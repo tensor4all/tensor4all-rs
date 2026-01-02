@@ -1,4 +1,5 @@
 use tensor4all_tensor::{Storage, TensorDynLen, TensorStaticLen};
+use tensor4all_tensor::storage::DenseStorageF64;
 use tensor4all_index::index::{DefaultIndex as Index, DynId, common_inds};
 use std::sync::Arc;
 
@@ -27,19 +28,13 @@ fn test_contract_dyn_len_matrix_multiplication() {
     // Create tensor A[i, j] with all ones
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
-    let mut storage_a = Storage::new_dense_f64(6);
-    if let Storage::DenseF64(ref mut vec) = storage_a {
-        vec.resize(6, 1.0);
-    }
+    let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]));
     let tensor_a: TensorDynLen<DynId, f64> = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
 
     // Create tensor B[j, k] with all ones
     let indices_b = vec![j.clone(), k.clone()];
     let dims_b = vec![3, 4];
-    let mut storage_b = Storage::new_dense_f64(12);
-    if let Storage::DenseF64(ref mut vec) = storage_b {
-        vec.resize(12, 1.0);
-    }
+    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]));
     let tensor_b: TensorDynLen<DynId, f64> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j: result should be C[i, k] with all 3.0 (since each element is sum of 3 ones)
@@ -71,19 +66,13 @@ fn test_contract_static_len_matrix_multiplication() {
     // Create tensor A[i, j] with all ones
     let indices_a = [i.clone(), j.clone()];
     let dims_a = [2, 3];
-    let mut storage_a = Storage::new_dense_f64(6);
-    if let Storage::DenseF64(ref mut vec) = storage_a {
-        vec.resize(6, 1.0);
-    }
+    let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]));
     let tensor_a: TensorStaticLen<2, DynId, f64> = TensorStaticLen::new(indices_a, dims_a, Arc::new(storage_a));
 
     // Create tensor B[j, k] with all ones
     let indices_b = [j.clone(), k.clone()];
     let dims_b = [3, 4];
-    let mut storage_b = Storage::new_dense_f64(12);
-    if let Storage::DenseF64(ref mut vec) = storage_b {
-        vec.resize(12, 1.0);
-    }
+    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]));
     let tensor_b: TensorStaticLen<2, DynId, f64> = TensorStaticLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j: result should be C[i, k] with all 3.0
@@ -137,19 +126,13 @@ fn test_contract_three_indices() {
     // Create tensor A[i, j, k] with all ones
     let indices_a = vec![i.clone(), j.clone(), k.clone()];
     let dims_a = vec![2, 3, 4];
-    let mut storage_a = Storage::new_dense_f64(24);
-    if let Storage::DenseF64(ref mut vec) = storage_a {
-        vec.resize(24, 1.0);
-    }
+    let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 24]));
     let tensor_a: TensorDynLen<DynId, f64> = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
 
     // Create tensor B[j, k, l] with all ones
     let indices_b = vec![j.clone(), k.clone(), l.clone()];
     let dims_b = vec![3, 4, 5];
-    let mut storage_b = Storage::new_dense_f64(60);
-    if let Storage::DenseF64(ref mut vec) = storage_b {
-        vec.resize(60, 1.0);
-    }
+    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 60]));
     let tensor_b: TensorDynLen<DynId, f64> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j and k: result should be C[i, l] with all 12.0 (3 * 4 = 12)
@@ -162,7 +145,7 @@ fn test_contract_three_indices() {
     // Check that all elements are 12.0
     if let Storage::DenseF64(ref vec) = *result.storage {
         assert_eq!(vec.len(), 10); // 2 * 5 = 10
-        for &val in vec.iter() {
+        for &val in vec.as_slice().iter() {
             assert_eq!(val, 12.0);
         }
     } else {

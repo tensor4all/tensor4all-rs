@@ -186,6 +186,7 @@ fn test_storage_dense_f64() {
             assert_eq!(v.capacity(), 10);
         }
         Storage::DenseC64(_) => panic!("expected DenseF64"),
+        Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseF64"),
     }
 }
 
@@ -200,6 +201,7 @@ fn test_storage_dense_c64() {
             assert_eq!(v.capacity(), 10);
         }
         Storage::DenseF64(_) => panic!("expected DenseC64"),
+        Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseC64"),
     }
 }
 
@@ -207,8 +209,8 @@ fn test_storage_dense_c64() {
 fn test_storage_factory_f64() {
     let storage = <f64 as DenseStorageFactory>::new_dense(7);
     match storage {
-        Storage::DenseF64(v) => assert_eq!(v.capacity(), 7),
-        Storage::DenseC64(_) => panic!("expected DenseF64"),
+            Storage::DenseF64(v) => assert_eq!(v.capacity(), 7),
+            Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseF64"),
     }
 }
 
@@ -216,8 +218,8 @@ fn test_storage_factory_f64() {
 fn test_storage_factory_c64() {
     let storage = <Complex64 as DenseStorageFactory>::new_dense(9);
     match storage {
-        Storage::DenseC64(v) => assert_eq!(v.capacity(), 9),
-        Storage::DenseF64(_) => panic!("expected DenseC64"),
+            Storage::DenseC64(v) => assert_eq!(v.capacity(), 9),
+            Storage::DenseF64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseC64"),
     }
 }
 
@@ -237,7 +239,7 @@ fn test_cow_storage() {
                 v.push(1.0);
                 v.push(2.0);
             }
-            Storage::DenseC64(_) => panic!("expected DenseF64"),
+            Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseF64"),
         }
     }
     
@@ -249,17 +251,17 @@ fn test_cow_storage() {
         Storage::DenseF64(v) => {
             assert_eq!(v.len(), 0);
         }
-        Storage::DenseC64(_) => panic!("expected DenseF64"),
+        Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseF64"),
     }
     
     // storage1 should have the new data
     match storage1.as_ref() {
         Storage::DenseF64(v) => {
             assert_eq!(v.len(), 2);
-            assert_eq!(v[0], 1.0);
-            assert_eq!(v[1], 2.0);
+            assert_eq!(v.get(0), 1.0);
+            assert_eq!(v.get(1), 2.0);
         }
-        Storage::DenseC64(_) => panic!("expected DenseF64"),
+        Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseF64"),
     }
 }
 
@@ -324,7 +326,7 @@ fn test_tensor_cow() {
             Storage::DenseF64(v) => {
                 v.push(42.0);
             }
-            Storage::DenseC64(_) => panic!("expected DenseF64"),
+            Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseF64"),
         }
     }
     
@@ -336,16 +338,16 @@ fn test_tensor_cow() {
         Storage::DenseF64(v) => {
             assert_eq!(v.len(), 0);
         }
-        Storage::DenseC64(_) => panic!("expected DenseF64"),
+        Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseF64"),
     }
     
     // tensor1's storage should have the new data
     match tensor1.storage.as_ref() {
         Storage::DenseF64(v) => {
             assert_eq!(v.len(), 1);
-            assert_eq!(v[0], 42.0);
+            assert_eq!(v.get(0), 42.0);
         }
-        Storage::DenseC64(_) => panic!("expected DenseF64"),
+        Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseF64"),
     }
 }
 
@@ -357,8 +359,8 @@ fn test_tensor_sum_f64_no_match() {
     {
         let s = make_mut_storage(&mut storage);
         match s {
-            Storage::DenseF64(v) => v.extend([1.0, 2.0, 3.0]),
-            Storage::DenseC64(_) => panic!("expected DenseF64"),
+            Storage::DenseF64(v) => v.extend([1.0, 2.0, 3.0].iter().copied()),
+            Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseF64"),
         }
     }
 
@@ -379,7 +381,7 @@ fn test_tensor_sum_c64() {
         let s = make_mut_storage(&mut storage);
         match s {
             Storage::DenseC64(v) => v.extend([Complex64::new(1.0, 2.0), Complex64::new(3.0, -1.0)]),
-            Storage::DenseF64(_) => panic!("expected DenseC64"),
+            Storage::DenseF64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseC64"),
         }
     }
 

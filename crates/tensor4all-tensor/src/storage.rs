@@ -4,12 +4,448 @@ use num_complex::Complex64;
 use mdarray::{DenseMapping, View, DynRank, Shape, Dense, Slice};
 use mdarray_linalg::{matmul::{MatMul, ContractBuilder}, Naive};
 
+/// Dense storage for f64 elements.
+#[derive(Debug, Clone)]
+pub struct DenseStorageF64(Vec<f64>);
+
+impl DenseStorageF64 {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    pub fn from_vec(vec: Vec<f64>) -> Self {
+        Self(vec)
+    }
+
+    pub fn as_slice(&self) -> &[f64] {
+        &self.0
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [f64] {
+        &mut self.0
+    }
+
+    pub fn into_vec(self) -> Vec<f64> {
+        self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
+
+    pub fn push(&mut self, val: f64) {
+        self.0.push(val);
+    }
+
+    pub fn extend_from_slice(&mut self, other: &[f64]) {
+        self.0.extend_from_slice(other);
+    }
+
+    pub fn extend<I: IntoIterator<Item = f64>>(&mut self, iter: I) {
+        self.0.extend(iter);
+    }
+
+    pub fn get(&self, i: usize) -> f64 {
+        self.0[i]
+    }
+
+    pub fn set(&mut self, i: usize, val: f64) {
+        self.0[i] = val;
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, f64> {
+        self.0.iter()
+    }
+
+    /// Permute the dense storage data according to the given permutation.
+    pub fn permute(&self, dims: &[usize], perm: &[usize]) -> Self {
+        assert_eq!(
+            perm.len(),
+            dims.len(),
+            "permutation length must match dimensions length"
+        );
+
+        // Create mdarray shape from dimensions
+        let shape = DynRank::from_dims(dims);
+        let mapping = DenseMapping::new(shape);
+
+        // Create a view over the vector data
+        let view: View<'_, f64, DynRank, Dense> = unsafe {
+            View::new_unchecked(self.0.as_ptr(), mapping)
+        };
+
+        // Permute the view
+        let permuted_view = view.into_permuted(perm);
+
+        // Convert to tensor and extract vector
+        let permuted_vec = permuted_view.to_tensor().into_vec();
+
+        Self::from_vec(permuted_vec)
+    }
+
+    /// Contract this dense storage with another dense storage.
+    pub fn contract(
+        &self,
+        dims: &[usize],
+        axes: &[usize],
+        other: &Self,
+        other_dims: &[usize],
+        other_axes: &[usize],
+    ) -> Self {
+        // Create mdarray views (which can be used as slices)
+        let shape = DynRank::from_dims(dims);
+        let mapping = DenseMapping::new(shape);
+        let view: View<'_, f64, DynRank, Dense> = unsafe {
+            View::new_unchecked(self.0.as_ptr(), mapping)
+        };
+
+        let other_shape = DynRank::from_dims(other_dims);
+        let other_mapping = DenseMapping::new(other_shape);
+        let other_view: View<'_, f64, DynRank, Dense> = unsafe {
+            View::new_unchecked(other.0.as_ptr(), other_mapping)
+        };
+
+        // Contract using mdarray-linalg
+        // View implements Borrow<Slice>, so we can use it directly
+        let slice: &Slice<f64, DynRank, Dense> = view.borrow();
+        let other_slice: &Slice<f64, DynRank, Dense> = other_view.borrow();
+
+        let result = Naive
+            .contract(
+                slice,
+                other_slice,
+                axes.to_vec(),
+                other_axes.to_vec(),
+            )
+            .eval();
+
+        Self::from_vec(result.into_vec())
+    }
+}
+
+/// Dense storage for Complex64 elements.
+#[derive(Debug, Clone)]
+pub struct DenseStorageC64(Vec<Complex64>);
+
+impl DenseStorageC64 {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    pub fn from_vec(vec: Vec<Complex64>) -> Self {
+        Self(vec)
+    }
+
+    pub fn as_slice(&self) -> &[Complex64] {
+        &self.0
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [Complex64] {
+        &mut self.0
+    }
+
+    pub fn into_vec(self) -> Vec<Complex64> {
+        self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
+
+    pub fn push(&mut self, val: Complex64) {
+        self.0.push(val);
+    }
+
+    pub fn extend_from_slice(&mut self, other: &[Complex64]) {
+        self.0.extend_from_slice(other);
+    }
+
+    pub fn extend<I: IntoIterator<Item = Complex64>>(&mut self, iter: I) {
+        self.0.extend(iter);
+    }
+
+    pub fn get(&self, i: usize) -> Complex64 {
+        self.0[i]
+    }
+
+    pub fn set(&mut self, i: usize, val: Complex64) {
+        self.0[i] = val;
+    }
+
+    /// Permute the dense storage data according to the given permutation.
+    pub fn permute(&self, dims: &[usize], perm: &[usize]) -> Self {
+        assert_eq!(
+            perm.len(),
+            dims.len(),
+            "permutation length must match dimensions length"
+        );
+
+        // Create mdarray shape from dimensions
+        let shape = DynRank::from_dims(dims);
+        let mapping = DenseMapping::new(shape);
+
+        // Create a view over the vector data
+        let view: View<'_, Complex64, DynRank, Dense> = unsafe {
+            View::new_unchecked(self.0.as_ptr(), mapping)
+        };
+
+        // Permute the view
+        let permuted_view = view.into_permuted(perm);
+
+        // Convert to tensor and extract vector
+        let permuted_vec = permuted_view.to_tensor().into_vec();
+
+        Self::from_vec(permuted_vec)
+    }
+
+    /// Contract this dense storage with another dense storage.
+    pub fn contract(
+        &self,
+        dims: &[usize],
+        axes: &[usize],
+        other: &Self,
+        other_dims: &[usize],
+        other_axes: &[usize],
+    ) -> Self {
+        // Create mdarray views (which can be used as slices)
+        let shape = DynRank::from_dims(dims);
+        let mapping = DenseMapping::new(shape);
+        let view: View<'_, Complex64, DynRank, Dense> = unsafe {
+            View::new_unchecked(self.0.as_ptr(), mapping)
+        };
+
+        let other_shape = DynRank::from_dims(other_dims);
+        let other_mapping = DenseMapping::new(other_shape);
+        let other_view: View<'_, Complex64, DynRank, Dense> = unsafe {
+            View::new_unchecked(other.0.as_ptr(), other_mapping)
+        };
+
+        // Contract using mdarray-linalg
+        // View implements Borrow<Slice>, so we can use it directly
+        let slice: &Slice<Complex64, DynRank, Dense> = view.borrow();
+        let other_slice: &Slice<Complex64, DynRank, Dense> = other_view.borrow();
+
+        let result = Naive
+            .contract(
+                slice,
+                other_slice,
+                axes.to_vec(),
+                other_axes.to_vec(),
+            )
+            .eval();
+
+        Self::from_vec(result.into_vec())
+    }
+}
+
+/// Diagonal storage for f64 elements.
+#[derive(Debug, Clone)]
+pub struct DiagStorageF64(Vec<f64>);
+
+impl DiagStorageF64 {
+    pub fn from_vec(vec: Vec<f64>) -> Self {
+        Self(vec)
+    }
+
+    pub fn as_slice(&self) -> &[f64] {
+        &self.0
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [f64] {
+        &mut self.0
+    }
+
+    pub fn into_vec(self) -> Vec<f64> {
+        self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn get(&self, i: usize) -> f64 {
+        self.0[i]
+    }
+
+    pub fn set(&mut self, i: usize, val: f64) {
+        self.0[i] = val;
+    }
+
+    /// Convert diagonal storage to a dense vector representation.
+    /// Creates a dense vector with diagonal elements set and off-diagonal elements as zero.
+    pub fn to_dense_vec(&self, dims: &[usize]) -> Vec<f64> {
+        let total_size: usize = dims.iter().product();
+        let mut dense_vec = vec![0.0; total_size];
+        let mindim_val = mindim(dims);
+        
+        // Set diagonal elements
+        // For a tensor with indices [i, j, k, ...] where all have dimension d,
+        // the diagonal elements are at positions where i == j == k == ...
+        // The linear index for position (i, i, i, ...) is computed as:
+        // i * (1 + stride_1 + stride_2 + ...)
+        // For a tensor with dimensions [d, d, d, ...], the stride for dimension k is d^(rank - k - 1)
+        let rank = dims.len();
+        if rank == 0 {
+            return vec![self.0[0]];
+        }
+        
+        // Compute stride for each dimension
+        let mut strides = vec![1; rank];
+        for i in (0..rank - 1).rev() {
+            strides[i] = strides[i + 1] * dims[i + 1];
+        }
+        
+        // Total stride for diagonal: sum of all strides
+        let diag_stride: usize = strides.iter().sum();
+        
+        // Set diagonal elements
+        for i in 0..mindim_val.min(self.0.len()) {
+            let linear_idx = i * diag_stride;
+            if linear_idx < total_size {
+                dense_vec[linear_idx] = self.0[i];
+            }
+        }
+        
+        dense_vec
+    }
+
+    /// Contract this diagonal storage with another diagonal storage.
+    /// Returns either a scalar (DenseStorageF64 with one element) or a diagonal storage.
+    pub fn contract_diag_diag(
+        &self,
+        dims: &[usize],
+        other: &Self,
+        other_dims: &[usize],
+        result_dims: &[usize],
+    ) -> Storage {
+        let mindim_a = mindim(dims);
+        let mindim_b = mindim(other_dims);
+        let min_len = mindim_a.min(mindim_b).min(self.0.len()).min(other.0.len());
+        
+        if result_dims.is_empty() {
+            // All indices contracted: compute inner product (scalar result)
+            let scalar: f64 = (0..min_len)
+                .map(|i| self.0[i] * other.0[i])
+                .sum();
+            Storage::DenseF64(DenseStorageF64::from_vec(vec![scalar]))
+        } else {
+            // Some indices remain: element-wise product (DiagTensor result)
+            let result_diag: Vec<f64> = (0..min_len)
+                .map(|i| self.0[i] * other.0[i])
+                .collect();
+            Storage::DiagF64(DiagStorageF64::from_vec(result_diag))
+        }
+    }
+}
+
+/// Diagonal storage for Complex64 elements.
+#[derive(Debug, Clone)]
+pub struct DiagStorageC64(Vec<Complex64>);
+
+impl DiagStorageC64 {
+    pub fn from_vec(vec: Vec<Complex64>) -> Self {
+        Self(vec)
+    }
+
+    pub fn as_slice(&self) -> &[Complex64] {
+        &self.0
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [Complex64] {
+        &mut self.0
+    }
+
+    pub fn into_vec(self) -> Vec<Complex64> {
+        self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn get(&self, i: usize) -> Complex64 {
+        self.0[i]
+    }
+
+    pub fn set(&mut self, i: usize, val: Complex64) {
+        self.0[i] = val;
+    }
+
+    /// Convert diagonal storage to a dense vector representation.
+    /// Creates a dense vector with diagonal elements set and off-diagonal elements as zero.
+    pub fn to_dense_vec(&self, dims: &[usize]) -> Vec<Complex64> {
+        let total_size: usize = dims.iter().product();
+        let mut dense_vec = vec![Complex64::new(0.0, 0.0); total_size];
+        let mindim_val = mindim(dims);
+        
+        // Same logic as DiagStorageF64 but for complex
+        let rank = dims.len();
+        if rank == 0 {
+            return vec![self.0[0]];
+        }
+        
+        let mut strides = vec![1; rank];
+        for i in (0..rank - 1).rev() {
+            strides[i] = strides[i + 1] * dims[i + 1];
+        }
+        
+        let diag_stride: usize = strides.iter().sum();
+        
+        for i in 0..mindim_val.min(self.0.len()) {
+            let linear_idx = i * diag_stride;
+            if linear_idx < total_size {
+                dense_vec[linear_idx] = self.0[i];
+            }
+        }
+        
+        dense_vec
+    }
+
+    /// Contract this diagonal storage with another diagonal storage.
+    /// Returns either a scalar (DenseStorageC64 with one element) or a diagonal storage.
+    pub fn contract_diag_diag(
+        &self,
+        dims: &[usize],
+        other: &Self,
+        other_dims: &[usize],
+        result_dims: &[usize],
+    ) -> Storage {
+        let mindim_a = mindim(dims);
+        let mindim_b = mindim(other_dims);
+        let min_len = mindim_a.min(mindim_b).min(self.0.len()).min(other.0.len());
+        
+        if result_dims.is_empty() {
+            // All indices contracted: compute inner product (scalar result)
+            let scalar: Complex64 = (0..min_len)
+                .map(|i| self.0[i] * other.0[i])
+                .sum();
+            Storage::DenseC64(DenseStorageC64::from_vec(vec![scalar]))
+        } else {
+            // Some indices remain: element-wise product (DiagTensor result)
+            let result_diag: Vec<Complex64> = (0..min_len)
+                .map(|i| self.0[i] * other.0[i])
+                .collect();
+            Storage::DiagC64(DiagStorageC64::from_vec(result_diag))
+        }
+    }
+}
+
 /// Storage backend for tensor data.
-/// Currently only DenseF64 and DenseC64 are supported.
+/// Supports Dense and Diag storage for f64 and Complex64 element types.
 #[derive(Debug, Clone)]
 pub enum Storage {
-    DenseF64(Vec<f64>),
-    DenseC64(Vec<Complex64>),
+    DenseF64(DenseStorageF64),
+    DenseC64(DenseStorageC64),
+    DiagF64(DiagStorageF64),
+    DiagC64(DiagStorageC64),
 }
 
 /// Type-driven constructor for `Storage`.
@@ -22,13 +458,13 @@ pub trait DenseStorageFactory {
 
 impl DenseStorageFactory for f64 {
     fn new_dense(capacity: usize) -> Storage {
-        Storage::DenseF64(Vec::with_capacity(capacity))
+        Storage::DenseF64(DenseStorageF64::with_capacity(capacity))
     }
 }
 
 impl DenseStorageFactory for Complex64 {
     fn new_dense(capacity: usize) -> Storage {
-        Storage::DenseC64(Vec::with_capacity(capacity))
+        Storage::DenseC64(DenseStorageC64::with_capacity(capacity))
     }
 }
 
@@ -42,8 +478,10 @@ pub trait SumFromStorage: Sized {
 impl SumFromStorage for f64 {
     fn sum_from_storage(storage: &Storage) -> Self {
         match storage {
-            Storage::DenseF64(v) => v.iter().copied().sum(),
-            Storage::DenseC64(v) => v.iter().map(|z| z.re).sum(),
+            Storage::DenseF64(v) => v.as_slice().iter().copied().sum(),
+            Storage::DenseC64(v) => v.as_slice().iter().map(|z| z.re).sum(),
+            Storage::DiagF64(v) => v.as_slice().iter().copied().sum(),
+            Storage::DiagC64(v) => v.as_slice().iter().map(|z| z.re).sum(),
         }
     }
 }
@@ -51,8 +489,10 @@ impl SumFromStorage for f64 {
 impl SumFromStorage for Complex64 {
     fn sum_from_storage(storage: &Storage) -> Self {
         match storage {
-            Storage::DenseF64(v) => Complex64::new(v.iter().copied().sum(), 0.0),
-            Storage::DenseC64(v) => v.iter().copied().sum(),
+            Storage::DenseF64(v) => Complex64::new(v.as_slice().iter().copied().sum(), 0.0),
+            Storage::DenseC64(v) => v.as_slice().iter().copied().sum(),
+            Storage::DiagF64(v) => Complex64::new(v.as_slice().iter().copied().sum(), 0.0),
+            Storage::DiagC64(v) => v.as_slice().iter().copied().sum(),
         }
     }
 }
@@ -67,8 +507,8 @@ pub enum AnyScalar {
 impl SumFromStorage for AnyScalar {
     fn sum_from_storage(storage: &Storage) -> Self {
         match storage {
-            Storage::DenseF64(_) => AnyScalar::F64(f64::sum_from_storage(storage)),
-            Storage::DenseC64(_) => AnyScalar::C64(Complex64::sum_from_storage(storage)),
+            Storage::DenseF64(_) | Storage::DiagF64(_) => AnyScalar::F64(f64::sum_from_storage(storage)),
+            Storage::DenseC64(_) | Storage::DiagC64(_) => AnyScalar::C64(Complex64::sum_from_storage(storage)),
         }
     }
 }
@@ -76,12 +516,27 @@ impl SumFromStorage for AnyScalar {
 impl Storage {
     /// Create a new DenseF64 storage with the given capacity.
     pub fn new_dense_f64(capacity: usize) -> Self {
-        Self::DenseF64(Vec::with_capacity(capacity))
+        Self::DenseF64(DenseStorageF64::with_capacity(capacity))
     }
 
     /// Create a new DenseC64 storage with the given capacity.
     pub fn new_dense_c64(capacity: usize) -> Self {
-        Self::DenseC64(Vec::with_capacity(capacity))
+        Self::DenseC64(DenseStorageC64::with_capacity(capacity))
+    }
+
+    /// Create a new DiagF64 storage with the given diagonal data.
+    pub fn new_diag_f64(diag_data: Vec<f64>) -> Self {
+        Self::DiagF64(DiagStorageF64::from_vec(diag_data))
+    }
+
+    /// Create a new DiagC64 storage with the given diagonal data.
+    pub fn new_diag_c64(diag_data: Vec<Complex64>) -> Self {
+        Self::DiagC64(DiagStorageC64::from_vec(diag_data))
+    }
+
+    /// Check if this storage is a Diag storage type.
+    pub fn is_diag(&self) -> bool {
+        matches!(self, Self::DiagF64(_) | Self::DiagC64(_))
     }
 
     /// Get the length of the storage (number of elements).
@@ -89,6 +544,8 @@ impl Storage {
         match self {
             Self::DenseF64(v) => v.len(),
             Self::DenseC64(v) => v.len(),
+            Self::DiagF64(v) => v.len(),
+            Self::DiagC64(v) => v.len(),
         }
     }
 
@@ -101,6 +558,30 @@ impl Storage {
     pub fn sum_c64(&self) -> Complex64 {
         Complex64::sum_from_storage(self)
     }
+
+    /// Convert this storage to dense storage.
+    /// For Diag storage, creates a Dense storage with diagonal elements set
+    /// and off-diagonal elements as zero.
+    /// For Dense storage, returns a copy.
+    pub fn to_dense_storage(&self, dims: &[usize]) -> Storage {
+        match self {
+            Storage::DenseF64(v) => Storage::DenseF64(DenseStorageF64::from_vec(v.as_slice().to_vec())),
+            Storage::DenseC64(v) => Storage::DenseC64(DenseStorageC64::from_vec(v.as_slice().to_vec())),
+            Storage::DiagF64(d) => Storage::DenseF64(DenseStorageF64::from_vec(d.to_dense_vec(dims))),
+            Storage::DiagC64(d) => Storage::DenseC64(DenseStorageC64::from_vec(d.to_dense_vec(dims))),
+        }
+    }
+
+    /// Permute the storage data according to the given permutation.
+    pub fn permute_storage(&self, dims: &[usize], perm: &[usize]) -> Storage {
+        match self {
+            Storage::DenseF64(v) => Storage::DenseF64(v.permute(dims, perm)),
+            Storage::DenseC64(v) => Storage::DenseC64(v.permute(dims, perm)),
+            // For Diag storage, permute is trivial: data doesn't change, only index order changes
+            Storage::DiagF64(v) => Storage::DiagF64(v.clone()),
+            Storage::DiagC64(v) => Storage::DiagC64(v.clone()),
+        }
+    }
 }
 
 /// Helper to get a mutable reference to storage, cloning if needed (COW).
@@ -108,69 +589,17 @@ pub fn make_mut_storage(arc: &mut Arc<Storage>) -> &mut Storage {
     Arc::make_mut(arc)
 }
 
-/// Permute the dense storage data according to the given permutation.
-///
-/// This is an internal helper function that permutes the data in a `Storage`
-/// according to the given dimensions and permutation.
-///
-/// # Arguments
-/// * `storage` - The storage to permute
-/// * `dims` - The original dimensions of the tensor
-/// * `perm` - The permutation: new axis i corresponds to old axis `perm[i]`
-///
-/// # Panics
-/// Panics if `perm.len() != dims.len()` or if the permutation is invalid.
-pub fn permute_storage(storage: &Storage, dims: &[usize], perm: &[usize]) -> Storage {
-    assert_eq!(
-        perm.len(),
-        dims.len(),
-        "permutation length must match dimensions length"
-    );
-
-    match storage {
-        Storage::DenseF64(vec) => {
-            // Create mdarray shape from dimensions
-            let shape = DynRank::from_dims(dims);
-            let mapping = DenseMapping::new(shape);
-
-            // Create a view over the vector data
-            let view: View<'_, f64, DynRank, Dense> = unsafe {
-                View::new_unchecked(vec.as_ptr(), mapping)
-            };
-
-            // Permute the view
-            let permuted_view = view.into_permuted(perm);
-
-            // Convert to tensor and extract vector
-            let permuted_vec = permuted_view.to_tensor().into_vec();
-
-            Storage::DenseF64(permuted_vec)
-        }
-        Storage::DenseC64(vec) => {
-            // Create mdarray shape from dimensions
-            let shape = DynRank::from_dims(dims);
-            let mapping = DenseMapping::new(shape);
-
-            // Create a view over the vector data
-            let view: View<'_, Complex64, DynRank, Dense> = unsafe {
-                View::new_unchecked(vec.as_ptr(), mapping)
-            };
-
-            // Permute the view
-            let permuted_view = view.into_permuted(perm);
-
-            // Convert to tensor and extract vector
-            let permuted_vec = permuted_view.to_tensor().into_vec();
-
-            Storage::DenseC64(permuted_vec)
-        }
-    }
+/// Get the minimum dimension from a slice of dimensions.
+/// This is used for DiagTensor where all indices must have the same dimension.
+pub fn mindim(dims: &[usize]) -> usize {
+    dims.iter().copied().min().unwrap_or(1)
 }
 
-/// Contract two dense storage tensors along specified axes.
+/// Contract two storage tensors along specified axes.
 ///
-/// This is an internal helper function that contracts two `Storage` tensors
-/// using mdarray-linalg's contract method.
+/// This is an internal helper function that contracts two `Storage` tensors.
+/// For Dense tensors, uses mdarray-linalg's contract method.
+/// For Diag tensors, implements specialized diagonal contraction.
 ///
 /// # Arguments
 /// * `storage_a` - First tensor storage
@@ -179,13 +608,14 @@ pub fn permute_storage(storage: &Storage, dims: &[usize], perm: &[usize]) -> Sto
 /// * `storage_b` - Second tensor storage
 /// * `dims_b` - Dimensions of the second tensor
 /// * `axes_b` - Axes of the second tensor to contract
+/// * `result_dims` - Dimensions of the result tensor (empty for scalar result)
 ///
 /// # Returns
 /// A new `Storage` containing the contracted result.
 ///
 /// # Panics
 /// Panics if the contracted dimensions don't match, or if the storage types
-/// don't match between the two tensors.
+/// are incompatible.
 pub fn contract_storage(
     storage_a: &Storage,
     dims_a: &[usize],
@@ -193,6 +623,7 @@ pub fn contract_storage(
     storage_b: &Storage,
     dims_b: &[usize],
     axes_b: &[usize],
+    result_dims: &[usize],
 ) -> Storage {
     // Verify that contracted dimensions match
     for (a_axis, b_axis) in axes_a.iter().zip(axes_b.iter()) {
@@ -208,67 +639,29 @@ pub fn contract_storage(
     }
 
     match (storage_a, storage_b) {
-        (Storage::DenseF64(vec_a), Storage::DenseF64(vec_b)) => {
-            // Create mdarray views (which can be used as slices)
-            let shape_a = DynRank::from_dims(dims_a);
-            let mapping_a = DenseMapping::new(shape_a);
-            let view_a: View<'_, f64, DynRank, Dense> = unsafe {
-                View::new_unchecked(vec_a.as_ptr(), mapping_a)
-            };
-
-            let shape_b = DynRank::from_dims(dims_b);
-            let mapping_b = DenseMapping::new(shape_b);
-            let view_b: View<'_, f64, DynRank, Dense> = unsafe {
-                View::new_unchecked(vec_b.as_ptr(), mapping_b)
-            };
-
-            // Contract using mdarray-linalg
-            // View implements Borrow<Slice>, so we can use it directly
-            let slice_a: &Slice<f64, DynRank, Dense> = view_a.borrow();
-            let slice_b: &Slice<f64, DynRank, Dense> = view_b.borrow();
-
-            let result = Naive
-                .contract(
-                    slice_a,
-                    slice_b,
-                    axes_a.to_vec(),
-                    axes_b.to_vec(),
-                )
-                .eval();
-
-            Storage::DenseF64(result.into_vec())
+        (Storage::DenseF64(a), Storage::DenseF64(b)) => {
+            Storage::DenseF64(a.contract(dims_a, axes_a, b, dims_b, axes_b))
         }
-        (Storage::DenseC64(vec_a), Storage::DenseC64(vec_b)) => {
-            // Create mdarray views (which can be used as slices)
-            let shape_a = DynRank::from_dims(dims_a);
-            let mapping_a = DenseMapping::new(shape_a);
-            let view_a: View<'_, Complex64, DynRank, Dense> = unsafe {
-                View::new_unchecked(vec_a.as_ptr(), mapping_a)
-            };
-
-            let shape_b = DynRank::from_dims(dims_b);
-            let mapping_b = DenseMapping::new(shape_b);
-            let view_b: View<'_, Complex64, DynRank, Dense> = unsafe {
-                View::new_unchecked(vec_b.as_ptr(), mapping_b)
-            };
-
-            // Contract using mdarray-linalg
-            // View implements Borrow<Slice>, so we can use it directly
-            let slice_a: &Slice<Complex64, DynRank, Dense> = view_a.borrow();
-            let slice_b: &Slice<Complex64, DynRank, Dense> = view_b.borrow();
-
-            let result = Naive
-                .contract(
-                    slice_a,
-                    slice_b,
-                    axes_a.to_vec(),
-                    axes_b.to_vec(),
-                )
-                .eval();
-
-            Storage::DenseC64(result.into_vec())
+        (Storage::DenseC64(a), Storage::DenseC64(b)) => {
+            Storage::DenseC64(a.contract(dims_a, axes_a, b, dims_b, axes_b))
         }
-        _ => panic!("Storage types must match for contraction"),
+        // DiagTensor × DiagTensor contraction
+        (Storage::DiagF64(a), Storage::DiagF64(b)) => {
+            a.contract_diag_diag(dims_a, b, dims_b, result_dims)
+        }
+        (Storage::DiagC64(a), Storage::DiagC64(b)) => {
+            a.contract_diag_diag(dims_a, b, dims_b, result_dims)
+        }
+        // DiagTensor × DenseTensor: convert Diag to Dense first
+        (Storage::DiagF64(_), Storage::DenseF64(_)) | (Storage::DiagC64(_), Storage::DenseC64(_)) => {
+            let dense_a = storage_a.to_dense_storage(dims_a);
+            contract_storage(&dense_a, dims_a, axes_a, storage_b, dims_b, axes_b, result_dims)
+        }
+        (Storage::DenseF64(_), Storage::DiagF64(_)) | (Storage::DenseC64(_), Storage::DiagC64(_)) => {
+            let dense_b = storage_b.to_dense_storage(dims_b);
+            contract_storage(storage_a, dims_a, axes_a, &dense_b, dims_b, axes_b, result_dims)
+        }
+        _ => panic!("Storage types must be compatible for contraction"),
     }
 }
 

@@ -1,6 +1,7 @@
 use std::sync::Arc;
+use num_complex::Complex64;
 use tensor4all_index::index::{Index, NoSymmSpace, common_inds, Symmetry};
-use crate::storage::{AnyScalar, Storage, SumFromStorage, permute_storage, contract_storage};
+use crate::storage::{AnyScalar, Storage, SumFromStorage, contract_storage};
 
 /// Compute the permutation array from original indices to new indices.
 ///
@@ -78,13 +79,27 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
     /// Create a new tensor with dynamic rank.
     ///
     /// # Panics
-    /// Panics if `indices.len() != dims.len()`.
+    /// Panics if `indices.len() != dims.len()`, or if the storage is Diag
+    /// and not all indices have the same dimension.
     pub fn new(indices: Vec<Index<Id, Symm>>, dims: Vec<usize>, storage: Arc<Storage>) -> Self {
         assert_eq!(
             indices.len(),
             dims.len(),
             "indices and dims must have the same length"
         );
+        
+        // Validate DiagTensor: all indices must have the same dimension
+        if storage.as_ref().is_diag() {
+            let first_dim = dims[0];
+            for (i, &dim) in dims.iter().enumerate() {
+                assert_eq!(
+                    dim, first_dim,
+                    "DiagTensor requires all indices to have the same dimension, but dims[{}] = {} != dims[0] = {}",
+                    i, dim, first_dim
+                );
+            }
+        }
+        
         Self {
             indices,
             dims,
@@ -162,7 +177,7 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
             .collect();
 
         // Permute storage data using the computed permutation
-        let new_storage = Arc::new(permute_storage(&self.storage, &self.dims, &perm));
+        let new_storage = Arc::new(self.storage.permute_storage(&self.dims, &perm));
 
         Self {
             indices: new_indices.to_vec(),
@@ -226,7 +241,7 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
             .collect();
 
         // Permute storage data
-        let new_storage = Arc::new(permute_storage(&self.storage, &self.dims, perm));
+        let new_storage = Arc::new(self.storage.permute_storage(&self.dims, perm));
 
         Self {
             indices: new_indices,
@@ -347,6 +362,7 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
             &other.storage,
             &other.dims,
             &axes_b,
+            &result_dims,
         ));
 
         Self {
@@ -368,7 +384,22 @@ pub struct TensorStaticLen<const N: usize, Id, T, Symm = NoSymmSpace> {
 
 impl<const N: usize, Id, T, Symm> TensorStaticLen<N, Id, T, Symm> {
     /// Create a new tensor with static rank `N`.
+    ///
+    /// # Panics
+    /// Panics if the storage is Diag and not all indices have the same dimension.
     pub fn new(indices: [Index<Id, Symm>; N], dims: [usize; N], storage: Arc<Storage>) -> Self {
+        // Validate DiagTensor: all indices must have the same dimension
+        if storage.as_ref().is_diag() {
+            let first_dim = dims[0];
+            for (i, &dim) in dims.iter().enumerate() {
+                assert_eq!(
+                    dim, first_dim,
+                    "DiagTensor requires all indices to have the same dimension, but dims[{}] = {} != dims[0] = {}",
+                    i, dim, first_dim
+                );
+            }
+        }
+        
         Self {
             indices,
             dims,
@@ -446,7 +477,7 @@ impl<const N: usize, Id, T, Symm> TensorStaticLen<N, Id, T, Symm> {
         let dims_slice: &[usize] = &self.dims;
 
         // Permute storage data using the computed permutation
-        let new_storage = Arc::new(permute_storage(&self.storage, dims_slice, &perm));
+        let new_storage = Arc::new(self.storage.permute_storage(dims_slice, &perm));
 
         Self {
             indices: std::array::from_fn(|i| new_indices[i].clone()),
@@ -511,7 +542,7 @@ impl<const N: usize, Id, T, Symm> TensorStaticLen<N, Id, T, Symm> {
         let dims_slice: &[usize] = &self.dims;
 
         // Permute storage data
-        let new_storage = Arc::new(permute_storage(&self.storage, dims_slice, perm));
+        let new_storage = Arc::new(self.storage.permute_storage(dims_slice, perm));
 
         Self {
             indices: new_indices,
@@ -643,6 +674,7 @@ impl<const N: usize, Id, T, Symm> TensorStaticLen<N, Id, T, Symm> {
             &other.storage,
             dims_b_slice,
             &axes_b,
+            &result_dims,
         ));
 
         TensorDynLen {
@@ -652,6 +684,155 @@ impl<const N: usize, Id, T, Symm> TensorStaticLen<N, Id, T, Symm> {
             _phantom: std::marker::PhantomData,
         }
     }
+}
+
+/// Check if a tensor is a DiagTensor (has Diag storage).
+pub fn is_diag_tensor<Id, T, Symm>(tensor: &TensorDynLen<Id, T, Symm>) -> bool {
+    tensor.storage.as_ref().is_diag()
+}
+
+/// Check if a tensor is a DiagTensor (has Diag storage).
+pub fn is_diag_tensor_static<const N: usize, Id, T, Symm>(tensor: &TensorStaticLen<N, Id, T, Symm>) -> bool {
+    tensor.storage.as_ref().is_diag()
+}
+
+/// Create a DiagTensor with dynamic rank from diagonal data.
+///
+/// # Arguments
+/// * `indices` - The indices for the tensor (all must have the same dimension)
+/// * `diag_data` - The diagonal elements (length must equal the dimension of indices)
+///
+/// # Panics
+/// Panics if indices have different dimensions, or if diag_data length doesn't match.
+pub fn diag_tensor_dyn_len<Id, Symm>(
+    indices: Vec<Index<Id, Symm>>,
+    diag_data: Vec<f64>,
+) -> TensorDynLen<Id, f64, Symm>
+where
+    Id: Clone,
+    Symm: Clone + Symmetry,
+{
+    let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
+    let first_dim = dims[0];
+    
+    // Validate all indices have same dimension
+    for (i, &dim) in dims.iter().enumerate() {
+        assert_eq!(
+            dim, first_dim,
+            "DiagTensor requires all indices to have the same dimension, but dims[{}] = {} != dims[0] = {}",
+            i, dim, first_dim
+        );
+    }
+    
+    assert_eq!(
+        diag_data.len(),
+        first_dim,
+        "diag_data length ({}) must equal index dimension ({})",
+        diag_data.len(),
+        first_dim
+    );
+    
+    let storage = Arc::new(Storage::new_diag_f64(diag_data));
+    TensorDynLen::new(indices, dims, storage)
+}
+
+/// Create a DiagTensor with dynamic rank from complex diagonal data.
+pub fn diag_tensor_dyn_len_c64<Id, Symm>(
+    indices: Vec<Index<Id, Symm>>,
+    diag_data: Vec<Complex64>,
+) -> TensorDynLen<Id, Complex64, Symm>
+where
+    Id: Clone,
+    Symm: Clone + Symmetry,
+{
+    let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
+    let first_dim = dims[0];
+    
+    // Validate all indices have same dimension
+    for (i, &dim) in dims.iter().enumerate() {
+        assert_eq!(
+            dim, first_dim,
+            "DiagTensor requires all indices to have the same dimension, but dims[{}] = {} != dims[0] = {}",
+            i, dim, first_dim
+        );
+    }
+    
+    assert_eq!(
+        diag_data.len(),
+        first_dim,
+        "diag_data length ({}) must equal index dimension ({})",
+        diag_data.len(),
+        first_dim
+    );
+    
+    let storage = Arc::new(Storage::new_diag_c64(diag_data));
+    TensorDynLen::new(indices, dims, storage)
+}
+
+/// Create a DiagTensor with static rank from diagonal data.
+pub fn diag_tensor_static_len<const N: usize, Id, Symm>(
+    indices: [Index<Id, Symm>; N],
+    diag_data: Vec<f64>,
+) -> TensorStaticLen<N, Id, f64, Symm>
+where
+    Id: Clone,
+    Symm: Clone + Symmetry,
+{
+    let dims: [usize; N] = std::array::from_fn(|i| indices[i].size());
+    let first_dim = dims[0];
+    
+    // Validate all indices have same dimension
+    for (i, &dim) in dims.iter().enumerate() {
+        assert_eq!(
+            dim, first_dim,
+            "DiagTensor requires all indices to have the same dimension, but dims[{}] = {} != dims[0] = {}",
+            i, dim, first_dim
+        );
+    }
+    
+    assert_eq!(
+        diag_data.len(),
+        first_dim,
+        "diag_data length ({}) must equal index dimension ({})",
+        diag_data.len(),
+        first_dim
+    );
+    
+    let storage = Arc::new(Storage::new_diag_f64(diag_data));
+    TensorStaticLen::new(indices, dims, storage)
+}
+
+/// Create a DiagTensor with static rank from complex diagonal data.
+pub fn diag_tensor_static_len_c64<const N: usize, Id, Symm>(
+    indices: [Index<Id, Symm>; N],
+    diag_data: Vec<Complex64>,
+) -> TensorStaticLen<N, Id, Complex64, Symm>
+where
+    Id: Clone,
+    Symm: Clone + Symmetry,
+{
+    let dims: [usize; N] = std::array::from_fn(|i| indices[i].size());
+    let first_dim = dims[0];
+    
+    // Validate all indices have same dimension
+    for (i, &dim) in dims.iter().enumerate() {
+        assert_eq!(
+            dim, first_dim,
+            "DiagTensor requires all indices to have the same dimension, but dims[{}] = {} != dims[0] = {}",
+            i, dim, first_dim
+        );
+    }
+    
+    assert_eq!(
+        diag_data.len(),
+        first_dim,
+        "diag_data length ({}) must equal index dimension ({})",
+        diag_data.len(),
+        first_dim
+    );
+    
+    let storage = Arc::new(Storage::new_diag_c64(diag_data));
+    TensorStaticLen::new(indices, dims, storage)
 }
 
 /// Convenience alias for dynamic element type tensors with dynamic rank.

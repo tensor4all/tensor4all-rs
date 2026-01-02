@@ -91,7 +91,7 @@ fn test_permute_dyn_f64_2d() {
     
     match &*permuted.storage {
         Storage::DenseF64(v) => {
-            assert_eq!(v, &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+            assert_eq!(v.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
         }
         _ => panic!("expected DenseF64"),
     }
@@ -131,12 +131,12 @@ fn test_permute_dyn_c64_2d() {
     
     match &*permuted.storage {
         Storage::DenseC64(v) => {
-            assert_eq!(v[0], Complex64::new(1.0, 0.0));
-            assert_eq!(v[1], Complex64::new(4.0, 0.0));
-            assert_eq!(v[2], Complex64::new(2.0, 0.0));
-            assert_eq!(v[3], Complex64::new(5.0, 0.0));
-            assert_eq!(v[4], Complex64::new(3.0, 0.0));
-            assert_eq!(v[5], Complex64::new(6.0, 0.0));
+            assert_eq!(v.get(0), Complex64::new(1.0, 0.0));
+            assert_eq!(v.get(1), Complex64::new(4.0, 0.0));
+            assert_eq!(v.get(2), Complex64::new(2.0, 0.0));
+            assert_eq!(v.get(3), Complex64::new(5.0, 0.0));
+            assert_eq!(v.get(4), Complex64::new(3.0, 0.0));
+            assert_eq!(v.get(5), Complex64::new(6.0, 0.0));
         }
         _ => panic!("expected DenseC64"),
     }
@@ -180,7 +180,7 @@ fn test_permute_dyn_f64_3d() {
             assert_eq!(v.len(), 24);
             // Check first few values to verify permutation
             // This is a complex permutation, so we just verify the structure
-            assert_eq!(v[0], 1.0); // First element should be the same
+            assert_eq!(v.get(0), 1.0); // First element should be the same
         }
         _ => panic!("expected DenseF64"),
     }
@@ -213,7 +213,7 @@ fn test_permute_static_f64_2d() {
     
     match &*permuted.storage {
         Storage::DenseF64(v) => {
-            assert_eq!(v, &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+            assert_eq!(v.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
         }
         _ => panic!("expected DenseF64"),
     }
@@ -246,7 +246,7 @@ fn test_permute_identity() {
     
     match &*permuted.storage {
         Storage::DenseF64(v) => {
-            assert_eq!(v, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+            assert_eq!(v.as_slice(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         }
         _ => panic!("expected DenseF64"),
     }
@@ -279,7 +279,7 @@ fn test_permute_indices_dyn_f64_2d() {
     
     match &*permuted.storage {
         Storage::DenseF64(v) => {
-            assert_eq!(v, &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+            assert_eq!(v.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
         }
         _ => panic!("expected DenseF64"),
     }
@@ -312,7 +312,7 @@ fn test_permute_indices_static_f64_2d() {
     
     match &*permuted.storage {
         Storage::DenseF64(v) => {
-            assert_eq!(v, &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+            assert_eq!(v.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
         }
         _ => panic!("expected DenseF64"),
     }
@@ -352,12 +352,12 @@ fn test_permute_indices_c64() {
     
     match &*permuted.storage {
         Storage::DenseC64(v) => {
-            assert_eq!(v[0], Complex64::new(1.0, 0.0));
-            assert_eq!(v[1], Complex64::new(4.0, 0.0));
-            assert_eq!(v[2], Complex64::new(2.0, 0.0));
-            assert_eq!(v[3], Complex64::new(5.0, 0.0));
-            assert_eq!(v[4], Complex64::new(3.0, 0.0));
-            assert_eq!(v[5], Complex64::new(6.0, 0.0));
+            assert_eq!(v.get(0), Complex64::new(1.0, 0.0));
+            assert_eq!(v.get(1), Complex64::new(4.0, 0.0));
+            assert_eq!(v.get(2), Complex64::new(2.0, 0.0));
+            assert_eq!(v.get(3), Complex64::new(5.0, 0.0));
+            assert_eq!(v.get(4), Complex64::new(3.0, 0.0));
+            assert_eq!(v.get(5), Complex64::new(6.0, 0.0));
         }
         _ => panic!("expected DenseC64"),
     }
