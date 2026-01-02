@@ -1,6 +1,8 @@
 use std::sync::Arc;
+use std::borrow::Borrow;
 use num_complex::Complex64;
-use mdarray::{DenseMapping, View, DynRank, Shape, Dense};
+use mdarray::{DenseMapping, View, DynRank, Shape, Dense, Slice};
+use mdarray_linalg::{matmul::{MatMul, ContractBuilder}, Naive};
 
 /// Storage backend for tensor data.
 /// Currently only DenseF64 and DenseC64 are supported.
@@ -162,6 +164,111 @@ pub fn permute_storage(storage: &Storage, dims: &[usize], perm: &[usize]) -> Sto
 
             Storage::DenseC64(permuted_vec)
         }
+    }
+}
+
+/// Contract two dense storage tensors along specified axes.
+///
+/// This is an internal helper function that contracts two `Storage` tensors
+/// using mdarray-linalg's contract method.
+///
+/// # Arguments
+/// * `storage_a` - First tensor storage
+/// * `dims_a` - Dimensions of the first tensor
+/// * `axes_a` - Axes of the first tensor to contract
+/// * `storage_b` - Second tensor storage
+/// * `dims_b` - Dimensions of the second tensor
+/// * `axes_b` - Axes of the second tensor to contract
+///
+/// # Returns
+/// A new `Storage` containing the contracted result.
+///
+/// # Panics
+/// Panics if the contracted dimensions don't match, or if the storage types
+/// don't match between the two tensors.
+pub fn contract_storage(
+    storage_a: &Storage,
+    dims_a: &[usize],
+    axes_a: &[usize],
+    storage_b: &Storage,
+    dims_b: &[usize],
+    axes_b: &[usize],
+) -> Storage {
+    // Verify that contracted dimensions match
+    for (a_axis, b_axis) in axes_a.iter().zip(axes_b.iter()) {
+        assert_eq!(
+            dims_a[*a_axis],
+            dims_b[*b_axis],
+            "Contracted dimensions must match: dims_a[{}] = {} != dims_b[{}] = {}",
+            a_axis,
+            dims_a[*a_axis],
+            b_axis,
+            dims_b[*b_axis]
+        );
+    }
+
+    match (storage_a, storage_b) {
+        (Storage::DenseF64(vec_a), Storage::DenseF64(vec_b)) => {
+            // Create mdarray views (which can be used as slices)
+            let shape_a = DynRank::from_dims(dims_a);
+            let mapping_a = DenseMapping::new(shape_a);
+            let view_a: View<'_, f64, DynRank, Dense> = unsafe {
+                View::new_unchecked(vec_a.as_ptr(), mapping_a)
+            };
+
+            let shape_b = DynRank::from_dims(dims_b);
+            let mapping_b = DenseMapping::new(shape_b);
+            let view_b: View<'_, f64, DynRank, Dense> = unsafe {
+                View::new_unchecked(vec_b.as_ptr(), mapping_b)
+            };
+
+            // Contract using mdarray-linalg
+            // View implements Borrow<Slice>, so we can use it directly
+            let slice_a: &Slice<f64, DynRank, Dense> = view_a.borrow();
+            let slice_b: &Slice<f64, DynRank, Dense> = view_b.borrow();
+
+            let result = Naive
+                .contract(
+                    slice_a,
+                    slice_b,
+                    axes_a.to_vec(),
+                    axes_b.to_vec(),
+                )
+                .eval();
+
+            Storage::DenseF64(result.into_vec())
+        }
+        (Storage::DenseC64(vec_a), Storage::DenseC64(vec_b)) => {
+            // Create mdarray views (which can be used as slices)
+            let shape_a = DynRank::from_dims(dims_a);
+            let mapping_a = DenseMapping::new(shape_a);
+            let view_a: View<'_, Complex64, DynRank, Dense> = unsafe {
+                View::new_unchecked(vec_a.as_ptr(), mapping_a)
+            };
+
+            let shape_b = DynRank::from_dims(dims_b);
+            let mapping_b = DenseMapping::new(shape_b);
+            let view_b: View<'_, Complex64, DynRank, Dense> = unsafe {
+                View::new_unchecked(vec_b.as_ptr(), mapping_b)
+            };
+
+            // Contract using mdarray-linalg
+            // View implements Borrow<Slice>, so we can use it directly
+            let slice_a: &Slice<Complex64, DynRank, Dense> = view_a.borrow();
+            let slice_b: &Slice<Complex64, DynRank, Dense> = view_b.borrow();
+
+            let result = Naive
+                .contract(
+                    slice_a,
+                    slice_b,
+                    axes_a.to_vec(),
+                    axes_b.to_vec(),
+                )
+                .eval();
+
+            Storage::DenseC64(result.into_vec())
+        }
+        _ => panic!("Storage types must match for contraction"),
     }
 }
 

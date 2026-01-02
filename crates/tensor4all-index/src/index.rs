@@ -198,3 +198,48 @@ pub fn generate_id() -> u128 {
 
 /// Default Index type with default tag capacity (max 4 tags, each max 16 characters).
 pub type DefaultIndex<Id, Symm = NoSymmSpace> = Index<Id, Symm, DefaultTagSet>;
+
+/// Find common indices between two index collections.
+///
+/// Returns a vector of indices that appear in both `indices_a` and `indices_b`
+/// (set intersection). This is similar to ITensors.jl's `commoninds` function.
+///
+/// # Arguments
+/// * `indices_a` - First collection of indices
+/// * `indices_b` - Second collection of indices
+///
+/// # Returns
+/// A vector containing indices that are common to both collections (matched by ID).
+///
+/// # Example
+/// ```
+/// use tensor4all_index::index::{DefaultIndex as Index, DynId, common_inds};
+///
+/// let i = Index::new_dyn(2);
+/// let j = Index::new_dyn(3);
+/// let k = Index::new_dyn(4);
+///
+/// let indices_a = vec![i.clone(), j.clone()];
+/// let indices_b = vec![j.clone(), k.clone()];
+///
+/// let common = common_inds(&indices_a, &indices_b);
+/// assert_eq!(common.len(), 1);
+/// assert_eq!(common[0].id, j.id);
+/// ```
+pub fn common_inds<Id, Symm, Tags>(
+    indices_a: &[Index<Id, Symm, Tags>],
+    indices_b: &[Index<Id, Symm, Tags>],
+) -> Vec<Index<Id, Symm, Tags>>
+where
+    Id: std::hash::Hash + Eq + Clone,
+    Symm: Clone,
+    Tags: Clone,
+{
+    let mut result = Vec::new();
+    for idx_a in indices_a {
+        if indices_b.iter().any(|idx_b| idx_b.id == idx_a.id) {
+            result.push(idx_a.clone());
+        }
+    }
+    result
+}
