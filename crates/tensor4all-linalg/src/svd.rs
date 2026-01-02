@@ -41,7 +41,7 @@ pub enum SvdError {
 /// - `s_vec` is a vector of length `k` containing singular values (real, f64)
 /// - `v_vec` is a vector of length `n * k` containing V matrix data
 fn extract_usv_from_svd_decomp<T>(
-    decomp: SVDDecomp<T, 2, 2>,
+    decomp: SVDDecomp<T>,
     m: usize,
     n: usize,
     k: usize,
