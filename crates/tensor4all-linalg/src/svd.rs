@@ -40,14 +40,15 @@ pub enum SvdError {
 /// - `u_vec` is a vector of length `m * k` containing U matrix data
 /// - `s_vec` is a vector of length `k` containing singular values (real, f64)
 /// - `v_vec` is a vector of length `n * k` containing V matrix data
-fn extract_usv_from_svd_decomp<T: ComplexFloat>(
-    decomp: SVDDecomp<T>,
+fn extract_usv_from_svd_decomp<T>(
+    decomp: SVDDecomp<T, 2, 2>,
     m: usize,
     n: usize,
     k: usize,
 ) -> (Vec<T>, Vec<f64>, Vec<T>)
 where
-    <T as ComplexFloat>::Real: Into<f64>,
+    T: ComplexFloat + Default + From<<T as ComplexFloat>::Real>,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     let SVDDecomp { s, u, vt } = decomp;
 
