@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/tensor4all-index", "crates/tensor4all-tensor"]
+members = ["crates/tensor4all-index", "crates/tensor4all-tensor", "crates/tensor4all-linalg"]
 resolver = "2"
 
 [workspace.package]
