@@ -1,0 +1,16 @@
+[package]
+name = "tensor4all-tensor"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tensor4all-index = { path = "../tensor4all-index" }
+num-complex = "0.4"
+mdarray = { git = "https://github.com/fre-hu/mdarray.git", rev = "70c43898d202682bf35e0db0c08475ec820ee7fa" }
+mdarray-linalg = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main" }
+
+[dev-dependencies]
+

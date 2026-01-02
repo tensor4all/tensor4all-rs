@@ -1,6 +1,6 @@
 use std::sync::Arc;
-use crate::index::{Index, NoSymmSpace};
-use crate::storage::{AnyScalar, Storage, SumFromStorage, permute_storage};
+use tensor4all_index::index::{Index, NoSymmSpace, common_inds, Symmetry};
+use crate::storage::{AnyScalar, Storage, SumFromStorage, permute_storage, contract_storage};
 
 /// Compute the permutation array from original indices to new indices.
 ///
@@ -22,8 +22,8 @@ use crate::storage::{AnyScalar, Storage, SumFromStorage, permute_storage};
 ///
 /// # Example
 /// ```
-/// use tensor4all_core::tensor::compute_permutation_from_indices;
-/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_tensor::tensor::compute_permutation_from_indices;
+/// use tensor4all_index::index::{DefaultIndex as Index, DynId};
 ///
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
@@ -130,9 +130,9 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::tensor::TensorDynLen;
-    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use tensor4all_core::storage::Storage;
+    /// use tensor4all_tensor::TensorDynLen;
+    /// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_tensor::Storage;
     /// use std::sync::Arc;
     ///
     /// // Create a 2×3 tensor
@@ -150,7 +150,7 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
     pub fn permute_indices(&self, new_indices: &[Index<Id, Symm>]) -> Self
     where
         Id: Clone + std::hash::Hash + Eq,
-        Symm: Clone + crate::index::Symmetry,
+        Symm: Clone + Symmetry,
     {
         // Compute permutation by matching IDs
         let perm = compute_permutation_from_indices(&self.indices, new_indices);
@@ -186,9 +186,9 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::tensor::TensorDynLen;
-    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use tensor4all_core::storage::Storage;
+    /// use tensor4all_tensor::TensorDynLen;
+    /// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_tensor::Storage;
     /// use std::sync::Arc;
     ///
     /// // Create a 2×3 tensor
@@ -232,6 +232,127 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
             indices: new_indices,
             dims: new_dims,
             storage: new_storage,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Contract this tensor with another tensor along common indices.
+    ///
+    /// This method finds common indices between `self` and `other`, then contracts
+    /// along those indices. The result tensor contains all non-contracted indices
+    /// from both tensors, with indices from `self` appearing first, followed by
+    /// indices from `other` that are not common.
+    ///
+    /// # Arguments
+    /// * `other` - The tensor to contract with
+    ///
+    /// # Returns
+    /// A new tensor resulting from the contraction.
+    ///
+    /// # Panics
+    /// Panics if there are no common indices, if common indices have mismatched
+    /// dimensions, or if storage types don't match.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_tensor::TensorDynLen;
+    /// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_tensor::Storage;
+    /// use std::sync::Arc;
+    ///
+    /// // Create two tensors: A[i, j] and B[j, k]
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let k = Index::new_dyn(4);
+    ///
+    /// let indices_a = vec![i.clone(), j.clone()];
+    /// let dims_a = vec![2, 3];
+    /// let storage_a = Arc::new(Storage::new_dense_f64(6));
+    /// let tensor_a: TensorDynLen<DynId, f64> = TensorDynLen::new(indices_a, dims_a, storage_a);
+    ///
+    /// let indices_b = vec![j.clone(), k.clone()];
+    /// let dims_b = vec![3, 4];
+    /// let storage_b = Arc::new(Storage::new_dense_f64(12));
+    /// let tensor_b: TensorDynLen<DynId, f64> = TensorDynLen::new(indices_b, dims_b, storage_b);
+    ///
+    /// // Contract along j: result is C[i, k]
+    /// let result = tensor_a.contract(&tensor_b);
+    /// assert_eq!(result.dims, vec![2, 4]);
+    /// ```
+    pub fn contract(&self, other: &Self) -> Self
+    where
+        Id: Clone + std::hash::Hash + Eq,
+        Symm: Clone + Symmetry,
+    {
+        // Find common indices
+        let common = common_inds(&self.indices, &other.indices);
+        if common.is_empty() {
+            panic!("No common indices found for contraction");
+        }
+
+        // Find positions of common indices in both tensors
+        let mut axes_a = Vec::new();
+        let mut axes_b = Vec::new();
+
+        for common_idx in &common {
+            // Find position in self
+            let pos_a = self.indices
+                .iter()
+                .position(|idx| idx.id == common_idx.id)
+                .expect("common index must be in self");
+            axes_a.push(pos_a);
+
+            // Find position in other
+            let pos_b = other.indices
+                .iter()
+                .position(|idx| idx.id == common_idx.id)
+                .expect("common index must be in other");
+            axes_b.push(pos_b);
+
+            // Verify dimensions match
+            assert_eq!(
+                self.dims[pos_a],
+                other.dims[pos_b],
+                "Common index dimension mismatch: {} != {}",
+                self.dims[pos_a],
+                other.dims[pos_b]
+            );
+        }
+
+        // Get non-contracted indices
+        let mut result_indices = Vec::new();
+        let mut result_dims = Vec::new();
+
+        // Add non-contracted indices from self
+        for (i, idx) in self.indices.iter().enumerate() {
+            if !axes_a.contains(&i) {
+                result_indices.push(idx.clone());
+                result_dims.push(self.dims[i]);
+            }
+        }
+
+        // Add non-contracted indices from other
+        for (i, idx) in other.indices.iter().enumerate() {
+            if !axes_b.contains(&i) {
+                result_indices.push(idx.clone());
+                result_dims.push(other.dims[i]);
+            }
+        }
+
+        // Perform contraction
+        let result_storage = Arc::new(contract_storage(
+            &self.storage,
+            &self.dims,
+            &axes_a,
+            &other.storage,
+            &other.dims,
+            &axes_b,
+        ));
+
+        Self {
+            indices: result_indices,
+            dims: result_dims,
+            storage: result_storage,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -293,9 +414,9 @@ impl<const N: usize, Id, T, Symm> TensorStaticLen<N, Id, T, Symm> {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::tensor::TensorStaticLen;
-    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use tensor4all_core::storage::Storage;
+    /// use tensor4all_tensor::TensorStaticLen;
+    /// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_tensor::Storage;
     /// use std::sync::Arc;
     ///
     /// // Create a 2×3 tensor
@@ -313,7 +434,7 @@ impl<const N: usize, Id, T, Symm> TensorStaticLen<N, Id, T, Symm> {
     pub fn permute_indices(&self, new_indices: &[Index<Id, Symm>; N]) -> Self
     where
         Id: Clone + std::hash::Hash + Eq,
-        Symm: Clone + crate::index::Symmetry,
+        Symm: Clone + Symmetry,
     {
         // Compute permutation by matching IDs
         let perm = compute_permutation_from_indices(&self.indices, new_indices);
@@ -349,9 +470,9 @@ impl<const N: usize, Id, T, Symm> TensorStaticLen<N, Id, T, Symm> {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::tensor::TensorStaticLen;
-    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use tensor4all_core::storage::Storage;
+    /// use tensor4all_tensor::TensorStaticLen;
+    /// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_tensor::Storage;
     /// use std::sync::Arc;
     ///
     /// // Create a 2×3 tensor
@@ -396,6 +517,138 @@ impl<const N: usize, Id, T, Symm> TensorStaticLen<N, Id, T, Symm> {
             indices: new_indices,
             dims: new_dims,
             storage: new_storage,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Contract this tensor with another tensor along common indices.
+    ///
+    /// This method finds common indices between `self` and `other`, then contracts
+    /// along those indices. The result tensor contains all non-contracted indices
+    /// from both tensors, with indices from `self` appearing first, followed by
+    /// indices from `other` that are not common.
+    ///
+    /// Note: The result is always a `TensorDynLen` because the rank of the result
+    /// may differ from the input ranks.
+    ///
+    /// # Arguments
+    /// * `other` - The tensor to contract with (can be `TensorStaticLen` or `TensorDynLen`)
+    ///
+    /// # Returns
+    /// A new `TensorDynLen` resulting from the contraction.
+    ///
+    /// # Panics
+    /// Panics if there are no common indices, if common indices have mismatched
+    /// dimensions, or if storage types don't match.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_tensor::{TensorStaticLen, TensorDynLen};
+    /// use tensor4all_index::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_tensor::Storage;
+    /// use std::sync::Arc;
+    ///
+    /// // Create two tensors: A[i, j] and B[j, k]
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let k = Index::new_dyn(4);
+    ///
+    /// let indices_a = [i.clone(), j.clone()];
+    /// let dims_a = [2, 3];
+    /// let storage_a = Arc::new(Storage::new_dense_f64(6));
+    /// let tensor_a: TensorStaticLen<2, DynId, f64> = TensorStaticLen::new(indices_a, dims_a, storage_a);
+    ///
+    /// let indices_b = [j.clone(), k.clone()];
+    /// let dims_b = [3, 4];
+    /// let storage_b = Arc::new(Storage::new_dense_f64(12));
+    /// let tensor_b: TensorStaticLen<2, DynId, f64> = TensorStaticLen::new(indices_b, dims_b, storage_b);
+    ///
+    /// // Contract along j: result is C[i, k]
+    /// let result = tensor_a.contract(&tensor_b);
+    /// assert_eq!(result.dims, vec![2, 4]);
+    /// ```
+    pub fn contract<const M: usize>(&self, other: &TensorStaticLen<M, Id, T, Symm>) -> TensorDynLen<Id, T, Symm>
+    where
+        Id: Clone + std::hash::Hash + Eq,
+        Symm: Clone + Symmetry,
+    {
+        // Convert static indices to slices for common_inds
+        let self_indices_slice: &[Index<Id, Symm>] = &self.indices;
+        let other_indices_slice: &[Index<Id, Symm>] = &other.indices;
+
+        // Find common indices
+        let common = common_inds(self_indices_slice, other_indices_slice);
+        if common.is_empty() {
+            panic!("No common indices found for contraction");
+        }
+
+        // Find positions of common indices in both tensors
+        let mut axes_a = Vec::new();
+        let mut axes_b = Vec::new();
+
+        for common_idx in &common {
+            // Find position in self
+            let pos_a = self.indices
+                .iter()
+                .position(|idx| idx.id == common_idx.id)
+                .expect("common index must be in self");
+            axes_a.push(pos_a);
+
+            // Find position in other
+            let pos_b = other.indices
+                .iter()
+                .position(|idx| idx.id == common_idx.id)
+                .expect("common index must be in other");
+            axes_b.push(pos_b);
+
+            // Verify dimensions match
+            assert_eq!(
+                self.dims[pos_a],
+                other.dims[pos_b],
+                "Common index dimension mismatch: {} != {}",
+                self.dims[pos_a],
+                other.dims[pos_b]
+            );
+        }
+
+        // Get non-contracted indices
+        let mut result_indices = Vec::new();
+        let mut result_dims = Vec::new();
+
+        // Add non-contracted indices from self
+        for (i, idx) in self.indices.iter().enumerate() {
+            if !axes_a.contains(&i) {
+                result_indices.push(idx.clone());
+                result_dims.push(self.dims[i]);
+            }
+        }
+
+        // Add non-contracted indices from other
+        for (i, idx) in other.indices.iter().enumerate() {
+            if !axes_b.contains(&i) {
+                result_indices.push(idx.clone());
+                result_dims.push(other.dims[i]);
+            }
+        }
+
+        // Convert dims to slices for contract_storage
+        let dims_a_slice: &[usize] = &self.dims;
+        let dims_b_slice: &[usize] = &other.dims;
+
+        // Perform contraction
+        let result_storage = Arc::new(contract_storage(
+            &self.storage,
+            dims_a_slice,
+            &axes_a,
+            &other.storage,
+            dims_b_slice,
+            &axes_b,
+        ));
+
+        TensorDynLen {
+            indices: result_indices,
+            dims: result_dims,
+            storage: result_storage,
             _phantom: std::marker::PhantomData,
         }
     }
