@@ -8,8 +8,8 @@ tensor4all-rs provides a type-safe, efficient implementation of tensor networks 
 
 ## Key Features
 
-- **Type-safe Index system**: Generic `Index<Id, Symm, MAX_TAGS, MAX_TAG_LEN>` type supporting both runtime and compile-time identities
-- **Tag support**: Index tags with configurable capacity (default: max 4 tags, each max 16 characters)
+- **Type-safe Index system**: Generic `Index<Id, Symm, Tags = DefaultTagSet>` type supporting both runtime and compile-time identities
+- **Tag support**: Index tags with configurable capacity via `Tags` type parameter (default: `DefaultTagSet` with max 4 tags, each max 16 characters)
 - **Quantum number symmetries**: Support for Abelian (U(1), Z_n) and non-Abelian (SU(2), SU(N)) symmetries (planned)
 - **Thread-safe ID generation**: UInt128 random IDs using thread-local RNG for extremely low collision probability
 - **Flexible tensor types**: Both dynamic-rank and static-rank tensor variants
@@ -23,19 +23,19 @@ tensor4all-rs provides a type-safe, efficient implementation of tensor networks 
 | Concept | QSpace v4 | ITensors.jl | tensor4all-rs |
 |---------|-----------|-------------|---------------|
 | **Tensor with QNs** | `QSpace` | `ITensor` | `TensorDynLen<Id, T, Symm>` / `TensorStaticLen<N, Id, T, Symm>` |
-| **Index** | Quantum number labels in `QIDX` | `Index{QNBlocks}` | `Index<Id, Symm, MAX_TAGS, MAX_TAG_LEN>` |
+| **Index** | Quantum number labels in `QIDX` | `Index{QNBlocks}` | `Index<Id, Symm, Tags = DefaultTagSet>` |
 | **Storage** | `DATA` (array of blocks) | `NDTensors.BlockSparse` | `Storage` enum (DenseF64, DenseC64) |
 | **Language** | MATLAB/C++ | Julia | Rust |
 
 ### Index Design
 
-The `Index` type is parameterized by identity type `Id`, symmetry type `Symm`, and tag capacity:
+The `Index` type is parameterized by identity type `Id`, symmetry type `Symm`, and tag type `Tags`:
 
 ```rust
-pub struct Index<Id, Symm = NoSymmSpace, const MAX_TAGS: usize = 4, const MAX_TAG_LEN: usize = 16> {
+pub struct Index<Id, Symm = NoSymmSpace, Tags = DefaultTagSet> {
     pub id: Id,
     pub symm: Symm,
-    pub tags: TagSet<MAX_TAGS, MAX_TAG_LEN>,
+    pub tags: Tags,
 }
 ```
 
@@ -48,8 +48,8 @@ pub struct Index<Id, Symm = NoSymmSpace, const MAX_TAGS: usize = 4, const MAX_TA
 - `QNSpace` (planned): Quantum number spaces (corresponds to `Index{QNBlocks}`)
 
 **Tags**:
-- Configurable tag capacity via const generics
-- Default: max 4 tags, each max 16 characters
+- Configurable via `Tags` type parameter (default: `DefaultTagSet`)
+- `DefaultTagSet = TagSet<4, 16>` (max 4 tags, each max 16 characters)
 - Tags are stored in `TagSet` using `SmallString` for efficient storage
 
 ### ID Generation

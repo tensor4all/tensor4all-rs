@@ -245,21 +245,30 @@ impl Symmetry for NoSymmSpace {
     }
 }
 
-/// Index with generic identity type `Id` and symmetry type `Symm`.
+/// Index with generic identity type `Id`, symmetry type `Symm`, and tag type `Tags`.
 ///
 /// - `Id = DynId` for ITensors-like runtime identity
 /// - `Id = ZST marker type` for compile-time-known identity
 /// - `Symm = NoSymmSpace` for no symmetry (default, corresponds to `Index{Int}`)
 /// - `Symm = QNSpace` (future) for quantum numbers (corresponds to `Index{QNBlocks}`)
+/// - `Tags = DefaultTagSet` for tags (default, max 4 tags, each max 16 characters)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Index<Id, Symm = NoSymmSpace> {
+pub struct Index<Id, Symm = NoSymmSpace, Tags = DefaultTagSet> {
     pub id: Id,
     pub symm: Symm,
+    pub tags: Tags,
 }
 
-impl<Id, Symm: Symmetry> Index<Id, Symm> {
+impl<Id, Symm: Symmetry, Tags> Index<Id, Symm, Tags>
+where
+    Tags: Default,
+{
     pub fn new(id: Id, symm: Symm) -> Self {
-        Self { id, symm }
+        Self {
+            id,
+            symm,
+            tags: Tags::default(),
+        }
     }
 
     /// Get the total dimension (size) of the index.
@@ -298,22 +307,30 @@ pub fn generate_id() -> u128 {
 #### Convenience Constructors
 
 ```rust
-impl<Id> Index<Id, NoSymmSpace> {
+impl<Id, Tags> Index<Id, NoSymmSpace, Tags>
+where
+    Tags: Default,
+{
     /// Create a new index with no symmetry from dimension.
     pub fn new_with_size(id: Id, size: usize) -> Self {
         Self {
             id,
             symm: NoSymmSpace::new(size),
+            tags: Tags::default(),
         }
     }
 }
 
-impl Index<DynId, NoSymmSpace> {
+impl<Tags> Index<DynId, NoSymmSpace, Tags>
+where
+    Tags: Default,
+{
     /// Create a new index with a generated dynamic ID and no symmetry.
     pub fn new_dyn(size: usize) -> Self {
         Self {
             id: DynId(generate_id()),
             symm: NoSymmSpace::new(size),
+            tags: Tags::default(),
         }
     }
 }
@@ -399,9 +416,10 @@ Two design options:
 
 **Option A**: Store arrow as separate field (like ITensors.jl)
 ```rust
-pub struct Index<Id, Symm> {
+pub struct Index<Id, Symm, Tags = DefaultTagSet> {
     pub id: Id,
     pub symm: Symm,
+    pub tags: Tags,
     pub arrow: Arrow,  // In, Out, Neither
 }
 ```
@@ -421,7 +439,7 @@ pub struct NonAbelianSymm {
 
 ### Design Decisions
 
-1. **Type Parameter for Symmetry**: Following ITensors.jl's `Index{T}` pattern, we use `Index<Id, Symm>` where `Symm` defaults to `NoSymmSpace`
+1. **Type Parameter for Symmetry**: Following ITensors.jl's `Index{T}` pattern, we use `Index<Id, Symm, Tags>` where `Symm` defaults to `NoSymmSpace` and `Tags` defaults to `DefaultTagSet`
 2. **No Backward Compatibility**: Clean break from old `Index<Id>` design
 3. **Size as Method**: `size()` method computes from `symm.total_dim()` rather than storing separately
 4. **Extensibility**: Easy to add `QNSpace`, `IrrepSpace`, etc. by implementing `Symmetry` trait
