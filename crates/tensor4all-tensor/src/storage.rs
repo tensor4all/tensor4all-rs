@@ -1,7 +1,7 @@
 use std::sync::Arc;
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use num_complex::Complex64;
-use mdarray::{DenseMapping, View, DynRank, Shape, Dense, Slice};
+use mdarray::{DenseMapping, View, DynRank, Shape, Dense, Slice, DTensor, Rank};
 use mdarray_linalg::{matmul::{MatMul, ContractBuilder}, Naive};
 
 /// Dense storage for f64 elements.
@@ -662,6 +662,107 @@ pub fn contract_storage(
             contract_storage(storage_a, dims_a, axes_a, &dense_b, dims_b, axes_b, result_dims)
         }
         _ => panic!("Storage types must be compatible for contraction"),
+    }
+}
+
+/// Scalar types that can be extracted from and stored in `Storage`.
+///
+/// This trait provides conversion methods between scalar types and `Storage`,
+/// supporting both view-based (borrowed) and owned operations.
+///
+/// # View-based operations
+/// - `extract_dense_view`: Returns a borrowed slice (no copy)
+/// - `extract_dense_cow`: Returns `Cow` (borrowed if possible, owned if needed)
+///
+/// # Owned operations
+/// - `extract_dense`: Returns owned `Vec` (always copies)
+/// - `dense_storage`: Creates `Storage` from owned `Vec`
+pub trait StorageScalar: Copy + 'static {
+    /// Extract a borrowed view of dense storage data (no copy).
+    ///
+    /// Returns an error if the storage is not the matching dense type.
+    fn extract_dense_view<'a>(storage: &'a Storage) -> Result<&'a [Self], String>;
+
+    /// Extract dense storage data as `Cow` (borrowed if possible, owned if needed).
+    ///
+    /// For dense storage, returns `Cow::Borrowed` (no copy).
+    /// For other storage types, may need to convert to dense first (copy).
+    fn extract_dense_cow<'a>(storage: &'a Storage) -> Result<Cow<'a, [Self]>, String> {
+        Self::extract_dense_view(storage).map(Cow::Borrowed)
+    }
+
+    /// Extract dense storage data as owned `Vec` (always copies).
+    ///
+    /// This is a convenience method that calls `extract_dense_cow` and converts to owned.
+    fn extract_dense(storage: &Storage) -> Result<Vec<Self>, String> {
+        Ok(Self::extract_dense_cow(storage)?.into_owned())
+    }
+
+    /// Create `Storage` from owned dense data.
+    fn dense_storage(data: Vec<Self>) -> Arc<Storage>;
+}
+
+/// Convert dense storage to a DTensor with rank 2.
+///
+/// This function extracts data from dense storage and reshapes it into a `DTensor<T, 2>`
+/// with the specified shape `[m, n]`. The data length must match `m * n`.
+///
+/// # Arguments
+/// * `storage` - Dense storage (DenseF64 or DenseC64)
+/// * `shape` - Shape array `[m, n]`
+///
+/// # Returns
+/// A `DTensor<T, 2>` with the specified shape
+///
+/// # Errors
+/// Returns an error if:
+/// - Storage type doesn't match T
+/// - Data length doesn't match `m * n`
+pub fn storage_to_dtensor<T: StorageScalar>(
+    storage: &Storage,
+    shape: [usize; 2],
+) -> Result<DTensor<T, 2>, String> {
+    // Extract data
+    let data = T::extract_dense(storage)?;
+    
+    // Validate length
+    let expected_len: usize = shape[0] * shape[1];
+    if data.len() != expected_len {
+        return Err(format!(
+            "Data length {} doesn't match shape product {}",
+            data.len(),
+            expected_len
+        ));
+    }
+    
+    // Create 1D tensor, then reshape to 2D
+    let tensor_1d = mdarray::Tensor::<T, Rank<1>>::from(data);
+    Ok(tensor_1d.into_shape(shape))
+}
+
+impl StorageScalar for f64 {
+    fn extract_dense_view<'a>(storage: &'a Storage) -> Result<&'a [Self], String> {
+        match storage {
+            Storage::DenseF64(ds) => Ok(ds.as_slice()),
+            _ => Err(format!("Expected DenseF64 storage, got {:?}", storage)),
+        }
+    }
+
+    fn dense_storage(data: Vec<Self>) -> Arc<Storage> {
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)))
+    }
+}
+
+impl StorageScalar for Complex64 {
+    fn extract_dense_view<'a>(storage: &'a Storage) -> Result<&'a [Self], String> {
+        match storage {
+            Storage::DenseC64(ds) => Ok(ds.as_slice()),
+            _ => Err(format!("Expected DenseC64 storage, got {:?}", storage)),
+        }
+    }
+
+    fn dense_storage(data: Vec<Self>) -> Arc<Storage> {
+        Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data)))
     }
 }
 

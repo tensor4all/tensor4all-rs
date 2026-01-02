@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::collections::HashSet;
 use num_complex::Complex64;
 use tensor4all_index::index::{Index, NoSymmSpace, common_inds, Symmetry};
-use crate::storage::{AnyScalar, Storage, SumFromStorage, contract_storage};
+use crate::storage::{AnyScalar, Storage, StorageScalar, SumFromStorage, contract_storage, storage_to_dtensor};
 use anyhow::Result;
+use mdarray::DTensor;
 
 /// Compute the permutation array from original indices to new indices.
 ///
@@ -80,9 +81,10 @@ pub struct TensorDynLen<Id, T, Symm = NoSymmSpace> {
 impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
     /// Create a new tensor with dynamic rank.
     ///
+    /// Dimensions are automatically computed from the indices using `Index::size()`.
+    ///
     /// # Panics
-    /// Panics if `indices.len() != dims.len()`, or if the storage is Diag
-    /// and not all indices have the same dimension.
+    /// Panics if the storage is Diag and not all indices have the same dimension.
     pub fn new(indices: Vec<Index<Id, Symm>>, dims: Vec<usize>, storage: Arc<Storage>) -> Self {
         assert_eq!(
             indices.len(),
@@ -108,6 +110,20 @@ impl<Id, T, Symm> TensorDynLen<Id, T, Symm> {
             storage,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    /// Create a new tensor with dynamic rank, automatically computing dimensions from indices.
+    ///
+    /// This is a convenience constructor that extracts dimensions from indices using `Index::size()`.
+    ///
+    /// # Panics
+    /// Panics if the storage is Diag and not all indices have the same dimension.
+    pub fn from_indices(indices: Vec<Index<Id, Symm>>, storage: Arc<Storage>) -> Self
+    where
+        Symm: Symmetry,
+    {
+        let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
+        Self::new(indices, dims, storage)
     }
 
     /// Get a mutable reference to storage (COW: clones if shared).
@@ -846,15 +862,15 @@ pub type AnyTensorStaticLen<const N: usize, Id, Symm = NoSymmSpace> = TensorStat
 /// Unfold a tensor into a matrix by splitting indices into left and right groups.
 ///
 /// This function validates the split, permutes the tensor so that left indices come first,
-/// and returns the unfolded tensor along with the matrix dimensions (m, n).
+/// and returns a 2D matrix tensor (`DTensor<T, 2>`) along with metadata.
 ///
 /// # Arguments
 /// * `t` - Input tensor
 /// * `left_inds` - Indices to place on the left (row) side of the matrix
 ///
 /// # Returns
-/// A tuple `(unfolded_tensor, left_len, m, n, left_indices, right_indices)` where:
-/// - `unfolded_tensor` is the tensor permuted to have left indices first, then right indices
+/// A tuple `(matrix_tensor, left_len, m, n, left_indices, right_indices)` where:
+/// - `matrix_tensor` is a `DTensor<T, 2>` with shape `[m, n]` containing the unfolded data
 /// - `left_len` is the number of left indices
 /// - `m` is the product of left index dimensions
 /// - `n` is the product of right index dimensions
@@ -866,11 +882,12 @@ pub type AnyTensorStaticLen<const N: usize, Id, Symm = NoSymmSpace> = TensorStat
 /// - The tensor rank is < 2
 /// - `left_inds` is empty or contains all indices
 /// - `left_inds` contains indices not in the tensor or duplicates
+/// - Storage type is not supported (must be DenseF64 or DenseC64)
 pub fn unfold_split<Id, T, Symm>(
     t: &TensorDynLen<Id, T, Symm>,
     left_inds: &[Index<Id, Symm>],
 ) -> Result<(
-    TensorDynLen<Id, T, Symm>,
+    DTensor<T, 2>,
     usize,
     usize,
     usize,
@@ -880,6 +897,7 @@ pub fn unfold_split<Id, T, Symm>(
 where
     Id: Clone + std::hash::Hash + Eq,
     Symm: Clone + Symmetry,
+    T: StorageScalar,
 {
     let rank = t.dims.len();
     
@@ -931,8 +949,12 @@ where
     let m: usize = unfolded.dims[..left_len].iter().product();
     let n: usize = unfolded.dims[left_len..].iter().product();
 
+    // Create DTensor directly from storage
+    let matrix_tensor = storage_to_dtensor::<T>(unfolded.storage.as_ref(), [m, n])
+        .map_err(|e| anyhow::anyhow!("Failed to create DTensor: {}", e))?;
+
     Ok((
-        unfolded,
+        matrix_tensor,
         left_len,
         m,
         n,
