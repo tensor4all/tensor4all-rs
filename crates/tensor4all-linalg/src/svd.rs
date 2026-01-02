@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tensor4all_index::index::{Index, DynId, NoSymmSpace, Symmetry};
 use tensor4all_index::tagset::DefaultTagSet;
-use tensor4all_tensor::{Storage, TensorDynLen};
+use tensor4all_tensor::{Storage, TensorDynLen, unfold_split};
 use tensor4all_tensor::storage::{DenseStorageF64, DenseStorageC64};
 use mdarray::{Dense, Slice, tensor};
 use mdarray_linalg::svd::{SVD, SVDDecomp, SVDError as MdarraySvdError};
@@ -13,14 +13,14 @@ use thiserror::Error;
 /// Error type for SVD operations in tensor4all-linalg.
 #[derive(Debug, Error)]
 pub enum SvdError {
-    #[error("Tensor must have rank 2, got rank {0}")]
-    InvalidRank(usize),
-
     #[error("Tensor storage must be DenseF64 or DenseC64, got {0:?}")]
     UnsupportedStorage(String),
 
     #[error("mdarray-linalg SVD error: {0}")]
     BackendError(#[from] MdarraySvdError),
+
+    #[error("Unfold error: {0}")]
+    UnfoldError(#[from] anyhow::Error),
 }
 
 /// Scalar types supported by this SVD wrapper.
@@ -77,10 +77,11 @@ impl SvdScalar for Complex64 {
     }
 }
 
-/// Compute SVD decomposition of a rank-2 tensor, returning (U, S, V).
+/// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
 ///
 /// This function mimics ITensor's SVD API, returning U, S, and V (not Vt).
-/// The input tensor must be rank-2 with DenseF64 or DenseC64 storage.
+/// The input tensor can have any rank >= 2, and indices are split into left and right groups.
+/// The tensor is unfolded into a matrix by grouping left indices as rows and right indices as columns.
 ///
 /// For complex-valued matrices, the mathematical convention is:
 /// \[ A = U * Σ * V^H \]
@@ -90,23 +91,29 @@ impl SvdScalar for Complex64 {
 /// and we return **V** (not Vt), so we build V by (conjugate-)transposing the leading k rows.
 ///
 /// # Arguments
-/// * `t` - Input tensor of rank 2 with DenseF64 or DenseC64 storage
+/// * `t` - Input tensor with DenseF64 or DenseC64 storage
+/// * `left_inds` - Indices to place on the left (row) side of the unfolded matrix
 ///
 /// # Returns
 /// A tuple `(U, S, V)` where:
-/// - `U` is an m×k tensor with indices `[left_index, bond_index]`
+/// - `U` is a tensor with indices `[left_inds..., bond_index]` and dimensions `[left_dims..., k]`
 /// - `S` is a k×k diagonal tensor with indices `[bond_index, bond_index]` (singular values are real)
-/// - `V` is an n×k tensor with indices `[right_index, bond_index]`
-/// where `k = min(m, n)` is the bond dimension.
+/// - `V` is a tensor with indices `[right_inds..., bond_index]` and dimensions `[right_dims..., k]`
+/// where `k = min(m, n)` is the bond dimension, `m = ∏left_dims`, and `n = ∏right_dims`.
 ///
 /// Note: Singular values `S` are always real, even for complex input tensors.
 ///
 /// # Errors
-/// Returns `SvdError` if the tensor is not rank-2, storage is not DenseF64 or DenseC64,
-/// or if the SVD computation fails.
+/// Returns `SvdError` if:
+/// - The tensor rank is < 2
+/// - Storage is not DenseF64 or DenseC64
+/// - `left_inds` is empty or contains all indices
+/// - `left_inds` contains indices not in the tensor or duplicates
+/// - The SVD computation fails
 #[allow(private_bounds)]
 pub fn svd<Id, Symm, T>(
     t: &TensorDynLen<Id, T, Symm>,
+    left_inds: &[Index<Id, Symm>],
 ) -> Result<
     (
         TensorDynLen<Id, T, Symm>,
@@ -121,22 +128,13 @@ where
     T: SvdScalar,
     <T as ComplexFloat>::Real: ComplexFloat + Default + 'static,
 {
-    // Validate rank
-    if t.dims.len() != 2 {
-        return Err(SvdError::InvalidRank(t.dims.len()));
-    }
-
-    let m = t.dims[0];
-    let n = t.dims[1];
+    // Unfold tensor into matrix
+    let (unfolded, left_len, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
+        .map_err(SvdError::UnfoldError)?;
     let k = m.min(n);
 
-    // Get original indices
-    let left_index = t.indices[0].clone();
-    let right_index = t.indices[1].clone();
-
-    // Extract data and create mdarray tensor
-    // SVD destroys the input, so we need to clone the data
-    let a_data = T::extract_dense(t.storage.as_ref())?;
+    // Extract data from unfolded tensor
+    let a_data = T::extract_dense(unfolded.storage.as_ref())?;
 
     // Create mdarray tensor
     let mut a_tensor = tensor![[T::default(); n]; m];
@@ -203,31 +201,40 @@ where
         SvdError::UnsupportedStorage("Failed to add Link tag".to_string())
     })?;
 
-    // Create U, S, V tensors
-    let u_indices = vec![left_index.clone(), bond_index.clone()];
-    let s_indices = vec![bond_index.clone(), bond_index.clone()];
-    let v_indices = vec![right_index.clone(), bond_index.clone()];
-
-    // Create storage using trait methods.
-    // Note: S uses `T::Real` (singular values), not `T`.
+    // Create U tensor: [left_inds..., bond_index]
+    let mut u_indices = left_indices.clone();
+    u_indices.push(bond_index.clone());
+    let mut u_dims = unfolded.dims[..left_len].to_vec();
+    u_dims.push(k);
     let u_storage = T::dense_storage(u_vec);
-    let s_storage = T::diag_real_storage(s_vec);
-    let v_storage = T::dense_storage(v_vec);
+    let u = TensorDynLen::new(u_indices, u_dims, u_storage);
 
-    let u = TensorDynLen::new(u_indices, vec![m, k], u_storage);
+    // Create S tensor: [bond_index, bond_index] (diagonal)
+    let s_indices = vec![bond_index.clone(), bond_index.clone()];
+    let s_storage = T::diag_real_storage(s_vec);
     let s = TensorDynLen::new(s_indices, vec![k, k], s_storage);
-    let v = TensorDynLen::new(v_indices, vec![n, k], v_storage);
+
+    // Create V tensor: [right_inds..., bond_index]
+    let mut v_indices = right_indices.clone();
+    v_indices.push(bond_index.clone());
+    let mut v_dims = unfolded.dims[left_len..].to_vec();
+    v_dims.push(k);
+    let v_storage = T::dense_storage(v_vec);
+    let v = TensorDynLen::new(v_indices, v_dims, v_storage);
 
     Ok((u, s, v))
 }
 
-/// Compute SVD decomposition of a rank-2 complex tensor, returning (U, S, V).
+/// Compute SVD decomposition of a complex tensor with arbitrary rank, returning (U, S, V).
 ///
 /// This is a convenience wrapper around the generic `svd` function for `Complex64` tensors.
 ///
 /// For complex-valued matrices, the mathematical convention is:
 /// \[ A = U * Σ * V^H \]
 /// where \(V^H\) is the conjugate-transpose of \(V\).
+///
+/// The input tensor can have any rank >= 2, and indices are split into left and right groups.
+/// The tensor is unfolded into a matrix by grouping left indices as rows and right indices as columns.
 ///
 /// `mdarray-linalg` returns `vt` (conceptually \(V^T\) / \(V^H\) depending on scalar type),
 /// and we return **V** (not Vt), so we build V by conjugate-transposing the leading k rows.
@@ -236,6 +243,7 @@ where
 #[inline]
 pub fn svd_c64<Id, Symm>(
     t: &TensorDynLen<Id, Complex64, Symm>,
+    left_inds: &[Index<Id, Symm>],
 ) -> Result<
     (
         TensorDynLen<Id, Complex64, Symm>,
@@ -248,6 +256,5 @@ where
     Id: Clone + std::hash::Hash + Eq + From<DynId>,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
 {
-    svd(t)
+    svd(t, left_inds)
 }
-

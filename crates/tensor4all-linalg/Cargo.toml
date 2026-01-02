@@ -15,6 +15,7 @@ mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", br
 faer-traits = "0.23"
 thiserror = "2.0"
 num-complex = "0.4"
+anyhow = "1.0"
 
 [dev-dependencies]
 
