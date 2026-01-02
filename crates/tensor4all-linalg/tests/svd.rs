@@ -209,29 +209,11 @@ fn test_svd_invalid_split() {
     
     // Empty left_inds should fail
     let result = svd(&tensor, &[]);
-<<<<<<< HEAD
     assert!(result.is_err(), "Expected error for empty left_inds");
     
     // All indices in left_inds should fail
     let result = svd(&tensor, &[i.clone(), j.clone()]);
     assert!(result.is_err(), "Expected error for all indices in left_inds");
-=======
-    assert!(result.is_err());
-    match result {
-        Err(tensor4all_linalg::SvdError::UnfoldError(_)) => {},
-        Err(e) => panic!("Expected UnfoldError for empty left_inds, got {:?}", e),
-        Ok(_) => panic!("Expected error but got Ok"),
-    }
-    
-    // All indices in left_inds should fail
-    let result = svd(&tensor, &[i.clone(), j.clone()]);
-    assert!(result.is_err());
-    match result {
-        Err(tensor4all_linalg::SvdError::UnfoldError(_)) => {},
-        Err(e) => panic!("Expected UnfoldError for all indices in left_inds, got {:?}", e),
-        Ok(_) => panic!("Expected error but got Ok"),
-    }
->>>>>>> origin/main
 }
 
 #[test]
