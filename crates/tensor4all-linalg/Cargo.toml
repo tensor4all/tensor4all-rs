@@ -1,0 +1,19 @@
+[package]
+name = "tensor4all-linalg"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tensor4all-tensor = { path = "../tensor4all-tensor" }
+tensor4all-index = { path = "../tensor4all-index" }
+mdarray = { git = "https://github.com/fre-hu/mdarray.git", rev = "70c43898d202682bf35e0db0c08475ec820ee7fa" }
+mdarray-linalg = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main" }
+mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-faer" }
+thiserror = "2.0"
+num-complex = "0.4"
+
+[dev-dependencies]
+
