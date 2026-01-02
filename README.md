@@ -14,7 +14,8 @@ tensor4all-rs provides a type-safe, efficient implementation of tensor networks 
 - **Thread-safe ID generation**: UInt128 random IDs using thread-local RNG for extremely low collision probability
 - **Flexible tensor types**: Both dynamic-rank and static-rank tensor variants
 - **Copy-on-write storage**: Efficient memory management for tensor networks
-- **Multiple storage backends**: DenseF64 and DenseC64 storage types
+- **Multiple storage backends**: DenseF64, DenseC64, DiagF64, and DiagC64 storage types
+- **Modular architecture**: Separated into `tensor4all-index` (core index/tag utilities) and `tensor4all-tensor` (tensor and storage implementations)
 
 ## Design Philosophy
 
@@ -24,7 +25,7 @@ tensor4all-rs provides a type-safe, efficient implementation of tensor networks 
 |---------|-----------|-------------|---------------|
 | **Tensor with QNs** | `QSpace` | `ITensor` | `TensorDynLen<Id, T, Symm>` / `TensorStaticLen<N, Id, T, Symm>` |
 | **Index** | Quantum number labels in `QIDX` | `Index{QNBlocks}` | `Index<Id, Symm, Tags = DefaultTagSet>` |
-| **Storage** | `DATA` (array of blocks) | `NDTensors.BlockSparse` | `Storage` enum (DenseF64, DenseC64) |
+| **Storage** | `DATA` (array of blocks) | `NDTensors.BlockSparse` | `Storage` enum (DenseF64, DenseC64, DiagF64, DiagC64) |
 | **Language** | MATLAB/C++ | Julia | Rust |
 
 ### Index Design
@@ -92,8 +93,16 @@ Tensor data is shared via `Arc<Storage>` with copy-on-write (COW) semantics:
 - If shared, clone then mutate
 
 **Storage Types**:
-- `DenseF64`: Dense storage for `f64` elements
-- `DenseC64`: Dense storage for `Complex64` elements
+- `DenseF64`: Dense storage for `f64` elements (wraps `DenseStorageF64`)
+- `DenseC64`: Dense storage for `Complex64` elements (wraps `DenseStorageC64`)
+- `DiagF64`: Diagonal storage for `f64` elements (wraps `DiagStorageF64`) - stores only diagonal elements
+- `DiagC64`: Diagonal storage for `Complex64` elements (wraps `DiagStorageC64`) - stores only diagonal elements
+
+**Storage Architecture**:
+- Storage types are implemented as newtype structs (`DenseStorageF64`, `DenseStorageC64`, `DiagStorageF64`, `DiagStorageC64`)
+- The `Storage` enum wraps these newtypes, providing a unified interface
+- Heavy operations (permutation, contraction, conversion) are implemented as methods on the storage newtypes
+- This design keeps `match` blocks short and organizes logic by storage type
 
 ### Element Types
 
@@ -108,26 +117,92 @@ Tensor data is shared via `Arc<Storage>` with copy-on-write (COW) semantics:
 | `Index{QNBlocks}` | `Index<Id, QNSpace>` (future) |
 | `Index(id, dim, ...)` | `Index::new_with_size(id, dim)` |
 | `Index(dim)` | `Index::new_dyn(dim)` |
+| `ITensor` | `TensorDynLen<Id, T, Symm>` or `TensorStaticLen<N, Id, T, Symm>` |
+| `NDTensors.Dense` | `Storage::DenseF64` or `Storage::DenseC64` |
+| `NDTensors.Diag` | `Storage::DiagF64` or `Storage::DiagC64` |
+
+## Project Structure
+
+tensor4all-rs is organized as a Cargo workspace with two main crates:
+
+- **`tensor4all-index`**: Core index, tag, and small string utilities
+  - `Index<Id, Symm, Tags>`: Generic index type
+  - `TagSet`: Index tag management
+  - `SmallString`: Efficient small string storage
+  - `common_inds`: Find common indices between tensors
+
+- **`tensor4all-tensor`**: Tensor and storage implementations
+  - `TensorDynLen<Id, T, Symm>`: Dynamic-rank tensors
+  - `TensorStaticLen<N, Id, T, Symm>`: Static-rank tensors
+  - `Storage`: Storage backend enum
+  - Storage newtypes: `DenseStorageF64`, `DenseStorageC64`, `DiagStorageF64`, `DiagStorageC64`
 
 ## Usage Example
 
+### Basic Tensor Creation
+
 ```rust
-use tensor4all_core::index::{DefaultIndex as Index, DynId};
-use tensor4all_core::storage::Storage;
-use tensor4all_core::tensor::TensorDynLen;
+use tensor4all_index::index::{DefaultIndex as Index, DynId};
+use tensor4all_tensor::{Storage, TensorDynLen};
 use std::sync::Arc;
 
 // Create indices
 let i = Index::new_dyn(2);  // Index with dimension 2, auto-generated ID
 let j = Index::new_dyn(3);  // Index with dimension 3, auto-generated ID
 
-// Create storage
+// Create dense storage
 let storage = Arc::new(Storage::new_dense_f64(6));  // Capacity for 2×3=6 elements
 
 // Create tensor
 let indices = vec![i, j];
 let dims = vec![2, 3];
 let tensor: TensorDynLen<DynId, f64> = TensorDynLen::new(indices, dims, storage);
+```
+
+### Diagonal Tensor Creation
+
+```rust
+use tensor4all_index::index::{DefaultIndex as Index, DynId};
+use tensor4all_tensor::diag_tensor_dyn_len;
+
+// Create a 3×3 diagonal tensor
+let i = Index::new_dyn(3);
+let j = Index::new_dyn(3);
+let diag_data = vec![1.0, 2.0, 3.0];
+
+let tensor = diag_tensor_dyn_len(vec![i, j], diag_data);
+```
+
+### Tensor Contraction
+
+```rust
+use tensor4all_index::index::{DefaultIndex as Index, DynId};
+use tensor4all_tensor::{Storage, TensorDynLen};
+use tensor4all_tensor::storage::DenseStorageF64;
+use std::sync::Arc;
+
+let i = Index::new_dyn(2);
+let j = Index::new_dyn(3);
+let k = Index::new_dyn(4);
+
+// Create tensor A[i, j]
+let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]));
+let tensor_a = TensorDynLen::new(
+    vec![i.clone(), j.clone()],
+    vec![2, 3],
+    Arc::new(storage_a)
+);
+
+// Create tensor B[j, k]
+let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]));
+let tensor_b = TensorDynLen::new(
+    vec![j.clone(), k.clone()],
+    vec![3, 4],
+    Arc::new(storage_b)
+);
+
+// Contract along j: result is C[i, k]
+let result = tensor_a.contract(&tensor_b);
 ```
 
 ## ITensors.jl ID Generation Algorithm
@@ -162,6 +237,10 @@ The UInt128 approach provides significantly better collision resistance than UIn
 - **Quantum Number Space**: Support for quantum number symmetries
 - **Arrow/Direction**: Index direction encoding for non-Abelian symmetries
 - **Non-Abelian Support**: Clebsch-Gordan coefficients for non-Abelian symmetries
+
+## TODO
+
+- **Optimize DiagTensor × DenseTensor contraction**: Currently, DiagTensor is converted to DenseTensor before contraction, which is inefficient. This can be optimized by implementing Block Matrix × Block Matrix contraction, as DiagTensor × DenseTensor is a special case of block matrix multiplication.
 
 ## References
 
