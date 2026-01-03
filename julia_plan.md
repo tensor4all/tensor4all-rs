@@ -1,5 +1,10 @@
 # Julia wrapper plan for `tensor4all` (Rust) via a local C-API (no JLL)
 
+## Status
+
+- **Milestone 1**: Complete (Index wrapper with ITensors.Index conversion)
+- **Milestone 2**: Complete (Tensor wrapper with ITensors.ITensor conversion)
+
 ## Goal (first milestone)
 
 Create a Julia package (`Tensor4all.jl`, module `Tensor4all`) that **builds the local Rust workspace** and accesses **tensor4all** through a **C ABI** (a `cdylib`), without using a JLL.
@@ -203,12 +208,16 @@ Minimal Julia tests:
   - `idx2 = Tensor4all.Index(it)`
   - `dim` and tags are consistent
 
-## CI considerations (later)
+## CI
 
-- For a Rust repo, CI would need Rust + Julia if we test Julia wrapper here.
-- Alternatively, we can keep the Julia wrapper in a separate Julia repo and depend on a local checkout during development.
+CI is implemented via `.github/workflows/CI_julia.yml`:
 
-This plan focuses on local development first.
+- Runs on push/PR to main and develop branches
+- Tests on Ubuntu and macOS with Julia LTS and latest
+- Uses `run_julia_tests.sh` which:
+  1. Builds `tensor4all-capi` with `cargo build --release`
+  2. Copies the library to `Tensor4all.jl/deps/`
+  3. Runs `Pkg.test()` in the Julia package
 
 ## Milestone 2: `TensorDynLen<DynId, NoSymmSpace>` ↔ `ITensors.ITensor`
 
