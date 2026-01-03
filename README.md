@@ -31,7 +31,6 @@ tensor4all-rs is designed with the following principles in mind:
 
 - **Compile-time error detection**: The design leverages Rust's type system to catch errors at compile time rather than runtime:
   - Generic type parameters (`Index<Id, Symm, Tags>`) enable compile-time validation of index compatibility
-  - Static-rank tensors (`TensorStaticLen<N, Id, T, Symm>`) catch rank mismatches at compile time
   - Type-safe storage variants prevent incorrect storage type usage
   - Compile-time identity types (ZST markers) enable static analysis of index relationships
 
@@ -43,7 +42,7 @@ tensor4all-rs is designed with the following principles in mind:
 
 | Concept | QSpace v4 | ITensors.jl | tensor4all-rs |
 |---------|-----------|-------------|---------------|
-| **Tensor with QNs** | `QSpace` | `ITensor` | `TensorDynLen<Id, T, Symm>` / `TensorStaticLen<N, Id, T, Symm>` |
+| **Tensor with QNs** | `QSpace` | `ITensor` | `TensorDynLen<Id, T, Symm>` |
 | **Index** | Quantum number labels in `QIDX` | `Index{QNBlocks}` | `Index<Id, Symm, Tags = DefaultTagSet>` |
 | **Storage** | `DATA` (array of blocks) | `NDTensors.BlockSparse` | `Storage` enum (DenseF64, DenseC64, DiagF64, DiagC64) |
 | **Language** | MATLAB/C++ | Julia | Rust |
@@ -96,15 +95,9 @@ Examples:
 
 ### Tensor Types
 
-Two tensor variants for different use cases:
-
-1. **Dynamic rank**: `TensorDynLen<Id, T, Symm = NoSymmSpace>`
-   - Rank determined at runtime
-   - Uses `Vec<Index>` and `Vec<usize>` for indices and dimensions
-
-2. **Static rank**: `TensorStaticLen<const N: usize, Id, T, Symm = NoSymmSpace>`
-   - Rank determined at compile time
-   - Uses arrays `[Index; N]` and `[usize; N]` for indices and dimensions
+Dynamic-rank tensors: `TensorDynLen<Id, T, Symm = NoSymmSpace>`
+- Rank determined at runtime
+- Uses `Vec<Index>` and `Vec<usize>` for indices and dimensions
 
 ### Storage
 
@@ -137,7 +130,7 @@ Tensor data is shared via `Arc<Storage>` with copy-on-write (COW) semantics:
 | `Index{QNBlocks}` | `Index<Id, QNSpace>` (future) |
 | `Index(id, dim, ...)` | `Index::new_with_size(id, dim)` |
 | `Index(dim)` | `Index::new_dyn(dim)` |
-| `ITensor` | `TensorDynLen<Id, T, Symm>` or `TensorStaticLen<N, Id, T, Symm>` |
+| `ITensor` | `TensorDynLen<Id, T, Symm>` |
 | `NDTensors.Dense` | `Storage::DenseF64` or `Storage::DenseC64` |
 | `NDTensors.Diag` | `Storage::DiagF64` or `Storage::DiagC64` |
 
@@ -170,7 +163,6 @@ tensor4all-rs is organized as a Cargo workspace with three main crates:
 
 - **`tensor4all-tensor`**: Tensor and storage implementations
   - `TensorDynLen<Id, T, Symm>`: Dynamic-rank tensors
-  - `TensorStaticLen<N, Id, T, Symm>`: Static-rank tensors
   - `Storage`: Storage backend enum
   - Storage newtypes: `DenseStorageF64`, `DenseStorageC64`, `DiagStorageF64`, `DiagStorageC64`
 
