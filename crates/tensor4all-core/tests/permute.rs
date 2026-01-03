@@ -1,5 +1,5 @@
 use tensor4all_core::index::{DefaultIndex as Index, DynId};
-use tensor4all_tensor::{Storage, TensorDynLen, TensorStaticLen, compute_permutation_from_indices};
+use tensor4all_tensor::{Storage, TensorDynLen, compute_permutation_from_indices};
 use num_complex::Complex64;
 use std::sync::Arc;
 
@@ -39,7 +39,6 @@ fn test_compute_permutation_from_indices_invalid() {
     // Test with invalid index (ID doesn't match)
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let k = Index::new_dyn(4);
     let invalid = Index::new_dyn(5);  // Different ID
     
     let original = vec![i.clone(), j.clone()];
@@ -186,38 +185,6 @@ fn test_permute_dyn_f64_3d() {
     }
 }
 
-#[test]
-fn test_permute_static_f64_2d() {
-    // Create a 2×3 tensor with static rank
-    let i = Index::new_dyn(2);
-    let j = Index::new_dyn(3);
-    let indices = [i.clone(), j.clone()];
-    let dims = [2, 3];
-    
-    let mut storage = Storage::new_dense_f64(6);
-    match &mut storage {
-        Storage::DenseF64(v) => {
-            v.extend_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-        }
-        _ => panic!("expected DenseF64"),
-    }
-    
-    let tensor: TensorStaticLen<2, DynId, f64> = TensorStaticLen::new(indices, dims, Arc::new(storage));
-    
-    // Permute to 3×2: swap dimensions
-    let permuted = tensor.permute(&[1, 0]);
-    
-    assert_eq!(permuted.dims, [3, 2]);
-    assert_eq!(permuted.indices[0].id, j.id);
-    assert_eq!(permuted.indices[1].id, i.id);
-    
-    match &*permuted.storage {
-        Storage::DenseF64(v) => {
-            assert_eq!(v.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
-        }
-        _ => panic!("expected DenseF64"),
-    }
-}
 
 #[test]
 fn test_permute_identity() {
@@ -285,38 +252,6 @@ fn test_permute_indices_dyn_f64_2d() {
     }
 }
 
-#[test]
-fn test_permute_indices_static_f64_2d() {
-    // Test permute_indices for static rank tensor
-    let i = Index::new_dyn(2);
-    let j = Index::new_dyn(3);
-    let indices = [i.clone(), j.clone()];
-    let dims = [2, 3];
-    
-    let mut storage = Storage::new_dense_f64(6);
-    match &mut storage {
-        Storage::DenseF64(v) => {
-            v.extend_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-        }
-        _ => panic!("expected DenseF64"),
-    }
-    
-    let tensor: TensorStaticLen<2, DynId, f64> = TensorStaticLen::new(indices, dims, Arc::new(storage));
-    
-    // Permute to 3×2: swap the two dimensions by providing new indices order
-    let permuted = tensor.permute_indices(&[j, i]);
-    
-    assert_eq!(permuted.dims, [3, 2]);
-    assert_eq!(permuted.indices[0].id, j.id);
-    assert_eq!(permuted.indices[1].id, i.id);
-    
-    match &*permuted.storage {
-        Storage::DenseF64(v) => {
-            assert_eq!(v.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
-        }
-        _ => panic!("expected DenseF64"),
-    }
-}
 
 #[test]
 fn test_permute_indices_c64() {

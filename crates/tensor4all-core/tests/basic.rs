@@ -1,5 +1,5 @@
 use tensor4all_core::index::{DefaultIndex as Index, DynId};
-use tensor4all_tensor::{AnyScalar, DenseStorageFactory, Storage, TensorDynLen, TensorStaticLen, make_mut_storage};
+use tensor4all_tensor::{AnyScalar, DenseStorageFactory, Storage, TensorDynLen, make_mut_storage};
 use std::sync::Arc;
 use num_complex::Complex64;
 
@@ -136,21 +136,6 @@ fn test_tensor_dyn_len_mismatch() {
     let _tensor: TensorDynLen<DynId, AnyScalar> = TensorDynLen::new(indices, dims, storage);
 }
 
-#[test]
-fn test_tensor_static_len_creation() {
-    let indices = [
-        Index::new_dyn(2),
-        Index::new_dyn(3),
-    ];
-    let dims = [2, 3];
-    let storage = Arc::new(Storage::new_dense_f64(6));
-    
-    let tensor = TensorStaticLen::<2, DynId, AnyScalar>::new(indices, dims, storage);
-    assert_eq!(tensor.indices.len(), 2);
-    assert_eq!(tensor.dims.len(), 2);
-    assert_eq!(tensor.dims[0], 2);
-    assert_eq!(tensor.dims[1], 3);
-}
 
 #[test]
 fn test_tensor_cow() {

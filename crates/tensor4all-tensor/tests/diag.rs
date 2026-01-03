@@ -1,4 +1,4 @@
-use tensor4all_tensor::{Storage, TensorDynLen, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, diag_tensor_static_len, is_diag_tensor, is_diag_tensor_static};
+use tensor4all_tensor::{Storage, TensorDynLen, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor};
 use tensor4all_core::index::{DefaultIndex as Index, DynId};
 use num_complex::Complex64;
 use std::sync::Arc;
@@ -12,17 +12,6 @@ fn test_diag_tensor_creation() {
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data.clone());
     assert_eq!(tensor.dims, vec![3, 3]);
     assert!(is_diag_tensor(&tensor));
-}
-
-#[test]
-fn test_diag_tensor_creation_static() {
-    let i = Index::new_dyn(3);
-    let j = Index::new_dyn(3);
-    let diag_data = vec![1.0, 2.0, 3.0];
-    
-    let tensor = diag_tensor_static_len([i.clone(), j.clone()], diag_data.clone());
-    assert_eq!(tensor.dims, [3, 3]);
-    assert!(is_diag_tensor_static(&tensor));
 }
 
 #[test]
