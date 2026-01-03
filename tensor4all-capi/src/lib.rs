@@ -8,6 +8,12 @@
 //! The initial implementation provides wrappers for:
 //! - `Index<DynId, NoSymmSpace, DefaultTagSet>` (the default index type)
 //!
+//! ## Milestone 2: Tensor types
+//!
+//! Extended to support:
+//! - `TensorDynLen<DynId, NoSymmSpace>` with Dense/Diag storage
+//! - Bidirectional conversion with ITensors.ITensor
+//!
 //! ## Design patterns
 //!
 //! Following the patterns from `sparse-ir-capi`:
@@ -23,9 +29,11 @@
 mod macros;
 
 mod index;
+mod tensor;
 mod types;
 
 pub use index::*;
+pub use tensor::*;
 pub use types::*;
 
 /// Status code type for C API

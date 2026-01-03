@@ -46,6 +46,8 @@ include("C_API.jl")
 
 # Re-export public API
 export Index, dim, tags, id, hastag
+export Tensor, rank, dims, indices, storage_kind, data
+export StorageKind, DenseF64, DenseC64, DiagF64, DiagC64
 
 """
     Index
@@ -199,6 +201,294 @@ end
 
 function Base.hash(i::Index, h::UInt)
     return hash(id(i), h)
+end
+
+# ============================================================================
+# Tensor Type
+# ============================================================================
+
+"""
+    StorageKind
+
+Enum representing the storage type of a tensor.
+"""
+@enum StorageKind begin
+    DenseF64 = 0
+    DenseC64 = 1
+    DiagF64 = 2
+    DiagC64 = 3
+end
+
+"""
+    Tensor
+
+A tensor with dynamically-typed indices and storage.
+
+Wraps a Rust `TensorDynLen<DynId, NoSymmSpace>` which corresponds to
+ITensors.jl's `ITensor`.
+
+# Constructors
+
+- `Tensor(indices::Vector{Index}, data::Array{Float64})` - Create dense f64 tensor
+- `Tensor(indices::Vector{Index}, data::Array{ComplexF64})` - Create dense complex tensor
+
+# Properties
+
+- `rank(t::Tensor)` - Get the number of indices
+- `dims(t::Tensor)` - Get dimensions as a tuple
+- `indices(t::Tensor)` - Get indices as a vector
+- `storage_kind(t::Tensor)` - Get the storage kind (DenseF64, DenseC64, etc.)
+- `data(t::Tensor)` - Get the tensor data as an Array
+"""
+mutable struct Tensor
+    ptr::Ptr{Cvoid}
+
+    function Tensor(ptr::Ptr{Cvoid})
+        if ptr == C_NULL
+            error("Failed to create Tensor (null pointer from C API)")
+        end
+        t = new(ptr)
+        finalizer(t) do x
+            C_API.t4a_tensor_release(x.ptr)
+        end
+        return t
+    end
+end
+
+# ============================================================================
+# Memory Order Conversion Helpers
+# ============================================================================
+
+"""
+    _is_column_major_contiguous(A::AbstractArray) -> Bool
+
+Check if an array is column-major contiguous (standard Julia layout).
+This is critical before passing data to FFI.
+"""
+function _is_column_major_contiguous(A::AbstractArray)
+    expected_strides = cumprod((1, size(A)...)[1:end-1])
+    return strides(A) == expected_strides
+end
+
+"""
+    _ensure_contiguous(A::AbstractArray{T,N}) where {T,N} -> Array{T,N}
+
+Ensure array is contiguous, copying if necessary.
+CRITICAL: Always call before passing arrays to FFI.
+"""
+function _ensure_contiguous(A::AbstractArray{T,N}) where {T,N}
+    if _is_column_major_contiguous(A)
+        return A isa Array ? A : Array{T,N}(A)
+    end
+    # Materialize to contiguous Array
+    return Array{T,N}(A)
+end
+
+"""
+    _column_to_row_major(arr::Array, dims::Tuple) -> Vector
+
+Convert column-major array to row-major flat vector for Rust.
+"""
+function _column_to_row_major(arr::AbstractArray)
+    arr = _ensure_contiguous(arr)
+    # Reverse dimensions to get row-major layout
+    perm = reverse(1:ndims(arr))
+    permuted = permutedims(arr, perm)
+    permuted = _ensure_contiguous(permuted)
+    return vec(permuted)
+end
+
+"""
+    _row_to_column_major(data::Vector, dims::Tuple) -> Array
+
+Convert row-major flat vector from Rust to column-major Julia array.
+"""
+function _row_to_column_major(data::Vector{T}, dims::Tuple) where T
+    # Data is row-major, so reverse dims for reshape
+    arr = reshape(data, reverse(dims)...)
+    # Reverse back to get column-major
+    perm = reverse(1:length(dims))
+    return permutedims(arr, perm)
+end
+
+# ============================================================================
+# Tensor Constructors
+# ============================================================================
+
+"""
+    Tensor(indices::Vector{Index}, data::AbstractArray{Float64})
+
+Create a dense f64 tensor from indices and column-major data.
+"""
+function Tensor(inds::Vector{Index}, data::AbstractArray{Float64})
+    isempty(inds) && error("Tensor must have at least one index")
+
+    expected_dims = Tuple(dim(idx) for idx in inds)
+    size(data) == expected_dims || error("Data size $(size(data)) doesn't match index dims $expected_dims")
+
+    # Convert to row-major for Rust
+    row_major_data = _column_to_row_major(data)
+
+    # Prepare C-API call
+    r = length(inds)
+    index_ptrs = [idx.ptr for idx in inds]
+    dims_vec = Csize_t[dim(idx) for idx in inds]
+
+    ptr = C_API.t4a_tensor_new_dense_f64(r, index_ptrs, dims_vec, Cdouble.(row_major_data))
+    return Tensor(ptr)
+end
+
+"""
+    Tensor(indices::Vector{Index}, data::AbstractArray{ComplexF64})
+
+Create a dense complex64 tensor from indices and column-major data.
+"""
+function Tensor(inds::Vector{Index}, data::AbstractArray{ComplexF64})
+    isempty(inds) && error("Tensor must have at least one index")
+
+    expected_dims = Tuple(dim(idx) for idx in inds)
+    size(data) == expected_dims || error("Data size $(size(data)) doesn't match index dims $expected_dims")
+
+    # Convert to row-major for Rust
+    row_major_data = _column_to_row_major(data)
+
+    # Prepare C-API call
+    r = length(inds)
+    index_ptrs = [idx.ptr for idx in inds]
+    dims_vec = Csize_t[dim(idx) for idx in inds]
+    data_re = Cdouble[real(z) for z in row_major_data]
+    data_im = Cdouble[imag(z) for z in row_major_data]
+
+    ptr = C_API.t4a_tensor_new_dense_c64(r, index_ptrs, dims_vec, data_re, data_im)
+    return Tensor(ptr)
+end
+
+# ============================================================================
+# Tensor Accessors
+# ============================================================================
+
+"""
+    rank(t::Tensor) -> Int
+
+Get the number of indices (rank) of a tensor.
+"""
+function rank(t::Tensor)
+    r = Ref{Csize_t}(0)
+    status = C_API.t4a_tensor_get_rank(t.ptr, r)
+    C_API.check_status(status)
+    return Int(r[])
+end
+
+"""
+    dims(t::Tensor) -> NTuple{N, Int}
+
+Get the dimensions of a tensor as a tuple.
+"""
+function dims(t::Tensor)
+    r = rank(t)
+    out_dims = Vector{Csize_t}(undef, r)
+    status = C_API.t4a_tensor_get_dims(t.ptr, out_dims, r)
+    C_API.check_status(status)
+    return Tuple(Int.(out_dims))
+end
+
+"""
+    indices(t::Tensor) -> Vector{Index}
+
+Get the indices of a tensor.
+"""
+function indices(t::Tensor)
+    r = rank(t)
+    out_ptrs = Vector{Ptr{Cvoid}}(undef, r)
+    status = C_API.t4a_tensor_get_indices(t.ptr, out_ptrs, r)
+    C_API.check_status(status)
+
+    # Wrap each returned pointer as an Index
+    return [Index(ptr) for ptr in out_ptrs]
+end
+
+"""
+    storage_kind(t::Tensor) -> StorageKind
+
+Get the storage kind of a tensor.
+"""
+function storage_kind(t::Tensor)
+    kind = Ref{Cint}(0)
+    status = C_API.t4a_tensor_get_storage_kind(t.ptr, kind)
+    C_API.check_status(status)
+    return StorageKind(kind[])
+end
+
+"""
+    data(t::Tensor) -> Array
+
+Get the tensor data as a column-major Julia array.
+"""
+function data(t::Tensor)
+    kind = storage_kind(t)
+    d = dims(t)
+
+    if kind == DenseF64
+        # Query length
+        out_len = Ref{Csize_t}(0)
+        status = C_API.t4a_tensor_get_data_f64(t.ptr, nothing, 0, out_len)
+        C_API.check_status(status)
+
+        # Get data
+        buf = Vector{Cdouble}(undef, out_len[])
+        status = C_API.t4a_tensor_get_data_f64(t.ptr, buf, out_len[], out_len)
+        C_API.check_status(status)
+
+        # Convert from row-major to column-major
+        return _row_to_column_major(buf, d)
+
+    elseif kind == DenseC64
+        # Query length
+        out_len = Ref{Csize_t}(0)
+        status = C_API.t4a_tensor_get_data_c64(t.ptr, nothing, nothing, 0, out_len)
+        C_API.check_status(status)
+
+        # Get data
+        buf_re = Vector{Cdouble}(undef, out_len[])
+        buf_im = Vector{Cdouble}(undef, out_len[])
+        status = C_API.t4a_tensor_get_data_c64(t.ptr, buf_re, buf_im, out_len[], out_len)
+        C_API.check_status(status)
+
+        # Combine and convert
+        buf = [ComplexF64(r, i) for (r, i) in zip(buf_re, buf_im)]
+        return _row_to_column_major(buf, d)
+
+    else
+        error("Unsupported storage kind for data extraction: $kind")
+    end
+end
+
+# ============================================================================
+# Tensor Display
+# ============================================================================
+
+function Base.show(io::IO, t::Tensor)
+    r = rank(t)
+    d = dims(t)
+    k = storage_kind(t)
+    print(io, "Tensor(rank=$r, dims=$d, storage=$k)")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", t::Tensor)
+    println(io, "Tensor4all.Tensor")
+    println(io, "  rank: ", rank(t))
+    println(io, "  dims: ", dims(t))
+    println(io, "  storage: ", storage_kind(t))
+    println(io, "  indices:")
+    for (i, idx) in enumerate(indices(t))
+        println(io, "    [$i] ", idx)
+    end
+end
+
+# Clone
+function Base.copy(t::Tensor)
+    ptr = C_API.t4a_tensor_clone(t.ptr)
+    return Tensor(ptr)
 end
 
 end # module
