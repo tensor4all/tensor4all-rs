@@ -3,8 +3,8 @@
 use crate::error::Result;
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
-use crate::types::Tensor3;
-use tensor4all_matrixci::util::{mat_mul, nrows, ncols, zeros, Matrix, Scalar};
+use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
+use tensor4all_matrixci::util::{mat_mul, ncols, nrows, zeros, Matrix, Scalar};
 use tensor4all_matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions};
 
 /// Compression method for tensor trains
@@ -44,7 +44,7 @@ impl Default for CompressionOptions {
 }
 
 /// Convert Tensor3 to Matrix for factorization (left matrix view)
-fn tensor3_to_left_matrix<T: Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T> {
+fn tensor3_to_left_matrix<T: Scalar + Default + Clone>(tensor: &Tensor3<T>) -> Matrix<T> {
     let left_dim = tensor.left_dim();
     let site_dim = tensor.site_dim();
     let right_dim = tensor.right_dim();
@@ -55,7 +55,7 @@ fn tensor3_to_left_matrix<T: Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T>
     for l in 0..left_dim {
         for s in 0..site_dim {
             for r in 0..right_dim {
-                mat[[l * site_dim + s, r]] = *tensor.get(l, s, r);
+                mat[[l * site_dim + s, r]] = *tensor.get3(l, s, r);
             }
         }
     }
@@ -63,7 +63,7 @@ fn tensor3_to_left_matrix<T: Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T>
 }
 
 /// Convert Tensor3 to Matrix for factorization (right matrix view)
-fn tensor3_to_right_matrix<T: Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T> {
+fn tensor3_to_right_matrix<T: Scalar + Default + Clone>(tensor: &Tensor3<T>) -> Matrix<T> {
     let left_dim = tensor.left_dim();
     let site_dim = tensor.site_dim();
     let right_dim = tensor.right_dim();
@@ -74,7 +74,7 @@ fn tensor3_to_right_matrix<T: Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T
     for l in 0..left_dim {
         for s in 0..site_dim {
             for r in 0..right_dim {
-                mat[[l, s * right_dim + r]] = *tensor.get(l, s, r);
+                mat[[l, s * right_dim + r]] = *tensor.get3(l, s, r);
             }
         }
     }
@@ -102,8 +102,8 @@ fn factorize<T: TTScalar + Scalar>(
     match method {
         CompressionMethod::LU => {
             let lu = rrlu(matrix, Some(options));
-            let left = lu.left(true);  // permuted
-            let right = lu.right(true);  // permuted
+            let left = lu.left(true); // permuted
+            let right = lu.right(true); // permuted
             let npivots = lu.npivots();
             (left, right, npivots)
         }
@@ -152,19 +152,19 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
             let (left_factor, right_factor, new_bond_dim) = factorize(
                 &mat,
                 options.method,
-                0.0,         // No truncation in left sweep
-                usize::MAX,  // No max bond dim in left sweep
-                true,        // left orthogonal
+                0.0,        // No truncation in left sweep
+                usize::MAX, // No max bond dim in left sweep
+                true,       // left orthogonal
             );
 
             // Update current tensor
-            let mut new_tensor = Tensor3::zeros(left_dim, site_dim, new_bond_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim);
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..new_bond_dim {
                         let row = l * site_dim + s;
                         if row < nrows(&left_factor) && r < ncols(&left_factor) {
-                            new_tensor.set(l, s, r, left_factor[[row, r]]);
+                            new_tensor.set3(l, s, r, left_factor[[row, r]]);
                         }
                     }
                 }
@@ -182,11 +182,11 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
             let contracted = mat_mul(&right_factor, &next_mat);
 
             // Update next tensor
-            let mut new_next_tensor = Tensor3::zeros(new_bond_dim, next_site_dim, next_right_dim);
+            let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim);
             for l in 0..new_bond_dim {
                 for s in 0..next_site_dim {
                     for r in 0..next_right_dim {
-                        new_next_tensor.set(l, s, r, contracted[[l, s * next_right_dim + r]]);
+                        new_next_tensor.set3(l, s, r, contracted[[l, s * next_right_dim + r]]);
                     }
                 }
             }
@@ -207,15 +207,15 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
                 options.method,
                 options.tolerance,
                 options.max_bond_dim,
-                false,  // right orthogonal
+                false, // right orthogonal
             );
 
             // Update current tensor from right_factor
-            let mut new_tensor = Tensor3::zeros(new_bond_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim);
             for l in 0..new_bond_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
-                        new_tensor.set(l, s, r, right_factor[[l, s * right_dim + r]]);
+                        new_tensor.set3(l, s, r, right_factor[[l, s * right_dim + r]]);
                     }
                 }
             }
@@ -232,11 +232,11 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
             let contracted = mat_mul(&prev_mat, &left_factor);
 
             // Update prev tensor
-            let mut new_prev_tensor = Tensor3::zeros(prev_left_dim, prev_site_dim, new_bond_dim);
+            let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);
             for l in 0..prev_left_dim {
                 for s in 0..prev_site_dim {
                     for r in 0..new_bond_dim {
-                        new_prev_tensor.set(l, s, r, contracted[[l * prev_site_dim + s, r]]);
+                        new_prev_tensor.set3(l, s, r, contracted[[l * prev_site_dim + s, r]]);
                     }
                 }
             }
@@ -264,7 +264,9 @@ mod tests {
         let original_sum = tt.sum();
 
         let mut tt_compressed = tt.clone();
-        tt_compressed.compress(&CompressionOptions::default()).unwrap();
+        tt_compressed
+            .compress(&CompressionOptions::default())
+            .unwrap();
 
         let compressed_sum = tt_compressed.sum();
         assert!((original_sum - compressed_sum).abs() < 1e-10);
@@ -273,32 +275,34 @@ mod tests {
     #[test]
     fn test_compress_preserves_values() {
         // Create a simple tensor train
-        let mut t0 = Tensor3::<f64>::zeros(1, 2, 2);
-        t0.set(0, 0, 0, 1.0);
-        t0.set(0, 0, 1, 0.5);
-        t0.set(0, 1, 0, 0.0);
-        t0.set(0, 1, 1, 1.0);
+        let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 2);
+        t0.set3(0, 0, 0, 1.0);
+        t0.set3(0, 0, 1, 0.5);
+        t0.set3(0, 1, 0, 0.0);
+        t0.set3(0, 1, 1, 1.0);
 
-        let mut t1 = Tensor3::<f64>::zeros(2, 3, 2);
+        let mut t1: Tensor3<f64> = tensor3_zeros(2, 3, 2);
         for l in 0..2 {
             for s in 0..3 {
                 for r in 0..2 {
-                    t1.set(l, s, r, ((l + s + r) as f64) * 0.1 + 0.1);
+                    t1.set3(l, s, r, ((l + s + r) as f64) * 0.1 + 0.1);
                 }
             }
         }
 
-        let mut t2 = Tensor3::<f64>::zeros(2, 2, 1);
-        t2.set(0, 0, 0, 1.0);
-        t2.set(0, 1, 0, 0.5);
-        t2.set(1, 0, 0, 0.5);
-        t2.set(1, 1, 0, 1.0);
+        let mut t2: Tensor3<f64> = tensor3_zeros(2, 2, 1);
+        t2.set3(0, 0, 0, 1.0);
+        t2.set3(0, 1, 0, 0.5);
+        t2.set3(1, 0, 0, 0.5);
+        t2.set3(1, 1, 0, 1.0);
 
         let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
         let original_sum = tt.sum();
 
         let mut tt_compressed = tt.clone();
-        tt_compressed.compress(&CompressionOptions::default()).unwrap();
+        tt_compressed
+            .compress(&CompressionOptions::default())
+            .unwrap();
 
         let compressed_sum = tt_compressed.sum();
         assert!((original_sum - compressed_sum).abs() < 1e-8);
@@ -307,17 +311,17 @@ mod tests {
     #[test]
     fn test_compress_with_max_bond_dim() {
         // Create a tensor train with higher bond dimension
-        let mut t0 = Tensor3::<f64>::zeros(1, 2, 3);
+        let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 3);
         for s in 0..2 {
             for r in 0..3 {
-                t0.set(0, s, r, (s + r + 1) as f64);
+                t0.set3(0, s, r, (s + r + 1) as f64);
             }
         }
 
-        let mut t1 = Tensor3::<f64>::zeros(3, 2, 1);
+        let mut t1: Tensor3<f64> = tensor3_zeros(3, 2, 1);
         for l in 0..3 {
             for s in 0..2 {
-                t1.set(l, s, 0, (l + s + 1) as f64);
+                t1.set3(l, s, 0, (l + s + 1) as f64);
             }
         }
 

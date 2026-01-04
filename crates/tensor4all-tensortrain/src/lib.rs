@@ -24,6 +24,7 @@
 //! ```
 
 pub mod arithmetic;
+pub mod cache;
 pub mod compression;
 pub mod contraction;
 pub mod error;
@@ -32,9 +33,10 @@ pub mod traits;
 pub mod types;
 
 // Re-export main types
+pub use cache::TTCache;
 pub use compression::{CompressionMethod, CompressionOptions};
 pub use contraction::{dot, hadamard, hadamard_zipup, ContractionOptions};
 pub use error::{Result, TensorTrainError};
 pub use tensortrain::TensorTrain;
 pub use traits::{AbstractTensorTrain, TTScalar};
-pub use types::{LocalIndex, MultiIndex, Tensor3};
+pub use types::{tensor3_from_data, tensor3_zeros, LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
