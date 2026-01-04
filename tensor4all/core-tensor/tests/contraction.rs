@@ -40,7 +40,7 @@ fn test_contract_dyn_len_matrix_multiplication() {
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j: result should be C[i, k] with all 3.0 (since each element is sum of 3 ones)
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract_einsum(&tensor_b);
     assert_eq!(result.dims, vec![2, 4]);
     assert_eq!(result.indices.len(), 2);
     assert_eq!(result.indices[0].id, i.id);
@@ -137,7 +137,7 @@ fn test_contract_no_common_indices() {
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
 
     // This should panic because there are no common indices
-    let _result = tensor_a.contract(&tensor_b);
+    let _result = tensor_a.contract_einsum(&tensor_b);
 }
 
 #[test]
@@ -162,7 +162,7 @@ fn test_contract_three_indices() {
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j and k: result should be C[i, l] with all 12.0 (3 * 4 = 12)
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract_einsum(&tensor_b);
     assert_eq!(result.dims, vec![2, 5]);
     assert_eq!(result.indices.len(), 2);
     assert_eq!(result.indices[0].id, i.id);
@@ -207,7 +207,7 @@ fn test_contract_mixed_f64_c64() {
     // Contract along j: result should be C[i, k] (Complex64)
     // Expected result: [[1+2i + 5+6i, 3+4i + 7+8i], [1+2i + 5+6i, 3+4i + 7+8i]]
     //                  = [[6+8i, 10+12i], [6+8i, 10+12i]]
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract_einsum(&tensor_b);
     assert_eq!(result.dims, vec![2, 2]);
     assert_eq!(result.indices.len(), 2);
     assert_eq!(result.indices[0].id, i.id);
@@ -261,7 +261,7 @@ fn test_contract_mixed_c64_f64() {
     // C[0,1] = (1+2i)*1 + (3+4i)*1 = 4+6i
     // C[1,0] = (5+6i)*1 + (7+8i)*1 = 12+14i
     // C[1,1] = (5+6i)*1 + (7+8i)*1 = 12+14i
-    let result = tensor_a.contract(&tensor_b);
+    let result = tensor_a.contract_einsum(&tensor_b);
     assert_eq!(result.dims, vec![2, 2]);
     
     // Check result storage type
@@ -278,8 +278,8 @@ fn test_contract_mixed_c64_f64() {
 }
 
 #[test]
-fn test_contract_pairs_different_ids() {
-    // Test contract_pairs with indices that have different IDs but same dimensions
+fn test_tensordot_different_ids() {
+    // Test tensordot with indices that have different IDs but same dimensions
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(3);  // Same dimension as j, but different ID
@@ -298,7 +298,7 @@ fn test_contract_pairs_different_ids() {
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract j (from A) with k (from B): result should be C[i, l] with all 3.0
-    let result = tensor_a.contract_pairs(&tensor_b, &[(j.clone(), k.clone())]).unwrap();
+    let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), k.clone())]).unwrap();
     assert_eq!(result.dims, vec![2, 4]);
     assert_eq!(result.indices.len(), 2);
     assert_eq!(result.indices[0].id, i.id);
@@ -316,7 +316,7 @@ fn test_contract_pairs_different_ids() {
 }
 
 #[test]
-fn test_contract_pairs_dimension_mismatch() {
+fn test_tensordot_dimension_mismatch() {
     // Test that dimension mismatch returns an error
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -332,7 +332,7 @@ fn test_contract_pairs_dimension_mismatch() {
     let storage_b = Arc::new(Storage::new_dense_f64(5));
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
 
-    let result = tensor_a.contract_pairs(&tensor_b, &[(j.clone(), k.clone())]);
+    let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), k.clone())]);
     assert!(result.is_err());
     if let Err(e) = result {
         let err_msg = format!("{}", e);
@@ -341,7 +341,7 @@ fn test_contract_pairs_dimension_mismatch() {
 }
 
 #[test]
-fn test_contract_pairs_index_not_found() {
+fn test_tensordot_index_not_found() {
     // Test that specifying a non-existent index returns an error
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -359,7 +359,7 @@ fn test_contract_pairs_index_not_found() {
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
 
     // Try to contract with a non-existent index from tensor_a
-    let result = tensor_a.contract_pairs(&tensor_b, &[(nonexistent.clone(), k.clone())]);
+    let result = tensor_a.tensordot(&tensor_b, &[(nonexistent.clone(), k.clone())]);
     assert!(result.is_err());
     if let Err(e) = result {
         let err_msg = format!("{}", e);
@@ -368,7 +368,7 @@ fn test_contract_pairs_index_not_found() {
 }
 
 #[test]
-fn test_contract_pairs_duplicate_axis() {
+fn test_tensordot_duplicate_axis() {
     // Test that specifying the same axis twice returns an error
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -386,7 +386,7 @@ fn test_contract_pairs_duplicate_axis() {
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
 
     // Try to contract j twice (duplicate axis in self)
-    let result = tensor_a.contract_pairs(&tensor_b, &[
+    let result = tensor_a.tensordot(&tensor_b, &[
         (j.clone(), k.clone()),
         (j.clone(), l.clone()),  // j is used twice
     ]);
@@ -395,7 +395,7 @@ fn test_contract_pairs_duplicate_axis() {
 }
 
 #[test]
-fn test_contract_pairs_empty_pairs() {
+fn test_tensordot_empty_pairs() {
     // Test that empty pairs returns an error
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -410,11 +410,71 @@ fn test_contract_pairs_empty_pairs() {
     let storage_b = Arc::new(Storage::new_dense_f64(3));
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
 
-    let result = tensor_a.contract_pairs(&tensor_b, &[]);
+    let result = tensor_a.tensordot(&tensor_b, &[]);
     assert!(result.is_err());
     if let Err(e) = result {
         let err_msg = format!("{}", e);
         assert!(err_msg.contains("No pairs") || err_msg.contains("empty") || err_msg.contains("specified"));
     }
+}
+
+#[test]
+fn test_tensordot_common_index_not_in_pairs() {
+    // Test that having a common index (same ID) not in the contraction pairs returns an error
+    // This is the "batch contraction not yet implemented" case
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);  // This will be a common index (batch dimension)
+    let k = Index::new_dyn(4);
+    let l = Index::new_dyn(5);
+
+    // Create tensor A[i, j, k]
+    let indices_a = vec![i.clone(), j.clone(), k.clone()];
+    let dims_a = vec![2, 3, 4];
+    let storage_a = Arc::new(Storage::new_dense_f64(24));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+
+    // Create tensor B[j, l] where j is a common index with A
+    let indices_b = vec![j.clone(), l.clone()];
+    let dims_b = vec![3, 5];
+    let storage_b = Arc::new(Storage::new_dense_f64(15));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+
+    // Try to contract only k with l, leaving j as a "batch" dimension
+    // This should fail because batch contraction is not yet implemented
+    let result = tensor_a.tensordot(&tensor_b, &[(k.clone(), l.clone())]);
+    assert!(result.is_err());
+    if let Err(e) = result {
+        let err_msg = format!("{}", e);
+        assert!(
+            err_msg.contains("batch") || err_msg.contains("not yet implemented") || err_msg.contains("Common index"),
+            "Expected batch contraction error, got: {}", err_msg
+        );
+    }
+}
+
+#[test]
+fn test_tensordot_common_index_in_pairs_ok() {
+    // Test that having a common index that IS in the contraction pairs works fine
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);  // This is a common index, but we will contract it
+    let k = Index::new_dyn(4);
+
+    // Create tensor A[i, j]
+    let indices_a = vec![i.clone(), j.clone()];
+    let dims_a = vec![2, 3];
+    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+
+    // Create tensor B[j, k] where j is a common index with A
+    let indices_b = vec![j.clone(), k.clone()];
+    let dims_b = vec![3, 4];
+    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12])));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+
+    // Contract j with j - this should work because the common index is in pairs
+    let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), j.clone())]);
+    assert!(result.is_ok());
+    let result = result.unwrap();
+    assert_eq!(result.dims, vec![2, 4]);
 }
 

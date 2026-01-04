@@ -48,7 +48,7 @@ where
 
 impl<Id, Symm, V> TreeTN<Id, Symm, V>
 where
-    Id: Clone + std::hash::Hash + Eq,
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
@@ -1155,8 +1155,8 @@ where
                     let idx_child = self.edge_index_for_node(edge, neighbor)?.clone();
 
                     // Contract current tensor with child tensor along the bond indices
-                    // We use contract_pairs which takes explicit index pairs
-                    current = current.contract_pairs(&child_tensor, &[(idx_current, idx_child)])
+                    // We use tensordot which takes explicit index pairs
+                    current = current.tensordot(&child_tensor, &[(idx_current, idx_child)])
                         .context("Failed to contract along edge")?;
                 }
             }
@@ -1364,7 +1364,7 @@ where
     /// 3. Computes distances from ortho_region using BFS
     /// 4. Processes nodes in order of decreasing distance (farthest first)
     /// 5. For each node, performs QR decomposition on edges pointing towards ortho_region
-    /// 6. Absorbs R factors into parent nodes using contract_pairs
+    /// 6. Absorbs R factors into parent nodes using tensordot
     ///
     /// # Arguments
     /// * `ortho_region` - The nodes that will serve as orthogonalization centers
@@ -1560,7 +1560,7 @@ where
                 .context("orthogonalize_with_qr: parent tensor not found")?;
 
             let updated_parent_tensor = parent_tensor
-                .contract_pairs(&r_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
+                .tensordot(&r_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
                 .context("orthogonalize_with_qr: failed to absorb R into parent tensor")?;
 
             // The new bond index is the QR-created bond shared between Q and R.
@@ -1596,7 +1596,7 @@ where
 
 impl<Id, Symm, V> Default for TreeTN<Id, Symm, V>
 where
-    Id: Clone + std::hash::Hash + Eq,
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
@@ -1614,7 +1614,7 @@ use std::sync::Arc;
 
 impl<Id, Symm, V> Mul<f64> for TreeTN<Id, Symm, V>
 where
-    Id: Clone + std::hash::Hash + Eq,
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
@@ -1708,7 +1708,7 @@ where
 
 impl<Id, Symm, V> Mul<Complex64> for TreeTN<Id, Symm, V>
 where
-    Id: Clone + std::hash::Hash + Eq,
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
@@ -1795,7 +1795,7 @@ where
 // Implement Mul with reference to avoid consuming TreeTN
 impl<Id, Symm, V> Mul<f64> for &TreeTN<Id, Symm, V>
 where
-    Id: Clone + std::hash::Hash + Eq,
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
@@ -1808,7 +1808,7 @@ where
 
 impl<Id, Symm, V> Mul<Complex64> for &TreeTN<Id, Symm, V>
 where
-    Id: Clone + std::hash::Hash + Eq,
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
@@ -1822,7 +1822,7 @@ where
 // Clone implementation for TreeTN
 impl<Id, Symm, V> Clone for TreeTN<Id, Symm, V>
 where
-    Id: Clone + std::hash::Hash + Eq,
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
@@ -2161,7 +2161,7 @@ pub fn decompose_tensor_to_treetn<Id, Symm, V>(
     topology: &TreeTopology<V>,
 ) -> Result<TreeTN<Id, Symm, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord,
+    Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
