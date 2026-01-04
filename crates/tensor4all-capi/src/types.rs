@@ -141,3 +141,103 @@ impl Drop for t4a_tensor {
 // Safety: t4a_tensor is Send + Sync because InternalTensor is Send + Sync
 unsafe impl Send for t4a_tensor {}
 unsafe impl Sync for t4a_tensor {}
+
+// ============================================================================
+// TensorTrain types
+// ============================================================================
+
+/// Opaque tensor train type for C API (f64)
+///
+/// Wraps `TensorTrain<f64>` from tensor4all-tensortrain.
+#[repr(C)]
+pub struct t4a_tt_f64 {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_tt_f64 {
+    /// Create a new t4a_tt_f64 from a TensorTrain<f64>
+    pub(crate) fn new(tt: tensor4all_tensortrain::TensorTrain<f64>) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(tt)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner TensorTrain<f64>
+    pub(crate) fn inner(&self) -> &tensor4all_tensortrain::TensorTrain<f64> {
+        unsafe { &*(self._private as *const tensor4all_tensortrain::TensorTrain<f64>) }
+    }
+
+    /// Get a mutable reference to the inner TensorTrain<f64>
+    pub(crate) fn inner_mut(&mut self) -> &mut tensor4all_tensortrain::TensorTrain<f64> {
+        unsafe { &mut *(self._private as *mut tensor4all_tensortrain::TensorTrain<f64>) }
+    }
+}
+
+impl Clone for t4a_tt_f64 {
+    fn clone(&self) -> Self {
+        let inner = self.inner().clone();
+        Self::new(inner)
+    }
+}
+
+impl Drop for t4a_tt_f64 {
+    fn drop(&mut self) {
+        unsafe {
+            if !self._private.is_null() {
+                let _ = Box::from_raw(self._private as *mut tensor4all_tensortrain::TensorTrain<f64>);
+            }
+        }
+    }
+}
+
+// Safety: t4a_tt_f64 is Send + Sync because TensorTrain<f64> is Send + Sync
+unsafe impl Send for t4a_tt_f64 {}
+unsafe impl Sync for t4a_tt_f64 {}
+
+/// Opaque tensor train type for C API (Complex64)
+///
+/// Wraps `TensorTrain<Complex64>` from tensor4all-tensortrain.
+#[repr(C)]
+pub struct t4a_tt_c64 {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_tt_c64 {
+    /// Create a new t4a_tt_c64 from a TensorTrain<Complex64>
+    pub(crate) fn new(tt: tensor4all_tensortrain::TensorTrain<num_complex::Complex64>) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(tt)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner TensorTrain<Complex64>
+    pub(crate) fn inner(&self) -> &tensor4all_tensortrain::TensorTrain<num_complex::Complex64> {
+        unsafe { &*(self._private as *const tensor4all_tensortrain::TensorTrain<num_complex::Complex64>) }
+    }
+
+    /// Get a mutable reference to the inner TensorTrain<Complex64>
+    pub(crate) fn inner_mut(&mut self) -> &mut tensor4all_tensortrain::TensorTrain<num_complex::Complex64> {
+        unsafe { &mut *(self._private as *mut tensor4all_tensortrain::TensorTrain<num_complex::Complex64>) }
+    }
+}
+
+impl Clone for t4a_tt_c64 {
+    fn clone(&self) -> Self {
+        let inner = self.inner().clone();
+        Self::new(inner)
+    }
+}
+
+impl Drop for t4a_tt_c64 {
+    fn drop(&mut self) {
+        unsafe {
+            if !self._private.is_null() {
+                let _ = Box::from_raw(self._private as *mut tensor4all_tensortrain::TensorTrain<num_complex::Complex64>);
+            }
+        }
+    }
+}
+
+// Safety: t4a_tt_c64 is Send + Sync because TensorTrain<Complex64> is Send + Sync
+unsafe impl Send for t4a_tt_c64 {}
+unsafe impl Sync for t4a_tt_c64 {}
