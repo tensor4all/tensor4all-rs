@@ -104,7 +104,7 @@ where
         // Step 1: Add all tensors as nodes and collect NodeIndex mappings
         let mut node_indices = Vec::with_capacity(tensors.len());
         for (tensor, node_name) in tensors.into_iter().zip(node_names.into_iter()) {
-            let node_idx = treetn.add_tensor_with_vertex(node_name, tensor)?;
+            let node_idx = treetn.add_tensor_with_name(node_name, tensor)?;
             node_indices.push(node_idx);
         }
 
@@ -164,7 +164,7 @@ where
     ///
     /// Also updates the site_index_network with the physical indices (all indices initially,
     /// as no connections exist yet).
-    pub fn add_tensor_with_vertex(&mut self, node_name: V, tensor: TensorDynLen<Id, Symm>) -> Result<NodeIndex> {
+    pub fn add_tensor_with_name(&mut self, node_name: V, tensor: TensorDynLen<Id, Symm>) -> Result<NodeIndex> {
         // Extract physical indices: initially all indices are physical (no connections yet)
         let physical_indices: HashSet<Index<Id, Symm>> = tensor.indices.iter().cloned().collect();
         
@@ -181,7 +181,7 @@ where
 
     /// Add a tensor to the network (backward compatibility for V = NodeIndex).
     ///
-    /// This method only works when `V = NodeIndex`. For other node name types, use `add_tensor_with_vertex` instead.
+    /// This method only works when `V = NodeIndex`. For other node name types, use `add_tensor_with_name` instead.
     ///
     /// Returns the NodeIndex for the newly added tensor.
     ///
@@ -586,8 +586,8 @@ where
         self.graph.graph().node_indices().collect()
     }
 
-    /// Get all vertex names in the tree tensor network.
-    pub fn vertex_names(&self) -> Vec<V> {
+    /// Get all node names in the tree tensor network.
+    pub fn node_names(&self) -> Vec<V> {
         self.graph.graph().node_indices()
             .filter_map(|idx| self.graph.node_name(idx).cloned())
             .collect()
@@ -601,7 +601,7 @@ where
     }
 
     /// Get a reference to the orthogonalization region (deprecated, NodeIndex-based).
-    #[deprecated(note = "Use ortho_region() instead. For NodeIndex vertices, convert manually.")]
+    #[deprecated(note = "Use ortho_region() instead. For NodeIndex nodes, convert manually.")]
     pub fn auto_centers(&self) -> HashSet<NodeIndex>
     where
         V: Into<NodeIndex> + Clone,
@@ -758,7 +758,7 @@ where
     /// # Algorithm
     ///
     /// For each edge `e`, create a new bond index with dimension `dA(e) + dB(e)`.
-    /// For each vertex `v`, create a new tensor that embeds:
+    /// For each node `v`, create a new tensor that embeds:
     /// - `T_A(v)` in the "A block" (first part of each bond dimension)
     /// - `T_B(v)` in the "B block" (second part of each bond dimension)
     ///
@@ -1069,7 +1069,7 @@ where
             };
 
             let new_tensor = TensorDynLen::new(canonical_indices, canonical_dims, Arc::new(new_storage));
-            result.add_tensor_with_vertex(node_name.clone(), new_tensor)?;
+            result.add_tensor_with_name(node_name.clone(), new_tensor)?;
         }
 
         // Add connections using the SAME shared index on both endpoints
@@ -1125,7 +1125,7 @@ where
         self.validate_tree()
             .context("contract_to_tensor: graph must be a tree")?;
 
-        // Choose a deterministic root (minimum vertex name)
+        // Choose a deterministic root (minimum node name)
         let root_name = self.graph.graph().node_indices()
             .filter_map(|idx| self.graph.node_name(idx).cloned())
             .min()
@@ -1407,29 +1407,29 @@ where
 
         // Validate ortho_region connectivity (similar to validate_ortho_consistency)
         let g = self.graph.graph();
-        let start_vertex = self.ortho_region.iter().next()
+        let start_node_name = self.ortho_region.iter().next()
             .ok_or_else(|| anyhow::anyhow!("ortho_region unexpectedly empty"))?;
-        let start_node = self.graph.node_index(start_vertex)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in graph", start_vertex))?;
+        let start_node = self.graph.node_index(start_node_name)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in graph", start_node_name))?;
         let mut stack = vec![start_node];
         let mut seen_nodes = HashSet::new();
-        let mut seen_vertices = HashSet::new();
+        let mut seen_node_names = HashSet::new();
         seen_nodes.insert(start_node);
-        seen_vertices.insert(start_vertex);
+        seen_node_names.insert(start_node_name);
         while let Some(v_node) = stack.pop() {
             for nb_node in g.neighbors(v_node) {
                 if let Some(nb_node_name) = self.graph.node_name(nb_node) {
                     if self.ortho_region.contains(nb_node_name) && seen_nodes.insert(nb_node) {
-                        seen_vertices.insert(nb_node_name);
+                        seen_node_names.insert(nb_node_name);
                         stack.push(nb_node);
                     }
                 }
             }
         }
-        if seen_vertices.len() != self.ortho_region.len() {
+        if seen_node_names.len() != self.ortho_region.len() {
             return Err(anyhow::anyhow!(
                 "ortho_region is not connected: reached {} out of {} centers",
-                seen_vertices.len(),
+                seen_node_names.len(),
                 self.ortho_region.len()
             ))
             .context("orthogonalize_with_qr: ortho_region must form a connected subtree");
@@ -1624,7 +1624,7 @@ where
     ///
     /// # Distribution Rules
     ///
-    /// - If `ortho_region` is **non-empty**: multiply each center vertex tensor by `a^{1/|C|}`.
+    /// - If `ortho_region` is **non-empty**: multiply each center node tensor by `a^{1/|C|}`.
     /// - If `ortho_region` is **empty**: multiply each tensor by `a^{1/N}`.
     /// - The product over all applied factors must equal `a`.
     ///
@@ -1632,7 +1632,7 @@ where
     ///
     /// - Distribute the magnitude `|a|` using the rules above.
     /// - Apply the sign `-1` to exactly one representative node.
-    /// - Representative node: `min(ortho_region)` if non-empty, else `min(all_vertices)`.
+    /// - Representative node: `min(ortho_region)` if non-empty, else `min(all_nodes)`.
     ///
     /// # Zero Scalar Handling
     ///
@@ -1645,16 +1645,16 @@ where
         }
 
         // Determine representative node
-        let representative_vertex: V = if !self.ortho_region.is_empty() {
+        let representative_node_name: V = if !self.ortho_region.is_empty() {
             self.ortho_region.iter().min().cloned().unwrap()
         } else {
-            // Get minimum vertex from all nodes
+            // Get minimum name from all nodes
             self.graph.graph().node_indices()
                 .filter_map(|idx| self.graph.node_name(idx).cloned())
                 .min()
                 .unwrap()
         };
-        let representative_node = self.graph.node_index(&representative_vertex).unwrap();
+        let representative_node = self.graph.node_index(&representative_node_name).unwrap();
 
         // Handle zero scalar
         if a == 0.0 {
@@ -1720,7 +1720,7 @@ where
     ///
     /// For complex scalars, we distribute the magnitude and apply the phase to one node.
     ///
-    /// - If `ortho_region` is **non-empty**: multiply each center vertex tensor by `|a|^{1/|C|}`.
+    /// - If `ortho_region` is **non-empty**: multiply each center node tensor by `|a|^{1/|C|}`.
     /// - If `ortho_region` is **empty**: multiply each tensor by `|a|^{1/N}`.
     /// - The phase `a/|a|` is applied to the representative node.
     ///
@@ -1734,7 +1734,7 @@ where
         }
 
         // Determine representative node
-        let representative_vertex: V = if !self.ortho_region.is_empty() {
+        let representative_node_name: V = if !self.ortho_region.is_empty() {
             self.ortho_region.iter().min().cloned().unwrap()
         } else {
             self.graph.graph().node_indices()
@@ -1742,7 +1742,7 @@ where
                 .min()
                 .unwrap()
         };
-        let representative_node = self.graph.node_index(&representative_vertex).unwrap();
+        let representative_node = self.graph.node_index(&representative_node_name).unwrap();
 
         // Handle zero scalar
         let magnitude = a.norm();
@@ -2258,7 +2258,7 @@ where
         // Single node - just wrap the tensor
         let mut tn = TreeTN::<Id, Symm, V>::new();
         let node_name = topology.nodes.keys().next().unwrap().clone();
-        tn.add_tensor_with_vertex(node_name, tensor.clone())?;
+        tn.add_tensor_with_name(node_name, tensor.clone())?;
         return Ok(tn);
     }
 
@@ -2388,7 +2388,7 @@ where
 
     // Add all tensors
     for (node_name, tensor) in &node_tensors {
-        tn.add_tensor_with_vertex(node_name.clone(), tensor.clone())?;
+        tn.add_tensor_with_name(node_name.clone(), tensor.clone())?;
     }
 
     // Add connections
