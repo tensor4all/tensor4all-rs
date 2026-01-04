@@ -1,3 +1,29 @@
 /target/
 Cargo.lock
 *.log
+*.so
+*.dylib
+*.dll
+*.a
+*.o
+*.obj
+*.exe
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Julia
+Manifest.toml
+LocalPreferences.toml
+
+# Avoid accidentally committing ad-hoc analysis notes at repo root
+*_analysis.md
