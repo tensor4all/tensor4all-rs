@@ -13,6 +13,7 @@ num-traits.workspace = true
 mdarray.workspace = true
 mdarray-linalg.workspace = true
 anyhow.workspace = true
+dyn-clone.workspace = true
 
 [dev-dependencies]
 

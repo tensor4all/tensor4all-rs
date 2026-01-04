@@ -11,4 +11,5 @@ tensor4all = { path = "../tensor4all" }
 petgraph.workspace = true
 anyhow.workspace = true
 num-complex.workspace = true
+dyn-clone.workspace = true
 
