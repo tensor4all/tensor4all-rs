@@ -10,7 +10,9 @@ use std::panic::catch_unwind;
 use std::ptr;
 
 use num_complex::Complex64;
-use tensor4all_tensortrain::{AbstractTensorTrain, TensorTrain};
+use tensor4all_tensortrain::{
+    AbstractTensorTrain, CompressionMethod, CompressionOptions, TensorTrain,
+};
 
 use crate::types::{t4a_tt_c64, t4a_tt_f64};
 use crate::{
@@ -850,6 +852,490 @@ pub extern "C" fn t4a_tt_c64_fulltensor(
     result.unwrap_or(T4A_INTERNAL_ERROR)
 }
 
+// ============================================================================
+// Arithmetic Operations - f64
+// ============================================================================
+
+/// Add two tensor trains element-wise (f64)
+///
+/// The resulting bond dimension is the sum of the input bond dimensions.
+/// Use compress() afterward to reduce the bond dimension.
+///
+/// # Safety
+/// - `a` and `b` must be valid pointers to t4a_tt_f64
+/// - Caller owns the returned tensor train and must call t4a_tt_f64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_f64_add(
+    a: *const t4a_tt_f64,
+    b: *const t4a_tt_f64,
+) -> *mut t4a_tt_f64 {
+    if a.is_null() || b.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+        match tt_a.inner().add(tt_b.inner()) {
+            Ok(sum) => Box::into_raw(Box::new(t4a_tt_f64::new(sum))),
+            Err(_) => ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+/// Subtract two tensor trains element-wise (f64)
+///
+/// Computes: a - b
+///
+/// # Safety
+/// - `a` and `b` must be valid pointers to t4a_tt_f64
+/// - Caller owns the returned tensor train and must call t4a_tt_f64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_f64_sub(
+    a: *const t4a_tt_f64,
+    b: *const t4a_tt_f64,
+) -> *mut t4a_tt_f64 {
+    if a.is_null() || b.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+        match tt_a.inner().sub(tt_b.inner()) {
+            Ok(diff) => Box::into_raw(Box::new(t4a_tt_f64::new(diff))),
+            Err(_) => ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+/// Negate a tensor train (multiply by -1) (f64)
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a t4a_tt_f64
+/// - Caller owns the returned tensor train and must call t4a_tt_f64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_f64_negate(ptr: *const t4a_tt_f64) -> *mut t4a_tt_f64 {
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let negated = tt.inner().negate();
+        Box::into_raw(Box::new(t4a_tt_f64::new(negated)))
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+/// Reverse a tensor train (swap left and right) (f64)
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a t4a_tt_f64
+/// - Caller owns the returned tensor train and must call t4a_tt_f64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_f64_reverse(ptr: *const t4a_tt_f64) -> *mut t4a_tt_f64 {
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let reversed = tt.inner().reverse();
+        Box::into_raw(Box::new(t4a_tt_f64::new(reversed)))
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+/// Compute the Hadamard (element-wise) product of two tensor trains (f64)
+///
+/// For each index i: result[i] = a[i] * b[i]
+///
+/// The resulting bond dimension is the product of the input bond dimensions.
+/// Use compress() afterward to reduce the bond dimension.
+///
+/// # Safety
+/// - `a` and `b` must be valid pointers to t4a_tt_f64
+/// - Caller owns the returned tensor train and must call t4a_tt_f64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_f64_hadamard(
+    a: *const t4a_tt_f64,
+    b: *const t4a_tt_f64,
+) -> *mut t4a_tt_f64 {
+    if a.is_null() || b.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+        match tt_a.inner().hadamard(tt_b.inner()) {
+            Ok(prod) => Box::into_raw(Box::new(t4a_tt_f64::new(prod))),
+            Err(_) => ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+/// Compute the inner product (dot product) of two tensor trains (f64)
+///
+/// Returns: sum over all indices i of a[i] * b[i]
+///
+/// # Safety
+/// - `a` and `b` must be valid pointers to t4a_tt_f64
+/// - `out_dot` must be a valid pointer
+#[no_mangle]
+pub extern "C" fn t4a_tt_f64_dot(
+    a: *const t4a_tt_f64,
+    b: *const t4a_tt_f64,
+    out_dot: *mut libc::c_double,
+) -> StatusCode {
+    if a.is_null() || b.is_null() || out_dot.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+        match tt_a.inner().dot(tt_b.inner()) {
+            Ok(dot) => {
+                unsafe { *out_dot = dot };
+                T4A_SUCCESS
+            }
+            Err(_) => T4A_INVALID_ARGUMENT,
+        }
+    }));
+
+    result.unwrap_or(T4A_INTERNAL_ERROR)
+}
+
+/// Compress a tensor train in-place (f64)
+///
+/// # Arguments
+/// - `ptr`: Tensor train handle
+/// - `tolerance`: Relative tolerance for truncation (e.g., 1e-12)
+/// - `max_bond_dim`: Maximum bond dimension (0 for unlimited)
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a t4a_tt_f64
+#[no_mangle]
+pub extern "C" fn t4a_tt_f64_compress(
+    ptr: *mut t4a_tt_f64,
+    tolerance: libc::c_double,
+    max_bond_dim: libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt = unsafe { &mut *ptr };
+        let options = CompressionOptions {
+            method: CompressionMethod::LU,
+            tolerance,
+            max_bond_dim: if max_bond_dim == 0 {
+                usize::MAX
+            } else {
+                max_bond_dim
+            },
+            normalize_error: true,
+        };
+        match tt.inner_mut().compress(&options) {
+            Ok(()) => T4A_SUCCESS,
+            Err(_) => T4A_INTERNAL_ERROR,
+        }
+    }));
+
+    result.unwrap_or(T4A_INTERNAL_ERROR)
+}
+
+/// Create a compressed copy of a tensor train (f64)
+///
+/// # Arguments
+/// - `ptr`: Tensor train handle
+/// - `tolerance`: Relative tolerance for truncation (e.g., 1e-12)
+/// - `max_bond_dim`: Maximum bond dimension (0 for unlimited)
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a t4a_tt_f64
+/// - Caller owns the returned tensor train and must call t4a_tt_f64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_f64_compressed(
+    ptr: *const t4a_tt_f64,
+    tolerance: libc::c_double,
+    max_bond_dim: libc::size_t,
+) -> *mut t4a_tt_f64 {
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let options = CompressionOptions {
+            method: CompressionMethod::LU,
+            tolerance,
+            max_bond_dim: if max_bond_dim == 0 {
+                usize::MAX
+            } else {
+                max_bond_dim
+            },
+            normalize_error: true,
+        };
+        match tt.inner().compressed(&options) {
+            Ok(compressed) => Box::into_raw(Box::new(t4a_tt_f64::new(compressed))),
+            Err(_) => ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+// ============================================================================
+// Arithmetic Operations - Complex64
+// ============================================================================
+
+/// Add two tensor trains element-wise (Complex64)
+///
+/// # Safety
+/// - `a` and `b` must be valid pointers to t4a_tt_c64
+/// - Caller owns the returned tensor train and must call t4a_tt_c64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_c64_add(
+    a: *const t4a_tt_c64,
+    b: *const t4a_tt_c64,
+) -> *mut t4a_tt_c64 {
+    if a.is_null() || b.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+        match tt_a.inner().add(tt_b.inner()) {
+            Ok(sum) => Box::into_raw(Box::new(t4a_tt_c64::new(sum))),
+            Err(_) => ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+/// Subtract two tensor trains element-wise (Complex64)
+///
+/// # Safety
+/// - `a` and `b` must be valid pointers to t4a_tt_c64
+/// - Caller owns the returned tensor train and must call t4a_tt_c64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_c64_sub(
+    a: *const t4a_tt_c64,
+    b: *const t4a_tt_c64,
+) -> *mut t4a_tt_c64 {
+    if a.is_null() || b.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+        match tt_a.inner().sub(tt_b.inner()) {
+            Ok(diff) => Box::into_raw(Box::new(t4a_tt_c64::new(diff))),
+            Err(_) => ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+/// Negate a tensor train (multiply by -1) (Complex64)
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a t4a_tt_c64
+/// - Caller owns the returned tensor train and must call t4a_tt_c64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_c64_negate(ptr: *const t4a_tt_c64) -> *mut t4a_tt_c64 {
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let negated = tt.inner().negate();
+        Box::into_raw(Box::new(t4a_tt_c64::new(negated)))
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+/// Reverse a tensor train (swap left and right) (Complex64)
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a t4a_tt_c64
+/// - Caller owns the returned tensor train and must call t4a_tt_c64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_c64_reverse(ptr: *const t4a_tt_c64) -> *mut t4a_tt_c64 {
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let reversed = tt.inner().reverse();
+        Box::into_raw(Box::new(t4a_tt_c64::new(reversed)))
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+/// Compute the Hadamard (element-wise) product of two tensor trains (Complex64)
+///
+/// # Safety
+/// - `a` and `b` must be valid pointers to t4a_tt_c64
+/// - Caller owns the returned tensor train and must call t4a_tt_c64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_c64_hadamard(
+    a: *const t4a_tt_c64,
+    b: *const t4a_tt_c64,
+) -> *mut t4a_tt_c64 {
+    if a.is_null() || b.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+        match tt_a.inner().hadamard(tt_b.inner()) {
+            Ok(prod) => Box::into_raw(Box::new(t4a_tt_c64::new(prod))),
+            Err(_) => ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+/// Compute the inner product (dot product) of two tensor trains (Complex64)
+///
+/// Returns: sum over all indices i of a[i] * b[i]
+///
+/// # Safety
+/// - `a` and `b` must be valid pointers to t4a_tt_c64
+/// - `out_re` and `out_im` must be valid pointers
+#[no_mangle]
+pub extern "C" fn t4a_tt_c64_dot(
+    a: *const t4a_tt_c64,
+    b: *const t4a_tt_c64,
+    out_re: *mut libc::c_double,
+    out_im: *mut libc::c_double,
+) -> StatusCode {
+    if a.is_null() || b.is_null() || out_re.is_null() || out_im.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+        match tt_a.inner().dot(tt_b.inner()) {
+            Ok(dot) => {
+                unsafe {
+                    *out_re = dot.re;
+                    *out_im = dot.im;
+                };
+                T4A_SUCCESS
+            }
+            Err(_) => T4A_INVALID_ARGUMENT,
+        }
+    }));
+
+    result.unwrap_or(T4A_INTERNAL_ERROR)
+}
+
+/// Compress a tensor train in-place (Complex64)
+///
+/// # Arguments
+/// - `ptr`: Tensor train handle
+/// - `tolerance`: Relative tolerance for truncation (e.g., 1e-12)
+/// - `max_bond_dim`: Maximum bond dimension (0 for unlimited)
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a t4a_tt_c64
+#[no_mangle]
+pub extern "C" fn t4a_tt_c64_compress(
+    ptr: *mut t4a_tt_c64,
+    tolerance: libc::c_double,
+    max_bond_dim: libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt = unsafe { &mut *ptr };
+        let options = CompressionOptions {
+            method: CompressionMethod::LU,
+            tolerance,
+            max_bond_dim: if max_bond_dim == 0 {
+                usize::MAX
+            } else {
+                max_bond_dim
+            },
+            normalize_error: true,
+        };
+        match tt.inner_mut().compress(&options) {
+            Ok(()) => T4A_SUCCESS,
+            Err(_) => T4A_INTERNAL_ERROR,
+        }
+    }));
+
+    result.unwrap_or(T4A_INTERNAL_ERROR)
+}
+
+/// Create a compressed copy of a tensor train (Complex64)
+///
+/// # Arguments
+/// - `ptr`: Tensor train handle
+/// - `tolerance`: Relative tolerance for truncation (e.g., 1e-12)
+/// - `max_bond_dim`: Maximum bond dimension (0 for unlimited)
+///
+/// # Safety
+/// - `ptr` must be a valid pointer to a t4a_tt_c64
+/// - Caller owns the returned tensor train and must call t4a_tt_c64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_c64_compressed(
+    ptr: *const t4a_tt_c64,
+    tolerance: libc::c_double,
+    max_bond_dim: libc::size_t,
+) -> *mut t4a_tt_c64 {
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let options = CompressionOptions {
+            method: CompressionMethod::LU,
+            tolerance,
+            max_bond_dim: if max_bond_dim == 0 {
+                usize::MAX
+            } else {
+                max_bond_dim
+            },
+            normalize_error: true,
+        };
+        match tt.inner().compressed(&options) {
+            Ok(compressed) => Box::into_raw(Box::new(t4a_tt_c64::new(compressed))),
+            Err(_) => ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1015,5 +1501,219 @@ mod tests {
         assert!((log_norm - norm.ln()).abs() < 1e-10);
 
         t4a_tt_f64_release(tt);
+    }
+
+    #[test]
+    fn test_tt_f64_add() {
+        let dims = [2_usize, 3];
+        let tt1 = t4a_tt_f64_new_constant(dims.as_ptr(), 2, 1.0);
+        let tt2 = t4a_tt_f64_new_constant(dims.as_ptr(), 2, 2.0);
+
+        let result = t4a_tt_f64_add(tt1 as *const _, tt2 as *const _);
+        assert!(!result.is_null());
+
+        // Sum should be (1.0 + 2.0) * 2 * 3 = 18.0
+        let mut sum: f64 = 0.0;
+        t4a_tt_f64_sum(result as *const _, &mut sum);
+        assert!((sum - 18.0).abs() < 1e-10);
+
+        t4a_tt_f64_release(result);
+        t4a_tt_f64_release(tt2);
+        t4a_tt_f64_release(tt1);
+    }
+
+    #[test]
+    fn test_tt_f64_sub() {
+        let dims = [2_usize, 3];
+        let tt1 = t4a_tt_f64_new_constant(dims.as_ptr(), 2, 5.0);
+        let tt2 = t4a_tt_f64_new_constant(dims.as_ptr(), 2, 2.0);
+
+        let result = t4a_tt_f64_sub(tt1 as *const _, tt2 as *const _);
+        assert!(!result.is_null());
+
+        // Sum should be (5.0 - 2.0) * 2 * 3 = 18.0
+        let mut sum: f64 = 0.0;
+        t4a_tt_f64_sum(result as *const _, &mut sum);
+        assert!((sum - 18.0).abs() < 1e-10);
+
+        t4a_tt_f64_release(result);
+        t4a_tt_f64_release(tt2);
+        t4a_tt_f64_release(tt1);
+    }
+
+    #[test]
+    fn test_tt_f64_negate() {
+        let dims = [2_usize, 2];
+        let tt = t4a_tt_f64_new_constant(dims.as_ptr(), 2, 3.0);
+
+        let neg = t4a_tt_f64_negate(tt as *const _);
+        assert!(!neg.is_null());
+
+        let mut sum1: f64 = 0.0;
+        let mut sum2: f64 = 0.0;
+        t4a_tt_f64_sum(tt as *const _, &mut sum1);
+        t4a_tt_f64_sum(neg as *const _, &mut sum2);
+        assert!((sum1 + sum2).abs() < 1e-10);
+
+        t4a_tt_f64_release(neg);
+        t4a_tt_f64_release(tt);
+    }
+
+    #[test]
+    fn test_tt_f64_reverse() {
+        let dims = [2_usize, 3];
+        let tt = t4a_tt_f64_new_constant(dims.as_ptr(), 2, 5.0);
+
+        let rev = t4a_tt_f64_reverse(tt as *const _);
+        assert!(!rev.is_null());
+
+        // Reversed site dims should be [3, 2]
+        let mut out_dims = [0_usize; 2];
+        t4a_tt_f64_site_dims(rev as *const _, out_dims.as_mut_ptr(), 2);
+        assert_eq!(out_dims, [3, 2]);
+
+        // Sum should be preserved
+        let mut sum1: f64 = 0.0;
+        let mut sum2: f64 = 0.0;
+        t4a_tt_f64_sum(tt as *const _, &mut sum1);
+        t4a_tt_f64_sum(rev as *const _, &mut sum2);
+        assert!((sum1 - sum2).abs() < 1e-10);
+
+        t4a_tt_f64_release(rev);
+        t4a_tt_f64_release(tt);
+    }
+
+    #[test]
+    fn test_tt_f64_hadamard() {
+        let dims = [2_usize, 3];
+        let tt1 = t4a_tt_f64_new_constant(dims.as_ptr(), 2, 2.0);
+        let tt2 = t4a_tt_f64_new_constant(dims.as_ptr(), 2, 3.0);
+
+        let result = t4a_tt_f64_hadamard(tt1 as *const _, tt2 as *const _);
+        assert!(!result.is_null());
+
+        // Sum should be 2.0 * 3.0 * 2 * 3 = 36.0
+        let mut sum: f64 = 0.0;
+        t4a_tt_f64_sum(result as *const _, &mut sum);
+        assert!((sum - 36.0).abs() < 1e-10);
+
+        t4a_tt_f64_release(result);
+        t4a_tt_f64_release(tt2);
+        t4a_tt_f64_release(tt1);
+    }
+
+    #[test]
+    fn test_tt_f64_dot() {
+        let dims = [2_usize, 3];
+        let tt1 = t4a_tt_f64_new_constant(dims.as_ptr(), 2, 2.0);
+        let tt2 = t4a_tt_f64_new_constant(dims.as_ptr(), 2, 3.0);
+
+        let mut dot: f64 = 0.0;
+        let status = t4a_tt_f64_dot(tt1 as *const _, tt2 as *const _, &mut dot);
+        assert_eq!(status, T4A_SUCCESS);
+
+        // dot = 2.0 * 3.0 * 2 * 3 = 36.0
+        assert!((dot - 36.0).abs() < 1e-10);
+
+        t4a_tt_f64_release(tt2);
+        t4a_tt_f64_release(tt1);
+    }
+
+    #[test]
+    fn test_tt_f64_compress() {
+        let dims = [2_usize, 3, 2];
+        let tt = t4a_tt_f64_new_constant(dims.as_ptr(), 3, 1.0);
+
+        let mut sum_before: f64 = 0.0;
+        t4a_tt_f64_sum(tt as *const _, &mut sum_before);
+
+        // Compress with default settings
+        let status = t4a_tt_f64_compress(tt, 1e-12, 0);
+        assert_eq!(status, T4A_SUCCESS);
+
+        let mut sum_after: f64 = 0.0;
+        t4a_tt_f64_sum(tt as *const _, &mut sum_after);
+        assert!((sum_before - sum_after).abs() < 1e-10);
+
+        t4a_tt_f64_release(tt);
+    }
+
+    #[test]
+    fn test_tt_f64_compressed() {
+        let dims = [2_usize, 3, 2];
+        let tt = t4a_tt_f64_new_constant(dims.as_ptr(), 3, 1.0);
+
+        let compressed = t4a_tt_f64_compressed(tt as *const _, 1e-12, 0);
+        assert!(!compressed.is_null());
+
+        let mut sum1: f64 = 0.0;
+        let mut sum2: f64 = 0.0;
+        t4a_tt_f64_sum(tt as *const _, &mut sum1);
+        t4a_tt_f64_sum(compressed as *const _, &mut sum2);
+        assert!((sum1 - sum2).abs() < 1e-10);
+
+        t4a_tt_f64_release(compressed);
+        t4a_tt_f64_release(tt);
+    }
+
+    #[test]
+    fn test_tt_c64_add() {
+        let dims = [2_usize, 2];
+        let tt1 = t4a_tt_c64_new_constant(dims.as_ptr(), 2, 1.0, 0.0);
+        let tt2 = t4a_tt_c64_new_constant(dims.as_ptr(), 2, 0.0, 1.0);
+
+        let result = t4a_tt_c64_add(tt1 as *const _, tt2 as *const _);
+        assert!(!result.is_null());
+
+        // Sum should be (1+i) * 4 = 4 + 4i
+        let mut re: f64 = 0.0;
+        let mut im: f64 = 0.0;
+        t4a_tt_c64_sum(result as *const _, &mut re, &mut im);
+        assert!((re - 4.0).abs() < 1e-10);
+        assert!((im - 4.0).abs() < 1e-10);
+
+        t4a_tt_c64_release(result);
+        t4a_tt_c64_release(tt2);
+        t4a_tt_c64_release(tt1);
+    }
+
+    #[test]
+    fn test_tt_c64_hadamard() {
+        let dims = [2_usize, 2];
+        let tt1 = t4a_tt_c64_new_constant(dims.as_ptr(), 2, 2.0, 0.0);
+        let tt2 = t4a_tt_c64_new_constant(dims.as_ptr(), 2, 0.0, 3.0);
+
+        let result = t4a_tt_c64_hadamard(tt1 as *const _, tt2 as *const _);
+        assert!(!result.is_null());
+
+        // Each element is 2 * 3i = 6i, sum = 6i * 4 = 24i
+        let mut re: f64 = 0.0;
+        let mut im: f64 = 0.0;
+        t4a_tt_c64_sum(result as *const _, &mut re, &mut im);
+        assert!((re).abs() < 1e-10);
+        assert!((im - 24.0).abs() < 1e-10);
+
+        t4a_tt_c64_release(result);
+        t4a_tt_c64_release(tt2);
+        t4a_tt_c64_release(tt1);
+    }
+
+    #[test]
+    fn test_tt_c64_dot() {
+        let dims = [2_usize, 2];
+        let tt1 = t4a_tt_c64_new_constant(dims.as_ptr(), 2, 2.0, 0.0);
+        let tt2 = t4a_tt_c64_new_constant(dims.as_ptr(), 2, 3.0, 0.0);
+
+        let mut re: f64 = 0.0;
+        let mut im: f64 = 0.0;
+        let status = t4a_tt_c64_dot(tt1 as *const _, tt2 as *const _, &mut re, &mut im);
+        assert_eq!(status, T4A_SUCCESS);
+
+        // dot = 2 * 3 * 4 = 24
+        assert!((re - 24.0).abs() < 1e-10);
+        assert!((im).abs() < 1e-10);
+
+        t4a_tt_c64_release(tt2);
+        t4a_tt_c64_release(tt1);
     }
 }

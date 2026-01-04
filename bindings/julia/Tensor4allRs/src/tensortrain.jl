@@ -640,3 +640,339 @@ function Base.copy(tt::TensorTrainC64)
     ptr == C_NULL && error("Failed to clone TensorTrainC64")
     return TensorTrainC64(ptr)
 end
+
+# ============================================================================
+# Arithmetic Operations - TensorTrainF64
+# ============================================================================
+
+"""
+    add_tt(a::TensorTrainF64, b::TensorTrainF64)
+
+Add two tensor trains element-wise.
+
+The resulting bond dimension is the sum of the input bond dimensions.
+Use `compress!` afterward to reduce the bond dimension.
+"""
+function add_tt(a::TensorTrainF64, b::TensorTrainF64)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_f64_add),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Ptr{Cvoid}),
+        a.ptr,
+        b.ptr,
+    )
+    ptr == C_NULL && error("Failed to add TensorTrainF64")
+    return TensorTrainF64(ptr)
+end
+
+"""
+    sub_tt(a::TensorTrainF64, b::TensorTrainF64)
+
+Subtract two tensor trains element-wise (a - b).
+"""
+function sub_tt(a::TensorTrainF64, b::TensorTrainF64)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_f64_sub),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Ptr{Cvoid}),
+        a.ptr,
+        b.ptr,
+    )
+    ptr == C_NULL && error("Failed to subtract TensorTrainF64")
+    return TensorTrainF64(ptr)
+end
+
+"""
+    negate_tt(tt::TensorTrainF64)
+
+Negate a tensor train (multiply by -1).
+"""
+function negate_tt(tt::TensorTrainF64)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_f64_negate),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        tt.ptr,
+    )
+    ptr == C_NULL && error("Failed to negate TensorTrainF64")
+    return TensorTrainF64(ptr)
+end
+
+"""
+    reverse_tt(tt::TensorTrainF64)
+
+Reverse a tensor train (swap left and right).
+"""
+function reverse_tt(tt::TensorTrainF64)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_f64_reverse),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        tt.ptr,
+    )
+    ptr == C_NULL && error("Failed to reverse TensorTrainF64")
+    return TensorTrainF64(ptr)
+end
+
+"""
+    hadamard(a::TensorTrainF64, b::TensorTrainF64)
+
+Compute the Hadamard (element-wise) product of two tensor trains.
+
+For each index i: result[i] = a[i] * b[i]
+
+The resulting bond dimension is the product of the input bond dimensions.
+Use `compress!` afterward to reduce the bond dimension.
+"""
+function hadamard(a::TensorTrainF64, b::TensorTrainF64)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_f64_hadamard),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Ptr{Cvoid}),
+        a.ptr,
+        b.ptr,
+    )
+    ptr == C_NULL && error("Failed to compute Hadamard product")
+    return TensorTrainF64(ptr)
+end
+
+"""
+    dot(a::TensorTrainF64, b::TensorTrainF64)
+
+Compute the inner product (dot product) of two tensor trains.
+
+Returns: sum over all indices i of a[i] * b[i]
+"""
+function dot(a::TensorTrainF64, b::TensorTrainF64)
+    lib = get_lib()
+    out_dot = Ref{Cdouble}(0.0)
+    status = ccall(
+        Libdl.dlsym(lib, :t4a_tt_f64_dot),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cdouble}),
+        a.ptr,
+        b.ptr,
+        out_dot,
+    )
+    status == T4A_SUCCESS || error("Failed to compute dot product: status = $status")
+    return out_dot[]
+end
+
+"""
+    compress!(tt::TensorTrainF64; tolerance::Float64=1e-12, max_bond_dim::Int=0)
+
+Compress a tensor train in-place.
+
+# Arguments
+- `tolerance`: Relative tolerance for truncation (default: 1e-12)
+- `max_bond_dim`: Maximum bond dimension (0 for unlimited)
+"""
+function compress!(tt::TensorTrainF64; tolerance::Float64 = 1e-12, max_bond_dim::Int = 0)
+    lib = get_lib()
+    status = ccall(
+        Libdl.dlsym(lib, :t4a_tt_f64_compress),
+        Cint,
+        (Ptr{Cvoid}, Cdouble, Csize_t),
+        tt.ptr,
+        tolerance,
+        max_bond_dim,
+    )
+    status == T4A_SUCCESS || error("Failed to compress: status = $status")
+    return tt
+end
+
+"""
+    compressed(tt::TensorTrainF64; tolerance::Float64=1e-12, max_bond_dim::Int=0)
+
+Create a compressed copy of a tensor train.
+
+# Arguments
+- `tolerance`: Relative tolerance for truncation (default: 1e-12)
+- `max_bond_dim`: Maximum bond dimension (0 for unlimited)
+"""
+function compressed(tt::TensorTrainF64; tolerance::Float64 = 1e-12, max_bond_dim::Int = 0)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_f64_compressed),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Cdouble, Csize_t),
+        tt.ptr,
+        tolerance,
+        max_bond_dim,
+    )
+    ptr == C_NULL && error("Failed to create compressed TensorTrainF64")
+    return TensorTrainF64(ptr)
+end
+
+# Operator overloads for TensorTrainF64
+Base.:+(a::TensorTrainF64, b::TensorTrainF64) = add_tt(a, b)
+Base.:-(a::TensorTrainF64, b::TensorTrainF64) = sub_tt(a, b)
+Base.:-(tt::TensorTrainF64) = negate_tt(tt)
+Base.:*(a::TensorTrainF64, b::TensorTrainF64) = hadamard(a, b)
+Base.:*(tt::TensorTrainF64, factor::Real) = scaled(tt, Float64(factor))
+Base.:*(factor::Real, tt::TensorTrainF64) = scaled(tt, Float64(factor))
+
+# ============================================================================
+# Arithmetic Operations - TensorTrainC64
+# ============================================================================
+
+"""
+    add_tt(a::TensorTrainC64, b::TensorTrainC64)
+
+Add two complex tensor trains element-wise.
+"""
+function add_tt(a::TensorTrainC64, b::TensorTrainC64)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_c64_add),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Ptr{Cvoid}),
+        a.ptr,
+        b.ptr,
+    )
+    ptr == C_NULL && error("Failed to add TensorTrainC64")
+    return TensorTrainC64(ptr)
+end
+
+"""
+    sub_tt(a::TensorTrainC64, b::TensorTrainC64)
+
+Subtract two complex tensor trains element-wise (a - b).
+"""
+function sub_tt(a::TensorTrainC64, b::TensorTrainC64)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_c64_sub),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Ptr{Cvoid}),
+        a.ptr,
+        b.ptr,
+    )
+    ptr == C_NULL && error("Failed to subtract TensorTrainC64")
+    return TensorTrainC64(ptr)
+end
+
+"""
+    negate_tt(tt::TensorTrainC64)
+
+Negate a complex tensor train (multiply by -1).
+"""
+function negate_tt(tt::TensorTrainC64)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_c64_negate),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        tt.ptr,
+    )
+    ptr == C_NULL && error("Failed to negate TensorTrainC64")
+    return TensorTrainC64(ptr)
+end
+
+"""
+    reverse_tt(tt::TensorTrainC64)
+
+Reverse a complex tensor train (swap left and right).
+"""
+function reverse_tt(tt::TensorTrainC64)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_c64_reverse),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        tt.ptr,
+    )
+    ptr == C_NULL && error("Failed to reverse TensorTrainC64")
+    return TensorTrainC64(ptr)
+end
+
+"""
+    hadamard(a::TensorTrainC64, b::TensorTrainC64)
+
+Compute the Hadamard (element-wise) product of two complex tensor trains.
+"""
+function hadamard(a::TensorTrainC64, b::TensorTrainC64)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_c64_hadamard),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Ptr{Cvoid}),
+        a.ptr,
+        b.ptr,
+    )
+    ptr == C_NULL && error("Failed to compute Hadamard product")
+    return TensorTrainC64(ptr)
+end
+
+"""
+    dot(a::TensorTrainC64, b::TensorTrainC64)
+
+Compute the inner product (dot product) of two complex tensor trains.
+"""
+function dot(a::TensorTrainC64, b::TensorTrainC64)
+    lib = get_lib()
+    out_re = Ref{Cdouble}(0.0)
+    out_im = Ref{Cdouble}(0.0)
+    status = ccall(
+        Libdl.dlsym(lib, :t4a_tt_c64_dot),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cdouble}, Ptr{Cdouble}),
+        a.ptr,
+        b.ptr,
+        out_re,
+        out_im,
+    )
+    status == T4A_SUCCESS || error("Failed to compute dot product: status = $status")
+    return ComplexF64(out_re[], out_im[])
+end
+
+"""
+    compress!(tt::TensorTrainC64; tolerance::Float64=1e-12, max_bond_dim::Int=0)
+
+Compress a complex tensor train in-place.
+"""
+function compress!(tt::TensorTrainC64; tolerance::Float64 = 1e-12, max_bond_dim::Int = 0)
+    lib = get_lib()
+    status = ccall(
+        Libdl.dlsym(lib, :t4a_tt_c64_compress),
+        Cint,
+        (Ptr{Cvoid}, Cdouble, Csize_t),
+        tt.ptr,
+        tolerance,
+        max_bond_dim,
+    )
+    status == T4A_SUCCESS || error("Failed to compress: status = $status")
+    return tt
+end
+
+"""
+    compressed(tt::TensorTrainC64; tolerance::Float64=1e-12, max_bond_dim::Int=0)
+
+Create a compressed copy of a complex tensor train.
+"""
+function compressed(tt::TensorTrainC64; tolerance::Float64 = 1e-12, max_bond_dim::Int = 0)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_c64_compressed),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Cdouble, Csize_t),
+        tt.ptr,
+        tolerance,
+        max_bond_dim,
+    )
+    ptr == C_NULL && error("Failed to create compressed TensorTrainC64")
+    return TensorTrainC64(ptr)
+end
+
+# Operator overloads for TensorTrainC64
+Base.:+(a::TensorTrainC64, b::TensorTrainC64) = add_tt(a, b)
+Base.:-(a::TensorTrainC64, b::TensorTrainC64) = sub_tt(a, b)
+Base.:-(tt::TensorTrainC64) = negate_tt(tt)
+Base.:*(a::TensorTrainC64, b::TensorTrainC64) = hadamard(a, b)
+Base.:*(tt::TensorTrainC64, factor::Number) = scaled(tt, factor)
+Base.:*(factor::Number, tt::TensorTrainC64) = scaled(tt, factor)
