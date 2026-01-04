@@ -32,7 +32,7 @@ tensor4all-rs provides a type-safe, efficient implementation of tensor networks 
 
 tensor4all-rs is designed with the following principles in mind:
 
-- **Modular architecture for fast development cycles**: The library is split into independent crates (`tensor4all-core`, `tensor4all-tensor`, and `tensor4all-linalg`) to enable rapid AI-assisted code generation and testing. Each module can be developed, tested, and compiled independently, minimizing iteration time during development.
+- **Modular architecture for fast development cycles**: The library is split into independent crates (`tensor4all-core-common`, `tensor4all-core-tensor`, and `tensor4all-core-linalg`) to enable rapid AI-assisted code generation and testing. Each module can be developed, tested, and compiled independently, minimizing iteration time during development.
 
 - **Compile-time error detection**: The design leverages Rust's type system to catch errors at compile time rather than runtime:
   - Generic type parameters (`Index<Id, Symm, Tags>`) enable compile-time validation of index compatibility
@@ -49,7 +49,7 @@ tensor4all-rs is designed with the following principles in mind:
 |---------|-----------|-------------|---------------|
 | **Tensor with QNs** | `QSpace` | `ITensor` | `TensorDynLen<Id, T, Symm>` |
 | **Index** | Quantum number labels in `QIDX` | `Index{QNBlocks}` | `Index<Id, Symm, Tags = DefaultTagSet>` |
-| **Storage** | `DATA` (array of blocks) | `NDTensors.BlockSparse` | `Storage` enum (DenseF64, DenseC64, DiagF64, DiagC64) |
+| **Storage** | `DATA` (array of blocks) | `NDTensors` (Dense, BlockSparse, Diag, etc.) | `Storage` enum (DenseF64, DenseC64, DiagF64, DiagC64) |
 | **Language** | MATLAB/C++ | Julia | Rust |
 
 ### Index Design
@@ -82,21 +82,9 @@ pub struct Index<Id, Symm = NoSymmSpace, Tags = DefaultTagSet> {
 tensor4all-rs uses **UInt128 with thread-local RNG** for ID generation:
 
 - Each thread has its own RNG instance, seeded from OS entropy
-- Collision probability for 10^5 indices: ~1.5 × 10^-29 (effectively zero)
 - Thread-safe without global synchronization
 - Similar to ITensors.jl's task-local RNG but with UInt128 for better collision resistance
-
-**Collision Probability** (Birthday Paradox):
-
-For `n` randomly generated UInt128 IDs:
-```
-P(collision) ≈ 1 - exp(-n² / (2 × 2^128))
-```
-
-Examples:
-- **n = 10^5 (100,000 indices)**: P(collision) ≈ **1.5 × 10^-29** (negligible)
-- **n = 10^6 (1 million indices)**: P(collision) ≈ **1.5 × 10^-27** (negligible)
-- **n = 10^9 (1 billion indices)**: P(collision) ≈ **1.5 × 10^-21** (negligible)
+- Collision probability for 10^9 indices: ~10^-21 (negligible)
 
 ### Tensor Types
 
@@ -160,24 +148,32 @@ tensor4all-rs and ITensors.jl use different conventions for truncation tolerance
 
 tensor4all-rs is organized as a Cargo workspace with the following crates:
 
+### Umbrella Crate
+
+- **`tensor4all`**: Re-exports all core crates for convenient single-import usage
+
 ### Core Crates
 
-- **`tensor4all-core`**: Core index, tag, and small string utilities
+- **`tensor4all-core-common`**: Core index, tag, and small string utilities
   - `Index<Id, Symm, Tags>`: Generic index type
   - `TagSet`: Index tag management
   - `SmallString`: Efficient small string storage
   - `common_inds`: Find common indices between tensors
 
-- **`tensor4all-tensor`**: Tensor and storage implementations
+- **`tensor4all-core-tensor`**: Tensor and storage implementations
   - `TensorDynLen<Id, T, Symm>`: Dynamic-rank tensors
   - `Storage`: Storage backend enum
   - Storage newtypes: `DenseStorageF64`, `DenseStorageC64`, `DiagStorageF64`, `DiagStorageC64`
 
-- **`tensor4all-linalg`**: Linear algebra operations for tensor networks
+- **`tensor4all-core-linalg`**: Linear algebra operations for tensor networks
   - `svd`: Singular Value Decomposition with truncation control
   - `qr`: QR decomposition with truncation control
   - Backend support: FAER (default) and LAPACK (optional)
   - Configurable relative tolerance (`rtol`) for truncation
+
+### FFI Crate
+
+- **`tensor4all-capi`**: C API for language bindings (Julia, Python)
 
 ### Algorithm Crates
 
@@ -261,8 +257,8 @@ uv run pytest
 ### Basic Tensor Creation
 
 ```rust
-use tensor4all_core::index::{DefaultIndex as Index, DynId};
-use tensor4all_tensor::{Storage, TensorDynLen};
+use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+use tensor4all_core_tensor::{Storage, TensorDynLen};
 use std::sync::Arc;
 
 // Create indices
@@ -281,8 +277,8 @@ let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
 ### Diagonal Tensor Creation
 
 ```rust
-use tensor4all_core::index::{DefaultIndex as Index, DynId};
-use tensor4all_tensor::diag_tensor_dyn_len;
+use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+use tensor4all_core_tensor::diag_tensor_dyn_len;
 
 // Create a 3×3 diagonal tensor
 let i = Index::new_dyn(3);
@@ -295,9 +291,9 @@ let tensor = diag_tensor_dyn_len(vec![i, j], diag_data);
 ### Tensor Contraction
 
 ```rust
-use tensor4all_core::index::{DefaultIndex as Index, DynId};
-use tensor4all_tensor::{Storage, TensorDynLen};
-use tensor4all_tensor::storage::DenseStorageF64;
+use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+use tensor4all_core_tensor::{Storage, TensorDynLen};
+use tensor4all_core_tensor::storage::DenseStorageF64;
 use std::sync::Arc;
 
 let i = Index::new_dyn(2);
