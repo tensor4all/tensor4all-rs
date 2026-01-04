@@ -4,7 +4,7 @@ use crate::error::{Result, TCIError};
 use crate::indexset::{IndexSet, MultiIndex};
 use tensor4all_matrixci::util::{a_times_b_inv, zeros, Matrix, Scalar};
 use tensor4all_matrixci::{AbstractMatrixCI, MatrixACA};
-use tensor4all_tensortrain::{Tensor3, TensorTrain, TTScalar};
+use tensor4all_tensortrain::{tensor3_zeros, Tensor3, Tensor3Ops, TensorTrain, TTScalar};
 
 /// Sweep strategy for TCI optimization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -94,7 +94,7 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
             i_set: (0..n).map(|_| IndexSet::new()).collect(),
             j_set: (0..n).map(|_| IndexSet::new()).collect(),
             local_dims: local_dims.clone(),
-            t_tensors: local_dims.iter().map(|&d| Tensor3::zeros(0, d, 0)).collect(),
+            t_tensors: local_dims.iter().map(|&d| tensor3_zeros(0, d, 0)).collect(),
             p_matrices: (0..n).map(|_| zeros(0, 0)).collect(),
             aca: (0..n).map(|_| MatrixACA::new(0, 0)).collect(),
             pi: (0..n).map(|_| zeros(0, 0)).collect(),
@@ -149,7 +149,7 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
     /// Get site tensor at position p (T * P^{-1})
     pub fn site_tensor(&self, p: usize) -> Tensor3<T> {
         if p >= self.len() {
-            return Tensor3::zeros(1, 1, 1);
+            return tensor3_zeros(1, 1, 1);
         }
 
         let t = &self.t_tensors[p];
@@ -245,7 +245,7 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
             // Get slice at index
             let mut slice = vec![T::zero(); t.right_dim()];
             for r in 0..t.right_dim() {
-                slice[r] = *t.get(0, idx, r);
+                slice[r] = *t.get3(0, idx, r);
             }
 
             // Apply P^{-1} if needed
@@ -277,7 +277,7 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
             for r in 0..right_dim {
                 let mut sum = T::zero();
                 for l in 0..left_dim {
-                    sum = sum + result[l] * *t.get(l, idx, r);
+                    sum = sum + result[l] * *t.get3(l, idx, r);
                 }
                 next[r] = sum;
             }
@@ -729,7 +729,7 @@ fn tensor3_to_matrix<T: Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T> {
     for l in 0..left_dim {
         for s in 0..site_dim {
             for r in 0..right_dim {
-                mat[[l * site_dim + s, r]] = *tensor.get(l, s, r);
+                mat[[l * site_dim + s, r]] = *tensor.get3(l, s, r);
             }
         }
     }
@@ -747,7 +747,7 @@ fn tensor3_to_matrix_cols<T: Scalar + Default>(tensor: &Tensor3<T>, rows: usize,
         for s in 0..site_dim {
             for r in 0..right_dim {
                 if l * site_dim + s < rows && r < cols {
-                    mat[[l * site_dim + s, r]] = *tensor.get(l, s, r);
+                    mat[[l * site_dim + s, r]] = *tensor.get3(l, s, r);
                 }
             }
         }
@@ -766,7 +766,7 @@ fn tensor3_to_matrix_rows<T: Scalar + Default>(tensor: &Tensor3<T>, rows: usize,
         for s in 0..site_dim {
             for r in 0..right_dim {
                 if l < rows && s * right_dim + r < cols {
-                    mat[[l, s * right_dim + r]] = *tensor.get(l, s, r);
+                    mat[[l, s * right_dim + r]] = *tensor.get3(l, s, r);
                 }
             }
         }
@@ -776,7 +776,7 @@ fn tensor3_to_matrix_rows<T: Scalar + Default>(tensor: &Tensor3<T>, rows: usize,
 
 /// Convert Matrix to Tensor3
 fn matrix_to_tensor3<T: Scalar + Default>(mat: &Matrix<T>, left_dim: usize, site_dim: usize, right_dim: usize) -> Tensor3<T> {
-    let mut tensor = Tensor3::zeros(left_dim, site_dim, right_dim);
+    let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim);
 
     // Determine the layout based on matrix dimensions
     if mat.nrows() == left_dim * site_dim && mat.ncols() == right_dim {
@@ -784,7 +784,7 @@ fn matrix_to_tensor3<T: Scalar + Default>(mat: &Matrix<T>, left_dim: usize, site
         for l in 0..left_dim {
             for s in 0..site_dim {
                 for r in 0..right_dim {
-                    tensor.set(l, s, r, mat[[l * site_dim + s, r]]);
+                    tensor.set3(l, s, r, mat[[l * site_dim + s, r]]);
                 }
             }
         }
@@ -793,19 +793,19 @@ fn matrix_to_tensor3<T: Scalar + Default>(mat: &Matrix<T>, left_dim: usize, site
         for l in 0..left_dim {
             for s in 0..site_dim {
                 for r in 0..right_dim {
-                    tensor.set(l, s, r, mat[[l, s * right_dim + r]]);
+                    tensor.set3(l, s, r, mat[[l, s * right_dim + r]]);
                 }
             }
         }
     } else if mat.nrows() == 1 && mat.ncols() == site_dim {
         // Single row with site values
         for s in 0..site_dim {
-            tensor.set(0, s, 0, mat[[0, s]]);
+            tensor.set3(0, s, 0, mat[[0, s]]);
         }
     } else if mat.nrows() == site_dim && mat.ncols() == 1 {
         // Single column with site values
         for s in 0..site_dim {
-            tensor.set(0, s, 0, mat[[s, 0]]);
+            tensor.set3(0, s, 0, mat[[s, 0]]);
         }
     }
 
