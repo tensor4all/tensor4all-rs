@@ -9,6 +9,7 @@ members = [
     "crates/tensor4all-matrixci",
     "crates/tensor4all-tensortrain",
     "crates/tensor4all-tensorci",
+    "crates/tensor4all-mpocontraction",
     "crates/tensor4all-capi",
 ]
 resolver = "2"
