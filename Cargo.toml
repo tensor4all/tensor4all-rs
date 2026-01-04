@@ -32,4 +32,5 @@ faer-traits = "0.23"
 thiserror = "2.0"
 rand = "0.8"
 petgraph = "0.6"
+dyn-clone = "1.0"
 

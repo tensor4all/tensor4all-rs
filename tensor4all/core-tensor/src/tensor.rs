@@ -827,6 +827,19 @@ where
     }
 }
 
+impl<Id, Symm> std::fmt::Debug for TensorDynLen<Id, Symm>
+where
+    Id: std::fmt::Debug,
+    Symm: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TensorDynLen")
+            .field("indices", &self.indices)
+            .field("dims", &self.dims)
+            .field("storage", &self.storage)
+            .finish()
+    }
+}
 
 /// Create a DiagTensor with dynamic rank from diagonal data.
 ///
