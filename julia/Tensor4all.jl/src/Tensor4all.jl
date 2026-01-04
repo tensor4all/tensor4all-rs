@@ -44,10 +44,18 @@ module Tensor4all
 
 include("C_API.jl")
 
+# Re-export library management for submodules
+using Libdl
+const T4A_SUCCESS = C_API.T4A_SUCCESS
+get_lib() = C_API.libhandle()
+
 # Re-export public API
 export Index, dim, tags, id, hastag
 export Tensor, rank, dims, indices, storage_kind, data
 export StorageKind, DenseF64, DenseC64, DiagF64, DiagC64
+
+# Include submodules
+include("TensorTrain/TensorTrain.jl")
 
 """
     Index

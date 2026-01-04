@@ -1,7 +1,3 @@
-using Test
-using Tensor4all
-using ITensors
-
 @testset "ITensors Extension" begin
     @testset "Tensor4all.Index → ITensors.Index" begin
         # Basic conversion

@@ -76,4 +76,90 @@ ffi.cdef("""
     StatusCode t4a_tensor_get_storage_kind(const t4a_tensor* ptr, t4a_storage_kind* out_kind);
     StatusCode t4a_tensor_get_data_f64(const t4a_tensor* ptr, double* buf, size_t buf_len, size_t* out_len);
     StatusCode t4a_tensor_get_data_c64(const t4a_tensor* ptr, double* buf_re, double* buf_im, size_t buf_len, size_t* out_len);
+
+    // ========================================================================
+    // TensorTrain F64 functions
+    // ========================================================================
+
+    // Opaque type
+    typedef struct { void* _private; } t4a_tt_f64;
+    typedef struct { void* _private; } t4a_tt_c64;
+
+    // Lifecycle - F64
+    t4a_tt_f64* t4a_tt_f64_new_zeros(const size_t* site_dims, size_t num_sites);
+    t4a_tt_f64* t4a_tt_f64_new_constant(const size_t* site_dims, size_t num_sites, double value);
+    void t4a_tt_f64_release(t4a_tt_f64* ptr);
+    t4a_tt_f64* t4a_tt_f64_clone(const t4a_tt_f64* ptr);
+
+    // Properties - F64
+    StatusCode t4a_tt_f64_len(const t4a_tt_f64* ptr, size_t* out_len);
+    StatusCode t4a_tt_f64_site_dims(const t4a_tt_f64* ptr, size_t* out_dims, size_t buf_len);
+    StatusCode t4a_tt_f64_link_dims(const t4a_tt_f64* ptr, size_t* out_dims, size_t buf_len);
+    StatusCode t4a_tt_f64_rank(const t4a_tt_f64* ptr, size_t* out_rank);
+
+    // Evaluation - F64
+    StatusCode t4a_tt_f64_evaluate(const t4a_tt_f64* ptr, const size_t* indices, size_t num_indices, double* out_value);
+    StatusCode t4a_tt_f64_sum(const t4a_tt_f64* ptr, double* out_sum);
+    StatusCode t4a_tt_f64_norm(const t4a_tt_f64* ptr, double* out_norm);
+    StatusCode t4a_tt_f64_log_norm(const t4a_tt_f64* ptr, double* out_log_norm);
+
+    // Scaling - F64
+    StatusCode t4a_tt_f64_scale_inplace(t4a_tt_f64* ptr, double factor);
+    t4a_tt_f64* t4a_tt_f64_scaled(const t4a_tt_f64* ptr, double factor);
+
+    // Full tensor - F64
+    StatusCode t4a_tt_f64_fulltensor(const t4a_tt_f64* ptr, double* out_data, size_t buf_len, size_t* out_len);
+
+    // Arithmetic - F64
+    t4a_tt_f64* t4a_tt_f64_add(const t4a_tt_f64* a, const t4a_tt_f64* b);
+    t4a_tt_f64* t4a_tt_f64_sub(const t4a_tt_f64* a, const t4a_tt_f64* b);
+    t4a_tt_f64* t4a_tt_f64_negate(const t4a_tt_f64* ptr);
+    t4a_tt_f64* t4a_tt_f64_reverse(const t4a_tt_f64* ptr);
+    t4a_tt_f64* t4a_tt_f64_hadamard(const t4a_tt_f64* a, const t4a_tt_f64* b);
+    StatusCode t4a_tt_f64_dot(const t4a_tt_f64* a, const t4a_tt_f64* b, double* out_dot);
+
+    // Compression - F64
+    StatusCode t4a_tt_f64_compress(t4a_tt_f64* ptr, double tolerance, size_t max_bond_dim);
+    t4a_tt_f64* t4a_tt_f64_compressed(const t4a_tt_f64* ptr, double tolerance, size_t max_bond_dim);
+
+    // ========================================================================
+    // TensorTrain C64 functions
+    // ========================================================================
+
+    // Lifecycle - C64
+    t4a_tt_c64* t4a_tt_c64_new_zeros(const size_t* site_dims, size_t num_sites);
+    t4a_tt_c64* t4a_tt_c64_new_constant(const size_t* site_dims, size_t num_sites, double re, double im);
+    void t4a_tt_c64_release(t4a_tt_c64* ptr);
+    t4a_tt_c64* t4a_tt_c64_clone(const t4a_tt_c64* ptr);
+
+    // Properties - C64
+    StatusCode t4a_tt_c64_len(const t4a_tt_c64* ptr, size_t* out_len);
+    StatusCode t4a_tt_c64_site_dims(const t4a_tt_c64* ptr, size_t* out_dims, size_t buf_len);
+    StatusCode t4a_tt_c64_link_dims(const t4a_tt_c64* ptr, size_t* out_dims, size_t buf_len);
+    StatusCode t4a_tt_c64_rank(const t4a_tt_c64* ptr, size_t* out_rank);
+
+    // Evaluation - C64
+    StatusCode t4a_tt_c64_evaluate(const t4a_tt_c64* ptr, const size_t* indices, size_t num_indices, double* out_re, double* out_im);
+    StatusCode t4a_tt_c64_sum(const t4a_tt_c64* ptr, double* out_re, double* out_im);
+    StatusCode t4a_tt_c64_norm(const t4a_tt_c64* ptr, double* out_norm);
+    StatusCode t4a_tt_c64_log_norm(const t4a_tt_c64* ptr, double* out_log_norm);
+
+    // Scaling - C64
+    StatusCode t4a_tt_c64_scale_inplace(t4a_tt_c64* ptr, double factor_re, double factor_im);
+    t4a_tt_c64* t4a_tt_c64_scaled(const t4a_tt_c64* ptr, double factor_re, double factor_im);
+
+    // Full tensor - C64
+    StatusCode t4a_tt_c64_fulltensor(const t4a_tt_c64* ptr, double* out_re, double* out_im, size_t buf_len, size_t* out_len);
+
+    // Arithmetic - C64
+    t4a_tt_c64* t4a_tt_c64_add(const t4a_tt_c64* a, const t4a_tt_c64* b);
+    t4a_tt_c64* t4a_tt_c64_sub(const t4a_tt_c64* a, const t4a_tt_c64* b);
+    t4a_tt_c64* t4a_tt_c64_negate(const t4a_tt_c64* ptr);
+    t4a_tt_c64* t4a_tt_c64_reverse(const t4a_tt_c64* ptr);
+    t4a_tt_c64* t4a_tt_c64_hadamard(const t4a_tt_c64* a, const t4a_tt_c64* b);
+    StatusCode t4a_tt_c64_dot(const t4a_tt_c64* a, const t4a_tt_c64* b, double* out_re, double* out_im);
+
+    // Compression - C64
+    StatusCode t4a_tt_c64_compress(t4a_tt_c64* ptr, double tolerance, size_t max_bond_dim);
+    t4a_tt_c64* t4a_tt_c64_compressed(const t4a_tt_c64* ptr, double tolerance, size_t max_bond_dim);
 """)

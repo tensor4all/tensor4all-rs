@@ -261,3 +261,60 @@ fn test_operation_c64() {
 
 - **Never use force push to main branch**: Force pushing (including `--force-with-lease`) to main is prohibited. If you need to rewrite history, do it on a feature branch and create a PR.
 
+## Language Bindings Structure
+
+### Directory Layout
+
+Language bindings are placed under the root directory with a unified structure:
+
+```
+tensor4all-rs/
+├── julia/
+│   └── Tensor4all.jl/          # Julia package
+│       ├── src/
+│       │   ├── Tensor4all.jl   # Main module
+│       │   └── TensorTrain/    # Submodule for TensorTrain
+│       │       └── TensorTrain.jl
+│       └── test/
+│           ├── runtests.jl     # Test runner
+│           └── test_tensortrain.jl
+├── python/
+│   └── tensor4all/             # Python package
+│       ├── __init__.py         # Main module
+│       ├── tensortrain/        # Subpackage for TensorTrain
+│       │   └── __init__.py
+│       └── tests/
+│           ├── test_tensortrain.py
+│           └── conftest.py
+```
+
+### Namespace Separation
+
+Bindings should use namespace separation by feature/crate:
+
+**Julia:**
+```julia
+using Tensor4all
+using Tensor4all.TensorTrain
+
+# Or access via qualified names
+tt = Tensor4all.TensorTrain.zeros(Float64, [2, 3, 2])
+```
+
+**Python:**
+```python
+import tensor4all
+from tensor4all import tensortrain
+
+# Or access via qualified names
+tt = tensor4all.tensortrain.TensorTrainF64.zeros([2, 3, 2])
+```
+
+### Guidelines
+
+- **One submodule per Rust crate**: Each major Rust crate (e.g., `tensor4all-tensortrain`) gets its own submodule in both Julia and Python bindings
+- **Consistent naming**: Use the same naming convention across languages (e.g., `TensorTrain` in Julia, `tensortrain` in Python following language conventions)
+- **Re-export common types**: The main module should re-export commonly used types for convenience
+- **Separate test files**: Each submodule should have its own test file (e.g., `test_tensortrain.jl`, `test_tensortrain.py`)
+- **Do not use `bindings/` directory**: Place bindings directly under `julia/` and `python/` at the repository root
+
