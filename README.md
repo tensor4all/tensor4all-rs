@@ -117,15 +117,17 @@ Tensor data is shared via `Arc<Storage>` with copy-on-write (COW) semantics:
 
 ## Type Correspondence
 
-| ITensors.jl | tensor4all-rs |
-|-------------|--------------|
-| `Index{Int}` | `Index<Id, NoSymmSpace>` |
-| `Index{QNBlocks}` | `Index<Id, QNSpace>` (future) |
-| `Index(id, dim, ...)` | `Index::new_with_size(id, dim)` |
-| `Index(dim)` | `Index::new_dyn(dim)` |
-| `ITensor` | `TensorDynLen<Id, T, Symm>` |
-| `NDTensors.Dense` | `Storage::DenseF64` or `Storage::DenseC64` |
-| `NDTensors.Diag` | `Storage::DiagF64` or `Storage::DiagC64` |
+| ITensors.jl | tensor4all-rs | Notes |
+|-------------|--------------|-------|
+| `Index{Int}` | `Index<Id, NoSymmSpace>` | |
+| `Index{QNBlocks}` | `Index<Id, QNSpace>` (future) | |
+| `Index(id, dim, ...)` | `Index::new_with_size(id, dim)` | |
+| `Index(dim)` | `Index::new_dyn(dim)` | |
+| `ITensor` | `TensorDynLen<Id, T, Symm>` | |
+| `NDTensors.Dense` | `Storage::DenseF64` or `Storage::DenseC64` | |
+| `NDTensors.Diag` | `Storage::DiagF64` or `Storage::DiagC64` | |
+| `A * B` (contract) | `a.contract_einsum(&b)` | Auto-contract all common indices |
+| — | `a.tensordot(&b, &[(i, j)])` | Explicit pairs only (NumPy-like) |
 
 ## Truncation Tolerance Comparison
 
@@ -317,8 +319,35 @@ let tensor_b = TensorDynLen::new(
 );
 
 // Contract along j: result is C[i, k]
-let result = tensor_a.contract(&tensor_b);
+let result = tensor_a.contract_einsum(&tensor_b);
 ```
+
+### Explicit Contraction with `tensordot`
+
+Unlike `contract_einsum()` which automatically contracts all common indices (einsum-like behavior),
+`tensordot()` contracts only explicitly specified index pairs, similar to NumPy's `tensordot`:
+
+```rust
+// Create tensor A[i, j] and B[k, l] with different IDs
+let i = Index::new_dyn(2);
+let j = Index::new_dyn(3);
+let k = Index::new_dyn(3);  // Same dimension as j, different ID
+let l = Index::new_dyn(4);
+
+// Contract j with k explicitly: result is C[i, l]
+let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), k.clone())])?;
+```
+
+**Key difference from ITensors.jl**: In ITensors.jl, `contract()` automatically contracts all
+indices with matching IDs. In tensor4all-rs, we provide both behaviors:
+- `contract_einsum()`: Automatic contraction of all common indices (ITensors.jl compatible)
+- `tensordot()`: Explicit contraction of specified pairs only (NumPy-like)
+
+**Future: Batch Contraction (Batched GEMM)**
+
+In a future version, `tensordot()` will support batch dimensions: common indices not specified
+in the contraction pairs will be preserved as batch dimensions, enabling efficient batched
+matrix multiplication. Currently, this case returns an error.
 
 ## ITensors.jl ID Generation Algorithm
 
@@ -354,6 +383,8 @@ The UInt128 approach provides significantly better collision resistance than UIn
 - **Non-Abelian Support**: Clebsch-Gordan coefficients for non-Abelian symmetries
 
 ## TODO
+
+- **Batch contraction in `tensordot`**: Implement batched GEMM support in `tensordot()`. When common indices exist but are not in the contraction pairs, they should be preserved as batch dimensions rather than raising an error. This enables efficient batched matrix multiplication patterns common in deep learning and tensor network algorithms.
 
 - **Optimize DiagTensor × DenseTensor contraction**: Currently, DiagTensor is converted to DenseTensor before contraction, which is inefficient. This can be optimized by implementing Block Matrix × Block Matrix contraction, as DiagTensor × DenseTensor is a special case of block matrix multiplication.
 

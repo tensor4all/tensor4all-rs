@@ -360,10 +360,10 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
     /// let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
     ///
     /// // Contract along j: result is C[i, k]
-    /// let result = tensor_a.contract(&tensor_b);
+    /// let result = tensor_a.contract_einsum(&tensor_b);
     /// assert_eq!(result.dims, vec![2, 4]);
     /// ```
-    pub fn contract(&self, other: &Self) -> Self
+    pub fn contract_einsum(&self, other: &Self) -> Self
     where
         Id: Clone + std::hash::Hash + Eq,
         Symm: Clone + Symmetry,
@@ -443,9 +443,10 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
 
     /// Contract this tensor with another tensor along explicitly specified index pairs.
     ///
-    /// This method contracts along the specified pairs of indices, where each pair
-    /// consists of an index from `self` and an index from `other`. The indices
-    /// do not need to have matching IDs - only matching dimensions are required.
+    /// Similar to NumPy's `tensordot`, this method contracts only along the explicitly
+    /// specified pairs of indices. Unlike `contract()` which automatically contracts
+    /// all common indices, `tensordot` gives you explicit control over which indices
+    /// to contract.
     ///
     /// # Arguments
     /// * `other` - The tensor to contract with
@@ -456,6 +457,12 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
     /// - Any specified index is not found in the respective tensor
     /// - Dimensions don't match for any pair
     /// - The same axis is specified multiple times in `self` or `other`
+    /// - There are common indices (same ID) that are not in the contraction pairs
+    ///   (batch contraction is not yet implemented)
+    ///
+    /// # Future: Batch Contraction
+    /// In a future version, common indices not specified in `pairs` will be treated
+    /// as batch dimensions (like batched GEMM). Currently, this case returns an error.
     ///
     /// # Example
     /// ```
@@ -482,23 +489,46 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
     /// let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
     ///
     /// // Contract j (from A) with k (from B): result is C[i, l]
-    /// let result = tensor_a.contract_pairs(&tensor_b, &[(j.clone(), k.clone())]).unwrap();
+    /// let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), k.clone())]).unwrap();
     /// assert_eq!(result.dims, vec![2, 4]);
     /// ```
-    pub fn contract_pairs(
+    pub fn tensordot(
         &self,
         other: &Self,
         pairs: &[(Index<Id, Symm>, Index<Id, Symm>)],
     ) -> Result<Self>
     where
-        Id: Clone + std::hash::Hash + Eq,
+        Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
         Symm: Clone + Symmetry,
     {
         use anyhow::Context;
 
         if pairs.is_empty() {
             return Err(anyhow::anyhow!("No pairs specified for contraction"))
-                .context("contract_pairs: at least one pair must be specified");
+                .context("tensordot: at least one pair must be specified");
+        }
+
+        // Collect IDs of indices that will be contracted
+        let contracted_ids_self: HashSet<_> = pairs.iter().map(|(idx, _)| &idx.id).collect();
+        let contracted_ids_other: HashSet<_> = pairs.iter().map(|(_, idx)| &idx.id).collect();
+
+        // Find common indices (same ID in both tensors)
+        let common = common_inds(&self.indices, &other.indices);
+
+        // Check if any common index is NOT in the contraction pairs
+        for common_idx in &common {
+            let in_contracted_self = contracted_ids_self.contains(&common_idx.id);
+            let in_contracted_other = contracted_ids_other.contains(&common_idx.id);
+
+            if !in_contracted_self || !in_contracted_other {
+                return Err(anyhow::anyhow!(
+                    "Common index with id {:?} found but not in contraction pairs. \
+                     Batch contraction (treating common indices as batch dimensions) \
+                     is not yet implemented.",
+                    common_idx.id
+                ))
+                .context("tensordot: batch contraction not yet implemented");
+            }
         }
 
         // Find positions of indices in both tensors and validate
@@ -511,14 +541,14 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
                 .iter()
                 .position(|idx| idx.id == idx_a.id)
                 .ok_or_else(|| anyhow::anyhow!("Index with id matching specified index not found in self tensor"))
-                .context("contract_pairs: index from self not found")?;
+                .context("tensordot: index from self not found")?;
 
             // Find position in other
             let pos_b = other.indices
                 .iter()
                 .position(|idx| idx.id == idx_b.id)
                 .ok_or_else(|| anyhow::anyhow!("Index with id matching specified index not found in other tensor"))
-                .context("contract_pairs: index from other not found")?;
+                .context("tensordot: index from other not found")?;
 
             // Verify dimensions match
             if self.dims[pos_a] != other.dims[pos_b] {
@@ -529,7 +559,7 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
                     pos_b,
                     other.dims[pos_b]
                 ))
-                .context("contract_pairs: dimensions must match for each pair");
+                .context("tensordot: dimensions must match for each pair");
             }
 
             // Check for duplicate axes in self
@@ -538,7 +568,7 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
                     "Duplicate axis {} in self tensor",
                     pos_a
                 ))
-                .context("contract_pairs: each axis can only be contracted once");
+                .context("tensordot: each axis can only be contracted once");
             }
 
             // Check for duplicate axes in other
@@ -547,7 +577,7 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
                     "Duplicate axis {} in other tensor",
                     pos_b
                 ))
-                .context("contract_pairs: each axis can only be contracted once");
+                .context("tensordot: each axis can only be contracted once");
             }
 
             axes_a.push(pos_a);
@@ -633,7 +663,7 @@ where
     type Output = TensorDynLen<Id, Symm>;
 
     fn mul(self, other: &TensorDynLen<Id, Symm>) -> Self::Output {
-        self.contract(other)
+        self.contract_einsum(other)
     }
 }
 
@@ -648,7 +678,7 @@ where
     type Output = TensorDynLen<Id, Symm>;
 
     fn mul(self, other: TensorDynLen<Id, Symm>) -> Self::Output {
-        self.contract(&other)
+        self.contract_einsum(&other)
     }
 }
 
@@ -661,7 +691,7 @@ where
     type Output = TensorDynLen<Id, Symm>;
 
     fn mul(self, other: TensorDynLen<Id, Symm>) -> Self::Output {
-        self.contract(&other)
+        self.contract_einsum(&other)
     }
 }
 
@@ -674,7 +704,7 @@ where
     type Output = TensorDynLen<Id, Symm>;
 
     fn mul(self, other: &TensorDynLen<Id, Symm>) -> Self::Output {
-        self.contract(other)
+        self.contract_einsum(other)
     }
 }
 
