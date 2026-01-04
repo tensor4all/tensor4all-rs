@@ -1,0 +1,35 @@
+[package]
+name = "tensor4all-mpocontraction"
+description = "MPO contraction algorithms for tensor4all"
+version.workspace = true
+edition.workspace = true
+authors = [
+    "Simone Foderà <simone.fodera@lmu.de>",
+    "Marc Ritter <Ritter.Marc@physik.uni-muenchen.de>",
+    "Hiroshi Shinaoka <h.shinaoka@gmail.com>",
+]
+license = "MIT"
+repository.workspace = true
+
+[features]
+default = ["backend-faer"]
+backend-faer = ["mdarray-linalg-faer"]
+backend-lapack = ["mdarray-linalg-lapack"]
+
+[dependencies]
+num-complex.workspace = true
+num-traits.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+mdarray.workspace = true
+mdarray-linalg.workspace = true
+mdarray-linalg-faer = { workspace = true, optional = true }
+mdarray-linalg-lapack = { workspace = true, optional = true }
+faer-traits.workspace = true
+tensor4all-matrixci = { path = "../tensor4all-matrixci" }
+tensor4all-tensortrain = { path = "../tensor4all-tensortrain" }
+
+[dev-dependencies]
+approx = "0.5"
+rand_chacha = "0.3"
