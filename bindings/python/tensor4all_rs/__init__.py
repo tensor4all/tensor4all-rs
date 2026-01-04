@@ -166,6 +166,35 @@ def _setup_function_signatures() -> None:
     ]
     lib.t4a_tt_f64_fulltensor.restype = ctypes.c_int
 
+    # Arithmetic operations - F64
+    lib.t4a_tt_f64_add.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.t4a_tt_f64_add.restype = ctypes.c_void_p
+
+    lib.t4a_tt_f64_sub.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.t4a_tt_f64_sub.restype = ctypes.c_void_p
+
+    lib.t4a_tt_f64_negate.argtypes = [ctypes.c_void_p]
+    lib.t4a_tt_f64_negate.restype = ctypes.c_void_p
+
+    lib.t4a_tt_f64_reverse.argtypes = [ctypes.c_void_p]
+    lib.t4a_tt_f64_reverse.restype = ctypes.c_void_p
+
+    lib.t4a_tt_f64_hadamard.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.t4a_tt_f64_hadamard.restype = ctypes.c_void_p
+
+    lib.t4a_tt_f64_dot.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_double),
+    ]
+    lib.t4a_tt_f64_dot.restype = ctypes.c_int
+
+    lib.t4a_tt_f64_compress.argtypes = [ctypes.c_void_p, ctypes.c_double, ctypes.c_size_t]
+    lib.t4a_tt_f64_compress.restype = ctypes.c_int
+
+    lib.t4a_tt_f64_compressed.argtypes = [ctypes.c_void_p, ctypes.c_double, ctypes.c_size_t]
+    lib.t4a_tt_f64_compressed.restype = ctypes.c_void_p
+
     # TensorTrain C64 functions
     lib.t4a_tt_c64_new_zeros.argtypes = [ctypes.POINTER(ctypes.c_size_t), ctypes.c_size_t]
     lib.t4a_tt_c64_new_zeros.restype = ctypes.c_void_p
@@ -240,6 +269,36 @@ def _setup_function_signatures() -> None:
         ctypes.POINTER(ctypes.c_size_t),
     ]
     lib.t4a_tt_c64_fulltensor.restype = ctypes.c_int
+
+    # Arithmetic operations - C64
+    lib.t4a_tt_c64_add.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.t4a_tt_c64_add.restype = ctypes.c_void_p
+
+    lib.t4a_tt_c64_sub.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.t4a_tt_c64_sub.restype = ctypes.c_void_p
+
+    lib.t4a_tt_c64_negate.argtypes = [ctypes.c_void_p]
+    lib.t4a_tt_c64_negate.restype = ctypes.c_void_p
+
+    lib.t4a_tt_c64_reverse.argtypes = [ctypes.c_void_p]
+    lib.t4a_tt_c64_reverse.restype = ctypes.c_void_p
+
+    lib.t4a_tt_c64_hadamard.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.t4a_tt_c64_hadamard.restype = ctypes.c_void_p
+
+    lib.t4a_tt_c64_dot.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_double),
+        ctypes.POINTER(ctypes.c_double),
+    ]
+    lib.t4a_tt_c64_dot.restype = ctypes.c_int
+
+    lib.t4a_tt_c64_compress.argtypes = [ctypes.c_void_p, ctypes.c_double, ctypes.c_size_t]
+    lib.t4a_tt_c64_compress.restype = ctypes.c_int
+
+    lib.t4a_tt_c64_compressed.argtypes = [ctypes.c_void_p, ctypes.c_double, ctypes.c_size_t]
+    lib.t4a_tt_c64_compressed.restype = ctypes.c_void_p
 
 
 class TensorTrainF64:
@@ -478,6 +537,115 @@ class TensorTrainF64:
     def __deepcopy__(self, memo) -> "TensorTrainF64":
         return self.copy()
 
+    def __add__(self, other: "TensorTrainF64") -> "TensorTrainF64":
+        """Add two tensor trains element-wise."""
+        lib = _get_lib()
+        ptr = lib.t4a_tt_f64_add(self._ptr, other._ptr)
+        if ptr is None:
+            raise RuntimeError("Failed to add TensorTrainF64")
+        return TensorTrainF64(ptr)
+
+    def __sub__(self, other: "TensorTrainF64") -> "TensorTrainF64":
+        """Subtract two tensor trains element-wise."""
+        lib = _get_lib()
+        ptr = lib.t4a_tt_f64_sub(self._ptr, other._ptr)
+        if ptr is None:
+            raise RuntimeError("Failed to subtract TensorTrainF64")
+        return TensorTrainF64(ptr)
+
+    def __neg__(self) -> "TensorTrainF64":
+        """Negate the tensor train."""
+        lib = _get_lib()
+        ptr = lib.t4a_tt_f64_negate(self._ptr)
+        if ptr is None:
+            raise RuntimeError("Failed to negate TensorTrainF64")
+        return TensorTrainF64(ptr)
+
+    def __mul__(self, other):
+        """Multiply: scalar * tt or tt * tt (Hadamard product)."""
+        if isinstance(other, TensorTrainF64):
+            return self.hadamard(other)
+        else:
+            return self.scaled(float(other))
+
+    def __rmul__(self, other):
+        """Right multiply: scalar * tt."""
+        return self.scaled(float(other))
+
+    def reverse(self) -> "TensorTrainF64":
+        """Reverse the tensor train (swap left and right)."""
+        lib = _get_lib()
+        ptr = lib.t4a_tt_f64_reverse(self._ptr)
+        if ptr is None:
+            raise RuntimeError("Failed to reverse TensorTrainF64")
+        return TensorTrainF64(ptr)
+
+    def hadamard(self, other: "TensorTrainF64") -> "TensorTrainF64":
+        """
+        Compute the Hadamard (element-wise) product of two tensor trains.
+
+        For each index i: result[i] = self[i] * other[i]
+
+        The resulting bond dimension is the product of the input bond dimensions.
+        Use compress() afterward to reduce the bond dimension.
+        """
+        lib = _get_lib()
+        ptr = lib.t4a_tt_f64_hadamard(self._ptr, other._ptr)
+        if ptr is None:
+            raise RuntimeError("Failed to compute Hadamard product")
+        return TensorTrainF64(ptr)
+
+    def dot(self, other: "TensorTrainF64") -> float:
+        """
+        Compute the inner product (dot product) of two tensor trains.
+
+        Returns: sum over all indices i of self[i] * other[i]
+        """
+        lib = _get_lib()
+        out_dot = ctypes.c_double()
+        status = lib.t4a_tt_f64_dot(self._ptr, other._ptr, ctypes.byref(out_dot))
+        if status != T4A_SUCCESS:
+            raise RuntimeError(f"Failed to compute dot product: status = {status}")
+        return out_dot.value
+
+    def compress(self, tolerance: float = 1e-12, max_bond_dim: int = 0) -> None:
+        """
+        Compress the tensor train in-place.
+
+        Parameters
+        ----------
+        tolerance : float
+            Relative tolerance for truncation (default: 1e-12).
+        max_bond_dim : int
+            Maximum bond dimension (0 for unlimited).
+        """
+        lib = _get_lib()
+        status = lib.t4a_tt_f64_compress(self._ptr, tolerance, max_bond_dim)
+        if status != T4A_SUCCESS:
+            raise RuntimeError(f"Failed to compress: status = {status}")
+
+    def compressed(self, tolerance: float = 1e-12, max_bond_dim: int = 0) -> "TensorTrainF64":
+        """
+        Create a compressed copy of the tensor train.
+
+        Parameters
+        ----------
+        tolerance : float
+            Relative tolerance for truncation (default: 1e-12).
+        max_bond_dim : int
+            Maximum bond dimension (0 for unlimited).
+
+        Returns
+        -------
+        TensorTrainF64
+            A new compressed tensor train.
+        """
+        lib = _get_lib()
+        ptr = lib.t4a_tt_f64_compressed(self._ptr, tolerance, max_bond_dim)
+        if ptr is None:
+            raise RuntimeError("Failed to create compressed TensorTrainF64")
+        return TensorTrainF64(ptr)
+
 
 class TensorTrainC64:
     """
@@ -668,6 +836,84 @@ class TensorTrainC64:
 
     def __deepcopy__(self, memo) -> "TensorTrainC64":
         return self.copy()
+
+    def __add__(self, other: "TensorTrainC64") -> "TensorTrainC64":
+        """Add two tensor trains element-wise."""
+        lib = _get_lib()
+        ptr = lib.t4a_tt_c64_add(self._ptr, other._ptr)
+        if ptr is None:
+            raise RuntimeError("Failed to add TensorTrainC64")
+        return TensorTrainC64(ptr)
+
+    def __sub__(self, other: "TensorTrainC64") -> "TensorTrainC64":
+        """Subtract two tensor trains element-wise."""
+        lib = _get_lib()
+        ptr = lib.t4a_tt_c64_sub(self._ptr, other._ptr)
+        if ptr is None:
+            raise RuntimeError("Failed to subtract TensorTrainC64")
+        return TensorTrainC64(ptr)
+
+    def __neg__(self) -> "TensorTrainC64":
+        """Negate the tensor train."""
+        lib = _get_lib()
+        ptr = lib.t4a_tt_c64_negate(self._ptr)
+        if ptr is None:
+            raise RuntimeError("Failed to negate TensorTrainC64")
+        return TensorTrainC64(ptr)
+
+    def __mul__(self, other):
+        """Multiply: scalar * tt or tt * tt (Hadamard product)."""
+        if isinstance(other, TensorTrainC64):
+            return self.hadamard(other)
+        else:
+            return self.scaled(complex(other))
+
+    def __rmul__(self, other):
+        """Right multiply: scalar * tt."""
+        return self.scaled(complex(other))
+
+    def reverse(self) -> "TensorTrainC64":
+        """Reverse the tensor train (swap left and right)."""
+        lib = _get_lib()
+        ptr = lib.t4a_tt_c64_reverse(self._ptr)
+        if ptr is None:
+            raise RuntimeError("Failed to reverse TensorTrainC64")
+        return TensorTrainC64(ptr)
+
+    def hadamard(self, other: "TensorTrainC64") -> "TensorTrainC64":
+        """Compute the Hadamard (element-wise) product of two tensor trains."""
+        lib = _get_lib()
+        ptr = lib.t4a_tt_c64_hadamard(self._ptr, other._ptr)
+        if ptr is None:
+            raise RuntimeError("Failed to compute Hadamard product")
+        return TensorTrainC64(ptr)
+
+    def dot(self, other: "TensorTrainC64") -> complex:
+        """Compute the inner product (dot product) of two tensor trains."""
+        lib = _get_lib()
+        out_re = ctypes.c_double()
+        out_im = ctypes.c_double()
+        status = lib.t4a_tt_c64_dot(
+            self._ptr, other._ptr, ctypes.byref(out_re), ctypes.byref(out_im)
+        )
+        if status != T4A_SUCCESS:
+            raise RuntimeError(f"Failed to compute dot product: status = {status}")
+        return complex(out_re.value, out_im.value)
+
+    def compress(self, tolerance: float = 1e-12, max_bond_dim: int = 0) -> None:
+        """Compress the tensor train in-place."""
+        lib = _get_lib()
+        status = lib.t4a_tt_c64_compress(self._ptr, tolerance, max_bond_dim)
+        if status != T4A_SUCCESS:
+            raise RuntimeError(f"Failed to compress: status = {status}")
+
+    def compressed(self, tolerance: float = 1e-12, max_bond_dim: int = 0) -> "TensorTrainC64":
+        """Create a compressed copy of the tensor train."""
+        lib = _get_lib()
+        ptr = lib.t4a_tt_c64_compressed(self._ptr, tolerance, max_bond_dim)
+        if ptr is None:
+            raise RuntimeError("Failed to create compressed TensorTrainC64")
+        return TensorTrainC64(ptr)
 
 
 __all__ = [

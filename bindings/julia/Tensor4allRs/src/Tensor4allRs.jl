@@ -53,9 +53,13 @@ end
 # Include submodules
 include("tensortrain.jl")
 
+export init_library
 export TensorTrainF64, TensorTrainC64
 export zeros_tt, constant_tt
 export site_dims, link_dims, rank, evaluate, sum_tt, norm_tt, log_norm_tt
 export scale!, scaled, fulltensor
+export add_tt, sub_tt, negate_tt, reverse_tt
+export hadamard, dot
+export compress!, compressed
 
 end # module
