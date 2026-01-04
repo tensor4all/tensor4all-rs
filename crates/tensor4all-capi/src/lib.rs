@@ -30,10 +30,12 @@ mod macros;
 
 mod index;
 mod tensor;
+mod tensortrain;
 mod types;
 
 pub use index::*;
 pub use tensor::*;
+pub use tensortrain::*;
 pub use types::*;
 
 /// Status code type for C API

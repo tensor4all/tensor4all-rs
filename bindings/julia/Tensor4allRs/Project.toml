@@ -1,0 +1,13 @@
+name = "Tensor4allRs"
+uuid = "e8f4b8c5-8d92-4e42-a5c3-b7e9c4a3f2d1"
+authors = ["tensor4all collaboration"]
+version = "0.1.0"
+
+[deps]
+Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
