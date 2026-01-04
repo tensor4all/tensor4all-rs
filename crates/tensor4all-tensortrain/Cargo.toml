@@ -17,6 +17,7 @@ num-traits.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
+mdarray.workspace = true
 tensor4all-matrixci = { path = "../tensor4all-matrixci" }
 
 [dev-dependencies]

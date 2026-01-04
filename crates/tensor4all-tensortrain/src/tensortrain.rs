@@ -2,7 +2,7 @@
 
 use crate::error::{Result, TensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
-use crate::types::Tensor3;
+use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 
 /// Tensor Train (Matrix Product State) representation
 ///
@@ -59,7 +59,7 @@ impl<T: TTScalar> TensorTrain<T> {
     pub fn zeros(site_dims: &[usize]) -> Self {
         let tensors: Vec<Tensor3<T>> = site_dims
             .iter()
-            .map(|&d| Tensor3::zeros(1, d, 1))
+            .map(|&d| tensor3_zeros(1, d, 1))
             .collect();
         Self { tensors }
     }
@@ -74,33 +74,33 @@ impl<T: TTScalar> TensorTrain<T> {
         let mut tensors = Vec::with_capacity(n);
 
         // First tensor: all ones
-        let mut first = Tensor3::zeros(1, site_dims[0], 1);
+        let mut first = tensor3_zeros(1, site_dims[0], 1);
         for s in 0..site_dims[0] {
-            first.set(0, s, 0, T::one());
+            first.set3(0, s, 0, T::one());
         }
         tensors.push(first);
 
         // Middle tensors: all ones
         for &d in &site_dims[1..n - 1] {
-            let mut tensor = Tensor3::zeros(1, d, 1);
+            let mut tensor = tensor3_zeros(1, d, 1);
             for s in 0..d {
-                tensor.set(0, s, 0, T::one());
+                tensor.set3(0, s, 0, T::one());
             }
             tensors.push(tensor);
         }
 
         // Last tensor: multiply by value
         if n > 1 {
-            let mut last = Tensor3::zeros(1, site_dims[n - 1], 1);
+            let mut last = tensor3_zeros(1, site_dims[n - 1], 1);
             for s in 0..site_dims[n - 1] {
-                last.set(0, s, 0, value);
+                last.set3(0, s, 0, value);
             }
             tensors.push(last);
         } else {
             // Single site: multiply the first (and only) tensor by value
             for s in 0..site_dims[0] {
-                let current = *tensors[0].get(0, s, 0);
-                tensors[0].set(0, s, 0, current * value);
+                let current = *tensors[0].get3(0, s, 0);
+                tensors[0].set3(0, s, 0, current * value);
             }
         }
 
@@ -120,8 +120,8 @@ impl<T: TTScalar> TensorTrain<T> {
             for l in 0..tensor.left_dim() {
                 for s in 0..tensor.site_dim() {
                     for r in 0..tensor.right_dim() {
-                        let val = *tensor.get(l, s, r);
-                        tensor.set(l, s, r, val * factor);
+                        let val = *tensor.get3(l, s, r);
+                        tensor.set3(l, s, r, val * factor);
                     }
                 }
             }
@@ -141,11 +141,11 @@ impl<T: TTScalar> TensorTrain<T> {
         for tensor in self.tensors.iter().rev() {
             // Swap left and right dimensions
             let mut new_tensor =
-                Tensor3::zeros(tensor.right_dim(), tensor.site_dim(), tensor.left_dim());
+                tensor3_zeros(tensor.right_dim(), tensor.site_dim(), tensor.left_dim());
             for l in 0..tensor.left_dim() {
                 for s in 0..tensor.site_dim() {
                     for r in 0..tensor.right_dim() {
-                        new_tensor.set(r, s, l, *tensor.get(l, s, r));
+                        new_tensor.set3(r, s, l, *tensor.get3(l, s, r));
                     }
                 }
             }
@@ -154,6 +154,59 @@ impl<T: TTScalar> TensorTrain<T> {
         Self {
             tensors: new_tensors,
         }
+    }
+}
+
+impl<T: TTScalar> TensorTrain<T> {
+    /// Convert the tensor train to a full tensor
+    ///
+    /// Returns a flat vector containing all tensor elements in row-major order,
+    /// along with the shape (site dimensions).
+    ///
+    /// Warning: This can be very large for high-dimensional tensors!
+    pub fn fulltensor(&self) -> (Vec<T>, Vec<usize>) {
+        if self.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+
+        let site_dims: Vec<usize> = self.site_dims();
+        let total_size: usize = site_dims.iter().product();
+
+        if total_size == 0 {
+            return (Vec::new(), site_dims);
+        }
+
+        // Build full tensor by iterating over all indices
+        let mut result = Vec::with_capacity(total_size);
+        let mut indices = vec![0usize; site_dims.len()];
+
+        loop {
+            // Evaluate at current indices
+            if let Ok(val) = self.evaluate(&indices) {
+                result.push(val);
+            } else {
+                result.push(T::zero());
+            }
+
+            // Increment indices (row-major order, last index fastest)
+            let mut carry = true;
+            for i in (0..site_dims.len()).rev() {
+                if carry {
+                    indices[i] += 1;
+                    if indices[i] >= site_dims[i] {
+                        indices[i] = 0;
+                    } else {
+                        carry = false;
+                    }
+                }
+            }
+
+            if carry {
+                break; // All indices wrapped around
+            }
+        }
+
+        (result, site_dims)
     }
 }
 
@@ -199,15 +252,15 @@ mod tests {
         let _site_dims = vec![2, 3];
 
         // First tensor: values are 1 for index 0, 2 for index 1
-        let mut t0 = Tensor3::<f64>::zeros(1, 2, 1);
-        t0.set(0, 0, 0, 1.0);
-        t0.set(0, 1, 0, 2.0);
+        let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+        t0.set3(0, 0, 0, 1.0);
+        t0.set3(0, 1, 0, 2.0);
 
         // Second tensor: values are 1, 2, 3 for indices 0, 1, 2
-        let mut t1 = Tensor3::<f64>::zeros(1, 3, 1);
-        t1.set(0, 0, 0, 1.0);
-        t1.set(0, 1, 0, 2.0);
-        t1.set(0, 2, 0, 3.0);
+        let mut t1: Tensor3<f64> = tensor3_zeros(1, 3, 1);
+        t1.set3(0, 0, 0, 1.0);
+        t1.set3(0, 1, 0, 2.0);
+        t1.set3(0, 2, 0, 3.0);
 
         let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
@@ -229,14 +282,14 @@ mod tests {
 
     #[test]
     fn test_tensortrain_reverse() {
-        let mut t0 = Tensor3::<f64>::zeros(1, 2, 1);
-        t0.set(0, 0, 0, 1.0);
-        t0.set(0, 1, 0, 2.0);
+        let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+        t0.set3(0, 0, 0, 1.0);
+        t0.set3(0, 1, 0, 2.0);
 
-        let mut t1 = Tensor3::<f64>::zeros(1, 3, 1);
-        t1.set(0, 0, 0, 1.0);
-        t1.set(0, 1, 0, 2.0);
-        t1.set(0, 2, 0, 3.0);
+        let mut t1: Tensor3<f64> = tensor3_zeros(1, 3, 1);
+        t1.set3(0, 0, 0, 1.0);
+        t1.set3(0, 1, 0, 2.0);
+        t1.set3(0, 2, 0, 3.0);
 
         let tt = TensorTrain::new(vec![t0, t1]).unwrap();
         let tt_rev = tt.reverse();
@@ -246,5 +299,103 @@ mod tests {
 
         // Reversed evaluation: tt_rev([2, 1]) should equal tt([1, 2])
         assert!((tt_rev.evaluate(&[2, 1]).unwrap() - tt.evaluate(&[1, 2]).unwrap()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fulltensor() {
+        let tt = TensorTrain::<f64>::constant(&[2, 3], 5.0);
+        let (data, shape) = tt.fulltensor();
+
+        assert_eq!(shape, vec![2, 3]);
+        assert_eq!(data.len(), 6);
+
+        // All elements should be 5.0
+        for val in &data {
+            assert!((val - 5.0).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_fulltensor_matches_evaluate() {
+        let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+        t0.set3(0, 0, 0, 1.0);
+        t0.set3(0, 1, 0, 2.0);
+
+        let mut t1: Tensor3<f64> = tensor3_zeros(1, 3, 1);
+        t1.set3(0, 0, 0, 1.0);
+        t1.set3(0, 1, 0, 2.0);
+        t1.set3(0, 2, 0, 3.0);
+
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+        let (data, shape) = tt.fulltensor();
+
+        assert_eq!(shape, vec![2, 3]);
+
+        // Check each element matches evaluate
+        for i in 0..2 {
+            for j in 0..3 {
+                let idx = i * 3 + j;
+                let expected = tt.evaluate(&[i, j]).unwrap();
+                assert!(
+                    (data[idx] - expected).abs() < 1e-10,
+                    "Mismatch at [{}, {}]: fulltensor={}, evaluate={}",
+                    i,
+                    j,
+                    data[idx],
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_norm_matches_norm() {
+        let tt = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+
+        let norm = tt.norm();
+        let log_norm = tt.log_norm();
+
+        // log_norm should equal ln(norm)
+        assert!(
+            (log_norm - norm.ln()).abs() < 1e-10,
+            "log_norm={}, ln(norm)={}",
+            log_norm,
+            norm.ln()
+        );
+    }
+
+    #[test]
+    fn test_log_norm_with_varied_values() {
+        let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 2);
+        t0.set3(0, 0, 0, 1.0);
+        t0.set3(0, 0, 1, 0.5);
+        t0.set3(0, 1, 0, 2.0);
+        t0.set3(0, 1, 1, 1.0);
+
+        let mut t1: Tensor3<f64> = tensor3_zeros(2, 2, 1);
+        t1.set3(0, 0, 0, 1.0);
+        t1.set3(0, 1, 0, 2.0);
+        t1.set3(1, 0, 0, 0.5);
+        t1.set3(1, 1, 0, 1.5);
+
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        let norm = tt.norm();
+        let log_norm = tt.log_norm();
+
+        assert!(
+            (log_norm - norm.ln()).abs() < 1e-10,
+            "log_norm={}, ln(norm)={}",
+            log_norm,
+            norm.ln()
+        );
+    }
+
+    #[test]
+    fn test_log_norm_zero_tensor() {
+        let tt = TensorTrain::<f64>::zeros(&[2, 3]);
+        let log_norm = tt.log_norm();
+
+        assert!(log_norm.is_infinite() && log_norm < 0.0);
     }
 }

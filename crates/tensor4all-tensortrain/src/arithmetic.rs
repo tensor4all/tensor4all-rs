@@ -3,7 +3,7 @@
 use crate::error::Result;
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
-use crate::types::Tensor3;
+use crate::types::{tensor3_zeros, Tensor3Ops};
 
 impl<T: TTScalar> TensorTrain<T> {
     /// Add two tensor trains element-wise
@@ -50,30 +50,30 @@ impl<T: TTScalar> TensorTrain<T> {
             if i == 0 {
                 // First tensor: [A | B] horizontally
                 let new_right_dim = a.right_dim() + b.right_dim();
-                let mut new_tensor = Tensor3::zeros(1, site_dim, new_right_dim);
+                let mut new_tensor = tensor3_zeros(1, site_dim, new_right_dim);
 
                 for s in 0..site_dim {
                     for r in 0..a.right_dim() {
-                        new_tensor.set(0, s, r, *a.get(0, s, r));
+                        new_tensor.set3(0, s, r, *a.get3(0, s, r));
                     }
                     for r in 0..b.right_dim() {
-                        new_tensor.set(0, s, a.right_dim() + r, *b.get(0, s, r));
+                        new_tensor.set3(0, s, a.right_dim() + r, *b.get3(0, s, r));
                     }
                 }
                 tensors.push(new_tensor);
             } else if i == n - 1 {
                 // Last tensor: [A; B] vertically
                 let new_left_dim = a.left_dim() + b.left_dim();
-                let mut new_tensor = Tensor3::zeros(new_left_dim, site_dim, 1);
+                let mut new_tensor = tensor3_zeros(new_left_dim, site_dim, 1);
 
                 for l in 0..a.left_dim() {
                     for s in 0..site_dim {
-                        new_tensor.set(l, s, 0, *a.get(l, s, 0));
+                        new_tensor.set3(l, s, 0, *a.get3(l, s, 0));
                     }
                 }
                 for l in 0..b.left_dim() {
                     for s in 0..site_dim {
-                        new_tensor.set(a.left_dim() + l, s, 0, *b.get(l, s, 0));
+                        new_tensor.set3(a.left_dim() + l, s, 0, *b.get3(l, s, 0));
                     }
                 }
                 tensors.push(new_tensor);
@@ -81,13 +81,13 @@ impl<T: TTScalar> TensorTrain<T> {
                 // Middle tensors: block diagonal [A 0; 0 B]
                 let new_left_dim = a.left_dim() + b.left_dim();
                 let new_right_dim = a.right_dim() + b.right_dim();
-                let mut new_tensor = Tensor3::zeros(new_left_dim, site_dim, new_right_dim);
+                let mut new_tensor = tensor3_zeros(new_left_dim, site_dim, new_right_dim);
 
                 // Copy A block
                 for l in 0..a.left_dim() {
                     for s in 0..site_dim {
                         for r in 0..a.right_dim() {
-                            new_tensor.set(l, s, r, *a.get(l, s, r));
+                            new_tensor.set3(l, s, r, *a.get3(l, s, r));
                         }
                     }
                 }
@@ -95,12 +95,7 @@ impl<T: TTScalar> TensorTrain<T> {
                 for l in 0..b.left_dim() {
                     for s in 0..site_dim {
                         for r in 0..b.right_dim() {
-                            new_tensor.set(
-                                a.left_dim() + l,
-                                s,
-                                a.right_dim() + r,
-                                *b.get(l, s, r),
-                            );
+                            new_tensor.set3(a.left_dim() + l, s, a.right_dim() + r, *b.get3(l, s, r));
                         }
                     }
                 }
@@ -190,6 +185,7 @@ impl<T: TTScalar> std::ops::Mul<T> for &TensorTrain<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Tensor3;
 
     #[test]
     fn test_add_constant_tensors() {
@@ -235,23 +231,23 @@ mod tests {
     #[test]
     fn test_add_preserves_evaluation() {
         // Create two simple tensor trains
-        let mut t0_a = Tensor3::<f64>::zeros(1, 2, 1);
-        t0_a.set(0, 0, 0, 1.0);
-        t0_a.set(0, 1, 0, 2.0);
+        let mut t0_a: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+        t0_a.set3(0, 0, 0, 1.0);
+        t0_a.set3(0, 1, 0, 2.0);
 
-        let mut t1_a = Tensor3::<f64>::zeros(1, 2, 1);
-        t1_a.set(0, 0, 0, 3.0);
-        t1_a.set(0, 1, 0, 4.0);
+        let mut t1_a: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+        t1_a.set3(0, 0, 0, 3.0);
+        t1_a.set3(0, 1, 0, 4.0);
 
         let tt_a = TensorTrain::new(vec![t0_a, t1_a]).unwrap();
 
-        let mut t0_b = Tensor3::<f64>::zeros(1, 2, 1);
-        t0_b.set(0, 0, 0, 0.5);
-        t0_b.set(0, 1, 0, 1.5);
+        let mut t0_b: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+        t0_b.set3(0, 0, 0, 0.5);
+        t0_b.set3(0, 1, 0, 1.5);
 
-        let mut t1_b = Tensor3::<f64>::zeros(1, 2, 1);
-        t1_b.set(0, 0, 0, 2.5);
-        t1_b.set(0, 1, 0, 3.5);
+        let mut t1_b: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+        t1_b.set3(0, 0, 0, 2.5);
+        t1_b.set3(0, 1, 0, 3.5);
 
         let tt_b = TensorTrain::new(vec![t0_b, t1_b]).unwrap();
 
@@ -260,14 +256,12 @@ mod tests {
         // Test some evaluations
         // result([0, 0]) = a([0,0]) + b([0,0]) = 1*3 + 0.5*2.5 = 3 + 1.25 = 4.25
         let val_00 = result.evaluate(&[0, 0]).unwrap();
-        let expected_00 =
-            tt_a.evaluate(&[0, 0]).unwrap() + tt_b.evaluate(&[0, 0]).unwrap();
+        let expected_00 = tt_a.evaluate(&[0, 0]).unwrap() + tt_b.evaluate(&[0, 0]).unwrap();
         assert!((val_00 - expected_00).abs() < 1e-10);
 
         // result([1, 1]) = a([1,1]) + b([1,1]) = 2*4 + 1.5*3.5 = 8 + 5.25 = 13.25
         let val_11 = result.evaluate(&[1, 1]).unwrap();
-        let expected_11 =
-            tt_a.evaluate(&[1, 1]).unwrap() + tt_b.evaluate(&[1, 1]).unwrap();
+        let expected_11 = tt_a.evaluate(&[1, 1]).unwrap() + tt_b.evaluate(&[1, 1]).unwrap();
         assert!((val_11 - expected_11).abs() < 1e-10);
     }
 }

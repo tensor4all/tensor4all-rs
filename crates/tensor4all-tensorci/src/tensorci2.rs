@@ -8,7 +8,7 @@ use crate::error::{Result, TCIError};
 use crate::indexset::MultiIndex;
 use tensor4all_matrixci::util::{zeros, Scalar};
 use tensor4all_matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
-use tensor4all_tensortrain::{Tensor3, TensorTrain, TTScalar};
+use tensor4all_tensortrain::{tensor3_zeros, Tensor3, Tensor3Ops, TensorTrain, TTScalar};
 
 /// Options for TCI2 algorithm
 #[derive(Debug, Clone)]
@@ -92,7 +92,7 @@ impl<T: Scalar + TTScalar + Default> TensorCI2<T> {
             i_set: (0..n).map(|_| Vec::new()).collect(),
             j_set: (0..n).map(|_| Vec::new()).collect(),
             local_dims: local_dims.clone(),
-            site_tensors: local_dims.iter().map(|&d| Tensor3::zeros(0, d, 0)).collect(),
+            site_tensors: local_dims.iter().map(|&d| tensor3_zeros(0, d, 0)).collect(),
             pivot_errors: Vec::new(),
             bond_errors: vec![0.0; n.saturating_sub(1)],
             max_sample_value: 0.0,
@@ -204,7 +204,7 @@ impl<T: Scalar + TTScalar + Default> TensorCI2<T> {
     /// Invalidate all site tensors
     fn invalidate_site_tensors(&mut self) {
         for p in 0..self.len() {
-            self.site_tensors[p] = Tensor3::zeros(0, self.local_dims[p], 0);
+            self.site_tensors[p] = tensor3_zeros(0, self.local_dims[p], 0);
         }
     }
 
@@ -449,13 +449,13 @@ where
     let site_dim_b = tci.local_dims[b];
     let new_bond_dim = luci.rank().max(1);
 
-    let mut tensor_b = Tensor3::zeros(left_dim, site_dim_b, new_bond_dim);
+    let mut tensor_b = tensor3_zeros(left_dim, site_dim_b, new_bond_dim);
     for l in 0..left_dim {
         for s in 0..site_dim_b {
             for r in 0..new_bond_dim {
                 let row = l * site_dim_b + s;
                 if row < left.nrows() && r < left.ncols() {
-                    tensor_b.set(l, s, r, left[[row, r]]);
+                    tensor_b.set3(l, s, r, left[[row, r]]);
                 }
             }
         }
@@ -466,13 +466,13 @@ where
     let site_dim_bp1 = tci.local_dims[b + 1];
     let right_dim = if b + 1 == tci.len() - 1 { 1 } else { tci.j_set[b + 1].len() };
 
-    let mut tensor_bp1 = Tensor3::zeros(new_bond_dim, site_dim_bp1, right_dim);
+    let mut tensor_bp1 = tensor3_zeros(new_bond_dim, site_dim_bp1, right_dim);
     for l in 0..new_bond_dim {
         for s in 0..site_dim_bp1 {
             for r in 0..right_dim {
                 let col = s * right_dim + r;
                 if l < right.nrows() && col < right.ncols() {
-                    tensor_bp1.set(l, s, r, right[[l, col]]);
+                    tensor_bp1.set3(l, s, r, right[[l, col]]);
                 }
             }
         }

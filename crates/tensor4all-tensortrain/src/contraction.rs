@@ -9,8 +9,8 @@ use crate::compression::{CompressionMethod, CompressionOptions};
 use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
-use crate::types::Tensor3;
-use tensor4all_matrixci::util::{nrows, ncols, zeros, Matrix, Scalar};
+use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
+use tensor4all_matrixci::util::{ncols, nrows, zeros, Matrix, Scalar};
 use tensor4all_matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
 
 /// Options for contraction with compression
@@ -79,7 +79,7 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
             let new_left_dim = a.left_dim() * b.left_dim();
             let new_right_dim = a.right_dim() * b.right_dim();
 
-            let mut new_tensor = Tensor3::zeros(new_left_dim, site_dim, new_right_dim);
+            let mut new_tensor = tensor3_zeros(new_left_dim, site_dim, new_right_dim);
 
             // Kronecker product on bond indices
             // new[la*lb, s, ra*rb] = a[la, s, ra] * b[lb, s, rb]
@@ -90,8 +90,8 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
                             for rb in 0..b.right_dim() {
                                 let new_l = la * b.left_dim() + lb;
                                 let new_r = ra * b.right_dim() + rb;
-                                let val = *a.get(la, s, ra) * *b.get(lb, s, rb);
-                                new_tensor.set(new_l, s, new_r, val);
+                                let val = *a.get3(la, s, ra) * *b.get3(lb, s, rb);
+                                new_tensor.set3(new_l, s, new_r, val);
                             }
                         }
                     }
@@ -145,7 +145,7 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
         for s in 0..a0.site_dim() {
             for ra in 0..a0.right_dim() {
                 for rb in 0..b0.right_dim() {
-                    result[[ra, rb]] = result[[ra, rb]] + *a0.get(0, s, ra) * *b0.get(0, s, rb);
+                    result[[ra, rb]] = result[[ra, rb]] + *a0.get3(0, s, ra) * *b0.get3(0, s, rb);
                 }
             }
         }
@@ -176,7 +176,7 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
                         for ra in 0..a.right_dim() {
                             for rb in 0..b.right_dim() {
                                 new_result[[ra, rb]] = new_result[[ra, rb]]
-                                    + r_val * *a.get(la, s, ra) * *b.get(lb, s, rb);
+                                    + r_val * *a.get3(la, s, ra) * *b.get3(lb, s, rb);
                             }
                         }
                     }
@@ -215,8 +215,8 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
 
         // R tensor carries the remainder from the previous factorization
         // R[link_new, link_a, link_b]
-        let mut r_tensor: Tensor3<T> = Tensor3::zeros(1, 1, 1);
-        r_tensor.set(0, 0, 0, T::one());
+        let mut r_tensor: Tensor3<T> = tensor3_zeros(1, 1, 1);
+        r_tensor.set3(0, 0, 0, T::one());
 
         let mut result_tensors = Vec::with_capacity(n);
 
@@ -244,23 +244,20 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
             let link_a_next = a.right_dim();
             let link_b_next = b.right_dim();
 
-            let mut c_tensor = Tensor3::<T>::zeros(
-                link_new * site_dim,
-                link_a_next,
-                link_b_next,
-            );
+            let mut c_tensor: Tensor3<T> =
+                tensor3_zeros(link_new * site_dim, link_a_next, link_b_next);
 
             for ln in 0..r_tensor.left_dim() {
                 for la in 0..a.left_dim() {
                     for lb in 0..b.left_dim() {
-                        let r_val = *r_tensor.get(ln, la, lb);
+                        let r_val = *r_tensor.get3(ln, la, lb);
                         for s in 0..site_dim {
                             for ra in 0..link_a_next {
                                 for rb in 0..link_b_next {
-                                    let val = r_val * *a.get(la, s, ra) * *b.get(lb, s, rb);
+                                    let val = r_val * *a.get3(la, s, ra) * *b.get3(lb, s, rb);
                                     let row = ln * site_dim + s;
-                                    let old_val = *c_tensor.get(row, ra, rb);
-                                    c_tensor.set(row, ra, rb, old_val + val);
+                                    let old_val = *c_tensor.get3(row, ra, rb);
+                                    c_tensor.set3(row, ra, rb, old_val + val);
                                 }
                             }
                         }
@@ -270,11 +267,11 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
 
             if i == n - 1 {
                 // Last site: just reshape and store
-                let mut result_tensor = Tensor3::zeros(link_new, site_dim, 1);
+                let mut result_tensor = tensor3_zeros(link_new, site_dim, 1);
                 for ln in 0..link_new {
                     for s in 0..site_dim {
                         // Sum over all link_a', link_b' (should be 1x1)
-                        result_tensor.set(ln, s, 0, *c_tensor.get(ln * site_dim + s, 0, 0));
+                        result_tensor.set3(ln, s, 0, *c_tensor.get3(ln * site_dim + s, 0, 0));
                     }
                 }
                 result_tensors.push(result_tensor);
@@ -288,7 +285,7 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
                 for row in 0..rows {
                     for ra in 0..link_a_next {
                         for rb in 0..link_b_next {
-                            c_mat[[row, ra * link_b_next + rb]] = *c_tensor.get(row, ra, rb);
+                            c_mat[[row, ra * link_b_next + rb]] = *c_tensor.get3(row, ra, rb);
                         }
                     }
                 }
@@ -307,13 +304,13 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
                 let new_bond_dim = luci.rank().max(1);
 
                 // Store left factor as site tensor: (link_new, site_dim, new_bond_dim)
-                let mut result_tensor = Tensor3::zeros(link_new, site_dim, new_bond_dim);
+                let mut result_tensor = tensor3_zeros(link_new, site_dim, new_bond_dim);
                 for ln in 0..link_new {
                     for s in 0..site_dim {
                         for r in 0..new_bond_dim {
                             let row = ln * site_dim + s;
                             if row < nrows(&left) && r < ncols(&left) {
-                                result_tensor.set(ln, s, r, left[[row, r]]);
+                                result_tensor.set3(ln, s, r, left[[row, r]]);
                             }
                         }
                     }
@@ -321,13 +318,13 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
                 result_tensors.push(result_tensor);
 
                 // Update R tensor for next iteration: (new_bond_dim, link_a', link_b')
-                r_tensor = Tensor3::zeros(new_bond_dim, link_a_next, link_b_next);
+                r_tensor = tensor3_zeros(new_bond_dim, link_a_next, link_b_next);
                 for l in 0..new_bond_dim {
                     for ra in 0..link_a_next {
                         for rb in 0..link_b_next {
                             let col = ra * link_b_next + rb;
                             if l < nrows(&right) && col < ncols(&right) {
-                                r_tensor.set(l, ra, rb, right[[l, col]]);
+                                r_tensor.set3(l, ra, rb, right[[l, col]]);
                             }
                         }
                     }
@@ -362,10 +359,7 @@ pub fn hadamard<T: TTScalar + Scalar + Default>(
 }
 
 /// Convenience function to compute dot product
-pub fn dot<T: TTScalar + Scalar + Default>(
-    a: &TensorTrain<T>,
-    b: &TensorTrain<T>,
-) -> Result<T> {
+pub fn dot<T: TTScalar + Scalar + Default>(a: &TensorTrain<T>, b: &TensorTrain<T>) -> Result<T> {
     a.dot(b)
 }
 
@@ -397,23 +391,23 @@ mod tests {
     #[test]
     fn test_hadamard_preserves_evaluation() {
         // Create two simple tensor trains
-        let mut t0_a = Tensor3::<f64>::zeros(1, 2, 1);
-        t0_a.set(0, 0, 0, 1.0);
-        t0_a.set(0, 1, 0, 2.0);
+        let mut t0_a: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+        t0_a.set3(0, 0, 0, 1.0);
+        t0_a.set3(0, 1, 0, 2.0);
 
-        let mut t1_a = Tensor3::<f64>::zeros(1, 2, 1);
-        t1_a.set(0, 0, 0, 3.0);
-        t1_a.set(0, 1, 0, 4.0);
+        let mut t1_a: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+        t1_a.set3(0, 0, 0, 3.0);
+        t1_a.set3(0, 1, 0, 4.0);
 
         let tt_a = TensorTrain::new(vec![t0_a, t1_a]).unwrap();
 
-        let mut t0_b = Tensor3::<f64>::zeros(1, 2, 1);
-        t0_b.set(0, 0, 0, 0.5);
-        t0_b.set(0, 1, 0, 1.5);
+        let mut t0_b: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+        t0_b.set3(0, 0, 0, 0.5);
+        t0_b.set3(0, 1, 0, 1.5);
 
-        let mut t1_b = Tensor3::<f64>::zeros(1, 2, 1);
-        t1_b.set(0, 0, 0, 2.0);
-        t1_b.set(0, 1, 0, 3.0);
+        let mut t1_b: Tensor3<f64> = tensor3_zeros(1, 2, 1);
+        t1_b.set3(0, 0, 0, 2.0);
+        t1_b.set3(0, 1, 0, 3.0);
 
         let tt_b = TensorTrain::new(vec![t0_b, t1_b]).unwrap();
 
@@ -445,30 +439,30 @@ mod tests {
 
     #[test]
     fn test_dot_equals_hadamard_sum() {
-        let mut t0_a = Tensor3::<f64>::zeros(1, 3, 2);
+        let mut t0_a: Tensor3<f64> = tensor3_zeros(1, 3, 2);
         for s in 0..3 {
             for r in 0..2 {
-                t0_a.set(0, s, r, (s + r + 1) as f64);
+                t0_a.set3(0, s, r, (s + r + 1) as f64);
             }
         }
 
-        let mut t1_a = Tensor3::<f64>::zeros(2, 2, 1);
+        let mut t1_a: Tensor3<f64> = tensor3_zeros(2, 2, 1);
         for l in 0..2 {
             for s in 0..2 {
-                t1_a.set(l, s, 0, (l + s + 1) as f64);
+                t1_a.set3(l, s, 0, (l + s + 1) as f64);
             }
         }
 
         let tt_a = TensorTrain::new(vec![t0_a.clone(), t1_a.clone()]).unwrap();
 
-        let mut t0_b = Tensor3::<f64>::zeros(1, 3, 1);
+        let mut t0_b: Tensor3<f64> = tensor3_zeros(1, 3, 1);
         for s in 0..3 {
-            t0_b.set(0, s, 0, (s + 1) as f64 * 0.5);
+            t0_b.set3(0, s, 0, (s + 1) as f64 * 0.5);
         }
 
-        let mut t1_b = Tensor3::<f64>::zeros(1, 2, 1);
+        let mut t1_b: Tensor3<f64> = tensor3_zeros(1, 2, 1);
         for s in 0..2 {
-            t1_b.set(0, s, 0, (s + 2) as f64 * 0.3);
+            t1_b.set3(0, s, 0, (s + 2) as f64 * 0.3);
         }
 
         let tt_b = TensorTrain::new(vec![t0_b, t1_b]).unwrap();
@@ -501,17 +495,17 @@ mod tests {
 
     #[test]
     fn test_hadamard_zipup_preserves_values() {
-        let mut t0_a = Tensor3::<f64>::zeros(1, 2, 2);
-        t0_a.set(0, 0, 0, 1.0);
-        t0_a.set(0, 0, 1, 0.5);
-        t0_a.set(0, 1, 0, 2.0);
-        t0_a.set(0, 1, 1, 1.0);
+        let mut t0_a: Tensor3<f64> = tensor3_zeros(1, 2, 2);
+        t0_a.set3(0, 0, 0, 1.0);
+        t0_a.set3(0, 0, 1, 0.5);
+        t0_a.set3(0, 1, 0, 2.0);
+        t0_a.set3(0, 1, 1, 1.0);
 
-        let mut t1_a = Tensor3::<f64>::zeros(2, 2, 1);
-        t1_a.set(0, 0, 0, 1.0);
-        t1_a.set(0, 1, 0, 2.0);
-        t1_a.set(1, 0, 0, 0.5);
-        t1_a.set(1, 1, 0, 1.5);
+        let mut t1_a: Tensor3<f64> = tensor3_zeros(2, 2, 1);
+        t1_a.set3(0, 0, 0, 1.0);
+        t1_a.set3(0, 1, 0, 2.0);
+        t1_a.set3(1, 0, 0, 0.5);
+        t1_a.set3(1, 1, 0, 1.5);
 
         let tt_a = TensorTrain::new(vec![t0_a, t1_a]).unwrap();
 
@@ -541,17 +535,17 @@ mod tests {
     #[test]
     fn test_hadamard_zipup_compresses() {
         // Create tensor trains with higher bond dimensions
-        let mut t0_a = Tensor3::<f64>::zeros(1, 2, 3);
+        let mut t0_a: Tensor3<f64> = tensor3_zeros(1, 2, 3);
         for s in 0..2 {
             for r in 0..3 {
-                t0_a.set(0, s, r, 1.0);
+                t0_a.set3(0, s, r, 1.0);
             }
         }
 
-        let mut t1_a = Tensor3::<f64>::zeros(3, 2, 1);
+        let mut t1_a: Tensor3<f64> = tensor3_zeros(3, 2, 1);
         for l in 0..3 {
             for s in 0..2 {
-                t1_a.set(l, s, 0, 1.0);
+                t1_a.set3(l, s, 0, 1.0);
             }
         }
 

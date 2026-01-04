@@ -3,6 +3,9 @@
 //! This crate provides tensor train (also known as Matrix Product State) algorithms,
 //! including:
 //! - `TensorTrain`: The main tensor train structure
+//! - `SiteTensorTrain`: Center-canonical form
+//! - `VidalTensorTrain`: Vidal canonical form with explicit singular values
+//! - `InverseTensorTrain`: Inverse form for efficient local updates
 //! - Compression algorithms (LU, CI, SVD)
 //! - Arithmetic operations (add, subtract, scale)
 //!
@@ -24,17 +27,23 @@
 //! ```
 
 pub mod arithmetic;
+pub mod cache;
+pub mod canonical;
 pub mod compression;
 pub mod contraction;
 pub mod error;
 pub mod tensortrain;
 pub mod traits;
 pub mod types;
+pub mod vidal;
 
 // Re-export main types
+pub use cache::TTCache;
+pub use canonical::{center_canonicalize, SiteTensorTrain};
 pub use compression::{CompressionMethod, CompressionOptions};
 pub use contraction::{dot, hadamard, hadamard_zipup, ContractionOptions};
 pub use error::{Result, TensorTrainError};
 pub use tensortrain::TensorTrain;
 pub use traits::{AbstractTensorTrain, TTScalar};
-pub use types::{LocalIndex, MultiIndex, Tensor3};
+pub use types::{tensor3_from_data, tensor3_zeros, LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
+pub use vidal::{DiagMatrix, InverseTensorTrain, VidalTensorTrain};
