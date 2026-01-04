@@ -1191,12 +1191,12 @@ fn test_treetn_add_single_node() {
     let data_a = vec![1.0; 6];
     let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
     let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage_a);
-    tn_a.add_tensor_with_vertex(0, tensor_a).unwrap();
+    tn_a.add_tensor_with_name(0, tensor_a).unwrap();
 
     let data_b = vec![2.0; 6];
     let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage_b);
-    tn_b.add_tensor_with_vertex(0, tensor_b).unwrap();
+    tn_b.add_tensor_with_name(0, tensor_b).unwrap();
 
     // Add should succeed for compatible networks
     assert!(tn_a.can_add(&tn_b));
@@ -1311,7 +1311,7 @@ macro_rules! test_treetn_add_two_nodes_correctness {
     ($test_name:ident, $scalar_type:ty, $storage_variant:ident, $storage_type:ty, $make_scalar:expr) => {
         #[test]
         fn $test_name() {
-            // Structure: vertex 0 -- vertex 1
+            // Structure: node 0 -- node 1
             let i0 = Index::new_dyn(2);
             let k1 = Index::new_dyn(3);
             let bond_a = Index::new_dyn(4);
@@ -1324,13 +1324,13 @@ macro_rules! test_treetn_add_two_nodes_correctness {
             let storage_a0 = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_a0)));
             let tensor_a0: TensorDynLen<DynId> = TensorDynLen::new(
                 vec![i0.clone(), bond_a.clone()], vec![2, 4], storage_a0);
-            let n0_a = tn_a.add_tensor_with_vertex(0, tensor_a0).unwrap();
+            let n0_a = tn_a.add_tensor_with_name(0, tensor_a0).unwrap();
 
             let data_a1: Vec<$scalar_type> = (1..=12).map(|x| $make_scalar(x * 3, 2)).collect();
             let storage_a1 = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_a1)));
             let tensor_a1: TensorDynLen<DynId> = TensorDynLen::new(
                 vec![bond_a.clone(), k1.clone()], vec![4, 3], storage_a1);
-            let n1_a = tn_a.add_tensor_with_vertex(1, tensor_a1).unwrap();
+            let n1_a = tn_a.add_tensor_with_name(1, tensor_a1).unwrap();
 
             tn_a.connect(n0_a, &bond_a, n1_a, &bond_a).unwrap();
 
@@ -1341,13 +1341,13 @@ macro_rules! test_treetn_add_two_nodes_correctness {
             let storage_b0 = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_b0)));
             let tensor_b0: TensorDynLen<DynId> = TensorDynLen::new(
                 vec![i0.clone(), bond_b.clone()], vec![2, 4], storage_b0);
-            let n0_b = tn_b.add_tensor_with_vertex(0, tensor_b0).unwrap();
+            let n0_b = tn_b.add_tensor_with_name(0, tensor_b0).unwrap();
 
             let data_b1: Vec<$scalar_type> = (1..=12).map(|x| $make_scalar(x * 7, 4)).collect();
             let storage_b1 = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_b1)));
             let tensor_b1: TensorDynLen<DynId> = TensorDynLen::new(
                 vec![bond_b.clone(), k1.clone()], vec![4, 3], storage_b1);
-            let n1_b = tn_b.add_tensor_with_vertex(1, tensor_b1).unwrap();
+            let n1_b = tn_b.add_tensor_with_name(1, tensor_b1).unwrap();
 
             tn_b.connect(n0_b, &bond_b, n1_b, &bond_b).unwrap();
 
@@ -1384,13 +1384,13 @@ macro_rules! test_treetn_add_single_node_correctness {
             let storage_a = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_a)));
             let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(
                 vec![i.clone(), j.clone()], vec![2, 3], storage_a);
-            tn_a.add_tensor_with_vertex(0, tensor_a).unwrap();
+            tn_a.add_tensor_with_name(0, tensor_a).unwrap();
 
             let data_b: Vec<$scalar_type> = (1..=6).map(|x| $make_scalar(x * 10, 2)).collect();
             let storage_b = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_b)));
             let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(
                 vec![i.clone(), j.clone()], vec![2, 3], storage_b);
-            tn_b.add_tensor_with_vertex(0, tensor_b).unwrap();
+            tn_b.add_tensor_with_name(0, tensor_b).unwrap();
 
             assert_treetn_add_correctness(tn_a, tn_b, stringify!($test_name));
         }
@@ -1424,11 +1424,11 @@ fn test_treetn_add_bond_dimension_growth() {
     // Network A with bond dim 3
     let storage_a0 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
     let tensor_a0: TensorDynLen<DynId> = TensorDynLen::new(vec![i0.clone(), bond_a.clone()], vec![2, 3], storage_a0);
-    let n0_a = tn_a.add_tensor_with_vertex(0, tensor_a0).unwrap();
+    let n0_a = tn_a.add_tensor_with_name(0, tensor_a0).unwrap();
 
     let storage_a1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12])));
     let tensor_a1: TensorDynLen<DynId> = TensorDynLen::new(vec![bond_a.clone(), k1.clone()], vec![3, 4], storage_a1);
-    let n1_a = tn_a.add_tensor_with_vertex(1, tensor_a1).unwrap();
+    let n1_a = tn_a.add_tensor_with_name(1, tensor_a1).unwrap();
 
     tn_a.connect(n0_a, &bond_a, n1_a, &bond_a).unwrap();
 
@@ -1437,11 +1437,11 @@ fn test_treetn_add_bond_dimension_growth() {
 
     let storage_b0 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 10])));
     let tensor_b0: TensorDynLen<DynId> = TensorDynLen::new(vec![i0.clone(), bond_b.clone()], vec![2, 5], storage_b0);
-    let n0_b = tn_b.add_tensor_with_vertex(0, tensor_b0).unwrap();
+    let n0_b = tn_b.add_tensor_with_name(0, tensor_b0).unwrap();
 
     let storage_b1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 20])));
     let tensor_b1: TensorDynLen<DynId> = TensorDynLen::new(vec![bond_b.clone(), k1.clone()], vec![5, 4], storage_b1);
-    let n1_b = tn_b.add_tensor_with_vertex(1, tensor_b1).unwrap();
+    let n1_b = tn_b.add_tensor_with_name(1, tensor_b1).unwrap();
 
     tn_b.connect(n0_b, &bond_b, n1_b, &bond_b).unwrap();
 
@@ -1461,11 +1461,11 @@ fn test_treetn_add_bond_dimension_growth() {
 
 #[test]
 fn test_treetn_add_multi_physical_permuted() {
-    // Regression test for issue #1: verify correctness when a vertex has
+    // Regression test for issue #1: verify correctness when a node has
     // multiple physical indices and tensor_b has them in a different order.
     //
-    // Network A: vertex 0 with tensor indices [i, j, k] (3 physical indices)
-    // Network B: vertex 0 with tensor indices [k, i, j] (permuted order)
+    // Network A: node 0 with tensor indices [i, j, k] (3 physical indices)
+    // Network B: node 0 with tensor indices [k, i, j] (permuted order)
     //
     // Both should represent the same logical data when accounting for permutation,
     // and contract(A + B) should equal contract(A) + contract(B).
@@ -1484,7 +1484,7 @@ fn test_treetn_add_multi_physical_permuted() {
         vec![2, 3, 4],
         storage_a,
     );
-    tn_a.add_tensor_with_vertex(0, tensor_a).unwrap();
+    tn_a.add_tensor_with_name(0, tensor_a).unwrap();
 
     // Network B: indices in order [k, i, j] (permuted from [i, j, k])
     // Data: different values, also sequential but scaled
@@ -1496,7 +1496,7 @@ fn test_treetn_add_multi_physical_permuted() {
         vec![4, 2, 3],  // Corresponding dimensions
         storage_b,
     );
-    tn_b.add_tensor_with_vertex(0, tensor_b).unwrap();
+    tn_b.add_tensor_with_name(0, tensor_b).unwrap();
 
     assert_treetn_add_correctness(tn_a, tn_b, "test_treetn_add_multi_physical_permuted");
 }
@@ -1506,11 +1506,11 @@ fn test_treetn_add_two_nodes_multi_physical_permuted() {
     // More complex test: two connected nodes, each with 2 physical indices,
     // where network B has permuted physical index ordering.
     //
-    // Structure: vertex 0 -- vertex 1
-    // Vertex 0: physical indices [i0, j0], bond index
-    // Vertex 1: bond index, physical indices [k1, l1]
+    // Structure: node 0 -- node 1
+    // Node 0: physical indices [i0, j0], bond index
+    // Node 1: bond index, physical indices [k1, l1]
     //
-    // Network B permutes the physical indices at each vertex.
+    // Network B permutes the physical indices at each node.
 
     let i0 = Index::new_dyn(2);
     let j0 = Index::new_dyn(3);
@@ -1522,7 +1522,7 @@ fn test_treetn_add_two_nodes_multi_physical_permuted() {
     // Network A with standard ordering
     let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
 
-    // Vertex 0: [i0, j0, bond] -> 2*3*4 = 24 elements
+    // Node 0: [i0, j0, bond] -> 2*3*4 = 24 elements
     let data_a0: Vec<f64> = (1..=24).map(|x| x as f64).collect();
     let storage_a0 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a0)));
     let tensor_a0: TensorDynLen<DynId> = TensorDynLen::new(
@@ -1530,9 +1530,9 @@ fn test_treetn_add_two_nodes_multi_physical_permuted() {
         vec![2, 3, 4],
         storage_a0,
     );
-    let n0_a = tn_a.add_tensor_with_vertex(0, tensor_a0).unwrap();
+    let n0_a = tn_a.add_tensor_with_name(0, tensor_a0).unwrap();
 
-    // Vertex 1: [bond, k1, l1] -> 4*2*3 = 24 elements
+    // Node 1: [bond, k1, l1] -> 4*2*3 = 24 elements
     let data_a1: Vec<f64> = (1..=24).map(|x| (x * 2) as f64).collect();
     let storage_a1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a1)));
     let tensor_a1: TensorDynLen<DynId> = TensorDynLen::new(
@@ -1540,14 +1540,14 @@ fn test_treetn_add_two_nodes_multi_physical_permuted() {
         vec![4, 2, 3],
         storage_a1,
     );
-    let n1_a = tn_a.add_tensor_with_vertex(1, tensor_a1).unwrap();
+    let n1_a = tn_a.add_tensor_with_name(1, tensor_a1).unwrap();
 
     tn_a.connect(n0_a, &bond_a, n1_a, &bond_a).unwrap();
 
     // Network B with permuted physical indices
     let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
 
-    // Vertex 0: [j0, i0, bond] (i0, j0 swapped)
+    // Node 0: [j0, i0, bond] (i0, j0 swapped)
     let data_b0: Vec<f64> = (1..=24).map(|x| (x * 10) as f64).collect();
     let storage_b0 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b0)));
     let tensor_b0: TensorDynLen<DynId> = TensorDynLen::new(
@@ -1555,9 +1555,9 @@ fn test_treetn_add_two_nodes_multi_physical_permuted() {
         vec![3, 2, 4],
         storage_b0,
     );
-    let n0_b = tn_b.add_tensor_with_vertex(0, tensor_b0).unwrap();
+    let n0_b = tn_b.add_tensor_with_name(0, tensor_b0).unwrap();
 
-    // Vertex 1: [l1, bond, k1] (permuted)
+    // Node 1: [l1, bond, k1] (permuted)
     let data_b1: Vec<f64> = (1..=24).map(|x| (x * 20) as f64).collect();
     let storage_b1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b1)));
     let tensor_b1: TensorDynLen<DynId> = TensorDynLen::new(
@@ -1565,7 +1565,7 @@ fn test_treetn_add_two_nodes_multi_physical_permuted() {
         vec![3, 4, 2],
         storage_b1,
     );
-    let n1_b = tn_b.add_tensor_with_vertex(1, tensor_b1).unwrap();
+    let n1_b = tn_b.add_tensor_with_name(1, tensor_b1).unwrap();
 
     tn_b.connect(n0_b, &bond_b, n1_b, &bond_b).unwrap();
 
