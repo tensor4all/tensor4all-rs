@@ -1,15 +1,15 @@
 [workspace]
 members = [
-    "tensor4all",
-    "tensor4all/core-common",
-    "tensor4all/core-tensor",
-    "tensor4all/core-linalg",
-    "tensor4all-treetn",
-    "quanticsgrids",
-    "tensor4all-matrixci",
-    "tensor4all-tensortrain",
-    "tensor4all-tensorci",
-    "tensor4all-capi",
+    "crates/tensor4all",
+    "crates/tensor4all/core-common",
+    "crates/tensor4all/core-tensor",
+    "crates/tensor4all/core-linalg",
+    "crates/tensor4all-treetn",
+    "crates/quanticsgrids",
+    "crates/tensor4all-matrixci",
+    "crates/tensor4all-tensortrain",
+    "crates/tensor4all-tensorci",
+    "crates/tensor4all-capi",
 ]
 resolver = "2"
 

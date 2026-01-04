@@ -3,7 +3,7 @@ requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [project]
-name = "pytensor4all"
+name = "tensor4all"
 version = "0.1.0"
 description = "Python bindings for tensor4all Rust library"
 readme = "README.md"
@@ -51,11 +51,11 @@ include = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/pytensor4all"]
+packages = ["src/tensor4all"]
 artifacts = [
-    "src/pytensor4all/_lib/*.so",
-    "src/pytensor4all/_lib/*.dylib",
-    "src/pytensor4all/_lib/*.dll",
+    "src/tensor4all/_lib/*.so",
+    "src/tensor4all/_lib/*.dylib",
+    "src/tensor4all/_lib/*.dll",
 ]
 
 [tool.hatch.build.targets.wheel.hooks.custom]
