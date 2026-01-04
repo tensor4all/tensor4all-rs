@@ -1,6 +1,6 @@
-# pytensor4all
+# tensor4all
 
-Python bindings for the [tensor4all](https://github.com/tensor4all/tensor4all-rs) Rust library.
+Python bindings for the [tensor4all-rs](https://github.com/tensor4all/tensor4all-rs) Rust library.
 
 ## Installation
 
@@ -9,7 +9,7 @@ Python bindings for the [tensor4all](https://github.com/tensor4all/tensor4all-rs
 1. Build the Rust shared library:
 
 ```bash
-cd pytensor4all
+cd python/tensor4all
 python scripts/build_capi.py
 ```
 
@@ -34,10 +34,16 @@ uv run pytest
 pytest
 ```
 
+Or from the repository root:
+
+```bash
+./scripts/run_python_tests.sh
+```
+
 ## Usage
 
 ```python
-from pytensor4all import Index, Tensor
+from tensor4all import Index, Tensor
 import numpy as np
 
 # Create indices

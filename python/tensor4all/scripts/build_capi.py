@@ -19,17 +19,18 @@ def get_lib_name() -> str:
 
 def main():
     # Find paths
+    # Structure: tensor4all-rs/python/tensor4all/scripts/build_capi.py
     script_dir = Path(__file__).parent
-    pkg_dir = script_dir.parent
-    rs_root = pkg_dir.parent  # tensor4all-rs directory
-    lib_dir = pkg_dir / "src" / "pytensor4all" / "_lib"
+    pkg_dir = script_dir.parent  # python/tensor4all
+    rs_root = pkg_dir.parent.parent  # tensor4all-rs directory
+    lib_dir = pkg_dir / "src" / "tensor4all" / "_lib"
 
     lib_name = get_lib_name()
 
     # Check if we're in the right place
-    if not (rs_root / "tensor4all-capi").exists():
-        print(f"Error: tensor4all-capi not found in {rs_root}")
-        print("Make sure you're running from the pytensor4all directory")
+    if not (rs_root / "crates" / "tensor4all-capi").exists():
+        print(f"Error: crates/tensor4all-capi not found in {rs_root}")
+        print("Make sure you're running from the tensor4all directory")
         sys.exit(1)
 
     # Build the Rust library

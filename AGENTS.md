@@ -175,7 +175,5 @@ This approach reduces maintenance burden and ensures consistency across similar 
 
 ## Git Workflow
 
-- Each crate is typically developed independently
-- Follow standard git workflow: create branches, commit changes, create PRs
-- Test changes before committing
+- Use `git worktree` for development work.
 

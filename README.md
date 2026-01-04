@@ -148,62 +148,51 @@ tensor4all-rs and ITensors.jl use different conventions for truncation tolerance
 
 ## Project Structure
 
-tensor4all-rs is organized as a Cargo workspace with the following crates:
+tensor4all-rs is organized as a Cargo workspace with the following structure:
 
-### Umbrella Crate
+```
+tensor4all-rs/
+├── crates/                    # Rust crates
+│   ├── tensor4all/            # Umbrella crate + core crates
+│   │   ├── core-common/       # Index, tag, and small string utilities
+│   │   ├── core-tensor/       # Tensor and storage implementations
+│   │   └── core-linalg/       # Linear algebra operations
+│   ├── tensor4all-capi/       # C API for language bindings
+│   ├── tensor4all-tensortrain/# Tensor Train (MPS) algorithms
+│   ├── tensor4all-matrixci/   # Matrix Cross Interpolation
+│   ├── tensor4all-tensorci/   # Tensor Cross Interpolation
+│   ├── tensor4all-treetn/     # Tree Tensor Networks
+│   └── quanticsgrids/         # Quantics grid structures
+├── julia/                     # Julia bindings
+│   └── Tensor4all.jl/
+├── python/                    # Python bindings
+│   └── tensor4all/
+└── scripts/                   # Build and test scripts
+    ├── run_julia_tests.sh
+    └── run_python_tests.sh
+```
 
+### Crates Overview
+
+**Umbrella Crate**:
 - **`tensor4all`**: Re-exports all core crates for convenient single-import usage
 
-### Core Crates
+**Core Crates** (in `crates/tensor4all/`):
+- **`core-common`**: Index, tag, and small string utilities
+- **`core-tensor`**: Tensor and storage implementations
+- **`core-linalg`**: Linear algebra operations (SVD, QR with FAER/LAPACK backends)
 
-- **`tensor4all-core-common`**: Core index, tag, and small string utilities
-  - `Index<Id, Symm, Tags>`: Generic index type
-  - `TagSet`: Index tag management
-  - `SmallString`: Efficient small string storage
-  - `common_inds`: Find common indices between tensors
-
-- **`tensor4all-core-tensor`**: Tensor and storage implementations
-  - `TensorDynLen<Id, T, Symm>`: Dynamic-rank tensors
-  - `Storage`: Storage backend enum
-  - Storage newtypes: `DenseStorageF64`, `DenseStorageC64`, `DiagStorageF64`, `DiagStorageC64`
-
-- **`tensor4all-core-linalg`**: Linear algebra operations for tensor networks
-  - `svd`: Singular Value Decomposition with truncation control
-  - `qr`: QR decomposition with truncation control
-  - Backend support: FAER (default) and LAPACK (optional)
-  - Configurable relative tolerance (`rtol`) for truncation
-
-### FFI Crate
-
+**FFI Crate**:
 - **`tensor4all-capi`**: C API for language bindings (Julia, Python)
 
-### Algorithm Crates
+**Algorithm Crates**:
+- **`tensor4all-tensortrain`**: Tensor Train (MPS) decomposition and operations
+- **`tensor4all-matrixci`**: Matrix ACA, LU, and LU-CI algorithms
+- **`tensor4all-tensorci`**: TCI1 and TCI2 algorithms
+- **`tensor4all-treetn`**: Tree Tensor Network structure and operations
 
-- **`tensor4all-tensortrain`**: Tensor Train (MPS) algorithms
-  - Tensor Train decomposition and compression
-  - Arithmetic operations for Tensor Trains
-  - Contraction operations
-
-- **`tensor4all-matrixci`**: Matrix Cross Interpolation algorithms
-  - Matrix ACA (Adaptive Cross Approximation)
-  - Matrix LU decomposition
-  - Matrix LU-CI (LU Cross Interpolation)
-
-- **`tensor4all-tensorci`**: Tensor Cross Interpolation algorithms
-  - TCI1 and TCI2 algorithms for tensor approximation
-  - Cached function evaluation
-  - Index set management
-
-- **`tensor4all-treetn`**: Tree Tensor Network (TTN) implementation
-  - Tree tensor network structure
-  - Named graph representation
-  - Site index network management
-
-### Utility Crates
-
-- **`quanticsgrids`**: Quantics grid structures
-  - Efficient conversion between quantics, grid indices, and original coordinates
-  - Discretized grid utilities
+**Utility Crates**:
+- **`quanticsgrids`**: Quantics grid structures and coordinate conversion
 
 ## Language Bindings
 
@@ -211,7 +200,7 @@ tensor4all-rs provides bindings for multiple programming languages through its C
 
 ### Julia: Tensor4all.jl
 
-Located in `Tensor4all.jl/`, this package provides Julia bindings with ITensors.jl interoperability.
+Located in `julia/Tensor4all.jl/`, this package provides Julia bindings with ITensors.jl interoperability.
 
 ```julia
 using Tensor4all
@@ -226,12 +215,17 @@ it_idx = ITensors.Index(i)
 t4a_idx = Tensor4all.Index(it_idx)
 ```
 
-### Python: pytensor4all
+**Running tests**:
+```bash
+./scripts/run_julia_tests.sh
+```
 
-Located in `pytensor4all/`, this package provides Python bindings via cffi with NumPy integration.
+### Python: tensor4all
+
+Located in `python/tensor4all/`, this package provides Python bindings via cffi with NumPy integration.
 
 ```python
-from pytensor4all import Index, Tensor
+from tensor4all import Index, Tensor
 import numpy as np
 
 # Create indices
@@ -246,12 +240,9 @@ t = Tensor([i, j], data)
 arr = t.to_numpy()
 ```
 
-**Installation (development)**:
+**Running tests**:
 ```bash
-cd pytensor4all
-python scripts/build_capi.py  # Build Rust library
-uv sync && uv pip install -e ".[dev]"
-uv run pytest
+./scripts/run_python_tests.sh
 ```
 
 ## Usage Example

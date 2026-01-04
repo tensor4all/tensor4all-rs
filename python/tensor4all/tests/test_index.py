@@ -2,7 +2,7 @@
 
 import pytest
 
-from pytensor4all import Index, TagOverflowError
+from tensor4all import Index, TagOverflowError
 
 
 class TestIndexBasic:

@@ -1,17 +1,20 @@
 #!/bin/bash
-# Run Python tests for pytensor4all
+# Run Python tests for tensor4all (Python package)
+#
+# Usage:
+#   ./scripts/run_python_tests.sh
+
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
 
 echo "=== Building tensor4all-capi ==="
 cargo build --release -p tensor4all-capi
 
 echo "=== Setting up Python environment ==="
-cd pytensor4all
-
-# Copy library
+cd "$REPO_ROOT/python/tensor4all"
 
 # Install dependencies and package
 if command -v uv &> /dev/null; then

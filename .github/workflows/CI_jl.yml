@@ -62,7 +62,7 @@ jobs:
         uses: julia-actions/cache@v2
 
       - name: Run Julia tests
-        run: ./run_julia_tests.sh
+        run: ./scripts/run_julia_tests.sh
 
   rollup-jl:
     runs-on: ubuntu-latest

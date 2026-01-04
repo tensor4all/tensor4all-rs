@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from pytensor4all import Index, Tensor, StorageKind
+from tensor4all import Index, Tensor, StorageKind
 
 
 class TestTensorBasic:
