@@ -12,6 +12,7 @@
 
 use crate::named_graph::NamedGraph;
 use petgraph::stable_graph::{StableGraph, NodeIndex, EdgeIndex};
+use petgraph::visit::DfsPostOrder;
 use petgraph::Undirected;
 use tensor4all::index::{Index, NoSymmSpace, Symmetry};
 use tensor4all::DefaultTagSet;
@@ -193,6 +194,58 @@ where
 
         true
     }
+
+    /// Perform a post-order DFS traversal starting from the given root node.
+    ///
+    /// Returns node names in post-order (children before parents, leaves first).
+    /// Uses petgraph's `DfsPostOrder` internally.
+    ///
+    /// # Arguments
+    /// * `root` - The node name to start traversal from
+    ///
+    /// # Returns
+    /// `Some(Vec<NodeName>)` with nodes in post-order, or `None` if root doesn't exist.
+    ///
+    /// # Example
+    /// For a tree: A - B - C (where B is root)
+    /// Post-order from B: [A, C, B] or [C, A, B] (neighbors visited in arbitrary order)
+    pub fn post_order_dfs(&self, root: &NodeName) -> Option<Vec<NodeName>> {
+        let root_idx = self.graph.node_index(root)?;
+        let g = self.graph.graph();
+
+        let mut dfs = DfsPostOrder::new(g, root_idx);
+        let mut result = Vec::new();
+
+        while let Some(node_idx) = dfs.next(g) {
+            if let Some(name) = self.graph.node_name(node_idx) {
+                result.push(name.clone());
+            }
+        }
+
+        Some(result)
+    }
+
+    /// Perform a post-order DFS traversal starting from the given root NodeIndex.
+    ///
+    /// Returns NodeIndex in post-order (children before parents, leaves first).
+    /// Uses petgraph's `DfsPostOrder` internally.
+    ///
+    /// # Arguments
+    /// * `root` - The NodeIndex to start traversal from
+    ///
+    /// # Returns
+    /// Vector of NodeIndex in post-order.
+    pub fn post_order_dfs_by_index(&self, root: NodeIndex) -> Vec<NodeIndex> {
+        let g = self.graph.graph();
+        let mut dfs = DfsPostOrder::new(g, root);
+        let mut result = Vec::new();
+
+        while let Some(node_idx) = dfs.next(g) {
+            result.push(node_idx);
+        }
+
+        result
+    }
 }
 
 impl<NodeName, Id, Symm, Tags> Default for SiteIndexNetwork<NodeName, Id, Symm, Tags>
@@ -229,6 +282,53 @@ mod tests {
         net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 
         assert_eq!(net.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_post_order_dfs_chain() {
+        // Create a chain: A - B - C
+        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
+
+        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        net.add_node("A".to_string(), empty.clone()).unwrap();
+        net.add_node("B".to_string(), empty.clone()).unwrap();
+        net.add_node("C".to_string(), empty.clone()).unwrap();
+        net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+
+        // Post-order from B: A and C are leaves, B is last
+        let result = net.post_order_dfs(&"B".to_string()).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.last().unwrap(), "B"); // Root is last in post-order
+        // A and C come before B (order between them is not guaranteed)
+        assert!(result.contains(&"A".to_string()));
+        assert!(result.contains(&"C".to_string()));
+    }
+
+    #[test]
+    fn test_post_order_dfs_star() {
+        // Create a star: A, B, C all connected to D (center)
+        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
+
+        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        net.add_node("A".to_string(), empty.clone()).unwrap();
+        net.add_node("B".to_string(), empty.clone()).unwrap();
+        net.add_node("C".to_string(), empty.clone()).unwrap();
+        net.add_node("D".to_string(), empty.clone()).unwrap();
+        net.add_edge(&"A".to_string(), &"D".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
+        net.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
+
+        // Post-order from D: A, B, C are leaves (in some order), D is last
+        let result = net.post_order_dfs(&"D".to_string()).unwrap();
+        assert_eq!(result.len(), 4);
+        assert_eq!(result.last().unwrap(), "D"); // Root is last
+    }
+
+    #[test]
+    fn test_post_order_dfs_nonexistent_root() {
+        let net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
+        assert!(net.post_order_dfs(&"X".to_string()).is_none());
     }
 }
 

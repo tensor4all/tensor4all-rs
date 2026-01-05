@@ -1256,29 +1256,9 @@ where
     /// Perform a post-order DFS traversal starting from the given root.
     ///
     /// Returns nodes in post-order (children before parents, leaves first).
+    /// Uses petgraph's `DfsPostOrder` via `SiteIndexNetwork`.
     fn post_order_dfs(&self, root: NodeIndex) -> Vec<NodeIndex> {
-        let g = self.graph.graph();
-        let mut result = Vec::new();
-        let mut visited = HashSet::new();
-        let mut stack = vec![(root, false)]; // (node, processed)
-
-        while let Some((node, processed)) = stack.pop() {
-            if processed {
-                result.push(node);
-            } else if !visited.contains(&node) {
-                visited.insert(node);
-                stack.push((node, true)); // Push back for post-processing
-
-                // Push unvisited neighbors
-                for neighbor in g.neighbors(node) {
-                    if !visited.contains(&neighbor) {
-                        stack.push((neighbor, false));
-                    }
-                }
-            }
-        }
-
-        result
+        self.site_index_network.post_order_dfs_by_index(root)
     }
 
     /// Validate that `ortho_region` and edge `ortho_towards` are consistent.
