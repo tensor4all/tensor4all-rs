@@ -1192,9 +1192,9 @@ where
     ///
     /// This method contracts all tensors in the network into a single tensor
     /// containing all physical indices. The contraction is performed using
-    /// a tree-aware order (post-order from leaves to root) with edge-based
-    /// contraction that uses Connection information to identify which indices
-    /// to contract, rather than relying on index ID matching.
+    /// an edge-based order (post-order DFS edges towards root), processing
+    /// each edge in sequence and using Connection information to identify
+    /// which indices to contract.
     ///
     /// # Returns
     /// A single tensor representing the full contraction of the network.
@@ -1233,49 +1233,39 @@ where
         let root = self.graph.node_index(&root_name)
             .ok_or_else(|| anyhow::anyhow!("Root node not found"))?;
 
-        // Build post-order traversal (leaves first, root last)
-        let post_order = self.post_order_dfs(root);
+        // Get edges to process (post-order DFS edges towards root)
+        let edges = self.site_index_network.edges_to_canonize(None, root);
 
-        // Track which nodes have been contracted and their resulting tensors
-        // For each node in post-order, we contract its tensor with all
-        // already-contracted children, using the edge's Connection info.
-        let mut contracted: HashMap<NodeIndex, TensorDynLen<Id, Symm>> = HashMap::new();
+        // Initialize with original tensors
+        let mut tensors: HashMap<NodeIndex, TensorDynLen<Id, Symm>> = self.graph.graph()
+            .node_indices()
+            .filter_map(|n| self.tensor(n).cloned().map(|t| (n, t)))
+            .collect();
 
-        for node in post_order {
-            let mut current = self.tensor(node)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node))?
-                .clone();
+        // Process each edge: contract tensor at `from` into tensor at `to`
+        for (from, to) in edges {
+            let from_tensor = tensors.remove(&from)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", from))?;
+            let to_tensor = tensors.remove(&to)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", to))?;
 
-            // Find all edges to already-contracted neighbors (children in the rooted tree)
-            for (edge, neighbor) in self.edges_for_node(node) {
-                if let Some(child_tensor) = contracted.remove(&neighbor) {
-                    // Determine which index belongs to which node
-                    // edge_index_for_node returns the index for a given node on this edge
-                    let idx_current = self.edge_index_for_node(edge, node)?.clone();
-                    let idx_child = self.edge_index_for_node(edge, neighbor)?.clone();
+            // Find the edge and get bond indices
+            let edge = self.graph.graph().find_edge(from, to)
+                .or_else(|| self.graph.graph().find_edge(to, from))
+                .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", from, to))?;
 
-                    // Contract current tensor with child tensor along the bond indices
-                    // We use tensordot which takes explicit index pairs
-                    current = current.tensordot(&child_tensor, &[(idx_current, idx_child)])
-                        .context("Failed to contract along edge")?;
-                }
-            }
+            let idx_from = self.edge_index_for_node(edge, from)?.clone();
+            let idx_to = self.edge_index_for_node(edge, to)?.clone();
 
-            // Store the contracted result for this node
-            contracted.insert(node, current);
+            // Contract and store result at `to`
+            let contracted = to_tensor.tensordot(&from_tensor, &[(idx_to, idx_from)])
+                .context("Failed to contract along edge")?;
+            tensors.insert(to, contracted);
         }
 
-        // The root's tensor (last in post-order) is the final result
-        contracted.remove(&root)
+        // The root's tensor is the final result
+        tensors.remove(&root)
             .ok_or_else(|| anyhow::anyhow!("Contraction produced no result"))
-    }
-
-    /// Perform a post-order DFS traversal starting from the given root.
-    ///
-    /// Returns nodes in post-order (children before parents, leaves first).
-    /// Uses petgraph's `DfsPostOrder` via `SiteIndexNetwork`.
-    fn post_order_dfs(&self, root: NodeIndex) -> Vec<NodeIndex> {
-        self.site_index_network.post_order_dfs_by_index(root)
     }
 
     /// Validate that `ortho_region` and edge `ortho_towards` are consistent.

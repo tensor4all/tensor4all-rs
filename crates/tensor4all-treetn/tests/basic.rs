@@ -1175,6 +1175,53 @@ fn test_treetn_contract_empty_fails() {
     assert!(result.is_err());
 }
 
+#[test]
+fn test_contract_to_tensor_chain() {
+    // Test edge-based contract_to_tensor with a 3-node chain
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
+
+    let i = Index::new_dyn(2);
+    let j1 = Index::new_dyn(3);
+    let j2 = Index::new_dyn(3);
+    let k1 = Index::new_dyn(4);
+    let k2 = Index::new_dyn(4);
+    let l = Index::new_dyn(5);
+
+    // Create a chain: node1 - node2 - node3
+    // node1: [i, j1] dims [2, 3]
+    let storage1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec((0..6).map(|x| x as f64).collect())));
+    let tensor1: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j1.clone()], vec![2, 3], storage1);
+    let n1 = tn.add_tensor_auto_name(tensor1);
+
+    // node2: [j2, k1] dims [3, 4]
+    let storage2 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec((0..12).map(|x| x as f64).collect())));
+    let tensor2: TensorDynLen<DynId> = TensorDynLen::new(vec![j2.clone(), k1.clone()], vec![3, 4], storage2);
+    let n2 = tn.add_tensor_auto_name(tensor2);
+
+    // node3: [k2, l] dims [4, 5]
+    let storage3 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec((0..20).map(|x| x as f64).collect())));
+    let tensor3: TensorDynLen<DynId> = TensorDynLen::new(vec![k2.clone(), l.clone()], vec![4, 5], storage3);
+    let n3 = tn.add_tensor_auto_name(tensor3);
+
+    // Connect: node1 -- node2 -- node3
+    tn.connect(n1, &j1, n2, &j2).unwrap();
+    tn.connect(n2, &k1, n3, &k2).unwrap();
+
+    // Contract to tensor
+    let result = tn.contract_to_tensor().unwrap();
+
+    // Result should have external indices only (i, l)
+    assert_eq!(result.dims.len(), 2);
+    assert_eq!(result.dims, vec![2, 5]);
+
+    // Verify total size
+    let data: Vec<f64> = match result.storage.as_ref() {
+        Storage::DenseF64(d) => d.iter().copied().collect(),
+        _ => panic!("Expected DenseF64 storage"),
+    };
+    assert_eq!(data.len(), 10); // 2 * 5 = 10
+}
+
 // ============================================================================
 // TreeTN::add tests
 // ============================================================================
