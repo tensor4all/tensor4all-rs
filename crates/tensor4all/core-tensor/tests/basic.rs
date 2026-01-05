@@ -223,7 +223,133 @@ fn test_tensor_duplicate_indices_from_indices() {
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone(), i.clone()]; // duplicate i
     let storage = Arc::new(Storage::new_dense_f64(12));
-    
+
     let _tensor: TensorDynLen<DynId> = TensorDynLen::from_indices(indices, storage);
+}
+
+// ============================================================================
+// Index Replacement Tests
+// ============================================================================
+
+#[test]
+fn test_replaceind_basic() {
+    use tensor4all_core_tensor::storage::DenseStorageF64;
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let new_i = Index::new_dyn(2);  // Same dimension, different ID
+
+    let indices = vec![i.clone(), j.clone()];
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, vec![2, 3], storage);
+
+    // Replace index i with new_i
+    let replaced = tensor.replaceind(&i, &new_i);
+
+    // Check that the first index was replaced
+    assert_eq!(replaced.indices[0].id, new_i.id);
+    // Check that the second index was not affected
+    assert_eq!(replaced.indices[1].id, j.id);
+    // Check that dimensions are unchanged
+    assert_eq!(replaced.dims, vec![2, 3]);
+    // Check that storage is shared (no data copy)
+    assert!(Arc::ptr_eq(&tensor.storage, &replaced.storage));
+}
+
+#[test]
+fn test_replaceind_no_match() {
+    use tensor4all_core_tensor::storage::DenseStorageF64;
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(4);  // Not in tensor
+    let new_k = Index::new_dyn(4);
+
+    let indices = vec![i.clone(), j.clone()];
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, vec![2, 3], storage);
+
+    // Replace index k (not in tensor) - should return unchanged tensor
+    let replaced = tensor.replaceind(&k, &new_k);
+
+    // Check that indices are unchanged
+    assert_eq!(replaced.indices[0].id, i.id);
+    assert_eq!(replaced.indices[1].id, j.id);
+}
+
+#[test]
+fn test_replaceinds_basic() {
+    use tensor4all_core_tensor::storage::DenseStorageF64;
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(4);
+    let new_i = Index::new_dyn(2);
+    let new_j = Index::new_dyn(3);
+    let new_k = Index::new_dyn(4);
+
+    let indices = vec![i.clone(), j.clone(), k.clone()];
+    let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, vec![2, 3, 4], storage);
+
+    // Replace all indices
+    let replaced = tensor.replaceinds(
+        &[i.clone(), j.clone(), k.clone()],
+        &[new_i.clone(), new_j.clone(), new_k.clone()]
+    );
+
+    // Check that all indices were replaced
+    assert_eq!(replaced.indices[0].id, new_i.id);
+    assert_eq!(replaced.indices[1].id, new_j.id);
+    assert_eq!(replaced.indices[2].id, new_k.id);
+    // Check that dimensions are unchanged
+    assert_eq!(replaced.dims, vec![2, 3, 4]);
+}
+
+#[test]
+fn test_replaceinds_partial() {
+    use tensor4all_core_tensor::storage::DenseStorageF64;
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(4);
+    let new_i = Index::new_dyn(2);
+    // Only replace i, not j or k
+
+    let indices = vec![i.clone(), j.clone(), k.clone()];
+    let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, vec![2, 3, 4], storage);
+
+    // Replace only i
+    let replaced = tensor.replaceinds(&[i.clone()], &[new_i.clone()]);
+
+    // Check that i was replaced
+    assert_eq!(replaced.indices[0].id, new_i.id);
+    // Check that j and k are unchanged
+    assert_eq!(replaced.indices[1].id, j.id);
+    assert_eq!(replaced.indices[2].id, k.id);
+}
+
+#[test]
+#[should_panic(expected = "old_indices and new_indices must have the same length")]
+fn test_replaceinds_length_mismatch() {
+    use tensor4all_core_tensor::storage::DenseStorageF64;
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let new_i = Index::new_dyn(2);
+    let new_j = Index::new_dyn(3);
+
+    let indices = vec![i.clone(), j.clone()];
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, vec![2, 3], storage);
+
+    // Should panic - length mismatch
+    let _replaced = tensor.replaceinds(&[i.clone()], &[new_i.clone(), new_j.clone()]);
 }
 
