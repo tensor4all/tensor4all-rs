@@ -63,8 +63,6 @@ where
 pub fn sim_owned<Id, Symm, Tags>(i: Index<Id, Symm, Tags>) -> Index<Id, Symm, Tags>
 where
     Id: From<DynId>,
-    Symm: Clone,
-    Tags: Clone,
 {
     Index {
         id: DynId(generate_id()).into(),
@@ -143,7 +141,7 @@ where
     Id: std::hash::Hash + Eq,
 {
     use std::collections::HashMap;
-    let mut seen = HashMap::new();
+    let mut seen = HashMap::with_capacity(indices.len());
     for (pos, idx) in indices.iter().enumerate() {
         if let Some(&first_pos) = seen.get(&idx.id) {
             return Err(ReplaceIndsError::DuplicateIndices {
@@ -202,7 +200,7 @@ where
     check_unique_indices(&indices)?;
 
     // Build a map from old ID to new index for fast lookup
-    let mut replacement_map = std::collections::HashMap::new();
+    let mut replacement_map = std::collections::HashMap::with_capacity(replacements.len());
     for (old, new) in replacements {
         // Validate space match
         if old.symm != new.symm {
@@ -273,7 +271,7 @@ where
     check_unique_indices(indices)?;
 
     // Build a map from old ID to new index for fast lookup
-    let mut replacement_map = std::collections::HashMap::new();
+    let mut replacement_map = std::collections::HashMap::with_capacity(replacements.len());
     for (old, new) in replacements {
         // Validate space match
         if old.symm != new.symm {
@@ -347,12 +345,15 @@ where
 /// Returns indices that appear in either `indices_a` or `indices_b` but not in both
 /// (matched by ID). This corresponds to ITensors.jl's `noncommoninds` function.
 ///
+/// Time complexity: O(n + m) where n = len(indices_a), m = len(indices_b).
+///
 /// # Arguments
 /// * `indices_a` - First collection of indices
 /// * `indices_b` - Second collection of indices
 ///
 /// # Returns
 /// A vector containing indices from both collections that are not common to both.
+/// Order: indices from A first (in original order), then indices from B (in original order).
 ///
 /// # Example
 /// ```
@@ -381,7 +382,9 @@ where
     let a_ids: std::collections::HashSet<_> = indices_a.iter().map(|idx| &idx.id).collect();
     let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| &idx.id).collect();
 
-    let mut result = Vec::new();
+    // Pre-allocate with estimated capacity (worst case: no common indices)
+    let mut result = Vec::with_capacity(indices_a.len() + indices_b.len());
+
     // Add indices from A that are not in B
     result.extend(
         indices_a
@@ -403,6 +406,8 @@ where
 ///
 /// Returns all unique indices from both collections (matched by ID).
 /// This corresponds to ITensors.jl's `unioninds` function.
+///
+/// Time complexity: O(n + m) where n = len(indices_a), m = len(indices_b).
 ///
 /// # Arguments
 /// * `indices_a` - First collection of indices
@@ -435,8 +440,8 @@ where
     Symm: Clone,
     Tags: Clone,
 {
-    let mut seen = std::collections::HashSet::new();
-    let mut result = Vec::new();
+    let mut seen = std::collections::HashSet::with_capacity(indices_a.len() + indices_b.len());
+    let mut result = Vec::with_capacity(indices_a.len() + indices_b.len());
 
     for idx in indices_a {
         if seen.insert(&idx.id) {
@@ -561,6 +566,8 @@ where
 /// Returns a vector of indices that appear in both `indices_a` and `indices_b`
 /// (set intersection). This is similar to ITensors.jl's `commoninds` function.
 ///
+/// Time complexity: O(n + m) where n = len(indices_a), m = len(indices_b).
+///
 /// # Arguments
 /// * `indices_a` - First collection of indices
 /// * `indices_b` - Second collection of indices
@@ -593,12 +600,11 @@ where
     Symm: Clone,
     Tags: Clone,
 {
-    let mut result = Vec::new();
-    for idx_a in indices_a {
-        if indices_b.iter().any(|idx_b| idx_b.id == idx_a.id) {
-            result.push(idx_a.clone());
-        }
-    }
-    result
+    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| &idx.id).collect();
+    indices_a
+        .iter()
+        .filter(|idx| b_ids.contains(&idx.id))
+        .cloned()
+        .collect()
 }
 
