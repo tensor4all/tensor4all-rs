@@ -4,13 +4,11 @@ use std::collections::VecDeque;
 use std::collections::HashSet;
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::marker::PhantomData;
 use tensor4all::TensorDynLen;
 use tensor4all::Storage;
 use tensor4all::index::{Index, NoSymmSpace, Symmetry, DynId};
 use tensor4all::index_ops::common_inds;
 use tensor4all::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
-use crate::bond_mode::{BondMode, Einsum, Explicit};
 use crate::connection::Connection;
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -31,20 +29,16 @@ use num_complex::Complex64;
 /// - `Id`: Index ID type
 /// - `Symm`: Symmetry type (default: NoSymmSpace)
 /// - `V`: Node name type for named nodes (default: NodeIndex for backward compatibility)
-/// - `Mode`: Bond mode - [`Einsum`] (default) or [`Explicit`]
 ///
-/// # Bond Modes
+/// # Construction
 ///
-/// - [`Einsum`]: Nodes are automatically connected by matching index IDs.
-///   Use `TreeTN::new(tensors, node_names)` to create.
-/// - [`Explicit`]: Nodes must be connected manually via `connect()`.
-///   Use `TreeTN::<_, _, _, Explicit>::new()` to create.
-pub struct TreeTN<Id, Symm = NoSymmSpace, V = NodeIndex, Mode = Einsum>
+/// - `TreeTN::new()`: Create an empty network, then use `add_tensor()` and `connect()` to build.
+/// - `TreeTN::from_tensors(tensors, node_names)`: Create from tensors with auto-connection by matching index IDs.
+pub struct TreeTN<Id, Symm = NoSymmSpace, V = NodeIndex>
 where
     Id: Clone + std::hash::Hash + Eq,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-    Mode: BondMode,
 {
     /// Named graph wrapper: provides mapping between node names (V) and NodeIndex
     graph: NamedGraph<V, TensorDynLen<Id, Symm>, Connection<Id, Symm>>,
@@ -60,20 +54,30 @@ where
     /// Site index network: manages topology and site space (physical indices).
     /// This structure enables topology and site space comparison independent of tensor data.
     site_index_network: SiteIndexNetwork<V, Id, Symm>,
-    /// Phantom data for Mode type parameter
-    _mode: PhantomData<Mode>,
 }
 
 // ============================================================================
-// Einsum mode implementation
+// Construction methods
 // ============================================================================
 
-impl<Id, Symm, V> TreeTN<Id, Symm, V, Einsum>
+impl<Id, Symm, V> TreeTN<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
+    /// Create a new empty TreeTN.
+    ///
+    /// Use `add_tensor()` to add tensors and `connect()` to establish bonds manually.
+    pub fn new() -> Self {
+        Self {
+            graph: NamedGraph::new(),
+            ortho_region: HashSet::new(),
+            canonical_form: None,
+            site_index_network: SiteIndexNetwork::new(),
+        }
+    }
+
     /// Create a TreeTN from a list of tensors and node names using einsum rule.
     ///
     /// This function connects tensors that share common indices (by ID).
@@ -94,7 +98,7 @@ where
     ///
     /// # Errors
     /// Returns an error if validation fails or connection fails.
-    pub fn new(
+    pub fn from_tensors(
         tensors: Vec<TensorDynLen<Id, Symm>>,
         node_names: Vec<V>,
     ) -> Result<Self>
@@ -108,17 +112,11 @@ where
                 tensors.len(),
                 node_names.len()
             ))
-            .context("TreeTN::new: tensors and node_names must have the same length");
+            .context("TreeTN::from_tensors: tensors and node_names must have the same length");
         }
 
         // Create empty TreeTN
-        let mut treetn = Self {
-            graph: NamedGraph::new(),
-            ortho_region: HashSet::new(),
-            canonical_form: None,
-            site_index_network: SiteIndexNetwork::new(),
-            _mode: PhantomData,
-        };
+        let mut treetn = Self::new();
 
         // Step 1: Add all tensors as nodes and collect NodeIndex mappings
         let mut node_indices = Vec::with_capacity(tensors.len());
@@ -169,36 +167,12 @@ where
                         "Index ID {:?} appears in {} tensors, but TreeTN requires exactly 2 (tree structure)",
                         index_id, n
                     ))
-                    .context("TreeTN::new: each bond index must connect exactly 2 nodes");
+                    .context("TreeTN::from_tensors: each bond index must connect exactly 2 nodes");
                 }
             }
         }
 
         Ok(treetn)
-    }
-}
-
-// ============================================================================
-// Explicit mode implementation
-// ============================================================================
-
-impl<Id, Symm, V> TreeTN<Id, Symm, V, Explicit>
-where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
-    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-{
-    /// Create a new empty TreeTN with explicit bond mode.
-    ///
-    /// Use `add_tensor()` to add tensors and `connect()` to establish bonds manually.
-    pub fn new() -> Self {
-        Self {
-            graph: NamedGraph::new(),
-            ortho_region: HashSet::new(),
-            canonical_form: None,
-            site_index_network: SiteIndexNetwork::new(),
-            _mode: PhantomData,
-        }
     }
 
     /// Add a tensor to the network with a node name.
@@ -253,15 +227,14 @@ where
 }
 
 // ============================================================================
-// Common implementation (both modes)
+// Common implementation
 // ============================================================================
 
-impl<Id, Symm, V, Mode> TreeTN<Id, Symm, V, Mode>
+impl<Id, Symm, V> TreeTN<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-    Mode: BondMode,
 {
     // ------------------------------------------------------------------------
     // Internal methods (used by mode-specific methods)
@@ -956,7 +929,6 @@ where
             ortho_region: HashSet::new(),
             canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
-            _mode: PhantomData,
         };
 
         // Process each node
@@ -2268,7 +2240,7 @@ where
     }
 }
 
-impl<Id, Symm, V> Default for TreeTN<Id, Symm, V, Explicit>
+impl<Id, Symm, V> Default for TreeTN<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
@@ -2279,24 +2251,6 @@ where
     }
 }
 
-impl<Id, Symm, V> Default for TreeTN<Id, Symm, V, Einsum>
-where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug + Ord,
-    Symm: Clone + Symmetry,
-    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-{
-    fn default() -> Self {
-        // Empty TreeTN with Einsum mode
-        Self {
-            graph: NamedGraph::new(),
-            ortho_region: HashSet::new(),
-            canonical_form: None,
-            site_index_network: SiteIndexNetwork::new(),
-            _mode: PhantomData,
-        }
-    }
-}
-
 // ============================================================================
 // Scalar multiplication for TreeTN
 // ============================================================================
@@ -2304,12 +2258,11 @@ where
 use std::ops::Mul;
 use std::sync::Arc;
 
-impl<Id, Symm, V, Mode> Mul<f64> for TreeTN<Id, Symm, V, Mode>
+impl<Id, Symm, V> Mul<f64> for TreeTN<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
-    Mode: BondMode,
 {
     type Output = Self;
 
@@ -2399,12 +2352,11 @@ where
     }
 }
 
-impl<Id, Symm, V, Mode> Mul<Complex64> for TreeTN<Id, Symm, V, Mode>
+impl<Id, Symm, V> Mul<Complex64> for TreeTN<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
-    Mode: BondMode,
 {
     type Output = Self;
 
@@ -2487,28 +2439,26 @@ where
 }
 
 // Implement Mul with reference to avoid consuming TreeTN
-impl<Id, Symm, V, Mode> Mul<f64> for &TreeTN<Id, Symm, V, Mode>
+impl<Id, Symm, V> Mul<f64> for &TreeTN<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
-    Mode: BondMode,
 {
-    type Output = TreeTN<Id, Symm, V, Mode>;
+    type Output = TreeTN<Id, Symm, V>;
 
     fn mul(self, a: f64) -> Self::Output {
         self.clone() * a
     }
 }
 
-impl<Id, Symm, V, Mode> Mul<Complex64> for &TreeTN<Id, Symm, V, Mode>
+impl<Id, Symm, V> Mul<Complex64> for &TreeTN<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
-    Mode: BondMode,
 {
-    type Output = TreeTN<Id, Symm, V, Mode>;
+    type Output = TreeTN<Id, Symm, V>;
 
     fn mul(self, a: Complex64) -> Self::Output {
         self.clone() * a
@@ -2519,12 +2469,11 @@ where
 // Norm Computation
 // ============================================================================
 
-impl<Id, Symm, V, Mode> TreeTN<Id, Symm, V, Mode>
+impl<Id, Symm, V> TreeTN<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
-    Mode: BondMode,
     Self: Default,
 {
     /// Compute the natural logarithm of the Frobenius norm: ln(||TN||).
@@ -2604,12 +2553,11 @@ where
 }
 
 // Clone implementation for TreeTN
-impl<Id, Symm, V, Mode> Clone for TreeTN<Id, Symm, V, Mode>
+impl<Id, Symm, V> Clone for TreeTN<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-    Mode: BondMode,
 {
     fn clone(&self) -> Self {
         Self {
@@ -2617,17 +2565,15 @@ where
             ortho_region: self.ortho_region.clone(),
             canonical_form: self.canonical_form,
             site_index_network: self.site_index_network.clone(),
-            _mode: PhantomData,
         }
     }
 }
 
-impl<Id, Symm, V, Mode> std::fmt::Debug for TreeTN<Id, Symm, V, Mode>
+impl<Id, Symm, V> std::fmt::Debug for TreeTN<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry + std::fmt::Debug,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-    Mode: BondMode,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeTN")
@@ -2642,12 +2588,11 @@ where
 // TensorLike implementation for TreeTN
 // ============================================================================
 
-impl<Id, Symm, V, Mode> tensor4all::TensorLike for TreeTN<Id, Symm, V, Mode>
+impl<Id, Symm, V> tensor4all::TensorLike for TreeTN<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     Symm: Clone + Symmetry + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
-    Mode: BondMode,
 {
     type Id = Id;
     type Symm = Symm;
@@ -3022,9 +2967,6 @@ impl<V: Clone + Hash + Eq> TreeTopology<V> {
 /// * `tensor` - The dense tensor to decompose
 /// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
 ///
-/// # Type Parameters
-/// * `Mode` - The bond mode for the resulting TreeTN (Einsum or Explicit)
-///
 /// # Returns
 /// A TreeTN representing the decomposed tensor.
 ///
@@ -3033,15 +2975,14 @@ impl<V: Clone + Hash + Eq> TreeTopology<V> {
 /// - The topology is invalid
 /// - Physical index positions don't match the tensor
 /// - Factorization fails
-pub fn factorize_tensor_to_treetn<Id, Symm, V, Mode>(
+pub fn factorize_tensor_to_treetn<Id, Symm, V>(
     tensor: &TensorDynLen<Id, Symm>,
     topology: &TreeTopology<V>,
-) -> Result<TreeTN<Id, Symm, V, Mode>>
+) -> Result<TreeTN<Id, Symm, V>>
 where
     Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
-    Mode: BondMode,
 {
     factorize_tensor_to_treetn_with(tensor, topology, FactorizeAlg::QR)
 }
@@ -3062,9 +3003,6 @@ where
 /// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
 /// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
 ///
-/// # Type Parameters
-/// * `Mode` - The bond mode for the resulting TreeTN (Einsum or Explicit)
-///
 /// # Returns
 /// A TreeTN representing the decomposed tensor.
 ///
@@ -3073,45 +3011,24 @@ where
 /// - The topology is invalid
 /// - Physical index positions don't match the tensor
 /// - Factorization fails
-pub fn factorize_tensor_to_treetn_with<Id, Symm, V, Mode>(
+pub fn factorize_tensor_to_treetn_with<Id, Symm, V>(
     tensor: &TensorDynLen<Id, Symm>,
     topology: &TreeTopology<V>,
     alg: FactorizeAlg,
-) -> Result<TreeTN<Id, Symm, V, Mode>>
+) -> Result<TreeTN<Id, Symm, V>>
 where
     Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
-    Mode: BondMode,
 {
     topology.validate()?;
 
     if topology.nodes.len() == 1 {
         // Single node - just wrap the tensor
         let node_name = topology.nodes.keys().next().unwrap().clone();
-        if Mode::IS_EINSUM {
-            let einsum_tn = TreeTN::<Id, Symm, V, Einsum>::new(
-                vec![tensor.clone()],
-                vec![node_name],
-            )?;
-            return Ok(TreeTN {
-                graph: einsum_tn.graph,
-                ortho_region: einsum_tn.ortho_region,
-                canonical_form: einsum_tn.canonical_form,
-                site_index_network: einsum_tn.site_index_network,
-                _mode: PhantomData,
-            });
-        } else {
-            let mut explicit_tn = TreeTN::<Id, Symm, V, Explicit>::new();
-            explicit_tn.add_tensor(node_name, tensor.clone())?;
-            return Ok(TreeTN {
-                graph: explicit_tn.graph,
-                ortho_region: explicit_tn.ortho_region,
-                canonical_form: explicit_tn.canonical_form,
-                site_index_network: explicit_tn.site_index_network,
-                _mode: PhantomData,
-            });
-        }
+        let mut tn = TreeTN::<Id, Symm, V>::new();
+        tn.add_tensor(node_name, tensor.clone())?;
+        return Ok(tn);
     }
 
     // Validate that all index positions are valid
@@ -3246,65 +3163,12 @@ where
     let (root_node, _) = &traversal_order.last().unwrap();
     node_tensors.insert(root_node.clone(), current_tensor);
 
-    // Build the TreeTN based on Mode
-    if Mode::IS_EINSUM {
-        // Einsum mode: use TreeTN::new(tensors, node_names) for auto-connection
-        // Since factorize() returns shared bond_index, tensors already have matching index IDs
-        let node_names: Vec<V> = topology.nodes.keys().cloned().collect();
-        let tensors: Vec<TensorDynLen<Id, Symm>> = node_names.iter()
-            .map(|name| node_tensors.get(name).cloned().unwrap())
-            .collect();
+    // Build the TreeTN using from_tensors (auto-connection by matching index IDs)
+    // Since factorize() returns shared bond_index, tensors already have matching index IDs
+    let node_names: Vec<V> = topology.nodes.keys().cloned().collect();
+    let tensors: Vec<TensorDynLen<Id, Symm>> = node_names.iter()
+        .map(|name| node_tensors.get(name).cloned().unwrap())
+        .collect();
 
-        // Build using Einsum mode constructor, then convert to target Mode
-        let einsum_tn = TreeTN::<Id, Symm, V, Einsum>::new(tensors, node_names)?;
-
-        // SAFETY: Both Einsum and Explicit have the same memory layout (PhantomData)
-        // and the network structure is valid for both modes
-        Ok(TreeTN {
-            graph: einsum_tn.graph,
-            ortho_region: einsum_tn.ortho_region,
-            canonical_form: einsum_tn.canonical_form,
-            site_index_network: einsum_tn.site_index_network,
-            _mode: PhantomData,
-        })
-    } else {
-        // Explicit mode: use add_tensor + connect
-        let mut tn = TreeTN::<Id, Symm, V, Explicit>::new();
-
-        // Add all tensors
-        for (node_name, t) in &node_tensors {
-            tn.add_tensor(node_name.clone(), t.clone())?;
-        }
-
-        // Add connections
-        for (a, b) in &topology.edges {
-            let key = if *a < *b {
-                (a.clone(), b.clone())
-            } else {
-                (b.clone(), a.clone())
-            };
-
-            if let Some((idx_a, idx_b)) = bond_indices.get(&key) {
-                let node_a = tn.graph.node_index(a)
-                    .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", a))?;
-                let node_b = tn.graph.node_index(b)
-                    .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", b))?;
-
-                if *a < *b {
-                    tn.connect(node_a, idx_a, node_b, idx_b)?;
-                } else {
-                    tn.connect(node_b, idx_a, node_a, idx_b)?;
-                }
-            }
-        }
-
-        // Convert to target Mode
-        Ok(TreeTN {
-            graph: tn.graph,
-            ortho_region: tn.ortho_region,
-            canonical_form: tn.canonical_form,
-            site_index_network: tn.site_index_network,
-            _mode: PhantomData,
-        })
-    }
+    TreeTN::from_tensors(tensors, node_names)
 }
