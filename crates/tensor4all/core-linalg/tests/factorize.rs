@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use tensor4all_core_common::index::{DynId, Index, NoSymmSpace};
-use tensor4all_core_linalg::{factorize, Canonical, FactorizeError, FactorizeOptions};
+use tensor4all_core_linalg::{factorize, Canonical, FactorizeAlg, FactorizeError, FactorizeOptions};
 use tensor4all_core_tensor::{storage::DenseStorageF64, Storage, TensorDynLen};
 
 // ============================================================================
@@ -11,7 +11,6 @@ use tensor4all_core_tensor::{storage::DenseStorageF64, Storage, TensorDynLen};
 
 /// Helper to create a simple 2x3 matrix tensor for testing.
 fn create_test_matrix() -> TensorDynLen<DynId> {
-    // Create a 2x3 matrix: [[1, 2, 3], [4, 5, 6]]
     let i: Index<DynId, NoSymmSpace, _> = Index::new_dyn(2);
     let j: Index<DynId, NoSymmSpace, _> = Index::new_dyn(3);
 
@@ -31,7 +30,6 @@ fn create_rank3_tensor() -> TensorDynLen<DynId> {
     let j: Index<DynId, NoSymmSpace, _> = Index::new_dyn(3);
     let k: Index<DynId, NoSymmSpace, _> = Index::new_dyn(2);
 
-    // 2x3x2 tensor
     let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
 
@@ -78,72 +76,88 @@ fn test_shared_bond_index(options: &FactorizeOptions) {
 }
 
 // ============================================================================
-// SVD Tests
+// All Algorithms: Reconstruction Tests
 // ============================================================================
 
 #[test]
-fn test_factorize_svd_left_canonical() {
-    let options = FactorizeOptions::svd().with_canonical(Canonical::Left);
-    test_factorize_reconstruction(&options);
+fn test_factorize_reconstruction_all_algorithms() {
+    // Test all algorithms with both canonical directions (where supported)
+    let algorithms = [
+        (FactorizeAlg::SVD, vec![Canonical::Left, Canonical::Right]),
+        (FactorizeAlg::QR, vec![Canonical::Left]), // Right not supported
+        (FactorizeAlg::LU, vec![Canonical::Left, Canonical::Right]),
+        (FactorizeAlg::CI, vec![Canonical::Left, Canonical::Right]),
+    ];
 
-    // Additional SVD-specific checks
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-
-    assert!(result.singular_values.is_some());
-    let sv = result.singular_values.unwrap();
-    assert!(!sv.is_empty());
-    assert!(result.rank > 0);
-    assert!(result.rank <= 2); // min(2, 3) = 2
+    for (alg, canonicals) in algorithms {
+        for canonical in canonicals {
+            let options = FactorizeOptions {
+                alg,
+                canonical,
+                rtol: None,
+                max_rank: None,
+            };
+            test_factorize_reconstruction(&options);
+        }
+    }
 }
 
 #[test]
-fn test_factorize_svd_right_canonical() {
-    let options = FactorizeOptions::svd().with_canonical(Canonical::Right);
-    test_factorize_reconstruction(&options);
+fn test_factorize_shared_bond_index_all_algorithms() {
+    // Test all algorithms have shared bond index
+    let algorithms = [
+        FactorizeAlg::SVD,
+        FactorizeAlg::QR,
+        FactorizeAlg::LU,
+        FactorizeAlg::CI,
+    ];
 
-    // Check singular values are returned
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-    assert!(result.singular_values.is_some());
+    for alg in algorithms {
+        let options = FactorizeOptions {
+            alg,
+            canonical: Canonical::Left,
+            rtol: None,
+            max_rank: None,
+        };
+        test_shared_bond_index(&options);
+    }
+}
+
+// ============================================================================
+// SVD-Specific Tests
+// ============================================================================
+
+#[test]
+fn test_factorize_svd_returns_singular_values() {
+    for canonical in [Canonical::Left, Canonical::Right] {
+        let tensor = create_test_matrix();
+        let left_inds = vec![tensor.indices[0].clone()];
+        let options = FactorizeOptions::svd().with_canonical(canonical);
+        let result = factorize(&tensor, &left_inds, &options).unwrap();
+
+        assert!(result.singular_values.is_some());
+        let sv = result.singular_values.unwrap();
+        assert!(!sv.is_empty());
+        assert!(result.rank > 0);
+        assert!(result.rank <= 2); // min(2, 3) = 2
+    }
 }
 
 #[test]
 fn test_factorize_svd_rank3() {
     let tensor = create_rank3_tensor();
-    // Split as (i, j) | (k)
     let left_inds = vec![tensor.indices[0].clone(), tensor.indices[1].clone()];
 
     let options = FactorizeOptions::svd();
     let result = factorize(&tensor, &left_inds, &options).unwrap();
 
-    // Verify reconstruction
     let reconstructed = result.left.contract_einsum(&result.right);
     assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
 }
 
-#[test]
-fn test_factorize_svd_shared_bond_index() {
-    test_shared_bond_index(&FactorizeOptions::svd().with_canonical(Canonical::Left));
-}
-
 // ============================================================================
-// QR Tests
+// QR-Specific Tests
 // ============================================================================
-
-#[test]
-fn test_factorize_qr_left_canonical() {
-    let options = FactorizeOptions::qr();
-    test_factorize_reconstruction(&options);
-
-    // QR should not return singular values
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-    assert!(result.singular_values.is_none());
-}
 
 #[test]
 fn test_factorize_qr_right_canonical_error() {
@@ -153,61 +167,40 @@ fn test_factorize_qr_right_canonical_error() {
     let options = FactorizeOptions::qr().with_canonical(Canonical::Right);
     let result = factorize(&tensor, &left_inds, &options);
 
-    // QR with Right canonical should fail
     assert!(matches!(result, Err(FactorizeError::UnsupportedCanonical(_))));
 }
 
 #[test]
-fn test_factorize_qr_shared_bond_index() {
-    test_shared_bond_index(&FactorizeOptions::qr());
+fn test_factorize_qr_no_singular_values() {
+    let tensor = create_test_matrix();
+    let left_inds = vec![tensor.indices[0].clone()];
+    let options = FactorizeOptions::qr();
+    let result = factorize(&tensor, &left_inds, &options).unwrap();
+
+    assert!(result.singular_values.is_none());
 }
 
 // ============================================================================
-// LU Tests
+// LU/CI-Specific Tests
 // ============================================================================
 
 #[test]
-fn test_factorize_lu_both_canonical() {
-    // Test both Left and Right canonical for LU
-    for canonical in [Canonical::Left, Canonical::Right] {
-        let options = FactorizeOptions::lu().with_canonical(canonical);
-        test_factorize_reconstruction(&options);
+fn test_factorize_lu_ci_no_singular_values() {
+    for alg in [FactorizeAlg::LU, FactorizeAlg::CI] {
+        for canonical in [Canonical::Left, Canonical::Right] {
+            let tensor = create_test_matrix();
+            let left_inds = vec![tensor.indices[0].clone()];
+            let options = FactorizeOptions {
+                alg,
+                canonical,
+                rtol: None,
+                max_rank: None,
+            };
+            let result = factorize(&tensor, &left_inds, &options).unwrap();
 
-        // LU should not return singular values
-        let tensor = create_test_matrix();
-        let left_inds = vec![tensor.indices[0].clone()];
-        let result = factorize(&tensor, &left_inds, &options).unwrap();
-        assert!(result.singular_values.is_none());
+            assert!(result.singular_values.is_none());
+        }
     }
-}
-
-#[test]
-fn test_factorize_lu_shared_bond_index() {
-    test_shared_bond_index(&FactorizeOptions::lu());
-}
-
-// ============================================================================
-// CI Tests
-// ============================================================================
-
-#[test]
-fn test_factorize_ci_both_canonical() {
-    // Test both Left and Right canonical for CI
-    for canonical in [Canonical::Left, Canonical::Right] {
-        let options = FactorizeOptions::ci().with_canonical(canonical);
-        test_factorize_reconstruction(&options);
-
-        // CI should not return singular values
-        let tensor = create_test_matrix();
-        let left_inds = vec![tensor.indices[0].clone()];
-        let result = factorize(&tensor, &left_inds, &options).unwrap();
-        assert!(result.singular_values.is_none());
-    }
-}
-
-#[test]
-fn test_factorize_ci_shared_bond_index() {
-    test_shared_bond_index(&FactorizeOptions::ci());
 }
 
 // ============================================================================
@@ -215,29 +208,19 @@ fn test_factorize_ci_shared_bond_index() {
 // ============================================================================
 
 #[test]
-fn test_factorize_svd_with_max_rank() {
+fn test_factorize_with_max_rank() {
     let tensor = create_test_matrix();
     let left_inds = vec![tensor.indices[0].clone()];
-
-    let options = FactorizeOptions::svd().with_max_rank(1);
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-
-    // Should truncate to rank 1
-    // Note: SVD currently uses rtol-based truncation, max_rank is for LU/CI
-    // This test verifies the API works, actual truncation behavior may vary
-    assert!(result.rank >= 1);
-}
-
-#[test]
-fn test_factorize_lu_with_max_rank() {
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
-
-    let options = FactorizeOptions::lu().with_max_rank(1);
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
 
     // LU should respect max_rank
+    let options = FactorizeOptions::lu().with_max_rank(1);
+    let result = factorize(&tensor, &left_inds, &options).unwrap();
     assert_eq!(result.rank, 1);
+
+    // SVD API works (actual truncation behavior may vary)
+    let options = FactorizeOptions::svd().with_max_rank(1);
+    let result = factorize(&tensor, &left_inds, &options).unwrap();
+    assert!(result.rank >= 1);
 }
 
 // ============================================================================
@@ -246,8 +229,6 @@ fn test_factorize_lu_with_max_rank() {
 
 #[test]
 fn test_diag_dense_contraction_svd_internals() {
-    // Test that diagonal tensor (S) can contract with dense tensor (V)
-    // This is the internal operation in factorize_svd
     use tensor4all_core_linalg::svd;
 
     let i: Index<DynId, NoSymmSpace, _> = Index::new_dyn(2);
@@ -273,11 +254,10 @@ fn test_diag_dense_contraction_svd_internals() {
     });
     assert!(common_found, "S and V should share a common index");
 
-    // S * V contraction should work
+    // Contractions should work
     let sv = s.contract_einsum(&v);
     assert_eq!(sv.dims.len(), 2, "S*V should be a 2D tensor");
 
-    // U * S contraction should also work
     let us = u.contract_einsum(&s);
     assert_eq!(us.dims.len(), 2, "U*S should be a 2D tensor");
 }
@@ -286,7 +266,6 @@ fn test_diag_dense_contraction_svd_internals() {
 // Helper Functions
 // ============================================================================
 
-/// Check if two tensors are approximately equal.
 fn assert_tensors_approx_equal(a: &TensorDynLen<DynId>, b: &TensorDynLen<DynId>, tol: f64) {
     assert_eq!(a.dims, b.dims, "Tensor dimensions don't match");
 
