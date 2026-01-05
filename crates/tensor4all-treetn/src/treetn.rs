@@ -644,6 +644,24 @@ where
             .collect()
     }
 
+    /// Compute edges to canonicalize from leaves to target, returning node names.
+    ///
+    /// Returns `(from, to)` pairs in the order they should be processed:
+    /// - `from` is the node being factorized
+    /// - `to` is the parent node (towards target)
+    ///
+    /// This is useful for contract_zipup and similar algorithms that work with
+    /// node names rather than NodeIndex.
+    ///
+    /// # Arguments
+    /// * `target` - Target node name for the orthogonality center
+    ///
+    /// # Returns
+    /// `None` if target node doesn't exist, otherwise a vector of `(from, to)` pairs.
+    pub fn edges_to_canonicalize_by_names(&self, target: &V) -> Option<Vec<(V, V)>> {
+        self.site_index_network.edges_to_canonicalize_by_names(target)
+    }
+
     /// Get a reference to the orthogonalization region (using node names).
     ///
     /// When empty, the network is not canonicalized.
@@ -792,22 +810,99 @@ where
         self.site_index_network.site_space_mut(node_name)
     }
 
-    /// Check if two TreeTN can be added together.
+    /// Check if two TreeTN are compatible (can be added or contracted).
     ///
-    /// Two TreeTN can be added if:
+    /// Two TreeTN are compatible if:
     /// - Site index networks are compatible (same topology and site space)
     ///
     /// # Arguments
     /// * `other` - The other TreeTN to check compatibility with
     ///
     /// # Returns
-    /// `true` if the networks can be added, `false` otherwise.
-    pub fn can_add(&self, other: &Self) -> bool
+    /// `true` if the networks are compatible, `false` otherwise.
+    pub fn is_compatible(&self, other: &Self) -> bool
     where
         Id: Ord,
     {
         // Check site index network compatibility (includes both topology and site space)
         self.site_index_network.is_compatible(&other.site_index_network)
+    }
+
+    /// Check if two TreeTNs have the same topology (graph structure).
+    ///
+    /// This only checks that both networks have the same nodes and edges,
+    /// not that they have the same site indices.
+    ///
+    /// Useful for operations like `contract_zipup` where we need networks
+    /// with the same structure but possibly different site indices.
+    pub fn same_topology(&self, other: &Self) -> bool {
+        self.site_index_network.topology().same_topology(other.site_index_network.topology())
+    }
+
+    /// Create a copy with all internal (link/bond) indices replaced by fresh IDs.
+    ///
+    /// External (site/physical) indices remain unchanged. This is useful when
+    /// contracting two TreeTNs that might have overlapping internal index IDs.
+    ///
+    /// # Returns
+    /// A new TreeTN with all bond indices replaced by `sim` indices (same dimension,
+    /// new unique ID).
+    ///
+    /// # Example
+    /// ```ignore
+    /// let tn1 = create_random_treetn();
+    /// let tn2 = create_random_treetn();
+    ///
+    /// // Before contraction, ensure no overlapping internal indices
+    /// let tn2_sim = tn2.sim_internal_inds();
+    /// let result = contract_zipup(&tn1, &tn2_sim, ...);
+    /// ```
+    pub fn sim_internal_inds(&self) -> Self
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry,
+    {
+        use tensor4all::index_ops::sim;
+
+        // Clone the structure
+        let mut result = self.clone();
+
+        // For each edge, create a sim index and update both the edge and tensors
+        let edges: Vec<EdgeIndex> = result.graph.graph().edge_indices().collect();
+
+        for edge in edges {
+            // Get the current bond index
+            let old_bond_idx = match result.bond_index(edge) {
+                Some(idx) => idx.clone(),
+                None => continue,
+            };
+
+            // Create a new sim index (same dimension, new ID)
+            let new_bond_idx = sim(&old_bond_idx);
+
+            // Get the endpoint nodes
+            let (node_a, node_b) = match result.graph.graph().edge_endpoints(edge) {
+                Some(endpoints) => endpoints,
+                None => continue,
+            };
+
+            // Update the edge weight
+            if let Some(edge_weight) = result.graph.graph_mut().edge_weight_mut(edge) {
+                *edge_weight = new_bond_idx.clone();
+            }
+
+            // Update tensor at node_a
+            if let Some(tensor_a) = result.graph.graph_mut().node_weight_mut(node_a) {
+                *tensor_a = tensor_a.replaceind(&old_bond_idx, &new_bond_idx);
+            }
+
+            // Update tensor at node_b
+            if let Some(tensor_b) = result.graph.graph_mut().node_weight_mut(node_b) {
+                *tensor_b = tensor_b.replaceind(&old_bond_idx, &new_bond_idx);
+            }
+        }
+
+        result
     }
 
     /// Add two TreeTN together using direct-sum (block) construction.
@@ -848,7 +943,7 @@ where
         use tensor4all::storage::{DenseStorageF64, DenseStorageC64};
 
         // Validate compatibility
-        if !self.can_add(&other) {
+        if !self.is_compatible(&other) {
             return Err(anyhow::anyhow!(
                 "Cannot add TreeTN: topologies or site spaces are incompatible"
             ));
@@ -1239,6 +1334,316 @@ where
         // The root's tensor is the final result
         tensors.remove(&root)
             .ok_or_else(|| anyhow::anyhow!("Contraction produced no result"))
+    }
+
+    /// Contract two TreeTNs with the same topology using the zip-up algorithm.
+    ///
+    /// The zip-up algorithm traverses from leaves towards the center, contracting
+    /// corresponding nodes from both networks and optionally truncating at each step.
+    ///
+    /// # Algorithm
+    /// 1. Replace internal (bond) indices of both networks with fresh IDs to avoid collision
+    /// 2. Traverse from leaves towards center
+    /// 3. At each edge (child → parent):
+    ///    - Contract the child tensors from both networks (along their shared site indices)
+    ///    - Factorize, keeping site indices + parent bond on left (canonical form)
+    ///    - Store left factor as child tensor in result
+    ///    - Contract right factor into parent tensor
+    /// 4. Contract the final center tensors
+    ///
+    /// # Arguments
+    /// * `other` - The other TreeTN to contract with (must have same topology)
+    /// * `center` - The center node name towards which to contract
+    /// * `rtol` - Optional relative tolerance for truncation
+    /// * `max_rank` - Optional maximum bond dimension
+    ///
+    /// # Returns
+    /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
+    ///
+    /// # Notes
+    /// - Both TreeTNs must have the same topology (checked via `is_compatible`)
+    /// - Site (external) indices are contracted between corresponding nodes
+    /// - Bond (internal) indices are replaced with fresh IDs before contraction
+    pub fn contract_zipup(
+        &self,
+        other: &Self,
+        center: &V,
+        rtol: Option<f64>,
+        max_rank: Option<usize>,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        self.contract_zipup_with(other, center, CanonicalForm::Unitary, rtol, max_rank)
+    }
+
+    /// Contract two TreeTNs with the same topology using the zip-up algorithm with a specified form.
+    ///
+    /// See [`contract_zipup`](Self::contract_zipup) for details.
+    ///
+    /// # Arguments
+    /// * `other` - The other TreeTN to contract with (must have same topology)
+    /// * `center` - The center node name towards which to contract
+    /// * `form` - The canonical form / algorithm to use for factorization
+    /// * `rtol` - Optional relative tolerance for truncation
+    /// * `max_rank` - Optional maximum bond dimension
+    pub fn contract_zipup_with(
+        &self,
+        other: &Self,
+        center: &V,
+        form: CanonicalForm,
+        rtol: Option<f64>,
+        max_rank: Option<usize>,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        // 1. Verify topologies are compatible (same graph structure)
+        if !self.same_topology(other) {
+            return Err(anyhow::anyhow!("contract_zipup: networks have incompatible topologies"));
+        }
+
+        // 2. Replace internal indices with fresh IDs to avoid collision
+        let tn1 = self.sim_internal_inds();
+        let tn2 = other.sim_internal_inds();
+
+        // 3. Get traversal edges from leaves to center
+        let edges = tn1.edges_to_canonicalize_by_names(center)
+            .ok_or_else(|| anyhow::anyhow!("contract_zipup: center node {:?} not found", center))?;
+
+        if edges.is_empty() && self.node_count() == 1 {
+            // Single node case: just contract the two tensors
+            let node_idx = tn1.graph.graph().node_indices().next()
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: no nodes found"))?;
+            let t1 = tn1.tensor(node_idx)
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: tensor not found in tn1"))?;
+            let t2 = tn2.tensor(tn2.graph.graph().node_indices().next()
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: tensor not found in tn2"))?)
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup: tensor not found"))?;
+
+            // Contract along common indices (site indices)
+            let common = common_inds(&t1.indices, &t2.indices);
+            let result = if common.is_empty() {
+                // Outer product when no common site indices
+                t1.outer_product(t2)?
+            } else {
+                let pairs: Vec<_> = common.iter().map(|idx| (idx.clone(), idx.clone())).collect();
+                t1.tensordot(t2, &pairs)?
+            };
+            let mut result_tn = Self::new();
+            let node_name = tn1.graph.node_name(node_idx)
+                .ok_or_else(|| anyhow::anyhow!("Node name not found"))?.clone();
+            result_tn.add_tensor(node_name, result)?;
+            return Ok(result_tn);
+        }
+
+        // 4. Initialize result tensors (start with contracted node tensors)
+        // For each node, contract the tensors from tn1 and tn2 along their common indices
+        let mut result_tensors: HashMap<V, TensorDynLen<Id, Symm>> = HashMap::new();
+
+        for node_name in tn1.node_names() {
+            let node1 = tn1.node_index(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn1", node_name))?;
+            let node2 = tn2.node_index(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn2", node_name))?;
+
+            let t1 = tn1.tensor(node1)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in tn1", node_name))?;
+            let t2 = tn2.tensor(node2)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in tn2", node_name))?;
+
+            // Contract along site indices (external indices)
+            let site_inds1: HashSet<_> = tn1.site_index_network.site_space(&node_name)
+                .map(|s| s.iter().map(|i| i.id.clone()).collect())
+                .unwrap_or_default();
+
+            let common: Vec<_> = common_inds(&t1.indices, &t2.indices)
+                .into_iter()
+                .filter(|idx| site_inds1.contains(&idx.id))
+                .collect();
+
+            let contracted = if common.is_empty() {
+                // Outer product when no common site indices
+                t1.outer_product(t2)?
+            } else {
+                let pairs: Vec<_> = common.iter().map(|idx| (idx.clone(), idx.clone())).collect();
+                t1.tensordot(t2, &pairs)?
+            };
+
+            result_tensors.insert(node_name, contracted);
+        }
+
+        // 5. Process edges from leaves to center
+        let alg = match form {
+            CanonicalForm::Unitary => FactorizeAlg::SVD,
+            CanonicalForm::LU => FactorizeAlg::LU,
+            CanonicalForm::CI => FactorizeAlg::CI,
+        };
+
+        for (child_name, parent_name) in &edges {
+            let child_tensor = result_tensors.remove(child_name)
+                .ok_or_else(|| anyhow::anyhow!("Child tensor {:?} not found", child_name))?;
+
+            // Get the bond index between child and parent from tn1 (bond1) and tn2 (bond2)
+            // After sim_internal_inds, these are fresh indices
+            let edge1 = tn1.edge_between(child_name, parent_name)
+                .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?} in tn1", child_name, parent_name))?;
+            let edge2 = tn2.edge_between(child_name, parent_name)
+                .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?} in tn2", child_name, parent_name))?;
+
+            let bond1 = tn1.bond_index(edge1)
+                .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge in tn1"))?
+                .clone();
+            let bond2 = tn2.bond_index(edge2)
+                .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge in tn2"))?
+                .clone();
+
+            // Factorize: left_inds = all indices except bond1 and bond2 (towards parent)
+            let left_inds: Vec<_> = child_tensor.indices.iter()
+                .filter(|idx| idx.id != bond1.id && idx.id != bond2.id)
+                .cloned()
+                .collect();
+
+            if left_inds.is_empty() {
+                // All indices are bond indices - just absorb into parent
+                // (This happens when site indices are fully contracted, i.e., inner product case)
+                let parent_tensor = result_tensors.remove(parent_name)
+                    .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
+
+                let contracted = parent_tensor.tensordot(&child_tensor, &[(bond1.clone(), bond1), (bond2.clone(), bond2)])?;
+                result_tensors.insert(parent_name.clone(), contracted);
+                // Don't re-insert child - it's been absorbed
+                // The node will be omitted from the result TreeTN
+                continue;
+            }
+
+            let factorize_options = FactorizeOptions {
+                alg,
+                canonical: Canonical::Left,
+                rtol,
+                max_rank,
+            };
+
+            let factorize_result = factorize(&child_tensor, &left_inds, &factorize_options)
+                .map_err(|e| anyhow::anyhow!("Factorization failed at node {:?}: {}", child_name, e))?;
+
+            // Store left factor as child
+            result_tensors.insert(child_name.clone(), factorize_result.left);
+
+            // Contract right factor into parent
+            let parent_tensor = result_tensors.remove(parent_name)
+                .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
+
+            // Right factor has: new_bond (from factorize), bond1, bond2
+            // Parent has: bond1, bond2 (among other indices)
+            // Contract along bond1 and bond2
+            let contracted = parent_tensor.tensordot(&factorize_result.right, &[(bond1.clone(), bond1), (bond2.clone(), bond2)])?;
+            result_tensors.insert(parent_name.clone(), contracted);
+        }
+
+        // 6. Build result TreeTN
+        let mut result = Self::new();
+
+        // Add tensors for nodes that still have tensors
+        // (Some nodes may have been absorbed during the zip-up process in inner product cases)
+        let remaining_nodes: Vec<_> = tn1.node_names()
+            .into_iter()
+            .filter(|name| result_tensors.contains_key(name))
+            .collect();
+
+        for node_name in &remaining_nodes {
+            let tensor = result_tensors.remove(node_name)
+                .ok_or_else(|| anyhow::anyhow!("Result tensor not found for node {:?}", node_name))?;
+            result.add_tensor(node_name.clone(), tensor)?;
+        }
+
+        // Connect nodes based on topology using matching index IDs
+        // Only connect edges where both endpoints exist in the result
+        for (a, b) in tn1.site_index_network.edges() {
+            let node_a = match result.node_index(&a) {
+                Some(idx) => idx,
+                None => continue, // Node was absorbed
+            };
+            let node_b = match result.node_index(&b) {
+                Some(idx) => idx,
+                None => continue, // Node was absorbed
+            };
+
+            let tensor_a = result.tensor(node_a).unwrap();
+            let tensor_b = result.tensor(node_b).unwrap();
+
+            // Find the common index (should be exactly one new bond index)
+            let common = common_inds(&tensor_a.indices, &tensor_b.indices);
+            if let Some(bond_idx) = common.first() {
+                result.connect_internal(node_a, bond_idx, node_b, bond_idx)?;
+            }
+        }
+
+        // Set canonical center (only if it exists in result)
+        if result.node_index(center).is_some() {
+            result.set_canonical_center(std::iter::once(center.clone()))?;
+        }
+
+        Ok(result)
+    }
+
+    /// Contract two TreeTNs using naive full contraction.
+    ///
+    /// This is a reference implementation that:
+    /// 1. Replaces internal indices with fresh IDs (sim_internal_inds)
+    /// 2. Converts both TreeTNs to full tensors
+    /// 3. Contracts along common site indices
+    ///
+    /// The result is a single tensor, not a TreeTN. This is useful for:
+    /// - Testing correctness of more sophisticated algorithms like `contract_zipup`
+    /// - Computing exact results for small networks
+    ///
+    /// # Arguments
+    /// * `other` - The other TreeTN to contract with (must have same topology)
+    ///
+    /// # Returns
+    /// A tensor representing the contracted result.
+    ///
+    /// # Note
+    /// This method is O(exp(n)) in both time and memory where n is the number of nodes.
+    /// Use `contract_zipup` for efficient contraction of large networks.
+    pub fn contract_naive(
+        &self,
+        other: &Self,
+    ) -> Result<TensorDynLen<Id, Symm>>
+    where
+        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId> + std::fmt::Debug,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: Ord,
+    {
+        // 1. Verify topologies are compatible
+        if !self.same_topology(other) {
+            return Err(anyhow::anyhow!("contract_naive: networks have incompatible topologies"));
+        }
+
+        // 2. Replace internal indices with fresh IDs to avoid collision
+        let tn1 = self.sim_internal_inds();
+        let tn2 = other.sim_internal_inds();
+
+        // 3. Convert both networks to full tensors
+        let tensor1 = tn1.contract_to_tensor()
+            .map_err(|e| anyhow::anyhow!("contract_naive: failed to contract tn1: {}", e))?;
+        let tensor2 = tn2.contract_to_tensor()
+            .map_err(|e| anyhow::anyhow!("contract_naive: failed to contract tn2: {}", e))?;
+
+        // 4. Find common indices (site indices) to contract
+        let common = common_inds(&tensor1.indices, &tensor2.indices);
+
+        // 5. Contract along common indices
+        if common.is_empty() {
+            // Outer product when no common indices
+            tensor1.outer_product(&tensor2)
+        } else {
+            let pairs: Vec<_> = common.iter().map(|idx| (idx.clone(), idx.clone())).collect();
+            tensor1.tensordot(&tensor2, &pairs)
+        }
     }
 
     /// Validate that `canonical_center` and edge `ortho_towards` are consistent.
@@ -2537,6 +2942,131 @@ where
     {
         let taken = std::mem::take(self);
         match taken.truncate_with(canonical_center, form, rtol, max_rank) {
+            Ok(truncated) => {
+                *self = truncated;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    // ========================================================================
+    // Truncation methods (by node name V)
+    // ========================================================================
+
+    /// Truncate the tree tensor network towards the specified center nodes (by name).
+    ///
+    /// Uses SVD (Unitary form) for truncation by default.
+    ///
+    /// # Arguments
+    /// * `canonical_center` - The node names that will serve as the truncation center(s)
+    /// * `rtol` - Optional relative tolerance for truncation
+    /// * `max_rank` - Optional maximum bond dimension
+    pub fn truncate_by_names(
+        self,
+        canonical_center: impl IntoIterator<Item = V>,
+        rtol: Option<f64>,
+        max_rank: Option<usize>,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+    {
+        self.truncate_by_names_with(canonical_center, CanonicalForm::Unitary, rtol, max_rank)
+    }
+
+    /// Truncate the tree tensor network with a specified algorithm (by node name).
+    ///
+    /// # Arguments
+    /// * `canonical_center` - The node names that will serve as the truncation center(s)
+    /// * `form` - The canonical form / algorithm to use
+    /// * `rtol` - Optional relative tolerance for truncation
+    /// * `max_rank` - Optional maximum bond dimension
+    pub fn truncate_by_names_with(
+        self,
+        canonical_center: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+        rtol: Option<f64>,
+        max_rank: Option<usize>,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+    {
+        // Convert node names to NodeIndex
+        let center_indices: Vec<NodeIndex> = canonical_center
+            .into_iter()
+            .filter_map(|name| self.node_index(&name))
+            .collect();
+
+        if center_indices.is_empty() {
+            return Err(anyhow::anyhow!("No valid center nodes found"))
+                .context("truncate_by_names_with: all specified node names must exist in the network");
+        }
+
+        // Delegate to the NodeIndex-based implementation
+        self.truncate_with(center_indices, form, rtol, max_rank)
+    }
+
+    /// Truncate the tree tensor network in-place (by node name).
+    ///
+    /// Uses SVD (Unitary form) for truncation by default.
+    ///
+    /// # Arguments
+    /// * `canonical_center` - The node names that will serve as the truncation center(s)
+    /// * `rtol` - Optional relative tolerance for truncation
+    /// * `max_rank` - Optional maximum bond dimension
+    pub fn truncate_by_names_mut(
+        &mut self,
+        canonical_center: impl IntoIterator<Item = V>,
+        rtol: Option<f64>,
+        max_rank: Option<usize>,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+        Self: Default,
+    {
+        self.truncate_by_names_with_mut(canonical_center, CanonicalForm::Unitary, rtol, max_rank)
+    }
+
+    /// Truncate the tree tensor network in-place with a specified algorithm (by node name).
+    ///
+    /// # Arguments
+    /// * `canonical_center` - The node names that will serve as the truncation center(s)
+    /// * `form` - The canonical form / algorithm to use
+    /// * `rtol` - Optional relative tolerance for truncation
+    /// * `max_rank` - Optional maximum bond dimension
+    pub fn truncate_by_names_with_mut(
+        &mut self,
+        canonical_center: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+        rtol: Option<f64>,
+        max_rank: Option<usize>,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+        Self: Default,
+    {
+        // Convert node names to NodeIndex
+        let center_indices: Vec<NodeIndex> = canonical_center
+            .into_iter()
+            .filter_map(|name| self.node_index(&name))
+            .collect();
+
+        if center_indices.is_empty() {
+            return Err(anyhow::anyhow!("No valid center nodes found"))
+                .context("truncate_by_names_with_mut: all specified node names must exist in the network");
+        }
+
+        // Delegate to the owned truncate_with (using mem::take pattern)
+        let taken = std::mem::take(self);
+        match taken.truncate_with(center_indices, form, rtol, max_rank) {
             Ok(truncated) => {
                 *self = truncated;
                 Ok(())

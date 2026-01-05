@@ -354,6 +354,36 @@ where
         }
     }
 
+    /// Compute edges to canonicalize from leaves to target, returning node names.
+    ///
+    /// This is similar to `edges_to_canonicalize(None, target)` but returns
+    /// `(from_name, to_name)` pairs instead of `(NodeIndex, NodeIndex)`.
+    ///
+    /// Useful for operations that work with two networks that have the same
+    /// topology but different NodeIndex values (e.g., contract_zipup).
+    ///
+    /// # Arguments
+    /// * `target` - Target node name for the orthogonality center
+    ///
+    /// # Returns
+    /// `None` if target node doesn't exist, otherwise a vector of `(from, to)` pairs
+    /// where `from` is the node being processed and `to` is its parent (towards target).
+    pub fn edges_to_canonicalize_by_names(&self, target: &NodeName) -> Option<Vec<(NodeName, NodeName)>> {
+        let target_idx = self.node_index(target)?;
+        let edges = self.edges_to_canonicalize(None, target_idx);
+
+        let result: Vec<_> = edges
+            .into_iter()
+            .filter_map(|(from_idx, to_idx)| {
+                let from_name = self.node_name(from_idx)?.clone();
+                let to_name = self.node_name(to_idx)?.clone();
+                Some((from_name, to_name))
+            })
+            .collect();
+
+        Some(result)
+    }
+
     /// Compute parent edges for each node in the given order.
     fn compute_parent_edges(&self, nodes: &[NodeIndex], root: NodeIndex) -> CanonicalizeEdges {
         let g = self.graph.graph();

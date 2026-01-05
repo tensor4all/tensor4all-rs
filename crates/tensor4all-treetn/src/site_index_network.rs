@@ -148,6 +148,38 @@ where
         self.topology.edge_count()
     }
 
+    /// Get a reference to the underlying topology (NodeNameNetwork).
+    pub fn topology(&self) -> &NodeNameNetwork<NodeName> {
+        &self.topology
+    }
+
+    /// Get all edges as pairs of node names.
+    ///
+    /// Returns an iterator of `(NodeName, NodeName)` pairs.
+    pub fn edges(&self) -> impl Iterator<Item = (NodeName, NodeName)> + '_ {
+        let graph = self.topology.graph();
+        graph.edge_indices().filter_map(move |edge| {
+            let (a, b) = graph.edge_endpoints(edge)?;
+            let name_a = self.topology.node_name(a)?.clone();
+            let name_b = self.topology.node_name(b)?.clone();
+            Some((name_a, name_b))
+        })
+    }
+
+    /// Get all neighbors of a node.
+    ///
+    /// Returns an iterator of neighbor node names.
+    pub fn neighbors(&self, node_name: &NodeName) -> impl Iterator<Item = NodeName> + '_ {
+        let node_idx = self.topology.node_index(node_name);
+        let graph = self.topology.graph();
+        let topology = &self.topology;
+
+        node_idx
+            .into_iter()
+            .flat_map(move |idx| graph.neighbors(idx))
+            .filter_map(move |n| topology.node_name(n).cloned())
+    }
+
     /// Get a reference to the internal graph.
     pub fn graph(&self) -> &StableGraph<(), (), Undirected> {
         self.topology.graph()
@@ -158,11 +190,6 @@ where
     /// **Warning**: Directly modifying the internal graph can break consistency.
     pub fn graph_mut(&mut self) -> &mut StableGraph<(), (), Undirected> {
         self.topology.graph_mut()
-    }
-
-    /// Get a reference to the underlying topology (NodeNameNetwork).
-    pub fn topology(&self) -> &NodeNameNetwork<NodeName> {
-        &self.topology
     }
 
     /// Check if two SiteIndexNetworks have compatible topology and site space.
@@ -223,6 +250,16 @@ where
         target: NodeIndex,
     ) -> CanonicalizeEdges {
         self.topology.edges_to_canonicalize(current_region, target)
+    }
+
+    /// Compute edges to canonicalize from leaves to target, returning node names.
+    ///
+    /// This is similar to `edges_to_canonicalize(None, target)` but returns
+    /// `(from_name, to_name)` pairs instead of `(NodeIndex, NodeIndex)`.
+    ///
+    /// See [`NodeNameNetwork::edges_to_canonicalize_by_names`] for details.
+    pub fn edges_to_canonicalize_by_names(&self, target: &NodeName) -> Option<Vec<(NodeName, NodeName)>> {
+        self.topology.edges_to_canonicalize_by_names(target)
     }
 }
 
