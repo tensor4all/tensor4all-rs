@@ -353,3 +353,135 @@ fn test_replaceinds_length_mismatch() {
     let _replaced = tensor.replaceinds(&[i.clone()], &[new_i.clone(), new_j.clone()]);
 }
 
+// ============================================================================
+// Complex Conjugation Tests
+// ============================================================================
+
+#[test]
+fn test_storage_conj_f64() {
+    use tensor4all_core_tensor::storage::DenseStorageF64;
+
+    let data = vec![1.0, 2.0, 3.0, 4.0];
+    let storage = Storage::DenseF64(DenseStorageF64::from_vec(data.clone()));
+    let conj_storage = storage.conj();
+
+    // For real numbers, conj is identity
+    match conj_storage {
+        Storage::DenseF64(v) => {
+            assert_eq!(v.as_slice(), &data);
+        }
+        _ => panic!("Expected DenseF64"),
+    }
+}
+
+#[test]
+fn test_storage_conj_c64() {
+    use tensor4all_core_tensor::storage::DenseStorageC64;
+
+    let data = vec![
+        Complex64::new(1.0, 2.0),
+        Complex64::new(3.0, -4.0),
+        Complex64::new(0.0, 5.0),
+    ];
+    let storage = Storage::DenseC64(DenseStorageC64::from_vec(data));
+    let conj_storage = storage.conj();
+
+    match conj_storage {
+        Storage::DenseC64(v) => {
+            let expected = vec![
+                Complex64::new(1.0, -2.0),
+                Complex64::new(3.0, 4.0),
+                Complex64::new(0.0, -5.0),
+            ];
+            assert_eq!(v.as_slice(), &expected);
+        }
+        _ => panic!("Expected DenseC64"),
+    }
+}
+
+#[test]
+fn test_storage_conj_diag_c64() {
+    use tensor4all_core_tensor::storage::DiagStorageC64;
+
+    let data = vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, -2.0)];
+    let storage = Storage::DiagC64(DiagStorageC64::from_vec(data));
+    let conj_storage = storage.conj();
+
+    match conj_storage {
+        Storage::DiagC64(v) => {
+            let expected = vec![Complex64::new(1.0, -1.0), Complex64::new(2.0, 2.0)];
+            assert_eq!(v.as_slice(), &expected);
+        }
+        _ => panic!("Expected DiagC64"),
+    }
+}
+
+#[test]
+fn test_tensor_conj_f64() {
+    use tensor4all_core_tensor::storage::DenseStorageF64;
+
+    let i = Index::new_dyn(2);
+    let data = vec![1.0, 2.0];
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data.clone())));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone()], vec![2], storage);
+
+    let conj_tensor = tensor.conj();
+
+    // Indices should be the same
+    assert_eq!(conj_tensor.indices[0].id, i.id);
+    // Dims should be the same
+    assert_eq!(conj_tensor.dims, vec![2]);
+    // Data should be the same (real conj is identity)
+    match conj_tensor.storage.as_ref() {
+        Storage::DenseF64(v) => {
+            assert_eq!(v.as_slice(), &data);
+        }
+        _ => panic!("Expected DenseF64"),
+    }
+}
+
+#[test]
+fn test_tensor_conj_c64() {
+    use tensor4all_core_tensor::storage::DenseStorageC64;
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let data = vec![
+        Complex64::new(1.0, 1.0),
+        Complex64::new(2.0, -2.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(0.0, 4.0),
+        Complex64::new(-1.0, 1.0),
+        Complex64::new(5.0, 5.0),
+    ];
+    let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data)));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![i.clone(), j.clone()],
+        vec![2, 3],
+        storage,
+    );
+
+    let conj_tensor = tensor.conj();
+
+    // Indices should be preserved
+    assert_eq!(conj_tensor.indices[0].id, i.id);
+    assert_eq!(conj_tensor.indices[1].id, j.id);
+    // Dims should be preserved
+    assert_eq!(conj_tensor.dims, vec![2, 3]);
+    // Data should be conjugated
+    match conj_tensor.storage.as_ref() {
+        Storage::DenseC64(v) => {
+            let expected = vec![
+                Complex64::new(1.0, -1.0),
+                Complex64::new(2.0, 2.0),
+                Complex64::new(3.0, 0.0),
+                Complex64::new(0.0, -4.0),
+                Complex64::new(-1.0, -1.0),
+                Complex64::new(5.0, -5.0),
+            ];
+            assert_eq!(v.as_slice(), &expected);
+        }
+        _ => panic!("Expected DenseC64"),
+    }
+}
+

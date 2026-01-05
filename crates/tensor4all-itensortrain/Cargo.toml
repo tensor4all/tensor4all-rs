@@ -1,0 +1,20 @@
+[package]
+name = "tensor4all-itensortrain"
+version = "0.1.0"
+edition = "2021"
+description = "ITensorMPS.jl-inspired Tensor Train library with orthogonality tracking"
+license = "MIT"
+repository = "https://github.com/tensor4all/tensor4all-rs"
+readme = "README.md"
+keywords = ["tensor", "tensor-train", "mps", "tensor-network"]
+categories = ["science", "mathematics"]
+
+[dependencies]
+tensor4all-core-tensor = { path = "../tensor4all/core-tensor" }
+tensor4all-core-linalg = { path = "../tensor4all/core-linalg" }
+tensor4all-core-common = { path = "../tensor4all/core-common" }
+num-complex = "0.4"
+thiserror = "2.0"
+
+[dev-dependencies]
+approx = "0.5"

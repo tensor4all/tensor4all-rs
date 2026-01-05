@@ -684,6 +684,46 @@ impl Storage {
         }
     }
 
+    /// Complex conjugate of all elements.
+    ///
+    /// For real (f64) storage, returns a copy (conjugate of real is identity).
+    /// For complex (Complex64) storage, conjugates each element.
+    ///
+    /// This is inspired by the `conj` operation in ITensorMPS.jl.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core_tensor::Storage;
+    /// use tensor4all_core_tensor::storage::DenseStorageC64;
+    /// use num_complex::Complex64;
+    ///
+    /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
+    /// let storage = Storage::DenseC64(DenseStorageC64::from_vec(data));
+    /// let conj_storage = storage.conj();
+    ///
+    /// // conj(1+2i) = 1-2i, conj(3-4i) = 3+4i
+    /// ```
+    pub fn conj(&self) -> Self {
+        match self {
+            Storage::DenseF64(v) => {
+                // Real numbers: conj(x) = x
+                Storage::DenseF64(DenseStorageF64::from_vec(v.as_slice().to_vec()))
+            }
+            Storage::DenseC64(v) => {
+                let conj_vec: Vec<Complex64> = v.as_slice().iter().map(|z| z.conj()).collect();
+                Storage::DenseC64(DenseStorageC64::from_vec(conj_vec))
+            }
+            Storage::DiagF64(d) => {
+                // Real numbers: conj(x) = x
+                Storage::DiagF64(DiagStorageF64::from_vec(d.as_slice().to_vec()))
+            }
+            Storage::DiagC64(d) => {
+                let conj_vec: Vec<Complex64> = d.as_slice().iter().map(|z| z.conj()).collect();
+                Storage::DiagC64(DiagStorageC64::from_vec(conj_vec))
+            }
+        }
+    }
+
     /// Combine two f64 storages into Complex64 storage.
     /// real_storage becomes the real part, imag_storage becomes the imaginary part.
     /// Formula: real + i * imag
