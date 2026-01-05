@@ -4,11 +4,13 @@ use std::collections::VecDeque;
 use std::collections::HashSet;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::marker::PhantomData;
 use tensor4all::TensorDynLen;
 use tensor4all::Storage;
 use tensor4all::index::{Index, NoSymmSpace, Symmetry, DynId};
 use tensor4all::index_ops::common_inds;
 use tensor4all::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
+use crate::bond_mode::{BondMode, Einsum, Explicit};
 use crate::connection::Connection;
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -29,11 +31,20 @@ use num_complex::Complex64;
 /// - `Id`: Index ID type
 /// - `Symm`: Symmetry type (default: NoSymmSpace)
 /// - `V`: Node name type for named nodes (default: NodeIndex for backward compatibility)
-pub struct TreeTN<Id, Symm = NoSymmSpace, V = NodeIndex>
+/// - `Mode`: Bond mode - [`Einsum`] (default) or [`Explicit`]
+///
+/// # Bond Modes
+///
+/// - [`Einsum`]: Nodes are automatically connected by matching index IDs.
+///   Use `TreeTN::new(tensors, node_names)` to create.
+/// - [`Explicit`]: Nodes must be connected manually via `connect()`.
+///   Use `TreeTN::<_, _, _, Explicit>::new()` to create.
+pub struct TreeTN<Id, Symm = NoSymmSpace, V = NodeIndex, Mode = Einsum>
 where
     Id: Clone + std::hash::Hash + Eq,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+    Mode: BondMode,
 {
     /// Named graph wrapper: provides mapping between node names (V) and NodeIndex
     graph: NamedGraph<V, TensorDynLen<Id, Symm>, Connection<Id, Symm>>,
@@ -45,23 +56,20 @@ where
     /// Site index network: manages topology and site space (physical indices).
     /// This structure enables topology and site space comparison independent of tensor data.
     site_index_network: SiteIndexNetwork<V, Id, Symm>,
+    /// Phantom data for Mode type parameter
+    _mode: PhantomData<Mode>,
 }
 
-impl<Id, Symm, V> TreeTN<Id, Symm, V>
+// ============================================================================
+// Einsum mode implementation
+// ============================================================================
+
+impl<Id, Symm, V> TreeTN<Id, Symm, V, Einsum>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
-    /// Create a new empty TreeTN.
-    pub fn new() -> Self {
-        Self {
-            graph: NamedGraph::new(),
-            ortho_region: HashSet::new(),
-            site_index_network: SiteIndexNetwork::new(),
-        }
-    }
-
     /// Create a TreeTN from a list of tensors and node names using einsum rule.
     ///
     /// This function connects tensors that share common indices (by ID).
@@ -82,7 +90,7 @@ where
     ///
     /// # Errors
     /// Returns an error if validation fails or connection fails.
-    pub fn from_tensors_with_names(
+    pub fn new(
         tensors: Vec<TensorDynLen<Id, Symm>>,
         node_names: Vec<V>,
     ) -> Result<Self>
@@ -96,27 +104,32 @@ where
                 tensors.len(),
                 node_names.len()
             ))
-            .context("from_tensors_with_names: tensors and node_names must have the same length");
+            .context("TreeTN::new: tensors and node_names must have the same length");
         }
 
         // Create empty TreeTN
-        let mut treetn = Self::new();
+        let mut treetn = Self {
+            graph: NamedGraph::new(),
+            ortho_region: HashSet::new(),
+            site_index_network: SiteIndexNetwork::new(),
+            _mode: PhantomData,
+        };
 
         // Step 1: Add all tensors as nodes and collect NodeIndex mappings
         let mut node_indices = Vec::with_capacity(tensors.len());
         for (tensor, node_name) in tensors.into_iter().zip(node_names.into_iter()) {
-            let node_idx = treetn.add_tensor_with_name(node_name, tensor)?;
+            let node_idx = treetn.add_tensor_internal(node_name, tensor)?;
             node_indices.push(node_idx);
         }
 
         // Step 2: Build a map from index ID to (node_index, index) pairs in O(n) time
         // Key: index ID, Value: vector of (NodeIndex, Index) pairs
         let mut index_map: HashMap<Id, Vec<(NodeIndex, Index<Id, Symm>)>> = HashMap::new();
-        
+
         for node_idx in &node_indices {
             let tensor = treetn.tensor(*node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_idx))?;
-            
+
             for index in &tensor.indices {
                 index_map
                     .entry(index.id.clone())
@@ -138,8 +151,8 @@ where
                     // Index appears in exactly 2 tensors - connect them
                     let (node_a, index_a) = &nodes_with_index[0];
                     let (node_b, index_b) = &nodes_with_index[1];
-                    
-                    treetn.connect(*node_a, index_a, *node_b, index_b)
+
+                    treetn.connect_internal(*node_a, index_a, *node_b, index_b)
                         .with_context(|| format!(
                             "Failed to connect nodes {:?} and {:?} via index ID {:?}",
                             node_a, node_b, index_id
@@ -151,12 +164,35 @@ where
                         "Index ID {:?} appears in {} tensors, but TreeTN requires exactly 2 (tree structure)",
                         index_id, n
                     ))
-                    .context("from_tensors_with_names: each bond index must connect exactly 2 nodes");
+                    .context("TreeTN::new: each bond index must connect exactly 2 nodes");
                 }
             }
         }
 
         Ok(treetn)
+    }
+}
+
+// ============================================================================
+// Explicit mode implementation
+// ============================================================================
+
+impl<Id, Symm, V> TreeTN<Id, Symm, V, Explicit>
+where
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
+    Symm: Clone + Symmetry,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    /// Create a new empty TreeTN with explicit bond mode.
+    ///
+    /// Use `add_tensor()` to add tensors and `connect()` to establish bonds manually.
+    pub fn new() -> Self {
+        Self {
+            graph: NamedGraph::new(),
+            ortho_region: HashSet::new(),
+            site_index_network: SiteIndexNetwork::new(),
+            _mode: PhantomData,
+        }
     }
 
     /// Add a tensor to the network with a node name.
@@ -165,52 +201,158 @@ where
     ///
     /// Also updates the site_index_network with the physical indices (all indices initially,
     /// as no connections exist yet).
-    pub fn add_tensor_with_name(&mut self, node_name: V, tensor: TensorDynLen<Id, Symm>) -> Result<NodeIndex> {
-        // Extract physical indices: initially all indices are physical (no connections yet)
-        let physical_indices: HashSet<Index<Id, Symm>> = tensor.indices.iter().cloned().collect();
-        
-        // Add to graph
-        let node_idx = self.graph.add_node(node_name.clone(), tensor)
-            .map_err(|e| anyhow::anyhow!(e))?;
-        
-        // Add to site_index_network
-        self.site_index_network.add_node(node_name, physical_indices)
-            .map_err(|e| anyhow::anyhow!("Failed to add node to site_index_network: {}", e))?;
-        
-        Ok(node_idx)
+    pub fn add_tensor(&mut self, node_name: V, tensor: TensorDynLen<Id, Symm>) -> Result<NodeIndex> {
+        self.add_tensor_internal(node_name, tensor)
     }
 
-    /// Add a tensor to the network (backward compatibility for V = NodeIndex).
+    /// Add a tensor to the network using NodeIndex as the node name.
     ///
-    /// This method only works when `V = NodeIndex`. For other node name types, use `add_tensor_with_name` instead.
+    /// This method only works when `V = NodeIndex`.
     ///
     /// Returns the NodeIndex for the newly added tensor.
-    ///
-    /// Also updates the site_index_network with the physical indices.
-    pub fn add_tensor(&mut self, tensor: TensorDynLen<Id, Symm>) -> NodeIndex
+    pub fn add_tensor_auto_name(&mut self, tensor: TensorDynLen<Id, Symm>) -> NodeIndex
     where
         V: From<NodeIndex> + Into<NodeIndex>,
     {
         // For V = NodeIndex, we need to add the node first to get a NodeIndex,
         // then use that NodeIndex as the node name
-        // This is a bit awkward, but necessary for backward compatibility
         let node = self.graph.graph_mut().add_node(tensor);
-        // Register the node as a named node (for V = NodeIndex, the node name is the same as the node)
-        // We need to get the tensor back to register it, but we can't clone it
-        // So we'll use a workaround: remove and re-add
         let tensor = self.graph.graph_mut().remove_node(node).unwrap();
-        
+
         // Extract physical indices: initially all indices are physical (no connections yet)
         let physical_indices: HashSet<Index<Id, Symm>> = tensor.indices.iter().cloned().collect();
-        
+
         // Add to graph with node name
         let _ = self.graph.add_node(V::from(node), tensor);
-        
+
         // Add to site_index_network
         let _ = self.site_index_network.add_node(V::from(node), physical_indices);
-        
+
         node
     }
+
+    /// Connect two tensors with a bond.
+    ///
+    /// The indices must exist in the respective tensors and have matching dimensions.
+    /// The connection's `index_source` will correspond to `node_a` and `index_target` to `node_b`.
+    pub fn connect(
+        &mut self,
+        node_a: NodeIndex,
+        index_a: &Index<Id, Symm>,
+        node_b: NodeIndex,
+        index_b: &Index<Id, Symm>,
+    ) -> Result<EdgeIndex> {
+        self.connect_internal(node_a, index_a, node_b, index_b)
+    }
+}
+
+// ============================================================================
+// Common implementation (both modes)
+// ============================================================================
+
+impl<Id, Symm, V, Mode> TreeTN<Id, Symm, V, Mode>
+where
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
+    Symm: Clone + Symmetry,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+    Mode: BondMode,
+{
+    // ------------------------------------------------------------------------
+    // Internal methods (used by mode-specific methods)
+    // ------------------------------------------------------------------------
+
+    /// Internal method to add a tensor with a node name.
+    fn add_tensor_internal(&mut self, node_name: V, tensor: TensorDynLen<Id, Symm>) -> Result<NodeIndex> {
+        // Extract physical indices: initially all indices are physical (no connections yet)
+        let physical_indices: HashSet<Index<Id, Symm>> = tensor.indices.iter().cloned().collect();
+
+        // Add to graph
+        let node_idx = self.graph.add_node(node_name.clone(), tensor)
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        // Add to site_index_network
+        self.site_index_network.add_node(node_name, physical_indices)
+            .map_err(|e| anyhow::anyhow!("Failed to add node to site_index_network: {}", e))?;
+
+        Ok(node_idx)
+    }
+
+    /// Internal method to connect two tensors.
+    fn connect_internal(
+        &mut self,
+        node_a: NodeIndex,
+        index_a: &Index<Id, Symm>,
+        node_b: NodeIndex,
+        index_b: &Index<Id, Symm>,
+    ) -> Result<EdgeIndex> {
+        // Validate that nodes exist
+        if !self.graph.contains_node(node_a) || !self.graph.contains_node(node_b) {
+            return Err(anyhow::anyhow!("One or both nodes do not exist"))
+                .context("Failed to connect tensors");
+        }
+
+        // Validate that indices exist in respective tensors
+        let tensor_a = self.tensor(node_a)
+            .ok_or_else(|| anyhow::anyhow!("Tensor for node_a not found"))?;
+        let tensor_b = self.tensor(node_b)
+            .ok_or_else(|| anyhow::anyhow!("Tensor for node_b not found"))?;
+
+        // Check that indices exist in tensors (by ID)
+        let has_index_a = tensor_a.indices.iter().any(|idx| idx.id == index_a.id);
+        let has_index_b = tensor_b.indices.iter().any(|idx| idx.id == index_b.id);
+
+        if !has_index_a {
+            return Err(anyhow::anyhow!("Index not found in tensor_a"))
+                .context("Failed to connect: index_a must exist in tensor_a");
+        }
+        if !has_index_b {
+            return Err(anyhow::anyhow!("Index not found in tensor_b"))
+                .context("Failed to connect: index_b must exist in tensor_b");
+        }
+
+        // Clone indices for the connection
+        let index_a_clone = tensor_a.indices.iter()
+            .find(|idx| idx.id == index_a.id)
+            .unwrap()
+            .clone();
+        let index_b_clone = tensor_b.indices.iter()
+            .find(|idx| idx.id == index_b.id)
+            .unwrap()
+            .clone();
+
+        // Get node names for site_index_network (before mutable borrow)
+        let node_name_a = self.graph.node_name(node_a)
+            .ok_or_else(|| anyhow::anyhow!("Node name for node_a not found"))?
+            .clone();
+        let node_name_b = self.graph.node_name(node_b)
+            .ok_or_else(|| anyhow::anyhow!("Node name for node_b not found"))?
+            .clone();
+
+        // Create connection
+        let connection = Connection::new(index_a_clone.clone(), index_b_clone.clone())
+            .context("Failed to create connection")?;
+
+        // Add edge to graph
+        let edge_idx = self.graph.graph_mut().add_edge(node_a, node_b, connection);
+
+        // Add edge to site_index_network
+        self.site_index_network.add_edge(&node_name_a, &node_name_b)
+            .map_err(|e| anyhow::anyhow!("Failed to add edge to site_index_network: {}", e))?;
+
+        // Update physical indices: remove connection indices from physical indices
+        if let Some(site_space_a) = self.site_index_network.site_space_mut(&node_name_a) {
+            site_space_a.remove(&index_a_clone);
+        }
+        if let Some(site_space_b) = self.site_index_network.site_space_mut(&node_name_b) {
+            site_space_b.remove(&index_b_clone);
+        }
+
+        Ok(edge_idx)
+    }
+
+    // ------------------------------------------------------------------------
+    // Public accessors
+    // ------------------------------------------------------------------------
 
     /// Get a reference to a tensor by NodeIndex.
     pub fn tensor(&self, node: NodeIndex) -> Option<&TensorDynLen<Id, Symm>> {
@@ -250,7 +392,7 @@ where
             .into_iter()
             .cloned()
             .collect();
-        
+
         // Check if all connection indices are present in the new tensor
         let common = common_inds(&connection_indices, &new_tensor.indices);
         if common.len() != connection_indices.len() {
@@ -287,86 +429,6 @@ where
         }
 
         Ok(old_tensor)
-    }
-
-    /// Connect two tensors with a bond.
-    ///
-    /// The indices must exist in the respective tensors and have matching dimensions.
-    /// The connection's `index_source` will correspond to `node_a` and `index_target` to `node_b`.
-    pub fn connect(
-        &mut self,
-        node_a: NodeIndex,
-        index_a: &Index<Id, Symm>,
-        node_b: NodeIndex,
-        index_b: &Index<Id, Symm>,
-    ) -> Result<EdgeIndex> {
-        // Validate that nodes exist
-        if !self.graph.contains_node(node_a) || !self.graph.contains_node(node_b) {
-            return Err(anyhow::anyhow!("One or both nodes do not exist"))
-                .context("Failed to connect tensors");
-        }
-
-        // Validate that indices exist in respective tensors
-        let tensor_a = self.tensor(node_a)
-            .ok_or_else(|| anyhow::anyhow!("Tensor for node_a not found"))?;
-        let tensor_b = self.tensor(node_b)
-            .ok_or_else(|| anyhow::anyhow!("Tensor for node_b not found"))?;
-
-        // Check that indices exist in tensors (by ID)
-        let has_index_a = tensor_a.indices.iter().any(|idx| idx.id == index_a.id);
-        let has_index_b = tensor_b.indices.iter().any(|idx| idx.id == index_b.id);
-
-        if !has_index_a {
-            return Err(anyhow::anyhow!("Index not found in tensor_a"))
-                .context("Failed to connect: index_a must exist in tensor_a");
-        }
-        if !has_index_b {
-            return Err(anyhow::anyhow!("Index not found in tensor_b"))
-                .context("Failed to connect: index_b must exist in tensor_b");
-        }
-
-        // Clone indices for the connection
-        // Find the actual Index objects from the tensors to preserve all metadata
-        let index_a_clone = tensor_a.indices.iter()
-            .find(|idx| idx.id == index_a.id)
-            .unwrap()
-            .clone();
-        let index_b_clone = tensor_b.indices.iter()
-            .find(|idx| idx.id == index_b.id)
-            .unwrap()
-            .clone();
-
-        // Get node names for site_index_network (before mutable borrow)
-        let node_name_a = self.graph.node_name(node_a)
-            .ok_or_else(|| anyhow::anyhow!("Node name for node_a not found"))?
-            .clone();
-        let node_name_b = self.graph.node_name(node_b)
-            .ok_or_else(|| anyhow::anyhow!("Node name for node_b not found"))?
-            .clone();
-
-        // Create connection
-        // index_source corresponds to node_a, index_target to node_b
-        let connection = Connection::new(index_a_clone.clone(), index_b_clone.clone())
-            .context("Failed to create connection")?;
-
-        // Add edge to graph
-        // petgraph will assign source/target based on the order (a, b)
-        let edge_idx = self.graph.graph_mut().add_edge(node_a, node_b, connection);
-        
-        // Add edge to site_index_network
-        self.site_index_network.add_edge(&node_name_a, &node_name_b)
-            .map_err(|e| anyhow::anyhow!("Failed to add edge to site_index_network: {}", e))?;
-        
-        // Update physical indices: remove connection indices from physical indices
-        // Connection indices are no longer physical (they are bond indices)
-        if let Some(site_space_a) = self.site_index_network.site_space_mut(&node_name_a) {
-            site_space_a.remove(&index_a_clone);
-        }
-        if let Some(site_space_b) = self.site_index_network.site_space_mut(&node_name_b) {
-            site_space_b.remove(&index_b_clone);
-        }
-        
-        Ok(edge_idx)
     }
 
     /// Get a reference to a connection by EdgeIndex.
@@ -857,8 +919,13 @@ where
             edge_info.insert(key, (bond_dim_a, bond_dim_b, shared_index));
         }
 
-        // Create new TreeTN
-        let mut result = Self::new();
+        // Create new TreeTN (empty)
+        let mut result = Self {
+            graph: NamedGraph::new(),
+            ortho_region: HashSet::new(),
+            site_index_network: SiteIndexNetwork::new(),
+            _mode: PhantomData,
+        };
 
         // Process each node
         for node_name in &node_names {
@@ -1070,7 +1137,7 @@ where
             };
 
             let new_tensor = TensorDynLen::new(canonical_indices, canonical_dims, Arc::new(new_storage));
-            result.add_tensor_with_name(node_name.clone(), new_tensor)?;
+            result.add_tensor_internal(node_name.clone(), new_tensor)?;
         }
 
         // Add connections using the SAME shared index on both endpoints
@@ -1080,7 +1147,7 @@ where
             let tgt_node = result.graph.node_index(tgt_name)
                 .ok_or_else(|| anyhow::anyhow!("Target node not found in result"))?;
             // Use the same shared_idx for both endpoints - this ensures contraction works
-            result.connect(src_node, shared_idx, tgt_node, shared_idx)?;
+            result.connect_internal(src_node, shared_idx, tgt_node, shared_idx)?;
         }
 
         // Clear ortho_region (sum is not canonized)
@@ -1612,7 +1679,7 @@ where
     }
 }
 
-impl<Id, Symm, V> Default for TreeTN<Id, Symm, V>
+impl<Id, Symm, V> Default for TreeTN<Id, Symm, V, Explicit>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
@@ -1630,11 +1697,12 @@ where
 use std::ops::Mul;
 use std::sync::Arc;
 
-impl<Id, Symm, V> Mul<f64> for TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> Mul<f64> for TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
 {
     type Output = Self;
 
@@ -1724,11 +1792,12 @@ where
     }
 }
 
-impl<Id, Symm, V> Mul<Complex64> for TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> Mul<Complex64> for TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
 {
     type Output = Self;
 
@@ -1811,26 +1880,28 @@ where
 }
 
 // Implement Mul with reference to avoid consuming TreeTN
-impl<Id, Symm, V> Mul<f64> for &TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> Mul<f64> for &TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
 {
-    type Output = TreeTN<Id, Symm, V>;
+    type Output = TreeTN<Id, Symm, V, Mode>;
 
     fn mul(self, a: f64) -> Self::Output {
         self.clone() * a
     }
 }
 
-impl<Id, Symm, V> Mul<Complex64> for &TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> Mul<Complex64> for &TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
 {
-    type Output = TreeTN<Id, Symm, V>;
+    type Output = TreeTN<Id, Symm, V, Mode>;
 
     fn mul(self, a: Complex64) -> Self::Output {
         self.clone() * a
@@ -1838,26 +1909,29 @@ where
 }
 
 // Clone implementation for TreeTN
-impl<Id, Symm, V> Clone for TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> Clone for TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+    Mode: BondMode,
 {
     fn clone(&self) -> Self {
         Self {
             graph: self.graph.clone(),
             ortho_region: self.ortho_region.clone(),
             site_index_network: self.site_index_network.clone(),
+            _mode: PhantomData,
         }
     }
 }
 
-impl<Id, Symm, V> std::fmt::Debug for TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> std::fmt::Debug for TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry + std::fmt::Debug,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+    Mode: BondMode,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeTN")
@@ -1872,11 +1946,12 @@ where
 // TensorLike implementation for TreeTN
 // ============================================================================
 
-impl<Id, Symm, V> tensor4all::TensorLike for TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> tensor4all::TensorLike for TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     Symm: Clone + Symmetry + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
+    Mode: BondMode,
 {
     type Id = Id;
     type Symm = Symm;
@@ -2262,7 +2337,7 @@ impl<V: Clone + Hash + Eq> TreeTopology<V> {
 pub fn decompose_tensor_to_treetn<Id, Symm, V>(
     tensor: &TensorDynLen<Id, Symm>,
     topology: &TreeTopology<V>,
-) -> Result<TreeTN<Id, Symm, V>>
+) -> Result<TreeTN<Id, Symm, V, Explicit>>
 where
     Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
@@ -2299,7 +2374,7 @@ pub fn decompose_tensor_to_treetn_with<Id, Symm, V>(
     tensor: &TensorDynLen<Id, Symm>,
     topology: &TreeTopology<V>,
     alg: FactorizeAlg,
-) -> Result<TreeTN<Id, Symm, V>>
+) -> Result<TreeTN<Id, Symm, V, Explicit>>
 where
     Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
@@ -2309,9 +2384,9 @@ where
 
     if topology.nodes.len() == 1 {
         // Single node - just wrap the tensor
-        let mut tn = TreeTN::<Id, Symm, V>::new();
+        let mut tn = TreeTN::<Id, Symm, V, Explicit>::new();
         let node_name = topology.nodes.keys().next().unwrap().clone();
-        tn.add_tensor_with_name(node_name, tensor.clone())?;
+        tn.add_tensor(node_name, tensor.clone())?;
         return Ok(tn);
     }
 
@@ -2448,11 +2523,11 @@ where
     node_tensors.insert(root_node.clone(), current_tensor);
 
     // Build the TreeTN
-    let mut tn = TreeTN::<Id, Symm, V>::new();
+    let mut tn = TreeTN::<Id, Symm, V, Explicit>::new();
 
     // Add all tensors
     for (node_name, t) in &node_tensors {
-        tn.add_tensor_with_name(node_name.clone(), t.clone())?;
+        tn.add_tensor(node_name.clone(), t.clone())?;
     }
 
     // Add connections

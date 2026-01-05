@@ -1,4 +1,4 @@
-use tensor4all_treetn::{Connection, TreeTN, TreeTopology};
+use tensor4all_treetn::{Connection, TreeTN, TreeTopology, Explicit};
 use tensor4all::index::{DefaultIndex as Index, DynId};
 use tensor4all::{TensorDynLen, Storage};
 use tensor4all::NoSymmSpace;
@@ -99,7 +99,7 @@ fn test_connection_ortho_towards_invalid() {
 
 #[test]
 fn test_treetn_add_tensor() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -108,7 +108,7 @@ fn test_treetn_add_tensor() {
     let storage = Arc::new(Storage::new_dense_f64(6));
     let tensor = TensorDynLen::new(indices, dims, storage);
     
-    let node = tn.add_tensor(tensor);
+    let node = tn.add_tensor_auto_name(tensor);
     assert_eq!(tn.node_count(), 1);
     
     let retrieved = tn.tensor(node);
@@ -118,7 +118,7 @@ fn test_treetn_add_tensor() {
 
 #[test]
 fn test_treetn_replace_tensor() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -127,7 +127,7 @@ fn test_treetn_replace_tensor() {
     let storage = Arc::new(Storage::new_dense_f64(6));
     let tensor = TensorDynLen::new(indices, dims, storage);
     
-    let node = tn.add_tensor(tensor);
+    let node = tn.add_tensor_auto_name(tensor);
     assert_eq!(tn.tensor(node).unwrap().dims, vec![2, 3]);
     
     // Replace with a new tensor
@@ -148,7 +148,7 @@ fn test_treetn_replace_tensor() {
 
 #[test]
 fn test_treetn_replace_tensor_invalid_node() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -166,7 +166,7 @@ fn test_treetn_replace_tensor_invalid_node() {
 
 #[test]
 fn test_treetn_replace_tensor_missing_connection_index() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     // Create two connected tensors
     let i1 = Index::new_dyn(2);
@@ -175,7 +175,7 @@ fn test_treetn_replace_tensor_missing_connection_index() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
@@ -183,7 +183,7 @@ fn test_treetn_replace_tensor_missing_connection_index() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     // Connect via j1 and i2
     tn.connect(node1, &j1, node2, &i2).unwrap();
@@ -210,7 +210,7 @@ fn test_treetn_replace_tensor_missing_connection_index() {
 
 #[test]
 fn test_treetn_replace_tensor_with_connection() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     // Create two connected tensors
     let i1 = Index::new_dyn(2);
@@ -219,7 +219,7 @@ fn test_treetn_replace_tensor_with_connection() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
@@ -227,7 +227,7 @@ fn test_treetn_replace_tensor_with_connection() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     // Connect via j1 and i2
     tn.connect(node1, &j1, node2, &i2).unwrap();
@@ -247,7 +247,7 @@ fn test_treetn_replace_tensor_with_connection() {
 
 #[test]
 fn test_treetn_connect() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     // Create two tensors
     let i1 = Index::new_dyn(2);
@@ -256,7 +256,7 @@ fn test_treetn_connect() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
@@ -264,7 +264,7 @@ fn test_treetn_connect() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     // Connect via j1 and i2 (both dimension 3)
     let edge = tn.connect(node1, &j1, node2, &i2);
@@ -279,7 +279,7 @@ fn test_treetn_connect() {
 
 #[test]
 fn test_treetn_connect_dimension_mismatch() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i1 = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
@@ -287,7 +287,7 @@ fn test_treetn_connect_dimension_mismatch() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(5); // Different dimension
     let k2 = Index::new_dyn(4);
@@ -295,7 +295,7 @@ fn test_treetn_connect_dimension_mismatch() {
     let dims2 = vec![5, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(20));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     // Try to connect j1 (dim 3) with i2 (dim 5) - should fail
     // Note: i2 has dimension 5, but j1 has dimension 3, so they can't be connected
@@ -310,7 +310,7 @@ fn test_treetn_connect_dimension_mismatch() {
 
 #[test]
 fn test_treetn_connect_invalid_node() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i1 = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
@@ -318,7 +318,7 @@ fn test_treetn_connect_invalid_node() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     // Create invalid node index
     let invalid_node = NodeIndex::new(999);
@@ -332,7 +332,7 @@ fn test_treetn_connect_invalid_node() {
 
 #[test]
 fn test_treetn_connect_index_not_in_tensor() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i1 = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
@@ -340,7 +340,7 @@ fn test_treetn_connect_index_not_in_tensor() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
@@ -348,7 +348,7 @@ fn test_treetn_connect_index_not_in_tensor() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     // Try to connect with an index that doesn't exist in tensor1
     let fake_index = Index::new_dyn(3);
@@ -360,7 +360,7 @@ fn test_treetn_connect_index_not_in_tensor() {
 
 #[test]
 fn test_treetn_edge_index_for_node() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i1 = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
@@ -368,7 +368,7 @@ fn test_treetn_edge_index_for_node() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
@@ -376,7 +376,7 @@ fn test_treetn_edge_index_for_node() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     let edge = tn.connect(node1, &j1, node2, &i2).unwrap();
     
@@ -398,7 +398,7 @@ fn test_treetn_edge_index_for_node() {
 
 #[test]
 fn test_treetn_replace_edge_bond() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i1 = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
@@ -406,7 +406,7 @@ fn test_treetn_replace_edge_bond() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
@@ -414,7 +414,7 @@ fn test_treetn_replace_edge_bond() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     let edge = tn.connect(node1, &j1, node2, &i2).unwrap();
     assert_eq!(tn.connection(edge).unwrap().bond_dim(), 3);
@@ -429,7 +429,7 @@ fn test_treetn_replace_edge_bond() {
 
 #[test]
 fn test_treetn_replace_edge_bond_mismatch() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i1 = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
@@ -437,7 +437,7 @@ fn test_treetn_replace_edge_bond_mismatch() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
@@ -445,7 +445,7 @@ fn test_treetn_replace_edge_bond_mismatch() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     let edge = tn.connect(node1, &j1, node2, &i2).unwrap();
     
@@ -458,7 +458,7 @@ fn test_treetn_replace_edge_bond_mismatch() {
 
 #[test]
 fn test_treetn_set_edge_ortho_towards() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i1 = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
@@ -466,7 +466,7 @@ fn test_treetn_set_edge_ortho_towards() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
@@ -474,7 +474,7 @@ fn test_treetn_set_edge_ortho_towards() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     let edge = tn.connect(node1, &j1, node2, &i2).unwrap();
     
@@ -502,7 +502,7 @@ fn test_treetn_set_edge_ortho_towards() {
 
 #[test]
 fn test_treetn_set_edge_ortho_towards_invalid() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i1 = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
@@ -510,7 +510,7 @@ fn test_treetn_set_edge_ortho_towards_invalid() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
@@ -518,7 +518,7 @@ fn test_treetn_set_edge_ortho_towards_invalid() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     let edge = tn.connect(node1, &j1, node2, &i2).unwrap();
     
@@ -532,7 +532,7 @@ fn test_treetn_set_edge_ortho_towards_invalid() {
 
 #[test]
 fn test_treetn_validate_tree_simple() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     // Create a simple tree: node1 -- node2
     let i1 = Index::new_dyn(2);
@@ -541,7 +541,7 @@ fn test_treetn_validate_tree_simple() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
@@ -549,7 +549,7 @@ fn test_treetn_validate_tree_simple() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     tn.connect(node1, &j1, node2, &i2).unwrap();
     
@@ -559,7 +559,7 @@ fn test_treetn_validate_tree_simple() {
 
 #[test]
 fn test_treetn_validate_tree_three_nodes() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     // Create a tree: node1 -- node2 -- node3
     let i1 = Index::new_dyn(2);
@@ -568,7 +568,7 @@ fn test_treetn_validate_tree_three_nodes() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let j2 = Index::new_dyn(4);
@@ -576,7 +576,7 @@ fn test_treetn_validate_tree_three_nodes() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     let i3 = Index::new_dyn(4);
     let k3 = Index::new_dyn(5);
@@ -584,7 +584,7 @@ fn test_treetn_validate_tree_three_nodes() {
     let dims3 = vec![4, 5];
     let storage3 = Arc::new(Storage::new_dense_f64(20));
     let tensor3 = TensorDynLen::new(indices3, dims3, storage3);
-    let node3 = tn.add_tensor(tensor3);
+    let node3 = tn.add_tensor_auto_name(tensor3);
     
     tn.connect(node1, &j1, node2, &i2).unwrap();
     tn.connect(node2, &j2, node3, &i3).unwrap();
@@ -595,7 +595,7 @@ fn test_treetn_validate_tree_three_nodes() {
 
 #[test]
 fn test_treetn_validate_tree_cycle() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     // Create a cycle: node1 -- node2 -- node3 -- node1
     let i1 = Index::new_dyn(2);
@@ -605,7 +605,7 @@ fn test_treetn_validate_tree_cycle() {
     let dims1 = vec![2, 3, 4];
     let storage1 = Arc::new(Storage::new_dense_f64(24));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let j2 = Index::new_dyn(5);
@@ -613,7 +613,7 @@ fn test_treetn_validate_tree_cycle() {
     let dims2 = vec![3, 5];
     let storage2 = Arc::new(Storage::new_dense_f64(15));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     let i3 = Index::new_dyn(4);
     let j3 = Index::new_dyn(5);
@@ -621,7 +621,7 @@ fn test_treetn_validate_tree_cycle() {
     let dims3 = vec![4, 5];
     let storage3 = Arc::new(Storage::new_dense_f64(20));
     let tensor3 = TensorDynLen::new(indices3, dims3, storage3);
-    let node3 = tn.add_tensor(tensor3);
+    let node3 = tn.add_tensor_auto_name(tensor3);
     
     tn.connect(node1, &j1, node2, &i2).unwrap();
     tn.connect(node2, &j2, node3, &j3).unwrap();
@@ -633,7 +633,7 @@ fn test_treetn_validate_tree_cycle() {
 
 #[test]
 fn test_treetn_validate_tree_disconnected() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     // Create two disconnected components
     let i1 = Index::new_dyn(2);
@@ -642,7 +642,7 @@ fn test_treetn_validate_tree_disconnected() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
@@ -650,7 +650,7 @@ fn test_treetn_validate_tree_disconnected() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     let i3 = Index::new_dyn(5);
     let j3 = Index::new_dyn(6);
@@ -658,7 +658,7 @@ fn test_treetn_validate_tree_disconnected() {
     let dims3 = vec![5, 6];
     let storage3 = Arc::new(Storage::new_dense_f64(30));
     let tensor3 = TensorDynLen::new(indices3, dims3, storage3);
-    let _node3 = tn.add_tensor(tensor3);
+    let _node3 = tn.add_tensor_auto_name(tensor3);
     
     // Connect node1 and node2, but leave node3 disconnected
     tn.connect(node1, &j1, node2, &i2).unwrap();
@@ -669,21 +669,21 @@ fn test_treetn_validate_tree_disconnected() {
 
 #[test]
 fn test_treetn_validate_tree_empty() {
-    let tn = TreeTN::<DynId>::new();
+    let tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     // Empty graph should be valid
     assert!(tn.validate_tree().is_ok());
 }
 
 #[test]
 fn test_auto_centers_empty() {
-    let tn = TreeTN::<DynId>::new();
+    let tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     assert!(!tn.is_canonized());
     assert!(tn.ortho_region().is_empty());
 }
 
 #[test]
 fn test_set_auto_centers() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -691,7 +691,7 @@ fn test_set_auto_centers() {
     let dims = vec![2, 3];
     let storage = Arc::new(Storage::new_dense_f64(6));
     let tensor = TensorDynLen::new(indices, dims, storage);
-    let node = tn.add_tensor(tensor);
+    let node = tn.add_tensor_auto_name(tensor);
     
     // Initially not canonized
     assert!(!tn.is_canonized());
@@ -706,7 +706,7 @@ fn test_set_auto_centers() {
 
 #[test]
 fn test_set_auto_centers_invalid_node() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let invalid_node = NodeIndex::new(999);
     let result = tn.set_ortho_region(vec![invalid_node]);
@@ -717,7 +717,7 @@ fn test_set_auto_centers_invalid_node() {
 
 #[test]
 fn test_add_remove_auto_center() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i1 = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
@@ -725,7 +725,7 @@ fn test_add_remove_auto_center() {
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::new_dense_f64(6));
     let tensor1 = TensorDynLen::new(indices1, dims1, storage1);
-    let node1 = tn.add_tensor(tensor1);
+    let node1 = tn.add_tensor_auto_name(tensor1);
     
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
@@ -733,7 +733,7 @@ fn test_add_remove_auto_center() {
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::new_dense_f64(12));
     let tensor2 = TensorDynLen::new(indices2, dims2, storage2);
-    let node2 = tn.add_tensor(tensor2);
+    let node2 = tn.add_tensor_auto_name(tensor2);
     
     // Add first node to region
     let result = tn.add_to_ortho_region(node1);
@@ -762,7 +762,7 @@ fn test_add_remove_auto_center() {
 
 #[test]
 fn test_add_auto_center_invalid() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let invalid_node = NodeIndex::new(999);
     let result = tn.add_to_ortho_region(invalid_node);
@@ -771,7 +771,7 @@ fn test_add_auto_center_invalid() {
 
 #[test]
 fn test_clear_auto_centers() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -779,7 +779,7 @@ fn test_clear_auto_centers() {
     let dims = vec![2, 3];
     let storage = Arc::new(Storage::new_dense_f64(6));
     let tensor = TensorDynLen::new(indices, dims, storage);
-    let node = tn.add_tensor(tensor);
+    let node = tn.add_tensor_auto_name(tensor);
     
     tn.set_ortho_region(vec![node]).unwrap();
     assert!(tn.is_canonized());
@@ -791,18 +791,18 @@ fn test_clear_auto_centers() {
 
 #[test]
 fn test_validate_ortho_consistency_requires_connected_auto_centers() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     // Create three nodes, but don't connect them (ortho_region will be disconnected).
     let i1 = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
     let tensor1 = TensorDynLen::new(vec![i1, j1], vec![2, 3], Arc::new(Storage::new_dense_f64(6)));
-    let n1 = tn.add_tensor(tensor1);
+    let n1 = tn.add_tensor_auto_name(tensor1);
 
     let i2 = Index::new_dyn(2);
     let j2 = Index::new_dyn(3);
     let tensor2 = TensorDynLen::new(vec![i2, j2], vec![2, 3], Arc::new(Storage::new_dense_f64(6)));
-    let n2 = tn.add_tensor(tensor2);
+    let n2 = tn.add_tensor_auto_name(tensor2);
 
     // Two centers that are not connected by edges should fail connectivity check.
     tn.set_ortho_region(vec![n1, n2]).unwrap();
@@ -811,18 +811,18 @@ fn test_validate_ortho_consistency_requires_connected_auto_centers() {
 
 #[test]
 fn test_validate_ortho_consistency_none_only_inside_centers() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     // Build a simple chain: n1 -- n2
     let i1 = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
     let tensor1 = TensorDynLen::new(vec![i1.clone(), j1.clone()], vec![2, 3], Arc::new(Storage::new_dense_f64(6)));
-    let n1 = tn.add_tensor(tensor1);
+    let n1 = tn.add_tensor_auto_name(tensor1);
 
     let i2 = Index::new_dyn(3);
     let k2 = Index::new_dyn(4);
     let tensor2 = TensorDynLen::new(vec![i2.clone(), k2.clone()], vec![3, 4], Arc::new(Storage::new_dense_f64(12)));
-    let n2 = tn.add_tensor(tensor2);
+    let n2 = tn.add_tensor_auto_name(tensor2);
 
     let e = tn.connect(n1, &j1, n2, &i2).unwrap();
 
@@ -839,24 +839,24 @@ fn test_validate_ortho_consistency_none_only_inside_centers() {
 
 #[test]
 fn test_validate_ortho_consistency_chain_points_towards_centers() {
-    let mut tn = TreeTN::<DynId>::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     // Build chain: n1 -- n2 -- n3, center is n2.
     let a1 = Index::new_dyn(2);
     let b1 = Index::new_dyn(3);
     let t1 = TensorDynLen::new(vec![a1, b1.clone()], vec![2, 3], Arc::new(Storage::new_dense_f64(6)));
-    let n1 = tn.add_tensor(t1);
+    let n1 = tn.add_tensor_auto_name(t1);
 
     let a2 = Index::new_dyn(3);
     let b2 = Index::new_dyn(4);
     let c2 = Index::new_dyn(5);
     let t2 = TensorDynLen::new(vec![a2.clone(), b2.clone(), c2], vec![3, 4, 5], Arc::new(Storage::new_dense_f64(60)));
-    let n2 = tn.add_tensor(t2);
+    let n2 = tn.add_tensor_auto_name(t2);
 
     let a3 = Index::new_dyn(4);
     let b3 = Index::new_dyn(6);
     let t3 = TensorDynLen::new(vec![a3.clone(), b3], vec![4, 6], Arc::new(Storage::new_dense_f64(24)));
-    let n3 = tn.add_tensor(t3);
+    let n3 = tn.add_tensor_auto_name(t3);
 
     // Connect n1 -- n2 via b1 (dim3) and a2 (dim3)
     let e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
@@ -876,7 +876,7 @@ fn test_validate_ortho_consistency_chain_points_towards_centers() {
 #[test]
 fn test_canonize_simple() {
     // Create a simple 2-node tree: n1 -- n2
-    let mut tn: TreeTN<DynId> = TreeTN::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     let a1 = Index::new_dyn(2);
     let b1 = Index::new_dyn(3);
@@ -893,8 +893,8 @@ fn test_canonize_simple() {
     let storage2 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12])));
     let tensor2: TensorDynLen<DynId> = TensorDynLen::new(indices2, dims2, storage2);
 
-    let n1 = tn.add_tensor(tensor1);
-    let n2 = tn.add_tensor(tensor2);
+    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n2 = tn.add_tensor_auto_name(tensor2);
 
     let _e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
 
@@ -912,7 +912,7 @@ fn test_canonize_simple() {
 #[test]
 fn test_canonize_mixed_storage() {
     // Test canonization with mixed f64 and Complex64 storage
-    let mut tn: TreeTN<DynId> = TreeTN::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     let a1 = Index::new_dyn(2);
     let b1 = Index::new_dyn(3);
@@ -931,8 +931,8 @@ fn test_canonize_mixed_storage() {
     let storage2 = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(vec![Complex64::new(1.0, 0.0); 12])));
     let tensor2: TensorDynLen<DynId> = TensorDynLen::new(indices2, dims2, storage2);
 
-    let n1 = tn.add_tensor(tensor1);
-    let n2 = tn.add_tensor(tensor2);
+    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n2 = tn.add_tensor_auto_name(tensor2);
 
     let _e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
 
@@ -1021,13 +1021,13 @@ fn test_tensor_add_different_indices_fails() {
 
 #[test]
 fn test_treetn_scalar_mul_positive() {
-    let mut tn: TreeTN<DynId> = TreeTN::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
     let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i, j], vec![2, 3], storage);
-    let _node = tn.add_tensor(tensor);
+    let _node = tn.add_tensor_auto_name(tensor);
 
     // Multiply by 4.0
     let tn_scaled = tn * 4.0;
@@ -1046,12 +1046,12 @@ fn test_treetn_scalar_mul_positive() {
 
 #[test]
 fn test_treetn_scalar_mul_negative() {
-    let mut tn: TreeTN<DynId> = TreeTN::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     let i = Index::new_dyn(2);
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 1.0])));
     let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i], vec![2], storage);
-    let _node = tn.add_tensor(tensor);
+    let _node = tn.add_tensor_auto_name(tensor);
 
     // Multiply by -4.0
     let tn_scaled = tn * (-4.0);
@@ -1069,12 +1069,12 @@ fn test_treetn_scalar_mul_negative() {
 
 #[test]
 fn test_treetn_scalar_mul_zero() {
-    let mut tn: TreeTN<DynId> = TreeTN::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     let i = Index::new_dyn(2);
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0])));
     let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i], vec![2], storage);
-    let _node = tn.add_tensor(tensor);
+    let _node = tn.add_tensor_auto_name(tensor);
 
     // Multiply by 0.0
     let tn_scaled = tn * 0.0;
@@ -1094,12 +1094,12 @@ fn test_treetn_scalar_mul_zero() {
 
 #[test]
 fn test_treetn_scalar_mul_complex() {
-    let mut tn: TreeTN<DynId> = TreeTN::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     let i = Index::new_dyn(2);
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 1.0])));
     let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i], vec![2], storage);
-    let _node = tn.add_tensor(tensor);
+    let _node = tn.add_tensor_auto_name(tensor);
 
     // Multiply by a complex scalar
     let tn_scaled = tn * Complex64::new(0.0, 2.0);
@@ -1121,13 +1121,13 @@ fn test_treetn_scalar_mul_complex() {
 
 #[test]
 fn test_treetn_contract_single_node() {
-    let mut tn: TreeTN<DynId> = TreeTN::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
     let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i, j], vec![2, 3], storage);
-    let _node = tn.add_tensor(tensor);
+    let _node = tn.add_tensor_auto_name(tensor);
 
     let result = tn.contract_to_tensor().unwrap();
     assert_eq!(result.dims, vec![2, 3]);
@@ -1135,7 +1135,7 @@ fn test_treetn_contract_single_node() {
 
 #[test]
 fn test_treetn_contract_two_nodes() {
-    let mut tn: TreeTN<DynId> = TreeTN::new();
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     let i = Index::new_dyn(2);
     let j1 = Index::new_dyn(3);
@@ -1145,12 +1145,12 @@ fn test_treetn_contract_two_nodes() {
     // node 1: indices [i, j1] with dims [2, 3]
     let storage1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
     let tensor1: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j1.clone()], vec![2, 3], storage1);
-    let n1 = tn.add_tensor(tensor1);
+    let n1 = tn.add_tensor_auto_name(tensor1);
 
     // node 2: indices [j2, k] with dims [3, 4]
     let storage2 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12])));
     let tensor2: TensorDynLen<DynId> = TensorDynLen::new(vec![j2.clone(), k.clone()], vec![3, 4], storage2);
-    let n2 = tn.add_tensor(tensor2);
+    let n2 = tn.add_tensor_auto_name(tensor2);
 
     // Connect via j1 and j2
     tn.connect(n1, &j1, n2, &j2).unwrap();
@@ -1170,7 +1170,7 @@ fn test_treetn_contract_two_nodes() {
 
 #[test]
 fn test_treetn_contract_empty_fails() {
-    let tn: TreeTN<DynId> = TreeTN::new();
+    let tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     let result = tn.contract_to_tensor();
     assert!(result.is_err());
 }
@@ -1182,8 +1182,8 @@ fn test_treetn_contract_empty_fails() {
 #[test]
 fn test_treetn_add_single_node() {
     // Create two compatible TreeTNs with single nodes
-    let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
-    let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
+    let mut tn_a = TreeTN::<DynId, NoSymmSpace, usize, Explicit>::new();
+    let mut tn_b = TreeTN::<DynId, NoSymmSpace, usize, Explicit>::new();
 
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -1191,12 +1191,12 @@ fn test_treetn_add_single_node() {
     let data_a = vec![1.0; 6];
     let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
     let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage_a);
-    tn_a.add_tensor_with_name(0, tensor_a).unwrap();
+    tn_a.add_tensor(0, tensor_a).unwrap();
 
     let data_b = vec![2.0; 6];
     let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage_b);
-    tn_b.add_tensor_with_name(0, tensor_b).unwrap();
+    tn_b.add_tensor(0, tensor_b).unwrap();
 
     // Add should succeed for compatible networks
     assert!(tn_a.can_add(&tn_b));
@@ -1278,8 +1278,8 @@ fn tensor_max_diff(a: &TensorDynLen<DynId>, b: &TensorDynLen<DynId>) -> f64 {
 
 /// Verify that contract(A + B) == contract(A) + contract(B) within tolerance
 fn assert_treetn_add_correctness(
-    tn_a: TreeTN<DynId, NoSymmSpace, usize>,
-    tn_b: TreeTN<DynId, NoSymmSpace, usize>,
+    tn_a: TreeTN<DynId, NoSymmSpace, usize, Explicit>,
+    tn_b: TreeTN<DynId, NoSymmSpace, usize, Explicit>,
     context: &str,
 ) {
     let contracted_a = tn_a.clone().contract_to_tensor().unwrap();
@@ -1318,36 +1318,36 @@ macro_rules! test_treetn_add_two_nodes_correctness {
             let bond_b = Index::new_dyn(4);
 
             // Network A
-            let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
+            let mut tn_a = TreeTN::<DynId, NoSymmSpace, usize, Explicit>::new();
 
             let data_a0: Vec<$scalar_type> = (1..=8).map(|x| $make_scalar(x, 1)).collect();
             let storage_a0 = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_a0)));
             let tensor_a0: TensorDynLen<DynId> = TensorDynLen::new(
                 vec![i0.clone(), bond_a.clone()], vec![2, 4], storage_a0);
-            let n0_a = tn_a.add_tensor_with_name(0, tensor_a0).unwrap();
+            let n0_a = tn_a.add_tensor(0, tensor_a0).unwrap();
 
             let data_a1: Vec<$scalar_type> = (1..=12).map(|x| $make_scalar(x * 3, 2)).collect();
             let storage_a1 = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_a1)));
             let tensor_a1: TensorDynLen<DynId> = TensorDynLen::new(
                 vec![bond_a.clone(), k1.clone()], vec![4, 3], storage_a1);
-            let n1_a = tn_a.add_tensor_with_name(1, tensor_a1).unwrap();
+            let n1_a = tn_a.add_tensor(1, tensor_a1).unwrap();
 
             tn_a.connect(n0_a, &bond_a, n1_a, &bond_a).unwrap();
 
             // Network B
-            let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
+            let mut tn_b = TreeTN::<DynId, NoSymmSpace, usize, Explicit>::new();
 
             let data_b0: Vec<$scalar_type> = (1..=8).map(|x| $make_scalar(x * 10, 3)).collect();
             let storage_b0 = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_b0)));
             let tensor_b0: TensorDynLen<DynId> = TensorDynLen::new(
                 vec![i0.clone(), bond_b.clone()], vec![2, 4], storage_b0);
-            let n0_b = tn_b.add_tensor_with_name(0, tensor_b0).unwrap();
+            let n0_b = tn_b.add_tensor(0, tensor_b0).unwrap();
 
             let data_b1: Vec<$scalar_type> = (1..=12).map(|x| $make_scalar(x * 7, 4)).collect();
             let storage_b1 = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_b1)));
             let tensor_b1: TensorDynLen<DynId> = TensorDynLen::new(
                 vec![bond_b.clone(), k1.clone()], vec![4, 3], storage_b1);
-            let n1_b = tn_b.add_tensor_with_name(1, tensor_b1).unwrap();
+            let n1_b = tn_b.add_tensor(1, tensor_b1).unwrap();
 
             tn_b.connect(n0_b, &bond_b, n1_b, &bond_b).unwrap();
 
@@ -1374,8 +1374,8 @@ macro_rules! test_treetn_add_single_node_correctness {
     ($test_name:ident, $scalar_type:ty, $storage_variant:ident, $storage_type:ty, $make_scalar:expr) => {
         #[test]
         fn $test_name() {
-            let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
-            let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
+            let mut tn_a = TreeTN::<DynId, NoSymmSpace, usize, Explicit>::new();
+            let mut tn_b = TreeTN::<DynId, NoSymmSpace, usize, Explicit>::new();
 
             let i = Index::new_dyn(2);
             let j = Index::new_dyn(3);
@@ -1384,13 +1384,13 @@ macro_rules! test_treetn_add_single_node_correctness {
             let storage_a = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_a)));
             let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(
                 vec![i.clone(), j.clone()], vec![2, 3], storage_a);
-            tn_a.add_tensor_with_name(0, tensor_a).unwrap();
+            tn_a.add_tensor(0, tensor_a).unwrap();
 
             let data_b: Vec<$scalar_type> = (1..=6).map(|x| $make_scalar(x * 10, 2)).collect();
             let storage_b = Arc::new(Storage::$storage_variant(<$storage_type>::from_vec(data_b)));
             let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(
                 vec![i.clone(), j.clone()], vec![2, 3], storage_b);
-            tn_b.add_tensor_with_name(0, tensor_b).unwrap();
+            tn_b.add_tensor(0, tensor_b).unwrap();
 
             assert_treetn_add_correctness(tn_a, tn_b, stringify!($test_name));
         }
@@ -1414,8 +1414,8 @@ test_treetn_add_single_node_correctness!(
 fn test_treetn_add_bond_dimension_growth() {
     // Verify that bond dimensions grow as expected: new_dim = dim_A + dim_B
     // Using shared bond indices within each network for proper contraction
-    let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
-    let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
+    let mut tn_a = TreeTN::<DynId, NoSymmSpace, usize, Explicit>::new();
+    let mut tn_b = TreeTN::<DynId, NoSymmSpace, usize, Explicit>::new();
 
     let i0 = Index::new_dyn(2);
     let bond_a = Index::new_dyn(3);  // shared bond dim 3 in network A
@@ -1424,11 +1424,11 @@ fn test_treetn_add_bond_dimension_growth() {
     // Network A with bond dim 3
     let storage_a0 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
     let tensor_a0: TensorDynLen<DynId> = TensorDynLen::new(vec![i0.clone(), bond_a.clone()], vec![2, 3], storage_a0);
-    let n0_a = tn_a.add_tensor_with_name(0, tensor_a0).unwrap();
+    let n0_a = tn_a.add_tensor(0, tensor_a0).unwrap();
 
     let storage_a1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12])));
     let tensor_a1: TensorDynLen<DynId> = TensorDynLen::new(vec![bond_a.clone(), k1.clone()], vec![3, 4], storage_a1);
-    let n1_a = tn_a.add_tensor_with_name(1, tensor_a1).unwrap();
+    let n1_a = tn_a.add_tensor(1, tensor_a1).unwrap();
 
     tn_a.connect(n0_a, &bond_a, n1_a, &bond_a).unwrap();
 
@@ -1437,11 +1437,11 @@ fn test_treetn_add_bond_dimension_growth() {
 
     let storage_b0 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 10])));
     let tensor_b0: TensorDynLen<DynId> = TensorDynLen::new(vec![i0.clone(), bond_b.clone()], vec![2, 5], storage_b0);
-    let n0_b = tn_b.add_tensor_with_name(0, tensor_b0).unwrap();
+    let n0_b = tn_b.add_tensor(0, tensor_b0).unwrap();
 
     let storage_b1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 20])));
     let tensor_b1: TensorDynLen<DynId> = TensorDynLen::new(vec![bond_b.clone(), k1.clone()], vec![5, 4], storage_b1);
-    let n1_b = tn_b.add_tensor_with_name(1, tensor_b1).unwrap();
+    let n1_b = tn_b.add_tensor(1, tensor_b1).unwrap();
 
     tn_b.connect(n0_b, &bond_b, n1_b, &bond_b).unwrap();
 
@@ -1476,7 +1476,7 @@ fn test_treetn_add_multi_physical_permuted() {
 
     // Network A: indices in order [i, j, k]
     // Data: sequential values 1..24
-    let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
+    let mut tn_a = TreeTN::<DynId, NoSymmSpace, usize, Explicit>::new();
     let data_a: Vec<f64> = (1..=24).map(|x| x as f64).collect();
     let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
     let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(
@@ -1484,11 +1484,11 @@ fn test_treetn_add_multi_physical_permuted() {
         vec![2, 3, 4],
         storage_a,
     );
-    tn_a.add_tensor_with_name(0, tensor_a).unwrap();
+    tn_a.add_tensor(0, tensor_a).unwrap();
 
     // Network B: indices in order [k, i, j] (permuted from [i, j, k])
     // Data: different values, also sequential but scaled
-    let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
+    let mut tn_b = TreeTN::<DynId, NoSymmSpace, usize, Explicit>::new();
     let data_b: Vec<f64> = (1..=24).map(|x| (x * 10) as f64).collect();
     let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(
@@ -1496,7 +1496,7 @@ fn test_treetn_add_multi_physical_permuted() {
         vec![4, 2, 3],  // Corresponding dimensions
         storage_b,
     );
-    tn_b.add_tensor_with_name(0, tensor_b).unwrap();
+    tn_b.add_tensor(0, tensor_b).unwrap();
 
     assert_treetn_add_correctness(tn_a, tn_b, "test_treetn_add_multi_physical_permuted");
 }
@@ -1520,7 +1520,7 @@ fn test_treetn_add_two_nodes_multi_physical_permuted() {
     let bond_b = Index::new_dyn(4);  // shared bond for network B
 
     // Network A with standard ordering
-    let mut tn_a: TreeTN<DynId, _, usize> = TreeTN::new();
+    let mut tn_a = TreeTN::<DynId, NoSymmSpace, usize, Explicit>::new();
 
     // Node 0: [i0, j0, bond] -> 2*3*4 = 24 elements
     let data_a0: Vec<f64> = (1..=24).map(|x| x as f64).collect();
@@ -1530,7 +1530,7 @@ fn test_treetn_add_two_nodes_multi_physical_permuted() {
         vec![2, 3, 4],
         storage_a0,
     );
-    let n0_a = tn_a.add_tensor_with_name(0, tensor_a0).unwrap();
+    let n0_a = tn_a.add_tensor(0, tensor_a0).unwrap();
 
     // Node 1: [bond, k1, l1] -> 4*2*3 = 24 elements
     let data_a1: Vec<f64> = (1..=24).map(|x| (x * 2) as f64).collect();
@@ -1540,12 +1540,12 @@ fn test_treetn_add_two_nodes_multi_physical_permuted() {
         vec![4, 2, 3],
         storage_a1,
     );
-    let n1_a = tn_a.add_tensor_with_name(1, tensor_a1).unwrap();
+    let n1_a = tn_a.add_tensor(1, tensor_a1).unwrap();
 
     tn_a.connect(n0_a, &bond_a, n1_a, &bond_a).unwrap();
 
     // Network B with permuted physical indices
-    let mut tn_b: TreeTN<DynId, _, usize> = TreeTN::new();
+    let mut tn_b = TreeTN::<DynId, NoSymmSpace, usize, Explicit>::new();
 
     // Node 0: [j0, i0, bond] (i0, j0 swapped)
     let data_b0: Vec<f64> = (1..=24).map(|x| (x * 10) as f64).collect();
@@ -1555,7 +1555,7 @@ fn test_treetn_add_two_nodes_multi_physical_permuted() {
         vec![3, 2, 4],
         storage_b0,
     );
-    let n0_b = tn_b.add_tensor_with_name(0, tensor_b0).unwrap();
+    let n0_b = tn_b.add_tensor(0, tensor_b0).unwrap();
 
     // Node 1: [l1, bond, k1] (permuted)
     let data_b1: Vec<f64> = (1..=24).map(|x| (x * 20) as f64).collect();
@@ -1565,7 +1565,7 @@ fn test_treetn_add_two_nodes_multi_physical_permuted() {
         vec![3, 4, 2],
         storage_b1,
     );
-    let n1_b = tn_b.add_tensor_with_name(1, tensor_b1).unwrap();
+    let n1_b = tn_b.add_tensor(1, tensor_b1).unwrap();
 
     tn_b.connect(n0_b, &bond_b, n1_b, &bond_b).unwrap();
 

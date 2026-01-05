@@ -1,9 +1,11 @@
+pub mod bond_mode;
 pub mod connection;
 pub mod dyn_treetn;
 pub mod named_graph;
 pub mod site_index_network;
 pub mod treetn;
 
+pub use bond_mode::{BondMode, Einsum, Explicit};
 pub use connection::Connection;
 pub use dyn_treetn::{BoxedTensorLike, DynIndex, DynTreeTN};
 pub use named_graph::NamedGraph;
