@@ -10,6 +10,7 @@ use tensor4all::index::{Index, NoSymmSpace, Symmetry, DynId, TagSet};
 use tensor4all::index_ops::common_inds;
 use tensor4all::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
 use crate::named_graph::NamedGraph;
+use crate::options::{CanonicalizationOptions, TruncationOptions};
 use crate::site_index_network::SiteIndexNetwork;
 use anyhow::{Result, Context};
 use num_complex::Complex64;
@@ -57,6 +58,17 @@ where
     /// Orthogonalization direction for each edge.
     /// Maps EdgeIndex to the node name (V) that the orthogonalization points towards.
     ortho_towards: HashMap<EdgeIndex, V>,
+}
+
+/// Internal context for sweep-to-center operations.
+///
+/// Contains precomputed information needed for both canonicalization and truncation.
+#[derive(Debug)]
+struct SweepContext {
+    /// Distance of each node from the canonical center (0 = in center).
+    dist: HashMap<NodeIndex, usize>,
+    /// Nodes sorted by decreasing distance (farthest first).
+    nodes_by_distance: Vec<(NodeIndex, usize)>,
 }
 
 // ============================================================================
@@ -334,6 +346,335 @@ where
         }
 
         Ok(edge_idx)
+    }
+
+    /// Prepare context for sweep-to-center operations.
+    ///
+    /// This method:
+    /// 1. Validates tree structure
+    /// 2. Sets canonical_center and validates connectivity
+    /// 3. Computes distances from center using multi-source BFS
+    /// 4. Returns nodes sorted by decreasing distance
+    ///
+    /// # Arguments
+    /// * `canonical_center` - The node names that will serve as centers
+    /// * `context_name` - Name for error context (e.g., "canonicalize_with")
+    ///
+    /// # Returns
+    /// A SweepContext if successful, or an error if validation fails.
+    fn prepare_sweep_to_center(
+        &mut self,
+        canonical_center: impl IntoIterator<Item = V>,
+        context_name: &str,
+    ) -> Result<Option<SweepContext>> {
+        // 1. Validate tree structure
+        self.validate_tree()
+            .with_context(|| format!("{}: graph must be a tree", context_name))?;
+
+        // 2. Set canonical_center
+        let canonical_center_v: Vec<V> = canonical_center.into_iter().collect();
+        self.set_canonical_center(canonical_center_v)
+            .with_context(|| format!("{}: failed to set canonical_center", context_name))?;
+
+        if self.canonical_center.is_empty() {
+            return Ok(None); // Nothing to do if no centers
+        }
+
+        // 3. Validate canonical_center connectivity (they must form a connected subtree)
+        let g = self.graph.graph();
+        let start_node_name = self.canonical_center.iter().next()
+            .ok_or_else(|| anyhow::anyhow!("canonical_center unexpectedly empty"))?;
+        let start_node = self.graph.node_index(start_node_name)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in graph", start_node_name))?;
+
+        let mut stack = vec![start_node];
+        let mut seen_nodes = HashSet::new();
+        let mut seen_node_names: HashSet<&V> = HashSet::new();
+        seen_nodes.insert(start_node);
+        seen_node_names.insert(start_node_name);
+
+        while let Some(v_node) = stack.pop() {
+            for nb_node in g.neighbors(v_node) {
+                if let Some(nb_node_name) = self.graph.node_name(nb_node) {
+                    if self.canonical_center.contains(nb_node_name) && seen_nodes.insert(nb_node) {
+                        seen_node_names.insert(nb_node_name);
+                        stack.push(nb_node);
+                    }
+                }
+            }
+        }
+
+        if seen_node_names.len() != self.canonical_center.len() {
+            return Err(anyhow::anyhow!(
+                "canonical_center is not connected: reached {} out of {} centers",
+                seen_node_names.len(),
+                self.canonical_center.len()
+            ))
+            .with_context(|| format!("{}: canonical_center must form a connected subtree", context_name));
+        }
+
+        // 4. Multi-source BFS to compute distances from canonical_center
+        let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut bfs_queue = VecDeque::new();
+        for c in &self.canonical_center {
+            if let Some(c_node) = self.graph.node_index(c) {
+                dist.insert(c_node, 0);
+                bfs_queue.push_back(c_node);
+            }
+        }
+        {
+            let g = self.graph.graph();
+            while let Some(v) = bfs_queue.pop_front() {
+                let dv = dist[&v];
+                for nb in g.neighbors(v) {
+                    if !dist.contains_key(&nb) {
+                        dist.insert(nb, dv + 1);
+                        bfs_queue.push_back(nb);
+                    }
+                }
+            }
+        }
+
+        // 5. Sort nodes by decreasing distance (farthest first)
+        let mut nodes_by_distance: Vec<(NodeIndex, usize)> = dist
+            .iter()
+            .map(|(&node, &d)| (node, d))
+            .collect();
+        nodes_by_distance.sort_by(|a, b| b.1.cmp(&a.1));
+
+        Ok(Some(SweepContext {
+            dist,
+            nodes_by_distance,
+        }))
+    }
+
+    /// Process one node during a sweep operation.
+    ///
+    /// Factorizes the tensor at node `v`, absorbs the right factor into the parent,
+    /// and updates the edge bond and ortho_towards.
+    ///
+    /// # Arguments
+    /// * `v` - The node to process
+    /// * `dist` - Distance map from prepare_sweep_to_center
+    /// * `factorize_options` - Options for factorization (algorithm, rtol, max_rank)
+    /// * `context_name` - Name for error context
+    ///
+    /// # Returns
+    /// `Ok(())` if successful, or an error if any step fails.
+    fn sweep_one_node(
+        &mut self,
+        v: NodeIndex,
+        dist: &HashMap<NodeIndex, usize>,
+        factorize_options: &FactorizeOptions,
+        context_name: &str,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        // Skip nodes in canonical_center
+        let v_node_name = self.graph.node_name(v);
+        if v_node_name.map(|n| self.canonical_center.contains(n)).unwrap_or(false) {
+            return Ok(());
+        }
+
+        // Find parent: neighbor with distance one less
+        let v_dist = dist[&v];
+        let parent_dist = v_dist.checked_sub(1)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} at distance 0 but not in canonical_center", v))
+            .with_context(|| format!("{}: distance calculation error", context_name))?;
+
+        let (parent, edge) = {
+            let g = self.graph.graph();
+            let parent = g
+                .neighbors(v)
+                .find(|&nb| dist.get(&nb).map(|&d| d == parent_dist).unwrap_or(false))
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Node {:?} at distance {} has no parent (neighbor with distance {})",
+                    v, v_dist, parent_dist
+                ))
+                .with_context(|| format!("{}: tree structure violation", context_name))?;
+
+            let edge = g
+                .edges_connecting(v, parent)
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("No edge found between node {:?} and parent {:?}", v, parent))
+                .with_context(|| format!("{}: edge not found", context_name))?
+                .id();
+            (parent, edge)
+        };
+
+        // Get bond index on v-side (the index we will factorize over)
+        let parent_bond_v = self
+            .edge_index_for_node(edge, v)
+            .with_context(|| format!("{}: failed to get parent bond index on v", context_name))?
+            .clone();
+
+        // Get tensor at node v
+        let tensor_v = self
+            .tensor(v)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
+            .with_context(|| format!("{}: tensor not found", context_name))?;
+
+        // Build left_inds = all indices except parent bond
+        let left_inds: Vec<Index<Id, Symm>> = tensor_v
+            .indices
+            .iter()
+            .filter(|idx| idx.id != parent_bond_v.id)
+            .cloned()
+            .collect();
+
+        if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
+            return Err(anyhow::anyhow!(
+                "Cannot process node {:?}: need at least one left index and one right index",
+                v
+            ))
+            .with_context(|| format!("{}: invalid tensor rank for factorization", context_name));
+        }
+
+        // Perform factorization
+        let factorize_result = factorize(tensor_v, &left_inds, factorize_options)
+            .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+            .with_context(|| format!("{}: factorization failed", context_name))?;
+
+        let left_tensor = factorize_result.left;
+        let right_tensor = factorize_result.right;
+
+        // Get edge index on parent side
+        let edge_index_parent = self
+            .edge_index_for_node(edge, parent)
+            .with_context(|| format!("{}: failed to get edge index for parent", context_name))?
+            .clone();
+
+        // Absorb right_tensor into parent
+        let parent_tensor = self
+            .tensor(parent)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
+            .with_context(|| format!("{}: parent tensor not found", context_name))?;
+
+        let updated_parent_tensor = parent_tensor
+            .tensordot(&right_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
+            .with_context(|| format!("{}: failed to absorb right factor into parent tensor", context_name))?;
+
+        // Update bond index FIRST, so replace_tensor validation matches
+        let new_bond_index = factorize_result.bond_index;
+        self.replace_edge_bond(edge, new_bond_index.clone())
+            .with_context(|| format!("{}: failed to update edge bond index", context_name))?;
+
+        // Update tensors
+        self.replace_tensor(v, left_tensor)
+            .with_context(|| format!("{}: failed to replace tensor at node v", context_name))?;
+        self.replace_tensor(parent, updated_parent_tensor)
+            .with_context(|| format!("{}: failed to replace tensor at parent node", context_name))?;
+
+        // Set ortho_towards to point towards parent (canonical_center direction)
+        let parent_name = self.graph.node_name(parent)
+            .ok_or_else(|| anyhow::anyhow!("Parent node name not found"))?
+            .clone();
+        self.set_edge_ortho_towards(edge, Some(parent_name))
+            .with_context(|| format!("{}: failed to set ortho_towards", context_name))?;
+
+        Ok(())
+    }
+
+    /// Internal implementation for canonicalization using the new helpers.
+    ///
+    /// This is the core canonicalization logic that both NodeIndex-based and V-based
+    /// methods delegate to.
+    fn canonicalize_impl(
+        &mut self,
+        canonical_center: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+        context_name: &str,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        // Determine algorithm from form
+        let alg = match form {
+            CanonicalForm::Unitary => FactorizeAlg::QR,
+            CanonicalForm::LU => FactorizeAlg::LU,
+            CanonicalForm::CI => FactorizeAlg::CI,
+        };
+
+        // Prepare sweep context
+        let sweep_ctx = self.prepare_sweep_to_center(canonical_center, context_name)?;
+
+        // If no centers (empty), nothing to do
+        let sweep_ctx = match sweep_ctx {
+            Some(ctx) => ctx,
+            None => return Ok(()),
+        };
+
+        // Set up factorization options (no truncation for canonicalization)
+        let factorize_options = FactorizeOptions {
+            alg,
+            canonical: Canonical::Left,
+            rtol: None,
+            max_rank: None,
+        };
+
+        // Process nodes in order of decreasing distance
+        for (v, _) in &sweep_ctx.nodes_by_distance {
+            self.sweep_one_node(*v, &sweep_ctx.dist, &factorize_options, context_name)?;
+        }
+
+        // Set the canonical form
+        self.canonical_form = Some(form);
+
+        Ok(())
+    }
+
+    /// Internal implementation for truncation using the new helpers.
+    ///
+    /// This is the core truncation logic that both NodeIndex-based and V-based
+    /// methods delegate to.
+    fn truncate_impl(
+        &mut self,
+        canonical_center: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+        rtol: Option<f64>,
+        max_rank: Option<usize>,
+        context_name: &str,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        // Determine algorithm from form (use SVD for Unitary in truncation, not QR)
+        let alg = match form {
+            CanonicalForm::Unitary => FactorizeAlg::SVD,
+            CanonicalForm::LU => FactorizeAlg::LU,
+            CanonicalForm::CI => FactorizeAlg::CI,
+        };
+
+        // Prepare sweep context
+        let sweep_ctx = self.prepare_sweep_to_center(canonical_center, context_name)?;
+
+        // If no centers (empty), nothing to do
+        let sweep_ctx = match sweep_ctx {
+            Some(ctx) => ctx,
+            None => return Ok(()),
+        };
+
+        // Set up factorization options WITH truncation parameters
+        let factorize_options = FactorizeOptions {
+            alg,
+            canonical: Canonical::Left,
+            rtol,
+            max_rank,
+        };
+
+        // Process nodes in order of decreasing distance
+        for (v, _) in &sweep_ctx.nodes_by_distance {
+            self.sweep_one_node(*v, &sweep_ctx.dist, &factorize_options, context_name)?;
+        }
+
+        // Set the canonical form
+        self.canonical_form = Some(form);
+
+        Ok(())
     }
 
     // ------------------------------------------------------------------------
@@ -1788,6 +2129,168 @@ where
         Ok(())
     }
 
+    // ========================================================================
+    // Consolidated Canonicalization API
+    // ========================================================================
+
+    /// Canonicalize the network towards the specified center using options.
+    ///
+    /// This is the recommended unified API for canonicalization. It accepts:
+    /// - Center nodes specified by their node names (V)
+    /// - [`CanonicalizationOptions`] to control the form and force behavior
+    ///
+    /// # Behavior
+    /// - If `options.force` is false (default):
+    ///   - Already at target with same form: returns unchanged (no-op)
+    ///   - Different form: returns an error (use `options.force()` to override)
+    /// - If `options.force` is true:
+    ///   - Always performs full canonicalization
+    ///
+    /// # Example
+    /// ```ignore
+    /// use tensor4all_treetn::CanonicalizationOptions;
+    ///
+    /// // Default canonicalization (Unitary form, smart behavior)
+    /// let ttn = ttn.canonicalize_opt(["A"], CanonicalizationOptions::default())?;
+    ///
+    /// // Force re-canonicalization with LU form
+    /// let ttn = ttn.canonicalize_opt(
+    ///     ["B"],
+    ///     CanonicalizationOptions::forced().with_form(CanonicalForm::LU)
+    /// )?;
+    /// ```
+    pub fn canonicalize_opt(
+        mut self,
+        canonical_center: impl IntoIterator<Item = V>,
+        options: CanonicalizationOptions,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        let center_v: HashSet<V> = canonical_center.into_iter().collect();
+
+        // Smart behavior when not forced
+        if !options.force {
+            // Check if already canonicalized with a different form
+            if let Some(current_form) = self.canonical_form {
+                if current_form != options.form {
+                    return Err(anyhow::anyhow!(
+                        "Cannot move ortho center: current form is {:?} but {:?} was requested. \
+                         Use CanonicalizationOptions::forced() to re-canonicalize with a different form.",
+                        current_form,
+                        options.form
+                    ))
+                    .context("canonicalize_opt: form mismatch");
+                }
+            }
+
+            // Check if already at target
+            if self.canonical_center == center_v && self.canonical_form == Some(options.form) {
+                return Ok(self);
+            }
+        }
+
+        // Perform canonicalization
+        self.canonicalize_impl(center_v, options.form, "canonicalize_opt")?;
+        Ok(self)
+    }
+
+    /// Canonicalize the network in-place towards the specified center using options.
+    ///
+    /// This is the `&mut self` version of [`canonicalize_opt`].
+    pub fn canonicalize_opt_mut(
+        &mut self,
+        canonical_center: impl IntoIterator<Item = V>,
+        options: CanonicalizationOptions,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        Self: Default,
+    {
+        let taken = std::mem::take(self);
+        match taken.canonicalize_opt(canonical_center, options) {
+            Ok(result) => {
+                *self = result;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    // ========================================================================
+    // Consolidated Truncation API
+    // ========================================================================
+
+    /// Truncate the network towards the specified center using options.
+    ///
+    /// This is the recommended unified API for truncation. It accepts:
+    /// - Center nodes specified by their node names (V)
+    /// - [`TruncationOptions`] to control the form, rtol, and max_rank
+    ///
+    /// # Example
+    /// ```ignore
+    /// use tensor4all_treetn::TruncationOptions;
+    ///
+    /// // Truncate with max rank of 50
+    /// let ttn = ttn.truncate_opt(
+    ///     ["center"],
+    ///     TruncationOptions::default().with_max_rank(50)
+    /// )?;
+    ///
+    /// // Truncate with relative tolerance
+    /// let ttn = ttn.truncate_opt(
+    ///     ["center"],
+    ///     TruncationOptions::default().with_rtol(1e-10)
+    /// )?;
+    /// ```
+    pub fn truncate_opt(
+        mut self,
+        canonical_center: impl IntoIterator<Item = V>,
+        options: TruncationOptions,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        self.truncate_impl(
+            canonical_center,
+            options.form,
+            options.rtol,
+            options.max_rank,
+            "truncate_opt",
+        )?;
+        Ok(self)
+    }
+
+    /// Truncate the network in-place towards the specified center using options.
+    ///
+    /// This is the `&mut self` version of [`truncate_opt`].
+    pub fn truncate_opt_mut(
+        &mut self,
+        canonical_center: impl IntoIterator<Item = V>,
+        options: TruncationOptions,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        Self: Default,
+    {
+        let taken = std::mem::take(self);
+        match taken.truncate_opt(canonical_center, options) {
+            Ok(result) => {
+                *self = result;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    // ========================================================================
+    // Legacy Canonicalization API (for backward compatibility)
+    // ========================================================================
+
     /// Canonicalize the network towards the specified canonical_center.
     ///
     /// This is a smart canonicalization that checks the current state:
@@ -1801,6 +2304,7 @@ where
     ///
     /// # Returns
     /// A new canonicalized TreeTN, or an error if validation fails or factorization fails.
+    #[deprecated(since = "0.2.0", note = "Use canonicalize_opt instead")]
     pub fn canonicalize(
         self,
         canonical_center: impl IntoIterator<Item = NodeIndex>,
@@ -1957,6 +2461,7 @@ where
     /// - The graph is not a tree
     /// - canonical_center are not connected
     /// - Factorization fails
+    #[deprecated(since = "0.2.0", note = "Use canonicalize_opt instead")]
     pub fn force_canonicalize_with(
         mut self,
         canonical_center: impl IntoIterator<Item = NodeIndex>,
@@ -1967,210 +2472,11 @@ where
         Symm: Clone + Symmetry + From<NoSymmSpace>,
         V: From<NodeIndex>,
     {
-        let alg = match form {
-            CanonicalForm::Unitary => FactorizeAlg::QR,
-            CanonicalForm::LU => FactorizeAlg::LU,
-            CanonicalForm::CI => FactorizeAlg::CI,
-        };
-        // 1. Validate tree structure
-        self.validate_tree()
-            .context("canonicalize_with: graph must be a tree")?;
-
-        // 2. Set canonical_center and validate connectivity
-        // Convert NodeIndex to V
+        // Convert NodeIndex to V and delegate to the new implementation
         let canonical_center_v: Vec<V> = canonical_center.into_iter()
             .map(V::from)
             .collect();
-        self.set_canonical_center(canonical_center_v)
-            .context("canonicalize_with: failed to set canonical_center")?;
-
-        if self.canonical_center.is_empty() {
-            return Ok(self); // Nothing to do if no centers
-        }
-
-        // Validate canonical_center connectivity (similar to validate_ortho_consistency)
-        let g = self.graph.graph();
-        let start_node_name = self.canonical_center.iter().next()
-            .ok_or_else(|| anyhow::anyhow!("canonical_center unexpectedly empty"))?;
-        let start_node = self.graph.node_index(start_node_name)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in graph", start_node_name))?;
-        let mut stack = vec![start_node];
-        let mut seen_nodes = HashSet::new();
-        let mut seen_node_names = HashSet::new();
-        seen_nodes.insert(start_node);
-        seen_node_names.insert(start_node_name);
-        while let Some(v_node) = stack.pop() {
-            for nb_node in g.neighbors(v_node) {
-                if let Some(nb_node_name) = self.graph.node_name(nb_node) {
-                    if self.canonical_center.contains(nb_node_name) && seen_nodes.insert(nb_node) {
-                        seen_node_names.insert(nb_node_name);
-                        stack.push(nb_node);
-                    }
-                }
-            }
-        }
-        if seen_node_names.len() != self.canonical_center.len() {
-            return Err(anyhow::anyhow!(
-                "canonical_center is not connected: reached {} out of {} centers",
-                seen_node_names.len(),
-                self.canonical_center.len()
-            ))
-            .context("canonicalize_with: canonical_center must form a connected subtree");
-        }
-
-        // 3. Multi-source BFS to compute distances from canonical_center
-        let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
-        let mut bfs_queue = VecDeque::new();
-        for c in &self.canonical_center {
-            if let Some(c_node) = self.graph.node_index(c) {
-                dist.insert(c_node, 0);
-                bfs_queue.push_back(c_node);
-            }
-        }
-        {
-            let g = self.graph.graph();
-            while let Some(v) = bfs_queue.pop_front() {
-                let dv = dist[&v];
-                for nb in g.neighbors(v) {
-                    if !dist.contains_key(&nb) {
-                        dist.insert(nb, dv + 1);
-                        bfs_queue.push_back(nb);
-                    }
-                }
-            }
-        }
-
-        // 4. Process nodes in order of decreasing distance (farthest first)
-        let mut nodes_by_distance: Vec<(NodeIndex, usize)> = dist
-            .iter()
-            .map(|(&node, &d)| (node, d))
-            .collect();
-        nodes_by_distance.sort_by(|a, b| b.1.cmp(&a.1)); // Sort descending by distance
-
-        for (v, _dv) in nodes_by_distance {
-            // Skip nodes in canonical_center (they are already at distance 0)
-            let v_node_name = self.graph.node_name(v);
-            if v_node_name.map(|v| self.canonical_center.contains(v)).unwrap_or(false) {
-                continue;
-            }
-
-            // Find parent: neighbor with distance one less
-            let v_dist = dist[&v];
-            let parent_dist = v_dist.checked_sub(1)
-                .ok_or_else(|| anyhow::anyhow!("Node {:?} at distance 0 but not in canonical_center", v))
-                .context("canonicalize_with: distance calculation error")?;
-
-            let (parent, edge) = {
-                let g = self.graph.graph();
-                let parent = g
-                    .neighbors(v)
-                    .find(|&nb| {
-                        dist.get(&nb).map(|&d| d == parent_dist).unwrap_or(false)
-                    })
-                    .ok_or_else(|| anyhow::anyhow!(
-                        "Node {:?} at distance {} has no parent (neighbor with distance {})",
-                        v,
-                        v_dist,
-                        parent_dist
-                    ))
-                    .context("canonicalize_with: tree structure violation")?;
-
-                // Find the edge between v and parent
-                let edge = g
-                    .edges_connecting(v, parent)
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("No edge found between node {:?} and parent {:?}", v, parent))
-                    .context("canonicalize_with: edge not found")?
-                    .id();
-                (parent, edge)
-            };
-
-            // Get the bond index on v-side corresponding to the parent edge.
-            // We will place this index on the RIGHT side of the factorization unfolding so that
-            // the right factor carries this bond and can be absorbed into the parent tensor.
-            let parent_bond_v = self
-                .edge_index_for_node(edge, v)
-                .context("canonicalize_with: failed to get parent bond index on v")?
-                .clone();
-
-            // Get the tensor at node v (reference)
-            let tensor_v = self
-                .tensor(v)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
-                .context("canonicalize_with: tensor not found")?;
-
-            // Build left_inds = all indices of tensor_v EXCEPT the parent bond.
-            let left_inds: Vec<Index<Id, Symm>> = tensor_v
-                .indices
-                .iter()
-                .filter(|idx| idx.id != parent_bond_v.id)
-                .cloned()
-                .collect();
-            if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
-                return Err(anyhow::anyhow!(
-                    "Cannot canonicalize node {:?}: need at least one left index and at least one right index",
-                    v
-                ))
-                .context("canonicalize_with: invalid tensor rank for factorization");
-            }
-
-            // Set up factorization options
-            let factorize_options = FactorizeOptions {
-                alg,
-                canonical: Canonical::Left,
-                rtol: None,
-                max_rank: None,
-            };
-
-            // Perform factorization using tensor-level factorize
-            let factorize_result = factorize(tensor_v, &left_inds, &factorize_options)
-                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
-                .context("canonicalize_with: factorization failed")?;
-
-            let left_tensor = factorize_result.left;
-            let right_tensor = factorize_result.right;
-
-            // In this split, right_tensor must contain the parent bond (as part of its right indices).
-            // We will absorb right_tensor into the parent along (edge_index_parent, parent_bond_v).
-            let edge_index_parent = self
-                .edge_index_for_node(edge, parent)
-                .context("canonicalize_with: failed to get edge index for parent")?
-                .clone();
-
-            let parent_tensor = self
-                .tensor(parent)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
-                .context("canonicalize_with: parent tensor not found")?;
-
-            let updated_parent_tensor = parent_tensor
-                .tensordot(&right_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
-                .context("canonicalize_with: failed to absorb right factor into parent tensor")?;
-
-            // The new bond index is the factorization-created bond shared between left and right.
-            // It is the bond_index from the factorize result.
-            let new_bond_index = factorize_result.bond_index;
-
-            // Update the bond index FIRST, so replace_tensor validation matches.
-            self.replace_edge_bond(edge, new_bond_index.clone())
-                .context("canonicalize_with: failed to update edge bond index")?;
-
-            // Now update tensors. These validations should pass because the edge expects new_bond_index.
-            self.replace_tensor(v, left_tensor)
-                .context("canonicalize_with: failed to replace tensor at node v")?;
-            self.replace_tensor(parent, updated_parent_tensor)
-                .context("canonicalize_with: failed to replace tensor at parent node")?;
-
-            // Set ortho_towards to point towards parent (canonical_center direction)
-            let parent_name = self.graph.node_name(parent)
-                .ok_or_else(|| anyhow::anyhow!("Parent node name not found"))?
-                .clone();
-            self.set_edge_ortho_towards(edge, Some(parent_name))
-                .context("canonicalize_with: failed to set ortho_towards")?;
-        }
-
-        // Set the canonical form
-        self.canonical_form = Some(form);
-
+        self.canonicalize_impl(canonical_center_v, form, "force_canonicalize_with")?;
         Ok(self)
     }
 
@@ -2289,6 +2595,7 @@ where
     ///
     /// # Returns
     /// A new canonicalized TreeTN, or an error if validation fails or factorization fails.
+    #[deprecated(since = "0.2.0", note = "Use canonicalize_opt instead")]
     pub fn force_canonicalize_by_names_with(
         mut self,
         canonical_center: impl IntoIterator<Item = V>,
@@ -2298,187 +2605,8 @@ where
         Id: Clone + std::hash::Hash + Eq + From<DynId>,
         Symm: Clone + Symmetry + From<NoSymmSpace>,
     {
-        let alg = match form {
-            CanonicalForm::Unitary => FactorizeAlg::QR,
-            CanonicalForm::LU => FactorizeAlg::LU,
-            CanonicalForm::CI => FactorizeAlg::CI,
-        };
-
-        // 1. Validate tree structure
-        self.validate_tree()
-            .context("canonicalize_by_names_with: graph must be a tree")?;
-
-        // 2. Set canonical_center and validate connectivity
-        let canonical_center_v: Vec<V> = canonical_center.into_iter().collect();
-        self.set_canonical_center(canonical_center_v)
-            .context("canonicalize_by_names_with: failed to set canonical_center")?;
-
-        if self.canonical_center.is_empty() {
-            return Ok(self); // Nothing to do if no centers
-        }
-
-        // Validate canonical_center connectivity
-        let g = self.graph.graph();
-        let start_node_name = self.canonical_center.iter().next()
-            .ok_or_else(|| anyhow::anyhow!("canonical_center unexpectedly empty"))?;
-        let start_node = self.graph.node_index(start_node_name)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in graph", start_node_name))?;
-        let mut stack = vec![start_node];
-        let mut seen_nodes = HashSet::new();
-        let mut seen_node_names = HashSet::new();
-        seen_nodes.insert(start_node);
-        seen_node_names.insert(start_node_name);
-        while let Some(v_node) = stack.pop() {
-            for nb_node in g.neighbors(v_node) {
-                if let Some(nb_node_name) = self.graph.node_name(nb_node) {
-                    if self.canonical_center.contains(nb_node_name) && seen_nodes.insert(nb_node) {
-                        seen_node_names.insert(nb_node_name);
-                        stack.push(nb_node);
-                    }
-                }
-            }
-        }
-        if seen_node_names.len() != self.canonical_center.len() {
-            return Err(anyhow::anyhow!(
-                "canonical_center is not connected: reached {} out of {} centers",
-                seen_node_names.len(),
-                self.canonical_center.len()
-            ))
-            .context("canonicalize_by_names_with: canonical_center must form a connected subtree");
-        }
-
-        // 3. Multi-source BFS to compute distances from canonical_center
-        let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
-        let mut bfs_queue = VecDeque::new();
-        for c in &self.canonical_center {
-            if let Some(c_node) = self.graph.node_index(c) {
-                dist.insert(c_node, 0);
-                bfs_queue.push_back(c_node);
-            }
-        }
-        {
-            let g = self.graph.graph();
-            while let Some(v) = bfs_queue.pop_front() {
-                let dv = dist[&v];
-                for nb in g.neighbors(v) {
-                    if !dist.contains_key(&nb) {
-                        dist.insert(nb, dv + 1);
-                        bfs_queue.push_back(nb);
-                    }
-                }
-            }
-        }
-
-        // 4. Process nodes in order of decreasing distance (farthest first)
-        let mut nodes_by_distance: Vec<(NodeIndex, usize)> = dist
-            .iter()
-            .map(|(&node, &d)| (node, d))
-            .collect();
-        nodes_by_distance.sort_by(|a, b| b.1.cmp(&a.1)); // Sort descending by distance
-
-        for (v, _dv) in nodes_by_distance {
-            // Skip nodes in canonical_center (they are already at distance 0)
-            let v_node_name = self.graph.node_name(v);
-            if v_node_name.map(|v| self.canonical_center.contains(v)).unwrap_or(false) {
-                continue;
-            }
-
-            // Find parent: neighbor with distance one less
-            let v_dist = dist[&v];
-            let parent = {
-                let g = self.graph.graph();
-                g.neighbors(v)
-                    .find(|nb| dist.get(nb).copied() == Some(v_dist - 1))
-            }
-            .ok_or_else(|| anyhow::anyhow!("No parent found for node {:?}", v))
-            .context("canonicalize_by_names_with: parent node not found (graph should be a tree)")?;
-
-            // Find edge to parent
-            let edge = self.graph.graph().find_edge(v, parent)
-                .or_else(|| self.graph.graph().find_edge(parent, v))
-                .ok_or_else(|| anyhow::anyhow!("No edge between node {:?} and parent {:?}", v, parent))
-                .context("canonicalize_by_names_with: edge to parent not found")?;
-
-            // Get bond index on the v side (the index we will factorize over)
-            let parent_bond_v = self
-                .edge_index_for_node(edge, v)
-                .context("canonicalize_by_names_with: failed to get bond index for node v")?
-                .clone();
-
-            let tensor_v = self
-                .tensor(v)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
-                .context("canonicalize_by_names_with: tensor not found at node v")?;
-
-            // "Left indices" for factorization = all indices except the parent bond
-            let left_inds: Vec<_> = tensor_v
-                .indices
-                .iter()
-                .filter(|idx| idx.id != parent_bond_v.id)
-                .cloned()
-                .collect();
-
-            if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
-                return Err(anyhow::anyhow!(
-                    "Cannot canonicalize node {:?}: need at least one left index and at least one right index",
-                    v
-                ))
-                .context("canonicalize_by_names_with: invalid tensor rank for factorization");
-            }
-
-            // Set up factorization options
-            let factorize_options = FactorizeOptions {
-                alg,
-                canonical: Canonical::Left,
-                rtol: None,
-                max_rank: None,
-            };
-
-            // Perform factorization using tensor-level factorize
-            let factorize_result = factorize(tensor_v, &left_inds, &factorize_options)
-                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
-                .context("canonicalize_by_names_with: factorization failed")?;
-
-            let left_tensor = factorize_result.left;
-            let right_tensor = factorize_result.right;
-
-            // Absorb right_tensor into the parent
-            let edge_index_parent = self
-                .edge_index_for_node(edge, parent)
-                .context("canonicalize_by_names_with: failed to get edge index for parent")?
-                .clone();
-
-            let parent_tensor = self
-                .tensor(parent)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
-                .context("canonicalize_by_names_with: parent tensor not found")?;
-
-            let updated_parent_tensor = parent_tensor
-                .tensordot(&right_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
-                .context("canonicalize_by_names_with: failed to absorb right factor into parent tensor")?;
-
-            // Update the bond index
-            let new_bond_index = factorize_result.bond_index;
-            self.replace_edge_bond(edge, new_bond_index.clone())
-                .context("canonicalize_by_names_with: failed to update edge bond index")?;
-
-            // Update tensors
-            self.replace_tensor(v, left_tensor)
-                .context("canonicalize_by_names_with: failed to replace tensor at node v")?;
-            self.replace_tensor(parent, updated_parent_tensor)
-                .context("canonicalize_by_names_with: failed to replace tensor at parent node")?;
-
-            // Set ortho_towards to point towards parent (canonical_center direction)
-            let parent_name = self.graph.node_name(parent)
-                .ok_or_else(|| anyhow::anyhow!("Parent node name not found"))?
-                .clone();
-            self.set_edge_ortho_towards(edge, Some(parent_name))
-                .context("canonicalize_by_names_with: failed to set ortho_towards")?;
-        }
-
-        // Set the canonical form
-        self.canonical_form = Some(form);
-
+        // Delegate to the new implementation
+        self.canonicalize_impl(canonical_center, form, "force_canonicalize_by_names_with")?;
         Ok(self)
     }
 
@@ -2685,6 +2813,7 @@ where
     ///
     /// # Returns
     /// A new truncated TreeTN, or an error if validation fails or factorization fails.
+    #[deprecated(since = "0.2.0", note = "Use truncate_opt instead")]
     pub fn truncate_with(
         mut self,
         canonical_center: impl IntoIterator<Item = NodeIndex>,
@@ -2697,201 +2826,11 @@ where
         Symm: Clone + Symmetry + From<NoSymmSpace>,
         V: From<NodeIndex>,
     {
-        let alg = match form {
-            CanonicalForm::Unitary => FactorizeAlg::SVD, // Use SVD for truncation (not QR)
-            CanonicalForm::LU => FactorizeAlg::LU,
-            CanonicalForm::CI => FactorizeAlg::CI,
-        };
-
-        // 1. Validate tree structure
-        self.validate_tree()
-            .context("truncate_with: graph must be a tree")?;
-
-        // 2. Set canonical_center and validate connectivity
+        // Convert NodeIndex to V and delegate to the new implementation
         let canonical_center_v: Vec<V> = canonical_center.into_iter()
             .map(V::from)
             .collect();
-        self.set_canonical_center(canonical_center_v)
-            .context("truncate_with: failed to set canonical_center")?;
-
-        if self.canonical_center.is_empty() {
-            return Ok(self);
-        }
-
-        // Validate canonical_center connectivity
-        let g = self.graph.graph();
-        let start_node_name = self.canonical_center.iter().next()
-            .ok_or_else(|| anyhow::anyhow!("canonical_center unexpectedly empty"))?;
-        let start_node = self.graph.node_index(start_node_name)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in graph", start_node_name))?;
-        let mut stack = vec![start_node];
-        let mut seen_nodes = HashSet::new();
-        let mut seen_node_names = HashSet::new();
-        seen_nodes.insert(start_node);
-        seen_node_names.insert(start_node_name);
-        while let Some(v_node) = stack.pop() {
-            for nb_node in g.neighbors(v_node) {
-                if let Some(nb_node_name) = self.graph.node_name(nb_node) {
-                    if self.canonical_center.contains(nb_node_name) && seen_nodes.insert(nb_node) {
-                        seen_node_names.insert(nb_node_name);
-                        stack.push(nb_node);
-                    }
-                }
-            }
-        }
-        if seen_node_names.len() != self.canonical_center.len() {
-            return Err(anyhow::anyhow!(
-                "canonical_center is not connected: reached {} out of {} centers",
-                seen_node_names.len(),
-                self.canonical_center.len()
-            ))
-            .context("truncate_with: canonical_center must form a connected subtree");
-        }
-
-        // 3. Multi-source BFS to compute distances from canonical_center
-        let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
-        let mut bfs_queue = VecDeque::new();
-        for c in &self.canonical_center {
-            if let Some(c_node) = self.graph.node_index(c) {
-                dist.insert(c_node, 0);
-                bfs_queue.push_back(c_node);
-            }
-        }
-        {
-            let g = self.graph.graph();
-            while let Some(v) = bfs_queue.pop_front() {
-                let dv = dist[&v];
-                for nb in g.neighbors(v) {
-                    if !dist.contains_key(&nb) {
-                        dist.insert(nb, dv + 1);
-                        bfs_queue.push_back(nb);
-                    }
-                }
-            }
-        }
-
-        // 4. Process nodes in order of decreasing distance (farthest first)
-        let mut nodes_by_distance: Vec<(NodeIndex, usize)> = dist
-            .iter()
-            .map(|(&node, &d)| (node, d))
-            .collect();
-        nodes_by_distance.sort_by(|a, b| b.1.cmp(&a.1));
-
-        for (v, _dv) in nodes_by_distance {
-            // Skip nodes in canonical_center
-            let v_node_name = self.graph.node_name(v);
-            if v_node_name.map(|v| self.canonical_center.contains(v)).unwrap_or(false) {
-                continue;
-            }
-
-            // Find parent: neighbor with distance one less
-            let v_dist = dist[&v];
-            let parent_dist = v_dist.checked_sub(1)
-                .ok_or_else(|| anyhow::anyhow!("Node {:?} at distance 0 but not in canonical_center", v))
-                .context("truncate_with: distance calculation error")?;
-
-            let (parent, edge) = {
-                let g = self.graph.graph();
-                let parent = g
-                    .neighbors(v)
-                    .find(|&nb| {
-                        dist.get(&nb).map(|&d| d == parent_dist).unwrap_or(false)
-                    })
-                    .ok_or_else(|| anyhow::anyhow!(
-                        "Node {:?} at distance {} has no parent",
-                        v, v_dist
-                    ))
-                    .context("truncate_with: tree structure violation")?;
-
-                let edge = g
-                    .edges_connecting(v, parent)
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("No edge found between node {:?} and parent {:?}", v, parent))
-                    .context("truncate_with: edge not found")?
-                    .id();
-                (parent, edge)
-            };
-
-            // Get the bond index on v-side
-            let parent_bond_v = self
-                .edge_index_for_node(edge, v)
-                .context("truncate_with: failed to get parent bond index on v")?
-                .clone();
-
-            // Get the tensor at node v
-            let tensor_v = self
-                .tensor(v)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
-                .context("truncate_with: tensor not found")?;
-
-            // Build left_inds = all indices except parent bond
-            let left_inds: Vec<Index<Id, Symm>> = tensor_v
-                .indices
-                .iter()
-                .filter(|idx| idx.id != parent_bond_v.id)
-                .cloned()
-                .collect();
-            if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
-                return Err(anyhow::anyhow!(
-                    "Cannot truncate node {:?}: need at least one left index and one right index",
-                    v
-                ))
-                .context("truncate_with: invalid tensor rank for factorization");
-            }
-
-            // Set up factorization options WITH truncation parameters
-            let factorize_options = FactorizeOptions {
-                alg,
-                canonical: Canonical::Left,
-                rtol,
-                max_rank,
-            };
-
-            // Perform factorization with truncation
-            let factorize_result = factorize(tensor_v, &left_inds, &factorize_options)
-                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
-                .context("truncate_with: factorization failed")?;
-
-            let left_tensor = factorize_result.left;
-            let right_tensor = factorize_result.right;
-
-            // Get edge index for parent side
-            let edge_index_parent = self
-                .edge_index_for_node(edge, parent)
-                .context("truncate_with: failed to get edge index for parent")?
-                .clone();
-
-            let parent_tensor = self
-                .tensor(parent)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
-                .context("truncate_with: parent tensor not found")?;
-
-            let updated_parent_tensor = parent_tensor
-                .tensordot(&right_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
-                .context("truncate_with: failed to absorb right factor into parent tensor")?;
-
-            // Update bond index FIRST
-            let new_bond_index = factorize_result.bond_index;
-            self.replace_edge_bond(edge, new_bond_index.clone())
-                .context("truncate_with: failed to update edge bond index")?;
-
-            // Update tensors
-            self.replace_tensor(v, left_tensor)
-                .context("truncate_with: failed to replace tensor at node v")?;
-            self.replace_tensor(parent, updated_parent_tensor)
-                .context("truncate_with: failed to replace tensor at parent node")?;
-
-            // Set ortho_towards to point towards parent
-            let parent_name = self.graph.node_name(parent)
-                .ok_or_else(|| anyhow::anyhow!("Parent node name not found"))?
-                .clone();
-            self.set_edge_ortho_towards(edge, Some(parent_name))
-                .context("truncate_with: failed to set ortho_towards")?;
-        }
-
-        // Set the canonical form
-        self.canonical_form = Some(form);
-
+        self.truncate_impl(canonical_center_v, form, rtol, max_rank, "truncate_with")?;
         Ok(self)
     }
 
