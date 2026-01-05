@@ -4,6 +4,7 @@ members = [
     "crates/tensor4all/core-common",
     "crates/tensor4all/core-tensor",
     "crates/tensor4all/core-linalg",
+    "crates/tensor4all-itensortrain",
     "crates/tensor4all-treetn",
     "crates/quanticsgrids",
     "crates/tensor4all-matrixci",

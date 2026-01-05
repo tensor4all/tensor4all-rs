@@ -196,6 +196,41 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
         f64::sum_from_storage(&self.storage)
     }
 
+    /// Extract the scalar value from a 0-dimensional tensor (or 1-element tensor).
+    ///
+    /// This is similar to Julia's `only()` function.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the tensor has more than one element.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use tensor4all_core_tensor::{TensorDynLen, Storage, AnyScalar};
+    /// use tensor4all_core_tensor::storage::DenseStorageF64;
+    /// use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+    /// use std::sync::Arc;
+    ///
+    /// // Create a scalar tensor (0 dimensions, 1 element)
+    /// let indices: Vec<Index<DynId>> = vec![];
+    /// let dims: Vec<usize> = vec![];
+    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![42.0])));
+    /// let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
+    ///
+    /// assert_eq!(tensor.only().real(), 42.0);
+    /// ```
+    pub fn only(&self) -> AnyScalar {
+        let total_size: usize = self.dims.iter().product();
+        assert!(
+            total_size == 1 || (self.dims.is_empty()),
+            "only() requires a scalar tensor (1 element), got {} elements with dims {:?}",
+            if self.dims.is_empty() { 1 } else { total_size },
+            self.dims
+        );
+        self.sum()
+    }
+
     /// Permute the tensor dimensions using the given new indices order.
     ///
     /// This is the main permutation method that takes the desired new indices
@@ -958,6 +993,50 @@ where
             indices: new_indices_vec,
             dims: self.dims.clone(),
             storage: self.storage.clone(),
+        }
+    }
+}
+
+// ============================================================================
+// Complex Conjugation
+// ============================================================================
+
+impl<Id, Symm> TensorDynLen<Id, Symm>
+where
+    Id: Clone,
+    Symm: Clone,
+{
+    /// Complex conjugate of all tensor elements.
+    ///
+    /// For real (f64) tensors, returns a copy (conjugate of real is identity).
+    /// For complex (Complex64) tensors, conjugates each element.
+    ///
+    /// The indices and dimensions remain unchanged.
+    ///
+    /// This is inspired by the `conj` operation in ITensorMPS.jl.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core_tensor::TensorDynLen;
+    /// use tensor4all_core_tensor::Storage;
+    /// use tensor4all_core_tensor::storage::DenseStorageC64;
+    /// use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+    /// use num_complex::Complex64;
+    /// use std::sync::Arc;
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
+    /// let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data)));
+    /// let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i], vec![2], storage);
+    ///
+    /// let conj_tensor = tensor.conj();
+    /// // Elements are now conjugated: 1-2i, 3+4i
+    /// ```
+    pub fn conj(&self) -> Self {
+        Self {
+            indices: self.indices.clone(),
+            dims: self.dims.clone(),
+            storage: Arc::new(self.storage.conj()),
         }
     }
 }

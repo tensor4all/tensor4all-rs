@@ -4,10 +4,13 @@ use std::collections::VecDeque;
 use std::collections::HashSet;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::marker::PhantomData;
 use tensor4all::TensorDynLen;
 use tensor4all::Storage;
 use tensor4all::index::{Index, NoSymmSpace, Symmetry, DynId};
 use tensor4all::index_ops::common_inds;
+use tensor4all::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
+use crate::bond_mode::{BondMode, Einsum, Explicit};
 use crate::connection::Connection;
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -28,39 +31,45 @@ use num_complex::Complex64;
 /// - `Id`: Index ID type
 /// - `Symm`: Symmetry type (default: NoSymmSpace)
 /// - `V`: Node name type for named nodes (default: NodeIndex for backward compatibility)
-pub struct TreeTN<Id, Symm = NoSymmSpace, V = NodeIndex>
+/// - `Mode`: Bond mode - [`Einsum`] (default) or [`Explicit`]
+///
+/// # Bond Modes
+///
+/// - [`Einsum`]: Nodes are automatically connected by matching index IDs.
+///   Use `TreeTN::new(tensors, node_names)` to create.
+/// - [`Explicit`]: Nodes must be connected manually via `connect()`.
+///   Use `TreeTN::<_, _, _, Explicit>::new()` to create.
+pub struct TreeTN<Id, Symm = NoSymmSpace, V = NodeIndex, Mode = Einsum>
 where
     Id: Clone + std::hash::Hash + Eq,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+    Mode: BondMode,
 {
     /// Named graph wrapper: provides mapping between node names (V) and NodeIndex
     graph: NamedGraph<V, TensorDynLen<Id, Symm>, Connection<Id, Symm>>,
     /// Orthogonalization region (ortho_region).
-    /// When empty, the network is not orthogonalized.
+    /// When empty, the network is not canonized.
     /// When non-empty, contains the node names (V) of the orthogonalization region.
     /// The region must form a connected subtree in the network.
     ortho_region: HashSet<V>,
     /// Site index network: manages topology and site space (physical indices).
     /// This structure enables topology and site space comparison independent of tensor data.
     site_index_network: SiteIndexNetwork<V, Id, Symm>,
+    /// Phantom data for Mode type parameter
+    _mode: PhantomData<Mode>,
 }
 
-impl<Id, Symm, V> TreeTN<Id, Symm, V>
+// ============================================================================
+// Einsum mode implementation
+// ============================================================================
+
+impl<Id, Symm, V> TreeTN<Id, Symm, V, Einsum>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
-    /// Create a new empty TreeTN.
-    pub fn new() -> Self {
-        Self {
-            graph: NamedGraph::new(),
-            ortho_region: HashSet::new(),
-            site_index_network: SiteIndexNetwork::new(),
-        }
-    }
-
     /// Create a TreeTN from a list of tensors and node names using einsum rule.
     ///
     /// This function connects tensors that share common indices (by ID).
@@ -81,7 +90,7 @@ where
     ///
     /// # Errors
     /// Returns an error if validation fails or connection fails.
-    pub fn from_tensors_with_names(
+    pub fn new(
         tensors: Vec<TensorDynLen<Id, Symm>>,
         node_names: Vec<V>,
     ) -> Result<Self>
@@ -95,27 +104,32 @@ where
                 tensors.len(),
                 node_names.len()
             ))
-            .context("from_tensors_with_names: tensors and node_names must have the same length");
+            .context("TreeTN::new: tensors and node_names must have the same length");
         }
 
         // Create empty TreeTN
-        let mut treetn = Self::new();
+        let mut treetn = Self {
+            graph: NamedGraph::new(),
+            ortho_region: HashSet::new(),
+            site_index_network: SiteIndexNetwork::new(),
+            _mode: PhantomData,
+        };
 
         // Step 1: Add all tensors as nodes and collect NodeIndex mappings
         let mut node_indices = Vec::with_capacity(tensors.len());
         for (tensor, node_name) in tensors.into_iter().zip(node_names.into_iter()) {
-            let node_idx = treetn.add_tensor_with_name(node_name, tensor)?;
+            let node_idx = treetn.add_tensor_internal(node_name, tensor)?;
             node_indices.push(node_idx);
         }
 
         // Step 2: Build a map from index ID to (node_index, index) pairs in O(n) time
         // Key: index ID, Value: vector of (NodeIndex, Index) pairs
         let mut index_map: HashMap<Id, Vec<(NodeIndex, Index<Id, Symm>)>> = HashMap::new();
-        
+
         for node_idx in &node_indices {
             let tensor = treetn.tensor(*node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_idx))?;
-            
+
             for index in &tensor.indices {
                 index_map
                     .entry(index.id.clone())
@@ -137,8 +151,8 @@ where
                     // Index appears in exactly 2 tensors - connect them
                     let (node_a, index_a) = &nodes_with_index[0];
                     let (node_b, index_b) = &nodes_with_index[1];
-                    
-                    treetn.connect(*node_a, index_a, *node_b, index_b)
+
+                    treetn.connect_internal(*node_a, index_a, *node_b, index_b)
                         .with_context(|| format!(
                             "Failed to connect nodes {:?} and {:?} via index ID {:?}",
                             node_a, node_b, index_id
@@ -150,12 +164,35 @@ where
                         "Index ID {:?} appears in {} tensors, but TreeTN requires exactly 2 (tree structure)",
                         index_id, n
                     ))
-                    .context("from_tensors_with_names: each bond index must connect exactly 2 nodes");
+                    .context("TreeTN::new: each bond index must connect exactly 2 nodes");
                 }
             }
         }
 
         Ok(treetn)
+    }
+}
+
+// ============================================================================
+// Explicit mode implementation
+// ============================================================================
+
+impl<Id, Symm, V> TreeTN<Id, Symm, V, Explicit>
+where
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
+    Symm: Clone + Symmetry,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    /// Create a new empty TreeTN with explicit bond mode.
+    ///
+    /// Use `add_tensor()` to add tensors and `connect()` to establish bonds manually.
+    pub fn new() -> Self {
+        Self {
+            graph: NamedGraph::new(),
+            ortho_region: HashSet::new(),
+            site_index_network: SiteIndexNetwork::new(),
+            _mode: PhantomData,
+        }
     }
 
     /// Add a tensor to the network with a node name.
@@ -164,52 +201,158 @@ where
     ///
     /// Also updates the site_index_network with the physical indices (all indices initially,
     /// as no connections exist yet).
-    pub fn add_tensor_with_name(&mut self, node_name: V, tensor: TensorDynLen<Id, Symm>) -> Result<NodeIndex> {
-        // Extract physical indices: initially all indices are physical (no connections yet)
-        let physical_indices: HashSet<Index<Id, Symm>> = tensor.indices.iter().cloned().collect();
-        
-        // Add to graph
-        let node_idx = self.graph.add_node(node_name.clone(), tensor)
-            .map_err(|e| anyhow::anyhow!(e))?;
-        
-        // Add to site_index_network
-        self.site_index_network.add_node(node_name, physical_indices)
-            .map_err(|e| anyhow::anyhow!("Failed to add node to site_index_network: {}", e))?;
-        
-        Ok(node_idx)
+    pub fn add_tensor(&mut self, node_name: V, tensor: TensorDynLen<Id, Symm>) -> Result<NodeIndex> {
+        self.add_tensor_internal(node_name, tensor)
     }
 
-    /// Add a tensor to the network (backward compatibility for V = NodeIndex).
+    /// Add a tensor to the network using NodeIndex as the node name.
     ///
-    /// This method only works when `V = NodeIndex`. For other node name types, use `add_tensor_with_name` instead.
+    /// This method only works when `V = NodeIndex`.
     ///
     /// Returns the NodeIndex for the newly added tensor.
-    ///
-    /// Also updates the site_index_network with the physical indices.
-    pub fn add_tensor(&mut self, tensor: TensorDynLen<Id, Symm>) -> NodeIndex
+    pub fn add_tensor_auto_name(&mut self, tensor: TensorDynLen<Id, Symm>) -> NodeIndex
     where
         V: From<NodeIndex> + Into<NodeIndex>,
     {
         // For V = NodeIndex, we need to add the node first to get a NodeIndex,
         // then use that NodeIndex as the node name
-        // This is a bit awkward, but necessary for backward compatibility
         let node = self.graph.graph_mut().add_node(tensor);
-        // Register the node as a named node (for V = NodeIndex, the node name is the same as the node)
-        // We need to get the tensor back to register it, but we can't clone it
-        // So we'll use a workaround: remove and re-add
         let tensor = self.graph.graph_mut().remove_node(node).unwrap();
-        
+
         // Extract physical indices: initially all indices are physical (no connections yet)
         let physical_indices: HashSet<Index<Id, Symm>> = tensor.indices.iter().cloned().collect();
-        
+
         // Add to graph with node name
         let _ = self.graph.add_node(V::from(node), tensor);
-        
+
         // Add to site_index_network
         let _ = self.site_index_network.add_node(V::from(node), physical_indices);
-        
+
         node
     }
+
+    /// Connect two tensors with a bond.
+    ///
+    /// The indices must exist in the respective tensors and have matching dimensions.
+    /// The connection's `index_source` will correspond to `node_a` and `index_target` to `node_b`.
+    pub fn connect(
+        &mut self,
+        node_a: NodeIndex,
+        index_a: &Index<Id, Symm>,
+        node_b: NodeIndex,
+        index_b: &Index<Id, Symm>,
+    ) -> Result<EdgeIndex> {
+        self.connect_internal(node_a, index_a, node_b, index_b)
+    }
+}
+
+// ============================================================================
+// Common implementation (both modes)
+// ============================================================================
+
+impl<Id, Symm, V, Mode> TreeTN<Id, Symm, V, Mode>
+where
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
+    Symm: Clone + Symmetry,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+    Mode: BondMode,
+{
+    // ------------------------------------------------------------------------
+    // Internal methods (used by mode-specific methods)
+    // ------------------------------------------------------------------------
+
+    /// Internal method to add a tensor with a node name.
+    fn add_tensor_internal(&mut self, node_name: V, tensor: TensorDynLen<Id, Symm>) -> Result<NodeIndex> {
+        // Extract physical indices: initially all indices are physical (no connections yet)
+        let physical_indices: HashSet<Index<Id, Symm>> = tensor.indices.iter().cloned().collect();
+
+        // Add to graph
+        let node_idx = self.graph.add_node(node_name.clone(), tensor)
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        // Add to site_index_network
+        self.site_index_network.add_node(node_name, physical_indices)
+            .map_err(|e| anyhow::anyhow!("Failed to add node to site_index_network: {}", e))?;
+
+        Ok(node_idx)
+    }
+
+    /// Internal method to connect two tensors.
+    fn connect_internal(
+        &mut self,
+        node_a: NodeIndex,
+        index_a: &Index<Id, Symm>,
+        node_b: NodeIndex,
+        index_b: &Index<Id, Symm>,
+    ) -> Result<EdgeIndex> {
+        // Validate that nodes exist
+        if !self.graph.contains_node(node_a) || !self.graph.contains_node(node_b) {
+            return Err(anyhow::anyhow!("One or both nodes do not exist"))
+                .context("Failed to connect tensors");
+        }
+
+        // Validate that indices exist in respective tensors
+        let tensor_a = self.tensor(node_a)
+            .ok_or_else(|| anyhow::anyhow!("Tensor for node_a not found"))?;
+        let tensor_b = self.tensor(node_b)
+            .ok_or_else(|| anyhow::anyhow!("Tensor for node_b not found"))?;
+
+        // Check that indices exist in tensors (by ID)
+        let has_index_a = tensor_a.indices.iter().any(|idx| idx.id == index_a.id);
+        let has_index_b = tensor_b.indices.iter().any(|idx| idx.id == index_b.id);
+
+        if !has_index_a {
+            return Err(anyhow::anyhow!("Index not found in tensor_a"))
+                .context("Failed to connect: index_a must exist in tensor_a");
+        }
+        if !has_index_b {
+            return Err(anyhow::anyhow!("Index not found in tensor_b"))
+                .context("Failed to connect: index_b must exist in tensor_b");
+        }
+
+        // Clone indices for the connection
+        let index_a_clone = tensor_a.indices.iter()
+            .find(|idx| idx.id == index_a.id)
+            .unwrap()
+            .clone();
+        let index_b_clone = tensor_b.indices.iter()
+            .find(|idx| idx.id == index_b.id)
+            .unwrap()
+            .clone();
+
+        // Get node names for site_index_network (before mutable borrow)
+        let node_name_a = self.graph.node_name(node_a)
+            .ok_or_else(|| anyhow::anyhow!("Node name for node_a not found"))?
+            .clone();
+        let node_name_b = self.graph.node_name(node_b)
+            .ok_or_else(|| anyhow::anyhow!("Node name for node_b not found"))?
+            .clone();
+
+        // Create connection
+        let connection = Connection::new(index_a_clone.clone(), index_b_clone.clone())
+            .context("Failed to create connection")?;
+
+        // Add edge to graph
+        let edge_idx = self.graph.graph_mut().add_edge(node_a, node_b, connection);
+
+        // Add edge to site_index_network
+        self.site_index_network.add_edge(&node_name_a, &node_name_b)
+            .map_err(|e| anyhow::anyhow!("Failed to add edge to site_index_network: {}", e))?;
+
+        // Update physical indices: remove connection indices from physical indices
+        if let Some(site_space_a) = self.site_index_network.site_space_mut(&node_name_a) {
+            site_space_a.remove(&index_a_clone);
+        }
+        if let Some(site_space_b) = self.site_index_network.site_space_mut(&node_name_b) {
+            site_space_b.remove(&index_b_clone);
+        }
+
+        Ok(edge_idx)
+    }
+
+    // ------------------------------------------------------------------------
+    // Public accessors
+    // ------------------------------------------------------------------------
 
     /// Get a reference to a tensor by NodeIndex.
     pub fn tensor(&self, node: NodeIndex) -> Option<&TensorDynLen<Id, Symm>> {
@@ -249,7 +392,7 @@ where
             .into_iter()
             .cloned()
             .collect();
-        
+
         // Check if all connection indices are present in the new tensor
         let common = common_inds(&connection_indices, &new_tensor.indices);
         if common.len() != connection_indices.len() {
@@ -286,86 +429,6 @@ where
         }
 
         Ok(old_tensor)
-    }
-
-    /// Connect two tensors with a bond.
-    ///
-    /// The indices must exist in the respective tensors and have matching dimensions.
-    /// The connection's `index_source` will correspond to `node_a` and `index_target` to `node_b`.
-    pub fn connect(
-        &mut self,
-        node_a: NodeIndex,
-        index_a: &Index<Id, Symm>,
-        node_b: NodeIndex,
-        index_b: &Index<Id, Symm>,
-    ) -> Result<EdgeIndex> {
-        // Validate that nodes exist
-        if !self.graph.contains_node(node_a) || !self.graph.contains_node(node_b) {
-            return Err(anyhow::anyhow!("One or both nodes do not exist"))
-                .context("Failed to connect tensors");
-        }
-
-        // Validate that indices exist in respective tensors
-        let tensor_a = self.tensor(node_a)
-            .ok_or_else(|| anyhow::anyhow!("Tensor for node_a not found"))?;
-        let tensor_b = self.tensor(node_b)
-            .ok_or_else(|| anyhow::anyhow!("Tensor for node_b not found"))?;
-
-        // Check that indices exist in tensors (by ID)
-        let has_index_a = tensor_a.indices.iter().any(|idx| idx.id == index_a.id);
-        let has_index_b = tensor_b.indices.iter().any(|idx| idx.id == index_b.id);
-
-        if !has_index_a {
-            return Err(anyhow::anyhow!("Index not found in tensor_a"))
-                .context("Failed to connect: index_a must exist in tensor_a");
-        }
-        if !has_index_b {
-            return Err(anyhow::anyhow!("Index not found in tensor_b"))
-                .context("Failed to connect: index_b must exist in tensor_b");
-        }
-
-        // Clone indices for the connection
-        // Find the actual Index objects from the tensors to preserve all metadata
-        let index_a_clone = tensor_a.indices.iter()
-            .find(|idx| idx.id == index_a.id)
-            .unwrap()
-            .clone();
-        let index_b_clone = tensor_b.indices.iter()
-            .find(|idx| idx.id == index_b.id)
-            .unwrap()
-            .clone();
-
-        // Get node names for site_index_network (before mutable borrow)
-        let node_name_a = self.graph.node_name(node_a)
-            .ok_or_else(|| anyhow::anyhow!("Node name for node_a not found"))?
-            .clone();
-        let node_name_b = self.graph.node_name(node_b)
-            .ok_or_else(|| anyhow::anyhow!("Node name for node_b not found"))?
-            .clone();
-
-        // Create connection
-        // index_source corresponds to node_a, index_target to node_b
-        let connection = Connection::new(index_a_clone.clone(), index_b_clone.clone())
-            .context("Failed to create connection")?;
-
-        // Add edge to graph
-        // petgraph will assign source/target based on the order (a, b)
-        let edge_idx = self.graph.graph_mut().add_edge(node_a, node_b, connection);
-        
-        // Add edge to site_index_network
-        self.site_index_network.add_edge(&node_name_a, &node_name_b)
-            .map_err(|e| anyhow::anyhow!("Failed to add edge to site_index_network: {}", e))?;
-        
-        // Update physical indices: remove connection indices from physical indices
-        // Connection indices are no longer physical (they are bond indices)
-        if let Some(site_space_a) = self.site_index_network.site_space_mut(&node_name_a) {
-            site_space_a.remove(&index_a_clone);
-        }
-        if let Some(site_space_b) = self.site_index_network.site_space_mut(&node_name_b) {
-            site_space_b.remove(&index_b_clone);
-        }
-        
-        Ok(edge_idx)
     }
 
     /// Get a reference to a connection by EdgeIndex.
@@ -581,6 +644,21 @@ where
         self.graph.graph().edge_count()
     }
 
+    /// Get the NodeIndex for a node by name.
+    pub fn node_index(&self, node_name: &V) -> Option<NodeIndex> {
+        self.graph.node_index(node_name)
+    }
+
+    /// Get the EdgeIndex for the edge between two nodes by name.
+    ///
+    /// Returns `None` if either node doesn't exist or there's no edge between them.
+    pub fn edge_between(&self, node_a: &V, node_b: &V) -> Option<EdgeIndex> {
+        let idx_a = self.graph.node_index(node_a)?;
+        let idx_b = self.graph.node_index(node_b)?;
+        self.graph.graph().find_edge(idx_a, idx_b)
+            .or_else(|| self.graph.graph().find_edge(idx_b, idx_a))
+    }
+
     /// Get all node indices in the tree tensor network.
     pub fn node_indices(&self) -> Vec<NodeIndex> {
         self.graph.graph().node_indices().collect()
@@ -595,7 +673,7 @@ where
 
     /// Get a reference to the orthogonalization region (using node names).
     ///
-    /// When empty, the network is not orthogonalized.
+    /// When empty, the network is not canonized.
     pub fn ortho_region(&self) -> &HashSet<V> {
         &self.ortho_region
     }
@@ -613,10 +691,10 @@ where
         HashSet::new()
     }
 
-    /// Check if the network is orthogonalized.
+    /// Check if the network is canonized.
     ///
     /// Returns `true` if `ortho_region` is non-empty, `false` otherwise.
-    pub fn is_orthogonalized(&self) -> bool {
+    pub fn is_canonized(&self) -> bool {
         !self.ortho_region.is_empty()
     }
 
@@ -648,7 +726,7 @@ where
         self.set_ortho_region(region)
     }
 
-    /// Clear the orthogonalization region (mark network as not orthogonalized).
+    /// Clear the orthogonalization region (mark network as not canonized).
     pub fn clear_ortho_region(&mut self) {
         self.ortho_region.clear();
     }
@@ -775,7 +853,7 @@ where
     /// - Storage types are not dense (only DenseF64 and DenseC64 are supported)
     ///
     /// # Notes
-    /// - The result is not orthogonalized; `ortho_region` is cleared.
+    /// - The result is not canonized; `ortho_region` is cleared.
     /// - Bond dimensions increase: new_dim = dim_A + dim_B.
     /// - Only dense storage (DenseF64/DenseC64) is currently supported.
     pub fn add(self, other: Self) -> Result<Self>
@@ -856,8 +934,13 @@ where
             edge_info.insert(key, (bond_dim_a, bond_dim_b, shared_index));
         }
 
-        // Create new TreeTN
-        let mut result = Self::new();
+        // Create new TreeTN (empty)
+        let mut result = Self {
+            graph: NamedGraph::new(),
+            ortho_region: HashSet::new(),
+            site_index_network: SiteIndexNetwork::new(),
+            _mode: PhantomData,
+        };
 
         // Process each node
         for node_name in &node_names {
@@ -1069,7 +1152,7 @@ where
             };
 
             let new_tensor = TensorDynLen::new(canonical_indices, canonical_dims, Arc::new(new_storage));
-            result.add_tensor_with_name(node_name.clone(), new_tensor)?;
+            result.add_tensor_internal(node_name.clone(), new_tensor)?;
         }
 
         // Add connections using the SAME shared index on both endpoints
@@ -1079,10 +1162,10 @@ where
             let tgt_node = result.graph.node_index(tgt_name)
                 .ok_or_else(|| anyhow::anyhow!("Target node not found in result"))?;
             // Use the same shared_idx for both endpoints - this ensures contraction works
-            result.connect(src_node, shared_idx, tgt_node, shared_idx)?;
+            result.connect_internal(src_node, shared_idx, tgt_node, shared_idx)?;
         }
 
-        // Clear ortho_region (sum is not orthogonalized)
+        // Clear ortho_region (sum is not canonized)
         result.clear_ortho_region();
 
         Ok(result)
@@ -1201,13 +1284,13 @@ where
     /// Validate that `ortho_region` and edge `ortho_towards` are consistent.
     ///
     /// Rules:
-    /// - If `ortho_region` is empty (not orthogonalized), all edges must have `ortho_towards == None`.
+    /// - If `ortho_region` is empty (not canonized), all edges must have `ortho_towards == None`.
     /// - If `ortho_region` is non-empty, it must be connected in the tree (forms a subtree).
     /// - `ortho_towards == None` is allowed **only** when both edge endpoints are in `ortho_region`.
     /// - For any edge with at least one endpoint outside `ortho_region`, `ortho_towards` must be `Some(...)`
     ///   and must point towards the endpoint with smaller distance to `ortho_region`.
     pub fn validate_ortho_consistency(&self) -> Result<()> {
-        // If not orthogonalized, require no edge directions.
+        // If not canonized, require no edge directions.
         if self.ortho_region.is_empty() {
             for e in self.graph.graph().edge_indices() {
                 let conn = self.connection(e).ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
@@ -1355,31 +1438,18 @@ where
         Ok(())
     }
 
-    /// Orthogonalize the network using QR decomposition towards the specified ortho_region.
+    /// Canonize the network towards the specified ortho_region.
     ///
-    /// This method consumes the TreeTN and returns a new orthogonalized TreeTN.
-    /// The algorithm:
-    /// 1. Validates that the graph is a tree
-    /// 2. Sets the ortho_region and validates connectivity
-    /// 3. Computes distances from ortho_region using BFS
-    /// 4. Processes nodes in order of decreasing distance (farthest first)
-    /// 5. For each node, performs QR decomposition on edges pointing towards ortho_region
-    /// 6. Absorbs R factors into parent nodes using tensordot
+    /// This method consumes the TreeTN and returns a new canonized TreeTN.
+    /// Uses the default algorithm (QR decomposition).
     ///
     /// # Arguments
-    /// * `ortho_region` - The nodes that will serve as orthogonalization centers
+    /// * `ortho_region` - The nodes that will serve as canonization centers
     ///
     /// # Returns
-    /// A new orthogonalized TreeTN, or an error if validation fails or QR decomposition fails.
-    ///
-    /// # Errors
-    /// Returns an error if:
-    /// - The graph is not a tree
-    /// - ortho_region are not connected
-    /// - QR decomposition fails
-    /// - Tensor storage types are not DenseF64 or DenseC64
-    pub fn orthogonalize_with_qr(
-        mut self,
+    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    pub fn canonize(
+        self,
         ortho_region: impl IntoIterator<Item = NodeIndex>,
     ) -> Result<Self>
     where
@@ -1387,11 +1457,45 @@ where
         Symm: Clone + Symmetry + From<NoSymmSpace>,
         V: From<NodeIndex>,
     {
-        use tensor4all::qr;
+        self.canonize_with(ortho_region, FactorizeAlg::QR)
+    }
 
+    /// Canonize the network towards the specified ortho_region using a specified algorithm.
+    ///
+    /// This method consumes the TreeTN and returns a new canonized TreeTN.
+    /// The algorithm:
+    /// 1. Validates that the graph is a tree
+    /// 2. Sets the ortho_region and validates connectivity
+    /// 3. Computes distances from ortho_region using BFS
+    /// 4. Processes nodes in order of decreasing distance (farthest first)
+    /// 5. For each node, performs factorization on edges pointing towards ortho_region
+    /// 6. Absorbs the right factor into parent nodes using tensordot
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as canonization centers
+    /// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
+    ///
+    /// # Returns
+    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The graph is not a tree
+    /// - ortho_region are not connected
+    /// - Factorization fails
+    pub fn canonize_with(
+        mut self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+        alg: FactorizeAlg,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+    {
         // 1. Validate tree structure
         self.validate_tree()
-            .context("orthogonalize_with_qr: graph must be a tree")?;
+            .context("canonize_with: graph must be a tree")?;
 
         // 2. Set ortho_region and validate connectivity
         // Convert NodeIndex to V
@@ -1399,7 +1503,7 @@ where
             .map(V::from)
             .collect();
         self.set_ortho_region(ortho_region_v)
-            .context("orthogonalize_with_qr: failed to set ortho_region")?;
+            .context("canonize_with: failed to set ortho_region")?;
 
         if self.ortho_region.is_empty() {
             return Ok(self); // Nothing to do if no centers
@@ -1432,26 +1536,26 @@ where
                 seen_node_names.len(),
                 self.ortho_region.len()
             ))
-            .context("orthogonalize_with_qr: ortho_region must form a connected subtree");
+            .context("canonize_with: ortho_region must form a connected subtree");
         }
 
         // 3. Multi-source BFS to compute distances from ortho_region
         let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
-        let mut q = VecDeque::new();
+        let mut bfs_queue = VecDeque::new();
         for c in &self.ortho_region {
             if let Some(c_node) = self.graph.node_index(c) {
                 dist.insert(c_node, 0);
-                q.push_back(c_node);
+                bfs_queue.push_back(c_node);
             }
         }
         {
             let g = self.graph.graph();
-            while let Some(v) = q.pop_front() {
+            while let Some(v) = bfs_queue.pop_front() {
                 let dv = dist[&v];
                 for nb in g.neighbors(v) {
                     if !dist.contains_key(&nb) {
                         dist.insert(nb, dv + 1);
-                        q.push_back(nb);
+                        bfs_queue.push_back(nb);
                     }
                 }
             }
@@ -1475,7 +1579,7 @@ where
             let v_dist = dist[&v];
             let parent_dist = v_dist.checked_sub(1)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} at distance 0 but not in ortho_region", v))
-                .context("orthogonalize_with_qr: distance calculation error")?;
+                .context("canonize_with: distance calculation error")?;
 
             let (parent, edge) = {
                 let g = self.graph.graph();
@@ -1490,31 +1594,31 @@ where
                         v_dist,
                         parent_dist
                     ))
-                    .context("orthogonalize_with_qr: tree structure violation")?;
+                    .context("canonize_with: tree structure violation")?;
 
                 // Find the edge between v and parent
                 let edge = g
                     .edges_connecting(v, parent)
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("No edge found between node {:?} and parent {:?}", v, parent))
-                    .context("orthogonalize_with_qr: edge not found")?
+                    .context("canonize_with: edge not found")?
                     .id();
                 (parent, edge)
             };
 
             // Get the bond index on v-side corresponding to the parent edge.
-            // We will place this index on the RIGHT side of the QR unfolding so that
-            // R carries this bond and can be absorbed into the parent tensor.
+            // We will place this index on the RIGHT side of the factorization unfolding so that
+            // the right factor carries this bond and can be absorbed into the parent tensor.
             let parent_bond_v = self
                 .edge_index_for_node(edge, v)
-                .context("orthogonalize_with_qr: failed to get parent bond index on v")?
+                .context("canonize_with: failed to get parent bond index on v")?
                 .clone();
 
             // Get the tensor at node v (reference)
             let tensor_v = self
                 .tensor(v)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
-                .context("orthogonalize_with_qr: tensor not found")?;
+                .context("canonize_with: tensor not found")?;
 
             // Build left_inds = all indices of tensor_v EXCEPT the parent bond.
             let left_inds: Vec<Index<Id, Symm>> = tensor_v
@@ -1525,76 +1629,269 @@ where
                 .collect();
             if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
                 return Err(anyhow::anyhow!(
-                    "Cannot QR-orthogonalize node {:?}: need at least one left index and at least one right index",
+                    "Cannot canonize node {:?}: need at least one left index and at least one right index",
                     v
                 ))
-                .context("orthogonalize_with_qr: invalid tensor rank for QR");
+                .context("canonize_with: invalid tensor rank for factorization");
             }
 
-            // Determine storage type and perform QR decomposition
-            let (q_tensor, r_tensor) = match tensor_v.storage.as_ref() {
-                Storage::DenseF64(_) => qr::<Id, Symm, f64>(tensor_v, &left_inds)
-                    .map_err(|e| anyhow::anyhow!("QR decomposition failed: {}", e))
-                    .context("orthogonalize_with_qr: QR decomposition failed for f64")?,
-                Storage::DenseC64(_) => qr::<Id, Symm, Complex64>(tensor_v, &left_inds)
-                    .map_err(|e| anyhow::anyhow!("QR decomposition failed: {}", e))
-                    .context("orthogonalize_with_qr: QR decomposition failed for Complex64")?,
-                _ => {
-                    return Err(anyhow::anyhow!(
-                        "Unsupported storage type for QR decomposition (only DenseF64 and DenseC64 are supported)"
-                    ))
-                    .context("orthogonalize_with_qr: unsupported storage type");
-                }
+            // Set up factorization options
+            let factorize_options = FactorizeOptions {
+                alg,
+                canonical: Canonical::Left,
+                rtol: None,
+                max_rank: None,
             };
 
-            // In this split, R must contain the parent bond (as part of its right indices).
-            // We will absorb R into the parent along (edge_index_parent, parent_bond_v).
+            // Perform factorization using tensor-level factorize
+            let factorize_result = factorize(tensor_v, &left_inds, &factorize_options)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+                .context("canonize_with: factorization failed")?;
+
+            let left_tensor = factorize_result.left;
+            let right_tensor = factorize_result.right;
+
+            // In this split, right_tensor must contain the parent bond (as part of its right indices).
+            // We will absorb right_tensor into the parent along (edge_index_parent, parent_bond_v).
             let edge_index_parent = self
                 .edge_index_for_node(edge, parent)
-                .context("orthogonalize_with_qr: failed to get edge index for parent")?
+                .context("canonize_with: failed to get edge index for parent")?
                 .clone();
 
             let parent_tensor = self
                 .tensor(parent)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
-                .context("orthogonalize_with_qr: parent tensor not found")?;
+                .context("canonize_with: parent tensor not found")?;
 
             let updated_parent_tensor = parent_tensor
-                .tensordot(&r_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
-                .context("orthogonalize_with_qr: failed to absorb R into parent tensor")?;
+                .tensordot(&right_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
+                .context("canonize_with: failed to absorb right factor into parent tensor")?;
 
-            // The new bond index is the QR-created bond shared between Q and R.
-            // It is always the last index of Q and the first index of R.
-            let new_bond_index = q_tensor
-                .indices
-                .last()
-                .ok_or_else(|| anyhow::anyhow!("Q tensor has no indices"))?
-                .clone();
+            // The new bond index is the factorization-created bond shared between left and right.
+            // It is the bond_index from the factorize result.
+            let new_bond_index = factorize_result.bond_index;
 
             // Update the connection bond indices FIRST, so replace_tensor validation matches.
             self.replace_edge_bond(edge, new_bond_index.clone(), new_bond_index.clone())
-                .context("orthogonalize_with_qr: failed to update edge bond indices")?;
+                .context("canonize_with: failed to update edge bond indices")?;
 
             // Now update tensors. These validations should pass because the edge expects new_bond_index.
-            self.replace_tensor(v, q_tensor)
-                .context("orthogonalize_with_qr: failed to replace tensor at node v")?;
+            self.replace_tensor(v, left_tensor)
+                .context("canonize_with: failed to replace tensor at node v")?;
             self.replace_tensor(parent, updated_parent_tensor)
-                .context("orthogonalize_with_qr: failed to replace tensor at parent node")?;
+                .context("canonize_with: failed to replace tensor at parent node")?;
 
             // Set ortho_towards to point towards parent (ortho_region direction)
             let ortho_towards_index = self
                 .edge_index_for_node(edge, parent)
-                .context("orthogonalize_with_qr: failed to get ortho_towards index for parent")?
+                .context("canonize_with: failed to get ortho_towards index for parent")?
                 .clone();
             self.set_edge_ortho_towards(edge, Some(ortho_towards_index))
-                .context("orthogonalize_with_qr: failed to set ortho_towards")?;
+                .context("canonize_with: failed to set ortho_towards")?;
+        }
+
+        Ok(self)
+    }
+
+    /// Canonize the network towards the specified ortho_region using node names directly.
+    ///
+    /// This is a variant of `canonize_with` that accepts node names (V) directly,
+    /// rather than requiring conversion from `NodeIndex`. This is useful when
+    /// `V` does not implement `From<NodeIndex>` (e.g., when `V = usize`).
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The node names that will serve as canonization centers
+    /// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
+    ///
+    /// # Returns
+    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    pub fn canonize_by_names(
+        mut self,
+        ortho_region: impl IntoIterator<Item = V>,
+        alg: FactorizeAlg,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        // 1. Validate tree structure
+        self.validate_tree()
+            .context("canonize_by_names: graph must be a tree")?;
+
+        // 2. Set ortho_region and validate connectivity
+        let ortho_region_v: Vec<V> = ortho_region.into_iter().collect();
+        self.set_ortho_region(ortho_region_v)
+            .context("canonize_by_names: failed to set ortho_region")?;
+
+        if self.ortho_region.is_empty() {
+            return Ok(self); // Nothing to do if no centers
+        }
+
+        // Validate ortho_region connectivity
+        let g = self.graph.graph();
+        let start_node_name = self.ortho_region.iter().next()
+            .ok_or_else(|| anyhow::anyhow!("ortho_region unexpectedly empty"))?;
+        let start_node = self.graph.node_index(start_node_name)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in graph", start_node_name))?;
+        let mut stack = vec![start_node];
+        let mut seen_nodes = HashSet::new();
+        let mut seen_node_names = HashSet::new();
+        seen_nodes.insert(start_node);
+        seen_node_names.insert(start_node_name);
+        while let Some(v_node) = stack.pop() {
+            for nb_node in g.neighbors(v_node) {
+                if let Some(nb_node_name) = self.graph.node_name(nb_node) {
+                    if self.ortho_region.contains(nb_node_name) && seen_nodes.insert(nb_node) {
+                        seen_node_names.insert(nb_node_name);
+                        stack.push(nb_node);
+                    }
+                }
+            }
+        }
+        if seen_node_names.len() != self.ortho_region.len() {
+            return Err(anyhow::anyhow!(
+                "ortho_region is not connected: reached {} out of {} centers",
+                seen_node_names.len(),
+                self.ortho_region.len()
+            ))
+            .context("canonize_by_names: ortho_region must form a connected subtree");
+        }
+
+        // 3. Multi-source BFS to compute distances from ortho_region
+        let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut bfs_queue = VecDeque::new();
+        for c in &self.ortho_region {
+            if let Some(c_node) = self.graph.node_index(c) {
+                dist.insert(c_node, 0);
+                bfs_queue.push_back(c_node);
+            }
+        }
+        {
+            let g = self.graph.graph();
+            while let Some(v) = bfs_queue.pop_front() {
+                let dv = dist[&v];
+                for nb in g.neighbors(v) {
+                    if !dist.contains_key(&nb) {
+                        dist.insert(nb, dv + 1);
+                        bfs_queue.push_back(nb);
+                    }
+                }
+            }
+        }
+
+        // 4. Process nodes in order of decreasing distance (farthest first)
+        let mut nodes_by_distance: Vec<(NodeIndex, usize)> = dist
+            .iter()
+            .map(|(&node, &d)| (node, d))
+            .collect();
+        nodes_by_distance.sort_by(|a, b| b.1.cmp(&a.1)); // Sort descending by distance
+
+        for (v, _dv) in nodes_by_distance {
+            // Skip nodes in ortho_region (they are already at distance 0)
+            let v_node_name = self.graph.node_name(v);
+            if v_node_name.map(|v| self.ortho_region.contains(v)).unwrap_or(false) {
+                continue;
+            }
+
+            // Find parent: neighbor with distance one less
+            let v_dist = dist[&v];
+            let parent = {
+                let g = self.graph.graph();
+                g.neighbors(v)
+                    .find(|nb| dist.get(nb).copied() == Some(v_dist - 1))
+            }
+            .ok_or_else(|| anyhow::anyhow!("No parent found for node {:?}", v))
+            .context("canonize_by_names: parent node not found (graph should be a tree)")?;
+
+            // Find edge to parent
+            let edge = self.graph.graph().find_edge(v, parent)
+                .or_else(|| self.graph.graph().find_edge(parent, v))
+                .ok_or_else(|| anyhow::anyhow!("No edge between node {:?} and parent {:?}", v, parent))
+                .context("canonize_by_names: edge to parent not found")?;
+
+            // Get bond index on the v side (the index we will factorize over)
+            let parent_bond_v = self
+                .edge_index_for_node(edge, v)
+                .context("canonize_by_names: failed to get bond index for node v")?
+                .clone();
+
+            let tensor_v = self
+                .tensor(v)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
+                .context("canonize_by_names: tensor not found at node v")?;
+
+            // "Left indices" for factorization = all indices except the parent bond
+            let left_inds: Vec<_> = tensor_v
+                .indices
+                .iter()
+                .filter(|idx| idx.id != parent_bond_v.id)
+                .cloned()
+                .collect();
+
+            if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
+                return Err(anyhow::anyhow!(
+                    "Cannot canonize node {:?}: need at least one left index and at least one right index",
+                    v
+                ))
+                .context("canonize_by_names: invalid tensor rank for factorization");
+            }
+
+            // Set up factorization options
+            let factorize_options = FactorizeOptions {
+                alg,
+                canonical: Canonical::Left,
+                rtol: None,
+                max_rank: None,
+            };
+
+            // Perform factorization using tensor-level factorize
+            let factorize_result = factorize(tensor_v, &left_inds, &factorize_options)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+                .context("canonize_by_names: factorization failed")?;
+
+            let left_tensor = factorize_result.left;
+            let right_tensor = factorize_result.right;
+
+            // Absorb right_tensor into the parent
+            let edge_index_parent = self
+                .edge_index_for_node(edge, parent)
+                .context("canonize_by_names: failed to get edge index for parent")?
+                .clone();
+
+            let parent_tensor = self
+                .tensor(parent)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
+                .context("canonize_by_names: parent tensor not found")?;
+
+            let updated_parent_tensor = parent_tensor
+                .tensordot(&right_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
+                .context("canonize_by_names: failed to absorb right factor into parent tensor")?;
+
+            // Update the connection bond indices
+            let new_bond_index = factorize_result.bond_index;
+            self.replace_edge_bond(edge, new_bond_index.clone(), new_bond_index.clone())
+                .context("canonize_by_names: failed to update edge bond indices")?;
+
+            // Update tensors
+            self.replace_tensor(v, left_tensor)
+                .context("canonize_by_names: failed to replace tensor at node v")?;
+            self.replace_tensor(parent, updated_parent_tensor)
+                .context("canonize_by_names: failed to replace tensor at parent node")?;
+
+            // Set ortho_towards to point towards parent (ortho_region direction)
+            let ortho_towards_index = self
+                .edge_index_for_node(edge, parent)
+                .context("canonize_by_names: failed to get ortho_towards index for parent")?
+                .clone();
+            self.set_edge_ortho_towards(edge, Some(ortho_towards_index))
+                .context("canonize_by_names: failed to set ortho_towards")?;
         }
 
         Ok(self)
     }
 }
 
-impl<Id, Symm, V> Default for TreeTN<Id, Symm, V>
+impl<Id, Symm, V> Default for TreeTN<Id, Symm, V, Explicit>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
@@ -1605,6 +1902,23 @@ where
     }
 }
 
+impl<Id, Symm, V> Default for TreeTN<Id, Symm, V, Einsum>
+where
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug + Ord,
+    Symm: Clone + Symmetry,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    fn default() -> Self {
+        // Empty TreeTN with Einsum mode
+        Self {
+            graph: NamedGraph::new(),
+            ortho_region: HashSet::new(),
+            site_index_network: SiteIndexNetwork::new(),
+            _mode: PhantomData,
+        }
+    }
+}
+
 // ============================================================================
 // Scalar multiplication for TreeTN
 // ============================================================================
@@ -1612,11 +1926,12 @@ where
 use std::ops::Mul;
 use std::sync::Arc;
 
-impl<Id, Symm, V> Mul<f64> for TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> Mul<f64> for TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
 {
     type Output = Self;
 
@@ -1706,11 +2021,12 @@ where
     }
 }
 
-impl<Id, Symm, V> Mul<Complex64> for TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> Mul<Complex64> for TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
 {
     type Output = Self;
 
@@ -1793,26 +2109,28 @@ where
 }
 
 // Implement Mul with reference to avoid consuming TreeTN
-impl<Id, Symm, V> Mul<f64> for &TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> Mul<f64> for &TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
 {
-    type Output = TreeTN<Id, Symm, V>;
+    type Output = TreeTN<Id, Symm, V, Mode>;
 
     fn mul(self, a: f64) -> Self::Output {
         self.clone() * a
     }
 }
 
-impl<Id, Symm, V> Mul<Complex64> for &TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> Mul<Complex64> for &TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
 {
-    type Output = TreeTN<Id, Symm, V>;
+    type Output = TreeTN<Id, Symm, V, Mode>;
 
     fn mul(self, a: Complex64) -> Self::Output {
         self.clone() * a
@@ -1820,26 +2138,29 @@ where
 }
 
 // Clone implementation for TreeTN
-impl<Id, Symm, V> Clone for TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> Clone for TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+    Mode: BondMode,
 {
     fn clone(&self) -> Self {
         Self {
             graph: self.graph.clone(),
             ortho_region: self.ortho_region.clone(),
             site_index_network: self.site_index_network.clone(),
+            _mode: PhantomData,
         }
     }
 }
 
-impl<Id, Symm, V> std::fmt::Debug for TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> std::fmt::Debug for TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry + std::fmt::Debug,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+    Mode: BondMode,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreeTN")
@@ -1854,11 +2175,12 @@ where
 // TensorLike implementation for TreeTN
 // ============================================================================
 
-impl<Id, Symm, V> tensor4all::TensorLike for TreeTN<Id, Symm, V>
+impl<Id, Symm, V, Mode> tensor4all::TensorLike for TreeTN<Id, Symm, V, Mode>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     Symm: Clone + Symmetry + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
+    Mode: BondMode,
 {
     type Id = Id;
     type Symm = Symm;
@@ -2225,13 +2547,16 @@ impl<V: Clone + Hash + Eq> TreeTopology<V> {
 ///
 /// # Algorithm
 ///
-/// 1. Start from a leaf node, QR decompose to separate that node's physical indices
-/// 2. Contract R with remaining tensor, repeat for next edge
+/// 1. Start from a leaf node, factorize to separate that node's physical indices
+/// 2. Contract the right factor with remaining tensor, repeat for next edge
 /// 3. Continue until all edges are processed
 ///
 /// # Arguments
 /// * `tensor` - The dense tensor to decompose
 /// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
+///
+/// # Type Parameters
+/// * `Mode` - The bond mode for the resulting TreeTN (Einsum or Explicit)
 ///
 /// # Returns
 /// A TreeTN representing the decomposed tensor.
@@ -2240,26 +2565,84 @@ impl<V: Clone + Hash + Eq> TreeTopology<V> {
 /// Returns an error if:
 /// - The topology is invalid
 /// - Physical index positions don't match the tensor
-/// - QR decomposition fails
-pub fn decompose_tensor_to_treetn<Id, Symm, V>(
+/// - Factorization fails
+pub fn factorize_tensor_to_treetn<Id, Symm, V, Mode>(
     tensor: &TensorDynLen<Id, Symm>,
     topology: &TreeTopology<V>,
-) -> Result<TreeTN<Id, Symm, V>>
+) -> Result<TreeTN<Id, Symm, V, Mode>>
 where
     Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
 {
-    use tensor4all::qr::qr;
+    factorize_tensor_to_treetn_with(tensor, topology, FactorizeAlg::QR)
+}
 
+/// Factorize a dense tensor into a TreeTN using a specified factorization algorithm.
+///
+/// This function takes a dense tensor and a tree topology specification, then
+/// recursively decomposes the tensor using the specified algorithm to create a TreeTN.
+///
+/// # Algorithm
+///
+/// 1. Start from a leaf node, factorize to separate that node's physical indices
+/// 2. Contract the right factor with remaining tensor, repeat for next edge
+/// 3. Continue until all edges are processed
+///
+/// # Arguments
+/// * `tensor` - The dense tensor to decompose
+/// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
+/// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
+///
+/// # Type Parameters
+/// * `Mode` - The bond mode for the resulting TreeTN (Einsum or Explicit)
+///
+/// # Returns
+/// A TreeTN representing the decomposed tensor.
+///
+/// # Errors
+/// Returns an error if:
+/// - The topology is invalid
+/// - Physical index positions don't match the tensor
+/// - Factorization fails
+pub fn factorize_tensor_to_treetn_with<Id, Symm, V, Mode>(
+    tensor: &TensorDynLen<Id, Symm>,
+    topology: &TreeTopology<V>,
+    alg: FactorizeAlg,
+) -> Result<TreeTN<Id, Symm, V, Mode>>
+where
+    Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
+    Symm: Clone + Symmetry + From<NoSymmSpace>,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
+{
     topology.validate()?;
 
     if topology.nodes.len() == 1 {
         // Single node - just wrap the tensor
-        let mut tn = TreeTN::<Id, Symm, V>::new();
         let node_name = topology.nodes.keys().next().unwrap().clone();
-        tn.add_tensor_with_name(node_name, tensor.clone())?;
-        return Ok(tn);
+        if Mode::IS_EINSUM {
+            let einsum_tn = TreeTN::<Id, Symm, V, Einsum>::new(
+                vec![tensor.clone()],
+                vec![node_name],
+            )?;
+            return Ok(TreeTN {
+                graph: einsum_tn.graph,
+                ortho_region: einsum_tn.ortho_region,
+                site_index_network: einsum_tn.site_index_network,
+                _mode: PhantomData,
+            });
+        } else {
+            let mut explicit_tn = TreeTN::<Id, Symm, V, Explicit>::new();
+            explicit_tn.add_tensor(node_name, tensor.clone())?;
+            return Ok(TreeTN {
+                graph: explicit_tn.graph,
+                ortho_region: explicit_tn.ortho_region,
+                site_index_network: explicit_tn.site_index_network,
+                _mode: PhantomData,
+            });
+        }
     }
 
     // Validate that all index positions are valid
@@ -2329,6 +2712,14 @@ where
     // Store bond indices between nodes: (node_a, node_b) -> (index_on_a, index_on_b)
     let mut bond_indices: HashMap<(V, V), (Index<Id, Symm>, Index<Id, Symm>)> = HashMap::new();
 
+    // Set up factorization options
+    let factorize_options = FactorizeOptions {
+        alg,
+        canonical: Canonical::Left,
+        rtol: None,
+        max_rank: None,
+    };
+
     // Process nodes in post-order (leaves first)
     for i in 0..traversal_order.len() - 1 {
         let (node, parent) = &traversal_order[i];
@@ -2348,20 +2739,23 @@ where
             continue;
         }
 
-        // Perform QR decomposition
-        // Q will have the node's physical indices + bond index
-        // R will have bond index + remaining indices
-        let (q, r) = qr::<Id, Symm, f64>(&current_tensor, &left_inds)
-            .map_err(|e| anyhow::anyhow!("QR decomposition failed: {:?}", e))?;
+        // Perform factorization using tensor-level factorize
+        // left will have the node's physical indices + bond index
+        // right will have bond index + remaining indices
+        let factorize_result = factorize(&current_tensor, &left_inds, &factorize_options)
+            .map_err(|e| anyhow::anyhow!("Factorization failed: {:?}", e))?;
 
-        // Store Q as the node's tensor (with physical indices + bond to parent)
-        node_tensors.insert(node.clone(), q.clone());
+        let left = factorize_result.left;
+        let right = factorize_result.right;
+        let bond_index = factorize_result.bond_index;
+
+        // Store left as the node's tensor (with physical indices + bond to parent)
+        node_tensors.insert(node.clone(), left);
 
         // Store the bond index connecting this node to its parent
-        let bond_idx_node = q.indices.last().cloned()
-            .ok_or_else(|| anyhow::anyhow!("Q has no indices"))?;
-        let bond_idx_parent = r.indices.first().cloned()
-            .ok_or_else(|| anyhow::anyhow!("R has no indices"))?;
+        // The bond_index is shared between left and right
+        let bond_idx_node = bond_index.clone();
+        let bond_idx_parent = bond_index;
 
         // Store in canonical order
         let key = if *node < *parent_node {
@@ -2375,43 +2769,71 @@ where
             bond_indices.insert(key, (bond_idx_parent, bond_idx_node));
         }
 
-        // R becomes the current tensor for the next iteration
-        current_tensor = r;
+        // right becomes the current tensor for the next iteration
+        current_tensor = right;
     }
 
     // The last node (root) gets the remaining tensor
     let (root_node, _) = &traversal_order.last().unwrap();
     node_tensors.insert(root_node.clone(), current_tensor);
 
-    // Build the TreeTN
-    let mut tn = TreeTN::<Id, Symm, V>::new();
+    // Build the TreeTN based on Mode
+    if Mode::IS_EINSUM {
+        // Einsum mode: use TreeTN::new(tensors, node_names) for auto-connection
+        // Since factorize() returns shared bond_index, tensors already have matching index IDs
+        let node_names: Vec<V> = topology.nodes.keys().cloned().collect();
+        let tensors: Vec<TensorDynLen<Id, Symm>> = node_names.iter()
+            .map(|name| node_tensors.get(name).cloned().unwrap())
+            .collect();
 
-    // Add all tensors
-    for (node_name, tensor) in &node_tensors {
-        tn.add_tensor_with_name(node_name.clone(), tensor.clone())?;
-    }
+        // Build using Einsum mode constructor, then convert to target Mode
+        let einsum_tn = TreeTN::<Id, Symm, V, Einsum>::new(tensors, node_names)?;
 
-    // Add connections
-    for (a, b) in &topology.edges {
-        let key = if *a < *b {
-            (a.clone(), b.clone())
-        } else {
-            (b.clone(), a.clone())
-        };
+        // SAFETY: Both Einsum and Explicit have the same memory layout (PhantomData)
+        // and the network structure is valid for both modes
+        Ok(TreeTN {
+            graph: einsum_tn.graph,
+            ortho_region: einsum_tn.ortho_region,
+            site_index_network: einsum_tn.site_index_network,
+            _mode: PhantomData,
+        })
+    } else {
+        // Explicit mode: use add_tensor + connect
+        let mut tn = TreeTN::<Id, Symm, V, Explicit>::new();
 
-        if let Some((idx_a, idx_b)) = bond_indices.get(&key) {
-            let node_a = tn.graph.node_index(a)
-                .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", a))?;
-            let node_b = tn.graph.node_index(b)
-                .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", b))?;
+        // Add all tensors
+        for (node_name, t) in &node_tensors {
+            tn.add_tensor(node_name.clone(), t.clone())?;
+        }
 
-            if *a < *b {
-                tn.connect(node_a, idx_a, node_b, idx_b)?;
+        // Add connections
+        for (a, b) in &topology.edges {
+            let key = if *a < *b {
+                (a.clone(), b.clone())
             } else {
-                tn.connect(node_b, idx_a, node_a, idx_b)?;
+                (b.clone(), a.clone())
+            };
+
+            if let Some((idx_a, idx_b)) = bond_indices.get(&key) {
+                let node_a = tn.graph.node_index(a)
+                    .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", a))?;
+                let node_b = tn.graph.node_index(b)
+                    .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", b))?;
+
+                if *a < *b {
+                    tn.connect(node_a, idx_a, node_b, idx_b)?;
+                } else {
+                    tn.connect(node_b, idx_a, node_a, idx_b)?;
+                }
             }
         }
-    }
 
-    Ok(tn)
+        // Convert to target Mode
+        Ok(TreeTN {
+            graph: tn.graph,
+            ortho_region: tn.ortho_region,
+            site_index_network: tn.site_index_network,
+            _mode: PhantomData,
+        })
+    }
 }
