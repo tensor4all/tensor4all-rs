@@ -6,7 +6,10 @@
 //! # Features
 //!
 //! - `TensorTrain`: Main tensor train type with orthogonality tracking
-//! - Canonicalization with SVD, LU, or CI algorithms
+//! - Canonicalization with multiple canonical forms:
+//!   - `Unitary`: Uses QR decomposition, each tensor is isometric
+//!   - `LU`: Uses LU decomposition, one factor has unit diagonal
+//!   - `CI`: Uses Cross Interpolation
 //! - Truncation with configurable tolerance and max rank
 //! - Norm and inner product computations
 //!
@@ -31,7 +34,7 @@
 //! # Differences from ITensorMPS.jl
 //!
 //! - Uses 0-indexed sites (Julia uses 1-indexed)
-//! - Supports multiple canonicalization algorithms (SVD, LU, CI)
+//! - Supports multiple canonical forms: Unitary (using QR), LU, CI
 //! - Uses `conj` instead of `dag` (no index direction flipping without QN support)
 //! - Each site can have multiple site indices (not just one physical index per site)
 
@@ -40,5 +43,5 @@ pub mod options;
 pub mod tensortrain;
 
 pub use error::{TensorTrainError, Result};
-pub use options::{CanonicalMethod, TruncateAlg, TruncateOptions};
+pub use options::{CanonicalForm, TruncateAlg, TruncateOptions};
 pub use tensortrain::TensorTrain;

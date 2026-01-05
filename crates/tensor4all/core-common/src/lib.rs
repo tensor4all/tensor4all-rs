@@ -4,7 +4,7 @@ pub mod index_ops;
 pub mod smallstring;
 pub mod tagset;
 
-pub use algorithm::{CompressionAlgorithm, ContractionAlgorithm, FactorizeAlgorithm};
+pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm, FactorizeAlgorithm};
 pub use index::{DefaultIndex, DynId, Index, NoSymmSpace, Symmetry};
 pub use index_ops::{
     check_unique_indices, common_inds, hascommoninds, hasind, hasinds, noncommon_inds,
