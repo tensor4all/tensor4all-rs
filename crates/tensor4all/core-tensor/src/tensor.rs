@@ -1041,6 +1041,66 @@ where
     }
 }
 
+// ============================================================================
+// Norm Computation
+// ============================================================================
+
+impl<Id, Symm> TensorDynLen<Id, Symm>
+where
+    Id: Clone + std::hash::Hash + Eq,
+    Symm: Clone + Symmetry,
+{
+    /// Compute the squared Frobenius norm of the tensor: ||T||² = Σ|T_ijk...|²
+    ///
+    /// For real tensors: sum of squares of all elements.
+    /// For complex tensors: sum of |z|² = z * conj(z) for all elements.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core_tensor::TensorDynLen;
+    /// use tensor4all_core_tensor::Storage;
+    /// use tensor4all_core_tensor::storage::DenseStorageF64;
+    /// use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+    /// use std::sync::Arc;
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];  // 1² + 2² + ... + 6² = 91
+    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    /// let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i, j], vec![2, 3], storage);
+    ///
+    /// assert!((tensor.norm_squared() - 91.0).abs() < 1e-10);
+    /// ```
+    pub fn norm_squared(&self) -> f64 {
+        // Contract tensor with its conjugate over all indices → scalar
+        // ||T||² = Σ T_ijk... * conj(T_ijk...) = Σ |T_ijk...|²
+        let conj = self.conj();
+        let scalar = self.contract_einsum(&conj);
+        scalar.sum().real()  // Result is always real for ||T||²
+    }
+
+    /// Compute the Frobenius norm of the tensor: ||T|| = sqrt(Σ|T_ijk...|²)
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core_tensor::TensorDynLen;
+    /// use tensor4all_core_tensor::Storage;
+    /// use tensor4all_core_tensor::storage::DenseStorageF64;
+    /// use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+    /// use std::sync::Arc;
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let data = vec![3.0, 4.0];  // sqrt(9 + 16) = 5
+    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    /// let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i], vec![2], storage);
+    ///
+    /// assert!((tensor.norm() - 5.0).abs() < 1e-10);
+    /// ```
+    pub fn norm(&self) -> f64 {
+        self.norm_squared().sqrt()
+    }
+}
+
 impl<Id, Symm> std::fmt::Debug for TensorDynLen<Id, Symm>
 where
     Id: std::fmt::Debug,

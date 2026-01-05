@@ -2106,6 +2106,166 @@ where
 
         Ok(self)
     }
+
+    /// Canonize the network in-place towards the specified ortho_region using node names.
+    ///
+    /// This is the `&mut self` version of `canonize_by_names_with`.
+    /// Useful when you need to keep using the same variable after canonization.
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The node names that will serve as canonization centers
+    /// * `form` - The canonical form to use
+    ///
+    /// # Example
+    /// ```ignore
+    /// tn.canonize_by_names_mut(std::iter::once("A".to_string()), CanonicalForm::Unitary)?;
+    /// // tn is now canonized and can be used directly
+    /// ```
+    pub fn canonize_by_names_mut(
+        &mut self,
+        ortho_region: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        Self: Default,
+    {
+        // Take self, canonize, and put it back
+        let taken = std::mem::take(self);
+        match taken.canonize_by_names_with(ortho_region, form) {
+            Ok(canonized) => {
+                *self = canonized;
+                Ok(())
+            }
+            Err(e) => {
+                // On error, self is left in default state
+                // This is a limitation of this pattern
+                Err(e)
+            }
+        }
+    }
+
+    /// Force canonize the network in-place using node names.
+    ///
+    /// This is the `&mut self` version of `force_canonize_by_names_with`.
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The node names that will serve as canonization centers
+    /// * `form` - The canonical form to use
+    pub fn force_canonize_by_names_mut(
+        &mut self,
+        ortho_region: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        Self: Default,
+    {
+        let taken = std::mem::take(self);
+        match taken.force_canonize_by_names_with(ortho_region, form) {
+            Ok(canonized) => {
+                *self = canonized;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Canonize the network in-place towards the specified ortho_region.
+    ///
+    /// This is the `&mut self` version of `canonize`.
+    /// Uses the default canonical form (Unitary).
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as canonization centers
+    ///
+    /// # Example
+    /// ```ignore
+    /// tn.canonize_mut(std::iter::once(n1))?;
+    /// // tn is now canonized and can be used directly
+    /// ```
+    pub fn canonize_mut(
+        &mut self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+        Self: Default,
+    {
+        self.canonize_with_mut(ortho_region, CanonicalForm::Unitary)
+    }
+
+    /// Canonize the network in-place towards the specified ortho_region using a specified canonical form.
+    ///
+    /// This is the `&mut self` version of `canonize_with`.
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as canonization centers
+    /// * `form` - The canonical form to use
+    ///
+    /// # Example
+    /// ```ignore
+    /// tn.canonize_with_mut(std::iter::once(n1), CanonicalForm::Unitary)?;
+    /// // tn is now canonized and can be used directly
+    /// ```
+    pub fn canonize_with_mut(
+        &mut self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+        form: CanonicalForm,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+        Self: Default,
+    {
+        let taken = std::mem::take(self);
+        match taken.canonize_with(ortho_region, form) {
+            Ok(canonized) => {
+                *self = canonized;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Force canonize the network in-place towards the specified ortho_region.
+    ///
+    /// This is the `&mut self` version of `force_canonize_with`.
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as canonization centers
+    /// * `form` - The canonical form to use
+    ///
+    /// # Example
+    /// ```ignore
+    /// tn.force_canonize_with_mut(std::iter::once(n1), CanonicalForm::Unitary)?;
+    /// // tn is now canonized and can be used directly
+    /// ```
+    pub fn force_canonize_with_mut(
+        &mut self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+        form: CanonicalForm,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+        Self: Default,
+    {
+        let taken = std::mem::take(self);
+        match taken.force_canonize_with(ortho_region, form) {
+            Ok(canonized) => {
+                *self = canonized;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
 }
 
 impl<Id, Symm, V> Default for TreeTN<Id, Symm, V, Explicit>
@@ -2352,6 +2512,94 @@ where
 
     fn mul(self, a: Complex64) -> Self::Output {
         self.clone() * a
+    }
+}
+
+// ============================================================================
+// Norm Computation
+// ============================================================================
+
+impl<Id, Symm, V, Mode> TreeTN<Id, Symm, V, Mode>
+where
+    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
+    Symm: Clone + Symmetry + From<NoSymmSpace>,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
+    Self: Default,
+{
+    /// Compute the natural logarithm of the Frobenius norm: ln(||TN||).
+    ///
+    /// **Warning**: This method may canonize the network if not already canonized
+    /// to a single Unitary center. Use `log_norm` (without canonization) if you
+    /// want to preserve the current canonization state.
+    ///
+    /// This is computed in a numerically stable way by:
+    /// 1. Ensuring Unitary canonization to a single site
+    /// 2. Computing ||center_tensor|| from that single center
+    ///
+    /// For Unitary canonical form, tensors outside the center satisfy Q†Q = I,
+    /// so they don't contribute to the norm: ||TN|| = ||center_tensor||.
+    ///
+    /// # Algorithm
+    /// - If already Unitary canonized to single site → use that site (no canonization)
+    /// - If Unitary canonized to multiple sites → canonize to min of ortho_region first
+    /// - Otherwise → Unitary canonize to min node name
+    ///
+    /// # Returns
+    /// `ln(||TN||)` as f64
+    ///
+    /// # Note
+    /// Unlike norm² which differs by factor 2 in log space from norm,
+    /// this function returns `ln(||TN||)`, not `ln(||TN||²)`.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The network is empty
+    /// - Canonization fails
+    pub fn log_norm(&mut self) -> Result<f64> {
+        let n = self.node_count();
+        if n == 0 {
+            return Err(anyhow::anyhow!("Cannot compute log_norm of empty TreeTN"))
+                .context("log_norm: network must have at least one node");
+        }
+
+        // Determine the single center site (by name)
+        let center_name: V = if self.is_canonized()
+            && self.canonical_form() == Some(CanonicalForm::Unitary)
+        {
+            if self.ortho_region.len() == 1 {
+                // Already Unitary canonized to single site - use it
+                self.ortho_region.iter().next().unwrap().clone()
+            } else {
+                // Unitary canonized to multiple sites - canonize to min site
+                let min_center = self.ortho_region.iter().min().unwrap().clone();
+                self.canonize_by_names_mut(std::iter::once(min_center.clone()), CanonicalForm::Unitary)
+                    .context("log_norm: failed to canonize to single site")?;
+                min_center
+            }
+        } else {
+            // Not canonized or not Unitary - canonize to min node name
+            let min_node_name = self.node_names().into_iter().min()
+                .ok_or_else(|| anyhow::anyhow!("No nodes in TreeTN"))
+                .context("log_norm: network must have nodes")?;
+            self.canonize_by_names_mut(std::iter::once(min_node_name.clone()), CanonicalForm::Unitary)
+                .context("log_norm: failed to canonize")?;
+            min_node_name
+        };
+
+        // Get center node index and tensor
+        let center_node = self.node_index(&center_name)
+            .ok_or_else(|| anyhow::anyhow!("Center node not found"))
+            .context("log_norm: center node must exist")?;
+
+        let center_tensor = self.tensor(center_node)
+            .ok_or_else(|| anyhow::anyhow!("Center tensor not found"))
+            .context("log_norm: center tensor must exist")?;
+
+        let norm_sq = center_tensor.norm_squared();
+        let norm = norm_sq.sqrt();
+
+        Ok(norm.ln())
     }
 }
 
