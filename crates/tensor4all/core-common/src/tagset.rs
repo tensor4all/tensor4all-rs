@@ -1,4 +1,4 @@
-use crate::smallstring::{SmallString, SmallStringError};
+use crate::smallstring::{SmallChar, SmallString, SmallStringError};
 
 /// Trait for tag set implementations.
 ///
@@ -81,31 +81,15 @@ pub trait TagSetLike: Default + Clone + PartialEq + Eq {
     /// Tags are automatically sorted.
     fn from_str(s: &str) -> Result<Self, TagSetError> {
         let mut tagset = Self::default();
-        
-        // Parse comma-separated tags, ignoring whitespace
-        let mut current_tag = String::new();
-        for ch in s.chars() {
-            if ch == ',' {
-                if !current_tag.is_empty() {
-                    let trimmed: String = current_tag.chars().filter(|c| !c.is_whitespace()).collect();
-                    if !trimmed.is_empty() {
-                        tagset.add_tag(&trimmed)?;
-                    }
-                    current_tag.clear();
-                }
-            } else {
-                current_tag.push(ch);
-            }
-        }
-        
-        // Handle the last tag
-        if !current_tag.is_empty() {
-            let trimmed: String = current_tag.chars().filter(|c| !c.is_whitespace()).collect();
+
+        // Parse comma-separated tags, trimming whitespace
+        for tag in s.split(',') {
+            let trimmed: String = tag.chars().filter(|c| !c.is_whitespace()).collect();
             if !trimmed.is_empty() {
                 tagset.add_tag(&trimmed)?;
             }
         }
-        
+
         Ok(tagset)
     }
 }
@@ -120,9 +104,27 @@ pub type TagSetIterator<'a> = Box<dyn Iterator<Item = String> + 'a>;
 ///
 /// Tags are always maintained in sorted order, regardless of insertion order,
 /// similar to ITensors.jl's `TagSet`.
+///
+/// # Type Parameters
+/// - `MAX_TAGS`: Maximum number of tags (default: 4, matching ITensors.jl)
+/// - `MAX_TAG_LEN`: Maximum length of each tag (default: 16, matching ITensors.jl)
+/// - `C`: Character type for tags (default: `u16` for ITensors.jl compatibility)
+///
+/// # Example
+/// ```
+/// use tensor4all_core_common::tagset::TagSet;
+///
+/// // Default: u16 characters (ITensors.jl compatible)
+/// let mut ts = TagSet::<4, 16>::new();
+/// ts.add_tag("site").unwrap();
+///
+/// // Explicit char type for full Unicode support
+/// let mut ts_unicode = TagSet::<4, 16, char>::new();
+/// ts_unicode.add_tag("日本語").unwrap();
+/// ```
 #[derive(Debug, Clone, Copy)]
-pub struct TagSet<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> {
-    tags: [SmallString<MAX_TAG_LEN>; MAX_TAGS],
+pub struct TagSet<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar = u16> {
+    tags: [SmallString<MAX_TAG_LEN, C>; MAX_TAGS],
     length: usize, // Actual number of tags (0 ≤ length ≤ MAX_TAGS)
 }
 
@@ -134,7 +136,7 @@ pub enum TagSetError {
     InvalidTag(SmallStringError),
 }
 
-impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSet<MAX_TAGS, MAX_TAG_LEN> {
+impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> TagSet<MAX_TAGS, MAX_TAG_LEN, C> {
     /// Create an empty TagSet.
     pub fn new() -> Self {
         Self {
@@ -156,13 +158,18 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSet<MAX_TAGS, MAX_TAG_L
         self.length
     }
 
+    /// Check if the tag set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.length == 0
+    }
+
     /// Get the maximum capacity.
     pub fn capacity(&self) -> usize {
         MAX_TAGS
     }
 
     /// Get a tag at the given index.
-    pub fn get(&self, index: usize) -> Option<&SmallString<MAX_TAG_LEN>> {
+    pub fn get(&self, index: usize) -> Option<&SmallString<MAX_TAG_LEN, C>> {
         if index < self.length {
             Some(&self.tags[index])
         } else {
@@ -171,7 +178,7 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSet<MAX_TAGS, MAX_TAG_L
     }
 
     /// Iterate over tags.
-    pub fn iter(&self) -> impl Iterator<Item = &SmallString<MAX_TAG_LEN>> {
+    pub fn iter(&self) -> impl Iterator<Item = &SmallString<MAX_TAG_LEN, C>> {
         self.tags[..self.length].iter()
     }
 
@@ -181,7 +188,7 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSet<MAX_TAGS, MAX_TAG_L
     }
 
     /// Check if all tags in another TagSet are present.
-    pub fn has_tags(&self, tags: &TagSet<MAX_TAGS, MAX_TAG_LEN>) -> bool {
+    pub fn has_tags(&self, tags: &TagSet<MAX_TAGS, MAX_TAG_LEN, C>) -> bool {
         <Self as TagSetLike>::has_tags(self, tags)
     }
 
@@ -201,7 +208,9 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSet<MAX_TAGS, MAX_TAG_L
     }
 }
 
-impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSetLike for TagSet<MAX_TAGS, MAX_TAG_LEN> {
+impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> TagSetLike
+    for TagSet<MAX_TAGS, MAX_TAG_LEN, C>
+{
     fn len(&self) -> usize {
         self.length
     }
@@ -223,7 +232,7 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSetLike for TagSet<MAX_
     }
 
     fn has_tag(&self, tag: &str) -> bool {
-        let tag_str = match SmallString::<MAX_TAG_LEN>::from_str(tag) {
+        let tag_str = match SmallString::<MAX_TAG_LEN, C>::from_str(tag) {
             Ok(s) => s,
             Err(_) => return false,
         };
@@ -231,17 +240,17 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSetLike for TagSet<MAX_
     }
 
     fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError> {
-        let tag_str = SmallString::<MAX_TAG_LEN>::from_str(tag)
-            .map_err(|e| TagSetError::InvalidTag(e))?;
+        let tag_str =
+            SmallString::<MAX_TAG_LEN, C>::from_str(tag).map_err(TagSetError::InvalidTag)?;
         self._add_tag_ordered(tag_str)
     }
 
     fn remove_tag(&mut self, tag: &str) -> bool {
-        let tag_str = match SmallString::<MAX_TAG_LEN>::from_str(tag) {
+        let tag_str = match SmallString::<MAX_TAG_LEN, C>::from_str(tag) {
             Ok(s) => s,
             Err(_) => return false,
         };
-        
+
         if let Some(pos) = self.tags[..self.length].iter().position(|t| *t == tag_str) {
             // Shift remaining tags left
             for i in pos..self.length - 1 {
@@ -255,9 +264,12 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSetLike for TagSet<MAX_
     }
 }
 
-impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSet<MAX_TAGS, MAX_TAG_LEN> {
+impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> TagSet<MAX_TAGS, MAX_TAG_LEN, C> {
     /// Internal: Add a tag in sorted order (similar to ITensors.jl's `_addtag_ordered!`).
-    fn _add_tag_ordered(&mut self, tag: SmallString<MAX_TAG_LEN>) -> Result<(), TagSetError> {
+    fn _add_tag_ordered(
+        &mut self,
+        tag: SmallString<MAX_TAG_LEN, C>,
+    ) -> Result<(), TagSetError> {
         // Check for duplicates
         if self._has_tag(&tag) {
             return Ok(()); // Already present, no error
@@ -289,18 +301,22 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> TagSet<MAX_TAGS, MAX_TAG_L
     }
 
     /// Internal: Check if a tag is present (binary search).
-    fn _has_tag(&self, tag: &SmallString<MAX_TAG_LEN>) -> bool {
+    fn _has_tag(&self, tag: &SmallString<MAX_TAG_LEN, C>) -> bool {
         self.tags[..self.length].binary_search(tag).is_ok()
     }
 }
 
-impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> Default for TagSet<MAX_TAGS, MAX_TAG_LEN> {
+impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> Default
+    for TagSet<MAX_TAGS, MAX_TAG_LEN, C>
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> PartialEq for TagSet<MAX_TAGS, MAX_TAG_LEN> {
+impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> PartialEq
+    for TagSet<MAX_TAGS, MAX_TAG_LEN, C>
+{
     fn eq(&self, other: &Self) -> bool {
         if self.length != other.length {
             return false;
@@ -309,11 +325,13 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> PartialEq for TagSet<MAX_T
     }
 }
 
-impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize> Eq for TagSet<MAX_TAGS, MAX_TAG_LEN> {}
+impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> Eq
+    for TagSet<MAX_TAGS, MAX_TAG_LEN, C>
+{
+}
 
-/// Default tag type (max 16 characters, matching ITensors.jl's `SmallString`).
+/// Default tag type (max 16 characters, u16 storage, matching ITensors.jl's `SmallString`).
 pub type Tag = SmallString<16>;
 
-/// Default TagSet (max 4 tags, each tag max 16 characters, matching ITensors.jl's `TagSet`).
+/// Default TagSet (max 4 tags, each tag max 16 characters, u16 storage, matching ITensors.jl).
 pub type DefaultTagSet = TagSet<4, 16>;
-
