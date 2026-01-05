@@ -449,14 +449,14 @@ fn test_treetn_validate_tree_empty() {
 // ============================================================================
 
 #[test]
-fn test_ortho_region_empty() {
+fn test_canonical_center_empty() {
     let tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
     assert!(!tn.is_canonicalized());
-    assert!(tn.ortho_region().is_empty());
+    assert!(tn.canonical_center().is_empty());
 }
 
 #[test]
-fn test_set_ortho_region() {
+fn test_set_canonical_center() {
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
 
     let i = Index::new_dyn(2);
@@ -469,23 +469,23 @@ fn test_set_ortho_region() {
 
     assert!(!tn.is_canonicalized());
 
-    let result = tn.set_ortho_region(vec![node]);
+    let result = tn.set_canonical_center(vec![node]);
     assert!(result.is_ok());
     assert!(tn.is_canonicalized());
-    assert!(tn.ortho_region().contains(&node));
+    assert!(tn.canonical_center().contains(&node));
 }
 
 #[test]
-fn test_set_ortho_region_invalid_node() {
+fn test_set_canonical_center_invalid_node() {
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
 
     let invalid_node = NodeIndex::new(999);
-    let result = tn.set_ortho_region(vec![invalid_node]);
+    let result = tn.set_canonical_center(vec![invalid_node]);
     assert!(result.is_err());
 }
 
 #[test]
-fn test_clear_ortho_region() {
+fn test_clear_canonical_center() {
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
 
     let i = Index::new_dyn(2);
@@ -496,12 +496,12 @@ fn test_clear_ortho_region() {
     );
     let node = tn.add_tensor_auto_name(tensor);
 
-    tn.set_ortho_region(vec![node]).unwrap();
+    tn.set_canonical_center(vec![node]).unwrap();
     assert!(tn.is_canonicalized());
 
-    tn.clear_ortho_region();
+    tn.clear_canonical_center();
     assert!(!tn.is_canonicalized());
-    assert!(tn.ortho_region().is_empty());
+    assert!(tn.canonical_center().is_empty());
 }
 
 // ============================================================================
@@ -522,7 +522,7 @@ fn test_validate_ortho_consistency_disconnected_centers() {
     let n2 = tn.add_tensor_auto_name(tensor2);
 
     // Two centers that are not connected should fail
-    tn.set_ortho_region(vec![n1, n2]).unwrap();
+    tn.set_canonical_center(vec![n1, n2]).unwrap();
     assert!(tn.validate_ortho_consistency().is_err());
 }
 
@@ -531,7 +531,7 @@ fn test_validate_ortho_consistency_none_only_inside_centers() {
     let (mut tn, _node1, node2, edge, _phys1, _bond, _phys2) = create_two_node_treetn();
 
     // Only node2 is center
-    tn.set_ortho_region(vec![node2]).unwrap();
+    tn.set_canonical_center(vec![node2]).unwrap();
 
     // Clear ortho_towards on a boundary edge (should be forbidden)
     tn.set_edge_ortho_towards(edge, None).unwrap();
@@ -543,7 +543,7 @@ fn test_validate_ortho_consistency_chain_pointing_towards_center() {
     let (mut tn, _n1, n2, _n3, e12, e23, _b12, _b23) = create_three_node_chain();
 
     // n2 is center
-    tn.set_ortho_region(vec![n2]).unwrap();
+    tn.set_canonical_center(vec![n2]).unwrap();
 
     // Both boundary edges must point into center
     tn.set_edge_ortho_towards(e12, Some(n2)).unwrap();
@@ -586,7 +586,7 @@ fn test_canonicalize_simple() {
     let tn_canon = tn.canonicalize(vec![n2]).unwrap();
 
     assert!(tn_canon.is_canonicalized());
-    assert!(tn_canon.ortho_region().contains(&n2));
+    assert!(tn_canon.canonical_center().contains(&n2));
     assert!(tn_canon.validate_ortho_consistency().is_ok());
 }
 
