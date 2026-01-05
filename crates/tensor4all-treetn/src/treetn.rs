@@ -644,6 +644,21 @@ where
         self.graph.graph().edge_count()
     }
 
+    /// Get the NodeIndex for a node by name.
+    pub fn node_index(&self, node_name: &V) -> Option<NodeIndex> {
+        self.graph.node_index(node_name)
+    }
+
+    /// Get the EdgeIndex for the edge between two nodes by name.
+    ///
+    /// Returns `None` if either node doesn't exist or there's no edge between them.
+    pub fn edge_between(&self, node_a: &V, node_b: &V) -> Option<EdgeIndex> {
+        let idx_a = self.graph.node_index(node_a)?;
+        let idx_b = self.graph.node_index(node_b)?;
+        self.graph.graph().find_edge(idx_a, idx_b)
+            .or_else(|| self.graph.graph().find_edge(idx_b, idx_a))
+    }
+
     /// Get all node indices in the tree tensor network.
     pub fn node_indices(&self) -> Vec<NodeIndex> {
         self.graph.graph().node_indices().collect()
@@ -1677,6 +1692,203 @@ where
 
         Ok(self)
     }
+
+    /// Canonize the network towards the specified ortho_region using node names directly.
+    ///
+    /// This is a variant of `canonize_with` that accepts node names (V) directly,
+    /// rather than requiring conversion from `NodeIndex`. This is useful when
+    /// `V` does not implement `From<NodeIndex>` (e.g., when `V = usize`).
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The node names that will serve as canonization centers
+    /// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
+    ///
+    /// # Returns
+    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    pub fn canonize_by_names(
+        mut self,
+        ortho_region: impl IntoIterator<Item = V>,
+        alg: FactorizeAlg,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        // 1. Validate tree structure
+        self.validate_tree()
+            .context("canonize_by_names: graph must be a tree")?;
+
+        // 2. Set ortho_region and validate connectivity
+        let ortho_region_v: Vec<V> = ortho_region.into_iter().collect();
+        self.set_ortho_region(ortho_region_v)
+            .context("canonize_by_names: failed to set ortho_region")?;
+
+        if self.ortho_region.is_empty() {
+            return Ok(self); // Nothing to do if no centers
+        }
+
+        // Validate ortho_region connectivity
+        let g = self.graph.graph();
+        let start_node_name = self.ortho_region.iter().next()
+            .ok_or_else(|| anyhow::anyhow!("ortho_region unexpectedly empty"))?;
+        let start_node = self.graph.node_index(start_node_name)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in graph", start_node_name))?;
+        let mut stack = vec![start_node];
+        let mut seen_nodes = HashSet::new();
+        let mut seen_node_names = HashSet::new();
+        seen_nodes.insert(start_node);
+        seen_node_names.insert(start_node_name);
+        while let Some(v_node) = stack.pop() {
+            for nb_node in g.neighbors(v_node) {
+                if let Some(nb_node_name) = self.graph.node_name(nb_node) {
+                    if self.ortho_region.contains(nb_node_name) && seen_nodes.insert(nb_node) {
+                        seen_node_names.insert(nb_node_name);
+                        stack.push(nb_node);
+                    }
+                }
+            }
+        }
+        if seen_node_names.len() != self.ortho_region.len() {
+            return Err(anyhow::anyhow!(
+                "ortho_region is not connected: reached {} out of {} centers",
+                seen_node_names.len(),
+                self.ortho_region.len()
+            ))
+            .context("canonize_by_names: ortho_region must form a connected subtree");
+        }
+
+        // 3. Multi-source BFS to compute distances from ortho_region
+        let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut bfs_queue = VecDeque::new();
+        for c in &self.ortho_region {
+            if let Some(c_node) = self.graph.node_index(c) {
+                dist.insert(c_node, 0);
+                bfs_queue.push_back(c_node);
+            }
+        }
+        {
+            let g = self.graph.graph();
+            while let Some(v) = bfs_queue.pop_front() {
+                let dv = dist[&v];
+                for nb in g.neighbors(v) {
+                    if !dist.contains_key(&nb) {
+                        dist.insert(nb, dv + 1);
+                        bfs_queue.push_back(nb);
+                    }
+                }
+            }
+        }
+
+        // 4. Process nodes in order of decreasing distance (farthest first)
+        let mut nodes_by_distance: Vec<(NodeIndex, usize)> = dist
+            .iter()
+            .map(|(&node, &d)| (node, d))
+            .collect();
+        nodes_by_distance.sort_by(|a, b| b.1.cmp(&a.1)); // Sort descending by distance
+
+        for (v, _dv) in nodes_by_distance {
+            // Skip nodes in ortho_region (they are already at distance 0)
+            let v_node_name = self.graph.node_name(v);
+            if v_node_name.map(|v| self.ortho_region.contains(v)).unwrap_or(false) {
+                continue;
+            }
+
+            // Find parent: neighbor with distance one less
+            let v_dist = dist[&v];
+            let parent = {
+                let g = self.graph.graph();
+                g.neighbors(v)
+                    .find(|nb| dist.get(nb).copied() == Some(v_dist - 1))
+            }
+            .ok_or_else(|| anyhow::anyhow!("No parent found for node {:?}", v))
+            .context("canonize_by_names: parent node not found (graph should be a tree)")?;
+
+            // Find edge to parent
+            let edge = self.graph.graph().find_edge(v, parent)
+                .or_else(|| self.graph.graph().find_edge(parent, v))
+                .ok_or_else(|| anyhow::anyhow!("No edge between node {:?} and parent {:?}", v, parent))
+                .context("canonize_by_names: edge to parent not found")?;
+
+            // Get bond index on the v side (the index we will factorize over)
+            let parent_bond_v = self
+                .edge_index_for_node(edge, v)
+                .context("canonize_by_names: failed to get bond index for node v")?
+                .clone();
+
+            let tensor_v = self
+                .tensor(v)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
+                .context("canonize_by_names: tensor not found at node v")?;
+
+            // "Left indices" for factorization = all indices except the parent bond
+            let left_inds: Vec<_> = tensor_v
+                .indices
+                .iter()
+                .filter(|idx| idx.id != parent_bond_v.id)
+                .cloned()
+                .collect();
+
+            if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
+                return Err(anyhow::anyhow!(
+                    "Cannot canonize node {:?}: need at least one left index and at least one right index",
+                    v
+                ))
+                .context("canonize_by_names: invalid tensor rank for factorization");
+            }
+
+            // Set up factorization options
+            let factorize_options = FactorizeOptions {
+                alg,
+                canonical: Canonical::Left,
+                rtol: None,
+                max_rank: None,
+            };
+
+            // Perform factorization using tensor-level factorize
+            let factorize_result = factorize(tensor_v, &left_inds, &factorize_options)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+                .context("canonize_by_names: factorization failed")?;
+
+            let left_tensor = factorize_result.left;
+            let right_tensor = factorize_result.right;
+
+            // Absorb right_tensor into the parent
+            let edge_index_parent = self
+                .edge_index_for_node(edge, parent)
+                .context("canonize_by_names: failed to get edge index for parent")?
+                .clone();
+
+            let parent_tensor = self
+                .tensor(parent)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
+                .context("canonize_by_names: parent tensor not found")?;
+
+            let updated_parent_tensor = parent_tensor
+                .tensordot(&right_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
+                .context("canonize_by_names: failed to absorb right factor into parent tensor")?;
+
+            // Update the connection bond indices
+            let new_bond_index = factorize_result.bond_index;
+            self.replace_edge_bond(edge, new_bond_index.clone(), new_bond_index.clone())
+                .context("canonize_by_names: failed to update edge bond indices")?;
+
+            // Update tensors
+            self.replace_tensor(v, left_tensor)
+                .context("canonize_by_names: failed to replace tensor at node v")?;
+            self.replace_tensor(parent, updated_parent_tensor)
+                .context("canonize_by_names: failed to replace tensor at parent node")?;
+
+            // Set ortho_towards to point towards parent (ortho_region direction)
+            let ortho_towards_index = self
+                .edge_index_for_node(edge, parent)
+                .context("canonize_by_names: failed to get ortho_towards index for parent")?
+                .clone();
+            self.set_edge_ortho_towards(edge, Some(ortho_towards_index))
+                .context("canonize_by_names: failed to set ortho_towards")?;
+        }
+
+        Ok(self)
+    }
 }
 
 impl<Id, Symm, V> Default for TreeTN<Id, Symm, V, Explicit>
@@ -1687,6 +1899,23 @@ where
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<Id, Symm, V> Default for TreeTN<Id, Symm, V, Einsum>
+where
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug + Ord,
+    Symm: Clone + Symmetry,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    fn default() -> Self {
+        // Empty TreeTN with Einsum mode
+        Self {
+            graph: NamedGraph::new(),
+            ortho_region: HashSet::new(),
+            site_index_network: SiteIndexNetwork::new(),
+            _mode: PhantomData,
+        }
     }
 }
 

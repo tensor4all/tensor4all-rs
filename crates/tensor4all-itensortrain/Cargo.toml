@@ -13,8 +13,10 @@ categories = ["science", "mathematics"]
 tensor4all-core-tensor = { path = "../tensor4all/core-tensor" }
 tensor4all-core-linalg = { path = "../tensor4all/core-linalg" }
 tensor4all-core-common = { path = "../tensor4all/core-common" }
+tensor4all-treetn = { path = "../tensor4all-treetn" }
 num-complex = "0.4"
 thiserror = "2.0"
+petgraph = "0.7"
 
 [dev-dependencies]
 approx = "0.5"

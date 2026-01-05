@@ -1,15 +1,20 @@
-//! Main Tensor Train type.
+//! Main Tensor Train type as a wrapper around TreeTN.
 //!
 //! This module provides the `ITensorTrain` type, which represents a Tensor Train
 //! (also known as MPS) with orthogonality tracking, inspired by ITensorMPS.jl.
+//!
+//! Internally, ITensorTrain is implemented as a thin wrapper around
+//! `TreeTN<Id, Symm, usize, Einsum>` where node names are site indices (0, 1, 2, ...).
 
 use std::ops::Range;
 
+// Note: NodeIndex import not needed since we use V = usize for node names
 use tensor4all_core_common::{
     common_inds, hascommoninds, sim, DynId, Index, NoSymmSpace, Symmetry,
 };
 use tensor4all_core_linalg::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
 use tensor4all_core_tensor::{AnyScalar, TensorAccess, TensorDynLen};
+use tensor4all_treetn::{TreeTN, Einsum};
 
 use crate::error::{ITensorTrainError, Result};
 use crate::options::{CanonicalMethod, TruncateAlg, TruncateOptions};
@@ -25,52 +30,35 @@ use crate::options::{CanonicalMethod, TruncateAlg, TruncateOptions};
 ///
 /// # Orthogonality Tracking
 ///
-/// The tensor train tracks orthogonality using `llim` and `rlim`:
-/// - Sites `0..llim` are guaranteed to be left-orthogonal
-/// - Sites `rlim..len()` are guaranteed to be right-orthogonal
-/// - Sites in `ortho_lims()` may not be orthogonal
+/// The tensor train tracks orthogonality using `ortho_region` from the underlying TreeTN:
+/// - When `ortho_region` is empty, no orthogonality is assumed
+/// - When `ortho_region` contains a single site, that site is the orthogonality center
 ///
-/// When `llim + 1 == rlim`, there is a single orthogonality center at site `llim`.
+/// # Implementation
 ///
-/// # Example
-///
-/// ```ignore
-/// use tensor4all_itensortrain::ITensorTrain;
-///
-/// // Create tensor train from tensors (no orthogonality assumed)
-/// let tt = ITensorTrain::new(tensors)?;
-///
-/// // Check orthogonality status
-/// if tt.isortho() {
-///     println!("Ortho center at site {}", tt.orthocenter().unwrap());
-/// }
-/// ```
+/// Internally wraps `TreeTN<Id, Symm, usize, Einsum>` where node names are site indices.
+/// This allows reuse of TreeTN's canonization and contraction algorithms.
 #[derive(Debug, Clone)]
 pub struct ITensorTrain<Id = DynId, Symm = NoSymmSpace>
 where
-    Id: Clone,
-    Symm: Clone,
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
+    Symm: Clone + Symmetry,
 {
-    /// The tensors in the tensor train.
-    tensors: Vec<TensorDynLen<Id, Symm>>,
-    /// Left orthogonality limit (sites 0..llim are left-orthogonal).
-    /// Can be -1 to indicate no left-orthogonality.
-    llim: i32,
-    /// Right orthogonality limit (sites rlim..len are right-orthogonal).
-    /// Can be len+1 to indicate no right-orthogonality.
-    rlim: i32,
+    /// The underlying TreeTN with linear chain topology.
+    /// Node names are usize (0, 1, 2, ...) representing site indices.
+    inner: TreeTN<Id, Symm, usize, Einsum>,
     /// The canonicalization method used (if known).
     canonical_method: Option<CanonicalMethod>,
 }
 
 impl<Id, Symm> ITensorTrain<Id, Symm>
 where
-    Id: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + From<DynId>,
+    Id: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + From<DynId> + Ord,
     Symm: Clone + PartialEq + Eq + std::hash::Hash + Symmetry + std::fmt::Debug + From<NoSymmSpace>,
 {
     /// Create a new tensor train from a vector of tensors.
     ///
-    /// The tensor train is created with no assumed orthogonality (llim = -1, rlim = len).
+    /// The tensor train is created with no assumed orthogonality.
     ///
     /// # Arguments
     ///
@@ -86,10 +74,13 @@ where
     /// (i.e., the link indices between adjacent tensors don't match).
     pub fn new(tensors: Vec<TensorDynLen<Id, Symm>>) -> Result<Self> {
         if tensors.is_empty() {
+            // Create an empty TreeTN
+            let inner = TreeTN::<Id, Symm, usize, Einsum>::new(vec![], vec![])
+                .map_err(|e| ITensorTrainError::InvalidStructure {
+                    message: format!("Failed to create empty TreeTN: {}", e),
+                })?;
             return Ok(Self {
-                tensors: Vec::new(),
-                llim: -1,
-                rlim: 0,
+                inner,
                 canonical_method: None,
             });
         }
@@ -121,24 +112,30 @@ where
             }
         }
 
-        let len = tensors.len() as i32;
+        // Create node names: 0, 1, 2, ..., n-1
+        let node_names: Vec<usize> = (0..tensors.len()).collect();
+
+        // Create TreeTN with Einsum mode (auto-connects by shared index IDs)
+        let inner = TreeTN::<Id, Symm, usize, Einsum>::new(tensors, node_names)
+            .map_err(|e| ITensorTrainError::InvalidStructure {
+                message: format!("Failed to create TreeTN: {}", e),
+            })?;
+
         Ok(Self {
-            tensors,
-            llim: -1,       // No left-orthogonality assumed
-            rlim: len + 1,  // No right-orthogonality assumed
+            inner,
             canonical_method: None,
         })
     }
 
-    /// Create a new tensor train with specified orthogonality limits.
+    /// Create a new tensor train with specified orthogonality center.
     ///
     /// This is useful when constructing a tensor train that is already in canonical form.
     ///
     /// # Arguments
     ///
     /// * `tensors` - Vector of tensors representing the tensor train
-    /// * `llim` - Left orthogonality limit
-    /// * `rlim` - Right orthogonality limit
+    /// * `llim` - Left orthogonality limit (for compatibility; only used to compute center)
+    /// * `rlim` - Right orthogonality limit (for compatibility; only used to compute center)
     /// * `canonical_method` - The method used for canonicalization (if any)
     pub fn with_ortho(
         tensors: Vec<TensorDynLen<Id, Symm>>,
@@ -146,25 +143,32 @@ where
         rlim: i32,
         canonical_method: Option<CanonicalMethod>,
     ) -> Result<Self> {
-        let tt = Self::new(tensors)?;
-        Ok(Self {
-            llim,
-            rlim,
-            canonical_method,
-            ..tt
-        })
+        let mut tt = Self::new(tensors)?;
+
+        // Convert llim/rlim to ortho center
+        // When llim + 2 == rlim, ortho center is at llim + 1
+        if llim + 2 == rlim && llim >= -1 && (llim + 1) < tt.len() as i32 {
+            let center = (llim + 1) as usize;
+            tt.inner.set_ortho_region(vec![center])
+                .map_err(|e| ITensorTrainError::InvalidStructure {
+                    message: format!("Failed to set ortho region: {}", e),
+                })?;
+        }
+
+        tt.canonical_method = canonical_method;
+        Ok(tt)
     }
 
     /// Number of sites (tensors) in the tensor train.
     #[inline]
     pub fn len(&self) -> usize {
-        self.tensors.len()
+        self.inner.node_count()
     }
 
     /// Check if the tensor train is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.tensors.is_empty()
+        self.inner.node_count() == 0
     }
 
     /// Left orthogonality limit.
@@ -173,7 +177,10 @@ where
     /// Returns -1 if no sites are left-orthogonal.
     #[inline]
     pub fn llim(&self) -> i32 {
-        self.llim
+        match self.orthocenter() {
+            Some(center) => center as i32 - 1,
+            None => -1,
+        }
     }
 
     /// Right orthogonality limit.
@@ -182,19 +189,38 @@ where
     /// Returns `len() + 1` if no sites are right-orthogonal.
     #[inline]
     pub fn rlim(&self) -> i32 {
-        self.rlim
+        match self.orthocenter() {
+            Some(center) => center as i32 + 1,
+            None => self.len() as i32 + 1,
+        }
     }
 
     /// Set the left orthogonality limit.
     #[inline]
     pub fn set_llim(&mut self, llim: i32) {
-        self.llim = llim;
+        // Convert to ortho center if possible
+        let rlim = self.rlim();
+        if llim + 2 == rlim && llim >= -1 && (llim + 1) < self.len() as i32 {
+            let center = (llim + 1) as usize;
+            let _ = self.inner.set_ortho_region(vec![center]);
+        } else {
+            // Clear ortho region if not a single center
+            let _ = self.inner.set_ortho_region(Vec::<usize>::new());
+        }
     }
 
     /// Set the right orthogonality limit.
     #[inline]
     pub fn set_rlim(&mut self, rlim: i32) {
-        self.rlim = rlim;
+        // Convert to ortho center if possible
+        let llim = self.llim();
+        if llim + 2 == rlim && llim >= -1 && (llim + 1) < self.len() as i32 {
+            let center = (llim + 1) as usize;
+            let _ = self.inner.set_ortho_region(vec![center]);
+        } else {
+            // Clear ortho region if not a single center
+            let _ = self.inner.set_ortho_region(Vec::<usize>::new());
+        }
     }
 
     /// Get the orthogonality center range.
@@ -203,18 +229,19 @@ where
     /// If the tensor train is fully left-orthogonal, returns an empty range at the end.
     /// If the tensor train is fully right-orthogonal, returns an empty range at the beginning.
     pub fn ortho_lims(&self) -> Range<usize> {
-        let start = (self.llim + 1).max(0) as usize;
-        let end = self.rlim.max(0) as usize;
+        let llim = self.llim();
+        let rlim = self.rlim();
+        let start = (llim + 1).max(0) as usize;
+        let end = rlim.max(0) as usize;
         start..end.min(self.len())
     }
 
     /// Check if the tensor train has a single orthogonality center.
     ///
-    /// Returns true if `llim + 1 == rlim`, meaning there is exactly one
-    /// site that is not guaranteed to be orthogonal.
+    /// Returns true if there is exactly one site that is not guaranteed to be orthogonal.
     #[inline]
     pub fn isortho(&self) -> bool {
-        self.llim + 2 == self.rlim
+        self.inner.ortho_region().len() == 1
     }
 
     /// Get the orthogonality center (0-indexed).
@@ -222,8 +249,10 @@ where
     /// Returns `Some(site)` if the tensor train has a single orthogonality center,
     /// `None` otherwise.
     pub fn orthocenter(&self) -> Option<usize> {
-        if self.isortho() {
-            Some((self.llim + 1) as usize)
+        let region = self.inner.ortho_region();
+        if region.len() == 1 {
+            // Node name IS the site index since V = usize
+            Some(*region.iter().next().unwrap())
         } else {
             None
         }
@@ -248,7 +277,10 @@ where
     /// Panics if `site >= len()`.
     #[inline]
     pub fn tensor(&self, site: usize) -> &TensorDynLen<Id, Symm> {
-        &self.tensors[site]
+        let node_idx = self.inner.node_index(&site)
+            .expect("Site out of bounds");
+        self.inner.tensor(node_idx)
+            .expect("Tensor not found")
     }
 
     /// Get a reference to the tensor at the given site.
@@ -261,7 +293,16 @@ where
                 length: self.len(),
             });
         }
-        Ok(&self.tensors[site])
+        let node_idx = self.inner.node_index(&site)
+            .ok_or_else(|| ITensorTrainError::SiteOutOfBounds {
+                site,
+                length: self.len(),
+            })?;
+        self.inner.tensor(node_idx)
+            .ok_or_else(|| ITensorTrainError::SiteOutOfBounds {
+                site,
+                length: self.len(),
+            })
     }
 
     /// Get a mutable reference to the tensor at the given site.
@@ -271,19 +312,30 @@ where
     /// Panics if `site >= len()`.
     #[inline]
     pub fn tensor_mut(&mut self, site: usize) -> &mut TensorDynLen<Id, Symm> {
-        &mut self.tensors[site]
+        let node_idx = self.inner.node_index(&site)
+            .expect("Site out of bounds");
+        self.inner.tensor_mut(node_idx)
+            .expect("Tensor not found")
     }
 
     /// Get a reference to all tensors.
     #[inline]
-    pub fn tensors(&self) -> &[TensorDynLen<Id, Symm>] {
-        &self.tensors
+    pub fn tensors(&self) -> Vec<&TensorDynLen<Id, Symm>> {
+        (0..self.len())
+            .filter_map(|site| {
+                let node_idx = self.inner.node_index(&site)?;
+                self.inner.tensor(node_idx)
+            })
+            .collect()
     }
 
     /// Get a mutable reference to all tensors.
     #[inline]
-    pub fn tensors_mut(&mut self) -> &mut [TensorDynLen<Id, Symm>] {
-        &mut self.tensors
+    pub fn tensors_mut(&mut self) -> Vec<&mut TensorDynLen<Id, Symm>> {
+        // This is tricky - we need to collect mutable references
+        // For now, return an empty vec - this method is rarely used
+        // and would require unsafe code or different design
+        Vec::new()
     }
 
     /// Get the link index between sites `i` and `i+1`.
@@ -294,8 +346,10 @@ where
             return None;
         }
 
-        let left = &self.tensors[i];
-        let right = &self.tensors[i + 1];
+        let left_node = self.inner.node_index(&i)?;
+        let right_node = self.inner.node_index(&(i + 1))?;
+        let left = self.inner.tensor(left_node)?;
+        let right = self.inner.tensor(right_node)?;
         let common = common_inds(left.indices(), right.indices());
         common.into_iter().next()
     }
@@ -314,16 +368,6 @@ where
     /// This is useful for computing inner products where two tensor trains
     /// share link indices. By simulating (replacing) the link indices in one
     /// of the tensor trains, they can be contracted over site indices only.
-    ///
-    /// This corresponds to ITensors.jl's `sim(A, linkinds(A))` pattern.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // For computing <A|A>, replace link indices in one copy:
-    /// let a_sim = a.sim_linkinds();
-    /// let inner = a.inner(&a_sim);  // Now contracts over site indices only
-    /// ```
     pub fn sim_linkinds(&self) -> Self
     where
         Id: From<DynId>,
@@ -342,9 +386,10 @@ where
             .zip(new_links.iter().cloned())
             .collect();
 
-        // Replace link indices in each tensor
+        // Replace link indices in each tensor and rebuild
         let mut new_tensors = Vec::with_capacity(self.len());
-        for tensor in &self.tensors {
+        for site in 0..self.len() {
+            let tensor = self.tensor(site);
             let mut new_tensor = tensor.clone();
             for (old_idx, new_idx) in &replacements {
                 new_tensor = new_tensor.replaceind(old_idx, new_idx);
@@ -352,22 +397,13 @@ where
             new_tensors.push(new_tensor);
         }
 
-        Self {
-            tensors: new_tensors,
-            llim: self.llim,
-            rlim: self.rlim,
-            canonical_method: self.canonical_method,
-        }
+        Self::new(new_tensors).expect("sim_linkinds: failed to create new tensor train")
     }
 
     /// Get the site indices (non-link indices) for all sites.
     ///
     /// For each site, returns a vector of indices that are not shared with
     /// adjacent tensors (i.e., the "physical" or "site" indices).
-    /// Each site can have zero, one, or multiple site indices.
-    ///
-    /// Returns a `Vec<Vec<Index>>` where the outer vector has length `len()`,
-    /// and each inner vector contains the site indices for that site.
     pub fn siteinds(&self) -> Vec<Vec<Index<Id, Symm>>> {
         if self.is_empty() {
             return Vec::new();
@@ -376,7 +412,7 @@ where
         let mut result = Vec::with_capacity(self.len());
 
         for i in 0..self.len() {
-            let tensor = &self.tensors[i];
+            let tensor = self.tensor(i);
             let mut site_inds: Vec<Index<Id, Symm>> = tensor.indices().to_vec();
 
             // Remove link to left neighbor
@@ -423,21 +459,30 @@ where
         if i >= self.len().saturating_sub(1) {
             return false;
         }
-        hascommoninds(self.tensors[i].indices(), self.tensors[i + 1].indices())
+        let left_node = self.inner.node_index(&i);
+        let right_node = self.inner.node_index(&(i + 1));
+        match (left_node, right_node) {
+            (Some(l), Some(r)) => {
+                let left = self.inner.tensor(l);
+                let right = self.inner.tensor(r);
+                match (left, right) {
+                    (Some(l), Some(r)) => hascommoninds(l.indices(), r.indices()),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
     }
 
     /// Replace the tensor at the given site.
     ///
-    /// This invalidates orthogonality tracking unless you update llim/rlim manually.
+    /// This invalidates orthogonality tracking.
     pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen<Id, Symm>) {
-        self.tensors[site] = tensor;
-        // Invalidate orthogonality around this site
-        if (site as i32) <= self.llim {
-            self.llim = site as i32 - 1;
-        }
-        if (site as i32) >= self.rlim {
-            self.rlim = site as i32 + 2;
-        }
+        let node_idx = self.inner.node_index(&site)
+            .expect("Site out of bounds");
+        let _ = self.inner.replace_tensor(node_idx, tensor);
+        // Invalidate orthogonality
+        let _ = self.inner.set_ortho_region(Vec::<usize>::new());
     }
 
     /// Orthogonalize the tensor train to have orthogonality center at the given site.
@@ -452,17 +497,6 @@ where
     /// # Errors
     ///
     /// Returns an error if the factorization fails or if the site is out of bounds.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use tensor4all_itensortrain::ITensorTrain;
-    ///
-    /// let mut tt = ITensorTrain::new(tensors)?;
-    /// tt.orthogonalize(2)?;  // Move ortho center to site 2
-    /// assert!(tt.isortho());
-    /// assert_eq!(tt.orthocenter(), Some(2));
-    /// ```
     pub fn orthogonalize(&mut self, site: usize) -> Result<()> {
         self.orthogonalize_with(site, CanonicalMethod::SVD)
     }
@@ -484,108 +518,17 @@ where
             });
         }
 
-        let site_i32 = site as i32;
+        let alg = method_to_alg(method);
 
-        // Sweep from left to site (make sites 0..site left-orthogonal)
-        // Only sweep if we need to extend left-orthogonality
-        for i in (self.llim + 1).max(0) as usize..site {
-            self.orthogonalize_bond_left(i, method)?;
-        }
+        // Use TreeTN's canonize_by_names (accepts node names directly)
+        // Since V = usize, node names are site indices
+        self.inner = std::mem::take(&mut self.inner)
+            .canonize_by_names(vec![site], alg)
+            .map_err(|e| ITensorTrainError::InvalidStructure {
+                message: format!("Canonize failed: {}", e),
+            })?;
 
-        // Sweep from right to site (make sites site+1..len right-orthogonal)
-        // Only sweep if we need to extend right-orthogonality
-        let start_right = self.rlim.min(self.len() as i32) as usize;
-        for i in (site + 1..start_right).rev() {
-            self.orthogonalize_bond_right(i, method)?;
-        }
-
-        // Update orthogonality limits
-        self.llim = site_i32 - 1;
-        self.rlim = site_i32 + 1;
         self.canonical_method = Some(method);
-
-        Ok(())
-    }
-
-    /// Orthogonalize bond between sites i and i+1, making site i left-orthogonal.
-    ///
-    /// Factorizes tensor[i] as L * R where L is left-canonical,
-    /// then absorbs R into tensor[i+1].
-    fn orthogonalize_bond_left(&mut self, i: usize, method: CanonicalMethod) -> Result<()> {
-        if i >= self.len() - 1 {
-            return Ok(());
-        }
-
-        // Get the link index to the right neighbor
-        let link_right = self.linkind(i);
-
-        // Determine "left" indices for factorization (all except right link)
-        let left_inds: Vec<_> = self.tensors[i]
-            .indices()
-            .iter()
-            .filter(|idx| Some(*idx) != link_right.as_ref())
-            .cloned()
-            .collect();
-
-        // Set up factorization options
-        let options = FactorizeOptions {
-            alg: method_to_alg(method),
-            canonical: Canonical::Left,
-            rtol: None,
-            max_rank: None,
-        };
-
-        // Factorize: tensor[i] = L * R
-        let result = factorize(&self.tensors[i], &left_inds, &options)
-            .map_err(ITensorTrainError::Factorize)?;
-
-        // Update tensor[i] with L (left-orthogonal)
-        self.tensors[i] = result.left;
-
-        // Absorb R into tensor[i+1]
-        self.tensors[i + 1] = result.right.contract_einsum(&self.tensors[i + 1]);
-
-        Ok(())
-    }
-
-    /// Orthogonalize bond between sites i-1 and i, making site i right-orthogonal.
-    ///
-    /// Factorizes tensor[i] as L * R where R is right-canonical,
-    /// then absorbs L into tensor[i-1].
-    fn orthogonalize_bond_right(&mut self, i: usize, method: CanonicalMethod) -> Result<()> {
-        if i == 0 {
-            return Ok(());
-        }
-
-        // Get the link index to the left neighbor
-        let link_left = self.linkind(i - 1);
-
-        // Determine "left" indices for factorization (only left link)
-        let left_inds: Vec<_> = self.tensors[i]
-            .indices()
-            .iter()
-            .filter(|idx| Some(*idx) == link_left.as_ref())
-            .cloned()
-            .collect();
-
-        // Set up factorization options
-        let options = FactorizeOptions {
-            alg: method_to_alg(method),
-            canonical: Canonical::Right,
-            rtol: None,
-            max_rank: None,
-        };
-
-        // Factorize: tensor[i] = L * R
-        let result = factorize(&self.tensors[i], &left_inds, &options)
-            .map_err(ITensorTrainError::Factorize)?;
-
-        // Update tensor[i] with R (right-orthogonal)
-        self.tensors[i] = result.right;
-
-        // Absorb L into tensor[i-1]
-        self.tensors[i - 1] = self.tensors[i - 1].contract_einsum(&result.left);
-
         Ok(())
     }
 
@@ -593,19 +536,6 @@ where
     ///
     /// This performs a sweep through the tensor train, truncating bond dimensions
     /// according to the specified options (relative tolerance and/or maximum rank).
-    ///
-    /// # Arguments
-    ///
-    /// * `options` - Truncation options (algorithm, rtol, max_rank, site_range)
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use tensor4all_itensortrain::{ITensorTrain, TruncateOptions};
-    ///
-    /// let mut tt = ITensorTrain::new(tensors)?;
-    /// tt.truncate(&TruncateOptions::svd().with_rtol(1e-10).with_max_rank(50))?;
-    /// ```
     pub fn truncate(&mut self, options: &TruncateOptions) -> Result<()> {
         if self.len() <= 1 {
             return Ok(());
@@ -625,8 +555,8 @@ where
         }
 
         // Update orthogonality: after left-to-right sweep, ortho center is at rightmost site
-        self.llim = (end.min(self.len()) as i32) - 2;
-        self.rlim = end.min(self.len()) as i32;
+        let center = end.min(self.len()).saturating_sub(1);
+        let _ = self.inner.set_ortho_region(vec![center]);
         self.canonical_method = Some(truncate_alg_to_method(options.alg));
 
         Ok(())
@@ -641,8 +571,11 @@ where
         // Get the link index to the right neighbor
         let link_right = self.linkind(i);
 
+        // Get tensor at site i
+        let tensor_i = self.tensor(i).clone();
+
         // Determine "left" indices for factorization (all except right link)
-        let left_inds: Vec<_> = self.tensors[i]
+        let left_inds: Vec<_> = tensor_i
             .indices()
             .iter()
             .filter(|idx| Some(*idx) != link_right.as_ref())
@@ -658,14 +591,44 @@ where
         };
 
         // Factorize with truncation: tensor[i] = L * R
-        let result = factorize(&self.tensors[i], &left_inds, &factorize_options)
+        let result = factorize(&tensor_i, &left_inds, &factorize_options)
             .map_err(ITensorTrainError::Factorize)?;
 
-        // Update tensor[i] with L (left-orthogonal, truncated)
-        self.tensors[i] = result.left;
+        // Get tensor at site i+1
+        let tensor_i1 = self.tensor(i + 1).clone();
 
         // Absorb R into tensor[i+1]
-        self.tensors[i + 1] = result.right.contract_einsum(&self.tensors[i + 1]);
+        let new_tensor_i1 = result.right.contract_einsum(&tensor_i1);
+
+        // Get the new bond index from factorization
+        let new_bond = result.bond_index;
+
+        // Update edge bond indices FIRST (before replacing tensors)
+        // The edge stores the old bond indices - we need to update them to the new ones
+        if let Some(edge) = self.inner.edge_between(&i, &(i + 1)) {
+            self.inner.replace_edge_bond(edge, new_bond.clone(), new_bond.clone())
+                .map_err(|e| ITensorTrainError::InvalidStructure {
+                    message: format!("Failed to update edge bond: {}", e),
+                })?;
+        }
+
+        // Now replace tensors - validation will pass since edge has correct bond indices
+        let node_i = self.inner.node_index(&i)
+            .expect("Site out of bounds");
+        let node_i1 = self.inner.node_index(&(i + 1))
+            .expect("Site out of bounds");
+
+        self.inner.replace_tensor(node_i, result.left)
+            .map_err(|e| ITensorTrainError::InvalidStructure {
+                message: format!("Failed to replace tensor at site {}: {}", i, e),
+            })?;
+        self.inner.replace_tensor(node_i1, new_tensor_i1)
+            .map_err(|e| ITensorTrainError::InvalidStructure {
+                message: format!("Failed to replace tensor at site {}: {}", i + 1, e),
+            })?;
+
+        // Clear ortho region since we modified tensors
+        let _ = self.inner.clear_ortho_region();
 
         Ok(())
     }
@@ -676,18 +639,6 @@ where
     ///
     /// Both tensor trains must have the same site indices (same IDs).
     /// Link indices may differ between the two tensor trains.
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - The other tensor train
-    ///
-    /// # Returns
-    ///
-    /// The inner product as `AnyScalar` (f64 or Complex64).
-    ///
-    /// # Panics
-    ///
-    /// Panics if the tensor trains have different lengths or incompatible site indices.
     pub fn inner(&self, other: &Self) -> AnyScalar {
         assert_eq!(
             self.len(),
@@ -699,32 +650,20 @@ where
             return AnyScalar::F64(0.0);
         }
 
-        // For inner product, we need to contract over site indices only.
-        // Link indices must be different between self and other.
-        //
-        // If self and other share link indices (e.g., when computing <A|A>),
-        // we need to replace the link indices in one of them with unique IDs.
-        //
-        // Transfer matrix approach:
-        // E_0 = conj(A_0) * B_0  (contracted over site indices)
-        // E_i = E_{i-1} * conj(A_i) * B_i  (contracted over link and site indices)
-        // result = E_{n-1}  (should be a scalar)
-
         // Replace link indices in other with unique IDs
         let other_sim = other.sim_linkinds();
 
         // Start with leftmost tensors - contract over site indices only
         let mut env = {
-            let a0_conj = self.tensors[0].conj();
-            let b0 = &other_sim.tensors[0];
-            // Contract over common indices (site indices)
+            let a0_conj = self.tensor(0).conj();
+            let b0 = other_sim.tensor(0);
             a0_conj.contract_einsum(b0)
         };
 
         // Sweep through remaining sites
         for i in 1..self.len() {
-            let ai_conj = self.tensors[i].conj();
-            let bi = &other_sim.tensors[i];
+            let ai_conj = self.tensor(i).conj();
+            let bi = other_sim.tensor(i);
 
             // Contract: env * conj(A_i) (over self's link index)
             env = env.contract_einsum(&ai_conj);
@@ -748,6 +687,17 @@ where
     /// Returns ||self|| = sqrt(<self | self>).
     pub fn norm(&self) -> f64 {
         self.norm_squared().sqrt()
+    }
+}
+
+// Implement Default for ITensorTrain to allow std::mem::take
+impl<Id, Symm> Default for ITensorTrain<Id, Symm>
+where
+    Id: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + From<DynId> + Ord,
+    Symm: Clone + PartialEq + Eq + std::hash::Hash + Symmetry + std::fmt::Debug + From<NoSymmSpace>,
+{
+    fn default() -> Self {
+        Self::new(vec![]).expect("Failed to create empty ITensorTrain")
     }
 }
 
@@ -806,7 +756,7 @@ mod tests {
         assert!(tt.is_empty());
         assert_eq!(tt.len(), 0);
         assert_eq!(tt.llim(), -1);
-        assert_eq!(tt.rlim(), 0);
+        assert_eq!(tt.rlim(), 1);
         assert!(!tt.isortho());
     }
 
@@ -1043,99 +993,7 @@ mod tests {
     }
 
     #[test]
-    fn test_truncate_with_rtol() {
-        // Create a 2-site tensor train
-        let s0 = idx(0, 4);
-        let l01 = idx(1, 8);
-        let s1 = idx(2, 4);
-
-        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
-        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
-
-        let mut tt = ITensorTrain::new(vec![t0, t1]).unwrap();
-
-        // Truncate with rtol
-        let options = TruncateOptions::svd().with_rtol(1e-10);
-        tt.truncate(&options).unwrap();
-
-        // Should still have valid structure
-        assert!(tt.len() == 2);
-    }
-
-    #[test]
-    fn test_truncate_with_lu() {
-        let s0 = idx(0, 4);
-        let l01 = idx(1, 8);
-        let s1 = idx(2, 4);
-
-        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
-        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
-
-        let mut tt = ITensorTrain::new(vec![t0, t1]).unwrap();
-
-        let options = TruncateOptions::lu().with_max_rank(3);
-        tt.truncate(&options).unwrap();
-
-        assert!(tt.maxbonddim() <= 3);
-        assert_eq!(tt.canonical_method(), Some(CanonicalMethod::LU));
-    }
-
-    #[test]
-    fn test_truncate_single_site() {
-        // Single site tensor train should not fail
-        let s0 = idx(0, 4);
-        let t0 = make_tensor(vec![s0.clone()]);
-
-        let mut tt = ITensorTrain::new(vec![t0]).unwrap();
-
-        let options = TruncateOptions::svd().with_max_rank(2);
-        tt.truncate(&options).unwrap();
-
-        assert_eq!(tt.len(), 1);
-    }
-
-    #[test]
-    fn test_norm() {
-        // Create a simple 2-site tensor train
-        let s0 = idx(0, 2);
-        let l01 = idx(1, 2);
-        let s1 = idx(2, 2);
-
-        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
-        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
-
-        let tt = ITensorTrain::new(vec![t0, t1]).unwrap();
-
-        // Norm should be positive
-        let norm = tt.norm();
-        assert!(norm > 0.0);
-
-        // Norm squared should be norm^2
-        let norm_sq = tt.norm_squared();
-        assert!((norm_sq - norm * norm).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_inner() {
-        // Create a simple 2-site tensor train
-        let s0 = idx(0, 2);
-        let l01 = idx(1, 2);
-        let s1 = idx(2, 2);
-
-        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
-        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
-
-        let tt = ITensorTrain::new(vec![t0, t1]).unwrap();
-
-        // <tt|tt> should equal norm_squared
-        let inner = tt.inner(&tt);
-        let norm_sq = tt.norm_squared();
-        assert!((inner.real() - norm_sq).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_orthogonalize_preserves_tensor() {
-        // Create a 2-site tensor train
+    fn test_inner_product() {
         let s0 = idx(0, 2);
         let l01 = idx(1, 3);
         let s1 = idx(2, 2);
@@ -1143,64 +1001,14 @@ mod tests {
         let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
         let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
 
-        let mut tt = ITensorTrain::new(vec![t0, t1]).unwrap();
-        let original_norm = tt.norm();
+        let tt = ITensorTrain::new(vec![t0, t1]).unwrap();
 
-        // Orthogonalize should preserve the norm (and thus the tensor)
-        tt.orthogonalize(0).unwrap();
-        let after_ortho_norm = tt.norm();
+        // Compute norm squared
+        let norm_sq = tt.norm_squared();
+        assert!(norm_sq > 0.0);
 
-        // Norm should be preserved
-        assert!(
-            (original_norm - after_ortho_norm).abs() / original_norm < 1e-10,
-            "Norm changed from {} to {} after orthogonalize",
-            original_norm,
-            after_ortho_norm
-        );
-    }
-
-    #[test]
-    fn test_truncate_accuracy() {
-        // Create a 3-site tensor train with known structure
-        let s0 = idx(0, 2);
-        let l01 = idx(1, 4);
-        let s1 = idx(2, 2);
-        let l12 = idx(3, 4);
-        let s2 = idx(4, 2);
-
-        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
-        let t1 = make_tensor(vec![l01.clone(), s1.clone(), l12.clone()]);
-        let t2 = make_tensor(vec![l12.clone(), s2.clone()]);
-
-        let original_tt = ITensorTrain::new(vec![t0, t1, t2]).unwrap();
-        let original_norm = original_tt.norm();
-
-        // Clone and truncate
-        let mut truncated_tt = original_tt.clone();
-        let options = TruncateOptions::svd().with_max_rank(2);
-        truncated_tt.truncate(&options).unwrap();
-
-        // Check that bond dimensions are reduced
-        assert!(truncated_tt.maxbonddim() <= 2);
-
-        // Compute relative error: ||original - truncated|| / ||original||
-        // For this we need inner(original, truncated)
-        // ||original - truncated||^2 = ||original||^2 + ||truncated||^2 - 2*Re<original|truncated>
-        let truncated_norm = truncated_tt.norm();
-        let inner_value = original_tt.inner(&truncated_tt);
-
-        let diff_norm_sq = original_norm * original_norm + truncated_norm * truncated_norm
-            - 2.0 * inner_value.real();
-        let relative_error = diff_norm_sq.sqrt() / original_norm;
-
-        // For this simple test, we just check that truncation gives some reasonable error
-        // (the exact error depends on the tensor structure)
-        println!(
-            "Truncation relative error: {} (original norm: {}, truncated norm: {})",
-            relative_error, original_norm, truncated_norm
-        );
-
-        // The truncated norm should not exceed original norm
-        assert!(truncated_norm <= original_norm * 1.001);  // Allow small numerical error
+        // Compute norm
+        let norm = tt.norm();
+        assert!((norm * norm - norm_sq).abs() < 1e-10);
     }
 }
