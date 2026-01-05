@@ -213,7 +213,7 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
     /// use std::sync::Arc;
     ///
     /// // Create a scalar tensor (0 dimensions, 1 element)
-    /// let indices: Vec<Index> = vec![];
+    /// let indices: Vec<Index<DynId>> = vec![];
     /// let dims: Vec<usize> = vec![];
     /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![42.0])));
     /// let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
