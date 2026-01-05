@@ -3,10 +3,10 @@
 //! A VidalMPO stores tensors and singular values separately,
 //! which is useful for TEBD-like algorithms.
 
-use crate::error::{MPOError, Result};
-use crate::mpo::MPO;
-use crate::types::{Tensor4, Tensor4Ops};
-use tensor4all_tensortrain::traits::TTScalar;
+use super::error::{MPOError, Result};
+use super::mpo::MPO;
+use super::types::{Tensor4, Tensor4Ops};
+use crate::traits::TTScalar;
 
 /// Vidal canonical form of MPO
 ///

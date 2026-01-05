@@ -3,10 +3,10 @@
 //! A SiteMPO maintains an orthogonality center that can be moved
 //! through the tensor train for efficient local updates.
 
-use crate::error::{MPOError, Result};
-use crate::mpo::MPO;
-use crate::types::{Tensor4, Tensor4Ops};
-use tensor4all_tensortrain::traits::TTScalar;
+use super::error::{MPOError, Result};
+use super::mpo::MPO;
+use super::types::{Tensor4, Tensor4Ops};
+use crate::traits::TTScalar;
 
 /// Center-canonical form of MPO with orthogonality center
 ///

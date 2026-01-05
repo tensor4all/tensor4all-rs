@@ -4,7 +4,7 @@ use crate::error::{Result, TCIError};
 use crate::indexset::{IndexSet, MultiIndex};
 use tensor4all_matrixci::util::{a_times_b_inv, zeros, Matrix, Scalar};
 use tensor4all_matrixci::{AbstractMatrixCI, MatrixACA};
-use tensor4all_tensortrain::{tensor3_zeros, Tensor3, Tensor3Ops, TensorTrain, TTScalar};
+use tensor4all_simpletensortrain::{tensor3_zeros, Tensor3, Tensor3Ops, TensorTrain, TTScalar};
 
 /// Sweep strategy for TCI optimization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1003,7 +1003,7 @@ mod tests {
         assert_eq!(tt.len(), 2);
 
         // Evaluate at the pivot using the TensorTrain
-        use tensor4all_tensortrain::AbstractTensorTrain;
+        use tensor4all_simpletensortrain::AbstractTensorTrain;
         let val = tt.evaluate(&first_pivot).unwrap();
         let expected = f(&first_pivot);
         assert!(

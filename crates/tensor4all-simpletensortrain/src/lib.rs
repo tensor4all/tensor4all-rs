@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```
-//! use tensor4all_tensortrain::{TensorTrain, AbstractTensorTrain};
+//! use tensor4all_simpletensortrain::{TensorTrain, AbstractTensorTrain};
 //!
 //! // Create a constant tensor train
 //! let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
@@ -32,6 +32,7 @@ pub mod canonical;
 pub mod compression;
 pub mod contraction;
 pub mod error;
+pub mod mpo;
 pub mod tensortrain;
 pub mod traits;
 pub mod types;
@@ -41,7 +42,7 @@ pub mod vidal;
 pub use cache::TTCache;
 pub use canonical::{center_canonicalize, SiteTensorTrain};
 pub use compression::{CompressionMethod, CompressionOptions};
-pub use contraction::{dot, hadamard, hadamard_zipup, ContractionOptions};
+pub use contraction::{dot, ContractionOptions};
 pub use error::{Result, TensorTrainError};
 pub use tensortrain::TensorTrain;
 pub use traits::{AbstractTensorTrain, TTScalar};

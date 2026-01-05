@@ -3,10 +3,10 @@
 //! This module provides functions for computing left and right environments
 //! used in variational algorithms and efficient MPO evaluation.
 
-use crate::error::{MPOError, Result};
-use crate::factorize::SVDScalar;
-use crate::mpo::MPO;
-use crate::types::{Tensor4, Tensor4Ops};
+use super::error::{MPOError, Result};
+use super::factorize::SVDScalar;
+use super::mpo::MPO;
+use super::types::{Tensor4, Tensor4Ops};
 use mdarray::DTensor;
 
 /// Type alias for 2D matrix using mdarray
@@ -86,7 +86,7 @@ where
     let new_s2 = s2_b;
     let new_right = right_a * right_b;
 
-    let mut result = crate::types::tensor4_zeros(new_left, new_s1, new_s2, new_right);
+    let mut result = super::types::tensor4_zeros(new_left, new_s1, new_s2, new_right);
 
     // Contract over shared index
     for la in 0..left_a {
@@ -291,7 +291,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::tensor4_zeros;
+    use crate::mpo::types::tensor4_zeros;
 
     #[test]
     fn test_contract_site_tensors() {

@@ -2,10 +2,10 @@
 //!
 //! An InverseMPO stores inverse singular values for efficient local updates.
 
-use crate::error::{MPOError, Result};
-use crate::mpo::MPO;
-use crate::types::{Tensor4, Tensor4Ops};
-use tensor4all_tensortrain::traits::TTScalar;
+use super::error::{MPOError, Result};
+use super::mpo::MPO;
+use super::types::{Tensor4, Tensor4Ops};
+use crate::traits::TTScalar;
 
 /// Inverse form of MPO
 ///

@@ -3,12 +3,12 @@
 //! This module implements the variational fitting (DMRG-like) algorithm
 //! for computing the product of two MPOs with controlled bond dimension.
 
-use crate::contraction::ContractionOptions;
-use crate::error::{MPOError, Result};
-use crate::factorize::{FactorizeMethod, SVDScalar};
-use crate::mpo::MPO;
-use crate::site_mpo::SiteMPO;
-use crate::types::{Tensor4, Tensor4Ops};
+use super::contraction::ContractionOptions;
+use super::error::{MPOError, Result};
+use super::factorize::{FactorizeMethod, SVDScalar};
+use super::mpo::MPO;
+use super::site_mpo::SiteMPO;
+use super::types::{Tensor4, Tensor4Ops};
 
 /// Options for the variational fit algorithm
 #[derive(Debug, Clone)]
@@ -96,7 +96,7 @@ where
             max_bond_dim: options.max_bond_dim,
             factorize_method: options.factorize_method,
         };
-        let naive_result = crate::contract_naive::contract_naive(mpo_a, mpo_b, Some(naive_opts))?;
+        let naive_result = super::contract_naive::contract_naive(mpo_a, mpo_b, Some(naive_opts))?;
         SiteMPO::from_mpo(naive_result, 0)?
     };
 

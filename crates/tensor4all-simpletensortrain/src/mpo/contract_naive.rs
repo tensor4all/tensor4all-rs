@@ -3,12 +3,12 @@
 //! Contracts two MPOs by directly multiplying site tensors,
 //! optionally followed by compression.
 
-use crate::contraction::ContractionOptions;
-use crate::environment::contract_site_tensors;
-use crate::error::{MPOError, Result};
-use crate::factorize::{factorize, FactorizeOptions, Matrix2, SVDScalar};
-use crate::mpo::MPO;
-use crate::types::{tensor4_zeros, Tensor4, Tensor4Ops};
+use super::contraction::ContractionOptions;
+use super::environment::contract_site_tensors;
+use super::error::{MPOError, Result};
+use super::factorize::{factorize, FactorizeOptions, Matrix2, SVDScalar};
+use super::mpo::MPO;
+use super::types::{tensor4_zeros, Tensor4, Tensor4Ops};
 use mdarray::DTensor;
 
 /// Helper function to create a zero-filled 2D tensor
@@ -194,7 +194,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::factorize::FactorizeMethod;
+    use crate::mpo::factorize::FactorizeMethod;
 
     #[test]
     fn test_contract_naive_identity() {

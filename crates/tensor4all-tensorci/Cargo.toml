@@ -14,7 +14,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
 tensor4all-matrixci = { path = "../tensor4all-matrixci" }
-tensor4all-tensortrain = { path = "../tensor4all-tensortrain" }
+tensor4all-simpletensortrain = { path = "../tensor4all-simpletensortrain" }
 
 [dev-dependencies]
 approx = "0.5"

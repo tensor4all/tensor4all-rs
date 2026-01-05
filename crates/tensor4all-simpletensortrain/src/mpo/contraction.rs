@@ -5,10 +5,10 @@
 
 use std::collections::HashMap;
 
-use crate::error::{MPOError, Result};
-use crate::factorize::SVDScalar;
-use crate::mpo::MPO;
-use crate::types::Tensor4Ops;
+use super::error::{MPOError, Result};
+use super::factorize::SVDScalar;
+use super::mpo::MPO;
+use super::types::Tensor4Ops;
 use mdarray::DTensor;
 
 /// Type alias for 2D matrix using mdarray
@@ -27,7 +27,7 @@ pub struct ContractionOptions {
     /// Maximum bond dimension after contraction
     pub max_bond_dim: usize,
     /// Factorization method for compression
-    pub factorize_method: crate::factorize::FactorizeMethod,
+    pub factorize_method: super::factorize::FactorizeMethod,
 }
 
 impl Default for ContractionOptions {
@@ -35,7 +35,7 @@ impl Default for ContractionOptions {
         Self {
             tolerance: 1e-12,
             max_bond_dim: usize::MAX,
-            factorize_method: crate::factorize::FactorizeMethod::SVD,
+            factorize_method: super::factorize::FactorizeMethod::SVD,
         }
     }
 }

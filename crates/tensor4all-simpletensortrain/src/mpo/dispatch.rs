@@ -5,13 +5,13 @@
 
 use tensor4all_core_common::algorithm::ContractionAlgorithm;
 
-use crate::contract_fit::{contract_fit, FitOptions};
-use crate::contract_naive::contract_naive;
-use crate::contract_zipup::contract_zipup;
-use crate::contraction::ContractionOptions;
-use crate::error::Result;
-use crate::factorize::SVDScalar;
-use crate::mpo::MPO;
+use super::contract_fit::{contract_fit, FitOptions};
+use super::contract_naive::contract_naive;
+use super::contract_zipup::contract_zipup;
+use super::contraction::ContractionOptions;
+use super::error::Result;
+use super::factorize::SVDScalar;
+use super::mpo::MPO;
 
 /// Unified contraction function with algorithm dispatch
 ///

@@ -1,6 +1,6 @@
 [package]
-name = "tensor4all-mpocontraction"
-description = "MPO contraction algorithms for tensor4all"
+name = "tensor4all-simpletensortrain"
+description = "Simple Tensor Train (MPS) algorithms for tensor4all"
 version.workspace = true
 edition.workspace = true
 authors = [
@@ -28,8 +28,8 @@ mdarray-linalg-faer = { workspace = true, optional = true }
 mdarray-linalg-lapack = { workspace = true, optional = true }
 faer-traits.workspace = true
 tensor4all-matrixci = { path = "../tensor4all-matrixci" }
-tensor4all-tensortrain = { path = "../tensor4all-tensortrain" }
 tensor4all-core-common = { path = "../tensor4all/core-common" }
+tensor4all-core-linalg = { path = "../tensor4all/core-linalg" }
 
 [dev-dependencies]
 approx = "0.5"
