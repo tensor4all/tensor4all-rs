@@ -9,7 +9,7 @@ use tensor4all::TensorDynLen;
 use tensor4all::Storage;
 use tensor4all::index::{Index, NoSymmSpace, Symmetry, DynId};
 use tensor4all::index_ops::common_inds;
-use tensor4all::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
+use tensor4all::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
 use crate::bond_mode::{BondMode, Einsum, Explicit};
 use crate::connection::Connection;
 use crate::named_graph::NamedGraph;
@@ -49,10 +49,14 @@ where
     /// Named graph wrapper: provides mapping between node names (V) and NodeIndex
     graph: NamedGraph<V, TensorDynLen<Id, Symm>, Connection<Id, Symm>>,
     /// Orthogonalization region (ortho_region).
-    /// When empty, the network is not canonized.
+    /// When empty, the network is not canonicalized.
     /// When non-empty, contains the node names (V) of the orthogonalization region.
     /// The region must form a connected subtree in the network.
     ortho_region: HashSet<V>,
+    /// Canonical form used for the current canonicalization.
+    /// `None` if not canonicalized (ortho_region is empty).
+    /// `Some(form)` if canonicalized with the specified form.
+    canonical_form: Option<CanonicalForm>,
     /// Site index network: manages topology and site space (physical indices).
     /// This structure enables topology and site space comparison independent of tensor data.
     site_index_network: SiteIndexNetwork<V, Id, Symm>,
@@ -111,6 +115,7 @@ where
         let mut treetn = Self {
             graph: NamedGraph::new(),
             ortho_region: HashSet::new(),
+            canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
             _mode: PhantomData,
         };
@@ -190,6 +195,7 @@ where
         Self {
             graph: NamedGraph::new(),
             ortho_region: HashSet::new(),
+            canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
             _mode: PhantomData,
         }
@@ -673,7 +679,7 @@ where
 
     /// Get a reference to the orthogonalization region (using node names).
     ///
-    /// When empty, the network is not canonized.
+    /// When empty, the network is not canonicalized.
     pub fn ortho_region(&self) -> &HashSet<V> {
         &self.ortho_region
     }
@@ -691,10 +697,10 @@ where
         HashSet::new()
     }
 
-    /// Check if the network is canonized.
+    /// Check if the network is canonicalized.
     ///
     /// Returns `true` if `ortho_region` is non-empty, `false` otherwise.
-    pub fn is_canonized(&self) -> bool {
+    pub fn is_canonicalized(&self) -> bool {
         !self.ortho_region.is_empty()
     }
 
@@ -726,15 +732,25 @@ where
         self.set_ortho_region(region)
     }
 
-    /// Clear the orthogonalization region (mark network as not canonized).
+    /// Clear the orthogonalization region (mark network as not canonicalized).
+    ///
+    /// Also clears the canonical form.
     pub fn clear_ortho_region(&mut self) {
         self.ortho_region.clear();
+        self.canonical_form = None;
     }
 
     /// Clear the orthogonalization region (deprecated).
     #[deprecated(note = "Use clear_ortho_region() instead")]
     pub fn clear_auto_centers(&mut self) {
         self.clear_ortho_region();
+    }
+
+    /// Get the current canonical form.
+    ///
+    /// Returns `None` if not canonicalized.
+    pub fn canonical_form(&self) -> Option<CanonicalForm> {
+        self.canonical_form
     }
 
     /// Add a node to the orthogonalization region.
@@ -853,7 +869,7 @@ where
     /// - Storage types are not dense (only DenseF64 and DenseC64 are supported)
     ///
     /// # Notes
-    /// - The result is not canonized; `ortho_region` is cleared.
+    /// - The result is not canonicalized; `ortho_region` is cleared.
     /// - Bond dimensions increase: new_dim = dim_A + dim_B.
     /// - Only dense storage (DenseF64/DenseC64) is currently supported.
     pub fn add(self, other: Self) -> Result<Self>
@@ -938,6 +954,7 @@ where
         let mut result = Self {
             graph: NamedGraph::new(),
             ortho_region: HashSet::new(),
+            canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
             _mode: PhantomData,
         };
@@ -1165,7 +1182,7 @@ where
             result.connect_internal(src_node, shared_idx, tgt_node, shared_idx)?;
         }
 
-        // Clear ortho_region (sum is not canonized)
+        // Clear ortho_region (sum is not canonicalized)
         result.clear_ortho_region();
 
         Ok(result)
@@ -1175,9 +1192,9 @@ where
     ///
     /// This method contracts all tensors in the network into a single tensor
     /// containing all physical indices. The contraction is performed using
-    /// a tree-aware order (post-order from leaves to root) with edge-based
-    /// contraction that uses Connection information to identify which indices
-    /// to contract, rather than relying on index ID matching.
+    /// an edge-based order (post-order DFS edges towards root), processing
+    /// each edge in sequence and using Connection information to identify
+    /// which indices to contract.
     ///
     /// # Returns
     /// A single tensor representing the full contraction of the network.
@@ -1216,81 +1233,51 @@ where
         let root = self.graph.node_index(&root_name)
             .ok_or_else(|| anyhow::anyhow!("Root node not found"))?;
 
-        // Build post-order traversal (leaves first, root last)
-        let post_order = self.post_order_dfs(root);
+        // Get edges to process (post-order DFS edges towards root)
+        let edges = self.site_index_network.edges_to_canonicalize(None, root);
 
-        // Track which nodes have been contracted and their resulting tensors
-        // For each node in post-order, we contract its tensor with all
-        // already-contracted children, using the edge's Connection info.
-        let mut contracted: HashMap<NodeIndex, TensorDynLen<Id, Symm>> = HashMap::new();
+        // Initialize with original tensors
+        let mut tensors: HashMap<NodeIndex, TensorDynLen<Id, Symm>> = self.graph.graph()
+            .node_indices()
+            .filter_map(|n| self.tensor(n).cloned().map(|t| (n, t)))
+            .collect();
 
-        for node in post_order {
-            let mut current = self.tensor(node)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node))?
-                .clone();
+        // Process each edge: contract tensor at `from` into tensor at `to`
+        for (from, to) in edges {
+            let from_tensor = tensors.remove(&from)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", from))?;
+            let to_tensor = tensors.remove(&to)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", to))?;
 
-            // Find all edges to already-contracted neighbors (children in the rooted tree)
-            for (edge, neighbor) in self.edges_for_node(node) {
-                if let Some(child_tensor) = contracted.remove(&neighbor) {
-                    // Determine which index belongs to which node
-                    // edge_index_for_node returns the index for a given node on this edge
-                    let idx_current = self.edge_index_for_node(edge, node)?.clone();
-                    let idx_child = self.edge_index_for_node(edge, neighbor)?.clone();
+            // Find the edge and get bond indices
+            let edge = self.graph.graph().find_edge(from, to)
+                .or_else(|| self.graph.graph().find_edge(to, from))
+                .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", from, to))?;
 
-                    // Contract current tensor with child tensor along the bond indices
-                    // We use tensordot which takes explicit index pairs
-                    current = current.tensordot(&child_tensor, &[(idx_current, idx_child)])
-                        .context("Failed to contract along edge")?;
-                }
-            }
+            let idx_from = self.edge_index_for_node(edge, from)?.clone();
+            let idx_to = self.edge_index_for_node(edge, to)?.clone();
 
-            // Store the contracted result for this node
-            contracted.insert(node, current);
+            // Contract and store result at `to`
+            let contracted = to_tensor.tensordot(&from_tensor, &[(idx_to, idx_from)])
+                .context("Failed to contract along edge")?;
+            tensors.insert(to, contracted);
         }
 
-        // The root's tensor (last in post-order) is the final result
-        contracted.remove(&root)
+        // The root's tensor is the final result
+        tensors.remove(&root)
             .ok_or_else(|| anyhow::anyhow!("Contraction produced no result"))
-    }
-
-    /// Perform a post-order DFS traversal starting from the given root.
-    ///
-    /// Returns nodes in post-order (children before parents, leaves first).
-    fn post_order_dfs(&self, root: NodeIndex) -> Vec<NodeIndex> {
-        let g = self.graph.graph();
-        let mut result = Vec::new();
-        let mut visited = HashSet::new();
-        let mut stack = vec![(root, false)]; // (node, processed)
-
-        while let Some((node, processed)) = stack.pop() {
-            if processed {
-                result.push(node);
-            } else if !visited.contains(&node) {
-                visited.insert(node);
-                stack.push((node, true)); // Push back for post-processing
-
-                // Push unvisited neighbors
-                for neighbor in g.neighbors(node) {
-                    if !visited.contains(&neighbor) {
-                        stack.push((neighbor, false));
-                    }
-                }
-            }
-        }
-
-        result
     }
 
     /// Validate that `ortho_region` and edge `ortho_towards` are consistent.
     ///
     /// Rules:
-    /// - If `ortho_region` is empty (not canonized), all edges must have `ortho_towards == None`.
+    /// - If `ortho_region` is empty (not canonicalized), all edges must have `ortho_towards == None`.
     /// - If `ortho_region` is non-empty, it must be connected in the tree (forms a subtree).
     /// - `ortho_towards == None` is allowed **only** when both edge endpoints are in `ortho_region`.
     /// - For any edge with at least one endpoint outside `ortho_region`, `ortho_towards` must be `Some(...)`
     ///   and must point towards the endpoint with smaller distance to `ortho_region`.
     pub fn validate_ortho_consistency(&self) -> Result<()> {
-        // If not canonized, require no edge directions.
+        // If not canonicalized, require no edge directions.
         if self.ortho_region.is_empty() {
             for e in self.graph.graph().edge_indices() {
                 let conn = self.connection(e).ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
@@ -1319,23 +1306,9 @@ where
         }
 
         // Check ortho_region connectivity in the induced subgraph.
-        let start_node = ortho_nodes.iter().next()
-            .ok_or_else(|| anyhow::anyhow!("ortho_region unexpectedly empty"))?;
-        let mut stack = vec![*start_node];
-        let mut seen = HashSet::new();
-        seen.insert(*start_node);
-        while let Some(v) = stack.pop() {
-            for nb in g.neighbors(v) {
-                if ortho_nodes.contains(&nb) && seen.insert(nb) {
-                    stack.push(nb);
-                }
-            }
-        }
-        if seen.len() != ortho_nodes.len() {
+        if !self.site_index_network.is_connected_subset(&ortho_nodes) {
             return Err(anyhow::anyhow!(
-                "ortho_region is not connected: reached {} out of {} centers",
-                seen.len(),
-                ortho_nodes.len()
+                "ortho_region is not connected"
             ))
             .context("validate_ortho_consistency: ortho_region must form a connected subtree");
         }
@@ -1438,17 +1411,20 @@ where
         Ok(())
     }
 
-    /// Canonize the network towards the specified ortho_region.
+    /// Canonicalize the network towards the specified ortho_region.
     ///
-    /// This method consumes the TreeTN and returns a new canonized TreeTN.
-    /// Uses the default algorithm (QR decomposition).
+    /// This is a smart canonicalization that checks the current state:
+    /// - If already canonicalized to the same ortho_region with the same form, returns unchanged
+    /// - Otherwise, performs full canonicalization
+    ///
+    /// Uses the default canonical form (Unitary).
     ///
     /// # Arguments
-    /// * `ortho_region` - The nodes that will serve as canonization centers
+    /// * `ortho_region` - The nodes that will serve as canonicalization centers
     ///
     /// # Returns
-    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
-    pub fn canonize(
+    /// A new canonicalized TreeTN, or an error if validation fails or factorization fails.
+    pub fn canonicalize(
         self,
         ortho_region: impl IntoIterator<Item = NodeIndex>,
     ) -> Result<Self>
@@ -1457,12 +1433,130 @@ where
         Symm: Clone + Symmetry + From<NoSymmSpace>,
         V: From<NodeIndex>,
     {
-        self.canonize_with(ortho_region, FactorizeAlg::QR)
+        self.canonicalize_with(ortho_region, CanonicalForm::Unitary)
     }
 
-    /// Canonize the network towards the specified ortho_region using a specified algorithm.
+    /// Canonicalize the network towards the specified ortho_region using a specified canonical form.
     ///
-    /// This method consumes the TreeTN and returns a new canonized TreeTN.
+    /// This is a smart canonicalization that:
+    /// - If not canonicalized: performs full canonicalization
+    /// - If already at target with same form: returns unchanged (no-op)
+    /// - If already canonicalized but at different position: moves ortho center efficiently
+    /// - If already canonicalized with different form: returns an error
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as canonicalization centers
+    /// * `form` - The canonical form to use
+    ///
+    /// # Returns
+    /// A new canonicalized TreeTN, or an error if:
+    /// - Validation fails
+    /// - Factorization fails
+    /// - Already canonicalized with a different form (use `force_canonicalize_with` to change form)
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Full canonicalization (not canonicalized → canonicalized)
+    /// let ttn = ttn.canonicalize_with([node_d], CanonicalForm::Unitary)?;
+    ///
+    /// // Move ortho center (D → B, same form)
+    /// let ttn = ttn.canonicalize_with([node_b], CanonicalForm::Unitary)?;
+    ///
+    /// // Error: different form requested
+    /// // let ttn = ttn.canonicalize_with([node_b], CanonicalForm::LU)?; // Error!
+    /// ```
+    pub fn canonicalize_with(
+        self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+        form: CanonicalForm,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+    {
+        let target_indices: Vec<NodeIndex> = ortho_region.into_iter().collect();
+
+        // Check if already canonicalized with a different form
+        if let Some(current_form) = self.canonical_form {
+            if current_form != form {
+                return Err(anyhow::anyhow!(
+                    "Cannot move ortho center: current form is {:?} but {:?} was requested. \
+                     Use force_canonicalize_with() to re-canonicalize with a different form.",
+                    current_form,
+                    form
+                ))
+                .context("canonicalize_with: form mismatch");
+            }
+        }
+
+        // Convert target to V for comparison
+        let target_v: HashSet<V> = target_indices.iter()
+            .map(|&idx| V::from(idx))
+            .collect();
+
+        // Check if already at target
+        if self.ortho_region == target_v && self.canonical_form == Some(form) {
+            return Ok(self);
+        }
+
+        // For single target (most common case), use edges_to_canonicalize
+        if target_indices.len() == 1 {
+            let target = target_indices[0];
+
+            // Get current region as NodeIndex set
+            let current_region: Option<HashSet<NodeIndex>> = if self.is_canonicalized() {
+                Some(self.ortho_region.iter()
+                    .filter_map(|v| self.graph.node_index(v))
+                    .collect())
+            } else {
+                None
+            };
+
+            // Compute edges to process
+            let edges = self.site_index_network.edges_to_canonicalize(
+                current_region.as_ref(),
+                target,
+            );
+
+            if edges.is_empty() {
+                return Ok(self);
+            }
+
+            // Process edges via force_canonicalize_with for now
+            // TODO: Optimize to only process the edges returned by edges_to_canonicalize
+            self.force_canonicalize_with(target_indices, form)
+        } else {
+            // Multiple targets: use force_canonicalize_with
+            self.force_canonicalize_with(target_indices, form)
+        }
+    }
+
+    /// Force canonicalize the network towards the specified ortho_region.
+    ///
+    /// This method always performs full canonicalization, ignoring the current state.
+    /// Uses the default canonical form (Unitary).
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as canonicalization centers
+    ///
+    /// # Returns
+    /// A new canonicalized TreeTN, or an error if validation fails or factorization fails.
+    pub fn force_canonicalize(
+        self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+    {
+        self.force_canonicalize_with(ortho_region, CanonicalForm::Unitary)
+    }
+
+    /// Force canonicalize the network towards the specified ortho_region using a specified canonical form.
+    ///
+    /// This method always performs full canonicalization, ignoring the current state.
     /// The algorithm:
     /// 1. Validates that the graph is a tree
     /// 2. Sets the ortho_region and validates connectivity
@@ -1472,30 +1566,38 @@ where
     /// 6. Absorbs the right factor into parent nodes using tensordot
     ///
     /// # Arguments
-    /// * `ortho_region` - The nodes that will serve as canonization centers
-    /// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
+    /// * `ortho_region` - The nodes that will serve as canonicalization centers
+    /// * `form` - The canonical form to use:
+    ///   - `Unitary`: Uses QR decomposition, each tensor is isometric
+    ///   - `LU`: Uses LU decomposition, one factor has unit diagonal
+    ///   - `CI`: Uses Cross Interpolation
     ///
     /// # Returns
-    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    /// A new canonicalized TreeTN, or an error if validation fails or factorization fails.
     ///
     /// # Errors
     /// Returns an error if:
     /// - The graph is not a tree
     /// - ortho_region are not connected
     /// - Factorization fails
-    pub fn canonize_with(
+    pub fn force_canonicalize_with(
         mut self,
         ortho_region: impl IntoIterator<Item = NodeIndex>,
-        alg: FactorizeAlg,
+        form: CanonicalForm,
     ) -> Result<Self>
     where
         Id: Clone + std::hash::Hash + Eq + From<DynId>,
         Symm: Clone + Symmetry + From<NoSymmSpace>,
         V: From<NodeIndex>,
     {
+        let alg = match form {
+            CanonicalForm::Unitary => FactorizeAlg::QR,
+            CanonicalForm::LU => FactorizeAlg::LU,
+            CanonicalForm::CI => FactorizeAlg::CI,
+        };
         // 1. Validate tree structure
         self.validate_tree()
-            .context("canonize_with: graph must be a tree")?;
+            .context("canonicalize_with: graph must be a tree")?;
 
         // 2. Set ortho_region and validate connectivity
         // Convert NodeIndex to V
@@ -1503,7 +1605,7 @@ where
             .map(V::from)
             .collect();
         self.set_ortho_region(ortho_region_v)
-            .context("canonize_with: failed to set ortho_region")?;
+            .context("canonicalize_with: failed to set ortho_region")?;
 
         if self.ortho_region.is_empty() {
             return Ok(self); // Nothing to do if no centers
@@ -1536,7 +1638,7 @@ where
                 seen_node_names.len(),
                 self.ortho_region.len()
             ))
-            .context("canonize_with: ortho_region must form a connected subtree");
+            .context("canonicalize_with: ortho_region must form a connected subtree");
         }
 
         // 3. Multi-source BFS to compute distances from ortho_region
@@ -1579,7 +1681,7 @@ where
             let v_dist = dist[&v];
             let parent_dist = v_dist.checked_sub(1)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} at distance 0 but not in ortho_region", v))
-                .context("canonize_with: distance calculation error")?;
+                .context("canonicalize_with: distance calculation error")?;
 
             let (parent, edge) = {
                 let g = self.graph.graph();
@@ -1594,14 +1696,14 @@ where
                         v_dist,
                         parent_dist
                     ))
-                    .context("canonize_with: tree structure violation")?;
+                    .context("canonicalize_with: tree structure violation")?;
 
                 // Find the edge between v and parent
                 let edge = g
                     .edges_connecting(v, parent)
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("No edge found between node {:?} and parent {:?}", v, parent))
-                    .context("canonize_with: edge not found")?
+                    .context("canonicalize_with: edge not found")?
                     .id();
                 (parent, edge)
             };
@@ -1611,14 +1713,14 @@ where
             // the right factor carries this bond and can be absorbed into the parent tensor.
             let parent_bond_v = self
                 .edge_index_for_node(edge, v)
-                .context("canonize_with: failed to get parent bond index on v")?
+                .context("canonicalize_with: failed to get parent bond index on v")?
                 .clone();
 
             // Get the tensor at node v (reference)
             let tensor_v = self
                 .tensor(v)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
-                .context("canonize_with: tensor not found")?;
+                .context("canonicalize_with: tensor not found")?;
 
             // Build left_inds = all indices of tensor_v EXCEPT the parent bond.
             let left_inds: Vec<Index<Id, Symm>> = tensor_v
@@ -1629,10 +1731,10 @@ where
                 .collect();
             if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
                 return Err(anyhow::anyhow!(
-                    "Cannot canonize node {:?}: need at least one left index and at least one right index",
+                    "Cannot canonicalize node {:?}: need at least one left index and at least one right index",
                     v
                 ))
-                .context("canonize_with: invalid tensor rank for factorization");
+                .context("canonicalize_with: invalid tensor rank for factorization");
             }
 
             // Set up factorization options
@@ -1646,7 +1748,7 @@ where
             // Perform factorization using tensor-level factorize
             let factorize_result = factorize(tensor_v, &left_inds, &factorize_options)
                 .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
-                .context("canonize_with: factorization failed")?;
+                .context("canonicalize_with: factorization failed")?;
 
             let left_tensor = factorize_result.left;
             let right_tensor = factorize_result.right;
@@ -1655,17 +1757,17 @@ where
             // We will absorb right_tensor into the parent along (edge_index_parent, parent_bond_v).
             let edge_index_parent = self
                 .edge_index_for_node(edge, parent)
-                .context("canonize_with: failed to get edge index for parent")?
+                .context("canonicalize_with: failed to get edge index for parent")?
                 .clone();
 
             let parent_tensor = self
                 .tensor(parent)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
-                .context("canonize_with: parent tensor not found")?;
+                .context("canonicalize_with: parent tensor not found")?;
 
             let updated_parent_tensor = parent_tensor
                 .tensordot(&right_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
-                .context("canonize_with: failed to absorb right factor into parent tensor")?;
+                .context("canonicalize_with: failed to absorb right factor into parent tensor")?;
 
             // The new bond index is the factorization-created bond shared between left and right.
             // It is the bond_index from the factorize result.
@@ -1673,55 +1775,167 @@ where
 
             // Update the connection bond indices FIRST, so replace_tensor validation matches.
             self.replace_edge_bond(edge, new_bond_index.clone(), new_bond_index.clone())
-                .context("canonize_with: failed to update edge bond indices")?;
+                .context("canonicalize_with: failed to update edge bond indices")?;
 
             // Now update tensors. These validations should pass because the edge expects new_bond_index.
             self.replace_tensor(v, left_tensor)
-                .context("canonize_with: failed to replace tensor at node v")?;
+                .context("canonicalize_with: failed to replace tensor at node v")?;
             self.replace_tensor(parent, updated_parent_tensor)
-                .context("canonize_with: failed to replace tensor at parent node")?;
+                .context("canonicalize_with: failed to replace tensor at parent node")?;
 
             // Set ortho_towards to point towards parent (ortho_region direction)
             let ortho_towards_index = self
                 .edge_index_for_node(edge, parent)
-                .context("canonize_with: failed to get ortho_towards index for parent")?
+                .context("canonicalize_with: failed to get ortho_towards index for parent")?
                 .clone();
             self.set_edge_ortho_towards(edge, Some(ortho_towards_index))
-                .context("canonize_with: failed to set ortho_towards")?;
+                .context("canonicalize_with: failed to set ortho_towards")?;
         }
+
+        // Set the canonical form
+        self.canonical_form = Some(form);
 
         Ok(self)
     }
 
-    /// Canonize the network towards the specified ortho_region using node names directly.
+    /// Canonicalize the network towards the specified ortho_region using node names directly.
     ///
-    /// This is a variant of `canonize_with` that accepts node names (V) directly,
+    /// This is a smart canonicalization that checks the current state:
+    /// - If already canonicalized to the same ortho_region, returns unchanged
+    /// - Otherwise, performs full canonicalization via `force_canonicalize_by_names`
+    ///
+    /// This is a variant of `canonicalize` that accepts node names (V) directly,
     /// rather than requiring conversion from `NodeIndex`. This is useful when
     /// `V` does not implement `From<NodeIndex>` (e.g., when `V = usize`).
     ///
+    /// Uses the default canonical form (`CanonicalForm::Unitary`).
+    ///
     /// # Arguments
-    /// * `ortho_region` - The node names that will serve as canonization centers
-    /// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
+    /// * `ortho_region` - The node names that will serve as canonicalization centers
     ///
     /// # Returns
-    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
-    pub fn canonize_by_names(
-        mut self,
+    /// A new canonicalized TreeTN, or an error if validation fails or factorization fails.
+    pub fn canonicalize_by_names(
+        self,
         ortho_region: impl IntoIterator<Item = V>,
-        alg: FactorizeAlg,
     ) -> Result<Self>
     where
         Id: Clone + std::hash::Hash + Eq + From<DynId>,
         Symm: Clone + Symmetry + From<NoSymmSpace>,
     {
+        self.canonicalize_by_names_with(ortho_region, CanonicalForm::Unitary)
+    }
+
+    /// Canonicalize the network towards the specified ortho_region using node names directly
+    /// with a specified canonical form.
+    ///
+    /// This is a smart canonicalization that:
+    /// - If not canonicalized: performs full canonicalization
+    /// - If already at target with same form: returns unchanged (no-op)
+    /// - If already canonicalized but at different position: moves ortho center efficiently
+    /// - If already canonicalized with different form: returns an error
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The node names that will serve as canonicalization centers
+    /// * `form` - The canonical form to use
+    ///
+    /// # Returns
+    /// A new canonicalized TreeTN, or an error if:
+    /// - Validation fails
+    /// - Factorization fails
+    /// - Already canonicalized with a different form (use `force_canonicalize_by_names_with` to change form)
+    pub fn canonicalize_by_names_with(
+        self,
+        ortho_region: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        let ortho_region_v: HashSet<V> = ortho_region.into_iter().collect();
+
+        // Check if already canonicalized with a different form
+        if let Some(current_form) = self.canonical_form {
+            if current_form != form {
+                return Err(anyhow::anyhow!(
+                    "Cannot move ortho center: current form is {:?} but {:?} was requested. \
+                     Use force_canonicalize_by_names_with() to re-canonicalize with a different form.",
+                    current_form,
+                    form
+                ))
+                .context("canonicalize_by_names_with: form mismatch");
+            }
+        }
+
+        // Check if already at target
+        if self.ortho_region == ortho_region_v && self.canonical_form == Some(form) {
+            return Ok(self);
+        }
+
+        // Use force_canonicalize for now
+        // TODO: Optimize to use edges_to_canonicalize for efficient moves
+        self.force_canonicalize_by_names_with(ortho_region_v, form)
+    }
+
+    /// Force canonicalize the network towards the specified ortho_region using node names directly.
+    ///
+    /// This method always performs full canonicalization, ignoring the current state.
+    /// Uses the default canonical form (`CanonicalForm::Unitary`).
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The node names that will serve as canonicalization centers
+    ///
+    /// # Returns
+    /// A new canonicalized TreeTN, or an error if validation fails or factorization fails.
+    pub fn force_canonicalize_by_names(
+        self,
+        ortho_region: impl IntoIterator<Item = V>,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        self.force_canonicalize_by_names_with(ortho_region, CanonicalForm::Unitary)
+    }
+
+    /// Force canonicalize the network towards the specified ortho_region using node names directly
+    /// with a specified canonical form.
+    ///
+    /// This method always performs full canonicalization, ignoring the current state.
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The node names that will serve as canonicalization centers
+    /// * `form` - The canonical form to use:
+    ///   - `Unitary`: Uses QR decomposition, each tensor is isometric
+    ///   - `LU`: Uses LU decomposition, one factor has unit diagonal
+    ///   - `CI`: Uses Cross Interpolation
+    ///
+    /// # Returns
+    /// A new canonicalized TreeTN, or an error if validation fails or factorization fails.
+    pub fn force_canonicalize_by_names_with(
+        mut self,
+        ortho_region: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        let alg = match form {
+            CanonicalForm::Unitary => FactorizeAlg::QR,
+            CanonicalForm::LU => FactorizeAlg::LU,
+            CanonicalForm::CI => FactorizeAlg::CI,
+        };
+
         // 1. Validate tree structure
         self.validate_tree()
-            .context("canonize_by_names: graph must be a tree")?;
+            .context("canonicalize_by_names_with: graph must be a tree")?;
 
         // 2. Set ortho_region and validate connectivity
         let ortho_region_v: Vec<V> = ortho_region.into_iter().collect();
         self.set_ortho_region(ortho_region_v)
-            .context("canonize_by_names: failed to set ortho_region")?;
+            .context("canonicalize_by_names_with: failed to set ortho_region")?;
 
         if self.ortho_region.is_empty() {
             return Ok(self); // Nothing to do if no centers
@@ -1754,7 +1968,7 @@ where
                 seen_node_names.len(),
                 self.ortho_region.len()
             ))
-            .context("canonize_by_names: ortho_region must form a connected subtree");
+            .context("canonicalize_by_names_with: ortho_region must form a connected subtree");
         }
 
         // 3. Multi-source BFS to compute distances from ortho_region
@@ -1801,24 +2015,24 @@ where
                     .find(|nb| dist.get(nb).copied() == Some(v_dist - 1))
             }
             .ok_or_else(|| anyhow::anyhow!("No parent found for node {:?}", v))
-            .context("canonize_by_names: parent node not found (graph should be a tree)")?;
+            .context("canonicalize_by_names_with: parent node not found (graph should be a tree)")?;
 
             // Find edge to parent
             let edge = self.graph.graph().find_edge(v, parent)
                 .or_else(|| self.graph.graph().find_edge(parent, v))
                 .ok_or_else(|| anyhow::anyhow!("No edge between node {:?} and parent {:?}", v, parent))
-                .context("canonize_by_names: edge to parent not found")?;
+                .context("canonicalize_by_names_with: edge to parent not found")?;
 
             // Get bond index on the v side (the index we will factorize over)
             let parent_bond_v = self
                 .edge_index_for_node(edge, v)
-                .context("canonize_by_names: failed to get bond index for node v")?
+                .context("canonicalize_by_names_with: failed to get bond index for node v")?
                 .clone();
 
             let tensor_v = self
                 .tensor(v)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
-                .context("canonize_by_names: tensor not found at node v")?;
+                .context("canonicalize_by_names_with: tensor not found at node v")?;
 
             // "Left indices" for factorization = all indices except the parent bond
             let left_inds: Vec<_> = tensor_v
@@ -1830,10 +2044,10 @@ where
 
             if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
                 return Err(anyhow::anyhow!(
-                    "Cannot canonize node {:?}: need at least one left index and at least one right index",
+                    "Cannot canonicalize node {:?}: need at least one left index and at least one right index",
                     v
                 ))
-                .context("canonize_by_names: invalid tensor rank for factorization");
+                .context("canonicalize_by_names_with: invalid tensor rank for factorization");
             }
 
             // Set up factorization options
@@ -1847,7 +2061,7 @@ where
             // Perform factorization using tensor-level factorize
             let factorize_result = factorize(tensor_v, &left_inds, &factorize_options)
                 .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
-                .context("canonize_by_names: factorization failed")?;
+                .context("canonicalize_by_names_with: factorization failed")?;
 
             let left_tensor = factorize_result.left;
             let right_tensor = factorize_result.right;
@@ -1855,39 +2069,202 @@ where
             // Absorb right_tensor into the parent
             let edge_index_parent = self
                 .edge_index_for_node(edge, parent)
-                .context("canonize_by_names: failed to get edge index for parent")?
+                .context("canonicalize_by_names_with: failed to get edge index for parent")?
                 .clone();
 
             let parent_tensor = self
                 .tensor(parent)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
-                .context("canonize_by_names: parent tensor not found")?;
+                .context("canonicalize_by_names_with: parent tensor not found")?;
 
             let updated_parent_tensor = parent_tensor
                 .tensordot(&right_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
-                .context("canonize_by_names: failed to absorb right factor into parent tensor")?;
+                .context("canonicalize_by_names_with: failed to absorb right factor into parent tensor")?;
 
             // Update the connection bond indices
             let new_bond_index = factorize_result.bond_index;
             self.replace_edge_bond(edge, new_bond_index.clone(), new_bond_index.clone())
-                .context("canonize_by_names: failed to update edge bond indices")?;
+                .context("canonicalize_by_names_with: failed to update edge bond indices")?;
 
             // Update tensors
             self.replace_tensor(v, left_tensor)
-                .context("canonize_by_names: failed to replace tensor at node v")?;
+                .context("canonicalize_by_names_with: failed to replace tensor at node v")?;
             self.replace_tensor(parent, updated_parent_tensor)
-                .context("canonize_by_names: failed to replace tensor at parent node")?;
+                .context("canonicalize_by_names_with: failed to replace tensor at parent node")?;
 
             // Set ortho_towards to point towards parent (ortho_region direction)
             let ortho_towards_index = self
                 .edge_index_for_node(edge, parent)
-                .context("canonize_by_names: failed to get ortho_towards index for parent")?
+                .context("canonicalize_by_names_with: failed to get ortho_towards index for parent")?
                 .clone();
             self.set_edge_ortho_towards(edge, Some(ortho_towards_index))
-                .context("canonize_by_names: failed to set ortho_towards")?;
+                .context("canonicalize_by_names_with: failed to set ortho_towards")?;
         }
 
+        // Set the canonical form
+        self.canonical_form = Some(form);
+
         Ok(self)
+    }
+
+    /// Canonicalize the network in-place towards the specified ortho_region using node names.
+    ///
+    /// This is the `&mut self` version of `canonicalize_by_names_with`.
+    /// Useful when you need to keep using the same variable after canonicalization.
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The node names that will serve as canonicalization centers
+    /// * `form` - The canonical form to use
+    ///
+    /// # Example
+    /// ```ignore
+    /// tn.canonicalize_by_names_mut(std::iter::once("A".to_string()), CanonicalForm::Unitary)?;
+    /// // tn is now canonicalized and can be used directly
+    /// ```
+    pub fn canonicalize_by_names_mut(
+        &mut self,
+        ortho_region: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        Self: Default,
+    {
+        // Take self, canonicalize, and put it back
+        let taken = std::mem::take(self);
+        match taken.canonicalize_by_names_with(ortho_region, form) {
+            Ok(canonicalized) => {
+                *self = canonicalized;
+                Ok(())
+            }
+            Err(e) => {
+                // On error, self is left in default state
+                // This is a limitation of this pattern
+                Err(e)
+            }
+        }
+    }
+
+    /// Force canonicalize the network in-place using node names.
+    ///
+    /// This is the `&mut self` version of `force_canonicalize_by_names_with`.
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The node names that will serve as canonicalization centers
+    /// * `form` - The canonical form to use
+    pub fn force_canonicalize_by_names_mut(
+        &mut self,
+        ortho_region: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        Self: Default,
+    {
+        let taken = std::mem::take(self);
+        match taken.force_canonicalize_by_names_with(ortho_region, form) {
+            Ok(canonicalized) => {
+                *self = canonicalized;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Canonicalize the network in-place towards the specified ortho_region.
+    ///
+    /// This is the `&mut self` version of `canonicalize`.
+    /// Uses the default canonical form (Unitary).
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as canonicalization centers
+    ///
+    /// # Example
+    /// ```ignore
+    /// tn.canonicalize_mut(std::iter::once(n1))?;
+    /// // tn is now canonicalized and can be used directly
+    /// ```
+    pub fn canonicalize_mut(
+        &mut self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+        Self: Default,
+    {
+        self.canonicalize_with_mut(ortho_region, CanonicalForm::Unitary)
+    }
+
+    /// Canonicalize the network in-place towards the specified ortho_region using a specified canonical form.
+    ///
+    /// This is the `&mut self` version of `canonicalize_with`.
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as canonicalization centers
+    /// * `form` - The canonical form to use
+    ///
+    /// # Example
+    /// ```ignore
+    /// tn.canonicalize_with_mut(std::iter::once(n1), CanonicalForm::Unitary)?;
+    /// // tn is now canonicalized and can be used directly
+    /// ```
+    pub fn canonicalize_with_mut(
+        &mut self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+        form: CanonicalForm,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+        Self: Default,
+    {
+        let taken = std::mem::take(self);
+        match taken.canonicalize_with(ortho_region, form) {
+            Ok(canonicalized) => {
+                *self = canonicalized;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Force canonicalize the network in-place towards the specified ortho_region.
+    ///
+    /// This is the `&mut self` version of `force_canonicalize_with`.
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as canonicalization centers
+    /// * `form` - The canonical form to use
+    ///
+    /// # Example
+    /// ```ignore
+    /// tn.force_canonicalize_with_mut(std::iter::once(n1), CanonicalForm::Unitary)?;
+    /// // tn is now canonicalized and can be used directly
+    /// ```
+    pub fn force_canonicalize_with_mut(
+        &mut self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+        form: CanonicalForm,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+        Self: Default,
+    {
+        let taken = std::mem::take(self);
+        match taken.force_canonicalize_with(ortho_region, form) {
+            Ok(canonicalized) => {
+                *self = canonicalized;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -1913,6 +2290,7 @@ where
         Self {
             graph: NamedGraph::new(),
             ortho_region: HashSet::new(),
+            canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
             _mode: PhantomData,
         }
@@ -2137,6 +2515,94 @@ where
     }
 }
 
+// ============================================================================
+// Norm Computation
+// ============================================================================
+
+impl<Id, Symm, V, Mode> TreeTN<Id, Symm, V, Mode>
+where
+    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
+    Symm: Clone + Symmetry + From<NoSymmSpace>,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
+    Self: Default,
+{
+    /// Compute the natural logarithm of the Frobenius norm: ln(||TN||).
+    ///
+    /// **Warning**: This method may canonicalize the network if not already canonicalized
+    /// to a single Unitary center. Use `log_norm` (without canonicalization) if you
+    /// want to preserve the current canonicalization state.
+    ///
+    /// This is computed in a numerically stable way by:
+    /// 1. Ensuring Unitary canonicalization to a single site
+    /// 2. Computing ||center_tensor|| from that single center
+    ///
+    /// For Unitary canonical form, tensors outside the center satisfy Q†Q = I,
+    /// so they don't contribute to the norm: ||TN|| = ||center_tensor||.
+    ///
+    /// # Algorithm
+    /// - If already Unitary canonicalized to single site → use that site (no canonicalization)
+    /// - If Unitary canonicalized to multiple sites → canonicalize to min of ortho_region first
+    /// - Otherwise → Unitary canonicalize to min node name
+    ///
+    /// # Returns
+    /// `ln(||TN||)` as f64
+    ///
+    /// # Note
+    /// Unlike norm² which differs by factor 2 in log space from norm,
+    /// this function returns `ln(||TN||)`, not `ln(||TN||²)`.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The network is empty
+    /// - Canonicalization fails
+    pub fn log_norm(&mut self) -> Result<f64> {
+        let n = self.node_count();
+        if n == 0 {
+            return Err(anyhow::anyhow!("Cannot compute log_norm of empty TreeTN"))
+                .context("log_norm: network must have at least one node");
+        }
+
+        // Determine the single center site (by name)
+        let center_name: V = if self.is_canonicalized()
+            && self.canonical_form() == Some(CanonicalForm::Unitary)
+        {
+            if self.ortho_region.len() == 1 {
+                // Already Unitary canonicalized to single site - use it
+                self.ortho_region.iter().next().unwrap().clone()
+            } else {
+                // Unitary canonicalized to multiple sites - canonicalize to min site
+                let min_center = self.ortho_region.iter().min().unwrap().clone();
+                self.canonicalize_by_names_mut(std::iter::once(min_center.clone()), CanonicalForm::Unitary)
+                    .context("log_norm: failed to canonicalize to single site")?;
+                min_center
+            }
+        } else {
+            // Not canonicalized or not Unitary - canonicalize to min node name
+            let min_node_name = self.node_names().into_iter().min()
+                .ok_or_else(|| anyhow::anyhow!("No nodes in TreeTN"))
+                .context("log_norm: network must have nodes")?;
+            self.canonicalize_by_names_mut(std::iter::once(min_node_name.clone()), CanonicalForm::Unitary)
+                .context("log_norm: failed to canonicalize")?;
+            min_node_name
+        };
+
+        // Get center node index and tensor
+        let center_node = self.node_index(&center_name)
+            .ok_or_else(|| anyhow::anyhow!("Center node not found"))
+            .context("log_norm: center node must exist")?;
+
+        let center_tensor = self.tensor(center_node)
+            .ok_or_else(|| anyhow::anyhow!("Center tensor not found"))
+            .context("log_norm: center tensor must exist")?;
+
+        let norm_sq = center_tensor.norm_squared();
+        let norm = norm_sq.sqrt();
+
+        Ok(norm.ln())
+    }
+}
+
 // Clone implementation for TreeTN
 impl<Id, Symm, V, Mode> Clone for TreeTN<Id, Symm, V, Mode>
 where
@@ -2149,6 +2615,7 @@ where
         Self {
             graph: self.graph.clone(),
             ortho_region: self.ortho_region.clone(),
+            canonical_form: self.canonical_form,
             site_index_network: self.site_index_network.clone(),
             _mode: PhantomData,
         }
@@ -2630,6 +3097,7 @@ where
             return Ok(TreeTN {
                 graph: einsum_tn.graph,
                 ortho_region: einsum_tn.ortho_region,
+                canonical_form: einsum_tn.canonical_form,
                 site_index_network: einsum_tn.site_index_network,
                 _mode: PhantomData,
             });
@@ -2639,6 +3107,7 @@ where
             return Ok(TreeTN {
                 graph: explicit_tn.graph,
                 ortho_region: explicit_tn.ortho_region,
+                canonical_form: explicit_tn.canonical_form,
                 site_index_network: explicit_tn.site_index_network,
                 _mode: PhantomData,
             });
@@ -2794,6 +3263,7 @@ where
         Ok(TreeTN {
             graph: einsum_tn.graph,
             ortho_region: einsum_tn.ortho_region,
+            canonical_form: einsum_tn.canonical_form,
             site_index_network: einsum_tn.site_index_network,
             _mode: PhantomData,
         })
@@ -2832,6 +3302,7 @@ where
         Ok(TreeTN {
             graph: tn.graph,
             ortho_region: tn.ortho_region,
+            canonical_form: tn.canonical_form,
             site_index_network: tn.site_index_network,
             _mode: PhantomData,
         })

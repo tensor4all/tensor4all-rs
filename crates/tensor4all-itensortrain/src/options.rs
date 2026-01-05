@@ -2,20 +2,8 @@
 
 use std::ops::Range;
 
-/// Canonicalization algorithm.
-///
-/// This specifies which algorithm to use for orthogonalizing tensors
-/// during canonicalization sweeps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CanonicalMethod {
-    /// Singular Value Decomposition (most accurate, but slowest).
-    #[default]
-    SVD,
-    /// Rank-revealing LU decomposition (fast, good accuracy).
-    LU,
-    /// Cross Interpolation (fastest, may be less accurate).
-    CI,
-}
+// Re-export CanonicalForm from core-common for convenience
+pub use tensor4all_core_common::CanonicalForm;
 
 /// Truncation algorithm.
 ///

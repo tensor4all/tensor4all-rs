@@ -17,7 +17,7 @@ use tensor4all_core_tensor::{AnyScalar, TensorAccess, TensorDynLen};
 use tensor4all_treetn::{TreeTN, Einsum};
 
 use crate::error::{TensorTrainError, Result};
-use crate::options::{CanonicalMethod, TruncateAlg, TruncateOptions};
+use crate::options::{CanonicalForm, TruncateAlg, TruncateOptions};
 
 /// Tensor Train with orthogonality tracking.
 ///
@@ -37,7 +37,7 @@ use crate::options::{CanonicalMethod, TruncateAlg, TruncateOptions};
 /// # Implementation
 ///
 /// Internally wraps `TreeTN<Id, Symm, usize, Einsum>` where node names are site indices.
-/// This allows reuse of TreeTN's canonization and contraction algorithms.
+/// This allows reuse of TreeTN's canonicalization and contraction algorithms.
 #[derive(Debug, Clone)]
 pub struct TensorTrain<Id = DynId, Symm = NoSymmSpace>
 where
@@ -47,8 +47,8 @@ where
     /// The underlying TreeTN with linear chain topology.
     /// Node names are usize (0, 1, 2, ...) representing site indices.
     inner: TreeTN<Id, Symm, usize, Einsum>,
-    /// The canonicalization method used (if known).
-    canonical_method: Option<CanonicalMethod>,
+    /// The canonical form used (if known).
+    canonical_form: Option<CanonicalForm>,
 }
 
 impl<Id, Symm> TensorTrain<Id, Symm>
@@ -81,7 +81,7 @@ where
                 })?;
             return Ok(Self {
                 inner,
-                canonical_method: None,
+                canonical_form: None,
             });
         }
 
@@ -123,7 +123,7 @@ where
 
         Ok(Self {
             inner,
-            canonical_method: None,
+            canonical_form: None,
         })
     }
 
@@ -136,12 +136,12 @@ where
     /// * `tensors` - Vector of tensors representing the tensor train
     /// * `llim` - Left orthogonality limit (for compatibility; only used to compute center)
     /// * `rlim` - Right orthogonality limit (for compatibility; only used to compute center)
-    /// * `canonical_method` - The method used for canonicalization (if any)
+    /// * `canonical_form` - The method used for canonicalization (if any)
     pub fn with_ortho(
         tensors: Vec<TensorDynLen<Id, Symm>>,
         llim: i32,
         rlim: i32,
-        canonical_method: Option<CanonicalMethod>,
+        canonical_form: Option<CanonicalForm>,
     ) -> Result<Self> {
         let mut tt = Self::new(tensors)?;
 
@@ -155,7 +155,7 @@ where
                 })?;
         }
 
-        tt.canonical_method = canonical_method;
+        tt.canonical_form = canonical_form;
         Ok(tt)
     }
 
@@ -260,14 +260,14 @@ where
 
     /// Get the canonicalization method used.
     #[inline]
-    pub fn canonical_method(&self) -> Option<CanonicalMethod> {
-        self.canonical_method
+    pub fn canonical_form(&self) -> Option<CanonicalForm> {
+        self.canonical_form
     }
 
     /// Set the canonicalization method.
     #[inline]
-    pub fn set_canonical_method(&mut self, method: Option<CanonicalMethod>) {
-        self.canonical_method = method;
+    pub fn set_canonical_form(&mut self, method: Option<CanonicalForm>) {
+        self.canonical_form = method;
     }
 
     /// Get a reference to the tensor at the given site.
@@ -498,16 +498,19 @@ where
     ///
     /// Returns an error if the factorization fails or if the site is out of bounds.
     pub fn orthogonalize(&mut self, site: usize) -> Result<()> {
-        self.orthogonalize_with(site, CanonicalMethod::SVD)
+        self.orthogonalize_with(site, CanonicalForm::Unitary)
     }
 
-    /// Orthogonalize with a specified method.
+    /// Orthogonalize with a specified canonical form.
     ///
     /// # Arguments
     ///
     /// * `site` - The target site for the orthogonality center (0-indexed)
-    /// * `method` - The canonicalization method to use (SVD, LU, or CI)
-    pub fn orthogonalize_with(&mut self, site: usize, method: CanonicalMethod) -> Result<()> {
+    /// * `form` - The canonical form to use:
+    ///   - `Unitary`: Uses QR decomposition, each tensor is isometric
+    ///   - `LU`: Uses LU decomposition, one factor has unit diagonal
+    ///   - `CI`: Uses Cross Interpolation
+    pub fn orthogonalize_with(&mut self, site: usize, form: CanonicalForm) -> Result<()> {
         if self.is_empty() {
             return Err(TensorTrainError::Empty);
         }
@@ -518,17 +521,15 @@ where
             });
         }
 
-        let alg = method_to_alg(method);
-
-        // Use TreeTN's canonize_by_names (accepts node names directly)
+        // Use TreeTN's canonicalize_by_names_with (accepts node names and CanonicalForm)
         // Since V = usize, node names are site indices
         self.inner = std::mem::take(&mut self.inner)
-            .canonize_by_names(vec![site], alg)
+            .canonicalize_by_names_with(vec![site], form)
             .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("Canonize failed: {}", e),
+                message: format!("Canonicalize failed: {}", e),
             })?;
 
-        self.canonical_method = Some(method);
+        self.canonical_form = Some(form);
         Ok(())
     }
 
@@ -557,7 +558,7 @@ where
         // Update orthogonality: after left-to-right sweep, ortho center is at rightmost site
         let center = end.min(self.len()).saturating_sub(1);
         let _ = self.inner.set_ortho_region(vec![center]);
-        self.canonical_method = Some(truncate_alg_to_method(options.alg));
+        self.canonical_form = Some(truncate_alg_to_form(options.alg));
 
         Ok(())
     }
@@ -701,15 +702,6 @@ where
     }
 }
 
-/// Convert CanonicalMethod to FactorizeAlg.
-fn method_to_alg(method: CanonicalMethod) -> FactorizeAlg {
-    match method {
-        CanonicalMethod::SVD => FactorizeAlg::SVD,
-        CanonicalMethod::LU => FactorizeAlg::LU,
-        CanonicalMethod::CI => FactorizeAlg::CI,
-    }
-}
-
 /// Convert TruncateAlg to FactorizeAlg.
 fn truncate_alg_to_factorize_alg(alg: TruncateAlg) -> FactorizeAlg {
     match alg {
@@ -719,12 +711,15 @@ fn truncate_alg_to_factorize_alg(alg: TruncateAlg) -> FactorizeAlg {
     }
 }
 
-/// Convert TruncateAlg to CanonicalMethod.
-fn truncate_alg_to_method(alg: TruncateAlg) -> CanonicalMethod {
+/// Convert TruncateAlg to CanonicalForm.
+///
+/// Note: SVD truncation algorithm corresponds to Unitary canonical form
+/// because both produce orthogonal/isometric tensors.
+fn truncate_alg_to_form(alg: TruncateAlg) -> CanonicalForm {
     match alg {
-        TruncateAlg::SVD => CanonicalMethod::SVD,
-        TruncateAlg::LU => CanonicalMethod::LU,
-        TruncateAlg::CI => CanonicalMethod::CI,
+        TruncateAlg::SVD => CanonicalForm::Unitary,
+        TruncateAlg::LU => CanonicalForm::LU,
+        TruncateAlg::CI => CanonicalForm::CI,
     }
 }
 
@@ -832,13 +827,13 @@ mod tests {
             vec![t0, t1],
             -1,  // no left orthogonality
             1,   // right orthogonal from site 1
-            Some(CanonicalMethod::SVD),
+            Some(CanonicalForm::Unitary),
         )
         .unwrap();
 
         assert!(tt.isortho());
         assert_eq!(tt.orthocenter(), Some(0));
-        assert_eq!(tt.canonical_method(), Some(CanonicalMethod::SVD));
+        assert_eq!(tt.canonical_form(), Some(CanonicalForm::Unitary));
     }
 
     #[test]
@@ -894,7 +889,7 @@ mod tests {
         tt.orthogonalize(0).unwrap();
         assert!(tt.isortho());
         assert_eq!(tt.orthocenter(), Some(0));
-        assert_eq!(tt.canonical_method(), Some(CanonicalMethod::SVD));
+        assert_eq!(tt.canonical_form(), Some(CanonicalForm::Unitary));
 
         // Orthogonalize to site 1
         tt.orthogonalize(1).unwrap();
@@ -944,10 +939,10 @@ mod tests {
 
         let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
-        tt.orthogonalize_with(0, CanonicalMethod::LU).unwrap();
+        tt.orthogonalize_with(0, CanonicalForm::LU).unwrap();
         assert!(tt.isortho());
         assert_eq!(tt.orthocenter(), Some(0));
-        assert_eq!(tt.canonical_method(), Some(CanonicalMethod::LU));
+        assert_eq!(tt.canonical_form(), Some(CanonicalForm::LU));
     }
 
     #[test]
@@ -961,10 +956,10 @@ mod tests {
 
         let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
-        tt.orthogonalize_with(1, CanonicalMethod::CI).unwrap();
+        tt.orthogonalize_with(1, CanonicalForm::CI).unwrap();
         assert!(tt.isortho());
         assert_eq!(tt.orthocenter(), Some(1));
-        assert_eq!(tt.canonical_method(), Some(CanonicalMethod::CI));
+        assert_eq!(tt.canonical_form(), Some(CanonicalForm::CI));
     }
 
     #[test]
@@ -989,7 +984,7 @@ mod tests {
 
         // Check that bond dimensions are reduced
         assert!(tt.maxbonddim() <= 4);
-        assert_eq!(tt.canonical_method(), Some(CanonicalMethod::SVD));
+        assert_eq!(tt.canonical_form(), Some(CanonicalForm::Unitary));
     }
 
     #[test]

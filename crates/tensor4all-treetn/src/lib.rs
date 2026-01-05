@@ -9,6 +9,6 @@ pub use bond_mode::{BondMode, Einsum, Explicit};
 pub use connection::Connection;
 pub use dyn_treetn::{BoxedTensorLike, DynIndex, DynTreeTN};
 pub use named_graph::NamedGraph;
-pub use site_index_network::SiteIndexNetwork;
+pub use site_index_network::{CanonicalizeEdges, SiteIndexNetwork};
 pub use treetn::{TreeTN, TreeTopology, factorize_tensor_to_treetn, factorize_tensor_to_treetn_with};
 

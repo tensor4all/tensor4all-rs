@@ -677,7 +677,7 @@ fn test_treetn_validate_tree_empty() {
 #[test]
 fn test_auto_centers_empty() {
     let tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
-    assert!(!tn.is_canonized());
+    assert!(!tn.is_canonicalized());
     assert!(tn.ortho_region().is_empty());
 }
 
@@ -693,13 +693,13 @@ fn test_set_auto_centers() {
     let tensor = TensorDynLen::new(indices, dims, storage);
     let node = tn.add_tensor_auto_name(tensor);
     
-    // Initially not canonized
-    assert!(!tn.is_canonized());
+    // Initially not canonicalized
+    assert!(!tn.is_canonicalized());
     
     // Set ortho_region
     let result = tn.set_ortho_region(vec![node]);
     assert!(result.is_ok());
-    assert!(tn.is_canonized());
+    assert!(tn.is_canonicalized());
     assert_eq!(tn.ortho_region().len(), 1);
     assert!(tn.ortho_region().contains(&node));
 }
@@ -738,7 +738,7 @@ fn test_add_remove_auto_center() {
     // Add first node to region
     let result = tn.add_to_ortho_region(node1);
     assert!(result.is_ok());
-    assert!(tn.is_canonized());
+    assert!(tn.is_canonicalized());
     assert_eq!(tn.ortho_region().len(), 1);
     
     // Add second node to region
@@ -756,7 +756,7 @@ fn test_add_remove_auto_center() {
     
     // Remove second node from region
     tn.remove_from_ortho_region(&node2);
-    assert!(!tn.is_canonized());
+    assert!(!tn.is_canonicalized());
     assert!(tn.ortho_region().is_empty());
 }
 
@@ -782,10 +782,10 @@ fn test_clear_auto_centers() {
     let node = tn.add_tensor_auto_name(tensor);
     
     tn.set_ortho_region(vec![node]).unwrap();
-    assert!(tn.is_canonized());
+    assert!(tn.is_canonicalized());
     
     tn.clear_ortho_region();
-    assert!(!tn.is_canonized());
+    assert!(!tn.is_canonicalized());
     assert!(tn.ortho_region().is_empty());
 }
 
@@ -874,7 +874,7 @@ fn test_validate_ortho_consistency_chain_points_towards_centers() {
 }
 
 #[test]
-fn test_canonize_simple() {
+fn test_canonicalize_simple() {
     // Create a simple 2-node tree: n1 -- n2
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
@@ -898,11 +898,11 @@ fn test_canonize_simple() {
 
     let _e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
 
-    // Canonize towards n2
-    let tn_canon = tn.canonize(vec![n2]).unwrap();
+    // Canonicalize towards n2
+    let tn_canon = tn.canonicalize(vec![n2]).unwrap();
 
-    // Verify that the network is canonized
-    assert!(tn_canon.is_canonized());
+    // Verify that the network is canonicalized
+    assert!(tn_canon.is_canonicalized());
     assert!(tn_canon.ortho_region().contains(&n2));
 
     // Verify ortho consistency
@@ -910,8 +910,8 @@ fn test_canonize_simple() {
 }
 
 #[test]
-fn test_canonize_mixed_storage() {
-    // Test canonization with mixed f64 and Complex64 storage
+fn test_canonicalize_mixed_storage() {
+    // Test canonicalization with mixed f64 and Complex64 storage
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     let a1 = Index::new_dyn(2);
@@ -936,11 +936,11 @@ fn test_canonize_mixed_storage() {
 
     let _e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
 
-    // Canonize towards n2
-    let tn_canon = tn.canonize(vec![n2]).unwrap();
+    // Canonicalize towards n2
+    let tn_canon = tn.canonicalize(vec![n2]).unwrap();
 
-    // Verify that the network is canonized
-    assert!(tn_canon.is_canonized());
+    // Verify that the network is canonicalized
+    assert!(tn_canon.is_canonicalized());
     assert!(tn_canon.ortho_region().contains(&n2));
 
     // Verify ortho consistency
@@ -1173,6 +1173,53 @@ fn test_treetn_contract_empty_fails() {
     let tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
     let result = tn.contract_to_tensor();
     assert!(result.is_err());
+}
+
+#[test]
+fn test_contract_to_tensor_chain() {
+    // Test edge-based contract_to_tensor with a 3-node chain
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
+
+    let i = Index::new_dyn(2);
+    let j1 = Index::new_dyn(3);
+    let j2 = Index::new_dyn(3);
+    let k1 = Index::new_dyn(4);
+    let k2 = Index::new_dyn(4);
+    let l = Index::new_dyn(5);
+
+    // Create a chain: node1 - node2 - node3
+    // node1: [i, j1] dims [2, 3]
+    let storage1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec((0..6).map(|x| x as f64).collect())));
+    let tensor1: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j1.clone()], vec![2, 3], storage1);
+    let n1 = tn.add_tensor_auto_name(tensor1);
+
+    // node2: [j2, k1] dims [3, 4]
+    let storage2 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec((0..12).map(|x| x as f64).collect())));
+    let tensor2: TensorDynLen<DynId> = TensorDynLen::new(vec![j2.clone(), k1.clone()], vec![3, 4], storage2);
+    let n2 = tn.add_tensor_auto_name(tensor2);
+
+    // node3: [k2, l] dims [4, 5]
+    let storage3 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec((0..20).map(|x| x as f64).collect())));
+    let tensor3: TensorDynLen<DynId> = TensorDynLen::new(vec![k2.clone(), l.clone()], vec![4, 5], storage3);
+    let n3 = tn.add_tensor_auto_name(tensor3);
+
+    // Connect: node1 -- node2 -- node3
+    tn.connect(n1, &j1, n2, &j2).unwrap();
+    tn.connect(n2, &k1, n3, &k2).unwrap();
+
+    // Contract to tensor
+    let result = tn.contract_to_tensor().unwrap();
+
+    // Result should have external indices only (i, l)
+    assert_eq!(result.dims.len(), 2);
+    assert_eq!(result.dims, vec![2, 5]);
+
+    // Verify total size
+    let data: Vec<f64> = match result.storage.as_ref() {
+        Storage::DenseF64(d) => d.iter().copied().collect(),
+        _ => panic!("Expected DenseF64 storage"),
+    };
+    assert_eq!(data.len(), 10); // 2 * 5 = 10
 }
 
 // ============================================================================
@@ -1573,3 +1620,403 @@ fn test_treetn_add_two_nodes_multi_physical_permuted() {
 }
 
 // Note: Complex64 two-nodes correctness test is generated by the macro (test_treetn_add_two_nodes_c64)
+
+// ============================================================================
+// TreeTN::contract_to_tensor tests for non-chain topologies
+// ============================================================================
+
+#[test]
+fn test_contract_to_tensor_star() {
+    // Test edge-based contract_to_tensor with a star topology
+    //     A
+    //     |
+    // B - C - D
+    //     |
+    //     E
+    let mut tn = TreeTN::<DynId, NoSymmSpace, String, Explicit>::new();
+
+    // External indices for each leaf
+    let ext_a = Index::new_dyn(2);
+    let ext_b = Index::new_dyn(3);
+    let ext_d = Index::new_dyn(4);
+    let ext_e = Index::new_dyn(5);
+
+    // Bond indices (connecting leaves to center C)
+    let bond_ac_a = Index::new_dyn(6);
+    let bond_ac_c = Index::new_dyn(6);
+    let bond_bc_b = Index::new_dyn(7);
+    let bond_bc_c = Index::new_dyn(7);
+    let bond_cd_c = Index::new_dyn(8);
+    let bond_cd_d = Index::new_dyn(8);
+    let bond_ce_c = Index::new_dyn(9);
+    let bond_ce_e = Index::new_dyn(9);
+
+    // Create tensors
+    // Node A: [ext_a, bond_ac_a] dims [2, 6]
+    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+        (0..12).map(|x| x as f64).collect()
+    )));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![ext_a.clone(), bond_ac_a.clone()], vec![2, 6], storage_a);
+    let na = tn.add_tensor("A".to_string(), tensor_a).unwrap();
+
+    // Node B: [ext_b, bond_bc_b] dims [3, 7]
+    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+        (0..21).map(|x| (x * 2) as f64).collect()
+    )));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![ext_b.clone(), bond_bc_b.clone()], vec![3, 7], storage_b);
+    let nb = tn.add_tensor("B".to_string(), tensor_b).unwrap();
+
+    // Node C (center): [bond_ac_c, bond_bc_c, bond_cd_c, bond_ce_c] dims [6, 7, 8, 9]
+    let storage_c = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+        (0..(6*7*8*9)).map(|x| (x % 100) as f64 / 10.0).collect()
+    )));
+    let tensor_c: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![bond_ac_c.clone(), bond_bc_c.clone(), bond_cd_c.clone(), bond_ce_c.clone()],
+        vec![6, 7, 8, 9], storage_c);
+    let nc = tn.add_tensor("C".to_string(), tensor_c).unwrap();
+
+    // Node D: [bond_cd_d, ext_d] dims [8, 4]
+    let storage_d = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+        (0..32).map(|x| (x * 3) as f64).collect()
+    )));
+    let tensor_d: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![bond_cd_d.clone(), ext_d.clone()], vec![8, 4], storage_d);
+    let nd = tn.add_tensor("D".to_string(), tensor_d).unwrap();
+
+    // Node E: [bond_ce_e, ext_e] dims [9, 5]
+    let storage_e = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+        (0..45).map(|x| (x + 1) as f64).collect()
+    )));
+    let tensor_e: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![bond_ce_e.clone(), ext_e.clone()], vec![9, 5], storage_e);
+    let ne = tn.add_tensor("E".to_string(), tensor_e).unwrap();
+
+    // Connect: A-C, B-C, C-D, C-E
+    tn.connect(na, &bond_ac_a, nc, &bond_ac_c).unwrap();
+    tn.connect(nb, &bond_bc_b, nc, &bond_bc_c).unwrap();
+    tn.connect(nc, &bond_cd_c, nd, &bond_cd_d).unwrap();
+    tn.connect(nc, &bond_ce_c, ne, &bond_ce_e).unwrap();
+
+    // Contract to tensor
+    let result = tn.contract_to_tensor().unwrap();
+
+    // Result should have external indices only (ext_a, ext_b, ext_d, ext_e)
+    assert_eq!(result.dims.len(), 4);
+    // Dims should be [2, 3, 4, 5] in some order
+    let mut sorted_dims = result.dims.clone();
+    sorted_dims.sort();
+    assert_eq!(sorted_dims, vec![2, 3, 4, 5]);
+
+    // Verify total size
+    let total_size: usize = result.dims.iter().product();
+    assert_eq!(total_size, 2 * 3 * 4 * 5);
+
+    // Verify data is not all zeros (sanity check)
+    let data: Vec<f64> = match result.storage.as_ref() {
+        Storage::DenseF64(d) => d.iter().copied().collect(),
+        _ => panic!("Expected DenseF64 storage"),
+    };
+    let sum: f64 = data.iter().sum();
+    assert!(sum.abs() > 1e-10, "Result should not be all zeros");
+}
+
+#[test]
+fn test_contract_to_tensor_y_shaped() {
+    // Test edge-based contract_to_tensor with a Y-shaped tree
+    //     A
+    //     |
+    //     B
+    //    / \
+    //   C   D
+    let mut tn = TreeTN::<DynId, NoSymmSpace, String, Explicit>::new();
+
+    // External indices
+    let ext_a = Index::new_dyn(2);
+    let ext_c = Index::new_dyn(3);
+    let ext_d = Index::new_dyn(4);
+
+    // Bond indices
+    let bond_ab_a = Index::new_dyn(5);
+    let bond_ab_b = Index::new_dyn(5);
+    let bond_bc_b = Index::new_dyn(6);
+    let bond_bc_c = Index::new_dyn(6);
+    let bond_bd_b = Index::new_dyn(7);
+    let bond_bd_d = Index::new_dyn(7);
+
+    // Create tensors
+    // Node A: [ext_a, bond_ab_a] dims [2, 5]
+    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+        (0..10).map(|x| x as f64).collect()
+    )));
+    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![ext_a.clone(), bond_ab_a.clone()], vec![2, 5], storage_a);
+    let na = tn.add_tensor("A".to_string(), tensor_a).unwrap();
+
+    // Node B (branch point): [bond_ab_b, bond_bc_b, bond_bd_b] dims [5, 6, 7]
+    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+        (0..(5*6*7)).map(|x| (x % 50) as f64 / 10.0).collect()
+    )));
+    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![bond_ab_b.clone(), bond_bc_b.clone(), bond_bd_b.clone()],
+        vec![5, 6, 7], storage_b);
+    let nb = tn.add_tensor("B".to_string(), tensor_b).unwrap();
+
+    // Node C: [bond_bc_c, ext_c] dims [6, 3]
+    let storage_c = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+        (0..18).map(|x| (x * 2) as f64).collect()
+    )));
+    let tensor_c: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![bond_bc_c.clone(), ext_c.clone()], vec![6, 3], storage_c);
+    let nc = tn.add_tensor("C".to_string(), tensor_c).unwrap();
+
+    // Node D: [bond_bd_d, ext_d] dims [7, 4]
+    let storage_d = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+        (0..28).map(|x| (x + 1) as f64).collect()
+    )));
+    let tensor_d: TensorDynLen<DynId> = TensorDynLen::new(
+        vec![bond_bd_d.clone(), ext_d.clone()], vec![7, 4], storage_d);
+    let nd = tn.add_tensor("D".to_string(), tensor_d).unwrap();
+
+    // Connect: A-B, B-C, B-D
+    tn.connect(na, &bond_ab_a, nb, &bond_ab_b).unwrap();
+    tn.connect(nb, &bond_bc_b, nc, &bond_bc_c).unwrap();
+    tn.connect(nb, &bond_bd_b, nd, &bond_bd_d).unwrap();
+
+    // Contract to tensor
+    let result = tn.contract_to_tensor().unwrap();
+
+    // Result should have external indices only (ext_a, ext_c, ext_d)
+    assert_eq!(result.dims.len(), 3);
+    // Dims should be [2, 3, 4] in some order
+    let mut sorted_dims = result.dims.clone();
+    sorted_dims.sort();
+    assert_eq!(sorted_dims, vec![2, 3, 4]);
+
+    // Verify total size
+    let total_size: usize = result.dims.iter().product();
+    assert_eq!(total_size, 2 * 3 * 4);
+
+    // Verify data is not all zeros (sanity check)
+    let data: Vec<f64> = match result.storage.as_ref() {
+        Storage::DenseF64(d) => d.iter().copied().collect(),
+        _ => panic!("Expected DenseF64 storage"),
+    };
+    let sum: f64 = data.iter().sum();
+    assert!(sum.abs() > 1e-10, "Result should not be all zeros");
+}
+
+// ============================================================================
+// log_norm tests
+// ============================================================================
+
+#[test]
+fn test_log_norm_chain() {
+    // Create a simple 2-node chain: n1 -- n2
+    // Data: all 1.0
+    // Total elements: 2*3 + 3*4 = 6 + 12, but contracted TN norm is different
+    // For a chain TN with all ones and bond dim 3:
+    // ||TN|| can be computed by contracting: (1,1,...) * (1,1,...) over bond
+
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
+
+    let a1 = Index::new_dyn(2);  // external
+    let b1 = Index::new_dyn(3);  // bond
+    let a2 = Index::new_dyn(3);  // bond
+    let b2 = Index::new_dyn(4);  // external
+
+    let storage1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
+    let tensor1: TensorDynLen<DynId> = TensorDynLen::new(vec![a1.clone(), b1.clone()], vec![2, 3], storage1);
+
+    let storage2 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12])));
+    let tensor2: TensorDynLen<DynId> = TensorDynLen::new(vec![a2.clone(), b2.clone()], vec![3, 4], storage2);
+
+    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n2 = tn.add_tensor_auto_name(tensor2);
+
+    tn.connect(n1, &b1, n2, &a2).unwrap();
+
+    // Compute log_norm
+    let log_norm = tn.log_norm().unwrap();
+
+    // Verify by contracting to tensor and computing norm
+    let full_tensor = tn.contract_to_tensor().unwrap();
+    let expected_norm = full_tensor.norm();
+    let expected_log_norm = expected_norm.ln();
+
+    assert!(
+        (log_norm - expected_log_norm).abs() < 1e-10,
+        "log_norm mismatch: got {}, expected {}",
+        log_norm, expected_log_norm
+    );
+}
+
+#[test]
+fn test_log_norm_already_canonicalized_single_site() {
+    // Create TN, canonicalize to single site, call log_norm
+    // Verify it uses the existing center without re-canonizing
+
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
+
+    let a1 = Index::new_dyn(2);
+    let b1 = Index::new_dyn(3);
+    let a2 = Index::new_dyn(3);
+    let b2 = Index::new_dyn(4);
+
+    let storage1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])));
+    let tensor1: TensorDynLen<DynId> = TensorDynLen::new(vec![a1.clone(), b1.clone()], vec![2, 3], storage1);
+
+    let storage2 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec((1..=12).map(|i| i as f64).collect())));
+    let tensor2: TensorDynLen<DynId> = TensorDynLen::new(vec![a2.clone(), b2.clone()], vec![3, 4], storage2);
+
+    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n2 = tn.add_tensor_auto_name(tensor2);
+
+    tn.connect(n1, &b1, n2, &a2).unwrap();
+
+    // First get expected norm via full contraction
+    let full_tensor = tn.contract_to_tensor().unwrap();
+    let expected_log_norm = full_tensor.norm().ln();
+
+    // Canonicalize to n1
+    tn.canonicalize_mut(std::iter::once(n1)).unwrap();
+    assert_eq!(tn.ortho_region().len(), 1);
+
+    // Compute log_norm
+    let log_norm = tn.log_norm().unwrap();
+
+    // Should still be canonicalized to n1
+    assert_eq!(tn.ortho_region().len(), 1);
+
+    assert!(
+        (log_norm - expected_log_norm).abs() < 1e-10,
+        "log_norm mismatch: got {}, expected {}",
+        log_norm, expected_log_norm
+    );
+}
+
+#[test]
+fn test_log_norm_multi_site_ortho_region() {
+    // Create TN with 3 nodes, canonicalize to 2 sites, call log_norm
+    // Verify it canonicalizes to single site
+
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
+
+    let a1 = Index::new_dyn(2);
+    let b1 = Index::new_dyn(3);
+    let a2 = Index::new_dyn(3);
+    let b2 = Index::new_dyn(3);
+    let a3 = Index::new_dyn(3);
+    let b3 = Index::new_dyn(4);
+
+    let storage1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
+    let tensor1: TensorDynLen<DynId> = TensorDynLen::new(vec![a1.clone(), b1.clone()], vec![2, 3], storage1);
+
+    let storage2 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 9])));
+    let tensor2: TensorDynLen<DynId> = TensorDynLen::new(vec![a2.clone(), b2.clone()], vec![3, 3], storage2);
+
+    let storage3 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12])));
+    let tensor3: TensorDynLen<DynId> = TensorDynLen::new(vec![a3.clone(), b3.clone()], vec![3, 4], storage3);
+
+    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n2 = tn.add_tensor_auto_name(tensor2);
+    let n3 = tn.add_tensor_auto_name(tensor3);
+
+    tn.connect(n1, &b1, n2, &a2).unwrap();
+    tn.connect(n2, &b2, n3, &a3).unwrap();
+
+    // Get expected norm via full contraction
+    let full_tensor = tn.contract_to_tensor().unwrap();
+    let expected_log_norm = full_tensor.norm().ln();
+
+    // Canonicalize to two sites (n1 and n2)
+    tn.canonicalize_mut(vec![n1, n2]).unwrap();
+    assert_eq!(tn.ortho_region().len(), 2);
+
+    // Compute log_norm - should canonicalize to single site
+    let log_norm = tn.log_norm().unwrap();
+
+    // Should now be canonicalized to single site (min of n1, n2)
+    assert_eq!(tn.ortho_region().len(), 1);
+
+    assert!(
+        (log_norm - expected_log_norm).abs() < 1e-10,
+        "log_norm mismatch: got {}, expected {}",
+        log_norm, expected_log_norm
+    );
+}
+
+#[test]
+fn test_log_norm_complex_tensor() {
+    // Test with complex tensors
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
+
+    let a1 = Index::new_dyn(2);
+    let b1 = Index::new_dyn(2);
+    let a2 = Index::new_dyn(2);
+    let b2 = Index::new_dyn(2);
+
+    let data1: Vec<Complex64> = vec![
+        Complex64::new(1.0, 1.0),
+        Complex64::new(2.0, -1.0),
+        Complex64::new(0.0, 1.0),
+        Complex64::new(1.0, 0.0),
+    ];
+    let storage1 = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data1)));
+    let tensor1: TensorDynLen<DynId> = TensorDynLen::new(vec![a1.clone(), b1.clone()], vec![2, 2], storage1);
+
+    let data2: Vec<Complex64> = vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 1.0),
+        Complex64::new(-1.0, 0.0),
+        Complex64::new(0.0, -1.0),
+    ];
+    let storage2 = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data2)));
+    let tensor2: TensorDynLen<DynId> = TensorDynLen::new(vec![a2.clone(), b2.clone()], vec![2, 2], storage2);
+
+    let n1 = tn.add_tensor_auto_name(tensor1);
+    let n2 = tn.add_tensor_auto_name(tensor2);
+
+    tn.connect(n1, &b1, n2, &a2).unwrap();
+
+    // Get expected norm via full contraction
+    let full_tensor = tn.contract_to_tensor().unwrap();
+    let expected_log_norm = full_tensor.norm().ln();
+
+    // Compute log_norm
+    let log_norm = tn.log_norm().unwrap();
+
+    assert!(
+        (log_norm - expected_log_norm).abs() < 1e-10,
+        "log_norm mismatch for complex: got {}, expected {}",
+        log_norm, expected_log_norm
+    );
+}
+
+#[test]
+fn test_log_norm_single_tensor() {
+    // Test with a single tensor (no bonds)
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
+
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(4);
+
+    let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data.clone())));
+    let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone(), j.clone()], vec![3, 4], storage);
+
+    let _n = tn.add_tensor_auto_name(tensor);
+
+    // Expected: sqrt(1² + 2² + ... + 12²) = sqrt(650)
+    let expected_norm = (data.iter().map(|x| x * x).sum::<f64>()).sqrt();
+    let expected_log_norm = expected_norm.ln();
+
+    let log_norm = tn.log_norm().unwrap();
+
+    assert!(
+        (log_norm - expected_log_norm).abs() < 1e-10,
+        "log_norm mismatch for single tensor: got {}, expected {}",
+        log_norm, expected_log_norm
+    );
+}
