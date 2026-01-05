@@ -9,7 +9,6 @@ use tensor4all::Storage;
 use tensor4all::index::{Index, NoSymmSpace, Symmetry, DynId};
 use tensor4all::index_ops::common_inds;
 use tensor4all::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
-use crate::connection::Connection;
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
 use anyhow::{Result, Context};
@@ -19,7 +18,7 @@ use num_complex::Complex64;
 ///
 /// Maintains a graph of tensors connected by bonds (edges).
 /// Each node stores a tensor, and edges store `Connection` objects
-/// that hold the Index objects on both sides of the bond.
+/// that hold the bond index.
 ///
 /// The structure uses SiteIndexNetwork to manage:
 /// - **Topology**: Graph structure (which nodes connect to which)
@@ -41,7 +40,8 @@ where
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Named graph wrapper: provides mapping between node names (V) and NodeIndex
-    graph: NamedGraph<V, TensorDynLen<Id, Symm>, Connection<Id, Symm>>,
+    /// Edges store the bond Index directly.
+    graph: NamedGraph<V, TensorDynLen<Id, Symm>, Index<Id, Symm>>,
     /// Orthogonalization region (ortho_region).
     /// When empty, the network is not canonicalized.
     /// When non-empty, contains the node names (V) of the orthogonalization region.
@@ -54,6 +54,9 @@ where
     /// Site index network: manages topology and site space (physical indices).
     /// This structure enables topology and site space comparison independent of tensor data.
     site_index_network: SiteIndexNetwork<V, Id, Symm>,
+    /// Orthogonalization direction for each edge.
+    /// Maps EdgeIndex to the node name (V) that the orthogonalization points towards.
+    ortho_towards: HashMap<EdgeIndex, V>,
 }
 
 // ============================================================================
@@ -75,6 +78,7 @@ where
             ortho_region: HashSet::new(),
             canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
+            ortho_towards: HashMap::new(),
         }
     }
 
@@ -257,6 +261,8 @@ where
     }
 
     /// Internal method to connect two tensors.
+    ///
+    /// In Einsum mode, `index_a` and `index_b` must have the same ID.
     fn connect_internal(
         &mut self,
         node_a: NodeIndex,
@@ -264,6 +270,15 @@ where
         node_b: NodeIndex,
         index_b: &Index<Id, Symm>,
     ) -> Result<EdgeIndex> {
+        // Validate that indices have the same ID (Einsum mode requirement)
+        if index_a.id != index_b.id {
+            return Err(anyhow::anyhow!(
+                "Index IDs must match in Einsum mode: {:?} != {:?}",
+                index_a.id, index_b.id
+            ))
+            .context("Failed to connect tensors");
+        }
+
         // Validate that nodes exist
         if !self.graph.contains_node(node_a) || !self.graph.contains_node(node_b) {
             return Err(anyhow::anyhow!("One or both nodes do not exist"))
@@ -289,13 +304,9 @@ where
                 .context("Failed to connect: index_b must exist in tensor_b");
         }
 
-        // Clone indices for the connection
-        let index_a_clone = tensor_a.indices.iter()
+        // Clone the bond index (same ID, use index_a)
+        let bond_index = tensor_a.indices.iter()
             .find(|idx| idx.id == index_a.id)
-            .unwrap()
-            .clone();
-        let index_b_clone = tensor_b.indices.iter()
-            .find(|idx| idx.id == index_b.id)
             .unwrap()
             .clone();
 
@@ -307,23 +318,19 @@ where
             .ok_or_else(|| anyhow::anyhow!("Node name for node_b not found"))?
             .clone();
 
-        // Create connection
-        let connection = Connection::new(index_a_clone.clone(), index_b_clone.clone())
-            .context("Failed to create connection")?;
-
-        // Add edge to graph
-        let edge_idx = self.graph.graph_mut().add_edge(node_a, node_b, connection);
+        // Add edge to graph with the bond index directly
+        let edge_idx = self.graph.graph_mut().add_edge(node_a, node_b, bond_index.clone());
 
         // Add edge to site_index_network
         self.site_index_network.add_edge(&node_name_a, &node_name_b)
             .map_err(|e| anyhow::anyhow!("Failed to add edge to site_index_network: {}", e))?;
 
-        // Update physical indices: remove connection indices from physical indices
+        // Update physical indices: remove bond index from physical indices
         if let Some(site_space_a) = self.site_index_network.site_space_mut(&node_name_a) {
-            site_space_a.remove(&index_a_clone);
+            site_space_a.remove(&bond_index);
         }
         if let Some(site_space_b) = self.site_index_network.site_space_mut(&node_name_b) {
-            site_space_b.remove(&index_b_clone);
+            site_space_b.remove(&bond_index);
         }
 
         Ok(edge_idx)
@@ -410,19 +417,21 @@ where
         Ok(old_tensor)
     }
 
-    /// Get a reference to a connection by EdgeIndex.
-    pub fn connection(&self, edge: EdgeIndex) -> Option<&Connection<Id, Symm>> {
+    /// Get the bond index for a given edge.
+    pub fn bond_index(&self, edge: EdgeIndex) -> Option<&Index<Id, Symm>> {
         self.graph.graph().edge_weight(edge)
     }
 
-    /// Get a mutable reference to a connection by EdgeIndex.
-    pub fn connection_mut(&mut self, edge: EdgeIndex) -> Option<&mut Connection<Id, Symm>> {
+    /// Get a mutable reference to the bond index for a given edge.
+    pub fn bond_index_mut(&mut self, edge: EdgeIndex) -> Option<&mut Index<Id, Symm>> {
         self.graph.graph_mut().edge_weight_mut(edge)
     }
 
-    /// Get the index on the side of the given node for an edge.
+    /// Get the bond index for a given edge (legacy API).
     ///
-    /// Returns the Index that belongs to the specified node in the given edge.
+    /// In Einsum mode, both endpoints share the same bond index.
+    /// The `node` parameter is kept for API compatibility but is not used.
+    #[deprecated(note = "Use bond_index() instead")]
     pub fn edge_index_for_node(
         &self,
         edge: EdgeIndex,
@@ -437,15 +446,8 @@ where
                 .context("edge_index_for_node: node must be one of the edge endpoints");
         }
 
-        let conn = self.connection(edge)
-            .ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
-
-        // index_source corresponds to source, index_target to target
-        if node == source {
-            Ok(&conn.index_source)
-        } else {
-            Ok(&conn.index_target)
-        }
+        self.bond_index(edge)
+            .ok_or_else(|| anyhow::anyhow!("Bond index not found"))
     }
 
     /// Get all edges connected to a node.
@@ -459,28 +461,24 @@ where
             .collect()
     }
 
-    /// Replace the bond indices for an edge (e.g., after SVD creates new bond indices).
+    /// Replace the bond index for an edge (e.g., after SVD creates a new bond index).
     ///
-    /// The new indices must have matching dimensions and correspond to the edge endpoints.
-    ///
-    /// Also updates site_index_network: removes old bond indices from physical indices
-    /// and adds new bond indices to physical indices (they become bond indices, not physical).
+    /// Also updates site_index_network: the old bond index becomes physical again,
+    /// and the new bond index is removed from physical indices.
     pub fn replace_edge_bond(
         &mut self,
         edge: EdgeIndex,
-        new_index_on_a: Index<Id, Symm>,
-        new_index_on_b: Index<Id, Symm>,
+        new_bond_index: Index<Id, Symm>,
     ) -> Result<()> {
         // Validate edge exists and get endpoints
         let (source, target) = self.graph.graph()
             .edge_endpoints(edge)
             .ok_or_else(|| anyhow::anyhow!("Edge does not exist"))?;
 
-        // Get old connection indices before updating
-        let conn = self.connection(edge)
-            .ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
-        let old_index_on_a = conn.index_source.clone();
-        let old_index_on_b = conn.index_target.clone();
+        // Get old bond index before updating
+        let old_bond_index = self.bond_index(edge)
+            .ok_or_else(|| anyhow::anyhow!("Bond index not found"))?
+            .clone();
 
         // Get node names for site_index_network update
         let node_name_a = self.graph.node_name(source)
@@ -490,27 +488,20 @@ where
             .ok_or_else(|| anyhow::anyhow!("Node name for target not found"))?
             .clone();
 
-        // Update the connection indices
-        // new_index_on_a corresponds to source, new_index_on_b to target
-        let conn_mut = self.connection_mut(edge)
-            .ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
-        conn_mut.replace_bond_indices(new_index_on_a.clone(), new_index_on_b.clone())
-            .context("Failed to replace bond indices")?;
+        // Update the bond index
+        *self.bond_index_mut(edge)
+            .ok_or_else(|| anyhow::anyhow!("Bond index not found"))? = new_bond_index.clone();
 
-        // Update site_index_network: 
-        // - Remove old bond indices from physical indices (they are no longer bond indices)
-        // - Remove new bond indices from physical indices (they become bond indices)
+        // Update site_index_network:
+        // - Old bond index becomes physical again
+        // - New bond index is removed from physical
         if let Some(site_space_a) = self.site_index_network.site_space_mut(&node_name_a) {
-            // Old index is no longer a bond, so it becomes physical again
-            site_space_a.insert(old_index_on_a);
-            // New index becomes a bond, so remove it from physical
-            site_space_a.remove(&new_index_on_a);
+            site_space_a.insert(old_bond_index.clone());
+            site_space_a.remove(&new_bond_index);
         }
         if let Some(site_space_b) = self.site_index_network.site_space_mut(&node_name_b) {
-            // Old index is no longer a bond, so it becomes physical again
-            site_space_b.insert(old_index_on_b);
-            // New index becomes a bond, so remove it from physical
-            site_space_b.remove(&new_index_on_b);
+            site_space_b.insert(old_bond_index);
+            site_space_b.remove(&new_bond_index);
         }
 
         Ok(())
@@ -518,52 +509,55 @@ where
 
     /// Set the orthogonalization direction for an edge.
     ///
-    /// The direction must be one of the edge's indices (or None).
-    /// The specified index must match either index_source or index_target of the connection.
+    /// The direction is specified as a node name (or None to clear).
+    /// The node must be one of the edge's endpoints.
     pub fn set_edge_ortho_towards(
         &mut self,
         edge: EdgeIndex,
-        dir: Option<Index<Id, Symm>>,
+        dir: Option<V>,
     ) -> Result<()> {
-        let conn = self.connection_mut(edge)
-            .ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
+        // Validate that the node (if any) is one of the edge endpoints
+        if let Some(ref node_name) = dir {
+            let (source, target) = self.graph.graph()
+                .edge_endpoints(edge)
+                .ok_or_else(|| anyhow::anyhow!("Edge does not exist"))?;
 
-        // Validate that the specified index (if any) is one of the connection indices
-        if let Some(ref ortho_idx) = dir {
-            if ortho_idx.id != conn.index_source.id && ortho_idx.id != conn.index_target.id {
+            let source_name = self.graph.node_name(source);
+            let target_name = self.graph.node_name(target);
+
+            if source_name != Some(node_name) && target_name != Some(node_name) {
                 return Err(anyhow::anyhow!(
-                    "ortho_towards index must be either index_source or index_target of the connection"
+                    "ortho_towards node {:?} must be one of the edge endpoints",
+                    node_name
                 ))
-                .context("set_edge_ortho_towards: invalid index");
+                .context("set_edge_ortho_towards: invalid node");
             }
         }
 
-        conn.set_ortho_towards(dir)
-            .context("Failed to set ortho_towards")?;
+        match dir {
+            Some(node_name) => {
+                self.ortho_towards.insert(edge, node_name);
+            }
+            None => {
+                self.ortho_towards.remove(&edge);
+            }
+        }
         Ok(())
     }
 
-    /// Get the node that corresponds to the orthogonalization direction.
+    /// Get the node name that the orthogonalization points towards.
     ///
-    /// Returns None if ortho_towards is None, or the NodeIndex of the node
-    /// that has the ortho_towards index.
-    pub fn ortho_towards_node(
-        &self,
-        edge: EdgeIndex,
-    ) -> Option<NodeIndex> {
-        let conn = self.connection(edge)?;
-        let ortho_idx = conn.ortho_towards.as_ref()?;
-        
-        let (source, target) = self.graph.graph().edge_endpoints(edge)?;
-        
-        // Check which node has the ortho_towards index
-        if ortho_idx.id == conn.index_source.id {
-            Some(source)
-        } else if ortho_idx.id == conn.index_target.id {
-            Some(target)
-        } else {
-            None
-        }
+    /// Returns None if ortho_towards is not set for this edge.
+    pub fn ortho_towards_node(&self, edge: EdgeIndex) -> Option<&V> {
+        self.ortho_towards.get(&edge)
+    }
+
+    /// Get the NodeIndex that the orthogonalization points towards.
+    ///
+    /// Returns None if ortho_towards is not set for this edge.
+    pub fn ortho_towards_node_index(&self, edge: EdgeIndex) -> Option<NodeIndex> {
+        self.ortho_towards.get(&edge)
+            .and_then(|name| self.graph.node_index(name))
     }
 
     /// Validate that the graph is a tree (or forest).
@@ -883,9 +877,9 @@ where
         for edge in self.graph.graph().edge_indices() {
             let (src, tgt) = self.graph.graph().edge_endpoints(edge)
                 .ok_or_else(|| anyhow::anyhow!("Edge has no endpoints"))?;
-            let conn_a = self.connection(edge)
-                .ok_or_else(|| anyhow::anyhow!("Connection not found in self"))?;
-            let bond_dim_a = conn_a.bond_dim();
+            let bond_index_a = self.bond_index(edge)
+                .ok_or_else(|| anyhow::anyhow!("Bond index not found in self"))?;
+            let bond_dim_a = bond_index_a.size();
 
             let src_name = self.graph.node_name(src)
                 .ok_or_else(|| anyhow::anyhow!("Source node name not found"))?
@@ -905,9 +899,9 @@ where
                 .next()
                 .or_else(|| other.graph.graph().edges_connecting(tgt_idx_other, src_idx_other).next())
                 .ok_or_else(|| anyhow::anyhow!("Edge not found in other"))?;
-            let conn_b = other.connection(edge_other.id())
-                .ok_or_else(|| anyhow::anyhow!("Connection not found in other"))?;
-            let bond_dim_b = conn_b.bond_dim();
+            let bond_index_b = other.bond_index(edge_other.id())
+                .ok_or_else(|| anyhow::anyhow!("Bond index not found in other"))?;
+            let bond_dim_b = bond_index_b.size();
 
             // Create ONE shared bond index for both endpoints (same ID)
             let new_dim = bond_dim_a + bond_dim_b;
@@ -929,6 +923,7 @@ where
             ortho_region: HashSet::new(),
             canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
+            ortho_towards: HashMap::new(),
         };
 
         // Process each node
@@ -1252,8 +1247,7 @@ where
         // If not canonicalized, require no edge directions.
         if self.ortho_region.is_empty() {
             for e in self.graph.graph().edge_indices() {
-                let conn = self.connection(e).ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
-                if conn.ortho_towards.is_some() {
+                if self.ortho_towards.contains_key(&e) {
                     return Err(anyhow::anyhow!(
                         "Found ortho_towards on edge {:?} but ortho_region is empty",
                         e
@@ -1307,7 +1301,6 @@ where
             let (source, target) = g
                 .edge_endpoints(e)
                 .ok_or_else(|| anyhow::anyhow!("Edge does not exist"))?;
-            let conn = self.connection(e).ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
 
             // Check if source and target nodes are in ortho_region
             let s_node_name = self.graph.node_name(source);
@@ -1315,8 +1308,11 @@ where
             let s_in = s_node_name.map(|v| self.ortho_region.contains(v)).unwrap_or(false);
             let t_in = t_node_name.map(|v| self.ortho_region.contains(v)).unwrap_or(false);
 
+            // Get ortho_towards for this edge
+            let ortho_towards_name = self.ortho_towards.get(&e);
+
             // None allowed only when both endpoints are centers.
-            if conn.ortho_towards.is_none() {
+            if ortho_towards_name.is_none() {
                 if !(s_in && t_in) {
                     return Err(anyhow::anyhow!(
                         "ortho_towards is None on edge {:?} but not both endpoints are in ortho_region",
@@ -1327,8 +1323,9 @@ where
                 continue;
             }
 
-            // From here on, ortho_towards must be Some.
-            let ortho_idx = conn.ortho_towards.as_ref().unwrap();
+            // From here on, ortho_towards must be Some(node_name) - convert to NodeIndex.
+            let ortho_node = self.graph.node_index(ortho_towards_name.unwrap())
+                .ok_or_else(|| anyhow::anyhow!("ortho_towards node not found in graph"))?;
 
             // Distances must exist.
             let ds = *dist
@@ -1351,26 +1348,23 @@ where
                 .context("validate_ortho_consistency: outside ortho_region, distances should differ");
             }
 
-            let expect_source_side = ds < dt;
-            let expected_id = if expect_source_side {
-                &conn.index_source.id
-            } else {
-                &conn.index_target.id
-            };
+            // Expected node is the one closer to ortho_region (smaller distance)
+            let expected_node = if ds < dt { source } else { target };
 
-            if &ortho_idx.id != expected_id {
+            if ortho_node != expected_node {
                 return Err(anyhow::anyhow!(
-                    "Invalid ortho_towards on edge {:?}: expected to point to {} side",
+                    "Invalid ortho_towards on edge {:?}: expected to point to {:?} but got {:?}",
                     e,
-                    if expect_source_side { "source" } else { "target" }
+                    expected_node,
+                    ortho_node
                 ))
                 .context("validate_ortho_consistency: ortho_towards must point towards ortho_region");
             }
 
             // Additionally enforce that boundary edges (one in centers, one out) always point into centers.
             if s_in ^ t_in {
-                let expected_into_centers_id = if s_in { &conn.index_source.id } else { &conn.index_target.id };
-                if &ortho_idx.id != expected_into_centers_id {
+                let expected_into_centers = if s_in { source } else { target };
+                if ortho_node != expected_into_centers {
                     return Err(anyhow::anyhow!(
                         "Boundary edge {:?} must point into ortho_region",
                         e
@@ -1745,9 +1739,9 @@ where
             // It is the bond_index from the factorize result.
             let new_bond_index = factorize_result.bond_index;
 
-            // Update the connection bond indices FIRST, so replace_tensor validation matches.
-            self.replace_edge_bond(edge, new_bond_index.clone(), new_bond_index.clone())
-                .context("canonicalize_with: failed to update edge bond indices")?;
+            // Update the bond index FIRST, so replace_tensor validation matches.
+            self.replace_edge_bond(edge, new_bond_index.clone())
+                .context("canonicalize_with: failed to update edge bond index")?;
 
             // Now update tensors. These validations should pass because the edge expects new_bond_index.
             self.replace_tensor(v, left_tensor)
@@ -1756,11 +1750,10 @@ where
                 .context("canonicalize_with: failed to replace tensor at parent node")?;
 
             // Set ortho_towards to point towards parent (ortho_region direction)
-            let ortho_towards_index = self
-                .edge_index_for_node(edge, parent)
-                .context("canonicalize_with: failed to get ortho_towards index for parent")?
+            let parent_name = self.graph.node_name(parent)
+                .ok_or_else(|| anyhow::anyhow!("Parent node name not found"))?
                 .clone();
-            self.set_edge_ortho_towards(edge, Some(ortho_towards_index))
+            self.set_edge_ortho_towards(edge, Some(parent_name))
                 .context("canonicalize_with: failed to set ortho_towards")?;
         }
 
@@ -2053,10 +2046,10 @@ where
                 .tensordot(&right_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
                 .context("canonicalize_by_names_with: failed to absorb right factor into parent tensor")?;
 
-            // Update the connection bond indices
+            // Update the bond index
             let new_bond_index = factorize_result.bond_index;
-            self.replace_edge_bond(edge, new_bond_index.clone(), new_bond_index.clone())
-                .context("canonicalize_by_names_with: failed to update edge bond indices")?;
+            self.replace_edge_bond(edge, new_bond_index.clone())
+                .context("canonicalize_by_names_with: failed to update edge bond index")?;
 
             // Update tensors
             self.replace_tensor(v, left_tensor)
@@ -2065,11 +2058,10 @@ where
                 .context("canonicalize_by_names_with: failed to replace tensor at parent node")?;
 
             // Set ortho_towards to point towards parent (ortho_region direction)
-            let ortho_towards_index = self
-                .edge_index_for_node(edge, parent)
-                .context("canonicalize_by_names_with: failed to get ortho_towards index for parent")?
+            let parent_name = self.graph.node_name(parent)
+                .ok_or_else(|| anyhow::anyhow!("Parent node name not found"))?
                 .clone();
-            self.set_edge_ortho_towards(edge, Some(ortho_towards_index))
+            self.set_edge_ortho_towards(edge, Some(parent_name))
                 .context("canonicalize_by_names_with: failed to set ortho_towards")?;
         }
 
@@ -2565,6 +2557,7 @@ where
             ortho_region: self.ortho_region.clone(),
             canonical_form: self.canonical_form,
             site_index_network: self.site_index_network.clone(),
+            ortho_towards: self.ortho_towards.clone(),
         }
     }
 }

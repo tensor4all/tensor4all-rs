@@ -601,10 +601,10 @@ where
         // Get the new bond index from factorization
         let new_bond = result.bond_index;
 
-        // Update edge bond indices FIRST (before replacing tensors)
-        // The edge stores the old bond indices - we need to update them to the new ones
+        // Update edge bond index FIRST (before replacing tensors)
+        // The edge stores the old bond index - we need to update it to the new one
         if let Some(edge) = self.inner.edge_between(&i, &(i + 1)) {
-            self.inner.replace_edge_bond(edge, new_bond.clone(), new_bond.clone())
+            self.inner.replace_edge_bond(edge, new_bond.clone())
                 .map_err(|e| TensorTrainError::InvalidStructure {
                     message: format!("Failed to update edge bond: {}", e),
                 })?;
