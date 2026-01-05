@@ -5,6 +5,10 @@ use tensor4all_core_common::index::{DynId, Index, NoSymmSpace};
 use tensor4all_core_linalg::{factorize, Canonical, FactorizeError, FactorizeOptions};
 use tensor4all_core_tensor::{storage::DenseStorageF64, Storage, TensorDynLen};
 
+// ============================================================================
+// Test Data Helpers
+// ============================================================================
+
 /// Helper to create a simple 2x3 matrix tensor for testing.
 fn create_test_matrix() -> TensorDynLen<DynId> {
     // Create a 2x3 matrix: [[1, 2, 3], [4, 5, 6]]
@@ -39,45 +43,71 @@ fn create_rank3_tensor() -> TensorDynLen<DynId> {
 }
 
 // ============================================================================
-// SVD Tests
+// Shared Test Helpers
 // ============================================================================
 
-#[test]
-fn test_factorize_svd_left_canonical() {
+/// Test factorization with given options and verify reconstruction.
+fn test_factorize_reconstruction(options: &FactorizeOptions) {
     let tensor = create_test_matrix();
     let left_inds = vec![tensor.indices[0].clone()];
 
-    let options = FactorizeOptions::svd().with_canonical(Canonical::Left);
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-
-    // Check that we got singular values
-    assert!(result.singular_values.is_some());
-    let sv = result.singular_values.unwrap();
-    assert!(!sv.is_empty());
-
-    // Check rank
-    assert!(result.rank > 0);
-    assert!(result.rank <= 2); // min(2, 3) = 2
+    let result = factorize(&tensor, &left_inds, options).unwrap();
 
     // Verify reconstruction: left * right ≈ original
     let reconstructed = result.left.contract_einsum(&result.right);
     assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
 }
 
-#[test]
-fn test_factorize_svd_right_canonical() {
+/// Test that left and right factors share the same bond index.
+fn test_shared_bond_index(options: &FactorizeOptions) {
     let tensor = create_test_matrix();
     let left_inds = vec![tensor.indices[0].clone()];
 
-    let options = FactorizeOptions::svd().with_canonical(Canonical::Right);
+    let result = factorize(&tensor, &left_inds, options).unwrap();
+
+    let left_bond = result.left.indices.last().unwrap();
+    let right_bond = result.right.indices.first().unwrap();
+    assert_eq!(
+        left_bond.id, right_bond.id,
+        "Left and right should share the same bond index"
+    );
+    assert_eq!(
+        left_bond.id, result.bond_index.id,
+        "Bond index should match left's bond index"
+    );
+}
+
+// ============================================================================
+// SVD Tests
+// ============================================================================
+
+#[test]
+fn test_factorize_svd_left_canonical() {
+    let options = FactorizeOptions::svd().with_canonical(Canonical::Left);
+    test_factorize_reconstruction(&options);
+
+    // Additional SVD-specific checks
+    let tensor = create_test_matrix();
+    let left_inds = vec![tensor.indices[0].clone()];
     let result = factorize(&tensor, &left_inds, &options).unwrap();
 
-    // Check that we got singular values
     assert!(result.singular_values.is_some());
+    let sv = result.singular_values.unwrap();
+    assert!(!sv.is_empty());
+    assert!(result.rank > 0);
+    assert!(result.rank <= 2); // min(2, 3) = 2
+}
 
-    // Verify reconstruction
-    let reconstructed = result.left.contract_einsum(&result.right);
-    assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
+#[test]
+fn test_factorize_svd_right_canonical() {
+    let options = FactorizeOptions::svd().with_canonical(Canonical::Right);
+    test_factorize_reconstruction(&options);
+
+    // Check singular values are returned
+    let tensor = create_test_matrix();
+    let left_inds = vec![tensor.indices[0].clone()];
+    let result = factorize(&tensor, &left_inds, &options).unwrap();
+    assert!(result.singular_values.is_some());
 }
 
 #[test]
@@ -94,24 +124,25 @@ fn test_factorize_svd_rank3() {
     assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
 }
 
+#[test]
+fn test_factorize_svd_shared_bond_index() {
+    test_shared_bond_index(&FactorizeOptions::svd().with_canonical(Canonical::Left));
+}
+
 // ============================================================================
 // QR Tests
 // ============================================================================
 
 #[test]
 fn test_factorize_qr_left_canonical() {
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
-
     let options = FactorizeOptions::qr();
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
+    test_factorize_reconstruction(&options);
 
     // QR should not return singular values
+    let tensor = create_test_matrix();
+    let left_inds = vec![tensor.indices[0].clone()];
+    let result = factorize(&tensor, &left_inds, &options).unwrap();
     assert!(result.singular_values.is_none());
-
-    // Verify reconstruction
-    let reconstructed = result.left.contract_einsum(&result.right);
-    assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
 }
 
 #[test]
@@ -126,37 +157,33 @@ fn test_factorize_qr_right_canonical_error() {
     assert!(matches!(result, Err(FactorizeError::UnsupportedCanonical(_))));
 }
 
+#[test]
+fn test_factorize_qr_shared_bond_index() {
+    test_shared_bond_index(&FactorizeOptions::qr());
+}
+
 // ============================================================================
 // LU Tests
 // ============================================================================
 
 #[test]
-fn test_factorize_lu_left_canonical() {
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
+fn test_factorize_lu_both_canonical() {
+    // Test both Left and Right canonical for LU
+    for canonical in [Canonical::Left, Canonical::Right] {
+        let options = FactorizeOptions::lu().with_canonical(canonical);
+        test_factorize_reconstruction(&options);
 
-    let options = FactorizeOptions::lu();
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-
-    // LU should not return singular values
-    assert!(result.singular_values.is_none());
-
-    // Verify reconstruction
-    let reconstructed = result.left.contract_einsum(&result.right);
-    assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
+        // LU should not return singular values
+        let tensor = create_test_matrix();
+        let left_inds = vec![tensor.indices[0].clone()];
+        let result = factorize(&tensor, &left_inds, &options).unwrap();
+        assert!(result.singular_values.is_none());
+    }
 }
 
 #[test]
-fn test_factorize_lu_right_canonical() {
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
-
-    let options = FactorizeOptions::lu().with_canonical(Canonical::Right);
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-
-    // Verify reconstruction
-    let reconstructed = result.left.contract_einsum(&result.right);
-    assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
+fn test_factorize_lu_shared_bond_index() {
+    test_shared_bond_index(&FactorizeOptions::lu());
 }
 
 // ============================================================================
@@ -164,32 +191,23 @@ fn test_factorize_lu_right_canonical() {
 // ============================================================================
 
 #[test]
-fn test_factorize_ci_left_canonical() {
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
+fn test_factorize_ci_both_canonical() {
+    // Test both Left and Right canonical for CI
+    for canonical in [Canonical::Left, Canonical::Right] {
+        let options = FactorizeOptions::ci().with_canonical(canonical);
+        test_factorize_reconstruction(&options);
 
-    let options = FactorizeOptions::ci();
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-
-    // CI should not return singular values
-    assert!(result.singular_values.is_none());
-
-    // Verify reconstruction
-    let reconstructed = result.left.contract_einsum(&result.right);
-    assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
+        // CI should not return singular values
+        let tensor = create_test_matrix();
+        let left_inds = vec![tensor.indices[0].clone()];
+        let result = factorize(&tensor, &left_inds, &options).unwrap();
+        assert!(result.singular_values.is_none());
+    }
 }
 
 #[test]
-fn test_factorize_ci_right_canonical() {
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
-
-    let options = FactorizeOptions::ci().with_canonical(Canonical::Right);
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-
-    // Verify reconstruction
-    let reconstructed = result.left.contract_einsum(&result.right);
-    assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
+fn test_factorize_ci_shared_bond_index() {
+    test_shared_bond_index(&FactorizeOptions::ci());
 }
 
 // ============================================================================
@@ -220,80 +238,6 @@ fn test_factorize_lu_with_max_rank() {
 
     // LU should respect max_rank
     assert_eq!(result.rank, 1);
-}
-
-// ============================================================================
-// Bond Index Tests
-// ============================================================================
-
-#[test]
-fn test_factorize_svd_shared_bond_index() {
-    // Verify that left and right factors share the same bond index
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
-
-    let options = FactorizeOptions::svd().with_canonical(Canonical::Left);
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-
-    // Check that left's last index and right's first index have the same ID
-    let left_bond = result.left.indices.last().unwrap();
-    let right_bond = result.right.indices.first().unwrap();
-    assert_eq!(
-        left_bond.id, right_bond.id,
-        "Left and right should share the same bond index"
-    );
-    assert_eq!(
-        left_bond.id, result.bond_index.id,
-        "Bond index should match left's bond index"
-    );
-}
-
-#[test]
-fn test_factorize_qr_shared_bond_index() {
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
-
-    let options = FactorizeOptions::qr();
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-
-    let left_bond = result.left.indices.last().unwrap();
-    let right_bond = result.right.indices.first().unwrap();
-    assert_eq!(
-        left_bond.id, right_bond.id,
-        "Left and right should share the same bond index"
-    );
-}
-
-#[test]
-fn test_factorize_lu_shared_bond_index() {
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
-
-    let options = FactorizeOptions::lu();
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-
-    let left_bond = result.left.indices.last().unwrap();
-    let right_bond = result.right.indices.first().unwrap();
-    assert_eq!(
-        left_bond.id, right_bond.id,
-        "Left and right should share the same bond index"
-    );
-}
-
-#[test]
-fn test_factorize_ci_shared_bond_index() {
-    let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
-
-    let options = FactorizeOptions::ci();
-    let result = factorize(&tensor, &left_inds, &options).unwrap();
-
-    let left_bond = result.left.indices.last().unwrap();
-    let right_bond = result.right.indices.first().unwrap();
-    assert_eq!(
-        left_bond.id, right_bond.id,
-        "Left and right should share the same bond index"
-    );
 }
 
 // ============================================================================
