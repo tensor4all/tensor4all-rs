@@ -1,8 +1,7 @@
 use mdarray::{DSlice, DTensor};
 use num_complex::{Complex64, ComplexFloat};
 use std::sync::atomic::{AtomicU64, Ordering};
-use tensor4all_core_common::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all_core_common::tagset::DefaultTagSet;
+use tensor4all_core_common::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
 use tensor4all_core_tensor::{unfold_split, StorageScalar, TensorDynLen};
 use thiserror::Error;
 
@@ -241,9 +240,15 @@ where
     }
 
     // Create bond index with "Link" tag (dimension r, not k)
-    let bond_index: Index<Id, Symm, DefaultTagSet> = Index::new_link(r)
+    let dyn_bond_index = Index::new_link(r)
         .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))
         .map_err(QrError::ComputationError)?;
+    // Convert from Index<DynId, NoSymmSpace, TagSet> to Index<Id, Symm, TagSet>
+    let bond_index: Index<Id, Symm, TagSet> = Index {
+        id: dyn_bond_index.id.into(),
+        symm: dyn_bond_index.symm.into(),
+        tags: dyn_bond_index.tags,
+    };
 
     // Create Q tensor: [left_inds..., bond_index]
     let mut q_indices = left_indices.clone();

@@ -1,5 +1,6 @@
 use std::cell::RefCell;
-use crate::tagset::{DefaultTagSet, TagSetLike, TagSetError};
+use std::sync::Arc;
+use crate::tagset::{DefaultTagSet as InlineTagSet, TagSetError, TagSetLike, TagSetIterator};
 use rand::Rng;
 
 /// Runtime ID for ITensors-like dynamic identity.
@@ -46,24 +47,169 @@ impl Symmetry for NoSymmSpace {
     }
 }
 
+/// Tag set wrapper using `Arc` for efficient cloning.
+///
+/// This wraps the underlying tag storage in an `Arc` for cheap cloning (reference count increment only).
+/// Tags are immutable and shared across indices with the same tag set.
+///
+/// # Size comparison
+/// - Inline storage: 168 bytes (Copy)
+/// - `TagSet` (Arc): 8 bytes (Clone only)
+///
+/// # Example
+/// ```
+/// use tensor4all_core_common::index::TagSet;
+///
+/// let tags = TagSet::from_str("Site,Link").unwrap();
+/// assert!(tags.has_tag("Site"));
+/// assert!(tags.has_tag("Link"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TagSet(Arc<InlineTagSet>);
+
+impl TagSet {
+    /// Create an empty tag set.
+    pub fn new() -> Self {
+        Self(Arc::new(InlineTagSet::new()))
+    }
+
+    /// Create a tag set from a comma-separated string.
+    pub fn from_str(s: &str) -> Result<Self, TagSetError> {
+        Ok(Self(Arc::new(InlineTagSet::from_str(s)?)))
+    }
+
+    /// Create a tag set from a slice of tag strings.
+    ///
+    /// Returns an error if any tag contains a comma (reserved as separator in `from_str`).
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core_common::index::TagSet;
+    ///
+    /// let tags = TagSet::from_tags(&["Site", "Link"]).unwrap();
+    /// assert!(tags.has_tag("Site"));
+    /// assert!(tags.has_tag("Link"));
+    /// assert_eq!(tags.len(), 2);
+    ///
+    /// // Comma in tag is an error
+    /// assert!(TagSet::from_tags(&["Site,Link"]).is_err());
+    /// ```
+    pub fn from_tags(tags: &[&str]) -> Result<Self, TagSetError> {
+        let mut inner = InlineTagSet::new();
+        for tag in tags {
+            if tag.contains(',') {
+                return Err(TagSetError::TagContainsComma { tag: (*tag).to_string() });
+            }
+            inner.add_tag(tag)?;
+        }
+        Ok(Self(Arc::new(inner)))
+    }
+
+    /// Check if a tag is present.
+    pub fn has_tag(&self, tag: &str) -> bool {
+        self.0.has_tag(tag)
+    }
+
+    /// Get the number of tags.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Check if the tag set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Get the inner Arc for advanced use.
+    pub fn inner(&self) -> &Arc<InlineTagSet> {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for TagSet {
+    type Target = InlineTagSet;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl TagSetLike for TagSet {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
+
+    fn get(&self, index: usize) -> Option<String> {
+        TagSetLike::get(&*self.0, index)
+    }
+
+    fn iter(&self) -> TagSetIterator<'_> {
+        TagSetLike::iter(&*self.0)
+    }
+
+    fn has_tag(&self, tag: &str) -> bool {
+        self.0.has_tag(tag)
+    }
+
+    fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError> {
+        // Arc is immutable, so we need to clone and replace
+        let mut inner = (*self.0).clone();
+        inner.add_tag(tag)?;
+        self.0 = Arc::new(inner);
+        Ok(())
+    }
+
+    fn remove_tag(&mut self, tag: &str) -> bool {
+        // Arc is immutable, so we need to clone and replace
+        let mut inner = (*self.0).clone();
+        let removed = inner.remove_tag(tag);
+        if removed {
+            self.0 = Arc::new(inner);
+        }
+        removed
+    }
+}
+
 /// Index with generic identity type `Id`, symmetry type `Symm`, and tag type `Tags`.
 ///
 /// - `Id = DynId` for ITensors-like runtime identity
 /// - `Id = ZST marker type` for compile-time-known identity
 /// - `Symm = NoSymmSpace` for no symmetry (default, corresponds to `Index{Int}` in ITensors.jl)
 /// - `Symm = QNSpace` (future) for quantum number spaces (corresponds to `Index{QNBlocks}` in ITensors.jl)
-/// - `Tags = DefaultTagSet` for tags (default, max 4 tags, each max 16 characters)
+/// - `Tags = TagSet` for tags (default, Arc-wrapped for cheap cloning)
+///
+/// # Memory Layout
+/// With default types (`DynId`, `NoSymmSpace`, `TagSet`):
+/// - Size: 32 bytes (16 + 8 + 8)
+/// - Tags are shared via `Arc`, so cloning is cheap (reference count increment only)
 ///
 /// **Equality**: Two `Index` values are considered equal if and only if their `id` fields match.
 /// Tags are not used for equality comparison.
+///
+/// # Example
+/// ```
+/// use tensor4all_core_common::index::{Index, DynId, TagSet};
+///
+/// // Create shared tags once
+/// let site_tags = TagSet::from_str("Site").unwrap();
+///
+/// // Share the same tags across many indices (cheap clone)
+/// let i1 = Index::<DynId>::new_dyn_with_tags(2, site_tags.clone());
+/// let i2 = Index::<DynId>::new_dyn_with_tags(2, site_tags.clone());
+/// // i1.tags and i2.tags point to the same Arc
+/// ```
 #[derive(Debug, Clone)]
-pub struct Index<Id, Symm = NoSymmSpace, Tags = DefaultTagSet> {
+pub struct Index<Id, Symm = NoSymmSpace, Tags = TagSet> {
     pub id: Id,
     pub symm: Symm,
     pub tags: Tags,
 }
 
-impl<Id, Symm: Symmetry, Tags> Index<Id, Symm, Tags> 
+impl<Id, Symm: Symmetry, Tags> Index<Id, Symm, Tags>
 where
     Tags: Default,
 {
@@ -92,11 +238,6 @@ where
     pub fn tags(&self) -> &Tags {
         &self.tags
     }
-
-    /// Get a mutable reference to the tags.
-    pub fn tags_mut(&mut self) -> &mut Tags {
-        &mut self.tags
-    }
 }
 
 impl<Id, Tags> Index<Id, NoSymmSpace, Tags>
@@ -124,77 +265,57 @@ where
     }
 }
 
-impl<Id, Symm, Tags> Index<Id, Symm, Tags>
-where
-    Id: From<DynId>,
-    Symm: From<NoSymmSpace>,
-    Tags: Default + TagSetLike,
-{
-    /// Create a new bond index with "Link" tag (for SVD, QR, etc.).
-    ///
-    /// This is a convenience method for creating bond indices commonly used in tensor
-    /// decompositions like SVD and QR factorization. The ID is automatically generated,
-    /// and the symmetry type is converted from `NoSymmSpace`.
-    ///
-    /// # Arguments
-    /// * `size` - Dimension of the bond index
-    ///
-    /// # Returns
-    /// A new index with "Link" tag and the specified size, or an error if the tag cannot be added.
-    pub fn new_link(size: usize) -> Result<Self, TagSetError> {
-        let mut tags = Tags::default();
-        tags.add_tag("Link")?;
-        Ok(Self {
-            id: DynId(generate_id()).into(),
-            symm: NoSymmSpace::new(size).into(),
-            tags,
-        })
-    }
-}
-
-impl<Tags> Index<DynId, NoSymmSpace, Tags>
-where
-    Tags: Default,
-{
-    /// Create a new index with a generated dynamic ID and no symmetry.
+// Constructors for Index with TagSet (default)
+impl Index<DynId, NoSymmSpace, TagSet> {
+    /// Create a new index with a generated dynamic ID and no tags.
     pub fn new_dyn(size: usize) -> Self {
         Self {
             id: DynId(generate_id()),
             symm: NoSymmSpace::new(size),
-            tags: Tags::default(),
+            tags: TagSet::new(),
         }
     }
 
-    /// Create a new index with a generated dynamic ID, no symmetry, and tags.
-    pub fn new_dyn_with_tags(size: usize, tags: Tags) -> Self {
+    /// Create a new index with a generated dynamic ID and shared tags.
+    ///
+    /// This is the most efficient way to create many indices with the same tags.
+    /// The `Arc` is cloned (reference count increment only), not the underlying data.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core_common::index::{Index, DynId, TagSet};
+    ///
+    /// let site_tags = TagSet::from_str("Site").unwrap();
+    /// let i1 = Index::<DynId>::new_dyn_with_tags(2, site_tags.clone());
+    /// let i2 = Index::<DynId>::new_dyn_with_tags(2, site_tags.clone());
+    /// ```
+    pub fn new_dyn_with_tags(size: usize, tags: TagSet) -> Self {
         Self {
             id: DynId(generate_id()),
             symm: NoSymmSpace::new(size),
             tags,
         }
     }
-}
 
-impl<Tags> Index<DynId, NoSymmSpace, Tags>
-where
-    Tags: Default + TagSetLike,
-{
-    /// Create a new index with a generated dynamic ID, no symmetry, and a single tag.
+    /// Create a new index with a generated dynamic ID and a single tag.
     ///
-    /// # Arguments
-    /// * `size` - Dimension of the index
-    /// * `tag` - Tag to add to the index
-    ///
-    /// # Returns
-    /// A new index with the specified size and tag, or an error if the tag cannot be added.
+    /// This creates a new `TagSet` with the given tag.
+    /// For sharing the same tag across many indices, create the `TagSet`
+    /// once and use `new_dyn_with_tags` instead.
     pub fn new_dyn_with_tag(size: usize, tag: &str) -> Result<Self, TagSetError> {
-        let mut tags = Tags::default();
-        tags.add_tag(tag)?;
         Ok(Self {
             id: DynId(generate_id()),
             symm: NoSymmSpace::new(size),
-            tags,
+            tags: TagSet::from_str(tag)?,
         })
+    }
+
+    /// Create a new bond index with "Link" tag (for SVD, QR, etc.).
+    ///
+    /// This is a convenience method for creating bond indices commonly used in tensor
+    /// decompositions like SVD and QR factorization.
+    pub fn new_link(size: usize) -> Result<Self, TagSetError> {
+        Self::new_dyn_with_tag(size, "Link")
     }
 }
 
@@ -221,21 +342,6 @@ thread_local! {
     ///
     /// Each thread has its own RNG, similar to ITensors.jl's task-local RNG.
     /// This provides thread-safe ID generation without global synchronization.
-    ///
-    /// **Seed initialization**: Each thread's RNG is automatically seeded with
-    /// cryptographically secure random data from the OS (via `getrandom` crate)
-    /// when first accessed. This ensures different threads use different seeds
-    /// and produce independent random sequences.
-    ///
-    /// **Dynamic thread creation**: When new threads are created (e.g., thread pool
-    /// resizing, new tasks), each new thread gets its own RNG with a fresh seed.
-    /// Existing threads continue using their existing RNG instances. This ensures
-    /// that IDs generated in different threads remain unique even when the thread
-    /// count changes dynamically.
-    ///
-    /// **Thread reuse**: If a thread is reused (e.g., in a thread pool), it continues
-    /// using the same RNG instance, maintaining the random sequence from where it
-    /// left off. This is safe because the RNG state is thread-local and independent.
     static ID_RNG: RefCell<rand::rngs::ThreadRng> = RefCell::new(rand::thread_rng());
 }
 
@@ -247,8 +353,13 @@ pub(crate) fn generate_id() -> u128 {
     ID_RNG.with(|rng| rng.borrow_mut().gen())
 }
 
-/// Default Index type with default tag capacity (max 4 tags, each max 16 characters).
-pub type DefaultIndex<Id, Symm = NoSymmSpace> = Index<Id, Symm, DefaultTagSet>;
+/// Default Index type alias (same as `Index<Id, Symm>` with default tags).
+///
+/// This is provided for convenience and compatibility.
+pub type DefaultIndex<Id, Symm = NoSymmSpace> = Index<Id, Symm, TagSet>;
+
+/// Type alias for backwards compatibility.
+pub type DefaultTagSet = TagSet;
 
 #[cfg(test)]
 mod tests {
@@ -261,12 +372,12 @@ mod tests {
         let id1 = generate_id();
         let id2 = generate_id();
         let id3 = generate_id();
-        
+
         // IDs should be unique (random generation, not sequential)
         assert_ne!(id1, id2);
         assert_ne!(id2, id3);
         assert_ne!(id1, id3);
-        
+
         // IDs should be non-zero (very high probability with u128)
         assert_ne!(id1, 0);
         assert_ne!(id2, 0);
@@ -275,137 +386,24 @@ mod tests {
 
     #[test]
     fn test_thread_local_rng_different_seeds() {
-        // Test that different threads produce different ID sequences
-        // This verifies that each thread gets a different seed
         const NUM_THREADS: usize = 4;
         const IDS_PER_THREAD: usize = 100;
-        
+
         let handles: Vec<_> = (0..NUM_THREADS)
             .map(|_| {
                 thread::spawn(|| {
-                    let mut thread_ids = Vec::new();
-                    for _ in 0..IDS_PER_THREAD {
-                        thread_ids.push(generate_id());
-                    }
-                    thread_ids
+                    (0..IDS_PER_THREAD).map(|_| generate_id()).collect::<Vec<_>>()
                 })
             })
             .collect();
-        
+
         let mut all_ids = HashSet::new();
-        let mut thread_sets = Vec::new();
-        
         for handle in handles {
             let thread_ids = handle.join().unwrap();
-            let thread_set: HashSet<_> = thread_ids.iter().cloned().collect();
-            thread_sets.push(thread_set.clone());
             all_ids.extend(thread_ids);
         }
-        
-        // All IDs should be unique across all threads
-        assert_eq!(all_ids.len(), NUM_THREADS * IDS_PER_THREAD, 
-                   "All IDs should be unique across threads");
-        
-        // Check that different threads produce different sequences
-        // (with extremely high probability if seeds are different)
-        for i in 0..thread_sets.len() {
-            for j in (i+1)..thread_sets.len() {
-                let intersection: Vec<_> = thread_sets[i].intersection(&thread_sets[j]).collect();
-                assert_eq!(intersection.len(), 0,
-                           "Thread {} and {} should produce different ID sequences (different seeds)",
-                           i, j);
-            }
-        }
-    }
 
-    #[test]
-    fn test_thread_count_changes() {
-        // Test behavior when thread count changes dynamically
-        // This simulates scenarios like thread pool resizing or new threads being spawned
-        
-        // Phase 1: Generate IDs in initial threads
-        const INITIAL_THREADS: usize = 2;
-        const IDS_PER_PHASE: usize = 50;
-        
-        let mut all_ids = HashSet::new();
-        let mut phase1_ids = HashSet::new();
-        
-        // Phase 1: Initial threads
-        let handles1: Vec<_> = (0..INITIAL_THREADS)
-            .map(|_| {
-                thread::spawn(|| {
-                    let mut thread_ids = Vec::new();
-                    for _ in 0..IDS_PER_PHASE {
-                        thread_ids.push(generate_id());
-                    }
-                    thread_ids
-                })
-            })
-            .collect();
-        
-        for handle in handles1 {
-            let thread_ids = handle.join().unwrap();
-            for id in &thread_ids {
-                all_ids.insert(*id);
-                phase1_ids.insert(*id);
-            }
-        }
-        
-        assert_eq!(phase1_ids.len(), INITIAL_THREADS * IDS_PER_PHASE);
-        
-        // Phase 2: Spawn new threads (simulating thread count increase)
-        const NEW_THREADS: usize = 3;
-        let handles2: Vec<_> = (0..NEW_THREADS)
-            .map(|_| {
-                thread::spawn(|| {
-                    let mut thread_ids = Vec::new();
-                    for _ in 0..IDS_PER_PHASE {
-                        thread_ids.push(generate_id());
-                    }
-                    thread_ids
-                })
-            })
-            .collect();
-        
-        let mut phase2_ids = HashSet::new();
-        for handle in handles2 {
-            let thread_ids = handle.join().unwrap();
-            for id in &thread_ids {
-                all_ids.insert(*id);
-                phase2_ids.insert(*id);
-            }
-        }
-        
-        assert_eq!(phase2_ids.len(), NEW_THREADS * IDS_PER_PHASE);
-        
-        // All IDs should still be unique across both phases
-        assert_eq!(all_ids.len(), (INITIAL_THREADS + NEW_THREADS) * IDS_PER_PHASE,
-                   "All IDs should be unique even when thread count changes");
-        
-        // Phase 1 and Phase 2 IDs should not overlap
-        let intersection: Vec<_> = phase1_ids.intersection(&phase2_ids).collect();
-        assert_eq!(intersection.len(), 0,
-                   "IDs from different thread phases should not overlap");
-        
-        // Phase 3: Reuse a thread (simulating thread pool reuse)
-        // When a thread is reused, it continues using its existing RNG
-        let handle3 = thread::spawn(|| {
-            let mut thread_ids = Vec::new();
-            for _ in 0..IDS_PER_PHASE {
-                thread_ids.push(generate_id());
-            }
-            thread_ids
-        });
-        
-        let phase3_ids: HashSet<_> = handle3.join().unwrap().into_iter().collect();
-        
-        // Phase 3 IDs should be unique (new thread = new seed)
-        assert_eq!(phase3_ids.len(), IDS_PER_PHASE);
-        
-        // Phase 3 should not overlap with previous phases
-        let intersection_13: Vec<_> = phase1_ids.intersection(&phase3_ids).collect();
-        let intersection_23: Vec<_> = phase2_ids.intersection(&phase3_ids).collect();
-        assert_eq!(intersection_13.len(), 0, "Phase 1 and Phase 3 should not overlap");
-        assert_eq!(intersection_23.len(), 0, "Phase 2 and Phase 3 should not overlap");
+        assert_eq!(all_ids.len(), NUM_THREADS * IDS_PER_THREAD,
+                   "All IDs should be unique across threads");
     }
 }

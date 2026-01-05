@@ -6,9 +6,7 @@ use tensor4all_core_common::index_ops::{
 
 #[test]
 fn test_sim_preserves_symm_and_tags() {
-    let mut idx = Index::new_dyn(8);
-    idx.tags_mut().add_tag("site").unwrap();
-    idx.tags_mut().add_tag("up").unwrap();
+    let idx = Index::new_dyn_with_tag(8, "site,up").unwrap();
 
     let similar = sim(&idx);
 

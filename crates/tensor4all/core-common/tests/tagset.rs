@@ -26,6 +26,7 @@ fn test_smallstring_too_long() {
             assert_eq!(actual, 11);
             assert_eq!(max, 5);
         }
+        SmallStringError::InvalidChar { .. } => panic!("Expected TooLong error"),
     }
 }
 

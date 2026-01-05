@@ -10,7 +10,7 @@
 //! The associated types are fixed to canonical values for simplicity:
 //! - `Id = DynId` (runtime identity)
 //! - `Symm = NoSymmSpace` (no symmetry)
-//! - `Tags = DefaultTagSet` (default tag set)
+//! - `Tags = TagSet` (Arc-wrapped tag set)
 //!
 //! # Example
 //!
@@ -35,8 +35,8 @@ use std::hash::Hash;
 use std::fmt::Debug;
 
 use std::collections::HashMap;
-use tensor4all::index::{DynId, Index, NoSymmSpace};
-use tensor4all::{DefaultTagSet, TensorDynLen, TensorLike};
+use tensor4all::index::{DynId, Index, NoSymmSpace, TagSet};
+use tensor4all::{TensorDynLen, TensorLike};
 
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -44,12 +44,12 @@ use crate::site_index_network::SiteIndexNetwork;
 use anyhow::{Context, Result};
 
 /// Type alias for the canonical Index type used in DynTreeTN.
-pub type DynIndex = Index<DynId, NoSymmSpace, DefaultTagSet>;
+pub type DynIndex = Index<DynId, NoSymmSpace, TagSet>;
 
 /// Type alias for boxed TensorLike trait objects with canonical type parameters.
 ///
 /// This is the node payload type for `DynTreeTN`.
-pub type BoxedTensorLike = Box<dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = DefaultTagSet>>;
+pub type BoxedTensorLike = Box<dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = TagSet>>;
 
 /// Dynamic Tree Tensor Network that can hold heterogeneous TensorLike objects.
 ///
@@ -66,7 +66,7 @@ pub type BoxedTensorLike = Box<dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Ta
 /// The `TensorLike` associated types are fixed to canonical values:
 /// - `Id = DynId` (runtime identity)
 /// - `Symm = NoSymmSpace` (no symmetry)
-/// - `Tags = DefaultTagSet` (default tag set)
+/// - `Tags = TagSet` (Arc-wrapped tag set)
 ///
 /// This ensures all nodes in the network have compatible index types.
 ///
@@ -96,7 +96,7 @@ where
     /// Orthogonalization region (node names).
     ortho_region: HashSet<V>,
     /// Site index network: manages topology and site space (physical indices).
-    site_index_network: SiteIndexNetwork<V, DynId, NoSymmSpace, DefaultTagSet>,
+    site_index_network: SiteIndexNetwork<V, DynId, NoSymmSpace, TagSet>,
     /// Orthogonalization direction for each edge (node name that ortho points towards).
     ortho_towards: HashMap<EdgeIndex, V>,
 }
@@ -136,7 +136,7 @@ where
     /// ```
     pub fn add_node<T>(&mut self, node_name: V, tensor_like: T) -> Result<NodeIndex>
     where
-        T: TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = DefaultTagSet> + 'static,
+        T: TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = TagSet> + 'static,
     {
         // Get external indices before boxing
         let external_indices: HashSet<DynIndex> = tensor_like.external_indices().into_iter().collect();
@@ -184,12 +184,12 @@ where
     }
 
     /// Get a reference to a node's TensorLike object by NodeIndex.
-    pub fn node(&self, node: NodeIndex) -> Option<&dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = DefaultTagSet>> {
+    pub fn node(&self, node: NodeIndex) -> Option<&dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = TagSet>> {
         self.graph.graph().node_weight(node).map(|b| b.as_ref())
     }
 
     /// Get a reference to a node's TensorLike object by node name.
-    pub fn node_by_name(&self, name: &V) -> Option<&dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = DefaultTagSet>> {
+    pub fn node_by_name(&self, name: &V) -> Option<&dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = TagSet>> {
         self.graph.node_index(name)
             .and_then(|idx| self.node(idx))
     }
@@ -327,7 +327,7 @@ where
     }
 
     /// Get a reference to the site index network.
-    pub fn site_index_network(&self) -> &SiteIndexNetwork<V, DynId, NoSymmSpace, DefaultTagSet> {
+    pub fn site_index_network(&self) -> &SiteIndexNetwork<V, DynId, NoSymmSpace, TagSet> {
         &self.site_index_network
     }
 
