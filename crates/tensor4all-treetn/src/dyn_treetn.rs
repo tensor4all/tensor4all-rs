@@ -568,7 +568,7 @@ mod tests {
         // Create a TreeTN (sub-network) with its own structure
         let j: DynIndex = Index::new_dyn(3);
         let sub_tensor = make_tensor(vec![j.clone()]);
-        let sub_tn = TreeTN::<DynId, NoSymmSpace, String>::new(
+        let sub_tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
             vec![sub_tensor],
             vec!["sub_node".to_string()],
         ).unwrap();
@@ -605,7 +605,7 @@ mod tests {
         let tensor_a = make_tensor(vec![i.clone(), bond.clone()]);
         let tensor_b = make_tensor(vec![bond.clone(), j.clone()]);
 
-        let inner_tn = TreeTN::<DynId, NoSymmSpace, String>::new(
+        let inner_tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
             vec![tensor_a, tensor_b],
             vec!["A".to_string(), "B".to_string()],
         ).unwrap();
