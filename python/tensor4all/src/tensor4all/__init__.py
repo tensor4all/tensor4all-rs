@@ -1,11 +1,11 @@
-"""pytensor4all - Python bindings for tensor4all Rust library.
+"""tensor4all - Python bindings for tensor4all Rust library.
 
 This package provides Python bindings to the tensor4all library,
 which implements tensor operations for quantum physics applications.
 
 Examples
 --------
->>> from pytensor4all import Index, Tensor
+>>> from tensor4all import Index, Tensor
 >>> import numpy as np
 >>>
 >>> # Create indices
@@ -22,8 +22,23 @@ Examples
 >>> print(t.to_numpy())
 """
 
+# Core types (tensor4all-core-common, tensor4all-core-tensor)
 from .index import Index
 from .tensor import Tensor, StorageKind
+
+# Algorithm types (tensor4all-core-common)
+from .algorithm import (
+    FactorizeAlgorithm,
+    ContractionAlgorithm,
+    CompressionAlgorithm,
+    get_default_svd_rtol,
+    resolve_truncation_tolerance,
+)
+
+# MPO types (tensor4all-mpocontraction)
+from . import mpo
+
+# Exceptions
 from ._capi import (
     T4AError,
     NullPointerError,
@@ -37,10 +52,18 @@ from ._capi import (
 __version__ = "0.1.0"
 
 __all__ = [
-    # Classes
+    # Core types
     "Index",
     "Tensor",
     "StorageKind",
+    # Algorithm types
+    "FactorizeAlgorithm",
+    "ContractionAlgorithm",
+    "CompressionAlgorithm",
+    "get_default_svd_rtol",
+    "resolve_truncation_tolerance",
+    # MPO module
+    "mpo",
     # Exceptions
     "T4AError",
     "NullPointerError",

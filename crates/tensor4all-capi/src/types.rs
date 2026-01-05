@@ -241,3 +241,137 @@ impl Drop for t4a_tt_c64 {
 // Safety: t4a_tt_c64 is Send + Sync because TensorTrain<Complex64> is Send + Sync
 unsafe impl Send for t4a_tt_c64 {}
 unsafe impl Sync for t4a_tt_c64 {}
+
+// ============================================================================
+// Algorithm types
+// ============================================================================
+
+/// Factorization algorithm for C API
+///
+/// Used for matrix decomposition in compression and truncation operations.
+///
+/// Corresponds to `FactorizeAlgorithm` in Rust.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum t4a_factorize_algorithm {
+    /// Singular Value Decomposition (default)
+    SVD = 0,
+    /// LU decomposition with partial pivoting
+    LU = 1,
+    /// Cross Interpolation / Skeleton decomposition
+    CI = 2,
+}
+
+impl Default for t4a_factorize_algorithm {
+    fn default() -> Self {
+        Self::SVD
+    }
+}
+
+impl From<tensor4all_core_common::FactorizeAlgorithm> for t4a_factorize_algorithm {
+    fn from(alg: tensor4all_core_common::FactorizeAlgorithm) -> Self {
+        match alg {
+            tensor4all_core_common::FactorizeAlgorithm::SVD => Self::SVD,
+            tensor4all_core_common::FactorizeAlgorithm::LU => Self::LU,
+            tensor4all_core_common::FactorizeAlgorithm::CI => Self::CI,
+        }
+    }
+}
+
+impl From<t4a_factorize_algorithm> for tensor4all_core_common::FactorizeAlgorithm {
+    fn from(alg: t4a_factorize_algorithm) -> Self {
+        match alg {
+            t4a_factorize_algorithm::SVD => Self::SVD,
+            t4a_factorize_algorithm::LU => Self::LU,
+            t4a_factorize_algorithm::CI => Self::CI,
+        }
+    }
+}
+
+/// Contraction algorithm for C API
+///
+/// Used for tensor train contraction (TT-TT or MPO-MPO).
+///
+/// Corresponds to `ContractionAlgorithm` in Rust.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum t4a_contraction_algorithm {
+    /// Naive contraction followed by compression (default)
+    Naive = 0,
+    /// Zip-up contraction with on-the-fly compression
+    ZipUp = 1,
+    /// Variational fitting algorithm
+    Fit = 2,
+}
+
+impl Default for t4a_contraction_algorithm {
+    fn default() -> Self {
+        Self::Naive
+    }
+}
+
+impl From<tensor4all_core_common::ContractionAlgorithm> for t4a_contraction_algorithm {
+    fn from(alg: tensor4all_core_common::ContractionAlgorithm) -> Self {
+        match alg {
+            tensor4all_core_common::ContractionAlgorithm::Naive => Self::Naive,
+            tensor4all_core_common::ContractionAlgorithm::ZipUp => Self::ZipUp,
+            tensor4all_core_common::ContractionAlgorithm::Fit => Self::Fit,
+        }
+    }
+}
+
+impl From<t4a_contraction_algorithm> for tensor4all_core_common::ContractionAlgorithm {
+    fn from(alg: t4a_contraction_algorithm) -> Self {
+        match alg {
+            t4a_contraction_algorithm::Naive => Self::Naive,
+            t4a_contraction_algorithm::ZipUp => Self::ZipUp,
+            t4a_contraction_algorithm::Fit => Self::Fit,
+        }
+    }
+}
+
+/// Compression algorithm for C API
+///
+/// Used for tensor train compression.
+///
+/// Corresponds to `CompressionAlgorithm` in Rust.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum t4a_compression_algorithm {
+    /// SVD-based compression (default)
+    SVD = 0,
+    /// LU-based compression
+    LU = 1,
+    /// Cross Interpolation based compression
+    CI = 2,
+    /// Variational compression
+    Variational = 3,
+}
+
+impl Default for t4a_compression_algorithm {
+    fn default() -> Self {
+        Self::SVD
+    }
+}
+
+impl From<tensor4all_core_common::CompressionAlgorithm> for t4a_compression_algorithm {
+    fn from(alg: tensor4all_core_common::CompressionAlgorithm) -> Self {
+        match alg {
+            tensor4all_core_common::CompressionAlgorithm::SVD => Self::SVD,
+            tensor4all_core_common::CompressionAlgorithm::LU => Self::LU,
+            tensor4all_core_common::CompressionAlgorithm::CI => Self::CI,
+            tensor4all_core_common::CompressionAlgorithm::Variational => Self::Variational,
+        }
+    }
+}
+
+impl From<t4a_compression_algorithm> for tensor4all_core_common::CompressionAlgorithm {
+    fn from(alg: t4a_compression_algorithm) -> Self {
+        match alg {
+            t4a_compression_algorithm::SVD => Self::SVD,
+            t4a_compression_algorithm::LU => Self::LU,
+            t4a_compression_algorithm::CI => Self::CI,
+            t4a_compression_algorithm::Variational => Self::Variational,
+        }
+    }
+}

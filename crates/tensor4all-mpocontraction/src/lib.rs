@@ -38,6 +38,8 @@ pub mod contraction;
 pub mod contract_naive;
 pub mod contract_zipup;
 pub mod contract_fit;
+pub mod dispatch;
+pub mod tt_contraction;
 
 // Re-export main types and functions
 pub use error::{MPOError, Result};
@@ -51,3 +53,4 @@ pub use contraction::{Contraction, ContractionOptions};
 pub use contract_naive::contract_naive;
 pub use contract_zipup::contract_zipup;
 pub use contract_fit::{contract_fit, FitOptions};
+pub use dispatch::contract;

@@ -44,18 +44,34 @@ module Tensor4all
 
 include("C_API.jl")
 
-# Re-export library management for submodules
+# Library management for submodules
 using Libdl
-const T4A_SUCCESS = C_API.T4A_SUCCESS
 get_lib() = C_API.libhandle()
 
+# Include submodules (respecting crate hierarchy)
+# 1. Algorithm (tensor4all-core-common)
+include("Algorithm.jl")
+# 2. TensorTrain (tensor4all-tensortrain)
+include("TensorTrain/TensorTrain.jl")
+# 3. MPO (tensor4all-mpocontraction)
+include("MPO/MPO.jl")
+
 # Re-export public API
+# Core types (tensor4all-core-common, tensor4all-core-tensor)
 export Index, dim, tags, id, hastag
 export Tensor, rank, dims, indices, storage_kind, data
 export StorageKind, DenseF64, DenseC64, DiagF64, DiagC64
 
-# Include submodules
-include("TensorTrain/TensorTrain.jl")
+# Re-export Algorithm submodule and utilities
+using .Algorithm: get_default_svd_rtol, resolve_truncation_tolerance
+export Algorithm
+export get_default_svd_rtol, resolve_truncation_tolerance
+
+# Re-export TensorTrain submodule
+export TensorTrain
+
+# Re-export MPO submodule
+export MPO
 
 """
     Index

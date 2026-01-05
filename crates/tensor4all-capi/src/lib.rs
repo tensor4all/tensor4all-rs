@@ -28,12 +28,16 @@
 #[macro_use]
 mod macros;
 
+mod algorithm;
 mod index;
+mod mpocontraction;
 mod tensor;
 mod tensortrain;
 mod types;
 
+pub use algorithm::*;
 pub use index::*;
+pub use mpocontraction::*;
 pub use tensor::*;
 pub use tensortrain::*;
 pub use types::*;

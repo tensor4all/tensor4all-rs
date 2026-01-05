@@ -1,15 +1,15 @@
+pub mod algorithm;
 pub mod index;
 pub mod index_ops;
 pub mod smallstring;
 pub mod tagset;
 
-pub use index::{
-    DefaultIndex, Index, DynId, NoSymmSpace, Symmetry,
-};
+pub use algorithm::{CompressionAlgorithm, ContractionAlgorithm, FactorizeAlgorithm};
+pub use index::{DefaultIndex, DynId, Index, NoSymmSpace, Symmetry};
 pub use index_ops::{
-    sim, sim_owned, replaceinds, replaceinds_in_place, ReplaceIndsError, unique_inds,
-    noncommon_inds, union_inds, hasind, hasinds, hascommoninds, common_inds, check_unique_indices,
+    check_unique_indices, common_inds, hascommoninds, hasind, hasinds, noncommon_inds,
+    replaceinds, replaceinds_in_place, sim, sim_owned, union_inds, unique_inds, ReplaceIndsError,
 };
 pub use smallstring::{SmallString, SmallStringError};
-pub use tagset::{DefaultTagSet, Tag, TagSet, TagSetError, TagSetLike, TagSetIterator};
+pub use tagset::{DefaultTagSet, Tag, TagSet, TagSetError, TagSetIterator, TagSetLike};
 
