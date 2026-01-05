@@ -26,7 +26,7 @@ repository = "https://github.com/tensor4all/tensor4all-rs"
 num-complex = "0.4"
 num-traits = "0.2"
 anyhow = "1.0"
-mdarray = { git = "https://github.com/fre-hu/mdarray.git", rev = "70c43898d202682bf35e0db0c08475ec820ee7fa" }
+mdarray = "0.7.2"
 mdarray-linalg = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main" }
 mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-faer" }
 mdarray-linalg-lapack = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-lapack" }

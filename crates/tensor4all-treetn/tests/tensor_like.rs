@@ -20,7 +20,7 @@ fn test_treetn_external_indices_single_node() {
     let tensor = make_tensor(vec![i.clone(), j.clone()]);
 
     // Use new to create the network
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::new(
+    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![tensor],
         vec!["A".to_string()],
     ).unwrap();
@@ -50,7 +50,7 @@ fn test_treetn_external_indices_connected_nodes() {
     let tensor_b = make_tensor(vec![bond_ab.clone(), j.clone()]);
 
     // new automatically connects tensors that share common indices
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::new(
+    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![tensor_a, tensor_b],
         vec!["A".to_string(), "B".to_string()],
     ).unwrap();
@@ -75,7 +75,7 @@ fn test_treetn_num_external_indices() {
     let tensor_a = make_tensor(vec![i.clone(), bond.clone()]);
     let tensor_b = make_tensor(vec![bond.clone(), j.clone()]);
 
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::new(
+    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![tensor_a, tensor_b],
         vec!["A".to_string(), "B".to_string()],
     ).unwrap();
@@ -102,7 +102,7 @@ fn test_treetn_to_tensor() {
         f64::dense_storage(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
     );
 
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::new(
+    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![tensor_a, tensor_b],
         vec!["A".to_string(), "B".to_string()],
     ).unwrap();
@@ -125,7 +125,7 @@ fn test_treetn_external_indices_deterministic_ordering() {
     let idx_c = Index::new_dyn(4);
 
     // Add nodes in non-alphabetical order (C, A, B)
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::new(
+    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![
             make_tensor(vec![idx_c.clone()]),
             make_tensor(vec![idx_a.clone()]),
@@ -153,7 +153,7 @@ fn test_treetn_tensor_like_object_safety() {
     let i = Index::new_dyn(2);
     let tensor = make_tensor(vec![i.clone()]);
 
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::new(
+    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![tensor],
         vec!["A".to_string()],
     ).unwrap();
@@ -170,7 +170,7 @@ fn test_treetn_clone_trait_object() {
     let i = Index::new_dyn(2);
     let tensor = make_tensor(vec![i.clone()]);
 
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::new(
+    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![tensor],
         vec!["A".to_string()],
     ).unwrap();
@@ -190,7 +190,7 @@ fn test_treetn_as_any() {
     let i = Index::new_dyn(2);
     let tensor = make_tensor(vec![i.clone()]);
 
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::new(
+    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![tensor],
         vec!["A".to_string()],
     ).unwrap();
@@ -211,7 +211,7 @@ fn test_treetn_downcast_via_trait_object() {
     let i = Index::new_dyn(2);
     let tensor = make_tensor(vec![i.clone()]);
 
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::new(
+    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![tensor],
         vec!["A".to_string()],
     ).unwrap();
@@ -240,7 +240,7 @@ fn test_mixed_downcast() {
     let j = Index::new_dyn(3);
 
     let tensor = make_tensor(vec![i.clone(), j.clone()]);
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::new(
+    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![make_tensor(vec![i.clone()])],
         vec!["A".to_string()],
     ).unwrap();
