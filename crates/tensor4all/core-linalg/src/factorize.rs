@@ -13,8 +13,7 @@
 //! ```
 
 use num_complex::{Complex64, ComplexFloat};
-use tensor4all_core_common::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all_core_common::tagset::DefaultTagSet;
+use tensor4all_core_common::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
 use tensor4all_core_tensor::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use tensor4all_matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use thiserror::Error;
@@ -163,7 +162,7 @@ where
     /// Right factor tensor.
     pub right: TensorDynLen<Id, Symm>,
     /// Bond index connecting left and right factors.
-    pub bond_index: Index<Id, Symm, DefaultTagSet>,
+    pub bond_index: Index<Id, Symm, TagSet>,
     /// Singular values (only for SVD).
     pub singular_values: Option<Vec<f64>>,
     /// Rank of the factorization.
@@ -401,8 +400,14 @@ where
     let u_matrix = lu.right(true);
 
     // Create bond index
-    let bond_index: Index<Id, Symm, DefaultTagSet> = Index::new_link(rank)
+    let dyn_bond_index = Index::new_link(rank)
         .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))?;
+    // Convert from Index<DynId, NoSymmSpace, TagSet> to Index<Id, Symm, TagSet>
+    let bond_index: Index<Id, Symm, TagSet> = Index {
+        id: dyn_bond_index.id.into(),
+        symm: dyn_bond_index.symm.into(),
+        tags: dyn_bond_index.tags,
+    };
 
     // Convert L matrix back to tensor
     let l_vec = matrix_to_vec(&l_matrix);
@@ -470,8 +475,14 @@ where
     let r_matrix = ci.right();
 
     // Create bond index
-    let bond_index: Index<Id, Symm, DefaultTagSet> = Index::new_link(rank)
+    let dyn_bond_index = Index::new_link(rank)
         .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))?;
+    // Convert from Index<DynId, NoSymmSpace, TagSet> to Index<Id, Symm, TagSet>
+    let bond_index: Index<Id, Symm, TagSet> = Index {
+        id: dyn_bond_index.id.into(),
+        symm: dyn_bond_index.symm.into(),
+        tags: dyn_bond_index.tags,
+    };
 
     // Convert L matrix back to tensor
     let l_vec = matrix_to_vec(&l_matrix);
