@@ -1,7 +1,11 @@
 mod backend;
+pub mod factorize;
 pub mod qr;
 pub mod svd;
 
+pub use factorize::{
+    factorize, Canonical, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult,
+};
 pub use qr::{
     default_qr_rtol, qr, qr_c64, qr_with, set_default_qr_rtol, QrError, QrOptions,
 };

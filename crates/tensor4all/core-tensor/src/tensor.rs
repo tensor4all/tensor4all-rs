@@ -827,6 +827,141 @@ where
     }
 }
 
+// ============================================================================
+// Index Replacement Methods
+// ============================================================================
+
+impl<Id, Symm> TensorDynLen<Id, Symm>
+where
+    Id: Clone + std::hash::Hash + Eq,
+    Symm: Clone,
+{
+    /// Replace an index in the tensor with a new index.
+    ///
+    /// This replaces the index matching `old_index` by ID with `new_index`.
+    /// The storage data is not modified, only the index metadata is changed.
+    ///
+    /// # Arguments
+    /// * `old_index` - The index to replace (matched by ID)
+    /// * `new_index` - The new index to use
+    ///
+    /// # Returns
+    /// A new tensor with the index replaced. If no index matches `old_index`,
+    /// returns a clone of the original tensor.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core_tensor::TensorDynLen;
+    /// use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_core_tensor::Storage;
+    /// use tensor4all_core_tensor::storage::DenseStorageF64;
+    /// use std::sync::Arc;
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let new_i = Index::new_dyn(2);  // Same dimension, different ID
+    ///
+    /// let indices = vec![i.clone(), j.clone()];
+    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![0.0; 6])));
+    /// let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, vec![2, 3], storage);
+    ///
+    /// // Replace index i with new_i
+    /// let replaced = tensor.replaceind(&i, &new_i);
+    /// assert_eq!(replaced.indices[0].id, new_i.id);
+    /// assert_eq!(replaced.indices[1].id, j.id);
+    /// ```
+    pub fn replaceind(&self, old_index: &Index<Id, Symm>, new_index: &Index<Id, Symm>) -> Self {
+        let new_indices: Vec<_> = self
+            .indices
+            .iter()
+            .map(|idx| {
+                if idx.id == old_index.id {
+                    new_index.clone()
+                } else {
+                    idx.clone()
+                }
+            })
+            .collect();
+
+        Self {
+            indices: new_indices,
+            dims: self.dims.clone(),
+            storage: self.storage.clone(),
+        }
+    }
+
+    /// Replace multiple indices in the tensor.
+    ///
+    /// This replaces each index in `old_indices` (matched by ID) with the corresponding
+    /// index in `new_indices`. The storage data is not modified.
+    ///
+    /// # Arguments
+    /// * `old_indices` - The indices to replace (matched by ID)
+    /// * `new_indices` - The new indices to use
+    ///
+    /// # Panics
+    /// Panics if `old_indices` and `new_indices` have different lengths.
+    ///
+    /// # Returns
+    /// A new tensor with the indices replaced. Indices not found in `old_indices`
+    /// are kept unchanged.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core_tensor::TensorDynLen;
+    /// use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_core_tensor::Storage;
+    /// use tensor4all_core_tensor::storage::DenseStorageF64;
+    /// use std::sync::Arc;
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let new_i = Index::new_dyn(2);
+    /// let new_j = Index::new_dyn(3);
+    ///
+    /// let indices = vec![i.clone(), j.clone()];
+    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![0.0; 6])));
+    /// let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, vec![2, 3], storage);
+    ///
+    /// // Replace both indices
+    /// let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()]);
+    /// assert_eq!(replaced.indices[0].id, new_i.id);
+    /// assert_eq!(replaced.indices[1].id, new_j.id);
+    /// ```
+    pub fn replaceinds(&self, old_indices: &[Index<Id, Symm>], new_indices: &[Index<Id, Symm>]) -> Self {
+        assert_eq!(
+            old_indices.len(),
+            new_indices.len(),
+            "old_indices and new_indices must have the same length"
+        );
+
+        // Build a map from old IDs to new indices
+        let replacement_map: std::collections::HashMap<_, _> = old_indices
+            .iter()
+            .zip(new_indices.iter())
+            .map(|(old, new)| (&old.id, new))
+            .collect();
+
+        let new_indices_vec: Vec<_> = self
+            .indices
+            .iter()
+            .map(|idx| {
+                if let Some(new_idx) = replacement_map.get(&idx.id) {
+                    (*new_idx).clone()
+                } else {
+                    idx.clone()
+                }
+            })
+            .collect();
+
+        Self {
+            indices: new_indices_vec,
+            dims: self.dims.clone(),
+            storage: self.storage.clone(),
+        }
+    }
+}
+
 impl<Id, Symm> std::fmt::Debug for TensorDynLen<Id, Symm>
 where
     Id: std::fmt::Debug,

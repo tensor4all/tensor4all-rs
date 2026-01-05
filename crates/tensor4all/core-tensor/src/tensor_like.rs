@@ -118,6 +118,74 @@ pub trait TensorLike: DynClone + Send + Sync + Debug {
     /// ```
     fn as_any(&self) -> &dyn Any;
 
+    /// Replace an index in this tensor-like object.
+    ///
+    /// This replaces the index matching `old_index` by ID with `new_index`.
+    /// The storage data is not modified, only the index metadata is changed.
+    ///
+    /// # Arguments
+    ///
+    /// * `old_index` - The index to replace (matched by ID)
+    /// * `new_index` - The new index to use
+    ///
+    /// # Returns
+    ///
+    /// A new `TensorDynLen` with the index replaced.
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation converts to `TensorDynLen` via `to_tensor()`
+    /// and then uses `TensorDynLen::replaceind`. Implementations may override
+    /// for better performance (e.g., TreeTN could replace directly in nodes).
+    fn replaceind(
+        &self,
+        old_index: &Index<Self::Id, Self::Symm, Self::Tags>,
+        new_index: &Index<Self::Id, Self::Symm, Self::Tags>,
+    ) -> Result<TensorDynLen<Self::Id, Self::Symm>> {
+        let tensor = self.to_tensor()?;
+        // Convert from Index<Id, Symm, Tags> to Index<Id, Symm> for TensorDynLen
+        let old_idx = Index::new(old_index.id.clone(), old_index.symm.clone());
+        let new_idx = Index::new(new_index.id.clone(), new_index.symm.clone());
+        Ok(tensor.replaceind(&old_idx, &new_idx))
+    }
+
+    /// Replace multiple indices in this tensor-like object.
+    ///
+    /// This replaces each index in `old_indices` (matched by ID) with the
+    /// corresponding index in `new_indices`. The storage data is not modified.
+    ///
+    /// # Arguments
+    ///
+    /// * `old_indices` - The indices to replace (matched by ID)
+    /// * `new_indices` - The new indices to use
+    ///
+    /// # Returns
+    ///
+    /// A new `TensorDynLen` with the indices replaced.
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation converts to `TensorDynLen` via `to_tensor()`
+    /// and then uses `TensorDynLen::replaceinds`. Implementations may override
+    /// for better performance.
+    fn replaceinds(
+        &self,
+        old_indices: &[Index<Self::Id, Self::Symm, Self::Tags>],
+        new_indices: &[Index<Self::Id, Self::Symm, Self::Tags>],
+    ) -> Result<TensorDynLen<Self::Id, Self::Symm>> {
+        let tensor = self.to_tensor()?;
+        // Convert from Index<Id, Symm, Tags> to Index<Id, Symm> for TensorDynLen
+        let old_inds: Vec<_> = old_indices
+            .iter()
+            .map(|idx| Index::new(idx.id.clone(), idx.symm.clone()))
+            .collect();
+        let new_inds: Vec<_> = new_indices
+            .iter()
+            .map(|idx| Index::new(idx.id.clone(), idx.symm.clone()))
+            .collect();
+        Ok(tensor.replaceinds(&old_inds, &new_inds))
+    }
+
     /// Explicit contraction between two tensor-like objects.
     ///
     /// This performs binary contraction over the specified index pairs.
