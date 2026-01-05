@@ -12,7 +12,7 @@ use std::ptr;
 use num_complex::Complex64;
 use tensor4all_core_linalg::default_svd_rtol;
 use tensor4all_tensortrain::{
-    AbstractTensorTrain, CompressionMethod, CompressionOptions, TensorTrain,
+    AbstractTensorTrain, CompressionMethod, CompressionOptions, ContractionOptions, TensorTrain,
 };
 
 use crate::types::{t4a_tt_c64, t4a_tt_f64};
@@ -1017,6 +1017,51 @@ pub extern "C" fn t4a_tt_f64_dot(
     result.unwrap_or(T4A_INTERNAL_ERROR)
 }
 
+/// Compute the Hadamard product with on-the-fly compression (zip-up algorithm) (f64)
+///
+/// This is more efficient than hadamard() followed by compress() for
+/// tensor trains with large bond dimensions, as it compresses at each step.
+///
+/// # Arguments
+/// - `a`, `b`: Input tensor trains
+/// - `tolerance`: Relative tolerance for truncation (e.g., 1e-12)
+/// - `max_bond_dim`: Maximum bond dimension (0 for unlimited)
+///
+/// # Safety
+/// - `a` and `b` must be valid pointers to t4a_tt_f64
+/// - Caller owns the returned tensor train and must call t4a_tt_f64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_f64_hadamard_zipup(
+    a: *const t4a_tt_f64,
+    b: *const t4a_tt_f64,
+    tolerance: libc::c_double,
+    max_bond_dim: libc::size_t,
+) -> *mut t4a_tt_f64 {
+    if a.is_null() || b.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+        let options = ContractionOptions {
+            tolerance,
+            max_bond_dim: if max_bond_dim == 0 {
+                usize::MAX
+            } else {
+                max_bond_dim
+            },
+            method: CompressionMethod::LU,
+        };
+        match tt_a.inner().hadamard_zipup(tt_b.inner(), &options) {
+            Ok(prod) => Box::into_raw(Box::new(t4a_tt_f64::new(prod))),
+            Err(_) => ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
 /// Compress a tensor train in-place (f64)
 ///
 /// # Arguments
@@ -1254,6 +1299,51 @@ pub extern "C" fn t4a_tt_c64_dot(
     }));
 
     result.unwrap_or(T4A_INTERNAL_ERROR)
+}
+
+/// Compute the Hadamard product with on-the-fly compression (zip-up algorithm) (Complex64)
+///
+/// This is more efficient than hadamard() followed by compress() for
+/// tensor trains with large bond dimensions, as it compresses at each step.
+///
+/// # Arguments
+/// - `a`, `b`: Input tensor trains
+/// - `tolerance`: Relative tolerance for truncation (e.g., 1e-12)
+/// - `max_bond_dim`: Maximum bond dimension (0 for unlimited)
+///
+/// # Safety
+/// - `a` and `b` must be valid pointers to t4a_tt_c64
+/// - Caller owns the returned tensor train and must call t4a_tt_c64_release
+#[no_mangle]
+pub extern "C" fn t4a_tt_c64_hadamard_zipup(
+    a: *const t4a_tt_c64,
+    b: *const t4a_tt_c64,
+    tolerance: libc::c_double,
+    max_bond_dim: libc::size_t,
+) -> *mut t4a_tt_c64 {
+    if a.is_null() || b.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+        let options = ContractionOptions {
+            tolerance,
+            max_bond_dim: if max_bond_dim == 0 {
+                usize::MAX
+            } else {
+                max_bond_dim
+            },
+            method: CompressionMethod::LU,
+        };
+        match tt_a.inner().hadamard_zipup(tt_b.inner(), &options) {
+            Ok(prod) => Box::into_raw(Box::new(t4a_tt_c64::new(prod))),
+            Err(_) => ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(ptr::null_mut())
 }
 
 /// Compress a tensor train in-place (Complex64)

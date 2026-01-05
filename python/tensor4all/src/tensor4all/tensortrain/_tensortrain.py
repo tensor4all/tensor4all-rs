@@ -305,6 +305,37 @@ class TensorTrainF64:
         ptr = lib.t4a_tt_f64_hadamard(self._ptr, other._ptr)
         return TensorTrainF64(ptr)
 
+    def hadamard_zipup(
+        self,
+        other: "TensorTrainF64",
+        tolerance: float = 1e-12,
+        max_bond_dim: int = 0,
+    ) -> "TensorTrainF64":
+        """
+        Compute the Hadamard product with on-the-fly compression.
+
+        More efficient than hadamard() + compress() for large bond dimensions.
+
+        Parameters
+        ----------
+        other : TensorTrainF64
+            The tensor train to multiply with element-wise.
+        tolerance : float
+            Relative tolerance for truncation (default: 1e-12).
+        max_bond_dim : int
+            Maximum bond dimension (0 for unlimited).
+
+        Returns
+        -------
+        TensorTrainF64
+            The compressed Hadamard product.
+        """
+        lib = get_lib()
+        ptr = lib.t4a_tt_f64_hadamard_zipup(
+            self._ptr, other._ptr, tolerance, max_bond_dim
+        )
+        return TensorTrainF64(ptr)
+
     def dot(self, other: "TensorTrainF64") -> float:
         """
         Compute the inner product (dot product) of two tensor trains.
@@ -577,6 +608,37 @@ class TensorTrainC64:
         """Compute the Hadamard (element-wise) product of two tensor trains."""
         lib = get_lib()
         ptr = lib.t4a_tt_c64_hadamard(self._ptr, other._ptr)
+        return TensorTrainC64(ptr)
+
+    def hadamard_zipup(
+        self,
+        other: "TensorTrainC64",
+        tolerance: float = 1e-12,
+        max_bond_dim: int = 0,
+    ) -> "TensorTrainC64":
+        """
+        Compute the Hadamard product with on-the-fly compression.
+
+        More efficient than hadamard() + compress() for large bond dimensions.
+
+        Parameters
+        ----------
+        other : TensorTrainC64
+            The tensor train to multiply with element-wise.
+        tolerance : float
+            Relative tolerance for truncation (default: 1e-12).
+        max_bond_dim : int
+            Maximum bond dimension (0 for unlimited).
+
+        Returns
+        -------
+        TensorTrainC64
+            The compressed Hadamard product.
+        """
+        lib = get_lib()
+        ptr = lib.t4a_tt_c64_hadamard_zipup(
+            self._ptr, other._ptr, tolerance, max_bond_dim
+        )
         return TensorTrainC64(ptr)
 
     def dot(self, other: "TensorTrainC64") -> complex:

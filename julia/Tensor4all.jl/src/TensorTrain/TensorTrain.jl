@@ -1,7 +1,7 @@
 """
     TensorTrain
 
-Submodule for tensor train (Matrix Product State) operations.
+Submodule for tensor train (MPS) operations (corresponds to tensor4all-tensortrain).
 
 # Basic Usage
 
@@ -25,7 +25,10 @@ module TensorTrain
 using Libdl
 
 # Import parent module's library management
-import ..get_lib, ..T4A_SUCCESS
+import ..get_lib, ..C_API
+
+# Use C_API's status code
+const T4A_SUCCESS = C_API.T4A_SUCCESS
 
 # ============================================================================
 # TensorTrainF64
@@ -805,6 +808,51 @@ function hadamard(a::TensorTrainC64, b::TensorTrainC64)
 end
 
 """
+    hadamard_zipup(a, b; tolerance=1e-12, max_bond_dim=0)
+
+Compute the Hadamard product with on-the-fly compression (zip-up algorithm).
+
+More efficient than `hadamard(a, b)` followed by `compress!()` for large bond dimensions.
+"""
+function hadamard_zipup(
+    a::TensorTrainF64,
+    b::TensorTrainF64;
+    tolerance::Float64 = 1e-12,
+    max_bond_dim::Int = 0,
+)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_f64_hadamard_zipup),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Ptr{Cvoid}, Cdouble, Csize_t),
+        a.ptr,
+        b.ptr,
+        tolerance,
+        max_bond_dim,
+    )
+    return TensorTrainF64(ptr)
+end
+
+function hadamard_zipup(
+    a::TensorTrainC64,
+    b::TensorTrainC64;
+    tolerance::Float64 = 1e-12,
+    max_bond_dim::Int = 0,
+)
+    lib = get_lib()
+    ptr = ccall(
+        Libdl.dlsym(lib, :t4a_tt_c64_hadamard_zipup),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Ptr{Cvoid}, Cdouble, Csize_t),
+        a.ptr,
+        b.ptr,
+        tolerance,
+        max_bond_dim,
+    )
+    return TensorTrainC64(ptr)
+end
+
+"""
     dot(a, b)
 
 Compute the inner product (dot product) of two tensor trains.
@@ -936,7 +984,7 @@ export zeros, constant
 export site_dims, link_dims, rank, evaluate
 export norm, log_norm
 export scale!, scaled, fulltensor
-export add, sub, negate, hadamard, dot
+export add, sub, negate, hadamard, hadamard_zipup, dot
 export compress!, compressed
 
 end # module TensorTrain

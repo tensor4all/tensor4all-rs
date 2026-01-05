@@ -10,9 +10,10 @@ use std::panic::catch_unwind;
 use std::ptr;
 
 use num_complex::Complex64;
+use tensor4all_core_common::ContractionAlgorithm;
 use tensor4all_mpocontraction::{
-    contract_fit, contract_naive, contract_zipup, ContractionOptions, FactorizeMethod, FitOptions,
-    MPO,
+    contract, contract_fit, contract_naive, contract_zipup, ContractionOptions, FactorizeMethod,
+    FitOptions, MPO,
 };
 
 use crate::{
@@ -514,6 +515,52 @@ pub extern "C" fn t4a_mpo_f64_contract_fit(
     result.unwrap_or(ptr::null_mut())
 }
 
+/// Contract two MPOs using the specified algorithm (f64)
+///
+/// Unified dispatch function that selects the appropriate contraction algorithm.
+///
+/// # Arguments
+/// - `a`: First MPO
+/// - `b`: Second MPO
+/// - `algorithm`: Contraction algorithm (0=Naive, 1=ZipUp, 2=Fit)
+/// - `tolerance`: Relative tolerance for truncation
+/// - `max_bond_dim`: Maximum bond dimension (0 for unlimited)
+#[no_mangle]
+pub extern "C" fn t4a_mpo_f64_contract(
+    a: *const t4a_mpo_f64,
+    b: *const t4a_mpo_f64,
+    algorithm: crate::t4a_contraction_algorithm,
+    tolerance: libc::c_double,
+    max_bond_dim: libc::size_t,
+) -> *mut t4a_mpo_f64 {
+    if a.is_null() || b.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mpo_a = unsafe { &*a };
+        let mpo_b = unsafe { &*b };
+
+        let rust_algorithm: ContractionAlgorithm = algorithm.into();
+        let options = ContractionOptions {
+            tolerance,
+            max_bond_dim: if max_bond_dim == 0 {
+                usize::MAX
+            } else {
+                max_bond_dim
+            },
+            factorize_method: FactorizeMethod::SVD,
+        };
+
+        match contract(mpo_a.inner(), mpo_b.inner(), rust_algorithm, &options) {
+            Ok(contracted) => Box::into_raw(Box::new(t4a_mpo_f64::new(contracted))),
+            Err(_) => ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
 // ============================================================================
 // Constructors - Complex64
 // ============================================================================
@@ -761,6 +808,52 @@ pub extern "C" fn t4a_mpo_c64_contract_fit(
         };
 
         match contract_fit(mpo_a.inner(), mpo_b.inner(), &fit_options, None) {
+            Ok(contracted) => Box::into_raw(Box::new(t4a_mpo_c64::new(contracted))),
+            Err(_) => ptr::null_mut(),
+        }
+    }));
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+/// Contract two MPOs using the specified algorithm (Complex64)
+///
+/// Unified dispatch function that selects the appropriate contraction algorithm.
+///
+/// # Arguments
+/// - `a`: First MPO
+/// - `b`: Second MPO
+/// - `algorithm`: Contraction algorithm (0=Naive, 1=ZipUp, 2=Fit)
+/// - `tolerance`: Relative tolerance for truncation
+/// - `max_bond_dim`: Maximum bond dimension (0 for unlimited)
+#[no_mangle]
+pub extern "C" fn t4a_mpo_c64_contract(
+    a: *const t4a_mpo_c64,
+    b: *const t4a_mpo_c64,
+    algorithm: crate::t4a_contraction_algorithm,
+    tolerance: libc::c_double,
+    max_bond_dim: libc::size_t,
+) -> *mut t4a_mpo_c64 {
+    if a.is_null() || b.is_null() {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mpo_a = unsafe { &*a };
+        let mpo_b = unsafe { &*b };
+
+        let rust_algorithm: ContractionAlgorithm = algorithm.into();
+        let options = ContractionOptions {
+            tolerance,
+            max_bond_dim: if max_bond_dim == 0 {
+                usize::MAX
+            } else {
+                max_bond_dim
+            },
+            factorize_method: FactorizeMethod::SVD,
+        };
+
+        match contract(mpo_a.inner(), mpo_b.inner(), rust_algorithm, &options) {
             Ok(contracted) => Box::into_raw(Box::new(t4a_mpo_c64::new(contracted))),
             Err(_) => ptr::null_mut(),
         }
