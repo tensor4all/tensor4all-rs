@@ -129,11 +129,13 @@ pub struct TagSet<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar 
 }
 
 /// Error type for TagSet operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TagSetError {
     TooManyTags { actual: usize, max: usize },
     TagTooLong { actual: usize, max: usize },
     InvalidTag(SmallStringError),
+    /// Tag contains a comma, which is reserved as a separator in from_str.
+    TagContainsComma { tag: String },
 }
 
 impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> TagSet<MAX_TAGS, MAX_TAG_LEN, C> {
