@@ -677,7 +677,7 @@ fn test_treetn_validate_tree_empty() {
 #[test]
 fn test_auto_centers_empty() {
     let tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
-    assert!(!tn.is_canonized());
+    assert!(!tn.is_canonicalized());
     assert!(tn.ortho_region().is_empty());
 }
 
@@ -693,13 +693,13 @@ fn test_set_auto_centers() {
     let tensor = TensorDynLen::new(indices, dims, storage);
     let node = tn.add_tensor_auto_name(tensor);
     
-    // Initially not canonized
-    assert!(!tn.is_canonized());
+    // Initially not canonicalized
+    assert!(!tn.is_canonicalized());
     
     // Set ortho_region
     let result = tn.set_ortho_region(vec![node]);
     assert!(result.is_ok());
-    assert!(tn.is_canonized());
+    assert!(tn.is_canonicalized());
     assert_eq!(tn.ortho_region().len(), 1);
     assert!(tn.ortho_region().contains(&node));
 }
@@ -738,7 +738,7 @@ fn test_add_remove_auto_center() {
     // Add first node to region
     let result = tn.add_to_ortho_region(node1);
     assert!(result.is_ok());
-    assert!(tn.is_canonized());
+    assert!(tn.is_canonicalized());
     assert_eq!(tn.ortho_region().len(), 1);
     
     // Add second node to region
@@ -756,7 +756,7 @@ fn test_add_remove_auto_center() {
     
     // Remove second node from region
     tn.remove_from_ortho_region(&node2);
-    assert!(!tn.is_canonized());
+    assert!(!tn.is_canonicalized());
     assert!(tn.ortho_region().is_empty());
 }
 
@@ -782,10 +782,10 @@ fn test_clear_auto_centers() {
     let node = tn.add_tensor_auto_name(tensor);
     
     tn.set_ortho_region(vec![node]).unwrap();
-    assert!(tn.is_canonized());
+    assert!(tn.is_canonicalized());
     
     tn.clear_ortho_region();
-    assert!(!tn.is_canonized());
+    assert!(!tn.is_canonicalized());
     assert!(tn.ortho_region().is_empty());
 }
 
@@ -874,7 +874,7 @@ fn test_validate_ortho_consistency_chain_points_towards_centers() {
 }
 
 #[test]
-fn test_canonize_simple() {
+fn test_canonicalize_simple() {
     // Create a simple 2-node tree: n1 -- n2
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
@@ -898,11 +898,11 @@ fn test_canonize_simple() {
 
     let _e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
 
-    // Canonize towards n2
-    let tn_canon = tn.canonize(vec![n2]).unwrap();
+    // Canonicalize towards n2
+    let tn_canon = tn.canonicalize(vec![n2]).unwrap();
 
-    // Verify that the network is canonized
-    assert!(tn_canon.is_canonized());
+    // Verify that the network is canonicalized
+    assert!(tn_canon.is_canonicalized());
     assert!(tn_canon.ortho_region().contains(&n2));
 
     // Verify ortho consistency
@@ -910,8 +910,8 @@ fn test_canonize_simple() {
 }
 
 #[test]
-fn test_canonize_mixed_storage() {
-    // Test canonization with mixed f64 and Complex64 storage
+fn test_canonicalize_mixed_storage() {
+    // Test canonicalization with mixed f64 and Complex64 storage
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
     let a1 = Index::new_dyn(2);
@@ -936,11 +936,11 @@ fn test_canonize_mixed_storage() {
 
     let _e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
 
-    // Canonize towards n2
-    let tn_canon = tn.canonize(vec![n2]).unwrap();
+    // Canonicalize towards n2
+    let tn_canon = tn.canonicalize(vec![n2]).unwrap();
 
-    // Verify that the network is canonized
-    assert!(tn_canon.is_canonized());
+    // Verify that the network is canonicalized
+    assert!(tn_canon.is_canonicalized());
     assert!(tn_canon.ortho_region().contains(&n2));
 
     // Verify ortho consistency
@@ -1853,8 +1853,8 @@ fn test_log_norm_chain() {
 }
 
 #[test]
-fn test_log_norm_already_canonized_single_site() {
-    // Create TN, canonize to single site, call log_norm
+fn test_log_norm_already_canonicalized_single_site() {
+    // Create TN, canonicalize to single site, call log_norm
     // Verify it uses the existing center without re-canonizing
 
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
@@ -1879,14 +1879,14 @@ fn test_log_norm_already_canonized_single_site() {
     let full_tensor = tn.contract_to_tensor().unwrap();
     let expected_log_norm = full_tensor.norm().ln();
 
-    // Canonize to n1
-    tn.canonize_mut(std::iter::once(n1)).unwrap();
+    // Canonicalize to n1
+    tn.canonicalize_mut(std::iter::once(n1)).unwrap();
     assert_eq!(tn.ortho_region().len(), 1);
 
     // Compute log_norm
     let log_norm = tn.log_norm().unwrap();
 
-    // Should still be canonized to n1
+    // Should still be canonicalized to n1
     assert_eq!(tn.ortho_region().len(), 1);
 
     assert!(
@@ -1898,8 +1898,8 @@ fn test_log_norm_already_canonized_single_site() {
 
 #[test]
 fn test_log_norm_multi_site_ortho_region() {
-    // Create TN with 3 nodes, canonize to 2 sites, call log_norm
-    // Verify it canonizes to single site
+    // Create TN with 3 nodes, canonicalize to 2 sites, call log_norm
+    // Verify it canonicalizes to single site
 
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex, Explicit>::new();
 
@@ -1930,14 +1930,14 @@ fn test_log_norm_multi_site_ortho_region() {
     let full_tensor = tn.contract_to_tensor().unwrap();
     let expected_log_norm = full_tensor.norm().ln();
 
-    // Canonize to two sites (n1 and n2)
-    tn.canonize_mut(vec![n1, n2]).unwrap();
+    // Canonicalize to two sites (n1 and n2)
+    tn.canonicalize_mut(vec![n1, n2]).unwrap();
     assert_eq!(tn.ortho_region().len(), 2);
 
-    // Compute log_norm - should canonize to single site
+    // Compute log_norm - should canonicalize to single site
     let log_norm = tn.log_norm().unwrap();
 
-    // Should now be canonized to single site (min of n1, n2)
+    // Should now be canonicalized to single site (min of n1, n2)
     assert_eq!(tn.ortho_region().len(), 1);
 
     assert!(

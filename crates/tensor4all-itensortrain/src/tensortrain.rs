@@ -37,7 +37,7 @@ use crate::options::{CanonicalForm, TruncateAlg, TruncateOptions};
 /// # Implementation
 ///
 /// Internally wraps `TreeTN<Id, Symm, usize, Einsum>` where node names are site indices.
-/// This allows reuse of TreeTN's canonization and contraction algorithms.
+/// This allows reuse of TreeTN's canonicalization and contraction algorithms.
 #[derive(Debug, Clone)]
 pub struct TensorTrain<Id = DynId, Symm = NoSymmSpace>
 where
@@ -521,12 +521,12 @@ where
             });
         }
 
-        // Use TreeTN's canonize_by_names_with (accepts node names and CanonicalForm)
+        // Use TreeTN's canonicalize_by_names_with (accepts node names and CanonicalForm)
         // Since V = usize, node names are site indices
         self.inner = std::mem::take(&mut self.inner)
-            .canonize_by_names_with(vec![site], form)
+            .canonicalize_by_names_with(vec![site], form)
             .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("Canonize failed: {}", e),
+                message: format!("Canonicalize failed: {}", e),
             })?;
 
         self.canonical_form = Some(form);

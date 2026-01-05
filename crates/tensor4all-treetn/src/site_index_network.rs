@@ -21,16 +21,16 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::fmt::Debug;
 
-/// Ordered sequence of directed edges for canonization.
+/// Ordered sequence of directed edges for canonicalization.
 ///
 /// Each edge is `(from, to)` where:
 /// - `from` is the node being orthogonalized away from
 /// - `to` is the direction towards the orthogonality center
 ///
 /// # Note on ordering
-/// - For path-based canonization (moving ortho center), edges are connected:
+/// - For path-based canonicalization (moving ortho center), edges are connected:
 ///   each edge's `to` equals the next edge's `from`.
-/// - For full canonization (from scratch), edges represent parent edges in
+/// - For full canonicalization (from scratch), edges represent parent edges in
 ///   post-order DFS traversal, which may not be connected as a path but
 ///   guarantees correct processing order (children before parents).
 ///
@@ -51,20 +51,20 @@ use std::fmt::Debug;
 /// edges = [(A, C), (B, C), (D, C), (E, C)]  (order depends on DFS)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CanonizeEdges {
+pub struct CanonicalizeEdges {
     edges: Vec<(NodeIndex, NodeIndex)>,
 }
 
-impl CanonizeEdges {
-    /// Create an empty edge sequence (no-op canonization).
+impl CanonicalizeEdges {
+    /// Create an empty edge sequence (no-op canonicalization).
     pub fn empty() -> Self {
         Self { edges: Vec::new() }
     }
 
     /// Create from a list of edges.
     ///
-    /// Note: For path-based canonization, edges should be connected (each edge's `to`
-    /// equals next edge's `from`). For full canonization, edges may not be connected
+    /// Note: For path-based canonicalization, edges should be connected (each edge's `to`
+    /// equals next edge's `from`). For full canonicalization, edges may not be connected
     /// but must be in correct processing order.
     pub fn from_edges(edges: Vec<(NodeIndex, NodeIndex)>) -> Self {
         Self { edges }
@@ -100,7 +100,7 @@ impl CanonizeEdges {
     }
 }
 
-impl IntoIterator for CanonizeEdges {
+impl IntoIterator for CanonicalizeEdges {
     type Item = (NodeIndex, NodeIndex);
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
@@ -109,7 +109,7 @@ impl IntoIterator for CanonizeEdges {
     }
 }
 
-impl<'a> IntoIterator for &'a CanonizeEdges {
+impl<'a> IntoIterator for &'a CanonicalizeEdges {
     type Item = &'a (NodeIndex, NodeIndex);
     type IntoIter = std::slice::Iter<'a, (NodeIndex, NodeIndex)>;
 
@@ -384,30 +384,30 @@ where
     /// Convert a node sequence to an edge sequence.
     ///
     /// For `[n1, n2, n3, ...]`, returns `[(n1, n2), (n2, n3), ...]`.
-    fn nodes_to_edges(nodes: &[NodeIndex]) -> CanonizeEdges {
+    fn nodes_to_edges(nodes: &[NodeIndex]) -> CanonicalizeEdges {
         if nodes.len() < 2 {
-            return CanonizeEdges::empty();
+            return CanonicalizeEdges::empty();
         }
         let edges: Vec<_> = nodes.windows(2)
             .map(|w| (w[0], w[1]))
             .collect();
-        CanonizeEdges::from_edges(edges)
+        CanonicalizeEdges::from_edges(edges)
     }
 
-    /// Compute edges to canonize from current state to target.
+    /// Compute edges to canonicalize from current state to target.
     ///
     /// This method determines which edges need to be processed (factorized)
     /// to move the orthogonality center from the current region to the target.
     ///
     /// # Arguments
-    /// * `current_region` - Current ortho region (`None` = not canonized)
+    /// * `current_region` - Current ortho region (`None` = not canonicalized)
     /// * `target` - Target node for the orthogonality center
     ///
     /// # Returns
-    /// Ordered `CanonizeEdges` to process for canonization.
+    /// Ordered `CanonicalizeEdges` to process for canonicalization.
     ///
     /// # Cases
-    /// - **Not canonized** (`current_region = None`): Full canonization using post-order DFS
+    /// - **Not canonicalized** (`current_region = None`): Full canonicalization using post-order DFS
     /// - **Already at target**: Returns empty (no-op)
     /// - **Move required**: Returns path from current to target
     ///
@@ -415,14 +415,14 @@ where
     /// ```text
     /// Chain: A - B - C - D
     ///
-    /// Full canonize to D:
-    ///   edges_to_canonize(None, D) → [(A,B), (B,C), (C,D)]
+    /// Full canonicalize to D:
+    ///   edges_to_canonicalize(None, D) → [(A,B), (B,C), (C,D)]
     ///
     /// Move from B to D:
-    ///   edges_to_canonize(Some({B}), D) → [(B,C), (C,D)]
+    ///   edges_to_canonicalize(Some({B}), D) → [(B,C), (C,D)]
     ///
     /// Already at D:
-    ///   edges_to_canonize(Some({D}), D) → []
+    ///   edges_to_canonicalize(Some({D}), D) → []
     ///
     /// Star:     A
     ///           |
@@ -430,18 +430,18 @@ where
     ///           |
     ///           E
     ///
-    /// Full canonize to C:
-    ///   edges_to_canonize(None, C) → [(A,C), (B,C), (D,C), (E,C)]
+    /// Full canonicalize to C:
+    ///   edges_to_canonicalize(None, C) → [(A,C), (B,C), (D,C), (E,C)]
     ///   (order of leaves may vary, but all edges point to center C)
     /// ```
-    pub fn edges_to_canonize(
+    pub fn edges_to_canonicalize(
         &self,
         current_region: Option<&HashSet<NodeIndex>>,
         target: NodeIndex,
-    ) -> CanonizeEdges {
+    ) -> CanonicalizeEdges {
         match current_region {
             None => {
-                // Not canonized: compute parent edges for each node in post-order.
+                // Not canonicalized: compute parent edges for each node in post-order.
                 // Post-order DFS guarantees children are processed before parents,
                 // so we get edges from leaves towards root in correct order.
                 let post_order = self.post_order_dfs_by_index(target);
@@ -449,7 +449,7 @@ where
             }
             Some(current) if current.contains(&target) => {
                 // Already at target: no-op
-                CanonizeEdges::empty()
+                CanonicalizeEdges::empty()
             }
             Some(current) => {
                 // Move from current to target: find path
@@ -459,11 +459,11 @@ where
                         Self::nodes_to_edges(&path)
                     } else {
                         // No path found (shouldn't happen in a connected tree)
-                        CanonizeEdges::empty()
+                        CanonicalizeEdges::empty()
                     }
                 } else {
-                    // Empty current region (shouldn't happen if is_canonized())
-                    CanonizeEdges::empty()
+                    // Empty current region (shouldn't happen if is_canonicalized())
+                    CanonicalizeEdges::empty()
                 }
             }
         }
@@ -472,16 +472,16 @@ where
     /// Compute parent edges for each node in the given order.
     ///
     /// For each node (except the root), finds the edge towards the root.
-    /// This is used for full canonization where we need to process
+    /// This is used for full canonicalization where we need to process
     /// edges from leaves towards root.
     ///
     /// # Arguments
     /// * `nodes` - Nodes in processing order (typically post-order DFS)
-    /// * `root` - The root node (target of canonization)
+    /// * `root` - The root node (target of canonicalization)
     ///
     /// # Returns
     /// Edges `(from, parent)` for each non-root node.
-    fn compute_parent_edges(&self, nodes: &[NodeIndex], root: NodeIndex) -> CanonizeEdges {
+    fn compute_parent_edges(&self, nodes: &[NodeIndex], root: NodeIndex) -> CanonicalizeEdges {
         let g = self.graph.graph();
         let mut edges = Vec::with_capacity(nodes.len().saturating_sub(1));
 
@@ -510,7 +510,7 @@ where
             }
         }
 
-        CanonizeEdges::from_edges(edges)
+        CanonicalizeEdges::from_edges(edges)
     }
 
     /// Check if a subset of nodes forms a connected subgraph.
@@ -670,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edges_to_canonize_full() {
+    fn test_edges_to_canonicalize_full() {
         // Create a chain: A - B - C - D
         let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
 
@@ -683,8 +683,8 @@ mod tests {
         net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
         net.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
 
-        // Full canonize to D (current = None)
-        let edges = net.edges_to_canonize(None, d);
+        // Full canonicalize to D (current = None)
+        let edges = net.edges_to_canonicalize(None, d);
         assert_eq!(edges.len(), 3);
         // Post-order: A, B, C, D → edges: (A,B), (B,C), (C,D)
         let edge_vec: Vec<_> = edges.iter().cloned().collect();
@@ -693,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edges_to_canonize_move() {
+    fn test_edges_to_canonicalize_move() {
         // Create a chain: A - B - C - D
         let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
 
@@ -708,14 +708,14 @@ mod tests {
 
         // Move from B to D
         let current: HashSet<NodeIndex> = [b].into();
-        let edges = net.edges_to_canonize(Some(&current), d);
+        let edges = net.edges_to_canonicalize(Some(&current), d);
         assert_eq!(edges.len(), 2);
         let edge_vec: Vec<_> = edges.iter().cloned().collect();
         assert_eq!(edge_vec, vec![(b, c), (c, d)]);
     }
 
     #[test]
-    fn test_edges_to_canonize_already_at_target() {
+    fn test_edges_to_canonicalize_already_at_target() {
         // Create a chain: A - B - C
         let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
 
@@ -728,13 +728,13 @@ mod tests {
 
         // Already at B
         let current: HashSet<NodeIndex> = [b].into();
-        let edges = net.edges_to_canonize(Some(&current), b);
+        let edges = net.edges_to_canonicalize(Some(&current), b);
         assert!(edges.is_empty());
     }
 
     #[test]
-    fn test_canonize_edges_struct() {
-        let edges = CanonizeEdges::empty();
+    fn test_canonicalize_edges_struct() {
+        let edges = CanonicalizeEdges::empty();
         assert!(edges.is_empty());
         assert_eq!(edges.len(), 0);
         assert!(edges.target().is_none());
@@ -743,7 +743,7 @@ mod tests {
         let n1 = NodeIndex::new(0);
         let n2 = NodeIndex::new(1);
         let n3 = NodeIndex::new(2);
-        let edges = CanonizeEdges::from_edges(vec![(n1, n2), (n2, n3)]);
+        let edges = CanonicalizeEdges::from_edges(vec![(n1, n2), (n2, n3)]);
         assert!(!edges.is_empty());
         assert_eq!(edges.len(), 2);
         assert_eq!(edges.start(), Some(n1));
@@ -788,7 +788,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edges_to_canonize_star() {
+    fn test_edges_to_canonicalize_star() {
         // Create a star: A, B, D, E all connected to C (center)
         //     A
         //     |
@@ -808,8 +808,8 @@ mod tests {
         net.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
         net.add_edge(&"C".to_string(), &"E".to_string()).unwrap();
 
-        // Full canonize to C (current = None)
-        let edges = net.edges_to_canonize(None, c);
+        // Full canonicalize to C (current = None)
+        let edges = net.edges_to_canonicalize(None, c);
 
         // Should have 4 edges (one from each leaf to center)
         assert_eq!(edges.len(), 4);
@@ -830,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edges_to_canonize_y_shaped() {
+    fn test_edges_to_canonicalize_y_shaped() {
         // Create a Y-shaped tree:
         //     A
         //     |
@@ -848,8 +848,8 @@ mod tests {
         net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
         net.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
 
-        // Full canonize to A (current = None)
-        let edges = net.edges_to_canonize(None, a);
+        // Full canonicalize to A (current = None)
+        let edges = net.edges_to_canonicalize(None, a);
 
         // Should have 3 edges
         assert_eq!(edges.len(), 3);
