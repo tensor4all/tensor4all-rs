@@ -27,12 +27,28 @@ use std::fmt::Debug;
 /// - `from` is the node being orthogonalized away from
 /// - `to` is the direction towards the orthogonality center
 ///
-/// Edges are guaranteed to be connected: each edge's `to` equals the next edge's `from`.
+/// # Note on ordering
+/// - For path-based canonization (moving ortho center), edges are connected:
+///   each edge's `to` equals the next edge's `from`.
+/// - For full canonization (from scratch), edges represent parent edges in
+///   post-order DFS traversal, which may not be connected as a path but
+///   guarantees correct processing order (children before parents).
 ///
 /// # Example
-/// For a path A → B → C → D (canonizing towards D):
+/// For a chain A - B - C - D (canonizing towards D):
 /// ```text
 /// edges = [(A, B), (B, C), (C, D)]
+/// ```
+///
+/// For a star with center C (canonizing towards C):
+/// ```text
+///     A
+///     |
+/// B - C - D
+///     |
+///     E
+///
+/// edges = [(A, C), (B, C), (D, C), (E, C)]  (order depends on DFS)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CanonizeEdges {
@@ -45,16 +61,12 @@ impl CanonizeEdges {
         Self { edges: Vec::new() }
     }
 
-    /// Create from a validated list of edges.
+    /// Create from a list of edges.
     ///
-    /// # Panics
-    /// Panics if edges are not connected (each edge's `to` must equal next edge's `from`).
+    /// Note: For path-based canonization, edges should be connected (each edge's `to`
+    /// equals next edge's `from`). For full canonization, edges may not be connected
+    /// but must be in correct processing order.
     pub fn from_edges(edges: Vec<(NodeIndex, NodeIndex)>) -> Self {
-        // Validate connectivity in debug builds
-        debug_assert!(
-            edges.windows(2).all(|w| w[0].1 == w[1].0),
-            "Edges must be connected: each edge's 'to' must equal next edge's 'from'"
-        );
         Self { edges }
     }
 
@@ -401,7 +413,7 @@ where
     ///
     /// # Example
     /// ```text
-    /// Tree: A - B - C - D
+    /// Chain: A - B - C - D
     ///
     /// Full canonize to D:
     ///   edges_to_canonize(None, D) → [(A,B), (B,C), (C,D)]
@@ -411,6 +423,16 @@ where
     ///
     /// Already at D:
     ///   edges_to_canonize(Some({D}), D) → []
+    ///
+    /// Star:     A
+    ///           |
+    ///       B - C - D
+    ///           |
+    ///           E
+    ///
+    /// Full canonize to C:
+    ///   edges_to_canonize(None, C) → [(A,C), (B,C), (D,C), (E,C)]
+    ///   (order of leaves may vary, but all edges point to center C)
     /// ```
     pub fn edges_to_canonize(
         &self,
@@ -419,9 +441,11 @@ where
     ) -> CanonizeEdges {
         match current_region {
             None => {
-                // Not canonized: use post-order DFS to get all edges towards target
+                // Not canonized: compute parent edges for each node in post-order.
+                // Post-order DFS guarantees children are processed before parents,
+                // so we get edges from leaves towards root in correct order.
                 let post_order = self.post_order_dfs_by_index(target);
-                Self::nodes_to_edges(&post_order)
+                self.compute_parent_edges(&post_order, target)
             }
             Some(current) if current.contains(&target) => {
                 // Already at target: no-op
@@ -443,6 +467,95 @@ where
                 }
             }
         }
+    }
+
+    /// Compute parent edges for each node in the given order.
+    ///
+    /// For each node (except the root), finds the edge towards the root.
+    /// This is used for full canonization where we need to process
+    /// edges from leaves towards root.
+    ///
+    /// # Arguments
+    /// * `nodes` - Nodes in processing order (typically post-order DFS)
+    /// * `root` - The root node (target of canonization)
+    ///
+    /// # Returns
+    /// Edges `(from, parent)` for each non-root node.
+    fn compute_parent_edges(&self, nodes: &[NodeIndex], root: NodeIndex) -> CanonizeEdges {
+        let g = self.graph.graph();
+        let mut edges = Vec::with_capacity(nodes.len().saturating_sub(1));
+
+        // Build parent map using BFS from root
+        let mut parent: std::collections::HashMap<NodeIndex, NodeIndex> = std::collections::HashMap::new();
+        let mut visited = HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(root);
+        visited.insert(root);
+
+        while let Some(node) = queue.pop_front() {
+            for neighbor in g.neighbors(node) {
+                if visited.insert(neighbor) {
+                    parent.insert(neighbor, node);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+
+        // For each node in order, add edge to its parent
+        for &node in nodes {
+            if node != root {
+                if let Some(&p) = parent.get(&node) {
+                    edges.push((node, p));
+                }
+            }
+        }
+
+        CanonizeEdges::from_edges(edges)
+    }
+
+    /// Check if a subset of nodes forms a connected subgraph.
+    ///
+    /// Uses DFS to verify that all nodes in the subset are reachable from each other
+    /// within the induced subgraph (only following edges where both endpoints are in the subset).
+    ///
+    /// # Arguments
+    /// * `nodes` - Set of NodeIndex to check for connectivity
+    ///
+    /// # Returns
+    /// `true` if the subset is connected (or empty), `false` otherwise.
+    ///
+    /// # Example
+    /// ```text
+    /// Tree: A - B - C - D
+    ///
+    /// is_connected_subset({B, C}) → true  (adjacent)
+    /// is_connected_subset({A, C}) → false (not adjacent, B not in subset)
+    /// is_connected_subset({A, B, C}) → true (connected chain)
+    /// ```
+    pub fn is_connected_subset(&self, nodes: &HashSet<NodeIndex>) -> bool {
+        if nodes.is_empty() || nodes.len() == 1 {
+            return true;
+        }
+
+        let g = self.graph.graph();
+
+        // Start DFS from any node in the subset
+        let start = *nodes.iter().next().unwrap();
+        let mut seen = HashSet::new();
+        let mut stack = vec![start];
+        seen.insert(start);
+
+        while let Some(v) = stack.pop() {
+            for nb in g.neighbors(v) {
+                // Only follow edges within the subset
+                if nodes.contains(&nb) && seen.insert(nb) {
+                    stack.push(nb);
+                }
+            }
+        }
+
+        // Connected if we reached all nodes
+        seen.len() == nodes.len()
     }
 }
 
@@ -639,6 +752,118 @@ mod tests {
         // Test iteration
         let collected: Vec<_> = edges.iter().cloned().collect();
         assert_eq!(collected, vec![(n1, n2), (n2, n3)]);
+    }
+
+    #[test]
+    fn test_is_connected_subset() {
+        // Create a chain: A - B - C - D
+        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
+
+        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        let a = net.add_node("A".to_string(), empty.clone()).unwrap();
+        let b = net.add_node("B".to_string(), empty.clone()).unwrap();
+        let c = net.add_node("C".to_string(), empty.clone()).unwrap();
+        let d = net.add_node("D".to_string(), empty.clone()).unwrap();
+        net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+        net.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
+
+        // Empty set is connected
+        assert!(net.is_connected_subset(&HashSet::new()));
+
+        // Single node is connected
+        assert!(net.is_connected_subset(&[a].into()));
+
+        // Adjacent nodes are connected
+        assert!(net.is_connected_subset(&[b, c].into()));
+
+        // Chain is connected
+        assert!(net.is_connected_subset(&[a, b, c].into()));
+        assert!(net.is_connected_subset(&[a, b, c, d].into()));
+
+        // Non-adjacent nodes are NOT connected (gap in the middle)
+        assert!(!net.is_connected_subset(&[a, c].into()));
+        assert!(!net.is_connected_subset(&[a, d].into()));
+        assert!(!net.is_connected_subset(&[a, c, d].into()));
+    }
+
+    #[test]
+    fn test_edges_to_canonize_star() {
+        // Create a star: A, B, D, E all connected to C (center)
+        //     A
+        //     |
+        // B - C - D
+        //     |
+        //     E
+        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
+
+        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        let a = net.add_node("A".to_string(), empty.clone()).unwrap();
+        let b = net.add_node("B".to_string(), empty.clone()).unwrap();
+        let c = net.add_node("C".to_string(), empty.clone()).unwrap();
+        let d = net.add_node("D".to_string(), empty.clone()).unwrap();
+        let e = net.add_node("E".to_string(), empty.clone()).unwrap();
+        net.add_edge(&"A".to_string(), &"C".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+        net.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
+        net.add_edge(&"C".to_string(), &"E".to_string()).unwrap();
+
+        // Full canonize to C (current = None)
+        let edges = net.edges_to_canonize(None, c);
+
+        // Should have 4 edges (one from each leaf to center)
+        assert_eq!(edges.len(), 4);
+
+        // Each edge should go TO center C
+        let edge_vec: Vec<_> = edges.iter().cloned().collect();
+        for (from, to) in &edge_vec {
+            assert_eq!(*to, c, "All edges should point to center C");
+            assert_ne!(*from, c, "No edge should start from center C");
+        }
+
+        // All leaves should be present as 'from' nodes
+        let from_nodes: HashSet<_> = edge_vec.iter().map(|(from, _)| *from).collect();
+        assert!(from_nodes.contains(&a), "Edge from A should exist");
+        assert!(from_nodes.contains(&b), "Edge from B should exist");
+        assert!(from_nodes.contains(&d), "Edge from D should exist");
+        assert!(from_nodes.contains(&e), "Edge from E should exist");
+    }
+
+    #[test]
+    fn test_edges_to_canonize_y_shaped() {
+        // Create a Y-shaped tree:
+        //     A
+        //     |
+        //     B
+        //    / \
+        //   C   D
+        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
+
+        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        let a = net.add_node("A".to_string(), empty.clone()).unwrap();
+        let b = net.add_node("B".to_string(), empty.clone()).unwrap();
+        let c = net.add_node("C".to_string(), empty.clone()).unwrap();
+        let d = net.add_node("D".to_string(), empty.clone()).unwrap();
+        net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
+
+        // Full canonize to A (current = None)
+        let edges = net.edges_to_canonize(None, a);
+
+        // Should have 3 edges
+        assert_eq!(edges.len(), 3);
+
+        // Verify structure: C->B, D->B, B->A (order of C,D may vary)
+        let edge_vec: Vec<_> = edges.iter().cloned().collect();
+
+        // B->A should be last (B is processed after its children C and D)
+        assert_eq!(edge_vec.last(), Some(&(b, a)), "B->A should be last edge");
+
+        // C and D should both point to B
+        let first_two: HashSet<_> = edge_vec[..2].iter().cloned().collect();
+        assert!(first_two.contains(&(c, b)), "C->B should be in first two edges");
+        assert!(first_two.contains(&(d, b)), "D->B should be in first two edges");
     }
 }
 

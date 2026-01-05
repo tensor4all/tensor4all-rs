@@ -1306,23 +1306,9 @@ where
         }
 
         // Check ortho_region connectivity in the induced subgraph.
-        let start_node = ortho_nodes.iter().next()
-            .ok_or_else(|| anyhow::anyhow!("ortho_region unexpectedly empty"))?;
-        let mut stack = vec![*start_node];
-        let mut seen = HashSet::new();
-        seen.insert(*start_node);
-        while let Some(v) = stack.pop() {
-            for nb in g.neighbors(v) {
-                if ortho_nodes.contains(&nb) && seen.insert(nb) {
-                    stack.push(nb);
-                }
-            }
-        }
-        if seen.len() != ortho_nodes.len() {
+        if !self.site_index_network.is_connected_subset(&ortho_nodes) {
             return Err(anyhow::anyhow!(
-                "ortho_region is not connected: reached {} out of {} centers",
-                seen.len(),
-                ortho_nodes.len()
+                "ortho_region is not connected"
             ))
             .context("validate_ortho_consistency: ortho_region must form a connected subtree");
         }
