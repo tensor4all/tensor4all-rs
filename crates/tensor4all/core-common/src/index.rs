@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::sync::Arc;
-use crate::tagset::{DefaultTagSet as InlineTagSet, TagSetError};
+use crate::tagset::{DefaultTagSet as InlineTagSet, TagSetError, TagSetLike, TagSetIterator};
 use rand::Rng;
 
 /// Runtime ID for ITensors-like dynamic identity.
@@ -131,6 +131,46 @@ impl std::ops::Deref for TagSet {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl TagSetLike for TagSet {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
+
+    fn get(&self, index: usize) -> Option<String> {
+        TagSetLike::get(&*self.0, index)
+    }
+
+    fn iter(&self) -> TagSetIterator<'_> {
+        TagSetLike::iter(&*self.0)
+    }
+
+    fn has_tag(&self, tag: &str) -> bool {
+        self.0.has_tag(tag)
+    }
+
+    fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError> {
+        // Arc is immutable, so we need to clone and replace
+        let mut inner = (*self.0).clone();
+        inner.add_tag(tag)?;
+        self.0 = Arc::new(inner);
+        Ok(())
+    }
+
+    fn remove_tag(&mut self, tag: &str) -> bool {
+        // Arc is immutable, so we need to clone and replace
+        let mut inner = (*self.0).clone();
+        let removed = inner.remove_tag(tag);
+        if removed {
+            self.0 = Arc::new(inner);
+        }
+        removed
     }
 }
 
@@ -317,6 +357,9 @@ pub(crate) fn generate_id() -> u128 {
 ///
 /// This is provided for convenience and compatibility.
 pub type DefaultIndex<Id, Symm = NoSymmSpace> = Index<Id, Symm, TagSet>;
+
+/// Type alias for backwards compatibility.
+pub type DefaultTagSet = TagSet;
 
 #[cfg(test)]
 mod tests {

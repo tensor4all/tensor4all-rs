@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use tensor4all::TensorDynLen;
 use tensor4all::Storage;
-use tensor4all::index::{Index, NoSymmSpace, Symmetry, DynId};
+use tensor4all::index::{Index, NoSymmSpace, Symmetry, DynId, TagSet};
 use tensor4all::index_ops::common_inds;
 use tensor4all::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
 use crate::connection::Connection;
@@ -911,8 +911,14 @@ where
 
             // Create ONE shared bond index for both endpoints (same ID)
             let new_dim = bond_dim_a + bond_dim_b;
-            let shared_index = Index::<Id, Symm>::new_link(new_dim)
+            // Create Link index using DynId, then convert to Id, Symm
+            let dyn_bond_index = Index::new_link(new_dim)
                 .map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))?;
+            let shared_index: Index<Id, Symm, TagSet> = Index {
+                id: dyn_bond_index.id.into(),
+                symm: dyn_bond_index.symm.into(),
+                tags: dyn_bond_index.tags,
+            };
 
             // Store in canonical order (smaller name first)
             let key = if src_name < tgt_name {

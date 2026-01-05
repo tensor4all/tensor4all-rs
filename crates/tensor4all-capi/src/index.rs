@@ -54,24 +54,22 @@ pub extern "C" fn t4a_index_new_with_tags(dim: usize, tags_csv: *const c_char) -
     }
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut index: InternalIndex = Index::new_dyn(dim);
-
-        if !tags_csv.is_null() {
-            let c_str = unsafe { CStr::from_ptr(tags_csv) };
-            if let Ok(tags_str) = c_str.to_str() {
-                // Parse comma-separated tags
-                for tag in tags_str.split(',') {
-                    let tag = tag.trim();
-                    if !tag.is_empty() {
-                        if index.tags_mut().add_tag(tag).is_err() {
-                            return std::ptr::null_mut();
-                        }
-                    }
-                }
-            }
+        if tags_csv.is_null() {
+            let index: InternalIndex = Index::new_dyn(dim);
+            return Box::into_raw(Box::new(t4a_index::new(index)));
         }
 
-        Box::into_raw(Box::new(t4a_index::new(index)))
+        let c_str = unsafe { CStr::from_ptr(tags_csv) };
+        let tags_str = match c_str.to_str() {
+            Ok(s) => s,
+            Err(_) => return std::ptr::null_mut(),
+        };
+
+        // Use new_dyn_with_tag which handles comma-separated tags
+        match Index::new_dyn_with_tag(dim, tags_str) {
+            Ok(index) => Box::into_raw(Box::new(t4a_index::new(index))),
+            Err(_) => std::ptr::null_mut(),
+        }
     }));
 
     result.unwrap_or(std::ptr::null_mut())
@@ -99,25 +97,25 @@ pub extern "C" fn t4a_index_new_with_id(
     }
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        use tensor4all_core_common::index::DynId;
+        use tensor4all_core_common::index::{DynId, TagSet};
 
         let id = ((id_hi as u128) << 64) | (id_lo as u128);
-        let mut index: InternalIndex = Index::new_with_size(DynId(id), dim);
 
-        if !tags_csv.is_null() {
+        let tags = if tags_csv.is_null() {
+            TagSet::new()
+        } else {
             let c_str = unsafe { CStr::from_ptr(tags_csv) };
-            if let Ok(tags_str) = c_str.to_str() {
-                for tag in tags_str.split(',') {
-                    let tag = tag.trim();
-                    if !tag.is_empty() {
-                        if index.tags_mut().add_tag(tag).is_err() {
-                            return std::ptr::null_mut();
-                        }
-                    }
-                }
+            let tags_str = match c_str.to_str() {
+                Ok(s) => s,
+                Err(_) => return std::ptr::null_mut(),
+            };
+            match TagSet::from_str(tags_str) {
+                Ok(t) => t,
+                Err(_) => return std::ptr::null_mut(),
             }
-        }
+        };
 
+        let index: InternalIndex = Index::new_with_size_and_tags(DynId(id), dim, tags);
         Box::into_raw(Box::new(t4a_index::new(index)))
     }));
 
@@ -248,6 +246,8 @@ pub extern "C" fn t4a_index_get_tags(
 /// Status code (T4A_SUCCESS, T4A_TAG_OVERFLOW, T4A_TAG_TOO_LONG, or error code)
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_index_add_tag(ptr: *mut t4a_index, tag: *const c_char) -> StatusCode {
+    use tensor4all_core_common::TagSetLike;
+
     if ptr.is_null() || tag.is_null() {
         return T4A_NULL_POINTER;
     }
@@ -261,7 +261,8 @@ pub extern "C" fn t4a_index_add_tag(ptr: *mut t4a_index, tag: *const c_char) -> 
             Err(_) => return T4A_INVALID_ARGUMENT,
         };
 
-        match index.inner_mut().tags_mut().add_tag(tag_str) {
+        // TagSet is Arc-wrapped, use TagSetLike::add_tag which does copy-on-write
+        match index.inner_mut().tags.add_tag(tag_str) {
             Ok(()) => T4A_SUCCESS,
             Err(TagSetError::TooManyTags { .. }) => T4A_TAG_OVERFLOW,
             Err(TagSetError::TagTooLong { .. }) => T4A_TAG_TOO_LONG,
@@ -282,6 +283,8 @@ pub extern "C" fn t4a_index_add_tag(ptr: *mut t4a_index, tag: *const c_char) -> 
 /// Status code (T4A_SUCCESS, T4A_TAG_OVERFLOW, T4A_TAG_TOO_LONG, or error code)
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_index_set_tags_csv(ptr: *mut t4a_index, tags_csv: *const c_char) -> StatusCode {
+    use tensor4all_core_common::index::TagSet;
+
     if ptr.is_null() || tags_csv.is_null() {
         return T4A_NULL_POINTER;
     }
@@ -295,29 +298,16 @@ pub extern "C" fn t4a_index_set_tags_csv(ptr: *mut t4a_index, tags_csv: *const c
             Err(_) => return T4A_INVALID_ARGUMENT,
         };
 
-        // Clear existing tags and add new ones
-        let tags = index.inner_mut().tags_mut();
-
-        // Remove all existing tags - collect first to avoid borrow issues
-        let existing_tags: Vec<String> = tags.iter().map(|s| s.to_string()).collect();
-        for tag in existing_tags {
-            tags.remove_tag(&tag);
-        }
-
-        // Add new tags
-        for tag in tags_str.split(',') {
-            let tag = tag.trim();
-            if !tag.is_empty() {
-                match tags.add_tag(tag) {
-                    Ok(()) => {}
-                    Err(TagSetError::TooManyTags { .. }) => return T4A_TAG_OVERFLOW,
-                    Err(TagSetError::TagTooLong { .. }) => return T4A_TAG_TOO_LONG,
-                    Err(_) => return T4A_INVALID_ARGUMENT,
-                }
+        // Create new TagSet from the comma-separated string and replace existing
+        match TagSet::from_str(tags_str) {
+            Ok(new_tags) => {
+                index.inner_mut().tags = new_tags;
+                T4A_SUCCESS
             }
+            Err(TagSetError::TooManyTags { .. }) => T4A_TAG_OVERFLOW,
+            Err(TagSetError::TagTooLong { .. }) => T4A_TAG_TOO_LONG,
+            Err(_) => T4A_INVALID_ARGUMENT,
         }
-
-        T4A_SUCCESS
     }));
 
     result.unwrap_or(T4A_INTERNAL_ERROR)

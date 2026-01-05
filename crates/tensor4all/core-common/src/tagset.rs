@@ -335,5 +335,6 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> Eq
 /// Default tag type (max 16 characters, u16 storage, matching ITensors.jl's `SmallString`).
 pub type Tag = SmallString<16>;
 
-/// Default TagSet (max 4 tags, each tag max 16 characters, u16 storage, matching ITensors.jl).
+/// Inline TagSet with fixed capacity (used internally by Arc-wrapped TagSet).
+/// For public API, use `tensor4all_core_common::TagSet` (Arc-wrapped) instead.
 pub type DefaultTagSet = TagSet<4, 16>;
