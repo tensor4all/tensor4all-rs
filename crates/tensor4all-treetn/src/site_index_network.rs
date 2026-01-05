@@ -11,6 +11,7 @@
 //! from tensor data or is already stored in Connection objects in TreeTN.
 
 use crate::named_graph::NamedGraph;
+use petgraph::algo::astar;
 use petgraph::stable_graph::{StableGraph, NodeIndex, EdgeIndex};
 use petgraph::visit::DfsPostOrder;
 use petgraph::Undirected;
@@ -19,6 +20,91 @@ use tensor4all::DefaultTagSet;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::fmt::Debug;
+
+/// Ordered sequence of directed edges for canonization.
+///
+/// Each edge is `(from, to)` where:
+/// - `from` is the node being orthogonalized away from
+/// - `to` is the direction towards the orthogonality center
+///
+/// Edges are guaranteed to be connected: each edge's `to` equals the next edge's `from`.
+///
+/// # Example
+/// For a path A → B → C → D (canonizing towards D):
+/// ```text
+/// edges = [(A, B), (B, C), (C, D)]
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonizeEdges {
+    edges: Vec<(NodeIndex, NodeIndex)>,
+}
+
+impl CanonizeEdges {
+    /// Create an empty edge sequence (no-op canonization).
+    pub fn empty() -> Self {
+        Self { edges: Vec::new() }
+    }
+
+    /// Create from a validated list of edges.
+    ///
+    /// # Panics
+    /// Panics if edges are not connected (each edge's `to` must equal next edge's `from`).
+    pub fn from_edges(edges: Vec<(NodeIndex, NodeIndex)>) -> Self {
+        // Validate connectivity in debug builds
+        debug_assert!(
+            edges.windows(2).all(|w| w[0].1 == w[1].0),
+            "Edges must be connected: each edge's 'to' must equal next edge's 'from'"
+        );
+        Self { edges }
+    }
+
+    /// Check if empty (already at target, no work needed).
+    pub fn is_empty(&self) -> bool {
+        self.edges.is_empty()
+    }
+
+    /// Number of edges to process.
+    pub fn len(&self) -> usize {
+        self.edges.len()
+    }
+
+    /// Iterate over edges in order.
+    pub fn iter(&self) -> impl Iterator<Item = &(NodeIndex, NodeIndex)> {
+        self.edges.iter()
+    }
+
+    /// Get the final target node (orthogonality center).
+    ///
+    /// Returns `None` if empty.
+    pub fn target(&self) -> Option<NodeIndex> {
+        self.edges.last().map(|(_, to)| *to)
+    }
+
+    /// Get the starting node (first node to be factorized).
+    ///
+    /// Returns `None` if empty.
+    pub fn start(&self) -> Option<NodeIndex> {
+        self.edges.first().map(|(from, _)| *from)
+    }
+}
+
+impl IntoIterator for CanonizeEdges {
+    type Item = (NodeIndex, NodeIndex);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.edges.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a CanonizeEdges {
+    type Item = &'a (NodeIndex, NodeIndex);
+    type IntoIter = std::slice::Iter<'a, (NodeIndex, NodeIndex)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.edges.iter()
+    }
+}
 
 /// Site Index Network (inspired by ITensorNetworks.jl's IndsNetwork)
 ///
@@ -246,6 +332,118 @@ where
 
         result
     }
+
+    /// Find the shortest path between two nodes using petgraph's A* algorithm.
+    ///
+    /// Since this is an unweighted graph (tree), we use unit edge weights.
+    /// Uses petgraph's `astar` with a trivial heuristic (behaves like BFS/Dijkstra).
+    ///
+    /// # Arguments
+    /// * `from` - Starting node
+    /// * `to` - Target node
+    ///
+    /// # Returns
+    /// `Some(Vec<NodeIndex>)` containing the path from `from` to `to` (inclusive),
+    /// or `None` if no path exists (nodes are disconnected or don't exist).
+    pub fn path_between(&self, from: NodeIndex, to: NodeIndex) -> Option<Vec<NodeIndex>> {
+        let g = self.graph.graph();
+
+        // Check if both nodes exist
+        if g.node_weight(from).is_none() || g.node_weight(to).is_none() {
+            return None;
+        }
+
+        // Same node case
+        if from == to {
+            return Some(vec![from]);
+        }
+
+        // Use A* with trivial heuristic (unit edge cost, zero estimate)
+        astar(
+            g,
+            from,
+            |n| n == to,
+            |_| 1usize,  // Unit edge cost
+            |_| 0usize,  // No heuristic (behaves like Dijkstra/BFS)
+        )
+        .map(|(_, path)| path)
+    }
+
+    /// Convert a node sequence to an edge sequence.
+    ///
+    /// For `[n1, n2, n3, ...]`, returns `[(n1, n2), (n2, n3), ...]`.
+    fn nodes_to_edges(nodes: &[NodeIndex]) -> CanonizeEdges {
+        if nodes.len() < 2 {
+            return CanonizeEdges::empty();
+        }
+        let edges: Vec<_> = nodes.windows(2)
+            .map(|w| (w[0], w[1]))
+            .collect();
+        CanonizeEdges::from_edges(edges)
+    }
+
+    /// Compute edges to canonize from current state to target.
+    ///
+    /// This method determines which edges need to be processed (factorized)
+    /// to move the orthogonality center from the current region to the target.
+    ///
+    /// # Arguments
+    /// * `current_region` - Current ortho region (`None` = not canonized)
+    /// * `target` - Target node for the orthogonality center
+    ///
+    /// # Returns
+    /// Ordered `CanonizeEdges` to process for canonization.
+    ///
+    /// # Cases
+    /// - **Not canonized** (`current_region = None`): Full canonization using post-order DFS
+    /// - **Already at target**: Returns empty (no-op)
+    /// - **Move required**: Returns path from current to target
+    ///
+    /// # Example
+    /// ```text
+    /// Tree: A - B - C - D
+    ///
+    /// Full canonize to D:
+    ///   edges_to_canonize(None, D) → [(A,B), (B,C), (C,D)]
+    ///
+    /// Move from B to D:
+    ///   edges_to_canonize(Some({B}), D) → [(B,C), (C,D)]
+    ///
+    /// Already at D:
+    ///   edges_to_canonize(Some({D}), D) → []
+    /// ```
+    pub fn edges_to_canonize(
+        &self,
+        current_region: Option<&HashSet<NodeIndex>>,
+        target: NodeIndex,
+    ) -> CanonizeEdges {
+        match current_region {
+            None => {
+                // Not canonized: use post-order DFS to get all edges towards target
+                let post_order = self.post_order_dfs_by_index(target);
+                Self::nodes_to_edges(&post_order)
+            }
+            Some(current) if current.contains(&target) => {
+                // Already at target: no-op
+                CanonizeEdges::empty()
+            }
+            Some(current) => {
+                // Move from current to target: find path
+                // Use any node in current as starting point
+                if let Some(&start) = current.iter().next() {
+                    if let Some(path) = self.path_between(start, target) {
+                        Self::nodes_to_edges(&path)
+                    } else {
+                        // No path found (shouldn't happen in a connected tree)
+                        CanonizeEdges::empty()
+                    }
+                } else {
+                    // Empty current region (shouldn't happen if is_canonized())
+                    CanonizeEdges::empty()
+                }
+            }
+        }
+    }
 }
 
 impl<NodeName, Id, Symm, Tags> Default for SiteIndexNetwork<NodeName, Id, Symm, Tags>
@@ -329,6 +527,118 @@ mod tests {
     fn test_post_order_dfs_nonexistent_root() {
         let net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
         assert!(net.post_order_dfs(&"X".to_string()).is_none());
+    }
+
+    #[test]
+    fn test_path_between_chain() {
+        // Create a chain: A - B - C - D
+        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
+
+        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        let a = net.add_node("A".to_string(), empty.clone()).unwrap();
+        let b = net.add_node("B".to_string(), empty.clone()).unwrap();
+        let c = net.add_node("C".to_string(), empty.clone()).unwrap();
+        let d = net.add_node("D".to_string(), empty.clone()).unwrap();
+        net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+        net.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
+
+        // Path from A to D
+        let path = net.path_between(a, d).unwrap();
+        assert_eq!(path, vec![a, b, c, d]);
+
+        // Path from D to A (reverse)
+        let path_rev = net.path_between(d, a).unwrap();
+        assert_eq!(path_rev, vec![d, c, b, a]);
+
+        // Same node
+        let path_same = net.path_between(b, b).unwrap();
+        assert_eq!(path_same, vec![b]);
+    }
+
+    #[test]
+    fn test_edges_to_canonize_full() {
+        // Create a chain: A - B - C - D
+        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
+
+        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        let a = net.add_node("A".to_string(), empty.clone()).unwrap();
+        let b = net.add_node("B".to_string(), empty.clone()).unwrap();
+        let c = net.add_node("C".to_string(), empty.clone()).unwrap();
+        let d = net.add_node("D".to_string(), empty.clone()).unwrap();
+        net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+        net.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
+
+        // Full canonize to D (current = None)
+        let edges = net.edges_to_canonize(None, d);
+        assert_eq!(edges.len(), 3);
+        // Post-order: A, B, C, D → edges: (A,B), (B,C), (C,D)
+        let edge_vec: Vec<_> = edges.iter().cloned().collect();
+        assert_eq!(edge_vec, vec![(a, b), (b, c), (c, d)]);
+        assert_eq!(edges.target(), Some(d));
+    }
+
+    #[test]
+    fn test_edges_to_canonize_move() {
+        // Create a chain: A - B - C - D
+        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
+
+        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        let _a = net.add_node("A".to_string(), empty.clone()).unwrap();
+        let b = net.add_node("B".to_string(), empty.clone()).unwrap();
+        let c = net.add_node("C".to_string(), empty.clone()).unwrap();
+        let d = net.add_node("D".to_string(), empty.clone()).unwrap();
+        net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+        net.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
+
+        // Move from B to D
+        let current: HashSet<NodeIndex> = [b].into();
+        let edges = net.edges_to_canonize(Some(&current), d);
+        assert_eq!(edges.len(), 2);
+        let edge_vec: Vec<_> = edges.iter().cloned().collect();
+        assert_eq!(edge_vec, vec![(b, c), (c, d)]);
+    }
+
+    #[test]
+    fn test_edges_to_canonize_already_at_target() {
+        // Create a chain: A - B - C
+        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> = SiteIndexNetwork::new();
+
+        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        let _a = net.add_node("A".to_string(), empty.clone()).unwrap();
+        let b = net.add_node("B".to_string(), empty.clone()).unwrap();
+        let _c = net.add_node("C".to_string(), empty.clone()).unwrap();
+        net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+
+        // Already at B
+        let current: HashSet<NodeIndex> = [b].into();
+        let edges = net.edges_to_canonize(Some(&current), b);
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn test_canonize_edges_struct() {
+        let edges = CanonizeEdges::empty();
+        assert!(edges.is_empty());
+        assert_eq!(edges.len(), 0);
+        assert!(edges.target().is_none());
+        assert!(edges.start().is_none());
+
+        let n1 = NodeIndex::new(0);
+        let n2 = NodeIndex::new(1);
+        let n3 = NodeIndex::new(2);
+        let edges = CanonizeEdges::from_edges(vec![(n1, n2), (n2, n3)]);
+        assert!(!edges.is_empty());
+        assert_eq!(edges.len(), 2);
+        assert_eq!(edges.start(), Some(n1));
+        assert_eq!(edges.target(), Some(n3));
+
+        // Test iteration
+        let collected: Vec<_> = edges.iter().cloned().collect();
+        assert_eq!(collected, vec![(n1, n2), (n2, n3)]);
     }
 }
 

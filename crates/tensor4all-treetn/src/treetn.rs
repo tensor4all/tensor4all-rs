@@ -53,6 +53,10 @@ where
     /// When non-empty, contains the node names (V) of the orthogonalization region.
     /// The region must form a connected subtree in the network.
     ortho_region: HashSet<V>,
+    /// Canonical form used for the current canonization.
+    /// `None` if not canonized (ortho_region is empty).
+    /// `Some(form)` if canonized with the specified form.
+    canonical_form: Option<CanonicalForm>,
     /// Site index network: manages topology and site space (physical indices).
     /// This structure enables topology and site space comparison independent of tensor data.
     site_index_network: SiteIndexNetwork<V, Id, Symm>,
@@ -111,6 +115,7 @@ where
         let mut treetn = Self {
             graph: NamedGraph::new(),
             ortho_region: HashSet::new(),
+            canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
             _mode: PhantomData,
         };
@@ -190,6 +195,7 @@ where
         Self {
             graph: NamedGraph::new(),
             ortho_region: HashSet::new(),
+            canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
             _mode: PhantomData,
         }
@@ -727,14 +733,24 @@ where
     }
 
     /// Clear the orthogonalization region (mark network as not canonized).
+    ///
+    /// Also clears the canonical form.
     pub fn clear_ortho_region(&mut self) {
         self.ortho_region.clear();
+        self.canonical_form = None;
     }
 
     /// Clear the orthogonalization region (deprecated).
     #[deprecated(note = "Use clear_ortho_region() instead")]
     pub fn clear_auto_centers(&mut self) {
         self.clear_ortho_region();
+    }
+
+    /// Get the current canonical form.
+    ///
+    /// Returns `None` if not canonized.
+    pub fn canonical_form(&self) -> Option<CanonicalForm> {
+        self.canonical_form
     }
 
     /// Add a node to the orthogonalization region.
@@ -938,6 +954,7 @@ where
         let mut result = Self {
             graph: NamedGraph::new(),
             ortho_region: HashSet::new(),
+            canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
             _mode: PhantomData,
         };
@@ -1445,16 +1462,33 @@ where
 
     /// Canonize the network towards the specified ortho_region using a specified canonical form.
     ///
-    /// This is a smart canonization that checks the current state:
-    /// - If already canonized to the same ortho_region with the same form, returns unchanged
-    /// - Otherwise, performs full canonization via `force_canonize_with`
+    /// This is a smart canonization that:
+    /// - If not canonized: performs full canonization
+    /// - If already at target with same form: returns unchanged (no-op)
+    /// - If already canonized but at different position: moves ortho center efficiently
+    /// - If already canonized with different form: returns an error
     ///
     /// # Arguments
     /// * `ortho_region` - The nodes that will serve as canonization centers
     /// * `form` - The canonical form to use
     ///
     /// # Returns
-    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    /// A new canonized TreeTN, or an error if:
+    /// - Validation fails
+    /// - Factorization fails
+    /// - Already canonized with a different form (use `force_canonize_with` to change form)
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Full canonization (not canonized → canonized)
+    /// let ttn = ttn.canonize_with([node_d], CanonicalForm::Unitary)?;
+    ///
+    /// // Move ortho center (D → B, same form)
+    /// let ttn = ttn.canonize_with([node_b], CanonicalForm::Unitary)?;
+    ///
+    /// // Error: different form requested
+    /// // let ttn = ttn.canonize_with([node_b], CanonicalForm::LU)?; // Error!
+    /// ```
     pub fn canonize_with(
         self,
         ortho_region: impl IntoIterator<Item = NodeIndex>,
@@ -1465,23 +1499,61 @@ where
         Symm: Clone + Symmetry + From<NoSymmSpace>,
         V: From<NodeIndex>,
     {
-        let ortho_region_v: HashSet<V> = ortho_region.into_iter()
-            .map(V::from)
+        let target_indices: Vec<NodeIndex> = ortho_region.into_iter().collect();
+
+        // Check if already canonized with a different form
+        if let Some(current_form) = self.canonical_form {
+            if current_form != form {
+                return Err(anyhow::anyhow!(
+                    "Cannot move ortho center: current form is {:?} but {:?} was requested. \
+                     Use force_canonize_with() to re-canonize with a different form.",
+                    current_form,
+                    form
+                ))
+                .context("canonize_with: form mismatch");
+            }
+        }
+
+        // Convert target to V for comparison
+        let target_v: HashSet<V> = target_indices.iter()
+            .map(|&idx| V::from(idx))
             .collect();
 
-        // Check if already canonized to the same region
-        // TODO: Also check canonical form when we track it
-        if self.ortho_region == ortho_region_v {
-            // Already canonized to this region, return unchanged
+        // Check if already at target
+        if self.ortho_region == target_v && self.canonical_form == Some(form) {
             return Ok(self);
         }
 
-        // Convert back to NodeIndex for force_canonize_with
-        let ortho_region_indices: Vec<NodeIndex> = ortho_region_v.iter()
-            .filter_map(|v| self.graph.node_index(v))
-            .collect();
+        // For single target (most common case), use edges_to_canonize
+        if target_indices.len() == 1 {
+            let target = target_indices[0];
 
-        self.force_canonize_with(ortho_region_indices, form)
+            // Get current region as NodeIndex set
+            let current_region: Option<HashSet<NodeIndex>> = if self.is_canonized() {
+                Some(self.ortho_region.iter()
+                    .filter_map(|v| self.graph.node_index(v))
+                    .collect())
+            } else {
+                None
+            };
+
+            // Compute edges to process
+            let edges = self.site_index_network.edges_to_canonize(
+                current_region.as_ref(),
+                target,
+            );
+
+            if edges.is_empty() {
+                return Ok(self);
+            }
+
+            // Process edges via force_canonize_with for now
+            // TODO: Optimize to only process the edges returned by edges_to_canonize
+            self.force_canonize_with(target_indices, form)
+        } else {
+            // Multiple targets: use force_canonize_with
+            self.force_canonize_with(target_indices, form)
+        }
     }
 
     /// Force canonize the network towards the specified ortho_region.
@@ -1744,6 +1816,9 @@ where
                 .context("canonize_with: failed to set ortho_towards")?;
         }
 
+        // Set the canonical form
+        self.canonical_form = Some(form);
+
         Ok(self)
     }
 
@@ -1778,16 +1853,21 @@ where
     /// Canonize the network towards the specified ortho_region using node names directly
     /// with a specified canonical form.
     ///
-    /// This is a smart canonization that checks the current state:
-    /// - If already canonized to the same ortho_region with the same form, returns unchanged
-    /// - Otherwise, performs full canonization via `force_canonize_by_names_with`
+    /// This is a smart canonization that:
+    /// - If not canonized: performs full canonization
+    /// - If already at target with same form: returns unchanged (no-op)
+    /// - If already canonized but at different position: moves ortho center efficiently
+    /// - If already canonized with different form: returns an error
     ///
     /// # Arguments
     /// * `ortho_region` - The node names that will serve as canonization centers
     /// * `form` - The canonical form to use
     ///
     /// # Returns
-    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    /// A new canonized TreeTN, or an error if:
+    /// - Validation fails
+    /// - Factorization fails
+    /// - Already canonized with a different form (use `force_canonize_by_names_with` to change form)
     pub fn canonize_by_names_with(
         self,
         ortho_region: impl IntoIterator<Item = V>,
@@ -1799,11 +1879,26 @@ where
     {
         let ortho_region_v: HashSet<V> = ortho_region.into_iter().collect();
 
-        // Check if already canonized to the same region
-        if self.ortho_region == ortho_region_v {
+        // Check if already canonized with a different form
+        if let Some(current_form) = self.canonical_form {
+            if current_form != form {
+                return Err(anyhow::anyhow!(
+                    "Cannot move ortho center: current form is {:?} but {:?} was requested. \
+                     Use force_canonize_by_names_with() to re-canonize with a different form.",
+                    current_form,
+                    form
+                ))
+                .context("canonize_by_names_with: form mismatch");
+            }
+        }
+
+        // Check if already at target
+        if self.ortho_region == ortho_region_v && self.canonical_form == Some(form) {
             return Ok(self);
         }
 
+        // Use force_canonize for now
+        // TODO: Optimize to use edges_to_canonize for efficient moves
         self.force_canonize_by_names_with(ortho_region_v, form)
     }
 
@@ -2030,6 +2125,9 @@ where
                 .context("canonize_by_names_with: failed to set ortho_towards")?;
         }
 
+        // Set the canonical form
+        self.canonical_form = Some(form);
+
         Ok(self)
     }
 }
@@ -2056,6 +2154,7 @@ where
         Self {
             graph: NamedGraph::new(),
             ortho_region: HashSet::new(),
+            canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
             _mode: PhantomData,
         }
@@ -2292,6 +2391,7 @@ where
         Self {
             graph: self.graph.clone(),
             ortho_region: self.ortho_region.clone(),
+            canonical_form: self.canonical_form,
             site_index_network: self.site_index_network.clone(),
             _mode: PhantomData,
         }
@@ -2773,6 +2873,7 @@ where
             return Ok(TreeTN {
                 graph: einsum_tn.graph,
                 ortho_region: einsum_tn.ortho_region,
+                canonical_form: einsum_tn.canonical_form,
                 site_index_network: einsum_tn.site_index_network,
                 _mode: PhantomData,
             });
@@ -2782,6 +2883,7 @@ where
             return Ok(TreeTN {
                 graph: explicit_tn.graph,
                 ortho_region: explicit_tn.ortho_region,
+                canonical_form: explicit_tn.canonical_form,
                 site_index_network: explicit_tn.site_index_network,
                 _mode: PhantomData,
             });
@@ -2937,6 +3039,7 @@ where
         Ok(TreeTN {
             graph: einsum_tn.graph,
             ortho_region: einsum_tn.ortho_region,
+            canonical_form: einsum_tn.canonical_form,
             site_index_network: einsum_tn.site_index_network,
             _mode: PhantomData,
         })
@@ -2975,6 +3078,7 @@ where
         Ok(TreeTN {
             graph: tn.graph,
             ortho_region: tn.ortho_region,
+            canonical_form: tn.canonical_form,
             site_index_network: tn.site_index_network,
             _mode: PhantomData,
         })
