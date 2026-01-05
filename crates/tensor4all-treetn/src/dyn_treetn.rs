@@ -34,10 +34,10 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::fmt::Debug;
 
+use std::collections::HashMap;
 use tensor4all::index::{DynId, Index, NoSymmSpace, TagSet};
 use tensor4all::{TensorDynLen, TensorLike};
 
-use crate::connection::Connection;
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
 
@@ -91,11 +91,14 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     /// Named graph: maps node names to boxed TensorLike trait objects.
-    graph: NamedGraph<V, BoxedTensorLike, Connection<DynId, NoSymmSpace>>,
+    /// Edges store bond indices directly (Index<DynId, NoSymmSpace>).
+    graph: NamedGraph<V, BoxedTensorLike, Index<DynId, NoSymmSpace>>,
     /// Orthogonalization region (node names).
     ortho_region: HashSet<V>,
     /// Site index network: manages topology and site space (physical indices).
     site_index_network: SiteIndexNetwork<V, DynId, NoSymmSpace, TagSet>,
+    /// Orthogonalization direction for each edge (node name that ortho points towards).
+    ortho_towards: HashMap<EdgeIndex, V>,
 }
 
 impl<V> DynTreeTN<V>
@@ -108,6 +111,7 @@ where
             graph: NamedGraph::new(),
             ortho_region: HashSet::new(),
             site_index_network: SiteIndexNetwork::new(),
+            ortho_towards: HashMap::new(),
         }
     }
 
@@ -142,7 +146,7 @@ where
 
         // Add to graph
         let node_idx = self.graph.add_node(node_name.clone(), boxed)
-            .map_err(|e| anyhow::anyhow!(e))
+            .map_err(|e: String| anyhow::anyhow!(e))
             .context("Failed to add node to graph")?;
 
         // Add to site_index_network
@@ -169,7 +173,7 @@ where
 
         // Add to graph
         let node_idx = self.graph.add_node(node_name.clone(), boxed)
-            .map_err(|e| anyhow::anyhow!(e))
+            .map_err(|e: String| anyhow::anyhow!(e))
             .context("Failed to add node to graph")?;
 
         // Add to site_index_network
@@ -224,8 +228,8 @@ where
         let ext_a = node_a_obj.external_indices();
         let ext_b = node_b_obj.external_indices();
 
-        let has_index_a = ext_a.iter().any(|idx| idx.id == index_a.id);
-        let has_index_b = ext_b.iter().any(|idx| idx.id == index_b.id);
+        let has_index_a = ext_a.iter().any(|idx| index_a.id == idx.id);
+        let has_index_b = ext_b.iter().any(|idx| index_b.id == idx.id);
 
         if !has_index_a {
             return Err(anyhow::anyhow!("Index not found in node A's external indices"))
@@ -244,14 +248,26 @@ where
             .ok_or_else(|| anyhow::anyhow!("Node name for node_b not found"))?
             .clone();
 
-        // Create connection (converts to Index<DynId, NoSymmSpace> by dropping tags)
-        let index_a_no_tags = Index::new(index_a.id, index_a.symm.clone());
-        let index_b_no_tags = Index::new(index_b.id, index_b.symm.clone());
-        let connection = Connection::new(index_a_no_tags, index_b_no_tags)
-            .context("Failed to create connection")?;
+        // In Einsum mode, both indices share the same ID, so store just one bond index
+        // Validate that index_a and index_b have matching IDs and dimensions
+        if index_a.id != index_b.id {
+            return Err(anyhow::anyhow!(
+                "In Einsum mode, indices must have the same ID: {:?} != {:?}",
+                index_a.id, index_b.id
+            )).context("Failed to connect: index mismatch");
+        }
+        if index_a.size() != index_b.size() {
+            return Err(anyhow::anyhow!(
+                "Dimension mismatch: {} != {}",
+                index_a.size(), index_b.size()
+            )).context("Failed to connect: dimension mismatch");
+        }
+
+        // Store the bond index directly on the edge (converts to Index<DynId, NoSymmSpace> by dropping tags)
+        let bond_index = Index::new(index_a.id, index_a.symm.clone());
 
         // Add edge to graph
-        let edge_idx = self.graph.graph_mut().add_edge(node_a, node_b, connection);
+        let edge_idx = self.graph.graph_mut().add_edge(node_a, node_b, bond_index);
 
         // Add edge to site_index_network
         self.site_index_network.add_edge(&node_name_a, &node_name_b)
@@ -268,9 +284,14 @@ where
         Ok(edge_idx)
     }
 
-    /// Get a reference to a connection by EdgeIndex.
-    pub fn connection(&self, edge: EdgeIndex) -> Option<&Connection<DynId, NoSymmSpace>> {
+    /// Get a reference to a bond index by EdgeIndex.
+    pub fn bond_index(&self, edge: EdgeIndex) -> Option<&Index<DynId, NoSymmSpace>> {
         self.graph.graph().edge_weight(edge)
+    }
+
+    /// Get a mutable reference to a bond index by EdgeIndex.
+    pub fn bond_index_mut(&mut self, edge: EdgeIndex) -> Option<&mut Index<DynId, NoSymmSpace>> {
+        self.graph.graph_mut().edge_weight_mut(edge)
     }
 
     /// Get the number of nodes in the network.
@@ -402,6 +423,7 @@ where
             graph: new_graph,
             ortho_region: self.ortho_region.clone(),
             site_index_network: self.site_index_network.clone(),
+            ortho_towards: self.ortho_towards.clone(),
         }
     }
 }
@@ -503,7 +525,7 @@ mod tests {
         let edge = tn.connect(node_a, &bond, node_b, &bond).unwrap();
 
         assert_eq!(tn.edge_count(), 1);
-        assert!(tn.connection(edge).is_some());
+        assert!(tn.bond_index(edge).is_some());
     }
 
     #[test]
