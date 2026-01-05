@@ -25,7 +25,10 @@ use std::fmt::Debug;
 /// Marker trait for bond modes.
 ///
 /// This trait is sealed and cannot be implemented outside this crate.
-pub trait BondMode: Clone + Copy + Send + Sync + Debug + Default + private::Sealed + 'static {}
+pub trait BondMode: Clone + Copy + Send + Sync + Debug + Default + private::Sealed + 'static {
+    /// Whether this mode uses einsum convention (auto-connect by shared index IDs)
+    const IS_EINSUM: bool;
+}
 
 mod private {
     pub trait Sealed {}
@@ -44,7 +47,9 @@ mod private {
 pub struct Einsum;
 
 impl private::Sealed for Einsum {}
-impl BondMode for Einsum {}
+impl BondMode for Einsum {
+    const IS_EINSUM: bool = true;
+}
 
 /// Explicit bond mode: nodes must be connected manually.
 ///
@@ -59,4 +64,6 @@ impl BondMode for Einsum {}
 pub struct Explicit;
 
 impl private::Sealed for Explicit {}
-impl BondMode for Explicit {}
+impl BondMode for Explicit {
+    const IS_EINSUM: bool = false;
+}

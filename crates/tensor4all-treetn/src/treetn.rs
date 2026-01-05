@@ -2326,6 +2326,9 @@ impl<V: Clone + Hash + Eq> TreeTopology<V> {
 /// * `tensor` - The dense tensor to decompose
 /// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
 ///
+/// # Type Parameters
+/// * `Mode` - The bond mode for the resulting TreeTN (Einsum or Explicit)
+///
 /// # Returns
 /// A TreeTN representing the decomposed tensor.
 ///
@@ -2334,19 +2337,20 @@ impl<V: Clone + Hash + Eq> TreeTopology<V> {
 /// - The topology is invalid
 /// - Physical index positions don't match the tensor
 /// - Factorization fails
-pub fn decompose_tensor_to_treetn<Id, Symm, V>(
+pub fn factorize_tensor_to_treetn<Id, Symm, V, Mode>(
     tensor: &TensorDynLen<Id, Symm>,
     topology: &TreeTopology<V>,
-) -> Result<TreeTN<Id, Symm, V, Explicit>>
+) -> Result<TreeTN<Id, Symm, V, Mode>>
 where
     Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
 {
-    decompose_tensor_to_treetn_with(tensor, topology, FactorizeAlg::QR)
+    factorize_tensor_to_treetn_with(tensor, topology, FactorizeAlg::QR)
 }
 
-/// Decompose a dense tensor into a TreeTN using a specified factorization algorithm.
+/// Factorize a dense tensor into a TreeTN using a specified factorization algorithm.
 ///
 /// This function takes a dense tensor and a tree topology specification, then
 /// recursively decomposes the tensor using the specified algorithm to create a TreeTN.
@@ -2362,6 +2366,9 @@ where
 /// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
 /// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
 ///
+/// # Type Parameters
+/// * `Mode` - The bond mode for the resulting TreeTN (Einsum or Explicit)
+///
 /// # Returns
 /// A TreeTN representing the decomposed tensor.
 ///
@@ -2370,24 +2377,43 @@ where
 /// - The topology is invalid
 /// - Physical index positions don't match the tensor
 /// - Factorization fails
-pub fn decompose_tensor_to_treetn_with<Id, Symm, V>(
+pub fn factorize_tensor_to_treetn_with<Id, Symm, V, Mode>(
     tensor: &TensorDynLen<Id, Symm>,
     topology: &TreeTopology<V>,
     alg: FactorizeAlg,
-) -> Result<TreeTN<Id, Symm, V, Explicit>>
+) -> Result<TreeTN<Id, Symm, V, Mode>>
 where
     Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
     Symm: Clone + Symmetry + From<NoSymmSpace>,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+    Mode: BondMode,
 {
     topology.validate()?;
 
     if topology.nodes.len() == 1 {
         // Single node - just wrap the tensor
-        let mut tn = TreeTN::<Id, Symm, V, Explicit>::new();
         let node_name = topology.nodes.keys().next().unwrap().clone();
-        tn.add_tensor(node_name, tensor.clone())?;
-        return Ok(tn);
+        if Mode::IS_EINSUM {
+            let einsum_tn = TreeTN::<Id, Symm, V, Einsum>::new(
+                vec![tensor.clone()],
+                vec![node_name],
+            )?;
+            return Ok(TreeTN {
+                graph: einsum_tn.graph,
+                ortho_region: einsum_tn.ortho_region,
+                site_index_network: einsum_tn.site_index_network,
+                _mode: PhantomData,
+            });
+        } else {
+            let mut explicit_tn = TreeTN::<Id, Symm, V, Explicit>::new();
+            explicit_tn.add_tensor(node_name, tensor.clone())?;
+            return Ok(TreeTN {
+                graph: explicit_tn.graph,
+                ortho_region: explicit_tn.ortho_region,
+                site_index_network: explicit_tn.site_index_network,
+                _mode: PhantomData,
+            });
+        }
     }
 
     // Validate that all index positions are valid
@@ -2522,35 +2548,63 @@ where
     let (root_node, _) = &traversal_order.last().unwrap();
     node_tensors.insert(root_node.clone(), current_tensor);
 
-    // Build the TreeTN
-    let mut tn = TreeTN::<Id, Symm, V, Explicit>::new();
+    // Build the TreeTN based on Mode
+    if Mode::IS_EINSUM {
+        // Einsum mode: use TreeTN::new(tensors, node_names) for auto-connection
+        // Since factorize() returns shared bond_index, tensors already have matching index IDs
+        let node_names: Vec<V> = topology.nodes.keys().cloned().collect();
+        let tensors: Vec<TensorDynLen<Id, Symm>> = node_names.iter()
+            .map(|name| node_tensors.get(name).cloned().unwrap())
+            .collect();
 
-    // Add all tensors
-    for (node_name, t) in &node_tensors {
-        tn.add_tensor(node_name.clone(), t.clone())?;
-    }
+        // Build using Einsum mode constructor, then convert to target Mode
+        let einsum_tn = TreeTN::<Id, Symm, V, Einsum>::new(tensors, node_names)?;
 
-    // Add connections
-    for (a, b) in &topology.edges {
-        let key = if *a < *b {
-            (a.clone(), b.clone())
-        } else {
-            (b.clone(), a.clone())
-        };
+        // SAFETY: Both Einsum and Explicit have the same memory layout (PhantomData)
+        // and the network structure is valid for both modes
+        Ok(TreeTN {
+            graph: einsum_tn.graph,
+            ortho_region: einsum_tn.ortho_region,
+            site_index_network: einsum_tn.site_index_network,
+            _mode: PhantomData,
+        })
+    } else {
+        // Explicit mode: use add_tensor + connect
+        let mut tn = TreeTN::<Id, Symm, V, Explicit>::new();
 
-        if let Some((idx_a, idx_b)) = bond_indices.get(&key) {
-            let node_a = tn.graph.node_index(a)
-                .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", a))?;
-            let node_b = tn.graph.node_index(b)
-                .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", b))?;
+        // Add all tensors
+        for (node_name, t) in &node_tensors {
+            tn.add_tensor(node_name.clone(), t.clone())?;
+        }
 
-            if *a < *b {
-                tn.connect(node_a, idx_a, node_b, idx_b)?;
+        // Add connections
+        for (a, b) in &topology.edges {
+            let key = if *a < *b {
+                (a.clone(), b.clone())
             } else {
-                tn.connect(node_b, idx_a, node_a, idx_b)?;
+                (b.clone(), a.clone())
+            };
+
+            if let Some((idx_a, idx_b)) = bond_indices.get(&key) {
+                let node_a = tn.graph.node_index(a)
+                    .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", a))?;
+                let node_b = tn.graph.node_index(b)
+                    .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", b))?;
+
+                if *a < *b {
+                    tn.connect(node_a, idx_a, node_b, idx_b)?;
+                } else {
+                    tn.connect(node_b, idx_a, node_a, idx_b)?;
+                }
             }
         }
-    }
 
-    Ok(tn)
+        // Convert to target Mode
+        Ok(TreeTN {
+            graph: tn.graph,
+            ortho_region: tn.ortho_region,
+            site_index_network: tn.site_index_network,
+            _mode: PhantomData,
+        })
+    }
 }

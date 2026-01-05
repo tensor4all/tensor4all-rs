@@ -10,5 +10,5 @@ pub use connection::Connection;
 pub use dyn_treetn::{BoxedTensorLike, DynIndex, DynTreeTN};
 pub use named_graph::NamedGraph;
 pub use site_index_network::SiteIndexNetwork;
-pub use treetn::{TreeTN, TreeTopology, decompose_tensor_to_treetn, decompose_tensor_to_treetn_with};
+pub use treetn::{TreeTN, TreeTopology, factorize_tensor_to_treetn, factorize_tensor_to_treetn_with};
 

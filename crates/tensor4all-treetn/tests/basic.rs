@@ -1203,7 +1203,7 @@ fn test_treetn_add_single_node() {
 }
 
 // ============================================================================
-// TreeTopology and decompose_tensor_to_treetn tests
+// TreeTopology and factorize_tensor_to_treetn tests
 // ============================================================================
 
 #[test]
