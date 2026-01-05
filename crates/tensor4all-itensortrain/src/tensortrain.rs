@@ -4,7 +4,7 @@
 //! (also known as MPS) with orthogonality tracking, inspired by ITensorMPS.jl.
 //!
 //! Internally, TensorTrain is implemented as a thin wrapper around
-//! `TreeTN<Id, Symm, usize, Einsum>` where node names are site indices (0, 1, 2, ...).
+//! `TreeTN<Id, Symm, usize>` where node names are site indices (0, 1, 2, ...).
 
 use std::ops::Range;
 
@@ -14,7 +14,7 @@ use tensor4all_core_common::{
 };
 use tensor4all_core_linalg::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
 use tensor4all_core_tensor::{AnyScalar, TensorAccess, TensorDynLen};
-use tensor4all_treetn::{TreeTN, Einsum};
+use tensor4all_treetn::TreeTN;
 
 use crate::error::{TensorTrainError, Result};
 use crate::options::{CanonicalForm, TruncateAlg, TruncateOptions};
@@ -36,7 +36,7 @@ use crate::options::{CanonicalForm, TruncateAlg, TruncateOptions};
 ///
 /// # Implementation
 ///
-/// Internally wraps `TreeTN<Id, Symm, usize, Einsum>` where node names are site indices.
+/// Internally wraps `TreeTN<Id, Symm, usize>` where node names are site indices.
 /// This allows reuse of TreeTN's canonicalization and contraction algorithms.
 #[derive(Debug, Clone)]
 pub struct TensorTrain<Id = DynId, Symm = NoSymmSpace>
@@ -46,7 +46,7 @@ where
 {
     /// The underlying TreeTN with linear chain topology.
     /// Node names are usize (0, 1, 2, ...) representing site indices.
-    inner: TreeTN<Id, Symm, usize, Einsum>,
+    inner: TreeTN<Id, Symm, usize>,
     /// The canonical form used (if known).
     canonical_form: Option<CanonicalForm>,
 }
@@ -75,10 +75,7 @@ where
     pub fn new(tensors: Vec<TensorDynLen<Id, Symm>>) -> Result<Self> {
         if tensors.is_empty() {
             // Create an empty TreeTN
-            let inner = TreeTN::<Id, Symm, usize, Einsum>::new(vec![], vec![])
-                .map_err(|e| TensorTrainError::InvalidStructure {
-                    message: format!("Failed to create empty TreeTN: {}", e),
-                })?;
+            let inner = TreeTN::<Id, Symm, usize>::new();
             return Ok(Self {
                 inner,
                 canonical_form: None,
@@ -115,8 +112,8 @@ where
         // Create node names: 0, 1, 2, ..., n-1
         let node_names: Vec<usize> = (0..tensors.len()).collect();
 
-        // Create TreeTN with Einsum mode (auto-connects by shared index IDs)
-        let inner = TreeTN::<Id, Symm, usize, Einsum>::new(tensors, node_names)
+        // Create TreeTN with from_tensors (auto-connects by shared index IDs)
+        let inner = TreeTN::<Id, Symm, usize>::from_tensors(tensors, node_names)
             .map_err(|e| TensorTrainError::InvalidStructure {
                 message: format!("Failed to create TreeTN: {}", e),
             })?;
