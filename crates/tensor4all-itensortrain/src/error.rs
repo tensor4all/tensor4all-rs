@@ -1,13 +1,13 @@
-//! Error types for ITensorTrain operations.
+//! Error types for TensorTrain operations.
 
 use thiserror::Error;
 
-/// Result type for ITensorTrain operations.
-pub type Result<T> = std::result::Result<T, ITensorTrainError>;
+/// Result type for TensorTrain operations.
+pub type Result<T> = std::result::Result<T, TensorTrainError>;
 
-/// Errors that can occur in ITensorTrain operations.
+/// Errors that can occur in TensorTrain operations.
 #[derive(Debug, Error)]
-pub enum ITensorTrainError {
+pub enum TensorTrainError {
     /// Tensor train is empty (has no tensors).
     #[error("Tensor train is empty")]
     Empty,

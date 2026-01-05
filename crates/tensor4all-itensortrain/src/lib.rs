@@ -5,7 +5,7 @@
 //!
 //! # Features
 //!
-//! - `ITensorTrain`: Main tensor train type with orthogonality tracking
+//! - `TensorTrain`: Main tensor train type with orthogonality tracking
 //! - Canonicalization with SVD, LU, or CI algorithms
 //! - Truncation with configurable tolerance and max rank
 //! - Norm and inner product computations
@@ -13,10 +13,10 @@
 //! # Example
 //!
 //! ```ignore
-//! use tensor4all_itensortrain::{ITensorTrain, TruncateOptions};
+//! use tensor4all_itensortrain::{TensorTrain, TruncateOptions};
 //!
 //! // Create a tensor train from tensors
-//! let tt = ITensorTrain::new(tensors)?;
+//! let tt = TensorTrain::new(tensors)?;
 //!
 //! // Orthogonalize to site 2
 //! tt.orthogonalize(2)?;
@@ -39,6 +39,6 @@ pub mod error;
 pub mod options;
 pub mod tensortrain;
 
-pub use error::{ITensorTrainError, Result};
+pub use error::{TensorTrainError, Result};
 pub use options::{CanonicalMethod, TruncateAlg, TruncateOptions};
-pub use tensortrain::ITensorTrain;
+pub use tensortrain::TensorTrain;

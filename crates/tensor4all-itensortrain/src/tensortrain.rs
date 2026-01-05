@@ -1,9 +1,9 @@
 //! Main Tensor Train type as a wrapper around TreeTN.
 //!
-//! This module provides the `ITensorTrain` type, which represents a Tensor Train
+//! This module provides the `TensorTrain` type, which represents a Tensor Train
 //! (also known as MPS) with orthogonality tracking, inspired by ITensorMPS.jl.
 //!
-//! Internally, ITensorTrain is implemented as a thin wrapper around
+//! Internally, TensorTrain is implemented as a thin wrapper around
 //! `TreeTN<Id, Symm, usize, Einsum>` where node names are site indices (0, 1, 2, ...).
 
 use std::ops::Range;
@@ -16,7 +16,7 @@ use tensor4all_core_linalg::{factorize, Canonical, FactorizeAlg, FactorizeOption
 use tensor4all_core_tensor::{AnyScalar, TensorAccess, TensorDynLen};
 use tensor4all_treetn::{TreeTN, Einsum};
 
-use crate::error::{ITensorTrainError, Result};
+use crate::error::{TensorTrainError, Result};
 use crate::options::{CanonicalMethod, TruncateAlg, TruncateOptions};
 
 /// Tensor Train with orthogonality tracking.
@@ -39,7 +39,7 @@ use crate::options::{CanonicalMethod, TruncateAlg, TruncateOptions};
 /// Internally wraps `TreeTN<Id, Symm, usize, Einsum>` where node names are site indices.
 /// This allows reuse of TreeTN's canonization and contraction algorithms.
 #[derive(Debug, Clone)]
-pub struct ITensorTrain<Id = DynId, Symm = NoSymmSpace>
+pub struct TensorTrain<Id = DynId, Symm = NoSymmSpace>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
@@ -51,7 +51,7 @@ where
     canonical_method: Option<CanonicalMethod>,
 }
 
-impl<Id, Symm> ITensorTrain<Id, Symm>
+impl<Id, Symm> TensorTrain<Id, Symm>
 where
     Id: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + From<DynId> + Ord,
     Symm: Clone + PartialEq + Eq + std::hash::Hash + Symmetry + std::fmt::Debug + From<NoSymmSpace>,
@@ -76,7 +76,7 @@ where
         if tensors.is_empty() {
             // Create an empty TreeTN
             let inner = TreeTN::<Id, Symm, usize, Einsum>::new(vec![], vec![])
-                .map_err(|e| ITensorTrainError::InvalidStructure {
+                .map_err(|e| TensorTrainError::InvalidStructure {
                     message: format!("Failed to create empty TreeTN: {}", e),
                 })?;
             return Ok(Self {
@@ -92,7 +92,7 @@ where
 
             let common = common_inds(left.indices(), right.indices());
             if common.is_empty() {
-                return Err(ITensorTrainError::InvalidStructure {
+                return Err(TensorTrainError::InvalidStructure {
                     message: format!(
                         "No common index between tensors at sites {} and {}",
                         i,
@@ -101,7 +101,7 @@ where
                 });
             }
             if common.len() > 1 {
-                return Err(ITensorTrainError::InvalidStructure {
+                return Err(TensorTrainError::InvalidStructure {
                     message: format!(
                         "Multiple common indices ({}) between tensors at sites {} and {}",
                         common.len(),
@@ -117,7 +117,7 @@ where
 
         // Create TreeTN with Einsum mode (auto-connects by shared index IDs)
         let inner = TreeTN::<Id, Symm, usize, Einsum>::new(tensors, node_names)
-            .map_err(|e| ITensorTrainError::InvalidStructure {
+            .map_err(|e| TensorTrainError::InvalidStructure {
                 message: format!("Failed to create TreeTN: {}", e),
             })?;
 
@@ -150,7 +150,7 @@ where
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < tt.len() as i32 {
             let center = (llim + 1) as usize;
             tt.inner.set_ortho_region(vec![center])
-                .map_err(|e| ITensorTrainError::InvalidStructure {
+                .map_err(|e| TensorTrainError::InvalidStructure {
                     message: format!("Failed to set ortho region: {}", e),
                 })?;
         }
@@ -288,18 +288,18 @@ where
     /// Returns `Err` if `site >= len()`.
     pub fn tensor_checked(&self, site: usize) -> Result<&TensorDynLen<Id, Symm>> {
         if site >= self.len() {
-            return Err(ITensorTrainError::SiteOutOfBounds {
+            return Err(TensorTrainError::SiteOutOfBounds {
                 site,
                 length: self.len(),
             });
         }
         let node_idx = self.inner.node_index(&site)
-            .ok_or_else(|| ITensorTrainError::SiteOutOfBounds {
+            .ok_or_else(|| TensorTrainError::SiteOutOfBounds {
                 site,
                 length: self.len(),
             })?;
         self.inner.tensor(node_idx)
-            .ok_or_else(|| ITensorTrainError::SiteOutOfBounds {
+            .ok_or_else(|| TensorTrainError::SiteOutOfBounds {
                 site,
                 length: self.len(),
             })
@@ -509,10 +509,10 @@ where
     /// * `method` - The canonicalization method to use (SVD, LU, or CI)
     pub fn orthogonalize_with(&mut self, site: usize, method: CanonicalMethod) -> Result<()> {
         if self.is_empty() {
-            return Err(ITensorTrainError::Empty);
+            return Err(TensorTrainError::Empty);
         }
         if site >= self.len() {
-            return Err(ITensorTrainError::SiteOutOfBounds {
+            return Err(TensorTrainError::SiteOutOfBounds {
                 site,
                 length: self.len(),
             });
@@ -524,7 +524,7 @@ where
         // Since V = usize, node names are site indices
         self.inner = std::mem::take(&mut self.inner)
             .canonize_by_names(vec![site], alg)
-            .map_err(|e| ITensorTrainError::InvalidStructure {
+            .map_err(|e| TensorTrainError::InvalidStructure {
                 message: format!("Canonize failed: {}", e),
             })?;
 
@@ -592,7 +592,7 @@ where
 
         // Factorize with truncation: tensor[i] = L * R
         let result = factorize(&tensor_i, &left_inds, &factorize_options)
-            .map_err(ITensorTrainError::Factorize)?;
+            .map_err(TensorTrainError::Factorize)?;
 
         // Get tensor at site i+1
         let tensor_i1 = self.tensor(i + 1).clone();
@@ -607,7 +607,7 @@ where
         // The edge stores the old bond indices - we need to update them to the new ones
         if let Some(edge) = self.inner.edge_between(&i, &(i + 1)) {
             self.inner.replace_edge_bond(edge, new_bond.clone(), new_bond.clone())
-                .map_err(|e| ITensorTrainError::InvalidStructure {
+                .map_err(|e| TensorTrainError::InvalidStructure {
                     message: format!("Failed to update edge bond: {}", e),
                 })?;
         }
@@ -619,11 +619,11 @@ where
             .expect("Site out of bounds");
 
         self.inner.replace_tensor(node_i, result.left)
-            .map_err(|e| ITensorTrainError::InvalidStructure {
+            .map_err(|e| TensorTrainError::InvalidStructure {
                 message: format!("Failed to replace tensor at site {}: {}", i, e),
             })?;
         self.inner.replace_tensor(node_i1, new_tensor_i1)
-            .map_err(|e| ITensorTrainError::InvalidStructure {
+            .map_err(|e| TensorTrainError::InvalidStructure {
                 message: format!("Failed to replace tensor at site {}: {}", i + 1, e),
             })?;
 
@@ -690,14 +690,14 @@ where
     }
 }
 
-// Implement Default for ITensorTrain to allow std::mem::take
-impl<Id, Symm> Default for ITensorTrain<Id, Symm>
+// Implement Default for TensorTrain to allow std::mem::take
+impl<Id, Symm> Default for TensorTrain<Id, Symm>
 where
     Id: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + From<DynId> + Ord,
     Symm: Clone + PartialEq + Eq + std::hash::Hash + Symmetry + std::fmt::Debug + From<NoSymmSpace>,
 {
     fn default() -> Self {
-        Self::new(vec![]).expect("Failed to create empty ITensorTrain")
+        Self::new(vec![]).expect("Failed to create empty TensorTrain")
     }
 }
 
@@ -752,7 +752,7 @@ mod tests {
 
     #[test]
     fn test_empty_tt() {
-        let tt: ITensorTrain<DynId, NoSymmSpace> = ITensorTrain::new(vec![]).unwrap();
+        let tt: TensorTrain<DynId, NoSymmSpace> = TensorTrain::new(vec![]).unwrap();
         assert!(tt.is_empty());
         assert_eq!(tt.len(), 0);
         assert_eq!(tt.llim(), -1);
@@ -764,7 +764,7 @@ mod tests {
     fn test_single_site_tt() {
         let tensor = make_tensor(vec![idx(0, 2)]);
 
-        let tt = ITensorTrain::new(vec![tensor]).unwrap();
+        let tt = TensorTrain::new(vec![tensor]).unwrap();
         assert_eq!(tt.len(), 1);
         assert!(!tt.isortho());
         assert_eq!(tt.bond_dims(), Vec::<usize>::new());
@@ -780,7 +780,7 @@ mod tests {
         let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
         let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
 
-        let tt = ITensorTrain::new(vec![t0, t1]).unwrap();
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
         assert_eq!(tt.len(), 2);
         assert_eq!(tt.bond_dims(), vec![3]);
         assert_eq!(tt.maxbonddim(), 3);
@@ -809,7 +809,7 @@ mod tests {
         let t0 = make_tensor(vec![s0a.clone(), s0b.clone(), l01.clone()]);
         let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
 
-        let tt = ITensorTrain::new(vec![t0, t1]).unwrap();
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
         // Check site indices (nested vec)
         let site_inds = tt.siteinds();
@@ -828,7 +828,7 @@ mod tests {
         let t1 = make_tensor(vec![l01, s1]);
 
         // Create with specified orthogonality (ortho center at site 0)
-        let tt = ITensorTrain::with_ortho(
+        let tt = TensorTrain::with_ortho(
             vec![t0, t1],
             -1,  // no left orthogonality
             1,   // right orthogonal from site 1
@@ -854,7 +854,7 @@ mod tests {
         let t2 = make_tensor(vec![l12, s2]);
 
         // Create with partial orthogonality
-        let tt = ITensorTrain::with_ortho(vec![t0, t1, t2], 0, 2, None).unwrap();
+        let tt = TensorTrain::with_ortho(vec![t0, t1, t2], 0, 2, None).unwrap();
 
         assert_eq!(tt.ortho_lims(), 1..2);
         assert!(tt.isortho());
@@ -869,11 +869,11 @@ mod tests {
         let t0 = make_tensor(vec![s0]);
         let t1 = make_tensor(vec![s1]);
 
-        let result = ITensorTrain::new(vec![t0, t1]);
+        let result = TensorTrain::new(vec![t0, t1]);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            ITensorTrainError::InvalidStructure { .. }
+            TensorTrainError::InvalidStructure { .. }
         ));
     }
 
@@ -887,7 +887,7 @@ mod tests {
         let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
         let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
 
-        let mut tt = ITensorTrain::new(vec![t0, t1]).unwrap();
+        let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
         assert!(!tt.isortho());
 
         // Orthogonalize to site 0
@@ -915,7 +915,7 @@ mod tests {
         let t1 = make_tensor(vec![l01.clone(), s1.clone(), l12.clone()]);
         let t2 = make_tensor(vec![l12.clone(), s2.clone()]);
 
-        let mut tt = ITensorTrain::new(vec![t0, t1, t2]).unwrap();
+        let mut tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
 
         // Orthogonalize to middle site
         tt.orthogonalize(1).unwrap();
@@ -942,7 +942,7 @@ mod tests {
         let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
         let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
 
-        let mut tt = ITensorTrain::new(vec![t0, t1]).unwrap();
+        let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
         tt.orthogonalize_with(0, CanonicalMethod::LU).unwrap();
         assert!(tt.isortho());
@@ -959,7 +959,7 @@ mod tests {
         let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
         let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
 
-        let mut tt = ITensorTrain::new(vec![t0, t1]).unwrap();
+        let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
         tt.orthogonalize_with(1, CanonicalMethod::CI).unwrap();
         assert!(tt.isortho());
@@ -980,7 +980,7 @@ mod tests {
         let t1 = make_tensor(vec![l01.clone(), s1.clone(), l12.clone()]);
         let t2 = make_tensor(vec![l12.clone(), s2.clone()]);
 
-        let mut tt = ITensorTrain::new(vec![t0, t1, t2]).unwrap();
+        let mut tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
         assert_eq!(tt.maxbonddim(), 8);
 
         // Truncate to max rank 4
@@ -1001,7 +1001,7 @@ mod tests {
         let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
         let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
 
-        let tt = ITensorTrain::new(vec![t0, t1]).unwrap();
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
         // Compute norm squared
         let norm_sq = tt.norm_squared();
