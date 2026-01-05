@@ -3,11 +3,11 @@
 //! Contracts two MPOs with on-the-fly compression at each step.
 //! This is more memory-efficient than naive contraction followed by compression.
 
-use crate::contraction::ContractionOptions;
-use crate::error::{MPOError, Result};
-use crate::factorize::{factorize, FactorizeOptions, Matrix2, SVDScalar};
-use crate::mpo::MPO;
-use crate::types::{tensor4_zeros, Tensor4, Tensor4Ops};
+use super::contraction::ContractionOptions;
+use super::error::{MPOError, Result};
+use super::factorize::{factorize, FactorizeOptions, Matrix2, SVDScalar};
+use super::mpo::MPO;
+use super::types::{tensor4_zeros, Tensor4, Tensor4Ops};
 use mdarray::DTensor;
 
 /// Helper function to create a zero-filled 2D tensor
@@ -207,7 +207,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::factorize::FactorizeMethod;
+    use crate::mpo::factorize::FactorizeMethod;
 
     #[test]
     fn test_contract_zipup_identity() {

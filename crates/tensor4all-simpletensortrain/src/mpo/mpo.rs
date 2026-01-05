@@ -3,9 +3,9 @@
 //! An MPO represents a high-dimensional operator as a product of
 //! 4D tensors with shape (left_bond, site_dim_1, site_dim_2, right_bond).
 
-use crate::error::{MPOError, Result};
-use crate::types::{tensor4_zeros, LocalIndex, Tensor4, Tensor4Ops};
-use tensor4all_tensortrain::traits::TTScalar;
+use super::error::{MPOError, Result};
+use super::types::{tensor4_zeros, LocalIndex, Tensor4, Tensor4Ops};
+use crate::traits::TTScalar;
 
 /// Matrix Product Operator representation
 ///

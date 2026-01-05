@@ -3,7 +3,7 @@
 //! This module provides various factorization methods (SVD, RSVD, LU, CI)
 //! for compressing and reshaping MPO tensors.
 
-use crate::error::{MPOError, Result};
+use super::error::{MPOError, Result};
 use mdarray::{DSlice, DTensor};
 use mdarray_linalg::svd::SVD;
 use num_complex::ComplexFloat;
@@ -81,7 +81,7 @@ pub struct FactorizeResult<T> {
 
 /// Trait bounds for SVD-compatible scalars
 pub trait SVDScalar:
-    tensor4all_tensortrain::traits::TTScalar
+    crate::traits::TTScalar
     + ComplexFloat
     + faer_traits::ComplexField
     + Default
@@ -94,7 +94,7 @@ where
 
 impl<T> SVDScalar for T
 where
-    T: tensor4all_tensortrain::traits::TTScalar
+    T: crate::traits::TTScalar
         + ComplexFloat
         + faer_traits::ComplexField
         + Default

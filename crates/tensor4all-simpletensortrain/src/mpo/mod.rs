@@ -1,6 +1,6 @@
-//! MPO (Matrix Product Operator) contraction algorithms for tensor4all
+//! MPO (Matrix Product Operator) contraction algorithms
 //!
-//! This crate provides algorithms for contracting two Matrix Product Operators (MPOs),
+//! This module provides algorithms for contracting two Matrix Product Operators (MPOs),
 //! which are tensor trains with 4D site tensors of shape (left_bond, site_dim_1, site_dim_2, right_bond).
 //!
 //! # Main Types
@@ -19,7 +19,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use tensor4all_mpocontraction::{MPO, contract_naive, ContractionOptions};
+//! use tensor4all_simpletensortrain::mpo::{MPO, contract_naive, ContractionOptions};
 //!
 //! let mpo_a = MPO::constant(&[2, 2], 1.0);
 //! let mpo_b = MPO::constant(&[2, 2], 2.0);

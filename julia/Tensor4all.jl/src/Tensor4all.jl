@@ -51,10 +51,11 @@ get_lib() = C_API.libhandle()
 # Include submodules (respecting crate hierarchy)
 # 1. Algorithm (tensor4all-core-common)
 include("Algorithm.jl")
-# 2. TensorTrain (tensor4all-tensortrain)
-include("TensorTrain/TensorTrain.jl")
+# DISABLED - pending simpletensortrain integration
+# 2. TensorTrain (tensor4all-simpletensortrain)
+# include("TensorTrain/TensorTrain.jl")
 # 3. MPO (tensor4all-mpocontraction)
-include("MPO/MPO.jl")
+# include("MPO/MPO.jl")
 
 # Re-export public API
 # Core types (tensor4all-core-common, tensor4all-core-tensor)
@@ -67,11 +68,12 @@ using .Algorithm: get_default_svd_rtol, resolve_truncation_tolerance
 export Algorithm
 export get_default_svd_rtol, resolve_truncation_tolerance
 
+# DISABLED - pending simpletensortrain integration
 # Re-export TensorTrain submodule
-export TensorTrain
+# export TensorTrain
 
 # Re-export MPO submodule
-export MPO
+# export MPO
 
 """
     Index

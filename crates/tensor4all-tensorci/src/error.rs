@@ -38,5 +38,5 @@ pub enum TCIError {
 
     /// Tensor train error
     #[error("Tensor train error: {0}")]
-    TensorTrainError(#[from] tensor4all_tensortrain::TensorTrainError),
+    TensorTrainError(#[from] tensor4all_simpletensortrain::TensorTrainError),
 }

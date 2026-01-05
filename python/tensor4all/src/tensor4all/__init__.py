@@ -35,8 +35,9 @@ from .algorithm import (
     resolve_truncation_tolerance,
 )
 
+# DISABLED - pending simpletensortrain integration
 # MPO types (tensor4all-mpocontraction)
-from . import mpo
+# from . import mpo
 
 # Exceptions
 from ._capi import (
@@ -62,8 +63,9 @@ __all__ = [
     "CompressionAlgorithm",
     "get_default_svd_rtol",
     "resolve_truncation_tolerance",
+    # DISABLED - pending simpletensortrain integration
     # MPO module
-    "mpo",
+    # "mpo",
     # Exceptions
     "T4AError",
     "NullPointerError",
