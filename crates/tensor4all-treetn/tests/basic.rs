@@ -757,6 +757,157 @@ fn test_treetn_add_two_nodes() {
 }
 
 // ============================================================================
+// Truncation Tests
+// ============================================================================
+
+#[test]
+fn test_truncate_simple() {
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
+
+    let i = Index::new_dyn(2);
+    let bond = Index::new_dyn(10); // Large bond
+    let k = Index::new_dyn(4);
+
+    // Create tensors with rank-deficient data (effectively rank 2)
+    // tensor1[i, bond] = data[i * 10 + bond], only bond=0,1 are nonzero
+    let mut data1 = vec![0.0f64; 20];
+    for idx in 0..2 {
+        data1[idx * 10] = 1.0;
+        data1[idx * 10 + 1] = 0.5;
+    }
+    let tensor1 = TensorDynLen::new(
+        vec![i.clone(), bond.clone()],
+        vec![2, 10],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+    );
+    let n1 = tn.add_tensor_auto_name(tensor1);
+
+    // tensor2[bond, k] similar structure
+    let mut data2 = vec![0.0f64; 40];
+    for k_idx in 0..4 {
+        data2[0 * 4 + k_idx] = 1.0;
+        data2[1 * 4 + k_idx] = 0.3;
+    }
+    let tensor2 = TensorDynLen::new(
+        vec![bond.clone(), k.clone()],
+        vec![10, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+    );
+    let n2 = tn.add_tensor_auto_name(tensor2);
+
+    let edge = tn.connect(n1, &bond, n2, &bond).unwrap();
+
+    // Original bond dimension is 10
+    assert_eq!(tn.bond_index(edge).unwrap().size(), 10);
+
+    // Truncate with max_rank = 3
+    let truncated = tn.truncate(std::iter::once(n2), None, Some(3)).unwrap();
+
+    // Bond should now be at most 3
+    let new_edge = truncated.edges_for_node(n1)[0].0;
+    assert!(truncated.bond_index(new_edge).unwrap().size() <= 3);
+}
+
+#[test]
+fn test_truncate_mut_simple() {
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
+
+    let i = Index::new_dyn(2);
+    let bond = Index::new_dyn(8);
+    let k = Index::new_dyn(4);
+
+    let data1: Vec<f64> = (0..16).map(|x| x as f64).collect();
+    let tensor1 = TensorDynLen::new(
+        vec![i.clone(), bond.clone()],
+        vec![2, 8],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+    );
+    let n1 = tn.add_tensor_auto_name(tensor1);
+
+    let data2: Vec<f64> = (0..32).map(|x| x as f64).collect();
+    let tensor2 = TensorDynLen::new(
+        vec![bond.clone(), k.clone()],
+        vec![8, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+    );
+    let n2 = tn.add_tensor_auto_name(tensor2);
+
+    let edge = tn.connect(n1, &bond, n2, &bond).unwrap();
+
+    // Original bond dimension
+    assert_eq!(tn.bond_index(edge).unwrap().size(), 8);
+
+    // Truncate in-place with max_rank = 4
+    tn.truncate_mut(std::iter::once(n2), None, Some(4)).unwrap();
+
+    // Bond should now be at most 4
+    let new_edge = tn.edges_for_node(n1)[0].0;
+    assert!(tn.bond_index(new_edge).unwrap().size() <= 4);
+}
+
+#[test]
+fn test_truncate_three_node_chain() {
+    let (tn, n1, _n2, n3, e12, e23, _b12, _b23) = create_three_node_chain();
+
+    // Original bond dimensions
+    assert_eq!(tn.bond_index(e12).unwrap().size(), 3);
+    assert_eq!(tn.bond_index(e23).unwrap().size(), 4);
+
+    // Truncate towards center (n2) with max_rank = 2
+    let truncated = tn.truncate(std::iter::once(n1), None, Some(2)).unwrap();
+
+    // All bonds should now be at most 2
+    for (edge, _) in truncated.edges_for_node(n1) {
+        assert!(truncated.bond_index(edge).unwrap().size() <= 2);
+    }
+    for (edge, _) in truncated.edges_for_node(n3) {
+        assert!(truncated.bond_index(edge).unwrap().size() <= 2);
+    }
+}
+
+#[test]
+fn test_truncate_with_rtol() {
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
+
+    let i = Index::new_dyn(2);
+    let bond = Index::new_dyn(5);
+    let k = Index::new_dyn(3);
+
+    // Create a low-rank tensor (rank ~1)
+    let mut data1 = vec![0.0f64; 10];
+    data1[0] = 1.0;
+    data1[5] = 1.0;
+    let tensor1 = TensorDynLen::new(
+        vec![i.clone(), bond.clone()],
+        vec![2, 5],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+    );
+    let n1 = tn.add_tensor_auto_name(tensor1);
+
+    let mut data2 = vec![0.0f64; 15];
+    data2[0] = 1.0;
+    data2[1] = 1.0;
+    data2[2] = 1.0;
+    let tensor2 = TensorDynLen::new(
+        vec![bond.clone(), k.clone()],
+        vec![5, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+    );
+    let n2 = tn.add_tensor_auto_name(tensor2);
+
+    tn.connect(n1, &bond, n2, &bond).unwrap();
+
+    // Truncate with rtol - should reduce rank significantly for low-rank data
+    let truncated = tn.truncate(std::iter::once(n2), Some(1e-10), None).unwrap();
+
+    // Bond dimension should be reduced
+    let new_edge = truncated.edges_for_node(n1)[0].0;
+    let new_bond_size = truncated.bond_index(new_edge).unwrap().size();
+    // The effective rank should be 1 or 2
+    assert!(new_bond_size <= 2, "Expected bond_size <= 2, got {}", new_bond_size);
+}
+
+// ============================================================================
 // DynTreeTN Tests (in dyn_treetn module)
 // ============================================================================
 

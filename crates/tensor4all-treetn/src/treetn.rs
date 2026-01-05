@@ -2236,6 +2236,314 @@ where
             Err(e) => Err(e),
         }
     }
+
+    // ========================================================================
+    // Truncation methods
+    // ========================================================================
+
+    /// Truncate the tree tensor network towards the specified ortho_region with SVD.
+    ///
+    /// This performs a sweep from leaves to the ortho_region, truncating bond dimensions
+    /// at each edge using SVD with the specified tolerance and/or maximum rank.
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as the truncation center(s)
+    /// * `rtol` - Optional relative tolerance for truncation (singular values with σ_i/σ_max < rtol are dropped)
+    /// * `max_rank` - Optional maximum bond dimension
+    ///
+    /// # Returns
+    /// A new truncated TreeTN, or an error if validation fails or factorization fails.
+    pub fn truncate(
+        self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+        rtol: Option<f64>,
+        max_rank: Option<usize>,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+    {
+        self.truncate_with(ortho_region, CanonicalForm::Unitary, rtol, max_rank)
+    }
+
+    /// Truncate the tree tensor network towards the specified ortho_region with a specified algorithm.
+    ///
+    /// This performs a sweep from leaves to the ortho_region, truncating bond dimensions
+    /// at each edge using the specified algorithm (SVD, LU, or CI).
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as the truncation center(s)
+    /// * `form` - The canonical form / algorithm to use (Unitary=SVD, LU, CI)
+    /// * `rtol` - Optional relative tolerance for truncation
+    /// * `max_rank` - Optional maximum bond dimension
+    ///
+    /// # Returns
+    /// A new truncated TreeTN, or an error if validation fails or factorization fails.
+    pub fn truncate_with(
+        mut self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+        form: CanonicalForm,
+        rtol: Option<f64>,
+        max_rank: Option<usize>,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+    {
+        let alg = match form {
+            CanonicalForm::Unitary => FactorizeAlg::SVD, // Use SVD for truncation (not QR)
+            CanonicalForm::LU => FactorizeAlg::LU,
+            CanonicalForm::CI => FactorizeAlg::CI,
+        };
+
+        // 1. Validate tree structure
+        self.validate_tree()
+            .context("truncate_with: graph must be a tree")?;
+
+        // 2. Set ortho_region and validate connectivity
+        let ortho_region_v: Vec<V> = ortho_region.into_iter()
+            .map(V::from)
+            .collect();
+        self.set_ortho_region(ortho_region_v)
+            .context("truncate_with: failed to set ortho_region")?;
+
+        if self.ortho_region.is_empty() {
+            return Ok(self);
+        }
+
+        // Validate ortho_region connectivity
+        let g = self.graph.graph();
+        let start_node_name = self.ortho_region.iter().next()
+            .ok_or_else(|| anyhow::anyhow!("ortho_region unexpectedly empty"))?;
+        let start_node = self.graph.node_index(start_node_name)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in graph", start_node_name))?;
+        let mut stack = vec![start_node];
+        let mut seen_nodes = HashSet::new();
+        let mut seen_node_names = HashSet::new();
+        seen_nodes.insert(start_node);
+        seen_node_names.insert(start_node_name);
+        while let Some(v_node) = stack.pop() {
+            for nb_node in g.neighbors(v_node) {
+                if let Some(nb_node_name) = self.graph.node_name(nb_node) {
+                    if self.ortho_region.contains(nb_node_name) && seen_nodes.insert(nb_node) {
+                        seen_node_names.insert(nb_node_name);
+                        stack.push(nb_node);
+                    }
+                }
+            }
+        }
+        if seen_node_names.len() != self.ortho_region.len() {
+            return Err(anyhow::anyhow!(
+                "ortho_region is not connected: reached {} out of {} centers",
+                seen_node_names.len(),
+                self.ortho_region.len()
+            ))
+            .context("truncate_with: ortho_region must form a connected subtree");
+        }
+
+        // 3. Multi-source BFS to compute distances from ortho_region
+        let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut bfs_queue = VecDeque::new();
+        for c in &self.ortho_region {
+            if let Some(c_node) = self.graph.node_index(c) {
+                dist.insert(c_node, 0);
+                bfs_queue.push_back(c_node);
+            }
+        }
+        {
+            let g = self.graph.graph();
+            while let Some(v) = bfs_queue.pop_front() {
+                let dv = dist[&v];
+                for nb in g.neighbors(v) {
+                    if !dist.contains_key(&nb) {
+                        dist.insert(nb, dv + 1);
+                        bfs_queue.push_back(nb);
+                    }
+                }
+            }
+        }
+
+        // 4. Process nodes in order of decreasing distance (farthest first)
+        let mut nodes_by_distance: Vec<(NodeIndex, usize)> = dist
+            .iter()
+            .map(|(&node, &d)| (node, d))
+            .collect();
+        nodes_by_distance.sort_by(|a, b| b.1.cmp(&a.1));
+
+        for (v, _dv) in nodes_by_distance {
+            // Skip nodes in ortho_region
+            let v_node_name = self.graph.node_name(v);
+            if v_node_name.map(|v| self.ortho_region.contains(v)).unwrap_or(false) {
+                continue;
+            }
+
+            // Find parent: neighbor with distance one less
+            let v_dist = dist[&v];
+            let parent_dist = v_dist.checked_sub(1)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} at distance 0 but not in ortho_region", v))
+                .context("truncate_with: distance calculation error")?;
+
+            let (parent, edge) = {
+                let g = self.graph.graph();
+                let parent = g
+                    .neighbors(v)
+                    .find(|&nb| {
+                        dist.get(&nb).map(|&d| d == parent_dist).unwrap_or(false)
+                    })
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "Node {:?} at distance {} has no parent",
+                        v, v_dist
+                    ))
+                    .context("truncate_with: tree structure violation")?;
+
+                let edge = g
+                    .edges_connecting(v, parent)
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("No edge found between node {:?} and parent {:?}", v, parent))
+                    .context("truncate_with: edge not found")?
+                    .id();
+                (parent, edge)
+            };
+
+            // Get the bond index on v-side
+            let parent_bond_v = self
+                .edge_index_for_node(edge, v)
+                .context("truncate_with: failed to get parent bond index on v")?
+                .clone();
+
+            // Get the tensor at node v
+            let tensor_v = self
+                .tensor(v)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
+                .context("truncate_with: tensor not found")?;
+
+            // Build left_inds = all indices except parent bond
+            let left_inds: Vec<Index<Id, Symm>> = tensor_v
+                .indices
+                .iter()
+                .filter(|idx| idx.id != parent_bond_v.id)
+                .cloned()
+                .collect();
+            if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
+                return Err(anyhow::anyhow!(
+                    "Cannot truncate node {:?}: need at least one left index and one right index",
+                    v
+                ))
+                .context("truncate_with: invalid tensor rank for factorization");
+            }
+
+            // Set up factorization options WITH truncation parameters
+            let factorize_options = FactorizeOptions {
+                alg,
+                canonical: Canonical::Left,
+                rtol,
+                max_rank,
+            };
+
+            // Perform factorization with truncation
+            let factorize_result = factorize(tensor_v, &left_inds, &factorize_options)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+                .context("truncate_with: factorization failed")?;
+
+            let left_tensor = factorize_result.left;
+            let right_tensor = factorize_result.right;
+
+            // Get edge index for parent side
+            let edge_index_parent = self
+                .edge_index_for_node(edge, parent)
+                .context("truncate_with: failed to get edge index for parent")?
+                .clone();
+
+            let parent_tensor = self
+                .tensor(parent)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
+                .context("truncate_with: parent tensor not found")?;
+
+            let updated_parent_tensor = parent_tensor
+                .tensordot(&right_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
+                .context("truncate_with: failed to absorb right factor into parent tensor")?;
+
+            // Update bond index FIRST
+            let new_bond_index = factorize_result.bond_index;
+            self.replace_edge_bond(edge, new_bond_index.clone())
+                .context("truncate_with: failed to update edge bond index")?;
+
+            // Update tensors
+            self.replace_tensor(v, left_tensor)
+                .context("truncate_with: failed to replace tensor at node v")?;
+            self.replace_tensor(parent, updated_parent_tensor)
+                .context("truncate_with: failed to replace tensor at parent node")?;
+
+            // Set ortho_towards to point towards parent
+            let parent_name = self.graph.node_name(parent)
+                .ok_or_else(|| anyhow::anyhow!("Parent node name not found"))?
+                .clone();
+            self.set_edge_ortho_towards(edge, Some(parent_name))
+                .context("truncate_with: failed to set ortho_towards")?;
+        }
+
+        // Set the canonical form
+        self.canonical_form = Some(form);
+
+        Ok(self)
+    }
+
+    /// Truncate the tree tensor network in-place towards the specified ortho_region.
+    ///
+    /// This is the `&mut self` version of `truncate`.
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as the truncation center(s)
+    /// * `rtol` - Optional relative tolerance for truncation
+    /// * `max_rank` - Optional maximum bond dimension
+    pub fn truncate_mut(
+        &mut self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+        rtol: Option<f64>,
+        max_rank: Option<usize>,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+        Self: Default,
+    {
+        self.truncate_with_mut(ortho_region, CanonicalForm::Unitary, rtol, max_rank)
+    }
+
+    /// Truncate the tree tensor network in-place with a specified algorithm.
+    ///
+    /// This is the `&mut self` version of `truncate_with`.
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as the truncation center(s)
+    /// * `form` - The canonical form / algorithm to use
+    /// * `rtol` - Optional relative tolerance for truncation
+    /// * `max_rank` - Optional maximum bond dimension
+    pub fn truncate_with_mut(
+        &mut self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+        form: CanonicalForm,
+        rtol: Option<f64>,
+        max_rank: Option<usize>,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+        Self: Default,
+    {
+        let taken = std::mem::take(self);
+        match taken.truncate_with(ortho_region, form, rtol, max_rank) {
+            Ok(truncated) => {
+                *self = truncated;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
 }
 
 impl<Id, Symm, V> Default for TreeTN<Id, Symm, V>
