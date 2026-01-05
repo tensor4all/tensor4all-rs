@@ -10,6 +10,7 @@ use std::panic::catch_unwind;
 use std::ptr;
 
 use num_complex::Complex64;
+use tensor4all_core_linalg::default_svd_rtol;
 use tensor4all_tensortrain::{
     AbstractTensorTrain, CompressionMethod, CompressionOptions, TensorTrain,
 };
@@ -1334,6 +1335,28 @@ pub extern "C" fn t4a_tt_c64_compressed(
     }));
 
     result.unwrap_or(ptr::null_mut())
+}
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+/// Get the default relative tolerance (rtol) for SVD truncation
+///
+/// This is the default value used by tensor train compression when no tolerance
+/// is explicitly specified. The rtol represents the relative Frobenius error:
+///   ||A - A_approx||_F / ||A||_F <= rtol
+///
+/// # Relation to ITensors.jl cutoff
+/// ITensors.jl uses `cutoff` (squared relative error). The conversion is:
+///   rtol = sqrt(cutoff)
+///   cutoff = rtol^2
+///
+/// # Returns
+/// - The default rtol value (currently 1e-12)
+#[no_mangle]
+pub extern "C" fn t4a_get_default_svd_rtol() -> libc::c_double {
+    default_svd_rtol()
 }
 
 #[cfg(test)]
