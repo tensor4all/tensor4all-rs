@@ -8,6 +8,7 @@ use tensor4all::TensorDynLen;
 use tensor4all::Storage;
 use tensor4all::index::{Index, NoSymmSpace, Symmetry, DynId};
 use tensor4all::index_ops::common_inds;
+use tensor4all::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
 use crate::connection::Connection;
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -37,7 +38,7 @@ where
     /// Named graph wrapper: provides mapping between node names (V) and NodeIndex
     graph: NamedGraph<V, TensorDynLen<Id, Symm>, Connection<Id, Symm>>,
     /// Orthogonalization region (ortho_region).
-    /// When empty, the network is not orthogonalized.
+    /// When empty, the network is not canonized.
     /// When non-empty, contains the node names (V) of the orthogonalization region.
     /// The region must form a connected subtree in the network.
     ortho_region: HashSet<V>,
@@ -595,7 +596,7 @@ where
 
     /// Get a reference to the orthogonalization region (using node names).
     ///
-    /// When empty, the network is not orthogonalized.
+    /// When empty, the network is not canonized.
     pub fn ortho_region(&self) -> &HashSet<V> {
         &self.ortho_region
     }
@@ -613,10 +614,10 @@ where
         HashSet::new()
     }
 
-    /// Check if the network is orthogonalized.
+    /// Check if the network is canonized.
     ///
     /// Returns `true` if `ortho_region` is non-empty, `false` otherwise.
-    pub fn is_orthogonalized(&self) -> bool {
+    pub fn is_canonized(&self) -> bool {
         !self.ortho_region.is_empty()
     }
 
@@ -648,7 +649,7 @@ where
         self.set_ortho_region(region)
     }
 
-    /// Clear the orthogonalization region (mark network as not orthogonalized).
+    /// Clear the orthogonalization region (mark network as not canonized).
     pub fn clear_ortho_region(&mut self) {
         self.ortho_region.clear();
     }
@@ -775,7 +776,7 @@ where
     /// - Storage types are not dense (only DenseF64 and DenseC64 are supported)
     ///
     /// # Notes
-    /// - The result is not orthogonalized; `ortho_region` is cleared.
+    /// - The result is not canonized; `ortho_region` is cleared.
     /// - Bond dimensions increase: new_dim = dim_A + dim_B.
     /// - Only dense storage (DenseF64/DenseC64) is currently supported.
     pub fn add(self, other: Self) -> Result<Self>
@@ -1082,7 +1083,7 @@ where
             result.connect(src_node, shared_idx, tgt_node, shared_idx)?;
         }
 
-        // Clear ortho_region (sum is not orthogonalized)
+        // Clear ortho_region (sum is not canonized)
         result.clear_ortho_region();
 
         Ok(result)
@@ -1201,13 +1202,13 @@ where
     /// Validate that `ortho_region` and edge `ortho_towards` are consistent.
     ///
     /// Rules:
-    /// - If `ortho_region` is empty (not orthogonalized), all edges must have `ortho_towards == None`.
+    /// - If `ortho_region` is empty (not canonized), all edges must have `ortho_towards == None`.
     /// - If `ortho_region` is non-empty, it must be connected in the tree (forms a subtree).
     /// - `ortho_towards == None` is allowed **only** when both edge endpoints are in `ortho_region`.
     /// - For any edge with at least one endpoint outside `ortho_region`, `ortho_towards` must be `Some(...)`
     ///   and must point towards the endpoint with smaller distance to `ortho_region`.
     pub fn validate_ortho_consistency(&self) -> Result<()> {
-        // If not orthogonalized, require no edge directions.
+        // If not canonized, require no edge directions.
         if self.ortho_region.is_empty() {
             for e in self.graph.graph().edge_indices() {
                 let conn = self.connection(e).ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
@@ -1355,31 +1356,18 @@ where
         Ok(())
     }
 
-    /// Orthogonalize the network using QR decomposition towards the specified ortho_region.
+    /// Canonize the network towards the specified ortho_region.
     ///
-    /// This method consumes the TreeTN and returns a new orthogonalized TreeTN.
-    /// The algorithm:
-    /// 1. Validates that the graph is a tree
-    /// 2. Sets the ortho_region and validates connectivity
-    /// 3. Computes distances from ortho_region using BFS
-    /// 4. Processes nodes in order of decreasing distance (farthest first)
-    /// 5. For each node, performs QR decomposition on edges pointing towards ortho_region
-    /// 6. Absorbs R factors into parent nodes using tensordot
+    /// This method consumes the TreeTN and returns a new canonized TreeTN.
+    /// Uses the default algorithm (QR decomposition).
     ///
     /// # Arguments
-    /// * `ortho_region` - The nodes that will serve as orthogonalization centers
+    /// * `ortho_region` - The nodes that will serve as canonization centers
     ///
     /// # Returns
-    /// A new orthogonalized TreeTN, or an error if validation fails or QR decomposition fails.
-    ///
-    /// # Errors
-    /// Returns an error if:
-    /// - The graph is not a tree
-    /// - ortho_region are not connected
-    /// - QR decomposition fails
-    /// - Tensor storage types are not DenseF64 or DenseC64
-    pub fn orthogonalize_with_qr(
-        mut self,
+    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    pub fn canonize(
+        self,
         ortho_region: impl IntoIterator<Item = NodeIndex>,
     ) -> Result<Self>
     where
@@ -1387,11 +1375,45 @@ where
         Symm: Clone + Symmetry + From<NoSymmSpace>,
         V: From<NodeIndex>,
     {
-        use tensor4all::qr;
+        self.canonize_with(ortho_region, FactorizeAlg::QR)
+    }
 
+    /// Canonize the network towards the specified ortho_region using a specified algorithm.
+    ///
+    /// This method consumes the TreeTN and returns a new canonized TreeTN.
+    /// The algorithm:
+    /// 1. Validates that the graph is a tree
+    /// 2. Sets the ortho_region and validates connectivity
+    /// 3. Computes distances from ortho_region using BFS
+    /// 4. Processes nodes in order of decreasing distance (farthest first)
+    /// 5. For each node, performs factorization on edges pointing towards ortho_region
+    /// 6. Absorbs the right factor into parent nodes using tensordot
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as canonization centers
+    /// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
+    ///
+    /// # Returns
+    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The graph is not a tree
+    /// - ortho_region are not connected
+    /// - Factorization fails
+    pub fn canonize_with(
+        mut self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+        alg: FactorizeAlg,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+    {
         // 1. Validate tree structure
         self.validate_tree()
-            .context("orthogonalize_with_qr: graph must be a tree")?;
+            .context("canonize_with: graph must be a tree")?;
 
         // 2. Set ortho_region and validate connectivity
         // Convert NodeIndex to V
@@ -1399,7 +1421,7 @@ where
             .map(V::from)
             .collect();
         self.set_ortho_region(ortho_region_v)
-            .context("orthogonalize_with_qr: failed to set ortho_region")?;
+            .context("canonize_with: failed to set ortho_region")?;
 
         if self.ortho_region.is_empty() {
             return Ok(self); // Nothing to do if no centers
@@ -1432,26 +1454,26 @@ where
                 seen_node_names.len(),
                 self.ortho_region.len()
             ))
-            .context("orthogonalize_with_qr: ortho_region must form a connected subtree");
+            .context("canonize_with: ortho_region must form a connected subtree");
         }
 
         // 3. Multi-source BFS to compute distances from ortho_region
         let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
-        let mut q = VecDeque::new();
+        let mut bfs_queue = VecDeque::new();
         for c in &self.ortho_region {
             if let Some(c_node) = self.graph.node_index(c) {
                 dist.insert(c_node, 0);
-                q.push_back(c_node);
+                bfs_queue.push_back(c_node);
             }
         }
         {
             let g = self.graph.graph();
-            while let Some(v) = q.pop_front() {
+            while let Some(v) = bfs_queue.pop_front() {
                 let dv = dist[&v];
                 for nb in g.neighbors(v) {
                     if !dist.contains_key(&nb) {
                         dist.insert(nb, dv + 1);
-                        q.push_back(nb);
+                        bfs_queue.push_back(nb);
                     }
                 }
             }
@@ -1475,7 +1497,7 @@ where
             let v_dist = dist[&v];
             let parent_dist = v_dist.checked_sub(1)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} at distance 0 but not in ortho_region", v))
-                .context("orthogonalize_with_qr: distance calculation error")?;
+                .context("canonize_with: distance calculation error")?;
 
             let (parent, edge) = {
                 let g = self.graph.graph();
@@ -1490,31 +1512,31 @@ where
                         v_dist,
                         parent_dist
                     ))
-                    .context("orthogonalize_with_qr: tree structure violation")?;
+                    .context("canonize_with: tree structure violation")?;
 
                 // Find the edge between v and parent
                 let edge = g
                     .edges_connecting(v, parent)
                     .next()
                     .ok_or_else(|| anyhow::anyhow!("No edge found between node {:?} and parent {:?}", v, parent))
-                    .context("orthogonalize_with_qr: edge not found")?
+                    .context("canonize_with: edge not found")?
                     .id();
                 (parent, edge)
             };
 
             // Get the bond index on v-side corresponding to the parent edge.
-            // We will place this index on the RIGHT side of the QR unfolding so that
-            // R carries this bond and can be absorbed into the parent tensor.
+            // We will place this index on the RIGHT side of the factorization unfolding so that
+            // the right factor carries this bond and can be absorbed into the parent tensor.
             let parent_bond_v = self
                 .edge_index_for_node(edge, v)
-                .context("orthogonalize_with_qr: failed to get parent bond index on v")?
+                .context("canonize_with: failed to get parent bond index on v")?
                 .clone();
 
             // Get the tensor at node v (reference)
             let tensor_v = self
                 .tensor(v)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
-                .context("orthogonalize_with_qr: tensor not found")?;
+                .context("canonize_with: tensor not found")?;
 
             // Build left_inds = all indices of tensor_v EXCEPT the parent bond.
             let left_inds: Vec<Index<Id, Symm>> = tensor_v
@@ -1525,69 +1547,65 @@ where
                 .collect();
             if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
                 return Err(anyhow::anyhow!(
-                    "Cannot QR-orthogonalize node {:?}: need at least one left index and at least one right index",
+                    "Cannot canonize node {:?}: need at least one left index and at least one right index",
                     v
                 ))
-                .context("orthogonalize_with_qr: invalid tensor rank for QR");
+                .context("canonize_with: invalid tensor rank for factorization");
             }
 
-            // Determine storage type and perform QR decomposition
-            let (q_tensor, r_tensor) = match tensor_v.storage.as_ref() {
-                Storage::DenseF64(_) => qr::<Id, Symm, f64>(tensor_v, &left_inds)
-                    .map_err(|e| anyhow::anyhow!("QR decomposition failed: {}", e))
-                    .context("orthogonalize_with_qr: QR decomposition failed for f64")?,
-                Storage::DenseC64(_) => qr::<Id, Symm, Complex64>(tensor_v, &left_inds)
-                    .map_err(|e| anyhow::anyhow!("QR decomposition failed: {}", e))
-                    .context("orthogonalize_with_qr: QR decomposition failed for Complex64")?,
-                _ => {
-                    return Err(anyhow::anyhow!(
-                        "Unsupported storage type for QR decomposition (only DenseF64 and DenseC64 are supported)"
-                    ))
-                    .context("orthogonalize_with_qr: unsupported storage type");
-                }
+            // Set up factorization options
+            let factorize_options = FactorizeOptions {
+                alg,
+                canonical: Canonical::Left,
+                rtol: None,
+                max_rank: None,
             };
 
-            // In this split, R must contain the parent bond (as part of its right indices).
-            // We will absorb R into the parent along (edge_index_parent, parent_bond_v).
+            // Perform factorization using tensor-level factorize
+            let factorize_result = factorize(tensor_v, &left_inds, &factorize_options)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
+                .context("canonize_with: factorization failed")?;
+
+            let left_tensor = factorize_result.left;
+            let right_tensor = factorize_result.right;
+
+            // In this split, right_tensor must contain the parent bond (as part of its right indices).
+            // We will absorb right_tensor into the parent along (edge_index_parent, parent_bond_v).
             let edge_index_parent = self
                 .edge_index_for_node(edge, parent)
-                .context("orthogonalize_with_qr: failed to get edge index for parent")?
+                .context("canonize_with: failed to get edge index for parent")?
                 .clone();
 
             let parent_tensor = self
                 .tensor(parent)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
-                .context("orthogonalize_with_qr: parent tensor not found")?;
+                .context("canonize_with: parent tensor not found")?;
 
             let updated_parent_tensor = parent_tensor
-                .tensordot(&r_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
-                .context("orthogonalize_with_qr: failed to absorb R into parent tensor")?;
+                .tensordot(&right_tensor, &[(edge_index_parent.clone(), parent_bond_v.clone())])
+                .context("canonize_with: failed to absorb right factor into parent tensor")?;
 
-            // The new bond index is the QR-created bond shared between Q and R.
-            // It is always the last index of Q and the first index of R.
-            let new_bond_index = q_tensor
-                .indices
-                .last()
-                .ok_or_else(|| anyhow::anyhow!("Q tensor has no indices"))?
-                .clone();
+            // The new bond index is the factorization-created bond shared between left and right.
+            // It is the bond_index from the factorize result.
+            let new_bond_index = factorize_result.bond_index;
 
             // Update the connection bond indices FIRST, so replace_tensor validation matches.
             self.replace_edge_bond(edge, new_bond_index.clone(), new_bond_index.clone())
-                .context("orthogonalize_with_qr: failed to update edge bond indices")?;
+                .context("canonize_with: failed to update edge bond indices")?;
 
             // Now update tensors. These validations should pass because the edge expects new_bond_index.
-            self.replace_tensor(v, q_tensor)
-                .context("orthogonalize_with_qr: failed to replace tensor at node v")?;
+            self.replace_tensor(v, left_tensor)
+                .context("canonize_with: failed to replace tensor at node v")?;
             self.replace_tensor(parent, updated_parent_tensor)
-                .context("orthogonalize_with_qr: failed to replace tensor at parent node")?;
+                .context("canonize_with: failed to replace tensor at parent node")?;
 
             // Set ortho_towards to point towards parent (ortho_region direction)
             let ortho_towards_index = self
                 .edge_index_for_node(edge, parent)
-                .context("orthogonalize_with_qr: failed to get ortho_towards index for parent")?
+                .context("canonize_with: failed to get ortho_towards index for parent")?
                 .clone();
             self.set_edge_ortho_towards(edge, Some(ortho_towards_index))
-                .context("orthogonalize_with_qr: failed to set ortho_towards")?;
+                .context("canonize_with: failed to set ortho_towards")?;
         }
 
         Ok(self)
@@ -2225,8 +2243,8 @@ impl<V: Clone + Hash + Eq> TreeTopology<V> {
 ///
 /// # Algorithm
 ///
-/// 1. Start from a leaf node, QR decompose to separate that node's physical indices
-/// 2. Contract R with remaining tensor, repeat for next edge
+/// 1. Start from a leaf node, factorize to separate that node's physical indices
+/// 2. Contract the right factor with remaining tensor, repeat for next edge
 /// 3. Continue until all edges are processed
 ///
 /// # Arguments
@@ -2240,7 +2258,7 @@ impl<V: Clone + Hash + Eq> TreeTopology<V> {
 /// Returns an error if:
 /// - The topology is invalid
 /// - Physical index positions don't match the tensor
-/// - QR decomposition fails
+/// - Factorization fails
 pub fn decompose_tensor_to_treetn<Id, Symm, V>(
     tensor: &TensorDynLen<Id, Symm>,
     topology: &TreeTopology<V>,
@@ -2250,8 +2268,43 @@ where
     Symm: Clone + Symmetry + From<NoSymmSpace>,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
-    use tensor4all::qr::qr;
+    decompose_tensor_to_treetn_with(tensor, topology, FactorizeAlg::QR)
+}
 
+/// Decompose a dense tensor into a TreeTN using a specified factorization algorithm.
+///
+/// This function takes a dense tensor and a tree topology specification, then
+/// recursively decomposes the tensor using the specified algorithm to create a TreeTN.
+///
+/// # Algorithm
+///
+/// 1. Start from a leaf node, factorize to separate that node's physical indices
+/// 2. Contract the right factor with remaining tensor, repeat for next edge
+/// 3. Continue until all edges are processed
+///
+/// # Arguments
+/// * `tensor` - The dense tensor to decompose
+/// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
+/// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
+///
+/// # Returns
+/// A TreeTN representing the decomposed tensor.
+///
+/// # Errors
+/// Returns an error if:
+/// - The topology is invalid
+/// - Physical index positions don't match the tensor
+/// - Factorization fails
+pub fn decompose_tensor_to_treetn_with<Id, Symm, V>(
+    tensor: &TensorDynLen<Id, Symm>,
+    topology: &TreeTopology<V>,
+    alg: FactorizeAlg,
+) -> Result<TreeTN<Id, Symm, V>>
+where
+    Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
+    Symm: Clone + Symmetry + From<NoSymmSpace>,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+{
     topology.validate()?;
 
     if topology.nodes.len() == 1 {
@@ -2329,6 +2382,14 @@ where
     // Store bond indices between nodes: (node_a, node_b) -> (index_on_a, index_on_b)
     let mut bond_indices: HashMap<(V, V), (Index<Id, Symm>, Index<Id, Symm>)> = HashMap::new();
 
+    // Set up factorization options
+    let factorize_options = FactorizeOptions {
+        alg,
+        canonical: Canonical::Left,
+        rtol: None,
+        max_rank: None,
+    };
+
     // Process nodes in post-order (leaves first)
     for i in 0..traversal_order.len() - 1 {
         let (node, parent) = &traversal_order[i];
@@ -2348,20 +2409,23 @@ where
             continue;
         }
 
-        // Perform QR decomposition
-        // Q will have the node's physical indices + bond index
-        // R will have bond index + remaining indices
-        let (q, r) = qr::<Id, Symm, f64>(&current_tensor, &left_inds)
-            .map_err(|e| anyhow::anyhow!("QR decomposition failed: {:?}", e))?;
+        // Perform factorization using tensor-level factorize
+        // left will have the node's physical indices + bond index
+        // right will have bond index + remaining indices
+        let factorize_result = factorize(&current_tensor, &left_inds, &factorize_options)
+            .map_err(|e| anyhow::anyhow!("Factorization failed: {:?}", e))?;
 
-        // Store Q as the node's tensor (with physical indices + bond to parent)
-        node_tensors.insert(node.clone(), q.clone());
+        let left = factorize_result.left;
+        let right = factorize_result.right;
+        let bond_index = factorize_result.bond_index;
+
+        // Store left as the node's tensor (with physical indices + bond to parent)
+        node_tensors.insert(node.clone(), left);
 
         // Store the bond index connecting this node to its parent
-        let bond_idx_node = q.indices.last().cloned()
-            .ok_or_else(|| anyhow::anyhow!("Q has no indices"))?;
-        let bond_idx_parent = r.indices.first().cloned()
-            .ok_or_else(|| anyhow::anyhow!("R has no indices"))?;
+        // The bond_index is shared between left and right
+        let bond_idx_node = bond_index.clone();
+        let bond_idx_parent = bond_index;
 
         // Store in canonical order
         let key = if *node < *parent_node {
@@ -2375,8 +2439,8 @@ where
             bond_indices.insert(key, (bond_idx_parent, bond_idx_node));
         }
 
-        // R becomes the current tensor for the next iteration
-        current_tensor = r;
+        // right becomes the current tensor for the next iteration
+        current_tensor = right;
     }
 
     // The last node (root) gets the remaining tensor
@@ -2387,8 +2451,8 @@ where
     let mut tn = TreeTN::<Id, Symm, V>::new();
 
     // Add all tensors
-    for (node_name, tensor) in &node_tensors {
-        tn.add_tensor_with_name(node_name.clone(), tensor.clone())?;
+    for (node_name, t) in &node_tensors {
+        tn.add_tensor_with_name(node_name.clone(), t.clone())?;
     }
 
     // Add connections

@@ -677,7 +677,7 @@ fn test_treetn_validate_tree_empty() {
 #[test]
 fn test_auto_centers_empty() {
     let tn = TreeTN::<DynId>::new();
-    assert!(!tn.is_orthogonalized());
+    assert!(!tn.is_canonized());
     assert!(tn.ortho_region().is_empty());
 }
 
@@ -693,13 +693,13 @@ fn test_set_auto_centers() {
     let tensor = TensorDynLen::new(indices, dims, storage);
     let node = tn.add_tensor(tensor);
     
-    // Initially not orthogonalized
-    assert!(!tn.is_orthogonalized());
+    // Initially not canonized
+    assert!(!tn.is_canonized());
     
     // Set ortho_region
     let result = tn.set_ortho_region(vec![node]);
     assert!(result.is_ok());
-    assert!(tn.is_orthogonalized());
+    assert!(tn.is_canonized());
     assert_eq!(tn.ortho_region().len(), 1);
     assert!(tn.ortho_region().contains(&node));
 }
@@ -738,7 +738,7 @@ fn test_add_remove_auto_center() {
     // Add first node to region
     let result = tn.add_to_ortho_region(node1);
     assert!(result.is_ok());
-    assert!(tn.is_orthogonalized());
+    assert!(tn.is_canonized());
     assert_eq!(tn.ortho_region().len(), 1);
     
     // Add second node to region
@@ -756,7 +756,7 @@ fn test_add_remove_auto_center() {
     
     // Remove second node from region
     tn.remove_from_ortho_region(&node2);
-    assert!(!tn.is_orthogonalized());
+    assert!(!tn.is_canonized());
     assert!(tn.ortho_region().is_empty());
 }
 
@@ -782,10 +782,10 @@ fn test_clear_auto_centers() {
     let node = tn.add_tensor(tensor);
     
     tn.set_ortho_region(vec![node]).unwrap();
-    assert!(tn.is_orthogonalized());
+    assert!(tn.is_canonized());
     
     tn.clear_ortho_region();
-    assert!(!tn.is_orthogonalized());
+    assert!(!tn.is_canonized());
     assert!(tn.ortho_region().is_empty());
 }
 
@@ -874,44 +874,44 @@ fn test_validate_ortho_consistency_chain_points_towards_centers() {
 }
 
 #[test]
-fn test_orthogonalize_with_qr_simple() {
+fn test_canonize_simple() {
     // Create a simple 2-node tree: n1 -- n2
     let mut tn: TreeTN<DynId> = TreeTN::new();
-    
+
     let a1 = Index::new_dyn(2);
     let b1 = Index::new_dyn(3);
     let a2 = Index::new_dyn(3);
     let b2 = Index::new_dyn(4);
-    
+
     let indices1 = vec![a1.clone(), b1.clone()];
     let dims1 = vec![2, 3];
     let storage1 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
     let tensor1: TensorDynLen<DynId> = TensorDynLen::new(indices1, dims1, storage1);
-    
+
     let indices2 = vec![a2.clone(), b2.clone()];
     let dims2 = vec![3, 4];
     let storage2 = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12])));
     let tensor2: TensorDynLen<DynId> = TensorDynLen::new(indices2, dims2, storage2);
-    
+
     let n1 = tn.add_tensor(tensor1);
     let n2 = tn.add_tensor(tensor2);
-    
+
     let _e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
-    
-    // Orthogonalize towards n2
-    let tn_ortho = tn.orthogonalize_with_qr(vec![n2]).unwrap();
-    
-    // Verify that the network is orthogonalized
-    assert!(tn_ortho.is_orthogonalized());
-    assert!(tn_ortho.ortho_region().contains(&n2));
-    
+
+    // Canonize towards n2
+    let tn_canon = tn.canonize(vec![n2]).unwrap();
+
+    // Verify that the network is canonized
+    assert!(tn_canon.is_canonized());
+    assert!(tn_canon.ortho_region().contains(&n2));
+
     // Verify ortho consistency
-    assert!(tn_ortho.validate_ortho_consistency().is_ok());
+    assert!(tn_canon.validate_ortho_consistency().is_ok());
 }
 
 #[test]
-fn test_orthogonalize_with_qr_mixed_storage() {
-    // Test orthogonalization with mixed f64 and Complex64 storage
+fn test_canonize_mixed_storage() {
+    // Test canonization with mixed f64 and Complex64 storage
     let mut tn: TreeTN<DynId> = TreeTN::new();
 
     let a1 = Index::new_dyn(2);
@@ -936,15 +936,15 @@ fn test_orthogonalize_with_qr_mixed_storage() {
 
     let _e12 = tn.connect(n1, &b1, n2, &a2).unwrap();
 
-    // Orthogonalize towards n2
-    let tn_ortho = tn.orthogonalize_with_qr(vec![n2]).unwrap();
+    // Canonize towards n2
+    let tn_canon = tn.canonize(vec![n2]).unwrap();
 
-    // Verify that the network is orthogonalized
-    assert!(tn_ortho.is_orthogonalized());
-    assert!(tn_ortho.ortho_region().contains(&n2));
+    // Verify that the network is canonized
+    assert!(tn_canon.is_canonized());
+    assert!(tn_canon.ortho_region().contains(&n2));
 
     // Verify ortho consistency
-    assert!(tn_ortho.validate_ortho_consistency().is_ok());
+    assert!(tn_canon.validate_ortho_consistency().is_ok());
 }
 
 // ============================================================================
