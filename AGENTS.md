@@ -318,3 +318,62 @@ tt = tensor4all.tensortrain.TensorTrainF64.zeros([2, 3, 2])
 - **Separate test files**: Each submodule should have its own test file (e.g., `test_tensortrain.jl`, `test_tensortrain.py`)
 - **Do not use `bindings/` directory**: Place bindings directly under `julia/` and `python/` at the repository root
 
+### Truncation Tolerance Options (cutoff vs rtol)
+
+Language bindings (Julia, Python) must support **both** `cutoff` (ITensors.jl style) and `rtol` (tensor4all-rs style) parameters for truncation tolerance:
+
+**Conversion relation:** `cutoff = rtol²` → `rtol = √cutoff`
+
+| Library | Parameter | Semantics |
+|---------|-----------|-----------|
+| tensor4all-rs | `rtol` | Relative Frobenius error: `‖A - A_approx‖_F / ‖A‖_F ≤ rtol` |
+| ITensors.jl | `cutoff` | Squared relative error: `Σ_{discarded} σ²_i / Σ_i σ²_i ≤ cutoff` |
+
+**Implementation requirements:**
+
+1. **Both options must be accepted** in all truncation-related functions
+2. **Error if both specified**: Throw an error with a helpful message explaining the relationship
+3. **No hardcoding of defaults**: Read default `rtol` value from Rust via C API (e.g., `t4a_get_default_rtol()`)
+4. **Internally use rtol**: Convert `cutoff` to `rtol = √cutoff` and pass to Rust
+
+**Example pattern (Julia):**
+```julia
+function resolve_truncation_tolerance(; cutoff=nothing, rtol=nothing)
+    if cutoff !== nothing && rtol !== nothing
+        throw(ArgumentError(
+            "Cannot specify both cutoff and rtol. Use one:\n" *
+            "  - cutoff (ITensors style): discarded weight ratio\n" *
+            "  - rtol (tensor4all style): relative Frobenius error\n" *
+            "Relation: rtol = √cutoff, cutoff = rtol²"
+        ))
+    end
+
+    if cutoff !== nothing
+        return sqrt(cutoff)
+    elseif rtol !== nothing
+        return rtol
+    else
+        return get_default_rtol()  # Read from Rust C API
+    end
+end
+```
+
+**Example pattern (Python):**
+```python
+def resolve_truncation_tolerance(cutoff=None, rtol=None):
+    if cutoff is not None and rtol is not None:
+        raise ValueError(
+            "Cannot specify both cutoff and rtol. Use one:\n"
+            "  - cutoff (ITensors style): discarded weight ratio\n"
+            "  - rtol (tensor4all style): relative Frobenius error\n"
+            "Relation: rtol = sqrt(cutoff), cutoff = rtol**2"
+        )
+
+    if cutoff is not None:
+        return math.sqrt(cutoff)
+    elif rtol is not None:
+        return rtol
+    else:
+        return get_default_rtol()  # Read from Rust C API
+```
+
