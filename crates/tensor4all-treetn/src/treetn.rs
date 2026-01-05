@@ -1420,7 +1420,10 @@ where
 
     /// Canonize the network towards the specified ortho_region.
     ///
-    /// This method consumes the TreeTN and returns a new canonized TreeTN.
+    /// This is a smart canonization that checks the current state:
+    /// - If already canonized to the same ortho_region with the same form, returns unchanged
+    /// - Otherwise, performs full canonization
+    ///
     /// Uses the default canonical form (Unitary).
     ///
     /// # Arguments
@@ -1442,7 +1445,70 @@ where
 
     /// Canonize the network towards the specified ortho_region using a specified canonical form.
     ///
-    /// This method consumes the TreeTN and returns a new canonized TreeTN.
+    /// This is a smart canonization that checks the current state:
+    /// - If already canonized to the same ortho_region with the same form, returns unchanged
+    /// - Otherwise, performs full canonization via `force_canonize_with`
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as canonization centers
+    /// * `form` - The canonical form to use
+    ///
+    /// # Returns
+    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    pub fn canonize_with(
+        self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+        form: CanonicalForm,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+    {
+        let ortho_region_v: HashSet<V> = ortho_region.into_iter()
+            .map(V::from)
+            .collect();
+
+        // Check if already canonized to the same region
+        // TODO: Also check canonical form when we track it
+        if self.ortho_region == ortho_region_v {
+            // Already canonized to this region, return unchanged
+            return Ok(self);
+        }
+
+        // Convert back to NodeIndex for force_canonize_with
+        let ortho_region_indices: Vec<NodeIndex> = ortho_region_v.iter()
+            .filter_map(|v| self.graph.node_index(v))
+            .collect();
+
+        self.force_canonize_with(ortho_region_indices, form)
+    }
+
+    /// Force canonize the network towards the specified ortho_region.
+    ///
+    /// This method always performs full canonization, ignoring the current state.
+    /// Uses the default canonical form (Unitary).
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The nodes that will serve as canonization centers
+    ///
+    /// # Returns
+    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    pub fn force_canonize(
+        self,
+        ortho_region: impl IntoIterator<Item = NodeIndex>,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: From<NodeIndex>,
+    {
+        self.force_canonize_with(ortho_region, CanonicalForm::Unitary)
+    }
+
+    /// Force canonize the network towards the specified ortho_region using a specified canonical form.
+    ///
+    /// This method always performs full canonization, ignoring the current state.
     /// The algorithm:
     /// 1. Validates that the graph is a tree
     /// 2. Sets the ortho_region and validates connectivity
@@ -1466,7 +1532,7 @@ where
     /// - The graph is not a tree
     /// - ortho_region are not connected
     /// - Factorization fails
-    pub fn canonize_with(
+    pub fn force_canonize_with(
         mut self,
         ortho_region: impl IntoIterator<Item = NodeIndex>,
         form: CanonicalForm,
@@ -1683,6 +1749,10 @@ where
 
     /// Canonize the network towards the specified ortho_region using node names directly.
     ///
+    /// This is a smart canonization that checks the current state:
+    /// - If already canonized to the same ortho_region, returns unchanged
+    /// - Otherwise, performs full canonization via `force_canonize_by_names`
+    ///
     /// This is a variant of `canonize` that accepts node names (V) directly,
     /// rather than requiring conversion from `NodeIndex`. This is useful when
     /// `V` does not implement `From<NodeIndex>` (e.g., when `V = usize`).
@@ -1708,9 +1778,60 @@ where
     /// Canonize the network towards the specified ortho_region using node names directly
     /// with a specified canonical form.
     ///
-    /// This is a variant of `canonize_with` that accepts node names (V) directly,
-    /// rather than requiring conversion from `NodeIndex`. This is useful when
-    /// `V` does not implement `From<NodeIndex>` (e.g., when `V = usize`).
+    /// This is a smart canonization that checks the current state:
+    /// - If already canonized to the same ortho_region with the same form, returns unchanged
+    /// - Otherwise, performs full canonization via `force_canonize_by_names_with`
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The node names that will serve as canonization centers
+    /// * `form` - The canonical form to use
+    ///
+    /// # Returns
+    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    pub fn canonize_by_names_with(
+        self,
+        ortho_region: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        let ortho_region_v: HashSet<V> = ortho_region.into_iter().collect();
+
+        // Check if already canonized to the same region
+        if self.ortho_region == ortho_region_v {
+            return Ok(self);
+        }
+
+        self.force_canonize_by_names_with(ortho_region_v, form)
+    }
+
+    /// Force canonize the network towards the specified ortho_region using node names directly.
+    ///
+    /// This method always performs full canonization, ignoring the current state.
+    /// Uses the default canonical form (`CanonicalForm::Unitary`).
+    ///
+    /// # Arguments
+    /// * `ortho_region` - The node names that will serve as canonization centers
+    ///
+    /// # Returns
+    /// A new canonized TreeTN, or an error if validation fails or factorization fails.
+    pub fn force_canonize_by_names(
+        self,
+        ortho_region: impl IntoIterator<Item = V>,
+    ) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace>,
+    {
+        self.force_canonize_by_names_with(ortho_region, CanonicalForm::Unitary)
+    }
+
+    /// Force canonize the network towards the specified ortho_region using node names directly
+    /// with a specified canonical form.
+    ///
+    /// This method always performs full canonization, ignoring the current state.
     ///
     /// # Arguments
     /// * `ortho_region` - The node names that will serve as canonization centers
@@ -1721,7 +1842,7 @@ where
     ///
     /// # Returns
     /// A new canonized TreeTN, or an error if validation fails or factorization fails.
-    pub fn canonize_by_names_with(
+    pub fn force_canonize_by_names_with(
         mut self,
         ortho_region: impl IntoIterator<Item = V>,
         form: CanonicalForm,
