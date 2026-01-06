@@ -1,0 +1,289 @@
+//! TreeTN decomposition from dense tensor.
+//!
+//! This module provides functions to decompose a dense tensor into a TreeTN
+//! using factorization algorithms.
+
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::Hash;
+
+use anyhow::Result;
+
+use tensor4all::index::{DynId, NoSymmSpace, Symmetry};
+use tensor4all::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
+use tensor4all::TensorDynLen;
+
+use super::TreeTN;
+
+// ============================================================================
+// TreeTopology specification
+// ============================================================================
+
+/// Specification for tree topology: defines nodes and edges.
+#[derive(Debug, Clone)]
+pub struct TreeTopology<V> {
+    /// Nodes in the tree (node name -> set of physical index positions in the input tensor)
+    pub nodes: HashMap<V, Vec<usize>>,
+    /// Edges in the tree: (node_a, node_b)
+    pub edges: Vec<(V, V)>,
+}
+
+impl<V: Clone + Hash + Eq> TreeTopology<V> {
+    /// Create a new tree topology with the given nodes and edges.
+    ///
+    /// # Arguments
+    /// * `nodes` - Map from node name to the positions of physical indices in the input tensor
+    /// * `edges` - List of edges as (node_a, node_b) pairs
+    pub fn new(nodes: HashMap<V, Vec<usize>>, edges: Vec<(V, V)>) -> Self {
+        Self { nodes, edges }
+    }
+
+    /// Validate that this topology describes a tree.
+    pub fn validate(&self) -> Result<()> {
+        let n = self.nodes.len();
+        if n == 0 {
+            return Err(anyhow::anyhow!("Tree topology must have at least one node"));
+        }
+        if n > 1 && self.edges.len() != n - 1 {
+            return Err(anyhow::anyhow!(
+                "Tree must have exactly n-1 edges: got {} nodes and {} edges",
+                n,
+                self.edges.len()
+            ));
+        }
+        // Check all edge endpoints are valid nodes
+        for (a, b) in &self.edges {
+            if !self.nodes.contains_key(a) {
+                return Err(anyhow::anyhow!("Edge refers to unknown node"));
+            }
+            if !self.nodes.contains_key(b) {
+                return Err(anyhow::anyhow!("Edge refers to unknown node"));
+            }
+        }
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Decomposition functions
+// ============================================================================
+
+/// Decompose a dense tensor into a TreeTN using QR-based factorization.
+///
+/// This function takes a dense tensor and a tree topology specification, then
+/// recursively decomposes the tensor using QR factorization to create a TreeTN.
+///
+/// # Algorithm
+///
+/// 1. Start from a leaf node, factorize to separate that node's physical indices
+/// 2. Contract the right factor with remaining tensor, repeat for next edge
+/// 3. Continue until all edges are processed
+///
+/// # Arguments
+/// * `tensor` - The dense tensor to decompose
+/// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
+///
+/// # Returns
+/// A TreeTN representing the decomposed tensor.
+///
+/// # Errors
+/// Returns an error if:
+/// - The topology is invalid
+/// - Physical index positions don't match the tensor
+/// - Factorization fails
+pub fn factorize_tensor_to_treetn<Id, Symm, V>(
+    tensor: &TensorDynLen<Id, Symm>,
+    topology: &TreeTopology<V>,
+) -> Result<TreeTN<Id, Symm, V>>
+where
+    Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
+    Symm: Clone + Symmetry + From<NoSymmSpace>,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+{
+    factorize_tensor_to_treetn_with(tensor, topology, FactorizeAlg::QR)
+}
+
+/// Factorize a dense tensor into a TreeTN using a specified factorization algorithm.
+///
+/// This function takes a dense tensor and a tree topology specification, then
+/// recursively decomposes the tensor using the specified algorithm to create a TreeTN.
+///
+/// # Algorithm
+///
+/// 1. Start from a leaf node, factorize to separate that node's physical indices
+/// 2. Contract the right factor with remaining tensor, repeat for next edge
+/// 3. Continue until all edges are processed
+///
+/// # Arguments
+/// * `tensor` - The dense tensor to decompose
+/// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
+/// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
+///
+/// # Returns
+/// A TreeTN representing the decomposed tensor.
+///
+/// # Errors
+/// Returns an error if:
+/// - The topology is invalid
+/// - Physical index positions don't match the tensor
+/// - Factorization fails
+pub fn factorize_tensor_to_treetn_with<Id, Symm, V>(
+    tensor: &TensorDynLen<Id, Symm>,
+    topology: &TreeTopology<V>,
+    alg: FactorizeAlg,
+) -> Result<TreeTN<Id, Symm, V>>
+where
+    Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
+    Symm: Clone + Symmetry + From<NoSymmSpace>,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+{
+    topology.validate()?;
+
+    if topology.nodes.len() == 1 {
+        // Single node - just wrap the tensor
+        let node_name = topology.nodes.keys().next().unwrap().clone();
+        let mut tn = TreeTN::<Id, Symm, V>::new();
+        tn.add_tensor(node_name, tensor.clone())?;
+        return Ok(tn);
+    }
+
+    // Validate that all index positions are valid
+    for (_, positions) in &topology.nodes {
+        for &pos in positions {
+            if pos >= tensor.indices.len() {
+                return Err(anyhow::anyhow!(
+                    "Index position {} out of bounds (tensor has {} indices)",
+                    pos,
+                    tensor.indices.len()
+                ));
+            }
+        }
+    }
+
+    // Build adjacency list for the tree
+    let mut adj: HashMap<V, Vec<V>> = HashMap::new();
+    for node in topology.nodes.keys() {
+        adj.insert(node.clone(), Vec::new());
+    }
+    for (a, b) in &topology.edges {
+        adj.get_mut(a).unwrap().push(b.clone());
+        adj.get_mut(b).unwrap().push(a.clone());
+    }
+
+    // Find leaves (nodes with degree 1) - not currently used but kept for reference
+    let _leaves: Vec<V> = adj.iter()
+        .filter(|(_, neighbors)| neighbors.len() == 1)
+        .map(|(node, _)| node.clone())
+        .collect();
+
+    // Choose root as the node with highest degree, or first non-leaf
+    let root = adj.iter()
+        .max_by_key(|(_, neighbors)| neighbors.len())
+        .map(|(node, _)| node.clone())
+        .ok_or_else(|| anyhow::anyhow!("Cannot find root node"))?;
+
+    // Build traversal order using BFS from root
+    let mut traversal_order: Vec<(V, Option<V>)> = Vec::new(); // (node, parent)
+    let mut visited: HashSet<V> = HashSet::new();
+    let mut queue = VecDeque::new();
+    queue.push_back((root.clone(), None::<V>));
+
+    while let Some((node, parent)) = queue.pop_front() {
+        if visited.contains(&node) {
+            continue;
+        }
+        visited.insert(node.clone());
+        traversal_order.push((node.clone(), parent));
+
+        for neighbor in adj.get(&node).unwrap() {
+            if !visited.contains(neighbor) {
+                queue.push_back((neighbor.clone(), Some(node.clone())));
+            }
+        }
+    }
+
+    // Reverse traversal order to process leaves first (post-order)
+    traversal_order.reverse();
+
+    // Store intermediate tensors as we decompose
+    let mut current_tensor = tensor.clone();
+
+    // Store the resulting node tensors
+    let mut node_tensors: HashMap<V, TensorDynLen<Id, Symm>> = HashMap::new();
+
+    // Store bond indices between nodes: (node_a, node_b) -> (index_on_a, index_on_b)
+    let mut _bond_indices: HashMap<(V, V), _> = HashMap::new();
+
+    // Set up factorization options
+    let factorize_options = FactorizeOptions {
+        alg,
+        canonical: Canonical::Left,
+        rtol: None,
+        max_rank: None,
+    };
+
+    // Process nodes in post-order (leaves first)
+    for i in 0..traversal_order.len() - 1 {
+        let (node, parent) = &traversal_order[i];
+        let parent_node = parent.as_ref().unwrap();
+
+        // Get the physical index positions for this node
+        let node_positions = topology.nodes.get(node).unwrap();
+
+        // Find physical indices for this node in current_tensor
+        let left_inds: Vec<_> = node_positions.iter()
+            .filter_map(|&pos| current_tensor.indices.get(pos).cloned())
+            .collect();
+
+        if left_inds.is_empty() && current_tensor.indices.len() > 1 {
+            // No physical indices to separate - use first index
+            // This happens when indices have already been separated
+            continue;
+        }
+
+        // Perform factorization using tensor-level factorize
+        // left will have the node's physical indices + bond index
+        // right will have bond index + remaining indices
+        let factorize_result = factorize(&current_tensor, &left_inds, &factorize_options)
+            .map_err(|e| anyhow::anyhow!("Factorization failed: {:?}", e))?;
+
+        let left = factorize_result.left;
+        let right = factorize_result.right;
+        let bond_index = factorize_result.bond_index;
+
+        // Store left as the node's tensor (with physical indices + bond to parent)
+        node_tensors.insert(node.clone(), left);
+
+        // Store the bond index connecting this node to its parent
+        // The bond_index is shared between left and right
+        let bond_idx_node = bond_index.clone();
+        let bond_idx_parent = bond_index;
+
+        // Store in canonical order
+        let key = if *node < *parent_node {
+            (node.clone(), parent_node.clone())
+        } else {
+            (parent_node.clone(), node.clone())
+        };
+        if *node < *parent_node {
+            _bond_indices.insert(key, (bond_idx_node, bond_idx_parent));
+        } else {
+            _bond_indices.insert(key, (bond_idx_parent, bond_idx_node));
+        }
+
+        // right becomes the current tensor for the next iteration
+        current_tensor = right;
+    }
+
+    // The last node (root) gets the remaining tensor
+    let (root_node, _) = &traversal_order.last().unwrap();
+    node_tensors.insert(root_node.clone(), current_tensor);
+
+    // Build the TreeTN using from_tensors (auto-connection by matching index IDs)
+    // Since factorize() returns shared bond_index, tensors already have matching index IDs
+    let node_names: Vec<V> = topology.nodes.keys().cloned().collect();
+    let tensors: Vec<TensorDynLen<Id, Symm>> = node_names.iter()
+        .map(|name| node_tensors.get(name).cloned().unwrap())
+        .collect();
+
+    TreeTN::from_tensors(tensors, node_names)
+}
