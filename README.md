@@ -375,6 +375,10 @@ let ttn = ttn.truncate(
 - **Canonicalization**: QR/LU-based canonicalization towards any center node
 - **Truncation**: SVD-based truncation using two-site sweeps with Euler tour traversal
 - **Local Update Sweeps**: `LocalUpdateSweepPlan` for DMRG/TDVP-style algorithms
+- **Contraction Algorithms**: Multiple algorithms for tensor network contraction:
+  - `contract_naive`: Simple sequential contraction
+  - `contract_zipup`: Efficient zip-up contraction
+  - `contract_fit`: Variational fitting algorithm minimizing ||A*B - C||² with lazy environment caching
 - **Random TTN Generation**: `random_treetn_f64` and `random_treetn_c64` for testing
 
 ## ITensors.jl ID Generation Algorithm
