@@ -15,7 +15,7 @@
 use num_complex::{Complex64, ComplexFloat};
 use crate::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
-use tensor4all_matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
+use matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use thiserror::Error;
 
 use crate::qr::{qr_with, QrOptions};
@@ -536,11 +536,11 @@ fn dtensor_to_matrix<T>(
     tensor: &mdarray::DTensor<T, 2>,
     m: usize,
     n: usize,
-) -> tensor4all_matrixci::Matrix<T>
+) -> matrixci::Matrix<T>
 where
     T: MatrixScalar + Clone,
 {
-    let mut matrix = tensor4all_matrixci::util::zeros(m, n);
+    let mut matrix = matrixci::util::zeros(m, n);
     for i in 0..m {
         for j in 0..n {
             matrix[[i, j]] = tensor[[i, j]].clone();
@@ -550,12 +550,12 @@ where
 }
 
 /// Convert Matrix to Vec for storage.
-fn matrix_to_vec<T>(matrix: &tensor4all_matrixci::Matrix<T>) -> Vec<T>
+fn matrix_to_vec<T>(matrix: &matrixci::Matrix<T>) -> Vec<T>
 where
     T: Clone,
 {
-    let m = tensor4all_matrixci::util::nrows(matrix);
-    let n = tensor4all_matrixci::util::ncols(matrix);
+    let m = matrixci::util::nrows(matrix);
+    let n = matrixci::util::ncols(matrix);
     let mut vec = Vec::with_capacity(m * n);
     for i in 0..m {
         for j in 0..n {

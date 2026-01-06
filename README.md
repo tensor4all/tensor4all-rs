@@ -36,17 +36,17 @@ A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assis
 ```
 tensor4all-rs/
 ├── crates/
-│   ├── tensor4all-core/         # Core: Index, Tensor, Storage, SVD, QR
-│   ├── tensor4all-capi/         # C API for language bindings
-│   ├── tensor4all-itensorlike/  # ITensor-like TensorTrain wrapper
-│   ├── tensor4all-simpletensortrain/  # Simple TT implementation
-│   ├── tensor4all-matrixci/     # Matrix Cross Interpolation
-│   ├── tensor4all-tensorci/     # Tensor Cross Interpolation
-│   ├── tensor4all-treetn/       # Tree Tensor Networks
-│   └── quanticsgrids/           # Quantics grid structures
-├── julia/Tensor4all.jl/         # Julia bindings
-├── python/tensor4all/           # Python bindings
-└── docs/                        # Design documents
+│   ├── tensor4all-core/              # Core: Index, Tensor, Storage, SVD, QR
+│   ├── tensor4all-treetn/            # Tree Tensor Networks
+│   ├── tensor4all-itensorlike/       # ITensor-like TensorTrain API
+│   ├── tensor4all-simpletensortrain/ # Simple TT/MPS implementation
+│   ├── tensor4all-tensorci/          # Tensor Cross Interpolation
+│   ├── tensor4all-capi/              # C API for language bindings
+│   ├── matrixci/                     # Matrix Cross Interpolation (internal)
+│   └── quanticsgrids/                # Quantics grid structures (internal)
+├── julia/Tensor4all.jl/              # Julia bindings
+├── python/tensor4all/                # Python bindings
+└── docs/                             # Design documents
 ```
 
 ## Usage Example (Rust)

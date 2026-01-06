@@ -8,7 +8,7 @@ use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::Tensor3Ops;
-use tensor4all_matrixci::util::{zeros, Matrix, Scalar};
+use matrixci::util::{zeros, Matrix, Scalar};
 
 /// Options for contraction with compression
 #[derive(Debug, Clone)]

@@ -6,8 +6,8 @@
 
 use crate::error::{Result, TCIError};
 use crate::indexset::MultiIndex;
-use tensor4all_matrixci::util::{zeros, Scalar};
-use tensor4all_matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
+use matrixci::util::{zeros, Scalar};
+use matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
 use tensor4all_simpletensortrain::{tensor3_zeros, Tensor3, Tensor3Ops, TensorTrain, TTScalar};
 
 /// Options for TCI2 algorithm

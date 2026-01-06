@@ -2,8 +2,8 @@
 
 use crate::error::{Result, TCIError};
 use crate::indexset::{IndexSet, MultiIndex};
-use tensor4all_matrixci::util::{a_times_b_inv, zeros, Matrix, Scalar};
-use tensor4all_matrixci::{AbstractMatrixCI, MatrixACA};
+use matrixci::util::{a_times_b_inv, zeros, Matrix, Scalar};
+use matrixci::{AbstractMatrixCI, MatrixACA};
 use tensor4all_simpletensortrain::{tensor3_zeros, Tensor3, Tensor3Ops, TensorTrain, TTScalar};
 
 /// Sweep strategy for TCI optimization

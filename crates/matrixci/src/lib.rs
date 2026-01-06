@@ -9,7 +9,7 @@
 //! # Example
 //!
 //! ```
-//! use tensor4all_matrixci::{MatrixCI, crossinterpolate, AbstractMatrixCI, from_vec2d};
+//! use matrixci::{MatrixCI, crossinterpolate, AbstractMatrixCI, from_vec2d};
 //!
 //! // Create a matrix
 //! let m = from_vec2d(vec![

@@ -1,6 +1,6 @@
 [package]
-name = "tensor4all-matrixci"
-description = "Matrix Cross Interpolation algorithms for tensor4all"
+name = "matrixci"
+description = "Matrix Cross Interpolation algorithms"
 version.workspace = true
 edition.workspace = true
 authors = ["tensor4all contributors"]

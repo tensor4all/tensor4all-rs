@@ -34,7 +34,7 @@ pub enum TCIError {
 
     /// Matrix CI error
     #[error("Matrix CI error: {0}")]
-    MatrixCIError(#[from] tensor4all_matrixci::MatrixCIError),
+    MatrixCIError(#[from] matrixci::MatrixCIError),
 
     /// Tensor train error
     #[error("Tensor train error: {0}")]
