@@ -30,16 +30,14 @@ mod macros;
 
 mod algorithm;
 mod index;
-// mod mpocontraction;  // Disabled - pending simpletensortrain integration
 mod tensor;
-// mod tensortrain;     // Disabled - pending simpletensortrain integration
+mod tensortrain;
 mod types;
 
 pub use algorithm::*;
 pub use index::*;
-// pub use mpocontraction::*;  // Disabled
 pub use tensor::*;
-// pub use tensortrain::*;     // Disabled
+pub use tensortrain::*;
 pub use types::*;
 
 /// Status code type for C API

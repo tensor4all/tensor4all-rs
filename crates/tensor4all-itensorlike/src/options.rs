@@ -137,3 +137,101 @@ impl TruncateOptions {
         self
     }
 }
+
+/// Contraction method for tensor train operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContractMethod {
+    /// Zip-up contraction (faster, one-pass).
+    #[default]
+    Zipup,
+    /// Fit/variational contraction (iterative optimization).
+    Fit,
+    /// Naive contraction: contract to full tensor, then decompose back.
+    /// Useful for debugging and testing, but O(exp(n)) in memory.
+    Naive,
+}
+
+/// Options for tensor train contraction.
+///
+/// # Example
+///
+/// ```
+/// use tensor4all_itensorlike::ContractOptions;
+///
+/// // Zipup with max rank
+/// let opts = ContractOptions::zipup().with_max_rank(50);
+///
+/// // Fit with relative tolerance
+/// let opts = ContractOptions::fit()
+///     .with_rtol(1e-10)
+///     .with_nsweeps(5);
+/// ```
+#[derive(Debug, Clone)]
+pub struct ContractOptions {
+    /// Contraction method to use.
+    pub method: ContractMethod,
+    /// Maximum bond dimension.
+    pub max_rank: Option<usize>,
+    /// Relative tolerance for truncation.
+    pub rtol: Option<f64>,
+    /// Number of sweeps for Fit method.
+    pub nsweeps: usize,
+}
+
+impl Default for ContractOptions {
+    fn default() -> Self {
+        Self {
+            method: ContractMethod::default(),
+            max_rank: None,
+            rtol: None,
+            nsweeps: 2,
+        }
+    }
+}
+
+impl ContractOptions {
+    /// Create options for zipup contraction.
+    pub fn zipup() -> Self {
+        Self {
+            method: ContractMethod::Zipup,
+            ..Default::default()
+        }
+    }
+
+    /// Create options for fit contraction.
+    pub fn fit() -> Self {
+        Self {
+            method: ContractMethod::Fit,
+            ..Default::default()
+        }
+    }
+
+    /// Create options for naive contraction.
+    ///
+    /// Note: Naive contraction is O(exp(n)) in memory and is primarily
+    /// useful for debugging and testing.
+    pub fn naive() -> Self {
+        Self {
+            method: ContractMethod::Naive,
+            ..Default::default()
+        }
+    }
+
+    /// Set maximum bond dimension.
+    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
+        self.max_rank = Some(max_rank);
+        self
+    }
+
+    /// Set relative tolerance.
+    pub fn with_rtol(mut self, rtol: f64) -> Self {
+        self.rtol = Some(rtol);
+        self
+    }
+
+    /// Set number of sweeps for Fit method.
+    pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
+        self.nsweeps = nsweeps;
+        self
+    }
+}

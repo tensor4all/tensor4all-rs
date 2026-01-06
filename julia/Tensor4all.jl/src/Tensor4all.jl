@@ -42,6 +42,8 @@ t4a_idx2 = Tensor4all.Index(it_idx2)
 """
 module Tensor4all
 
+using LinearAlgebra
+
 include("C_API.jl")
 
 # Library management for submodules
@@ -51,11 +53,6 @@ get_lib() = C_API.libhandle()
 # Include submodules (respecting crate hierarchy)
 # 1. Algorithm (tensor4all-core-common)
 include("Algorithm.jl")
-# DISABLED - pending simpletensortrain integration
-# 2. TensorTrain (tensor4all-simpletensortrain)
-# include("TensorTrain/TensorTrain.jl")
-# 3. MPO (tensor4all-mpocontraction)
-# include("MPO/MPO.jl")
 
 # Re-export public API
 # Core types (tensor4all-core-common, tensor4all-core-tensor)
@@ -67,13 +64,6 @@ export StorageKind, DenseF64, DenseC64, DiagF64, DiagC64
 using .Algorithm: get_default_svd_rtol, resolve_truncation_tolerance
 export Algorithm
 export get_default_svd_rtol, resolve_truncation_tolerance
-
-# DISABLED - pending simpletensortrain integration
-# Re-export TensorTrain submodule
-# export TensorTrain
-
-# Re-export MPO submodule
-# export MPO
 
 """
     Index
@@ -214,8 +204,14 @@ function Base.show(io::IO, ::MIME"text/plain", i::Index)
     end
 end
 
-# Clone
+# Clone (shallow copy - same as deepcopy for this type)
 function Base.copy(i::Index)
+    ptr = C_API.t4a_index_clone(i.ptr)
+    return Index(ptr)
+end
+
+# Deep copy
+function Base.deepcopy(i::Index)
     ptr = C_API.t4a_index_clone(i.ptr)
     return Index(ptr)
 end
@@ -228,6 +224,220 @@ end
 function Base.hash(i::Index, h::UInt)
     return hash(id(i), h)
 end
+
+# ============================================================================
+# Index Utilities
+# ============================================================================
+
+"""
+    sim(i::Index) -> Index
+
+Create a new index with the same dimension and tags but a new unique ID.
+This is useful for creating "similar" indices that won't contract with the original.
+"""
+function sim(i::Index)
+    return Index(dim(i); tags=tags(i))
+end
+
+"""
+    hascommoninds(inds1, inds2) -> Bool
+
+Check if two collections of indices have any common indices (by ID).
+
+# Example
+```julia
+i, j, k = Index(2), Index(3), Index(4)
+hascommoninds([i, j], [j, k])  # true
+hascommoninds([i], [k])        # false
+```
+"""
+function hascommoninds(inds1, inds2)
+    ids1 = Set(id(i) for i in inds1)
+    for i in inds2
+        if id(i) in ids1
+            return true
+        end
+    end
+    return false
+end
+
+"""
+    commoninds(inds1, inds2) -> Vector{Index}
+
+Return the indices that appear in both collections (by ID).
+Returns indices from inds1.
+
+# Example
+```julia
+i, j, k = Index(2), Index(3), Index(4)
+commoninds([i, j], [j, k])  # [j]
+```
+"""
+function commoninds(inds1, inds2)
+    ids2 = Set(id(i) for i in inds2)
+    return [i for i in inds1 if id(i) in ids2]
+end
+
+# Alias for ITensors compatibility
+const common_inds = commoninds
+
+"""
+    commonind(inds1, inds2) -> Union{Index, Nothing}
+
+Return the first common index, or nothing if none exists.
+"""
+function commonind(inds1, inds2)
+    result = commoninds(inds1, inds2)
+    return isempty(result) ? nothing : first(result)
+end
+
+"""
+    uniqueinds(inds1, inds2) -> Vector{Index}
+
+Return the indices in inds1 that do not appear in inds2 (by ID).
+
+# Example
+```julia
+i, j, k = Index(2), Index(3), Index(4)
+uniqueinds([i, j], [j, k])  # [i]
+```
+"""
+function uniqueinds(inds1, inds2)
+    ids2 = Set(id(i) for i in inds2)
+    return [i for i in inds1 if !(id(i) in ids2)]
+end
+
+"""
+    uniqueind(inds1, inds2) -> Union{Index, Nothing}
+
+Return the first unique index in inds1 (not in inds2), or nothing if none exists.
+"""
+function uniqueind(inds1, inds2)
+    result = uniqueinds(inds1, inds2)
+    return isempty(result) ? nothing : first(result)
+end
+
+"""
+    noncommoninds(inds1, inds2) -> Vector{Index}
+
+Return all indices that appear in only one of the collections.
+Equivalent to union of uniqueinds(inds1, inds2) and uniqueinds(inds2, inds1).
+"""
+function noncommoninds(inds1, inds2)
+    return vcat(uniqueinds(inds1, inds2), uniqueinds(inds2, inds1))
+end
+
+"""
+    replaceinds(inds, old_inds, new_inds) -> Vector{Index}
+
+Replace indices in `inds` according to the mapping old_inds → new_inds.
+"""
+function replaceinds(inds, old_inds, new_inds)
+    length(old_inds) == length(new_inds) || error("old_inds and new_inds must have same length")
+    id_map = Dict(id(o) => n for (o, n) in zip(old_inds, new_inds))
+    return [get(id_map, id(i), i) for i in inds]
+end
+
+"""
+    replaceind(inds, old_ind, new_ind) -> Vector{Index}
+
+Replace a single index in `inds`.
+"""
+function replaceind(inds, old_ind::Index, new_ind::Index)
+    return replaceinds(inds, [old_ind], [new_ind])
+end
+
+export sim, hascommoninds, commoninds, common_inds, commonind
+export uniqueinds, uniqueind, noncommoninds, replaceinds, replaceind
+
+# ============================================================================
+# Curried/Predicate Index Functions
+# ============================================================================
+
+# Curried version of hascommoninds for use with findfirst/findall
+# Note: This is implemented as a struct to avoid ambiguity with the 2-arg version
+
+"""
+    HasCommonIndsPredicate
+
+A predicate type for checking if an object has common indices with a given set.
+Used internally by `hascommoninds(is)` curried form.
+"""
+struct HasCommonIndsPredicate
+    target_ids::Set{UInt128}
+end
+
+function (p::HasCommonIndsPredicate)(x)
+    for idx in indices(x)
+        if id(idx) in p.target_ids
+            return true
+        end
+    end
+    return false
+end
+
+"""
+    hascommoninds(is::Vector{Index}) -> HasCommonIndsPredicate
+
+Return a predicate that checks if its argument has common indices with `is`.
+Useful for `findfirst`, `findall`, etc.
+
+# Example
+```julia
+sites = [Index(2), Index(3), Index(4)]
+tt = random_tt(sites; linkdims=2)
+findfirst(hascommoninds(sites[2:2]), tt)  # Returns 2
+```
+"""
+function hascommoninds(is::Vector{Index})
+    return HasCommonIndsPredicate(Set(id(i) for i in is))
+end
+
+hascommoninds(i::Index) = hascommoninds([i])
+
+"""
+    hasind(i::Index) -> Function
+
+Return a function that checks if its argument has the index `i`.
+
+# Example
+```julia
+sites = [Index(2), Index(3)]
+tt = random_tt(sites; linkdims=2)
+findfirst(hasind(sites[1]), tt)  # Returns 1
+```
+"""
+hasind(i::Index) = x -> any(idx -> id(idx) == id(i), indices(x))
+
+"""
+    hasinds(is) -> Function
+
+Return a function that checks if its argument has all the indices in `is`.
+
+# Example
+```julia
+i, j = Index(2), Index(3)
+t = Tensor([i, j], rand(2, 3))
+hasinds([i, j])(t)  # true
+hasinds([i])(t)     # true
+```
+"""
+function hasinds(is)
+    return function(x)
+        x_inds = indices(x)
+        x_ids = Set(id(idx) for idx in x_inds)
+        for i in is
+            if !(id(i) in x_ids)
+                return false
+            end
+        end
+        return true
+    end
+end
+
+hasinds(i::Index) = hasind(i)
+
+export hasind, hasinds
 
 # ============================================================================
 # Tensor Type
@@ -489,6 +699,116 @@ function data(t::Tensor)
     end
 end
 
+"""
+    Array(t::Tensor, inds::Vector{Index}) -> Array
+
+Get the tensor data as a Julia array with indices in the specified order.
+
+This is similar to ITensors.jl's `Array(T, i, j, k, ...)` syntax.
+The returned array has dimensions ordered according to the provided indices.
+
+# Arguments
+- `t`: The tensor to extract data from
+- `inds`: Vector of indices specifying the desired dimension order
+
+# Example
+```julia
+i = Index(2)
+j = Index(3)
+T = Tensor([i, j], rand(2, 3))
+
+# Get data with original order
+A1 = Array(T, [i, j])  # shape (2, 3)
+
+# Get data with permuted order
+A2 = Array(T, [j, i])  # shape (3, 2), transposed
+```
+"""
+function Base.Array(t::Tensor, inds::Vector{Index})
+    t_inds = indices(t)
+
+    # Check that inds contains exactly the same indices as t
+    if length(inds) != length(t_inds)
+        error("Number of indices ($(length(inds))) doesn't match tensor rank ($(length(t_inds)))")
+    end
+
+    # Find permutation: perm[i] = position of inds[i] in t_inds
+    perm = Int[]
+    for idx in inds
+        pos = findfirst(x -> x == idx, t_inds)
+        if pos === nothing
+            error("Index not found in tensor: $idx")
+        end
+        push!(perm, pos)
+    end
+
+    # Check for duplicates
+    if length(unique(perm)) != length(perm)
+        error("Duplicate indices in requested order")
+    end
+
+    # Get data in tensor's native order
+    arr = data(t)
+
+    # If perm is identity, no need to permute
+    if perm == collect(1:length(perm))
+        return arr
+    end
+
+    # Permute dimensions
+    return permutedims(arr, perm)
+end
+
+# Convenience: Array(t, i, j, k, ...) varargs form
+function Base.Array(t::Tensor, inds::Index...)
+    return Array(t, collect(inds))
+end
+
+"""
+    Tensor(inds::Vector{Index}, arr::AbstractArray, source_inds::Vector{Index})
+
+Create a tensor from an array, specifying both the target indices and source indices.
+
+The `source_inds` specifies which index corresponds to which dimension of `arr`.
+The data is permuted so that the tensor's internal order matches `inds`.
+
+# Example
+```julia
+i = Index(2)
+j = Index(3)
+A = rand(3, 2)  # Note: j dimension first
+
+# Create tensor with indices [i, j] from array with dimensions [j, i]
+T = Tensor([i, j], A, [j, i])
+```
+"""
+function Tensor(inds::Vector{Index}, arr::AbstractArray, source_inds::Vector{Index})
+    # Find permutation from source_inds to inds
+    if length(inds) != length(source_inds)
+        error("Target and source index counts must match")
+    end
+    if length(inds) != ndims(arr)
+        error("Number of indices doesn't match array dimensions")
+    end
+
+    # Find permutation: perm[i] = position of inds[i] in source_inds
+    perm = Int[]
+    for idx in inds
+        pos = findfirst(x -> x == idx, source_inds)
+        if pos === nothing
+            error("Index not found in source indices: $idx")
+        end
+        push!(perm, pos)
+    end
+
+    # Permute array to match target index order
+    if perm != collect(1:length(perm))
+        arr = permutedims(arr, perm)
+    end
+
+    return Tensor(inds, arr)
+end
+
 # ============================================================================
 # Tensor Display
 # ============================================================================
@@ -511,10 +831,23 @@ function Base.show(io::IO, ::MIME"text/plain", t::Tensor)
     end
 end
 
-# Clone
+# Clone (shallow copy - same as deepcopy for this type)
 function Base.copy(t::Tensor)
     ptr = C_API.t4a_tensor_clone(t.ptr)
     return Tensor(ptr)
 end
+
+# Deep copy
+function Base.deepcopy(t::Tensor)
+    ptr = C_API.t4a_tensor_clone(t.ptr)
+    return Tensor(ptr)
+end
+
+# ============================================================================
+# ITensorLike Submodule (TensorTrain)
+# ============================================================================
+# TensorTrain functionality is in a separate submodule.
+# Use: using Tensor4all.ITensorLike
+include("ITensorLike.jl")
 
 end # module

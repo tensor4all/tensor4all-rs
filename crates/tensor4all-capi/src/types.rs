@@ -6,6 +6,7 @@
 use std::ffi::c_void;
 use tensor4all_core_common::index::{DefaultIndex, DynId, NoSymmSpace};
 use tensor4all_core_tensor::{TensorDynLen, Storage};
+use tensor4all_itensorlike::TensorTrain;
 
 /// The internal index type we're wrapping
 pub(crate) type InternalIndex = DefaultIndex<DynId, NoSymmSpace>;
@@ -143,9 +144,95 @@ unsafe impl Send for t4a_tensor {}
 unsafe impl Sync for t4a_tensor {}
 
 // ============================================================================
-// TensorTrain types - DISABLED pending simpletensortrain integration
-// See tensortrain.rs.disabled for the original implementation
+// TensorTrain type
 // ============================================================================
+
+/// The internal tensor train type we're wrapping
+pub(crate) type InternalTensorTrain = TensorTrain<DynId, NoSymmSpace>;
+
+/// Opaque tensor train type for C API
+///
+/// Wraps `TensorTrain<DynId, NoSymmSpace>` which corresponds to ITensorMPS.jl's `MPS`.
+///
+/// The internal structure is hidden using a void pointer.
+#[repr(C)]
+pub struct t4a_tensortrain {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_tensortrain {
+    /// Create a new t4a_tensortrain from an InternalTensorTrain
+    pub(crate) fn new(tt: InternalTensorTrain) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(tt)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner InternalTensorTrain
+    pub(crate) fn inner(&self) -> &InternalTensorTrain {
+        unsafe { &*(self._private as *const InternalTensorTrain) }
+    }
+
+    /// Get a mutable reference to the inner InternalTensorTrain
+    pub(crate) fn inner_mut(&mut self) -> &mut InternalTensorTrain {
+        unsafe { &mut *(self._private as *mut InternalTensorTrain) }
+    }
+}
+
+impl Clone for t4a_tensortrain {
+    fn clone(&self) -> Self {
+        let inner = self.inner().clone();
+        Self::new(inner)
+    }
+}
+
+impl Drop for t4a_tensortrain {
+    fn drop(&mut self) {
+        unsafe {
+            if !self._private.is_null() {
+                let _ = Box::from_raw(self._private as *mut InternalTensorTrain);
+            }
+        }
+    }
+}
+
+// Safety: t4a_tensortrain is Send + Sync because InternalTensorTrain is Send + Sync
+unsafe impl Send for t4a_tensortrain {}
+unsafe impl Sync for t4a_tensortrain {}
+
+/// Canonical form enum for C API
+///
+/// Represents the method used for canonicalization.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum t4a_canonical_form {
+    /// Unitary (QR-based) canonicalization - tensors are isometric
+    Unitary = 0,
+    /// LU-based canonicalization - one factor has unit diagonal
+    LU = 1,
+    /// Cross Interpolation based canonicalization
+    CI = 2,
+}
+
+impl From<tensor4all_itensorlike::CanonicalForm> for t4a_canonical_form {
+    fn from(form: tensor4all_itensorlike::CanonicalForm) -> Self {
+        match form {
+            tensor4all_itensorlike::CanonicalForm::Unitary => Self::Unitary,
+            tensor4all_itensorlike::CanonicalForm::LU => Self::LU,
+            tensor4all_itensorlike::CanonicalForm::CI => Self::CI,
+        }
+    }
+}
+
+impl From<t4a_canonical_form> for tensor4all_itensorlike::CanonicalForm {
+    fn from(form: t4a_canonical_form) -> Self {
+        match form {
+            t4a_canonical_form::Unitary => Self::Unitary,
+            t4a_canonical_form::LU => Self::LU,
+            t4a_canonical_form::CI => Self::CI,
+        }
+    }
+}
 
 // ============================================================================
 // Algorithm types
@@ -277,6 +364,47 @@ impl From<t4a_compression_algorithm> for tensor4all_core_common::CompressionAlgo
             t4a_compression_algorithm::LU => Self::LU,
             t4a_compression_algorithm::CI => Self::CI,
             t4a_compression_algorithm::Variational => Self::Variational,
+        }
+    }
+}
+
+/// Contract method for tensor train contraction in C API
+///
+/// Used for tensor train contraction operations.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum t4a_contract_method {
+    /// Zip-up contraction (faster, one-pass) - default
+    Zipup = 0,
+    /// Fit/variational contraction (iterative optimization)
+    Fit = 1,
+    /// Naive contraction: contract to full tensor, then decompose back.
+    /// Useful for debugging and testing, but O(exp(n)) in memory.
+    Naive = 2,
+}
+
+impl Default for t4a_contract_method {
+    fn default() -> Self {
+        Self::Zipup
+    }
+}
+
+impl From<tensor4all_itensorlike::ContractMethod> for t4a_contract_method {
+    fn from(method: tensor4all_itensorlike::ContractMethod) -> Self {
+        match method {
+            tensor4all_itensorlike::ContractMethod::Zipup => Self::Zipup,
+            tensor4all_itensorlike::ContractMethod::Fit => Self::Fit,
+            tensor4all_itensorlike::ContractMethod::Naive => Self::Naive,
+        }
+    }
+}
+
+impl From<t4a_contract_method> for tensor4all_itensorlike::ContractMethod {
+    fn from(method: t4a_contract_method) -> Self {
+        match method {
+            t4a_contract_method::Zipup => Self::Zipup,
+            t4a_contract_method::Fit => Self::Fit,
+            t4a_contract_method::Naive => Self::Naive,
         }
     }
 }

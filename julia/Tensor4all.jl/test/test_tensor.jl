@@ -97,4 +97,80 @@
         @test retrieved ≈ data
         @test size(retrieved) == (2, 3, 4)
     end
+
+    @testset "Array with index order" begin
+        i = T4AIndex(2)
+        j = T4AIndex(3)
+
+        # Create 2x3 tensor
+        original_data = [1.0 2.0 3.0; 4.0 5.0 6.0]
+        t = T4ATensor([i, j], original_data)
+
+        # Get tensor indices
+        t_inds = Tensor4all.indices(t)
+
+        # Array with same order as tensor
+        arr1 = Array(t, t_inds)
+        @test arr1 ≈ original_data
+        @test size(arr1) == (2, 3)
+
+        # Array with reversed order (transpose)
+        arr2 = Array(t, [t_inds[2], t_inds[1]])
+        @test arr2 ≈ transpose(original_data)
+        @test size(arr2) == (3, 2)
+
+        # Varargs form
+        arr3 = Array(t, t_inds[1], t_inds[2])
+        @test arr3 ≈ original_data
+    end
+
+    @testset "Array with index order (3D)" begin
+        i = T4AIndex(2)
+        j = T4AIndex(3)
+        k = T4AIndex(4)
+
+        data = rand(2, 3, 4)
+        t = T4ATensor([i, j, k], data)
+        t_inds = Tensor4all.indices(t)
+
+        # Original order
+        arr1 = Array(t, t_inds)
+        @test arr1 ≈ data
+
+        # Permuted order: (k, i, j) -> permutedims(data, (3, 1, 2))
+        arr2 = Array(t, [t_inds[3], t_inds[1], t_inds[2]])
+        @test arr2 ≈ permutedims(data, (3, 1, 2))
+        @test size(arr2) == (4, 2, 3)
+    end
+
+    @testset "Tensor from array with source indices" begin
+        i = T4AIndex(2)
+        j = T4AIndex(3)
+
+        # Array with (j, i) order: shape (3, 2)
+        arr = rand(3, 2)
+
+        # Create tensor with [i, j] from array with [j, i]
+        t_inds = Tensor4all.indices(T4ATensor([i, j], zeros(2, 3)))
+        arr_inds = [t_inds[2], t_inds[1]]  # [j, i]
+
+        t = T4ATensor(t_inds, arr, arr_inds)
+
+        # Data should be permuted to (i, j) order
+        @test Tensor4all.dims(t) == (2, 3)
+        @test Array(t, t_inds) ≈ permutedims(arr, (2, 1))
+    end
+
+    @testset "deepcopy" begin
+        i = T4AIndex(3)
+        j = T4AIndex(4)
+        data = rand(3, 4)
+
+        t = T4ATensor([i, j], data)
+        t2 = deepcopy(t)
+
+        @test Tensor4all.rank(t2) == 2
+        @test Tensor4all.dims(t2) == (3, 4)
+        @test Tensor4all.data(t2) ≈ data
+    end
 end

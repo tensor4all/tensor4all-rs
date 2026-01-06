@@ -8,8 +8,9 @@ using Libdl
 # Paths
 const SCRIPT_DIR = @__DIR__
 const PACKAGE_DIR = dirname(SCRIPT_DIR)
-const WORKSPACE_DIR = dirname(PACKAGE_DIR)  # tensor4all-rs
-const CAPI_DIR = joinpath(WORKSPACE_DIR, "tensor4all-capi")
+const JULIA_DIR = dirname(PACKAGE_DIR)  # julia/
+const WORKSPACE_DIR = dirname(JULIA_DIR)  # tensor4all-rs
+const CAPI_DIR = joinpath(WORKSPACE_DIR, "crates", "tensor4all-capi")
 
 # Output library name (platform-specific)
 const LIB_NAME = "libtensor4all_capi." * Libdl.dlext
