@@ -48,6 +48,12 @@ impl LinsolveOptions {
         }
     }
 
+    /// Set number of sweeps.
+    pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
+        self.nsweeps = nsweeps;
+        self
+    }
+
     /// Set truncation options.
     pub fn with_truncation(mut self, truncation: TruncationOptions) -> Self {
         self.truncation = truncation;
