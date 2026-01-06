@@ -5,7 +5,7 @@
 //! - [`TruncationOptions`]: Options for truncation
 //! - [`CenterSpec`]: Trait for specifying canonical/truncation centers
 
-use tensor4all::CanonicalForm;
+use tensor4all_core::CanonicalForm;
 
 /// Options for canonicalization operations.
 ///

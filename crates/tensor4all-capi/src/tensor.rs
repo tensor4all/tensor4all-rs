@@ -7,8 +7,8 @@ use std::ptr;
 use std::sync::Arc;
 
 use num_complex::Complex64;
-use tensor4all_core_tensor::storage::{DenseStorageF64, DenseStorageC64};
-use tensor4all_core_tensor::Storage;
+use tensor4all_core::storage::{DenseStorageF64, DenseStorageC64};
+use tensor4all_core::Storage;
 
 use crate::types::{t4a_index, t4a_tensor, t4a_storage_kind, InternalIndex, InternalTensor};
 use crate::{StatusCode, T4A_SUCCESS, T4A_NULL_POINTER, T4A_INVALID_ARGUMENT, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR};

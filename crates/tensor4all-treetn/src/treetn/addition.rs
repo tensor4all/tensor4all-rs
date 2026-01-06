@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use tensor4all::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
-use tensor4all::storage::{DenseStorageC64, DenseStorageF64, Storage};
-use tensor4all::TensorDynLen;
+use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
+use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64, Storage};
+use tensor4all_core::TensorDynLen;
 
 use super::{compute_strides, linear_to_multi_index, multi_to_linear_index, TreeTN};
 

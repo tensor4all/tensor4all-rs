@@ -5,7 +5,7 @@
 
 use std::hash::Hash;
 
-use tensor4all::index::{Index, Symmetry};
+use tensor4all_core::index::{Index, Symmetry};
 
 use super::TreeTN;
 
@@ -13,7 +13,7 @@ use super::TreeTN;
 // TensorLike implementation for TreeTN
 // ============================================================================
 
-impl<Id, Symm, V> tensor4all::TensorLike for TreeTN<Id, Symm, V>
+impl<Id, Symm, V> tensor4all_core::TensorLike for TreeTN<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     Symm: Clone + Symmetry + std::fmt::Debug + Send + Sync + 'static,
@@ -21,7 +21,7 @@ where
 {
     type Id = Id;
     type Symm = Symm;
-    type Tags = tensor4all::DefaultTagSet;
+    type Tags = tensor4all_core::DefaultTagSet;
 
     fn external_indices(&self) -> Vec<Index<Self::Id, Self::Symm, Self::Tags>> {
         // Collect all site indices from the site_index_network.
@@ -47,7 +47,7 @@ where
                     .map(|idx| Index::new_with_tags(
                         idx.id.clone(),
                         idx.symm.clone(),
-                        tensor4all::DefaultTagSet::default(),
+                        tensor4all_core::DefaultTagSet::default(),
                     ))
                     .collect();
                 indices.sort_by(|a, b| a.id.cmp(&b.id));
@@ -67,7 +67,7 @@ where
             .sum()
     }
 
-    fn to_tensor(&self) -> anyhow::Result<tensor4all::TensorDynLen<Self::Id, Self::Symm>> {
+    fn to_tensor(&self) -> anyhow::Result<tensor4all_core::TensorDynLen<Self::Id, Self::Symm>> {
         // Use the existing contract_to_tensor method
         self.contract_to_tensor()
     }

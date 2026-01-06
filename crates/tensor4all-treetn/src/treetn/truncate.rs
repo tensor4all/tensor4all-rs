@@ -15,8 +15,8 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all::CanonicalForm;
+use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
+use tensor4all_core::CanonicalForm;
 
 use super::localupdate::{apply_local_update_sweep, LocalUpdateSweepPlan, TruncateUpdater};
 use super::TreeTN;

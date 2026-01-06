@@ -14,9 +14,9 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
-use tensor4all::TensorDynLen;
+use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
+use tensor4all_core::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
+use tensor4all_core::TensorDynLen;
 
 use super::addition::direct_sum_tensors;
 use super::decompose::{TreeTopology, factorize_tensor_to_treetn};
@@ -53,7 +53,7 @@ where
         Id: Clone + std::hash::Hash + Eq + From<DynId>,
         Symm: Clone + Symmetry,
     {
-        use tensor4all::index_ops::sim;
+        use tensor4all_core::index_ops::sim;
 
         // Clone the structure
         let mut result = self.clone();

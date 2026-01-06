@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 // Re-export CanonicalForm from core-common for convenience
-pub use tensor4all_core_common::CanonicalForm;
+pub use tensor4all_core::CanonicalForm;
 
 /// Truncation algorithm.
 ///

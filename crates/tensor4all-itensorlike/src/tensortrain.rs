@@ -9,10 +9,10 @@
 use std::ops::Range;
 
 // Note: NodeIndex import not needed since we use V = usize for node names
-use tensor4all_core_common::{
+use tensor4all_core::{
     common_inds, hascommoninds, sim, DynId, Index, NoSymmSpace, Symmetry,
 };
-use tensor4all_core_tensor::{AnyScalar, TensorAccess, TensorDynLen};
+use tensor4all_core::{AnyScalar, TensorAccess, TensorDynLen};
 use tensor4all_treetn::{TreeTN, CanonicalizationOptions, TruncationOptions, ContractionOptions as TreeTNContractionOptions, ContractionMethod as TreeTNContractionMethod, contract as treetn_contract};
 
 use crate::error::{TensorTrainError, Result};
@@ -724,8 +724,8 @@ fn truncate_alg_to_form(alg: TruncateAlg) -> CanonicalForm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor4all_core_common::{DynId, Index, NoSymmSpace};
-    use tensor4all_core_tensor::StorageScalar;
+    use tensor4all_core::{DynId, Index, NoSymmSpace};
+    use tensor4all_core::StorageScalar;
 
     /// Helper to create a simple tensor for testing using DynId
     fn make_tensor(

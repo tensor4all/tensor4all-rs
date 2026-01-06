@@ -8,9 +8,9 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
-use tensor4all::TensorDynLen;
+use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
+use tensor4all_core::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
+use tensor4all_core::TensorDynLen;
 
 use super::TreeTN;
 

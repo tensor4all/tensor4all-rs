@@ -1,0 +1,30 @@
+[package]
+name = "tensor4all-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["backend-faer"]
+backend-faer = ["mdarray-linalg-faer"]
+backend-lapack = ["mdarray-linalg-lapack"]
+
+[dependencies]
+matrixci = { path = "../matrixci" }
+num-complex.workspace = true
+num-traits.workspace = true
+mdarray.workspace = true
+mdarray-linalg.workspace = true
+mdarray-linalg-faer = { workspace = true, optional = true }
+mdarray-linalg-lapack = { workspace = true, optional = true }
+faer-traits.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+dyn-clone.workspace = true
+rand.workspace = true
+rand_distr.workspace = true
+
+[dev-dependencies]
+rand_chacha.workspace = true
