@@ -1,451 +1,118 @@
 # tensor4all-rs
 
-A Rust implementation of tensor networks, inspired by ITensors.jl and QSpace v4.
-The API is designed to be largely compatible with ITensors.jl, with the goal of enabling easy conversion between the two libraries.
-
-This library is experimental and currently focuses on QTT (Quantics Tensor Train) and TCI (Tensor Cross Interpolation) algorithms. Abelian and non-Abelian symmetries are not in the initial scope, but the design is extensible to support them in the future.
-
-## Overview
-
-tensor4all-rs provides a type-safe, efficient implementation of tensor networks with support for quantum number symmetries. The design is inspired by both ITensors.jl (Julia) and QSpace v4 (MATLAB/C++), which represent the same mathematical concept: block-sparse tensors organized by quantum numbers.
-
-## Key Features
-
-- **Type-safe Index system**: Generic `Index<Id, Symm, Tags = DefaultTagSet>` type supporting both runtime and compile-time identities
-- **Tag support**: Index tags with configurable capacity via `Tags` type parameter (default: `DefaultTagSet` with max 4 tags, each max 16 characters)
-- **Quantum number symmetries**: Support for Abelian (U(1), Z_n) and non-Abelian (SU(2), SU(N)) symmetries (planned)
-- **Thread-safe ID generation**: UInt128 random IDs using thread-local RNG for extremely low collision probability
-- **Flexible tensor types**: Both dynamic-rank and static-rank tensor variants
-- **Copy-on-write storage**: Efficient memory management for tensor networks
-- **Multiple storage backends**: DenseF64, DenseC64, DiagF64, and DiagC64 storage types
-- **Linear algebra operations**: SVD and QR decompositions with configurable truncation tolerance, supporting both FAER and LAPACK backends
-- **Tensor Train (MPS) algorithms**: Tensor Train decomposition, compression, and arithmetic operations
-- **Tensor Cross Interpolation (TCI)**: TCI1 and TCI2 algorithms for tensor approximation
-- **Matrix Cross Interpolation**: Matrix ACA, LU, and LU-CI algorithms
-- **Tree Tensor Networks (TTN)**: Tree tensor network structure with canonicalization, truncation, and sweep-based local updates
-- **Quantics grids**: Efficient conversion between quantics, grid indices, and original coordinates
-- **Modular architecture**: Separated into independent crates for core utilities, tensor operations, linear algebra, and various algorithms
+A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assisted development with fast trial-and-error cycles.
 
 ## Design Philosophy
 
-### Design Principles
+**Vibe Coding Optimized**: tensor4all-rs is designed for rapid prototyping with AI code generation:
 
-tensor4all-rs is designed with the following principles in mind:
+- **Modular architecture**: Independent crates (`core-common`, `core-tensor`, `core-linalg`, etc.) enable fast compilation and isolated testing
+- **ITensors.jl-like dynamic structure**: Flexible `Index` system and dynamic-rank tensors preserve the intuitive API
+- **Static error detection**: Rust's type system catches errors at compile time while maintaining runtime flexibility
 
-- **Modular architecture for fast development cycles**: The library is split into independent crates (`tensor4all-core-common`, `tensor4all-core-tensor`, and `tensor4all-core-linalg`) to enable rapid AI-assisted code generation and testing. Each module can be developed, tested, and compiled independently, minimizing iteration time during development.
-
-- **Compile-time error detection**: The design leverages Rust's type system to catch errors at compile time rather than runtime:
-  - Generic type parameters (`Index<Id, Symm, Tags>`) enable compile-time validation of index compatibility
-  - Type-safe storage variants prevent incorrect storage type usage
-  - Compile-time identity types (ZST markers) enable static analysis of index relationships
-
-- **Extensibility without breaking changes**: The generic design allows adding new features (e.g., quantum number symmetries) without breaking existing code, through trait implementations and type parameters.
-
-- **Performance through zero-cost abstractions**: Rust's zero-cost abstractions ensure that the type-safe, generic design does not incur runtime overhead compared to more direct implementations.
-
-### Comparison with Existing Libraries
-
-| Concept | QSpace v4 | ITensors.jl | tensor4all-rs |
-|---------|-----------|-------------|---------------|
-| **Tensor with QNs** | `QSpace` | `ITensor` | `TensorDynLen<Id, T, Symm>` |
-| **Index** | Quantum number labels in `QIDX` | `Index{QNBlocks}` | `Index<Id, Symm, Tags = DefaultTagSet>` |
-| **Storage** | `DATA` (array of blocks) | `NDTensors` (Dense, BlockSparse, Diag, etc.) | `Storage` enum (DenseF64, DenseC64, DiagF64, DiagC64) |
-| **Language** | MATLAB/C++ | Julia | Rust |
-
-### Index Design
-
-The `Index` type is parameterized by identity type `Id`, symmetry type `Symm`, and tag type `Tags`:
-
-```rust
-pub struct Index<Id, Symm = NoSymmSpace, Tags = DefaultTagSet> {
-    pub id: Id,
-    pub symm: Symm,
-    pub tags: Tags,
-}
-```
-
-**Identity Types**:
-- `DynId` (u128): Runtime identity with thread-local random ID generation
-- ZST marker types: Compile-time-known identity for static analysis
-
-**Symmetry Types**:
-- `NoSymmSpace`: No symmetry (corresponds to `Index{Int}` in ITensors.jl)
-- `QNSpace` (planned): Quantum number spaces (corresponds to `Index{QNBlocks}`)
-
-**Tags**:
-- Configurable via `Tags` type parameter (default: `DefaultTagSet`)
-- `DefaultTagSet = TagSet<4, 16>` (max 4 tags, each max 16 characters)
-- Tags are stored in `TagSet` using `SmallString` for efficient storage
-
-### ID Generation
-
-tensor4all-rs uses **UInt128 with thread-local RNG** for ID generation:
-
-- Each thread has its own RNG instance, seeded from OS entropy
-- Thread-safe without global synchronization
-- Similar to ITensors.jl's task-local RNG but with UInt128 for better collision resistance
-- Collision probability for 10^9 indices: ~10^-21 (negligible)
-
-### Tensor Types
-
-Dynamic-rank tensors: `TensorDynLen<Id, T, Symm = NoSymmSpace>`
-- Rank determined at runtime
-- Uses `Vec<Index>` and `Vec<usize>` for indices and dimensions
-
-### Storage
-
-Tensor data is shared via `Arc<Storage>` with copy-on-write (COW) semantics:
-- If uniquely owned, mutate in place
-- If shared, clone then mutate
-
-**Storage Types**:
-- `DenseF64`: Dense storage for `f64` elements (wraps `DenseStorageF64`)
-- `DenseC64`: Dense storage for `Complex64` elements (wraps `DenseStorageC64`)
-- `DiagF64`: Diagonal storage for `f64` elements (wraps `DiagStorageF64`) - stores only diagonal elements
-- `DiagC64`: Diagonal storage for `Complex64` elements (wraps `DiagStorageC64`) - stores only diagonal elements
-
-**Storage Architecture**:
-- Storage types are implemented as newtype structs (`DenseStorageF64`, `DenseStorageC64`, `DiagStorageF64`, `DiagStorageC64`)
-- The `Storage` enum wraps these newtypes, providing a unified interface
-- Heavy operations (permutation, contraction, conversion) are implemented as methods on the storage newtypes
-- This design keeps `match` blocks short and organizes logic by storage type
-
-### Element Types
-
-- **Static element type**: Use concrete types like `f64` or `Complex64`
-- **Dynamic element type**: Use `AnyScalar` enum for runtime type dispatch
+**Scope**: Initial focus on QTT (Quantics Tensor Train) and TCI (Tensor Cross Interpolation). The design is extensible to support Abelian and non-Abelian symmetries in the future.
 
 ## Type Correspondence
 
-| ITensors.jl | tensor4all-rs | Notes |
-|-------------|--------------|-------|
-| `Index{Int}` | `Index<Id, NoSymmSpace>` | |
-| `Index{QNBlocks}` | `Index<Id, QNSpace>` (future) | |
-| `Index(id, dim, ...)` | `Index::new_with_size(id, dim)` | |
-| `Index(dim)` | `Index::new_dyn(dim)` | |
-| `ITensor` | `TensorDynLen<Id, T, Symm>` | |
-| `NDTensors.Dense` | `Storage::DenseF64` or `Storage::DenseC64` | |
-| `NDTensors.Diag` | `Storage::DiagF64` or `Storage::DiagC64` | |
-| `A * B` (contract) | `a.contract_einsum(&b)` | Auto-contract all common indices |
-| — | `a.tensordot(&b, &[(i, j)])` | Explicit pairs only (NumPy-like) |
+| ITensors.jl | QSpace v4 | tensor4all-rs |
+|-------------|-----------|---------------|
+| `Index{Int}` | — | `Index<Id, NoSymmSpace>` |
+| `Index{QNBlocks}` | `QIDX` | `Index<Id, QNSpace>` (future) |
+| `ITensor` | `QSpace` | `TensorDynLen<Id, T, Symm>` |
+| `Dense` | `DATA` | `Storage::DenseF64/C64` |
+| `Diag` | — | `Storage::DiagF64/C64` |
+| `A * B` | — | `a.contract_einsum(&b)` |
 
-## Truncation Tolerance Comparison
+### Truncation Tolerance
 
-tensor4all-rs and ITensors.jl use different conventions for truncation tolerance:
-
-| Library | Parameter | Semantics | Guarantee |
-|---------|-----------|----------|-----------|
-| **tensor4all-rs** | `rtol` | Relative Frobenius error tolerance | \|A - A_approx\|_F / \|A\|_F ≤ rtol |
-| **ITensors.jl** | `cutoff` | Squared relative error (discarded weight ratio) | Σ_{discarded} σ²_i / Σ_i σ²_i ≤ cutoff |
-
-**Conversion**: ITensors.jl's `cutoff` corresponds to `rtol²` in tensor4all-rs:
-- To achieve the same truncation behavior, use `rtol = sqrt(cutoff)` in tensor4all-rs
-- For example, ITensors `cutoff=1e-20` (for ~10 digit accuracy) corresponds to `rtol=1e-10` in tensor4all-rs
-
-**Default values**:
-- tensor4all-rs: `rtol = 1e-12` (near machine precision)
-- ITensors.jl: `cutoff = 1e-16` (default, corresponds to `rtol ≈ 1e-8`)
+| Library | Parameter | Conversion |
+|---------|-----------|------------|
+| tensor4all-rs | `rtol` | — |
+| ITensors.jl | `cutoff` | `rtol = √cutoff` |
 
 ## Project Structure
 
-tensor4all-rs is organized as a Cargo workspace with the following structure:
-
 ```
 tensor4all-rs/
-├── crates/                    # Rust crates
-│   ├── tensor4all/            # Umbrella crate + core crates
-│   │   ├── core-common/       # Index, tag, and small string utilities
-│   │   ├── core-tensor/       # Tensor and storage implementations
-│   │   └── core-linalg/       # Linear algebra operations
-│   ├── tensor4all-capi/       # C API for language bindings
-│   ├── tensor4all-tensortrain/# Tensor Train (MPS) algorithms
-│   ├── tensor4all-matrixci/   # Matrix Cross Interpolation
-│   ├── tensor4all-tensorci/   # Tensor Cross Interpolation
-│   ├── tensor4all-treetn/     # Tree Tensor Networks
-│   └── quanticsgrids/         # Quantics grid structures
-├── julia/                     # Julia bindings
-│   └── Tensor4all.jl/
-├── python/                    # Python bindings
-│   └── tensor4all/
-└── scripts/                   # Build and test scripts
-    ├── run_julia_tests.sh
-    └── run_python_tests.sh
+├── crates/
+│   ├── tensor4all/           # Umbrella + core crates
+│   │   ├── core-common/      # Index, tags, utilities
+│   │   ├── core-tensor/      # Tensor, storage
+│   │   └── core-linalg/      # SVD, QR (FAER/LAPACK)
+│   ├── tensor4all-capi/      # C API for bindings
+│   ├── tensor4all-tensortrain/
+│   ├── tensor4all-matrixci/
+│   ├── tensor4all-tensorci/
+│   ├── tensor4all-treetn/
+│   └── quanticsgrids/
+├── julia/Tensor4all.jl/      # Julia bindings
+├── python/tensor4all/        # Python bindings
+└── docs/                     # Design documents
 ```
-
-### Crates Overview
-
-**Umbrella Crate**:
-- **`tensor4all`**: Re-exports all core crates for convenient single-import usage
-
-**Core Crates** (in `crates/tensor4all/`):
-- **`core-common`**: Index, tag, and small string utilities
-- **`core-tensor`**: Tensor and storage implementations
-- **`core-linalg`**: Linear algebra operations (SVD, QR with FAER/LAPACK backends)
-
-**FFI Crate**:
-- **`tensor4all-capi`**: C API for language bindings (Julia, Python)
-
-**Algorithm Crates**:
-- **`tensor4all-tensortrain`**: Tensor Train (MPS) decomposition and operations
-- **`tensor4all-matrixci`**: Matrix ACA, LU, and LU-CI algorithms
-- **`tensor4all-tensorci`**: TCI1 and TCI2 algorithms
-- **`tensor4all-treetn`**: Tree Tensor Networks with canonicalization, truncation, and local update sweeps
-
-**Utility Crates**:
-- **`quanticsgrids`**: Quantics grid structures and coordinate conversion
 
 ## Language Bindings
 
-tensor4all-rs provides bindings for multiple programming languages through its C API (`tensor4all-capi`):
-
-### Julia: Tensor4all.jl
-
-Located in `julia/Tensor4all.jl/`, this package provides Julia bindings with ITensors.jl interoperability.
+### Julia
 
 ```julia
 using Tensor4all
+using Tensor4all.ITensorLike  # TensorTrain functionality
 
-# Create indices
+# Index with ITensors.jl interop
 i = Index(2, tags="Site")
-j = Index(3, tags="Link")
-
-# Convert to/from ITensors.Index
-using ITensors
-it_idx = ITensors.Index(i)
-t4a_idx = Tensor4all.Index(it_idx)
+it_idx = ITensors.Index(i)  # Convert to ITensors.Index
 ```
 
-**Running tests**:
-```bash
-./scripts/run_julia_tests.sh
-```
-
-### Python: tensor4all
-
-Located in `python/tensor4all/`, this package provides Python bindings via cffi with NumPy integration.
+### Python
 
 ```python
 from tensor4all import Index, Tensor
 import numpy as np
 
-# Create indices
 i = Index(2, tags="Site")
-j = Index(3, tags="Link")
-
-# Create tensor from NumPy array
-data = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float64)
-t = Tensor([i, j], data)
-
-# Convert back to NumPy
-arr = t.to_numpy()
-```
-
-**Running tests**:
-```bash
-./scripts/run_python_tests.sh
+t = Tensor([i, j], np.array([[1, 2], [3, 4]]))
 ```
 
 ## Usage Example
 
-### Basic Tensor Creation
-
 ```rust
 use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
 use tensor4all_core_tensor::{Storage, TensorDynLen};
-use std::sync::Arc;
 
-// Create indices
-let i = Index::new_dyn(2);  // Index with dimension 2, auto-generated ID
-let j = Index::new_dyn(3);  // Index with dimension 3, auto-generated ID
-
-// Create dense storage
-let storage = Arc::new(Storage::new_dense_f64(6));  // Capacity for 2×3=6 elements
-
-// Create tensor
-let indices = vec![i, j];
-let dims = vec![2, 3];
-let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
-```
-
-### Diagonal Tensor Creation
-
-```rust
-use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
-use tensor4all_core_tensor::diag_tensor_dyn_len;
-
-// Create a 3×3 diagonal tensor
-let i = Index::new_dyn(3);
-let j = Index::new_dyn(3);
-let diag_data = vec![1.0, 2.0, 3.0];
-
-let tensor = diag_tensor_dyn_len(vec![i, j], diag_data);
-```
-
-### Tensor Contraction
-
-```rust
-use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
-use tensor4all_core_tensor::{Storage, TensorDynLen};
-use tensor4all_core_tensor::storage::DenseStorageF64;
-use std::sync::Arc;
-
+// Create indices and tensors
 let i = Index::new_dyn(2);
 let j = Index::new_dyn(3);
 let k = Index::new_dyn(4);
 
-// Create tensor A[i, j]
-let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]));
-let tensor_a = TensorDynLen::new(
-    vec![i.clone(), j.clone()],
-    vec![2, 3],
-    Arc::new(storage_a)
-);
-
-// Create tensor B[j, k]
-let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]));
-let tensor_b = TensorDynLen::new(
-    vec![j.clone(), k.clone()],
-    vec![3, 4],
-    Arc::new(storage_b)
-);
-
-// Contract along j: result is C[i, k]
-let result = tensor_a.contract_einsum(&tensor_b);
+// Contract: C[i,k] = A[i,j] * B[j,k]
+let c = tensor_a.contract_einsum(&tensor_b);
 ```
-
-### Explicit Contraction with `tensordot`
-
-Unlike `contract_einsum()` which automatically contracts all common indices (einsum-like behavior),
-`tensordot()` contracts only explicitly specified index pairs, similar to NumPy's `tensordot`:
-
-```rust
-// Create tensor A[i, j] and B[k, l] with different IDs
-let i = Index::new_dyn(2);
-let j = Index::new_dyn(3);
-let k = Index::new_dyn(3);  // Same dimension as j, different ID
-let l = Index::new_dyn(4);
-
-// Contract j with k explicitly: result is C[i, l]
-let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), k.clone())])?;
-```
-
-**Key difference from ITensors.jl**: In ITensors.jl, `contract()` automatically contracts all
-indices with matching IDs. In tensor4all-rs, we provide both behaviors:
-- `contract_einsum()`: Automatic contraction of all common indices (ITensors.jl compatible)
-- `tensordot()`: Explicit contraction of specified pairs only (NumPy-like)
-
-**Future: Batch Contraction (Batched GEMM)**
-
-In a future version, `tensordot()` will support batch dimensions: common indices not specified
-in the contraction pairs will be preserved as batch dimensions, enabling efficient batched
-matrix multiplication. Currently, this case returns an error.
-
-### Tree Tensor Networks (TTN)
-
-The `tensor4all-treetn` crate provides tree tensor network operations:
-
-```rust
-use tensor4all_treetn::{
-    TreeTN, random_treetn_f64, TruncationOptions, CanonicalizationOptions,
-    LocalUpdateSweepPlan, TruncateUpdater, apply_local_update_sweep,
-};
-use tensor4all::CanonicalForm;
-
-// Create a random tree tensor network
-let site_dims = vec![2, 2, 2, 2];  // 4 sites with dimension 2
-let bond_dim = 10;
-let ttn = random_treetn_f64(&site_dims, bond_dim);
-
-// Canonicalize towards a center node
-let ttn = ttn.canonicalize(
-    ["node_0"],  // Center node name
-    CanonicalizationOptions::default()
-)?;
-
-// Truncate bond dimensions
-let ttn = ttn.truncate(
-    ["node_0"],
-    TruncationOptions::default()
-        .with_max_rank(5)
-        .with_rtol(1e-10)
-)?;
-```
-
-**Key Features**:
-- **Canonicalization**: QR/LU-based canonicalization towards any center node
-- **Truncation**: SVD-based truncation using two-site sweeps with Euler tour traversal
-- **Local Update Sweeps**: `LocalUpdateSweepPlan` for DMRG/TDVP-style algorithms
-- **Contraction Algorithms**: Multiple algorithms for tensor network contraction:
-  - `contract_naive`: Simple sequential contraction
-  - `contract_zipup`: Efficient zip-up contraction
-  - `contract_fit`: Variational fitting algorithm minimizing ||A*B - C||² with lazy environment caching
-- **Random TTN Generation**: `random_treetn_f64` and `random_treetn_c64` for testing
-
-## ITensors.jl ID Generation Algorithm
-
-ITensors.jl uses **random ID generation** for Index objects:
-
-```julia
-const IDType = UInt64
-
-const _INDEX_ID_RNG_KEY = :ITensors_index_id_rng_bLeTZeEsme4bG3vD
-index_id_rng() = get!(task_local_storage(), _INDEX_ID_RNG_KEY, Xoshiro())::Xoshiro
-
-function Index(dim::Number; tags="", plev=0, dir=Neither)
-  return Index(rand(index_id_rng(), IDType), dim, dir, tags, plev)
-end
-```
-
-**Key characteristics**:
-- **Random generation**: Uses `rand(index_id_rng(), UInt64)` to generate random 64-bit IDs
-- **Task-local RNG**: Each Julia task has its own `Xoshiro` random number generator stored in task-local storage
-- **Collision probability**: Extremely low due to the large ID space (2^64 ≈ 1.84 × 10^19)
-- **Reproducibility**: Can be controlled by seeding the task-local RNG if needed
-
-**Comparison with tensor4all-rs**:
-- **ITensors.jl**: Random IDs (UInt64 from Xoshiro RNG, task-local)
-- **tensor4all-rs**: Random IDs (UInt128 from thread-local RNG)
-
-The UInt128 approach provides significantly better collision resistance than UInt64 while maintaining the benefits of random ID generation (better hash distribution, no ID reuse issues).
 
 ## Future Extensions
 
-- **Quantum Number Space**: Support for quantum number symmetries
-- **Arrow/Direction**: Index direction encoding for non-Abelian symmetries
-- **Non-Abelian Support**: Clebsch-Gordan coefficients for non-Abelian symmetries
-
-## TODO
-
-- **Batch contraction in `tensordot`**: Implement batched GEMM support in `tensordot()`. When common indices exist but are not in the contraction pairs, they should be preserved as batch dimensions rather than raising an error. This enables efficient batched matrix multiplication patterns common in deep learning and tensor network algorithms.
-
-- **Optimize DiagTensor × DenseTensor contraction**: Currently, DiagTensor is converted to DenseTensor before contraction, which is inefficient. This can be optimized by implementing Block Matrix × Block Matrix contraction, as DiagTensor × DenseTensor is a special case of block matrix multiplication.
+- Quantum number symmetries (Abelian: U(1), Z_n)
+- Non-Abelian symmetries (SU(2), SU(N))
+- Arrow/direction for fermionic systems
 
 ## Acknowledgments
 
-We acknowledge many fruitful discussions with M. Fishman and E. M. Stoudenmire.
-This implementation is inspired by **ITensors.jl** (https://github.com/ITensor/ITensors.jl).
-We have borrowed API design concepts and function names for compatibility, but the implementation
-is independently written in Rust.
+This implementation is inspired by **ITensors.jl** (https://github.com/ITensor/ITensors.jl). We have borrowed API design concepts for compatibility, but the implementation is independently written in Rust.
 
+We acknowledge many fruitful discussions with **M. Fishman** and **E. M. Stoudenmire** at the Center for Computational Quantum Physics (CCQ), Flatiron Institute. H. Shinaoka visited CCQ during his sabbatical (November–December 2025), which greatly contributed to this project.
 
-**Note**: This library is experimental and not intended for production use. If you use this code
-in research and publish a paper, please cite:
+**Citation**: If you use this code in research, please cite:
 
 > We used tensor4all-rs (https://github.com/tensor4all/tensor4all-rs), inspired by ITensors.jl.
 
-If you cite ITensors.jl directly, please use:
+For ITensors.jl:
 
 > M. Fishman, S. R. White, E. M. Stoudenmire, "The ITensor Software Library for Tensor Network Calculations", arXiv:2007.14822 (2020)
 
 ## References
 
-- ITensors.jl: https://github.com/ITensor/ITensors.jl
-- ITensors.jl paper: M. Fishman, S. R. White, E. M. Stoudenmire, arXiv:2007.14822 (2020)
-- QSpace v4.0 Documentation: `qspace-v4-pub/Docu/user-guide.pdf`
-- QSpace Source: `qspace-v4-pub/Source/QSpace.hh`, `qspace-v4-pub/Source/wbindex.hh`
-- Original QSpace paper: A. Weichselbaum, Annals of Physics **327**, 2972 (2012)
-- X-symbols paper: A. Weichselbaum, Phys. Rev. Research **2**, 023385 (2020)
+- [ITensors.jl](https://github.com/ITensor/ITensors.jl) — M. Fishman, S. R. White, E. M. Stoudenmire, arXiv:2007.14822 (2020)
+- QSpace v4 — A. Weichselbaum, Annals of Physics **327**, 2972 (2012)
 
 ## License
 
-This project is licensed under the **MIT License** (see [LICENSE-MIT](LICENSE-MIT)).
+MIT License (see [LICENSE-MIT](LICENSE-MIT))
