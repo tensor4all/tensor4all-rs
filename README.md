@@ -22,7 +22,7 @@ tensor4all-rs provides a type-safe, efficient implementation of tensor networks 
 - **Tensor Train (MPS) algorithms**: Tensor Train decomposition, compression, and arithmetic operations
 - **Tensor Cross Interpolation (TCI)**: TCI1 and TCI2 algorithms for tensor approximation
 - **Matrix Cross Interpolation**: Matrix ACA, LU, and LU-CI algorithms
-- **Tree Tensor Networks (TTN)**: Tree tensor network structure and operations
+- **Tree Tensor Networks (TTN)**: Tree tensor network structure with canonicalization, truncation, and sweep-based local updates
 - **Quantics grids**: Efficient conversion between quantics, grid indices, and original coordinates
 - **Modular architecture**: Separated into independent crates for core utilities, tensor operations, linear algebra, and various algorithms
 
@@ -189,7 +189,7 @@ tensor4all-rs/
 - **`tensor4all-tensortrain`**: Tensor Train (MPS) decomposition and operations
 - **`tensor4all-matrixci`**: Matrix ACA, LU, and LU-CI algorithms
 - **`tensor4all-tensorci`**: TCI1 and TCI2 algorithms
-- **`tensor4all-treetn`**: Tree Tensor Network structure and operations
+- **`tensor4all-treetn`**: Tree Tensor Networks with canonicalization, truncation, and local update sweeps
 
 **Utility Crates**:
 - **`quanticsgrids`**: Quantics grid structures and coordinate conversion
@@ -339,6 +339,43 @@ indices with matching IDs. In tensor4all-rs, we provide both behaviors:
 In a future version, `tensordot()` will support batch dimensions: common indices not specified
 in the contraction pairs will be preserved as batch dimensions, enabling efficient batched
 matrix multiplication. Currently, this case returns an error.
+
+### Tree Tensor Networks (TTN)
+
+The `tensor4all-treetn` crate provides tree tensor network operations:
+
+```rust
+use tensor4all_treetn::{
+    TreeTN, random_treetn_f64, TruncationOptions, CanonicalizationOptions,
+    LocalUpdateSweepPlan, TruncateUpdater, apply_local_update_sweep,
+};
+use tensor4all::CanonicalForm;
+
+// Create a random tree tensor network
+let site_dims = vec![2, 2, 2, 2];  // 4 sites with dimension 2
+let bond_dim = 10;
+let ttn = random_treetn_f64(&site_dims, bond_dim);
+
+// Canonicalize towards a center node
+let ttn = ttn.canonicalize(
+    ["node_0"],  // Center node name
+    CanonicalizationOptions::default()
+)?;
+
+// Truncate bond dimensions
+let ttn = ttn.truncate(
+    ["node_0"],
+    TruncationOptions::default()
+        .with_max_rank(5)
+        .with_rtol(1e-10)
+)?;
+```
+
+**Key Features**:
+- **Canonicalization**: QR/LU-based canonicalization towards any center node
+- **Truncation**: SVD-based truncation using two-site sweeps with Euler tour traversal
+- **Local Update Sweeps**: `LocalUpdateSweepPlan` for DMRG/TDVP-style algorithms
+- **Random TTN Generation**: `random_treetn_f64` and `random_treetn_c64` for testing
 
 ## ITensors.jl ID Generation Algorithm
 
