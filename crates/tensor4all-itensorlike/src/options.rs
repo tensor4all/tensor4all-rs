@@ -40,7 +40,7 @@ pub enum TruncateAlg {
 /// # Example
 ///
 /// ```
-/// use tensor4all_itensortrain::TruncateOptions;
+/// use tensor4all_itensorlike::TruncateOptions;
 ///
 /// // SVD with relative tolerance
 /// let opts = TruncateOptions::svd().with_rtol(1e-10);
