@@ -12,4 +12,8 @@ petgraph.workspace = true
 anyhow.workspace = true
 num-complex.workspace = true
 dyn-clone.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+rand_chacha.workspace = true
 

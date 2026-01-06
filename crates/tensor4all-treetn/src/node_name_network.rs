@@ -243,6 +243,34 @@ where
         result
     }
 
+    /// Perform an Euler tour traversal starting from the given root node.
+    ///
+    /// Delegates to [`NamedGraph::euler_tour_edges`].
+    pub fn euler_tour_edges(&self, root: &NodeName) -> Option<Vec<(NodeIndex, NodeIndex)>> {
+        self.graph.euler_tour_edges(root)
+    }
+
+    /// Perform an Euler tour traversal starting from the given root NodeIndex.
+    ///
+    /// Delegates to [`NamedGraph::euler_tour_edges_by_index`].
+    pub fn euler_tour_edges_by_index(&self, root: NodeIndex) -> Vec<(NodeIndex, NodeIndex)> {
+        self.graph.euler_tour_edges_by_index(root)
+    }
+
+    /// Perform an Euler tour traversal and return the vertex sequence.
+    ///
+    /// Delegates to [`NamedGraph::euler_tour_vertices`].
+    pub fn euler_tour_vertices(&self, root: &NodeName) -> Option<Vec<NodeIndex>> {
+        self.graph.euler_tour_vertices(root)
+    }
+
+    /// Perform an Euler tour traversal and return the vertex sequence by NodeIndex.
+    ///
+    /// Delegates to [`NamedGraph::euler_tour_vertices_by_index`].
+    pub fn euler_tour_vertices_by_index(&self, root: NodeIndex) -> Vec<NodeIndex> {
+        self.graph.euler_tour_vertices_by_index(root)
+    }
+
     /// Find the shortest path between two nodes using A* algorithm.
     ///
     /// Since this is an unweighted graph, we use unit edge weights.
@@ -354,6 +382,36 @@ where
         }
     }
 
+    /// Compute edges to canonicalize from leaves to target, returning node names.
+    ///
+    /// This is similar to `edges_to_canonicalize(None, target)` but returns
+    /// `(from_name, to_name)` pairs instead of `(NodeIndex, NodeIndex)`.
+    ///
+    /// Useful for operations that work with two networks that have the same
+    /// topology but different NodeIndex values (e.g., contract_zipup).
+    ///
+    /// # Arguments
+    /// * `target` - Target node name for the orthogonality center
+    ///
+    /// # Returns
+    /// `None` if target node doesn't exist, otherwise a vector of `(from, to)` pairs
+    /// where `from` is the node being processed and `to` is its parent (towards target).
+    pub fn edges_to_canonicalize_by_names(&self, target: &NodeName) -> Option<Vec<(NodeName, NodeName)>> {
+        let target_idx = self.node_index(target)?;
+        let edges = self.edges_to_canonicalize(None, target_idx);
+
+        let result: Vec<_> = edges
+            .into_iter()
+            .filter_map(|(from_idx, to_idx)| {
+                let from_name = self.node_name(from_idx)?.clone();
+                let to_name = self.node_name(to_idx)?.clone();
+                Some((from_name, to_name))
+            })
+            .collect();
+
+        Some(result)
+    }
+
     /// Compute parent edges for each node in the given order.
     fn compute_parent_edges(&self, nodes: &[NodeIndex], root: NodeIndex) -> CanonicalizeEdges {
         let g = self.graph.graph();
@@ -385,6 +443,116 @@ where
         }
 
         CanonicalizeEdges::from_edges(edges)
+    }
+
+    /// Compute edges to canonicalize from leaves towards a connected region (multiple centers).
+    ///
+    /// Given a set of target nodes forming a connected region, this function returns
+    /// all edges (src, dst) where:
+    /// - `src` is a node outside the target region
+    /// - `dst` is the next node towards the target region
+    ///
+    /// The edges are ordered so that nodes farther from the target region are processed first
+    /// (children before parents), which is the correct order for canonicalization.
+    ///
+    /// # Arguments
+    /// * `target_region` - Set of NodeIndex that forms the canonical center region
+    ///                     (must be non-empty and connected)
+    ///
+    /// # Returns
+    /// `CanonicalizeEdges` with all edges pointing towards the target region.
+    /// Returns empty edges if target_region is empty.
+    ///
+    /// # Panics
+    /// Does not panic, but if target_region is disconnected, behavior is undefined
+    /// (may return partial results).
+    pub fn edges_to_canonicalize_to_region(
+        &self,
+        target_region: &HashSet<NodeIndex>,
+    ) -> CanonicalizeEdges {
+        if target_region.is_empty() {
+            return CanonicalizeEdges::empty();
+        }
+
+        let g = self.graph.graph();
+
+        // Multi-source BFS from target_region to compute distances and parent pointers
+        let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+        let mut queue = VecDeque::new();
+
+        // Initialize all target region nodes at distance 0
+        for &node in target_region {
+            dist.insert(node, 0);
+            queue.push_back(node);
+        }
+
+        // BFS to find distances and parents
+        while let Some(node) = queue.pop_front() {
+            let d = dist[&node];
+            for neighbor in g.neighbors(node) {
+                if !dist.contains_key(&neighbor) {
+                    dist.insert(neighbor, d + 1);
+                    parent.insert(neighbor, node);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+
+        // Collect edges from nodes outside target region towards their parent
+        // Sort by distance (descending) so farther nodes are processed first
+        let mut node_dist_pairs: Vec<(NodeIndex, usize)> = dist
+            .iter()
+            .filter(|(node, _)| !target_region.contains(node))
+            .map(|(&node, &d)| (node, d))
+            .collect();
+
+        node_dist_pairs.sort_by(|a, b| b.1.cmp(&a.1)); // Descending by distance
+
+        let edges: Vec<(NodeIndex, NodeIndex)> = node_dist_pairs
+            .iter()
+            .filter_map(|(node, _)| {
+                let p = parent.get(node)?;
+                Some((*node, *p))
+            })
+            .collect();
+
+        CanonicalizeEdges::from_edges(edges)
+    }
+
+    /// Compute edges to canonicalize towards a region, returning node names.
+    ///
+    /// This is similar to `edges_to_canonicalize_to_region` but takes and returns
+    /// node names instead of NodeIndex.
+    ///
+    /// # Arguments
+    /// * `target_region` - Set of node names that forms the canonical center region
+    ///
+    /// # Returns
+    /// `None` if any target node doesn't exist, otherwise `Some(Vec<(from, to)>)`
+    /// where edges point towards the target region.
+    pub fn edges_to_canonicalize_to_region_by_names(
+        &self,
+        target_region: &HashSet<NodeName>,
+    ) -> Option<Vec<(NodeName, NodeName)>> {
+        // Convert node names to NodeIndex
+        let target_indices: HashSet<NodeIndex> = target_region
+            .iter()
+            .map(|name| self.node_index(name))
+            .collect::<Option<HashSet<_>>>()?;
+
+        let edges = self.edges_to_canonicalize_to_region(&target_indices);
+
+        let result: Vec<_> = edges
+            .into_iter()
+            .filter_map(|(from_idx, to_idx)| {
+                let from_name = self.node_name(from_idx)?.clone();
+                let to_name = self.node_name(to_idx)?.clone();
+                Some((from_name, to_name))
+            })
+            .collect();
+
+        Some(result)
     }
 
     /// Check if two networks have the same topology (same nodes and edges).
@@ -526,5 +694,119 @@ mod tests {
         net3.add_edge(&"A".to_string(), &"C".to_string()).unwrap();
 
         assert!(!net1.same_topology(&net3));
+    }
+
+    #[test]
+    fn test_euler_tour_chain() {
+        // Chain: A - B - C
+        let mut net: NodeNameNetwork<String> = NodeNameNetwork::new();
+        let a = net.add_node("A".to_string()).unwrap();
+        let b = net.add_node("B".to_string()).unwrap();
+        let c = net.add_node("C".to_string()).unwrap();
+        net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+
+        // Euler tour from B: should visit all edges twice
+        let edges = net.euler_tour_edges(&"B".to_string()).unwrap();
+        // 2 edges × 2 directions = 4 directed edges
+        assert_eq!(edges.len(), 4);
+
+        // Verify each undirected edge appears twice (forward and backward)
+        let edge_set: HashSet<_> = edges.iter().cloned().collect();
+        assert!(edge_set.contains(&(b, a)) || edge_set.contains(&(b, c)));
+
+        // Vertices: should start and end at B
+        let vertices = net.euler_tour_vertices(&"B".to_string()).unwrap();
+        assert_eq!(vertices.len(), 5); // B, ?, B, ?, B
+        assert_eq!(vertices[0], b);
+        assert_eq!(vertices[vertices.len() - 1], b);
+
+        // All vertices should be visited
+        let unique_vertices: HashSet<_> = vertices.iter().cloned().collect();
+        assert_eq!(unique_vertices, [a, b, c].into());
+    }
+
+    #[test]
+    fn test_euler_tour_y_shape() {
+        // Y-shape:
+        //     A
+        //     |
+        // B - C - D
+        let mut net: NodeNameNetwork<String> = NodeNameNetwork::new();
+        let a = net.add_node("A".to_string()).unwrap();
+        let b = net.add_node("B".to_string()).unwrap();
+        let c = net.add_node("C".to_string()).unwrap();
+        let d = net.add_node("D".to_string()).unwrap();
+        net.add_edge(&"A".to_string(), &"C".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+        net.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
+
+        // Euler tour from C: should visit all 3 edges twice
+        let edges = net.euler_tour_edges(&"C".to_string()).unwrap();
+        // 3 edges × 2 directions = 6 directed edges
+        assert_eq!(edges.len(), 6);
+
+        // Start from C
+        assert_eq!(edges[0].0, c);
+
+        // Vertices: 7 visits (C + 6 edges)
+        let vertices = net.euler_tour_vertices(&"C".to_string()).unwrap();
+        assert_eq!(vertices.len(), 7);
+        assert_eq!(vertices[0], c);
+        assert_eq!(vertices[vertices.len() - 1], c);
+
+        // All vertices should be visited
+        let unique_vertices: HashSet<_> = vertices.iter().cloned().collect();
+        assert_eq!(unique_vertices, [a, b, c, d].into());
+    }
+
+    #[test]
+    fn test_euler_tour_single_node() {
+        let mut net: NodeNameNetwork<String> = NodeNameNetwork::new();
+        let a = net.add_node("A".to_string()).unwrap();
+
+        let edges = net.euler_tour_edges(&"A".to_string()).unwrap();
+        assert!(edges.is_empty());
+
+        let vertices = net.euler_tour_vertices(&"A".to_string()).unwrap();
+        assert_eq!(vertices, vec![a]);
+    }
+
+    #[test]
+    fn test_euler_tour_star() {
+        // Star: center C connected to A, B, D, E
+        //     A
+        //     |
+        // B - C - D
+        //     |
+        //     E
+        let mut net: NodeNameNetwork<String> = NodeNameNetwork::new();
+        let a = net.add_node("A".to_string()).unwrap();
+        let b = net.add_node("B".to_string()).unwrap();
+        let c = net.add_node("C".to_string()).unwrap();
+        let d = net.add_node("D".to_string()).unwrap();
+        let e = net.add_node("E".to_string()).unwrap();
+        net.add_edge(&"A".to_string(), &"C".to_string()).unwrap();
+        net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+        net.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
+        net.add_edge(&"C".to_string(), &"E".to_string()).unwrap();
+
+        // Euler tour from C: should visit all 4 edges twice
+        let edges = net.euler_tour_edges(&"C".to_string()).unwrap();
+        // 4 edges × 2 directions = 8 directed edges
+        assert_eq!(edges.len(), 8);
+
+        // Start from C
+        assert_eq!(edges[0].0, c);
+
+        // Vertices: 9 visits (C + 8 edges)
+        let vertices = net.euler_tour_vertices(&"C".to_string()).unwrap();
+        assert_eq!(vertices.len(), 9);
+        assert_eq!(vertices[0], c);
+        assert_eq!(vertices[vertices.len() - 1], c);
+
+        // All vertices should be visited
+        let unique_vertices: HashSet<_> = vertices.iter().cloned().collect();
+        assert_eq!(unique_vertices, [a, b, c, d, e].into());
     }
 }

@@ -33,6 +33,8 @@ mdarray-linalg-lapack = { git = "https://github.com/grothesque/mdarray-linalg", 
 faer-traits = "0.23"
 thiserror = "2.0"
 rand = "0.8"
+rand_chacha = "0.3"
+rand_distr = "0.4"
 petgraph = "0.6"
 dyn-clone = "1.0"
 

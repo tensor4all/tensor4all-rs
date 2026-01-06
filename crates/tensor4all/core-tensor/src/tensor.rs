@@ -656,6 +656,158 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
             storage: result_storage,
         })
     }
+
+    /// Compute the outer product (tensor product) of two tensors.
+    ///
+    /// Creates a new tensor whose indices are the concatenation of the indices
+    /// from both input tensors. The result has shape `[...self.dims, ...other.dims]`.
+    ///
+    /// This is equivalent to numpy's `np.outer` or `np.tensordot(a, b, axes=0)`,
+    /// or ITensor's `*` operator when there are no common indices.
+    ///
+    /// # Arguments
+    /// * `other` - The other tensor to compute outer product with
+    ///
+    /// # Returns
+    /// A new tensor with indices from both tensors.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core_tensor::TensorDynLen;
+    /// use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+    /// use tensor4all_core_tensor::storage::DenseStorageF64;
+    /// use tensor4all_core_tensor::Storage;
+    /// use std::sync::Arc;
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(
+    ///     vec![i.clone()],
+    ///     vec![2],
+    ///     Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0]))),
+    /// );
+    /// let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(
+    ///     vec![j.clone()],
+    ///     vec![3],
+    ///     Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0, 3.0]))),
+    /// );
+    ///
+    /// // Outer product: C[i, j] = A[i] * B[j]
+    /// let result = tensor_a.outer_product(&tensor_b).unwrap();
+    /// assert_eq!(result.dims, vec![2, 3]);
+    /// ```
+    pub fn outer_product(&self, other: &Self) -> Result<Self>
+    where
+        Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
+        Symm: Clone + Symmetry,
+    {
+        use anyhow::Context;
+        use crate::storage::contract_storage;
+
+        // Check for common indices - outer product should have none
+        let common = common_inds(&self.indices, &other.indices);
+        if !common.is_empty() {
+            return Err(anyhow::anyhow!(
+                "outer_product: tensors have common indices with ids {:?}. \
+                 Use tensordot to contract common indices, or use sim() to replace \
+                 indices with fresh IDs before computing outer product.",
+                common.iter().map(|idx| &idx.id).collect::<Vec<_>>()
+            ))
+            .context("outer_product: common indices found");
+        }
+
+        // Build result indices and dimensions
+        let mut result_indices = self.indices.clone();
+        result_indices.extend(other.indices.iter().cloned());
+
+        let mut result_dims = self.dims.clone();
+        result_dims.extend(other.dims.iter().cloned());
+
+        // Perform outer product using contract_storage with empty axes
+        let result_storage = Arc::new(contract_storage(
+            &self.storage,
+            &self.dims,
+            &[],  // No axes to contract from self
+            &other.storage,
+            &other.dims,
+            &[],  // No axes to contract from other
+            &result_dims,
+        ));
+
+        Ok(Self {
+            indices: result_indices,
+            dims: result_dims,
+            storage: result_storage,
+        })
+    }
+}
+
+// ============================================================================
+// Random tensor generation
+// ============================================================================
+
+impl<Id, Symm> TensorDynLen<Id, Symm>
+where
+    Id: Clone + std::hash::Hash + Eq,
+    Symm: Clone + Symmetry,
+{
+    /// Create a random f64 tensor with values from standard normal distribution.
+    ///
+    /// # Arguments
+    /// * `rng` - Random number generator
+    /// * `indices` - The indices for the tensor
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core_tensor::TensorDynLen;
+    /// use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+    /// use rand::SeedableRng;
+    /// use rand_chacha::ChaCha8Rng;
+    ///
+    /// let mut rng = ChaCha8Rng::seed_from_u64(42);
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let tensor: TensorDynLen<DynId> = TensorDynLen::random_f64(&mut rng, vec![i, j]);
+    /// assert_eq!(tensor.dims, vec![2, 3]);
+    /// ```
+    pub fn random_f64<R: rand::Rng>(rng: &mut R, indices: Vec<Index<Id, Symm>>) -> Self {
+        let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
+        let total_size: usize = dims.iter().product();
+        let storage = Arc::new(Storage::DenseF64(
+            crate::storage::DenseStorageF64::random(rng, total_size)
+        ));
+        Self::new(indices, dims, storage)
+    }
+
+    /// Create a random Complex64 tensor with values from standard normal distribution.
+    ///
+    /// Both real and imaginary parts are drawn from standard normal distribution.
+    ///
+    /// # Arguments
+    /// * `rng` - Random number generator
+    /// * `indices` - The indices for the tensor
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core_tensor::TensorDynLen;
+    /// use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+    /// use rand::SeedableRng;
+    /// use rand_chacha::ChaCha8Rng;
+    ///
+    /// let mut rng = ChaCha8Rng::seed_from_u64(42);
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let tensor: TensorDynLen<DynId> = TensorDynLen::random_c64(&mut rng, vec![i, j]);
+    /// assert_eq!(tensor.dims, vec![2, 3]);
+    /// ```
+    pub fn random_c64<R: rand::Rng>(rng: &mut R, indices: Vec<Index<Id, Symm>>) -> Self {
+        let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
+        let total_size: usize = dims.iter().product();
+        let storage = Arc::new(Storage::DenseC64(
+            crate::storage::DenseStorageC64::random(rng, total_size)
+        ));
+        Self::new(indices, dims, storage)
+    }
 }
 
 /// Implement multiplication operator for tensor contraction.
@@ -1072,6 +1224,14 @@ where
     /// assert!((tensor.norm_squared() - 91.0).abs() < 1e-10);
     /// ```
     pub fn norm_squared(&self) -> f64 {
+        // Special case: scalar tensor (no indices)
+        if self.indices.is_empty() {
+            // For a scalar, ||T||² = |value|²
+            let value = self.sum();
+            let abs_val = value.abs();
+            return abs_val * abs_val;
+        }
+
         // Contract tensor with its conjugate over all indices → scalar
         // ||T||² = Σ T_ijk... * conj(T_ijk...) = Σ |T_ijk...|²
         let conj = self.conj();
@@ -1098,6 +1258,64 @@ where
     /// ```
     pub fn norm(&self) -> f64 {
         self.norm_squared().sqrt()
+    }
+
+    /// Compute the relative distance between two tensors.
+    ///
+    /// Returns `||A - B|| / ||A||` (Frobenius norm).
+    /// If `||A|| = 0`, returns `||B||` instead to avoid division by zero.
+    ///
+    /// This is the ITensor-style distance function useful for comparing tensors.
+    ///
+    /// # Arguments
+    /// * `other` - The other tensor to compare with
+    ///
+    /// # Returns
+    /// The relative distance as a f64 value.
+    ///
+    /// # Note
+    /// The indices of both tensors must be permutable to each other.
+    /// The result tensor (A - B) uses the index ordering from self.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core_tensor::TensorDynLen;
+    /// use tensor4all_core_tensor::Storage;
+    /// use tensor4all_core_tensor::storage::DenseStorageF64;
+    /// use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
+    /// use std::sync::Arc;
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let data_a = vec![1.0, 0.0];
+    /// let data_b = vec![1.0, 0.0];  // Same tensor
+    /// let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
+    /// let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
+    /// let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone()], vec![2], storage_a);
+    /// let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone()], vec![2], storage_b);
+    ///
+    /// assert!(tensor_a.distance(&tensor_b) < 1e-10);  // Zero distance
+    /// ```
+    pub fn distance(&self, other: &Self) -> f64
+    where
+        Id: std::fmt::Debug,
+    {
+        let norm_self = self.norm();
+
+        // Compute A - B = A + (-1) * B
+        let neg_other_storage = other.storage.as_ref() * (-1.0_f64);
+        let neg_other = Self {
+            indices: other.indices.clone(),
+            dims: other.dims.clone(),
+            storage: std::sync::Arc::new(neg_other_storage),
+        };
+        let diff = self.add(&neg_other).expect("distance: tensors must have same indices");
+        let norm_diff = diff.norm();
+
+        if norm_self > 0.0 {
+            norm_diff / norm_self
+        } else {
+            norm_diff
+        }
     }
 }
 

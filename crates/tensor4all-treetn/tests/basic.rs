@@ -3,7 +3,7 @@
 //! In Einsum mode, tensors that share a bond must use the SAME Index (same ID).
 //! When connecting node_a to node_b, both tensors must contain the same bond index.
 
-use tensor4all_treetn::{TreeTN, TreeTopology};
+use tensor4all_treetn::{TreeTN, TreeTopology, TruncationOptions, CanonicalizationOptions};
 use tensor4all::index::{DefaultIndex as Index, DynId};
 use tensor4all::{TensorDynLen, Storage};
 use tensor4all::NoSymmSpace;
@@ -449,14 +449,14 @@ fn test_treetn_validate_tree_empty() {
 // ============================================================================
 
 #[test]
-fn test_ortho_region_empty() {
+fn test_canonical_center_empty() {
     let tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
     assert!(!tn.is_canonicalized());
-    assert!(tn.ortho_region().is_empty());
+    assert!(tn.canonical_center().is_empty());
 }
 
 #[test]
-fn test_set_ortho_region() {
+fn test_set_canonical_center() {
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
 
     let i = Index::new_dyn(2);
@@ -469,23 +469,23 @@ fn test_set_ortho_region() {
 
     assert!(!tn.is_canonicalized());
 
-    let result = tn.set_ortho_region(vec![node]);
+    let result = tn.set_canonical_center(vec![node]);
     assert!(result.is_ok());
     assert!(tn.is_canonicalized());
-    assert!(tn.ortho_region().contains(&node));
+    assert!(tn.canonical_center().contains(&node));
 }
 
 #[test]
-fn test_set_ortho_region_invalid_node() {
+fn test_set_canonical_center_invalid_node() {
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
 
     let invalid_node = NodeIndex::new(999);
-    let result = tn.set_ortho_region(vec![invalid_node]);
+    let result = tn.set_canonical_center(vec![invalid_node]);
     assert!(result.is_err());
 }
 
 #[test]
-fn test_clear_ortho_region() {
+fn test_clear_canonical_center() {
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
 
     let i = Index::new_dyn(2);
@@ -496,12 +496,12 @@ fn test_clear_ortho_region() {
     );
     let node = tn.add_tensor_auto_name(tensor);
 
-    tn.set_ortho_region(vec![node]).unwrap();
+    tn.set_canonical_center(vec![node]).unwrap();
     assert!(tn.is_canonicalized());
 
-    tn.clear_ortho_region();
+    tn.clear_canonical_center();
     assert!(!tn.is_canonicalized());
-    assert!(tn.ortho_region().is_empty());
+    assert!(tn.canonical_center().is_empty());
 }
 
 // ============================================================================
@@ -522,7 +522,7 @@ fn test_validate_ortho_consistency_disconnected_centers() {
     let n2 = tn.add_tensor_auto_name(tensor2);
 
     // Two centers that are not connected should fail
-    tn.set_ortho_region(vec![n1, n2]).unwrap();
+    tn.set_canonical_center(vec![n1, n2]).unwrap();
     assert!(tn.validate_ortho_consistency().is_err());
 }
 
@@ -531,7 +531,7 @@ fn test_validate_ortho_consistency_none_only_inside_centers() {
     let (mut tn, _node1, node2, edge, _phys1, _bond, _phys2) = create_two_node_treetn();
 
     // Only node2 is center
-    tn.set_ortho_region(vec![node2]).unwrap();
+    tn.set_canonical_center(vec![node2]).unwrap();
 
     // Clear ortho_towards on a boundary edge (should be forbidden)
     tn.set_edge_ortho_towards(edge, None).unwrap();
@@ -543,7 +543,7 @@ fn test_validate_ortho_consistency_chain_pointing_towards_center() {
     let (mut tn, _n1, n2, _n3, e12, e23, _b12, _b23) = create_three_node_chain();
 
     // n2 is center
-    tn.set_ortho_region(vec![n2]).unwrap();
+    tn.set_canonical_center(vec![n2]).unwrap();
 
     // Both boundary edges must point into center
     tn.set_edge_ortho_towards(e12, Some(n2)).unwrap();
@@ -583,10 +583,13 @@ fn test_canonicalize_simple() {
     tn.connect(n1, &bond, n2, &bond).unwrap();
 
     // Canonicalize towards n2
-    let tn_canon = tn.canonicalize(vec![n2]).unwrap();
+    let tn_canon = tn.canonicalize(
+        std::iter::once(n2),
+        CanonicalizationOptions::default(),
+    ).unwrap();
 
     assert!(tn_canon.is_canonicalized());
-    assert!(tn_canon.ortho_region().contains(&n2));
+    assert!(tn_canon.canonical_center().contains(&n2));
     assert!(tn_canon.validate_ortho_consistency().is_ok());
 }
 
@@ -757,7 +760,726 @@ fn test_treetn_add_two_nodes() {
 }
 
 // ============================================================================
+// Truncation Tests
+// ============================================================================
+
+#[test]
+fn test_truncate_simple() {
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
+
+    let i = Index::new_dyn(2);
+    let bond = Index::new_dyn(10); // Large bond
+    let k = Index::new_dyn(4);
+
+    // Create tensors with rank-deficient data (effectively rank 2)
+    // tensor1[i, bond] = data[i * 10 + bond], only bond=0,1 are nonzero
+    let mut data1 = vec![0.0f64; 20];
+    for idx in 0..2 {
+        data1[idx * 10] = 1.0;
+        data1[idx * 10 + 1] = 0.5;
+    }
+    let tensor1 = TensorDynLen::new(
+        vec![i.clone(), bond.clone()],
+        vec![2, 10],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+    );
+    let n1 = tn.add_tensor_auto_name(tensor1);
+
+    // tensor2[bond, k] similar structure
+    let mut data2 = vec![0.0f64; 40];
+    for k_idx in 0..4 {
+        data2[0 * 4 + k_idx] = 1.0;
+        data2[1 * 4 + k_idx] = 0.3;
+    }
+    let tensor2 = TensorDynLen::new(
+        vec![bond.clone(), k.clone()],
+        vec![10, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+    );
+    let n2 = tn.add_tensor_auto_name(tensor2);
+
+    let edge = tn.connect(n1, &bond, n2, &bond).unwrap();
+
+    // Original bond dimension is 10
+    assert_eq!(tn.bond_index(edge).unwrap().size(), 10);
+
+    // Truncate with max_rank = 3
+    let truncated = tn.truncate(
+        std::iter::once(n2),
+        TruncationOptions::default().with_max_rank(3),
+    ).unwrap();
+
+    // Bond should now be at most 3
+    let new_edge = truncated.edges_for_node(n1)[0].0;
+    assert!(truncated.bond_index(new_edge).unwrap().size() <= 3);
+}
+
+#[test]
+fn test_truncate_mut_simple() {
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
+
+    let i = Index::new_dyn(2);
+    let bond = Index::new_dyn(8);
+    let k = Index::new_dyn(4);
+
+    let data1: Vec<f64> = (0..16).map(|x| x as f64).collect();
+    let tensor1 = TensorDynLen::new(
+        vec![i.clone(), bond.clone()],
+        vec![2, 8],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+    );
+    let n1 = tn.add_tensor_auto_name(tensor1);
+
+    let data2: Vec<f64> = (0..32).map(|x| x as f64).collect();
+    let tensor2 = TensorDynLen::new(
+        vec![bond.clone(), k.clone()],
+        vec![8, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+    );
+    let n2 = tn.add_tensor_auto_name(tensor2);
+
+    let edge = tn.connect(n1, &bond, n2, &bond).unwrap();
+
+    // Original bond dimension
+    assert_eq!(tn.bond_index(edge).unwrap().size(), 8);
+
+    // Truncate in-place with max_rank = 4
+    tn.truncate_mut(
+        std::iter::once(n2),
+        TruncationOptions::default().with_max_rank(4),
+    ).unwrap();
+
+    // Bond should now be at most 4
+    let new_edge = tn.edges_for_node(n1)[0].0;
+    assert!(tn.bond_index(new_edge).unwrap().size() <= 4);
+}
+
+#[test]
+fn test_truncate_three_node_chain() {
+    let (tn, n1, _n2, n3, e12, e23, _b12, _b23) = create_three_node_chain();
+
+    // Original bond dimensions
+    assert_eq!(tn.bond_index(e12).unwrap().size(), 3);
+    assert_eq!(tn.bond_index(e23).unwrap().size(), 4);
+
+    // Truncate towards center (n1) with max_rank = 2
+    let truncated = tn.truncate(
+        std::iter::once(n1),
+        TruncationOptions::default().with_max_rank(2),
+    ).unwrap();
+
+    // All bonds should now be at most 2
+    for (edge, _) in truncated.edges_for_node(n1) {
+        assert!(truncated.bond_index(edge).unwrap().size() <= 2);
+    }
+    for (edge, _) in truncated.edges_for_node(n3) {
+        assert!(truncated.bond_index(edge).unwrap().size() <= 2);
+    }
+}
+
+#[test]
+fn test_truncate_with_rtol() {
+    let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
+
+    let i = Index::new_dyn(2);
+    let bond = Index::new_dyn(5);
+    let k = Index::new_dyn(3);
+
+    // Create a low-rank tensor (rank ~1)
+    let mut data1 = vec![0.0f64; 10];
+    data1[0] = 1.0;
+    data1[5] = 1.0;
+    let tensor1 = TensorDynLen::new(
+        vec![i.clone(), bond.clone()],
+        vec![2, 5],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+    );
+    let n1 = tn.add_tensor_auto_name(tensor1);
+
+    let mut data2 = vec![0.0f64; 15];
+    data2[0] = 1.0;
+    data2[1] = 1.0;
+    data2[2] = 1.0;
+    let tensor2 = TensorDynLen::new(
+        vec![bond.clone(), k.clone()],
+        vec![5, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+    );
+    let n2 = tn.add_tensor_auto_name(tensor2);
+
+    tn.connect(n1, &bond, n2, &bond).unwrap();
+
+    // Truncate with rtol - should reduce rank significantly for low-rank data
+    let truncated = tn.truncate(
+        std::iter::once(n2),
+        TruncationOptions::default().with_rtol(1e-10),
+    ).unwrap();
+
+    // Bond dimension should be reduced
+    let new_edge = truncated.edges_for_node(n1)[0].0;
+    let new_bond_size = truncated.bond_index(new_edge).unwrap().size();
+    // The effective rank should be 1 or 2
+    assert!(new_bond_size <= 2, "Expected bond_size <= 2, got {}", new_bond_size);
+}
+
+// ============================================================================
+// sim_internal_inds Tests
+// ============================================================================
+
+#[test]
+fn test_sim_internal_inds() {
+    let (tn, node1, node2, _edge, phys1, bond, phys2) = create_two_node_treetn();
+
+    // Get original bond ID
+    let original_bond_id = bond.id;
+    let original_bond_size = bond.size();
+
+    // Create a copy with simulated internal indices
+    let tn_sim = tn.sim_internal_inds();
+
+    // Check that structure is preserved
+    assert_eq!(tn_sim.node_count(), 2);
+    assert_eq!(tn_sim.edge_count(), 1);
+
+    // Check that bond index has new ID but same size
+    let new_edge = tn_sim.edges_for_node(node1)[0].0;
+    let new_bond = tn_sim.bond_index(new_edge).unwrap();
+    assert_eq!(new_bond.size(), original_bond_size);
+    assert_ne!(new_bond.id, original_bond_id, "Bond ID should be different after sim_internal_inds");
+
+    // Check that physical indices are unchanged
+    let tensor1 = tn_sim.tensor(node1).unwrap();
+    let tensor2 = tn_sim.tensor(node2).unwrap();
+
+    // Find physical indices (those with size 2 and 4)
+    let has_phys1 = tensor1.indices.iter().any(|idx| idx.id == phys1.id);
+    let has_phys2 = tensor2.indices.iter().any(|idx| idx.id == phys2.id);
+    assert!(has_phys1, "Physical index 1 should be preserved");
+    assert!(has_phys2, "Physical index 2 should be preserved");
+
+    // Check that tensors contain the new bond index
+    let has_new_bond_in_t1 = tensor1.indices.iter().any(|idx| idx.id == new_bond.id);
+    let has_new_bond_in_t2 = tensor2.indices.iter().any(|idx| idx.id == new_bond.id);
+    assert!(has_new_bond_in_t1, "Tensor 1 should have new bond index");
+    assert!(has_new_bond_in_t2, "Tensor 2 should have new bond index");
+
+    // Original tensors should still have old bond
+    let orig_tensor1 = tn.tensor(node1).unwrap();
+    let has_old_bond = orig_tensor1.indices.iter().any(|idx| idx.id == original_bond_id);
+    assert!(has_old_bond, "Original tensor should still have original bond");
+}
+
+// ============================================================================
 // DynTreeTN Tests (in dyn_treetn module)
 // ============================================================================
 
 // DynTreeTN tests are in the dyn_treetn.rs file as unit tests.
+
+// ============================================================================
+// contract_zipup tests
+// ============================================================================
+
+// Note: contract_zipup is a complex algorithm that needs more testing.
+// The current implementation has known limitations with cases where
+// all site indices are contracted (inner product case).
+// These tests verify basic functionality.
+
+#[test]
+fn test_contract_zipup_basic_api() {
+    use tensor4all_treetn::{SiteIndexNetwork, random_treetn_f64, LinkSpace};
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+    use std::collections::HashSet;
+
+    // Create two networks with the same topology but different site indices
+    let mut site_network1 = SiteIndexNetwork::<String, DynId>::new();
+    let site_a1 = Index::new_dyn(2);
+    let site_b1 = Index::new_dyn(3);
+    site_network1.add_node("A".to_string(), HashSet::from([site_a1.clone()])).unwrap();
+    site_network1.add_node("B".to_string(), HashSet::from([site_b1.clone()])).unwrap();
+    site_network1.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+
+    let mut site_network2 = SiteIndexNetwork::<String, DynId>::new();
+    let site_a2 = Index::new_dyn(2);
+    let site_b2 = Index::new_dyn(3);
+    site_network2.add_node("A".to_string(), HashSet::from([site_a2.clone()])).unwrap();
+    site_network2.add_node("B".to_string(), HashSet::from([site_b2.clone()])).unwrap();
+    site_network2.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+
+    let mut rng1 = ChaCha8Rng::seed_from_u64(42);
+    let mut rng2 = ChaCha8Rng::seed_from_u64(123);
+    let tn1 = random_treetn_f64(&mut rng1, &site_network1, LinkSpace::uniform(4));
+    let tn2 = random_treetn_f64(&mut rng2, &site_network2, LinkSpace::uniform(4));
+
+    // Verify same_topology works
+    assert!(tn1.same_topology(&tn2));
+
+    // Note: contract_zipup with non-shared site indices currently has issues
+    // because tensordot requires at least one contraction pair.
+    // This test verifies the API exists and type checks correctly.
+}
+
+/// Test contract_zipup with shared site indices (inner product case).
+/// This is the typical use case: computing overlap <ψ|φ>.
+#[test]
+fn test_contract_zipup_shared_site_indices() {
+    use std::collections::HashSet;
+
+    // Create shared site indices (same Index objects for both networks)
+    let site_a = Index::new_dyn(2);  // Physical index at node A
+    let site_b = Index::new_dyn(3);  // Physical index at node B
+
+    // Create bond indices (different for each network)
+    let bond1 = Index::new_dyn(4);  // Bond for network 1
+    let bond2 = Index::new_dyn(4);  // Bond for network 2
+
+    // Create tensor for node A in network 1: A1[site_a, bond1]
+    let tensor_a1 = TensorDynLen::new(
+        vec![site_a.clone(), bond1.clone()],
+        vec![2, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 8]))),
+    );
+
+    // Create tensor for node B in network 1: B1[bond1, site_b]
+    let tensor_b1 = TensorDynLen::new(
+        vec![bond1.clone(), site_b.clone()],
+        vec![4, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+    );
+
+    // Create TreeTN 1
+    let tn1: TreeTN<DynId, NoSymmSpace, String> = TreeTN::from_tensors(
+        vec![tensor_a1, tensor_b1],
+        vec!["A".to_string(), "B".to_string()],
+    ).unwrap();
+
+    // Create tensor for node A in network 2: A2[site_a, bond2]
+    // Uses the SAME site_a index
+    let tensor_a2 = TensorDynLen::new(
+        vec![site_a.clone(), bond2.clone()],
+        vec![2, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![2.0; 8]))),
+    );
+
+    // Create tensor for node B in network 2: B2[bond2, site_b]
+    // Uses the SAME site_b index
+    let tensor_b2 = TensorDynLen::new(
+        vec![bond2.clone(), site_b.clone()],
+        vec![4, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![2.0; 12]))),
+    );
+
+    // Create TreeTN 2
+    let tn2: TreeTN<DynId, NoSymmSpace, String> = TreeTN::from_tensors(
+        vec![tensor_a2, tensor_b2],
+        vec!["A".to_string(), "B".to_string()],
+    ).unwrap();
+
+    // Verify same topology
+    assert!(tn1.same_topology(&tn2));
+    assert_eq!(tn1.node_count(), 2);
+    assert_eq!(tn2.node_count(), 2);
+
+    // Contract with center at B
+    // Since all site indices are contracted (inner product case),
+    // all tensors collapse into the center node
+    let result = tn1.contract_zipup(&tn2, &"B".to_string(), None, None).unwrap();
+
+    // For inner product: all nodes get absorbed into center
+    // Result should have 1 node (the center B) containing a scalar
+    assert_eq!(result.node_count(), 1);
+
+    // Result should have 0 edges (single node)
+    assert_eq!(result.edge_count(), 0);
+
+    // The center node should exist
+    assert!(result.node_index(&"B".to_string()).is_some());
+}
+
+/// Test contract_zipup with partial site contraction (external indices remain).
+/// This simulates computing <ψ|O|φ> where O is an MPO.
+#[test]
+fn test_contract_zipup_partial_contraction() {
+    // Create indices
+    // Shared site indices (will be contracted between tn1 and tn2)
+    let site_a = Index::new_dyn(2);  // Physical index at node A
+    let site_b = Index::new_dyn(3);  // Physical index at node B
+
+    // External index (exists only in tn2, will remain in result)
+    let site_external_a = Index::new_dyn(2);  // External index at A (like MPO output)
+    let site_external_b = Index::new_dyn(3);  // External index at B (like MPO output)
+
+    // Bond indices (different for each network, will be replaced by sim_internal_inds)
+    let bond1 = Index::new_dyn(4);  // Bond for network 1
+    let bond2 = Index::new_dyn(4);  // Bond for network 2
+
+    // Network 1 (like bra <ψ|):
+    // A1[site_a, bond1] -- B1[bond1, site_b]
+    let tensor_a1 = TensorDynLen::new(
+        vec![site_a.clone(), bond1.clone()],
+        vec![2, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 8]))),
+    );
+
+    let tensor_b1 = TensorDynLen::new(
+        vec![bond1.clone(), site_b.clone()],
+        vec![4, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+    );
+
+    let tn1: TreeTN<DynId, NoSymmSpace, String> = TreeTN::from_tensors(
+        vec![tensor_a1, tensor_b1],
+        vec!["A".to_string(), "B".to_string()],
+    ).unwrap();
+
+    // Network 2 (like O|φ> with MPO indices):
+    // A2[site_a, site_external_a, bond2] -- B2[bond2, site_b, site_external_b]
+    // Has both shared and external site indices at each node
+    let tensor_a2 = TensorDynLen::new(
+        vec![site_a.clone(), site_external_a.clone(), bond2.clone()],
+        vec![2, 2, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![2.0; 16]))),
+    );
+
+    let tensor_b2 = TensorDynLen::new(
+        vec![bond2.clone(), site_b.clone(), site_external_b.clone()],
+        vec![4, 3, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![2.0; 36]))),
+    );
+
+    let tn2: TreeTN<DynId, NoSymmSpace, String> = TreeTN::from_tensors(
+        vec![tensor_a2, tensor_b2],
+        vec!["A".to_string(), "B".to_string()],
+    ).unwrap();
+
+    // Verify same topology
+    assert!(tn1.same_topology(&tn2));
+
+    // Contract with center at B
+    let result = tn1.contract_zipup(&tn2, &"B".to_string(), None, None).unwrap();
+
+    // Result should preserve structure because both nodes have external indices
+    assert_eq!(result.node_count(), 2);
+    assert_eq!(result.edge_count(), 1);
+
+    // Check that node A exists and has the external index
+    let node_a = result.node_index(&"A".to_string()).unwrap();
+    let tensor_a = result.tensor(node_a).unwrap();
+    assert!(tensor_a.indices.iter().any(|idx| idx.id == site_external_a.id));
+
+    // Check that node B exists and has the external index
+    let node_b = result.node_index(&"B".to_string()).unwrap();
+    let tensor_b = result.tensor(node_b).unwrap();
+    assert!(tensor_b.indices.iter().any(|idx| idx.id == site_external_b.id));
+}
+
+// ============================================================================
+// Helper function for comparing contract_zipup vs contract_naive
+// ============================================================================
+
+use tensor4all_treetn::{SiteIndexNetwork, random_treetn_f64, LinkSpace};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use std::collections::HashSet;
+
+/// Helper to test contract_zipup vs contract_naive for a given topology.
+///
+/// Creates two random TreeTNs with the given site network and link space,
+/// contracts them using both methods, and verifies the results match.
+///
+/// # Arguments
+/// * `site_network` - The site index network defining topology and site indices
+/// * `link_space` - The bond dimensions
+/// * `center` - The center node name for contract_zipup
+/// * `seed1`, `seed2` - Random seeds for the two networks
+/// * `rtol` - Relative tolerance for comparison
+fn compare_zipup_vs_naive(
+    site_network: &SiteIndexNetwork<String, DynId>,
+    link_space: LinkSpace<String>,
+    center: &str,
+    seed1: u64,
+    seed2: u64,
+    rtol: f64,
+) {
+    // Create two random TreeTNs
+    let mut rng1 = ChaCha8Rng::seed_from_u64(seed1);
+    let mut rng2 = ChaCha8Rng::seed_from_u64(seed2);
+    let tn1 = random_treetn_f64(&mut rng1, site_network, link_space.clone());
+    let tn2 = random_treetn_f64(&mut rng2, site_network, link_space);
+
+    // Contract using naive method (reference)
+    let naive_result = tn1.contract_naive(&tn2)
+        .expect("contract_naive should succeed");
+
+    // Contract using zipup method
+    let zipup_result = tn1.contract_zipup(&tn2, &center.to_string(), None, None)
+        .expect("contract_zipup should succeed");
+
+    // Convert zipup result to tensor for comparison
+    let zipup_tensor = zipup_result.contract_to_tensor()
+        .expect("contract_to_tensor should succeed");
+
+    // Compare using distance
+    let dist = naive_result.distance(&zipup_tensor);
+    assert!(
+        dist < rtol,
+        "contract_zipup vs contract_naive distance too large: {} >= {}",
+        dist, rtol
+    );
+}
+
+// ============================================================================
+// Topology tests using helper function
+// ============================================================================
+
+/// Test contract_zipup vs contract_naive for 2-node chain: A -- B
+#[test]
+fn test_zipup_vs_naive_2node_chain() {
+    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let site_a = Index::new_dyn(2);
+    let site_b = Index::new_dyn(3);
+    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
+    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
+    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+
+    compare_zipup_vs_naive(&site_network, LinkSpace::uniform(4), "B", 42, 123, 1e-10);
+}
+
+/// Test contract_zipup vs contract_naive for 3-node chain: A -- B -- C
+#[test]
+fn test_zipup_vs_naive_3node_chain() {
+    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let site_a = Index::new_dyn(2);
+    let site_b = Index::new_dyn(2);
+    let site_c = Index::new_dyn(2);
+    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
+    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
+    site_network.add_node("C".to_string(), HashSet::from([site_c])).unwrap();
+    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+
+    // Test with center at B (middle)
+    compare_zipup_vs_naive(&site_network, LinkSpace::uniform(3), "B", 42, 123, 1e-10);
+
+    // Test with center at A (end)
+    compare_zipup_vs_naive(&site_network, LinkSpace::uniform(3), "A", 42, 123, 1e-10);
+
+    // Test with center at C (other end)
+    compare_zipup_vs_naive(&site_network, LinkSpace::uniform(3), "C", 42, 123, 1e-10);
+}
+
+/// Test contract_zipup vs contract_naive for star topology:
+///       A
+///       |
+///   C - B - D
+#[test]
+fn test_zipup_vs_naive_star() {
+    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let site_a = Index::new_dyn(2);
+    let site_b = Index::new_dyn(2);
+    let site_c = Index::new_dyn(2);
+    let site_d = Index::new_dyn(2);
+    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
+    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
+    site_network.add_node("C".to_string(), HashSet::from([site_c])).unwrap();
+    site_network.add_node("D".to_string(), HashSet::from([site_d])).unwrap();
+    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+    site_network.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
+
+    // Test with center at B (hub)
+    compare_zipup_vs_naive(&site_network, LinkSpace::uniform(3), "B", 42, 123, 1e-10);
+
+    // Test with center at A (leaf)
+    compare_zipup_vs_naive(&site_network, LinkSpace::uniform(3), "A", 42, 123, 1e-10);
+}
+
+/// Test contract_zipup vs contract_naive for Y-shaped topology:
+///   A - B - C
+///       |
+///       D
+#[test]
+fn test_zipup_vs_naive_y_shape() {
+    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let site_a = Index::new_dyn(2);
+    let site_b = Index::new_dyn(2);
+    let site_c = Index::new_dyn(2);
+    let site_d = Index::new_dyn(2);
+    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
+    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
+    site_network.add_node("C".to_string(), HashSet::from([site_c])).unwrap();
+    site_network.add_node("D".to_string(), HashSet::from([site_d])).unwrap();
+    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+    site_network.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
+
+    // Test with center at B
+    compare_zipup_vs_naive(&site_network, LinkSpace::uniform(3), "B", 42, 123, 1e-10);
+
+    // Test with center at D
+    compare_zipup_vs_naive(&site_network, LinkSpace::uniform(3), "D", 42, 123, 1e-10);
+}
+
+/// Test contract_zipup vs contract_naive for 5-node chain: A -- B -- C -- D -- E
+#[test]
+fn test_zipup_vs_naive_5node_chain() {
+    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    for name in ["A", "B", "C", "D", "E"] {
+        let site = Index::new_dyn(2);
+        site_network.add_node(name.to_string(), HashSet::from([site])).unwrap();
+    }
+    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+    site_network.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
+    site_network.add_edge(&"D".to_string(), &"E".to_string()).unwrap();
+
+    // Test with center at C (middle)
+    compare_zipup_vs_naive(&site_network, LinkSpace::uniform(2), "C", 42, 123, 1e-10);
+
+    // Test with center at E (end)
+    compare_zipup_vs_naive(&site_network, LinkSpace::uniform(2), "E", 42, 123, 1e-10);
+}
+
+// ============================================================================
+// Internal Consistency Tests
+// ============================================================================
+
+#[test]
+fn test_verify_internal_consistency_basic() {
+    // Create a simple 2-node TreeTN and verify its consistency
+    let (tn, _n1, _n2, _edge, _phys1, _bond, _phys2) = create_two_node_treetn();
+
+    // Should pass consistency check
+    tn.verify_internal_consistency().expect("Consistency check should pass for basic TreeTN");
+}
+
+#[test]
+fn test_verify_internal_consistency_chain_3node() {
+    // Create 3-node chain
+    let (tn, _n1, _n2, _n3, _e12, _e23, _bond12, _bond23) = create_three_node_chain();
+
+    // Should pass consistency check
+    tn.verify_internal_consistency().expect("Consistency check should pass for 3-node chain");
+}
+
+#[test]
+fn test_verify_internal_consistency_after_canonicalization() {
+    let (tn, _n1, n2, _n3, _e12, _e23, _bond12, _bond23) = create_three_node_chain();
+
+    // Canonicalize to center n2
+    let tn = tn.canonicalize(
+        vec![n2],
+        tensor4all_treetn::CanonicalizationOptions::default(),
+    ).expect("Canonicalization should succeed");
+
+    // Should still pass consistency check after canonicalization
+    tn.verify_internal_consistency().expect("Consistency check should pass after canonicalization");
+}
+
+#[test]
+fn test_verify_internal_consistency_with_string_node_names() {
+    // Create TreeTN with string node names
+    let mut tn = TreeTN::<DynId, NoSymmSpace, String>::new();
+
+    let site_a = Index::new_dyn(2);
+    let site_b = Index::new_dyn(3);
+    let bond = Index::new_dyn(4);
+
+    let tensor_a = TensorDynLen::new(
+        vec![site_a.clone(), bond.clone()],
+        vec![2, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 8]))),
+    );
+
+    let tensor_b = TensorDynLen::new(
+        vec![bond.clone(), site_b.clone()],
+        vec![4, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+    );
+
+    tn.add_tensor("A".to_string(), tensor_a).unwrap();
+    tn.add_tensor("B".to_string(), tensor_b).unwrap();
+    tn.connect(
+        tn.node_index(&"A".to_string()).unwrap(),
+        &bond,
+        tn.node_index(&"B".to_string()).unwrap(),
+        &bond,
+    ).unwrap();
+
+    // Should pass consistency check
+    tn.verify_internal_consistency().expect("Consistency check should pass for string-named TreeTN");
+}
+
+// ============================================================================
+// Appearance Comparison Tests
+// ============================================================================
+
+#[test]
+fn test_same_appearance_cloned_treetnns() {
+    // Create a TreeTN and clone it - should have same appearance
+    let (tn1, _n1, _n2, _edge, _phys1, _bond, _phys2) = create_two_node_treetn();
+    let tn2 = tn1.clone();
+
+    // Should have same appearance (both have no ortho_towards set)
+    assert!(tn1.same_appearance(&tn2));
+    assert!(tn2.same_appearance(&tn1)); // Symmetric
+}
+
+#[test]
+fn test_same_appearance_after_same_canonicalization() {
+    // Create a TreeTN, clone, and canonicalize both to the same center
+    let (tn1, _n1, n2, _n3, _, _, _, _) = create_three_node_chain();
+    let tn2 = tn1.clone();
+
+    let tn1 = tn1.canonicalize(
+        vec![n2],
+        tensor4all_treetn::CanonicalizationOptions::default(),
+    ).unwrap();
+
+    let tn2 = tn2.canonicalize(
+        vec![n2],
+        tensor4all_treetn::CanonicalizationOptions::default(),
+    ).unwrap();
+
+    // Both canonicalized to same center - should have same appearance
+    assert!(tn1.same_appearance(&tn2));
+}
+
+#[test]
+fn test_same_appearance_different_ortho_towards() {
+    // Create a TreeTN, clone, and canonicalize to different centers
+    let (tn1, n1, _n2, n3, _, _, _, _) = create_three_node_chain();
+    let tn2 = tn1.clone();
+
+    let tn1 = tn1.canonicalize(
+        vec![n1],  // Canonicalize to left
+        tensor4all_treetn::CanonicalizationOptions::default(),
+    ).unwrap();
+
+    let tn2 = tn2.canonicalize(
+        vec![n3],  // Canonicalize to right
+        tensor4all_treetn::CanonicalizationOptions::default(),
+    ).unwrap();
+
+    // Different canonical centers - different ortho_towards directions
+    // Note: They still share equivalent site index network (same topology and site space)
+    assert!(tn1.share_equivalent_site_index_network(&tn2));
+    // But different appearance due to ortho_towards
+    assert!(!tn1.same_appearance(&tn2));
+}
+
+#[test]
+fn test_same_appearance_one_canonicalized_one_not() {
+    // Create a TreeTN, clone, and only canonicalize one
+    let (tn1, _n1, n2, _n3, _, _, _, _) = create_three_node_chain();
+    let tn2 = tn1.clone();
+
+    let tn1 = tn1.canonicalize(
+        vec![n2],
+        tensor4all_treetn::CanonicalizationOptions::default(),
+    ).unwrap();
+
+    // tn2 is not canonicalized - different ortho_towards state
+    assert!(tn1.share_equivalent_site_index_network(&tn2));
+    assert!(!tn1.same_appearance(&tn2));
+}

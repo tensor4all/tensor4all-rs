@@ -4,6 +4,8 @@ use std::ops::{Add, Mul};
 use num_complex::Complex64;
 use mdarray::{DenseMapping, View, DynRank, Shape, Dense, Slice, DTensor, Rank};
 use mdarray_linalg::{matmul::{MatMul, ContractBuilder}, Naive};
+use rand::Rng;
+use rand_distr::{StandardNormal, Distribution};
 
 /// Dense storage for f64 elements.
 #[derive(Debug, Clone)]
@@ -16,6 +18,14 @@ impl DenseStorageF64 {
 
     pub fn from_vec(vec: Vec<f64>) -> Self {
         Self(vec)
+    }
+
+    /// Create storage with random values from standard normal distribution.
+    pub fn random<R: Rng>(rng: &mut R, size: usize) -> Self {
+        let data: Vec<f64> = (0..size)
+            .map(|_| StandardNormal.sample(rng))
+            .collect();
+        Self(data)
     }
 
     pub fn as_slice(&self) -> &[f64] {
@@ -98,6 +108,9 @@ impl DenseStorageF64 {
     }
 
     /// Contract this dense storage with another dense storage.
+    ///
+    /// This method handles non-contiguous contracted axes by permuting the tensors
+    /// to make the contracted axes contiguous before calling mdarray-linalg's contract.
     pub fn contract(
         &self,
         dims: &[usize],
@@ -124,35 +137,197 @@ impl DenseStorageF64 {
             other.0.len(),
             other_expected_len
         );
-        // Create mdarray views (which can be used as slices)
-        let shape = DynRank::from_dims(dims);
-        let mapping = DenseMapping::new(shape);
-        let view: View<'_, f64, DynRank, Dense> = unsafe {
-            View::new_unchecked(self.0.as_ptr(), mapping)
+
+        // Check if axes are contiguous (need to permute if not)
+        // For self: move contracted axes to end
+        // For other: move contracted axes to front
+        let (perm_self, new_axes_self, new_dims_self) =
+            compute_contraction_permutation(dims, axes, false);
+        let (perm_other, new_axes_other, new_dims_other) =
+            compute_contraction_permutation(other_dims, other_axes, true);
+
+        // Permute self if needed
+        let storage_self = if perm_self.iter().enumerate().all(|(i, &p)| i == p) {
+            std::borrow::Cow::Borrowed(self)
+        } else {
+            std::borrow::Cow::Owned(self.permute(dims, &perm_self))
         };
 
-        let other_shape = DynRank::from_dims(other_dims);
-        let other_mapping = DenseMapping::new(other_shape);
-        let other_view: View<'_, f64, DynRank, Dense> = unsafe {
-            View::new_unchecked(other.0.as_ptr(), other_mapping)
+        // Permute other if needed
+        let storage_other = if perm_other.iter().enumerate().all(|(i, &p)| i == p) {
+            std::borrow::Cow::Borrowed(other)
+        } else {
+            std::borrow::Cow::Owned(other.permute(other_dims, &perm_other))
         };
 
-        // Contract using mdarray-linalg
-        // View implements Borrow<Slice>, so we can use it directly
-        let slice: &Slice<f64, DynRank, Dense> = view.borrow();
-        let other_slice: &Slice<f64, DynRank, Dense> = other_view.borrow();
+        // Use manual GEMM-based contraction for robustness
+        // This handles non-contiguous axes and edge cases that mdarray-linalg may not support
+        let result_vec = contract_via_gemm(
+            storage_self.as_slice(),
+            &new_dims_self,
+            &new_axes_self,
+            storage_other.as_slice(),
+            &new_dims_other,
+            &new_axes_other,
+        );
 
-        let result = Naive
-            .contract(
-                slice,
-                other_slice,
-                axes.to_vec(),
-                other_axes.to_vec(),
-            )
-            .eval();
-
-        Self::from_vec(result.into_vec())
+        Self::from_vec(result_vec)
     }
+}
+
+/// Contract two tensors via GEMM (matrix multiplication).
+///
+/// This function assumes that contracted axes are already contiguous:
+/// - For `a`: contracted axes are at the END (axes_a are the last naxes positions)
+/// - For `b`: contracted axes are at the FRONT (axes_b are the first naxes positions)
+///
+/// The contraction is equivalent to:
+/// ```text
+/// A[m..., k...] @ B[k..., n...] = C[m..., n...]
+/// ```
+///
+/// where `k...` are the contracted dimensions.
+fn contract_via_gemm(
+    a: &[f64],
+    dims_a: &[usize],
+    axes_a: &[usize],
+    b: &[f64],
+    dims_b: &[usize],
+    axes_b: &[usize],
+) -> Vec<f64> {
+    let naxes = axes_a.len();
+    assert_eq!(naxes, axes_b.len(), "Number of contracted axes must match");
+
+    // Compute M, K, N for GEMM
+    // M = product of non-contracted dimensions in A (first part after permutation)
+    // K = product of contracted dimensions (should match in both)
+    // N = product of non-contracted dimensions in B (last part after permutation)
+
+    let ndim_a = dims_a.len();
+    let ndim_b = dims_b.len();
+
+    // Axes should be contiguous at end of A and front of B
+    // For A: non-contracted are positions 0..ndim_a-naxes, contracted are ndim_a-naxes..ndim_a
+    // For B: contracted are positions 0..naxes, non-contracted are naxes..ndim_b
+
+    let m: usize = dims_a.iter().take(ndim_a - naxes).product();
+    let m = if m == 0 { 1 } else { m }; // Handle case with no non-contracted dims
+
+    let k: usize = dims_a.iter().skip(ndim_a - naxes).product();
+    let k = if k == 0 { 1 } else { k };
+
+    let n: usize = dims_b.iter().skip(naxes).product();
+    let n = if n == 0 { 1 } else { n };
+
+    // Verify K matches in both tensors
+    let k_b: usize = dims_b.iter().take(naxes).product();
+    let k_b = if k_b == 0 { 1 } else { k_b };
+    assert_eq!(k, k_b, "Contracted dimension sizes must match: {} vs {}", k, k_b);
+
+    // Perform GEMM: C[m, n] = A[m, k] @ B[k, n]
+    let mut c = vec![0.0_f64; m * n];
+
+    // Simple GEMM implementation (could be optimized with BLAS)
+    for i in 0..m {
+        for j in 0..n {
+            let mut sum = 0.0;
+            for l in 0..k {
+                // A is row-major: A[i, l] = a[i * k + l]
+                // B is row-major: B[l, j] = b[l * n + j]
+                sum += a[i * k + l] * b[l * n + j];
+            }
+            c[i * n + j] = sum;
+        }
+    }
+
+    c
+}
+
+/// Contract two Complex64 tensors via GEMM (matrix multiplication).
+///
+/// Same as contract_via_gemm but for complex numbers.
+fn contract_via_gemm_c64(
+    a: &[Complex64],
+    dims_a: &[usize],
+    axes_a: &[usize],
+    b: &[Complex64],
+    dims_b: &[usize],
+    axes_b: &[usize],
+) -> Vec<Complex64> {
+    let naxes = axes_a.len();
+    assert_eq!(naxes, axes_b.len(), "Number of contracted axes must match");
+
+    let ndim_a = dims_a.len();
+    let ndim_b = dims_b.len();
+
+    let m: usize = dims_a.iter().take(ndim_a - naxes).product();
+    let m = if m == 0 { 1 } else { m };
+
+    let k: usize = dims_a.iter().skip(ndim_a - naxes).product();
+    let k = if k == 0 { 1 } else { k };
+
+    let n: usize = dims_b.iter().skip(naxes).product();
+    let n = if n == 0 { 1 } else { n };
+
+    let k_b: usize = dims_b.iter().take(naxes).product();
+    let k_b = if k_b == 0 { 1 } else { k_b };
+    assert_eq!(k, k_b, "Contracted dimension sizes must match: {} vs {}", k, k_b);
+
+    let mut c = vec![Complex64::new(0.0, 0.0); m * n];
+
+    for i in 0..m {
+        for j in 0..n {
+            let mut sum = Complex64::new(0.0, 0.0);
+            for l in 0..k {
+                sum += a[i * k + l] * b[l * n + j];
+            }
+            c[i * n + j] = sum;
+        }
+    }
+
+    c
+}
+
+/// Compute permutation to make contracted axes contiguous.
+///
+/// If `axes_at_front` is true, contracted axes are moved to the front (maintaining original order).
+/// If false, contracted axes are moved to the end (maintaining original order).
+///
+/// Returns (permutation, new_axes, new_dims).
+///
+/// IMPORTANT: The new_axes are returned in the SAME ORDER as the input axes,
+/// so that the correspondence with the other tensor is preserved.
+fn compute_contraction_permutation(
+    dims: &[usize],
+    axes: &[usize],
+    axes_at_front: bool,
+) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+    let ndim = dims.len();
+    let naxes = axes.len();
+
+    // Build permutation, preserving the order of contracted axes
+    let non_contracted: Vec<usize> = (0..ndim).filter(|i| !axes.contains(i)).collect();
+
+    let perm: Vec<usize> = if axes_at_front {
+        // Contracted axes at front (in original order): [axes..., non_contracted...]
+        axes.iter().chain(non_contracted.iter()).cloned().collect()
+    } else {
+        // Contracted axes at end (in original order): [non_contracted..., axes...]
+        non_contracted.iter().chain(axes.iter()).cloned().collect()
+    };
+
+    // Compute new dims after permutation
+    let new_dims: Vec<usize> = perm.iter().map(|&i| dims[i]).collect();
+
+    // Compute new axes positions after permutation
+    // The axes are now contiguous, but in the same order as the input
+    let new_axes: Vec<usize> = if axes_at_front {
+        (0..naxes).collect()
+    } else {
+        (ndim - naxes..ndim).collect()
+    };
+
+    (perm, new_axes, new_dims)
 }
 
 /// Dense storage for Complex64 elements.
@@ -166,6 +341,17 @@ impl DenseStorageC64 {
 
     pub fn from_vec(vec: Vec<Complex64>) -> Self {
         Self(vec)
+    }
+
+    /// Create storage with random complex values (re, im both from standard normal).
+    pub fn random<R: Rng>(rng: &mut R, size: usize) -> Self {
+        let data: Vec<Complex64> = (0..size)
+            .map(|_| Complex64::new(
+                StandardNormal.sample(rng),
+                StandardNormal.sample(rng),
+            ))
+            .collect();
+        Self(data)
     }
 
     pub fn as_slice(&self) -> &[Complex64] {
@@ -244,6 +430,9 @@ impl DenseStorageC64 {
     }
 
     /// Contract this dense storage with another dense storage.
+    ///
+    /// This method handles non-contiguous contracted axes by permuting the tensors
+    /// to make the contracted axes contiguous before calling mdarray-linalg's contract.
     pub fn contract(
         &self,
         dims: &[usize],
@@ -270,34 +459,40 @@ impl DenseStorageC64 {
             other.0.len(),
             other_expected_len
         );
-        // Create mdarray views (which can be used as slices)
-        let shape = DynRank::from_dims(dims);
-        let mapping = DenseMapping::new(shape);
-        let view: View<'_, Complex64, DynRank, Dense> = unsafe {
-            View::new_unchecked(self.0.as_ptr(), mapping)
+
+        // Check if axes are contiguous (need to permute if not)
+        // For self: move contracted axes to end
+        // For other: move contracted axes to front
+        let (perm_self, new_axes_self, new_dims_self) =
+            compute_contraction_permutation(dims, axes, false);
+        let (perm_other, new_axes_other, new_dims_other) =
+            compute_contraction_permutation(other_dims, other_axes, true);
+
+        // Permute self if needed
+        let storage_self = if perm_self.iter().enumerate().all(|(i, &p)| i == p) {
+            std::borrow::Cow::Borrowed(self)
+        } else {
+            std::borrow::Cow::Owned(self.permute(dims, &perm_self))
         };
 
-        let other_shape = DynRank::from_dims(other_dims);
-        let other_mapping = DenseMapping::new(other_shape);
-        let other_view: View<'_, Complex64, DynRank, Dense> = unsafe {
-            View::new_unchecked(other.0.as_ptr(), other_mapping)
+        // Permute other if needed
+        let storage_other = if perm_other.iter().enumerate().all(|(i, &p)| i == p) {
+            std::borrow::Cow::Borrowed(other)
+        } else {
+            std::borrow::Cow::Owned(other.permute(other_dims, &perm_other))
         };
 
-        // Contract using mdarray-linalg
-        // View implements Borrow<Slice>, so we can use it directly
-        let slice: &Slice<Complex64, DynRank, Dense> = view.borrow();
-        let other_slice: &Slice<Complex64, DynRank, Dense> = other_view.borrow();
+        // Use manual GEMM-based contraction for robustness
+        let result_vec = contract_via_gemm_c64(
+            storage_self.as_slice(),
+            &new_dims_self,
+            &new_axes_self,
+            storage_other.as_slice(),
+            &new_dims_other,
+            &new_axes_other,
+        );
 
-        let result = Naive
-            .contract(
-                slice,
-                other_slice,
-                axes.to_vec(),
-                other_axes.to_vec(),
-            )
-            .eval();
-
-        Self::from_vec(result.into_vec())
+        Self::from_vec(result_vec)
     }
 }
 

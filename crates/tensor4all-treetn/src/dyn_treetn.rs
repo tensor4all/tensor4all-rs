@@ -94,7 +94,7 @@ where
     /// Edges store bond indices directly (Index<DynId, NoSymmSpace>).
     graph: NamedGraph<V, BoxedTensorLike, Index<DynId, NoSymmSpace>>,
     /// Orthogonalization region (node names).
-    ortho_region: HashSet<V>,
+    canonical_center: HashSet<V>,
     /// Site index network: manages topology and site space (physical indices).
     site_index_network: SiteIndexNetwork<V, DynId, NoSymmSpace, TagSet>,
     /// Orthogonalization direction for each edge (node name that ortho points towards).
@@ -109,7 +109,7 @@ where
     pub fn new() -> Self {
         Self {
             graph: NamedGraph::new(),
-            ortho_region: HashSet::new(),
+            canonical_center: HashSet::new(),
             site_index_network: SiteIndexNetwork::new(),
             ortho_towards: HashMap::new(),
         }
@@ -332,8 +332,8 @@ where
     }
 
     /// Get a reference to the orthogonalization region.
-    pub fn ortho_region(&self) -> &HashSet<V> {
-        &self.ortho_region
+    pub fn canonical_center(&self) -> &HashSet<V> {
+        &self.canonical_center
     }
 
     /// Contract the entire network to a single tensor.
@@ -421,7 +421,7 @@ where
 
         Self {
             graph: new_graph,
-            ortho_region: self.ortho_region.clone(),
+            canonical_center: self.canonical_center.clone(),
             site_index_network: self.site_index_network.clone(),
             ortho_towards: self.ortho_towards.clone(),
         }
@@ -436,7 +436,7 @@ where
         f.debug_struct("DynTreeTN")
             .field("node_count", &self.node_count())
             .field("edge_count", &self.edge_count())
-            .field("ortho_region", &self.ortho_region)
+            .field("canonical_center", &self.canonical_center)
             .finish()
     }
 }
