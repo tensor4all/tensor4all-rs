@@ -490,7 +490,8 @@ where
 
         // Get bond index on src-side (the index we will factorize over)
         let bond_on_src = self
-            .edge_index_for_node(edge, src)
+            .bond_index(edge)
+            .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))
             .with_context(|| format!("{}: failed to get bond index on src", context_name))?
             .clone();
 
@@ -524,11 +525,8 @@ where
         let left_tensor = factorize_result.left;
         let right_tensor = factorize_result.right;
 
-        // Get edge index on dst side
-        let bond_on_dst = self
-            .edge_index_for_node(edge, dst)
-            .with_context(|| format!("{}: failed to get edge index for dst", context_name))?
-            .clone();
+        // Get edge index on dst side (same as src side in Einsum mode)
+        let bond_on_dst = bond_on_src.clone();
 
         // Absorb right_tensor into dst
         let tensor_dst = self
@@ -607,13 +605,7 @@ where
         let edges = self.edges_for_node(node);
         let connection_indices: Vec<Index<Id, Symm>> = edges
             .iter()
-            .map(|(edge_idx, _neighbor)| {
-                self.edge_index_for_node(*edge_idx, node)
-                    .context("Failed to get connection index for validation")
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .cloned()
+            .filter_map(|(edge_idx, _neighbor)| self.bond_index(*edge_idx).cloned())
             .collect();
 
         // Check if all connection indices are present in the new tensor
@@ -662,29 +654,6 @@ where
     /// Get a mutable reference to the bond index for a given edge.
     pub fn bond_index_mut(&mut self, edge: EdgeIndex) -> Option<&mut Index<Id, Symm>> {
         self.graph.graph_mut().edge_weight_mut(edge)
-    }
-
-    /// Get the bond index for a given edge (legacy API).
-    ///
-    /// In Einsum mode, both endpoints share the same bond index.
-    /// The `node` parameter is kept for API compatibility but is not used.
-    #[deprecated(note = "Use bond_index() instead")]
-    pub fn edge_index_for_node(
-        &self,
-        edge: EdgeIndex,
-        node: NodeIndex,
-    ) -> Result<&Index<Id, Symm>> {
-        let (source, target) = self.graph.graph()
-            .edge_endpoints(edge)
-            .ok_or_else(|| anyhow::anyhow!("Edge does not exist"))?;
-
-        if node != source && node != target {
-            return Err(anyhow::anyhow!("Node is not an endpoint of the edge"))
-                .context("edge_index_for_node: node must be one of the edge endpoints");
-        }
-
-        self.bond_index(edge)
-            .ok_or_else(|| anyhow::anyhow!("Bond index not found"))
     }
 
     /// Get all edges connected to a node.
@@ -937,15 +906,6 @@ where
         &self.canonical_center
     }
 
-    /// Get a reference to the orthogonalization region (deprecated, NodeIndex-based).
-    #[deprecated(note = "Use canonical_center() instead. For NodeIndex nodes, convert manually.")]
-    pub fn auto_centers(&self) -> HashSet<NodeIndex>
-    where
-        V: Into<NodeIndex> + Clone,
-    {
-        HashSet::new()
-    }
-
     /// Check if the network is canonicalized.
     ///
     /// Returns `true` if `canonical_center` is non-empty, `false` otherwise.
@@ -971,28 +931,12 @@ where
         Ok(())
     }
 
-    /// Set the orthogonalization region (deprecated, NodeIndex-based).
-    #[deprecated(note = "Use set_canonical_center() with node names instead")]
-    pub fn set_auto_centers(&mut self, centers: impl IntoIterator<Item = NodeIndex>) -> Result<()>
-    where
-        V: From<NodeIndex>,
-    {
-        let region: HashSet<V> = centers.into_iter().map(V::from).collect();
-        self.set_canonical_center(region)
-    }
-
     /// Clear the orthogonalization region (mark network as not canonicalized).
     ///
     /// Also clears the canonical form.
     pub fn clear_canonical_center(&mut self) {
         self.canonical_center.clear();
         self.canonical_form = None;
-    }
-
-    /// Clear the orthogonalization region (deprecated).
-    #[deprecated(note = "Use clear_canonical_center() instead")]
-    pub fn clear_auto_centers(&mut self) {
-        self.clear_canonical_center();
     }
 
     /// Get the current canonical form.
@@ -1014,42 +958,11 @@ where
         Ok(())
     }
 
-    /// Add a node to the orthogonalization region (deprecated, NodeIndex-based).
-    #[deprecated(note = "Use add_to_canonical_center() with node name instead")]
-    pub fn add_auto_center(&mut self, center: NodeIndex) -> Result<()>
-    where
-        V: From<NodeIndex>,
-    {
-        self.add_to_canonical_center(V::from(center))
-    }
-
     /// Remove a node from the orthogonalization region.
     ///
     /// Returns `true` if the node was in the region, `false` otherwise.
     pub fn remove_from_canonical_center(&mut self, node_name: &V) -> bool {
         self.canonical_center.remove(node_name)
-    }
-
-    /// Remove a node from the orthogonalization region (deprecated, NodeIndex-based).
-    #[deprecated(note = "Use remove_from_canonical_center() with node name instead")]
-    pub fn remove_auto_center(&mut self, center: NodeIndex)
-    where
-        V: From<NodeIndex> + PartialEq,
-    {
-        let node_name = V::from(center);
-        self.remove_from_canonical_center(&node_name);
-    }
-
-    /// Get a reference to the physical indices manager (site space).
-    #[deprecated(note = "Use site_index_network() instead")]
-    pub fn physical_indices(&self) -> &SiteIndexNetwork<V, Id, Symm> {
-        &self.site_index_network
-    }
-
-    /// Get a mutable reference to the physical indices manager (site space).
-    #[deprecated(note = "Use site_index_network_mut() instead")]
-    pub fn physical_indices_mut(&mut self) -> &mut SiteIndexNetwork<V, Id, Symm> {
-        &mut self.site_index_network
     }
 
     /// Get a reference to the site index network.

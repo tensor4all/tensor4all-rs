@@ -245,9 +245,8 @@ where
                 } else {
                     // This is a bond index - find which neighbor it connects to
                     for edge in self.edges_for_node(node_idx_a) {
-                        #[allow(deprecated)]
-                        if let Ok(edge_idx) = self.edge_index_for_node(edge.0, node_idx_a) {
-                            if edge_idx.id == idx.id {
+                        if let Some(bond_idx) = self.bond_index(edge.0) {
+                            if bond_idx.id == idx.id {
                                 let neighbor_name = self.graph.node_name(edge.1)
                                     .ok_or_else(|| anyhow::anyhow!("Neighbor name not found"))?
                                     .clone();
@@ -319,9 +318,8 @@ where
             for (pos, idx) in tensor_b.indices.iter().enumerate() {
                 if !physical_indices_b.contains(idx) {
                     for edge in other.edges_for_node(node_idx_b) {
-                        #[allow(deprecated)]
-                        if let Ok(edge_idx) = other.edge_index_for_node(edge.0, node_idx_b) {
-                            if edge_idx.id == idx.id {
+                        if let Some(bond_idx) = other.bond_index(edge.0) {
+                            if bond_idx.id == idx.id {
                                 let neighbor_name = other.graph.node_name(edge.1)
                                     .ok_or_else(|| anyhow::anyhow!("Neighbor name not found"))?
                                     .clone();
@@ -510,18 +508,18 @@ where
             let to_tensor = tensors.remove(&to)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", to))?;
 
-            // Find the edge and get bond indices
+            // Find the edge and get bond index
             let edge = self.graph.graph().find_edge(from, to)
                 .or_else(|| self.graph.graph().find_edge(to, from))
                 .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", from, to))?;
 
-            #[allow(deprecated)]
-            let idx_from = self.edge_index_for_node(edge, from)?.clone();
-            #[allow(deprecated)]
-            let idx_to = self.edge_index_for_node(edge, to)?.clone();
+            // In Einsum mode, both endpoints share the same bond index
+            let bond_idx = self.bond_index(edge)
+                .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))?
+                .clone();
 
             // Contract and store result at `to`
-            let contracted = to_tensor.tensordot(&from_tensor, &[(idx_to, idx_from)])
+            let contracted = to_tensor.tensordot(&from_tensor, &[(bond_idx.clone(), bond_idx)])
                 .context("Failed to contract along edge")?;
             tensors.insert(to, contracted);
         }

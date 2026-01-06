@@ -14,7 +14,7 @@ use tensor4all_core_common::{
 };
 use tensor4all_core_linalg::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
 use tensor4all_core_tensor::{AnyScalar, TensorAccess, TensorDynLen};
-use tensor4all_treetn::TreeTN;
+use tensor4all_treetn::{TreeTN, CanonicalizationOptions};
 
 use crate::error::{TensorTrainError, Result};
 use crate::options::{CanonicalForm, TruncateAlg, TruncateOptions};
@@ -146,7 +146,7 @@ where
         // When llim + 2 == rlim, ortho center is at llim + 1
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < tt.len() as i32 {
             let center = (llim + 1) as usize;
-            tt.inner.set_ortho_region(vec![center])
+            tt.inner.set_canonical_center(vec![center])
                 .map_err(|e| TensorTrainError::InvalidStructure {
                     message: format!("Failed to set ortho region: {}", e),
                 })?;
@@ -199,10 +199,10 @@ where
         let rlim = self.rlim();
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < self.len() as i32 {
             let center = (llim + 1) as usize;
-            let _ = self.inner.set_ortho_region(vec![center]);
+            let _ = self.inner.set_canonical_center(vec![center]);
         } else {
             // Clear ortho region if not a single center
-            let _ = self.inner.set_ortho_region(Vec::<usize>::new());
+            let _ = self.inner.set_canonical_center(Vec::<usize>::new());
         }
     }
 
@@ -213,10 +213,10 @@ where
         let llim = self.llim();
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < self.len() as i32 {
             let center = (llim + 1) as usize;
-            let _ = self.inner.set_ortho_region(vec![center]);
+            let _ = self.inner.set_canonical_center(vec![center]);
         } else {
             // Clear ortho region if not a single center
-            let _ = self.inner.set_ortho_region(Vec::<usize>::new());
+            let _ = self.inner.set_canonical_center(Vec::<usize>::new());
         }
     }
 
@@ -238,7 +238,7 @@ where
     /// Returns true if there is exactly one site that is not guaranteed to be orthogonal.
     #[inline]
     pub fn isortho(&self) -> bool {
-        self.inner.ortho_region().len() == 1
+        self.inner.canonical_center().len() == 1
     }
 
     /// Get the orthogonality center (0-indexed).
@@ -246,7 +246,7 @@ where
     /// Returns `Some(site)` if the tensor train has a single orthogonality center,
     /// `None` otherwise.
     pub fn orthocenter(&self) -> Option<usize> {
-        let region = self.inner.ortho_region();
+        let region = self.inner.canonical_center();
         if region.len() == 1 {
             // Node name IS the site index since V = usize
             Some(*region.iter().next().unwrap())
@@ -479,7 +479,7 @@ where
             .expect("Site out of bounds");
         let _ = self.inner.replace_tensor(node_idx, tensor);
         // Invalidate orthogonality
-        let _ = self.inner.set_ortho_region(Vec::<usize>::new());
+        let _ = self.inner.set_canonical_center(Vec::<usize>::new());
     }
 
     /// Orthogonalize the tensor train to have orthogonality center at the given site.
@@ -518,10 +518,11 @@ where
             });
         }
 
-        // Use TreeTN's canonicalize_by_names_with (accepts node names and CanonicalForm)
+        // Use TreeTN's canonicalize (accepts node names and CanonicalizationOptions)
         // Since V = usize, node names are site indices
+        let options = CanonicalizationOptions::forced().with_form(form);
         self.inner = std::mem::take(&mut self.inner)
-            .canonicalize_by_names_with(vec![site], form)
+            .canonicalize(vec![site], options)
             .map_err(|e| TensorTrainError::InvalidStructure {
                 message: format!("Canonicalize failed: {}", e),
             })?;
@@ -554,7 +555,7 @@ where
 
         // Update orthogonality: after left-to-right sweep, ortho center is at rightmost site
         let center = end.min(self.len()).saturating_sub(1);
-        let _ = self.inner.set_ortho_region(vec![center]);
+        let _ = self.inner.set_canonical_center(vec![center]);
         self.canonical_form = Some(truncate_alg_to_form(options.alg));
 
         Ok(())
@@ -626,7 +627,7 @@ where
             })?;
 
         // Clear ortho region since we modified tensors
-        let _ = self.inner.clear_ortho_region();
+        let _ = self.inner.clear_canonical_center();
 
         Ok(())
     }
