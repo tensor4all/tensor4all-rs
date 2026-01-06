@@ -30,7 +30,6 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use anyhow::Result;
-use petgraph::stable_graph::NodeIndex;
 
 use tensor4all::index::{DynId, Index, NoSymmSpace, Symmetry};
 use tensor4all::{factorize, Canonical, FactorizeAlg, FactorizeOptions, TensorDynLen};
@@ -48,11 +47,16 @@ use super::TreeTN;
 /// The environment `env[(from, to)]` represents the contraction of the
 /// "from" side subtree (A×B contracted with conj(C)).
 ///
+/// # Lazy Evaluation
+///
+/// The cache starts empty. When an environment is requested via `get_or_compute`,
+/// it is computed recursively from the leaves and cached for future use.
+///
 /// # Cache Invalidation
 ///
-/// When C[u] is updated during a sweep step (u → v):
-/// - `env[(u, v)]` is recomputed with the new C[u]
-/// - `env[(v, u)]` is invalidated (removed) because C[v] will change
+/// When tensors in a region T are updated, all caches containing those tensors
+/// must be invalidated. The invalidation propagates recursively from T towards
+/// the leaves of the tree.
 #[derive(Debug, Clone)]
 pub struct FitEnvironment<Id, Symm, V>
 where
@@ -68,7 +72,7 @@ impl<Id, Symm, V> FitEnvironment<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
-    V: Clone + Hash + Eq + std::fmt::Debug,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Create an empty environment cache.
     pub fn new() -> Self {
@@ -77,28 +81,16 @@ where
         }
     }
 
-    /// Get the environment tensor for edge (from, to).
+    /// Get the environment tensor for edge (from, to) if it exists.
     pub fn get(&self, from: &V, to: &V) -> Option<&TensorDynLen<Id, Symm>> {
         self.envs.get(&(from.clone(), to.clone()))
     }
 
     /// Insert an environment tensor for edge (from, to).
-    pub fn insert(&mut self, from: V, to: V, env: TensorDynLen<Id, Symm>) {
+    /// This is mainly for testing; normally use `get_or_compute` for lazy evaluation.
+    #[allow(dead_code)]
+    pub(crate) fn insert(&mut self, from: V, to: V, env: TensorDynLen<Id, Symm>) {
         self.envs.insert((from, to), env);
-    }
-
-    /// Remove the environment tensor for edge (from, to).
-    pub fn remove(&mut self, from: &V, to: &V) -> Option<TensorDynLen<Id, Symm>> {
-        self.envs.remove(&(from.clone(), to.clone()))
-    }
-
-    /// Update environment after a sweep step (from → to).
-    ///
-    /// - Inserts the new environment for (from, to)
-    /// - Removes the invalidated environment for (to, from)
-    pub fn update_after_step(&mut self, from: &V, to: &V, new_env: TensorDynLen<Id, Symm>) {
-        self.envs.insert((from.clone(), to.clone()), new_env);
-        self.envs.remove(&(to.clone(), from.clone()));
     }
 
     /// Check if environment exists for edge (from, to).
@@ -121,19 +113,152 @@ where
         self.envs.clear();
     }
 
-    /// Verify all cached environments by recomputing from scratch.
+    /// Get or compute the environment tensor for edge (from, to).
     ///
-    /// This is expensive and should only be used for testing/debugging.
+    /// If the environment is cached, returns it directly.
+    /// Otherwise, recursively computes it from child environments (towards leaves)
+    /// and caches the result.
     ///
     /// # Arguments
-    /// * `tn_a` - First input TreeTN (with sim'd internal indices)
-    /// * `tn_b` - Second input TreeTN (with sim'd internal indices)
+    /// * `from` - The node whose subtree we're computing
+    /// * `to` - The direction we're looking towards
+    /// * `tn_a` - First input TreeTN
+    /// * `tn_b` - Second input TreeTN
+    /// * `tn_c` - Current approximation TreeTN
+    pub fn get_or_compute(
+        &mut self,
+        from: &V,
+        to: &V,
+        tn_a: &TreeTN<Id, Symm, V>,
+        tn_b: &TreeTN<Id, Symm, V>,
+        tn_c: &TreeTN<Id, Symm, V>,
+    ) -> Result<TensorDynLen<Id, Symm>>
+    where
+        Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+        V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    {
+        // If already cached, return a clone
+        if let Some(env) = self.envs.get(&(from.clone(), to.clone())) {
+            return Ok(env.clone());
+        }
+
+        // Get neighbors of `from` excluding `to`
+        let child_neighbors: Vec<V> = tn_c
+            .site_index_network()
+            .neighbors(from)
+            .filter(|n| n != to)
+            .collect();
+
+        // Recursively get or compute child environments
+        let child_envs: Vec<TensorDynLen<Id, Symm>> = child_neighbors
+            .iter()
+            .map(|child| self.get_or_compute(child, from, tn_a, tn_b, tn_c))
+            .collect::<Result<Vec<_>>>()?;
+
+        // Compute the environment for (from, to) using child environments
+        let env = compute_single_node_environment(from, to, tn_a, tn_b, tn_c, &child_envs)?;
+
+        // Cache and return
+        self.envs.insert((from.clone(), to.clone()), env.clone());
+        Ok(env)
+    }
+
+    /// Invalidate all caches affected by updates to tensors in region T.
+    ///
+    /// For each `t ∈ T`:
+    /// 1. Remove all `env[(t, *)]` (0th generation)
+    /// 2. Recursively remove caches propagating towards leaves
+    ///
+    /// # Arguments
+    /// * `region` - The set of nodes whose tensors were updated
+    /// * `tn_c` - The TreeTN (for topology information)
+    pub fn invalidate<'a>(
+        &mut self,
+        region: impl IntoIterator<Item = &'a V>,
+        tn_c: &TreeTN<Id, Symm, V>,
+    ) where
+        V: 'a + Send + Sync,
+    {
+        for t in region {
+            // Get all neighbors of t
+            let neighbors: Vec<V> = tn_c.site_index_network().neighbors(t).collect();
+
+            // Remove all env[(t, *)] and propagate recursively
+            for neighbor in neighbors {
+                self.invalidate_recursive(t, &neighbor, tn_c);
+            }
+        }
+    }
+
+    /// Recursively invalidate caches starting from env[(from, to)] towards leaves.
+    ///
+    /// If env[(from, to)] exists, remove it and propagate to env[(to, x)] for all x ≠ from.
+    fn invalidate_recursive(&mut self, from: &V, to: &V, tn_c: &TreeTN<Id, Symm, V>) {
+        // Remove env[(from, to)] if it exists
+        if self.envs.remove(&(from.clone(), to.clone())).is_some() {
+            // Propagate to next generation: env[(to, x)] for all neighbors x of to, x ≠ from
+            let neighbors: Vec<V> = tn_c
+                .site_index_network()
+                .neighbors(to)
+                .filter(|n| n != from)
+                .collect();
+
+            for neighbor in neighbors {
+                self.invalidate_recursive(to, &neighbor, tn_c);
+            }
+        }
+    }
+
+    /// Verify cache structural consistency.
+    ///
+    /// For any `env[(x, x1)]` where `x` is not a leaf (has neighbors other than `x1`),
+    /// all child environments `env[(y, x)]` for neighbors `y ≠ x1` must exist.
+    ///
+    /// # Arguments
+    /// * `tn_c` - The TreeTN (for topology information)
+    ///
+    /// # Returns
+    /// `Ok(())` if consistent, or an error describing the inconsistency.
+    pub fn verify_structural_consistency(&self, tn_c: &TreeTN<Id, Symm, V>) -> Result<()>
+    where
+        V: Clone + Hash + Eq + std::fmt::Debug,
+    {
+        for (from, to) in self.envs.keys() {
+            // Get neighbors of `from` excluding `to`
+            let child_neighbors: Vec<V> = tn_c
+                .site_index_network()
+                .neighbors(from)
+                .filter(|n| n != to)
+                .collect();
+
+            // If `from` is not a leaf, all child environments must exist
+            for child in &child_neighbors {
+                if !self.envs.contains_key(&(child.clone(), from.clone())) {
+                    return Err(anyhow::anyhow!(
+                        "Structural inconsistency: env[({:?}, {:?})] exists but child env[({:?}, {:?})] is missing",
+                        from, to, child, from
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Verify cache value consistency by recomputing all entries.
+    ///
+    /// Creates a fresh empty cache, recomputes all entries lazily,
+    /// and compares with the existing cache values.
+    ///
+    /// # Arguments
+    /// * `tn_a` - First input TreeTN
+    /// * `tn_b` - Second input TreeTN
     /// * `tn_c` - Current approximation TreeTN
     /// * `tol` - Relative tolerance for comparison
     ///
     /// # Returns
-    /// `Ok(())` if all environments match, or an error describing the mismatch.
-    pub fn verify_all_environments(
+    /// `Ok(())` if all values match, or an error describing the mismatch.
+    pub fn verify_value_consistency(
         &self,
         tn_a: &TreeTN<Id, Symm, V>,
         tn_b: &TreeTN<Id, Symm, V>,
@@ -145,15 +270,16 @@ where
         Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
         V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
+        // Create a fresh cache and recompute all entries
+        let mut fresh_cache = FitEnvironment::new();
+
         for ((from, to), cached_env) in &self.envs {
-            let recomputed = compute_environment_from_scratch(from, to, tn_a, tn_b, tn_c)?;
+            let recomputed = fresh_cache.get_or_compute(from, to, tn_a, tn_b, tn_c)?;
 
             // Compare tensors by computing difference norm
-            // Since we don't have a direct sub method, we compute norms separately
             let cached_norm = cached_env.norm();
             let recomputed_norm = recomputed.norm();
 
-            // Simple norm comparison as a proxy
             let diff_norm = (cached_norm - recomputed_norm).abs();
             let relative_error = if cached_norm > 1e-15 {
                 diff_norm / cached_norm
@@ -163,14 +289,29 @@ where
 
             if relative_error > tol {
                 return Err(anyhow::anyhow!(
-                    "Environment mismatch at edge ({:?}, {:?}): relative error = {}, tolerance = {}",
-                    from,
-                    to,
-                    relative_error,
-                    tol
+                    "Value inconsistency at env[({:?}, {:?})]: cached_norm={}, recomputed_norm={}, relative_error={}, tol={}",
+                    from, to, cached_norm, recomputed_norm, relative_error, tol
                 ));
             }
         }
+        Ok(())
+    }
+
+    /// Verify both structural and value consistency.
+    pub fn verify_consistency(
+        &self,
+        tn_a: &TreeTN<Id, Symm, V>,
+        tn_b: &TreeTN<Id, Symm, V>,
+        tn_c: &TreeTN<Id, Symm, V>,
+        tol: f64,
+    ) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
+        Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+        V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    {
+        self.verify_structural_consistency(tn_c)?;
+        self.verify_value_consistency(tn_a, tn_b, tn_c, tol)?;
         Ok(())
     }
 }
@@ -179,7 +320,7 @@ impl<Id, Symm, V> Default for FitEnvironment<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
     Symm: Clone + Symmetry,
-    V: Clone + Hash + Eq + std::fmt::Debug,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     fn default() -> Self {
         Self::new()
@@ -189,91 +330,6 @@ where
 // ============================================================================
 // Environment computation helpers
 // ============================================================================
-
-/// Compute a single environment tensor from scratch (no caching).
-///
-/// This computes the environment for edge (from, to) by contracting:
-/// - All tensors in the "from" subtree of A
-/// - All tensors in the "from" subtree of B
-/// - All tensors in the "from" subtree of conj(C)
-///
-/// The result has indices: (link_A_from_to, link_B_from_to, link_C_from_to)
-fn compute_environment_from_scratch<Id, Symm, V>(
-    from: &V,
-    to: &V,
-    tn_a: &TreeTN<Id, Symm, V>,
-    tn_b: &TreeTN<Id, Symm, V>,
-    tn_c: &TreeTN<Id, Symm, V>,
-) -> Result<TensorDynLen<Id, Symm>>
-where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
-    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
-{
-    // Get the subtree rooted at "from" (excluding "to")
-    let subtree_nodes = get_subtree_nodes(tn_c, from, to)?;
-
-    if subtree_nodes.is_empty() {
-        return Err(anyhow::anyhow!("Subtree is empty"));
-    }
-
-    // For a single node subtree, compute directly
-    if subtree_nodes.len() == 1 {
-        return compute_leaf_environment(from, to, tn_a, tn_b, tn_c);
-    }
-
-    // For multi-node subtree, recursively contract from leaves
-    contract_subtree_environment(&subtree_nodes, from, to, tn_a, tn_b, tn_c)
-}
-
-/// Get all nodes in the subtree rooted at `root`, excluding the subtree containing `exclude`.
-fn get_subtree_nodes<Id, Symm, V>(
-    tn: &TreeTN<Id, Symm, V>,
-    root: &V,
-    exclude: &V,
-) -> Result<Vec<V>>
-where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
-    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-{
-    let root_idx = tn
-        .node_index(root)
-        .ok_or_else(|| anyhow::anyhow!("Root node {:?} not found", root))?;
-    let exclude_idx = tn
-        .node_index(exclude)
-        .ok_or_else(|| anyhow::anyhow!("Exclude node {:?} not found", exclude))?;
-
-    let graph = tn.site_index_network().topology().graph();
-
-    // DFS from root, but don't cross through exclude
-    let mut result = Vec::new();
-    let mut visited = std::collections::HashSet::new();
-    let mut stack = vec![root_idx];
-
-    while let Some(node) = stack.pop() {
-        if visited.contains(&node) {
-            continue;
-        }
-        visited.insert(node);
-
-        let node_name = tn
-            .site_index_network()
-            .topology()
-            .node_name(node)
-            .ok_or_else(|| anyhow::anyhow!("Node name not found for {:?}", node))?;
-        result.push(node_name.clone());
-
-        // Add neighbors except exclude
-        for neighbor in graph.neighbors(node) {
-            if neighbor != exclude_idx && !visited.contains(&neighbor) {
-                stack.push(neighbor);
-            }
-        }
-    }
-
-    Ok(result)
-}
 
 /// Compute environment for a leaf node (no children in subtree).
 fn compute_leaf_environment<Id, Symm, V>(
@@ -353,152 +409,105 @@ where
     Ok(env)
 }
 
-/// Contract a multi-node subtree to compute environment.
-fn contract_subtree_environment<Id, Symm, V>(
-    subtree_nodes: &[V],
-    root: &V,
+/// Compute environment for a single node using child environments.
+///
+/// This computes: child_envs × A[node] × B[node] × conj(C[node])
+/// leaving open only the indices connecting to `towards`.
+fn compute_single_node_environment<Id, Symm, V>(
+    node: &V,
     towards: &V,
     tn_a: &TreeTN<Id, Symm, V>,
     tn_b: &TreeTN<Id, Symm, V>,
     tn_c: &TreeTN<Id, Symm, V>,
+    child_envs: &[TensorDynLen<Id, Symm>],
 ) -> Result<TensorDynLen<Id, Symm>>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
     Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    let subtree_set: std::collections::HashSet<V> = subtree_nodes.iter().cloned().collect();
+    // Get local tensors
+    let node_idx_a = tn_a
+        .node_index(node)
+        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn_a", node))?;
+    let node_idx_b = tn_b
+        .node_index(node)
+        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn_b", node))?;
+    let node_idx_c = tn_c
+        .node_index(node)
+        .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn_c", node))?;
 
-    // Process nodes from leaves towards root using topology order
-    let root_idx = tn_c.node_index(root).unwrap();
-    let towards_idx = tn_c.node_index(towards).unwrap();
+    let tensor_a = tn_a
+        .tensor(node_idx_a)
+        .ok_or_else(|| anyhow::anyhow!("Tensor not found in tn_a"))?;
+    let tensor_b = tn_b
+        .tensor(node_idx_b)
+        .ok_or_else(|| anyhow::anyhow!("Tensor not found in tn_b"))?;
+    let tensor_c = tn_c
+        .tensor(node_idx_c)
+        .ok_or_else(|| anyhow::anyhow!("Tensor not found in tn_c"))?;
 
-    let graph = tn_c.site_index_network().topology().graph();
-
-    // Collect postorder sequence, excluding 'towards' subtree
-    fn collect_postorder<V: Clone + Hash + Eq>(
-        graph: &petgraph::stable_graph::StableUnGraph<V, ()>,
-        node: NodeIndex,
-        exclude: NodeIndex,
-        visited: &mut std::collections::HashSet<NodeIndex>,
-        result: &mut Vec<NodeIndex>,
-    ) {
-        if visited.contains(&node) || node == exclude {
-            return;
-        }
-        visited.insert(node);
-
-        for neighbor in graph.neighbors(node) {
-            if neighbor != exclude && !visited.contains(&neighbor) {
-                collect_postorder(graph, neighbor, exclude, visited, result);
-            }
-        }
-        result.push(node);
+    if child_envs.is_empty() {
+        // Leaf node: compute from tensors directly
+        return compute_leaf_environment(node, towards, tn_a, tn_b, tn_c);
     }
 
-    let mut visited = std::collections::HashSet::new();
-    let mut postorder_nodes = Vec::new();
-    collect_postorder(graph, root_idx, towards_idx, &mut visited, &mut postorder_nodes);
+    // Non-leaf: contract A × B × conj(C) × child_envs
+    let site_space_a = tn_a.site_space(node).cloned().unwrap_or_default();
+    let site_space_b = tn_b.site_space(node).cloned().unwrap_or_default();
 
-    // Store computed environments for each node
-    let mut node_envs: HashMap<V, TensorDynLen<Id, Symm>> = HashMap::new();
+    // Contract A and B on site indices
+    let common_site_pairs: Vec<_> = site_space_a
+        .iter()
+        .filter_map(|idx_a| {
+            site_space_b
+                .iter()
+                .find(|idx_b| idx_a.id == idx_b.id)
+                .map(|idx_b| (idx_a.clone(), idx_b.clone()))
+        })
+        .collect();
 
-    // Process nodes in postorder
-    for node_idx in postorder_nodes {
-        let node_name = tn_c
-            .site_index_network()
-            .topology()
-            .node_name(node_idx)
-            .unwrap()
-            .clone();
+    let ab = if common_site_pairs.is_empty() {
+        tensor_a.tensordot(tensor_b, &[])?
+    } else {
+        tensor_a.tensordot(tensor_b, &common_site_pairs)?
+    };
 
-        // Collect environments from children (neighbors in subtree, excluding towards)
-        let neighbors: Vec<_> = tn_c.site_index_network().neighbors(&node_name).collect();
-        let child_envs: Vec<_> = neighbors
+    // Contract with conj(C)
+    let c_conj = tensor_c.conj();
+    let site_space_c = tn_c.site_space(node).cloned().unwrap_or_default();
+    let ab_c_common: Vec<_> = ab
+        .indices
+        .iter()
+        .filter_map(|idx_ab| {
+            site_space_c
+                .iter()
+                .find(|idx_c| idx_ab.id == idx_c.id)
+                .map(|idx_c| (idx_ab.clone(), idx_c.clone()))
+        })
+        .collect();
+
+    let mut result = ab.tensordot(&c_conj, &ab_c_common)?;
+
+    // Contract with child environments
+    for child_env in child_envs {
+        // Find common indices between result and child_env
+        let common: Vec<_> = result
+            .indices
             .iter()
-            .filter(|n| subtree_set.contains(*n) && **n != *towards)
-            .filter_map(|n| node_envs.get(n).cloned())
-            .collect();
-
-        // Get local tensors
-        let node_idx_a = tn_a.node_index(&node_name).unwrap();
-        let node_idx_b = tn_b.node_index(&node_name).unwrap();
-        let node_idx_c = tn_c.node_index(&node_name).unwrap();
-
-        let tensor_a = tn_a.tensor(node_idx_a).unwrap();
-        let tensor_b = tn_b.tensor(node_idx_b).unwrap();
-        let tensor_c = tn_c.tensor(node_idx_c).unwrap();
-
-        // Contract: child_envs × A × B × conj(C)
-        let env = if child_envs.is_empty() {
-            // Leaf node: compute from tensors directly
-            compute_leaf_environment(&node_name, towards, tn_a, tn_b, tn_c)?
-        } else {
-            // Non-leaf: contract with child environments
-            let site_space_a = tn_a.site_space(&node_name).cloned().unwrap_or_default();
-            let site_space_b = tn_b.site_space(&node_name).cloned().unwrap_or_default();
-
-            // Contract A and B on site indices
-            let common_site_pairs: Vec<_> = site_space_a
-                .iter()
-                .filter_map(|idx_a| {
-                    site_space_b
-                        .iter()
-                        .find(|idx_b| idx_a.id == idx_b.id)
-                        .map(|idx_b| (idx_a.clone(), idx_b.clone()))
-                })
-                .collect();
-
-            let ab = if common_site_pairs.is_empty() {
-                tensor_a.tensordot(tensor_b, &[])?
-            } else {
-                tensor_a.tensordot(tensor_b, &common_site_pairs)?
-            };
-
-            // Contract with conj(C)
-            let c_conj = tensor_c.conj();
-            let site_space_c = tn_c.site_space(&node_name).cloned().unwrap_or_default();
-            let ab_c_common: Vec<_> = ab
-                .indices
-                .iter()
-                .filter_map(|idx_ab| {
-                    site_space_c
-                        .iter()
-                        .find(|idx_c| idx_ab.id == idx_c.id)
-                        .map(|idx_c| (idx_ab.clone(), idx_c.clone()))
-                })
-                .collect();
-
-            let mut result = ab.tensordot(&c_conj, &ab_c_common)?;
-
-            // Contract with child environments
-            for child_env in child_envs {
-                // Find common indices between result and child_env
-                let common: Vec<_> = result
+            .filter_map(|idx_r| {
+                child_env
                     .indices
                     .iter()
-                    .filter_map(|idx_r| {
-                        child_env
-                            .indices
-                            .iter()
-                            .find(|idx_e| idx_r.id == idx_e.id)
-                            .map(|idx_e| (idx_r.clone(), idx_e.clone()))
-                    })
-                    .collect();
+                    .find(|idx_e| idx_r.id == idx_e.id)
+                    .map(|idx_e| (idx_r.clone(), idx_e.clone()))
+            })
+            .collect();
 
-                result = result.tensordot(&child_env, &common)?;
-            }
-
-            result
-        };
-
-        node_envs.insert(node_name, env);
+        result = result.tensordot(child_env, &common)?;
     }
 
-    // Return the environment at root
-    node_envs
-        .remove(root)
-        .ok_or_else(|| anyhow::anyhow!("Failed to compute environment at root"))
+    Ok(result)
 }
 
 // ============================================================================
@@ -568,32 +577,6 @@ where
         self.factorize_alg = alg;
         self
     }
-
-    /// Initialize all environments towards a center node.
-    ///
-    /// Computes environments from all leaves towards the center.
-    /// Should be called before the first sweep.
-    pub fn initialize_environments(&mut self, center: &V, tn_c: &TreeTN<Id, Symm, V>) -> Result<()>
-    where
-        Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
-        V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
-    {
-        self.envs.clear();
-
-        // Collect edges to process (from leaves towards center)
-        let edges_to_center = tn_c
-            .edges_to_canonicalize_by_names(center)
-            .ok_or_else(|| anyhow::anyhow!("Failed to get edges to center"))?;
-
-        // Process each edge
-        for (from, to) in edges_to_center {
-            let env = compute_environment_from_scratch(&from, &to, &self.tn_a, &self.tn_b, tn_c)?;
-            self.envs.insert(from, to, env);
-        }
-
-        Ok(())
-    }
 }
 
 impl<Id, Symm, V> LocalUpdater<Id, Symm, V> for FitUpdater<Id, Symm, V>
@@ -632,6 +615,7 @@ where
         let b_v = self.tn_b.tensor(idx_v_b).unwrap();
 
         // Collect environments from neighbors (excluding the edge between u and v)
+        // Uses lazy evaluation: computes and caches if not already present
         let mut env_tensors: Vec<TensorDynLen<Id, Symm>> = Vec::new();
 
         // Environments from u's neighbors (except v)
@@ -639,9 +623,14 @@ where
             if neighbor == *node_v {
                 continue;
             }
-            if let Some(env) = self.envs.get(&neighbor, node_u) {
-                env_tensors.push(env.clone());
-            }
+            let env = self.envs.get_or_compute(
+                &neighbor,
+                node_u,
+                &self.tn_a,
+                &self.tn_b,
+                full_treetn,
+            )?;
+            env_tensors.push(env);
         }
 
         // Environments from v's neighbors (except u)
@@ -649,9 +638,14 @@ where
             if neighbor == *node_u {
                 continue;
             }
-            if let Some(env) = self.envs.get(&neighbor, node_v) {
-                env_tensors.push(env.clone());
-            }
+            let env = self.envs.get_or_compute(
+                &neighbor,
+                node_v,
+                &self.tn_a,
+                &self.tn_b,
+                full_treetn,
+            )?;
+            env_tensors.push(env);
         }
 
         // Compute optimal 2-site tensor: env × A[u] × B[u] × A[v] × B[v] × env
@@ -794,18 +788,17 @@ where
         subtree.set_ortho_towards(&preserved_bond.id, Some(step.new_center.clone()));
         subtree.set_canonical_center([step.new_center.clone()])?;
 
-        // Update environment cache
-        // Compute new environment for (u, v) direction
-        let new_env = compute_environment_from_scratch(
-            node_u,
-            node_v,
-            &self.tn_a,
-            &self.tn_b,
-            full_treetn, // Use full_treetn which will be updated after this
-        )?;
-        self.envs.update_after_step(node_u, node_v, new_env);
-
         Ok(subtree)
+    }
+
+    fn after_step(
+        &mut self,
+        step: &LocalUpdateStep<V>,
+        full_treetn_after: &TreeTN<Id, Symm, V>,
+    ) -> Result<()> {
+        // Invalidate all caches affected by the updated region
+        self.envs.invalidate(&step.nodes, full_treetn_after);
+        Ok(())
     }
 }
 
@@ -918,17 +911,9 @@ where
     // Canonicalize towards center
     tn_c = tn_c.canonicalize([center.clone()], CanonicalizationOptions::default())?;
 
-    // Create FitUpdater
-    let mut updater = FitUpdater::new(
-        tn_a.clone(),
-        tn_b.clone(),
-        options.max_rank,
-        options.rtol,
-    )
-    .with_factorize_alg(options.factorize_alg);
-
-    // Initialize environments
-    updater.initialize_environments(center, &tn_c)?;
+    // Create FitUpdater (environments are computed lazily)
+    let mut updater = FitUpdater::new(tn_a.clone(), tn_b.clone(), options.max_rank, options.rtol)
+        .with_factorize_alg(options.factorize_alg);
 
     // Create sweep plan
     let plan = LocalUpdateSweepPlan::from_treetn(&tn_c, center, 2)
@@ -997,33 +982,8 @@ mod tests {
         assert!(retrieved.is_some());
     }
 
-    #[test]
-    fn test_fit_environment_update_after_step() {
-        let mut env: FitEnvironment<DynId, NoSymmSpace, String> = FitEnvironment::new();
-
-        let idx = TestIndex::new_dyn(2);
-        let tensor1 = TensorDynLen::new(
-            vec![idx.clone()],
-            vec![2],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0]))),
-        );
-        let tensor2 = TensorDynLen::new(
-            vec![idx.clone()],
-            vec![2],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![3.0, 4.0]))),
-        );
-
-        // Insert initial environment
-        env.insert("B".to_string(), "A".to_string(), tensor1);
-        assert!(env.contains(&"B".to_string(), &"A".to_string()));
-
-        // Update after step A -> B
-        env.update_after_step(&"A".to_string(), &"B".to_string(), tensor2);
-
-        // (A, B) should exist, (B, A) should be removed
-        assert!(env.contains(&"A".to_string(), &"B".to_string()));
-        assert!(!env.contains(&"B".to_string(), &"A".to_string()));
-    }
+    // Note: invalidate() tests require a real TreeTN for topology information.
+    // These are tested in integration tests with actual TreeTN instances.
 
     #[test]
     fn test_fit_contraction_options_default() {

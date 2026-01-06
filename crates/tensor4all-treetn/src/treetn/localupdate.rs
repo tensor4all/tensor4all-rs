@@ -211,12 +211,26 @@ where
     Symm: Clone + Symmetry,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
+    /// Optional hook called before performing an update step.
+    ///
+    /// This is called with the full TreeTN state *before* the update is applied.
+    /// Implementors can use it to validate assumptions or prefetch/update caches.
+    fn before_step(
+        &mut self,
+        _step: &LocalUpdateStep<V>,
+        _full_treetn_before: &TreeTN<Id, Symm, V>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Update a local subtree.
     ///
     /// # Arguments
     /// * `subtree` - The extracted subtree to update
     /// * `step` - The current step information (nodes and new_center)
-    /// * `full_treetn` - Reference to the full TreeTN (for context, e.g., environment tensors)
+    /// * `full_treetn` - Reference to the full (global) TreeTN. This provides global context
+    ///   (e.g., topology, neighbor relations, and index/bond metadata) that some update
+    ///   algorithms may need. It may be unused by simple updaters.
     ///
     /// # Returns
     /// The updated subtree, which must have the same "appearance" as the input
@@ -230,6 +244,21 @@ where
         step: &LocalUpdateStep<V>,
         full_treetn: &TreeTN<Id, Symm, V>,
     ) -> Result<TreeTN<Id, Symm, V>>;
+
+    /// Optional hook called after an update step has been applied to the full TreeTN.
+    ///
+    /// This is called after:
+    /// - The updated subtree has been inserted back into the full TreeTN
+    /// - The canonical center has been moved to `step.new_center`
+    ///
+    /// Implementors can use this to update caches that must see the post-update state.
+    fn after_step(
+        &mut self,
+        _step: &LocalUpdateStep<V>,
+        _full_treetn_after: &TreeTN<Id, Symm, V>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Apply a local update sweep to a TreeTN.
@@ -300,6 +329,10 @@ where
             .context("apply_local_update_sweep: canonical_center must be within extracted subtree");
         }
 
+        updater
+            .before_step(step, treetn)
+            .context("apply_local_update_sweep: LocalUpdater::before_step failed")?;
+
         // Extract subtree for the nodes in this step
         let subtree = treetn.extract_subtree(&step.nodes)?;
 
@@ -311,6 +344,10 @@ where
 
         // Update canonical center
         treetn.set_canonical_center([step.new_center.clone()])?;
+
+        updater
+            .after_step(step, treetn)
+            .context("apply_local_update_sweep: LocalUpdater::after_step failed")?;
     }
 
     Ok(())
