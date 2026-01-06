@@ -207,3 +207,142 @@ fn test_projected_operator_local_dimension() {
     // 2 * 2 = 4
     assert_eq!(dim, 4);
 }
+
+// ============================================================================
+// Integration Tests
+// ============================================================================
+
+/// Create a simple 2-site MPS chain for testing.
+/// Returns (mps, site indices, bond indices)
+fn create_two_site_mps() -> (
+    TreeTN<DynId, NoSymmSpace, &'static str>,
+    Vec<Index<DynId>>,
+    Vec<Index<DynId>>,
+) {
+    let mut mps = TreeTN::<DynId, NoSymmSpace, &'static str>::new();
+
+    // Physical indices (dimension 2 for each site)
+    let s0 = Index::new_dyn(2);
+    let s1 = Index::new_dyn(2);
+
+    // Bond index (dimension 2)
+    let b01 = Index::new_dyn(2);
+
+    // Create tensors with normalized data
+    // Site 0: [s0, b01] shape (2, 2)
+    let t0 = TensorDynLen::new(
+        vec![s0.clone(), b01.clone()],
+        vec![2, 2],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
+            1.0, 0.0, // s0=0: b01=0, b01=1
+            0.0, 1.0, // s0=1: b01=0, b01=1
+        ]))),
+    );
+
+    // Site 1: [b01, s1] shape (2, 2)
+    let t1 = TensorDynLen::new(
+        vec![b01.clone(), s1.clone()],
+        vec![2, 2],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
+            1.0, 0.0, // b01=0: s1=0, s1=1
+            0.0, 1.0, // b01=1: s1=0, s1=1
+        ]))),
+    );
+
+    // Add nodes with string names
+    let n0 = mps.add_tensor("site0", t0).unwrap();
+    let n1 = mps.add_tensor("site1", t1).unwrap();
+
+    // Connect nodes
+    mps.connect(n0, &b01, n1, &b01).unwrap();
+
+    (mps, vec![s0, s1], vec![b01])
+}
+
+/// Create an identity MPO for testing.
+/// The identity operator at each site: I[s, s'] = delta(s, s')
+fn create_identity_mpo(
+    site_indices: &[Index<DynId>],
+) -> (TreeTN<DynId, NoSymmSpace, &'static str>, Vec<Index<DynId>>) {
+    let mut mpo = TreeTN::<DynId, NoSymmSpace, &'static str>::new();
+
+    // Clone site indices for output (ket) indices
+    // The bra contracts with s, ket gets s'
+    let s0_out = site_indices[0].clone();
+    let s1_out = site_indices[1].clone();
+
+    // For the identity MPO, we need input and output physical indices
+    // Input physical index (for ket contraction)
+    let s0_in = Index::new_dyn(2);
+    let s1_in = Index::new_dyn(2);
+
+    // Bond index for MPO (dimension 1 for identity)
+    let b01 = Index::new_dyn(1);
+
+    // Identity tensor at site 0: [s0_out, s0_in, b01] shape (2, 2, 1)
+    // I[s0_out, s0_in, b01] = delta(s0_out, s0_in) for b01=0
+    let t0 = TensorDynLen::new(
+        vec![s0_out.clone(), s0_in.clone(), b01.clone()],
+        vec![2, 2, 1],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
+            1.0, // s0_out=0, s0_in=0, b01=0
+            0.0, // s0_out=0, s0_in=1, b01=0
+            0.0, // s0_out=1, s0_in=0, b01=0
+            1.0, // s0_out=1, s0_in=1, b01=0
+        ]))),
+    );
+
+    // Identity tensor at site 1: [b01, s1_out, s1_in] shape (1, 2, 2)
+    let t1 = TensorDynLen::new(
+        vec![b01.clone(), s1_out.clone(), s1_in.clone()],
+        vec![1, 2, 2],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
+            1.0, // b01=0, s1_out=0, s1_in=0
+            0.0, // b01=0, s1_out=0, s1_in=1
+            0.0, // b01=0, s1_out=1, s1_in=0
+            1.0, // b01=0, s1_out=1, s1_in=1
+        ]))),
+    );
+
+    // Add nodes with string names
+    let n0 = mpo.add_tensor("site0", t0).unwrap();
+    let n1 = mpo.add_tensor("site1", t1).unwrap();
+
+    // Connect nodes
+    mpo.connect(n0, &b01, n1, &b01).unwrap();
+
+    (mpo, vec![s0_in, s1_in])
+}
+
+#[test]
+fn test_linsolve_simple_two_site() {
+    use tensor4all_treetn::linsolve;
+
+    // Create a simple 2-site MPS as the RHS
+    let (rhs, site_indices, _bonds) = create_two_site_mps();
+
+    // Create an identity MPO
+    let (identity_mpo, _input_indices) = create_identity_mpo(&site_indices);
+
+    // Create initial guess (same as RHS for simplicity)
+    let init = rhs.clone();
+
+    // Solve I * x = b (solution should be x = b)
+    let options = LinsolveOptions::default()
+        .with_nsweeps(1)
+        .with_krylov_tol(1e-8)
+        .with_max_rank(4);
+
+    let result = linsolve(&identity_mpo, &rhs, init, &"site0", options);
+
+    // The solve should succeed (even if the algorithm isn't fully working yet,
+    // we want to verify it doesn't panic)
+    assert!(
+        result.is_ok(),
+        "linsolve failed: {:?}",
+        result.err()
+    );
+
+    let linsolve_result = result.unwrap();
+    assert_eq!(linsolve_result.sweeps, 1);
+}
