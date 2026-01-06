@@ -192,12 +192,14 @@ where
         self.topology.graph_mut()
     }
 
-    /// Check if two SiteIndexNetworks have compatible topology and site space.
+    /// Check if two SiteIndexNetworks share equivalent site index structure.
     ///
-    /// Two networks are compatible if:
+    /// Two networks are equivalent if:
     /// - Same topology (nodes and edges)
     /// - Same site space for each node
-    pub fn is_compatible(&self, other: &Self) -> bool {
+    ///
+    /// This is used to verify that two TreeTNs can be added or contracted.
+    pub fn share_equivalent_site_index_network(&self, other: &Self) -> bool {
         // Check topology
         if !self.topology.same_topology(&other.topology) {
             return false;
@@ -260,6 +262,26 @@ where
     /// See [`NodeNameNetwork::edges_to_canonicalize_by_names`] for details.
     pub fn edges_to_canonicalize_by_names(&self, target: &NodeName) -> Option<Vec<(NodeName, NodeName)>> {
         self.topology.edges_to_canonicalize_by_names(target)
+    }
+
+    /// Compute edges to canonicalize from leaves towards a connected region (multiple centers).
+    ///
+    /// See [`NodeNameNetwork::edges_to_canonicalize_to_region`] for details.
+    pub fn edges_to_canonicalize_to_region(
+        &self,
+        target_region: &HashSet<NodeIndex>,
+    ) -> CanonicalizeEdges {
+        self.topology.edges_to_canonicalize_to_region(target_region)
+    }
+
+    /// Compute edges to canonicalize towards a region, returning node names.
+    ///
+    /// See [`NodeNameNetwork::edges_to_canonicalize_to_region_by_names`] for details.
+    pub fn edges_to_canonicalize_to_region_by_names(
+        &self,
+        target_region: &HashSet<NodeName>,
+    ) -> Option<Vec<(NodeName, NodeName)>> {
+        self.topology.edges_to_canonicalize_to_region_by_names(target_region)
     }
 }
 
@@ -375,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_compatible() {
+    fn test_share_equivalent_site_index_network() {
         let mut net1: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
             SiteIndexNetwork::new();
         let site1: HashSet<_> = [Index::new(1u128, NoSymmSpace::new(2))].into();
@@ -389,7 +411,7 @@ mod tests {
         net2.add_node("B".to_string(), HashSet::new()).unwrap();
         net2.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 
-        assert!(net1.is_compatible(&net2));
+        assert!(net1.share_equivalent_site_index_network(&net2));
 
         // Different site space
         let mut net3: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
@@ -399,6 +421,6 @@ mod tests {
         net3.add_node("B".to_string(), HashSet::new()).unwrap();
         net3.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 
-        assert!(!net1.is_compatible(&net3));
+        assert!(!net1.share_equivalent_site_index_network(&net3));
     }
 }

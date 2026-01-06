@@ -6,6 +6,7 @@
 mod canonicalize;
 mod contraction;
 mod decompose;
+mod localupdate;
 mod ops;
 mod tensor_like;
 mod truncate;
@@ -70,9 +71,11 @@ where
     /// Site index network: manages topology and site space (physical indices).
     /// This structure enables topology and site space comparison independent of tensor data.
     pub(crate) site_index_network: SiteIndexNetwork<V, Id, Symm>,
-    /// Orthogonalization direction for each edge.
-    /// Maps EdgeIndex to the node name (V) that the orthogonalization points towards.
-    pub(crate) ortho_towards: HashMap<EdgeIndex, V>,
+    /// Orthogonalization direction for each index (bond or site).
+    /// Maps index ID to the node name (V) that the orthogonalization points towards.
+    /// - For bond indices: points towards the canonical center direction
+    /// - For site indices: points to the node that owns the index (always towards canonical center)
+    pub(crate) ortho_towards: HashMap<Id, V>,
 }
 
 /// Internal context for sweep-to-center operations.
@@ -923,15 +926,52 @@ where
         Ok(())
     }
 
-    /// Set the orthogonalization direction for an edge.
+    /// Set the orthogonalization direction for an index (bond or site).
+    ///
+    /// The direction is specified as a node name (or None to clear).
+    ///
+    /// # Arguments
+    /// * `index_id` - The index ID to set ortho direction for
+    /// * `dir` - The node name that the ortho points towards, or None to clear
+    pub fn set_ortho_towards(
+        &mut self,
+        index_id: &Id,
+        dir: Option<V>,
+    ) {
+        match dir {
+            Some(node_name) => {
+                self.ortho_towards.insert(index_id.clone(), node_name);
+            }
+            None => {
+                self.ortho_towards.remove(index_id);
+            }
+        }
+    }
+
+    /// Get the node name that the orthogonalization points towards for an index.
+    ///
+    /// Returns None if ortho_towards is not set for this index.
+    pub fn ortho_towards_for_index(&self, index_id: &Id) -> Option<&V> {
+        self.ortho_towards.get(index_id)
+    }
+
+    /// Set the orthogonalization direction for an edge (by EdgeIndex).
+    ///
+    /// This is a convenience method that looks up the bond index ID and calls `set_ortho_towards`.
     ///
     /// The direction is specified as a node name (or None to clear).
     /// The node must be one of the edge's endpoints.
     pub fn set_edge_ortho_towards(
         &mut self,
-        edge: EdgeIndex,
+        edge: petgraph::stable_graph::EdgeIndex,
         dir: Option<V>,
     ) -> Result<()> {
+        // Get the bond index ID for this edge
+        let bond_id = self.bond_index(edge)
+            .ok_or_else(|| anyhow::anyhow!("Edge does not exist"))?
+            .id
+            .clone();
+
         // Validate that the node (if any) is one of the edge endpoints
         if let Some(ref node_name) = dir {
             let (source, target) = self.graph.graph()
@@ -950,29 +990,23 @@ where
             }
         }
 
-        match dir {
-            Some(node_name) => {
-                self.ortho_towards.insert(edge, node_name);
-            }
-            None => {
-                self.ortho_towards.remove(&edge);
-            }
-        }
+        self.set_ortho_towards(&bond_id, dir);
         Ok(())
     }
 
-    /// Get the node name that the orthogonalization points towards.
+    /// Get the node name that the orthogonalization points towards for an edge.
     ///
-    /// Returns None if ortho_towards is not set for this edge.
-    pub fn ortho_towards_node(&self, edge: EdgeIndex) -> Option<&V> {
-        self.ortho_towards.get(&edge)
+    /// Returns None if ortho_towards is not set for this edge's bond index.
+    pub fn ortho_towards_node(&self, edge: petgraph::stable_graph::EdgeIndex) -> Option<&V> {
+        self.bond_index(edge)
+            .and_then(|bond| self.ortho_towards.get(&bond.id))
     }
 
-    /// Get the NodeIndex that the orthogonalization points towards.
+    /// Get the NodeIndex that the orthogonalization points towards for an edge.
     ///
-    /// Returns None if ortho_towards is not set for this edge.
-    pub fn ortho_towards_node_index(&self, edge: EdgeIndex) -> Option<NodeIndex> {
-        self.ortho_towards.get(&edge)
+    /// Returns None if ortho_towards is not set for this edge's bond index.
+    pub fn ortho_towards_node_index(&self, edge: petgraph::stable_graph::EdgeIndex) -> Option<NodeIndex> {
+        self.ortho_towards_node(edge)
             .and_then(|name| self.graph.node_index(name))
     }
 
@@ -1222,22 +1256,24 @@ where
         self.site_index_network.site_space_mut(node_name)
     }
 
-    /// Check if two TreeTN are compatible (can be added or contracted).
+    /// Check if two TreeTNs share equivalent site index network structure.
     ///
-    /// Two TreeTN are compatible if:
-    /// - Site index networks are compatible (same topology and site space)
+    /// Two TreeTNs share equivalent structure if:
+    /// - Same topology (nodes and edges)
+    /// - Same site space for each node
+    ///
+    /// This is used to verify that two TreeTNs can be added or contracted.
     ///
     /// # Arguments
-    /// * `other` - The other TreeTN to check compatibility with
+    /// * `other` - The other TreeTN to check against
     ///
     /// # Returns
-    /// `true` if the networks are compatible, `false` otherwise.
-    pub fn is_compatible(&self, other: &Self) -> bool
+    /// `true` if the networks share equivalent site index structure, `false` otherwise.
+    pub fn share_equivalent_site_index_network(&self, other: &Self) -> bool
     where
         Id: Ord,
     {
-        // Check site index network compatibility (includes both topology and site space)
-        self.site_index_network.is_compatible(&other.site_index_network)
+        self.site_index_network.share_equivalent_site_index_network(&other.site_index_network)
     }
 
     /// Check if two TreeTNs have the same topology (graph structure).
@@ -1249,6 +1285,208 @@ where
     /// with the same structure but possibly different site indices.
     pub fn same_topology(&self, other: &Self) -> bool {
         self.site_index_network.topology().same_topology(other.site_index_network.topology())
+    }
+
+    /// Check if two TreeTNs have the same "appearance".
+    ///
+    /// Two TreeTNs have the same appearance if:
+    /// 1. They have the same topology (same nodes and edges)
+    /// 2. They have the same external indices (physical indices) at each node
+    ///    (compared as sets, so order within a node doesn't matter)
+    /// 3. They have the same orthogonalization direction (ortho_towards) on each edge
+    ///
+    /// This is a weaker check than `share_equivalent_site_index_network`:
+    /// - `share_equivalent_site_index_network`: checks topology + site space (indices)
+    /// - `same_appearance`: checks topology + site space + ortho_towards directions
+    ///
+    /// Note: This does NOT compare tensor data, only structural information.
+    /// Note: Bond index IDs may differ between the two TreeTNs (e.g., after independent
+    ///       canonicalization), so we compare ortho_towards by edge position, not by index ID.
+    ///
+    /// # Arguments
+    /// * `other` - The other TreeTN to compare against
+    ///
+    /// # Returns
+    /// `true` if both TreeTNs have the same appearance, `false` otherwise.
+    pub fn same_appearance(&self, other: &Self) -> bool
+    where
+        Id: Ord,
+        V: Ord,
+    {
+        // Step 1: Check topology and site space
+        if !self.share_equivalent_site_index_network(other) {
+            return false;
+        }
+
+        // Step 2: Check ortho_towards on each edge by position (node pair)
+        // Bond index IDs may differ, so we compare by edge location (node_a, node_b)
+        let mut self_bond_ortho_count = 0;
+        let mut other_bond_ortho_count = 0;
+
+        // Count bond index entries in self
+        for node_name in self.node_names() {
+            let self_neighbors: Vec<V> = self.site_index_network.neighbors(&node_name).collect();
+
+            for neighbor_name in self_neighbors {
+                // Only process each edge once (when node_name < neighbor_name)
+                if node_name >= neighbor_name {
+                    continue;
+                }
+
+                // Get edge and bond in self
+                let self_edge = match self.edge_between(&node_name, &neighbor_name) {
+                    Some(e) => e,
+                    None => continue,
+                };
+                let self_bond_id = match self.bond_index(self_edge) {
+                    Some(b) => &b.id,
+                    None => continue,
+                };
+
+                // Get edge and bond in other
+                let other_edge = match other.edge_between(&node_name, &neighbor_name) {
+                    Some(e) => e,
+                    None => return false, // Edge exists in self but not in other
+                };
+                let other_bond_id = match other.bond_index(other_edge) {
+                    Some(b) => &b.id,
+                    None => return false,
+                };
+
+                // Compare ortho_towards for this edge
+                let self_ortho = self.ortho_towards.get(self_bond_id);
+                let other_ortho = other.ortho_towards.get(other_bond_id);
+
+                match (self_ortho, other_ortho) {
+                    (None, None) => {} // Both have no direction - OK
+                    (Some(self_dir), Some(other_dir)) => {
+                        // Both have direction - must be the same
+                        if self_dir != other_dir {
+                            return false;
+                        }
+                        self_bond_ortho_count += 1;
+                        other_bond_ortho_count += 1;
+                    }
+                    _ => return false, // One has direction, other doesn't
+                }
+            }
+        }
+
+        // Verify we compared all bond ortho_towards entries
+        // (site index ortho_towards are not compared here as they're implied by topology)
+        // Count actual bond index entries in each ortho_towards map
+        let self_total_bond_entries: usize = self.graph.graph().edge_indices()
+            .filter_map(|e| self.bond_index(e))
+            .filter(|b| self.ortho_towards.contains_key(&b.id))
+            .count();
+        let other_total_bond_entries: usize = other.graph.graph().edge_indices()
+            .filter_map(|e| other.bond_index(e))
+            .filter(|b| other.ortho_towards.contains_key(&b.id))
+            .count();
+
+        if self_bond_ortho_count != self_total_bond_entries
+            || other_bond_ortho_count != other_total_bond_entries {
+            return false;
+        }
+
+        true
+    }
+
+    /// Verify internal data consistency by reconstructing the TreeTN from scratch.
+    ///
+    /// This function clones all tensors and node names, reconstructs a new TreeTN
+    /// using `from_tensors`, and verifies that the reconstruction matches the original.
+    ///
+    /// # Consistency checks performed:
+    /// 1. Topology: Same nodes and edges
+    /// 2. Site space: Same physical indices for each node
+    /// 3. Tensors: Same tensor data at each node
+    ///
+    /// This is useful for debugging and testing to ensure that the internal state
+    /// of a TreeTN is consistent after complex operations.
+    ///
+    /// # Returns
+    /// `Ok(())` if the internal data is consistent, or `Err` with details about the inconsistency.
+    pub fn verify_internal_consistency(&self) -> Result<()>
+    where
+        Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug,
+        Symm: Clone + Symmetry + PartialEq + std::fmt::Debug,
+        V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    {
+        // Step 1: Clone all tensors and node names
+        let node_names: Vec<V> = self.node_names();
+        let tensors: Vec<TensorDynLen<Id, Symm>> = node_names
+            .iter()
+            .filter_map(|name| {
+                let idx = self.graph.node_index(name)?;
+                self.tensor(idx).cloned()
+            })
+            .collect();
+
+        if tensors.len() != node_names.len() {
+            return Err(anyhow::anyhow!(
+                "Internal inconsistency: {} node names but {} tensors found",
+                node_names.len(),
+                tensors.len()
+            ));
+        }
+
+        // Step 2: Reconstruct TreeTN from scratch using from_tensors
+        let reconstructed = TreeTN::<Id, Symm, V>::from_tensors(tensors, node_names)
+            .context("verify_internal_consistency: failed to reconstruct TreeTN")?;
+
+        // Step 3: Verify topology matches
+        if !self.same_topology(&reconstructed) {
+            return Err(anyhow::anyhow!(
+                "Internal inconsistency: topology does not match after reconstruction"
+            ))
+            .context("verify_internal_consistency: topology mismatch");
+        }
+
+        // Step 4: Verify site index network matches
+        if !self.site_index_network.share_equivalent_site_index_network(&reconstructed.site_index_network) {
+            return Err(anyhow::anyhow!(
+                "Internal inconsistency: site index network does not match after reconstruction"
+            ))
+            .context("verify_internal_consistency: site space mismatch");
+        }
+
+        // Step 5: Verify tensor data matches at each node
+        for node_name in self.node_names() {
+            let idx_self = self.graph.node_index(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in original", node_name))?;
+            let idx_reconstructed = reconstructed.graph.node_index(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in reconstructed", node_name))?;
+
+            let tensor_self = self.tensor(idx_self)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in original", node_name))?;
+            let tensor_reconstructed = reconstructed.tensor(idx_reconstructed)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in reconstructed", node_name))?;
+
+            // Compare tensor indices (as sets, since order may differ)
+            let indices_self: HashSet<_> = tensor_self.indices.iter().collect();
+            let indices_reconstructed: HashSet<_> = tensor_reconstructed.indices.iter().collect();
+            if indices_self != indices_reconstructed {
+                return Err(anyhow::anyhow!(
+                    "Internal inconsistency: tensor indices differ at node {:?}",
+                    node_name
+                ))
+                .context("verify_internal_consistency: tensor index mismatch");
+            }
+
+            // Compare tensor dimensions
+            if tensor_self.dims != tensor_reconstructed.dims {
+                return Err(anyhow::anyhow!(
+                    "Internal inconsistency: tensor dimensions differ at node {:?}: {:?} vs {:?}",
+                    node_name,
+                    tensor_self.dims,
+                    tensor_reconstructed.dims
+                ))
+                .context("verify_internal_consistency: tensor dimension mismatch");
+            }
+        }
+
+        Ok(())
     }
 }
 

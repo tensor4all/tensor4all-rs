@@ -417,6 +417,116 @@ where
         CanonicalizeEdges::from_edges(edges)
     }
 
+    /// Compute edges to canonicalize from leaves towards a connected region (multiple centers).
+    ///
+    /// Given a set of target nodes forming a connected region, this function returns
+    /// all edges (src, dst) where:
+    /// - `src` is a node outside the target region
+    /// - `dst` is the next node towards the target region
+    ///
+    /// The edges are ordered so that nodes farther from the target region are processed first
+    /// (children before parents), which is the correct order for canonicalization.
+    ///
+    /// # Arguments
+    /// * `target_region` - Set of NodeIndex that forms the canonical center region
+    ///                     (must be non-empty and connected)
+    ///
+    /// # Returns
+    /// `CanonicalizeEdges` with all edges pointing towards the target region.
+    /// Returns empty edges if target_region is empty.
+    ///
+    /// # Panics
+    /// Does not panic, but if target_region is disconnected, behavior is undefined
+    /// (may return partial results).
+    pub fn edges_to_canonicalize_to_region(
+        &self,
+        target_region: &HashSet<NodeIndex>,
+    ) -> CanonicalizeEdges {
+        if target_region.is_empty() {
+            return CanonicalizeEdges::empty();
+        }
+
+        let g = self.graph.graph();
+
+        // Multi-source BFS from target_region to compute distances and parent pointers
+        let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut parent: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+        let mut queue = VecDeque::new();
+
+        // Initialize all target region nodes at distance 0
+        for &node in target_region {
+            dist.insert(node, 0);
+            queue.push_back(node);
+        }
+
+        // BFS to find distances and parents
+        while let Some(node) = queue.pop_front() {
+            let d = dist[&node];
+            for neighbor in g.neighbors(node) {
+                if !dist.contains_key(&neighbor) {
+                    dist.insert(neighbor, d + 1);
+                    parent.insert(neighbor, node);
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+
+        // Collect edges from nodes outside target region towards their parent
+        // Sort by distance (descending) so farther nodes are processed first
+        let mut node_dist_pairs: Vec<(NodeIndex, usize)> = dist
+            .iter()
+            .filter(|(node, _)| !target_region.contains(node))
+            .map(|(&node, &d)| (node, d))
+            .collect();
+
+        node_dist_pairs.sort_by(|a, b| b.1.cmp(&a.1)); // Descending by distance
+
+        let edges: Vec<(NodeIndex, NodeIndex)> = node_dist_pairs
+            .iter()
+            .filter_map(|(node, _)| {
+                let p = parent.get(node)?;
+                Some((*node, *p))
+            })
+            .collect();
+
+        CanonicalizeEdges::from_edges(edges)
+    }
+
+    /// Compute edges to canonicalize towards a region, returning node names.
+    ///
+    /// This is similar to `edges_to_canonicalize_to_region` but takes and returns
+    /// node names instead of NodeIndex.
+    ///
+    /// # Arguments
+    /// * `target_region` - Set of node names that forms the canonical center region
+    ///
+    /// # Returns
+    /// `None` if any target node doesn't exist, otherwise `Some(Vec<(from, to)>)`
+    /// where edges point towards the target region.
+    pub fn edges_to_canonicalize_to_region_by_names(
+        &self,
+        target_region: &HashSet<NodeName>,
+    ) -> Option<Vec<(NodeName, NodeName)>> {
+        // Convert node names to NodeIndex
+        let target_indices: HashSet<NodeIndex> = target_region
+            .iter()
+            .map(|name| self.node_index(name))
+            .collect::<Option<HashSet<_>>>()?;
+
+        let edges = self.edges_to_canonicalize_to_region(&target_indices);
+
+        let result: Vec<_> = edges
+            .into_iter()
+            .filter_map(|(from_idx, to_idx)| {
+                let from_name = self.node_name(from_idx)?.clone();
+                let to_name = self.node_name(to_idx)?.clone();
+                Some((from_name, to_name))
+            })
+            .collect();
+
+        Some(result)
+    }
+
     /// Check if two networks have the same topology (same nodes and edges).
     pub fn same_topology(&self, other: &Self) -> bool {
         if self.node_count() != other.node_count() {

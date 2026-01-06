@@ -133,10 +133,10 @@ where
         Symm: Clone + Symmetry + From<NoSymmSpace>,
         V: Ord,
     {
-        // Validate compatibility
-        if !self.is_compatible(&other) {
+        // Validate site index network equivalence
+        if !self.share_equivalent_site_index_network(&other) {
             return Err(anyhow::anyhow!(
-                "Cannot add TreeTN: topologies or site spaces are incompatible"
+                "Cannot add TreeTN: site index networks are not equivalent"
             ));
         }
 
@@ -556,7 +556,7 @@ where
     /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
     ///
     /// # Notes
-    /// - Both TreeTNs must have the same topology (checked via `is_compatible`)
+    /// - Both TreeTNs must have the same topology (checked via `same_topology`)
     /// - Site (external) indices are contracted between corresponding nodes
     /// - Bond (internal) indices are replaced with fresh IDs before contraction
     pub fn contract_zipup(
@@ -844,139 +844,100 @@ where
     /// Validate that `canonical_center` and edge `ortho_towards` are consistent.
     ///
     /// Rules:
-    /// - If `canonical_center` is empty (not canonicalized), all edges must have `ortho_towards == None`.
-    /// - If `canonical_center` is non-empty, it must be connected in the tree (forms a subtree).
-    /// - `ortho_towards == None` is allowed **only** when both edge endpoints are in `canonical_center`.
-    /// - For any edge with at least one endpoint outside `canonical_center`, `ortho_towards` must be `Some(...)`
-    ///   and must point towards the endpoint with smaller distance to `canonical_center`.
+    /// - If `canonical_center` is empty (not canonicalized), all indices must have `ortho_towards == None`.
+    /// - If `canonical_center` is non-empty:
+    ///   - It must form a connected subtree
+    ///   - All edges from outside the center region must have `ortho_towards` pointing towards the center
+    ///   - Edges entirely inside the center region may have `ortho_towards == None`
     pub fn validate_ortho_consistency(&self) -> Result<()> {
-        // If not canonicalized, require no edge directions.
+        // If not canonicalized, require no ortho_towards at all
         if self.canonical_center.is_empty() {
-            for e in self.graph.graph().edge_indices() {
-                if self.ortho_towards.contains_key(&e) {
-                    return Err(anyhow::anyhow!(
-                        "Found ortho_towards on edge {:?} but canonical_center is empty",
-                        e
-                    ))
-                    .context("validate_ortho_consistency: canonical_center empty implies no directions");
-                }
+            if !self.ortho_towards.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "Found {} ortho_towards entries but canonical_center is empty",
+                    self.ortho_towards.len()
+                ))
+                .context("validate_ortho_consistency: canonical_center empty implies no ortho_towards");
             }
             return Ok(());
         }
 
-        // Validate all canonical_center exist and convert to NodeIndex for graph operations
-        let g = self.graph.graph();
-        let mut ortho_nodes = HashSet::new();
+        // Validate all canonical_center nodes exist and convert to NodeIndex
+        let mut center_indices = HashSet::new();
         for c in &self.canonical_center {
-            if !self.graph.has_node(c) {
-                return Err(anyhow::anyhow!("ortho_center {:?} does not exist in graph", c))
-                    .context("validate_ortho_consistency: all canonical_center must be valid nodes");
-            }
-            if let Some(node) = self.graph.node_index(c) {
-                ortho_nodes.insert(node);
-            }
+            let idx = self.graph.node_index(c)
+                .ok_or_else(|| anyhow::anyhow!("canonical_center node {:?} does not exist", c))?;
+            center_indices.insert(idx);
         }
 
-        // Check canonical_center connectivity in the induced subgraph.
-        if !self.site_index_network.is_connected_subset(&ortho_nodes) {
-            return Err(anyhow::anyhow!(
-                "canonical_center is not connected"
-            ))
-            .context("validate_ortho_consistency: canonical_center must form a connected subtree");
+        // Check canonical_center connectivity
+        if !self.site_index_network.is_connected_subset(&center_indices) {
+            return Err(anyhow::anyhow!("canonical_center is not connected"))
+                .context("validate_ortho_consistency: canonical_center must form a connected subtree");
         }
 
-        // Multi-source BFS distances to canonical_center.
-        let mut dist: std::collections::HashMap<NodeIndex, usize> = std::collections::HashMap::new();
-        let mut q = VecDeque::new();
-        for c_node in &ortho_nodes {
-            dist.insert(*c_node, 0);
-            q.push_back(*c_node);
+        // Get expected edges from edges_to_canonicalize_to_region
+        // These are edges (src, dst) where src is outside the center and dst is towards the center
+        let expected_edges = self.site_index_network.edges_to_canonicalize_to_region(&center_indices);
+
+        // Build a set of expected (bond_id, expected_direction) pairs
+        let mut expected_directions: HashMap<Id, V> = HashMap::new();
+        for (src, dst) in expected_edges.iter() {
+            // Find the edge between src and dst
+            let edge = self.graph.graph().find_edge(*src, *dst)
+                .or_else(|| self.graph.graph().find_edge(*dst, *src))
+                .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", src, dst))?;
+
+            let bond_id = self.bond_index(edge)
+                .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))?
+                .id
+                .clone();
+
+            // The expected ortho_towards direction is dst (towards center)
+            let dst_name = self.graph.node_name(*dst)
+                .ok_or_else(|| anyhow::anyhow!("Node name not found for {:?}", dst))?
+                .clone();
+
+            expected_directions.insert(bond_id, dst_name);
         }
-        while let Some(v) = q.pop_front() {
-            let dv = dist[&v];
-            for nb in g.neighbors(v) {
-                if !dist.contains_key(&nb) {
-                    dist.insert(nb, dv + 1);
-                    q.push_back(nb);
+
+        // Verify all expected directions are present in ortho_towards
+        for (bond_id, expected_dir) in &expected_directions {
+            match self.ortho_towards.get(bond_id) {
+                Some(actual_dir) => {
+                    if actual_dir != expected_dir {
+                        return Err(anyhow::anyhow!(
+                            "ortho_towards for bond {:?} points to {:?} but expected {:?}",
+                            bond_id, actual_dir, expected_dir
+                        ))
+                        .context("validate_ortho_consistency: wrong direction");
+                    }
                 }
-            }
-        }
-
-        // Check each edge.
-        for e in g.edge_indices() {
-            let (source, target) = g
-                .edge_endpoints(e)
-                .ok_or_else(|| anyhow::anyhow!("Edge does not exist"))?;
-
-            // Check if source and target nodes are in canonical_center
-            let s_node_name = self.graph.node_name(source);
-            let t_node_name = self.graph.node_name(target);
-            let s_in = s_node_name.map(|v| self.canonical_center.contains(v)).unwrap_or(false);
-            let t_in = t_node_name.map(|v| self.canonical_center.contains(v)).unwrap_or(false);
-
-            // Get ortho_towards for this edge
-            let ortho_towards_name = self.ortho_towards.get(&e);
-
-            // None allowed only when both endpoints are centers.
-            if ortho_towards_name.is_none() {
-                if !(s_in && t_in) {
+                None => {
                     return Err(anyhow::anyhow!(
-                        "ortho_towards is None on edge {:?} but not both endpoints are in canonical_center",
-                        e
+                        "ortho_towards for bond {:?} is missing, expected to point to {:?}",
+                        bond_id, expected_dir
                     ))
-                    .context("validate_ortho_consistency: None allowed only inside canonical_center");
+                    .context("validate_ortho_consistency: missing ortho_towards");
                 }
-                continue;
             }
+        }
 
-            // From here on, ortho_towards must be Some(node_name) - convert to NodeIndex.
-            let ortho_node = self.graph.node_index(ortho_towards_name.unwrap())
-                .ok_or_else(|| anyhow::anyhow!("ortho_towards node not found in graph"))?;
+        // Verify no unexpected bond ortho_towards entries
+        // (site index ortho_towards are allowed even if not in expected_directions)
+        let bond_ids: HashSet<Id> = self.graph.graph().edge_indices()
+            .filter_map(|e| self.bond_index(e))
+            .map(|b| b.id.clone())
+            .collect();
 
-            // Distances must exist.
-            let ds = *dist
-                .get(&source)
-                .ok_or_else(|| anyhow::anyhow!("No distance for source node {:?}", source))?;
-            let dt = *dist
-                .get(&target)
-                .ok_or_else(|| anyhow::anyhow!("No distance for target node {:?}", target))?;
-
-            // Choose expected direction: towards smaller distance (closer to canonical_center).
-            // In a tree with connected canonical_center, adjacent nodes should differ by exactly 1
-            // unless both are in canonical_center (handled above).
-            if ds == dt {
+        for (id, _) in &self.ortho_towards {
+            if bond_ids.contains(id) && !expected_directions.contains_key(id) {
+                // This is a bond inside the canonical_center - should not have ortho_towards
                 return Err(anyhow::anyhow!(
-                    "Ambiguous direction on edge {:?}: distances are equal ({} == {})",
-                    e,
-                    ds,
-                    dt
+                    "Unexpected ortho_towards for bond {:?} (inside canonical_center)",
+                    id
                 ))
-                .context("validate_ortho_consistency: outside canonical_center, distances should differ");
-            }
-
-            // Expected node is the one closer to canonical_center (smaller distance)
-            let expected_node = if ds < dt { source } else { target };
-
-            if ortho_node != expected_node {
-                return Err(anyhow::anyhow!(
-                    "Invalid ortho_towards on edge {:?}: expected to point to {:?} but got {:?}",
-                    e,
-                    expected_node,
-                    ortho_node
-                ))
-                .context("validate_ortho_consistency: ortho_towards must point towards canonical_center");
-            }
-
-            // Additionally enforce that boundary edges (one in centers, one out) always point into centers.
-            if s_in ^ t_in {
-                let expected_into_centers = if s_in { source } else { target };
-                if ortho_node != expected_into_centers {
-                    return Err(anyhow::anyhow!(
-                        "Boundary edge {:?} must point into canonical_center",
-                        e
-                    ))
-                    .context("validate_ortho_consistency: boundary must point into canonical_center");
-                }
+                .context("validate_ortho_consistency: bonds inside center should not have ortho_towards");
             }
         }
 

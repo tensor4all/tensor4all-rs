@@ -1324,3 +1324,147 @@ fn test_zipup_vs_naive_5node_chain() {
     // Test with center at E (end)
     compare_zipup_vs_naive(&site_network, LinkSpace::uniform(2), "E", 42, 123, 1e-10);
 }
+
+// ============================================================================
+// Internal Consistency Tests
+// ============================================================================
+
+#[test]
+fn test_verify_internal_consistency_basic() {
+    // Create a simple 2-node TreeTN and verify its consistency
+    let (tn, _n1, _n2, _edge, _phys1, _bond, _phys2) = create_two_node_treetn();
+
+    // Should pass consistency check
+    tn.verify_internal_consistency().expect("Consistency check should pass for basic TreeTN");
+}
+
+#[test]
+fn test_verify_internal_consistency_chain_3node() {
+    // Create 3-node chain
+    let (tn, _n1, _n2, _n3, _e12, _e23, _bond12, _bond23) = create_three_node_chain();
+
+    // Should pass consistency check
+    tn.verify_internal_consistency().expect("Consistency check should pass for 3-node chain");
+}
+
+#[test]
+fn test_verify_internal_consistency_after_canonicalization() {
+    let (tn, _n1, n2, _n3, _e12, _e23, _bond12, _bond23) = create_three_node_chain();
+
+    // Canonicalize to center n2
+    let tn = tn.canonicalize_opt(
+        vec![n2],
+        tensor4all_treetn::CanonicalizationOptions::default(),
+    ).expect("Canonicalization should succeed");
+
+    // Should still pass consistency check after canonicalization
+    tn.verify_internal_consistency().expect("Consistency check should pass after canonicalization");
+}
+
+#[test]
+fn test_verify_internal_consistency_with_string_node_names() {
+    // Create TreeTN with string node names
+    let mut tn = TreeTN::<DynId, NoSymmSpace, String>::new();
+
+    let site_a = Index::new_dyn(2);
+    let site_b = Index::new_dyn(3);
+    let bond = Index::new_dyn(4);
+
+    let tensor_a = TensorDynLen::new(
+        vec![site_a.clone(), bond.clone()],
+        vec![2, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 8]))),
+    );
+
+    let tensor_b = TensorDynLen::new(
+        vec![bond.clone(), site_b.clone()],
+        vec![4, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+    );
+
+    tn.add_tensor("A".to_string(), tensor_a).unwrap();
+    tn.add_tensor("B".to_string(), tensor_b).unwrap();
+    tn.connect(
+        tn.node_index(&"A".to_string()).unwrap(),
+        &bond,
+        tn.node_index(&"B".to_string()).unwrap(),
+        &bond,
+    ).unwrap();
+
+    // Should pass consistency check
+    tn.verify_internal_consistency().expect("Consistency check should pass for string-named TreeTN");
+}
+
+// ============================================================================
+// Appearance Comparison Tests
+// ============================================================================
+
+#[test]
+fn test_same_appearance_cloned_treetnns() {
+    // Create a TreeTN and clone it - should have same appearance
+    let (tn1, _n1, _n2, _edge, _phys1, _bond, _phys2) = create_two_node_treetn();
+    let tn2 = tn1.clone();
+
+    // Should have same appearance (both have no ortho_towards set)
+    assert!(tn1.same_appearance(&tn2));
+    assert!(tn2.same_appearance(&tn1)); // Symmetric
+}
+
+#[test]
+fn test_same_appearance_after_same_canonicalization() {
+    // Create a TreeTN, clone, and canonicalize both to the same center
+    let (tn1, _n1, n2, _n3, _, _, _, _) = create_three_node_chain();
+    let tn2 = tn1.clone();
+
+    let tn1 = tn1.canonicalize_opt(
+        vec![n2],
+        tensor4all_treetn::CanonicalizationOptions::default(),
+    ).unwrap();
+
+    let tn2 = tn2.canonicalize_opt(
+        vec![n2],
+        tensor4all_treetn::CanonicalizationOptions::default(),
+    ).unwrap();
+
+    // Both canonicalized to same center - should have same appearance
+    assert!(tn1.same_appearance(&tn2));
+}
+
+#[test]
+fn test_same_appearance_different_ortho_towards() {
+    // Create a TreeTN, clone, and canonicalize to different centers
+    let (tn1, n1, _n2, n3, _, _, _, _) = create_three_node_chain();
+    let tn2 = tn1.clone();
+
+    let tn1 = tn1.canonicalize_opt(
+        vec![n1],  // Canonicalize to left
+        tensor4all_treetn::CanonicalizationOptions::default(),
+    ).unwrap();
+
+    let tn2 = tn2.canonicalize_opt(
+        vec![n3],  // Canonicalize to right
+        tensor4all_treetn::CanonicalizationOptions::default(),
+    ).unwrap();
+
+    // Different canonical centers - different ortho_towards directions
+    // Note: They still share equivalent site index network (same topology and site space)
+    assert!(tn1.share_equivalent_site_index_network(&tn2));
+    // But different appearance due to ortho_towards
+    assert!(!tn1.same_appearance(&tn2));
+}
+
+#[test]
+fn test_same_appearance_one_canonicalized_one_not() {
+    // Create a TreeTN, clone, and only canonicalize one
+    let (tn1, _n1, n2, _n3, _, _, _, _) = create_three_node_chain();
+    let tn2 = tn1.clone();
+
+    let tn1 = tn1.canonicalize_opt(
+        vec![n2],
+        tensor4all_treetn::CanonicalizationOptions::default(),
+    ).unwrap();
+
+    // tn2 is not canonicalized - different ortho_towards state
+    assert!(tn1.share_equivalent_site_index_network(&tn2));
+    assert!(!tn1.same_appearance(&tn2));
+}
