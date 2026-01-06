@@ -3,7 +3,7 @@
 //! In Einsum mode, tensors that share a bond must use the SAME Index (same ID).
 //! When connecting node_a to node_b, both tensors must contain the same bond index.
 
-use tensor4all_treetn::{TreeTN, TreeTopology};
+use tensor4all_treetn::{TreeTN, TreeTopology, TruncationOptions};
 use tensor4all::index::{DefaultIndex as Index, DynId};
 use tensor4all::{TensorDynLen, Storage};
 use tensor4all::NoSymmSpace;
@@ -801,7 +801,10 @@ fn test_truncate_simple() {
     assert_eq!(tn.bond_index(edge).unwrap().size(), 10);
 
     // Truncate with max_rank = 3
-    let truncated = tn.truncate(std::iter::once(n2), None, Some(3)).unwrap();
+    let truncated = tn.truncate_opt(
+        std::iter::once(n2),
+        TruncationOptions::default().with_max_rank(3),
+    ).unwrap();
 
     // Bond should now be at most 3
     let new_edge = truncated.edges_for_node(n1)[0].0;
@@ -838,7 +841,10 @@ fn test_truncate_mut_simple() {
     assert_eq!(tn.bond_index(edge).unwrap().size(), 8);
 
     // Truncate in-place with max_rank = 4
-    tn.truncate_mut(std::iter::once(n2), None, Some(4)).unwrap();
+    tn.truncate_opt_mut(
+        std::iter::once(n2),
+        TruncationOptions::default().with_max_rank(4),
+    ).unwrap();
 
     // Bond should now be at most 4
     let new_edge = tn.edges_for_node(n1)[0].0;
@@ -853,8 +859,11 @@ fn test_truncate_three_node_chain() {
     assert_eq!(tn.bond_index(e12).unwrap().size(), 3);
     assert_eq!(tn.bond_index(e23).unwrap().size(), 4);
 
-    // Truncate towards center (n2) with max_rank = 2
-    let truncated = tn.truncate(std::iter::once(n1), None, Some(2)).unwrap();
+    // Truncate towards center (n1) with max_rank = 2
+    let truncated = tn.truncate_opt(
+        std::iter::once(n1),
+        TruncationOptions::default().with_max_rank(2),
+    ).unwrap();
 
     // All bonds should now be at most 2
     for (edge, _) in truncated.edges_for_node(n1) {
@@ -898,7 +907,10 @@ fn test_truncate_with_rtol() {
     tn.connect(n1, &bond, n2, &bond).unwrap();
 
     // Truncate with rtol - should reduce rank significantly for low-rank data
-    let truncated = tn.truncate(std::iter::once(n2), Some(1e-10), None).unwrap();
+    let truncated = tn.truncate_opt(
+        std::iter::once(n2),
+        TruncationOptions::default().with_rtol(1e-10),
+    ).unwrap();
 
     // Bond dimension should be reduced
     let new_edge = truncated.edges_for_node(n1)[0].0;
