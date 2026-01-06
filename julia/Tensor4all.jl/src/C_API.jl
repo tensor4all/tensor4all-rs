@@ -484,4 +484,368 @@ function t4a_tensor_new_dense_c64(rank::Integer, index_ptrs::Vector{Ptr{Cvoid}},
     )
 end
 
+# ============================================================================
+# TensorTrain lifecycle functions
+# ============================================================================
+
+"""
+    t4a_tt_new_empty() -> Ptr{Cvoid}
+
+Create an empty tensor train.
+"""
+function t4a_tt_new_empty()
+    return ccall(
+        (:t4a_tt_new_empty, libpath()),
+        Ptr{Cvoid},
+        ()
+    )
+end
+
+"""
+    t4a_tt_new(tensor_ptrs::Vector{Ptr{Cvoid}}, num_tensors::Integer) -> Ptr{Cvoid}
+
+Create a tensor train from an array of tensors.
+"""
+function t4a_tt_new(tensor_ptrs::Vector{Ptr{Cvoid}}, num_tensors::Integer)
+    return ccall(
+        (:t4a_tt_new, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Ptr{Cvoid}}, Csize_t),
+        tensor_ptrs,
+        Csize_t(num_tensors)
+    )
+end
+
+"""
+    t4a_tensortrain_release(ptr::Ptr{Cvoid})
+
+Release a tensor train (called by finalizer).
+"""
+function t4a_tensortrain_release(ptr::Ptr{Cvoid})
+    ptr == C_NULL && return
+    ccall(
+        (:t4a_tensortrain_release, libpath()),
+        Cvoid,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+"""
+    t4a_tensortrain_clone(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
+
+Clone a tensor train.
+"""
+function t4a_tensortrain_clone(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_tensortrain_clone, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+# ============================================================================
+# TensorTrain accessors
+# ============================================================================
+
+"""
+    t4a_tt_len(ptr::Ptr{Cvoid}, out_len::Ref{Csize_t}) -> Cint
+
+Get the number of sites in the tensor train.
+"""
+function t4a_tt_len(ptr::Ptr{Cvoid}, out_len::Ref{Csize_t})
+    return ccall(
+        (:t4a_tt_len, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out_len
+    )
+end
+
+"""
+    t4a_tt_is_empty(ptr::Ptr{Cvoid}) -> Cint
+
+Check if the tensor train is empty.
+Returns 1 if empty, 0 if not, negative on error.
+"""
+function t4a_tt_is_empty(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_tt_is_empty, libpath()),
+        Cint,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+"""
+    t4a_tt_tensor(ptr::Ptr{Cvoid}, site::Integer) -> Ptr{Cvoid}
+
+Get the tensor at a specific site (0-indexed).
+Returns a new tensor handle that the caller owns.
+"""
+function t4a_tt_tensor(ptr::Ptr{Cvoid}, site::Integer)
+    return ccall(
+        (:t4a_tt_tensor, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Csize_t),
+        ptr,
+        Csize_t(site)
+    )
+end
+
+"""
+    t4a_tt_set_tensor(ptr::Ptr{Cvoid}, site::Integer, tensor::Ptr{Cvoid}) -> Cint
+
+Set the tensor at a specific site (0-indexed).
+The tensor is cloned into the tensor train. This invalidates orthogonality.
+"""
+function t4a_tt_set_tensor(ptr::Ptr{Cvoid}, site::Integer, tensor::Ptr{Cvoid})
+    return ccall(
+        (:t4a_tt_set_tensor, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Ptr{Cvoid}),
+        ptr,
+        Csize_t(site),
+        tensor
+    )
+end
+
+"""
+    t4a_tt_bond_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t}, buf_len::Integer) -> Cint
+
+Get the bond dimensions of the tensor train.
+"""
+function t4a_tt_bond_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t}, buf_len::Integer)
+    return ccall(
+        (:t4a_tt_bond_dims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t),
+        ptr,
+        out_dims,
+        Csize_t(buf_len)
+    )
+end
+
+"""
+    t4a_tt_maxbonddim(ptr::Ptr{Cvoid}, out_max::Ref{Csize_t}) -> Cint
+
+Get the maximum bond dimension of the tensor train.
+"""
+function t4a_tt_maxbonddim(ptr::Ptr{Cvoid}, out_max::Ref{Csize_t})
+    return ccall(
+        (:t4a_tt_maxbonddim, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out_max
+    )
+end
+
+"""
+    t4a_tt_linkind(ptr::Ptr{Cvoid}, site::Integer) -> Ptr{Cvoid}
+
+Get the link index between sites `site` and `site+1` (0-indexed).
+Returns a new index handle that the caller owns, or NULL if no link exists.
+"""
+function t4a_tt_linkind(ptr::Ptr{Cvoid}, site::Integer)
+    return ccall(
+        (:t4a_tt_linkind, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Csize_t),
+        ptr,
+        Csize_t(site)
+    )
+end
+
+# ============================================================================
+# TensorTrain orthogonality
+# ============================================================================
+
+"""
+    t4a_tt_isortho(ptr::Ptr{Cvoid}) -> Cint
+
+Check if the tensor train has a single orthogonality center.
+Returns 1 if yes, 0 if no, negative on error.
+"""
+function t4a_tt_isortho(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_tt_isortho, libpath()),
+        Cint,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+"""
+    t4a_tt_orthocenter(ptr::Ptr{Cvoid}, out_center::Ref{Csize_t}) -> Cint
+
+Get the orthogonality center (0-indexed).
+"""
+function t4a_tt_orthocenter(ptr::Ptr{Cvoid}, out_center::Ref{Csize_t})
+    return ccall(
+        (:t4a_tt_orthocenter, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out_center
+    )
+end
+
+"""
+    t4a_tt_llim(ptr::Ptr{Cvoid}, out_llim::Ref{Cint}) -> Cint
+
+Get the left orthogonality limit.
+"""
+function t4a_tt_llim(ptr::Ptr{Cvoid}, out_llim::Ref{Cint})
+    return ccall(
+        (:t4a_tt_llim, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cint}),
+        ptr,
+        out_llim
+    )
+end
+
+"""
+    t4a_tt_rlim(ptr::Ptr{Cvoid}, out_rlim::Ref{Cint}) -> Cint
+
+Get the right orthogonality limit.
+"""
+function t4a_tt_rlim(ptr::Ptr{Cvoid}, out_rlim::Ref{Cint})
+    return ccall(
+        (:t4a_tt_rlim, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cint}),
+        ptr,
+        out_rlim
+    )
+end
+
+"""
+    t4a_tt_canonical_form(ptr::Ptr{Cvoid}, out_form::Ref{Cint}) -> Cint
+
+Get the canonical form of the tensor train.
+"""
+function t4a_tt_canonical_form(ptr::Ptr{Cvoid}, out_form::Ref{Cint})
+    return ccall(
+        (:t4a_tt_canonical_form, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cint}),
+        ptr,
+        out_form
+    )
+end
+
+# ============================================================================
+# TensorTrain operations
+# ============================================================================
+
+"""
+    t4a_tt_orthogonalize(ptr::Ptr{Cvoid}, site::Integer) -> Cint
+
+Orthogonalize the tensor train to have orthogonality center at the given site.
+Uses QR decomposition (Unitary canonical form).
+"""
+function t4a_tt_orthogonalize(ptr::Ptr{Cvoid}, site::Integer)
+    return ccall(
+        (:t4a_tt_orthogonalize, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t),
+        ptr,
+        Csize_t(site)
+    )
+end
+
+"""
+    t4a_tt_orthogonalize_with(ptr::Ptr{Cvoid}, site::Integer, form::Cint) -> Cint
+
+Orthogonalize the tensor train with a specific canonical form.
+form: 0=Unitary, 1=LU, 2=CI
+"""
+function t4a_tt_orthogonalize_with(ptr::Ptr{Cvoid}, site::Integer, form::Integer)
+    return ccall(
+        (:t4a_tt_orthogonalize_with, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Cint),
+        ptr,
+        Csize_t(site),
+        Cint(form)
+    )
+end
+
+"""
+    t4a_tt_truncate(ptr::Ptr{Cvoid}, rtol::Float64, max_rank::Integer) -> Cint
+
+Truncate the tensor train bond dimensions.
+rtol: relative tolerance (use 0.0 for default)
+max_rank: maximum bond dimension (use 0 for no limit)
+"""
+function t4a_tt_truncate(ptr::Ptr{Cvoid}, rtol::Float64, max_rank::Integer)
+    return ccall(
+        (:t4a_tt_truncate, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Cdouble, Csize_t),
+        ptr,
+        rtol,
+        Csize_t(max_rank)
+    )
+end
+
+"""
+    t4a_tt_norm(ptr::Ptr{Cvoid}, out_norm::Ref{Cdouble}) -> Cint
+
+Compute the norm of the tensor train.
+"""
+function t4a_tt_norm(ptr::Ptr{Cvoid}, out_norm::Ref{Cdouble})
+    return ccall(
+        (:t4a_tt_norm, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr,
+        out_norm
+    )
+end
+
+"""
+    t4a_tt_inner(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, out_re::Ref{Cdouble}, out_im::Ref{Cdouble}) -> Cint
+
+Compute the inner product of two tensor trains.
+"""
+function t4a_tt_inner(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, out_re::Ref{Cdouble}, out_im::Ref{Cdouble})
+    return ccall(
+        (:t4a_tt_inner, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cdouble}, Ptr{Cdouble}),
+        ptr1,
+        ptr2,
+        out_re,
+        out_im
+    )
+end
+
+"""
+    t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, max_rank::Integer, rtol::Float64, nsweeps::Integer) -> Ptr{Cvoid}
+
+Contract two tensor trains.
+method: 0=Zipup, 1=Fit
+max_rank: maximum bond dimension (use 0 for no limit)
+rtol: relative tolerance (use 0.0 for default)
+nsweeps: number of sweeps for Fit method
+"""
+function t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, max_rank::Integer, rtol::Float64, nsweeps::Integer)
+    return ccall(
+        (:t4a_tt_contract, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Ptr{Cvoid}, Cint, Csize_t, Cdouble, Csize_t),
+        ptr1,
+        ptr2,
+        Cint(method),
+        Csize_t(max_rank),
+        rtol,
+        Csize_t(nsweeps)
+    )
+end
+
 end # module C_API

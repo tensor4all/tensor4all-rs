@@ -15,9 +15,7 @@ crate-type = ["cdylib", "rlib"]
 tensor4all-core-common = { path = "../tensor4all/core-common" }
 tensor4all-core-tensor = { path = "../tensor4all/core-tensor" }
 tensor4all-core-linalg = { path = "../tensor4all/core-linalg" }
-# Disabled - pending simpletensortrain integration
-# tensor4all-simpletensortrain = { path = "../tensor4all-simpletensortrain" }
-# tensor4all-mpocontraction = { path = "../tensor4all-mpocontraction" }
+tensor4all-itensorlike = { path = "../tensor4all-itensorlike" }
 libc = "0.2"
 thiserror.workspace = true
 paste = "1.0"

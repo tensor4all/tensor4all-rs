@@ -12,12 +12,11 @@ use std::ops::Range;
 use tensor4all_core_common::{
     common_inds, hascommoninds, sim, DynId, Index, NoSymmSpace, Symmetry,
 };
-use tensor4all_core_linalg::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
 use tensor4all_core_tensor::{AnyScalar, TensorAccess, TensorDynLen};
-use tensor4all_treetn::{TreeTN, CanonicalizationOptions};
+use tensor4all_treetn::{TreeTN, CanonicalizationOptions, TruncationOptions, ContractionOptions as TreeTNContractionOptions, ContractionMethod as TreeTNContractionMethod, contract as treetn_contract};
 
 use crate::error::{TensorTrainError, Result};
-use crate::options::{CanonicalForm, TruncateAlg, TruncateOptions};
+use crate::options::{CanonicalForm, TruncateAlg, TruncateOptions, ContractMethod, ContractOptions};
 
 /// Tensor Train with orthogonality tracking.
 ///
@@ -533,101 +532,34 @@ where
 
     /// Truncate the tensor train bond dimensions.
     ///
-    /// This performs a sweep through the tensor train, truncating bond dimensions
-    /// according to the specified options (relative tolerance and/or maximum rank).
+    /// This delegates to the TreeTN's truncate_mut method, which performs a
+    /// two-site sweep with Euler tour traversal for optimal truncation.
+    ///
+    /// Note: The `site_range` option in `TruncateOptions` is currently ignored
+    /// as the underlying TreeTN truncation operates on the full network.
     pub fn truncate(&mut self, options: &TruncateOptions) -> Result<()> {
         if self.len() <= 1 {
             return Ok(());
         }
 
-        // Determine the range of bonds to truncate
-        let start = options.site_range.as_ref().map(|r| r.start).unwrap_or(0);
-        let end = options
-            .site_range
-            .as_ref()
-            .map(|r| r.end)
-            .unwrap_or(self.len());
-
-        // Sweep left to right, truncating each bond
-        for i in start..end.min(self.len()).saturating_sub(1) {
-            self.truncate_bond(i, options)?;
-        }
-
-        // Update orthogonality: after left-to-right sweep, ortho center is at rightmost site
-        let center = end.min(self.len()).saturating_sub(1);
-        let _ = self.inner.set_canonical_center(vec![center]);
-        self.canonical_form = Some(truncate_alg_to_form(options.alg));
-
-        Ok(())
-    }
-
-    /// Truncate a single bond between sites i and i+1.
-    fn truncate_bond(&mut self, i: usize, options: &TruncateOptions) -> Result<()> {
-        if i >= self.len() - 1 {
-            return Ok(());
-        }
-
-        // Get the link index to the right neighbor
-        let link_right = self.linkind(i);
-
-        // Get tensor at site i
-        let tensor_i = self.tensor(i).clone();
-
-        // Determine "left" indices for factorization (all except right link)
-        let left_inds: Vec<_> = tensor_i
-            .indices()
-            .iter()
-            .filter(|idx| Some(*idx) != link_right.as_ref())
-            .cloned()
-            .collect();
-
-        // Set up factorization options with truncation parameters
-        let factorize_options = FactorizeOptions {
-            alg: truncate_alg_to_factorize_alg(options.alg),
-            canonical: Canonical::Left,
+        // Convert TruncateOptions to TruncationOptions
+        let form = truncate_alg_to_form(options.alg);
+        let treetn_options = TruncationOptions {
+            form,
             rtol: options.rtol,
             max_rank: options.max_rank,
         };
 
-        // Factorize with truncation: tensor[i] = L * R
-        let result = factorize(&tensor_i, &left_inds, &factorize_options)
-            .map_err(TensorTrainError::Factorize)?;
+        // Truncate towards the last site (rightmost) as the canonical center
+        // This matches ITensor convention where truncation sweeps left-to-right
+        let center = self.len() - 1;
 
-        // Get tensor at site i+1
-        let tensor_i1 = self.tensor(i + 1).clone();
-
-        // Absorb R into tensor[i+1]
-        let new_tensor_i1 = result.right.contract_einsum(&tensor_i1);
-
-        // Get the new bond index from factorization
-        let new_bond = result.bond_index;
-
-        // Update edge bond index FIRST (before replacing tensors)
-        // The edge stores the old bond index - we need to update it to the new one
-        if let Some(edge) = self.inner.edge_between(&i, &(i + 1)) {
-            self.inner.replace_edge_bond(edge, new_bond.clone())
-                .map_err(|e| TensorTrainError::InvalidStructure {
-                    message: format!("Failed to update edge bond: {}", e),
-                })?;
-        }
-
-        // Now replace tensors - validation will pass since edge has correct bond indices
-        let node_i = self.inner.node_index(&i)
-            .expect("Site out of bounds");
-        let node_i1 = self.inner.node_index(&(i + 1))
-            .expect("Site out of bounds");
-
-        self.inner.replace_tensor(node_i, result.left)
+        self.inner.truncate_mut([center], treetn_options)
             .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("Failed to replace tensor at site {}: {}", i, e),
-            })?;
-        self.inner.replace_tensor(node_i1, new_tensor_i1)
-            .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("Failed to replace tensor at site {}: {}", i + 1, e),
+                message: format!("TreeTN truncation failed: {}", e),
             })?;
 
-        // Clear ortho region since we modified tensors
-        let _ = self.inner.clear_canonical_center();
+        self.canonical_form = Some(form);
 
         Ok(())
     }
@@ -687,6 +619,83 @@ where
     pub fn norm(&self) -> f64 {
         self.norm_squared().sqrt()
     }
+
+    /// Contract two tensor trains with the same site indices.
+    ///
+    /// This contracts two tensor trains that share the same site indices,
+    /// resulting in a new tensor train. The contraction is performed using
+    /// either the zip-up or fit algorithm.
+    ///
+    /// # Arguments
+    /// * `other` - The other tensor train to contract with
+    /// * `options` - Options controlling the contraction method and truncation
+    ///
+    /// # Returns
+    /// A new tensor train representing the contraction result.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use tensor4all_itensorlike::{TensorTrain, ContractOptions};
+    ///
+    /// // Contract using zipup with max rank 50
+    /// let result = tt1.contract(&tt2, &ContractOptions::zipup().with_max_rank(50))?;
+    ///
+    /// // Contract using fit with 5 sweeps
+    /// let result = tt1.contract(&tt2, &ContractOptions::fit().with_nsweeps(5))?;
+    /// ```
+    pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
+        if self.is_empty() || other.is_empty() {
+            return Err(TensorTrainError::InvalidStructure {
+                message: "Cannot contract empty tensor trains".to_string(),
+            });
+        }
+
+        if self.len() != other.len() {
+            return Err(TensorTrainError::InvalidStructure {
+                message: format!(
+                    "Tensor trains must have the same length for contraction: {} vs {}",
+                    self.len(),
+                    other.len()
+                ),
+            });
+        }
+
+        // Convert ContractOptions to TreeTN ContractionOptions
+        let treetn_method = match options.method {
+            ContractMethod::Zipup => TreeTNContractionMethod::Zipup,
+            ContractMethod::Fit => TreeTNContractionMethod::Fit,
+            ContractMethod::Naive => TreeTNContractionMethod::Naive,
+        };
+
+        let treetn_options = TreeTNContractionOptions::new(treetn_method)
+            .with_nsweeps(options.nsweeps);
+
+        let treetn_options = if let Some(max_rank) = options.max_rank {
+            treetn_options.with_max_rank(max_rank)
+        } else {
+            treetn_options
+        };
+
+        let treetn_options = if let Some(rtol) = options.rtol {
+            treetn_options.with_rtol(rtol)
+        } else {
+            treetn_options
+        };
+
+        // Use the last site as the canonical center
+        let center = self.len() - 1;
+
+        // Call TreeTN contract
+        let result_inner = treetn_contract(&self.inner, &other.inner, &center, treetn_options)
+            .map_err(|e| TensorTrainError::InvalidStructure {
+                message: format!("TreeTN contraction failed: {}", e),
+            })?;
+
+        Ok(Self {
+            inner: result_inner,
+            canonical_form: Some(CanonicalForm::Unitary),
+        })
+    }
 }
 
 // Implement Default for TensorTrain to allow std::mem::take
@@ -697,15 +706,6 @@ where
 {
     fn default() -> Self {
         Self::new(vec![]).expect("Failed to create empty TensorTrain")
-    }
-}
-
-/// Convert TruncateAlg to FactorizeAlg.
-fn truncate_alg_to_factorize_alg(alg: TruncateAlg) -> FactorizeAlg {
-    match alg {
-        TruncateAlg::SVD => FactorizeAlg::SVD,
-        TruncateAlg::LU => FactorizeAlg::LU,
-        TruncateAlg::CI => FactorizeAlg::CI,
     }
 }
 

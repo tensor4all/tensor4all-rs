@@ -43,5 +43,5 @@ pub mod options;
 pub mod tensortrain;
 
 pub use error::{TensorTrainError, Result};
-pub use options::{CanonicalForm, TruncateAlg, TruncateOptions};
+pub use options::{CanonicalForm, TruncateAlg, TruncateOptions, ContractMethod, ContractOptions};
 pub use tensortrain::TensorTrain;

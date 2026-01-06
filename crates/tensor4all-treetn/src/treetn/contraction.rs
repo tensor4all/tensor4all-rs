@@ -19,6 +19,7 @@ use tensor4all::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOpt
 use tensor4all::TensorDynLen;
 
 use super::addition::direct_sum_tensors;
+use super::decompose::{TreeTopology, factorize_tensor_to_treetn};
 use super::{common_inds, TreeTN};
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -757,6 +758,9 @@ pub enum ContractionMethod {
     Zipup,
     /// Fit/variational contraction (iterative optimization).
     Fit,
+    /// Naive contraction: contract to full tensor, then decompose back to TreeTN.
+    /// Useful for debugging and testing, but O(exp(n)) in memory.
+    Naive,
 }
 
 /// Options for the generic contract function.
@@ -887,5 +891,78 @@ where
             };
             contract_fit(tn_a, tn_b, center, fit_options)
         }
+        ContractionMethod::Naive => {
+            contract_naive_to_treetn(tn_a, tn_b, center, options.max_rank, options.rtol)
+        }
     }
+}
+
+/// Contract two TreeTNs using naive contraction, then decompose back to TreeTN.
+///
+/// This method:
+/// 1. Contracts both networks to full tensors
+/// 2. Contracts the tensors along common (site) indices
+/// 3. Decomposes the result back to a TreeTN using the original topology
+///
+/// This is O(exp(n)) in memory and is primarily useful for debugging and testing.
+///
+/// # Arguments
+/// * `tn_a` - First TreeTN
+/// * `tn_b` - Second TreeTN (must have same topology)
+/// * `center` - Center node for the output TreeTN
+/// * `max_rank` - Optional maximum bond dimension for decomposition
+/// * `rtol` - Optional relative tolerance for truncation
+///
+/// # Returns
+/// A new TreeTN representing the contracted result.
+pub fn contract_naive_to_treetn<Id, Symm, V>(
+    tn_a: &TreeTN<Id, Symm, V>,
+    tn_b: &TreeTN<Id, Symm, V>,
+    _center: &V,
+    _max_rank: Option<usize>,
+    _rtol: Option<f64>,
+) -> Result<TreeTN<Id, Symm, V>>
+where
+    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
+    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    // 1. Contract to full tensor using existing contract_naive
+    let contracted_tensor = tn_a.contract_naive(tn_b)?;
+
+    // 2. Build topology from tn_a's structure
+    // Get node names and their site indices
+    let mut nodes: HashMap<V, Vec<usize>> = HashMap::new();
+    let mut idx_position = 0usize;
+
+    // Collect node names in sorted order for deterministic index assignment
+    let mut node_names: Vec<_> = tn_a.graph.graph().node_indices()
+        .filter_map(|idx| tn_a.graph.node_name(idx).cloned())
+        .collect();
+    node_names.sort();
+
+    for node_name in &node_names {
+        let site_space = tn_a.site_index_network.site_space(node_name)
+            .ok_or_else(|| anyhow::anyhow!("Site space not found for node {:?}", node_name))?;
+
+        // Each site index becomes a position in the contracted tensor
+        let positions: Vec<usize> = (idx_position..idx_position + site_space.len()).collect();
+        idx_position += site_space.len();
+        nodes.insert(node_name.clone(), positions);
+    }
+
+    // Get edges from the graph
+    let edges: Vec<(V, V)> = tn_a.graph.graph().edge_indices()
+        .filter_map(|e| {
+            let (src, dst) = tn_a.graph.graph().edge_endpoints(e)?;
+            let src_name = tn_a.graph.node_name(src)?;
+            let dst_name = tn_a.graph.node_name(dst)?;
+            Some((src_name.clone(), dst_name.clone()))
+        })
+        .collect();
+
+    let topology = TreeTopology::new(nodes, edges);
+
+    // 3. Decompose back to TreeTN
+    factorize_tensor_to_treetn(&contracted_tensor, &topology)
 }
