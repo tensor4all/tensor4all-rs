@@ -35,7 +35,7 @@ impl<V: Clone + Hash + Eq> StaticTopology<V> {
         for node in treetn.site_index_network().node_names() {
             let neighbors: Vec<V> = treetn
                 .site_index_network()
-                .neighbors(&node)
+                .neighbors(node)
                 .collect();
             adjacency.insert(node.clone(), neighbors);
         }
