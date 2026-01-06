@@ -12,9 +12,9 @@ name = "tensor4all_capi"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-tensor4all-core-common = { path = "../tensor4all/core-common" }
-tensor4all-core-tensor = { path = "../tensor4all/core-tensor" }
-tensor4all-core-linalg = { path = "../tensor4all/core-linalg" }
+tensor4all-core-common = { path = "../tensor4all-core/common" }
+tensor4all-core-tensor = { path = "../tensor4all-core/tensor" }
+tensor4all-core-linalg = { path = "../tensor4all-core/linalg" }
 tensor4all-itensorlike = { path = "../tensor4all-itensorlike" }
 libc = "0.2"
 thiserror.workspace = true

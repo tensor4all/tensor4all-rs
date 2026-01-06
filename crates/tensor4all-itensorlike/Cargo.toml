@@ -10,9 +10,9 @@ keywords = ["tensor", "itensor", "tensor-network"]
 categories = ["science", "mathematics"]
 
 [dependencies]
-tensor4all-core-tensor = { path = "../tensor4all/core-tensor" }
-tensor4all-core-linalg = { path = "../tensor4all/core-linalg" }
-tensor4all-core-common = { path = "../tensor4all/core-common" }
+tensor4all-core-tensor = { path = "../tensor4all-core/tensor" }
+tensor4all-core-linalg = { path = "../tensor4all-core/linalg" }
+tensor4all-core-common = { path = "../tensor4all-core/common" }
 tensor4all-treetn = { path = "../tensor4all-treetn" }
 num-complex = "0.4"
 thiserror = "2.0"

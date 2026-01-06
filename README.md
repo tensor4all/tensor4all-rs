@@ -36,10 +36,11 @@ A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assis
 ```
 tensor4all-rs/
 ├── crates/
-│   ├── tensor4all/              # Umbrella + core crates
-│   │   ├── core-common/         # Index, tags, utilities
-│   │   ├── core-tensor/         # Tensor, storage
-│   │   └── core-linalg/         # SVD, QR (FAER/LAPACK)
+│   ├── tensor4all/              # Umbrella crate (re-exports)
+│   ├── tensor4all-core/         # Core crates
+│   │   ├── common/              # Index, tags, utilities
+│   │   ├── tensor/              # Tensor, storage
+│   │   └── linalg/              # SVD, QR (FAER/LAPACK)
 │   ├── tensor4all-capi/         # C API for language bindings
 │   ├── tensor4all-itensorlike/  # ITensor-like TensorTrain wrapper
 │   ├── tensor4all-simpletensortrain/  # Simple TT implementation
