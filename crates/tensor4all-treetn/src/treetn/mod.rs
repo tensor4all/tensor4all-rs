@@ -15,7 +15,6 @@ use petgraph::stable_graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::{Dfs, EdgeRef};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
 use std::hash::Hash;
 
 use anyhow::{Context, Result};
@@ -25,7 +24,6 @@ use tensor4all::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOpt
 use tensor4all::TensorDynLen;
 
 use crate::named_graph::NamedGraph;
-use crate::options::{CanonicalizationOptions, TruncationOptions};
 use crate::site_index_network::SiteIndexNetwork;
 
 // Re-export the decomposition functions and types
@@ -83,10 +81,9 @@ where
 /// Contains precomputed information needed for both canonicalization and truncation.
 #[derive(Debug)]
 pub(crate) struct SweepContext {
-    /// Distance of each node from the canonical center (0 = in center).
-    pub(crate) dist: HashMap<NodeIndex, usize>,
-    /// Nodes sorted by decreasing distance (farthest first).
-    pub(crate) nodes_by_distance: Vec<(NodeIndex, usize)>,
+    /// Edges to process, ordered from leaves towards center.
+    /// Each edge is (src, dst) where src is the node to factorize and dst is its parent.
+    pub(crate) edges: Vec<(NodeIndex, NodeIndex)>,
 }
 
 // ============================================================================
@@ -399,8 +396,7 @@ where
     /// This method:
     /// 1. Validates tree structure
     /// 2. Sets canonical_center and validates connectivity
-    /// 3. Computes distances from center using multi-source BFS
-    /// 4. Returns nodes sorted by decreasing distance
+    /// 3. Computes edges from leaves towards center using edges_to_canonicalize_to_region
     ///
     /// # Arguments
     /// * `canonical_center` - The node names that will serve as centers
@@ -426,39 +422,17 @@ where
             return Ok(None); // Nothing to do if no centers
         }
 
-        // 3. Validate canonical_center connectivity (they must form a connected subtree)
-        let g = self.graph.graph();
-        let start_node_name = self
+        // 3. Convert canonical_center names to NodeIndex set
+        let center_indices: HashSet<NodeIndex> = self
             .canonical_center
             .iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("canonical_center unexpectedly empty"))?;
-        let start_node = self
-            .graph
-            .node_index(start_node_name)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in graph", start_node_name))?;
+            .filter_map(|name| self.graph.node_index(name))
+            .collect();
 
-        let mut stack = vec![start_node];
-        let mut seen_nodes = HashSet::new();
-        let mut seen_node_names: HashSet<&V> = HashSet::new();
-        seen_nodes.insert(start_node);
-        seen_node_names.insert(start_node_name);
-
-        while let Some(v_node) = stack.pop() {
-            for nb_node in g.neighbors(v_node) {
-                if let Some(nb_node_name) = self.graph.node_name(nb_node) {
-                    if self.canonical_center.contains(nb_node_name) && seen_nodes.insert(nb_node) {
-                        seen_node_names.insert(nb_node_name);
-                        stack.push(nb_node);
-                    }
-                }
-            }
-        }
-
-        if seen_node_names.len() != self.canonical_center.len() {
+        // 4. Validate canonical_center connectivity
+        if !self.site_index_network.is_connected_subset(&center_indices) {
             return Err(anyhow::anyhow!(
-                "canonical_center is not connected: reached {} out of {} centers",
-                seen_node_names.len(),
+                "canonical_center is not connected: {} centers but not all reachable",
                 self.canonical_center.len()
             ))
             .with_context(|| {
@@ -469,56 +443,32 @@ where
             });
         }
 
-        // 4. Multi-source BFS to compute distances from canonical_center
-        let mut dist: HashMap<NodeIndex, usize> = HashMap::new();
-        let mut bfs_queue = VecDeque::new();
-        for c in &self.canonical_center {
-            if let Some(c_node) = self.graph.node_index(c) {
-                dist.insert(c_node, 0);
-                bfs_queue.push_back(c_node);
-            }
-        }
-        {
-            let g = self.graph.graph();
-            while let Some(v) = bfs_queue.pop_front() {
-                let dv = dist[&v];
-                for nb in g.neighbors(v) {
-                    if !dist.contains_key(&nb) {
-                        dist.insert(nb, dv + 1);
-                        bfs_queue.push_back(nb);
-                    }
-                }
-            }
-        }
+        // 5. Get ordered edges from leaves towards center
+        let canonicalize_edges = self
+            .site_index_network
+            .edges_to_canonicalize_to_region(&center_indices);
+        let edges: Vec<(NodeIndex, NodeIndex)> = canonicalize_edges.into_iter().collect();
 
-        // 5. Sort nodes by decreasing distance (farthest first)
-        let mut nodes_by_distance: Vec<(NodeIndex, usize)> =
-            dist.iter().map(|(&node, &d)| (node, d)).collect();
-        nodes_by_distance.sort_by(|a, b| b.1.cmp(&a.1));
-
-        Ok(Some(SweepContext {
-            dist,
-            nodes_by_distance,
-        }))
+        Ok(Some(SweepContext { edges }))
     }
 
-    /// Process one node during a sweep operation.
+    /// Process one edge during a sweep operation.
     ///
-    /// Factorizes the tensor at node `v`, absorbs the right factor into the parent,
+    /// Factorizes the tensor at `src` node, absorbs the right factor into `dst` (parent),
     /// and updates the edge bond and ortho_towards.
     ///
     /// # Arguments
-    /// * `v` - The node to process
-    /// * `dist` - Distance map from prepare_sweep_to_center
+    /// * `src` - The source node to factorize (further from center)
+    /// * `dst` - The destination/parent node (closer to center)
     /// * `factorize_options` - Options for factorization (algorithm, rtol, max_rank)
     /// * `context_name` - Name for error context
     ///
     /// # Returns
     /// `Ok(())` if successful, or an error if any step fails.
-    pub(crate) fn sweep_one_node(
+    pub(crate) fn sweep_edge(
         &mut self,
-        v: NodeIndex,
-        dist: &HashMap<NodeIndex, usize>,
+        src: NodeIndex,
+        dst: NodeIndex,
         factorize_options: &FactorizeOptions,
         context_name: &str,
     ) -> Result<()>
@@ -526,106 +476,74 @@ where
         Id: Clone + std::hash::Hash + Eq + From<DynId>,
         Symm: Clone + Symmetry + From<NoSymmSpace>,
     {
-        // Skip nodes in canonical_center
-        let v_node_name = self.graph.node_name(v);
-        if v_node_name
-            .map(|n| self.canonical_center.contains(n))
-            .unwrap_or(false)
-        {
-            return Ok(());
-        }
-
-        // Find parent: neighbor with distance one less
-        let v_dist = dist[&v];
-        let parent_dist = v_dist
-            .checked_sub(1)
-            .ok_or_else(|| {
-                anyhow::anyhow!("Node {:?} at distance 0 but not in canonical_center", v)
-            })
-            .with_context(|| format!("{}: distance calculation error", context_name))?;
-
-        let (parent, edge) = {
+        // Find edge between src and dst
+        let edge = {
             let g = self.graph.graph();
-            let parent = g
-                .neighbors(v)
-                .find(|&nb| dist.get(&nb).map(|&d| d == parent_dist).unwrap_or(false))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Node {:?} at distance {} has no parent (neighbor with distance {})",
-                        v,
-                        v_dist,
-                        parent_dist
-                    )
-                })
-                .with_context(|| format!("{}: tree structure violation", context_name))?;
-
-            let edge = g
-                .edges_connecting(v, parent)
+            g.edges_connecting(src, dst)
                 .next()
                 .ok_or_else(|| {
-                    anyhow::anyhow!("No edge found between node {:?} and parent {:?}", v, parent)
+                    anyhow::anyhow!("No edge found between node {:?} and {:?}", src, dst)
                 })
                 .with_context(|| format!("{}: edge not found", context_name))?
-                .id();
-            (parent, edge)
+                .id()
         };
 
-        // Get bond index on v-side (the index we will factorize over)
-        let parent_bond_v = self
-            .edge_index_for_node(edge, v)
-            .with_context(|| format!("{}: failed to get parent bond index on v", context_name))?
+        // Get bond index on src-side (the index we will factorize over)
+        let bond_on_src = self
+            .edge_index_for_node(edge, src)
+            .with_context(|| format!("{}: failed to get bond index on src", context_name))?
             .clone();
 
-        // Get tensor at node v
-        let tensor_v = self
-            .tensor(v)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", v))
+        // Get tensor at src node
+        let tensor_src = self
+            .tensor(src)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", src))
             .with_context(|| format!("{}: tensor not found", context_name))?;
 
-        // Build left_inds = all indices except parent bond
-        let left_inds: Vec<Index<Id, Symm>> = tensor_v
+        // Build left_inds = all indices except dst bond
+        let left_inds: Vec<Index<Id, Symm>> = tensor_src
             .indices
             .iter()
-            .filter(|idx| idx.id != parent_bond_v.id)
+            .filter(|idx| idx.id != bond_on_src.id)
             .cloned()
             .collect();
 
-        if left_inds.is_empty() || left_inds.len() == tensor_v.indices.len() {
+        if left_inds.is_empty() || left_inds.len() == tensor_src.indices.len() {
             return Err(anyhow::anyhow!(
                 "Cannot process node {:?}: need at least one left index and one right index",
-                v
+                src
             ))
             .with_context(|| format!("{}: invalid tensor rank for factorization", context_name));
         }
 
         // Perform factorization
-        let factorize_result = factorize(tensor_v, &left_inds, factorize_options)
+        let factorize_result = factorize(tensor_src, &left_inds, factorize_options)
             .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
             .with_context(|| format!("{}: factorization failed", context_name))?;
 
         let left_tensor = factorize_result.left;
         let right_tensor = factorize_result.right;
 
-        // Get edge index on parent side
-        let edge_index_parent = self
-            .edge_index_for_node(edge, parent)
-            .with_context(|| format!("{}: failed to get edge index for parent", context_name))?
+        // Get edge index on dst side
+        let bond_on_dst = self
+            .edge_index_for_node(edge, dst)
+            .with_context(|| format!("{}: failed to get edge index for dst", context_name))?
             .clone();
 
-        // Absorb right_tensor into parent
-        let parent_tensor = self
-            .tensor(parent)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found for parent node {:?}", parent))
-            .with_context(|| format!("{}: parent tensor not found", context_name))?;
+        // Absorb right_tensor into dst
+        let tensor_dst = self
+            .tensor(dst)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
+            .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
-        let updated_parent_tensor = parent_tensor
+        let updated_dst_tensor = tensor_dst
             .tensordot(
                 &right_tensor,
-                &[(edge_index_parent.clone(), parent_bond_v.clone())],
+                &[(bond_on_dst.clone(), bond_on_src.clone())],
             )
             .with_context(|| {
                 format!(
-                    "{}: failed to absorb right factor into parent tensor",
+                    "{}: failed to absorb right factor into dst tensor",
                     context_name
                 )
             })?;
@@ -636,20 +554,20 @@ where
             .with_context(|| format!("{}: failed to update edge bond index", context_name))?;
 
         // Update tensors
-        self.replace_tensor(v, left_tensor)
-            .with_context(|| format!("{}: failed to replace tensor at node v", context_name))?;
-        self.replace_tensor(parent, updated_parent_tensor)
+        self.replace_tensor(src, left_tensor)
+            .with_context(|| format!("{}: failed to replace tensor at src node", context_name))?;
+        self.replace_tensor(dst, updated_dst_tensor)
             .with_context(|| {
-                format!("{}: failed to replace tensor at parent node", context_name)
+                format!("{}: failed to replace tensor at dst node", context_name)
             })?;
 
-        // Set ortho_towards to point towards parent (canonical_center direction)
-        let parent_name = self
+        // Set ortho_towards to point towards dst (canonical_center direction)
+        let dst_name = self
             .graph
-            .node_name(parent)
-            .ok_or_else(|| anyhow::anyhow!("Parent node name not found"))?
+            .node_name(dst)
+            .ok_or_else(|| anyhow::anyhow!("Dst node name not found"))?
             .clone();
-        self.set_edge_ortho_towards(edge, Some(parent_name))
+        self.set_edge_ortho_towards(edge, Some(dst_name))
             .with_context(|| format!("{}: failed to set ortho_towards", context_name))?;
 
         Ok(())
@@ -693,9 +611,9 @@ where
             max_rank: None,
         };
 
-        // Process nodes in order of decreasing distance
-        for (v, _) in &sweep_ctx.nodes_by_distance {
-            self.sweep_one_node(*v, &sweep_ctx.dist, &factorize_options, context_name)?;
+        // Process edges in order (leaves towards center)
+        for (src, dst) in &sweep_ctx.edges {
+            self.sweep_edge(*src, *dst, &factorize_options, context_name)?;
         }
 
         // Set the canonical form
@@ -744,9 +662,9 @@ where
             max_rank,
         };
 
-        // Process nodes in order of decreasing distance
-        for (v, _) in &sweep_ctx.nodes_by_distance {
-            self.sweep_one_node(*v, &sweep_ctx.dist, &factorize_options, context_name)?;
+        // Process edges in order (leaves towards center)
+        for (src, dst) in &sweep_ctx.edges {
+            self.sweep_edge(*src, *dst, &factorize_options, context_name)?;
         }
 
         // Set the canonical form
