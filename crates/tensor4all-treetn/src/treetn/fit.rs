@@ -31,8 +31,8 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all::{factorize, Canonical, FactorizeAlg, FactorizeOptions, TensorDynLen};
+use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
+use tensor4all_core::{factorize, Canonical, FactorizeAlg, FactorizeOptions, TensorDynLen};
 
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
 use super::TreeTN;
@@ -948,9 +948,9 @@ where
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use tensor4all::index::DefaultIndex;
-    use tensor4all::storage::{DenseStorageF64, Storage};
-    use tensor4all::NoSymmSpace;
+    use tensor4all_core::index::DefaultIndex;
+    use tensor4all_core::storage::{DenseStorageF64, Storage};
+    use tensor4all_core::NoSymmSpace;
 
     type TestIndex = DefaultIndex<DynId>;
 

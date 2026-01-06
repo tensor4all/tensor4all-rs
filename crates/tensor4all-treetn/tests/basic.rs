@@ -4,10 +4,10 @@
 //! When connecting node_a to node_b, both tensors must contain the same bond index.
 
 use tensor4all_treetn::{TreeTN, TreeTopology, TruncationOptions, CanonicalizationOptions};
-use tensor4all::index::{DefaultIndex as Index, DynId};
-use tensor4all::{TensorDynLen, Storage};
-use tensor4all::NoSymmSpace;
-use tensor4all::storage::{DenseStorageF64, DenseStorageC64};
+use tensor4all_core::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::{TensorDynLen, Storage};
+use tensor4all_core::NoSymmSpace;
+use tensor4all_core::storage::{DenseStorageF64, DenseStorageC64};
 use std::sync::Arc;
 use std::collections::HashMap;
 use petgraph::graph::NodeIndex;

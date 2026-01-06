@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use tensor4all::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all::CanonicalForm;
+use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
+use tensor4all_core::CanonicalForm;
 
 use super::TreeTN;
 use crate::options::CanonicalizationOptions;

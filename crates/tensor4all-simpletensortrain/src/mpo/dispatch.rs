@@ -3,7 +3,7 @@
 //! Provides a unified `contract` function that dispatches to the appropriate
 //! algorithm based on [`ContractionAlgorithm`].
 
-use tensor4all_core_common::algorithm::ContractionAlgorithm;
+use tensor4all_core::algorithm::ContractionAlgorithm;
 
 use super::contract_fit::{contract_fit, FitOptions};
 use super::contract_naive::contract_naive;
@@ -30,7 +30,7 @@ use super::mpo::MPO;
 ///
 /// ```ignore
 /// use tensor4all_mpocontraction::{contract, MPO, ContractionOptions};
-/// use tensor4all_core_common::algorithm::ContractionAlgorithm;
+/// use tensor4all_core::algorithm::ContractionAlgorithm;
 ///
 /// let mpo_a = MPO::identity(&[2, 2])?;
 /// let mpo_b = MPO::identity(&[2, 2])?;

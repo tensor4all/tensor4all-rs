@@ -1,8 +1,8 @@
 //! Tests for TensorLike trait implementation for TreeTN.
 
 use tensor4all_treetn::TreeTN;
-use tensor4all::index::{Index, DynId, NoSymmSpace};
-use tensor4all::{TensorDynLen, TensorLike, TensorLikeDowncast, DefaultTagSet, StorageScalar};
+use tensor4all_core::index::{Index, DynId, NoSymmSpace};
+use tensor4all_core::{TensorDynLen, TensorLike, TensorLikeDowncast, DefaultTagSet, StorageScalar};
 
 /// Helper to create a simple tensor with given indices
 fn make_tensor(indices: Vec<Index<DynId, NoSymmSpace>>) -> TensorDynLen<DynId> {

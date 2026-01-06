@@ -13,8 +13,8 @@ use petgraph::Undirected;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
-use tensor4all::index::{Index, NoSymmSpace, Symmetry};
-use tensor4all::DefaultTagSet;
+use tensor4all_core::index::{Index, NoSymmSpace, Symmetry};
+use tensor4all_core::DefaultTagSet;
 
 // Re-export CanonicalizeEdges for convenience
 pub use crate::node_name_network::CanonicalizeEdges as CanonicalizeEdgesType;
@@ -300,7 +300,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor4all::index::Index;
+    use tensor4all_core::index::Index;
 
     #[test]
     fn test_site_index_network_basic() {

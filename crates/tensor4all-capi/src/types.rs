@@ -4,8 +4,8 @@
 //! details from C code.
 
 use std::ffi::c_void;
-use tensor4all_core_common::index::{DefaultIndex, DynId, NoSymmSpace};
-use tensor4all_core_tensor::{TensorDynLen, Storage};
+use tensor4all_core::index::{DefaultIndex, DynId, NoSymmSpace};
+use tensor4all_core::{TensorDynLen, Storage};
 use tensor4all_itensorlike::TensorTrain;
 
 /// The internal index type we're wrapping
@@ -260,17 +260,17 @@ impl Default for t4a_factorize_algorithm {
     }
 }
 
-impl From<tensor4all_core_common::FactorizeAlgorithm> for t4a_factorize_algorithm {
-    fn from(alg: tensor4all_core_common::FactorizeAlgorithm) -> Self {
+impl From<tensor4all_core::FactorizeAlgorithm> for t4a_factorize_algorithm {
+    fn from(alg: tensor4all_core::FactorizeAlgorithm) -> Self {
         match alg {
-            tensor4all_core_common::FactorizeAlgorithm::SVD => Self::SVD,
-            tensor4all_core_common::FactorizeAlgorithm::LU => Self::LU,
-            tensor4all_core_common::FactorizeAlgorithm::CI => Self::CI,
+            tensor4all_core::FactorizeAlgorithm::SVD => Self::SVD,
+            tensor4all_core::FactorizeAlgorithm::LU => Self::LU,
+            tensor4all_core::FactorizeAlgorithm::CI => Self::CI,
         }
     }
 }
 
-impl From<t4a_factorize_algorithm> for tensor4all_core_common::FactorizeAlgorithm {
+impl From<t4a_factorize_algorithm> for tensor4all_core::FactorizeAlgorithm {
     fn from(alg: t4a_factorize_algorithm) -> Self {
         match alg {
             t4a_factorize_algorithm::SVD => Self::SVD,
@@ -302,17 +302,17 @@ impl Default for t4a_contraction_algorithm {
     }
 }
 
-impl From<tensor4all_core_common::ContractionAlgorithm> for t4a_contraction_algorithm {
-    fn from(alg: tensor4all_core_common::ContractionAlgorithm) -> Self {
+impl From<tensor4all_core::ContractionAlgorithm> for t4a_contraction_algorithm {
+    fn from(alg: tensor4all_core::ContractionAlgorithm) -> Self {
         match alg {
-            tensor4all_core_common::ContractionAlgorithm::Naive => Self::Naive,
-            tensor4all_core_common::ContractionAlgorithm::ZipUp => Self::ZipUp,
-            tensor4all_core_common::ContractionAlgorithm::Fit => Self::Fit,
+            tensor4all_core::ContractionAlgorithm::Naive => Self::Naive,
+            tensor4all_core::ContractionAlgorithm::ZipUp => Self::ZipUp,
+            tensor4all_core::ContractionAlgorithm::Fit => Self::Fit,
         }
     }
 }
 
-impl From<t4a_contraction_algorithm> for tensor4all_core_common::ContractionAlgorithm {
+impl From<t4a_contraction_algorithm> for tensor4all_core::ContractionAlgorithm {
     fn from(alg: t4a_contraction_algorithm) -> Self {
         match alg {
             t4a_contraction_algorithm::Naive => Self::Naive,
@@ -346,18 +346,18 @@ impl Default for t4a_compression_algorithm {
     }
 }
 
-impl From<tensor4all_core_common::CompressionAlgorithm> for t4a_compression_algorithm {
-    fn from(alg: tensor4all_core_common::CompressionAlgorithm) -> Self {
+impl From<tensor4all_core::CompressionAlgorithm> for t4a_compression_algorithm {
+    fn from(alg: tensor4all_core::CompressionAlgorithm) -> Self {
         match alg {
-            tensor4all_core_common::CompressionAlgorithm::SVD => Self::SVD,
-            tensor4all_core_common::CompressionAlgorithm::LU => Self::LU,
-            tensor4all_core_common::CompressionAlgorithm::CI => Self::CI,
-            tensor4all_core_common::CompressionAlgorithm::Variational => Self::Variational,
+            tensor4all_core::CompressionAlgorithm::SVD => Self::SVD,
+            tensor4all_core::CompressionAlgorithm::LU => Self::LU,
+            tensor4all_core::CompressionAlgorithm::CI => Self::CI,
+            tensor4all_core::CompressionAlgorithm::Variational => Self::Variational,
         }
     }
 }
 
-impl From<t4a_compression_algorithm> for tensor4all_core_common::CompressionAlgorithm {
+impl From<t4a_compression_algorithm> for tensor4all_core::CompressionAlgorithm {
     fn from(alg: t4a_compression_algorithm) -> Self {
         match alg {
             t4a_compression_algorithm::SVD => Self::SVD,

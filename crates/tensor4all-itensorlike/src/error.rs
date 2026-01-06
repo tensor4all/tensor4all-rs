@@ -34,7 +34,7 @@ pub enum TensorTrainError {
 
     /// Factorization error.
     #[error("Factorization error: {0}")]
-    Factorize(#[from] tensor4all_core_linalg::FactorizeError),
+    Factorize(#[from] tensor4all_core::FactorizeError),
 
     /// General operation error.
     #[error("Operation error: {message}")]

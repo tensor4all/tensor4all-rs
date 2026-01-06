@@ -8,8 +8,8 @@ use crate::{
     T4A_SUCCESS, T4A_TAG_OVERFLOW, T4A_TAG_TOO_LONG,
 };
 use std::ffi::{c_char, CStr};
-use tensor4all_core_common::index::Index;
-use tensor4all_core_common::tagset::TagSetError;
+use tensor4all_core::index::Index;
+use tensor4all_core::tagset::TagSetError;
 
 // Generate common lifecycle functions
 impl_opaque_type_common!(index);
@@ -97,7 +97,7 @@ pub extern "C" fn t4a_index_new_with_id(
     }
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        use tensor4all_core_common::index::{DynId, TagSet};
+        use tensor4all_core::index::{DynId, TagSet};
 
         let id = ((id_hi as u128) << 64) | (id_lo as u128);
 
@@ -246,7 +246,7 @@ pub extern "C" fn t4a_index_get_tags(
 /// Status code (T4A_SUCCESS, T4A_TAG_OVERFLOW, T4A_TAG_TOO_LONG, or error code)
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_index_add_tag(ptr: *mut t4a_index, tag: *const c_char) -> StatusCode {
-    use tensor4all_core_common::TagSetLike;
+    use tensor4all_core::TagSetLike;
 
     if ptr.is_null() || tag.is_null() {
         return T4A_NULL_POINTER;
@@ -283,7 +283,7 @@ pub extern "C" fn t4a_index_add_tag(ptr: *mut t4a_index, tag: *const c_char) -> 
 /// Status code (T4A_SUCCESS, T4A_TAG_OVERFLOW, T4A_TAG_TOO_LONG, or error code)
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_index_set_tags_csv(ptr: *mut t4a_index, tags_csv: *const c_char) -> StatusCode {
-    use tensor4all_core_common::index::TagSet;
+    use tensor4all_core::index::TagSet;
 
     if ptr.is_null() || tags_csv.is_null() {
         return T4A_NULL_POINTER;

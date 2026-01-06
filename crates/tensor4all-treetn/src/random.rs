@@ -10,8 +10,8 @@ use rand::Rng;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
-use tensor4all::index::{DynId, Index, NoSymmSpace};
-use tensor4all::TensorDynLen;
+use tensor4all_core::index::{DynId, Index, NoSymmSpace};
+use tensor4all_core::TensorDynLen;
 
 /// Specification for link (bond) dimensions.
 ///
@@ -77,7 +77,7 @@ pub type DefaultIndex = Index<DynId, NoSymmSpace>;
 /// # Example
 /// ```
 /// use tensor4all_treetn::{SiteIndexNetwork, random_treetn_f64, LinkSpace};
-/// use tensor4all::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
 /// use rand::SeedableRng;
 /// use rand_chacha::ChaCha8Rng;
 /// use std::collections::HashSet;

@@ -16,7 +16,7 @@
 //!
 //! ```ignore
 //! use tensor4all_treetn::DynTreeTN;
-//! use tensor4all::{TensorDynLen, TensorLike};
+//! use tensor4all_core::{TensorDynLen, TensorLike};
 //!
 //! let mut tn = DynTreeTN::<String>::new();
 //!
@@ -35,8 +35,8 @@ use std::hash::Hash;
 use std::fmt::Debug;
 
 use std::collections::HashMap;
-use tensor4all::index::{DynId, Index, NoSymmSpace, TagSet};
-use tensor4all::{TensorDynLen, TensorLike};
+use tensor4all_core::index::{DynId, Index, NoSymmSpace, TagSet};
+use tensor4all_core::{TensorDynLen, TensorLike};
 
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -444,8 +444,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor4all::storage::DenseStorageF64;
-    use tensor4all::Storage;
+    use tensor4all_core::storage::DenseStorageF64;
+    use tensor4all_core::Storage;
     use std::sync::Arc;
 
     fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen<DynId, NoSymmSpace> {

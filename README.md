@@ -6,7 +6,7 @@ A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assis
 
 **Vibe Coding Optimized**: tensor4all-rs is designed for rapid prototyping with AI code generation:
 
-- **Modular architecture**: Independent crates (`core-common`, `core-tensor`, `core-linalg`, etc.) enable fast compilation and isolated testing
+- **Modular architecture**: Independent crates with unified core (`tensor4all-core`) enable fast compilation and isolated testing
 - **ITensors.jl-like dynamic structure**: Flexible `Index` system and dynamic-rank tensors preserve the intuitive API
 - **Static error detection**: Rust's type system catches errors at compile time while maintaining runtime flexibility
 - **Multi-language support via C-API**: Full functionality exposed through C-API; initial targets are Julia and Python
@@ -36,11 +36,7 @@ A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assis
 ```
 tensor4all-rs/
 ├── crates/
-│   ├── tensor4all/              # Umbrella crate (re-exports)
-│   ├── tensor4all-core/         # Core crates
-│   │   ├── common/              # Index, tags, utilities
-│   │   ├── tensor/              # Tensor, storage
-│   │   └── linalg/              # SVD, QR (FAER/LAPACK)
+│   ├── tensor4all-core/         # Core: Index, Tensor, Storage, SVD, QR
 │   ├── tensor4all-capi/         # C API for language bindings
 │   ├── tensor4all-itensorlike/  # ITensor-like TensorTrain wrapper
 │   ├── tensor4all-simpletensortrain/  # Simple TT implementation

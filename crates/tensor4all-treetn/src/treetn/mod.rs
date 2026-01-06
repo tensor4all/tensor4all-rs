@@ -21,9 +21,9 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all::{factorize, CanonicalForm, FactorizeOptions};
-use tensor4all::TensorDynLen;
+use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
+use tensor4all_core::{factorize, CanonicalForm, FactorizeOptions};
+use tensor4all_core::TensorDynLen;
 
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;

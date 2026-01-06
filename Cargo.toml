@@ -1,9 +1,6 @@
 [workspace]
 members = [
-    "crates/tensor4all",
-    "crates/tensor4all-core/common",
-    "crates/tensor4all-core/tensor",
-    "crates/tensor4all-core/linalg",
+    "crates/tensor4all-core",
     "crates/tensor4all-itensorlike",
     "crates/tensor4all-treetn",
     "crates/quanticsgrids",

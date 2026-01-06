@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-tensor4all = { path = "../tensor4all" }
+tensor4all-core = { path = "../tensor4all-core" }
 petgraph.workspace = true
 anyhow.workspace = true
 num-complex.workspace = true

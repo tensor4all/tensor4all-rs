@@ -583,7 +583,7 @@ pub extern "C" fn t4a_tt_inner(
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        use tensor4all_core_tensor::AnyScalar;
+        use tensor4all_core::AnyScalar;
 
         let tt1 = unsafe { &*ptr1 };
         let tt2 = unsafe { &*ptr2 };

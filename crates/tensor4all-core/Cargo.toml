@@ -1,14 +1,9 @@
 [package]
-name = "tensor4all-simpletensortrain"
-description = "Simple Tensor Train (MPS) algorithms for tensor4all"
+name = "tensor4all-core"
 version.workspace = true
 edition.workspace = true
-authors = [
-    "Simone Foderà <simone.fodera@lmu.de>",
-    "Marc Ritter <Ritter.Marc@physik.uni-muenchen.de>",
-    "Hiroshi Shinaoka <h.shinaoka@gmail.com>",
-]
-license = "MIT"
+authors.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [features]
@@ -17,19 +12,19 @@ backend-faer = ["mdarray-linalg-faer"]
 backend-lapack = ["mdarray-linalg-lapack"]
 
 [dependencies]
+tensor4all-matrixci = { path = "../tensor4all-matrixci" }
 num-complex.workspace = true
 num-traits.workspace = true
-anyhow.workspace = true
-thiserror.workspace = true
-rand.workspace = true
 mdarray.workspace = true
 mdarray-linalg.workspace = true
 mdarray-linalg-faer = { workspace = true, optional = true }
 mdarray-linalg-lapack = { workspace = true, optional = true }
 faer-traits.workspace = true
-tensor4all-matrixci = { path = "../tensor4all-matrixci" }
-tensor4all-core = { path = "../tensor4all-core" }
+thiserror.workspace = true
+anyhow.workspace = true
+dyn-clone.workspace = true
+rand.workspace = true
+rand_distr.workspace = true
 
 [dev-dependencies]
-approx = "0.5"
-rand_chacha = "0.3"
+rand_chacha.workspace = true

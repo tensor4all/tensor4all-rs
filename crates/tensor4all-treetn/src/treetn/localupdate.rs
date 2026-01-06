@@ -13,7 +13,7 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all::index::Symmetry;
+use tensor4all_core::index::Symmetry;
 
 use super::TreeTN;
 use crate::node_name_network::NodeNameNetwork;
@@ -75,7 +75,7 @@ where
     pub fn from_treetn<Id, Symm>(treetn: &TreeTN<Id, Symm, V>, root: &V, nsite: usize) -> Option<Self>
     where
         Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-        Symm: Clone + tensor4all::index::Symmetry,
+        Symm: Clone + tensor4all_core::index::Symmetry,
     {
         Self::new(treetn.site_index_network().topology(), root, nsite)
     }
@@ -357,8 +357,8 @@ where
 // TruncateUpdater - LocalUpdater implementation for truncation
 // ============================================================================
 
-use tensor4all::index::{DynId, NoSymmSpace};
-use tensor4all::{factorize, Canonical, FactorizeOptions};
+use tensor4all_core::index::{DynId, NoSymmSpace};
+use tensor4all_core::{factorize, Canonical, FactorizeOptions};
 
 /// Truncation updater for nsite=2 sweeps.
 ///
@@ -474,7 +474,7 @@ where
         // Create new bond index with the original ID but new dimension
         // This ensures the bond index ID matches what the parent TreeTN expects
         // The new dimension comes from the factorized bond's symmetry
-        let new_bond = tensor4all::index::Index::new_with_tags(
+        let new_bond = tensor4all_core::index::Index::new_with_tags(
             bond_ab.id.clone(),
             factorized_bond.symm.clone(),
             bond_ab.tags.clone(),
@@ -793,9 +793,9 @@ where
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use tensor4all::index::{DefaultIndex as Index, DynId};
-    use tensor4all::storage::{DenseStorageF64, Storage};
-    use tensor4all::{NoSymmSpace, TensorDynLen};
+    use tensor4all_core::index::{DefaultIndex as Index, DynId};
+    use tensor4all_core::storage::{DenseStorageF64, Storage};
+    use tensor4all_core::{NoSymmSpace, TensorDynLen};
 
     /// Create a 4-node Y-shape TreeTN:
     ///     A
