@@ -3,7 +3,7 @@
 //! In Einsum mode, tensors that share a bond must use the SAME Index (same ID).
 //! When connecting node_a to node_b, both tensors must contain the same bond index.
 
-use tensor4all_treetn::{TreeTN, TreeTopology, TruncationOptions};
+use tensor4all_treetn::{TreeTN, TreeTopology, TruncationOptions, CanonicalizationOptions};
 use tensor4all::index::{DefaultIndex as Index, DynId};
 use tensor4all::{TensorDynLen, Storage};
 use tensor4all::NoSymmSpace;
@@ -583,7 +583,10 @@ fn test_canonicalize_simple() {
     tn.connect(n1, &bond, n2, &bond).unwrap();
 
     // Canonicalize towards n2
-    let tn_canon = tn.canonicalize(vec![n2]).unwrap();
+    let tn_canon = tn.canonicalize_opt(
+        std::iter::once(n2),
+        CanonicalizationOptions::default(),
+    ).unwrap();
 
     assert!(tn_canon.is_canonicalized());
     assert!(tn_canon.canonical_center().contains(&n2));

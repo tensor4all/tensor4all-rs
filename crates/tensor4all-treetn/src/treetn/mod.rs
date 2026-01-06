@@ -20,7 +20,7 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 
 use tensor4all::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all::{factorize, Canonical, CanonicalForm, FactorizeOptions};
+use tensor4all::{factorize, CanonicalForm, FactorizeOptions};
 use tensor4all::TensorDynLen;
 
 use crate::named_graph::NamedGraph;

@@ -18,6 +18,7 @@ use tensor4all::index::{DynId, NoSymmSpace, Symmetry};
 use tensor4all::CanonicalForm;
 
 use super::TreeTN;
+use crate::options::CanonicalizationOptions;
 
 // ============================================================================
 // Default implementation
@@ -342,8 +343,10 @@ where
             } else {
                 // Unitary canonicalized to multiple sites - canonicalize to min site
                 let min_center = self.canonical_center.iter().min().unwrap().clone();
-                self.canonicalize_by_names_mut(std::iter::once(min_center.clone()), CanonicalForm::Unitary)
-                    .context("log_norm: failed to canonicalize to single site")?;
+                self.canonicalize_opt_mut(
+                    std::iter::once(min_center.clone()),
+                    CanonicalizationOptions::default(),
+                ).context("log_norm: failed to canonicalize to single site")?;
                 min_center
             }
         } else {
@@ -351,8 +354,10 @@ where
             let min_node_name = self.node_names().into_iter().min()
                 .ok_or_else(|| anyhow::anyhow!("No nodes in TreeTN"))
                 .context("log_norm: network must have nodes")?;
-            self.canonicalize_by_names_mut(std::iter::once(min_node_name.clone()), CanonicalForm::Unitary)
-                .context("log_norm: failed to canonicalize")?;
+            self.canonicalize_opt_mut(
+                std::iter::once(min_node_name.clone()),
+                CanonicalizationOptions::default(),
+            ).context("log_norm: failed to canonicalize")?;
             min_node_name
         };
 
