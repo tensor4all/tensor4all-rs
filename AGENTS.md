@@ -282,6 +282,8 @@ When adding dependencies, consider:
 
 ## Git Workflow
 
+**Important**: Do NOT execute `git push` or `gh pr create` without explicit user instruction. Always wait for user approval before pushing commits or creating PRs.
+
 ### Minor Changes vs Large Features
 
 | Change Type | Workflow |
@@ -350,4 +352,11 @@ gh run view <RUN_ID> --log-failed
 
 ### Before Creating a PR
 
-Read `README.md` and check if any information has become outdated due to implementation changes. Update documentation as needed.
+**Required**: Before creating a PR, always:
+1. Read `README.md` and verify the information is still accurate
+2. Update any outdated sections, especially:
+   - **Project Structure**: Ensure crate list matches actual `crates/` directory
+   - **Sample Code**: Verify examples still compile and reflect current API
+3. Check if new features need to be documented
+
+Do not create a PR with outdated documentation.

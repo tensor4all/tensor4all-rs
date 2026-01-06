@@ -9,6 +9,7 @@ A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assis
 - **Modular architecture**: Independent crates (`core-common`, `core-tensor`, `core-linalg`, etc.) enable fast compilation and isolated testing
 - **ITensors.jl-like dynamic structure**: Flexible `Index` system and dynamic-rank tensors preserve the intuitive API
 - **Static error detection**: Rust's type system catches errors at compile time while maintaining runtime flexibility
+- **Multi-language support via C-API**: Full functionality exposed through C-API; initial targets are Julia and Python
 
 **Scope**: Initial focus on QTT (Quantics Tensor Train) and TCI (Tensor Cross Interpolation). The design is extensible to support Abelian and non-Abelian symmetries in the future.
 
@@ -35,19 +36,53 @@ A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assis
 ```
 tensor4all-rs/
 ├── crates/
-│   ├── tensor4all/           # Umbrella + core crates
-│   │   ├── core-common/      # Index, tags, utilities
-│   │   ├── core-tensor/      # Tensor, storage
-│   │   └── core-linalg/      # SVD, QR (FAER/LAPACK)
-│   ├── tensor4all-capi/      # C API for bindings
-│   ├── tensor4all-tensortrain/
-│   ├── tensor4all-matrixci/
-│   ├── tensor4all-tensorci/
-│   ├── tensor4all-treetn/
-│   └── quanticsgrids/
-├── julia/Tensor4all.jl/      # Julia bindings
-├── python/tensor4all/        # Python bindings
-└── docs/                     # Design documents
+│   ├── tensor4all/              # Umbrella + core crates
+│   │   ├── core-common/         # Index, tags, utilities
+│   │   ├── core-tensor/         # Tensor, storage
+│   │   └── core-linalg/         # SVD, QR (FAER/LAPACK)
+│   ├── tensor4all-capi/         # C API for language bindings
+│   ├── tensor4all-itensorlike/  # ITensor-like TensorTrain wrapper
+│   ├── tensor4all-simpletensortrain/  # Simple TT implementation
+│   ├── tensor4all-matrixci/     # Matrix Cross Interpolation
+│   ├── tensor4all-tensorci/     # Tensor Cross Interpolation
+│   ├── tensor4all-treetn/       # Tree Tensor Networks
+│   └── quanticsgrids/           # Quantics grid structures
+├── julia/Tensor4all.jl/         # Julia bindings
+├── python/tensor4all/           # Python bindings
+└── docs/                        # Design documents
+```
+
+## Usage Example (Rust)
+
+### Tree Tensor Network
+
+```rust
+use tensor4all_treetn::{
+    TreeTN, random_treetn_f64,
+    CanonicalizationOptions, TruncationOptions,
+};
+
+// Create a random tree tensor network (4 sites, bond dim 10)
+let site_dims = vec![2, 2, 2, 2];
+let bond_dim = 10;
+let ttn = random_treetn_f64(&site_dims, bond_dim);
+
+// Canonicalize towards center node
+let ttn = ttn.canonicalize(
+    ["node_0"],
+    CanonicalizationOptions::default()
+)?;
+
+// Truncate bond dimensions
+let ttn = ttn.truncate(
+    ["node_0"],
+    TruncationOptions::default()
+        .with_max_rank(5)
+        .with_rtol(1e-10)
+)?;
+
+// Contract two tree tensor networks
+let result = contract_zipup(&ttn1, &ttn2, options)?;
 ```
 
 ## Language Bindings
@@ -56,11 +91,38 @@ tensor4all-rs/
 
 ```julia
 using Tensor4all
-using Tensor4all.ITensorLike  # TensorTrain functionality
+using Tensor4all.ITensorLike
 
-# Index with ITensors.jl interop
-i = Index(2, tags="Site")
+# Create indices
+i = Index(2, tags="Site,n=1")
+j = Index(3, tags="Link")
+k = Index(2, tags="Site,n=2")
+
+# Create random tensors
+t1 = Tensor([i, j], randn(2, 3))
+t2 = Tensor([j, k], randn(3, 2))
+
+# Contract tensors
+result = contract(t1, t2)
+
+# Create TensorTrain
+link1 = Index(4, tags="Link,l=1")
+link2 = Index(4, tags="Link,l=2")
+tensors = [
+    Tensor([i, link1], randn(2, 4)),
+    Tensor([link1, j, link2], randn(4, 3, 4)),
+    Tensor([link2, k], randn(4, 2)),
+]
+tt = TensorTrain(tensors)
+
+# Orthogonalize and truncate
+orthogonalize!(tt, 2)
+truncate!(tt; maxdim=3, rtol=1e-10)
+
+# ITensors.jl interop
+using ITensors
 it_idx = ITensors.Index(i)  # Convert to ITensors.Index
+t4a_idx = Index(it_idx)     # Convert back
 ```
 
 ### Python
@@ -69,23 +131,16 @@ it_idx = ITensors.Index(i)  # Convert to ITensors.Index
 from tensor4all import Index, Tensor
 import numpy as np
 
+# Create indices
 i = Index(2, tags="Site")
-t = Tensor([i, j], np.array([[1, 2], [3, 4]]))
-```
+j = Index(3, tags="Link")
 
-## Usage Example
+# Create tensor from NumPy array
+data = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float64)
+t = Tensor([i, j], data)
 
-```rust
-use tensor4all_core_common::index::{DefaultIndex as Index, DynId};
-use tensor4all_core_tensor::{Storage, TensorDynLen};
-
-// Create indices and tensors
-let i = Index::new_dyn(2);
-let j = Index::new_dyn(3);
-let k = Index::new_dyn(4);
-
-// Contract: C[i,k] = A[i,j] * B[j,k]
-let c = tensor_a.contract_einsum(&tensor_b);
+# Convert back to NumPy
+arr = t.to_numpy()
 ```
 
 ## Future Extensions
