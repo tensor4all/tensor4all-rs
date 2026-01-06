@@ -20,7 +20,7 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 
 use tensor4all::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
+use tensor4all::{factorize, Canonical, CanonicalForm, FactorizeOptions};
 use tensor4all::TensorDynLen;
 
 use crate::named_graph::NamedGraph;
@@ -569,55 +569,6 @@ where
             .clone();
         self.set_edge_ortho_towards(edge, Some(dst_name))
             .with_context(|| format!("{}: failed to set ortho_towards", context_name))?;
-
-        Ok(())
-    }
-
-    /// Internal implementation for canonicalization using the new helpers.
-    ///
-    /// This is the core canonicalization logic that both NodeIndex-based and V-based
-    /// methods delegate to.
-    pub(crate) fn canonicalize_impl(
-        &mut self,
-        canonical_center: impl IntoIterator<Item = V>,
-        form: CanonicalForm,
-        context_name: &str,
-    ) -> Result<()>
-    where
-        Id: Clone + std::hash::Hash + Eq + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace>,
-    {
-        // Determine algorithm from form
-        let alg = match form {
-            CanonicalForm::Unitary => FactorizeAlg::QR,
-            CanonicalForm::LU => FactorizeAlg::LU,
-            CanonicalForm::CI => FactorizeAlg::CI,
-        };
-
-        // Prepare sweep context
-        let sweep_ctx = self.prepare_sweep_to_center(canonical_center, context_name)?;
-
-        // If no centers (empty), nothing to do
-        let sweep_ctx = match sweep_ctx {
-            Some(ctx) => ctx,
-            None => return Ok(()),
-        };
-
-        // Set up factorization options (no truncation for canonicalization)
-        let factorize_options = FactorizeOptions {
-            alg,
-            canonical: Canonical::Left,
-            rtol: None,
-            max_rank: None,
-        };
-
-        // Process edges in order (leaves towards center)
-        for (src, dst) in &sweep_ctx.edges {
-            self.sweep_edge(*src, *dst, &factorize_options, context_name)?;
-        }
-
-        // Set the canonical form
-        self.canonical_form = Some(form);
 
         Ok(())
     }
