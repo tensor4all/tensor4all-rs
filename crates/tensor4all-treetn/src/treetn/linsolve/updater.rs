@@ -3,13 +3,23 @@
 //! Uses GMRES (via kryst) to solve the local linear problem at each sweep step.
 
 use std::hash::Hash;
+use std::sync::Arc;
+use std::sync::RwLock;
 
 use anyhow::Result;
 
+use kryst::context::ksp_context::Workspace;
+use kryst::parallel::{NoComm, UniverseComm};
+use kryst::preconditioner::PcSide;
+use kryst::solver::{GmresSolver, LinearSolver};
+use kryst::utils::convergence::ConvergedReason;
+
 use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all_core::{factorize, Canonical, FactorizeOptions, TensorDynLen};
+use tensor4all_core::storage::{DenseStorageF64, StorageScalar};
+use tensor4all_core::{factorize, Canonical, FactorizeOptions, Storage, TensorDynLen};
 
 use super::environment::NetworkTopology;
+use super::local_linop::{LocalLinOp, StaticTopology};
 use super::options::LinsolveOptions;
 use super::projected_operator::ProjectedOperator;
 use super::projected_state::ProjectedState;
@@ -63,8 +73,8 @@ where
     Symm: Clone + Symmetry + std::fmt::Debug,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
-    /// Projected operator (3-chain)
-    pub projected_operator: ProjectedOperator<Id, Symm, V>,
+    /// Projected operator (3-chain), wrapped in Arc<RwLock> for GMRES
+    pub projected_operator: Arc<RwLock<ProjectedOperator<Id, Symm, V>>>,
     /// Projected state for RHS (2-chain)
     pub projected_state: ProjectedState<Id, Symm, V>,
     /// Solver options
@@ -73,9 +83,9 @@ where
 
 impl<Id, Symm, V> LinsolveUpdater<Id, Symm, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
-    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
+    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     /// Create a new LinsolveUpdater.
     pub fn new(
@@ -84,7 +94,7 @@ where
         options: LinsolveOptions,
     ) -> Self {
         Self {
-            projected_operator: ProjectedOperator::new(operator),
+            projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
             projected_state: ProjectedState::new(rhs),
             options,
         }
@@ -96,7 +106,7 @@ where
     fn solve_local(
         &mut self,
         region: &[V],
-        _init: &TensorDynLen<Id, Symm>,
+        init: &TensorDynLen<Id, Symm>,
         state: &TreeTN<Id, Symm, V>,
     ) -> Result<TensorDynLen<Id, Symm>> {
         let topology = TreeTNTopology::new(state);
@@ -104,34 +114,85 @@ where
         // Get local RHS: <b|_local
         let rhs_local = self.projected_state.local_constant_term(region, state, &topology)?;
 
-        // For now, use a simple iterative approach
-        // TODO: Integrate with kryst GMRES properly
+        // Compute local dimension
+        let dim: usize = init
+            .indices
+            .iter()
+            .map(|idx| idx.symm.total_dim())
+            .product();
 
-        // If a₀ = 0 and a₁ = 1, this is just A*x = b
-        // For the initial implementation, we use a fixed-point iteration approach
-        // Real implementation should use GMRES
+        // Convert RHS to flat array
+        let b: Vec<f64> = f64::extract_dense_view(rhs_local.storage.as_ref())
+            .map_err(|e| anyhow::anyhow!("RHS storage error: {}", e))?
+            .to_vec();
 
-        let a0 = self.options.a0;
-        let a1 = self.options.a1;
+        // Initial guess from input tensor
+        let mut x: Vec<f64> = f64::extract_dense_view(init.storage.as_ref())
+            .map_err(|e| anyhow::anyhow!("Init storage error: {}", e))?
+            .to_vec();
 
-        if a0.abs() < 1e-15 && (a1 - 1.0).abs() < 1e-15 {
-            // Simple case: H*x = b
-            // For now, just return the RHS as initial approximation
-            // TODO: Implement proper GMRES solve
-            Ok(rhs_local)
-        } else {
-            // General case: (a₀ + a₁*H)*x = b
-            // TODO: Implement proper GMRES solve with shifted operator
-            Ok(rhs_local)
+        // Create static topology for ownership
+        let static_topology = StaticTopology::from_treetn(state);
+
+        // Create the linear operator wrapper (owns cloned state)
+        let linop = LocalLinOp::new(
+            Arc::clone(&self.projected_operator),
+            region.to_vec(),
+            state.clone(),
+            static_topology,
+            init.clone(),
+            self.options.a0,
+            self.options.a1,
+        );
+
+        // Create GMRES solver
+        let mut solver = GmresSolver::new(
+            self.options.krylov_dim,
+            self.options.krylov_tol,
+            self.options.krylov_maxiter,
+        );
+
+        // Create workspace
+        let mut workspace = Workspace::new(dim);
+
+        // Create communicator (NoComm for single-process)
+        let comm = UniverseComm::NoComm(NoComm);
+
+        // Solve using GMRES
+        let stats = solver.solve(
+            &linop,
+            None, // No preconditioner
+            &b,
+            &mut x,
+            PcSide::Left, // Default preconditioner side (ignored without preconditioner)
+            &comm,
+            None, // No monitors
+            Some(&mut workspace),
+        )?;
+
+        // Log convergence info if needed (using eprintln for now, could add tracing later)
+        if stats.reason == ConvergedReason::DivergedMaxIts {
+            eprintln!(
+                "Warning: GMRES did not converge within {} iterations (residual: {})",
+                stats.iterations,
+                stats.final_residual
+            );
         }
+
+        // Convert solution back to tensor
+        let dims: Vec<usize> = init.indices.iter().map(|idx| idx.symm.total_dim()).collect();
+        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(x)));
+        let result = TensorDynLen::new(init.indices.clone(), dims, storage);
+
+        Ok(result)
     }
 }
 
 impl<Id, Symm, V> LocalUpdater<Id, Symm, V> for LinsolveUpdater<Id, Symm, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
-    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
+    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     fn update(
         &mut self,
@@ -256,7 +317,10 @@ where
         let topology = TreeTNTopology::new(full_treetn_after);
 
         // Invalidate all caches affected by the updated region
-        self.projected_operator.invalidate(&step.nodes, &topology);
+        {
+            let mut proj_op = self.projected_operator.write().unwrap();
+            proj_op.invalidate(&step.nodes, &topology);
+        }
         self.projected_state.invalidate(&step.nodes, &topology);
 
         Ok(())

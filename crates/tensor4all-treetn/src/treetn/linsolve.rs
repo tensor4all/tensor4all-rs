@@ -23,6 +23,7 @@
 //! - Phys. Rev. B 72, 180403 (2005) - Noise term technique (not implemented in initial version)
 
 mod environment;
+mod local_linop;
 mod options;
 mod projected_operator;
 mod projected_state;
@@ -89,9 +90,9 @@ pub fn linsolve<Id, Symm, V>(
     options: LinsolveOptions,
 ) -> Result<LinsolveResult<Id, Symm, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
-    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
+    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     // Canonicalize initial guess towards center
     let mut x = init.canonicalize([center.clone()], CanonicalizationOptions::default())?;
