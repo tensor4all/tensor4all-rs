@@ -422,9 +422,11 @@ The UInt128 approach provides significantly better collision resistance than UIn
 
 ## Acknowledgments
 
+We acknowledge many fruitful discussions with M. Fishman and E. M. Stoudenmire.
 This implementation is inspired by **ITensors.jl** (https://github.com/ITensor/ITensors.jl).
 We have borrowed API design concepts and function names for compatibility, but the implementation
 is independently written in Rust.
+
 
 **Note**: This library is experimental and not intended for production use. If you use this code
 in research and publish a paper, please cite:
