@@ -16,4 +16,6 @@ pub use treetn::{
     LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
     apply_local_update_sweep,
     TreeTN, TreeTopology, factorize_tensor_to_treetn, factorize_tensor_to_treetn_with,
+    FitEnvironment, FitUpdater, FitContractionOptions, contract_fit,
+    ContractionMethod, ContractionOptions, contract,
 };

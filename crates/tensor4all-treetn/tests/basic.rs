@@ -1187,13 +1187,22 @@ use std::collections::HashSet;
 /// Creates two random TreeTNs with the given site network and link space,
 /// contracts them using both methods, and verifies the results match.
 ///
+// ============================================================================
+// Contraction Method Testing Helpers
+// ============================================================================
+
+use tensor4all_treetn::{ContractionMethod, ContractionOptions, contract};
+
+/// Generic comparison function for contraction methods vs naive
 /// # Arguments
+/// * `method` - The contraction method to test (Zipup or Fit)
 /// * `site_network` - The site index network defining topology and site indices
 /// * `link_space` - The bond dimensions
-/// * `center` - The center node name for contract_zipup
+/// * `center` - The center node name
 /// * `seed1`, `seed2` - Random seeds for the two networks
 /// * `rtol` - Relative tolerance for comparison
-fn compare_zipup_vs_naive(
+fn compare_contract_vs_naive(
+    method: ContractionMethod,
     site_network: &SiteIndexNetwork<String, DynId>,
     link_space: LinkSpace<String>,
     center: &str,
@@ -1211,21 +1220,46 @@ fn compare_zipup_vs_naive(
     let naive_result = tn1.contract_naive(&tn2)
         .expect("contract_naive should succeed");
 
-    // Contract using zipup method
-    let zipup_result = tn1.contract_zipup(&tn2, &center.to_string(), None, None)
-        .expect("contract_zipup should succeed");
+    // Contract using the specified method via dispatcher
+    let options = ContractionOptions::new(method);
+    let result = contract(&tn1, &tn2, &center.to_string(), options)
+        .expect("contract should succeed");
 
-    // Convert zipup result to tensor for comparison
-    let zipup_tensor = zipup_result.contract_to_tensor()
+    // Convert result to tensor for comparison
+    let result_tensor = result.contract_to_tensor()
         .expect("contract_to_tensor should succeed");
 
     // Compare using distance
-    let dist = naive_result.distance(&zipup_tensor);
+    let dist = naive_result.distance(&result_tensor);
     assert!(
         dist < rtol,
-        "contract_zipup vs contract_naive distance too large: {} >= {}",
-        dist, rtol
+        "{:?} vs contract_naive distance too large: {} >= {} (center={})",
+        method, dist, rtol, center
     );
+}
+
+/// Wrapper for zipup vs naive
+fn compare_zipup_vs_naive(
+    site_network: &SiteIndexNetwork<String, DynId>,
+    link_space: LinkSpace<String>,
+    center: &str,
+    seed1: u64,
+    seed2: u64,
+    rtol: f64,
+) {
+    compare_contract_vs_naive(ContractionMethod::Zipup, site_network, link_space, center, seed1, seed2, rtol);
+}
+
+/// Wrapper for fit vs naive
+fn compare_fit_vs_naive(
+    site_network: &SiteIndexNetwork<String, DynId>,
+    link_space: LinkSpace<String>,
+    center: &str,
+    seed1: u64,
+    seed2: u64,
+    rtol: f64,
+) {
+    compare_contract_vs_naive(ContractionMethod::Fit, site_network, link_space, center, seed1, seed2, rtol);
 }
 
 // ============================================================================
@@ -1482,4 +1516,296 @@ fn test_same_appearance_one_canonicalized_one_not() {
     // tn2 is not canonicalized - different ortho_towards state
     assert!(tn1.share_equivalent_site_index_network(&tn2));
     assert!(!tn1.same_appearance(&tn2));
+}
+
+// ============================================================================
+// Fit Algorithm Tests
+// ============================================================================
+
+use tensor4all_treetn::FitContractionOptions;
+
+/// Create a simple MPS-like chain for fit testing: A - B - C
+/// Each node has physical index (site) and bond indices.
+#[allow(dead_code)]
+fn create_mps_chain_for_fit() -> TreeTN<DynId, NoSymmSpace, String> {
+    let mut tn = TreeTN::<DynId, NoSymmSpace, String>::new();
+
+    // Physical indices
+    let site_a = Index::new_dyn(2);
+    let site_b = Index::new_dyn(2);
+    let site_c = Index::new_dyn(2);
+
+    // Bond indices
+    let bond_ab = Index::new_dyn(3);
+    let bond_bc = Index::new_dyn(3);
+
+    // Tensor A: [site_a, bond_ab]
+    let data_a: Vec<f64> = (0..6).map(|x| (x as f64 + 1.0) / 10.0).collect();
+    let tensor_a = TensorDynLen::new(
+        vec![site_a.clone(), bond_ab.clone()],
+        vec![2, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a))),
+    );
+    tn.add_tensor("A".to_string(), tensor_a).unwrap();
+
+    // Tensor B: [bond_ab, site_b, bond_bc]
+    let data_b: Vec<f64> = (0..18).map(|x| (x as f64 + 1.0) / 20.0).collect();
+    let tensor_b = TensorDynLen::new(
+        vec![bond_ab.clone(), site_b.clone(), bond_bc.clone()],
+        vec![3, 2, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b))),
+    );
+    tn.add_tensor("B".to_string(), tensor_b).unwrap();
+
+    // Tensor C: [bond_bc, site_c]
+    let data_c: Vec<f64> = (0..6).map(|x| (x as f64 + 1.0) / 10.0).collect();
+    let tensor_c = TensorDynLen::new(
+        vec![bond_bc.clone(), site_c.clone()],
+        vec![3, 2],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_c))),
+    );
+    tn.add_tensor("C".to_string(), tensor_c).unwrap();
+
+    // Connect
+    let n_a = tn.node_index(&"A".to_string()).unwrap();
+    let n_b = tn.node_index(&"B".to_string()).unwrap();
+    let n_c = tn.node_index(&"C".to_string()).unwrap();
+
+    tn.connect(n_a, &bond_ab, n_b, &bond_ab).unwrap();
+    tn.connect(n_b, &bond_bc, n_c, &bond_bc).unwrap();
+
+    // Set site spaces
+    if let Some(ss) = tn.site_space_mut(&"A".to_string()) {
+        ss.insert(site_a);
+    }
+    if let Some(ss) = tn.site_space_mut(&"B".to_string()) {
+        ss.insert(site_b);
+    }
+    if let Some(ss) = tn.site_space_mut(&"C".to_string()) {
+        ss.insert(site_c);
+    }
+
+    tn
+}
+
+/// Create an MPO-like chain (same topology as MPS but with two physical indices per site)
+#[allow(dead_code)]
+fn create_mpo_chain_for_fit() -> TreeTN<DynId, NoSymmSpace, String> {
+    let mut tn = TreeTN::<DynId, NoSymmSpace, String>::new();
+
+    // Physical indices (input and output for each site)
+    let site_a_in = Index::new_dyn(2);
+    let site_a_out = Index::new_dyn(2);
+    let site_b_in = Index::new_dyn(2);
+    let site_b_out = Index::new_dyn(2);
+    let site_c_in = Index::new_dyn(2);
+    let site_c_out = Index::new_dyn(2);
+
+    // Bond indices
+    let bond_ab = Index::new_dyn(2);
+    let bond_bc = Index::new_dyn(2);
+
+    // Tensor A: [site_a_in, site_a_out, bond_ab]
+    let data_a: Vec<f64> = (0..8).map(|x| (x as f64 + 1.0) / 10.0).collect();
+    let tensor_a = TensorDynLen::new(
+        vec![site_a_in.clone(), site_a_out.clone(), bond_ab.clone()],
+        vec![2, 2, 2],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a))),
+    );
+    tn.add_tensor("A".to_string(), tensor_a).unwrap();
+
+    // Tensor B: [bond_ab, site_b_in, site_b_out, bond_bc]
+    let data_b: Vec<f64> = (0..16).map(|x| (x as f64 + 1.0) / 20.0).collect();
+    let tensor_b = TensorDynLen::new(
+        vec![bond_ab.clone(), site_b_in.clone(), site_b_out.clone(), bond_bc.clone()],
+        vec![2, 2, 2, 2],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b))),
+    );
+    tn.add_tensor("B".to_string(), tensor_b).unwrap();
+
+    // Tensor C: [bond_bc, site_c_in, site_c_out]
+    let data_c: Vec<f64> = (0..8).map(|x| (x as f64 + 1.0) / 10.0).collect();
+    let tensor_c = TensorDynLen::new(
+        vec![bond_bc.clone(), site_c_in.clone(), site_c_out.clone()],
+        vec![2, 2, 2],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_c))),
+    );
+    tn.add_tensor("C".to_string(), tensor_c).unwrap();
+
+    // Connect
+    let n_a = tn.node_index(&"A".to_string()).unwrap();
+    let n_b = tn.node_index(&"B".to_string()).unwrap();
+    let n_c = tn.node_index(&"C".to_string()).unwrap();
+
+    tn.connect(n_a, &bond_ab, n_b, &bond_ab).unwrap();
+    tn.connect(n_b, &bond_bc, n_c, &bond_bc).unwrap();
+
+    // Set site spaces (both in and out are site indices for MPO)
+    if let Some(ss) = tn.site_space_mut(&"A".to_string()) {
+        ss.insert(site_a_in);
+        ss.insert(site_a_out);
+    }
+    if let Some(ss) = tn.site_space_mut(&"B".to_string()) {
+        ss.insert(site_b_in);
+        ss.insert(site_b_out);
+    }
+    if let Some(ss) = tn.site_space_mut(&"C".to_string()) {
+        ss.insert(site_c_in);
+        ss.insert(site_c_out);
+    }
+
+    tn
+}
+
+#[test]
+fn test_fit_contraction_options() {
+    let options = FitContractionOptions::new(5)
+        .with_max_rank(10)
+        .with_rtol(1e-8);
+
+    assert_eq!(options.nsweeps, 5);
+    assert_eq!(options.max_rank, Some(10));
+    assert_eq!(options.rtol, Some(1e-8));
+}
+
+#[test]
+fn test_fit_environment_basic() {
+    use tensor4all_treetn::FitEnvironment;
+
+    let mut env: FitEnvironment<DynId, NoSymmSpace, String> = FitEnvironment::default();
+
+    let idx = Index::new_dyn(2);
+    let tensor = TensorDynLen::new(
+        vec![idx],
+        vec![2],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0]))),
+    );
+
+    // Insert and get
+    env.insert("A".to_string(), "B".to_string(), tensor.clone());
+    assert!(env.contains(&"A".to_string(), &"B".to_string()));
+    assert!(!env.contains(&"B".to_string(), &"A".to_string()));
+
+    // Update after step invalidates reverse direction
+    let tensor2 = TensorDynLen::new(
+        vec![Index::new_dyn(3)],
+        vec![3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0, 3.0]))),
+    );
+    env.update_after_step(&"B".to_string(), &"A".to_string(), tensor2);
+
+    assert!(env.contains(&"B".to_string(), &"A".to_string()));
+    assert!(!env.contains(&"A".to_string(), &"B".to_string()));
+}
+
+// ============================================================================
+// Fit vs Naive Topology Tests (same pattern as zipup tests)
+// ============================================================================
+
+/// Test contract_fit vs contract_naive for 2-node chain: A -- B
+#[test]
+fn test_fit_vs_naive_2node_chain() {
+    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let site_a = Index::new_dyn(2);
+    let site_b = Index::new_dyn(3);
+    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
+    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
+    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+
+    compare_fit_vs_naive(&site_network, LinkSpace::uniform(4), "B", 42, 123, 1e-10);
+}
+
+/// Test contract_fit vs contract_naive for 3-node chain: A -- B -- C
+#[test]
+fn test_fit_vs_naive_3node_chain() {
+    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let site_a = Index::new_dyn(2);
+    let site_b = Index::new_dyn(2);
+    let site_c = Index::new_dyn(2);
+    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
+    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
+    site_network.add_node("C".to_string(), HashSet::from([site_c])).unwrap();
+    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+
+    // Test with center at B (middle)
+    compare_fit_vs_naive(&site_network, LinkSpace::uniform(3), "B", 42, 123, 1e-10);
+
+    // Test with center at A (end)
+    compare_fit_vs_naive(&site_network, LinkSpace::uniform(3), "A", 42, 123, 1e-10);
+
+    // Test with center at C (other end)
+    compare_fit_vs_naive(&site_network, LinkSpace::uniform(3), "C", 42, 123, 1e-10);
+}
+
+/// Test contract_fit vs contract_naive for star topology:
+///       A
+///       |
+///   C - B - D
+#[test]
+fn test_fit_vs_naive_star() {
+    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let site_a = Index::new_dyn(2);
+    let site_b = Index::new_dyn(2);
+    let site_c = Index::new_dyn(2);
+    let site_d = Index::new_dyn(2);
+    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
+    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
+    site_network.add_node("C".to_string(), HashSet::from([site_c])).unwrap();
+    site_network.add_node("D".to_string(), HashSet::from([site_d])).unwrap();
+    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+    site_network.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
+
+    // Test with center at B (hub)
+    compare_fit_vs_naive(&site_network, LinkSpace::uniform(3), "B", 42, 123, 1e-10);
+
+    // Test with center at A (leaf)
+    compare_fit_vs_naive(&site_network, LinkSpace::uniform(3), "A", 42, 123, 1e-10);
+}
+
+/// Test contract_fit vs contract_naive for Y-shaped topology:
+///   A - B - C
+///       |
+///       D
+#[test]
+fn test_fit_vs_naive_y_shape() {
+    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let site_a = Index::new_dyn(2);
+    let site_b = Index::new_dyn(2);
+    let site_c = Index::new_dyn(2);
+    let site_d = Index::new_dyn(2);
+    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
+    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
+    site_network.add_node("C".to_string(), HashSet::from([site_c])).unwrap();
+    site_network.add_node("D".to_string(), HashSet::from([site_d])).unwrap();
+    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+    site_network.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
+
+    // Test with center at B
+    compare_fit_vs_naive(&site_network, LinkSpace::uniform(3), "B", 42, 123, 1e-10);
+
+    // Test with center at D
+    compare_fit_vs_naive(&site_network, LinkSpace::uniform(3), "D", 42, 123, 1e-10);
+}
+
+/// Test contract_fit vs contract_naive for 5-node chain: A -- B -- C -- D -- E
+#[test]
+fn test_fit_vs_naive_5node_chain() {
+    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    for name in ["A", "B", "C", "D", "E"] {
+        let site = Index::new_dyn(2);
+        site_network.add_node(name.to_string(), HashSet::from([site])).unwrap();
+    }
+    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+    site_network.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
+    site_network.add_edge(&"D".to_string(), &"E".to_string()).unwrap();
+
+    // Test with center at C (middle)
+    compare_fit_vs_naive(&site_network, LinkSpace::uniform(2), "C", 42, 123, 1e-10);
+
+    // Test with center at E (end)
+    compare_fit_vs_naive(&site_network, LinkSpace::uniform(2), "E", 42, 123, 1e-10);
 }

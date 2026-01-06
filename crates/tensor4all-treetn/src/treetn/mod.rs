@@ -7,6 +7,7 @@ mod addition;
 mod canonicalize;
 mod contraction;
 mod decompose;
+mod fit;
 mod localupdate;
 mod ops;
 mod tensor_like;
@@ -34,6 +35,16 @@ pub use decompose::{TreeTopology, factorize_tensor_to_treetn, factorize_tensor_t
 pub use localupdate::{
     LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
     apply_local_update_sweep,
+};
+
+// Re-export fit algorithm types
+pub use fit::{
+    FitEnvironment, FitUpdater, FitContractionOptions, contract_fit,
+};
+
+// Re-export contraction dispatcher
+pub use contraction::{
+    ContractionMethod, ContractionOptions, contract,
 };
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).

@@ -742,3 +742,150 @@ where
         Ok(())
     }
 }
+
+// ============================================================================
+// Contraction Method Dispatcher
+// ============================================================================
+
+use super::fit::{contract_fit, FitContractionOptions};
+
+/// Contraction method for TreeTN operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContractionMethod {
+    /// Zip-up contraction (faster, one-pass).
+    #[default]
+    Zipup,
+    /// Fit/variational contraction (iterative optimization).
+    Fit,
+}
+
+/// Options for the generic contract function.
+#[derive(Debug, Clone)]
+pub struct ContractionOptions {
+    /// Contraction method to use.
+    pub method: ContractionMethod,
+    /// Maximum bond dimension (optional).
+    pub max_rank: Option<usize>,
+    /// Relative tolerance for truncation (optional).
+    pub rtol: Option<f64>,
+    /// Number of sweeps for Fit method.
+    pub nsweeps: usize,
+    /// Convergence tolerance for Fit method (None = fixed sweeps).
+    pub convergence_tol: Option<f64>,
+    /// Factorization algorithm for Fit method.
+    pub factorize_alg: FactorizeAlg,
+}
+
+impl Default for ContractionOptions {
+    fn default() -> Self {
+        Self {
+            method: ContractionMethod::default(),
+            max_rank: None,
+            rtol: None,
+            nsweeps: 2,
+            convergence_tol: None,
+            factorize_alg: FactorizeAlg::default(),
+        }
+    }
+}
+
+impl ContractionOptions {
+    /// Create options with specified method.
+    pub fn new(method: ContractionMethod) -> Self {
+        Self {
+            method,
+            ..Default::default()
+        }
+    }
+
+    /// Create options for zipup contraction.
+    pub fn zipup() -> Self {
+        Self::new(ContractionMethod::Zipup)
+    }
+
+    /// Create options for fit contraction.
+    pub fn fit() -> Self {
+        Self::new(ContractionMethod::Fit)
+    }
+
+    /// Set maximum bond dimension.
+    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
+        self.max_rank = Some(max_rank);
+        self
+    }
+
+    /// Set relative tolerance.
+    pub fn with_rtol(mut self, rtol: f64) -> Self {
+        self.rtol = Some(rtol);
+        self
+    }
+
+    /// Set number of sweeps for Fit method.
+    pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
+        self.nsweeps = nsweeps;
+        self
+    }
+
+    /// Set convergence tolerance for Fit method.
+    pub fn with_convergence_tol(mut self, tol: f64) -> Self {
+        self.convergence_tol = Some(tol);
+        self
+    }
+
+    /// Set factorization algorithm for Fit method.
+    pub fn with_factorize_alg(mut self, alg: FactorizeAlg) -> Self {
+        self.factorize_alg = alg;
+        self
+    }
+}
+
+/// Contract two TreeTNs using the specified method.
+///
+/// This is the main entry point for TreeTN contraction. It dispatches to the
+/// appropriate algorithm based on the options.
+///
+/// # Arguments
+/// * `tn_a` - First TreeTN
+/// * `tn_b` - Second TreeTN
+/// * `center` - Center node for contraction
+/// * `options` - Contraction options including method selection
+///
+/// # Returns
+/// The contracted TreeTN
+pub fn contract<Id, Symm, V>(
+    tn_a: &TreeTN<Id, Symm, V>,
+    tn_b: &TreeTN<Id, Symm, V>,
+    center: &V,
+    options: ContractionOptions,
+) -> Result<TreeTN<Id, Symm, V>>
+where
+    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
+    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    match options.method {
+        ContractionMethod::Zipup => {
+            tn_a.contract_zipup(tn_b, center, options.rtol, options.max_rank)
+        }
+        ContractionMethod::Fit => {
+            let fit_options = FitContractionOptions::new(options.nsweeps)
+                .with_factorize_alg(options.factorize_alg);
+            let fit_options = if let Some(max_rank) = options.max_rank {
+                fit_options.with_max_rank(max_rank)
+            } else {
+                fit_options
+            };
+            let fit_options = if let Some(rtol) = options.rtol {
+                fit_options.with_rtol(rtol)
+            } else {
+                fit_options
+            };
+            let fit_options = if let Some(tol) = options.convergence_tol {
+                fit_options.with_convergence_tol(tol)
+            } else {
+                fit_options
+            };
+            contract_fit(tn_a, tn_b, center, fit_options)
+        }
+    }
+}
