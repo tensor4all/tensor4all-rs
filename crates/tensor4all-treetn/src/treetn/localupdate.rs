@@ -237,20 +237,28 @@ where
 /// This function orchestrates the sweep by:
 /// 1. Iterating through the sweep plan
 /// 2. For each step:
-///    a. Extract the local subtree
-///    b. Call the updater to transform it
-///    c. Replace the subtree back into the TreeTN
+///    a. Validate that the canonical center is a single node within the extracted subtree
+///    b. Extract the local subtree
+///    c. Call the updater to transform it
+///    d. Replace the subtree back into the TreeTN
 ///
 /// # Arguments
 /// * `treetn` - The TreeTN to update (modified in place)
 /// * `plan` - The sweep plan specifying the update order
 /// * `updater` - The local updater implementation
 ///
+/// # Preconditions
+/// - The TreeTN must be canonicalized with a single-node canonical center
+/// - The canonical center must be within the first step's nodes
+///
 /// # Returns
 /// `Ok(())` if the sweep completes successfully.
 ///
 /// # Errors
 /// Returns an error if:
+/// - TreeTN is not canonicalized (canonical_center is empty)
+/// - canonical_center is not a single node
+/// - canonical_center is not within the extracted subtree
 /// - Subtree extraction fails
 /// - The updater returns an error
 /// - Subtree replacement fails
@@ -266,6 +274,32 @@ where
     U: LocalUpdater<Id, Symm, V>,
 {
     for step in plan.iter() {
+        // Validate: canonical_center must be a single node within the step's nodes
+        let canonical_center = treetn.canonical_center();
+        if canonical_center.is_empty() {
+            return Err(anyhow::anyhow!(
+                "TreeTN is not canonicalized: canonical_center is empty"
+            ))
+            .context("apply_local_update_sweep: TreeTN must be canonicalized before sweep");
+        }
+        if canonical_center.len() != 1 {
+            return Err(anyhow::anyhow!(
+                "canonical_center must be a single node, got {} nodes",
+                canonical_center.len()
+            ))
+            .context("apply_local_update_sweep: canonical_center must be a single node");
+        }
+        let center_node = canonical_center.iter().next().unwrap();
+        let step_nodes_set: HashSet<V> = step.nodes.iter().cloned().collect();
+        if !step_nodes_set.contains(center_node) {
+            return Err(anyhow::anyhow!(
+                "canonical_center {:?} is not within the extracted subtree {:?}",
+                center_node,
+                step.nodes
+            ))
+            .context("apply_local_update_sweep: canonical_center must be within extracted subtree");
+        }
+
         // Extract subtree for the nodes in this step
         let subtree = treetn.extract_subtree(&step.nodes)?;
 
@@ -1115,7 +1149,15 @@ mod tests {
 
     #[test]
     fn test_truncate_updater_basic() {
-        let mut tn = create_chain_treetn();
+        use crate::CanonicalizationOptions;
+
+        let tn = create_chain_treetn();
+
+        // Canonicalize towards B (the root of the sweep)
+        // This is required before using TruncateUpdater
+        let mut tn = tn
+            .canonicalize(["B".to_string()], CanonicalizationOptions::default())
+            .expect("Failed to canonicalize");
 
         // Create sweep plan with nsite=2 from B
         let plan = LocalUpdateSweepPlan::from_treetn(&tn, &"B".to_string(), 2).unwrap();
@@ -1144,9 +1186,17 @@ mod tests {
 
     #[test]
     fn test_apply_local_update_sweep_preserves_structure() {
-        let mut tn = create_chain_treetn();
+        use crate::CanonicalizationOptions;
+
+        let tn = create_chain_treetn();
         let original_node_count = tn.node_count();
         let original_edge_count = tn.edge_count();
+
+        // Canonicalize towards B (the root of the sweep)
+        // This is required before using TruncateUpdater
+        let mut tn = tn
+            .canonicalize(["B".to_string()], CanonicalizationOptions::default())
+            .expect("Failed to canonicalize");
 
         // Create sweep plan with nsite=2 from B
         let plan = LocalUpdateSweepPlan::from_treetn(&tn, &"B".to_string(), 2).unwrap();
@@ -1161,6 +1211,28 @@ mod tests {
 
         // Verify consistency
         tn.verify_internal_consistency().unwrap();
+    }
+
+    #[test]
+    fn test_apply_local_update_sweep_requires_canonicalization() {
+        // Test that apply_local_update_sweep fails when TreeTN is not canonicalized
+        let mut tn = create_chain_treetn();
+
+        // Create sweep plan with nsite=2 from B
+        let plan = LocalUpdateSweepPlan::from_treetn(&tn, &"B".to_string(), 2).unwrap();
+
+        // Create truncate updater
+        let mut updater = TruncateUpdater::new(Some(2), None);
+
+        // Apply sweep should fail because TreeTN is not canonicalized
+        let result = apply_local_update_sweep(&mut tn, &plan, &mut updater);
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("not canonicalized") || err_msg.contains("canonical_center is empty"),
+            "Unexpected error message: {}",
+            err_msg
+        );
     }
 
     #[test]
