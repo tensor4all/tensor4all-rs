@@ -3,6 +3,7 @@
 //! This module provides the [`TreeTN`] type, a tree-structured tensor network
 //! for efficient tensor operations with canonicalization and truncation support.
 
+mod addition;
 mod canonicalize;
 mod contraction;
 mod decompose;
