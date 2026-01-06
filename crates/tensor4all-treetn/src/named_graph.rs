@@ -7,7 +7,7 @@
 use petgraph::stable_graph::{StableGraph, NodeIndex, EdgeIndex};
 use petgraph::Undirected;
 use petgraph::EdgeType;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::fmt::Debug;
 
@@ -203,6 +203,109 @@ where
     pub fn graph_mut(&mut self) -> &mut StableGraph<NodeData, EdgeData, Ty> {
         &mut self.graph
     }
+
+    /// Perform an Euler tour traversal starting from the given root node.
+    ///
+    /// The Euler tour visits each edge exactly twice (once in each direction),
+    /// forming a closed walk that covers all edges. This is useful for sweep
+    /// algorithms where we need to visit all nodes while maintaining the
+    /// canonical center at a single point.
+    ///
+    /// # Algorithm
+    /// Uses DFS with backtracking. When visiting a node:
+    /// 1. For each unvisited neighbor, record the edge and recurse
+    /// 2. When backtracking, record the edge back to the parent
+    ///
+    /// # Returns
+    /// A vector of directed edges `(from, to)` in traversal order.
+    /// Each undirected edge appears twice: once as (u, v) and once as (v, u).
+    ///
+    /// # Example
+    /// For a Y-shaped tree with root at center C:
+    /// ```text
+    ///     A
+    ///     |
+    /// B - C - D
+    /// ```
+    /// Starting from C, the tour might be:
+    /// `[(C,A), (A,C), (C,B), (B,C), (C,D), (D,C)]`
+    pub fn euler_tour_edges(&self, root: &NodeName) -> Option<Vec<(NodeIndex, NodeIndex)>> {
+        let root_idx = self.node_index(root)?;
+        Some(self.euler_tour_edges_by_index(root_idx))
+    }
+
+    /// Perform an Euler tour traversal starting from the given root NodeIndex.
+    ///
+    /// See [`euler_tour_edges`] for details.
+    pub fn euler_tour_edges_by_index(&self, root: NodeIndex) -> Vec<(NodeIndex, NodeIndex)> {
+        let mut visited_edges: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
+        let mut tour = Vec::new();
+        let mut stack = vec![root];
+
+        while let Some(u) = stack.last().copied() {
+            let mut pushed = false;
+
+            // Try to find an unvisited neighbor
+            for v in self.graph.neighbors(u) {
+                if !visited_edges.contains(&(u, v)) {
+                    // Mark both directions as visited (undirected edge)
+                    visited_edges.insert((u, v));
+                    visited_edges.insert((v, u));
+                    // Record the forward edge
+                    tour.push((u, v));
+                    // Push neighbor onto stack
+                    stack.push(v);
+                    pushed = true;
+                    break; // Handle one neighbor at a time
+                }
+            }
+
+            if !pushed {
+                // No unvisited neighbors, backtrack
+                stack.pop();
+                if let Some(&parent) = stack.last() {
+                    // Record the backtracking edge
+                    tour.push((u, parent));
+                }
+            }
+        }
+
+        tour
+    }
+
+    /// Perform an Euler tour traversal and return the vertex sequence.
+    ///
+    /// This returns the sequence of vertices visited, including repeated visits.
+    /// Each vertex appears multiple times based on its degree in the tree.
+    ///
+    /// # Returns
+    /// A vector of NodeIndex in visitation order, or None if root doesn't exist.
+    ///
+    /// # Example
+    /// For a chain A - B - C starting from B:
+    /// - Edges: `[(B,A), (A,B), (B,C), (C,B)]`
+    /// - Vertices: `[B, A, B, C, B]`
+    pub fn euler_tour_vertices(&self, root: &NodeName) -> Option<Vec<NodeIndex>> {
+        let root_idx = self.node_index(root)?;
+        Some(self.euler_tour_vertices_by_index(root_idx))
+    }
+
+    /// Perform an Euler tour traversal and return the vertex sequence by NodeIndex.
+    ///
+    /// See [`euler_tour_vertices`] for details.
+    pub fn euler_tour_vertices_by_index(&self, root: NodeIndex) -> Vec<NodeIndex> {
+        let edges = self.euler_tour_edges_by_index(root);
+        if edges.is_empty() {
+            // Single node case
+            return vec![root];
+        }
+        // Start with the first vertex, then append destinations
+        let mut vertices = vec![edges[0].0];
+        for (_, to) in &edges {
+            vertices.push(*to);
+        }
+        vertices
+    }
 }
 
 impl<NodeName, NodeData, EdgeData, Ty> Default for NamedGraph<NodeName, NodeData, EdgeData, Ty>
@@ -302,23 +405,61 @@ mod tests {
     #[test]
     fn test_named_graph_remove() {
         let mut g: NamedGraph<String, i32, ()> = NamedGraph::new();
-        
+
         g.add_node("A".to_string(), 1).unwrap();
         g.add_node("B".to_string(), 2).unwrap();
         g.add_edge(&"A".to_string(), &"B".to_string(), ()).unwrap();
-        
+
         assert_eq!(g.node_count(), 2);
         assert_eq!(g.edge_count(), 1);
-        
+
         // Remove edge
         g.remove_edge(&"A".to_string(), &"B".to_string());
         assert_eq!(g.edge_count(), 0);
-        
+
         // Remove node
         let data = g.remove_node(&"A".to_string());
         assert_eq!(data, Some(1));
         assert_eq!(g.node_count(), 1);
         assert!(!g.has_node(&"A".to_string()));
+    }
+
+    #[test]
+    fn test_euler_tour_chain() {
+        // Chain: A - B - C
+        let mut g: NamedGraph<String, (), ()> = NamedGraph::new();
+        let a = g.add_node("A".to_string(), ()).unwrap();
+        let b = g.add_node("B".to_string(), ()).unwrap();
+        let c = g.add_node("C".to_string(), ()).unwrap();
+        g.add_edge(&"A".to_string(), &"B".to_string(), ()).unwrap();
+        g.add_edge(&"B".to_string(), &"C".to_string(), ()).unwrap();
+
+        // Euler tour from B: should visit all edges twice
+        let edges = g.euler_tour_edges(&"B".to_string()).unwrap();
+        // 2 edges × 2 directions = 4 directed edges
+        assert_eq!(edges.len(), 4);
+
+        // Vertices: should start and end at B
+        let vertices = g.euler_tour_vertices(&"B".to_string()).unwrap();
+        assert_eq!(vertices.len(), 5); // B, ?, B, ?, B
+        assert_eq!(vertices[0], b);
+        assert_eq!(vertices[vertices.len() - 1], b);
+
+        // All vertices should be visited
+        let unique_vertices: HashSet<_> = vertices.iter().cloned().collect();
+        assert_eq!(unique_vertices, [a, b, c].into());
+    }
+
+    #[test]
+    fn test_euler_tour_single_node() {
+        let mut g: NamedGraph<String, (), ()> = NamedGraph::new();
+        let a = g.add_node("A".to_string(), ()).unwrap();
+
+        let edges = g.euler_tour_edges(&"A".to_string()).unwrap();
+        assert!(edges.is_empty());
+
+        let vertices = g.euler_tour_vertices(&"A".to_string()).unwrap();
+        assert_eq!(vertices, vec![a]);
     }
 }
 

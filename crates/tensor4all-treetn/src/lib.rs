@@ -12,4 +12,8 @@ pub use node_name_network::{CanonicalizeEdges, NodeNameNetwork};
 pub use options::{CanonicalizationOptions, TruncationOptions};
 pub use random::{LinkSpace, random_treetn_f64, random_treetn_c64};
 pub use site_index_network::SiteIndexNetwork;
-pub use treetn::{TreeTN, TreeTopology, factorize_tensor_to_treetn, factorize_tensor_to_treetn_with};
+pub use treetn::{
+    LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
+    apply_local_update_sweep,
+    TreeTN, TreeTopology, factorize_tensor_to_treetn, factorize_tensor_to_treetn_with,
+};

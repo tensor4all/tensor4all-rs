@@ -30,6 +30,12 @@ use crate::site_index_network::SiteIndexNetwork;
 // Re-export the decomposition functions and types
 pub use decompose::{TreeTopology, factorize_tensor_to_treetn, factorize_tensor_to_treetn_with};
 
+// Re-export local update types
+pub use localupdate::{
+    LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
+    apply_local_update_sweep,
+};
+
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
 ///
 /// Maintains a graph of tensors connected by bonds (edges).
