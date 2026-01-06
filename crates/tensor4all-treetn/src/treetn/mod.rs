@@ -622,57 +622,6 @@ where
         Ok(())
     }
 
-    /// Internal implementation for truncation using the new helpers.
-    ///
-    /// This is the core truncation logic that both NodeIndex-based and V-based
-    /// methods delegate to.
-    pub(crate) fn truncate_impl(
-        &mut self,
-        canonical_center: impl IntoIterator<Item = V>,
-        form: CanonicalForm,
-        rtol: Option<f64>,
-        max_rank: Option<usize>,
-        context_name: &str,
-    ) -> Result<()>
-    where
-        Id: Clone + std::hash::Hash + Eq + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace>,
-    {
-        // Determine algorithm from form (use SVD for Unitary in truncation, not QR)
-        let alg = match form {
-            CanonicalForm::Unitary => FactorizeAlg::SVD,
-            CanonicalForm::LU => FactorizeAlg::LU,
-            CanonicalForm::CI => FactorizeAlg::CI,
-        };
-
-        // Prepare sweep context
-        let sweep_ctx = self.prepare_sweep_to_center(canonical_center, context_name)?;
-
-        // If no centers (empty), nothing to do
-        let sweep_ctx = match sweep_ctx {
-            Some(ctx) => ctx,
-            None => return Ok(()),
-        };
-
-        // Set up factorization options WITH truncation parameters
-        let factorize_options = FactorizeOptions {
-            alg,
-            canonical: Canonical::Left,
-            rtol,
-            max_rank,
-        };
-
-        // Process edges in order (leaves towards center)
-        for (src, dst) in &sweep_ctx.edges {
-            self.sweep_edge(*src, *dst, &factorize_options, context_name)?;
-        }
-
-        // Set the canonical form
-        self.canonical_form = Some(form);
-
-        Ok(())
-    }
-
     // ------------------------------------------------------------------------
     // Public accessors
     // ------------------------------------------------------------------------
