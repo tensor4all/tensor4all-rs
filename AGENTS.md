@@ -255,7 +255,7 @@ fn test_operation_c64() {
   ```bash
   # Create PR
   gh pr create --base main --title "Feature: your feature name" --body "Description of changes"
-  
+
   # Enable auto-merge (recommended)
   gh pr merge --auto --squash --delete-branch
   ```
@@ -264,6 +264,20 @@ fn test_operation_c64() {
   - No need to manually monitor CI status
   - Branch is automatically deleted after merge
   - Reduces manual intervention and speeds up development cycle
+
+- **Monitor PR status after creation**: After creating a PR with auto-merge enabled, monitor the CI status every 1 minute until all checks pass or an error occurs:
+  ```bash
+  # Check PR status
+  gh pr checks <PR_NUMBER>
+
+  # Or view detailed status
+  gh pr view <PR_NUMBER> --json state,statusCheckRollup
+  ```
+  **If CI fails**:
+  - Review the failed check details using `gh run view <RUN_ID> --log-failed`
+  - Fix the issue locally and push a new commit
+  - Continue monitoring until all checks pass
+  - Do not leave a PR in a failed state unattended
 
 - **Never push directly to main branch**: All changes must be made through pull requests. Create a branch, commit changes, push the branch, and create a PR. Wait for CI workflows to pass before merging.
 
