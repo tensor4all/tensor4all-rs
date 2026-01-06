@@ -282,12 +282,38 @@ When adding dependencies, consider:
 
 ## Git Workflow
 
-### Using Worktrees for Features
+### Minor Changes vs Large Features
+
+| Change Type | Workflow |
+|-------------|----------|
+| Minor fixes (README, docs, delete unused files) | Branch + PR with auto-merge |
+| Large features, refactoring | Worktree + PR with auto-merge |
+
+### Minor Changes (Branch-based)
+
+For small fixes that don't require isolated development:
+
+```bash
+# Create branch
+git checkout -b fix-readme
+# Make changes, commit
+git add -A && git commit -m "Fix README typo"
+git push -u origin fix-readme
+
+# Create PR with auto-merge
+gh pr create --base main --title "Fix README typo" --body "Description"
+gh pr merge --auto --squash --delete-branch
+```
+
+### Large Features (Worktree-based)
+
+For substantial development that benefits from isolation:
 
 ```bash
 # Create worktree for new feature
 git worktree add ../tensor4all-rs-feature-name -b feature-name
 cd ../tensor4all-rs-feature-name
+# Work on feature...
 ```
 
 Always start from the latest main branch.
