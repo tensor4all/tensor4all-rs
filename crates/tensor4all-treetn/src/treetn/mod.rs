@@ -8,6 +8,7 @@ mod canonicalize;
 mod contraction;
 mod decompose;
 mod fit;
+mod linsolve;
 mod localupdate;
 mod ops;
 mod tensor_like;
@@ -45,6 +46,14 @@ pub use fit::{
 // Re-export contraction dispatcher
 pub use contraction::{
     ContractionMethod, ContractionOptions, contract,
+};
+
+// Re-export linsolve types
+pub use linsolve::{
+    EnvironmentCache, NetworkTopology,
+    LinsolveOptions, LinsolveUpdater, LinsolveResult,
+    ProjectedOperator, ProjectedState,
+    linsolve,
 };
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
