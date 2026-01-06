@@ -2,6 +2,14 @@
 
 Before starting work, read the repository root `README.md` as well as this `AGENTS.md`.
 
+## Development Stage
+
+**This project is in early development stage.** Backward compatibility is not required at this time. When refactoring or improving the API:
+
+- Do not keep legacy/deprecated code for backward compatibility
+- Remove deprecated methods immediately instead of marking them with `#[deprecated]`
+- Prefer clean, simple APIs over maintaining multiple ways to do the same thing
+
 ## General Guidelines
 
 - Use the same language as in past conversations with the user (if it has been Japanese, use Japanese)

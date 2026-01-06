@@ -29,18 +29,18 @@ where
     /// use tensor4all_treetn::TruncationOptions;
     ///
     /// // Truncate with max rank of 50
-    /// let ttn = ttn.truncate_opt(
+    /// let ttn = ttn.truncate(
     ///     ["center"],
     ///     TruncationOptions::default().with_max_rank(50)
     /// )?;
     ///
     /// // Truncate with relative tolerance
-    /// let ttn = ttn.truncate_opt(
+    /// let ttn = ttn.truncate(
     ///     ["center"],
     ///     TruncationOptions::default().with_rtol(1e-10)
     /// )?;
     /// ```
-    pub fn truncate_opt(
+    pub fn truncate(
         mut self,
         canonical_center: impl IntoIterator<Item = V>,
         options: TruncationOptions,
@@ -54,15 +54,15 @@ where
             options.form,
             options.rtol,
             options.max_rank,
-            "truncate_opt",
+            "truncate",
         )?;
         Ok(self)
     }
 
     /// Truncate the network in-place towards the specified center using options.
     ///
-    /// This is the `&mut self` version of [`truncate_opt`].
-    pub fn truncate_opt_mut(
+    /// This is the `&mut self` version of [`truncate`].
+    pub fn truncate_mut(
         &mut self,
         canonical_center: impl IntoIterator<Item = V>,
         options: TruncationOptions,
@@ -76,7 +76,7 @@ where
             options.form,
             options.rtol,
             options.max_rank,
-            "truncate_opt_mut",
+            "truncate_mut",
         )
     }
 

@@ -583,7 +583,7 @@ fn test_canonicalize_simple() {
     tn.connect(n1, &bond, n2, &bond).unwrap();
 
     // Canonicalize towards n2
-    let tn_canon = tn.canonicalize_opt(
+    let tn_canon = tn.canonicalize(
         std::iter::once(n2),
         CanonicalizationOptions::default(),
     ).unwrap();
@@ -804,7 +804,7 @@ fn test_truncate_simple() {
     assert_eq!(tn.bond_index(edge).unwrap().size(), 10);
 
     // Truncate with max_rank = 3
-    let truncated = tn.truncate_opt(
+    let truncated = tn.truncate(
         std::iter::once(n2),
         TruncationOptions::default().with_max_rank(3),
     ).unwrap();
@@ -844,7 +844,7 @@ fn test_truncate_mut_simple() {
     assert_eq!(tn.bond_index(edge).unwrap().size(), 8);
 
     // Truncate in-place with max_rank = 4
-    tn.truncate_opt_mut(
+    tn.truncate_mut(
         std::iter::once(n2),
         TruncationOptions::default().with_max_rank(4),
     ).unwrap();
@@ -863,7 +863,7 @@ fn test_truncate_three_node_chain() {
     assert_eq!(tn.bond_index(e23).unwrap().size(), 4);
 
     // Truncate towards center (n1) with max_rank = 2
-    let truncated = tn.truncate_opt(
+    let truncated = tn.truncate(
         std::iter::once(n1),
         TruncationOptions::default().with_max_rank(2),
     ).unwrap();
@@ -910,7 +910,7 @@ fn test_truncate_with_rtol() {
     tn.connect(n1, &bond, n2, &bond).unwrap();
 
     // Truncate with rtol - should reduce rank significantly for low-rank data
-    let truncated = tn.truncate_opt(
+    let truncated = tn.truncate(
         std::iter::once(n2),
         TruncationOptions::default().with_rtol(1e-10),
     ).unwrap();
@@ -1367,7 +1367,7 @@ fn test_verify_internal_consistency_after_canonicalization() {
     let (tn, _n1, n2, _n3, _e12, _e23, _bond12, _bond23) = create_three_node_chain();
 
     // Canonicalize to center n2
-    let tn = tn.canonicalize_opt(
+    let tn = tn.canonicalize(
         vec![n2],
         tensor4all_treetn::CanonicalizationOptions::default(),
     ).expect("Canonicalization should succeed");
@@ -1431,12 +1431,12 @@ fn test_same_appearance_after_same_canonicalization() {
     let (tn1, _n1, n2, _n3, _, _, _, _) = create_three_node_chain();
     let tn2 = tn1.clone();
 
-    let tn1 = tn1.canonicalize_opt(
+    let tn1 = tn1.canonicalize(
         vec![n2],
         tensor4all_treetn::CanonicalizationOptions::default(),
     ).unwrap();
 
-    let tn2 = tn2.canonicalize_opt(
+    let tn2 = tn2.canonicalize(
         vec![n2],
         tensor4all_treetn::CanonicalizationOptions::default(),
     ).unwrap();
@@ -1451,12 +1451,12 @@ fn test_same_appearance_different_ortho_towards() {
     let (tn1, n1, _n2, n3, _, _, _, _) = create_three_node_chain();
     let tn2 = tn1.clone();
 
-    let tn1 = tn1.canonicalize_opt(
+    let tn1 = tn1.canonicalize(
         vec![n1],  // Canonicalize to left
         tensor4all_treetn::CanonicalizationOptions::default(),
     ).unwrap();
 
-    let tn2 = tn2.canonicalize_opt(
+    let tn2 = tn2.canonicalize(
         vec![n3],  // Canonicalize to right
         tensor4all_treetn::CanonicalizationOptions::default(),
     ).unwrap();
@@ -1474,7 +1474,7 @@ fn test_same_appearance_one_canonicalized_one_not() {
     let (tn1, _n1, n2, _n3, _, _, _, _) = create_three_node_chain();
     let tn2 = tn1.clone();
 
-    let tn1 = tn1.canonicalize_opt(
+    let tn1 = tn1.canonicalize(
         vec![n2],
         tensor4all_treetn::CanonicalizationOptions::default(),
     ).unwrap();

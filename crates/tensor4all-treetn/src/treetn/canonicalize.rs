@@ -37,15 +37,15 @@ where
     /// use tensor4all_treetn::CanonicalizationOptions;
     ///
     /// // Default canonicalization (Unitary form, smart behavior)
-    /// let ttn = ttn.canonicalize_opt(["A"], CanonicalizationOptions::default())?;
+    /// let ttn = ttn.canonicalize(["A"], CanonicalizationOptions::default())?;
     ///
     /// // Force re-canonicalization with LU form
-    /// let ttn = ttn.canonicalize_opt(
+    /// let ttn = ttn.canonicalize(
     ///     ["B"],
     ///     CanonicalizationOptions::forced().with_form(CanonicalForm::LU)
     /// )?;
     /// ```
-    pub fn canonicalize_opt(
+    pub fn canonicalize(
         mut self,
         canonical_center: impl IntoIterator<Item = V>,
         options: CanonicalizationOptions,
@@ -67,7 +67,7 @@ where
                         current_form,
                         options.form
                     ))
-                    .context("canonicalize_opt: form mismatch");
+                    .context("canonicalize: form mismatch");
                 }
             }
 
@@ -78,14 +78,14 @@ where
         }
 
         // Perform canonicalization
-        self.canonicalize_impl(center_v, options.form, "canonicalize_opt")?;
+        self.canonicalize_impl(center_v, options.form, "canonicalize")?;
         Ok(self)
     }
 
     /// Canonicalize the network in-place towards the specified center using options.
     ///
-    /// This is the `&mut self` version of [`canonicalize_opt`].
-    pub fn canonicalize_opt_mut(
+    /// This is the `&mut self` version of [`canonicalize`].
+    pub fn canonicalize_mut(
         &mut self,
         canonical_center: impl IntoIterator<Item = V>,
         options: CanonicalizationOptions,
@@ -96,7 +96,7 @@ where
         Self: Default,
     {
         let taken = std::mem::take(self);
-        match taken.canonicalize_opt(canonical_center, options) {
+        match taken.canonicalize(canonical_center, options) {
             Ok(result) => {
                 *self = result;
                 Ok(())
