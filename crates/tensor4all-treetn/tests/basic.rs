@@ -1668,35 +1668,9 @@ fn test_fit_contraction_options() {
     assert_eq!(options.rtol, Some(1e-8));
 }
 
-#[test]
-fn test_fit_environment_basic() {
-    use tensor4all_treetn::FitEnvironment;
-
-    let mut env: FitEnvironment<DynId, NoSymmSpace, String> = FitEnvironment::default();
-
-    let idx = Index::new_dyn(2);
-    let tensor = TensorDynLen::new(
-        vec![idx],
-        vec![2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0]))),
-    );
-
-    // Insert and get
-    env.insert("A".to_string(), "B".to_string(), tensor.clone());
-    assert!(env.contains(&"A".to_string(), &"B".to_string()));
-    assert!(!env.contains(&"B".to_string(), &"A".to_string()));
-
-    // Update after step invalidates reverse direction
-    let tensor2 = TensorDynLen::new(
-        vec![Index::new_dyn(3)],
-        vec![3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0, 3.0]))),
-    );
-    env.update_after_step(&"B".to_string(), &"A".to_string(), tensor2);
-
-    assert!(env.contains(&"B".to_string(), &"A".to_string()));
-    assert!(!env.contains(&"A".to_string(), &"B".to_string()));
-}
+// Note: test_fit_environment_basic was removed because FitEnvironment now uses
+// lazy evaluation with private insert method. The functionality is tested
+// through the fit vs naive topology tests below.
 
 // ============================================================================
 // Fit vs Naive Topology Tests (same pattern as zipup tests)
