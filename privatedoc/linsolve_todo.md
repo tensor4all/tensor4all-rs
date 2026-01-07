@@ -8,6 +8,11 @@
 - [x] Step 4: Add linsolve tests
 - [x] Step 5: Add integration test with simple MPS example
 - [x] Fix clippy warning in local_linop.rs
+- [x] Add validation for MPO/MPS topology compatibility
+- [x] Add validation for site index matching
+- [x] Add FIXME comment for state.clone() in solve_local
+- [x] Fix docstrings in projected_operator.rs (Tree TN terminology)
+- [x] Fix docstrings in projected_state.rs (Tree TN terminology)
 
 ## Known Limitations (to be addressed in future iterations)
 
@@ -30,22 +35,7 @@ let hx = proj_op.apply(...).expect("Failed to apply projected operator");
 - Use `catch_unwind` (not recommended)
 - Request kryst API change to support fallible operations
 
-### 2. Missing Validation
-
-- No explicit check that operator and state have compatible tree topologies
-- No check that site indices match between MPO and MPS
-- These failures are caught as runtime errors, but earlier validation would improve UX
-
-**Suggested implementation**:
-```rust
-fn validate_compatibility(operator: &TreeTN, state: &TreeTN) -> Result<()> {
-    // Check same node names
-    // Check matching site dimensions
-    // Check compatible bond structure
-}
-```
-
-### 3. Test Coverage
+### 2. Test Coverage
 
 Current test (`test_linsolve_simple_two_site`) only verifies:
 - Function runs without panic

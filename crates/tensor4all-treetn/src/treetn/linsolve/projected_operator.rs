@@ -1,6 +1,6 @@
 //! ProjectedOperator: 3-chain environment for operator application.
 //!
-//! Computes `<psi|H|v>` efficiently at each site.
+//! Computes `<psi|H|v>` efficiently for Tree Tensor Networks.
 
 use std::hash::Hash;
 
@@ -14,19 +14,25 @@ use crate::treetn::TreeTN;
 
 /// ProjectedOperator: Manages 3-chain environments for operator application.
 ///
-/// This computes `<psi|H|v>` at each site during the sweep.
+/// This computes `<psi|H|v>` for each local region during the sweep.
 ///
-/// # Diagram
+/// For Tree Tensor Networks, the environment is computed by contracting
+/// all tensors outside the "open region" into environment tensors.
+/// The open region consists of nodes being updated in the current sweep step.
 ///
+/// # Structure
+///
+/// For each edge (from, to) pointing towards the open region, we cache:
 /// ```text
-/// o--o--o-      -o--o--o--o--o--o <psi|   ← bra (conjugate of state vector)
-/// |  |  |  |  |  |  |  |  |  |  |
-/// o--o--o--o--o--o--o--o--o--o--o H       ← MPO (operator A)
-/// |  |  |  |  |  |  |  |  |  |  |
-/// o--o--o-      -o--o--o--o--o--o |psi>   ← ket (state vector)
-///        ↑      ↑
-///      lpos    rpos (unprojected sites)
+/// env[(from, to)] = contraction of:
+///   - bra tensor at `from` (conjugated)
+///   - operator tensor at `from`
+///   - ket tensor at `from`
+///   - all child environments (edges pointing away from `to`)
 /// ```
+///
+/// This forms a "3-chain" sandwich: `<bra| H |ket>` contracted over
+/// all nodes except the open region.
 pub struct ProjectedOperator<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,

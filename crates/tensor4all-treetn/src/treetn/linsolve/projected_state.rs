@@ -1,6 +1,6 @@
 //! ProjectedState: 2-chain environment for RHS computation.
 //!
-//! Computes `<b|x_local>` efficiently at each site.
+//! Computes `<b|x_local>` efficiently for Tree Tensor Networks.
 
 use std::hash::Hash;
 
@@ -14,16 +14,24 @@ use crate::treetn::TreeTN;
 
 /// ProjectedState: Manages 2-chain environments for RHS computation.
 ///
-/// This computes `<b|x_local>` at each site during the sweep.
+/// This computes `<b|x_local>` for each local region during the sweep.
 ///
-/// # Diagram
+/// For Tree Tensor Networks, the environment is computed by contracting
+/// all tensors outside the "open region" into environment tensors.
+/// The open region consists of nodes being updated in the current sweep step.
 ///
+/// # Structure
+///
+/// For each edge (from, to) pointing towards the open region, we cache:
 /// ```text
-/// o--o--o-      -o--o--o--o--o--o <b|     ← RHS state (constant term)
-/// |  |  |         |  |  |  |  |  |
-/// *--*--*-      -*--*--*--*--*--* |x>     ← Solution state
-///     L_env        R_env
+/// env[(from, to)] = contraction of:
+///   - bra tensor at `from` (conjugated RHS)
+///   - ket tensor at `from` (current solution)
+///   - all child environments (edges pointing away from `to`)
 /// ```
+///
+/// This forms a "2-chain" overlap: `<b|x>` contracted over
+/// all nodes except the open region.
 pub struct ProjectedState<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,

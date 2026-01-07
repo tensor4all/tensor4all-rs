@@ -134,7 +134,12 @@ where
         // Create static topology for ownership
         let static_topology = StaticTopology::from_treetn(state);
 
-        // Create the linear operator wrapper (owns cloned state)
+        // FIXME: state.clone() is inefficient for large states.
+        // This is required because kryst's LinOp trait requires 'static lifetime,
+        // so LocalLinOp must own all its data. Consider:
+        // - Using Rc<RefCell<>> or Arc<RwLock<>> for shared state
+        // - Restructuring to avoid repeated clones per sweep step
+        // - Caching the LocalLinOp between calls if state hasn't changed
         let linop = LocalLinOp::new(
             Arc::clone(&self.projected_operator),
             region.to_vec(),
