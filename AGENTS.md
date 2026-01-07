@@ -34,6 +34,27 @@ Before starting work, read the repository root `README.md` as well as this `AGEN
 - Each crate in `crates/` is an independent Rust package with its own `Cargo.toml`, `src/`, and `tests/` directories
 - When working on a crate, understand the package structure and be aware of dependencies between crates
 
+### Before Starting Work: API Reference
+
+**Always dump the latest API documentation before starting implementation work:**
+
+```bash
+cargo run -p api-dump --release -- . -o docs/api
+```
+
+This generates Markdown files in `docs/api/` with function signatures and docstrings for each crate.
+
+**Required workflow:**
+1. Run the API dump command above
+2. Read the API docs for crates related to your task (e.g., `docs/api/tensor4all_simpletensortrain.md`)
+3. Understand existing functions before implementing new ones
+4. During implementation, check the API docs to avoid duplicating existing functionality
+
+**When to reference API docs:**
+- Before adding a new function: check if similar functionality exists
+- When implementing a feature: look for helper functions you can reuse
+- When unsure about existing API: read the relevant crate's API doc
+
 ---
 
 ## Code Style

@@ -8,6 +8,7 @@ members = [
     "crates/tensor4all-simpletensortrain",
     "crates/tensor4all-tensorci",
     "crates/tensor4all-capi",
+    "tools/api-dump",
 ]
 resolver = "2"
 
