@@ -1,0 +1,17 @@
+[package]
+name = "api-dump"
+version = "0.1.0"
+edition = "2021"
+description = "Dump Rust workspace API to Markdown"
+
+[[bin]]
+name = "api-dump"
+path = "src/main.rs"
+
+[dependencies]
+syn = { version = "2", features = ["full", "parsing"] }
+quote = "1"
+walkdir = "2"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
