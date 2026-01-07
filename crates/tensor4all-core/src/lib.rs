@@ -27,6 +27,10 @@ pub use storage::{DenseStorageFactory, Storage, StorageScalar, SumFromStorage, m
 pub use tensor::{TensorDynLen, TensorType, TensorAccess, compute_permutation_from_indices, is_diag_tensor, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, unfold_split};
 pub use tensor_like::{TensorLike, TensorLikeDowncast};
 
+// Contraction
+pub mod contract;
+pub use contract::contract_multi;
+
 // Linear algebra (SVD, QR, factorize)
 mod backend;
 pub mod factorize;

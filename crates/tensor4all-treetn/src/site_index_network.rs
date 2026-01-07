@@ -283,6 +283,104 @@ where
     ) -> Option<Vec<(NodeName, NodeName)>> {
         self.topology.edges_to_canonicalize_to_region_by_names(target_region)
     }
+
+    // =========================================================================
+    // Operator/state compatibility checking
+    // =========================================================================
+
+    /// Check if an operator can act on this state (as a ket).
+    ///
+    /// Returns `Ok(result_network)` if the operator can act on self,
+    /// where `result_network` is the SiteIndexNetwork of the output state.
+    ///
+    /// For an operator to act on a state:
+    /// - They must have the same topology (same nodes and edges)
+    /// - The operator must have indices that can contract with the state's site indices
+    ///
+    /// # Arguments
+    /// * `operator` - The operator's SiteIndexNetwork
+    ///
+    /// # Returns
+    /// - `Ok(SiteIndexNetwork)` - The resulting state's site index network after the operator acts
+    /// - `Err(String)` - Error message if the operator cannot act on this state
+    ///
+    /// # Note
+    /// This is a simplified version that assumes the operator's output indices
+    /// have the same structure as the input (i.e., the result has the same
+    /// site index structure as the original state). For more complex operators
+    /// with different input/output dimensions, a more sophisticated approach
+    /// would be needed.
+    pub fn apply_operator_topology(
+        &self,
+        operator: &Self,
+    ) -> Result<Self, String> {
+        // Check topology match
+        if !self.topology.same_topology(&operator.topology) {
+            return Err(format!(
+                "Operator and state have different topologies. State nodes: {:?}, Operator nodes: {:?}",
+                self.node_names(),
+                operator.node_names()
+            ));
+        }
+
+        // For now, assume the operator preserves the site index structure
+        // (output has same site indices as input). This is the common case
+        // for Hamiltonians and other operators where H|ψ⟩ has the same
+        // index structure as |ψ⟩.
+        //
+        // A more complete implementation would:
+        // 1. Check that operator has compatible input indices
+        // 2. Return the actual output index structure
+        Ok(self.clone())
+    }
+
+    /// Check if this network has compatible site dimensions with another.
+    ///
+    /// Two networks have compatible site dimensions if:
+    /// - Same topology (nodes and edges)
+    /// - Each node has the same number of site indices
+    /// - Site index dimensions match (after sorting, order doesn't matter)
+    ///
+    /// This is useful for checking if two states can be added or if
+    /// a state matches the expected output of an operator.
+    pub fn compatible_site_dimensions(&self, other: &Self) -> bool {
+        // Check topology
+        if !self.topology.same_topology(&other.topology) {
+            return false;
+        }
+
+        // Check site dimensions for each node
+        for name in self.node_names() {
+            match (self.site_space(name), other.site_space(name)) {
+                (Some(self_indices), Some(other_indices)) => {
+                    // Check same number of indices
+                    if self_indices.len() != other_indices.len() {
+                        return false;
+                    }
+
+                    // Get dimensions and sort for comparison
+                    let mut self_dims: Vec<_> = self_indices
+                        .iter()
+                        .map(|idx| idx.symm.total_dim())
+                        .collect();
+                    let mut other_dims: Vec<_> = other_indices
+                        .iter()
+                        .map(|idx| idx.symm.total_dim())
+                        .collect();
+                    self_dims.sort();
+                    other_dims.sort();
+
+                    if self_dims != other_dims {
+                        return false;
+                    }
+                }
+                (None, None) => continue,
+                _ => return false,
+            }
+        }
+
+        true
+    }
 }
 
 impl<NodeName, Id, Symm, Tags> Default for SiteIndexNetwork<NodeName, Id, Symm, Tags>
@@ -422,5 +520,73 @@ mod tests {
         net3.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 
         assert!(!net1.share_equivalent_site_index_network(&net3));
+    }
+
+    #[test]
+    fn test_apply_operator_topology() {
+        // Create state network
+        let mut state: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+            SiteIndexNetwork::new();
+        let site1: HashSet<_> = [Index::new(1u128, NoSymmSpace::new(2))].into();
+        let site2: HashSet<_> = [Index::new(2u128, NoSymmSpace::new(3))].into();
+        state.add_node("A".to_string(), site1.clone()).unwrap();
+        state.add_node("B".to_string(), site2.clone()).unwrap();
+        state.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+
+        // Create operator with same topology
+        let mut operator: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+            SiteIndexNetwork::new();
+        // Operator has different index IDs but same dimensions
+        let op_site1: HashSet<_> = [Index::new(101u128, NoSymmSpace::new(2))].into();
+        let op_site2: HashSet<_> = [Index::new(102u128, NoSymmSpace::new(3))].into();
+        operator.add_node("A".to_string(), op_site1).unwrap();
+        operator.add_node("B".to_string(), op_site2).unwrap();
+        operator.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+
+        // Should succeed
+        let result = state.apply_operator_topology(&operator);
+        assert!(result.is_ok());
+
+        // Create operator with different topology
+        let mut bad_operator: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+            SiteIndexNetwork::new();
+        bad_operator.add_node("A".to_string(), HashSet::new()).unwrap();
+        bad_operator.add_node("C".to_string(), HashSet::new()).unwrap(); // Different node name
+        bad_operator.add_edge(&"A".to_string(), &"C".to_string()).unwrap();
+
+        // Should fail
+        let result = state.apply_operator_topology(&bad_operator);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_compatible_site_dimensions() {
+        // Create two networks with same dimensions
+        let mut net1: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+            SiteIndexNetwork::new();
+        let site1: HashSet<_> = [Index::new(1u128, NoSymmSpace::new(2))].into();
+        net1.add_node("A".to_string(), site1).unwrap();
+        net1.add_node("B".to_string(), HashSet::new()).unwrap();
+        net1.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+
+        let mut net2: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+            SiteIndexNetwork::new();
+        // Different ID but same dimension
+        let site2: HashSet<_> = [Index::new(99u128, NoSymmSpace::new(2))].into();
+        net2.add_node("A".to_string(), site2).unwrap();
+        net2.add_node("B".to_string(), HashSet::new()).unwrap();
+        net2.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+
+        assert!(net1.compatible_site_dimensions(&net2));
+
+        // Create network with different dimension
+        let mut net3: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+            SiteIndexNetwork::new();
+        let site3: HashSet<_> = [Index::new(99u128, NoSymmSpace::new(5))].into(); // Different dim
+        net3.add_node("A".to_string(), site3).unwrap();
+        net3.add_node("B".to_string(), HashSet::new()).unwrap();
+        net3.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+
+        assert!(!net1.compatible_site_dimensions(&net3));
     }
 }

@@ -18,4 +18,11 @@ pub use treetn::{
     TreeTN, TreeTopology, factorize_tensor_to_treetn, factorize_tensor_to_treetn_with,
     FitEnvironment, FitUpdater, FitContractionOptions, contract_fit,
     ContractionMethod, ContractionOptions, contract,
+    // Linsolve exports
+    EnvironmentCache, NetworkTopology,
+    IndexMapping, LinearOperator,
+    LinsolveOptions, LinsolveUpdater, LinsolveResult,
+    LinsolveVerifyReport, NodeVerifyDetail,
+    ProjectedOperator, ProjectedState,
+    linsolve,
 };
