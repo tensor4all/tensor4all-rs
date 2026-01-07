@@ -11,11 +11,13 @@
 //! - Transposition returns views (no data copy)
 //! - Data is only copied when materialized via `to_owned()`
 //! - Blocks are stored in a sparse HashMap
+//! - Generic over scalar type `T` (f64, Complex64, etc.)
 //!
 //! # Core Types
 //!
+//! - [`Scalar`]: Trait for scalar types (f64, Complex64)
 //! - [`BlockPartition`]: Defines how an axis is divided into blocks
-//! - [`BlockData`]: Owned 2D block data (wraps mdarray's `DTensor<f64, 2>`)
+//! - [`BlockData`]: Owned 2D block data (wraps mdarray's `DTensor<T, 2>`)
 //! - [`BlockedArray`]: Owned blocked array
 //! - [`BlockedView`]: Borrowed view (supports lazy transposition)
 //!
@@ -24,12 +26,12 @@
 //! ```
 //! use blocked_mdarray::{BlockPartition, BlockedArray, BlockData, blocked_matmul};
 //!
-//! // Create a 4x4 matrix split into 2x2 blocks
+//! // Create a 4x4 matrix split into 2x2 blocks (f64)
 //! let parts = vec![
 //!     BlockPartition::uniform(2, 2),
 //!     BlockPartition::uniform(2, 2),
 //! ];
-//! let mut matrix = BlockedArray::new(parts);
+//! let mut matrix = BlockedArray::<f64>::new(parts);
 //!
 //! // Set only diagonal blocks (block-diagonal matrix)
 //! matrix.set_block(vec![0, 0], BlockData::new(vec![1.0, 0.0, 0.0, 1.0], [2, 2]));
@@ -39,15 +41,43 @@
 //! let result = blocked_matmul(&matrix, &matrix).unwrap();
 //! assert_eq!(result.num_nonzero_blocks(), 2);
 //! ```
+//!
+//! # Complex64 Example
+//!
+//! ```
+//! use blocked_mdarray::{BlockPartition, BlockedArray, BlockData, blocked_matmul};
+//! use num_complex::Complex64;
+//!
+//! // Create a complex blocked array
+//! let parts = vec![
+//!     BlockPartition::trivial(2),
+//!     BlockPartition::trivial(2),
+//! ];
+//! let mut matrix = BlockedArray::<Complex64>::new(parts);
+//!
+//! // Set with complex values
+//! matrix.set_block(
+//!     vec![0, 0],
+//!     BlockData::new(
+//!         vec![
+//!             Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0),
+//!             Complex64::new(0.0, -1.0), Complex64::new(1.0, 0.0),
+//!         ],
+//!         [2, 2],
+//!     ),
+//! );
+//! ```
 
 mod block_data;
 mod blocked_array;
 mod error;
 mod matmul;
 mod partition;
+mod scalar;
 
 pub use block_data::{BlockData, BlockSlice2, BlockSliceStrided2, BlockTensor2};
 pub use blocked_array::{BlockedArray, BlockedArrayLike, BlockedView};
 pub use error::{BlockedArrayError, Result};
 pub use matmul::blocked_matmul;
 pub use partition::{block_linear_index, block_multi_index, BlockIndex, BlockPartition};
+pub use scalar::Scalar;

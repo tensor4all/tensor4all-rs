@@ -15,6 +15,7 @@ thiserror.workspace = true
 mdarray.workspace = true
 mdarray-linalg.workspace = true
 mdarray-linalg-faer.workspace = true
+faer-traits.workspace = true
 
 [dev-dependencies]
 rand.workspace = true
