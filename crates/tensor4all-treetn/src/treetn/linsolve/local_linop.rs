@@ -34,8 +34,11 @@ where
     pub linear_operator: Option<Arc<LinearOperator<Id, Symm, V>>>,
     /// The region being updated
     pub region: Vec<V>,
-    /// Current state for environment computation (cloned to own)
+    /// Current state for ket in environment computation (V_in space)
     pub state: TreeTN<Id, Symm, V>,
+    /// Reference state for bra in environment computation (V_out space)
+    /// If None, uses `state` (same as ket) for V_in = V_out case
+    pub bra_state: Option<TreeTN<Id, Symm, V>>,
     /// Template tensor (stores index structure for reshaping)
     pub template: TensorDynLen<Id, Symm>,
     /// Coefficient a₀
@@ -52,7 +55,7 @@ where
     Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    /// Create a new LocalLinOp.
+    /// Create a new LocalLinOp for V_in = V_out case.
     pub fn new(
         projected_operator: Arc<RwLock<ProjectedOperator<Id, Symm, V>>>,
         region: Vec<V>,
@@ -73,6 +76,37 @@ where
             linear_operator: None,
             region,
             state,
+            bra_state: None, // Use state as bra (V_in = V_out)
+            template,
+            a0,
+            a1,
+            dim,
+        }
+    }
+
+    /// Create a new LocalLinOp for V_in ≠ V_out case with explicit bra_state.
+    pub fn with_bra_state(
+        projected_operator: Arc<RwLock<ProjectedOperator<Id, Symm, V>>>,
+        region: Vec<V>,
+        state: TreeTN<Id, Symm, V>,
+        bra_state: TreeTN<Id, Symm, V>,
+        template: TensorDynLen<Id, Symm>,
+        a0: f64,
+        a1: f64,
+    ) -> Self {
+        // Compute dimension from template
+        let dim: usize = template
+            .indices
+            .iter()
+            .map(|idx| idx.symm.total_dim())
+            .product();
+
+        Self {
+            projected_operator,
+            linear_operator: None,
+            region,
+            state,
+            bra_state: Some(bra_state),
             template,
             a0,
             a1,
@@ -86,6 +120,7 @@ where
         linear_operator: Arc<LinearOperator<Id, Symm, V>>,
         region: Vec<V>,
         state: TreeTN<Id, Symm, V>,
+        bra_state: Option<TreeTN<Id, Symm, V>>,
         template: TensorDynLen<Id, Symm>,
         a0: f64,
         a1: f64,
@@ -102,11 +137,18 @@ where
             linear_operator: Some(linear_operator),
             region,
             state,
+            bra_state,
             template,
             a0,
             a1,
             dim,
         }
+    }
+
+    /// Get the bra state for environment computation.
+    /// Returns bra_state if set, otherwise returns state (V_in = V_out case).
+    fn get_bra_state(&self) -> &TreeTN<Id, Symm, V> {
+        self.bra_state.as_ref().unwrap_or(&self.state)
     }
 
     /// Convert flat array to tensor.
@@ -149,11 +191,12 @@ where
                 .apply_local(&x_tensor, &self.region)
                 .expect("Failed to apply linear operator")
         } else {
-            // Fall back to ProjectedOperator (legacy path)
-            // Use state's SiteIndexNetwork directly (implements NetworkTopology)
+            // Fall back to ProjectedOperator
+            // Pass both ket_state (self.state) and bra_state for environment computation
+            let bra_state = self.get_bra_state();
             let mut proj_op = self.projected_operator.write().unwrap();
             proj_op
-                .apply(&x_tensor, &self.region, &self.state, self.state.site_index_network())
+                .apply(&x_tensor, &self.region, &self.state, bra_state, self.state.site_index_network())
                 .expect("Failed to apply projected operator")
         };
 

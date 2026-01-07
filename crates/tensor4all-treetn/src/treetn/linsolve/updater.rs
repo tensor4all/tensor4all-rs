@@ -110,6 +110,15 @@ impl<V: std::fmt::Debug> std::fmt::Display for LinsolveVerifyReport<V> {
 /// 2. Compute local RHS (from ProjectedState environments)
 /// 3. Solve local linear system using GMRES
 /// 4. Factorize the result and update the state
+///
+/// # Input/Output Space Support
+///
+/// For operators where input space V_in ≠ output space V_out:
+/// - Use `with_reference_state` constructor to specify a reference state in V_out
+/// - The reference state is used as the "bra" in environment computations
+/// - The current solution x (in V_in) is used as the "ket"
+///
+/// For V_in = V_out (default): The current solution x is used for both bra and ket.
 pub struct LinsolveUpdater<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
@@ -122,6 +131,9 @@ where
     pub linear_operator: Option<Arc<LinearOperator<Id, Symm, V>>>,
     /// Projected state for RHS (2-chain)
     pub projected_state: ProjectedState<Id, Symm, V>,
+    /// Reference state for bra in environment computation (V_out space)
+    /// If None, uses the current solution x (V_in = V_out case)
+    pub reference_state_out: Option<TreeTN<Id, Symm, V>>,
     /// Solver options
     pub options: LinsolveOptions,
 }
@@ -132,7 +144,7 @@ where
     Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
-    /// Create a new LinsolveUpdater.
+    /// Create a new LinsolveUpdater for V_in = V_out case.
     pub fn new(
         operator: TreeTN<Id, Symm, V>,
         rhs: TreeTN<Id, Symm, V>,
@@ -142,6 +154,29 @@ where
             projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
             linear_operator: None,
             projected_state: ProjectedState::new(rhs),
+            reference_state_out: None,
+            options,
+        }
+    }
+
+    /// Create a new LinsolveUpdater for V_in ≠ V_out case with explicit reference state.
+    ///
+    /// # Arguments
+    /// * `operator` - The operator A mapping V_in → V_out
+    /// * `rhs` - The RHS b in V_out
+    /// * `reference_state_out` - Reference state in V_out for bra in environment computation
+    /// * `options` - Solver options
+    pub fn with_reference_state(
+        operator: TreeTN<Id, Symm, V>,
+        rhs: TreeTN<Id, Symm, V>,
+        reference_state_out: TreeTN<Id, Symm, V>,
+        options: LinsolveOptions,
+    ) -> Self {
+        Self {
+            projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
+            linear_operator: None,
+            projected_state: ProjectedState::new(rhs),
+            reference_state_out: Some(reference_state_out),
             options,
         }
     }
@@ -157,6 +192,7 @@ where
     pub fn with_linear_operator(
         linear_operator: LinearOperator<Id, Symm, V>,
         rhs: TreeTN<Id, Symm, V>,
+        reference_state_out: Option<TreeTN<Id, Symm, V>>,
         options: LinsolveOptions,
     ) -> Self {
         let operator = linear_operator.mpo.clone();
@@ -164,8 +200,15 @@ where
             projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
             linear_operator: Some(Arc::new(linear_operator)),
             projected_state: ProjectedState::new(rhs),
+            reference_state_out,
             options,
         }
+    }
+
+    /// Get the bra state for environment computation.
+    /// Returns reference_state_out if set, otherwise returns the ket_state (V_in = V_out case).
+    pub fn get_bra_state<'a>(&'a self, ket_state: &'a TreeTN<Id, Symm, V>) -> &'a TreeTN<Id, Symm, V> {
+        self.reference_state_out.as_ref().unwrap_or(ket_state)
     }
 
     /// Verify internal data consistency between operator, RHS, and state.
@@ -433,7 +476,13 @@ where
         let topology = state.site_index_network();
 
         // Get local RHS: <b|_local
-        let rhs_local = self.projected_state.local_constant_term(region, state, topology)?;
+        // For V_in ≠ V_out case, use reference_state_out for bra in environment computation
+        let rhs_local = match &self.reference_state_out {
+            Some(ref_out) => self.projected_state.local_constant_term_with_bra(
+                region, state, ref_out, topology,
+            )?,
+            None => self.projected_state.local_constant_term(region, state, topology)?,
+        };
 
         // Compute local dimension
         let dim: usize = init
@@ -458,6 +507,11 @@ where
         // - Using Rc<RefCell<>> or Arc<RwLock<>> for shared state
         // - Restructuring to avoid repeated clones per sweep step
         // - Caching the LocalLinOp between calls if state hasn't changed
+        //
+        // For V_in ≠ V_out case, we use reference_state_out as the bra state.
+        // For V_in = V_out case (reference_state_out is None), the state is used as both ket and bra.
+        let bra_state = self.reference_state_out.clone();
+
         let linop = if let Some(ref linear_op) = self.linear_operator {
             // Use LinearOperator for correct index handling
             LocalLinOp::with_linear_operator(
@@ -465,20 +519,32 @@ where
                 Arc::clone(linear_op),
                 region.to_vec(),
                 state.clone(),
+                bra_state,
                 init.clone(),
                 self.options.a0,
                 self.options.a1,
             )
         } else {
             // Legacy path without LinearOperator
-            LocalLinOp::new(
-                Arc::clone(&self.projected_operator),
-                region.to_vec(),
-                state.clone(),
-                init.clone(),
-                self.options.a0,
-                self.options.a1,
-            )
+            match bra_state {
+                Some(bra) => LocalLinOp::with_bra_state(
+                    Arc::clone(&self.projected_operator),
+                    region.to_vec(),
+                    state.clone(),
+                    bra,
+                    init.clone(),
+                    self.options.a0,
+                    self.options.a1,
+                ),
+                None => LocalLinOp::new(
+                    Arc::clone(&self.projected_operator),
+                    region.to_vec(),
+                    state.clone(),
+                    init.clone(),
+                    self.options.a0,
+                    self.options.a1,
+                ),
+            }
         };
 
         // Create GMRES solver
