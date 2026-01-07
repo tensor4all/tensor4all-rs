@@ -1,11 +1,11 @@
 //! Blocked array and view types.
 
 use std::collections::HashMap;
-use std::marker::PhantomData;
 
 use mdarray::{DSlice, Dense};
 
 use crate::block_data::BlockData;
+use crate::block_structure::BlockStructure;
 use crate::partition::{block_linear_index, block_multi_index, BlockIndex, BlockPartition};
 use crate::scalar::Scalar;
 
@@ -13,69 +13,75 @@ use crate::scalar::Scalar;
 ///
 /// The array is partitioned along each axis, creating a grid of blocks.
 /// Only non-zero blocks are stored in memory (sparse representation).
+///
+/// Internally wraps a `BlockStructure` for metadata and a HashMap for actual data.
 #[derive(Debug, Clone)]
 pub struct BlockedArray<T: Scalar> {
-    /// Block partition for each axis.
-    partitions: Vec<BlockPartition>,
+    /// Block structure (partitions + non-zero block indices).
+    structure: BlockStructure,
     /// Non-zero blocks stored in a HashMap.
     /// Key: linear block index, Value: block data.
-    blocks: HashMap<usize, BlockData<T>>,
-    _marker: PhantomData<T>,
+    data: HashMap<usize, BlockData<T>>,
 }
 
 impl<T: Scalar> BlockedArray<T> {
     /// Create an empty blocked array with given partitions.
     pub fn new(partitions: Vec<BlockPartition>) -> Self {
         Self {
-            partitions,
-            blocks: HashMap::new(),
-            _marker: PhantomData,
+            structure: BlockStructure::empty(partitions),
+            data: HashMap::new(),
         }
+    }
+
+    /// Get a reference to the block structure (metadata only).
+    pub fn structure(&self) -> &BlockStructure {
+        &self.structure
     }
 
     /// Get the rank (number of dimensions).
     pub fn rank(&self) -> usize {
-        self.partitions.len()
+        self.structure.rank()
     }
 
     /// Get the total shape (sum of block sizes per axis).
     pub fn shape(&self) -> Vec<usize> {
-        self.partitions.iter().map(|p| p.total_dim()).collect()
+        self.structure.shape()
     }
 
     /// Get the partitions.
     pub fn partitions(&self) -> &[BlockPartition] {
-        &self.partitions
+        self.structure.partitions()
     }
 
     /// Get the number of blocks per axis.
     pub fn num_blocks(&self) -> Vec<usize> {
-        self.partitions.iter().map(|p| p.num_blocks()).collect()
+        self.structure.num_blocks()
     }
 
     /// Get the total number of blocks (including zero blocks).
     pub fn total_blocks(&self) -> usize {
-        self.num_blocks().iter().product()
+        self.structure.total_blocks()
     }
 
     /// Get the number of non-zero (stored) blocks.
     pub fn num_nonzero_blocks(&self) -> usize {
-        self.blocks.len()
+        self.structure.num_nonzero_blocks()
     }
 
-    /// Get the shape of a specific block.
-    pub fn block_shape(&self, block_idx: &BlockIndex) -> [usize; 2] {
-        assert_eq!(block_idx.len(), 2, "Only 2D blocks are supported");
-        [
-            self.partitions[0].block_size(block_idx[0]),
-            self.partitions[1].block_size(block_idx[1]),
-        ]
+    /// Get the shape of a specific block (N-dimensional).
+    pub fn block_shape(&self, block_idx: &BlockIndex) -> Vec<usize> {
+        self.structure.block_shape(block_idx)
+    }
+
+    /// Get the shape of a specific block as fixed-size array (2D only).
+    pub fn block_shape_2d(&self, block_idx: &BlockIndex) -> [usize; 2] {
+        self.structure.block_shape_2d(block_idx)
     }
 
     /// Get a block reference (returns None for zero blocks).
     pub fn get_block(&self, block_idx: &BlockIndex) -> Option<&BlockData<T>> {
         let linear = block_linear_index(block_idx, &self.num_blocks());
-        self.blocks.get(&linear)
+        self.data.get(&linear)
     }
 
     /// Get a block as mdarray slice (returns None for zero blocks).
@@ -85,7 +91,7 @@ impl<T: Scalar> BlockedArray<T> {
 
     /// Set a block.
     pub fn set_block(&mut self, block_idx: BlockIndex, data: BlockData<T>) {
-        let expected_shape = self.block_shape(&block_idx);
+        let expected_shape = self.block_shape_2d(&block_idx);
         assert_eq!(
             data.shape(),
             expected_shape,
@@ -95,7 +101,8 @@ impl<T: Scalar> BlockedArray<T> {
         );
 
         let linear = block_linear_index(&block_idx, &self.num_blocks());
-        self.blocks.insert(linear, data);
+        self.data.insert(linear, data);
+        self.structure.insert_block(&block_idx);
     }
 
     /// Accumulate into a block (add to existing or create new).
@@ -104,13 +111,13 @@ impl<T: Scalar> BlockedArray<T> {
     pub fn accumulate_block(&mut self, block_idx: BlockIndex, data: BlockData<T>) {
         let linear = block_linear_index(&block_idx, &self.num_blocks());
 
-        if let Some(existing) = self.blocks.get(&linear) {
+        if let Some(existing) = self.data.get(&linear) {
             // Add to existing block
             let sum = existing.add(&data);
-            self.blocks.insert(linear, sum);
+            self.data.insert(linear, sum);
         } else {
             // Insert new block
-            let expected_shape = self.block_shape(&block_idx);
+            let expected_shape = self.block_shape_2d(&block_idx);
             assert_eq!(
                 data.shape(),
                 expected_shape,
@@ -118,20 +125,22 @@ impl<T: Scalar> BlockedArray<T> {
                 data.shape(),
                 expected_shape
             );
-            self.blocks.insert(linear, data);
+            self.data.insert(linear, data);
+            self.structure.insert_block(&block_idx);
         }
     }
 
     /// Remove a block (make it zero).
     pub fn remove_block(&mut self, block_idx: &BlockIndex) -> Option<BlockData<T>> {
         let linear = block_linear_index(block_idx, &self.num_blocks());
-        self.blocks.remove(&linear)
+        self.structure.remove_block(block_idx);
+        self.data.remove(&linear)
     }
 
     /// Iterate over non-zero blocks.
     pub fn iter_blocks(&self) -> impl Iterator<Item = (BlockIndex, &BlockData<T>)> {
         let num_blocks = self.num_blocks();
-        self.blocks.iter().map(move |(&linear, data)| {
+        self.data.iter().map(move |(&linear, data)| {
             let block_idx = block_multi_index(linear, &num_blocks);
             (block_idx, data)
         })
@@ -156,7 +165,7 @@ impl<T: Scalar> BlockedArray<T> {
 
     /// Compute sparsity ratio (stored elements / total elements).
     pub fn sparsity(&self) -> f64 {
-        let stored: usize = self.blocks.values().map(|b| b.len()).sum();
+        let stored: usize = self.data.values().map(|b| b.len()).sum();
         let total: usize = self.shape().iter().product();
         if total == 0 {
             0.0
@@ -176,6 +185,15 @@ pub struct BlockedView<'a, T: Scalar> {
 }
 
 impl<'a, T: Scalar> BlockedView<'a, T> {
+    /// Get a reference to the block structure (with transposition applied).
+    pub fn structure(&self) -> BlockStructure {
+        if self.transposed {
+            self.source.structure.permute(&[1, 0])
+        } else {
+            self.source.structure.clone()
+        }
+    }
+
     /// Get the rank (number of dimensions).
     pub fn rank(&self) -> usize {
         self.source.rank()
@@ -290,6 +308,9 @@ pub trait BlockedArrayLike<T: Scalar> {
     ///
     /// Returns a Vec to maintain trait object safety.
     fn iter_nonzero_blocks(&self) -> Vec<(BlockIndex, BlockData<T>)>;
+
+    /// Get the block structure.
+    fn structure(&self) -> BlockStructure;
 }
 
 impl<T: Scalar> BlockedArrayLike<T> for BlockedArray<T> {
@@ -302,7 +323,7 @@ impl<T: Scalar> BlockedArrayLike<T> for BlockedArray<T> {
     }
 
     fn partitions(&self) -> Vec<BlockPartition> {
-        self.partitions.clone()
+        self.partitions().to_vec()
     }
 
     fn num_blocks(&self) -> Vec<usize> {
@@ -317,6 +338,10 @@ impl<T: Scalar> BlockedArrayLike<T> for BlockedArray<T> {
         self.iter_blocks()
             .map(|(idx, data)| (idx, data.clone()))
             .collect()
+    }
+
+    fn structure(&self) -> BlockStructure {
+        self.structure.clone()
     }
 }
 
@@ -343,6 +368,10 @@ impl<'a, T: Scalar> BlockedArrayLike<T> for BlockedView<'a, T> {
 
     fn iter_nonzero_blocks(&self) -> Vec<(BlockIndex, BlockData<T>)> {
         self.iter_blocks().collect()
+    }
+
+    fn structure(&self) -> BlockStructure {
+        BlockedView::structure(self)
     }
 }
 
@@ -403,6 +432,11 @@ mod tests {
 
         // Zero block
         assert!(arr.get_block(&vec![0, 1]).is_none());
+
+        // Structure should match
+        assert!(arr.structure().has_block(&vec![0, 0]));
+        assert!(arr.structure().has_block(&vec![1, 1]));
+        assert!(!arr.structure().has_block(&vec![0, 1]));
     }
 
     #[test]
@@ -443,6 +477,11 @@ mod tests {
         assert_eq!(block.get([0, 0]), T::from_f64(0.0));
         // Original [0, 1][0, 1] = 1.0 -> Transposed [1, 0][1, 0]
         assert_eq!(block.get([1, 0]), T::from_f64(1.0));
+
+        // Transposed structure
+        let view_structure = view.structure();
+        assert!(view_structure.has_block(&vec![1, 0]));
+        assert!(!view_structure.has_block(&vec![0, 1]));
     }
 
     #[test]
@@ -529,5 +568,24 @@ mod tests {
     #[test]
     fn test_accumulate_block_c64() {
         test_accumulate_block_generic::<Complex64>();
+    }
+
+    #[test]
+    fn test_structure_access() {
+        let partitions = vec![
+            BlockPartition::uniform(2, 3),
+            BlockPartition::uniform(2, 3),
+        ];
+        let mut arr = BlockedArray::<f64>::new(partitions);
+
+        arr.set_block(vec![0, 0], BlockData::new(vec![1.0; 4], [2, 2]));
+        arr.set_block(vec![1, 2], BlockData::new(vec![2.0; 4], [2, 2]));
+
+        // Access structure without cloning for read-only operations
+        let structure = arr.structure();
+        assert_eq!(structure.num_nonzero_blocks(), 2);
+        assert!(structure.has_block(&vec![0, 0]));
+        assert!(structure.has_block(&vec![1, 2]));
+        assert!(!structure.has_block(&vec![0, 1]));
     }
 }

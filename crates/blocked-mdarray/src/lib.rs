@@ -18,7 +18,8 @@
 //! - [`Scalar`]: Trait for scalar types (f64, Complex64)
 //! - [`BlockPartition`]: Defines how an axis is divided into blocks
 //! - [`BlockData`]: Owned 2D block data (wraps mdarray's `DTensor<T, 2>`)
-//! - [`BlockedArray`]: Owned blocked array
+//! - [`BlockStructure`]: Block structure metadata (partitions + sparsity pattern)
+//! - [`BlockedArray`]: Owned blocked array (wraps `BlockStructure` + data)
 //! - [`BlockedView`]: Borrowed view (supports lazy transposition)
 //!
 //! # Example
@@ -69,14 +70,18 @@
 //! ```
 
 mod block_data;
+mod block_structure;
 mod blocked_array;
+mod blocked_data;
 mod error;
 mod matmul;
 mod partition;
 mod scalar;
 
 pub use block_data::{BlockData, BlockSlice2, BlockSliceStrided2, BlockTensor2};
+pub use block_structure::BlockStructure;
 pub use blocked_array::{BlockedArray, BlockedArrayLike, BlockedView};
+pub use blocked_data::{linear_to_multi, multi_to_linear, BlockedData};
 pub use error::{BlockedArrayError, Result};
 pub use matmul::blocked_matmul;
 pub use partition::{block_linear_index, block_multi_index, BlockIndex, BlockPartition};
