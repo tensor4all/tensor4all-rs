@@ -64,7 +64,10 @@ where
     /// # Arguments
     /// * `v` - The local tensor to apply the operator to
     /// * `region` - The nodes in the open region
-    /// * `state` - The current state |psi⟩ (used for environment computation)
+    /// * `ket_state` - The current state |ket⟩ (used for ket in environment computation)
+    /// * `bra_state` - The reference state ⟨bra| (used for bra in environment computation)
+    ///                 For V_in = V_out, this is the same as ket_state.
+    ///                 For V_in ≠ V_out, this should be a state in V_out.
     /// * `topology` - Network topology for traversal
     ///
     /// # Returns
@@ -73,11 +76,12 @@ where
         &mut self,
         v: &TensorDynLen<Id, Symm>,
         region: &[V],
-        state: &TreeTN<Id, Symm, V>,
+        ket_state: &TreeTN<Id, Symm, V>,
+        bra_state: &TreeTN<Id, Symm, V>,
         topology: &T,
     ) -> Result<TensorDynLen<Id, Symm>> {
         // Ensure environments are computed
-        self.ensure_environments(region, state, topology)?;
+        self.ensure_environments(region, ket_state, bra_state, topology)?;
 
         // Collect all tensors to contract: operator tensors + environments + input v
         let mut all_tensors: Vec<TensorDynLen<Id, Symm>> = Vec::new();
@@ -116,13 +120,14 @@ where
     fn ensure_environments<T: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        state: &TreeTN<Id, Symm, V>,
+        ket_state: &TreeTN<Id, Symm, V>,
+        bra_state: &TreeTN<Id, Symm, V>,
         topology: &T,
     ) -> Result<()> {
         for node in region {
             for neighbor in topology.neighbors(node) {
                 if !region.contains(&neighbor) && !self.envs.contains(&neighbor, node) {
-                    let env = self.compute_environment(&neighbor, node, state, topology)?;
+                    let env = self.compute_environment(&neighbor, node, ket_state, bra_state, topology)?;
                     self.envs.insert(neighbor.clone(), node.clone(), env);
                 }
             }
@@ -131,11 +136,19 @@ where
     }
 
     /// Recursively compute environment for edge (from, to).
+    ///
+    /// # Arguments
+    /// * `from` - Source node of the edge
+    /// * `to` - Destination node of the edge
+    /// * `ket_state` - State for ket tensors (input space, V_in)
+    /// * `bra_state` - State for bra tensors (output space, V_out)
+    /// * `topology` - Network topology
     fn compute_environment<T: NetworkTopology<V>>(
         &mut self,
         from: &V,
         to: &V,
-        state: &TreeTN<Id, Symm, V>,
+        ket_state: &TreeTN<Id, Symm, V>,
+        bra_state: &TreeTN<Id, Symm, V>,
         topology: &T,
     ) -> Result<TensorDynLen<Id, Symm>> {
         // First, ensure child environments are computed
@@ -146,7 +159,7 @@ where
 
         for child in &child_neighbors {
             if !self.envs.contains(child, from) {
-                let child_env = self.compute_environment(child, from, state, topology)?;
+                let child_env = self.compute_environment(child, from, ket_state, bra_state, topology)?;
                 self.envs.insert(child.clone(), from.clone(), child_env);
             }
         }
@@ -157,47 +170,42 @@ where
             .filter_map(|child| self.envs.get(child, from).cloned())
             .collect();
 
-        // Get tensors from bra, operator, and ket at this node
-        let node_idx_bra = state
+        // Get tensors from bra (V_out), operator, and ket (V_in) at this node
+        let node_idx_bra = bra_state
             .node_index(from)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in state", from))?;
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in bra_state", from))?;
         let node_idx_op = self.operator
             .node_index(from)
             .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", from))?;
-        let node_idx_ket = state
+        let node_idx_ket = ket_state
             .node_index(from)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in state", from))?;
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in ket_state", from))?;
 
-        let tensor_bra = state
+        let tensor_bra = bra_state
             .tensor(node_idx_bra)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found in state"))?;
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found in bra_state"))?;
         let tensor_op = self.operator
             .tensor(node_idx_op)
             .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?;
-        let tensor_ket = state
+        let tensor_ket = ket_state
             .tensor(node_idx_ket)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found in state"))?;
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found in ket_state"))?;
 
         // Environment contraction for 3-chain: <bra| H |ket>
         //
         // Index convention:
-        // - state's site index: s (same ID for both bra and ket)
-        // - operator's input index: s_in (same ID as state's s)
-        // - operator's output index: s_out (different ID)
+        // - ket_state's site index: s_in (input space, V_in)
+        // - bra_state's site index: s_out (output space, V_out)
+        // - operator's input index matches ket_state's site index
+        // - operator's output index matches bra_state's site index
         //
-        // Contraction order: (bra * operator) * ket
-        // 1. bra(s) * operator(s_out, s_in) contracts s with s_out? No!
-        //    We need s_out to match bra's s, but they have different IDs.
+        // For V_in = V_out: bra_state = ket_state, indices have same IDs
+        // For V_in ≠ V_out: bra_state ≠ ket_state, indices have different IDs
         //
-        // The issue: s_out has a NEW ID, not matching bra's s.
-        // For proper contraction, operator output indices should match bra's site indices.
-        //
-        // Current workaround: Contract over ALL common indices between tensors,
-        // not just site space indices. The operator has bond indices that connect
-        // to environments, and site indices that connect to bra/ket.
+        // Contraction: ket * operator * bra_conj, contracting over common indices
 
         let bra_conj = tensor_bra.conj();
-        let site_space_ket = state.site_space(from).cloned().unwrap_or_default();
+        let site_space_ket = ket_state.site_space(from).cloned().unwrap_or_default();
 
         // Contract ket with operator on INPUT site indices (same ID by design)
         let ket_op_common: Vec<_> = tensor_ket

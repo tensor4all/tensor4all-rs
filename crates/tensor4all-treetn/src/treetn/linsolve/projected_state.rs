@@ -61,14 +61,41 @@ where
     /// Compute the local constant term `<b|_local` for the given region.
     ///
     /// This returns the local RHS tensors contracted with environments.
+    ///
+    /// # Arguments
+    /// * `region` - The nodes in the local update region
+    /// * `ket_state` - The current solution state (in V_in)
+    /// * `topology` - The network topology
+    ///
+    /// For V_in ≠ V_out case, use `local_constant_term_with_bra` instead.
     pub fn local_constant_term<T: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        solution: &TreeTN<Id, Symm, V>,
+        ket_state: &TreeTN<Id, Symm, V>,
+        topology: &T,
+    ) -> Result<TensorDynLen<Id, Symm>> {
+        // For V_in = V_out case, use ket_state as bra_state
+        self.local_constant_term_with_bra(region, ket_state, ket_state, topology)
+    }
+
+    /// Compute the local constant term `<b|_local` for the given region with explicit bra state.
+    ///
+    /// For V_in ≠ V_out case, provides a reference state in V_out for environment computation.
+    ///
+    /// # Arguments
+    /// * `region` - The nodes in the local update region
+    /// * `ket_state` - The current solution state (in V_in)
+    /// * `bra_state` - Reference state for bra in environment computation (in V_out)
+    /// * `topology` - The network topology
+    pub fn local_constant_term_with_bra<T: NetworkTopology<V>>(
+        &mut self,
+        region: &[V],
+        _ket_state: &TreeTN<Id, Symm, V>,
+        bra_state: &TreeTN<Id, Symm, V>,
         topology: &T,
     ) -> Result<TensorDynLen<Id, Symm>> {
         // Ensure environments are computed
-        self.ensure_environments(region, solution, topology)?;
+        self.ensure_environments(region, bra_state, topology)?;
 
         // Collect all tensors to contract: local RHS tensors + environments
         let mut all_tensors: Vec<TensorDynLen<Id, Symm>> = Vec::new();
@@ -101,16 +128,19 @@ where
     }
 
     /// Ensure environments are computed for neighbors of the region.
+    ///
+    /// # Arguments
+    /// * `bra_state` - Reference state in V_out for environment computation
     fn ensure_environments<T: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        solution: &TreeTN<Id, Symm, V>,
+        bra_state: &TreeTN<Id, Symm, V>,
         topology: &T,
     ) -> Result<()> {
         for node in region {
             for neighbor in topology.neighbors(node) {
                 if !region.contains(&neighbor) && !self.envs.contains(&neighbor, node) {
-                    let env = self.compute_environment(&neighbor, node, solution, topology)?;
+                    let env = self.compute_environment(&neighbor, node, bra_state, topology)?;
                     self.envs.insert(neighbor.clone(), node.clone(), env);
                 }
             }
@@ -119,11 +149,16 @@ where
     }
 
     /// Recursively compute environment for edge (from, to).
+    ///
+    /// Computes `<b|ref_out>` partial contraction at node `from`.
+    ///
+    /// # Arguments
+    /// * `bra_state` - Reference state in V_out for environment computation
     fn compute_environment<T: NetworkTopology<V>>(
         &mut self,
         from: &V,
         to: &V,
-        solution: &TreeTN<Id, Symm, V>,
+        bra_state: &TreeTN<Id, Symm, V>,
         topology: &T,
     ) -> Result<TensorDynLen<Id, Symm>> {
         // First, ensure child environments are computed
@@ -134,7 +169,7 @@ where
 
         for child in &child_neighbors {
             if !self.envs.contains(child, from) {
-                let child_env = self.compute_environment(child, from, solution, topology)?;
+                let child_env = self.compute_environment(child, from, bra_state, topology)?;
                 self.envs.insert(child.clone(), from.clone(), child_env);
             }
         }
@@ -145,26 +180,26 @@ where
             .filter_map(|child| self.envs.get(child, from).cloned())
             .collect();
 
-        // Contract bra (RHS) with ket (solution) at this node
+        // Contract bra (RHS) with ket (bra_state as reference) at this node
         let node_idx_bra = self.rhs
             .node_index(from)
             .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in RHS", from))?;
-        let node_idx_ket = solution
+        let node_idx_ket = bra_state
             .node_index(from)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in solution", from))?;
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in bra_state", from))?;
 
         let tensor_bra = self.rhs
             .tensor(node_idx_bra)
             .ok_or_else(|| anyhow::anyhow!("Tensor not found in RHS"))?;
-        let tensor_ket = solution
+        let tensor_ket = bra_state
             .tensor(node_idx_ket)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found in solution"))?;
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found in bra_state"))?;
 
         let bra_conj = tensor_bra.conj();
 
         // Find common site indices (contract only over site indices, not bond indices)
         let site_space_bra = self.rhs.site_space(from).cloned().unwrap_or_default();
-        let site_space_ket = solution.site_space(from).cloned().unwrap_or_default();
+        let site_space_ket = bra_state.site_space(from).cloned().unwrap_or_default();
 
         let common_site_pairs: Vec<_> = site_space_bra
             .iter()
