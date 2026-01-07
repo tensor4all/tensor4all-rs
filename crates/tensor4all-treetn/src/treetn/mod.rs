@@ -51,7 +51,9 @@ pub use contraction::{
 // Re-export linsolve types
 pub use linsolve::{
     EnvironmentCache, NetworkTopology,
+    IndexMapping, LinearOperator,
     LinsolveOptions, LinsolveUpdater, LinsolveResult,
+    LinsolveVerifyReport, NodeVerifyDetail,
     ProjectedOperator, ProjectedState,
     linsolve,
 };

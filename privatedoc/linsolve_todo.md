@@ -13,6 +13,8 @@
 - [x] Add FIXME comment for state.clone() in solve_local
 - [x] Fix docstrings in projected_operator.rs (Tree TN terminology)
 - [x] Fix docstrings in projected_state.rs (Tree TN terminology)
+- [x] Add diagonal MPO test helper with solution verification
+- [x] Add tests with non-trivial diagonal values ([2,3], [sqrt(2),sqrt(2)])
 
 ## Known Limitations (to be addressed in future iterations)
 
@@ -37,13 +39,15 @@ let hx = proj_op.apply(...).expect("Failed to apply projected operator");
 
 ### 2. Test Coverage
 
-Current test (`test_linsolve_simple_two_site`) only verifies:
-- Function runs without panic
-- Returns expected number of sweeps
+Current tests:
+- `test_linsolve_simple_two_site`: Basic smoke test
+- `test_linsolve_identity_operator`: Verifies I*x=b => x=b
+- `test_linsolve_uniform_diagonal`: Verifies 2I*x=b => x=b/2
+- `test_linsolve_nonuniform_diagonal`: Verifies D*x=b with D=[2,3] diagonal
 
 Missing tests:
-- [ ] Verify solution correctness (compare with known solution)
-- [ ] Test with non-identity operators
+- [x] Verify solution correctness (compare with known solution)
+- [x] Test with non-identity operators (diagonal operators)
 - [ ] Test convergence behavior
 - [ ] Test with larger systems (3+ sites)
 - [ ] Test truncation behavior

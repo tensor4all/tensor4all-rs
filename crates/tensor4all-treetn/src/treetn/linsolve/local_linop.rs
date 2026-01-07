@@ -12,47 +12,9 @@ use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
 use tensor4all_core::storage::{DenseStorageF64, StorageScalar};
 use tensor4all_core::{Storage, TensorDynLen};
 
-use super::environment::NetworkTopology;
+use super::linear_operator::LinearOperator;
 use super::projected_operator::ProjectedOperator;
 use crate::treetn::TreeTN;
-
-/// Simple topology stored as adjacency list.
-#[derive(Clone, Debug)]
-pub struct StaticTopology<V> {
-    /// Adjacency list: node -> neighbors
-    adjacency: std::collections::HashMap<V, Vec<V>>,
-}
-
-impl<V: Clone + Hash + Eq> StaticTopology<V> {
-    /// Create from a TreeTN's topology.
-    pub fn from_treetn<Id, Symm>(treetn: &TreeTN<Id, Symm, V>) -> Self
-    where
-        Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-        Symm: Clone + Symmetry + std::fmt::Debug,
-        V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-    {
-        let mut adjacency = std::collections::HashMap::new();
-        for node in treetn.site_index_network().node_names() {
-            let neighbors: Vec<V> = treetn
-                .site_index_network()
-                .neighbors(node)
-                .collect();
-            adjacency.insert(node.clone(), neighbors);
-        }
-        Self { adjacency }
-    }
-}
-
-impl<V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug> NetworkTopology<V> for StaticTopology<V> {
-    type Neighbors<'a> = std::iter::Cloned<std::slice::Iter<'a, V>> where V: 'a;
-
-    fn neighbors(&self, node: &V) -> Self::Neighbors<'_> {
-        self.adjacency
-            .get(node)
-            .map(|v| v.iter().cloned())
-            .unwrap_or_else(|| [].iter().cloned())
-    }
-}
 
 /// LocalLinOp: Wraps the projected operator for use with kryst GMRES.
 ///
@@ -68,12 +30,12 @@ where
 {
     /// The projected operator (shared, mutable for environment caching)
     pub projected_operator: Arc<RwLock<ProjectedOperator<Id, Symm, V>>>,
+    /// Linear operator with index mapping (optional, used when available)
+    pub linear_operator: Option<Arc<LinearOperator<Id, Symm, V>>>,
     /// The region being updated
     pub region: Vec<V>,
     /// Current state for environment computation (cloned to own)
     pub state: TreeTN<Id, Symm, V>,
-    /// Network topology (static/owned)
-    pub topology: StaticTopology<V>,
     /// Template tensor (stores index structure for reshaping)
     pub template: TensorDynLen<Id, Symm>,
     /// Coefficient a₀
@@ -95,7 +57,6 @@ where
         projected_operator: Arc<RwLock<ProjectedOperator<Id, Symm, V>>>,
         region: Vec<V>,
         state: TreeTN<Id, Symm, V>,
-        topology: StaticTopology<V>,
         template: TensorDynLen<Id, Symm>,
         a0: f64,
         a1: f64,
@@ -109,9 +70,38 @@ where
 
         Self {
             projected_operator,
+            linear_operator: None,
             region,
             state,
-            topology,
+            template,
+            a0,
+            a1,
+            dim,
+        }
+    }
+
+    /// Create a new LocalLinOp with a LinearOperator for index mapping.
+    pub fn with_linear_operator(
+        projected_operator: Arc<RwLock<ProjectedOperator<Id, Symm, V>>>,
+        linear_operator: Arc<LinearOperator<Id, Symm, V>>,
+        region: Vec<V>,
+        state: TreeTN<Id, Symm, V>,
+        template: TensorDynLen<Id, Symm>,
+        a0: f64,
+        a1: f64,
+    ) -> Self {
+        // Compute dimension from template
+        let dim: usize = template
+            .indices
+            .iter()
+            .map(|idx| idx.symm.total_dim())
+            .product();
+
+        Self {
+            projected_operator,
+            linear_operator: Some(linear_operator),
+            region,
+            state,
             template,
             a0,
             a1,
@@ -150,11 +140,22 @@ where
         // Convert x to tensor
         let x_tensor = self.array_to_tensor(x);
 
-        // Apply projected operator: H * x
-        let mut proj_op = self.projected_operator.write().unwrap();
-        let hx = proj_op
-            .apply(&x_tensor, &self.region, &self.state, &self.topology)
-            .expect("Failed to apply projected operator");
+        // Apply operator: H * x
+        // Use LinearOperator if available (handles index mapping correctly)
+        // Otherwise fall back to ProjectedOperator
+        let hx = if let Some(ref linear_op) = self.linear_operator {
+            // Use LinearOperator.apply_local for correct index handling
+            linear_op
+                .apply_local(&x_tensor, &self.region)
+                .expect("Failed to apply linear operator")
+        } else {
+            // Fall back to ProjectedOperator (legacy path)
+            // Use state's SiteIndexNetwork directly (implements NetworkTopology)
+            let mut proj_op = self.projected_operator.write().unwrap();
+            proj_op
+                .apply(&x_tensor, &self.region, &self.state, self.state.site_index_network())
+                .expect("Failed to apply projected operator")
+        };
 
         // Compute y = a₀ * x + a₁ * H * x
         let hx_data = self.tensor_to_array(&hx);

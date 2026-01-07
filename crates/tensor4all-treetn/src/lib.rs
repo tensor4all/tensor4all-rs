@@ -20,7 +20,9 @@ pub use treetn::{
     ContractionMethod, ContractionOptions, contract,
     // Linsolve exports
     EnvironmentCache, NetworkTopology,
+    IndexMapping, LinearOperator,
     LinsolveOptions, LinsolveUpdater, LinsolveResult,
+    LinsolveVerifyReport, NodeVerifyDetail,
     ProjectedOperator, ProjectedState,
     linsolve,
 };

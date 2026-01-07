@@ -23,6 +23,7 @@
 //! - Phys. Rev. B 72, 180403 (2005) - Noise term technique (not implemented in initial version)
 
 mod environment;
+mod linear_operator;
 mod local_linop;
 mod options;
 mod projected_operator;
@@ -30,10 +31,11 @@ mod projected_state;
 mod updater;
 
 pub use environment::{EnvironmentCache, NetworkTopology};
+pub use linear_operator::{IndexMapping, LinearOperator};
 pub use options::LinsolveOptions;
 pub use projected_operator::ProjectedOperator;
 pub use projected_state::ProjectedState;
-pub use updater::LinsolveUpdater;
+pub use updater::{LinsolveUpdater, LinsolveVerifyReport, NodeVerifyDetail};
 
 use std::hash::Hash;
 
@@ -66,8 +68,8 @@ where
 /// Validate that operator, rhs, and init have compatible structures for linsolve.
 ///
 /// Checks:
-/// 1. All three TreeTNs have the same tree topology (same node names and edges)
-/// 2. Site dimensions are compatible (operator has input/output indices matching state indices)
+/// 1. Operator can act on init (same topology)
+/// 2. Result of operator action has compatible site dimensions with rhs
 fn validate_linsolve_inputs<Id, Symm, V>(
     operator: &TreeTN<Id, Symm, V>,
     rhs: &TreeTN<Id, Symm, V>,
@@ -78,79 +80,20 @@ where
     Symm: Clone + Symmetry + PartialEq + std::fmt::Debug,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    // Check that all have the same node names
-    let op_nodes: std::collections::BTreeSet<_> = operator.site_index_network().node_names().into_iter().collect();
-    let rhs_nodes: std::collections::BTreeSet<_> = rhs.site_index_network().node_names().into_iter().collect();
-    let init_nodes: std::collections::BTreeSet<_> = init.site_index_network().node_names().into_iter().collect();
+    let init_network = init.site_index_network();
+    let op_network = operator.site_index_network();
+    let rhs_network = rhs.site_index_network();
 
-    if op_nodes != rhs_nodes {
+    // Check 1: Operator can act on init
+    let result_network = init_network
+        .apply_operator_topology(op_network)
+        .map_err(|e| anyhow::anyhow!("Operator cannot act on init: {}", e))?;
+
+    // Check 2: Result has compatible dimensions with rhs
+    if !result_network.compatible_site_dimensions(rhs_network) {
         return Err(anyhow::anyhow!(
-            "Operator and RHS have different node names. Operator: {:?}, RHS: {:?}",
-            op_nodes, rhs_nodes
+            "Result of operator action is not compatible with RHS"
         ));
-    }
-
-    if op_nodes != init_nodes {
-        return Err(anyhow::anyhow!(
-            "Operator and init have different node names. Operator: {:?}, Init: {:?}",
-            op_nodes, init_nodes
-        ));
-    }
-
-    // Check that rhs and init have the same topology (edges)
-    // We compare by checking neighbors for each node
-    for node in &rhs_nodes {
-        let rhs_neighbors: std::collections::BTreeSet<_> = rhs.site_index_network().neighbors(node).collect();
-        let init_neighbors: std::collections::BTreeSet<_> = init.site_index_network().neighbors(node).collect();
-
-        if rhs_neighbors != init_neighbors {
-            return Err(anyhow::anyhow!(
-                "RHS and init have different topology at node {:?}. RHS neighbors: {:?}, Init neighbors: {:?}",
-                node, rhs_neighbors, init_neighbors
-            ));
-        }
-    }
-
-    // Check site index compatibility
-    // For each node, the RHS and init should have site indices with matching dimensions
-    for node in &rhs_nodes {
-        let rhs_site = rhs.site_space(node);
-        let init_site = init.site_space(node);
-
-        match (rhs_site, init_site) {
-            (Some(rhs_s), Some(init_s)) => {
-                // Check that dimensions match (not necessarily same IDs)
-                let rhs_dims: Vec<_> = rhs_s.iter().map(|idx| idx.symm.total_dim()).collect();
-                let init_dims: Vec<_> = init_s.iter().map(|idx| idx.symm.total_dim()).collect();
-
-                if rhs_dims.len() != init_dims.len() {
-                    return Err(anyhow::anyhow!(
-                        "RHS and init have different number of site indices at node {:?}. RHS: {}, Init: {}",
-                        node, rhs_dims.len(), init_dims.len()
-                    ));
-                }
-
-                // Sort dimensions to compare (order may differ)
-                let mut rhs_dims_sorted = rhs_dims.clone();
-                let mut init_dims_sorted = init_dims.clone();
-                rhs_dims_sorted.sort();
-                init_dims_sorted.sort();
-
-                if rhs_dims_sorted != init_dims_sorted {
-                    return Err(anyhow::anyhow!(
-                        "RHS and init have incompatible site dimensions at node {:?}. RHS: {:?}, Init: {:?}",
-                        node, rhs_dims, init_dims
-                    ));
-                }
-            }
-            (None, None) => {} // Both have no site indices, OK
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "RHS and init have mismatched site space presence at node {:?}",
-                    node
-                ));
-            }
-        }
     }
 
     Ok(())

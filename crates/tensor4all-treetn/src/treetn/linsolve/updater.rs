@@ -16,47 +16,90 @@ use kryst::utils::convergence::ConvergedReason;
 
 use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
 use tensor4all_core::storage::{DenseStorageF64, StorageScalar};
-use tensor4all_core::{factorize, Canonical, FactorizeOptions, Storage, TensorDynLen};
+use tensor4all_core::{contract_multi, FactorizeAlg, Storage, TensorDynLen};
 
-use super::environment::NetworkTopology;
-use super::local_linop::{LocalLinOp, StaticTopology};
+use super::linear_operator::LinearOperator;
+use crate::treetn::decompose::{TreeTopology, factorize_tensor_to_treetn_with};
+use super::local_linop::LocalLinOp;
 use super::options::LinsolveOptions;
 use super::projected_operator::ProjectedOperator;
 use super::projected_state::ProjectedState;
 use crate::treetn::localupdate::{LocalUpdateStep, LocalUpdater};
 use crate::treetn::TreeTN;
 
-/// Adapter to implement NetworkTopology for TreeTN's SiteIndexNetwork.
-pub struct TreeTNTopology<'a, Id, Symm, V>
-where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
-    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-{
-    treetn: &'a TreeTN<Id, Symm, V>,
+/// Report from LinsolveUpdater::verify().
+#[derive(Debug, Clone)]
+pub struct LinsolveVerifyReport<V> {
+    /// Whether the configuration is valid
+    pub is_valid: bool,
+    /// Errors that would prevent linsolve from working
+    pub errors: Vec<String>,
+    /// Warnings that might indicate issues
+    pub warnings: Vec<String>,
+    /// Per-node details
+    pub node_details: Vec<NodeVerifyDetail<V>>,
 }
 
-impl<'a, Id, Symm, V> TreeTNTopology<'a, Id, Symm, V>
-where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
-    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-{
-    pub fn new(treetn: &'a TreeTN<Id, Symm, V>) -> Self {
-        Self { treetn }
+impl<V> Default for LinsolveVerifyReport<V> {
+    fn default() -> Self {
+        Self {
+            is_valid: false,
+            errors: Vec::new(),
+            warnings: Vec::new(),
+            node_details: Vec::new(),
+        }
     }
 }
 
-impl<'a, Id, Symm, V> NetworkTopology<V> for TreeTNTopology<'a, Id, Symm, V>
-where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
-    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-{
-    type Neighbors<'b> = Box<dyn Iterator<Item = V> + 'b> where Self: 'b, V: 'b;
+/// Per-node verification details.
+#[derive(Debug, Clone)]
+pub struct NodeVerifyDetail<V> {
+    /// Node name
+    pub node: V,
+    /// State's site space index IDs
+    pub state_site_indices: Vec<String>,
+    /// Operator's site space index IDs
+    pub op_site_indices: Vec<String>,
+    /// State tensor's all index IDs with dimensions
+    pub state_tensor_indices: Vec<String>,
+    /// Operator tensor's all index IDs with dimensions
+    pub op_tensor_indices: Vec<String>,
+    /// Number of common indices between state and operator
+    pub common_index_count: usize,
+}
 
-    fn neighbors(&self, node: &V) -> Self::Neighbors<'_> {
-        Box::new(self.treetn.site_index_network().neighbors(node))
+impl<V: std::fmt::Debug> std::fmt::Display for LinsolveVerifyReport<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "LinsolveVerifyReport:")?;
+        writeln!(f, "  Valid: {}", self.is_valid)?;
+
+        if !self.errors.is_empty() {
+            writeln!(f, "  Errors:")?;
+            for err in &self.errors {
+                writeln!(f, "    - {}", err)?;
+            }
+        }
+
+        if !self.warnings.is_empty() {
+            writeln!(f, "  Warnings:")?;
+            for warn in &self.warnings {
+                writeln!(f, "    - {}", warn)?;
+            }
+        }
+
+        if !self.node_details.is_empty() {
+            writeln!(f, "  Node Details:")?;
+            for detail in &self.node_details {
+                writeln!(f, "    {:?}:", detail.node)?;
+                writeln!(f, "      State site indices: {:?}", detail.state_site_indices)?;
+                writeln!(f, "      Op site indices: {:?}", detail.op_site_indices)?;
+                writeln!(f, "      State tensor indices: {:?}", detail.state_tensor_indices)?;
+                writeln!(f, "      Op tensor indices: {:?}", detail.op_tensor_indices)?;
+                writeln!(f, "      Common index count: {}", detail.common_index_count)?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -75,6 +118,8 @@ where
 {
     /// Projected operator (3-chain), wrapped in Arc<RwLock> for GMRES
     pub projected_operator: Arc<RwLock<ProjectedOperator<Id, Symm, V>>>,
+    /// Linear operator with index mapping (handles s_in/s_out correctly)
+    pub linear_operator: Option<Arc<LinearOperator<Id, Symm, V>>>,
     /// Projected state for RHS (2-chain)
     pub projected_state: ProjectedState<Id, Symm, V>,
     /// Solver options
@@ -95,9 +140,284 @@ where
     ) -> Self {
         Self {
             projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
+            linear_operator: None,
             projected_state: ProjectedState::new(rhs),
             options,
         }
+    }
+
+    /// Create a new LinsolveUpdater with a LinearOperator for correct index handling.
+    ///
+    /// The LinearOperator wraps the MPO and handles the mapping between:
+    /// - True site indices (from state x and b)
+    /// - Internal MPO indices (s_in_tmp, s_out_tmp)
+    ///
+    /// This is required when the MPO uses independent indices for input/output
+    /// (which is necessary because a tensor cannot have two indices with the same ID).
+    pub fn with_linear_operator(
+        linear_operator: LinearOperator<Id, Symm, V>,
+        rhs: TreeTN<Id, Symm, V>,
+        options: LinsolveOptions,
+    ) -> Self {
+        let operator = linear_operator.mpo.clone();
+        Self {
+            projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
+            linear_operator: Some(Arc::new(linear_operator)),
+            projected_state: ProjectedState::new(rhs),
+            options,
+        }
+    }
+
+    /// Verify internal data consistency between operator, RHS, and state.
+    ///
+    /// This function checks that:
+    /// 1. The operator's site space structure is compatible with the state
+    /// 2. The operator's input indices can match the state's site indices
+    /// 3. Environment computation requirements are satisfiable
+    ///
+    /// Returns a detailed report of any inconsistencies found.
+    pub fn verify(
+        &self,
+        state: &TreeTN<Id, Symm, V>,
+    ) -> Result<LinsolveVerifyReport<V>> {
+        let mut report = LinsolveVerifyReport::default();
+
+        let proj_op = self.projected_operator.read().unwrap();
+        let operator = &proj_op.operator;
+        let rhs = &self.projected_state.rhs;
+
+        // Check node consistency
+        let state_nodes: std::collections::BTreeSet<_> =
+            state.site_index_network().node_names().into_iter().collect();
+        let op_nodes: std::collections::BTreeSet<_> =
+            operator.site_index_network().node_names().into_iter().collect();
+        let rhs_nodes: std::collections::BTreeSet<_> =
+            rhs.site_index_network().node_names().into_iter().collect();
+
+        if state_nodes != op_nodes {
+            report.errors.push(format!(
+                "State and operator have different node sets. State: {:?}, Operator: {:?}",
+                state_nodes, op_nodes
+            ));
+        }
+
+        if state_nodes != rhs_nodes {
+            report.errors.push(format!(
+                "State and RHS have different node sets. State: {:?}, RHS: {:?}",
+                state_nodes, rhs_nodes
+            ));
+        }
+
+        // Check site index compatibility per node
+        for node in &state_nodes {
+            let state_site = state.site_space(node);
+            let op_site = operator.site_space(node);
+            let _rhs_site = rhs.site_space(node);
+
+            // Get state tensor indices
+            if let Some(state_idx) = state.node_index(node) {
+                if let Some(state_tensor) = state.tensor(state_idx) {
+                    let state_indices: Vec<_> = state_tensor
+                        .indices
+                        .iter()
+                        .map(|idx| (idx.id.clone(), idx.symm.total_dim()))
+                        .collect();
+
+                    // Get operator tensor indices
+                    if let Some(op_idx) = operator.node_index(node) {
+                        if let Some(op_tensor) = operator.tensor(op_idx) {
+                            let op_indices: Vec<_> = op_tensor
+                                .indices
+                                .iter()
+                                .map(|idx| (idx.id.clone(), idx.symm.total_dim()))
+                                .collect();
+
+                            // Check for common indices (should have at least bond indices)
+                            let common_count = state_indices
+                                .iter()
+                                .filter(|(id, _)| op_indices.iter().any(|(oid, _)| oid == id))
+                                .count();
+
+                            report.node_details.push(NodeVerifyDetail {
+                                node: (*node).clone(),
+                                state_site_indices: state_site
+                                    .map(|s| s.iter().map(|i| format!("{:?}", i.id)).collect())
+                                    .unwrap_or_default(),
+                                op_site_indices: op_site
+                                    .map(|s| s.iter().map(|i| format!("{:?}", i.id)).collect())
+                                    .unwrap_or_default(),
+                                state_tensor_indices: state_indices
+                                    .iter()
+                                    .map(|(id, dim)| format!("{:?}(dim={})", id, dim))
+                                    .collect(),
+                                op_tensor_indices: op_indices
+                                    .iter()
+                                    .map(|(id, dim)| format!("{:?}(dim={})", id, dim))
+                                    .collect(),
+                                common_index_count: common_count,
+                            });
+
+                            // Warn if no site indices in common (expected for MPO)
+                            // In proper MPO structure, operator should have input indices
+                            // that match state's site indices
+                            if common_count == 0 {
+                                report.warnings.push(format!(
+                                    "Node {:?}: No common indices between state and operator tensors. \
+                                     State has {:?}, operator has {:?}",
+                                    node, state_indices, op_indices
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Final verdict
+        report.is_valid = report.errors.is_empty();
+
+        Ok(report)
+    }
+
+    /// Contract all tensors in the region into a single local tensor.
+    fn contract_region(
+        &self,
+        subtree: &TreeTN<Id, Symm, V>,
+        region: &[V],
+    ) -> Result<TensorDynLen<Id, Symm>> {
+        if region.is_empty() {
+            return Err(anyhow::anyhow!("Region cannot be empty"));
+        }
+
+        // Collect all tensors in the region
+        let tensors: Vec<TensorDynLen<Id, Symm>> = region
+            .iter()
+            .map(|node| {
+                let idx = subtree.node_index(node)
+                    .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node))?;
+                subtree.tensor(idx)
+                    .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node))
+                    .map(|t| t.clone())
+            })
+            .collect::<Result<_>>()?;
+
+        // Use contract_multi for optimal contraction ordering
+        contract_multi(&tensors)
+    }
+
+    /// Build TreeTopology for the subtree region from the solved tensor.
+    ///
+    /// Maps each node to the positions of its indices in the solved tensor.
+    fn build_subtree_topology(
+        &self,
+        solved_tensor: &TensorDynLen<Id, Symm>,
+        region: &[V],
+        full_treetn: &TreeTN<Id, Symm, V>,
+    ) -> Result<TreeTopology<V>> {
+        use std::collections::HashMap;
+
+        let mut nodes: HashMap<V, Vec<usize>> = HashMap::new();
+        let mut edges: Vec<(V, V)> = Vec::new();
+
+        // For each node in the region, find which indices belong to it
+        for node in region {
+            let mut positions = Vec::new();
+
+            // Get site indices for this node
+            if let Some(site_indices) = full_treetn.site_space(node) {
+                for site_idx in site_indices {
+                    // Find position in solved_tensor
+                    if let Some(pos) = solved_tensor
+                        .indices
+                        .iter()
+                        .position(|idx| idx.id == site_idx.id)
+                    {
+                        positions.push(pos);
+                    }
+                }
+            }
+
+            // Get bond indices to neighbors outside the region
+            for neighbor in full_treetn.site_index_network().neighbors(node) {
+                if !region.contains(&neighbor) {
+                    // This is an external neighbor - the bond belongs to this node
+                    if let Some(edge) = full_treetn.edge_between(node, &neighbor) {
+                        if let Some(bond) = full_treetn.bond_index(edge) {
+                            if let Some(pos) = solved_tensor
+                                .indices
+                                .iter()
+                                .position(|idx| idx.id == bond.id)
+                            {
+                                positions.push(pos);
+                            }
+                        }
+                    }
+                }
+            }
+
+            nodes.insert(node.clone(), positions);
+        }
+
+        // Build edges between nodes in the region
+        for (i, node_a) in region.iter().enumerate() {
+            for node_b in region.iter().skip(i + 1) {
+                if full_treetn.edge_between(node_a, node_b).is_some() {
+                    edges.push((node_a.clone(), node_b.clone()));
+                }
+            }
+        }
+
+        Ok(TreeTopology::new(nodes, edges))
+    }
+
+    /// Copy decomposed tensors back to subtree, preserving original bond IDs.
+    fn copy_decomposed_to_subtree(
+        &self,
+        subtree: &mut TreeTN<Id, Symm, V>,
+        decomposed: &TreeTN<Id, Symm, V>,
+        region: &[V],
+        full_treetn: &TreeTN<Id, Symm, V>,
+    ) -> Result<()> {
+        // For each node in the region, update its tensor in subtree
+        for node in region {
+            let decomp_idx = decomposed.node_index(node)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in decomposed TreeTN", node))?;
+            let mut new_tensor = decomposed.tensor(decomp_idx).unwrap().clone();
+
+            // Replace bond indices to preserve original IDs
+            for neighbor in full_treetn.site_index_network().neighbors(node) {
+                if region.contains(&neighbor) {
+                    // Internal bond - need to find and replace the new bond ID
+                    if let Some(orig_edge) = subtree.edge_between(node, &neighbor) {
+                        if let Some(orig_bond) = subtree.bond_index(orig_edge) {
+                            // Find the decomposed edge bond
+                            if let Some(decomp_edge) = decomposed.edge_between(node, &neighbor) {
+                                if let Some(decomp_bond) = decomposed.bond_index(decomp_edge) {
+                                    // Create preserved bond with original ID but new dimension
+                                    let preserved_bond = Index::new_with_tags(
+                                        orig_bond.id.clone(),
+                                        decomp_bond.symm.clone(),
+                                        orig_bond.tags.clone(),
+                                    );
+                                    new_tensor = new_tensor.replaceind(decomp_bond, &preserved_bond);
+
+                                    // Update the edge bond in subtree (only once per edge)
+                                    if node < &neighbor {
+                                        subtree.replace_edge_bond(orig_edge, preserved_bond)?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Update the tensor in subtree
+            let subtree_idx = subtree.node_index(node).unwrap();
+            subtree.replace_tensor(subtree_idx, new_tensor)?;
+        }
+
+        Ok(())
     }
 
     /// Solve the local linear problem using GMRES.
@@ -109,10 +429,11 @@ where
         init: &TensorDynLen<Id, Symm>,
         state: &TreeTN<Id, Symm, V>,
     ) -> Result<TensorDynLen<Id, Symm>> {
-        let topology = TreeTNTopology::new(state);
+        // Use state's SiteIndexNetwork directly (implements NetworkTopology)
+        let topology = state.site_index_network();
 
         // Get local RHS: <b|_local
-        let rhs_local = self.projected_state.local_constant_term(region, state, &topology)?;
+        let rhs_local = self.projected_state.local_constant_term(region, state, topology)?;
 
         // Compute local dimension
         let dim: usize = init
@@ -131,24 +452,34 @@ where
             .map_err(|e| anyhow::anyhow!("Init storage error: {}", e))?
             .to_vec();
 
-        // Create static topology for ownership
-        let static_topology = StaticTopology::from_treetn(state);
-
         // FIXME: state.clone() is inefficient for large states.
         // This is required because kryst's LinOp trait requires 'static lifetime,
         // so LocalLinOp must own all its data. Consider:
         // - Using Rc<RefCell<>> or Arc<RwLock<>> for shared state
         // - Restructuring to avoid repeated clones per sweep step
         // - Caching the LocalLinOp between calls if state hasn't changed
-        let linop = LocalLinOp::new(
-            Arc::clone(&self.projected_operator),
-            region.to_vec(),
-            state.clone(),
-            static_topology,
-            init.clone(),
-            self.options.a0,
-            self.options.a1,
-        );
+        let linop = if let Some(ref linear_op) = self.linear_operator {
+            // Use LinearOperator for correct index handling
+            LocalLinOp::with_linear_operator(
+                Arc::clone(&self.projected_operator),
+                Arc::clone(linear_op),
+                region.to_vec(),
+                state.clone(),
+                init.clone(),
+                self.options.a0,
+                self.options.a1,
+            )
+        } else {
+            // Legacy path without LinearOperator
+            LocalLinOp::new(
+                Arc::clone(&self.projected_operator),
+                region.to_vec(),
+                state.clone(),
+                init.clone(),
+                self.options.a0,
+                self.options.a1,
+            )
+        };
 
         // Create GMRES solver
         let mut solver = GmresSolver::new(
@@ -205,110 +536,22 @@ where
         step: &LocalUpdateStep<V>,
         full_treetn: &TreeTN<Id, Symm, V>,
     ) -> Result<TreeTN<Id, Symm, V>> {
-        // LinsolveUpdater is designed for nsite=2
-        if step.nodes.len() != 2 {
-            return Err(anyhow::anyhow!(
-                "LinsolveUpdater requires exactly 2 nodes, got {}",
-                step.nodes.len()
-            ));
-        }
+        // Contract tensors in the region into a single local tensor
+        let init_local = self.contract_region(&subtree, &step.nodes)?;
 
-        let node_u = &step.nodes[0];
-        let node_v = &step.nodes[1];
-
-        // Get current local tensor (contracted 2-site tensor)
-        let idx_u = subtree.node_index(node_u).unwrap();
-        let idx_v = subtree.node_index(node_v).unwrap();
-        let tensor_u = subtree.tensor(idx_u).unwrap();
-        let tensor_v = subtree.tensor(idx_v).unwrap();
-
-        // Contract u and v tensors
-        let edge_uv = subtree.edge_between(node_u, node_v).unwrap();
-        let bond_uv = subtree.bond_index(edge_uv).unwrap();
-
-        let contract_inds: Vec<_> = tensor_u
-            .indices
-            .iter()
-            .filter_map(|idx| {
-                if idx.id == bond_uv.id {
-                    tensor_v
-                        .indices
-                        .iter()
-                        .find(|idx_v| idx_v.id == bond_uv.id)
-                        .map(|idx_v| (idx.clone(), idx_v.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let init_local = tensor_u.tensordot(tensor_v, &contract_inds)?;
-
-        // Solve local linear problem
+        // Solve local linear problem using GMRES
         let solved_local = self.solve_local(&step.nodes, &init_local, full_treetn)?;
 
-        // Factorize to get new tensors for u and v
-        let site_c_u = full_treetn.site_space(node_u).cloned().unwrap_or_default();
-        let left_inds: Vec<_> = solved_local
-            .indices
-            .iter()
-            .filter(|idx| {
-                // Keep site indices of u and link indices to u's other neighbors
-                site_c_u.iter().any(|s| s.id == idx.id)
-                    || full_treetn
-                        .site_index_network()
-                        .neighbors(node_u)
-                        .filter(|n| n != node_v)
-                        .any(|neighbor| {
-                            full_treetn
-                                .edge_between(node_u, &neighbor)
-                                .and_then(|e| full_treetn.bond_index(e))
-                                .map(|b| b.id == idx.id)
-                                .unwrap_or(false)
-                        })
-            })
-            .cloned()
-            .collect();
+        // Build TreeTopology for the subtree region
+        let topology = self.build_subtree_topology(&solved_local, &step.nodes, full_treetn)?;
 
-        // Set up factorization options
-        let mut options = FactorizeOptions::svd().with_canonical(Canonical::Left);
+        // Decompose solved tensor back into TreeTN using factorize_tensor_to_treetn
+        let decomposed = factorize_tensor_to_treetn_with(&solved_local, &topology, FactorizeAlg::SVD)?;
 
-        if let Some(max_rank) = self.options.truncation.max_rank {
-            options = options.with_max_rank(max_rank);
-        }
-        if let Some(rtol) = self.options.truncation.rtol {
-            options = options.with_rtol(rtol);
-        }
+        // Copy decomposed tensors back to subtree, preserving original bond IDs
+        self.copy_decomposed_to_subtree(&mut subtree, &decomposed, &step.nodes, full_treetn)?;
 
-        // Factorize
-        let factorize_result = factorize(&solved_local, &left_inds, &options)
-            .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?;
-
-        let new_tensor_u = factorize_result.left;
-        let new_tensor_v = factorize_result.right;
-        let new_bond = factorize_result.bond_index;
-
-        // Preserve original bond index ID
-        let old_bond = subtree.bond_index(edge_uv).unwrap().clone();
-        let preserved_bond = Index::new_with_tags(
-            old_bond.id.clone(),
-            new_bond.symm.clone(),
-            old_bond.tags.clone(),
-        );
-
-        let new_tensor_u = new_tensor_u.replaceind(&new_bond, &preserved_bond);
-        let new_tensor_v = new_tensor_v.replaceind(&new_bond, &preserved_bond);
-
-        // Update subtree
-        let idx_u_sub = subtree.node_index(node_u).unwrap();
-        let idx_v_sub = subtree.node_index(node_v).unwrap();
-
-        subtree.replace_edge_bond(edge_uv, preserved_bond.clone())?;
-        subtree.replace_tensor(idx_u_sub, new_tensor_u)?;
-        subtree.replace_tensor(idx_v_sub, new_tensor_v)?;
-
-        // Set ortho_towards
-        subtree.set_ortho_towards(&preserved_bond.id, Some(step.new_center.clone()));
+        // Set canonical center
         subtree.set_canonical_center([step.new_center.clone()])?;
 
         Ok(subtree)
@@ -319,14 +562,15 @@ where
         step: &LocalUpdateStep<V>,
         full_treetn_after: &TreeTN<Id, Symm, V>,
     ) -> Result<()> {
-        let topology = TreeTNTopology::new(full_treetn_after);
+        // Use state's SiteIndexNetwork directly (implements NetworkTopology)
+        let topology = full_treetn_after.site_index_network();
 
         // Invalidate all caches affected by the updated region
         {
             let mut proj_op = self.projected_operator.write().unwrap();
-            proj_op.invalidate(&step.nodes, &topology);
+            proj_op.invalidate(&step.nodes, topology);
         }
-        self.projected_state.invalidate(&step.nodes, &topology);
+        self.projected_state.invalidate(&step.nodes, topology);
 
         Ok(())
     }

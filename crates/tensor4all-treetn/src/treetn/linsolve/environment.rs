@@ -4,10 +4,13 @@
 //! used in various algorithms (linsolve, fit, etc.).
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 
 use tensor4all_core::index::Symmetry;
 use tensor4all_core::TensorDynLen;
+
+use crate::SiteIndexNetwork;
 
 /// Trait for network topology, used for cache invalidation traversal.
 pub trait NetworkTopology<V> {
@@ -130,6 +133,32 @@ where
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ============================================================================
+// NetworkTopology implementations for SiteIndexNetwork
+// ============================================================================
+
+/// Implement NetworkTopology for SiteIndexNetwork.
+///
+/// This enables direct use of SiteIndexNetwork for cache invalidation
+/// and environment computation without needing adapter types like StaticTopology.
+impl<NodeName, Id, Symm, Tags> NetworkTopology<NodeName> for SiteIndexNetwork<NodeName, Id, Symm, Tags>
+where
+    NodeName: Clone + Hash + Eq + Send + Sync + Debug,
+    Id: Clone + Hash + Eq,
+    Symm: Clone + Symmetry,
+    Tags: Clone,
+{
+    type Neighbors<'a>
+        = Box<dyn Iterator<Item = NodeName> + 'a>
+    where
+        Self: 'a,
+        NodeName: 'a;
+
+    fn neighbors(&self, node: &NodeName) -> Self::Neighbors<'_> {
+        Box::new(SiteIndexNetwork::neighbors(self, node))
     }
 }
 

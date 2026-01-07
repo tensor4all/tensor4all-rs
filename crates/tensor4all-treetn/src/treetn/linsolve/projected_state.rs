@@ -7,7 +7,7 @@ use std::hash::Hash;
 use anyhow::Result;
 
 use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::{contract_multi, TensorDynLen};
 
 use super::environment::{EnvironmentCache, NetworkTopology};
 use crate::treetn::TreeTN;
@@ -46,8 +46,8 @@ where
 
 impl<Id, Symm, V> ProjectedState<Id, Symm, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
+    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     /// Create a new ProjectedState.
@@ -70,22 +70,10 @@ where
         // Ensure environments are computed
         self.ensure_environments(region, solution, topology)?;
 
-        // Collect environments from neighbors outside the region
-        let mut env_tensors: Vec<TensorDynLen<Id, Symm>> = Vec::new();
+        // Collect all tensors to contract: local RHS tensors + environments
+        let mut all_tensors: Vec<TensorDynLen<Id, Symm>> = Vec::new();
 
-        for node in region {
-            for neighbor in topology.neighbors(node) {
-                if !region.contains(&neighbor) {
-                    if let Some(env) = self.envs.get(&neighbor, node) {
-                        env_tensors.push(env.clone());
-                    }
-                }
-            }
-        }
-
-        // Contract local RHS tensors
-        let mut result: Option<TensorDynLen<Id, Symm>> = None;
-
+        // Collect local RHS tensors (conjugated)
         for node in region {
             let node_idx = self.rhs
                 .node_index(node)
@@ -94,44 +82,22 @@ where
                 .tensor(node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found in RHS"))?
                 .conj();
+            all_tensors.push(tensor);
+        }
 
-            result = Some(match result {
-                None => tensor,
-                Some(r) => {
-                    let common: Vec<_> = r
-                        .indices
-                        .iter()
-                        .filter_map(|idx_r| {
-                            tensor
-                                .indices
-                                .iter()
-                                .find(|idx_t| idx_r.id == idx_t.id)
-                                .map(|idx_t| (idx_r.clone(), idx_t.clone()))
-                        })
-                        .collect();
-                    r.tensordot(&tensor, &common)?
+        // Collect environments from neighbors outside the region
+        for node in region {
+            for neighbor in topology.neighbors(node) {
+                if !region.contains(&neighbor) {
+                    if let Some(env) = self.envs.get(&neighbor, node) {
+                        all_tensors.push(env.clone());
+                    }
                 }
-            });
+            }
         }
 
-        let mut result = result.ok_or_else(|| anyhow::anyhow!("Empty region"))?;
-
-        // Contract with environments
-        for env in env_tensors {
-            let common: Vec<_> = result
-                .indices
-                .iter()
-                .filter_map(|idx_r| {
-                    env.indices
-                        .iter()
-                        .find(|idx_e| idx_r.id == idx_e.id)
-                        .map(|idx_e| (idx_r.clone(), idx_e.clone()))
-                })
-                .collect();
-            result = result.tensordot(&env, &common)?;
-        }
-
-        Ok(result)
+        // Use contract_multi for optimal contraction ordering
+        contract_multi(&all_tensors)
     }
 
     /// Ensure environments are computed for neighbors of the region.
@@ -196,7 +162,7 @@ where
 
         let bra_conj = tensor_bra.conj();
 
-        // Find common site indices
+        // Find common site indices (contract only over site indices, not bond indices)
         let site_space_bra = self.rhs.site_space(from).cloned().unwrap_or_default();
         let site_space_ket = solution.site_space(from).cloned().unwrap_or_default();
 
@@ -210,30 +176,20 @@ where
             })
             .collect();
 
-        let mut result = if common_site_pairs.is_empty() {
+        let bra_ket = if common_site_pairs.is_empty() {
             bra_conj.tensordot(tensor_ket, &[])?
         } else {
             bra_conj.tensordot(tensor_ket, &common_site_pairs)?
         };
 
-        // Contract with child environments
-        for child_env in child_envs {
-            let common: Vec<_> = result
-                .indices
-                .iter()
-                .filter_map(|idx_r| {
-                    child_env
-                        .indices
-                        .iter()
-                        .find(|idx_e| idx_r.id == idx_e.id)
-                        .map(|idx_e| (idx_r.clone(), idx_e.clone()))
-                })
-                .collect();
-
-            result = result.tensordot(&child_env, &common)?;
+        // Contract bra*ket with child environments using contract_multi
+        if child_envs.is_empty() {
+            Ok(bra_ket)
+        } else {
+            let mut all_tensors = vec![bra_ket];
+            all_tensors.extend(child_envs);
+            contract_multi(&all_tensors)
         }
-
-        Ok(result)
     }
 
     /// Invalidate caches affected by updates to the given region.
