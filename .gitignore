@@ -26,7 +26,7 @@ Manifest.toml
 LocalPreferences.toml
 
 # Avoid accidentally committing ad-hoc analysis notes at repo root
-*_analysis.md
+*.md
 
-# Generated API documentation (regenerate with: cargo run -p api-dump -- . -o docs/api)
-docs/api/
+# Private documentation (not committed)
+privatedoc/*
