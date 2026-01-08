@@ -1,89 +1,115 @@
-//! Block data storage wrapping mdarray Tensor.
-//!
-//! `BlockedData` wraps mdarray's `Tensor<T, DynRank>` for N-dimensional block storage.
-//! All operations are delegated to mdarray.
+//! N-dimensional block data storage.
 
-use std::sync::Arc;
+use std::fmt::Debug;
 
-use mdarray::{DynRank, Tensor};
+use mdarray::expr::Expression;
+use mdarray::Tensor;
+use mdarray_linalg::matmul::{ContractBuilder, MatMul};
+use mdarray_linalg_faer::Faer;
 
 use crate::scalar::Scalar;
 
-/// Block data storage wrapping mdarray Tensor with dynamic rank.
+/// Trait for block data storage backends.
 ///
-/// This is a thin wrapper around mdarray's Tensor. All arithmetic and
-/// reshape operations are delegated to mdarray.
+/// This trait abstracts over different storage backends (CPU, GPU, etc.)
+/// allowing `BlockedArray` to work with any compatible implementation.
+pub trait BlockedDataLike<T: Scalar>: Debug + Clone {
+    /// Get the rank (number of dimensions).
+    fn rank(&self) -> usize;
+
+    /// Get the shape.
+    fn shape(&self) -> Vec<usize>;
+
+    /// Get the total number of elements.
+    fn len(&self) -> usize;
+
+    /// Check if empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Permute axes, returning a new owned instance.
+    fn permute(&self, perm: &[usize]) -> Self;
+
+    /// Reshape, returning a new owned instance.
+    fn reshape(&self, shape: &[usize]) -> Self;
+}
+
+/// N-dimensional block data storage using mdarray.
+///
+/// Wraps `mdarray::Tensor<T>` (dynamic rank) for block operations.
 #[derive(Debug, Clone)]
-pub struct BlockedData<T: Scalar>(Arc<Tensor<T, DynRank>>);
+pub struct BlockedData<T: Scalar> {
+    tensor: Tensor<T>,
+}
 
 impl<T: Scalar> BlockedData<T> {
-    /// Create from mdarray Tensor.
-    pub fn new(tensor: Tensor<T, DynRank>) -> Self {
-        Self(Arc::new(tensor))
+    /// Create a new BlockedData from a Tensor.
+    pub fn from_tensor(tensor: Tensor<T>) -> Self {
+        Self { tensor }
     }
 
-    /// Get reference to underlying mdarray Tensor.
-    pub fn as_tensor(&self) -> &Tensor<T, DynRank> {
-        &self.0
+    /// Matrix multiplication for 2D tensors.
+    ///
+    /// Computes C = A * B where A is (m, k) and B is (k, n).
+    /// Uses Faer backend for efficient BLAS-like operations.
+    ///
+    /// # Panics
+    /// - If either tensor is not 2D
+    /// - If inner dimensions don't match
+    pub fn matmul(&self, other: &Self) -> Self {
+        assert_eq!(self.rank(), 2, "matmul requires 2D tensors");
+        assert_eq!(other.rank(), 2, "matmul requires 2D tensors");
+        assert_eq!(
+            self.shape()[1],
+            other.shape()[0],
+            "Inner dimensions must match"
+        );
+
+        // Use Faer's contract_n for DynRank tensors (contracts last 1 axis of A with first 1 axis of B)
+        let tensor = Faer.contract_n(&self.tensor, &other.tensor, 1).eval();
+
+        Self { tensor }
     }
 
-    /// Get Arc reference for sharing.
-    pub fn arc(&self) -> Arc<Tensor<T, DynRank>> {
-        Arc::clone(&self.0)
+    /// Element-wise addition.
+    ///
+    /// Uses mdarray's expression system for efficient element-wise operations.
+    ///
+    /// # Panics
+    /// - If shapes don't match
+    pub fn add(&self, other: &Self) -> Self {
+        assert_eq!(self.shape(), other.shape(), "Shapes must match for addition");
+
+        // Use mdarray's zip expression for element-wise addition
+        let tensor = self.tensor.expr().zip(other.tensor.expr()).map(|(a, b)| *a + *b).eval();
+
+        Self { tensor }
     }
 }
 
-/// Helper to convert multi-dimensional index to linear index (row-major).
-pub fn multi_to_linear(idx: &[usize], shape: &[usize]) -> usize {
-    let mut linear = 0;
-    let mut stride = 1;
-    for i in (0..idx.len()).rev() {
-        linear += idx[i] * stride;
-        stride *= shape[i];
-    }
-    linear
-}
-
-/// Helper to convert linear index to multi-dimensional index (row-major).
-pub fn linear_to_multi(mut linear: usize, shape: &[usize]) -> Vec<usize> {
-    let mut idx = vec![0; shape.len()];
-    for i in (0..shape.len()).rev() {
-        idx[i] = linear % shape[i];
-        linear /= shape[i];
-    }
-    idx
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_multi_to_linear() {
-        // 2x3 array: [[0,1,2], [3,4,5]]
-        let shape = vec![2, 3];
-        assert_eq!(multi_to_linear(&[0, 0], &shape), 0);
-        assert_eq!(multi_to_linear(&[0, 2], &shape), 2);
-        assert_eq!(multi_to_linear(&[1, 0], &shape), 3);
-        assert_eq!(multi_to_linear(&[1, 2], &shape), 5);
+impl<T: Scalar> BlockedDataLike<T> for BlockedData<T> {
+    fn rank(&self) -> usize {
+        self.tensor.rank()
     }
 
-    #[test]
-    fn test_linear_to_multi() {
-        let shape = vec![2, 3];
-        assert_eq!(linear_to_multi(0, &shape), vec![0, 0]);
-        assert_eq!(linear_to_multi(2, &shape), vec![0, 2]);
-        assert_eq!(linear_to_multi(3, &shape), vec![1, 0]);
-        assert_eq!(linear_to_multi(5, &shape), vec![1, 2]);
+    fn shape(&self) -> Vec<usize> {
+        self.tensor.dims().to_vec()
     }
 
-    #[test]
-    fn test_3d_indexing() {
-        // 2x3x4 array
-        let shape = vec![2, 3, 4];
+    fn len(&self) -> usize {
+        self.tensor.len()
+    }
 
-        // [1, 2, 3] -> 1*12 + 2*4 + 3 = 23
-        assert_eq!(multi_to_linear(&[1, 2, 3], &shape), 23);
-        assert_eq!(linear_to_multi(23, &shape), vec![1, 2, 3]);
+    fn permute(&self, perm: &[usize]) -> Self {
+        let view = self.tensor.permute(perm);
+        let tensor = view.cloned().eval();
+        Self { tensor }
+    }
+
+    fn reshape(&self, shape: &[usize]) -> Self {
+        let view = self.tensor.reshape(shape);
+        let tensor = view.cloned().eval();
+        Self { tensor }
     }
 }

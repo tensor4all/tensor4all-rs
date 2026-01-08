@@ -10,6 +10,71 @@ use std::collections::{HashMap, HashSet};
 
 use crate::partition::{block_linear_index, block_multi_index, BlockIndex, BlockPartition};
 
+/// A plan for reshaping a block structure from one set of partitions to another.
+///
+/// This captures the mapping from old block indices to new block indices,
+/// allowing efficient reshape operations on both `BlockStructure` and `BlockedArray`.
+#[derive(Debug, Clone)]
+pub struct ReshapePlan {
+    /// Number of blocks per axis in the old structure.
+    pub old_num_blocks: Vec<usize>,
+    /// Number of blocks per axis in the new structure.
+    pub new_num_blocks: Vec<usize>,
+    /// Target partitions.
+    pub new_partitions: Vec<BlockPartition>,
+    /// Mapping from old linear block index to new linear block index.
+    pub block_mapping: HashMap<usize, usize>,
+}
+
+impl ReshapePlan {
+    /// Create a new reshape plan.
+    ///
+    /// The `nonzero_blocks` parameter specifies which old linear indices are non-zero
+    /// and should be included in the mapping.
+    pub fn new(
+        old_num_blocks: Vec<usize>,
+        new_partitions: Vec<BlockPartition>,
+        nonzero_blocks: &HashSet<usize>,
+    ) -> Self {
+        let new_num_blocks: Vec<usize> = new_partitions.iter().map(|p| p.num_blocks()).collect();
+
+        let block_mapping: HashMap<usize, usize> = nonzero_blocks
+            .iter()
+            .map(|&old_linear| {
+                let old_multi = block_multi_index(old_linear, &old_num_blocks);
+                let global_linear = block_linear_index(&old_multi, &old_num_blocks);
+                let new_multi = block_multi_index(global_linear, &new_num_blocks);
+                let new_linear = block_linear_index(&new_multi, &new_num_blocks);
+                (old_linear, new_linear)
+            })
+            .collect();
+
+        Self {
+            old_num_blocks,
+            new_num_blocks,
+            new_partitions,
+            block_mapping,
+        }
+    }
+
+    /// Get the new block shape for a given old linear block index.
+    pub fn new_block_shape(&self, old_linear: usize) -> Vec<usize> {
+        let new_linear = self.block_mapping.get(&old_linear)
+            .expect("Block not in mapping");
+        let new_multi = block_multi_index(*new_linear, &self.new_num_blocks);
+        new_multi
+            .iter()
+            .enumerate()
+            .map(|(axis, &idx)| self.new_partitions[axis].block_size(idx))
+            .collect()
+    }
+
+    /// Iterate over (old_linear, new_linear) pairs.
+    pub fn iter_mapping(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.block_mapping.iter().map(|(&old, &new)| (old, new))
+    }
+}
+
 /// Merge multiple partitions into one.
 ///
 /// Each combination of blocks from the input partitions becomes a single block
@@ -169,6 +234,17 @@ impl BlockStructure {
         self.shape().iter().product()
     }
 
+    /// Transform block indices according to a permutation.
+    ///
+    /// Takes a list of block indices and returns the transformed indices
+    /// after applying the permutation to the axes.
+    pub fn permute_block_indices(&self, indices: &[BlockIndex], perm: &[usize]) -> Vec<BlockIndex> {
+        indices
+            .iter()
+            .map(|idx| perm.iter().map(|&a| idx[a]).collect())
+            .collect()
+    }
+
     /// Permute axes.
     pub fn permute(&self, axes: &[usize]) -> Self {
         assert_eq!(axes.len(), self.rank(), "Axes length must match rank");
@@ -183,17 +259,15 @@ impl BlockStructure {
         );
 
         let new_partitions: Vec<_> = axes.iter().map(|&a| self.partitions[a].clone()).collect();
-        let orig_num_blocks = self.num_blocks();
-        let new_num_blocks: Vec<_> = axes.iter().map(|&a| orig_num_blocks[a]).collect();
+        let new_num_blocks: Vec<_> = new_partitions.iter().map(|p| p.num_blocks()).collect();
 
-        let new_nonzero: HashSet<usize> = self
-            .nonzero_blocks
+        // Transform block indices
+        let orig_indices: Vec<BlockIndex> = self.iter_nonzero_indices().collect();
+        let new_indices = self.permute_block_indices(&orig_indices, axes);
+
+        let new_nonzero: HashSet<usize> = new_indices
             .iter()
-            .map(|&linear| {
-                let orig_idx = block_multi_index(linear, &orig_num_blocks);
-                let permuted_idx: Vec<_> = axes.iter().map(|&a| orig_idx[a]).collect();
-                block_linear_index(&permuted_idx, &new_num_blocks)
-            })
+            .map(|idx| block_linear_index(idx, &new_num_blocks))
             .collect();
 
         Self {
@@ -210,20 +284,89 @@ impl BlockStructure {
             .map(move |&linear| block_multi_index(linear, &num_blocks))
     }
 
-    /// Reshape by merging consecutive axes.
+    /// Reshape to a new shape with trivial partitions.
     ///
-    /// This creates a new structure where groups of consecutive axes are merged.
-    /// For example, a 3D structure (i, j, k) can be reshaped to 2D (ij, k) by
-    /// calling `reshape(&[2, 1])` which merges the first 2 axes into 1.
+    /// This is a convenience method that creates trivial partitions (single block
+    /// per axis) for the new shape and delegates to `reshape_to`.
+    ///
+    /// # Arguments
+    /// * `new_shape` - Target shape
+    ///
+    /// # Panics
+    /// - If total elements don't match
+    pub fn reshape(&self, new_shape: &[usize]) -> Self {
+        let new_partitions: Vec<BlockPartition> = new_shape
+            .iter()
+            .map(|&dim| BlockPartition::trivial(dim))
+            .collect();
+        self.reshape_to(new_partitions)
+    }
+
+    /// Create a reshape plan for transforming to new partitions.
+    ///
+    /// The plan can be reused to reshape both `BlockStructure` and `BlockedArray`
+    /// with the same mapping.
+    ///
+    /// # Arguments
+    /// * `new_partitions` - Target partitions for each axis
+    ///
+    /// # Panics
+    /// - If total elements don't match
+    pub fn plan_reshape_to(&self, new_partitions: Vec<BlockPartition>) -> ReshapePlan {
+        // Verify total dims match
+        let old_total: usize = self.shape().iter().product();
+        let new_total: usize = new_partitions.iter().map(|p| p.total_dim()).product();
+        assert_eq!(
+            old_total, new_total,
+            "Total elements must match: {} vs {}",
+            old_total, new_total
+        );
+
+        ReshapePlan::new(self.num_blocks(), new_partitions, &self.nonzero_blocks)
+    }
+
+    /// Reshape using a pre-computed plan.
+    ///
+    /// This is more efficient when reshaping multiple arrays with the same
+    /// block structure, as the mapping is computed only once.
+    pub fn reshape_with_plan(&self, plan: &ReshapePlan) -> Self {
+        let new_nonzero: HashSet<usize> = plan.block_mapping.values().copied().collect();
+
+        Self {
+            partitions: plan.new_partitions.clone(),
+            nonzero_blocks: new_nonzero,
+        }
+    }
+
+    /// Reshape to new partitions (general reshape).
+    ///
+    /// This transforms the block structure to use new partitions.
+    /// Total elements must be preserved. Block indices are transformed
+    /// by mapping through linear indices in row-major order.
+    ///
+    /// # Arguments
+    /// * `new_partitions` - Target partitions for each axis
+    ///
+    /// # Panics
+    /// - If total elements don't match
+    pub fn reshape_to(&self, new_partitions: Vec<BlockPartition>) -> Self {
+        let plan = self.plan_reshape_to(new_partitions);
+        self.reshape_with_plan(&plan)
+    }
+
+    /// Compute merged partitions for grouping consecutive axes.
+    ///
+    /// This computes the target partitions when merging consecutive axes.
+    /// For example, with partitions for axes [i, j, k] and group_sizes [2, 1],
+    /// this returns [merged(i,j), k].
     ///
     /// # Arguments
     /// * `group_sizes` - Number of axes to merge for each output axis.
     ///   Sum must equal the current rank.
     ///
-    /// # Panics
-    /// - If sum of `group_sizes` doesn't equal current rank
-    /// - If any group size is zero
-    pub fn reshape(&self, group_sizes: &[usize]) -> Self {
+    /// # Returns
+    /// New partitions where each partition is the merged result of the corresponding group.
+    pub fn compute_merged_partitions(&self, group_sizes: &[usize]) -> Vec<BlockPartition> {
         let total_axes: usize = group_sizes.iter().sum();
         assert_eq!(
             total_axes,
@@ -237,7 +380,6 @@ impl BlockStructure {
             "All group sizes must be positive"
         );
 
-        // Build new partitions by merging
         let mut new_partitions = Vec::with_capacity(group_sizes.len());
         let mut axis = 0;
 
@@ -245,8 +387,6 @@ impl BlockStructure {
             if group_size == 1 {
                 new_partitions.push(self.partitions[axis].clone());
             } else {
-                // Merge multiple partitions: each block in output corresponds to
-                // all combinations of blocks in the merged axes
                 let merged_parts: Vec<_> = (axis..axis + group_size)
                     .map(|a| &self.partitions[a])
                     .collect();
@@ -255,42 +395,7 @@ impl BlockStructure {
             axis += group_size;
         }
 
-        // Remap non-zero blocks
-        let orig_num_blocks = self.num_blocks();
-        let new_num_blocks: Vec<_> = new_partitions.iter().map(|p| p.num_blocks()).collect();
-
-        let new_nonzero: HashSet<usize> = self
-            .nonzero_blocks
-            .iter()
-            .map(|&linear| {
-                let orig_idx = block_multi_index(linear, &orig_num_blocks);
-
-                // Map original index to new index
-                let mut new_idx = Vec::with_capacity(group_sizes.len());
-                let mut axis = 0;
-                for &group_size in group_sizes {
-                    if group_size == 1 {
-                        new_idx.push(orig_idx[axis]);
-                    } else {
-                        // Compute linear index within the merged group
-                        let group_num_blocks: Vec<_> =
-                            (axis..axis + group_size).map(|a| orig_num_blocks[a]).collect();
-                        let group_idx: Vec<_> =
-                            (axis..axis + group_size).map(|a| orig_idx[a]).collect();
-                        let merged_linear = block_linear_index(&group_idx, &group_num_blocks);
-                        new_idx.push(merged_linear);
-                    }
-                    axis += group_size;
-                }
-
-                block_linear_index(&new_idx, &new_num_blocks)
-            })
-            .collect();
-
-        Self {
-            partitions: new_partitions,
-            nonzero_blocks: new_nonzero,
-        }
+        new_partitions
     }
 
     /// Build an index of non-zero blocks grouped by a specific axis.
@@ -409,7 +514,7 @@ impl BlockStructure {
     /// # Panics
     /// - If axes lengths don't match
     /// - If contracted partitions don't match
-    pub fn tensordot_structure(&self, other: &Self, axes_self: &[usize], axes_other: &[usize]) -> Self {
+    pub fn tensordot(&self, other: &Self, axes_self: &[usize], axes_other: &[usize]) -> Self {
         assert_eq!(
             axes_self.len(),
             axes_other.len(),
@@ -449,27 +554,35 @@ impl BlockStructure {
         let a_2d = if self.rank() == 0 {
             a_perm
         } else if free_self.is_empty() {
-            // All axes contracted: reshape to [1, contracted]
-            let mut group = vec![axes_self.len()];
-            if group[0] == 0 {
-                group[0] = 1;
-            }
-            a_perm.reshape(&[group[0]])
+            // All axes contracted: reshape to [contracted]
+            let group_sizes = vec![axes_self.len().max(1)];
+            let new_partitions = a_perm.compute_merged_partitions(&group_sizes);
+            a_perm.reshape_to(new_partitions)
         } else if axes_self.is_empty() {
-            // No contraction: reshape to [free, 1]
-            a_perm.reshape(&[free_self.len()])
+            // No contraction: reshape to [free]
+            let group_sizes = vec![free_self.len()];
+            let new_partitions = a_perm.compute_merged_partitions(&group_sizes);
+            a_perm.reshape_to(new_partitions)
         } else {
-            a_perm.reshape(&[num_free_self, num_contracted])
+            let group_sizes = vec![num_free_self, num_contracted];
+            let new_partitions = a_perm.compute_merged_partitions(&group_sizes);
+            a_perm.reshape_to(new_partitions)
         };
 
         let b_2d = if other.rank() == 0 {
             b_perm
         } else if free_other.is_empty() {
-            b_perm.reshape(&[axes_other.len()])
+            let group_sizes = vec![axes_other.len()];
+            let new_partitions = b_perm.compute_merged_partitions(&group_sizes);
+            b_perm.reshape_to(new_partitions)
         } else if axes_other.is_empty() {
-            b_perm.reshape(&[free_other.len()])
+            let group_sizes = vec![free_other.len()];
+            let new_partitions = b_perm.compute_merged_partitions(&group_sizes);
+            b_perm.reshape_to(new_partitions)
         } else {
-            b_perm.reshape(&[num_contracted, num_free_other])
+            let group_sizes = vec![num_contracted, num_free_other];
+            let new_partitions = b_perm.compute_merged_partitions(&group_sizes);
+            b_perm.reshape_to(new_partitions)
         };
 
         // matmul if both are 2D, otherwise handle edge cases
@@ -529,7 +642,7 @@ impl BlockStructure {
 
     /// Estimate the computational cost for tensor contraction.
     ///
-    /// Uses the same approach as tensordot_structure but returns cost instead.
+    /// Uses the same approach as tensordot but returns cost instead.
     pub fn estimate_tensordot_cost(&self, other: &Self, axes_self: &[usize], axes_other: &[usize]) -> u64 {
         assert_eq!(
             axes_self.len(),
@@ -577,8 +690,10 @@ impl BlockStructure {
             return 2 * self_size * other_size / (num_contracted.max(1) as u64);
         }
 
-        let a_2d = a_perm.reshape(&[num_free_self, num_contracted]);
-        let b_2d = b_perm.reshape(&[num_contracted, num_free_other]);
+        let group_sizes_a = vec![num_free_self, num_contracted];
+        let group_sizes_b = vec![num_contracted, num_free_other];
+        let a_2d = a_perm.reshape_to(a_perm.compute_merged_partitions(&group_sizes_a));
+        let b_2d = b_perm.reshape_to(b_perm.compute_merged_partitions(&group_sizes_b));
 
         a_2d.estimate_matmul_cost(&b_2d)
     }
@@ -795,8 +910,10 @@ mod tests {
         structure.insert_block(&vec![0, 1, 0]);
         structure.insert_block(&vec![1, 2, 1]);
 
-        // Reshape to 2D: merge first two axes
-        let reshaped = structure.reshape(&[2, 1]);
+        // Reshape to 2D: merge first two axes using compute_merged_partitions + reshape_to
+        let group_sizes = [2, 1];
+        let new_partitions = structure.compute_merged_partitions(&group_sizes);
+        let reshaped = structure.reshape_to(new_partitions);
 
         assert_eq!(reshaped.rank(), 2);
         // First axis: 2*3 = 6 blocks
@@ -822,7 +939,10 @@ mod tests {
         structure.insert_block(&vec![0, 1]);
         structure.insert_block(&vec![1, 0]);
 
-        let reshaped = structure.reshape(&[1, 1]);
+        // Using compute_merged_partitions + reshape_to
+        let group_sizes = [1, 1];
+        let new_partitions = structure.compute_merged_partitions(&group_sizes);
+        let reshaped = structure.reshape_to(new_partitions);
 
         assert_eq!(reshaped.rank(), 2);
         assert_eq!(reshaped.num_blocks(), vec![2, 2]);
@@ -831,8 +951,8 @@ mod tests {
     }
 
     #[test]
-    fn test_reshape_to_1d() {
-        // Reshape 2D to 1D
+    fn test_reshape_to_1d_with_merged_partitions() {
+        // Reshape 2D to 1D using compute_merged_partitions
         let partitions = vec![
             BlockPartition::new(vec![2, 3]), // 2 blocks
             BlockPartition::new(vec![4, 5]), // 2 blocks
@@ -842,7 +962,9 @@ mod tests {
         structure.insert_block(&vec![0, 1]); // -> 1
         structure.insert_block(&vec![1, 1]); // -> 3
 
-        let reshaped = structure.reshape(&[2]);
+        let group_sizes = [2];
+        let new_partitions = structure.compute_merged_partitions(&group_sizes);
+        let reshaped = structure.reshape_to(new_partitions);
 
         assert_eq!(reshaped.rank(), 1);
         assert_eq!(reshaped.num_blocks(), vec![4]); // 2*2 = 4 blocks
@@ -872,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tensordot_structure_3d_3d() {
+    fn test_tensordot_3d_3d() {
         // A[i, j, k] × B[k, l, m] -> C[i, j, l, m]
         // Contract on axis 2 of A and axis 0 of B
         let k_partition = BlockPartition::uniform(3, 2); // shared
@@ -895,7 +1017,7 @@ mod tests {
         b.insert_block(&vec![0, 0, 1]);
         b.insert_block(&vec![1, 1, 0]);
 
-        let c = a.tensordot_structure(&b, &[2], &[0]);
+        let c = a.tensordot(&b, &[2], &[0]);
 
         // Result should be 2D (merged): [i*j, l*m] = [4, 4] blocks
         assert_eq!(c.rank(), 2);
@@ -924,7 +1046,7 @@ mod tests {
         b.insert_block(&vec![1, 0]);
 
         // tensordot
-        let c_td = a.tensordot_structure(&b, &[1], &[0]);
+        let c_td = a.tensordot(&b, &[1], &[0]);
         // matmul
         let c_mm = a.matmul_structure(&b);
 
@@ -956,5 +1078,199 @@ mod tests {
         let mm_cost = a.estimate_matmul_cost(&b);
 
         assert_eq!(td_cost, mm_cost);
+    }
+
+    #[test]
+    fn test_reshape_to_new_shape() {
+        // 2D structure with single block -> reshape to 1D
+        let partitions = vec![
+            BlockPartition::trivial(4),
+            BlockPartition::trivial(3),
+        ];
+        let mut structure = BlockStructure::empty(partitions);
+        structure.insert_block(&vec![0, 0]);
+
+        // Reshape [4, 3] -> [12]
+        let reshaped = structure.reshape(&[12]);
+
+        assert_eq!(reshaped.rank(), 1);
+        assert_eq!(reshaped.shape(), vec![12]);
+        assert_eq!(reshaped.num_blocks(), vec![1]);
+        assert!(reshaped.has_block(&vec![0]));
+    }
+
+    #[test]
+    fn test_reshape_1d_to_2d() {
+        // 1D structure -> reshape to 2D
+        let partitions = vec![BlockPartition::trivial(12)];
+        let mut structure = BlockStructure::empty(partitions);
+        structure.insert_block(&vec![0]);
+
+        // Reshape [12] -> [3, 4]
+        let reshaped = structure.reshape(&[3, 4]);
+
+        assert_eq!(reshaped.rank(), 2);
+        assert_eq!(reshaped.shape(), vec![3, 4]);
+        assert_eq!(reshaped.num_blocks(), vec![1, 1]);
+        assert!(reshaped.has_block(&vec![0, 0]));
+    }
+
+    #[test]
+    fn test_reshape_2d_to_3d() {
+        // 2D structure -> reshape to 3D
+        let partitions = vec![
+            BlockPartition::trivial(6),
+            BlockPartition::trivial(4),
+        ];
+        let mut structure = BlockStructure::empty(partitions);
+        structure.insert_block(&vec![0, 0]);
+
+        // Reshape [6, 4] -> [2, 3, 4]
+        let reshaped = structure.reshape(&[2, 3, 4]);
+
+        assert_eq!(reshaped.rank(), 3);
+        assert_eq!(reshaped.shape(), vec![2, 3, 4]);
+        assert_eq!(reshaped.num_blocks(), vec![1, 1, 1]);
+        assert!(reshaped.has_block(&vec![0, 0, 0]));
+    }
+
+    #[test]
+    fn test_reshape_round_trip_2d_3d_2d() {
+        // Test round-trip: 2D -> 3D -> 2D should recover original structure
+        let partitions = vec![
+            BlockPartition::trivial(6),
+            BlockPartition::trivial(4),
+        ];
+        let mut original = BlockStructure::empty(partitions);
+        original.insert_block(&vec![0, 0]);
+
+        // Count elements before
+        let elements_before: usize = original
+            .iter_nonzero_indices()
+            .map(|idx| original.block_size(&idx))
+            .sum();
+
+        // 2D [6, 4] -> 3D [2, 3, 4]
+        let reshaped_3d = original.reshape(&[2, 3, 4]);
+        let elements_after_3d: usize = reshaped_3d
+            .iter_nonzero_indices()
+            .map(|idx| reshaped_3d.block_size(&idx))
+            .sum();
+        assert_eq!(elements_before, elements_after_3d, "Elements must be preserved in 2D->3D");
+
+        // 3D [2, 3, 4] -> 2D [6, 4]
+        let round_trip = reshaped_3d.reshape(&[6, 4]);
+        let elements_after_round: usize = round_trip
+            .iter_nonzero_indices()
+            .map(|idx| round_trip.block_size(&idx))
+            .sum();
+        assert_eq!(elements_before, elements_after_round, "Elements must be preserved in round-trip");
+
+        // Verify structure matches original
+        assert_eq!(round_trip.rank(), original.rank());
+        assert_eq!(round_trip.shape(), original.shape());
+        assert_eq!(round_trip.num_blocks(), original.num_blocks());
+        assert_eq!(round_trip.num_nonzero_blocks(), original.num_nonzero_blocks());
+        assert!(round_trip.has_block(&vec![0, 0]));
+    }
+
+    #[test]
+    fn test_reshape_preserves_nonzero_elements() {
+        // Test that non-zero block element count is preserved through multiple reshapes
+        let partitions = vec![
+            BlockPartition::trivial(24),
+        ];
+        let mut structure = BlockStructure::empty(partitions);
+        structure.insert_block(&vec![0]);
+
+        let count_elements = |s: &BlockStructure| -> usize {
+            s.iter_nonzero_indices()
+                .map(|idx| s.block_size(&idx))
+                .sum()
+        };
+
+        let initial_elements = count_elements(&structure);
+        assert_eq!(initial_elements, 24);
+
+        // [24] -> [4, 6]
+        let s1 = structure.reshape(&[4, 6]);
+        assert_eq!(count_elements(&s1), initial_elements);
+
+        // [4, 6] -> [2, 2, 6]
+        let s2 = s1.reshape(&[2, 2, 6]);
+        assert_eq!(count_elements(&s2), initial_elements);
+
+        // [2, 2, 6] -> [2, 12]
+        let s3 = s2.reshape(&[2, 12]);
+        assert_eq!(count_elements(&s3), initial_elements);
+
+        // [2, 12] -> [24]
+        let s4 = s3.reshape(&[24]);
+        assert_eq!(count_elements(&s4), initial_elements);
+    }
+
+    #[test]
+    fn test_plan_reshape_to_and_reshape_with_plan() {
+        // Test that plan_reshape_to + reshape_with_plan gives same result as reshape_to
+        let partitions = vec![
+            BlockPartition::trivial(6),
+            BlockPartition::trivial(4),
+        ];
+        let mut structure = BlockStructure::empty(partitions);
+        structure.insert_block(&vec![0, 0]);
+
+        // Using reshape_to directly
+        let new_partitions = vec![
+            BlockPartition::trivial(2),
+            BlockPartition::trivial(3),
+            BlockPartition::trivial(4),
+        ];
+        let reshaped_direct = structure.reshape_to(new_partitions.clone());
+
+        // Using plan_reshape_to + reshape_with_plan
+        let plan = structure.plan_reshape_to(new_partitions);
+        let reshaped_with_plan = structure.reshape_with_plan(&plan);
+
+        // Results should be identical
+        assert_eq!(reshaped_direct.rank(), reshaped_with_plan.rank());
+        assert_eq!(reshaped_direct.shape(), reshaped_with_plan.shape());
+        assert_eq!(reshaped_direct.num_blocks(), reshaped_with_plan.num_blocks());
+        assert_eq!(reshaped_direct.num_nonzero_blocks(), reshaped_with_plan.num_nonzero_blocks());
+
+        // Verify plan contents
+        assert_eq!(plan.old_num_blocks, vec![1, 1]);
+        assert_eq!(plan.new_num_blocks, vec![1, 1, 1]);
+        assert_eq!(plan.block_mapping.len(), 1);
+        assert_eq!(plan.block_mapping.get(&0), Some(&0));
+    }
+
+    #[test]
+    fn test_reshape_plan_reuse() {
+        // Test that the same plan can be used for multiple structures with same shape
+        let partitions = vec![
+            BlockPartition::trivial(6),
+            BlockPartition::trivial(4),
+        ];
+
+        let mut structure1 = BlockStructure::empty(partitions.clone());
+        structure1.insert_block(&vec![0, 0]);
+
+        let mut structure2 = BlockStructure::empty(partitions);
+        structure2.insert_block(&vec![0, 0]);
+
+        // Create plan from structure1
+        let new_partitions = vec![
+            BlockPartition::trivial(2),
+            BlockPartition::trivial(12),
+        ];
+        let plan = structure1.plan_reshape_to(new_partitions);
+
+        // Use same plan for both structures
+        let reshaped1 = structure1.reshape_with_plan(&plan);
+        let reshaped2 = structure2.reshape_with_plan(&plan);
+
+        // Both should have same result
+        assert_eq!(reshaped1.shape(), reshaped2.shape());
+        assert_eq!(reshaped1.num_nonzero_blocks(), reshaped2.num_nonzero_blocks());
     }
 }
