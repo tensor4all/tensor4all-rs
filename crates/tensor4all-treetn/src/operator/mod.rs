@@ -1,0 +1,86 @@
+//! Operator composition for Tree Tensor Networks.
+//!
+//! This module provides traits and functions for working with operators on TreeTN states,
+//! including composing multiple non-overlapping operators into a single operator.
+//!
+//! # Key Types
+//!
+//! - [`Operator`]: Trait for objects that can act as operators on tensor network states
+//! - [`compose_exclusive_operators`]: Compose non-overlapping operators into a single operator
+//!
+//! # Example
+//!
+//! ```ignore
+//! // Build local operators acting on different regions
+//! let op1 = build_local_operator(&[site_a, site_b]);  // acts on {a, b}
+//! let op2 = build_local_operator(&[site_c, site_d]);  // acts on {c, d}
+//!
+//! // State has sites {a, b, x, c, d}
+//! let target = state.site_index_network();
+//!
+//! // Compose into single operator on full space (identity at gap x)
+//! let composed = compose_exclusive_operators(target, &[&op1, &op2])?;
+//!
+//! // Apply composed operator
+//! let result = state.contract_zipup(&composed, center, rtol, max_rank)?;
+//! ```
+
+mod compose;
+mod identity;
+
+pub use compose::{
+    are_exclusive_operators, compose_exclusive_linear_operators, compose_exclusive_operators,
+};
+pub use identity::{build_identity_operator_tensor, build_identity_operator_tensor_c64};
+
+use std::collections::HashSet;
+use std::fmt::Debug;
+use std::hash::Hash;
+
+use tensor4all_core::index::{Index, Symmetry};
+
+use crate::SiteIndexNetwork;
+
+/// Trait for operators that can act on tensor network states.
+///
+/// An operator has:
+/// - A set of site indices it acts on
+/// - A site index network describing its structure
+///
+/// This trait is used for composing multiple operators into a single operator
+/// and for validating operator compatibility.
+///
+/// # Type Parameters
+///
+/// - `Id`: Index identifier type
+/// - `Symm`: Symmetry type
+/// - `V`: Node name type
+pub trait Operator<Id, Symm, V>
+where
+    Id: Clone + Hash + Eq + Debug,
+    Symm: Clone + Symmetry + Debug,
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    /// Get all site indices this operator acts on.
+    ///
+    /// Returns the union of site indices across all nodes.
+    fn site_indices(&self) -> HashSet<Index<Id, Symm>>;
+
+    /// Get the site index network describing this operator's structure.
+    ///
+    /// The site index network contains:
+    /// - Topology: which nodes connect to which
+    /// - Site space: which site indices belong to each node
+    fn site_index_network(&self) -> &SiteIndexNetwork<V, Id, Symm>;
+
+    /// Get the set of node names this operator covers.
+    ///
+    /// Default implementation extracts node names from the site index network.
+    fn node_names(&self) -> HashSet<V> {
+        self.site_index_network()
+            .node_names()
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+}
