@@ -372,6 +372,70 @@ where
     }
 }
 
+// ============================================================================
+// Operator trait implementation
+// ============================================================================
+
+use crate::operator::Operator;
+use crate::SiteIndexNetwork;
+use std::collections::HashSet;
+
+impl<Id, Symm, V> Operator<Id, Symm, V> for LinearOperator<Id, Symm, V>
+where
+    Id: Clone + Hash + Eq + std::fmt::Debug,
+    Symm: Clone + Symmetry + std::fmt::Debug,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    fn site_indices(&self) -> HashSet<Index<Id, Symm>> {
+        // Return the TRUE input site indices (not internal MPO indices)
+        self.input_mapping
+            .values()
+            .map(|m| m.true_index.clone())
+            .collect()
+    }
+
+    fn site_index_network(&self) -> &SiteIndexNetwork<V, Id, Symm> {
+        self.mpo.site_index_network()
+    }
+
+    fn node_names(&self) -> HashSet<V> {
+        self.mpo.node_names().into_iter().collect()
+    }
+}
+
+impl<Id, Symm, V> LinearOperator<Id, Symm, V>
+where
+    Id: Clone + Hash + Eq + std::fmt::Debug,
+    Symm: Clone + Symmetry + std::fmt::Debug,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    /// Get all input site indices (true indices from state space).
+    pub fn input_site_indices(&self) -> HashSet<Index<Id, Symm>> {
+        self.input_mapping
+            .values()
+            .map(|m| m.true_index.clone())
+            .collect()
+    }
+
+    /// Get all output site indices (true indices from result space).
+    pub fn output_site_indices(&self) -> HashSet<Index<Id, Symm>> {
+        self.output_mapping
+            .values()
+            .map(|m| m.true_index.clone())
+            .collect()
+    }
+
+    /// Get all input mappings.
+    pub fn input_mappings(&self) -> &HashMap<V, IndexMapping<Id, Symm>> {
+        &self.input_mapping
+    }
+
+    /// Get all output mappings.
+    pub fn output_mappings(&self) -> &HashMap<V, IndexMapping<Id, Symm>> {
+        &self.output_mapping
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
