@@ -20,7 +20,7 @@ impl BlockPartition {
     ///
     /// # Example
     /// ```
-    /// use blocked_mdarray::BlockPartition;
+    /// use block_array::BlockPartition;
     /// let p = BlockPartition::new(vec![3, 4, 3]);
     /// assert_eq!(p.num_blocks(), 3);
     /// assert_eq!(p.total_dim(), 10);
@@ -43,7 +43,7 @@ impl BlockPartition {
     ///
     /// # Example
     /// ```
-    /// use blocked_mdarray::BlockPartition;
+    /// use block_array::BlockPartition;
     /// let p = BlockPartition::uniform(4, 3);  // 3 blocks of size 4
     /// assert_eq!(p.num_blocks(), 3);
     /// assert_eq!(p.total_dim(), 12);
@@ -56,7 +56,7 @@ impl BlockPartition {
     ///
     /// # Example
     /// ```
-    /// use blocked_mdarray::BlockPartition;
+    /// use block_array::BlockPartition;
     /// let p = BlockPartition::trivial(10);
     /// assert_eq!(p.num_blocks(), 1);
     /// assert_eq!(p.block_size(0), 10);

@@ -13,7 +13,7 @@ use crate::partition::{block_linear_index, block_multi_index, BlockIndex, BlockP
 /// A plan for reshaping a block structure from one set of partitions to another.
 ///
 /// This captures the mapping from old block indices to new block indices,
-/// allowing efficient reshape operations on both `BlockStructure` and `BlockedArray`.
+/// allowing efficient reshape operations on both `BlockStructure` and `BlockArray`.
 #[derive(Debug, Clone)]
 pub struct ReshapePlan {
     /// Number of blocks per axis in the old structure.
@@ -306,7 +306,7 @@ impl BlockStructure {
 
     /// Create a reshape plan for transforming to new partitions.
     ///
-    /// The plan can be reused to reshape both `BlockStructure` and `BlockedArray`
+    /// The plan can be reused to reshape both `BlockStructure` and `BlockArray`
     /// with the same mapping.
     ///
     /// # Arguments

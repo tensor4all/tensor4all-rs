@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/blocked-mdarray",
+    "crates/block-array",
     "crates/tensor4all-core",
     "crates/tensor4all-itensorlike",
     "crates/tensor4all-treetn",

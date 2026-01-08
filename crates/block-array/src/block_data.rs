@@ -12,8 +12,8 @@ use crate::scalar::Scalar;
 /// Trait for block data storage backends.
 ///
 /// This trait abstracts over different storage backends (CPU, GPU, etc.)
-/// allowing `BlockedArray` to work with any compatible implementation.
-pub trait BlockedDataLike<T: Scalar>: Debug + Clone {
+/// allowing `BlockArray` to work with any compatible implementation.
+pub trait BlockDataLike<T: Scalar>: Debug + Clone {
     /// Get the rank (number of dimensions).
     fn rank(&self) -> usize;
 
@@ -39,12 +39,12 @@ pub trait BlockedDataLike<T: Scalar>: Debug + Clone {
 ///
 /// Wraps `mdarray::Tensor<T>` (dynamic rank) for block operations.
 #[derive(Debug, Clone)]
-pub struct BlockedData<T: Scalar> {
+pub struct BlockData<T: Scalar> {
     tensor: Tensor<T>,
 }
 
-impl<T: Scalar> BlockedData<T> {
-    /// Create a new BlockedData from a Tensor.
+impl<T: Scalar> BlockData<T> {
+    /// Create a new BlockData from a Tensor.
     pub fn from_tensor(tensor: Tensor<T>) -> Self {
         Self { tensor }
     }
@@ -121,7 +121,7 @@ impl<T: Scalar> BlockedData<T> {
     }
 }
 
-impl<T: Scalar> BlockedDataLike<T> for BlockedData<T> {
+impl<T: Scalar> BlockDataLike<T> for BlockData<T> {
     fn rank(&self) -> usize {
         self.tensor.rank()
     }

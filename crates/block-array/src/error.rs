@@ -4,7 +4,7 @@ use thiserror::Error;
 
 /// Error type for blocked array operations.
 #[derive(Debug, Error)]
-pub enum BlockedArrayError {
+pub enum BlockArrayError {
     /// Block partitions are incompatible for the operation.
     #[error("Incompatible block partitions for operation")]
     IncompatiblePartitions,
@@ -33,4 +33,4 @@ pub enum BlockedArrayError {
 }
 
 /// Result type for blocked array operations.
-pub type Result<T> = std::result::Result<T, BlockedArrayError>;
+pub type Result<T> = std::result::Result<T, BlockArrayError>;
