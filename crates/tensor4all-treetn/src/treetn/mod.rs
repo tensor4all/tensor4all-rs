@@ -12,6 +12,7 @@ mod linsolve;
 mod localupdate;
 mod ops;
 mod tensor_like;
+mod transform;
 mod truncate;
 
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
