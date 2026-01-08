@@ -10,19 +10,36 @@ pub use dyn_treetn::{BoxedTensorLike, DynIndex, DynTreeTN};
 pub use named_graph::NamedGraph;
 pub use node_name_network::{CanonicalizeEdges, NodeNameNetwork};
 pub use options::{CanonicalizationOptions, TruncationOptions};
-pub use random::{LinkSpace, random_treetn_f64, random_treetn_c64};
+pub use random::{random_treetn_c64, random_treetn_f64, LinkSpace};
 pub use site_index_network::SiteIndexNetwork;
 pub use treetn::{
-    LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
     apply_local_update_sweep,
-    TreeTN, TreeTopology, factorize_tensor_to_treetn, factorize_tensor_to_treetn_with,
-    FitEnvironment, FitUpdater, FitContractionOptions, contract_fit,
-    ContractionMethod, ContractionOptions, contract,
-    // Linsolve exports
-    EnvironmentCache, NetworkTopology,
-    IndexMapping, LinearOperator,
-    LinsolveOptions, LinsolveUpdater, LinsolveResult,
-    LinsolveVerifyReport, NodeVerifyDetail,
-    ProjectedOperator, ProjectedState,
+    contract,
+    contract_fit,
+    factorize_tensor_to_treetn,
+    factorize_tensor_to_treetn_with,
     linsolve,
+    ContractionMethod,
+    ContractionOptions,
+    // Linsolve exports
+    EnvironmentCache,
+    FitContractionOptions,
+    FitEnvironment,
+    FitUpdater,
+    IndexMapping,
+    LinearOperator,
+    LinsolveOptions,
+    LinsolveResult,
+    LinsolveUpdater,
+    LinsolveVerifyReport,
+    LocalUpdateStep,
+    LocalUpdateSweepPlan,
+    LocalUpdater,
+    NetworkTopology,
+    NodeVerifyDetail,
+    ProjectedOperator,
+    ProjectedState,
+    TreeTN,
+    TreeTopology,
+    TruncateUpdater,
 };

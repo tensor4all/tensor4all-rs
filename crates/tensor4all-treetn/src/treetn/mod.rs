@@ -23,39 +23,31 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 
 use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all_core::{factorize, CanonicalForm, FactorizeOptions};
 use tensor4all_core::TensorDynLen;
+use tensor4all_core::{factorize, CanonicalForm, FactorizeOptions};
 
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
 
 // Re-export the decomposition functions and types
-pub use decompose::{TreeTopology, factorize_tensor_to_treetn, factorize_tensor_to_treetn_with};
+pub use decompose::{factorize_tensor_to_treetn, factorize_tensor_to_treetn_with, TreeTopology};
 
 // Re-export local update types
 pub use localupdate::{
-    LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
-    apply_local_update_sweep,
+    apply_local_update_sweep, LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
 };
 
 // Re-export fit algorithm types
-pub use fit::{
-    FitEnvironment, FitUpdater, FitContractionOptions, contract_fit,
-};
+pub use fit::{contract_fit, FitContractionOptions, FitEnvironment, FitUpdater};
 
 // Re-export contraction dispatcher
-pub use contraction::{
-    ContractionMethod, ContractionOptions, contract,
-};
+pub use contraction::{contract, ContractionMethod, ContractionOptions};
 
 // Re-export linsolve types
 pub use linsolve::{
-    EnvironmentCache, NetworkTopology,
-    IndexMapping, LinearOperator,
-    LinsolveOptions, LinsolveUpdater, LinsolveResult,
-    LinsolveVerifyReport, NodeVerifyDetail,
-    ProjectedOperator, ProjectedState,
-    linsolve,
+    linsolve, EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveResult,
+    LinsolveUpdater, LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator,
+    ProjectedState,
 };
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
@@ -213,14 +205,14 @@ where
                     let (node_a, index_a) = &nodes_with_index[0];
                     let (node_b, index_b) = &nodes_with_index[1];
 
-                    treetn.connect_internal(*node_a, index_a, *node_b, index_b).with_context(
-                        || {
+                    treetn
+                        .connect_internal(*node_a, index_a, *node_b, index_b)
+                        .with_context(|| {
                             format!(
                                 "Failed to connect nodes {:?} and {:?} via index ID {:?}",
                                 node_a, node_b, index_id
                             )
-                        },
-                    )?;
+                        })?;
                 }
                 n => {
                     // Index appears in more than 2 tensors - this violates tree structure
@@ -564,10 +556,7 @@ where
             .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
         let updated_dst_tensor = tensor_dst
-            .tensordot(
-                &right_tensor,
-                &[(bond_on_dst.clone(), bond_on_src.clone())],
-            )
+            .tensordot(&right_tensor, &[(bond_on_dst.clone(), bond_on_src.clone())])
             .with_context(|| {
                 format!(
                     "{}: failed to absorb right factor into dst tensor",
@@ -584,9 +573,7 @@ where
         self.replace_tensor(src, left_tensor)
             .with_context(|| format!("{}: failed to replace tensor at src node", context_name))?;
         self.replace_tensor(dst, updated_dst_tensor)
-            .with_context(|| {
-                format!("{}: failed to replace tensor at dst node", context_name)
-            })?;
+            .with_context(|| format!("{}: failed to replace tensor at dst node", context_name))?;
 
         // Set ortho_towards to point towards dst (canonical_center direction)
         let dst_name = self
@@ -650,22 +637,28 @@ where
         }
 
         // Get node name for site_index_network update
-        let node_name = self.graph.node_name(node)
+        let node_name = self
+            .graph
+            .node_name(node)
             .ok_or_else(|| anyhow::anyhow!("Node name not found"))?
             .clone();
 
         // Calculate new physical indices: all indices minus connection indices
-        let connection_indices_set: HashSet<Index<Id, Symm>> = connection_indices.iter().cloned().collect();
-        let new_physical_indices: HashSet<Index<Id, Symm>> = new_tensor.indices
+        let connection_indices_set: HashSet<Index<Id, Symm>> =
+            connection_indices.iter().cloned().collect();
+        let new_physical_indices: HashSet<Index<Id, Symm>> = new_tensor
+            .indices
             .iter()
             .filter(|idx| !connection_indices_set.contains(idx))
             .cloned()
             .collect();
 
         // All validations passed, replace the tensor
-        let old_tensor = self.graph.graph_mut().node_weight_mut(node).map(|old| {
-            std::mem::replace(old, new_tensor)
-        });
+        let old_tensor = self
+            .graph
+            .graph_mut()
+            .node_weight_mut(node)
+            .map(|old| std::mem::replace(old, new_tensor));
 
         // Update site_index_network with new physical indices
         if let Some(site_space) = self.site_index_network.site_space_mut(&node_name) {
@@ -687,7 +680,8 @@ where
 
     /// Get all edges connected to a node.
     pub fn edges_for_node(&self, node: NodeIndex) -> Vec<(EdgeIndex, NodeIndex)> {
-        self.graph.graph()
+        self.graph
+            .graph()
             .edges(node)
             .map(|edge| {
                 let target = edge.target();
@@ -706,25 +700,33 @@ where
         new_bond_index: Index<Id, Symm>,
     ) -> Result<()> {
         // Validate edge exists and get endpoints
-        let (source, target) = self.graph.graph()
+        let (source, target) = self
+            .graph
+            .graph()
             .edge_endpoints(edge)
             .ok_or_else(|| anyhow::anyhow!("Edge does not exist"))?;
 
         // Get old bond index before updating
-        let old_bond_index = self.bond_index(edge)
+        let old_bond_index = self
+            .bond_index(edge)
             .ok_or_else(|| anyhow::anyhow!("Bond index not found"))?
             .clone();
 
         // Get node names for site_index_network update
-        let node_name_a = self.graph.node_name(source)
+        let node_name_a = self
+            .graph
+            .node_name(source)
             .ok_or_else(|| anyhow::anyhow!("Node name for source not found"))?
             .clone();
-        let node_name_b = self.graph.node_name(target)
+        let node_name_b = self
+            .graph
+            .node_name(target)
             .ok_or_else(|| anyhow::anyhow!("Node name for target not found"))?
             .clone();
 
         // Update the bond index
-        *self.bond_index_mut(edge)
+        *self
+            .bond_index_mut(edge)
             .ok_or_else(|| anyhow::anyhow!("Bond index not found"))? = new_bond_index.clone();
 
         // Update site_index_network:
@@ -749,11 +751,7 @@ where
     /// # Arguments
     /// * `index_id` - The index ID to set ortho direction for
     /// * `dir` - The node name that the ortho points towards, or None to clear
-    pub fn set_ortho_towards(
-        &mut self,
-        index_id: &Id,
-        dir: Option<V>,
-    ) {
+    pub fn set_ortho_towards(&mut self, index_id: &Id, dir: Option<V>) {
         match dir {
             Some(node_name) => {
                 self.ortho_towards.insert(index_id.clone(), node_name);
@@ -783,14 +781,17 @@ where
         dir: Option<V>,
     ) -> Result<()> {
         // Get the bond index ID for this edge
-        let bond_id = self.bond_index(edge)
+        let bond_id = self
+            .bond_index(edge)
             .ok_or_else(|| anyhow::anyhow!("Edge does not exist"))?
             .id
             .clone();
 
         // Validate that the node (if any) is one of the edge endpoints
         if let Some(ref node_name) = dir {
-            let (source, target) = self.graph.graph()
+            let (source, target) = self
+                .graph
+                .graph()
                 .edge_endpoints(edge)
                 .ok_or_else(|| anyhow::anyhow!("Edge does not exist"))?;
 
@@ -821,7 +822,10 @@ where
     /// Get the NodeIndex that the orthogonalization points towards for an edge.
     ///
     /// Returns None if ortho_towards is not set for this edge's bond index.
-    pub fn ortho_towards_node_index(&self, edge: petgraph::stable_graph::EdgeIndex) -> Option<NodeIndex> {
+    pub fn ortho_towards_node_index(
+        &self,
+        edge: petgraph::stable_graph::EdgeIndex,
+    ) -> Option<NodeIndex> {
         self.ortho_towards_node(edge)
             .and_then(|name| self.graph.node_index(name))
     }
@@ -839,7 +843,9 @@ where
 
         // Check if graph is connected
         let mut visited = std::collections::HashSet::new();
-        let start_node = g.node_indices().next()
+        let start_node = g
+            .node_indices()
+            .next()
             .ok_or_else(|| anyhow::anyhow!("Graph has no nodes"))?;
 
         // DFS to count reachable nodes
@@ -894,7 +900,9 @@ where
     pub fn edge_between(&self, node_a: &V, node_b: &V) -> Option<EdgeIndex> {
         let idx_a = self.graph.node_index(node_a)?;
         let idx_b = self.graph.node_index(node_b)?;
-        self.graph.graph().find_edge(idx_a, idx_b)
+        self.graph
+            .graph()
+            .find_edge(idx_a, idx_b)
             .or_else(|| self.graph.graph().find_edge(idx_b, idx_a))
     }
 
@@ -905,7 +913,9 @@ where
 
     /// Get all node names in the tree tensor network.
     pub fn node_names(&self) -> Vec<V> {
-        self.graph.graph().node_indices()
+        self.graph
+            .graph()
+            .node_indices()
             .filter_map(|idx| self.graph.node_name(idx).cloned())
             .collect()
     }
@@ -925,7 +935,8 @@ where
     /// # Returns
     /// `None` if target node doesn't exist, otherwise a vector of `(from, to)` pairs.
     pub fn edges_to_canonicalize_by_names(&self, target: &V) -> Option<Vec<(V, V)>> {
-        self.site_index_network.edges_to_canonicalize_by_names(target)
+        self.site_index_network
+            .edges_to_canonicalize_by_names(target)
     }
 
     /// Get a reference to the orthogonalization region (using node names).
@@ -951,8 +962,11 @@ where
         // Validate that all nodes exist in the graph
         for node_name in &region {
             if !self.graph.has_node(node_name) {
-                return Err(anyhow::anyhow!("Node {:?} does not exist in the graph", node_name))
-                    .context("set_canonical_center: all nodes must be valid");
+                return Err(anyhow::anyhow!(
+                    "Node {:?} does not exist in the graph",
+                    node_name
+                ))
+                .context("set_canonical_center: all nodes must be valid");
             }
         }
 
@@ -980,8 +994,11 @@ where
     /// Validates that the node exists in the graph.
     pub fn add_to_canonical_center(&mut self, node_name: V) -> Result<()> {
         if !self.graph.has_node(&node_name) {
-            return Err(anyhow::anyhow!("Node {:?} does not exist in the graph", node_name))
-                .context("add_to_canonical_center: node must be valid");
+            return Err(anyhow::anyhow!(
+                "Node {:?} does not exist in the graph",
+                node_name
+            ))
+            .context("add_to_canonical_center: node must be valid");
         }
         self.canonical_center.insert(node_name);
         Ok(())
@@ -1012,7 +1029,10 @@ where
     }
 
     /// Get a mutable reference to the site space (physical indices) for a node.
-    pub fn site_space_mut(&mut self, node_name: &V) -> Option<&mut std::collections::HashSet<Index<Id, Symm>>> {
+    pub fn site_space_mut(
+        &mut self,
+        node_name: &V,
+    ) -> Option<&mut std::collections::HashSet<Index<Id, Symm>>> {
         self.site_index_network.site_space_mut(node_name)
     }
 
@@ -1033,7 +1053,8 @@ where
     where
         Id: Ord,
     {
-        self.site_index_network.share_equivalent_site_index_network(&other.site_index_network)
+        self.site_index_network
+            .share_equivalent_site_index_network(&other.site_index_network)
     }
 
     /// Check if two TreeTNs have the same topology (graph structure).
@@ -1044,7 +1065,9 @@ where
     /// Useful for operations like `contract_zipup` where we need networks
     /// with the same structure but possibly different site indices.
     pub fn same_topology(&self, other: &Self) -> bool {
-        self.site_index_network.topology().same_topology(other.site_index_network.topology())
+        self.site_index_network
+            .topology()
+            .same_topology(other.site_index_network.topology())
     }
 
     /// Check if two TreeTNs have the same "appearance".
@@ -1135,17 +1158,24 @@ where
         // Verify we compared all bond ortho_towards entries
         // (site index ortho_towards are not compared here as they're implied by topology)
         // Count actual bond index entries in each ortho_towards map
-        let self_total_bond_entries: usize = self.graph.graph().edge_indices()
+        let self_total_bond_entries: usize = self
+            .graph
+            .graph()
+            .edge_indices()
             .filter_map(|e| self.bond_index(e))
             .filter(|b| self.ortho_towards.contains_key(&b.id))
             .count();
-        let other_total_bond_entries: usize = other.graph.graph().edge_indices()
+        let other_total_bond_entries: usize = other
+            .graph
+            .graph()
+            .edge_indices()
             .filter_map(|e| other.bond_index(e))
             .filter(|b| other.ortho_towards.contains_key(&b.id))
             .count();
 
         if self_bond_ortho_count != self_total_bond_entries
-            || other_bond_ortho_count != other_total_bond_entries {
+            || other_bond_ortho_count != other_total_bond_entries
+        {
             return false;
         }
 
@@ -1204,7 +1234,10 @@ where
         }
 
         // Step 4: Verify site index network matches
-        if !self.site_index_network.share_equivalent_site_index_network(&reconstructed.site_index_network) {
+        if !self
+            .site_index_network
+            .share_equivalent_site_index_network(&reconstructed.site_index_network)
+        {
             return Err(anyhow::anyhow!(
                 "Internal inconsistency: site index network does not match after reconstruction"
             ))
@@ -1213,15 +1246,22 @@ where
 
         // Step 5: Verify tensor data matches at each node
         for node_name in self.node_names() {
-            let idx_self = self.graph.node_index(&node_name)
+            let idx_self = self
+                .graph
+                .node_index(&node_name)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in original", node_name))?;
-            let idx_reconstructed = reconstructed.graph.node_index(&node_name)
-                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in reconstructed", node_name))?;
+            let idx_reconstructed =
+                reconstructed.graph.node_index(&node_name).ok_or_else(|| {
+                    anyhow::anyhow!("Node {:?} not found in reconstructed", node_name)
+                })?;
 
-            let tensor_self = self.tensor(idx_self)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in original", node_name))?;
-            let tensor_reconstructed = reconstructed.tensor(idx_reconstructed)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in reconstructed", node_name))?;
+            let tensor_self = self.tensor(idx_self).ok_or_else(|| {
+                anyhow::anyhow!("Tensor not found for node {:?} in original", node_name)
+            })?;
+            let tensor_reconstructed =
+                reconstructed.tensor(idx_reconstructed).ok_or_else(|| {
+                    anyhow::anyhow!("Tensor not found for node {:?} in reconstructed", node_name)
+                })?;
 
             // Compare tensor indices (as sets, since order may differ)
             let indices_self: HashSet<_> = tensor_self.indices.iter().collect();
@@ -1281,7 +1321,11 @@ pub(crate) fn compute_strides(dims: &[usize]) -> Vec<usize> {
 }
 
 /// Convert linear index to multi-index.
-pub(crate) fn linear_to_multi_index(mut linear: usize, strides: &[usize], rank: usize) -> Vec<usize> {
+pub(crate) fn linear_to_multi_index(
+    mut linear: usize,
+    strides: &[usize],
+    rank: usize,
+) -> Vec<usize> {
     let mut multi = vec![0; rank];
     for i in 0..rank {
         multi[i] = linear / strides[i];

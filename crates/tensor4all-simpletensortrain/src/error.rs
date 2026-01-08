@@ -14,7 +14,11 @@ pub enum TensorTrainError {
 
     /// Invalid index provided
     #[error("Index out of bounds: index {index} at site {site} (max: {max})")]
-    IndexOutOfBounds { site: usize, index: usize, max: usize },
+    IndexOutOfBounds {
+        site: usize,
+        index: usize,
+        max: usize,
+    },
 
     /// Length mismatch in index set
     #[error("Index set length mismatch: expected {expected}, got {got}")]

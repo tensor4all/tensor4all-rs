@@ -4,7 +4,7 @@ use crate::error::{Result, TCIError};
 use crate::indexset::{IndexSet, MultiIndex};
 use matrixci::util::{a_times_b_inv, zeros, Matrix, Scalar};
 use matrixci::{AbstractMatrixCI, MatrixACA};
-use tensor4all_simpletensortrain::{tensor3_zeros, Tensor3, Tensor3Ops, TensorTrain, TTScalar};
+use tensor4all_simpletensortrain::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
 
 /// Sweep strategy for TCI optimization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -123,7 +123,11 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
     /// Get current rank (maximum bond dimension)
     pub fn rank(&self) -> usize {
         if self.t_tensors.len() <= 1 {
-            return if self.i_set.is_empty() || self.i_set[0].is_empty() { 0 } else { 1 };
+            return if self.i_set.is_empty() || self.i_set[0].is_empty() {
+                0
+            } else {
+                1
+            };
         }
         self.t_tensors
             .iter()
@@ -138,7 +142,11 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
         if self.t_tensors.len() <= 1 {
             return Vec::new();
         }
-        self.t_tensors.iter().skip(1).map(|t| t.left_dim()).collect()
+        self.t_tensors
+            .iter()
+            .skip(1)
+            .map(|t| t.left_dim())
+            .collect()
     }
 
     /// Get the maximum pivot error from the last sweep
@@ -239,7 +247,11 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
             let idx = indices[0];
             if idx >= t.site_dim() {
                 return Err(TCIError::IndexOutOfBounds {
-                    message: format!("Index {} out of bounds at site 0 (max {})", idx, t.site_dim()),
+                    message: format!(
+                        "Index {} out of bounds at site 0 (max {})",
+                        idx,
+                        t.site_dim()
+                    ),
                 });
             }
             // Get slice at index
@@ -265,7 +277,12 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
             let idx = indices[p];
             if idx >= t.site_dim() {
                 return Err(TCIError::IndexOutOfBounds {
-                    message: format!("Index {} out of bounds at site {} (max {})", idx, p, t.site_dim()),
+                    message: format!(
+                        "Index {} out of bounds at site {} (max {})",
+                        idx,
+                        p,
+                        t.site_dim()
+                    ),
                 });
             }
 
@@ -653,8 +670,12 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
         for p in 0..n - 1 {
             // Find local pivot position in Pi
             let local_pivot = (
-                self.pi_i_set[p].pos(&self.i_set[p + 1].get(0).cloned().unwrap_or_default()).unwrap_or(0),
-                self.pi_j_set[p + 1].pos(&self.j_set[p].get(0).cloned().unwrap_or_default()).unwrap_or(0),
+                self.pi_i_set[p]
+                    .pos(&self.i_set[p + 1].get(0).cloned().unwrap_or_default())
+                    .unwrap_or(0),
+                self.pi_j_set[p + 1]
+                    .pos(&self.j_set[p].get(0).cloned().unwrap_or_default())
+                    .unwrap_or(0),
             );
 
             // Initialize ACA from Pi with the pivot
@@ -737,7 +758,11 @@ fn tensor3_to_matrix<T: Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T> {
 }
 
 /// Convert Tensor3 to Matrix for columns (left*site, right)
-fn tensor3_to_matrix_cols<T: Scalar + Default>(tensor: &Tensor3<T>, rows: usize, cols: usize) -> Matrix<T> {
+fn tensor3_to_matrix_cols<T: Scalar + Default>(
+    tensor: &Tensor3<T>,
+    rows: usize,
+    cols: usize,
+) -> Matrix<T> {
     let left_dim = tensor.left_dim();
     let site_dim = tensor.site_dim();
     let right_dim = tensor.right_dim();
@@ -756,7 +781,11 @@ fn tensor3_to_matrix_cols<T: Scalar + Default>(tensor: &Tensor3<T>, rows: usize,
 }
 
 /// Convert Tensor3 to Matrix for rows (left, site*right)
-fn tensor3_to_matrix_rows<T: Scalar + Default>(tensor: &Tensor3<T>, rows: usize, cols: usize) -> Matrix<T> {
+fn tensor3_to_matrix_rows<T: Scalar + Default>(
+    tensor: &Tensor3<T>,
+    rows: usize,
+    cols: usize,
+) -> Matrix<T> {
     let left_dim = tensor.left_dim();
     let site_dim = tensor.site_dim();
     let right_dim = tensor.right_dim();
@@ -775,7 +804,12 @@ fn tensor3_to_matrix_rows<T: Scalar + Default>(tensor: &Tensor3<T>, rows: usize,
 }
 
 /// Convert Matrix to Tensor3
-fn matrix_to_tensor3<T: Scalar + Default>(mat: &Matrix<T>, left_dim: usize, site_dim: usize, right_dim: usize) -> Tensor3<T> {
+fn matrix_to_tensor3<T: Scalar + Default>(
+    mat: &Matrix<T>,
+    left_dim: usize,
+    site_dim: usize,
+    right_dim: usize,
+) -> Tensor3<T> {
     let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim);
 
     // Determine the layout based on matrix dimensions
@@ -911,7 +945,8 @@ mod tests {
         let first_pivot = vec![0, 0];
         let options = TCI1Options::default();
 
-        let (tci, _ranks, _errors) = crossinterpolate1(f, local_dims, first_pivot, options).unwrap();
+        let (tci, _ranks, _errors) =
+            crossinterpolate1(f, local_dims, first_pivot, options).unwrap();
         assert_eq!(tci.len(), 2);
         assert!(tci.rank() >= 1);
     }
@@ -924,7 +959,8 @@ mod tests {
         let first_pivot = vec![1, 1];
         let options = TCI1Options::default();
 
-        let (tci, _ranks, _errors) = crossinterpolate1(f, local_dims, first_pivot, options).unwrap();
+        let (tci, _ranks, _errors) =
+            crossinterpolate1(f, local_dims, first_pivot, options).unwrap();
         assert_eq!(tci.len(), 2);
     }
 
@@ -936,7 +972,8 @@ mod tests {
         let first_pivot = vec![1, 1];
         let options = TCI1Options::default();
 
-        let (tci, _ranks, _errors) = crossinterpolate1(f, local_dims.clone(), first_pivot.clone(), options).unwrap();
+        let (tci, _ranks, _errors) =
+            crossinterpolate1(f, local_dims.clone(), first_pivot.clone(), options).unwrap();
 
         // The TCI should exactly reproduce the function at the pivot
         let val = tci.evaluate(&first_pivot).unwrap();
@@ -957,7 +994,8 @@ mod tests {
         let first_pivot = vec![1, 1];
         let options = TCI1Options::default();
 
-        let (tci, _ranks, _errors) = crossinterpolate1(f, local_dims.clone(), first_pivot.clone(), options).unwrap();
+        let (tci, _ranks, _errors) =
+            crossinterpolate1(f, local_dims.clone(), first_pivot.clone(), options).unwrap();
 
         // Test evaluation at points on the cross through the pivot
         // Points (i, 1) for all i
@@ -996,7 +1034,8 @@ mod tests {
         let first_pivot = vec![1, 1];
         let options = TCI1Options::default();
 
-        let (tci, _ranks, _errors) = crossinterpolate1(f, local_dims, first_pivot.clone(), options).unwrap();
+        let (tci, _ranks, _errors) =
+            crossinterpolate1(f, local_dims, first_pivot.clone(), options).unwrap();
 
         // Convert to TensorTrain
         let tt = tci.to_tensor_train().unwrap();
@@ -1022,7 +1061,8 @@ mod tests {
         let first_pivot = vec![0, 0, 0];
         let options = TCI1Options::default();
 
-        let (tci, _ranks, _errors) = crossinterpolate1(f, local_dims, first_pivot.clone(), options).unwrap();
+        let (tci, _ranks, _errors) =
+            crossinterpolate1(f, local_dims, first_pivot.clone(), options).unwrap();
 
         assert_eq!(tci.len(), 3);
 
@@ -1046,14 +1086,19 @@ mod tests {
         let mut options = TCI1Options::default();
         options.tolerance = 1e-12;
 
-        let (tci, _ranks, errors) = crossinterpolate1(f, local_dims.clone(), first_pivot, options).unwrap();
+        let (tci, _ranks, errors) =
+            crossinterpolate1(f, local_dims.clone(), first_pivot, options).unwrap();
 
         // Should converge to rank 2
         assert!(tci.rank() <= 3, "Expected rank <= 3, got {}", tci.rank());
 
         // Check error is small
         let final_error = errors.last().copied().unwrap_or(f64::INFINITY);
-        assert!(final_error < 1e-8, "Expected small error, got {}", final_error);
+        assert!(
+            final_error < 1e-8,
+            "Expected small error, got {}",
+            final_error
+        );
 
         // Test all values
         for i in 0..4 {
@@ -1085,7 +1130,8 @@ mod tests {
         let mut options = TCI1Options::default();
         options.tolerance = 1e-6;
 
-        let (tci, _ranks, errors) = crossinterpolate1(f, local_dims.clone(), first_pivot, options).unwrap();
+        let (tci, _ranks, errors) =
+            crossinterpolate1(f, local_dims.clone(), first_pivot, options).unwrap();
 
         // Should achieve reasonable rank
         assert!(tci.rank() <= 5, "Expected rank <= 5, got {}", tci.rank());

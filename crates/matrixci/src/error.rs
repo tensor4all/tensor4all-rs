@@ -15,7 +15,9 @@ pub enum MatrixCIError {
     },
 
     /// Index out of bounds
-    #[error("Index out of bounds: ({row}, {col}) is out of bounds for a ({nrows}, {ncols}) matrix")]
+    #[error(
+        "Index out of bounds: ({row}, {col}) is out of bounds for a ({nrows}, {ncols}) matrix"
+    )]
     IndexOutOfBounds {
         row: usize,
         col: usize,

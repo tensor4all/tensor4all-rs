@@ -1,9 +1,7 @@
 use num_complex::Complex64;
 use std::sync::Arc;
 use tensor4all_core::index::{DefaultIndex as Index, DynId};
-use tensor4all_core::{
-    default_svd_rtol, set_default_svd_rtol, svd, svd_c64, svd_with, SvdOptions,
-};
+use tensor4all_core::{default_svd_rtol, set_default_svd_rtol, svd, svd_c64, svd_with, SvdOptions};
 use tensor4all_core::{Storage, TensorDynLen};
 
 #[test]
@@ -350,8 +348,8 @@ fn test_svd_truncation() {
     // Create diagonal matrix: [[1, 0], [0, 1e-14]]
     // This matrix has singular values [1.0, 1e-14]
     let mut data = vec![0.0; 4];
-    data[0] = 1.0;      // [0, 0] = 1.0
-    data[3] = 1e-14;    // [1, 1] = 1e-14
+    data[0] = 1.0; // [0, 0] = 1.0
+    data[3] = 1e-14; // [1, 1] = 1e-14
 
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec(data),
@@ -361,7 +359,8 @@ fn test_svd_truncation() {
 
     // Use a more lenient rtol to ensure truncation happens
     let options = SvdOptions::with_rtol(1e-10);
-    let (u, s, v) = svd_with::<DynId, _, f64>(&tensor, &[i.clone()], &options).expect("SVD should succeed");
+    let (u, s, v) =
+        svd_with::<DynId, _, f64>(&tensor, &[i.clone()], &options).expect("SVD should succeed");
 
     // With rtol=1e-10, the discarded weight ratio is (1e-14)^2 / (1^2 + (1e-14)^2) ≈ 1e-28
     // This is much less than (1e-10)^2 = 1e-20, so truncation should occur
@@ -402,8 +401,8 @@ fn test_svd_with_override() {
     // Create a matrix with singular values that will be truncated with a lenient rtol
     // but not with a strict rtol
     let mut data = vec![0.0; 4];
-    data[0] = 1.0;      // [0, 0] = 1.0
-    data[3] = 1e-6;     // [1, 1] = 1e-6
+    data[0] = 1.0; // [0, 0] = 1.0
+    data[3] = 1e-6; // [1, 1] = 1e-6
 
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec(data),
@@ -445,7 +444,7 @@ fn test_default_svd_rtol() {
     // Test global default rtol getter and setter
     // Note: Other tests may have changed the global default, so we restore it first
     let original_rtol = default_svd_rtol();
-    
+
     // Restore to expected default (1e-12) for this test
     set_default_svd_rtol(1e-12).expect("Should set default rtol");
     let current_rtol = default_svd_rtol();

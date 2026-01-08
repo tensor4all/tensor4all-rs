@@ -120,11 +120,7 @@ impl<T: Scalar> RrLU<T> {
 
     /// Get pivot errors
     pub fn pivot_errors(&self) -> Vec<f64> {
-        let mut errors: Vec<f64> = self
-            .diag()
-            .iter()
-            .map(|d| f64::sqrt(d.abs_sq()))
-            .collect();
+        let mut errors: Vec<f64> = self.diag().iter().map(|d| f64::sqrt(d.abs_sq())).collect();
         errors.push(self.error);
         errors
     }

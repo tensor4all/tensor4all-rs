@@ -26,31 +26,31 @@
 //! let result = contract_naive(&mpo_a, &mpo_b, None)?;
 //! ```
 
-pub mod error;
-pub mod types;
-pub mod mpo;
-pub mod site_mpo;
-pub mod vidal_mpo;
-pub mod inverse_mpo;
-pub mod factorize;
-pub mod environment;
-pub mod contraction;
+pub mod contract_fit;
 pub mod contract_naive;
 pub mod contract_zipup;
-pub mod contract_fit;
+pub mod contraction;
 pub mod dispatch;
+pub mod environment;
+pub mod error;
+pub mod factorize;
+pub mod inverse_mpo;
+pub mod mpo;
+pub mod site_mpo;
 pub mod tt_contraction;
+pub mod types;
+pub mod vidal_mpo;
 
 // Re-export main types and functions
-pub use error::{MPOError, Result};
-pub use types::{Tensor4, Tensor4Ops, tensor4_zeros, tensor4_from_data};
-pub use mpo::MPO;
-pub use site_mpo::SiteMPO;
-pub use vidal_mpo::VidalMPO;
-pub use inverse_mpo::InverseMPO;
-pub use factorize::{factorize, FactorizeMethod, FactorizeOptions, FactorizeResult};
-pub use contraction::{Contraction, ContractionOptions};
+pub use contract_fit::{contract_fit, FitOptions};
 pub use contract_naive::contract_naive;
 pub use contract_zipup::contract_zipup;
-pub use contract_fit::{contract_fit, FitOptions};
+pub use contraction::{Contraction, ContractionOptions};
 pub use dispatch::contract;
+pub use error::{MPOError, Result};
+pub use factorize::{factorize, FactorizeMethod, FactorizeOptions, FactorizeResult};
+pub use inverse_mpo::InverseMPO;
+pub use mpo::MPO;
+pub use site_mpo::SiteMPO;
+pub use types::{tensor4_from_data, tensor4_zeros, Tensor4, Tensor4Ops};
+pub use vidal_mpo::VidalMPO;

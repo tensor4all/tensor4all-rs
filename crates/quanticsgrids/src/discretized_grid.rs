@@ -300,15 +300,31 @@ impl std::fmt::Display for DiscretizedGrid {
         let total_points: u64 = rs.iter().map(|&r| (base as u64).pow(r as u32)).product();
 
         if ndims <= 1 {
-            write!(f, "DiscretizedGrid{{{}}} with {} grid points", ndims, total_points)?;
+            write!(
+                f,
+                "DiscretizedGrid{{{}}} with {} grid points",
+                ndims, total_points
+            )?;
         } else {
-            let sizes: Vec<String> = rs.iter().map(|&r| format!("{}", (base as u64).pow(r as u32))).collect();
-            write!(f, "DiscretizedGrid{{{}}} with {} = {} grid points", ndims, sizes.join(" x "), total_points)?;
+            let sizes: Vec<String> = rs
+                .iter()
+                .map(|&r| format!("{}", (base as u64).pow(r as u32)))
+                .collect();
+            write!(
+                f,
+                "DiscretizedGrid{{{}}} with {} = {} grid points",
+                ndims,
+                sizes.join(" x "),
+                total_points
+            )?;
         }
 
         // Variable names
         let var_names = self.discrete_grid.variable_names();
-        if var_names.iter().any(|n| !n.chars().all(|c| c.is_ascii_digit())) {
+        if var_names
+            .iter()
+            .any(|n| !n.chars().all(|c| c.is_ascii_digit()))
+        {
             write!(f, "\n  Variables: ({})", var_names.join(", "))?;
         }
 
@@ -327,7 +343,11 @@ impl std::fmt::Display for DiscretizedGrid {
         // Domain
         let step = self.grid_step();
         if ndims == 1 {
-            write!(f, "\n  Domain: [{}, {})", self.lower_bound[0], self.upper_bound[0])?;
+            write!(
+                f,
+                "\n  Domain: [{}, {})",
+                self.lower_bound[0], self.upper_bound[0]
+            )?;
             write!(f, "\n  Grid spacing: {}", step[0])?;
         } else {
             let bounds_str: Vec<String> = self
@@ -531,10 +551,7 @@ impl DiscretizedGridBuilder {
 }
 
 /// Wrap a function to accept quantics indices
-pub fn quantics_function<F>(
-    grid: &DiscretizedGrid,
-    f: F,
-) -> impl Fn(&[i64]) -> Result<f64> + '_
+pub fn quantics_function<F>(grid: &DiscretizedGrid, f: F) -> impl Fn(&[i64]) -> Result<f64> + '_
 where
     F: Fn(&[f64]) -> f64 + 'static,
 {
@@ -673,7 +690,10 @@ mod tests {
             .with_upper_bound(&[0.0])
             .build();
 
-        assert!(matches!(result, Err(QuanticsGridError::InvalidBounds { .. })));
+        assert!(matches!(
+            result,
+            Err(QuanticsGridError::InvalidBounds { .. })
+        ));
     }
 
     #[test]

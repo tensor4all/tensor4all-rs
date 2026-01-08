@@ -2,7 +2,9 @@
 //!
 //! Provides functions to create, manipulate, and query tensor trains.
 
-use crate::types::{t4a_canonical_form, t4a_index, t4a_tensor, t4a_tensortrain, InternalTensorTrain};
+use crate::types::{
+    t4a_canonical_form, t4a_index, t4a_tensor, t4a_tensortrain, InternalTensorTrain,
+};
 use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -119,7 +121,11 @@ pub extern "C" fn t4a_tt_is_empty(ptr: *const t4a_tensortrain) -> libc::c_int {
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         let tt = unsafe { &*ptr };
-        if tt.inner().is_empty() { 1 } else { 0 }
+        if tt.inner().is_empty() {
+            1
+        } else {
+            0
+        }
     }));
 
     result.unwrap_or(T4A_INTERNAL_ERROR)
@@ -187,7 +193,8 @@ pub extern "C" fn t4a_tt_set_tensor(
             return T4A_INVALID_ARGUMENT;
         }
 
-        tt.inner_mut().set_tensor(site, tensor_inner.inner().clone());
+        tt.inner_mut()
+            .set_tensor(site, tensor_inner.inner().clone());
         T4A_SUCCESS
     }));
 
@@ -303,7 +310,11 @@ pub extern "C" fn t4a_tt_isortho(ptr: *const t4a_tensortrain) -> libc::c_int {
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         let tt = unsafe { &*ptr };
-        if tt.inner().isortho() { 1 } else { 0 }
+        if tt.inner().isortho() {
+            1
+        } else {
+            0
+        }
     }));
 
     result.unwrap_or(T4A_INTERNAL_ERROR)
@@ -635,7 +646,7 @@ pub extern "C" fn t4a_tt_contract(
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        use tensor4all_itensorlike::{ContractOptions, ContractMethod};
+        use tensor4all_itensorlike::{ContractMethod, ContractOptions};
 
         let tt1 = unsafe { &*ptr1 };
         let tt2 = unsafe { &*ptr2 };

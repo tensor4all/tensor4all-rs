@@ -95,7 +95,12 @@ impl<T: TTScalar> TensorTrain<T> {
                 for l in 0..b.left_dim() {
                     for s in 0..site_dim {
                         for r in 0..b.right_dim() {
-                            new_tensor.set3(a.left_dim() + l, s, a.right_dim() + r, *b.get3(l, s, r));
+                            new_tensor.set3(
+                                a.left_dim() + l,
+                                s,
+                                a.right_dim() + r,
+                                *b.get3(l, s, r),
+                            );
                         }
                     }
                 }

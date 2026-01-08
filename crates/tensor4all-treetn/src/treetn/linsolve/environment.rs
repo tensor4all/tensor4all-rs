@@ -113,10 +113,7 @@ where
         // Remove env[(from, to)] if it exists
         if self.envs.remove(&(from.clone(), to.clone())).is_some() {
             // Propagate to next generation: env[(to, x)] for all neighbors x of to, x ≠ from
-            let neighbors: Vec<V> = topology
-                .neighbors(to)
-                .filter(|n| n != from)
-                .collect();
+            let neighbors: Vec<V> = topology.neighbors(to).filter(|n| n != from).collect();
 
             for neighbor in neighbors {
                 self.invalidate_recursive(to, &neighbor, topology);
@@ -144,7 +141,8 @@ where
 ///
 /// This enables direct use of SiteIndexNetwork for cache invalidation
 /// and environment computation without needing adapter types like StaticTopology.
-impl<NodeName, Id, Symm, Tags> NetworkTopology<NodeName> for SiteIndexNetwork<NodeName, Id, Symm, Tags>
+impl<NodeName, Id, Symm, Tags> NetworkTopology<NodeName>
+    for SiteIndexNetwork<NodeName, Id, Symm, Tags>
 where
     NodeName: Clone + Hash + Eq + Send + Sync + Debug,
     Id: Clone + Hash + Eq,

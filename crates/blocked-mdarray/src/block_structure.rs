@@ -59,7 +59,9 @@ impl ReshapePlan {
 
     /// Get the new block shape for a given old linear block index.
     pub fn new_block_shape(&self, old_linear: usize) -> Vec<usize> {
-        let new_linear = self.block_mapping.get(&old_linear)
+        let new_linear = self
+            .block_mapping
+            .get(&old_linear)
             .expect("Block not in mapping");
         let new_multi = block_multi_index(*new_linear, &self.new_num_blocks);
         new_multi
@@ -417,7 +419,6 @@ impl BlockStructure {
         index
     }
 
-
     /// Compute the resulting structure of matrix multiplication (C = self @ other).
     ///
     /// This predicts which blocks in the result will be non-zero based on the
@@ -540,7 +541,11 @@ impl BlockStructure {
 
         // Build permutation: [free axes, contracted axes]
         let perm_self: Vec<usize> = free_self.iter().chain(axes_self.iter()).copied().collect();
-        let perm_other: Vec<usize> = axes_other.iter().chain(free_other.iter()).copied().collect();
+        let perm_other: Vec<usize> = axes_other
+            .iter()
+            .chain(free_other.iter())
+            .copied()
+            .collect();
 
         // Permute
         let a_perm = self.permute(&perm_self);
@@ -612,7 +617,8 @@ impl BlockStructure {
             let mut result = Self::empty(result_parts);
             for _ in self.iter_nonzero_indices() {
                 for other_idx in other.iter_nonzero_indices() {
-                    let mut result_idx: Vec<usize> = free_self.iter()
+                    let mut result_idx: Vec<usize> = free_self
+                        .iter()
                         .map(|_| 0) // placeholder
                         .collect();
                     result_idx.extend(free_other.iter().map(|&a| other_idx[a]));
@@ -643,7 +649,12 @@ impl BlockStructure {
     /// Estimate the computational cost for tensor contraction.
     ///
     /// Uses the same approach as tensordot but returns cost instead.
-    pub fn estimate_tensordot_cost(&self, other: &Self, axes_self: &[usize], axes_other: &[usize]) -> u64 {
+    pub fn estimate_tensordot_cost(
+        &self,
+        other: &Self,
+        axes_self: &[usize],
+        axes_other: &[usize],
+    ) -> u64 {
         assert_eq!(
             axes_self.len(),
             axes_other.len(),
@@ -668,7 +679,11 @@ impl BlockStructure {
 
         // Build permutation
         let perm_self: Vec<usize> = free_self.iter().chain(axes_self.iter()).copied().collect();
-        let perm_other: Vec<usize> = axes_other.iter().chain(free_other.iter()).copied().collect();
+        let perm_other: Vec<usize> = axes_other
+            .iter()
+            .chain(free_other.iter())
+            .copied()
+            .collect();
 
         // Permute and reshape to 2D
         let a_perm = self.permute(&perm_self);
@@ -681,10 +696,12 @@ impl BlockStructure {
         if num_free_self == 0 || num_free_other == 0 || num_contracted == 0 {
             // Edge case: handle separately
             // For now, return a simple estimate
-            let self_size: u64 = self.iter_nonzero_indices()
+            let self_size: u64 = self
+                .iter_nonzero_indices()
                 .map(|idx| self.block_size(&idx) as u64)
                 .sum();
-            let other_size: u64 = other.iter_nonzero_indices()
+            let other_size: u64 = other
+                .iter_nonzero_indices()
                 .map(|idx| other.block_size(&idx) as u64)
                 .sum();
             return 2 * self_size * other_size / (num_contracted.max(1) as u64);
@@ -719,10 +736,7 @@ mod tests {
 
     #[test]
     fn test_block_structure_insert_has() {
-        let partitions = vec![
-            BlockPartition::uniform(2, 3),
-            BlockPartition::uniform(2, 3),
-        ];
+        let partitions = vec![BlockPartition::uniform(2, 3), BlockPartition::uniform(2, 3)];
         let mut structure = BlockStructure::empty(partitions);
 
         structure.insert_block(&vec![0, 1]);
@@ -755,9 +769,9 @@ mod tests {
     #[test]
     fn test_block_structure_permute_3d() {
         let partitions = vec![
-            BlockPartition::uniform(2, 2),  // axis 0: 2 blocks of size 2
-            BlockPartition::uniform(3, 2),  // axis 1: 2 blocks of size 3
-            BlockPartition::uniform(4, 2),  // axis 2: 2 blocks of size 4
+            BlockPartition::uniform(2, 2), // axis 0: 2 blocks of size 2
+            BlockPartition::uniform(3, 2), // axis 1: 2 blocks of size 3
+            BlockPartition::uniform(4, 2), // axis 2: 2 blocks of size 4
         ];
         let mut structure = BlockStructure::empty(partitions);
         structure.insert_block(&vec![0, 1, 0]);
@@ -777,10 +791,7 @@ mod tests {
 
     #[test]
     fn test_group_by_axis() {
-        let partitions = vec![
-            BlockPartition::uniform(2, 3),
-            BlockPartition::uniform(2, 3),
-        ];
+        let partitions = vec![BlockPartition::uniform(2, 3), BlockPartition::uniform(2, 3)];
         let mut structure = BlockStructure::empty(partitions);
         // Row 0: cols 0, 2
         // Row 1: col 1
@@ -806,19 +817,13 @@ mod tests {
         // C = A @ B should have:
         //   C[0,0] from A[0,0]*B[0,0] + A[0,1]*B[1,0]
         //   C[1,1] from A[1,2]*B[2,1]
-        let a_parts = vec![
-            BlockPartition::uniform(2, 2),
-            BlockPartition::uniform(2, 3),
-        ];
+        let a_parts = vec![BlockPartition::uniform(2, 2), BlockPartition::uniform(2, 3)];
         let mut a = BlockStructure::empty(a_parts);
         a.insert_block(&vec![0, 0]);
         a.insert_block(&vec![0, 1]);
         a.insert_block(&vec![1, 2]);
 
-        let b_parts = vec![
-            BlockPartition::uniform(2, 3),
-            BlockPartition::uniform(2, 2),
-        ];
+        let b_parts = vec![BlockPartition::uniform(2, 3), BlockPartition::uniform(2, 2)];
         let mut b = BlockStructure::empty(b_parts);
         b.insert_block(&vec![0, 0]);
         b.insert_block(&vec![1, 0]);
@@ -857,18 +862,12 @@ mod tests {
         // matmul cost: 2 * (2*2*2) + 2 * (2*2*2) = 32
         // accumulate cost: 1 * (2*2) = 4
         // total = 36
-        let a_parts = vec![
-            BlockPartition::uniform(2, 1),
-            BlockPartition::uniform(2, 2),
-        ];
+        let a_parts = vec![BlockPartition::uniform(2, 1), BlockPartition::uniform(2, 2)];
         let mut a = BlockStructure::empty(a_parts);
         a.insert_block(&vec![0, 0]);
         a.insert_block(&vec![0, 1]);
 
-        let b_parts = vec![
-            BlockPartition::uniform(2, 2),
-            BlockPartition::uniform(2, 1),
-        ];
+        let b_parts = vec![BlockPartition::uniform(2, 2), BlockPartition::uniform(2, 1)];
         let mut b = BlockStructure::empty(b_parts);
         b.insert_block(&vec![0, 0]);
         b.insert_block(&vec![1, 0]);
@@ -880,17 +879,11 @@ mod tests {
     #[test]
     fn test_estimate_matmul_cost_sparse() {
         // Sparse case: no matching k indices -> cost = 0
-        let a_parts = vec![
-            BlockPartition::uniform(2, 2),
-            BlockPartition::uniform(2, 2),
-        ];
+        let a_parts = vec![BlockPartition::uniform(2, 2), BlockPartition::uniform(2, 2)];
         let mut a = BlockStructure::empty(a_parts);
         a.insert_block(&vec![0, 0]); // k=0
 
-        let b_parts = vec![
-            BlockPartition::uniform(2, 2),
-            BlockPartition::uniform(2, 2),
-        ];
+        let b_parts = vec![BlockPartition::uniform(2, 2), BlockPartition::uniform(2, 2)];
         let mut b = BlockStructure::empty(b_parts);
         b.insert_block(&vec![1, 0]); // k=1
 
@@ -931,10 +924,7 @@ mod tests {
     #[test]
     fn test_reshape_identity() {
         // Reshape with all 1s should be identity
-        let partitions = vec![
-            BlockPartition::uniform(2, 2),
-            BlockPartition::uniform(3, 2),
-        ];
+        let partitions = vec![BlockPartition::uniform(2, 2), BlockPartition::uniform(3, 2)];
         let mut structure = BlockStructure::empty(partitions);
         structure.insert_block(&vec![0, 1]);
         structure.insert_block(&vec![1, 0]);
@@ -1059,17 +1049,11 @@ mod tests {
     fn test_estimate_tensordot_cost() {
         let k_partition = BlockPartition::uniform(3, 2);
 
-        let a_parts = vec![
-            BlockPartition::uniform(2, 2),
-            k_partition.clone(),
-        ];
+        let a_parts = vec![BlockPartition::uniform(2, 2), k_partition.clone()];
         let mut a = BlockStructure::empty(a_parts);
         a.insert_block(&vec![0, 0]);
 
-        let b_parts = vec![
-            k_partition.clone(),
-            BlockPartition::uniform(4, 2),
-        ];
+        let b_parts = vec![k_partition.clone(), BlockPartition::uniform(4, 2)];
         let mut b = BlockStructure::empty(b_parts);
         b.insert_block(&vec![0, 0]);
 
@@ -1083,10 +1067,7 @@ mod tests {
     #[test]
     fn test_reshape_to_new_shape() {
         // 2D structure with single block -> reshape to 1D
-        let partitions = vec![
-            BlockPartition::trivial(4),
-            BlockPartition::trivial(3),
-        ];
+        let partitions = vec![BlockPartition::trivial(4), BlockPartition::trivial(3)];
         let mut structure = BlockStructure::empty(partitions);
         structure.insert_block(&vec![0, 0]);
 
@@ -1118,10 +1099,7 @@ mod tests {
     #[test]
     fn test_reshape_2d_to_3d() {
         // 2D structure -> reshape to 3D
-        let partitions = vec![
-            BlockPartition::trivial(6),
-            BlockPartition::trivial(4),
-        ];
+        let partitions = vec![BlockPartition::trivial(6), BlockPartition::trivial(4)];
         let mut structure = BlockStructure::empty(partitions);
         structure.insert_block(&vec![0, 0]);
 
@@ -1137,10 +1115,7 @@ mod tests {
     #[test]
     fn test_reshape_round_trip_2d_3d_2d() {
         // Test round-trip: 2D -> 3D -> 2D should recover original structure
-        let partitions = vec![
-            BlockPartition::trivial(6),
-            BlockPartition::trivial(4),
-        ];
+        let partitions = vec![BlockPartition::trivial(6), BlockPartition::trivial(4)];
         let mut original = BlockStructure::empty(partitions);
         original.insert_block(&vec![0, 0]);
 
@@ -1156,7 +1131,10 @@ mod tests {
             .iter_nonzero_indices()
             .map(|idx| reshaped_3d.block_size(&idx))
             .sum();
-        assert_eq!(elements_before, elements_after_3d, "Elements must be preserved in 2D->3D");
+        assert_eq!(
+            elements_before, elements_after_3d,
+            "Elements must be preserved in 2D->3D"
+        );
 
         // 3D [2, 3, 4] -> 2D [6, 4]
         let round_trip = reshaped_3d.reshape(&[6, 4]);
@@ -1164,29 +1142,31 @@ mod tests {
             .iter_nonzero_indices()
             .map(|idx| round_trip.block_size(&idx))
             .sum();
-        assert_eq!(elements_before, elements_after_round, "Elements must be preserved in round-trip");
+        assert_eq!(
+            elements_before, elements_after_round,
+            "Elements must be preserved in round-trip"
+        );
 
         // Verify structure matches original
         assert_eq!(round_trip.rank(), original.rank());
         assert_eq!(round_trip.shape(), original.shape());
         assert_eq!(round_trip.num_blocks(), original.num_blocks());
-        assert_eq!(round_trip.num_nonzero_blocks(), original.num_nonzero_blocks());
+        assert_eq!(
+            round_trip.num_nonzero_blocks(),
+            original.num_nonzero_blocks()
+        );
         assert!(round_trip.has_block(&vec![0, 0]));
     }
 
     #[test]
     fn test_reshape_preserves_nonzero_elements() {
         // Test that non-zero block element count is preserved through multiple reshapes
-        let partitions = vec![
-            BlockPartition::trivial(24),
-        ];
+        let partitions = vec![BlockPartition::trivial(24)];
         let mut structure = BlockStructure::empty(partitions);
         structure.insert_block(&vec![0]);
 
         let count_elements = |s: &BlockStructure| -> usize {
-            s.iter_nonzero_indices()
-                .map(|idx| s.block_size(&idx))
-                .sum()
+            s.iter_nonzero_indices().map(|idx| s.block_size(&idx)).sum()
         };
 
         let initial_elements = count_elements(&structure);
@@ -1212,10 +1192,7 @@ mod tests {
     #[test]
     fn test_plan_reshape_to_and_reshape_with_plan() {
         // Test that plan_reshape_to + reshape_with_plan gives same result as reshape_to
-        let partitions = vec![
-            BlockPartition::trivial(6),
-            BlockPartition::trivial(4),
-        ];
+        let partitions = vec![BlockPartition::trivial(6), BlockPartition::trivial(4)];
         let mut structure = BlockStructure::empty(partitions);
         structure.insert_block(&vec![0, 0]);
 
@@ -1234,8 +1211,14 @@ mod tests {
         // Results should be identical
         assert_eq!(reshaped_direct.rank(), reshaped_with_plan.rank());
         assert_eq!(reshaped_direct.shape(), reshaped_with_plan.shape());
-        assert_eq!(reshaped_direct.num_blocks(), reshaped_with_plan.num_blocks());
-        assert_eq!(reshaped_direct.num_nonzero_blocks(), reshaped_with_plan.num_nonzero_blocks());
+        assert_eq!(
+            reshaped_direct.num_blocks(),
+            reshaped_with_plan.num_blocks()
+        );
+        assert_eq!(
+            reshaped_direct.num_nonzero_blocks(),
+            reshaped_with_plan.num_nonzero_blocks()
+        );
 
         // Verify plan contents
         assert_eq!(plan.old_num_blocks, vec![1, 1]);
@@ -1247,10 +1230,7 @@ mod tests {
     #[test]
     fn test_reshape_plan_reuse() {
         // Test that the same plan can be used for multiple structures with same shape
-        let partitions = vec![
-            BlockPartition::trivial(6),
-            BlockPartition::trivial(4),
-        ];
+        let partitions = vec![BlockPartition::trivial(6), BlockPartition::trivial(4)];
 
         let mut structure1 = BlockStructure::empty(partitions.clone());
         structure1.insert_block(&vec![0, 0]);
@@ -1259,10 +1239,7 @@ mod tests {
         structure2.insert_block(&vec![0, 0]);
 
         // Create plan from structure1
-        let new_partitions = vec![
-            BlockPartition::trivial(2),
-            BlockPartition::trivial(12),
-        ];
+        let new_partitions = vec![BlockPartition::trivial(2), BlockPartition::trivial(12)];
         let plan = structure1.plan_reshape_to(new_partitions);
 
         // Use same plan for both structures
@@ -1271,6 +1248,9 @@ mod tests {
 
         // Both should have same result
         assert_eq!(reshaped1.shape(), reshaped2.shape());
-        assert_eq!(reshaped1.num_nonzero_blocks(), reshaped2.num_nonzero_blocks());
+        assert_eq!(
+            reshaped1.num_nonzero_blocks(),
+            reshaped2.num_nonzero_blocks()
+        );
     }
 }

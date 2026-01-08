@@ -1,15 +1,13 @@
 //! Benchmarks for quanticsgrids conversion functions
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid, UnfoldingScheme};
 
 fn bench_grididx_to_quantics(c: &mut Criterion) {
     let mut group = c.benchmark_group("grididx_to_quantics");
 
     for r in [4, 8, 12, 16] {
-        let grid = InherentDiscreteGrid::builder(&[r])
-            .build()
-            .unwrap();
+        let grid = InherentDiscreteGrid::builder(&[r]).build().unwrap();
         let max_idx = 2i64.pow(r as u32);
         let grididx = vec![max_idx / 2];
 
@@ -20,9 +18,7 @@ fn bench_grididx_to_quantics(c: &mut Criterion) {
 
     // 2D grid
     for r in [4, 8, 12] {
-        let grid = InherentDiscreteGrid::builder(&[r, r])
-            .build()
-            .unwrap();
+        let grid = InherentDiscreteGrid::builder(&[r, r]).build().unwrap();
         let max_idx = 2i64.pow(r as u32);
         let grididx = vec![max_idx / 2, max_idx / 2];
 
@@ -48,9 +44,7 @@ fn bench_quantics_to_grididx(c: &mut Criterion) {
     let mut group = c.benchmark_group("quantics_to_grididx");
 
     for r in [4, 8, 12, 16] {
-        let grid = InherentDiscreteGrid::builder(&[r])
-            .build()
-            .unwrap();
+        let grid = InherentDiscreteGrid::builder(&[r]).build().unwrap();
         let quantics: Vec<i64> = vec![1; r];
 
         group.bench_with_input(BenchmarkId::new("1D_base2", r), &r, |b, _| {
@@ -80,25 +74,25 @@ fn bench_origcoord_conversions(c: &mut Criterion) {
 
     // DiscretizedGrid conversions
     for r in [8, 12, 16] {
-        let grid = DiscretizedGrid::builder(&[r])
-            .build()
-            .unwrap();
+        let grid = DiscretizedGrid::builder(&[r]).build().unwrap();
         let coord = vec![0.5];
         let grididx = vec![2i64.pow(r as u32 - 1)];
 
-        group.bench_with_input(BenchmarkId::new("origcoord_to_grididx_1D", r), &r, |b, _| {
-            b.iter(|| grid.origcoord_to_grididx(black_box(&coord)))
-        });
+        group.bench_with_input(
+            BenchmarkId::new("origcoord_to_grididx_1D", r),
+            &r,
+            |b, _| b.iter(|| grid.origcoord_to_grididx(black_box(&coord))),
+        );
 
-        group.bench_with_input(BenchmarkId::new("grididx_to_origcoord_1D", r), &r, |b, _| {
-            b.iter(|| grid.grididx_to_origcoord(black_box(&grididx)))
-        });
+        group.bench_with_input(
+            BenchmarkId::new("grididx_to_origcoord_1D", r),
+            &r,
+            |b, _| b.iter(|| grid.grididx_to_origcoord(black_box(&grididx))),
+        );
     }
 
     // 2D
-    let grid = DiscretizedGrid::builder(&[10, 10])
-        .build()
-        .unwrap();
+    let grid = DiscretizedGrid::builder(&[10, 10]).build().unwrap();
     let coord = vec![0.5, 0.5];
     group.bench_function("origcoord_to_quantics_2D_R10", |b| {
         b.iter(|| grid.origcoord_to_quantics(black_box(&coord)))

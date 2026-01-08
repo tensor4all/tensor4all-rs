@@ -529,9 +529,9 @@ impl InherentDiscreteGridBuilder {
         // Default values
         let origin = self.origin.unwrap_or_else(|| vec![1; ndims]);
         let step = self.step.unwrap_or_else(|| vec![1; ndims]);
-        let variable_names = self.variable_names.unwrap_or_else(|| {
-            (1..=ndims).map(|i| i.to_string()).collect()
-        });
+        let variable_names = self
+            .variable_names
+            .unwrap_or_else(|| (1..=ndims).map(|i| i.to_string()).collect());
 
         // Validate dimensions match
         if origin.len() != ndims {
@@ -572,7 +572,11 @@ impl InherentDiscreteGridBuilder {
         let lookup_table = build_lookup_table(&self.rs, &index_table, &variable_names)?;
 
         // Compute max grid indices
-        let max_grididx: Vec<i64> = self.rs.iter().map(|&r| (self.base as i64).pow(r as u32)).collect();
+        let max_grididx: Vec<i64> = self
+            .rs
+            .iter()
+            .map(|&r| (self.base as i64).pow(r as u32))
+            .collect();
 
         Ok(InherentDiscreteGrid {
             ndims,
@@ -666,10 +670,7 @@ fn build_lookup_table(
     index_table: &IndexTable,
     variable_names: &[String],
 ) -> Result<Vec<Vec<LookupEntry>>> {
-    let mut lookup_table: Vec<Vec<LookupEntry>> = rs
-        .iter()
-        .map(|&r| vec![(0, 0); r])
-        .collect();
+    let mut lookup_table: Vec<Vec<LookupEntry>> = rs.iter().map(|&r| vec![(0, 0); r]).collect();
 
     let mut index_visited: Vec<Vec<bool>> = rs.iter().map(|&r| vec![false; r]).collect();
 

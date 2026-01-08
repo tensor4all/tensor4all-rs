@@ -3,8 +3,8 @@
 use crate::error::{MatrixCIError, Result};
 use crate::traits::AbstractMatrixCI;
 use crate::util::{
-    a_inv_times_b, a_times_b_inv, dot, from_vec2d, get_col, get_row, mat_mul, ncols, nrows,
-    submatrix, submatrix_argmax, zeros, append_col, append_row, Matrix, Scalar,
+    a_inv_times_b, a_times_b_inv, append_col, append_row, dot, from_vec2d, get_col, get_row,
+    mat_mul, ncols, nrows, submatrix, submatrix_argmax, zeros, Matrix, Scalar,
 };
 
 /// Matrix Cross Interpolation representation
@@ -71,9 +71,7 @@ impl<T: Scalar> MatrixCI<T> {
         let nr = nrows(a);
         let _nc = ncols(a);
 
-        let pivot_cols = from_vec2d(
-            (0..nr).map(|r| vec![pivot_col[r]]).collect()
-        );
+        let pivot_cols = from_vec2d((0..nr).map(|r| vec![pivot_col[r]]).collect());
 
         let pivot_rows = from_vec2d(vec![pivot_row]);
 
@@ -392,7 +390,12 @@ mod tests {
         for i in 0..3 {
             for j in 0..3 {
                 let diff = (m[[i, j]] - approx[[i, j]]).abs();
-                assert!(diff < 1e-10, "Approximation error too large at ({}, {})", i, j);
+                assert!(
+                    diff < 1e-10,
+                    "Approximation error too large at ({}, {})",
+                    i,
+                    j
+                );
             }
         }
     }

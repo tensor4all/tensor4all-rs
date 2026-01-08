@@ -15,11 +15,11 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 
 use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
 use tensor4all_core::TensorDynLen;
+use tensor4all_core::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
 
 use super::addition::direct_sum_tensors;
-use super::decompose::{TreeTopology, factorize_tensor_to_treetn};
+use super::decompose::{factorize_tensor_to_treetn, TreeTopology};
 use super::{common_inds, TreeTN};
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -149,7 +149,10 @@ where
 
         // Build node names list (sorted)
         let node_names: Vec<V> = {
-            let mut names: Vec<V> = self.graph.graph().node_indices()
+            let mut names: Vec<V> = self
+                .graph
+                .graph()
+                .node_indices()
                 .filter_map(|idx| self.graph.node_name(idx).cloned())
                 .collect();
             names.sort();
@@ -167,18 +170,25 @@ where
 
         // Step 2: Process each node using direct_sum_tensors
         for node_name in &node_names {
-            let node_idx_a = self.graph.node_index(node_name)
+            let node_idx_a = self
+                .graph
+                .node_index(node_name)
                 .ok_or_else(|| anyhow::anyhow!("Node not found in self"))?;
-            let node_idx_b = other.graph.node_index(node_name)
+            let node_idx_b = other
+                .graph
+                .node_index(node_name)
                 .ok_or_else(|| anyhow::anyhow!("Node not found in other"))?;
 
-            let tensor_a = self.tensor(node_idx_a)
+            let tensor_a = self
+                .tensor(node_idx_a)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found in self"))?;
-            let tensor_b = other.tensor(node_idx_b)
+            let tensor_b = other
+                .tensor(node_idx_b)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found in other"))?;
 
             // Get site indices for this node
-            let site_indices: HashSet<Id> = self.site_space(node_name)
+            let site_indices: HashSet<Id> = self
+                .site_space(node_name)
                 .map(|s| s.iter().map(|idx| idx.id.clone()).collect())
                 .unwrap_or_default();
 
@@ -186,7 +196,9 @@ where
             let mut neighbor_names_a: HashMap<Id, V> = HashMap::new();
             for edge in self.edges_for_node(node_idx_a) {
                 if let Some(bond_idx) = self.bond_index(edge.0) {
-                    let neighbor_name = self.graph.node_name(edge.1)
+                    let neighbor_name = self
+                        .graph
+                        .node_name(edge.1)
                         .ok_or_else(|| anyhow::anyhow!("Neighbor name not found"))?
                         .clone();
                     neighbor_names_a.insert(bond_idx.id.clone(), neighbor_name);
@@ -196,7 +208,9 @@ where
             let mut neighbor_names_b: HashMap<Id, V> = HashMap::new();
             for edge in other.edges_for_node(node_idx_b) {
                 if let Some(bond_idx) = other.bond_index(edge.0) {
-                    let neighbor_name = other.graph.node_name(edge.1)
+                    let neighbor_name = other
+                        .graph
+                        .node_name(edge.1)
                         .ok_or_else(|| anyhow::anyhow!("Neighbor name not found"))?
                         .clone();
                     neighbor_names_b.insert(bond_idx.id.clone(), neighbor_name);
@@ -205,17 +219,15 @@ where
 
             // Build bond_info_by_neighbor for this node
             let mut bond_info_by_neighbor: HashMap<V, _> = HashMap::new();
-            for (neighbor, info) in merged_bonds.iter()
-                .filter_map(|((a, b), info)| {
-                    if a == node_name {
-                        Some((b, info))
-                    } else if b == node_name {
-                        Some((a, info))
-                    } else {
-                        None
-                    }
-                })
-            {
+            for (neighbor, info) in merged_bonds.iter().filter_map(|((a, b), info)| {
+                if a == node_name {
+                    Some((b, info))
+                } else if b == node_name {
+                    Some((a, info))
+                } else {
+                    None
+                }
+            }) {
                 bond_info_by_neighbor.insert(neighbor.clone(), info);
             }
 
@@ -234,9 +246,13 @@ where
 
         // Step 3: Add connections using the merged bond indices
         for ((src_name, tgt_name), info) in &merged_bonds {
-            let src_node = result.graph.node_index(src_name)
+            let src_node = result
+                .graph
+                .node_index(src_name)
                 .ok_or_else(|| anyhow::anyhow!("Source node not found in result"))?;
-            let tgt_node = result.graph.node_index(tgt_name)
+            let tgt_node = result
+                .graph
+                .node_index(tgt_name)
                 .ok_or_else(|| anyhow::anyhow!("Target node not found in result"))?;
             // Use the same merged_index for both endpoints
             result.connect_internal(src_node, &info.merged_index, tgt_node, &info.merged_index)?;
@@ -274,9 +290,14 @@ where
 
         if self.node_count() == 1 {
             // Single node - just return a clone of its tensor
-            let node = self.graph.graph().node_indices().next()
+            let node = self
+                .graph
+                .graph()
+                .node_indices()
+                .next()
                 .ok_or_else(|| anyhow::anyhow!("No nodes found"))?;
-            return self.tensor(node)
+            return self
+                .tensor(node)
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found"));
         }
@@ -286,47 +307,62 @@ where
             .context("contract_to_tensor: graph must be a tree")?;
 
         // Choose a deterministic root (minimum node name)
-        let root_name = self.graph.graph().node_indices()
+        let root_name = self
+            .graph
+            .graph()
+            .node_indices()
             .filter_map(|idx| self.graph.node_name(idx).cloned())
             .min()
             .ok_or_else(|| anyhow::anyhow!("No nodes found"))?;
-        let root = self.graph.node_index(&root_name)
+        let root = self
+            .graph
+            .node_index(&root_name)
             .ok_or_else(|| anyhow::anyhow!("Root node not found"))?;
 
         // Get edges to process (post-order DFS edges towards root)
         let edges = self.site_index_network.edges_to_canonicalize(None, root);
 
         // Initialize with original tensors
-        let mut tensors: HashMap<NodeIndex, TensorDynLen<Id, Symm>> = self.graph.graph()
+        let mut tensors: HashMap<NodeIndex, TensorDynLen<Id, Symm>> = self
+            .graph
+            .graph()
             .node_indices()
             .filter_map(|n| self.tensor(n).cloned().map(|t| (n, t)))
             .collect();
 
         // Process each edge: contract tensor at `from` into tensor at `to`
         for (from, to) in edges {
-            let from_tensor = tensors.remove(&from)
+            let from_tensor = tensors
+                .remove(&from)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", from))?;
-            let to_tensor = tensors.remove(&to)
+            let to_tensor = tensors
+                .remove(&to)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", to))?;
 
             // Find the edge and get bond index
-            let edge = self.graph.graph().find_edge(from, to)
+            let edge = self
+                .graph
+                .graph()
+                .find_edge(from, to)
                 .or_else(|| self.graph.graph().find_edge(to, from))
                 .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", from, to))?;
 
             // In Einsum mode, both endpoints share the same bond index
-            let bond_idx = self.bond_index(edge)
+            let bond_idx = self
+                .bond_index(edge)
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))?
                 .clone();
 
             // Contract and store result at `to`
-            let contracted = to_tensor.tensordot(&from_tensor, &[(bond_idx.clone(), bond_idx)])
+            let contracted = to_tensor
+                .tensordot(&from_tensor, &[(bond_idx.clone(), bond_idx)])
                 .context("Failed to contract along edge")?;
             tensors.insert(to, contracted);
         }
 
         // The root's tensor is the final result
-        tensors.remove(&root)
+        tensors
+            .remove(&root)
             .ok_or_else(|| anyhow::anyhow!("Contraction produced no result"))
     }
 
@@ -396,7 +432,9 @@ where
     {
         // 1. Verify topologies are compatible (same graph structure)
         if !self.same_topology(other) {
-            return Err(anyhow::anyhow!("contract_zipup: networks have incompatible topologies"));
+            return Err(anyhow::anyhow!(
+                "contract_zipup: networks have incompatible topologies"
+            ));
         }
 
         // 2. Replace internal indices with fresh IDs to avoid collision
@@ -404,17 +442,27 @@ where
         let tn2 = other.sim_internal_inds();
 
         // 3. Get traversal edges from leaves to center
-        let edges = tn1.edges_to_canonicalize_by_names(center)
+        let edges = tn1
+            .edges_to_canonicalize_by_names(center)
             .ok_or_else(|| anyhow::anyhow!("contract_zipup: center node {:?} not found", center))?;
 
         if edges.is_empty() && self.node_count() == 1 {
             // Single node case: just contract the two tensors
-            let node_idx = tn1.graph.graph().node_indices().next()
+            let node_idx = tn1
+                .graph
+                .graph()
+                .node_indices()
+                .next()
                 .ok_or_else(|| anyhow::anyhow!("contract_zipup: no nodes found"))?;
-            let t1 = tn1.tensor(node_idx)
+            let t1 = tn1
+                .tensor(node_idx)
                 .ok_or_else(|| anyhow::anyhow!("contract_zipup: tensor not found in tn1"))?;
-            let t2 = tn2.tensor(tn2.graph.graph().node_indices().next()
-                .ok_or_else(|| anyhow::anyhow!("contract_zipup: tensor not found in tn2"))?)
+            let t2 = tn2
+                .tensor(
+                    tn2.graph.graph().node_indices().next().ok_or_else(|| {
+                        anyhow::anyhow!("contract_zipup: tensor not found in tn2")
+                    })?,
+                )
                 .ok_or_else(|| anyhow::anyhow!("contract_zipup: tensor not found"))?;
 
             // Contract along common indices (site indices)
@@ -423,12 +471,18 @@ where
                 // Outer product when no common site indices
                 t1.outer_product(t2)?
             } else {
-                let pairs: Vec<_> = common.iter().map(|idx| (idx.clone(), idx.clone())).collect();
+                let pairs: Vec<_> = common
+                    .iter()
+                    .map(|idx| (idx.clone(), idx.clone()))
+                    .collect();
                 t1.tensordot(t2, &pairs)?
             };
             let mut result_tn = Self::new();
-            let node_name = tn1.graph.node_name(node_idx)
-                .ok_or_else(|| anyhow::anyhow!("Node name not found"))?.clone();
+            let node_name = tn1
+                .graph
+                .node_name(node_idx)
+                .ok_or_else(|| anyhow::anyhow!("Node name not found"))?
+                .clone();
             result_tn.add_tensor(node_name, result)?;
             return Ok(result_tn);
         }
@@ -438,18 +492,24 @@ where
         let mut result_tensors: HashMap<V, TensorDynLen<Id, Symm>> = HashMap::new();
 
         for node_name in tn1.node_names() {
-            let node1 = tn1.node_index(&node_name)
+            let node1 = tn1
+                .node_index(&node_name)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn1", node_name))?;
-            let node2 = tn2.node_index(&node_name)
+            let node2 = tn2
+                .node_index(&node_name)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn2", node_name))?;
 
-            let t1 = tn1.tensor(node1)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in tn1", node_name))?;
-            let t2 = tn2.tensor(node2)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in tn2", node_name))?;
+            let t1 = tn1.tensor(node1).ok_or_else(|| {
+                anyhow::anyhow!("Tensor not found for node {:?} in tn1", node_name)
+            })?;
+            let t2 = tn2.tensor(node2).ok_or_else(|| {
+                anyhow::anyhow!("Tensor not found for node {:?} in tn2", node_name)
+            })?;
 
             // Contract along site indices (external indices)
-            let site_inds1: HashSet<_> = tn1.site_index_network.site_space(&node_name)
+            let site_inds1: HashSet<_> = tn1
+                .site_index_network
+                .site_space(&node_name)
                 .map(|s| s.iter().map(|i| i.id.clone()).collect())
                 .unwrap_or_default();
 
@@ -462,7 +522,10 @@ where
                 // Outer product when no common site indices
                 t1.outer_product(t2)?
             } else {
-                let pairs: Vec<_> = common.iter().map(|idx| (idx.clone(), idx.clone())).collect();
+                let pairs: Vec<_> = common
+                    .iter()
+                    .map(|idx| (idx.clone(), idx.clone()))
+                    .collect();
                 t1.tensordot(t2, &pairs)?
             };
 
@@ -477,25 +540,40 @@ where
         };
 
         for (child_name, parent_name) in &edges {
-            let child_tensor = result_tensors.remove(child_name)
+            let child_tensor = result_tensors
+                .remove(child_name)
                 .ok_or_else(|| anyhow::anyhow!("Child tensor {:?} not found", child_name))?;
 
             // Get the bond index between child and parent from tn1 (bond1) and tn2 (bond2)
             // After sim_internal_inds, these are fresh indices
-            let edge1 = tn1.edge_between(child_name, parent_name)
-                .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?} in tn1", child_name, parent_name))?;
-            let edge2 = tn2.edge_between(child_name, parent_name)
-                .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?} in tn2", child_name, parent_name))?;
+            let edge1 = tn1.edge_between(child_name, parent_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Edge not found between {:?} and {:?} in tn1",
+                    child_name,
+                    parent_name
+                )
+            })?;
+            let edge2 = tn2.edge_between(child_name, parent_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Edge not found between {:?} and {:?} in tn2",
+                    child_name,
+                    parent_name
+                )
+            })?;
 
-            let bond1 = tn1.bond_index(edge1)
+            let bond1 = tn1
+                .bond_index(edge1)
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge in tn1"))?
                 .clone();
-            let bond2 = tn2.bond_index(edge2)
+            let bond2 = tn2
+                .bond_index(edge2)
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge in tn2"))?
                 .clone();
 
             // Factorize: left_inds = all indices except bond1 and bond2 (towards parent)
-            let left_inds: Vec<_> = child_tensor.indices.iter()
+            let left_inds: Vec<_> = child_tensor
+                .indices
+                .iter()
                 .filter(|idx| idx.id != bond1.id && idx.id != bond2.id)
                 .cloned()
                 .collect();
@@ -503,10 +581,14 @@ where
             if left_inds.is_empty() {
                 // All indices are bond indices - just absorb into parent
                 // (This happens when site indices are fully contracted, i.e., inner product case)
-                let parent_tensor = result_tensors.remove(parent_name)
+                let parent_tensor = result_tensors
+                    .remove(parent_name)
                     .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
 
-                let contracted = parent_tensor.tensordot(&child_tensor, &[(bond1.clone(), bond1), (bond2.clone(), bond2)])?;
+                let contracted = parent_tensor.tensordot(
+                    &child_tensor,
+                    &[(bond1.clone(), bond1), (bond2.clone(), bond2)],
+                )?;
                 result_tensors.insert(parent_name.clone(), contracted);
                 // Don't re-insert child - it's been absorbed
                 // The node will be omitted from the result TreeTN
@@ -521,19 +603,25 @@ where
             };
 
             let factorize_result = factorize(&child_tensor, &left_inds, &factorize_options)
-                .map_err(|e| anyhow::anyhow!("Factorization failed at node {:?}: {}", child_name, e))?;
+                .map_err(|e| {
+                    anyhow::anyhow!("Factorization failed at node {:?}: {}", child_name, e)
+                })?;
 
             // Store left factor as child
             result_tensors.insert(child_name.clone(), factorize_result.left);
 
             // Contract right factor into parent
-            let parent_tensor = result_tensors.remove(parent_name)
+            let parent_tensor = result_tensors
+                .remove(parent_name)
                 .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
 
             // Right factor has: new_bond (from factorize), bond1, bond2
             // Parent has: bond1, bond2 (among other indices)
             // Contract along bond1 and bond2
-            let contracted = parent_tensor.tensordot(&factorize_result.right, &[(bond1.clone(), bond1), (bond2.clone(), bond2)])?;
+            let contracted = parent_tensor.tensordot(
+                &factorize_result.right,
+                &[(bond1.clone(), bond1), (bond2.clone(), bond2)],
+            )?;
             result_tensors.insert(parent_name.clone(), contracted);
         }
 
@@ -542,14 +630,16 @@ where
 
         // Add tensors for nodes that still have tensors
         // (Some nodes may have been absorbed during the zip-up process in inner product cases)
-        let remaining_nodes: Vec<_> = tn1.node_names()
+        let remaining_nodes: Vec<_> = tn1
+            .node_names()
             .into_iter()
             .filter(|name| result_tensors.contains_key(name))
             .collect();
 
         for node_name in &remaining_nodes {
-            let tensor = result_tensors.remove(node_name)
-                .ok_or_else(|| anyhow::anyhow!("Result tensor not found for node {:?}", node_name))?;
+            let tensor = result_tensors.remove(node_name).ok_or_else(|| {
+                anyhow::anyhow!("Result tensor not found for node {:?}", node_name)
+            })?;
             result.add_tensor(node_name.clone(), tensor)?;
         }
 
@@ -603,10 +693,7 @@ where
     /// # Note
     /// This method is O(exp(n)) in both time and memory where n is the number of nodes.
     /// Use `contract_zipup` for efficient contraction of large networks.
-    pub fn contract_naive(
-        &self,
-        other: &Self,
-    ) -> Result<TensorDynLen<Id, Symm>>
+    pub fn contract_naive(&self, other: &Self) -> Result<TensorDynLen<Id, Symm>>
     where
         Id: Clone + std::hash::Hash + Eq + Ord + From<DynId> + std::fmt::Debug,
         Symm: Clone + Symmetry + From<NoSymmSpace>,
@@ -614,7 +701,9 @@ where
     {
         // 1. Verify topologies are compatible
         if !self.same_topology(other) {
-            return Err(anyhow::anyhow!("contract_naive: networks have incompatible topologies"));
+            return Err(anyhow::anyhow!(
+                "contract_naive: networks have incompatible topologies"
+            ));
         }
 
         // 2. Replace internal indices with fresh IDs to avoid collision
@@ -622,9 +711,11 @@ where
         let tn2 = other.sim_internal_inds();
 
         // 3. Convert both networks to full tensors
-        let tensor1 = tn1.contract_to_tensor()
+        let tensor1 = tn1
+            .contract_to_tensor()
             .map_err(|e| anyhow::anyhow!("contract_naive: failed to contract tn1: {}", e))?;
-        let tensor2 = tn2.contract_to_tensor()
+        let tensor2 = tn2
+            .contract_to_tensor()
             .map_err(|e| anyhow::anyhow!("contract_naive: failed to contract tn2: {}", e))?;
 
         // 4. Find common indices (site indices) to contract
@@ -635,7 +726,10 @@ where
             // Outer product when no common indices
             tensor1.outer_product(&tensor2)
         } else {
-            let pairs: Vec<_> = common.iter().map(|idx| (idx.clone(), idx.clone())).collect();
+            let pairs: Vec<_> = common
+                .iter()
+                .map(|idx| (idx.clone(), idx.clone()))
+                .collect();
             tensor1.tensordot(&tensor2, &pairs)
         }
     }
@@ -656,7 +750,9 @@ where
                     "Found {} ortho_towards entries but canonical_center is empty",
                     self.ortho_towards.len()
                 ))
-                .context("validate_ortho_consistency: canonical_center empty implies no ortho_towards");
+                .context(
+                    "validate_ortho_consistency: canonical_center empty implies no ortho_towards",
+                );
             }
             return Ok(());
         }
@@ -664,36 +760,47 @@ where
         // Validate all canonical_center nodes exist and convert to NodeIndex
         let mut center_indices = HashSet::new();
         for c in &self.canonical_center {
-            let idx = self.graph.node_index(c)
+            let idx = self
+                .graph
+                .node_index(c)
                 .ok_or_else(|| anyhow::anyhow!("canonical_center node {:?} does not exist", c))?;
             center_indices.insert(idx);
         }
 
         // Check canonical_center connectivity
         if !self.site_index_network.is_connected_subset(&center_indices) {
-            return Err(anyhow::anyhow!("canonical_center is not connected"))
-                .context("validate_ortho_consistency: canonical_center must form a connected subtree");
+            return Err(anyhow::anyhow!("canonical_center is not connected")).context(
+                "validate_ortho_consistency: canonical_center must form a connected subtree",
+            );
         }
 
         // Get expected edges from edges_to_canonicalize_to_region
         // These are edges (src, dst) where src is outside the center and dst is towards the center
-        let expected_edges = self.site_index_network.edges_to_canonicalize_to_region(&center_indices);
+        let expected_edges = self
+            .site_index_network
+            .edges_to_canonicalize_to_region(&center_indices);
 
         // Build a set of expected (bond_id, expected_direction) pairs
         let mut expected_directions: HashMap<Id, V> = HashMap::new();
         for (src, dst) in expected_edges.iter() {
             // Find the edge between src and dst
-            let edge = self.graph.graph().find_edge(*src, *dst)
+            let edge = self
+                .graph
+                .graph()
+                .find_edge(*src, *dst)
                 .or_else(|| self.graph.graph().find_edge(*dst, *src))
                 .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", src, dst))?;
 
-            let bond_id = self.bond_index(edge)
+            let bond_id = self
+                .bond_index(edge)
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))?
                 .id
                 .clone();
 
             // The expected ortho_towards direction is dst (towards center)
-            let dst_name = self.graph.node_name(*dst)
+            let dst_name = self
+                .graph
+                .node_name(*dst)
                 .ok_or_else(|| anyhow::anyhow!("Node name not found for {:?}", dst))?
                 .clone();
 
@@ -707,7 +814,9 @@ where
                     if actual_dir != expected_dir {
                         return Err(anyhow::anyhow!(
                             "ortho_towards for bond {:?} points to {:?} but expected {:?}",
-                            bond_id, actual_dir, expected_dir
+                            bond_id,
+                            actual_dir,
+                            expected_dir
                         ))
                         .context("validate_ortho_consistency: wrong direction");
                     }
@@ -715,7 +824,8 @@ where
                 None => {
                     return Err(anyhow::anyhow!(
                         "ortho_towards for bond {:?} is missing, expected to point to {:?}",
-                        bond_id, expected_dir
+                        bond_id,
+                        expected_dir
                     ))
                     .context("validate_ortho_consistency: missing ortho_towards");
                 }
@@ -724,7 +834,10 @@ where
 
         // Verify no unexpected bond ortho_towards entries
         // (site index ortho_towards are allowed even if not in expected_directions)
-        let bond_ids: HashSet<Id> = self.graph.graph().edge_indices()
+        let bond_ids: HashSet<Id> = self
+            .graph
+            .graph()
+            .edge_indices()
             .filter_map(|e| self.bond_index(e))
             .map(|b| b.id.clone())
             .collect();
@@ -736,7 +849,9 @@ where
                     "Unexpected ortho_towards for bond {:?} (inside canonical_center)",
                     id
                 ))
-                .context("validate_ortho_consistency: bonds inside center should not have ortho_towards");
+                .context(
+                    "validate_ortho_consistency: bonds inside center should not have ortho_towards",
+                );
             }
         }
 
@@ -936,13 +1051,18 @@ where
     let mut idx_position = 0usize;
 
     // Collect node names in sorted order for deterministic index assignment
-    let mut node_names: Vec<_> = tn_a.graph.graph().node_indices()
+    let mut node_names: Vec<_> = tn_a
+        .graph
+        .graph()
+        .node_indices()
         .filter_map(|idx| tn_a.graph.node_name(idx).cloned())
         .collect();
     node_names.sort();
 
     for node_name in &node_names {
-        let site_space = tn_a.site_index_network.site_space(node_name)
+        let site_space = tn_a
+            .site_index_network
+            .site_space(node_name)
             .ok_or_else(|| anyhow::anyhow!("Site space not found for node {:?}", node_name))?;
 
         // Each site index becomes a position in the contracted tensor
@@ -952,7 +1072,10 @@ where
     }
 
     // Get edges from the graph
-    let edges: Vec<(V, V)> = tn_a.graph.graph().edge_indices()
+    let edges: Vec<(V, V)> = tn_a
+        .graph
+        .graph()
+        .edge_indices()
         .filter_map(|e| {
             let (src, dst) = tn_a.graph.graph().edge_endpoints(e)?;
             let src_name = tn_a.graph.node_name(src)?;

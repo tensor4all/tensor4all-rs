@@ -1,7 +1,7 @@
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::{
-    sim, sim_owned, replaceinds, replaceinds_in_place, ReplaceIndsError, unique_inds,
-    noncommon_inds, union_inds, hasind, hasinds, hascommoninds, common_inds,
+    common_inds, hascommoninds, hasind, hasinds, noncommon_inds, replaceinds, replaceinds_in_place,
+    sim, sim_owned, union_inds, unique_inds, ReplaceIndsError,
 };
 
 #[test]
@@ -123,8 +123,7 @@ fn test_noncommon_inds() {
 
     let noncommon = noncommon_inds(&indices_a, &indices_b);
     assert_eq!(noncommon.len(), 2); // i and k
-    let noncommon_ids: std::collections::HashSet<_> =
-        noncommon.iter().map(|idx| idx.id).collect();
+    let noncommon_ids: std::collections::HashSet<_> = noncommon.iter().map(|idx| idx.id).collect();
     assert!(noncommon_ids.contains(&i.id));
     assert!(noncommon_ids.contains(&k.id));
     assert!(!noncommon_ids.contains(&j.id));
@@ -217,10 +216,7 @@ fn test_replaceinds_multiple_replacements() {
     let new_k = Index::new_dyn(4);
 
     let indices = vec![i.clone(), j.clone(), k.clone()];
-    let replacements = vec![
-        (i.clone(), new_i.clone()),
-        (k.clone(), new_k.clone()),
-    ];
+    let replacements = vec![(i.clone(), new_i.clone()), (k.clone(), new_k.clone())];
 
     let replaced = replaceinds(indices, &replacements).unwrap();
     assert_eq!(replaced.len(), 3);
@@ -245,4 +241,3 @@ fn test_replaceinds_no_match() {
     assert_eq!(replaced[0].id, i.id);
     assert_eq!(replaced[1].id, j.id);
 }
-

@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use anyhow::Result;
-use omeco::{EinCode, GreedyMethod, NestedEinsum, optimize_code};
+use omeco::{optimize_code, EinCode, GreedyMethod, NestedEinsum};
 
 use crate::index::Symmetry;
 use crate::tensor::TensorDynLen;
@@ -180,10 +180,7 @@ mod tests {
     use num_complex::Complex64;
     use std::sync::Arc;
 
-    fn make_test_tensor(
-        shape: &[usize],
-        ids: &[u128],
-    ) -> TensorDynLen<DynId, NoSymmSpace> {
+    fn make_test_tensor(shape: &[usize], ids: &[u128]) -> TensorDynLen<DynId, NoSymmSpace> {
         let indices: Vec<Index<DynId, NoSymmSpace>> = ids
             .iter()
             .zip(shape.iter())

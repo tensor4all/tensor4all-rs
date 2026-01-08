@@ -14,8 +14,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core" }
 tensor4all-itensorlike = { path = "../tensor4all-itensorlike" }
-libc = "0.2"
+libc.workspace = true
 thiserror.workspace = true
-paste = "1.0"
-num-complex = "0.4"
+paste.workspace = true
+num-complex.workspace = true
 

@@ -1,6 +1,6 @@
-use tensor4all_core::AnyScalar;
 use num_complex::Complex64;
-use num_traits::{Zero, One};
+use num_traits::{One, Zero};
+use tensor4all_core::AnyScalar;
 
 #[test]
 fn test_is_complex() {
@@ -94,7 +94,10 @@ fn test_powi() {
 #[test]
 fn test_add() {
     // F64 + F64
-    assert_eq!(AnyScalar::F64(1.0) + AnyScalar::F64(2.0), AnyScalar::F64(3.0));
+    assert_eq!(
+        AnyScalar::F64(1.0) + AnyScalar::F64(2.0),
+        AnyScalar::F64(3.0)
+    );
 
     // F64 + C64
     let result = AnyScalar::F64(1.0) + AnyScalar::C64(Complex64::new(2.0, 3.0));
@@ -117,7 +120,8 @@ fn test_add() {
     }
 
     // C64 + C64
-    let result = AnyScalar::C64(Complex64::new(1.0, 2.0)) + AnyScalar::C64(Complex64::new(3.0, 4.0));
+    let result =
+        AnyScalar::C64(Complex64::new(1.0, 2.0)) + AnyScalar::C64(Complex64::new(3.0, 4.0));
     match result {
         AnyScalar::C64(z) => {
             assert_eq!(z.re, 4.0);
@@ -129,7 +133,10 @@ fn test_add() {
 
 #[test]
 fn test_sub() {
-    assert_eq!(AnyScalar::F64(5.0) - AnyScalar::F64(2.0), AnyScalar::F64(3.0));
+    assert_eq!(
+        AnyScalar::F64(5.0) - AnyScalar::F64(2.0),
+        AnyScalar::F64(3.0)
+    );
 
     let result = AnyScalar::C64(Complex64::new(5.0, 6.0)) - AnyScalar::F64(2.0);
     match result {
@@ -143,7 +150,10 @@ fn test_sub() {
 
 #[test]
 fn test_mul() {
-    assert_eq!(AnyScalar::F64(3.0) * AnyScalar::F64(4.0), AnyScalar::F64(12.0));
+    assert_eq!(
+        AnyScalar::F64(3.0) * AnyScalar::F64(4.0),
+        AnyScalar::F64(12.0)
+    );
 
     let result = AnyScalar::C64(Complex64::new(1.0, 2.0)) * AnyScalar::F64(2.0);
     match result {
@@ -157,7 +167,10 @@ fn test_mul() {
 
 #[test]
 fn test_div() {
-    assert_eq!(AnyScalar::F64(12.0) / AnyScalar::F64(4.0), AnyScalar::F64(3.0));
+    assert_eq!(
+        AnyScalar::F64(12.0) / AnyScalar::F64(4.0),
+        AnyScalar::F64(3.0)
+    );
 
     let result = AnyScalar::C64(Complex64::new(6.0, 8.0)) / AnyScalar::F64(2.0);
     match result {
@@ -283,7 +296,9 @@ fn test_partial_ord() {
     assert!(c1.partial_cmp(&c2).is_none());
 
     // Mixed types cannot be compared
-    assert!(AnyScalar::F64(1.0).partial_cmp(&AnyScalar::C64(Complex64::new(1.0, 0.0))).is_none());
+    assert!(AnyScalar::F64(1.0)
+        .partial_cmp(&AnyScalar::C64(Complex64::new(1.0, 0.0)))
+        .is_none());
 }
 
 #[test]
@@ -295,4 +310,3 @@ fn test_display() {
     let display_str = format!("{}", s2);
     assert!(display_str.contains("1") && display_str.contains("2"));
 }
-

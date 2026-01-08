@@ -234,11 +234,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// Set columns with new pivot rows and permutation
     pub fn set_cols(&mut self, new_pivot_rows: &Matrix<T>, permutation: &[usize]) {
         // Permute column indices
-        self.col_indices = self
-            .col_indices
-            .iter()
-            .map(|&c| permutation[c])
-            .collect();
+        self.col_indices = self.col_indices.iter().map(|&c| permutation[c]).collect();
 
         // Permute V matrix columns
         let mut temp_v = zeros(nrows(&self.v), ncols(new_pivot_rows));
@@ -271,11 +267,7 @@ impl<T: Scalar> MatrixACA<T> {
     /// Set rows with new pivot columns and permutation
     pub fn set_rows(&mut self, new_pivot_cols: &Matrix<T>, permutation: &[usize]) {
         // Permute row indices
-        self.row_indices = self
-            .row_indices
-            .iter()
-            .map(|&r| permutation[r])
-            .collect();
+        self.row_indices = self.row_indices.iter().map(|&r| permutation[r]).collect();
 
         // Permute U matrix rows
         let mut temp_u = zeros(nrows(new_pivot_cols), ncols(&self.u));

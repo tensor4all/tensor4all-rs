@@ -173,7 +173,9 @@ impl<T: Scalar> BlockedArray<T> {
             .data
             .iter()
             .map(|(&old_linear, block_data)| {
-                let new_linear = *plan.block_mapping.get(&old_linear)
+                let new_linear = *plan
+                    .block_mapping
+                    .get(&old_linear)
                     .expect("Block not in reshape plan");
                 let new_block_shape = plan.new_block_shape(old_linear);
                 let new_block = block_data.reshape(&new_block_shape);
@@ -245,7 +247,11 @@ impl<T: Scalar> BlockedArray<T> {
         let free_other: Vec<usize> = (0..rank_other)
             .filter(|a| !axes_other.contains(a))
             .collect();
-        let perm_other: Vec<usize> = axes_other.iter().chain(free_other.iter()).copied().collect();
+        let perm_other: Vec<usize> = axes_other
+            .iter()
+            .chain(free_other.iter())
+            .copied()
+            .collect();
 
         // Apply permutations
         let a_perm = self.permute(&perm_self);
@@ -317,8 +323,41 @@ impl<T: Scalar> BlockedArray<T> {
             }
         }
 
+        // Handle full contraction (both 1D -> scalar result) as a special case
+        if a_2d.rank() == 1 && b_2d.rank() == 1 {
+            // Full contraction: result is a scalar (0D tensor)
+            // Both a and b are 1D with the same contracted dimension
+            // Result = sum over k of dot(a[k], b[k])
+            let mut result_scalar = T::zero();
+
+            for (k, _) in &a_by_k {
+                if b_by_k.contains_key(k) {
+                    let a_block = a_2d.get_block(&vec![*k]).unwrap();
+                    let b_block = b_2d.get_block(&vec![*k]).unwrap();
+                    result_scalar = result_scalar + a_block.dot(&b_block);
+                }
+            }
+
+            // Create scalar result (0D blocked array with trivial structure)
+            let mut nonzero = std::collections::HashSet::new();
+            nonzero.insert(0);
+            let scalar_structure = BlockStructure::new(vec![], nonzero);
+            let scalar_data =
+                BlockedData::from_tensor(mdarray::Tensor::from_fn(&[], |_| result_scalar));
+            let mut data = HashMap::new();
+            data.insert(0, scalar_data);
+            let scalar_result = BlockedArray {
+                structure: scalar_structure,
+                data,
+            };
+
+            return scalar_result;
+        }
+
         // Build 2D result structure for intermediate result
-        let c_2d_structure = a_2d.structure.tensordot(&b_2d.structure, &[a_2d.rank() - 1], &[0]);
+        let c_2d_structure = a_2d
+            .structure
+            .tensordot(&b_2d.structure, &[a_2d.rank() - 1], &[0]);
 
         // Result array (2D intermediate)
         let mut c_2d = BlockedArray {
@@ -468,7 +507,8 @@ mod tests {
         // A: shape (2, 3)
         let mut a = BlockedArray::new(vec![part_2.clone(), part_3.clone()]);
         // [[1, 2, 3], [4, 5, 6]]
-        let a_data = BlockedData::from_tensor(tensor_from_slice(&[2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+        let a_data =
+            BlockedData::from_tensor(tensor_from_slice(&[2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
         a.set_block(vec![0, 0], a_data);
 
         // B: shape (3, 4)
@@ -476,7 +516,9 @@ mod tests {
         // [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]
         let b_data = BlockedData::from_tensor(tensor_from_slice(
             &[3, 4],
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            &[
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
         ));
         b.set_block(vec![0, 0], b_data);
 
@@ -582,7 +624,8 @@ mod tests {
 
         let mut a = BlockedArray::new(vec![part_2, part_3]);
         // [[1, 2, 3], [4, 5, 6]]
-        let data = BlockedData::from_tensor(tensor_from_slice(&[2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+        let data =
+            BlockedData::from_tensor(tensor_from_slice(&[2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
         a.set_block(vec![0, 0], data);
 
         let b = a.reshape(&[6]);
@@ -601,7 +644,8 @@ mod tests {
         let part_6 = BlockPartition::trivial(6);
 
         let mut a = BlockedArray::new(vec![part_6]);
-        let data = BlockedData::from_tensor(tensor_from_slice(&[6], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+        let data =
+            BlockedData::from_tensor(tensor_from_slice(&[6], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
         a.set_block(vec![0], data);
 
         let b = a.reshape(&[2, 3]);
@@ -642,7 +686,9 @@ mod tests {
         let mut a = BlockedArray::new(vec![part]);
         let data = BlockedData::from_tensor(tensor_from_slice(
             &[12],
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            &[
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
         ));
         a.set_block(vec![0], data);
 
@@ -667,9 +713,7 @@ mod tests {
 
         // Helper to count elements in non-zero blocks
         let count_elements = |arr: &BlockedArray<f64>| -> usize {
-            arr.iter_blocks()
-                .map(|(_, block)| block.len())
-                .sum()
+            arr.iter_blocks().map(|(_, block)| block.len()).sum()
         };
 
         let elements_before = count_elements(&original);
@@ -677,17 +721,28 @@ mod tests {
 
         // 2D [6, 4] -> 3D [2, 3, 4]
         let reshaped_3d = original.reshape(&[2, 3, 4]);
-        assert_eq!(count_elements(&reshaped_3d), elements_before, "Elements must be preserved in 2D->3D");
+        assert_eq!(
+            count_elements(&reshaped_3d),
+            elements_before,
+            "Elements must be preserved in 2D->3D"
+        );
         assert_eq!(reshaped_3d.shape(), vec![2, 3, 4]);
 
         // 3D [2, 3, 4] -> 2D [6, 4]
         let round_trip = reshaped_3d.reshape(&[6, 4]);
-        assert_eq!(count_elements(&round_trip), elements_before, "Elements must be preserved in round-trip");
+        assert_eq!(
+            count_elements(&round_trip),
+            elements_before,
+            "Elements must be preserved in round-trip"
+        );
 
         // Verify structure matches original
         assert_eq!(round_trip.rank(), original.rank());
         assert_eq!(round_trip.shape(), original.shape());
-        assert_eq!(round_trip.num_nonzero_blocks(), original.num_nonzero_blocks());
+        assert_eq!(
+            round_trip.num_nonzero_blocks(),
+            original.num_nonzero_blocks()
+        );
     }
 
     #[test]
@@ -752,8 +807,14 @@ mod tests {
         // Results should be identical
         assert_eq!(reshaped_direct.rank(), reshaped_with_plan.rank());
         assert_eq!(reshaped_direct.shape(), reshaped_with_plan.shape());
-        assert_eq!(reshaped_direct.num_blocks(), reshaped_with_plan.num_blocks());
-        assert_eq!(reshaped_direct.num_nonzero_blocks(), reshaped_with_plan.num_nonzero_blocks());
+        assert_eq!(
+            reshaped_direct.num_blocks(),
+            reshaped_with_plan.num_blocks()
+        );
+        assert_eq!(
+            reshaped_direct.num_nonzero_blocks(),
+            reshaped_with_plan.num_nonzero_blocks()
+        );
 
         // Verify block shapes match
         let block_direct = reshaped_direct.get_block(&vec![0, 0, 0]).unwrap();
@@ -774,10 +835,7 @@ mod tests {
         arr2.set_block(vec![0, 0], make_block_data(&[6, 4], 100.0)); // Different values
 
         // Create plan from arr1
-        let new_partitions = vec![
-            BlockPartition::trivial(2),
-            BlockPartition::trivial(12),
-        ];
+        let new_partitions = vec![BlockPartition::trivial(2), BlockPartition::trivial(12)];
         let plan = arr1.plan_reshape_to(new_partitions);
 
         // Use same plan for both arrays
@@ -786,7 +844,10 @@ mod tests {
 
         // Both should have same structure
         assert_eq!(reshaped1.shape(), reshaped2.shape());
-        assert_eq!(reshaped1.num_nonzero_blocks(), reshaped2.num_nonzero_blocks());
+        assert_eq!(
+            reshaped1.num_nonzero_blocks(),
+            reshaped2.num_nonzero_blocks()
+        );
 
         // But different data
         let block1 = reshaped1.get_block(&vec![0, 0]).unwrap();

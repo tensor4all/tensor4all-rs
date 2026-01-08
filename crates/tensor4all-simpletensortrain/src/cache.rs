@@ -31,10 +31,7 @@ impl<T: TTScalar> TTCache<T> {
     pub fn new<TT: AbstractTensorTrain<T>>(tt: &TT) -> Self {
         let n = tt.len();
         let tensors: Vec<Tensor3<T>> = tt.site_tensors().to_vec();
-        let site_dims: Vec<Vec<usize>> = tensors
-            .iter()
-            .map(|t| vec![t.site_dim()])
-            .collect();
+        let site_dims: Vec<Vec<usize>> = tensors.iter().map(|t| vec![t.site_dim()]).collect();
 
         Self {
             tensors,
@@ -47,7 +44,10 @@ impl<T: TTScalar> TTCache<T> {
     /// Create a new TTCache with custom site dimensions
     ///
     /// This allows treating a single tensor site as multiple logical indices.
-    pub fn with_site_dims<TT: AbstractTensorTrain<T>>(tt: &TT, site_dims: Vec<Vec<usize>>) -> Result<Self> {
+    pub fn with_site_dims<TT: AbstractTensorTrain<T>>(
+        tt: &TT,
+        site_dims: Vec<Vec<usize>>,
+    ) -> Result<Self> {
         let n = tt.len();
         if site_dims.len() != n {
             return Err(TensorTrainError::InvalidOperation {
@@ -465,7 +465,9 @@ mod tests {
         let left_indices = vec![vec![0], vec![1]];
         let right_indices = vec![vec![0], vec![1]];
 
-        let (result, shape) = cache.batch_evaluate(&left_indices, &right_indices, 1).unwrap();
+        let (result, shape) = cache
+            .batch_evaluate(&left_indices, &right_indices, 1)
+            .unwrap();
 
         // Shape should be (2, 3, 2)
         assert_eq!(shape, vec![2, 3, 2]);

@@ -102,10 +102,12 @@ where
 
         // Collect local RHS tensors (conjugated)
         for node in region {
-            let node_idx = self.rhs
+            let node_idx = self
+                .rhs
                 .node_index(node)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in RHS", node))?;
-            let tensor = self.rhs
+            let tensor = self
+                .rhs
                 .tensor(node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found in RHS"))?
                 .conj();
@@ -162,10 +164,7 @@ where
         topology: &T,
     ) -> Result<TensorDynLen<Id, Symm>> {
         // First, ensure child environments are computed
-        let child_neighbors: Vec<V> = topology
-            .neighbors(from)
-            .filter(|n| n != to)
-            .collect();
+        let child_neighbors: Vec<V> = topology.neighbors(from).filter(|n| n != to).collect();
 
         for child in &child_neighbors {
             if !self.envs.contains(child, from) {
@@ -181,14 +180,16 @@ where
             .collect();
 
         // Contract bra (RHS) with ket (bra_state as reference) at this node
-        let node_idx_bra = self.rhs
+        let node_idx_bra = self
+            .rhs
             .node_index(from)
             .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in RHS", from))?;
         let node_idx_ket = bra_state
             .node_index(from)
             .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in bra_state", from))?;
 
-        let tensor_bra = self.rhs
+        let tensor_bra = self
+            .rhs
             .tensor(node_idx_bra)
             .ok_or_else(|| anyhow::anyhow!("Tensor not found in RHS"))?;
         let tensor_ket = bra_state

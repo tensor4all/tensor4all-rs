@@ -8,7 +8,7 @@ use crate::error::{Result, TCIError};
 use crate::indexset::MultiIndex;
 use matrixci::util::{zeros, Scalar};
 use matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
-use tensor4all_simpletensortrain::{tensor3_zeros, Tensor3, Tensor3Ops, TensorTrain, TTScalar};
+use tensor4all_simpletensortrain::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
 
 /// Options for TCI2 algorithm
 #[derive(Debug, Clone)]
@@ -117,7 +117,11 @@ impl<T: Scalar + TTScalar + Default> TensorCI2<T> {
     /// Get current rank (maximum bond dimension)
     pub fn rank(&self) -> usize {
         if self.len() <= 1 {
-            return if self.i_set.is_empty() || self.i_set[0].is_empty() { 0 } else { 1 };
+            return if self.i_set.is_empty() || self.i_set[0].is_empty() {
+                0
+            } else {
+                1
+            };
         }
         self.i_set
             .iter()
@@ -152,9 +156,9 @@ impl<T: Scalar + TTScalar + Default> TensorCI2<T> {
 
     /// Check if site tensors are available
     pub fn is_site_tensors_available(&self) -> bool {
-        self.site_tensors.iter().all(|t| {
-            t.left_dim() > 0 || t.right_dim() > 0
-        })
+        self.site_tensors
+            .iter()
+            .all(|t| t.left_dim() > 0 || t.right_dim() > 0)
     }
 
     /// Get site tensor at position p
@@ -301,22 +305,14 @@ where
         if is_forward {
             for b in 0..n - 1 {
                 update_pivots(
-                    &mut tci,
-                    b,
-                    &f,
-                    &batched_f,
-                    true, // left orthogonal in forward sweep
+                    &mut tci, b, &f, &batched_f, true, // left orthogonal in forward sweep
                     &options,
                 )?;
             }
         } else {
             for b in (0..n - 1).rev() {
                 update_pivots(
-                    &mut tci,
-                    b,
-                    &f,
-                    &batched_f,
-                    false, // right orthogonal in backward sweep
+                    &mut tci, b, &f, &batched_f, false, // right orthogonal in backward sweep
                     &options,
                 )?;
             }
@@ -382,7 +378,8 @@ where
     // Use batch evaluation if available, otherwise use single evaluation
     if let Some(ref batch_fn) = batched_f {
         // Build all index pairs
-        let mut all_indices: Vec<MultiIndex> = Vec::with_capacity(i_combined.len() * j_combined.len());
+        let mut all_indices: Vec<MultiIndex> =
+            Vec::with_capacity(i_combined.len() * j_combined.len());
         for i_multi in &i_combined {
             for j_multi in &j_combined {
                 let mut full_idx = i_multi.clone();
@@ -464,7 +461,11 @@ where
 
     // Convert right matrix to tensor at site b+1
     let site_dim_bp1 = tci.local_dims[b + 1];
-    let right_dim = if b + 1 == tci.len() - 1 { 1 } else { tci.j_set[b + 1].len() };
+    let right_dim = if b + 1 == tci.len() - 1 {
+        1
+    } else {
+        tci.j_set[b + 1].len()
+    };
 
     let mut tensor_bp1 = tensor3_zeros(new_bond_dim, site_dim_bp1, right_dim);
     for l in 0..new_bond_dim {
@@ -518,7 +519,8 @@ mod tests {
             local_dims,
             first_pivot,
             options,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(tci.len(), 2);
         assert!(tci.rank() >= 1);
@@ -529,20 +531,18 @@ mod tests {
         // Use batch evaluation
         let f = |idx: &MultiIndex| (idx[0] + idx[1] + 1) as f64;
         let batched_f = |indices: &[MultiIndex]| -> Vec<f64> {
-            indices.iter().map(|idx| (idx[0] + idx[1] + 1) as f64).collect()
+            indices
+                .iter()
+                .map(|idx| (idx[0] + idx[1] + 1) as f64)
+                .collect()
         };
 
         let local_dims = vec![3, 3];
         let first_pivot = vec![vec![1, 1]];
         let options = TCI2Options::default();
 
-        let (tci, _ranks, _errors) = crossinterpolate2(
-            f,
-            Some(batched_f),
-            local_dims,
-            first_pivot,
-            options,
-        ).unwrap();
+        let (tci, _ranks, _errors) =
+            crossinterpolate2(f, Some(batched_f), local_dims, first_pivot, options).unwrap();
 
         assert_eq!(tci.len(), 2);
     }
@@ -563,13 +563,18 @@ mod tests {
             local_dims,
             first_pivot,
             options,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Should converge to rank 2
         assert!(tci.rank() <= 3, "Expected rank <= 3, got {}", tci.rank());
 
         // Check error is small
         let final_error = errors.last().copied().unwrap_or(f64::INFINITY);
-        assert!(final_error < 0.1, "Expected small error, got {}", final_error);
+        assert!(
+            final_error < 0.1,
+            "Expected small error, got {}",
+            final_error
+        );
     }
 }

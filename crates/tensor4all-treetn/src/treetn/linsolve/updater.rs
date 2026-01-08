@@ -19,11 +19,11 @@ use tensor4all_core::storage::{DenseStorageF64, StorageScalar};
 use tensor4all_core::{contract_multi, FactorizeAlg, Storage, TensorDynLen};
 
 use super::linear_operator::LinearOperator;
-use crate::treetn::decompose::{TreeTopology, factorize_tensor_to_treetn_with};
 use super::local_linop::LocalLinOp;
 use super::options::LinsolveOptions;
 use super::projected_operator::ProjectedOperator;
 use super::projected_state::ProjectedState;
+use crate::treetn::decompose::{factorize_tensor_to_treetn_with, TreeTopology};
 use crate::treetn::localupdate::{LocalUpdateStep, LocalUpdater};
 use crate::treetn::TreeTN;
 
@@ -91,9 +91,17 @@ impl<V: std::fmt::Debug> std::fmt::Display for LinsolveVerifyReport<V> {
             writeln!(f, "  Node Details:")?;
             for detail in &self.node_details {
                 writeln!(f, "    {:?}:", detail.node)?;
-                writeln!(f, "      State site indices: {:?}", detail.state_site_indices)?;
+                writeln!(
+                    f,
+                    "      State site indices: {:?}",
+                    detail.state_site_indices
+                )?;
                 writeln!(f, "      Op site indices: {:?}", detail.op_site_indices)?;
-                writeln!(f, "      State tensor indices: {:?}", detail.state_tensor_indices)?;
+                writeln!(
+                    f,
+                    "      State tensor indices: {:?}",
+                    detail.state_tensor_indices
+                )?;
                 writeln!(f, "      Op tensor indices: {:?}", detail.op_tensor_indices)?;
                 writeln!(f, "      Common index count: {}", detail.common_index_count)?;
             }
@@ -141,7 +149,8 @@ where
 impl<Id, Symm, V> LinsolveUpdater<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
+    Symm:
+        Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     /// Create a new LinsolveUpdater for V_in = V_out case.
@@ -207,7 +216,10 @@ where
 
     /// Get the bra state for environment computation.
     /// Returns reference_state_out if set, otherwise returns the ket_state (V_in = V_out case).
-    pub fn get_bra_state<'a>(&'a self, ket_state: &'a TreeTN<Id, Symm, V>) -> &'a TreeTN<Id, Symm, V> {
+    pub fn get_bra_state<'a>(
+        &'a self,
+        ket_state: &'a TreeTN<Id, Symm, V>,
+    ) -> &'a TreeTN<Id, Symm, V> {
         self.reference_state_out.as_ref().unwrap_or(ket_state)
     }
 
@@ -219,10 +231,7 @@ where
     /// 3. Environment computation requirements are satisfiable
     ///
     /// Returns a detailed report of any inconsistencies found.
-    pub fn verify(
-        &self,
-        state: &TreeTN<Id, Symm, V>,
-    ) -> Result<LinsolveVerifyReport<V>> {
+    pub fn verify(&self, state: &TreeTN<Id, Symm, V>) -> Result<LinsolveVerifyReport<V>> {
         let mut report = LinsolveVerifyReport::default();
 
         let proj_op = self.projected_operator.read().unwrap();
@@ -230,10 +239,16 @@ where
         let rhs = &self.projected_state.rhs;
 
         // Check node consistency
-        let state_nodes: std::collections::BTreeSet<_> =
-            state.site_index_network().node_names().into_iter().collect();
-        let op_nodes: std::collections::BTreeSet<_> =
-            operator.site_index_network().node_names().into_iter().collect();
+        let state_nodes: std::collections::BTreeSet<_> = state
+            .site_index_network()
+            .node_names()
+            .into_iter()
+            .collect();
+        let op_nodes: std::collections::BTreeSet<_> = operator
+            .site_index_network()
+            .node_names()
+            .into_iter()
+            .collect();
         let rhs_nodes: std::collections::BTreeSet<_> =
             rhs.site_index_network().node_names().into_iter().collect();
 
@@ -336,9 +351,11 @@ where
         let tensors: Vec<TensorDynLen<Id, Symm>> = region
             .iter()
             .map(|node| {
-                let idx = subtree.node_index(node)
+                let idx = subtree
+                    .node_index(node)
                     .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node))?;
-                subtree.tensor(idx)
+                subtree
+                    .tensor(idx)
                     .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node))
                     .map(|t| t.clone())
             })
@@ -423,7 +440,8 @@ where
     ) -> Result<()> {
         // For each node in the region, update its tensor in subtree
         for node in region {
-            let decomp_idx = decomposed.node_index(node)
+            let decomp_idx = decomposed
+                .node_index(node)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in decomposed TreeTN", node))?;
             let mut new_tensor = decomposed.tensor(decomp_idx).unwrap().clone();
 
@@ -442,7 +460,8 @@ where
                                         decomp_bond.symm.clone(),
                                         orig_bond.tags.clone(),
                                     );
-                                    new_tensor = new_tensor.replaceind(decomp_bond, &preserved_bond);
+                                    new_tensor =
+                                        new_tensor.replaceind(decomp_bond, &preserved_bond);
 
                                     // Update the edge bond in subtree (only once per edge)
                                     if node < &neighbor {
@@ -478,10 +497,12 @@ where
         // Get local RHS: <b|_local
         // For V_in ≠ V_out case, use reference_state_out for bra in environment computation
         let rhs_local = match &self.reference_state_out {
-            Some(ref_out) => self.projected_state.local_constant_term_with_bra(
-                region, state, ref_out, topology,
-            )?,
-            None => self.projected_state.local_constant_term(region, state, topology)?,
+            Some(ref_out) => self
+                .projected_state
+                .local_constant_term_with_bra(region, state, ref_out, topology)?,
+            None => self
+                .projected_state
+                .local_constant_term(region, state, topology)?,
         };
 
         // Compute local dimension
@@ -576,13 +597,16 @@ where
         if stats.reason == ConvergedReason::DivergedMaxIts {
             eprintln!(
                 "Warning: GMRES did not converge within {} iterations (residual: {})",
-                stats.iterations,
-                stats.final_residual
+                stats.iterations, stats.final_residual
             );
         }
 
         // Convert solution back to tensor
-        let dims: Vec<usize> = init.indices.iter().map(|idx| idx.symm.total_dim()).collect();
+        let dims: Vec<usize> = init
+            .indices
+            .iter()
+            .map(|idx| idx.symm.total_dim())
+            .collect();
         let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(x)));
         let result = TensorDynLen::new(init.indices.clone(), dims, storage);
 
@@ -593,7 +617,8 @@ where
 impl<Id, Symm, V> LocalUpdater<Id, Symm, V> for LinsolveUpdater<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
+    Symm:
+        Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     fn update(
@@ -612,7 +637,8 @@ where
         let topology = self.build_subtree_topology(&solved_local, &step.nodes, full_treetn)?;
 
         // Decompose solved tensor back into TreeTN using factorize_tensor_to_treetn
-        let decomposed = factorize_tensor_to_treetn_with(&solved_local, &topology, FactorizeAlg::SVD)?;
+        let decomposed =
+            factorize_tensor_to_treetn_with(&solved_local, &topology, FactorizeAlg::SVD)?;
 
         // Copy decomposed tensors back to subtree, preserving original bond IDs
         self.copy_decomposed_to_subtree(&mut subtree, &decomposed, &step.nodes, full_treetn)?;

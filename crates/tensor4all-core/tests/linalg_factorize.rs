@@ -167,7 +167,10 @@ fn test_factorize_qr_right_canonical_error() {
     let options = FactorizeOptions::qr().with_canonical(Canonical::Right);
     let result = factorize(&tensor, &left_inds, &options);
 
-    assert!(matches!(result, Err(FactorizeError::UnsupportedCanonical(_))));
+    assert!(matches!(
+        result,
+        Err(FactorizeError::UnsupportedCanonical(_))
+    ));
 }
 
 #[test]
@@ -249,9 +252,10 @@ fn test_diag_dense_contraction_svd_internals() {
     assert!(matches!(s.storage.as_ref(), Storage::DiagF64(_)));
 
     // Verify S and V share a common index
-    let common_found = s.indices.iter().any(|s_idx| {
-        v.indices.iter().any(|v_idx| s_idx.id == v_idx.id)
-    });
+    let common_found = s
+        .indices
+        .iter()
+        .any(|s_idx| v.indices.iter().any(|v_idx| s_idx.id == v_idx.id));
     assert!(common_found, "S and V should share a common index");
 
     // Contractions should work

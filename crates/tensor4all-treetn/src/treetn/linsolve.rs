@@ -43,8 +43,8 @@ use anyhow::Result;
 
 use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
 
+use super::localupdate::{apply_local_update_sweep, LocalUpdateSweepPlan};
 use super::TreeTN;
-use super::localupdate::{LocalUpdateSweepPlan, apply_local_update_sweep};
 use crate::CanonicalizationOptions;
 
 /// Result of linsolve operation.
@@ -127,7 +127,8 @@ pub fn linsolve<Id, Symm, V>(
 ) -> Result<LinsolveResult<Id, Symm, V>>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
+    Symm:
+        Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     // Validate inputs before proceeding
@@ -137,11 +138,7 @@ where
     let mut x = init.canonicalize([center.clone()], CanonicalizationOptions::default())?;
 
     // Create LinsolveUpdater
-    let mut updater = LinsolveUpdater::new(
-        operator.clone(),
-        rhs.clone(),
-        options.clone(),
-    );
+    let mut updater = LinsolveUpdater::new(operator.clone(), rhs.clone(), options.clone());
 
     // Create sweep plan (nsite=2 for 2-site updates)
     let plan = LocalUpdateSweepPlan::from_treetn(&x, center, 2)

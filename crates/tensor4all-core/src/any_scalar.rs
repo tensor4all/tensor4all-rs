@@ -1,7 +1,7 @@
-use std::ops::{Add, Sub, Mul, Div, Neg};
-use std::fmt;
 use num_complex::{Complex64, ComplexFloat};
-use num_traits::{Zero, One};
+use num_traits::{One, Zero};
+use std::fmt;
+use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use crate::storage::{Storage, SumFromStorage};
 
@@ -19,8 +19,12 @@ pub enum AnyScalar {
 impl SumFromStorage for AnyScalar {
     fn sum_from_storage(storage: &Storage) -> Self {
         match storage {
-            Storage::DenseF64(_) | Storage::DiagF64(_) => AnyScalar::F64(f64::sum_from_storage(storage)),
-            Storage::DenseC64(_) | Storage::DiagC64(_) => AnyScalar::C64(Complex64::sum_from_storage(storage)),
+            Storage::DenseF64(_) | Storage::DiagF64(_) => {
+                AnyScalar::F64(f64::sum_from_storage(storage))
+            }
+            Storage::DenseC64(_) | Storage::DiagC64(_) => {
+                AnyScalar::C64(Complex64::sum_from_storage(storage))
+            }
         }
     }
 }
@@ -70,7 +74,7 @@ impl AnyScalar {
     }
 
     /// Compute square root.
-    /// 
+    ///
     /// For negative real numbers, returns a complex number with the principal value.
     pub fn sqrt(&self) -> Self {
         match self {
@@ -86,7 +90,7 @@ impl AnyScalar {
     }
 
     /// Raise to a floating-point power.
-    /// 
+    ///
     /// For negative real numbers, returns a complex number with the principal value.
     pub fn powf(&self, exp: f64) -> Self {
         match self {
@@ -250,4 +254,3 @@ impl fmt::Display for AnyScalar {
         }
     }
 }
-

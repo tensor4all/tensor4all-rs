@@ -1,4 +1,4 @@
-use crate::index::{Index, DynId, Symmetry, generate_id};
+use crate::index::{generate_id, DynId, Index, Symmetry};
 
 /// Create a similar index with the same space and tags but a new ID.
 ///
@@ -100,7 +100,10 @@ impl std::fmt::Display for ReplaceIndsError {
                     from_dim, to_dim
                 )
             }
-            ReplaceIndsError::DuplicateIndices { first_pos, duplicate_pos } => {
+            ReplaceIndsError::DuplicateIndices {
+                first_pos,
+                duplicate_pos,
+            } => {
                 write!(
                     f,
                     "Duplicate indices found: index at position {} has the same ID as index at position {}",
@@ -607,4 +610,3 @@ where
         .cloned()
         .collect()
 }
-

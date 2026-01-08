@@ -72,7 +72,11 @@ where
     /// Generate a sweep plan from a TreeTN's topology.
     ///
     /// Convenience method that extracts the NodeNameNetwork topology from a TreeTN.
-    pub fn from_treetn<Id, Symm>(treetn: &TreeTN<Id, Symm, V>, root: &V, nsite: usize) -> Option<Self>
+    pub fn from_treetn<Id, Symm>(
+        treetn: &TreeTN<Id, Symm, V>,
+        root: &V,
+        nsite: usize,
+    ) -> Option<Self>
     where
         Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
         Symm: Clone + tensor4all_core::index::Symmetry,
@@ -326,7 +330,9 @@ where
                 center_node,
                 step.nodes
             ))
-            .context("apply_local_update_sweep: canonical_center must be within extracted subtree");
+            .context(
+                "apply_local_update_sweep: canonical_center must be within extracted subtree",
+            );
         }
 
         updater
@@ -453,8 +459,7 @@ where
             .collect();
 
         // Set up factorization options
-        let mut options = FactorizeOptions::svd()
-            .with_canonical(Canonical::Left); // Left canonical: A is isometry, B has the norm
+        let mut options = FactorizeOptions::svd().with_canonical(Canonical::Left); // Left canonical: A is isometry, B has the norm
 
         if let Some(max_rank) = self.max_rank {
             options = options.with_max_rank(max_rank);
@@ -601,9 +606,9 @@ where
                 added_edges.insert(edge_key);
 
                 // Get bond index from original TreeTN
-                let orig_edge = self
-                    .edge_between(name, &neighbor)
-                    .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", name, neighbor))?;
+                let orig_edge = self.edge_between(name, &neighbor).ok_or_else(|| {
+                    anyhow::anyhow!("Edge not found between {:?} and {:?}", name, neighbor)
+                })?;
 
                 let bond_index = self
                     .bond_index(orig_edge)
@@ -629,7 +634,9 @@ where
                 if let Some(ortho_dir) = self.ortho_towards.get(&bond_index.id) {
                     // Only copy if the direction node is in the subtree
                     if node_name_set.contains(ortho_dir) {
-                        subtree.ortho_towards.insert(bond_index.id.clone(), ortho_dir.clone());
+                        subtree
+                            .ortho_towards
+                            .insert(bond_index.id.clone(), ortho_dir.clone());
                     }
                 }
             }
@@ -718,11 +725,18 @@ where
 
             let new_tensor = replacement
                 .tensor(replacement_node_idx)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in replacement", name))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Tensor not found for node {:?} in replacement", name)
+                })?
                 .clone();
 
             self.replace_tensor(self_node_idx, new_tensor)
-                .with_context(|| format!("replace_subtree: failed to replace tensor at node {:?}", name))?;
+                .with_context(|| {
+                    format!(
+                        "replace_subtree: failed to replace tensor at node {:?}",
+                        name
+                    )
+                })?;
         }
 
         // Replace ortho_towards for edges within the subtree
@@ -898,7 +912,9 @@ mod tests {
         // Verify connectivity
         let _n_a = subtree.node_index(&"A".to_string()).unwrap();
         let _n_b = subtree.node_index(&"B".to_string()).unwrap();
-        assert!(subtree.edge_between(&"A".to_string(), &"B".to_string()).is_some());
+        assert!(subtree
+            .edge_between(&"A".to_string(), &"B".to_string())
+            .is_some());
 
         // Verify consistency after extraction
         subtree.verify_internal_consistency().unwrap();
@@ -1278,12 +1294,9 @@ mod tests {
 
         // from_treetn should work the same as new with topology
         let plan1 = LocalUpdateSweepPlan::from_treetn(&tn, &"B".to_string(), 2).unwrap();
-        let plan2 = LocalUpdateSweepPlan::new(
-            tn.site_index_network().topology(),
-            &"B".to_string(),
-            2,
-        )
-        .unwrap();
+        let plan2 =
+            LocalUpdateSweepPlan::new(tn.site_index_network().topology(), &"B".to_string(), 2)
+                .unwrap();
 
         assert_eq!(plan1.len(), plan2.len());
         assert_eq!(plan1.nsite, plan2.nsite);

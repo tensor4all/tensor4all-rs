@@ -72,7 +72,9 @@ impl<T: TTScalar> MPO<T> {
     /// Each element O[i1, j1, i2, j2, ..., iL, jL] = value
     pub fn constant(site_dims: &[(usize, usize)], value: T) -> Self {
         if site_dims.is_empty() {
-            return Self { tensors: Vec::new() };
+            return Self {
+                tensors: Vec::new(),
+            };
         }
 
         let n = site_dims.len();
@@ -130,7 +132,9 @@ impl<T: TTScalar> MPO<T> {
     /// The identity operator: O[i1, j1, ...] = delta(i1, j1) * delta(i2, j2) * ...
     pub fn identity(site_dims: &[usize]) -> Result<Self> {
         if site_dims.is_empty() {
-            return Ok(Self { tensors: Vec::new() });
+            return Ok(Self {
+                tensors: Vec::new(),
+            });
         }
 
         let mut tensors = Vec::with_capacity(site_dims.len());

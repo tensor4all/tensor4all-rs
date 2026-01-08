@@ -128,7 +128,9 @@ where
                     if state_indices.len() * 2 != mpo_indices.len() {
                         return Err(anyhow::anyhow!(
                             "Node {:?}: MPO should have 2x site indices. State has {}, MPO has {}",
-                            node, state_indices.len(), mpo_indices.len()
+                            node,
+                            state_indices.len(),
+                            mpo_indices.len()
                         ));
                     }
 
@@ -145,22 +147,30 @@ where
                         if matching_mpo.len() < 2 {
                             return Err(anyhow::anyhow!(
                                 "Node {:?}: Not enough MPO indices with dimension {}. Found {}",
-                                node, dim, matching_mpo.len()
+                                node,
+                                dim,
+                                matching_mpo.len()
                             ));
                         }
 
                         // Convention: first matching is s_in_tmp, second is s_out_tmp
                         // (This depends on how the MPO was constructed)
-                        input_mapping.insert(node.clone(), IndexMapping {
-                            true_index: state_idx.clone(),
-                            internal_index: matching_mpo[0].clone(),
-                        });
+                        input_mapping.insert(
+                            node.clone(),
+                            IndexMapping {
+                                true_index: state_idx.clone(),
+                                internal_index: matching_mpo[0].clone(),
+                            },
+                        );
 
                         // For output, use the same true index (space(x) = space(b))
-                        output_mapping.insert(node.clone(), IndexMapping {
-                            true_index: state_idx.clone(),
-                            internal_index: matching_mpo[1].clone(),
-                        });
+                        output_mapping.insert(
+                            node.clone(),
+                            IndexMapping {
+                                true_index: state_idx.clone(),
+                                internal_index: matching_mpo[1].clone(),
+                            },
+                        );
                     }
                 }
                 (None, None) => {
@@ -211,10 +221,12 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node))?;
 
             // Get operator tensor
-            let op_node_idx = self.mpo
+            let op_node_idx = self
+                .mpo
                 .node_index(&node)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in MPO", node))?;
-            let op_tensor = self.mpo
+            let op_tensor = self
+                .mpo
                 .tensor(op_node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in MPO", node))?;
 
@@ -287,10 +299,12 @@ where
         // Step 2: Contract with local operator tensors
         let mut op_tensor: Option<TensorDynLen<Id, Symm>> = None;
         for node in region {
-            let node_idx = self.mpo
+            let node_idx = self
+                .mpo
                 .node_index(node)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in MPO", node))?;
-            let tensor = self.mpo
+            let tensor = self
+                .mpo
                 .tensor(node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found in MPO for node {:?}", node))?
                 .clone();

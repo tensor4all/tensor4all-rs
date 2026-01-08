@@ -42,6 +42,7 @@ mod blocked_data;
 mod error;
 mod partition;
 mod scalar;
+mod tensor_network;
 
 pub use block_structure::{BlockStructure, ReshapePlan};
 pub use blocked_array::{BlockedArray, BlockedArrayLike};
@@ -49,3 +50,4 @@ pub use blocked_data::{BlockedData, BlockedDataLike};
 pub use error::{BlockedArrayError, Result};
 pub use partition::{block_linear_index, block_multi_index, BlockIndex, BlockPartition};
 pub use scalar::Scalar;
+pub use tensor_network::{EdgeInfo, EdgeLabel, TensorId, TensorNetwork};

@@ -1,8 +1,8 @@
 //! Tests for TensorLike trait implementation for TreeTN.
 
+use tensor4all_core::index::{DynId, Index, NoSymmSpace};
+use tensor4all_core::{DefaultTagSet, StorageScalar, TensorDynLen, TensorLike, TensorLikeDowncast};
 use tensor4all_treetn::TreeTN;
-use tensor4all_core::index::{Index, DynId, NoSymmSpace};
-use tensor4all_core::{TensorDynLen, TensorLike, TensorLikeDowncast, DefaultTagSet, StorageScalar};
 
 /// Helper to create a simple tensor with given indices
 fn make_tensor(indices: Vec<Index<DynId, NoSymmSpace>>) -> TensorDynLen<DynId> {
@@ -20,10 +20,9 @@ fn test_treetn_external_indices_single_node() {
     let tensor = make_tensor(vec![i.clone(), j.clone()]);
 
     // Use new to create the network
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
-        vec![tensor],
-        vec!["A".to_string()],
-    ).unwrap();
+    let tn =
+        TreeTN::<DynId, NoSymmSpace, String>::from_tensors(vec![tensor], vec!["A".to_string()])
+            .unwrap();
 
     // External indices should be all indices (since no connections)
     let external = tn.external_indices();
@@ -53,7 +52,8 @@ fn test_treetn_external_indices_connected_nodes() {
     let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![tensor_a, tensor_b],
         vec!["A".to_string(), "B".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
 
     // External indices should be i and j (not bond_ab)
     let external = tn.external_indices();
@@ -78,7 +78,8 @@ fn test_treetn_num_external_indices() {
     let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![tensor_a, tensor_b],
         vec!["A".to_string(), "B".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
 
     assert_eq!(tn.num_external_indices(), 2);
 }
@@ -105,7 +106,8 @@ fn test_treetn_to_tensor() {
     let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![tensor_a, tensor_b],
         vec!["A".to_string(), "B".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Contract to tensor
     let result = tn.to_tensor().expect("to_tensor should succeed");
@@ -132,7 +134,8 @@ fn test_treetn_external_indices_deterministic_ordering() {
             make_tensor(vec![idx_b.clone()]),
         ],
         vec!["C".to_string(), "A".to_string(), "B".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
 
     // External indices should be sorted by node name first
     let external = tn.external_indices();
@@ -153,10 +156,9 @@ fn test_treetn_tensor_like_object_safety() {
     let i = Index::new_dyn(2);
     let tensor = make_tensor(vec![i.clone()]);
 
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
-        vec![tensor],
-        vec!["A".to_string()],
-    ).unwrap();
+    let tn =
+        TreeTN::<DynId, NoSymmSpace, String>::from_tensors(vec![tensor], vec!["A".to_string()])
+            .unwrap();
 
     // Use as trait object
     let trait_obj: &dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = DefaultTagSet> = &tn;
@@ -170,10 +172,9 @@ fn test_treetn_clone_trait_object() {
     let i = Index::new_dyn(2);
     let tensor = make_tensor(vec![i.clone()]);
 
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
-        vec![tensor],
-        vec!["A".to_string()],
-    ).unwrap();
+    let tn =
+        TreeTN::<DynId, NoSymmSpace, String>::from_tensors(vec![tensor], vec!["A".to_string()])
+            .unwrap();
 
     // Box as trait object
     let boxed: Box<dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = DefaultTagSet>> =
@@ -190,10 +191,9 @@ fn test_treetn_as_any() {
     let i = Index::new_dyn(2);
     let tensor = make_tensor(vec![i.clone()]);
 
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
-        vec![tensor],
-        vec!["A".to_string()],
-    ).unwrap();
+    let tn =
+        TreeTN::<DynId, NoSymmSpace, String>::from_tensors(vec![tensor], vec!["A".to_string()])
+            .unwrap();
 
     // Get as Any
     let any_ref = tn.as_any();
@@ -211,10 +211,9 @@ fn test_treetn_downcast_via_trait_object() {
     let i = Index::new_dyn(2);
     let tensor = make_tensor(vec![i.clone()]);
 
-    let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
-        vec![tensor],
-        vec!["A".to_string()],
-    ).unwrap();
+    let tn =
+        TreeTN::<DynId, NoSymmSpace, String>::from_tensors(vec![tensor], vec!["A".to_string()])
+            .unwrap();
 
     // Use as trait object
     let trait_obj: &dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = DefaultTagSet> = &tn;
@@ -243,12 +242,11 @@ fn test_mixed_downcast() {
     let tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
         vec![make_tensor(vec![i.clone()])],
         vec!["A".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
 
-    let objects: Vec<Box<dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = DefaultTagSet>>> = vec![
-        Box::new(tensor),
-        Box::new(tn),
-    ];
+    let objects: Vec<Box<dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = DefaultTagSet>>> =
+        vec![Box::new(tensor), Box::new(tn)];
 
     // First should be TensorDynLen
     assert!(objects[0].is::<TensorDynLen<DynId>>());
@@ -262,6 +260,8 @@ fn test_mixed_downcast() {
     let tensor_ref = objects[0].downcast_ref::<TensorDynLen<DynId>>().unwrap();
     assert_eq!(tensor_ref.num_external_indices(), 2);
 
-    let tn_ref = objects[1].downcast_ref::<TreeTN<DynId, NoSymmSpace, String>>().unwrap();
+    let tn_ref = objects[1]
+        .downcast_ref::<TreeTN<DynId, NoSymmSpace, String>>()
+        .unwrap();
     assert_eq!(tn_ref.node_count(), 1);
 }

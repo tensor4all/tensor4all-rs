@@ -316,7 +316,12 @@ where
                                         let a_val = *tensor_a.get4(la, s1, k, ra);
                                         let b_val = *tensor_b.get4(lb, k, s2, rb);
                                         let old = new_env.get(lr, la, lb);
-                                        new_env.set(lr, la, lb, old + r_val * c_val * a_val * b_val);
+                                        new_env.set(
+                                            lr,
+                                            la,
+                                            lb,
+                                            old + r_val * c_val * a_val * b_val,
+                                        );
                                     }
                                 }
                             }

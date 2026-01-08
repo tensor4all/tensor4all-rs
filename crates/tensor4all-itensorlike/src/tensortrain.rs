@@ -9,14 +9,18 @@
 use std::ops::Range;
 
 // Note: NodeIndex import not needed since we use V = usize for node names
-use tensor4all_core::{
-    common_inds, hascommoninds, sim, DynId, Index, NoSymmSpace, Symmetry,
-};
+use tensor4all_core::{common_inds, hascommoninds, sim, DynId, Index, NoSymmSpace, Symmetry};
 use tensor4all_core::{AnyScalar, TensorAccess, TensorDynLen};
-use tensor4all_treetn::{TreeTN, CanonicalizationOptions, TruncationOptions, ContractionOptions as TreeTNContractionOptions, ContractionMethod as TreeTNContractionMethod, contract as treetn_contract};
+use tensor4all_treetn::{
+    contract as treetn_contract, CanonicalizationOptions,
+    ContractionMethod as TreeTNContractionMethod, ContractionOptions as TreeTNContractionOptions,
+    TreeTN, TruncationOptions,
+};
 
-use crate::error::{TensorTrainError, Result};
-use crate::options::{CanonicalForm, TruncateAlg, TruncateOptions, ContractMethod, ContractOptions};
+use crate::error::{Result, TensorTrainError};
+use crate::options::{
+    CanonicalForm, ContractMethod, ContractOptions, TruncateAlg, TruncateOptions,
+};
 
 /// Tensor Train with orthogonality tracking.
 ///
@@ -112,10 +116,11 @@ where
         let node_names: Vec<usize> = (0..tensors.len()).collect();
 
         // Create TreeTN with from_tensors (auto-connects by shared index IDs)
-        let inner = TreeTN::<Id, Symm, usize>::from_tensors(tensors, node_names)
-            .map_err(|e| TensorTrainError::InvalidStructure {
+        let inner = TreeTN::<Id, Symm, usize>::from_tensors(tensors, node_names).map_err(|e| {
+            TensorTrainError::InvalidStructure {
                 message: format!("Failed to create TreeTN: {}", e),
-            })?;
+            }
+        })?;
 
         Ok(Self {
             inner,
@@ -145,10 +150,11 @@ where
         // When llim + 2 == rlim, ortho center is at llim + 1
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < tt.len() as i32 {
             let center = (llim + 1) as usize;
-            tt.inner.set_canonical_center(vec![center])
-                .map_err(|e| TensorTrainError::InvalidStructure {
+            tt.inner.set_canonical_center(vec![center]).map_err(|e| {
+                TensorTrainError::InvalidStructure {
                     message: format!("Failed to set ortho region: {}", e),
-                })?;
+                }
+            })?;
         }
 
         tt.canonical_form = canonical_form;
@@ -273,10 +279,8 @@ where
     /// Panics if `site >= len()`.
     #[inline]
     pub fn tensor(&self, site: usize) -> &TensorDynLen<Id, Symm> {
-        let node_idx = self.inner.node_index(&site)
-            .expect("Site out of bounds");
-        self.inner.tensor(node_idx)
-            .expect("Tensor not found")
+        let node_idx = self.inner.node_index(&site).expect("Site out of bounds");
+        self.inner.tensor(node_idx).expect("Tensor not found")
     }
 
     /// Get a reference to the tensor at the given site.
@@ -289,12 +293,15 @@ where
                 length: self.len(),
             });
         }
-        let node_idx = self.inner.node_index(&site)
-            .ok_or_else(|| TensorTrainError::SiteOutOfBounds {
-                site,
-                length: self.len(),
-            })?;
-        self.inner.tensor(node_idx)
+        let node_idx =
+            self.inner
+                .node_index(&site)
+                .ok_or_else(|| TensorTrainError::SiteOutOfBounds {
+                    site,
+                    length: self.len(),
+                })?;
+        self.inner
+            .tensor(node_idx)
             .ok_or_else(|| TensorTrainError::SiteOutOfBounds {
                 site,
                 length: self.len(),
@@ -308,10 +315,8 @@ where
     /// Panics if `site >= len()`.
     #[inline]
     pub fn tensor_mut(&mut self, site: usize) -> &mut TensorDynLen<Id, Symm> {
-        let node_idx = self.inner.node_index(&site)
-            .expect("Site out of bounds");
-        self.inner.tensor_mut(node_idx)
-            .expect("Tensor not found")
+        let node_idx = self.inner.node_index(&site).expect("Site out of bounds");
+        self.inner.tensor_mut(node_idx).expect("Tensor not found")
     }
 
     /// Get a reference to all tensors.
@@ -474,8 +479,7 @@ where
     ///
     /// This invalidates orthogonality tracking.
     pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen<Id, Symm>) {
-        let node_idx = self.inner.node_index(&site)
-            .expect("Site out of bounds");
+        let node_idx = self.inner.node_index(&site).expect("Site out of bounds");
         let _ = self.inner.replace_tensor(node_idx, tensor);
         // Invalidate orthogonality
         let _ = self.inner.set_canonical_center(Vec::<usize>::new());
@@ -554,7 +558,8 @@ where
         // This matches ITensor convention where truncation sweeps left-to-right
         let center = self.len() - 1;
 
-        self.inner.truncate_mut([center], treetn_options)
+        self.inner
+            .truncate_mut([center], treetn_options)
             .map_err(|e| TensorTrainError::InvalidStructure {
                 message: format!("TreeTN truncation failed: {}", e),
             })?;
@@ -667,8 +672,8 @@ where
             ContractMethod::Naive => TreeTNContractionMethod::Naive,
         };
 
-        let treetn_options = TreeTNContractionOptions::new(treetn_method)
-            .with_nsweeps(options.nsweeps);
+        let treetn_options =
+            TreeTNContractionOptions::new(treetn_method).with_nsweeps(options.nsweeps);
 
         let treetn_options = if let Some(max_rank) = options.max_rank {
             treetn_options.with_max_rank(max_rank)
@@ -724,13 +729,11 @@ fn truncate_alg_to_form(alg: TruncateAlg) -> CanonicalForm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor4all_core::{DynId, Index, NoSymmSpace};
     use tensor4all_core::StorageScalar;
+    use tensor4all_core::{DynId, Index, NoSymmSpace};
 
     /// Helper to create a simple tensor for testing using DynId
-    fn make_tensor(
-        indices: Vec<Index<DynId, NoSymmSpace>>,
-    ) -> TensorDynLen<DynId, NoSymmSpace> {
+    fn make_tensor(indices: Vec<Index<DynId, NoSymmSpace>>) -> TensorDynLen<DynId, NoSymmSpace> {
         let dims: Vec<usize> = indices.iter().map(|i| i.size()).collect();
         let size: usize = dims.iter().product();
         let data: Vec<f64> = (0..size).map(|i| i as f64).collect();
@@ -766,9 +769,9 @@ mod tests {
     #[test]
     fn test_two_site_tt() {
         // Create two tensors with a shared link index
-        let s0 = idx(0, 2);   // site 0
-        let l01 = idx(1, 3);  // link 0-1
-        let s1 = idx(2, 2);   // site 1
+        let s0 = idx(0, 2); // site 0
+        let l01 = idx(1, 3); // link 0-1
+        let s1 = idx(2, 2); // site 1
 
         let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
         let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
@@ -794,10 +797,10 @@ mod tests {
     #[test]
     fn test_multi_site_indices() {
         // Test site with multiple physical indices
-        let s0a = idx(0, 2);  // site 0 index a
-        let s0b = idx(1, 3);  // site 0 index b
-        let l01 = idx(2, 4);  // link 0-1
-        let s1 = idx(3, 2);   // site 1
+        let s0a = idx(0, 2); // site 0 index a
+        let s0b = idx(1, 3); // site 0 index b
+        let l01 = idx(2, 4); // link 0-1
+        let s1 = idx(3, 2); // site 1
 
         let t0 = make_tensor(vec![s0a.clone(), s0b.clone(), l01.clone()]);
         let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
@@ -807,8 +810,8 @@ mod tests {
         // Check site indices (nested vec)
         let site_inds = tt.siteinds();
         assert_eq!(site_inds.len(), 2);
-        assert_eq!(site_inds[0].len(), 2);  // site 0 has 2 indices
-        assert_eq!(site_inds[1].len(), 1);  // site 1 has 1 index
+        assert_eq!(site_inds[0].len(), 2); // site 0 has 2 indices
+        assert_eq!(site_inds[1].len(), 1); // site 1 has 1 index
     }
 
     #[test]
@@ -823,8 +826,8 @@ mod tests {
         // Create with specified orthogonality (ortho center at site 0)
         let tt = TensorTrain::with_ortho(
             vec![t0, t1],
-            -1,  // no left orthogonality
-            1,   // right orthogonal from site 1
+            -1, // no left orthogonality
+            1,  // right orthogonal from site 1
             Some(CanonicalForm::Unitary),
         )
         .unwrap();

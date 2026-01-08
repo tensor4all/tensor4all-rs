@@ -26,7 +26,10 @@ pub enum QuanticsGridError {
 
     /// Index table contains unknown variable
     #[error("Index table contains unknown variable '{variable}'. Valid variables: {valid:?}")]
-    UnknownVariable { variable: String, valid: Vec<String> },
+    UnknownVariable {
+        variable: String,
+        valid: Vec<String>,
+    },
 
     /// Index table contains invalid bit number
     #[error("Bit number {bit} for variable '{variable}' exceeds resolution {resolution}")]

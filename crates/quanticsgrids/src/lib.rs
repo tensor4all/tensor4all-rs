@@ -130,13 +130,13 @@
 //! assert!(matches!(result, Err(QuanticsGridError::GridIndexOutOfBounds { .. })));
 //! ```
 
+mod discretized_grid;
 mod error;
 mod inherent_discrete_grid;
-mod discretized_grid;
 
+pub use discretized_grid::{quantics_function, DiscretizedGrid, DiscretizedGridBuilder};
 pub use error::{QuanticsGridError, Result};
 pub use inherent_discrete_grid::{InherentDiscreteGrid, InherentDiscreteGridBuilder};
-pub use discretized_grid::{quantics_function, DiscretizedGrid, DiscretizedGridBuilder};
 
 /// Unfolding scheme for tensor train structure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

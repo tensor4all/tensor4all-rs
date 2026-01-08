@@ -153,7 +153,12 @@ where
 
     /// Convert flat array to tensor.
     fn array_to_tensor(&self, x: &[f64]) -> TensorDynLen<Id, Symm> {
-        let dims: Vec<usize> = self.template.indices.iter().map(|idx| idx.symm.total_dim()).collect();
+        let dims: Vec<usize> = self
+            .template
+            .indices
+            .iter()
+            .map(|idx| idx.symm.total_dim())
+            .collect();
         let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(x.to_vec())));
         TensorDynLen::new(self.template.indices.clone(), dims, storage)
     }
@@ -169,7 +174,8 @@ where
 impl<Id, Symm, V> LinOp for LocalLinOp<Id, Symm, V>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
+    Symm:
+        Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     type S = f64;
@@ -196,7 +202,13 @@ where
             let bra_state = self.get_bra_state();
             let mut proj_op = self.projected_operator.write().unwrap();
             proj_op
-                .apply(&x_tensor, &self.region, &self.state, bra_state, self.state.site_index_network())
+                .apply(
+                    &x_tensor,
+                    &self.region,
+                    &self.state,
+                    bra_state,
+                    self.state.site_index_network(),
+                )
                 .expect("Failed to apply projected operator")
         };
 

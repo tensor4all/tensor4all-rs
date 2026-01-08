@@ -18,15 +18,15 @@ pub struct PhysicalIndices<Id, Symm = crate::index::NoSymmSpace, Tags = DefaultT
     /// `physical_indices[i]` contains the list of physical indices for site `i`.
     /// The order of indices within each site is preserved.
     physical_indices: Vec<Vec<Index<Id, Symm, Tags>>>,
-    
+
     /// Tensor integer ID per site.
     /// `tensor_id_by_site[i]` is the tensor ID associated with site `i` (or `None` if not set yet).
     tensor_id_by_site: Vec<Option<usize>>,
-    
+
     /// Flattened list of all physical indices in the order they appear in tensors (unsorted).
     /// This preserves the original order of indices as they appear in the tensor network.
     unsorted_indices: Vec<Index<Id, Symm, Tags>>,
-    
+
     /// Flattened list of all physical indices sorted by ID.
     /// Used for comparison: two `PhysicalIndices` are equal if and only if their `sorted_indices` match.
     sorted_indices: Vec<Index<Id, Symm, Tags>>,
@@ -92,8 +92,7 @@ where
         site_index: usize,
         indices: Vec<Index<Id, Symm, Tags>>,
         tensor_id: usize,
-    )
-    where
+    ) where
         Id: Ord,
     {
         // Ensure we have enough sites
@@ -115,7 +114,7 @@ where
 
         // Append indices to the site (order is preserved)
         self.physical_indices[site_index].extend(indices);
-        
+
         // Update flattened indices
         self.update_flattened_indices();
     }
@@ -131,8 +130,7 @@ where
         site_index: usize,
         indices: Vec<Index<Id, Symm, Tags>>,
         tensor_id: usize,
-    )
-    where
+    ) where
         Id: Ord,
     {
         // Ensure we have enough sites
@@ -144,7 +142,7 @@ where
         // Replace indices and bind site to tensor_id.
         self.physical_indices[site_index] = indices;
         self.tensor_id_by_site[site_index] = Some(tensor_id);
-        
+
         // Update flattened indices
         self.update_flattened_indices();
     }
@@ -249,4 +247,3 @@ where
     Tags: Clone,
 {
 }
-

@@ -3,8 +3,8 @@
 //! Provides functions to work with algorithm enums from C/FFI.
 
 use crate::{
-    t4a_compression_algorithm, t4a_contraction_algorithm, t4a_factorize_algorithm,
-    StatusCode, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
+    t4a_compression_algorithm, t4a_contraction_algorithm, t4a_factorize_algorithm, StatusCode,
+    T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 use std::ffi::CStr;
 use std::os::raw::c_char;

@@ -1,6 +1,6 @@
 //! Utility functions for matrix cross interpolation
 
-use num_traits::{Float, Zero, One};
+use num_traits::{Float, One, Zero};
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::collections::HashSet;
@@ -307,16 +307,18 @@ fn solve_linear_system<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
     let m = ncols(b);
 
     // Create augmented matrix [A | B]
-    let mut aug: Vec<Vec<T>> = (0..n).map(|i| {
-        let mut row = Vec::with_capacity(n + m);
-        for j in 0..n {
-            row.push(a[[i, j]]);
-        }
-        for j in 0..m {
-            row.push(b[[i, j]]);
-        }
-        row
-    }).collect();
+    let mut aug: Vec<Vec<T>> = (0..n)
+        .map(|i| {
+            let mut row = Vec::with_capacity(n + m);
+            for j in 0..n {
+                row.push(a[[i, j]]);
+            }
+            for j in 0..m {
+                row.push(b[[i, j]]);
+            }
+            row
+        })
+        .collect();
 
     // Forward elimination with partial pivoting
     for k in 0..n {
@@ -497,14 +499,8 @@ mod tests {
 
     #[test]
     fn test_mat_mul() {
-        let a = from_vec2d(vec![
-            vec![1.0, 2.0],
-            vec![3.0, 4.0],
-        ]);
-        let b = from_vec2d(vec![
-            vec![5.0, 6.0],
-            vec![7.0, 8.0],
-        ]);
+        let a = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
+        let b = from_vec2d(vec![vec![5.0, 6.0], vec![7.0, 8.0]]);
         let c = mat_mul(&a, &b);
 
         assert_eq!(c[[0, 0]], 19.0);

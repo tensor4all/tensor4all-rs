@@ -72,6 +72,30 @@ impl<T: Scalar> BlockedData<T> {
         Self { tensor }
     }
 
+    /// Dot product for 1D tensors (vectors).
+    ///
+    /// Computes sum(a * b) and returns a scalar value.
+    ///
+    /// # Panics
+    /// - If either tensor is not 1D
+    /// - If lengths don't match
+    pub fn dot(&self, other: &Self) -> T {
+        assert_eq!(self.rank(), 1, "dot requires 1D tensors");
+        assert_eq!(other.rank(), 1, "dot requires 1D tensors");
+        assert_eq!(
+            self.shape()[0],
+            other.shape()[0],
+            "Vector lengths must match for dot product"
+        );
+
+        // Compute dot product: sum of element-wise products
+        self.tensor
+            .expr()
+            .zip(other.tensor.expr())
+            .map(|(a, b)| *a * *b)
+            .fold(T::zero(), |acc, x| acc + x)
+    }
+
     /// Element-wise addition.
     ///
     /// Uses mdarray's expression system for efficient element-wise operations.
@@ -79,10 +103,19 @@ impl<T: Scalar> BlockedData<T> {
     /// # Panics
     /// - If shapes don't match
     pub fn add(&self, other: &Self) -> Self {
-        assert_eq!(self.shape(), other.shape(), "Shapes must match for addition");
+        assert_eq!(
+            self.shape(),
+            other.shape(),
+            "Shapes must match for addition"
+        );
 
         // Use mdarray's zip expression for element-wise addition
-        let tensor = self.tensor.expr().zip(other.tensor.expr()).map(|(a, b)| *a + *b).eval();
+        let tensor = self
+            .tensor
+            .expr()
+            .zip(other.tensor.expr())
+            .map(|(a, b)| *a + *b)
+            .eval();
 
         Self { tensor }
     }

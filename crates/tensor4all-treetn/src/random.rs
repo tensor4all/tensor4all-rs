@@ -152,7 +152,8 @@ where
         };
 
         if !link_indices.contains_key(&key) {
-            let dim = link_space.get(&key.0, &key.1)
+            let dim = link_space
+                .get(&key.0, &key.1)
                 .expect("LinkSpace must provide dimension for all edges");
             let link_idx = Index::new_dyn(dim);
             link_indices.insert(key, link_idx);
@@ -167,7 +168,8 @@ where
         let node_name = node_name.clone();
 
         // Collect site indices
-        let site_inds = site_network.site_space(&node_name)
+        let site_inds = site_network
+            .site_space(&node_name)
             .cloned()
             .unwrap_or_default();
 
@@ -198,8 +200,7 @@ where
     }
 
     // Step 3: Create TreeTN from tensors
-    TreeTN::from_tensors(tensors, node_names)
-        .expect("Failed to create TreeTN from random tensors")
+    TreeTN::from_tensors(tensors, node_names).expect("Failed to create TreeTN from random tensors")
 }
 
 #[cfg(test)]
@@ -215,9 +216,15 @@ mod tests {
         let mut site_network = SiteIndexNetwork::<String, DynId>::new();
         let i = Index::new_dyn(2);
         let j = Index::new_dyn(3);
-        site_network.add_node("A".to_string(), HashSet::from([i.clone()])).unwrap();
-        site_network.add_node("B".to_string(), HashSet::from([j.clone()])).unwrap();
-        site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+        site_network
+            .add_node("A".to_string(), HashSet::from([i.clone()]))
+            .unwrap();
+        site_network
+            .add_node("B".to_string(), HashSet::from([j.clone()]))
+            .unwrap();
+        site_network
+            .add_edge(&"A".to_string(), &"B".to_string())
+            .unwrap();
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let treetn = random_treetn_f64(&mut rng, &site_network, LinkSpace::uniform(4));
@@ -247,11 +254,21 @@ mod tests {
     #[test]
     fn test_link_space_per_edge() {
         let mut site_network = SiteIndexNetwork::<String, DynId>::new();
-        site_network.add_node("A".to_string(), HashSet::new()).unwrap();
-        site_network.add_node("B".to_string(), HashSet::new()).unwrap();
-        site_network.add_node("C".to_string(), HashSet::new()).unwrap();
-        site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
-        site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+        site_network
+            .add_node("A".to_string(), HashSet::new())
+            .unwrap();
+        site_network
+            .add_node("B".to_string(), HashSet::new())
+            .unwrap();
+        site_network
+            .add_node("C".to_string(), HashSet::new())
+            .unwrap();
+        site_network
+            .add_edge(&"A".to_string(), &"B".to_string())
+            .unwrap();
+        site_network
+            .add_edge(&"B".to_string(), &"C".to_string())
+            .unwrap();
 
         let mut dims = HashMap::new();
         dims.insert(("A".to_string(), "B".to_string()), 5);
