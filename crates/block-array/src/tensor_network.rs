@@ -8,8 +8,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::block_array::BlockArray;
+use crate::block_data::BlockDataLike;
 use crate::partition::BlockPartition;
-use crate::scalar::Scalar;
 
 /// Unique identifier for a tensor in the network.
 pub type TensorId = usize;
@@ -29,9 +29,9 @@ pub struct EdgeInfo {
 
 /// A tensor in the network with labeled edges.
 #[derive(Debug, Clone)]
-struct NetworkTensor<T: Scalar> {
+struct NetworkTensor<D: BlockDataLike> {
     /// The actual blocked array data.
-    data: BlockArray<T>,
+    data: BlockArray<D>,
     /// Edge labels for each axis.
     edge_labels: Vec<EdgeLabel>,
 }
@@ -41,16 +41,16 @@ struct NetworkTensor<T: Scalar> {
 /// Tensors sharing the same edge label will be contracted along that edge.
 /// The contraction order is optimized using a greedy algorithm.
 #[derive(Debug)]
-pub struct TensorNetwork<T: Scalar> {
+pub struct TensorNetwork<D: BlockDataLike> {
     /// Tensors in the network.
-    tensors: HashMap<TensorId, NetworkTensor<T>>,
+    tensors: HashMap<TensorId, NetworkTensor<D>>,
     /// Next available tensor ID.
     next_id: TensorId,
     /// Edge information indexed by label.
     edges: HashMap<EdgeLabel, EdgeInfo>,
 }
 
-impl<T: Scalar> TensorNetwork<T> {
+impl<D: BlockDataLike> TensorNetwork<D> {
     /// Create an empty tensor network.
     pub fn new() -> Self {
         Self {
@@ -74,7 +74,7 @@ impl<T: Scalar> TensorNetwork<T> {
     /// - If an edge label appears more than once within the same tensor
     /// - If an edge label would end up connected to 3 or more tensors (hyperedge not supported)
     /// - If an edge label is reused with incompatible partition
-    pub fn add_tensor(&mut self, tensor: BlockArray<T>, edge_labels: Vec<EdgeLabel>) -> TensorId {
+    pub fn add_tensor(&mut self, tensor: BlockArray<D>, edge_labels: Vec<EdgeLabel>) -> TensorId {
         assert_eq!(
             tensor.rank(),
             edge_labels.len(),
@@ -307,8 +307,8 @@ TensorNetwork only supports labels with degree <= 2. Existing connections: {:?}"
 
     fn contraction_axes_from_tensors(
         &self,
-        t1: &NetworkTensor<T>,
-        t2: &NetworkTensor<T>,
+        t1: &NetworkTensor<D>,
+        t2: &NetworkTensor<D>,
     ) -> (Vec<usize>, Vec<usize>) {
         let shared = self.shared_edges_from_tensors(t1, t2);
 
@@ -333,8 +333,8 @@ TensorNetwork only supports labels with degree <= 2. Existing connections: {:?}"
 
     fn shared_edges_from_tensors(
         &self,
-        t1: &NetworkTensor<T>,
-        t2: &NetworkTensor<T>,
+        t1: &NetworkTensor<D>,
+        t2: &NetworkTensor<D>,
     ) -> HashSet<EdgeLabel> {
         let labels1: HashSet<_> = t1.edge_labels.iter().cloned().collect();
         let labels2: HashSet<_> = t2.edge_labels.iter().cloned().collect();
@@ -347,7 +347,7 @@ TensorNetwork only supports labels with degree <= 2. Existing connections: {:?}"
     ///
     /// If the network is disconnected (no shared edges between any remaining tensors),
     /// this continues contracting by taking an outer product between an arbitrary pair.
-    pub fn contract_all(&mut self) -> Option<BlockArray<T>> {
+    pub fn contract_all(&mut self) -> Option<BlockArray<D>> {
         while self.tensors.len() > 1 {
             if let Some((id1, id2, _cost)) = self.find_best_contraction() {
                 self.contract_pair(id1, id2);
@@ -369,7 +369,7 @@ TensorNetwork only supports labels with degree <= 2. Existing connections: {:?}"
     /// Contract all tensors and also return the remaining edge labels of the final tensor.
     ///
     /// This is useful when the caller needs to map result axes back to original labels.
-    pub fn contract_all_with_labels(&mut self) -> Option<(BlockArray<T>, Vec<EdgeLabel>)> {
+    pub fn contract_all_with_labels(&mut self) -> Option<(BlockArray<D>, Vec<EdgeLabel>)> {
         while self.tensors.len() > 1 {
             if let Some((id1, id2, _cost)) = self.find_best_contraction() {
                 self.contract_pair(id1, id2);
@@ -460,7 +460,7 @@ TensorNetwork only supports labels with degree <= 2. Existing connections: {:?}"
     }
 }
 
-impl<T: Scalar> Default for TensorNetwork<T> {
+impl<D: BlockDataLike> Default for TensorNetwork<D> {
     fn default() -> Self {
         Self::new()
     }
@@ -485,17 +485,17 @@ mod tests {
 
     #[test]
     fn test_tensor_network_basic() {
-        let mut network = TensorNetwork::<f64>::new();
+        let mut network = TensorNetwork::<BlockData<f64>>::new();
 
         // Create tensors A[i,j] and B[j,k]
         let part_i = BlockPartition::trivial(2);
         let part_j = BlockPartition::trivial(3);
         let part_k = BlockPartition::trivial(4);
 
-        let mut a = BlockArray::new(vec![part_i.clone(), part_j.clone()]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part_i.clone(), part_j.clone()]);
         a.set_block(vec![0, 0], make_block_data(&[2, 3], 1.0));
 
-        let mut b = BlockArray::new(vec![part_j, part_k]);
+        let mut b = BlockArray::<BlockData<f64>>::new(vec![part_j, part_k]);
         b.set_block(vec![0, 0], make_block_data(&[3, 4], 1.0));
 
         let id_a = network.add_tensor(a, vec!["i".to_string(), "j".to_string()]);
@@ -515,7 +515,7 @@ mod tests {
 
     #[test]
     fn test_tensor_network_chain() {
-        let mut network = TensorNetwork::<f64>::new();
+        let mut network = TensorNetwork::<BlockData<f64>>::new();
 
         // Create chain: A[i,j] @ B[j,k] @ C[k,l]
         let part_i = BlockPartition::trivial(2);
@@ -523,13 +523,13 @@ mod tests {
         let part_k = BlockPartition::trivial(4);
         let part_l = BlockPartition::trivial(5);
 
-        let mut a = BlockArray::new(vec![part_i, part_j.clone()]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part_i, part_j.clone()]);
         a.set_block(vec![0, 0], make_block_data(&[2, 3], 1.0));
 
-        let mut b = BlockArray::new(vec![part_j, part_k.clone()]);
+        let mut b = BlockArray::<BlockData<f64>>::new(vec![part_j, part_k.clone()]);
         b.set_block(vec![0, 0], make_block_data(&[3, 4], 1.0));
 
-        let mut c = BlockArray::new(vec![part_k, part_l]);
+        let mut c = BlockArray::<BlockData<f64>>::new(vec![part_k, part_l]);
         c.set_block(vec![0, 0], make_block_data(&[4, 5], 1.0));
 
         network.add_tensor(a, vec!["i".to_string(), "j".to_string()]);
@@ -553,18 +553,18 @@ mod tests {
 
     #[test]
     fn test_tensor_network_triangle() {
-        let mut network = TensorNetwork::<f64>::new();
+        let mut network = TensorNetwork::<BlockData<f64>>::new();
 
         // Create triangle: A[i,j], B[j,k], C[k,i] -> scalar
         let part = BlockPartition::trivial(3);
 
-        let mut a = BlockArray::new(vec![part.clone(), part.clone()]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part.clone(), part.clone()]);
         a.set_block(vec![0, 0], make_block_data(&[3, 3], 1.0));
 
-        let mut b = BlockArray::new(vec![part.clone(), part.clone()]);
+        let mut b = BlockArray::<BlockData<f64>>::new(vec![part.clone(), part.clone()]);
         b.set_block(vec![0, 0], make_block_data(&[3, 3], 1.0));
 
-        let mut c = BlockArray::new(vec![part.clone(), part]);
+        let mut c = BlockArray::<BlockData<f64>>::new(vec![part.clone(), part]);
         c.set_block(vec![0, 0], make_block_data(&[3, 3], 1.0));
 
         network.add_tensor(a, vec!["i".to_string(), "j".to_string()]);
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn test_contraction_cost_estimate() {
-        let mut network = TensorNetwork::<f64>::new();
+        let mut network = TensorNetwork::<BlockData<f64>>::new();
 
         // A[i,j] = [10, 100], B[j,k] = [100, 10], C[k,l] = [10, 10]
         // A@B: contracts j (100), output [10, 10], cost = 2 * 10 * 100 * 10 = 20000
@@ -594,13 +594,13 @@ mod tests {
         let part_20 = BlockPartition::trivial(20);
         let part_3 = BlockPartition::trivial(3);
 
-        let mut a = BlockArray::new(vec![part_5.clone(), part_100.clone()]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part_5.clone(), part_100.clone()]);
         a.set_block(vec![0, 0], make_block_data(&[5, 100], 1.0));
 
-        let mut b = BlockArray::new(vec![part_100, part_20.clone()]);
+        let mut b = BlockArray::<BlockData<f64>>::new(vec![part_100, part_20.clone()]);
         b.set_block(vec![0, 0], make_block_data(&[100, 20], 1.0));
 
-        let mut c = BlockArray::new(vec![part_20, part_3]);
+        let mut c = BlockArray::<BlockData<f64>>::new(vec![part_20, part_3]);
         c.set_block(vec![0, 0], make_block_data(&[20, 3], 1.0));
 
         let id_a = network.add_tensor(a, vec!["i".to_string(), "j".to_string()]);
@@ -622,18 +622,18 @@ mod tests {
     #[test]
     #[should_panic(expected = "degree <= 2")]
     fn test_reject_hyperedge_degree_ge_3() {
-        let mut network = TensorNetwork::<f64>::new();
+        let mut network = TensorNetwork::<BlockData<f64>>::new();
 
         let part_i = BlockPartition::trivial(2);
         let part_j = BlockPartition::trivial(3);
 
-        let mut a = BlockArray::new(vec![part_i.clone(), part_j.clone()]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part_i.clone(), part_j.clone()]);
         a.set_block(vec![0, 0], make_block_data(&[2, 3], 1.0));
 
-        let mut b = BlockArray::new(vec![part_i.clone(), part_j.clone()]);
+        let mut b = BlockArray::<BlockData<f64>>::new(vec![part_i.clone(), part_j.clone()]);
         b.set_block(vec![0, 0], make_block_data(&[2, 3], 1.0));
 
-        let mut c = BlockArray::new(vec![part_i, part_j]);
+        let mut c = BlockArray::<BlockData<f64>>::new(vec![part_i, part_j]);
         c.set_block(vec![0, 0], make_block_data(&[2, 3], 1.0));
 
         // Label "j" would appear on three tensors.
@@ -645,10 +645,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "appears more than once within the same tensor")]
     fn test_reject_duplicate_label_within_tensor() {
-        let mut network = TensorNetwork::<f64>::new();
+        let mut network = TensorNetwork::<BlockData<f64>>::new();
 
         let part = BlockPartition::trivial(3);
-        let mut a = BlockArray::new(vec![part.clone(), part]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part.clone(), part]);
         a.set_block(vec![0, 0], make_block_data(&[3, 3], 1.0));
 
         // Duplicate label "i" on the same tensor is not supported.

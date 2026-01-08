@@ -1,19 +1,22 @@
 //! N-dimensional block data storage.
 
 use std::fmt::Debug;
+use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use mdarray::expr::Expression;
 use mdarray::Tensor;
 use mdarray_linalg::matmul::{ContractBuilder, MatMul};
 use mdarray_linalg_faer::Faer;
 
-use crate::scalar::Scalar;
+use faer_traits::ComplexField;
+use num_complex::ComplexFloat;
+use num_traits::{MulAdd, One, Zero};
 
 /// Trait for block data storage backends.
 ///
 /// This trait abstracts over different storage backends (CPU, GPU, etc.)
 /// allowing `BlockArray` to work with any compatible implementation.
-pub trait BlockDataLike<T: Scalar>: Debug + Clone {
+pub trait BlockDataLike: Debug + Clone {
     /// Get the rank (number of dimensions).
     fn rank(&self) -> usize;
 
@@ -28,22 +31,74 @@ pub trait BlockDataLike<T: Scalar>: Debug + Clone {
         self.len() == 0
     }
 
+    /// Construct a tensor filled with zeros.
+    fn zeros(shape: &[usize]) -> Self;
+
     /// Permute axes, returning a new owned instance.
     fn permute(&self, perm: &[usize]) -> Self;
 
     /// Reshape, returning a new owned instance.
     fn reshape(&self, shape: &[usize]) -> Self;
+
+    /// Matrix multiplication for 2D blocks.
+    fn matmul(&self, other: &Self) -> Self;
+
+    /// Dot product for 1D blocks, returning a scalar block (0D).
+    fn dot(&self, other: &Self) -> Self;
+
+    /// Element-wise addition.
+    fn add(&self, other: &Self) -> Self;
 }
 
 /// N-dimensional block data storage using mdarray.
 ///
 /// Wraps `mdarray::Tensor<T>` (dynamic rank) for block operations.
 #[derive(Debug, Clone)]
-pub struct BlockData<T: Scalar> {
+pub struct BlockData<T>
+where
+    T: Clone
+        + Copy
+        + Debug
+        + Default
+        + PartialEq
+        + Zero
+        + One
+        + Add<Output = T>
+        + Sub<Output = T>
+        + Mul<Output = T>
+        + Div<Output = T>
+        + Neg<Output = T>
+        + ComplexFloat
+        + ComplexField
+        + MulAdd<Output = T>
+        + Send
+        + Sync
+        + 'static,
+{
     tensor: Tensor<T>,
 }
 
-impl<T: Scalar> BlockData<T> {
+impl<T> BlockData<T>
+where
+    T: Clone
+        + Copy
+        + Debug
+        + Default
+        + PartialEq
+        + Zero
+        + One
+        + Add<Output = T>
+        + Sub<Output = T>
+        + Mul<Output = T>
+        + Div<Output = T>
+        + Neg<Output = T>
+        + ComplexFloat
+        + ComplexField
+        + MulAdd<Output = T>
+        + Send
+        + Sync
+        + 'static,
+{
     /// Create a new BlockData from a Tensor.
     pub fn from_tensor(tensor: Tensor<T>) -> Self {
         Self { tensor }
@@ -72,14 +127,14 @@ impl<T: Scalar> BlockData<T> {
         Self { tensor }
     }
 
-    /// Dot product for 1D tensors (vectors).
+    /// Dot product for 1D tensors (vectors), returning a scalar value.
     ///
     /// Computes sum(a * b) and returns a scalar value.
     ///
     /// # Panics
     /// - If either tensor is not 1D
     /// - If lengths don't match
-    pub fn dot(&self, other: &Self) -> T {
+    pub fn dot_scalar(&self, other: &Self) -> T {
         assert_eq!(self.rank(), 1, "dot requires 1D tensors");
         assert_eq!(other.rank(), 1, "dot requires 1D tensors");
         assert_eq!(
@@ -121,7 +176,27 @@ impl<T: Scalar> BlockData<T> {
     }
 }
 
-impl<T: Scalar> BlockDataLike<T> for BlockData<T> {
+impl<T> BlockDataLike for BlockData<T>
+where
+    T: Clone
+        + Copy
+        + Debug
+        + Default
+        + PartialEq
+        + Zero
+        + One
+        + Add<Output = T>
+        + Sub<Output = T>
+        + Mul<Output = T>
+        + Div<Output = T>
+        + Neg<Output = T>
+        + ComplexFloat
+        + ComplexField
+        + MulAdd<Output = T>
+        + Send
+        + Sync
+        + 'static,
+{
     fn rank(&self) -> usize {
         self.tensor.rank()
     }
@@ -134,6 +209,11 @@ impl<T: Scalar> BlockDataLike<T> for BlockData<T> {
         self.tensor.len()
     }
 
+    fn zeros(shape: &[usize]) -> Self {
+        let tensor = Tensor::from_fn(shape, |_| T::zero());
+        Self { tensor }
+    }
+
     fn permute(&self, perm: &[usize]) -> Self {
         let view = self.tensor.permute(perm);
         let tensor = view.cloned().eval();
@@ -144,5 +224,19 @@ impl<T: Scalar> BlockDataLike<T> for BlockData<T> {
         let view = self.tensor.reshape(shape);
         let tensor = view.cloned().eval();
         Self { tensor }
+    }
+
+    fn matmul(&self, other: &Self) -> Self {
+        BlockData::matmul(self, other)
+    }
+
+    fn dot(&self, other: &Self) -> Self {
+        let scalar = BlockData::dot_scalar(self, other);
+        let tensor = Tensor::from_fn(&[], |_| scalar);
+        Self { tensor }
+    }
+
+    fn add(&self, other: &Self) -> Self {
+        BlockData::add(self, other)
     }
 }

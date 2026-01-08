@@ -2,10 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::block_data::{BlockData, BlockDataLike};
+use crate::block_data::BlockDataLike;
 use crate::block_structure::{BlockStructure, ReshapePlan};
 use crate::partition::{block_linear_index, block_multi_index, BlockIndex, BlockPartition};
-use crate::scalar::Scalar;
 
 /// A blocked multi-dimensional array (owns data).
 ///
@@ -14,15 +13,15 @@ use crate::scalar::Scalar;
 ///
 /// Internally wraps a `BlockStructure` for metadata and a HashMap for actual data.
 #[derive(Debug, Clone)]
-pub struct BlockArray<T: Scalar> {
+pub struct BlockArray<D: BlockDataLike> {
     /// Block structure (partitions + non-zero block indices).
     structure: BlockStructure,
     /// Non-zero blocks stored in a HashMap.
     /// Key: linear block index, Value: block data.
-    data: HashMap<usize, BlockData<T>>,
+    data: HashMap<usize, D>,
 }
 
-impl<T: Scalar> BlockArray<T> {
+impl<D: BlockDataLike> BlockArray<D> {
     /// Create an empty blocked array with given partitions.
     pub fn new(partitions: Vec<BlockPartition>) -> Self {
         Self {
@@ -72,13 +71,13 @@ impl<T: Scalar> BlockArray<T> {
     }
 
     /// Get a block reference (returns None for zero blocks).
-    pub fn get_block(&self, block_idx: &BlockIndex) -> Option<&BlockData<T>> {
+    pub fn get_block(&self, block_idx: &BlockIndex) -> Option<&D> {
         let linear = block_linear_index(block_idx, &self.num_blocks());
         self.data.get(&linear)
     }
 
     /// Set a block.
-    pub fn set_block(&mut self, block_idx: BlockIndex, data: BlockData<T>) {
+    pub fn set_block(&mut self, block_idx: BlockIndex, data: D) {
         let linear = block_linear_index(&block_idx, &self.num_blocks());
         self.structure.insert_block(&block_idx);
         self.data.insert(linear, data);
@@ -88,7 +87,7 @@ impl<T: Scalar> BlockArray<T> {
     ///
     /// If the block exists, adds the data element-wise.
     /// If the block doesn't exist, sets it to the given data.
-    pub fn accumulate_block(&mut self, block_idx: BlockIndex, data: BlockData<T>) {
+    pub fn accumulate_block(&mut self, block_idx: BlockIndex, data: D) {
         let linear = block_linear_index(&block_idx, &self.num_blocks());
         if let Some(existing) = self.data.get(&linear) {
             let summed = existing.add(&data);
@@ -100,14 +99,14 @@ impl<T: Scalar> BlockArray<T> {
     }
 
     /// Remove a block (make it zero).
-    pub fn remove_block(&mut self, block_idx: &BlockIndex) -> Option<BlockData<T>> {
+    pub fn remove_block(&mut self, block_idx: &BlockIndex) -> Option<D> {
         let linear = block_linear_index(block_idx, &self.num_blocks());
         self.structure.remove_block(block_idx);
         self.data.remove(&linear)
     }
 
     /// Iterate over non-zero blocks.
-    pub fn iter_blocks(&self) -> impl Iterator<Item = (BlockIndex, &BlockData<T>)> {
+    pub fn iter_blocks(&self) -> impl Iterator<Item = (BlockIndex, &D)> {
         let num_blocks = self.num_blocks();
         self.data.iter().map(move |(&linear, data)| {
             let block_idx = block_multi_index(linear, &num_blocks);
@@ -132,7 +131,7 @@ impl<T: Scalar> BlockArray<T> {
         let new_structure = self.structure.permute(perm);
         let new_num_blocks = new_structure.num_blocks();
 
-        let new_data: HashMap<usize, BlockData<T>> = self
+        let new_data: HashMap<usize, D> = self
             .data
             .iter()
             .zip(new_indices.iter())
@@ -169,7 +168,7 @@ impl<T: Scalar> BlockArray<T> {
     pub fn reshape_with_plan(&self, plan: &ReshapePlan) -> Self {
         let new_structure = self.structure.reshape_with_plan(plan);
 
-        let new_data: HashMap<usize, BlockData<T>> = self
+        let new_data: HashMap<usize, D> = self
             .data
             .iter()
             .map(|(&old_linear, block_data)| {
@@ -232,10 +231,10 @@ impl<T: Scalar> BlockArray<T> {
     /// The result has shape: [free axes of self] + [free axes of other]
     pub fn tensordot(
         &self,
-        other: &BlockArray<T>,
+        other: &BlockArray<D>,
         axes_self: &[usize],
         axes_other: &[usize],
-    ) -> BlockArray<T> {
+    ) -> BlockArray<D> {
         // Step 1: Permute self so contracted axes are at the end
         // free_self = axes not in axes_self
         let rank_self = self.rank();
@@ -328,13 +327,13 @@ impl<T: Scalar> BlockArray<T> {
             // Full contraction: result is a scalar (0D tensor)
             // Both a and b are 1D with the same contracted dimension
             // Result = sum over k of dot(a[k], b[k])
-            let mut result_scalar = T::zero();
+            let mut result_scalar = D::zeros(&[]);
 
             for (k, _) in &a_by_k {
                 if b_by_k.contains_key(k) {
                     let a_block = a_2d.get_block(&vec![*k]).unwrap();
                     let b_block = b_2d.get_block(&vec![*k]).unwrap();
-                    result_scalar = result_scalar + a_block.dot(&b_block);
+                    result_scalar = result_scalar.add(&a_block.dot(b_block));
                 }
             }
 
@@ -342,10 +341,8 @@ impl<T: Scalar> BlockArray<T> {
             let mut nonzero = std::collections::HashSet::new();
             nonzero.insert(0);
             let scalar_structure = BlockStructure::new(vec![], nonzero);
-            let scalar_data =
-                BlockData::from_tensor(mdarray::Tensor::from_fn(&[], |_| result_scalar));
             let mut data = HashMap::new();
-            data.insert(0, scalar_data);
+            data.insert(0, result_scalar);
             let scalar_result = BlockArray {
                 structure: scalar_structure,
                 data,
@@ -417,8 +414,8 @@ impl<T: Scalar> BlockArray<T> {
     }
 }
 
-/// Trait for types that can act as blocked arrays (owned or view).
-pub trait BlockArrayLike<T: Scalar> {
+/// Trait for types that can act as block arrays (owned or view).
+pub trait BlockArrayLike<D: BlockDataLike> {
     /// Get the rank.
     fn rank(&self) -> usize;
 
@@ -431,19 +428,19 @@ pub trait BlockArrayLike<T: Scalar> {
     /// Get the number of blocks per axis.
     fn num_blocks(&self) -> Vec<usize>;
 
-    /// Get a block (returns owned BlockData).
-    fn get_block(&self, block_idx: &BlockIndex) -> Option<BlockData<T>>;
+    /// Get a block (returns owned block data).
+    fn get_block(&self, block_idx: &BlockIndex) -> Option<D>;
 
     /// Iterate over non-zero blocks, returning (index, data) pairs.
     ///
     /// Returns a Vec to maintain trait object safety.
-    fn iter_nonzero_blocks(&self) -> Vec<(BlockIndex, BlockData<T>)>;
+    fn iter_nonzero_blocks(&self) -> Vec<(BlockIndex, D)>;
 
     /// Get the block structure.
     fn structure(&self) -> BlockStructure;
 }
 
-impl<T: Scalar> BlockArrayLike<T> for BlockArray<T> {
+impl<D: BlockDataLike> BlockArrayLike<D> for BlockArray<D> {
     fn rank(&self) -> usize {
         self.rank()
     }
@@ -460,11 +457,11 @@ impl<T: Scalar> BlockArrayLike<T> for BlockArray<T> {
         self.num_blocks()
     }
 
-    fn get_block(&self, block_idx: &BlockIndex) -> Option<BlockData<T>> {
+    fn get_block(&self, block_idx: &BlockIndex) -> Option<D> {
         BlockArray::get_block(self, block_idx).cloned()
     }
 
-    fn iter_nonzero_blocks(&self) -> Vec<(BlockIndex, BlockData<T>)> {
+    fn iter_nonzero_blocks(&self) -> Vec<(BlockIndex, D)> {
         self.iter_blocks()
             .map(|(idx, data)| (idx, data.clone()))
             .collect()
@@ -478,6 +475,7 @@ impl<T: Scalar> BlockArrayLike<T> for BlockArray<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::block_data::BlockData;
     use mdarray::Tensor;
 
     fn make_block_data(shape: &[usize], start_val: f64) -> BlockData<f64> {
@@ -505,14 +503,14 @@ mod tests {
         let part_4 = BlockPartition::trivial(4);
 
         // A: shape (2, 3)
-        let mut a = BlockArray::new(vec![part_2.clone(), part_3.clone()]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part_2.clone(), part_3.clone()]);
         // [[1, 2, 3], [4, 5, 6]]
         let a_data =
             BlockData::from_tensor(tensor_from_slice(&[2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
         a.set_block(vec![0, 0], a_data);
 
         // B: shape (3, 4)
-        let mut b = BlockArray::new(vec![part_3, part_4]);
+        let mut b = BlockArray::<BlockData<f64>>::new(vec![part_3, part_4]);
         // [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]
         let b_data = BlockData::from_tensor(tensor_from_slice(
             &[3, 4],
@@ -544,13 +542,13 @@ mod tests {
         let part_c = BlockPartition::uniform(4, 2);
 
         // A: (4, 4) with 2x2 block structure
-        let mut a = BlockArray::new(vec![part_a.clone(), part_b.clone()]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part_a.clone(), part_b.clone()]);
         // Set blocks A[0,0] and A[1,1] (diagonal)
         a.set_block(vec![0, 0], make_block_data(&[2, 2], 1.0));
         a.set_block(vec![1, 1], make_block_data(&[2, 2], 5.0));
 
         // B: (4, 4) with 2x2 block structure
-        let mut b = BlockArray::new(vec![part_b, part_c]);
+        let mut b = BlockArray::<BlockData<f64>>::new(vec![part_b, part_c]);
         // Set blocks B[0,0] and B[1,0]
         b.set_block(vec![0, 0], make_block_data(&[2, 2], 1.0));
         b.set_block(vec![1, 0], make_block_data(&[2, 2], 1.0));
@@ -578,11 +576,11 @@ mod tests {
         // C[0,0] = A[0,0]@B[0,0] + A[0,1]@B[1,0]
         let part = BlockPartition::uniform(4, 2);
 
-        let mut a = BlockArray::new(vec![part.clone(), part.clone()]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part.clone(), part.clone()]);
         a.set_block(vec![0, 0], make_block_data(&[2, 2], 1.0));
         a.set_block(vec![0, 1], make_block_data(&[2, 2], 1.0));
 
-        let mut b = BlockArray::new(vec![part.clone(), part]);
+        let mut b = BlockArray::<BlockData<f64>>::new(vec![part.clone(), part]);
         b.set_block(vec![0, 0], make_block_data(&[2, 2], 1.0));
         b.set_block(vec![1, 0], make_block_data(&[2, 2], 1.0));
 
@@ -604,10 +602,11 @@ mod tests {
         let part_4 = BlockPartition::trivial(4);
         let part_5 = BlockPartition::trivial(5);
 
-        let mut a = BlockArray::new(vec![part_2.clone(), part_3.clone(), part_4.clone()]);
+        let mut a =
+            BlockArray::<BlockData<f64>>::new(vec![part_2.clone(), part_3.clone(), part_4.clone()]);
         a.set_block(vec![0, 0, 0], make_block_data(&[2, 3, 4], 1.0));
 
-        let mut b = BlockArray::new(vec![part_3, part_5]);
+        let mut b = BlockArray::<BlockData<f64>>::new(vec![part_3, part_5]);
         b.set_block(vec![0, 0], make_block_data(&[3, 5], 1.0));
 
         let c = a.tensordot(&b, &[1], &[0]);
@@ -622,7 +621,7 @@ mod tests {
         let part_2 = BlockPartition::trivial(2);
         let part_3 = BlockPartition::trivial(3);
 
-        let mut a = BlockArray::new(vec![part_2, part_3]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part_2, part_3]);
         // [[1, 2, 3], [4, 5, 6]]
         let data =
             BlockData::from_tensor(tensor_from_slice(&[2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
@@ -643,7 +642,7 @@ mod tests {
         // 1D array [6] -> 2D array [2, 3]
         let part_6 = BlockPartition::trivial(6);
 
-        let mut a = BlockArray::new(vec![part_6]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part_6]);
         let data = BlockData::from_tensor(tensor_from_slice(&[6], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
         a.set_block(vec![0], data);
 
@@ -663,7 +662,7 @@ mod tests {
         let part_4 = BlockPartition::trivial(4);
         let part_6 = BlockPartition::trivial(6);
 
-        let mut a = BlockArray::new(vec![part_4, part_6]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part_4, part_6]);
         let data = make_block_data(&[4, 6], 1.0);
         a.set_block(vec![0, 0], data);
 
@@ -682,7 +681,7 @@ mod tests {
         // Verify that reshape preserves element count
         let part = BlockPartition::trivial(12);
 
-        let mut a = BlockArray::new(vec![part]);
+        let mut a = BlockArray::<BlockData<f64>>::new(vec![part]);
         let data = BlockData::from_tensor(tensor_from_slice(
             &[12],
             &[
@@ -711,7 +710,7 @@ mod tests {
         original.set_block(vec![0, 0], data);
 
         // Helper to count elements in non-zero blocks
-        let count_elements = |arr: &BlockArray<f64>| -> usize {
+        let count_elements = |arr: &BlockArray<BlockData<f64>>| -> usize {
             arr.iter_blocks().map(|(_, block)| block.len()).sum()
         };
 
@@ -753,8 +752,9 @@ mod tests {
         let data = make_block_data(&[24], 1.0);
         arr.set_block(vec![0], data);
 
-        let count_elements =
-            |a: &BlockArray<f64>| -> usize { a.iter_blocks().map(|(_, block)| block.len()).sum() };
+        let count_elements = |a: &BlockArray<BlockData<f64>>| -> usize {
+            a.iter_blocks().map(|(_, block)| block.len()).sum()
+        };
 
         let initial_elements = count_elements(&arr);
         assert_eq!(initial_elements, 24);

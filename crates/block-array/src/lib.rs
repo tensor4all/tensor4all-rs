@@ -13,7 +13,6 @@
 //!
 //! # Core Types
 //!
-//! - [`Scalar`]: Trait for scalar types (f64, Complex64)
 //! - [`BlockPartition`]: Defines how an axis is divided into blocks
 //! - [`BlockData`]: Owned N-D block data (wraps mdarray's `Tensor<T>`)
 //! - [`BlockStructure`]: Block structure metadata (partitions + sparsity pattern)
@@ -22,14 +21,14 @@
 //! # Example
 //!
 //! ```
-//! use block_array::{BlockPartition, BlockArray};
+//! use block_array::{BlockData, BlockArray, BlockPartition};
 //!
 //! // Create a 4x4 matrix split into 2x2 blocks (f64)
 //! let parts = vec![
 //!     BlockPartition::uniform(2, 2),
 //!     BlockPartition::uniform(2, 2),
 //! ];
-//! let matrix = BlockArray::<f64>::new(parts);
+//! let matrix = BlockArray::<BlockData<f64>>::new(parts);
 //!
 //! assert_eq!(matrix.shape(), vec![4, 4]);
 //! assert_eq!(matrix.num_blocks(), vec![2, 2]);
@@ -41,7 +40,6 @@ mod block_data;
 mod block_structure;
 mod error;
 mod partition;
-mod scalar;
 mod tensor_network;
 
 pub use block_array::{BlockArray, BlockArrayLike};
@@ -49,5 +47,4 @@ pub use block_data::{BlockData, BlockDataLike};
 pub use block_structure::{BlockStructure, ReshapePlan};
 pub use error::{BlockArrayError, Result};
 pub use partition::{block_linear_index, block_multi_index, BlockIndex, BlockPartition};
-pub use scalar::Scalar;
 pub use tensor_network::{EdgeInfo, EdgeLabel, TensorId, TensorNetwork};

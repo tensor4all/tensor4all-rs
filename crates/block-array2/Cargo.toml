@@ -1,0 +1,14 @@
+[package]
+name = "block-array2"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Block tensor planning: block structure metadata, contraction order optimization, and contraction plan generation"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+
+
