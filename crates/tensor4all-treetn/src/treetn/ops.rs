@@ -116,7 +116,9 @@ where
             self.canonical_center.iter().min().cloned().unwrap()
         } else {
             // Get minimum name from all nodes
-            self.graph.graph().node_indices()
+            self.graph
+                .graph()
+                .node_indices()
                 .filter_map(|idx| self.graph.node_name(idx).cloned())
                 .min()
                 .unwrap()
@@ -141,11 +143,14 @@ where
         };
 
         // Determine which nodes to scale and the per-node factor
-        let (nodes_to_scale, per_node_factor): (Vec<_>, f64) = if !self.canonical_center.is_empty() {
+        let (nodes_to_scale, per_node_factor): (Vec<_>, f64) = if !self.canonical_center.is_empty()
+        {
             // Scale only canonical_center nodes
             let center_count = self.canonical_center.len();
             let factor = magnitude.powf(1.0 / center_count as f64);
-            let nodes = self.canonical_center.iter()
+            let nodes = self
+                .canonical_center
+                .iter()
                 .filter_map(|v| self.graph.node_index(v))
                 .collect();
             (nodes, factor)
@@ -204,7 +209,9 @@ where
         let representative_node_name: V = if !self.canonical_center.is_empty() {
             self.canonical_center.iter().min().cloned().unwrap()
         } else {
-            self.graph.graph().node_indices()
+            self.graph
+                .graph()
+                .node_indices()
                 .filter_map(|idx| self.graph.node_name(idx).cloned())
                 .min()
                 .unwrap()
@@ -226,10 +233,13 @@ where
         let phase = a / magnitude;
 
         // Determine which nodes to scale and the per-node factor (real)
-        let (nodes_to_scale, per_node_factor): (Vec<_>, f64) = if !self.canonical_center.is_empty() {
+        let (nodes_to_scale, per_node_factor): (Vec<_>, f64) = if !self.canonical_center.is_empty()
+        {
             let center_count = self.canonical_center.len();
             let factor = magnitude.powf(1.0 / center_count as f64);
-            let nodes = self.canonical_center.iter()
+            let nodes = self
+                .canonical_center
+                .iter()
                 .filter_map(|v| self.graph.node_index(v))
                 .collect();
             (nodes, factor)
@@ -334,39 +344,45 @@ where
         }
 
         // Determine the single center site (by name)
-        let center_name: V = if self.is_canonicalized()
-            && self.canonical_form() == Some(CanonicalForm::Unitary)
-        {
-            if self.canonical_center.len() == 1 {
-                // Already Unitary canonicalized to single site - use it
-                self.canonical_center.iter().next().unwrap().clone()
+        let center_name: V =
+            if self.is_canonicalized() && self.canonical_form() == Some(CanonicalForm::Unitary) {
+                if self.canonical_center.len() == 1 {
+                    // Already Unitary canonicalized to single site - use it
+                    self.canonical_center.iter().next().unwrap().clone()
+                } else {
+                    // Unitary canonicalized to multiple sites - canonicalize to min site
+                    let min_center = self.canonical_center.iter().min().unwrap().clone();
+                    self.canonicalize_mut(
+                        std::iter::once(min_center.clone()),
+                        CanonicalizationOptions::default(),
+                    )
+                    .context("log_norm: failed to canonicalize to single site")?;
+                    min_center
+                }
             } else {
-                // Unitary canonicalized to multiple sites - canonicalize to min site
-                let min_center = self.canonical_center.iter().min().unwrap().clone();
+                // Not canonicalized or not Unitary - canonicalize to min node name
+                let min_node_name = self
+                    .node_names()
+                    .into_iter()
+                    .min()
+                    .ok_or_else(|| anyhow::anyhow!("No nodes in TreeTN"))
+                    .context("log_norm: network must have nodes")?;
                 self.canonicalize_mut(
-                    std::iter::once(min_center.clone()),
+                    std::iter::once(min_node_name.clone()),
                     CanonicalizationOptions::default(),
-                ).context("log_norm: failed to canonicalize to single site")?;
-                min_center
-            }
-        } else {
-            // Not canonicalized or not Unitary - canonicalize to min node name
-            let min_node_name = self.node_names().into_iter().min()
-                .ok_or_else(|| anyhow::anyhow!("No nodes in TreeTN"))
-                .context("log_norm: network must have nodes")?;
-            self.canonicalize_mut(
-                std::iter::once(min_node_name.clone()),
-                CanonicalizationOptions::default(),
-            ).context("log_norm: failed to canonicalize")?;
-            min_node_name
-        };
+                )
+                .context("log_norm: failed to canonicalize")?;
+                min_node_name
+            };
 
         // Get center node index and tensor
-        let center_node = self.node_index(&center_name)
+        let center_node = self
+            .node_index(&center_name)
             .ok_or_else(|| anyhow::anyhow!("Center node not found"))
             .context("log_norm: center node must exist")?;
 
-        let center_tensor = self.tensor(center_node)
+        let center_tensor = self
+            .tensor(center_node)
             .ok_or_else(|| anyhow::anyhow!("Center tensor not found"))
             .context("log_norm: center tensor must exist")?;
 

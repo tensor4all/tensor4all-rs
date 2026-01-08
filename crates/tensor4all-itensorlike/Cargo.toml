@@ -1,10 +1,11 @@
 [package]
 name = "tensor4all-itensorlike"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "ITensors.jl-like API for tensor operations"
-license = "MIT"
-repository = "https://github.com/tensor4all/tensor4all-rs"
 readme = "README.md"
 keywords = ["tensor", "itensor", "tensor-network"]
 categories = ["science", "mathematics"]
@@ -12,9 +13,9 @@ categories = ["science", "mathematics"]
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core" }
 tensor4all-treetn = { path = "../tensor4all-treetn" }
-num-complex = "0.4"
-thiserror = "2.0"
-petgraph = "0.7"
+num-complex.workspace = true
+thiserror.workspace = true
+petgraph.workspace = true
 
 [dev-dependencies]
-approx = "0.5"
+approx.workspace = true

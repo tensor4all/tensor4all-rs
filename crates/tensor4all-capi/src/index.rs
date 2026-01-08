@@ -282,7 +282,10 @@ pub extern "C" fn t4a_index_add_tag(ptr: *mut t4a_index, tag: *const c_char) -> 
 /// # Returns
 /// Status code (T4A_SUCCESS, T4A_TAG_OVERFLOW, T4A_TAG_TOO_LONG, or error code)
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_index_set_tags_csv(ptr: *mut t4a_index, tags_csv: *const c_char) -> StatusCode {
+pub extern "C" fn t4a_index_set_tags_csv(
+    ptr: *mut t4a_index,
+    tags_csv: *const c_char,
+) -> StatusCode {
     use tensor4all_core::index::TagSet;
 
     if ptr.is_null() || tags_csv.is_null() {

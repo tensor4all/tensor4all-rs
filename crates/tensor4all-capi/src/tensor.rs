@@ -7,11 +7,14 @@ use std::ptr;
 use std::sync::Arc;
 
 use num_complex::Complex64;
-use tensor4all_core::storage::{DenseStorageF64, DenseStorageC64};
+use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64};
 use tensor4all_core::Storage;
 
-use crate::types::{t4a_index, t4a_tensor, t4a_storage_kind, InternalIndex, InternalTensor};
-use crate::{StatusCode, T4A_SUCCESS, T4A_NULL_POINTER, T4A_INVALID_ARGUMENT, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR};
+use crate::types::{t4a_index, t4a_storage_kind, t4a_tensor, InternalIndex, InternalTensor};
+use crate::{
+    StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER,
+    T4A_SUCCESS,
+};
 
 // Generate lifecycle functions: t4a_tensor_release, t4a_tensor_clone, t4a_tensor_is_assigned
 impl_opaque_type_common!(tensor);
@@ -300,9 +303,7 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
         }
 
         // Extract dimensions
-        let dims_vec: Vec<usize> = (0..rank)
-            .map(|i| unsafe { *dims.add(i) })
-            .collect();
+        let dims_vec: Vec<usize> = (0..rank).map(|i| unsafe { *dims.add(i) }).collect();
 
         // Validate data length
         let expected_len: usize = dims_vec.iter().product();
@@ -311,9 +312,7 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
         }
 
         // Copy data
-        let data_vec: Vec<f64> = unsafe {
-            std::slice::from_raw_parts(data, data_len).to_vec()
-        };
+        let data_vec: Vec<f64> = unsafe { std::slice::from_raw_parts(data, data_len).to_vec() };
 
         // Create storage
         let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_vec)));
@@ -370,9 +369,7 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
         }
 
         // Extract dimensions
-        let dims_vec: Vec<usize> = (0..rank)
-            .map(|i| unsafe { *dims.add(i) })
-            .collect();
+        let dims_vec: Vec<usize> = (0..rank).map(|i| unsafe { *dims.add(i) }).collect();
 
         // Validate data length
         let expected_len: usize = dims_vec.iter().product();
@@ -382,9 +379,7 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
 
         // Copy data
         let data_vec: Vec<Complex64> = (0..data_len)
-            .map(|i| unsafe {
-                Complex64::new(*data_re.add(i), *data_im.add(i))
-            })
+            .map(|i| unsafe { Complex64::new(*data_re.add(i), *data_im.add(i)) })
             .collect();
 
         // Create storage
@@ -417,13 +412,8 @@ mod tests {
         let dims = [2_usize, 3_usize];
         let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
 
-        let tensor = t4a_tensor_new_dense_f64(
-            2,
-            index_ptrs.as_ptr(),
-            dims.as_ptr(),
-            data.as_ptr(),
-            6,
-        );
+        let tensor =
+            t4a_tensor_new_dense_f64(2, index_ptrs.as_ptr(), dims.as_ptr(), data.as_ptr(), 6);
         assert!(!tensor.is_null());
 
         // Test is_assigned
@@ -451,41 +441,54 @@ mod tests {
         let dims = [2_usize, 3_usize];
         let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
 
-        let tensor = t4a_tensor_new_dense_f64(
-            2,
-            index_ptrs.as_ptr(),
-            dims.as_ptr(),
-            data.as_ptr(),
-            6,
-        );
+        let tensor =
+            t4a_tensor_new_dense_f64(2, index_ptrs.as_ptr(), dims.as_ptr(), data.as_ptr(), 6);
 
         // Get rank
         let mut rank: usize = 0;
-        assert_eq!(t4a_tensor_get_rank(tensor as *const _, &mut rank), T4A_SUCCESS);
+        assert_eq!(
+            t4a_tensor_get_rank(tensor as *const _, &mut rank),
+            T4A_SUCCESS
+        );
         assert_eq!(rank, 2);
 
         // Get dims
         let mut out_dims = [0_usize; 2];
-        assert_eq!(t4a_tensor_get_dims(tensor as *const _, out_dims.as_mut_ptr(), 2), T4A_SUCCESS);
+        assert_eq!(
+            t4a_tensor_get_dims(tensor as *const _, out_dims.as_mut_ptr(), 2),
+            T4A_SUCCESS
+        );
         assert_eq!(out_dims, [2, 3]);
 
         // Get storage kind
         let mut kind = t4a_storage_kind::DenseC64;
-        assert_eq!(t4a_tensor_get_storage_kind(tensor as *const _, &mut kind), T4A_SUCCESS);
+        assert_eq!(
+            t4a_tensor_get_storage_kind(tensor as *const _, &mut kind),
+            T4A_SUCCESS
+        );
         assert_eq!(kind, t4a_storage_kind::DenseF64);
 
         // Get data
         let mut out_len: usize = 0;
-        assert_eq!(t4a_tensor_get_data_f64(tensor as *const _, ptr::null_mut(), 0, &mut out_len), T4A_SUCCESS);
+        assert_eq!(
+            t4a_tensor_get_data_f64(tensor as *const _, ptr::null_mut(), 0, &mut out_len),
+            T4A_SUCCESS
+        );
         assert_eq!(out_len, 6);
 
         let mut out_data = [0.0; 6];
-        assert_eq!(t4a_tensor_get_data_f64(tensor as *const _, out_data.as_mut_ptr(), 6, &mut out_len), T4A_SUCCESS);
+        assert_eq!(
+            t4a_tensor_get_data_f64(tensor as *const _, out_data.as_mut_ptr(), 6, &mut out_len),
+            T4A_SUCCESS
+        );
         assert_eq!(out_data, data);
 
         // Get indices
         let mut out_indices: [*mut t4a_index; 2] = [ptr::null_mut(); 2];
-        assert_eq!(t4a_tensor_get_indices(tensor as *const _, out_indices.as_mut_ptr(), 2), T4A_SUCCESS);
+        assert_eq!(
+            t4a_tensor_get_indices(tensor as *const _, out_indices.as_mut_ptr(), 2),
+            T4A_SUCCESS
+        );
 
         // Verify indices have correct dimensions
         let mut dim0: usize = 0;
@@ -530,7 +533,10 @@ mod tests {
 
         // Get storage kind
         let mut kind = t4a_storage_kind::DenseF64;
-        assert_eq!(t4a_tensor_get_storage_kind(tensor as *const _, &mut kind), T4A_SUCCESS);
+        assert_eq!(
+            t4a_tensor_get_storage_kind(tensor as *const _, &mut kind),
+            T4A_SUCCESS
+        );
         assert_eq!(kind, t4a_storage_kind::DenseC64);
 
         // Get data

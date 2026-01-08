@@ -57,17 +57,16 @@ impl<T: TTScalar> TensorTrain<T> {
 
     /// Create a tensor train representing the zero function
     pub fn zeros(site_dims: &[usize]) -> Self {
-        let tensors: Vec<Tensor3<T>> = site_dims
-            .iter()
-            .map(|&d| tensor3_zeros(1, d, 1))
-            .collect();
+        let tensors: Vec<Tensor3<T>> = site_dims.iter().map(|&d| tensor3_zeros(1, d, 1)).collect();
         Self { tensors }
     }
 
     /// Create a tensor train representing a constant function
     pub fn constant(site_dims: &[usize], value: T) -> Self {
         if site_dims.is_empty() {
-            return Self { tensors: Vec::new() };
+            return Self {
+                tensors: Vec::new(),
+            };
         }
 
         let n = site_dims.len();

@@ -127,10 +127,13 @@ fn process_crate(crate_path: &Path, output_dir: &Path) -> Result<(), Box<dyn std
     let cargo_content = fs::read_to_string(&cargo_toml_path)?;
     let cargo: CargoToml = toml::from_str(&cargo_content)?;
 
-    let crate_name = cargo
-        .package
-        .and_then(|p| p.name)
-        .unwrap_or_else(|| crate_path.file_name().unwrap().to_string_lossy().to_string());
+    let crate_name = cargo.package.and_then(|p| p.name).unwrap_or_else(|| {
+        crate_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
+    });
 
     let src_dir = crate_path.join("src");
     if !src_dir.exists() {

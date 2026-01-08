@@ -1,7 +1,7 @@
+use crate::tagset::{DefaultTagSet as InlineTagSet, TagSetError, TagSetIterator, TagSetLike};
+use rand::Rng;
 use std::cell::RefCell;
 use std::sync::Arc;
-use crate::tagset::{DefaultTagSet as InlineTagSet, TagSetError, TagSetLike, TagSetIterator};
-use rand::Rng;
 
 /// Runtime ID for ITensors-like dynamic identity.
 ///
@@ -98,7 +98,9 @@ impl TagSet {
         let mut inner = InlineTagSet::new();
         for tag in tags {
             if tag.contains(',') {
-                return Err(TagSetError::TagContainsComma { tag: (*tag).to_string() });
+                return Err(TagSetError::TagContainsComma {
+                    tag: (*tag).to_string(),
+                });
             }
             inner.add_tag(tag)?;
         }
@@ -364,8 +366,8 @@ pub type DefaultTagSet = TagSet;
 #[cfg(test)]
 mod tests {
     use super::generate_id;
-    use std::thread;
     use std::collections::HashSet;
+    use std::thread;
 
     #[test]
     fn test_id_generation() {
@@ -392,7 +394,9 @@ mod tests {
         let handles: Vec<_> = (0..NUM_THREADS)
             .map(|_| {
                 thread::spawn(|| {
-                    (0..IDS_PER_THREAD).map(|_| generate_id()).collect::<Vec<_>>()
+                    (0..IDS_PER_THREAD)
+                        .map(|_| generate_id())
+                        .collect::<Vec<_>>()
                 })
             })
             .collect();
@@ -403,7 +407,10 @@ mod tests {
             all_ids.extend(thread_ids);
         }
 
-        assert_eq!(all_ids.len(), NUM_THREADS * IDS_PER_THREAD,
-                   "All IDs should be unique across threads");
+        assert_eq!(
+            all_ids.len(),
+            NUM_THREADS * IDS_PER_THREAD,
+            "All IDs should be unique across threads"
+        );
     }
 }

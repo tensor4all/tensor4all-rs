@@ -9,14 +9,14 @@
 //! - **External indices**: Physical/site indices of the object
 //! - **Explicit contraction (tensordot)**: Binary contraction with specified index pairs
 
+use crate::index::{Index, Symmetry};
+use crate::tagset::TagSetLike;
 use crate::tensor::TensorDynLen;
 use anyhow::Result;
 use dyn_clone::DynClone;
 use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hash;
-use crate::index::{Index, Symmetry};
-use crate::tagset::TagSetLike;
 
 /// Trait for tensor-like objects that expose external indices and support contraction.
 ///
@@ -231,15 +231,16 @@ pub trait TensorLike: DynClone + Send + Sync + Debug {
         let other_tensor = other.to_tensor()?;
 
         // Convert pairs to the format expected by TensorDynLen::tensordot
-        let converted_pairs: Vec<(Index<Self::Id, Self::Symm>, Index<Self::Id, Self::Symm>)> = pairs
-            .iter()
-            .map(|(a, b)| {
-                (
-                    Index::new(a.id.clone(), a.symm.clone()),
-                    Index::new(b.id.clone(), b.symm.clone()),
-                )
-            })
-            .collect();
+        let converted_pairs: Vec<(Index<Self::Id, Self::Symm>, Index<Self::Id, Self::Symm>)> =
+            pairs
+                .iter()
+                .map(|(a, b)| {
+                    (
+                        Index::new(a.id.clone(), a.symm.clone()),
+                        Index::new(b.id.clone(), b.symm.clone()),
+                    )
+                })
+                .collect();
 
         // Use TensorDynLen's tensordot
         self_tensor.tensordot(&other_tensor, &converted_pairs)
@@ -298,7 +299,8 @@ where
     }
 }
 
-impl<Id, Symm, Tags> TensorLikeDowncast for dyn TensorLike<Id = Id, Symm = Symm, Tags = Tags> + Send + Sync
+impl<Id, Symm, Tags> TensorLikeDowncast
+    for dyn TensorLike<Id = Id, Symm = Symm, Tags = Tags> + Send + Sync
 where
     Id: Clone + Hash + Eq + Debug + Send + Sync,
     Symm: Clone + Symmetry + Send + Sync,
@@ -331,11 +333,13 @@ where
         // Convert from Index<Id, Symm> to Index<Id, Symm, DefaultTagSet> by adding default tags.
         self.indices
             .iter()
-            .map(|idx| Index::new_with_tags(
-                idx.id.clone(),
-                idx.symm.clone(),
-                crate::DefaultTagSet::default(),
-            ))
+            .map(|idx| {
+                Index::new_with_tags(
+                    idx.id.clone(),
+                    idx.symm.clone(),
+                    crate::DefaultTagSet::default(),
+                )
+            })
             .collect()
     }
 
@@ -366,9 +370,7 @@ mod tests {
         Symm: Clone + Symmetry + Send + Sync + 'static,
         Tags: Clone + TagSetLike + Send + Sync + 'static,
     {
-        fn _takes_trait_object(
-            _obj: &dyn TensorLike<Id = (), Symm = (), Tags = ()>,
-        ) {
+        fn _takes_trait_object(_obj: &dyn TensorLike<Id = (), Symm = (), Tags = ()>) {
             // This won't compile if TensorLike is not object-safe
         }
     }

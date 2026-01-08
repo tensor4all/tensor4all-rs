@@ -17,10 +17,10 @@ matrixci = { path = "../matrixci" }
 tensor4all-simpletensortrain = { path = "../tensor4all-simpletensortrain" }
 
 [dev-dependencies]
-approx = "0.5"
-criterion = "0.5"
-bnum = "0.12"
-uint = "0.10"
+approx.workspace = true
+criterion.workspace = true
+bnum.workspace = true
+uint.workspace = true
 
 [[bench]]
 name = "cached_function"

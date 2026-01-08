@@ -12,10 +12,10 @@
 //! // result.left * result.right ≈ tensor
 //! ```
 
-use num_complex::{Complex64, ComplexFloat};
 use crate::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
+use num_complex::{Complex64, ComplexFloat};
 use thiserror::Error;
 
 use crate::qr::{qr_with, QrOptions};
@@ -532,11 +532,7 @@ where
 }
 
 /// Convert DTensor to Matrix (tensor4all-matrixci format).
-fn dtensor_to_matrix<T>(
-    tensor: &mdarray::DTensor<T, 2>,
-    m: usize,
-    n: usize,
-) -> matrixci::Matrix<T>
+fn dtensor_to_matrix<T>(tensor: &mdarray::DTensor<T, 2>, m: usize, n: usize) -> matrixci::Matrix<T>
 where
     T: MatrixScalar + Clone,
 {

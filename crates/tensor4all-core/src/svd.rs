@@ -1,11 +1,11 @@
+use crate::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
+use crate::index_ops::sim;
+use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use mdarray::DSlice;
 use mdarray_linalg::svd::SVDDecomp;
 use num_complex::{Complex64, ComplexFloat};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use crate::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
-use crate::index_ops::sim;
-use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use thiserror::Error;
 
 use crate::backend::svd_backend;
@@ -324,9 +324,10 @@ where
     }
 
     // Unfold tensor into matrix (returns DTensor<T, 2>)
-    let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<Id, T, Symm>(t, left_inds)
-        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
-        .map_err(SvdError::ComputationError)?;
+    let (mut a_tensor, _, m, n, left_indices, right_indices) =
+        unfold_split::<Id, T, Symm>(t, left_inds)
+            .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
+            .map_err(SvdError::ComputationError)?;
     let k = m.min(n);
 
     // Call SVD using selected backend

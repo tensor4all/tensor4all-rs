@@ -361,7 +361,11 @@ fn create_mps_from_values(
     Vec<Index<DynId>>,
     Vec<Index<DynId>>,
 ) {
-    assert_eq!(values.len(), phys_dim * phys_dim, "values length must be phys_dim^2");
+    assert_eq!(
+        values.len(),
+        phys_dim * phys_dim,
+        "values length must be phys_dim^2"
+    );
 
     let mut mps = TreeTN::<DynId, NoSymmSpace, &'static str>::new();
 
@@ -401,7 +405,9 @@ fn create_mps_from_values(
     let t1 = TensorDynLen::new(
         vec![b01.clone(), s1.clone()],
         vec![bond_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(values.to_vec()))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+            values.to_vec(),
+        ))),
     );
 
     let n0 = mps.add_tensor("site0", t0).unwrap();
@@ -425,8 +431,8 @@ fn create_mps_from_values(
 /// * `b_values` - RHS values for each configuration [b_00, b_01, b_10, b_11]
 /// * `tol` - Tolerance for comparing solution
 fn test_diagonal_linsolve(diag_values: &[f64], b_values: &[f64], tol: f64) {
-    use tensor4all_treetn::linsolve;
     use tensor4all_core::storage::StorageScalar;
+    use tensor4all_treetn::linsolve;
 
     let phys_dim = 2;
     assert_eq!(diag_values.len(), 2);
@@ -475,7 +481,10 @@ fn test_diagonal_linsolve(diag_values: &[f64], b_values: &[f64], tol: f64) {
         "Solution dimension mismatch"
     );
 
-    for (i, (&computed, &expected)) in solution_values.iter().zip(exact_solution.iter()).enumerate()
+    for (i, (&computed, &expected)) in solution_values
+        .iter()
+        .zip(exact_solution.iter())
+        .enumerate()
     {
         let diff = (computed - expected).abs();
         assert!(
@@ -820,8 +829,8 @@ fn create_mpo_with_internal_indices(
     phys_dim: usize,
 ) -> (
     TreeTN<DynId, NoSymmSpace, &'static str>,
-    Vec<Index<DynId>>,  // s_in_tmp (internal input indices)
-    Vec<Index<DynId>>,  // s_out_tmp (internal output indices)
+    Vec<Index<DynId>>, // s_in_tmp (internal input indices)
+    Vec<Index<DynId>>, // s_out_tmp (internal output indices)
 ) {
     assert_eq!(diag_values.len(), 2);
 
@@ -882,22 +891,34 @@ fn test_linear_operator_creation() {
     let mut output_mapping = std::collections::HashMap::new();
 
     // For space(x) = space(b), true_in = true_out = state's site indices
-    input_mapping.insert("site0", IndexMapping {
-        true_index: site_indices[0].clone(),
-        internal_index: s_in_tmp[0].clone(),
-    });
-    input_mapping.insert("site1", IndexMapping {
-        true_index: site_indices[1].clone(),
-        internal_index: s_in_tmp[1].clone(),
-    });
-    output_mapping.insert("site0", IndexMapping {
-        true_index: site_indices[0].clone(),  // same as input (space(x) = space(b))
-        internal_index: s_out_tmp[0].clone(),
-    });
-    output_mapping.insert("site1", IndexMapping {
-        true_index: site_indices[1].clone(),
-        internal_index: s_out_tmp[1].clone(),
-    });
+    input_mapping.insert(
+        "site0",
+        IndexMapping {
+            true_index: site_indices[0].clone(),
+            internal_index: s_in_tmp[0].clone(),
+        },
+    );
+    input_mapping.insert(
+        "site1",
+        IndexMapping {
+            true_index: site_indices[1].clone(),
+            internal_index: s_in_tmp[1].clone(),
+        },
+    );
+    output_mapping.insert(
+        "site0",
+        IndexMapping {
+            true_index: site_indices[0].clone(), // same as input (space(x) = space(b))
+            internal_index: s_out_tmp[0].clone(),
+        },
+    );
+    output_mapping.insert(
+        "site1",
+        IndexMapping {
+            true_index: site_indices[1].clone(),
+            internal_index: s_out_tmp[1].clone(),
+        },
+    );
 
     let linear_op = LinearOperator::new(mpo, input_mapping, output_mapping);
 
@@ -925,22 +946,34 @@ fn test_linear_operator_apply_local() {
     let mut input_mapping = std::collections::HashMap::new();
     let mut output_mapping = std::collections::HashMap::new();
 
-    input_mapping.insert("site0", IndexMapping {
-        true_index: site_indices[0].clone(),
-        internal_index: s_in_tmp[0].clone(),
-    });
-    input_mapping.insert("site1", IndexMapping {
-        true_index: site_indices[1].clone(),
-        internal_index: s_in_tmp[1].clone(),
-    });
-    output_mapping.insert("site0", IndexMapping {
-        true_index: site_indices[0].clone(),
-        internal_index: s_out_tmp[0].clone(),
-    });
-    output_mapping.insert("site1", IndexMapping {
-        true_index: site_indices[1].clone(),
-        internal_index: s_out_tmp[1].clone(),
-    });
+    input_mapping.insert(
+        "site0",
+        IndexMapping {
+            true_index: site_indices[0].clone(),
+            internal_index: s_in_tmp[0].clone(),
+        },
+    );
+    input_mapping.insert(
+        "site1",
+        IndexMapping {
+            true_index: site_indices[1].clone(),
+            internal_index: s_in_tmp[1].clone(),
+        },
+    );
+    output_mapping.insert(
+        "site0",
+        IndexMapping {
+            true_index: site_indices[0].clone(),
+            internal_index: s_out_tmp[0].clone(),
+        },
+    );
+    output_mapping.insert(
+        "site1",
+        IndexMapping {
+            true_index: site_indices[1].clone(),
+            internal_index: s_out_tmp[1].clone(),
+        },
+    );
 
     let linear_op = LinearOperator::new(mpo, input_mapping, output_mapping);
 
@@ -961,10 +994,18 @@ fn test_linear_operator_apply_local() {
     // The result includes the site index AND the MPO bond index (dim 1)
     // because we only contracted site0's local operator, not the full MPO
     // Result indices: [true_site0, mpo_bond] with shape (2, 1)
-    assert_eq!(result_tensor.indices.len(), 2, "Expected 2 indices (site + bond), got {}", result_tensor.indices.len());
+    assert_eq!(
+        result_tensor.indices.len(),
+        2,
+        "Expected 2 indices (site + bond), got {}",
+        result_tensor.indices.len()
+    );
 
     // Check that output has true site index
-    let has_site0 = result_tensor.indices.iter().any(|idx| idx.id == site_indices[0].id);
+    let has_site0 = result_tensor
+        .indices
+        .iter()
+        .any(|idx| idx.id == site_indices[0].id);
     assert!(has_site0, "Result should have site0's true index");
 
     // Check values - the diagonal operator at site0 has value 2.0
@@ -975,8 +1016,16 @@ fn test_linear_operator_apply_local() {
         .to_vec();
 
     // Output shape is (phys_dim, bond_dim) = (2, 1) so values has 2 elements
-    assert!((values[0] - 2.0).abs() < 1e-10, "Expected 2.0, got {}", values[0]);
-    assert!((values[1] - 0.0).abs() < 1e-10, "Expected 0.0, got {}", values[1]);
+    assert!(
+        (values[0] - 2.0).abs() < 1e-10,
+        "Expected 2.0, got {}",
+        values[0]
+    );
+    assert!(
+        (values[1] - 0.0).abs() < 1e-10,
+        "Expected 0.0, got {}",
+        values[1]
+    );
 }
 
 #[test]
@@ -991,22 +1040,34 @@ fn test_linear_operator_apply_local_two_sites() {
     let mut input_mapping = std::collections::HashMap::new();
     let mut output_mapping = std::collections::HashMap::new();
 
-    input_mapping.insert("site0", IndexMapping {
-        true_index: site_indices[0].clone(),
-        internal_index: s_in_tmp[0].clone(),
-    });
-    input_mapping.insert("site1", IndexMapping {
-        true_index: site_indices[1].clone(),
-        internal_index: s_in_tmp[1].clone(),
-    });
-    output_mapping.insert("site0", IndexMapping {
-        true_index: site_indices[0].clone(),
-        internal_index: s_out_tmp[0].clone(),
-    });
-    output_mapping.insert("site1", IndexMapping {
-        true_index: site_indices[1].clone(),
-        internal_index: s_out_tmp[1].clone(),
-    });
+    input_mapping.insert(
+        "site0",
+        IndexMapping {
+            true_index: site_indices[0].clone(),
+            internal_index: s_in_tmp[0].clone(),
+        },
+    );
+    input_mapping.insert(
+        "site1",
+        IndexMapping {
+            true_index: site_indices[1].clone(),
+            internal_index: s_in_tmp[1].clone(),
+        },
+    );
+    output_mapping.insert(
+        "site0",
+        IndexMapping {
+            true_index: site_indices[0].clone(),
+            internal_index: s_out_tmp[0].clone(),
+        },
+    );
+    output_mapping.insert(
+        "site1",
+        IndexMapping {
+            true_index: site_indices[1].clone(),
+            internal_index: s_out_tmp[1].clone(),
+        },
+    );
 
     let linear_op = LinearOperator::new(mpo, input_mapping, output_mapping);
 
@@ -1016,8 +1077,8 @@ fn test_linear_operator_apply_local_two_sites() {
         vec![site_indices[0].clone(), site_indices[1].clone()],
         vec![phys_dim, phys_dim],
         Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
-            1.0, 0.0,  // s0=0: s1=0, s1=1
-            0.0, 0.0,  // s0=1: s1=0, s1=1
+            1.0, 0.0, // s0=0: s1=0, s1=1
+            0.0, 0.0, // s0=1: s1=0, s1=1
         ]))),
     );
 
@@ -1032,8 +1093,14 @@ fn test_linear_operator_apply_local_two_sites() {
     assert_eq!(result_tensor.indices.len(), 2);
 
     // Check that output has true site indices
-    let has_site0 = result_tensor.indices.iter().any(|idx| idx.id == site_indices[0].id);
-    let has_site1 = result_tensor.indices.iter().any(|idx| idx.id == site_indices[1].id);
+    let has_site0 = result_tensor
+        .indices
+        .iter()
+        .any(|idx| idx.id == site_indices[0].id);
+    let has_site1 = result_tensor
+        .indices
+        .iter()
+        .any(|idx| idx.id == site_indices[1].id);
     assert!(has_site0, "Result should have site0's true index");
     assert!(has_site1, "Result should have site1's true index");
 
@@ -1044,10 +1111,19 @@ fn test_linear_operator_apply_local_two_sites() {
         .to_vec();
 
     // D|00⟩ = 6.0 * |00⟩
-    assert!((values[0] - 6.0).abs() < 1e-10, "Expected 6.0, got {}", values[0]);
+    assert!(
+        (values[0] - 6.0).abs() < 1e-10,
+        "Expected 6.0, got {}",
+        values[0]
+    );
     // All other components should be 0
     for (i, &v) in values.iter().enumerate().skip(1) {
-        assert!((v - 0.0).abs() < 1e-10, "Expected 0.0 at index {}, got {}", i, v);
+        assert!(
+            (v - 0.0).abs() < 1e-10,
+            "Expected 0.0 at index {}, got {}",
+            i,
+            v
+        );
     }
 }
 
@@ -1062,24 +1138,36 @@ fn create_linear_operator(
     let mut output_mapping = std::collections::HashMap::new();
 
     // site0 mapping
-    input_mapping.insert("site0", IndexMapping {
-        true_index: state_site_indices[0].clone(),
-        internal_index: s_in_tmp[0].clone(),
-    });
-    output_mapping.insert("site0", IndexMapping {
-        true_index: state_site_indices[0].clone(),
-        internal_index: s_out_tmp[0].clone(),
-    });
+    input_mapping.insert(
+        "site0",
+        IndexMapping {
+            true_index: state_site_indices[0].clone(),
+            internal_index: s_in_tmp[0].clone(),
+        },
+    );
+    output_mapping.insert(
+        "site0",
+        IndexMapping {
+            true_index: state_site_indices[0].clone(),
+            internal_index: s_out_tmp[0].clone(),
+        },
+    );
 
     // site1 mapping
-    input_mapping.insert("site1", IndexMapping {
-        true_index: state_site_indices[1].clone(),
-        internal_index: s_in_tmp[1].clone(),
-    });
-    output_mapping.insert("site1", IndexMapping {
-        true_index: state_site_indices[1].clone(),
-        internal_index: s_out_tmp[1].clone(),
-    });
+    input_mapping.insert(
+        "site1",
+        IndexMapping {
+            true_index: state_site_indices[1].clone(),
+            internal_index: s_in_tmp[1].clone(),
+        },
+    );
+    output_mapping.insert(
+        "site1",
+        IndexMapping {
+            true_index: state_site_indices[1].clone(),
+            internal_index: s_out_tmp[1].clone(),
+        },
+    );
 
     LinearOperator::new(mpo, input_mapping, output_mapping)
 }
@@ -1087,7 +1175,7 @@ fn create_linear_operator(
 #[test]
 fn test_linsolve_with_linear_operator_identity() {
     use tensor4all_treetn::{
-        LocalUpdateSweepPlan, apply_local_update_sweep, CanonicalizationOptions,
+        apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
     };
 
     let phys_dim = 2;
@@ -1105,7 +1193,9 @@ fn test_linsolve_with_linear_operator_identity() {
     let init = rhs.clone();
 
     // Canonicalize init towards center
-    let mut x = init.canonicalize(["site0"], CanonicalizationOptions::default()).unwrap();
+    let mut x = init
+        .canonicalize(["site0"], CanonicalizationOptions::default())
+        .unwrap();
 
     // Create LinsolveUpdater with LinearOperator
     let options = LinsolveOptions::default()
@@ -1128,10 +1218,10 @@ fn test_linsolve_with_linear_operator_identity() {
 
 #[test]
 fn test_linsolve_with_linear_operator_diagonal() {
-    use tensor4all_treetn::{
-        LocalUpdateSweepPlan, apply_local_update_sweep, CanonicalizationOptions,
-    };
     use tensor4all_core::storage::StorageScalar;
+    use tensor4all_treetn::{
+        apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
+    };
 
     let phys_dim = 2;
 
@@ -1148,7 +1238,9 @@ fn test_linsolve_with_linear_operator_diagonal() {
     let init = rhs.clone();
 
     // Canonicalize init towards center
-    let mut x = init.canonicalize(["site0"], CanonicalizationOptions::default()).unwrap();
+    let mut x = init
+        .canonicalize(["site0"], CanonicalizationOptions::default())
+        .unwrap();
 
     // Create LinsolveUpdater with LinearOperator
     let options = LinsolveOptions::default()
@@ -1176,7 +1268,11 @@ fn test_linsolve_with_linear_operator_diagonal() {
 
     // Solution should be approximately [1, 0, 0, 0]
     println!("Solution values: {:?}", values);
-    assert!((values[0] - 1.0).abs() < 0.1, "Expected ~1.0, got {}", values[0]);
+    assert!(
+        (values[0] - 1.0).abs() < 0.1,
+        "Expected ~1.0, got {}",
+        values[0]
+    );
 }
 
 /// Create a 3-site MPO with internal indices for use with LinearOperator.
@@ -1192,10 +1288,14 @@ fn create_three_site_mpo_with_internal_indices(
     phys_dim: usize,
 ) -> (
     TreeTN<DynId, NoSymmSpace, &'static str>,
-    Vec<Index<DynId>>,  // s_in_tmp for each site
-    Vec<Index<DynId>>,  // s_out_tmp for each site
+    Vec<Index<DynId>>, // s_in_tmp for each site
+    Vec<Index<DynId>>, // s_out_tmp for each site
 ) {
-    assert_eq!(diag_values.len(), 3, "Need 3 diagonal values for 3-site MPO");
+    assert_eq!(
+        diag_values.len(),
+        3,
+        "Need 3 diagonal values for 3-site MPO"
+    );
 
     let mut mpo = TreeTN::<DynId, NoSymmSpace, &'static str>::new();
 
@@ -1228,7 +1328,12 @@ fn create_three_site_mpo_with_internal_indices(
         data1[i * phys_dim + i] = diag_values[1];
     }
     let t1 = TensorDynLen::new(
-        vec![b01.clone(), s1_out_tmp.clone(), s1_in_tmp.clone(), b12.clone()],
+        vec![
+            b01.clone(),
+            s1_out_tmp.clone(),
+            s1_in_tmp.clone(),
+            b12.clone(),
+        ],
         vec![1, phys_dim, phys_dim, 1],
         Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
     );
@@ -1274,14 +1379,20 @@ fn create_three_site_linear_operator(
 
     let sites = ["site0", "site1", "site2"];
     for (i, site) in sites.iter().enumerate() {
-        input_mapping.insert(*site, IndexMapping {
-            true_index: state_site_indices[i].clone(),
-            internal_index: s_in_tmp[i].clone(),
-        });
-        output_mapping.insert(*site, IndexMapping {
-            true_index: state_site_indices[i].clone(),
-            internal_index: s_out_tmp[i].clone(),
-        });
+        input_mapping.insert(
+            *site,
+            IndexMapping {
+                true_index: state_site_indices[i].clone(),
+                internal_index: s_in_tmp[i].clone(),
+            },
+        );
+        output_mapping.insert(
+            *site,
+            IndexMapping {
+                true_index: state_site_indices[i].clone(),
+                internal_index: s_out_tmp[i].clone(),
+            },
+        );
     }
 
     LinearOperator::new(mpo, input_mapping, output_mapping)
@@ -1290,7 +1401,7 @@ fn create_three_site_linear_operator(
 #[test]
 fn test_linsolve_with_linear_operator_three_site_identity() {
     use tensor4all_treetn::{
-        LocalUpdateSweepPlan, apply_local_update_sweep, CanonicalizationOptions,
+        apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
     };
 
     let phys_dim = 2;
@@ -1299,7 +1410,8 @@ fn test_linsolve_with_linear_operator_three_site_identity() {
     let (rhs, site_indices, _bonds) = create_three_site_mps(None);
 
     // Create MPO with internal indices (identity: all diag values = 1.0)
-    let (mpo, s_in_tmp, s_out_tmp) = create_three_site_mpo_with_internal_indices(&[1.0, 1.0, 1.0], phys_dim);
+    let (mpo, s_in_tmp, s_out_tmp) =
+        create_three_site_mpo_with_internal_indices(&[1.0, 1.0, 1.0], phys_dim);
 
     // Create LinearOperator with proper index mapping
     let linear_op = create_three_site_linear_operator(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
@@ -1308,7 +1420,9 @@ fn test_linsolve_with_linear_operator_three_site_identity() {
     let init = rhs.clone();
 
     // Canonicalize init towards site0
-    let mut x = init.canonicalize(["site0"], CanonicalizationOptions::default()).unwrap();
+    let mut x = init
+        .canonicalize(["site0"], CanonicalizationOptions::default())
+        .unwrap();
 
     // Create LinsolveUpdater with LinearOperator
     let options = LinsolveOptions::default()
@@ -1333,7 +1447,7 @@ fn test_linsolve_with_linear_operator_three_site_identity() {
 #[test]
 fn test_linsolve_with_linear_operator_three_site_diagonal() {
     use tensor4all_treetn::{
-        LocalUpdateSweepPlan, apply_local_update_sweep, CanonicalizationOptions,
+        apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
     };
 
     let phys_dim = 2;
@@ -1343,7 +1457,8 @@ fn test_linsolve_with_linear_operator_three_site_diagonal() {
     let (rhs, site_indices, _bonds) = create_three_site_mps(None);
 
     // Create MPO with diagonal values [2.0, 3.0, 1.0] (product = 6.0)
-    let (mpo, s_in_tmp, s_out_tmp) = create_three_site_mpo_with_internal_indices(&[2.0, 3.0, 1.0], phys_dim);
+    let (mpo, s_in_tmp, s_out_tmp) =
+        create_three_site_mpo_with_internal_indices(&[2.0, 3.0, 1.0], phys_dim);
 
     // Create LinearOperator
     let linear_op = create_three_site_linear_operator(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
@@ -1352,7 +1467,9 @@ fn test_linsolve_with_linear_operator_three_site_diagonal() {
     let init = rhs.clone();
 
     // Canonicalize init towards site0
-    let mut x = init.canonicalize(["site0"], CanonicalizationOptions::default()).unwrap();
+    let mut x = init
+        .canonicalize(["site0"], CanonicalizationOptions::default())
+        .unwrap();
 
     // Create LinsolveUpdater with LinearOperator
     let options = LinsolveOptions::default()
@@ -1397,14 +1514,20 @@ fn create_two_site_mps_with_indices(
     let t0 = TensorDynLen::new(
         vec![site_indices[0].clone(), bond.clone()],
         vec![phys_dim, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; phys_dim * 2]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
+            1.0;
+            phys_dim
+                * 2
+        ]))),
     );
 
     // Site 1: [bond, s1]
     let t1 = TensorDynLen::new(
         vec![bond.clone(), site_indices[1].clone()],
         vec![2, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 2 * phys_dim]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+            vec![1.0; 2 * phys_dim],
+        ))),
     );
 
     let n0 = mps.add_tensor("site0", t0).unwrap();
@@ -1421,8 +1544,8 @@ fn create_two_site_mpo_vin_vout(
     phys_dim: usize,
 ) -> (
     TreeTN<DynId, NoSymmSpace, &'static str>,
-    Vec<Index<DynId>>,  // s_in_tmp
-    Vec<Index<DynId>>,  // s_out_tmp
+    Vec<Index<DynId>>, // s_in_tmp
+    Vec<Index<DynId>>, // s_out_tmp
 ) {
     let mut mpo = TreeTN::<DynId, NoSymmSpace, &'static str>::new();
 
@@ -1476,7 +1599,7 @@ fn create_two_site_mpo_vin_vout(
 #[test]
 fn test_linsolve_vin_neq_vout_with_reference_state() {
     use tensor4all_treetn::{
-        LocalUpdateSweepPlan, apply_local_update_sweep, CanonicalizationOptions,
+        apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
     };
 
     let phys_dim = 2;
@@ -1506,29 +1629,43 @@ fn test_linsolve_vin_neq_vout_with_reference_state() {
     let mut output_mapping = std::collections::HashMap::new();
 
     // Site 0 mappings
-    input_mapping.insert("site0", IndexMapping {
-        true_index: s_in[0].clone(),      // x's site index
-        internal_index: s_in_tmp[0].clone(),  // MPO input index
-    });
-    output_mapping.insert("site0", IndexMapping {
-        true_index: s_out[0].clone(),     // b's site index (different from s_in!)
-        internal_index: s_out_tmp[0].clone(),  // MPO output index
-    });
+    input_mapping.insert(
+        "site0",
+        IndexMapping {
+            true_index: s_in[0].clone(),         // x's site index
+            internal_index: s_in_tmp[0].clone(), // MPO input index
+        },
+    );
+    output_mapping.insert(
+        "site0",
+        IndexMapping {
+            true_index: s_out[0].clone(), // b's site index (different from s_in!)
+            internal_index: s_out_tmp[0].clone(), // MPO output index
+        },
+    );
 
     // Site 1 mappings
-    input_mapping.insert("site1", IndexMapping {
-        true_index: s_in[1].clone(),
-        internal_index: s_in_tmp[1].clone(),
-    });
-    output_mapping.insert("site1", IndexMapping {
-        true_index: s_out[1].clone(),
-        internal_index: s_out_tmp[1].clone(),
-    });
+    input_mapping.insert(
+        "site1",
+        IndexMapping {
+            true_index: s_in[1].clone(),
+            internal_index: s_in_tmp[1].clone(),
+        },
+    );
+    output_mapping.insert(
+        "site1",
+        IndexMapping {
+            true_index: s_out[1].clone(),
+            internal_index: s_out_tmp[1].clone(),
+        },
+    );
 
     let linear_op = LinearOperator::new(mpo, input_mapping, output_mapping);
 
     // Canonicalize x towards site0
-    let mut x = x_init.canonicalize(["site0"], CanonicalizationOptions::default()).unwrap();
+    let mut x = x_init
+        .canonicalize(["site0"], CanonicalizationOptions::default())
+        .unwrap();
 
     // Create LinsolveUpdater with reference_state_out for V_in ≠ V_out case
     let options = LinsolveOptions::default()
@@ -1539,7 +1676,7 @@ fn test_linsolve_vin_neq_vout_with_reference_state() {
     let mut updater = LinsolveUpdater::with_linear_operator(
         linear_op,
         rhs.clone(),
-        Some(ref_out),  // <-- V_in ≠ V_out: provide reference state in V_out
+        Some(ref_out), // <-- V_in ≠ V_out: provide reference state in V_out
         options,
     );
 

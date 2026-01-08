@@ -98,7 +98,10 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     }
 
     /// Create a VidalTensorTrain with a specific partition
-    pub fn from_tensor_train_with_partition(tt: &TensorTrain<T>, partition: Range<usize>) -> Result<Self> {
+    pub fn from_tensor_train_with_partition(
+        tt: &TensorTrain<T>,
+        partition: Range<usize>,
+    ) -> Result<Self> {
         let n = tt.len();
         if n == 0 {
             return Ok(Self {
@@ -110,7 +113,10 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
 
         if partition.end > n {
             return Err(TensorTrainError::InvalidOperation {
-                message: format!("Partition end {} exceeds tensor train length {}", partition.end, n),
+                message: format!(
+                    "Partition end {} exceeds tensor train length {}",
+                    partition.end, n
+                ),
             });
         }
 
@@ -152,7 +158,12 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             for l in 0..new_bond_dim {
                 for s in 0..next_site_dim {
                     for r_idx in 0..next_right_dim {
-                        new_next_tensor.set3(l, s, r_idx, contracted[[l, s * next_right_dim + r_idx]]);
+                        new_next_tensor.set3(
+                            l,
+                            s,
+                            r_idx,
+                            contracted[[l, s * next_right_dim + r_idx]],
+                        );
                     }
                 }
             }
@@ -211,8 +222,14 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
                 for l in 0..prev_left_dim {
                     for s in 0..prev_site_dim {
                         for r in 0..new_bond_dim {
-                            if l * prev_site_dim + s < nrows(&contracted) && r < ncols(&contracted) {
-                                new_prev_tensor.set3(l, s, r, contracted[[l * prev_site_dim + s, r]]);
+                            if l * prev_site_dim + s < nrows(&contracted) && r < ncols(&contracted)
+                            {
+                                new_prev_tensor.set3(
+                                    l,
+                                    s,
+                                    r,
+                                    contracted[[l * prev_site_dim + s, r]],
+                                );
                             }
                         }
                     }
@@ -439,7 +456,12 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
                         } else {
                             1.0
                         };
-                        new_tensor.set3(l, s, r, val * T::from_f64(sv_left) * T::from_f64(sv_right));
+                        new_tensor.set3(
+                            l,
+                            s,
+                            r,
+                            val * T::from_f64(sv_left) * T::from_f64(sv_right),
+                        );
                     }
                 }
             }

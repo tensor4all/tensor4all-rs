@@ -623,13 +623,9 @@ where
             if neighbor == *node_v {
                 continue;
             }
-            let env = self.envs.get_or_compute(
-                &neighbor,
-                node_u,
-                &self.tn_a,
-                &self.tn_b,
-                full_treetn,
-            )?;
+            let env =
+                self.envs
+                    .get_or_compute(&neighbor, node_u, &self.tn_a, &self.tn_b, full_treetn)?;
             env_tensors.push(env);
         }
 
@@ -638,13 +634,9 @@ where
             if neighbor == *node_u {
                 continue;
             }
-            let env = self.envs.get_or_compute(
-                &neighbor,
-                node_v,
-                &self.tn_a,
-                &self.tn_b,
-                full_treetn,
-            )?;
+            let env =
+                self.envs
+                    .get_or_compute(&neighbor, node_v, &self.tn_a, &self.tn_b, full_treetn)?;
             env_tensors.push(env);
         }
 

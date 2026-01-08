@@ -396,7 +396,10 @@ where
     /// # Returns
     /// `None` if target node doesn't exist, otherwise a vector of `(from, to)` pairs
     /// where `from` is the node being processed and `to` is its parent (towards target).
-    pub fn edges_to_canonicalize_by_names(&self, target: &NodeName) -> Option<Vec<(NodeName, NodeName)>> {
+    pub fn edges_to_canonicalize_by_names(
+        &self,
+        target: &NodeName,
+    ) -> Option<Vec<(NodeName, NodeName)>> {
         let target_idx = self.node_index(target)?;
         let edges = self.edges_to_canonicalize(None, target_idx);
 

@@ -131,14 +131,24 @@ pub struct TagSet<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar 
 /// Error type for TagSet operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TagSetError {
-    TooManyTags { actual: usize, max: usize },
-    TagTooLong { actual: usize, max: usize },
+    TooManyTags {
+        actual: usize,
+        max: usize,
+    },
+    TagTooLong {
+        actual: usize,
+        max: usize,
+    },
     InvalidTag(SmallStringError),
     /// Tag contains a comma, which is reserved as a separator in from_str.
-    TagContainsComma { tag: String },
+    TagContainsComma {
+        tag: String,
+    },
 }
 
-impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> TagSet<MAX_TAGS, MAX_TAG_LEN, C> {
+impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar>
+    TagSet<MAX_TAGS, MAX_TAG_LEN, C>
+{
     /// Create an empty TagSet.
     pub fn new() -> Self {
         Self {
@@ -266,12 +276,11 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> TagSetLike
     }
 }
 
-impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> TagSet<MAX_TAGS, MAX_TAG_LEN, C> {
+impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar>
+    TagSet<MAX_TAGS, MAX_TAG_LEN, C>
+{
     /// Internal: Add a tag in sorted order (similar to ITensors.jl's `_addtag_ordered!`).
-    fn _add_tag_ordered(
-        &mut self,
-        tag: SmallString<MAX_TAG_LEN, C>,
-    ) -> Result<(), TagSetError> {
+    fn _add_tag_ordered(&mut self, tag: SmallString<MAX_TAG_LEN, C>) -> Result<(), TagSetError> {
         // Check for duplicates
         if self._has_tag(&tag) {
             return Ok(()); // Already present, no error

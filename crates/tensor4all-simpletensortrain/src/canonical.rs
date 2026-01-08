@@ -317,7 +317,11 @@ impl<T: TTScalar + Scalar + Default> SiteTensorTrain<T> {
     ) -> Result<()> {
         if i >= self.len() - 1 {
             return Err(TensorTrainError::InvalidOperation {
-                message: format!("Cannot set two-site tensors at site {} (max {})", i, self.len() - 2),
+                message: format!(
+                    "Cannot set two-site tensors at site {} (max {})",
+                    i,
+                    self.len() - 2
+                ),
             });
         }
 
@@ -387,7 +391,12 @@ pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
             for l in 0..new_bond_dim {
                 for s in 0..next_site_dim {
                     for r_idx in 0..next_right_dim {
-                        new_next_tensor.set3(l, s, r_idx, contracted[[l, s * next_right_dim + r_idx]]);
+                        new_next_tensor.set3(
+                            l,
+                            s,
+                            r_idx,
+                            contracted[[l, s * next_right_dim + r_idx]],
+                        );
                     }
                 }
             }
@@ -567,7 +576,10 @@ mod tests {
                 assert!(
                     (original - canonical).abs() < 1e-10,
                     "Evaluation mismatch at [{}, {}]: {} vs {}",
-                    i, j, original, canonical
+                    i,
+                    j,
+                    original,
+                    canonical
                 );
             }
         }

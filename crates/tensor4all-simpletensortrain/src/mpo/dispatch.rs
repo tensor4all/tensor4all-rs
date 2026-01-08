@@ -55,12 +55,8 @@ where
     <T as num_complex::ComplexFloat>::Real: Into<f64>,
 {
     match algorithm {
-        ContractionAlgorithm::Naive => {
-            contract_naive(mpo_a, mpo_b, Some(options.clone()))
-        }
-        ContractionAlgorithm::ZipUp => {
-            contract_zipup(mpo_a, mpo_b, options)
-        }
+        ContractionAlgorithm::Naive => contract_naive(mpo_a, mpo_b, Some(options.clone())),
+        ContractionAlgorithm::ZipUp => contract_zipup(mpo_a, mpo_b, options),
         ContractionAlgorithm::Fit => {
             let fit_options = FitOptions {
                 tolerance: options.tolerance,

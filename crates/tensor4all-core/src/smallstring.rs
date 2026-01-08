@@ -110,7 +110,10 @@ impl<const MAX_LEN: usize, C: SmallChar> SmallString<MAX_LEN, C> {
             if len >= MAX_LEN {
                 // Count total characters for error message
                 let actual = len + 1 + s.chars().skip(len + 1).count();
-                return Err(SmallStringError::TooLong { actual, max: MAX_LEN });
+                return Err(SmallStringError::TooLong {
+                    actual,
+                    max: MAX_LEN,
+                });
             }
             data[len] = C::from_char(ch).ok_or(SmallStringError::InvalidChar { char_value: ch })?;
             len += 1;
@@ -222,7 +225,10 @@ mod tests {
     #[test]
     fn test_smallstring_too_long() {
         let result = SmallString::<4>::from_str("hello");
-        assert!(matches!(result, Err(SmallStringError::TooLong { actual: 5, max: 4 })));
+        assert!(matches!(
+            result,
+            Err(SmallStringError::TooLong { actual: 5, max: 4 })
+        ));
     }
 
     #[test]

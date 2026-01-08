@@ -174,7 +174,8 @@ where
                         let mut sum = T::zero();
                         for k in 0..next_left.min(right_cols) {
                             if l < right_rows {
-                                sum = sum + fact_result.right[[l, k]] * *next_tensor.get4(k, i1, i2, r);
+                                sum = sum
+                                    + fact_result.right[[l, k]] * *next_tensor.get4(k, i1, i2, r);
                             }
                         }
                         new_next.set4(l, i1, i2, r, sum);

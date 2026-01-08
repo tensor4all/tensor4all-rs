@@ -88,10 +88,12 @@ where
 
         // Collect local operator tensors
         for node in region {
-            let node_idx = self.operator
+            let node_idx = self
+                .operator
                 .node_index(node)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", node))?;
-            let tensor = self.operator
+            let tensor = self
+                .operator
                 .tensor(node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?
                 .clone();
@@ -127,7 +129,8 @@ where
         for node in region {
             for neighbor in topology.neighbors(node) {
                 if !region.contains(&neighbor) && !self.envs.contains(&neighbor, node) {
-                    let env = self.compute_environment(&neighbor, node, ket_state, bra_state, topology)?;
+                    let env =
+                        self.compute_environment(&neighbor, node, ket_state, bra_state, topology)?;
                     self.envs.insert(neighbor.clone(), node.clone(), env);
                 }
             }
@@ -152,14 +155,12 @@ where
         topology: &T,
     ) -> Result<TensorDynLen<Id, Symm>> {
         // First, ensure child environments are computed
-        let child_neighbors: Vec<V> = topology
-            .neighbors(from)
-            .filter(|n| n != to)
-            .collect();
+        let child_neighbors: Vec<V> = topology.neighbors(from).filter(|n| n != to).collect();
 
         for child in &child_neighbors {
             if !self.envs.contains(child, from) {
-                let child_env = self.compute_environment(child, from, ket_state, bra_state, topology)?;
+                let child_env =
+                    self.compute_environment(child, from, ket_state, bra_state, topology)?;
                 self.envs.insert(child.clone(), from.clone(), child_env);
             }
         }
@@ -174,7 +175,8 @@ where
         let node_idx_bra = bra_state
             .node_index(from)
             .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in bra_state", from))?;
-        let node_idx_op = self.operator
+        let node_idx_op = self
+            .operator
             .node_index(from)
             .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", from))?;
         let node_idx_ket = ket_state
@@ -184,7 +186,8 @@ where
         let tensor_bra = bra_state
             .tensor(node_idx_bra)
             .ok_or_else(|| anyhow::anyhow!("Tensor not found in bra_state"))?;
-        let tensor_op = self.operator
+        let tensor_op = self
+            .operator
             .tensor(node_idx_op)
             .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?;
         let tensor_ket = ket_state

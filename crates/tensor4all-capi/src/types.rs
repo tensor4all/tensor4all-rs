@@ -5,7 +5,7 @@
 
 use std::ffi::c_void;
 use tensor4all_core::index::{DefaultIndex, DynId, NoSymmSpace};
-use tensor4all_core::{TensorDynLen, Storage};
+use tensor4all_core::{Storage, TensorDynLen};
 use tensor4all_itensorlike::TensorTrain;
 
 /// The internal index type we're wrapping

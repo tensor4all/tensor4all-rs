@@ -141,7 +141,9 @@ where
 
         // Step 2: Generate sweep plan (nsite=2 for two-site truncation)
         let plan = LocalUpdateSweepPlan::from_treetn(self, &center_node, 2)
-            .ok_or_else(|| anyhow::anyhow!("Failed to create sweep plan from center {:?}", center_node))
+            .ok_or_else(|| {
+                anyhow::anyhow!("Failed to create sweep plan from center {:?}", center_node)
+            })
             .context(format!("{}: sweep plan creation failed", context_name))?;
 
         // If no steps (single node network), nothing more to do

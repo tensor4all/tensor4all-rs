@@ -1,14 +1,12 @@
 //! Tests for TensorLike trait implementation.
 
-use tensor4all_core::index::{Index, DynId, NoSymmSpace};
+use tensor4all_core::index::{DynId, Index, NoSymmSpace};
 use tensor4all_core::DefaultTagSet;
 use tensor4all_core::{StorageScalar, TensorDynLen, TensorLike, TensorLikeDowncast};
 
 /// Helper to create a simple tensor with given dimensions
 fn make_tensor(dims: &[usize]) -> TensorDynLen<DynId> {
-    let indices: Vec<Index<DynId, NoSymmSpace>> = dims.iter()
-        .map(|&d| Index::new_dyn(d))
-        .collect();
+    let indices: Vec<Index<DynId, NoSymmSpace>> = dims.iter().map(|&d| Index::new_dyn(d)).collect();
     let total_size: usize = dims.iter().product();
     let data: Vec<f64> = (0..total_size).map(|i| i as f64).collect();
     let storage = f64::dense_storage(data);
@@ -58,26 +56,24 @@ fn test_tensor_like_tensordot_basic() {
 
     // Tensor A: 2x3 matrix
     let a_data: Vec<f64> = (0..6).map(|x| x as f64).collect();
-    let a = TensorDynLen::from_indices(
-        vec![i.clone(), j.clone()],
-        f64::dense_storage(a_data),
-    );
+    let a = TensorDynLen::from_indices(vec![i.clone(), j.clone()], f64::dense_storage(a_data));
 
     // Tensor B: 3x4 matrix (use a copy of j with same id)
     let j_copy = Index::new(j.id, j.symm.clone());
     let b_data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-    let b = TensorDynLen::from_indices(
-        vec![j_copy.clone(), k.clone()],
-        f64::dense_storage(b_data),
-    );
+    let b = TensorDynLen::from_indices(vec![j_copy.clone(), k.clone()], f64::dense_storage(b_data));
 
     // Create pairs with DefaultTagSet
     let pairs = vec![(
         Index::<DynId, NoSymmSpace, DefaultTagSet>::new_with_tags(
-            j.id, j.symm.clone(), DefaultTagSet::default(),
+            j.id,
+            j.symm.clone(),
+            DefaultTagSet::default(),
         ),
         Index::<DynId, NoSymmSpace, DefaultTagSet>::new_with_tags(
-            j_copy.id, j_copy.symm.clone(), DefaultTagSet::default(),
+            j_copy.id,
+            j_copy.symm.clone(),
+            DefaultTagSet::default(),
         ),
     )];
 

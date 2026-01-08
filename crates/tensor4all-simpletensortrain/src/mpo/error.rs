@@ -34,7 +34,11 @@ pub enum MPOError {
 
     /// Invalid index provided
     #[error("Index out of bounds: index {index} at site {site} (max: {max})")]
-    IndexOutOfBounds { site: usize, index: usize, max: usize },
+    IndexOutOfBounds {
+        site: usize,
+        index: usize,
+        max: usize,
+    },
 
     /// Empty MPO
     #[error("MPO is empty")]

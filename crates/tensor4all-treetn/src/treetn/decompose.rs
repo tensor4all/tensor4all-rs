@@ -9,8 +9,8 @@ use std::hash::Hash;
 use anyhow::Result;
 
 use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
 use tensor4all_core::TensorDynLen;
+use tensor4all_core::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
 
 use super::TreeTN;
 
@@ -170,13 +170,15 @@ where
     }
 
     // Find leaves (nodes with degree 1) - not currently used but kept for reference
-    let _leaves: Vec<V> = adj.iter()
+    let _leaves: Vec<V> = adj
+        .iter()
         .filter(|(_, neighbors)| neighbors.len() == 1)
         .map(|(node, _)| node.clone())
         .collect();
 
     // Choose root as the node with highest degree, or first non-leaf
-    let root = adj.iter()
+    let root = adj
+        .iter()
         .max_by_key(|(_, neighbors)| neighbors.len())
         .map(|(node, _)| node.clone())
         .ok_or_else(|| anyhow::anyhow!("Cannot find root node"))?;
@@ -230,7 +232,8 @@ where
         let node_positions = topology.nodes.get(node).unwrap();
 
         // Find physical indices for this node in current_tensor
-        let left_inds: Vec<_> = node_positions.iter()
+        let left_inds: Vec<_> = node_positions
+            .iter()
             .filter_map(|&pos| current_tensor.indices.get(pos).cloned())
             .collect();
 
@@ -281,7 +284,8 @@ where
     // Build the TreeTN using from_tensors (auto-connection by matching index IDs)
     // Since factorize() returns shared bond_index, tensors already have matching index IDs
     let node_names: Vec<V> = topology.nodes.keys().cloned().collect();
-    let tensors: Vec<TensorDynLen<Id, Symm>> = node_names.iter()
+    let tensors: Vec<TensorDynLen<Id, Symm>> = node_names
+        .iter()
         .map(|name| node_tensors.get(name).cloned().unwrap())
         .collect();
 

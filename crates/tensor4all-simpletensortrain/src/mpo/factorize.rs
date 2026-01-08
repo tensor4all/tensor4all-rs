@@ -306,8 +306,7 @@ where
     let n = matrix.dim(1);
 
     // Convert DTensor to matrixci::Matrix (temporary until matrixci migration)
-    let mut mat_ci: matrixci::util::Matrix<T> =
-        matrixci::util::zeros(m, n);
+    let mut mat_ci: matrixci::util::Matrix<T> = matrixci::util::zeros(m, n);
     for i in 0..m {
         for j in 0..n {
             mat_ci[[i, j]] = matrix[[i, j]];

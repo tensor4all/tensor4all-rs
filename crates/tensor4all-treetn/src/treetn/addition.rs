@@ -70,33 +70,55 @@ where
         let mut result = HashMap::new();
 
         for edge in self.graph.graph().edge_indices() {
-            let (src, tgt) = self.graph.graph().edge_endpoints(edge)
+            let (src, tgt) = self
+                .graph
+                .graph()
+                .edge_endpoints(edge)
                 .ok_or_else(|| anyhow::anyhow!("Edge has no endpoints"))?;
 
-            let bond_index_a = self.bond_index(edge)
+            let bond_index_a = self
+                .bond_index(edge)
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found in self"))?;
             let dim_a = bond_index_a.size();
 
-            let src_name = self.graph.node_name(src)
+            let src_name = self
+                .graph
+                .node_name(src)
                 .ok_or_else(|| anyhow::anyhow!("Source node name not found"))?
                 .clone();
-            let tgt_name = self.graph.node_name(tgt)
+            let tgt_name = self
+                .graph
+                .node_name(tgt)
                 .ok_or_else(|| anyhow::anyhow!("Target node name not found"))?
                 .clone();
 
             // Find corresponding edge in other
-            let src_idx_other = other.graph.node_index(&src_name)
+            let src_idx_other = other
+                .graph
+                .node_index(&src_name)
                 .ok_or_else(|| anyhow::anyhow!("Source node not found in other"))?;
-            let tgt_idx_other = other.graph.node_index(&tgt_name)
+            let tgt_idx_other = other
+                .graph
+                .node_index(&tgt_name)
                 .ok_or_else(|| anyhow::anyhow!("Target node not found in other"))?;
 
             // Find edge between these nodes in other
-            let edge_other = other.graph.graph().edges_connecting(src_idx_other, tgt_idx_other)
+            let edge_other = other
+                .graph
+                .graph()
+                .edges_connecting(src_idx_other, tgt_idx_other)
                 .next()
-                .or_else(|| other.graph.graph().edges_connecting(tgt_idx_other, src_idx_other).next())
+                .or_else(|| {
+                    other
+                        .graph
+                        .graph()
+                        .edges_connecting(tgt_idx_other, src_idx_other)
+                        .next()
+                })
                 .ok_or_else(|| anyhow::anyhow!("Edge not found in other"))?;
 
-            let bond_index_b = other.bond_index(edge_other.id())
+            let bond_index_b = other
+                .bond_index(edge_other.id())
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found in other"))?;
             let dim_b = bond_index_b.size();
 
@@ -117,11 +139,14 @@ where
                 (tgt_name, src_name)
             };
 
-            result.insert(key, MergedBondInfo {
-                dim_a,
-                dim_b,
-                merged_index,
-            });
+            result.insert(
+                key,
+                MergedBondInfo {
+                    dim_a,
+                    dim_b,
+                    merged_index,
+                },
+            );
         }
 
         Ok(result)
@@ -179,12 +204,10 @@ where
     }
 
     // Build canonical index order: physical indices first (in original order), then bonds (sorted by neighbor)
-    let mut canonical_indices: Vec<Index<Id, Symm>> = physical_inds_a.iter()
-        .map(|(_, idx)| idx.clone())
-        .collect();
-    let mut canonical_dims: Vec<usize> = physical_inds_a.iter()
-        .map(|(_, idx)| idx.size())
-        .collect();
+    let mut canonical_indices: Vec<Index<Id, Symm>> =
+        physical_inds_a.iter().map(|(_, idx)| idx.clone()).collect();
+    let mut canonical_dims: Vec<usize> =
+        physical_inds_a.iter().map(|(_, idx)| idx.size()).collect();
 
     // Sort bonds by neighbor name for deterministic ordering
     let mut sorted_bond_neighbors: Vec<V> = bond_info_by_neighbor.keys().cloned().collect();
@@ -194,8 +217,9 @@ where
     let mut bond_axis_info: Vec<(usize, usize, usize)> = Vec::new();
 
     for neighbor_name in &sorted_bond_neighbors {
-        let info = bond_info_by_neighbor.get(neighbor_name)
-            .ok_or_else(|| anyhow::anyhow!("Bond info not found for neighbor {:?}", neighbor_name))?;
+        let info = bond_info_by_neighbor.get(neighbor_name).ok_or_else(|| {
+            anyhow::anyhow!("Bond info not found for neighbor {:?}", neighbor_name)
+        })?;
 
         bond_axis_info.push((canonical_indices.len(), info.dim_a, info.dim_b));
         canonical_indices.push(info.merged_index.clone());
@@ -225,9 +249,13 @@ where
     // Physical indices - match by position in physical_inds_a
     for (_, idx_a) in &physical_inds_a {
         // Find corresponding physical index in tensor_b by ID
-        let pos_b = tensor_b.indices.iter()
+        let pos_b = tensor_b
+            .indices
+            .iter()
             .position(|idx_b| site_indices.contains(&idx_b.id) && idx_b.id == idx_a.id)
-            .ok_or_else(|| anyhow::anyhow!("Physical index {:?} not found in tensor_b", idx_a.id))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("Physical index {:?} not found in tensor_b", idx_a.id)
+            })?;
         perm_b.push(pos_b);
     }
     // Bond indices in sorted neighbor order
@@ -252,14 +280,30 @@ where
 
     let new_storage = if is_complex {
         let data_a = match tensor_a.storage.as_ref() {
-            Storage::DenseF64(d) => d.as_slice().iter().map(|&x| Complex64::new(x, 0.0)).collect::<Vec<_>>(),
+            Storage::DenseF64(d) => d
+                .as_slice()
+                .iter()
+                .map(|&x| Complex64::new(x, 0.0))
+                .collect::<Vec<_>>(),
             Storage::DenseC64(d) => d.as_slice().to_vec(),
-            _ => return Err(anyhow::anyhow!("Only dense storage is supported for TTN addition")),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Only dense storage is supported for TTN addition"
+                ))
+            }
         };
         let data_b = match tensor_b.storage.as_ref() {
-            Storage::DenseF64(d) => d.as_slice().iter().map(|&x| Complex64::new(x, 0.0)).collect::<Vec<_>>(),
+            Storage::DenseF64(d) => d
+                .as_slice()
+                .iter()
+                .map(|&x| Complex64::new(x, 0.0))
+                .collect::<Vec<_>>(),
             Storage::DenseC64(d) => d.as_slice().to_vec(),
-            _ => return Err(anyhow::anyhow!("Only dense storage is supported for TTN addition")),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Only dense storage is supported for TTN addition"
+                ))
+            }
         };
 
         let permuted_data_a = permute_data_c64(&data_a, &tensor_a.dims, &perm_a);
@@ -267,11 +311,26 @@ where
 
         if has_bonds {
             let mut result_data = vec![Complex64::new(0.0, 0.0); total_size];
-            embed_block_c64(&mut result_data, &canonical_dims, &permuted_data_a, &permuted_dims_a, &bond_axis_info, true)?;
-            embed_block_c64(&mut result_data, &canonical_dims, &permuted_data_b, &permuted_dims_b, &bond_axis_info, false)?;
+            embed_block_c64(
+                &mut result_data,
+                &canonical_dims,
+                &permuted_data_a,
+                &permuted_dims_a,
+                &bond_axis_info,
+                true,
+            )?;
+            embed_block_c64(
+                &mut result_data,
+                &canonical_dims,
+                &permuted_data_b,
+                &permuted_dims_b,
+                &bond_axis_info,
+                false,
+            )?;
             Storage::DenseC64(DenseStorageC64::from_vec(result_data))
         } else {
-            let result_data: Vec<Complex64> = permuted_data_a.iter()
+            let result_data: Vec<Complex64> = permuted_data_a
+                .iter()
                 .zip(permuted_data_b.iter())
                 .map(|(&a, &b)| a + b)
                 .collect();
@@ -280,11 +339,19 @@ where
     } else {
         let data_a = match tensor_a.storage.as_ref() {
             Storage::DenseF64(d) => d.as_slice().to_vec(),
-            _ => return Err(anyhow::anyhow!("Only dense storage is supported for TTN addition")),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Only dense storage is supported for TTN addition"
+                ))
+            }
         };
         let data_b = match tensor_b.storage.as_ref() {
             Storage::DenseF64(d) => d.as_slice().to_vec(),
-            _ => return Err(anyhow::anyhow!("Only dense storage is supported for TTN addition")),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Only dense storage is supported for TTN addition"
+                ))
+            }
         };
 
         let permuted_data_a = permute_data_f64(&data_a, &tensor_a.dims, &perm_a);
@@ -292,11 +359,26 @@ where
 
         if has_bonds {
             let mut result_data = vec![0.0_f64; total_size];
-            embed_block_f64(&mut result_data, &canonical_dims, &permuted_data_a, &permuted_dims_a, &bond_axis_info, true)?;
-            embed_block_f64(&mut result_data, &canonical_dims, &permuted_data_b, &permuted_dims_b, &bond_axis_info, false)?;
+            embed_block_f64(
+                &mut result_data,
+                &canonical_dims,
+                &permuted_data_a,
+                &permuted_dims_a,
+                &bond_axis_info,
+                true,
+            )?;
+            embed_block_f64(
+                &mut result_data,
+                &canonical_dims,
+                &permuted_data_b,
+                &permuted_dims_b,
+                &bond_axis_info,
+                false,
+            )?;
             Storage::DenseF64(DenseStorageF64::from_vec(result_data))
         } else {
-            let result_data: Vec<f64> = permuted_data_a.iter()
+            let result_data: Vec<f64> = permuted_data_a
+                .iter()
                 .zip(permuted_data_b.iter())
                 .map(|(&a, &b)| a + b)
                 .collect();
@@ -304,7 +386,11 @@ where
         }
     };
 
-    Ok(TensorDynLen::new(canonical_indices, canonical_dims, Arc::new(new_storage)))
+    Ok(TensorDynLen::new(
+        canonical_indices,
+        canonical_dims,
+        Arc::new(new_storage),
+    ))
 }
 
 // ============================================================================
@@ -336,7 +422,8 @@ fn embed_block_f64(
     let src_strides = compute_strides(src_dims);
     let dest_strides = compute_strides(dest_dims);
 
-    let bond_map: HashMap<usize, (usize, usize)> = bond_positions.iter()
+    let bond_map: HashMap<usize, (usize, usize)> = bond_positions
+        .iter()
         .map(|&(pos, dim_a, dim_b)| (pos, (dim_a, dim_b)))
         .collect();
 
@@ -394,7 +481,8 @@ fn embed_block_c64(
     let src_strides = compute_strides(src_dims);
     let dest_strides = compute_strides(dest_dims);
 
-    let bond_map: HashMap<usize, (usize, usize)> = bond_positions.iter()
+    let bond_map: HashMap<usize, (usize, usize)> = bond_positions
+        .iter()
         .map(|&(pos, dim_a, dim_b)| (pos, (dim_a, dim_b)))
         .collect();
 

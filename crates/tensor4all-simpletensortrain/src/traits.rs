@@ -277,7 +277,8 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
             for ra in 0..right_dim {
                 for ra_c in 0..right_dim {
                     let idx = ra * right_dim + ra_c;
-                    current[idx] = current[idx] + *first.get3(0, s, ra) * first.get3(0, s, ra_c).conj();
+                    current[idx] =
+                        current[idx] + *first.get3(0, s, ra) * first.get3(0, s, ra_c).conj();
                 }
             }
         }
@@ -300,7 +301,9 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
                             for ra_c in 0..right_dim {
                                 let idx = ra * right_dim + ra_c;
                                 new_current[idx] = new_current[idx]
-                                    + c_val * *tensor.get3(la, s, ra) * tensor.get3(la_c, s, ra_c).conj();
+                                    + c_val
+                                        * *tensor.get3(la, s, ra)
+                                        * tensor.get3(la_c, s, ra_c).conj();
                             }
                         }
                     }
@@ -342,14 +345,19 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
             for ra in 0..right_dim {
                 for ra_c in 0..right_dim {
                     let idx = ra * right_dim + ra_c;
-                    current[idx] = current[idx] + *first.get3(0, s, ra) * first.get3(0, s, ra_c).conj();
+                    current[idx] =
+                        current[idx] + *first.get3(0, s, ra) * first.get3(0, s, ra_c).conj();
                 }
             }
         }
 
         // Normalize and accumulate log scale
         let mut log_scale = 0.0;
-        let scale = current.iter().map(|x| x.abs_sq()).fold(0.0, f64::max).sqrt();
+        let scale = current
+            .iter()
+            .map(|x| x.abs_sq())
+            .fold(0.0, f64::max)
+            .sqrt();
         if scale > 0.0 {
             log_scale += scale.ln();
             let inv_scale = T::one() / T::from_f64(scale);
@@ -379,7 +387,9 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
                             for ra_c in 0..right_dim {
                                 let idx = ra * right_dim + ra_c;
                                 new_current[idx] = new_current[idx]
-                                    + c_val * *tensor.get3(la, s, ra) * tensor.get3(la_c, s, ra_c).conj();
+                                    + c_val
+                                        * *tensor.get3(la, s, ra)
+                                        * tensor.get3(la_c, s, ra_c).conj();
                             }
                         }
                     }
@@ -387,7 +397,11 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
             }
 
             // Normalize and accumulate log scale
-            let scale = new_current.iter().map(|x| x.abs_sq()).fold(0.0, f64::max).sqrt();
+            let scale = new_current
+                .iter()
+                .map(|x| x.abs_sq())
+                .fold(0.0, f64::max)
+                .sqrt();
             if scale > 0.0 {
                 log_scale += scale.ln();
                 let inv_scale = T::one() / T::from_f64(scale);

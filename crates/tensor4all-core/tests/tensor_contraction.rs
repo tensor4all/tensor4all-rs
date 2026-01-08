@@ -1,9 +1,9 @@
-use tensor4all_core::{Storage, TensorDynLen};
-use tensor4all_core::storage::{DenseStorageF64, DenseStorageC64};
-use tensor4all_core::index::{DefaultIndex as Index, DynId};
-use tensor4all_core::index_ops::common_inds;
 use num_complex::Complex64;
 use std::sync::Arc;
+use tensor4all_core::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::index_ops::common_inds;
+use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64};
+use tensor4all_core::{Storage, TensorDynLen};
 
 #[test]
 fn test_common_inds() {
@@ -263,7 +263,7 @@ fn test_contract_mixed_c64_f64() {
     // C[1,1] = (5+6i)*1 + (7+8i)*1 = 12+14i
     let result = tensor_a.contract_einsum(&tensor_b);
     assert_eq!(result.dims, vec![2, 2]);
-    
+
     // Check result storage type
     if let Storage::DenseC64(ref vec) = *result.storage {
         assert_eq!(vec.len(), 4);
@@ -282,7 +282,7 @@ fn test_tensordot_different_ids() {
     // Test tensordot with indices that have different IDs but same dimensions
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let k = Index::new_dyn(3);  // Same dimension as j, but different ID
+    let k = Index::new_dyn(3); // Same dimension as j, but different ID
     let l = Index::new_dyn(4);
 
     // Create tensor A[i, j]
@@ -298,7 +298,9 @@ fn test_tensordot_different_ids() {
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract j (from A) with k (from B): result should be C[i, l] with all 3.0
-    let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), k.clone())]).unwrap();
+    let result = tensor_a
+        .tensordot(&tensor_b, &[(j.clone(), k.clone())])
+        .unwrap();
     assert_eq!(result.dims, vec![2, 4]);
     assert_eq!(result.indices.len(), 2);
     assert_eq!(result.indices[0].id, i.id);
@@ -320,7 +322,7 @@ fn test_tensordot_dimension_mismatch() {
     // Test that dimension mismatch returns an error
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let k = Index::new_dyn(5);  // Different dimension from j
+    let k = Index::new_dyn(5); // Different dimension from j
 
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
@@ -386,10 +388,13 @@ fn test_tensordot_duplicate_axis() {
     let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
 
     // Try to contract j twice (duplicate axis in self)
-    let result = tensor_a.tensordot(&tensor_b, &[
-        (j.clone(), k.clone()),
-        (j.clone(), l.clone()),  // j is used twice
-    ]);
+    let result = tensor_a.tensordot(
+        &tensor_b,
+        &[
+            (j.clone(), k.clone()),
+            (j.clone(), l.clone()), // j is used twice
+        ],
+    );
     // Just verify it's an error - duplicate axes should be detected
     assert!(result.is_err());
 }
@@ -414,7 +419,11 @@ fn test_tensordot_empty_pairs() {
     assert!(result.is_err());
     if let Err(e) = result {
         let err_msg = format!("{}", e);
-        assert!(err_msg.contains("No pairs") || err_msg.contains("empty") || err_msg.contains("specified"));
+        assert!(
+            err_msg.contains("No pairs")
+                || err_msg.contains("empty")
+                || err_msg.contains("specified")
+        );
     }
 }
 
@@ -423,7 +432,7 @@ fn test_tensordot_common_index_not_in_pairs() {
     // Test that having a common index (same ID) not in the contraction pairs returns an error
     // This is the "batch contraction not yet implemented" case
     let i = Index::new_dyn(2);
-    let j = Index::new_dyn(3);  // This will be a common index (batch dimension)
+    let j = Index::new_dyn(3); // This will be a common index (batch dimension)
     let k = Index::new_dyn(4);
     let l = Index::new_dyn(5);
 
@@ -446,8 +455,11 @@ fn test_tensordot_common_index_not_in_pairs() {
     if let Err(e) = result {
         let err_msg = format!("{}", e);
         assert!(
-            err_msg.contains("batch") || err_msg.contains("not yet implemented") || err_msg.contains("Common index"),
-            "Expected batch contraction error, got: {}", err_msg
+            err_msg.contains("batch")
+                || err_msg.contains("not yet implemented")
+                || err_msg.contains("Common index"),
+            "Expected batch contraction error, got: {}",
+            err_msg
         );
     }
 }
@@ -456,7 +468,7 @@ fn test_tensordot_common_index_not_in_pairs() {
 fn test_tensordot_common_index_in_pairs_ok() {
     // Test that having a common index that IS in the contraction pairs works fine
     let i = Index::new_dyn(2);
-    let j = Index::new_dyn(3);  // This is a common index, but we will contract it
+    let j = Index::new_dyn(3); // This is a common index, but we will contract it
     let k = Index::new_dyn(4);
 
     // Create tensor A[i, j]
@@ -477,4 +489,3 @@ fn test_tensordot_common_index_in_pairs_ok() {
     let result = result.unwrap();
     assert_eq!(result.dims, vec![2, 4]);
 }
-

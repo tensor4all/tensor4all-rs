@@ -291,7 +291,11 @@ mod tests {
 
     #[test]
     fn test_factorize_algorithm_roundtrip() {
-        for alg in [FactorizeAlgorithm::SVD, FactorizeAlgorithm::LU, FactorizeAlgorithm::CI] {
+        for alg in [
+            FactorizeAlgorithm::SVD,
+            FactorizeAlgorithm::LU,
+            FactorizeAlgorithm::CI,
+        ] {
             let i = alg.to_i32();
             let recovered = FactorizeAlgorithm::from_i32(i).unwrap();
             assert_eq!(alg, recovered);
@@ -327,11 +331,7 @@ mod tests {
 
     #[test]
     fn test_canonical_form_roundtrip() {
-        for form in [
-            CanonicalForm::Unitary,
-            CanonicalForm::LU,
-            CanonicalForm::CI,
-        ] {
+        for form in [CanonicalForm::Unitary, CanonicalForm::LU, CanonicalForm::CI] {
             let i = form.to_i32();
             let recovered = CanonicalForm::from_i32(i).unwrap();
             assert_eq!(form, recovered);

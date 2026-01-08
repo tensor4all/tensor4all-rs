@@ -60,17 +60,11 @@ impl<V: Clone> InnerCache<V> {
     }
 
     fn flat_index_u64(idx: &[usize], coeffs: &[u64]) -> u64 {
-        idx.iter()
-            .zip(coeffs)
-            .map(|(&i, &c)| c * i as u64)
-            .sum()
+        idx.iter().zip(coeffs).map(|(&i, &c)| c * i as u64).sum()
     }
 
     fn flat_index_u128(idx: &[usize], coeffs: &[u128]) -> u128 {
-        idx.iter()
-            .zip(coeffs)
-            .map(|(&i, &c)| c * i as u128)
-            .sum()
+        idx.iter().zip(coeffs).map(|(&i, &c)| c * i as u128).sum()
     }
 
     fn get(&self, idx: &[usize]) -> Option<&V> {

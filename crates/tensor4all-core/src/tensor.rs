@@ -1,12 +1,14 @@
-use std::sync::Arc;
-use std::collections::HashSet;
-use std::ops::Mul;
-use num_complex::Complex64;
 use crate::index::{Index, NoSymmSpace, Symmetry};
-use crate::index_ops::{common_inds, check_unique_indices};
-use crate::storage::{AnyScalar, Storage, StorageScalar, SumFromStorage, contract_storage, storage_to_dtensor};
+use crate::index_ops::{check_unique_indices, common_inds};
+use crate::storage::{
+    contract_storage, storage_to_dtensor, AnyScalar, Storage, StorageScalar, SumFromStorage,
+};
 use anyhow::Result;
 use mdarray::DTensor;
+use num_complex::Complex64;
+use std::collections::HashSet;
+use std::ops::Mul;
+use std::sync::Arc;
 
 /// Compute the permutation array from original indices to new indices.
 ///
@@ -61,7 +63,7 @@ where
             .iter()
             .position(|old_idx| old_idx.id == new_idx.id)
             .expect("new_indices must be a permutation of original_indices");
-        
+
         if used.contains(&pos) {
             panic!("duplicate index in new_indices");
         }
@@ -90,7 +92,7 @@ pub trait TensorType {
 pub trait TensorAccess: TensorType {
     /// Get a reference to the indices.
     fn indices(&self) -> &[Index<Self::Id, Self::Symm>];
-    
+
     /// Get a reference to the storage.
     fn storage(&self) -> &Storage;
 }
@@ -119,7 +121,7 @@ where
     fn indices(&self) -> &[Index<Self::Id, Self::Symm>] {
         &self.indices
     }
-    
+
     fn storage(&self) -> &Storage {
         &self.storage
     }
@@ -142,10 +144,11 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
             dims.len(),
             "indices and dims must have the same length"
         );
-        
+
         // Check for duplicate indices
-        check_unique_indices(&indices).expect("Tensor indices must all be unique (no duplicate IDs)");
-        
+        check_unique_indices(&indices)
+            .expect("Tensor indices must all be unique (no duplicate IDs)");
+
         // Validate DiagTensor: all indices must have the same dimension
         if storage.as_ref().is_diag() {
             let first_dim = dims[0];
@@ -157,7 +160,7 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
                 );
             }
         }
-        
+
         Self {
             indices,
             dims,
@@ -275,10 +278,7 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
         let perm = compute_permutation_from_indices(&self.indices, new_indices);
 
         // Compute new dims from new indices
-        let new_dims: Vec<usize> = new_indices
-            .iter()
-            .map(|idx| idx.size())
-            .collect();
+        let new_dims: Vec<usize> = new_indices.iter().map(|idx| idx.size()).collect();
 
         // Permute storage data using the computed permutation
         let new_storage = Arc::new(self.storage.permute_storage(&self.dims, &perm));
@@ -335,14 +335,9 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
         );
 
         // Permute indices and dims
-        let new_indices: Vec<Index<Id, Symm>> = perm
-            .iter()
-            .map(|&i| self.indices[i].clone())
-            .collect();
-        let new_dims: Vec<usize> = perm
-            .iter()
-            .map(|&i| self.dims[i])
-            .collect();
+        let new_indices: Vec<Index<Id, Symm>> =
+            perm.iter().map(|&i| self.indices[i].clone()).collect();
+        let new_dims: Vec<usize> = perm.iter().map(|&i| self.dims[i]).collect();
 
         // Permute storage data
         let new_storage = Arc::new(self.storage.permute_storage(&self.dims, perm));
@@ -415,14 +410,16 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
 
         for common_idx in &common {
             // Find position in self
-            let pos_a = self.indices
+            let pos_a = self
+                .indices
                 .iter()
                 .position(|idx| idx.id == common_idx.id)
                 .expect("common index must be in self");
             axes_a.push(pos_a);
 
             // Find position in other
-            let pos_b = other.indices
+            let pos_b = other
+                .indices
                 .iter()
                 .position(|idx| idx.id == common_idx.id)
                 .expect("common index must be in other");
@@ -430,11 +427,9 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
 
             // Verify dimensions match
             assert_eq!(
-                self.dims[pos_a],
-                other.dims[pos_b],
+                self.dims[pos_a], other.dims[pos_b],
                 "Common index dimension mismatch: {} != {}",
-                self.dims[pos_a],
-                other.dims[pos_b]
+                self.dims[pos_a], other.dims[pos_b]
             );
         }
 
@@ -572,17 +567,27 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
 
         for (idx_a, idx_b) in pairs {
             // Find position in self
-            let pos_a = self.indices
+            let pos_a = self
+                .indices
                 .iter()
                 .position(|idx| idx.id == idx_a.id)
-                .ok_or_else(|| anyhow::anyhow!("Index with id matching specified index not found in self tensor"))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Index with id matching specified index not found in self tensor"
+                    )
+                })
                 .context("tensordot: index from self not found")?;
 
             // Find position in other
-            let pos_b = other.indices
+            let pos_b = other
+                .indices
                 .iter()
                 .position(|idx| idx.id == idx_b.id)
-                .ok_or_else(|| anyhow::anyhow!("Index with id matching specified index not found in other tensor"))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Index with id matching specified index not found in other tensor"
+                    )
+                })
                 .context("tensordot: index from other not found")?;
 
             // Verify dimensions match
@@ -599,20 +604,14 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
 
             // Check for duplicate axes in self
             if axes_a.contains(&pos_a) {
-                return Err(anyhow::anyhow!(
-                    "Duplicate axis {} in self tensor",
-                    pos_a
-                ))
-                .context("tensordot: each axis can only be contracted once");
+                return Err(anyhow::anyhow!("Duplicate axis {} in self tensor", pos_a))
+                    .context("tensordot: each axis can only be contracted once");
             }
 
             // Check for duplicate axes in other
             if axes_b.contains(&pos_b) {
-                return Err(anyhow::anyhow!(
-                    "Duplicate axis {} in other tensor",
-                    pos_b
-                ))
-                .context("tensordot: each axis can only be contracted once");
+                return Err(anyhow::anyhow!("Duplicate axis {} in other tensor", pos_b))
+                    .context("tensordot: each axis can only be contracted once");
             }
 
             axes_a.push(pos_a);
@@ -701,8 +700,8 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
         Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
         Symm: Clone + Symmetry,
     {
-        use anyhow::Context;
         use crate::storage::contract_storage;
+        use anyhow::Context;
 
         // Check for common indices - outer product should have none
         let common = common_inds(&self.indices, &other.indices);
@@ -727,10 +726,10 @@ impl<Id, Symm> TensorDynLen<Id, Symm> {
         let result_storage = Arc::new(contract_storage(
             &self.storage,
             &self.dims,
-            &[],  // No axes to contract from self
+            &[], // No axes to contract from self
             &other.storage,
             &other.dims,
-            &[],  // No axes to contract from other
+            &[], // No axes to contract from other
             &result_dims,
         ));
 
@@ -773,9 +772,9 @@ where
     pub fn random_f64<R: rand::Rng>(rng: &mut R, indices: Vec<Index<Id, Symm>>) -> Self {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
         let total_size: usize = dims.iter().product();
-        let storage = Arc::new(Storage::DenseF64(
-            crate::storage::DenseStorageF64::random(rng, total_size)
-        ));
+        let storage = Arc::new(Storage::DenseF64(crate::storage::DenseStorageF64::random(
+            rng, total_size,
+        )));
         Self::new(indices, dims, storage)
     }
 
@@ -803,9 +802,9 @@ where
     pub fn random_c64<R: rand::Rng>(rng: &mut R, indices: Vec<Index<Id, Symm>>) -> Self {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
         let total_size: usize = dims.iter().product();
-        let storage = Arc::new(Storage::DenseC64(
-            crate::storage::DenseStorageC64::random(rng, total_size)
-        ));
+        let storage = Arc::new(Storage::DenseC64(crate::storage::DenseStorageC64::random(
+            rng, total_size,
+        )));
         Self::new(indices, dims, storage)
     }
 }
@@ -895,7 +894,6 @@ where
     }
 }
 
-
 /// Check if a tensor is a DiagTensor (has Diag storage).
 pub fn is_diag_tensor<Id, Symm>(tensor: &TensorDynLen<Id, Symm>) -> bool {
     tensor.storage.as_ref().is_diag()
@@ -965,7 +963,9 @@ where
         }
 
         // Check if we need to permute other to match self's index order
-        let needs_permute = self.indices.iter()
+        let needs_permute = self
+            .indices
+            .iter()
             .zip(other.indices.iter())
             .any(|(a, b)| a.id != b.id);
 
@@ -988,7 +988,9 @@ where
         }
 
         // Add storages using try_add (returns Result instead of panicking)
-        let result_storage = self.storage.as_ref()
+        let result_storage = self
+            .storage
+            .as_ref()
             .try_add(other_aligned.storage.as_ref())
             .map_err(|e| anyhow::anyhow!("Storage addition failed: {}", e))?;
 
@@ -1115,7 +1117,11 @@ where
     /// assert_eq!(replaced.indices[0].id, new_i.id);
     /// assert_eq!(replaced.indices[1].id, new_j.id);
     /// ```
-    pub fn replaceinds(&self, old_indices: &[Index<Id, Symm>], new_indices: &[Index<Id, Symm>]) -> Self {
+    pub fn replaceinds(
+        &self,
+        old_indices: &[Index<Id, Symm>],
+        new_indices: &[Index<Id, Symm>],
+    ) -> Self {
         assert_eq!(
             old_indices.len(),
             new_indices.len(),
@@ -1236,7 +1242,7 @@ where
         // ||T||² = Σ T_ijk... * conj(T_ijk...) = Σ |T_ijk...|²
         let conj = self.conj();
         let scalar = self.contract_einsum(&conj);
-        scalar.sum().real()  // Result is always real for ||T||²
+        scalar.sum().real() // Result is always real for ||T||²
     }
 
     /// Compute the Frobenius norm of the tensor: ||T|| = sqrt(Σ|T_ijk...|²)
@@ -1308,7 +1314,9 @@ where
             dims: other.dims.clone(),
             storage: std::sync::Arc::new(neg_other_storage),
         };
-        let diff = self.add(&neg_other).expect("distance: tensors must have same indices");
+        let diff = self
+            .add(&neg_other)
+            .expect("distance: tensors must have same indices");
         let norm_diff = diff.norm();
 
         if norm_self > 0.0 {
@@ -1351,7 +1359,7 @@ where
 {
     let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
     let first_dim = dims[0];
-    
+
     // Validate all indices have same dimension
     for (i, &dim) in dims.iter().enumerate() {
         assert_eq!(
@@ -1360,7 +1368,7 @@ where
             i, dim, first_dim
         );
     }
-    
+
     assert_eq!(
         diag_data.len(),
         first_dim,
@@ -1368,7 +1376,7 @@ where
         diag_data.len(),
         first_dim
     );
-    
+
     let storage = Arc::new(Storage::new_diag_f64(diag_data));
     TensorDynLen::new(indices, dims, storage)
 }
@@ -1384,7 +1392,7 @@ where
 {
     let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
     let first_dim = dims[0];
-    
+
     // Validate all indices have same dimension
     for (i, &dim) in dims.iter().enumerate() {
         assert_eq!(
@@ -1393,7 +1401,7 @@ where
             i, dim, first_dim
         );
     }
-    
+
     assert_eq!(
         diag_data.len(),
         first_dim,
@@ -1401,11 +1409,10 @@ where
         diag_data.len(),
         first_dim
     );
-    
+
     let storage = Arc::new(Storage::new_diag_c64(diag_data));
     TensorDynLen::new(indices, dims, storage)
 }
-
 
 /// Unfold a tensor into a matrix by splitting indices into left and right groups.
 ///
@@ -1448,12 +1455,12 @@ where
     T: StorageScalar,
 {
     let rank = t.dims.len();
-    
+
     // Validate rank
     anyhow::ensure!(rank >= 2, "Tensor must have rank >= 2, got rank {}", rank);
 
     let left_len = left_inds.len();
-    
+
     // Validate split: must be a proper subset
     anyhow::ensure!(
         left_len > 0 && left_len < rank,
@@ -1465,7 +1472,7 @@ where
     // Validate that all left_inds are in the tensor and there are no duplicates
     let tensor_id_set: HashSet<_> = t.indices.iter().map(|idx| &idx.id).collect();
     let mut left_id_set = HashSet::new();
-    
+
     for left_idx in left_inds {
         anyhow::ensure!(
             tensor_id_set.contains(&left_idx.id),
@@ -1510,4 +1517,3 @@ where
         right_inds,
     ))
 }
-

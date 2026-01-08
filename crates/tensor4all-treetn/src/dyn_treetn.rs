@@ -31,8 +31,8 @@
 
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
 use std::collections::HashSet;
-use std::hash::Hash;
 use std::fmt::Debug;
+use std::hash::Hash;
 
 use std::collections::HashMap;
 use tensor4all_core::index::{DynId, Index, NoSymmSpace, TagSet};
@@ -139,18 +139,22 @@ where
         T: TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = TagSet> + 'static,
     {
         // Get external indices before boxing
-        let external_indices: HashSet<DynIndex> = tensor_like.external_indices().into_iter().collect();
+        let external_indices: HashSet<DynIndex> =
+            tensor_like.external_indices().into_iter().collect();
 
         // Box the tensor_like object
         let boxed: BoxedTensorLike = Box::new(tensor_like);
 
         // Add to graph
-        let node_idx = self.graph.add_node(node_name.clone(), boxed)
+        let node_idx = self
+            .graph
+            .add_node(node_name.clone(), boxed)
             .map_err(|e: String| anyhow::anyhow!(e))
             .context("Failed to add node to graph")?;
 
         // Add to site_index_network
-        self.site_index_network.add_node(node_name, external_indices)
+        self.site_index_network
+            .add_node(node_name, external_indices)
             .map_err(|e| anyhow::anyhow!("Failed to add node to site_index_network: {}", e))?;
 
         Ok(node_idx)
@@ -172,26 +176,34 @@ where
         let external_indices: HashSet<DynIndex> = boxed.external_indices().into_iter().collect();
 
         // Add to graph
-        let node_idx = self.graph.add_node(node_name.clone(), boxed)
+        let node_idx = self
+            .graph
+            .add_node(node_name.clone(), boxed)
             .map_err(|e: String| anyhow::anyhow!(e))
             .context("Failed to add node to graph")?;
 
         // Add to site_index_network
-        self.site_index_network.add_node(node_name, external_indices)
+        self.site_index_network
+            .add_node(node_name, external_indices)
             .map_err(|e| anyhow::anyhow!("Failed to add node to site_index_network: {}", e))?;
 
         Ok(node_idx)
     }
 
     /// Get a reference to a node's TensorLike object by NodeIndex.
-    pub fn node(&self, node: NodeIndex) -> Option<&dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = TagSet>> {
+    pub fn node(
+        &self,
+        node: NodeIndex,
+    ) -> Option<&dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = TagSet>> {
         self.graph.graph().node_weight(node).map(|b| b.as_ref())
     }
 
     /// Get a reference to a node's TensorLike object by node name.
-    pub fn node_by_name(&self, name: &V) -> Option<&dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = TagSet>> {
-        self.graph.node_index(name)
-            .and_then(|idx| self.node(idx))
+    pub fn node_by_name(
+        &self,
+        name: &V,
+    ) -> Option<&dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Tags = TagSet>> {
+        self.graph.node_index(name).and_then(|idx| self.node(idx))
     }
 
     /// Connect two nodes with a bond.
@@ -220,9 +232,15 @@ where
         }
 
         // Validate that indices exist in respective nodes' external indices
-        let node_a_obj = self.graph.graph().node_weight(node_a)
+        let node_a_obj = self
+            .graph
+            .graph()
+            .node_weight(node_a)
             .ok_or_else(|| anyhow::anyhow!("Node A not found"))?;
-        let node_b_obj = self.graph.graph().node_weight(node_b)
+        let node_b_obj = self
+            .graph
+            .graph()
+            .node_weight(node_b)
             .ok_or_else(|| anyhow::anyhow!("Node B not found"))?;
 
         let ext_a = node_a_obj.external_indices();
@@ -232,19 +250,27 @@ where
         let has_index_b = ext_b.iter().any(|idx| index_b.id == idx.id);
 
         if !has_index_a {
-            return Err(anyhow::anyhow!("Index not found in node A's external indices"))
-                .context("Failed to connect: index_a must be an external index of node A");
+            return Err(anyhow::anyhow!(
+                "Index not found in node A's external indices"
+            ))
+            .context("Failed to connect: index_a must be an external index of node A");
         }
         if !has_index_b {
-            return Err(anyhow::anyhow!("Index not found in node B's external indices"))
-                .context("Failed to connect: index_b must be an external index of node B");
+            return Err(anyhow::anyhow!(
+                "Index not found in node B's external indices"
+            ))
+            .context("Failed to connect: index_b must be an external index of node B");
         }
 
         // Get node names for site_index_network (before mutable borrow)
-        let node_name_a = self.graph.node_name(node_a)
+        let node_name_a = self
+            .graph
+            .node_name(node_a)
             .ok_or_else(|| anyhow::anyhow!("Node name for node_a not found"))?
             .clone();
-        let node_name_b = self.graph.node_name(node_b)
+        let node_name_b = self
+            .graph
+            .node_name(node_b)
             .ok_or_else(|| anyhow::anyhow!("Node name for node_b not found"))?
             .clone();
 
@@ -253,14 +279,18 @@ where
         if index_a.id != index_b.id {
             return Err(anyhow::anyhow!(
                 "In Einsum mode, indices must have the same ID: {:?} != {:?}",
-                index_a.id, index_b.id
-            )).context("Failed to connect: index mismatch");
+                index_a.id,
+                index_b.id
+            ))
+            .context("Failed to connect: index mismatch");
         }
         if index_a.size() != index_b.size() {
             return Err(anyhow::anyhow!(
                 "Dimension mismatch: {} != {}",
-                index_a.size(), index_b.size()
-            )).context("Failed to connect: dimension mismatch");
+                index_a.size(),
+                index_b.size()
+            ))
+            .context("Failed to connect: dimension mismatch");
         }
 
         // Store the bond index directly on the edge (converts to Index<DynId, NoSymmSpace> by dropping tags)
@@ -270,7 +300,8 @@ where
         let edge_idx = self.graph.graph_mut().add_edge(node_a, node_b, bond_index);
 
         // Add edge to site_index_network
-        self.site_index_network.add_edge(&node_name_a, &node_name_b)
+        self.site_index_network
+            .add_edge(&node_name_a, &node_name_b)
             .map_err(|e| anyhow::anyhow!("Failed to add edge to site_index_network: {}", e))?;
 
         // Update physical indices: remove connection indices from site space
@@ -306,7 +337,9 @@ where
 
     /// Get all node names in the network.
     pub fn node_names(&self) -> Vec<V> {
-        self.graph.graph().node_indices()
+        self.graph
+            .graph()
+            .node_indices()
             .filter_map(|idx| self.graph.node_name(idx).cloned())
             .collect()
     }
@@ -368,8 +401,12 @@ where
         let mut tensors: Vec<TensorDynLen<DynId, NoSymmSpace>> = Vec::new();
         for node in self.graph.graph().node_indices() {
             let obj = self.graph.graph().node_weight(node).unwrap();
-            let tensor = obj.to_tensor()
-                .with_context(|| format!("Failed to convert node {:?} to tensor", self.graph.node_name(node)))?;
+            let tensor = obj.to_tensor().with_context(|| {
+                format!(
+                    "Failed to convert node {:?} to tensor",
+                    self.graph.node_name(node)
+                )
+            })?;
             tensors.push(tensor);
         }
 
@@ -444,9 +481,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tensor4all_core::storage::DenseStorageF64;
     use tensor4all_core::Storage;
-    use std::sync::Arc;
 
     fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen<DynId, NoSymmSpace> {
         let total_size: usize = indices.iter().map(|idx| idx.size()).product();
@@ -593,7 +630,8 @@ mod tests {
         let sub_tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
             vec![sub_tensor],
             vec!["sub_node".to_string()],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Add the TreeTN as a node in DynTreeTN - heterogeneous!
         dyn_tn.add_node("sub_network".to_string(), sub_tn).unwrap();
@@ -630,14 +668,17 @@ mod tests {
         let inner_tn = TreeTN::<DynId, NoSymmSpace, String>::from_tensors(
             vec![tensor_a, tensor_b],
             vec!["A".to_string(), "B".to_string()],
-        ).unwrap();
+        )
+        .unwrap();
 
         // The inner TreeTN has external indices i and j (bond is internal)
         assert_eq!(inner_tn.num_external_indices(), 2);
 
         // Add to DynTreeTN
         let mut dyn_tn = DynTreeTN::<String>::new();
-        dyn_tn.add_node("inner_network".to_string(), inner_tn).unwrap();
+        dyn_tn
+            .add_node("inner_network".to_string(), inner_tn)
+            .unwrap();
 
         // The DynTreeTN node should have the same external indices
         let node = dyn_tn.node_by_name(&"inner_network".to_string()).unwrap();

@@ -31,5 +31,5 @@ matrixci = { path = "../matrixci" }
 tensor4all-core = { path = "../tensor4all-core" }
 
 [dev-dependencies]
-approx = "0.5"
-rand_chacha = "0.3"
+approx.workspace = true
+rand_chacha.workspace = true

@@ -32,7 +32,9 @@ where
         // 3. Flatten into a single Vec
 
         // Get all node names and sort them
-        let mut node_names: Vec<_> = self.site_index_network.node_names()
+        let mut node_names: Vec<_> = self
+            .site_index_network
+            .node_names()
             .into_iter()
             .cloned()
             .collect();
@@ -43,12 +45,15 @@ where
         for node_name in node_names {
             if let Some(site_space) = self.site_index_network.site_space(&node_name) {
                 // Collect and sort indices by id
-                let mut indices: Vec<_> = site_space.iter()
-                    .map(|idx| Index::new_with_tags(
-                        idx.id.clone(),
-                        idx.symm.clone(),
-                        tensor4all_core::DefaultTagSet::default(),
-                    ))
+                let mut indices: Vec<_> = site_space
+                    .iter()
+                    .map(|idx| {
+                        Index::new_with_tags(
+                            idx.id.clone(),
+                            idx.symm.clone(),
+                            tensor4all_core::DefaultTagSet::default(),
+                        )
+                    })
                     .collect();
                 indices.sort_by(|a, b| a.id.cmp(&b.id));
                 result.extend(indices);
@@ -60,7 +65,8 @@ where
 
     fn num_external_indices(&self) -> usize {
         // Sum up all site indices across all nodes
-        self.site_index_network.node_names()
+        self.site_index_network
+            .node_names()
             .iter()
             .filter_map(|name| self.site_index_network.site_space(name))
             .map(|site_space| site_space.len())

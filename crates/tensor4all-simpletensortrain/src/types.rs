@@ -115,12 +115,21 @@ impl<T: Clone + Default> Tensor3Ops<T> for Tensor3<T> {
 }
 
 /// Create a zero-filled Tensor3
-pub fn tensor3_zeros<T: Clone + Default>(left_dim: usize, site_dim: usize, right_dim: usize) -> Tensor3<T> {
+pub fn tensor3_zeros<T: Clone + Default>(
+    left_dim: usize,
+    site_dim: usize,
+    right_dim: usize,
+) -> Tensor3<T> {
     Tensor3::from_elem([left_dim, site_dim, right_dim], T::default())
 }
 
 /// Create a Tensor3 from flat data (row-major order)
-pub fn tensor3_from_data<T: Clone>(data: Vec<T>, left_dim: usize, site_dim: usize, right_dim: usize) -> Tensor3<T> {
+pub fn tensor3_from_data<T: Clone>(
+    data: Vec<T>,
+    left_dim: usize,
+    site_dim: usize,
+    right_dim: usize,
+) -> Tensor3<T> {
     assert_eq!(data.len(), left_dim * site_dim * right_dim);
     Tensor3::from_fn([left_dim, site_dim, right_dim], |idx| {
         let l = idx[0];

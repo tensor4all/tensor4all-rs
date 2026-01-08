@@ -108,10 +108,7 @@ where
     }
 
     /// Get the site space by NodeIndex.
-    pub fn site_space_by_index(
-        &self,
-        node: NodeIndex,
-    ) -> Option<&HashSet<Index<Id, Symm, Tags>>> {
+    pub fn site_space_by_index(&self, node: NodeIndex) -> Option<&HashSet<Index<Id, Symm, Tags>>> {
         let name = self.topology.node_name(node)?;
         self.site_spaces.get(name)
     }
@@ -260,7 +257,10 @@ where
     /// `(from_name, to_name)` pairs instead of `(NodeIndex, NodeIndex)`.
     ///
     /// See [`NodeNameNetwork::edges_to_canonicalize_by_names`] for details.
-    pub fn edges_to_canonicalize_by_names(&self, target: &NodeName) -> Option<Vec<(NodeName, NodeName)>> {
+    pub fn edges_to_canonicalize_by_names(
+        &self,
+        target: &NodeName,
+    ) -> Option<Vec<(NodeName, NodeName)>> {
         self.topology.edges_to_canonicalize_by_names(target)
     }
 
@@ -281,7 +281,8 @@ where
         &self,
         target_region: &HashSet<NodeName>,
     ) -> Option<Vec<(NodeName, NodeName)>> {
-        self.topology.edges_to_canonicalize_to_region_by_names(target_region)
+        self.topology
+            .edges_to_canonicalize_to_region_by_names(target_region)
     }
 
     // =========================================================================
@@ -310,10 +311,7 @@ where
     /// site index structure as the original state). For more complex operators
     /// with different input/output dimensions, a more sophisticated approach
     /// would be needed.
-    pub fn apply_operator_topology(
-        &self,
-        operator: &Self,
-    ) -> Result<Self, String> {
+    pub fn apply_operator_topology(&self, operator: &Self) -> Result<Self, String> {
         // Check topology match
         if !self.topology.same_topology(&operator.topology) {
             return Err(format!(
@@ -541,7 +539,9 @@ mod tests {
         let op_site2: HashSet<_> = [Index::new(102u128, NoSymmSpace::new(3))].into();
         operator.add_node("A".to_string(), op_site1).unwrap();
         operator.add_node("B".to_string(), op_site2).unwrap();
-        operator.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+        operator
+            .add_edge(&"A".to_string(), &"B".to_string())
+            .unwrap();
 
         // Should succeed
         let result = state.apply_operator_topology(&operator);
@@ -550,9 +550,15 @@ mod tests {
         // Create operator with different topology
         let mut bad_operator: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
             SiteIndexNetwork::new();
-        bad_operator.add_node("A".to_string(), HashSet::new()).unwrap();
-        bad_operator.add_node("C".to_string(), HashSet::new()).unwrap(); // Different node name
-        bad_operator.add_edge(&"A".to_string(), &"C".to_string()).unwrap();
+        bad_operator
+            .add_node("A".to_string(), HashSet::new())
+            .unwrap();
+        bad_operator
+            .add_node("C".to_string(), HashSet::new())
+            .unwrap(); // Different node name
+        bad_operator
+            .add_edge(&"A".to_string(), &"C".to_string())
+            .unwrap();
 
         // Should fail
         let result = state.apply_operator_topology(&bad_operator);

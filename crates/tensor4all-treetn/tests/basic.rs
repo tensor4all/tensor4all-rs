@@ -3,15 +3,15 @@
 //! In Einsum mode, tensors that share a bond must use the SAME Index (same ID).
 //! When connecting node_a to node_b, both tensors must contain the same bond index.
 
-use tensor4all_treetn::{TreeTN, TreeTopology, TruncationOptions, CanonicalizationOptions};
-use tensor4all_core::index::{DefaultIndex as Index, DynId};
-use tensor4all_core::{TensorDynLen, Storage};
-use tensor4all_core::NoSymmSpace;
-use tensor4all_core::storage::{DenseStorageF64, DenseStorageC64};
-use std::sync::Arc;
-use std::collections::HashMap;
-use petgraph::graph::NodeIndex;
 use num_complex::Complex64;
+use petgraph::graph::NodeIndex;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tensor4all_core::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64};
+use tensor4all_core::NoSymmSpace;
+use tensor4all_core::{Storage, TensorDynLen};
+use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TreeTopology, TruncationOptions};
 
 // ============================================================================
 // Helper Functions
@@ -21,7 +21,8 @@ use num_complex::Complex64;
 /// Returns (tn, node1, node2, edge, physical1, bond, physical2)
 fn create_two_node_treetn() -> (
     TreeTN<DynId, NoSymmSpace, NodeIndex>,
-    NodeIndex, NodeIndex,
+    NodeIndex,
+    NodeIndex,
     petgraph::graph::EdgeIndex,
     Index<DynId>,
     Index<DynId>,
@@ -55,8 +56,11 @@ fn create_two_node_treetn() -> (
 /// Create a 3-node chain: n1 -- n2 -- n3
 fn create_three_node_chain() -> (
     TreeTN<DynId, NoSymmSpace, NodeIndex>,
-    NodeIndex, NodeIndex, NodeIndex,
-    petgraph::graph::EdgeIndex, petgraph::graph::EdgeIndex,
+    NodeIndex,
+    NodeIndex,
+    NodeIndex,
+    petgraph::graph::EdgeIndex,
+    petgraph::graph::EdgeIndex,
     Index<DynId>, // bond12
     Index<DynId>, // bond23
 ) {
@@ -104,11 +108,7 @@ fn test_treetn_add_tensor() {
 
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let tensor = TensorDynLen::new(
-        vec![i, j],
-        vec![2, 3],
-        Arc::new(Storage::new_dense_f64(6)),
-    );
+    let tensor = TensorDynLen::new(vec![i, j], vec![2, 3], Arc::new(Storage::new_dense_f64(6)));
 
     let node = tn.add_tensor_auto_name(tensor);
     assert_eq!(tn.node_count(), 1);
@@ -148,11 +148,7 @@ fn test_treetn_replace_tensor_nonexistent() {
 
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let tensor = TensorDynLen::new(
-        vec![i, j],
-        vec![2, 3],
-        Arc::new(Storage::new_dense_f64(6)),
-    );
+    let tensor = TensorDynLen::new(vec![i, j], vec![2, 3], Arc::new(Storage::new_dense_f64(6)));
 
     let invalid_node = NodeIndex::new(999);
     let result = tn.replace_tensor(invalid_node, tensor);
@@ -176,7 +172,9 @@ fn test_treetn_replace_tensor_missing_bond_index() {
     let result = tn.replace_tensor(node1, new_tensor);
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("missing") || err_msg.contains("index") || err_msg.contains("indices"));
+    assert!(
+        err_msg.contains("missing") || err_msg.contains("index") || err_msg.contains("indices")
+    );
 }
 
 #[test]
@@ -240,7 +238,8 @@ fn test_treetn_connect_id_mismatch() {
     let err_chain = format!("{:?}", err);
     assert!(
         err_chain.contains("ID") || err_chain.contains("Einsum") || err_chain.contains("match"),
-        "Error chain should mention ID mismatch: {}", err_chain
+        "Error chain should mention ID mismatch: {}",
+        err_chain
     );
 }
 
@@ -419,19 +418,11 @@ fn test_treetn_validate_tree_disconnected() {
 
     // Create two disconnected nodes
     let i1 = Index::new_dyn(2);
-    let tensor1 = TensorDynLen::new(
-        vec![i1],
-        vec![2],
-        Arc::new(Storage::new_dense_f64(2)),
-    );
+    let tensor1 = TensorDynLen::new(vec![i1], vec![2], Arc::new(Storage::new_dense_f64(2)));
     let _node1 = tn.add_tensor_auto_name(tensor1);
 
     let i2 = Index::new_dyn(3);
-    let tensor2 = TensorDynLen::new(
-        vec![i2],
-        vec![3],
-        Arc::new(Storage::new_dense_f64(3)),
-    );
+    let tensor2 = TensorDynLen::new(vec![i2], vec![3], Arc::new(Storage::new_dense_f64(3)));
     let _node2 = tn.add_tensor_auto_name(tensor2);
 
     // Should fail: not connected
@@ -460,11 +451,7 @@ fn test_set_canonical_center() {
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
 
     let i = Index::new_dyn(2);
-    let tensor = TensorDynLen::new(
-        vec![i],
-        vec![2],
-        Arc::new(Storage::new_dense_f64(2)),
-    );
+    let tensor = TensorDynLen::new(vec![i], vec![2], Arc::new(Storage::new_dense_f64(2)));
     let node = tn.add_tensor_auto_name(tensor);
 
     assert!(!tn.is_canonicalized());
@@ -489,11 +476,7 @@ fn test_clear_canonical_center() {
     let mut tn = TreeTN::<DynId, NoSymmSpace, NodeIndex>::new();
 
     let i = Index::new_dyn(2);
-    let tensor = TensorDynLen::new(
-        vec![i],
-        vec![2],
-        Arc::new(Storage::new_dense_f64(2)),
-    );
+    let tensor = TensorDynLen::new(vec![i], vec![2], Arc::new(Storage::new_dense_f64(2)));
     let node = tn.add_tensor_auto_name(tensor);
 
     tn.set_canonical_center(vec![node]).unwrap();
@@ -583,10 +566,9 @@ fn test_canonicalize_simple() {
     tn.connect(n1, &bond, n2, &bond).unwrap();
 
     // Canonicalize towards n2
-    let tn_canon = tn.canonicalize(
-        std::iter::once(n2),
-        CanonicalizationOptions::default(),
-    ).unwrap();
+    let tn_canon = tn
+        .canonicalize(std::iter::once(n2), CanonicalizationOptions::default())
+        .unwrap();
 
     assert!(tn_canon.is_canonicalized());
     assert!(tn_canon.canonical_center().contains(&n2));
@@ -804,10 +786,12 @@ fn test_truncate_simple() {
     assert_eq!(tn.bond_index(edge).unwrap().size(), 10);
 
     // Truncate with max_rank = 3
-    let truncated = tn.truncate(
-        std::iter::once(n2),
-        TruncationOptions::default().with_max_rank(3),
-    ).unwrap();
+    let truncated = tn
+        .truncate(
+            std::iter::once(n2),
+            TruncationOptions::default().with_max_rank(3),
+        )
+        .unwrap();
 
     // Bond should now be at most 3
     let new_edge = truncated.edges_for_node(n1)[0].0;
@@ -847,7 +831,8 @@ fn test_truncate_mut_simple() {
     tn.truncate_mut(
         std::iter::once(n2),
         TruncationOptions::default().with_max_rank(4),
-    ).unwrap();
+    )
+    .unwrap();
 
     // Bond should now be at most 4
     let new_edge = tn.edges_for_node(n1)[0].0;
@@ -863,10 +848,12 @@ fn test_truncate_three_node_chain() {
     assert_eq!(tn.bond_index(e23).unwrap().size(), 4);
 
     // Truncate towards center (n1) with max_rank = 2
-    let truncated = tn.truncate(
-        std::iter::once(n1),
-        TruncationOptions::default().with_max_rank(2),
-    ).unwrap();
+    let truncated = tn
+        .truncate(
+            std::iter::once(n1),
+            TruncationOptions::default().with_max_rank(2),
+        )
+        .unwrap();
 
     // All bonds should now be at most 2
     for (edge, _) in truncated.edges_for_node(n1) {
@@ -910,16 +897,22 @@ fn test_truncate_with_rtol() {
     tn.connect(n1, &bond, n2, &bond).unwrap();
 
     // Truncate with rtol - should reduce rank significantly for low-rank data
-    let truncated = tn.truncate(
-        std::iter::once(n2),
-        TruncationOptions::default().with_rtol(1e-10),
-    ).unwrap();
+    let truncated = tn
+        .truncate(
+            std::iter::once(n2),
+            TruncationOptions::default().with_rtol(1e-10),
+        )
+        .unwrap();
 
     // Bond dimension should be reduced
     let new_edge = truncated.edges_for_node(n1)[0].0;
     let new_bond_size = truncated.bond_index(new_edge).unwrap().size();
     // The effective rank should be 1 or 2
-    assert!(new_bond_size <= 2, "Expected bond_size <= 2, got {}", new_bond_size);
+    assert!(
+        new_bond_size <= 2,
+        "Expected bond_size <= 2, got {}",
+        new_bond_size
+    );
 }
 
 // ============================================================================
@@ -945,7 +938,10 @@ fn test_sim_internal_inds() {
     let new_edge = tn_sim.edges_for_node(node1)[0].0;
     let new_bond = tn_sim.bond_index(new_edge).unwrap();
     assert_eq!(new_bond.size(), original_bond_size);
-    assert_ne!(new_bond.id, original_bond_id, "Bond ID should be different after sim_internal_inds");
+    assert_ne!(
+        new_bond.id, original_bond_id,
+        "Bond ID should be different after sim_internal_inds"
+    );
 
     // Check that physical indices are unchanged
     let tensor1 = tn_sim.tensor(node1).unwrap();
@@ -965,8 +961,14 @@ fn test_sim_internal_inds() {
 
     // Original tensors should still have old bond
     let orig_tensor1 = tn.tensor(node1).unwrap();
-    let has_old_bond = orig_tensor1.indices.iter().any(|idx| idx.id == original_bond_id);
-    assert!(has_old_bond, "Original tensor should still have original bond");
+    let has_old_bond = orig_tensor1
+        .indices
+        .iter()
+        .any(|idx| idx.id == original_bond_id);
+    assert!(
+        has_old_bond,
+        "Original tensor should still have original bond"
+    );
 }
 
 // ============================================================================
@@ -986,25 +988,37 @@ fn test_sim_internal_inds() {
 
 #[test]
 fn test_contract_zipup_basic_api() {
-    use tensor4all_treetn::{SiteIndexNetwork, random_treetn_f64, LinkSpace};
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
     use std::collections::HashSet;
+    use tensor4all_treetn::{random_treetn_f64, LinkSpace, SiteIndexNetwork};
 
     // Create two networks with the same topology but different site indices
     let mut site_network1 = SiteIndexNetwork::<String, DynId>::new();
     let site_a1 = Index::new_dyn(2);
     let site_b1 = Index::new_dyn(3);
-    site_network1.add_node("A".to_string(), HashSet::from([site_a1.clone()])).unwrap();
-    site_network1.add_node("B".to_string(), HashSet::from([site_b1.clone()])).unwrap();
-    site_network1.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    site_network1
+        .add_node("A".to_string(), HashSet::from([site_a1.clone()]))
+        .unwrap();
+    site_network1
+        .add_node("B".to_string(), HashSet::from([site_b1.clone()]))
+        .unwrap();
+    site_network1
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
 
     let mut site_network2 = SiteIndexNetwork::<String, DynId>::new();
     let site_a2 = Index::new_dyn(2);
     let site_b2 = Index::new_dyn(3);
-    site_network2.add_node("A".to_string(), HashSet::from([site_a2.clone()])).unwrap();
-    site_network2.add_node("B".to_string(), HashSet::from([site_b2.clone()])).unwrap();
-    site_network2.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    site_network2
+        .add_node("A".to_string(), HashSet::from([site_a2.clone()]))
+        .unwrap();
+    site_network2
+        .add_node("B".to_string(), HashSet::from([site_b2.clone()]))
+        .unwrap();
+    site_network2
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
 
     let mut rng1 = ChaCha8Rng::seed_from_u64(42);
     let mut rng2 = ChaCha8Rng::seed_from_u64(123);
@@ -1026,12 +1040,12 @@ fn test_contract_zipup_shared_site_indices() {
     use std::collections::HashSet;
 
     // Create shared site indices (same Index objects for both networks)
-    let site_a = Index::new_dyn(2);  // Physical index at node A
-    let site_b = Index::new_dyn(3);  // Physical index at node B
+    let site_a = Index::new_dyn(2); // Physical index at node A
+    let site_b = Index::new_dyn(3); // Physical index at node B
 
     // Create bond indices (different for each network)
-    let bond1 = Index::new_dyn(4);  // Bond for network 1
-    let bond2 = Index::new_dyn(4);  // Bond for network 2
+    let bond1 = Index::new_dyn(4); // Bond for network 1
+    let bond2 = Index::new_dyn(4); // Bond for network 2
 
     // Create tensor for node A in network 1: A1[site_a, bond1]
     let tensor_a1 = TensorDynLen::new(
@@ -1051,7 +1065,8 @@ fn test_contract_zipup_shared_site_indices() {
     let tn1: TreeTN<DynId, NoSymmSpace, String> = TreeTN::from_tensors(
         vec![tensor_a1, tensor_b1],
         vec!["A".to_string(), "B".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Create tensor for node A in network 2: A2[site_a, bond2]
     // Uses the SAME site_a index
@@ -1073,7 +1088,8 @@ fn test_contract_zipup_shared_site_indices() {
     let tn2: TreeTN<DynId, NoSymmSpace, String> = TreeTN::from_tensors(
         vec![tensor_a2, tensor_b2],
         vec!["A".to_string(), "B".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Verify same topology
     assert!(tn1.same_topology(&tn2));
@@ -1083,7 +1099,9 @@ fn test_contract_zipup_shared_site_indices() {
     // Contract with center at B
     // Since all site indices are contracted (inner product case),
     // all tensors collapse into the center node
-    let result = tn1.contract_zipup(&tn2, &"B".to_string(), None, None).unwrap();
+    let result = tn1
+        .contract_zipup(&tn2, &"B".to_string(), None, None)
+        .unwrap();
 
     // For inner product: all nodes get absorbed into center
     // Result should have 1 node (the center B) containing a scalar
@@ -1102,16 +1120,16 @@ fn test_contract_zipup_shared_site_indices() {
 fn test_contract_zipup_partial_contraction() {
     // Create indices
     // Shared site indices (will be contracted between tn1 and tn2)
-    let site_a = Index::new_dyn(2);  // Physical index at node A
-    let site_b = Index::new_dyn(3);  // Physical index at node B
+    let site_a = Index::new_dyn(2); // Physical index at node A
+    let site_b = Index::new_dyn(3); // Physical index at node B
 
     // External index (exists only in tn2, will remain in result)
-    let site_external_a = Index::new_dyn(2);  // External index at A (like MPO output)
-    let site_external_b = Index::new_dyn(3);  // External index at B (like MPO output)
+    let site_external_a = Index::new_dyn(2); // External index at A (like MPO output)
+    let site_external_b = Index::new_dyn(3); // External index at B (like MPO output)
 
     // Bond indices (different for each network, will be replaced by sim_internal_inds)
-    let bond1 = Index::new_dyn(4);  // Bond for network 1
-    let bond2 = Index::new_dyn(4);  // Bond for network 2
+    let bond1 = Index::new_dyn(4); // Bond for network 1
+    let bond2 = Index::new_dyn(4); // Bond for network 2
 
     // Network 1 (like bra <ψ|):
     // A1[site_a, bond1] -- B1[bond1, site_b]
@@ -1130,7 +1148,8 @@ fn test_contract_zipup_partial_contraction() {
     let tn1: TreeTN<DynId, NoSymmSpace, String> = TreeTN::from_tensors(
         vec![tensor_a1, tensor_b1],
         vec!["A".to_string(), "B".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Network 2 (like O|φ> with MPO indices):
     // A2[site_a, site_external_a, bond2] -- B2[bond2, site_b, site_external_b]
@@ -1150,13 +1169,16 @@ fn test_contract_zipup_partial_contraction() {
     let tn2: TreeTN<DynId, NoSymmSpace, String> = TreeTN::from_tensors(
         vec![tensor_a2, tensor_b2],
         vec!["A".to_string(), "B".to_string()],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Verify same topology
     assert!(tn1.same_topology(&tn2));
 
     // Contract with center at B
-    let result = tn1.contract_zipup(&tn2, &"B".to_string(), None, None).unwrap();
+    let result = tn1
+        .contract_zipup(&tn2, &"B".to_string(), None, None)
+        .unwrap();
 
     // Result should preserve structure because both nodes have external indices
     assert_eq!(result.node_count(), 2);
@@ -1165,22 +1187,28 @@ fn test_contract_zipup_partial_contraction() {
     // Check that node A exists and has the external index
     let node_a = result.node_index(&"A".to_string()).unwrap();
     let tensor_a = result.tensor(node_a).unwrap();
-    assert!(tensor_a.indices.iter().any(|idx| idx.id == site_external_a.id));
+    assert!(tensor_a
+        .indices
+        .iter()
+        .any(|idx| idx.id == site_external_a.id));
 
     // Check that node B exists and has the external index
     let node_b = result.node_index(&"B".to_string()).unwrap();
     let tensor_b = result.tensor(node_b).unwrap();
-    assert!(tensor_b.indices.iter().any(|idx| idx.id == site_external_b.id));
+    assert!(tensor_b
+        .indices
+        .iter()
+        .any(|idx| idx.id == site_external_b.id));
 }
 
 // ============================================================================
 // Helper function for comparing contract_zipup vs contract_naive
 // ============================================================================
 
-use tensor4all_treetn::{SiteIndexNetwork, random_treetn_f64, LinkSpace};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::collections::HashSet;
+use tensor4all_treetn::{random_treetn_f64, LinkSpace, SiteIndexNetwork};
 
 /// Helper to test contract_zipup vs contract_naive for a given topology.
 ///
@@ -1190,8 +1218,7 @@ use std::collections::HashSet;
 // ============================================================================
 // Contraction Method Testing Helpers
 // ============================================================================
-
-use tensor4all_treetn::{ContractionMethod, ContractionOptions, contract};
+use tensor4all_treetn::{contract, ContractionMethod, ContractionOptions};
 
 /// Generic comparison function for contraction methods vs naive
 /// # Arguments
@@ -1217,16 +1244,18 @@ fn compare_contract_vs_naive(
     let tn2 = random_treetn_f64(&mut rng2, site_network, link_space);
 
     // Contract using naive method (reference)
-    let naive_result = tn1.contract_naive(&tn2)
+    let naive_result = tn1
+        .contract_naive(&tn2)
         .expect("contract_naive should succeed");
 
     // Contract using the specified method via dispatcher
     let options = ContractionOptions::new(method);
-    let result = contract(&tn1, &tn2, &center.to_string(), options)
-        .expect("contract should succeed");
+    let result =
+        contract(&tn1, &tn2, &center.to_string(), options).expect("contract should succeed");
 
     // Convert result to tensor for comparison
-    let result_tensor = result.contract_to_tensor()
+    let result_tensor = result
+        .contract_to_tensor()
         .expect("contract_to_tensor should succeed");
 
     // Compare using distance
@@ -1234,7 +1263,10 @@ fn compare_contract_vs_naive(
     assert!(
         dist < rtol,
         "{:?} vs contract_naive distance too large: {} >= {} (center={})",
-        method, dist, rtol, center
+        method,
+        dist,
+        rtol,
+        center
     );
 }
 
@@ -1247,7 +1279,15 @@ fn compare_zipup_vs_naive(
     seed2: u64,
     rtol: f64,
 ) {
-    compare_contract_vs_naive(ContractionMethod::Zipup, site_network, link_space, center, seed1, seed2, rtol);
+    compare_contract_vs_naive(
+        ContractionMethod::Zipup,
+        site_network,
+        link_space,
+        center,
+        seed1,
+        seed2,
+        rtol,
+    );
 }
 
 /// Wrapper for fit vs naive
@@ -1259,7 +1299,15 @@ fn compare_fit_vs_naive(
     seed2: u64,
     rtol: f64,
 ) {
-    compare_contract_vs_naive(ContractionMethod::Fit, site_network, link_space, center, seed1, seed2, rtol);
+    compare_contract_vs_naive(
+        ContractionMethod::Fit,
+        site_network,
+        link_space,
+        center,
+        seed1,
+        seed2,
+        rtol,
+    );
 }
 
 // ============================================================================
@@ -1272,9 +1320,15 @@ fn test_zipup_vs_naive_2node_chain() {
     let mut site_network = SiteIndexNetwork::<String, DynId>::new();
     let site_a = Index::new_dyn(2);
     let site_b = Index::new_dyn(3);
-    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
-    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
-    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    site_network
+        .add_node("A".to_string(), HashSet::from([site_a]))
+        .unwrap();
+    site_network
+        .add_node("B".to_string(), HashSet::from([site_b]))
+        .unwrap();
+    site_network
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
 
     compare_zipup_vs_naive(&site_network, LinkSpace::uniform(4), "B", 42, 123, 1e-10);
 }
@@ -1286,11 +1340,21 @@ fn test_zipup_vs_naive_3node_chain() {
     let site_a = Index::new_dyn(2);
     let site_b = Index::new_dyn(2);
     let site_c = Index::new_dyn(2);
-    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
-    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
-    site_network.add_node("C".to_string(), HashSet::from([site_c])).unwrap();
-    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
-    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+    site_network
+        .add_node("A".to_string(), HashSet::from([site_a]))
+        .unwrap();
+    site_network
+        .add_node("B".to_string(), HashSet::from([site_b]))
+        .unwrap();
+    site_network
+        .add_node("C".to_string(), HashSet::from([site_c]))
+        .unwrap();
+    site_network
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"B".to_string(), &"C".to_string())
+        .unwrap();
 
     // Test with center at B (middle)
     compare_zipup_vs_naive(&site_network, LinkSpace::uniform(3), "B", 42, 123, 1e-10);
@@ -1313,13 +1377,27 @@ fn test_zipup_vs_naive_star() {
     let site_b = Index::new_dyn(2);
     let site_c = Index::new_dyn(2);
     let site_d = Index::new_dyn(2);
-    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
-    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
-    site_network.add_node("C".to_string(), HashSet::from([site_c])).unwrap();
-    site_network.add_node("D".to_string(), HashSet::from([site_d])).unwrap();
-    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
-    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
-    site_network.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
+    site_network
+        .add_node("A".to_string(), HashSet::from([site_a]))
+        .unwrap();
+    site_network
+        .add_node("B".to_string(), HashSet::from([site_b]))
+        .unwrap();
+    site_network
+        .add_node("C".to_string(), HashSet::from([site_c]))
+        .unwrap();
+    site_network
+        .add_node("D".to_string(), HashSet::from([site_d]))
+        .unwrap();
+    site_network
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"B".to_string(), &"C".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"B".to_string(), &"D".to_string())
+        .unwrap();
 
     // Test with center at B (hub)
     compare_zipup_vs_naive(&site_network, LinkSpace::uniform(3), "B", 42, 123, 1e-10);
@@ -1339,13 +1417,27 @@ fn test_zipup_vs_naive_y_shape() {
     let site_b = Index::new_dyn(2);
     let site_c = Index::new_dyn(2);
     let site_d = Index::new_dyn(2);
-    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
-    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
-    site_network.add_node("C".to_string(), HashSet::from([site_c])).unwrap();
-    site_network.add_node("D".to_string(), HashSet::from([site_d])).unwrap();
-    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
-    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
-    site_network.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
+    site_network
+        .add_node("A".to_string(), HashSet::from([site_a]))
+        .unwrap();
+    site_network
+        .add_node("B".to_string(), HashSet::from([site_b]))
+        .unwrap();
+    site_network
+        .add_node("C".to_string(), HashSet::from([site_c]))
+        .unwrap();
+    site_network
+        .add_node("D".to_string(), HashSet::from([site_d]))
+        .unwrap();
+    site_network
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"B".to_string(), &"C".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"B".to_string(), &"D".to_string())
+        .unwrap();
 
     // Test with center at B
     compare_zipup_vs_naive(&site_network, LinkSpace::uniform(3), "B", 42, 123, 1e-10);
@@ -1360,12 +1452,22 @@ fn test_zipup_vs_naive_5node_chain() {
     let mut site_network = SiteIndexNetwork::<String, DynId>::new();
     for name in ["A", "B", "C", "D", "E"] {
         let site = Index::new_dyn(2);
-        site_network.add_node(name.to_string(), HashSet::from([site])).unwrap();
+        site_network
+            .add_node(name.to_string(), HashSet::from([site]))
+            .unwrap();
     }
-    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
-    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
-    site_network.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
-    site_network.add_edge(&"D".to_string(), &"E".to_string()).unwrap();
+    site_network
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"B".to_string(), &"C".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"C".to_string(), &"D".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"D".to_string(), &"E".to_string())
+        .unwrap();
 
     // Test with center at C (middle)
     compare_zipup_vs_naive(&site_network, LinkSpace::uniform(2), "C", 42, 123, 1e-10);
@@ -1384,7 +1486,8 @@ fn test_verify_internal_consistency_basic() {
     let (tn, _n1, _n2, _edge, _phys1, _bond, _phys2) = create_two_node_treetn();
 
     // Should pass consistency check
-    tn.verify_internal_consistency().expect("Consistency check should pass for basic TreeTN");
+    tn.verify_internal_consistency()
+        .expect("Consistency check should pass for basic TreeTN");
 }
 
 #[test]
@@ -1393,7 +1496,8 @@ fn test_verify_internal_consistency_chain_3node() {
     let (tn, _n1, _n2, _n3, _e12, _e23, _bond12, _bond23) = create_three_node_chain();
 
     // Should pass consistency check
-    tn.verify_internal_consistency().expect("Consistency check should pass for 3-node chain");
+    tn.verify_internal_consistency()
+        .expect("Consistency check should pass for 3-node chain");
 }
 
 #[test]
@@ -1401,13 +1505,16 @@ fn test_verify_internal_consistency_after_canonicalization() {
     let (tn, _n1, n2, _n3, _e12, _e23, _bond12, _bond23) = create_three_node_chain();
 
     // Canonicalize to center n2
-    let tn = tn.canonicalize(
-        vec![n2],
-        tensor4all_treetn::CanonicalizationOptions::default(),
-    ).expect("Canonicalization should succeed");
+    let tn = tn
+        .canonicalize(
+            vec![n2],
+            tensor4all_treetn::CanonicalizationOptions::default(),
+        )
+        .expect("Canonicalization should succeed");
 
     // Should still pass consistency check after canonicalization
-    tn.verify_internal_consistency().expect("Consistency check should pass after canonicalization");
+    tn.verify_internal_consistency()
+        .expect("Consistency check should pass after canonicalization");
 }
 
 #[test]
@@ -1438,10 +1545,12 @@ fn test_verify_internal_consistency_with_string_node_names() {
         &bond,
         tn.node_index(&"B".to_string()).unwrap(),
         &bond,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Should pass consistency check
-    tn.verify_internal_consistency().expect("Consistency check should pass for string-named TreeTN");
+    tn.verify_internal_consistency()
+        .expect("Consistency check should pass for string-named TreeTN");
 }
 
 // ============================================================================
@@ -1465,15 +1574,19 @@ fn test_same_appearance_after_same_canonicalization() {
     let (tn1, _n1, n2, _n3, _, _, _, _) = create_three_node_chain();
     let tn2 = tn1.clone();
 
-    let tn1 = tn1.canonicalize(
-        vec![n2],
-        tensor4all_treetn::CanonicalizationOptions::default(),
-    ).unwrap();
+    let tn1 = tn1
+        .canonicalize(
+            vec![n2],
+            tensor4all_treetn::CanonicalizationOptions::default(),
+        )
+        .unwrap();
 
-    let tn2 = tn2.canonicalize(
-        vec![n2],
-        tensor4all_treetn::CanonicalizationOptions::default(),
-    ).unwrap();
+    let tn2 = tn2
+        .canonicalize(
+            vec![n2],
+            tensor4all_treetn::CanonicalizationOptions::default(),
+        )
+        .unwrap();
 
     // Both canonicalized to same center - should have same appearance
     assert!(tn1.same_appearance(&tn2));
@@ -1485,15 +1598,19 @@ fn test_same_appearance_different_ortho_towards() {
     let (tn1, n1, _n2, n3, _, _, _, _) = create_three_node_chain();
     let tn2 = tn1.clone();
 
-    let tn1 = tn1.canonicalize(
-        vec![n1],  // Canonicalize to left
-        tensor4all_treetn::CanonicalizationOptions::default(),
-    ).unwrap();
+    let tn1 = tn1
+        .canonicalize(
+            vec![n1], // Canonicalize to left
+            tensor4all_treetn::CanonicalizationOptions::default(),
+        )
+        .unwrap();
 
-    let tn2 = tn2.canonicalize(
-        vec![n3],  // Canonicalize to right
-        tensor4all_treetn::CanonicalizationOptions::default(),
-    ).unwrap();
+    let tn2 = tn2
+        .canonicalize(
+            vec![n3], // Canonicalize to right
+            tensor4all_treetn::CanonicalizationOptions::default(),
+        )
+        .unwrap();
 
     // Different canonical centers - different ortho_towards directions
     // Note: They still share equivalent site index network (same topology and site space)
@@ -1508,10 +1625,12 @@ fn test_same_appearance_one_canonicalized_one_not() {
     let (tn1, _n1, n2, _n3, _, _, _, _) = create_three_node_chain();
     let tn2 = tn1.clone();
 
-    let tn1 = tn1.canonicalize(
-        vec![n2],
-        tensor4all_treetn::CanonicalizationOptions::default(),
-    ).unwrap();
+    let tn1 = tn1
+        .canonicalize(
+            vec![n2],
+            tensor4all_treetn::CanonicalizationOptions::default(),
+        )
+        .unwrap();
 
     // tn2 is not canonicalized - different ortho_towards state
     assert!(tn1.share_equivalent_site_index_network(&tn2));
@@ -1617,7 +1736,12 @@ fn create_mpo_chain_for_fit() -> TreeTN<DynId, NoSymmSpace, String> {
     // Tensor B: [bond_ab, site_b_in, site_b_out, bond_bc]
     let data_b: Vec<f64> = (0..16).map(|x| (x as f64 + 1.0) / 20.0).collect();
     let tensor_b = TensorDynLen::new(
-        vec![bond_ab.clone(), site_b_in.clone(), site_b_out.clone(), bond_bc.clone()],
+        vec![
+            bond_ab.clone(),
+            site_b_in.clone(),
+            site_b_out.clone(),
+            bond_bc.clone(),
+        ],
         vec![2, 2, 2, 2],
         Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b))),
     );
@@ -1682,9 +1806,15 @@ fn test_fit_vs_naive_2node_chain() {
     let mut site_network = SiteIndexNetwork::<String, DynId>::new();
     let site_a = Index::new_dyn(2);
     let site_b = Index::new_dyn(3);
-    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
-    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
-    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    site_network
+        .add_node("A".to_string(), HashSet::from([site_a]))
+        .unwrap();
+    site_network
+        .add_node("B".to_string(), HashSet::from([site_b]))
+        .unwrap();
+    site_network
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
 
     compare_fit_vs_naive(&site_network, LinkSpace::uniform(4), "B", 42, 123, 1e-10);
 }
@@ -1696,11 +1826,21 @@ fn test_fit_vs_naive_3node_chain() {
     let site_a = Index::new_dyn(2);
     let site_b = Index::new_dyn(2);
     let site_c = Index::new_dyn(2);
-    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
-    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
-    site_network.add_node("C".to_string(), HashSet::from([site_c])).unwrap();
-    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
-    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+    site_network
+        .add_node("A".to_string(), HashSet::from([site_a]))
+        .unwrap();
+    site_network
+        .add_node("B".to_string(), HashSet::from([site_b]))
+        .unwrap();
+    site_network
+        .add_node("C".to_string(), HashSet::from([site_c]))
+        .unwrap();
+    site_network
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"B".to_string(), &"C".to_string())
+        .unwrap();
 
     // Test with center at B (middle)
     compare_fit_vs_naive(&site_network, LinkSpace::uniform(3), "B", 42, 123, 1e-10);
@@ -1723,13 +1863,27 @@ fn test_fit_vs_naive_star() {
     let site_b = Index::new_dyn(2);
     let site_c = Index::new_dyn(2);
     let site_d = Index::new_dyn(2);
-    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
-    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
-    site_network.add_node("C".to_string(), HashSet::from([site_c])).unwrap();
-    site_network.add_node("D".to_string(), HashSet::from([site_d])).unwrap();
-    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
-    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
-    site_network.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
+    site_network
+        .add_node("A".to_string(), HashSet::from([site_a]))
+        .unwrap();
+    site_network
+        .add_node("B".to_string(), HashSet::from([site_b]))
+        .unwrap();
+    site_network
+        .add_node("C".to_string(), HashSet::from([site_c]))
+        .unwrap();
+    site_network
+        .add_node("D".to_string(), HashSet::from([site_d]))
+        .unwrap();
+    site_network
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"B".to_string(), &"C".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"B".to_string(), &"D".to_string())
+        .unwrap();
 
     // Test with center at B (hub)
     compare_fit_vs_naive(&site_network, LinkSpace::uniform(3), "B", 42, 123, 1e-10);
@@ -1749,13 +1903,27 @@ fn test_fit_vs_naive_y_shape() {
     let site_b = Index::new_dyn(2);
     let site_c = Index::new_dyn(2);
     let site_d = Index::new_dyn(2);
-    site_network.add_node("A".to_string(), HashSet::from([site_a])).unwrap();
-    site_network.add_node("B".to_string(), HashSet::from([site_b])).unwrap();
-    site_network.add_node("C".to_string(), HashSet::from([site_c])).unwrap();
-    site_network.add_node("D".to_string(), HashSet::from([site_d])).unwrap();
-    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
-    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
-    site_network.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
+    site_network
+        .add_node("A".to_string(), HashSet::from([site_a]))
+        .unwrap();
+    site_network
+        .add_node("B".to_string(), HashSet::from([site_b]))
+        .unwrap();
+    site_network
+        .add_node("C".to_string(), HashSet::from([site_c]))
+        .unwrap();
+    site_network
+        .add_node("D".to_string(), HashSet::from([site_d]))
+        .unwrap();
+    site_network
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"B".to_string(), &"C".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"B".to_string(), &"D".to_string())
+        .unwrap();
 
     // Test with center at B
     compare_fit_vs_naive(&site_network, LinkSpace::uniform(3), "B", 42, 123, 1e-10);
@@ -1770,12 +1938,22 @@ fn test_fit_vs_naive_5node_chain() {
     let mut site_network = SiteIndexNetwork::<String, DynId>::new();
     for name in ["A", "B", "C", "D", "E"] {
         let site = Index::new_dyn(2);
-        site_network.add_node(name.to_string(), HashSet::from([site])).unwrap();
+        site_network
+            .add_node(name.to_string(), HashSet::from([site]))
+            .unwrap();
     }
-    site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
-    site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
-    site_network.add_edge(&"C".to_string(), &"D".to_string()).unwrap();
-    site_network.add_edge(&"D".to_string(), &"E".to_string()).unwrap();
+    site_network
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"B".to_string(), &"C".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"C".to_string(), &"D".to_string())
+        .unwrap();
+    site_network
+        .add_edge(&"D".to_string(), &"E".to_string())
+        .unwrap();
 
     // Test with center at C (middle)
     compare_fit_vs_naive(&site_network, LinkSpace::uniform(2), "C", 42, 123, 1e-10);

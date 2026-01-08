@@ -1,11 +1,11 @@
 [package]
-name = "blocked-mdarray"
+name = "block-array"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Blocked multi-dimensional arrays with sparse-matrix-style operations"
+description = "Block multi-dimensional arrays with sparse-matrix-style operations"
 
 [dependencies]
 num-complex.workspace = true

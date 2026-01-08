@@ -251,13 +251,7 @@ mod tests {
 
     #[test]
     fn test_as_left_matrix() {
-        let t: Tensor4<f64> = tensor4_from_data(
-            (0..24).map(|x| x as f64).collect(),
-            2,
-            3,
-            2,
-            2,
-        );
+        let t: Tensor4<f64> = tensor4_from_data((0..24).map(|x| x as f64).collect(), 2, 3, 2, 2);
 
         let (mat, rows, cols) = t.as_left_matrix();
         assert_eq!(rows, 12); // 2 * 3 * 2
@@ -267,13 +261,7 @@ mod tests {
 
     #[test]
     fn test_as_right_matrix() {
-        let t: Tensor4<f64> = tensor4_from_data(
-            (0..24).map(|x| x as f64).collect(),
-            2,
-            3,
-            2,
-            2,
-        );
+        let t: Tensor4<f64> = tensor4_from_data((0..24).map(|x| x as f64).collect(), 2, 3, 2, 2);
 
         let (mat, rows, cols) = t.as_right_matrix();
         assert_eq!(rows, 2);
@@ -283,13 +271,7 @@ mod tests {
 
     #[test]
     fn test_as_center_matrix() {
-        let t: Tensor4<f64> = tensor4_from_data(
-            (0..24).map(|x| x as f64).collect(),
-            2,
-            3,
-            2,
-            2,
-        );
+        let t: Tensor4<f64> = tensor4_from_data((0..24).map(|x| x as f64).collect(), 2, 3, 2, 2);
 
         let (mat, rows, cols) = t.as_center_matrix();
         assert_eq!(rows, 6); // 2 * 3

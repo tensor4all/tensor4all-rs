@@ -152,11 +152,7 @@ where
     pub fn evaluate(&mut self, indices: &[(usize, usize)]) -> Result<T> {
         if indices.len() != self.len() {
             return Err(MPOError::InvalidOperation {
-                message: format!(
-                    "Expected {} index pairs, got {}",
-                    self.len(),
-                    indices.len()
-                ),
+                message: format!("Expected {} index pairs, got {}", self.len(), indices.len()),
             });
         }
 
@@ -174,8 +170,8 @@ where
         for k in 0..first_a.site_dim_2() {
             for ra in 0..first_a.right_dim() {
                 for rb in 0..first_b.right_dim() {
-                    current[[ra, rb]] =
-                        current[[ra, rb]] + *first_a.get4(0, i0, k, ra) * *first_b.get4(0, k, j0, rb);
+                    current[[ra, rb]] = current[[ra, rb]]
+                        + *first_a.get4(0, i0, k, ra) * *first_b.get4(0, k, j0, rb);
                 }
             }
         }
