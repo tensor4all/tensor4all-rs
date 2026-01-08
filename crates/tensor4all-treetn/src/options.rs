@@ -3,7 +3,7 @@
 //! Provides:
 //! - [`CanonicalizationOptions`]: Options for canonicalization
 //! - [`TruncationOptions`]: Options for truncation
-//! - [`CenterSpec`]: Trait for specifying canonical/truncation centers
+//! - [`SplitOptions`]: Options for split operations
 
 use tensor4all_core::CanonicalForm;
 
@@ -117,6 +117,70 @@ impl TruncationOptions {
     /// Set the canonical form / algorithm.
     pub fn with_form(mut self, form: CanonicalForm) -> Self {
         self.form = form;
+        self
+    }
+}
+
+/// Options for split operations.
+///
+/// # Builder Pattern
+///
+/// ```ignore
+/// let options = SplitOptions::default()
+///     .with_max_rank(50)
+///     .with_rtol(1e-10)
+///     .with_final_sweep(true);
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct SplitOptions {
+    /// Canonical form / algorithm to use (SVD, QR, etc.)
+    pub form: CanonicalForm,
+    /// Relative tolerance for truncation (keep singular values > rtol * max_sv)
+    pub rtol: Option<f64>,
+    /// Maximum bond dimension
+    pub max_rank: Option<usize>,
+    /// Whether to perform a final sweep for global bond dimension optimization
+    pub final_sweep: bool,
+}
+
+impl Default for SplitOptions {
+    fn default() -> Self {
+        Self {
+            form: CanonicalForm::Unitary,
+            rtol: None,
+            max_rank: None,
+            final_sweep: false,
+        }
+    }
+}
+
+impl SplitOptions {
+    /// Create options with default settings.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create options with a maximum rank.
+    pub fn with_max_rank(mut self, rank: usize) -> Self {
+        self.max_rank = Some(rank);
+        self
+    }
+
+    /// Create options with a relative tolerance.
+    pub fn with_rtol(mut self, rtol: f64) -> Self {
+        self.rtol = Some(rtol);
+        self
+    }
+
+    /// Set the canonical form / algorithm.
+    pub fn with_form(mut self, form: CanonicalForm) -> Self {
+        self.form = form;
+        self
+    }
+
+    /// Enable or disable final sweep for global optimization.
+    pub fn with_final_sweep(mut self, final_sweep: bool) -> Self {
+        self.final_sweep = final_sweep;
         self
     }
 }
