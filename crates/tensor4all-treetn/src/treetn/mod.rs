@@ -10,6 +10,7 @@ mod decompose;
 mod fit;
 mod linsolve;
 mod localupdate;
+mod operator_impl;
 mod ops;
 mod tensor_like;
 mod transform;

@@ -19,7 +19,7 @@ A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assis
 |-------------|-----------|---------------|
 | `Index{Int}` | — | `Index<Id, NoSymmSpace>` |
 | `Index{QNBlocks}` | `QIDX` | `Index<Id, QNSpace>` (future) |
-| `ITensor` | `QSpace` | `TensorDynLen<Id, T, Symm>` |
+| `ITensor` | `QSpace` | `TensorDynLen<Id, Symm>` |
 | `Dense` | `DATA` | `Storage::DenseF64/C64` |
 | `Diag` | — | `Storage::DiagF64/C64` |
 | `A * B` | — | `a.contract_einsum(&b)` |
@@ -46,6 +46,7 @@ tensor4all-rs/
 │   └── quanticsgrids/                # Quantics grid structures (internal)
 ├── julia/Tensor4all.jl/              # Julia bindings
 ├── python/tensor4all/                # Python bindings
+├── tools/api-dump/                   # API documentation generator
 └── docs/                             # Design documents
 ```
 
@@ -55,31 +56,42 @@ tensor4all-rs/
 
 ```rust
 use tensor4all_treetn::{
-    TreeTN, random_treetn_f64,
-    CanonicalizationOptions, TruncationOptions,
+    TreeTN, SiteIndexNetwork, LinkSpace,
+    random_treetn_f64, CanonicalizationOptions, TruncationOptions,
 };
+use tensor4all_core::{Index, DynId, NoSymmSpace};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 
-// Create a random tree tensor network (4 sites, bond dim 10)
-let site_dims = vec![2, 2, 2, 2];
-let bond_dim = 10;
-let ttn = random_treetn_f64(&site_dims, bond_dim);
+// Build a site index network (chain topology: A -- B -- C)
+let mut site_network = SiteIndexNetwork::new();
+site_network.add_node("A".to_string(), vec![Index::new_dyn(2)]).unwrap();
+site_network.add_node("B".to_string(), vec![Index::new_dyn(2)]).unwrap();
+site_network.add_node("C".to_string(), vec![Index::new_dyn(2)]).unwrap();
+site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+
+// Create random tree tensor network with uniform bond dimension
+let mut rng = ChaCha8Rng::seed_from_u64(42);
+let link_space = LinkSpace::uniform(10);
+let ttn = random_treetn_f64(&mut rng, &site_network, link_space);
 
 // Canonicalize towards center node
 let ttn = ttn.canonicalize(
-    ["node_0"],
+    ["B".to_string()],
     CanonicalizationOptions::default()
 )?;
 
 // Truncate bond dimensions
 let ttn = ttn.truncate(
-    ["node_0"],
+    ["B".to_string()],
     TruncationOptions::default()
         .with_max_rank(5)
         .with_rtol(1e-10)
 )?;
 
-// Contract two tree tensor networks
-let result = contract_zipup(&ttn1, &ttn2, options)?;
+// Contract two tree tensor networks using zip-up algorithm
+let result = ttn1.contract_zipup(&ttn2, &"B".to_string(), Some(1e-10), Some(5))?;
 ```
 
 ## Language Bindings
