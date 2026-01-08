@@ -9,7 +9,7 @@ pub mod treetn;
 pub use dyn_treetn::{BoxedTensorLike, DynIndex, DynTreeTN};
 pub use named_graph::NamedGraph;
 pub use node_name_network::{CanonicalizeEdges, NodeNameNetwork};
-pub use options::{CanonicalizationOptions, TruncationOptions};
+pub use options::{CanonicalizationOptions, SplitOptions, TruncationOptions};
 pub use random::{random_treetn_c64, random_treetn_f64, LinkSpace};
 pub use site_index_network::SiteIndexNetwork;
 pub use treetn::{
