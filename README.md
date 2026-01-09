@@ -171,9 +171,10 @@ arr = t.to_numpy()
 
 ## Future Extensions
 
+- Optimization for block-sparse tensors
+- Automatic differentiation
 - Quantum number symmetries (Abelian: U(1), Z_n)
 - Non-Abelian symmetries (SU(2), SU(N))
-- Arrow/direction for fermionic systems
 
 ## Acknowledgments
 
@@ -183,7 +184,7 @@ We acknowledge many fruitful discussions with **M. Fishman** and **E. M. Stouden
 
 **Citation**: If you use this code in research, please cite:
 
-> We used tensor4all-rs (https://github.com/tensor4all/tensor4all-rs), inspired by ITensors.jl.
+> We used tensor4all-rs (https://github.com/shinaoka/tensor4all-rs), inspired by ITensors.jl.
 
 For ITensors.jl:
 
