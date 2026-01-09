@@ -1,0 +1,29 @@
+[package]
+name = "tensor4all-quantics-transform"
+version.workspace = true
+edition.workspace = true
+authors = [
+    "Hiroshi Shinaoka <h.shinaoka@gmail.com>",
+    "Markus Wallerberger <markus.wallerberger@tuwien.ac.at>",
+    "Satoshi Terasaki <terasakisatoshi.math@gmail.com>",
+    "Samuel Badr <samuel.badr@gmail.com>",
+    "Gianluca Grosso <gianluca.grosso@campus.lmu.de>",
+    "Hirone Ishida <sakai.39186@gmail.com>",
+]
+license.workspace = true
+repository.workspace = true
+description = "Quantics transformation operators for tensor train methods"
+
+[dependencies]
+tensor4all-treetn = { path = "../tensor4all-treetn" }
+tensor4all-core = { path = "../tensor4all-core" }
+tensor4all-simpletensortrain = { path = "../tensor4all-simpletensortrain" }
+quanticsgrids = { path = "../quanticsgrids" }
+num-complex = { workspace = true }
+num-traits = { workspace = true }
+num-rational = "0.4"
+num-integer = "0.1"
+anyhow = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }

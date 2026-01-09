@@ -41,6 +41,7 @@ tensor4all-rs/
 │   ├── tensor4all-itensorlike/       # ITensor-like TensorTrain API
 │   ├── tensor4all-simpletensortrain/ # Simple TT/MPS implementation
 │   ├── tensor4all-tensorci/          # Tensor Cross Interpolation
+│   ├── tensor4all-quantics-transform/# Quantics transformation operators
 │   ├── tensor4all-capi/              # C API for language bindings
 │   ├── matrixci/                     # Matrix Cross Interpolation (internal)
 │   └── quanticsgrids/                # Quantics grid structures (internal)
