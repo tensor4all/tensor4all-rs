@@ -156,9 +156,10 @@ arr = t.to_numpy()
 
 ## Future Extensions
 
+- Optimization for block-sparse tensors
+- Automatic differentiation
 - Quantum number symmetries (Abelian: U(1), Z_n)
 - Non-Abelian symmetries (SU(2), SU(N))
-- Arrow/direction for fermionic systems
 
 ## Acknowledgments
 
