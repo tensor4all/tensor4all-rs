@@ -1,0 +1,24 @@
+[package]
+name = "tensor4all-quanticstci"
+version.workspace = true
+edition.workspace = true
+authors = [
+    "Hiroshi Shinaoka <h.shinaoka@gmail.com>",
+    "Markus Wallerberger <markus.wallerberger@tuwien.ac.at>",
+    "Satoshi Terasaki <terasakisatoshi.math@gmail.com>",
+]
+license.workspace = true
+repository.workspace = true
+description = "High-level Quantics TCI interface for function interpolation"
+
+[dependencies]
+tensor4all-tensorci = { path = "../tensor4all-tensorci" }
+tensor4all-simpletensortrain = { path = "../tensor4all-simpletensortrain" }
+quanticsgrids = { path = "../quanticsgrids" }
+num-complex = { workspace = true }
+num-traits = { workspace = true }
+anyhow = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }
