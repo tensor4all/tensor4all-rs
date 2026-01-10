@@ -23,6 +23,19 @@ We want algorithms (contraction, factorization, etc.) to work with:
 Traits let us express these behaviors in a single API, while allowing different concrete types
 to choose their own internal representation.
 
+### Minimal interface, implementation freedom
+
+`IndexLike` and `TensorLike` are intentionally designed as **minimal interfaces**:
+they define *what* operations an algorithm needs (e.g. `id`, `dim`, `conj`, `tensordot`),
+but they do **not** prescribe *how* those operations must be implemented internally.
+
+This makes it possible to plug in different concrete implementations with very different internals, for example:
+- **Quantum numbers / symmetry sectors** (Abelian/non-Abelian)
+- **Block-sparse storage layouts** and metadata
+- **Different contraction backends/algorithms** (dense, block-sparse, optimized order, GPU, etc.)
+
+As long as a type satisfies the trait contract, higher-level algorithms can operate on it without knowing these details.
+
 ## Overview
 
 The index system in tensor4all-rs-index-like is designed to support both:
