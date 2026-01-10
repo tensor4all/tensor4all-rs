@@ -10,7 +10,7 @@ pub mod defaults;
 // This allows `tensor4all_core::index::...` to work
 pub use defaults::index;
 
-pub use defaults::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, NoSymmSpace, Symmetry, TagSet};
+pub use defaults::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
 pub use index_like::{ConjState, IndexLike};
 
 // Index operations (uses defaults::*)

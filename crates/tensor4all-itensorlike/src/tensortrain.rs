@@ -702,7 +702,7 @@ fn truncate_alg_to_form(alg: TruncateAlg) -> CanonicalForm {
 mod tests {
     use super::*;
     use tensor4all_core::StorageScalar;
-    use tensor4all_core::{DynId, Index, NoSymmSpace};
+    use tensor4all_core::{DynId, Index};
 
     /// Helper to create a simple tensor for testing
     fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {

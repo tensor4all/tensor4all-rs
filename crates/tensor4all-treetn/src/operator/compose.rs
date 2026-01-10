@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use petgraph::stable_graph::NodeIndex;
 
-use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
+use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::storage::{DenseStorageF64, Storage};
 use tensor4all_core::{IndexLike, TensorDynLen};
 
@@ -176,7 +176,6 @@ pub fn compose_exclusive_linear_operators<I, V>(
 where
     I: IndexLike,
     I::Id: Clone + Hash + Eq + Ord + Debug + From<DynId> + Send + Sync,
-    I::Symm: Clone + Symmetry + Debug + From<NoSymmSpace> + PartialEq + Send + Sync,
     I::Tags: Default,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
@@ -196,7 +195,7 @@ where
     let gaps: Vec<V> = all_target_nodes.difference(&covered).cloned().collect();
 
     // 4. Build tensors and mappings
-    let mut tensors: Vec<TensorDynLen<I::Id, I::Symm>> = Vec::new();
+    let mut tensors: Vec<TensorDynLen> = Vec::new();
     let mut result_node_names: Vec<V> = Vec::new();
     let mut combined_input_mapping: HashMap<V, IndexMapping<I>> = HashMap::new();
     let mut combined_output_mapping: HashMap<V, IndexMapping<I>> = HashMap::new();
@@ -247,8 +246,8 @@ where
 
         // Create internal indices for the identity operator
         // (different IDs from true indices)
-        let mut internal_inputs: Vec<Index<I::Id, I::Symm, I::Tags>> = Vec::new();
-        let mut internal_outputs: Vec<Index<I::Id, I::Symm, I::Tags>> = Vec::new();
+        let mut internal_inputs: Vec<Index<I::Id, I::Tags>> = Vec::new();
+        let mut internal_outputs: Vec<Index<I::Id, I::Tags>> = Vec::new();
 
         for (true_input, true_output) in index_pairs {
             // Create new internal indices with fresh IDs
@@ -257,18 +256,18 @@ where
             let dim_out = true_output.dim();
 
             // Create internal indices with matching dimensions
-            let internal_in_base: Index<DynId, NoSymmSpace, TagSet> = Index::new_dyn(dim_in);
-            let internal_out_base: Index<DynId, NoSymmSpace, TagSet> = Index::new_dyn(dim_out);
+            let internal_in_base: DynIndex = Index::new_dyn(dim_in);
+            let internal_out_base: DynIndex = Index::new_dyn(dim_out);
 
             // Convert to the target type
-            let internal_in: Index<I::Id, I::Symm, I::Tags> = Index::new_with_tags(
+            let internal_in: Index<I::Id, I::Tags> = Index::new_with_tags(
                 I::Id::from(internal_in_base.id),
-                I::Symm::from(internal_in_base.symm),
+                internal_in_base.dim(),
                 I::Tags::default(),
             );
-            let internal_out: Index<I::Id, I::Symm, I::Tags> = Index::new_with_tags(
+            let internal_out: Index<I::Id, I::Tags> = Index::new_with_tags(
                 I::Id::from(internal_out_base.id),
-                I::Symm::from(internal_out_base.symm),
+                internal_out_base.dim(),
                 I::Tags::default(),
             );
 
@@ -327,7 +326,6 @@ pub fn compose_exclusive_operators<I, V, O>(
 where
     I: IndexLike,
     I::Id: Clone + Hash + Eq + Ord + Debug + From<DynId> + Send + Sync,
-    I::Symm: Clone + Symmetry + Debug + From<NoSymmSpace> + PartialEq + Send + Sync,
     I::Tags: Default,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
     O: Operator<I, V>,
@@ -346,7 +344,7 @@ mod tests {
     use crate::random::{random_treetn_f64, LinkSpace};
     use tensor4all_core::TensorAccess;
 
-    type DynIndex = Index<DynId, NoSymmSpace, TagSet>;
+    type DynIndex = Index<DynId, TagSet>;
 
     fn make_index(dim: usize) -> DynIndex {
         Index::new_dyn(dim)

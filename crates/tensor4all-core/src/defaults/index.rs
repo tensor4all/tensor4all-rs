@@ -3,12 +3,15 @@
 //! This module provides the default index types:
 //!
 //! - [`DynId`]: Runtime identity (UUID-based unique identifier)
-//! - [`NoSymmSpace`]: No symmetry (trivial symmetry space)
 //! - [`TagSet`]: Tag set for metadata (Arc-wrapped for cheap cloning)
-//! - [`Index`]: Generic index type parameterized by Id, Symm, Tags
-//! - [`DynIndex`]: Default index type (`Index<DynId, NoSymmSpace, TagSet>`)
+//! - [`Index`]: Generic index type parameterized by Id and Tags
+//! - [`DynIndex`]: Default index type (`Index<DynId, TagSet>`)
 //!
 //! The `DynIndex` type implements the [`IndexLike`] trait.
+//!
+//! **Note**: Symmetry (quantum numbers) is not included in the default implementation.
+//! For QSpace-compatible indices with non-Abelian symmetries, use a separate concrete type
+//! that implements `IndexLike` directly.
 
 use crate::index_like::IndexLike;
 use crate::tagset::{DefaultTagSet as InlineTagSet, TagSetError, TagSetIterator, TagSetLike};
@@ -22,44 +25,6 @@ use std::sync::Arc;
 /// Uses UInt128 for extremely low collision probability (see design.md for analysis).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DynId(pub u128);
-
-/// Trait for symmetry information (quantum number space).
-///
-/// This corresponds to the `T` parameter in ITensors.jl's `Index{T}`,
-/// where `T = Int` for no symmetry and `T = QNBlocks` for quantum numbers.
-pub trait Symmetry: Clone + PartialEq + Eq + std::hash::Hash {
-    /// Return the total dimension of the space.
-    ///
-    /// For no symmetry, this is just the dimension.
-    /// For quantum number spaces, this is the sum of all block dimensions.
-    fn total_dim(&self) -> usize;
-}
-
-/// No symmetry space (corresponds to ITensors.jl's `Index{Int}`).
-///
-/// This represents a simple index with no quantum number structure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NoSymmSpace {
-    dim: usize,
-}
-
-impl NoSymmSpace {
-    /// Create a new no-symmetry space with the given dimension.
-    pub fn new(dim: usize) -> Self {
-        Self { dim }
-    }
-
-    /// Get the dimension.
-    pub fn dim(&self) -> usize {
-        self.dim
-    }
-}
-
-impl Symmetry for NoSymmSpace {
-    fn total_dim(&self) -> usize {
-        self.dim
-    }
-}
 
 /// Tag set wrapper using `Arc` for efficient cloning.
 ///
@@ -190,17 +155,18 @@ impl TagSetLike for TagSet {
     }
 }
 
-/// Index with generic identity type `Id`, symmetry type `Symm`, and tag type `Tags`.
+/// Index with generic identity type `Id` and tag type `Tags`.
 ///
 /// - `Id = DynId` for ITensors-like runtime identity
 /// - `Id = ZST marker type` for compile-time-known identity
-/// - `Symm = NoSymmSpace` for no symmetry (default, corresponds to `Index{Int}` in ITensors.jl)
-/// - `Symm = QNSpace` (future) for quantum number spaces (corresponds to `Index{QNBlocks}` in ITensors.jl)
 /// - `Tags = TagSet` for tags (default, Arc-wrapped for cheap cloning)
 ///
+/// **Note**: This default implementation does not include symmetry (quantum numbers).
+/// For QSpace-compatible indices with non-Abelian symmetries, use a separate concrete type.
+///
 /// # Memory Layout
-/// With default types (`DynId`, `NoSymmSpace`, `TagSet`):
-/// - Size: 32 bytes (16 + 8 + 8)
+/// With default types (`DynId`, `TagSet`):
+/// - Size: 24 bytes (16 + 8)
 /// - Tags are shared via `Arc`, so cloning is cheap (reference count increment only)
 ///
 /// **Equality**: Two `Index` values are considered equal if and only if their `id` fields match.
@@ -219,35 +185,33 @@ impl TagSetLike for TagSet {
 /// // i1.tags and i2.tags point to the same Arc
 /// ```
 #[derive(Debug, Clone)]
-pub struct Index<Id, Symm = NoSymmSpace, Tags = TagSet> {
+pub struct Index<Id, Tags = TagSet> {
     pub id: Id,
-    pub symm: Symm,
+    pub dim: usize,
     pub tags: Tags,
 }
 
-impl<Id, Symm: Symmetry, Tags> Index<Id, Symm, Tags>
+impl<Id, Tags> Index<Id, Tags>
 where
     Tags: Default,
 {
-    /// Create a new index with the given identity and symmetry.
-    pub fn new(id: Id, symm: Symm) -> Self {
+    /// Create a new index with the given identity and dimension.
+    pub fn new(id: Id, dim: usize) -> Self {
         Self {
             id,
-            symm,
+            dim,
             tags: Tags::default(),
         }
     }
 
-    /// Create a new index with the given identity, symmetry, and tags.
-    pub fn new_with_tags(id: Id, symm: Symm, tags: Tags) -> Self {
-        Self { id, symm, tags }
+    /// Create a new index with the given identity, dimension, and tags.
+    pub fn new_with_tags(id: Id, dim: usize, tags: Tags) -> Self {
+        Self { id, dim, tags }
     }
 
-    /// Get the total dimension (size) of the index.
-    ///
-    /// This is computed from the symmetry information.
+    /// Get the dimension (size) of the index.
     pub fn size(&self) -> usize {
-        self.symm.total_dim()
+        self.dim
     }
 
     /// Get a reference to the tags.
@@ -256,38 +220,36 @@ where
     }
 }
 
-impl<Id, Tags> Index<Id, NoSymmSpace, Tags>
+impl<Id, Tags> Index<Id, Tags>
 where
     Tags: Default,
 {
-    /// Create a new index with no symmetry from dimension.
-    ///
-    /// This is a convenience constructor for the common case of no symmetry.
+    /// Create a new index from dimension (convenience constructor).
     pub fn new_with_size(id: Id, size: usize) -> Self {
         Self {
             id,
-            symm: NoSymmSpace::new(size),
+            dim: size,
             tags: Tags::default(),
         }
     }
 
-    /// Create a new index with no symmetry from dimension and tags.
+    /// Create a new index from dimension and tags.
     pub fn new_with_size_and_tags(id: Id, size: usize, tags: Tags) -> Self {
         Self {
             id,
-            symm: NoSymmSpace::new(size),
+            dim: size,
             tags,
         }
     }
 }
 
 // Constructors for Index with TagSet (default)
-impl Index<DynId, NoSymmSpace, TagSet> {
+impl Index<DynId, TagSet> {
     /// Create a new index with a generated dynamic ID and no tags.
     pub fn new_dyn(size: usize) -> Self {
         Self {
             id: DynId(generate_id()),
-            symm: NoSymmSpace::new(size),
+            dim: size,
             tags: TagSet::new(),
         }
     }
@@ -308,7 +270,7 @@ impl Index<DynId, NoSymmSpace, TagSet> {
     pub fn new_dyn_with_tags(size: usize, tags: TagSet) -> Self {
         Self {
             id: DynId(generate_id()),
-            symm: NoSymmSpace::new(size),
+            dim: size,
             tags,
         }
     }
@@ -321,7 +283,7 @@ impl Index<DynId, NoSymmSpace, TagSet> {
     pub fn new_dyn_with_tag(size: usize, tag: &str) -> Result<Self, TagSetError> {
         Ok(Self {
             id: DynId(generate_id()),
-            symm: NoSymmSpace::new(size),
+            dim: size,
             tags: TagSet::from_str(tag)?,
         })
     }
@@ -336,22 +298,22 @@ impl Index<DynId, NoSymmSpace, TagSet> {
 }
 
 // Equality and Hash implementations: only compare by `id`
-impl<Id: PartialEq, Symm, Tags> PartialEq for Index<Id, Symm, Tags> {
+impl<Id: PartialEq, Tags> PartialEq for Index<Id, Tags> {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
-impl<Id: Eq, Symm, Tags> Eq for Index<Id, Symm, Tags> {}
+impl<Id: Eq, Tags> Eq for Index<Id, Tags> {}
 
-impl<Id: std::hash::Hash, Symm, Tags> std::hash::Hash for Index<Id, Symm, Tags> {
+impl<Id: std::hash::Hash, Tags> std::hash::Hash for Index<Id, Tags> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
 }
 
-// Copy implementation: Index is Copy when Id, Symm, and Tags are all Copy
-impl<Id: Copy, Symm: Copy, Tags: Copy> Copy for Index<Id, Symm, Tags> {}
+// Copy implementation: Index is Copy when Id and Tags are both Copy
+impl<Id: Copy, Tags: Copy> Copy for Index<Id, Tags> {}
 
 thread_local! {
     /// Thread-local random number generator for ID generation.
@@ -369,10 +331,10 @@ pub(crate) fn generate_id() -> u128 {
     ID_RNG.with(|rng| rng.borrow_mut().gen())
 }
 
-/// Default Index type alias (same as `Index<Id, Symm>` with default tags).
+/// Default Index type alias (same as `Index<Id>` with default tags).
 ///
 /// This is provided for convenience and compatibility.
-pub type DefaultIndex<Id, Symm = NoSymmSpace> = Index<Id, Symm, TagSet>;
+pub type DefaultIndex<Id> = Index<Id, TagSet>;
 
 /// Type alias for backwards compatibility.
 pub type DefaultTagSet = TagSet;
@@ -385,11 +347,12 @@ pub type DefaultTagSet = TagSet;
 ///
 /// `DynIndex` uses:
 /// - `DynId`: Dynamic identity (UUID-based unique identifier)
-/// - `NoSymmSpace`: No symmetry (trivial symmetry space)
 /// - `TagSet`: Default tag set for metadata
 ///
 /// This is the recommended index type for most tensor network applications.
-pub type DynIndex = Index<DynId, NoSymmSpace, TagSet>;
+/// It does not include symmetry (quantum numbers); for QSpace-compatible indices,
+/// use a separate concrete type that implements `IndexLike` directly.
+pub type DynIndex = Index<DynId, TagSet>;
 
 impl IndexLike for DynIndex {
     type Id = DynId;
@@ -399,7 +362,7 @@ impl IndexLike for DynIndex {
     }
 
     fn dim(&self) -> usize {
-        self.symm.total_dim()
+        self.dim
     }
 
     fn conj_state(&self) -> crate::ConjState {
@@ -415,7 +378,7 @@ impl IndexLike for DynIndex {
     fn sim(&self) -> Self {
         Index {
             id: DynId(generate_id()),
-            symm: self.symm.clone(),
+            dim: self.dim,
             tags: self.tags.clone(),
         }
     }
@@ -573,9 +536,6 @@ mod tests {
         assert_eq!(i1.tags, i2.tags);
         assert!(i2.tags.has_tag("Site"));
         assert!(i2.tags.has_tag("x=1"));
-
-        // Same symm
-        assert_eq!(i1.symm, i2.symm);
     }
 
     fn _assert_index_like_bounds<I: IndexLike>() {}

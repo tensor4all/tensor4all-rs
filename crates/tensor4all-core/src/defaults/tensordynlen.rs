@@ -91,7 +91,7 @@ pub trait TensorAccess {
 
 /// Tensor with dynamic rank (number of indices) and dynamic scalar type.
 ///
-/// This is a concrete type using `DynIndex` (= `Index<DynId, NoSymmSpace, TagSet>`).
+/// This is a concrete type using `DynIndex` (= `Index<DynId, TagSet>`).
 pub struct TensorDynLen {
     pub indices: Vec<DynIndex>,
     pub dims: Vec<usize>,

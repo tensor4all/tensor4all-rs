@@ -7,7 +7,7 @@ use std::ffi::c_void;
 use tensor4all_core::{DynIndex, Storage, TensorDynLen};
 use tensor4all_itensorlike::TensorTrain;
 
-/// The internal index type we're wrapping (DynIndex = Index<DynId, NoSymmSpace, TagSet>)
+/// The internal index type we're wrapping (DynIndex = Index<DynId, TagSet>)
 pub(crate) type InternalIndex = DynIndex;
 
 /// The internal tensor type we're wrapping (TensorDynLen is a concrete type, not generic)
@@ -15,7 +15,7 @@ pub(crate) type InternalTensor = TensorDynLen;
 
 /// Opaque index type for C API
 ///
-/// Wraps `DefaultIndex<DynId, NoSymmSpace>` which corresponds to ITensors.jl's `Index{Int}`.
+/// Wraps `DynIndex` (= `Index<DynId, TagSet>`) which corresponds to ITensors.jl's `Index{Int}`.
 ///
 /// The internal structure is hidden using a void pointer.
 #[repr(C)]
@@ -93,7 +93,7 @@ impl t4a_storage_kind {
 
 /// Opaque tensor type for C API
 ///
-/// Wraps `TensorDynLen<DynId, NoSymmSpace>` which corresponds to ITensors.jl's `ITensor`.
+/// Wraps `TensorDynLen` which corresponds to ITensors.jl's `ITensor`.
 ///
 /// The internal structure is hidden using a void pointer.
 #[repr(C)]
@@ -151,7 +151,7 @@ pub(crate) type InternalTensorTrain = TensorTrain;
 
 /// Opaque tensor train type for C API
 ///
-/// Wraps `TensorTrain<DynId, NoSymmSpace>` which corresponds to ITensorMPS.jl's `MPS`.
+/// Wraps `TensorTrain` which corresponds to ITensorMPS.jl's `MPS`.
 ///
 /// The internal structure is hidden using a void pointer.
 #[repr(C)]

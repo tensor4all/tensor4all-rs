@@ -156,7 +156,7 @@ fn execute_contraction_tree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defaults::{DynId, DynIndex, Index, NoSymmSpace};
+    use crate::defaults::{DynId, DynIndex, Index};
     use crate::storage::{DenseStorageC64, Storage};
     use num_complex::Complex64;
     use std::sync::Arc;
@@ -165,7 +165,7 @@ mod tests {
         let indices: Vec<DynIndex> = ids
             .iter()
             .zip(shape.iter())
-            .map(|(&id, &dim)| Index::new(DynId(id), NoSymmSpace::new(dim)))
+            .map(|(&id, &dim)| Index::new(DynId(id), dim))
             .collect();
         let dims = shape.to_vec();
         let total_size: usize = shape.iter().product();

@@ -1,6 +1,6 @@
 //! Tests for TensorLike trait implementation.
 
-use tensor4all_core::index::{DynId, Index, NoSymmSpace};
+use tensor4all_core::index::{DynId, Index};
 use tensor4all_core::DynIndex;
 use tensor4all_core::{StorageScalar, TensorDynLen, TensorLike};
 
@@ -39,16 +39,16 @@ fn test_tensor_like_num_external_indices() {
 fn test_tensor_like_tensordot_basic() {
     // Create two tensors: A(i,j) and B(j,k)
     // Contract over j to get C(i,k)
-    let i = Index::<DynId, NoSymmSpace>::new_dyn(2);
-    let j = Index::<DynId, NoSymmSpace>::new_dyn(3);
-    let k = Index::<DynId, NoSymmSpace>::new_dyn(4);
+    let i = Index::<DynId>::new_dyn(2);
+    let j = Index::<DynId>::new_dyn(3);
+    let k = Index::<DynId>::new_dyn(4);
 
     // Tensor A: 2x3 matrix
     let a_data: Vec<f64> = (0..6).map(|x| x as f64).collect();
     let a = TensorDynLen::from_indices(vec![i.clone(), j.clone()], f64::dense_storage(a_data));
 
     // Tensor B: 3x4 matrix (use a copy of j with same id)
-    let j_copy = Index::new(j.id.clone(), j.symm.clone());
+    let j_copy = Index::new(j.id.clone(), j.dim);
     let b_data: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let b = TensorDynLen::from_indices(vec![j_copy.clone(), k.clone()], f64::dense_storage(b_data));
 

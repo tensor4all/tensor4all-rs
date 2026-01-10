@@ -229,7 +229,7 @@ mod tests {
     use super::*;
     use tensor4all_core::TensorAccess;
 
-    type DynIndex = Index<DynId, NoSymmSpace, TagSet>;
+    type DynIndex = Index<DynId, TagSet>;
 
     fn make_index(dim: usize) -> DynIndex {
         Index::new_dyn(dim)

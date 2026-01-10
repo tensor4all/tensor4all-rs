@@ -1,8 +1,8 @@
 //! Tests for the unified factorize function.
 
 use std::sync::Arc;
-use tensor4all_core::index::{DynId, Index, NoSymmSpace};
-use tensor4all_core::{factorize, Canonical, FactorizeAlg, FactorizeError, FactorizeOptions};
+use tensor4all_core::index::{DynId, Index};
+use tensor4all_core::{factorize, Canonical, DynIndex, FactorizeAlg, FactorizeError, FactorizeOptions};
 use tensor4all_core::{storage::DenseStorageF64, Storage, TensorDynLen};
 
 // ============================================================================
@@ -11,8 +11,8 @@ use tensor4all_core::{storage::DenseStorageF64, Storage, TensorDynLen};
 
 /// Helper to create a simple 2x3 matrix tensor for testing.
 fn create_test_matrix() -> TensorDynLen {
-    let i: Index<DynId, NoSymmSpace, _> = Index::new_dyn(2);
-    let j: Index<DynId, NoSymmSpace, _> = Index::new_dyn(3);
+    let i: DynIndex = Index::new_dyn(2);
+    let j: DynIndex = Index::new_dyn(3);
 
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
@@ -26,9 +26,9 @@ fn create_test_matrix() -> TensorDynLen {
 
 /// Helper to create a rank-3 tensor for testing.
 fn create_rank3_tensor() -> TensorDynLen {
-    let i: Index<DynId, NoSymmSpace, _> = Index::new_dyn(2);
-    let j: Index<DynId, NoSymmSpace, _> = Index::new_dyn(3);
-    let k: Index<DynId, NoSymmSpace, _> = Index::new_dyn(2);
+    let i: DynIndex = Index::new_dyn(2);
+    let j: DynIndex = Index::new_dyn(3);
+    let k: DynIndex = Index::new_dyn(2);
 
     let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
@@ -234,8 +234,8 @@ fn test_factorize_with_max_rank() {
 fn test_diag_dense_contraction_svd_internals() {
     use tensor4all_core::svd;
 
-    let i: Index<DynId, NoSymmSpace, _> = Index::new_dyn(2);
-    let j: Index<DynId, NoSymmSpace, _> = Index::new_dyn(3);
+    let i: DynIndex = Index::new_dyn(2);
+    let j: DynIndex = Index::new_dyn(3);
 
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));

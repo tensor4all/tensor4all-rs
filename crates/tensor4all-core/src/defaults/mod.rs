@@ -3,10 +3,9 @@
 //! This module provides the default concrete types for tensor network operations:
 //!
 //! - [`DynId`]: Runtime identity (UUID-based unique identifier)
-//! - [`NoSymmSpace`]: No symmetry (trivial symmetry space)
 //! - [`TagSet`]: Tag set for metadata (Arc-wrapped for cheap cloning)
-//! - [`Index`]: Generic index type
-//! - [`DynIndex`]: Default index type (`Index<DynId, NoSymmSpace, TagSet>`)
+//! - [`Index`]: Generic index type (`Index<Id, Tags>`)
+//! - [`DynIndex`]: Default index type (`Index<DynId, TagSet>`)
 //! - [`TensorDynLen`]: Dense tensor with dynamic rank
 //!
 //! Linear algebra operations:
@@ -31,7 +30,7 @@ pub mod qr;
 pub mod svd;
 
 pub use index::{
-    DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, NoSymmSpace, Symmetry, TagSet,
+    DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet,
 };
 pub use tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor,

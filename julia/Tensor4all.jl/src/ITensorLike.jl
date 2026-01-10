@@ -58,7 +58,7 @@ export CanonicalForm, Unitary, LU, CI
 
 A tensor train (MPS) with orthogonality tracking.
 
-Wraps a Rust `TensorTrain<DynId, NoSymmSpace>` which corresponds to
+Wraps a Rust `TensorTrain` which corresponds to
 ITensorMPS.jl's `MPS`.
 
 # Constructors

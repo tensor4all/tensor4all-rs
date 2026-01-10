@@ -381,7 +381,7 @@ where
 // Type alias for backwards compatibility
 // ============================================================================
 
-use tensor4all_core::index::{DynId, Index, NoSymmSpace};
+use tensor4all_core::index::{DynId, Index};
 use tensor4all_core::DefaultTagSet;
 
 /// Type alias for the default SiteIndexNetwork using DynId indices.
@@ -389,7 +389,7 @@ use tensor4all_core::DefaultTagSet;
 /// This preserves backwards compatibility with existing code that uses
 /// `SiteIndexNetwork<NodeName, Id, Symm, Tags>`.
 pub type DefaultSiteIndexNetwork<NodeName> =
-    SiteIndexNetwork<NodeName, Index<DynId, NoSymmSpace, DefaultTagSet>>;
+    SiteIndexNetwork<NodeName, Index<DynId, DefaultTagSet>>;
 
 #[cfg(test)]
 mod tests {
