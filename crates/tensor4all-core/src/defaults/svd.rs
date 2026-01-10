@@ -5,15 +5,13 @@
 use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
-use tensor4all_tensorbackend::mdarray::DSlice;
-use tensor4all_tensorbackend::mdarray_linalg::svd::SVDDecomp;
 use num_complex::{Complex64, ComplexFloat};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use thiserror::Error;
-
-use crate::backend::svd_backend;
 use tensor4all_tensorbackend::faer_traits::ComplexField;
+use tensor4all_tensorbackend::mdarray::DSlice;
+use tensor4all_tensorbackend::{svd_backend, SvdResult};
+use thiserror::Error;
 
 /// Error type for SVD operations in tensor4all-linalg.
 #[derive(Debug, Error)]
@@ -123,7 +121,7 @@ fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
     r.max(1)
 }
 
-/// Extract U, S, V from mdarray-linalg's SVDDecomp (which returns U, S, Vt).
+/// Extract U, S, V from tensorbackend's SvdResult (which returns U, S, Vt).
 ///
 /// This helper function converts the backend's SVD result to our desired format:
 /// - Extracts singular values from the diagonal view (first row)
@@ -131,7 +129,7 @@ fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
 /// - Converts Vt to V (takes first k rows and (conjugate-)transposes)
 ///
 /// # Arguments
-/// * `decomp` - SVD decomposition from mdarray-linalg
+/// * `decomp` - SVD decomposition from tensorbackend
 /// * `m` - Number of rows
 /// * `n` - Number of columns
 /// * `k` - Bond dimension (min(m, n))
@@ -141,8 +139,8 @@ fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
 /// - `u_vec` is a vector of length `m * k` containing U matrix data
 /// - `s_vec` is a vector of length `k` containing singular values (real, f64)
 /// - `v_vec` is a vector of length `n * k` containing V matrix data
-fn extract_usv_from_svd_decomp<T>(
-    decomp: SVDDecomp<T>,
+fn extract_usv_from_svd_result<T>(
+    decomp: SvdResult<T>,
     m: usize,
     n: usize,
     k: usize,
@@ -151,7 +149,7 @@ where
     T: ComplexFloat + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    let SVDDecomp { s, u, vt } = decomp;
+    let SvdResult { s, u, vt } = decomp;
 
     // Extract singular values and convert to real type.
     //
@@ -321,7 +319,7 @@ where
     let decomp = svd_backend(a_slice).map_err(SvdError::ComputationError)?;
 
     // Extract U, S, V from the decomposition (full rank k)
-    let (u_vec_full, s_vec_full, v_vec_full) = extract_usv_from_svd_decomp(decomp, m, n, k);
+    let (u_vec_full, s_vec_full, v_vec_full) = extract_usv_from_svd_result(decomp, m, n, k);
 
     // Compute retained rank based on rtol truncation
     let r = compute_retained_rank(&s_vec_full, rtol);

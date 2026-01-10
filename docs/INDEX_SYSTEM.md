@@ -42,6 +42,44 @@ The index system in tensor4all-rs-index-like is designed to support both:
 - **ITensors.jl-like behavior**: Directionless indices for convenient tensor operations
 - **QSpace compatibility**: Directed indices (bra/ket) for quantum tensor networks
 
+## Why Index IDs are Needed
+
+**Rule**: Contractable indices must have the same ID.
+
+This rule is explicitly enforced in the `is_contractable()` method of `IndexLike`.
+
+### The Problem: Large Networks Need Efficient Pairing
+
+In QSpace (and other symmetric tensor libraries), contractability can be determined from:
+- Quantum numbers / symmetry sectors
+- Dimension
+- Direction (bra/ket)
+
+However, for large and complex tensor networks (e.g., TreeTN, MPS/MPO with many sites), you often need to:
+1. Build a **graph structure** to represent connections between tensors
+2. Efficiently look up "which leg of tensor A connects to which leg of tensor B"
+3. Propagate indices through network transformations (splitting, merging, canonicalization)
+
+A **lightweight ID** serves as the "pairing key" that answers: *which specific legs are intended to contract?*
+
+### ID vs. Symmetry/Dimension Checks
+
+| Aspect | Purpose |
+|--------|---------|
+| **ID** | Identifies *intent to pair* — which legs should contract |
+| **dim** | Checks *dimensional compatibility* — sizes must match |
+| **ConjState** | Checks *directional compatibility* — bra↔ket or undirected↔undirected |
+| **Symmetry sectors** (QSpace-specific) | Checks *mathematical compatibility* — quantum numbers must match |
+
+The `is_contractable()` method checks all applicable criteria:
+1. Same `id()`
+2. Same `dim()`
+3. Compatible `ConjState`
+
+This separation allows:
+- **Graph algorithms** to use IDs for fast edge lookups (O(1) with HashSet/HashMap)
+- **Contraction algorithms** to verify mathematical compatibility before actual computation
+
 ## QSpace Overview
 
 QSpace (extern/qspace-v4-pub) is a MATLAB/Octave library for tensor networks with quantum number symmetries. In QSpace:

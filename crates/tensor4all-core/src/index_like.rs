@@ -90,13 +90,24 @@ pub enum ConjState {
 pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     /// Lightweight identifier type (conjugate-independent).
     ///
-    /// Used as edge labels in TreeTN graphs for efficient matching.
+    /// **Rule**: Contractable indices must have the same ID.
+    ///
+    /// The ID serves as a "pairing key" to identify which legs are intended to contract.
+    /// In large tensor networks, IDs enable efficient graph-based lookups (O(1) with HashSet/HashMap)
+    /// to find matching legs across many tensors.
+    ///
+    /// This is separate from dimension/direction checks:
+    /// - **ID**: "intent to pair" (which specific legs should connect)
+    /// - **dim/ConjState**: "mathematical compatibility" (can they actually contract)
     type Id: Clone + Eq + Hash + Debug + Send + Sync;
 
     /// Get the identifier of this index.
     ///
-    /// The ID is used for matching indices during contraction.
-    /// Two indices with the same ID are considered the same logical leg.
+    /// The ID is used as the pairing key during contraction.
+    /// **Contractable indices must have the same ID** — this is enforced by `is_contractable()`.
+    ///
+    /// Two indices with the same ID represent the same logical leg (though they may differ
+    /// in conjugate state for directed indices).
     fn id(&self) -> &Self::Id;
 
     /// Get the total dimension (state-space dimension) of the index.
