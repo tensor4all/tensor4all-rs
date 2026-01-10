@@ -7,8 +7,7 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::index::{DynId, NoSymmSpace};
-use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, TensorLike};
 use crate::algorithm::CanonicalForm;
 
 use super::TreeTN;
