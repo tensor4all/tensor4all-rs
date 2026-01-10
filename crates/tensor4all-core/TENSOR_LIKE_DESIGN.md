@@ -150,10 +150,10 @@ pub type DefaultTreeTN<V = NodeIndex> = TreeTN<TensorDynLen, V>;
 /// # 設計方針
 ///
 /// - `Id` を関連型として持つ（軽量な識別子）
-/// - ID が同じ Index は同じと定義（`Eq` は ID で比較）
-/// - conjugate 状態（方向）は等価性判定では無視される
-/// - conjugate の整合性は縮約実行時にチェックされ、不一致なら Runtime エラー
-pub trait IndexLike: Clone + Debug + Send + Sync + 'static {
+/// - `Eq` はオブジェクト等価性（ID + dimension + conjugate state を含む）
+/// - `conj_state()` で方向（conjugate state）を取得
+/// - `is_contractable()` で縮約可能性を判定（方向を考慮）
+pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     /// 軽量な識別子型（conjugate 情報を持たない）
     type Id: Clone + Eq + Hash + Debug + Send + Sync;
 
@@ -162,6 +162,20 @@ pub trait IndexLike: Clone + Debug + Send + Sync + 'static {
 
     /// 次元
     fn dim(&self) -> usize;
+
+    /// Conjugate state (方向) を取得
+    fn conj_state(&self) -> ConjState;
+
+    /// Conjugate を取得（Ket <-> Bra を反転、Undirected は不変）
+    fn conj(&self) -> Self;
+
+    /// 縮約可能性を判定（デフォルト実装）
+    /// - 同じ ID + 同じ dimension
+    /// - Conjugate state が互換性がある:
+    ///   - (Ket, Bra) or (Bra, Ket) → contractable
+    ///   - (Undirected, Undirected) → contractable
+    ///   - Mixed (Undirected, Ket/Bra) → not contractable
+    fn is_contractable(&self, other: &Self) -> bool { ... }
 
     /// 同じ ID か比較（デフォルト実装）
     fn same_id(&self, other: &Self) -> bool {
@@ -174,13 +188,23 @@ pub trait IndexLike: Clone + Debug + Send + Sync + 'static {
     }
 }
 
-// PartialEq/Eq は ID で判定（conjugate 無視）
+// PartialEq/Eq はオブジェクト等価性で判定（conjugate state を含む）
 // 実装例:
 // impl PartialEq for DynIndex {
 //     fn eq(&self, other: &Self) -> bool {
-//         self.id() == other.id()
+//         self.id() == other.id() && self.dim() == other.dim() && self.conj_state() == other.conj_state()
 //     }
 // }
+```
+
+### ConjState
+
+```rust
+pub enum ConjState {
+    Undirected,  // 方向なし（ITensors.jl-like デフォルト）
+    Ket,         // Ingoing（QSpace: itag に trailing `*` なし）
+    Bra,         // Outgoing（QSpace: itag に trailing `*` あり）
+}
 ```
 
 ### ID を関連型にする理由
@@ -211,7 +235,8 @@ where
 
 ### Eq の設計方針
 
-`Eq` は「同じ論理的な脚かどうか」を判定する（conjugate 状態は無視）。
+`Eq` は「オブジェクト等価性」を判定する（ID + dimension + conjugate state を含む）。
+`is_contractable()` が「縮約可能性」を判定する（方向を考慮したルール）。
 
 具体的な実装での例（ITensor スタイル）:
 ```rust

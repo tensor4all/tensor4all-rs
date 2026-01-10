@@ -402,6 +402,16 @@ impl IndexLike for DynIndex {
         self.symm.total_dim()
     }
 
+    fn conj_state(&self) -> crate::ConjState {
+        // Default indices are undirected (ITensors.jl-like behavior)
+        crate::ConjState::Undirected
+    }
+
+    fn conj(&self) -> Self {
+        // For undirected indices, conj() is a no-op
+        self.clone()
+    }
+
     fn sim(&self) -> Self {
         Index {
             id: DynId(generate_id()),
@@ -574,5 +584,45 @@ mod tests {
     fn test_index_satisfies_index_like() {
         // Compile-time check that DynIndex implements IndexLike
         _assert_index_like_bounds::<DynIndex>();
+    }
+
+    #[test]
+    fn test_conj_state_undirected() {
+        let i: DynIndex = Index::new_dyn(5);
+        assert_eq!(i.conj_state(), crate::ConjState::Undirected);
+    }
+
+    #[test]
+    fn test_conj_undirected_noop() {
+        let i: DynIndex = Index::new_dyn(5);
+        let i_conj = i.conj();
+        // For undirected indices, conj() should be a no-op
+        assert_eq!(i, i_conj);
+        assert_eq!(i.conj_state(), i_conj.conj_state());
+    }
+
+    #[test]
+    fn test_is_contractable_undirected() {
+        let i1: DynIndex = Index::new_dyn(5);
+        let i2 = i1.clone();
+        let i3: DynIndex = Index::new_dyn(5);
+
+        // Same index (clone) should be contractable
+        assert!(i1.is_contractable(&i2));
+        // Different index (different ID) should not be contractable
+        assert!(!i1.is_contractable(&i3));
+    }
+
+    #[test]
+    fn test_is_contractable_same_id_dim() {
+        let i1: DynIndex = Index::new_dyn(5);
+        let i2 = i1.clone();
+        let i3: DynIndex = Index::new_dyn(3);
+
+        // Same ID and dim should be contractable for undirected
+        assert!(i1.is_contractable(&i2));
+        // Different dim should not be contractable even if same ID
+        // (but in practice, different IDs are used)
+        assert!(!i1.is_contractable(&i3));
     }
 }

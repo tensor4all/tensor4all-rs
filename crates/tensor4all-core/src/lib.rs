@@ -11,7 +11,7 @@ pub mod defaults;
 pub use defaults::index;
 
 pub use defaults::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, NoSymmSpace, Symmetry, TagSet};
-pub use index_like::IndexLike;
+pub use index_like::{ConjState, IndexLike};
 
 // Index operations (uses defaults::*)
 pub mod index_ops;

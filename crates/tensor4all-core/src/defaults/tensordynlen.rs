@@ -1186,8 +1186,11 @@ impl TensorDynLen {
     /// // Elements are now conjugated: 1-2i, 3+4i
     /// ```
     pub fn conj(&self) -> Self {
+        // Conjugate tensor: conjugate storage data and map indices via IndexLike::conj()
+        // For default undirected indices, conj() is a no-op, so this is future-proof
+        // for QSpace-compatible directed indices where conj() flips Ket <-> Bra
         Self {
-            indices: self.indices.clone(),
+            indices: self.indices.iter().map(|idx| idx.conj()).collect(),
             dims: self.dims.clone(),
             storage: Arc::new(self.storage.conj()),
         }

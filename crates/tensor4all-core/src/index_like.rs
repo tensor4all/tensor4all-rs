@@ -6,6 +6,40 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
+/// Conjugate state (direction) of an index.
+///
+/// This enum represents whether an index has a direction (bra/ket) or is directionless.
+/// The direction is used to determine contractability between indices.
+///
+/// # QSpace Compatibility
+///
+/// In QSpace (extern/qspace-v4-pub), index direction is encoded via trailing `*` in `itags`:
+/// - **Ket** = ingoing index (QSpace: itag **without** trailing `*`)
+/// - **Bra** = outgoing index (QSpace: itag **with** trailing `*`)
+///
+/// # ITensors.jl Compatibility
+///
+/// ITensors.jl uses directionless indices by default (convenient for general tensor operations).
+/// The `Undirected` variant provides this behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConjState {
+    /// Directionless index (ITensors.jl-like default).
+    ///
+    /// Undirected indices can contract with other undirected indices
+    /// if they have the same ID and dimension.
+    Undirected,
+    /// Ket (ingoing) index.
+    ///
+    /// In QSpace terminology, this corresponds to an index without a trailing `*` in its itag.
+    /// Ket indices can only contract with Bra indices (and vice versa).
+    Ket,
+    /// Bra (outgoing) index.
+    ///
+    /// In QSpace terminology, this corresponds to an index with a trailing `*` in its itag.
+    /// Bra indices can only contract with Ket indices (and vice versa).
+    Bra,
+}
+
 /// Trait for index-like types that can be used in tensor operations.
 ///
 /// This trait abstracts away the identity mechanism of indices, allowing algorithms
@@ -14,20 +48,31 @@ use std::hash::Hash;
 /// # Design Principles
 ///
 /// - **`Id` as associated type**: Lightweight identifier (conjugate-independent)
-/// - **`Eq` by ID**: Two indices are equal iff their IDs match
+/// - **`Eq` by object equality**: Two indices are equal iff they represent the same object
+///   (including ID, dimension, and conjugate state if applicable)
 /// - **`dim()`**: Returns the dimension of the index
+/// - **`conj_state()`**: Returns the conjugate state (direction) of the index
 ///
 /// # Key Properties
 ///
-/// - **`Eq`**: Defines when two indices are considered "the same leg" (for contraction pairing)
+/// - **`Eq`**: Defines object equality (includes ID, dimension, and conjugate state)
 /// - **`Hash`**: Enables efficient lookup in `HashMap<I, ...>` / `HashSet<I>`
 /// - **`Clone`**: Indices are small value types, freely copyable
+/// - **`is_contractable()`**: Determines if two indices can be contracted
 ///
-/// # Invariant
+/// # Conjugate State and Contractability
 ///
-/// Two `Index` values are equal (via `Eq`) iff they refer to the same logical leg.
-/// Symmetry metadata, direction flags, prime levels, tags, etc. may be carried by the index
-/// but **must not affect `Eq` / `Hash`** for ITensors-like semantics (where indices match by ID only).
+/// The `conj_state()` method returns the direction of an index:
+/// - `Undirected`: Directionless index (ITensors.jl-like default)
+/// - `Ket`: Ingoing index (QSpace: no trailing `*` in itag)
+/// - `Bra`: Outgoing index (QSpace: trailing `*` in itag)
+///
+/// Two indices are contractable if:
+/// - They have the same `id()` and `dim()`
+/// - Their conjugate states are compatible:
+///   - `(Ket, Bra)` or `(Bra, Ket)` → contractable
+///   - `(Undirected, Undirected)` → contractable
+///   - Mixed `(Undirected, Ket/Bra)` → **not contractable** (mixing forbidden)
 ///
 /// # Example
 ///
@@ -57,9 +102,51 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     /// Get the total dimension (state-space dimension) of the index.
     fn dim(&self) -> usize;
 
+    /// Get the conjugate state (direction) of this index.
+    ///
+    /// Returns `ConjState::Undirected` for directionless indices (ITensors.jl-like default),
+    /// or `ConjState::Ket`/`ConjState::Bra` for directed indices (QSpace-compatible).
+    fn conj_state(&self) -> ConjState;
+
+    /// Create the conjugate of this index.
+    ///
+    /// For directed indices, this toggles between `Ket` and `Bra`.
+    /// For `Undirected` indices, this returns `self` unchanged (no-op).
+    ///
+    /// # Returns
+    /// A new index with the conjugate state toggled (if directed) or unchanged (if undirected).
+    fn conj(&self) -> Self;
+
+    /// Check if this index can be contracted with another index.
+    ///
+    /// Two indices are contractable if:
+    /// - They have the same `id()` and `dim()`
+    /// - Their conjugate states are compatible:
+    ///   - `(Ket, Bra)` or `(Bra, Ket)` → contractable
+    ///   - `(Undirected, Undirected)` → contractable
+    ///   - Mixed `(Undirected, Ket/Bra)` → **not contractable** (mixing forbidden)
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation checks:
+    /// 1. Same ID: `self.id() == other.id()`
+    /// 2. Same dimension: `self.dim() == other.dim()`
+    /// 3. Compatible conjugate states (see rules above)
+    fn is_contractable(&self, other: &Self) -> bool {
+        if self.id() != other.id() || self.dim() != other.dim() {
+            return false;
+        }
+        match (self.conj_state(), other.conj_state()) {
+            (ConjState::Ket, ConjState::Bra) | (ConjState::Bra, ConjState::Ket) => true,
+            (ConjState::Undirected, ConjState::Undirected) => true,
+            _ => false, // Mixed directed/undirected is forbidden
+        }
+    }
+
     /// Check if this index has the same ID as another.
     ///
     /// Default implementation compares IDs directly.
+    /// This is a convenience method for pure ID comparison (does not check contractability).
     fn same_id(&self, other: &Self) -> bool {
         self.id() == other.id()
     }
