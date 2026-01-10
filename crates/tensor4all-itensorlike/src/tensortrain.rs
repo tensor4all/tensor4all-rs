@@ -10,10 +10,11 @@ use std::ops::Range;
 
 use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
 use tensor4all_core::{AnyScalar, TensorAccess, TensorDynLen};
+use tensor4all_treetn::treetn::contraction::{contract as treetn_contract, ContractionMethod, ContractionOptions as TreeTNContractionOptions};
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 use crate::error::{Result, TensorTrainError};
-use crate::options::{CanonicalForm, TruncateAlg, TruncateOptions};
+use crate::options::{CanonicalForm, ContractMethod, ContractOptions, TruncateAlg, TruncateOptions};
 
 /// Tensor Train with orthogonality tracking.
 ///
@@ -606,8 +607,76 @@ impl TensorTrain {
         self.norm_squared().sqrt()
     }
 
-    // Note: contract method is temporarily disabled pending TreeTN contraction API refactoring.
-    // See: treetn/contraction.rs for the underlying implementation.
+    /// Contract two tensor trains, returning a new tensor train.
+    ///
+    /// This performs element-wise contraction of corresponding sites,
+    /// similar to MPO-MPO contraction in ITensor.
+    ///
+    /// # Arguments
+    /// * `other` - The other tensor train to contract with
+    /// * `options` - Contraction options (method, max_rank, rtol, nsweeps)
+    ///
+    /// # Returns
+    /// A new tensor train resulting from the contraction.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - Either tensor train is empty
+    /// - The tensor trains have different lengths
+    /// - The contraction algorithm fails
+    pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
+        if self.is_empty() || other.is_empty() {
+            return Err(TensorTrainError::InvalidStructure {
+                message: "Cannot contract empty tensor trains".to_string(),
+            });
+        }
+
+        if self.len() != other.len() {
+            return Err(TensorTrainError::InvalidStructure {
+                message: format!(
+                    "Tensor trains must have the same length for contraction: {} vs {}",
+                    self.len(),
+                    other.len()
+                ),
+            });
+        }
+
+        // Convert ContractOptions to TreeTN ContractionOptions
+        let treetn_method = match options.method {
+            ContractMethod::Zipup => ContractionMethod::Zipup,
+            ContractMethod::Fit => ContractionMethod::Fit,
+            ContractMethod::Naive => ContractionMethod::Naive,
+        };
+
+        let treetn_options =
+            TreeTNContractionOptions::new(treetn_method).with_nsweeps(options.nsweeps);
+
+        let treetn_options = if let Some(max_rank) = options.max_rank {
+            treetn_options.with_max_rank(max_rank)
+        } else {
+            treetn_options
+        };
+
+        let treetn_options = if let Some(rtol) = options.rtol {
+            treetn_options.with_rtol(rtol)
+        } else {
+            treetn_options
+        };
+
+        // Use the last site as the canonical center
+        let center = self.len() - 1;
+
+        // Call TreeTN contract
+        let result_inner = treetn_contract(&self.inner, &other.inner, &center, treetn_options)
+            .map_err(|e| TensorTrainError::InvalidStructure {
+                message: format!("TreeTN contraction failed: {}", e),
+            })?;
+
+        Ok(Self {
+            inner: result_inner,
+            canonical_form: Some(CanonicalForm::Unitary),
+        })
+    }
 }
 
 // Implement Default for TensorTrain to allow std::mem::take

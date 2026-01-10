@@ -8,7 +8,7 @@
 
 mod addition;
 mod canonicalize;
-mod contraction;
+pub mod contraction;
 mod decompose;
 mod fit;
 pub mod linsolve;
