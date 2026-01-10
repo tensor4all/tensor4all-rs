@@ -7,7 +7,7 @@ use std::hash::Hash;
 use anyhow::Result;
 
 use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::{contract_multi, TensorDynLen};
+use tensor4all_core::{IndexLike, contract_multi, TensorDynLen};
 
 use super::environment::{EnvironmentCache, NetworkTopology};
 use crate::treetn::TreeTN;
@@ -32,26 +32,25 @@ use crate::treetn::TreeTN;
 ///
 /// This forms a "2-chain" overlap: `<b|x>` contracted over
 /// all nodes except the open region.
-pub struct ProjectedState<Id, Symm, V>
+pub struct ProjectedState<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// The RHS state |b⟩
-    pub rhs: TreeTN<Id, Symm, V>,
+    pub rhs: TreeTN<I, V>,
     /// Environment cache
-    pub envs: EnvironmentCache<Id, Symm, V>,
+    pub envs: EnvironmentCache<I, V>,
 }
 
-impl<Id, Symm, V> ProjectedState<Id, Symm, V>
+impl<I, V> ProjectedState<I, V>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
     Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     /// Create a new ProjectedState.
-    pub fn new(rhs: TreeTN<Id, Symm, V>) -> Self {
+    pub fn new(rhs: TreeTN<I, V>) -> Self {
         Self {
             rhs,
             envs: EnvironmentCache::new(),
@@ -71,9 +70,9 @@ where
     pub fn local_constant_term<T: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        ket_state: &TreeTN<Id, Symm, V>,
+        ket_state: &TreeTN<I, V>,
         topology: &T,
-    ) -> Result<TensorDynLen<Id, Symm>> {
+    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
         // For V_in = V_out case, use ket_state as bra_state
         self.local_constant_term_with_bra(region, ket_state, ket_state, topology)
     }
@@ -90,15 +89,15 @@ where
     pub fn local_constant_term_with_bra<T: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        _ket_state: &TreeTN<Id, Symm, V>,
-        bra_state: &TreeTN<Id, Symm, V>,
+        _ket_state: &TreeTN<I, V>,
+        bra_state: &TreeTN<I, V>,
         topology: &T,
-    ) -> Result<TensorDynLen<Id, Symm>> {
+    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
         // Ensure environments are computed
         self.ensure_environments(region, bra_state, topology)?;
 
         // Collect all tensors to contract: local RHS tensors + environments
-        let mut all_tensors: Vec<TensorDynLen<Id, Symm>> = Vec::new();
+        let mut all_tensors: Vec<TensorDynLen<I::Id, I::Symm>> = Vec::new();
 
         // Collect local RHS tensors (conjugated)
         for node in region {
@@ -136,7 +135,7 @@ where
     fn ensure_environments<T: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        bra_state: &TreeTN<Id, Symm, V>,
+        bra_state: &TreeTN<I, V>,
         topology: &T,
     ) -> Result<()> {
         for node in region {
@@ -160,9 +159,9 @@ where
         &mut self,
         from: &V,
         to: &V,
-        bra_state: &TreeTN<Id, Symm, V>,
+        bra_state: &TreeTN<I, V>,
         topology: &T,
-    ) -> Result<TensorDynLen<Id, Symm>> {
+    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
         // First, ensure child environments are computed
         let child_neighbors: Vec<V> = topology.neighbors(from).filter(|n| n != to).collect();
 
@@ -174,7 +173,7 @@ where
         }
 
         // Collect child environments
-        let child_envs: Vec<TensorDynLen<Id, Symm>> = child_neighbors
+        let child_envs: Vec<TensorDynLen<I::Id, I::Symm>> = child_neighbors
             .iter()
             .filter_map(|child| self.envs.get(child, from).cloned())
             .collect();

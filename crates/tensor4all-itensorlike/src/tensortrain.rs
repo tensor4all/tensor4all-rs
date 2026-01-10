@@ -44,8 +44,8 @@ use crate::options::{
 #[derive(Debug, Clone)]
 pub struct TensorTrain<Id = DynId, Symm = NoSymmSpace>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug + Send + Sync,
+    Symm: Clone + Symmetry + std::fmt::Debug + Send + Sync,
 {
     /// The underlying TreeTN with linear chain topology.
     /// Node names are usize (0, 1, 2, ...) representing site indices.
@@ -56,8 +56,8 @@ where
 
 impl<Id, Symm> TensorTrain<Id, Symm>
 where
-    Id: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + From<DynId> + Ord,
-    Symm: Clone + PartialEq + Eq + std::hash::Hash + Symmetry + std::fmt::Debug + From<NoSymmSpace>,
+    Id: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + From<DynId> + Ord + Send + Sync,
+    Symm: Clone + PartialEq + Eq + std::hash::Hash + Symmetry + std::fmt::Debug + From<NoSymmSpace> + Send + Sync,
 {
     /// Create a new tensor train from a vector of tensors.
     ///
@@ -706,8 +706,8 @@ where
 // Implement Default for TensorTrain to allow std::mem::take
 impl<Id, Symm> Default for TensorTrain<Id, Symm>
 where
-    Id: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + From<DynId> + Ord,
-    Symm: Clone + PartialEq + Eq + std::hash::Hash + Symmetry + std::fmt::Debug + From<NoSymmSpace>,
+    Id: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + From<DynId> + Ord + Send + Sync,
+    Symm: Clone + PartialEq + Eq + std::hash::Hash + Symmetry + std::fmt::Debug + From<NoSymmSpace> + Send + Sync,
 {
     fn default() -> Self {
         Self::new(vec![]).expect("Failed to create empty TensorTrain")

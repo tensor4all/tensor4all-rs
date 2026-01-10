@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock};
 use kryst::matrix::op::LinOp;
 use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
 use tensor4all_core::storage::{DenseStorageF64, StorageScalar};
-use tensor4all_core::{Storage, TensorDynLen};
+use tensor4all_core::{IndexLike, Storage, TensorDynLen};
 
 use super::linear_operator::LinearOperator;
 use super::projected_operator::ProjectedOperator;
@@ -22,25 +22,26 @@ use crate::treetn::TreeTN;
 /// where H is the projected operator and x, y are flattened tensor data.
 ///
 /// All data is owned to satisfy kryst's `'static` requirement.
-pub struct LocalLinOp<Id, Symm, V>
+pub struct LocalLinOp<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+    I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     /// The projected operator (shared, mutable for environment caching)
-    pub projected_operator: Arc<RwLock<ProjectedOperator<Id, Symm, V>>>,
+    pub projected_operator: Arc<RwLock<ProjectedOperator<I, V>>>,
     /// Linear operator with index mapping (optional, used when available)
-    pub linear_operator: Option<Arc<LinearOperator<Id, Symm, V>>>,
+    pub linear_operator: Option<Arc<LinearOperator<I, V>>>,
     /// The region being updated
     pub region: Vec<V>,
     /// Current state for ket in environment computation (V_in space)
-    pub state: TreeTN<Id, Symm, V>,
+    pub state: TreeTN<I, V>,
     /// Reference state for bra in environment computation (V_out space)
     /// If None, uses `state` (same as ket) for V_in = V_out case
-    pub bra_state: Option<TreeTN<Id, Symm, V>>,
+    pub bra_state: Option<TreeTN<I, V>>,
     /// Template tensor (stores index structure for reshaping)
-    pub template: TensorDynLen<Id, Symm>,
+    pub template: TensorDynLen<I::Id, I::Symm>,
     /// Coefficient a₀
     pub a0: f64,
     /// Coefficient a₁
@@ -49,18 +50,19 @@ where
     pub dim: usize,
 }
 
-impl<Id, Symm, V> LocalLinOp<Id, Symm, V>
+impl<I, V> LocalLinOp<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+    I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     /// Create a new LocalLinOp for V_in = V_out case.
     pub fn new(
-        projected_operator: Arc<RwLock<ProjectedOperator<Id, Symm, V>>>,
+        projected_operator: Arc<RwLock<ProjectedOperator<I, V>>>,
         region: Vec<V>,
-        state: TreeTN<Id, Symm, V>,
-        template: TensorDynLen<Id, Symm>,
+        state: TreeTN<I, V>,
+        template: TensorDynLen<I::Id, I::Symm>,
         a0: f64,
         a1: f64,
     ) -> Self {
@@ -86,11 +88,11 @@ where
 
     /// Create a new LocalLinOp for V_in ≠ V_out case with explicit bra_state.
     pub fn with_bra_state(
-        projected_operator: Arc<RwLock<ProjectedOperator<Id, Symm, V>>>,
+        projected_operator: Arc<RwLock<ProjectedOperator<I, V>>>,
         region: Vec<V>,
-        state: TreeTN<Id, Symm, V>,
-        bra_state: TreeTN<Id, Symm, V>,
-        template: TensorDynLen<Id, Symm>,
+        state: TreeTN<I, V>,
+        bra_state: TreeTN<I, V>,
+        template: TensorDynLen<I::Id, I::Symm>,
         a0: f64,
         a1: f64,
     ) -> Self {
@@ -116,12 +118,12 @@ where
 
     /// Create a new LocalLinOp with a LinearOperator for index mapping.
     pub fn with_linear_operator(
-        projected_operator: Arc<RwLock<ProjectedOperator<Id, Symm, V>>>,
-        linear_operator: Arc<LinearOperator<Id, Symm, V>>,
+        projected_operator: Arc<RwLock<ProjectedOperator<I, V>>>,
+        linear_operator: Arc<LinearOperator<I, V>>,
         region: Vec<V>,
-        state: TreeTN<Id, Symm, V>,
-        bra_state: Option<TreeTN<Id, Symm, V>>,
-        template: TensorDynLen<Id, Symm>,
+        state: TreeTN<I, V>,
+        bra_state: Option<TreeTN<I, V>>,
+        template: TensorDynLen<I::Id, I::Symm>,
         a0: f64,
         a1: f64,
     ) -> Self {
@@ -147,12 +149,12 @@ where
 
     /// Get the bra state for environment computation.
     /// Returns bra_state if set, otherwise returns state (V_in = V_out case).
-    fn get_bra_state(&self) -> &TreeTN<Id, Symm, V> {
+    fn get_bra_state(&self) -> &TreeTN<I, V> {
         self.bra_state.as_ref().unwrap_or(&self.state)
     }
 
     /// Convert flat array to tensor.
-    fn array_to_tensor(&self, x: &[f64]) -> TensorDynLen<Id, Symm> {
+    fn array_to_tensor(&self, x: &[f64]) -> TensorDynLen<I::Id, I::Symm> {
         let dims: Vec<usize> = self
             .template
             .indices
@@ -164,17 +166,18 @@ where
     }
 
     /// Convert tensor to flat array.
-    fn tensor_to_array(&self, tensor: &TensorDynLen<Id, Symm>) -> Vec<f64> {
+    fn tensor_to_array(&self, tensor: &TensorDynLen<I::Id, I::Symm>) -> Vec<f64> {
         f64::extract_dense_view(tensor.storage.as_ref())
             .expect("Expected DenseF64 storage")
             .to_vec()
     }
 }
 
-impl<Id, Symm, V> LinOp for LocalLinOp<Id, Symm, V>
+impl<I, V> LinOp for LocalLinOp<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    Symm:
+    I: IndexLike + 'static,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
+    I::Symm:
         Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {

@@ -2,7 +2,7 @@
 
 use tensor4all_core::index::{DynId, Index, NoSymmSpace};
 use tensor4all_core::DynIndex;
-use tensor4all_core::{StorageScalar, TensorDynLen, TensorLike, TensorLikeDowncast};
+use tensor4all_core::{StorageScalar, TensorDynLen, TensorLike};
 
 /// Helper to create a simple tensor with given dimensions
 fn make_tensor(dims: &[usize]) -> TensorDynLen {
@@ -36,18 +36,6 @@ fn test_tensor_like_num_external_indices() {
 }
 
 #[test]
-fn test_tensor_like_to_tensor() {
-    let original = make_tensor(&[2, 3]);
-
-    // to_tensor should return a clone
-    let cloned = <TensorDynLen as TensorLike>::to_tensor(&original)
-        .expect("to_tensor should succeed");
-
-    assert_eq!(cloned.indices.len(), original.indices.len());
-    assert_eq!(cloned.dims, original.dims);
-}
-
-#[test]
 fn test_tensor_like_tensordot_basic() {
     // Create two tensors: A(i,j) and B(j,k)
     // Contract over j to get C(i,k)
@@ -67,7 +55,7 @@ fn test_tensor_like_tensordot_basic() {
     // Create pairs with DynIndex
     let pairs: Vec<(DynIndex, DynIndex)> = vec![(j.clone(), j_copy.clone())];
 
-    // Use TensorLike::tensordot (via default implementation)
+    // Use TensorLike::tensordot
     let c = <TensorDynLen as TensorLike>::tensordot(&a, &b, &pairs)
         .expect("tensordot should succeed");
 
@@ -75,80 +63,4 @@ fn test_tensor_like_tensordot_basic() {
     assert_eq!(c.dims, vec![2, 4]);
 }
 
-#[test]
-fn test_tensor_like_object_safety() {
-    let tensor = make_tensor(&[2, 3]);
-
-    // Use trait object (TensorLike is now concrete, no associated types)
-    let trait_obj: &dyn TensorLike = &tensor;
-
-    // Should be able to call methods on trait object
-    assert_eq!(trait_obj.num_external_indices(), 2);
-
-    let external = trait_obj.external_indices();
-    assert_eq!(external.len(), 2);
-}
-
-#[test]
-fn test_tensor_like_clone_trait_object() {
-    let tensor = make_tensor(&[2, 3]);
-
-    // Box the tensor as a trait object
-    let boxed: Box<dyn TensorLike> = Box::new(tensor);
-
-    // Clone the boxed trait object (via dyn-clone)
-    let cloned = dyn_clone::clone_box(&*boxed);
-
-    // Both should have the same properties
-    assert_eq!(boxed.num_external_indices(), cloned.num_external_indices());
-}
-
-#[test]
-fn test_tensor_like_as_any() {
-    let tensor = make_tensor(&[2, 3]);
-
-    // Get as Any
-    let any_ref = tensor.as_any();
-
-    // Should be able to downcast back to TensorDynLen
-    let downcast = any_ref.downcast_ref::<TensorDynLen>();
-    assert!(downcast.is_some());
-
-    let downcast_tensor = downcast.unwrap();
-    assert_eq!(downcast_tensor.dims, vec![2, 3]);
-}
-
-#[test]
-fn test_tensor_like_downcast_via_trait_object() {
-    let tensor = make_tensor(&[2, 3]);
-
-    // Use as trait object
-    let trait_obj: &dyn TensorLike = &tensor;
-
-    // Use TensorLikeDowncast extension trait
-    assert!(trait_obj.is::<TensorDynLen>());
-
-    let downcast = trait_obj.downcast_ref::<TensorDynLen>();
-    assert!(downcast.is_some());
-    assert_eq!(downcast.unwrap().dims, vec![2, 3]);
-
-    // Should not downcast to wrong type
-    assert!(!trait_obj.is::<String>());
-    assert!(trait_obj.downcast_ref::<String>().is_none());
-}
-
-#[test]
-fn test_tensor_like_downcast_boxed() {
-    let tensor = make_tensor(&[4, 5]);
-
-    // Box as trait object
-    let boxed: Box<dyn TensorLike> = Box::new(tensor);
-
-    // Downcast via as_any
-    let downcast = boxed.as_any().downcast_ref::<TensorDynLen>();
-    assert!(downcast.is_some());
-    assert_eq!(downcast.unwrap().dims, vec![4, 5]);
-
-    // Also via extension trait
-    assert!(boxed.is::<TensorDynLen>());
-}
+// Note: trait object tests removed - TensorLike is now fully generic and does not support dyn

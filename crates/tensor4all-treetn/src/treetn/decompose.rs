@@ -9,7 +9,7 @@ use std::hash::Hash;
 use anyhow::Result;
 
 use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::{IndexLike, TensorDynLen};
 use tensor4all_core::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
 
 use super::TreeTN;
@@ -90,13 +90,14 @@ impl<V: Clone + Hash + Eq> TreeTopology<V> {
 /// - The topology is invalid
 /// - Physical index positions don't match the tensor
 /// - Factorization fails
-pub fn factorize_tensor_to_treetn<Id, Symm, V>(
-    tensor: &TensorDynLen<Id, Symm>,
+pub fn factorize_tensor_to_treetn<I, V>(
+    tensor: &TensorDynLen<I::Id, I::Symm>,
     topology: &TreeTopology<V>,
-) -> Result<TreeTN<Id, Symm, V>>
+) -> Result<TreeTN<I, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug + Send + Sync,
+    I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
     factorize_tensor_to_treetn_with(tensor, topology, FactorizeAlg::QR)
@@ -126,14 +127,15 @@ where
 /// - The topology is invalid
 /// - Physical index positions don't match the tensor
 /// - Factorization fails
-pub fn factorize_tensor_to_treetn_with<Id, Symm, V>(
-    tensor: &TensorDynLen<Id, Symm>,
+pub fn factorize_tensor_to_treetn_with<I, V>(
+    tensor: &TensorDynLen<I::Id, I::Symm>,
     topology: &TreeTopology<V>,
     alg: FactorizeAlg,
-) -> Result<TreeTN<Id, Symm, V>>
+) -> Result<TreeTN<I, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug + Send + Sync,
+    I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
     topology.validate()?;
@@ -141,7 +143,7 @@ where
     if topology.nodes.len() == 1 {
         // Single node - just wrap the tensor
         let node_name = topology.nodes.keys().next().unwrap().clone();
-        let mut tn = TreeTN::<Id, Symm, V>::new();
+        let mut tn = TreeTN::<I, V>::new();
         tn.add_tensor(node_name, tensor.clone())?;
         return Ok(tn);
     }
@@ -210,7 +212,7 @@ where
     let mut current_tensor = tensor.clone();
 
     // Store the resulting node tensors
-    let mut node_tensors: HashMap<V, TensorDynLen<Id, Symm>> = HashMap::new();
+    let mut node_tensors: HashMap<V, TensorDynLen<I::Id, I::Symm>> = HashMap::new();
 
     // Store bond indices between nodes: (node_a, node_b) -> (index_on_a, index_on_b)
     let mut _bond_indices: HashMap<(V, V), _> = HashMap::new();
@@ -284,7 +286,7 @@ where
     // Build the TreeTN using from_tensors (auto-connection by matching index IDs)
     // Since factorize() returns shared bond_index, tensors already have matching index IDs
     let node_names: Vec<V> = topology.nodes.keys().cloned().collect();
-    let tensors: Vec<TensorDynLen<Id, Symm>> = node_names
+    let tensors: Vec<TensorDynLen<I::Id, I::Symm>> = node_names
         .iter()
         .map(|name| node_tensors.get(name).cloned().unwrap())
         .collect();

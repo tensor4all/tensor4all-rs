@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use tensor4all_core::index::Symmetry;
+use tensor4all_core::index::{Index, Symmetry};
+use tensor4all_core::IndexLike;
 use tensor4all_core::TensorDynLen;
 
 use crate::SiteIndexNetwork;
@@ -32,20 +33,18 @@ pub trait NetworkTopology<V> {
 ///
 /// The actual contraction logic is implemented in ProjectedOperator/ProjectedState.
 #[derive(Debug, Clone)]
-pub struct EnvironmentCache<Id, Symm, V>
+pub struct EnvironmentCache<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq,
 {
     /// Cached environment tensors: (from, to) -> tensor
-    envs: HashMap<(V, V), TensorDynLen<Id, Symm>>,
+    envs: HashMap<(V, V), TensorDynLen<I::Id, I::Symm>>,
 }
 
-impl<Id, Symm, V> EnvironmentCache<Id, Symm, V>
+impl<I, V> EnvironmentCache<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Create a new empty environment cache.
@@ -56,12 +55,12 @@ where
     }
 
     /// Get a cached environment tensor if it exists.
-    pub fn get(&self, from: &V, to: &V) -> Option<&TensorDynLen<Id, Symm>> {
+    pub fn get(&self, from: &V, to: &V) -> Option<&TensorDynLen<I::Id, I::Symm>> {
         self.envs.get(&(from.clone(), to.clone()))
     }
 
     /// Insert an environment tensor.
-    pub fn insert(&mut self, from: V, to: V, env: TensorDynLen<Id, Symm>) {
+    pub fn insert(&mut self, from: V, to: V, env: TensorDynLen<I::Id, I::Symm>) {
         self.envs.insert((from, to), env);
     }
 
@@ -122,10 +121,9 @@ where
     }
 }
 
-impl<Id, Symm, V> Default for EnvironmentCache<Id, Symm, V>
+impl<I, V> Default for EnvironmentCache<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     fn default() -> Self {
@@ -142,12 +140,12 @@ where
 /// This enables direct use of SiteIndexNetwork for cache invalidation
 /// and environment computation without needing adapter types like StaticTopology.
 impl<NodeName, Id, Symm, Tags> NetworkTopology<NodeName>
-    for SiteIndexNetwork<NodeName, Id, Symm, Tags>
+    for SiteIndexNetwork<NodeName, Index<Id, Symm, Tags>>
 where
     NodeName: Clone + Hash + Eq + Send + Sync + Debug,
-    Id: Clone + Hash + Eq,
-    Symm: Clone + Symmetry,
-    Tags: Clone,
+    Id: Clone + Hash + Eq + Debug + Send + Sync,
+    Symm: Clone + Symmetry + Debug + Send + Sync,
+    Tags: Clone + Debug + Send + Sync,
 {
     type Neighbors<'a>
         = Box<dyn Iterator<Item = NodeName> + 'a>

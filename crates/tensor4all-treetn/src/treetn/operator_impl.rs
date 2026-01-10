@@ -10,13 +10,13 @@ use super::TreeTN;
 use crate::operator::Operator;
 use crate::SiteIndexNetwork;
 
-impl<Id, Symm, V> Operator<Id, Symm, V> for TreeTN<Id, Symm, V>
+impl<I, V> Operator<I, V> for TreeTN<I, V>
 where
-    Id: Clone + Hash + Eq + Debug,
-    Symm: Clone + Symmetry + Debug,
+    Id: Clone + Hash + Eq + Debug + Send + Sync,
+    Symm: Clone + Symmetry + Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
-    fn site_indices(&self) -> HashSet<Index<Id, Symm>> {
+    fn site_indices(&self) -> HashSet<I> {
         // Collect all site indices from all nodes
         let mut all_indices = HashSet::new();
         for name in self.node_names() {
@@ -27,7 +27,7 @@ where
         all_indices
     }
 
-    fn site_index_network(&self) -> &SiteIndexNetwork<V, Id, Symm> {
+    fn site_index_network(&self) -> &SiteIndexNetwork<V, I> {
         &self.site_index_network
     }
 
@@ -48,7 +48,7 @@ mod tests {
         Index::new_dyn(dim)
     }
 
-    fn create_chain_site_network(n: usize) -> SiteIndexNetwork<String, DynId> {
+    fn create_chain_site_network(n: usize) -> SiteIndexNetwork<String, Index<DynId, NoSymmSpace>> {
         let mut net = SiteIndexNetwork::new();
         for i in 0..n {
             let name = format!("N{}", i);

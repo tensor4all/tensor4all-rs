@@ -7,7 +7,7 @@ use std::hash::Hash;
 use anyhow::Result;
 
 use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::{contract_multi, TensorDynLen};
+use tensor4all_core::{IndexLike, contract_multi, TensorDynLen};
 
 use super::environment::{EnvironmentCache, NetworkTopology};
 use crate::treetn::TreeTN;
@@ -33,26 +33,25 @@ use crate::treetn::TreeTN;
 ///
 /// This forms a "3-chain" sandwich: `<bra| H |ket>` contracted over
 /// all nodes except the open region.
-pub struct ProjectedOperator<Id, Symm, V>
+pub struct ProjectedOperator<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// The operator H
-    pub operator: TreeTN<Id, Symm, V>,
+    pub operator: TreeTN<I, V>,
     /// Environment cache
-    pub envs: EnvironmentCache<Id, Symm, V>,
+    pub envs: EnvironmentCache<I, V>,
 }
 
-impl<Id, Symm, V> ProjectedOperator<Id, Symm, V>
+impl<I, V> ProjectedOperator<I, V>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
     Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     /// Create a new ProjectedOperator.
-    pub fn new(operator: TreeTN<Id, Symm, V>) -> Self {
+    pub fn new(operator: TreeTN<I, V>) -> Self {
         Self {
             operator,
             envs: EnvironmentCache::new(),
@@ -74,17 +73,17 @@ where
     /// The result of applying H to v: `H|v⟩`
     pub fn apply<T: NetworkTopology<V>>(
         &mut self,
-        v: &TensorDynLen<Id, Symm>,
+        v: &TensorDynLen<I::Id, I::Symm>,
         region: &[V],
-        ket_state: &TreeTN<Id, Symm, V>,
-        bra_state: &TreeTN<Id, Symm, V>,
+        ket_state: &TreeTN<I, V>,
+        bra_state: &TreeTN<I, V>,
         topology: &T,
-    ) -> Result<TensorDynLen<Id, Symm>> {
+    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
         // Ensure environments are computed
         self.ensure_environments(region, ket_state, bra_state, topology)?;
 
         // Collect all tensors to contract: operator tensors + environments + input v
-        let mut all_tensors: Vec<TensorDynLen<Id, Symm>> = Vec::new();
+        let mut all_tensors: Vec<TensorDynLen<I::Id, I::Symm>> = Vec::new();
 
         // Collect local operator tensors
         for node in region {
@@ -122,8 +121,8 @@ where
     fn ensure_environments<T: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        ket_state: &TreeTN<Id, Symm, V>,
-        bra_state: &TreeTN<Id, Symm, V>,
+        ket_state: &TreeTN<I, V>,
+        bra_state: &TreeTN<I, V>,
         topology: &T,
     ) -> Result<()> {
         for node in region {
@@ -150,10 +149,10 @@ where
         &mut self,
         from: &V,
         to: &V,
-        ket_state: &TreeTN<Id, Symm, V>,
-        bra_state: &TreeTN<Id, Symm, V>,
+        ket_state: &TreeTN<I, V>,
+        bra_state: &TreeTN<I, V>,
         topology: &T,
-    ) -> Result<TensorDynLen<Id, Symm>> {
+    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
         // First, ensure child environments are computed
         let child_neighbors: Vec<V> = topology.neighbors(from).filter(|n| n != to).collect();
 
@@ -166,7 +165,7 @@ where
         }
 
         // Collect child environments
-        let child_envs: Vec<TensorDynLen<Id, Symm>> = child_neighbors
+        let child_envs: Vec<TensorDynLen<I::Id, I::Symm>> = child_neighbors
             .iter()
             .filter_map(|child| self.envs.get(child, from).cloned())
             .collect();

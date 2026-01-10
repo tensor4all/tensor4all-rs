@@ -16,16 +16,16 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 
 use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
+use tensor4all_core::IndexLike;
 use tensor4all_core::CanonicalForm;
 
 use super::localupdate::{apply_local_update_sweep, LocalUpdateSweepPlan, TruncateUpdater};
 use super::TreeTN;
 use crate::options::{CanonicalizationOptions, TruncationOptions};
 
-impl<Id, Symm, V> TreeTN<Id, Symm, V>
+impl<I, V> TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Truncate the network towards the specified center using options.
@@ -61,8 +61,8 @@ where
         options: TruncationOptions,
     ) -> Result<Self>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
-        Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + From<NoSymmSpace>,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
+        I::Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + From<NoSymmSpace> + Send + Sync,
         V: Ord,
     {
         self.truncate_impl(
@@ -84,8 +84,8 @@ where
         options: TruncationOptions,
     ) -> Result<()>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
-        Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + From<NoSymmSpace>,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
+        I::Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + From<NoSymmSpace> + Send + Sync,
         V: Ord,
     {
         self.truncate_impl(
@@ -109,8 +109,8 @@ where
         context_name: &str,
     ) -> Result<()>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
-        Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + From<NoSymmSpace>,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
+        I::Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + From<NoSymmSpace> + Send + Sync,
         V: Ord,
     {
         // Collect center nodes

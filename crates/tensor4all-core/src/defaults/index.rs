@@ -1,4 +1,18 @@
+//! Index types for tensor network operations.
+//!
+//! This module provides the default index types:
+//!
+//! - [`DynId`]: Runtime identity (UUID-based unique identifier)
+//! - [`NoSymmSpace`]: No symmetry (trivial symmetry space)
+//! - [`TagSet`]: Tag set for metadata (Arc-wrapped for cheap cloning)
+//! - [`Index`]: Generic index type parameterized by Id, Symm, Tags
+//! - [`DynIndex`]: Default index type (`Index<DynId, NoSymmSpace, TagSet>`)
+//!
+//! The `DynIndex` type implements the [`IndexLike`] trait.
+
+use crate::index_like::IndexLike;
 use crate::tagset::{DefaultTagSet as InlineTagSet, TagSetError, TagSetIterator, TagSetLike};
+use anyhow::Result;
 use rand::Rng;
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -363,9 +377,47 @@ pub type DefaultIndex<Id, Symm = NoSymmSpace> = Index<Id, Symm, TagSet>;
 /// Type alias for backwards compatibility.
 pub type DefaultTagSet = TagSet;
 
+// ============================================================================
+// DynIndex: Default index type with IndexLike implementation
+// ============================================================================
+
+/// Type alias for the default index type with IndexLike bound.
+///
+/// `DynIndex` uses:
+/// - `DynId`: Dynamic identity (UUID-based unique identifier)
+/// - `NoSymmSpace`: No symmetry (trivial symmetry space)
+/// - `TagSet`: Default tag set for metadata
+///
+/// This is the recommended index type for most tensor network applications.
+pub type DynIndex = Index<DynId, NoSymmSpace, TagSet>;
+
+impl IndexLike for DynIndex {
+    type Id = DynId;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+
+    fn dim(&self) -> usize {
+        self.symm.total_dim()
+    }
+
+    fn new_bond(dim: usize) -> Result<Self> {
+        Index::new_link(dim).map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))
+    }
+
+    fn sim(&self) -> Self {
+        Index {
+            id: DynId(generate_id()),
+            symm: self.symm.clone(),
+            tags: self.tags.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::generate_id;
+    use super::*;
     use std::collections::HashSet;
     use std::thread;
 
@@ -412,5 +464,103 @@ mod tests {
             NUM_THREADS * IDS_PER_THREAD,
             "All IDs should be unique across threads"
         );
+    }
+
+    #[test]
+    fn test_index_like_basic() {
+        let i: DynIndex = Index::new_dyn(5);
+
+        // Test IndexLike methods
+        assert_eq!(i.dim(), 5);
+
+        // Test id() method
+        let id = i.id();
+        assert_eq!(*id, i.id);
+    }
+
+    #[test]
+    fn test_index_like_id_methods() {
+        let i1: DynIndex = Index::new_dyn(5);
+        let i2 = i1.clone();
+        let i3: DynIndex = Index::new_dyn(5);
+
+        // same_id should return true for clones
+        assert!(i1.same_id(&i2));
+        // same_id should return false for different indices
+        assert!(!i1.same_id(&i3));
+
+        // has_id should match by ID
+        assert!(i1.has_id(i1.id()));
+        assert!(i1.has_id(i2.id()));
+        assert!(!i1.has_id(i3.id()));
+    }
+
+    #[test]
+    fn test_index_like_equality() {
+        let i1: DynIndex = Index::new_dyn(5);
+        let i2 = i1.clone();
+        let i3: DynIndex = Index::new_dyn(5);
+
+        // Same index (cloned) should be equal
+        assert_eq!(i1, i2);
+        // Different index (new ID) should not be equal
+        assert_ne!(i1, i3);
+    }
+
+    #[test]
+    fn test_index_like_in_hashset() {
+        let i1: DynIndex = Index::new_dyn(5);
+        let i2 = i1.clone();
+        let i3: DynIndex = Index::new_dyn(5);
+
+        let mut set = HashSet::new();
+        set.insert(i1.clone());
+
+        // Clone of same index should be found
+        assert!(set.contains(&i2));
+        // Different index should not be found
+        assert!(!set.contains(&i3));
+    }
+
+    #[test]
+    fn test_new_bond() {
+        let bond: DynIndex = DynIndex::new_bond(10).unwrap();
+        assert_eq!(bond.dim(), 10);
+
+        // Each new_bond creates a unique index
+        let bond2: DynIndex = DynIndex::new_bond(10).unwrap();
+        assert_ne!(bond, bond2);
+    }
+
+    #[test]
+    fn test_sim() {
+        let tags = TagSet::from_str("Site,x=1").unwrap();
+        let i1 = Index::<DynId>::new_dyn_with_tags(5, tags);
+
+        // Create a similar index
+        let i2 = i1.sim();
+
+        // Different ID (not equal)
+        assert_ne!(i1, i2);
+        assert!(!i1.same_id(&i2));
+
+        // Same dimension
+        assert_eq!(i1.dim(), i2.dim());
+
+        // Same tags
+        assert_eq!(i1.tags, i2.tags);
+        assert!(i2.tags.has_tag("Site"));
+        assert!(i2.tags.has_tag("x=1"));
+
+        // Same symm
+        assert_eq!(i1.symm, i2.symm);
+    }
+
+    fn _assert_index_like_bounds<I: IndexLike>() {}
+
+    #[test]
+    fn test_index_satisfies_index_like() {
+        // Compile-time check that DynIndex implements IndexLike
+        _assert_index_like_bounds::<DynIndex>();
     }
 }

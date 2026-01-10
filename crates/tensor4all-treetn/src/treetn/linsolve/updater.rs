@@ -16,7 +16,7 @@ use kryst::utils::convergence::ConvergedReason;
 
 use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
 use tensor4all_core::storage::{DenseStorageF64, StorageScalar};
-use tensor4all_core::{contract_multi, FactorizeAlg, Storage, TensorDynLen};
+use tensor4all_core::{IndexLike, contract_multi, FactorizeAlg, Storage, TensorDynLen};
 
 use super::linear_operator::LinearOperator;
 use super::local_linop::LocalLinOp;
@@ -127,36 +127,36 @@ impl<V: std::fmt::Debug> std::fmt::Display for LinsolveVerifyReport<V> {
 /// - The current solution x (in V_in) is used as the "ket"
 ///
 /// For V_in = V_out (default): The current solution x is used for both bra and ket.
-pub struct LinsolveUpdater<Id, Symm, V>
+pub struct LinsolveUpdater<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Projected operator (3-chain), wrapped in Arc<RwLock> for GMRES
-    pub projected_operator: Arc<RwLock<ProjectedOperator<Id, Symm, V>>>,
+    pub projected_operator: Arc<RwLock<ProjectedOperator<I, V>>>,
     /// Linear operator with index mapping (handles s_in/s_out correctly)
-    pub linear_operator: Option<Arc<LinearOperator<Id, Symm, V>>>,
+    pub linear_operator: Option<Arc<LinearOperator<I, V>>>,
     /// Projected state for RHS (2-chain)
-    pub projected_state: ProjectedState<Id, Symm, V>,
+    pub projected_state: ProjectedState<I, V>,
     /// Reference state for bra in environment computation (V_out space)
     /// If None, uses the current solution x (V_in = V_out case)
-    pub reference_state_out: Option<TreeTN<Id, Symm, V>>,
+    pub reference_state_out: Option<TreeTN<I, V>>,
     /// Solver options
     pub options: LinsolveOptions,
 }
 
-impl<Id, Symm, V> LinsolveUpdater<Id, Symm, V>
+impl<I, V> LinsolveUpdater<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    Symm:
+    I: IndexLike + 'static,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
+    I::Symm:
         Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     /// Create a new LinsolveUpdater for V_in = V_out case.
     pub fn new(
-        operator: TreeTN<Id, Symm, V>,
-        rhs: TreeTN<Id, Symm, V>,
+        operator: TreeTN<I, V>,
+        rhs: TreeTN<I, V>,
         options: LinsolveOptions,
     ) -> Self {
         Self {
@@ -176,9 +176,9 @@ where
     /// * `reference_state_out` - Reference state in V_out for bra in environment computation
     /// * `options` - Solver options
     pub fn with_reference_state(
-        operator: TreeTN<Id, Symm, V>,
-        rhs: TreeTN<Id, Symm, V>,
-        reference_state_out: TreeTN<Id, Symm, V>,
+        operator: TreeTN<I, V>,
+        rhs: TreeTN<I, V>,
+        reference_state_out: TreeTN<I, V>,
         options: LinsolveOptions,
     ) -> Self {
         Self {
@@ -199,9 +199,9 @@ where
     /// This is required when the MPO uses independent indices for input/output
     /// (which is necessary because a tensor cannot have two indices with the same ID).
     pub fn with_linear_operator(
-        linear_operator: LinearOperator<Id, Symm, V>,
-        rhs: TreeTN<Id, Symm, V>,
-        reference_state_out: Option<TreeTN<Id, Symm, V>>,
+        linear_operator: LinearOperator<I, V>,
+        rhs: TreeTN<I, V>,
+        reference_state_out: Option<TreeTN<I, V>>,
         options: LinsolveOptions,
     ) -> Self {
         let operator = linear_operator.mpo.clone();
@@ -218,8 +218,8 @@ where
     /// Returns reference_state_out if set, otherwise returns the ket_state (V_in = V_out case).
     pub fn get_bra_state<'a>(
         &'a self,
-        ket_state: &'a TreeTN<Id, Symm, V>,
-    ) -> &'a TreeTN<Id, Symm, V> {
+        ket_state: &'a TreeTN<I, V>,
+    ) -> &'a TreeTN<I, V> {
         self.reference_state_out.as_ref().unwrap_or(ket_state)
     }
 
@@ -231,7 +231,7 @@ where
     /// 3. Environment computation requirements are satisfiable
     ///
     /// Returns a detailed report of any inconsistencies found.
-    pub fn verify(&self, state: &TreeTN<Id, Symm, V>) -> Result<LinsolveVerifyReport<V>> {
+    pub fn verify(&self, state: &TreeTN<I, V>) -> Result<LinsolveVerifyReport<V>> {
         let mut report = LinsolveVerifyReport::default();
 
         let proj_op = self.projected_operator.read().unwrap();
@@ -340,15 +340,15 @@ where
     /// Contract all tensors in the region into a single local tensor.
     fn contract_region(
         &self,
-        subtree: &TreeTN<Id, Symm, V>,
+        subtree: &TreeTN<I, V>,
         region: &[V],
-    ) -> Result<TensorDynLen<Id, Symm>> {
+    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
         if region.is_empty() {
             return Err(anyhow::anyhow!("Region cannot be empty"));
         }
 
         // Collect all tensors in the region
-        let tensors: Vec<TensorDynLen<Id, Symm>> = region
+        let tensors: Vec<TensorDynLen<I::Id, I::Symm>> = region
             .iter()
             .map(|node| {
                 let idx = subtree
@@ -370,9 +370,9 @@ where
     /// Maps each node to the positions of its indices in the solved tensor.
     fn build_subtree_topology(
         &self,
-        solved_tensor: &TensorDynLen<Id, Symm>,
+        solved_tensor: &TensorDynLen<I::Id, I::Symm>,
         region: &[V],
-        full_treetn: &TreeTN<Id, Symm, V>,
+        full_treetn: &TreeTN<I, V>,
     ) -> Result<TreeTopology<V>> {
         use std::collections::HashMap;
 
@@ -433,10 +433,10 @@ where
     /// Copy decomposed tensors back to subtree, preserving original bond IDs.
     fn copy_decomposed_to_subtree(
         &self,
-        subtree: &mut TreeTN<Id, Symm, V>,
-        decomposed: &TreeTN<Id, Symm, V>,
+        subtree: &mut TreeTN<I, V>,
+        decomposed: &TreeTN<I, V>,
         region: &[V],
-        full_treetn: &TreeTN<Id, Symm, V>,
+        full_treetn: &TreeTN<I, V>,
     ) -> Result<()> {
         // For each node in the region, update its tensor in subtree
         for node in region {
@@ -488,9 +488,9 @@ where
     fn solve_local(
         &mut self,
         region: &[V],
-        init: &TensorDynLen<Id, Symm>,
-        state: &TreeTN<Id, Symm, V>,
-    ) -> Result<TensorDynLen<Id, Symm>> {
+        init: &TensorDynLen<I::Id, I::Symm>,
+        state: &TreeTN<I, V>,
+    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
         // Use state's SiteIndexNetwork directly (implements NetworkTopology)
         let topology = state.site_index_network();
 
@@ -614,19 +614,20 @@ where
     }
 }
 
-impl<Id, Symm, V> LocalUpdater<Id, Symm, V> for LinsolveUpdater<Id, Symm, V>
+impl<I, V> LocalUpdater<I, V> for LinsolveUpdater<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    Symm:
+    I: IndexLike + 'static,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
+    I::Symm:
         Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     fn update(
         &mut self,
-        mut subtree: TreeTN<Id, Symm, V>,
+        mut subtree: TreeTN<I, V>,
         step: &LocalUpdateStep<V>,
-        full_treetn: &TreeTN<Id, Symm, V>,
-    ) -> Result<TreeTN<Id, Symm, V>> {
+        full_treetn: &TreeTN<I, V>,
+    ) -> Result<TreeTN<I, V>> {
         // Contract tensors in the region into a single local tensor
         let init_local = self.contract_region(&subtree, &step.nodes)?;
 
@@ -652,7 +653,7 @@ where
     fn after_step(
         &mut self,
         step: &LocalUpdateStep<V>,
-        full_treetn_after: &TreeTN<Id, Symm, V>,
+        full_treetn_after: &TreeTN<I, V>,
     ) -> Result<()> {
         // Use state's SiteIndexNetwork directly (implements NetworkTopology)
         let topology = full_treetn_after.site_index_network();

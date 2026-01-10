@@ -15,7 +15,7 @@ use anyhow::Result;
 
 use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
 use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64, Storage};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::{IndexLike, TensorDynLen};
 
 use super::{compute_strides, linear_to_multi_index, multi_to_linear_index, TreeTN};
 
@@ -24,23 +24,21 @@ use super::{compute_strides, linear_to_multi_index, multi_to_linear_index, TreeT
 /// When adding two TreeTNs, each bond index in the result has dimension
 /// `dim_a + dim_b`, where `dim_a` and `dim_b` are the original bond dimensions.
 #[derive(Debug, Clone)]
-pub struct MergedBondInfo<Id, Symm>
+pub struct MergedBondInfo<I>
 where
-    Id: Clone + std::hash::Hash + Eq,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
 {
     /// Bond dimension from the first TreeTN
     pub dim_a: usize,
     /// Bond dimension from the second TreeTN
     pub dim_b: usize,
     /// The new merged bond index (with dimension dim_a + dim_b)
-    pub merged_index: Index<Id, Symm>,
+    pub merged_index: I,
 }
 
-impl<Id, Symm, V> TreeTN<Id, Symm, V>
+impl<I, V> TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Compute merged bond indices for direct-sum addition.
@@ -61,10 +59,11 @@ where
     pub fn compute_merged_bond_indices(
         &self,
         other: &Self,
-    ) -> Result<HashMap<(V, V), MergedBondInfo<Id, Symm>>>
+    ) -> Result<HashMap<(V, V), MergedBondInfo<I>>>
     where
-        Id: From<DynId>,
-        Symm: From<NoSymmSpace>,
+        I::Id: From<DynId>,
+        I::Symm: From<NoSymmSpace>,
+        I::Tags: Default,
         V: Ord,
     {
         let mut result = HashMap::new();
@@ -124,13 +123,13 @@ where
 
             // Create ONE shared bond index for both endpoints
             let new_dim = dim_a + dim_b;
-            let dyn_bond_index = Index::new_link(new_dim)
+            let dyn_bond_index: Index<DynId, NoSymmSpace, TagSet> = Index::new_link(new_dim)
                 .map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))?;
-            let merged_index: Index<Id, Symm, TagSet> = Index {
-                id: dyn_bond_index.id.into(),
-                symm: dyn_bond_index.symm.into(),
-                tags: dyn_bond_index.tags,
-            };
+            let merged_index: Index<I::Id, I::Symm, I::Tags> = Index::new_with_tags(
+                I::Id::from(dyn_bond_index.id),
+                I::Symm::from(dyn_bond_index.symm),
+                I::Tags::default(),
+            );
 
             // Store in canonical order (smaller name first)
             let key = if src_name < tgt_name {
@@ -168,22 +167,21 @@ where
 ///
 /// # Returns
 /// A new tensor representing the direct sum, with merged bond indices.
-pub fn direct_sum_tensors<Id, Symm, V>(
-    tensor_a: &TensorDynLen<Id, Symm>,
-    tensor_b: &TensorDynLen<Id, Symm>,
-    site_indices: &HashSet<Id>,
-    bond_info_by_neighbor: &HashMap<V, &MergedBondInfo<Id, Symm>>,
-    neighbor_names_a: &HashMap<Id, V>,
-    neighbor_names_b: &HashMap<Id, V>,
-) -> Result<TensorDynLen<Id, Symm>>
+pub fn direct_sum_tensors<I, V>(
+    tensor_a: &TensorDynLen<I::Id, I::Symm>,
+    tensor_b: &TensorDynLen<I::Id, I::Symm>,
+    site_indices: &HashSet<I::Id>,
+    bond_info_by_neighbor: &HashMap<V, &MergedBondInfo<I>>,
+    neighbor_names_a: &HashMap<I::Id, V>,
+    neighbor_names_b: &HashMap<I::Id, V>,
+) -> Result<TensorDynLen<I::Id, I::Symm>>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Ord + std::fmt::Debug,
 {
     // Separate physical and bond indices for tensor_a, preserving order
-    let mut physical_inds_a: Vec<(usize, Index<Id, Symm>)> = Vec::new();
-    let mut bond_inds_a: Vec<(usize, Index<Id, Symm>, V)> = Vec::new(); // (pos, index, neighbor_name)
+    let mut physical_inds_a: Vec<(usize, Index<I::Id, I::Symm>)> = Vec::new();
+    let mut bond_inds_a: Vec<(usize, Index<I::Id, I::Symm>, V)> = Vec::new(); // (pos, index, neighbor_name)
 
     for (pos, idx) in tensor_a.indices.iter().enumerate() {
         if site_indices.contains(&idx.id) {
@@ -194,7 +192,7 @@ where
     }
 
     // Do the same for tensor_b
-    let mut bond_inds_b: Vec<(usize, Index<Id, Symm>, V)> = Vec::new();
+    let mut bond_inds_b: Vec<(usize, Index<I::Id, I::Symm>, V)> = Vec::new();
     for (pos, idx) in tensor_b.indices.iter().enumerate() {
         if !site_indices.contains(&idx.id) {
             if let Some(neighbor) = neighbor_names_b.get(&idx.id) {
@@ -204,7 +202,7 @@ where
     }
 
     // Build canonical index order: physical indices first (in original order), then bonds (sorted by neighbor)
-    let mut canonical_indices: Vec<Index<Id, Symm>> =
+    let mut canonical_indices: Vec<Index<I::Id, I::Symm>> =
         physical_inds_a.iter().map(|(_, idx)| idx.clone()).collect();
     let mut canonical_dims: Vec<usize> =
         physical_inds_a.iter().map(|(_, idx)| idx.size()).collect();

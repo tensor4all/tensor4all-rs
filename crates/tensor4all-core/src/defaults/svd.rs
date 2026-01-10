@@ -2,8 +2,8 @@
 //!
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 
-use crate::index_like::IndexLike; use crate::defaults::DynIndex;
-use crate::index_ops::sim;
+use crate::defaults::DynIndex;
+use crate::index_like::IndexLike;
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use mdarray::DSlice;
 use mdarray_linalg::svd::SVDDecomp;
@@ -356,10 +356,10 @@ where
     let u_storage = T::dense_storage(u_vec);
     let u = TensorDynLen::from_indices(u_indices, u_storage);
 
-    // Create S tensor: [bond_index, sim(bond_index)] (diagonal)
+    // Create S tensor: [bond_index, bond_index.sim()] (diagonal)
     // Singular values are always real (f64), even for complex input
     // Use sim() to create a similar index with a new ID to avoid duplicate index IDs
-    let s_indices = vec![bond_index.clone(), sim(&bond_index)];
+    let s_indices = vec![bond_index.clone(), bond_index.sim()];
     let s_storage = Arc::new(Storage::new_diag_f64(s_vec));
     let s = TensorDynLen::from_indices(s_indices, s_storage);
 

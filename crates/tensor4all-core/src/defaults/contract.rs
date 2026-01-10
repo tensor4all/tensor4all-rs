@@ -11,7 +11,7 @@ use anyhow::Result;
 use omeco::{optimize_code, EinCode, GreedyMethod, NestedEinsum};
 
 use crate::index_like::IndexLike;
-use crate::tensor::TensorDynLen;
+use crate::defaults::TensorDynLen;
 
 /// Contract multiple tensors into a single tensor.
 ///
@@ -70,7 +70,7 @@ fn contract_pair(a: &TensorDynLen, b: &TensorDynLen) -> Result<TensorDynLen> {
 
 /// Contract multiple tensors using omeco's GreedyMethod for optimal ordering.
 fn contract_multi_optimized(tensors: &[TensorDynLen]) -> Result<TensorDynLen> {
-    use crate::index::DynId;
+    use crate::defaults::DynId;
 
     // Build mapping from DynId -> usize for omeco
     let mut id_to_idx: HashMap<DynId, usize> = HashMap::new();
@@ -156,8 +156,7 @@ fn execute_contraction_tree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::{DynId, Index, NoSymmSpace};
-    use crate::defaults::DynIndex;
+    use crate::defaults::{DynId, DynIndex, Index, NoSymmSpace};
     use crate::storage::{DenseStorageC64, Storage};
     use num_complex::Complex64;
     use std::sync::Arc;

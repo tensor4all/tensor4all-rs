@@ -15,7 +15,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::CanonicalForm;
+use tensor4all_core::{CanonicalForm, IndexLike};
 
 use super::TreeTN;
 use crate::options::CanonicalizationOptions;
@@ -24,10 +24,9 @@ use crate::options::CanonicalizationOptions;
 // Default implementation
 // ============================================================================
 
-impl<Id, Symm, V> Default for TreeTN<Id, Symm, V>
+impl<I, V> Default for TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     fn default() -> Self {
@@ -39,10 +38,9 @@ where
 // Clone implementation
 // ============================================================================
 
-impl<Id, Symm, V> Clone for TreeTN<Id, Symm, V>
+impl<I, V> Clone for TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     fn clone(&self) -> Self {
@@ -60,10 +58,9 @@ where
 // Debug implementation
 // ============================================================================
 
-impl<Id, Symm, V> std::fmt::Debug for TreeTN<Id, Symm, V>
+impl<I, V> std::fmt::Debug for TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -79,10 +76,9 @@ where
 // Scalar multiplication for TreeTN
 // ============================================================================
 
-impl<Id, Symm, V> Mul<f64> for TreeTN<Id, Symm, V>
+impl<I, V> Mul<f64> for TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
     type Output = Self;
@@ -178,10 +174,9 @@ where
     }
 }
 
-impl<Id, Symm, V> Mul<Complex64> for TreeTN<Id, Symm, V>
+impl<I, V> Mul<Complex64> for TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
     type Output = Self;
@@ -270,26 +265,24 @@ where
 }
 
 // Implement Mul with reference to avoid consuming TreeTN
-impl<Id, Symm, V> Mul<f64> for &TreeTN<Id, Symm, V>
+impl<I, V> Mul<f64> for &TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
-    type Output = TreeTN<Id, Symm, V>;
+    type Output = TreeTN<I, V>;
 
     fn mul(self, a: f64) -> Self::Output {
         self.clone() * a
     }
 }
 
-impl<Id, Symm, V> Mul<Complex64> for &TreeTN<Id, Symm, V>
+impl<I, V> Mul<Complex64> for &TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
-    type Output = TreeTN<Id, Symm, V>;
+    type Output = TreeTN<I, V>;
 
     fn mul(self, a: Complex64) -> Self::Output {
         self.clone() * a
@@ -300,10 +293,11 @@ where
 // Norm Computation
 // ============================================================================
 
-impl<Id, Symm, V> TreeTN<Id, Symm, V>
+impl<I, V> TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+    I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
     Self: Default,
 {

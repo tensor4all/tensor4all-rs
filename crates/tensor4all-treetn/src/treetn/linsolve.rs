@@ -42,6 +42,7 @@ use std::hash::Hash;
 use anyhow::Result;
 
 use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
+use tensor4all_core::IndexLike;
 
 use super::localupdate::{apply_local_update_sweep, LocalUpdateSweepPlan};
 use super::TreeTN;
@@ -49,14 +50,13 @@ use crate::CanonicalizationOptions;
 
 /// Result of linsolve operation.
 #[derive(Debug, Clone)]
-pub struct LinsolveResult<Id, Symm, V>
+pub struct LinsolveResult<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// The solution TreeTN
-    pub solution: TreeTN<Id, Symm, V>,
+    pub solution: TreeTN<I, V>,
     /// Number of sweeps performed
     pub sweeps: usize,
     /// Final residual norm (if computed)
@@ -70,14 +70,15 @@ where
 /// Checks:
 /// 1. Operator can act on init (same topology)
 /// 2. Result of operator action has compatible site dimensions with rhs
-fn validate_linsolve_inputs<Id, Symm, V>(
-    operator: &TreeTN<Id, Symm, V>,
-    rhs: &TreeTN<Id, Symm, V>,
-    init: &TreeTN<Id, Symm, V>,
+fn validate_linsolve_inputs<I, V>(
+    operator: &TreeTN<I, V>,
+    rhs: &TreeTN<I, V>,
+    init: &TreeTN<I, V>,
 ) -> Result<()>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug,
-    Symm: Clone + Symmetry + PartialEq + std::fmt::Debug,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    I::Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     let init_network = init.site_index_network();
@@ -118,16 +119,17 @@ where
 /// ```ignore
 /// let solution = linsolve(&h_mpo, &b_mps, x0_mps, "center", LinsolveOptions::default())?;
 /// ```
-pub fn linsolve<Id, Symm, V>(
-    operator: &TreeTN<Id, Symm, V>,
-    rhs: &TreeTN<Id, Symm, V>,
-    init: TreeTN<Id, Symm, V>,
+pub fn linsolve<I, V>(
+    operator: &TreeTN<I, V>,
+    rhs: &TreeTN<I, V>,
+    init: TreeTN<I, V>,
     center: &V,
     options: LinsolveOptions,
-) -> Result<LinsolveResult<Id, Symm, V>>
+) -> Result<LinsolveResult<I, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    Symm:
+    I: IndexLike + 'static,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
+    I::Symm:
         Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {

@@ -85,4 +85,15 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     fn new_bond(dim: usize) -> Result<Self>
     where
         Self: Sized;
+
+    /// Create a similar index with a new identity but the same structure (dimension, tags, etc.).
+    ///
+    /// This is used to create "equivalent" indices that have the same properties
+    /// but different identities, commonly needed in index replacement operations.
+    ///
+    /// # Returns
+    /// A new index with a fresh identity and the same structure as `self`.
+    fn sim(&self) -> Self
+    where
+        Self: Sized;
 }

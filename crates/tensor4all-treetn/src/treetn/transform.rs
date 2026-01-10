@@ -10,17 +10,17 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 use petgraph::stable_graph::NodeIndex;
 
-use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::{factorize, Canonical, FactorizeAlg, FactorizeOptions, TensorDynLen};
+use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
+use tensor4all_core::{IndexLike, factorize, Canonical, FactorizeAlg, FactorizeOptions, TensorDynLen};
 
 use super::TreeTN;
 use crate::options::SplitOptions;
 use crate::site_index_network::SiteIndexNetwork;
 
-impl<Id, Symm, V> TreeTN<Id, Symm, V>
+impl<I, V> TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    Symm: Clone + Symmetry + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     /// Fuse (merge) adjacent nodes to match the target structure.
@@ -57,13 +57,13 @@ where
     /// ```
     pub fn fuse_to<TargetV>(
         &self,
-        target: &SiteIndexNetwork<TargetV, Id, Symm>,
-    ) -> Result<TreeTN<Id, Symm, TargetV>>
+        target: &SiteIndexNetwork<TargetV, I>,
+    ) -> Result<TreeTN<I, TargetV>>
     where
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         // Step 1: Build a mapping from site index ID to current node name
-        let mut site_to_current_node: HashMap<Id, V> = HashMap::new();
+        let mut site_to_current_node: HashMap<I::Id, V> = HashMap::new();
         for current_node_name in self.node_names() {
             if let Some(site_space) = self.site_space(&current_node_name) {
                 for site_idx in site_space {
@@ -128,7 +128,7 @@ where
         }
 
         // Step 4: For each target node, contract all its current nodes into one tensor
-        let mut result_tensors: HashMap<TargetV, TensorDynLen<Id, Symm>> = HashMap::new();
+        let mut result_tensors: HashMap<TargetV, TensorDynLen<I::Id, I::Symm>> = HashMap::new();
 
         for (target_name, current_nodes) in &target_to_current {
             let contracted = self.contract_node_group(current_nodes).with_context(|| {
@@ -145,7 +145,7 @@ where
         let mut target_names: Vec<TargetV> = target.node_names().into_iter().cloned().collect();
         target_names.sort();
 
-        let tensors: Vec<TensorDynLen<Id, Symm>> = target_names
+        let tensors: Vec<TensorDynLen<I::Id, I::Symm>> = target_names
             .iter()
             .map(|name| result_tensors.remove(name).unwrap())
             .collect();
@@ -161,7 +161,7 @@ where
     /// The nodes must form a connected subtree in the current TreeTN.
     /// Contracts all internal bonds (bonds between nodes in the group),
     /// keeping external bonds and site indices.
-    fn contract_node_group(&self, nodes: &HashSet<V>) -> Result<TensorDynLen<Id, Symm>>
+    fn contract_node_group(&self, nodes: &HashSet<V>) -> Result<TensorDynLen<I::Id, I::Symm>>
     where
         V: Ord,
     {
@@ -217,7 +217,7 @@ where
             .collect();
 
         // Initialize with cloned tensors
-        let mut tensors: HashMap<NodeIndex, TensorDynLen<Id, Symm>> = node_indices
+        let mut tensors: HashMap<NodeIndex, TensorDynLen<I::Id, I::Symm>> = node_indices
             .iter()
             .filter_map(|&idx| self.tensor(idx).cloned().map(|t| (idx, t)))
             .collect();
@@ -297,16 +297,16 @@ where
     /// ```
     pub fn split_to<TargetV>(
         &self,
-        target: &SiteIndexNetwork<TargetV, Id, Symm>,
+        target: &SiteIndexNetwork<TargetV, I>,
         options: &SplitOptions,
-    ) -> Result<TreeTN<Id, Symm, TargetV>>
+    ) -> Result<TreeTN<I, TargetV>>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+        I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
         TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         // Step 1: Build mapping from site index ID to target node name
-        let mut site_to_target: HashMap<Id, TargetV> = HashMap::new();
+        let mut site_to_target: HashMap<I::Id, TargetV> = HashMap::new();
         for target_node_name in target.node_names() {
             if let Some(site_space) = target.site_space(target_node_name) {
                 for site_idx in site_space {
@@ -339,7 +339,7 @@ where
 
         // Step 3: Phase 1 - Split all nodes that need splitting
         // Collect all resulting tensors with their target node names
-        let mut result_tensors: Vec<(TargetV, TensorDynLen<Id, Symm>)> = Vec::new();
+        let mut result_tensors: Vec<(TargetV, TensorDynLen<I::Id, I::Symm>)> = Vec::new();
 
         for current_node_name in self.node_names() {
             let node_idx = self
@@ -373,7 +373,7 @@ where
         result_tensors.sort_by(|(a, _), (b, _)| a.cmp(b));
 
         let names: Vec<TargetV> = result_tensors.iter().map(|(name, _)| name.clone()).collect();
-        let tensors: Vec<TensorDynLen<Id, Symm>> =
+        let tensors: Vec<TensorDynLen<I::Id, I::Symm>> =
             result_tensors.into_iter().map(|(_, t)| t).collect();
 
         let result = TreeTN::<Id, Symm, TargetV>::from_tensors(tensors, names)
@@ -408,16 +408,16 @@ where
     /// Returns a vector of (target_name, tensor) pairs.
     fn split_tensor_for_targets<TargetV>(
         &self,
-        tensor: &TensorDynLen<Id, Symm>,
-        site_to_target: &HashMap<Id, TargetV>,
-    ) -> Result<Vec<(TargetV, TensorDynLen<Id, Symm>)>>
+        tensor: &TensorDynLen<I::Id, I::Symm>,
+        site_to_target: &HashMap<I::Id, TargetV>,
+    ) -> Result<Vec<(TargetV, TensorDynLen<I::Id, I::Symm>)>>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+        I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
         TargetV: Clone + Hash + Eq + Ord + std::fmt::Debug,
     {
         // Group tensor's site indices by their target node
-        let mut partition: HashMap<TargetV, HashSet<Id>> = HashMap::new();
+        let mut partition: HashMap<TargetV, HashSet<I::Id>> = HashMap::new();
         for idx in &tensor.indices {
             if let Some(target_name) = site_to_target.get(&idx.id) {
                 partition
@@ -443,7 +443,7 @@ where
 
         // Split iteratively: separate first target's indices, then next, etc.
         let mut remaining_tensor = tensor.clone();
-        let mut result: Vec<(TargetV, TensorDynLen<Id, Symm>)> = Vec::new();
+        let mut result: Vec<(TargetV, TensorDynLen<I::Id, I::Symm>)> = Vec::new();
 
         // Process all but the last target (the last one gets the remaining tensor)
         for target_name in target_names.iter().take(target_names.len() - 1) {
@@ -502,7 +502,7 @@ mod tests {
     /// Test fuse_to with identity transformation (same structure).
     /// The result should equal the original tensor.
     fn test_fuse_to_identity_generic(
-        site_network: &SiteIndexNetwork<String, DynId>,
+        site_network: &SiteIndexNetwork<String, Index<DynId, NoSymmSpace>>,
         link_space: LinkSpace<String>,
         seed: u64,
         rtol: f64,
@@ -531,7 +531,7 @@ mod tests {
     /// Test fuse_to that merges all nodes into one.
     /// The result should be a single tensor equal to full contraction.
     fn test_fuse_to_all_into_one_generic(
-        site_network: &SiteIndexNetwork<String, DynId>,
+        site_network: &SiteIndexNetwork<String, Index<DynId, NoSymmSpace>>,
         link_space: LinkSpace<String>,
         seed: u64,
         rtol: f64,
@@ -548,7 +548,7 @@ mod tests {
         }
 
         // Create target with single node containing all site indices
-        let mut target = SiteIndexNetwork::<String, DynId>::new();
+        let mut target = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
         target
             .add_node("ALL".to_string(), all_site_indices)
             .unwrap();
@@ -574,8 +574,8 @@ mod tests {
     /// Test fuse_to that merges adjacent pairs.
     /// For a chain A-B-C-D, merge to AB-CD.
     fn test_fuse_to_pairwise_generic(
-        site_network: &SiteIndexNetwork<String, DynId>,
-        target_network: &SiteIndexNetwork<String, DynId>,
+        site_network: &SiteIndexNetwork<String, Index<DynId, NoSymmSpace>>,
+        target_network: &SiteIndexNetwork<String, Index<DynId, NoSymmSpace>>,
         link_space: LinkSpace<String>,
         seed: u64,
         rtol: f64,
@@ -605,8 +605,8 @@ mod tests {
     // =========================================================================
 
     /// Create a 4-node chain: A -- B -- C -- D
-    fn create_4node_chain() -> SiteIndexNetwork<String, DynId> {
-        let mut net = SiteIndexNetwork::<String, DynId>::new();
+    fn create_4node_chain() -> SiteIndexNetwork<String, Index<DynId, NoSymmSpace>> {
+        let mut net = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
         let site_a = Index::new_dyn(2);
         let site_b = Index::new_dyn(2);
         let site_c = Index::new_dyn(2);
@@ -629,8 +629,8 @@ mod tests {
     ///     A
     ///     |
     /// C - B - D
-    fn create_star() -> SiteIndexNetwork<String, DynId> {
-        let mut net = SiteIndexNetwork::<String, DynId>::new();
+    fn create_star() -> SiteIndexNetwork<String, Index<DynId, NoSymmSpace>> {
+        let mut net = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
         let site_a = Index::new_dyn(2);
         let site_b = Index::new_dyn(2);
         let site_c = Index::new_dyn(2);
@@ -655,7 +655,7 @@ mod tests {
     ///     B -- C
     ///     |
     ///     D
-    fn create_y_shape() -> SiteIndexNetwork<String, DynId> {
+    fn create_y_shape() -> SiteIndexNetwork<String, Index<DynId, NoSymmSpace>> {
         create_star() // Same as star for this topology
     }
 
@@ -710,7 +710,7 @@ mod tests {
             .clone();
 
         // Create target: A+B -> AB, C+D -> CD
-        let mut target = SiteIndexNetwork::<String, DynId>::new();
+        let mut target = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
         target
             .add_node("AB".to_string(), HashSet::from([site_a, site_b]))
             .unwrap();
@@ -776,7 +776,7 @@ mod tests {
 
         // Merge center B with leaf A, keep C and D separate
         // Target: AB (center+one leaf), C, D
-        let mut target = SiteIndexNetwork::<String, DynId>::new();
+        let mut target = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
         target
             .add_node("AB".to_string(), HashSet::from([site_a, site_b]))
             .unwrap();
@@ -840,7 +840,7 @@ mod tests {
 
         // Create target that tries to fuse non-adjacent nodes A and D (skipping B, C)
         // This should fail because B and C have no target node
-        let mut target = SiteIndexNetwork::<String, DynId>::new();
+        let mut target = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
         target
             .add_node("AD".to_string(), HashSet::from([site_a, site_d]))
             .unwrap();
@@ -919,7 +919,7 @@ mod tests {
             .clone();
 
         // Create source (coarse) structure: AB -- CD
-        let mut source = SiteIndexNetwork::<String, DynId>::new();
+        let mut source = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
         source
             .add_node("AB".to_string(), HashSet::from([site_a.clone(), site_b.clone()]))
             .unwrap();
@@ -992,7 +992,7 @@ mod tests {
             .clone();
 
         // Create coarse structure
-        let mut coarse = SiteIndexNetwork::<String, DynId>::new();
+        let mut coarse = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
         coarse
             .add_node("AB".to_string(), HashSet::from([site_a, site_b]))
             .unwrap();
@@ -1060,7 +1060,7 @@ mod tests {
             .clone();
 
         // Create source structure
-        let mut source = SiteIndexNetwork::<String, DynId>::new();
+        let mut source = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
         source
             .add_node("AB".to_string(), HashSet::from([site_a.clone(), site_b.clone()]))
             .unwrap();

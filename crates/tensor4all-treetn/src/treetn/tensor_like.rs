@@ -13,7 +13,7 @@ use super::TreeTN;
 // TensorLike implementation for TreeTN
 // ============================================================================
 
-impl<Id, Symm, V> tensor4all_core::TensorLike for TreeTN<Id, Symm, V>
+impl<I, V> tensor4all_core::TensorLike for TreeTN<I, V>
 where
     Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     Symm: Clone + Symmetry + std::fmt::Debug + Send + Sync + 'static,

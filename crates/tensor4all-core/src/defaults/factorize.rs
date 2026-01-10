@@ -61,7 +61,7 @@ pub fn factorize(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult, FactorizeError> {
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
     // Dispatch based on storage type
     match t.storage.as_ref() {
         Storage::DenseF64(_) => factorize_impl::<f64>(t, left_inds, options),
@@ -77,7 +77,7 @@ fn factorize_impl<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult, FactorizeError>
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
     T: StorageScalar
         + ComplexFloat
@@ -100,7 +100,7 @@ fn factorize_svd<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult, FactorizeError>
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
     T: StorageScalar
         + ComplexFloat
@@ -159,7 +159,7 @@ fn factorize_qr<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult, FactorizeError>
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
     T: StorageScalar
         + ComplexFloat
@@ -198,7 +198,7 @@ fn factorize_lu<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult, FactorizeError>
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
     T: StorageScalar
         + ComplexFloat
@@ -266,7 +266,7 @@ fn factorize_ci<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult, FactorizeError>
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
     T: StorageScalar
         + ComplexFloat

@@ -6,8 +6,8 @@
 //!
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 
-use crate::index::Index;
-use crate::index_like::IndexLike; use crate::defaults::DynIndex;
+use crate::defaults::{DynIndex, Index};
+use crate::index_like::IndexLike;
 use crate::storage::{DenseStorageC64, DenseStorageF64, Storage};
 use crate::tensor::TensorDynLen;
 use anyhow::Result;
@@ -80,7 +80,7 @@ fn setup_direct_sum(
     b: &TensorDynLen,
     pairs: &[(DynIndex, DynIndex)],
 ) -> Result<DirectSumSetup> {
-    use crate::index::DynId;
+    use crate::defaults::DynId;
     use std::collections::HashMap;
 
     if pairs.is_empty() {
@@ -358,7 +358,7 @@ fn direct_sum_c64(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::{DynId, NoSymmSpace, TagSet};
+    use crate::defaults::{DynId, NoSymmSpace, TagSet};
 
     type TestIndex = Index<DynId, NoSymmSpace, TagSet>;
 

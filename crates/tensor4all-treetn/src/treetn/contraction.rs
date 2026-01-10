@@ -14,9 +14,9 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
+use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
 use tensor4all_core::TensorDynLen;
-use tensor4all_core::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
+use tensor4all_core::{IndexLike, factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
 
 use super::addition::direct_sum_tensors;
 use super::decompose::{factorize_tensor_to_treetn, TreeTopology};
@@ -24,10 +24,9 @@ use super::{common_inds, TreeTN};
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
 
-impl<Id, Symm, V> TreeTN<Id, Symm, V>
+impl<I, V> TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Create a copy with all internal (link/bond) indices replaced by fresh IDs.
@@ -50,8 +49,8 @@ where
     /// ```
     pub fn sim_internal_inds(&self) -> Self
     where
-        Id: Clone + std::hash::Hash + Eq + From<DynId>,
-        Symm: Clone + Symmetry,
+        I::Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        I::Symm: Clone + Symmetry + std::fmt::Debug + Send + Sync,
     {
         use tensor4all_core::index_ops::sim;
 
@@ -126,8 +125,8 @@ where
     /// - Only dense storage (DenseF64/DenseC64) is currently supported.
     pub fn add(self, other: Self) -> Result<Self>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
+        I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
         V: Ord,
     {
         // Validate site index network equivalence
@@ -187,13 +186,13 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found in other"))?;
 
             // Get site indices for this node
-            let site_indices: HashSet<Id> = self
+            let site_indices: HashSet<I::Id> = self
                 .site_space(node_name)
                 .map(|s| s.iter().map(|idx| idx.id.clone()).collect())
                 .unwrap_or_default();
 
             // Build neighbor_names maps for tensor_a and tensor_b
-            let mut neighbor_names_a: HashMap<Id, V> = HashMap::new();
+            let mut neighbor_names_a: HashMap<I::Id, V> = HashMap::new();
             for edge in self.edges_for_node(node_idx_a) {
                 if let Some(bond_idx) = self.bond_index(edge.0) {
                     let neighbor_name = self
@@ -205,7 +204,7 @@ where
                 }
             }
 
-            let mut neighbor_names_b: HashMap<Id, V> = HashMap::new();
+            let mut neighbor_names_b: HashMap<I::Id, V> = HashMap::new();
             for edge in other.edges_for_node(node_idx_b) {
                 if let Some(bond_idx) = other.bond_index(edge.0) {
                     let neighbor_name = other
@@ -280,7 +279,7 @@ where
     /// - The network is empty
     /// - The graph is not a valid tree
     /// - Tensor contraction fails
-    pub fn contract_to_tensor(&self) -> Result<TensorDynLen<Id, Symm>>
+    pub fn contract_to_tensor(&self) -> Result<TensorDynLen<I::Id, I::Symm>>
     where
         V: Ord,
     {
@@ -323,7 +322,7 @@ where
         let edges = self.site_index_network.edges_to_canonicalize(None, root);
 
         // Initialize with original tensors
-        let mut tensors: HashMap<NodeIndex, TensorDynLen<Id, Symm>> = self
+        let mut tensors: HashMap<NodeIndex, TensorDynLen<I::Id, I::Symm>> = self
             .graph
             .graph()
             .node_indices()
@@ -402,8 +401,8 @@ where
         max_rank: Option<usize>,
     ) -> Result<Self>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
+        I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
     {
         self.contract_zipup_with(other, center, CanonicalForm::Unitary, rtol, max_rank)
     }
@@ -427,8 +426,8 @@ where
         max_rank: Option<usize>,
     ) -> Result<Self>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
+        I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
     {
         // 1. Verify topologies are compatible (same graph structure)
         if !self.same_topology(other) {
@@ -489,7 +488,7 @@ where
 
         // 4. Initialize result tensors (start with contracted node tensors)
         // For each node, contract the tensors from tn1 and tn2 along their common indices
-        let mut result_tensors: HashMap<V, TensorDynLen<Id, Symm>> = HashMap::new();
+        let mut result_tensors: HashMap<V, TensorDynLen<I::Id, I::Symm>> = HashMap::new();
 
         for node_name in tn1.node_names() {
             let node1 = tn1
@@ -693,10 +692,10 @@ where
     /// # Note
     /// This method is O(exp(n)) in both time and memory where n is the number of nodes.
     /// Use `contract_zipup` for efficient contraction of large networks.
-    pub fn contract_naive(&self, other: &Self) -> Result<TensorDynLen<Id, Symm>>
+    pub fn contract_naive(&self, other: &Self) -> Result<TensorDynLen<I::Id, I::Symm>>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId> + std::fmt::Debug,
-        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + From<DynId> + std::fmt::Debug,
+        I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
         V: Ord,
     {
         // 1. Verify topologies are compatible
@@ -780,8 +779,8 @@ where
             .site_index_network
             .edges_to_canonicalize_to_region(&center_indices);
 
-        // Build a set of expected (bond_id, expected_direction) pairs
-        let mut expected_directions: HashMap<Id, V> = HashMap::new();
+        // Build a set of expected (bond, expected_direction) pairs
+        let mut expected_directions: HashMap<I, V> = HashMap::new();
         for (src, dst) in expected_edges.iter() {
             // Find the edge between src and dst
             let edge = self
@@ -791,10 +790,9 @@ where
                 .or_else(|| self.graph.graph().find_edge(*dst, *src))
                 .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", src, dst))?;
 
-            let bond_id = self
+            let bond = self
                 .bond_index(edge)
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))?
-                .id
                 .clone();
 
             // The expected ortho_towards direction is dst (towards center)
@@ -804,17 +802,17 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Node name not found for {:?}", dst))?
                 .clone();
 
-            expected_directions.insert(bond_id, dst_name);
+            expected_directions.insert(bond, dst_name);
         }
 
         // Verify all expected directions are present in ortho_towards
-        for (bond_id, expected_dir) in &expected_directions {
-            match self.ortho_towards.get(bond_id) {
+        for (bond, expected_dir) in &expected_directions {
+            match self.ortho_towards.get(bond) {
                 Some(actual_dir) => {
                     if actual_dir != expected_dir {
                         return Err(anyhow::anyhow!(
                             "ortho_towards for bond {:?} points to {:?} but expected {:?}",
-                            bond_id,
+                            bond,
                             actual_dir,
                             expected_dir
                         ))
@@ -824,7 +822,7 @@ where
                 None => {
                     return Err(anyhow::anyhow!(
                         "ortho_towards for bond {:?} is missing, expected to point to {:?}",
-                        bond_id,
+                        bond,
                         expected_dir
                     ))
                     .context("validate_ortho_consistency: missing ortho_towards");
@@ -834,20 +832,20 @@ where
 
         // Verify no unexpected bond ortho_towards entries
         // (site index ortho_towards are allowed even if not in expected_directions)
-        let bond_ids: HashSet<Id> = self
+        let bond_indices: HashSet<I> = self
             .graph
             .graph()
             .edge_indices()
             .filter_map(|e| self.bond_index(e))
-            .map(|b| b.id.clone())
+            .cloned()
             .collect();
 
-        for (id, _) in &self.ortho_towards {
-            if bond_ids.contains(id) && !expected_directions.contains_key(id) {
+        for (idx, _) in &self.ortho_towards {
+            if bond_indices.contains(idx) && !expected_directions.contains_key(idx) {
                 // This is a bond inside the canonical_center - should not have ortho_towards
                 return Err(anyhow::anyhow!(
                     "Unexpected ortho_towards for bond {:?} (inside canonical_center)",
-                    id
+                    idx
                 ))
                 .context(
                     "validate_ortho_consistency: bonds inside center should not have ortho_towards",
@@ -971,15 +969,16 @@ impl ContractionOptions {
 ///
 /// # Returns
 /// The contracted TreeTN
-pub fn contract<Id, Symm, V>(
-    tn_a: &TreeTN<Id, Symm, V>,
-    tn_b: &TreeTN<Id, Symm, V>,
+pub fn contract<I, V>(
+    tn_a: &TreeTN<I, V>,
+    tn_b: &TreeTN<I, V>,
     center: &V,
     options: ContractionOptions,
-) -> Result<TreeTN<Id, Symm, V>>
+) -> Result<TreeTN<I, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+    I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     match options.method {
@@ -1030,16 +1029,17 @@ where
 ///
 /// # Returns
 /// A new TreeTN representing the contracted result.
-pub fn contract_naive_to_treetn<Id, Symm, V>(
-    tn_a: &TreeTN<Id, Symm, V>,
-    tn_b: &TreeTN<Id, Symm, V>,
+pub fn contract_naive_to_treetn<I, V>(
+    tn_a: &TreeTN<I, V>,
+    tn_b: &TreeTN<I, V>,
     _center: &V,
     _max_rank: Option<usize>,
     _rtol: Option<f64>,
-) -> Result<TreeTN<Id, Symm, V>>
+) -> Result<TreeTN<I, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+    I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     // 1. Contract to full tensor using existing contract_naive

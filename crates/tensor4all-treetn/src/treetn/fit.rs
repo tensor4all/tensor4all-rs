@@ -32,7 +32,7 @@ use std::hash::Hash;
 use anyhow::Result;
 
 use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all_core::{factorize, Canonical, FactorizeAlg, FactorizeOptions, TensorDynLen};
+use tensor4all_core::{IndexLike, factorize, Canonical, FactorizeAlg, FactorizeOptions, TensorDynLen};
 
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
 use super::TreeTN;
@@ -58,20 +58,18 @@ use super::TreeTN;
 /// must be invalidated. The invalidation propagates recursively from T towards
 /// the leaves of the tree.
 #[derive(Debug, Clone)]
-pub struct FitEnvironment<Id, Symm, V>
+pub struct FitEnvironment<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq,
 {
     /// Environment tensors: (from, to) -> tensor
-    envs: HashMap<(V, V), TensorDynLen<Id, Symm>>,
+    envs: HashMap<(V, V), TensorDynLen<I::Id, I::Symm>>,
 }
 
-impl<Id, Symm, V> FitEnvironment<Id, Symm, V>
+impl<I, V> FitEnvironment<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Create an empty environment cache.
@@ -82,14 +80,14 @@ where
     }
 
     /// Get the environment tensor for edge (from, to) if it exists.
-    pub fn get(&self, from: &V, to: &V) -> Option<&TensorDynLen<Id, Symm>> {
+    pub fn get(&self, from: &V, to: &V) -> Option<&TensorDynLen<I::Id, I::Symm>> {
         self.envs.get(&(from.clone(), to.clone()))
     }
 
     /// Insert an environment tensor for edge (from, to).
     /// This is mainly for testing; normally use `get_or_compute` for lazy evaluation.
     #[allow(dead_code)]
-    pub(crate) fn insert(&mut self, from: V, to: V, env: TensorDynLen<Id, Symm>) {
+    pub(crate) fn insert(&mut self, from: V, to: V, env: TensorDynLen<I::Id, I::Symm>) {
         self.envs.insert((from, to), env);
     }
 
@@ -129,13 +127,13 @@ where
         &mut self,
         from: &V,
         to: &V,
-        tn_a: &TreeTN<Id, Symm, V>,
-        tn_b: &TreeTN<Id, Symm, V>,
-        tn_c: &TreeTN<Id, Symm, V>,
-    ) -> Result<TensorDynLen<Id, Symm>>
+        tn_a: &TreeTN<I, V>,
+        tn_b: &TreeTN<I, V>,
+        tn_c: &TreeTN<I, V>,
+    ) -> Result<TensorDynLen<I::Id, I::Symm>>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+        I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
         V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         // If already cached, return a clone
@@ -151,7 +149,7 @@ where
             .collect();
 
         // Recursively get or compute child environments
-        let child_envs: Vec<TensorDynLen<Id, Symm>> = child_neighbors
+        let child_envs: Vec<TensorDynLen<I::Id, I::Symm>> = child_neighbors
             .iter()
             .map(|child| self.get_or_compute(child, from, tn_a, tn_b, tn_c))
             .collect::<Result<Vec<_>>>()?;
@@ -176,7 +174,7 @@ where
     pub fn invalidate<'a>(
         &mut self,
         region: impl IntoIterator<Item = &'a V>,
-        tn_c: &TreeTN<Id, Symm, V>,
+        tn_c: &TreeTN<I, V>,
     ) where
         V: 'a + Send + Sync,
     {
@@ -194,7 +192,7 @@ where
     /// Recursively invalidate caches starting from env[(from, to)] towards leaves.
     ///
     /// If env[(from, to)] exists, remove it and propagate to env[(to, x)] for all x ≠ from.
-    fn invalidate_recursive(&mut self, from: &V, to: &V, tn_c: &TreeTN<Id, Symm, V>) {
+    fn invalidate_recursive(&mut self, from: &V, to: &V, tn_c: &TreeTN<I, V>) {
         // Remove env[(from, to)] if it exists
         if self.envs.remove(&(from.clone(), to.clone())).is_some() {
             // Propagate to next generation: env[(to, x)] for all neighbors x of to, x ≠ from
@@ -220,7 +218,7 @@ where
     ///
     /// # Returns
     /// `Ok(())` if consistent, or an error describing the inconsistency.
-    pub fn verify_structural_consistency(&self, tn_c: &TreeTN<Id, Symm, V>) -> Result<()>
+    pub fn verify_structural_consistency(&self, tn_c: &TreeTN<I, V>) -> Result<()>
     where
         V: Clone + Hash + Eq + std::fmt::Debug,
     {
@@ -260,14 +258,14 @@ where
     /// `Ok(())` if all values match, or an error describing the mismatch.
     pub fn verify_value_consistency(
         &self,
-        tn_a: &TreeTN<Id, Symm, V>,
-        tn_b: &TreeTN<Id, Symm, V>,
-        tn_c: &TreeTN<Id, Symm, V>,
+        tn_a: &TreeTN<I, V>,
+        tn_b: &TreeTN<I, V>,
+        tn_c: &TreeTN<I, V>,
         tol: f64,
     ) -> Result<()>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+        I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
         V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         // Create a fresh cache and recompute all entries
@@ -300,14 +298,14 @@ where
     /// Verify both structural and value consistency.
     pub fn verify_consistency(
         &self,
-        tn_a: &TreeTN<Id, Symm, V>,
-        tn_b: &TreeTN<Id, Symm, V>,
-        tn_c: &TreeTN<Id, Symm, V>,
+        tn_a: &TreeTN<I, V>,
+        tn_b: &TreeTN<I, V>,
+        tn_c: &TreeTN<I, V>,
         tol: f64,
     ) -> Result<()>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+        I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
         V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         self.verify_structural_consistency(tn_c)?;
@@ -316,10 +314,9 @@ where
     }
 }
 
-impl<Id, Symm, V> Default for FitEnvironment<Id, Symm, V>
+impl<I, V> Default for FitEnvironment<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     fn default() -> Self {
@@ -332,16 +329,17 @@ where
 // ============================================================================
 
 /// Compute environment for a leaf node (no children in subtree).
-fn compute_leaf_environment<Id, Symm, V>(
+fn compute_leaf_environment<I, V>(
     node: &V,
     _towards: &V,
-    tn_a: &TreeTN<Id, Symm, V>,
-    tn_b: &TreeTN<Id, Symm, V>,
-    tn_c: &TreeTN<Id, Symm, V>,
-) -> Result<TensorDynLen<Id, Symm>>
+    tn_a: &TreeTN<I, V>,
+    tn_b: &TreeTN<I, V>,
+    tn_c: &TreeTN<I, V>,
+) -> Result<TensorDynLen<I::Id, I::Symm>>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+    I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     // Get tensors
@@ -413,17 +411,18 @@ where
 ///
 /// This computes: child_envs × A[node] × B[node] × conj(C[node])
 /// leaving open only the indices connecting to `towards`.
-fn compute_single_node_environment<Id, Symm, V>(
+fn compute_single_node_environment<I, V>(
     node: &V,
     towards: &V,
-    tn_a: &TreeTN<Id, Symm, V>,
-    tn_b: &TreeTN<Id, Symm, V>,
-    tn_c: &TreeTN<Id, Symm, V>,
-    child_envs: &[TensorDynLen<Id, Symm>],
-) -> Result<TensorDynLen<Id, Symm>>
+    tn_a: &TreeTN<I, V>,
+    tn_b: &TreeTN<I, V>,
+    tn_c: &TreeTN<I, V>,
+    child_envs: &[TensorDynLen<I::Id, I::Symm>],
+) -> Result<TensorDynLen<I::Id, I::Symm>>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+    I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     // Get local tensors
@@ -519,18 +518,17 @@ where
 /// Implements the `LocalUpdater` trait to perform 2-site updates
 /// that optimize `C ≈ A * B`.
 #[derive(Debug)]
-pub struct FitUpdater<Id, Symm, V>
+pub struct FitUpdater<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// First input TreeTN (with sim'd internal indices)
-    pub tn_a: TreeTN<Id, Symm, V>,
+    pub tn_a: TreeTN<I, V>,
     /// Second input TreeTN (with sim'd internal indices)
-    pub tn_b: TreeTN<Id, Symm, V>,
+    pub tn_b: TreeTN<I, V>,
     /// Environment cache
-    pub envs: FitEnvironment<Id, Symm, V>,
+    pub envs: FitEnvironment<I, V>,
     /// Maximum bond dimension
     pub max_rank: Option<usize>,
     /// Relative tolerance for truncation
@@ -539,10 +537,11 @@ where
     pub factorize_alg: FactorizeAlg,
 }
 
-impl<Id, Symm, V> FitUpdater<Id, Symm, V>
+impl<I, V> FitUpdater<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + std::fmt::Debug + From<DynId> + Send + Sync,
+    I::Symm: Clone + Symmetry + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Create a new FitUpdater.
@@ -553,8 +552,8 @@ where
     /// * `max_rank` - Maximum bond dimension for truncation
     /// * `rtol` - Relative tolerance for truncation
     pub fn new(
-        tn_a: TreeTN<Id, Symm, V>,
-        tn_b: TreeTN<Id, Symm, V>,
+        tn_a: TreeTN<I, V>,
+        tn_b: TreeTN<I, V>,
         max_rank: Option<usize>,
         rtol: Option<f64>,
     ) -> Self {
@@ -579,18 +578,19 @@ where
     }
 }
 
-impl<Id, Symm, V> LocalUpdater<Id, Symm, V> for FitUpdater<Id, Symm, V>
+impl<I, V> LocalUpdater<I, V> for FitUpdater<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+    I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     fn update(
         &mut self,
-        mut subtree: TreeTN<Id, Symm, V>,
+        mut subtree: TreeTN<I, V>,
         step: &LocalUpdateStep<V>,
-        full_treetn: &TreeTN<Id, Symm, V>,
-    ) -> Result<TreeTN<Id, Symm, V>> {
+        full_treetn: &TreeTN<I, V>,
+    ) -> Result<TreeTN<I, V>> {
         // FitUpdater is designed for nsite=2
         if step.nodes.len() != 2 {
             return Err(anyhow::anyhow!(
@@ -616,7 +616,7 @@ where
 
         // Collect environments from neighbors (excluding the edge between u and v)
         // Uses lazy evaluation: computes and caches if not already present
-        let mut env_tensors: Vec<TensorDynLen<Id, Symm>> = Vec::new();
+        let mut env_tensors: Vec<TensorDynLen<I::Id, I::Symm>> = Vec::new();
 
         // Environments from u's neighbors (except v)
         for neighbor in full_treetn.site_index_network().neighbors(node_u) {
@@ -777,7 +777,7 @@ where
         subtree.replace_tensor(idx_v_sub, new_tensor_v)?;
 
         // Set ortho_towards
-        subtree.set_ortho_towards(&preserved_bond.id, Some(step.new_center.clone()));
+        subtree.set_ortho_towards(&preserved_bond, Some(step.new_center.clone()));
         subtree.set_canonical_center([step.new_center.clone()])?;
 
         Ok(subtree)
@@ -786,7 +786,7 @@ where
     fn after_step(
         &mut self,
         step: &LocalUpdateStep<V>,
-        full_treetn_after: &TreeTN<Id, Symm, V>,
+        full_treetn_after: &TreeTN<I, V>,
     ) -> Result<()> {
         // Invalidate all caches affected by the updated region
         self.envs.invalidate(&step.nodes, full_treetn_after);
@@ -876,15 +876,16 @@ impl FitContractionOptions {
 /// 1. Initialize C using zipup contraction
 /// 2. Apply fit algorithm with sweeps
 /// 3. Return optimized C
-pub fn contract_fit<Id, Symm, V>(
-    tn_a: &TreeTN<Id, Symm, V>,
-    tn_b: &TreeTN<Id, Symm, V>,
+pub fn contract_fit<I, V>(
+    tn_a: &TreeTN<I, V>,
+    tn_b: &TreeTN<I, V>,
     center: &V,
     options: FitContractionOptions,
-) -> Result<TreeTN<Id, Symm, V>>
+) -> Result<TreeTN<I, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    I: IndexLike,
+    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
+    I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     use super::localupdate::apply_local_update_sweep;
@@ -948,14 +949,14 @@ mod tests {
 
     #[test]
     fn test_fit_environment_new() {
-        let env: FitEnvironment<DynId, NoSymmSpace, String> = FitEnvironment::new();
+        let env: FitEnvironment<TestIndex, String> = FitEnvironment::new();
         assert!(env.is_empty());
         assert_eq!(env.len(), 0);
     }
 
     #[test]
     fn test_fit_environment_insert_get() {
-        let mut env: FitEnvironment<DynId, NoSymmSpace, String> = FitEnvironment::new();
+        let mut env: FitEnvironment<TestIndex, String> = FitEnvironment::new();
 
         let idx = TestIndex::new_dyn(2);
         let tensor = TensorDynLen::new(

@@ -24,9 +24,9 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
+use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
 use tensor4all_core::TensorDynLen;
-use tensor4all_core::{factorize, CanonicalForm, FactorizeOptions};
+use tensor4all_core::{factorize, CanonicalForm, FactorizeOptions, IndexLike};
 
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -63,23 +63,21 @@ pub use linsolve::{
 /// - **Site Space**: Physical indices organized by node
 ///
 /// # Type Parameters
-/// - `Id`: Index ID type
-/// - `Symm`: Symmetry type (default: NoSymmSpace)
+/// - `I`: Index type implementing `IndexLike` (default: `Index<DynId, NoSymmSpace, TagSet>`)
 /// - `V`: Node name type for named nodes (default: NodeIndex for backward compatibility)
 ///
 /// # Construction
 ///
 /// - `TreeTN::new()`: Create an empty network, then use `add_tensor()` and `connect()` to build.
 /// - `TreeTN::from_tensors(tensors, node_names)`: Create from tensors with auto-connection by matching index IDs.
-pub struct TreeTN<Id, Symm = NoSymmSpace, V = NodeIndex>
+pub struct TreeTN<I = Index<DynId, NoSymmSpace, TagSet>, V = NodeIndex>
 where
-    Id: Clone + std::hash::Hash + Eq,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Named graph wrapper: provides mapping between node names (V) and NodeIndex
     /// Edges store the bond Index directly.
-    pub(crate) graph: NamedGraph<V, TensorDynLen<Id, Symm>, Index<Id, Symm>>,
+    pub(crate) graph: NamedGraph<V, TensorDynLen<I::Id, I::Symm>, I>,
     /// Orthogonalization region (canonical_center).
     /// When empty, the network is not canonicalized.
     /// When non-empty, contains the node names (V) of the orthogonalization region.
@@ -91,12 +89,14 @@ where
     pub(crate) canonical_form: Option<CanonicalForm>,
     /// Site index network: manages topology and site space (physical indices).
     /// This structure enables topology and site space comparison independent of tensor data.
-    pub(crate) site_index_network: SiteIndexNetwork<V, Id, Symm>,
+    pub(crate) site_index_network: SiteIndexNetwork<V, I>,
     /// Orthogonalization direction for each index (bond or site).
-    /// Maps index ID to the node name (V) that the orthogonalization points towards.
+    /// Maps index to the node name (V) that the orthogonalization points towards.
     /// - For bond indices: points towards the canonical center direction
     /// - For site indices: points to the node that owns the index (always towards canonical center)
-    pub(crate) ortho_towards: HashMap<Id, V>,
+    ///
+    /// Note: Uses the full index as the key (via `IndexLike: Eq + Hash`).
+    pub(crate) ortho_towards: HashMap<I, V>,
 }
 
 /// Internal context for sweep-to-center operations.
@@ -113,10 +113,9 @@ pub(crate) struct SweepContext {
 // Construction methods
 // ============================================================================
 
-impl<Id, Symm, V> TreeTN<Id, Symm, V>
+impl<I, V> TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Create a new empty TreeTN.
@@ -152,9 +151,9 @@ where
     ///
     /// # Errors
     /// Returns an error if validation fails or connection fails.
-    pub fn from_tensors(tensors: Vec<TensorDynLen<Id, Symm>>, node_names: Vec<V>) -> Result<Self>
+    pub fn from_tensors(tensors: Vec<TensorDynLen<I::Id, I::Symm>>, node_names: Vec<V>) -> Result<Self>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         // Validate input lengths
         if tensors.len() != node_names.len() {
@@ -178,7 +177,7 @@ where
 
         // Step 2: Build a map from index ID to (node_index, index) pairs in O(n) time
         // Key: index ID, Value: vector of (NodeIndex, Index) pairs
-        let mut index_map: HashMap<Id, Vec<(NodeIndex, Index<Id, Symm>)>> = HashMap::new();
+        let mut index_map: HashMap<I::Id, Vec<(NodeIndex, I)>> = HashMap::new();
 
         for node_idx in &node_indices {
             let tensor = treetn
@@ -239,7 +238,7 @@ where
     pub fn add_tensor(
         &mut self,
         node_name: V,
-        tensor: TensorDynLen<Id, Symm>,
+        tensor: TensorDynLen<I::Id, I::Symm>,
     ) -> Result<NodeIndex> {
         self.add_tensor_internal(node_name, tensor)
     }
@@ -249,7 +248,7 @@ where
     /// This method only works when `V = NodeIndex`.
     ///
     /// Returns the NodeIndex for the newly added tensor.
-    pub fn add_tensor_auto_name(&mut self, tensor: TensorDynLen<Id, Symm>) -> NodeIndex
+    pub fn add_tensor_auto_name(&mut self, tensor: TensorDynLen<I::Id, I::Symm>) -> NodeIndex
     where
         V: From<NodeIndex> + Into<NodeIndex>,
     {
@@ -280,9 +279,9 @@ where
     pub fn connect(
         &mut self,
         node_a: NodeIndex,
-        index_a: &Index<Id, Symm>,
+        index_a: &I,
         node_b: NodeIndex,
-        index_b: &Index<Id, Symm>,
+        index_b: &I,
     ) -> Result<EdgeIndex> {
         self.connect_internal(node_a, index_a, node_b, index_b)
     }
@@ -292,10 +291,9 @@ where
 // Common implementation
 // ============================================================================
 
-impl<Id, Symm, V> TreeTN<Id, Symm, V>
+impl<I, V> TreeTN<I, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    I: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     // ------------------------------------------------------------------------
@@ -306,10 +304,10 @@ where
     pub(crate) fn add_tensor_internal(
         &mut self,
         node_name: V,
-        tensor: TensorDynLen<Id, Symm>,
+        tensor: TensorDynLen<I::Id, I::Symm>,
     ) -> Result<NodeIndex> {
         // Extract physical indices: initially all indices are physical (no connections yet)
-        let physical_indices: HashSet<Index<Id, Symm>> = tensor.indices.iter().cloned().collect();
+        let physical_indices: HashSet<I> = tensor.indices.iter().cloned().collect();
 
         // Add to graph
         let node_idx = self
@@ -331,9 +329,9 @@ where
     pub(crate) fn connect_internal(
         &mut self,
         node_a: NodeIndex,
-        index_a: &Index<Id, Symm>,
+        index_a: &I,
         node_b: NodeIndex,
-        index_b: &Index<Id, Symm>,
+        index_b: &I,
     ) -> Result<EdgeIndex> {
         // Validate that indices have the same ID (Einsum mode requirement)
         if index_a.id != index_b.id {
@@ -496,8 +494,8 @@ where
         context_name: &str,
     ) -> Result<()>
     where
-        Id: Clone + std::hash::Hash + Eq + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        I::Id: Clone + std::hash::Hash + Eq + From<DynId>,
+        I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
     {
         // Find edge between src and dst
         let edge = {
@@ -525,7 +523,7 @@ where
             .with_context(|| format!("{}: tensor not found", context_name))?;
 
         // Build left_inds = all indices except dst bond
-        let left_inds: Vec<Index<Id, Symm>> = tensor_src
+        let left_inds: Vec<I> = tensor_src
             .indices
             .iter()
             .filter(|idx| idx.id != bond_on_src.id)
@@ -594,12 +592,12 @@ where
     // ------------------------------------------------------------------------
 
     /// Get a reference to a tensor by NodeIndex.
-    pub fn tensor(&self, node: NodeIndex) -> Option<&TensorDynLen<Id, Symm>> {
+    pub fn tensor(&self, node: NodeIndex) -> Option<&TensorDynLen<I::Id, I::Symm>> {
         self.graph.graph().node_weight(node)
     }
 
     /// Get a mutable reference to a tensor by NodeIndex.
-    pub fn tensor_mut(&mut self, node: NodeIndex) -> Option<&mut TensorDynLen<Id, Symm>> {
+    pub fn tensor_mut(&mut self, node: NodeIndex) -> Option<&mut TensorDynLen<I::Id, I::Symm>> {
         self.graph.graph_mut().node_weight_mut(node)
     }
 
@@ -612,8 +610,8 @@ where
     pub fn replace_tensor(
         &mut self,
         node: NodeIndex,
-        new_tensor: TensorDynLen<Id, Symm>,
-    ) -> Result<Option<TensorDynLen<Id, Symm>>> {
+        new_tensor: TensorDynLen<I::Id, I::Symm>,
+    ) -> Result<Option<TensorDynLen<I::Id, I::Symm>>> {
         // Check if node exists
         if !self.graph.contains_node(node) {
             return Ok(None);
@@ -621,7 +619,7 @@ where
 
         // Validate that all connection indices exist in the new tensor
         let edges = self.edges_for_node(node);
-        let connection_indices: Vec<Index<Id, Symm>> = edges
+        let connection_indices: Vec<I> = edges
             .iter()
             .filter_map(|(edge_idx, _neighbor)| self.bond_index(*edge_idx).cloned())
             .collect();
@@ -646,9 +644,9 @@ where
             .clone();
 
         // Calculate new physical indices: all indices minus connection indices
-        let connection_indices_set: HashSet<Index<Id, Symm>> =
+        let connection_indices_set: HashSet<I> =
             connection_indices.iter().cloned().collect();
-        let new_physical_indices: HashSet<Index<Id, Symm>> = new_tensor
+        let new_physical_indices: HashSet<I> = new_tensor
             .indices
             .iter()
             .filter(|idx| !connection_indices_set.contains(idx))
@@ -671,12 +669,12 @@ where
     }
 
     /// Get the bond index for a given edge.
-    pub fn bond_index(&self, edge: EdgeIndex) -> Option<&Index<Id, Symm>> {
+    pub fn bond_index(&self, edge: EdgeIndex) -> Option<&I> {
         self.graph.graph().edge_weight(edge)
     }
 
     /// Get a mutable reference to the bond index for a given edge.
-    pub fn bond_index_mut(&mut self, edge: EdgeIndex) -> Option<&mut Index<Id, Symm>> {
+    pub fn bond_index_mut(&mut self, edge: EdgeIndex) -> Option<&mut I> {
         self.graph.graph_mut().edge_weight_mut(edge)
     }
 
@@ -699,7 +697,7 @@ where
     pub fn replace_edge_bond(
         &mut self,
         edge: EdgeIndex,
-        new_bond_index: Index<Id, Symm>,
+        new_bond_index: I,
     ) -> Result<()> {
         // Validate edge exists and get endpoints
         let (source, target) = self
@@ -751,15 +749,15 @@ where
     /// The direction is specified as a node name (or None to clear).
     ///
     /// # Arguments
-    /// * `index_id` - The index ID to set ortho direction for
+    /// * `index` - The index to set ortho direction for
     /// * `dir` - The node name that the ortho points towards, or None to clear
-    pub fn set_ortho_towards(&mut self, index_id: &Id, dir: Option<V>) {
+    pub fn set_ortho_towards(&mut self, index: &I, dir: Option<V>) {
         match dir {
             Some(node_name) => {
-                self.ortho_towards.insert(index_id.clone(), node_name);
+                self.ortho_towards.insert(index.clone(), node_name);
             }
             None => {
-                self.ortho_towards.remove(index_id);
+                self.ortho_towards.remove(index);
             }
         }
     }
@@ -767,13 +765,13 @@ where
     /// Get the node name that the orthogonalization points towards for an index.
     ///
     /// Returns None if ortho_towards is not set for this index.
-    pub fn ortho_towards_for_index(&self, index_id: &Id) -> Option<&V> {
-        self.ortho_towards.get(index_id)
+    pub fn ortho_towards_for_index(&self, index: &I) -> Option<&V> {
+        self.ortho_towards.get(index)
     }
 
     /// Set the orthogonalization direction for an edge (by EdgeIndex).
     ///
-    /// This is a convenience method that looks up the bond index ID and calls `set_ortho_towards`.
+    /// This is a convenience method that looks up the bond index and calls `set_ortho_towards`.
     ///
     /// The direction is specified as a node name (or None to clear).
     /// The node must be one of the edge's endpoints.
@@ -782,11 +780,10 @@ where
         edge: petgraph::stable_graph::EdgeIndex,
         dir: Option<V>,
     ) -> Result<()> {
-        // Get the bond index ID for this edge
-        let bond_id = self
+        // Get the bond index for this edge
+        let bond = self
             .bond_index(edge)
             .ok_or_else(|| anyhow::anyhow!("Edge does not exist"))?
-            .id
             .clone();
 
         // Validate that the node (if any) is one of the edge endpoints
@@ -809,7 +806,7 @@ where
             }
         }
 
-        self.set_ortho_towards(&bond_id, dir);
+        self.set_ortho_towards(&bond, dir);
         Ok(())
     }
 
@@ -818,7 +815,7 @@ where
     /// Returns None if ortho_towards is not set for this edge's bond index.
     pub fn ortho_towards_node(&self, edge: petgraph::stable_graph::EdgeIndex) -> Option<&V> {
         self.bond_index(edge)
-            .and_then(|bond| self.ortho_towards.get(&bond.id))
+            .and_then(|bond| self.ortho_towards.get(bond))
     }
 
     /// Get the NodeIndex that the orthogonalization points towards for an edge.
@@ -1016,17 +1013,17 @@ where
     /// Get a reference to the site index network.
     ///
     /// The site index network contains both topology (graph structure) and site space (physical indices).
-    pub fn site_index_network(&self) -> &SiteIndexNetwork<V, Id, Symm> {
+    pub fn site_index_network(&self) -> &SiteIndexNetwork<V, I> {
         &self.site_index_network
     }
 
     /// Get a mutable reference to the site index network.
-    pub fn site_index_network_mut(&mut self) -> &mut SiteIndexNetwork<V, Id, Symm> {
+    pub fn site_index_network_mut(&mut self) -> &mut SiteIndexNetwork<V, I> {
         &mut self.site_index_network
     }
 
     /// Get a reference to the site space (physical indices) for a node.
-    pub fn site_space(&self, node_name: &V) -> Option<&std::collections::HashSet<Index<Id, Symm>>> {
+    pub fn site_space(&self, node_name: &V) -> Option<&std::collections::HashSet<I>> {
         self.site_index_network.site_space(node_name)
     }
 
@@ -1034,7 +1031,7 @@ where
     pub fn site_space_mut(
         &mut self,
         node_name: &V,
-    ) -> Option<&mut std::collections::HashSet<Index<Id, Symm>>> {
+    ) -> Option<&mut std::collections::HashSet<I>> {
         self.site_index_network.site_space_mut(node_name)
     }
 
@@ -1053,7 +1050,7 @@ where
     /// `true` if the networks share equivalent site index structure, `false` otherwise.
     pub fn share_equivalent_site_index_network(&self, other: &Self) -> bool
     where
-        Id: Ord,
+        I::Id: Ord,
     {
         self.site_index_network
             .share_equivalent_site_index_network(&other.site_index_network)
@@ -1095,7 +1092,7 @@ where
     /// `true` if both TreeTNs have the same appearance, `false` otherwise.
     pub fn same_appearance(&self, other: &Self) -> bool
     where
-        Id: Ord,
+        I::Id: Ord,
         V: Ord,
     {
         // Step 1: Check topology and site space
@@ -1123,8 +1120,8 @@ where
                     Some(e) => e,
                     None => continue,
                 };
-                let self_bond_id = match self.bond_index(self_edge) {
-                    Some(b) => &b.id,
+                let self_bond = match self.bond_index(self_edge) {
+                    Some(b) => b,
                     None => continue,
                 };
 
@@ -1133,14 +1130,14 @@ where
                     Some(e) => e,
                     None => return false, // Edge exists in self but not in other
                 };
-                let other_bond_id = match other.bond_index(other_edge) {
-                    Some(b) => &b.id,
+                let other_bond = match other.bond_index(other_edge) {
+                    Some(b) => b,
                     None => return false,
                 };
 
                 // Compare ortho_towards for this edge
-                let self_ortho = self.ortho_towards.get(self_bond_id);
-                let other_ortho = other.ortho_towards.get(other_bond_id);
+                let self_ortho = self.ortho_towards.get(self_bond);
+                let other_ortho = other.ortho_towards.get(other_bond);
 
                 match (self_ortho, other_ortho) {
                     (None, None) => {} // Both have no direction - OK
@@ -1165,14 +1162,14 @@ where
             .graph()
             .edge_indices()
             .filter_map(|e| self.bond_index(e))
-            .filter(|b| self.ortho_towards.contains_key(&b.id))
+            .filter(|b| self.ortho_towards.contains_key(b))
             .count();
         let other_total_bond_entries: usize = other
             .graph
             .graph()
             .edge_indices()
             .filter_map(|e| other.bond_index(e))
-            .filter(|b| other.ortho_towards.contains_key(&b.id))
+            .filter(|b| other.ortho_towards.contains_key(b))
             .count();
 
         if self_bond_ortho_count != self_total_bond_entries
@@ -1201,13 +1198,13 @@ where
     /// `Ok(())` if the internal data is consistent, or `Err` with details about the inconsistency.
     pub fn verify_internal_consistency(&self) -> Result<()>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug,
-        Symm: Clone + Symmetry + PartialEq + std::fmt::Debug,
+        I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        I::Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + Send + Sync,
         V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         // Step 1: Clone all tensors and node names
         let node_names: Vec<V> = self.node_names();
-        let tensors: Vec<TensorDynLen<Id, Symm>> = node_names
+        let tensors: Vec<TensorDynLen<I::Id, I::Symm>> = node_names
             .iter()
             .filter_map(|name| {
                 let idx = self.graph.node_index(name)?;
@@ -1224,7 +1221,7 @@ where
         }
 
         // Step 2: Reconstruct TreeTN from scratch using from_tensors
-        let reconstructed = TreeTN::<Id, Symm, V>::from_tensors(tensors, node_names)
+        let reconstructed = TreeTN::<I, V>::from_tensors(tensors, node_names)
             .context("verify_internal_consistency: failed to reconstruct TreeTN")?;
 
         // Step 3: Verify topology matches
@@ -1298,12 +1295,11 @@ where
 
 /// Find common indices between two slices of indices.
 pub(crate) fn common_inds<Id, Symm>(
-    inds_a: &[Index<Id, Symm>],
-    inds_b: &[Index<Id, Symm>],
-) -> Vec<Index<Id, Symm>>
+    inds_a: &[I],
+    inds_b: &[I],
+) -> Vec<I>
 where
-    Id: Clone + std::hash::Hash + Eq,
-    Symm: Clone,
+    I: IndexLike,
 {
     let set_b: HashSet<_> = inds_b.iter().map(|idx| &idx.id).collect();
     inds_a

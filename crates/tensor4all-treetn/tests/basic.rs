@@ -994,7 +994,7 @@ fn test_contract_zipup_basic_api() {
     use tensor4all_treetn::{random_treetn_f64, LinkSpace, SiteIndexNetwork};
 
     // Create two networks with the same topology but different site indices
-    let mut site_network1 = SiteIndexNetwork::<String, DynId>::new();
+    let mut site_network1 = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
     let site_a1 = Index::new_dyn(2);
     let site_b1 = Index::new_dyn(3);
     site_network1
@@ -1007,7 +1007,7 @@ fn test_contract_zipup_basic_api() {
         .add_edge(&"A".to_string(), &"B".to_string())
         .unwrap();
 
-    let mut site_network2 = SiteIndexNetwork::<String, DynId>::new();
+    let mut site_network2 = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
     let site_a2 = Index::new_dyn(2);
     let site_b2 = Index::new_dyn(3);
     site_network2
@@ -1230,7 +1230,7 @@ use tensor4all_treetn::{contract, ContractionMethod, ContractionOptions};
 /// * `rtol` - Relative tolerance for comparison
 fn compare_contract_vs_naive(
     method: ContractionMethod,
-    site_network: &SiteIndexNetwork<String, DynId>,
+    site_network: &SiteIndexNetwork<String, Index<DynId, NoSymmSpace>>,
     link_space: LinkSpace<String>,
     center: &str,
     seed1: u64,
@@ -1272,7 +1272,7 @@ fn compare_contract_vs_naive(
 
 /// Wrapper for zipup vs naive
 fn compare_zipup_vs_naive(
-    site_network: &SiteIndexNetwork<String, DynId>,
+    site_network: &SiteIndexNetwork<String, Index<DynId, NoSymmSpace>>,
     link_space: LinkSpace<String>,
     center: &str,
     seed1: u64,
@@ -1292,7 +1292,7 @@ fn compare_zipup_vs_naive(
 
 /// Wrapper for fit vs naive
 fn compare_fit_vs_naive(
-    site_network: &SiteIndexNetwork<String, DynId>,
+    site_network: &SiteIndexNetwork<String, Index<DynId, NoSymmSpace>>,
     link_space: LinkSpace<String>,
     center: &str,
     seed1: u64,
@@ -1317,7 +1317,7 @@ fn compare_fit_vs_naive(
 /// Test contract_zipup vs contract_naive for 2-node chain: A -- B
 #[test]
 fn test_zipup_vs_naive_2node_chain() {
-    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let mut site_network = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
     let site_a = Index::new_dyn(2);
     let site_b = Index::new_dyn(3);
     site_network
@@ -1336,7 +1336,7 @@ fn test_zipup_vs_naive_2node_chain() {
 /// Test contract_zipup vs contract_naive for 3-node chain: A -- B -- C
 #[test]
 fn test_zipup_vs_naive_3node_chain() {
-    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let mut site_network = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
     let site_a = Index::new_dyn(2);
     let site_b = Index::new_dyn(2);
     let site_c = Index::new_dyn(2);
@@ -1372,7 +1372,7 @@ fn test_zipup_vs_naive_3node_chain() {
 ///   C - B - D
 #[test]
 fn test_zipup_vs_naive_star() {
-    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let mut site_network = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
     let site_a = Index::new_dyn(2);
     let site_b = Index::new_dyn(2);
     let site_c = Index::new_dyn(2);
@@ -1412,7 +1412,7 @@ fn test_zipup_vs_naive_star() {
 ///       D
 #[test]
 fn test_zipup_vs_naive_y_shape() {
-    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let mut site_network = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
     let site_a = Index::new_dyn(2);
     let site_b = Index::new_dyn(2);
     let site_c = Index::new_dyn(2);
@@ -1449,7 +1449,7 @@ fn test_zipup_vs_naive_y_shape() {
 /// Test contract_zipup vs contract_naive for 5-node chain: A -- B -- C -- D -- E
 #[test]
 fn test_zipup_vs_naive_5node_chain() {
-    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let mut site_network = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
     for name in ["A", "B", "C", "D", "E"] {
         let site = Index::new_dyn(2);
         site_network
@@ -1803,7 +1803,7 @@ fn test_fit_contraction_options() {
 /// Test contract_fit vs contract_naive for 2-node chain: A -- B
 #[test]
 fn test_fit_vs_naive_2node_chain() {
-    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let mut site_network = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
     let site_a = Index::new_dyn(2);
     let site_b = Index::new_dyn(3);
     site_network
@@ -1822,7 +1822,7 @@ fn test_fit_vs_naive_2node_chain() {
 /// Test contract_fit vs contract_naive for 3-node chain: A -- B -- C
 #[test]
 fn test_fit_vs_naive_3node_chain() {
-    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let mut site_network = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
     let site_a = Index::new_dyn(2);
     let site_b = Index::new_dyn(2);
     let site_c = Index::new_dyn(2);
@@ -1858,7 +1858,7 @@ fn test_fit_vs_naive_3node_chain() {
 ///   C - B - D
 #[test]
 fn test_fit_vs_naive_star() {
-    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let mut site_network = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
     let site_a = Index::new_dyn(2);
     let site_b = Index::new_dyn(2);
     let site_c = Index::new_dyn(2);
@@ -1898,7 +1898,7 @@ fn test_fit_vs_naive_star() {
 ///       D
 #[test]
 fn test_fit_vs_naive_y_shape() {
-    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let mut site_network = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
     let site_a = Index::new_dyn(2);
     let site_b = Index::new_dyn(2);
     let site_c = Index::new_dyn(2);
@@ -1935,7 +1935,7 @@ fn test_fit_vs_naive_y_shape() {
 /// Test contract_fit vs contract_naive for 5-node chain: A -- B -- C -- D -- E
 #[test]
 fn test_fit_vs_naive_5node_chain() {
-    let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+    let mut site_network = SiteIndexNetwork::<String, Index<DynId, NoSymmSpace>>::new();
     for name in ["A", "B", "C", "D", "E"] {
         let site = Index::new_dyn(2);
         site_network

@@ -2,11 +2,47 @@
 //!
 //! This module provides the default concrete types for tensor network operations:
 //!
+//! - [`DynId`]: Runtime identity (UUID-based unique identifier)
+//! - [`NoSymmSpace`]: No symmetry (trivial symmetry space)
+//! - [`TagSet`]: Tag set for metadata (Arc-wrapped for cheap cloning)
+//! - [`Index`]: Generic index type
 //! - [`DynIndex`]: Default index type (`Index<DynId, NoSymmSpace, TagSet>`)
+//! - [`TensorDynLen`]: Dense tensor with dynamic rank
+//!
+//! Linear algebra operations:
+//! - [`svd`]: Singular Value Decomposition
+//! - [`qr`]: QR decomposition
+//! - [`factorize`]: Unified factorization interface
+//! - [`direct_sum`]: Direct sum of tensors
 //!
 //! These types are suitable for most tensor network applications and provide
 //! a good balance of flexibility and performance.
 
-mod dyn_index;
+pub mod index;
+pub mod tensordynlen;
 
-pub use dyn_index::DynIndex;
+// Contraction
+pub mod contract;
+
+// Linear algebra modules
+pub mod direct_sum;
+pub mod factorize;
+pub mod qr;
+pub mod svd;
+
+pub use index::{
+    DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, NoSymmSpace, Symmetry, TagSet,
+};
+pub use tensordynlen::{
+    compute_permutation_from_indices, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor,
+    unfold_split, TensorAccess, TensorDynLen,
+};
+pub use contract::contract_multi;
+
+// Re-export linear algebra functions and types
+pub use direct_sum::direct_sum;
+pub use factorize::{
+    factorize, Canonical, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult,
+};
+pub use qr::{default_qr_rtol, qr, qr_c64, qr_with, set_default_qr_rtol, QrError, QrOptions};
+pub use svd::{default_svd_rtol, set_default_svd_rtol, svd, svd_c64, svd_with, SvdError, SvdOptions};

@@ -48,3 +48,16 @@ pub use treetn::{
     TreeTopology,
     TruncateUpdater,
 };
+
+use petgraph::graph::NodeIndex;
+use tensor4all_core::index::{DynId, NoSymmSpace};
+
+/// Default TreeTN type using DynId for index identity and NoSymmSpace for symmetry.
+///
+/// This is the most common configuration for TreeTN, equivalent to:
+/// ```ignore
+/// TreeTN<DynId, NoSymmSpace, NodeIndex>
+/// ```
+///
+/// Use this when you don't need custom index types or symmetry.
+pub type DefaultTreeTN<V = NodeIndex> = TreeTN<DynId, NoSymmSpace, V>;

@@ -10,9 +10,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use num_complex::Complex64;
 
-use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
+use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
 use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64, Storage};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::{IndexLike, TensorDynLen};
 
 /// Build an identity operator tensor for a gap node.
 ///
@@ -36,13 +36,12 @@ use tensor4all_core::TensorDynLen;
 /// ```text
 /// T[s, s'] = δ_{s,s'} = [[1, 0], [0, 1]]
 /// ```
-pub fn build_identity_operator_tensor<Id, Symm>(
-    site_indices: &[Index<Id, Symm>],
-    output_site_indices: &[Index<Id, Symm>],
-) -> Result<TensorDynLen<Id, Symm>>
+pub fn build_identity_operator_tensor<I>(
+    site_indices: &[I],
+    output_site_indices: &[I],
+) -> Result<TensorDynLen<I::Id, I::Symm>>
 where
-    Id: Clone + Hash + Eq + Debug + From<DynId>,
-    Symm: Clone + Symmetry + Debug + From<NoSymmSpace>,
+    I: IndexLike,
 {
     // Validate same number of input and output indices
     if site_indices.len() != output_site_indices.len() {
@@ -55,13 +54,11 @@ where
 
     // Validate dimensions match
     for (inp, out) in site_indices.iter().zip(output_site_indices.iter()) {
-        if inp.symm.total_dim() != out.symm.total_dim() {
+        if inp.dim() != out.dim() {
             return Err(anyhow::anyhow!(
-                "Dimension mismatch: input index {:?} has dim {}, output {:?} has dim {}",
-                inp.id,
-                inp.symm.total_dim(),
-                out.id,
-                out.symm.total_dim()
+                "Dimension mismatch: input index has dim {}, output has dim {}",
+                inp.dim(),
+                out.dim(),
             ));
         }
     }
@@ -73,13 +70,16 @@ where
     }
 
     // Build combined index list: [s1, s1', s2, s2', ...]
-    let mut all_indices: Vec<Index<Id, Symm>> = Vec::with_capacity(site_indices.len() * 2);
+    let mut all_indices: Vec<Index<I::Id, I::Symm>> = Vec::with_capacity(site_indices.len() * 2);
     let mut dims: Vec<usize> = Vec::with_capacity(site_indices.len() * 2);
 
     for (inp, out) in site_indices.iter().zip(output_site_indices.iter()) {
-        all_indices.push(inp.clone());
-        all_indices.push(out.clone());
-        let dim = inp.symm.total_dim();
+        // Create Index<I::Id, I::Symm> from IndexLike
+        let inp_index = Index::new(inp.id().clone(), inp.symm().clone());
+        let out_index = Index::new(out.id().clone(), out.symm().clone());
+        all_indices.push(inp_index);
+        all_indices.push(out_index);
+        let dim = inp.dim();
         dims.push(dim);
         dims.push(dim);
     }
@@ -105,7 +105,7 @@ where
 
     // Iterate over all diagonal elements
     // Each pair (s_i, s_i') should have s_i = s_i'
-    let input_dims: Vec<usize> = site_indices.iter().map(|i| i.symm.total_dim()).collect();
+    let input_dims: Vec<usize> = site_indices.iter().map(|i| i.dim()).collect();
     let input_total: usize = input_dims.iter().product();
 
     for input_linear in 0..input_total {
@@ -137,13 +137,12 @@ where
 /// Build an identity operator tensor with complex data type.
 ///
 /// Same as [`build_identity_operator_tensor`] but returns a complex tensor.
-pub fn build_identity_operator_tensor_c64<Id, Symm>(
-    site_indices: &[Index<Id, Symm>],
-    output_site_indices: &[Index<Id, Symm>],
-) -> Result<TensorDynLen<Id, Symm>>
+pub fn build_identity_operator_tensor_c64<I>(
+    site_indices: &[I],
+    output_site_indices: &[I],
+) -> Result<TensorDynLen<I::Id, I::Symm>>
 where
-    Id: Clone + Hash + Eq + Debug + From<DynId>,
-    Symm: Clone + Symmetry + Debug + From<NoSymmSpace>,
+    I: IndexLike,
 {
     // Validate same number of input and output indices
     if site_indices.len() != output_site_indices.len() {
@@ -156,13 +155,11 @@ where
 
     // Validate dimensions match
     for (inp, out) in site_indices.iter().zip(output_site_indices.iter()) {
-        if inp.symm.total_dim() != out.symm.total_dim() {
+        if inp.dim() != out.dim() {
             return Err(anyhow::anyhow!(
-                "Dimension mismatch: input index {:?} has dim {}, output {:?} has dim {}",
-                inp.id,
-                inp.symm.total_dim(),
-                out.id,
-                out.symm.total_dim()
+                "Dimension mismatch: input index has dim {}, output has dim {}",
+                inp.dim(),
+                out.dim(),
             ));
         }
     }
@@ -175,13 +172,15 @@ where
     }
 
     // Build combined index list
-    let mut all_indices: Vec<Index<Id, Symm>> = Vec::with_capacity(site_indices.len() * 2);
+    let mut all_indices: Vec<Index<I::Id, I::Symm>> = Vec::with_capacity(site_indices.len() * 2);
     let mut dims: Vec<usize> = Vec::with_capacity(site_indices.len() * 2);
 
     for (inp, out) in site_indices.iter().zip(output_site_indices.iter()) {
-        all_indices.push(inp.clone());
-        all_indices.push(out.clone());
-        let dim = inp.symm.total_dim();
+        let inp_index = Index::new(inp.id().clone(), inp.symm().clone());
+        let out_index = Index::new(out.id().clone(), out.symm().clone());
+        all_indices.push(inp_index);
+        all_indices.push(out_index);
+        let dim = inp.dim();
         dims.push(dim);
         dims.push(dim);
     }
@@ -198,7 +197,7 @@ where
 
     let strides = compute_strides(&dims);
     let n_pairs = site_indices.len();
-    let input_dims: Vec<usize> = site_indices.iter().map(|i| i.symm.total_dim()).collect();
+    let input_dims: Vec<usize> = site_indices.iter().map(|i| i.dim()).collect();
     let input_total: usize = input_dims.iter().product();
 
     let mut data = vec![Complex64::new(0.0, 0.0); total_size];
@@ -230,7 +229,7 @@ mod tests {
     use super::*;
     use tensor4all_core::TensorAccess;
 
-    type DynIndex = Index<DynId, NoSymmSpace>;
+    type DynIndex = Index<DynId, NoSymmSpace, TagSet>;
 
     fn make_index(dim: usize) -> DynIndex {
         Index::new_dyn(dim)
@@ -313,7 +312,7 @@ mod tests {
     #[test]
     fn test_identity_empty() {
         let tensor: TensorDynLen<DynId, NoSymmSpace> =
-            build_identity_operator_tensor(&[], &[]).unwrap();
+            build_identity_operator_tensor::<DynIndex>(&[], &[]).unwrap();
 
         assert_eq!(tensor.indices.len(), 0);
         assert_eq!(tensor.dims.len(), 0);

@@ -3,6 +3,9 @@
 //! This module provides enums for selecting algorithms in various tensor train operations.
 //! These types are designed to be FFI-friendly (representable as C integers).
 //!
+//! **Note:** These types are TT/TreeTN-specific and should be moved to `tensor4all-treetn`
+//! in a future refactoring.
+//!
 //! # Design Philosophy
 //!
 //! Following ITensors.jl's pattern, algorithms are represented as static types.
@@ -15,73 +18,14 @@
 //! # Example
 //!
 //! ```
-//! use tensor4all_core::algorithm::{FactorizeAlgorithm, ContractionAlgorithm};
-//!
-//! // Select factorization algorithm
-//! let alg = FactorizeAlgorithm::SVD;
+//! use tensor4all_core::algorithm::{ContractionAlgorithm, CanonicalForm};
 //!
 //! // Select contraction algorithm
 //! let alg = ContractionAlgorithm::ZipUp;
+//!
+//! // Select canonical form
+//! let form = CanonicalForm::Unitary;
 //! ```
-
-/// Algorithm for matrix factorization / decomposition.
-///
-/// Used in compression, truncation, and various tensor operations.
-///
-/// # C API Representation
-/// - `T4A_FACTORIZE_SVD` = 0
-/// - `T4A_FACTORIZE_LU` = 1
-/// - `T4A_FACTORIZE_CI` = 2
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[repr(i32)]
-pub enum FactorizeAlgorithm {
-    /// Singular Value Decomposition
-    ///
-    /// Most accurate for truncation, computes optimal low-rank approximation.
-    /// Time complexity: O(min(m,n) * m * n)
-    #[default]
-    SVD = 0,
-
-    /// LU decomposition with partial pivoting
-    ///
-    /// Faster than SVD, but may not give optimal truncation.
-    /// Time complexity: O(min(m,n)^2 * max(m,n))
-    LU = 1,
-
-    /// Cross Interpolation (CI) / Skeleton decomposition
-    ///
-    /// Adaptive algorithm that selects representative rows and columns.
-    /// Time complexity: O(r^2 * (m + n)) where r is the rank.
-    CI = 2,
-}
-
-impl FactorizeAlgorithm {
-    /// Create from C API integer representation.
-    ///
-    /// Returns `None` for invalid values.
-    pub fn from_i32(value: i32) -> Option<Self> {
-        match value {
-            0 => Some(Self::SVD),
-            1 => Some(Self::LU),
-            2 => Some(Self::CI),
-            _ => None,
-        }
-    }
-
-    /// Convert to C API integer representation.
-    pub fn to_i32(self) -> i32 {
-        self as i32
-    }
-
-    /// Get algorithm name as string.
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::SVD => "svd",
-            Self::LU => "lu",
-            Self::CI => "ci",
-        }
-    }
-}
 
 /// Algorithm for tensor train contraction (TT-TT or MPO-MPO).
 ///
@@ -290,19 +234,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_factorize_algorithm_roundtrip() {
-        for alg in [
-            FactorizeAlgorithm::SVD,
-            FactorizeAlgorithm::LU,
-            FactorizeAlgorithm::CI,
-        ] {
-            let i = alg.to_i32();
-            let recovered = FactorizeAlgorithm::from_i32(i).unwrap();
-            assert_eq!(alg, recovered);
-        }
-    }
-
-    #[test]
     fn test_contraction_algorithm_roundtrip() {
         for alg in [
             ContractionAlgorithm::Naive,
@@ -340,8 +271,6 @@ mod tests {
 
     #[test]
     fn test_invalid_values() {
-        assert!(FactorizeAlgorithm::from_i32(-1).is_none());
-        assert!(FactorizeAlgorithm::from_i32(100).is_none());
         assert!(ContractionAlgorithm::from_i32(-1).is_none());
         assert!(ContractionAlgorithm::from_i32(100).is_none());
         assert!(CompressionAlgorithm::from_i32(-1).is_none());
@@ -352,7 +281,6 @@ mod tests {
 
     #[test]
     fn test_default() {
-        assert_eq!(FactorizeAlgorithm::default(), FactorizeAlgorithm::SVD);
         assert_eq!(ContractionAlgorithm::default(), ContractionAlgorithm::Naive);
         assert_eq!(CompressionAlgorithm::default(), CompressionAlgorithm::SVD);
         assert_eq!(CanonicalForm::default(), CanonicalForm::Unitary);

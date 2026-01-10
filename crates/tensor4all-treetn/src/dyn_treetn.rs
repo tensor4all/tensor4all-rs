@@ -53,7 +53,7 @@ pub type BoxedTensorLike = Box<dyn TensorLike<Id = DynId, Symm = NoSymmSpace, Ta
 
 /// Dynamic Tree Tensor Network that can hold heterogeneous TensorLike objects.
 ///
-/// Unlike `TreeTN<Id, Symm, V>` which stores homogeneous `TensorDynLen<Id, Symm>` tensors,
+/// Unlike `TreeTN<I, V>` which stores homogeneous `TensorDynLen<I::Id, I::Symm>` tensors,
 /// `DynTreeTN<V>` can store any object implementing `TensorLike` as node payloads.
 /// This enables mixing different tensor representations within the same network.
 ///
@@ -96,7 +96,7 @@ where
     /// Orthogonalization region (node names).
     canonical_center: HashSet<V>,
     /// Site index network: manages topology and site space (physical indices).
-    site_index_network: SiteIndexNetwork<V, DynId, NoSymmSpace, TagSet>,
+    site_index_network: SiteIndexNetwork<V, DynIndex>,
     /// Orthogonalization direction for each edge (node name that ortho points towards).
     ortho_towards: HashMap<EdgeIndex, V>,
 }
@@ -360,7 +360,7 @@ where
     }
 
     /// Get a reference to the site index network.
-    pub fn site_index_network(&self) -> &SiteIndexNetwork<V, DynId, NoSymmSpace, TagSet> {
+    pub fn site_index_network(&self) -> &SiteIndexNetwork<V, DynIndex> {
         &self.site_index_network
     }
 

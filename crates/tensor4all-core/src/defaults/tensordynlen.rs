@@ -1415,3 +1415,53 @@ pub fn unfold_split<T: StorageScalar>(
         right_inds,
     ))
 }
+
+// ============================================================================
+// TensorLike implementation for TensorDynLen
+// ============================================================================
+
+use crate::tensor_like::{FactorizeError, FactorizeOptions, FactorizeResult, TensorLike};
+
+impl TensorLike for TensorDynLen {
+    type Index = DynIndex;
+
+    fn external_indices(&self) -> Vec<DynIndex> {
+        // For TensorDynLen, all indices are external.
+        self.indices.clone()
+    }
+
+    fn num_external_indices(&self) -> usize {
+        self.indices.len()
+    }
+
+    fn replaceind(&self, old_index: &DynIndex, new_index: &DynIndex) -> Result<Self> {
+        // Delegate to the inherent method
+        Ok(TensorDynLen::replaceind(self, old_index, new_index))
+    }
+
+    fn replaceinds(
+        &self,
+        old_indices: &[DynIndex],
+        new_indices: &[DynIndex],
+    ) -> Result<Self> {
+        // Delegate to the inherent method
+        Ok(TensorDynLen::replaceinds(self, old_indices, new_indices))
+    }
+
+    fn tensordot(
+        &self,
+        other: &Self,
+        pairs: &[(DynIndex, DynIndex)],
+    ) -> Result<Self> {
+        // Delegate to the inherent method
+        TensorDynLen::tensordot(self, other, pairs)
+    }
+
+    fn factorize(
+        &self,
+        left_inds: &[DynIndex],
+        options: &FactorizeOptions,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        crate::factorize::factorize(self, left_inds, options)
+    }
+}
