@@ -7,15 +7,16 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::{IndexLike, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
+use tensor4all_core::index::{DynId, NoSymmSpace};
+use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
+use crate::algorithm::CanonicalForm;
 
 use super::TreeTN;
 use crate::options::CanonicalizationOptions;
 
-impl<I, V> TreeTN<I, V>
+impl<T, V> TreeTN<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Canonicalize the network towards the specified center using options.
@@ -49,9 +50,6 @@ where
         canonical_center: impl IntoIterator<Item = V>,
         options: CanonicalizationOptions,
     ) -> Result<Self>
-    where
-        I::Id: Clone + std::hash::Hash + Eq + From<DynId>,
-        I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
     {
         let center_v: HashSet<V> = canonical_center.into_iter().collect();
 
@@ -90,8 +88,6 @@ where
         options: CanonicalizationOptions,
     ) -> Result<()>
     where
-        I::Id: Clone + std::hash::Hash + Eq + From<DynId>,
-        I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
         Self: Default,
     {
         let taken = std::mem::take(self);
@@ -113,9 +109,6 @@ where
         form: CanonicalForm,
         context_name: &str,
     ) -> Result<()>
-    where
-        I::Id: Clone + std::hash::Hash + Eq + From<DynId>,
-        I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
     {
         // Determine algorithm from form
         let alg = match form {

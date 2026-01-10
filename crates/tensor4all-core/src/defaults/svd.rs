@@ -5,15 +5,15 @@
 use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
-use mdarray::DSlice;
-use mdarray_linalg::svd::SVDDecomp;
+use tensor4all_tensorbackend::mdarray::DSlice;
+use tensor4all_tensorbackend::mdarray_linalg::svd::SVDDecomp;
 use num_complex::{Complex64, ComplexFloat};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
 
 use crate::backend::svd_backend;
-use faer_traits::ComplexField;
+use tensor4all_tensorbackend::faer_traits::ComplexField;
 
 /// Error type for SVD operations in tensor4all-linalg.
 #[derive(Debug, Error)]

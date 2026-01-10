@@ -3,7 +3,6 @@
 //! This trait allows algorithms to be generic over different index types
 //! without needing to know about the internal ID representation.
 
-use anyhow::Result;
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -71,20 +70,6 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     fn has_id(&self, id: &Self::Id) -> bool {
         self.id() == id
     }
-
-    /// Create a new bond index with a fresh identity and the specified dimension.
-    ///
-    /// This is used by factorization operations (SVD, QR) to create new internal
-    /// bond indices connecting the factors.
-    ///
-    /// # Arguments
-    /// * `dim` - The dimension of the new index
-    ///
-    /// # Returns
-    /// A new index with a unique identity and the specified dimension.
-    fn new_bond(dim: usize) -> Result<Self>
-    where
-        Self: Sized;
 
     /// Create a similar index with a new identity but the same structure (dimension, tags, etc.).
     ///

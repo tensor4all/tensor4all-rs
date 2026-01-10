@@ -14,9 +14,9 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all_core::TensorDynLen;
-use tensor4all_core::{IndexLike, factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
+use tensor4all_core::index::{DynId, NoSymmSpace};
+use tensor4all_core::{IndexLike, Canonical, FactorizeAlg, FactorizeOptions, TensorLike};
+use crate::algorithm::CanonicalForm;
 
 use super::addition::direct_sum_tensors;
 use super::decompose::{factorize_tensor_to_treetn, TreeTopology};
@@ -24,9 +24,9 @@ use super::{common_inds, TreeTN};
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
 
-impl<I, V> TreeTN<I, V>
+impl<T, V> TreeTN<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Create a copy with all internal (link/bond) indices replaced by fresh IDs.
@@ -48,11 +48,7 @@ where
     /// let result = contract_zipup(&tn1, &tn2_sim, ...);
     /// ```
     pub fn sim_internal_inds(&self) -> Self
-    where
-        I::Id: Clone + std::hash::Hash + Eq + From<DynId>,
-        I::Symm: Clone + Symmetry + std::fmt::Debug + Send + Sync,
     {
-        use tensor4all_core::index_ops::sim;
 
         // Clone the structure
         let mut result = self.clone();

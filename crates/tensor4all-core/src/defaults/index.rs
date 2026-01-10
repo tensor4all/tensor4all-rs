@@ -402,16 +402,28 @@ impl IndexLike for DynIndex {
         self.symm.total_dim()
     }
 
-    fn new_bond(dim: usize) -> Result<Self> {
-        Index::new_link(dim).map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))
-    }
-
     fn sim(&self) -> Self {
         Index {
             id: DynId(generate_id()),
             symm: self.symm.clone(),
             tags: self.tags.clone(),
         }
+    }
+}
+
+impl DynIndex {
+    /// Create a new bond index with a fresh identity and the specified dimension.
+    ///
+    /// This is used by factorization operations (SVD, QR) to create new internal
+    /// bond indices connecting the factors.
+    ///
+    /// # Arguments
+    /// * `dim` - The dimension of the new index
+    ///
+    /// # Returns
+    /// A new index with a unique identity and the specified dimension.
+    pub fn new_bond(dim: usize) -> Result<Self> {
+        Index::new_link(dim).map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))
     }
 }
 

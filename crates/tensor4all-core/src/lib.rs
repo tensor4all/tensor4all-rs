@@ -1,6 +1,4 @@
 // Common (tags, utilities)
-#[path = "algorithm_to_be_removed_to_treetn.rs"]
-pub mod algorithm;
 pub mod index_like;
 pub mod smallstring;
 pub mod tagset;
@@ -12,8 +10,6 @@ pub mod defaults;
 // This allows `tensor4all_core::index::...` to work
 pub use defaults::index;
 
-// TT/TreeTN-specific algorithm types (to be moved to tensor4all-treetn)
-pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm};
 pub use defaults::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, NoSymmSpace, Symmetry, TagSet};
 pub use index_like::IndexLike;
 
@@ -26,9 +22,9 @@ pub use index_ops::{
 pub use smallstring::{SmallChar, SmallString, SmallStringError};
 pub use tagset::{Tag, TagSetError, TagSetLike};
 
-// Tensor (storage, tensor types)
-pub mod any_scalar;
-pub mod storage;
+// Tensor (storage, tensor types) - re-exported from tensor4all-tensorbackend
+pub use tensor4all_tensorbackend::any_scalar;
+pub use tensor4all_tensorbackend::storage;
 pub mod tensor_like;
 
 // Backwards compatibility: re-export defaults::tensordynlen as tensor
@@ -51,8 +47,8 @@ pub use tensor_like::{
 pub use defaults::contract;
 pub use defaults::contract::contract_multi;
 
-// Linear algebra backend (generic, not in defaults)
-mod backend;
+// Linear algebra backend - re-exported from tensor4all-tensorbackend
+pub use tensor4all_tensorbackend::backend;
 
 // Re-export linear algebra modules from defaults for backwards compatibility
 // This allows `tensor4all_core::svd::...`, `tensor4all_core::qr::...`, etc.

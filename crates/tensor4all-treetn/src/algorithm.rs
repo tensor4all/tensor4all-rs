@@ -3,9 +3,6 @@
 //! This module provides enums for selecting algorithms in various tensor train operations.
 //! These types are designed to be FFI-friendly (representable as C integers).
 //!
-//! **Note:** These types are TT/TreeTN-specific and should be moved to `tensor4all-treetn`
-//! in a future refactoring.
-//!
 //! # Design Philosophy
 //!
 //! Following ITensors.jl's pattern, algorithms are represented as static types.
@@ -18,7 +15,7 @@
 //! # Example
 //!
 //! ```
-//! use tensor4all_core::algorithm::{ContractionAlgorithm, CanonicalForm};
+//! use tensor4all_treetn::algorithm::{ContractionAlgorithm, CanonicalForm};
 //!
 //! // Select contraction algorithm
 //! let alg = ContractionAlgorithm::ZipUp;

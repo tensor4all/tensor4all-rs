@@ -4,13 +4,13 @@
 
 use crate::index_like::IndexLike; use crate::defaults::DynIndex;
 use crate::{unfold_split, StorageScalar, TensorDynLen};
-use mdarray::{DSlice, DTensor};
+use tensor4all_tensorbackend::mdarray::{DSlice, DTensor};
 use num_complex::{Complex64, ComplexFloat};
 use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
 use crate::backend::qr_backend;
-use faer_traits::ComplexField;
+use tensor4all_tensorbackend::faer_traits::ComplexField;
 
 /// Error type for QR operations in tensor4all-linalg.
 #[derive(Debug, Error)]

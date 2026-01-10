@@ -909,8 +909,7 @@ impl Storage {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageC64;
+    /// use tensor4all_tensorbackend::{Storage, DenseStorageC64};
     /// use num_complex::Complex64;
     ///
     /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];

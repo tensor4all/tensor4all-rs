@@ -3,7 +3,7 @@ use crate::storage::{
     contract_storage, storage_to_dtensor, AnyScalar, Storage, StorageScalar, SumFromStorage,
 };
 use anyhow::Result;
-use mdarray::DTensor;
+use tensor4all_tensorbackend::mdarray::DTensor;
 use num_complex::Complex64;
 use std::collections::HashSet;
 use std::ops::Mul;

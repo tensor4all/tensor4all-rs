@@ -34,7 +34,7 @@ impl AnyScalar {
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::AnyScalar;
+    /// use tensor4all_tensorbackend::AnyScalar;
     /// let s = AnyScalar::new_real(3.5);
     /// ```
     pub fn new_real(x: f64) -> Self {
@@ -45,7 +45,7 @@ impl AnyScalar {
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::AnyScalar;
+    /// use tensor4all_tensorbackend::AnyScalar;
     /// let s = AnyScalar::new_complex(1.0, 2.0);  // 1 + 2i
     /// ```
     pub fn new_complex(re: f64, im: f64) -> Self {

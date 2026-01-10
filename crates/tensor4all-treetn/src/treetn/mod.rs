@@ -3,18 +3,19 @@
 //! This module provides the [`TreeTN`] type, a tree-structured tensor network
 //! for efficient tensor operations with canonicalization and truncation support.
 
-mod addition;
-mod canonicalize;
-mod contraction;
-mod decompose;
-mod fit;
-mod linsolve;
-mod localupdate;
-mod operator_impl;
+// TODO: Re-enable these submodules after fixing for TensorLike refactoring
+// mod addition;
+// mod canonicalize;
+// mod contraction;
+// mod decompose;
+// mod fit;
+// mod linsolve;
+// mod localupdate;
+// mod operator_impl;
 mod ops;
 mod tensor_like;
-mod transform;
-mod truncate;
+// mod transform;
+// mod truncate;
 
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::{Dfs, EdgeRef};
@@ -24,33 +25,33 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
-use tensor4all_core::TensorDynLen;
-use tensor4all_core::{factorize, CanonicalForm, FactorizeOptions, IndexLike};
+use tensor4all_core::{FactorizeOptions, IndexLike, TensorLike};
+use crate::algorithm::CanonicalForm;
 
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
 
-// Re-export the decomposition functions and types
-pub use decompose::{factorize_tensor_to_treetn, factorize_tensor_to_treetn_with, TreeTopology};
-
-// Re-export local update types
-pub use localupdate::{
-    apply_local_update_sweep, LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
-};
-
-// Re-export fit algorithm types
-pub use fit::{contract_fit, FitContractionOptions, FitEnvironment, FitUpdater};
-
-// Re-export contraction dispatcher
-pub use contraction::{contract, ContractionMethod, ContractionOptions};
-
-// Re-export linsolve types
-pub use linsolve::{
-    linsolve, EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveResult,
-    LinsolveUpdater, LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator,
-    ProjectedState,
-};
+// TODO: Re-enable these re-exports after fixing for TensorLike refactoring
+// // Re-export the decomposition functions and types
+// pub use decompose::{factorize_tensor_to_treetn, factorize_tensor_to_treetn_with, TreeTopology};
+//
+// // Re-export local update types
+// pub use localupdate::{
+//     apply_local_update_sweep, LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
+// };
+//
+// // Re-export fit algorithm types
+// pub use fit::{contract_fit, FitContractionOptions, FitEnvironment, FitUpdater};
+//
+// // Re-export contraction dispatcher
+// pub use contraction::{contract, ContractionMethod, ContractionOptions};
+//
+// // Re-export linsolve types
+// pub use linsolve::{
+//     linsolve, EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveResult,
+//     LinsolveUpdater, LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator,
+//     ProjectedState,
+// };
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
 ///
@@ -63,21 +64,21 @@ pub use linsolve::{
 /// - **Site Space**: Physical indices organized by node
 ///
 /// # Type Parameters
-/// - `I`: Index type implementing `IndexLike` (default: `Index<DynId, NoSymmSpace, TagSet>`)
+/// - `T`: Tensor type implementing `TensorLike` (default: `TensorDynLen`)
 /// - `V`: Node name type for named nodes (default: NodeIndex for backward compatibility)
 ///
 /// # Construction
 ///
 /// - `TreeTN::new()`: Create an empty network, then use `add_tensor()` and `connect()` to build.
 /// - `TreeTN::from_tensors(tensors, node_names)`: Create from tensors with auto-connection by matching index IDs.
-pub struct TreeTN<I = Index<DynId, NoSymmSpace, TagSet>, V = NodeIndex>
+pub struct TreeTN<T = tensor4all_core::TensorDynLen, V = NodeIndex>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Named graph wrapper: provides mapping between node names (V) and NodeIndex
     /// Edges store the bond Index directly.
-    pub(crate) graph: NamedGraph<V, TensorDynLen<I::Id, I::Symm>, I>,
+    pub(crate) graph: NamedGraph<V, T, T::Index>,
     /// Orthogonalization region (canonical_center).
     /// When empty, the network is not canonicalized.
     /// When non-empty, contains the node names (V) of the orthogonalization region.
@@ -89,14 +90,14 @@ where
     pub(crate) canonical_form: Option<CanonicalForm>,
     /// Site index network: manages topology and site space (physical indices).
     /// This structure enables topology and site space comparison independent of tensor data.
-    pub(crate) site_index_network: SiteIndexNetwork<V, I>,
+    pub(crate) site_index_network: SiteIndexNetwork<V, T::Index>,
     /// Orthogonalization direction for each index (bond or site).
     /// Maps index to the node name (V) that the orthogonalization points towards.
     /// - For bond indices: points towards the canonical center direction
     /// - For site indices: points to the node that owns the index (always towards canonical center)
     ///
     /// Note: Uses the full index as the key (via `IndexLike: Eq + Hash`).
-    pub(crate) ortho_towards: HashMap<I, V>,
+    pub(crate) ortho_towards: HashMap<T::Index, V>,
 }
 
 /// Internal context for sweep-to-center operations.
@@ -113,9 +114,9 @@ pub(crate) struct SweepContext {
 // Construction methods
 // ============================================================================
 
-impl<I, V> TreeTN<I, V>
+impl<T, V> TreeTN<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Create a new empty TreeTN.
@@ -151,9 +152,9 @@ where
     ///
     /// # Errors
     /// Returns an error if validation fails or connection fails.
-    pub fn from_tensors(tensors: Vec<TensorDynLen<I::Id, I::Symm>>, node_names: Vec<V>) -> Result<Self>
+    pub fn from_tensors(tensors: Vec<T>, node_names: Vec<V>) -> Result<Self>
     where
-        I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         // Validate input lengths
         if tensors.len() != node_names.len() {
@@ -177,16 +178,16 @@ where
 
         // Step 2: Build a map from index ID to (node_index, index) pairs in O(n) time
         // Key: index ID, Value: vector of (NodeIndex, Index) pairs
-        let mut index_map: HashMap<I::Id, Vec<(NodeIndex, I)>> = HashMap::new();
+        let mut index_map: HashMap<<T::Index as IndexLike>::Id, Vec<(NodeIndex, T::Index)>> = HashMap::new();
 
         for node_idx in &node_indices {
             let tensor = treetn
                 .tensor(*node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_idx))?;
 
-            for index in &tensor.indices {
+            for index in tensor.external_indices() {
                 index_map
-                    .entry(index.id.clone())
+                    .entry(index.id().clone())
                     .or_insert_with(Vec::new)
                     .push((*node_idx, index.clone()));
             }
@@ -238,7 +239,7 @@ where
     pub fn add_tensor(
         &mut self,
         node_name: V,
-        tensor: TensorDynLen<I::Id, I::Symm>,
+        tensor: T,
     ) -> Result<NodeIndex> {
         self.add_tensor_internal(node_name, tensor)
     }
@@ -248,7 +249,7 @@ where
     /// This method only works when `V = NodeIndex`.
     ///
     /// Returns the NodeIndex for the newly added tensor.
-    pub fn add_tensor_auto_name(&mut self, tensor: TensorDynLen<I::Id, I::Symm>) -> NodeIndex
+    pub fn add_tensor_auto_name(&mut self, tensor: T) -> NodeIndex
     where
         V: From<NodeIndex> + Into<NodeIndex>,
     {
@@ -279,9 +280,9 @@ where
     pub fn connect(
         &mut self,
         node_a: NodeIndex,
-        index_a: &I,
+        index_a: &T::Index,
         node_b: NodeIndex,
-        index_b: &I,
+        index_b: &T::Index,
     ) -> Result<EdgeIndex> {
         self.connect_internal(node_a, index_a, node_b, index_b)
     }
@@ -291,9 +292,9 @@ where
 // Common implementation
 // ============================================================================
 
-impl<I, V> TreeTN<I, V>
+impl<T, V> TreeTN<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     // ------------------------------------------------------------------------
@@ -304,10 +305,10 @@ where
     pub(crate) fn add_tensor_internal(
         &mut self,
         node_name: V,
-        tensor: TensorDynLen<I::Id, I::Symm>,
+        tensor: T,
     ) -> Result<NodeIndex> {
         // Extract physical indices: initially all indices are physical (no connections yet)
-        let physical_indices: HashSet<I> = tensor.indices.iter().cloned().collect();
+        let physical_indices: HashSet<T::Index> = tensor.external_indices().into_iter().collect();
 
         // Add to graph
         let node_idx = self
@@ -329,16 +330,16 @@ where
     pub(crate) fn connect_internal(
         &mut self,
         node_a: NodeIndex,
-        index_a: &I,
+        index_a: &T::Index,
         node_b: NodeIndex,
-        index_b: &I,
+        index_b: &T::Index,
     ) -> Result<EdgeIndex> {
         // Validate that indices have the same ID (Einsum mode requirement)
-        if index_a.id != index_b.id {
+        if index_a.id() != index_b.id() {
             return Err(anyhow::anyhow!(
                 "Index IDs must match in Einsum mode: {:?} != {:?}",
-                index_a.id,
-                index_b.id
+                index_a.id(),
+                index_b.id()
             ))
             .context("Failed to connect tensors");
         }
@@ -358,8 +359,8 @@ where
             .ok_or_else(|| anyhow::anyhow!("Tensor for node_b not found"))?;
 
         // Check that indices exist in tensors (by ID)
-        let has_index_a = tensor_a.indices.iter().any(|idx| idx.id == index_a.id);
-        let has_index_b = tensor_b.indices.iter().any(|idx| idx.id == index_b.id);
+        let has_index_a = tensor_a.external_indices().iter().any(|idx| idx.id() == index_a.id());
+        let has_index_b = tensor_b.external_indices().iter().any(|idx| idx.id() == index_b.id());
 
         if !has_index_a {
             return Err(anyhow::anyhow!("Index not found in tensor_a"))
@@ -372,9 +373,9 @@ where
 
         // Clone the bond index (same ID, use index_a)
         let bond_index = tensor_a
-            .indices
+            .external_indices()
             .iter()
-            .find(|idx| idx.id == index_a.id)
+            .find(|idx| idx.id() == index_a.id())
             .unwrap()
             .clone();
 
@@ -493,9 +494,6 @@ where
         factorize_options: &FactorizeOptions,
         context_name: &str,
     ) -> Result<()>
-    where
-        I::Id: Clone + std::hash::Hash + Eq + From<DynId>,
-        I::Symm: Clone + Symmetry + From<NoSymmSpace> + std::fmt::Debug + Send + Sync,
     {
         // Find edge between src and dst
         let edge = {
@@ -523,14 +521,15 @@ where
             .with_context(|| format!("{}: tensor not found", context_name))?;
 
         // Build left_inds = all indices except dst bond
-        let left_inds: Vec<I> = tensor_src
-            .indices
+        let left_inds: Vec<T::Index> = tensor_src
+            .external_indices()
             .iter()
-            .filter(|idx| idx.id != bond_on_src.id)
+            .filter(|idx| idx.id() != bond_on_src.id())
             .cloned()
             .collect();
 
-        if left_inds.is_empty() || left_inds.len() == tensor_src.indices.len() {
+        let tensor_external_indices = tensor_src.external_indices();
+        if left_inds.is_empty() || left_inds.len() == tensor_external_indices.len() {
             return Err(anyhow::anyhow!(
                 "Cannot process node {:?}: need at least one left index and one right index",
                 src
@@ -539,7 +538,7 @@ where
         }
 
         // Perform factorization
-        let factorize_result = factorize(tensor_src, &left_inds, factorize_options)
+        let factorize_result = tensor_src.factorize(&left_inds, factorize_options)
             .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
             .with_context(|| format!("{}: factorization failed", context_name))?;
 
@@ -592,12 +591,12 @@ where
     // ------------------------------------------------------------------------
 
     /// Get a reference to a tensor by NodeIndex.
-    pub fn tensor(&self, node: NodeIndex) -> Option<&TensorDynLen<I::Id, I::Symm>> {
+    pub fn tensor(&self, node: NodeIndex) -> Option<&T> {
         self.graph.graph().node_weight(node)
     }
 
     /// Get a mutable reference to a tensor by NodeIndex.
-    pub fn tensor_mut(&mut self, node: NodeIndex) -> Option<&mut TensorDynLen<I::Id, I::Symm>> {
+    pub fn tensor_mut(&mut self, node: NodeIndex) -> Option<&mut T> {
         self.graph.graph_mut().node_weight_mut(node)
     }
 
@@ -610,8 +609,8 @@ where
     pub fn replace_tensor(
         &mut self,
         node: NodeIndex,
-        new_tensor: TensorDynLen<I::Id, I::Symm>,
-    ) -> Result<Option<TensorDynLen<I::Id, I::Symm>>> {
+        new_tensor: T,
+    ) -> Result<Option<T>> {
         // Check if node exists
         if !self.graph.contains_node(node) {
             return Ok(None);
@@ -619,13 +618,14 @@ where
 
         // Validate that all connection indices exist in the new tensor
         let edges = self.edges_for_node(node);
-        let connection_indices: Vec<I> = edges
+        let connection_indices: Vec<T::Index> = edges
             .iter()
             .filter_map(|(edge_idx, _neighbor)| self.bond_index(*edge_idx).cloned())
             .collect();
 
         // Check if all connection indices are present in the new tensor
-        let common = common_inds(&connection_indices, &new_tensor.indices);
+        let new_tensor_indices = new_tensor.external_indices();
+        let common = common_inds(&connection_indices, &new_tensor_indices);
         if common.len() != connection_indices.len() {
             return Err(anyhow::anyhow!(
                 "New tensor is missing {} connection index(es): found {} out of {} required indices",
@@ -644,10 +644,9 @@ where
             .clone();
 
         // Calculate new physical indices: all indices minus connection indices
-        let connection_indices_set: HashSet<I> =
+        let connection_indices_set: HashSet<T::Index> =
             connection_indices.iter().cloned().collect();
-        let new_physical_indices: HashSet<I> = new_tensor
-            .indices
+        let new_physical_indices: HashSet<T::Index> = new_tensor_indices
             .iter()
             .filter(|idx| !connection_indices_set.contains(idx))
             .cloned()
@@ -669,12 +668,12 @@ where
     }
 
     /// Get the bond index for a given edge.
-    pub fn bond_index(&self, edge: EdgeIndex) -> Option<&I> {
+    pub fn bond_index(&self, edge: EdgeIndex) -> Option<&T::Index> {
         self.graph.graph().edge_weight(edge)
     }
 
     /// Get a mutable reference to the bond index for a given edge.
-    pub fn bond_index_mut(&mut self, edge: EdgeIndex) -> Option<&mut I> {
+    pub fn bond_index_mut(&mut self, edge: EdgeIndex) -> Option<&mut T::Index> {
         self.graph.graph_mut().edge_weight_mut(edge)
     }
 
@@ -697,7 +696,7 @@ where
     pub fn replace_edge_bond(
         &mut self,
         edge: EdgeIndex,
-        new_bond_index: I,
+        new_bond_index: T::Index,
     ) -> Result<()> {
         // Validate edge exists and get endpoints
         let (source, target) = self
@@ -751,7 +750,7 @@ where
     /// # Arguments
     /// * `index` - The index to set ortho direction for
     /// * `dir` - The node name that the ortho points towards, or None to clear
-    pub fn set_ortho_towards(&mut self, index: &I, dir: Option<V>) {
+    pub fn set_ortho_towards(&mut self, index: &T::Index, dir: Option<V>) {
         match dir {
             Some(node_name) => {
                 self.ortho_towards.insert(index.clone(), node_name);
@@ -765,7 +764,7 @@ where
     /// Get the node name that the orthogonalization points towards for an index.
     ///
     /// Returns None if ortho_towards is not set for this index.
-    pub fn ortho_towards_for_index(&self, index: &I) -> Option<&V> {
+    pub fn ortho_towards_for_index(&self, index: &T::Index) -> Option<&V> {
         self.ortho_towards.get(index)
     }
 
@@ -1013,17 +1012,17 @@ where
     /// Get a reference to the site index network.
     ///
     /// The site index network contains both topology (graph structure) and site space (physical indices).
-    pub fn site_index_network(&self) -> &SiteIndexNetwork<V, I> {
+    pub fn site_index_network(&self) -> &SiteIndexNetwork<V, T::Index> {
         &self.site_index_network
     }
 
     /// Get a mutable reference to the site index network.
-    pub fn site_index_network_mut(&mut self) -> &mut SiteIndexNetwork<V, I> {
+    pub fn site_index_network_mut(&mut self) -> &mut SiteIndexNetwork<V, T::Index> {
         &mut self.site_index_network
     }
 
     /// Get a reference to the site space (physical indices) for a node.
-    pub fn site_space(&self, node_name: &V) -> Option<&std::collections::HashSet<I>> {
+    pub fn site_space(&self, node_name: &V) -> Option<&std::collections::HashSet<T::Index>> {
         self.site_index_network.site_space(node_name)
     }
 
@@ -1031,7 +1030,7 @@ where
     pub fn site_space_mut(
         &mut self,
         node_name: &V,
-    ) -> Option<&mut std::collections::HashSet<I>> {
+    ) -> Option<&mut std::collections::HashSet<T::Index>> {
         self.site_index_network.site_space_mut(node_name)
     }
 
@@ -1050,7 +1049,7 @@ where
     /// `true` if the networks share equivalent site index structure, `false` otherwise.
     pub fn share_equivalent_site_index_network(&self, other: &Self) -> bool
     where
-        I::Id: Ord,
+        <T::Index as IndexLike>::Id: Ord,
     {
         self.site_index_network
             .share_equivalent_site_index_network(&other.site_index_network)
@@ -1092,7 +1091,7 @@ where
     /// `true` if both TreeTNs have the same appearance, `false` otherwise.
     pub fn same_appearance(&self, other: &Self) -> bool
     where
-        I::Id: Ord,
+        <T::Index as IndexLike>::Id: Ord,
         V: Ord,
     {
         // Step 1: Check topology and site space
@@ -1198,13 +1197,12 @@ where
     /// `Ok(())` if the internal data is consistent, or `Err` with details about the inconsistency.
     pub fn verify_internal_consistency(&self) -> Result<()>
     where
-        I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
-        I::Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
         V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         // Step 1: Clone all tensors and node names
         let node_names: Vec<V> = self.node_names();
-        let tensors: Vec<TensorDynLen<I::Id, I::Symm>> = node_names
+        let tensors: Vec<T> = node_names
             .iter()
             .filter_map(|name| {
                 let idx = self.graph.node_index(name)?;
@@ -1221,7 +1219,7 @@ where
         }
 
         // Step 2: Reconstruct TreeTN from scratch using from_tensors
-        let reconstructed = TreeTN::<I, V>::from_tensors(tensors, node_names)
+        let reconstructed = TreeTN::<T, V>::from_tensors(tensors, node_names)
             .context("verify_internal_consistency: failed to reconstruct TreeTN")?;
 
         // Step 3: Verify topology matches
@@ -1263,8 +1261,8 @@ where
                 })?;
 
             // Compare tensor indices (as sets, since order may differ)
-            let indices_self: HashSet<_> = tensor_self.indices.iter().collect();
-            let indices_reconstructed: HashSet<_> = tensor_reconstructed.indices.iter().collect();
+            let indices_self: HashSet<_> = tensor_self.external_indices().into_iter().collect();
+            let indices_reconstructed: HashSet<_> = tensor_reconstructed.external_indices().into_iter().collect();
             if indices_self != indices_reconstructed {
                 return Err(anyhow::anyhow!(
                     "Internal inconsistency: tensor indices differ at node {:?}",
@@ -1274,12 +1272,12 @@ where
             }
 
             // Compare tensor dimensions
-            if tensor_self.dims != tensor_reconstructed.dims {
+            if tensor_self.num_external_indices() != tensor_reconstructed.num_external_indices() {
                 return Err(anyhow::anyhow!(
-                    "Internal inconsistency: tensor dimensions differ at node {:?}: {:?} vs {:?}",
+                    "Internal inconsistency: tensor dimensions differ at node {:?}: {} vs {}",
                     node_name,
-                    tensor_self.dims,
-                    tensor_reconstructed.dims
+                    tensor_self.num_external_indices(),
+                    tensor_reconstructed.num_external_indices()
                 ))
                 .context("verify_internal_consistency: tensor dimension mismatch");
             }
@@ -1294,17 +1292,14 @@ where
 // ============================================================================
 
 /// Find common indices between two slices of indices.
-pub(crate) fn common_inds<Id, Symm>(
+pub(crate) fn common_inds<I: IndexLike>(
     inds_a: &[I],
     inds_b: &[I],
-) -> Vec<I>
-where
-    I: IndexLike,
-{
-    let set_b: HashSet<_> = inds_b.iter().map(|idx| &idx.id).collect();
+) -> Vec<I> {
+    let set_b: HashSet<_> = inds_b.iter().map(|idx| idx.id()).collect();
     inds_a
         .iter()
-        .filter(|idx| set_b.contains(&idx.id))
+        .filter(|idx| set_b.contains(idx.id()))
         .cloned()
         .collect()
 }

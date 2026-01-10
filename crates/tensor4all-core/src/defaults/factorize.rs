@@ -24,7 +24,7 @@ use num_complex::{Complex64, ComplexFloat};
 
 use crate::qr::{qr_with, QrOptions};
 use crate::svd::{svd_with, SvdOptions};
-use faer_traits::ComplexField;
+use tensor4all_tensorbackend::faer_traits::ComplexField;
 
 // Re-export types from tensor_like for backwards compatibility
 pub use crate::tensor_like::{
@@ -350,7 +350,7 @@ fn extract_singular_values(s: &TensorDynLen) -> Vec<f64> {
 }
 
 /// Convert DTensor to Matrix (tensor4all-matrixci format).
-fn dtensor_to_matrix<T>(tensor: &mdarray::DTensor<T, 2>, m: usize, n: usize) -> matrixci::Matrix<T>
+fn dtensor_to_matrix<T>(tensor: &tensor4all_tensorbackend::mdarray::DTensor<T, 2>, m: usize, n: usize) -> matrixci::Matrix<T>
 where
     T: MatrixScalar + Clone,
 {

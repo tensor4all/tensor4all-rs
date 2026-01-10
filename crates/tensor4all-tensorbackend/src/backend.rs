@@ -21,7 +21,7 @@ use mdarray_linalg_lapack::Lapack;
 ///
 /// # Returns
 /// SVD decomposition result from mdarray-linalg
-pub(crate) fn svd_backend<T>(a: &mut DSlice<T, 2>) -> Result<SVDDecomp<T>>
+pub fn svd_backend<T>(a: &mut DSlice<T, 2>) -> Result<SVDDecomp<T>>
 where
     T: num_complex::ComplexFloat
         + faer_traits::ComplexField
@@ -60,7 +60,7 @@ where
 ///
 /// # Returns
 /// Tuple `(Q, R)` where Q is m×m and R is m×n (full QR)
-pub(crate) fn qr_backend<T>(a: &mut DSlice<T, 2>) -> (DTensor<T, 2>, DTensor<T, 2>)
+pub fn qr_backend<T>(a: &mut DSlice<T, 2>) -> (DTensor<T, 2>, DTensor<T, 2>)
 where
     T: num_complex::ComplexFloat
         + Default
