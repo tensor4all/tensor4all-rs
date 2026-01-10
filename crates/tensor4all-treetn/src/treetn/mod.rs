@@ -14,7 +14,7 @@ mod localupdate;
 // mod operator_impl;
 mod ops;
 mod tensor_like;
-// mod transform;
+mod transform;
 mod truncate;
 
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
