@@ -7,7 +7,7 @@
 // mod addition;
 mod canonicalize;
 // mod contraction;
-// mod decompose;
+mod decompose;
 // mod fit;
 // mod linsolve;
 mod localupdate;
