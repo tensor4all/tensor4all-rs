@@ -58,6 +58,7 @@ pub fn direct_sum(
 }
 
 /// Setup data for direct sum computation
+#[allow(dead_code)]
 struct DirectSumSetup {
     common_a_positions: Vec<usize>,
     common_b_positions: Vec<usize>,

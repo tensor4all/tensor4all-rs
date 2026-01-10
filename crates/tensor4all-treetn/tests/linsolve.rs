@@ -1764,3 +1764,342 @@ fn test_linsolve_vin_neq_vout_with_reference_state() {
     assert_eq!(x.node_count(), 2);
     println!("V_in ≠ V_out test with reference_state: PASSED");
 }
+
+// ============================================================================
+// Non-diagonal operator tests
+// ============================================================================
+
+/// Create a Pauli-X MPO (bit-flip operator) for 2 sites.
+/// X = [[0, 1], [1, 0]] on each site
+/// Combined operator: X_0 ⊗ X_1
+///
+/// For single site: X|0⟩ = |1⟩, X|1⟩ = |0⟩
+/// For two sites: (X⊗X)|00⟩ = |11⟩, (X⊗X)|01⟩ = |10⟩, etc.
+fn create_pauli_x_mpo(
+    phys_dim: usize,
+) -> (
+    TreeTN<TensorDynLen, &'static str>,
+    Vec<DynIndex>,
+    Vec<DynIndex>,
+) {
+    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+
+    // MPO internal indices
+    let s0_in_tmp = DynIndex::new_dyn(phys_dim);
+    let s0_out_tmp = DynIndex::new_dyn(phys_dim);
+    let s1_in_tmp = DynIndex::new_dyn(phys_dim);
+    let s1_out_tmp = DynIndex::new_dyn(phys_dim);
+    let bond = DynIndex::new_dyn(1); // bond dim = 1 since no coupling between sites
+
+    // Pauli X matrix: [[0, 1], [1, 0]]
+    // As a tensor [out, in]: X[0,0]=0, X[0,1]=1, X[1,0]=1, X[1,1]=0
+    let pauli_x = vec![0.0, 1.0, 1.0, 0.0];
+
+    // Site 0 tensor: [s0_out, s0_in, bond] with X matrix
+    let mut data0 = vec![0.0; phys_dim * phys_dim * 1];
+    for out_idx in 0..phys_dim {
+        for in_idx in 0..phys_dim {
+            // index: out * phys_dim * 1 + in * 1 + bond
+            data0[out_idx * phys_dim + in_idx] = pauli_x[out_idx * phys_dim + in_idx];
+        }
+    }
+    let t0 = TensorDynLen::new(
+        vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
+        vec![phys_dim, phys_dim, 1],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data0))),
+    );
+
+    // Site 1 tensor: [bond, s1_out, s1_in] with X matrix
+    let mut data1 = vec![0.0; 1 * phys_dim * phys_dim];
+    for out_idx in 0..phys_dim {
+        for in_idx in 0..phys_dim {
+            // index: bond * phys_dim * phys_dim + out * phys_dim + in
+            data1[out_idx * phys_dim + in_idx] = pauli_x[out_idx * phys_dim + in_idx];
+        }
+    }
+    let t1 = TensorDynLen::new(
+        vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
+        vec![1, phys_dim, phys_dim],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+    );
+
+    let n0 = mpo.add_tensor("site0", t0).unwrap();
+    let n1 = mpo.add_tensor("site1", t1).unwrap();
+    mpo.connect(n0, &bond, n1, &bond).unwrap();
+
+    (
+        mpo,
+        vec![s0_in_tmp, s1_in_tmp],
+        vec![s0_out_tmp, s1_out_tmp],
+    )
+}
+
+/// Test solving X * x = b where X is Pauli-X operator.
+/// X * x = b means x = X^{-1} * b = X * b (since X^2 = I)
+///
+/// For example: b = |00⟩ = [1, 0, 0, 0]
+/// Then x = X * b = |11⟩ = [0, 0, 0, 1]
+#[test]
+fn test_linsolve_pauli_x() {
+    use tensor4all_core::storage::StorageScalar;
+    use tensor4all_treetn::{
+        apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
+    };
+
+    let phys_dim = 2;
+
+    // RHS b = |00⟩ = [1, 0, 0, 0]
+    // The solution should be x = X * b = |11⟩ = [0, 0, 0, 1]
+    let b_values = [1.0, 0.0, 0.0, 0.0];
+    let exact_solution = [0.0, 0.0, 0.0, 1.0]; // X|00⟩ = |11⟩
+
+    // Create RHS MPS
+    let (rhs, site_indices, _bonds) = create_mps_from_values(&b_values, phys_dim);
+
+    // Create Pauli-X MPO with internal indices
+    let (mpo, s_in_tmp, s_out_tmp) = create_pauli_x_mpo(phys_dim);
+
+    // Create index mappings
+    let (mpo, input_mapping, output_mapping) =
+        create_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
+
+    // Create initial guess
+    let init = rhs.clone();
+
+    // Canonicalize towards site0
+    let mut x = init
+        .canonicalize(["site0"], CanonicalizationOptions::default())
+        .unwrap();
+
+    // Solve X * x = b
+    let options = LinsolveOptions::default()
+        .with_nsweeps(20)
+        .with_krylov_tol(1e-12)
+        .with_max_rank(8);
+
+    let mut updater = LinsolveUpdater::with_index_mappings(
+        mpo,
+        input_mapping,
+        output_mapping,
+        rhs.clone(),
+        None,
+        options,
+    );
+
+    // Create sweep plan with 2-site updates
+    let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0", 2).unwrap();
+
+    // Run sweeps for convergence
+    for _ in 0..20 {
+        apply_local_update_sweep(&mut x, &plan, &mut updater).unwrap();
+    }
+
+    // Contract solution MPS to get full state vector
+    let contracted = x.contract_to_tensor().unwrap();
+
+    // Extract solution values
+    let solution_values: Vec<f64> = f64::extract_dense_view(contracted.storage.as_ref())
+        .expect("Failed to extract solution")
+        .to_vec();
+
+    // Compare with exact solution
+    assert_eq!(
+        solution_values.len(),
+        exact_solution.len(),
+        "Solution dimension mismatch"
+    );
+
+    let tol = 1e-4;
+    // Sort both vectors and compare
+    let mut sorted_computed: Vec<f64> = solution_values.clone();
+    let mut sorted_expected: Vec<f64> = exact_solution.to_vec();
+    sorted_computed.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted_expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    for (i, (&computed, &expected)) in sorted_computed
+        .iter()
+        .zip(sorted_expected.iter())
+        .enumerate()
+    {
+        let diff = (computed - expected).abs();
+        assert!(
+            diff < tol,
+            "Pauli-X solution mismatch at sorted index {}: computed={}, expected={}, diff={}",
+            i,
+            computed,
+            expected,
+            diff
+        );
+    }
+}
+
+/// Create a general 2x2 matrix MPO for 2 sites.
+/// mat = [[a, b], [c, d]] on each site
+/// Combined operator: mat_0 ⊗ mat_1
+fn create_general_2x2_mpo(
+    mat: &[f64; 4], // [a, b, c, d] row-major: mat[i,j] = mat[i*2+j]
+    phys_dim: usize,
+) -> (
+    TreeTN<TensorDynLen, &'static str>,
+    Vec<DynIndex>,
+    Vec<DynIndex>,
+) {
+    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
+
+    // MPO internal indices
+    let s0_in_tmp = DynIndex::new_dyn(phys_dim);
+    let s0_out_tmp = DynIndex::new_dyn(phys_dim);
+    let s1_in_tmp = DynIndex::new_dyn(phys_dim);
+    let s1_out_tmp = DynIndex::new_dyn(phys_dim);
+    let bond = DynIndex::new_dyn(1);
+
+    // Site 0 tensor: [s0_out, s0_in, bond]
+    let mut data0 = vec![0.0; phys_dim * phys_dim * 1];
+    for out_idx in 0..phys_dim {
+        for in_idx in 0..phys_dim {
+            data0[out_idx * phys_dim + in_idx] = mat[out_idx * phys_dim + in_idx];
+        }
+    }
+    let t0 = TensorDynLen::new(
+        vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
+        vec![phys_dim, phys_dim, 1],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data0))),
+    );
+
+    // Site 1 tensor: [bond, s1_out, s1_in]
+    let mut data1 = vec![0.0; 1 * phys_dim * phys_dim];
+    for out_idx in 0..phys_dim {
+        for in_idx in 0..phys_dim {
+            data1[out_idx * phys_dim + in_idx] = mat[out_idx * phys_dim + in_idx];
+        }
+    }
+    let t1 = TensorDynLen::new(
+        vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
+        vec![1, phys_dim, phys_dim],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+    );
+
+    let n0 = mpo.add_tensor("site0", t0).unwrap();
+    let n1 = mpo.add_tensor("site1", t1).unwrap();
+    mpo.connect(n0, &bond, n1, &bond).unwrap();
+
+    (
+        mpo,
+        vec![s0_in_tmp, s1_in_tmp],
+        vec![s0_out_tmp, s1_out_tmp],
+    )
+}
+
+/// Test solving A * x = b where A is a general (non-diagonal) 2x2 matrix.
+/// A = [[2, 1], [1, 2]] (symmetric positive definite)
+///
+/// For 2 sites: A_total = A_0 ⊗ A_1 (Kronecker product)
+/// A_total is a 4x4 matrix.
+#[test]
+fn test_linsolve_general_matrix() {
+    use tensor4all_core::storage::StorageScalar;
+    use tensor4all_treetn::{
+        apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
+    };
+
+    let phys_dim = 2;
+
+    // Matrix A = [[2, 1], [1, 2]]
+    let mat = [2.0, 1.0, 1.0, 2.0];
+
+    // A ⊗ A matrix (4x4):
+    // [4, 2, 2, 1]
+    // [2, 4, 1, 2]
+    // [2, 1, 4, 2]
+    // [1, 2, 2, 4]
+    //
+    // For b = [1, 0, 0, 0]:
+    // A_total * x = b
+    // Solve: x = A_total^{-1} * b
+    // A^{-1} = (1/3) * [[2, -1], [-1, 2]]
+    // (A⊗A)^{-1} = A^{-1} ⊗ A^{-1}
+    //           = (1/9) * [[4, -2, -2, 1], [-2, 4, 1, -2], [-2, 1, 4, -2], [1, -2, -2, 4]]
+    // (A⊗A)^{-1} * [1, 0, 0, 0] = (1/9) * [4, -2, -2, 1]
+
+    let b_values = [1.0, 0.0, 0.0, 0.0];
+    let exact_solution = [4.0 / 9.0, -2.0 / 9.0, -2.0 / 9.0, 1.0 / 9.0];
+
+    // Create RHS MPS
+    let (rhs, site_indices, _bonds) = create_mps_from_values(&b_values, phys_dim);
+
+    // Create general matrix MPO with internal indices
+    let (mpo, s_in_tmp, s_out_tmp) = create_general_2x2_mpo(&mat, phys_dim);
+
+    // Create index mappings
+    let (mpo, input_mapping, output_mapping) =
+        create_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
+
+    // Create initial guess
+    let init = rhs.clone();
+
+    // Canonicalize towards site0
+    let mut x = init
+        .canonicalize(["site0"], CanonicalizationOptions::default())
+        .unwrap();
+
+    // Solve A * x = b
+    let options = LinsolveOptions::default()
+        .with_nsweeps(30)
+        .with_krylov_tol(1e-12)
+        .with_max_rank(8);
+
+    let mut updater = LinsolveUpdater::with_index_mappings(
+        mpo,
+        input_mapping,
+        output_mapping,
+        rhs.clone(),
+        None,
+        options,
+    );
+
+    // Create sweep plan with 2-site updates
+    let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0", 2).unwrap();
+
+    // Run sweeps for convergence
+    for _ in 0..30 {
+        apply_local_update_sweep(&mut x, &plan, &mut updater).unwrap();
+    }
+
+    // Contract solution MPS to get full state vector
+    let contracted = x.contract_to_tensor().unwrap();
+
+    // Extract solution values
+    let solution_values: Vec<f64> = f64::extract_dense_view(contracted.storage.as_ref())
+        .expect("Failed to extract solution")
+        .to_vec();
+
+    // Compare with exact solution
+    assert_eq!(
+        solution_values.len(),
+        exact_solution.len(),
+        "Solution dimension mismatch"
+    );
+
+    let tol = 1e-3;
+    // Sort both vectors and compare
+    let mut sorted_computed: Vec<f64> = solution_values.clone();
+    let mut sorted_expected: Vec<f64> = exact_solution.to_vec();
+    sorted_computed.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted_expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    for (i, (&computed, &expected)) in sorted_computed
+        .iter()
+        .zip(sorted_expected.iter())
+        .enumerate()
+    {
+        let diff = (computed - expected).abs();
+        assert!(
+            diff < tol,
+            "General matrix solution mismatch at sorted index {}: computed={}, expected={}, diff={}",
+            i,
+            computed,
+            expected,
+            diff
+        );
+    }
+}

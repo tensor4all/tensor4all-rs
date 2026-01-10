@@ -17,7 +17,7 @@
 //! // result.left * result.right ≈ tensor
 //! ```
 
-use crate::index_like::IndexLike; use crate::defaults::DynIndex;
+use crate::defaults::DynIndex;
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use num_complex::{Complex64, ComplexFloat};

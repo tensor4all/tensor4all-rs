@@ -29,6 +29,7 @@ impl<T: TTScalar> InverseMPO<T> {
     }
 
     /// Create an InverseMPO from parts without validation
+    #[allow(dead_code)]
     pub(crate) fn from_parts_unchecked(
         tensors: Vec<Tensor4<T>>,
         inv_lambdas: Vec<Vec<f64>>,

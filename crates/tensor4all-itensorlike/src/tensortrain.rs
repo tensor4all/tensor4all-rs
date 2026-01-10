@@ -9,13 +9,11 @@
 use std::ops::Range;
 
 use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
-use tensor4all_core::{AnyScalar, TensorAccess, TensorDynLen, TensorLike};
+use tensor4all_core::{AnyScalar, TensorAccess, TensorDynLen};
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 use crate::error::{Result, TensorTrainError};
-use crate::options::{
-    CanonicalForm, ContractMethod, ContractOptions, TruncateAlg, TruncateOptions,
-};
+use crate::options::{CanonicalForm, TruncateAlg, TruncateOptions};
 
 /// Tensor Train with orthogonality tracking.
 ///

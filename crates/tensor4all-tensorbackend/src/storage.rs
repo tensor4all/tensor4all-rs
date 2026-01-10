@@ -1,12 +1,8 @@
-use mdarray::{DTensor, Dense, DenseMapping, DynRank, Rank, Shape, Slice, View};
-use mdarray_linalg::{
-    matmul::{ContractBuilder, MatMul},
-    Naive,
-};
+use mdarray::{DTensor, Dense, DenseMapping, DynRank, Rank, Shape, View};
 use num_complex::Complex64;
 use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
-use std::borrow::{Borrow, Cow};
+use std::borrow::Cow;
 use std::ops::{Add, Mul};
 use std::sync::Arc;
 
@@ -204,7 +200,6 @@ fn contract_via_gemm(
     // N = product of non-contracted dimensions in B (last part after permutation)
 
     let ndim_a = dims_a.len();
-    let ndim_b = dims_b.len();
 
     // Axes should be contiguous at end of A and front of B
     // For A: non-contracted are positions 0..ndim_a-naxes, contracted are ndim_a-naxes..ndim_a
@@ -262,7 +257,6 @@ fn contract_via_gemm_c64(
     assert_eq!(naxes, axes_b.len(), "Number of contracted axes must match");
 
     let ndim_a = dims_a.len();
-    let ndim_b = dims_b.len();
 
     let m: usize = dims_a.iter().take(ndim_a - naxes).product();
     let m = if m == 0 { 1 } else { m };

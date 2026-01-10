@@ -860,8 +860,8 @@ pub fn contract_naive_to_treetn<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
-    max_rank: Option<usize>,
-    rtol: Option<f64>,
+    _max_rank: Option<usize>,
+    _rtol: Option<f64>,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
