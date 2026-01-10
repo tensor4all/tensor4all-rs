@@ -12,6 +12,7 @@
 //!
 //! For heterogeneous tensor collections, use an enum wrapper.
 
+use crate::any_scalar::AnyScalar;
 use crate::IndexLike;
 use anyhow::Result;
 use std::fmt::Debug;
@@ -398,6 +399,69 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
     /// # Returns
     /// The squared Frobenius norm as a non-negative f64.
     fn norm_squared(&self) -> f64;
+
+    /// Permute tensor indices to match the specified order.
+    ///
+    /// This reorders the tensor's axes to match the order specified by `new_order`.
+    /// The indices in `new_order` are matched by ID with the tensor's current indices.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_order` - The desired order of indices (matched by ID)
+    ///
+    /// # Returns
+    ///
+    /// A new tensor with permuted indices.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The number of indices doesn't match
+    /// - An index ID in `new_order` is not found in the tensor
+    fn permuteinds(&self, new_order: &[Self::Index]) -> Result<Self>;
+
+    /// Contract multiple tensors using einsum-style contraction.
+    ///
+    /// This method contracts 2 or more tensors over their common indices.
+    /// Indices appearing in exactly two tensors are contracted.
+    /// Indices appearing in only one tensor appear in the output.
+    ///
+    /// # Arguments
+    ///
+    /// * `tensors` - Slice of tensors to contract (must have length >= 1)
+    ///
+    /// # Returns
+    ///
+    /// A new tensor representing the contracted result.
+    ///
+    /// # Behavior by N
+    /// - N=0: Error
+    /// - N=1: Clone of input
+    /// - N=2: Uses `tensordot` over common indices
+    /// - N>=3: Recursively contracts pairs
+    fn contract_einsum(tensors: &[Self]) -> Result<Self>;
+
+    // ========================================================================
+    // Vector space operations (for Krylov solvers)
+    // ========================================================================
+
+    /// Compute a linear combination: `a * self + b * other`.
+    ///
+    /// This is the fundamental vector space operation.
+    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self>;
+
+    /// Scalar multiplication.
+    fn scale(&self, scalar: AnyScalar) -> Self;
+
+    /// Inner product (dot product) of two tensors.
+    ///
+    /// Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
+    fn inner_product(&self, other: &Self) -> Result<AnyScalar>;
+
+    /// Compute the Frobenius norm of the tensor.
+    fn norm(&self) -> f64 {
+        self.norm_squared().sqrt()
+    }
 }
 
 /// Result of direct sum operation.

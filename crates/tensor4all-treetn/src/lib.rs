@@ -3,7 +3,7 @@ pub mod algorithm;
 // TreeTN now uses T: TensorLike pattern, making dyn_treetn unnecessary
 pub mod named_graph;
 pub mod node_name_network;
-// TODO: Re-enable operator module after fixing for TensorLike refactoring
+// TODO: Refactor operator module for TensorLike pattern
 // pub mod operator;
 pub mod options;
 // TODO: Re-enable random module after fixing for TensorLike refactoring
@@ -23,37 +23,21 @@ pub use node_name_network::{CanonicalizeEdges, NodeNameNetwork};
 pub use options::{CanonicalizationOptions, SplitOptions, TruncationOptions};
 // pub use random::{random_treetn_c64, random_treetn_f64, LinkSpace};
 pub use site_index_network::SiteIndexNetwork;
-// TODO: Re-enable these exports after fixing for TensorLike refactoring
 pub use treetn::{
-    // apply_local_update_sweep,
-    // contract,
-    // contract_fit,
-    // factorize_tensor_to_treetn,
-    // factorize_tensor_to_treetn_with,
-    // linsolve,
-    // ContractionMethod,
-    // ContractionOptions,
-    // // Linsolve exports
-    // EnvironmentCache,
-    // FitContractionOptions,
-    // FitEnvironment,
-    // FitUpdater,
-    // IndexMapping,
-    // LinearOperator,
-    // LinsolveOptions,
-    // LinsolveResult,
-    // LinsolveUpdater,
-    // LinsolveVerifyReport,
-    // LocalUpdateStep,
-    // LocalUpdateSweepPlan,
-    // LocalUpdater,
-    // NetworkTopology,
-    // NodeVerifyDetail,
-    // ProjectedOperator,
-    // ProjectedState,
+    // Decomposition
+    factorize_tensor_to_treetn, factorize_tensor_to_treetn_with, TreeTopology,
+    // Local update
+    apply_local_update_sweep, LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater,
+    TruncateUpdater,
+    // Core type
     TreeTN,
-    // TreeTopology,
-    // TruncateUpdater,
+};
+
+// Re-export linsolve types
+pub use treetn::linsolve::{
+    linsolve, EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveResult,
+    LinsolveUpdater, LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator,
+    ProjectedState,
 };
 
 use petgraph::graph::NodeIndex;

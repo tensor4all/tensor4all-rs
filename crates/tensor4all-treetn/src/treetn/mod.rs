@@ -3,15 +3,14 @@
 //! This module provides the [`TreeTN`] type, a tree-structured tensor network
 //! for efficient tensor operations with canonicalization and truncation support.
 
-// TODO: Re-enable these submodules after fixing for TensorLike refactoring
 mod addition;
 mod canonicalize;
 mod contraction;
 mod decompose;
 mod fit;
-// mod linsolve;
+pub mod linsolve;
 mod localupdate;
-// mod operator_impl;
+mod operator_impl;
 mod ops;
 mod tensor_like;
 mod transform;
@@ -31,27 +30,20 @@ use crate::algorithm::CanonicalForm;
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
 
-// TODO: Re-enable these re-exports after fixing for TensorLike refactoring
-// // Re-export the decomposition functions and types
-// pub use decompose::{factorize_tensor_to_treetn, factorize_tensor_to_treetn_with, TreeTopology};
-//
-// // Re-export local update types
-// pub use localupdate::{
-//     apply_local_update_sweep, LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
-// };
-//
-// // Re-export fit algorithm types
-// pub use fit::{contract_fit, FitContractionOptions, FitEnvironment, FitUpdater};
-//
-// // Re-export contraction dispatcher
-// pub use contraction::{contract, ContractionMethod, ContractionOptions};
-//
-// // Re-export linsolve types
-// pub use linsolve::{
-//     linsolve, EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveResult,
-//     LinsolveUpdater, LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator,
-//     ProjectedState,
-// };
+// Re-export the decomposition functions and types
+pub use decompose::{factorize_tensor_to_treetn, factorize_tensor_to_treetn_with, TreeTopology};
+
+// Re-export local update types
+pub use localupdate::{
+    apply_local_update_sweep, LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
+};
+
+// Re-export linsolve types
+pub use linsolve::{
+    linsolve, EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveResult,
+    LinsolveUpdater, LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator,
+    ProjectedState,
+};
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
 ///
@@ -358,9 +350,9 @@ where
             .tensor(node_b)
             .ok_or_else(|| anyhow::anyhow!("Tensor for node_b not found"))?;
 
-        // Check that indices exist in tensors (by ID)
-        let has_index_a = tensor_a.external_indices().iter().any(|idx| idx.id() == index_a.id());
-        let has_index_b = tensor_b.external_indices().iter().any(|idx| idx.id() == index_b.id());
+        // Check that indices exist in tensors
+        let has_index_a = tensor_a.external_indices().iter().any(|idx| idx == index_a);
+        let has_index_b = tensor_b.external_indices().iter().any(|idx| idx == index_b);
 
         if !has_index_a {
             return Err(anyhow::anyhow!("Index not found in tensor_a"))
@@ -375,7 +367,7 @@ where
         let bond_index = tensor_a
             .external_indices()
             .iter()
-            .find(|idx| idx.id() == index_a.id())
+            .find(|idx| idx.same_id(index_a))
             .unwrap()
             .clone();
 

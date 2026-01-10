@@ -4,9 +4,7 @@
 //! - `Default` implementation
 //! - `Clone` implementation
 //! - `Debug` implementation
-//! - TODO: Re-enable after TensorLike adds scalar multiplication support:
-//!   - `Mul<f64>` and `Mul<Complex64>` for scalar multiplication
-//!   - `log_norm` for computing the logarithm of the Frobenius norm
+//! - `log_norm` for computing the logarithm of the Frobenius norm
 
 use std::hash::Hash;
 
@@ -65,18 +63,6 @@ where
             .finish_non_exhaustive()
     }
 }
-
-// ============================================================================
-// Scalar multiplication for TreeTN (TODO: Re-enable after TensorLike refactoring)
-// ============================================================================
-//
-// The scalar multiplication implementations are temporarily disabled because they
-// access internal tensor fields (`storage`) that are not exposed by the TensorLike trait.
-//
-// To re-enable, either:
-// 1. Add a `scale(&self, factor: f64) -> Self` method to TensorLike
-// 2. Add a `scale_complex(&self, factor: Complex64) -> Self` method to TensorLike
-// 3. Use a different approach that doesn't require internal field access
 
 // ============================================================================
 // Norm Computation

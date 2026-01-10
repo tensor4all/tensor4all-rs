@@ -18,7 +18,9 @@ use tensor4all_core::{IndexLike, TensorDynLen};
 use super::identity::build_identity_operator_tensor;
 use super::Operator;
 use crate::site_index_network::SiteIndexNetwork;
-use crate::treetn::{IndexMapping, LinearOperator, TreeTN};
+use crate::treetn::TreeTN;
+// TODO: Re-enable after operator module is refactored
+// use crate::treetn::linsolve::{IndexMapping, LinearOperator};
 
 /// Check if a set of operators are exclusive (non-overlapping) on the target network.
 ///

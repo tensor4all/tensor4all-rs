@@ -55,7 +55,7 @@ fn contract_pair(a: &TensorDynLen, b: &TensorDynLen) -> Result<TensorDynLen> {
         .filter_map(|idx_a| {
             b.indices
                 .iter()
-                .find(|idx_b| idx_a.id() == idx_b.id())
+                .find(|idx_b| idx_a.same_id(idx_b))
                 .map(|idx_b| (idx_a.clone(), idx_b.clone()))
         })
         .collect();

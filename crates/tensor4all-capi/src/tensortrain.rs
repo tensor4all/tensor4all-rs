@@ -632,50 +632,20 @@ pub extern "C" fn t4a_tt_inner(
 ///
 /// # Returns
 /// A new tensor train handle, or NULL on error
+///
+/// # Note
+/// Currently returns NULL as TensorTrain::contract is not yet implemented.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tt_contract(
-    ptr1: *const t4a_tensortrain,
-    ptr2: *const t4a_tensortrain,
-    method: crate::types::t4a_contract_method,
-    max_rank: libc::size_t,
-    rtol: libc::c_double,
-    nsweeps: libc::size_t,
+    _ptr1: *const t4a_tensortrain,
+    _ptr2: *const t4a_tensortrain,
+    _method: crate::types::t4a_contract_method,
+    _max_rank: libc::size_t,
+    _rtol: libc::c_double,
+    _nsweeps: libc::size_t,
 ) -> *mut t4a_tensortrain {
-    if ptr1.is_null() || ptr2.is_null() {
-        return std::ptr::null_mut();
-    }
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        use tensor4all_itensorlike::{ContractMethod, ContractOptions};
-
-        let tt1 = unsafe { &*ptr1 };
-        let tt2 = unsafe { &*ptr2 };
-
-        // Build options
-        let rust_method: ContractMethod = method.into();
-        let mut options = match rust_method {
-            ContractMethod::Zipup => ContractOptions::zipup(),
-            ContractMethod::Fit => ContractOptions::fit(),
-            ContractMethod::Naive => ContractOptions::naive(),
-        };
-
-        if max_rank > 0 {
-            options = options.with_max_rank(max_rank);
-        }
-        if rtol > 0.0 {
-            options = options.with_rtol(rtol);
-        }
-        if nsweeps > 0 {
-            options = options.with_nsweeps(nsweeps);
-        }
-
-        match tt1.inner().contract(tt2.inner(), &options) {
-            Ok(result) => Box::into_raw(Box::new(t4a_tensortrain::new(result))),
-            Err(_) => std::ptr::null_mut(),
-        }
-    }));
-
-    result.unwrap_or(std::ptr::null_mut())
+    // TODO: Implement when TensorTrain::contract is available
+    std::ptr::null_mut()
 }
 
 #[cfg(test)]

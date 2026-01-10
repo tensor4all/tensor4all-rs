@@ -1,16 +1,39 @@
 //! ProjectedOperator: 3-chain environment for operator application.
 //!
 //! Computes `<psi|H|v>` efficiently for Tree Tensor Networks.
+//!
+//! # Index Mapping
+//!
+//! For MPOs where input/output site indices have different IDs from the state's
+//! site indices (required because a tensor cannot have two indices with the same ID),
+//! use `with_index_mappings` to define the correspondence.
 
+use std::collections::HashMap;
 use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::{IndexLike, contract_multi, TensorDynLen};
+use tensor4all_core::{IndexLike, TensorLike};
 
 use super::environment::{EnvironmentCache, NetworkTopology};
 use crate::treetn::TreeTN;
+
+/// Mapping between true site indices and internal MPO indices.
+///
+/// In the equation `A * x = b`:
+/// - The state `x` has site indices with certain IDs
+/// - The MPO `A` internally uses different IDs (`s_in_tmp`, `s_out_tmp`)
+/// - This mapping defines the correspondence
+#[derive(Debug, Clone)]
+pub struct IndexMapping<I>
+where
+    I: IndexLike,
+{
+    /// True site index (from state x or b)
+    pub true_index: I,
+    /// Internal MPO index (s_in_tmp or s_out_tmp)
+    pub internal_index: I,
+}
 
 /// ProjectedOperator: Manages 3-chain environments for operator application.
 ///
@@ -33,32 +56,62 @@ use crate::treetn::TreeTN;
 ///
 /// This forms a "3-chain" sandwich: `<bra| H |ket>` contracted over
 /// all nodes except the open region.
-pub struct ProjectedOperator<I, V>
+pub struct ProjectedOperator<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// The operator H
-    pub operator: TreeTN<I, V>,
+    pub operator: TreeTN<T, V>,
     /// Environment cache
-    pub envs: EnvironmentCache<I, V>,
+    pub envs: EnvironmentCache<T, V>,
+    /// Input index mapping (true site index -> MPO's internal input index)
+    /// Used when MPO has internal indices different from state's site indices.
+    pub input_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
+    /// Output index mapping (true site index -> MPO's internal output index)
+    pub output_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
 }
 
-impl<I, V> ProjectedOperator<I, V>
+impl<T, V> ProjectedOperator<T, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     /// Create a new ProjectedOperator.
-    pub fn new(operator: TreeTN<I, V>) -> Self {
+    pub fn new(operator: TreeTN<T, V>) -> Self {
         Self {
             operator,
             envs: EnvironmentCache::new(),
+            input_mapping: None,
+            output_mapping: None,
+        }
+    }
+
+    /// Create a new ProjectedOperator with index mappings from a LinearOperator.
+    ///
+    /// The mappings define how state's site indices relate to MPO's internal indices.
+    /// This is required when the MPO uses internal indices (s_in_tmp, s_out_tmp)
+    /// that differ from the state's site indices.
+    pub fn with_index_mappings(
+        operator: TreeTN<T, V>,
+        input_mapping: HashMap<V, IndexMapping<T::Index>>,
+        output_mapping: HashMap<V, IndexMapping<T::Index>>,
+    ) -> Self {
+        Self {
+            operator,
+            envs: EnvironmentCache::new(),
+            input_mapping: Some(input_mapping),
+            output_mapping: Some(output_mapping),
         }
     }
 
     /// Apply the operator to a local tensor: compute `H|v⟩` at the current position.
+    ///
+    /// If index mappings are set (via `with_index_mappings`), this method:
+    /// 1. Transforms input `v`'s site indices to MPO's internal input indices
+    /// 2. Contracts with MPO tensors and environment tensors
+    /// 3. Transforms result's internal output indices back to true site indices
     ///
     /// # Arguments
     /// * `v` - The local tensor to apply the operator to
@@ -71,21 +124,35 @@ where
     ///
     /// # Returns
     /// The result of applying H to v: `H|v⟩`
-    pub fn apply<T: NetworkTopology<V>>(
+    pub fn apply<NT: NetworkTopology<V>>(
         &mut self,
-        v: &TensorDynLen<I::Id, I::Symm>,
+        v: &T,
         region: &[V],
-        ket_state: &TreeTN<I, V>,
-        bra_state: &TreeTN<I, V>,
-        topology: &T,
-    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
+        ket_state: &TreeTN<T, V>,
+        bra_state: &TreeTN<T, V>,
+        topology: &NT,
+    ) -> Result<T> {
         // Ensure environments are computed
         self.ensure_environments(region, ket_state, bra_state, topology)?;
 
         // Collect all tensors to contract: operator tensors + environments + input v
-        let mut all_tensors: Vec<TensorDynLen<I::Id, I::Symm>> = Vec::new();
+        let mut all_tensors: Vec<T> = Vec::new();
 
-        // Collect local operator tensors
+        // Step 1: Transform input tensor - replace true site indices with internal indices
+        let transformed_v = if let Some(ref input_mapping) = self.input_mapping {
+            let mut result = v.clone();
+            for node in region {
+                if let Some(mapping) = input_mapping.get(node) {
+                    result = result.replaceind(&mapping.true_index, &mapping.internal_index)?;
+                }
+            }
+            result
+        } else {
+            v.clone()
+        };
+        all_tensors.push(transformed_v);
+
+        // Step 2: Collect local operator tensors
         for node in region {
             let node_idx = self
                 .operator
@@ -99,7 +166,7 @@ where
             all_tensors.push(tensor);
         }
 
-        // Collect environments from neighbors outside the region
+        // Step 3: Collect environments from neighbors outside the region
         for node in region {
             for neighbor in topology.neighbors(node) {
                 if !region.contains(&neighbor) {
@@ -110,20 +177,30 @@ where
             }
         }
 
-        // Add input vector v
-        all_tensors.push(v.clone());
+        // Contract all tensors
+        let contracted = T::contract_einsum(&all_tensors)?;
 
-        // Use contract_multi for optimal contraction ordering
-        contract_multi(&all_tensors)
+        // Step 4: Transform output - replace internal output indices with true indices
+        if let Some(ref output_mapping) = self.output_mapping {
+            let mut result = contracted;
+            for node in region {
+                if let Some(mapping) = output_mapping.get(node) {
+                    result = result.replaceind(&mapping.internal_index, &mapping.true_index)?;
+                }
+            }
+            Ok(result)
+        } else {
+            Ok(contracted)
+        }
     }
 
     /// Ensure environments are computed for neighbors of the region.
-    fn ensure_environments<T: NetworkTopology<V>>(
+    fn ensure_environments<NT: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        ket_state: &TreeTN<I, V>,
-        bra_state: &TreeTN<I, V>,
-        topology: &T,
+        ket_state: &TreeTN<T, V>,
+        bra_state: &TreeTN<T, V>,
+        topology: &NT,
     ) -> Result<()> {
         for node in region {
             for neighbor in topology.neighbors(node) {
@@ -145,14 +222,14 @@ where
     /// * `ket_state` - State for ket tensors (input space, V_in)
     /// * `bra_state` - State for bra tensors (output space, V_out)
     /// * `topology` - Network topology
-    fn compute_environment<T: NetworkTopology<V>>(
+    fn compute_environment<NT: NetworkTopology<V>>(
         &mut self,
         from: &V,
         to: &V,
-        ket_state: &TreeTN<I, V>,
-        bra_state: &TreeTN<I, V>,
-        topology: &T,
-    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
+        ket_state: &TreeTN<T, V>,
+        bra_state: &TreeTN<T, V>,
+        topology: &NT,
+    ) -> Result<T> {
         // First, ensure child environments are computed
         let child_neighbors: Vec<V> = topology.neighbors(from).filter(|n| n != to).collect();
 
@@ -165,7 +242,7 @@ where
         }
 
         // Collect child environments
-        let child_envs: Vec<TensorDynLen<I::Id, I::Symm>> = child_neighbors
+        let child_envs: Vec<T> = child_neighbors
             .iter()
             .filter_map(|child| self.envs.get(child, from).cloned())
             .collect();
@@ -195,85 +272,83 @@ where
 
         // Environment contraction for 3-chain: <bra| H |ket>
         //
-        // Index convention:
-        // - ket_state's site index: s_in (input space, V_in)
-        // - bra_state's site index: s_out (output space, V_out)
-        // - operator's input index matches ket_state's site index
-        // - operator's output index matches bra_state's site index
+        // When using index mappings (from LinearOperator):
+        // - ket's site index (s) needs to be replaced with MPO's input index (s_in_tmp) for contraction
+        // - bra's site index (s) needs to be replaced with MPO's output index (s_out_tmp) for contraction
         //
-        // For V_in = V_out: bra_state = ket_state, indices have same IDs
-        // For V_in ≠ V_out: bra_state ≠ ket_state, indices have different IDs
-        //
-        // Contraction: ket * operator * bra_conj, contracting over common indices
+        // Without mappings: indices are assumed to match directly (same ID).
 
         let bra_conj = tensor_bra.conj();
-        let site_space_ket = ket_state.site_space(from).cloned().unwrap_or_default();
 
-        // Contract ket with operator on INPUT site indices (same ID by design)
-        let ket_op_common: Vec<_> = tensor_ket
-            .indices
+        // Transform ket tensor for contraction with operator
+        let transformed_ket = if let Some(ref input_mapping) = self.input_mapping {
+            if let Some(mapping) = input_mapping.get(from) {
+                tensor_ket.replaceind(&mapping.true_index, &mapping.internal_index)?
+            } else {
+                tensor_ket.clone()
+            }
+        } else {
+            tensor_ket.clone()
+        };
+
+        // Transform bra_conj tensor for contraction with operator
+        let transformed_bra_conj = if let Some(ref output_mapping) = self.output_mapping {
+            if let Some(mapping) = output_mapping.get(from) {
+                bra_conj.replaceind(&mapping.true_index, &mapping.internal_index)?
+            } else {
+                bra_conj.clone()
+            }
+        } else {
+            bra_conj.clone()
+        };
+
+        // Contract transformed_ket with operator on common indices
+        let ket_indices = transformed_ket.external_indices();
+        let op_indices = tensor_op.external_indices();
+        let ket_op_common: Vec<_> = ket_indices
             .iter()
             .filter_map(|idx_ket| {
-                // Find operator index with same ID (this is s_in)
-                tensor_op
-                    .indices
+                op_indices
                     .iter()
-                    .find(|idx_op| idx_ket.id == idx_op.id)
+                    .find(|idx_op| idx_ket.same_id(idx_op))
                     .map(|idx_op| (idx_ket.clone(), idx_op.clone()))
-            })
-            .filter(|(idx_ket, _)| {
-                // Only contract site indices, not bond indices
-                site_space_ket.iter().any(|s| s.id == idx_ket.id)
             })
             .collect();
 
         let ket_op = if ket_op_common.is_empty() {
-            tensor_ket.tensordot(tensor_op, &[])?
+            // If no common indices, do outer product
+            transformed_ket.tensordot(tensor_op, &[])?
         } else {
-            tensor_ket.tensordot(tensor_op, &ket_op_common)?
+            transformed_ket.tensordot(tensor_op, &ket_op_common)?
         };
 
-        // Now contract with bra on OUTPUT site indices
-        // The operator's s_out should contract with bra's s.
-        // But they have DIFFERENT IDs! This is the fundamental issue.
-        //
-        // Solution: Find operator indices that are NOT in state's site space
-        // (these are s_out), and contract them with bra's site indices by DIMENSION matching.
-        //
-        // Better solution: The operator's site_space should only contain OUTPUT indices,
-        // and we explicitly pass which indices are input vs output.
-        //
-        // For now, contract all remaining common indices between ket_op and bra_conj.
-        // After ket*op contraction, ket_op has:
-        //   - bond indices (from ket and operator)
-        //   - operator's output indices (s_out)
-        // bra_conj has:
-        //   - bond indices (from bra = state)
-        //   - bra's site indices (s)
-        //
-        // Bond indices should match, site indices (s_out vs s) don't match.
-
-        let ket_op_bra_common: Vec<_> = ket_op
-            .indices
+        // Contract ket_op with transformed_bra_conj on common indices
+        let ket_op_indices = ket_op.external_indices();
+        let bra_conj_indices = transformed_bra_conj.external_indices();
+        let ket_op_bra_common: Vec<_> = ket_op_indices
             .iter()
             .filter_map(|idx| {
-                bra_conj
-                    .indices
+                bra_conj_indices
                     .iter()
-                    .find(|idx_bra| idx.id == idx_bra.id)
+                    .find(|idx_bra| idx.same_id(idx_bra))
                     .map(|idx_bra| (idx.clone(), idx_bra.clone()))
             })
             .collect();
 
-        let ket_op_bra = ket_op.tensordot(&bra_conj, &ket_op_bra_common)?;
+        let ket_op_bra = if ket_op_bra_common.is_empty() {
+            // If no common indices, do outer product
+            ket_op.tensordot(&transformed_bra_conj, &[])?
+        } else {
+            ket_op.tensordot(&transformed_bra_conj, &ket_op_bra_common)?
+        };
 
-        // Contract ket_op_bra with child environments using contract_multi
+        // Contract ket_op_bra with child environments using T::contract_einsum
         if child_envs.is_empty() {
             Ok(ket_op_bra)
         } else {
-            let mut all_tensors = vec![ket_op_bra];
+            let mut all_tensors: Vec<T> = vec![ket_op_bra];
             all_tensors.extend(child_envs);
-            contract_multi(&all_tensors)
+            T::contract_einsum(&all_tensors)
         }
     }
 
@@ -283,7 +358,7 @@ where
         for node in region {
             if let Some(site_space) = self.operator.site_space(node) {
                 for idx in site_space {
-                    dim *= idx.symm.total_dim();
+                    dim *= idx.dim();
                 }
             }
         }
@@ -291,7 +366,7 @@ where
     }
 
     /// Invalidate caches affected by updates to the given region.
-    pub fn invalidate<T: NetworkTopology<V>>(&mut self, region: &[V], topology: &T) {
+    pub fn invalidate<NT: NetworkTopology<V>>(&mut self, region: &[V], topology: &NT) {
         self.envs.invalidate(region, topology);
     }
 }

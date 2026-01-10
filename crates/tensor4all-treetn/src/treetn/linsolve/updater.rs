@@ -1,27 +1,21 @@
 //! LinsolveUpdater: Local update implementation for linsolve.
 //!
-//! Uses GMRES (via kryst) to solve the local linear problem at each sweep step.
+//! Uses GMRES (via tensor4all_core::krylov) to solve the local linear problem at each sweep step.
 
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::sync::RwLock;
 
 use anyhow::Result;
 
-use kryst::context::ksp_context::Workspace;
-use kryst::parallel::{NoComm, UniverseComm};
-use kryst::preconditioner::PcSide;
-use kryst::solver::{GmresSolver, LinearSolver};
-use kryst::utils::convergence::ConvergedReason;
+use tensor4all_core::any_scalar::AnyScalar;
+use tensor4all_core::krylov::{gmres, GmresOptions};
+use tensor4all_core::{FactorizeAlg, IndexLike, TensorLike};
 
-use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all_core::storage::{DenseStorageF64, StorageScalar};
-use tensor4all_core::{IndexLike, contract_multi, FactorizeAlg, Storage, TensorDynLen};
-
-use super::linear_operator::LinearOperator;
 use super::local_linop::LocalLinOp;
 use super::options::LinsolveOptions;
-use super::projected_operator::ProjectedOperator;
+use super::projected_operator::{IndexMapping, ProjectedOperator};
 use super::projected_state::ProjectedState;
 use crate::treetn::decompose::{factorize_tensor_to_treetn_with, TreeTopology};
 use crate::treetn::localupdate::{LocalUpdateStep, LocalUpdater};
@@ -127,41 +121,37 @@ impl<V: std::fmt::Debug> std::fmt::Display for LinsolveVerifyReport<V> {
 /// - The current solution x (in V_in) is used as the "ket"
 ///
 /// For V_in = V_out (default): The current solution x is used for both bra and ket.
-pub struct LinsolveUpdater<I, V>
+pub struct LinsolveUpdater<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Projected operator (3-chain), wrapped in Arc<RwLock> for GMRES
-    pub projected_operator: Arc<RwLock<ProjectedOperator<I, V>>>,
-    /// Linear operator with index mapping (handles s_in/s_out correctly)
-    pub linear_operator: Option<Arc<LinearOperator<I, V>>>,
+    pub projected_operator: Arc<RwLock<ProjectedOperator<T, V>>>,
     /// Projected state for RHS (2-chain)
-    pub projected_state: ProjectedState<I, V>,
+    pub projected_state: ProjectedState<T, V>,
     /// Reference state for bra in environment computation (V_out space)
     /// If None, uses the current solution x (V_in = V_out case)
-    pub reference_state_out: Option<TreeTN<I, V>>,
+    pub reference_state_out: Option<TreeTN<T, V>>,
     /// Solver options
     pub options: LinsolveOptions,
 }
 
-impl<I, V> LinsolveUpdater<I, V>
+impl<T, V> LinsolveUpdater<T, V>
 where
-    I: IndexLike + 'static,
-    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    I::Symm:
-        Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
+    T: TensorLike + 'static,
+    T::Index: IndexLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     /// Create a new LinsolveUpdater for V_in = V_out case.
     pub fn new(
-        operator: TreeTN<I, V>,
-        rhs: TreeTN<I, V>,
+        operator: TreeTN<T, V>,
+        rhs: TreeTN<T, V>,
         options: LinsolveOptions,
     ) -> Self {
         Self {
             projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
-            linear_operator: None,
             projected_state: ProjectedState::new(rhs),
             reference_state_out: None,
             options,
@@ -176,38 +166,43 @@ where
     /// * `reference_state_out` - Reference state in V_out for bra in environment computation
     /// * `options` - Solver options
     pub fn with_reference_state(
-        operator: TreeTN<I, V>,
-        rhs: TreeTN<I, V>,
-        reference_state_out: TreeTN<I, V>,
+        operator: TreeTN<T, V>,
+        rhs: TreeTN<T, V>,
+        reference_state_out: TreeTN<T, V>,
         options: LinsolveOptions,
     ) -> Self {
         Self {
             projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
-            linear_operator: None,
             projected_state: ProjectedState::new(rhs),
             reference_state_out: Some(reference_state_out),
             options,
         }
     }
 
-    /// Create a new LinsolveUpdater with a LinearOperator for correct index handling.
+    /// Create a new LinsolveUpdater with index mappings for correct index handling.
     ///
-    /// The LinearOperator wraps the MPO and handles the mapping between:
-    /// - True site indices (from state x and b)
-    /// - Internal MPO indices (s_in_tmp, s_out_tmp)
+    /// Use this when the MPO uses internal indices (s_in_tmp, s_out_tmp) that differ
+    /// from the state's site indices. The mappings define how to translate between them.
     ///
-    /// This is required when the MPO uses independent indices for input/output
-    /// (which is necessary because a tensor cannot have two indices with the same ID).
-    pub fn with_linear_operator(
-        linear_operator: LinearOperator<I, V>,
-        rhs: TreeTN<I, V>,
-        reference_state_out: Option<TreeTN<I, V>>,
+    /// # Arguments
+    /// * `operator` - The MPO with internal index IDs
+    /// * `input_mapping` - Mapping from true input indices to MPO's internal indices
+    /// * `output_mapping` - Mapping from true output indices to MPO's internal indices
+    /// * `rhs` - The RHS b
+    /// * `reference_state_out` - Optional reference state for V_in ≠ V_out case
+    /// * `options` - Solver options
+    pub fn with_index_mappings(
+        operator: TreeTN<T, V>,
+        input_mapping: HashMap<V, IndexMapping<T::Index>>,
+        output_mapping: HashMap<V, IndexMapping<T::Index>>,
+        rhs: TreeTN<T, V>,
+        reference_state_out: Option<TreeTN<T, V>>,
         options: LinsolveOptions,
     ) -> Self {
-        let operator = linear_operator.mpo.clone();
+        let projected_operator =
+            ProjectedOperator::with_index_mappings(operator, input_mapping, output_mapping);
         Self {
-            projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
-            linear_operator: Some(Arc::new(linear_operator)),
+            projected_operator: Arc::new(RwLock::new(projected_operator)),
             projected_state: ProjectedState::new(rhs),
             reference_state_out,
             options,
@@ -218,8 +213,8 @@ where
     /// Returns reference_state_out if set, otherwise returns the ket_state (V_in = V_out case).
     pub fn get_bra_state<'a>(
         &'a self,
-        ket_state: &'a TreeTN<I, V>,
-    ) -> &'a TreeTN<I, V> {
+        ket_state: &'a TreeTN<T, V>,
+    ) -> &'a TreeTN<T, V> {
         self.reference_state_out.as_ref().unwrap_or(ket_state)
     }
 
@@ -231,7 +226,7 @@ where
     /// 3. Environment computation requirements are satisfiable
     ///
     /// Returns a detailed report of any inconsistencies found.
-    pub fn verify(&self, state: &TreeTN<I, V>) -> Result<LinsolveVerifyReport<V>> {
+    pub fn verify(&self, state: &TreeTN<T, V>) -> Result<LinsolveVerifyReport<V>> {
         let mut report = LinsolveVerifyReport::default();
 
         let proj_op = self.projected_operator.read().unwrap();
@@ -275,19 +270,19 @@ where
             // Get state tensor indices
             if let Some(state_idx) = state.node_index(node) {
                 if let Some(state_tensor) = state.tensor(state_idx) {
-                    let state_indices: Vec<_> = state_tensor
-                        .indices
+                    let state_indices_vec = state_tensor.external_indices();
+                    let state_indices: Vec<_> = state_indices_vec
                         .iter()
-                        .map(|idx| (idx.id.clone(), idx.symm.total_dim()))
+                        .map(|idx| (idx.id().clone(), idx.dim()))
                         .collect();
 
                     // Get operator tensor indices
                     if let Some(op_idx) = operator.node_index(node) {
                         if let Some(op_tensor) = operator.tensor(op_idx) {
-                            let op_indices: Vec<_> = op_tensor
-                                .indices
+                            let op_indices_vec = op_tensor.external_indices();
+                            let op_indices: Vec<_> = op_indices_vec
                                 .iter()
-                                .map(|idx| (idx.id.clone(), idx.symm.total_dim()))
+                                .map(|idx| (idx.id().clone(), idx.dim()))
                                 .collect();
 
                             // Check for common indices (should have at least bond indices)
@@ -299,10 +294,10 @@ where
                             report.node_details.push(NodeVerifyDetail {
                                 node: (*node).clone(),
                                 state_site_indices: state_site
-                                    .map(|s| s.iter().map(|i| format!("{:?}", i.id)).collect())
+                                    .map(|s| s.iter().map(|i| format!("{:?}", i.id())).collect())
                                     .unwrap_or_default(),
                                 op_site_indices: op_site
-                                    .map(|s| s.iter().map(|i| format!("{:?}", i.id)).collect())
+                                    .map(|s| s.iter().map(|i| format!("{:?}", i.id())).collect())
                                     .unwrap_or_default(),
                                 state_tensor_indices: state_indices
                                     .iter()
@@ -340,29 +335,29 @@ where
     /// Contract all tensors in the region into a single local tensor.
     fn contract_region(
         &self,
-        subtree: &TreeTN<I, V>,
+        subtree: &TreeTN<T, V>,
         region: &[V],
-    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
+    ) -> Result<T> {
         if region.is_empty() {
             return Err(anyhow::anyhow!("Region cannot be empty"));
         }
 
         // Collect all tensors in the region
-        let tensors: Vec<TensorDynLen<I::Id, I::Symm>> = region
+        let tensors: Vec<T> = region
             .iter()
             .map(|node| {
                 let idx = subtree
                     .node_index(node)
                     .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node))?;
-                subtree
+                let tensor = subtree
                     .tensor(idx)
-                    .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node))
-                    .map(|t| t.clone())
+                    .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node))?;
+                Ok(tensor.clone())
             })
             .collect::<Result<_>>()?;
 
-        // Use contract_multi for optimal contraction ordering
-        contract_multi(&tensors)
+        // Use TensorLike::contract_einsum for contraction
+        T::contract_einsum(&tensors)
     }
 
     /// Build TreeTopology for the subtree region from the solved tensor.
@@ -370,14 +365,16 @@ where
     /// Maps each node to the positions of its indices in the solved tensor.
     fn build_subtree_topology(
         &self,
-        solved_tensor: &TensorDynLen<I::Id, I::Symm>,
+        solved_tensor: &T,
         region: &[V],
-        full_treetn: &TreeTN<I, V>,
+        full_treetn: &TreeTN<T, V>,
     ) -> Result<TreeTopology<V>> {
         use std::collections::HashMap;
 
         let mut nodes: HashMap<V, Vec<usize>> = HashMap::new();
         let mut edges: Vec<(V, V)> = Vec::new();
+
+        let solved_indices = solved_tensor.external_indices();
 
         // For each node in the region, find which indices belong to it
         for node in region {
@@ -387,10 +384,9 @@ where
             if let Some(site_indices) = full_treetn.site_space(node) {
                 for site_idx in site_indices {
                     // Find position in solved_tensor
-                    if let Some(pos) = solved_tensor
-                        .indices
+                    if let Some(pos) = solved_indices
                         .iter()
-                        .position(|idx| idx.id == site_idx.id)
+                        .position(|idx| idx == site_idx)
                     {
                         positions.push(pos);
                     }
@@ -403,10 +399,9 @@ where
                     // This is an external neighbor - the bond belongs to this node
                     if let Some(edge) = full_treetn.edge_between(node, &neighbor) {
                         if let Some(bond) = full_treetn.bond_index(edge) {
-                            if let Some(pos) = solved_tensor
-                                .indices
+                            if let Some(pos) = solved_indices
                                 .iter()
-                                .position(|idx| idx.id == bond.id)
+                                .position(|idx| idx == bond)
                             {
                                 positions.push(pos);
                             }
@@ -433,41 +428,54 @@ where
     /// Copy decomposed tensors back to subtree, preserving original bond IDs.
     fn copy_decomposed_to_subtree(
         &self,
-        subtree: &mut TreeTN<I, V>,
-        decomposed: &TreeTN<I, V>,
+        subtree: &mut TreeTN<T, V>,
+        decomposed: &TreeTN<T, V>,
         region: &[V],
-        full_treetn: &TreeTN<I, V>,
+        full_treetn: &TreeTN<T, V>,
     ) -> Result<()> {
-        // For each node in the region, update its tensor in subtree
+        use std::collections::HashMap;
+
+        // Phase 1: Build a mapping from decomposed bond IDs to new bond indices
+        // For internal bonds, we create a single new bond index that will be used
+        // for both nodes sharing that edge
+        let mut bond_mapping: HashMap<<T::Index as IndexLike>::Id, T::Index> = HashMap::new();
+
+        for (i, node_a) in region.iter().enumerate() {
+            for node_b in region.iter().skip(i + 1) {
+                // Check if there's an edge between these nodes
+                if let Some(decomp_edge) = decomposed.edge_between(node_a, node_b) {
+                    if let Some(decomp_bond) = decomposed.bond_index(decomp_edge) {
+                        // Create a new bond index with original ID structure
+                        // Use sim() once for this edge
+                        if let Some(orig_edge) = subtree.edge_between(node_a, node_b) {
+                            if let Some(orig_bond) = subtree.bond_index(orig_edge) {
+                                let new_bond = orig_bond.sim();
+                                bond_mapping.insert(decomp_bond.id().clone(), new_bond.clone());
+
+                                // Update the edge bond in subtree
+                                subtree.replace_edge_bond(orig_edge, new_bond)?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase 2: For each node in the region, update its tensor using the bond mapping
         for node in region {
             let decomp_idx = decomposed
                 .node_index(node)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in decomposed TreeTN", node))?;
             let mut new_tensor = decomposed.tensor(decomp_idx).unwrap().clone();
 
-            // Replace bond indices to preserve original IDs
+            // Replace bond indices using the pre-computed mapping
             for neighbor in full_treetn.site_index_network().neighbors(node) {
                 if region.contains(&neighbor) {
-                    // Internal bond - need to find and replace the new bond ID
-                    if let Some(orig_edge) = subtree.edge_between(node, &neighbor) {
-                        if let Some(orig_bond) = subtree.bond_index(orig_edge) {
-                            // Find the decomposed edge bond
-                            if let Some(decomp_edge) = decomposed.edge_between(node, &neighbor) {
-                                if let Some(decomp_bond) = decomposed.bond_index(decomp_edge) {
-                                    // Create preserved bond with original ID but new dimension
-                                    let preserved_bond = Index::new_with_tags(
-                                        orig_bond.id.clone(),
-                                        decomp_bond.symm.clone(),
-                                        orig_bond.tags.clone(),
-                                    );
-                                    new_tensor =
-                                        new_tensor.replaceind(decomp_bond, &preserved_bond);
-
-                                    // Update the edge bond in subtree (only once per edge)
-                                    if node < &neighbor {
-                                        subtree.replace_edge_bond(orig_edge, preserved_bond)?;
-                                    }
-                                }
+                    // Internal bond - use the mapped bond
+                    if let Some(decomp_edge) = decomposed.edge_between(node, &neighbor) {
+                        if let Some(decomp_bond) = decomposed.bond_index(decomp_edge) {
+                            if let Some(new_bond) = bond_mapping.get(decomp_bond.id()) {
+                                new_tensor = new_tensor.replaceind(decomp_bond, new_bond)?;
                             }
                         }
                     }
@@ -488,15 +496,15 @@ where
     fn solve_local(
         &mut self,
         region: &[V],
-        init: &TensorDynLen<I::Id, I::Symm>,
-        state: &TreeTN<I, V>,
-    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
+        init: &T,
+        state: &TreeTN<T, V>,
+    ) -> Result<T> {
         // Use state's SiteIndexNetwork directly (implements NetworkTopology)
         let topology = state.site_index_network();
 
         // Get local RHS: <b|_local
         // For V_in ≠ V_out case, use reference_state_out for bra in environment computation
-        let rhs_local = match &self.reference_state_out {
+        let rhs_local_raw = match &self.reference_state_out {
             Some(ref_out) => self
                 .projected_state
                 .local_constant_term_with_bra(region, state, ref_out, topology)?,
@@ -505,129 +513,98 @@ where
                 .local_constant_term(region, state, topology)?,
         };
 
-        // Compute local dimension
-        let dim: usize = init
-            .indices
-            .iter()
-            .map(|idx| idx.symm.total_dim())
-            .product();
+        // Align RHS indices with init indices.
+        // The RHS may have indices from the `rhs` TreeTN, while init has indices from
+        // the current `state`. For GMRES operations (like b - A*x), they must match.
+        let init_indices = init.external_indices();
+        let rhs_indices = rhs_local_raw.external_indices();
 
-        // Convert RHS to flat array
-        let b: Vec<f64> = f64::extract_dense_view(rhs_local.storage.as_ref())
-            .map_err(|e| anyhow::anyhow!("RHS storage error: {}", e))?
-            .to_vec();
+        let rhs_local = if init_indices.len() == rhs_indices.len() {
+            let indices_match = init_indices
+                .iter()
+                .zip(rhs_indices.iter())
+                .all(|(ii, ri)| ii == ri);
+            if indices_match {
+                rhs_local_raw
+            } else {
+                // Replace RHS indices with init indices
+                rhs_local_raw.replaceinds(&rhs_indices, &init_indices)?
+            }
+        } else {
+            return Err(anyhow::anyhow!(
+                "Index count mismatch between init ({}) and RHS ({})",
+                init_indices.len(),
+                rhs_indices.len()
+            ));
+        };
 
-        // Initial guess from input tensor
-        let mut x: Vec<f64> = f64::extract_dense_view(init.storage.as_ref())
-            .map_err(|e| anyhow::anyhow!("Init storage error: {}", e))?
-            .to_vec();
-
-        // FIXME: state.clone() is inefficient for large states.
-        // This is required because kryst's LinOp trait requires 'static lifetime,
-        // so LocalLinOp must own all its data. Consider:
-        // - Using Rc<RefCell<>> or Arc<RwLock<>> for shared state
-        // - Restructuring to avoid repeated clones per sweep step
-        // - Caching the LocalLinOp between calls if state hasn't changed
-        //
         // For V_in ≠ V_out case, we use reference_state_out as the bra state.
         // For V_in = V_out case (reference_state_out is None), the state is used as both ket and bra.
         let bra_state = self.reference_state_out.clone();
 
-        let linop = if let Some(ref linear_op) = self.linear_operator {
-            // Use LinearOperator for correct index handling
-            LocalLinOp::with_linear_operator(
+        // Convert coefficients to AnyScalar
+        let a0 = AnyScalar::F64(self.options.a0);
+        let a1 = AnyScalar::F64(self.options.a1);
+
+        // Create local linear operator
+        // ProjectedOperator handles both environment computation and index mappings
+        let linop = match bra_state {
+            Some(bra) => LocalLinOp::with_bra_state(
                 Arc::clone(&self.projected_operator),
-                Arc::clone(linear_op),
                 region.to_vec(),
                 state.clone(),
-                bra_state,
-                init.clone(),
-                self.options.a0,
-                self.options.a1,
-            )
-        } else {
-            // Legacy path without LinearOperator
-            match bra_state {
-                Some(bra) => LocalLinOp::with_bra_state(
-                    Arc::clone(&self.projected_operator),
-                    region.to_vec(),
-                    state.clone(),
-                    bra,
-                    init.clone(),
-                    self.options.a0,
-                    self.options.a1,
-                ),
-                None => LocalLinOp::new(
-                    Arc::clone(&self.projected_operator),
-                    region.to_vec(),
-                    state.clone(),
-                    init.clone(),
-                    self.options.a0,
-                    self.options.a1,
-                ),
-            }
+                bra,
+                a0,
+                a1,
+            ),
+            None => LocalLinOp::new(
+                Arc::clone(&self.projected_operator),
+                region.to_vec(),
+                state.clone(),
+                a0,
+                a1,
+            ),
         };
 
-        // Create GMRES solver
-        let mut solver = GmresSolver::new(
-            self.options.krylov_dim,
-            self.options.krylov_tol,
-            self.options.krylov_maxiter,
-        );
+        // Create closure for GMRES that applies the linear operator
+        let apply_a = |x: &T| linop.apply(x);
 
-        // Create workspace
-        let mut workspace = Workspace::new(dim);
+        // Set up GMRES options
+        let gmres_options = GmresOptions {
+            max_iter: self.options.krylov_dim,
+            rtol: self.options.krylov_tol,
+            max_restarts: (self.options.krylov_maxiter / self.options.krylov_dim).max(1),
+            verbose: false,
+        };
 
-        // Create communicator (NoComm for single-process)
-        let comm = UniverseComm::NoComm(NoComm);
+        // Solve using GMRES (works directly with TensorDynLen)
+        let result = gmres(apply_a, &rhs_local, init, &gmres_options)?;
 
-        // Solve using GMRES
-        let stats = solver.solve(
-            &linop,
-            None, // No preconditioner
-            &b,
-            &mut x,
-            PcSide::Left, // Default preconditioner side (ignored without preconditioner)
-            &comm,
-            None, // No monitors
-            Some(&mut workspace),
-        )?;
-
-        // Log convergence info if needed (using eprintln for now, could add tracing later)
-        if stats.reason == ConvergedReason::DivergedMaxIts {
+        // Log convergence info if needed
+        if !result.converged {
             eprintln!(
-                "Warning: GMRES did not converge within {} iterations (residual: {})",
-                stats.iterations, stats.final_residual
+                "Warning: GMRES did not converge (iterations: {}, residual: {:.6e})",
+                result.iterations, result.residual_norm
             );
         }
 
-        // Convert solution back to tensor
-        let dims: Vec<usize> = init
-            .indices
-            .iter()
-            .map(|idx| idx.symm.total_dim())
-            .collect();
-        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(x)));
-        let result = TensorDynLen::new(init.indices.clone(), dims, storage);
-
-        Ok(result)
+        Ok(result.solution)
     }
 }
 
-impl<I, V> LocalUpdater<I, V> for LinsolveUpdater<I, V>
+impl<T, V> LocalUpdater<T, V> for LinsolveUpdater<T, V>
 where
-    I: IndexLike + 'static,
-    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    I::Symm:
-        Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
+    T: TensorLike + 'static,
+    T::Index: IndexLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     fn update(
         &mut self,
-        mut subtree: TreeTN<I, V>,
+        mut subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
-        full_treetn: &TreeTN<I, V>,
-    ) -> Result<TreeTN<I, V>> {
+        full_treetn: &TreeTN<T, V>,
+    ) -> Result<TreeTN<T, V>> {
         // Contract tensors in the region into a single local tensor
         let init_local = self.contract_region(&subtree, &step.nodes)?;
 
@@ -653,7 +630,7 @@ where
     fn after_step(
         &mut self,
         step: &LocalUpdateStep<V>,
-        full_treetn_after: &TreeTN<I, V>,
+        full_treetn_after: &TreeTN<T, V>,
     ) -> Result<()> {
         // Use state's SiteIndexNetwork directly (implements NetworkTopology)
         let topology = full_treetn_after.site_index_network();

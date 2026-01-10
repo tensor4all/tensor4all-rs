@@ -302,7 +302,7 @@ where
         .filter_map(|idx_a| {
             site_space_b
                 .iter()
-                .find(|idx_b| idx_a.id() == idx_b.id())
+                .find(|idx_b| idx_a.same_id(idx_b))
                 .map(|idx_b| (idx_a.clone(), idx_b.clone()))
         })
         .collect();
@@ -328,7 +328,7 @@ where
         .filter_map(|idx_ab| {
             site_space_c
                 .iter()
-                .find(|idx_c| idx_ab.id() == idx_c.id())
+                .find(|idx_c| idx_ab.same_id(idx_c))
                 .map(|idx_c| (idx_ab.clone(), idx_c.clone()))
         })
         .collect();
@@ -392,7 +392,7 @@ where
         .filter_map(|idx_a| {
             site_space_b
                 .iter()
-                .find(|idx_b| idx_a.id() == idx_b.id())
+                .find(|idx_b| idx_a.same_id(idx_b))
                 .map(|idx_b| (idx_a.clone(), idx_b.clone()))
         })
         .collect();
@@ -414,7 +414,7 @@ where
         .filter_map(|idx_ab| {
             site_space_c
                 .iter()
-                .find(|idx_c| idx_ab.id() == idx_c.id())
+                .find(|idx_c| idx_ab.same_id(idx_c))
                 .map(|idx_c| (idx_ab.clone(), idx_c.clone()))
         })
         .collect();
@@ -432,7 +432,7 @@ where
                 child_env
                     .external_indices()
                     .iter()
-                    .find(|idx_e| idx_r.id() == idx_e.id())
+                    .find(|idx_e| idx_r.same_id(idx_e))
                     .map(|idx_e| (idx_r.clone(), idx_e.clone()))
             })
             .collect();
@@ -582,7 +582,7 @@ where
             .filter_map(|idx_a| {
                 site_u_b
                     .iter()
-                    .find(|idx_b| idx_a.id() == idx_b.id())
+                    .find(|idx_b| idx_a.same_id(idx_b))
                     .map(|idx_b| (idx_a.clone(), idx_b.clone()))
             })
             .collect();
@@ -598,7 +598,7 @@ where
             .filter_map(|idx_a| {
                 site_v_b
                     .iter()
-                    .find(|idx_b| idx_a.id() == idx_b.id())
+                    .find(|idx_b| idx_a.same_id(idx_b))
                     .map(|idx_b| (idx_a.clone(), idx_b.clone()))
             })
             .collect();
@@ -613,7 +613,7 @@ where
             .filter_map(|idx_u| {
                 ab_v.external_indices()
                     .iter()
-                    .find(|idx_v| idx_u.id() == idx_v.id())
+                    .find(|idx_v| idx_u.same_id(idx_v))
                     .map(|idx_v| (idx_u.clone(), idx_v.clone()))
             })
             .collect();
@@ -634,7 +634,7 @@ where
                 .filter_map(|idx| {
                     env.external_indices()
                         .iter()
-                        .find(|idx_e| idx.id() == idx_e.id())
+                        .find(|idx_e| idx.same_id(idx_e))
                         .map(|idx_e| (idx.clone(), idx_e.clone()))
                 })
                 .collect();
@@ -652,7 +652,7 @@ where
             .iter()
             .filter(|idx| {
                 // Keep site indices of u and link indices to u's other neighbors
-                site_c_u.iter().any(|s| s.id() == idx.id())
+                site_c_u.iter().any(|s| s.same_id(*idx))
                     || full_treetn
                         .site_index_network()
                         .neighbors(node_u)
@@ -661,7 +661,7 @@ where
                             full_treetn
                                 .edge_between(node_u, &neighbor)
                                 .and_then(|e| full_treetn.bond_index(e))
-                                .map(|b| b.id() == idx.id())
+                                .map(|b| b.same_id(*idx))
                                 .unwrap_or(false)
                         })
             })

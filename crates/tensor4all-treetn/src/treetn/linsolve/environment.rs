@@ -7,9 +7,8 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use tensor4all_core::index::{Index, Symmetry};
 use tensor4all_core::IndexLike;
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::TensorLike;
 
 use crate::SiteIndexNetwork;
 
@@ -33,18 +32,18 @@ pub trait NetworkTopology<V> {
 ///
 /// The actual contraction logic is implemented in ProjectedOperator/ProjectedState.
 #[derive(Debug, Clone)]
-pub struct EnvironmentCache<I, V>
+pub struct EnvironmentCache<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq,
 {
     /// Cached environment tensors: (from, to) -> tensor
-    envs: HashMap<(V, V), TensorDynLen<I::Id, I::Symm>>,
+    envs: HashMap<(V, V), T>,
 }
 
-impl<I, V> EnvironmentCache<I, V>
+impl<T, V> EnvironmentCache<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Create a new empty environment cache.
@@ -55,12 +54,12 @@ where
     }
 
     /// Get a cached environment tensor if it exists.
-    pub fn get(&self, from: &V, to: &V) -> Option<&TensorDynLen<I::Id, I::Symm>> {
+    pub fn get(&self, from: &V, to: &V) -> Option<&T> {
         self.envs.get(&(from.clone(), to.clone()))
     }
 
     /// Insert an environment tensor.
-    pub fn insert(&mut self, from: V, to: V, env: TensorDynLen<I::Id, I::Symm>) {
+    pub fn insert(&mut self, from: V, to: V, env: T) {
         self.envs.insert((from, to), env);
     }
 
@@ -89,10 +88,10 @@ where
     /// For each `t ∈ region`:
     /// 1. Remove all `env[(t, *)]` (0th generation)
     /// 2. Recursively remove caches propagating towards leaves
-    pub fn invalidate<'a, T: NetworkTopology<V>>(
+    pub fn invalidate<'a, NT: NetworkTopology<V>>(
         &mut self,
         region: impl IntoIterator<Item = &'a V>,
-        topology: &T,
+        topology: &NT,
     ) where
         V: 'a,
     {
@@ -108,7 +107,7 @@ where
     }
 
     /// Recursively invalidate caches starting from env[(from, to)] towards leaves.
-    fn invalidate_recursive<T: NetworkTopology<V>>(&mut self, from: &V, to: &V, topology: &T) {
+    fn invalidate_recursive<NT: NetworkTopology<V>>(&mut self, from: &V, to: &V, topology: &NT) {
         // Remove env[(from, to)] if it exists
         if self.envs.remove(&(from.clone(), to.clone())).is_some() {
             // Propagate to next generation: env[(to, x)] for all neighbors x of to, x ≠ from
@@ -121,9 +120,9 @@ where
     }
 }
 
-impl<I, V> Default for EnvironmentCache<I, V>
+impl<T, V> Default for EnvironmentCache<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     fn default() -> Self {
@@ -139,13 +138,11 @@ where
 ///
 /// This enables direct use of SiteIndexNetwork for cache invalidation
 /// and environment computation without needing adapter types like StaticTopology.
-impl<NodeName, Id, Symm, Tags> NetworkTopology<NodeName>
-    for SiteIndexNetwork<NodeName, Index<Id, Symm, Tags>>
+impl<NodeName, I> NetworkTopology<NodeName>
+    for SiteIndexNetwork<NodeName, I>
 where
     NodeName: Clone + Hash + Eq + Send + Sync + Debug,
-    Id: Clone + Hash + Eq + Debug + Send + Sync,
-    Symm: Clone + Symmetry + Debug + Send + Sync,
-    Tags: Clone + Debug + Send + Sync,
+    I: IndexLike,
 {
     type Neighbors<'a>
         = Box<dyn Iterator<Item = NodeName> + 'a>

@@ -374,7 +374,7 @@ pub fn union_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
 /// assert!(!hasind(&indices, &Index::new_dyn(4)));
 /// ```
 pub fn hasind<I: IndexLike>(indices: &[I], index: &I) -> bool {
-    indices.iter().any(|idx| idx.id() == index.id())
+    indices.iter().any(|idx| idx == index)
 }
 
 /// Check if a collection contains all of the specified indices (by ID).

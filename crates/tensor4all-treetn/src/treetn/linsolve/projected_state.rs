@@ -6,8 +6,7 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::{IndexLike, contract_multi, TensorDynLen};
+use tensor4all_core::{IndexLike, TensorLike};
 
 use super::environment::{EnvironmentCache, NetworkTopology};
 use crate::treetn::TreeTN;
@@ -32,25 +31,25 @@ use crate::treetn::TreeTN;
 ///
 /// This forms a "2-chain" overlap: `<b|x>` contracted over
 /// all nodes except the open region.
-pub struct ProjectedState<I, V>
+pub struct ProjectedState<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// The RHS state |b⟩
-    pub rhs: TreeTN<I, V>,
+    pub rhs: TreeTN<T, V>,
     /// Environment cache
-    pub envs: EnvironmentCache<I, V>,
+    pub envs: EnvironmentCache<T, V>,
 }
 
-impl<I, V> ProjectedState<I, V>
+impl<T, V> ProjectedState<T, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     /// Create a new ProjectedState.
-    pub fn new(rhs: TreeTN<I, V>) -> Self {
+    pub fn new(rhs: TreeTN<T, V>) -> Self {
         Self {
             rhs,
             envs: EnvironmentCache::new(),
@@ -67,12 +66,12 @@ where
     /// * `topology` - The network topology
     ///
     /// For V_in ≠ V_out case, use `local_constant_term_with_bra` instead.
-    pub fn local_constant_term<T: NetworkTopology<V>>(
+    pub fn local_constant_term<NT: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        ket_state: &TreeTN<I, V>,
-        topology: &T,
-    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
+        ket_state: &TreeTN<T, V>,
+        topology: &NT,
+    ) -> Result<T> {
         // For V_in = V_out case, use ket_state as bra_state
         self.local_constant_term_with_bra(region, ket_state, ket_state, topology)
     }
@@ -86,18 +85,18 @@ where
     /// * `ket_state` - The current solution state (in V_in)
     /// * `bra_state` - Reference state for bra in environment computation (in V_out)
     /// * `topology` - The network topology
-    pub fn local_constant_term_with_bra<T: NetworkTopology<V>>(
+    pub fn local_constant_term_with_bra<NT: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        _ket_state: &TreeTN<I, V>,
-        bra_state: &TreeTN<I, V>,
-        topology: &T,
-    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
+        _ket_state: &TreeTN<T, V>,
+        bra_state: &TreeTN<T, V>,
+        topology: &NT,
+    ) -> Result<T> {
         // Ensure environments are computed
         self.ensure_environments(region, bra_state, topology)?;
 
         // Collect all tensors to contract: local RHS tensors + environments
-        let mut all_tensors: Vec<TensorDynLen<I::Id, I::Symm>> = Vec::new();
+        let mut all_tensors: Vec<T> = Vec::new();
 
         // Collect local RHS tensors (conjugated)
         for node in region {
@@ -124,19 +123,19 @@ where
             }
         }
 
-        // Use contract_multi for optimal contraction ordering
-        contract_multi(&all_tensors)
+        // Use T::contract_einsum for optimal contraction ordering
+        T::contract_einsum(&all_tensors)
     }
 
     /// Ensure environments are computed for neighbors of the region.
     ///
     /// # Arguments
     /// * `bra_state` - Reference state in V_out for environment computation
-    fn ensure_environments<T: NetworkTopology<V>>(
+    fn ensure_environments<NT: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        bra_state: &TreeTN<I, V>,
-        topology: &T,
+        bra_state: &TreeTN<T, V>,
+        topology: &NT,
     ) -> Result<()> {
         for node in region {
             for neighbor in topology.neighbors(node) {
@@ -155,13 +154,13 @@ where
     ///
     /// # Arguments
     /// * `bra_state` - Reference state in V_out for environment computation
-    fn compute_environment<T: NetworkTopology<V>>(
+    fn compute_environment<NT: NetworkTopology<V>>(
         &mut self,
         from: &V,
         to: &V,
-        bra_state: &TreeTN<I, V>,
-        topology: &T,
-    ) -> Result<TensorDynLen<I::Id, I::Symm>> {
+        bra_state: &TreeTN<T, V>,
+        topology: &NT,
+    ) -> Result<T> {
         // First, ensure child environments are computed
         let child_neighbors: Vec<V> = topology.neighbors(from).filter(|n| n != to).collect();
 
@@ -173,7 +172,7 @@ where
         }
 
         // Collect child environments
-        let child_envs: Vec<TensorDynLen<I::Id, I::Symm>> = child_neighbors
+        let child_envs: Vec<T> = child_neighbors
             .iter()
             .filter_map(|child| self.envs.get(child, from).cloned())
             .collect();
@@ -206,7 +205,7 @@ where
             .filter_map(|idx_bra| {
                 site_space_ket
                     .iter()
-                    .find(|idx_ket| idx_bra.id == idx_ket.id)
+                    .find(|idx_ket| idx_bra.same_id(idx_ket))
                     .map(|idx_ket| (idx_bra.clone(), idx_ket.clone()))
             })
             .collect();
@@ -217,18 +216,18 @@ where
             bra_conj.tensordot(tensor_ket, &common_site_pairs)?
         };
 
-        // Contract bra*ket with child environments using contract_multi
+        // Contract bra*ket with child environments using T::contract_einsum
         if child_envs.is_empty() {
             Ok(bra_ket)
         } else {
-            let mut all_tensors = vec![bra_ket];
+            let mut all_tensors: Vec<T> = vec![bra_ket];
             all_tensors.extend(child_envs);
-            contract_multi(&all_tensors)
+            T::contract_einsum(&all_tensors)
         }
     }
 
     /// Invalidate caches affected by updates to the given region.
-    pub fn invalidate<T: NetworkTopology<V>>(&mut self, region: &[V], topology: &T) {
+    pub fn invalidate<NT: NetworkTopology<V>>(&mut self, region: &[V], topology: &NT) {
         self.envs.invalidate(region, topology);
     }
 }

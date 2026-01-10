@@ -174,9 +174,44 @@ where
         }
 
         // The root's tensor is the final result
-        tensors
+        let result = tensors
             .remove(&root)
-            .ok_or_else(|| anyhow::anyhow!("Contraction produced no result"))
+            .ok_or_else(|| anyhow::anyhow!("Contraction produced no result"))?;
+
+        // Permute result indices to match canonical site index order:
+        // node names sorted, then site indices per node in consistent order
+        let mut expected_indices: Vec<T::Index> = Vec::new();
+        let mut node_names: Vec<V> = self.node_names();
+        node_names.sort();
+        for node_name in &node_names {
+            if let Some(site_space) = self.site_space(node_name) {
+                // Use site indices in insertion order (deterministic from site_space)
+                expected_indices.extend(site_space.iter().cloned());
+            }
+        }
+
+        // Get current index order from result tensor
+        let current_indices = result.external_indices();
+
+        // Check if permutation is needed
+        if current_indices.len() != expected_indices.len() {
+            // This shouldn't happen, but return as-is if sizes don't match
+            return Ok(result);
+        }
+
+        // Check if already in correct order
+        let already_ordered = current_indices
+            .iter()
+            .zip(expected_indices.iter())
+            .all(|(c, e)| c == e);
+
+        if already_ordered {
+            return Ok(result);
+        }
+
+        // Build permutation: for each expected index, find its position in current indices
+        // Then use replaceind to reorder (permuting indices)
+        result.permuteinds(&expected_indices)
     }
 
     /// Contract two TreeTNs with the same topology using the zip-up algorithm.

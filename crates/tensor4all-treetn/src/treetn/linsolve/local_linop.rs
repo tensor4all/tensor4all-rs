@@ -1,229 +1,140 @@
-//! LocalLinOp: LinOp wrapper for projected operator.
+//! LocalLinOp: Linear operator wrapper for local GMRES solving.
 //!
-//! This module provides a wrapper that implements kryst's `LinOp` trait
-//! for our projected tensor network operator, enabling GMRES solving.
+//! This module provides a wrapper that applies the local projected operator
+//! to tensors, enabling GMRES solving via `tensor4all_core::krylov::gmres`.
 
-use std::any::Any;
 use std::hash::Hash;
 use std::sync::{Arc, RwLock};
 
-use kryst::matrix::op::LinOp;
-use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::storage::{DenseStorageF64, StorageScalar};
-use tensor4all_core::{IndexLike, Storage, TensorDynLen};
+use anyhow::Result;
+use tensor4all_core::any_scalar::AnyScalar;
+use tensor4all_core::{IndexLike, TensorLike};
 
-use super::linear_operator::LinearOperator;
 use super::projected_operator::ProjectedOperator;
 use crate::treetn::TreeTN;
 
-/// LocalLinOp: Wraps the projected operator for use with kryst GMRES.
+/// LocalLinOp: Wraps the projected operator for local GMRES solving.
 ///
-/// This implements `LinOp` to compute `y = (a₀ + a₁ * H) * x`
-/// where H is the projected operator and x, y are flattened tensor data.
-///
-/// All data is owned to satisfy kryst's `'static` requirement.
-pub struct LocalLinOp<I, V>
+/// This applies the local linear operator: `y = a₀ * x + a₁ * H * x`
+/// where H is the projected operator.
+pub struct LocalLinOp<T, V>
 where
-    I: IndexLike,
-    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
-    I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
-    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    T: TensorLike + 'static,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     /// The projected operator (shared, mutable for environment caching)
-    pub projected_operator: Arc<RwLock<ProjectedOperator<I, V>>>,
-    /// Linear operator with index mapping (optional, used when available)
-    pub linear_operator: Option<Arc<LinearOperator<I, V>>>,
+    pub projected_operator: Arc<RwLock<ProjectedOperator<T, V>>>,
     /// The region being updated
     pub region: Vec<V>,
     /// Current state for ket in environment computation (V_in space)
-    pub state: TreeTN<I, V>,
+    pub state: TreeTN<T, V>,
     /// Reference state for bra in environment computation (V_out space)
     /// If None, uses `state` (same as ket) for V_in = V_out case
-    pub bra_state: Option<TreeTN<I, V>>,
-    /// Template tensor (stores index structure for reshaping)
-    pub template: TensorDynLen<I::Id, I::Symm>,
-    /// Coefficient a₀
-    pub a0: f64,
-    /// Coefficient a₁
-    pub a1: f64,
-    /// Dimension of the local Hilbert space
-    pub dim: usize,
+    pub bra_state: Option<TreeTN<T, V>>,
+    /// Coefficient a₀ (can be real or complex)
+    pub a0: AnyScalar,
+    /// Coefficient a₁ (can be real or complex)
+    pub a1: AnyScalar,
 }
 
-impl<I, V> LocalLinOp<I, V>
+impl<T, V> LocalLinOp<T, V>
 where
-    I: IndexLike,
-    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
-    I::Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync,
-    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    T: TensorLike + 'static,
+    T::Index: IndexLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     /// Create a new LocalLinOp for V_in = V_out case.
     pub fn new(
-        projected_operator: Arc<RwLock<ProjectedOperator<I, V>>>,
+        projected_operator: Arc<RwLock<ProjectedOperator<T, V>>>,
         region: Vec<V>,
-        state: TreeTN<I, V>,
-        template: TensorDynLen<I::Id, I::Symm>,
-        a0: f64,
-        a1: f64,
+        state: TreeTN<T, V>,
+        a0: AnyScalar,
+        a1: AnyScalar,
     ) -> Self {
-        // Compute dimension from template
-        let dim: usize = template
-            .indices
-            .iter()
-            .map(|idx| idx.symm.total_dim())
-            .product();
-
         Self {
             projected_operator,
-            linear_operator: None,
             region,
             state,
             bra_state: None, // Use state as bra (V_in = V_out)
-            template,
             a0,
             a1,
-            dim,
         }
     }
 
     /// Create a new LocalLinOp for V_in ≠ V_out case with explicit bra_state.
     pub fn with_bra_state(
-        projected_operator: Arc<RwLock<ProjectedOperator<I, V>>>,
+        projected_operator: Arc<RwLock<ProjectedOperator<T, V>>>,
         region: Vec<V>,
-        state: TreeTN<I, V>,
-        bra_state: TreeTN<I, V>,
-        template: TensorDynLen<I::Id, I::Symm>,
-        a0: f64,
-        a1: f64,
+        state: TreeTN<T, V>,
+        bra_state: TreeTN<T, V>,
+        a0: AnyScalar,
+        a1: AnyScalar,
     ) -> Self {
-        // Compute dimension from template
-        let dim: usize = template
-            .indices
-            .iter()
-            .map(|idx| idx.symm.total_dim())
-            .product();
-
         Self {
             projected_operator,
-            linear_operator: None,
             region,
             state,
             bra_state: Some(bra_state),
-            template,
             a0,
             a1,
-            dim,
-        }
-    }
-
-    /// Create a new LocalLinOp with a LinearOperator for index mapping.
-    pub fn with_linear_operator(
-        projected_operator: Arc<RwLock<ProjectedOperator<I, V>>>,
-        linear_operator: Arc<LinearOperator<I, V>>,
-        region: Vec<V>,
-        state: TreeTN<I, V>,
-        bra_state: Option<TreeTN<I, V>>,
-        template: TensorDynLen<I::Id, I::Symm>,
-        a0: f64,
-        a1: f64,
-    ) -> Self {
-        // Compute dimension from template
-        let dim: usize = template
-            .indices
-            .iter()
-            .map(|idx| idx.symm.total_dim())
-            .product();
-
-        Self {
-            projected_operator,
-            linear_operator: Some(linear_operator),
-            region,
-            state,
-            bra_state,
-            template,
-            a0,
-            a1,
-            dim,
         }
     }
 
     /// Get the bra state for environment computation.
     /// Returns bra_state if set, otherwise returns state (V_in = V_out case).
-    fn get_bra_state(&self) -> &TreeTN<I, V> {
+    fn get_bra_state(&self) -> &TreeTN<T, V> {
         self.bra_state.as_ref().unwrap_or(&self.state)
     }
 
-    /// Convert flat array to tensor.
-    fn array_to_tensor(&self, x: &[f64]) -> TensorDynLen<I::Id, I::Symm> {
-        let dims: Vec<usize> = self
-            .template
-            .indices
-            .iter()
-            .map(|idx| idx.symm.total_dim())
-            .collect();
-        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(x.to_vec())));
-        TensorDynLen::new(self.template.indices.clone(), dims, storage)
-    }
-
-    /// Convert tensor to flat array.
-    fn tensor_to_array(&self, tensor: &TensorDynLen<I::Id, I::Symm>) -> Vec<f64> {
-        f64::extract_dense_view(tensor.storage.as_ref())
-            .expect("Expected DenseF64 storage")
-            .to_vec()
-    }
-}
-
-impl<I, V> LinOp for LocalLinOp<I, V>
-where
-    I: IndexLike + 'static,
-    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    I::Symm:
-        Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
-    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
-{
-    type S = f64;
-
-    fn dims(&self) -> (usize, usize) {
-        (self.dim, self.dim)
-    }
-
-    fn matvec(&self, x: &[f64], y: &mut [f64]) {
-        // Convert x to tensor
-        let x_tensor = self.array_to_tensor(x);
-
+    /// Apply the local linear operator: `y = a₀ * x + a₁ * H * x`
+    ///
+    /// This is used by `tensor4all_core::krylov::gmres` to solve the local problem.
+    pub fn apply(&self, x: &T) -> Result<T> {
         // Apply operator: H * x
-        // Use LinearOperator if available (handles index mapping correctly)
-        // Otherwise fall back to ProjectedOperator
-        let hx = if let Some(ref linear_op) = self.linear_operator {
-            // Use LinearOperator.apply_local for correct index handling
-            linear_op
-                .apply_local(&x_tensor, &self.region)
-                .expect("Failed to apply linear operator")
+        // ProjectedOperator handles environment computation and index mappings
+        let bra_state = self.get_bra_state();
+        let mut proj_op = self.projected_operator.write().unwrap();
+
+        let hx = proj_op.apply(
+            x,
+            &self.region,
+            &self.state,
+            bra_state,
+            self.state.site_index_network(),
+        )?;
+
+        // The operator H may produce output indices that differ from x's indices.
+        // To compute axpby, we need hx to have the same indices as x.
+        // Replace hx's indices with x's indices (matched by position).
+        let x_indices = x.external_indices();
+        let hx_indices = hx.external_indices();
+
+        let hx_aligned = if x_indices.len() == hx_indices.len() {
+            // Check if indices already match
+            let indices_match = x_indices
+                .iter()
+                .zip(hx_indices.iter())
+                .all(|(xi, hi)| xi == hi);
+
+            if indices_match {
+                hx
+            } else {
+                // Replace hx indices with x indices
+                hx.replaceinds(&hx_indices, &x_indices)?
+            }
         } else {
-            // Fall back to ProjectedOperator
-            // Pass both ket_state (self.state) and bra_state for environment computation
-            let bra_state = self.get_bra_state();
-            let mut proj_op = self.projected_operator.write().unwrap();
-            proj_op
-                .apply(
-                    &x_tensor,
-                    &self.region,
-                    &self.state,
-                    bra_state,
-                    self.state.site_index_network(),
-                )
-                .expect("Failed to apply projected operator")
+            // Different number of indices - this shouldn't happen for a valid operator
+            return Err(anyhow::anyhow!(
+                "Index count mismatch in local operator: x has {} indices, Hx has {}",
+                x_indices.len(),
+                hx_indices.len()
+            ));
         };
 
-        // Compute y = a₀ * x + a₁ * H * x
-        let hx_data = self.tensor_to_array(&hx);
-
-        for (i, yi) in y.iter_mut().enumerate() {
-            *yi = self.a0 * x[i] + self.a1 * hx_data[i];
-        }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        // Compute y = a₀ * x + a₁ * H * x using TensorLike::axpby
+        // y = a₀ * x + a₁ * hx_aligned
+        x.axpby(self.a0.clone(), &hx_aligned, self.a1.clone())
     }
 }

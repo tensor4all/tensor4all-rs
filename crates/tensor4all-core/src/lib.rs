@@ -27,6 +27,9 @@ pub use tensor4all_tensorbackend::any_scalar;
 pub use tensor4all_tensorbackend::storage;
 pub mod tensor_like;
 
+// Krylov subspace methods (GMRES, etc.)
+pub mod krylov;
+
 // Backwards compatibility: re-export defaults::tensordynlen as tensor
 pub use defaults::tensordynlen as tensor;
 

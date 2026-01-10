@@ -4,18 +4,13 @@
 //! (also known as MPS) with orthogonality tracking, inspired by ITensorMPS.jl.
 //!
 //! Internally, TensorTrain is implemented as a thin wrapper around
-//! `TreeTN<Id, Symm, usize>` where node names are site indices (0, 1, 2, ...).
+//! `TreeTN<TensorDynLen, usize>` where node names are site indices (0, 1, 2, ...).
 
 use std::ops::Range;
 
-// Note: NodeIndex import not needed since we use V = usize for node names
-use tensor4all_core::{common_inds, hascommoninds, sim, DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all_core::{AnyScalar, TensorAccess, TensorDynLen};
-use tensor4all_treetn::{
-    contract as treetn_contract, CanonicalizationOptions,
-    ContractionMethod as TreeTNContractionMethod, ContractionOptions as TreeTNContractionOptions,
-    TreeTN, TruncationOptions,
-};
+use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
+use tensor4all_core::{AnyScalar, TensorAccess, TensorDynLen, TensorLike};
+use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 use crate::error::{Result, TensorTrainError};
 use crate::options::{
@@ -39,26 +34,18 @@ use crate::options::{
 ///
 /// # Implementation
 ///
-/// Internally wraps `TreeTN<Id, Symm, usize>` where node names are site indices.
+/// Internally wraps `TreeTN<TensorDynLen, usize>` where node names are site indices.
 /// This allows reuse of TreeTN's canonicalization and contraction algorithms.
 #[derive(Debug, Clone)]
-pub struct TensorTrain<Id = DynId, Symm = NoSymmSpace>
-where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug + Send + Sync,
-    Symm: Clone + Symmetry + std::fmt::Debug + Send + Sync,
-{
+pub struct TensorTrain {
     /// The underlying TreeTN with linear chain topology.
     /// Node names are usize (0, 1, 2, ...) representing site indices.
-    inner: TreeTN<Id, Symm, usize>,
+    inner: TreeTN<TensorDynLen, usize>,
     /// The canonical form used (if known).
     canonical_form: Option<CanonicalForm>,
 }
 
-impl<Id, Symm> TensorTrain<Id, Symm>
-where
-    Id: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + From<DynId> + Ord + Send + Sync,
-    Symm: Clone + PartialEq + Eq + std::hash::Hash + Symmetry + std::fmt::Debug + From<NoSymmSpace> + Send + Sync,
-{
+impl TensorTrain {
     /// Create a new tensor train from a vector of tensors.
     ///
     /// The tensor train is created with no assumed orthogonality.
@@ -75,10 +62,10 @@ where
     ///
     /// Returns an error if the tensors have inconsistent bond dimensions
     /// (i.e., the link indices between adjacent tensors don't match).
-    pub fn new(tensors: Vec<TensorDynLen<Id, Symm>>) -> Result<Self> {
+    pub fn new(tensors: Vec<TensorDynLen>) -> Result<Self> {
         if tensors.is_empty() {
             // Create an empty TreeTN
-            let inner = TreeTN::<Id, Symm, usize>::new();
+            let inner = TreeTN::<TensorDynLen, usize>::new();
             return Ok(Self {
                 inner,
                 canonical_form: None,
@@ -116,7 +103,7 @@ where
         let node_names: Vec<usize> = (0..tensors.len()).collect();
 
         // Create TreeTN with from_tensors (auto-connects by shared index IDs)
-        let inner = TreeTN::<Id, Symm, usize>::from_tensors(tensors, node_names).map_err(|e| {
+        let inner = TreeTN::<TensorDynLen, usize>::from_tensors(tensors, node_names).map_err(|e| {
             TensorTrainError::InvalidStructure {
                 message: format!("Failed to create TreeTN: {}", e),
             }
@@ -139,7 +126,7 @@ where
     /// * `rlim` - Right orthogonality limit (for compatibility; only used to compute center)
     /// * `canonical_form` - The method used for canonicalization (if any)
     pub fn with_ortho(
-        tensors: Vec<TensorDynLen<Id, Symm>>,
+        tensors: Vec<TensorDynLen>,
         llim: i32,
         rlim: i32,
         canonical_form: Option<CanonicalForm>,
@@ -278,7 +265,7 @@ where
     ///
     /// Panics if `site >= len()`.
     #[inline]
-    pub fn tensor(&self, site: usize) -> &TensorDynLen<Id, Symm> {
+    pub fn tensor(&self, site: usize) -> &TensorDynLen {
         let node_idx = self.inner.node_index(&site).expect("Site out of bounds");
         self.inner.tensor(node_idx).expect("Tensor not found")
     }
@@ -286,7 +273,7 @@ where
     /// Get a reference to the tensor at the given site.
     ///
     /// Returns `Err` if `site >= len()`.
-    pub fn tensor_checked(&self, site: usize) -> Result<&TensorDynLen<Id, Symm>> {
+    pub fn tensor_checked(&self, site: usize) -> Result<&TensorDynLen> {
         if site >= self.len() {
             return Err(TensorTrainError::SiteOutOfBounds {
                 site,
@@ -314,14 +301,14 @@ where
     ///
     /// Panics if `site >= len()`.
     #[inline]
-    pub fn tensor_mut(&mut self, site: usize) -> &mut TensorDynLen<Id, Symm> {
+    pub fn tensor_mut(&mut self, site: usize) -> &mut TensorDynLen {
         let node_idx = self.inner.node_index(&site).expect("Site out of bounds");
         self.inner.tensor_mut(node_idx).expect("Tensor not found")
     }
 
     /// Get a reference to all tensors.
     #[inline]
-    pub fn tensors(&self) -> Vec<&TensorDynLen<Id, Symm>> {
+    pub fn tensors(&self) -> Vec<&TensorDynLen> {
         (0..self.len())
             .filter_map(|site| {
                 let node_idx = self.inner.node_index(&site)?;
@@ -332,7 +319,7 @@ where
 
     /// Get a mutable reference to all tensors.
     #[inline]
-    pub fn tensors_mut(&mut self) -> Vec<&mut TensorDynLen<Id, Symm>> {
+    pub fn tensors_mut(&mut self) -> Vec<&mut TensorDynLen> {
         // This is tricky - we need to collect mutable references
         // For now, return an empty vec - this method is rarely used
         // and would require unsafe code or different design
@@ -342,7 +329,7 @@ where
     /// Get the link index between sites `i` and `i+1`.
     ///
     /// Returns `None` if `i >= len() - 1` or if no common index exists.
-    pub fn linkind(&self, i: usize) -> Option<Index<Id, Symm>> {
+    pub fn linkind(&self, i: usize) -> Option<DynIndex> {
         if i >= self.len().saturating_sub(1) {
             return None;
         }
@@ -358,7 +345,7 @@ where
     /// Get all link indices.
     ///
     /// Returns a vector of length `len() - 1` containing the link indices.
-    pub fn linkinds(&self) -> Vec<Index<Id, Symm>> {
+    pub fn linkinds(&self) -> Vec<DynIndex> {
         (0..self.len().saturating_sub(1))
             .filter_map(|i| self.linkind(i))
             .collect()
@@ -369,18 +356,14 @@ where
     /// This is useful for computing inner products where two tensor trains
     /// share link indices. By simulating (replacing) the link indices in one
     /// of the tensor trains, they can be contracted over site indices only.
-    pub fn sim_linkinds(&self) -> Self
-    where
-        Id: From<DynId>,
-        Symm: Clone + PartialEq,
-    {
+    pub fn sim_linkinds(&self) -> Self {
         if self.len() <= 1 {
             return self.clone();
         }
 
         // Build replacement pairs: (old_link, new_link) for each link index
         let old_links = self.linkinds();
-        let new_links: Vec<_> = old_links.iter().map(|idx| sim(idx)).collect();
+        let new_links: Vec<_> = old_links.iter().map(|idx| idx.sim()).collect();
         let replacements: Vec<_> = old_links
             .iter()
             .cloned()
@@ -405,7 +388,7 @@ where
     ///
     /// For each site, returns a vector of indices that are not shared with
     /// adjacent tensors (i.e., the "physical" or "site" indices).
-    pub fn siteinds(&self) -> Vec<Vec<Index<Id, Symm>>> {
+    pub fn siteinds(&self) -> Vec<Vec<DynIndex>> {
         if self.is_empty() {
             return Vec::new();
         }
@@ -414,7 +397,7 @@ where
 
         for i in 0..self.len() {
             let tensor = self.tensor(i);
-            let mut site_inds: Vec<Index<Id, Symm>> = tensor.indices().to_vec();
+            let mut site_inds: Vec<DynIndex> = tensor.indices().to_vec();
 
             // Remove link to left neighbor
             if i > 0 {
@@ -478,7 +461,7 @@ where
     /// Replace the tensor at the given site.
     ///
     /// This invalidates orthogonality tracking.
-    pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen<Id, Symm>) {
+    pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen) {
         let node_idx = self.inner.node_index(&site).expect("Site out of bounds");
         let _ = self.inner.replace_tensor(node_idx, tensor);
         // Invalidate orthogonality
@@ -625,90 +608,12 @@ where
         self.norm_squared().sqrt()
     }
 
-    /// Contract two tensor trains with the same site indices.
-    ///
-    /// This contracts two tensor trains that share the same site indices,
-    /// resulting in a new tensor train. The contraction is performed using
-    /// either the zip-up or fit algorithm.
-    ///
-    /// # Arguments
-    /// * `other` - The other tensor train to contract with
-    /// * `options` - Options controlling the contraction method and truncation
-    ///
-    /// # Returns
-    /// A new tensor train representing the contraction result.
-    ///
-    /// # Example
-    /// ```ignore
-    /// use tensor4all_itensorlike::{TensorTrain, ContractOptions};
-    ///
-    /// // Contract using zipup with max rank 50
-    /// let result = tt1.contract(&tt2, &ContractOptions::zipup().with_max_rank(50))?;
-    ///
-    /// // Contract using fit with 5 sweeps
-    /// let result = tt1.contract(&tt2, &ContractOptions::fit().with_nsweeps(5))?;
-    /// ```
-    pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
-        if self.is_empty() || other.is_empty() {
-            return Err(TensorTrainError::InvalidStructure {
-                message: "Cannot contract empty tensor trains".to_string(),
-            });
-        }
-
-        if self.len() != other.len() {
-            return Err(TensorTrainError::InvalidStructure {
-                message: format!(
-                    "Tensor trains must have the same length for contraction: {} vs {}",
-                    self.len(),
-                    other.len()
-                ),
-            });
-        }
-
-        // Convert ContractOptions to TreeTN ContractionOptions
-        let treetn_method = match options.method {
-            ContractMethod::Zipup => TreeTNContractionMethod::Zipup,
-            ContractMethod::Fit => TreeTNContractionMethod::Fit,
-            ContractMethod::Naive => TreeTNContractionMethod::Naive,
-        };
-
-        let treetn_options =
-            TreeTNContractionOptions::new(treetn_method).with_nsweeps(options.nsweeps);
-
-        let treetn_options = if let Some(max_rank) = options.max_rank {
-            treetn_options.with_max_rank(max_rank)
-        } else {
-            treetn_options
-        };
-
-        let treetn_options = if let Some(rtol) = options.rtol {
-            treetn_options.with_rtol(rtol)
-        } else {
-            treetn_options
-        };
-
-        // Use the last site as the canonical center
-        let center = self.len() - 1;
-
-        // Call TreeTN contract
-        let result_inner = treetn_contract(&self.inner, &other.inner, &center, treetn_options)
-            .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("TreeTN contraction failed: {}", e),
-            })?;
-
-        Ok(Self {
-            inner: result_inner,
-            canonical_form: Some(CanonicalForm::Unitary),
-        })
-    }
+    // Note: contract method is temporarily disabled pending TreeTN contraction API refactoring.
+    // See: treetn/contraction.rs for the underlying implementation.
 }
 
 // Implement Default for TensorTrain to allow std::mem::take
-impl<Id, Symm> Default for TensorTrain<Id, Symm>
-where
-    Id: Clone + PartialEq + Eq + std::hash::Hash + std::fmt::Debug + From<DynId> + Ord + Send + Sync,
-    Symm: Clone + PartialEq + Eq + std::hash::Hash + Symmetry + std::fmt::Debug + From<NoSymmSpace> + Send + Sync,
-{
+impl Default for TensorTrain {
     fn default() -> Self {
         Self::new(vec![]).expect("Failed to create empty TensorTrain")
     }
@@ -732,8 +637,8 @@ mod tests {
     use tensor4all_core::StorageScalar;
     use tensor4all_core::{DynId, Index, NoSymmSpace};
 
-    /// Helper to create a simple tensor for testing using DynId
-    fn make_tensor(indices: Vec<Index<DynId, NoSymmSpace>>) -> TensorDynLen<DynId, NoSymmSpace> {
+    /// Helper to create a simple tensor for testing
+    fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
         let dims: Vec<usize> = indices.iter().map(|i| i.size()).collect();
         let size: usize = dims.iter().product();
         let data: Vec<f64> = (0..size).map(|i| i as f64).collect();
@@ -741,14 +646,14 @@ mod tests {
         TensorDynLen::new(indices, dims, storage)
     }
 
-    /// Helper to create an index with DynId
-    fn idx(id: u128, size: usize) -> Index<DynId, NoSymmSpace> {
+    /// Helper to create a DynIndex
+    fn idx(id: u128, size: usize) -> DynIndex {
         Index::new_with_size(DynId(id), size)
     }
 
     #[test]
     fn test_empty_tt() {
-        let tt: TensorTrain<DynId, NoSymmSpace> = TensorTrain::new(vec![]).unwrap();
+        let tt: TensorTrain = TensorTrain::new(vec![]).unwrap();
         assert!(tt.is_empty());
         assert_eq!(tt.len(), 0);
         assert_eq!(tt.llim(), -1);
