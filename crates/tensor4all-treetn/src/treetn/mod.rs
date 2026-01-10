@@ -8,7 +8,7 @@
 mod canonicalize;
 // mod contraction;
 mod decompose;
-// mod fit;
+mod fit;
 // mod linsolve;
 mod localupdate;
 // mod operator_impl;

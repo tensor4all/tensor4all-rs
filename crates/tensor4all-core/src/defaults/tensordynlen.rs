@@ -1464,4 +1464,9 @@ impl TensorLike for TensorDynLen {
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
         crate::factorize::factorize(self, left_inds, options)
     }
+
+    fn conj(&self) -> Self {
+        // Delegate to the inherent method (complex conjugate for dense tensors)
+        TensorDynLen::conj(self)
+    }
 }

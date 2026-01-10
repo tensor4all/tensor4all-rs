@@ -322,6 +322,19 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
         left_inds: &[Self::Index],
         options: &FactorizeOptions,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
+
+    /// Tensor conjugate operation.
+    ///
+    /// This is a generalized conjugate operation that depends on the tensor type:
+    /// - For dense tensors (TensorDynLen): element-wise complex conjugate
+    /// - For symmetric tensors: tensor conjugate considering symmetry sectors
+    ///
+    /// This operation is essential for computing inner products and overlaps
+    /// in tensor network algorithms like fitting.
+    ///
+    /// # Returns
+    /// A new tensor representing the tensor conjugate.
+    fn conj(&self) -> Self;
 }
 
 #[cfg(test)]
