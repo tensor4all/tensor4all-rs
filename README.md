@@ -52,6 +52,21 @@ tensor4all-rs/
 └── docs/                             # Design documents
 ```
 
+### Crate Documentation
+
+| Crate | Description |
+|-------|-------------|
+| [tensor4all-core](crates/tensor4all-core/) | Core types: Index, Tensor, Storage, SVD, QR, LU |
+| [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology |
+| [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensors.jl-like TensorTrain API |
+| [tensor4all-simpletensortrain](crates/tensor4all-simpletensortrain/) | Simple TT/MPS with multiple canonical forms |
+| [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI) algorithms |
+| [tensor4all-quanticstci](crates/tensor4all-quanticstci/) | High-level Quantics TCI interface |
+| [tensor4all-quantics-transform](crates/tensor4all-quantics-transform/) | Quantics transformation operators |
+| [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
+| [matrixci](crates/matrixci/) | Matrix Cross Interpolation |
+| [quanticsgrids](crates/quanticsgrids/) | Quantics grid structures |
+
 ## Usage Example (Rust)
 
 ### Tree Tensor Network
@@ -174,6 +189,10 @@ We acknowledge many fruitful discussions with **M. Fishman** and **E. M. Stouden
 For ITensors.jl:
 
 > M. Fishman, S. R. White, E. M. Stoudenmire, "The ITensor Software Library for Tensor Network Calculations", arXiv:2007.14822 (2020)
+
+## Documentation
+
+- [Index System Design](docs/INDEX_SYSTEM.md) — Overview of the index system, QSpace compatibility, and IndexLike/TensorLike design
 
 ## References
 

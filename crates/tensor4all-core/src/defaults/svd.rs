@@ -1,15 +1,17 @@
-use crate::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
-use crate::index_ops::sim;
+//! SVD decomposition for tensors.
+//!
+//! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
+
+use crate::defaults::DynIndex;
+use crate::index_like::IndexLike;
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
-use mdarray::DSlice;
-use mdarray_linalg::svd::SVDDecomp;
 use num_complex::{Complex64, ComplexFloat};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use tensor4all_tensorbackend::faer_traits::ComplexField;
+use tensor4all_tensorbackend::mdarray::DSlice;
+use tensor4all_tensorbackend::{svd_backend, SvdResult};
 use thiserror::Error;
-
-use crate::backend::svd_backend;
-use faer_traits::ComplexField;
 
 /// Error type for SVD operations in tensor4all-linalg.
 #[derive(Debug, Error)]
@@ -119,7 +121,7 @@ fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
     r.max(1)
 }
 
-/// Extract U, S, V from mdarray-linalg's SVDDecomp (which returns U, S, Vt).
+/// Extract U, S, V from tensorbackend's SvdResult (which returns U, S, Vt).
 ///
 /// This helper function converts the backend's SVD result to our desired format:
 /// - Extracts singular values from the diagonal view (first row)
@@ -127,7 +129,7 @@ fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
 /// - Converts Vt to V (takes first k rows and (conjugate-)transposes)
 ///
 /// # Arguments
-/// * `decomp` - SVD decomposition from mdarray-linalg
+/// * `decomp` - SVD decomposition from tensorbackend
 /// * `m` - Number of rows
 /// * `n` - Number of columns
 /// * `k` - Bond dimension (min(m, n))
@@ -137,8 +139,8 @@ fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
 /// - `u_vec` is a vector of length `m * k` containing U matrix data
 /// - `s_vec` is a vector of length `k` containing singular values (real, f64)
 /// - `v_vec` is a vector of length `n * k` containing V matrix data
-fn extract_usv_from_svd_decomp<T>(
-    decomp: SVDDecomp<T>,
+fn extract_usv_from_svd_result<T>(
+    decomp: SvdResult<T>,
     m: usize,
     n: usize,
     k: usize,
@@ -147,7 +149,7 @@ where
     T: ComplexFloat + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    let SVDDecomp { s, u, vt } = decomp;
+    let SvdResult { s, u, vt } = decomp;
 
     // Extract singular values and convert to real type.
     //
@@ -237,24 +239,15 @@ where
 /// - `left_inds` contains indices not in the tensor or duplicates
 /// - The SVD computation fails
 #[allow(private_bounds)]
-pub fn svd<Id, Symm, T>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
-) -> Result<
-    (
-        TensorDynLen<Id, Symm>,
-        TensorDynLen<Id, Symm>,
-        TensorDynLen<Id, Symm>,
-    ),
-    SvdError,
->
+pub fn svd<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
     T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    svd_with::<Id, Symm, T>(t, left_inds, &SvdOptions::default())
+    svd_with::<T>(t, left_inds, &SvdOptions::default())
 }
 
 /// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
@@ -299,21 +292,12 @@ where
 /// - The SVD computation fails
 /// - `options.rtol` is invalid (not finite or negative)
 #[allow(private_bounds)]
-pub fn svd_with<Id, Symm, T>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
+pub fn svd_with<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
     options: &SvdOptions,
-) -> Result<
-    (
-        TensorDynLen<Id, Symm>,
-        TensorDynLen<Id, Symm>,
-        TensorDynLen<Id, Symm>,
-    ),
-    SvdError,
->
+) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
     T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
@@ -324,10 +308,9 @@ where
     }
 
     // Unfold tensor into matrix (returns DTensor<T, 2>)
-    let (mut a_tensor, _, m, n, left_indices, right_indices) =
-        unfold_split::<Id, T, Symm>(t, left_inds)
-            .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
-            .map_err(SvdError::ComputationError)?;
+    let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<T>(t, left_inds)
+        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
+        .map_err(SvdError::ComputationError)?;
     let k = m.min(n);
 
     // Call SVD using selected backend
@@ -336,7 +319,7 @@ where
     let decomp = svd_backend(a_slice).map_err(SvdError::ComputationError)?;
 
     // Extract U, S, V from the decomposition (full rank k)
-    let (u_vec_full, s_vec_full, v_vec_full) = extract_usv_from_svd_decomp(decomp, m, n, k);
+    let (u_vec_full, s_vec_full, v_vec_full) = extract_usv_from_svd_result(decomp, m, n, k);
 
     // Compute retained rank based on rtol truncation
     let r = compute_retained_rank(&s_vec_full, rtol);
@@ -361,15 +344,9 @@ where
     }
 
     // Create bond index with "Link" tag (dimension r, not k)
-    let dyn_bond_index = Index::new_link(r)
+    let bond_index = DynIndex::new_bond(r)
         .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))
         .map_err(SvdError::ComputationError)?;
-    // Convert from Index<DynId, NoSymmSpace, TagSet> to Index<Id, Symm, TagSet>
-    let bond_index: Index<Id, Symm, TagSet> = Index {
-        id: dyn_bond_index.id.into(),
-        symm: dyn_bond_index.symm.into(),
-        tags: dyn_bond_index.tags,
-    };
 
     // Create U tensor: [left_inds..., bond_index]
     let mut u_indices = left_indices.clone();
@@ -377,10 +354,10 @@ where
     let u_storage = T::dense_storage(u_vec);
     let u = TensorDynLen::from_indices(u_indices, u_storage);
 
-    // Create S tensor: [bond_index, sim(bond_index)] (diagonal)
+    // Create S tensor: [bond_index, bond_index.sim()] (diagonal)
     // Singular values are always real (f64), even for complex input
     // Use sim() to create a similar index with a new ID to avoid duplicate index IDs
-    let s_indices = vec![bond_index.clone(), sim(&bond_index)];
+    let s_indices = vec![bond_index.clone(), bond_index.sim()];
     let s_storage = Arc::new(Storage::new_diag_f64(s_vec));
     let s = TensorDynLen::from_indices(s_indices, s_storage);
 
@@ -409,20 +386,9 @@ where
 ///
 /// Note: Singular values `S` are always real (f64), even for complex input tensors.
 #[inline]
-pub fn svd_c64<Id, Symm>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
-) -> Result<
-    (
-        TensorDynLen<Id, Symm>,
-        TensorDynLen<Id, Symm>,
-        TensorDynLen<Id, Symm>,
-    ),
-    SvdError,
->
-where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
-{
-    svd::<Id, Symm, Complex64>(t, left_inds)
+pub fn svd_c64(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
+    svd::<Complex64>(t, left_inds)
 }

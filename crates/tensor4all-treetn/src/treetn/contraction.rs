@@ -1,8 +1,7 @@
-//! Contraction and addition operations for TreeTN.
+//! Contraction and operations for TreeTN.
 //!
 //! This module provides methods for:
 //! - Replacing internal indices with fresh IDs (`sim_internal_inds`)
-//! - Adding two TreeTNs (`add`)
 //! - Contracting TreeTN to tensor (`contract_to_tensor`)
 //! - Zip-up contraction (`contract_zipup`)
 //! - Naive contraction (`contract_naive`)
@@ -14,20 +13,14 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::TensorDynLen;
-use tensor4all_core::{factorize, Canonical, CanonicalForm, FactorizeAlg, FactorizeOptions};
+use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
+use crate::algorithm::CanonicalForm;
 
-use super::addition::direct_sum_tensors;
-use super::decompose::{factorize_tensor_to_treetn, TreeTopology};
-use super::{common_inds, TreeTN};
-use crate::named_graph::NamedGraph;
-use crate::site_index_network::SiteIndexNetwork;
+use super::TreeTN;
 
-impl<Id, Symm, V> TreeTN<Id, Symm, V>
+impl<T, V> TreeTN<T, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Create a copy with all internal (link/bond) indices replaced by fresh IDs.
@@ -38,23 +31,7 @@ where
     /// # Returns
     /// A new TreeTN with all bond indices replaced by `sim` indices (same dimension,
     /// new unique ID).
-    ///
-    /// # Example
-    /// ```ignore
-    /// let tn1 = create_random_treetn();
-    /// let tn2 = create_random_treetn();
-    ///
-    /// // Before contraction, ensure no overlapping internal indices
-    /// let tn2_sim = tn2.sim_internal_inds();
-    /// let result = contract_zipup(&tn1, &tn2_sim, ...);
-    /// ```
-    pub fn sim_internal_inds(&self) -> Self
-    where
-        Id: Clone + std::hash::Hash + Eq + From<DynId>,
-        Symm: Clone + Symmetry,
-    {
-        use tensor4all_core::index_ops::sim;
-
+    pub fn sim_internal_inds(&self) -> Self {
         // Clone the structure
         let mut result = self.clone();
 
@@ -69,7 +46,7 @@ where
             };
 
             // Create a new sim index (same dimension, new ID)
-            let new_bond_idx = sim(&old_bond_idx);
+            let new_bond_idx = old_bond_idx.sim();
 
             // Get the endpoint nodes
             let (node_a, node_b) = match result.graph.graph().edge_endpoints(edge) {
@@ -84,187 +61,23 @@ where
 
             // Update tensor at node_a
             if let Some(tensor_a) = result.graph.graph_mut().node_weight_mut(node_a) {
-                *tensor_a = tensor_a.replaceind(&old_bond_idx, &new_bond_idx);
+                if let Ok(new_tensor) = tensor_a.replaceind(&old_bond_idx, &new_bond_idx) {
+                    *tensor_a = new_tensor;
+                }
             }
 
             // Update tensor at node_b
             if let Some(tensor_b) = result.graph.graph_mut().node_weight_mut(node_b) {
-                *tensor_b = tensor_b.replaceind(&old_bond_idx, &new_bond_idx);
+                if let Ok(new_tensor) = tensor_b.replaceind(&old_bond_idx, &new_bond_idx) {
+                    *tensor_b = new_tensor;
+                }
             }
         }
 
         result
     }
 
-    /// Add two TreeTN together using direct-sum (block) construction.
-    ///
-    /// This method constructs a new TTN whose bond indices are the **direct sums**
-    /// of the original bond indices, so that the resulting network represents the
-    /// exact sum of the two input networks.
-    ///
-    /// # Algorithm
-    ///
-    /// 1. Compute merged bond indices from both networks (using `compute_merged_bond_indices`)
-    /// 2. For each node, compute the direct sum of tensors (using `direct_sum_tensors`)
-    /// 3. Build the result TreeTN with connections using the merged bond indices
-    ///
-    /// # Arguments
-    /// * `other` - The other TreeTN to add
-    ///
-    /// # Returns
-    /// A new TreeTN representing `self + other`, or an error if the networks are incompatible.
-    ///
-    /// # Errors
-    /// Returns an error if:
-    /// - Topologies are not compatible
-    /// - Site spaces are not equal
-    /// - Storage types are not dense (only DenseF64 and DenseC64 are supported)
-    ///
-    /// # Notes
-    /// - The result is not canonicalized; `canonical_center` is cleared.
-    /// - Bond dimensions increase: new_dim = dim_A + dim_B.
-    /// - Only dense storage (DenseF64/DenseC64) is currently supported.
-    pub fn add(self, other: Self) -> Result<Self>
-    where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace>,
-        V: Ord,
-    {
-        // Validate site index network equivalence
-        if !self.share_equivalent_site_index_network(&other) {
-            return Err(anyhow::anyhow!(
-                "Cannot add TreeTN: site index networks are not equivalent"
-            ));
-        }
-
-        if self.node_count() == 0 {
-            return Ok(other);
-        }
-        if other.node_count() == 0 {
-            return Ok(self);
-        }
-
-        // Step 1: Compute merged bond indices
-        let merged_bonds = self.compute_merged_bond_indices(&other)?;
-
-        // Build node names list (sorted)
-        let node_names: Vec<V> = {
-            let mut names: Vec<V> = self
-                .graph
-                .graph()
-                .node_indices()
-                .filter_map(|idx| self.graph.node_name(idx).cloned())
-                .collect();
-            names.sort();
-            names
-        };
-
-        // Create new TreeTN (empty)
-        let mut result = Self {
-            graph: NamedGraph::new(),
-            canonical_center: HashSet::new(),
-            canonical_form: None,
-            site_index_network: SiteIndexNetwork::new(),
-            ortho_towards: HashMap::new(),
-        };
-
-        // Step 2: Process each node using direct_sum_tensors
-        for node_name in &node_names {
-            let node_idx_a = self
-                .graph
-                .node_index(node_name)
-                .ok_or_else(|| anyhow::anyhow!("Node not found in self"))?;
-            let node_idx_b = other
-                .graph
-                .node_index(node_name)
-                .ok_or_else(|| anyhow::anyhow!("Node not found in other"))?;
-
-            let tensor_a = self
-                .tensor(node_idx_a)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found in self"))?;
-            let tensor_b = other
-                .tensor(node_idx_b)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found in other"))?;
-
-            // Get site indices for this node
-            let site_indices: HashSet<Id> = self
-                .site_space(node_name)
-                .map(|s| s.iter().map(|idx| idx.id.clone()).collect())
-                .unwrap_or_default();
-
-            // Build neighbor_names maps for tensor_a and tensor_b
-            let mut neighbor_names_a: HashMap<Id, V> = HashMap::new();
-            for edge in self.edges_for_node(node_idx_a) {
-                if let Some(bond_idx) = self.bond_index(edge.0) {
-                    let neighbor_name = self
-                        .graph
-                        .node_name(edge.1)
-                        .ok_or_else(|| anyhow::anyhow!("Neighbor name not found"))?
-                        .clone();
-                    neighbor_names_a.insert(bond_idx.id.clone(), neighbor_name);
-                }
-            }
-
-            let mut neighbor_names_b: HashMap<Id, V> = HashMap::new();
-            for edge in other.edges_for_node(node_idx_b) {
-                if let Some(bond_idx) = other.bond_index(edge.0) {
-                    let neighbor_name = other
-                        .graph
-                        .node_name(edge.1)
-                        .ok_or_else(|| anyhow::anyhow!("Neighbor name not found"))?
-                        .clone();
-                    neighbor_names_b.insert(bond_idx.id.clone(), neighbor_name);
-                }
-            }
-
-            // Build bond_info_by_neighbor for this node
-            let mut bond_info_by_neighbor: HashMap<V, _> = HashMap::new();
-            for (neighbor, info) in merged_bonds.iter().filter_map(|((a, b), info)| {
-                if a == node_name {
-                    Some((b, info))
-                } else if b == node_name {
-                    Some((a, info))
-                } else {
-                    None
-                }
-            }) {
-                bond_info_by_neighbor.insert(neighbor.clone(), info);
-            }
-
-            // Compute direct sum
-            let new_tensor = direct_sum_tensors(
-                tensor_a,
-                tensor_b,
-                &site_indices,
-                &bond_info_by_neighbor,
-                &neighbor_names_a,
-                &neighbor_names_b,
-            )?;
-
-            result.add_tensor_internal(node_name.clone(), new_tensor)?;
-        }
-
-        // Step 3: Add connections using the merged bond indices
-        for ((src_name, tgt_name), info) in &merged_bonds {
-            let src_node = result
-                .graph
-                .node_index(src_name)
-                .ok_or_else(|| anyhow::anyhow!("Source node not found in result"))?;
-            let tgt_node = result
-                .graph
-                .node_index(tgt_name)
-                .ok_or_else(|| anyhow::anyhow!("Target node not found in result"))?;
-            // Use the same merged_index for both endpoints
-            result.connect_internal(src_node, &info.merged_index, tgt_node, &info.merged_index)?;
-        }
-
-        // Clear canonical_center (sum is not canonicalized)
-        result.clear_canonical_center();
-
-        Ok(result)
-    }
-
-    /// Contract the TreeTN to a single dense tensor.
+    /// Contract the TreeTN to a single tensor.
     ///
     /// This method contracts all tensors in the network into a single tensor
     /// containing all physical indices. The contraction is performed using
@@ -280,7 +93,7 @@ where
     /// - The network is empty
     /// - The graph is not a valid tree
     /// - Tensor contraction fails
-    pub fn contract_to_tensor(&self) -> Result<TensorDynLen<Id, Symm>>
+    pub fn contract_to_tensor(&self) -> Result<T>
     where
         V: Ord,
     {
@@ -323,7 +136,7 @@ where
         let edges = self.site_index_network.edges_to_canonicalize(None, root);
 
         // Initialize with original tensors
-        let mut tensors: HashMap<NodeIndex, TensorDynLen<Id, Symm>> = self
+        let mut tensors: HashMap<NodeIndex, T> = self
             .graph
             .graph()
             .node_indices()
@@ -347,7 +160,7 @@ where
                 .or_else(|| self.graph.graph().find_edge(to, from))
                 .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", from, to))?;
 
-            // In Einsum mode, both endpoints share the same bond index
+            // Both endpoints share the same bond index
             let bond_idx = self
                 .bond_index(edge)
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))?
@@ -361,9 +174,44 @@ where
         }
 
         // The root's tensor is the final result
-        tensors
+        let result = tensors
             .remove(&root)
-            .ok_or_else(|| anyhow::anyhow!("Contraction produced no result"))
+            .ok_or_else(|| anyhow::anyhow!("Contraction produced no result"))?;
+
+        // Permute result indices to match canonical site index order:
+        // node names sorted, then site indices per node in consistent order
+        let mut expected_indices: Vec<T::Index> = Vec::new();
+        let mut node_names: Vec<V> = self.node_names();
+        node_names.sort();
+        for node_name in &node_names {
+            if let Some(site_space) = self.site_space(node_name) {
+                // Use site indices in insertion order (deterministic from site_space)
+                expected_indices.extend(site_space.iter().cloned());
+            }
+        }
+
+        // Get current index order from result tensor
+        let current_indices = result.external_indices();
+
+        // Check if permutation is needed
+        if current_indices.len() != expected_indices.len() {
+            // This shouldn't happen, but return as-is if sizes don't match
+            return Ok(result);
+        }
+
+        // Check if already in correct order
+        let already_ordered = current_indices
+            .iter()
+            .zip(expected_indices.iter())
+            .all(|(c, e)| c == e);
+
+        if already_ordered {
+            return Ok(result);
+        }
+
+        // Build permutation: for each expected index, find its position in current indices
+        // Then use replaceind to reorder (permuting indices)
+        result.permuteinds(&expected_indices)
     }
 
     /// Contract two TreeTNs with the same topology using the zip-up algorithm.
@@ -389,11 +237,6 @@ where
     ///
     /// # Returns
     /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
-    ///
-    /// # Notes
-    /// - Both TreeTNs must have the same topology (checked via `same_topology`)
-    /// - Site (external) indices are contracted between corresponding nodes
-    /// - Bond (internal) indices are replaced with fresh IDs before contraction
     pub fn contract_zipup(
         &self,
         other: &Self,
@@ -402,8 +245,8 @@ where
         max_rank: Option<usize>,
     ) -> Result<Self>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: Ord,
+        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         self.contract_zipup_with(other, center, CanonicalForm::Unitary, rtol, max_rank)
     }
@@ -411,13 +254,6 @@ where
     /// Contract two TreeTNs with the same topology using the zip-up algorithm with a specified form.
     ///
     /// See [`contract_zipup`](Self::contract_zipup) for details.
-    ///
-    /// # Arguments
-    /// * `other` - The other TreeTN to contract with (must have same topology)
-    /// * `center` - The center node name towards which to contract
-    /// * `form` - The canonical form / algorithm to use for factorization
-    /// * `rtol` - Optional relative tolerance for truncation
-    /// * `max_rank` - Optional maximum bond dimension
     pub fn contract_zipup_with(
         &self,
         other: &Self,
@@ -427,8 +263,8 @@ where
         max_rank: Option<usize>,
     ) -> Result<Self>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
-        Symm: Clone + Symmetry + From<NoSymmSpace>,
+        V: Ord,
+        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         // 1. Verify topologies are compatible (same graph structure)
         if !self.same_topology(other) {
@@ -466,7 +302,7 @@ where
                 .ok_or_else(|| anyhow::anyhow!("contract_zipup: tensor not found"))?;
 
             // Contract along common indices (site indices)
-            let common = common_inds(&t1.indices, &t2.indices);
+            let common = find_common_indices(t1, t2);
             let result = if common.is_empty() {
                 // Outer product when no common site indices
                 t1.outer_product(t2)?
@@ -488,8 +324,7 @@ where
         }
 
         // 4. Initialize result tensors (start with contracted node tensors)
-        // For each node, contract the tensors from tn1 and tn2 along their common indices
-        let mut result_tensors: HashMap<V, TensorDynLen<Id, Symm>> = HashMap::new();
+        let mut result_tensors: HashMap<V, T> = HashMap::new();
 
         for node_name in tn1.node_names() {
             let node1 = tn1
@@ -507,15 +342,15 @@ where
             })?;
 
             // Contract along site indices (external indices)
-            let site_inds1: HashSet<_> = tn1
+            let site_ids: HashSet<_> = tn1
                 .site_index_network
                 .site_space(&node_name)
-                .map(|s| s.iter().map(|i| i.id.clone()).collect())
+                .map(|s| s.iter().map(|i| i.id().clone()).collect())
                 .unwrap_or_default();
 
-            let common: Vec<_> = common_inds(&t1.indices, &t2.indices)
+            let common: Vec<_> = find_common_indices(t1, t2)
                 .into_iter()
-                .filter(|idx| site_inds1.contains(&idx.id))
+                .filter(|idx| site_ids.contains(idx.id()))
                 .collect();
 
             let contracted = if common.is_empty() {
@@ -545,7 +380,6 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Child tensor {:?} not found", child_name))?;
 
             // Get the bond index between child and parent from tn1 (bond1) and tn2 (bond2)
-            // After sim_internal_inds, these are fresh indices
             let edge1 = tn1.edge_between(child_name, parent_name).ok_or_else(|| {
                 anyhow::anyhow!(
                     "Edge not found between {:?} and {:?} in tn1",
@@ -572,10 +406,9 @@ where
 
             // Factorize: left_inds = all indices except bond1 and bond2 (towards parent)
             let left_inds: Vec<_> = child_tensor
-                .indices
-                .iter()
-                .filter(|idx| idx.id != bond1.id && idx.id != bond2.id)
-                .cloned()
+                .external_indices()
+                .into_iter()
+                .filter(|idx| *idx.id() != *bond1.id() && *idx.id() != *bond2.id())
                 .collect();
 
             if left_inds.is_empty() {
@@ -591,7 +424,6 @@ where
                 )?;
                 result_tensors.insert(parent_name.clone(), contracted);
                 // Don't re-insert child - it's been absorbed
-                // The node will be omitted from the result TreeTN
                 continue;
             }
 
@@ -602,7 +434,7 @@ where
                 max_rank,
             };
 
-            let factorize_result = factorize(&child_tensor, &left_inds, &factorize_options)
+            let factorize_result = child_tensor.factorize(&left_inds, &factorize_options)
                 .map_err(|e| {
                     anyhow::anyhow!("Factorization failed at node {:?}: {}", child_name, e)
                 })?;
@@ -659,7 +491,7 @@ where
             let tensor_b = result.tensor(node_b).unwrap();
 
             // Find the common index (should be exactly one new bond index)
-            let common = common_inds(&tensor_a.indices, &tensor_b.indices);
+            let common = find_common_indices(tensor_a, tensor_b);
             if let Some(bond_idx) = common.first() {
                 result.connect_internal(node_a, bond_idx, node_b, bond_idx)?;
             }
@@ -693,11 +525,10 @@ where
     /// # Note
     /// This method is O(exp(n)) in both time and memory where n is the number of nodes.
     /// Use `contract_zipup` for efficient contraction of large networks.
-    pub fn contract_naive(&self, other: &Self) -> Result<TensorDynLen<Id, Symm>>
+    pub fn contract_naive(&self, other: &Self) -> Result<T>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId> + std::fmt::Debug,
-        Symm: Clone + Symmetry + From<NoSymmSpace>,
         V: Ord,
+        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         // 1. Verify topologies are compatible
         if !self.same_topology(other) {
@@ -719,7 +550,7 @@ where
             .map_err(|e| anyhow::anyhow!("contract_naive: failed to contract tn2: {}", e))?;
 
         // 4. Find common indices (site indices) to contract
-        let common = common_inds(&tensor1.indices, &tensor2.indices);
+        let common = find_common_indices(&tensor1, &tensor2);
 
         // 5. Contract along common indices
         if common.is_empty() {
@@ -775,13 +606,12 @@ where
         }
 
         // Get expected edges from edges_to_canonicalize_to_region
-        // These are edges (src, dst) where src is outside the center and dst is towards the center
         let expected_edges = self
             .site_index_network
             .edges_to_canonicalize_to_region(&center_indices);
 
-        // Build a set of expected (bond_id, expected_direction) pairs
-        let mut expected_directions: HashMap<Id, V> = HashMap::new();
+        // Build a set of expected (bond, expected_direction) pairs
+        let mut expected_directions: HashMap<T::Index, V> = HashMap::new();
         for (src, dst) in expected_edges.iter() {
             // Find the edge between src and dst
             let edge = self
@@ -791,10 +621,9 @@ where
                 .or_else(|| self.graph.graph().find_edge(*dst, *src))
                 .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", src, dst))?;
 
-            let bond_id = self
+            let bond = self
                 .bond_index(edge)
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))?
-                .id
                 .clone();
 
             // The expected ortho_towards direction is dst (towards center)
@@ -804,17 +633,17 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Node name not found for {:?}", dst))?
                 .clone();
 
-            expected_directions.insert(bond_id, dst_name);
+            expected_directions.insert(bond, dst_name);
         }
 
         // Verify all expected directions are present in ortho_towards
-        for (bond_id, expected_dir) in &expected_directions {
-            match self.ortho_towards.get(bond_id) {
+        for (bond, expected_dir) in &expected_directions {
+            match self.ortho_towards.get(bond) {
                 Some(actual_dir) => {
                     if actual_dir != expected_dir {
                         return Err(anyhow::anyhow!(
                             "ortho_towards for bond {:?} points to {:?} but expected {:?}",
-                            bond_id,
+                            bond,
                             actual_dir,
                             expected_dir
                         ))
@@ -824,7 +653,7 @@ where
                 None => {
                     return Err(anyhow::anyhow!(
                         "ortho_towards for bond {:?} is missing, expected to point to {:?}",
-                        bond_id,
+                        bond,
                         expected_dir
                     ))
                     .context("validate_ortho_consistency: missing ortho_towards");
@@ -834,20 +663,20 @@ where
 
         // Verify no unexpected bond ortho_towards entries
         // (site index ortho_towards are allowed even if not in expected_directions)
-        let bond_ids: HashSet<Id> = self
+        let bond_indices: HashSet<T::Index> = self
             .graph
             .graph()
             .edge_indices()
             .filter_map(|e| self.bond_index(e))
-            .map(|b| b.id.clone())
+            .cloned()
             .collect();
 
-        for (id, _) in &self.ortho_towards {
-            if bond_ids.contains(id) && !expected_directions.contains_key(id) {
+        for (idx, _) in &self.ortho_towards {
+            if bond_indices.contains(idx) && !expected_directions.contains_key(idx) {
                 // This is a bond inside the canonical_center - should not have ortho_towards
                 return Err(anyhow::anyhow!(
                     "Unexpected ortho_towards for bond {:?} (inside canonical_center)",
-                    id
+                    idx
                 ))
                 .context(
                     "validate_ortho_consistency: bonds inside center should not have ortho_towards",
@@ -860,10 +689,26 @@ where
 }
 
 // ============================================================================
+// Helper functions
+// ============================================================================
+
+/// Find common indices between two tensors (by ID).
+fn find_common_indices<T: TensorLike>(a: &T, b: &T) -> Vec<T::Index>
+where
+    <T::Index as IndexLike>::Id: Eq + std::hash::Hash,
+{
+    let a_ids: HashSet<_> = a.external_indices().iter().map(|i| i.id().clone()).collect();
+    b.external_indices()
+        .into_iter()
+        .filter(|i| a_ids.contains(i.id()))
+        .collect()
+}
+
+// ============================================================================
 // Contraction Method Dispatcher
 // ============================================================================
 
-use super::fit::{contract_fit, FitContractionOptions};
+use super::fit::FitContractionOptions;
 
 /// Contraction method for TreeTN operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -962,24 +807,15 @@ impl ContractionOptions {
 ///
 /// This is the main entry point for TreeTN contraction. It dispatches to the
 /// appropriate algorithm based on the options.
-///
-/// # Arguments
-/// * `tn_a` - First TreeTN
-/// * `tn_b` - Second TreeTN
-/// * `center` - Center node for contraction
-/// * `options` - Contraction options including method selection
-///
-/// # Returns
-/// The contracted TreeTN
-pub fn contract<Id, Symm, V>(
-    tn_a: &TreeTN<Id, Symm, V>,
-    tn_b: &TreeTN<Id, Symm, V>,
+pub fn contract<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
     center: &V,
     options: ContractionOptions,
-) -> Result<TreeTN<Id, Symm, V>>
+) -> Result<TreeTN<T, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     match options.method {
@@ -1004,7 +840,7 @@ where
             } else {
                 fit_options
             };
-            contract_fit(tn_a, tn_b, center, fit_options)
+            super::fit::contract_fit(tn_a, tn_b, center, fit_options)
         }
         ContractionMethod::Naive => {
             contract_naive_to_treetn(tn_a, tn_b, center, options.max_rank, options.rtol)
@@ -1020,43 +856,30 @@ where
 /// 3. Decomposes the result back to a TreeTN using the original topology
 ///
 /// This is O(exp(n)) in memory and is primarily useful for debugging and testing.
-///
-/// # Arguments
-/// * `tn_a` - First TreeTN
-/// * `tn_b` - Second TreeTN (must have same topology)
-/// * `center` - Center node for the output TreeTN
-/// * `max_rank` - Optional maximum bond dimension for decomposition
-/// * `rtol` - Optional relative tolerance for truncation
-///
-/// # Returns
-/// A new TreeTN representing the contracted result.
-pub fn contract_naive_to_treetn<Id, Symm, V>(
-    tn_a: &TreeTN<Id, Symm, V>,
-    tn_b: &TreeTN<Id, Symm, V>,
-    _center: &V,
+pub fn contract_naive_to_treetn<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
     _max_rank: Option<usize>,
     _rtol: Option<f64>,
-) -> Result<TreeTN<Id, Symm, V>>
+) -> Result<TreeTN<T, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     // 1. Contract to full tensor using existing contract_naive
     let contracted_tensor = tn_a.contract_naive(tn_b)?;
 
-    // 2. Build topology from tn_a's structure
-    // Get node names and their site indices
+    // 2. Build topology from tn_a's structure and decompose
+    use super::decompose::factorize_tensor_to_treetn_with;
+
+    // Build topology
     let mut nodes: HashMap<V, Vec<usize>> = HashMap::new();
     let mut idx_position = 0usize;
 
     // Collect node names in sorted order for deterministic index assignment
-    let mut node_names: Vec<_> = tn_a
-        .graph
-        .graph()
-        .node_indices()
-        .filter_map(|idx| tn_a.graph.node_name(idx).cloned())
-        .collect();
+    let mut node_names: Vec<_> = tn_a.node_names();
     node_names.sort();
 
     for node_name in &node_names {
@@ -1084,8 +907,15 @@ where
         })
         .collect();
 
-    let topology = TreeTopology::new(nodes, edges);
+    let topology = super::decompose::TreeTopology::new(nodes, edges);
 
     // 3. Decompose back to TreeTN
-    factorize_tensor_to_treetn(&contracted_tensor, &topology)
+    let mut result = factorize_tensor_to_treetn_with(&contracted_tensor, &topology, FactorizeAlg::SVD)?;
+
+    // Set canonical center
+    if result.node_index(center).is_some() {
+        result.set_canonical_center(std::iter::once(center.clone()))?;
+    }
+
+    Ok(result)
 }

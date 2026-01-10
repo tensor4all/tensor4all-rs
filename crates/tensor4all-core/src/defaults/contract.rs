@@ -2,16 +2,16 @@
 //!
 //! This module provides functions to contract multiple tensors efficiently
 //! by using omeco's GreedyMethod to find the optimal contraction order.
+//!
+//! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 
 use std::collections::HashMap;
-use std::fmt::Debug;
-use std::hash::Hash;
 
 use anyhow::Result;
 use omeco::{optimize_code, EinCode, GreedyMethod, NestedEinsum};
 
-use crate::index::Symmetry;
-use crate::tensor::TensorDynLen;
+use crate::index_like::IndexLike;
+use crate::defaults::TensorDynLen;
 
 /// Contract multiple tensors into a single tensor.
 ///
@@ -37,13 +37,7 @@ use crate::tensor::TensorDynLen;
 /// let tensors = vec![tensor_a, tensor_b, tensor_c];
 /// let result = contract_multi(&tensors)?;
 /// ```
-pub fn contract_multi<Id, Symm>(
-    tensors: &[TensorDynLen<Id, Symm>],
-) -> Result<TensorDynLen<Id, Symm>>
-where
-    Id: Clone + Hash + Eq + Debug + Send + Sync + 'static,
-    Symm: Clone + Symmetry + Send + Sync,
-{
+pub fn contract_multi(tensors: &[TensorDynLen]) -> Result<TensorDynLen> {
     match tensors.len() {
         0 => Err(anyhow::anyhow!("No tensors to contract")),
         1 => Ok(tensors[0].clone()),
@@ -54,21 +48,14 @@ where
 
 /// Contract two tensors over their common indices.
 /// If there are no common indices, performs outer product.
-fn contract_pair<Id, Symm>(
-    a: &TensorDynLen<Id, Symm>,
-    b: &TensorDynLen<Id, Symm>,
-) -> Result<TensorDynLen<Id, Symm>>
-where
-    Id: Clone + Hash + Eq + Debug,
-    Symm: Clone + Symmetry,
-{
+fn contract_pair(a: &TensorDynLen, b: &TensorDynLen) -> Result<TensorDynLen> {
     let common: Vec<_> = a
         .indices
         .iter()
         .filter_map(|idx_a| {
             b.indices
                 .iter()
-                .find(|idx_b| idx_a.id == idx_b.id)
+                .find(|idx_b| idx_a.is_contractable(idx_b))
                 .map(|idx_b| (idx_a.clone(), idx_b.clone()))
         })
         .collect();
@@ -82,31 +69,29 @@ where
 }
 
 /// Contract multiple tensors using omeco's GreedyMethod for optimal ordering.
-fn contract_multi_optimized<Id, Symm>(
-    tensors: &[TensorDynLen<Id, Symm>],
-) -> Result<TensorDynLen<Id, Symm>>
-where
-    Id: Clone + Hash + Eq + Debug + Send + Sync + 'static,
-    Symm: Clone + Symmetry + Send + Sync,
-{
-    // Build mapping from Id -> usize for omeco
-    let mut id_to_idx: HashMap<Id, usize> = HashMap::new();
+fn contract_multi_optimized(tensors: &[TensorDynLen]) -> Result<TensorDynLen> {
+    use crate::defaults::DynId;
+
+    // Build mapping from DynId -> usize for omeco
+    let mut id_to_idx: HashMap<DynId, usize> = HashMap::new();
     let mut next_idx = 0usize;
 
     for tensor in tensors {
         for idx in &tensor.indices {
-            id_to_idx.entry(idx.id.clone()).or_insert_with(|| {
-                let i = next_idx;
-                next_idx += 1;
-                i
-            });
+            id_to_idx
+                .entry(idx.id().clone())
+                .or_insert_with(|| {
+                    let i = next_idx;
+                    next_idx += 1;
+                    i
+                });
         }
     }
 
     // Build EinCode with usize labels
     let ixs: Vec<Vec<usize>> = tensors
         .iter()
-        .map(|t| t.indices.iter().map(|idx| id_to_idx[&idx.id]).collect())
+        .map(|t| t.indices.iter().map(|idx| id_to_idx[idx.id()]).collect())
         .collect();
 
     // Determine output indices (appear exactly once across all tensors)
@@ -130,7 +115,7 @@ where
     let mut sizes: HashMap<usize, usize> = HashMap::new();
     for tensor in tensors {
         for (idx, &dim) in tensor.indices.iter().zip(tensor.dims.iter()) {
-            let i = id_to_idx[&idx.id];
+            let i = id_to_idx[idx.id()];
             sizes.entry(i).or_insert(dim);
         }
     }
@@ -145,19 +130,15 @@ where
 }
 
 /// Execute a contraction tree by recursively contracting tensors.
-fn execute_contraction_tree<Id, Symm>(
-    tensors: &[TensorDynLen<Id, Symm>],
+fn execute_contraction_tree(
+    tensors: &[TensorDynLen],
     tree: &NestedEinsum<usize>,
-) -> Result<TensorDynLen<Id, Symm>>
-where
-    Id: Clone + Hash + Eq + Debug,
-    Symm: Clone + Symmetry,
-{
+) -> Result<TensorDynLen> {
     match tree {
         NestedEinsum::Leaf { tensor_index } => Ok(tensors[*tensor_index].clone()),
         NestedEinsum::Node { args, .. } => {
             // Recursively evaluate children
-            let children: Vec<TensorDynLen<Id, Symm>> = args
+            let children: Vec<TensorDynLen> = args
                 .iter()
                 .map(|arg| execute_contraction_tree(tensors, arg))
                 .collect::<Result<_>>()?;
@@ -175,16 +156,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::{DynId, Index, NoSymmSpace};
+    use crate::defaults::{DynId, DynIndex, Index};
     use crate::storage::{DenseStorageC64, Storage};
     use num_complex::Complex64;
     use std::sync::Arc;
 
-    fn make_test_tensor(shape: &[usize], ids: &[u128]) -> TensorDynLen<DynId, NoSymmSpace> {
-        let indices: Vec<Index<DynId, NoSymmSpace>> = ids
+    fn make_test_tensor(shape: &[usize], ids: &[u128]) -> TensorDynLen {
+        let indices: Vec<DynIndex> = ids
             .iter()
             .zip(shape.iter())
-            .map(|(&id, &dim)| Index::new(DynId(id), NoSymmSpace::new(dim)))
+            .map(|(&id, &dim)| Index::new(DynId(id), dim))
             .collect();
         let dims = shape.to_vec();
         let total_size: usize = shape.iter().product();
@@ -197,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_contract_multi_empty() {
-        let tensors: Vec<TensorDynLen<DynId, NoSymmSpace>> = vec![];
+        let tensors: Vec<TensorDynLen> = vec![];
         let result = contract_multi(&tensors);
         assert!(result.is_err());
     }

@@ -3,171 +3,33 @@
 //! This module provides a unified `factorize()` function that dispatches to
 //! SVD, QR, LU, or CI (Cross Interpolation) algorithms based on options.
 //!
+//! # Note
+//!
+//! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
+//! Generic tensor types are not supported.
+//!
 //! # Example
 //!
 //! ```ignore
-//! use tensor4all_core_linalg::{factorize, FactorizeOptions, FactorizeAlg, Canonical};
+//! use tensor4all_core::{factorize, FactorizeOptions, FactorizeAlg, Canonical};
 //!
 //! let result = factorize(&tensor, &left_inds, &FactorizeOptions::default())?;
 //! // result.left * result.right ≈ tensor
 //! ```
 
-use crate::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
+use crate::defaults::DynIndex;
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use num_complex::{Complex64, ComplexFloat};
-use thiserror::Error;
 
 use crate::qr::{qr_with, QrOptions};
 use crate::svd::{svd_with, SvdOptions};
-use faer_traits::ComplexField;
+use tensor4all_tensorbackend::faer_traits::ComplexField;
 
-/// Error type for factorize operations.
-#[derive(Debug, Error)]
-pub enum FactorizeError {
-    #[error("Factorization failed: {0}")]
-    ComputationError(#[from] anyhow::Error),
-    #[error("Invalid rtol value: {0}. rtol must be finite and non-negative.")]
-    InvalidRtol(f64),
-    #[error("Unsupported storage type: {0}")]
-    UnsupportedStorage(&'static str),
-    #[error("Unsupported canonical direction for this algorithm: {0}")]
-    UnsupportedCanonical(&'static str),
-    #[error("SVD error: {0}")]
-    SvdError(#[from] crate::svd::SvdError),
-    #[error("QR error: {0}")]
-    QrError(#[from] crate::qr::QrError),
-}
-
-/// Factorization algorithm.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FactorizeAlg {
-    /// Singular Value Decomposition
-    #[default]
-    SVD,
-    /// QR decomposition
-    QR,
-    /// Rank-revealing LU decomposition
-    LU,
-    /// Cross Interpolation (LU-based)
-    CI,
-}
-
-/// Canonical direction for factorization.
-///
-/// This determines which factor is "canonical" (orthogonal for SVD/QR,
-/// or unit-diagonal for LU/CI).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Canonical {
-    /// Left factor is canonical.
-    /// - SVD: L=U (orthogonal), R=S*V
-    /// - QR: L=Q (orthogonal), R=R
-    /// - LU/CI: L has unit diagonal
-    #[default]
-    Left,
-    /// Right factor is canonical.
-    /// - SVD: L=U*S, R=V (orthogonal)
-    /// - QR: Not supported (would need LQ)
-    /// - LU/CI: U has unit diagonal
-    Right,
-}
-
-/// Options for tensor factorization.
-#[derive(Debug, Clone)]
-pub struct FactorizeOptions {
-    /// Factorization algorithm to use.
-    pub alg: FactorizeAlg,
-    /// Canonical direction.
-    pub canonical: Canonical,
-    /// Relative tolerance for truncation.
-    /// If `None`, uses the algorithm's default.
-    pub rtol: Option<f64>,
-    /// Maximum rank for truncation.
-    /// If `None`, no rank limit is applied.
-    pub max_rank: Option<usize>,
-}
-
-impl Default for FactorizeOptions {
-    fn default() -> Self {
-        Self {
-            alg: FactorizeAlg::SVD,
-            canonical: Canonical::Left,
-            rtol: None,
-            max_rank: None,
-        }
-    }
-}
-
-impl FactorizeOptions {
-    /// Create options for SVD factorization.
-    pub fn svd() -> Self {
-        Self {
-            alg: FactorizeAlg::SVD,
-            ..Default::default()
-        }
-    }
-
-    /// Create options for QR factorization.
-    pub fn qr() -> Self {
-        Self {
-            alg: FactorizeAlg::QR,
-            ..Default::default()
-        }
-    }
-
-    /// Create options for LU factorization.
-    pub fn lu() -> Self {
-        Self {
-            alg: FactorizeAlg::LU,
-            ..Default::default()
-        }
-    }
-
-    /// Create options for CI factorization.
-    pub fn ci() -> Self {
-        Self {
-            alg: FactorizeAlg::CI,
-            ..Default::default()
-        }
-    }
-
-    /// Set canonical direction.
-    pub fn with_canonical(mut self, canonical: Canonical) -> Self {
-        self.canonical = canonical;
-        self
-    }
-
-    /// Set relative tolerance.
-    pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.rtol = Some(rtol);
-        self
-    }
-
-    /// Set maximum rank.
-    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.max_rank = Some(max_rank);
-        self
-    }
-}
-
-/// Result of tensor factorization.
-#[derive(Debug, Clone)]
-pub struct FactorizeResult<Id, Symm>
-where
-    Id: Clone,
-    Symm: Clone,
-{
-    /// Left factor tensor.
-    pub left: TensorDynLen<Id, Symm>,
-    /// Right factor tensor.
-    pub right: TensorDynLen<Id, Symm>,
-    /// Bond index connecting left and right factors.
-    pub bond_index: Index<Id, Symm, TagSet>,
-    /// Singular values (only for SVD).
-    pub singular_values: Option<Vec<f64>>,
-    /// Rank of the factorization.
-    pub rank: usize,
-}
+// Re-export types from tensor_like for backwards compatibility
+pub use crate::tensor_like::{
+    Canonical, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult,
+};
 
 /// Factorize a tensor into left and right factors.
 ///
@@ -195,19 +57,15 @@ where
 /// - The storage type is not supported (only DenseF64 and DenseC64)
 /// - QR is used with `Canonical::Right`
 /// - The underlying algorithm fails
-pub fn factorize<Id, Symm>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
+pub fn factorize(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<Id, Symm>, FactorizeError>
-where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
-{
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
     // Dispatch based on storage type
     match t.storage.as_ref() {
-        Storage::DenseF64(_) => factorize_impl::<Id, Symm, f64>(t, left_inds, options),
-        Storage::DenseC64(_) => factorize_impl::<Id, Symm, Complex64>(t, left_inds, options),
+        Storage::DenseF64(_) => factorize_impl::<f64>(t, left_inds, options),
+        Storage::DenseC64(_) => factorize_impl::<Complex64>(t, left_inds, options),
         Storage::DiagF64(_) | Storage::DiagC64(_) => Err(FactorizeError::UnsupportedStorage(
             "Diagonal storage not supported for factorize",
         )),
@@ -215,14 +73,12 @@ where
 }
 
 /// Internal implementation with scalar type.
-fn factorize_impl<Id, Symm, T>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
+fn factorize_impl<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<Id, Symm>, FactorizeError>
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
     T: StorageScalar
         + ComplexFloat
         + ComplexField
@@ -232,22 +88,20 @@ where
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     match options.alg {
-        FactorizeAlg::SVD => factorize_svd::<Id, Symm, T>(t, left_inds, options),
-        FactorizeAlg::QR => factorize_qr::<Id, Symm, T>(t, left_inds, options),
-        FactorizeAlg::LU => factorize_lu::<Id, Symm, T>(t, left_inds, options),
-        FactorizeAlg::CI => factorize_ci::<Id, Symm, T>(t, left_inds, options),
+        FactorizeAlg::SVD => factorize_svd::<T>(t, left_inds, options),
+        FactorizeAlg::QR => factorize_qr::<T>(t, left_inds, options),
+        FactorizeAlg::LU => factorize_lu::<T>(t, left_inds, options),
+        FactorizeAlg::CI => factorize_ci::<T>(t, left_inds, options),
     }
 }
 
 /// SVD factorization implementation.
-fn factorize_svd<Id, Symm, T>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
+fn factorize_svd<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<Id, Symm>, FactorizeError>
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
     T: StorageScalar
         + ComplexFloat
         + ComplexField
@@ -258,7 +112,7 @@ where
 {
     let svd_options = SvdOptions { rtol: options.rtol };
 
-    let (u, s, v) = svd_with::<Id, Symm, T>(t, left_inds, &svd_options)?;
+    let (u, s, v) = svd_with::<T>(t, left_inds, &svd_options)?;
 
     // Extract singular values from diagonal tensor
     let singular_values = extract_singular_values(&s);
@@ -272,21 +126,11 @@ where
     let bond_index = s.indices[0].clone();
     let sim_bond_index = s.indices[1].clone();
 
-    // Convert tagged indices to untagged for replaceind
-    let bond_idx_untagged = Index::new(bond_index.id.clone(), bond_index.symm.clone());
-    let sim_bond_idx_untagged = Index::new(sim_bond_index.id.clone(), sim_bond_index.symm.clone());
-
     match options.canonical {
         Canonical::Left => {
             // L = U, R = S * V
-            // After S * V contraction:
-            // - S has [bond_index, sim_bond_index]
-            // - V has [right_inds..., bond_index]
-            // - Result has [sim_bond_index, right_inds...]
-            // But U has [left_inds..., bond_index], so we need to replace
-            // sim_bond_index with bond_index in the result for reconstruction to work.
             let right_contracted = s.contract_einsum(&v);
-            let right = right_contracted.replaceind(&sim_bond_idx_untagged, &bond_idx_untagged);
+            let right = right_contracted.replaceind(&sim_bond_index, &bond_index);
             Ok(FactorizeResult {
                 left: u,
                 right,
@@ -297,14 +141,8 @@ where
         }
         Canonical::Right => {
             // L = U * S, R = V
-            // After U * S contraction:
-            // - U has [left_inds..., bond_index]
-            // - S has [bond_index, sim_bond_index]
-            // - Result has [left_inds..., sim_bond_index]
-            // But V has [right_inds..., bond_index], so we need to replace
-            // sim_bond_index with bond_index in the result for reconstruction to work.
             let left_contracted = u.contract_einsum(&s);
-            let left = left_contracted.replaceind(&sim_bond_idx_untagged, &bond_idx_untagged);
+            let left = left_contracted.replaceind(&sim_bond_index, &bond_index);
             Ok(FactorizeResult {
                 left,
                 right: v,
@@ -317,14 +155,12 @@ where
 }
 
 /// QR factorization implementation.
-fn factorize_qr<Id, Symm, T>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
+fn factorize_qr<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<Id, Symm>, FactorizeError>
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
     T: StorageScalar
         + ComplexFloat
         + ComplexField
@@ -341,7 +177,7 @@ where
 
     let qr_options = QrOptions { rtol: options.rtol };
 
-    let (q, r) = qr_with::<Id, Symm, T>(t, left_inds, &qr_options)?;
+    let (q, r) = qr_with::<T>(t, left_inds, &qr_options)?;
 
     // Get bond index from Q tensor (last index)
     let bond_index = q.indices.last().unwrap().clone();
@@ -358,14 +194,12 @@ where
 }
 
 /// LU factorization implementation.
-fn factorize_lu<Id, Symm, T>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
+fn factorize_lu<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<Id, Symm>, FactorizeError>
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
     T: StorageScalar
         + ComplexFloat
         + ComplexField
@@ -374,9 +208,10 @@ where
         + MatrixScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
+
     // Unfold tensor into matrix
     let (a_tensor, _, m, n, left_indices, right_indices) =
-        unfold_split::<Id, T, Symm>(t, left_inds)
+        unfold_split::<T>(t, left_inds)
             .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
 
     // Convert to Matrix type for rrlu
@@ -400,14 +235,8 @@ where
     let u_matrix = lu.right(true);
 
     // Create bond index
-    let dyn_bond_index = Index::new_link(rank)
-        .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))?;
-    // Convert from Index<DynId, NoSymmSpace, TagSet> to Index<Id, Symm, TagSet>
-    let bond_index: Index<Id, Symm, TagSet> = Index {
-        id: dyn_bond_index.id.into(),
-        symm: dyn_bond_index.symm.into(),
-        tags: dyn_bond_index.tags,
-    };
+    let bond_index = DynIndex::new_bond(rank)
+        .map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))?;
 
     // Convert L matrix back to tensor
     let l_vec = matrix_to_vec(&l_matrix);
@@ -433,14 +262,12 @@ where
 }
 
 /// CI (Cross Interpolation) factorization implementation.
-fn factorize_ci<Id, Symm, T>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
+fn factorize_ci<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<Id, Symm>, FactorizeError>
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
     T: StorageScalar
         + ComplexFloat
         + ComplexField
@@ -449,9 +276,10 @@ where
         + MatrixScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
+
     // Unfold tensor into matrix
     let (a_tensor, _, m, n, left_indices, right_indices) =
-        unfold_split::<Id, T, Symm>(t, left_inds)
+        unfold_split::<T>(t, left_inds)
             .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
 
     // Convert to Matrix type for MatrixLUCI
@@ -475,14 +303,8 @@ where
     let r_matrix = ci.right();
 
     // Create bond index
-    let dyn_bond_index = Index::new_link(rank)
-        .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))?;
-    // Convert from Index<DynId, NoSymmSpace, TagSet> to Index<Id, Symm, TagSet>
-    let bond_index: Index<Id, Symm, TagSet> = Index {
-        id: dyn_bond_index.id.into(),
-        symm: dyn_bond_index.symm.into(),
-        tags: dyn_bond_index.tags,
-    };
+    let bond_index = DynIndex::new_bond(rank)
+        .map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))?;
 
     // Convert L matrix back to tensor
     let l_vec = matrix_to_vec(&l_matrix);
@@ -508,11 +330,7 @@ where
 }
 
 /// Extract singular values from a diagonal tensor.
-fn extract_singular_values<Id, Symm>(s: &TensorDynLen<Id, Symm>) -> Vec<f64>
-where
-    Id: Clone,
-    Symm: Clone,
-{
+fn extract_singular_values(s: &TensorDynLen) -> Vec<f64> {
     match s.storage.as_ref() {
         Storage::DiagF64(diag) => diag.as_slice().to_vec(),
         Storage::DiagC64(diag) => {
@@ -532,7 +350,7 @@ where
 }
 
 /// Convert DTensor to Matrix (tensor4all-matrixci format).
-fn dtensor_to_matrix<T>(tensor: &mdarray::DTensor<T, 2>, m: usize, n: usize) -> matrixci::Matrix<T>
+fn dtensor_to_matrix<T>(tensor: &tensor4all_tensorbackend::mdarray::DTensor<T, 2>, m: usize, n: usize) -> matrixci::Matrix<T>
 where
     T: MatrixScalar + Clone,
 {

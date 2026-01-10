@@ -1,13 +1,13 @@
 [workspace]
+# Note: tensor4all-treetn, tensor4all-itensorlike, tensor4all-quantics-transform temporarily excluded
+# - these need update for concrete TensorLike
 members = [
+    "crates/tensor4all-tensorbackend",
     "crates/tensor4all-core",
-    "crates/tensor4all-itensorlike",
-    "crates/tensor4all-treetn",
     "crates/quanticsgrids",
     "crates/matrixci",
     "crates/tensor4all-simpletensortrain",
     "crates/tensor4all-tensorci",
-    "crates/tensor4all-quantics-transform",
     "crates/tensor4all-quanticstci",
     "crates/tensor4all-capi",
     "tools/api-dump",
@@ -32,9 +32,9 @@ uint = "0.10"
 libc = "0.2"
 paste = "1.0"
 mdarray = "0.7.2"
-mdarray-linalg = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main" }
-mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-faer" }
-mdarray-linalg-lapack = { git = "https://github.com/grothesque/mdarray-linalg", branch = "main", package = "mdarray-linalg-lapack" }
+mdarray-linalg = { git = "https://github.com/grothesque/mdarray-linalg", rev = "febdb0756bbe" }
+mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", rev = "febdb0756bbe", package = "mdarray-linalg-faer" }
+mdarray-linalg-lapack = { git = "https://github.com/grothesque/mdarray-linalg", rev = "febdb0756bbe", package = "mdarray-linalg-lapack" }
 faer-traits = "0.23"
 thiserror = "2.0"
 rand = "0.8"

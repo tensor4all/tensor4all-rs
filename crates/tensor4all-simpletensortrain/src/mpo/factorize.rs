@@ -5,14 +5,8 @@
 
 use super::error::{MPOError, Result};
 use mdarray::{DSlice, DTensor};
-use mdarray_linalg::svd::SVD;
 use num_complex::ComplexFloat;
-
-#[cfg(feature = "backend-faer")]
-use mdarray_linalg_faer::Faer;
-
-#[cfg(feature = "backend-lapack")]
-use mdarray_linalg_lapack::Lapack;
+use tensor4all_tensorbackend::svd_backend;
 
 /// Type alias for 2D matrix using mdarray
 pub type Matrix2<T> = DTensor<T, 2>;
@@ -159,33 +153,11 @@ where
     // Clone matrix for SVD (it may be modified)
     let mut a = matrix.clone();
 
-    // Compute SVD using the selected backend
-    let svd_result = {
-        let a_slice: &mut DSlice<T, 2> = a.as_mut();
-
-        #[cfg(feature = "backend-faer")]
-        {
-            let bd = Faer;
-            bd.svd(a_slice).map_err(|e| MPOError::FactorizationError {
-                message: format!("SVD computation failed: {:?}", e),
-            })?
-        }
-        #[cfg(all(feature = "backend-lapack", not(feature = "backend-faer")))]
-        {
-            let bd = Lapack::new();
-            bd.svd(a_slice).map_err(|e| MPOError::FactorizationError {
-                message: format!("SVD computation failed: {:?}", e),
-            })?
-        }
-        #[cfg(not(any(feature = "backend-faer", feature = "backend-lapack")))]
-        {
-            let _ = a_slice;
-            return Err(MPOError::FactorizationError {
-                message: "No backend feature enabled (need backend-faer or backend-lapack)"
-                    .to_string(),
-            });
-        }
-    };
+    // Compute SVD using tensorbackend (handles faer/lapack switching internally)
+    let a_slice: &mut DSlice<T, 2> = a.as_mut();
+    let svd_result = svd_backend(a_slice).map_err(|e| MPOError::FactorizationError {
+        message: format!("SVD computation failed: {:?}", e),
+    })?;
 
     let u = svd_result.u;
     let s = svd_result.s;

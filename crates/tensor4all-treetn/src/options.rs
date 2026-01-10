@@ -5,7 +5,7 @@
 //! - [`TruncationOptions`]: Options for truncation
 //! - [`SplitOptions`]: Options for split operations
 
-use tensor4all_core::CanonicalForm;
+use crate::algorithm::CanonicalForm;
 
 /// Options for canonicalization operations.
 ///

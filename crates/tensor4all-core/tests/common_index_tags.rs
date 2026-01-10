@@ -22,7 +22,7 @@ fn test_index_equality_by_id_only() {
     let id = idx1.id;
     let idx3 = Index {
         id,
-        symm: idx1.symm,
+        dim: idx1.dim,
         tags: TagSet::from_str("bond").unwrap(),
     };
 
@@ -57,7 +57,7 @@ fn test_index_hash_by_id_only() {
     // Create another index with same ID as idx1 but different tags
     let idx3 = Index {
         id: idx1.id,
-        symm: idx1.symm,
+        dim: idx1.dim,
         tags: TagSet::from_str("bond").unwrap(),
     };
 
@@ -80,7 +80,7 @@ fn test_index_tags_immutability() {
     let new_tags = TagSet::from_str("bond").unwrap();
     let idx2 = Index {
         id: idx.id,
-        symm: idx.symm,
+        dim: idx.dim,
         tags: new_tags,
     };
 
