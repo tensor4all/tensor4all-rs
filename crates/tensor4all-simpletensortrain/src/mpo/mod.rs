@@ -46,7 +46,7 @@ pub use contract_fit::{contract_fit, FitOptions};
 pub use contract_naive::contract_naive;
 pub use contract_zipup::contract_zipup;
 pub use contraction::{Contraction, ContractionOptions};
-pub use dispatch::contract;
+pub use dispatch::{contract, ContractionAlgorithm};
 pub use error::{MPOError, Result};
 pub use factorize::{factorize, FactorizeMethod, FactorizeOptions, FactorizeResult};
 pub use inverse_mpo::InverseMPO;

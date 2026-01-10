@@ -171,9 +171,10 @@ arr = t.to_numpy()
 
 ## Future Extensions
 
+- Optimization for block-sparse tensors
+- Automatic differentiation
 - Quantum number symmetries (Abelian: U(1), Z_n)
 - Non-Abelian symmetries (SU(2), SU(N))
-- Arrow/direction for fermionic systems
 
 ## Acknowledgments
 
@@ -188,6 +189,10 @@ We acknowledge many fruitful discussions with **M. Fishman** and **E. M. Stouden
 For ITensors.jl:
 
 > M. Fishman, S. R. White, E. M. Stoudenmire, "The ITensor Software Library for Tensor Network Calculations", arXiv:2007.14822 (2020)
+
+## Documentation
+
+- [Index System Design](docs/INDEX_SYSTEM.md) — Overview of the index system, QSpace compatibility, and IndexLike/TensorLike design
 
 ## References
 

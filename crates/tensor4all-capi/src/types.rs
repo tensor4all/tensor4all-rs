@@ -4,19 +4,18 @@
 //! details from C code.
 
 use std::ffi::c_void;
-use tensor4all_core::index::{DefaultIndex, DynId, NoSymmSpace};
-use tensor4all_core::{Storage, TensorDynLen};
+use tensor4all_core::{DynIndex, Storage, TensorDynLen};
 use tensor4all_itensorlike::TensorTrain;
 
-/// The internal index type we're wrapping
-pub(crate) type InternalIndex = DefaultIndex<DynId, NoSymmSpace>;
+/// The internal index type we're wrapping (DynIndex = Index<DynId, TagSet>)
+pub(crate) type InternalIndex = DynIndex;
 
-/// The internal tensor type we're wrapping
-pub(crate) type InternalTensor = TensorDynLen<DynId, NoSymmSpace>;
+/// The internal tensor type we're wrapping (TensorDynLen is a concrete type, not generic)
+pub(crate) type InternalTensor = TensorDynLen;
 
 /// Opaque index type for C API
 ///
-/// Wraps `DefaultIndex<DynId, NoSymmSpace>` which corresponds to ITensors.jl's `Index{Int}`.
+/// Wraps `DynIndex` (= `Index<DynId, TagSet>`) which corresponds to ITensors.jl's `Index{Int}`.
 ///
 /// The internal structure is hidden using a void pointer.
 #[repr(C)]
@@ -94,7 +93,7 @@ impl t4a_storage_kind {
 
 /// Opaque tensor type for C API
 ///
-/// Wraps `TensorDynLen<DynId, NoSymmSpace>` which corresponds to ITensors.jl's `ITensor`.
+/// Wraps `TensorDynLen` which corresponds to ITensors.jl's `ITensor`.
 ///
 /// The internal structure is hidden using a void pointer.
 #[repr(C)]
@@ -147,12 +146,12 @@ unsafe impl Sync for t4a_tensor {}
 // TensorTrain type
 // ============================================================================
 
-/// The internal tensor train type we're wrapping
-pub(crate) type InternalTensorTrain = TensorTrain<DynId, NoSymmSpace>;
+/// The internal tensor train type we're wrapping (TensorTrain is a concrete type, not generic)
+pub(crate) type InternalTensorTrain = TensorTrain;
 
 /// Opaque tensor train type for C API
 ///
-/// Wraps `TensorTrain<DynId, NoSymmSpace>` which corresponds to ITensorMPS.jl's `MPS`.
+/// Wraps `TensorTrain` which corresponds to ITensorMPS.jl's `MPS`.
 ///
 /// The internal structure is hidden using a void pointer.
 #[repr(C)]
@@ -242,7 +241,7 @@ impl From<t4a_canonical_form> for tensor4all_itensorlike::CanonicalForm {
 ///
 /// Used for matrix decomposition in compression and truncation operations.
 ///
-/// Corresponds to `FactorizeAlgorithm` in Rust.
+/// Corresponds to `FactorizeAlg` in Rust.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum t4a_factorize_algorithm {
@@ -252,6 +251,8 @@ pub enum t4a_factorize_algorithm {
     LU = 1,
     /// Cross Interpolation / Skeleton decomposition
     CI = 2,
+    /// QR decomposition
+    QR = 3,
 }
 
 impl Default for t4a_factorize_algorithm {
@@ -260,22 +261,24 @@ impl Default for t4a_factorize_algorithm {
     }
 }
 
-impl From<tensor4all_core::FactorizeAlgorithm> for t4a_factorize_algorithm {
-    fn from(alg: tensor4all_core::FactorizeAlgorithm) -> Self {
+impl From<tensor4all_core::FactorizeAlg> for t4a_factorize_algorithm {
+    fn from(alg: tensor4all_core::FactorizeAlg) -> Self {
         match alg {
-            tensor4all_core::FactorizeAlgorithm::SVD => Self::SVD,
-            tensor4all_core::FactorizeAlgorithm::LU => Self::LU,
-            tensor4all_core::FactorizeAlgorithm::CI => Self::CI,
+            tensor4all_core::FactorizeAlg::SVD => Self::SVD,
+            tensor4all_core::FactorizeAlg::LU => Self::LU,
+            tensor4all_core::FactorizeAlg::CI => Self::CI,
+            tensor4all_core::FactorizeAlg::QR => Self::QR,
         }
     }
 }
 
-impl From<t4a_factorize_algorithm> for tensor4all_core::FactorizeAlgorithm {
+impl From<t4a_factorize_algorithm> for tensor4all_core::FactorizeAlg {
     fn from(alg: t4a_factorize_algorithm) -> Self {
         match alg {
             t4a_factorize_algorithm::SVD => Self::SVD,
             t4a_factorize_algorithm::LU => Self::LU,
             t4a_factorize_algorithm::CI => Self::CI,
+            t4a_factorize_algorithm::QR => Self::QR,
         }
     }
 }
@@ -284,7 +287,7 @@ impl From<t4a_factorize_algorithm> for tensor4all_core::FactorizeAlgorithm {
 ///
 /// Used for tensor train contraction (TT-TT or MPO-MPO).
 ///
-/// Corresponds to `ContractionAlgorithm` in Rust.
+/// This is a standalone C API type (not mapped to tensor4all-core type).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum t4a_contraction_algorithm {
@@ -302,31 +305,11 @@ impl Default for t4a_contraction_algorithm {
     }
 }
 
-impl From<tensor4all_core::ContractionAlgorithm> for t4a_contraction_algorithm {
-    fn from(alg: tensor4all_core::ContractionAlgorithm) -> Self {
-        match alg {
-            tensor4all_core::ContractionAlgorithm::Naive => Self::Naive,
-            tensor4all_core::ContractionAlgorithm::ZipUp => Self::ZipUp,
-            tensor4all_core::ContractionAlgorithm::Fit => Self::Fit,
-        }
-    }
-}
-
-impl From<t4a_contraction_algorithm> for tensor4all_core::ContractionAlgorithm {
-    fn from(alg: t4a_contraction_algorithm) -> Self {
-        match alg {
-            t4a_contraction_algorithm::Naive => Self::Naive,
-            t4a_contraction_algorithm::ZipUp => Self::ZipUp,
-            t4a_contraction_algorithm::Fit => Self::Fit,
-        }
-    }
-}
-
 /// Compression algorithm for C API
 ///
 /// Used for tensor train compression.
 ///
-/// Corresponds to `CompressionAlgorithm` in Rust.
+/// This is a standalone C API type (not mapped to tensor4all-core type).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum t4a_compression_algorithm {
@@ -343,28 +326,6 @@ pub enum t4a_compression_algorithm {
 impl Default for t4a_compression_algorithm {
     fn default() -> Self {
         Self::SVD
-    }
-}
-
-impl From<tensor4all_core::CompressionAlgorithm> for t4a_compression_algorithm {
-    fn from(alg: tensor4all_core::CompressionAlgorithm) -> Self {
-        match alg {
-            tensor4all_core::CompressionAlgorithm::SVD => Self::SVD,
-            tensor4all_core::CompressionAlgorithm::LU => Self::LU,
-            tensor4all_core::CompressionAlgorithm::CI => Self::CI,
-            tensor4all_core::CompressionAlgorithm::Variational => Self::Variational,
-        }
-    }
-}
-
-impl From<t4a_compression_algorithm> for tensor4all_core::CompressionAlgorithm {
-    fn from(alg: t4a_compression_algorithm) -> Self {
-        match alg {
-            t4a_compression_algorithm::SVD => Self::SVD,
-            t4a_compression_algorithm::LU => Self::LU,
-            t4a_compression_algorithm::CI => Self::CI,
-            t4a_compression_algorithm::Variational => Self::Variational,
-        }
     }
 }
 

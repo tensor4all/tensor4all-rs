@@ -8,9 +8,7 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::TensorDynLen;
-use tensor4all_core::{factorize, Canonical, FactorizeAlg, FactorizeOptions};
+use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
 
 use super::TreeTN;
 
@@ -90,13 +88,13 @@ impl<V: Clone + Hash + Eq> TreeTopology<V> {
 /// - The topology is invalid
 /// - Physical index positions don't match the tensor
 /// - Factorization fails
-pub fn factorize_tensor_to_treetn<Id, Symm, V>(
-    tensor: &TensorDynLen<Id, Symm>,
+pub fn factorize_tensor_to_treetn<T, V>(
+    tensor: &T,
     topology: &TreeTopology<V>,
-) -> Result<TreeTN<Id, Symm, V>>
+) -> Result<TreeTN<T, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
     factorize_tensor_to_treetn_with(tensor, topology, FactorizeAlg::QR)
@@ -126,22 +124,24 @@ where
 /// - The topology is invalid
 /// - Physical index positions don't match the tensor
 /// - Factorization fails
-pub fn factorize_tensor_to_treetn_with<Id, Symm, V>(
-    tensor: &TensorDynLen<Id, Symm>,
+pub fn factorize_tensor_to_treetn_with<T, V>(
+    tensor: &T,
     topology: &TreeTopology<V>,
     alg: FactorizeAlg,
-) -> Result<TreeTN<Id, Symm, V>>
+) -> Result<TreeTN<T, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId> + Ord + std::fmt::Debug,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
     topology.validate()?;
 
+    let tensor_indices = tensor.external_indices();
+
     if topology.nodes.len() == 1 {
         // Single node - just wrap the tensor
         let node_name = topology.nodes.keys().next().unwrap().clone();
-        let mut tn = TreeTN::<Id, Symm, V>::new();
+        let mut tn = TreeTN::<T, V>::new();
         tn.add_tensor(node_name, tensor.clone())?;
         return Ok(tn);
     }
@@ -149,11 +149,11 @@ where
     // Validate that all index positions are valid
     for (_, positions) in &topology.nodes {
         for &pos in positions {
-            if pos >= tensor.indices.len() {
+            if pos >= tensor_indices.len() {
                 return Err(anyhow::anyhow!(
                     "Index position {} out of bounds (tensor has {} indices)",
                     pos,
-                    tensor.indices.len()
+                    tensor_indices.len()
                 ));
             }
         }
@@ -210,10 +210,10 @@ where
     let mut current_tensor = tensor.clone();
 
     // Store the resulting node tensors
-    let mut node_tensors: HashMap<V, TensorDynLen<Id, Symm>> = HashMap::new();
+    let mut node_tensors: HashMap<V, T> = HashMap::new();
 
     // Store bond indices between nodes: (node_a, node_b) -> (index_on_a, index_on_b)
-    let mut _bond_indices: HashMap<(V, V), _> = HashMap::new();
+    let mut _bond_indices: HashMap<(V, V), (T::Index, T::Index)> = HashMap::new();
 
     // Set up factorization options
     let factorize_options = FactorizeOptions {
@@ -232,21 +232,23 @@ where
         let node_positions = topology.nodes.get(node).unwrap();
 
         // Find physical indices for this node in current_tensor
+        let current_indices = current_tensor.external_indices();
         let left_inds: Vec<_> = node_positions
             .iter()
-            .filter_map(|&pos| current_tensor.indices.get(pos).cloned())
+            .filter_map(|&pos| current_indices.get(pos).cloned())
             .collect();
 
-        if left_inds.is_empty() && current_tensor.indices.len() > 1 {
+        if left_inds.is_empty() && current_indices.len() > 1 {
             // No physical indices to separate - use first index
             // This happens when indices have already been separated
             continue;
         }
 
-        // Perform factorization using tensor-level factorize
+        // Perform factorization using TensorLike::factorize
         // left will have the node's physical indices + bond index
         // right will have bond index + remaining indices
-        let factorize_result = factorize(&current_tensor, &left_inds, &factorize_options)
+        let factorize_result = current_tensor
+            .factorize(&left_inds, &factorize_options)
             .map_err(|e| anyhow::anyhow!("Factorization failed: {:?}", e))?;
 
         let left = factorize_result.left;
@@ -284,7 +286,7 @@ where
     // Build the TreeTN using from_tensors (auto-connection by matching index IDs)
     // Since factorize() returns shared bond_index, tensors already have matching index IDs
     let node_names: Vec<V> = topology.nodes.keys().cloned().collect();
-    let tensors: Vec<TensorDynLen<Id, Symm>> = node_names
+    let tensors: Vec<T> = node_names
         .iter()
         .map(|name| node_tensors.get(name).cloned().unwrap())
         .collect();

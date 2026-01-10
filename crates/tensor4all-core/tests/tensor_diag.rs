@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use std::sync::Arc;
-use tensor4all_core::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::{
     diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor, AnyScalar, Storage, TensorDynLen,
 };
@@ -123,7 +123,7 @@ fn test_diag_tensor_contract_diag_dense() {
     let dims_b = vec![2, 2];
     use tensor4all_core::storage::DenseStorageF64;
     let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 4]));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j: result should be DenseTensor[i, k]
     let result = tensor_a.contract_einsum(&tensor_b);

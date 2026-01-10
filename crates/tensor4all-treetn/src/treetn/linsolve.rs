@@ -31,9 +31,9 @@ mod projected_state;
 mod updater;
 
 pub use environment::{EnvironmentCache, NetworkTopology};
-pub use linear_operator::{IndexMapping, LinearOperator};
+pub use linear_operator::LinearOperator;
 pub use options::LinsolveOptions;
-pub use projected_operator::ProjectedOperator;
+pub use projected_operator::{IndexMapping, ProjectedOperator};
 pub use projected_state::ProjectedState;
 pub use updater::{LinsolveUpdater, LinsolveVerifyReport, NodeVerifyDetail};
 
@@ -41,7 +41,7 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
+use tensor4all_core::TensorLike;
 
 use super::localupdate::{apply_local_update_sweep, LocalUpdateSweepPlan};
 use super::TreeTN;
@@ -49,14 +49,13 @@ use crate::CanonicalizationOptions;
 
 /// Result of linsolve operation.
 #[derive(Debug, Clone)]
-pub struct LinsolveResult<Id, Symm, V>
+pub struct LinsolveResult<T, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// The solution TreeTN
-    pub solution: TreeTN<Id, Symm, V>,
+    pub solution: TreeTN<T, V>,
     /// Number of sweeps performed
     pub sweeps: usize,
     /// Final residual norm (if computed)
@@ -70,14 +69,14 @@ where
 /// Checks:
 /// 1. Operator can act on init (same topology)
 /// 2. Result of operator action has compatible site dimensions with rhs
-fn validate_linsolve_inputs<Id, Symm, V>(
-    operator: &TreeTN<Id, Symm, V>,
-    rhs: &TreeTN<Id, Symm, V>,
-    init: &TreeTN<Id, Symm, V>,
+fn validate_linsolve_inputs<T, V>(
+    operator: &TreeTN<T, V>,
+    rhs: &TreeTN<T, V>,
+    init: &TreeTN<T, V>,
 ) -> Result<()>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug,
-    Symm: Clone + Symmetry + PartialEq + std::fmt::Debug,
+    T: TensorLike,
+    <T::Index as tensor4all_core::IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     let init_network = init.site_index_network();
@@ -118,17 +117,16 @@ where
 /// ```ignore
 /// let solution = linsolve(&h_mpo, &b_mps, x0_mps, "center", LinsolveOptions::default())?;
 /// ```
-pub fn linsolve<Id, Symm, V>(
-    operator: &TreeTN<Id, Symm, V>,
-    rhs: &TreeTN<Id, Symm, V>,
-    init: TreeTN<Id, Symm, V>,
+pub fn linsolve<T, V>(
+    operator: &TreeTN<T, V>,
+    rhs: &TreeTN<T, V>,
+    init: TreeTN<T, V>,
     center: &V,
     options: LinsolveOptions,
-) -> Result<LinsolveResult<Id, Symm, V>>
+) -> Result<LinsolveResult<T, V>>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync + 'static,
-    Symm:
-        Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug + Send + Sync + 'static,
+    T: TensorLike + 'static,
+    <T::Index as tensor4all_core::IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     // Validate inputs before proceeding
@@ -144,28 +142,20 @@ where
     let plan = LocalUpdateSweepPlan::from_treetn(&x, center, 2)
         .ok_or_else(|| anyhow::anyhow!("Failed to create sweep plan"))?;
 
-    let converged = false;
     let mut final_sweeps = 0;
 
     // Perform sweeps
     for sweep in 0..options.nsweeps {
         final_sweeps = sweep + 1;
-
-        // TODO: Compute residual for convergence check
-        // For now, just run all sweeps
-
         apply_local_update_sweep(&mut x, &plan, &mut updater)?;
-
-        // Early termination check would go here
-        if let Some(_tol) = options.convergence_tol {
-            // TODO: Compute ||Hx - b|| / ||b|| and check convergence
-        }
     }
 
+    // Note: Residual computation (||Hx - b|| / ||b||) and convergence checking
+    // are not yet implemented. Currently, all requested sweeps are performed.
     Ok(LinsolveResult {
         solution: x,
         sweeps: final_sweeps,
         residual: None,
-        converged,
+        converged: false,
     })
 }

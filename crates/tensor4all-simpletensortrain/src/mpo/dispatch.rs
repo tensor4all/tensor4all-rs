@@ -3,7 +3,17 @@
 //! Provides a unified `contract` function that dispatches to the appropriate
 //! algorithm based on [`ContractionAlgorithm`].
 
-use tensor4all_core::algorithm::ContractionAlgorithm;
+/// Algorithm for MPO contraction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContractionAlgorithm {
+    /// Naive contraction (exact but memory-intensive)
+    #[default]
+    Naive,
+    /// Zip-up contraction with on-the-fly compression
+    ZipUp,
+    /// Variational fitting algorithm
+    Fit,
+}
 
 use super::contract_fit::{contract_fit, FitOptions};
 use super::contract_naive::contract_naive;
@@ -29,8 +39,7 @@ use super::mpo::MPO;
 /// # Example
 ///
 /// ```ignore
-/// use tensor4all_mpocontraction::{contract, MPO, ContractionOptions};
-/// use tensor4all_core::algorithm::ContractionAlgorithm;
+/// use tensor4all_simpletensortrain::mpo::{contract, MPO, ContractionOptions, ContractionAlgorithm};
 ///
 /// let mpo_a = MPO::identity(&[2, 2])?;
 /// let mpo_b = MPO::identity(&[2, 2])?;

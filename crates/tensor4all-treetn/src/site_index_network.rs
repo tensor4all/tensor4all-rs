@@ -2,7 +2,7 @@
 //!
 //! Provides a structure combining:
 //! - **NodeNameNetwork**: Graph topology (node connections)
-//! - **Site space map**: Physical indices at each node (`HashMap<NodeName, HashSet<Index>>`)
+//! - **Site space map**: Physical indices at each node (`HashMap<NodeName, HashSet<I>>`)
 //!
 //! This design separates the index structure from tensor data,
 //! enabling topology and site space comparison independent of tensor values.
@@ -13,8 +13,7 @@ use petgraph::Undirected;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
-use tensor4all_core::index::{Index, NoSymmSpace, Symmetry};
-use tensor4all_core::DefaultTagSet;
+use tensor4all_core::IndexLike;
 
 // Re-export CanonicalizeEdges for convenience
 pub use crate::node_name_network::CanonicalizeEdges as CanonicalizeEdgesType;
@@ -32,29 +31,23 @@ pub use crate::node_name_network::CanonicalizeEdges as CanonicalizeEdgesType;
 ///
 /// # Type Parameters
 /// - `NodeName`: Node name type (must be Clone, Hash, Eq, Send, Sync, Debug)
-/// - `Id`: Index ID type
-/// - `Symm`: Symmetry type
-/// - `Tags`: Tag type (default: DefaultTagSet)
+/// - `I`: Index type (must implement `IndexLike`)
 #[derive(Debug, Clone)]
-pub struct SiteIndexNetwork<NodeName, Id, Symm = NoSymmSpace, Tags = DefaultTagSet>
+pub struct SiteIndexNetwork<NodeName, I>
 where
     NodeName: Clone + Hash + Eq + Send + Sync + Debug,
-    Id: Clone + Hash + Eq,
-    Symm: Clone + Symmetry,
-    Tags: Clone,
+    I: IndexLike,
 {
     /// Graph topology (node names and connections only).
     topology: NodeNameNetwork<NodeName>,
     /// Site space (physical indices) for each node.
-    site_spaces: HashMap<NodeName, HashSet<Index<Id, Symm, Tags>>>,
+    site_spaces: HashMap<NodeName, HashSet<I>>,
 }
 
-impl<NodeName, Id, Symm, Tags> SiteIndexNetwork<NodeName, Id, Symm, Tags>
+impl<NodeName, I> SiteIndexNetwork<NodeName, I>
 where
     NodeName: Clone + Hash + Eq + Send + Sync + Debug,
-    Id: Clone + Hash + Eq,
-    Symm: Clone + Symmetry,
-    Tags: Clone,
+    I: IndexLike,
 {
     /// Create a new empty SiteIndexNetwork.
     pub fn new() -> Self {
@@ -82,7 +75,7 @@ where
     pub fn add_node(
         &mut self,
         node_name: NodeName,
-        site_space: impl Into<HashSet<Index<Id, Symm, Tags>>>,
+        site_space: impl Into<HashSet<I>>,
     ) -> Result<NodeIndex, String> {
         let node_idx = self.topology.add_node(node_name.clone())?;
         self.site_spaces.insert(node_name, site_space.into());
@@ -95,20 +88,17 @@ where
     }
 
     /// Get the site space (physical indices) for a node.
-    pub fn site_space(&self, node_name: &NodeName) -> Option<&HashSet<Index<Id, Symm, Tags>>> {
+    pub fn site_space(&self, node_name: &NodeName) -> Option<&HashSet<I>> {
         self.site_spaces.get(node_name)
     }
 
     /// Get a mutable reference to the site space for a node.
-    pub fn site_space_mut(
-        &mut self,
-        node_name: &NodeName,
-    ) -> Option<&mut HashSet<Index<Id, Symm, Tags>>> {
+    pub fn site_space_mut(&mut self, node_name: &NodeName) -> Option<&mut HashSet<I>> {
         self.site_spaces.get_mut(node_name)
     }
 
     /// Get the site space by NodeIndex.
-    pub fn site_space_by_index(&self, node: NodeIndex) -> Option<&HashSet<Index<Id, Symm, Tags>>> {
+    pub fn site_space_by_index(&self, node: NodeIndex) -> Option<&HashSet<I>> {
         let name = self.topology.node_name(node)?;
         self.site_spaces.get(name)
     }
@@ -357,14 +347,10 @@ where
                     }
 
                     // Get dimensions and sort for comparison
-                    let mut self_dims: Vec<_> = self_indices
-                        .iter()
-                        .map(|idx| idx.symm.total_dim())
-                        .collect();
-                    let mut other_dims: Vec<_> = other_indices
-                        .iter()
-                        .map(|idx| idx.symm.total_dim())
-                        .collect();
+                    // Use IndexLike::dim() to get the dimension
+                    let mut self_dims: Vec<_> = self_indices.iter().map(|idx| idx.dim()).collect();
+                    let mut other_dims: Vec<_> =
+                        other_indices.iter().map(|idx| idx.dim()).collect();
                     self_dims.sort();
                     other_dims.sort();
 
@@ -381,30 +367,41 @@ where
     }
 }
 
-impl<NodeName, Id, Symm, Tags> Default for SiteIndexNetwork<NodeName, Id, Symm, Tags>
+impl<NodeName, I> Default for SiteIndexNetwork<NodeName, I>
 where
     NodeName: Clone + Hash + Eq + Send + Sync + Debug,
-    Id: Clone + Hash + Eq,
-    Symm: Clone + Symmetry,
-    Tags: Clone,
+    I: IndexLike,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
+// ============================================================================
+// Type alias for backwards compatibility
+// ============================================================================
+
+use tensor4all_core::index::{DynId, Index};
+use tensor4all_core::DefaultTagSet;
+
+/// Type alias for the default SiteIndexNetwork using DynId indices.
+///
+/// This preserves backwards compatibility with existing code that uses
+/// `SiteIndexNetwork<NodeName, Id, Symm, Tags>`.
+pub type DefaultSiteIndexNetwork<NodeName> =
+    SiteIndexNetwork<NodeName, Index<DynId, DefaultTagSet>>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor4all_core::index::Index;
+    use tensor4all_core::DynIndex;
 
     #[test]
     fn test_site_index_network_basic() {
-        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
-            SiteIndexNetwork::new();
+        let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
 
-        let site1: HashSet<_> = [Index::new(1u128, NoSymmSpace::new(2))].into();
-        let site2: HashSet<_> = [Index::new(2u128, NoSymmSpace::new(3))].into();
+        let site1: HashSet<_> = [DynIndex::new_dyn(2)].into();
+        let site2: HashSet<_> = [DynIndex::new_dyn(3)].into();
         net.add_node("A".to_string(), site1).unwrap();
         net.add_node("B".to_string(), site2).unwrap();
 
@@ -417,10 +414,9 @@ mod tests {
 
     #[test]
     fn test_post_order_dfs_chain() {
-        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
-            SiteIndexNetwork::new();
+        let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
 
-        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        let empty: HashSet<DynIndex> = HashSet::new();
         net.add_node("A".to_string(), empty.clone()).unwrap();
         net.add_node("B".to_string(), empty.clone()).unwrap();
         net.add_node("C".to_string(), empty.clone()).unwrap();
@@ -436,10 +432,9 @@ mod tests {
 
     #[test]
     fn test_path_between_chain() {
-        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
-            SiteIndexNetwork::new();
+        let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
 
-        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        let empty: HashSet<DynIndex> = HashSet::new();
         let a = net.add_node("A".to_string(), empty.clone()).unwrap();
         let b = net.add_node("B".to_string(), empty.clone()).unwrap();
         let c = net.add_node("C".to_string(), empty.clone()).unwrap();
@@ -454,10 +449,9 @@ mod tests {
 
     #[test]
     fn test_edges_to_canonicalize_full() {
-        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
-            SiteIndexNetwork::new();
+        let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
 
-        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        let empty: HashSet<DynIndex> = HashSet::new();
         let a = net.add_node("A".to_string(), empty.clone()).unwrap();
         let b = net.add_node("B".to_string(), empty.clone()).unwrap();
         let c = net.add_node("C".to_string(), empty.clone()).unwrap();
@@ -474,10 +468,10 @@ mod tests {
 
     #[test]
     fn test_is_connected_subset() {
-        let mut net: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+        let mut net: SiteIndexNetwork<String, DynIndex> =
             SiteIndexNetwork::new();
 
-        let empty: HashSet<Index<u128, NoSymmSpace, DefaultTagSet>> = HashSet::new();
+        let empty: HashSet<DynIndex> = HashSet::new();
         let a = net.add_node("A".to_string(), empty.clone()).unwrap();
         let b = net.add_node("B".to_string(), empty.clone()).unwrap();
         let c = net.add_node("C".to_string(), empty.clone()).unwrap();
@@ -494,14 +488,14 @@ mod tests {
 
     #[test]
     fn test_share_equivalent_site_index_network() {
-        let mut net1: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+        let mut net1: SiteIndexNetwork<String, DynIndex> =
             SiteIndexNetwork::new();
-        let site1: HashSet<_> = [Index::new(1u128, NoSymmSpace::new(2))].into();
+        let site1: HashSet<_> = [DynIndex::new_dyn(2)].into();
         net1.add_node("A".to_string(), site1.clone()).unwrap();
         net1.add_node("B".to_string(), HashSet::new()).unwrap();
         net1.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 
-        let mut net2: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+        let mut net2: SiteIndexNetwork<String, DynIndex> =
             SiteIndexNetwork::new();
         net2.add_node("A".to_string(), site1.clone()).unwrap();
         net2.add_node("B".to_string(), HashSet::new()).unwrap();
@@ -510,9 +504,9 @@ mod tests {
         assert!(net1.share_equivalent_site_index_network(&net2));
 
         // Different site space
-        let mut net3: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+        let mut net3: SiteIndexNetwork<String, DynIndex> =
             SiteIndexNetwork::new();
-        let site3: HashSet<_> = [Index::new(99u128, NoSymmSpace::new(5))].into();
+        let site3: HashSet<_> = [DynIndex::new_dyn(5)].into();
         net3.add_node("A".to_string(), site3).unwrap();
         net3.add_node("B".to_string(), HashSet::new()).unwrap();
         net3.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
@@ -523,20 +517,20 @@ mod tests {
     #[test]
     fn test_apply_operator_topology() {
         // Create state network
-        let mut state: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+        let mut state: SiteIndexNetwork<String, DynIndex> =
             SiteIndexNetwork::new();
-        let site1: HashSet<_> = [Index::new(1u128, NoSymmSpace::new(2))].into();
-        let site2: HashSet<_> = [Index::new(2u128, NoSymmSpace::new(3))].into();
+        let site1: HashSet<_> = [DynIndex::new_dyn(2)].into();
+        let site2: HashSet<_> = [DynIndex::new_dyn(3)].into();
         state.add_node("A".to_string(), site1.clone()).unwrap();
         state.add_node("B".to_string(), site2.clone()).unwrap();
         state.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 
         // Create operator with same topology
-        let mut operator: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+        let mut operator: SiteIndexNetwork<String, DynIndex> =
             SiteIndexNetwork::new();
         // Operator has different index IDs but same dimensions
-        let op_site1: HashSet<_> = [Index::new(101u128, NoSymmSpace::new(2))].into();
-        let op_site2: HashSet<_> = [Index::new(102u128, NoSymmSpace::new(3))].into();
+        let op_site1: HashSet<_> = [DynIndex::new_dyn(2)].into();
+        let op_site2: HashSet<_> = [DynIndex::new_dyn(3)].into();
         operator.add_node("A".to_string(), op_site1).unwrap();
         operator.add_node("B".to_string(), op_site2).unwrap();
         operator
@@ -548,7 +542,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Create operator with different topology
-        let mut bad_operator: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+        let mut bad_operator: SiteIndexNetwork<String, DynIndex> =
             SiteIndexNetwork::new();
         bad_operator
             .add_node("A".to_string(), HashSet::new())
@@ -568,17 +562,17 @@ mod tests {
     #[test]
     fn test_compatible_site_dimensions() {
         // Create two networks with same dimensions
-        let mut net1: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+        let mut net1: SiteIndexNetwork<String, DynIndex> =
             SiteIndexNetwork::new();
-        let site1: HashSet<_> = [Index::new(1u128, NoSymmSpace::new(2))].into();
+        let site1: HashSet<_> = [DynIndex::new_dyn(2)].into();
         net1.add_node("A".to_string(), site1).unwrap();
         net1.add_node("B".to_string(), HashSet::new()).unwrap();
         net1.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 
-        let mut net2: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+        let mut net2: SiteIndexNetwork<String, DynIndex> =
             SiteIndexNetwork::new();
         // Different ID but same dimension
-        let site2: HashSet<_> = [Index::new(99u128, NoSymmSpace::new(2))].into();
+        let site2: HashSet<_> = [DynIndex::new_dyn(2)].into();
         net2.add_node("A".to_string(), site2).unwrap();
         net2.add_node("B".to_string(), HashSet::new()).unwrap();
         net2.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
@@ -586,9 +580,9 @@ mod tests {
         assert!(net1.compatible_site_dimensions(&net2));
 
         // Create network with different dimension
-        let mut net3: SiteIndexNetwork<String, u128, NoSymmSpace, DefaultTagSet> =
+        let mut net3: SiteIndexNetwork<String, DynIndex> =
             SiteIndexNetwork::new();
-        let site3: HashSet<_> = [Index::new(99u128, NoSymmSpace::new(5))].into(); // Different dim
+        let site3: HashSet<_> = [DynIndex::new_dyn(5)].into(); // Different dim
         net3.add_node("A".to_string(), site3).unwrap();
         net3.add_node("B".to_string(), HashSet::new()).unwrap();
         net3.add_edge(&"A".to_string(), &"B".to_string()).unwrap();

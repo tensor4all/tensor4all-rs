@@ -43,6 +43,7 @@ impl<T: TTScalar> SiteMPO<T> {
     }
 
     /// Create a SiteMPO from tensors without validation
+    #[allow(dead_code)]
     pub(crate) fn from_tensors_unchecked(tensors: Vec<Tensor4<T>>, center: usize) -> Self {
         Self { tensors, center }
     }
