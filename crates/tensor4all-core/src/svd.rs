@@ -1,4 +1,8 @@
-use crate::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
+//! SVD decomposition for tensors.
+//!
+//! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
+
+use crate::index_like::{DynIndex, IndexLike};
 use crate::index_ops::sim;
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use mdarray::DSlice;
@@ -237,24 +241,15 @@ where
 /// - `left_inds` contains indices not in the tensor or duplicates
 /// - The SVD computation fails
 #[allow(private_bounds)]
-pub fn svd<Id, Symm, T>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
-) -> Result<
-    (
-        TensorDynLen<Id, Symm>,
-        TensorDynLen<Id, Symm>,
-        TensorDynLen<Id, Symm>,
-    ),
-    SvdError,
->
+pub fn svd<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
     T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    svd_with::<Id, Symm, T>(t, left_inds, &SvdOptions::default())
+    svd_with::<T>(t, left_inds, &SvdOptions::default())
 }
 
 /// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
@@ -299,21 +294,12 @@ where
 /// - The SVD computation fails
 /// - `options.rtol` is invalid (not finite or negative)
 #[allow(private_bounds)]
-pub fn svd_with<Id, Symm, T>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
+pub fn svd_with<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
     options: &SvdOptions,
-) -> Result<
-    (
-        TensorDynLen<Id, Symm>,
-        TensorDynLen<Id, Symm>,
-        TensorDynLen<Id, Symm>,
-    ),
-    SvdError,
->
+) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
     T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
@@ -324,10 +310,9 @@ where
     }
 
     // Unfold tensor into matrix (returns DTensor<T, 2>)
-    let (mut a_tensor, _, m, n, left_indices, right_indices) =
-        unfold_split::<Id, T, Symm>(t, left_inds)
-            .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
-            .map_err(SvdError::ComputationError)?;
+    let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<T>(t, left_inds)
+        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
+        .map_err(SvdError::ComputationError)?;
     let k = m.min(n);
 
     // Call SVD using selected backend
@@ -361,15 +346,9 @@ where
     }
 
     // Create bond index with "Link" tag (dimension r, not k)
-    let dyn_bond_index = Index::new_link(r)
+    let bond_index = DynIndex::new_bond(r)
         .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))
         .map_err(SvdError::ComputationError)?;
-    // Convert from Index<DynId, NoSymmSpace, TagSet> to Index<Id, Symm, TagSet>
-    let bond_index: Index<Id, Symm, TagSet> = Index {
-        id: dyn_bond_index.id.into(),
-        symm: dyn_bond_index.symm.into(),
-        tags: dyn_bond_index.tags,
-    };
 
     // Create U tensor: [left_inds..., bond_index]
     let mut u_indices = left_indices.clone();
@@ -409,20 +388,9 @@ where
 ///
 /// Note: Singular values `S` are always real (f64), even for complex input tensors.
 #[inline]
-pub fn svd_c64<Id, Symm>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
-) -> Result<
-    (
-        TensorDynLen<Id, Symm>,
-        TensorDynLen<Id, Symm>,
-        TensorDynLen<Id, Symm>,
-    ),
-    SvdError,
->
-where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
-{
-    svd::<Id, Symm, Complex64>(t, left_inds)
+pub fn svd_c64(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
+    svd::<Complex64>(t, left_inds)
 }

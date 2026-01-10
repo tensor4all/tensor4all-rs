@@ -1,13 +1,12 @@
 [workspace]
+# Note: tensor4all-treetn, tensor4all-itensorlike, tensor4all-quantics-transform temporarily excluded
+# - these need update for concrete TensorLike
 members = [
     "crates/tensor4all-core",
-    "crates/tensor4all-itensorlike",
-    "crates/tensor4all-treetn",
     "crates/quanticsgrids",
     "crates/matrixci",
     "crates/tensor4all-simpletensortrain",
     "crates/tensor4all-tensorci",
-    "crates/tensor4all-quantics-transform",
     "crates/tensor4all-quanticstci",
     "crates/tensor4all-capi",
     "tools/api-dump",

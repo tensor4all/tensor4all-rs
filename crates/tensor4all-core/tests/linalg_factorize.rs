@@ -10,7 +10,7 @@ use tensor4all_core::{storage::DenseStorageF64, Storage, TensorDynLen};
 // ============================================================================
 
 /// Helper to create a simple 2x3 matrix tensor for testing.
-fn create_test_matrix() -> TensorDynLen<DynId> {
+fn create_test_matrix() -> TensorDynLen {
     let i: Index<DynId, NoSymmSpace, _> = Index::new_dyn(2);
     let j: Index<DynId, NoSymmSpace, _> = Index::new_dyn(3);
 
@@ -25,7 +25,7 @@ fn create_test_matrix() -> TensorDynLen<DynId> {
 }
 
 /// Helper to create a rank-3 tensor for testing.
-fn create_rank3_tensor() -> TensorDynLen<DynId> {
+fn create_rank3_tensor() -> TensorDynLen {
     let i: Index<DynId, NoSymmSpace, _> = Index::new_dyn(2);
     let j: Index<DynId, NoSymmSpace, _> = Index::new_dyn(3);
     let k: Index<DynId, NoSymmSpace, _> = Index::new_dyn(2);
@@ -240,13 +240,13 @@ fn test_diag_dense_contraction_svd_internals() {
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
 
-    let tensor: TensorDynLen<DynId> = TensorDynLen {
+    let tensor: TensorDynLen = TensorDynLen {
         indices: vec![i.clone(), j.clone()],
         dims: vec![2, 3],
         storage,
     };
 
-    let (u, s, v) = svd::<DynId, _, f64>(&tensor, &[i.clone()]).expect("SVD should succeed");
+    let (u, s, v) = svd::<f64>(&tensor, &[i.clone()]).expect("SVD should succeed");
 
     // Verify S is diagonal storage
     assert!(matches!(s.storage.as_ref(), Storage::DiagF64(_)));
@@ -270,7 +270,7 @@ fn test_diag_dense_contraction_svd_internals() {
 // Helper Functions
 // ============================================================================
 
-fn assert_tensors_approx_equal(a: &TensorDynLen<DynId>, b: &TensorDynLen<DynId>, tol: f64) {
+fn assert_tensors_approx_equal(a: &TensorDynLen, b: &TensorDynLen, tol: f64) {
     assert_eq!(a.dims, b.dims, "Tensor dimensions don't match");
 
     match (a.storage.as_ref(), b.storage.as_ref()) {

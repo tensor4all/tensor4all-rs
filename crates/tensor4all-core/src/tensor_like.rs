@@ -1,66 +1,208 @@
 //! TensorLike trait for unifying tensor types.
 //!
-//! This trait provides a common interface for:
-//! - `TensorDynLen<Id, Symm>` - Dense tensors
-//! - `TreeTN<Id, Symm, V>` - Tree tensor networks
-//! - Third-party tensor-like objects
+//! This module provides a trait for tensor-like objects that expose external indices
+//! and support contraction operations. Currently only `TensorDynLen` implements this trait.
 //!
-//! The trait exposes:
-//! - **External indices**: Physical/site indices of the object
-//! - **Explicit contraction (tensordot)**: Binary contraction with specified index pairs
+//! Note: This trait works with concrete types (`DynIndex`, `TensorDynLen`) only.
+//!
+//! # Factorization
+//!
+//! This module also provides the unified factorization interface via the `factorize` method
+//! on the `TensorLike` trait, along with supporting types:
+//! - [`FactorizeError`] - Error type for factorize operations
+//! - [`FactorizeAlg`] - Factorization algorithm (SVD, QR, LU, CI)
+//! - [`Canonical`] - Canonical direction (Left, Right)
+//! - [`FactorizeOptions`] - Options for factorization
+//! - [`FactorizeResult`] - Result of factorization
 
-use crate::index::{Index, Symmetry};
-use crate::tagset::TagSetLike;
+use crate::index_like::DynIndex;
 use crate::tensor::TensorDynLen;
 use anyhow::Result;
 use dyn_clone::DynClone;
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::Hash;
+use thiserror::Error;
+
+// ============================================================================
+// Factorization types
+// ============================================================================
+
+/// Error type for factorize operations.
+#[derive(Debug, Error)]
+pub enum FactorizeError {
+    #[error("Factorization failed: {0}")]
+    ComputationError(#[from] anyhow::Error),
+    #[error("Invalid rtol value: {0}. rtol must be finite and non-negative.")]
+    InvalidRtol(f64),
+    #[error("Unsupported storage type: {0}")]
+    UnsupportedStorage(&'static str),
+    #[error("Unsupported canonical direction for this algorithm: {0}")]
+    UnsupportedCanonical(&'static str),
+    #[error("SVD error: {0}")]
+    SvdError(#[from] crate::svd::SvdError),
+    #[error("QR error: {0}")]
+    QrError(#[from] crate::qr::QrError),
+}
+
+/// Factorization algorithm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FactorizeAlg {
+    /// Singular Value Decomposition
+    #[default]
+    SVD,
+    /// QR decomposition
+    QR,
+    /// Rank-revealing LU decomposition
+    LU,
+    /// Cross Interpolation (LU-based)
+    CI,
+}
+
+/// Canonical direction for factorization.
+///
+/// This determines which factor is "canonical" (orthogonal for SVD/QR,
+/// or unit-diagonal for LU/CI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Canonical {
+    /// Left factor is canonical.
+    /// - SVD: L=U (orthogonal), R=S*V
+    /// - QR: L=Q (orthogonal), R=R
+    /// - LU/CI: L has unit diagonal
+    #[default]
+    Left,
+    /// Right factor is canonical.
+    /// - SVD: L=U*S, R=V (orthogonal)
+    /// - QR: Not supported (would need LQ)
+    /// - LU/CI: U has unit diagonal
+    Right,
+}
+
+/// Options for tensor factorization.
+#[derive(Debug, Clone)]
+pub struct FactorizeOptions {
+    /// Factorization algorithm to use.
+    pub alg: FactorizeAlg,
+    /// Canonical direction.
+    pub canonical: Canonical,
+    /// Relative tolerance for truncation.
+    /// If `None`, uses the algorithm's default.
+    pub rtol: Option<f64>,
+    /// Maximum rank for truncation.
+    /// If `None`, no rank limit is applied.
+    pub max_rank: Option<usize>,
+}
+
+impl Default for FactorizeOptions {
+    fn default() -> Self {
+        Self {
+            alg: FactorizeAlg::SVD,
+            canonical: Canonical::Left,
+            rtol: None,
+            max_rank: None,
+        }
+    }
+}
+
+impl FactorizeOptions {
+    /// Create options for SVD factorization.
+    pub fn svd() -> Self {
+        Self {
+            alg: FactorizeAlg::SVD,
+            ..Default::default()
+        }
+    }
+
+    /// Create options for QR factorization.
+    pub fn qr() -> Self {
+        Self {
+            alg: FactorizeAlg::QR,
+            ..Default::default()
+        }
+    }
+
+    /// Create options for LU factorization.
+    pub fn lu() -> Self {
+        Self {
+            alg: FactorizeAlg::LU,
+            ..Default::default()
+        }
+    }
+
+    /// Create options for CI factorization.
+    pub fn ci() -> Self {
+        Self {
+            alg: FactorizeAlg::CI,
+            ..Default::default()
+        }
+    }
+
+    /// Set canonical direction.
+    pub fn with_canonical(mut self, canonical: Canonical) -> Self {
+        self.canonical = canonical;
+        self
+    }
+
+    /// Set relative tolerance.
+    pub fn with_rtol(mut self, rtol: f64) -> Self {
+        self.rtol = Some(rtol);
+        self
+    }
+
+    /// Set maximum rank.
+    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
+        self.max_rank = Some(max_rank);
+        self
+    }
+}
+
+/// Result of tensor factorization.
+///
+/// Uses concrete types (`DynIndex`, `TensorDynLen`).
+#[derive(Debug, Clone)]
+pub struct FactorizeResult {
+    /// Left factor tensor.
+    pub left: TensorDynLen,
+    /// Right factor tensor.
+    pub right: TensorDynLen,
+    /// Bond index connecting left and right factors.
+    pub bond_index: DynIndex,
+    /// Singular values (only for SVD).
+    pub singular_values: Option<Vec<f64>>,
+    /// Rank of the factorization.
+    pub rank: usize,
+}
+
+// ============================================================================
+// TensorLike trait
+// ============================================================================
 
 /// Trait for tensor-like objects that expose external indices and support contraction.
 ///
-/// This is the primary abstraction for treating both dense tensors (`TensorDynLen`)
-/// and tensor networks (`TreeTN`) through a common interface.
+/// This trait provides a common interface for dense tensors (`TensorDynLen`).
 ///
 /// # Design Principles
 ///
 /// - **Minimal interface**: Only external indices and explicit contraction
 /// - **Object-safe**: Uses `Vec` returns instead of iterators for trait object compatibility
-/// - **Clonable trait objects**: Uses `dyn-clone` for `Box<dyn TensorLike<...>>` cloneability
+/// - **Clonable trait objects**: Uses `dyn-clone` for `Box<dyn TensorLike>` cloneability
 /// - **Stable ordering**: `external_indices()` returns indices in deterministic order
-///
-/// # Associated Types
-///
-/// - `Id`: Index identity type (e.g., `DynId` for runtime identity)
-/// - `Symm`: Symmetry type (e.g., `NoSymmSpace` for no symmetry)
-/// - `Tags`: Tag type (e.g., `DefaultTagSet`)
+/// - **Concrete types**: Uses `DynIndex` and `TensorDynLen` directly
 ///
 /// # Example
 ///
 /// ```ignore
-/// use tensor4all::TensorLike;
+/// use tensor4all_core::TensorLike;
 ///
-/// fn contract_external<T: TensorLike>(a: &T, b: &T) -> Result<TensorDynLen<T::Id, T::Symm>> {
+/// fn contract_external<T: TensorLike>(a: &T, b: &T) -> Result<TensorDynLen> {
 ///     // Get common external indices and contract
 ///     let pairs = find_common_indices(a.external_indices(), b.external_indices());
 ///     a.tensordot(b, &pairs)
 /// }
 /// ```
 pub trait TensorLike: DynClone + Send + Sync + Debug {
-    /// Index identity type.
-    type Id: Clone + Hash + Eq + Debug + Send + Sync;
-
-    /// Symmetry type.
-    type Symm: Clone + Symmetry + Send + Sync;
-
-    /// Tag type.
-    type Tags: Clone + TagSetLike + Send + Sync;
-
     /// Return flattened external indices for this object.
     ///
     /// - For `TensorDynLen`: returns the tensor's indices
-    /// - For `TreeTN`: returns union of all site/physical indices across nodes
     ///
     /// # Ordering
     ///
@@ -69,7 +211,7 @@ pub trait TensorLike: DynClone + Send + Sync + Debug {
     /// - Use insertion-ordered storage
     ///
     /// This ensures consistent behavior for hashing, serialization, and comparison.
-    fn external_indices(&self) -> Vec<Index<Self::Id, Self::Symm, Self::Tags>>;
+    fn external_indices(&self) -> Vec<DynIndex>;
 
     /// Number of external indices.
     ///
@@ -83,15 +225,14 @@ pub trait TensorLike: DynClone + Send + Sync + Debug {
     /// Convert this object to a dense tensor.
     ///
     /// - For `TensorDynLen`: returns a clone of self
-    /// - For `TreeTN`: contracts all nodes to produce a single tensor
     ///
     /// This method is required for implementing `tensordot` via trait objects,
     /// since we need access to the underlying tensor data.
     ///
     /// # Errors
     ///
-    /// Returns an error if the conversion fails (e.g., empty TreeTN).
-    fn to_tensor(&self) -> Result<TensorDynLen<Self::Id, Self::Symm>>;
+    /// Returns an error if the conversion fails.
+    fn to_tensor(&self) -> Result<TensorDynLen>;
 
     /// Return `self` as `Any` for optional downcasting / runtime type inspection.
     ///
@@ -107,15 +248,6 @@ pub trait TensorLike: DynClone + Send + Sync + Debug {
     /// ```
     ///
     /// This requires the concrete type to be `'static` (the usual `Any` constraint).
-    ///
-    /// # Usage
-    ///
-    /// ```ignore
-    /// let tensor_like: &dyn TensorLike<...> = &my_tensor;
-    /// if let Some(tensor) = tensor_like.as_any().downcast_ref::<TensorDynLen<DynId>>() {
-    ///     // Use tensor directly
-    /// }
-    /// ```
     fn as_any(&self) -> &dyn Any;
 
     /// Replace an index in this tensor-like object.
@@ -135,18 +267,10 @@ pub trait TensorLike: DynClone + Send + Sync + Debug {
     /// # Default Implementation
     ///
     /// The default implementation converts to `TensorDynLen` via `to_tensor()`
-    /// and then uses `TensorDynLen::replaceind`. Implementations may override
-    /// for better performance (e.g., TreeTN could replace directly in nodes).
-    fn replaceind(
-        &self,
-        old_index: &Index<Self::Id, Self::Symm, Self::Tags>,
-        new_index: &Index<Self::Id, Self::Symm, Self::Tags>,
-    ) -> Result<TensorDynLen<Self::Id, Self::Symm>> {
+    /// and then uses `TensorDynLen::replaceind`.
+    fn replaceind(&self, old_index: &DynIndex, new_index: &DynIndex) -> Result<TensorDynLen> {
         let tensor = self.to_tensor()?;
-        // Convert from Index<Id, Symm, Tags> to Index<Id, Symm> for TensorDynLen
-        let old_idx = Index::new(old_index.id.clone(), old_index.symm.clone());
-        let new_idx = Index::new(new_index.id.clone(), new_index.symm.clone());
-        Ok(tensor.replaceind(&old_idx, &new_idx))
+        Ok(tensor.replaceind(old_index, new_index))
     }
 
     /// Replace multiple indices in this tensor-like object.
@@ -166,24 +290,14 @@ pub trait TensorLike: DynClone + Send + Sync + Debug {
     /// # Default Implementation
     ///
     /// The default implementation converts to `TensorDynLen` via `to_tensor()`
-    /// and then uses `TensorDynLen::replaceinds`. Implementations may override
-    /// for better performance.
+    /// and then uses `TensorDynLen::replaceinds`.
     fn replaceinds(
         &self,
-        old_indices: &[Index<Self::Id, Self::Symm, Self::Tags>],
-        new_indices: &[Index<Self::Id, Self::Symm, Self::Tags>],
-    ) -> Result<TensorDynLen<Self::Id, Self::Symm>> {
+        old_indices: &[DynIndex],
+        new_indices: &[DynIndex],
+    ) -> Result<TensorDynLen> {
         let tensor = self.to_tensor()?;
-        // Convert from Index<Id, Symm, Tags> to Index<Id, Symm> for TensorDynLen
-        let old_inds: Vec<_> = old_indices
-            .iter()
-            .map(|idx| Index::new(idx.id.clone(), idx.symm.clone()))
-            .collect();
-        let new_inds: Vec<_> = new_indices
-            .iter()
-            .map(|idx| Index::new(idx.id.clone(), idx.symm.clone()))
-            .collect();
-        Ok(tensor.replaceinds(&old_inds, &new_inds))
+        Ok(tensor.replaceinds(old_indices, new_indices))
     }
 
     /// Explicit contraction between two tensor-like objects.
@@ -213,46 +327,64 @@ pub trait TensorLike: DynClone + Send + Sync + Debug {
     /// # Default Implementation
     ///
     /// The default implementation converts both operands to `TensorDynLen` via
-    /// `to_tensor()` and then uses `TensorDynLen::tensordot`. Implementations
-    /// may override this for better performance.
+    /// `to_tensor()` and then uses `TensorDynLen::tensordot`.
     fn tensordot(
         &self,
-        other: &dyn TensorLike<Id = Self::Id, Symm = Self::Symm, Tags = Self::Tags>,
-        pairs: &[(
-            Index<Self::Id, Self::Symm, Self::Tags>,
-            Index<Self::Id, Self::Symm, Self::Tags>,
-        )],
-    ) -> Result<TensorDynLen<Self::Id, Self::Symm>>
-    where
-        Self::Id: Ord,
-    {
+        other: &dyn TensorLike,
+        pairs: &[(DynIndex, DynIndex)],
+    ) -> Result<TensorDynLen> {
         // Convert both operands to TensorDynLen
         let self_tensor = self.to_tensor()?;
         let other_tensor = other.to_tensor()?;
 
-        // Convert pairs to the format expected by TensorDynLen::tensordot
-        let converted_pairs: Vec<(Index<Self::Id, Self::Symm>, Index<Self::Id, Self::Symm>)> =
-            pairs
-                .iter()
-                .map(|(a, b)| {
-                    (
-                        Index::new(a.id.clone(), a.symm.clone()),
-                        Index::new(b.id.clone(), b.symm.clone()),
-                    )
-                })
-                .collect();
-
         // Use TensorDynLen's tensordot
-        self_tensor.tensordot(&other_tensor, &converted_pairs)
+        self_tensor.tensordot(&other_tensor, pairs)
+    }
+
+    /// Factorize this tensor into left and right factors.
+    ///
+    /// This function dispatches to the appropriate algorithm based on `options.alg`:
+    /// - `SVD`: Singular Value Decomposition
+    /// - `QR`: QR decomposition
+    /// - `LU`: Rank-revealing LU decomposition
+    /// - `CI`: Cross Interpolation
+    ///
+    /// The `canonical` option controls which factor is "canonical":
+    /// - `Canonical::Left`: Left factor is orthogonal (SVD/QR) or unit-diagonal (LU/CI)
+    /// - `Canonical::Right`: Right factor is orthogonal (SVD) or unit-diagonal (LU/CI)
+    ///
+    /// # Arguments
+    /// * `left_inds` - Indices to place on the left side
+    /// * `options` - Factorization options
+    ///
+    /// # Returns
+    /// A `FactorizeResult` containing the left and right factors, bond index,
+    /// singular values (for SVD), and rank.
+    ///
+    /// # Errors
+    /// Returns `FactorizeError` if:
+    /// - The storage type is not supported (only DenseF64 and DenseC64)
+    /// - QR is used with `Canonical::Right`
+    /// - The underlying algorithm fails
+    ///
+    /// # Default Implementation
+    ///
+    /// The default implementation converts to `TensorDynLen` via `to_tensor()`
+    /// and then calls the standalone `factorize` function.
+    fn factorize(
+        &self,
+        left_inds: &[DynIndex],
+        options: &FactorizeOptions,
+    ) -> std::result::Result<FactorizeResult, FactorizeError> {
+        let tensor = self
+            .to_tensor()
+            .map_err(|e| FactorizeError::ComputationError(e))?;
+        crate::factorize::factorize(&tensor, left_inds, options)
     }
 }
 
 // Make trait objects cloneable
-dyn_clone::clone_trait_object!(<Id, Symm, Tags> TensorLike<Id=Id, Symm=Symm, Tags=Tags> where
-    Id: Clone + Hash + Eq + Debug + Send + Sync,
-    Symm: Clone + Symmetry + Send + Sync,
-    Tags: Clone + TagSetLike + Send + Sync,
-);
+dyn_clone::clone_trait_object!(TensorLike);
 
 // ============================================================================
 // Helper methods on trait objects for downcasting
@@ -269,12 +401,7 @@ pub trait TensorLikeDowncast {
     fn downcast_ref<T: 'static>(&self) -> Option<&T>;
 }
 
-impl<Id, Symm, Tags> TensorLikeDowncast for dyn TensorLike<Id = Id, Symm = Symm, Tags = Tags>
-where
-    Id: Clone + Hash + Eq + Debug + Send + Sync,
-    Symm: Clone + Symmetry + Send + Sync,
-    Tags: Clone + TagSetLike + Send + Sync,
-{
+impl TensorLikeDowncast for dyn TensorLike {
     fn is<T: 'static>(&self) -> bool {
         self.as_any().is::<T>()
     }
@@ -284,12 +411,7 @@ where
     }
 }
 
-impl<Id, Symm, Tags> TensorLikeDowncast for dyn TensorLike<Id = Id, Symm = Symm, Tags = Tags> + Send
-where
-    Id: Clone + Hash + Eq + Debug + Send + Sync,
-    Symm: Clone + Symmetry + Send + Sync,
-    Tags: Clone + TagSetLike + Send + Sync,
-{
+impl TensorLikeDowncast for dyn TensorLike + Send {
     fn is<T: 'static>(&self) -> bool {
         self.as_any().is::<T>()
     }
@@ -299,13 +421,7 @@ where
     }
 }
 
-impl<Id, Symm, Tags> TensorLikeDowncast
-    for dyn TensorLike<Id = Id, Symm = Symm, Tags = Tags> + Send + Sync
-where
-    Id: Clone + Hash + Eq + Debug + Send + Sync,
-    Symm: Clone + Symmetry + Send + Sync,
-    Tags: Clone + TagSetLike + Send + Sync,
-{
+impl TensorLikeDowncast for dyn TensorLike + Send + Sync {
     fn is<T: 'static>(&self) -> bool {
         self.as_any().is::<T>()
     }
@@ -319,35 +435,17 @@ where
 // Implementation for TensorDynLen
 // ============================================================================
 
-impl<Id, Symm> TensorLike for TensorDynLen<Id, Symm>
-where
-    Id: Clone + Hash + Eq + Debug + Send + Sync + 'static,
-    Symm: Clone + Symmetry + Debug + Send + Sync + 'static,
-{
-    type Id = Id;
-    type Symm = Symm;
-    type Tags = crate::DefaultTagSet;
-
-    fn external_indices(&self) -> Vec<Index<Self::Id, Self::Symm, Self::Tags>> {
+impl TensorLike for TensorDynLen {
+    fn external_indices(&self) -> Vec<DynIndex> {
         // For TensorDynLen, all indices are external.
-        // Convert from Index<Id, Symm> to Index<Id, Symm, DefaultTagSet> by adding default tags.
-        self.indices
-            .iter()
-            .map(|idx| {
-                Index::new_with_tags(
-                    idx.id.clone(),
-                    idx.symm.clone(),
-                    crate::DefaultTagSet::default(),
-                )
-            })
-            .collect()
+        self.indices.clone()
     }
 
     fn num_external_indices(&self) -> usize {
         self.indices.len()
     }
 
-    fn to_tensor(&self) -> Result<TensorDynLen<Self::Id, Self::Symm>> {
+    fn to_tensor(&self) -> Result<TensorDynLen> {
         // TensorDynLen is already a tensor, just clone it
         Ok(self.clone())
     }
@@ -364,13 +462,8 @@ mod tests {
     use super::*;
 
     // Basic compile-time check that the trait is object-safe
-    fn _assert_object_safe<Id, Symm, Tags>()
-    where
-        Id: Clone + Hash + Eq + Debug + Send + Sync + 'static,
-        Symm: Clone + Symmetry + Send + Sync + 'static,
-        Tags: Clone + TagSetLike + Send + Sync + 'static,
-    {
-        fn _takes_trait_object(_obj: &dyn TensorLike<Id = (), Symm = (), Tags = ()>) {
+    fn _assert_object_safe() {
+        fn _takes_trait_object(_obj: &dyn TensorLike) {
             // This won't compile if TensorLike is not object-safe
         }
     }

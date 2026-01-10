@@ -109,7 +109,7 @@ fn test_tensor_dyn_len_creation() {
     let dims = vec![2, 3];
     let storage = Arc::new(Storage::new_dense_f64(6));
 
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, storage);
     assert_eq!(tensor.indices.len(), 2);
     assert_eq!(tensor.dims.len(), 2);
     assert_eq!(tensor.dims[0], 2);
@@ -123,7 +123,7 @@ fn test_tensor_dyn_len_mismatch() {
     let dims = vec![2, 3]; // mismatch
     let storage = Arc::new(Storage::new_dense_f64(6));
 
-    let _tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
+    let _tensor: TensorDynLen = TensorDynLen::new(indices, dims, storage);
 }
 
 #[test]
@@ -133,8 +133,8 @@ fn test_tensor_cow() {
     let storage = Arc::new(Storage::new_dense_f64(2));
 
     let mut tensor1 =
-        TensorDynLen::<DynId>::new(indices.clone(), dims.clone(), Arc::clone(&storage));
-    let tensor2 = TensorDynLen::<DynId>::new(indices, dims, storage);
+        TensorDynLen::new(indices.clone(), dims.clone(), Arc::clone(&storage));
+    let tensor2 = TensorDynLen::new(indices, dims, storage);
 
     // Initially, both tensors share the same storage
     assert!(Arc::ptr_eq(&tensor1.storage, &tensor2.storage));
@@ -192,7 +192,7 @@ fn test_tensor_sum_f64_no_match() {
         }
     }
 
-    let t: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
+    let t: TensorDynLen = TensorDynLen::new(indices, dims, storage);
     let sum_f64 = t.sum_f64();
     assert_eq!(sum_f64, 6.0);
 
@@ -216,7 +216,7 @@ fn test_tensor_sum_c64() {
     }
 
     // Now always returns AnyScalar
-    let t: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
+    let t: TensorDynLen = TensorDynLen::new(indices, dims, storage);
     let sum_any: AnyScalar = t.sum();
     assert_eq!(sum_any, AnyScalar::C64(Complex64::new(4.0, 1.0)));
 }
@@ -230,7 +230,7 @@ fn test_tensor_duplicate_indices_new() {
     let dims = vec![2, 3, 2];
     let storage = Arc::new(Storage::new_dense_f64(12));
 
-    let _tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, storage);
+    let _tensor: TensorDynLen = TensorDynLen::new(indices, dims, storage);
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn test_tensor_duplicate_indices_from_indices() {
     let indices = vec![i.clone(), j.clone(), i.clone()]; // duplicate i
     let storage = Arc::new(Storage::new_dense_f64(12));
 
-    let _tensor: TensorDynLen<DynId> = TensorDynLen::from_indices(indices, storage);
+    let _tensor: TensorDynLen = TensorDynLen::from_indices(indices, storage);
 }
 
 // ============================================================================
@@ -259,7 +259,7 @@ fn test_replaceind_basic() {
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3], storage);
 
     // Replace index i with new_i
     let replaced = tensor.replaceind(&i, &new_i);
@@ -286,7 +286,7 @@ fn test_replaceind_no_match() {
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3], storage);
 
     // Replace index k (not in tensor) - should return unchanged tensor
     let replaced = tensor.replaceind(&k, &new_k);
@@ -310,7 +310,7 @@ fn test_replaceinds_basic() {
     let indices = vec![i.clone(), j.clone(), k.clone()];
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, vec![2, 3, 4], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3, 4], storage);
 
     // Replace all indices
     let replaced = tensor.replaceinds(
@@ -339,7 +339,7 @@ fn test_replaceinds_partial() {
     let indices = vec![i.clone(), j.clone(), k.clone()];
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, vec![2, 3, 4], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3, 4], storage);
 
     // Replace only i
     let replaced = tensor.replaceinds(&[i.clone()], &[new_i.clone()]);
@@ -364,7 +364,7 @@ fn test_replaceinds_length_mismatch() {
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3], storage);
 
     // Should panic - length mismatch
     let _replaced = tensor.replaceinds(&[i.clone()], &[new_i.clone(), new_j.clone()]);
@@ -440,7 +440,7 @@ fn test_tensor_conj_f64() {
     let i = Index::new_dyn(2);
     let data = vec![1.0, 2.0];
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data.clone())));
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(vec![i.clone()], vec![2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone()], vec![2], storage);
 
     let conj_tensor = tensor.conj();
 
@@ -472,7 +472,7 @@ fn test_tensor_conj_c64() {
         Complex64::new(5.0, 5.0),
     ];
     let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data)));
-    let tensor: TensorDynLen<DynId> =
+    let tensor: TensorDynLen =
         TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
 
     let conj_tensor = tensor.conj();

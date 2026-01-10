@@ -1,4 +1,8 @@
-use crate::index::{DynId, Index, NoSymmSpace, Symmetry, TagSet};
+//! QR decomposition for tensors.
+//!
+//! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
+
+use crate::index_like::{DynIndex, IndexLike};
 use crate::{unfold_split, StorageScalar, TensorDynLen};
 use mdarray::{DSlice, DTensor};
 use num_complex::{Complex64, ComplexFloat};
@@ -141,17 +145,15 @@ where
 /// - `left_inds` contains indices not in the tensor or duplicates
 /// - The QR computation fails
 #[allow(private_bounds)]
-pub fn qr<Id, Symm, T>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
-) -> Result<(TensorDynLen<Id, Symm>, TensorDynLen<Id, Symm>), QrError>
+pub fn qr<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+) -> Result<(TensorDynLen, TensorDynLen), QrError>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
     T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    qr_with::<Id, Symm, T>(t, left_inds, &QrOptions::default())
+    qr_with::<T>(t, left_inds, &QrOptions::default())
 }
 
 /// Compute QR decomposition of a tensor with arbitrary rank, returning (Q, R).
@@ -191,14 +193,12 @@ where
 /// - The QR computation fails
 /// - `options.rtol` is invalid (not finite or negative)
 #[allow(private_bounds)]
-pub fn qr_with<Id, Symm, T>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
+pub fn qr_with<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
     options: &QrOptions,
-) -> Result<(TensorDynLen<Id, Symm>, TensorDynLen<Id, Symm>), QrError>
+) -> Result<(TensorDynLen, TensorDynLen), QrError>
 where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
     T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
@@ -209,10 +209,9 @@ where
     }
 
     // Unfold tensor into matrix (returns DTensor<T, 2>)
-    let (mut a_tensor, _, m, n, left_indices, right_indices) =
-        unfold_split::<Id, T, Symm>(t, left_inds)
-            .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
-            .map_err(QrError::ComputationError)?;
+    let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<T>(t, left_inds)
+        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
+        .map_err(QrError::ComputationError)?;
     let k = m.min(n);
 
     // Call QR using selected backend
@@ -241,15 +240,9 @@ where
     }
 
     // Create bond index with "Link" tag (dimension r, not k)
-    let dyn_bond_index = Index::new_link(r)
+    let bond_index = DynIndex::new_bond(r)
         .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))
         .map_err(QrError::ComputationError)?;
-    // Convert from Index<DynId, NoSymmSpace, TagSet> to Index<Id, Symm, TagSet>
-    let bond_index: Index<Id, Symm, TagSet> = Index {
-        id: dyn_bond_index.id.into(),
-        symm: dyn_bond_index.symm.into(),
-        tags: dyn_bond_index.tags,
-    };
 
     // Create Q tensor: [left_inds..., bond_index]
     let mut q_indices = left_indices.clone();
@@ -277,13 +270,9 @@ where
 /// The input tensor can have any rank >= 2, and indices are split into left and right groups.
 /// The tensor is unfolded into a matrix by grouping left indices as rows and right indices as columns.
 #[inline]
-pub fn qr_c64<Id, Symm>(
-    t: &TensorDynLen<Id, Symm>,
-    left_inds: &[Index<Id, Symm>],
-) -> Result<(TensorDynLen<Id, Symm>, TensorDynLen<Id, Symm>), QrError>
-where
-    Id: Clone + std::hash::Hash + Eq + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace>,
-{
-    qr::<Id, Symm, Complex64>(t, left_inds)
+pub fn qr_c64(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+) -> Result<(TensorDynLen, TensorDynLen), QrError> {
+    qr::<Complex64>(t, left_inds)
 }
