@@ -1,7 +1,7 @@
 //! Tests for the unified factorize function.
 
 use std::sync::Arc;
-use tensor4all_core::index::{DynId, Index};
+use tensor4all_core::index::Index;
 use tensor4all_core::{factorize, Canonical, DynIndex, FactorizeAlg, FactorizeError, FactorizeOptions};
 use tensor4all_core::{storage::DenseStorageF64, Storage, TensorDynLen};
 

@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use std::sync::Arc;
-use tensor4all_core::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::{default_svd_rtol, set_default_svd_rtol, svd, svd_c64, svd_with, SvdOptions};
 use tensor4all_core::{Storage, TensorDynLen};
 

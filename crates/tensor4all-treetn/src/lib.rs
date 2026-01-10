@@ -1,6 +1,6 @@
 pub mod algorithm;
-// dyn_treetn.rs has been removed per TENSOR_LIKE_DESIGN.md
-// TreeTN now uses T: TensorLike pattern, making dyn_treetn unnecessary
+// dyn_treetn.rs has been removed.
+// TreeTN uses the `T: TensorLike` pattern, making a separate dyn wrapper unnecessary.
 pub mod named_graph;
 pub mod node_name_network;
 // TODO: Refactor operator module for TensorLike pattern

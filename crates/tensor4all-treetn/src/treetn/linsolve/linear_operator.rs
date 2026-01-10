@@ -402,7 +402,5 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Tests will be added when we integrate with the rest of the system
 }

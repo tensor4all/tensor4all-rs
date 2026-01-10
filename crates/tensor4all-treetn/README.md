@@ -15,28 +15,33 @@ Tree tensor network (TreeTN) implementation for general tensor networks beyond l
 ## Usage
 
 ```rust
-use tensor4all_treetn::{
-    SiteIndexNetwork, LinkSpace, random_treetn_f64,
-    CanonicalizationOptions, TruncationOptions,
-};
-use tensor4all_core::Index;
+use anyhow::Result;
+use rand::thread_rng;
+use tensor4all_core::index::{DynId, Index};
+use tensor4all_core::TensorDynLen;
+use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
-// Build a tree topology: A -- B -- C
-let mut network = SiteIndexNetwork::new();
-network.add_node("A".into(), vec![Index::new_dyn(2)])?;
-network.add_node("B".into(), vec![Index::new_dyn(2)])?;
-network.add_node("C".into(), vec![Index::new_dyn(2)])?;
-network.add_edge(&"A".into(), &"B".into())?;
-network.add_edge(&"B".into(), &"C".into())?;
+// Build a simple 2-node TreeTN: A -- B (shared bond index)
+let bond = Index::<DynId>::new_dyn(10);
+let a_site = Index::<DynId>::new_dyn(2);
+let b_site = Index::<DynId>::new_dyn(2);
 
-// Create random tree tensor network
-let ttn = random_treetn_f64(&mut rng, &network, LinkSpace::uniform(10));
+let mut rng = thread_rng();
+let a = TensorDynLen::random_f64(&mut rng, vec![a_site.clone(), bond.clone()]);
+let b = TensorDynLen::random_f64(&mut rng, vec![bond.clone(), b_site.clone()]);
+
+let mut ttn = TreeTN::<TensorDynLen, String>::new();
+let node_a = ttn.add_tensor("A".to_string(), a)?;
+let node_b = ttn.add_tensor("B".to_string(), b)?;
+ttn.connect(node_a, &bond, node_b, &bond)?;
 
 // Canonicalize towards center node B
-let ttn = ttn.canonicalize(["B".into()], CanonicalizationOptions::default())?;
+let ttn = ttn.canonicalize(["B".to_string()], CanonicalizationOptions::default())?;
 
 // Truncate bond dimensions
-let ttn = ttn.truncate(["B".into()], TruncationOptions::default().with_max_rank(5))?;
+let ttn = ttn.truncate(["B".to_string()], TruncationOptions::default().with_max_rank(5))?;
+
+# Ok::<(), anyhow::Error>(())
 ```
 
 ## License

@@ -4,18 +4,15 @@
 //! When connecting node_a to node_b, both tensors must contain the same bond index.
 //!
 //! Migrated from tensor4all-rs main branch to index-like branch with type adjustments:
-//! - TreeTN<DynId, NoSymmSpace, V> -> TreeTN<TensorDynLen, V>
 //! - Index<DynId> -> DynIndex
 //! - idx.id -> idx.id()
 //! - Tests using random_treetn_f64/LinkSpace are commented out (random module disabled)
 
-use num_complex::Complex64;
 use petgraph::graph::NodeIndex;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64};
+use tensor4all_core::storage::DenseStorageF64;
 use tensor4all_core::{DynIndex, IndexLike, Storage, TensorDynLen};
-use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TreeTopology, TruncationOptions};
+use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 // ============================================================================
 // Helper Functions
@@ -162,7 +159,7 @@ fn test_treetn_replace_tensor_nonexistent() {
 
 #[test]
 fn test_treetn_replace_tensor_missing_bond_index() {
-    let (mut tn, node1, _node2, _edge, _phys1, bond, _phys2) = create_two_node_treetn();
+    let (mut tn, node1, _node2, _edge, _phys1, _bond, _phys2) = create_two_node_treetn();
 
     // Try to replace node1 with a tensor that doesn't have the bond index
     let new_i = DynIndex::new_dyn(5);
@@ -345,7 +342,7 @@ fn test_treetn_set_edge_ortho_towards() {
 
 #[test]
 fn test_treetn_set_edge_ortho_towards_invalid() {
-    let (mut tn, node1, node2, edge, _phys1, _bond, _phys2) = create_two_node_treetn();
+    let (mut tn, _node1, _node2, edge, _phys1, _bond, _phys2) = create_two_node_treetn();
 
     // Create a third node that is not connected to this edge
     let i3 = DynIndex::new_dyn(5);
@@ -1154,8 +1151,6 @@ fn test_contract_zipup_basic_api() {
 /// This is the typical use case: computing overlap <ψ|φ>.
 #[test]
 fn test_contract_zipup_shared_site_indices() {
-    use std::collections::HashSet;
-
     // Create shared site indices (same Index objects for both networks)
     let site_a = DynIndex::new_dyn(2); // Physical index at node A
     let site_b = DynIndex::new_dyn(3); // Physical index at node B
