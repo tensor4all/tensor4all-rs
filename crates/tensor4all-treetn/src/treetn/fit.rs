@@ -788,11 +788,75 @@ impl FitContractionOptions {
     }
 }
 
-// Note: contract_fit function is commented out because it depends on
-// contract_zipup from the contraction module, which is not yet refactored.
-//
-// pub fn contract_fit<T, V>(...) -> Result<TreeTN<T, V>> { ... }
+/// Contract two TreeTNs using the fit (variational) algorithm.
+///
+/// This algorithm minimizes `||A*B - C||²` iteratively by optimizing
+/// each local tensor of C while keeping others fixed.
+///
+/// # Arguments
+/// * `tn_a` - First TreeTN
+/// * `tn_b` - Second TreeTN
+/// * `center` - Node to use as canonical center
+/// * `options` - Fit algorithm options
+///
+/// # Returns
+/// A new TreeTN representing the contracted result.
+pub fn contract_fit<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    options: FitContractionOptions,
+) -> Result<TreeTN<T, V>>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    use super::localupdate::apply_local_update_sweep;
+    use crate::CanonicalizationOptions;
 
-// Tests are disabled until dependencies are available
-// #[cfg(test)]
-// mod tests { ... }
+    // Validate topologies match
+    if !tn_a.same_topology(tn_b) {
+        return Err(anyhow::anyhow!(
+            "TreeTNs must have the same topology for fit contraction"
+        ));
+    }
+
+    // Initialize C using zipup (arguments: rtol, max_rank)
+    let mut tn_c = tn_a.contract_zipup(tn_b, center, options.rtol, options.max_rank)?;
+
+    // Canonicalize towards center
+    tn_c = tn_c.canonicalize([center.clone()], CanonicalizationOptions::default())?;
+
+    // Create FitUpdater (environments are computed lazily)
+    let mut updater = FitUpdater::new(tn_a.clone(), tn_b.clone(), options.max_rank, options.rtol)
+        .with_factorize_alg(options.factorize_alg);
+
+    // Create sweep plan
+    let plan = LocalUpdateSweepPlan::from_treetn(&tn_c, center, 2)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create sweep plan"))?;
+
+    // Perform sweeps
+    for _sweep in 0..options.nsweeps {
+        let log_norm_before = if options.convergence_tol.is_some() {
+            Some(tn_c.log_norm()?)
+        } else {
+            None
+        };
+
+        apply_local_update_sweep(&mut tn_c, &plan, &mut updater)?;
+
+        // Check convergence using log_norm
+        if let (Some(tol), Some(log_norm_before)) = (options.convergence_tol, log_norm_before) {
+            let log_norm_after = tn_c.log_norm()?;
+            // relative change in norm: |exp(log_after) - exp(log_before)| / exp(log_before)
+            // = |exp(log_after - log_before) - 1|
+            let relative_change = (f64::exp(log_norm_after - log_norm_before) - 1.0).abs();
+            if relative_change < tol {
+                break;
+            }
+        }
+    }
+
+    Ok(tn_c)
+}

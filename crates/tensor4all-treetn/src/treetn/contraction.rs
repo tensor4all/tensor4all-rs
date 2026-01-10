@@ -4,6 +4,7 @@
 //! - Replacing internal indices with fresh IDs (`sim_internal_inds`)
 //! - Contracting TreeTN to tensor (`contract_to_tensor`)
 //! - Zip-up contraction (`contract_zipup`)
+//! - Naive contraction (`contract_naive`)
 //! - Validation (`validate_ortho_consistency`)
 
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
@@ -268,8 +269,8 @@ where
             // Contract along common indices (site indices)
             let common = find_common_indices(t1, t2);
             let result = if common.is_empty() {
-                // TODO: Outer product - need to add to TensorLike
-                return Err(anyhow::anyhow!("Outer product not yet supported in TensorLike"));
+                // Outer product when no common site indices
+                t1.outer_product(t2)?
             } else {
                 let pairs: Vec<_> = common
                     .iter()
@@ -318,8 +319,8 @@ where
                 .collect();
 
             let contracted = if common.is_empty() {
-                // TODO: Outer product - need to add to TensorLike
-                return Err(anyhow::anyhow!("Outer product not yet supported in TensorLike"));
+                // Outer product when no common site indices
+                t1.outer_product(t2)?
             } else {
                 let pairs: Vec<_> = common
                     .iter()
@@ -377,6 +378,7 @@ where
 
             if left_inds.is_empty() {
                 // All indices are bond indices - just absorb into parent
+                // (This happens when site indices are fully contracted, i.e., inner product case)
                 let parent_tensor = result_tensors
                     .remove(parent_name)
                     .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
@@ -386,6 +388,7 @@ where
                     &[(bond1.clone(), bond1), (bond2.clone(), bond2)],
                 )?;
                 result_tensors.insert(parent_name.clone(), contracted);
+                // Don't re-insert child - it's been absorbed
                 continue;
             }
 
@@ -409,6 +412,9 @@ where
                 .remove(parent_name)
                 .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
 
+            // Right factor has: new_bond (from factorize), bond1, bond2
+            // Parent has: bond1, bond2 (among other indices)
+            // Contract along bond1 and bond2
             let contracted = parent_tensor.tensordot(
                 &factorize_result.right,
                 &[(bond1.clone(), bond1), (bond2.clone(), bond2)],
@@ -420,6 +426,7 @@ where
         let mut result = Self::new();
 
         // Add tensors for nodes that still have tensors
+        // (Some nodes may have been absorbed during the zip-up process in inner product cases)
         let remaining_nodes: Vec<_> = tn1
             .node_names()
             .into_iter()
@@ -434,14 +441,15 @@ where
         }
 
         // Connect nodes based on topology using matching index IDs
+        // Only connect edges where both endpoints exist in the result
         for (a, b) in tn1.site_index_network.edges() {
             let node_a = match result.node_index(&a) {
                 Some(idx) => idx,
-                None => continue,
+                None => continue, // Node was absorbed
             };
             let node_b = match result.node_index(&b) {
                 Some(idx) => idx,
-                None => continue,
+                None => continue, // Node was absorbed
             };
 
             let tensor_a = result.tensor(node_a).unwrap();
@@ -460,6 +468,66 @@ where
         }
 
         Ok(result)
+    }
+
+    /// Contract two TreeTNs using naive full contraction.
+    ///
+    /// This is a reference implementation that:
+    /// 1. Replaces internal indices with fresh IDs (sim_internal_inds)
+    /// 2. Converts both TreeTNs to full tensors
+    /// 3. Contracts along common site indices
+    ///
+    /// The result is a single tensor, not a TreeTN. This is useful for:
+    /// - Testing correctness of more sophisticated algorithms like `contract_zipup`
+    /// - Computing exact results for small networks
+    ///
+    /// # Arguments
+    /// * `other` - The other TreeTN to contract with (must have same topology)
+    ///
+    /// # Returns
+    /// A tensor representing the contracted result.
+    ///
+    /// # Note
+    /// This method is O(exp(n)) in both time and memory where n is the number of nodes.
+    /// Use `contract_zipup` for efficient contraction of large networks.
+    pub fn contract_naive(&self, other: &Self) -> Result<T>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        // 1. Verify topologies are compatible
+        if !self.same_topology(other) {
+            return Err(anyhow::anyhow!(
+                "contract_naive: networks have incompatible topologies"
+            ));
+        }
+
+        // 2. Replace internal indices with fresh IDs to avoid collision
+        let tn1 = self.sim_internal_inds();
+        let tn2 = other.sim_internal_inds();
+
+        // 3. Convert both networks to full tensors
+        let tensor1 = tn1
+            .contract_to_tensor()
+            .map_err(|e| anyhow::anyhow!("contract_naive: failed to contract tn1: {}", e))?;
+        let tensor2 = tn2
+            .contract_to_tensor()
+            .map_err(|e| anyhow::anyhow!("contract_naive: failed to contract tn2: {}", e))?;
+
+        // 4. Find common indices (site indices) to contract
+        let common = find_common_indices(&tensor1, &tensor2);
+
+        // 5. Contract along common indices
+        if common.is_empty() {
+            // Outer product when no common indices
+            tensor1.outer_product(&tensor2)
+        } else {
+            let pairs: Vec<_> = common
+                .iter()
+                .map(|idx| (idx.clone(), idx.clone()))
+                .collect();
+            tensor1.tensordot(&tensor2, &pairs)
+        }
     }
 
     /// Validate that `canonical_center` and edge `ortho_towards` are consistent.
@@ -559,6 +627,7 @@ where
         }
 
         // Verify no unexpected bond ortho_towards entries
+        // (site index ortho_towards are allowed even if not in expected_directions)
         let bond_indices: HashSet<T::Index> = self
             .graph
             .graph()
@@ -569,6 +638,7 @@ where
 
         for (idx, _) in &self.ortho_towards {
             if bond_indices.contains(idx) && !expected_directions.contains_key(idx) {
+                // This is a bond inside the canonical_center - should not have ortho_towards
                 return Err(anyhow::anyhow!(
                     "Unexpected ortho_towards for bond {:?} (inside canonical_center)",
                     idx
@@ -603,8 +673,7 @@ where
 // Contraction Method Dispatcher
 // ============================================================================
 
-// TODO: Re-enable these after fit module is fully working
-// use super::fit::{contract_fit, FitContractionOptions};
+use super::fit::FitContractionOptions;
 
 /// Contraction method for TreeTN operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -615,6 +684,7 @@ pub enum ContractionMethod {
     /// Fit/variational contraction (iterative optimization).
     Fit,
     /// Naive contraction: contract to full tensor, then decompose back to TreeTN.
+    /// Useful for debugging and testing, but O(exp(n)) in memory.
     Naive,
 }
 
@@ -702,8 +772,6 @@ impl ContractionOptions {
 ///
 /// This is the main entry point for TreeTN contraction. It dispatches to the
 /// appropriate algorithm based on the options.
-///
-/// Currently only Zipup method is supported.
 pub fn contract<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
@@ -720,12 +788,99 @@ where
             tn_a.contract_zipup(tn_b, center, options.rtol, options.max_rank)
         }
         ContractionMethod::Fit => {
-            // TODO: Re-enable after fit module is fully working
-            Err(anyhow::anyhow!("Fit contraction not yet implemented for TensorLike"))
+            let fit_options = FitContractionOptions::new(options.nsweeps)
+                .with_factorize_alg(options.factorize_alg);
+            let fit_options = if let Some(max_rank) = options.max_rank {
+                fit_options.with_max_rank(max_rank)
+            } else {
+                fit_options
+            };
+            let fit_options = if let Some(rtol) = options.rtol {
+                fit_options.with_rtol(rtol)
+            } else {
+                fit_options
+            };
+            let fit_options = if let Some(tol) = options.convergence_tol {
+                fit_options.with_convergence_tol(tol)
+            } else {
+                fit_options
+            };
+            super::fit::contract_fit(tn_a, tn_b, center, fit_options)
         }
         ContractionMethod::Naive => {
-            // TODO: Implement naive contraction for TensorLike
-            Err(anyhow::anyhow!("Naive contraction not yet implemented for TensorLike"))
+            contract_naive_to_treetn(tn_a, tn_b, center, options.max_rank, options.rtol)
         }
     }
+}
+
+/// Contract two TreeTNs using naive contraction, then decompose back to TreeTN.
+///
+/// This method:
+/// 1. Contracts both networks to full tensors
+/// 2. Contracts the tensors along common (site) indices
+/// 3. Decomposes the result back to a TreeTN using the original topology
+///
+/// This is O(exp(n)) in memory and is primarily useful for debugging and testing.
+pub fn contract_naive_to_treetn<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    max_rank: Option<usize>,
+    rtol: Option<f64>,
+) -> Result<TreeTN<T, V>>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    // 1. Contract to full tensor using existing contract_naive
+    let contracted_tensor = tn_a.contract_naive(tn_b)?;
+
+    // 2. Build topology from tn_a's structure and decompose
+    use super::decompose::factorize_tensor_to_treetn_with;
+
+    // Build topology
+    let mut nodes: HashMap<V, Vec<usize>> = HashMap::new();
+    let mut idx_position = 0usize;
+
+    // Collect node names in sorted order for deterministic index assignment
+    let mut node_names: Vec<_> = tn_a.node_names();
+    node_names.sort();
+
+    for node_name in &node_names {
+        let site_space = tn_a
+            .site_index_network
+            .site_space(node_name)
+            .ok_or_else(|| anyhow::anyhow!("Site space not found for node {:?}", node_name))?;
+
+        // Each site index becomes a position in the contracted tensor
+        let positions: Vec<usize> = (idx_position..idx_position + site_space.len()).collect();
+        idx_position += site_space.len();
+        nodes.insert(node_name.clone(), positions);
+    }
+
+    // Get edges from the graph
+    let edges: Vec<(V, V)> = tn_a
+        .graph
+        .graph()
+        .edge_indices()
+        .filter_map(|e| {
+            let (src, dst) = tn_a.graph.graph().edge_endpoints(e)?;
+            let src_name = tn_a.graph.node_name(src)?;
+            let dst_name = tn_a.graph.node_name(dst)?;
+            Some((src_name.clone(), dst_name.clone()))
+        })
+        .collect();
+
+    let topology = super::decompose::TreeTopology::new(nodes, edges);
+
+    // 3. Decompose back to TreeTN
+    let mut result = factorize_tensor_to_treetn_with(&contracted_tensor, &topology, FactorizeAlg::SVD)?;
+
+    // Set canonical center
+    if result.node_index(center).is_some() {
+        result.set_canonical_center(std::iter::once(center.clone()))?;
+    }
+
+    Ok(result)
 }

@@ -367,6 +367,37 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
         other: &Self,
         pairs: &[(Self::Index, Self::Index)],
     ) -> Result<DirectSumResult<Self>>;
+
+    /// Outer product (tensor product) of two tensors.
+    ///
+    /// Computes the tensor product of `self` and `other`, resulting in a tensor
+    /// with all indices from both tensors. No indices are contracted.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The other tensor to compute outer product with
+    ///
+    /// # Returns
+    ///
+    /// A new tensor representing the outer product.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tensors have common indices (by ID).
+    /// Use `tensordot` for contraction when indices overlap.
+    fn outer_product(&self, other: &Self) -> Result<Self>;
+
+    /// Compute the squared Frobenius norm of the tensor.
+    ///
+    /// The squared Frobenius norm is defined as the sum of squared absolute values
+    /// of all tensor elements: `||T||_F^2 = sum_i |T_i|^2`.
+    ///
+    /// This is used for computing norms in tensor network algorithms,
+    /// convergence checks, and normalization.
+    ///
+    /// # Returns
+    /// The squared Frobenius norm as a non-negative f64.
+    fn norm_squared(&self) -> f64;
 }
 
 /// Result of direct sum operation.

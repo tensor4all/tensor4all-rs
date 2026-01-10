@@ -1478,4 +1478,14 @@ impl TensorLike for TensorDynLen {
         let (tensor, new_indices) = crate::direct_sum::direct_sum(self, other, pairs)?;
         Ok(crate::tensor_like::DirectSumResult { tensor, new_indices })
     }
+
+    fn outer_product(&self, other: &Self) -> Result<Self> {
+        // Delegate to the inherent method
+        TensorDynLen::outer_product(self, other)
+    }
+
+    fn norm_squared(&self) -> f64 {
+        // Delegate to the inherent method
+        TensorDynLen::norm_squared(self)
+    }
 }
