@@ -10,12 +10,12 @@ mod canonicalize;
 // mod decompose;
 // mod fit;
 // mod linsolve;
-// mod localupdate;
+mod localupdate;
 // mod operator_impl;
 mod ops;
 mod tensor_like;
 // mod transform;
-// mod truncate;
+mod truncate;
 
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::{Dfs, EdgeRef};

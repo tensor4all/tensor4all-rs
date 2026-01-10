@@ -15,7 +15,7 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::TensorLike;
+use tensor4all_core::{IndexLike, TensorLike};
 use crate::algorithm::CanonicalForm;
 
 use super::localupdate::{apply_local_update_sweep, LocalUpdateSweepPlan, TruncateUpdater};
@@ -61,6 +61,7 @@ where
     ) -> Result<Self>
     where
         V: Ord,
+        <T::Index as IndexLike>::Id: Ord,
     {
         self.truncate_impl(
             canonical_center,
@@ -82,6 +83,7 @@ where
     ) -> Result<()>
     where
         V: Ord,
+        <T::Index as IndexLike>::Id: Ord,
     {
         self.truncate_impl(
             canonical_center,
@@ -105,6 +107,7 @@ where
     ) -> Result<()>
     where
         V: Ord,
+        <T::Index as IndexLike>::Id: Ord,
     {
         // Collect center nodes
         let center_nodes: HashSet<V> = canonical_center.into_iter().collect();

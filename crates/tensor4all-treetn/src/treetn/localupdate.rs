@@ -13,8 +13,7 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::index::Symmetry;
-use tensor4all_core::IndexLike;
+use tensor4all_core::{IndexLike, TensorLike};
 
 use super::TreeTN;
 use crate::node_name_network::NodeNameNetwork;
@@ -73,13 +72,13 @@ where
     /// Generate a sweep plan from a TreeTN's topology.
     ///
     /// Convenience method that extracts the NodeNameNetwork topology from a TreeTN.
-    pub fn from_treetn<I>(
-        treetn: &TreeTN<I, V>,
+    pub fn from_treetn<T>(
+        treetn: &TreeTN<T, V>,
         root: &V,
         nsite: usize,
     ) -> Option<Self>
     where
-        I: IndexLike,
+        T: TensorLike,
     {
         Self::new(treetn.site_index_network().topology(), root, nsite)
     }
@@ -198,8 +197,7 @@ where
 /// (truncation, fitting, DMRG, TDVP) to share the same sweep infrastructure.
 ///
 /// # Type Parameters
-/// - `Id`: Index ID type
-/// - `Symm`: Symmetry type
+/// - `T`: Tensor type implementing TensorLike
 /// - `V`: Node name type
 ///
 /// # Workflow
@@ -209,9 +207,9 @@ where
 ///    b. Call `update()` with the extracted subtree and step info
 ///    c. Replace the subtree in the original TreeTN with the updated one
 ///    d. Update the canonical center to `step.new_center`
-pub trait LocalUpdater<I, V>
+pub trait LocalUpdater<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Optional hook called before performing an update step.
@@ -221,7 +219,7 @@ where
     fn before_step(
         &mut self,
         _step: &LocalUpdateStep<V>,
-        _full_treetn_before: &TreeTN<I, V>,
+        _full_treetn_before: &TreeTN<T, V>,
     ) -> Result<()> {
         Ok(())
     }
@@ -243,10 +241,10 @@ where
     /// Returns an error if the update fails (e.g., SVD doesn't converge).
     fn update(
         &mut self,
-        subtree: TreeTN<I, V>,
+        subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
-        full_treetn: &TreeTN<I, V>,
-    ) -> Result<TreeTN<I, V>>;
+        full_treetn: &TreeTN<T, V>,
+    ) -> Result<TreeTN<T, V>>;
 
     /// Optional hook called after an update step has been applied to the full TreeTN.
     ///
@@ -258,7 +256,7 @@ where
     fn after_step(
         &mut self,
         _step: &LocalUpdateStep<V>,
-        _full_treetn_after: &TreeTN<I, V>,
+        _full_treetn_after: &TreeTN<T, V>,
     ) -> Result<()> {
         Ok(())
     }
@@ -294,17 +292,16 @@ where
 /// - Subtree extraction fails
 /// - The updater returns an error
 /// - Subtree replacement fails
-pub fn apply_local_update_sweep<I, V, U>(
-    treetn: &mut TreeTN<I, V>,
+pub fn apply_local_update_sweep<T, V, U>(
+    treetn: &mut TreeTN<T, V>,
     plan: &LocalUpdateSweepPlan<V>,
     updater: &mut U,
 ) -> Result<()>
 where
-    I: IndexLike,
-    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
-    I::Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + Send + Sync,
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
-    U: LocalUpdater<I, V>,
+    U: LocalUpdater<T, V>,
 {
     for step in plan.iter() {
         // Validate: canonical_center must be a single node within the step's nodes
@@ -363,8 +360,7 @@ where
 // TruncateUpdater - LocalUpdater implementation for truncation
 // ============================================================================
 
-use tensor4all_core::index::{DynId, NoSymmSpace};
-use tensor4all_core::{factorize, Canonical, FactorizeOptions};
+use tensor4all_core::{Canonical, FactorizeOptions};
 
 /// Truncation updater for nsite=2 sweeps.
 ///
@@ -402,19 +398,18 @@ impl TruncateUpdater {
     }
 }
 
-impl<I, V> LocalUpdater<I, V> for TruncateUpdater
+impl<T, V> LocalUpdater<T, V> for TruncateUpdater
 where
-    I: IndexLike,
-    I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId> + Send + Sync,
-    I::Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + From<NoSymmSpace> + Send + Sync,
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     fn update(
         &mut self,
-        mut subtree: TreeTN<I, V>,
+        mut subtree: TreeTN<T, V>,
         step: &LocalUpdateStep<V>,
-        _full_treetn: &TreeTN<I, V>,
-    ) -> Result<TreeTN<I, V>> {
+        _full_treetn: &TreeTN<T, V>,
+    ) -> Result<TreeTN<T, V>> {
         // TruncateUpdater is designed for nsite=2
         if step.nodes.len() != 2 {
             return Err(anyhow::anyhow!(
@@ -453,9 +448,9 @@ where
         // Determine left indices (indices that will remain on A after factorization)
         // These are: all indices of A except the bond to B
         let left_inds: Vec<_> = tensor_a
-            .indices
+            .external_indices()
             .iter()
-            .filter(|idx| idx.id != bond_ab.id)
+            .filter(|idx| idx.id() != bond_ab.id())
             .cloned()
             .collect();
 
@@ -470,27 +465,15 @@ where
         }
 
         // Factorize
-        let factorize_result = factorize(&tensor_ab, &left_inds, &options)
+        let factorize_result = tensor_ab.factorize(&left_inds, &options)
             .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?;
 
         let new_tensor_a = factorize_result.left;
         let new_tensor_b = factorize_result.right;
-        let factorized_bond = factorize_result.bond_index;
-
-        // Create new bond index with the original ID but new dimension
-        // This ensures the bond index ID matches what the parent TreeTN expects
-        // The new dimension comes from the factorized bond's symmetry
-        let new_bond = tensor4all_core::index::Index::new_with_tags(
-            bond_ab.id.clone(),
-            factorized_bond.symm.clone(),
-            bond_ab.tags.clone(),
-        );
-
-        // Replace bond index in the new tensors
-        let new_tensor_a = new_tensor_a.replaceind(&factorized_bond, &new_bond);
-        let new_tensor_b = new_tensor_b.replaceind(&factorized_bond, &new_bond);
+        let new_bond = factorize_result.bond_index;
 
         // Update the subtree - first update the edge bond, then the tensors
+        // The factorize result creates a new bond index, so we update the edge to use it
         subtree.replace_edge_bond(edge_ab, new_bond.clone())?;
         subtree.replace_tensor(idx_a, new_tensor_a)?;
         subtree.replace_tensor(idx_b, new_tensor_b)?;
@@ -509,9 +492,9 @@ where
 // Sub-tree extraction
 // ============================================================================
 
-impl<I, V> TreeTN<I, V>
+impl<T, V> TreeTN<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Extract a sub-tree from this TreeTN.
@@ -534,7 +517,7 @@ where
     /// - canonical_center is intersected with the extracted nodes
     pub fn extract_subtree(&self, node_names: &[V]) -> Result<Self>
     where
-        I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
         V: Ord,
     {
         if node_names.is_empty() {
@@ -565,7 +548,7 @@ where
         let node_name_set: HashSet<V> = node_names.iter().cloned().collect();
 
         // Create new TreeTN with extracted tensors
-        let mut subtree = TreeTN::<I, V>::new();
+        let mut subtree = TreeTN::<T, V>::new();
 
         // Step 1: Add all nodes with their tensors
         for name in node_names {
@@ -663,9 +646,9 @@ where
 // Sub-tree replacement
 // ============================================================================
 
-impl<I, V> TreeTN<I, V>
+impl<T, V> TreeTN<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Replace a sub-tree with another TreeTN of the same topology.
@@ -691,8 +674,7 @@ where
     /// - The original TreeTN is modified in-place
     pub fn replace_subtree(&mut self, node_names: &[V], replacement: &Self) -> Result<()>
     where
-        I::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
-        I::Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
         V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         if node_names.is_empty() {
@@ -702,16 +684,76 @@ where
         // Extract current subtree for comparison
         let current_subtree = self.extract_subtree(node_names)?;
 
-        // Verify that replacement has the same topology and site index network
-        // (ortho_towards can differ, as truncation may change canonicalization)
-        if !current_subtree.share_equivalent_site_index_network(replacement) {
+        // Verify that replacement has the same topology (nodes and edges)
+        // Note: site index network may differ due to bond dimension changes in truncation
+        if !current_subtree.same_topology(replacement) {
             return Err(anyhow::anyhow!(
-                "Replacement TreeTN does not have the same site index network as the current subtree"
+                "Replacement TreeTN does not have the same topology as the current subtree"
             ))
-            .context("replace_subtree: site index network mismatch");
+            .context("replace_subtree: topology mismatch");
         }
 
-        // Replace tensors
+        let node_name_set: HashSet<V> = node_names.iter().cloned().collect();
+        let mut processed_edges: HashSet<(V, V)> = HashSet::new();
+
+        // Step 1: Update edge bond indices FIRST (before replacing tensors)
+        // This is crucial because replace_tensor validates that tensors contain connection indices
+        for name in node_names {
+            let neighbors: Vec<V> = self.site_index_network.neighbors(name).collect();
+
+            for neighbor in neighbors {
+                // Only process edges within the subtree
+                if !node_name_set.contains(&neighbor) {
+                    continue;
+                }
+
+                let edge_key = if *name < neighbor {
+                    (name.clone(), neighbor.clone())
+                } else {
+                    (neighbor.clone(), name.clone())
+                };
+
+                if processed_edges.contains(&edge_key) {
+                    continue;
+                }
+                processed_edges.insert(edge_key.clone());
+
+                // Get edges in both self and replacement
+                let self_edge = self
+                    .edge_between(name, &neighbor)
+                    .ok_or_else(|| anyhow::anyhow!("Edge not found in self"))?;
+                let replacement_edge = replacement
+                    .edge_between(name, &neighbor)
+                    .ok_or_else(|| anyhow::anyhow!("Edge not found in replacement"))?;
+
+                // Get new bond index from replacement
+                let new_bond = replacement
+                    .bond_index(replacement_edge)
+                    .ok_or_else(|| anyhow::anyhow!("Bond index not found in replacement"))?
+                    .clone();
+
+                // Update bond index in self
+                self.replace_edge_bond(self_edge, new_bond.clone())
+                    .with_context(|| {
+                        format!(
+                            "replace_subtree: failed to update bond between {:?} and {:?}",
+                            name, neighbor
+                        )
+                    })?;
+
+                // Copy ortho_towards from replacement (using the new bond)
+                match replacement.ortho_towards.get(&new_bond) {
+                    Some(dir) => {
+                        self.ortho_towards.insert(new_bond, dir.clone());
+                    }
+                    None => {
+                        self.ortho_towards.remove(&new_bond);
+                    }
+                }
+            }
+        }
+
+        // Step 2: Replace tensors (now bond indices match)
         for name in node_names {
             let self_node_idx = self
                 .graph
@@ -738,50 +780,6 @@ where
                 })?;
         }
 
-        // Replace ortho_towards for edges within the subtree
-        let node_name_set: HashSet<V> = node_names.iter().cloned().collect();
-        let mut processed_edges: HashSet<(V, V)> = HashSet::new();
-
-        for name in node_names {
-            let neighbors: Vec<V> = self.site_index_network.neighbors(name).collect();
-
-            for neighbor in neighbors {
-                if !node_name_set.contains(&neighbor) {
-                    continue;
-                }
-
-                let edge_key = if *name < neighbor {
-                    (name.clone(), neighbor.clone())
-                } else {
-                    (neighbor.clone(), name.clone())
-                };
-
-                if processed_edges.contains(&edge_key) {
-                    continue;
-                }
-                processed_edges.insert(edge_key);
-
-                // Get bond index from self edge
-                let self_edge = self
-                    .edge_between(name, &neighbor)
-                    .ok_or_else(|| anyhow::anyhow!("Edge not found"))?;
-                let bond = self
-                    .bond_index(self_edge)
-                    .ok_or_else(|| anyhow::anyhow!("Bond index not found"))?
-                    .clone();
-
-                // Copy ortho_towards from replacement (keyed by full bond index)
-                match replacement.ortho_towards.get(&bond) {
-                    Some(dir) => {
-                        self.ortho_towards.insert(bond, dir.clone());
-                    }
-                    None => {
-                        self.ortho_towards.remove(&bond);
-                    }
-                }
-            }
-        }
-
         // Update canonical_center: remove old nodes, add from replacement
         for name in node_names {
             self.canonical_center.remove(name);
@@ -805,11 +803,9 @@ where
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use tensor4all_core::index::{DefaultIndex, DynId};
+    use tensor4all_core::index::DefaultTagSet;
     use tensor4all_core::storage::{DenseStorageF64, Storage};
-    use tensor4all_core::{NoSymmSpace, TensorDynLen};
-
-    type TestIndex = DefaultIndex<DynId>;
+    use tensor4all_core::{DynIndex, NoSymmSpace, TensorDynLen};
 
     /// Create a 4-node Y-shape TreeTN:
     ///     A
@@ -818,20 +814,20 @@ mod tests {
     ///    / \
     ///   C   D
     fn create_y_shape_treetn() -> (
-        TreeTN<TestIndex, String>,
-        TestIndex,
-        TestIndex,
-        TestIndex,
-        TestIndex,
+        TreeTN<TensorDynLen, String>,
+        DynIndex,
+        DynIndex,
+        DynIndex,
+        DynIndex,
     ) {
-        let mut tn = TreeTN::<TestIndex, String>::new();
+        let mut tn = TreeTN::<TensorDynLen, String>::new();
 
-        let site_a = TestIndex::new_dyn(2);
-        let site_c = TestIndex::new_dyn(2);
-        let site_d = TestIndex::new_dyn(2);
-        let bond_ab = TestIndex::new_dyn(3);
-        let bond_bc = TestIndex::new_dyn(3);
-        let bond_bd = TestIndex::new_dyn(3);
+        let site_a = DynIndex::new_dyn(2);
+        let site_c = DynIndex::new_dyn(2);
+        let site_d = DynIndex::new_dyn(2);
+        let bond_ab = DynIndex::new_dyn(3);
+        let bond_bc = DynIndex::new_dyn(3);
+        let bond_bd = DynIndex::new_dyn(3);
 
         // Tensor A: [site_a, bond_ab]
         let tensor_a = TensorDynLen::new(
@@ -891,7 +887,7 @@ mod tests {
         // Should have site_a as external index plus bond_ab (which becomes external)
         let n_a = subtree.node_index(&"A".to_string()).unwrap();
         let tensor_a = subtree.tensor(n_a).unwrap();
-        assert_eq!(tensor_a.indices.len(), 2);
+        assert_eq!(tensor_a.num_external_indices(), 2);
 
         // Verify consistency after extraction
         subtree.verify_internal_consistency().unwrap();
@@ -1156,14 +1152,14 @@ mod tests {
 
     /// Create a chain TreeTN: A - B - C
     /// Each node has a site index of dim 2, bonds of dim 4
-    fn create_chain_treetn() -> TreeTN<TestIndex, String> {
-        let mut tn = TreeTN::<TestIndex, String>::new();
+    fn create_chain_treetn() -> TreeTN<TensorDynLen, String> {
+        let mut tn = TreeTN::<TensorDynLen, String>::new();
 
-        let site_a = TestIndex::new_dyn(2);
-        let site_b = TestIndex::new_dyn(2);
-        let site_c = TestIndex::new_dyn(2);
-        let bond_ab = TestIndex::new_dyn(4);
-        let bond_bc = TestIndex::new_dyn(4);
+        let site_a = DynIndex::new_dyn(2);
+        let site_b = DynIndex::new_dyn(2);
+        let site_c = DynIndex::new_dyn(2);
+        let bond_ab = DynIndex::new_dyn(4);
+        let bond_bc = DynIndex::new_dyn(4);
 
         // Tensor A: [site_a, bond_ab] dim 2x4
         let tensor_a = TensorDynLen::new(
@@ -1230,9 +1226,9 @@ mod tests {
         for node_name in tn.node_names() {
             let node_idx = tn.node_index(&node_name).unwrap();
             let tensor = tn.tensor(node_idx).unwrap();
-            for dim in &tensor.dims {
+            for dim in tensor.external_indices().iter().map(|i| i.dim()) {
                 // Site dims are 2, truncated bonds should be <= 2
-                assert!(*dim <= 4); // Original max was 4
+                assert!(dim <= 4); // Original max was 4
             }
         }
     }
