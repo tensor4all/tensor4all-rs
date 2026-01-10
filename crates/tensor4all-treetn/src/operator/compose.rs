@@ -11,14 +11,16 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use petgraph::stable_graph::NodeIndex;
 
-use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
+use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::storage::{DenseStorageF64, Storage};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::{IndexLike, TensorDynLen};
 
 use super::identity::build_identity_operator_tensor;
 use super::Operator;
 use crate::site_index_network::SiteIndexNetwork;
-use crate::treetn::{IndexMapping, LinearOperator, TreeTN};
+use crate::treetn::TreeTN;
+// TODO: Re-enable after operator module is refactored
+// use crate::treetn::linsolve::{IndexMapping, LinearOperator};
 
 /// Check if a set of operators are exclusive (non-overlapping) on the target network.
 ///
@@ -35,15 +37,14 @@ use crate::treetn::{IndexMapping, LinearOperator, TreeTN};
 /// # Returns
 ///
 /// `true` if operators are exclusive, `false` otherwise.
-pub fn are_exclusive_operators<Id, Symm, V, O>(
-    target: &SiteIndexNetwork<V, Id, Symm>,
+pub fn are_exclusive_operators<I, V, O>(
+    target: &SiteIndexNetwork<V, I>,
     operators: &[&O],
 ) -> bool
 where
-    Id: Clone + Hash + Eq + Debug,
-    Symm: Clone + Symmetry + Debug,
+    I: IndexLike,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
-    O: Operator<Id, Symm, V>,
+    O: Operator<I, V>,
 {
     // Collect node sets for each operator
     let node_sets: Vec<HashSet<V>> = operators.iter().map(|op| op.node_names()).collect();
@@ -92,15 +93,14 @@ where
 }
 
 /// Check if paths between two operator regions don't cross other operators.
-fn check_path_exclusive<Id, Symm, V>(
-    target: &SiteIndexNetwork<V, Id, Symm>,
+fn check_path_exclusive<I, V>(
+    target: &SiteIndexNetwork<V, I>,
     set_a: &HashSet<V>,
     set_b: &HashSet<V>,
     all_sets: &[HashSet<V>],
 ) -> bool
 where
-    Id: Clone + Hash + Eq + Debug,
-    Symm: Clone + Symmetry + Debug,
+    I: IndexLike,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     // Find a node from each set
@@ -168,14 +168,15 @@ where
 /// - Operators are not exclusive (overlapping)
 /// - Operator nodes don't exist in target
 /// - Gap node site indices not provided
-pub fn compose_exclusive_linear_operators<Id, Symm, V>(
-    target: &SiteIndexNetwork<V, Id, Symm>,
-    operators: &[&LinearOperator<Id, Symm, V>],
-    gap_site_indices: &HashMap<V, Vec<(Index<Id, Symm>, Index<Id, Symm>)>>,
-) -> Result<LinearOperator<Id, Symm, V>>
+pub fn compose_exclusive_linear_operators<I, V>(
+    target: &SiteIndexNetwork<V, I>,
+    operators: &[&LinearOperator<I, V>],
+    gap_site_indices: &HashMap<V, Vec<(I, I)>>,
+) -> Result<LinearOperator<I, V>>
 where
-    Id: Clone + Hash + Eq + Ord + Debug + From<DynId>,
-    Symm: Clone + Symmetry + Debug + From<NoSymmSpace> + PartialEq,
+    I: IndexLike,
+    I::Id: Clone + Hash + Eq + Ord + Debug + From<DynId> + Send + Sync,
+    I::Tags: Default,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     // 1. Validate exclusivity
@@ -194,10 +195,10 @@ where
     let gaps: Vec<V> = all_target_nodes.difference(&covered).cloned().collect();
 
     // 4. Build tensors and mappings
-    let mut tensors: Vec<TensorDynLen<Id, Symm>> = Vec::new();
+    let mut tensors: Vec<TensorDynLen> = Vec::new();
     let mut result_node_names: Vec<V> = Vec::new();
-    let mut combined_input_mapping: HashMap<V, IndexMapping<Id, Symm>> = HashMap::new();
-    let mut combined_output_mapping: HashMap<V, IndexMapping<Id, Symm>> = HashMap::new();
+    let mut combined_input_mapping: HashMap<V, IndexMapping<I>> = HashMap::new();
+    let mut combined_output_mapping: HashMap<V, IndexMapping<I>> = HashMap::new();
 
     // 4a. Add tensors and mappings from operators
     for op in operators {
@@ -245,27 +246,29 @@ where
 
         // Create internal indices for the identity operator
         // (different IDs from true indices)
-        let mut internal_inputs: Vec<Index<Id, Symm>> = Vec::new();
-        let mut internal_outputs: Vec<Index<Id, Symm>> = Vec::new();
+        let mut internal_inputs: Vec<Index<I::Id, I::Tags>> = Vec::new();
+        let mut internal_outputs: Vec<Index<I::Id, I::Tags>> = Vec::new();
 
         for (true_input, true_output) in index_pairs {
             // Create new internal indices with fresh IDs
             // Use Index::new_dyn to get unique IDs
-            let dim_in = true_input.symm.total_dim();
-            let dim_out = true_output.symm.total_dim();
+            let dim_in = true_input.dim();
+            let dim_out = true_output.dim();
 
             // Create internal indices with matching dimensions
-            let internal_in: Index<DynId, NoSymmSpace> = Index::new_dyn(dim_in);
-            let internal_out: Index<DynId, NoSymmSpace> = Index::new_dyn(dim_out);
+            let internal_in_base: DynIndex = Index::new_dyn(dim_in);
+            let internal_out_base: DynIndex = Index::new_dyn(dim_out);
 
             // Convert to the target type
-            let internal_in = Index::new(
-                Id::from(internal_in.id),
-                Symm::from(internal_in.symm),
+            let internal_in: Index<I::Id, I::Tags> = Index::new_with_tags(
+                I::Id::from(internal_in_base.id),
+                internal_in_base.dim(),
+                I::Tags::default(),
             );
-            let internal_out = Index::new(
-                Id::from(internal_out.id),
-                Symm::from(internal_out.symm),
+            let internal_out: Index<I::Id, I::Tags> = Index::new_with_tags(
+                I::Id::from(internal_out_base.id),
+                internal_out_base.dim(),
+                I::Tags::default(),
             );
 
             internal_inputs.push(internal_in.clone());
@@ -315,16 +318,17 @@ where
 ///
 /// This is a generic version that accepts any type implementing the Operator trait.
 /// For actual composition, use [`compose_exclusive_linear_operators`] with LinearOperator inputs.
-pub fn compose_exclusive_operators<Id, Symm, V, O>(
-    _target: &SiteIndexNetwork<V, Id, Symm>,
+pub fn compose_exclusive_operators<I, V, O>(
+    _target: &SiteIndexNetwork<V, I>,
     _operators: &[&O],
-    _gap_site_indices: &HashMap<V, Vec<(Index<Id, Symm>, Index<Id, Symm>)>>,
-) -> Result<LinearOperator<Id, Symm, V>>
+    _gap_site_indices: &HashMap<V, Vec<(I, I)>>,
+) -> Result<LinearOperator<I, V>>
 where
-    Id: Clone + Hash + Eq + Ord + Debug + From<DynId>,
-    Symm: Clone + Symmetry + Debug + From<NoSymmSpace> + PartialEq,
+    I: IndexLike,
+    I::Id: Clone + Hash + Eq + Ord + Debug + From<DynId> + Send + Sync,
+    I::Tags: Default,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
-    O: Operator<Id, Symm, V>,
+    O: Operator<I, V>,
 {
     // This function requires operators to be LinearOperator
     // Use compose_exclusive_linear_operators directly for LinearOperator inputs
@@ -340,13 +344,13 @@ mod tests {
     use crate::random::{random_treetn_f64, LinkSpace};
     use tensor4all_core::TensorAccess;
 
-    type DynIndex = Index<DynId, NoSymmSpace>;
+    type DynIndex = Index<DynId, TagSet>;
 
     fn make_index(dim: usize) -> DynIndex {
         Index::new_dyn(dim)
     }
 
-    fn create_chain_site_network(n: usize) -> SiteIndexNetwork<String, DynId, NoSymmSpace> {
+    fn create_chain_site_network(n: usize) -> SiteIndexNetwork<String, DynIndex> {
         let mut net = SiteIndexNetwork::new();
         for i in 0..n {
             let name = format!("N{}", i);
@@ -363,10 +367,10 @@ mod tests {
 
     /// Create a simple LinearOperator from a TreeTN with explicit index mappings.
     fn create_linear_operator_from_treetn(
-        mpo: TreeTN<DynId, NoSymmSpace, String>,
+        mpo: TreeTN<DynIndex, String>,
         input_indices: &[(String, DynIndex, DynIndex)], // (node, true_input, internal_input)
         output_indices: &[(String, DynIndex, DynIndex)], // (node, true_output, internal_output)
-    ) -> LinearOperator<DynId, NoSymmSpace, String> {
+    ) -> LinearOperator<DynIndex, String> {
         let mut input_mapping = HashMap::new();
         let mut output_mapping = HashMap::new();
 
@@ -399,14 +403,14 @@ mod tests {
         let target = create_chain_site_network(5);
 
         // Create two non-overlapping operators
-        let mut op1_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op1_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         op1_net.add_node("N0".to_string(), HashSet::new()).unwrap();
         op1_net.add_node("N1".to_string(), HashSet::new()).unwrap();
         op1_net
             .add_edge(&"N0".to_string(), &"N1".to_string())
             .unwrap();
 
-        let mut op2_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op2_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         op2_net.add_node("N3".to_string(), HashSet::new()).unwrap();
         op2_net.add_node("N4".to_string(), HashSet::new()).unwrap();
         op2_net
@@ -430,14 +434,14 @@ mod tests {
         let target = create_chain_site_network(4);
 
         // Create overlapping operators (both include N1)
-        let mut op1_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op1_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         op1_net.add_node("N0".to_string(), HashSet::new()).unwrap();
         op1_net.add_node("N1".to_string(), HashSet::new()).unwrap();
         op1_net
             .add_edge(&"N0".to_string(), &"N1".to_string())
             .unwrap();
 
-        let mut op2_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op2_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         op2_net.add_node("N1".to_string(), HashSet::new()).unwrap();
         op2_net.add_node("N2".to_string(), HashSet::new()).unwrap();
         op2_net
@@ -459,10 +463,10 @@ mod tests {
         let target = create_chain_site_network(4);
 
         // Create single-node operators
-        let mut op1_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op1_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         op1_net.add_node("N0".to_string(), HashSet::new()).unwrap();
 
-        let mut op2_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op2_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         op2_net.add_node("N2".to_string(), HashSet::new()).unwrap();
 
         let link_space = LinkSpace::uniform(2);
@@ -487,7 +491,7 @@ mod tests {
         let target = create_chain_site_network(5);
 
         // Create site networks for operators
-        let mut op1_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op1_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let s0_in = make_index(2);
         let s0_out = make_index(2);
         let s1_in = make_index(2);
@@ -512,7 +516,7 @@ mod tests {
             .add_edge(&"N0".to_string(), &"N1".to_string())
             .unwrap();
 
-        let mut op2_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op2_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let s3_in = make_index(2);
         let s3_out = make_index(2);
         let s4_in = make_index(2);
@@ -620,7 +624,7 @@ mod tests {
         let target = create_chain_site_network(3);
 
         // Create single-node site networks
-        let mut op1_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op1_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let s0_in = make_index(2);
         let s0_out = make_index(2);
         op1_net
@@ -632,7 +636,7 @@ mod tests {
             )
             .unwrap();
 
-        let mut op2_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op2_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let s2_in = make_index(2);
         let s2_out = make_index(2);
         op2_net
@@ -694,7 +698,7 @@ mod tests {
         let target = create_chain_site_network(2);
 
         // Create single-node site networks
-        let mut op1_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op1_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let s0_in = make_index(2);
         let s0_out = make_index(2);
         op1_net
@@ -706,7 +710,7 @@ mod tests {
             )
             .unwrap();
 
-        let mut op2_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op2_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let s1_in = make_index(2);
         let s1_out = make_index(2);
         op2_net
@@ -763,7 +767,7 @@ mod tests {
         let target = create_chain_site_network(3);
 
         // Create overlapping networks
-        let mut op1_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op1_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let s0_in = make_index(2);
         let s1_in = make_index(2);
         op1_net
@@ -782,7 +786,7 @@ mod tests {
             .add_edge(&"N0".to_string(), &"N1".to_string())
             .unwrap();
 
-        let mut op2_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op2_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let s1_in2 = make_index(2);
         let s2_in = make_index(2);
         op2_net
@@ -829,7 +833,7 @@ mod tests {
         // Actually, for exclusivity check, we need connected subtrees.
         // Let's use single-node operators instead.
 
-        let mut op1_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op1_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let s0_in = make_index(2);
         let s0_out = make_index(2);
         op1_net
@@ -841,7 +845,7 @@ mod tests {
             )
             .unwrap();
 
-        let mut op2_net: SiteIndexNetwork<String, DynId> = SiteIndexNetwork::new();
+        let mut op2_net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let s2_in = make_index(2);
         let s2_out = make_index(2);
         op2_net

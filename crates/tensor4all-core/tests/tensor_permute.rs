@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use std::sync::Arc;
-use tensor4all_core::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::{compute_permutation_from_indices, Storage, TensorDynLen};
 
 #[test]
@@ -77,7 +77,7 @@ fn test_permute_dyn_f64_2d() {
         _ => panic!("expected DenseF64"),
     }
 
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, Arc::new(storage));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
 
     // Permute to 3×2: swap dimensions
     // Expected: [[1, 4], [2, 5], [3, 6]]
@@ -119,7 +119,7 @@ fn test_permute_dyn_c64_2d() {
         _ => panic!("expected DenseC64"),
     }
 
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, Arc::new(storage));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
 
     // Permute to 3×2
     let permuted = tensor.permute(&[1, 0]);
@@ -161,7 +161,7 @@ fn test_permute_dyn_f64_3d() {
         _ => panic!("expected DenseF64"),
     }
 
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, Arc::new(storage));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
 
     // Permute to 4×2×3: [2, 0, 1]
     let permuted = tensor.permute(&[2, 0, 1]);
@@ -201,7 +201,7 @@ fn test_permute_identity() {
         _ => panic!("expected DenseF64"),
     }
 
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, Arc::new(storage));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
 
     // Identity permutation should not change anything
     let permuted = tensor.permute(&[0, 1]);
@@ -234,7 +234,7 @@ fn test_permute_indices_dyn_f64_2d() {
         _ => panic!("expected DenseF64"),
     }
 
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, Arc::new(storage));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
 
     // Permute to 3×2: swap the two dimensions by providing new indices order
     let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);
@@ -274,7 +274,7 @@ fn test_permute_indices_c64() {
         _ => panic!("expected DenseC64"),
     }
 
-    let tensor: TensorDynLen<DynId> = TensorDynLen::new(indices, dims, Arc::new(storage));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
 
     // Permute to 3×2
     let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);

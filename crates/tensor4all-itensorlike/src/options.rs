@@ -2,8 +2,8 @@
 
 use std::ops::Range;
 
-// Re-export CanonicalForm from core-common for convenience
-pub use tensor4all_core::CanonicalForm;
+// Re-export CanonicalForm from treetn for convenience
+pub use tensor4all_treetn::algorithm::CanonicalForm;
 
 /// Truncation algorithm.
 ///

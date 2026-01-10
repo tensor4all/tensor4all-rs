@@ -15,17 +15,16 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::index::{DynId, NoSymmSpace, Symmetry};
-use tensor4all_core::CanonicalForm;
+use tensor4all_core::{IndexLike, TensorLike};
+use crate::algorithm::CanonicalForm;
 
 use super::localupdate::{apply_local_update_sweep, LocalUpdateSweepPlan, TruncateUpdater};
 use super::TreeTN;
 use crate::options::{CanonicalizationOptions, TruncationOptions};
 
-impl<Id, Symm, V> TreeTN<Id, Symm, V>
+impl<T, V> TreeTN<T, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Truncate the network towards the specified center using options.
@@ -61,9 +60,8 @@ where
         options: TruncationOptions,
     ) -> Result<Self>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
-        Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + From<NoSymmSpace>,
         V: Ord,
+        <T::Index as IndexLike>::Id: Ord,
     {
         self.truncate_impl(
             canonical_center,
@@ -84,9 +82,8 @@ where
         options: TruncationOptions,
     ) -> Result<()>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
-        Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + From<NoSymmSpace>,
         V: Ord,
+        <T::Index as IndexLike>::Id: Ord,
     {
         self.truncate_impl(
             canonical_center,
@@ -109,9 +106,8 @@ where
         context_name: &str,
     ) -> Result<()>
     where
-        Id: Clone + std::hash::Hash + Eq + Ord + From<DynId>,
-        Symm: Clone + Symmetry + PartialEq + std::fmt::Debug + From<NoSymmSpace>,
         V: Ord,
+        <T::Index as IndexLike>::Id: Ord,
     {
         // Collect center nodes
         let center_nodes: HashSet<V> = canonical_center.into_iter().collect();

@@ -1,75 +1,4 @@
-use crate::index::{generate_id, DynId, Index, Symmetry};
-
-/// Create a similar index with the same space and tags but a new ID.
-///
-/// This corresponds to ITensors.jl's `sim(i::Index)` function. It creates a new
-/// index with the same symmetry space (dimension/QN structure) and tags, but with
-/// a freshly generated ID. This is commonly used in tensor decompositions like SVD
-/// where you need a new bond index with the same structure.
-///
-/// # Arguments
-/// * `i` - The index to create a similar copy of
-///
-/// # Returns
-/// A new index with the same `symm` and `tags` but a new `id`.
-///
-/// # Example
-/// ```
-/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_core::index_ops::sim;
-///
-/// let idx = Index::new_dyn(8);
-/// let similar = sim(&idx);
-///
-/// // Same size and tags, but different ID
-/// assert_eq!(similar.size(), idx.size());
-/// assert_ne!(similar.id, idx.id);
-/// ```
-pub fn sim<Id, Symm, Tags>(i: &Index<Id, Symm, Tags>) -> Index<Id, Symm, Tags>
-where
-    Id: From<DynId>,
-    Symm: Clone,
-    Tags: Clone,
-{
-    Index {
-        id: DynId(generate_id()).into(),
-        symm: i.symm.clone(),
-        tags: i.tags.clone(),
-    }
-}
-
-/// Create a similar index with the same space and tags but a new ID (consumes input).
-///
-/// This is an owned variant of `sim` that consumes the input index, avoiding
-/// unnecessary clones when you already own the index.
-///
-/// # Arguments
-/// * `i` - The index to create a similar copy of (consumed)
-///
-/// # Returns
-/// A new index with the same `symm` and `tags` but a new `id`.
-///
-/// # Example
-/// ```
-/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_core::index_ops::sim_owned;
-///
-/// let idx = Index::new_dyn(8);
-/// let similar = sim_owned(idx);  // idx is consumed
-///
-/// // Same size and tags, but different ID
-/// assert_eq!(similar.size(), 8);
-/// ```
-pub fn sim_owned<Id, Symm, Tags>(i: Index<Id, Symm, Tags>) -> Index<Id, Symm, Tags>
-where
-    Id: From<DynId>,
-{
-    Index {
-        id: DynId(generate_id()).into(),
-        symm: i.symm,
-        tags: i.tags,
-    }
-}
+use crate::IndexLike;
 
 /// Error type for index replacement operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,22 +66,17 @@ impl std::error::Error for ReplaceIndsError {}
 /// let duplicate = vec![i.clone(), i.clone()];
 /// assert!(check_unique_indices(&duplicate).is_err());
 /// ```
-pub fn check_unique_indices<Id, Symm, Tags>(
-    indices: &[Index<Id, Symm, Tags>],
-) -> Result<(), ReplaceIndsError>
-where
-    Id: std::hash::Hash + Eq,
-{
+pub fn check_unique_indices<I: IndexLike>(indices: &[I]) -> Result<(), ReplaceIndsError> {
     use std::collections::HashMap;
-    let mut seen = HashMap::with_capacity(indices.len());
+    let mut seen: HashMap<&I::Id, usize> = HashMap::with_capacity(indices.len());
     for (pos, idx) in indices.iter().enumerate() {
-        if let Some(&first_pos) = seen.get(&idx.id) {
+        if let Some(&first_pos) = seen.get(idx.id()) {
             return Err(ReplaceIndsError::DuplicateIndices {
                 first_pos,
                 duplicate_pos: pos,
             });
         }
-        seen.insert(&idx.id, pos);
+        seen.insert(idx.id(), pos);
     }
     Ok(())
 }
@@ -161,17 +85,17 @@ where
 ///
 /// This corresponds to ITensors.jl's `replaceinds` function. It replaces indices
 /// in `indices` that match (by ID) any of the `(old, new)` pairs in `replacements`.
-/// The replacement index must have the same symmetry space as the original.
+/// The replacement index must have the same dimension as the original.
 ///
 /// # Arguments
 /// * `indices` - Collection of indices to modify
 /// * `replacements` - Pairs of `(old_index, new_index)` where indices matching `old_index.id` are replaced with `new_index`
 ///
 /// # Returns
-/// A new vector with replacements applied, or an error if any replacement has a space mismatch.
+/// A new vector with replacements applied, or an error if any replacement has a dimension mismatch.
 ///
 /// # Errors
-/// Returns `ReplaceIndsError::SpaceMismatch` if any replacement index has a different symmetry space than the original.
+/// Returns `ReplaceIndsError::SpaceMismatch` if any replacement index has a different dimension than the original.
 ///
 /// # Example
 /// ```
@@ -190,35 +114,30 @@ where
 /// assert_eq!(replaced.len(), 3);
 /// assert_eq!(replaced[1].id, new_j.id);
 /// ```
-pub fn replaceinds<Id, Symm, Tags>(
-    indices: Vec<Index<Id, Symm, Tags>>,
-    replacements: &[(Index<Id, Symm, Tags>, Index<Id, Symm, Tags>)],
-) -> Result<Vec<Index<Id, Symm, Tags>>, ReplaceIndsError>
-where
-    Id: std::hash::Hash + Eq + Clone,
-    Symm: Symmetry + Clone,
-    Tags: Clone,
-{
+pub fn replaceinds<I: IndexLike>(
+    indices: Vec<I>,
+    replacements: &[(I, I)],
+) -> Result<Vec<I>, ReplaceIndsError> {
     // Check for duplicates in input indices
     check_unique_indices(&indices)?;
 
     // Build a map from old ID to new index for fast lookup
     let mut replacement_map = std::collections::HashMap::with_capacity(replacements.len());
     for (old, new) in replacements {
-        // Validate space match
-        if old.symm != new.symm {
+        // Validate dimension match
+        if old.dim() != new.dim() {
             return Err(ReplaceIndsError::SpaceMismatch {
-                from_dim: old.symm.total_dim(),
-                to_dim: new.symm.total_dim(),
+                from_dim: old.dim(),
+                to_dim: new.dim(),
             });
         }
-        replacement_map.insert(&old.id, new);
+        replacement_map.insert(old.id(), new);
     }
 
     // Apply replacements
     let mut result = Vec::with_capacity(indices.len());
     for idx in indices {
-        if let Some(new_idx) = replacement_map.get(&idx.id) {
+        if let Some(new_idx) = replacement_map.get(idx.id()) {
             result.push((*new_idx).clone());
         } else {
             result.push(idx);
@@ -240,10 +159,10 @@ where
 /// * `replacements` - Pairs of `(old_index, new_index)` where indices matching `old_index.id` are replaced with `new_index`
 ///
 /// # Returns
-/// `Ok(())` on success, or an error if any replacement has a space mismatch.
+/// `Ok(())` on success, or an error if any replacement has a dimension mismatch.
 ///
 /// # Errors
-/// Returns `ReplaceIndsError::SpaceMismatch` if any replacement index has a different symmetry space than the original.
+/// Returns `ReplaceIndsError::SpaceMismatch` if any replacement index has a different dimension than the original.
 ///
 /// # Example
 /// ```
@@ -261,34 +180,29 @@ where
 /// replaceinds_in_place(&mut indices, &replacements).unwrap();
 /// assert_eq!(indices[1].id, new_j.id);
 /// ```
-pub fn replaceinds_in_place<Id, Symm, Tags>(
-    indices: &mut [Index<Id, Symm, Tags>],
-    replacements: &[(Index<Id, Symm, Tags>, Index<Id, Symm, Tags>)],
-) -> Result<(), ReplaceIndsError>
-where
-    Id: std::hash::Hash + Eq + Clone,
-    Symm: Symmetry + Clone,
-    Tags: Clone,
-{
+pub fn replaceinds_in_place<I: IndexLike>(
+    indices: &mut [I],
+    replacements: &[(I, I)],
+) -> Result<(), ReplaceIndsError> {
     // Check for duplicates in input indices
     check_unique_indices(indices)?;
 
     // Build a map from old ID to new index for fast lookup
     let mut replacement_map = std::collections::HashMap::with_capacity(replacements.len());
     for (old, new) in replacements {
-        // Validate space match
-        if old.symm != new.symm {
+        // Validate dimension match
+        if old.dim() != new.dim() {
             return Err(ReplaceIndsError::SpaceMismatch {
-                from_dim: old.symm.total_dim(),
-                to_dim: new.symm.total_dim(),
+                from_dim: old.dim(),
+                to_dim: new.dim(),
             });
         }
-        replacement_map.insert(&old.id, new);
+        replacement_map.insert(old.id(), new);
     }
 
     // Apply replacements in-place
     for idx in indices.iter_mut() {
-        if let Some(new_idx) = replacement_map.get(&idx.id) {
+        if let Some(new_idx) = replacement_map.get(idx.id()) {
             *idx = (*new_idx).clone();
         }
     }
@@ -326,19 +240,11 @@ where
 /// assert_eq!(unique.len(), 1);
 /// assert_eq!(unique[0].id, i.id);
 /// ```
-pub fn unique_inds<Id, Symm, Tags>(
-    indices_a: &[Index<Id, Symm, Tags>],
-    indices_b: &[Index<Id, Symm, Tags>],
-) -> Vec<Index<Id, Symm, Tags>>
-where
-    Id: std::hash::Hash + Eq + Clone,
-    Symm: Clone,
-    Tags: Clone,
-{
-    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| &idx.id).collect();
+pub fn unique_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
+    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| idx.id()).collect();
     indices_a
         .iter()
-        .filter(|idx| !b_ids.contains(&idx.id))
+        .filter(|idx| !b_ids.contains(idx.id()))
         .cloned()
         .collect()
 }
@@ -373,17 +279,9 @@ where
 /// let noncommon = noncommon_inds(&indices_a, &indices_b);
 /// assert_eq!(noncommon.len(), 2);  // i and k
 /// ```
-pub fn noncommon_inds<Id, Symm, Tags>(
-    indices_a: &[Index<Id, Symm, Tags>],
-    indices_b: &[Index<Id, Symm, Tags>],
-) -> Vec<Index<Id, Symm, Tags>>
-where
-    Id: std::hash::Hash + Eq + Clone,
-    Symm: Clone,
-    Tags: Clone,
-{
-    let a_ids: std::collections::HashSet<_> = indices_a.iter().map(|idx| &idx.id).collect();
-    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| &idx.id).collect();
+pub fn noncommon_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
+    let a_ids: std::collections::HashSet<_> = indices_a.iter().map(|idx| idx.id()).collect();
+    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| idx.id()).collect();
 
     // Pre-allocate with estimated capacity (worst case: no common indices)
     let mut result = Vec::with_capacity(indices_a.len() + indices_b.len());
@@ -392,14 +290,14 @@ where
     result.extend(
         indices_a
             .iter()
-            .filter(|idx| !b_ids.contains(&idx.id))
+            .filter(|idx| !b_ids.contains(idx.id()))
             .cloned(),
     );
     // Add indices from B that are not in A
     result.extend(
         indices_b
             .iter()
-            .filter(|idx| !a_ids.contains(&idx.id))
+            .filter(|idx| !a_ids.contains(idx.id()))
             .cloned(),
     );
     result
@@ -434,25 +332,18 @@ where
 /// let union = union_inds(&indices_a, &indices_b);
 /// assert_eq!(union.len(), 3);  // i, j, k
 /// ```
-pub fn union_inds<Id, Symm, Tags>(
-    indices_a: &[Index<Id, Symm, Tags>],
-    indices_b: &[Index<Id, Symm, Tags>],
-) -> Vec<Index<Id, Symm, Tags>>
-where
-    Id: std::hash::Hash + Eq + Clone,
-    Symm: Clone,
-    Tags: Clone,
-{
-    let mut seen = std::collections::HashSet::with_capacity(indices_a.len() + indices_b.len());
+pub fn union_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
+    let mut seen: std::collections::HashSet<&I::Id> =
+        std::collections::HashSet::with_capacity(indices_a.len() + indices_b.len());
     let mut result = Vec::with_capacity(indices_a.len() + indices_b.len());
 
     for idx in indices_a {
-        if seen.insert(&idx.id) {
+        if seen.insert(idx.id()) {
             result.push(idx.clone());
         }
     }
     for idx in indices_b {
-        if seen.insert(&idx.id) {
+        if seen.insert(idx.id()) {
             result.push(idx.clone());
         }
     }
@@ -482,14 +373,8 @@ where
 /// assert!(hasind(&indices, &i));
 /// assert!(!hasind(&indices, &Index::new_dyn(4)));
 /// ```
-pub fn hasind<Id, Symm, Tags>(
-    indices: &[Index<Id, Symm, Tags>],
-    index: &Index<Id, Symm, Tags>,
-) -> bool
-where
-    Id: std::hash::Hash + Eq,
-{
-    indices.iter().any(|idx| idx.id == index.id)
+pub fn hasind<I: IndexLike>(indices: &[I], index: &I) -> bool {
+    indices.iter().any(|idx| idx == index)
 }
 
 /// Check if a collection contains all of the specified indices (by ID).
@@ -516,15 +401,9 @@ where
 /// assert!(hasinds(&indices, &[i.clone(), j.clone()]));
 /// assert!(!hasinds(&indices, &[i.clone(), Index::new_dyn(5)]));
 /// ```
-pub fn hasinds<Id, Symm, Tags>(
-    indices: &[Index<Id, Symm, Tags>],
-    targets: &[Index<Id, Symm, Tags>],
-) -> bool
-where
-    Id: std::hash::Hash + Eq,
-{
-    let index_ids: std::collections::HashSet<_> = indices.iter().map(|idx| &idx.id).collect();
-    targets.iter().all(|target| index_ids.contains(&target.id))
+pub fn hasinds<I: IndexLike>(indices: &[I], targets: &[I]) -> bool {
+    let index_ids: std::collections::HashSet<_> = indices.iter().map(|idx| idx.id()).collect();
+    targets.iter().all(|target| index_ids.contains(target.id()))
 }
 
 /// Check if two collections have any common indices (by ID).
@@ -553,15 +432,9 @@ where
 /// assert!(hascommoninds(&indices_a, &indices_b));
 /// assert!(!hascommoninds(&[i.clone()], &[k.clone()]));
 /// ```
-pub fn hascommoninds<Id, Symm, Tags>(
-    indices_a: &[Index<Id, Symm, Tags>],
-    indices_b: &[Index<Id, Symm, Tags>],
-) -> bool
-where
-    Id: std::hash::Hash + Eq,
-{
-    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| &idx.id).collect();
-    indices_a.iter().any(|idx| b_ids.contains(&idx.id))
+pub fn hascommoninds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> bool {
+    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| idx.id()).collect();
+    indices_a.iter().any(|idx| b_ids.contains(idx.id()))
 }
 
 /// Find common indices between two index collections.
@@ -594,19 +467,11 @@ where
 /// assert_eq!(common.len(), 1);
 /// assert_eq!(common[0].id, j.id);
 /// ```
-pub fn common_inds<Id, Symm, Tags>(
-    indices_a: &[Index<Id, Symm, Tags>],
-    indices_b: &[Index<Id, Symm, Tags>],
-) -> Vec<Index<Id, Symm, Tags>>
-where
-    Id: std::hash::Hash + Eq + Clone,
-    Symm: Clone,
-    Tags: Clone,
-{
-    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| &idx.id).collect();
+pub fn common_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
+    let b_ids: std::collections::HashSet<_> = indices_b.iter().map(|idx| idx.id()).collect();
     indices_a
         .iter()
-        .filter(|idx| b_ids.contains(&idx.id))
+        .filter(|idx| b_ids.contains(idx.id()))
         .cloned()
         .collect()
 }

@@ -57,7 +57,7 @@ impl<V: Clone + Ord + Hash> LinkSpace<V> {
 }
 
 /// Type alias for the default index type used in random generation.
-pub type DefaultIndex = Index<DynId, NoSymmSpace>;
+pub type DefaultIndex = Index<DynId, TagSet>;
 
 /// Create a random f64 TreeTN from a site index network.
 ///
@@ -77,13 +77,13 @@ pub type DefaultIndex = Index<DynId, NoSymmSpace>;
 /// # Example
 /// ```
 /// use tensor4all_treetn::{SiteIndexNetwork, random_treetn_f64, LinkSpace};
-/// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+/// use tensor4all_core::index::{DefaultIndex as Index, DynId, NoSymmSpace};
 /// use rand::SeedableRng;
 /// use rand_chacha::ChaCha8Rng;
 /// use std::collections::HashSet;
 ///
 /// // Create a simple 2-node network
-/// let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+/// let mut site_network = SiteIndexNetwork::<String, Index<DynId, TagSet>>::new();
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
 /// site_network.add_node("A".to_string(), HashSet::from([i.clone()])).unwrap();
@@ -97,7 +97,7 @@ pub type DefaultIndex = Index<DynId, NoSymmSpace>;
 /// ```
 pub fn random_treetn_f64<R, V>(
     rng: &mut R,
-    site_network: &SiteIndexNetwork<V, DynId, NoSymmSpace>,
+    site_network: &SiteIndexNetwork<V, DefaultIndex>,
     link_space: LinkSpace<V>,
 ) -> TreeTN<DynId, NoSymmSpace, V>
 where
@@ -118,7 +118,7 @@ where
 /// * `link_space` - Specification for bond dimensions
 pub fn random_treetn_c64<R, V>(
     rng: &mut R,
-    site_network: &SiteIndexNetwork<V, DynId, NoSymmSpace>,
+    site_network: &SiteIndexNetwork<V, DefaultIndex>,
     link_space: LinkSpace<V>,
 ) -> TreeTN<DynId, NoSymmSpace, V>
 where
@@ -131,7 +131,7 @@ where
 /// Internal implementation for creating random TreeTN.
 fn random_treetn_impl<R, V>(
     rng: &mut R,
-    site_network: &SiteIndexNetwork<V, DynId, NoSymmSpace>,
+    site_network: &SiteIndexNetwork<V, DefaultIndex>,
     link_space: LinkSpace<V>,
     is_complex: bool,
 ) -> TreeTN<DynId, NoSymmSpace, V>
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn test_random_treetn_f64_two_nodes() {
         // Use String as node name to avoid lifetime issues with &str
-        let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+        let mut site_network = SiteIndexNetwork::<String, Index<DynId, TagSet>>::new();
         let i = Index::new_dyn(2);
         let j = Index::new_dyn(3);
         site_network
@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_random_treetn_c64_chain() {
-        let mut site_network = SiteIndexNetwork::<i32, DynId>::new();
+        let mut site_network = SiteIndexNetwork::<i32, Index<DynId, TagSet>>::new();
         // Chain: 0 -- 1 -- 2
         for i in 0..3 {
             let idx = Index::new_dyn(2);
@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn test_link_space_per_edge() {
-        let mut site_network = SiteIndexNetwork::<String, DynId>::new();
+        let mut site_network = SiteIndexNetwork::<String, Index<DynId, TagSet>>::new();
         site_network
             .add_node("A".to_string(), HashSet::new())
             .unwrap();

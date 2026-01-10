@@ -25,50 +25,43 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::index::{DynId, Index, NoSymmSpace, Symmetry};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::IndexLike;
+use tensor4all_core::TensorLike;
 
+use super::projected_operator::IndexMapping;
 use crate::treetn::TreeTN;
-
-/// Mapping between true site indices and internal MPO indices.
-#[derive(Debug, Clone)]
-pub struct IndexMapping<Id, Symm>
-where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
-{
-    /// True site index (from state x or b)
-    pub true_index: Index<Id, Symm>,
-    /// Internal MPO index (s_in_tmp or s_out_tmp)
-    pub internal_index: Index<Id, Symm>,
-}
 
 /// LinearOperator: Wraps an MPO with index mapping for automatic transformations.
 ///
+/// # Deprecated
+///
+/// This type is deprecated. Use `LinsolveUpdater::with_index_mappings()` instead,
+/// which directly accepts index mappings without the intermediate `LinearOperator` wrapper.
+/// The index mappings are now handled internally by `ProjectedOperator`.
+///
 /// # Type Parameters
 ///
-/// * `Id` - Index identifier type
-/// * `Symm` - Symmetry type
+/// * `T` - Tensor type implementing `TensorLike`
 /// * `V` - Node name type
 #[derive(Debug, Clone)]
-pub struct LinearOperator<Id, Symm, V>
+pub struct LinearOperator<T, V>
 where
-    Id: Clone + std::hash::Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// The MPO with internal index IDs
-    pub mpo: TreeTN<Id, Symm, V>,
+    pub mpo: TreeTN<T, V>,
     /// Input index mapping: node -> (true s_in, internal s_in_tmp)
-    pub input_mapping: HashMap<V, IndexMapping<Id, Symm>>,
+    pub input_mapping: HashMap<V, IndexMapping<T::Index>>,
     /// Output index mapping: node -> (true s_out, internal s_out_tmp)
-    pub output_mapping: HashMap<V, IndexMapping<Id, Symm>>,
+    pub output_mapping: HashMap<V, IndexMapping<T::Index>>,
 }
 
-impl<Id, Symm, V> LinearOperator<Id, Symm, V>
+impl<T, V> LinearOperator<T, V>
 where
-    Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + From<DynId>,
-    Symm: Clone + Symmetry + From<NoSymmSpace> + PartialEq + std::fmt::Debug,
+    T: TensorLike,
+    T::Index: IndexLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     /// Create a new LinearOperator from an MPO and index mappings.
@@ -79,9 +72,9 @@ where
     /// * `input_mapping` - Mapping from true input indices to internal indices
     /// * `output_mapping` - Mapping from true output indices to internal indices
     pub fn new(
-        mpo: TreeTN<Id, Symm, V>,
-        input_mapping: HashMap<V, IndexMapping<Id, Symm>>,
-        output_mapping: HashMap<V, IndexMapping<Id, Symm>>,
+        mpo: TreeTN<T, V>,
+        input_mapping: HashMap<V, IndexMapping<T::Index>>,
+        output_mapping: HashMap<V, IndexMapping<T::Index>>,
     ) -> Self {
         Self {
             mpo,
@@ -106,8 +99,8 @@ where
     ///
     /// A LinearOperator with proper index mappings, or an error if structure is incompatible.
     pub fn from_mpo_and_state(
-        mpo: TreeTN<Id, Symm, V>,
-        state: &TreeTN<Id, Symm, V>,
+        mpo: TreeTN<T, V>,
+        state: &TreeTN<T, V>,
     ) -> Result<Self> {
         let mut input_mapping = HashMap::new();
         let mut output_mapping = HashMap::new();
@@ -136,12 +129,12 @@ where
 
                     // For each state site index, find matching MPO indices by dimension
                     for state_idx in state_indices {
-                        let dim = state_idx.symm.total_dim();
+                        let dim = state_idx.dim();
 
                         // Find MPO indices with matching dimension
                         let matching_mpo: Vec<_> = mpo_indices
                             .iter()
-                            .filter(|idx| idx.symm.total_dim() == dim)
+                            .filter(|idx| idx.dim() == dim)
                             .collect();
 
                         if matching_mpo.len() < 2 {
@@ -206,11 +199,11 @@ where
     /// # Returns
     ///
     /// The result `A|x⟩` with correct output indices.
-    pub fn apply(&self, state: &TreeTN<Id, Symm, V>) -> Result<TreeTN<Id, Symm, V>> {
+    pub fn apply(&self, state: &TreeTN<T, V>) -> Result<TreeTN<T, V>> {
         // For now, implement a simple node-by-node application
         // This is a placeholder - full implementation requires proper TTN contraction
 
-        let mut result_tensors: HashMap<V, TensorDynLen<Id, Symm>> = HashMap::new();
+        let mut result_tensors: HashMap<V, T> = HashMap::new();
 
         for node in state.site_index_network().node_names() {
             let node_idx = state
@@ -232,21 +225,21 @@ where
 
             // Step 1: Replace state's site indices with MPO's input indices
             let transformed_state = if let Some(mapping) = self.input_mapping.get(&node) {
-                state_tensor.replaceind(&mapping.true_index, &mapping.internal_index)
+                state_tensor.replaceind(&mapping.true_index, &mapping.internal_index)?
             } else {
                 state_tensor.clone()
             };
 
             // Step 2: Contract with operator
             // Find common indices between transformed state and operator
-            let common: Vec<_> = transformed_state
-                .indices
+            let state_indices = transformed_state.external_indices();
+            let op_indices = op_tensor.external_indices();
+            let common: Vec<_> = state_indices
                 .iter()
                 .filter_map(|idx_s| {
-                    op_tensor
-                        .indices
+                    op_indices
                         .iter()
-                        .find(|idx_o| idx_s.id == idx_o.id)
+                        .find(|idx_o| idx_s.same_id(idx_o))
                         .map(|idx_o| (idx_s.clone(), idx_o.clone()))
                 })
                 .collect();
@@ -255,7 +248,7 @@ where
 
             // Step 3: Replace MPO's output indices with true output indices
             let result_tensor = if let Some(mapping) = self.output_mapping.get(&node) {
-                contracted.replaceind(&mapping.internal_index, &mapping.true_index)
+                contracted.replaceind(&mapping.internal_index, &mapping.true_index)?
             } else {
                 contracted
             };
@@ -283,21 +276,17 @@ where
     /// # Returns
     ///
     /// The result of applying the operator to the local tensor.
-    pub fn apply_local(
-        &self,
-        local_tensor: &TensorDynLen<Id, Symm>,
-        region: &[V],
-    ) -> Result<TensorDynLen<Id, Symm>> {
+    pub fn apply_local(&self, local_tensor: &T, region: &[V]) -> Result<T> {
         // Step 1: Replace input indices in local_tensor with internal indices
         let mut transformed = local_tensor.clone();
         for node in region {
             if let Some(mapping) = self.input_mapping.get(node) {
-                transformed = transformed.replaceind(&mapping.true_index, &mapping.internal_index);
+                transformed = transformed.replaceind(&mapping.true_index, &mapping.internal_index)?;
             }
         }
 
         // Step 2: Contract with local operator tensors
-        let mut op_tensor: Option<TensorDynLen<Id, Symm>> = None;
+        let mut op_tensor: Option<T> = None;
         for node in region {
             let node_idx = self
                 .mpo
@@ -312,14 +301,14 @@ where
             op_tensor = Some(match op_tensor {
                 None => tensor,
                 Some(t) => {
-                    let common: Vec<_> = t
-                        .indices
+                    let t_indices = t.external_indices();
+                    let tensor_indices = tensor.external_indices();
+                    let common: Vec<_> = t_indices
                         .iter()
                         .filter_map(|idx_t| {
-                            tensor
-                                .indices
+                            tensor_indices
                                 .iter()
-                                .find(|idx| idx_t.id == idx.id)
+                                .find(|idx| idx_t.same_id(idx))
                                 .map(|idx| (idx_t.clone(), idx.clone()))
                         })
                         .collect();
@@ -331,14 +320,14 @@ where
         let op_tensor = op_tensor.ok_or_else(|| anyhow::anyhow!("Empty region"))?;
 
         // Contract transformed tensor with operator
-        let common: Vec<_> = transformed
-            .indices
+        let transformed_indices = transformed.external_indices();
+        let op_indices = op_tensor.external_indices();
+        let common: Vec<_> = transformed_indices
             .iter()
             .filter_map(|idx_t| {
-                op_tensor
-                    .indices
+                op_indices
                     .iter()
-                    .find(|idx_o| idx_t.id == idx_o.id)
+                    .find(|idx_o| idx_t.same_id(idx_o))
                     .map(|idx_o| (idx_t.clone(), idx_o.clone()))
             })
             .collect();
@@ -349,7 +338,7 @@ where
         let mut result = contracted;
         for node in region {
             if let Some(mapping) = self.output_mapping.get(node) {
-                result = result.replaceind(&mapping.internal_index, &mapping.true_index);
+                result = result.replaceind(&mapping.internal_index, &mapping.true_index)?;
             }
         }
 
@@ -357,60 +346,35 @@ where
     }
 
     /// Get the internal MPO.
-    pub fn mpo(&self) -> &TreeTN<Id, Symm, V> {
+    pub fn mpo(&self) -> &TreeTN<T, V> {
         &self.mpo
     }
 
     /// Get input mapping for a node.
-    pub fn get_input_mapping(&self, node: &V) -> Option<&IndexMapping<Id, Symm>> {
+    pub fn get_input_mapping(&self, node: &V) -> Option<&IndexMapping<T::Index>> {
         self.input_mapping.get(node)
     }
 
     /// Get output mapping for a node.
-    pub fn get_output_mapping(&self, node: &V) -> Option<&IndexMapping<Id, Symm>> {
+    pub fn get_output_mapping(&self, node: &V) -> Option<&IndexMapping<T::Index>> {
         self.output_mapping.get(node)
     }
 }
 
 // ============================================================================
-// Operator trait implementation
+// Helper methods
 // ============================================================================
 
-use crate::operator::Operator;
-use crate::SiteIndexNetwork;
 use std::collections::HashSet;
 
-impl<Id, Symm, V> Operator<Id, Symm, V> for LinearOperator<Id, Symm, V>
+impl<T, V> LinearOperator<T, V>
 where
-    Id: Clone + Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
-    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
-{
-    fn site_indices(&self) -> HashSet<Index<Id, Symm>> {
-        // Return the TRUE input site indices (not internal MPO indices)
-        self.input_mapping
-            .values()
-            .map(|m| m.true_index.clone())
-            .collect()
-    }
-
-    fn site_index_network(&self) -> &SiteIndexNetwork<V, Id, Symm> {
-        self.mpo.site_index_network()
-    }
-
-    fn node_names(&self) -> HashSet<V> {
-        self.mpo.node_names().into_iter().collect()
-    }
-}
-
-impl<Id, Symm, V> LinearOperator<Id, Symm, V>
-where
-    Id: Clone + Hash + Eq + std::fmt::Debug,
-    Symm: Clone + Symmetry + std::fmt::Debug,
+    T: TensorLike,
+    T::Index: IndexLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
     /// Get all input site indices (true indices from state space).
-    pub fn input_site_indices(&self) -> HashSet<Index<Id, Symm>> {
+    pub fn input_site_indices(&self) -> HashSet<T::Index> {
         self.input_mapping
             .values()
             .map(|m| m.true_index.clone())
@@ -418,7 +382,7 @@ where
     }
 
     /// Get all output site indices (true indices from result space).
-    pub fn output_site_indices(&self) -> HashSet<Index<Id, Symm>> {
+    pub fn output_site_indices(&self) -> HashSet<T::Index> {
         self.output_mapping
             .values()
             .map(|m| m.true_index.clone())
@@ -426,19 +390,17 @@ where
     }
 
     /// Get all input mappings.
-    pub fn input_mappings(&self) -> &HashMap<V, IndexMapping<Id, Symm>> {
+    pub fn input_mappings(&self) -> &HashMap<V, IndexMapping<T::Index>> {
         &self.input_mapping
     }
 
     /// Get all output mappings.
-    pub fn output_mappings(&self) -> &HashMap<V, IndexMapping<Id, Symm>> {
+    pub fn output_mappings(&self) -> &HashMap<V, IndexMapping<T::Index>> {
         &self.output_mapping
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Tests will be added when we integrate with the rest of the system
 }

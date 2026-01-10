@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::One;
-use tensor4all_core::index::{DynId, Index, NoSymmSpace, TagSet};
+use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::storage::{DenseStorageC64, Storage};
 use tensor4all_core::TensorDynLen;
 use tensor4all_simpletensortrain::{
@@ -59,10 +59,10 @@ pub fn tensortrain_to_linear_operator(
     }
 
     // Create site indices for input and output
-    let mut site_in_indices: Vec<Index<DynId, NoSymmSpace, TagSet>> = Vec::with_capacity(n);
-    let mut site_out_indices: Vec<Index<DynId, NoSymmSpace, TagSet>> = Vec::with_capacity(n);
-    let mut internal_in_indices: Vec<Index<DynId, NoSymmSpace, TagSet>> = Vec::with_capacity(n);
-    let mut internal_out_indices: Vec<Index<DynId, NoSymmSpace, TagSet>> = Vec::with_capacity(n);
+    let mut site_in_indices: Vec<Index<DynId, TagSet>> = Vec::with_capacity(n);
+    let mut site_out_indices: Vec<Index<DynId, TagSet>> = Vec::with_capacity(n);
+    let mut internal_in_indices: Vec<Index<DynId, TagSet>> = Vec::with_capacity(n);
+    let mut internal_out_indices: Vec<Index<DynId, TagSet>> = Vec::with_capacity(n);
 
     for &dim in site_dims.iter() {
         // True site indices (for state)
@@ -74,7 +74,7 @@ pub fn tensortrain_to_linear_operator(
     }
 
     // Create bond indices
-    let mut bond_indices: Vec<Index<DynId, NoSymmSpace, TagSet>> = Vec::with_capacity(n + 1);
+    let mut bond_indices: Vec<Index<DynId, TagSet>> = Vec::with_capacity(n + 1);
 
     for i in 0..=n {
         let dim = if i == 0 {
@@ -112,7 +112,7 @@ pub fn tensortrain_to_linear_operator(
         // For first tensor: (site_out, site_in, right_bond)
         // For last tensor: (left_bond, site_out, site_in)
         // For middle: (left_bond, site_out, site_in, right_bond)
-        let mut indices: Vec<Index<DynId, NoSymmSpace, TagSet>> = Vec::with_capacity(4);
+        let mut indices: Vec<Index<DynId, TagSet>> = Vec::with_capacity(4);
         let mut dims_vec: Vec<usize> = Vec::with_capacity(4);
 
         if i > 0 {
@@ -191,19 +191,15 @@ pub fn tensortrain_to_linear_operator(
     let treetn = TreeTN::from_tensors(tensors, node_names)?;
 
     // Build index mappings
-    let mut input_mapping: HashMap<usize, IndexMapping<DynId, NoSymmSpace>> = HashMap::new();
-    let mut output_mapping: HashMap<usize, IndexMapping<DynId, NoSymmSpace>> = HashMap::new();
+    let mut input_mapping: HashMap<usize, IndexMapping<DynIndex>> = HashMap::new();
+    let mut output_mapping: HashMap<usize, IndexMapping<DynIndex>> = HashMap::new();
 
     for i in 0..n {
-        // Convert from Index<DynId, NoSymmSpace, TagSet> to Index<DynId, NoSymmSpace, ()>
-        let site_in_no_tags: Index<DynId, NoSymmSpace> =
-            Index::new(site_in_indices[i].id, site_in_indices[i].symm);
-        let site_out_no_tags: Index<DynId, NoSymmSpace> =
-            Index::new(site_out_indices[i].id, site_out_indices[i].symm);
-        let internal_in_no_tags: Index<DynId, NoSymmSpace> =
-            Index::new(internal_in_indices[i].id, internal_in_indices[i].symm);
-        let internal_out_no_tags: Index<DynId, NoSymmSpace> =
-            Index::new(internal_out_indices[i].id, internal_out_indices[i].symm);
+        // Use indices directly (they already have the correct type)
+        let site_in_no_tags = &site_in_indices[i];
+        let site_out_no_tags = &site_out_indices[i];
+        let internal_in_no_tags = &internal_in_indices[i];
+        let internal_out_no_tags = &internal_out_indices[i];
 
         input_mapping.insert(
             i,
@@ -253,10 +249,10 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     }
 
     // Create site indices for input and output
-    let mut site_in_indices: Vec<Index<DynId, NoSymmSpace, TagSet>> = Vec::with_capacity(n);
-    let mut site_out_indices: Vec<Index<DynId, NoSymmSpace, TagSet>> = Vec::with_capacity(n);
-    let mut internal_in_indices: Vec<Index<DynId, NoSymmSpace, TagSet>> = Vec::with_capacity(n);
-    let mut internal_out_indices: Vec<Index<DynId, NoSymmSpace, TagSet>> = Vec::with_capacity(n);
+    let mut site_in_indices: Vec<Index<DynId, TagSet>> = Vec::with_capacity(n);
+    let mut site_out_indices: Vec<Index<DynId, TagSet>> = Vec::with_capacity(n);
+    let mut internal_in_indices: Vec<Index<DynId, TagSet>> = Vec::with_capacity(n);
+    let mut internal_out_indices: Vec<Index<DynId, TagSet>> = Vec::with_capacity(n);
 
     for i in 0..n {
         // True site indices (for state)
@@ -268,7 +264,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     }
 
     // Create bond indices
-    let mut bond_indices: Vec<Index<DynId, NoSymmSpace, TagSet>> = Vec::with_capacity(n + 1);
+    let mut bond_indices: Vec<Index<DynId, TagSet>> = Vec::with_capacity(n + 1);
 
     for i in 0..=n {
         let dim = if i == 0 {
@@ -306,7 +302,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
         }
 
         // Create indices for this tensor: (left_bond, site_out, site_in, right_bond)
-        let mut indices: Vec<Index<DynId, NoSymmSpace, TagSet>> = Vec::with_capacity(4);
+        let mut indices: Vec<Index<DynId, TagSet>> = Vec::with_capacity(4);
         let mut dims_vec: Vec<usize> = Vec::with_capacity(4);
 
         if i > 0 {
@@ -385,18 +381,15 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     let treetn = TreeTN::from_tensors(tensors, node_names)?;
 
     // Build index mappings
-    let mut input_mapping: HashMap<usize, IndexMapping<DynId, NoSymmSpace>> = HashMap::new();
-    let mut output_mapping: HashMap<usize, IndexMapping<DynId, NoSymmSpace>> = HashMap::new();
+    let mut input_mapping: HashMap<usize, IndexMapping<DynIndex>> = HashMap::new();
+    let mut output_mapping: HashMap<usize, IndexMapping<DynIndex>> = HashMap::new();
 
     for i in 0..n {
-        let site_in_no_tags: Index<DynId, NoSymmSpace> =
-            Index::new(site_in_indices[i].id, site_in_indices[i].symm);
-        let site_out_no_tags: Index<DynId, NoSymmSpace> =
-            Index::new(site_out_indices[i].id, site_out_indices[i].symm);
-        let internal_in_no_tags: Index<DynId, NoSymmSpace> =
-            Index::new(internal_in_indices[i].id, internal_in_indices[i].symm);
-        let internal_out_no_tags: Index<DynId, NoSymmSpace> =
-            Index::new(internal_out_indices[i].id, internal_out_indices[i].symm);
+        // Use indices directly (they already have the correct type)
+        let site_in_no_tags = &site_in_indices[i];
+        let site_out_no_tags = &site_out_indices[i];
+        let internal_in_no_tags = &internal_in_indices[i];
+        let internal_out_no_tags = &internal_out_indices[i];
 
         input_mapping.insert(
             i,

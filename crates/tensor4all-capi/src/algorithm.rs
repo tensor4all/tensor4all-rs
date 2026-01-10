@@ -36,6 +36,7 @@ pub extern "C" fn t4a_factorize_algorithm_from_i32(
         0 => t4a_factorize_algorithm::SVD,
         1 => t4a_factorize_algorithm::LU,
         2 => t4a_factorize_algorithm::CI,
+        3 => t4a_factorize_algorithm::QR,
         _ => return T4A_INVALID_ARGUMENT,
     };
 
@@ -58,6 +59,7 @@ pub extern "C" fn t4a_factorize_algorithm_name(alg: t4a_factorize_algorithm) -> 
         t4a_factorize_algorithm::SVD => "svd\0",
         t4a_factorize_algorithm::LU => "lu\0",
         t4a_factorize_algorithm::CI => "ci\0",
+        t4a_factorize_algorithm::QR => "qr\0",
     };
     name.as_ptr() as *const c_char
 }
@@ -222,6 +224,7 @@ pub extern "C" fn t4a_factorize_algorithm_from_name(
         "svd" => t4a_factorize_algorithm::SVD,
         "lu" => t4a_factorize_algorithm::LU,
         "ci" | "cross" | "crossinterpolation" => t4a_factorize_algorithm::CI,
+        "qr" => t4a_factorize_algorithm::QR,
         _ => return T4A_INVALID_ARGUMENT,
     };
 

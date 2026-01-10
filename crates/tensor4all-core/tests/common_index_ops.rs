@@ -1,14 +1,16 @@
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::{
     common_inds, hascommoninds, hasind, hasinds, noncommon_inds, replaceinds, replaceinds_in_place,
-    sim, sim_owned, union_inds, unique_inds, ReplaceIndsError,
+    union_inds, unique_inds, ReplaceIndsError,
 };
+use tensor4all_core::IndexLike;
 
 #[test]
 fn test_sim_preserves_symm_and_tags() {
     let idx = Index::new_dyn_with_tag(8, "site,up").unwrap();
 
-    let similar = sim(&idx);
+    // Use IndexLike::sim() method
+    let similar = idx.sim();
 
     // Same size and tags, but different ID
     assert_eq!(similar.size(), idx.size());
@@ -16,18 +18,6 @@ fn test_sim_preserves_symm_and_tags() {
     assert!(similar.tags().has_tag("site"));
     assert!(similar.tags().has_tag("up"));
     assert_ne!(similar.id, idx.id);
-}
-
-#[test]
-fn test_sim_owned_consumes_input() {
-    let idx = Index::new_dyn(8);
-    let original_id = idx.id;
-
-    let similar = sim_owned(idx); // idx is consumed
-
-    // Same size, but different ID
-    assert_eq!(similar.size(), 8);
-    assert_ne!(similar.id, original_id);
 }
 
 #[test]

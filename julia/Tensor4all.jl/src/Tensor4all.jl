@@ -70,7 +70,7 @@ export get_default_svd_rtol, resolve_truncation_tolerance
 
 A tensor index with dimension, ID, and tags.
 
-Wraps a Rust `DefaultIndex<DynId, NoSymmSpace>` which corresponds to
+Wraps a Rust `DynIndex` (= `Index<DynId, TagSet>`) which corresponds to
 ITensors.jl's `Index{Int}` (no quantum number symmetry).
 
 # Constructors
@@ -460,7 +460,7 @@ end
 
 A tensor with dynamically-typed indices and storage.
 
-Wraps a Rust `TensorDynLen<DynId, NoSymmSpace>` which corresponds to
+Wraps a Rust `TensorDynLen` which corresponds to
 ITensors.jl's `ITensor`.
 
 # Constructors

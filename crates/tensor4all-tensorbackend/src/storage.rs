@@ -1,12 +1,8 @@
-use mdarray::{DTensor, Dense, DenseMapping, DynRank, Rank, Shape, Slice, View};
-use mdarray_linalg::{
-    matmul::{ContractBuilder, MatMul},
-    Naive,
-};
+use mdarray::{DTensor, Dense, DenseMapping, DynRank, Rank, Shape, View};
 use num_complex::Complex64;
 use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
-use std::borrow::{Borrow, Cow};
+use std::borrow::Cow;
 use std::ops::{Add, Mul};
 use std::sync::Arc;
 
@@ -204,7 +200,6 @@ fn contract_via_gemm(
     // N = product of non-contracted dimensions in B (last part after permutation)
 
     let ndim_a = dims_a.len();
-    let ndim_b = dims_b.len();
 
     // Axes should be contiguous at end of A and front of B
     // For A: non-contracted are positions 0..ndim_a-naxes, contracted are ndim_a-naxes..ndim_a
@@ -262,7 +257,6 @@ fn contract_via_gemm_c64(
     assert_eq!(naxes, axes_b.len(), "Number of contracted axes must match");
 
     let ndim_a = dims_a.len();
-    let ndim_b = dims_b.len();
 
     let m: usize = dims_a.iter().take(ndim_a - naxes).product();
     let m = if m == 0 { 1 } else { m };
@@ -909,8 +903,7 @@ impl Storage {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageC64;
+    /// use tensor4all_tensorbackend::{Storage, DenseStorageC64};
     /// use num_complex::Complex64;
     ///
     /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
@@ -1048,6 +1041,252 @@ impl Storage {
                 std::mem::discriminant(self),
                 std::mem::discriminant(other)
             )),
+        }
+    }
+
+    /// Try to subtract two storages element-wise.
+    ///
+    /// Returns an error if the storages have different types or lengths.
+    pub fn try_sub(&self, other: &Storage) -> Result<Storage, String> {
+        match (self, other) {
+            (Storage::DenseF64(a), Storage::DenseF64(b)) => {
+                if a.len() != b.len() {
+                    return Err(format!(
+                        "Storage lengths must match for subtraction: {} != {}",
+                        a.len(),
+                        b.len()
+                    ));
+                }
+                let diff_vec: Vec<f64> = a
+                    .as_slice()
+                    .iter()
+                    .zip(b.as_slice().iter())
+                    .map(|(&x, &y)| x - y)
+                    .collect();
+                Ok(Storage::DenseF64(DenseStorageF64::from_vec(diff_vec)))
+            }
+            (Storage::DenseC64(a), Storage::DenseC64(b)) => {
+                if a.len() != b.len() {
+                    return Err(format!(
+                        "Storage lengths must match for subtraction: {} != {}",
+                        a.len(),
+                        b.len()
+                    ));
+                }
+                let diff_vec: Vec<Complex64> = a
+                    .as_slice()
+                    .iter()
+                    .zip(b.as_slice().iter())
+                    .map(|(&x, &y)| x - y)
+                    .collect();
+                Ok(Storage::DenseC64(DenseStorageC64::from_vec(diff_vec)))
+            }
+            (Storage::DiagF64(a), Storage::DiagF64(b)) => {
+                if a.len() != b.len() {
+                    return Err(format!(
+                        "Storage lengths must match for subtraction: {} != {}",
+                        a.len(),
+                        b.len()
+                    ));
+                }
+                let diff_vec: Vec<f64> = a
+                    .as_slice()
+                    .iter()
+                    .zip(b.as_slice().iter())
+                    .map(|(&x, &y)| x - y)
+                    .collect();
+                Ok(Storage::DiagF64(DiagStorageF64::from_vec(diff_vec)))
+            }
+            (Storage::DiagC64(a), Storage::DiagC64(b)) => {
+                if a.len() != b.len() {
+                    return Err(format!(
+                        "Storage lengths must match for subtraction: {} != {}",
+                        a.len(),
+                        b.len()
+                    ));
+                }
+                let diff_vec: Vec<Complex64> = a
+                    .as_slice()
+                    .iter()
+                    .zip(b.as_slice().iter())
+                    .map(|(&x, &y)| x - y)
+                    .collect();
+                Ok(Storage::DiagC64(DiagStorageC64::from_vec(diff_vec)))
+            }
+            _ => Err(format!(
+                "Storage types must match for subtraction: {:?} vs {:?}",
+                std::mem::discriminant(self),
+                std::mem::discriminant(other)
+            )),
+        }
+    }
+
+    /// Scale storage by a scalar value.
+    ///
+    /// If the scalar is complex but the storage is real, the storage is promoted to complex.
+    pub fn scale(&self, scalar: &crate::AnyScalar) -> Storage {
+        use crate::AnyScalar;
+        match (self, scalar) {
+            // Real storage with real scalar
+            (Storage::DenseF64(a), AnyScalar::F64(s)) => {
+                let scaled: Vec<f64> = a.as_slice().iter().map(|&x| x * s).collect();
+                Storage::DenseF64(DenseStorageF64::from_vec(scaled))
+            }
+            // Real storage with complex scalar -> promote to complex
+            (Storage::DenseF64(a), AnyScalar::C64(s)) => {
+                let scaled: Vec<Complex64> = a
+                    .as_slice()
+                    .iter()
+                    .map(|&x| Complex64::new(x, 0.0) * s)
+                    .collect();
+                Storage::DenseC64(DenseStorageC64::from_vec(scaled))
+            }
+            // Complex storage with real scalar
+            (Storage::DenseC64(a), AnyScalar::F64(s)) => {
+                let scaled: Vec<Complex64> = a
+                    .as_slice()
+                    .iter()
+                    .map(|&x| x * Complex64::new(*s, 0.0))
+                    .collect();
+                Storage::DenseC64(DenseStorageC64::from_vec(scaled))
+            }
+            // Complex storage with complex scalar
+            (Storage::DenseC64(a), AnyScalar::C64(s)) => {
+                let scaled: Vec<Complex64> = a.as_slice().iter().map(|&x| x * s).collect();
+                Storage::DenseC64(DenseStorageC64::from_vec(scaled))
+            }
+            // Diagonal variants
+            (Storage::DiagF64(a), AnyScalar::F64(s)) => {
+                let scaled: Vec<f64> = a.as_slice().iter().map(|&x| x * s).collect();
+                Storage::DiagF64(DiagStorageF64::from_vec(scaled))
+            }
+            (Storage::DiagF64(a), AnyScalar::C64(s)) => {
+                let scaled: Vec<Complex64> = a
+                    .as_slice()
+                    .iter()
+                    .map(|&x| Complex64::new(x, 0.0) * s)
+                    .collect();
+                Storage::DiagC64(DiagStorageC64::from_vec(scaled))
+            }
+            (Storage::DiagC64(a), AnyScalar::F64(s)) => {
+                let scaled: Vec<Complex64> = a
+                    .as_slice()
+                    .iter()
+                    .map(|&x| x * Complex64::new(*s, 0.0))
+                    .collect();
+                Storage::DiagC64(DiagStorageC64::from_vec(scaled))
+            }
+            (Storage::DiagC64(a), AnyScalar::C64(s)) => {
+                let scaled: Vec<Complex64> = a.as_slice().iter().map(|&x| x * s).collect();
+                Storage::DiagC64(DiagStorageC64::from_vec(scaled))
+            }
+        }
+    }
+
+    /// Compute linear combination: `a * self + b * other`.
+    ///
+    /// Returns an error if the storages have different types or lengths.
+    /// If any scalar is complex, the result is promoted to complex.
+    pub fn axpby(
+        &self,
+        a: &crate::AnyScalar,
+        other: &Storage,
+        b: &crate::AnyScalar,
+    ) -> Result<Storage, String> {
+        use crate::AnyScalar;
+
+        // First check lengths match
+        if self.len() != other.len() {
+            return Err(format!(
+                "Storage lengths must match for axpby: {} != {}",
+                self.len(),
+                other.len()
+            ));
+        }
+
+        // Determine if we need complex output
+        let needs_complex = matches!(a, AnyScalar::C64(_))
+            || matches!(b, AnyScalar::C64(_))
+            || matches!(self, Storage::DenseC64(_) | Storage::DiagC64(_))
+            || matches!(other, Storage::DenseC64(_) | Storage::DiagC64(_));
+
+        if needs_complex {
+            // Promote everything to complex
+            let a_c: Complex64 = (*a).into();
+            let b_c: Complex64 = (*b).into();
+
+            let result: Vec<Complex64> = match (self, other) {
+                (Storage::DenseF64(x), Storage::DenseF64(y)) => x
+                    .as_slice()
+                    .iter()
+                    .zip(y.as_slice().iter())
+                    .map(|(&xi, &yi)| {
+                        a_c * Complex64::new(xi, 0.0) + b_c * Complex64::new(yi, 0.0)
+                    })
+                    .collect(),
+                (Storage::DenseF64(x), Storage::DenseC64(y)) => x
+                    .as_slice()
+                    .iter()
+                    .zip(y.as_slice().iter())
+                    .map(|(&xi, &yi)| a_c * Complex64::new(xi, 0.0) + b_c * yi)
+                    .collect(),
+                (Storage::DenseC64(x), Storage::DenseF64(y)) => x
+                    .as_slice()
+                    .iter()
+                    .zip(y.as_slice().iter())
+                    .map(|(&xi, &yi)| a_c * xi + b_c * Complex64::new(yi, 0.0))
+                    .collect(),
+                (Storage::DenseC64(x), Storage::DenseC64(y)) => x
+                    .as_slice()
+                    .iter()
+                    .zip(y.as_slice().iter())
+                    .map(|(&xi, &yi)| a_c * xi + b_c * yi)
+                    .collect(),
+                _ => {
+                    return Err(format!(
+                        "axpby not supported for storage types: {:?} vs {:?}",
+                        std::mem::discriminant(self),
+                        std::mem::discriminant(other)
+                    ))
+                }
+            };
+            Ok(Storage::DenseC64(DenseStorageC64::from_vec(result)))
+        } else {
+            // All real
+            let a_f = match a {
+                AnyScalar::F64(v) => *v,
+                AnyScalar::C64(_) => unreachable!(),
+            };
+            let b_f = match b {
+                AnyScalar::F64(v) => *v,
+                AnyScalar::C64(_) => unreachable!(),
+            };
+
+            match (self, other) {
+                (Storage::DenseF64(x), Storage::DenseF64(y)) => {
+                    let result: Vec<f64> = x
+                        .as_slice()
+                        .iter()
+                        .zip(y.as_slice().iter())
+                        .map(|(&xi, &yi)| a_f * xi + b_f * yi)
+                        .collect();
+                    Ok(Storage::DenseF64(DenseStorageF64::from_vec(result)))
+                }
+                (Storage::DiagF64(x), Storage::DiagF64(y)) => {
+                    let result: Vec<f64> = x
+                        .as_slice()
+                        .iter()
+                        .zip(y.as_slice().iter())
+                        .map(|(&xi, &yi)| a_f * xi + b_f * yi)
+                        .collect();
+                    Ok(Storage::DiagF64(DiagStorageF64::from_vec(result)))
+                }
+                _ => Err(format!(
+                    "axpby not supported for storage types: {:?} vs {:?}",
+                    std::mem::discriminant(self),
+                    std::mem::discriminant(other)
+                )),
+            }
         }
     }
 }

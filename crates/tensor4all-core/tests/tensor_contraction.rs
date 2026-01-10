@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use std::sync::Arc;
-use tensor4all_core::index::{DefaultIndex as Index, DynId};
+use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::common_inds;
 use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64};
 use tensor4all_core::{Storage, TensorDynLen};
@@ -31,13 +31,13 @@ fn test_contract_dyn_len_matrix_multiplication() {
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
     let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
 
     // Create tensor B[j, k] with all ones
     let indices_b = vec![j.clone(), k.clone()];
     let dims_b = vec![3, 4];
     let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j: result should be C[i, k] with all 3.0 (since each element is sum of 3 ones)
     let result = tensor_a.contract_einsum(&tensor_b);
@@ -70,13 +70,13 @@ fn test_mul_operator_contraction() {
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
     let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
 
     // Create tensor B[j, k] with all ones
     let indices_b = vec![j.clone(), k.clone()];
     let dims_b = vec![3, 4];
     let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j using * operator: result should be C[i, k] with all 3.0
     let result = &tensor_a * &tensor_b;
@@ -106,12 +106,12 @@ fn test_mul_operator_owned() {
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
     let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
 
     let indices_b = vec![j.clone(), k.clone()];
     let dims_b = vec![3, 4];
     let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Use * operator with owned tensors
     let result = tensor_a * tensor_b;
@@ -129,12 +129,12 @@ fn test_contract_no_common_indices() {
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
     let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, storage_a);
 
     let indices_b = vec![k.clone()];
     let dims_b = vec![4];
     let storage_b = Arc::new(Storage::new_dense_f64(4));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, storage_b);
 
     // This should panic because there are no common indices
     let _result = tensor_a.contract_einsum(&tensor_b);
@@ -153,13 +153,13 @@ fn test_contract_three_indices() {
     let indices_a = vec![i.clone(), j.clone(), k.clone()];
     let dims_a = vec![2, 3, 4];
     let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 24]));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
 
     // Create tensor B[j, k, l] with all ones
     let indices_b = vec![j.clone(), k.clone(), l.clone()];
     let dims_b = vec![3, 4, 5];
     let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 60]));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j and k: result should be C[i, l] with all 12.0 (3 * 4 = 12)
     let result = tensor_a.contract_einsum(&tensor_b);
@@ -191,7 +191,7 @@ fn test_contract_mixed_f64_c64() {
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 2];
     let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 4]));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
 
     // Create tensor B[j, k] with complex values: [[1+2i, 3+4i], [5+6i, 7+8i]]
     let indices_b = vec![j.clone(), k.clone()];
@@ -202,7 +202,7 @@ fn test_contract_mixed_f64_c64() {
         Complex64::new(5.0, 6.0),
         Complex64::new(7.0, 8.0),
     ]));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j: result should be C[i, k] (Complex64)
     // Expected result: [[1+2i + 5+6i, 3+4i + 7+8i], [1+2i + 5+6i, 3+4i + 7+8i]]
@@ -245,13 +245,13 @@ fn test_contract_mixed_c64_f64() {
         Complex64::new(5.0, 6.0),
         Complex64::new(7.0, 8.0),
     ]));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
 
     // Create tensor B[j, k] with all 1.0 (f64)
     let indices_b = vec![j.clone(), k.clone()];
     let dims_b = vec![2, 2];
     let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 4]));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j: result should be C[i, k] (Complex64)
     // For A[i,j] * B[j,k] where A is complex and B is real:
@@ -289,13 +289,13 @@ fn test_tensordot_different_ids() {
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
     let storage_a = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, Arc::new(storage_a));
 
     // Create tensor B[k, l] where k has same dimension as j but different ID
     let indices_b = vec![k.clone(), l.clone()];
     let dims_b = vec![3, 4];
     let storage_b = Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract j (from A) with k (from B): result should be C[i, l] with all 3.0
     let result = tensor_a
@@ -327,12 +327,12 @@ fn test_tensordot_dimension_mismatch() {
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
     let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, storage_a);
 
     let indices_b = vec![k.clone()];
     let dims_b = vec![5];
     let storage_b = Arc::new(Storage::new_dense_f64(5));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, storage_b);
 
     let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), k.clone())]);
     assert!(result.is_err());
@@ -353,12 +353,12 @@ fn test_tensordot_index_not_found() {
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
     let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, storage_a);
 
     let indices_b = vec![k.clone()];
     let dims_b = vec![3];
     let storage_b = Arc::new(Storage::new_dense_f64(3));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, storage_b);
 
     // Try to contract with a non-existent index from tensor_a
     let result = tensor_a.tensordot(&tensor_b, &[(nonexistent.clone(), k.clone())]);
@@ -380,12 +380,12 @@ fn test_tensordot_duplicate_axis() {
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
     let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, storage_a);
 
     let indices_b = vec![k.clone(), l.clone()];
     let dims_b = vec![3, 4];
     let storage_b = Arc::new(Storage::new_dense_f64(12));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, storage_b);
 
     // Try to contract j twice (duplicate axis in self)
     let result = tensor_a.tensordot(
@@ -408,12 +408,12 @@ fn test_tensordot_empty_pairs() {
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
     let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, storage_a);
 
     let indices_b = vec![j.clone()];
     let dims_b = vec![3];
     let storage_b = Arc::new(Storage::new_dense_f64(3));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, storage_b);
 
     let result = tensor_a.tensordot(&tensor_b, &[]);
     assert!(result.is_err());
@@ -440,13 +440,13 @@ fn test_tensordot_common_index_not_in_pairs() {
     let indices_a = vec![i.clone(), j.clone(), k.clone()];
     let dims_a = vec![2, 3, 4];
     let storage_a = Arc::new(Storage::new_dense_f64(24));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, storage_a);
 
     // Create tensor B[j, l] where j is a common index with A
     let indices_b = vec![j.clone(), l.clone()];
     let dims_b = vec![3, 5];
     let storage_b = Arc::new(Storage::new_dense_f64(15));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, storage_b);
 
     // Try to contract only k with l, leaving j as a "batch" dimension
     // This should fail because batch contraction is not yet implemented
@@ -475,13 +475,13 @@ fn test_tensordot_common_index_in_pairs_ok() {
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
     let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6])));
-    let tensor_a: TensorDynLen<DynId> = TensorDynLen::new(indices_a, dims_a, storage_a);
+    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a, storage_a);
 
     // Create tensor B[j, k] where j is a common index with A
     let indices_b = vec![j.clone(), k.clone()];
     let dims_b = vec![3, 4];
     let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12])));
-    let tensor_b: TensorDynLen<DynId> = TensorDynLen::new(indices_b, dims_b, storage_b);
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, storage_b);
 
     // Contract j with j - this should work because the common index is in pairs
     let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), j.clone())]);

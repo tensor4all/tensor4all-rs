@@ -26,7 +26,10 @@ Manifest.toml
 LocalPreferences.toml
 
 # Avoid accidentally committing ad-hoc analysis notes at repo root
-*.md
+/*.md
+!README.md
+!AGENTS.md
+!CLAUDE.md
 
 # Private documentation (not committed)
 privatedoc/*
