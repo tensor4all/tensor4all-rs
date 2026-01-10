@@ -1469,4 +1469,13 @@ impl TensorLike for TensorDynLen {
         // Delegate to the inherent method (complex conjugate for dense tensors)
         TensorDynLen::conj(self)
     }
+
+    fn direct_sum(
+        &self,
+        other: &Self,
+        pairs: &[(DynIndex, DynIndex)],
+    ) -> Result<crate::tensor_like::DirectSumResult<Self>> {
+        let (tensor, new_indices) = crate::direct_sum::direct_sum(self, other, pairs)?;
+        Ok(crate::tensor_like::DirectSumResult { tensor, new_indices })
+    }
 }

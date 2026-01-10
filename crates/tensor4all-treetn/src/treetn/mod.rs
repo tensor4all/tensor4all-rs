@@ -4,7 +4,7 @@
 //! for efficient tensor operations with canonicalization and truncation support.
 
 // TODO: Re-enable these submodules after fixing for TensorLike refactoring
-// mod addition;
+mod addition;
 mod canonicalize;
 // mod contraction;
 mod decompose;

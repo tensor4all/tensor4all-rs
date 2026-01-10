@@ -335,6 +335,47 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
     /// # Returns
     /// A new tensor representing the tensor conjugate.
     fn conj(&self) -> Self;
+
+    /// Direct sum of two tensors along specified index pairs.
+    ///
+    /// For tensors A and B with indices to be summed specified as pairs,
+    /// creates a new tensor C where each paired index has dimension = dim_A + dim_B.
+    /// Non-paired indices must match exactly between A and B (same ID).
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Second tensor
+    /// * `pairs` - Pairs of (self_index, other_index) to be summed. Each pair creates
+    ///   a new index in the result with dimension = dim(self_index) + dim(other_index).
+    ///
+    /// # Returns
+    ///
+    /// A `DirectSumResult` containing the result tensor and new indices created
+    /// for the summed dimensions (one per pair).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // A has indices [i, j] with dims [2, 3]
+    /// // B has indices [i, k] with dims [2, 4]
+    /// // If we pair (j, k), result has indices [i, m] with dims [2, 7]
+    /// // where m is a new index with dim = 3 + 4 = 7
+    /// let result = a.direct_sum(&b, &[(j, k)])?;
+    /// ```
+    fn direct_sum(
+        &self,
+        other: &Self,
+        pairs: &[(Self::Index, Self::Index)],
+    ) -> Result<DirectSumResult<Self>>;
+}
+
+/// Result of direct sum operation.
+#[derive(Debug, Clone)]
+pub struct DirectSumResult<T: TensorLike> {
+    /// The resulting tensor from direct sum.
+    pub tensor: T,
+    /// New indices created for the summed dimensions (one per pair).
+    pub new_indices: Vec<T::Index>,
 }
 
 #[cfg(test)]

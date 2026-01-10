@@ -40,7 +40,7 @@ pub use defaults::tensordynlen::{
     unfold_split, TensorAccess, TensorDynLen,
 };
 pub use tensor_like::{
-    Canonical, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult, TensorLike,
+    Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult, TensorLike,
 };
 
 // Contraction - backwards compatibility
