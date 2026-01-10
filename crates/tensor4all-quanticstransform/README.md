@@ -1,4 +1,4 @@
-# tensor4all-quantics-transform
+# tensor4all-quanticstransform
 
 Quantics transformation operators for tensor train methods.
 
