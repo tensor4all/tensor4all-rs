@@ -1,5 +1,5 @@
 [package]
-name = "tensor4all-quantics-transform"
+name = "tensor4all-quanticstransform"
 version.workspace = true
 edition.workspace = true
 authors = [

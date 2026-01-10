@@ -36,16 +36,17 @@ A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assis
 ```
 tensor4all-rs/
 ├── crates/
-│   ├── tensor4all-core/              # Core: Index, Tensor, Storage, SVD, QR
-│   ├── tensor4all-treetn/            # Tree Tensor Networks
-│   ├── tensor4all-itensorlike/       # ITensor-like TensorTrain API
+│   ├── tensor4all-tensorbackend/     # Scalar types, storage backends
+│   ├── tensor4all-core/              # Core: Index, Tensor, SVD, QR
 │   ├── tensor4all-simpletensortrain/ # Simple TT/MPS implementation
 │   ├── tensor4all-tensorci/          # Tensor Cross Interpolation
 │   ├── tensor4all-quanticstci/       # High-level Quantics TCI (QuanticsTCI.jl port)
-│   ├── tensor4all-quantics-transform/# Quantics transformation operators
 │   ├── tensor4all-capi/              # C API for language bindings
 │   ├── matrixci/                     # Matrix Cross Interpolation (internal)
-│   └── quanticsgrids/                # Quantics grid structures (internal)
+│   ├── quanticsgrids/                # Quantics grid structures (internal)
+│   ├── tensor4all-treetn/            # Tree Tensor Networks (WIP, excluded)
+│   ├── tensor4all-itensorlike/       # ITensor-like TensorTrain API (WIP, excluded)
+│   └── tensor4all-quanticstransform/# Quantics transformation operators (WIP, excluded)
 ├── julia/Tensor4all.jl/              # Julia bindings
 ├── python/tensor4all/                # Python bindings
 ├── tools/api-dump/                   # API documentation generator
@@ -54,61 +55,45 @@ tensor4all-rs/
 
 ### Crate Documentation
 
+**Active crates** (in workspace):
+
 | Crate | Description |
 |-------|-------------|
-| [tensor4all-core](crates/tensor4all-core/) | Core types: Index, Tensor, Storage, SVD, QR, LU |
-| [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology |
-| [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensors.jl-like TensorTrain API |
+| [tensor4all-tensorbackend](crates/tensor4all-tensorbackend/) | Scalar types (f64, Complex64) and storage backends |
+| [tensor4all-core](crates/tensor4all-core/) | Core types: Index, Tensor, SVD, QR, LU |
 | [tensor4all-simpletensortrain](crates/tensor4all-simpletensortrain/) | Simple TT/MPS with multiple canonical forms |
 | [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI) algorithms |
 | [tensor4all-quanticstci](crates/tensor4all-quanticstci/) | High-level Quantics TCI interface |
-| [tensor4all-quantics-transform](crates/tensor4all-quantics-transform/) | Quantics transformation operators |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
 | [matrixci](crates/matrixci/) | Matrix Cross Interpolation |
 | [quanticsgrids](crates/quanticsgrids/) | Quantics grid structures |
 
+**Work-in-progress crates** (excluded from workspace, need TensorLike update):
+
+| Crate | Description |
+|-------|-------------|
+| [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology |
+| [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensors.jl-like TensorTrain API |
+| [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
+
 ## Usage Example (Rust)
 
-### Tree Tensor Network
+### Simple Tensor Train (MPS)
 
 ```rust
-use tensor4all_treetn::{
-    TreeTN, SiteIndexNetwork, LinkSpace,
-    random_treetn_f64, CanonicalizationOptions, TruncationOptions,
-};
-use tensor4all_core::{Index, DynId, NoSymmSpace};
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
+use tensor4all_simpletensortrain::{TensorTrain, AbstractTensorTrain};
 
-// Build a site index network (chain topology: A -- B -- C)
-let mut site_network = SiteIndexNetwork::new();
-site_network.add_node("A".to_string(), vec![Index::new_dyn(2)]).unwrap();
-site_network.add_node("B".to_string(), vec![Index::new_dyn(2)]).unwrap();
-site_network.add_node("C".to_string(), vec![Index::new_dyn(2)]).unwrap();
-site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
-site_network.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+// Create a constant tensor train with local dimensions [2, 3, 4]
+let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 
-// Create random tree tensor network with uniform bond dimension
-let mut rng = ChaCha8Rng::seed_from_u64(42);
-let link_space = LinkSpace::uniform(10);
-let ttn = random_treetn_f64(&mut rng, &site_network, link_space);
+// Evaluate at a specific multi-index
+let value = tt.evaluate(&[0, 1, 2])?;
 
-// Canonicalize towards center node
-let ttn = ttn.canonicalize(
-    ["B".to_string()],
-    CanonicalizationOptions::default()
-)?;
+// Compute sum over all indices
+let total = tt.sum();
 
-// Truncate bond dimensions
-let ttn = ttn.truncate(
-    ["B".to_string()],
-    TruncationOptions::default()
-        .with_max_rank(5)
-        .with_rtol(1e-10)
-)?;
-
-// Contract two tree tensor networks using zip-up algorithm
-let result = ttn1.contract_zipup(&ttn2, &"B".to_string(), Some(1e-10), Some(5))?;
+// Compress with tolerance (rtol=1e-10, maxrank=20)
+let compressed = tt.compressed(1e-10, Some(20))?;
 ```
 
 ## Language Bindings

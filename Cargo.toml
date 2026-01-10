@@ -1,5 +1,5 @@
 [workspace]
-# Note: tensor4all-treetn, tensor4all-itensorlike, tensor4all-quantics-transform temporarily excluded
+# Note: tensor4all-treetn, tensor4all-itensorlike, tensor4all-quanticstransform temporarily excluded
 # - these need update for concrete TensorLike
 members = [
     "crates/tensor4all-tensorbackend",
