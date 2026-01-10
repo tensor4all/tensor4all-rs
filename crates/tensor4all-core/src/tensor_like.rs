@@ -15,7 +15,7 @@
 //! - [`FactorizeOptions`] - Options for factorization
 //! - [`FactorizeResult`] - Result of factorization
 
-use crate::index_like::DynIndex;
+use crate::defaults::DynIndex;
 use crate::tensor::TensorDynLen;
 use anyhow::Result;
 use dyn_clone::DynClone;

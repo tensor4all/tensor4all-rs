@@ -1,7 +1,7 @@
 //! Tests for TensorLike trait implementation.
 
 use tensor4all_core::index::{DynId, Index, NoSymmSpace};
-use tensor4all_core::index_like::DynIndex;
+use tensor4all_core::DynIndex;
 use tensor4all_core::{StorageScalar, TensorDynLen, TensorLike, TensorLikeDowncast};
 
 /// Helper to create a simple tensor with given dimensions

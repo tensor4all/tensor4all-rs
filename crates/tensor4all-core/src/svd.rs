@@ -2,7 +2,7 @@
 //!
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 
-use crate::index_like::{DynIndex, IndexLike};
+use crate::index_like::IndexLike; use crate::defaults::DynIndex;
 use crate::index_ops::sim;
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use mdarray::DSlice;

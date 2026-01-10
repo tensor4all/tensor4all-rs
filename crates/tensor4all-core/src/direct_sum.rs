@@ -7,7 +7,7 @@
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 
 use crate::index::Index;
-use crate::index_like::{DynIndex, IndexLike};
+use crate::index_like::IndexLike; use crate::defaults::DynIndex;
 use crate::storage::{DenseStorageC64, DenseStorageF64, Storage};
 use crate::tensor::TensorDynLen;
 use anyhow::Result;

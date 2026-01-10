@@ -157,7 +157,7 @@ fn execute_contraction_tree(
 mod tests {
     use super::*;
     use crate::index::{DynId, Index, NoSymmSpace};
-    use crate::index_like::DynIndex;
+    use crate::defaults::DynIndex;
     use crate::storage::{DenseStorageC64, Storage};
     use num_complex::Complex64;
     use std::sync::Arc;

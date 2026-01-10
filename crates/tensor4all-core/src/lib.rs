@@ -6,11 +6,15 @@ pub mod index_ops;
 pub mod smallstring;
 pub mod tagset;
 
+// Default concrete type implementations
+pub mod defaults;
+
 pub use algorithm::{
     CanonicalForm, CompressionAlgorithm, ContractionAlgorithm, FactorizeAlgorithm,
 };
 pub use index::{DefaultIndex, DefaultTagSet, DynId, Index, NoSymmSpace, Symmetry, TagSet};
-pub use index_like::{DynIndex, IndexLike};
+pub use index_like::IndexLike;
+pub use defaults::DynIndex;
 pub use index_ops::{
     check_unique_indices, common_inds, hascommoninds, hasind, hasinds, noncommon_inds, replaceinds,
     replaceinds_in_place, sim, sim_owned, union_inds, unique_inds, ReplaceIndsError,

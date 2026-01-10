@@ -1,4 +1,4 @@
-use crate::index_like::{DynIndex, IndexLike};
+use crate::index_like::IndexLike; use crate::defaults::DynIndex;
 use crate::storage::{
     contract_storage, storage_to_dtensor, AnyScalar, Storage, StorageScalar, SumFromStorage,
 };
@@ -36,7 +36,7 @@ fn common_indices(a: &[DynIndex], b: &[DynIndex]) -> Vec<DynIndex> {
 /// # Example
 /// ```
 /// use tensor4all_core::tensor::compute_permutation_from_indices;
-/// use tensor4all_core::index_like::DynIndex;
+/// use tensor4all_core::DynIndex;
 ///
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
