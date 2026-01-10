@@ -6,7 +6,7 @@
 // TODO: Re-enable these submodules after fixing for TensorLike refactoring
 mod addition;
 mod canonicalize;
-// mod contraction;
+mod contraction;
 mod decompose;
 mod fit;
 // mod linsolve;
