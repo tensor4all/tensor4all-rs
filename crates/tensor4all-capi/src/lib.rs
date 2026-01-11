@@ -30,13 +30,17 @@ mod macros;
 
 mod algorithm;
 mod index;
+mod simplett;
 mod tensor;
+mod tensorci;
 mod tensortrain;
 mod types;
 
 pub use algorithm::*;
 pub use index::*;
+pub use simplett::*;
 pub use tensor::*;
+pub use tensorci::*;
 pub use tensortrain::*;
 pub use types::*;
 
