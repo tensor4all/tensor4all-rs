@@ -10,7 +10,7 @@ use rand::Rng;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
-use tensor4all_core::index::{DynId, Index, NoSymmSpace};
+use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::TensorDynLen;
 
 /// Specification for link (bond) dimensions.
@@ -99,7 +99,7 @@ pub fn random_treetn_f64<R, V>(
     rng: &mut R,
     site_network: &SiteIndexNetwork<V, DefaultIndex>,
     link_space: LinkSpace<V>,
-) -> TreeTN<DynId, NoSymmSpace, V>
+) -> TreeTN<TensorDynLen, V>
 where
     R: Rng,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -120,7 +120,7 @@ pub fn random_treetn_c64<R, V>(
     rng: &mut R,
     site_network: &SiteIndexNetwork<V, DefaultIndex>,
     link_space: LinkSpace<V>,
-) -> TreeTN<DynId, NoSymmSpace, V>
+) -> TreeTN<TensorDynLen, V>
 where
     R: Rng,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -134,7 +134,7 @@ fn random_treetn_impl<R, V>(
     site_network: &SiteIndexNetwork<V, DefaultIndex>,
     link_space: LinkSpace<V>,
     is_complex: bool,
-) -> TreeTN<DynId, NoSymmSpace, V>
+) -> TreeTN<TensorDynLen, V>
 where
     R: Rng,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,

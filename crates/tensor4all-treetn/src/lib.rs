@@ -6,8 +6,7 @@ pub mod node_name_network;
 // TODO: Refactor operator module for TensorLike pattern
 // pub mod operator;
 pub mod options;
-// TODO: Re-enable random module after fixing for TensorLike refactoring
-// pub mod random;
+pub mod random;
 pub mod site_index_network;
 pub mod treetn;
 
@@ -21,7 +20,7 @@ pub use node_name_network::{CanonicalizeEdges, NodeNameNetwork};
 //     compose_exclusive_linear_operators, compose_exclusive_operators, Operator,
 // };
 pub use options::{CanonicalizationOptions, SplitOptions, TruncationOptions};
-// pub use random::{random_treetn_c64, random_treetn_f64, LinkSpace};
+pub use random::{random_treetn_c64, random_treetn_f64, LinkSpace};
 pub use site_index_network::SiteIndexNetwork;
 pub use treetn::{
     // Decomposition
