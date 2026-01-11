@@ -168,6 +168,10 @@ where
         adj.get_mut(a).unwrap().push(b.clone());
         adj.get_mut(b).unwrap().push(a.clone());
     }
+    // Sort each adjacency list to ensure deterministic traversal order
+    for neighbors in adj.values_mut() {
+        neighbors.sort();
+    }
 
     // Find leaves (nodes with degree 1) - not currently used but kept for reference
     let _leaves: Vec<V> = adj
@@ -176,10 +180,15 @@ where
         .map(|(node, _)| node.clone())
         .collect();
 
-    // Choose root as the node with highest degree, or first non-leaf
+    // Choose root as the node with highest degree
+    // Use min() to ensure deterministic selection when multiple nodes have the same degree
     let root = adj
         .iter()
-        .max_by_key(|(_, neighbors)| neighbors.len())
+        .max_by(|(node_a, neighbors_a), (node_b, neighbors_b)| {
+            // First compare by degree, then by node name (ascending) for tie-breaking
+            neighbors_a.len().cmp(&neighbors_b.len())
+                .then_with(|| node_b.cmp(node_a)) // Prefer smaller node name
+        })
         .map(|(node, _)| node.clone())
         .ok_or_else(|| anyhow::anyhow!("Cannot find root node"))?;
 
@@ -285,7 +294,9 @@ where
 
     // Build the TreeTN using from_tensors (auto-connection by matching index IDs)
     // Since factorize() returns shared bond_index, tensors already have matching index IDs
-    let node_names: Vec<V> = topology.nodes.keys().cloned().collect();
+    // IMPORTANT: Sort node_names to ensure deterministic ordering (HashMap iteration is non-deterministic)
+    let mut node_names: Vec<V> = topology.nodes.keys().cloned().collect();
+    node_names.sort();
     let tensors: Vec<T> = node_names
         .iter()
         .map(|name| node_tensors.get(name).cloned().unwrap())

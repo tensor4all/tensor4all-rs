@@ -607,7 +607,6 @@ where
     ) -> Result<TreeTN<T, V>> {
         // Contract tensors in the region into a single local tensor
         let init_local = self.contract_region(&subtree, &step.nodes)?;
-
         // Solve local linear problem using GMRES
         let solved_local = self.solve_local(&step.nodes, &init_local, full_treetn)?;
 

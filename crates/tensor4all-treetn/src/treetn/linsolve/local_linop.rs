@@ -105,36 +105,20 @@ where
             self.state.site_index_network(),
         )?;
 
-        // The operator H may produce output indices that differ from x's indices.
-        // To compute axpby, we need hx to have the same indices as x.
-        // Replace hx's indices with x's indices (matched by position).
-        let x_indices = x.external_indices();
-        let hx_indices = hx.external_indices();
-
-        let hx_aligned = if x_indices.len() == hx_indices.len() {
-            // Check if indices already match
-            let indices_match = x_indices
-                .iter()
-                .zip(hx_indices.iter())
-                .all(|(xi, hi)| xi == hi);
-
-            if indices_match {
-                hx
-            } else {
-                // Replace hx indices with x indices
-                hx.replaceinds(&hx_indices, &x_indices)?
-            }
-        } else {
-            // Different number of indices - this shouldn't happen for a valid operator
-            return Err(anyhow::anyhow!(
-                "Index count mismatch in local operator: x has {} indices, Hx has {}",
-                x_indices.len(),
-                hx_indices.len()
-            ));
+        // When a0 = 0, just return a1 * H * x (avoids axpby which requires same indices)
+        // This is important for space_in != space_out cases
+        let a0_is_zero = match &self.a0 {
+            AnyScalar::F64(x) => *x == 0.0,
+            AnyScalar::C64(z) => z.re == 0.0 && z.im == 0.0,
         };
+        if a0_is_zero {
+            return Ok(hx.scale(self.a1.clone()));
+        }
 
-        // Compute y = a₀ * x + a₁ * H * x using TensorLike::axpby
-        // y = a₀ * x + a₁ * hx_aligned
+        // Align hx indices to match x's index order for axpby
+        let hx_aligned = hx.permuteinds(&x.external_indices())?;
+
+        // Compute y = a₀ * x + a₁ * H * x
         x.axpby(self.a0.clone(), &hx_aligned, self.a1.clone())
     }
 }
