@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```
-//! use tensor4all_simpletensortrain::{TensorTrain, AbstractTensorTrain};
+//! use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
 //!
 //! // Create a constant tensor train
 //! let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);

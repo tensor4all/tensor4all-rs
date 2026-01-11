@@ -17,7 +17,7 @@ description = "Quantics transformation operators for tensor train methods"
 [dependencies]
 tensor4all-treetn = { path = "../tensor4all-treetn" }
 tensor4all-core = { path = "../tensor4all-core" }
-tensor4all-simpletensortrain = { path = "../tensor4all-simpletensortrain" }
+tensor4all-simplett = { path = "../tensor4all-simplett" }
 quanticsgrids = { path = "../quanticsgrids" }
 num-complex = { workspace = true }
 num-traits = { workspace = true }

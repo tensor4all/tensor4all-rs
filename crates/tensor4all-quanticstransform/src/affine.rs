@@ -13,7 +13,7 @@ use num_complex::Complex64;
 use num_integer::Integer;
 use num_rational::Rational64;
 use num_traits::One;
-use tensor4all_simpletensortrain::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
 use crate::common::{
     tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
@@ -198,7 +198,7 @@ fn affine_transform_tensors(
     m: usize,
     n: usize,
     bc_periodic: &[bool],
-) -> Result<Vec<tensor4all_simpletensortrain::Tensor3<Complex64>>> {
+) -> Result<Vec<tensor4all_simplett::Tensor3<Complex64>>> {
     let site_dim = 1 << (m + n); // 2^(M+N) for fused representation
 
     // Initial carry is zero vector
@@ -275,7 +275,7 @@ fn affine_transform_tensors(
             tensors_data.get(pos + 1).map_or(1, |d| d.len())
         };
 
-        let mut t: tensor4all_simpletensortrain::Tensor3<Complex64> =
+        let mut t: tensor4all_simplett::Tensor3<Complex64> =
             tensor3_zeros(left_dim, site_dim, right_dim);
 
         for (l, left_data) in data.iter().enumerate() {

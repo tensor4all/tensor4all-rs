@@ -9,7 +9,7 @@ use num_traits::One;
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::storage::{DenseStorageC64, Storage};
 use tensor4all_core::TensorDynLen;
-use tensor4all_simpletensortrain::{
+use tensor4all_simplett::{
     types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain,
 };
 use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};

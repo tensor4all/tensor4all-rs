@@ -14,6 +14,8 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core" }
 tensor4all-itensorlike = { path = "../tensor4all-itensorlike" }
+tensor4all-simplett = { path = "../tensor4all-simplett" }
+tensor4all-tensorci = { path = "../tensor4all-tensorci" }
 libc.workspace = true
 thiserror.workspace = true
 paste.workspace = true

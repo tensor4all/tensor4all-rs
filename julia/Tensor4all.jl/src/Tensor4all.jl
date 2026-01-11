@@ -844,6 +844,20 @@ function Base.deepcopy(t::Tensor)
 end
 
 # ============================================================================
+# SimpleTT Submodule (Simple Tensor Train for TCI)
+# ============================================================================
+# SimpleTT provides a simple tensor train interface designed for TCI operations.
+# Use: using Tensor4all.SimpleTT
+include("SimpleTT.jl")
+
+# ============================================================================
+# TensorCI Submodule (Tensor Cross Interpolation)
+# ============================================================================
+# TensorCI provides tensor cross interpolation algorithms.
+# Use: using Tensor4all.TensorCI
+include("TensorCI.jl")
+
+# ============================================================================
 # ITensorLike Submodule (TensorTrain)
 # ============================================================================
 # TensorTrain functionality is in a separate submodule.

@@ -848,4 +848,413 @@ function t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, ma
     )
 end
 
+# ============================================================================
+# SimpleTT (simple tensor train) lifecycle functions
+# ============================================================================
+
+"""
+    t4a_simplett_f64_release(ptr::Ptr{Cvoid})
+
+Release a SimpleTT tensor train.
+"""
+function t4a_simplett_f64_release(ptr::Ptr{Cvoid})
+    ptr == C_NULL && return
+    ccall(
+        (:t4a_simplett_f64_release, libpath()),
+        Cvoid,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+"""
+    t4a_simplett_f64_clone(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
+
+Clone a SimpleTT tensor train.
+"""
+function t4a_simplett_f64_clone(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_simplett_f64_clone, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+# ============================================================================
+# SimpleTT constructors
+# ============================================================================
+
+"""
+    t4a_simplett_f64_constant(site_dims::Vector{Csize_t}, value::Float64) -> Ptr{Cvoid}
+
+Create a constant SimpleTT tensor train.
+"""
+function t4a_simplett_f64_constant(site_dims::Vector{Csize_t}, value::Float64)
+    return ccall(
+        (:t4a_simplett_f64_constant, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Csize_t}, Csize_t, Cdouble),
+        site_dims,
+        Csize_t(length(site_dims)),
+        value
+    )
+end
+
+"""
+    t4a_simplett_f64_zeros(site_dims::Vector{Csize_t}) -> Ptr{Cvoid}
+
+Create a zero SimpleTT tensor train.
+"""
+function t4a_simplett_f64_zeros(site_dims::Vector{Csize_t})
+    return ccall(
+        (:t4a_simplett_f64_zeros, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Csize_t}, Csize_t),
+        site_dims,
+        Csize_t(length(site_dims))
+    )
+end
+
+# ============================================================================
+# SimpleTT accessors
+# ============================================================================
+
+"""
+    t4a_simplett_f64_len(ptr::Ptr{Cvoid}, out_len::Ref{Csize_t}) -> Cint
+
+Get the number of sites.
+"""
+function t4a_simplett_f64_len(ptr::Ptr{Cvoid}, out_len::Ref{Csize_t})
+    return ccall(
+        (:t4a_simplett_f64_len, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out_len
+    )
+end
+
+"""
+    t4a_simplett_f64_site_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t}) -> Cint
+
+Get the site dimensions.
+"""
+function t4a_simplett_f64_site_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t})
+    return ccall(
+        (:t4a_simplett_f64_site_dims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t),
+        ptr,
+        out_dims,
+        Csize_t(length(out_dims))
+    )
+end
+
+"""
+    t4a_simplett_f64_link_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t}) -> Cint
+
+Get the link (bond) dimensions.
+"""
+function t4a_simplett_f64_link_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t})
+    return ccall(
+        (:t4a_simplett_f64_link_dims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t),
+        ptr,
+        out_dims,
+        Csize_t(length(out_dims))
+    )
+end
+
+"""
+    t4a_simplett_f64_rank(ptr::Ptr{Cvoid}, out_rank::Ref{Csize_t}) -> Cint
+
+Get the maximum bond dimension (rank).
+"""
+function t4a_simplett_f64_rank(ptr::Ptr{Cvoid}, out_rank::Ref{Csize_t})
+    return ccall(
+        (:t4a_simplett_f64_rank, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out_rank
+    )
+end
+
+"""
+    t4a_simplett_f64_evaluate(ptr::Ptr{Cvoid}, indices::Vector{Csize_t}, out_value::Ref{Cdouble}) -> Cint
+
+Evaluate the tensor train at a given multi-index.
+"""
+function t4a_simplett_f64_evaluate(ptr::Ptr{Cvoid}, indices::Vector{Csize_t}, out_value::Ref{Cdouble})
+    return ccall(
+        (:t4a_simplett_f64_evaluate, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t, Ptr{Cdouble}),
+        ptr,
+        indices,
+        Csize_t(length(indices)),
+        out_value
+    )
+end
+
+"""
+    t4a_simplett_f64_sum(ptr::Ptr{Cvoid}, out_value::Ref{Cdouble}) -> Cint
+
+Compute the sum over all indices.
+"""
+function t4a_simplett_f64_sum(ptr::Ptr{Cvoid}, out_value::Ref{Cdouble})
+    return ccall(
+        (:t4a_simplett_f64_sum, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr,
+        out_value
+    )
+end
+
+"""
+    t4a_simplett_f64_norm(ptr::Ptr{Cvoid}, out_value::Ref{Cdouble}) -> Cint
+
+Compute the Frobenius norm.
+"""
+function t4a_simplett_f64_norm(ptr::Ptr{Cvoid}, out_value::Ref{Cdouble})
+    return ccall(
+        (:t4a_simplett_f64_norm, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr,
+        out_value
+    )
+end
+
+"""
+    t4a_simplett_f64_site_tensor(ptr::Ptr{Cvoid}, site::Integer, out_data::Vector{Cdouble},
+                                  out_left_dim::Ref{Csize_t}, out_site_dim::Ref{Csize_t},
+                                  out_right_dim::Ref{Csize_t}) -> Cint
+
+Get site tensor data at a specific site.
+"""
+function t4a_simplett_f64_site_tensor(
+    ptr::Ptr{Cvoid},
+    site::Integer,
+    out_data::Vector{Cdouble},
+    out_left_dim::Ref{Csize_t},
+    out_site_dim::Ref{Csize_t},
+    out_right_dim::Ref{Csize_t}
+)
+    return ccall(
+        (:t4a_simplett_f64_site_tensor, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Ptr{Cdouble}, Csize_t, Ptr{Csize_t}, Ptr{Csize_t}, Ptr{Csize_t}),
+        ptr,
+        Csize_t(site),
+        out_data,
+        Csize_t(length(out_data)),
+        out_left_dim,
+        out_site_dim,
+        out_right_dim
+    )
+end
+
+# ============================================================================
+# TensorCI2 lifecycle functions
+# ============================================================================
+
+"""
+    t4a_tci2_f64_release(ptr::Ptr{Cvoid})
+
+Release a TensorCI2 object.
+"""
+function t4a_tci2_f64_release(ptr::Ptr{Cvoid})
+    ptr == C_NULL && return
+    ccall(
+        (:t4a_tci2_f64_release, libpath()),
+        Cvoid,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+"""
+    t4a_tci2_f64_new(local_dims::Vector{Csize_t}) -> Ptr{Cvoid}
+
+Create a new TensorCI2 object.
+"""
+function t4a_tci2_f64_new(local_dims::Vector{Csize_t})
+    return ccall(
+        (:t4a_tci2_f64_new, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Csize_t}, Csize_t),
+        local_dims,
+        Csize_t(length(local_dims))
+    )
+end
+
+# ============================================================================
+# TensorCI2 accessors
+# ============================================================================
+
+"""
+    t4a_tci2_f64_len(ptr::Ptr{Cvoid}, out_len::Ref{Csize_t}) -> Cint
+
+Get the number of sites.
+"""
+function t4a_tci2_f64_len(ptr::Ptr{Cvoid}, out_len::Ref{Csize_t})
+    return ccall(
+        (:t4a_tci2_f64_len, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out_len
+    )
+end
+
+"""
+    t4a_tci2_f64_rank(ptr::Ptr{Cvoid}, out_rank::Ref{Csize_t}) -> Cint
+
+Get the current rank (maximum bond dimension).
+"""
+function t4a_tci2_f64_rank(ptr::Ptr{Cvoid}, out_rank::Ref{Csize_t})
+    return ccall(
+        (:t4a_tci2_f64_rank, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out_rank
+    )
+end
+
+"""
+    t4a_tci2_f64_link_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t}) -> Cint
+
+Get the link (bond) dimensions.
+"""
+function t4a_tci2_f64_link_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t})
+    return ccall(
+        (:t4a_tci2_f64_link_dims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t),
+        ptr,
+        out_dims,
+        Csize_t(length(out_dims))
+    )
+end
+
+"""
+    t4a_tci2_f64_max_sample_value(ptr::Ptr{Cvoid}, out_value::Ref{Cdouble}) -> Cint
+
+Get the maximum sample value encountered.
+"""
+function t4a_tci2_f64_max_sample_value(ptr::Ptr{Cvoid}, out_value::Ref{Cdouble})
+    return ccall(
+        (:t4a_tci2_f64_max_sample_value, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr,
+        out_value
+    )
+end
+
+"""
+    t4a_tci2_f64_max_bond_error(ptr::Ptr{Cvoid}, out_value::Ref{Cdouble}) -> Cint
+
+Get the maximum bond error from the last sweep.
+"""
+function t4a_tci2_f64_max_bond_error(ptr::Ptr{Cvoid}, out_value::Ref{Cdouble})
+    return ccall(
+        (:t4a_tci2_f64_max_bond_error, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr,
+        out_value
+    )
+end
+
+# ============================================================================
+# TensorCI2 pivot operations
+# ============================================================================
+
+"""
+    t4a_tci2_f64_add_global_pivots(ptr::Ptr{Cvoid}, pivots::Vector{Csize_t}, n_pivots::Integer, n_sites::Integer) -> Cint
+
+Add global pivots to the TCI. Pivots are stored as a flat array.
+"""
+function t4a_tci2_f64_add_global_pivots(ptr::Ptr{Cvoid}, pivots::Vector{Csize_t}, n_pivots::Integer, n_sites::Integer)
+    return ccall(
+        (:t4a_tci2_f64_add_global_pivots, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t, Csize_t),
+        ptr,
+        pivots,
+        Csize_t(n_pivots),
+        Csize_t(n_sites)
+    )
+end
+
+# ============================================================================
+# TensorCI2 conversion
+# ============================================================================
+
+"""
+    t4a_tci2_f64_to_tensor_train(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
+
+Convert a TCI to a SimpleTT TensorTrain.
+"""
+function t4a_tci2_f64_to_tensor_train(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_tci2_f64_to_tensor_train, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+# ============================================================================
+# TensorCI2 high-level crossinterpolate2
+# ============================================================================
+
+# Callback type for evaluation function
+# signature: (indices_ptr, n_indices, result_ptr, user_data) -> status
+const EvalCallback = Ptr{Cvoid}
+
+"""
+    t4a_crossinterpolate2_f64(local_dims, initial_pivots, n_initial_pivots,
+                               eval_fn, user_data, tolerance, max_bonddim, max_iter,
+                               out_tci, out_final_error) -> Cint
+
+Perform cross interpolation of a function.
+"""
+function t4a_crossinterpolate2_f64(
+    local_dims::Vector{Csize_t},
+    initial_pivots::Vector{Csize_t},  # flat array
+    n_initial_pivots::Integer,
+    eval_fn::Ptr{Cvoid},
+    user_data::Ptr{Cvoid},
+    tolerance::Float64,
+    max_bonddim::Integer,
+    max_iter::Integer,
+    out_tci::Ref{Ptr{Cvoid}},
+    out_final_error::Ref{Cdouble}
+)
+    return ccall(
+        (:t4a_crossinterpolate2_f64, libpath()),
+        Cint,
+        (Ptr{Csize_t}, Csize_t, Ptr{Csize_t}, Csize_t, Ptr{Cvoid}, Ptr{Cvoid},
+         Cdouble, Csize_t, Csize_t, Ptr{Ptr{Cvoid}}, Ptr{Cdouble}),
+        local_dims,
+        Csize_t(length(local_dims)),
+        isempty(initial_pivots) ? C_NULL : initial_pivots,
+        Csize_t(n_initial_pivots),
+        eval_fn,
+        user_data,
+        tolerance,
+        Csize_t(max_bonddim),
+        Csize_t(max_iter),
+        out_tci,
+        out_final_error
+    )
+end
+
 end # module C_API

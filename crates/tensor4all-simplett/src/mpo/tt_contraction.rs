@@ -1,6 +1,6 @@
 //! Contraction operations for tensor trains (TT-TT)
 //!
-//! This module re-exports TT contraction operations from `tensor4all-simpletensortrain`.
+//! This module re-exports TT contraction operations from `tensor4all-simplett`.
 //! These operations are conceptually MPO-MPO contractions where the MPO
 //! has trivial (dimension 1) "operator" indices.
 //!
@@ -21,7 +21,7 @@
 //! let inner = dot(&tt1, &tt2).unwrap();
 //! ```
 
-// Re-export TT contraction types and functions from tensor4all-simpletensortrain
+// Re-export TT contraction types and functions from tensor4all-simplett
 pub use crate::contraction::{dot, ContractionOptions};
 
 // Also re-export TensorTrain for convenience

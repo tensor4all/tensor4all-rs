@@ -8,7 +8,7 @@ use crate::error::{Result, TCIError};
 use crate::indexset::MultiIndex;
 use matrixci::util::{zeros, Scalar};
 use matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
-use tensor4all_simpletensortrain::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
 
 /// Options for TCI2 algorithm
 #[derive(Debug, Clone)]
@@ -361,8 +361,9 @@ where
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
-    // Invalidate site tensors
-    tci.invalidate_site_tensors();
+    // Note: Do NOT call invalidate_site_tensors() here.
+    // That would wipe out previously computed site tensors in multi-site cases.
+    // Tensors are updated in-place for each bond.
 
     // Build combined index sets
     let i_combined = tci.kronecker_i(b);
@@ -492,6 +493,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tensor4all_simplett::AbstractTensorTrain;
 
     #[test]
     fn test_tensorci2_new() {
@@ -576,5 +578,115 @@ mod tests {
             "Expected small error, got {}",
             final_error
         );
+    }
+
+    #[test]
+    fn test_crossinterpolate2_3sites_constant() {
+        // 3-site constant function: f(i, j, k) = 1.0
+        let f = |_: &MultiIndex| 1.0f64;
+        let local_dims = vec![2, 2, 2];
+        let first_pivot = vec![vec![0, 0, 0]];
+        let options = TCI2Options::default();
+
+        let result = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+            f,
+            None,
+            local_dims,
+            first_pivot,
+            options,
+        );
+
+        assert!(result.is_ok(), "crossinterpolate2 failed: {:?}", result.err());
+        let (tci, _ranks, _errors) = result.unwrap();
+
+        assert_eq!(tci.len(), 3);
+        assert!(tci.rank() >= 1);
+
+        // Verify site tensor dimensions
+        for p in 0..tci.len() {
+            let t = tci.site_tensor(p);
+            assert!(t.left_dim() > 0, "Site {} left_dim should be > 0", p);
+            assert!(t.right_dim() > 0, "Site {} right_dim should be > 0", p);
+        }
+
+        // Test to_tensor_train conversion
+        let tt_result = tci.to_tensor_train();
+        assert!(tt_result.is_ok(), "to_tensor_train failed: {:?}", tt_result.err());
+
+        let tt = tt_result.unwrap();
+        assert_eq!(tt.len(), 3);
+
+        // Verify TT can be evaluated
+        let val = tt.evaluate(&[0, 0, 0]).unwrap();
+        assert!((val - 1.0).abs() < 1e-10, "Expected 1.0, got {}", val);
+    }
+
+    #[test]
+    fn test_crossinterpolate2_4sites_product() {
+        // 4-site product function: f(i, j, k, l) = (1+i) * (1+j) * (1+k) * (1+l)
+        let f = |idx: &MultiIndex| {
+            (1 + idx[0]) as f64 * (1 + idx[1]) as f64 * (1 + idx[2]) as f64 * (1 + idx[3]) as f64
+        };
+        let local_dims = vec![2, 2, 2, 2];
+        let first_pivot = vec![vec![0, 0, 0, 0]];
+        let options = TCI2Options::default();
+
+        let result = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+            f,
+            None,
+            local_dims,
+            first_pivot,
+            options,
+        );
+
+        assert!(result.is_ok(), "crossinterpolate2 failed: {:?}", result.err());
+        let (tci, _ranks, _errors) = result.unwrap();
+
+        assert_eq!(tci.len(), 4);
+
+        // Test to_tensor_train conversion
+        let tt_result = tci.to_tensor_train();
+        assert!(tt_result.is_ok(), "to_tensor_train failed: {:?}", tt_result.err());
+
+        let tt = tt_result.unwrap();
+        assert_eq!(tt.len(), 4);
+
+        // Verify evaluations
+        let val = tt.evaluate(&[0, 0, 0, 0]).unwrap();
+        assert!((val - 1.0).abs() < 1e-10, "f(0,0,0,0) = 1, got {}", val);
+
+        let val = tt.evaluate(&[1, 1, 1, 1]).unwrap();
+        assert!((val - 16.0).abs() < 1e-10, "f(1,1,1,1) = 16, got {}", val);
+    }
+
+    #[test]
+    fn test_crossinterpolate2_5sites_constant() {
+        // 5-site constant function
+        let f = |_: &MultiIndex| 2.5f64;
+        let local_dims = vec![2, 2, 2, 2, 2];
+        let first_pivot = vec![vec![0, 0, 0, 0, 0]];
+        let options = TCI2Options::default();
+
+        let result = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+            f,
+            None,
+            local_dims,
+            first_pivot,
+            options,
+        );
+
+        assert!(result.is_ok(), "crossinterpolate2 failed: {:?}", result.err());
+        let (tci, _ranks, _errors) = result.unwrap();
+
+        assert_eq!(tci.len(), 5);
+
+        let tt_result = tci.to_tensor_train();
+        assert!(tt_result.is_ok(), "to_tensor_train failed: {:?}", tt_result.err());
+
+        let tt = tt_result.unwrap();
+
+        // Sum should be 2.5 * 2^5 = 80
+        let sum = tt.sum();
+        assert!((sum - 80.0).abs() < 1e-8, "Expected sum=80, got {}", sum);
     }
 }

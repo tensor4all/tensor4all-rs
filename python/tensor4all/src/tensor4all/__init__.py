@@ -35,6 +35,12 @@ from .algorithm import (
     resolve_truncation_tolerance,
 )
 
+# SimpleTT types (tensor4all-simplett)
+from .simplett import SimpleTensorTrain
+
+# TensorCI types (tensor4all-tensorci)
+from .tensorci import TensorCI2, crossinterpolate2
+
 # DISABLED - pending simpletensortrain integration
 # MPO types (tensor4all-mpocontraction)
 # from . import mpo
@@ -63,6 +69,11 @@ __all__ = [
     "CompressionAlgorithm",
     "get_default_svd_rtol",
     "resolve_truncation_tolerance",
+    # SimpleTT types
+    "SimpleTensorTrain",
+    # TensorCI types
+    "TensorCI2",
+    "crossinterpolate2",
     # DISABLED - pending simpletensortrain integration
     # MPO module
     # "mpo",

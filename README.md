@@ -81,7 +81,7 @@ tensor4all-rs/
 ### Simple Tensor Train (MPS)
 
 ```rust
-use tensor4all_simpletensortrain::{TensorTrain, AbstractTensorTrain};
+use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
 
 // Create a constant tensor train with local dimensions [2, 3, 4]
 let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
@@ -96,12 +96,57 @@ let total = tt.sum();
 let compressed = tt.compressed(1e-10, Some(20))?;
 ```
 
+### Tensor Cross Interpolation (TCI)
+
+```rust
+use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+
+// Define a function to interpolate
+let f = |idx: &Vec<usize>| -> f64 {
+    ((1 + idx[0]) * (1 + idx[1]) * (1 + idx[2])) as f64
+};
+
+// Perform cross interpolation
+let local_dims = vec![4, 4, 4];
+let initial_pivots = vec![vec![0, 0, 0]];
+let options = TCI2Options { tolerance: 1e-10, ..Default::default() };
+
+let (tci, ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+    f, None, local_dims, initial_pivots, options
+)?;
+
+// Convert to tensor train
+let tt = tci.to_tensor_train()?;
+println!("Rank: {}, Final error: {:.2e}", tci.rank(), errors.last().unwrap());
+```
+
 ## Language Bindings
 
 ### Julia
 
 ```julia
 using Tensor4all
+using Tensor4all.TensorCI
+
+# Cross interpolation of a function
+f(i, j, k) = Float64((1 + i) * (1 + j) * (1 + k))
+tt, err = crossinterpolate2(f, [4, 4, 4]; tolerance=1e-10)
+
+# Evaluate the tensor train
+println(tt(0, 0, 0))  # 1.0
+println(tt(1, 1, 1))  # 8.0
+println(tt(3, 3, 3))  # 64.0
+
+# Check properties
+using Tensor4all.SimpleTT: rank, site_dims
+println("Rank: ", rank(tt))
+println("Site dims: ", site_dims(tt))
+println("Sum: ", sum(tt))
+```
+
+#### ITensorLike interface (advanced)
+
+```julia
 using Tensor4all.ITensorLike
 
 # Create indices
@@ -129,14 +174,32 @@ tt = TensorTrain(tensors)
 # Orthogonalize and truncate
 orthogonalize!(tt, 2)
 truncate!(tt; maxdim=3, rtol=1e-10)
-
-# ITensors.jl interop
-using ITensors
-it_idx = ITensors.Index(i)  # Convert to ITensors.Index
-t4a_idx = Index(it_idx)     # Convert back
 ```
 
 ### Python
+
+```python
+from tensor4all import crossinterpolate2
+
+# Define a function to interpolate
+def f(i, j, k):
+    return float((1 + i) * (1 + j) * (1 + k))
+
+# Perform cross interpolation
+tt, err = crossinterpolate2(f, [4, 4, 4], tolerance=1e-10)
+
+# Evaluate the tensor train
+print(tt(0, 0, 0))  # 1.0
+print(tt(1, 1, 1))  # 8.0
+print(tt(3, 3, 3))  # 64.0
+
+# Check properties
+print("Rank:", tt.rank)
+print("Site dims:", tt.site_dims)
+print("Sum:", tt.sum())
+```
+
+#### Index and Tensor (advanced)
 
 ```python
 from tensor4all import Index, Tensor

@@ -5,7 +5,7 @@
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
-use tensor4all_simpletensortrain::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
 use crate::common::{tensortrain_to_linear_operator, BoundaryCondition, QuanticsOperator};
 
@@ -171,7 +171,7 @@ fn shift_mpo(r: usize, offset: i64, bc: BoundaryCondition) -> Result<TensorTrain
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor4all_simpletensortrain::AbstractTensorTrain;
+    use tensor4all_simplett::AbstractTensorTrain;
 
     #[test]
     fn test_shift_mpo_structure() {
