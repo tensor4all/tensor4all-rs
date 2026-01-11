@@ -1,11 +1,10 @@
 [workspace]
-# Note: tensor4all-quanticstransform temporarily excluded
-# - needs full rewrite for new TensorLike-based LinearOperator API
 members = [
     "crates/tensor4all-tensorbackend",
     "crates/tensor4all-core",
     "crates/tensor4all-treetn",
     "crates/tensor4all-itensorlike",
+    "crates/tensor4all-quanticstransform",
     "crates/quanticsgrids",
     "crates/matrixci",
     "crates/tensor4all-simplett",
