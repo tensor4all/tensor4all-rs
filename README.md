@@ -38,7 +38,7 @@ tensor4all-rs/
 ├── crates/
 │   ├── tensor4all-tensorbackend/     # Scalar types, storage backends
 │   ├── tensor4all-core/              # Core: Index, Tensor, SVD, QR
-│   ├── tensor4all-simpletensortrain/ # Simple TT/MPS implementation
+│   ├── tensor4all-simplett/          # Simple TT/MPS implementation
 │   ├── tensor4all-tensorci/          # Tensor Cross Interpolation
 │   ├── tensor4all-quanticstci/       # High-level Quantics TCI (QuanticsTCI.jl port)
 │   ├── tensor4all-capi/              # C API for language bindings
@@ -61,7 +61,7 @@ tensor4all-rs/
 |-------|-------------|
 | [tensor4all-tensorbackend](crates/tensor4all-tensorbackend/) | Scalar types (f64, Complex64) and storage backends |
 | [tensor4all-core](crates/tensor4all-core/) | Core types: Index, Tensor, SVD, QR, LU |
-| [tensor4all-simpletensortrain](crates/tensor4all-simpletensortrain/) | Simple TT/MPS with multiple canonical forms |
+| [tensor4all-simplett](crates/tensor4all-simplett/) | Simple TT/MPS with multiple canonical forms |
 | [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI) algorithms |
 | [tensor4all-quanticstci](crates/tensor4all-quanticstci/) | High-level Quantics TCI interface |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
