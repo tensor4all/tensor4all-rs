@@ -316,7 +316,6 @@ mod tests {
     use crate::random::{random_treetn_f64, LinkSpace};
     use tensor4all_core::index::{DynId, Index, TagSet};
     use tensor4all_core::storage::Storage;
-    use tensor4all_core::TensorAccess;
     use tensor4all_core::TensorDynLen;
 
     type DynIndex = Index<DynId, TagSet>;
@@ -873,7 +872,7 @@ mod tests {
         assert_eq!(n1_tensor.dims, vec![3, 3]);
 
         // Check it's diagonal (only diagonal elements are 1.0)
-        let data = match n1_tensor.storage() {
+        let data = match n1_tensor.storage().as_ref() {
             Storage::DenseF64(d) => d.as_slice(),
             _ => panic!("Expected DenseF64"),
         };

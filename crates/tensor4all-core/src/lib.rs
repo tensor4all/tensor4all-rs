@@ -16,8 +16,10 @@ pub use index_like::{ConjState, IndexLike};
 // Index operations (uses defaults::*)
 pub mod index_ops;
 pub use index_ops::{
-    check_unique_indices, common_inds, hascommoninds, hasind, hasinds, noncommon_inds, replaceinds,
-    replaceinds_in_place, union_inds, unique_inds, ReplaceIndsError,
+    check_unique_indices, common_ind_positions, common_inds, hascommoninds, hasind, hasinds,
+    noncommon_inds, prepare_contraction, prepare_contraction_pairs, replaceinds,
+    replaceinds_in_place, union_inds, unique_inds, ContractionError, ContractionSpec,
+    ReplaceIndsError,
 };
 pub use smallstring::{SmallChar, SmallString, SmallStringError};
 pub use tagset::{Tag, TagSetError, TagSetLike};
@@ -42,6 +44,7 @@ pub use defaults::tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor,
     unfold_split, TensorAccess, TensorDynLen,
 };
+pub use defaults::tensor_data::{TensorComponent, TensorData};
 pub use tensor_like::{
     Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult, TensorLike,
 };

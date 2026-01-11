@@ -159,7 +159,7 @@ where
         let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(options.max_iter);
 
         // v_0 = r / ||r||
-        let v0 = r.scale(AnyScalar::F64(1.0 / r_norm));
+        let v0 = r.scale(AnyScalar::F64(1.0 / r_norm))?;
         v_basis.push(v0);
 
         // Initialize Givens rotation storage
@@ -239,7 +239,7 @@ where
 
             // Add new basis vector (if not converged and h_jp1_j is not too small)
             if h_jp1_j_real > 1e-14 {
-                let v_jp1 = w_orth.scale(AnyScalar::F64(1.0 / h_jp1_j_real));
+                let v_jp1 = w_orth.scale(AnyScalar::F64(1.0 / h_jp1_j_real))?;
                 v_basis.push(v_jp1);
             } else {
                 // Lucky breakdown - we've found the exact solution in the Krylov subspace
@@ -414,7 +414,7 @@ fn update_solution<T: TensorLike>(x: &T, v_basis: &[T], y: &[AnyScalar]) -> Resu
     let mut result = x.clone();
 
     for (vi, yi) in v_basis.iter().zip(y.iter()) {
-        let scaled_vi = vi.scale(yi.clone());
+        let scaled_vi = vi.scale(yi.clone())?;
         // result = result + scaled_vi = 1.0 * result + 1.0 * scaled_vi
         result = result.axpby(AnyScalar::F64(1.0), &scaled_vi, AnyScalar::F64(1.0))?;
     }
@@ -425,7 +425,7 @@ fn update_solution<T: TensorLike>(x: &T, v_basis: &[T], y: &[AnyScalar]) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defaults::tensordynlen::{TensorAccess, TensorDynLen};
+    use crate::defaults::tensordynlen::TensorDynLen;
     use crate::defaults::DynIndex;
     use crate::storage::{DenseStorageF64, Storage};
     use std::sync::Arc;
@@ -524,7 +524,7 @@ mod tests {
         let diag = vec![2.0, 3.0, 4.0];
         let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
             // Element-wise multiply by diagonal
-            let x_data = match x.storage() {
+            let x_data = match x.storage().as_ref() {
                 Storage::DenseF64(d) => d.as_slice().to_vec(),
                 _ => panic!("Expected DenseF64"),
             };
@@ -583,7 +583,7 @@ mod tests {
         let a_data = vec![2.0, 1.0, 0.0, 3.0];
 
         let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
-            let x_data = match x.storage() {
+            let x_data = match x.storage().as_ref() {
                 Storage::DenseF64(d) => d.as_slice().to_vec(),
                 _ => panic!("Expected DenseF64"),
             };
@@ -631,7 +631,7 @@ mod tests {
 
         let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> {
             // A = 2*I
-            Ok(x.scale(AnyScalar::F64(2.0)))
+            x.scale(AnyScalar::F64(2.0))
         };
 
         let options = GmresOptions {

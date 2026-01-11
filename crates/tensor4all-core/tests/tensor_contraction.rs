@@ -47,7 +47,7 @@ fn test_contract_dyn_len_matrix_multiplication() {
     assert_eq!(result.indices[1].id, k.id);
 
     // Check that all elements are 3.0
-    if let Storage::DenseF64(ref vec) = *result.storage {
+    if let Storage::DenseF64(ref vec) = **result.storage() {
         assert_eq!(vec.len(), 8); // 2 * 4 = 8
         for &val in vec.iter() {
             assert_eq!(val, 3.0);
@@ -86,7 +86,7 @@ fn test_mul_operator_contraction() {
     assert_eq!(result.indices[1].id, k.id);
 
     // Check that all elements are 3.0
-    if let Storage::DenseF64(ref vec) = *result.storage {
+    if let Storage::DenseF64(ref vec) = **result.storage() {
         assert_eq!(vec.len(), 8); // 2 * 4 = 8
         for &val in vec.iter() {
             assert_eq!(val, 3.0);
@@ -120,7 +120,7 @@ fn test_mul_operator_owned() {
 }
 
 #[test]
-#[should_panic(expected = "No common indices found")]
+#[should_panic(expected = "NoCommonIndices")]
 fn test_contract_no_common_indices() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
@@ -169,7 +169,7 @@ fn test_contract_three_indices() {
     assert_eq!(result.indices[1].id, l.id);
 
     // Check that all elements are 12.0
-    if let Storage::DenseF64(ref vec) = *result.storage {
+    if let Storage::DenseF64(ref vec) = **result.storage() {
         assert_eq!(vec.len(), 10); // 2 * 5 = 10
         for &val in vec.as_slice().iter() {
             assert_eq!(val, 12.0);
@@ -214,7 +214,7 @@ fn test_contract_mixed_f64_c64() {
     assert_eq!(result.indices[1].id, k.id);
 
     // Check result storage type and values
-    if let Storage::DenseC64(ref vec) = *result.storage {
+    if let Storage::DenseC64(ref vec) = **result.storage() {
         assert_eq!(vec.len(), 4);
         // All elements should be the same: sum of first column and sum of second column
         // First row: [6+8i, 10+12i]
@@ -265,7 +265,7 @@ fn test_contract_mixed_c64_f64() {
     assert_eq!(result.dims, vec![2, 2]);
 
     // Check result storage type
-    if let Storage::DenseC64(ref vec) = *result.storage {
+    if let Storage::DenseC64(ref vec) = **result.storage() {
         assert_eq!(vec.len(), 4);
         // Check actual computed values
         assert!((vec.get(0) - Complex64::new(4.0, 6.0)).norm() < 1e-10);
@@ -307,7 +307,7 @@ fn test_tensordot_different_ids() {
     assert_eq!(result.indices[1].id, l.id);
 
     // Check that all elements are 3.0
-    if let Storage::DenseF64(ref vec) = *result.storage {
+    if let Storage::DenseF64(ref vec) = **result.storage() {
         assert_eq!(vec.len(), 8);
         for &val in vec.iter() {
             assert_eq!(val, 3.0);
@@ -338,7 +338,11 @@ fn test_tensordot_dimension_mismatch() {
     assert!(result.is_err());
     if let Err(e) = result {
         let err_msg = format!("{}", e);
-        assert!(err_msg.contains("dimension") || err_msg.contains("mismatch"));
+        assert!(
+            err_msg.contains("Dimension") || err_msg.contains("mismatch"),
+            "Expected dimension mismatch error, got: {}",
+            err_msg
+        );
     }
 }
 
@@ -365,7 +369,11 @@ fn test_tensordot_index_not_found() {
     assert!(result.is_err());
     if let Err(e) = result {
         let err_msg = format!("{}", e);
-        assert!(err_msg.contains("not found") || err_msg.contains("index"));
+        assert!(
+            err_msg.contains("not found") || err_msg.contains("Index"),
+            "Expected index not found error, got: {}",
+            err_msg
+        );
     }
 }
 
@@ -423,6 +431,9 @@ fn test_tensordot_empty_pairs() {
             err_msg.contains("No pairs")
                 || err_msg.contains("empty")
                 || err_msg.contains("specified")
+                || err_msg.contains("NoCommon"),
+            "Expected empty pairs error, got: {}",
+            err_msg
         );
     }
 }

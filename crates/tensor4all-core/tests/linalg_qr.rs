@@ -90,11 +90,11 @@ fn test_qr_reconstruction() {
 
     // Reconstruct: A = Q * R
     // Extract Q and R data
-    let q_data = match q.storage.as_ref() {
+    let q_data = match q.storage().as_ref() {
         Storage::DenseF64(dense) => dense.as_slice(),
         _ => panic!("Q should be dense"),
     };
-    let r_data = match r.storage.as_ref() {
+    let r_data = match r.storage().as_ref() {
         Storage::DenseF64(dense) => dense.as_slice(),
         _ => panic!("R should be dense"),
     };
@@ -128,7 +128,7 @@ fn test_qr_reconstruction() {
     assert_eq!(reconstructed.dims, vec![3, 4]);
 
     // Extract reconstructed data
-    let reconstructed_data_vec = match reconstructed.storage.as_ref() {
+    let reconstructed_data_vec = match reconstructed.storage().as_ref() {
         Storage::DenseF64(dense) => dense.as_slice().to_vec(),
         _ => panic!("Reconstructed should be dense"),
     };
@@ -252,11 +252,11 @@ fn test_qr_complex_reconstruction() {
 
     let (q, r) = qr_c64(&tensor, &[i_idx.clone()]).expect("Complex QR should succeed");
 
-    let q_data = match q.storage.as_ref() {
+    let q_data = match q.storage().as_ref() {
         Storage::DenseC64(dense) => dense.as_slice(),
         _ => panic!("Q should be dense complex"),
     };
-    let r_data = match r.storage.as_ref() {
+    let r_data = match r.storage().as_ref() {
         Storage::DenseC64(dense) => dense.as_slice(),
         _ => panic!("R should be dense complex"),
     };

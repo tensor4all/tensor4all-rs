@@ -35,7 +35,7 @@ fn test_svd_identity() {
 
     // For identity matrix, singular values should be [1, 1] (in some order)
     // Extract singular values from diagonal storage
-    match s.storage.as_ref() {
+    match s.storage().as_ref() {
         Storage::DiagF64(diag) => {
             let s_vals = diag.as_slice();
             assert_eq!(s_vals.len(), 2);
@@ -121,15 +121,15 @@ fn test_svd_reconstruction() {
 
     // For now, let's use a simpler approach: manually reconstruct
     // Extract U, S, V data
-    let u_data = match u.storage.as_ref() {
+    let u_data = match u.storage().as_ref() {
         Storage::DenseF64(dense) => dense.as_slice(),
         _ => panic!("U should be dense"),
     };
-    let s_data = match s.storage.as_ref() {
+    let s_data = match s.storage().as_ref() {
         Storage::DiagF64(diag) => diag.as_slice(),
         _ => panic!("S should be diagonal"),
     };
-    let v_data = match v.storage.as_ref() {
+    let v_data = match v.storage().as_ref() {
         Storage::DenseF64(dense) => dense.as_slice(),
         _ => panic!("V should be dense"),
     };
@@ -163,7 +163,7 @@ fn test_svd_reconstruction() {
     assert_eq!(reconstructed.dims, vec![3, 4]);
 
     // Extract reconstructed data
-    let reconstructed_data_vec = match reconstructed.storage.as_ref() {
+    let reconstructed_data_vec = match reconstructed.storage().as_ref() {
         Storage::DenseF64(dense) => dense.as_slice().to_vec(),
         _ => panic!("Reconstructed should be dense"),
     };
@@ -295,15 +295,15 @@ fn test_svd_complex_reconstruction() {
 
     let (u, s, v) = svd_c64(&tensor, &[i_idx.clone()]).expect("Complex SVD should succeed");
 
-    let u_data = match u.storage.as_ref() {
+    let u_data = match u.storage().as_ref() {
         Storage::DenseC64(dense) => dense.as_slice(),
         _ => panic!("U should be dense complex"),
     };
-    let s_data = match s.storage.as_ref() {
+    let s_data = match s.storage().as_ref() {
         Storage::DiagF64(diag) => diag.as_slice(),
         _ => panic!("S should be diagonal real (f64)"),
     };
-    let v_data = match v.storage.as_ref() {
+    let v_data = match v.storage().as_ref() {
         Storage::DenseC64(dense) => dense.as_slice(),
         _ => panic!("V should be dense complex"),
     };
@@ -377,7 +377,7 @@ fn test_svd_truncation() {
     assert_eq!(v.dims, vec![2, 1], "V should be truncated to rank 1");
 
     // Check singular value
-    match s.storage.as_ref() {
+    match s.storage().as_ref() {
         Storage::DiagF64(diag) => {
             let s_vals = diag.as_slice();
             assert_eq!(s_vals.len(), 1);

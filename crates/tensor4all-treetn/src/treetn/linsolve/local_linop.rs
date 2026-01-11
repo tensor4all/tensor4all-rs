@@ -112,7 +112,7 @@ where
             AnyScalar::C64(z) => z.re == 0.0 && z.im == 0.0,
         };
         if a0_is_zero {
-            return Ok(hx.scale(self.a1.clone()));
+            return hx.scale(self.a1.clone());
         }
 
         // Align hx indices to match x's index order for axpby
