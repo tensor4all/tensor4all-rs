@@ -156,6 +156,7 @@ arr = t.to_numpy()
 
 ## Future Extensions
 
+- GPU acceleration via PyTorch backend (tch-rs)
 - Optimization for block-sparse tensors
 - Automatic differentiation
 - Quantum number symmetries (Abelian: U(1), Z_n)
