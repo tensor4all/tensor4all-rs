@@ -68,6 +68,38 @@ import Tensor4all.SimpleTT: rank as tt_rank
     # @testset "crossinterpolate2 max_bonddim (2-site)" begin
     # end
 
+    @testset "crossinterpolate2 3-site constant" begin
+        # 3-site constant function: f(i, j, k) = 1.0
+        f(i, j, k) = 1.0
+        tt, err = crossinterpolate2(f, [2, 2, 2]; tolerance=1e-10)
+
+        @test length(tt) == 3
+        @test tt_rank(tt) == 1
+        @test sum(tt) ≈ 8.0  # 2^3 = 8
+        @test tt(0, 0, 0) ≈ 1.0
+    end
+
+    @testset "crossinterpolate2 4-site product" begin
+        # 4-site product function: f(i, j, k, l) = (1+i) * (1+j) * (1+k) * (1+l)
+        f(i, j, k, l) = Float64((1 + i) * (1 + j) * (1 + k) * (1 + l))
+        tt, err = crossinterpolate2(f, [2, 2, 2, 2]; tolerance=1e-10)
+
+        @test length(tt) == 4
+        @test tt_rank(tt) == 1  # Product is rank-1
+        @test tt(0, 0, 0, 0) ≈ 1.0
+        @test tt(1, 1, 1, 1) ≈ 16.0
+    end
+
+    @testset "crossinterpolate2 5-site constant" begin
+        # 5-site constant function
+        f(args...) = 2.5
+        tt, err = crossinterpolate2(f, [2, 2, 2, 2, 2]; tolerance=1e-10)
+
+        @test length(tt) == 5
+        @test tt_rank(tt) == 1
+        @test sum(tt) ≈ 80.0  # 2.5 * 2^5 = 80
+    end
+
     @testset "TensorCI2 show" begin
         tci = TensorCI2([2, 3])
 
