@@ -1,6 +1,6 @@
 [workspace]
 # Note: tensor4all-quanticstransform temporarily excluded
-# - needs update for concrete TensorLike
+# - needs full rewrite for new TensorLike-based LinearOperator API
 members = [
     "crates/tensor4all-tensorbackend",
     "crates/tensor4all-core",
