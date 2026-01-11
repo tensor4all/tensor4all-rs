@@ -242,4 +242,95 @@ mod tests {
         assert_eq!(total_elements, 2 * 3 * 4 * 5);
         assert_eq!(result.dims.len(), 4);
     }
+
+    /// Test omeco's handling of hyperedges.
+    ///
+    /// Simulates: A(i, I) * B(j, J) * C(k, K) * delta_{IJK}
+    /// where delta is a 3D superdiagonal (I==J==K).
+    ///
+    /// Decomposed representation:
+    /// - A(i, x), B(j, x), C(k, x), delta(x)
+    /// - x is a hyperedge connecting all four tensors
+    #[test]
+    fn test_omeco_hyperedge_delta() {
+        use omeco::{EinCode, GreedyMethod, optimize_code, contraction_complexity};
+        use std::collections::HashMap;
+
+        // A(i, x), B(j, x), C(k, x), delta(x)
+        // x is the hyperedge (appears in all 4 tensors)
+        let ixs: Vec<Vec<char>> = vec![
+            vec!['i', 'x'],  // A
+            vec!['j', 'x'],  // B
+            vec!['k', 'x'],  // C
+            vec!['x'],       // delta (1D)
+        ];
+        let output = vec!['i', 'j', 'k'];
+
+        let code = EinCode::new(ixs.clone(), output);
+
+        let mut sizes: HashMap<char, usize> = HashMap::new();
+        sizes.insert('i', 10);
+        sizes.insert('j', 10);
+        sizes.insert('k', 10);
+        sizes.insert('x', 100);  // hyperedge dimension
+
+        let tree = optimize_code(&code, &sizes, &GreedyMethod::default())
+            .expect("optimization should succeed");
+
+        let complexity = contraction_complexity(&tree, &sizes, &ixs);
+
+        // Verify the optimization found a solution
+        // Time complexity should be reasonable (not exponentially bad)
+        println!("Hyperedge test - tc: 2^{:.2}, sc: 2^{:.2}", complexity.tc, complexity.sc);
+
+        // Space complexity should be around log2(10*10*10) = ~10 for output
+        // plus some intermediate tensors
+        assert!(complexity.sc < 15.0, "Space complexity should be reasonable");
+
+        // The tree should have 4 leaves (one for each input tensor)
+        assert_eq!(tree.leaf_count(), 4);
+    }
+
+    /// Test omeco with a simple hyperedge case: U * s * V (SVD-like)
+    #[test]
+    fn test_omeco_hyperedge_svd() {
+        use omeco::{EinCode, GreedyMethod, optimize_code, contraction_complexity};
+        use std::collections::HashMap;
+
+        // U(i, j), s(j), V(j, k)
+        // j is a hyperedge connecting all 3 tensors
+        let ixs: Vec<Vec<char>> = vec![
+            vec!['i', 'j'],  // U
+            vec!['j'],       // s (1D diagonal)
+            vec!['j', 'k'],  // V
+        ];
+        let output = vec!['i', 'k'];
+
+        let code = EinCode::new(ixs.clone(), output);
+
+        let mut sizes: HashMap<char, usize> = HashMap::new();
+        sizes.insert('i', 100);
+        sizes.insert('j', 50);  // bond dimension
+        sizes.insert('k', 100);
+
+        let tree = optimize_code(&code, &sizes, &GreedyMethod::default())
+            .expect("optimization should succeed");
+
+        let complexity = contraction_complexity(&tree, &sizes, &ixs);
+
+        println!("SVD hyperedge - tc: 2^{:.2}, sc: 2^{:.2}", complexity.tc, complexity.sc);
+        println!("Tree structure: {:?}", tree);
+
+        // 3 input tensors
+        assert_eq!(tree.leaf_count(), 3);
+
+        // Note: sc is high (2^18.93 ≈ 500000 = 100*50*100) because
+        // intermediate tensor keeps all indices until final contraction.
+        // This is a limitation of treating diagonal as just another tensor.
+        //
+        // With proper diagonal handling, we could:
+        // 1. U(i,j) * s(j) → U'(i,j) where U'[i,j] = U[i,j] * s[j] (element-wise, O(n²))
+        // 2. U'(i,j) * V(j,k) → R(i,k) (matrix mult, O(n³))
+        // Instead omeco creates larger intermediate.
+    }
 }
