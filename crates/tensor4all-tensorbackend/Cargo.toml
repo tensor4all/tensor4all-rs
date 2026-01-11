@@ -21,6 +21,7 @@ mdarray.workspace = true
 mdarray-linalg.workspace = true
 mdarray-linalg-faer = { workspace = true, optional = true }
 mdarray-linalg-lapack = { workspace = true, optional = true }
+faer.workspace = true
 faer-traits.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
