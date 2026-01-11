@@ -6,12 +6,12 @@
 //! ## Milestone 1: Index types
 //!
 //! The initial implementation provides wrappers for:
-//! - `Index<DynId, NoSymmSpace, DefaultTagSet>` (the default index type)
+//! - `DynIndex` (`Index<DynId, TagSet>`) - the default dynamic index type
 //!
 //! ## Milestone 2: Tensor types
 //!
 //! Extended to support:
-//! - `TensorDynLen<DynId, NoSymmSpace>` with Dense/Diag storage
+//! - `TensorDynLen` with Dense/Diag storage
 //! - Bidirectional conversion with ITensors.ITensor
 //!
 //! ## Design patterns
