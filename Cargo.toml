@@ -36,6 +36,7 @@ mdarray = "0.7.2"
 mdarray-linalg = { git = "https://github.com/grothesque/mdarray-linalg", rev = "febdb0756bbe" }
 mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", rev = "febdb0756bbe", package = "mdarray-linalg-faer" }
 mdarray-linalg-lapack = { git = "https://github.com/grothesque/mdarray-linalg", rev = "febdb0756bbe", package = "mdarray-linalg-lapack" }
+faer = "0.23"
 faer-traits = "0.23"
 thiserror = "2.0"
 rand = "0.8"

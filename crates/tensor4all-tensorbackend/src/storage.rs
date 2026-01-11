@@ -1,6 +1,9 @@
+use faer::linalg::matmul::matmul as faer_matmul;
+use faer::{Accum, Par};
+use faer_traits::ComplexField;
 use mdarray::{DTensor, Dense, DenseMapping, DynRank, Rank, Shape, View};
 use num_complex::Complex64;
-use num_traits::Zero;
+use num_traits::{One, Zero};
 use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
 use std::borrow::Cow;
@@ -17,9 +20,11 @@ pub trait DenseScalar:
     + Debug
     + Default
     + Zero
+    + One
     + Add<Output = Self>
     + Mul<Output = Self>
     + AddAssign
+    + ComplexField
     + Send
     + Sync
     + 'static
@@ -279,20 +284,19 @@ fn contract_via_gemm<T: DenseScalar>(
     );
 
     // Perform GEMM: C[m, n] = A[m, k] @ B[k, n]
-    let mut c = vec![T::zero(); m * n];
+    // Data is row-major, so A[i, l] = a[i * k + l], B[l, j] = b[l * n + j]
+    //
+    // Create faer MatRef views with row-major strides:
+    // - row_stride = number of columns (k for A, n for B)
+    // - col_stride = 1
+    let a_mat = unsafe { faer::MatRef::from_raw_parts(a.as_ptr(), m, k, k as isize, 1) };
+    let b_mat = unsafe { faer::MatRef::from_raw_parts(b.as_ptr(), k, n, n as isize, 1) };
 
-    // Simple GEMM implementation (could be optimized with BLAS)
-    for i in 0..m {
-        for j in 0..n {
-            let mut sum = T::zero();
-            for l in 0..k {
-                // A is row-major: A[i, l] = a[i * k + l]
-                // B is row-major: B[l, j] = b[l * n + j]
-                sum += a[i * k + l] * b[l * n + j];
-            }
-            c[i * n + j] = sum;
-        }
-    }
+    let mut c = vec![T::zero(); m * n];
+    let mut c_mat = unsafe { faer::MatMut::from_raw_parts_mut(c.as_mut_ptr(), m, n, n as isize, 1) };
+
+    // Use faer GEMM: C = 1.0 * A * B + 0.0 * C
+    faer_matmul(&mut c_mat, Accum::Replace, a_mat, b_mat, T::one(), Par::Seq);
 
     c
 }
