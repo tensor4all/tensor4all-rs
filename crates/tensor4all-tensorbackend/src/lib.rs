@@ -16,8 +16,8 @@ pub use any_scalar::AnyScalar;
 pub use backend::{qr_backend, svd_backend, SvdResult};
 pub use storage::{
     contract_storage, make_mut_storage, mindim, storage_to_dtensor, DenseScalar, DenseStorage,
-    DenseStorageC64, DenseStorageF64, DenseStorageFactory, DiagStorageC64, DiagStorageF64, Storage,
-    StorageScalar, SumFromStorage,
+    DenseStorageC64, DenseStorageF64, DenseStorageFactory, DiagStorage, DiagStorageC64,
+    DiagStorageF64, Storage, StorageScalar, SumFromStorage,
 };
 
 // Re-export underlying crates for downstream use

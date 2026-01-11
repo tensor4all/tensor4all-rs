@@ -339,24 +339,24 @@ fn compute_contraction_permutation(
     (perm, new_axes, new_dims)
 }
 
-/// Diagonal storage for f64 elements.
+/// Diagonal storage for tensor elements, generic over scalar type.
 #[derive(Debug, Clone)]
-pub struct DiagStorageF64(Vec<f64>);
+pub struct DiagStorage<T>(Vec<T>);
 
-impl DiagStorageF64 {
-    pub fn from_vec(vec: Vec<f64>) -> Self {
+impl<T> DiagStorage<T> {
+    pub fn from_vec(vec: Vec<T>) -> Self {
         Self(vec)
     }
 
-    pub fn as_slice(&self) -> &[f64] {
+    pub fn as_slice(&self) -> &[T] {
         &self.0
     }
 
-    pub fn as_mut_slice(&mut self) -> &mut [f64] {
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
         &mut self.0
     }
 
-    pub fn into_vec(self) -> Vec<f64> {
+    pub fn into_vec(self) -> Vec<T> {
         self.0
     }
 
@@ -364,19 +364,29 @@ impl DiagStorageF64 {
         self.0.len()
     }
 
-    pub fn get(&self, i: usize) -> f64 {
-        self.0[i]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
+}
 
-    pub fn set(&mut self, i: usize, val: f64) {
+impl<T: Clone> DiagStorage<T> {
+    pub fn get(&self, i: usize) -> T {
+        self.0[i].clone()
+    }
+}
+
+impl<T: Copy> DiagStorage<T> {
+    pub fn set(&mut self, i: usize, val: T) {
         self.0[i] = val;
     }
+}
 
+impl<T: DenseScalar> DiagStorage<T> {
     /// Convert diagonal storage to a dense vector representation.
     /// Creates a dense vector with diagonal elements set and off-diagonal elements as zero.
-    pub fn to_dense_vec(&self, dims: &[usize]) -> Vec<f64> {
+    pub fn to_dense_vec(&self, dims: &[usize]) -> Vec<T> {
         let total_size: usize = dims.iter().product();
-        let mut dense_vec = vec![0.0; total_size];
+        let mut dense_vec = vec![T::zero(); total_size];
         let mindim_val = mindim(dims);
 
         // Set diagonal elements
@@ -410,14 +420,16 @@ impl DiagStorageF64 {
         dense_vec
     }
 
-    /// Contract this diagonal storage with another diagonal storage.
-    /// Returns either a scalar (DenseStorageF64 with one element) or a diagonal storage.
+    /// Contract this diagonal storage with another diagonal storage of the same type.
+    /// Returns either a scalar (Dense with one element) or a diagonal storage.
     pub fn contract_diag_diag(
         &self,
         dims: &[usize],
         other: &Self,
         other_dims: &[usize],
         result_dims: &[usize],
+        make_dense: impl FnOnce(Vec<T>) -> Storage,
+        make_diag: impl FnOnce(Vec<T>) -> Storage,
     ) -> Storage {
         let mindim_a = mindim(dims);
         let mindim_b = mindim(other_dims);
@@ -425,102 +437,261 @@ impl DiagStorageF64 {
 
         if result_dims.is_empty() {
             // All indices contracted: compute inner product (scalar result)
-            let scalar: f64 = (0..min_len).map(|i| self.0[i] * other.0[i]).sum();
-            Storage::DenseF64(DenseStorageF64::from_vec(vec![scalar]))
+            let scalar: T = (0..min_len).fold(T::zero(), |acc, i| acc + self.0[i] * other.0[i]);
+            make_dense(vec![scalar])
         } else {
             // Some indices remain: element-wise product (DiagTensor result)
-            let result_diag: Vec<f64> = (0..min_len).map(|i| self.0[i] * other.0[i]).collect();
-            Storage::DiagF64(DiagStorageF64::from_vec(result_diag))
+            let result_diag: Vec<T> = (0..min_len).map(|i| self.0[i] * other.0[i]).collect();
+            make_diag(result_diag)
         }
+    }
+
+    /// Contract this diagonal storage with a dense storage.
+    ///
+    /// # Arguments
+    /// * `diag_dims` - Dimensions of the diagonal tensor (all must be equal)
+    /// * `axes_diag` - Axes of the diagonal tensor to contract
+    /// * `dense` - The dense storage to contract with
+    /// * `dense_dims` - Dimensions of the dense tensor
+    /// * `axes_dense` - Axes of the dense tensor to contract (must match axes_diag in length)
+    /// * `result_dims` - Dimensions of the result tensor
+    ///
+    /// # Returns
+    /// The contracted storage (always Dense, since Diag structure is generally lost)
+    pub fn contract_diag_dense(
+        &self,
+        diag_dims: &[usize],
+        axes_diag: &[usize],
+        dense: &DenseStorage<T>,
+        dense_dims: &[usize],
+        axes_dense: &[usize],
+        result_dims: &[usize],
+        make_storage: impl FnOnce(Vec<T>) -> Storage,
+    ) -> Storage {
+        contract_diag_dense_impl(
+            self.as_slice(),
+            diag_dims,
+            axes_diag,
+            dense.as_slice(),
+            dense_dims,
+            axes_dense,
+            result_dims,
+            make_storage,
+        )
     }
 }
 
-/// Diagonal storage for Complex64 elements.
-#[derive(Debug, Clone)]
-pub struct DiagStorageC64(Vec<Complex64>);
+/// Type alias for f64 diagonal storage (for backward compatibility).
+pub type DiagStorageF64 = DiagStorage<f64>;
 
-impl DiagStorageC64 {
-    pub fn from_vec(vec: Vec<Complex64>) -> Self {
-        Self(vec)
-    }
+/// Type alias for Complex64 diagonal storage (for backward compatibility).
+pub type DiagStorageC64 = DiagStorage<Complex64>;
 
-    pub fn as_slice(&self) -> &[Complex64] {
-        &self.0
-    }
+/// Generic implementation of Diag × Dense contraction.
+///
+/// This function exploits the diagonal structure: for a diagonal tensor,
+/// all indices have the same value t (0 <= t < d). When contracting with
+/// a dense tensor, we only need to access the "diagonal slices" of the dense tensor.
+///
+/// Algorithm:
+/// 1. For each diagonal index t = 0..d:
+///    - Get diag[t]
+///    - Extract the slice of dense where all axes_dense have value t
+///    - Multiply and accumulate into result
+fn contract_diag_dense_impl<T: DenseScalar>(
+    diag: &[T],
+    diag_dims: &[usize],
+    axes_diag: &[usize],
+    dense: &[T],
+    dense_dims: &[usize],
+    axes_dense: &[usize],
+    result_dims: &[usize],
+    make_storage: impl FnOnce(Vec<T>) -> Storage,
+) -> Storage {
+    let diag_rank = diag_dims.len();
+    let dense_rank = dense_dims.len();
+    let _num_contracted = axes_diag.len();
 
-    pub fn as_mut_slice(&mut self) -> &mut [Complex64] {
-        &mut self.0
-    }
+    // The diagonal dimension (all diag_dims should be equal)
+    let d = if diag_dims.is_empty() { 1 } else { diag_dims[0] };
 
-    pub fn into_vec(self) -> Vec<Complex64> {
-        self.0
-    }
+    // Compute the non-contracted axes for the result
+    let diag_non_contracted: Vec<usize> = (0..diag_rank)
+        .filter(|i| !axes_diag.contains(i))
+        .collect();
+    let dense_non_contracted: Vec<usize> = (0..dense_rank)
+        .filter(|i| !axes_dense.contains(i))
+        .collect();
 
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
+    // Result size
+    let result_size: usize = result_dims.iter().product();
+    let result_size = if result_size == 0 { 1 } else { result_size };
 
-    pub fn get(&self, i: usize) -> Complex64 {
-        self.0[i]
-    }
+    // Compute strides for dense tensor (row-major)
+    let dense_strides = compute_strides(dense_dims);
 
-    pub fn set(&mut self, i: usize, val: Complex64) {
-        self.0[i] = val;
-    }
+    // Compute the size of the non-contracted part of dense
+    let dense_non_contracted_dims: Vec<usize> = dense_non_contracted
+        .iter()
+        .map(|&i| dense_dims[i])
+        .collect();
+    let dense_slice_size: usize = dense_non_contracted_dims.iter().product();
+    let dense_slice_size = if dense_slice_size == 0 { 1 } else { dense_slice_size };
 
-    /// Convert diagonal storage to a dense vector representation.
-    /// Creates a dense vector with diagonal elements set and off-diagonal elements as zero.
-    pub fn to_dense_vec(&self, dims: &[usize]) -> Vec<Complex64> {
-        let total_size: usize = dims.iter().product();
-        let mut dense_vec = vec![Complex64::new(0.0, 0.0); total_size];
-        let mindim_val = mindim(dims);
+    // Compute strides for the non-contracted dense dimensions
+    let dense_non_contracted_strides = compute_strides(&dense_non_contracted_dims);
 
-        // Same logic as DiagStorageF64 but for complex
-        let rank = dims.len();
-        if rank == 0 {
-            return vec![self.0[0]];
-        }
+    // If all diag axes are contracted, result has shape = dense_non_contracted_dims
+    // If some diag axes remain, result has shape = [d, d, ...] (diag non-contracted) + dense_non_contracted_dims
+    let diag_non_contracted_count = diag_non_contracted.len();
 
-        let mut strides = vec![1; rank];
-        for i in (0..rank - 1).rev() {
-            strides[i] = strides[i + 1] * dims[i + 1];
-        }
+    if diag_non_contracted_count == 0 {
+        // All diagonal indices contracted: result is purely from dense's non-contracted part
+        // For each t, we accumulate diag[t] * dense_slice[t] into result
+        let mut result = vec![T::zero(); result_size];
 
-        let diag_stride: usize = strides.iter().sum();
+        for t in 0..d.min(diag.len()) {
+            let diag_val = diag[t];
 
-        for i in 0..mindim_val.min(self.0.len()) {
-            let linear_idx = i * diag_stride;
-            if linear_idx < total_size {
-                dense_vec[linear_idx] = self.0[i];
+            // Compute base offset in dense for this t (all contracted axes = t)
+            let base_offset: usize = axes_dense
+                .iter()
+                .map(|&axis| t * dense_strides[axis])
+                .sum();
+
+            // Iterate over all non-contracted positions in dense
+            for flat_idx in 0..dense_slice_size {
+                // Convert flat_idx to multi-index for non-contracted dims
+                let mut offset = base_offset;
+                let mut remaining = flat_idx;
+                for (local_axis, &global_axis) in dense_non_contracted.iter().enumerate() {
+                    let idx = remaining / dense_non_contracted_strides[local_axis];
+                    remaining %= dense_non_contracted_strides[local_axis];
+                    offset += idx * dense_strides[global_axis];
+                }
+
+                result[flat_idx] += diag_val * dense[offset];
             }
         }
 
-        dense_vec
-    }
+        make_storage(result)
+    } else {
+        // Some diagonal indices remain: result has diagonal structure in those indices
+        // Result shape: [d, d, ...] (diag_non_contracted_count times) + dense_non_contracted_dims
+        // But since the diagonal indices must all equal, only the diagonal elements are non-zero
+        // Result is effectively: for each t, result[t,t,...,dense_indices] = diag[t] * dense_slice
 
-    /// Contract this diagonal storage with another diagonal storage.
-    /// Returns either a scalar (DenseStorageC64 with one element) or a diagonal storage.
-    pub fn contract_diag_diag(
-        &self,
-        dims: &[usize],
-        other: &Self,
-        other_dims: &[usize],
-        result_dims: &[usize],
-    ) -> Storage {
-        let mindim_a = mindim(dims);
-        let mindim_b = mindim(other_dims);
-        let min_len = mindim_a.min(mindim_b).min(self.0.len()).min(other.0.len());
+        // Compute result strides
+        let result_strides = compute_strides(result_dims);
 
-        if result_dims.is_empty() {
-            // All indices contracted: compute inner product (scalar result)
-            let scalar: Complex64 = (0..min_len).map(|i| self.0[i] * other.0[i]).sum();
-            Storage::DenseC64(DenseStorageC64::from_vec(vec![scalar]))
-        } else {
-            // Some indices remain: element-wise product (DiagTensor result)
-            let result_diag: Vec<Complex64> =
-                (0..min_len).map(|i| self.0[i] * other.0[i]).collect();
-            Storage::DiagC64(DiagStorageC64::from_vec(result_diag))
+        let mut result = vec![T::zero(); result_size];
+
+        for t in 0..d.min(diag.len()) {
+            let diag_val = diag[t];
+
+            // Compute base offset in dense for this t
+            let base_offset_dense: usize = axes_dense
+                .iter()
+                .map(|&axis| t * dense_strides[axis])
+                .sum();
+
+            // Compute base offset in result for diagonal position (t, t, ...)
+            let base_offset_result: usize = (0..diag_non_contracted_count)
+                .map(|i| t * result_strides[i])
+                .sum();
+
+            // Iterate over all non-contracted positions in dense
+            for flat_idx in 0..dense_slice_size {
+                // Convert flat_idx to multi-index for non-contracted dims
+                let mut offset_dense = base_offset_dense;
+                let mut offset_result = base_offset_result;
+                let mut remaining = flat_idx;
+
+                for (local_axis, &global_axis) in dense_non_contracted.iter().enumerate() {
+                    let idx = remaining / dense_non_contracted_strides[local_axis];
+                    remaining %= dense_non_contracted_strides[local_axis];
+                    offset_dense += idx * dense_strides[global_axis];
+                    // In result, these come after the diagonal indices
+                    offset_result += idx * result_strides[diag_non_contracted_count + local_axis];
+                }
+
+                result[offset_result] = diag_val * dense[offset_dense];
+            }
         }
+
+        make_storage(result)
+    }
+}
+
+/// Compute row-major strides for given dimensions.
+fn compute_strides(dims: &[usize]) -> Vec<usize> {
+    if dims.is_empty() {
+        return vec![];
+    }
+    let mut strides = vec![1; dims.len()];
+    for i in (0..dims.len() - 1).rev() {
+        strides[i] = strides[i + 1] * dims[i + 1];
+    }
+    strides
+}
+
+/// Helper for Dense × Diag contraction: compute as Diag × Dense and permute result.
+///
+/// This function handles the case where Dense appears first in the contraction.
+/// It computes the contraction using `contract_diag_dense_impl` (which assumes Diag first),
+/// then permutes the result to match the expected dimension order.
+fn contract_dense_diag_impl<T: DenseScalar>(
+    dense: &DenseStorage<T>,
+    dense_dims: &[usize],
+    axes_dense: &[usize],
+    diag: &DiagStorage<T>,
+    diag_dims: &[usize],
+    axes_diag: &[usize],
+    _result_dims: &[usize],
+    make_storage: impl FnOnce(Vec<T>) -> Storage,
+    make_permuted: impl FnOnce(Storage, &[usize], &[usize]) -> Storage,
+) -> Storage {
+    let diag_rank = diag_dims.len();
+    let dense_rank = dense_dims.len();
+    let diag_non_contracted_count = diag_rank - axes_diag.len();
+    let dense_non_contracted_count = dense_rank - axes_dense.len();
+
+    // Build reordered result_dims: [diag_non_contracted..., dense_non_contracted...]
+    let diag_non_contracted_dims: Vec<usize> = (0..diag_rank)
+        .filter(|i| !axes_diag.contains(i))
+        .map(|i| diag_dims[i])
+        .collect();
+    let dense_non_contracted_dims: Vec<usize> = (0..dense_rank)
+        .filter(|i| !axes_dense.contains(i))
+        .map(|i| dense_dims[i])
+        .collect();
+    let swapped_result_dims: Vec<usize> = diag_non_contracted_dims
+        .iter()
+        .chain(dense_non_contracted_dims.iter())
+        .copied()
+        .collect();
+
+    let intermediate = contract_diag_dense_impl(
+        diag.as_slice(),
+        diag_dims,
+        axes_diag,
+        dense.as_slice(),
+        dense_dims,
+        axes_dense,
+        &swapped_result_dims,
+        make_storage,
+    );
+
+    // Permute to get [dense_non_contracted..., diag_non_contracted...]
+    if diag_non_contracted_count > 0 && dense_non_contracted_count > 0 {
+        // Build permutation: move diag dims to end
+        let mut perm: Vec<usize> = (diag_non_contracted_count
+            ..(diag_non_contracted_count + dense_non_contracted_count))
+            .collect();
+        perm.extend(0..diag_non_contracted_count);
+        make_permuted(intermediate, &swapped_result_dims, &perm)
+    } else {
+        intermediate
     }
 }
 
@@ -1193,12 +1364,22 @@ pub fn contract_storage(
             Storage::DenseC64(a.contract(dims_a, axes_a, b, dims_b, axes_b))
         }
         // DiagTensor × DiagTensor contraction
-        (Storage::DiagF64(a), Storage::DiagF64(b)) => {
-            a.contract_diag_diag(dims_a, b, dims_b, result_dims)
-        }
-        (Storage::DiagC64(a), Storage::DiagC64(b)) => {
-            a.contract_diag_diag(dims_a, b, dims_b, result_dims)
-        }
+        (Storage::DiagF64(a), Storage::DiagF64(b)) => a.contract_diag_diag(
+            dims_a,
+            b,
+            dims_b,
+            result_dims,
+            |v| Storage::DenseF64(DenseStorage::from_vec(v)),
+            |v| Storage::DiagF64(DiagStorage::from_vec(v)),
+        ),
+        (Storage::DiagC64(a), Storage::DiagC64(b)) => a.contract_diag_diag(
+            dims_a,
+            b,
+            dims_b,
+            result_dims,
+            |v| Storage::DenseC64(DenseStorage::from_vec(v)),
+            |v| Storage::DiagC64(DiagStorage::from_vec(v)),
+        ),
 
         // Mixed types: f64 × Complex64 (use real/imaginary separation)
         (Storage::DenseF64(_), Storage::DenseC64(_))
@@ -1272,84 +1453,129 @@ pub fn contract_storage(
             &result_real_c64 + &result_imag_c64
         }
 
-        // DiagTensor × DenseTensor: convert Diag to Dense first, then handle mixed types
-        (Storage::DiagF64(_), Storage::DenseF64(_))
-        | (Storage::DiagC64(_), Storage::DenseC64(_)) => {
-            let dense_a = storage_a.to_dense_storage(dims_a);
-            contract_storage(
-                &dense_a,
-                dims_a,
-                axes_a,
-                storage_b,
-                dims_b,
-                axes_b,
-                result_dims,
-            )
-        }
-        (Storage::DenseF64(_), Storage::DiagF64(_))
-        | (Storage::DenseC64(_), Storage::DiagC64(_)) => {
-            let dense_b = storage_b.to_dense_storage(dims_b);
-            contract_storage(
-                storage_a,
-                dims_a,
-                axes_a,
-                &dense_b,
-                dims_b,
-                axes_b,
-                result_dims,
-            )
-        }
+        // DiagTensor × DenseTensor: use optimized contract_diag_dense
+        (Storage::DiagF64(diag), Storage::DenseF64(dense)) => diag.contract_diag_dense(
+            dims_a,
+            axes_a,
+            dense,
+            dims_b,
+            axes_b,
+            result_dims,
+            |v| Storage::DenseF64(DenseStorage::from_vec(v)),
+        ),
+        (Storage::DiagC64(diag), Storage::DenseC64(dense)) => diag.contract_diag_dense(
+            dims_a,
+            axes_a,
+            dense,
+            dims_b,
+            axes_b,
+            result_dims,
+            |v| Storage::DenseC64(DenseStorage::from_vec(v)),
+        ),
 
-        // Mixed Diag/Dense with type mixing: convert Diag to Dense first, then apply separation
-        (Storage::DiagF64(_), Storage::DenseC64(_)) => {
-            let dense_a = storage_a.to_dense_storage(dims_a);
-            contract_storage(
-                &dense_a,
+        // DenseTensor × DiagTensor: use generic helper
+        (Storage::DenseF64(dense), Storage::DiagF64(diag)) => contract_dense_diag_impl(
+            dense,
+            dims_a,
+            axes_a,
+            diag,
+            dims_b,
+            axes_b,
+            result_dims,
+            |v| Storage::DenseF64(DenseStorage::from_vec(v)),
+            |s, dims, perm| s.permute_storage(dims, perm),
+        ),
+        (Storage::DenseC64(dense), Storage::DiagC64(diag)) => contract_dense_diag_impl(
+            dense,
+            dims_a,
+            axes_a,
+            diag,
+            dims_b,
+            axes_b,
+            result_dims,
+            |v| Storage::DenseC64(DenseStorage::from_vec(v)),
+            |s, dims, perm| s.permute_storage(dims, perm),
+        ),
+
+        // Mixed Diag/Dense with type promotion: promote f64 to Complex64
+        (Storage::DiagF64(diag_f64), Storage::DenseC64(dense_c64)) => {
+            // Diag<f64> × Dense<C64>: promote Diag to C64
+            let diag_c64 = promote_diag_to_c64(diag_f64);
+            diag_c64.contract_diag_dense(
                 dims_a,
                 axes_a,
-                storage_b,
+                dense_c64,
                 dims_b,
                 axes_b,
                 result_dims,
+                |v| Storage::DenseC64(DenseStorage::from_vec(v)),
             )
         }
-        (Storage::DenseC64(_), Storage::DiagF64(_)) => {
-            let dense_b = storage_b.to_dense_storage(dims_b);
-            contract_storage(
-                storage_a,
+        (Storage::DenseC64(dense_c64), Storage::DiagF64(diag_f64)) => {
+            // Dense<C64> × Diag<f64>: promote Diag to C64, use helper
+            let diag_c64 = promote_diag_to_c64(diag_f64);
+            contract_dense_diag_impl(
+                dense_c64,
                 dims_a,
                 axes_a,
-                &dense_b,
+                &diag_c64,
                 dims_b,
                 axes_b,
                 result_dims,
+                |v| Storage::DenseC64(DenseStorage::from_vec(v)),
+                |s, dims, perm| s.permute_storage(dims, perm),
             )
         }
-        (Storage::DiagC64(_), Storage::DenseF64(_)) => {
-            let dense_b = storage_b.to_dense_storage(dims_b);
-            contract_storage(
-                storage_a,
+        (Storage::DiagC64(diag_c64), Storage::DenseF64(dense_f64)) => {
+            // Diag<C64> × Dense<f64>: promote Dense to C64
+            let dense_c64 = promote_dense_to_c64(dense_f64);
+            diag_c64.contract_diag_dense(
                 dims_a,
                 axes_a,
-                &dense_b,
+                &dense_c64,
                 dims_b,
                 axes_b,
                 result_dims,
+                |v| Storage::DenseC64(DenseStorage::from_vec(v)),
             )
         }
-        (Storage::DenseF64(_), Storage::DiagC64(_)) => {
-            let dense_a = storage_a.to_dense_storage(dims_a);
-            contract_storage(
-                &dense_a,
+        (Storage::DenseF64(dense_f64), Storage::DiagC64(diag_c64)) => {
+            // Dense<f64> × Diag<C64>: promote Dense to C64, use helper
+            let dense_c64 = promote_dense_to_c64(dense_f64);
+            contract_dense_diag_impl(
+                &dense_c64,
                 dims_a,
                 axes_a,
-                storage_b,
+                diag_c64,
                 dims_b,
                 axes_b,
                 result_dims,
+                |v| Storage::DenseC64(DenseStorage::from_vec(v)),
+                |s, dims, perm| s.permute_storage(dims, perm),
             )
         }
     }
+}
+
+/// Promote Diag<f64> to Diag<Complex64>
+fn promote_diag_to_c64(diag: &DiagStorage<f64>) -> DiagStorage<Complex64> {
+    DiagStorage::from_vec(
+        diag.as_slice()
+            .iter()
+            .map(|&x| Complex64::new(x, 0.0))
+            .collect(),
+    )
+}
+
+/// Promote Dense<f64> to Dense<Complex64>
+fn promote_dense_to_c64(dense: &DenseStorage<f64>) -> DenseStorage<Complex64> {
+    DenseStorage::from_vec(
+        dense
+            .as_slice()
+            .iter()
+            .map(|&x| Complex64::new(x, 0.0))
+            .collect(),
+    )
 }
 
 /// Scalar types that can be extracted from and stored in `Storage`.
@@ -1594,6 +1820,314 @@ impl Mul<AnyScalar> for &Storage {
         match scalar {
             AnyScalar::F64(x) => self * x,
             AnyScalar::C64(z) => self * z,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to extract f64 data from storage
+    fn extract_f64(storage: &Storage) -> Vec<f64> {
+        match storage {
+            Storage::DenseF64(ds) => ds.as_slice().to_vec(),
+            _ => panic!("Expected DenseF64"),
+        }
+    }
+
+    /// Helper to extract Complex64 data from storage
+    fn extract_c64(storage: &Storage) -> Vec<Complex64> {
+        match storage {
+            Storage::DenseC64(ds) => ds.as_slice().to_vec(),
+            _ => panic!("Expected DenseC64"),
+        }
+    }
+
+    // ===== DiagStorage<T> generic tests =====
+
+    #[test]
+    fn test_diag_storage_generic_f64() {
+        let diag: DiagStorage<f64> = DiagStorage::from_vec(vec![1.0, 2.0, 3.0]);
+        assert_eq!(diag.len(), 3);
+        assert_eq!(diag.get(0), 1.0);
+        assert_eq!(diag.get(1), 2.0);
+        assert_eq!(diag.get(2), 3.0);
+    }
+
+    #[test]
+    fn test_diag_storage_generic_c64() {
+        let diag: DiagStorage<Complex64> = DiagStorage::from_vec(vec![
+            Complex64::new(1.0, 2.0),
+            Complex64::new(3.0, 4.0),
+        ]);
+        assert_eq!(diag.len(), 2);
+        assert_eq!(diag.get(0), Complex64::new(1.0, 2.0));
+        assert_eq!(diag.get(1), Complex64::new(3.0, 4.0));
+    }
+
+    #[test]
+    fn test_diag_to_dense_vec_2d() {
+        // 2D diagonal tensor [3, 3] with diag = [1, 2, 3]
+        let diag: DiagStorage<f64> = DiagStorage::from_vec(vec![1.0, 2.0, 3.0]);
+        let dense = diag.to_dense_vec(&[3, 3]);
+        // Expected: [[1,0,0], [0,2,0], [0,0,3]] in row-major
+        assert_eq!(dense, vec![1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0]);
+    }
+
+    #[test]
+    fn test_diag_to_dense_vec_3d() {
+        // 3D diagonal tensor [2, 2, 2] with diag = [1, 2]
+        let diag: DiagStorage<f64> = DiagStorage::from_vec(vec![1.0, 2.0]);
+        let dense = diag.to_dense_vec(&[2, 2, 2]);
+        // Position (0,0,0) = 1.0, position (1,1,1) = 2.0, others = 0
+        // Row-major: [[[1,0],[0,0]], [[0,0],[0,2]]]
+        // Linear: 1,0,0,0,0,0,0,2
+        assert_eq!(dense, vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0]);
+    }
+
+    // ===== Diag × Dense contraction tests =====
+
+    #[test]
+    fn test_contract_diag_dense_2d_all_contracted() {
+        // Diag tensor [3, 3] with diag = [1, 2, 3]
+        // Dense tensor [3, 3] with all 1s
+        // Contract all axes: result = sum_t diag[t] * dense[t, t] = 1*1 + 2*1 + 3*1 = 6
+        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
+        let dense = Storage::DenseF64(DenseStorage::from_vec(vec![1.0; 9]));
+
+        let result = contract_storage(&diag, &[3, 3], &[0, 1], &dense, &[3, 3], &[0, 1], &[]);
+
+        let data = extract_f64(&result);
+        assert_eq!(data.len(), 1);
+        assert!((data[0] - 6.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_contract_diag_dense_2d_one_axis() {
+        // Diag tensor [3, 3] with diag = [1, 2, 3]
+        // Dense tensor [3, 2]
+        // Contract axis 1 of diag with axis 0 of dense
+        // Result[i, j] = diag[i, i] * dense[i, j] (since diag is only non-zero when i=k)
+        //              = diag[i] * dense[i, j]
+        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
+        // Dense = [[1,2], [3,4], [5,6]] in row-major
+        let dense = Storage::DenseF64(DenseStorage::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+
+        let result = contract_storage(&diag, &[3, 3], &[1], &dense, &[3, 2], &[0], &[3, 2]);
+
+        let data = extract_f64(&result);
+        // Result should be:
+        // [diag[0]*dense[0,:], diag[1]*dense[1,:], diag[2]*dense[2,:]]
+        // = [1*[1,2], 2*[3,4], 3*[5,6]]
+        // = [[1,2], [6,8], [15,18]]
+        // Row-major: [1, 2, 6, 8, 15, 18]
+        assert_eq!(data.len(), 6);
+        assert!((data[0] - 1.0).abs() < 1e-10);
+        assert!((data[1] - 2.0).abs() < 1e-10);
+        assert!((data[2] - 6.0).abs() < 1e-10);
+        assert!((data[3] - 8.0).abs() < 1e-10);
+        assert!((data[4] - 15.0).abs() < 1e-10);
+        assert!((data[5] - 18.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_contract_dense_diag_2d_one_axis() {
+        // Dense × Diag (reversed order)
+        // Dense tensor [2, 3]
+        // Diag tensor [3, 3] with diag = [1, 2, 3]
+        // Contract axis 1 of dense with axis 0 of diag
+        let dense = Storage::DenseF64(DenseStorage::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
+
+        let result = contract_storage(&dense, &[2, 3], &[1], &diag, &[3, 3], &[0], &[2, 3]);
+
+        let data = extract_f64(&result);
+        // Result[i, j] = dense[i, k] * diag[k, j] summed over k
+        // But diag is only non-zero when k=j, so:
+        // Result[i, j] = dense[i, j] * diag[j]
+        // = [[1*1, 2*2, 3*3], [4*1, 5*2, 6*3]]
+        // = [[1, 4, 9], [4, 10, 18]]
+        // Row-major: [1, 4, 9, 4, 10, 18]
+        assert_eq!(data.len(), 6);
+        assert!((data[0] - 1.0).abs() < 1e-10);
+        assert!((data[1] - 4.0).abs() < 1e-10);
+        assert!((data[2] - 9.0).abs() < 1e-10);
+        assert!((data[3] - 4.0).abs() < 1e-10);
+        assert!((data[4] - 10.0).abs() < 1e-10);
+        assert!((data[5] - 18.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_contract_diag_dense_3d() {
+        // Diag tensor [2, 2, 2] with diag = [1, 2]
+        // Dense tensor [2, 3]
+        // Contract axis 2 of diag with axis 0 of dense
+        // Result has shape [2, 2, 3] but only diagonal in first two indices is non-zero
+        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0]));
+        let dense = Storage::DenseF64(DenseStorage::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+
+        let result = contract_storage(&diag, &[2, 2, 2], &[2], &dense, &[2, 3], &[0], &[2, 2, 3]);
+
+        let data = extract_f64(&result);
+        assert_eq!(data.len(), 12);
+        // Result shape [2, 2, 3]
+        // diag only non-zero at (t, t, t), so result[i, j, k] = diag[i] * dense[i, k] if i==j, else 0
+        // Result[0, 0, :] = diag[0] * dense[0, :] = 1 * [1, 2, 3] = [1, 2, 3]
+        // Result[0, 1, :] = 0 (diag is zero when i != j)
+        // Result[1, 0, :] = 0
+        // Result[1, 1, :] = diag[1] * dense[1, :] = 2 * [4, 5, 6] = [8, 10, 12]
+        // Row-major: [1,2,3, 0,0,0, 0,0,0, 8,10,12]
+        assert!((data[0] - 1.0).abs() < 1e-10);
+        assert!((data[1] - 2.0).abs() < 1e-10);
+        assert!((data[2] - 3.0).abs() < 1e-10);
+        assert!((data[3] - 0.0).abs() < 1e-10);
+        assert!((data[4] - 0.0).abs() < 1e-10);
+        assert!((data[5] - 0.0).abs() < 1e-10);
+        assert!((data[6] - 0.0).abs() < 1e-10);
+        assert!((data[7] - 0.0).abs() < 1e-10);
+        assert!((data[8] - 0.0).abs() < 1e-10);
+        assert!((data[9] - 8.0).abs() < 1e-10);
+        assert!((data[10] - 10.0).abs() < 1e-10);
+        assert!((data[11] - 12.0).abs() < 1e-10);
+    }
+
+    // ===== Type promotion tests =====
+
+    #[test]
+    fn test_contract_diag_f64_dense_c64() {
+        // Diag<f64> × Dense<Complex64> should produce Dense<Complex64>
+        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0]));
+        let dense = Storage::DenseC64(DenseStorage::from_vec(vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0),
+        ]));
+
+        let result = contract_storage(&diag, &[2, 2], &[1], &dense, &[2, 2], &[0], &[2, 2]);
+
+        let data = extract_c64(&result);
+        assert_eq!(data.len(), 4);
+        // Result[i, j] = diag[i] * dense[i, j]
+        // Result[0, 0] = 1 * (1+1i) = 1+1i
+        // Result[0, 1] = 1 * (2+2i) = 2+2i
+        // Result[1, 0] = 2 * (3+3i) = 6+6i
+        // Result[1, 1] = 2 * (4+4i) = 8+8i
+        assert!((data[0] - Complex64::new(1.0, 1.0)).norm() < 1e-10);
+        assert!((data[1] - Complex64::new(2.0, 2.0)).norm() < 1e-10);
+        assert!((data[2] - Complex64::new(6.0, 6.0)).norm() < 1e-10);
+        assert!((data[3] - Complex64::new(8.0, 8.0)).norm() < 1e-10);
+    }
+
+    #[test]
+    fn test_contract_diag_c64_dense_f64() {
+        // Diag<Complex64> × Dense<f64> should produce Dense<Complex64>
+        let diag = Storage::DiagC64(DiagStorage::from_vec(vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+        ]));
+        let dense = Storage::DenseF64(DenseStorage::from_vec(vec![1.0, 2.0, 3.0, 4.0]));
+
+        let result = contract_storage(&diag, &[2, 2], &[1], &dense, &[2, 2], &[0], &[2, 2]);
+
+        let data = extract_c64(&result);
+        assert_eq!(data.len(), 4);
+        // Result[i, j] = diag[i] * dense[i, j]
+        // Result[0, 0] = (1+1i) * 1 = 1+1i
+        // Result[0, 1] = (1+1i) * 2 = 2+2i
+        // Result[1, 0] = (2+2i) * 3 = 6+6i
+        // Result[1, 1] = (2+2i) * 4 = 8+8i
+        assert!((data[0] - Complex64::new(1.0, 1.0)).norm() < 1e-10);
+        assert!((data[1] - Complex64::new(2.0, 2.0)).norm() < 1e-10);
+        assert!((data[2] - Complex64::new(6.0, 6.0)).norm() < 1e-10);
+        assert!((data[3] - Complex64::new(8.0, 8.0)).norm() < 1e-10);
+    }
+
+    #[test]
+    fn test_contract_dense_f64_diag_c64() {
+        // Dense<f64> × Diag<Complex64> should produce Dense<Complex64>
+        let dense = Storage::DenseF64(DenseStorage::from_vec(vec![1.0, 2.0, 3.0, 4.0]));
+        let diag = Storage::DiagC64(DiagStorage::from_vec(vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+        ]));
+
+        let result = contract_storage(&dense, &[2, 2], &[1], &diag, &[2, 2], &[0], &[2, 2]);
+
+        let data = extract_c64(&result);
+        assert_eq!(data.len(), 4);
+        // Result[i, j] = dense[i, j] * diag[j]
+        // Result[0, 0] = 1 * (1+1i) = 1+1i
+        // Result[0, 1] = 2 * (2+2i) = 4+4i
+        // Result[1, 0] = 3 * (1+1i) = 3+3i
+        // Result[1, 1] = 4 * (2+2i) = 8+8i
+        assert!((data[0] - Complex64::new(1.0, 1.0)).norm() < 1e-10);
+        assert!((data[1] - Complex64::new(4.0, 4.0)).norm() < 1e-10);
+        assert!((data[2] - Complex64::new(3.0, 3.0)).norm() < 1e-10);
+        assert!((data[3] - Complex64::new(8.0, 8.0)).norm() < 1e-10);
+    }
+
+    #[test]
+    fn test_contract_dense_c64_diag_f64() {
+        // Dense<Complex64> × Diag<f64> should produce Dense<Complex64>
+        let dense = Storage::DenseC64(DenseStorage::from_vec(vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0),
+        ]));
+        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0]));
+
+        let result = contract_storage(&dense, &[2, 2], &[1], &diag, &[2, 2], &[0], &[2, 2]);
+
+        let data = extract_c64(&result);
+        assert_eq!(data.len(), 4);
+        // Result[i, j] = dense[i, j] * diag[j]
+        // Result[0, 0] = (1+1i) * 1 = 1+1i
+        // Result[0, 1] = (2+2i) * 2 = 4+4i
+        // Result[1, 0] = (3+3i) * 1 = 3+3i
+        // Result[1, 1] = (4+4i) * 2 = 8+8i
+        assert!((data[0] - Complex64::new(1.0, 1.0)).norm() < 1e-10);
+        assert!((data[1] - Complex64::new(4.0, 4.0)).norm() < 1e-10);
+        assert!((data[2] - Complex64::new(3.0, 3.0)).norm() < 1e-10);
+        assert!((data[3] - Complex64::new(8.0, 8.0)).norm() < 1e-10);
+    }
+
+    // ===== Diag × Diag contraction tests =====
+
+    #[test]
+    fn test_contract_diag_diag_all_contracted() {
+        // Diag [3, 3] × Diag [3, 3] with all indices contracted
+        // Result = sum_t diag1[t] * diag2[t] (inner product)
+        let diag1 = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
+        let diag2 = Storage::DiagF64(DiagStorage::from_vec(vec![4.0, 5.0, 6.0]));
+
+        let result =
+            contract_storage(&diag1, &[3, 3], &[0, 1], &diag2, &[3, 3], &[0, 1], &[]);
+
+        let data = extract_f64(&result);
+        assert_eq!(data.len(), 1);
+        // 1*4 + 2*5 + 3*6 = 4 + 10 + 18 = 32
+        assert!((data[0] - 32.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_contract_diag_diag_partial() {
+        // Diag [3, 3] × Diag [3, 3] with one axis contracted
+        // Result is a diagonal tensor
+        let diag1 = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
+        let diag2 = Storage::DiagF64(DiagStorage::from_vec(vec![4.0, 5.0, 6.0]));
+
+        let result =
+            contract_storage(&diag1, &[3, 3], &[1], &diag2, &[3, 3], &[0], &[3, 3]);
+
+        // Result is element-wise product: [1*4, 2*5, 3*6] = [4, 10, 18]
+        match &result {
+            Storage::DiagF64(d) => {
+                assert_eq!(d.as_slice(), &[4.0, 10.0, 18.0]);
+            }
+            _ => panic!("Expected DiagF64"),
         }
     }
 }
