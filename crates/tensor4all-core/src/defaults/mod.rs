@@ -18,6 +18,7 @@
 //! a good balance of flexibility and performance.
 
 pub mod index;
+pub mod tensor_data;
 pub mod tensordynlen;
 
 // Contraction
@@ -32,6 +33,7 @@ pub mod svd;
 pub use index::{
     DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet,
 };
+pub use tensor_data::{TensorComponent, TensorData};
 pub use tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor,
     unfold_split, TensorAccess, TensorDynLen,

@@ -127,49 +127,26 @@ fn test_tensor_dyn_len_mismatch() {
 }
 
 #[test]
-fn test_tensor_cow() {
+fn test_tensor_shared_storage() {
     let indices = vec![Index::new_dyn(2)];
     let dims = vec![2];
     let storage = Arc::new(Storage::new_dense_f64(2));
 
-    let mut tensor1 =
-        TensorDynLen::new(indices.clone(), dims.clone(), Arc::clone(&storage));
+    let tensor1 = TensorDynLen::new(indices.clone(), dims.clone(), Arc::clone(&storage));
     let tensor2 = TensorDynLen::new(indices, dims, storage);
 
-    // Initially, both tensors share the same storage
-    assert!(Arc::ptr_eq(&tensor1.storage, &tensor2.storage));
+    // Both tensors share the same storage
+    assert!(Arc::ptr_eq(tensor1.storage(), tensor2.storage()));
 
-    // Mutate tensor1's storage (should clone due to COW)
-    {
-        let mut_storage = tensor1.storage_mut();
-        match mut_storage {
-            Storage::DenseF64(v) => {
-                v.push(42.0);
-            }
-            Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => {
-                panic!("expected DenseF64")
-            }
-        }
-    }
+    // Operations that don't modify storage should still share it
+    let cloned = tensor1.clone();
+    assert!(Arc::ptr_eq(tensor1.storage(), cloned.storage()));
 
-    // After mutation, they should have different storage
-    assert!(!Arc::ptr_eq(&tensor1.storage, &tensor2.storage));
-
-    // tensor2's storage should be unchanged
-    match tensor2.storage.as_ref() {
+    // Check that both tensors have the expected empty storage
+    match tensor1.storage().as_ref() {
         Storage::DenseF64(v) => {
             assert_eq!(v.len(), 0);
-        }
-        Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => {
-            panic!("expected DenseF64")
-        }
-    }
-
-    // tensor1's storage should have the new data
-    match tensor1.storage.as_ref() {
-        Storage::DenseF64(v) => {
-            assert_eq!(v.len(), 1);
-            assert_eq!(v.get(0), 42.0);
+            assert_eq!(v.capacity(), 2);
         }
         Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => {
             panic!("expected DenseF64")
@@ -271,7 +248,7 @@ fn test_replaceind_basic() {
     // Check that dimensions are unchanged
     assert_eq!(replaced.dims, vec![2, 3]);
     // Check that storage is shared (no data copy)
-    assert!(Arc::ptr_eq(&tensor.storage, &replaced.storage));
+    assert!(Arc::ptr_eq(tensor.storage(), replaced.storage()));
 }
 
 #[test]
@@ -449,7 +426,7 @@ fn test_tensor_conj_f64() {
     // Dims should be the same
     assert_eq!(conj_tensor.dims, vec![2]);
     // Data should be the same (real conj is identity)
-    match conj_tensor.storage.as_ref() {
+    match conj_tensor.storage().as_ref() {
         Storage::DenseF64(v) => {
             assert_eq!(v.as_slice(), &data);
         }
@@ -483,7 +460,7 @@ fn test_tensor_conj_c64() {
     // Dims should be preserved
     assert_eq!(conj_tensor.dims, vec![2, 3]);
     // Data should be conjugated
-    match conj_tensor.storage.as_ref() {
+    match conj_tensor.storage().as_ref() {
         Storage::DenseC64(v) => {
             let expected = vec![
                 Complex64::new(1.0, -1.0),
@@ -496,5 +473,117 @@ fn test_tensor_conj_c64() {
             assert_eq!(v.as_slice(), &expected);
         }
         _ => panic!("Expected DenseC64"),
+    }
+}
+
+// ============================================================================
+// TensorData integration tests
+// ============================================================================
+
+#[test]
+fn test_tensor_has_tensor_data() {
+    use tensor4all_core::storage::DenseStorageF64;
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    let tensor: TensorDynLen =
+        TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
+
+    // TensorDynLen now contains TensorData internally
+    let tensor_data = tensor.tensor_data();
+
+    // Check properties
+    assert!(tensor_data.is_simple());
+    assert_eq!(tensor_data.ndim(), 2);
+    assert_eq!(tensor_data.dims(), &[2, 3]);
+    assert_eq!(tensor_data.index_ids()[0], i.id);
+    assert_eq!(tensor_data.index_ids()[1], j.id);
+
+    // Tensor should also be simple
+    assert!(tensor.is_simple());
+}
+
+#[test]
+fn test_tensor_data_lazy_outer_product() {
+    use tensor4all_core::storage::DenseStorageF64;
+    use tensor4all_core::TensorData;
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+
+    let data_a = vec![1.0, 2.0];
+    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
+    let td_a = TensorData::new(storage_a, vec![i.id.clone()], vec![2]);
+
+    let data_b = vec![3.0, 4.0, 5.0];
+    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
+    let td_b = TensorData::new(storage_b, vec![j.id.clone()], vec![3]);
+
+    // Lazy outer product using TensorData directly
+    let lazy_result = TensorData::outer_product(&td_a, &td_b);
+
+    // Should have 2 components (not materialized yet)
+    assert!(!lazy_result.is_simple());
+    assert_eq!(lazy_result.components().len(), 2);
+    assert_eq!(lazy_result.ndim(), 2);
+    assert_eq!(lazy_result.dims(), &[2, 3]);
+
+    // Materialize and verify
+    let (storage, dims) = lazy_result.materialize().unwrap();
+    assert_eq!(dims, vec![2, 3]);
+
+    match storage.as_ref() {
+        Storage::DenseF64(v) => {
+            // Expected: [[1*3, 1*4, 1*5], [2*3, 2*4, 2*5]] = [3, 4, 5, 6, 8, 10]
+            let expected = vec![3.0, 4.0, 5.0, 6.0, 8.0, 10.0];
+            assert_eq!(v.as_slice().len(), expected.len());
+            for (a, b) in v.as_slice().iter().zip(expected.iter()) {
+                assert!((a - b).abs() < 1e-10);
+            }
+        }
+        _ => panic!("Expected DenseF64"),
+    }
+}
+
+#[test]
+fn test_tensor_data_lazy_outer_product_with_permute() {
+    use tensor4all_core::storage::DenseStorageF64;
+    use tensor4all_core::TensorData;
+
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+
+    let data_a = vec![1.0, 2.0];
+    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
+    let td_a = TensorData::new(storage_a, vec![i.id.clone()], vec![2]);
+
+    let data_b = vec![3.0, 4.0, 5.0];
+    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
+    let td_b = TensorData::new(storage_b, vec![j.id.clone()], vec![3]);
+
+    // Lazy outer product then permute using TensorData directly
+    let lazy_result = TensorData::outer_product(&td_a, &td_b);
+    let permuted = lazy_result.permute(&[j.id.clone(), i.id.clone()]);
+
+    // Check permuted dimensions
+    assert_eq!(permuted.dims(), &[3, 2]);
+
+    // Materialize and verify - should be transposed
+    let (storage, dims) = permuted.materialize().unwrap();
+    assert_eq!(dims, vec![3, 2]);
+
+    match storage.as_ref() {
+        Storage::DenseF64(v) => {
+            // Original was [[3, 4, 5], [6, 8, 10]] in row-major: [3, 4, 5, 6, 8, 10]
+            // Transposed should be [[3, 6], [4, 8], [5, 10]] in row-major: [3, 6, 4, 8, 5, 10]
+            let expected = vec![3.0, 6.0, 4.0, 8.0, 5.0, 10.0];
+            assert_eq!(v.as_slice().len(), expected.len());
+            for (a, b) in v.as_slice().iter().zip(expected.iter()) {
+                assert!((a - b).abs() < 1e-10);
+            }
+        }
+        _ => panic!("Expected DenseF64"),
     }
 }

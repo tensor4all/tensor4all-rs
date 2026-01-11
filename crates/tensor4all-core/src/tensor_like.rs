@@ -451,7 +451,7 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
     fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self>;
 
     /// Scalar multiplication.
-    fn scale(&self, scalar: AnyScalar) -> Self;
+    fn scale(&self, scalar: AnyScalar) -> Result<Self>;
 
     /// Inner product (dot product) of two tensors.
     ///
@@ -463,13 +463,37 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
         self.norm_squared().sqrt()
     }
 
-    /// Create a delta (diagonal identity) tensor.
+    /// Create a diagonal (Kronecker delta) tensor for a single index pair.
+    ///
+    /// Creates a 2D tensor `T[i, o]` where `T[i, o] = δ_{i,o}` (1 if i==o, 0 otherwise).
+    ///
+    /// # Arguments
+    ///
+    /// * `input_index` - Input index
+    /// * `output_index` - Output index (must have same dimension as input)
+    ///
+    /// # Returns
+    ///
+    /// A 2D tensor with shape `[dim, dim]` representing the identity matrix.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if dimensions don't match.
+    ///
+    /// # Example
+    ///
+    /// For dimension 2:
+    /// ```text
+    /// diagonal(i, o) = [[1, 0], [0, 1]]
+    /// ```
+    fn diagonal(input_index: &Self::Index, output_index: &Self::Index) -> Result<Self>;
+
+    /// Create a delta (identity) tensor as outer product of diagonals.
     ///
     /// For paired indices `(i1, o1), (i2, o2), ...`, creates a tensor where:
     /// `T[i1, o1, i2, o2, ...] = δ_{i1,o1} × δ_{i2,o2} × ...`
     ///
-    /// The tensor has value 1.0 on the diagonal (where input = output for each pair)
-    /// and 0.0 elsewhere.
+    /// This is computed as the outer product of individual diagonal tensors.
     ///
     /// # Arguments
     ///
@@ -492,7 +516,34 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
     /// ```text
     /// delta([i], [o]) = [[1, 0], [0, 1]]
     /// ```
-    fn delta(input_indices: &[Self::Index], output_indices: &[Self::Index]) -> Result<Self>;
+    fn delta(input_indices: &[Self::Index], output_indices: &[Self::Index]) -> Result<Self> {
+        // Validate same number of input and output indices
+        if input_indices.len() != output_indices.len() {
+            return Err(anyhow::anyhow!(
+                "Number of input indices ({}) must match output indices ({})",
+                input_indices.len(),
+                output_indices.len()
+            ));
+        }
+
+        if input_indices.is_empty() {
+            // Return a scalar tensor with value 1.0
+            return Self::scalar_one();
+        }
+
+        // Build as outer product of diagonal tensors
+        let mut result = Self::diagonal(&input_indices[0], &output_indices[0])?;
+        for (inp, out) in input_indices[1..].iter().zip(output_indices[1..].iter()) {
+            let diag = Self::diagonal(inp, out)?;
+            result = result.outer_product(&diag)?;
+        }
+        Ok(result)
+    }
+
+    /// Create a scalar tensor with value 1.0.
+    ///
+    /// This is used as the identity element for outer products.
+    fn scalar_one() -> Result<Self>;
 }
 
 /// Result of direct sum operation.

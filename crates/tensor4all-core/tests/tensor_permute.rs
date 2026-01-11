@@ -88,7 +88,7 @@ fn test_permute_dyn_f64_2d() {
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
 
-    match &*permuted.storage {
+    match permuted.storage().as_ref() {
         Storage::DenseF64(v) => {
             assert_eq!(v.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
         }
@@ -128,7 +128,7 @@ fn test_permute_dyn_c64_2d() {
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
 
-    match &*permuted.storage {
+    match permuted.storage().as_ref() {
         Storage::DenseC64(v) => {
             assert_eq!(v.get(0), Complex64::new(1.0, 0.0));
             assert_eq!(v.get(1), Complex64::new(4.0, 0.0));
@@ -174,7 +174,7 @@ fn test_permute_dyn_f64_3d() {
     // Verify data was permuted correctly
     // Original: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
     // After permute [2, 0, 1]: should reorganize the data
-    match &*permuted.storage {
+    match permuted.storage().as_ref() {
         Storage::DenseF64(v) => {
             assert_eq!(v.len(), 24);
             // Check first few values to verify permutation
@@ -210,7 +210,7 @@ fn test_permute_identity() {
     assert_eq!(permuted.indices[0].id, i.id);
     assert_eq!(permuted.indices[1].id, j.id);
 
-    match &*permuted.storage {
+    match permuted.storage().as_ref() {
         Storage::DenseF64(v) => {
             assert_eq!(v.as_slice(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         }
@@ -243,7 +243,7 @@ fn test_permute_indices_dyn_f64_2d() {
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
 
-    match &*permuted.storage {
+    match permuted.storage().as_ref() {
         Storage::DenseF64(v) => {
             assert_eq!(v.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
         }
@@ -283,7 +283,7 @@ fn test_permute_indices_c64() {
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
 
-    match &*permuted.storage {
+    match permuted.storage().as_ref() {
         Storage::DenseC64(v) => {
             assert_eq!(v.get(0), Complex64::new(1.0, 0.0));
             assert_eq!(v.get(1), Complex64::new(4.0, 0.0));

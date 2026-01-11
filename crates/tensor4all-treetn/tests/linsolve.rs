@@ -490,7 +490,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
 
     // Debug: print initial state
     let contracted_init = x.contract_to_tensor().unwrap();
-    let sol_init: Vec<f64> = f64::extract_dense_view(contracted_init.storage.as_ref())
+    let sol_init: Vec<f64> = f64::extract_dense_view(contracted_init.storage().as_ref())
         .expect("Failed to extract initial")
         .to_vec();
     eprintln!("Initial state: {:?}", sol_init);
@@ -499,7 +499,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     for node_name in x.node_names() {
         let node_idx = x.node_index(&node_name).unwrap();
         let tensor = x.tensor(node_idx).unwrap();
-        let data: Vec<f64> = f64::extract_dense_view(tensor.storage.as_ref())
+        let data: Vec<f64> = f64::extract_dense_view(tensor.storage().as_ref())
             .expect("Failed to extract tensor")
             .to_vec();
         let dims: Vec<usize> = tensor.external_indices().iter().map(|i| i.dim()).collect();
@@ -514,7 +514,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
 
         // Print state before step
         let contracted_before = x.contract_to_tensor().unwrap();
-        let sol_before: Vec<f64> = f64::extract_dense_view(contracted_before.storage.as_ref())
+        let sol_before: Vec<f64> = f64::extract_dense_view(contracted_before.storage().as_ref())
             .expect("Failed to extract")
             .to_vec();
         eprintln!("    State before step: {:?}", sol_before);
@@ -523,7 +523,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
         for node_name in x.node_names() {
             let node_idx = x.node_index(&node_name).unwrap();
             let tensor = x.tensor(node_idx).unwrap();
-            let data: Vec<f64> = f64::extract_dense_view(tensor.storage.as_ref())
+            let data: Vec<f64> = f64::extract_dense_view(tensor.storage().as_ref())
                 .expect("Failed to extract tensor")
                 .to_vec();
             eprintln!("      Tensor {:?}: {:?}", node_name, data);
@@ -538,7 +538,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
         for node_name in subtree.node_names() {
             let node_idx = subtree.node_index(&node_name).unwrap();
             let tensor = subtree.tensor(node_idx).unwrap();
-            let data: Vec<f64> = f64::extract_dense_view(tensor.storage.as_ref())
+            let data: Vec<f64> = f64::extract_dense_view(tensor.storage().as_ref())
                 .expect("Failed to extract tensor")
                 .to_vec();
             eprintln!("      Subtree {:?}: {:?}", node_name, data);
@@ -551,7 +551,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
         for node_name in updated_subtree.node_names() {
             let node_idx = updated_subtree.node_index(&node_name).unwrap();
             let tensor = updated_subtree.tensor(node_idx).unwrap();
-            let data: Vec<f64> = f64::extract_dense_view(tensor.storage.as_ref())
+            let data: Vec<f64> = f64::extract_dense_view(tensor.storage().as_ref())
                 .expect("Failed to extract tensor")
                 .to_vec();
             eprintln!("      Updated {:?}: {:?}", node_name, data);
@@ -562,7 +562,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
 
         // Print state after step
         let contracted_after = x.contract_to_tensor().unwrap();
-        let sol_after: Vec<f64> = f64::extract_dense_view(contracted_after.storage.as_ref())
+        let sol_after: Vec<f64> = f64::extract_dense_view(contracted_after.storage().as_ref())
             .expect("Failed to extract")
             .to_vec();
         eprintln!("    State after step: {:?}", sol_after);
@@ -571,7 +571,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
         for node_name in x.node_names() {
             let node_idx = x.node_index(&node_name).unwrap();
             let tensor = x.tensor(node_idx).unwrap();
-            let data: Vec<f64> = f64::extract_dense_view(tensor.storage.as_ref())
+            let data: Vec<f64> = f64::extract_dense_view(tensor.storage().as_ref())
                 .expect("Failed to extract tensor")
                 .to_vec();
             eprintln!("      Tensor {:?}: {:?}", node_name, data);
@@ -583,7 +583,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     for sweep in 1..10 {
         apply_local_update_sweep(&mut x, &plan, &mut updater).unwrap();
         let contracted_debug = x.contract_to_tensor().unwrap();
-        let sol_debug: Vec<f64> = f64::extract_dense_view(contracted_debug.storage.as_ref())
+        let sol_debug: Vec<f64> = f64::extract_dense_view(contracted_debug.storage().as_ref())
             .expect("Failed to extract solution")
             .to_vec();
         eprintln!("Sweep {}: raw solution = {:?}", sweep, sol_debug);
@@ -593,7 +593,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     let contracted = x.contract_to_tensor().unwrap();
 
     // Extract solution values
-    let solution_values: Vec<f64> = f64::extract_dense_view(contracted.storage.as_ref())
+    let solution_values: Vec<f64> = f64::extract_dense_view(contracted.storage().as_ref())
         .expect("Failed to extract solution")
         .to_vec();
 
@@ -1146,7 +1146,7 @@ fn test_linear_operator_apply_local() {
     // Check values - the diagonal operator at site0 has value 2.0
     // D|0⟩ = 2.0 * |0⟩ = [2.0, 0.0]
     use tensor4all_core::storage::StorageScalar;
-    let values: Vec<f64> = f64::extract_dense_view(result_tensor.storage.as_ref())
+    let values: Vec<f64> = f64::extract_dense_view(result_tensor.storage().as_ref())
         .expect("Failed to extract values")
         .to_vec();
 
@@ -1241,7 +1241,7 @@ fn test_linear_operator_apply_local_two_sites() {
 
     // Check values
     use tensor4all_core::storage::StorageScalar;
-    let values: Vec<f64> = f64::extract_dense_view(result_tensor.storage.as_ref())
+    let values: Vec<f64> = f64::extract_dense_view(result_tensor.storage().as_ref())
         .expect("Failed to extract values")
         .to_vec();
 
@@ -1405,7 +1405,7 @@ fn test_linsolve_with_index_mappings_diagonal() {
     // Expected solution: D*x = b => x = b/6 = [1, 0, 0, 0]
     // Contract solution to get full tensor using contract_to_tensor
     let contracted = x.contract_to_tensor().unwrap();
-    let values: Vec<f64> = f64::extract_dense_view(contracted.storage.as_ref())
+    let values: Vec<f64> = f64::extract_dense_view(contracted.storage().as_ref())
         .expect("Failed to extract values")
         .to_vec();
 
@@ -1977,7 +1977,7 @@ fn test_linsolve_pauli_x() {
     let contracted = x.contract_to_tensor().unwrap();
 
     // Extract solution values
-    let solution_values: Vec<f64> = f64::extract_dense_view(contracted.storage.as_ref())
+    let solution_values: Vec<f64> = f64::extract_dense_view(contracted.storage().as_ref())
         .expect("Failed to extract solution")
         .to_vec();
 
@@ -2148,7 +2148,7 @@ fn test_linsolve_general_matrix() {
     let contracted = x.contract_to_tensor().unwrap();
 
     // Extract solution values
-    let solution_values: Vec<f64> = f64::extract_dense_view(contracted.storage.as_ref())
+    let solution_values: Vec<f64> = f64::extract_dense_view(contracted.storage().as_ref())
         .expect("Failed to extract solution")
         .to_vec();
 

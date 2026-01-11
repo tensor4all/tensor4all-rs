@@ -17,11 +17,7 @@ fn create_test_matrix() -> TensorDynLen {
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
 
-    TensorDynLen {
-        indices: vec![i, j],
-        dims: vec![2, 3],
-        storage,
-    }
+    TensorDynLen::new(vec![i, j], vec![2, 3], storage)
 }
 
 /// Helper to create a rank-3 tensor for testing.
@@ -33,11 +29,7 @@ fn create_rank3_tensor() -> TensorDynLen {
     let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
 
-    TensorDynLen {
-        indices: vec![i, j, k],
-        dims: vec![2, 3, 2],
-        storage,
-    }
+    TensorDynLen::new(vec![i, j, k], vec![2, 3, 2], storage)
 }
 
 // ============================================================================
@@ -240,16 +232,12 @@ fn test_diag_dense_contraction_svd_internals() {
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
 
-    let tensor: TensorDynLen = TensorDynLen {
-        indices: vec![i.clone(), j.clone()],
-        dims: vec![2, 3],
-        storage,
-    };
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
 
     let (u, s, v) = svd::<f64>(&tensor, &[i.clone()]).expect("SVD should succeed");
 
     // Verify S is diagonal storage
-    assert!(matches!(s.storage.as_ref(), Storage::DiagF64(_)));
+    assert!(matches!(s.storage().as_ref(), Storage::DiagF64(_)));
 
     // Verify S and V share a common index
     let common_found = s
@@ -273,7 +261,7 @@ fn test_diag_dense_contraction_svd_internals() {
 fn assert_tensors_approx_equal(a: &TensorDynLen, b: &TensorDynLen, tol: f64) {
     assert_eq!(a.dims, b.dims, "Tensor dimensions don't match");
 
-    match (a.storage.as_ref(), b.storage.as_ref()) {
+    match (a.storage().as_ref(), b.storage().as_ref()) {
         (Storage::DenseF64(a_data), Storage::DenseF64(b_data)) => {
             let a_slice = a_data.as_slice();
             let b_slice = b_data.as_slice();

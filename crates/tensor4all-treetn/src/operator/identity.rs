@@ -133,21 +133,20 @@ pub fn build_identity_operator_tensor_c64(
 mod tests {
     use super::*;
     use tensor4all_core::index::Index;
-    use tensor4all_core::TensorAccess;
 
     fn make_index(dim: usize) -> DynIndex {
         Index::new_dyn(dim)
     }
 
     fn get_f64_data(tensor: &TensorDynLen) -> &[f64] {
-        match tensor.storage() {
+        match tensor.storage().as_ref() {
             Storage::DenseF64(d) => d.as_slice(),
             _ => panic!("Expected DenseF64 storage"),
         }
     }
 
     fn get_c64_data(tensor: &TensorDynLen) -> &[Complex64] {
-        match tensor.storage() {
+        match tensor.storage().as_ref() {
             Storage::DenseC64(d) => d.as_slice(),
             _ => panic!("Expected DenseC64 storage"),
         }

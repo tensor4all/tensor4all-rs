@@ -63,7 +63,7 @@ pub fn factorize(
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
     // Dispatch based on storage type
-    match t.storage.as_ref() {
+    match t.storage().as_ref() {
         Storage::DenseF64(_) => factorize_impl::<f64>(t, left_inds, options),
         Storage::DenseC64(_) => factorize_impl::<Complex64>(t, left_inds, options),
         Storage::DiagF64(_) | Storage::DiagC64(_) => Err(FactorizeError::UnsupportedStorage(
@@ -331,7 +331,7 @@ where
 
 /// Extract singular values from a diagonal tensor.
 fn extract_singular_values(s: &TensorDynLen) -> Vec<f64> {
-    match s.storage.as_ref() {
+    match s.storage().as_ref() {
         Storage::DiagF64(diag) => diag.as_slice().to_vec(),
         Storage::DiagC64(diag) => {
             // Singular values should be real

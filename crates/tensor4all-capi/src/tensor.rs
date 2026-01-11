@@ -139,7 +139,7 @@ pub extern "C" fn t4a_tensor_get_storage_kind(
 
     let result = catch_unwind(|| {
         let tensor = unsafe { &*ptr };
-        let kind = t4a_storage_kind::from_storage(tensor.inner().storage.as_ref());
+        let kind = t4a_storage_kind::from_storage(tensor.inner().storage().as_ref());
         unsafe { *out_kind = kind };
         T4A_SUCCESS
     });
@@ -178,7 +178,7 @@ pub extern "C" fn t4a_tensor_get_data_f64(
     let result = catch_unwind(|| {
         let tensor = unsafe { &*ptr };
 
-        let data = match tensor.inner().storage.as_ref() {
+        let data = match tensor.inner().storage().as_ref() {
             Storage::DenseF64(ds) => ds.as_slice(),
             _ => return T4A_INVALID_ARGUMENT,
         };
@@ -235,7 +235,7 @@ pub extern "C" fn t4a_tensor_get_data_c64(
     let result = catch_unwind(|| {
         let tensor = unsafe { &*ptr };
 
-        let data = match tensor.inner().storage.as_ref() {
+        let data = match tensor.inner().storage().as_ref() {
             Storage::DenseC64(ds) => ds.as_slice(),
             _ => return T4A_INVALID_ARGUMENT,
         };
