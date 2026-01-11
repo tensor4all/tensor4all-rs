@@ -10,7 +10,6 @@ members = [
     "crates/tensor4all-tensorci",
     "crates/tensor4all-quanticstci",
     "crates/tensor4all-capi",
-    "crates/tensor4all-callback-test",
     "tools/api-dump",
 ]
 resolver = "2"
