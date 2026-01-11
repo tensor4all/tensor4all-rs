@@ -935,48 +935,6 @@ impl TensorDynLen {
         })
     }
 
-    /// Contract multiple tensors using einsum-style contraction.
-    ///
-    /// This is a static method that takes a slice of tensors.
-    pub fn contract_einsum_slice(tensors: &[Self]) -> Result<Self> {
-        match tensors.len() {
-            0 => Err(anyhow::anyhow!("No tensors to contract")),
-            1 => Ok(tensors[0].clone()),
-            2 => {
-                // Find common indices
-                let common = common_indices(&tensors[0].indices, &tensors[1].indices);
-                if common.is_empty() {
-                    // No common indices - perform outer product
-                    tensors[0].outer_product(&tensors[1])
-                } else {
-                    // Build pairs for tensordot
-                    let pairs: Vec<_> = common
-                        .iter()
-                        .map(|idx| (idx.clone(), idx.clone()))
-                        .collect();
-                    tensors[0].tensordot(&tensors[1], &pairs)
-                }
-            }
-            _ => {
-                // Recursively contract pairs (left-to-right)
-                let mut result = tensors[0].clone();
-                for tensor in tensors.iter().skip(1) {
-                    let common = common_indices(&result.indices, &tensor.indices);
-                    if common.is_empty() {
-                        result = result.outer_product(tensor)?;
-                    } else {
-                        let pairs: Vec<_> = common
-                            .iter()
-                            .map(|idx| (idx.clone(), idx.clone()))
-                            .collect();
-                        result = result.tensordot(tensor, &pairs)?;
-                    }
-                }
-                Ok(result)
-            }
-        }
-    }
-
     /// Compute a linear combination: `a * self + b * other`.
     pub fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
         // Scale self by a
@@ -1003,7 +961,7 @@ impl TensorDynLen {
     pub fn inner_product(&self, other: &Self) -> Result<AnyScalar> {
         // Contract self.conj() with other over all indices
         let conj_self = self.conj();
-        let result = Self::contract_einsum_slice(&[conj_self, other.clone()])?;
+        let result = super::contract::contract_multi(&[conj_self, other.clone()])?;
         // Result should be a scalar (no indices)
         Ok(result.sum())
     }
@@ -1571,8 +1529,8 @@ impl TensorLike for TensorDynLen {
     }
 
     fn contract_einsum(tensors: &[Self]) -> Result<Self> {
-        // Delegate to the inherent method
-        TensorDynLen::contract_einsum_slice(tensors)
+        // Delegate to contract_multi which uses omeco for optimization
+        super::contract::contract_multi(tensors)
     }
 
     fn axpby(&self, a: crate::AnyScalar, other: &Self, b: crate::AnyScalar) -> Result<Self> {
