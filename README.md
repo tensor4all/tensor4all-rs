@@ -240,6 +240,31 @@ For ITensors.jl:
 
 > M. Fishman, S. R. White, E. M. Stoudenmire, "The ITensor Software Library for Tensor Network Calculations", arXiv:2007.14822 (2020)
 
+## TODO / Known Issues
+
+### Naming Convention
+
+- **Tolerance parameters**: Standardize on `rtol` (relative tolerance) and `atol` (absolute tolerance)
+  - Current inconsistency: `cutoff`, `tolerance`, `rtol` used interchangeably
+  - `cutoff` (ITensors.jl style) should only appear in compatibility layers
+  - Conversion: `rtol = √cutoff`
+
+### Incomplete Implementations
+
+- **MPO canonical forms**: VidalMPO and InverseMPO conversions not yet implemented
+- **TreeTN refactoring**: Operator and random modules disabled pending TensorLike pattern update
+- **C API TCI2 sweep**: Currently only supports initial pivot; full sweep not exposed
+
+### WIP Crates (excluded from workspace)
+
+- `tensor4all-treetn` — Tree tensor networks
+- `tensor4all-itensorlike` — ITensors.jl-like API
+- `tensor4all-quanticstransform` — Quantics transformation operators
+
+### Known Backend Issues
+
+- Complex SVD: mdarray-linalg-faer returns V^T instead of V^H for complex matrices
+
 ## Documentation
 
 - [Index System Design](docs/INDEX_SYSTEM.md) — Overview of the index system, QSpace compatibility, and IndexLike/TensorLike design
