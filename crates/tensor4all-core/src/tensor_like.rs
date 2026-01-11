@@ -462,6 +462,37 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
     fn norm(&self) -> f64 {
         self.norm_squared().sqrt()
     }
+
+    /// Create a delta (diagonal identity) tensor.
+    ///
+    /// For paired indices `(i1, o1), (i2, o2), ...`, creates a tensor where:
+    /// `T[i1, o1, i2, o2, ...] = δ_{i1,o1} × δ_{i2,o2} × ...`
+    ///
+    /// The tensor has value 1.0 on the diagonal (where input = output for each pair)
+    /// and 0.0 elsewhere.
+    ///
+    /// # Arguments
+    ///
+    /// * `input_indices` - Input indices
+    /// * `output_indices` - Output indices (must have same length and matching dimensions)
+    ///
+    /// # Returns
+    ///
+    /// A tensor representing the identity operator on the given index space.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Number of input and output indices don't match
+    /// - Dimensions of paired indices don't match
+    ///
+    /// # Example
+    ///
+    /// For a single index pair with dimension 2:
+    /// ```text
+    /// delta([i], [o]) = [[1, 0], [0, 1]]
+    /// ```
+    fn delta(input_indices: &[Self::Index], output_indices: &[Self::Index]) -> Result<Self>;
 }
 
 /// Result of direct sum operation.
