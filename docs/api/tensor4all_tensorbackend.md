@@ -94,91 +94,57 @@ Compute QR decomposition using LAPACK backend.
 
 ## src/storage.rs
 
-### `pub fn with_capacity(capacity: usize) -> Self` (impl DenseStorageF64)
+### `pub fn with_capacity(capacity: usize) -> Self` (impl DenseStorage < T >)
 
-### `pub fn from_vec(vec: Vec < f64 >) -> Self` (impl DenseStorageF64)
+### `pub fn from_vec(vec: Vec < T >) -> Self` (impl DenseStorage < T >)
 
-### `pub fn random(rng: & mut R, size: usize) -> Self` (impl DenseStorageF64)
+### `pub fn as_slice(&self) -> & [T]` (impl DenseStorage < T >)
 
-Create storage with random values from standard normal distribution.
+### `pub fn as_mut_slice(&mut self) -> & mut [T]` (impl DenseStorage < T >)
 
-### `pub fn as_slice(&self) -> & [f64]` (impl DenseStorageF64)
+### `pub fn into_vec(self) -> Vec < T >` (impl DenseStorage < T >)
 
-### `pub fn as_mut_slice(&mut self) -> & mut [f64]` (impl DenseStorageF64)
+### `pub fn len(&self) -> usize` (impl DenseStorage < T >)
 
-### `pub fn into_vec(self) -> Vec < f64 >` (impl DenseStorageF64)
+### `pub fn is_empty(&self) -> bool` (impl DenseStorage < T >)
 
-### `pub fn len(&self) -> usize` (impl DenseStorageF64)
+### `pub fn capacity(&self) -> usize` (impl DenseStorage < T >)
 
-### `pub fn capacity(&self) -> usize` (impl DenseStorageF64)
+### `pub fn push(&mut self, val: T)` (impl DenseStorage < T >)
 
-### `pub fn push(&mut self, val: f64)` (impl DenseStorageF64)
+### `pub fn iter(&self) -> std :: slice :: Iter < '_ , T >` (impl DenseStorage < T >)
 
-### `pub fn extend_from_slice(&mut self, other: & [f64])` (impl DenseStorageF64)
+### `pub fn extend_from_slice(&mut self, other: & [T])` (impl DenseStorage < T >)
 
-### `pub fn extend(&mut self, iter: I)` (impl DenseStorageF64)
+### `pub fn get(&self, i: usize) -> T` (impl DenseStorage < T >)
 
-### `pub fn get(&self, i: usize) -> f64` (impl DenseStorageF64)
+### `pub fn set(&mut self, i: usize, val: T)` (impl DenseStorage < T >)
 
-### `pub fn set(&mut self, i: usize, val: f64)` (impl DenseStorageF64)
+### `pub fn extend(&mut self, iter: I)` (impl DenseStorage < T >)
 
-### `pub fn iter(&self) -> std :: slice :: Iter < '_ , f64 >` (impl DenseStorageF64)
-
-### `pub fn permute(&self, dims: & [usize], perm: & [usize]) -> Self` (impl DenseStorageF64)
+### `pub fn permute(&self, dims: & [usize], perm: & [usize]) -> Self` (impl DenseStorage < T >)
 
 Permute the dense storage data according to the given permutation.
 
-### `pub fn contract(&self, dims: & [usize], axes: & [usize], other: & Self, other_dims: & [usize], other_axes: & [usize]) -> Self` (impl DenseStorageF64)
+### `pub fn contract(&self, dims: & [usize], axes: & [usize], other: & Self, other_dims: & [usize], other_axes: & [usize]) -> Self` (impl DenseStorage < T >)
 
-Contract this dense storage with another dense storage. This method handles non-contiguous contracted axes by permuting the tensors to make the contracted axes contiguous before calling mdarray-linalg's contract.
+Contract this dense storage with another dense storage. This method handles non-contiguous contracted axes by permuting the tensors to make the contracted axes contiguous before calling GEMM-based contraction.
 
-### ` fn contract_via_gemm(a: & [f64], dims_a: & [usize], axes_a: & [usize], b: & [f64], dims_b: & [usize], axes_b: & [usize]) -> Vec < f64 >`
+### `pub fn random(rng: & mut R, size: usize) -> Self` (impl DenseStorage < f64 >)
+
+Create storage with random values from standard normal distribution.
+
+### `pub fn random(rng: & mut R, size: usize) -> Self` (impl DenseStorage < Complex64 >)
+
+Create storage with random complex values (re, im both from standard normal).
+
+### ` fn contract_via_gemm(a: & [T], dims_a: & [usize], axes_a: & [usize], b: & [T], dims_b: & [usize], axes_b: & [usize]) -> Vec < T >`
 
 Contract two tensors via GEMM (matrix multiplication). This function assumes that contracted axes are already contiguous: - For `a`: contracted axes are at the END (axes_a are the last naxes positions)
-
-### ` fn contract_via_gemm_c64(a: & [Complex64], dims_a: & [usize], axes_a: & [usize], b: & [Complex64], dims_b: & [usize], axes_b: & [usize]) -> Vec < Complex64 >`
-
-Contract two Complex64 tensors via GEMM (matrix multiplication). Same as contract_via_gemm but for complex numbers.
 
 ### ` fn compute_contraction_permutation(dims: & [usize], axes: & [usize], axes_at_front: bool) -> (Vec < usize > , Vec < usize > , Vec < usize >)`
 
 Compute permutation to make contracted axes contiguous. If `axes_at_front` is true, contracted axes are moved to the front (maintaining original order). If false, contracted axes are moved to the end (maintaining original order).
-
-### `pub fn with_capacity(capacity: usize) -> Self` (impl DenseStorageC64)
-
-### `pub fn from_vec(vec: Vec < Complex64 >) -> Self` (impl DenseStorageC64)
-
-### `pub fn random(rng: & mut R, size: usize) -> Self` (impl DenseStorageC64)
-
-Create storage with random complex values (re, im both from standard normal).
-
-### `pub fn as_slice(&self) -> & [Complex64]` (impl DenseStorageC64)
-
-### `pub fn as_mut_slice(&mut self) -> & mut [Complex64]` (impl DenseStorageC64)
-
-### `pub fn into_vec(self) -> Vec < Complex64 >` (impl DenseStorageC64)
-
-### `pub fn len(&self) -> usize` (impl DenseStorageC64)
-
-### `pub fn capacity(&self) -> usize` (impl DenseStorageC64)
-
-### `pub fn push(&mut self, val: Complex64)` (impl DenseStorageC64)
-
-### `pub fn extend_from_slice(&mut self, other: & [Complex64])` (impl DenseStorageC64)
-
-### `pub fn extend(&mut self, iter: I)` (impl DenseStorageC64)
-
-### `pub fn get(&self, i: usize) -> Complex64` (impl DenseStorageC64)
-
-### `pub fn set(&mut self, i: usize, val: Complex64)` (impl DenseStorageC64)
-
-### `pub fn permute(&self, dims: & [usize], perm: & [usize]) -> Self` (impl DenseStorageC64)
-
-Permute the dense storage data according to the given permutation.
-
-### `pub fn contract(&self, dims: & [usize], axes: & [usize], other: & Self, other_dims: & [usize], other_axes: & [usize]) -> Self` (impl DenseStorageC64)
-
-Contract this dense storage with another dense storage. This method handles non-contiguous contracted axes by permuting the tensors to make the contracted axes contiguous before calling mdarray-linalg's contract.
 
 ### `pub fn from_vec(vec: Vec < f64 >) -> Self` (impl DiagStorageF64)
 
