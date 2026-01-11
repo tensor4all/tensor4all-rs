@@ -267,4 +267,73 @@ ffi.cdef("""
     t4a_mpo_c64* t4a_mpo_c64_contract_zipup(const t4a_mpo_c64* a, const t4a_mpo_c64* b, double tolerance, size_t max_bond_dim);
     t4a_mpo_c64* t4a_mpo_c64_contract_fit(const t4a_mpo_c64* a, const t4a_mpo_c64* b, double tolerance, size_t max_bond_dim, size_t max_sweeps);
     t4a_mpo_c64* t4a_mpo_c64_contract(const t4a_mpo_c64* a, const t4a_mpo_c64* b, t4a_contraction_algorithm algorithm, double tolerance, size_t max_bond_dim);
+
+    // ========================================================================
+    // SimpleTT F64 functions (tensor4all-simplett)
+    // ========================================================================
+
+    // Opaque type
+    typedef struct { void* _private; } t4a_simplett_f64;
+
+    // Lifecycle
+    void t4a_simplett_f64_release(t4a_simplett_f64* ptr);
+    t4a_simplett_f64* t4a_simplett_f64_clone(const t4a_simplett_f64* ptr);
+
+    // Constructors
+    t4a_simplett_f64* t4a_simplett_f64_constant(const size_t* site_dims, size_t n_sites, double value);
+    t4a_simplett_f64* t4a_simplett_f64_zeros(const size_t* site_dims, size_t n_sites);
+
+    // Accessors
+    StatusCode t4a_simplett_f64_len(const t4a_simplett_f64* ptr, size_t* out_len);
+    StatusCode t4a_simplett_f64_site_dims(const t4a_simplett_f64* ptr, size_t* out_dims, size_t buf_len);
+    StatusCode t4a_simplett_f64_link_dims(const t4a_simplett_f64* ptr, size_t* out_dims, size_t buf_len);
+    StatusCode t4a_simplett_f64_rank(const t4a_simplett_f64* ptr, size_t* out_rank);
+    StatusCode t4a_simplett_f64_evaluate(const t4a_simplett_f64* ptr, const size_t* indices, size_t n_indices, double* out_value);
+    StatusCode t4a_simplett_f64_sum(const t4a_simplett_f64* ptr, double* out_value);
+    StatusCode t4a_simplett_f64_norm(const t4a_simplett_f64* ptr, double* out_value);
+    StatusCode t4a_simplett_f64_site_tensor(const t4a_simplett_f64* ptr, size_t site,
+                                             double* out_data, size_t buf_len,
+                                             size_t* out_left_dim, size_t* out_site_dim, size_t* out_right_dim);
+
+    // ========================================================================
+    // TensorCI2 F64 functions (tensor4all-tensorci)
+    // ========================================================================
+
+    // Opaque type
+    typedef struct { void* _private; } t4a_tci2_f64;
+
+    // Callback type for evaluation function
+    typedef int (*t4a_eval_callback)(const int64_t* indices, size_t n_indices, double* result, void* user_data);
+
+    // Lifecycle
+    void t4a_tci2_f64_release(t4a_tci2_f64* ptr);
+    t4a_tci2_f64* t4a_tci2_f64_new(const size_t* local_dims, size_t n_sites);
+
+    // Accessors
+    StatusCode t4a_tci2_f64_len(const t4a_tci2_f64* ptr, size_t* out_len);
+    StatusCode t4a_tci2_f64_rank(const t4a_tci2_f64* ptr, size_t* out_rank);
+    StatusCode t4a_tci2_f64_link_dims(const t4a_tci2_f64* ptr, size_t* out_dims, size_t buf_len);
+    StatusCode t4a_tci2_f64_max_sample_value(const t4a_tci2_f64* ptr, double* out_value);
+    StatusCode t4a_tci2_f64_max_bond_error(const t4a_tci2_f64* ptr, double* out_value);
+
+    // Pivot operations
+    StatusCode t4a_tci2_f64_add_global_pivots(t4a_tci2_f64* ptr, const size_t* pivots, size_t n_pivots, size_t n_sites);
+
+    // Conversion
+    t4a_simplett_f64* t4a_tci2_f64_to_tensor_train(const t4a_tci2_f64* ptr);
+
+    // High-level crossinterpolate2
+    StatusCode t4a_crossinterpolate2_f64(
+        const size_t* local_dims,
+        size_t n_sites,
+        const size_t* initial_pivots,
+        size_t n_initial_pivots,
+        t4a_eval_callback eval_fn,
+        void* user_data,
+        double tolerance,
+        size_t max_bonddim,
+        size_t max_iter,
+        t4a_tci2_f64** out_tci,
+        double* out_final_error
+    );
 """)
