@@ -13,7 +13,7 @@ description = "High-level Quantics TCI interface for function interpolation"
 
 [dependencies]
 tensor4all-tensorci = { path = "../tensor4all-tensorci" }
-tensor4all-simpletensortrain = { path = "../tensor4all-simpletensortrain" }
+tensor4all-simplett = { path = "../tensor4all-simplett" }
 quanticsgrids = { path = "../quanticsgrids" }
 num-complex = { workspace = true }
 num-traits = { workspace = true }

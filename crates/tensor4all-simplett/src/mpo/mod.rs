@@ -19,7 +19,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use tensor4all_simpletensortrain::mpo::{MPO, contract_naive, ContractionOptions};
+//! use tensor4all_simplett::mpo::{MPO, contract_naive, ContractionOptions};
 //!
 //! let mpo_a = MPO::constant(&[2, 2], 1.0);
 //! let mpo_b = MPO::constant(&[2, 2], 2.0);

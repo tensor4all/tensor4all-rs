@@ -1,4 +1,4 @@
-# tensor4all-simpletensortrain
+# tensor4all-simplett
 
 Simple, efficient Tensor Train (MPS) implementation focused on practical computational methods. Provides multiple canonical forms and compression algorithms.
 
@@ -13,7 +13,7 @@ Simple, efficient Tensor Train (MPS) implementation focused on practical computa
 ## Usage
 
 ```rust
-use tensor4all_simpletensortrain::{TensorTrain, AbstractTensorTrain};
+use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
 
 // Create a constant tensor train
 let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);

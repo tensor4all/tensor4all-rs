@@ -1,5 +1,5 @@
 [package]
-name = "tensor4all-simpletensortrain"
+name = "tensor4all-simplett"
 description = "Simple Tensor Train (MPS) algorithms for tensor4all"
 version.workspace = true
 edition.workspace = true

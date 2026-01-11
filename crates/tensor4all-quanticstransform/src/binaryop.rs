@@ -7,7 +7,7 @@
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
-use tensor4all_simpletensortrain::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
 use crate::common::{tensortrain_to_linear_operator, BoundaryCondition, QuanticsOperator};
 
@@ -221,9 +221,9 @@ pub fn binaryop_single_mpo(
         // where mid_bond carries (carry_state, x_value)
         let mid_bond = (if n == r - 1 { 1 } else { 3 }) * 2; // carry × x
 
-        let mut t_x: tensor4all_simpletensortrain::Tensor3<Complex64> =
+        let mut t_x: tensor4all_simplett::Tensor3<Complex64> =
             tensor3_zeros(left_bond, 4, mid_bond);
-        let mut t_y: tensor4all_simpletensortrain::Tensor3<Complex64> =
+        let mut t_y: tensor4all_simplett::Tensor3<Complex64> =
             tensor3_zeros(mid_bond, 4, right_bond);
 
         for l in 0..left_bond {
@@ -324,7 +324,7 @@ pub fn binaryop_single_operator(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor4all_simpletensortrain::AbstractTensorTrain;
+    use tensor4all_simplett::AbstractTensorTrain;
 
     #[test]
     fn test_binary_coeffs_valid() {

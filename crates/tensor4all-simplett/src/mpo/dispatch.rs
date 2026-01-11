@@ -39,7 +39,7 @@ use super::mpo::MPO;
 /// # Example
 ///
 /// ```ignore
-/// use tensor4all_simpletensortrain::mpo::{contract, MPO, ContractionOptions, ContractionAlgorithm};
+/// use tensor4all_simplett::mpo::{contract, MPO, ContractionOptions, ContractionAlgorithm};
 ///
 /// let mpo_a = MPO::identity(&[2, 2])?;
 /// let mpo_b = MPO::identity(&[2, 2])?;
