@@ -77,7 +77,7 @@ pub type DefaultIndex = Index<DynId, TagSet>;
 /// # Example
 /// ```
 /// use tensor4all_treetn::{SiteIndexNetwork, random_treetn_f64, LinkSpace};
-/// use tensor4all_core::index::{DefaultIndex as Index, DynId, NoSymmSpace};
+/// use tensor4all_core::index::{Index, DynId, TagSet};
 /// use rand::SeedableRng;
 /// use rand_chacha::ChaCha8Rng;
 /// use std::collections::HashSet;

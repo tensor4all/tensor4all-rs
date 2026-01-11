@@ -1589,4 +1589,94 @@ impl TensorLike for TensorDynLen {
         // Delegate to the inherent method
         TensorDynLen::inner_product(self, other)
     }
+
+    fn delta(input_indices: &[DynIndex], output_indices: &[DynIndex]) -> Result<Self> {
+        use crate::storage::DenseStorageF64;
+
+        // Validate same number of input and output indices
+        if input_indices.len() != output_indices.len() {
+            return Err(anyhow::anyhow!(
+                "Number of input indices ({}) must match output indices ({})",
+                input_indices.len(),
+                output_indices.len()
+            ));
+        }
+
+        // Validate dimensions match
+        for (inp, out) in input_indices.iter().zip(output_indices.iter()) {
+            if inp.dim() != out.dim() {
+                return Err(anyhow::anyhow!(
+                    "Dimension mismatch: input index has dim {}, output has dim {}",
+                    inp.dim(),
+                    out.dim(),
+                ));
+            }
+        }
+
+        if input_indices.is_empty() {
+            // No site indices: create a scalar tensor (value 1.0)
+            let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0])));
+            return Ok(TensorDynLen::new(vec![], vec![], storage));
+        }
+
+        // Build combined index list: [i1, o1, i2, o2, ...]
+        let mut all_indices: Vec<DynIndex> = Vec::with_capacity(input_indices.len() * 2);
+        let mut dims: Vec<usize> = Vec::with_capacity(input_indices.len() * 2);
+
+        for (inp, out) in input_indices.iter().zip(output_indices.iter()) {
+            all_indices.push(inp.clone());
+            all_indices.push(out.clone());
+            let dim = inp.dim();
+            dims.push(dim);
+            dims.push(dim);
+        }
+
+        // Calculate total size
+        let total_size: usize = dims.iter().product();
+
+        // Build delta tensor data
+        let mut data = vec![0.0_f64; total_size];
+
+        // Helper: compute strides for row-major layout
+        fn compute_strides(dims: &[usize]) -> Vec<usize> {
+            let mut strides = vec![1; dims.len()];
+            for i in (0..dims.len().saturating_sub(1)).rev() {
+                strides[i] = strides[i + 1] * dims[i + 1];
+            }
+            strides
+        }
+
+        let strides = compute_strides(&dims);
+        let n_pairs = input_indices.len();
+
+        // Iterate over all diagonal elements
+        // Each pair (i_k, o_k) should have i_k = o_k
+        let input_dims: Vec<usize> = input_indices.iter().map(|i| i.dim()).collect();
+        let input_total: usize = input_dims.iter().product();
+
+        for input_linear in 0..input_total {
+            // Convert to multi-index for input indices
+            let mut input_multi = vec![0usize; n_pairs];
+            let mut remaining = input_linear;
+            for i in (0..n_pairs).rev() {
+                input_multi[i] = remaining % input_dims[i];
+                remaining /= input_dims[i];
+            }
+
+            // Build full multi-index: [i1, o1, i2, o2, ...] where i_k = o_k
+            let mut full_multi = vec![0usize; n_pairs * 2];
+            for i in 0..n_pairs {
+                full_multi[2 * i] = input_multi[i]; // input index
+                full_multi[2 * i + 1] = input_multi[i]; // output index (diagonal)
+            }
+
+            // Convert to linear index in full tensor
+            let linear_idx: usize = full_multi.iter().zip(&strides).map(|(&m, &s)| m * s).sum();
+
+            data[linear_idx] = 1.0;
+        }
+
+        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+        Ok(TensorDynLen::new(all_indices, dims, storage))
+    }
 }

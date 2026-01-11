@@ -37,7 +37,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use tensor4all_core::IndexLike;
+use tensor4all_core::TensorLike;
 
 use crate::SiteIndexNetwork;
 
@@ -52,24 +52,24 @@ use crate::SiteIndexNetwork;
 ///
 /// # Type Parameters
 ///
-/// - `I`: Index type implementing `IndexLike`
+/// - `T`: Tensor type implementing `TensorLike`
 /// - `V`: Node name type
-pub trait Operator<I, V>
+pub trait Operator<T, V>
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     /// Get all site indices this operator acts on.
     ///
     /// Returns the union of site indices across all nodes.
-    fn site_indices(&self) -> HashSet<I>;
+    fn site_indices(&self) -> HashSet<T::Index>;
 
     /// Get the site index network describing this operator's structure.
     ///
     /// The site index network contains:
     /// - Topology: which nodes connect to which
     /// - Site space: which site indices belong to each node
-    fn site_index_network(&self) -> &SiteIndexNetwork<V, I>;
+    fn site_index_network(&self) -> &SiteIndexNetwork<V, T::Index>;
 
     /// Get the set of node names this operator covers.
     ///

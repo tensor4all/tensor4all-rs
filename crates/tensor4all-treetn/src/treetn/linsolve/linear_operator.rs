@@ -367,6 +367,41 @@ where
 
 use std::collections::HashSet;
 
+use crate::operator::Operator;
+use crate::SiteIndexNetwork;
+
+// Implement Operator trait for LinearOperator
+impl<T, V> Operator<T, V> for LinearOperator<T, V>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    fn site_indices(&self) -> HashSet<T::Index> {
+        // Return union of input and output true indices
+        let mut result: HashSet<T::Index> = self
+            .input_mapping
+            .values()
+            .map(|m| m.true_index.clone())
+            .collect();
+        result.extend(self.output_mapping.values().map(|m| m.true_index.clone()));
+        result
+    }
+
+    fn site_index_network(&self) -> &SiteIndexNetwork<V, T::Index> {
+        self.mpo.site_index_network()
+    }
+
+    fn node_names(&self) -> HashSet<V> {
+        self.mpo
+            .site_index_network()
+            .node_names()
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+}
+
 impl<T, V> LinearOperator<T, V>
 where
     T: TensorLike,

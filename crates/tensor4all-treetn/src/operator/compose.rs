@@ -6,21 +6,16 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use petgraph::stable_graph::NodeIndex;
 
-use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::storage::{DenseStorageF64, Storage};
-use tensor4all_core::{IndexLike, TensorDynLen};
+use tensor4all_core::{IndexLike, TensorLike};
 
-use super::identity::build_identity_operator_tensor;
 use super::Operator;
 use crate::site_index_network::SiteIndexNetwork;
+use crate::treetn::linsolve::{IndexMapping, LinearOperator};
 use crate::treetn::TreeTN;
-// TODO: Re-enable after operator module is refactored
-// use crate::treetn::linsolve::{IndexMapping, LinearOperator};
 
 /// Check if a set of operators are exclusive (non-overlapping) on the target network.
 ///
@@ -37,14 +32,14 @@ use crate::treetn::TreeTN;
 /// # Returns
 ///
 /// `true` if operators are exclusive, `false` otherwise.
-pub fn are_exclusive_operators<I, V, O>(
-    target: &SiteIndexNetwork<V, I>,
+pub fn are_exclusive_operators<T, V, O>(
+    target: &SiteIndexNetwork<V, T::Index>,
     operators: &[&O],
 ) -> bool
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
-    O: Operator<I, V>,
+    O: Operator<T, V>,
 {
     // Collect node sets for each operator
     let node_sets: Vec<HashSet<V>> = operators.iter().map(|op| op.node_names()).collect();
@@ -83,7 +78,7 @@ where
     // 3. Path-exclusive check: paths between operators should not cross other operators
     for i in 0..node_sets.len() {
         for j in (i + 1)..node_sets.len() {
-            if !check_path_exclusive(target, &node_sets[i], &node_sets[j], &node_sets) {
+            if !check_path_exclusive::<T, V>(target, &node_sets[i], &node_sets[j], &node_sets) {
                 return false;
             }
         }
@@ -93,14 +88,14 @@ where
 }
 
 /// Check if paths between two operator regions don't cross other operators.
-fn check_path_exclusive<I, V>(
-    target: &SiteIndexNetwork<V, I>,
+fn check_path_exclusive<T, V>(
+    target: &SiteIndexNetwork<V, T::Index>,
     set_a: &HashSet<V>,
     set_b: &HashSet<V>,
     all_sets: &[HashSet<V>],
 ) -> bool
 where
-    I: IndexLike,
+    T: TensorLike,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     // Find a node from each set
@@ -150,13 +145,13 @@ where
 ///
 /// This function takes multiple non-overlapping operators and combines them into
 /// a single operator that acts on the full target space. Gap positions (nodes not
-/// covered by any operator) are filled with identity operators.
+/// covered by any operator) are filled with identity operators using `T::delta()`.
 ///
 /// # Arguments
 ///
 /// * `target` - The full site index network (defines the output structure)
 /// * `operators` - Non-overlapping LinearOperators to compose
-/// * `gap_site_indices` - Site indices for gap nodes: node_name -> (input_index, output_index)
+/// * `gap_site_indices` - Site indices for gap nodes: node_name -> [(input_index, output_index), ...]
 ///
 /// # Returns
 ///
@@ -168,19 +163,19 @@ where
 /// - Operators are not exclusive (overlapping)
 /// - Operator nodes don't exist in target
 /// - Gap node site indices not provided
-pub fn compose_exclusive_linear_operators<I, V>(
-    target: &SiteIndexNetwork<V, I>,
-    operators: &[&LinearOperator<I, V>],
-    gap_site_indices: &HashMap<V, Vec<(I, I)>>,
-) -> Result<LinearOperator<I, V>>
+pub fn compose_exclusive_linear_operators<T, V>(
+    target: &SiteIndexNetwork<V, T::Index>,
+    operators: &[&LinearOperator<T, V>],
+    gap_site_indices: &HashMap<V, Vec<(T::Index, T::Index)>>,
+) -> Result<LinearOperator<T, V>>
 where
-    I: IndexLike,
-    I::Id: Clone + Hash + Eq + Ord + Debug + From<DynId> + Send + Sync,
-    I::Tags: Default,
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     // 1. Validate exclusivity
-    if !are_exclusive_operators(target, operators) {
+    if !are_exclusive_operators::<T, V, _>(target, operators) {
         return Err(anyhow::anyhow!(
             "Operators are not exclusive: they may overlap or not form connected subtrees"
         ))
@@ -195,10 +190,10 @@ where
     let gaps: Vec<V> = all_target_nodes.difference(&covered).cloned().collect();
 
     // 4. Build tensors and mappings
-    let mut tensors: Vec<TensorDynLen> = Vec::new();
+    let mut tensors: Vec<T> = Vec::new();
     let mut result_node_names: Vec<V> = Vec::new();
-    let mut combined_input_mapping: HashMap<V, IndexMapping<I>> = HashMap::new();
-    let mut combined_output_mapping: HashMap<V, IndexMapping<I>> = HashMap::new();
+    let mut combined_input_mapping: HashMap<V, IndexMapping<T::Index>> = HashMap::new();
+    let mut combined_output_mapping: HashMap<V, IndexMapping<T::Index>> = HashMap::new();
 
     // 4a. Add tensors and mappings from operators
     for op in operators {
@@ -226,7 +221,7 @@ where
         }
     }
 
-    // 4b. Add identity tensors at gaps
+    // 4b. Add identity tensors at gaps using T::delta()
     for gap_name in gaps {
         let index_pairs = gap_site_indices.get(&gap_name).ok_or_else(|| {
             anyhow::anyhow!(
@@ -237,50 +232,28 @@ where
 
         if index_pairs.is_empty() {
             // No site indices at this gap - create scalar identity
-            let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0])));
-            let scalar_tensor = TensorDynLen::new(vec![], vec![], storage);
-            tensors.push(scalar_tensor);
+            // For now, we skip this case as T::delta() needs at least empty slices
+            // The caller should provide empty Vec for nodes without site indices
             result_node_names.push(gap_name);
+            // Create scalar using T::delta with empty indices
+            let scalar_tensor = T::delta(&[], &[])
+                .context("Failed to create scalar identity tensor")?;
+            tensors.push(scalar_tensor);
             continue;
         }
 
-        // Create internal indices for the identity operator
-        // (different IDs from true indices)
-        let mut internal_inputs: Vec<Index<I::Id, I::Tags>> = Vec::new();
-        let mut internal_outputs: Vec<Index<I::Id, I::Tags>> = Vec::new();
+        // Separate input and output indices
+        let internal_inputs: Vec<T::Index> = index_pairs.iter().map(|(i, _)| i.clone()).collect();
+        let internal_outputs: Vec<T::Index> = index_pairs.iter().map(|(_, o)| o.clone()).collect();
 
-        for (true_input, true_output) in index_pairs {
-            // Create new internal indices with fresh IDs
-            // Use Index::new_dyn to get unique IDs
-            let dim_in = true_input.dim();
-            let dim_out = true_output.dim();
-
-            // Create internal indices with matching dimensions
-            let internal_in_base: DynIndex = Index::new_dyn(dim_in);
-            let internal_out_base: DynIndex = Index::new_dyn(dim_out);
-
-            // Convert to the target type
-            let internal_in: Index<I::Id, I::Tags> = Index::new_with_tags(
-                I::Id::from(internal_in_base.id),
-                internal_in_base.dim(),
-                I::Tags::default(),
-            );
-            let internal_out: Index<I::Id, I::Tags> = Index::new_with_tags(
-                I::Id::from(internal_out_base.id),
-                internal_out_base.dim(),
-                I::Tags::default(),
-            );
-
-            internal_inputs.push(internal_in.clone());
-            internal_outputs.push(internal_out.clone());
-
-            // Store mappings (first pair only for now - single site index per node)
+        // Store mappings for the first pair (single site index per node for now)
+        if let Some((true_input, true_output)) = index_pairs.first() {
             if combined_input_mapping.get(&gap_name).is_none() {
                 combined_input_mapping.insert(
                     gap_name.clone(),
                     IndexMapping {
                         true_index: true_input.clone(),
-                        internal_index: internal_in,
+                        internal_index: internal_inputs[0].clone(),
                     },
                 );
             }
@@ -289,14 +262,14 @@ where
                     gap_name.clone(),
                     IndexMapping {
                         true_index: true_output.clone(),
-                        internal_index: internal_out,
+                        internal_index: internal_outputs[0].clone(),
                     },
                 );
             }
         }
 
-        // Build identity tensor
-        let identity_tensor = build_identity_operator_tensor(&internal_inputs, &internal_outputs)
+        // Build identity tensor using T::delta()
+        let identity_tensor = T::delta(&internal_inputs, &internal_outputs)
             .with_context(|| format!("Failed to build identity tensor for gap {:?}", gap_name))?;
 
         tensors.push(identity_tensor);
@@ -318,17 +291,16 @@ where
 ///
 /// This is a generic version that accepts any type implementing the Operator trait.
 /// For actual composition, use [`compose_exclusive_linear_operators`] with LinearOperator inputs.
-pub fn compose_exclusive_operators<I, V, O>(
-    _target: &SiteIndexNetwork<V, I>,
+pub fn compose_exclusive_operators<T, V, O>(
+    _target: &SiteIndexNetwork<V, T::Index>,
     _operators: &[&O],
-    _gap_site_indices: &HashMap<V, Vec<(I, I)>>,
-) -> Result<LinearOperator<I, V>>
+    _gap_site_indices: &HashMap<V, Vec<(T::Index, T::Index)>>,
+) -> Result<LinearOperator<T, V>>
 where
-    I: IndexLike,
-    I::Id: Clone + Hash + Eq + Ord + Debug + From<DynId> + Send + Sync,
-    I::Tags: Default,
+    T: TensorLike,
+    T::Index: Clone + Hash + Eq + Debug,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
-    O: Operator<I, V>,
+    O: Operator<T, V>,
 {
     // This function requires operators to be LinearOperator
     // Use compose_exclusive_linear_operators directly for LinearOperator inputs
@@ -342,7 +314,10 @@ where
 mod tests {
     use super::*;
     use crate::random::{random_treetn_f64, LinkSpace};
+    use tensor4all_core::index::{DynId, Index, TagSet};
+    use tensor4all_core::storage::Storage;
     use tensor4all_core::TensorAccess;
+    use tensor4all_core::TensorDynLen;
 
     type DynIndex = Index<DynId, TagSet>;
 
@@ -367,10 +342,10 @@ mod tests {
 
     /// Create a simple LinearOperator from a TreeTN with explicit index mappings.
     fn create_linear_operator_from_treetn(
-        mpo: TreeTN<DynIndex, String>,
+        mpo: TreeTN<TensorDynLen, String>,
         input_indices: &[(String, DynIndex, DynIndex)], // (node, true_input, internal_input)
         output_indices: &[(String, DynIndex, DynIndex)], // (node, true_output, internal_output)
-    ) -> LinearOperator<DynIndex, String> {
+    ) -> LinearOperator<TensorDynLen, String> {
         let mut input_mapping = HashMap::new();
         let mut output_mapping = HashMap::new();
 
@@ -424,7 +399,7 @@ mod tests {
         let op2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
 
         // Test exclusivity
-        let result = are_exclusive_operators(&target, &[&op1, &op2]);
+        let result = are_exclusive_operators::<TensorDynLen, _, _>(&target, &[&op1, &op2]);
         assert!(result, "Disjoint operators should be exclusive");
     }
 
@@ -453,7 +428,7 @@ mod tests {
         let op1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
         let op2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
 
-        let result = are_exclusive_operators(&target, &[&op1, &op2]);
+        let result = are_exclusive_operators::<TensorDynLen, _, _>(&target, &[&op1, &op2]);
         assert!(!result, "Overlapping operators should not be exclusive");
     }
 
@@ -474,7 +449,7 @@ mod tests {
         let op1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
         let op2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
 
-        let result = are_exclusive_operators(&target, &[&op1, &op2]);
+        let result = are_exclusive_operators::<TensorDynLen, _, _>(&target, &[&op1, &op2]);
         assert!(result, "Single-node disjoint operators should be exclusive");
     }
 
