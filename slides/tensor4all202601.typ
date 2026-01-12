@@ -343,7 +343,7 @@
   #v(0.5em)
 
   - *DynId*: UUID-based unique identifier (like ITensors.jl)
-  - *TagSet*: String tags for labeling (e.g., `"Site,n=1"`)
+  - *TagSet*: ITensor-compatible string tags for labeling (e.g., `"Site,n=1"`)
   - Implements `IndexLike` trait
   ]
 ]
@@ -366,11 +366,7 @@
   *Advantages*:
   - Diagonal × Dense = lazy (no memory explosion)
   - Actual expansion only when needed
-
-  #v(0.5em)
-
-  *Contraction path optimization*: #link("https://github.com/GiggleLiu/omeco")[omeco] \
-  → Greedy algorithm finds near-optimal contraction order for N≥3 tensors
+  - Permutations are tracked, not executed
   ]
 ]
 
@@ -397,6 +393,27 @@
   *Backend libraries*:
   - `mdarray`: Multi-dimensional array storage
   - `mdarray-linalg`: Linear algebra operations (SVD, QR, LU)
+  ]
+]
+
+// Slide 15: Contraction Path Optimization
+#slide("Contraction Path Optimization")[
+  #text(size: 18pt)[
+  *Problem*: Contraction order affects computational cost exponentially
+
+  #v(0.5em)
+
+  *Solution*: #link("https://github.com/GiggleLiu/omeco")[omeco] (Rust port of OMEinsumContractionOrders.jl)
+  - Greedy algorithm finds near-optimal order in O(n² log n)
+  - Supports *hyperedges* (index shared by 3+ tensors)
+
+  #v(0.5em)
+
+  *Workflow*:
+  + `TensorData` decomposed into `TensorComponent` list
+  + Each component → (Storage, index IDs) passed to omeco
+  + omeco returns optimal contraction tree
+  + Execute tree with pairwise contractions
   ]
 ]
 
