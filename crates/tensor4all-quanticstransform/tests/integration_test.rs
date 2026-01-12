@@ -139,16 +139,16 @@ fn tensortrain_to_treetn(
 /// Create a product state MPS representing a specific integer value x.
 ///
 /// The state |x⟩ = |x_0⟩ ⊗ |x_1⟩ ⊗ ... ⊗ |x_{R-1}⟩ where x_i are binary digits.
-/// Uses little-endian convention (LSB first): x = Σ_n x_n * 2^n
+/// Uses big-endian convention (MSB first): x = Σ_n x_n * 2^(R-1-n)
 ///
-/// This matches the convention used by quantics operators (flip, shift, etc.)
-/// where site 0 contains the least significant bit.
+/// This matches Julia Quantics.jl's convention where site 0 (Julia site 1)
+/// contains the most significant bit.
 fn create_product_state_mps(x: usize, r: usize) -> TensorTrain<Complex64> {
     let mut tensors = Vec::with_capacity(r);
 
     for n in 0..r {
-        // Little-endian: bit n corresponds to 2^n
-        let bit = (x >> n) & 1;
+        // Big-endian: site n contains bit 2^(R-1-n)
+        let bit = (x >> (r - 1 - n)) & 1;
 
         let mut t = tensor3_zeros(1, 2, 1);
         t.set3(0, bit, 0, Complex64::one());
@@ -215,8 +215,8 @@ fn contract_treetn_to_vector(
         // Convert x to multi-index in tensor order
         let mut multi_idx = vec![0usize; r];
         for i in 0..r {
-            // Little-endian: bit i corresponds to 2^i
-            let bit = (x >> i) & 1;
+            // Big-endian: site i corresponds to bit 2^(R-1-i)
+            let bit = (x >> (r - 1 - i)) & 1;
             multi_idx[site_to_tensor[i]] = bit;
         }
 
@@ -1336,9 +1336,7 @@ use tensor4all_quanticstransform::cumsum_operator;
 
 /// Test cumulative sum operator creation.
 ///
-/// Note: cumsum uses big-endian bit comparison (MSB first) while our test states
-/// use little-endian (LSB first). Full numerical verification would require
-/// big-endian test states.
+/// Basic operator creation test.
 #[test]
 fn test_cumsum_operator_creation() {
     let r = 3;
@@ -1351,36 +1349,23 @@ fn test_cumsum_operator_creation() {
     eprintln!("Cumsum operator creation test passed!");
 }
 
-/// Test cumsum with big-endian input states.
+/// Test cumsum operator for all x values.
 ///
 /// cumsum is a strict upper triangular matrix:
 /// cumsum(|x⟩) = Σ_{y > x} |y⟩
 ///
-/// The comparison y > x is done from MSB to LSB (big-endian).
+/// The comparison y > x is done in big-endian bit order (MSB to LSB).
 #[test]
-fn test_cumsum_big_endian() {
+fn test_cumsum_all_values() {
     let r = 3;
     let n = 1 << r;
 
-    eprintln!("\n=== Testing cumsum with big-endian states (R={}, N={}) ===", r, n);
+    eprintln!("\n=== Testing cumsum for all x values (R={}, N={}) ===", r, n);
 
     let op = cumsum_operator(r).expect("Failed to create cumsum operator");
 
-    // Create big-endian product state: site 0 = MSB
-    fn create_big_endian_mps(x: usize, r: usize) -> TensorTrain<Complex64> {
-        let mut tensors = Vec::with_capacity(r);
-        for n in 0..r {
-            // Big-endian: bit n corresponds to 2^(R-1-n)
-            let bit = (x >> (r - 1 - n)) & 1;
-            let mut t = tensor3_zeros(1, 2, 1);
-            t.set3(0, bit, 0, Complex64::one());
-            tensors.push(t);
-        }
-        TensorTrain::new(tensors).expect("Failed to create big-endian MPS")
-    }
-
     for x in 0..n {
-        let mps = create_big_endian_mps(x, r);
+        let mps = create_product_state_mps(x, r);
         let (treetn, site_indices) = tensortrain_to_treetn(&mps);
 
         // Remap site indices
@@ -1416,29 +1401,34 @@ fn test_cumsum_big_endian() {
 
         eprintln!("cumsum(|{}⟩):", x);
 
-        // For big-endian comparison: count how many y > x
+        // For cumsum, result[y] = 1 iff y > x (strict upper triangular)
+        // Now that contract_treetn_to_vector uses big-endian, result[y] corresponds to value y
         let mut count_positive = 0;
         for y in 0..n {
-            // Expected: result[y_bigendian] = 1 if y_value > x_value
-            // y_bigendian is the big-endian interpretation of output indices
-            // For output index pattern, we need to reverse the bits
-            let y_value = (0..r).fold(0usize, |acc, bit| {
-                acc | (((y >> bit) & 1) << (r - 1 - bit))
-            });
+            let expected_val = if y > x { Complex64::one() } else { Complex64::zero() };
 
             if result_vec[y].norm() > 0.5 {
                 count_positive += 1;
-                eprintln!("  y_idx={} (value={}): ({:.4}, {:.4})",
-                          y, y_value, result_vec[y].re, result_vec[y].im);
+                eprintln!("  y={}: ({:.4}, {:.4})", y, result_vec[y].re, result_vec[y].im);
             }
+
+            assert_relative_eq!(
+                result_vec[y].re,
+                expected_val.re,
+                epsilon = 1e-10,
+                max_relative = 1e-10
+            );
+            assert_relative_eq!(
+                result_vec[y].im,
+                expected_val.im,
+                epsilon = 1e-10,
+                max_relative = 1e-10
+            );
         }
 
         // x has n-1-x values greater than it
         let expected_count = n - 1 - x;
         eprintln!("  Found {} positive, expected {} (y > {})", count_positive, expected_count, x);
-
-        assert_eq!(count_positive, expected_count,
-                   "cumsum({}) should have {} positive outputs", x, expected_count);
     }
 
     eprintln!("All cumsum tests passed!");

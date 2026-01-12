@@ -12,17 +12,22 @@ tensor4all-quanticstransform は Quantics.jl の Rust 実装であるが、以�
 
 ### Phase 1 & 2: 数値テスト完了 (2025-01-12)
 
+**Big-endian convention への統一** (Julia Quantics.jl と同じ):
+- Site 0 = MSB (Most Significant Bit)
+- Site R-1 = LSB (Least Significant Bit)
+- x = Σ_n x_n * 2^(R-1-n)
+
 以下の変換の数値的正確性を検証:
 
 1. **Flip operator** (Periodic/Open BC)
    - flip(x) = 2^R - x を全 x ∈ [0, 2^R) で検証
    - Open BC: flip(0) = 2^R は overflow → zero vector (Rust拡張機能)
-   - Note: Julia の flipop は bc=1 (periodic) または bc=-1 (antisymmetric) のみ
+   - Big-endian convention
 
 2. **Shift operator** (Periodic/Open BC)
    - shift(x, offset) = x + offset を全 x と複数の offset で検証
    - Open BC: overflow/underflow は zero vector
-   - Little-endian convention (site 0 = LSB)
+   - Big-endian convention
 
 3. **Fourier operator**
    - Unitarity: ||F|x⟩||² = 1 for all basis states
@@ -31,12 +36,12 @@ tensor4all-quanticstransform は Quantics.jl の Rust 実装であるが、以�
 4. **Phase rotation operator**
    - exp(i*θ*x) multiplication verified for all x
    - Identity tests: θ=0, θ=2π
-   - Little-endian convention に修正
+   - Big-endian convention
 
 5. **Cumsum operator**
    - Strict upper triangular matrix
    - Big-endian bit comparison (MSB first)
-   - Count verification for each input
+   - Full numerical verification for all x
 
 6. **Affine operator**
    - Identity, shift, negation, 2D rotation の operator creation 検証
