@@ -399,21 +399,24 @@
 // Slide 15: Contraction Path Optimization
 #slide("Contraction Path Optimization")[
   #text(size: 18pt)[
-  *Problem*: Contraction order affects computational cost exponentially
+  *Problem*: `TensorData` can contain mixed Dense + Diag components \
+  → Need optimal contraction order for the component list
 
-  #v(0.5em)
+  #v(0.3em)
+
+  *Example* (SVD-like): `U(i,j)` × `s(j)` × `V(j,k)` where `s` is diagonal
+  - Index `j` is a *hyperedge* (shared by 3 tensors)
+  - Naive order may expand diagonal unnecessarily
+
+  #v(0.3em)
 
   *Solution*: #link("https://github.com/GiggleLiu/omeco")[omeco] (Rust port of OMEinsumContractionOrders.jl)
-  - Greedy algorithm finds near-optimal order in O(n² log n)
-  - Supports *hyperedges* (index shared by 3+ tensors)
+  - GreedyMethod: O(n² log n) near-optimal ordering
+  - Also supports TreeSA (simulated annealing)
 
-  #v(0.5em)
+  #v(0.3em)
 
-  *Workflow*:
-  + `TensorData` decomposed into `TensorComponent` list
-  + Each component → (Storage, index IDs) passed to omeco
-  + omeco returns optimal contraction tree
-  + Execute tree with pairwise contractions
+  *Workflow*: `TensorData.components` → omeco → contraction tree → execute
   ]
 ]
 
