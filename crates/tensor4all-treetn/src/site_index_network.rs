@@ -176,6 +176,34 @@ where
         Ok(())
     }
 
+    /// Replace all site indices for a node with a new set.
+    ///
+    /// Updates both the site space and the reverse lookup.
+    /// This is an atomic operation that removes all old indices and adds all new ones.
+    pub fn set_site_space(
+        &mut self,
+        node_name: &NodeName,
+        new_indices: HashSet<I>,
+    ) -> Result<(), String> {
+        let site_space = self.site_spaces.get_mut(node_name)
+            .ok_or_else(|| format!("Node {:?} not found", node_name))?;
+
+        // Remove old indices from index_to_node
+        for old_idx in site_space.iter() {
+            self.index_to_node.remove(old_idx.id());
+        }
+
+        // Add new indices to index_to_node
+        for new_idx in &new_indices {
+            self.index_to_node.insert(new_idx.id().clone(), node_name.clone());
+        }
+
+        // Replace site space
+        *site_space = new_indices;
+
+        Ok(())
+    }
+
     /// Get the site space by NodeIndex.
     pub fn site_space_by_index(&self, node: NodeIndex) -> Option<&HashSet<I>> {
         let name = self.topology.node_name(node)?;

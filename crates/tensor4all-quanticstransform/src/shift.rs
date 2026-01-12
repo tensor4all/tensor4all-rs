@@ -41,8 +41,9 @@ pub fn shift_operator(r: usize, offset: i64, bc: BoundaryCondition) -> Result<Qu
 /// Create the shift MPO as a TensorTrain.
 ///
 /// The shift operation computes x + offset using binary addition with carry propagation.
-/// The offset is decomposed into binary: offset = Σ_n offset_n * 2^(R-n)
-/// Then at each site n, we compute: out_n = x_n + offset_n + carry_in (mod 2)
+/// Uses little-endian convention: site n contains bit 2^n (LSB at site 0).
+///
+/// At each site n, we compute: out_n = x_n + offset_n + carry_in (mod 2)
 /// with carry_out = (x_n + offset_n + carry_in) / 2
 fn shift_mpo(r: usize, offset: i64, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
     if r == 0 {
@@ -58,14 +59,20 @@ fn shift_mpo(r: usize, offset: i64, bc: BoundaryCondition) -> Result<TensorTrain
         (nbc, offset_mod as usize)
     };
 
-    // Convert offset to binary (MSB first)
-    let offset_bits: Vec<usize> = (0..r).map(|n| (offset_mod >> (r - 1 - n)) & 1).collect();
+    // Convert offset to binary (little-endian: LSB first)
+    // offset = Σ_n offset_bits[n] * 2^n
+    let offset_bits: Vec<usize> = (0..r).map(|n| (offset_mod >> n) & 1).collect();
 
     let mut tensors = Vec::with_capacity(r);
 
     // Carry states: index 0 = carry 0, index 1 = carry 1
-    // For addition, carry can be -1, 0, or 1, but for x + const (where const >= 0),
-    // carry is always 0 or 1.
+    // For addition, carry can be 0 or 1 (since x + offset with offset >= 0).
+    //
+    // With little-endian convention:
+    // - Site 0 is LSB, site R-1 is MSB
+    // - Carry propagates from LSB to MSB (site 0 -> site R-1)
+    // - First tensor (n=0, LSB): no carry input, has carry output
+    // - Last tensor (n=R-1, MSB): has carry input, apply BC
 
     for n in 0..r {
         let y_bit = offset_bits[n]; // The constant bit at position n
@@ -93,8 +100,8 @@ fn shift_mpo(r: usize, offset: i64, bc: BoundaryCondition) -> Result<TensorTrain
             }
             tensors.push(t);
         } else if n == 0 {
-            // First tensor (MSB): carry output, no carry input
-            // Initial carry is 0
+            // First tensor (LSB): no carry input, has carry output
+            // Initial carry is 0 (implicit)
             let mut t = tensor3_zeros(1, 4, 2);
             for x_bit in 0..2 {
                 let sum = x_bit + y_bit; // carry_in = 0 at start
@@ -105,8 +112,7 @@ fn shift_mpo(r: usize, offset: i64, bc: BoundaryCondition) -> Result<TensorTrain
             }
             tensors.push(t);
         } else if n == r - 1 {
-            // Last tensor (LSB): carry input, no carry output
-            // Apply boundary condition
+            // Last tensor (MSB): has carry input, apply boundary condition
             let bc_val = match bc {
                 BoundaryCondition::Periodic => Complex64::one(),
                 BoundaryCondition::Open => Complex64::zero(),

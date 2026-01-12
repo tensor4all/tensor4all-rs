@@ -662,9 +662,10 @@ where
             .map(|old| std::mem::replace(old, new_tensor));
 
         // Update site_index_network with new physical indices
-        if let Some(site_space) = self.site_index_network.site_space_mut(&node_name) {
-            *site_space = new_physical_indices;
-        }
+        // This properly updates both the site_space and the index_to_node mapping
+        self.site_index_network
+            .set_site_space(&node_name, new_physical_indices)
+            .map_err(|e| anyhow::anyhow!("Failed to update site_index_network: {}", e))?;
 
         Ok(old_tensor)
     }

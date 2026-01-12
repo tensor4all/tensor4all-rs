@@ -186,3 +186,161 @@ fn test_treetn_site_indices_deterministic_ordering() {
 //
 // These tests tested dyn TensorLike functionality which no longer exists.
 // For heterogeneous tensor collections, use an enum wrapper instead.
+
+// ============================================================================
+// TensorIndex trait tests for TreeTN
+// ============================================================================
+
+#[test]
+fn test_treetn_external_indices_via_trait() {
+    // Test that external_indices() via TensorIndex trait works correctly
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let bond = DynIndex::new_dyn(4);
+
+    let tensor_a = make_tensor(vec![i.clone(), bond.clone()]);
+    let tensor_b = make_tensor(vec![bond.clone(), j.clone()]);
+
+    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![tensor_a, tensor_b],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+
+    // Use TensorIndex trait method
+    let ext_indices = tn.external_indices();
+    assert_eq!(ext_indices.len(), 2);
+
+    // Verify that site indices are i and j (not bond)
+    let ext_ids: Vec<_> = ext_indices.iter().map(|idx| idx.id()).collect();
+    assert!(ext_ids.contains(&i.id()));
+    assert!(ext_ids.contains(&j.id()));
+    assert!(!ext_ids.contains(&bond.id()));
+}
+
+#[test]
+fn test_treetn_replaceind_site_index() {
+    // Test replacing a site (physical) index
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let bond = DynIndex::new_dyn(4);
+
+    let tensor_a = make_tensor(vec![i.clone(), bond.clone()]);
+    let tensor_b = make_tensor(vec![bond.clone(), j.clone()]);
+
+    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![tensor_a, tensor_b],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+
+    // Debug: print site indices
+    eprintln!("TreeTN external_indices: {:?}", tn.external_indices().iter().map(|idx| idx.id()).collect::<Vec<_>>());
+    eprintln!("i.id() = {:?}", i.id());
+    eprintln!("j.id() = {:?}", j.id());
+    eprintln!("bond.id() = {:?}", bond.id());
+
+    // Debug: print site_space for node A
+    if let Some(space) = tn.site_space(&"A".to_string()) {
+        eprintln!("Node A site_space IDs: {:?}", space.iter().map(|idx| idx.id()).collect::<Vec<_>>());
+        eprintln!("Node A site_space contains(&i): {}", space.contains(&i));
+        // Check by iterating
+        for idx in space {
+            eprintln!("  Checking idx.id() == i.id(): {:?} == {:?} => {}", idx.id(), i.id(), idx.id() == i.id());
+            eprintln!("  idx == i: {}", *idx == i);
+        }
+    }
+    if let Some(space) = tn.site_space(&"B".to_string()) {
+        eprintln!("Node B site_space IDs: {:?}", space.iter().map(|idx| idx.id()).collect::<Vec<_>>());
+    }
+
+    // Create a new index with same dimension
+    let i_new = DynIndex::new_dyn(2);
+
+    // Debug: clone and check the cloned site_space
+    let tn_cloned = tn.clone();
+    if let Some(cloned_space) = tn_cloned.site_space(&"A".to_string()) {
+        eprintln!("Cloned Node A site_space IDs: {:?}", cloned_space.iter().map(|idx| idx.id()).collect::<Vec<_>>());
+        eprintln!("Cloned Node A site_space contains(&i): {}", cloned_space.contains(&i));
+    }
+
+    // Replace i with i_new
+    let tn_replaced = tn.replaceind(&i, &i_new).expect("replaceind should succeed");
+
+    // Check that the new index is present and old is not
+    let ext_indices = tn_replaced.external_indices();
+    let ext_ids: Vec<_> = ext_indices.iter().map(|idx| idx.id()).collect();
+
+    assert!(!ext_ids.contains(&i.id()), "Old index should be replaced");
+    assert!(ext_ids.contains(&i_new.id()), "New index should be present");
+    assert!(ext_ids.contains(&j.id()), "Other indices should remain");
+}
+
+#[test]
+fn test_treetn_replaceind_not_found() {
+    // Test that replaceind fails gracefully for unknown index
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+
+    let tensor = make_tensor(vec![i.clone(), j.clone()]);
+    let tn =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+
+    // Try to replace an index that doesn't exist
+    let unknown = DynIndex::new_dyn(5);
+    let new_idx = DynIndex::new_dyn(5);
+
+    let result = tn.replaceind(&unknown, &new_idx);
+    assert!(result.is_err(), "replaceind should fail for unknown index");
+}
+
+#[test]
+fn test_treetn_replaceinds_multiple() {
+    // Test replacing multiple indices at once
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let k = DynIndex::new_dyn(4);
+
+    let tensor = make_tensor(vec![i.clone(), j.clone(), k.clone()]);
+    let tn =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+
+    // Replace i and j with new indices
+    let i_new = DynIndex::new_dyn(2);
+    let j_new = DynIndex::new_dyn(3);
+
+    let tn_replaced = tn
+        .replaceinds(&[i.clone(), j.clone()], &[i_new.clone(), j_new.clone()])
+        .expect("replaceinds should succeed");
+
+    let ext_indices = tn_replaced.external_indices();
+    let ext_ids: Vec<_> = ext_indices.iter().map(|idx| idx.id()).collect();
+
+    assert!(!ext_ids.contains(&i.id()));
+    assert!(!ext_ids.contains(&j.id()));
+    assert!(ext_ids.contains(&i_new.id()));
+    assert!(ext_ids.contains(&j_new.id()));
+    assert!(ext_ids.contains(&k.id())); // k should remain
+}
+
+#[test]
+fn test_treetn_external_indices_single_node_multiple_indices() {
+    // Test external_indices with single node having multiple indices
+    let indices: Vec<DynIndex> = (0..5).map(|_| DynIndex::new_dyn(2)).collect();
+
+    let tensor = make_tensor(indices.clone());
+    let tn =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+
+    let ext = tn.external_indices();
+    assert_eq!(ext.len(), 5);
+
+    // All original indices should be present
+    for idx in &indices {
+        assert!(
+            ext.iter().any(|e| e.id() == idx.id()),
+            "Index {:?} should be in external_indices",
+            idx.id()
+        );
+    }
+}

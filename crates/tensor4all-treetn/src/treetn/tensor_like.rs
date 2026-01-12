@@ -68,6 +68,9 @@ where
     /// Looks up the index location (site or link) and replaces it in:
     /// - The tensor containing it
     /// - The appropriate index network (site_index_network or link_index_network)
+    ///
+    /// Note: `replace_tensor` automatically updates the `site_index_network` based on
+    /// the new tensor's indices, so we don't need to manually call `replace_site_index`.
     fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self> {
         let mut result = self.clone();
 
@@ -76,15 +79,11 @@ where
             let node_idx = result.node_index(node_name)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", node_name))?;
 
-            // Replace in tensor
+            // Replace in tensor - this also updates site_index_network via replace_tensor
             let tensor = result.tensor(node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_name))?;
             let new_tensor = tensor.replaceind(old_index, new_index)?;
             result.replace_tensor(node_idx, new_tensor)?;
-
-            // Replace in site_index_network
-            result.site_index_network.replace_site_index(node_name, old_index, new_index.clone())
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
 
             return Ok(result);
         }
@@ -94,7 +93,7 @@ where
             let (node_a, node_b) = result.graph.graph().edge_endpoints(edge)
                 .ok_or_else(|| anyhow::anyhow!("Edge {:?} not found", edge))?;
 
-            // Replace in both endpoint tensors
+            // Replace in both endpoint tensors - this also updates site_index_network
             for node in [node_a, node_b] {
                 let tensor = result.tensor(node)
                     .ok_or_else(|| anyhow::anyhow!("Tensor not found"))?;

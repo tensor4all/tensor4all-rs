@@ -58,24 +58,23 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
 
     // Create link indices with dimension 2 (for carry states)
     // Carry states: index 0 = carry -1, index 1 = carry 0
+    //
+    // In Julia Quantics.jl:
+    // - cval = [-1, 0], so Julia index 1 = carry -1, Julia index 2 = carry 0
+    // - M[1] *= onehot(links[1] => 2) selects cin = 2 (Julia) = 1 (0-indexed) = carry 0
+    // - bc_tensor = ITensor([1.0, bc], links[end]) contracts with cout
 
     for n in 0..r {
         if n == 0 {
-            // First tensor: select initial carry state (carry = -1, i.e., index 0 -> +1 in 2's complement)
-            // Actually in Quantics.jl: M[1] *= onehot(links[1] => 2)
-            // This means initial carry index = 2 (1-indexed) = 1 (0-indexed) = carry 0
-            // Wait, let me re-read the Julia code...
-            // cval = [-1, 0], so index 1 (Julia) = carry -1, index 2 (Julia) = carry 0
-            // onehot(links[1] => 2) means cin = 2 (Julia) = carry 0
-            // So we start with carry 0, and the flip logic adds -1 to get the negation
-
-            // First tensor: contract with [0, 1] on left link to select cin=1 (carry=0)
+            // First tensor: select initial carry state cin=1 (carry=0)
             let mut t = tensor3_zeros(1, 4, 2);
             for cout in 0..2 {
-                for s_out in 0..2 {
-                    for s_in in 0..2 {
-                        let val = single_tensor[1][cout][s_out][s_in]; // cin=1 (carry=0)
-                        let s = s_out * 2 + s_in;
+                for a in 0..2 {
+                    for b in 0..2 {
+                        let val = single_tensor[1][cout][a][b]; // cin=1 (carry=0)
+                        // In TT format: s = s_out * 2 + s_in
+                        // Here a -> s' (output), b -> s (input)
+                        let s = a * 2 + b;
                         t.set3(0, s, cout, val);
                     }
                 }
@@ -89,16 +88,20 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
             };
 
             // Contract with bc_tensor = [1.0, bc] on right link
+            // In Julia: bc_tensor = ITensor([1.0, bc], links[end])
+            // Julia index 1 = cout 0 (carry -1) gets weight 1.0
+            // Julia index 2 = cout 1 (carry 0) gets weight bc
             let mut t = tensor3_zeros(2, 4, 1);
             for cin in 0..2 {
-                for s_out in 0..2 {
-                    for s_in in 0..2 {
+                for a in 0..2 {
+                    for b in 0..2 {
                         let mut sum = Complex64::zero();
                         for cout in 0..2 {
+                            // cout=0 (carry=-1) gets weight 1.0, cout=1 (carry=0) gets weight bc
                             let bc_weight = if cout == 0 { Complex64::one() } else { bc_val };
-                            sum += single_tensor[cin][cout][s_out][s_in] * bc_weight;
+                            sum += single_tensor[cin][cout][a][b] * bc_weight;
                         }
-                        let s = s_out * 2 + s_in;
+                        let s = a * 2 + b;
                         t.set3(cin, s, 0, sum);
                     }
                 }
@@ -109,10 +112,10 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
             let mut t = tensor3_zeros(2, 4, 2);
             for cin in 0..2 {
                 for cout in 0..2 {
-                    for s_out in 0..2 {
-                        for s_in in 0..2 {
-                            let val = single_tensor[cin][cout][s_out][s_in];
-                            let s = s_out * 2 + s_in;
+                    for a in 0..2 {
+                        for b in 0..2 {
+                            let val = single_tensor[cin][cout][a][b];
+                            let s = a * 2 + b;
                             t.set3(cin, s, cout, val);
                         }
                     }
@@ -127,25 +130,37 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
 
 /// Create the single-site tensor for flip operation.
 ///
-/// Returns a 4D tensor [cin][cout][s_out][s_in] where:
+/// Returns a 4D tensor [cin][cout][a][b] where:
 /// - cin: input carry state (0 = carry -1, 1 = carry 0)
 /// - cout: output carry state
-/// - s_out: output bit (0 or 1)
-/// - s_in: input bit (0 or 1)
+/// - a: corresponds to s' (output site index in ITensor convention)
+/// - b: corresponds to s (input site index in ITensor convention)
 ///
-/// The flip computes: out = -(a - 1) + cval[cin]
-/// where cval = [-1, 0] for cin = [0, 1]
+/// The flip computes: out = -a + cval[cin]
+/// where a is the input bit value and cval = [-1, 0] for cin = [0, 1]
+///
+/// Note: In the Julia Quantics.jl code:
+/// - The loop variable `a` represents the input bit (0 or 1)
+/// - The computed `b` represents the output bit
+/// - The tensor is stored as tensor[cin, cout, a, b]
+/// - The ITensor is created as ITensor(t, (link_l, link_r, s', s))
+/// - This means a -> s' (output index) and b -> s (input index)
+///
+/// In TensorTrain MPO format, the combined site index is s = s' * 2 + s
+/// where s' is the output bit and s is the input bit.
 fn single_tensor_flip() -> [[[[Complex64; 2]; 2]; 2]; 2] {
     let cval = [-1i32, 0i32];
     let mut tensor = [[[[Complex64::zero(); 2]; 2]; 2]; 2];
 
     for icin in 0..2 {
         for a in 0..2 {
-            // a is the input bit (s_in)
-            let out = -(a as i32 - 1) + cval[icin];
+            // a is the input bit value (0 or 1)
+            // Formula: out = -a + cval[icin]
+            let out = -(a as i32) + cval[icin];
             let icout = if out < 0 { 0 } else { 1 };
-            let b = out.rem_euclid(2) as usize; // b is the output bit (s_out)
-            tensor[icin][icout][b][a] = Complex64::one();
+            let b = out.rem_euclid(2) as usize; // b is the output bit (0 or 1)
+            // Store as tensor[cin][cout][a][b] matching Julia exactly
+            tensor[icin][icout][a][b] = Complex64::one();
         }
     }
 
@@ -161,18 +176,22 @@ mod tests {
     fn test_single_tensor_flip() {
         let t = single_tensor_flip();
 
-        // Verify non-zero entries
-        // When cin=1 (carry=0), a=0: out = -(0-1) + 0 = 1, cout=1, b=1
-        assert_eq!(t[1][1][1][0], Complex64::one());
+        // Verify non-zero entries using formula: out = -a + cval[cin]
+        // cval = [-1, 0], so cval[0] = -1, cval[1] = 0
+        //
+        // tensor[cin][cout][a][b] = 1 when input a produces output b
 
-        // When cin=1 (carry=0), a=1: out = -(1-1) + 0 = 0, cout=1, b=0
-        assert_eq!(t[1][1][0][1], Complex64::one());
+        // When cin=1 (carry=0), a=0: out = -0 + 0 = 0, cout=1 (out >= 0), b=0 mod 2 = 0
+        assert_eq!(t[1][1][0][0], Complex64::one());
 
-        // When cin=0 (carry=-1), a=0: out = -(0-1) + (-1) = 0, cout=1, b=0
-        assert_eq!(t[0][1][0][0], Complex64::one());
+        // When cin=1 (carry=0), a=1: out = -1 + 0 = -1, cout=0 (out < 0), b=(-1) mod 2 = 1
+        assert_eq!(t[1][0][1][1], Complex64::one());
 
-        // When cin=0 (carry=-1), a=1: out = -(1-1) + (-1) = -1, cout=0, b=1
-        assert_eq!(t[0][0][1][1], Complex64::one());
+        // When cin=0 (carry=-1), a=0: out = -0 + (-1) = -1, cout=0 (out < 0), b=(-1) mod 2 = 1
+        assert_eq!(t[0][0][0][1], Complex64::one());
+
+        // When cin=0 (carry=-1), a=1: out = -1 + (-1) = -2, cout=0 (out < 0), b=(-2) mod 2 = 0
+        assert_eq!(t[0][0][1][0], Complex64::one());
     }
 
     #[test]
