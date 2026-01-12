@@ -9,10 +9,12 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use mdarray::DTensor;
 use num_complex::Complex64;
 use num_integer::Integer;
 use num_rational::Rational64;
 use num_traits::One;
+use sprs::CsMat;
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
 use crate::common::{
@@ -162,6 +164,123 @@ pub fn affine_operator(
     tensortrain_to_linear_operator_asymmetric(&mpo, &input_dims, &output_dims)
 }
 
+/// Compute the full affine transformation matrix directly (for verification).
+///
+/// This computes the transformation matrix by directly evaluating y = A*x + b
+/// for all possible input values. The result is a sparse boolean matrix.
+///
+/// # Arguments
+/// * `r` - Number of bits per variable
+/// * `params` - Affine transformation parameters
+/// * `bc` - Boundary conditions for each output variable
+///
+/// # Returns
+/// Sparse matrix of size 2^(R*M) × 2^(R*N) where entry (y_flat, x_flat) = 1
+/// if the transformation maps x to y.
+///
+/// # Note
+/// This is only practical for small R due to exponential size.
+/// Use for testing/verification only.
+pub fn affine_transform_matrix(
+    r: usize,
+    params: &AffineParams,
+    bc: &[BoundaryCondition],
+) -> Result<CsMat<f64>> {
+    if r == 0 {
+        return Err(anyhow::anyhow!("Number of bits must be positive"));
+    }
+    if bc.len() != params.m {
+        return Err(anyhow::anyhow!(
+            "Boundary conditions length {} doesn't match output dimensions {}",
+            bc.len(),
+            params.m
+        ));
+    }
+
+    let (a_int, b_int, scale) = params.to_integer_scaled();
+    let m = params.m;
+    let n = params.n;
+
+    let bc_periodic: Vec<bool> = bc
+        .iter()
+        .map(|b| matches!(b, BoundaryCondition::Periodic))
+        .collect();
+
+    let input_size = 1usize << (r * n); // 2^(R*N)
+    let output_size = 1usize << (r * m); // 2^(R*M)
+    let modulus = 1i64 << r; // 2^R
+
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    let mut vals = Vec::new();
+
+    // Iterate over all x ∈ {0, ..., 2^R-1}^N
+    for x_flat in 0..input_size {
+        // Decode x_flat to N-dimensional x vector
+        // x_flat = x[0] + x[1]*2^R + x[2]*2^(2R) + ...
+        let x: Vec<i64> = (0..n)
+            .map(|var| ((x_flat >> (var * r)) & ((1 << r) - 1)) as i64)
+            .collect();
+
+        // Compute y = A*x + b (unscaled, then divide by scale)
+        let mut y_unscaled: Vec<i64> = vec![0; m];
+        for i in 0..m {
+            y_unscaled[i] = b_int[i];
+            for j in 0..n {
+                y_unscaled[i] += a_int[i * n + j] * x[j];
+            }
+        }
+
+        // Check if y is divisible by scale
+        if y_unscaled.iter().any(|&yi| yi % scale != 0) {
+            continue; // No valid output for this input
+        }
+
+        let y: Vec<i64> = y_unscaled.iter().map(|&yi| yi / scale).collect();
+
+        // Apply boundary conditions
+        let y_bounded: Vec<i64> = y
+            .iter()
+            .enumerate()
+            .map(|(i, &yi)| {
+                if bc_periodic[i] {
+                    // Periodic: wrap around
+                    ((yi % modulus) + modulus) % modulus
+                } else {
+                    // Open: must be in range [0, 2^R)
+                    yi
+                }
+            })
+            .collect();
+
+        // Check if output is valid (in range for open boundaries)
+        let valid = y_bounded
+            .iter()
+            .enumerate()
+            .all(|(i, &yi)| bc_periodic[i] || (yi >= 0 && yi < modulus));
+
+        if !valid {
+            continue;
+        }
+
+        // Encode y to flat index
+        // y_flat = y[0] + y[1]*2^R + y[2]*2^(2R) + ...
+        let y_flat: usize = y_bounded
+            .iter()
+            .enumerate()
+            .map(|(var, &yi)| (yi as usize) << (var * r))
+            .sum();
+
+        rows.push(y_flat);
+        cols.push(x_flat);
+        vals.push(1.0);
+    }
+
+    // Build sparse matrix in CSR format
+    let triplet = sprs::TriMat::from_triplets((output_size, input_size), rows, cols, vals);
+    Ok(triplet.to_csr())
+}
+
 /// Create the affine transformation MPO as a TensorTrain.
 fn affine_transform_mpo(
     r: usize,
@@ -185,11 +304,225 @@ fn affine_transform_mpo(
         .map_err(|e| anyhow::anyhow!("Failed to create affine transform MPO: {}", e))
 }
 
+/// Create unfused affine transformation tensors.
+///
+/// Returns a vector of R tensors, where each tensor has shape:
+/// `[left_bond, 2, 2, ..., 2, right_bond]` with M+N physical indices of dimension 2.
+///
+/// The physical index order matches Quantics.jl:
+/// `(y[1], y[2], ..., y[M], x[1], x[2], ..., x[N])`
+/// where y are output variables and x are input variables.
+///
+/// # Arguments
+/// * `r` - Number of bits per variable (number of sites)
+/// * `params` - Affine transformation parameters
+/// * `bc` - Boundary conditions for each output variable
+///
+/// # Returns
+/// Vector of R tensors with unfused physical indices.
+///
+/// # Example
+/// ```ignore
+/// use tensor4all_quantics_transform::{affine_transform_tensors_unfused, AffineParams, BoundaryCondition};
+///
+/// let params = AffineParams::from_integers(vec![1, 0, 1, 1], vec![0, 0], 2, 2).unwrap();
+/// let bc = vec![BoundaryCondition::Periodic; 2];
+/// let tensors = affine_transform_tensors_unfused(4, &params, &bc).unwrap();
+/// // Each tensor has shape [left, 2, 2, 2, 2, right] for M=2, N=2
+/// ```
+pub fn affine_transform_tensors_unfused(
+    r: usize,
+    params: &AffineParams,
+    bc: &[BoundaryCondition],
+) -> Result<Vec<DTensor<Complex64, 3>>> {
+    if r == 0 {
+        return Err(anyhow::anyhow!("Number of bits must be positive"));
+    }
+    if bc.len() != params.m {
+        return Err(anyhow::anyhow!(
+            "Boundary conditions length {} doesn't match output dimensions {}",
+            bc.len(),
+            params.m
+        ));
+    }
+
+    let (a_int, b_int, scale) = params.to_integer_scaled();
+    let m = params.m;
+    let n = params.n;
+
+    // Convert boundary conditions to weights
+    let bc_periodic: Vec<bool> = bc
+        .iter()
+        .map(|b| matches!(b, BoundaryCondition::Periodic))
+        .collect();
+
+    // Compute fused tensors first
+    let fused_tensors = affine_transform_tensors(r, &a_int, &b_int, scale, m, n, &bc_periodic)?;
+
+    // Convert fused tensors to unfused format
+    // Fused: [left, fused_site, right] where fused_site = 2^(M+N)
+    // Unfused: [left, 2, 2, ..., 2, right] with M+N dimensions of size 2
+    //
+    // Fused index encoding: site_idx = y_bits | (x_bits << M)
+    // where y_bits = y[0] + 2*y[1] + ... + 2^(M-1)*y[M-1]
+    // and   x_bits = x[0] + 2*x[1] + ... + 2^(N-1)*x[N-1]
+    //
+    // Quantics.jl order: (y[0], y[1], ..., y[M-1], x[0], x[1], ..., x[N-1])
+    // For DTensor with row-major (C order), rightmost index varies fastest.
+    // We want the order to match Quantics.jl, so:
+    // unfused[left, y0, y1, ..., yM-1, x0, x1, ..., xN-1, right]
+
+    let mut unfused_tensors = Vec::with_capacity(r);
+    let site_dim = 1 << (m + n);
+
+    for tensor in fused_tensors.iter() {
+        let left_dim = tensor.left_dim();
+        let right_dim = tensor.right_dim();
+
+        // Create unfused tensor
+        // Shape: [left_dim, 2^(M+N), right_dim] but we keep it as 3D for now
+        // The reshape to (M+N+2)-dimensional tensor will be done by the caller if needed
+        // For now, we provide a 3D tensor where the middle dimension is the fused site
+        // and document how to unfuse it.
+        //
+        // Actually, let's return it properly unfused using a flat storage with
+        // the correct index order for reshape.
+        //
+        // Total size: left_dim * 2^(M+N) * right_dim
+        // Shape for unfused: [left_dim, 2, 2, ..., 2, right_dim]
+        //
+        // Index mapping from fused to unfused:
+        // fused site_idx -> (y0, y1, ..., yM-1, x0, x1, ..., xN-1)
+        // site_idx = y0 + 2*y1 + ... + 2^(M-1)*yM-1 + 2^M * (x0 + 2*x1 + ...)
+
+        // For Quantics.jl compatibility, we need to reorder the data.
+        // Julia uses column-major (Fortran order), Rust/C uses row-major.
+        // In Julia: tensor[link_in, link_out, y1, y2, ..., yM, x1, x2, ..., xN]
+        // ITensor reshapes this appropriately.
+        //
+        // For Rust with row-major:
+        // We'll create a tensor where the physical indices are in the order
+        // (y0, y1, ..., yM-1, x0, x1, ..., xN-1) matching Quantics.jl
+
+        let mut unfused_data = vec![Complex64::new(0.0, 0.0); left_dim * site_dim * right_dim];
+
+        for l in 0..left_dim {
+            for fused_idx in 0..site_dim {
+                for rr in 0..right_dim {
+                    let val = tensor.get3(l, fused_idx, rr);
+                    if val.norm() > 0.0 {
+                        // The fused index encodes: site_idx = y_bits | (x_bits << M)
+                        // This matches Quantics.jl's ordering (y variables first, then x)
+                        // so we can use fused_idx directly.
+                        //
+                        // The caller can reshape [left, site_dim, right] to
+                        // [left, 2, 2, ..., 2, right] with M+N dimensions of size 2,
+                        // where indices are in order (y[0], y[1], ..., y[M-1], x[0], ..., x[N-1])
+                        let flat_idx = l * site_dim * right_dim + fused_idx * right_dim + rr;
+                        unfused_data[flat_idx] = *val;
+                    }
+                }
+            }
+        }
+
+        // Create DTensor with shape [left_dim, site_dim, right_dim]
+        // The caller can reshape this to [left_dim, 2, 2, ..., 2, right_dim]
+        // with the understanding that the indices are ordered as (y0, y1, ..., x0, x1, ...)
+        let unfused_tensor =
+            DTensor::<Complex64, 3>::from_fn([left_dim, site_dim, right_dim], |idx| {
+                let l = idx[0];
+                let s = idx[1];
+                let r = idx[2];
+                unfused_data[l * site_dim * right_dim + s * right_dim + r]
+            });
+
+        unfused_tensors.push(unfused_tensor);
+    }
+
+    Ok(unfused_tensors)
+}
+
+/// Information about the unfused tensor structure.
+///
+/// This helper provides metadata for reshaping the unfused tensors.
+#[derive(Clone, Debug)]
+pub struct UnfusedTensorInfo {
+    /// Number of output variables (M)
+    pub m: usize,
+    /// Number of input variables (N)
+    pub n: usize,
+    /// Total physical dimensions per site (M + N)
+    pub num_physical_dims: usize,
+    /// Dimension of each physical index (always 2)
+    pub physical_dim: usize,
+}
+
+impl UnfusedTensorInfo {
+    /// Create info for the given affine parameters.
+    pub fn new(params: &AffineParams) -> Self {
+        Self {
+            m: params.m,
+            n: params.n,
+            num_physical_dims: params.m + params.n,
+            physical_dim: 2,
+        }
+    }
+
+    /// Get the shape for a fully unfused tensor at a given site.
+    ///
+    /// Returns `[left_bond, 2, 2, ..., 2, right_bond]` where there are M+N 2s.
+    pub fn unfused_shape(&self, left_bond: usize, right_bond: usize) -> Vec<usize> {
+        let mut shape = Vec::with_capacity(2 + self.num_physical_dims);
+        shape.push(left_bond);
+        for _ in 0..self.num_physical_dims {
+            shape.push(2);
+        }
+        shape.push(right_bond);
+        shape
+    }
+
+    /// Decode a fused site index to individual variable bits.
+    ///
+    /// Returns `(y_bits, x_bits)` where:
+    /// - `y_bits[i]` is the bit for output variable i
+    /// - `x_bits[j]` is the bit for input variable j
+    pub fn decode_fused_index(&self, fused_idx: usize) -> (Vec<usize>, Vec<usize>) {
+        let y_combined = fused_idx & ((1 << self.m) - 1);
+        let x_combined = fused_idx >> self.m;
+
+        let y_bits: Vec<usize> = (0..self.m).map(|i| (y_combined >> i) & 1).collect();
+        let x_bits: Vec<usize> = (0..self.n).map(|j| (x_combined >> j) & 1).collect();
+
+        (y_bits, x_bits)
+    }
+
+    /// Encode individual variable bits to a fused site index.
+    ///
+    /// # Arguments
+    /// * `y_bits` - Bits for output variables (length M)
+    /// * `x_bits` - Bits for input variables (length N)
+    pub fn encode_fused_index(&self, y_bits: &[usize], x_bits: &[usize]) -> usize {
+        let y_combined: usize = y_bits.iter().enumerate().map(|(i, &b)| b << i).sum();
+        let x_combined: usize = x_bits.iter().enumerate().map(|(j, &b)| b << j).sum();
+        y_combined | (x_combined << self.m)
+    }
+}
+
 /// Compute the core tensors for the affine transformation.
 ///
 /// This implements the algorithm from Quantics.jl that handles:
 /// - Carry propagation for multi-bit arithmetic
 /// - Scaling factor s from rational to integer conversion
+///
+/// Uses big-endian convention: site 0 = MSB, site R-1 = LSB.
+///
+/// Carry propagation direction (matching shift.rs):
+/// - Arithmetic carry flows LSB → MSB (physical fact)
+/// - In big-endian: site R-1 → site 0 (right → left)
+/// - Tensor structure: t[left, site, right] where left=carry_out (going left), right=carry_in (from right)
+/// - Site 0 (MSB): BC applied on left, receives carry from right → shape (1, site_dim, num_carries)
+/// - Site R-1 (LSB): initial carry=0, sends carry to left → shape (num_carries, site_dim, 1)
+/// - Middle sites: shape (num_carries, site_dim, num_carries)
 fn affine_transform_tensors(
     r: usize,
     a_int: &[i64],
@@ -201,91 +534,135 @@ fn affine_transform_tensors(
 ) -> Result<Vec<tensor4all_simplett::Tensor3<Complex64>>> {
     let site_dim = 1 << (m + n); // 2^(M+N) for fused representation
 
-    // Initial carry is zero vector
+    // Process from LSB (site R-1) to MSB (site 0)
+    // This allows carry to propagate correctly: LSB → MSB
+    //
+    // Initial carry at LSB is zero vector
     let mut carries: Vec<Vec<i64>> = vec![vec![0i64; m]];
 
-    // Working copy of b for bit extraction
-    let mut b_work = b_int.to_vec();
+    // Store core data for each site (will be in reverse order: R-1, R-2, ..., 0)
+    let mut core_data_list: Vec<AffineCoreData> = Vec::with_capacity(r);
 
-    let mut tensors_data: Vec<Vec<Vec<Vec<bool>>>> = Vec::with_capacity(r);
+    for site in (0..r).rev() {
+        // site goes R-1, R-2, ..., 0
+        let bit_pos = r - 1 - site; // bit position: site R-1 → bit 0 (LSB), site 0 → bit R-1 (MSB)
 
-    // Process from LSB (r-1) to MSB (0)
-    for bit_pos in (0..r).rev() {
-        // Extract current bit from b
-        let b_curr: Vec<i64> = b_work
+        // Extract bit at position bit_pos from b
+        let b_curr: Vec<i64> = b_int
             .iter()
             .map(|&b| {
                 let sign = if b >= 0 { 1 } else { -1 };
-                sign * (b.abs() & 1)
+                sign * ((b.abs() >> bit_pos) & 1)
             })
             .collect();
 
-        // Compute core tensor for this bit position
-        let (new_carries, data) =
-            affine_transform_core(a_int, &b_curr, scale, m, n, &carries, bit_pos == r - 1)?;
+        // Compute core tensor for this site
+        let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries)?;
 
-        tensors_data.push(data);
-        carries = new_carries;
-
-        // Shift b right
-        for b in &mut b_work {
-            *b >>= 1;
-        }
+        carries = core_data.carries_out.clone();
+        core_data_list.push(core_data);
     }
 
-    // Reverse to get MSB first order
-    tensors_data.reverse();
+    // core_data_list is now in order: [site R-1, site R-2, ..., site 0]
 
-    // Apply boundary conditions at the first tensor (MSB)
-    // Filter carries based on boundary condition weights
-    if !tensors_data.is_empty() {
-        let first_data = &mut tensors_data[0];
-        let mut weighted_first: Vec<Vec<Vec<bool>>> = vec![vec![vec![false; site_dim]; 1]; 1];
-
-        for (carry_idx, carry) in carries.iter().enumerate() {
-            // Check if this carry satisfies boundary conditions
-            let weight = if bc_periodic.iter().all(|&p| p) {
-                // All periodic: any carry is fine
-                true
-            } else {
-                // Open boundaries: carry must be zero
-                carry.iter().all(|&c| c == 0)
-            };
-
-            if weight && carry_idx < first_data.len() {
-                for (site_idx, &val) in first_data[carry_idx][0].iter().enumerate() {
-                    if val {
-                        weighted_first[0][0][site_idx] = true;
-                    }
-                }
-            }
-        }
-
-        tensors_data[0] = weighted_first;
-    }
-
-    // Convert to Tensor3 format
+    // Build tensors in the same order, then reverse to get [site 0, site 1, ..., site R-1]
     let mut tensors = Vec::with_capacity(r);
 
-    for (pos, data) in tensors_data.iter().enumerate() {
-        let left_dim = if pos == 0 { 1 } else { data.len() };
-        let right_dim = if pos == r - 1 {
-            1
-        } else {
-            tensors_data.get(pos + 1).map_or(1, |d| d.len())
-        };
+    for (idx, core_data) in core_data_list.iter().enumerate() {
+        // idx=0 corresponds to site R-1 (LSB), idx=R-1 corresponds to site 0 (MSB)
+        let actual_site = r - 1 - idx;
+        let num_carry_out = core_data.carries_out.len();
+        let (_, num_carry_in, _) = *core_data.tensor.shape();
+
+        // Tensor shape follows shift.rs pattern:
+        // t[left, site, right] where left=carry_out (going left), right=carry_in (from right)
+        //
+        // - Site 0 (MSB): left_dim=1 (BC applied), right_dim=num_carry (receives from right)
+        // - Site R-1 (LSB): left_dim=num_carry (sends to left), right_dim=1 (initial carry=0)
+        // - Middle: left_dim=num_carry, right_dim=num_carry
+        let is_msb = actual_site == 0;
+        let is_lsb = actual_site == r - 1;
+
+        let left_dim = if is_msb { 1 } else { num_carry_out };
+        let right_dim = if is_lsb { 1 } else { num_carry_in };
 
         let mut t: tensor4all_simplett::Tensor3<Complex64> =
             tensor3_zeros(left_dim, site_dim, right_dim);
 
-        for (l, left_data) in data.iter().enumerate() {
-            for (ri, right_data) in left_data.iter().enumerate() {
-                for (s, &val) in right_data.iter().enumerate() {
-                    if val {
-                        let l_idx = if pos == 0 { 0 } else { l };
-                        let r_idx = if pos == r - 1 { 0 } else { ri };
-                        if l_idx < left_dim && r_idx < right_dim {
-                            t.set3(l_idx, s, r_idx, Complex64::one());
+        if is_lsb && is_msb {
+            // R==1: single site case where LSB and MSB are the same
+            // Shape (1, site_dim, 1)
+            // Initial carry_in=0 (only index 0), apply BC on carry_out
+            for cout_idx in 0..num_carry_out {
+                let carry = &core_data.carries_out[cout_idx];
+                let bc_weight = if bc_periodic.iter().all(|&p| p) {
+                    // All periodic: any final carry is acceptable
+                    Complex64::one()
+                } else {
+                    // Open boundaries: final carry must be zero for valid output
+                    if carry.iter().all(|&c| c == 0) {
+                        Complex64::one()
+                    } else {
+                        Complex64::new(0.0, 0.0)
+                    }
+                };
+
+                for site_idx in 0..site_dim {
+                    // Only carry_in_idx=0 (initial carry is zero vector)
+                    if core_data.tensor[[cout_idx, 0, site_idx]] {
+                        let old = t.get3(0, site_idx, 0);
+                        t.set3(0, site_idx, 0, *old + bc_weight);
+                    }
+                }
+            }
+        } else if is_lsb {
+            // LSB (site R-1): initial carry_in=0, send carry_out to left
+            // Shape (num_carry_out, site_dim, 1)
+            // core_data.tensor[carry_out_idx, carry_in_idx, site_idx]
+            // Only carry_in_idx=0 matters (initial carry is the first entry: zero vector)
+            for cout_idx in 0..num_carry_out {
+                for site_idx in 0..site_dim {
+                    if core_data.tensor[[cout_idx, 0, site_idx]] {
+                        t.set3(cout_idx, site_idx, 0, Complex64::one());
+                    }
+                }
+            }
+        } else if is_msb {
+            // MSB (site 0): apply BC on carry_out, receive carry from right
+            // Shape (1, site_dim, num_carry_in)
+            // Apply BC based on final outgoing carry
+            for cout_idx in 0..num_carry_out {
+                let carry = &core_data.carries_out[cout_idx];
+                let bc_weight = if bc_periodic.iter().all(|&p| p) {
+                    // All periodic: any final carry is acceptable
+                    Complex64::one()
+                } else {
+                    // Open boundaries: final carry must be zero for valid output
+                    if carry.iter().all(|&c| c == 0) {
+                        Complex64::one()
+                    } else {
+                        Complex64::new(0.0, 0.0)
+                    }
+                };
+
+                for cin_idx in 0..num_carry_in {
+                    for site_idx in 0..site_dim {
+                        if core_data.tensor[[cout_idx, cin_idx, site_idx]] {
+                            // Sum over carry_out (contract with BC weight)
+                            let old = t.get3(0, site_idx, cin_idx);
+                            t.set3(0, site_idx, cin_idx, *old + bc_weight);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Middle tensors: receive carry from right, send carry to left
+            // Shape (num_carry_out, site_dim, num_carry_in)
+            for cout_idx in 0..num_carry_out {
+                for cin_idx in 0..num_carry_in {
+                    for site_idx in 0..site_dim {
+                        if core_data.tensor[[cout_idx, cin_idx, site_idx]] {
+                            t.set3(cout_idx, site_idx, cin_idx, Complex64::one());
                         }
                     }
                 }
@@ -295,16 +672,30 @@ fn affine_transform_tensors(
         tensors.push(t);
     }
 
+    // tensors is in order [site R-1, ..., site 0], reverse to get [site 0, ..., site R-1]
+    tensors.reverse();
+
     Ok(tensors)
+}
+
+/// Core tensor data for affine transformation.
+///
+/// Shape: (num_carry_out, num_carry_in, site_dim)
+/// where site_dim = 2^(M+N)
+struct AffineCoreData {
+    /// Possible outgoing carry vectors
+    carries_out: Vec<Vec<i64>>,
+    /// Tensor data: tensor[carry_out_idx, carry_in_idx, site_idx]
+    tensor: DTensor<bool, 3>,
 }
 
 /// Compute a single core tensor for the affine transformation.
 ///
 /// The core tensor encodes: 2 * carry_out = A * x + b_curr - scale * y + carry_in
 ///
-/// Returns (new_carries, data) where:
-/// - new_carries: list of possible outgoing carry vectors
-/// - data[carry_out_idx][carry_in_idx][site_idx]: bool tensor
+/// Returns AffineCoreData containing:
+/// - carries_out: list of possible outgoing carry vectors
+/// - tensor: shape (num_carry_out, num_carry_in, site_dim)
 fn affine_transform_core(
     a_int: &[i64],
     b_curr: &[i64],
@@ -312,10 +703,10 @@ fn affine_transform_core(
     m: usize,
     n: usize,
     carries_in: &[Vec<i64>],
-    _is_lsb: bool,
-) -> Result<(Vec<Vec<i64>>, Vec<Vec<Vec<bool>>>)> {
-    let mut carry_out_map: HashMap<Vec<i64>, Vec<Vec<bool>>> = HashMap::new();
+) -> Result<AffineCoreData> {
+    let mut carry_out_map: HashMap<Vec<i64>, DTensor<bool, 2>> = HashMap::new();
     let site_dim = 1 << (m + n);
+    let num_carry_in = carries_in.len();
 
     // Iterate over all input carries
     for (c_idx, carry_in) in carries_in.iter().enumerate() {
@@ -347,10 +738,10 @@ fn affine_transform_core(
                 // Site index: y bits in lower positions, x bits in upper positions
                 let site_idx = y_bits | (x_bits << m);
 
-                let entry = carry_out_map.entry(carry_out).or_insert_with(|| {
-                    vec![vec![false; site_dim]; carries_in.len()]
-                });
-                entry[c_idx][site_idx] = true;
+                let entry = carry_out_map
+                    .entry(carry_out)
+                    .or_insert_with(|| DTensor::<bool, 2>::from_elem([num_carry_in, site_dim], false));
+                entry[[c_idx, site_idx]] = true;
             } else {
                 // Scale is even: z must be even for valid y
                 if z.iter().any(|&zi| zi % 2 != 0) {
@@ -370,25 +761,36 @@ fn affine_transform_core(
 
                     let site_idx = y_bits | (x_bits << m);
 
-                    let entry = carry_out_map.entry(carry_out).or_insert_with(|| {
-                        vec![vec![false; site_dim]; carries_in.len()]
-                    });
-                    entry[c_idx][site_idx] = true;
+                    let entry = carry_out_map
+                        .entry(carry_out)
+                        .or_insert_with(|| DTensor::<bool, 2>::from_elem([num_carry_in, site_dim], false));
+                    entry[[c_idx, site_idx]] = true;
                 }
             }
         }
     }
 
-    // Convert to vectors
+    // Convert to sorted vectors for deterministic ordering
     let mut carries_out: Vec<Vec<i64>> = carry_out_map.keys().cloned().collect();
-    carries_out.sort(); // For deterministic ordering
+    carries_out.sort();
 
-    let mut data: Vec<Vec<Vec<bool>>> = Vec::with_capacity(carries_out.len());
-    for carry in &carries_out {
-        data.push(carry_out_map[carry].clone());
+    let num_carry_out = carries_out.len();
+
+    // Build 3D tensor: (num_carry_out, num_carry_in, site_dim)
+    let mut tensor = DTensor::<bool, 3>::from_elem([num_carry_out, num_carry_in, site_dim], false);
+    for (cout_idx, carry) in carries_out.iter().enumerate() {
+        let data_2d = &carry_out_map[carry];
+        for cin_idx in 0..num_carry_in {
+            for site_idx in 0..site_dim {
+                tensor[[cout_idx, cin_idx, site_idx]] = data_2d[[cin_idx, site_idx]];
+            }
+        }
     }
 
-    Ok((carries_out, data))
+    Ok(AffineCoreData {
+        carries_out,
+        tensor,
+    })
 }
 
 #[cfg(test)]
@@ -599,5 +1001,721 @@ mod tests {
 
         let result = affine_operator(16, &params, &bc);
         assert!(result.is_ok());
+    }
+
+    // ========== Matrix verification tests ==========
+
+    #[test]
+    fn test_affine_matrix_identity() {
+        // Identity transformation: y = x
+        let r = 3;
+        let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+        let bc = vec![BoundaryCondition::Periodic];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+
+        // Should be identity matrix of size 2^R × 2^R
+        let size = 1 << r;
+        assert_eq!(matrix.rows(), size);
+        assert_eq!(matrix.cols(), size);
+        assert_eq!(matrix.nnz(), size); // Identity has exactly N non-zeros
+
+        // Check that it's identity
+        for i in 0..size {
+            assert_eq!(*matrix.get(i, i).unwrap_or(&0.0), 1.0);
+        }
+    }
+
+    #[test]
+    fn test_affine_matrix_shift() {
+        // Shift transformation: y = x + 3 (mod 2^R)
+        let r = 3;
+        let params = AffineParams::from_integers(vec![1], vec![3], 1, 1).unwrap();
+        let bc = vec![BoundaryCondition::Periodic];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+
+        let size = 1 << r; // 8
+        assert_eq!(matrix.nnz(), size); // Permutation has exactly N non-zeros
+
+        // Check specific mappings: y = (x + 3) mod 8
+        // x=0 -> y=3, x=1 -> y=4, ..., x=5 -> y=0, x=6 -> y=1, x=7 -> y=2
+        for x in 0..size {
+            let y = (x + 3) % size;
+            assert_eq!(*matrix.get(y, x).unwrap_or(&0.0), 1.0);
+        }
+    }
+
+    #[test]
+    fn test_affine_matrix_scale_by_two() {
+        // Scale: y = 2*x (mod 2^R)
+        let r = 3;
+        let params = AffineParams::from_integers(vec![2], vec![0], 1, 1).unwrap();
+        let bc = vec![BoundaryCondition::Periodic];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+
+        let size = 1 << r; // 8
+        assert_eq!(matrix.nnz(), size);
+
+        // Check: y = 2*x mod 8
+        for x in 0..size {
+            let y = (2 * x) % size;
+            assert_eq!(*matrix.get(y, x).unwrap_or(&0.0), 1.0);
+        }
+    }
+
+    #[test]
+    fn test_affine_matrix_sum_2d() {
+        // y = x1 + x2 (M=1, N=2)
+        let r = 2;
+        let params = AffineParams::from_integers(vec![1, 1], vec![0], 1, 2).unwrap();
+        let bc = vec![BoundaryCondition::Periodic];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+
+        let input_size = 1 << (r * 2); // 2^(2*2) = 16
+        let output_size = 1 << r; // 2^2 = 4
+
+        assert_eq!(matrix.rows(), output_size);
+        assert_eq!(matrix.cols(), input_size);
+
+        // Check specific cases
+        // x_flat = x1 + x2 * 2^R
+        // x1=1, x2=2: x_flat = 1 + 2*4 = 9, y = (1+2) mod 4 = 3
+        assert_eq!(*matrix.get(3, 9).unwrap_or(&0.0), 1.0);
+        // x1=3, x2=3: x_flat = 3 + 3*4 = 15, y = (3+3) mod 4 = 2
+        assert_eq!(*matrix.get(2, 15).unwrap_or(&0.0), 1.0);
+    }
+
+    #[test]
+    fn test_affine_matrix_2d_identity() {
+        // 2D identity: y = [x1, x2] (M=2, N=2)
+        let r = 2;
+        let params = AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
+        let bc = vec![BoundaryCondition::Periodic; 2];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+
+        let size = 1 << (r * 2); // 2^(2*2) = 16
+        assert_eq!(matrix.rows(), size);
+        assert_eq!(matrix.cols(), size);
+        assert_eq!(matrix.nnz(), size); // Identity
+
+        // Check it's identity
+        for i in 0..size {
+            assert_eq!(*matrix.get(i, i).unwrap_or(&0.0), 1.0);
+        }
+    }
+
+    #[test]
+    fn test_affine_matrix_2d_swap() {
+        // Swap: y1 = x2, y2 = x1 (M=2, N=2)
+        let r = 2;
+        let params = AffineParams::from_integers(vec![0, 1, 1, 0], vec![0, 0], 2, 2).unwrap();
+        let bc = vec![BoundaryCondition::Periodic; 2];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+
+        let size = 1 << (r * 2); // 16
+        assert_eq!(matrix.nnz(), size); // Permutation
+
+        // x_flat = x1 + x2 * 2^R, y_flat = y1 + y2 * 2^R
+        // Swap: y1 = x2, y2 = x1, so y_flat = x2 + x1 * 2^R
+        let modulus = 1 << r;
+        for x1 in 0..modulus {
+            for x2 in 0..modulus {
+                let x_flat = x1 + x2 * modulus;
+                let y_flat = x2 + x1 * modulus; // swapped
+                assert_eq!(*matrix.get(y_flat, x_flat).unwrap_or(&0.0), 1.0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_affine_matrix_half_scale() {
+        // y = x/2 (only even inputs have valid output)
+        let r = 3;
+        let a = vec![Rational64::new(1, 2)];
+        let b = vec![Rational64::from_integer(0)];
+        let params = AffineParams::new(a, b, 1, 1).unwrap();
+        let bc = vec![BoundaryCondition::Periodic];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+
+        // Only even x values map: x=0->0, x=2->1, x=4->2, x=6->3
+        assert_eq!(matrix.nnz(), 4);
+
+        assert_eq!(*matrix.get(0, 0).unwrap_or(&0.0), 1.0);
+        assert_eq!(*matrix.get(1, 2).unwrap_or(&0.0), 1.0);
+        assert_eq!(*matrix.get(2, 4).unwrap_or(&0.0), 1.0);
+        assert_eq!(*matrix.get(3, 6).unwrap_or(&0.0), 1.0);
+    }
+
+    // ========== MPO vs Matrix comparison tests (from Quantics.jl) ==========
+
+    use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops};
+
+    /// Convert MPO (TensorTrain) to dense matrix for comparison.
+    ///
+    /// The MPO has R sites. Each site has physical dimension 2^(M+N).
+    /// The site index encodes: site_idx = y_bits | (x_bits << M)
+    /// where y_bits and x_bits are the bits of y and x variables at that site.
+    ///
+    /// Flat index convention (matching affine_transform_matrix):
+    /// - x_flat = x[0] + x[1]*2^R + x[2]*2^(2R) + ...
+    /// - y_flat = y[0] + y[1]*2^R + y[2]*2^(2R) + ...
+    ///
+    /// Big-endian convention: site 0 = MSB, site R-1 = LSB.
+    fn mpo_to_dense_matrix(
+        mpo: &TensorTrain<Complex64>,
+        m: usize,
+        n: usize,
+        r: usize,
+    ) -> Vec<Vec<Complex64>> {
+        let output_size = 1 << (m * r);
+        let input_size = 1 << (n * r);
+        let mut matrix = vec![vec![Complex64::new(0.0, 0.0); input_size]; output_size];
+
+        let tensors = mpo.site_tensors();
+
+        // For each input/output combination, compute the matrix element
+        for y_flat in 0..output_size {
+            for x_flat in 0..input_size {
+                // Contract the MPO for this (y_flat, x_flat) pair
+                // Start with a row vector of size 1 (left boundary)
+                let mut left_vec = vec![Complex64::one()];
+
+                for site in 0..r {
+                    // Big-endian: site 0 = MSB, so bit_pos = R-1-site
+                    let bit_pos = r - 1 - site;
+
+                    // Extract bits for this site from each variable
+                    // y_flat = y[0] + y[1]*2^R + ... where each y[i] is R bits
+                    // For variable i, extract bit at position bit_pos
+                    let mut y_bits = 0usize;
+                    for var in 0..m {
+                        // y[var] occupies bits [var*R, (var+1)*R) in y_flat
+                        let y_var = (y_flat >> (var * r)) & ((1 << r) - 1);
+                        let bit = (y_var >> bit_pos) & 1;
+                        y_bits |= bit << var;
+                    }
+
+                    let mut x_bits = 0usize;
+                    for var in 0..n {
+                        let x_var = (x_flat >> (var * r)) & ((1 << r) - 1);
+                        let bit = (x_var >> bit_pos) & 1;
+                        x_bits |= bit << var;
+                    }
+
+                    // Site index: y_bits in lower M bits, x_bits in upper N bits
+                    let site_idx = y_bits | (x_bits << m);
+
+                    let tensor = &tensors[site];
+                    let left_dim = tensor.left_dim();
+                    let right_dim = tensor.right_dim();
+
+                    // Contract: new_vec[r] = sum_l left_vec[l] * tensor[l, site_idx, r]
+                    let mut new_vec = vec![Complex64::new(0.0, 0.0); right_dim];
+                    for l in 0..left_dim.min(left_vec.len()) {
+                        for rr in 0..right_dim {
+                            new_vec[rr] += left_vec[l] * tensor.get3(l, site_idx, rr);
+                        }
+                    }
+                    left_vec = new_vec;
+                }
+
+                // After all sites, left_vec should have size 1 (right boundary)
+                matrix[y_flat][x_flat] = if left_vec.is_empty() {
+                    Complex64::new(0.0, 0.0)
+                } else {
+                    left_vec[0]
+                };
+            }
+        }
+        matrix
+    }
+
+    // MPO vs matrix comparison tests
+
+    #[test]
+    fn test_affine_mpo_vs_matrix_1d_identity() {
+        // Test 1D identity: y = x (M=1, N=1)
+        let r = 3;
+        let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+        let bc = vec![BoundaryCondition::Periodic];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
+        let mpo_matrix = mpo_to_dense_matrix(&mpo, 1, 1, r);
+
+        let size = 1 << r;
+        for y in 0..size {
+            for x in 0..size {
+                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
+                let mpo_val = mpo_matrix[y][x].re;
+                assert!(
+                    (sparse_val - mpo_val).abs() < 1e-10,
+                    "Mismatch at ({}, {}): sparse={}, mpo={}",
+                    y,
+                    x,
+                    sparse_val,
+                    mpo_val
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_affine_mpo_vs_matrix_1d_shift() {
+        // Test 1D shift: y = x + 3 (M=1, N=1)
+        let r = 3;
+        let params = AffineParams::from_integers(vec![1], vec![3], 1, 1).unwrap();
+        let bc = vec![BoundaryCondition::Periodic];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
+        let mpo_matrix = mpo_to_dense_matrix(&mpo, 1, 1, r);
+
+        let size = 1 << r;
+        for y in 0..size {
+            for x in 0..size {
+                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
+                let mpo_val = mpo_matrix[y][x].re;
+                assert!(
+                    (sparse_val - mpo_val).abs() < 1e-10,
+                    "Mismatch at ({}, {}): sparse={}, mpo={}",
+                    y,
+                    x,
+                    sparse_val,
+                    mpo_val
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_affine_mpo_vs_matrix_simple() {
+        // Compare MPO to matrix: A = [[1, 0], [1, 1]], b = [0, 0]
+        // From Quantics.jl compare_simple test
+        //
+        // A = [[1, 0], [1, 1]] means:
+        //   y1 = 1*x1 + 0*x2 = x1
+        //   y2 = 1*x1 + 1*x2 = x1 + x2
+        //
+        // Flat index convention: flat = var0 + var1 * 2^R
+        // For r=3: x_flat = x1 + 8*x2, y_flat = y1 + 8*y2
+        //
+        // Example: x1=1, x2=1 => y1=1, y2=2
+        //   x_flat = 1 + 8*1 = 9
+        //   y_flat = 1 + 8*2 = 17
+        //   So matrix[17,9] = 1
+        //
+        // But y_flat=1 means y1=1, y2=0 (since 1 = 1 + 8*0)
+        // For y1=1, y2=0: need x1=1, x2=-x1=-1 (invalid) or via modular arithmetic
+        // Actually y2 = x1+x2 = 0 mod 8 means x1+x2 = 0 or 8
+        // If x1=1, then x2=7 for x1+x2=8, so y1=1, y2=0 (mod 8)
+        // x_flat = 1 + 8*7 = 57, so matrix[1,57] = 1
+        let r = 3;
+        let a = vec![1i64, 0, 1, 1]; // [[1, 0], [1, 1]] row-major
+        let b = vec![0i64, 0];
+        let params = AffineParams::from_integers(a, b, 2, 2).unwrap();
+        let bc = vec![BoundaryCondition::Periodic; 2];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
+        let mpo_matrix = mpo_to_dense_matrix(&mpo, 2, 2, r);
+
+        // Compare
+        let size = 1 << (2 * r);
+        for y in 0..size {
+            for x in 0..size {
+                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
+                let mpo_val = mpo_matrix[y][x].re;
+                assert!(
+                    (sparse_val - mpo_val).abs() < 1e-10,
+                    "Mismatch at ({}, {}): sparse={}, mpo={}",
+                    y,
+                    x,
+                    sparse_val,
+                    mpo_val
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_affine_matrix_3x3_hard() {
+        // From Quantics.jl compare_hard test
+        // A = [1 0 1; 1 2 -1; 0 1 1], b = [11; 23; -15]
+        let r = 4;
+        let a = vec![1i64, 0, 1, 1, 2, -1, 0, 1, 1]; // 3×3 row-major
+        let b = vec![11i64, 23, -15];
+        let params = AffineParams::from_integers(a, b, 3, 3).unwrap();
+        let bc = vec![BoundaryCondition::Periodic; 3];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+
+        // Verify dimensions
+        let input_size = 1 << (3 * r); // 2^12 = 4096
+        let output_size = 1 << (3 * r); // 2^12 = 4096
+        assert_eq!(matrix.rows(), output_size);
+        assert_eq!(matrix.cols(), input_size);
+
+        // Verify non-zero count is reasonable (permutation-like)
+        assert!(matrix.nnz() > 0);
+        assert!(matrix.nnz() <= input_size);
+    }
+
+    #[test]
+    fn test_affine_matrix_rectangular() {
+        // From Quantics.jl compare_rect test
+        // A = [1 0 1; 1 2 0] (2×3), b = [11; -3]
+        let r = 4;
+        let a = vec![1i64, 0, 1, 1, 2, 0]; // 2×3 row-major
+        let b = vec![11i64, -3];
+        let params = AffineParams::from_integers(a, b, 2, 3).unwrap();
+        let bc = vec![BoundaryCondition::Periodic; 2];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+
+        // Verify dimensions
+        let input_size = 1 << (3 * r); // 2^12 = 4096
+        let output_size = 1 << (2 * r); // 2^8 = 256
+        assert_eq!(matrix.rows(), output_size);
+        assert_eq!(matrix.cols(), input_size);
+    }
+
+    #[test]
+    fn test_affine_matrix_denom_odd() {
+        // From Quantics.jl compare_denom_odd test
+        // A = [1/3], b = [0]
+        for r in [1, 3, 6] {
+            for bc in [BoundaryCondition::Periodic, BoundaryCondition::Open] {
+                let a = vec![Rational64::new(1, 3)];
+                let b = vec![Rational64::from_integer(0)];
+                let params = AffineParams::new(a, b, 1, 1).unwrap();
+                let bcs = vec![bc];
+
+                let matrix = affine_transform_matrix(r, &params, &bcs).unwrap();
+
+                // y = x/3 only valid for x divisible by 3
+                let size = 1 << r;
+                let expected_nnz = (size + 2) / 3; // Number of multiples of 3 in [0, 2^R)
+                assert_eq!(
+                    matrix.nnz(),
+                    expected_nnz,
+                    "R={}, bc={:?}: expected {} non-zeros, got {}",
+                    r,
+                    bc,
+                    expected_nnz,
+                    matrix.nnz()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_affine_matrix_light_cone() {
+        // From Quantics.jl compare_light_cone test
+        // Light cone transformation: A = 1/2 * [[1, 1], [1, -1]], b = [2, 3]
+        for r in [3, 4] {
+            for bc in [BoundaryCondition::Periodic, BoundaryCondition::Open] {
+                let a = vec![
+                    Rational64::new(1, 2),
+                    Rational64::new(1, 2),
+                    Rational64::new(1, 2),
+                    Rational64::new(-1, 2),
+                ];
+                let b = vec![
+                    Rational64::from_integer(2),
+                    Rational64::from_integer(3),
+                ];
+                let params = AffineParams::new(a, b, 2, 2).unwrap();
+                let bcs = vec![bc; 2];
+
+                let result = affine_transform_matrix(r, &params, &bcs);
+                assert!(
+                    result.is_ok(),
+                    "R={}, bc={:?}: failed to create matrix",
+                    r,
+                    bc
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_affine_matrix_unitarity_full() {
+        // From Quantics.jl full test - verify T'*T == I for orthogonal transforms
+        // A = [[1, 0], [1, 1]], b = [0, 0]
+        let r = 4;
+        let a = vec![1i64, 0, 1, 1]; // [[1, 0], [1, 1]]
+        let b = vec![0i64, 0];
+        let params = AffineParams::from_integers(a, b, 2, 2).unwrap();
+        let bc = vec![BoundaryCondition::Periodic; 2];
+
+        let t = affine_transform_matrix(r, &params, &bc).unwrap();
+
+        // Compute T' * T
+        let size = 1 << (2 * r);
+        let mut prod = vec![vec![0.0; size]; size];
+        for i in 0..size {
+            for j in 0..size {
+                let mut sum = 0.0;
+                for k in 0..size {
+                    let t_ki = *t.get(k, i).unwrap_or(&0.0);
+                    let t_kj = *t.get(k, j).unwrap_or(&0.0);
+                    sum += t_ki * t_kj;
+                }
+                prod[i][j] = sum;
+            }
+        }
+
+        // Check T' * T == I
+        for i in 0..size {
+            for j in 0..size {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (prod[i][j] - expected).abs() < 1e-10,
+                    "T'*T not identity at ({}, {}): got {}",
+                    i,
+                    j,
+                    prod[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_affine_mpo_vs_matrix_r1() {
+        // R=1 is a special case where is_msb and is_lsb are both true
+        let r = 1;
+
+        // Identity R=1
+        let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+        let bc = vec![BoundaryCondition::Periodic];
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
+        let mpo_matrix = mpo_to_dense_matrix(&mpo, 1, 1, r);
+        for y in 0..2 {
+            for x in 0..2 {
+                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
+                let mpo_val = mpo_matrix[y][x].re;
+                assert!(
+                    (sparse_val - mpo_val).abs() < 1e-10,
+                    "R=1 identity mismatch at ({},{}): sparse={}, mpo={}",
+                    y,
+                    x,
+                    sparse_val,
+                    mpo_val
+                );
+            }
+        }
+
+        // Shift R=1 (y = x + 1 mod 2)
+        let params = AffineParams::from_integers(vec![1], vec![1], 1, 1).unwrap();
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
+        let mpo_matrix = mpo_to_dense_matrix(&mpo, 1, 1, r);
+        for y in 0..2 {
+            for x in 0..2 {
+                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
+                let mpo_val = mpo_matrix[y][x].re;
+                assert!(
+                    (sparse_val - mpo_val).abs() < 1e-10,
+                    "R=1 shift mismatch at ({},{}): sparse={}, mpo={}",
+                    y,
+                    x,
+                    sparse_val,
+                    mpo_val
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_affine_matrix_unitarity_with_shift() {
+        // From Quantics.jl full test with shift - verify T*T' == I
+        // A = [[1, 0], [1, 1]], b = [4, 1]
+        let r = 4;
+        let a = vec![1i64, 0, 1, 1];
+        let b = vec![4i64, 1];
+        let params = AffineParams::from_integers(a, b, 2, 2).unwrap();
+        let bc = vec![BoundaryCondition::Periodic; 2];
+
+        let t = affine_transform_matrix(r, &params, &bc).unwrap();
+
+        // Compute T * T'
+        let size = 1 << (2 * r);
+        let mut prod = vec![vec![0.0; size]; size];
+        for i in 0..size {
+            for j in 0..size {
+                let mut sum = 0.0;
+                for k in 0..size {
+                    let t_ik = *t.get(i, k).unwrap_or(&0.0);
+                    let t_jk = *t.get(j, k).unwrap_or(&0.0);
+                    sum += t_ik * t_jk;
+                }
+                prod[i][j] = sum;
+            }
+        }
+
+        // Check T * T' == I
+        for i in 0..size {
+            for j in 0..size {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    (prod[i][j] - expected).abs() < 1e-10,
+                    "T*T' not identity at ({}, {}): got {}",
+                    i,
+                    j,
+                    prod[i][j]
+                );
+            }
+        }
+    }
+
+    // ========== Unfused API tests ==========
+
+    #[test]
+    fn test_affine_unfused_basic() {
+        // Test unfused API basic functionality
+        let r = 3;
+        let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+        let bc = vec![BoundaryCondition::Periodic];
+
+        let unfused = affine_transform_tensors_unfused(r, &params, &bc).unwrap();
+
+        assert_eq!(unfused.len(), r);
+
+        // For M=1, N=1, site_dim = 2^2 = 4
+        let site_dim = 4;
+        // For identity transform y=x, carry is always 0, so bond dimension is 1
+        assert_eq!(*unfused[0].shape(), (1, site_dim, 1)); // First tensor: (1, 4, 1)
+        assert_eq!(*unfused[r - 1].shape(), (1, site_dim, 1)); // Last tensor: (1, 4, 1)
+    }
+
+    #[test]
+    fn test_affine_unfused_2d() {
+        // Test unfused API with 2D transformation
+        let r = 2;
+        let params = AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
+        let bc = vec![BoundaryCondition::Periodic; 2];
+
+        let unfused = affine_transform_tensors_unfused(r, &params, &bc).unwrap();
+
+        assert_eq!(unfused.len(), r);
+
+        // For M=2, N=2, site_dim = 2^4 = 16
+        let site_dim = 16;
+        for tensor in &unfused {
+            assert_eq!(tensor.shape().1, site_dim);
+        }
+    }
+
+    #[test]
+    fn test_unfused_tensor_info() {
+        let params = AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
+        let info = UnfusedTensorInfo::new(&params);
+
+        assert_eq!(info.m, 2);
+        assert_eq!(info.n, 2);
+        assert_eq!(info.num_physical_dims, 4);
+        assert_eq!(info.physical_dim, 2);
+
+        // Test shape
+        let shape = info.unfused_shape(3, 5);
+        assert_eq!(shape, vec![3, 2, 2, 2, 2, 5]);
+
+        // Test index encoding/decoding
+        // site_idx = y_bits | (x_bits << m)
+        // y_bits = y0 + 2*y1, x_bits = x0 + 2*x1
+        // Example: y0=1, y1=0, x0=0, x1=1 -> y_bits=1, x_bits=2 -> site_idx = 1 + 4*2 = 9
+        let (y_bits, x_bits) = info.decode_fused_index(9);
+        assert_eq!(y_bits, vec![1, 0]);
+        assert_eq!(x_bits, vec![0, 1]);
+
+        let encoded = info.encode_fused_index(&[1, 0], &[0, 1]);
+        assert_eq!(encoded, 9);
+    }
+
+    #[test]
+    fn test_unfused_vs_fused_equivalence() {
+        // Verify that unfused tensors give the same matrix as fused
+        let r = 2;
+        let params = AffineParams::from_integers(vec![1, 0, 1, 1], vec![0, 0], 2, 2).unwrap();
+        let bc = vec![BoundaryCondition::Periodic; 2];
+
+        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
+        let unfused = affine_transform_tensors_unfused(r, &params, &bc).unwrap();
+
+        // Contract unfused tensors to matrix
+        let info = UnfusedTensorInfo::new(&params);
+        let m = info.m;
+        let n = info.n;
+        let output_size = 1 << (m * r);
+        let input_size = 1 << (n * r);
+
+        let mut unfused_matrix = vec![vec![Complex64::new(0.0, 0.0); input_size]; output_size];
+
+        for y_flat in 0..output_size {
+            for x_flat in 0..input_size {
+                let mut left_vec = vec![Complex64::one()];
+
+                for site in 0..r {
+                    let bit_pos = r - 1 - site;
+
+                    let mut y_bits = 0usize;
+                    for var in 0..m {
+                        let y_var = (y_flat >> (var * r)) & ((1 << r) - 1);
+                        let bit = (y_var >> bit_pos) & 1;
+                        y_bits |= bit << var;
+                    }
+
+                    let mut x_bits = 0usize;
+                    for var in 0..n {
+                        let x_var = (x_flat >> (var * r)) & ((1 << r) - 1);
+                        let bit = (x_var >> bit_pos) & 1;
+                        x_bits |= bit << var;
+                    }
+
+                    let site_idx = y_bits | (x_bits << m);
+                    let tensor = &unfused[site];
+                    let (left_dim, _, right_dim) = *tensor.shape();
+
+                    let mut new_vec = vec![Complex64::new(0.0, 0.0); right_dim];
+                    for l in 0..left_dim.min(left_vec.len()) {
+                        for rr in 0..right_dim {
+                            new_vec[rr] += left_vec[l] * tensor[[l, site_idx, rr]];
+                        }
+                    }
+                    left_vec = new_vec;
+                }
+
+                unfused_matrix[y_flat][x_flat] = if left_vec.is_empty() {
+                    Complex64::new(0.0, 0.0)
+                } else {
+                    left_vec[0]
+                };
+            }
+        }
+
+        // Compare
+        let size = 1 << (2 * r);
+        for y in 0..size {
+            for x in 0..size {
+                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
+                let unfused_val = unfused_matrix[y][x].re;
+                assert!(
+                    (sparse_val - unfused_val).abs() < 1e-10,
+                    "Unfused vs fused mismatch at ({}, {}): sparse={}, unfused={}",
+                    y,
+                    x,
+                    sparse_val,
+                    unfused_val
+                );
+            }
+        }
     }
 }

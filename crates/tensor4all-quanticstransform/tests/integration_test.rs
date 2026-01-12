@@ -1453,7 +1453,7 @@ fn test_affine_identity() {
         .expect("Failed to create affine params");
     let bc = vec![BoundaryCondition::Periodic];
 
-    let op = affine_operator(r, &params, &bc).expect("Failed to create affine operator");
+    let _op = affine_operator(r, &params, &bc).expect("Failed to create affine operator");
 
     for x in 0..n {
         // Create input state |x⟩
