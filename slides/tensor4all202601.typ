@@ -300,35 +300,58 @@
   `tensordot`: explicit control / `contract_einsum`: convenient for networks
 ]
 
-// Slide 11: Default Implementations
-#slide("Default Implementations")[
-  #text(size: 18pt)[
-  *Index*: `Index<Id, Tags>` with type alias `DynIndex = Index<DynId, TagSet>`
-  - `DynId`: UUID-based unique identifier (like ITensors.jl)
-  - `TagSet`: String tags for labeling (e.g., `"Site,n=1"`)
+// Slide 11: Type Hierarchy Overview
+#slide("Type Hierarchy Overview")[
+  #text(size: 20pt)[
+  ```
+  TensorDynLen (implements TensorLike)
+      │
+      ├── indices: Vec<DynIndex>     ← Index information
+      │
+      └── data: TensorData           ← Actual tensor data
+              │
+              └── components: Vec<TensorComponent>
+                      │
+                      └── storage: Storage   ← Dense/Diag × F64/C64
+  ```
 
-  #v(0.5em)
+  #v(0.8em)
 
-  *Tensor*: `TensorDynLen` — dynamic-length index tensor
-  - Implements `TensorLike` trait
-  - Indices: `Vec<DynIndex>`
-
-  #v(0.5em)
-
-  *Storage hierarchy* (in `tensor4all-tensorbackend`):
-  #code-block[
-    ```rust
-    enum Storage { DenseF64, DenseC64, DiagF64, DiagC64 }
-    ```
-  ]
-  Backend: `mdarray` for storage, `mdarray-linalg` for linear algebra (SVD, QR, etc.)
+  - *TensorDynLen*: User-facing tensor type (implements `TensorLike`)
+  - *TensorData*: Lazy outer product of tensor components
+  - *Storage*: Low-level data storage (`mdarray` backend)
   ]
 ]
 
-// Slide 12: TensorData Structure
+// Slide 12: DynIndex
+#slide("DynIndex: Default Index Type")[
+  #text(size: 18pt)[
+  Type alias: `DynIndex = Index<DynId, TagSet>`
+
+  #v(0.5em)
+
+  #code-block[
+    ```rust
+    pub struct Index<Id, Tags> {
+        pub id: Id,      // Unique identifier
+        pub dim: usize,  // Dimension
+        pub tags: Tags,  // String tags for labeling
+    }
+    ```
+  ]
+
+  #v(0.5em)
+
+  - *DynId*: UUID-based unique identifier (like ITensors.jl)
+  - *TagSet*: String tags for labeling (e.g., `"Site,n=1"`)
+  - Implements `IndexLike` trait
+  ]
+]
+
+// Slide 13: TensorData
 #slide("TensorData: Lazy Outer Products")[
   #text(size: 18pt)[
-  `TensorData` stores tensors as *lazy outer products* of components:
+  Stores tensors as *lazy outer products* of components:
   #code-block[
     ```rust
     pub struct TensorData {
@@ -348,6 +371,32 @@
 
   *Contraction path optimization*: #link("https://github.com/GiggleLiu/omeco")[omeco] \
   → Greedy algorithm finds near-optimal contraction order for N≥3 tensors
+  ]
+]
+
+// Slide 14: Storage
+#slide("Storage: Backend Layer")[
+  #text(size: 18pt)[
+  Defined in `tensor4all-tensorbackend` crate:
+
+  #v(0.5em)
+
+  #code-block[
+    ```rust
+    pub enum Storage {
+        DenseF64(DenseStorageF64),  // Dense real
+        DenseC64(DenseStorageC64),  // Dense complex
+        DiagF64(DiagStorageF64),    // Diagonal real
+        DiagC64(DiagStorageC64),    // Diagonal complex
+    }
+    ```
+  ]
+
+  #v(0.5em)
+
+  *Backend libraries*:
+  - `mdarray`: Multi-dimensional array storage
+  - `mdarray-linalg`: Linear algebra operations (SVD, QR, LU)
   ]
 ]
 
