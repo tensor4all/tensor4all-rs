@@ -49,7 +49,10 @@ pub fn phase_rotation_operator(r: usize, theta: f64) -> Result<QuanticsOperator>
 ///
 /// Each site tensor is diagonal with entries:
 /// - For x_n = 0: 1
-/// - For x_n = 1: exp(i*θ*2^(R-n))
+/// - For x_n = 1: exp(i*θ*2^(R-1-n))
+///
+/// Uses big-endian convention: site n corresponds to bit 2^(R-1-n) (MSB at site 0).
+/// This matches Julia Quantics.jl's convention.
 fn phase_rotation_mpo(r: usize, theta: f64) -> Result<TensorTrain<Complex64>> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive"));
@@ -61,8 +64,8 @@ fn phase_rotation_mpo(r: usize, theta: f64) -> Result<TensorTrain<Complex64>> {
     let mut tensors = Vec::with_capacity(r);
 
     for n in 0..r {
-        // Phase for this site: θ * 2^(R-1-n)
-        // Using high precision for the computation
+        // Phase for this site: θ * 2^(R-1-n) (big-endian: site 0 = MSB)
+        // This matches Julia's convention: site n=1 (Julia) has power R-n
         let power = (r - 1 - n) as f64;
         let site_phase = (theta_mod * 2.0_f64.powf(power)).rem_euclid(2.0 * PI);
 
@@ -123,11 +126,17 @@ mod tests {
     #[test]
     fn test_phase_rotation_pi() {
         // θ = π should give (-1)^x
+        // With big-endian: site 0 (MSB) has phase π * 2^(R-1), site R-1 (LSB) has phase π * 2^0
         let r = 3;
         let mpo = phase_rotation_mpo(r, PI).unwrap();
 
-        // For the last site (n = r-1 = 2), phase = π * 2^0 = π
-        // exp(i*π) = -1
+        // For site 0 (MSB), phase = π * 2^2 = 4π ≡ 0 (mod 2π), exp(0) = 1
+        let t_first = mpo.site_tensor(0);
+        assert_relative_eq!(t_first.get3(0, 0, 0).re, 1.0, epsilon = 1e-10);
+        assert_relative_eq!(t_first.get3(0, 3, 0).re, 1.0, epsilon = 1e-10);
+        assert_relative_eq!(t_first.get3(0, 3, 0).im, 0.0, epsilon = 1e-10);
+
+        // For site 2 (LSB), phase = π * 2^0 = π, exp(i*π) = -1
         let t_last = mpo.site_tensor(r - 1);
         assert_relative_eq!(t_last.get3(0, 0, 0).re, 1.0, epsilon = 1e-10);
         assert_relative_eq!(t_last.get3(0, 3, 0).re, -1.0, epsilon = 1e-10);

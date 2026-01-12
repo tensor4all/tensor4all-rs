@@ -8,7 +8,48 @@ tensor4all-quanticstransform は Quantics.jl の Rust 実装であるが、以�
 2. **TreeTN への適用機能**: `LinearOperator` を実際の `TreeTN` に適用する機能
 3. **タグベースのインデックス選択**: Quantics.jl のようなタグベースのワークフロー
 
-## 完了した作業 (2025-01-12)
+## 完了した作業
+
+### Phase 1 & 2: 数値テスト完了 (2025-01-12)
+
+**Big-endian convention への統一** (Julia Quantics.jl と同じ):
+- Site 0 = MSB (Most Significant Bit)
+- Site R-1 = LSB (Least Significant Bit)
+- x = Σ_n x_n * 2^(R-1-n)
+
+以下の変換の数値的正確性を検証:
+
+1. **Flip operator** (Periodic/Open BC)
+   - flip(x) = 2^R - x を全 x ∈ [0, 2^R) で検証
+   - Open BC: flip(0) = 2^R は overflow → zero vector (Rust拡張機能)
+   - Big-endian convention
+
+2. **Shift operator** (Periodic/Open BC)
+   - shift(x, offset) = x + offset を全 x と複数の offset で検証
+   - Open BC: overflow/underflow は zero vector
+   - Big-endian convention
+
+3. **Fourier operator**
+   - Unitarity: ||F|x⟩||² = 1 for all basis states
+   - Inverse operator creation verified
+
+4. **Phase rotation operator**
+   - exp(i*θ*x) multiplication verified for all x
+   - Identity tests: θ=0, θ=2π
+   - Big-endian convention
+
+5. **Cumsum operator**
+   - Strict upper triangular matrix
+   - Big-endian bit comparison (MSB first)
+   - Full numerical verification for all x
+
+6. **Affine operator**
+   - Identity, shift, negation, 2D rotation の operator creation 検証
+
+7. **Binaryop operator**
+   - Identity, sum, difference の operator creation 検証
+
+全 24 integration tests + 55 unit tests passing.
 
 ### TensorIndex トレイト (tensor4all-core)
 
@@ -55,56 +96,6 @@ pub fn apply_linear_operator<T, V>(
 
 ## 次のステップ
 
-### Phase 1: quanticstransform の数値テスト
-
-**目標**: 各変換が数学的に正しいことを検証
-
-#### 1.1 Fourier 変換テスト
-
-```rust
-#[test]
-fn test_fourier_transform_correctness() {
-    // sin(2πx) の Fourier 変換が δ(k-1) + δ(k+1) になることを確認
-    // 1. 入力関数を TreeTN (MPS) として構築
-    // 2. Fourier operator を適用
-    // 3. 結果を contract_to_tensor して検証
-}
-```
-
-#### 1.2 Flip 変換テスト
-
-```rust
-#[test]
-fn test_flip_transform_correctness() {
-    // f(x) → f(1-x) の検証
-    // 多項式関数で確認
-}
-```
-
-#### 1.3 Shift 変換テスト
-
-```rust
-#[test]
-fn test_shift_transform_correctness() {
-    // f(x) → f(x + a) の検証
-    // 周期境界条件の確認
-}
-```
-
-### Phase 2: Integration tests with TreeTN
-
-**目標**: apply_linear_operator が正しく動作することを end-to-end で検証
-
-```rust
-#[test]
-fn test_apply_fourier_to_mps() {
-    let mps = create_test_mps();  // sin(2πx) を表現
-    let fourier_op = build_fourier_operator(n_bits, grid);
-    let result = apply_linear_operator(&fourier_op, &mps, ApplyOptions::default())?;
-    // 結果を検証
-}
-```
-
 ### Phase 3: タグシステム (optional)
 
 **現状**: IndexMapping による明示的なマッピングで対応
@@ -147,8 +138,8 @@ tensor4all-quanticstransform
 └── tensor4all-treetn (TreeTN, LinearOperator, apply_linear_operator)
 ```
 
-## 優先度
+## ステータス
 
-1. **High**: Phase 1 (数値テスト) - 変換の正確性を保証
-2. **Medium**: Phase 2 (Integration) - 実用的なワークフロー検証
-3. **Low**: Phase 3 (タグ) - 便利だが必須ではない
+- ✅ Phase 1: 数値テスト (完了)
+- ✅ Phase 2: Integration tests (完了)
+- ⏳ Phase 3: タグシステム (optional, 未着手)
