@@ -41,6 +41,7 @@ where
             canonical_center: self.canonical_center.clone(),
             canonical_form: self.canonical_form,
             site_index_network: self.site_index_network.clone(),
+            link_index_network: self.link_index_network.clone(),
             ortho_towards: self.ortho_towards.clone(),
         }
     }

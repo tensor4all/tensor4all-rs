@@ -1,6 +1,7 @@
 pub mod algorithm;
 // dyn_treetn.rs has been removed.
 // TreeTN uses the `T: TensorLike` pattern, making a separate dyn wrapper unnecessary.
+pub mod link_index_network;
 pub mod named_graph;
 pub mod node_name_network;
 pub mod operator;
@@ -20,6 +21,7 @@ pub use operator::{
 };
 pub use options::{CanonicalizationOptions, SplitOptions, TruncationOptions};
 pub use random::{random_treetn_c64, random_treetn_f64, LinkSpace};
+pub use link_index_network::LinkIndexNetwork;
 pub use site_index_network::SiteIndexNetwork;
 pub use treetn::{
     // Decomposition
@@ -33,9 +35,9 @@ pub use treetn::{
 
 // Re-export linsolve types
 pub use treetn::linsolve::{
-    linsolve, EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveResult,
-    LinsolveUpdater, LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator,
-    ProjectedState,
+    apply_linear_operator, linsolve, ApplyOptions, ArcLinearOperator, EnvironmentCache,
+    IndexMapping, LinearOperator, LinsolveOptions, LinsolveResult, LinsolveUpdater,
+    LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator, ProjectedState,
 };
 
 use petgraph::graph::NodeIndex;

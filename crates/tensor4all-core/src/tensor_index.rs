@@ -1,0 +1,92 @@
+//! TensorIndex trait for index operations on tensor-like objects.
+//!
+//! This trait provides a minimal interface for objects that have external indices
+//! and support index replacement operations. It is a subset of `TensorLike` that
+//! can be implemented by both dense tensors and tensor networks (like TreeTN).
+
+use crate::IndexLike;
+use anyhow::Result;
+use std::fmt::Debug;
+
+/// Trait for objects that have external indices and support index operations.
+///
+/// This is a minimal trait that can be implemented by:
+/// - Dense tensors (`TensorDynLen`)
+/// - Tensor networks (`TreeTN`)
+/// - Any other structure that organizes tensors with indices
+///
+/// # Design
+///
+/// This trait is separate from `TensorLike` to allow tensor networks to implement
+/// index operations without needing to implement contraction/factorization operations.
+pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
+    /// The index type used by this object.
+    type Index: IndexLike;
+
+    /// Return flattened external indices for this object.
+    ///
+    /// # Ordering
+    ///
+    /// The ordering MUST be stable (deterministic). Implementations should:
+    /// - Sort indices by their `id` field, or
+    /// - Use insertion-ordered storage
+    ///
+    /// This ensures consistent behavior for hashing, serialization, and comparison.
+    fn external_indices(&self) -> Vec<Self::Index>;
+
+    /// Number of external indices.
+    ///
+    /// Default implementation calls `external_indices().len()`, but implementations
+    /// SHOULD override this for efficiency when the count can be computed without
+    /// allocating the full index list.
+    fn num_external_indices(&self) -> usize {
+        self.external_indices().len()
+    }
+
+    /// Replace an index in this object.
+    ///
+    /// This replaces the index matching `old_index` by ID with `new_index`.
+    /// The storage data is not modified, only the index metadata is changed.
+    ///
+    /// # Arguments
+    ///
+    /// * `old_index` - The index to replace (matched by ID)
+    /// * `new_index` - The new index to use
+    ///
+    /// # Returns
+    ///
+    /// A new object with the index replaced.
+    fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self>;
+
+    /// Replace multiple indices in this object.
+    ///
+    /// This replaces each index in `old_indices` (matched by ID) with the
+    /// corresponding index in `new_indices`. The storage data is not modified.
+    ///
+    /// # Arguments
+    ///
+    /// * `old_indices` - The indices to replace (matched by ID)
+    /// * `new_indices` - The new indices to use
+    ///
+    /// # Returns
+    ///
+    /// A new object with the indices replaced.
+    fn replaceinds(&self, old_indices: &[Self::Index], new_indices: &[Self::Index]) -> Result<Self>;
+
+    /// Replace indices using pairs of (old, new).
+    ///
+    /// This is a convenience method that wraps `replaceinds`.
+    ///
+    /// # Arguments
+    ///
+    /// * `pairs` - Pairs of (old_index, new_index) to replace
+    ///
+    /// # Returns
+    ///
+    /// A new object with the indices replaced.
+    fn replaceinds_pairs(&self, pairs: &[(Self::Index, Self::Index)]) -> Result<Self> {
+        let (old, new): (Vec<_>, Vec<_>) = pairs.iter().cloned().unzip();
+        self.replaceinds(&old, &new)
+    }
+}
+

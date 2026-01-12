@@ -11,7 +11,7 @@
 use petgraph::graph::NodeIndex;
 use std::sync::Arc;
 use tensor4all_core::storage::DenseStorageF64;
-use tensor4all_core::{DynIndex, IndexLike, Storage, TensorDynLen};
+use tensor4all_core::{DynIndex, IndexLike, Storage, TensorDynLen, TensorIndex};
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 // ============================================================================

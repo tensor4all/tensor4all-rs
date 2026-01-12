@@ -1339,12 +1339,12 @@ pub fn unfold_split<T: StorageScalar>(
 }
 
 // ============================================================================
-// TensorLike implementation for TensorDynLen
+// TensorIndex implementation for TensorDynLen
 // ============================================================================
 
-use crate::tensor_like::{FactorizeError, FactorizeOptions, FactorizeResult, TensorLike};
+use crate::tensor_index::TensorIndex;
 
-impl TensorLike for TensorDynLen {
+impl TensorIndex for TensorDynLen {
     type Index = DynIndex;
 
     fn external_indices(&self) -> Vec<DynIndex> {
@@ -1369,7 +1369,15 @@ impl TensorLike for TensorDynLen {
         // Delegate to the inherent method
         Ok(TensorDynLen::replaceinds(self, old_indices, new_indices))
     }
+}
 
+// ============================================================================
+// TensorLike implementation for TensorDynLen
+// ============================================================================
+
+use crate::tensor_like::{FactorizeError, FactorizeOptions, FactorizeResult, TensorLike};
+
+impl TensorLike for TensorDynLen {
     fn tensordot(
         &self,
         other: &Self,

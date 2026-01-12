@@ -42,6 +42,8 @@ where
     topology: NodeNameNetwork<NodeName>,
     /// Site space (physical indices) for each node.
     site_spaces: HashMap<NodeName, HashSet<I>>,
+    /// Reverse lookup: index ID → node name containing this index.
+    index_to_node: HashMap<I::Id, NodeName>,
 }
 
 impl<NodeName, I> SiteIndexNetwork<NodeName, I>
@@ -54,6 +56,7 @@ where
         Self {
             topology: NodeNameNetwork::new(),
             site_spaces: HashMap::new(),
+            index_to_node: HashMap::new(),
         }
     }
 
@@ -62,6 +65,7 @@ where
         Self {
             topology: NodeNameNetwork::with_capacity(nodes, edges),
             site_spaces: HashMap::with_capacity(nodes),
+            index_to_node: HashMap::new(),
         }
     }
 
@@ -78,7 +82,12 @@ where
         site_space: impl Into<HashSet<I>>,
     ) -> Result<NodeIndex, String> {
         let node_idx = self.topology.add_node(node_name.clone())?;
-        self.site_spaces.insert(node_name, site_space.into());
+        let site_space_set = site_space.into();
+        // Update reverse lookup for all indices
+        for idx in &site_space_set {
+            self.index_to_node.insert(idx.id().clone(), node_name.clone());
+        }
+        self.site_spaces.insert(node_name, site_space_set);
         Ok(node_idx)
     }
 
@@ -93,8 +102,78 @@ where
     }
 
     /// Get a mutable reference to the site space for a node.
+    ///
+    /// **Warning**: Direct modification of site space via this method does NOT
+    /// update the reverse lookup (`index_to_node`). Use `add_site_index()`,
+    /// `remove_site_index()`, or `replace_site_index()` for modifications
+    /// that maintain consistency.
     pub fn site_space_mut(&mut self, node_name: &NodeName) -> Option<&mut HashSet<I>> {
         self.site_spaces.get_mut(node_name)
+    }
+
+    /// Find the node containing a given site index.
+    ///
+    /// # Arguments
+    /// * `index` - The index to look up
+    ///
+    /// # Returns
+    /// The node name containing this index, or None if not found.
+    pub fn find_node_by_index(&self, index: &I) -> Option<&NodeName> {
+        self.index_to_node.get(index.id())
+    }
+
+    /// Find the node containing an index by ID.
+    pub fn find_node_by_index_id(&self, id: &I::Id) -> Option<&NodeName> {
+        self.index_to_node.get(id)
+    }
+
+    /// Check if a site index is registered.
+    pub fn contains_index(&self, index: &I) -> bool {
+        self.index_to_node.contains_key(index.id())
+    }
+
+    /// Add a site index to a node's site space.
+    ///
+    /// Updates both the site space and the reverse lookup.
+    pub fn add_site_index(&mut self, node_name: &NodeName, index: I) -> Result<(), String> {
+        let site_space = self.site_spaces.get_mut(node_name)
+            .ok_or_else(|| format!("Node {:?} not found", node_name))?;
+        site_space.insert(index.clone());
+        self.index_to_node.insert(index.id().clone(), node_name.clone());
+        Ok(())
+    }
+
+    /// Remove a site index from a node's site space.
+    ///
+    /// Updates both the site space and the reverse lookup.
+    pub fn remove_site_index(&mut self, node_name: &NodeName, index: &I) -> Result<bool, String> {
+        let site_space = self.site_spaces.get_mut(node_name)
+            .ok_or_else(|| format!("Node {:?} not found", node_name))?;
+        let removed = site_space.remove(index);
+        if removed {
+            self.index_to_node.remove(index.id());
+        }
+        Ok(removed)
+    }
+
+    /// Replace a site index in a node's site space.
+    ///
+    /// Updates both the site space and the reverse lookup.
+    pub fn replace_site_index(
+        &mut self,
+        node_name: &NodeName,
+        old_index: &I,
+        new_index: I,
+    ) -> Result<(), String> {
+        let site_space = self.site_spaces.get_mut(node_name)
+            .ok_or_else(|| format!("Node {:?} not found", node_name))?;
+        if !site_space.remove(old_index) {
+            return Err(format!("Index {:?} not found in node {:?}", old_index.id(), node_name));
+        }
+        self.index_to_node.remove(old_index.id());
+        site_space.insert(new_index.clone());
+        self.index_to_node.insert(new_index.id().clone(), node_name.clone());
+        Ok(())
     }
 
     /// Get the site space by NodeIndex.

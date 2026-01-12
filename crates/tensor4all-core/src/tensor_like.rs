@@ -13,7 +13,7 @@
 //! For heterogeneous tensor collections, use an enum wrapper.
 
 use crate::any_scalar::AnyScalar;
-use crate::IndexLike;
+use crate::tensor_index::TensorIndex;
 use anyhow::Result;
 use std::fmt::Debug;
 
@@ -206,64 +206,17 @@ pub struct FactorizeResult<T: TensorLike> {
 ///     MPS(MatrixProductState),
 /// }
 /// ```
-pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
-    /// The index type used by this tensor.
-    type Index: IndexLike;
-
-    /// Return flattened external indices for this object.
-    ///
-    /// # Ordering
-    ///
-    /// The ordering MUST be stable (deterministic). Implementations should:
-    /// - Sort indices by their `id` field, or
-    /// - Use insertion-ordered storage
-    ///
-    /// This ensures consistent behavior for hashing, serialization, and comparison.
-    fn external_indices(&self) -> Vec<Self::Index>;
-
-    /// Number of external indices.
-    ///
-    /// Default implementation calls `external_indices().len()`, but implementations
-    /// SHOULD override this for efficiency when the count can be computed without
-    /// allocating the full index list.
-    fn num_external_indices(&self) -> usize {
-        self.external_indices().len()
-    }
-
-    /// Replace an index in this tensor-like object.
-    ///
-    /// This replaces the index matching `old_index` by ID with `new_index`.
-    /// The storage data is not modified, only the index metadata is changed.
-    ///
-    /// # Arguments
-    ///
-    /// * `old_index` - The index to replace (matched by ID)
-    /// * `new_index` - The new index to use
-    ///
-    /// # Returns
-    ///
-    /// A new tensor with the index replaced.
-    fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self>;
-
-    /// Replace multiple indices in this tensor-like object.
-    ///
-    /// This replaces each index in `old_indices` (matched by ID) with the
-    /// corresponding index in `new_indices`. The storage data is not modified.
-    ///
-    /// # Arguments
-    ///
-    /// * `old_indices` - The indices to replace (matched by ID)
-    /// * `new_indices` - The new indices to use
-    ///
-    /// # Returns
-    ///
-    /// A new tensor with the indices replaced.
-    fn replaceinds(
-        &self,
-        old_indices: &[Self::Index],
-        new_indices: &[Self::Index],
-    ) -> Result<Self>;
-
+///
+/// # Supertrait
+///
+/// `TensorLike` extends `TensorIndex`, which provides:
+/// - `external_indices()` - Get all external indices
+/// - `num_external_indices()` - Count external indices
+/// - `replaceind()` / `replaceinds()` - Replace indices
+///
+/// This separation allows tensor networks (like `TreeTN`) to implement
+/// index operations without implementing contraction/factorization.
+pub trait TensorLike: TensorIndex {
     /// Explicit contraction between two tensor-like objects.
     ///
     /// This performs binary contraction over the specified index pairs.
@@ -290,7 +243,7 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
     fn tensordot(
         &self,
         other: &Self,
-        pairs: &[(Self::Index, Self::Index)],
+        pairs: &[(<Self as TensorIndex>::Index, <Self as TensorIndex>::Index)],
     ) -> Result<Self>;
 
     /// Factorize this tensor into left and right factors.
@@ -320,7 +273,7 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
     /// - The underlying algorithm fails
     fn factorize(
         &self,
-        left_inds: &[Self::Index],
+        left_inds: &[<Self as TensorIndex>::Index],
         options: &FactorizeOptions,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
 
@@ -366,7 +319,7 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
     fn direct_sum(
         &self,
         other: &Self,
-        pairs: &[(Self::Index, Self::Index)],
+        pairs: &[(<Self as TensorIndex>::Index, <Self as TensorIndex>::Index)],
     ) -> Result<DirectSumResult<Self>>;
 
     /// Outer product (tensor product) of two tensors.
@@ -418,7 +371,7 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
     /// Returns an error if:
     /// - The number of indices doesn't match
     /// - An index ID in `new_order` is not found in the tensor
-    fn permuteinds(&self, new_order: &[Self::Index]) -> Result<Self>;
+    fn permuteinds(&self, new_order: &[<Self as TensorIndex>::Index]) -> Result<Self>;
 
     /// Contract multiple tensors using einsum-style contraction.
     ///
@@ -486,7 +439,7 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
     /// ```text
     /// diagonal(i, o) = [[1, 0], [0, 1]]
     /// ```
-    fn diagonal(input_index: &Self::Index, output_index: &Self::Index) -> Result<Self>;
+    fn diagonal(input_index: &<Self as TensorIndex>::Index, output_index: &<Self as TensorIndex>::Index) -> Result<Self>;
 
     /// Create a delta (identity) tensor as outer product of diagonals.
     ///
@@ -516,7 +469,7 @@ pub trait TensorLike: Sized + Clone + Debug + Send + Sync {
     /// ```text
     /// delta([i], [o]) = [[1, 0], [0, 1]]
     /// ```
-    fn delta(input_indices: &[Self::Index], output_indices: &[Self::Index]) -> Result<Self> {
+    fn delta(input_indices: &[<Self as TensorIndex>::Index], output_indices: &[<Self as TensorIndex>::Index]) -> Result<Self> {
         // Validate same number of input and output indices
         if input_indices.len() != output_indices.len() {
             return Err(anyhow::anyhow!(

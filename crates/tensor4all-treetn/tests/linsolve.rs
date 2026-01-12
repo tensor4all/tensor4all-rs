@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tensor4all_core::storage::DenseStorageF64;
-use tensor4all_core::{DynIndex, IndexLike, Storage, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, IndexLike, Storage, TensorDynLen, TensorIndex, TensorLike};
 use tensor4all_treetn::{
     EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveUpdater,
     ProjectedOperator, ProjectedState, TreeTN,
