@@ -28,7 +28,23 @@ tensor4all-quanticstransform は Quantics.jl の Rust 実装であるが、以�
    - Unitarity: ||F|x⟩||² = 1 for all basis states
    - Inverse operator creation verified
 
-全 11 integration tests passing.
+4. **Phase rotation operator**
+   - exp(i*θ*x) multiplication verified for all x
+   - Identity tests: θ=0, θ=2π
+   - Little-endian convention に修正
+
+5. **Cumsum operator**
+   - Strict upper triangular matrix
+   - Big-endian bit comparison (MSB first)
+   - Count verification for each input
+
+6. **Affine operator**
+   - Identity, shift, negation, 2D rotation の operator creation 検証
+
+7. **Binaryop operator**
+   - Identity, sum, difference の operator creation 検証
+
+全 24 integration tests + 55 unit tests passing.
 
 ### TensorIndex トレイト (tensor4all-core)
 
