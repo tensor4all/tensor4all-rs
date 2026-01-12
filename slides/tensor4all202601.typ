@@ -66,7 +66,7 @@
   "tensor4all-rs",
   subtitle: "Tensor Network Computing with Vibe Coding",
   author: "Hiroshi Shinaoka",
-  date: "2025",
+  date: "January, 2026",
   url: "https://github.com/tensor4all/tensor4all-rs",
 )
 
@@ -121,7 +121,27 @@
     → Agent can refactor entire architecture autonomously
 ]
 
-// Slide 3: Design Philosophy
+// Slide 5: Workflow (2) - Issue-based
+#slide("Typical Workflow (2): Issue-based")[
+  *For larger projects with multiple tasks:*
+
+  #v(0.5em)
+
+  + *Investigate*: Ask agent to analyze codebase and identify issues \
+    → Agent creates GitHub issues via `gh` command
+
+  + *Accumulate*: Build up a backlog of well-defined issues
+
+  + *Resolve*: Agent picks and solves issues one by one \
+    → Each issue becomes a focused PR
+
+  #v(0.5em)
+
+  *Advantage*: Clear task boundaries, easy to track progress, \
+  parallelizable with multiple agents
+]
+
+// Slide: Design Philosophy
 #slide("Design Philosophy of tensor4all-rs")[
   #v(0.5em)
 
@@ -169,7 +189,7 @@
     [`Index{Int}`], [`Index<Id, NoSymmSpace>`],
     [`ITensor`], [`TensorDynLen<Id, Symm>`],
     [`Dense` / `Diag`], [`Storage::DenseF64` / `DiagF64`],
-    [`A * B`], [`a.contract_einsum(&b)`],
+    [`A * B`], [`a.contract(&b)` or `T::contract(&[a, b])`],
     [`cutoff`], [`rtol` (= √cutoff)],
   )
   ]
@@ -233,20 +253,23 @@
     }
     ```
   ]
+
+  *Important*: `is_contractable()` checks ID, dim, *and* ConjState \
+  → Same ID alone does NOT guarantee contractability!
 ]
 
-// Slide 8: Contractability Rules
-#slide("Contractability Rules")[
-  Two indices are contractable if:
+// Slide 9: Contractability Rules
+#slide("Contractability Rules (`is_contractable`)")[
+  `is_contractable(&self, other)` returns `true` iff *all* conditions hold:
 
   #v(0.5em)
 
-  + Same `id()` and `dim()`
+  + Same `id()` — must reference the same logical index
+  + Same `dim()` — dimensions must match
   + Compatible `ConjState`:
     - `(Ket, Bra)` or `(Bra, Ket)` → *contractable*
     - `(Undirected, Undirected)` → *contractable*
     - Mixed directed/undirected → *forbidden*
-
 ]
 
 // Slide 9: TensorLike Trait
@@ -261,7 +284,7 @@
     }
 
     pub trait TensorLike: TensorIndex {
-        fn tensordot(&self, other: &Self, pairs: &[(Self::Index, Self::Index)]) -> Result<Self>;
+        fn contract(tensors: &[Self]) -> Result<Self>;  // Auto-contracts via is_contractable
         fn factorize(&self, left_inds: &[Self::Index], options: &FactorizeOptions)
             -> Result<FactorizeResult<Self>>;
         fn conj(&self) -> Self;
@@ -277,58 +300,83 @@
 // Slide 10: Contraction Methods
 #slide("Contraction Methods")[
   #text(size: 18pt)[
-  *Explicit contraction* — specify index pairs:
+  *Automatic contraction* — uses `is_contractable()` to find pairs:
   #code-block[
     ```rust
-    // Contract indices i from A with j from B
+    // Contractable index pairs are automatically found and contracted
+    let c = T::contract(&[a, b, c])?;
+    // Or using * operator for TensorDynLen
+    let c = &a * &b;
+    ```
+  ]
+
+  #v(0.5em)
+
+  *Explicit contraction* — on concrete type (TensorDynLen):
+  #code-block[
+    ```rust
+    // Contract specific indices i from A with j from B
     let c = a.tensordot(&b, &[(i, j)])?;
     ```
   ]
-
-  #v(0.5em)
-
-  *Einsum-style contraction* — automatic matching by index ID:
-  #code-block[
-    ```rust
-    // Indices with same ID are automatically contracted
-    let c = TensorLike::contract_einsum(&[a, b, c])?;
-    ```
-  ]
   ]
 
   #v(0.5em)
-  `tensordot`: explicit control / `contract_einsum`: convenient for networks
+  `contract`: generic, auto-matching / `tensordot`: explicit control (concrete type only)
 ]
 
-// Slide 11: Default Implementations
-#slide("Default Implementations")[
+// Slide 11: Type Hierarchy Overview
+#slide("Type Hierarchy Overview")[
+  #text(size: 20pt)[
+  ```
+  TensorDynLen (implements TensorLike)
+      │
+      ├── indices: Vec<DynIndex>     ← Index information
+      │
+      └── data: TensorData           ← Actual tensor data
+              │
+              └── components: Vec<TensorComponent>
+                      │
+                      └── storage: Storage   ← Dense/Diag × F64/C64
+  ```
+
+  #v(0.8em)
+
+  - *TensorDynLen*: User-facing tensor type (implements `TensorLike`)
+  - *TensorData*: Lazy outer product of tensor components
+  - *Storage*: Low-level data storage (`mdarray` backend)
+  ]
+]
+
+// Slide 12: DynIndex
+#slide("DynIndex: Default Index Type")[
   #text(size: 18pt)[
-  *Index*: `Index<Id, Tags>` with type alias `DynIndex = Index<DynId, TagSet>`
-  - `DynId`: UUID-based unique identifier (like ITensors.jl)
-  - `TagSet`: String tags for labeling (e.g., `"Site,n=1"`)
+  Type alias: `DynIndex = Index<DynId, TagSet>`
 
   #v(0.5em)
 
-  *Tensor*: `TensorDynLen` — dynamic-length index tensor
-  - Implements `TensorLike` trait
-  - Indices: `Vec<DynIndex>`
-
-  #v(0.5em)
-
-  *Storage hierarchy* (in `tensor4all-tensorbackend`):
   #code-block[
     ```rust
-    enum Storage { DenseF64, DenseC64, DiagF64, DiagC64 }
+    pub struct Index<Id, Tags> {
+        pub id: Id,      // Unique identifier
+        pub dim: usize,  // Dimension
+        pub tags: Tags,  // String tags for labeling
+    }
     ```
   ]
-  Backend: `mdarray` for storage, `mdarray-linalg` for linear algebra (SVD, QR, etc.)
+
+  #v(0.5em)
+
+  - *DynId*: UUID-based unique identifier (like ITensors.jl)
+  - *TagSet*: ITensor-compatible string tags for labeling (e.g., `"Site,n=1"`)
+  - Implements `IndexLike` trait
   ]
 ]
 
-// Slide 12: TensorData Structure
+// Slide 13: TensorData
 #slide("TensorData: Lazy Outer Products")[
   #text(size: 18pt)[
-  `TensorData` stores tensors as *lazy outer products* of components:
+  Stores tensors as *lazy outer products* of components:
   #code-block[
     ```rust
     pub struct TensorData {
@@ -343,11 +391,57 @@
   *Advantages*:
   - Diagonal × Dense = lazy (no memory explosion)
   - Actual expansion only when needed
+  - Permutations are tracked, not executed
+  ]
+]
+
+// Slide 14: Storage
+#slide("Storage: Backend Layer")[
+  #text(size: 18pt)[
+  Defined in `tensor4all-tensorbackend` crate:
 
   #v(0.5em)
 
-  *Contraction path optimization*: #link("https://github.com/GiggleLiu/omeco")[omeco] \
-  → Greedy algorithm finds near-optimal contraction order for N≥3 tensors
+  #code-block[
+    ```rust
+    pub enum Storage {
+        DenseF64(DenseStorageF64),  // Dense real
+        DenseC64(DenseStorageC64),  // Dense complex
+        DiagF64(DiagStorageF64),    // Diagonal real
+        DiagC64(DiagStorageC64),    // Diagonal complex
+    }
+    ```
+  ]
+
+  #v(0.5em)
+
+  *Backend libraries*:
+  - `mdarray`: Multi-dimensional array storage
+  - `mdarray-linalg`: Linear algebra operations (SVD, QR, LU)
+  ]
+]
+
+// Slide 15: Contraction Path Optimization
+#slide("Contraction Path Optimization")[
+  #text(size: 18pt)[
+  *Problem*: `TensorData` can contain mixed Dense + Diag components \
+  → Need optimal contraction order for the component list
+
+  #v(0.3em)
+
+  *Example* (SVD-like): `U(i,j)` × `s(j)` × `V(j,k)` where `s` is diagonal
+  - Index `j` is a *hyperedge* (shared by 3 tensors)
+  - Naive order may expand diagonal unnecessarily
+
+  #v(0.3em)
+
+  *Solution*: #link("https://github.com/GiggleLiu/omeco")[omeco] (Rust port of OMEinsumContractionOrders.jl)
+  - GreedyMethod: O(n² log n) near-optimal ordering
+  - Also supports TreeSA (simulated annealing)
+
+  #v(0.3em)
+
+  *Workflow*: `TensorData.components` → omeco → contraction tree → execute
   ]
 ]
 
@@ -364,7 +458,7 @@
     // Create tensors and contract
     let a = Tensor::random(&[i.clone(), j.clone()]);
     let b = Tensor::random(&[j.clone(), k.clone()]);
-    let c = a.contract_einsum(&b)?;  // Contract on shared index j
+    let c = &a * &b;  // Contract on shared index j (uses is_contractable)
     ```
   ]
 ]

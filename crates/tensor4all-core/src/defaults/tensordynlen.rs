@@ -404,10 +404,10 @@ impl TensorDynLen {
     /// let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, storage_b);
     ///
     /// // Contract along j: result is C[i, k]
-    /// let result = tensor_a.contract_einsum(&tensor_b);
+    /// let result = tensor_a.contract(&tensor_b);
     /// assert_eq!(result.dims, vec![2, 4]);
     /// ```
-    pub fn contract_einsum(&self, other: &Self) -> Self {
+    pub fn contract(&self, other: &Self) -> Self {
         let spec = prepare_contraction(&self.indices, &self.dims, &other.indices, &other.dims)
             .expect("contraction preparation failed");
 
@@ -706,7 +706,7 @@ impl Mul<&TensorDynLen> for &TensorDynLen {
     type Output = TensorDynLen;
 
     fn mul(self, other: &TensorDynLen) -> Self::Output {
-        self.contract_einsum(other)
+        self.contract(other)
     }
 }
 
@@ -717,7 +717,7 @@ impl Mul<TensorDynLen> for TensorDynLen {
     type Output = TensorDynLen;
 
     fn mul(self, other: TensorDynLen) -> Self::Output {
-        self.contract_einsum(&other)
+        self.contract(&other)
     }
 }
 
@@ -726,7 +726,7 @@ impl Mul<TensorDynLen> for &TensorDynLen {
     type Output = TensorDynLen;
 
     fn mul(self, other: TensorDynLen) -> Self::Output {
-        self.contract_einsum(&other)
+        self.contract(&other)
     }
 }
 
@@ -735,7 +735,7 @@ impl Mul<&TensorDynLen> for TensorDynLen {
     type Output = TensorDynLen;
 
     fn mul(self, other: &TensorDynLen) -> Self::Output {
-        self.contract_einsum(other)
+        self.contract(other)
     }
 }
 
@@ -1081,7 +1081,7 @@ impl TensorDynLen {
         // Contract tensor with its conjugate over all indices → scalar
         // ||T||² = Σ T_ijk... * conj(T_ijk...) = Σ |T_ijk...|²
         let conj = self.conj();
-        let scalar = self.contract_einsum(&conj);
+        let scalar = self.contract(&conj);
         scalar.sum().real() // Result is always real for ||T||²
     }
 
@@ -1378,15 +1378,6 @@ impl TensorIndex for TensorDynLen {
 use crate::tensor_like::{FactorizeError, FactorizeOptions, FactorizeResult, TensorLike};
 
 impl TensorLike for TensorDynLen {
-    fn tensordot(
-        &self,
-        other: &Self,
-        pairs: &[(DynIndex, DynIndex)],
-    ) -> Result<Self> {
-        // Delegate to the inherent method
-        TensorDynLen::tensordot(self, other, pairs)
-    }
-
     fn factorize(
         &self,
         left_inds: &[DynIndex],
@@ -1424,7 +1415,7 @@ impl TensorLike for TensorDynLen {
         Ok(TensorDynLen::permute_indices(self, new_order))
     }
 
-    fn contract_einsum(tensors: &[Self]) -> Result<Self> {
+    fn contract(tensors: &[Self]) -> Result<Self> {
         // Delegate to contract_multi which uses omeco for optimization
         super::contract::contract_multi(tensors)
     }

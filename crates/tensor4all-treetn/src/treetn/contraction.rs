@@ -152,23 +152,9 @@ where
                 .remove(&to)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", to))?;
 
-            // Find the edge and get bond index
-            let edge = self
-                .graph
-                .graph()
-                .find_edge(from, to)
-                .or_else(|| self.graph.graph().find_edge(to, from))
-                .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", from, to))?;
-
-            // Both endpoints share the same bond index
-            let bond_idx = self
-                .bond_index(edge)
-                .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))?
-                .clone();
-
             // Contract and store result at `to`
-            let contracted = to_tensor
-                .tensordot(&from_tensor, &[(bond_idx.clone(), bond_idx)])
+            // (bond indices are auto-detected via is_contractable)
+            let contracted = T::contract(&[to_tensor, from_tensor])
                 .context("Failed to contract along edge")?;
             tensors.insert(to, contracted);
         }
@@ -301,18 +287,8 @@ where
                 )
                 .ok_or_else(|| anyhow::anyhow!("contract_zipup: tensor not found"))?;
 
-            // Contract along common indices (site indices)
-            let common = find_common_indices(t1, t2);
-            let result = if common.is_empty() {
-                // Outer product when no common site indices
-                t1.outer_product(t2)?
-            } else {
-                let pairs: Vec<_> = common
-                    .iter()
-                    .map(|idx| (idx.clone(), idx.clone()))
-                    .collect();
-                t1.tensordot(t2, &pairs)?
-            };
+            // Contract t1 and t2 - common indices are auto-detected via is_contractable
+            let result = T::contract(&[t1.clone(), t2.clone()])?;
             let mut result_tn = Self::new();
             let node_name = tn1
                 .graph
@@ -341,28 +317,9 @@ where
                 anyhow::anyhow!("Tensor not found for node {:?} in tn2", node_name)
             })?;
 
-            // Contract along site indices (external indices)
-            let site_ids: HashSet<_> = tn1
-                .site_index_network
-                .site_space(&node_name)
-                .map(|s| s.iter().map(|i| i.id().clone()).collect())
-                .unwrap_or_default();
-
-            let common: Vec<_> = find_common_indices(t1, t2)
-                .into_iter()
-                .filter(|idx| site_ids.contains(idx.id()))
-                .collect();
-
-            let contracted = if common.is_empty() {
-                // Outer product when no common site indices
-                t1.outer_product(t2)?
-            } else {
-                let pairs: Vec<_> = common
-                    .iter()
-                    .map(|idx| (idx.clone(), idx.clone()))
-                    .collect();
-                t1.tensordot(t2, &pairs)?
-            };
+            // Contract along site indices
+            // T::contract auto-contracts all is_contractable pairs
+            let contracted = T::contract(&[t1.clone(), t2.clone()])?;
 
             result_tensors.insert(node_name, contracted);
         }
@@ -418,10 +375,7 @@ where
                     .remove(parent_name)
                     .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
 
-                let contracted = parent_tensor.tensordot(
-                    &child_tensor,
-                    &[(bond1.clone(), bond1), (bond2.clone(), bond2)],
-                )?;
+                let contracted = T::contract(&[parent_tensor, child_tensor])?;
                 result_tensors.insert(parent_name.clone(), contracted);
                 // Don't re-insert child - it's been absorbed
                 continue;
@@ -450,10 +404,7 @@ where
             // Right factor has: new_bond (from factorize), bond1, bond2
             // Parent has: bond1, bond2 (among other indices)
             // Contract along bond1 and bond2
-            let contracted = parent_tensor.tensordot(
-                &factorize_result.right,
-                &[(bond1.clone(), bond1), (bond2.clone(), bond2)],
-            )?;
+            let contracted = T::contract(&[parent_tensor, factorize_result.right])?;
             result_tensors.insert(parent_name.clone(), contracted);
         }
 
@@ -549,20 +500,9 @@ where
             .contract_to_tensor()
             .map_err(|e| anyhow::anyhow!("contract_naive: failed to contract tn2: {}", e))?;
 
-        // 4. Find common indices (site indices) to contract
-        let common = find_common_indices(&tensor1, &tensor2);
-
-        // 5. Contract along common indices
-        if common.is_empty() {
-            // Outer product when no common indices
-            tensor1.outer_product(&tensor2)
-        } else {
-            let pairs: Vec<_> = common
-                .iter()
-                .map(|idx| (idx.clone(), idx.clone()))
-                .collect();
-            tensor1.tensordot(&tensor2, &pairs)
-        }
+        // 4. Contract along common indices
+        // T::contract auto-contracts all is_contractable pairs
+        T::contract(&[tensor1, tensor2])
     }
 
     /// Validate that `canonical_center` and edge `ortho_towards` are consistent.

@@ -575,7 +575,7 @@ impl TensorTrain {
         let mut env = {
             let a0_conj = self.tensor(0).conj();
             let b0 = other_sim.tensor(0);
-            a0_conj.contract_einsum(b0)
+            a0_conj.contract(b0)
         };
 
         // Sweep through remaining sites
@@ -584,9 +584,9 @@ impl TensorTrain {
             let bi = other_sim.tensor(i);
 
             // Contract: env * conj(A_i) (over self's link index)
-            env = env.contract_einsum(&ai_conj);
+            env = env.contract(&ai_conj);
             // Contract: result * B_i (over other's link index and site indices)
-            env = env.contract_einsum(bi);
+            env = env.contract(bi);
         }
 
         // Result should be a scalar (0-dimensional tensor)

@@ -1038,7 +1038,7 @@ Permute the tensor dimensions using the given new indices order. This is the mai
 
 Permute the tensor dimensions, returning a new tensor. This method reorders the indices, dimensions, and data according to the given permutation. The permutation specifies which old axis each new
 
-### `pub fn contract_einsum(&self, other: & Self) -> Self` (impl TensorDynLen < Id , Symm >)
+### `pub fn contract(&self, other: & Self) -> Self` (impl TensorDynLen < Id , Symm >)
 
 Contract this tensor with another tensor along common indices. This method finds common indices between `self` and `other`, then contracts along those indices. The result tensor contains all non-contracted indices
 

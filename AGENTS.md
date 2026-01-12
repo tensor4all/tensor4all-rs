@@ -415,6 +415,20 @@ gh pr create --base main --title "Feature: name" --body "Description"
 gh pr merge --auto --squash --delete-branch
 ```
 
+### Updating Pull Requests
+
+**Before updating a PR, always check if it has been merged:**
+
+```bash
+# Check PR state
+gh pr view <PR_NUMBER> --json state
+```
+
+- If `state: "MERGED"` → PR is already merged. Do NOT push updates. Ask user for next steps.
+- If `state: "OPEN"` → Safe to push updates.
+
+**Never push to a merged PR** - the updates will be ignored and waste effort.
+
 ### Monitoring CI
 
 ```bash

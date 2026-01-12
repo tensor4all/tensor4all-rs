@@ -25,7 +25,7 @@ A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assis
 | `ITensor` | `QSpace` | `TensorDynLen<Id, Symm>` |
 | `Dense` | `DATA` | `Storage::DenseF64/C64` |
 | `Diag` | — | `Storage::DiagF64/C64` |
-| `A * B` | — | `a.contract_einsum(&b)` |
+| `A * B` | — | `a.contract(&b)` |
 
 ### Truncation Tolerance
 
