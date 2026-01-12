@@ -5,6 +5,7 @@
 //! Discrete Fourier Transform as a Matrix Product Operator", arXiv:2404.03182.
 
 use anyhow::Result;
+use mdarray::DTensor;
 use num_complex::Complex64;
 use num_traits::Zero;
 use std::f64::consts::PI;
@@ -163,7 +164,7 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
                 for beta in 0..=k {
                     let mut sum = Complex64::zero();
                     for alpha in 0..=k {
-                        sum += core_tensor[alpha][tau][sigma][beta];
+                        sum += core_tensor[[alpha, tau, sigma, beta]];
                     }
                     let s = tau * 2 + sigma;
                     t.set3(0, s, beta, sum);
@@ -182,7 +183,7 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
                 for sigma in 0..2 {
                     for beta in 0..=k {
                         let s = tau * 2 + sigma;
-                        t.set3(alpha, s, beta, core_tensor[alpha][tau][sigma][beta]);
+                        t.set3(alpha, s, beta, core_tensor[[alpha, tau, sigma, beta]]);
                     }
                 }
             }
@@ -198,7 +199,7 @@ fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrai
             for tau in 0..2 {
                 for sigma in 0..2 {
                     let s = tau * 2 + sigma;
-                    t.set3(alpha, s, 0, core_tensor[alpha][tau][sigma][0]);
+                    t.set3(alpha, s, 0, core_tensor[[alpha, tau, sigma, 0]]);
                 }
             }
         }
@@ -286,14 +287,18 @@ fn lagrange_polynomial(grid: &[f64], bary_weights: &[f64], alpha: usize, x: f64)
 ///
 /// A[alpha, tau, sigma, beta] = P_alpha(x) * exp(2πi * sign * x * tau)
 /// where x = (sigma + grid[beta]) / 2
+///
+/// Returns tensor of shape (k+1, 2, 2, k+1)
 fn build_dft_core_tensor(
     grid: &[f64],
     bary_weights: &[f64],
     sign: f64,
-) -> Vec<Vec<Vec<Vec<Complex64>>>> {
+) -> DTensor<Complex64, 4> {
     let k = grid.len() - 1;
 
-    let mut tensor = vec![vec![vec![vec![Complex64::zero(); k + 1]; 2]; 2]; k + 1];
+    // tensor[alpha, tau, sigma, beta] - shape: (k+1, 2, 2, k+1)
+    let mut tensor =
+        DTensor::<Complex64, 4>::from_elem([k + 1, 2, 2, k + 1], Complex64::zero());
 
     for alpha in 0..=k {
         for tau in 0..2 {
@@ -303,7 +308,7 @@ fn build_dft_core_tensor(
                     let p_alpha = lagrange_polynomial(grid, bary_weights, alpha, x);
                     let phase = 2.0 * PI * sign * x * tau as f64;
                     let exp_phase = Complex64::new(phase.cos(), phase.sin());
-                    tensor[alpha][tau][sigma][beta] = Complex64::new(p_alpha, 0.0) * exp_phase;
+                    tensor[[alpha, tau, sigma, beta]] = Complex64::new(p_alpha, 0.0) * exp_phase;
                 }
             }
         }
