@@ -476,10 +476,11 @@ pub fn common_inds<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> Vec<I> {
         .collect()
 }
 
-/// Find common indices between two slices and return their positions.
+/// Find contractable indices between two slices and return their positions.
 ///
 /// Returns a vector of `(pos_a, pos_b)` tuples where each tuple indicates
-/// that `indices_a[pos_a]` and `indices_b[pos_b]` have the same ID.
+/// that `indices_a[pos_a]` and `indices_b[pos_b]` are contractable
+/// (same ID, same dimension, and compatible ConjState).
 ///
 /// # Example
 /// ```
@@ -500,7 +501,7 @@ pub fn common_ind_positions<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> V
     let mut positions = Vec::new();
     for (pos_a, idx_a) in indices_a.iter().enumerate() {
         for (pos_b, idx_b) in indices_b.iter().enumerate() {
-            if idx_a.id() == idx_b.id() {
+            if idx_a.is_contractable(idx_b) {
                 positions.push((pos_a, pos_b));
                 break; // Each index in a can match at most one in b
             }

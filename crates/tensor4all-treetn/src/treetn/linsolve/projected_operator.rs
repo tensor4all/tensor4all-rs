@@ -178,7 +178,7 @@ where
         }
 
         // Contract all tensors
-        let contracted = T::contract_einsum(&all_tensors)?;
+        let contracted = T::contract(&all_tensors)?;
 
         // Step 4: Transform output - replace internal output indices with true indices
         if let Some(ref output_mapping) = self.output_mapping {
@@ -302,53 +302,19 @@ where
             bra_conj.clone()
         };
 
-        // Contract transformed_ket with operator on common indices
-        let ket_indices = transformed_ket.external_indices();
-        let op_indices = tensor_op.external_indices();
-        let ket_op_common: Vec<_> = ket_indices
-            .iter()
-            .filter_map(|idx_ket| {
-                op_indices
-                    .iter()
-                    .find(|idx_op| idx_ket.same_id(idx_op))
-                    .map(|idx_op| (idx_ket.clone(), idx_op.clone()))
-            })
-            .collect();
+        // Contract ket with op - T::contract auto-detects contractable pairs
+        let ket_op = T::contract(&[transformed_ket, tensor_op.clone()])?;
 
-        let ket_op = if ket_op_common.is_empty() {
-            // If no common indices, do outer product
-            transformed_ket.tensordot(tensor_op, &[])?
-        } else {
-            transformed_ket.tensordot(tensor_op, &ket_op_common)?
-        };
+        // Contract ket_op with transformed_bra_conj
+        let ket_op_bra = T::contract(&[ket_op, transformed_bra_conj])?;
 
-        // Contract ket_op with transformed_bra_conj on common indices
-        let ket_op_indices = ket_op.external_indices();
-        let bra_conj_indices = transformed_bra_conj.external_indices();
-        let ket_op_bra_common: Vec<_> = ket_op_indices
-            .iter()
-            .filter_map(|idx| {
-                bra_conj_indices
-                    .iter()
-                    .find(|idx_bra| idx.same_id(idx_bra))
-                    .map(|idx_bra| (idx.clone(), idx_bra.clone()))
-            })
-            .collect();
-
-        let ket_op_bra = if ket_op_bra_common.is_empty() {
-            // If no common indices, do outer product
-            ket_op.tensordot(&transformed_bra_conj, &[])?
-        } else {
-            ket_op.tensordot(&transformed_bra_conj, &ket_op_bra_common)?
-        };
-
-        // Contract ket_op_bra with child environments using T::contract_einsum
+        // Contract ket_op_bra with child environments using T::contract
         if child_envs.is_empty() {
             Ok(ket_op_bra)
         } else {
             let mut all_tensors: Vec<T> = vec![ket_op_bra];
             all_tensors.extend(child_envs);
-            T::contract_einsum(&all_tensors)
+            T::contract(&all_tensors)
         }
     }
 

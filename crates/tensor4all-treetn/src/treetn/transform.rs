@@ -230,22 +230,9 @@ where
                 .remove(&to)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", to))?;
 
-            // Find the bond index for this edge
-            let edge = self
-                .graph
-                .graph()
-                .find_edge(from, to)
-                .or_else(|| self.graph.graph().find_edge(to, from))
-                .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", from, to))?;
-
-            let bond_idx = self
-                .bond_index(edge)
-                .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))?
-                .clone();
-
-            // Contract using TensorLike::tensordot
-            let contracted = to_tensor
-                .tensordot(&from_tensor, &[(bond_idx.clone(), bond_idx)])
+            // Contract using TensorLike::contract
+            // (bond indices are auto-detected via is_contractable)
+            let contracted = T::contract(&[to_tensor, from_tensor])
                 .map_err(|e| anyhow::anyhow!("Failed to contract tensors: {}", e))?;
 
             tensors.insert(to, contracted);

@@ -70,7 +70,7 @@ fn test_diag_tensor_contract_diag_diag_all_contracted() {
     let tensor_b = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_b);
 
     // Contract all indices: result should be scalar (inner product)
-    let result = tensor_a.contract_einsum(&tensor_b);
+    let result = tensor_a.contract(&tensor_b);
 
     // Result should be scalar: 1*3 + 2*4 = 11
     assert_eq!(result.dims.len(), 0);
@@ -95,7 +95,7 @@ fn test_diag_tensor_contract_diag_diag_partial() {
     let tensor_b = diag_tensor_dyn_len(vec![j.clone(), k.clone()], diag_b);
 
     // Contract along j: result should be DiagTensor[i, k]
-    let result = tensor_a.contract_einsum(&tensor_b);
+    let result = tensor_a.contract(&tensor_b);
 
     assert_eq!(result.dims, vec![3, 3]);
     assert!(is_diag_tensor(&result));
@@ -126,7 +126,7 @@ fn test_diag_tensor_contract_diag_dense() {
     let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j: result should be DenseTensor[i, k]
-    let result = tensor_a.contract_einsum(&tensor_b);
+    let result = tensor_a.contract(&tensor_b);
 
     assert_eq!(result.dims, vec![2, 2]);
     // Result should be DenseTensor (Diag×Dense converts Diag to Dense first)
@@ -228,7 +228,7 @@ fn test_diag_tensor_contract_rank3() {
     let tensor_b = diag_tensor_dyn_len(vec![k.clone(), l.clone()], diag_b);
 
     // Contract along k: result should be DiagTensor[i, j, l]
-    let result = tensor_a.contract_einsum(&tensor_b);
+    let result = tensor_a.contract(&tensor_b);
 
     assert_eq!(result.dims, vec![2, 2, 2]);
     assert!(is_diag_tensor(&result));

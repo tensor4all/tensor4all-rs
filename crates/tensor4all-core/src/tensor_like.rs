@@ -180,7 +180,7 @@ pub struct FactorizeResult<T: TensorLike> {
 ///
 /// # Design Principles
 ///
-/// - **Minimal interface**: Only external indices and explicit contraction
+/// - **Minimal interface**: Only external indices and automatic contraction
 /// - **Fully generic**: Uses associated type for `Index`, returns `Self`
 /// - **Stable ordering**: `external_indices()` returns indices in deterministic order
 /// - **No trait objects**: Requires `Sized`, cannot use `dyn TensorLike`
@@ -191,8 +191,7 @@ pub struct FactorizeResult<T: TensorLike> {
 /// use tensor4all_core::TensorLike;
 ///
 /// fn contract_pair<T: TensorLike>(a: &T, b: &T) -> Result<T> {
-///     let pairs = find_common_pairs(&a.external_indices(), &b.external_indices());
-///     a.tensordot(b, &pairs)
+///     T::contract(&[a.clone(), b.clone()])
 /// }
 /// ```
 ///
@@ -217,34 +216,6 @@ pub struct FactorizeResult<T: TensorLike> {
 /// This separation allows tensor networks (like `TreeTN`) to implement
 /// index operations without implementing contraction/factorization.
 pub trait TensorLike: TensorIndex {
-    /// Explicit contraction between two tensor-like objects.
-    ///
-    /// This performs binary contraction over the specified index pairs.
-    /// Each pair `(idx_self, idx_other)` specifies:
-    /// - An index from `self` to contract
-    /// - An index from `other` to contract with
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - The other tensor to contract with (same type)
-    /// * `pairs` - List of (self_index, other_index) pairs to contract
-    ///
-    /// # Returns
-    ///
-    /// A new tensor representing the contracted result.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - `pairs` is empty
-    /// - An index in `pairs` doesn't exist in the corresponding object
-    /// - Index dimensions don't match
-    /// - There are common indices not in `pairs` (ambiguous contraction)
-    fn tensordot(
-        &self,
-        other: &Self,
-        pairs: &[(<Self as TensorIndex>::Index, <Self as TensorIndex>::Index)],
-    ) -> Result<Self>;
 
     /// Factorize this tensor into left and right factors.
     ///
@@ -373,11 +344,11 @@ pub trait TensorLike: TensorIndex {
     /// - An index ID in `new_order` is not found in the tensor
     fn permuteinds(&self, new_order: &[<Self as TensorIndex>::Index]) -> Result<Self>;
 
-    /// Contract multiple tensors using einsum-style contraction.
+    /// Contract multiple tensors over their contractable indices.
     ///
-    /// This method contracts 2 or more tensors over their common indices.
-    /// Indices appearing in exactly two tensors are contracted.
-    /// Indices appearing in only one tensor appear in the output.
+    /// This method contracts 2 or more tensors. Pairs of indices that satisfy
+    /// `is_contractable()` (same ID, same dimension, compatible ConjState)
+    /// are automatically contracted. This is similar to ITensor's `*` operator.
     ///
     /// # Arguments
     ///
@@ -390,9 +361,9 @@ pub trait TensorLike: TensorIndex {
     /// # Behavior by N
     /// - N=0: Error
     /// - N=1: Clone of input
-    /// - N=2: Uses `tensordot` over common indices
-    /// - N>=3: Recursively contracts pairs
-    fn contract_einsum(tensors: &[Self]) -> Result<Self>;
+    /// - N=2: Contracts over contractable index pairs
+    /// - N>=3: Recursively contracts pairs with optimal ordering
+    fn contract(tensors: &[Self]) -> Result<Self>;
 
     // ========================================================================
     // Vector space operations (for Krylov solvers)

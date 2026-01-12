@@ -36,7 +36,7 @@ fn test_tensor_like_num_external_indices() {
 }
 
 #[test]
-fn test_tensor_like_tensordot_basic() {
+fn test_tensor_like_contract_basic() {
     // Create two tensors: A(i,j) and B(j,k)
     // Contract over j to get C(i,k)
     let i = Index::<DynId>::new_dyn(2);
@@ -52,12 +52,9 @@ fn test_tensor_like_tensordot_basic() {
     let b_data: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let b = TensorDynLen::from_indices(vec![j_copy.clone(), k.clone()], f64::dense_storage(b_data));
 
-    // Create pairs with DynIndex
-    let pairs: Vec<(DynIndex, DynIndex)> = vec![(j.clone(), j_copy.clone())];
-
-    // Use TensorLike::tensordot
-    let c = <TensorDynLen as TensorLike>::tensordot(&a, &b, &pairs)
-        .expect("tensordot should succeed");
+    // Use TensorLike::contract - auto-detects contractable pairs via is_contractable
+    let c = <TensorDynLen as TensorLike>::contract(&[a, b])
+        .expect("contract should succeed");
 
     // Result should be 2x4
     assert_eq!(c.dims, vec![2, 4]);
