@@ -307,10 +307,10 @@
 
   #v(0.5em)
 
-  *Einsum-style contraction* — automatic matching by index ID:
+  *Einsum-style contraction* — automatic matching by `is_contractable()`:
   #code-block[
     ```rust
-    // Indices with same ID are automatically contracted
+    // Contractable index pairs are automatically found and contracted
     let c = TensorLike::contract_einsum(&[a, b, c])?;
     ```
   ]
