@@ -999,11 +999,11 @@ fn test_shift_open_boundary() {
 ///
 /// For flip, the boundary condition affects whether flip(0) = 0 or flip(0) = 2^R (overflow).
 /// Since flip(x) = 2^R - x:
-/// - flip(0) = 2^R = 0 (mod 2^R) with Periodic, but overflows with Open
+/// - flip(0) = 2^R = 0 (mod 2^R) with Periodic, but produces zero vector with Open (overflow)
 /// - flip(x) for x > 0 gives 2^R - x which is in [1, 2^R-1], so no overflow
 ///
-/// Note: Looking at the flip implementation, Open BC is actually the same as Periodic
-/// for the output (bc_val is 1.0 for both). The difference would be in flipop_to_negativedomain.
+/// Note: Julia's flipop only supports bc=1 (periodic) or bc=-1 (antisymmetric), not Open BC.
+/// The Open BC for flip is a Rust-specific extension that zeros out the flip(0) case.
 #[test]
 fn test_flip_open_boundary() {
     let r = 3;
@@ -1049,31 +1049,52 @@ fn test_flip_open_boundary() {
         // Contract result
         let result_vec = contract_treetn_to_vector(&result_treetn, &output_indices);
 
-        // For flip with current implementation, Open BC behaves same as Periodic
-        // (bc_val = 1.0 for both in flip_mpo)
-        let expected_x = if x == 0 { 0 } else { n - x };
+        // With Open BC:
+        // - flip(0) = 2^R overflows -> zero vector (all coefficients zero)
+        // - flip(x) for x > 0 = 2^R - x (no overflow, normal result)
+        let is_overflow = x == 0; // flip(0) = 2^R causes overflow
 
-        eprintln!("flip({}, Open) = {} (expected)", x, expected_x);
+        if is_overflow {
+            // All coefficients should be zero
+            eprintln!("flip({}, Open) = overflow -> zero vector", x);
+            for y in 0..n {
+                assert_relative_eq!(
+                    result_vec[y].re,
+                    0.0,
+                    epsilon = 1e-10,
+                    max_relative = 1e-10
+                );
+                assert_relative_eq!(
+                    result_vec[y].im,
+                    0.0,
+                    epsilon = 1e-10,
+                    max_relative = 1e-10
+                );
+            }
+        } else {
+            // Normal result: delta at expected_x
+            let expected_x = n - x;
+            eprintln!("flip({}, Open) = {} (no overflow)", x, expected_x);
 
-        // Check result is delta at expected_x
-        for y in 0..n {
-            let expected_val = if y == expected_x {
-                Complex64::one()
-            } else {
-                Complex64::zero()
-            };
-            assert_relative_eq!(
-                result_vec[y].re,
-                expected_val.re,
-                epsilon = 1e-10,
-                max_relative = 1e-10
-            );
-            assert_relative_eq!(
-                result_vec[y].im,
-                expected_val.im,
-                epsilon = 1e-10,
-                max_relative = 1e-10
-            );
+            for y in 0..n {
+                let expected_val = if y == expected_x {
+                    Complex64::one()
+                } else {
+                    Complex64::zero()
+                };
+                assert_relative_eq!(
+                    result_vec[y].re,
+                    expected_val.re,
+                    epsilon = 1e-10,
+                    max_relative = 1e-10
+                );
+                assert_relative_eq!(
+                    result_vec[y].im,
+                    expected_val.im,
+                    epsilon = 1e-10,
+                    max_relative = 1e-10
+                );
+            }
         }
     }
 

@@ -82,9 +82,18 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
             tensors.push(t);
         } else if n == r - 1 {
             // Last tensor: apply boundary condition
+            //
+            // Note: Julia's flipop only supports bc=1 (periodic) or bc=-1 (antisymmetric).
+            // It does NOT support "open" boundary condition (zero at overflow).
+            // For the flip operation f(x) = 2^R - x:
+            // - flip(0) = 2^R ≡ 0 (mod 2^R), which causes overflow
+            // - All other x ∈ [1, 2^R-1] map to valid values without overflow
+            //
+            // For Open BC, we zero out the flip(0) case by setting bc_val = 0.
+            // This is a Rust-specific extension not present in Julia's flipop.
             let bc_val = match bc {
                 BoundaryCondition::Periodic => Complex64::one(),
-                BoundaryCondition::Open => Complex64::one(), // For flip, open BC is same as periodic at output
+                BoundaryCondition::Open => Complex64::zero(), // Zero out overflow (flip(0) = 2^R)
             };
 
             // Contract with bc_tensor = [1.0, bc] on right link
