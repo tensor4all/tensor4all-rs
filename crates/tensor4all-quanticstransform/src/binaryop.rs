@@ -5,6 +5,7 @@
 //! a, b ∈ {-1, 0, 1}.
 
 use anyhow::Result;
+use mdarray::DTensor;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
@@ -146,13 +147,14 @@ fn binaryop_tensor_single(
     cin_on: bool,
     cout_on: bool,
     bc: i8,
-) -> Vec<Vec<Vec<Vec<Vec<Complex64>>>>> {
+) -> DTensor<Complex64, 5> {
     let cin_states: Vec<i8> = if cin_on { vec![-1, 0, 1] } else { vec![0] };
     let cin_size = cin_states.len();
     let cout_size = if cout_on { 3 } else { 1 };
 
-    // tensor[cin][cout][x][y][out]
-    let mut tensor = vec![vec![vec![vec![vec![Complex64::zero(); 2]; 2]; 2]; cout_size]; cin_size];
+    // tensor[cin, cout, x, y, out] - shape: (cin_size, cout_size, 2, 2, 2)
+    let mut tensor =
+        DTensor::<Complex64, 5>::from_elem([cin_size, cout_size, 2, 2, 2], Complex64::zero());
 
     for (idx_cin, &cin) in cin_states.iter().enumerate() {
         for x in 0..2i8 {
@@ -163,14 +165,14 @@ fn binaryop_tensor_single(
 
                 if cout_on {
                     let cout_idx = (cout + 1) as usize;
-                    tensor[idx_cin][cout_idx][x as usize][y as usize][out_bit] = Complex64::one();
+                    tensor[[idx_cin, cout_idx, x as usize, y as usize, out_bit]] = Complex64::one();
                 } else {
                     let weight = if cout == 0 {
                         Complex64::one()
                     } else {
                         Complex64::new(bc as f64, 0.0)
                     };
-                    tensor[idx_cin][0][x as usize][y as usize][out_bit] = weight;
+                    tensor[[idx_cin, 0, x as usize, y as usize, out_bit]] = weight;
                 }
             }
         }
@@ -347,17 +349,16 @@ mod tests {
     fn test_binaryop_tensor_single() {
         // Test (1, 1) coefficients (sum)
         let tensor = binaryop_tensor_single(1, 1, false, false, 1);
-        assert_eq!(tensor.len(), 1); // cin_size = 1
-        assert_eq!(tensor[0].len(), 1); // cout_size = 1
+        assert_eq!(*tensor.shape(), (1, 1, 2, 2, 2)); // (cin_size, cout_size, x, y, out)
 
         // x=0, y=0: result=0, out=0
-        assert_eq!(tensor[0][0][0][0][0], Complex64::one());
+        assert_eq!(tensor[[0, 0, 0, 0, 0]], Complex64::one());
         // x=0, y=1: result=1, out=1
-        assert_eq!(tensor[0][0][0][1][1], Complex64::one());
+        assert_eq!(tensor[[0, 0, 0, 1, 1]], Complex64::one());
         // x=1, y=0: result=1, out=1
-        assert_eq!(tensor[0][0][1][0][1], Complex64::one());
+        assert_eq!(tensor[[0, 0, 1, 0, 1]], Complex64::one());
         // x=1, y=1: result=2, out=0 (with carry)
-        assert_eq!(tensor[0][0][1][1][0], Complex64::one());
+        assert_eq!(tensor[[0, 0, 1, 1, 0]], Complex64::one());
     }
 
     #[test]
@@ -366,13 +367,13 @@ mod tests {
         let tensor = binaryop_tensor_single(1, -1, false, false, 1);
 
         // x=0, y=0: result=0, out=0
-        assert_eq!(tensor[0][0][0][0][0], Complex64::one());
+        assert_eq!(tensor[[0, 0, 0, 0, 0]], Complex64::one());
         // x=0, y=1: result=-1, out=1 (|−1| mod 2 = 1)
-        assert_eq!(tensor[0][0][0][1][1], Complex64::one());
+        assert_eq!(tensor[[0, 0, 0, 1, 1]], Complex64::one());
         // x=1, y=0: result=1, out=1
-        assert_eq!(tensor[0][0][1][0][1], Complex64::one());
+        assert_eq!(tensor[[0, 0, 1, 0, 1]], Complex64::one());
         // x=1, y=1: result=0, out=0
-        assert_eq!(tensor[0][0][1][1][0], Complex64::one());
+        assert_eq!(tensor[[0, 0, 1, 1, 0]], Complex64::one());
     }
 
     #[test]
