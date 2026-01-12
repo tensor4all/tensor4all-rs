@@ -441,8 +441,7 @@ where
         // Contract A and B
         let tensor_a = subtree.tensor(idx_a).unwrap();
         let tensor_b = subtree.tensor(idx_b).unwrap();
-        let tensor_ab = tensor_a
-            .tensordot(tensor_b, &[(bond_ab.clone(), bond_ab.clone())])
+        let tensor_ab = T::contract(&[tensor_a.clone(), tensor_b.clone()])
             .context("Failed to contract A and B")?;
 
         // Determine left indices (indices that will remain on A after factorization)

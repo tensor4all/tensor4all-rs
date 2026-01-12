@@ -44,7 +44,7 @@ fn test_factorize_reconstruction(options: &FactorizeOptions) {
     let result = factorize(&tensor, &left_inds, options).unwrap();
 
     // Verify reconstruction: left * right ≈ original
-    let reconstructed = result.left.contract_einsum(&result.right);
+    let reconstructed = result.left.contract(&result.right);
     assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
 }
 
@@ -143,7 +143,7 @@ fn test_factorize_svd_rank3() {
     let options = FactorizeOptions::svd();
     let result = factorize(&tensor, &left_inds, &options).unwrap();
 
-    let reconstructed = result.left.contract_einsum(&result.right);
+    let reconstructed = result.left.contract(&result.right);
     assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
 }
 
@@ -247,10 +247,10 @@ fn test_diag_dense_contraction_svd_internals() {
     assert!(common_found, "S and V should share a common index");
 
     // Contractions should work
-    let sv = s.contract_einsum(&v);
+    let sv = s.contract(&v);
     assert_eq!(sv.dims.len(), 2, "S*V should be a 2D tensor");
 
-    let us = u.contract_einsum(&s);
+    let us = u.contract(&s);
     assert_eq!(us.dims.len(), 2, "U*S should be a 2D tensor");
 }
 

@@ -231,20 +231,7 @@ where
             };
 
             // Step 2: Contract with operator
-            // Find common indices between transformed state and operator
-            let state_indices = transformed_state.external_indices();
-            let op_indices = op_tensor.external_indices();
-            let common: Vec<_> = state_indices
-                .iter()
-                .filter_map(|idx_s| {
-                    op_indices
-                        .iter()
-                        .find(|idx_o| idx_s.same_id(idx_o))
-                        .map(|idx_o| (idx_s.clone(), idx_o.clone()))
-                })
-                .collect();
-
-            let contracted = transformed_state.tensordot(op_tensor, &common)?;
+            let contracted = T::contract(&[transformed_state, op_tensor.clone()])?;
 
             // Step 3: Replace MPO's output indices with true output indices
             let result_tensor = if let Some(mapping) = self.output_mapping.get(&node) {
@@ -300,39 +287,14 @@ where
 
             op_tensor = Some(match op_tensor {
                 None => tensor,
-                Some(t) => {
-                    let t_indices = t.external_indices();
-                    let tensor_indices = tensor.external_indices();
-                    let common: Vec<_> = t_indices
-                        .iter()
-                        .filter_map(|idx_t| {
-                            tensor_indices
-                                .iter()
-                                .find(|idx| idx_t.same_id(idx))
-                                .map(|idx| (idx_t.clone(), idx.clone()))
-                        })
-                        .collect();
-                    t.tensordot(&tensor, &common)?
-                }
+                Some(t) => T::contract(&[t, tensor.clone()])?,
             });
         }
 
         let op_tensor = op_tensor.ok_or_else(|| anyhow::anyhow!("Empty region"))?;
 
         // Contract transformed tensor with operator
-        let transformed_indices = transformed.external_indices();
-        let op_indices = op_tensor.external_indices();
-        let common: Vec<_> = transformed_indices
-            .iter()
-            .filter_map(|idx_t| {
-                op_indices
-                    .iter()
-                    .find(|idx_o| idx_t.same_id(idx_o))
-                    .map(|idx_o| (idx_t.clone(), idx_o.clone()))
-            })
-            .collect();
-
-        let contracted = transformed.tensordot(&op_tensor, &common)?;
+        let contracted = T::contract(&[transformed, op_tensor])?;
 
         // Step 3: Replace output indices back to true indices
         let mut result = contracted;

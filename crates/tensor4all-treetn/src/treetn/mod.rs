@@ -547,17 +547,13 @@ where
         let left_tensor = factorize_result.left;
         let right_tensor = factorize_result.right;
 
-        // Get edge index on dst side (same as src side in Einsum mode)
-        let bond_on_dst = bond_on_src.clone();
-
         // Absorb right_tensor into dst
         let tensor_dst = self
             .tensor(dst)
             .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
             .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
-        let updated_dst_tensor = tensor_dst
-            .tensordot(&right_tensor, &[(bond_on_dst.clone(), bond_on_src.clone())])
+        let updated_dst_tensor = T::contract(&[tensor_dst.clone(), right_tensor])
             .with_context(|| {
                 format!(
                     "{}: failed to absorb right factor into dst tensor",

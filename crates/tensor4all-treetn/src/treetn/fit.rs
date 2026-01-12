@@ -292,49 +292,17 @@ where
         .tensor(node_idx_c)
         .ok_or_else(|| anyhow::anyhow!("Tensor not found in tn_c"))?;
 
-    // Get site indices (physical indices) for this node
-    let site_space_a = tn_a.site_space(node).cloned().unwrap_or_default();
-    let site_space_b = tn_b.site_space(node).cloned().unwrap_or_default();
-
-    // Find common indices between A's site and B's site
-    let common_site_pairs: Vec<_> = site_space_a
-        .iter()
-        .filter_map(|idx_a| {
-            site_space_b
-                .iter()
-                .find(|idx_b| idx_a.same_id(idx_b))
-                .map(|idx_b| (idx_a.clone(), idx_b.clone()))
-        })
-        .collect();
-
     // Contract A * B on site indices
-    let ab = if common_site_pairs.is_empty() {
-        // No common site indices - outer product
-        tensor_a.tensordot(tensor_b, &[])
-            .map_err(|e| anyhow::anyhow!("tensordot failed: {}", e))?
-    } else {
-        tensor_a.tensordot(tensor_b, &common_site_pairs)
-            .map_err(|e| anyhow::anyhow!("tensordot failed: {}", e))?
-    };
+    // T::contract auto-contracts all is_contractable pairs
+    let ab = T::contract(&[tensor_a.clone(), tensor_b.clone()])
+        .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     // Contract with conj(C) on remaining site indices
     let c_conj = tensor_c.conj();
 
-    // Find common indices between AB and conj(C)
-    let site_space_c = tn_c.site_space(node).cloned().unwrap_or_default();
-    let ab_c_common: Vec<_> = ab
-        .external_indices()
-        .iter()
-        .filter_map(|idx_ab| {
-            site_space_c
-                .iter()
-                .find(|idx_c| idx_ab.same_id(idx_c))
-                .map(|idx_c| (idx_ab.clone(), idx_c.clone()))
-        })
-        .collect();
-
-    let env = ab.tensordot(&c_conj, &ab_c_common)
-        .map_err(|e| anyhow::anyhow!("tensordot failed: {}", e))?;
+    // Contract AB with conj(C) - T::contract auto-contracts all is_contractable pairs
+    let env = T::contract(&[ab, c_conj])
+        .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     Ok(env)
 }
@@ -383,62 +351,19 @@ where
     }
 
     // Non-leaf: contract A × B × conj(C) × child_envs
-    let site_space_a = tn_a.site_space(node).cloned().unwrap_or_default();
-    let site_space_b = tn_b.site_space(node).cloned().unwrap_or_default();
-
-    // Contract A and B on site indices
-    let common_site_pairs: Vec<_> = site_space_a
-        .iter()
-        .filter_map(|idx_a| {
-            site_space_b
-                .iter()
-                .find(|idx_b| idx_a.same_id(idx_b))
-                .map(|idx_b| (idx_a.clone(), idx_b.clone()))
-        })
-        .collect();
-
-    let ab = if common_site_pairs.is_empty() {
-        tensor_a.tensordot(tensor_b, &[])
-            .map_err(|e| anyhow::anyhow!("tensordot failed: {}", e))?
-    } else {
-        tensor_a.tensordot(tensor_b, &common_site_pairs)
-            .map_err(|e| anyhow::anyhow!("tensordot failed: {}", e))?
-    };
+    // T::contract auto-contracts all is_contractable pairs
+    let ab = T::contract(&[tensor_a.clone(), tensor_b.clone()])
+        .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     // Contract with conj(C)
     let c_conj = tensor_c.conj();
-    let site_space_c = tn_c.site_space(node).cloned().unwrap_or_default();
-    let ab_c_common: Vec<_> = ab
-        .external_indices()
-        .iter()
-        .filter_map(|idx_ab| {
-            site_space_c
-                .iter()
-                .find(|idx_c| idx_ab.same_id(idx_c))
-                .map(|idx_c| (idx_ab.clone(), idx_c.clone()))
-        })
-        .collect();
-
-    let mut result = ab.tensordot(&c_conj, &ab_c_common)
-        .map_err(|e| anyhow::anyhow!("tensordot failed: {}", e))?;
+    let mut result = T::contract(&[ab, c_conj])
+        .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     // Contract with child environments
     for child_env in child_envs {
-        // Find common indices between result and child_env
-        let common: Vec<_> = result
-            .external_indices()
-            .iter()
-            .filter_map(|idx_r| {
-                child_env
-                    .external_indices()
-                    .iter()
-                    .find(|idx_e| idx_r.same_id(idx_e))
-                    .map(|idx_e| (idx_r.clone(), idx_e.clone()))
-            })
-            .collect();
-
-        result = result.tensordot(child_env, &common)
-            .map_err(|e| anyhow::anyhow!("tensordot failed: {}", e))?;
+        result = T::contract(&[result, child_env.clone()])
+            .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
     }
 
     Ok(result)
@@ -574,72 +499,21 @@ where
         }
 
         // Compute optimal 2-site tensor: env × A[u] × B[u] × A[v] × B[v] × env
-        // Contract A[u] and B[u] on site indices
-        let site_u_a = self.tn_a.site_space(node_u).cloned().unwrap_or_default();
-        let site_u_b = self.tn_b.site_space(node_u).cloned().unwrap_or_default();
-        let common_u: Vec<_> = site_u_a
-            .iter()
-            .filter_map(|idx_a| {
-                site_u_b
-                    .iter()
-                    .find(|idx_b| idx_a.same_id(idx_b))
-                    .map(|idx_b| (idx_a.clone(), idx_b.clone()))
-            })
-            .collect();
+        // T::contract auto-contracts all is_contractable pairs
+        let ab_u = T::contract(&[a_u.clone(), b_u.clone()])
+            .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
-        let ab_u = a_u.tensordot(b_u, &common_u)
-            .map_err(|e| anyhow::anyhow!("tensordot failed: {}", e))?;
-
-        // Contract A[v] and B[v] on site indices
-        let site_v_a = self.tn_a.site_space(node_v).cloned().unwrap_or_default();
-        let site_v_b = self.tn_b.site_space(node_v).cloned().unwrap_or_default();
-        let common_v: Vec<_> = site_v_a
-            .iter()
-            .filter_map(|idx_a| {
-                site_v_b
-                    .iter()
-                    .find(|idx_b| idx_a.same_id(idx_b))
-                    .map(|idx_b| (idx_a.clone(), idx_b.clone()))
-            })
-            .collect();
-
-        let ab_v = a_v.tensordot(b_v, &common_v)
-            .map_err(|e| anyhow::anyhow!("tensordot failed: {}", e))?;
+        let ab_v = T::contract(&[a_v.clone(), b_v.clone()])
+            .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
         // Contract ab_u and ab_v on internal bonds
-        let common_bonds: Vec<_> = ab_u
-            .external_indices()
-            .iter()
-            .filter_map(|idx_u| {
-                ab_v.external_indices()
-                    .iter()
-                    .find(|idx_v| idx_u.same_id(idx_v))
-                    .map(|idx_v| (idx_u.clone(), idx_v.clone()))
-            })
-            .collect();
-
-        let mut ab_uv = if common_bonds.is_empty() {
-            ab_u.tensordot(&ab_v, &[])
-                .map_err(|e| anyhow::anyhow!("tensordot failed: {}", e))?
-        } else {
-            ab_u.tensordot(&ab_v, &common_bonds)
-                .map_err(|e| anyhow::anyhow!("tensordot failed: {}", e))?
-        };
+        let mut ab_uv = T::contract(&[ab_u, ab_v])
+            .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
         // Contract with environment tensors
         for env in env_tensors {
-            let common: Vec<_> = ab_uv
-                .external_indices()
-                .iter()
-                .filter_map(|idx| {
-                    env.external_indices()
-                        .iter()
-                        .find(|idx_e| idx.same_id(idx_e))
-                        .map(|idx_e| (idx.clone(), idx_e.clone()))
-                })
-                .collect();
-            ab_uv = ab_uv.tensordot(&env, &common)
-                .map_err(|e| anyhow::anyhow!("tensordot failed: {}", e))?;
+            ab_uv = T::contract(&[ab_uv, env.clone()])
+                .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
         }
 
         // The result ab_uv is the optimal 2-site tensor

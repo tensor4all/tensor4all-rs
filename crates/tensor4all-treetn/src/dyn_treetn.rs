@@ -376,7 +376,7 @@ where
         // Contract all tensors together using common indices
         let mut result = tensors.remove(0);
         for tensor in tensors {
-            result = result.contract_einsum(&tensor);
+            result = result.contract(&tensor);
         }
 
         Ok(result)

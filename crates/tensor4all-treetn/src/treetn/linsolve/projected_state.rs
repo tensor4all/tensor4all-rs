@@ -123,8 +123,8 @@ where
             }
         }
 
-        // Use T::contract_einsum for optimal contraction ordering
-        T::contract_einsum(&all_tensors)
+        // Use T::contract for optimal contraction ordering
+        T::contract(&all_tensors)
     }
 
     /// Ensure environments are computed for neighbors of the region.
@@ -196,33 +196,16 @@ where
 
         let bra_conj = tensor_bra.conj();
 
-        // Find common site indices (contract only over site indices, not bond indices)
-        let site_space_bra = self.rhs.site_space(from).cloned().unwrap_or_default();
-        let site_space_ket = bra_state.site_space(from).cloned().unwrap_or_default();
+        // Contract bra and ket - T::contract auto-detects contractable pairs
+        let bra_ket = T::contract(&[bra_conj, tensor_ket.clone()])?;
 
-        let common_site_pairs: Vec<_> = site_space_bra
-            .iter()
-            .filter_map(|idx_bra| {
-                site_space_ket
-                    .iter()
-                    .find(|idx_ket| idx_bra.same_id(idx_ket))
-                    .map(|idx_ket| (idx_bra.clone(), idx_ket.clone()))
-            })
-            .collect();
-
-        let bra_ket = if common_site_pairs.is_empty() {
-            bra_conj.tensordot(tensor_ket, &[])?
-        } else {
-            bra_conj.tensordot(tensor_ket, &common_site_pairs)?
-        };
-
-        // Contract bra*ket with child environments using T::contract_einsum
+        // Contract bra*ket with child environments using T::contract
         if child_envs.is_empty() {
             Ok(bra_ket)
         } else {
             let mut all_tensors: Vec<T> = vec![bra_ket];
             all_tensors.extend(child_envs);
-            T::contract_einsum(&all_tensors)
+            T::contract(&all_tensors)
         }
     }
 

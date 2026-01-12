@@ -356,8 +356,8 @@ where
             })
             .collect::<Result<_>>()?;
 
-        // Use TensorLike::contract_einsum for contraction
-        T::contract_einsum(&tensors)
+        // Use TensorLike::contract for contraction
+        T::contract(&tensors)
     }
 
     /// Build TreeTopology for the subtree region from the solved tensor.

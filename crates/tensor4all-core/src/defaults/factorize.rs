@@ -129,7 +129,7 @@ where
     match options.canonical {
         Canonical::Left => {
             // L = U, R = S * V
-            let right_contracted = s.contract_einsum(&v);
+            let right_contracted = s.contract(&v);
             let right = right_contracted.replaceind(&sim_bond_index, &bond_index);
             Ok(FactorizeResult {
                 left: u,
@@ -141,7 +141,7 @@ where
         }
         Canonical::Right => {
             // L = U * S, R = V
-            let left_contracted = u.contract_einsum(&s);
+            let left_contracted = u.contract(&s);
             let left = left_contracted.replaceind(&sim_bond_index, &bond_index);
             Ok(FactorizeResult {
                 left,

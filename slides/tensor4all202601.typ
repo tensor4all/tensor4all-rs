@@ -189,7 +189,7 @@
     [`Index{Int}`], [`Index<Id, NoSymmSpace>`],
     [`ITensor`], [`TensorDynLen<Id, Symm>`],
     [`Dense` / `Diag`], [`Storage::DenseF64` / `DiagF64`],
-    [`A * B`], [`a.contract_einsum(&b)`],
+    [`A * B`], [`a.contract(&b)` or `T::contract(&[a, b])`],
     [`cutoff`], [`rtol` (= √cutoff)],
   )
   ]
@@ -284,7 +284,7 @@
     }
 
     pub trait TensorLike: TensorIndex {
-        fn tensordot(&self, other: &Self, pairs: &[(Self::Index, Self::Index)]) -> Result<Self>;
+        fn contract(tensors: &[Self]) -> Result<Self>;  // Auto-contracts via is_contractable
         fn factorize(&self, left_inds: &[Self::Index], options: &FactorizeOptions)
             -> Result<FactorizeResult<Self>>;
         fn conj(&self) -> Self;
@@ -300,27 +300,29 @@
 // Slide 10: Contraction Methods
 #slide("Contraction Methods")[
   #text(size: 18pt)[
-  *Explicit contraction* — specify index pairs:
-  #code-block[
-    ```rust
-    // Contract indices i from A with j from B
-    let c = a.tensordot(&b, &[(i, j)])?;
-    ```
-  ]
-
-  #v(0.5em)
-
-  *Einsum-style contraction* — automatic matching by `is_contractable()`:
+  *Automatic contraction* — uses `is_contractable()` to find pairs:
   #code-block[
     ```rust
     // Contractable index pairs are automatically found and contracted
-    let c = TensorLike::contract_einsum(&[a, b, c])?;
+    let c = T::contract(&[a, b, c])?;
+    // Or using * operator for TensorDynLen
+    let c = &a * &b;
+    ```
+  ]
+
+  #v(0.5em)
+
+  *Explicit contraction* — on concrete type (TensorDynLen):
+  #code-block[
+    ```rust
+    // Contract specific indices i from A with j from B
+    let c = a.tensordot(&b, &[(i, j)])?;
     ```
   ]
   ]
 
   #v(0.5em)
-  `tensordot`: explicit control / `contract_einsum`: convenient for networks
+  `contract`: generic, auto-matching / `tensordot`: explicit control (concrete type only)
 ]
 
 // Slide 11: Type Hierarchy Overview
@@ -456,7 +458,7 @@
     // Create tensors and contract
     let a = Tensor::random(&[i.clone(), j.clone()]);
     let b = Tensor::random(&[j.clone(), k.clone()]);
-    let c = a.contract_einsum(&b)?;  // Contract on shared index j
+    let c = &a * &b;  // Contract on shared index j (uses is_contractable)
     ```
   ]
 ]

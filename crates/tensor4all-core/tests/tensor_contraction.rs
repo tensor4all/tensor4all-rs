@@ -40,7 +40,7 @@ fn test_contract_dyn_len_matrix_multiplication() {
     let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j: result should be C[i, k] with all 3.0 (since each element is sum of 3 ones)
-    let result = tensor_a.contract_einsum(&tensor_b);
+    let result = tensor_a.contract(&tensor_b);
     assert_eq!(result.dims, vec![2, 4]);
     assert_eq!(result.indices.len(), 2);
     assert_eq!(result.indices[0].id, i.id);
@@ -137,7 +137,7 @@ fn test_contract_no_common_indices() {
     let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, storage_b);
 
     // This should panic because there are no common indices
-    let _result = tensor_a.contract_einsum(&tensor_b);
+    let _result = tensor_a.contract(&tensor_b);
 }
 
 #[test]
@@ -162,7 +162,7 @@ fn test_contract_three_indices() {
     let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b, Arc::new(storage_b));
 
     // Contract along j and k: result should be C[i, l] with all 12.0 (3 * 4 = 12)
-    let result = tensor_a.contract_einsum(&tensor_b);
+    let result = tensor_a.contract(&tensor_b);
     assert_eq!(result.dims, vec![2, 5]);
     assert_eq!(result.indices.len(), 2);
     assert_eq!(result.indices[0].id, i.id);
@@ -207,7 +207,7 @@ fn test_contract_mixed_f64_c64() {
     // Contract along j: result should be C[i, k] (Complex64)
     // Expected result: [[1+2i + 5+6i, 3+4i + 7+8i], [1+2i + 5+6i, 3+4i + 7+8i]]
     //                  = [[6+8i, 10+12i], [6+8i, 10+12i]]
-    let result = tensor_a.contract_einsum(&tensor_b);
+    let result = tensor_a.contract(&tensor_b);
     assert_eq!(result.dims, vec![2, 2]);
     assert_eq!(result.indices.len(), 2);
     assert_eq!(result.indices[0].id, i.id);
@@ -261,7 +261,7 @@ fn test_contract_mixed_c64_f64() {
     // C[0,1] = (1+2i)*1 + (3+4i)*1 = 4+6i
     // C[1,0] = (5+6i)*1 + (7+8i)*1 = 12+14i
     // C[1,1] = (5+6i)*1 + (7+8i)*1 = 12+14i
-    let result = tensor_a.contract_einsum(&tensor_b);
+    let result = tensor_a.contract(&tensor_b);
     assert_eq!(result.dims, vec![2, 2]);
 
     // Check result storage type
