@@ -121,7 +121,27 @@
     → Agent can refactor entire architecture autonomously
 ]
 
-// Slide 3: Design Philosophy
+// Slide 5: Workflow (2) - Issue-based
+#slide("Typical Workflow (2): Issue-based")[
+  *For larger projects with multiple tasks:*
+
+  #v(0.5em)
+
+  + *Investigate*: Ask agent to analyze codebase and identify issues \
+    → Agent creates GitHub issues via `gh` command
+
+  + *Accumulate*: Build up a backlog of well-defined issues
+
+  + *Resolve*: Agent picks and solves issues one by one \
+    → Each issue becomes a focused PR
+
+  #v(0.5em)
+
+  *Advantage*: Clear task boundaries, easy to track progress, \
+  parallelizable with multiple agents
+]
+
+// Slide: Design Philosophy
 #slide("Design Philosophy of tensor4all-rs")[
   #v(0.5em)
 
