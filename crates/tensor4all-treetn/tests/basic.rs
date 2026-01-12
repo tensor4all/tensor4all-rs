@@ -11,7 +11,7 @@
 use petgraph::graph::NodeIndex;
 use std::sync::Arc;
 use tensor4all_core::storage::DenseStorageF64;
-use tensor4all_core::{DynIndex, IndexLike, Storage, TensorDynLen};
+use tensor4all_core::{DynIndex, IndexLike, Storage, TensorDynLen, TensorIndex};
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 // ============================================================================
@@ -627,8 +627,6 @@ fn test_contract_chain() {
 /// The canonical order is: node names sorted, then site indices per node.
 #[test]
 fn test_contract_to_tensor_index_ordering() {
-    use tensor4all_core::TensorLike;
-
     // Create a TreeTN with string node names for predictable ordering
     let mut tn = TreeTN::<TensorDynLen, String>::new();
 
@@ -676,8 +674,6 @@ fn test_contract_to_tensor_index_ordering() {
 /// Test contract_to_tensor index ordering with reverse alphabetical node names.
 #[test]
 fn test_contract_to_tensor_index_ordering_reverse() {
-    use tensor4all_core::TensorLike;
-
     let mut tn = TreeTN::<TensorDynLen, String>::new();
 
     // Site indices

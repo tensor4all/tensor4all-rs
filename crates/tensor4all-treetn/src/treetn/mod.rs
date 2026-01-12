@@ -43,9 +43,9 @@ pub use localupdate::{
 
 // Re-export linsolve types
 pub use linsolve::{
-    linsolve, EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveResult,
-    LinsolveUpdater, LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator,
-    ProjectedState,
+    apply_linear_operator, linsolve, ApplyOptions, ArcLinearOperator, EnvironmentCache,
+    IndexMapping, LinearOperator, LinsolveOptions, LinsolveResult, LinsolveUpdater,
+    LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator, ProjectedState,
 };
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
@@ -86,6 +86,9 @@ where
     /// Site index network: manages topology and site space (physical indices).
     /// This structure enables topology and site space comparison independent of tensor data.
     pub(crate) site_index_network: SiteIndexNetwork<V, T::Index>,
+    /// Link index network: manages bond/link indices with reverse lookup.
+    /// Provides O(1) lookup from index ID to edge.
+    pub(crate) link_index_network: crate::link_index_network::LinkIndexNetwork<T::Index>,
     /// Orthogonalization direction for each index (bond or site).
     /// Maps index to the node name (V) that the orthogonalization points towards.
     /// - For bond indices: points towards the canonical center direction
@@ -123,6 +126,7 @@ where
             canonical_center: HashSet::new(),
             canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
+            link_index_network: crate::link_index_network::LinkIndexNetwork::new(),
             ortho_towards: HashMap::new(),
         }
     }
@@ -404,6 +408,9 @@ where
         if let Some(site_space_b) = self.site_index_network.site_space_mut(&node_name_b) {
             site_space_b.remove(&bond_index);
         }
+
+        // Register bond index in link_index_network for reverse lookup
+        self.link_index_network.insert(edge_idx, &bond_index);
 
         Ok(edge_idx)
     }

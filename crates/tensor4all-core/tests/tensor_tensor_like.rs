@@ -2,7 +2,7 @@
 
 use tensor4all_core::index::{DynId, Index};
 use tensor4all_core::DynIndex;
-use tensor4all_core::{StorageScalar, TensorDynLen, TensorLike};
+use tensor4all_core::{StorageScalar, TensorDynLen, TensorIndex, TensorLike};
 
 /// Helper to create a simple tensor with given dimensions
 fn make_tensor(dims: &[usize]) -> TensorDynLen {

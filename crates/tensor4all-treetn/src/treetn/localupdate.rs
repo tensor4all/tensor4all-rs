@@ -804,7 +804,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tensor4all_core::storage::{DenseStorageF64, Storage};
-    use tensor4all_core::{DynIndex, TensorDynLen};
+    use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
 
     /// Create a 4-node Y-shape TreeTN:
     ///     A

@@ -27,7 +27,10 @@ pub use tagset::{Tag, TagSetError, TagSetLike};
 // Tensor (storage, tensor types) - re-exported from tensor4all-tensorbackend
 pub use tensor4all_tensorbackend::any_scalar;
 pub use tensor4all_tensorbackend::storage;
+pub mod tensor_index;
 pub mod tensor_like;
+
+pub use tensor_index::TensorIndex;
 
 // Krylov subspace methods (GMRES, etc.)
 pub mod krylov;

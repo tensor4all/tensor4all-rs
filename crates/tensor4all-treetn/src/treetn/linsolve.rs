@@ -22,6 +22,7 @@
 //!
 //! - Phys. Rev. B 72, 180403 (2005) - Noise term technique (not implemented in initial version)
 
+mod apply;
 mod environment;
 mod linear_operator;
 mod local_linop;
@@ -30,6 +31,7 @@ mod projected_operator;
 mod projected_state;
 mod updater;
 
+pub use apply::{apply_linear_operator, ApplyOptions, ArcLinearOperator};
 pub use environment::{EnvironmentCache, NetworkTopology};
 pub use linear_operator::LinearOperator;
 pub use options::LinsolveOptions;

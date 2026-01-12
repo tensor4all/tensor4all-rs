@@ -6,14 +6,15 @@ Before starting work, read the repository root `README.md` as well as this `AGEN
 
 1. [Development Stage](#development-stage)
 2. [General Guidelines](#general-guidelines)
-3. [Code Style](#code-style)
-4. [Error Handling](#error-handling)
-5. [Testing](#testing)
-6. [API Design](#api-design)
-7. [C API Design](#c-api-design)
-8. [Language Bindings](#language-bindings)
-9. [Dependencies](#dependencies)
-10. [Git Workflow](#git-workflow)
+3. [Context-Efficient Exploration](#context-efficient-exploration)
+4. [Code Style](#code-style)
+5. [Error Handling](#error-handling)
+6. [Testing](#testing)
+7. [API Design](#api-design)
+8. [C API Design](#c-api-design)
+9. [Language Bindings](#language-bindings)
+10. [Dependencies](#dependencies)
+11. [Git Workflow](#git-workflow)
 
 ---
 
@@ -36,7 +37,7 @@ Before starting work, read the repository root `README.md` as well as this `AGEN
 
 ### Before Starting Work: API Reference
 
-**Always dump the latest API documentation before starting implementation work:**
+**Always check API docs before reading source code:**
 
 ```bash
 cargo run -p api-dump --release -- . -o docs/api
@@ -45,15 +46,78 @@ cargo run -p api-dump --release -- . -o docs/api
 This generates Markdown files in `docs/api/` with function signatures and docstrings for each crate.
 
 **Required workflow:**
-1. Run the API dump command above
+1. Run the API dump command above (if outdated)
 2. Read the API docs for crates related to your task (e.g., `docs/api/tensor4all_simpletensortrain.md`)
 3. Understand existing functions before implementing new ones
-4. During implementation, check the API docs to avoid duplicating existing functionality
+4. Only read source files when API doc is insufficient
+
+**Context budget guideline:**
+| Content | Typical Size |
+|---------|--------------|
+| API docs | ~500 lines for a crate summary |
+| Full source file | ~1000+ lines |
+| Grep results | ~50 lines for targeted search |
 
 **When to reference API docs:**
 - Before adding a new function: check if similar functionality exists
 - When implementing a feature: look for helper functions you can reuse
 - When unsure about existing API: read the relevant crate's API doc
+
+---
+
+## Context-Efficient Exploration
+
+Large codebases can quickly fill up context windows. Use these strategies to minimize context usage:
+
+### Use Task Tool with Explore Agent
+
+For open-ended exploration, use the Task tool with `subagent_type=Explore` instead of reading files directly:
+
+```
+# Bad: Reading entire files
+"Read all files in src/ to understand the codebase"
+
+# Good: Let Explore agent summarize
+"Use Task tool with Explore agent to understand the tensor contraction implementation"
+```
+
+### Grep for Structure, Not Content
+
+Use Grep to get function signatures and type definitions without reading full files:
+
+```bash
+# Public functions in a crate
+Grep pattern="pub fn \w+" path="crates/tensor4all-simpletensortrain/src"
+
+# Trait implementations
+Grep pattern="impl.*for" path="crates/tensor4all-quanticstransform/src"
+
+# Type definitions
+Grep pattern="^pub (struct|enum|type)" path="crates/tensor4all-index/src"
+```
+
+### Read Specific Lines Only
+
+When you need details, use `offset` and `limit` parameters:
+
+```
+# Read only lines 100-150
+Read file_path="src/lib.rs" offset=100 limit=50
+```
+
+### Prefer API Docs Over Source
+
+The generated `docs/api/*.md` files contain function signatures and docstrings in a compact format. **Always check API docs first** before reading source files.
+
+### Summary
+
+| Task | Approach |
+|------|----------|
+| Understand codebase structure | Task tool with Explore agent |
+| Find function signatures | Grep for `pub fn` |
+| Find trait implementations | Grep for `impl.*for` |
+| Understand specific function | Read API doc, then source if needed |
+| Debug test failure | Read specific test file with line range |
 
 ---
 

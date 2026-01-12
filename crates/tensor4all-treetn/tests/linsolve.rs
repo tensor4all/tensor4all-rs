@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tensor4all_core::storage::DenseStorageF64;
-use tensor4all_core::{DynIndex, IndexLike, Storage, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, IndexLike, Storage, TensorDynLen, TensorIndex};
 use tensor4all_treetn::{
     EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveUpdater,
     ProjectedOperator, ProjectedState, TreeTN,
@@ -557,7 +557,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
             eprintln!("      Updated {:?}: {:?}", node_name, data);
         }
         x.replace_subtree(&step.nodes, &updated_subtree).unwrap();
-        x.set_canonical_center([step.new_center.clone()]).unwrap();
+        x.set_canonical_center([step.new_center]).unwrap();
         updater.after_step(step, &x).unwrap();
 
         // Print state after step
