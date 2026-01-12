@@ -483,7 +483,6 @@ mod tests {
     use crate::SiteIndexNetwork;
     use std::collections::HashSet;
     use tensor4all_core::index::{DynId, Index, TagSet};
-    use tensor4all_core::TensorDynLen;
 
     type DynIndex = Index<DynId, TagSet>;
 
