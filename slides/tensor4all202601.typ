@@ -253,20 +253,23 @@
     }
     ```
   ]
+
+  *Important*: `is_contractable()` checks ID, dim, *and* ConjState \
+  → Same ID alone does NOT guarantee contractability!
 ]
 
-// Slide 8: Contractability Rules
-#slide("Contractability Rules")[
-  Two indices are contractable if:
+// Slide 9: Contractability Rules
+#slide("Contractability Rules (`is_contractable`)")[
+  `is_contractable(&self, other)` returns `true` iff *all* conditions hold:
 
   #v(0.5em)
 
-  + Same `id()` and `dim()`
+  + Same `id()` — must reference the same logical index
+  + Same `dim()` — dimensions must match
   + Compatible `ConjState`:
     - `(Ket, Bra)` or `(Bra, Ket)` → *contractable*
     - `(Undirected, Undirected)` → *contractable*
     - Mixed directed/undirected → *forbidden*
-
 ]
 
 // Slide 9: TensorLike Trait
