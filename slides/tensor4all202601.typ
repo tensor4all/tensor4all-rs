@@ -66,7 +66,7 @@
   "tensor4all-rs",
   subtitle: "Tensor Network Computing with Vibe Coding",
   author: "Hiroshi Shinaoka",
-  date: "2025",
+  date: "January, 2026",
   url: "https://github.com/tensor4all/tensor4all-rs",
 )
 
