@@ -1,5 +1,8 @@
 # tensor4all-rs
 
+[![CI](https://github.com/shinaoka/tensor4all-rs/actions/workflows/CI_rs.yml/badge.svg)](https://github.com/shinaoka/tensor4all-rs/actions/workflows/CI_rs.yml)
+[![codecov](https://codecov.io/gh/shinaoka/tensor4all-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/shinaoka/tensor4all-rs)
+
 A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assisted development with fast trial-and-error cycles.
 
 ## Design Philosophy
