@@ -31,8 +31,6 @@ jobs:
 
       - name: Build rustdoc
         run: cargo doc --workspace --no-deps
-        env:
-          RUSTDOCFLAGS: "--enable-index-page -Zunstable-options"
 
       - name: Combine documentation
         run: |
