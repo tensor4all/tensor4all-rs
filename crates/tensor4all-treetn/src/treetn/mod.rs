@@ -27,7 +27,7 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::{FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, FactorizeOptions, IndexLike, TensorLike};
 use crate::algorithm::CanonicalForm;
 
 use crate::named_graph::NamedGraph;
@@ -553,7 +553,7 @@ where
             .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
             .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
-        let updated_dst_tensor = T::contract(&[tensor_dst.clone(), right_tensor])
+        let updated_dst_tensor = T::contract(&[tensor_dst.clone(), right_tensor], AllowedPairs::All)
             .with_context(|| {
                 format!(
                     "{}: failed to absorb right factor into dst tensor",

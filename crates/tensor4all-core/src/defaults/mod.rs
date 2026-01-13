@@ -38,7 +38,7 @@ pub use tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor,
     unfold_split, TensorAccess, TensorDynLen,
 };
-pub use contract::contract_multi;
+pub use contract::{contract_connected, contract_multi};
 
 // Re-export linear algebra functions and types
 pub use direct_sum::direct_sum;

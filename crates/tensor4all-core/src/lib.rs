@@ -49,12 +49,13 @@ pub use defaults::tensordynlen::{
 };
 pub use defaults::tensor_data::{TensorComponent, TensorData};
 pub use tensor_like::{
-    Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult, TensorLike,
+    AllowedPairs, Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions,
+    FactorizeResult, TensorLike,
 };
 
 // Contraction - backwards compatibility
 pub use defaults::contract;
-pub use defaults::contract::contract_multi;
+pub use defaults::contract::{contract_connected, contract_multi};
 
 // Linear algebra backend - re-exported from tensor4all-tensorbackend
 pub use tensor4all_tensorbackend::backend;

@@ -169,6 +169,45 @@ pub struct FactorizeResult<T: TensorLike> {
 }
 
 // ============================================================================
+// Contraction types
+// ============================================================================
+
+/// Specifies which tensor pairs are allowed to contract.
+///
+/// This enum controls which tensor pairs can have their indices contracted
+/// in multi-tensor contraction operations. This is useful for tensor networks
+/// where the graph structure determines which tensors are connected.
+///
+/// # Example
+///
+/// ```ignore
+/// use tensor4all_core::{TensorLike, AllowedPairs};
+///
+/// // Contract all contractable index pairs (default behavior)
+/// let result = T::contract(&tensors, AllowedPairs::All)?;
+///
+/// // Only contract indices between specified tensor pairs
+/// let edges = vec![(0, 1), (1, 2)];  // tensor 0-1 and tensor 1-2
+/// let result = T::contract(&tensors, AllowedPairs::Specified(&edges))?;
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub enum AllowedPairs<'a> {
+    /// All tensor pairs are allowed to contract.
+    ///
+    /// Indices with matching IDs across any two tensors will be contracted.
+    /// This is the default behavior, equivalent to ITensor's `*` operator.
+    All,
+    /// Only specified tensor pairs are allowed to contract.
+    ///
+    /// Each pair is `(tensor_idx_a, tensor_idx_b)` into the input tensor slice.
+    /// Indices are only contracted if they belong to an allowed pair.
+    ///
+    /// This is useful for tensor networks where the graph structure
+    /// determines which tensors are connected (e.g., TreeTN edges).
+    Specified(&'a [(usize, usize)]),
+}
+
+// ============================================================================
 // TensorLike trait (fully generic)
 // ============================================================================
 
@@ -188,10 +227,10 @@ pub struct FactorizeResult<T: TensorLike> {
 /// # Example
 ///
 /// ```ignore
-/// use tensor4all_core::TensorLike;
+/// use tensor4all_core::{TensorLike, AllowedPairs};
 ///
 /// fn contract_pair<T: TensorLike>(a: &T, b: &T) -> Result<T> {
-///     T::contract(&[a.clone(), b.clone()])
+///     T::contract(&[a.clone(), b.clone()], AllowedPairs::All)
 /// }
 /// ```
 ///
@@ -348,22 +387,75 @@ pub trait TensorLike: TensorIndex {
     ///
     /// This method contracts 2 or more tensors. Pairs of indices that satisfy
     /// `is_contractable()` (same ID, same dimension, compatible ConjState)
-    /// are automatically contracted. This is similar to ITensor's `*` operator.
+    /// are contracted based on the `allowed` parameter.
+    ///
+    /// Handles disconnected tensor graphs automatically by:
+    /// 1. Finding connected components based on contractable indices
+    /// 2. Contracting each connected component separately
+    /// 3. Combining results using outer product
     ///
     /// # Arguments
     ///
     /// * `tensors` - Slice of tensors to contract (must have length >= 1)
+    /// * `allowed` - Specifies which tensor pairs can have their indices contracted:
+    ///   - `AllowedPairs::All`: Contract all contractable index pairs (default behavior)
+    ///   - `AllowedPairs::Specified(&[(i, j)])`: Only contract indices between specified tensor pairs
+    ///
+    /// # Returns
+    ///
+    /// A new tensor representing the contracted result.
+    /// If tensors form disconnected components, they are combined via outer product.
+    ///
+    /// # Behavior by N
+    /// - N=0: Error
+    /// - N=1: Clone of input
+    /// - N>=2: Contract connected components, combine with outer product
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - No tensors are provided
+    /// - `AllowedPairs::Specified` contains a pair with no contractable indices
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Contract all contractable pairs
+    /// let result = T::contract(&[a, b, c], AllowedPairs::All)?;
+    ///
+    /// // Only contract between tensor pairs (0,1) and (1,2)
+    /// let result = T::contract(&[a, b, c], AllowedPairs::Specified(&[(0, 1), (1, 2)]))?;
+    /// ```
+    fn contract(tensors: &[Self], allowed: AllowedPairs<'_>) -> Result<Self>;
+
+    /// Contract multiple tensors that must form a connected graph.
+    ///
+    /// This is the core contraction method that requires all tensors to be
+    /// connected through contractable indices. Use [`contract`] if you want
+    /// automatic handling of disconnected components via outer product.
+    ///
+    /// # Arguments
+    ///
+    /// * `tensors` - Slice of tensors to contract (must form a connected graph)
+    /// * `allowed` - Specifies which tensor pairs can have their indices contracted
     ///
     /// # Returns
     ///
     /// A new tensor representing the contracted result.
     ///
-    /// # Behavior by N
-    /// - N=0: Error
-    /// - N=1: Clone of input
-    /// - N=2: Contracts over contractable index pairs
-    /// - N>=3: Recursively contracts pairs with optimal ordering
-    fn contract(tensors: &[Self]) -> Result<Self>;
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - No tensors are provided
+    /// - The tensors form a disconnected graph
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // All tensors must be connected through contractable indices
+    /// let result = T::contract_connected(&[a, b, c], AllowedPairs::All)?;
+    /// ```
+    fn contract_connected(tensors: &[Self], allowed: AllowedPairs<'_>) -> Result<Self>;
 
     // ========================================================================
     // Vector space operations (for Krylov solvers)
