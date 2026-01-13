@@ -560,6 +560,19 @@ pub trait TensorLike: TensorIndex {
     ///
     /// This is used as the identity element for outer products.
     fn scalar_one() -> Result<Self>;
+
+    /// Create a tensor filled with 1.0 for the given indices.
+    ///
+    /// This is useful for adding indices to tensors via outer product
+    /// without changing tensor values (since multiplying by 1 is identity).
+    ///
+    /// # Example
+    /// To add a dummy index `l` to tensor `T`:
+    /// ```ignore
+    /// let ones = T::ones(&[l])?;
+    /// let t_with_l = t.outer_product(&ones)?;
+    /// ```
+    fn ones(indices: &[<Self as TensorIndex>::Index]) -> Result<Self>;
 }
 
 /// Result of direct sum operation.

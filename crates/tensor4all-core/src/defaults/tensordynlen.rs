@@ -1472,5 +1472,16 @@ impl TensorLike for TensorDynLen {
         Ok(TensorDynLen::new(vec![], vec![], storage))
     }
 
+    fn ones(indices: &[DynIndex]) -> Result<Self> {
+        use crate::storage::DenseStorageF64;
+        if indices.is_empty() {
+            return Self::scalar_one();
+        }
+        let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
+        let total_size: usize = dims.iter().product();
+        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; total_size])));
+        Ok(TensorDynLen::new(indices.to_vec(), dims, storage))
+    }
+
     // delta() uses the default implementation via diagonal() and outer_product()
 }
