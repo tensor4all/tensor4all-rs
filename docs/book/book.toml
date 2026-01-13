@@ -1,0 +1,18 @@
+[book]
+title = "tensor4all-rs"
+authors = ["Hiroshi Shinaoka"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/tensor4all/tensor4all-rs"
+edit-url-template = "https://github.com/tensor4all/tensor4all-rs/edit/main/docs/book/{path}"
+
+[output.html.fold]
+enable = true
+level = 1
