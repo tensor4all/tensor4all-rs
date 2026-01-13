@@ -13,7 +13,7 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::{IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, IndexLike, TensorLike};
 
 use super::environment::{EnvironmentCache, NetworkTopology};
 use crate::treetn::TreeTN;
@@ -178,7 +178,7 @@ where
         }
 
         // Contract all tensors
-        let contracted = T::contract(&all_tensors)?;
+        let contracted = T::contract(&all_tensors, AllowedPairs::All)?;
 
         // Step 4: Transform output - replace internal output indices with true indices
         if let Some(ref output_mapping) = self.output_mapping {
@@ -303,10 +303,10 @@ where
         };
 
         // Contract ket with op - T::contract auto-detects contractable pairs
-        let ket_op = T::contract(&[transformed_ket, tensor_op.clone()])?;
+        let ket_op = T::contract(&[transformed_ket, tensor_op.clone()], AllowedPairs::All)?;
 
         // Contract ket_op with transformed_bra_conj
-        let ket_op_bra = T::contract(&[ket_op, transformed_bra_conj])?;
+        let ket_op_bra = T::contract(&[ket_op, transformed_bra_conj], AllowedPairs::All)?;
 
         // Contract ket_op_bra with child environments using T::contract
         if child_envs.is_empty() {
@@ -314,7 +314,7 @@ where
         } else {
             let mut all_tensors: Vec<T> = vec![ket_op_bra];
             all_tensors.extend(child_envs);
-            T::contract(&all_tensors)
+            T::contract(&all_tensors, AllowedPairs::All)
         }
     }
 

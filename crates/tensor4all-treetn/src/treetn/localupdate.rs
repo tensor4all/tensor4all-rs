@@ -13,7 +13,7 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::{IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, IndexLike, TensorLike};
 
 use super::TreeTN;
 use crate::node_name_network::NodeNameNetwork;
@@ -441,7 +441,7 @@ where
         // Contract A and B
         let tensor_a = subtree.tensor(idx_a).unwrap();
         let tensor_b = subtree.tensor(idx_b).unwrap();
-        let tensor_ab = T::contract(&[tensor_a.clone(), tensor_b.clone()])
+        let tensor_ab = T::contract(&[tensor_a.clone(), tensor_b.clone()], AllowedPairs::All)
             .context("Failed to contract A and B")?;
 
         // Determine left indices (indices that will remain on A after factorization)

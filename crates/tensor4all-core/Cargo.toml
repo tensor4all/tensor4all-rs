@@ -22,6 +22,7 @@ dyn-clone.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
 omeco.workspace = true
+petgraph.workspace = true
 
 [dev-dependencies]
 rand_chacha.workspace = true

@@ -31,7 +31,7 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
 
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
 use super::TreeTN;
@@ -294,14 +294,14 @@ where
 
     // Contract A * B on site indices
     // T::contract auto-contracts all is_contractable pairs
-    let ab = T::contract(&[tensor_a.clone(), tensor_b.clone()])
+    let ab = T::contract(&[tensor_a.clone(), tensor_b.clone()], AllowedPairs::All)
         .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     // Contract with conj(C) on remaining site indices
     let c_conj = tensor_c.conj();
 
     // Contract AB with conj(C) - T::contract auto-contracts all is_contractable pairs
-    let env = T::contract(&[ab, c_conj])
+    let env = T::contract(&[ab, c_conj], AllowedPairs::All)
         .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     Ok(env)
@@ -352,17 +352,17 @@ where
 
     // Non-leaf: contract A × B × conj(C) × child_envs
     // T::contract auto-contracts all is_contractable pairs
-    let ab = T::contract(&[tensor_a.clone(), tensor_b.clone()])
+    let ab = T::contract(&[tensor_a.clone(), tensor_b.clone()], AllowedPairs::All)
         .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     // Contract with conj(C)
     let c_conj = tensor_c.conj();
-    let mut result = T::contract(&[ab, c_conj])
+    let mut result = T::contract(&[ab, c_conj], AllowedPairs::All)
         .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     // Contract with child environments
     for child_env in child_envs {
-        result = T::contract(&[result, child_env.clone()])
+        result = T::contract(&[result, child_env.clone()], AllowedPairs::All)
             .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
     }
 
@@ -500,19 +500,19 @@ where
 
         // Compute optimal 2-site tensor: env × A[u] × B[u] × A[v] × B[v] × env
         // T::contract auto-contracts all is_contractable pairs
-        let ab_u = T::contract(&[a_u.clone(), b_u.clone()])
+        let ab_u = T::contract(&[a_u.clone(), b_u.clone()], AllowedPairs::All)
             .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
-        let ab_v = T::contract(&[a_v.clone(), b_v.clone()])
+        let ab_v = T::contract(&[a_v.clone(), b_v.clone()], AllowedPairs::All)
             .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
         // Contract ab_u and ab_v on internal bonds
-        let mut ab_uv = T::contract(&[ab_u, ab_v])
+        let mut ab_uv = T::contract(&[ab_u, ab_v], AllowedPairs::All)
             .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
         // Contract with environment tensors
         for env in env_tensors {
-            ab_uv = T::contract(&[ab_uv, env.clone()])
+            ab_uv = T::contract(&[ab_uv, env.clone()], AllowedPairs::All)
                 .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
         }
 

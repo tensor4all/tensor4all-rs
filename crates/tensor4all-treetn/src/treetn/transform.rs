@@ -10,7 +10,7 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 use petgraph::stable_graph::NodeIndex;
 
-use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
 
 use super::TreeTN;
 use crate::options::SplitOptions;
@@ -232,7 +232,7 @@ where
 
             // Contract using TensorLike::contract
             // (bond indices are auto-detected via is_contractable)
-            let contracted = T::contract(&[to_tensor, from_tensor])
+            let contracted = T::contract(&[to_tensor, from_tensor], AllowedPairs::All)
                 .map_err(|e| anyhow::anyhow!("Failed to contract tensors: {}", e))?;
 
             tensors.insert(to, contracted);
