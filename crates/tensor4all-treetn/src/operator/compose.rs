@@ -182,33 +182,79 @@ where
         .context("compose_exclusive_linear_operators: operators must be exclusive");
     }
 
-    // 2. Collect covered nodes
+    // 2. Collect covered nodes and build node-to-operator map
     let covered: HashSet<V> = operators.iter().flat_map(|op| op.node_names()).collect();
+
+    let mut node_to_operator: HashMap<V, usize> = HashMap::new();
+    for (op_idx, op) in operators.iter().enumerate() {
+        for name in op.node_names() {
+            node_to_operator.insert(name, op_idx);
+        }
+    }
 
     // 3. Identify gap nodes
     let all_target_nodes: HashSet<V> = target.node_names().into_iter().cloned().collect();
     let gaps: Vec<V> = all_target_nodes.difference(&covered).cloned().collect();
+    let gap_set: HashSet<V> = gaps.iter().cloned().collect();
 
-    // 4. Build tensors and mappings
+    // 4. Identify cross-component edges and create dummy link pairs
+    // An edge is cross-component if endpoints are in different operators or one is a gap
+    let mut dummy_links_for_node: HashMap<V, Vec<T::Index>> = HashMap::new();
+
+    for (node_a, node_b) in target.edges() {
+        let comp_a = node_to_operator.get(&node_a);
+        let comp_b = node_to_operator.get(&node_b);
+        let is_gap_a = gap_set.contains(&node_a);
+        let is_gap_b = gap_set.contains(&node_b);
+
+        let is_cross = match (comp_a, comp_b, is_gap_a, is_gap_b) {
+            (Some(a), Some(b), false, false) => a != b,
+            _ => true,
+        };
+
+        if is_cross {
+            let (link_a, link_b) = T::Index::create_dummy_link_pair();
+            dummy_links_for_node
+                .entry(node_a.clone())
+                .or_default()
+                .push(link_a);
+            dummy_links_for_node
+                .entry(node_b.clone())
+                .or_default()
+                .push(link_b);
+        }
+    }
+
+    // 5. Build tensors and mappings
     let mut tensors: Vec<T> = Vec::new();
     let mut result_node_names: Vec<V> = Vec::new();
     let mut combined_input_mapping: HashMap<V, IndexMapping<T::Index>> = HashMap::new();
     let mut combined_output_mapping: HashMap<V, IndexMapping<T::Index>> = HashMap::new();
 
-    // 4a. Add tensors and mappings from operators
+    // 5a. Add tensors from operators (with dummy links added via outer product)
     for op in operators {
-        // Copy tensors
         for name in op.node_names() {
             let node_idx = op
                 .mpo()
                 .node_index(&name)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", name))?;
-            let tensor = op
+            let mut tensor = op
                 .mpo()
                 .tensor(node_idx)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", name))?;
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", name))?
+                .clone();
 
-            tensors.push(tensor.clone());
+            // Add dummy links via outer product with ones tensor
+            if let Some(links) = dummy_links_for_node.get(&name) {
+                for link in links {
+                    let ones = T::ones(&[link.clone()])
+                        .with_context(|| format!("Failed to create ones tensor for dummy link at {:?}", name))?;
+                    tensor = tensor.outer_product(&ones)
+                        .with_context(|| format!("Failed to add dummy link to tensor at {:?}", name))?;
+                }
+            }
+
+            tensors.push(tensor);
             result_node_names.push(name.clone());
 
             // Copy mappings
@@ -221,7 +267,7 @@ where
         }
     }
 
-    // 4b. Add identity tensors at gaps using T::delta()
+    // 5b. Add identity tensors at gaps (with dummy links added via outer product)
     for gap_name in gaps {
         let index_pairs = gap_site_indices.get(&gap_name).ok_or_else(|| {
             anyhow::anyhow!(
@@ -230,30 +276,18 @@ where
             )
         })?;
 
-        if index_pairs.is_empty() {
-            // No site indices at this gap - create scalar identity
-            // For now, we skip this case as T::delta() needs at least empty slices
-            // The caller should provide empty Vec for nodes without site indices
-            result_node_names.push(gap_name);
-            // Create scalar using T::delta with empty indices
-            let scalar_tensor = T::delta(&[], &[])
-                .context("Failed to create scalar identity tensor")?;
-            tensors.push(scalar_tensor);
-            continue;
-        }
+        // Collect site indices for delta
+        let input_indices: Vec<T::Index> = index_pairs.iter().map(|(i, _)| i.clone()).collect();
+        let output_indices: Vec<T::Index> = index_pairs.iter().map(|(_, o)| o.clone()).collect();
 
-        // Separate input and output indices
-        let internal_inputs: Vec<T::Index> = index_pairs.iter().map(|(i, _)| i.clone()).collect();
-        let internal_outputs: Vec<T::Index> = index_pairs.iter().map(|(_, o)| o.clone()).collect();
-
-        // Store mappings for the first pair (single site index per node for now)
+        // Store mappings for the first site pair (if any)
         if let Some((true_input, true_output)) = index_pairs.first() {
             if combined_input_mapping.get(&gap_name).is_none() {
                 combined_input_mapping.insert(
                     gap_name.clone(),
                     IndexMapping {
                         true_index: true_input.clone(),
-                        internal_index: internal_inputs[0].clone(),
+                        internal_index: input_indices[0].clone(),
                     },
                 );
             }
@@ -262,21 +296,35 @@ where
                     gap_name.clone(),
                     IndexMapping {
                         true_index: true_output.clone(),
-                        internal_index: internal_outputs[0].clone(),
+                        internal_index: output_indices[0].clone(),
                     },
                 );
             }
         }
 
-        // Build identity tensor using T::delta()
-        let identity_tensor = T::delta(&internal_inputs, &internal_outputs)
-            .with_context(|| format!("Failed to build identity tensor for gap {:?}", gap_name))?;
+        // Create delta tensor for site indices
+        let mut identity_tensor = if input_indices.is_empty() {
+            T::delta(&[], &[]).context("Failed to create scalar identity tensor")?
+        } else {
+            T::delta(&input_indices, &output_indices)
+                .with_context(|| format!("Failed to build identity tensor for gap {:?}", gap_name))?
+        };
+
+        // Add dummy links via outer product (bond indices, not site indices)
+        if let Some(links) = dummy_links_for_node.get(&gap_name) {
+            for link in links {
+                let ones = T::ones(&[link.clone()])
+                    .with_context(|| format!("Failed to create ones tensor for dummy link at gap {:?}", gap_name))?;
+                identity_tensor = identity_tensor.outer_product(&ones)
+                    .with_context(|| format!("Failed to add dummy link to gap tensor {:?}", gap_name))?;
+            }
+        }
 
         tensors.push(identity_tensor);
         result_node_names.push(gap_name);
     }
 
-    // 5. Create TreeTN from tensors
+    // 6. Create TreeTN from tensors
     let mpo = TreeTN::from_tensors(tensors, result_node_names)
         .context("compose_exclusive_linear_operators: failed to create TreeTN")?;
 
@@ -864,20 +912,27 @@ mod tests {
             compose_exclusive_linear_operators(&target, &[&lin_op1, &lin_op2], &gap_site_indices)
                 .expect("Composition should succeed");
 
-        // Get the tensor at N1 (should be identity)
+        // Get the tensor at N1 (should be identity with dummy links)
         let n1_idx = composed.mpo().node_index(&"N1".to_string()).unwrap();
         let n1_tensor = composed.mpo().tensor(n1_idx).unwrap();
 
-        // Identity tensor for dim 3 should have shape [3, 3] with indices [in, out]
-        assert_eq!(n1_tensor.dims, vec![3, 3]);
+        // N1 has 2 neighbors (N0 and N2), so 2 dummy links of dim 1 are added
+        // Shape should be [3, 3, 1, 1] (site_in, site_out, dummy_link1, dummy_link2)
+        // The order may vary, but total size should be 3*3*1*1 = 9
+        let total_size: usize = n1_tensor.dims.iter().product();
+        assert_eq!(total_size, 9, "Total tensor size should be 9 (3x3 identity with dim-1 links)");
 
-        // Check it's diagonal (only diagonal elements are 1.0)
+        // Check that site dimensions 3 appear exactly twice
+        let dim3_count = n1_tensor.dims.iter().filter(|&&d| d == 3).count();
+        assert_eq!(dim3_count, 2, "Should have exactly 2 site dimensions of size 3");
+
+        // Check it's effectively an identity (only diagonal elements are non-zero)
         let data = match n1_tensor.storage().as_ref() {
             Storage::DenseF64(d) => d.as_slice(),
             _ => panic!("Expected DenseF64"),
         };
 
-        // For 3x3 identity in row-major: [1,0,0, 0,1,0, 0,0,1]
+        // For identity with dim-1 dummy links, data is still [1,0,0, 0,1,0, 0,0,1]
         let expected = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         for (i, (got, want)) in data.iter().zip(expected.iter()).enumerate() {
             assert!(

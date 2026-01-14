@@ -382,6 +382,21 @@ impl IndexLike for DynIndex {
             tags: self.tags.clone(),
         }
     }
+
+    fn create_dummy_link_pair() -> (Self, Self) {
+        let id = DynId(generate_id());
+        let idx1 = Index {
+            id: id.clone(),
+            dim: 1,
+            tags: TagSet::default(),
+        };
+        let idx2 = Index {
+            id,
+            dim: 1,
+            tags: TagSet::default(),
+        };
+        (idx1, idx2)
+    }
 }
 
 impl DynIndex {

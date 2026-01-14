@@ -27,7 +27,7 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::{FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, FactorizeOptions, IndexLike, TensorLike};
 use crate::algorithm::CanonicalForm;
 
 use crate::named_graph::NamedGraph;
@@ -152,6 +152,22 @@ where
     /// # Errors
     /// Returns an error if validation fails or connection fails.
     pub fn from_tensors(tensors: Vec<T>, node_names: Vec<V>) -> Result<Self>
+    where
+        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        V: Ord,
+    {
+        let treetn = Self::from_tensors_unchecked(tensors, node_names)?;
+
+        // Verify structural constraints after construction
+        treetn.verify_internal_consistency()
+            .context("TreeTN::from_tensors: constructed TreeTN failed internal consistency check")?;
+
+        Ok(treetn)
+    }
+
+    /// Internal version of `from_tensors` that skips verification.
+    /// Used by `verify_internal_consistency` to avoid infinite recursion.
+    fn from_tensors_unchecked(tensors: Vec<T>, node_names: Vec<V>) -> Result<Self>
     where
         <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
@@ -553,7 +569,7 @@ where
             .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
             .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
-        let updated_dst_tensor = T::contract(&[tensor_dst.clone(), right_tensor])
+        let updated_dst_tensor = T::contract(&[tensor_dst.clone(), right_tensor], AllowedPairs::All)
             .with_context(|| {
                 format!(
                     "{}: failed to absorb right factor into dst tensor",
@@ -1179,15 +1195,21 @@ where
         true
     }
 
-    /// Verify internal data consistency by reconstructing the TreeTN from scratch.
+    /// Verify internal data consistency by checking structural invariants and reconstructing the TreeTN.
     ///
-    /// This function clones all tensors and node names, reconstructs a new TreeTN
-    /// using `from_tensors`, and verifies that the reconstruction matches the original.
+    /// This function performs two categories of checks:
     ///
-    /// # Consistency checks performed:
-    /// 1. Topology: Same nodes and edges
-    /// 2. Site space: Same physical indices for each node
-    /// 3. Tensors: Same tensor data at each node
+    /// ## Structural invariants (fail-fast checks):
+    /// 0a. **Connectivity**: All tensors must form a single connected component
+    /// 0b. **Index sharing**: Only edge-connected (adjacent) nodes may share index IDs.
+    ///     Non-adjacent nodes sharing an index ID violates tree structure assumptions.
+    ///
+    /// ## Reconstruction consistency:
+    /// After structural checks pass, clones all tensors and node names, reconstructs
+    /// a new TreeTN using `from_tensors`, and verifies:
+    /// 1. **Topology**: Same nodes and edges
+    /// 2. **Site space**: Same physical indices for each node
+    /// 3. **Tensors**: Same tensor data at each node
     ///
     /// This is useful for debugging and testing to ensure that the internal state
     /// of a TreeTN is consistent after complex operations.
@@ -1199,6 +1221,75 @@ where
         <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
         V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
+        // Step 0a: Verify all tensors are connected (form a single connected component)
+        // Use DFS to check connectivity since StableGraph doesn't support connected_components
+        let num_nodes = self.graph.graph().node_count();
+        if num_nodes > 1 {
+            // Start DFS from any node
+            if let Some(start_node) = self.graph.graph().node_indices().next() {
+                let mut dfs = Dfs::new(self.graph.graph(), start_node);
+                let mut visited_count = 0;
+                while dfs.next(self.graph.graph()).is_some() {
+                    visited_count += 1;
+                }
+                if visited_count != num_nodes {
+                    return Err(anyhow::anyhow!(
+                        "TreeTN is disconnected: DFS visited {} of {} nodes. All tensors must be connected.",
+                        visited_count,
+                        num_nodes
+                    ))
+                    .context("verify_internal_consistency: graph must be connected");
+                }
+            }
+        }
+
+        // Step 0b: Verify non-adjacent tensors don't share index IDs
+        // Build a map from index ID to nodes that have that index
+        let mut index_id_to_nodes: HashMap<<T::Index as IndexLike>::Id, Vec<NodeIndex>> =
+            HashMap::new();
+        for node_idx in self.graph.graph().node_indices() {
+            if let Some(tensor) = self.tensor(node_idx) {
+                for index in tensor.external_indices() {
+                    index_id_to_nodes
+                        .entry(index.id().clone())
+                        .or_default()
+                        .push(node_idx);
+                }
+            }
+        }
+
+        // Check each index ID - if shared by multiple nodes, they must be adjacent
+        for (index_id, nodes) in &index_id_to_nodes {
+            if nodes.len() > 2 {
+                // More than 2 nodes share the same index ID - always invalid for tree structure
+                return Err(anyhow::anyhow!(
+                    "Index ID {:?} is shared by {} nodes, but tree structure allows at most 2",
+                    index_id,
+                    nodes.len()
+                ))
+                .context("verify_internal_consistency: index ID shared by too many nodes");
+            }
+            if nodes.len() == 2 {
+                // Two nodes share the index - they must be adjacent (connected by an edge)
+                let node_a = nodes[0];
+                let node_b = nodes[1];
+                if self.graph.graph().find_edge(node_a, node_b).is_none()
+                    && self.graph.graph().find_edge(node_b, node_a).is_none()
+                {
+                    let name_a = self.graph.node_name(node_a);
+                    let name_b = self.graph.node_name(node_b);
+                    return Err(anyhow::anyhow!(
+                        "Non-adjacent nodes {:?} and {:?} share index ID {:?}. \
+                        Only adjacent (edge-connected) nodes may share index IDs.",
+                        name_a,
+                        name_b,
+                        index_id
+                    ))
+                    .context("verify_internal_consistency: non-adjacent nodes share index ID");
+                }
+            }
+        }
+
         // Step 1: Clone all tensors and node names
         let node_names: Vec<V> = self.node_names();
         let tensors: Vec<T> = node_names
@@ -1217,8 +1308,9 @@ where
             ));
         }
 
-        // Step 2: Reconstruct TreeTN from scratch using from_tensors
-        let reconstructed = TreeTN::<T, V>::from_tensors(tensors, node_names)
+        // Step 2: Reconstruct TreeTN from scratch using from_tensors_unchecked
+        // (use unchecked version to avoid infinite recursion)
+        let reconstructed = TreeTN::<T, V>::from_tensors_unchecked(tensors, node_names)
             .context("verify_internal_consistency: failed to reconstruct TreeTN")?;
 
         // Step 3: Verify topology matches

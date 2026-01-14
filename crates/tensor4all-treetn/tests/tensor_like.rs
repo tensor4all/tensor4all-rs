@@ -143,17 +143,23 @@ fn test_treetn_contract_to_tensor() {
 
 #[test]
 fn test_treetn_site_indices_deterministic_ordering() {
-    // Create a TreeTN with multiple nodes and verify ordering is deterministic
-    let idx_a = DynIndex::new_dyn(2);
-    let idx_b = DynIndex::new_dyn(3);
-    let idx_c = DynIndex::new_dyn(4);
+    // Create a TreeTN with multiple connected nodes and verify ordering is deterministic
+    // Structure: C -- A -- B (linear chain)
+    let idx_a = DynIndex::new_dyn(2); // site index for A
+    let idx_b = DynIndex::new_dyn(3); // site index for B
+    let idx_c = DynIndex::new_dyn(4); // site index for C
+    let bond_ca = DynIndex::new_dyn(2); // bond between C and A
+    let bond_ab = DynIndex::new_dyn(2); // bond between A and B
 
     // Add nodes in non-alphabetical order (C, A, B)
+    // C has site index idx_c and bond to A
+    // A has site index idx_a and bonds to C and B
+    // B has site index idx_b and bond to A
     let tn = TreeTN::<TensorDynLen, String>::from_tensors(
         vec![
-            make_tensor(vec![idx_c.clone()]),
-            make_tensor(vec![idx_a.clone()]),
-            make_tensor(vec![idx_b.clone()]),
+            make_tensor(vec![idx_c.clone(), bond_ca.clone()]),
+            make_tensor(vec![bond_ca.clone(), idx_a.clone(), bond_ab.clone()]),
+            make_tensor(vec![bond_ab.clone(), idx_b.clone()]),
         ],
         vec!["C".to_string(), "A".to_string(), "B".to_string()],
     )

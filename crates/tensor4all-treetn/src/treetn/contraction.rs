@@ -13,7 +13,7 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
 use crate::algorithm::CanonicalForm;
 
 use super::TreeTN;
@@ -154,7 +154,7 @@ where
 
             // Contract and store result at `to`
             // (bond indices are auto-detected via is_contractable)
-            let contracted = T::contract(&[to_tensor, from_tensor])
+            let contracted = T::contract(&[to_tensor, from_tensor], AllowedPairs::All)
                 .context("Failed to contract along edge")?;
             tensors.insert(to, contracted);
         }
@@ -288,7 +288,7 @@ where
                 .ok_or_else(|| anyhow::anyhow!("contract_zipup: tensor not found"))?;
 
             // Contract t1 and t2 - common indices are auto-detected via is_contractable
-            let result = T::contract(&[t1.clone(), t2.clone()])?;
+            let result = T::contract(&[t1.clone(), t2.clone()], AllowedPairs::All)?;
             let mut result_tn = Self::new();
             let node_name = tn1
                 .graph
@@ -319,7 +319,7 @@ where
 
             // Contract along site indices
             // T::contract auto-contracts all is_contractable pairs
-            let contracted = T::contract(&[t1.clone(), t2.clone()])?;
+            let contracted = T::contract(&[t1.clone(), t2.clone()], AllowedPairs::All)?;
 
             result_tensors.insert(node_name, contracted);
         }
@@ -375,7 +375,7 @@ where
                     .remove(parent_name)
                     .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
 
-                let contracted = T::contract(&[parent_tensor, child_tensor])?;
+                let contracted = T::contract(&[parent_tensor, child_tensor], AllowedPairs::All)?;
                 result_tensors.insert(parent_name.clone(), contracted);
                 // Don't re-insert child - it's been absorbed
                 continue;
@@ -404,7 +404,7 @@ where
             // Right factor has: new_bond (from factorize), bond1, bond2
             // Parent has: bond1, bond2 (among other indices)
             // Contract along bond1 and bond2
-            let contracted = T::contract(&[parent_tensor, factorize_result.right])?;
+            let contracted = T::contract(&[parent_tensor, factorize_result.right], AllowedPairs::All)?;
             result_tensors.insert(parent_name.clone(), contracted);
         }
 
@@ -502,7 +502,7 @@ where
 
         // 4. Contract along common indices
         // T::contract auto-contracts all is_contractable pairs
-        T::contract(&[tensor1, tensor2])
+        T::contract(&[tensor1, tensor2], AllowedPairs::All)
     }
 
     /// Validate that `canonical_center` and edge `ortho_towards` are consistent.

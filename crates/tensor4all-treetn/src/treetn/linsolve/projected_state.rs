@@ -6,7 +6,7 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::{IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, IndexLike, TensorLike};
 
 use super::environment::{EnvironmentCache, NetworkTopology};
 use crate::treetn::TreeTN;
@@ -124,7 +124,7 @@ where
         }
 
         // Use T::contract for optimal contraction ordering
-        T::contract(&all_tensors)
+        T::contract(&all_tensors, AllowedPairs::All)
     }
 
     /// Ensure environments are computed for neighbors of the region.
@@ -197,7 +197,7 @@ where
         let bra_conj = tensor_bra.conj();
 
         // Contract bra and ket - T::contract auto-detects contractable pairs
-        let bra_ket = T::contract(&[bra_conj, tensor_ket.clone()])?;
+        let bra_ket = T::contract(&[bra_conj, tensor_ket.clone()], AllowedPairs::All)?;
 
         // Contract bra*ket with child environments using T::contract
         if child_envs.is_empty() {
@@ -205,7 +205,7 @@ where
         } else {
             let mut all_tensors: Vec<T> = vec![bra_ket];
             all_tensors.extend(child_envs);
-            T::contract(&all_tensors)
+            T::contract(&all_tensors, AllowedPairs::All)
         }
     }
 

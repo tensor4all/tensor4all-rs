@@ -179,4 +179,17 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     fn sim(&self) -> Self
     where
         Self: Sized;
+
+    /// Create a pair of contractable dummy indices with dimension 1.
+    ///
+    /// These are used for structural connections that don't carry quantum numbers,
+    /// such as connecting components in a tree tensor network.
+    ///
+    /// Both indices will be `Undirected` and have the same ID, making them contractable.
+    ///
+    /// # Returns
+    /// A pair `(idx1, idx2)` where `idx1.is_contractable(&idx2)` is true.
+    fn create_dummy_link_pair() -> (Self, Self)
+    where
+        Self: Sized;
 }

@@ -225,7 +225,7 @@ impl TensorData {
     /// A tuple of (Storage, dims) where dims matches external_dims.
     pub fn materialize(&self) -> anyhow::Result<(Arc<Storage>, Vec<usize>)> {
         use crate::defaults::{contract_multi, DynIndex, Index, TensorDynLen};
-        use crate::tensor_like::TensorLike;
+        use crate::tensor_like::{AllowedPairs, TensorLike};
 
         if self.components.is_empty() {
             return Err(anyhow::anyhow!("Cannot materialize empty TensorData"));
@@ -246,8 +246,8 @@ impl TensorData {
             })
             .collect();
 
-        // Contract all components (outer product if no common indices)
-        let contracted = contract_multi(&tensors)?;
+        // Contract all components (handles disconnected components via outer product)
+        let contracted = contract_multi(&tensors, AllowedPairs::All)?;
 
         // Check if we need to permute to match external order
         let contracted_ids: Vec<DynId> = contracted

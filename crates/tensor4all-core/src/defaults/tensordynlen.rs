@@ -851,7 +851,7 @@ impl TensorDynLen {
     pub fn inner_product(&self, other: &Self) -> Result<AnyScalar> {
         // Contract self.conj() with other over all indices
         let conj_self = self.conj();
-        let result = super::contract::contract_multi(&[conj_self, other.clone()])?;
+        let result = super::contract::contract_multi(&[conj_self, other.clone()], crate::AllowedPairs::All)?;
         // Result should be a scalar (no indices)
         Ok(result.sum())
     }
@@ -1415,9 +1415,14 @@ impl TensorLike for TensorDynLen {
         Ok(TensorDynLen::permute_indices(self, new_order))
     }
 
-    fn contract(tensors: &[Self]) -> Result<Self> {
-        // Delegate to contract_multi which uses omeco for optimization
-        super::contract::contract_multi(tensors)
+    fn contract(tensors: &[Self], allowed: crate::AllowedPairs<'_>) -> Result<Self> {
+        // Delegate to contract_multi which handles disconnected components
+        super::contract::contract_multi(tensors, allowed)
+    }
+
+    fn contract_connected(tensors: &[Self], allowed: crate::AllowedPairs<'_>) -> Result<Self> {
+        // Delegate to contract_connected which requires connected graph
+        super::contract::contract_connected(tensors, allowed)
     }
 
     fn axpby(&self, a: crate::AnyScalar, other: &Self, b: crate::AnyScalar) -> Result<Self> {
@@ -1465,6 +1470,17 @@ impl TensorLike for TensorDynLen {
         use crate::storage::DenseStorageF64;
         let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0])));
         Ok(TensorDynLen::new(vec![], vec![], storage))
+    }
+
+    fn ones(indices: &[DynIndex]) -> Result<Self> {
+        use crate::storage::DenseStorageF64;
+        if indices.is_empty() {
+            return Self::scalar_one();
+        }
+        let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
+        let total_size: usize = dims.iter().product();
+        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; total_size])));
+        Ok(TensorDynLen::new(indices.to_vec(), dims, storage))
     }
 
     // delta() uses the default implementation via diagonal() and outer_product()

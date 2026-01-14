@@ -11,7 +11,7 @@ use anyhow::Result;
 
 use tensor4all_core::any_scalar::AnyScalar;
 use tensor4all_core::krylov::{gmres, GmresOptions};
-use tensor4all_core::{FactorizeAlg, IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, FactorizeAlg, IndexLike, TensorLike};
 
 use super::local_linop::LocalLinOp;
 use super::options::LinsolveOptions;
@@ -357,7 +357,7 @@ where
             .collect::<Result<_>>()?;
 
         // Use TensorLike::contract for contraction
-        T::contract(&tensors)
+        T::contract(&tensors, AllowedPairs::All)
     }
 
     /// Build TreeTopology for the subtree region from the solved tensor.
