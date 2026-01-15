@@ -1078,10 +1078,10 @@ mod tests {
 
         // All 4 nodes should be visited
         let visited: HashSet<_> = plan.iter().map(|s| s.nodes[0].clone()).collect();
-        assert!(visited.contains(&"A".to_string()));
-        assert!(visited.contains(&"B".to_string()));
-        assert!(visited.contains(&"C".to_string()));
-        assert!(visited.contains(&"D".to_string()));
+        assert!(visited.contains("A"));
+        assert!(visited.contains("B"));
+        assert!(visited.contains("C"));
+        assert!(visited.contains("D"));
     }
 
     #[test]

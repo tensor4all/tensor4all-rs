@@ -236,7 +236,7 @@ fn test_diag_dense_contraction_svd_internals() {
 
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
 
-    let (u, s, v) = svd::<f64>(&tensor, &[i.clone()]).expect("SVD should succeed");
+    let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
     // Verify S is diagonal storage
     assert!(matches!(s.storage().as_ref(), Storage::DiagF64(_)));

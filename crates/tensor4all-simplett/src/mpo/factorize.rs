@@ -12,9 +12,10 @@ use tensor4all_tensorbackend::svd_backend;
 pub type Matrix2<T> = DTensor<T, 2>;
 
 /// Factorization method to use
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FactorizeMethod {
     /// Singular Value Decomposition
+    #[default]
     SVD,
     /// Randomized SVD (faster for large matrices)
     RSVD,
@@ -22,12 +23,6 @@ pub enum FactorizeMethod {
     LU,
     /// Cross Interpolation
     CI,
-}
-
-impl Default for FactorizeMethod {
-    fn default() -> Self {
-        Self::SVD
-    }
 }
 
 /// Options for factorization
@@ -467,7 +462,7 @@ mod tests {
             for j in 0..n {
                 let mut reconstructed = Complex64::new(0.0, 0.0);
                 for k in 0..result.rank {
-                    reconstructed = reconstructed + result.left[[i, k]] * result.right[[k, j]];
+                    reconstructed += result.left[[i, k]] * result.right[[k, j]];
                 }
                 let original = matrix[[i, j]];
                 let error = (reconstructed - original).norm();

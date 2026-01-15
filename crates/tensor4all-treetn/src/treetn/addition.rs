@@ -51,6 +51,7 @@ where
     /// Returns an error if:
     /// - Networks have incompatible topologies
     /// - Bond indices cannot be found
+    #[allow(clippy::type_complexity)]
     pub fn compute_merged_bond_indices(
         &self,
         other: &Self,

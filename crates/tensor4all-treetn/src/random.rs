@@ -150,14 +150,14 @@ where
         } else {
             (b.clone(), a.clone())
         };
+        let key_clone = (key.0.clone(), key.1.clone());
 
-        if !link_indices.contains_key(&key) {
+        link_indices.entry(key).or_insert_with(|| {
             let dim = link_space
-                .get(&key.0, &key.1)
+                .get(&key_clone.0, &key_clone.1)
                 .expect("LinkSpace must provide dimension for all edges");
-            let link_idx = Index::new_dyn(dim);
-            link_indices.insert(key, link_idx);
-        }
+            Index::new_dyn(dim)
+        });
     }
 
     // Step 2: For each node, collect all indices and create random tensor

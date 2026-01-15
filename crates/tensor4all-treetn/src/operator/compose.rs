@@ -163,6 +163,7 @@ where
 /// - Operators are not exclusive (overlapping)
 /// - Operator nodes don't exist in target
 /// - Gap node site indices not provided
+#[allow(clippy::type_complexity)]
 pub fn compose_exclusive_linear_operators<T, V>(
     target: &SiteIndexNetwork<V, T::Index>,
     operators: &[&LinearOperator<T, V>],
@@ -247,7 +248,7 @@ where
             // Add dummy links via outer product with ones tensor
             if let Some(links) = dummy_links_for_node.get(&name) {
                 for link in links {
-                    let ones = T::ones(&[link.clone()]).with_context(|| {
+                    let ones = T::ones(std::slice::from_ref(link)).with_context(|| {
                         format!("Failed to create ones tensor for dummy link at {:?}", name)
                     })?;
                     tensor = tensor.outer_product(&ones).with_context(|| {
@@ -281,7 +282,7 @@ where
 
         // Store mappings for the first site pair (if any)
         if let Some((true_input, true_output)) = index_pairs.first() {
-            if combined_input_mapping.get(&gap_name).is_none() {
+            if !combined_input_mapping.contains_key(&gap_name) {
                 combined_input_mapping.insert(
                     gap_name.clone(),
                     IndexMapping {
@@ -290,7 +291,7 @@ where
                     },
                 );
             }
-            if combined_output_mapping.get(&gap_name).is_none() {
+            if !combined_output_mapping.contains_key(&gap_name) {
                 combined_output_mapping.insert(
                     gap_name.clone(),
                     IndexMapping {
@@ -313,7 +314,7 @@ where
         // Add dummy links via outer product (bond indices, not site indices)
         if let Some(links) = dummy_links_for_node.get(&gap_name) {
             for link in links {
-                let ones = T::ones(&[link.clone()]).with_context(|| {
+                let ones = T::ones(std::slice::from_ref(link)).with_context(|| {
                     format!(
                         "Failed to create ones tensor for dummy link at gap {:?}",
                         gap_name
@@ -344,6 +345,7 @@ where
 ///
 /// This is a generic version that accepts any type implementing the Operator trait.
 /// For actual composition, use [`compose_exclusive_linear_operators`] with LinearOperator inputs.
+#[allow(clippy::type_complexity)]
 pub fn compose_exclusive_operators<T, V, O>(
     _target: &SiteIndexNetwork<V, T::Index>,
     _operators: &[&O],
@@ -622,11 +624,11 @@ mod tests {
         // Verify the composed operator
         let node_names = composed.node_names();
         assert_eq!(node_names.len(), 5, "Composed operator should have 5 nodes");
-        assert!(node_names.contains(&"N0".to_string()));
-        assert!(node_names.contains(&"N1".to_string()));
-        assert!(node_names.contains(&"N2".to_string())); // Gap node
-        assert!(node_names.contains(&"N3".to_string()));
-        assert!(node_names.contains(&"N4".to_string()));
+        assert!(node_names.contains("N0"));
+        assert!(node_names.contains("N1"));
+        assert!(node_names.contains("N2")); // Gap node
+        assert!(node_names.contains("N3"));
+        assert!(node_names.contains("N4"));
 
         // Verify mappings exist for all nodes
         assert!(composed.get_input_mapping(&"N0".to_string()).is_some());

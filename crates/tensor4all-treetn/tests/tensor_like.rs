@@ -11,7 +11,7 @@
 //! - TensorDynLen<DynId, NoSymmSpace> -> TensorDynLen
 //! - idx.id -> idx.id() (IndexLike trait method)
 
-use tensor4all_core::{DynIndex, IndexLike, StorageScalar, TensorDynLen, TensorIndex, TensorLike};
+use tensor4all_core::{DynIndex, IndexLike, StorageScalar, TensorDynLen, TensorIndex};
 use tensor4all_treetn::TreeTN;
 
 /// Helper to create a simple tensor with given indices

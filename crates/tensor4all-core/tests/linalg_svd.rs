@@ -186,7 +186,7 @@ fn test_svd_invalid_rank() {
     let storage = Arc::new(Storage::new_dense_f64(2));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone()], vec![2], storage);
 
-    let result = svd::<f64>(&tensor, &[i.clone()]);
+    let result = svd::<f64>(&tensor, std::slice::from_ref(&i));
     assert!(result.is_err());
     // Expected: unfold_split returns an error for rank < 2
     if result.is_ok() {

@@ -18,6 +18,7 @@ pub struct t4a_simplett_f64 {
     _private: *const c_void,
 }
 
+#[allow(dead_code)]
 impl t4a_simplett_f64 {
     pub(crate) fn new(tt: TensorTrain<f64>) -> Self {
         Self {
@@ -29,10 +30,12 @@ impl t4a_simplett_f64 {
         unsafe { &*(self._private as *const TensorTrain<f64>) }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn inner_mut(&mut self) -> &mut TensorTrain<f64> {
         unsafe { &mut *(self._private as *mut TensorTrain<f64>) }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn into_inner(self) -> TensorTrain<f64> {
         let ptr = self._private as *mut TensorTrain<f64>;
         std::mem::forget(self);

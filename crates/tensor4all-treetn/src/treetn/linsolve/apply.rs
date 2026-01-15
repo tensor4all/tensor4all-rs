@@ -216,6 +216,7 @@ where
 
     // Build gap site indices: for each gap node, create identity mapping
     // (input index = output index for identity)
+    #[allow(clippy::type_complexity)]
     let mut gap_site_indices: HashMap<V, Vec<(T::Index, T::Index)>> = HashMap::new();
 
     for gap_name in &gap_nodes {

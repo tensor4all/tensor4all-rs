@@ -114,13 +114,13 @@ where
             AnyScalar::C64(z) => z.re == 0.0 && z.im == 0.0,
         };
         if a0_is_zero {
-            return hx.scale(self.a1.clone());
+            return hx.scale(self.a1);
         }
 
         // Align hx indices to match x's index order for axpby
         let hx_aligned = hx.permuteinds(&x.external_indices())?;
 
         // Compute y = a₀ * x + a₁ * H * x
-        x.axpby(self.a0.clone(), &hx_aligned, self.a1.clone())
+        x.axpby(self.a0, &hx_aligned, self.a1)
     }
 }

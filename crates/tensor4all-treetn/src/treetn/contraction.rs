@@ -618,7 +618,7 @@ where
             .cloned()
             .collect();
 
-        for (idx, _) in &self.ortho_towards {
+        for idx in self.ortho_towards.keys() {
             if bond_indices.contains(idx) && !expected_directions.contains_key(idx) {
                 // This is a bond inside the canonical_center - should not have ortho_towards
                 return Err(anyhow::anyhow!(

@@ -555,9 +555,11 @@ mod tests {
         let f = |idx: &MultiIndex| (idx[0] + idx[1]) as f64;
         let local_dims = vec![4, 4];
         let first_pivot = vec![vec![1, 1]];
-        let mut options = TCI2Options::default();
-        options.tolerance = 1e-12;
-        options.max_iter = 10;
+        let options = TCI2Options {
+            tolerance: 1e-12,
+            max_iter: 10,
+            ..Default::default()
+        };
 
         let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
             f,

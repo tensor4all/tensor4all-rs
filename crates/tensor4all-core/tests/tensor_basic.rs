@@ -319,7 +319,7 @@ fn test_replaceinds_partial() {
     let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3, 4], storage);
 
     // Replace only i
-    let replaced = tensor.replaceinds(&[i.clone()], &[new_i.clone()]);
+    let replaced = tensor.replaceinds(std::slice::from_ref(&i), std::slice::from_ref(&new_i));
 
     // Check that i was replaced
     assert_eq!(replaced.indices[0].id, new_i.id);
@@ -344,7 +344,7 @@ fn test_replaceinds_length_mismatch() {
     let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3], storage);
 
     // Should panic - length mismatch
-    let _replaced = tensor.replaceinds(&[i.clone()], &[new_i.clone(), new_j.clone()]);
+    let _replaced = tensor.replaceinds(std::slice::from_ref(&i), &[new_i, new_j]);
 }
 
 // ============================================================================
@@ -513,11 +513,11 @@ fn test_tensor_data_lazy_outer_product() {
 
     let data_a = vec![1.0, 2.0];
     let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
-    let td_a = TensorData::new(storage_a, vec![i.id.clone()], vec![2]);
+    let td_a = TensorData::new(storage_a, vec![i.id], vec![2]);
 
     let data_b = vec![3.0, 4.0, 5.0];
     let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
-    let td_b = TensorData::new(storage_b, vec![j.id.clone()], vec![3]);
+    let td_b = TensorData::new(storage_b, vec![j.id], vec![3]);
 
     // Lazy outer product using TensorData directly
     let lazy_result = TensorData::outer_product(&td_a, &td_b);
@@ -535,7 +535,7 @@ fn test_tensor_data_lazy_outer_product() {
     match storage.as_ref() {
         Storage::DenseF64(v) => {
             // Expected: [[1*3, 1*4, 1*5], [2*3, 2*4, 2*5]] = [3, 4, 5, 6, 8, 10]
-            let expected = vec![3.0, 4.0, 5.0, 6.0, 8.0, 10.0];
+            let expected = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0];
             assert_eq!(v.as_slice().len(), expected.len());
             for (a, b) in v.as_slice().iter().zip(expected.iter()) {
                 assert!((a - b).abs() < 1e-10);
@@ -555,15 +555,15 @@ fn test_tensor_data_lazy_outer_product_with_permute() {
 
     let data_a = vec![1.0, 2.0];
     let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
-    let td_a = TensorData::new(storage_a, vec![i.id.clone()], vec![2]);
+    let td_a = TensorData::new(storage_a, vec![i.id], vec![2]);
 
     let data_b = vec![3.0, 4.0, 5.0];
     let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
-    let td_b = TensorData::new(storage_b, vec![j.id.clone()], vec![3]);
+    let td_b = TensorData::new(storage_b, vec![j.id], vec![3]);
 
     // Lazy outer product then permute using TensorData directly
     let lazy_result = TensorData::outer_product(&td_a, &td_b);
-    let permuted = lazy_result.permute(&[j.id.clone(), i.id.clone()]);
+    let permuted = lazy_result.permute(&[j.id, i.id]);
 
     // Check permuted dimensions
     assert_eq!(permuted.dims(), &[3, 2]);
@@ -576,7 +576,7 @@ fn test_tensor_data_lazy_outer_product_with_permute() {
         Storage::DenseF64(v) => {
             // Original was [[3, 4, 5], [6, 8, 10]] in row-major: [3, 4, 5, 6, 8, 10]
             // Transposed should be [[3, 6], [4, 8], [5, 10]] in row-major: [3, 6, 4, 8, 5, 10]
-            let expected = vec![3.0, 6.0, 4.0, 8.0, 5.0, 10.0];
+            let expected = [3.0, 6.0, 4.0, 8.0, 5.0, 10.0];
             assert_eq!(v.as_slice().len(), expected.len());
             for (a, b) in v.as_slice().iter().zip(expected.iter()) {
                 assert!((a - b).abs() < 1e-10);

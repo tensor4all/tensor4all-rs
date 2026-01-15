@@ -1083,8 +1083,10 @@ mod tests {
         let f = |idx: &MultiIndex| (idx[0] + idx[1]) as f64;
         let local_dims = vec![4, 4];
         let first_pivot = vec![1, 1];
-        let mut options = TCI1Options::default();
-        options.tolerance = 1e-12;
+        let options = TCI1Options {
+            tolerance: 1e-12,
+            ..Default::default()
+        };
 
         let (tci, _ranks, errors) =
             crossinterpolate1(f, local_dims.clone(), first_pivot, options).unwrap();
@@ -1127,8 +1129,10 @@ mod tests {
         };
         let local_dims = vec![5, 5];
         let first_pivot = vec![2, 2];
-        let mut options = TCI1Options::default();
-        options.tolerance = 1e-6;
+        let options = TCI1Options {
+            tolerance: 1e-6,
+            ..Default::default()
+        };
 
         let (tci, _ranks, errors) =
             crossinterpolate1(f, local_dims.clone(), first_pivot, options).unwrap();

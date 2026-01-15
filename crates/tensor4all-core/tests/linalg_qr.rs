@@ -20,7 +20,7 @@ fn test_qr_identity() {
     ));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
 
-    let (q, r) = qr::<f64>(&tensor, &[i.clone()]).expect("QR should succeed");
+    let (q, r) = qr::<f64>(&tensor, std::slice::from_ref(&i)).expect("QR should succeed");
 
     // Check dimensions
     assert_eq!(q.dims, vec![2, 2]);
@@ -50,7 +50,7 @@ fn test_qr_simple_matrix() {
     ));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
 
-    let (q, r) = qr::<f64>(&tensor, &[i.clone()]).expect("QR should succeed");
+    let (q, r) = qr::<f64>(&tensor, std::slice::from_ref(&i)).expect("QR should succeed");
 
     // Check dimensions: m=2, n=3, k=min(2,3)=2
     assert_eq!(q.dims, vec![2, 2]);
@@ -83,7 +83,7 @@ fn test_qr_reconstruction() {
     ));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![3, 4], storage);
 
-    let (q, r) = qr::<f64>(&tensor, &[i.clone()]).expect("QR should succeed");
+    let (q, r) = qr::<f64>(&tensor, std::slice::from_ref(&i)).expect("QR should succeed");
 
     // Reconstruct: A = Q * R
     // Extract Q and R data
@@ -151,7 +151,7 @@ fn test_qr_invalid_rank() {
     let storage = Arc::new(Storage::new_dense_f64(2));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone()], vec![2], storage);
 
-    let result = qr::<f64>(&tensor, &[i.clone()]);
+    let result = qr::<f64>(&tensor, std::slice::from_ref(&i));
     assert!(result.is_err());
     // Expected: unfold_split returns an error for rank < 2
     if result.is_ok() {
@@ -173,7 +173,7 @@ fn test_qr_invalid_split() {
     assert!(result.is_err(), "Expected error for empty left_inds");
 
     // All indices in left_inds should fail
-    let result = qr::<f64>(&tensor, &[i.clone(), j.clone()]);
+    let result = qr::<f64>(&tensor, &[i, j]);
     assert!(
         result.is_err(),
         "Expected error for all indices in left_inds"
@@ -200,7 +200,7 @@ fn test_qr_rank3() {
 
     // Split: left = [i], right = [j, k]
     // This unfolds to a 2×12 matrix
-    let (q, r) = qr::<f64>(&tensor, &[i.clone()]).expect("QR should succeed");
+    let (q, r) = qr::<f64>(&tensor, std::slice::from_ref(&i)).expect("QR should succeed");
 
     // Check dimensions:
     // Q should be [i, bond] = [2, min(2, 12)] = [2, 2]
@@ -246,7 +246,7 @@ fn test_qr_complex_reconstruction() {
     let tensor: TensorDynLen =
         TensorDynLen::new(vec![i_idx.clone(), j_idx.clone()], vec![2, 2], storage);
 
-    let (q, r) = qr_c64(&tensor, &[i_idx.clone()]).expect("Complex QR should succeed");
+    let (q, r) = qr_c64(&tensor, std::slice::from_ref(&i_idx)).expect("Complex QR should succeed");
 
     let q_data = match q.storage().as_ref() {
         Storage::DenseC64(dense) => dense.as_slice(),

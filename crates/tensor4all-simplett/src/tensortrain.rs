@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn test_tensortrain_evaluate() {
         // Create a simple tensor train that returns the product of indices + 1
-        let _site_dims = vec![2, 3];
+        let _site_dims = [2, 3];
 
         // First tensor: values are 1 for index 0, 2 for index 1
         let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 1);

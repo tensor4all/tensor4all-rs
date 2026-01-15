@@ -872,8 +872,8 @@ fn test_truncate_simple() {
     // tensor2[bond, k] similar structure
     let mut data2 = vec![0.0f64; 40];
     for k_idx in 0..4 {
-        data2[0 * 4 + k_idx] = 1.0;
-        data2[1 * 4 + k_idx] = 0.3;
+        data2[0 + k_idx] = 1.0;
+        data2[4 + k_idx] = 0.3;
     }
     let tensor2 = TensorDynLen::new(
         vec![bond.clone(), k.clone()],
@@ -1026,7 +1026,7 @@ fn test_sim_internal_inds() {
     let (tn, node1, node2, _edge, phys1, bond, phys2) = create_two_node_treetn();
 
     // Get original bond ID
-    let original_bond_id = bond.id().clone();
+    let original_bond_id = *bond.id();
     let original_bond_size = bond.size();
 
     // Create a copy with simulated internal indices
@@ -1057,8 +1057,8 @@ fn test_sim_internal_inds() {
     assert!(has_phys2, "Physical index 2 should be preserved");
 
     // Check that tensors contain the new bond index
-    let has_new_bond_in_t1 = tensor1.indices.iter().any(|idx| idx.same_id(&new_bond));
-    let has_new_bond_in_t2 = tensor2.indices.iter().any(|idx| idx.same_id(&new_bond));
+    let has_new_bond_in_t1 = tensor1.indices.iter().any(|idx| idx.same_id(new_bond));
+    let has_new_bond_in_t2 = tensor2.indices.iter().any(|idx| idx.same_id(new_bond));
     assert!(has_new_bond_in_t1, "Tensor 1 should have new bond index");
     assert!(has_new_bond_in_t2, "Tensor 2 should have new bond index");
 

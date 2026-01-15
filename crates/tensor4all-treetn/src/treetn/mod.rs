@@ -196,8 +196,11 @@ where
 
         // Step 2: Build a map from index ID to (node_index, index) pairs in O(n) time
         // Key: index ID, Value: vector of (NodeIndex, Index) pairs
-        let mut index_map: HashMap<<T::Index as IndexLike>::Id, Vec<(NodeIndex, T::Index)>> =
-            HashMap::new();
+        #[allow(clippy::type_complexity)]
+        let mut index_map: HashMap<
+            <T::Index as IndexLike>::Id,
+            Vec<(NodeIndex, T::Index)>,
+        > = HashMap::new();
 
         for node_idx in &node_indices {
             let tensor = treetn

@@ -161,7 +161,7 @@ fn test_hasinds() {
     assert!(hasinds(&indices, &[i.clone(), j.clone()]));
     assert!(hasinds(&indices, &[i.clone(), j.clone(), k.clone()]));
     assert!(!hasinds(&indices, &[i.clone(), l.clone()]));
-    assert!(!hasinds(&indices, &[l.clone()]));
+    assert!(!hasinds(&indices, std::slice::from_ref(&l)));
 }
 
 #[test]

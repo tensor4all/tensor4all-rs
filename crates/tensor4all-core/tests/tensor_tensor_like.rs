@@ -76,7 +76,7 @@ fn test_contract_allowed_pairs_specified() {
     let a = TensorDynLen::from_indices(vec![i.clone(), j.clone()], f64::dense_storage(a_data));
 
     // Tensor B: 3x4 matrix (j, k) - j has same id as A's j
-    let j_copy = Index::new(j.id.clone(), j.dim);
+    let j_copy = Index::new(j.id, j.dim);
     let b_data: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let b = TensorDynLen::from_indices(vec![j_copy.clone(), k.clone()], f64::dense_storage(b_data));
 

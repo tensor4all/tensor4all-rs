@@ -163,6 +163,7 @@ impl<V: Scalar + TTScalar + Default + Clone> QuanticsTensorCI2<V> {
                 let coord = grid
                     .quantics_to_origcoord(quantics)
                     .map_err(|e| anyhow!("Coordinate conversion error: {}", e))?;
+                #[allow(clippy::clone_on_copy)]
                 result.push((coord, value.clone()));
             }
             Ok(result)
@@ -208,12 +209,14 @@ where
 
         // Check cache first
         if let Some(v) = cache_clone.borrow().get(&q_i64) {
+            #[allow(clippy::clone_on_copy)]
             return v.clone();
         }
 
         // Compute and cache
         let coords = grid_clone.quantics_to_origcoord(&q_i64).unwrap();
         let value = f(&coords);
+        #[allow(clippy::clone_on_copy)]
         cache_clone.borrow_mut().insert(q_i64, value.clone());
         value
     };
@@ -375,12 +378,14 @@ where
 
         // Check cache first
         if let Some(v) = cache_clone.borrow().get(&q_i64) {
+            #[allow(clippy::clone_on_copy)]
             return v.clone();
         }
 
         // Compute and cache
         let grididx = grid_clone.quantics_to_grididx(&q_i64).unwrap();
         let value = f(&grididx);
+        #[allow(clippy::clone_on_copy)]
         cache_clone.borrow_mut().insert(q_i64, value.clone());
         value
     };

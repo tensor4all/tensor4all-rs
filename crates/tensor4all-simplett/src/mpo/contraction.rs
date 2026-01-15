@@ -177,6 +177,7 @@ where
         }
 
         // Contract through remaining sites
+        #[allow(clippy::needless_range_loop)]
         for site in 1..self.len() {
             let a = self.mpo_a.site_tensor(site);
             let b = self.mpo_b.site_tensor(site);

@@ -147,7 +147,7 @@ where
     }
 
     // Validate that all index positions are valid
-    for (_, positions) in &topology.nodes {
+    for positions in topology.nodes.values() {
         for &pos in positions {
             if pos >= tensor_indices.len() {
                 return Err(anyhow::anyhow!(
@@ -235,6 +235,7 @@ where
     };
 
     // Process nodes in post-order (leaves first)
+    #[allow(clippy::needless_range_loop)]
     for i in 0..traversal_order.len() - 1 {
         let (node, parent) = &traversal_order[i];
         let parent_node = parent.as_ref().unwrap();
