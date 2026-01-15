@@ -982,6 +982,85 @@ mod tests {
     }
 
     #[test]
+    fn test_contract_with_fit_method() {
+        use crate::ContractOptions;
+
+        // Use two-site tensor trains with shared site indices to exercise contraction
+        let s0 = idx(100, 2);
+        let s1 = idx(101, 2);
+        let l01_a = idx(102, 3);
+        let l01_b = idx(103, 3);
+
+        let t1_0 = make_tensor(vec![s0.clone(), l01_a.clone()]);
+        let t1_1 = make_tensor(vec![l01_a.clone(), s1.clone()]);
+        let tt1 = TensorTrain::new(vec![t1_0, t1_1]).unwrap();
+
+        let t2_0 = make_tensor(vec![s0.clone(), l01_b.clone()]);
+        let t2_1 = make_tensor(vec![l01_b.clone(), s1.clone()]);
+        let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
+
+        // Test contract with Fit method
+        let options = ContractOptions::fit()
+            .with_max_rank(10)
+            .with_nhalfsweeps(4); // 4 half-sweeps = 2 full sweeps
+        let result = tt1.contract(&tt2, &options);
+        assert!(result.is_ok());
+        let result_tt = result.unwrap();
+        assert_eq!(result_tt.len(), 1);
+    }
+
+    #[test]
+    fn test_contract_with_naive_method() {
+        use crate::ContractOptions;
+
+        // Use single-site tensor trains with a shared site index
+        let s0 = idx(200, 2);
+
+        let t1 = make_tensor(vec![s0.clone()]);
+        let tt1 = TensorTrain::new(vec![t1]).unwrap();
+
+        let t2 = make_tensor(vec![s0.clone()]);
+        let tt2 = TensorTrain::new(vec![t2]).unwrap();
+
+        // Test contract with Naive method
+        let options = ContractOptions::naive();
+        let result = tt1.contract(&tt2, &options);
+        assert!(result.is_ok());
+        let result_tt = result.unwrap();
+        assert_eq!(result_tt.len(), 1);
+    }
+
+
+    #[test]
+    fn test_contract_nhalfsweeps_conversion() {
+        use crate::ContractOptions;
+
+        // Use two-site tensor trains with shared site indices to exercise contraction
+        let s0 = idx(300, 2);
+        let s1 = idx(301, 2);
+        let l01_a = idx(302, 3);
+        let l01_b = idx(303, 3);
+
+        let t1_0 = make_tensor(vec![s0.clone(), l01_a.clone()]);
+        let t1_1 = make_tensor(vec![l01_a.clone(), s1.clone()]);
+        let tt1 = TensorTrain::new(vec![t1_0, t1_1]).unwrap();
+
+        let t2_0 = make_tensor(vec![s0.clone(), l01_b.clone()]);
+        let t2_1 = make_tensor(vec![l01_b.clone(), s1.clone()]);
+        let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
+
+        // Test that nhalfsweeps is correctly converted to nfullsweeps
+        // nhalfsweeps=6 should become nfullsweeps=3
+        let options = ContractOptions::fit()
+            .with_nhalfsweeps(6)
+            .with_max_rank(10);
+        let result = tt1.contract(&tt2, &options);
+        assert!(result.is_ok());
+        let result_tt = result.unwrap();
+        assert_eq!(result_tt.len(), 1);
+    }
+
+    #[test]
     fn test_inner_product() {
         let s0 = idx(0, 2);
         let l01 = idx(1, 3);
