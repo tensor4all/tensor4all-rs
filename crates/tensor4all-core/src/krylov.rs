@@ -177,22 +177,23 @@ where
             let mut h_col: Vec<AnyScalar> = Vec::with_capacity(j + 2);
             let mut w_orth = w;
 
-            for i in 0..=j {
-                let h_ij = v_basis[i].inner_product(&w_orth)?;
-                h_col.push(h_ij.clone());
+            for v_i in v_basis.iter().take(j + 1) {
+                let h_ij = v_i.inner_product(&w_orth)?;
+                h_col.push(h_ij);
                 // w_orth = w_orth - h_ij * v_i = 1.0 * w_orth + (-h_ij) * v_i
                 let neg_h_ij = AnyScalar::F64(0.0) - h_ij;
-                w_orth = w_orth.axpby(AnyScalar::F64(1.0), &v_basis[i], neg_h_ij)?;
+                w_orth = w_orth.axpby(AnyScalar::F64(1.0), v_i, neg_h_ij)?;
             }
 
             let h_jp1_j_real = w_orth.norm();
             let h_jp1_j = AnyScalar::F64(h_jp1_j_real);
-            h_col.push(h_jp1_j.clone());
+            h_col.push(h_jp1_j);
 
             // Apply previous Givens rotations to new column
+            #[allow(clippy::needless_range_loop)]
             for i in 0..j {
-                let h_i = h_col[i].clone();
-                let h_ip1 = h_col[i + 1].clone();
+                let h_i = h_col[i];
+                let h_ip1 = h_col[i + 1];
                 let (new_hi, new_hip1) = apply_givens_rotation(&cs[i], &sn[i], &h_i, &h_ip1);
                 h_col[i] = new_hi;
                 h_col[i + 1] = new_hip1;
@@ -200,8 +201,8 @@ where
 
             // Compute new Givens rotation for h_col[j] and h_col[j+1]
             let (c_j, s_j) = compute_givens_rotation(&h_col[j], &h_col[j + 1]);
-            cs.push(c_j.clone());
-            sn.push(s_j.clone());
+            cs.push(c_j);
+            sn.push(s_j);
 
             // Apply new rotation to eliminate h_col[j+1]
             let (new_hj, _) = apply_givens_rotation(&c_j, &s_j, &h_col[j], &h_col[j + 1]);
@@ -209,11 +210,11 @@ where
             h_col[j + 1] = AnyScalar::F64(0.0);
 
             // Apply rotation to g
-            let g_j = g[j].clone();
+            let g_j = g[j];
             let g_jp1 = AnyScalar::F64(0.0);
             let (new_gj, new_gjp1) = apply_givens_rotation(&c_j, &s_j, &g_j, &g_jp1);
             g[j] = new_gj;
-            g.push(new_gjp1.clone());
+            g.push(new_gjp1);
 
             h_matrix.push(h_col);
 
@@ -384,11 +385,11 @@ fn solve_upper_triangular(h: &[Vec<AnyScalar>], g: &[AnyScalar]) -> Result<Vec<A
     let mut y = vec![AnyScalar::F64(0.0); n];
 
     for i in (0..n).rev() {
-        let mut sum = g[i].clone();
+        let mut sum = g[i];
 
         for j in (i + 1)..n {
             // sum = sum - h[j][i] * y[j]
-            let prod = h[j][i].clone() * y[j].clone();
+            let prod = h[j][i] * y[j];
             sum = sum - prod;
         }
 
@@ -399,7 +400,7 @@ fn solve_upper_triangular(h: &[Vec<AnyScalar>], g: &[AnyScalar]) -> Result<Vec<A
             ));
         }
 
-        y[i] = sum / h_ii.clone();
+        y[i] = sum / *h_ii;
     }
 
     Ok(y)
@@ -410,7 +411,7 @@ fn update_solution<T: TensorLike>(x: &T, v_basis: &[T], y: &[AnyScalar]) -> Resu
     let mut result = x.clone();
 
     for (vi, yi) in v_basis.iter().zip(y.iter()) {
-        let scaled_vi = vi.scale(yi.clone())?;
+        let scaled_vi = vi.scale(*yi)?;
         // result = result + scaled_vi = 1.0 * result + 1.0 * scaled_vi
         result = result.axpby(AnyScalar::F64(1.0), &scaled_vi, AnyScalar::F64(1.0))?;
     }
@@ -517,7 +518,7 @@ mod tests {
         let expected_x = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
 
         // Diagonal scaling operator
-        let diag = vec![2.0, 3.0, 4.0];
+        let diag = [2.0, 3.0, 4.0];
         let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
             // Element-wise multiply by diagonal
             let x_data = match x.storage().as_ref() {
@@ -576,7 +577,7 @@ mod tests {
         let expected_x = make_vector_with_index(vec![1.0, 2.0], &idx);
 
         // Matrix A (stored as row-major)
-        let a_data = vec![2.0, 1.0, 0.0, 3.0];
+        let a_data = [2.0, 1.0, 0.0, 3.0];
 
         let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
             let x_data = match x.storage().as_ref() {

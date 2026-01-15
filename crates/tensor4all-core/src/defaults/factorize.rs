@@ -357,7 +357,7 @@ where
     let mut matrix = matrixci::util::zeros(m, n);
     for i in 0..m {
         for j in 0..n {
-            matrix[[i, j]] = tensor[[i, j]].clone();
+            matrix[[i, j]] = tensor[[i, j]];
         }
     }
     matrix

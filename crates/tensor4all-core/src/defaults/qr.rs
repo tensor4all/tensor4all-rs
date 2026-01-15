@@ -22,20 +22,12 @@ pub enum QrError {
 }
 
 /// Options for QR decomposition with truncation control.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct QrOptions {
     /// Relative tolerance for truncation based on R's diagonal elements.
     /// If `None`, uses the global default rtol.
     /// Columns of R with |R[i, i]| < rtol are truncated.
     pub rtol: Option<f64>,
-}
-
-impl Default for QrOptions {
-    fn default() -> Self {
-        Self {
-            rtol: None, // Use global default
-        }
-    }
 }
 
 impl QrOptions {
@@ -135,7 +127,7 @@ where
 /// A tuple `(Q, R)` where:
 /// - `Q` is a tensor with indices `[left_inds..., bond_index]` and dimensions `[left_dims..., r]`
 /// - `R` is a tensor with indices `[bond_index, right_inds...]` and dimensions `[r, right_dims...]`
-/// where `r` is the retained rank (≤ min(m, n)) determined by rtol truncation.
+///   where `r` is the retained rank (≤ min(m, n)) determined by rtol truncation.
 ///
 /// # Errors
 /// Returns `QrError` if:
@@ -182,7 +174,7 @@ where
 /// A tuple `(Q, R)` where:
 /// - `Q` is a tensor with indices `[left_inds..., bond_index]` and dimensions `[left_dims..., r]`
 /// - `R` is a tensor with indices `[bond_index, right_inds...]` and dimensions `[r, right_dims...]`
-/// where `r` is the retained rank (≤ min(m, n)) determined by rtol truncation.
+///   where `r` is the retained rank (≤ min(m, n)) determined by rtol truncation.
 ///
 /// # Errors
 /// Returns `QrError` if:

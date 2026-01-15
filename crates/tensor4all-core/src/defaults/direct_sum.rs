@@ -179,7 +179,7 @@ fn setup_direct_sum(
 
     // New indices from pairs
     for new_idx in &new_indices {
-        result_indices.push(Index::new(new_idx.id().clone(), new_idx.dim()));
+        result_indices.push(Index::new(*new_idx.id(), new_idx.dim()));
         result_dims.push(new_idx.dim());
     }
 
@@ -252,6 +252,7 @@ fn direct_sum_f64(
 
     let mut result_data: Vec<f64> = vec![0.0; setup.result_total];
 
+    #[allow(clippy::needless_range_loop)]
     for result_linear in 0..setup.result_total {
         let result_multi = linear_to_multi(result_linear, &setup.result_dims);
         let common_multi: Vec<usize> = result_multi[..setup.n_common].to_vec();
@@ -313,6 +314,7 @@ fn direct_sum_c64(
 
     let mut result_data: Vec<Complex64> = vec![Complex64::new(0.0, 0.0); setup.result_total];
 
+    #[allow(clippy::needless_range_loop)]
     for result_linear in 0..setup.result_total {
         let result_multi = linear_to_multi(result_linear, &setup.result_dims);
         let common_multi: Vec<usize> = result_multi[..setup.n_common].to_vec();
@@ -373,8 +375,8 @@ mod tests {
         // A[i, j] - 2x3 tensor
         let a = TensorDynLen::new(
             vec![
-                Index::new(i.id.clone(), i.dim()),
-                Index::new(j.id.clone(), j.dim()),
+                Index::new(i.id, i.dim()),
+                Index::new(j.id, j.dim()),
             ],
             vec![2, 3],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
@@ -386,8 +388,8 @@ mod tests {
         // B[i, k] - 2x4 tensor
         let b = TensorDynLen::new(
             vec![
-                Index::new(i.id.clone(), i.dim()),
-                Index::new(k.id.clone(), k.dim()),
+                Index::new(i.id, i.dim()),
+                Index::new(k.id, k.dim()),
             ],
             vec![2, 4],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
@@ -443,8 +445,8 @@ mod tests {
         // A[i, j] - 2x2 tensor
         let a = TensorDynLen::new(
             vec![
-                Index::new(i.id.clone(), i.dim()),
-                Index::new(j.id.clone(), j.dim()),
+                Index::new(i.id, i.dim()),
+                Index::new(j.id, j.dim()),
             ],
             vec![2, 2],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
@@ -455,8 +457,8 @@ mod tests {
         // B[k, l] - 3x3 tensor (no common indices)
         let b = TensorDynLen::new(
             vec![
-                Index::new(k.id.clone(), k.dim()),
-                Index::new(l.id.clone(), l.dim()),
+                Index::new(k.id, k.dim()),
+                Index::new(l.id, l.dim()),
             ],
             vec![3, 3],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
@@ -465,10 +467,10 @@ mod tests {
         );
 
         // Direct sum along (i, k) and (j, l)
-        let i_idx: DynIndex = Index::new(i.id.clone(), i.dim());
-        let j_idx: DynIndex = Index::new(j.id.clone(), j.dim());
-        let k_idx: DynIndex = Index::new(k.id.clone(), k.dim());
-        let l_idx: DynIndex = Index::new(l.id.clone(), l.dim());
+        let i_idx: DynIndex = Index::new(i.id, i.dim());
+        let j_idx: DynIndex = Index::new(j.id, j.dim());
+        let k_idx: DynIndex = Index::new(k.id, k.dim());
+        let l_idx: DynIndex = Index::new(l.id, l.dim());
         let (result, new_indices) = direct_sum(&a, &b, &[(i_idx, k_idx), (j_idx, l_idx)]).unwrap();
 
         // Result should be 5x5 (2+3, 2+3)

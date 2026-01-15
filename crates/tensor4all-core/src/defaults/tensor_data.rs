@@ -161,7 +161,7 @@ impl TensorData {
     ///
     /// # Arguments
     /// * `new_order` - The new index order as a list of DynIds.
-    ///                 Must be a permutation of external_index_ids.
+    ///   Must be a permutation of external_index_ids.
     pub fn permute(&self, new_order: &[DynId]) -> Self {
         assert_eq!(
             new_order.len(),
@@ -191,7 +191,7 @@ impl TensorData {
     ///
     /// # Arguments
     /// * `perm` - Permutation array where `perm[i]` is the old position of
-    ///            the index that should be at new position `i`.
+    ///   the index that should be at new position `i`.
     pub fn permute_by_perm(&self, perm: &[usize]) -> Self {
         assert_eq!(
             perm.len(),
@@ -201,7 +201,7 @@ impl TensorData {
 
         let new_order: Vec<DynId> = perm
             .iter()
-            .map(|&old_pos| self.external_index_ids[old_pos].clone())
+            .map(|&old_pos| self.external_index_ids[old_pos])
             .collect();
 
         let new_dims: Vec<usize> = perm
@@ -240,7 +240,7 @@ impl TensorData {
                     .index_ids
                     .iter()
                     .zip(comp.dims.iter())
-                    .map(|(id, &dim)| Index::new(id.clone(), dim))
+                    .map(|(id, &dim)| Index::new(*id, dim))
                     .collect();
                 TensorDynLen::new(indices, comp.dims.clone(), comp.storage.clone())
             })
@@ -253,7 +253,7 @@ impl TensorData {
         let contracted_ids: Vec<DynId> = contracted
             .indices
             .iter()
-            .map(|idx| idx.id.clone())
+            .map(|idx| idx.id)
             .collect();
 
         if contracted_ids == self.external_index_ids {
@@ -305,7 +305,7 @@ mod tests {
         let id_i = new_id();
         let id_j = new_id();
 
-        let data = TensorData::new(storage, vec![id_i.clone(), id_j.clone()], vec![2, 3]);
+        let data = TensorData::new(storage, vec![id_i, id_j], vec![2, 3]);
 
         assert!(data.is_simple());
         assert_eq!(data.ndim(), 2);
@@ -321,8 +321,8 @@ mod tests {
         let id_i = new_id();
         let id_j = new_id();
 
-        let a = TensorData::new(storage_a, vec![id_i.clone()], vec![2]);
-        let b = TensorData::new(storage_b, vec![id_j.clone()], vec![3]);
+        let a = TensorData::new(storage_a, vec![id_i], vec![2]);
+        let b = TensorData::new(storage_b, vec![id_j], vec![3]);
 
         let c = TensorData::outer_product(&a, &b);
 
@@ -340,10 +340,10 @@ mod tests {
         let id_i = new_id();
         let id_j = new_id();
 
-        let data = TensorData::new(storage, vec![id_i.clone(), id_j.clone()], vec![2, 3]);
+        let data = TensorData::new(storage, vec![id_i, id_j], vec![2, 3]);
 
         // Permute to [j, i]
-        let permuted = data.permute(&[id_j.clone(), id_i.clone()]);
+        let permuted = data.permute(&[id_j, id_i]);
 
         // After permute, external order differs from storage order, so not simple
         assert!(!permuted.is_simple());
@@ -365,13 +365,13 @@ mod tests {
         let id_i = new_id();
         let id_j = new_id();
 
-        let a = TensorData::new(storage_a, vec![id_i.clone()], vec![2]);
-        let b = TensorData::new(storage_b, vec![id_j.clone()], vec![3]);
+        let a = TensorData::new(storage_a, vec![id_i], vec![2]);
+        let b = TensorData::new(storage_b, vec![id_j], vec![3]);
 
         let c = TensorData::outer_product(&a, &b);
 
         // Permute to [j, i]
-        let permuted = c.permute(&[id_j.clone(), id_i.clone()]);
+        let permuted = c.permute(&[id_j, id_i]);
 
         assert_eq!(permuted.external_index_ids, vec![id_j, id_i]);
         assert_eq!(permuted.external_dims, vec![3, 2]);
@@ -390,7 +390,7 @@ mod tests {
 
         let data = TensorData::new(
             storage.clone(),
-            vec![id_i.clone(), id_j.clone()],
+            vec![id_i, id_j],
             vec![2, 3],
         );
 
@@ -418,8 +418,8 @@ mod tests {
         let id_i = new_id();
         let id_j = new_id();
 
-        let a = TensorData::new(storage_a, vec![id_i.clone()], vec![2]);
-        let b = TensorData::new(storage_b, vec![id_j.clone()], vec![3]);
+        let a = TensorData::new(storage_a, vec![id_i], vec![2]);
+        let b = TensorData::new(storage_b, vec![id_j], vec![3]);
 
         let c = TensorData::outer_product(&a, &b);
 
@@ -431,7 +431,7 @@ mod tests {
                 let data = m.as_slice();
                 assert_eq!(data.len(), 6);
                 // Expected: [3, 4, 5, 6, 8, 10]
-                let expected = vec![3.0, 4.0, 5.0, 6.0, 8.0, 10.0];
+                let expected = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0];
                 for (a, b) in data.iter().zip(expected.iter()) {
                     assert!((a - b).abs() < 1e-10);
                 }
@@ -452,8 +452,8 @@ mod tests {
         let id_i = new_id();
         let id_j = new_id();
 
-        let a = TensorData::new(storage_a, vec![id_i.clone()], vec![2]);
-        let b = TensorData::new(storage_b, vec![id_j.clone()], vec![3]);
+        let a = TensorData::new(storage_a, vec![id_i], vec![2]);
+        let b = TensorData::new(storage_b, vec![id_j], vec![3]);
 
         let c = TensorData::outer_product(&a, &b);
         let permuted = c.permute(&[id_j.clone(), id_i.clone()]);
@@ -466,7 +466,7 @@ mod tests {
                 let data = m.as_slice();
                 assert_eq!(data.len(), 6);
                 // Expected after transpose: [3, 6, 4, 8, 5, 10]
-                let expected = vec![3.0, 6.0, 4.0, 8.0, 5.0, 10.0];
+                let expected = [3.0, 6.0, 4.0, 8.0, 5.0, 10.0];
                 for (a, b) in data.iter().zip(expected.iter()) {
                     assert!((a - b).abs() < 1e-10);
                 }

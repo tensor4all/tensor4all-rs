@@ -148,7 +148,7 @@ impl TensorDynLen {
         }
 
         // Create TensorData from storage
-        let index_ids: Vec<DynId> = indices.iter().map(|idx| idx.id().clone()).collect();
+        let index_ids: Vec<DynId> = indices.iter().map(|idx| *idx.id()).collect();
         let data = TensorData::new(storage, index_ids, dims.clone());
 
         Self {
@@ -937,7 +937,7 @@ impl TensorDynLen {
             .collect();
 
         // Create new TensorData with updated index IDs
-        let new_index_ids: Vec<DynId> = new_indices.iter().map(|idx| idx.id().clone()).collect();
+        let new_index_ids: Vec<DynId> = new_indices.iter().map(|idx| *idx.id()).collect();
         let new_data = TensorData::new(self.storage().clone(), new_index_ids, self.dims.clone());
 
         Self::from_data(new_indices, self.dims.clone(), new_data)
@@ -992,7 +992,6 @@ impl TensorDynLen {
         let replacement_map: std::collections::HashMap<_, _> = old_indices
             .iter()
             .zip(new_indices.iter())
-            .map(|(old, new)| (old, new))
             .collect();
 
         let new_indices_vec: Vec<_> = self
@@ -1009,7 +1008,7 @@ impl TensorDynLen {
 
         // Create new TensorData with updated index IDs
         let new_index_ids: Vec<DynId> =
-            new_indices_vec.iter().map(|idx| idx.id().clone()).collect();
+            new_indices_vec.iter().map(|idx| *idx.id()).collect();
         let new_data = TensorData::new(self.storage().clone(), new_index_ids, self.dims.clone());
 
         Self::from_data(new_indices_vec, self.dims.clone(), new_data)
@@ -1271,6 +1270,7 @@ pub fn diag_tensor_dyn_len_c64(indices: Vec<DynIndex>, diag_data: Vec<Complex64>
 /// - `left_inds` is empty or contains all indices
 /// - `left_inds` contains indices not in the tensor or duplicates
 /// - Storage type is not supported (must be DenseF64 or DenseC64)
+#[allow(clippy::type_complexity)]
 pub fn unfold_split<T: StorageScalar>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],

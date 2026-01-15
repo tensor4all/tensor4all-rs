@@ -433,6 +433,7 @@ fn contract_connected_optimized(
 /// Returns: (ixs, internal_id_to_original)
 /// - ixs: Vec<Vec<usize>> - internal IDs for each tensor's indices
 /// - internal_id_to_original: Maps internal_id -> (tensor_idx, index_position)
+#[allow(clippy::type_complexity)]
 fn build_internal_ids(
     tensors: &[TensorDynLen],
     allowed: AllowedPairs<'_>,
