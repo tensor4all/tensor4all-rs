@@ -296,10 +296,7 @@ fn compute_givens_rotation(a: &AnyScalar, b: &AnyScalar) -> (AnyScalar, AnyScala
                     AnyScalar::C64(Complex64::new(0.0, 0.0)),
                 )
             } else {
-                (
-                    AnyScalar::C64(*a_val / r),
-                    AnyScalar::C64(*b_val / r),
-                )
+                (AnyScalar::C64(*a_val / r), AnyScalar::C64(*b_val / r))
             }
         }
         // Mixed real/complex - promote to complex
@@ -312,10 +309,7 @@ fn compute_givens_rotation(a: &AnyScalar, b: &AnyScalar) -> (AnyScalar, AnyScala
                     AnyScalar::C64(Complex64::new(0.0, 0.0)),
                 )
             } else {
-                (
-                    AnyScalar::C64(a_c / r),
-                    AnyScalar::C64(*b_val / r),
-                )
+                (AnyScalar::C64(a_c / r), AnyScalar::C64(*b_val / r))
             }
         }
         (AnyScalar::C64(a_val), AnyScalar::F64(b_val)) => {
@@ -327,10 +321,7 @@ fn compute_givens_rotation(a: &AnyScalar, b: &AnyScalar) -> (AnyScalar, AnyScala
                     AnyScalar::C64(Complex64::new(0.0, 0.0)),
                 )
             } else {
-                (
-                    AnyScalar::C64(*a_val / r),
-                    AnyScalar::C64(b_c / r),
-                )
+                (AnyScalar::C64(*a_val / r), AnyScalar::C64(b_c / r))
             }
         }
     }
@@ -347,7 +338,12 @@ fn apply_givens_rotation(
     use num_complex::Complex64;
 
     match (c, s, x, y) {
-        (AnyScalar::F64(c_val), AnyScalar::F64(s_val), AnyScalar::F64(x_val), AnyScalar::F64(y_val)) => {
+        (
+            AnyScalar::F64(c_val),
+            AnyScalar::F64(s_val),
+            AnyScalar::F64(x_val),
+            AnyScalar::F64(y_val),
+        ) => {
             let new_x = c_val * x_val + s_val * y_val;
             let new_y = -s_val * x_val + c_val * y_val;
             (AnyScalar::F64(new_x), AnyScalar::F64(new_y))

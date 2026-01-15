@@ -72,11 +72,7 @@ where
     /// Generate a sweep plan from a TreeTN's topology.
     ///
     /// Convenience method that extracts the NodeNameNetwork topology from a TreeTN.
-    pub fn from_treetn<T>(
-        treetn: &TreeTN<T, V>,
-        root: &V,
-        nsite: usize,
-    ) -> Option<Self>
+    pub fn from_treetn<T>(treetn: &TreeTN<T, V>, root: &V, nsite: usize) -> Option<Self>
     where
         T: TensorLike,
     {
@@ -464,7 +460,8 @@ where
         }
 
         // Factorize
-        let factorize_result = tensor_ab.factorize(&left_inds, &options)
+        let factorize_result = tensor_ab
+            .factorize(&left_inds, &options)
             .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?;
 
         let new_tensor_a = factorize_result.left;
@@ -516,7 +513,8 @@ where
     /// - canonical_center is intersected with the extracted nodes
     pub fn extract_subtree(&self, node_names: &[V]) -> Result<Self>
     where
-        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
         V: Ord,
     {
         if node_names.is_empty() {
@@ -673,7 +671,8 @@ where
     /// - The original TreeTN is modified in-place
     pub fn replace_subtree(&mut self, node_names: &[V], replacement: &Self) -> Result<()>
     where
-        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
         V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         if node_names.is_empty() {

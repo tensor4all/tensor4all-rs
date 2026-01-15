@@ -247,10 +247,12 @@ where
             // Add dummy links via outer product with ones tensor
             if let Some(links) = dummy_links_for_node.get(&name) {
                 for link in links {
-                    let ones = T::ones(&[link.clone()])
-                        .with_context(|| format!("Failed to create ones tensor for dummy link at {:?}", name))?;
-                    tensor = tensor.outer_product(&ones)
-                        .with_context(|| format!("Failed to add dummy link to tensor at {:?}", name))?;
+                    let ones = T::ones(&[link.clone()]).with_context(|| {
+                        format!("Failed to create ones tensor for dummy link at {:?}", name)
+                    })?;
+                    tensor = tensor.outer_product(&ones).with_context(|| {
+                        format!("Failed to add dummy link to tensor at {:?}", name)
+                    })?;
                 }
             }
 
@@ -270,10 +272,7 @@ where
     // 5b. Add identity tensors at gaps (with dummy links added via outer product)
     for gap_name in gaps {
         let index_pairs = gap_site_indices.get(&gap_name).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Site indices not provided for gap node {:?}",
-                gap_name
-            )
+            anyhow::anyhow!("Site indices not provided for gap node {:?}", gap_name)
         })?;
 
         // Collect site indices for delta
@@ -306,17 +305,23 @@ where
         let mut identity_tensor = if input_indices.is_empty() {
             T::delta(&[], &[]).context("Failed to create scalar identity tensor")?
         } else {
-            T::delta(&input_indices, &output_indices)
-                .with_context(|| format!("Failed to build identity tensor for gap {:?}", gap_name))?
+            T::delta(&input_indices, &output_indices).with_context(|| {
+                format!("Failed to build identity tensor for gap {:?}", gap_name)
+            })?
         };
 
         // Add dummy links via outer product (bond indices, not site indices)
         if let Some(links) = dummy_links_for_node.get(&gap_name) {
             for link in links {
-                let ones = T::ones(&[link.clone()])
-                    .with_context(|| format!("Failed to create ones tensor for dummy link at gap {:?}", gap_name))?;
-                identity_tensor = identity_tensor.outer_product(&ones)
-                    .with_context(|| format!("Failed to add dummy link to gap tensor {:?}", gap_name))?;
+                let ones = T::ones(&[link.clone()]).with_context(|| {
+                    format!(
+                        "Failed to create ones tensor for dummy link at gap {:?}",
+                        gap_name
+                    )
+                })?;
+                identity_tensor = identity_tensor.outer_product(&ones).with_context(|| {
+                    format!("Failed to add dummy link to gap tensor {:?}", gap_name)
+                })?;
             }
         }
 
@@ -920,11 +925,17 @@ mod tests {
         // Shape should be [3, 3, 1, 1] (site_in, site_out, dummy_link1, dummy_link2)
         // The order may vary, but total size should be 3*3*1*1 = 9
         let total_size: usize = n1_tensor.dims.iter().product();
-        assert_eq!(total_size, 9, "Total tensor size should be 9 (3x3 identity with dim-1 links)");
+        assert_eq!(
+            total_size, 9,
+            "Total tensor size should be 9 (3x3 identity with dim-1 links)"
+        );
 
         // Check that site dimensions 3 appear exactly twice
         let dim3_count = n1_tensor.dims.iter().filter(|&&d| d == 3).count();
-        assert_eq!(dim3_count, 2, "Should have exactly 2 site dimensions of size 3");
+        assert_eq!(
+            dim3_count, 2,
+            "Should have exactly 2 site dimensions of size 3"
+        );
 
         // Check it's effectively an identity (only diagonal elements are non-zero)
         let data = match n1_tensor.storage().as_ref() {

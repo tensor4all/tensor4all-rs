@@ -13,6 +13,7 @@ pub mod treetn;
 pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm};
 
 // dyn_treetn exports removed - use TreeTN<TensorDynLen, V> directly
+pub use link_index_network::LinkIndexNetwork;
 pub use named_graph::NamedGraph;
 pub use node_name_network::{CanonicalizeEdges, NodeNameNetwork};
 pub use operator::{
@@ -21,16 +22,20 @@ pub use operator::{
 };
 pub use options::{CanonicalizationOptions, SplitOptions, TruncationOptions};
 pub use random::{random_treetn_c64, random_treetn_f64, LinkSpace};
-pub use link_index_network::LinkIndexNetwork;
 pub use site_index_network::SiteIndexNetwork;
 pub use treetn::{
-    // Decomposition
-    factorize_tensor_to_treetn, factorize_tensor_to_treetn_with, TreeTopology,
     // Local update
-    apply_local_update_sweep, LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater,
-    TruncateUpdater,
+    apply_local_update_sweep,
+    // Decomposition
+    factorize_tensor_to_treetn,
+    factorize_tensor_to_treetn_with,
+    LocalUpdateStep,
+    LocalUpdateSweepPlan,
+    LocalUpdater,
     // Core type
     TreeTN,
+    TreeTopology,
+    TruncateUpdater,
 };
 
 // Re-export linsolve types

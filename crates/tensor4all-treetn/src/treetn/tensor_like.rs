@@ -76,11 +76,13 @@ where
 
         // Check if it's a site index
         if let Some(node_name) = self.site_index_network.find_node_by_index(old_index) {
-            let node_idx = result.node_index(node_name)
+            let node_idx = result
+                .node_index(node_name)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", node_name))?;
 
             // Replace in tensor - this also updates site_index_network via replace_tensor
-            let tensor = result.tensor(node_idx)
+            let tensor = result
+                .tensor(node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_name))?;
             let new_tensor = tensor.replaceind(old_index, new_index)?;
             result.replace_tensor(node_idx, new_tensor)?;
@@ -90,33 +92,47 @@ where
 
         // Check if it's a link index
         if let Some(edge) = self.link_index_network.find_edge(old_index) {
-            let (node_a, node_b) = result.graph.graph().edge_endpoints(edge)
+            let (node_a, node_b) = result
+                .graph
+                .graph()
+                .edge_endpoints(edge)
                 .ok_or_else(|| anyhow::anyhow!("Edge {:?} not found", edge))?;
 
             // Replace in both endpoint tensors - this also updates site_index_network
             for node in [node_a, node_b] {
-                let tensor = result.tensor(node)
+                let tensor = result
+                    .tensor(node)
                     .ok_or_else(|| anyhow::anyhow!("Tensor not found"))?;
                 let new_tensor = tensor.replaceind(old_index, new_index)?;
                 result.replace_tensor(node, new_tensor)?;
             }
 
             // Replace in graph edge weight
-            *result.bond_index_mut(edge)
+            *result
+                .bond_index_mut(edge)
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found"))? = new_index.clone();
 
             // Replace in link_index_network
-            result.link_index_network.replace_index(old_index, new_index, edge)
+            result
+                .link_index_network
+                .replace_index(old_index, new_index, edge)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
 
             return Ok(result);
         }
 
-        Err(anyhow::anyhow!("Index {:?} not found in TreeTN", old_index.id()))
+        Err(anyhow::anyhow!(
+            "Index {:?} not found in TreeTN",
+            old_index.id()
+        ))
     }
 
     /// Replace multiple indices in this TreeTN.
-    fn replaceinds(&self, old_indices: &[Self::Index], new_indices: &[Self::Index]) -> Result<Self> {
+    fn replaceinds(
+        &self,
+        old_indices: &[Self::Index],
+        new_indices: &[Self::Index],
+    ) -> Result<Self> {
         if old_indices.len() != new_indices.len() {
             return Err(anyhow::anyhow!(
                 "Length mismatch: {} old indices, {} new indices",

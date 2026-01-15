@@ -169,7 +169,9 @@ fn contract_treetn_to_vector(
     let n = 1 << r; // 2^R
 
     // Contract to full tensor
-    let full_tensor = treetn.contract_to_tensor().expect("Failed to contract TreeTN");
+    let full_tensor = treetn
+        .contract_to_tensor()
+        .expect("Failed to contract TreeTN");
 
     // Extract data from the tensor
     // The tensor has indices ordered by the indices field
@@ -177,9 +179,15 @@ fn contract_treetn_to_vector(
 
     // Debug
     eprintln!("contract_treetn_to_vector:");
-    eprintln!("  full_tensor.indices: {:?}", ext_indices.iter().map(|i| i.id()).collect::<Vec<_>>());
+    eprintln!(
+        "  full_tensor.indices: {:?}",
+        ext_indices.iter().map(|i| i.id()).collect::<Vec<_>>()
+    );
     eprintln!("  full_tensor.dims: {:?}", full_tensor.dims);
-    eprintln!("  site_indices requested: {:?}", site_indices.iter().map(|i| i.id()).collect::<Vec<_>>());
+    eprintln!(
+        "  site_indices requested: {:?}",
+        site_indices.iter().map(|i| i.id()).collect::<Vec<_>>()
+    );
 
     // Build mapping from site index ID to position in external indices
     let mut idx_to_pos: HashMap<DynId, usize> = HashMap::new();
@@ -201,7 +209,9 @@ fn contract_treetn_to_vector(
     let mut result = vec![Complex64::zero(); n];
 
     // Get data from storage
-    let storage = full_tensor.materialize_storage().expect("Failed to materialize storage");
+    let storage = full_tensor
+        .materialize_storage()
+        .expect("Failed to materialize storage");
     let data = match storage.as_ref() {
         Storage::DenseC64(dense) => dense.as_slice(),
         _ => panic!("Expected DenseC64 storage"),
@@ -231,8 +241,10 @@ fn contract_treetn_to_vector(
         result[x] = data[flat_idx];
 
         if data[flat_idx].norm() > 1e-10 {
-            eprintln!("  x={} (binary: {:03b}) -> multi_idx={:?} -> flat_idx={} -> value={:?}",
-                x, x, multi_idx, flat_idx, data[flat_idx]);
+            eprintln!(
+                "  x={} (binary: {:03b}) -> multi_idx={:?} -> flat_idx={} -> value={:?}",
+                x, x, multi_idx, flat_idx, data[flat_idx]
+            );
         }
     }
 
@@ -273,7 +285,10 @@ fn test_flip_mpo_direct() {
     // flip(x) = 2^R - x (mod 2^R) = n - x
     for x_in in 0..n {
         let expected_x_out = if x_in == 0 { 0 } else { n - x_in };
-        eprintln!("flip({}) should be {} (little-endian convention)", x_in, expected_x_out);
+        eprintln!(
+            "flip({}) should be {} (little-endian convention)",
+            x_in, expected_x_out
+        );
     }
 }
 
@@ -294,16 +309,28 @@ fn test_flip_numerical_correctness() {
     // Debug: verify MPS values
     eprintln!("\n=== Testing flip on x={} (R={}) ===", x, r);
     let mps_values = evaluate_mps_all(&mps);
-    eprintln!("MPS values: {:?}", mps_values.iter().map(|c| (c.re, c.im)).collect::<Vec<_>>());
+    eprintln!(
+        "MPS values: {:?}",
+        mps_values.iter().map(|c| (c.re, c.im)).collect::<Vec<_>>()
+    );
 
     let (treetn, site_indices) = tensortrain_to_treetn(&mps);
 
     // Debug: print site indices
-    eprintln!("Site indices: {:?}", site_indices.iter().map(|i| i.id()).collect::<Vec<_>>());
+    eprintln!(
+        "Site indices: {:?}",
+        site_indices.iter().map(|i| i.id()).collect::<Vec<_>>()
+    );
 
     // Debug: verify TreeTN contraction matches MPS values
     let treetn_values = contract_treetn_to_vector(&treetn, &site_indices);
-    eprintln!("TreeTN values: {:?}", treetn_values.iter().map(|c| (c.re, c.im)).collect::<Vec<_>>());
+    eprintln!(
+        "TreeTN values: {:?}",
+        treetn_values
+            .iter()
+            .map(|c| (c.re, c.im))
+            .collect::<Vec<_>>()
+    );
     eprintln!("Comparing MPS and TreeTN values...");
     for (i, (m, t)) in mps_values.iter().zip(treetn_values.iter()).enumerate() {
         if (m.re - t.re).abs() > 1e-10 || (m.im - t.im).abs() > 1e-10 {
@@ -319,7 +346,12 @@ fn test_flip_numerical_correctness() {
             .expect("Missing input mapping")
             .true_index
             .clone();
-        eprintln!("Remapping site {} from {:?} to {:?}", i, site_indices[i].id(), op_input.id());
+        eprintln!(
+            "Remapping site {} from {:?} to {:?}",
+            i,
+            site_indices[i].id(),
+            op_input.id()
+        );
         treetn_remapped = treetn_remapped
             .replaceind(&site_indices[i], &op_input)
             .expect("Failed to replace index");
@@ -327,16 +359,21 @@ fn test_flip_numerical_correctness() {
 
     // Debug: check remapped TreeTN
     let remapped_ext = treetn_remapped.external_indices();
-    eprintln!("Remapped TreeTN external indices: {:?}", remapped_ext.iter().map(|i| i.id()).collect::<Vec<_>>());
+    eprintln!(
+        "Remapped TreeTN external indices: {:?}",
+        remapped_ext.iter().map(|i| i.id()).collect::<Vec<_>>()
+    );
 
     // Apply operator
-    let result_treetn =
-        apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
-            .expect("Failed to apply operator");
+    let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+        .expect("Failed to apply operator");
 
     // Debug: check result TreeTN
     let result_ext = result_treetn.external_indices();
-    eprintln!("Result TreeTN external indices: {:?}", result_ext.iter().map(|i| i.id()).collect::<Vec<_>>());
+    eprintln!(
+        "Result TreeTN external indices: {:?}",
+        result_ext.iter().map(|i| i.id()).collect::<Vec<_>>()
+    );
 
     // Get output site indices from operator
     let output_indices: Vec<DynIndex> = (0..r)
@@ -347,11 +384,17 @@ fn test_flip_numerical_correctness() {
                 .clone()
         })
         .collect();
-    eprintln!("Output indices: {:?}", output_indices.iter().map(|i| i.id()).collect::<Vec<_>>());
+    eprintln!(
+        "Output indices: {:?}",
+        output_indices.iter().map(|i| i.id()).collect::<Vec<_>>()
+    );
 
     // Contract result to vector
     let result_vec = contract_treetn_to_vector(&result_treetn, &output_indices);
-    eprintln!("Result vector: {:?}", result_vec.iter().map(|c| (c.re, c.im)).collect::<Vec<_>>());
+    eprintln!(
+        "Result vector: {:?}",
+        result_vec.iter().map(|c| (c.re, c.im)).collect::<Vec<_>>()
+    );
 
     // Expected: flip(x) = 2^R - x = n - x for periodic BC (but flip(0) = 0, not n)
     // flip(1) = 8 - 1 = 7 for R=3
@@ -361,7 +404,10 @@ fn test_flip_numerical_correctness() {
     // Debug: print where the non-zero value is
     for (idx, val) in result_vec.iter().enumerate() {
         if val.norm() > 1e-10 {
-            eprintln!("  Non-zero value at index {}: ({}, {})", idx, val.re, val.im);
+            eprintln!(
+                "  Non-zero value at index {}: ({}, {})",
+                idx, val.re, val.im
+            );
         }
     }
 
@@ -373,8 +419,10 @@ fn test_flip_numerical_correctness() {
             Complex64::zero()
         };
         if result_vec[y].norm() > 1e-10 || y == expected_x {
-            eprintln!("  result_vec[{}] = ({}, {}), expected = ({}, {})",
-                y, result_vec[y].re, result_vec[y].im, expected_val.re, expected_val.im);
+            eprintln!(
+                "  result_vec[{}] = ({}, {}), expected = ({}, {})",
+                y, result_vec[y].re, result_vec[y].im, expected_val.re, expected_val.im
+            );
         }
         assert_relative_eq!(result_vec[y].re, expected_val.re, epsilon = 1e-10);
         assert_relative_eq!(result_vec[y].im, expected_val.im, epsilon = 1e-10);
@@ -414,9 +462,8 @@ fn test_shift_numerical_correctness() {
             }
 
             // Apply operator
-            let result_treetn =
-                apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
-                    .expect("Failed to apply operator");
+            let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+                .expect("Failed to apply operator");
 
             // Get output indices
             let output_indices: Vec<DynIndex> = (0..r)
@@ -492,9 +539,8 @@ fn test_fourier_numerical_correctness() {
     }
 
     // Apply operator
-    let result_treetn =
-        apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
-            .expect("Failed to apply operator");
+    let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+        .expect("Failed to apply operator");
 
     // Get output indices
     let output_indices: Vec<DynIndex> = (0..r)
@@ -553,13 +599,17 @@ fn test_fourier_inverse_operator_creation() {
             .expect("Failed to replace index");
     }
 
-    let result =
-        apply_linear_operator(&forward_op, &treetn_tmp, ApplyOptions::naive())
-            .expect("Failed to apply forward Fourier");
+    let result = apply_linear_operator(&forward_op, &treetn_tmp, ApplyOptions::naive())
+        .expect("Failed to apply forward Fourier");
 
     // Result should have R external indices (the output indices)
     let ext_indices = result.external_indices();
-    assert_eq!(ext_indices.len(), r, "Result should have {} external indices", r);
+    assert_eq!(
+        ext_indices.len(),
+        r,
+        "Result should have {} external indices",
+        r
+    );
 }
 
 // ============================================================================
@@ -595,9 +645,8 @@ fn test_flip_all_values() {
         }
 
         // Apply operator
-        let result_treetn =
-            apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
-                .expect("Failed to apply operator");
+        let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
 
         // Get output indices
         let output_indices: Vec<DynIndex> = (0..r)
@@ -649,7 +698,10 @@ fn test_shift_all_values() {
     let r = 3;
     let n = 1 << r;
 
-    eprintln!("\n=== Testing shift for all x values (R={}, N={}) ===", r, n);
+    eprintln!(
+        "\n=== Testing shift for all x values (R={}, N={}) ===",
+        r, n
+    );
 
     // Test various shift amounts
     for offset in [-3i64, -1, 0, 1, 3, 5] {
@@ -676,9 +728,8 @@ fn test_shift_all_values() {
             }
 
             // Apply operator
-            let result_treetn =
-                apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
-                    .expect("Failed to apply operator");
+            let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+                .expect("Failed to apply operator");
 
             // Get output indices
             let output_indices: Vec<DynIndex> = (0..r)
@@ -731,7 +782,10 @@ fn test_fourier_unitarity_all_basis_states() {
     let r = 3;
     let n = 1 << r;
 
-    eprintln!("\n=== Testing Fourier unitarity for all basis states (R={}, N={}) ===", r, n);
+    eprintln!(
+        "\n=== Testing Fourier unitarity for all basis states (R={}, N={}) ===",
+        r, n
+    );
 
     // Create forward Fourier operator (normalized)
     let op =
@@ -758,9 +812,8 @@ fn test_fourier_unitarity_all_basis_states() {
         }
 
         // Apply operator
-        let result_treetn =
-            apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
-                .expect("Failed to apply operator");
+        let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
 
         // Get output indices
         let output_indices: Vec<DynIndex> = (0..r)
@@ -811,7 +864,10 @@ fn test_fourier_inverse_application() {
     let r = 3;
     let n = 1 << r;
 
-    eprintln!("\n=== Testing inverse Fourier F^{{-1}} |0⟩ (R={}, N={}) ===", r, n);
+    eprintln!(
+        "\n=== Testing inverse Fourier F^{{-1}} |0⟩ (R={}, N={}) ===",
+        r, n
+    );
 
     // Create inverse Fourier operator
     let inverse_op = quantics_fourier_operator(r, FourierOptions::inverse())
@@ -835,9 +891,8 @@ fn test_fourier_inverse_application() {
             .expect("Failed to replace index");
     }
 
-    let result_inv =
-        apply_linear_operator(&inverse_op, &treetn_inv, ApplyOptions::naive())
-            .expect("Failed to apply inverse Fourier");
+    let result_inv = apply_linear_operator(&inverse_op, &treetn_inv, ApplyOptions::naive())
+        .expect("Failed to apply inverse Fourier");
 
     // Get output indices
     let output_indices: Vec<DynIndex> = (0..r)
@@ -856,7 +911,10 @@ fn test_fourier_inverse_application() {
     eprintln!("F^{{-1}}|0⟩:");
     let expected_magnitude = 1.0 / (n as f64).sqrt();
     for k in 0..n {
-        eprintln!("  k={}: ({:.4}, {:.4})", k, result_vec[k].re, result_vec[k].im);
+        eprintln!(
+            "  k={}: ({:.4}, {:.4})",
+            k, result_vec[k].re, result_vec[k].im
+        );
         // All components should have equal magnitude (uniform superposition)
         assert_relative_eq!(result_vec[k].norm(), expected_magnitude, epsilon = 1e-6);
     }
@@ -881,7 +939,10 @@ fn test_shift_open_boundary() {
     let r = 3;
     let n = 1 << r; // N = 8
 
-    eprintln!("\n=== Testing shift with Open boundary (R={}, N={}) ===", r, n);
+    eprintln!(
+        "\n=== Testing shift with Open boundary (R={}, N={}) ===",
+        r, n
+    );
 
     // Test cases: (x, offset, expected)
     // With Open BC, the result depends on whether x + offset_mod causes carry overflow.
@@ -904,21 +965,21 @@ fn test_shift_open_boundary() {
     //
     let test_cases: Vec<(usize, i64, Option<usize>)> = vec![
         // No overflow cases (positive offset)
-        (0, 0, Some(0)),   // 0 + 0 = 0, in range
-        (3, 2, Some(5)),   // 3 + 2 = 5, in range
-        (0, 7, Some(7)),   // 0 + 7 = 7, in range
-        (1, 3, Some(4)),   // 1 + 3 = 4, in range
+        (0, 0, Some(0)), // 0 + 0 = 0, in range
+        (3, 2, Some(5)), // 3 + 2 = 5, in range
+        (0, 7, Some(7)), // 0 + 7 = 7, in range
+        (1, 3, Some(4)), // 1 + 3 = 4, in range
         // Overflow cases (positive offset)
-        (7, 1, None),      // 7 + 1 = 8 >= 8, overflow
-        (6, 3, None),      // 6 + 3 = 9 >= 8, overflow
-        (4, 5, None),      // 4 + 5 = 9 >= 8, overflow
+        (7, 1, None), // 7 + 1 = 8 >= 8, overflow
+        (6, 3, None), // 6 + 3 = 9 >= 8, overflow
+        (4, 5, None), // 4 + 5 = 9 >= 8, overflow
         // Negative offset cases
         // shift(x, -k) -> offset_mod = 8 - k, x + offset_mod >= 8 iff x >= k
-        (0, -1, Some(7)),  // offset_mod = 7, 0 + 7 = 7 < 8, no overflow
-        (0, -7, Some(1)),  // offset_mod = 1, 0 + 1 = 1 < 8, no overflow
-        (1, -1, None),     // offset_mod = 7, 1 + 7 = 8 >= 8, overflow
-        (2, -1, None),     // offset_mod = 7, 2 + 7 = 9 >= 8, overflow
-        (7, -7, None),     // offset_mod = 1, 7 + 1 = 8 >= 8, overflow
+        (0, -1, Some(7)), // offset_mod = 7, 0 + 7 = 7 < 8, no overflow
+        (0, -7, Some(1)), // offset_mod = 1, 0 + 1 = 1 < 8, no overflow
+        (1, -1, None),    // offset_mod = 7, 1 + 7 = 8 >= 8, overflow
+        (2, -1, None),    // offset_mod = 7, 2 + 7 = 9 >= 8, overflow
+        (7, -7, None),    // offset_mod = 1, 7 + 1 = 8 >= 8, overflow
     ];
 
     for (x, offset, expected) in test_cases {
@@ -942,9 +1003,8 @@ fn test_shift_open_boundary() {
         }
 
         // Apply operator
-        let result_treetn =
-            apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
-                .expect("Failed to apply operator");
+        let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
 
         // Get output indices
         let output_indices: Vec<DynIndex> = (0..r)
@@ -1009,7 +1069,10 @@ fn test_flip_open_boundary() {
     let r = 3;
     let n = 1 << r;
 
-    eprintln!("\n=== Testing flip with Open boundary (R={}, N={}) ===", r, n);
+    eprintln!(
+        "\n=== Testing flip with Open boundary (R={}, N={}) ===",
+        r, n
+    );
 
     // Create flip operator with Open BC
     let op = flip_operator(r, BoundaryCondition::Open).expect("Failed to create flip operator");
@@ -1032,9 +1095,8 @@ fn test_flip_open_boundary() {
         }
 
         // Apply operator
-        let result_treetn =
-            apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
-                .expect("Failed to apply operator");
+        let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
 
         // Get output indices
         let output_indices: Vec<DynIndex> = (0..r)
@@ -1058,18 +1120,8 @@ fn test_flip_open_boundary() {
             // All coefficients should be zero
             eprintln!("flip({}, Open) = overflow -> zero vector", x);
             for y in 0..n {
-                assert_relative_eq!(
-                    result_vec[y].re,
-                    0.0,
-                    epsilon = 1e-10,
-                    max_relative = 1e-10
-                );
-                assert_relative_eq!(
-                    result_vec[y].im,
-                    0.0,
-                    epsilon = 1e-10,
-                    max_relative = 1e-10
-                );
+                assert_relative_eq!(result_vec[y].re, 0.0, epsilon = 1e-10, max_relative = 1e-10);
+                assert_relative_eq!(result_vec[y].im, 0.0, epsilon = 1e-10, max_relative = 1e-10);
             }
         } else {
             // Normal result: delta at expected_x
@@ -1120,7 +1172,10 @@ fn test_phase_rotation_all_values() {
     let n = 1 << r;
     let theta = PI / 4.0; // 45 degrees
 
-    eprintln!("\n=== Testing phase rotation for all x values (R={}, N={}, θ=π/4) ===", r, n);
+    eprintln!(
+        "\n=== Testing phase rotation for all x values (R={}, N={}, θ=π/4) ===",
+        r, n
+    );
 
     let op = phase_rotation_operator(r, theta).expect("Failed to create phase rotation operator");
 
@@ -1142,9 +1197,8 @@ fn test_phase_rotation_all_values() {
         }
 
         // Apply operator
-        let result_treetn =
-            apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
-                .expect("Failed to apply operator");
+        let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
 
         // Get output indices
         let output_indices: Vec<DynIndex> = (0..r)
@@ -1162,8 +1216,10 @@ fn test_phase_rotation_all_values() {
         // Expected: |x⟩ -> exp(i*θ*x) * |x⟩
         let expected_phase = Complex64::new((theta * x as f64).cos(), (theta * x as f64).sin());
 
-        eprintln!("phase_rotation({}) = exp(i*{:.4}*{}) = ({:.4}, {:.4})",
-                  x, theta, x, expected_phase.re, expected_phase.im);
+        eprintln!(
+            "phase_rotation({}) = exp(i*{:.4}*{}) = ({:.4}, {:.4})",
+            x, theta, x, expected_phase.re, expected_phase.im
+        );
 
         // Check result: only position x should be non-zero
         for y in 0..n {
@@ -1197,7 +1253,10 @@ fn test_phase_rotation_zero_theta() {
     let n = 1 << r;
     let theta = 0.0;
 
-    eprintln!("\n=== Testing phase rotation with θ=0 (identity) (R={}, N={}) ===", r, n);
+    eprintln!(
+        "\n=== Testing phase rotation with θ=0 (identity) (R={}, N={}) ===",
+        r, n
+    );
 
     let op = phase_rotation_operator(r, theta).expect("Failed to create phase rotation operator");
 
@@ -1219,9 +1278,8 @@ fn test_phase_rotation_zero_theta() {
         }
 
         // Apply operator
-        let result_treetn =
-            apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
-                .expect("Failed to apply operator");
+        let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
 
         // Get output indices
         let output_indices: Vec<DynIndex> = (0..r)
@@ -1268,7 +1326,10 @@ fn test_phase_rotation_two_pi() {
     let n = 1 << r;
     let theta = 2.0 * PI;
 
-    eprintln!("\n=== Testing phase rotation with θ=2π (identity) (R={}, N={}) ===", r, n);
+    eprintln!(
+        "\n=== Testing phase rotation with θ=2π (identity) (R={}, N={}) ===",
+        r, n
+    );
 
     let op = phase_rotation_operator(r, theta).expect("Failed to create phase rotation operator");
 
@@ -1288,9 +1349,8 @@ fn test_phase_rotation_two_pi() {
                 .expect("Failed to replace index");
         }
 
-        let result_treetn =
-            apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
-                .expect("Failed to apply operator");
+        let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
 
         let output_indices: Vec<DynIndex> = (0..r)
             .map(|i| {
@@ -1360,7 +1420,10 @@ fn test_cumsum_all_values() {
     let r = 3;
     let n = 1 << r;
 
-    eprintln!("\n=== Testing cumsum for all x values (R={}, N={}) ===", r, n);
+    eprintln!(
+        "\n=== Testing cumsum for all x values (R={}, N={}) ===",
+        r, n
+    );
 
     let op = cumsum_operator(r).expect("Failed to create cumsum operator");
 
@@ -1382,9 +1445,8 @@ fn test_cumsum_all_values() {
         }
 
         // Apply operator
-        let result_treetn =
-            apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
-                .expect("Failed to apply operator");
+        let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
 
         // Get output indices
         let output_indices: Vec<DynIndex> = (0..r)
@@ -1405,11 +1467,18 @@ fn test_cumsum_all_values() {
         // Now that contract_treetn_to_vector uses big-endian, result[y] corresponds to value y
         let mut count_positive = 0;
         for y in 0..n {
-            let expected_val = if y > x { Complex64::one() } else { Complex64::zero() };
+            let expected_val = if y > x {
+                Complex64::one()
+            } else {
+                Complex64::zero()
+            };
 
             if result_vec[y].norm() > 0.5 {
                 count_positive += 1;
-                eprintln!("  y={}: ({:.4}, {:.4})", y, result_vec[y].re, result_vec[y].im);
+                eprintln!(
+                    "  y={}: ({:.4}, {:.4})",
+                    y, result_vec[y].re, result_vec[y].im
+                );
             }
 
             assert_relative_eq!(
@@ -1428,7 +1497,10 @@ fn test_cumsum_all_values() {
 
         // x has n-1-x values greater than it
         let expected_count = n - 1 - x;
-        eprintln!("  Found {} positive, expected {} (y > {})", count_positive, expected_count, x);
+        eprintln!(
+            "  Found {} positive, expected {} (y > {})",
+            count_positive, expected_count, x
+        );
     }
 
     eprintln!("All cumsum tests passed!");
@@ -1506,7 +1578,10 @@ fn test_affine_shift() {
     let n = 1 << r;
     let offset = 3i64;
 
-    eprintln!("\n=== Testing affine shift y = x + {} (R={}, N={}) ===", offset, r, n);
+    eprintln!(
+        "\n=== Testing affine shift y = x + {} (R={}, N={}) ===",
+        offset, r, n
+    );
 
     // Shift: y = 1*x + offset
     let params = AffineParams::from_integers(vec![1], vec![offset], 1, 1)
@@ -1532,7 +1607,10 @@ fn test_affine_negation() {
     let bc = vec![BoundaryCondition::Periodic];
 
     let op = affine_operator(r, &params, &bc);
-    assert!(op.is_ok(), "Affine negation operator creation should succeed");
+    assert!(
+        op.is_ok(),
+        "Affine negation operator creation should succeed"
+    );
 
     eprintln!("Affine negation test: operator creation successful");
 }
@@ -1548,12 +1626,17 @@ fn test_affine_2d_rotation() {
     let params = AffineParams::from_integers(
         vec![1, 1, 1, -1], // Row major: [1,1] for row 0, [1,-1] for row 1
         vec![0, 0],
-        2, 2
-    ).expect("Failed to create affine params");
+        2,
+        2,
+    )
+    .expect("Failed to create affine params");
     let bc = vec![BoundaryCondition::Periodic; 2];
 
     let op = affine_operator(r, &params, &bc);
-    assert!(op.is_ok(), "Affine 2D rotation operator creation should succeed");
+    assert!(
+        op.is_ok(),
+        "Affine 2D rotation operator creation should succeed"
+    );
 
     eprintln!("Affine 2D rotation test: operator creation successful");
 }
@@ -1572,7 +1655,10 @@ fn test_binaryop_identity_x() {
     eprintln!("\n=== Testing binaryop identity a=1, b=0 (R={}) ===", r);
 
     let op = binaryop_single_operator(r, 1, 0, BoundaryCondition::Periodic);
-    assert!(op.is_ok(), "Binaryop identity operator creation should succeed");
+    assert!(
+        op.is_ok(),
+        "Binaryop identity operator creation should succeed"
+    );
 
     eprintln!("Binaryop identity test: operator creation successful");
 }
@@ -1598,7 +1684,10 @@ fn test_binaryop_difference() {
     eprintln!("\n=== Testing binaryop difference a=1, b=-1 (R={}) ===", r);
 
     let op = binaryop_single_operator(r, 1, -1, BoundaryCondition::Periodic);
-    assert!(op.is_ok(), "Binaryop difference operator creation should succeed");
+    assert!(
+        op.is_ok(),
+        "Binaryop difference operator creation should succeed"
+    );
 
     eprintln!("Binaryop difference test: operator creation successful");
 }

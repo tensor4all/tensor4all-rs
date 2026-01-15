@@ -169,7 +169,7 @@ fn single_tensor_flip() -> [[[[Complex64; 2]; 2]; 2]; 2] {
             let out = -(a as i32) + cval[icin];
             let icout = if out < 0 { 0 } else { 1 };
             let b = out.rem_euclid(2) as usize; // b is the output bit (0 or 1)
-            // Store as tensor[cin][cout][a][b] matching Julia exactly
+                                                // Store as tensor[cin][cout][a][b] matching Julia exactly
             tensor[icin][icout][a][b] = Complex64::one();
         }
     }

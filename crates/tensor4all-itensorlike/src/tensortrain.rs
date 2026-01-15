@@ -10,11 +10,15 @@ use std::ops::Range;
 
 use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
 use tensor4all_core::{AnyScalar, TensorAccess, TensorDynLen};
-use tensor4all_treetn::treetn::contraction::{contract as treetn_contract, ContractionMethod, ContractionOptions as TreeTNContractionOptions};
+use tensor4all_treetn::treetn::contraction::{
+    contract as treetn_contract, ContractionMethod, ContractionOptions as TreeTNContractionOptions,
+};
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 use crate::error::{Result, TensorTrainError};
-use crate::options::{CanonicalForm, ContractMethod, ContractOptions, TruncateAlg, TruncateOptions};
+use crate::options::{
+    CanonicalForm, ContractMethod, ContractOptions, TruncateAlg, TruncateOptions,
+};
 
 /// Tensor Train with orthogonality tracking.
 ///
@@ -102,11 +106,12 @@ impl TensorTrain {
         let node_names: Vec<usize> = (0..tensors.len()).collect();
 
         // Create TreeTN with from_tensors (auto-connects by shared index IDs)
-        let inner = TreeTN::<TensorDynLen, usize>::from_tensors(tensors, node_names).map_err(|e| {
-            TensorTrainError::InvalidStructure {
-                message: format!("Failed to create TreeTN: {}", e),
-            }
-        })?;
+        let inner =
+            TreeTN::<TensorDynLen, usize>::from_tensors(tensors, node_names).map_err(|e| {
+                TensorTrainError::InvalidStructure {
+                    message: format!("Failed to create TreeTN: {}", e),
+                }
+            })?;
 
         Ok(Self {
             inner,

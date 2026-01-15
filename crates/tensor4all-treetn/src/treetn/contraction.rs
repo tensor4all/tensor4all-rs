@@ -13,8 +13,10 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::{AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
 use crate::algorithm::CanonicalForm;
+use tensor4all_core::{
+    AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
+};
 
 use super::TreeTN;
 
@@ -232,7 +234,8 @@ where
     ) -> Result<Self>
     where
         V: Ord,
-        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         self.contract_zipup_with(other, center, CanonicalForm::Unitary, rtol, max_rank)
     }
@@ -250,7 +253,8 @@ where
     ) -> Result<Self>
     where
         V: Ord,
-        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         // 1. Verify topologies are compatible (same graph structure)
         if !self.same_topology(other) {
@@ -388,7 +392,8 @@ where
                 max_rank,
             };
 
-            let factorize_result = child_tensor.factorize(&left_inds, &factorize_options)
+            let factorize_result = child_tensor
+                .factorize(&left_inds, &factorize_options)
                 .map_err(|e| {
                     anyhow::anyhow!("Factorization failed at node {:?}: {}", child_name, e)
                 })?;
@@ -404,7 +409,8 @@ where
             // Right factor has: new_bond (from factorize), bond1, bond2
             // Parent has: bond1, bond2 (among other indices)
             // Contract along bond1 and bond2
-            let contracted = T::contract(&[parent_tensor, factorize_result.right], AllowedPairs::All)?;
+            let contracted =
+                T::contract(&[parent_tensor, factorize_result.right], AllowedPairs::All)?;
             result_tensors.insert(parent_name.clone(), contracted);
         }
 
@@ -479,7 +485,8 @@ where
     pub fn contract_naive(&self, other: &Self) -> Result<T>
     where
         V: Ord,
-        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         // 1. Verify topologies are compatible
         if !self.same_topology(other) {
@@ -637,7 +644,11 @@ fn find_common_indices<T: TensorLike>(a: &T, b: &T) -> Vec<T::Index>
 where
     <T::Index as IndexLike>::Id: Eq + std::hash::Hash,
 {
-    let a_ids: HashSet<_> = a.external_indices().iter().map(|i| i.id().clone()).collect();
+    let a_ids: HashSet<_> = a
+        .external_indices()
+        .iter()
+        .map(|i| i.id().clone())
+        .collect();
     b.external_indices()
         .into_iter()
         .filter(|i| a_ids.contains(i.id()))
@@ -850,7 +861,8 @@ where
     let topology = super::decompose::TreeTopology::new(nodes, edges);
 
     // 3. Decompose back to TreeTN
-    let mut result = factorize_tensor_to_treetn_with(&contracted_tensor, &topology, FactorizeAlg::SVD)?;
+    let mut result =
+        factorize_tensor_to_treetn_with(&contracted_tensor, &topology, FactorizeAlg::SVD)?;
 
     // Set canonical center
     if result.node_index(center).is_some() {

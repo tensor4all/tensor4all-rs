@@ -162,8 +162,8 @@ fn setup_direct_sum(
     let mut new_indices: Vec<DynIndex> = Vec::new();
     for (&dim_a, &dim_b) in paired_dims_a.iter().zip(&paired_dims_b) {
         let new_dim = dim_a + dim_b;
-        let new_index =
-            DynIndex::new_link(new_dim).map_err(|e| anyhow::anyhow!("Failed to create index: {:?}", e))?;
+        let new_index = DynIndex::new_link(new_dim)
+            .map_err(|e| anyhow::anyhow!("Failed to create index: {:?}", e))?;
         new_indices.push(new_index);
     }
 

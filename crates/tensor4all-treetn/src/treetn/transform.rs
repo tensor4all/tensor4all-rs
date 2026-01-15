@@ -10,7 +10,9 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 use petgraph::stable_graph::NodeIndex;
 
-use tensor4all_core::{AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{
+    AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
+};
 
 use super::TreeTN;
 use crate::options::SplitOptions;
@@ -356,7 +358,10 @@ where
         // Sort by target name for deterministic ordering
         result_tensors.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-        let names: Vec<TargetV> = result_tensors.iter().map(|(name, _)| name.clone()).collect();
+        let names: Vec<TargetV> = result_tensors
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
         let tensors: Vec<T> = result_tensors.into_iter().map(|(_, t)| t).collect();
 
         let result = TreeTN::<T, TargetV>::from_tensors(tensors, names)

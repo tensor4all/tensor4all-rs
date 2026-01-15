@@ -20,7 +20,8 @@ use crate::treetn::TreeTN;
 pub struct LocalLinOp<T, V>
 where
     T: TensorLike + 'static,
-    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
+    <T::Index as IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     /// The projected operator (shared, mutable for environment caching)
@@ -42,7 +43,8 @@ impl<T, V> LocalLinOp<T, V>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
-    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
+    <T::Index as IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     /// Create a new LocalLinOp for V_in = V_out case.

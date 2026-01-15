@@ -99,10 +99,7 @@ where
     /// # Returns
     ///
     /// A LinearOperator with proper index mappings, or an error if structure is incompatible.
-    pub fn from_mpo_and_state(
-        mpo: TreeTN<T, V>,
-        state: &TreeTN<T, V>,
-    ) -> Result<Self> {
+    pub fn from_mpo_and_state(mpo: TreeTN<T, V>, state: &TreeTN<T, V>) -> Result<Self> {
         let mut input_mapping = HashMap::new();
         let mut output_mapping = HashMap::new();
 
@@ -133,10 +130,8 @@ where
                         let dim = state_idx.dim();
 
                         // Find MPO indices with matching dimension
-                        let matching_mpo: Vec<_> = mpo_indices
-                            .iter()
-                            .filter(|idx| idx.dim() == dim)
-                            .collect();
+                        let matching_mpo: Vec<_> =
+                            mpo_indices.iter().filter(|idx| idx.dim() == dim).collect();
 
                         if matching_mpo.len() < 2 {
                             return Err(anyhow::anyhow!(
@@ -232,7 +227,8 @@ where
             };
 
             // Step 2: Contract with operator
-            let contracted = T::contract(&[transformed_state, op_tensor.clone()], AllowedPairs::All)?;
+            let contracted =
+                T::contract(&[transformed_state, op_tensor.clone()], AllowedPairs::All)?;
 
             // Step 3: Replace MPO's output indices with true output indices
             let result_tensor = if let Some(mapping) = self.output_mapping.get(&node) {
@@ -269,7 +265,8 @@ where
         let mut transformed = local_tensor.clone();
         for node in region {
             if let Some(mapping) = self.input_mapping.get(node) {
-                transformed = transformed.replaceind(&mapping.true_index, &mapping.internal_index)?;
+                transformed =
+                    transformed.replaceind(&mapping.true_index, &mapping.internal_index)?;
             }
         }
 

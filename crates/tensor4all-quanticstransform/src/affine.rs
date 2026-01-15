@@ -726,7 +726,11 @@ fn affine_transform_core(
             if scale % 2 == 1 {
                 // Scale is odd: unique y that satisfies condition
                 let y: Vec<i64> = z.iter().map(|&zi| zi & 1).collect();
-                let y_bits: usize = y.iter().enumerate().map(|(i, &yi)| (yi as usize) << i).sum();
+                let y_bits: usize = y
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &yi)| (yi as usize) << i)
+                    .sum();
 
                 // Compute carry_out = (z - scale * y) / 2
                 let carry_out: Vec<i64> = z
@@ -738,9 +742,9 @@ fn affine_transform_core(
                 // Site index: y bits in lower positions, x bits in upper positions
                 let site_idx = y_bits | (x_bits << m);
 
-                let entry = carry_out_map
-                    .entry(carry_out)
-                    .or_insert_with(|| DTensor::<bool, 2>::from_elem([num_carry_in, site_dim], false));
+                let entry = carry_out_map.entry(carry_out).or_insert_with(|| {
+                    DTensor::<bool, 2>::from_elem([num_carry_in, site_dim], false)
+                });
                 entry[[c_idx, site_idx]] = true;
             } else {
                 // Scale is even: z must be even for valid y
@@ -761,9 +765,9 @@ fn affine_transform_core(
 
                     let site_idx = y_bits | (x_bits << m);
 
-                    let entry = carry_out_map
-                        .entry(carry_out)
-                        .or_insert_with(|| DTensor::<bool, 2>::from_elem([num_carry_in, site_dim], false));
+                    let entry = carry_out_map.entry(carry_out).or_insert_with(|| {
+                        DTensor::<bool, 2>::from_elem([num_carry_in, site_dim], false)
+                    });
                     entry[[c_idx, site_idx]] = true;
                 }
             }
@@ -1427,10 +1431,7 @@ mod tests {
                     Rational64::new(1, 2),
                     Rational64::new(-1, 2),
                 ];
-                let b = vec![
-                    Rational64::from_integer(2),
-                    Rational64::from_integer(3),
-                ];
+                let b = vec![Rational64::from_integer(2), Rational64::from_integer(3)];
                 let params = AffineParams::new(a, b, 2, 2).unwrap();
                 let bcs = vec![bc; 2];
 

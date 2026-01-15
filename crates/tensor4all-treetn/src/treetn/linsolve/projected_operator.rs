@@ -75,7 +75,8 @@ where
 impl<T, V> ProjectedOperator<T, V>
 where
     T: TensorLike,
-    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
+    <T::Index as IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     /// Create a new ProjectedOperator.

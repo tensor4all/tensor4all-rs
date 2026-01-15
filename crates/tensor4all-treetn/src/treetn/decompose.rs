@@ -186,7 +186,9 @@ where
         .iter()
         .max_by(|(node_a, neighbors_a), (node_b, neighbors_b)| {
             // First compare by degree, then by node name (ascending) for tie-breaking
-            neighbors_a.len().cmp(&neighbors_b.len())
+            neighbors_a
+                .len()
+                .cmp(&neighbors_b.len())
                 .then_with(|| node_b.cmp(node_a)) // Prefer smaller node name
         })
         .map(|(node, _)| node.clone())

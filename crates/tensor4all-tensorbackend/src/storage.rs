@@ -293,7 +293,8 @@ fn contract_via_gemm<T: DenseScalar>(
     let b_mat = unsafe { faer::MatRef::from_raw_parts(b.as_ptr(), k, n, n as isize, 1) };
 
     let mut c = vec![T::zero(); m * n];
-    let mut c_mat = unsafe { faer::MatMut::from_raw_parts_mut(c.as_mut_ptr(), m, n, n as isize, 1) };
+    let mut c_mat =
+        unsafe { faer::MatMut::from_raw_parts_mut(c.as_mut_ptr(), m, n, n as isize, 1) };
 
     // Use faer GEMM: C = 1.0 * A * B + 0.0 * C
     faer_matmul(&mut c_mat, Accum::Replace, a_mat, b_mat, T::one(), Par::Seq);
@@ -517,12 +518,15 @@ fn contract_diag_dense_impl<T: DenseScalar>(
     let _num_contracted = axes_diag.len();
 
     // The diagonal dimension (all diag_dims should be equal)
-    let d = if diag_dims.is_empty() { 1 } else { diag_dims[0] };
+    let d = if diag_dims.is_empty() {
+        1
+    } else {
+        diag_dims[0]
+    };
 
     // Compute the non-contracted axes for the result
-    let diag_non_contracted: Vec<usize> = (0..diag_rank)
-        .filter(|i| !axes_diag.contains(i))
-        .collect();
+    let diag_non_contracted: Vec<usize> =
+        (0..diag_rank).filter(|i| !axes_diag.contains(i)).collect();
     let dense_non_contracted: Vec<usize> = (0..dense_rank)
         .filter(|i| !axes_dense.contains(i))
         .collect();
@@ -540,7 +544,11 @@ fn contract_diag_dense_impl<T: DenseScalar>(
         .map(|&i| dense_dims[i])
         .collect();
     let dense_slice_size: usize = dense_non_contracted_dims.iter().product();
-    let dense_slice_size = if dense_slice_size == 0 { 1 } else { dense_slice_size };
+    let dense_slice_size = if dense_slice_size == 0 {
+        1
+    } else {
+        dense_slice_size
+    };
 
     // Compute strides for the non-contracted dense dimensions
     let dense_non_contracted_strides = compute_strides(&dense_non_contracted_dims);
@@ -558,10 +566,7 @@ fn contract_diag_dense_impl<T: DenseScalar>(
             let diag_val = diag[t];
 
             // Compute base offset in dense for this t (all contracted axes = t)
-            let base_offset: usize = axes_dense
-                .iter()
-                .map(|&axis| t * dense_strides[axis])
-                .sum();
+            let base_offset: usize = axes_dense.iter().map(|&axis| t * dense_strides[axis]).sum();
 
             // Iterate over all non-contracted positions in dense
             for flat_idx in 0..dense_slice_size {
@@ -594,10 +599,8 @@ fn contract_diag_dense_impl<T: DenseScalar>(
             let diag_val = diag[t];
 
             // Compute base offset in dense for this t
-            let base_offset_dense: usize = axes_dense
-                .iter()
-                .map(|&axis| t * dense_strides[axis])
-                .sum();
+            let base_offset_dense: usize =
+                axes_dense.iter().map(|&axis| t * dense_strides[axis]).sum();
 
             // Compute base offset in result for diagonal position (t, t, ...)
             let base_offset_result: usize = (0..diag_non_contracted_count)
@@ -1458,24 +1461,16 @@ pub fn contract_storage(
         }
 
         // DiagTensor × DenseTensor: use optimized contract_diag_dense
-        (Storage::DiagF64(diag), Storage::DenseF64(dense)) => diag.contract_diag_dense(
-            dims_a,
-            axes_a,
-            dense,
-            dims_b,
-            axes_b,
-            result_dims,
-            |v| Storage::DenseF64(DenseStorage::from_vec(v)),
-        ),
-        (Storage::DiagC64(diag), Storage::DenseC64(dense)) => diag.contract_diag_dense(
-            dims_a,
-            axes_a,
-            dense,
-            dims_b,
-            axes_b,
-            result_dims,
-            |v| Storage::DenseC64(DenseStorage::from_vec(v)),
-        ),
+        (Storage::DiagF64(diag), Storage::DenseF64(dense)) => {
+            diag.contract_diag_dense(dims_a, axes_a, dense, dims_b, axes_b, result_dims, |v| {
+                Storage::DenseF64(DenseStorage::from_vec(v))
+            })
+        }
+        (Storage::DiagC64(diag), Storage::DenseC64(dense)) => {
+            diag.contract_diag_dense(dims_a, axes_a, dense, dims_b, axes_b, result_dims, |v| {
+                Storage::DenseC64(DenseStorage::from_vec(v))
+            })
+        }
 
         // DenseTensor × DiagTensor: use generic helper
         (Storage::DenseF64(dense), Storage::DiagF64(diag)) => contract_dense_diag_impl(
@@ -1861,10 +1856,8 @@ mod tests {
 
     #[test]
     fn test_diag_storage_generic_c64() {
-        let diag: DiagStorage<Complex64> = DiagStorage::from_vec(vec![
-            Complex64::new(1.0, 2.0),
-            Complex64::new(3.0, 4.0),
-        ]);
+        let diag: DiagStorage<Complex64> =
+            DiagStorage::from_vec(vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)]);
         assert_eq!(diag.len(), 2);
         assert_eq!(diag.get(0), Complex64::new(1.0, 2.0));
         assert_eq!(diag.get(1), Complex64::new(3.0, 4.0));
@@ -2107,8 +2100,7 @@ mod tests {
         let diag1 = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
         let diag2 = Storage::DiagF64(DiagStorage::from_vec(vec![4.0, 5.0, 6.0]));
 
-        let result =
-            contract_storage(&diag1, &[3, 3], &[0, 1], &diag2, &[3, 3], &[0, 1], &[]);
+        let result = contract_storage(&diag1, &[3, 3], &[0, 1], &diag2, &[3, 3], &[0, 1], &[]);
 
         let data = extract_f64(&result);
         assert_eq!(data.len(), 1);
@@ -2123,8 +2115,7 @@ mod tests {
         let diag1 = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
         let diag2 = Storage::DiagF64(DiagStorage::from_vec(vec![4.0, 5.0, 6.0]));
 
-        let result =
-            contract_storage(&diag1, &[3, 3], &[1], &diag2, &[3, 3], &[0], &[3, 3]);
+        let result = contract_storage(&diag1, &[3, 3], &[1], &diag2, &[3, 3], &[0], &[3, 3]);
 
         // Result is element-wise product: [1*4, 2*5, 3*6] = [4, 10, 18]
         match &result {

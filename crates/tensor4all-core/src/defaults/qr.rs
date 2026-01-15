@@ -4,9 +4,9 @@
 
 use crate::defaults::DynIndex;
 use crate::{unfold_split, StorageScalar, TensorDynLen};
-use tensor4all_tensorbackend::mdarray::{DSlice, DTensor};
 use num_complex::{Complex64, ComplexFloat};
 use std::sync::atomic::{AtomicU64, Ordering};
+use tensor4all_tensorbackend::mdarray::{DSlice, DTensor};
 use thiserror::Error;
 
 use crate::backend::qr_backend;

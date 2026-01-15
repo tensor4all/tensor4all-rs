@@ -141,15 +141,12 @@ impl<T, V> LinsolveUpdater<T, V>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
-    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
+    <T::Index as IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     /// Create a new LinsolveUpdater for V_in = V_out case.
-    pub fn new(
-        operator: TreeTN<T, V>,
-        rhs: TreeTN<T, V>,
-        options: LinsolveOptions,
-    ) -> Self {
+    pub fn new(operator: TreeTN<T, V>, rhs: TreeTN<T, V>, options: LinsolveOptions) -> Self {
         Self {
             projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
             projected_state: ProjectedState::new(rhs),
@@ -211,10 +208,7 @@ where
 
     /// Get the bra state for environment computation.
     /// Returns reference_state_out if set, otherwise returns the ket_state (V_in = V_out case).
-    pub fn get_bra_state<'a>(
-        &'a self,
-        ket_state: &'a TreeTN<T, V>,
-    ) -> &'a TreeTN<T, V> {
+    pub fn get_bra_state<'a>(&'a self, ket_state: &'a TreeTN<T, V>) -> &'a TreeTN<T, V> {
         self.reference_state_out.as_ref().unwrap_or(ket_state)
     }
 
@@ -333,11 +327,7 @@ where
     }
 
     /// Contract all tensors in the region into a single local tensor.
-    fn contract_region(
-        &self,
-        subtree: &TreeTN<T, V>,
-        region: &[V],
-    ) -> Result<T> {
+    fn contract_region(&self, subtree: &TreeTN<T, V>, region: &[V]) -> Result<T> {
         if region.is_empty() {
             return Err(anyhow::anyhow!("Region cannot be empty"));
         }
@@ -384,10 +374,7 @@ where
             if let Some(site_indices) = full_treetn.site_space(node) {
                 for site_idx in site_indices {
                     // Find position in solved_tensor
-                    if let Some(pos) = solved_indices
-                        .iter()
-                        .position(|idx| idx == site_idx)
-                    {
+                    if let Some(pos) = solved_indices.iter().position(|idx| idx == site_idx) {
                         positions.push(pos);
                     }
                 }
@@ -399,10 +386,7 @@ where
                     // This is an external neighbor - the bond belongs to this node
                     if let Some(edge) = full_treetn.edge_between(node, &neighbor) {
                         if let Some(bond) = full_treetn.bond_index(edge) {
-                            if let Some(pos) = solved_indices
-                                .iter()
-                                .position(|idx| idx == bond)
-                            {
+                            if let Some(pos) = solved_indices.iter().position(|idx| idx == bond) {
                                 positions.push(pos);
                             }
                         }
@@ -493,12 +477,7 @@ where
     /// Solve the local linear problem using GMRES.
     ///
     /// Solves: (a₀ + a₁ * H_local) |x_local⟩ = |b_local⟩
-    fn solve_local(
-        &mut self,
-        region: &[V],
-        init: &T,
-        state: &TreeTN<T, V>,
-    ) -> Result<T> {
+    fn solve_local(&mut self, region: &[V], init: &T, state: &TreeTN<T, V>) -> Result<T> {
         // Use state's SiteIndexNetwork directly (implements NetworkTopology)
         let topology = state.site_index_network();
 
@@ -596,7 +575,8 @@ impl<T, V> LocalUpdater<T, V> for LinsolveUpdater<T, V>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
-    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
+    <T::Index as IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     fn update(

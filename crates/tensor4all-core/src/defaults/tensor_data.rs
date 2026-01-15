@@ -351,7 +351,10 @@ mod tests {
         assert_eq!(permuted.external_dims, vec![3, 2]);
 
         // Internal storage order unchanged
-        assert_eq!(permuted.components[0].index_ids, data.components[0].index_ids);
+        assert_eq!(
+            permuted.components[0].index_ids,
+            data.components[0].index_ids
+        );
     }
 
     #[test]
@@ -385,7 +388,11 @@ mod tests {
         let id_i = new_id();
         let id_j = new_id();
 
-        let data = TensorData::new(storage.clone(), vec![id_i.clone(), id_j.clone()], vec![2, 3]);
+        let data = TensorData::new(
+            storage.clone(),
+            vec![id_i.clone(), id_j.clone()],
+            vec![2, 3],
+        );
 
         let (materialized, dims) = data.materialize().unwrap();
         assert_eq!(dims, vec![2, 3]);

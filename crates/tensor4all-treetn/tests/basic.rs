@@ -1041,7 +1041,8 @@ fn test_sim_internal_inds() {
     let new_bond = tn_sim.bond_index(new_edge).unwrap();
     assert_eq!(new_bond.size(), original_bond_size);
     assert_ne!(
-        *new_bond.id(), original_bond_id,
+        *new_bond.id(),
+        original_bond_id,
         "Bond ID should be different after sim_internal_inds"
     );
 

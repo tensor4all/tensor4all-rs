@@ -7,8 +7,8 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, TensorLike};
 use crate::algorithm::CanonicalForm;
+use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, TensorLike};
 
 use super::TreeTN;
 use crate::options::CanonicalizationOptions;
@@ -48,8 +48,7 @@ where
         mut self,
         canonical_center: impl IntoIterator<Item = V>,
         options: CanonicalizationOptions,
-    ) -> Result<Self>
-    {
+    ) -> Result<Self> {
         let center_v: HashSet<V> = canonical_center.into_iter().collect();
 
         // Smart behavior when not forced
@@ -107,8 +106,7 @@ where
         canonical_center: impl IntoIterator<Item = V>,
         form: CanonicalForm,
         context_name: &str,
-    ) -> Result<()>
-    {
+    ) -> Result<()> {
         // Determine algorithm from form
         let alg = match form {
             CanonicalForm::Unitary => FactorizeAlg::QR,

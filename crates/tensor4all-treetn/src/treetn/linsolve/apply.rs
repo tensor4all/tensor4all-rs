@@ -354,7 +354,11 @@ where
     }
 
     /// Replace multiple external indices.
-    fn replaceinds(&self, old_indices: &[Self::Index], new_indices: &[Self::Index]) -> Result<Self> {
+    fn replaceinds(
+        &self,
+        old_indices: &[Self::Index],
+        new_indices: &[Self::Index],
+    ) -> Result<Self> {
         if old_indices.len() != new_indices.len() {
             return Err(anyhow::anyhow!(
                 "Length mismatch: {} old indices, {} new indices",
@@ -566,8 +570,11 @@ mod tests {
     fn test_arc_linear_operator_cow() {
         let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let s0 = make_index(2);
-        net.add_node("N0".to_string(), [s0.clone()].into_iter().collect::<HashSet<_>>())
-            .unwrap();
+        net.add_node(
+            "N0".to_string(),
+            [s0.clone()].into_iter().collect::<HashSet<_>>(),
+        )
+        .unwrap();
 
         let link_space = LinkSpace::uniform(2);
         let mut rng = rand::thread_rng();

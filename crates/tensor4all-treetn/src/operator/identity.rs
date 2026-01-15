@@ -157,8 +157,7 @@ mod tests {
         let s_in = make_index(2);
         let s_out = make_index(2);
 
-        let tensor =
-            build_identity_operator_tensor(&[s_in.clone()], &[s_out.clone()]).unwrap();
+        let tensor = build_identity_operator_tensor(&[s_in.clone()], &[s_out.clone()]).unwrap();
 
         assert_eq!(tensor.indices.len(), 2);
         assert_eq!(tensor.dims, vec![2, 2]);
@@ -229,8 +228,7 @@ mod tests {
         let s_in = make_index(2);
         let s_out = make_index(2);
 
-        let tensor =
-            build_identity_operator_tensor_c64(&[s_in.clone()], &[s_out.clone()]).unwrap();
+        let tensor = build_identity_operator_tensor_c64(&[s_in.clone()], &[s_out.clone()]).unwrap();
 
         let data = get_c64_data(&tensor);
         assert_eq!(data[0], Complex64::new(1.0, 0.0));

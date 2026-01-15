@@ -159,7 +159,8 @@ where
     pub fn add(&self, other: &Self) -> Result<Self>
     where
         V: Ord,
-        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         // Verify same topology
         if !self.same_topology(other) {

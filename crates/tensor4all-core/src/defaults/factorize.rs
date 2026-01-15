@@ -208,11 +208,9 @@ where
         + MatrixScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-
     // Unfold tensor into matrix
-    let (a_tensor, _, m, n, left_indices, right_indices) =
-        unfold_split::<T>(t, left_inds)
-            .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
+    let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<T>(t, left_inds)
+        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
 
     // Convert to Matrix type for rrlu
     let a_matrix = dtensor_to_matrix(&a_tensor, m, n);
@@ -276,11 +274,9 @@ where
         + MatrixScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-
     // Unfold tensor into matrix
-    let (a_tensor, _, m, n, left_indices, right_indices) =
-        unfold_split::<T>(t, left_inds)
-            .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
+    let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<T>(t, left_inds)
+        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
 
     // Convert to Matrix type for MatrixLUCI
     let a_matrix = dtensor_to_matrix(&a_tensor, m, n);
@@ -350,7 +346,11 @@ fn extract_singular_values(s: &TensorDynLen) -> Vec<f64> {
 }
 
 /// Convert DTensor to Matrix (tensor4all-matrixci format).
-fn dtensor_to_matrix<T>(tensor: &tensor4all_tensorbackend::mdarray::DTensor<T, 2>, m: usize, n: usize) -> matrixci::Matrix<T>
+fn dtensor_to_matrix<T>(
+    tensor: &tensor4all_tensorbackend::mdarray::DTensor<T, 2>,
+    m: usize,
+    n: usize,
+) -> matrixci::Matrix<T>
 where
     T: MatrixScalar + Clone,
 {

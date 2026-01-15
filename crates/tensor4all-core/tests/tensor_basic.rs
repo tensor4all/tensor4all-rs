@@ -449,8 +449,7 @@ fn test_tensor_conj_c64() {
         Complex64::new(5.0, 5.0),
     ];
     let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data)));
-    let tensor: TensorDynLen =
-        TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
 
     let conj_tensor = tensor.conj();
 
@@ -488,8 +487,7 @@ fn test_tensor_has_tensor_data() {
     let j = Index::new_dyn(3);
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
-    let tensor: TensorDynLen =
-        TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
 
     // TensorDynLen now contains TensorData internally
     let tensor_data = tensor.tensor_data();

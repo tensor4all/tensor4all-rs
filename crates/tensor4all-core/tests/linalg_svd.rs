@@ -18,8 +18,7 @@ fn test_svd_identity() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec(data),
     ));
-    let tensor: TensorDynLen =
-        TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
 
     let (u, s, v) = svd::<f64>(&tensor, &[i.clone()]).expect("SVD should succeed");
 
@@ -63,8 +62,7 @@ fn test_svd_simple_matrix() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec(data),
     ));
-    let tensor: TensorDynLen =
-        TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
 
     let (u, s, v) = svd::<f64>(&tensor, &[i.clone()]).expect("SVD should succeed");
 
@@ -104,8 +102,7 @@ fn test_svd_reconstruction() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec(data.clone()),
     ));
-    let tensor: TensorDynLen =
-        TensorDynLen::new(vec![i.clone(), j.clone()], vec![3, 4], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![3, 4], storage);
 
     let (u, s, v) = svd::<f64>(&tensor, &[i.clone()]).expect("SVD should succeed");
 
@@ -204,8 +201,7 @@ fn test_svd_invalid_split() {
     let j = Index::new_dyn(3);
 
     let storage = Arc::new(Storage::new_dense_f64(6));
-    let tensor: TensorDynLen =
-        TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
 
     // Empty left_inds should fail
     let result = svd::<f64>(&tensor, &[]);
@@ -354,13 +350,11 @@ fn test_svd_truncation() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec(data),
     ));
-    let tensor: TensorDynLen =
-        TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
 
     // Use a more lenient rtol to ensure truncation happens
     let options = SvdOptions::with_rtol(1e-10);
-    let (u, s, v) =
-        svd_with::<f64>(&tensor, &[i.clone()], &options).expect("SVD should succeed");
+    let (u, s, v) = svd_with::<f64>(&tensor, &[i.clone()], &options).expect("SVD should succeed");
 
     // With rtol=1e-10, the discarded weight ratio is (1e-14)^2 / (1^2 + (1e-14)^2) ≈ 1e-28
     // This is much less than (1e-10)^2 = 1e-20, so truncation should occur
@@ -407,21 +401,20 @@ fn test_svd_with_override() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec(data),
     ));
-    let tensor: TensorDynLen =
-        TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
 
     // Save original default
     let original_rtol = default_svd_rtol();
 
     // Test with lenient rtol (should truncate)
     let lenient_options = SvdOptions::with_rtol(1e-4);
-    let (u1, s1, _v1) = svd_with::<f64>(&tensor, &[i.clone()], &lenient_options)
-        .expect("SVD should succeed");
+    let (u1, s1, _v1) =
+        svd_with::<f64>(&tensor, &[i.clone()], &lenient_options).expect("SVD should succeed");
 
     // Test with strict rtol (should not truncate)
     let strict_options = SvdOptions::with_rtol(1e-12);
-    let (u2, s2, _v2) = svd_with::<f64>(&tensor, &[i.clone()], &strict_options)
-        .expect("SVD should succeed");
+    let (u2, s2, _v2) =
+        svd_with::<f64>(&tensor, &[i.clone()], &strict_options).expect("SVD should succeed");
 
     // With rtol=1e-4, the ratio is (1e-6)^2 / (1^2 + (1e-6)^2) ≈ 1e-12 < (1e-4)^2 = 1e-8
     // So truncation should occur
@@ -497,8 +490,7 @@ fn test_svd_uses_global_default() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec(data),
     ));
-    let tensor: TensorDynLen =
-        TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
 
     // Save original default
     let original_rtol = default_svd_rtol();

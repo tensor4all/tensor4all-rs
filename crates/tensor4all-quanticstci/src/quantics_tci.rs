@@ -6,9 +6,9 @@ use std::rc::Rc;
 
 use anyhow::{anyhow, Result};
 use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid};
-use tensor4all_tensorci::Scalar;
 use rand::Rng;
 use tensor4all_simplett::{AbstractTensorTrain, TTScalar, TensorTrain};
+use tensor4all_tensorci::Scalar;
 use tensor4all_tensorci::{crossinterpolate2, TensorCI2};
 
 use crate::options::QtciOptions;
