@@ -346,6 +346,13 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
+    fn test_contract_options_nhalfsweeps_must_be_multiple_of_2() {
+        // odd nhalfsweeps must panic
+        let _opts = ContractOptions::fit().with_nhalfsweeps(1);
+    }
+
+    #[test]
     fn test_contract_method_default() {
         let method: ContractMethod = Default::default();
         assert_eq!(method, ContractMethod::Zipup);

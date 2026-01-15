@@ -761,4 +761,51 @@ mod tests {
         crate::t4a_index_release(l01_clone);
         crate::t4a_index_release(s1);
     }
+
+    #[test]
+    fn test_tt_contract_rounds_up_odd_nhalfsweeps() {
+        use crate::{t4a_index_clone, t4a_index_new, t4a_tensor_new_dense_f64};
+
+        // Build two 1-site tensor trains sharing the same site index id
+        let s0 = t4a_index_new(2);
+        let s0_clone = t4a_index_clone(s0);
+
+        let data_a: Vec<f64> = vec![1.0, 2.0];
+        let data_b: Vec<f64> = vec![3.0, 4.0];
+
+        let inds_a: [*const t4a_index; 1] = [s0];
+        let dims_a: [libc::size_t; 1] = [2];
+        let t0 = t4a_tensor_new_dense_f64(1, inds_a.as_ptr(), dims_a.as_ptr(), data_a.as_ptr(), 2);
+
+        let inds_b: [*const t4a_index; 1] = [s0_clone];
+        let dims_b: [libc::size_t; 1] = [2];
+        let t1 = t4a_tensor_new_dense_f64(1, inds_b.as_ptr(), dims_b.as_ptr(), data_b.as_ptr(), 2);
+
+        let tensors0: [*const t4a_tensor; 1] = [t0];
+        let tensors1: [*const t4a_tensor; 1] = [t1];
+        let tt0 = t4a_tt_new(tensors0.as_ptr(), 1);
+        let tt1 = t4a_tt_new(tensors1.as_ptr(), 1);
+        assert!(!tt0.is_null());
+        assert!(!tt1.is_null());
+
+        // Pass odd nhalfsweeps (= 1). The C API should round it up to 2 and not panic.
+        let result = t4a_tt_contract(
+            tt0,
+            tt1,
+            crate::types::t4a_contract_method::Zipup,
+            0,
+            0.0,
+            1,
+        );
+        assert!(!result.is_null());
+
+        // Cleanup
+        t4a_tensortrain_release(result);
+        t4a_tensortrain_release(tt0);
+        t4a_tensortrain_release(tt1);
+        crate::t4a_tensor_release(t0);
+        crate::t4a_tensor_release(t1);
+        crate::t4a_index_release(s0);
+        crate::t4a_index_release(s0_clone);
+    }
 }
