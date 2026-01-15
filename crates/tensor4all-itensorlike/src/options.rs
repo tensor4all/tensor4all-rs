@@ -249,7 +249,7 @@ impl ContractOptions {
     /// # Panics
     /// Panics if `nhalfsweeps` is not a multiple of 2.
     pub fn with_nhalfsweeps(mut self, nhalfsweeps: usize) -> Self {
-        if nhalfsweeps % 2 != 0 {
+        if !nhalfsweeps.is_multiple_of(2) {
             panic!("nhalfsweeps must be a multiple of 2, got {}", nhalfsweeps);
         }
         self.nhalfsweeps = nhalfsweeps;

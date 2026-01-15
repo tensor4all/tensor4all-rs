@@ -26,8 +26,8 @@ use tensor4all_itensorlike::{CanonicalForm, ContractOptions, Result, TensorTrain
 /// * `link_indices` - Link indices (one per bond, length should be length-1)
 fn create_random_mpo(
     length: usize,
-    phys_dim: usize,
-    bond_dim: usize,
+    _phys_dim: usize,
+    _bond_dim: usize,
     input_indices: &[DynIndex],
     output_indices: &[DynIndex],
     link_indices: &[DynIndex],

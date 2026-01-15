@@ -668,7 +668,7 @@ pub extern "C" fn t4a_tt_contract(
         if nhalfsweeps > 0 {
             // nhalfsweeps must be a multiple of 2
             // Round up to nearest even number if odd
-            let nhalfsweeps_even = if nhalfsweeps % 2 == 0 {
+            let nhalfsweeps_even = if nhalfsweeps.is_multiple_of(2) {
                 nhalfsweeps
             } else {
                 nhalfsweeps + 1
