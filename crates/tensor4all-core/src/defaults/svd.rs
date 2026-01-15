@@ -3,10 +3,11 @@
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 
 use crate::defaults::DynIndex;
+use crate::global_default::GlobalDefault;
 use crate::index_like::IndexLike;
+use crate::truncation::{HasTruncationParams, TruncationParams};
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use num_complex::{Complex64, ComplexFloat};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tensor4all_tensorbackend::faer_traits::ComplexField;
 use tensor4all_tensorbackend::mdarray::DSlice;
@@ -25,34 +26,55 @@ pub enum SvdError {
 /// Options for SVD decomposition with truncation control.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SvdOptions {
-    /// Relative Frobenius error tolerance for truncation.
-    /// If `None`, uses the global default rtol.
-    /// The truncation guarantees: ||A - A_approx||_F / ||A||_F <= rtol.
-    pub rtol: Option<f64>,
-    /// Maximum rank (bond dimension) for truncation.
-    /// If `None`, no rank limit is applied.
-    pub max_rank: Option<usize>,
+    /// Truncation parameters (rtol, max_rank).
+    pub truncation: TruncationParams,
 }
 
 impl SvdOptions {
     /// Create new SVD options with the specified rtol.
     pub fn with_rtol(rtol: f64) -> Self {
         Self {
-            rtol: Some(rtol),
-            max_rank: None,
+            truncation: TruncationParams::new().with_rtol(rtol),
         }
+    }
+
+    /// Create new SVD options with the specified max_rank.
+    pub fn with_max_rank(max_rank: usize) -> Self {
+        Self {
+            truncation: TruncationParams::new().with_max_rank(max_rank),
+        }
+    }
+
+    /// Get rtol from options (for backwards compatibility).
+    pub fn rtol(&self) -> Option<f64> {
+        self.truncation.rtol
+    }
+
+    /// Get max_rank from options (for backwards compatibility).
+    pub fn max_rank(&self) -> Option<usize> {
+        self.truncation.max_rank
     }
 }
 
-// Global default rtol stored as AtomicU64 (f64::to_bits())
+impl HasTruncationParams for SvdOptions {
+    fn truncation_params(&self) -> &TruncationParams {
+        &self.truncation
+    }
+
+    fn truncation_params_mut(&mut self) -> &mut TruncationParams {
+        &mut self.truncation
+    }
+}
+
+// Global default rtol using the unified GlobalDefault type
 // Default value: 1e-12 (near machine precision)
-static DEFAULT_SVD_RTOL: AtomicU64 = AtomicU64::new(1e-12_f64.to_bits());
+static DEFAULT_SVD_RTOL: GlobalDefault = GlobalDefault::new(1e-12);
 
 /// Get the global default rtol for SVD truncation.
 ///
 /// The default value is 1e-12 (near machine precision).
 pub fn default_svd_rtol() -> f64 {
-    f64::from_bits(DEFAULT_SVD_RTOL.load(Ordering::Relaxed))
+    DEFAULT_SVD_RTOL.get()
 }
 
 /// Set the global default rtol for SVD truncation.
@@ -63,11 +85,9 @@ pub fn default_svd_rtol() -> f64 {
 /// # Errors
 /// Returns `SvdError::InvalidRtol` if rtol is not finite or is negative.
 pub fn set_default_svd_rtol(rtol: f64) -> Result<(), SvdError> {
-    if !rtol.is_finite() || rtol < 0.0 {
-        return Err(SvdError::InvalidRtol(rtol));
-    }
-    DEFAULT_SVD_RTOL.store(rtol.to_bits(), Ordering::Relaxed);
-    Ok(())
+    DEFAULT_SVD_RTOL
+        .set(rtol)
+        .map_err(|e| SvdError::InvalidRtol(e.0))
 }
 
 /// Compute the retained rank based on rtol (TSVD truncation).
@@ -300,7 +320,7 @@ where
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     // Determine rtol to use
-    let rtol = options.rtol.unwrap_or_else(default_svd_rtol);
+    let rtol = options.truncation.effective_rtol(default_svd_rtol());
     if !rtol.is_finite() || rtol < 0.0 {
         return Err(SvdError::InvalidRtol(rtol));
     }
@@ -323,7 +343,7 @@ where
     let mut r = compute_retained_rank(&s_vec_full, rtol);
 
     // Apply max_rank limit if specified
-    if let Some(max_rank) = options.max_rank {
+    if let Some(max_rank) = options.truncation.max_rank {
         r = r.min(max_rank);
     }
 

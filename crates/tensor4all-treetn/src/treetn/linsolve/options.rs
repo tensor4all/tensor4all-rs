@@ -126,7 +126,7 @@ mod tests {
             .with_convergence_tol(1e-6);
 
         assert_eq!(opts.nsweeps, 5);
-        assert_eq!(opts.truncation.max_rank, Some(100));
+        assert_eq!(opts.truncation.max_rank(), Some(100));
         assert_eq!(opts.krylov_tol, 1e-8);
         assert_eq!(opts.a0, 1.0);
         assert_eq!(opts.a1, -1.0);

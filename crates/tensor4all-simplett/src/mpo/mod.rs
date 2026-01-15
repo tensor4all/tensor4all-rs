@@ -26,6 +26,19 @@
 //! let result = contract_naive(&mpo_a, &mpo_b, None)?;
 //! ```
 
+use mdarray::DTensor;
+
+/// Type alias for 2D matrix using mdarray
+pub type Matrix2<T> = DTensor<T, 2>;
+
+/// Helper function to create a zero-filled 2D tensor.
+///
+/// This is a shared utility used across multiple MPO modules.
+#[inline]
+pub(crate) fn matrix2_zeros<T: Clone + Default>(rows: usize, cols: usize) -> Matrix2<T> {
+    DTensor::<T, 2>::from_elem([rows, cols], T::default())
+}
+
 pub mod contract_fit;
 pub mod contract_naive;
 pub mod contract_zipup;

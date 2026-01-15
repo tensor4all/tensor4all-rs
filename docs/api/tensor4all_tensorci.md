@@ -396,3 +396,9 @@ Update pivots at bond b using LU-based cross interpolation
 
 ### ` fn test_crossinterpolate2_rank2_function()`
 
+### ` fn test_crossinterpolate2_3sites_constant()`
+
+### ` fn test_crossinterpolate2_4sites_product()`
+
+### ` fn test_crossinterpolate2_5sites_constant()`
+

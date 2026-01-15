@@ -1,162 +1,50 @@
 # tensor4all-core
 
-## src/algorithm.rs
+## src/defaults/contract.rs
 
-### `pub fn from_i32(value: i32) -> Option < Self >` (impl FactorizeAlgorithm)
+### `pub fn contract_multi(tensors: & [TensorDynLen], allowed: AllowedPairs < '_ >) -> Result < TensorDynLen >`
 
-Create from C API integer representation. Returns `None` for invalid values.
+Contract multiple tensors into a single tensor, handling disconnected components. This function automatically handles disconnected tensor graphs by: 1. Finding connected components based on contractable indices
 
-### `pub fn to_i32(self) -> i32` (impl FactorizeAlgorithm)
+### `pub fn contract_connected(tensors: & [TensorDynLen], allowed: AllowedPairs < '_ >) -> Result < TensorDynLen >`
 
-Convert to C API integer representation.
+Contract multiple tensors that form a connected graph. Uses omeco's GreedyMethod to find the optimal contraction order.
 
-### `pub fn name(&self) -> & 'static str` (impl FactorizeAlgorithm)
+### ` fn has_contractable_indices(a: & TensorDynLen, b: & TensorDynLen) -> bool`
 
-Get algorithm name as string.
+Check if two tensors have any contractable indices.
 
-### `pub fn from_i32(value: i32) -> Option < Self >` (impl ContractionAlgorithm)
+### ` fn find_tensor_connected_components(tensors: & [TensorDynLen], allowed: AllowedPairs < '_ >) -> Vec < Vec < usize > >`
 
-Create from C API integer representation. Returns `None` for invalid values.
+Find connected components of tensors based on contractable indices. Uses petgraph for O(V+E) connected component detection.
 
-### `pub fn to_i32(self) -> i32` (impl ContractionAlgorithm)
+### ` fn remap_allowed_pairs(allowed: AllowedPairs < '_ >, component: & [usize]) -> RemappedAllowedPairs`
 
-Convert to C API integer representation.
+Remap AllowedPairs for a subset of tensors. Given original tensor indices in `component`, returns AllowedPairs with indices remapped to the component's local indices.
 
-### `pub fn name(&self) -> & 'static str` (impl ContractionAlgorithm)
+### ` fn as_ref(&self) -> AllowedPairs < '_ >` (impl RemappedAllowedPairs)
 
-Get algorithm name as string.
-
-### `pub fn from_i32(value: i32) -> Option < Self >` (impl CanonicalForm)
-
-Create from C API integer representation. Returns `None` for invalid values.
-
-### `pub fn to_i32(self) -> i32` (impl CanonicalForm)
-
-Convert to C API integer representation.
-
-### `pub fn name(&self) -> & 'static str` (impl CanonicalForm)
-
-Get form name as string.
-
-### `pub fn from_i32(value: i32) -> Option < Self >` (impl CompressionAlgorithm)
-
-Create from C API integer representation. Returns `None` for invalid values.
-
-### `pub fn to_i32(self) -> i32` (impl CompressionAlgorithm)
-
-Convert to C API integer representation.
-
-### `pub fn name(&self) -> & 'static str` (impl CompressionAlgorithm)
-
-Get algorithm name as string.
-
-### ` fn test_factorize_algorithm_roundtrip()`
-
-### ` fn test_contraction_algorithm_roundtrip()`
-
-### ` fn test_compression_algorithm_roundtrip()`
-
-### ` fn test_canonical_form_roundtrip()`
-
-### ` fn test_invalid_values()`
-
-### ` fn test_default()`
-
-## src/any_scalar.rs
-
-### ` fn sum_from_storage(storage: & Storage) -> Self` (impl AnyScalar)
-
-### `pub fn new_real(x: f64) -> Self` (impl AnyScalar)
-
-Create a real scalar value.
-
-### `pub fn new_complex(re: f64, im: f64) -> Self` (impl AnyScalar)
-
-Create a complex scalar value from real and imaginary parts.
-
-### `pub fn is_complex(&self) -> bool` (impl AnyScalar)
-
-Check if this scalar is complex.
-
-### `pub fn real(&self) -> f64` (impl AnyScalar)
-
-Get the real part of the scalar.
-
-### `pub fn abs(&self) -> f64` (impl AnyScalar)
-
-Get the absolute value (magnitude).
-
-### `pub fn sqrt(&self) -> Self` (impl AnyScalar)
-
-Compute square root. For negative real numbers, returns a complex number with the principal value.
-
-### `pub fn powf(&self, exp: f64) -> Self` (impl AnyScalar)
-
-Raise to a floating-point power. For negative real numbers, returns a complex number with the principal value.
-
-### `pub fn powi(&self, exp: i32) -> Self` (impl AnyScalar)
-
-Raise to an integer power.
-
-### ` fn add(self, rhs: Self) -> Self :: Output` (impl AnyScalar)
-
-### ` fn sub(self, rhs: Self) -> Self :: Output` (impl AnyScalar)
-
-### ` fn mul(self, rhs: Self) -> Self :: Output` (impl AnyScalar)
-
-### ` fn div(self, rhs: Self) -> Self :: Output` (impl AnyScalar)
-
-### ` fn neg(self) -> Self :: Output` (impl AnyScalar)
-
-### ` fn from(x: f64) -> Self` (impl AnyScalar)
-
-### ` fn from(z: Complex64) -> Self` (impl AnyScalar)
-
-### ` fn try_from(value: AnyScalar) -> Result < Self , Self :: Error >` (impl f64)
-
-### ` fn from(value: AnyScalar) -> Self` (impl Complex64)
-
-### ` fn default() -> Self` (impl AnyScalar)
-
-### ` fn zero() -> Self` (impl AnyScalar)
-
-### ` fn is_zero(&self) -> bool` (impl AnyScalar)
-
-### ` fn one() -> Self` (impl AnyScalar)
-
-### ` fn partial_cmp(&self, other: & Self) -> Option < std :: cmp :: Ordering >` (impl AnyScalar)
-
-### ` fn fmt(&self, f: & mut fmt :: Formatter < '_ >) -> fmt :: Result` (impl AnyScalar)
-
-## src/backend.rs
-
-### `pub(crate) fn svd_backend(a: & mut DSlice < T , 2 >) -> Result < SVDDecomp < T > >`
-
-Compute SVD decomposition using the selected backend.
-
-### `pub(crate) fn qr_backend(a: & mut DSlice < T , 2 >) -> (DTensor < T , 2 > , DTensor < T , 2 >)`
-
-Compute QR decomposition using the selected backend.
-
-## src/contract.rs
-
-### `pub fn contract_multi(tensors: & [TensorDynLen < Id , Symm >]) -> Result < TensorDynLen < Id , Symm > >`
-
-Contract multiple tensors into a single tensor. Uses omeco's GreedyMethod to find the optimal contraction order for N>=3 tensors.
-
-### ` fn contract_pair(a: & TensorDynLen < Id , Symm >, b: & TensorDynLen < Id , Symm >) -> Result < TensorDynLen < Id , Symm > >`
+### ` fn contract_pair(a: & TensorDynLen, b: & TensorDynLen) -> Result < TensorDynLen >`
 
 Contract two tensors over their common indices. If there are no common indices, performs outer product.
 
-### ` fn contract_multi_optimized(tensors: & [TensorDynLen < Id , Symm >]) -> Result < TensorDynLen < Id , Symm > >`
+### ` fn contract_connected_optimized(tensors: & [TensorDynLen], allowed: AllowedPairs < '_ >) -> Result < TensorDynLen >`
 
-Contract multiple tensors using omeco's GreedyMethod for optimal ordering.
+Contract multiple tensors using omeco's GreedyMethod for optimal ordering. Uses internal IDs to control which indices are contracted based on `allowed`.
 
-### ` fn execute_contraction_tree(tensors: & [TensorDynLen < Id , Symm >], tree: & NestedEinsum < usize >) -> Result < TensorDynLen < Id , Symm > >`
+### ` fn build_internal_ids(tensors: & [TensorDynLen], allowed: AllowedPairs < '_ >) -> (Vec < Vec < usize > > , HashMap < usize , (usize , usize) >)`
+
+Build internal IDs for contraction. Internal IDs are integers that represent indices during contraction: - Contractable pairs in allowed tensor pairs share the same internal ID
+
+### ` fn validate_connected_graph(num_tensors: usize, pairs: & [(usize , usize)]) -> Result < () >`
+
+Validate that the specified tensor pairs form a connected graph. Returns an error if the graph is disconnected.
+
+### ` fn execute_contraction_tree(tensors: & [TensorDynLen], tree: & NestedEinsum < usize >) -> Result < TensorDynLen >`
 
 Execute a contraction tree by recursively contracting tensors.
 
-### ` fn make_test_tensor(shape: & [usize], ids: & [u128]) -> TensorDynLen < DynId , NoSymmSpace >`
+### ` fn make_test_tensor(shape: & [usize], ids: & [u128]) -> TensorDynLen`
 
 ### ` fn test_contract_multi_empty()`
 
@@ -168,69 +56,81 @@ Execute a contraction tree by recursively contracting tensors.
 
 ### ` fn test_contract_multi_four()`
 
-### ` fn test_contract_multi_no_contraction()`
+### ` fn test_contract_multi_outer_product()`
 
-## src/factorize.rs
+### ` fn test_contract_multi_vector_outer_product()`
 
-### ` fn default() -> Self` (impl FactorizeOptions)
+### ` fn test_contract_connected_disconnected_error()`
 
-### `pub fn svd() -> Self` (impl FactorizeOptions)
+### ` fn test_contract_connected_specified_no_contractable_error()`
 
-Create options for SVD factorization.
+### ` fn test_contract_specified_pairs()`
 
-### `pub fn qr() -> Self` (impl FactorizeOptions)
+### ` fn test_contract_specified_no_contractable_indices_error()`
 
-Create options for QR factorization.
+### ` fn test_contract_specified_disconnected_outer_product()`
 
-### `pub fn lu() -> Self` (impl FactorizeOptions)
+### ` fn test_validate_connected_graph()`
 
-Create options for LU factorization.
+### ` fn test_omeco_hyperedge_delta()`
 
-### `pub fn ci() -> Self` (impl FactorizeOptions)
+Test omeco's handling of hyperedges. Simulates: A(i, I) * B(j, J) * C(k, K) * delta_{IJK} where delta is a 3D superdiagonal (I==J==K).
 
-Create options for CI factorization.
+### ` fn test_omeco_hyperedge_svd()`
 
-### `pub fn with_canonical(mut self, canonical: Canonical) -> Self` (impl FactorizeOptions)
+Test omeco with a simple hyperedge case: U * s * V (SVD-like)
 
-Set canonical direction.
+## src/defaults/direct_sum.rs
 
-### `pub fn with_rtol(mut self, rtol: f64) -> Self` (impl FactorizeOptions)
+### `pub fn direct_sum(a: & TensorDynLen, b: & TensorDynLen, pairs: & [(DynIndex , DynIndex)]) -> Result < (TensorDynLen , Vec < DynIndex >) >`
 
-Set relative tolerance.
+Compute the direct sum of two tensors along specified index pairs. For tensors A and B with indices to be summed specified as pairs, creates a new tensor C where each paired index has dimension = dim_A + dim_B.
 
-### `pub fn with_max_rank(mut self, max_rank: usize) -> Self` (impl FactorizeOptions)
+### ` fn setup_direct_sum(a: & TensorDynLen, b: & TensorDynLen, pairs: & [(DynIndex , DynIndex)]) -> Result < DirectSumSetup >`
 
-Set maximum rank.
+### ` fn linear_to_multi(linear: usize, dims: & [usize]) -> Vec < usize >`
 
-### `pub fn factorize(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >], options: & FactorizeOptions) -> Result < FactorizeResult < Id , Symm > , FactorizeError >`
+### ` fn multi_to_linear(multi: & [usize], strides: & [usize]) -> usize`
+
+### ` fn direct_sum_f64(a: & TensorDynLen, b: & TensorDynLen, pairs: & [(DynIndex , DynIndex)]) -> Result < (TensorDynLen , Vec < DynIndex >) >`
+
+### ` fn direct_sum_c64(a: & TensorDynLen, b: & TensorDynLen, pairs: & [(DynIndex , DynIndex)]) -> Result < (TensorDynLen , Vec < DynIndex >) >`
+
+### ` fn test_direct_sum_simple()`
+
+### ` fn test_direct_sum_multiple_pairs()`
+
+## src/defaults/factorize.rs
+
+### `pub fn factorize(t: & TensorDynLen, left_inds: & [DynIndex], options: & FactorizeOptions) -> Result < FactorizeResult < TensorDynLen > , FactorizeError >`
 
 Factorize a tensor into left and right factors. This function dispatches to the appropriate algorithm based on `options.alg`: - `SVD`: Singular Value Decomposition
 
-### ` fn factorize_impl(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >], options: & FactorizeOptions) -> Result < FactorizeResult < Id , Symm > , FactorizeError >`
+### ` fn factorize_impl(t: & TensorDynLen, left_inds: & [DynIndex], options: & FactorizeOptions) -> Result < FactorizeResult < TensorDynLen > , FactorizeError >`
 
 Internal implementation with scalar type.
 
-### ` fn factorize_svd(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >], options: & FactorizeOptions) -> Result < FactorizeResult < Id , Symm > , FactorizeError >`
+### ` fn factorize_svd(t: & TensorDynLen, left_inds: & [DynIndex], options: & FactorizeOptions) -> Result < FactorizeResult < TensorDynLen > , FactorizeError >`
 
 SVD factorization implementation.
 
-### ` fn factorize_qr(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >], options: & FactorizeOptions) -> Result < FactorizeResult < Id , Symm > , FactorizeError >`
+### ` fn factorize_qr(t: & TensorDynLen, left_inds: & [DynIndex], options: & FactorizeOptions) -> Result < FactorizeResult < TensorDynLen > , FactorizeError >`
 
 QR factorization implementation.
 
-### ` fn factorize_lu(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >], options: & FactorizeOptions) -> Result < FactorizeResult < Id , Symm > , FactorizeError >`
+### ` fn factorize_lu(t: & TensorDynLen, left_inds: & [DynIndex], options: & FactorizeOptions) -> Result < FactorizeResult < TensorDynLen > , FactorizeError >`
 
 LU factorization implementation.
 
-### ` fn factorize_ci(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >], options: & FactorizeOptions) -> Result < FactorizeResult < Id , Symm > , FactorizeError >`
+### ` fn factorize_ci(t: & TensorDynLen, left_inds: & [DynIndex], options: & FactorizeOptions) -> Result < FactorizeResult < TensorDynLen > , FactorizeError >`
 
 CI (Cross Interpolation) factorization implementation.
 
-### ` fn extract_singular_values(s: & TensorDynLen < Id , Symm >) -> Vec < f64 >`
+### ` fn extract_singular_values(s: & TensorDynLen) -> Vec < f64 >`
 
 Extract singular values from a diagonal tensor.
 
-### ` fn dtensor_to_matrix(tensor: & mdarray :: DTensor < T , 2 >, m: usize, n: usize) -> matrixci :: Matrix < T >`
+### ` fn dtensor_to_matrix(tensor: & tensor4all_tensorbackend :: mdarray :: DTensor < T , 2 >, m: usize, n: usize) -> matrixci :: Matrix < T >`
 
 Convert DTensor to Matrix (tensor4all-matrixci format).
 
@@ -238,21 +138,7 @@ Convert DTensor to Matrix (tensor4all-matrixci format).
 
 Convert Matrix to Vec for storage.
 
-## src/index.rs
-
-### `pub fn total_dim(&self) -> usize` (trait Symmetry)
-
-Return the total dimension of the space. For no symmetry, this is just the dimension. For quantum number spaces, this is the sum of all block dimensions.
-
-### `pub fn new(dim: usize) -> Self` (impl NoSymmSpace)
-
-Create a new no-symmetry space with the given dimension.
-
-### `pub fn dim(&self) -> usize` (impl NoSymmSpace)
-
-Get the dimension.
-
-### ` fn total_dim(&self) -> usize` (impl NoSymmSpace)
+## src/defaults/index.rs
 
 ### `pub fn new() -> Self` (impl TagSet)
 
@@ -298,185 +184,107 @@ Get the inner Arc for advanced use.
 
 ### ` fn remove_tag(&mut self, tag: & str) -> bool` (impl TagSet)
 
-### `pub fn new(id: Id, symm: Symm) -> Self` (impl Index < Id , Symm , Tags >)
+### `pub fn new(id: Id, dim: usize) -> Self` (impl Index < Id , Tags >)
 
-Create a new index with the given identity and symmetry.
+Create a new index with the given identity and dimension.
 
-### `pub fn new_with_tags(id: Id, symm: Symm, tags: Tags) -> Self` (impl Index < Id , Symm , Tags >)
+### `pub fn new_with_tags(id: Id, dim: usize, tags: Tags) -> Self` (impl Index < Id , Tags >)
 
-Create a new index with the given identity, symmetry, and tags.
+Create a new index with the given identity, dimension, and tags.
 
-### `pub fn size(&self) -> usize` (impl Index < Id , Symm , Tags >)
+### `pub fn size(&self) -> usize` (impl Index < Id , Tags >)
 
-Get the total dimension (size) of the index. This is computed from the symmetry information.
+Get the dimension (size) of the index.
 
-### `pub fn tags(&self) -> & Tags` (impl Index < Id , Symm , Tags >)
+### `pub fn tags(&self) -> & Tags` (impl Index < Id , Tags >)
 
 Get a reference to the tags.
 
-### `pub fn new_with_size(id: Id, size: usize) -> Self` (impl Index < Id , NoSymmSpace , Tags >)
+### `pub fn new_with_size(id: Id, size: usize) -> Self` (impl Index < Id , Tags >)
 
-Create a new index with no symmetry from dimension. This is a convenience constructor for the common case of no symmetry.
+Create a new index from dimension (convenience constructor).
 
-### `pub fn new_with_size_and_tags(id: Id, size: usize, tags: Tags) -> Self` (impl Index < Id , NoSymmSpace , Tags >)
+### `pub fn new_with_size_and_tags(id: Id, size: usize, tags: Tags) -> Self` (impl Index < Id , Tags >)
 
-Create a new index with no symmetry from dimension and tags.
+Create a new index from dimension and tags.
 
-### `pub fn new_dyn(size: usize) -> Self` (impl Index < DynId , NoSymmSpace , TagSet >)
+### `pub fn new_dyn(size: usize) -> Self` (impl Index < DynId , TagSet >)
 
 Create a new index with a generated dynamic ID and no tags.
 
-### `pub fn new_dyn_with_tags(size: usize, tags: TagSet) -> Self` (impl Index < DynId , NoSymmSpace , TagSet >)
+### `pub fn new_dyn_with_tags(size: usize, tags: TagSet) -> Self` (impl Index < DynId , TagSet >)
 
 Create a new index with a generated dynamic ID and shared tags. This is the most efficient way to create many indices with the same tags. The `Arc` is cloned (reference count increment only), not the underlying data.
 
-### `pub fn new_dyn_with_tag(size: usize, tag: & str) -> Result < Self , TagSetError >` (impl Index < DynId , NoSymmSpace , TagSet >)
+### `pub fn new_dyn_with_tag(size: usize, tag: & str) -> Result < Self , TagSetError >` (impl Index < DynId , TagSet >)
 
 Create a new index with a generated dynamic ID and a single tag. This creates a new `TagSet` with the given tag. For sharing the same tag across many indices, create the `TagSet`
 
-### `pub fn new_link(size: usize) -> Result < Self , TagSetError >` (impl Index < DynId , NoSymmSpace , TagSet >)
+### `pub fn new_link(size: usize) -> Result < Self , TagSetError >` (impl Index < DynId , TagSet >)
 
 Create a new bond index with "Link" tag (for SVD, QR, etc.). This is a convenience method for creating bond indices commonly used in tensor decompositions like SVD and QR factorization.
 
-### ` fn eq(&self, other: & Self) -> bool` (impl Index < Id , Symm , Tags >)
+### ` fn eq(&self, other: & Self) -> bool` (impl Index < Id , Tags >)
 
-### ` fn hash(&self, state: & mut H)` (impl Index < Id , Symm , Tags >)
+### ` fn hash(&self, state: & mut H)` (impl Index < Id , Tags >)
 
 ### `pub(crate) fn generate_id() -> u128`
 
 Generate a unique random ID for dynamic indices (thread-safe). Uses thread-local random number generator to generate UInt128 IDs, providing extremely low collision probability (see design.md for analysis).
 
+### ` fn id(&self) -> & Self :: Id` (impl DynIndex)
+
+### ` fn dim(&self) -> usize` (impl DynIndex)
+
+### ` fn conj_state(&self) -> crate :: ConjState` (impl DynIndex)
+
+### ` fn conj(&self) -> Self` (impl DynIndex)
+
+### ` fn sim(&self) -> Self` (impl DynIndex)
+
+### ` fn create_dummy_link_pair() -> (Self , Self)` (impl DynIndex)
+
+### `pub fn new_bond(dim: usize) -> Result < Self >` (impl DynIndex)
+
+Create a new bond index with a fresh identity and the specified dimension. This is used by factorization operations (SVD, QR) to create new internal bond indices connecting the factors.
+
 ### ` fn test_id_generation()`
 
 ### ` fn test_thread_local_rng_different_seeds()`
 
-## src/index_ops.rs
+### ` fn test_index_like_basic()`
 
-### `pub fn sim(i: & Index < Id , Symm , Tags >) -> Index < Id , Symm , Tags >`
+### ` fn test_index_like_id_methods()`
 
-Create a similar index with the same space and tags but a new ID. This corresponds to ITensors.jl's `sim(i::Index)` function. It creates a new index with the same symmetry space (dimension/QN structure) and tags, but with
+### ` fn test_index_like_equality()`
 
-### `pub fn sim_owned(i: Index < Id , Symm , Tags >) -> Index < Id , Symm , Tags >`
+### ` fn test_index_like_in_hashset()`
 
-Create a similar index with the same space and tags but a new ID (consumes input). This is an owned variant of `sim` that consumes the input index, avoiding unnecessary clones when you already own the index.
+### ` fn test_new_bond()`
 
-### ` fn fmt(&self, f: & mut std :: fmt :: Formatter < '_ >) -> std :: fmt :: Result` (impl ReplaceIndsError)
+### ` fn test_sim()`
 
-### `pub fn check_unique_indices(indices: & [Index < Id , Symm , Tags >]) -> Result < () , ReplaceIndsError >`
+### ` fn _assert_index_like_bounds()`
 
-Check if a collection of indices contains any duplicates (by ID).
+### ` fn test_index_satisfies_index_like()`
 
-### `pub fn replaceinds(indices: Vec < Index < Id , Symm , Tags > >, replacements: & [(Index < Id , Symm , Tags > , Index < Id , Symm , Tags >)]) -> Result < Vec < Index < Id , Symm , Tags > > , ReplaceIndsError >`
+### ` fn test_conj_state_undirected()`
 
-Replace indices in a collection based on ID matching. This corresponds to ITensors.jl's `replaceinds` function. It replaces indices in `indices` that match (by ID) any of the `(old, new)` pairs in `replacements`.
+### ` fn test_conj_undirected_noop()`
 
-### `pub fn replaceinds_in_place(indices: & mut [Index < Id , Symm , Tags >], replacements: & [(Index < Id , Symm , Tags > , Index < Id , Symm , Tags >)]) -> Result < () , ReplaceIndsError >`
+### ` fn test_is_contractable_undirected()`
 
-Replace indices in-place based on ID matching. This is an in-place variant of `replaceinds` that modifies the input slice directly. Useful for performance-critical code where you want to avoid allocations.
+### ` fn test_is_contractable_same_id_dim()`
 
-### `pub fn unique_inds(indices_a: & [Index < Id , Symm , Tags >], indices_b: & [Index < Id , Symm , Tags >]) -> Vec < Index < Id , Symm , Tags > >`
-
-Find indices that are unique to the first collection (set difference A \ B). Returns indices that appear in `indices_a` but not in `indices_b` (matched by ID). This corresponds to ITensors.jl's `uniqueinds` function.
-
-### `pub fn noncommon_inds(indices_a: & [Index < Id , Symm , Tags >], indices_b: & [Index < Id , Symm , Tags >]) -> Vec < Index < Id , Symm , Tags > >`
-
-Find indices that are not common between two collections (symmetric difference). Returns indices that appear in either `indices_a` or `indices_b` but not in both (matched by ID). This corresponds to ITensors.jl's `noncommoninds` function.
-
-### `pub fn union_inds(indices_a: & [Index < Id , Symm , Tags >], indices_b: & [Index < Id , Symm , Tags >]) -> Vec < Index < Id , Symm , Tags > >`
-
-Find the union of two index collections. Returns all unique indices from both collections (matched by ID). This corresponds to ITensors.jl's `unioninds` function.
-
-### `pub fn hasind(indices: & [Index < Id , Symm , Tags >], index: & Index < Id , Symm , Tags >) -> bool`
-
-Check if a collection contains a specific index (by ID). This corresponds to ITensors.jl's `hasind` function.
-
-### `pub fn hasinds(indices: & [Index < Id , Symm , Tags >], targets: & [Index < Id , Symm , Tags >]) -> bool`
-
-Check if a collection contains all of the specified indices (by ID). This corresponds to ITensors.jl's `hasinds` function.
-
-### `pub fn hascommoninds(indices_a: & [Index < Id , Symm , Tags >], indices_b: & [Index < Id , Symm , Tags >]) -> bool`
-
-Check if two collections have any common indices (by ID). This corresponds to ITensors.jl's `hascommoninds` function.
-
-### `pub fn common_inds(indices_a: & [Index < Id , Symm , Tags >], indices_b: & [Index < Id , Symm , Tags >]) -> Vec < Index < Id , Symm , Tags > >`
-
-Find common indices between two index collections. Returns a vector of indices that appear in both `indices_a` and `indices_b` (set intersection). This is similar to ITensors.jl's `commoninds` function.
-
-## src/physical_indices.rs
-
-### `pub fn new() -> Self` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Create a new empty PhysicalIndices manager.
-
-### `pub fn with_capacity(sites: usize) -> Self` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Create a new PhysicalIndices manager with the given capacity for sites.
-
-### ` fn update_flattened_indices(&mut self)` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Update the flattened index lists from the current physical_indices. This should be called whenever physical_indices are modified to keep the flattened lists in sync.
-
-### `pub fn add_site_indices(&mut self, site_index: usize, indices: Vec < Index < Id , Symm , Tags > >, tensor_id: usize)` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Add physical indices to a site and bind the site to a tensor ID. If the site already has a tensor ID set, it must match `tensor_id`. The new indices are appended in order.
-
-### `pub fn set_site_indices(&mut self, site_index: usize, indices: Vec < Index < Id , Symm , Tags > >, tensor_id: usize)` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Set physical indices for a site, replacing any existing indices.
-
-### `pub fn get_site_indices(&self, site_index: usize) -> Option < & [Index < Id , Symm , Tags >] >` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Get the physical indices for a site. Returns `None` if the site doesn't exist.
-
-### `pub fn get_site_tensor_id(&self, site_index: usize) -> Option < usize >` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Get the tensor integer ID for a site. Returns `None` if the site doesn't exist.
-
-### `pub fn num_sites(&self) -> usize` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Get the number of sites.
-
-### `pub fn total_indices(&self) -> usize` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Get the total number of physical indices across all sites.
-
-### `pub fn all_indices(&self) -> & [Vec < Index < Id , Symm , Tags > >]` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Get a reference to all physical indices (organized by site).
-
-### `pub fn all_tensor_ids_by_site(&self) -> & [Option < usize >]` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Get a reference to all tensor IDs (organized by site).
-
-### `pub fn unsorted_indices(&self) -> & [Index < Id , Symm , Tags >]` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Get a reference to the unsorted flattened indices (in tensor order).
-
-### `pub fn sorted_indices(&self) -> & [Index < Id , Symm , Tags >]` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Get a reference to the sorted flattened indices (sorted by ID).
-
-### `pub fn clear(&mut self)` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Clear all physical indices and tensor IDs.
-
-### `pub fn remove_site(&mut self, site_index: usize) -> bool` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Remove a site and all its physical indices. Returns `true` if the site existed and was removed, `false` otherwise.
-
-### ` fn default() -> Self` (impl PhysicalIndices < Id , Symm , Tags >)
-
-### ` fn eq(&self, other: & Self) -> bool` (impl PhysicalIndices < Id , Symm , Tags >)
-
-Two `PhysicalIndices` are equal if and only if their sorted flattened index lists match.
-
-## src/qr.rs
-
-### ` fn default() -> Self` (impl QrOptions)
+## src/defaults/qr.rs
 
 ### `pub fn with_rtol(rtol: f64) -> Self` (impl QrOptions)
 
 Create new QR options with the specified rtol.
+
+### `pub fn rtol(&self) -> Option < f64 >` (impl QrOptions)
+
+Get rtol from options (for backwards compatibility).
 
 ### `pub fn default_qr_rtol() -> f64`
 
@@ -490,17 +298,509 @@ Set the global default rtol for QR truncation.
 
 Compute the retained rank based on rtol truncation for QR. This checks R's diagonal elements and truncates columns where |R[i, i]| < rtol.
 
-### `pub fn qr(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >]) -> Result < (TensorDynLen < Id , Symm > , TensorDynLen < Id , Symm >) , QrError >`
+### `pub fn qr(t: & TensorDynLen, left_inds: & [DynIndex]) -> Result < (TensorDynLen , TensorDynLen) , QrError >`
 
 Compute QR decomposition of a tensor with arbitrary rank, returning (Q, R). This function uses the global default rtol for truncation. See `qr_with` for per-call rtol control.
 
-### `pub fn qr_with(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >], options: & QrOptions) -> Result < (TensorDynLen < Id , Symm > , TensorDynLen < Id , Symm >) , QrError >`
+### `pub fn qr_with(t: & TensorDynLen, left_inds: & [DynIndex], options: & QrOptions) -> Result < (TensorDynLen , TensorDynLen) , QrError >`
 
 Compute QR decomposition of a tensor with arbitrary rank, returning (Q, R). This function allows per-call control of the truncation tolerance via `QrOptions`. If `options.rtol` is `None`, uses the global default rtol.
 
-### `pub fn qr_c64(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >]) -> Result < (TensorDynLen < Id , Symm > , TensorDynLen < Id , Symm >) , QrError >`
+### `pub fn qr_c64(t: & TensorDynLen, left_inds: & [DynIndex]) -> Result < (TensorDynLen , TensorDynLen) , QrError >`
 
 Compute QR decomposition of a complex tensor with arbitrary rank, returning (Q, R). This is a convenience wrapper around the generic `qr` function for `Complex64` tensors. For the mathematical convention:
+
+## src/defaults/svd.rs
+
+### `pub fn with_rtol(rtol: f64) -> Self` (impl SvdOptions)
+
+Create new SVD options with the specified rtol.
+
+### `pub fn with_max_rank(max_rank: usize) -> Self` (impl SvdOptions)
+
+Create new SVD options with the specified max_rank.
+
+### `pub fn rtol(&self) -> Option < f64 >` (impl SvdOptions)
+
+Get rtol from options (for backwards compatibility).
+
+### `pub fn max_rank(&self) -> Option < usize >` (impl SvdOptions)
+
+Get max_rank from options (for backwards compatibility).
+
+### ` fn truncation_params(&self) -> & TruncationParams` (impl SvdOptions)
+
+### ` fn truncation_params_mut(&mut self) -> & mut TruncationParams` (impl SvdOptions)
+
+### `pub fn default_svd_rtol() -> f64`
+
+Get the global default rtol for SVD truncation. The default value is 1e-12 (near machine precision).
+
+### `pub fn set_default_svd_rtol(rtol: f64) -> Result < () , SvdError >`
+
+Set the global default rtol for SVD truncation.
+
+### ` fn compute_retained_rank(s_vec: & [f64], rtol: f64) -> usize`
+
+Compute the retained rank based on rtol (TSVD truncation). This implements the truncation criterion: sum_{i>r} σ_i² / sum_i σ_i² <= rtol²
+
+### ` fn extract_usv_from_svd_result(decomp: SvdResult < T >, m: usize, n: usize, k: usize) -> (Vec < T > , Vec < f64 > , Vec < T >)`
+
+Extract U, S, V from tensorbackend's SvdResult (which returns U, S, Vt). This helper function converts the backend's SVD result to our desired format: - Extracts singular values from the diagonal view (first row)
+
+### `pub fn svd(t: & TensorDynLen, left_inds: & [DynIndex]) -> Result < (TensorDynLen , TensorDynLen , TensorDynLen) , SvdError >`
+
+Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V). This function uses the global default rtol for truncation. See `svd_with` for per-call rtol control.
+
+### `pub fn svd_with(t: & TensorDynLen, left_inds: & [DynIndex], options: & SvdOptions) -> Result < (TensorDynLen , TensorDynLen , TensorDynLen) , SvdError >`
+
+Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V). This function allows per-call control of the truncation tolerance via `SvdOptions`. If `options.rtol` is `None`, uses the global default rtol.
+
+### `pub fn svd_c64(t: & TensorDynLen, left_inds: & [DynIndex]) -> Result < (TensorDynLen , TensorDynLen , TensorDynLen) , SvdError >`
+
+Compute SVD decomposition of a complex tensor with arbitrary rank, returning (U, S, V). This is a convenience wrapper around the generic `svd` function for `Complex64` tensors. For complex-valued matrices, the mathematical convention is:
+
+## src/defaults/tensor_data.rs
+
+### `pub fn new(storage: Arc < Storage >, index_ids: Vec < DynId >, dims: Vec < usize >) -> Self` (impl TensorComponent)
+
+Create a new TensorComponent.
+
+### `pub fn ndim(&self) -> usize` (impl TensorComponent)
+
+Get the number of dimensions.
+
+### `pub fn numel(&self) -> usize` (impl TensorComponent)
+
+Get the total number of elements.
+
+### `pub fn new(storage: Arc < Storage >, index_ids: Vec < DynId >, dims: Vec < usize >) -> Self` (impl TensorData)
+
+Create a new TensorData from a single storage.
+
+### `pub fn from_components(components: Vec < TensorComponent >, external_index_ids: Vec < DynId >, external_dims: Vec < usize >) -> Self` (impl TensorData)
+
+Create TensorData from components with explicit external order.
+
+### `pub fn is_simple(&self) -> bool` (impl TensorData)
+
+Check if this is a simple tensor (single component, no permutation needed).
+
+### `pub fn storage(&self) -> Option < & Arc < Storage > >` (impl TensorData)
+
+Get the underlying storage if this is a simple tensor.
+
+### `pub fn ndim(&self) -> usize` (impl TensorData)
+
+Get the number of external dimensions.
+
+### `pub fn numel(&self) -> usize` (impl TensorData)
+
+Get the total number of elements.
+
+### `pub fn dims(&self) -> & [usize]` (impl TensorData)
+
+Get the external dimensions.
+
+### `pub fn index_ids(&self) -> & [DynId]` (impl TensorData)
+
+Get the external index IDs.
+
+### `pub fn outer_product(a: & Self, b: & Self) -> Self` (impl TensorData)
+
+Compute outer product of two TensorData (lazy). This just concatenates the components and index lists without actually computing the outer product data.
+
+### `pub fn permute(&self, new_order: & [DynId]) -> Self` (impl TensorData)
+
+Permute the external index order (lazy). This only updates the external_index_ids order without touching the underlying storage data.
+
+### `pub fn permute_by_perm(&self, perm: & [usize]) -> Self` (impl TensorData)
+
+Permute using a permutation array.
+
+### `pub fn materialize(&self) -> anyhow :: Result < (Arc < Storage > , Vec < usize >) >` (impl TensorData)
+
+Materialize the tensor into a single Storage with the external index order. This contracts all components and permutes the result to match the external_index_ids order.
+
+### `pub fn into_components(self) -> Vec < TensorComponent >` (impl TensorData)
+
+Get all components (for passing to contraction).
+
+### `pub fn components(&self) -> & [TensorComponent]` (impl TensorData)
+
+Get a reference to all components.
+
+### ` fn make_test_storage(data: Vec < f64 >) -> Arc < Storage >`
+
+### ` fn new_id() -> DynId`
+
+### ` fn test_tensor_data_simple()`
+
+### ` fn test_outer_product()`
+
+### ` fn test_permute()`
+
+### ` fn test_permute_outer_product()`
+
+### ` fn test_materialize_simple()`
+
+### ` fn test_materialize_outer_product()`
+
+### ` fn test_materialize_with_permute()`
+
+## src/defaults/tensordynlen.rs
+
+### `pub fn compute_permutation_from_indices(original_indices: & [DynIndex], new_indices: & [DynIndex]) -> Vec < usize >`
+
+Compute the permutation array from original indices to new indices. This function finds the mapping from new indices to original indices by matching index IDs. The result is a permutation array `perm` such that
+
+### `pub fn indices(&self) -> & [DynIndex]` (trait TensorAccess)
+
+Get a reference to the indices.
+
+### `pub fn data(&self) -> & Storage` (trait TensorAccess)
+
+Get a reference to the underlying data (Storage).
+
+### ` fn indices(&self) -> & [DynIndex]` (impl TensorDynLen)
+
+### ` fn data(&self) -> & Storage` (impl TensorDynLen)
+
+### `pub fn new(indices: Vec < DynIndex >, dims: Vec < usize >, storage: Arc < Storage >) -> Self` (impl TensorDynLen)
+
+Create a new tensor with dynamic rank.
+
+### `pub fn from_indices(indices: Vec < DynIndex >, storage: Arc < Storage >) -> Self` (impl TensorDynLen)
+
+Create a new tensor with dynamic rank, automatically computing dimensions from indices. This is a convenience constructor that extracts dimensions from indices using `IndexLike::dim()`.
+
+### `pub fn is_simple(&self) -> bool` (impl TensorDynLen)
+
+Check if this tensor is simple (single storage, no lazy operations pending).
+
+### `pub fn storage(&self) -> & Arc < Storage >` (impl TensorDynLen)
+
+Get the storage (for simple tensors only).
+
+### `pub fn try_storage(&self) -> Option < & Arc < Storage > >` (impl TensorDynLen)
+
+Try to get the storage without materializing. Returns `None` if the tensor has pending lazy operations. Use `materialize_storage()` to force materialization.
+
+### `pub fn materialize_storage(&self) -> Result < Arc < Storage > >` (impl TensorDynLen)
+
+Get the storage, materializing if necessary. For simple tensors, returns the underlying storage without copying. For lazy tensors, performs any pending operations and returns the result.
+
+### `pub fn tensor_data(&self) -> & TensorData` (impl TensorDynLen)
+
+Get the internal TensorData reference.
+
+### ` fn from_data(indices: Vec < DynIndex >, dims: Vec < usize >, data: TensorData) -> Self` (impl TensorDynLen)
+
+Create TensorDynLen directly from TensorData and indices. This is an internal constructor for building tensors from lazy operations.
+
+### `pub fn sum(&self) -> AnyScalar` (impl TensorDynLen)
+
+Sum all elements, returning `AnyScalar`.
+
+### `pub fn sum_f64(&self) -> f64` (impl TensorDynLen)
+
+Sum all elements as f64.
+
+### `pub fn only(&self) -> AnyScalar` (impl TensorDynLen)
+
+Extract the scalar value from a 0-dimensional tensor (or 1-element tensor). This is similar to Julia's `only()` function.
+
+### `pub fn permute_indices(&self, new_indices: & [DynIndex]) -> Self` (impl TensorDynLen)
+
+Permute the tensor dimensions using the given new indices order. This is the main permutation method that takes the desired new indices and automatically computes the corresponding permutation of dimensions
+
+### `pub fn permute(&self, perm: & [usize]) -> Self` (impl TensorDynLen)
+
+Permute the tensor dimensions, returning a new tensor. This method reorders the indices, dimensions, and data according to the given permutation. The permutation specifies which old axis each new
+
+### `pub fn contract(&self, other: & Self) -> Self` (impl TensorDynLen)
+
+Contract this tensor with another tensor along common indices. This method finds common indices between `self` and `other`, then contracts along those indices. The result tensor contains all non-contracted indices
+
+### `pub fn tensordot(&self, other: & Self, pairs: & [(DynIndex , DynIndex)]) -> Result < Self >` (impl TensorDynLen)
+
+Contract this tensor with another tensor along explicitly specified index pairs. Similar to NumPy's `tensordot`, this method contracts only along the explicitly specified pairs of indices. Unlike `contract()` which automatically contracts
+
+### `pub fn outer_product(&self, other: & Self) -> Result < Self >` (impl TensorDynLen)
+
+Compute the outer product (tensor product) of two tensors. Creates a new tensor whose indices are the concatenation of the indices from both input tensors. The result has shape `[...self.dims, ...other.dims]`.
+
+### `pub fn random_f64(rng: & mut R, indices: Vec < DynIndex >) -> Self` (impl TensorDynLen)
+
+Create a random f64 tensor with values from standard normal distribution.
+
+### `pub fn random_c64(rng: & mut R, indices: Vec < DynIndex >) -> Self` (impl TensorDynLen)
+
+Create a random Complex64 tensor with values from standard normal distribution. Both real and imaginary parts are drawn from standard normal distribution.
+
+### ` fn mul(self, other: & TensorDynLen) -> Self :: Output` (impl & TensorDynLen)
+
+### ` fn mul(self, other: TensorDynLen) -> Self :: Output` (impl TensorDynLen)
+
+### ` fn mul(self, other: TensorDynLen) -> Self :: Output` (impl & TensorDynLen)
+
+### ` fn mul(self, other: & TensorDynLen) -> Self :: Output` (impl TensorDynLen)
+
+### `pub fn is_diag_tensor(tensor: & TensorDynLen) -> bool`
+
+Check if a tensor is a DiagTensor (has Diag storage).
+
+### `pub fn add(&self, other: & Self) -> Result < Self >` (impl TensorDynLen)
+
+Add two tensors element-wise. The tensors must have the same index set (matched by ID). If the indices are in a different order, the other tensor will be permuted to match `self`.
+
+### `pub fn axpby(&self, a: AnyScalar, other: & Self, b: AnyScalar) -> Result < Self >` (impl TensorDynLen)
+
+Compute a linear combination: `a * self + b * other`.
+
+### `pub fn scale(&self, scalar: AnyScalar) -> Result < Self >` (impl TensorDynLen)
+
+Scalar multiplication.
+
+### `pub fn inner_product(&self, other: & Self) -> Result < AnyScalar >` (impl TensorDynLen)
+
+Inner product (dot product) of two tensors. Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
+
+### ` fn clone(&self) -> Self` (impl TensorDynLen)
+
+### `pub fn replaceind(&self, old_index: & DynIndex, new_index: & DynIndex) -> Self` (impl TensorDynLen)
+
+Replace an index in the tensor with a new index. This replaces the index matching `old_index` by ID with `new_index`. The storage data is not modified, only the index metadata is changed.
+
+### `pub fn replaceinds(&self, old_indices: & [DynIndex], new_indices: & [DynIndex]) -> Self` (impl TensorDynLen)
+
+Replace multiple indices in the tensor. This replaces each index in `old_indices` (matched by ID) with the corresponding index in `new_indices`. The storage data is not modified.
+
+### `pub fn conj(&self) -> Self` (impl TensorDynLen)
+
+Complex conjugate of all tensor elements. For real (f64) tensors, returns a copy (conjugate of real is identity). For complex (Complex64) tensors, conjugates each element.
+
+### `pub fn norm_squared(&self) -> f64` (impl TensorDynLen)
+
+Compute the squared Frobenius norm of the tensor: ||T||² = Σ|T_ijk...|² For real tensors: sum of squares of all elements. For complex tensors: sum of |z|² = z * conj(z) for all elements.
+
+### `pub fn norm(&self) -> f64` (impl TensorDynLen)
+
+Compute the Frobenius norm of the tensor: ||T|| = sqrt(Σ|T_ijk...|²)
+
+### `pub fn distance(&self, other: & Self) -> f64` (impl TensorDynLen)
+
+Compute the relative distance between two tensors. Returns `||A - B|| / ||A||` (Frobenius norm). If `||A|| = 0`, returns `||B||` instead to avoid division by zero.
+
+### ` fn fmt(&self, f: & mut std :: fmt :: Formatter < '_ >) -> std :: fmt :: Result` (impl TensorDynLen)
+
+### `pub fn diag_tensor_dyn_len(indices: Vec < DynIndex >, diag_data: Vec < f64 >) -> TensorDynLen`
+
+Create a DiagTensor with dynamic rank from diagonal data.
+
+### `pub fn diag_tensor_dyn_len_c64(indices: Vec < DynIndex >, diag_data: Vec < Complex64 >) -> TensorDynLen`
+
+Create a DiagTensor with dynamic rank from complex diagonal data.
+
+### `pub fn unfold_split(t: & TensorDynLen, left_inds: & [DynIndex]) -> Result < (DTensor < T , 2 > , usize , usize , usize , Vec < DynIndex > , Vec < DynIndex > ,) >`
+
+Unfold a tensor into a matrix by splitting indices into left and right groups. This function validates the split, permutes the tensor so that left indices come first, and returns a 2D matrix tensor (`DTensor<T, 2>`) along with metadata.
+
+### ` fn external_indices(&self) -> Vec < DynIndex >` (impl TensorDynLen)
+
+### ` fn num_external_indices(&self) -> usize` (impl TensorDynLen)
+
+### ` fn replaceind(&self, old_index: & DynIndex, new_index: & DynIndex) -> Result < Self >` (impl TensorDynLen)
+
+### ` fn replaceinds(&self, old_indices: & [DynIndex], new_indices: & [DynIndex]) -> Result < Self >` (impl TensorDynLen)
+
+### ` fn factorize(&self, left_inds: & [DynIndex], options: & FactorizeOptions) -> std :: result :: Result < FactorizeResult < Self > , FactorizeError >` (impl TensorDynLen)
+
+### ` fn conj(&self) -> Self` (impl TensorDynLen)
+
+### ` fn direct_sum(&self, other: & Self, pairs: & [(DynIndex , DynIndex)]) -> Result < crate :: tensor_like :: DirectSumResult < Self > >` (impl TensorDynLen)
+
+### ` fn outer_product(&self, other: & Self) -> Result < Self >` (impl TensorDynLen)
+
+### ` fn norm_squared(&self) -> f64` (impl TensorDynLen)
+
+### ` fn permuteinds(&self, new_order: & [DynIndex]) -> Result < Self >` (impl TensorDynLen)
+
+### ` fn contract(tensors: & [Self], allowed: crate :: AllowedPairs < '_ >) -> Result < Self >` (impl TensorDynLen)
+
+### ` fn contract_connected(tensors: & [Self], allowed: crate :: AllowedPairs < '_ >) -> Result < Self >` (impl TensorDynLen)
+
+### ` fn axpby(&self, a: crate :: AnyScalar, other: & Self, b: crate :: AnyScalar) -> Result < Self >` (impl TensorDynLen)
+
+### ` fn scale(&self, scalar: crate :: AnyScalar) -> Result < Self >` (impl TensorDynLen)
+
+### ` fn inner_product(&self, other: & Self) -> Result < crate :: AnyScalar >` (impl TensorDynLen)
+
+### ` fn diagonal(input_index: & DynIndex, output_index: & DynIndex) -> Result < Self >` (impl TensorDynLen)
+
+### ` fn scalar_one() -> Result < Self >` (impl TensorDynLen)
+
+### ` fn ones(indices: & [DynIndex]) -> Result < Self >` (impl TensorDynLen)
+
+## src/global_default.rs
+
+### `pub fn new(initial: f64) -> Self` (impl GlobalDefault)
+
+Create a new global default with the given initial value. This is a const fn, so it can be used in static declarations.
+
+### `pub fn get(&self) -> f64` (impl GlobalDefault)
+
+Get the current default value.
+
+### `pub fn set(&self, value: f64) -> Result < () , InvalidRtolError >` (impl GlobalDefault)
+
+Set a new default value.
+
+### `pub fn set_unchecked(&self, value: f64)` (impl GlobalDefault)
+
+Set a new default value without validation.
+
+### ` fn test_global_default()`
+
+### ` fn test_invalid_values()`
+
+## src/index_like.rs
+
+### `pub fn id(&self) -> & Self :: Id` (trait IndexLike)
+
+Get the identifier of this index. The ID is used as the pairing key during contraction. **Contractable indices must have the same ID** — this is enforced by `is_contractable()`.
+
+### `pub fn dim(&self) -> usize` (trait IndexLike)
+
+Get the total dimension (state-space dimension) of the index.
+
+### `pub fn conj_state(&self) -> ConjState` (trait IndexLike)
+
+Get the conjugate state (direction) of this index. Returns `ConjState::Undirected` for directionless indices (ITensors.jl-like default), or `ConjState::Ket`/`ConjState::Bra` for directed indices (QSpace-compatible).
+
+### `pub fn conj(&self) -> Self` (trait IndexLike)
+
+Create the conjugate of this index. For directed indices, this toggles between `Ket` and `Bra`. For `Undirected` indices, this returns `self` unchanged (no-op).
+
+### `pub fn is_contractable(&self, other: & Self) -> bool` (trait IndexLike default)
+
+Check if this index can be contracted with another index. Two indices are contractable if: - They have the same `id()` and `dim()`
+
+### `pub fn same_id(&self, other: & Self) -> bool` (trait IndexLike default)
+
+Check if this index has the same ID as another. Default implementation compares IDs directly. This is a convenience method for pure ID comparison (does not check contractability).
+
+### `pub fn has_id(&self, id: & Self :: Id) -> bool` (trait IndexLike default)
+
+Check if this index has the given ID. Default implementation compares with the given ID.
+
+### `pub fn sim(&self) -> Self` (trait IndexLike)
+
+Create a similar index with a new identity but the same structure (dimension, tags, etc.). This is used to create "equivalent" indices that have the same properties but different identities, commonly needed in index replacement operations.
+
+### `pub fn create_dummy_link_pair() -> (Self , Self)` (trait IndexLike)
+
+Create a pair of contractable dummy indices with dimension 1. These are used for structural connections that don't carry quantum numbers, such as connecting components in a tree tensor network.
+
+## src/index_ops.rs
+
+### ` fn fmt(&self, f: & mut std :: fmt :: Formatter < '_ >) -> std :: fmt :: Result` (impl ReplaceIndsError)
+
+### `pub fn check_unique_indices(indices: & [I]) -> Result < () , ReplaceIndsError >`
+
+Check if a collection of indices contains any duplicates (by ID).
+
+### `pub fn replaceinds(indices: Vec < I >, replacements: & [(I , I)]) -> Result < Vec < I > , ReplaceIndsError >`
+
+Replace indices in a collection based on ID matching. This corresponds to ITensors.jl's `replaceinds` function. It replaces indices in `indices` that match (by ID) any of the `(old, new)` pairs in `replacements`.
+
+### `pub fn replaceinds_in_place(indices: & mut [I], replacements: & [(I , I)]) -> Result < () , ReplaceIndsError >`
+
+Replace indices in-place based on ID matching. This is an in-place variant of `replaceinds` that modifies the input slice directly. Useful for performance-critical code where you want to avoid allocations.
+
+### `pub fn unique_inds(indices_a: & [I], indices_b: & [I]) -> Vec < I >`
+
+Find indices that are unique to the first collection (set difference A \ B). Returns indices that appear in `indices_a` but not in `indices_b` (matched by ID). This corresponds to ITensors.jl's `uniqueinds` function.
+
+### `pub fn noncommon_inds(indices_a: & [I], indices_b: & [I]) -> Vec < I >`
+
+Find indices that are not common between two collections (symmetric difference). Returns indices that appear in either `indices_a` or `indices_b` but not in both (matched by ID). This corresponds to ITensors.jl's `noncommoninds` function.
+
+### `pub fn union_inds(indices_a: & [I], indices_b: & [I]) -> Vec < I >`
+
+Find the union of two index collections. Returns all unique indices from both collections (matched by ID). This corresponds to ITensors.jl's `unioninds` function.
+
+### `pub fn hasind(indices: & [I], index: & I) -> bool`
+
+Check if a collection contains a specific index (by ID). This corresponds to ITensors.jl's `hasind` function.
+
+### `pub fn hasinds(indices: & [I], targets: & [I]) -> bool`
+
+Check if a collection contains all of the specified indices (by ID). This corresponds to ITensors.jl's `hasinds` function.
+
+### `pub fn hascommoninds(indices_a: & [I], indices_b: & [I]) -> bool`
+
+Check if two collections have any common indices (by ID). This corresponds to ITensors.jl's `hascommoninds` function.
+
+### `pub fn common_inds(indices_a: & [I], indices_b: & [I]) -> Vec < I >`
+
+Find common indices between two index collections. Returns a vector of indices that appear in both `indices_a` and `indices_b` (set intersection). This is similar to ITensors.jl's `commoninds` function.
+
+### `pub fn common_ind_positions(indices_a: & [I], indices_b: & [I]) -> Vec < (usize , usize) >`
+
+Find contractable indices between two slices and return their positions. Returns a vector of `(pos_a, pos_b)` tuples where each tuple indicates that `indices_a[pos_a]` and `indices_b[pos_b]` are contractable
+
+### ` fn fmt(&self, f: & mut std :: fmt :: Formatter < '_ >) -> std :: fmt :: Result` (impl ContractionError)
+
+### `pub fn prepare_contraction(indices_a: & [I], dims_a: & [usize], indices_b: & [I], dims_b: & [usize]) -> Result < ContractionSpec < I > , ContractionError >`
+
+Prepare contraction data for two tensors that share common indices. This function finds common indices and computes the axes to contract and the resulting indices/dimensions.
+
+### `pub fn prepare_contraction_pairs(indices_a: & [I], dims_a: & [usize], indices_b: & [I], dims_b: & [usize], pairs: & [(I , I)]) -> Result < ContractionSpec < I > , ContractionError >`
+
+Prepare contraction data for explicit index pairs (like tensordot). Unlike `prepare_contraction`, this function takes explicit pairs of indices to contract, allowing contraction of indices with different IDs.
+
+## src/krylov.rs
+
+### ` fn default() -> Self` (impl GmresOptions)
+
+### `pub fn gmres(apply_a: F, b: & T, x0: & T, options: & GmresOptions) -> Result < GmresResult < T > >`
+
+Solve `A x = b` using GMRES (Generalized Minimal Residual Method). This implements the restarted GMRES algorithm that works with abstract tensor types through the [`TensorLike`] trait's vector space operations.
+
+### ` fn compute_givens_rotation(a: & AnyScalar, b: & AnyScalar) -> (AnyScalar , AnyScalar)`
+
+Compute Givens rotation coefficients to eliminate b in (a, b).
+
+### ` fn apply_givens_rotation(c: & AnyScalar, s: & AnyScalar, x: & AnyScalar, y: & AnyScalar) -> (AnyScalar , AnyScalar)`
+
+Apply Givens rotation: (c, s) @ (x, y) -> (c*x + s*y, -conj(s)*x + c*y) for complex or (c*x + s*y, -s*x + c*y) for real.
+
+### ` fn solve_upper_triangular(h: & [Vec < AnyScalar >], g: & [AnyScalar]) -> Result < Vec < AnyScalar > >`
+
+Solve upper triangular system R y = g using back substitution.
+
+### ` fn update_solution(x: & T, v_basis: & [T], y: & [AnyScalar]) -> Result < T >`
+
+Update solution: x_new = x + sum_i y_i * v_i
+
+### ` fn make_vector_with_index(data: Vec < f64 >, idx: & DynIndex) -> TensorDynLen`
+
+Helper to create a 1D tensor (vector) with given data and shared index.
+
+### ` fn test_givens_rotation_real()`
+
+### ` fn test_apply_givens_rotation_real()`
+
+### ` fn test_gmres_identity_operator()`
+
+### ` fn test_gmres_diagonal_matrix()`
+
+### ` fn test_gmres_nonsymmetric_matrix()`
+
+### ` fn test_gmres_with_good_initial_guess()`
+
+### ` fn test_gmres_zero_rhs()`
 
 ## src/smallstring.rs
 
@@ -575,298 +875,6 @@ Get a reference to the internal data slice.
 ### ` fn test_smallstring_ordering()`
 
 ### ` fn test_smallstring_size()`
-
-## src/storage.rs
-
-### `pub fn with_capacity(capacity: usize) -> Self` (impl DenseStorageF64)
-
-### `pub fn from_vec(vec: Vec < f64 >) -> Self` (impl DenseStorageF64)
-
-### `pub fn random(rng: & mut R, size: usize) -> Self` (impl DenseStorageF64)
-
-Create storage with random values from standard normal distribution.
-
-### `pub fn as_slice(&self) -> & [f64]` (impl DenseStorageF64)
-
-### `pub fn as_mut_slice(&mut self) -> & mut [f64]` (impl DenseStorageF64)
-
-### `pub fn into_vec(self) -> Vec < f64 >` (impl DenseStorageF64)
-
-### `pub fn len(&self) -> usize` (impl DenseStorageF64)
-
-### `pub fn capacity(&self) -> usize` (impl DenseStorageF64)
-
-### `pub fn push(&mut self, val: f64)` (impl DenseStorageF64)
-
-### `pub fn extend_from_slice(&mut self, other: & [f64])` (impl DenseStorageF64)
-
-### `pub fn extend(&mut self, iter: I)` (impl DenseStorageF64)
-
-### `pub fn get(&self, i: usize) -> f64` (impl DenseStorageF64)
-
-### `pub fn set(&mut self, i: usize, val: f64)` (impl DenseStorageF64)
-
-### `pub fn iter(&self) -> std :: slice :: Iter < '_ , f64 >` (impl DenseStorageF64)
-
-### `pub fn permute(&self, dims: & [usize], perm: & [usize]) -> Self` (impl DenseStorageF64)
-
-Permute the dense storage data according to the given permutation.
-
-### `pub fn contract(&self, dims: & [usize], axes: & [usize], other: & Self, other_dims: & [usize], other_axes: & [usize]) -> Self` (impl DenseStorageF64)
-
-Contract this dense storage with another dense storage. This method handles non-contiguous contracted axes by permuting the tensors to make the contracted axes contiguous before calling mdarray-linalg's contract.
-
-### ` fn contract_via_gemm(a: & [f64], dims_a: & [usize], axes_a: & [usize], b: & [f64], dims_b: & [usize], axes_b: & [usize]) -> Vec < f64 >`
-
-Contract two tensors via GEMM (matrix multiplication). This function assumes that contracted axes are already contiguous: - For `a`: contracted axes are at the END (axes_a are the last naxes positions)
-
-### ` fn contract_via_gemm_c64(a: & [Complex64], dims_a: & [usize], axes_a: & [usize], b: & [Complex64], dims_b: & [usize], axes_b: & [usize]) -> Vec < Complex64 >`
-
-Contract two Complex64 tensors via GEMM (matrix multiplication). Same as contract_via_gemm but for complex numbers.
-
-### ` fn compute_contraction_permutation(dims: & [usize], axes: & [usize], axes_at_front: bool) -> (Vec < usize > , Vec < usize > , Vec < usize >)`
-
-Compute permutation to make contracted axes contiguous. If `axes_at_front` is true, contracted axes are moved to the front (maintaining original order). If false, contracted axes are moved to the end (maintaining original order).
-
-### `pub fn with_capacity(capacity: usize) -> Self` (impl DenseStorageC64)
-
-### `pub fn from_vec(vec: Vec < Complex64 >) -> Self` (impl DenseStorageC64)
-
-### `pub fn random(rng: & mut R, size: usize) -> Self` (impl DenseStorageC64)
-
-Create storage with random complex values (re, im both from standard normal).
-
-### `pub fn as_slice(&self) -> & [Complex64]` (impl DenseStorageC64)
-
-### `pub fn as_mut_slice(&mut self) -> & mut [Complex64]` (impl DenseStorageC64)
-
-### `pub fn into_vec(self) -> Vec < Complex64 >` (impl DenseStorageC64)
-
-### `pub fn len(&self) -> usize` (impl DenseStorageC64)
-
-### `pub fn capacity(&self) -> usize` (impl DenseStorageC64)
-
-### `pub fn push(&mut self, val: Complex64)` (impl DenseStorageC64)
-
-### `pub fn extend_from_slice(&mut self, other: & [Complex64])` (impl DenseStorageC64)
-
-### `pub fn extend(&mut self, iter: I)` (impl DenseStorageC64)
-
-### `pub fn get(&self, i: usize) -> Complex64` (impl DenseStorageC64)
-
-### `pub fn set(&mut self, i: usize, val: Complex64)` (impl DenseStorageC64)
-
-### `pub fn permute(&self, dims: & [usize], perm: & [usize]) -> Self` (impl DenseStorageC64)
-
-Permute the dense storage data according to the given permutation.
-
-### `pub fn contract(&self, dims: & [usize], axes: & [usize], other: & Self, other_dims: & [usize], other_axes: & [usize]) -> Self` (impl DenseStorageC64)
-
-Contract this dense storage with another dense storage. This method handles non-contiguous contracted axes by permuting the tensors to make the contracted axes contiguous before calling mdarray-linalg's contract.
-
-### `pub fn from_vec(vec: Vec < f64 >) -> Self` (impl DiagStorageF64)
-
-### `pub fn as_slice(&self) -> & [f64]` (impl DiagStorageF64)
-
-### `pub fn as_mut_slice(&mut self) -> & mut [f64]` (impl DiagStorageF64)
-
-### `pub fn into_vec(self) -> Vec < f64 >` (impl DiagStorageF64)
-
-### `pub fn len(&self) -> usize` (impl DiagStorageF64)
-
-### `pub fn get(&self, i: usize) -> f64` (impl DiagStorageF64)
-
-### `pub fn set(&mut self, i: usize, val: f64)` (impl DiagStorageF64)
-
-### `pub fn to_dense_vec(&self, dims: & [usize]) -> Vec < f64 >` (impl DiagStorageF64)
-
-Convert diagonal storage to a dense vector representation. Creates a dense vector with diagonal elements set and off-diagonal elements as zero.
-
-### `pub fn contract_diag_diag(&self, dims: & [usize], other: & Self, other_dims: & [usize], result_dims: & [usize]) -> Storage` (impl DiagStorageF64)
-
-Contract this diagonal storage with another diagonal storage. Returns either a scalar (DenseStorageF64 with one element) or a diagonal storage.
-
-### `pub fn from_vec(vec: Vec < Complex64 >) -> Self` (impl DiagStorageC64)
-
-### `pub fn as_slice(&self) -> & [Complex64]` (impl DiagStorageC64)
-
-### `pub fn as_mut_slice(&mut self) -> & mut [Complex64]` (impl DiagStorageC64)
-
-### `pub fn into_vec(self) -> Vec < Complex64 >` (impl DiagStorageC64)
-
-### `pub fn len(&self) -> usize` (impl DiagStorageC64)
-
-### `pub fn get(&self, i: usize) -> Complex64` (impl DiagStorageC64)
-
-### `pub fn set(&mut self, i: usize, val: Complex64)` (impl DiagStorageC64)
-
-### `pub fn to_dense_vec(&self, dims: & [usize]) -> Vec < Complex64 >` (impl DiagStorageC64)
-
-Convert diagonal storage to a dense vector representation. Creates a dense vector with diagonal elements set and off-diagonal elements as zero.
-
-### `pub fn contract_diag_diag(&self, dims: & [usize], other: & Self, other_dims: & [usize], result_dims: & [usize]) -> Storage` (impl DiagStorageC64)
-
-Contract this diagonal storage with another diagonal storage. Returns either a scalar (DenseStorageC64 with one element) or a diagonal storage.
-
-### `pub fn new_dense(capacity: usize) -> Storage` (trait DenseStorageFactory)
-
-### ` fn new_dense(capacity: usize) -> Storage` (impl f64)
-
-### ` fn new_dense(capacity: usize) -> Storage` (impl Complex64)
-
-### `pub fn sum_from_storage(storage: & Storage) -> Self` (trait SumFromStorage)
-
-### ` fn sum_from_storage(storage: & Storage) -> Self` (impl f64)
-
-### ` fn sum_from_storage(storage: & Storage) -> Self` (impl Complex64)
-
-### `pub fn new_dense_f64(capacity: usize) -> Self` (impl Storage)
-
-Create a new DenseF64 storage with the given capacity.
-
-### `pub fn new_dense_c64(capacity: usize) -> Self` (impl Storage)
-
-Create a new DenseC64 storage with the given capacity.
-
-### `pub fn new_diag_f64(diag_data: Vec < f64 >) -> Self` (impl Storage)
-
-Create a new DiagF64 storage with the given diagonal data.
-
-### `pub fn new_diag_c64(diag_data: Vec < Complex64 >) -> Self` (impl Storage)
-
-Create a new DiagC64 storage with the given diagonal data.
-
-### `pub fn is_diag(&self) -> bool` (impl Storage)
-
-Check if this storage is a Diag storage type.
-
-### `pub fn len(&self) -> usize` (impl Storage)
-
-Get the length of the storage (number of elements).
-
-### `pub fn sum_f64(&self) -> f64` (impl Storage)
-
-Sum all elements as f64.
-
-### `pub fn sum_c64(&self) -> Complex64` (impl Storage)
-
-Sum all elements as Complex64.
-
-### `pub fn to_dense_storage(&self, dims: & [usize]) -> Storage` (impl Storage)
-
-Convert this storage to dense storage. For Diag storage, creates a Dense storage with diagonal elements set and off-diagonal elements as zero.
-
-### `pub fn permute_storage(&self, dims: & [usize], perm: & [usize]) -> Storage` (impl Storage)
-
-Permute the storage data according to the given permutation.
-
-### `pub fn extract_real_part(&self) -> Storage` (impl Storage)
-
-Extract real part from Complex64 storage as f64 storage. For f64 storage, returns a copy.
-
-### `pub fn extract_imag_part(&self, dims: & [usize]) -> Storage` (impl Storage)
-
-Extract imaginary part from Complex64 storage as f64 storage. For f64 storage, returns zero storage (will be resized appropriately).
-
-### `pub fn to_complex_storage(&self) -> Storage` (impl Storage)
-
-Convert f64 storage to Complex64 storage (real part only, imaginary part is zero). For Complex64 storage, returns a copy.
-
-### `pub fn conj(&self) -> Self` (impl Storage)
-
-Complex conjugate of all elements. For real (f64) storage, returns a copy (conjugate of real is identity). For complex (Complex64) storage, conjugates each element.
-
-### `pub fn combine_to_complex(real_storage: & Storage, imag_storage: & Storage) -> Storage` (impl Storage)
-
-Combine two f64 storages into Complex64 storage. real_storage becomes the real part, imag_storage becomes the imaginary part. Formula: real + i * imag
-
-### `pub fn try_add(&self, other: & Storage) -> Result < Storage , String >` (impl Storage)
-
-Add two storages element-wise, returning `Result` on error instead of panicking. Both storages must have the same type and length.
-
-### `pub fn make_mut_storage(arc: & mut Arc < Storage >) -> & mut Storage`
-
-Helper to get a mutable reference to storage, cloning if needed (COW).
-
-### `pub fn mindim(dims: & [usize]) -> usize`
-
-Get the minimum dimension from a slice of dimensions. This is used for DiagTensor where all indices must have the same dimension.
-
-### `pub fn contract_storage(storage_a: & Storage, dims_a: & [usize], axes_a: & [usize], storage_b: & Storage, dims_b: & [usize], axes_b: & [usize], result_dims: & [usize]) -> Storage`
-
-Contract two storage tensors along specified axes. This is an internal helper function that contracts two `Storage` tensors. For Dense tensors, uses mdarray-linalg's contract method.
-
-### `pub fn extract_dense_view(storage: & 'a Storage) -> Result < & 'a [Self] , String >` (trait StorageScalar)
-
-Extract a borrowed view of dense storage data (no copy). Returns an error if the storage is not the matching dense type.
-
-### `pub fn extract_dense_cow(storage: & 'a Storage) -> Result < Cow < 'a , [Self] > , String >` (trait StorageScalar default)
-
-Extract dense storage data as `Cow` (borrowed if possible, owned if needed). For dense storage, returns `Cow::Borrowed` (no copy). For other storage types, may need to convert to dense first (copy).
-
-### `pub fn extract_dense(storage: & Storage) -> Result < Vec < Self > , String >` (trait StorageScalar default)
-
-Extract dense storage data as owned `Vec` (always copies). This is a convenience method that calls `extract_dense_cow` and converts to owned.
-
-### `pub fn dense_storage(data: Vec < Self >) -> Arc < Storage >` (trait StorageScalar)
-
-Create `Storage` from owned dense data.
-
-### `pub fn storage_to_dtensor(storage: & Storage, shape: [usize ; 2]) -> Result < DTensor < T , 2 > , String >`
-
-Convert dense storage to a DTensor with rank 2. This function extracts data from dense storage and reshapes it into a `DTensor<T, 2>` with the specified shape `[m, n]`. The data length must match `m * n`.
-
-### ` fn extract_dense_view(storage: & 'a Storage) -> Result < & 'a [Self] , String >` (impl f64)
-
-### ` fn dense_storage(data: Vec < Self >) -> Arc < Storage >` (impl f64)
-
-### ` fn extract_dense_view(storage: & 'a Storage) -> Result < & 'a [Self] , String >` (impl Complex64)
-
-### ` fn dense_storage(data: Vec < Self >) -> Arc < Storage >` (impl Complex64)
-
-### ` fn add(self, rhs: & Storage) -> Self :: Output` (impl & Storage)
-
-### ` fn mul(self, scalar: f64) -> Self :: Output` (impl & Storage)
-
-### ` fn mul(self, scalar: Complex64) -> Self :: Output` (impl & Storage)
-
-### ` fn mul(self, scalar: AnyScalar) -> Self :: Output` (impl & Storage)
-
-## src/svd.rs
-
-### ` fn default() -> Self` (impl SvdOptions)
-
-### `pub fn with_rtol(rtol: f64) -> Self` (impl SvdOptions)
-
-Create new SVD options with the specified rtol.
-
-### `pub fn default_svd_rtol() -> f64`
-
-Get the global default rtol for SVD truncation. The default value is 1e-12 (near machine precision).
-
-### `pub fn set_default_svd_rtol(rtol: f64) -> Result < () , SvdError >`
-
-Set the global default rtol for SVD truncation.
-
-### ` fn compute_retained_rank(s_vec: & [f64], rtol: f64) -> usize`
-
-Compute the retained rank based on rtol (TSVD truncation). This implements the truncation criterion: sum_{i>r} σ_i² / sum_i σ_i² <= rtol²
-
-### ` fn extract_usv_from_svd_decomp(decomp: SVDDecomp < T >, m: usize, n: usize, k: usize) -> (Vec < T > , Vec < f64 > , Vec < T >)`
-
-Extract U, S, V from mdarray-linalg's SVDDecomp (which returns U, S, Vt). This helper function converts the backend's SVD result to our desired format: - Extracts singular values from the diagonal view (first row)
-
-### `pub fn svd(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >]) -> Result < (TensorDynLen < Id , Symm > , TensorDynLen < Id , Symm > , TensorDynLen < Id , Symm > ,) , SvdError , >`
-
-Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V). This function uses the global default rtol for truncation. See `svd_with` for per-call rtol control.
-
-### `pub fn svd_with(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >], options: & SvdOptions) -> Result < (TensorDynLen < Id , Symm > , TensorDynLen < Id , Symm > , TensorDynLen < Id , Symm > ,) , SvdError , >`
-
-Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V). This function allows per-call control of the truncation tolerance via `SvdOptions`. If `options.rtol` is `None`, uses the global default rtol.
-
-### `pub fn svd_c64(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >]) -> Result < (TensorDynLen < Id , Symm > , TensorDynLen < Id , Symm > , TensorDynLen < Id , Symm > ,) , SvdError , >`
-
-Compute SVD decomposition of a complex tensor with arbitrary rank, returning (U, S, V). This is a convenience wrapper around the generic `svd` function for `Complex64` tensors. For complex-valued matrices, the mathematical convention is:
 
 ## src/tagset.rs
 
@@ -988,189 +996,191 @@ Internal: Check if a tag is present (binary search).
 
 ### ` fn eq(&self, other: & Self) -> bool` (impl TagSet < MAX_TAGS , MAX_TAG_LEN , C >)
 
-## src/tensor.rs
+## src/tensor_index.rs
 
-### `pub fn compute_permutation_from_indices(original_indices: & [Index < Id , Symm >], new_indices: & [Index < Id , Symm >]) -> Vec < usize >`
+### `pub fn external_indices(&self) -> Vec < Self :: Index >` (trait TensorIndex)
 
-Compute the permutation array from original indices to new indices. This function finds the mapping from new indices to original indices by matching index IDs. The result is a permutation array `perm` such that
+Return flattened external indices for this object.
 
-### `pub fn indices(&self) -> & [Index < Self :: Id , Self :: Symm >]` (trait TensorAccess)
-
-Get a reference to the indices.
-
-### `pub fn storage(&self) -> & Storage` (trait TensorAccess)
-
-Get a reference to the storage.
-
-### ` fn indices(&self) -> & [Index < Self :: Id , Self :: Symm >]` (impl TensorDynLen < Id , Symm >)
-
-### ` fn storage(&self) -> & Storage` (impl TensorDynLen < Id , Symm >)
-
-### `pub fn new(indices: Vec < Index < Id , Symm > >, dims: Vec < usize >, storage: Arc < Storage >) -> Self` (impl TensorDynLen < Id , Symm >)
-
-Create a new tensor with dynamic rank. Dimensions are automatically computed from the indices using `Index::size()`.
-
-### `pub fn from_indices(indices: Vec < Index < Id , Symm > >, storage: Arc < Storage >) -> Self` (impl TensorDynLen < Id , Symm >)
-
-Create a new tensor with dynamic rank, automatically computing dimensions from indices. This is a convenience constructor that extracts dimensions from indices using `Index::size()`.
-
-### `pub fn storage_mut(&mut self) -> & mut Storage` (impl TensorDynLen < Id , Symm >)
-
-Get a mutable reference to storage (COW: clones if shared).
-
-### `pub fn sum(&self) -> AnyScalar` (impl TensorDynLen < Id , Symm >)
-
-Sum all elements, returning `AnyScalar`.
-
-### `pub fn sum_f64(&self) -> f64` (impl TensorDynLen < Id , Symm >)
-
-Sum all elements as f64.
-
-### `pub fn only(&self) -> AnyScalar` (impl TensorDynLen < Id , Symm >)
-
-Extract the scalar value from a 0-dimensional tensor (or 1-element tensor). This is similar to Julia's `only()` function.
-
-### `pub fn permute_indices(&self, new_indices: & [Index < Id , Symm >]) -> Self` (impl TensorDynLen < Id , Symm >)
-
-Permute the tensor dimensions using the given new indices order. This is the main permutation method that takes the desired new indices and automatically computes the corresponding permutation of dimensions
-
-### `pub fn permute(&self, perm: & [usize]) -> Self` (impl TensorDynLen < Id , Symm >)
-
-Permute the tensor dimensions, returning a new tensor. This method reorders the indices, dimensions, and data according to the given permutation. The permutation specifies which old axis each new
-
-### `pub fn contract(&self, other: & Self) -> Self` (impl TensorDynLen < Id , Symm >)
-
-Contract this tensor with another tensor along common indices. This method finds common indices between `self` and `other`, then contracts along those indices. The result tensor contains all non-contracted indices
-
-### `pub fn tensordot(&self, other: & Self, pairs: & [(Index < Id , Symm > , Index < Id , Symm >)]) -> Result < Self >` (impl TensorDynLen < Id , Symm >)
-
-Contract this tensor with another tensor along explicitly specified index pairs. Similar to NumPy's `tensordot`, this method contracts only along the explicitly specified pairs of indices. Unlike `contract()` which automatically contracts
-
-### `pub fn outer_product(&self, other: & Self) -> Result < Self >` (impl TensorDynLen < Id , Symm >)
-
-Compute the outer product (tensor product) of two tensors. Creates a new tensor whose indices are the concatenation of the indices from both input tensors. The result has shape `[...self.dims, ...other.dims]`.
-
-### `pub fn random_f64(rng: & mut R, indices: Vec < Index < Id , Symm > >) -> Self` (impl TensorDynLen < Id , Symm >)
-
-Create a random f64 tensor with values from standard normal distribution.
-
-### `pub fn random_c64(rng: & mut R, indices: Vec < Index < Id , Symm > >) -> Self` (impl TensorDynLen < Id , Symm >)
-
-Create a random Complex64 tensor with values from standard normal distribution. Both real and imaginary parts are drawn from standard normal distribution.
-
-### ` fn mul(self, other: & TensorDynLen < Id , Symm >) -> Self :: Output` (impl & TensorDynLen < Id , Symm >)
-
-### ` fn mul(self, other: TensorDynLen < Id , Symm >) -> Self :: Output` (impl TensorDynLen < Id , Symm >)
-
-### ` fn mul(self, other: TensorDynLen < Id , Symm >) -> Self :: Output` (impl & TensorDynLen < Id , Symm >)
-
-### ` fn mul(self, other: & TensorDynLen < Id , Symm >) -> Self :: Output` (impl TensorDynLen < Id , Symm >)
-
-### `pub fn is_diag_tensor(tensor: & TensorDynLen < Id , Symm >) -> bool`
-
-Check if a tensor is a DiagTensor (has Diag storage).
-
-### `pub fn add(&self, other: & Self) -> Result < Self >` (impl TensorDynLen < Id , Symm >)
-
-Add two tensors element-wise. The tensors must have the same index set (matched by ID). If the indices are in a different order, the other tensor will be permuted to match `self`.
-
-### ` fn clone(&self) -> Self` (impl TensorDynLen < Id , Symm >)
-
-### `pub fn replaceind(&self, old_index: & Index < Id , Symm >, new_index: & Index < Id , Symm >) -> Self` (impl TensorDynLen < Id , Symm >)
-
-Replace an index in the tensor with a new index. This replaces the index matching `old_index` by ID with `new_index`. The storage data is not modified, only the index metadata is changed.
-
-### `pub fn replaceinds(&self, old_indices: & [Index < Id , Symm >], new_indices: & [Index < Id , Symm >]) -> Self` (impl TensorDynLen < Id , Symm >)
-
-Replace multiple indices in the tensor. This replaces each index in `old_indices` (matched by ID) with the corresponding index in `new_indices`. The storage data is not modified.
-
-### `pub fn conj(&self) -> Self` (impl TensorDynLen < Id , Symm >)
-
-Complex conjugate of all tensor elements. For real (f64) tensors, returns a copy (conjugate of real is identity). For complex (Complex64) tensors, conjugates each element.
-
-### `pub fn norm_squared(&self) -> f64` (impl TensorDynLen < Id , Symm >)
-
-Compute the squared Frobenius norm of the tensor: ||T||² = Σ|T_ijk...|² For real tensors: sum of squares of all elements. For complex tensors: sum of |z|² = z * conj(z) for all elements.
-
-### `pub fn norm(&self) -> f64` (impl TensorDynLen < Id , Symm >)
-
-Compute the Frobenius norm of the tensor: ||T|| = sqrt(Σ|T_ijk...|²)
-
-### `pub fn distance(&self, other: & Self) -> f64` (impl TensorDynLen < Id , Symm >)
-
-Compute the relative distance between two tensors. Returns `||A - B|| / ||A||` (Frobenius norm). If `||A|| = 0`, returns `||B||` instead to avoid division by zero.
-
-### ` fn fmt(&self, f: & mut std :: fmt :: Formatter < '_ >) -> std :: fmt :: Result` (impl TensorDynLen < Id , Symm >)
-
-### `pub fn diag_tensor_dyn_len(indices: Vec < Index < Id , Symm > >, diag_data: Vec < f64 >) -> TensorDynLen < Id , Symm >`
-
-Create a DiagTensor with dynamic rank from diagonal data.
-
-### `pub fn diag_tensor_dyn_len_c64(indices: Vec < Index < Id , Symm > >, diag_data: Vec < Complex64 >) -> TensorDynLen < Id , Symm >`
-
-Create a DiagTensor with dynamic rank from complex diagonal data.
-
-### `pub fn unfold_split(t: & TensorDynLen < Id , Symm >, left_inds: & [Index < Id , Symm >]) -> Result < (DTensor < T , 2 > , usize , usize , usize , Vec < Index < Id , Symm > > , Vec < Index < Id , Symm > > ,) >`
-
-Unfold a tensor into a matrix by splitting indices into left and right groups. This function validates the split, permutes the tensor so that left indices come first, and returns a 2D matrix tensor (`DTensor<T, 2>`) along with metadata.
-
-## src/tensor_like.rs
-
-### `pub fn external_indices(&self) -> Vec < Index < Self :: Id , Self :: Symm , Self :: Tags > >` (trait TensorLike)
-
-Return flattened external indices for this object. - For `TensorDynLen`: returns the tensor's indices - For `TreeTN`: returns union of all site/physical indices across nodes
-
-### `pub fn num_external_indices(&self) -> usize` (trait TensorLike default)
+### `pub fn num_external_indices(&self) -> usize` (trait TensorIndex default)
 
 Number of external indices. Default implementation calls `external_indices().len()`, but implementations SHOULD override this for efficiency when the count can be computed without
 
-### `pub fn to_tensor(&self) -> Result < TensorDynLen < Self :: Id , Self :: Symm > >` (trait TensorLike)
+### `pub fn replaceind(&self, old_index: & Self :: Index, new_index: & Self :: Index) -> Result < Self >` (trait TensorIndex)
 
-Convert this object to a dense tensor. - For `TensorDynLen`: returns a clone of self - For `TreeTN`: contracts all nodes to produce a single tensor
+Replace an index in this object. This replaces the index matching `old_index` by ID with `new_index`. The storage data is not modified, only the index metadata is changed.
 
-### `pub fn as_any(&self) -> & dyn Any` (trait TensorLike)
+### `pub fn replaceinds(&self, old_indices: & [Self :: Index], new_indices: & [Self :: Index]) -> Result < Self >` (trait TensorIndex)
 
-Return `self` as `Any` for optional downcasting / runtime type inspection. This allows callers to attempt downcasting a trait object back to its concrete type when needed (similar to C++'s `dynamic_cast`).
+Replace multiple indices in this object. This replaces each index in `old_indices` (matched by ID) with the corresponding index in `new_indices`. The storage data is not modified.
 
-### `pub fn replaceind(&self, old_index: & Index < Self :: Id , Self :: Symm , Self :: Tags >, new_index: & Index < Self :: Id , Self :: Symm , Self :: Tags >) -> Result < TensorDynLen < Self :: Id , Self :: Symm > >` (trait TensorLike default)
+### `pub fn replaceinds_pairs(&self, pairs: & [(Self :: Index , Self :: Index)]) -> Result < Self >` (trait TensorIndex default)
 
-Replace an index in this tensor-like object. This replaces the index matching `old_index` by ID with `new_index`. The storage data is not modified, only the index metadata is changed.
+Replace indices using pairs of (old, new). This is a convenience method that wraps `replaceinds`.
 
-### `pub fn replaceinds(&self, old_indices: & [Index < Self :: Id , Self :: Symm , Self :: Tags >], new_indices: & [Index < Self :: Id , Self :: Symm , Self :: Tags >]) -> Result < TensorDynLen < Self :: Id , Self :: Symm > >` (trait TensorLike default)
+## src/tensor_like.rs
 
-Replace multiple indices in this tensor-like object. This replaces each index in `old_indices` (matched by ID) with the corresponding index in `new_indices`. The storage data is not modified.
+### ` fn default() -> Self` (impl FactorizeOptions)
 
-### `pub fn tensordot(&self, other: & dyn TensorLike < Id = Self :: Id , Symm = Self :: Symm , Tags = Self :: Tags >, pairs: & [(Index < Self :: Id , Self :: Symm , Self :: Tags > , Index < Self :: Id , Self :: Symm , Self :: Tags > ,)]) -> Result < TensorDynLen < Self :: Id , Self :: Symm > >` (trait TensorLike default)
+### `pub fn svd() -> Self` (impl FactorizeOptions)
 
-Explicit contraction between two tensor-like objects. This performs binary contraction over the specified index pairs. Each pair `(idx_self, idx_other)` specifies:
+Create options for SVD factorization.
 
-### `pub fn is(&self) -> bool` (trait TensorLikeDowncast)
+### `pub fn qr() -> Self` (impl FactorizeOptions)
 
-Check if the underlying type is `T`.
+Create options for QR factorization.
 
-### `pub fn downcast_ref(&self) -> Option < & T >` (trait TensorLikeDowncast)
+### `pub fn lu() -> Self` (impl FactorizeOptions)
 
-Attempt to downcast to a reference of type `T`.
+Create options for LU factorization.
 
-### ` fn is(&self) -> bool` (impl dyn TensorLike < Id = Id , Symm = Symm , Tags = Tags >)
+### `pub fn ci() -> Self` (impl FactorizeOptions)
 
-### ` fn downcast_ref(&self) -> Option < & T >` (impl dyn TensorLike < Id = Id , Symm = Symm , Tags = Tags >)
+Create options for CI factorization.
 
-### ` fn is(&self) -> bool` (impl dyn TensorLike < Id = Id , Symm = Symm , Tags = Tags > + Send)
+### `pub fn with_canonical(mut self, canonical: Canonical) -> Self` (impl FactorizeOptions)
 
-### ` fn downcast_ref(&self) -> Option < & T >` (impl dyn TensorLike < Id = Id , Symm = Symm , Tags = Tags > + Send)
+Set canonical direction.
 
-### ` fn is(&self) -> bool` (impl dyn TensorLike < Id = Id , Symm = Symm , Tags = Tags > + Send + Sync)
+### `pub fn with_rtol(mut self, rtol: f64) -> Self` (impl FactorizeOptions)
 
-### ` fn downcast_ref(&self) -> Option < & T >` (impl dyn TensorLike < Id = Id , Symm = Symm , Tags = Tags > + Send + Sync)
+Set relative tolerance.
 
-### ` fn external_indices(&self) -> Vec < Index < Self :: Id , Self :: Symm , Self :: Tags > >` (impl TensorDynLen < Id , Symm >)
+### `pub fn with_max_rank(mut self, max_rank: usize) -> Self` (impl FactorizeOptions)
 
-### ` fn num_external_indices(&self) -> usize` (impl TensorDynLen < Id , Symm >)
+Set maximum rank.
 
-### ` fn to_tensor(&self) -> Result < TensorDynLen < Self :: Id , Self :: Symm > >` (impl TensorDynLen < Id , Symm >)
+### `pub fn factorize(&self, left_inds: & [< Self as TensorIndex > :: Index], options: & FactorizeOptions) -> std :: result :: Result < FactorizeResult < Self > , FactorizeError >` (trait TensorLike)
 
-### ` fn as_any(&self) -> & dyn Any` (impl TensorDynLen < Id , Symm >)
+Factorize this tensor into left and right factors. This function dispatches to the appropriate algorithm based on `options.alg`: - `SVD`: Singular Value Decomposition
 
-### ` fn _assert_object_safe()`
+### `pub fn conj(&self) -> Self` (trait TensorLike)
+
+Tensor conjugate operation. This is a generalized conjugate operation that depends on the tensor type: - For dense tensors (TensorDynLen): element-wise complex conjugate
+
+### `pub fn direct_sum(&self, other: & Self, pairs: & [(< Self as TensorIndex > :: Index , < Self as TensorIndex > :: Index)]) -> Result < DirectSumResult < Self > >` (trait TensorLike)
+
+Direct sum of two tensors along specified index pairs. For tensors A and B with indices to be summed specified as pairs, creates a new tensor C where each paired index has dimension = dim_A + dim_B.
+
+### `pub fn outer_product(&self, other: & Self) -> Result < Self >` (trait TensorLike)
+
+Outer product (tensor product) of two tensors. Computes the tensor product of `self` and `other`, resulting in a tensor with all indices from both tensors. No indices are contracted.
+
+### `pub fn norm_squared(&self) -> f64` (trait TensorLike)
+
+Compute the squared Frobenius norm of the tensor. The squared Frobenius norm is defined as the sum of squared absolute values of all tensor elements: `||T||_F^2 = sum_i |T_i|^2`.
+
+### `pub fn permuteinds(&self, new_order: & [< Self as TensorIndex > :: Index]) -> Result < Self >` (trait TensorLike)
+
+Permute tensor indices to match the specified order. This reorders the tensor's axes to match the order specified by `new_order`. The indices in `new_order` are matched by ID with the tensor's current indices.
+
+### `pub fn contract(tensors: & [Self], allowed: AllowedPairs < '_ >) -> Result < Self >` (trait TensorLike)
+
+Contract multiple tensors over their contractable indices. This method contracts 2 or more tensors. Pairs of indices that satisfy `is_contractable()` (same ID, same dimension, compatible ConjState)
+
+### `pub fn contract_connected(tensors: & [Self], allowed: AllowedPairs < '_ >) -> Result < Self >` (trait TensorLike)
+
+Contract multiple tensors that must form a connected graph. This is the core contraction method that requires all tensors to be connected through contractable indices. Use [`contract`] if you want
+
+### `pub fn axpby(&self, a: AnyScalar, other: & Self, b: AnyScalar) -> Result < Self >` (trait TensorLike)
+
+Compute a linear combination: `a * self + b * other`. This is the fundamental vector space operation.
+
+### `pub fn scale(&self, scalar: AnyScalar) -> Result < Self >` (trait TensorLike)
+
+Scalar multiplication.
+
+### `pub fn inner_product(&self, other: & Self) -> Result < AnyScalar >` (trait TensorLike)
+
+Inner product (dot product) of two tensors. Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
+
+### `pub fn norm(&self) -> f64` (trait TensorLike default)
+
+Compute the Frobenius norm of the tensor.
+
+### `pub fn diagonal(input_index: & < Self as TensorIndex > :: Index, output_index: & < Self as TensorIndex > :: Index) -> Result < Self >` (trait TensorLike)
+
+Create a diagonal (Kronecker delta) tensor for a single index pair. Creates a 2D tensor `T[i, o]` where `T[i, o] = δ_{i,o}` (1 if i==o, 0 otherwise).
+
+### `pub fn delta(input_indices: & [< Self as TensorIndex > :: Index], output_indices: & [< Self as TensorIndex > :: Index]) -> Result < Self >` (trait TensorLike default)
+
+Create a delta (identity) tensor as outer product of diagonals. For paired indices `(i1, o1), (i2, o2), ...`, creates a tensor where: `T[i1, o1, i2, o2, ...] = δ_{i1,o1} × δ_{i2,o2} × ...`
+
+### `pub fn scalar_one() -> Result < Self >` (trait TensorLike)
+
+Create a scalar tensor with value 1.0. This is used as the identity element for outer products.
+
+### `pub fn ones(indices: & [< Self as TensorIndex > :: Index]) -> Result < Self >` (trait TensorLike)
+
+Create a tensor filled with 1.0 for the given indices. This is useful for adding indices to tensors via outer product without changing tensor values (since multiplying by 1 is identity).
+
+### ` fn _assert_sized()`
+
+## src/truncation.rs
+
+### `pub fn is_svd_based(&self) -> bool` (impl DecompositionAlg)
+
+Check if this algorithm is SVD-based (SVD or RSVD).
+
+### `pub fn is_orthogonal(&self) -> bool` (impl DecompositionAlg)
+
+Check if this algorithm provides orthogonal factors.
+
+### `pub fn new() -> Self` (impl TruncationParams)
+
+Create new truncation parameters with default values.
+
+### `pub fn with_rtol(mut self, rtol: f64) -> Self` (impl TruncationParams)
+
+Set the relative tolerance.
+
+### `pub fn with_max_rank(mut self, max_rank: usize) -> Self` (impl TruncationParams)
+
+Set the maximum rank.
+
+### `pub fn effective_rtol(&self, default: f64) -> f64` (impl TruncationParams)
+
+Get the effective rtol, using the provided default if not set.
+
+### `pub fn effective_max_rank(&self) -> usize` (impl TruncationParams)
+
+Get the effective max_rank, using usize::MAX if not set.
+
+### `pub fn merge(&self, other: & Self) -> Self` (impl TruncationParams)
+
+Merge with another set of parameters, preferring self's values.
+
+### `pub fn truncation_params(&self) -> & TruncationParams` (trait HasTruncationParams)
+
+Get a reference to the truncation parameters.
+
+### `pub fn truncation_params_mut(&mut self) -> & mut TruncationParams` (trait HasTruncationParams)
+
+Get a mutable reference to the truncation parameters.
+
+### `pub fn rtol(&self) -> Option < f64 >` (trait HasTruncationParams default)
+
+Get the rtol value.
+
+### `pub fn max_rank(&self) -> Option < usize >` (trait HasTruncationParams default)
+
+Get the max_rank value.
+
+### `pub fn with_rtol(mut self, rtol: f64) -> Self` (trait HasTruncationParams default)
+
+Set the rtol value (builder pattern).
+
+### `pub fn with_max_rank(mut self, max_rank: usize) -> Self` (trait HasTruncationParams default)
+
+Set the max_rank value (builder pattern).
+
+### ` fn truncation_params(&self) -> & TruncationParams` (impl TruncationParams)
+
+### ` fn truncation_params_mut(&mut self) -> & mut TruncationParams` (impl TruncationParams)
+
+### ` fn test_truncation_params_builder()`
+
+### ` fn test_effective_values()`
+
+### ` fn test_decomposition_alg()`
 
