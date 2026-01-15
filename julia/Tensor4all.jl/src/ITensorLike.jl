@@ -491,9 +491,9 @@ function contract(tt1::TensorTrain, tt2::TensorTrain;
                   method::Union{Symbol, AbstractString, Integer}=:zipup,
                   maxdim::Integer=0,
                   rtol::Real=0.0,
-                  nsweeps::Integer=2)
+                  nhalfsweeps::Integer=2)
     method_int = _contract_method_to_int(method)
-    ptr = C_API.t4a_tt_contract(tt1.ptr, tt2.ptr, method_int, maxdim, Float64(rtol), nsweeps)
+    ptr = C_API.t4a_tt_contract(tt1.ptr, tt2.ptr, method_int, maxdim, Float64(rtol), nhalfsweeps)
     ptr == C_NULL && error("Tensor train contraction failed")
     return TensorTrain(ptr)
 end

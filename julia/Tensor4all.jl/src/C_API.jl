@@ -826,15 +826,15 @@ function t4a_tt_inner(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, out_re::Ref{Cdouble}, 
 end
 
 """
-    t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, max_rank::Integer, rtol::Float64, nsweeps::Integer) -> Ptr{Cvoid}
+    t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, max_rank::Integer, rtol::Float64, nhalfsweeps::Integer) -> Ptr{Cvoid}
 
 Contract two tensor trains.
 method: 0=Zipup, 1=Fit
 max_rank: maximum bond dimension (use 0 for no limit)
 rtol: relative tolerance (use 0.0 for default)
-nsweeps: number of sweeps for Fit method
+nhalfsweeps: number of half-sweeps for Fit method (must be a multiple of 2)
 """
-function t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, max_rank::Integer, rtol::Float64, nsweeps::Integer)
+function t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, max_rank::Integer, rtol::Float64, nhalfsweeps::Integer)
     return ccall(
         (:t4a_tt_contract, libpath()),
         Ptr{Cvoid},
@@ -844,7 +844,7 @@ function t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, ma
         Cint(method),
         Csize_t(max_rank),
         rtol,
-        Csize_t(nsweeps)
+        Csize_t(nhalfsweeps)
     )
 end
 

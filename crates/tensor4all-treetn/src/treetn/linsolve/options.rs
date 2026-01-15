@@ -5,8 +5,10 @@ use crate::TruncationOptions;
 /// Options for the linsolve algorithm.
 #[derive(Debug, Clone)]
 pub struct LinsolveOptions {
-    /// Number of sweeps to perform.
-    pub nsweeps: usize,
+    /// Number of full sweeps to perform.
+    ///
+    /// A full sweep visits each edge twice (forward and backward) using an Euler tour.
+    pub nfullsweeps: usize,
     /// Truncation options for factorization.
     pub truncation: TruncationOptions,
     /// Tolerance for GMRES convergence.
@@ -27,7 +29,7 @@ pub struct LinsolveOptions {
 impl Default for LinsolveOptions {
     fn default() -> Self {
         Self {
-            nsweeps: 10,
+            nfullsweeps: 5,
             truncation: TruncationOptions::default(),
             krylov_tol: 1e-10,
             krylov_maxiter: 100,
@@ -40,17 +42,17 @@ impl Default for LinsolveOptions {
 }
 
 impl LinsolveOptions {
-    /// Create new options with specified number of sweeps.
-    pub fn new(nsweeps: usize) -> Self {
+    /// Create new options with specified number of full sweeps.
+    pub fn new(nfullsweeps: usize) -> Self {
         Self {
-            nsweeps,
+            nfullsweeps,
             ..Default::default()
         }
     }
 
-    /// Set number of sweeps.
-    pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
-        self.nsweeps = nsweeps;
+    /// Set number of full sweeps.
+    pub fn with_nfullsweeps(mut self, nfullsweeps: usize) -> Self {
+        self.nfullsweeps = nfullsweeps;
         self
     }
 
@@ -111,7 +113,7 @@ mod tests {
     #[test]
     fn test_default_options() {
         let opts = LinsolveOptions::default();
-        assert_eq!(opts.nsweeps, 10);
+        assert_eq!(opts.nfullsweeps, 5);
         assert_eq!(opts.a0, 0.0);
         assert_eq!(opts.a1, 1.0);
         assert!(opts.convergence_tol.is_none());
@@ -125,7 +127,7 @@ mod tests {
             .with_coefficients(1.0, -1.0)
             .with_convergence_tol(1e-6);
 
-        assert_eq!(opts.nsweeps, 5);
+        assert_eq!(opts.nfullsweeps, 5);
         assert_eq!(opts.truncation.max_rank(), Some(100));
         assert_eq!(opts.krylov_tol, 1e-8);
         assert_eq!(opts.a0, 1.0);

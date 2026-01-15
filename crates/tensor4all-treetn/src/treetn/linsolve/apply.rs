@@ -42,8 +42,10 @@ pub struct ApplyOptions {
     pub max_rank: Option<usize>,
     /// Relative tolerance for truncation.
     pub rtol: Option<f64>,
-    /// Number of sweeps for Fit method.
-    pub nsweeps: usize,
+    /// Number of full sweeps for Fit method.
+    ///
+    /// A full sweep visits each edge twice (forward and backward) using an Euler tour.
+    pub nfullsweeps: usize,
     /// Convergence tolerance for Fit method.
     pub convergence_tol: Option<f64>,
 }
@@ -54,7 +56,7 @@ impl Default for ApplyOptions {
             method: ContractionMethod::Zipup,
             max_rank: None,
             rtol: None,
-            nsweeps: 2,
+            nfullsweeps: 1,
             convergence_tol: None,
         }
     }
@@ -94,9 +96,9 @@ impl ApplyOptions {
         self
     }
 
-    /// Set number of sweeps for Fit method.
-    pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
-        self.nsweeps = nsweeps;
+    /// Set number of full sweeps for Fit method.
+    pub fn with_nfullsweeps(mut self, nfullsweeps: usize) -> Self {
+        self.nfullsweeps = nfullsweeps;
         self
     }
 }
@@ -177,7 +179,7 @@ where
         method: options.method,
         max_rank: options.max_rank,
         rtol: options.rtol,
-        nsweeps: options.nsweeps,
+        nfullsweeps: options.nfullsweeps,
         convergence_tol: options.convergence_tol,
         ..Default::default()
     };
