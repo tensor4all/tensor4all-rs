@@ -514,6 +514,289 @@ where
         Ok(result)
     }
 
+    /// Contract two TreeTNs using zip-up algorithm with accumulated intermediate tensors.
+    ///
+    /// This is an improved version of zip-up contraction that maintains intermediate tensors
+    /// (environment tensors) as it processes from leaves towards the root, similar to
+    /// ITensors.jl's MPO zip-up algorithm.
+    ///
+    /// # Algorithm
+    /// 1. Process leaves: contract A[leaf] * B[leaf], factorize, store R at parent
+    /// 2. Process internal nodes: contract [R_accumulated..., A[node], B[node]], factorize, store R_new at parent
+    /// 3. Process root: contract [R_list..., A[root], B[root]], store as final result
+    /// 4. Set canonical center
+    ///
+    /// # Arguments
+    /// * `other` - The other TreeTN to contract with (must have same topology)
+    /// * `center` - The center node name towards which to contract
+    /// * `form` - Canonical form (Unitary/LU/CI)
+    /// * `rtol` - Optional relative tolerance for truncation
+    /// * `max_rank` - Optional maximum bond dimension
+    ///
+    /// # Returns
+    /// The contracted TreeTN result, or an error if topologies don't match or contraction fails.
+    pub fn contract_zipup_tree_accumulated(
+        &self,
+        other: &Self,
+        center: &V,
+        form: CanonicalForm,
+        rtol: Option<f64>,
+        max_rank: Option<usize>,
+    ) -> Result<Self>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        // 1. Verify topologies are compatible
+        if !self.same_topology(other) {
+            return Err(anyhow::anyhow!(
+                "contract_zipup_tree_accumulated: networks have incompatible topologies"
+            ));
+        }
+
+        // 2. Replace internal indices with fresh IDs to avoid collision
+        let tn_a = self.sim_internal_inds();
+        let tn_b = other.sim_internal_inds();
+
+        // 3. Get traversal edges from leaves to center (post-order DFS)
+        let edges = tn_a
+            .edges_to_canonicalize_by_names(center)
+            .ok_or_else(|| anyhow::anyhow!("contract_zipup_tree_accumulated: center node {:?} not found", center))?;
+
+        // 4. Handle single node case
+        if edges.is_empty() && self.node_count() == 1 {
+            let node_idx = tn_a
+                .graph
+                .graph()
+                .node_indices()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup_tree_accumulated: no nodes found"))?;
+            let t_a = tn_a
+                .tensor(node_idx)
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_a"))?;
+            let t_b = tn_b
+                .tensor(
+                    tn_b.graph.graph().node_indices().next().ok_or_else(|| {
+                        anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_b")
+                    })?,
+                )
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_b"))?;
+
+            let contracted = T::contract(&[t_a.clone(), t_b.clone()], AllowedPairs::All)?;
+            let node_name = tn_a
+                .graph
+                .node_name(node_idx)
+                .ok_or_else(|| anyhow::anyhow!("contract_zipup_tree_accumulated: node name not found"))?;
+
+            let mut result = TreeTN::new();
+            result.add_tensor(node_name.clone(), contracted)?;
+            result.set_canonical_center(std::iter::once(center.clone()))?;
+            return Ok(result);
+        }
+
+        // 5. Initialize intermediate tensors storage: HashMap<node_name, Vec<intermediate_tensor>>
+        let mut intermediate_tensors: HashMap<V, Vec<T>> = HashMap::new();
+
+        // 6. Initialize result tensors: HashMap<node_name, tensor>
+        let mut result_tensors: HashMap<V, T> = HashMap::new();
+
+        // 7. Determine which nodes are leaves (for processing logic)
+        let root_name = center.clone();
+
+        // Helper: Get bond index between two nodes
+        let get_bond_index = |tn: &TreeTN<T, V>, node_a: &V, node_b: &V| -> Result<T::Index> {
+            let edge = tn
+                .edge_between(node_a, node_b)
+                .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", node_a, node_b))?;
+            tn.bond_index(edge)
+                .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))
+                .cloned()
+        };
+
+        // 8. Set up factorization options based on form
+        let alg = match form {
+            CanonicalForm::Unitary => FactorizeAlg::SVD,
+            CanonicalForm::LU => FactorizeAlg::LU,
+            CanonicalForm::CI => FactorizeAlg::CI,
+        };
+
+        let factorize_options = FactorizeOptions {
+            alg,
+            canonical: Canonical::Left,
+            rtol,
+            max_rank,
+        };
+
+        // 9. Process edges from leaves towards root
+        for (source_name, destination_name) in &edges {
+            // Get tensors from both networks
+            let node_a_idx = tn_a
+                .node_index(source_name)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn_a", source_name))?;
+            let node_b_idx = tn_b
+                .node_index(source_name)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tn_b", source_name))?;
+
+            let tensor_a = tn_a
+                .tensor(node_a_idx)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in tn_a", source_name))?
+                .clone();
+            let tensor_b = tn_b
+                .tensor(node_b_idx)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in tn_b", source_name))?
+                .clone();
+
+            // Check if this is a leaf node (no intermediate tensors accumulated yet)
+            let is_leaf = !intermediate_tensors.contains_key(source_name)
+                || intermediate_tensors.get(source_name).map(|v| v.is_empty()).unwrap_or(true);
+
+            let c_temp = if is_leaf {
+                // Leaf node: contract A[source] * B[source]
+                T::contract(&[tensor_a, tensor_b], AllowedPairs::All)
+                    .context("Failed to contract leaf tensors")?
+            } else {
+                // Internal node: contract [R_accumulated..., A[source], B[source]]
+                let mut tensor_list = Vec::new();
+                if let Some(r_list) = intermediate_tensors.remove(source_name) {
+                    tensor_list.extend(r_list);
+                }
+                tensor_list.push(tensor_a);
+                tensor_list.push(tensor_b);
+                T::contract(&tensor_list, AllowedPairs::All)
+                    .context("Failed to contract internal node tensors")?
+            };
+
+            // Factorize child tensor and pass the right factor to destination (even if destination is root)
+            let bond_to_dest_a = get_bond_index(&tn_a, source_name, destination_name)
+                .context("Failed to get bond index to destination in tn_a")?;
+            let bond_to_dest_b = get_bond_index(&tn_b, source_name, destination_name)
+                .context("Failed to get bond index to destination in tn_b")?;
+
+            // left_inds = all indices except the two parent bonds (keep site + child bonds)
+            let left_inds: Vec<_> = c_temp
+                .external_indices()
+                .into_iter()
+                .filter(|idx| {
+                    *idx.id() != *bond_to_dest_a.id() && *idx.id() != *bond_to_dest_b.id()
+                })
+                .collect();
+
+            if left_inds.is_empty() {
+                // If no left indices remain, pass the tensor directly to destination
+                intermediate_tensors
+                    .entry(destination_name.clone())
+                    .or_insert_with(Vec::new)
+                    .push(c_temp);
+                continue;
+            }
+
+            let factorize_result = c_temp
+                .factorize(&left_inds, &factorize_options)
+                .context("Failed to factorize")?;
+
+            // Store left factor as result tensor for source node
+            result_tensors.insert(source_name.clone(), factorize_result.left);
+
+            // Store right factor (intermediate tensor R) at destination
+            intermediate_tensors
+                .entry(destination_name.clone())
+                .or_insert_with(Vec::new)
+                .push(factorize_result.right);
+
+            // Note: bond index update will be handled when building the result TreeTN
+        }
+
+        // 9.5. Process root node (if it has intermediate tensors accumulated)
+        if let Some(r_list) = intermediate_tensors.remove(&root_name) {
+            // Get root tensors from both networks
+            let root_a_idx = tn_a
+                .node_index(&root_name)
+                .ok_or_else(|| anyhow::anyhow!("Root node {:?} not found in tn_a", root_name))?;
+            let root_b_idx = tn_b
+                .node_index(&root_name)
+                .ok_or_else(|| anyhow::anyhow!("Root node {:?} not found in tn_b", root_name))?;
+
+            let root_tensor_a = tn_a
+                .tensor(root_a_idx)
+                .ok_or_else(|| anyhow::anyhow!("Root tensor not found in tn_a"))?
+                .clone();
+            let root_tensor_b = tn_b
+                .tensor(root_b_idx)
+                .ok_or_else(|| anyhow::anyhow!("Root tensor not found in tn_b"))?
+                .clone();
+
+            // Contract [R_list..., A[root], B[root]]
+            let mut tensor_list = r_list;
+            tensor_list.push(root_tensor_a);
+            tensor_list.push(root_tensor_b);
+            let root_result = T::contract(&tensor_list, AllowedPairs::All)
+                .context("Failed to contract root node tensors")?;
+
+            // Store root result (no factorization needed)
+            result_tensors.insert(root_name.clone(), root_result);
+        } else {
+            // No intermediate tensors: root is a single node or already processed
+            // Check if root tensors need to be contracted
+            if !result_tensors.contains_key(&root_name) {
+                let root_a_idx = tn_a
+                    .node_index(&root_name)
+                    .ok_or_else(|| anyhow::anyhow!("Root node {:?} not found in tn_a", root_name))?;
+                let root_b_idx = tn_b
+                    .node_index(&root_name)
+                    .ok_or_else(|| anyhow::anyhow!("Root node {:?} not found in tn_b", root_name))?;
+
+                let root_tensor_a = tn_a
+                    .tensor(root_a_idx)
+                    .ok_or_else(|| anyhow::anyhow!("Root tensor not found in tn_a"))?
+                    .clone();
+                let root_tensor_b = tn_b
+                    .tensor(root_b_idx)
+                    .ok_or_else(|| anyhow::anyhow!("Root tensor not found in tn_b"))?
+                    .clone();
+
+                let root_result = T::contract(&[root_tensor_a, root_tensor_b], AllowedPairs::All)
+                    .context("Failed to contract root node tensors")?;
+
+                result_tensors.insert(root_name.clone(), root_result);
+            }
+        }
+
+        // 10. Build result TreeTN
+        let mut result = TreeTN::new();
+
+        // Add all result tensors
+        for (node_name, tensor) in result_tensors {
+            result.add_tensor(node_name, tensor)?;
+        }
+
+        // Connect nodes based on original topology
+        for (source_name, destination_name) in &edges {
+            if let (Some(node_a_idx), Some(node_b_idx)) = (
+                result.node_index(source_name),
+                result.node_index(destination_name),
+            ) {
+                let tensor_a = result.tensor(node_a_idx).unwrap();
+                let tensor_b = result.tensor(node_b_idx).unwrap();
+
+                // Find the common index (should be the bond index)
+                use tensor4all_core::index_ops::common_inds;
+                let indices_a = tensor_a.external_indices();
+                let indices_b = tensor_b.external_indices();
+                let common = common_inds::<T::Index>(&indices_a, &indices_b);
+                if let Some(bond_idx) = common.first() {
+                    result.connect_internal(node_a_idx, bond_idx, node_b_idx, bond_idx)?;
+                }
+            }
+        }
+
+        // 11. Set canonical center
+        if result.node_index(center).is_some() {
+            result.set_canonical_center(std::iter::once(center.clone()))?;
+        }
+
+        Ok(result)
+    }
+
     /// Contract two TreeTNs using naive full contraction.
     ///
     /// This is a reference implementation that:
