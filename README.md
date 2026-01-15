@@ -268,6 +268,32 @@ For ITensors.jl:
 
 - Complex SVD: mdarray-linalg-faer returns V^T instead of V^H for complex matrices
 
+## Development
+
+### Pre-commit Checks
+
+Before committing changes, ensure that both formatting and linting pass:
+
+```bash
+# Check code formatting
+cargo fmt --all -- --check
+
+# Run clippy with all warnings as errors
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+If either command fails, fix the issues before committing:
+
+```bash
+# Auto-fix formatting
+cargo fmt --all
+
+# Fix clippy warnings (some may require manual fixes)
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+These checks are also enforced in CI, so ensuring they pass locally will prevent CI failures.
+
 ## Documentation
 
 - [Index System Design](docs/INDEX_SYSTEM.md) — Overview of the index system, QSpace compatibility, and IndexLike/TensorLike design
