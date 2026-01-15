@@ -179,7 +179,8 @@ where
         }
 
         // Contract all tensors
-        let contracted = T::contract(&all_tensors, AllowedPairs::All)?;
+        let tensor_refs: Vec<&T> = all_tensors.iter().collect();
+        let contracted = T::contract(&tensor_refs, AllowedPairs::All)?;
 
         // Step 4: Transform output - replace internal output indices with true indices
         if let Some(ref output_mapping) = self.output_mapping {
@@ -303,20 +304,11 @@ where
             bra_conj.clone()
         };
 
-        // Contract ket with op - T::contract auto-detects contractable pairs
-        let ket_op = T::contract(&[transformed_ket, tensor_op.clone()], AllowedPairs::All)?;
-
-        // Contract ket_op with transformed_bra_conj
-        let ket_op_bra = T::contract(&[ket_op, transformed_bra_conj], AllowedPairs::All)?;
-
-        // Contract ket_op_bra with child environments using T::contract
-        if child_envs.is_empty() {
-            Ok(ket_op_bra)
-        } else {
-            let mut all_tensors: Vec<T> = vec![ket_op_bra];
-            all_tensors.extend(child_envs);
-            T::contract(&all_tensors, AllowedPairs::All)
-        }
+        // Contract ket, op, bra, and child environments together
+        // Let contract() find the optimal contraction order
+        let mut tensor_refs: Vec<&T> = vec![&transformed_ket, tensor_op, &transformed_bra_conj];
+        tensor_refs.extend(child_envs.iter());
+        T::contract(&tensor_refs, AllowedPairs::All)
     }
 
     /// Compute the local dimension (size of the local Hilbert space).

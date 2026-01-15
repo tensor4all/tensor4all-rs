@@ -49,20 +49,23 @@ use crate::tensor_like::AllowedPairs;
 /// use tensor4all_core::{contract_multi, AllowedPairs};
 ///
 /// // Connected tensors: contracts via omeco
-/// let result = contract_multi(&[a, b, c], AllowedPairs::All)?;
+/// let result = contract_multi(&[&a, &b, &c], AllowedPairs::All)?;
 ///
 /// // Disconnected tensors: contracts each component, outer product to combine
-/// let result = contract_multi(&[a, b], AllowedPairs::All)?;  // a, b have no common indices
+/// let result = contract_multi(&[&a, &b], AllowedPairs::All)?;  // a, b have no common indices
 /// ```
-pub fn contract_multi(tensors: &[TensorDynLen], allowed: AllowedPairs<'_>) -> Result<TensorDynLen> {
+pub fn contract_multi(
+    tensors: &[&TensorDynLen],
+    allowed: AllowedPairs<'_>,
+) -> Result<TensorDynLen> {
     match tensors.len() {
         0 => Err(anyhow::anyhow!("No tensors to contract")),
-        1 => Ok(tensors[0].clone()),
+        1 => Ok((*tensors[0]).clone()),
         _ => {
             // Validate AllowedPairs::Specified pairs have contractable indices
             if let AllowedPairs::Specified(pairs) = allowed {
                 for &(i, j) in pairs {
-                    if !has_contractable_indices(&tensors[i], &tensors[j]) {
+                    if !has_contractable_indices(tensors[i], tensors[j]) {
                         return Err(anyhow::anyhow!(
                             "Specified pair ({}, {}) has no contractable indices",
                             i,
@@ -82,8 +85,8 @@ pub fn contract_multi(tensors: &[TensorDynLen], allowed: AllowedPairs<'_>) -> Re
                 // Multiple components - contract each and combine with outer product
                 let mut results: Vec<TensorDynLen> = Vec::new();
                 for component in &components {
-                    let component_tensors: Vec<TensorDynLen> =
-                        component.iter().map(|&i| tensors[i].clone()).collect();
+                    let component_tensors: Vec<&TensorDynLen> =
+                        component.iter().map(|&i| tensors[i]).collect();
 
                     // Remap AllowedPairs for the component
                     let remapped_allowed = remap_allowed_pairs(allowed, component);
@@ -131,15 +134,16 @@ pub fn contract_multi(tensors: &[TensorDynLen], allowed: AllowedPairs<'_>) -> Re
 /// use tensor4all_core::{contract_connected, AllowedPairs};
 ///
 /// let tensors = vec![tensor_a, tensor_b, tensor_c];  // Must be connected
-/// let result = contract_connected(&tensors, AllowedPairs::All)?;
+/// let tensor_refs: Vec<&_> = tensors.iter().collect();
+/// let result = contract_connected(&tensor_refs, AllowedPairs::All)?;
 /// ```
 pub fn contract_connected(
-    tensors: &[TensorDynLen],
+    tensors: &[&TensorDynLen],
     allowed: AllowedPairs<'_>,
 ) -> Result<TensorDynLen> {
     match tensors.len() {
         0 => Err(anyhow::anyhow!("No tensors to contract")),
-        1 => Ok(tensors[0].clone()),
+        1 => Ok((*tensors[0]).clone()),
         _ => contract_connected_optimized(tensors, allowed),
     }
 }
@@ -160,14 +164,14 @@ fn has_contractable_indices(a: &TensorDynLen, b: &TensorDynLen) -> bool {
 /// Uses petgraph for O(V+E) connected component detection.
 ///
 /// # Arguments
-/// * `tensors` - Slice of tensors
+/// * `tensors` - Slice of tensor references
 /// * `allowed` - Which tensor pairs can have their indices contracted
 ///
 /// # Returns
 /// A vector of components, where each component is a vector of tensor indices.
 /// Components are sorted by their smallest tensor index for determinism.
 fn find_tensor_connected_components(
-    tensors: &[TensorDynLen],
+    tensors: &[&TensorDynLen],
     allowed: AllowedPairs<'_>,
 ) -> Vec<Vec<usize>> {
     let n = tensors.len();
@@ -188,7 +192,7 @@ fn find_tensor_connected_components(
             // Two tensors connected if they have any contractable indices
             for i in 0..n {
                 for j in (i + 1)..n {
-                    if has_contractable_indices(&tensors[i], &tensors[j]) {
+                    if has_contractable_indices(tensors[i], tensors[j]) {
                         graph.add_edge(nodes[i], nodes[j], ());
                     }
                 }
@@ -197,7 +201,7 @@ fn find_tensor_connected_components(
         AllowedPairs::Specified(pairs) => {
             // Only specified pairs with contractable indices are connected
             for &(i, j) in pairs {
-                if has_contractable_indices(&tensors[i], &tensors[j]) {
+                if has_contractable_indices(tensors[i], tensors[j]) {
                     graph.add_edge(nodes[i], nodes[j], ());
                 }
             }
@@ -315,14 +319,14 @@ fn contract_pair(a: &TensorDynLen, b: &TensorDynLen) -> Result<TensorDynLen> {
 ///
 /// Uses internal IDs to control which indices are contracted based on `allowed`.
 fn contract_connected_optimized(
-    tensors: &[TensorDynLen],
+    tensors: &[&TensorDynLen],
     allowed: AllowedPairs<'_>,
 ) -> Result<TensorDynLen> {
     // 1. Validate for Specified pairs
     if let AllowedPairs::Specified(pairs) = allowed {
         // 1a. Check that all specified pairs have contractable indices
         for &(i, j) in pairs {
-            if !has_contractable_indices(&tensors[i], &tensors[j]) {
+            if !has_contractable_indices(tensors[i], tensors[j]) {
                 return Err(anyhow::anyhow!(
                     "Specified pair ({}, {}) has no contractable indices",
                     i,
@@ -435,7 +439,7 @@ fn contract_connected_optimized(
 /// - internal_id_to_original: Maps internal_id -> (tensor_idx, index_position)
 #[allow(clippy::type_complexity)]
 fn build_internal_ids(
-    tensors: &[TensorDynLen],
+    tensors: &[&TensorDynLen],
     allowed: AllowedPairs<'_>,
 ) -> (Vec<Vec<usize>>, HashMap<usize, (usize, usize)>) {
     let mut next_id = 0usize;
@@ -633,7 +637,7 @@ mod tests {
 
     #[test]
     fn test_contract_multi_empty() {
-        let tensors: Vec<TensorDynLen> = vec![];
+        let tensors: Vec<&TensorDynLen> = vec![];
         let result = contract_multi(&tensors, AllowedPairs::All);
         assert!(result.is_err());
     }
@@ -641,8 +645,7 @@ mod tests {
     #[test]
     fn test_contract_multi_single() {
         let tensor = make_test_tensor(&[2, 3], &[1, 2]);
-        let tensors = vec![tensor.clone()];
-        let result = contract_multi(&tensors, AllowedPairs::All).unwrap();
+        let result = contract_multi(&[&tensor], AllowedPairs::All).unwrap();
         assert_eq!(result.dims, tensor.dims);
     }
 
@@ -651,8 +654,7 @@ mod tests {
         // A[i,j] * B[j,k] -> C[i,k]
         let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
-        let tensors = vec![a, b];
-        let result = contract_multi(&tensors, AllowedPairs::All).unwrap();
+        let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
         assert_eq!(result.dims, vec![2, 4]); // i, k
     }
 
@@ -662,8 +664,7 @@ mod tests {
         let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let c = make_test_tensor(&[4, 5], &[3, 4]); // k=3, l=4
-        let tensors = vec![a, b, c];
-        let result = contract_multi(&tensors, AllowedPairs::All).unwrap();
+        let result = contract_multi(&[&a, &b, &c], AllowedPairs::All).unwrap();
         // Output has dimensions for i and l (order may vary due to tree structure)
         let mut sorted_dims = result.dims.clone();
         sorted_dims.sort();
@@ -677,8 +678,7 @@ mod tests {
         let b = make_test_tensor(&[3, 4], &[2, 3]);
         let c = make_test_tensor(&[4, 5], &[3, 4]);
         let d = make_test_tensor(&[5, 6], &[4, 5]);
-        let tensors = vec![a, b, c, d];
-        let result = contract_multi(&tensors, AllowedPairs::All).unwrap();
+        let result = contract_multi(&[&a, &b, &c, &d], AllowedPairs::All).unwrap();
         // Output has dimensions for i and m (order may vary due to tree structure)
         let mut sorted_dims = result.dims.clone();
         sorted_dims.sort();
@@ -690,8 +690,7 @@ mod tests {
         // A[i,j] * B[k,l] (no common indices) -> outer product C[i,j,k,l]
         let a = make_test_tensor(&[2, 3], &[1, 2]);
         let b = make_test_tensor(&[4, 5], &[3, 4]);
-        let tensors = vec![a, b];
-        let result = contract_multi(&tensors, AllowedPairs::All).unwrap();
+        let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
         // Total elements should be 2*3*4*5 = 120
         let total_elements: usize = result.dims.iter().product();
         assert_eq!(total_elements, 2 * 3 * 4 * 5);
@@ -703,8 +702,7 @@ mod tests {
         // A[i] * B[j] (no common indices) -> outer product C[i,j]
         let a = make_test_tensor(&[2], &[1]); // i=1
         let b = make_test_tensor(&[3], &[2]); // j=2
-        let tensors = vec![a, b];
-        let result = contract_multi(&tensors, AllowedPairs::All).unwrap();
+        let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
         // Total elements should be 2*3 = 6
         let total_elements: usize = result.dims.iter().product();
         assert_eq!(total_elements, 2 * 3);
@@ -716,8 +714,7 @@ mod tests {
         // contract_connected should error on disconnected graphs
         let a = make_test_tensor(&[2, 3], &[1, 2]);
         let b = make_test_tensor(&[4, 5], &[3, 4]);
-        let tensors = vec![a, b];
-        let result = contract_connected(&tensors, AllowedPairs::All);
+        let result = contract_connected(&[&a, &b], AllowedPairs::All);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("disconnected"));
     }
@@ -728,8 +725,7 @@ mod tests {
         // Should give clear error message (not just "disconnected")
         let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
         let b = make_test_tensor(&[4, 5], &[3, 4]); // k=3, l=4 (no common with a)
-        let tensors = vec![a, b];
-        let result = contract_connected(&tensors, AllowedPairs::Specified(&[(0, 1)]));
+        let result = contract_connected(&[&a, &b], AllowedPairs::Specified(&[(0, 1)]));
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("no contractable indices"));
@@ -748,8 +744,8 @@ mod tests {
         let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let c = make_test_tensor(&[2, 5], &[1, 4]); // i=1, l=4
-        let tensors = vec![a, b, c];
-        let result = contract_multi(&tensors, AllowedPairs::Specified(&[(0, 1), (0, 2)])).unwrap();
+        let result =
+            contract_multi(&[&a, &b, &c], AllowedPairs::Specified(&[(0, 1), (0, 2)])).unwrap();
         let mut sorted_dims = result.dims.clone();
         sorted_dims.sort();
         assert_eq!(sorted_dims, vec![4, 5]); // k=4, l=5
@@ -764,8 +760,7 @@ mod tests {
         let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let c = make_test_tensor(&[6, 5], &[5, 4]); // m=5, l=4 (no common with B)
-        let tensors = vec![a, b, c];
-        let result = contract_multi(&tensors, AllowedPairs::Specified(&[(0, 1), (1, 2)]));
+        let result = contract_multi(&[&a, &b, &c], AllowedPairs::Specified(&[(0, 1), (1, 2)]));
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -782,8 +777,11 @@ mod tests {
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let c = make_test_tensor(&[4, 5], &[4, 5]); // m=4, n=5
         let d = make_test_tensor(&[5, 6], &[5, 6]); // n=5, p=6
-        let tensors = vec![a, b, c, d];
-        let result = contract_multi(&tensors, AllowedPairs::Specified(&[(0, 1), (2, 3)])).unwrap();
+        let result = contract_multi(
+            &[&a, &b, &c, &d],
+            AllowedPairs::Specified(&[(0, 1), (2, 3)]),
+        )
+        .unwrap();
         // A-B contracts j: result has i, k (dims 2, 4)
         // C-D contracts n: result has m, p (dims 4, 6)
         // Outer product: result has 4 indices

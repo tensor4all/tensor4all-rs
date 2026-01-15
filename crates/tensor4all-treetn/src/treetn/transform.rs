@@ -234,7 +234,7 @@ where
 
             // Contract using TensorLike::contract
             // (bond indices are auto-detected via is_contractable)
-            let contracted = T::contract(&[to_tensor, from_tensor], AllowedPairs::All)
+            let contracted = T::contract(&[&to_tensor, &from_tensor], AllowedPairs::All)
                 .map_err(|e| anyhow::anyhow!("Failed to contract tensors: {}", e))?;
 
             tensors.insert(to, contracted);

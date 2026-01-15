@@ -157,7 +157,7 @@ where
 
             // Contract and store result at `to`
             // (bond indices are auto-detected via is_contractable)
-            let contracted = T::contract(&[to_tensor, from_tensor], AllowedPairs::All)
+            let contracted = T::contract(&[&to_tensor, &from_tensor], AllowedPairs::All)
                 .context("Failed to contract along edge")?;
             tensors.insert(to, contracted);
         }
@@ -309,7 +309,7 @@ where
                 .ok_or_else(|| anyhow::anyhow!("contract_zipup: tensor not found"))?;
 
             // Contract t1 and t2 - common indices are auto-detected via is_contractable
-            let result = T::contract(&[t1.clone(), t2.clone()], AllowedPairs::All)?;
+            let result = T::contract(&[t1, t2], AllowedPairs::All)?;
             let mut result_tn = Self::new();
             let node_name = tn1
                 .graph
@@ -342,7 +342,7 @@ where
 
             // T::contract auto-contracts all is_contractable pairs
             let t_contract = Instant::now();
-            let contracted = T::contract(&[t1.clone(), t2.clone()], AllowedPairs::All)?;
+            let contracted = T::contract(&[t1, t2], AllowedPairs::All)?;
             site_contraction_time += t_contract.elapsed();
 
             result_tensors.insert(node_name, contracted);
@@ -410,7 +410,7 @@ where
                     .remove(parent_name)
                     .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
 
-                let contracted = T::contract(&[parent_tensor, child_tensor], AllowedPairs::All)?;
+                let contracted = T::contract(&[&parent_tensor, &child_tensor], AllowedPairs::All)?;
                 result_tensors.insert(parent_name.clone(), contracted);
                 continue;
             }
@@ -439,8 +439,10 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
 
             let t_contract = Instant::now();
-            let contracted =
-                T::contract(&[parent_tensor, factorize_result.right], AllowedPairs::All)?;
+            let contracted = T::contract(
+                &[&parent_tensor, &factorize_result.right],
+                AllowedPairs::All,
+            )?;
             edge_contraction_time += t_contract.elapsed();
             result_tensors.insert(parent_name.clone(), contracted);
         }
@@ -589,7 +591,7 @@ where
                     anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_b")
                 })?;
 
-            let contracted = T::contract(&[t_a.clone(), t_b.clone()], AllowedPairs::All)?;
+            let contracted = T::contract(&[t_a, t_b], AllowedPairs::All)?;
             let node_name = tn_a.graph.node_name(node_idx).ok_or_else(|| {
                 anyhow::anyhow!("contract_zipup_tree_accumulated: node name not found")
             })?;
@@ -665,7 +667,7 @@ where
 
             let c_temp = if is_leaf {
                 // Leaf node: contract A[source] * B[source]
-                T::contract(&[tensor_a, tensor_b], AllowedPairs::All)
+                T::contract(&[&tensor_a, &tensor_b], AllowedPairs::All)
                     .context("Failed to contract leaf tensors")?
             } else {
                 // Internal node: contract [R_accumulated..., A[source], B[source]]
@@ -675,7 +677,8 @@ where
                 }
                 tensor_list.push(tensor_a);
                 tensor_list.push(tensor_b);
-                T::contract(&tensor_list, AllowedPairs::All)
+                let tensor_refs: Vec<&T> = tensor_list.iter().collect();
+                T::contract(&tensor_refs, AllowedPairs::All)
                     .context("Failed to contract internal node tensors")?
             };
 
@@ -742,7 +745,8 @@ where
             let mut tensor_list = r_list;
             tensor_list.push(root_tensor_a);
             tensor_list.push(root_tensor_b);
-            let root_result = T::contract(&tensor_list, AllowedPairs::All)
+            let tensor_refs: Vec<&T> = tensor_list.iter().collect();
+            let root_result = T::contract(&tensor_refs, AllowedPairs::All)
                 .context("Failed to contract root node tensors")?;
 
             // Store root result (no factorization needed)
@@ -760,12 +764,10 @@ where
 
                 let root_tensor_a = tn_a
                     .tensor(root_a_idx)
-                    .ok_or_else(|| anyhow::anyhow!("Root tensor not found in tn_a"))?
-                    .clone();
+                    .ok_or_else(|| anyhow::anyhow!("Root tensor not found in tn_a"))?;
                 let root_tensor_b = tn_b
                     .tensor(root_b_idx)
-                    .ok_or_else(|| anyhow::anyhow!("Root tensor not found in tn_b"))?
-                    .clone();
+                    .ok_or_else(|| anyhow::anyhow!("Root tensor not found in tn_b"))?;
 
                 let root_result = T::contract(&[root_tensor_a, root_tensor_b], AllowedPairs::All)
                     .context("Failed to contract root node tensors")?;
@@ -857,7 +859,7 @@ where
 
         // 4. Contract along common indices
         // T::contract auto-contracts all is_contractable pairs
-        T::contract(&[tensor1, tensor2], AllowedPairs::All)
+        T::contract(&[&tensor1, &tensor2], AllowedPairs::All)
     }
 
     /// Validate that `canonical_center` and edge `ortho_towards` are consistent.

@@ -247,7 +247,8 @@ impl TensorData {
             .collect();
 
         // Contract all components (handles disconnected components via outer product)
-        let contracted = contract_multi(&tensors, AllowedPairs::All)?;
+        let tensor_refs: Vec<&TensorDynLen> = tensors.iter().collect();
+        let contracted = contract_multi(&tensor_refs, AllowedPairs::All)?;
 
         // Check if we need to permute to match external order
         let contracted_ids: Vec<DynId> = contracted.indices.iter().map(|idx| idx.id).collect();

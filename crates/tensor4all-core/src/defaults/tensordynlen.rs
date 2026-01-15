@@ -868,7 +868,7 @@ impl TensorDynLen {
         // Contract self.conj() with other over all indices
         let conj_self = self.conj();
         let result =
-            super::contract::contract_multi(&[conj_self, other.clone()], crate::AllowedPairs::All)?;
+            super::contract::contract_multi(&[&conj_self, other], crate::AllowedPairs::All)?;
         // Result should be a scalar (no indices)
         Ok(result.sum())
     }
@@ -1416,12 +1416,12 @@ impl TensorLike for TensorDynLen {
         Ok(TensorDynLen::permute_indices(self, new_order))
     }
 
-    fn contract(tensors: &[Self], allowed: crate::AllowedPairs<'_>) -> Result<Self> {
+    fn contract(tensors: &[&Self], allowed: crate::AllowedPairs<'_>) -> Result<Self> {
         // Delegate to contract_multi which handles disconnected components
         super::contract::contract_multi(tensors, allowed)
     }
 
-    fn contract_connected(tensors: &[Self], allowed: crate::AllowedPairs<'_>) -> Result<Self> {
+    fn contract_connected(tensors: &[&Self], allowed: crate::AllowedPairs<'_>) -> Result<Self> {
         // Delegate to contract_connected which requires connected graph
         super::contract::contract_connected(tensors, allowed)
     }
