@@ -1118,7 +1118,7 @@ mod tests {
         let plan_nsite1 = LocalUpdateSweepPlan::new(&net, &"A".to_string(), 1).unwrap();
         // Single node has no edges, so Euler tour returns just [A]
         // Steps: all except last = 0 steps
-        assert!(plan_nsite1.is_empty() || plan_nsite1.len() == 0);
+        assert!(plan_nsite1.is_empty());
 
         let plan_nsite2 = LocalUpdateSweepPlan::new(&net, &"A".to_string(), 2).unwrap();
         assert!(plan_nsite2.is_empty());

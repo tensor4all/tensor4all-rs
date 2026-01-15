@@ -872,7 +872,7 @@ fn test_truncate_simple() {
     // tensor2[bond, k] similar structure
     let mut data2 = vec![0.0f64; 40];
     for k_idx in 0..4 {
-        data2[0 + k_idx] = 1.0;
+        data2[k_idx] = 1.0;
         data2[4 + k_idx] = 0.3;
     }
     let tensor2 = TensorDynLen::new(

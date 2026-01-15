@@ -57,6 +57,7 @@ pub fn flip_operator(r: usize, bc: BoundaryCondition) -> Result<QuanticsOperator
 /// Carry propagates from LSB to MSB, so in big-endian convention:
 /// - Site 0 (MSB): has carry input from site 1, applies boundary condition
 /// - Site R-1 (LSB): initial carry = 0, has carry output to site R-2
+#[allow(clippy::needless_range_loop)]
 fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
     let single_tensor = single_tensor_flip();
 
@@ -158,6 +159,7 @@ fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
 ///
 /// In TensorTrain MPO format, the combined site index is s = s' * 2 + s
 /// where s' is the output bit and s is the input bit.
+#[allow(clippy::needless_range_loop)]
 fn single_tensor_flip() -> [[[[Complex64; 2]; 2]; 2]; 2] {
     let cval = [-1i32, 0i32];
     let mut tensor = [[[[Complex64::zero(); 2]; 2]; 2]; 2];

@@ -78,6 +78,7 @@ fn shift_mpo(r: usize, offset: i64, bc: BoundaryCondition) -> Result<TensorTrain
     // - Carry flows right-to-left (LSB at R-1 to MSB at 0)
     // - t[left, s, right] where left = carry_out (going left), right = carry_in (from right)
 
+    #[allow(clippy::needless_range_loop)]
     for n in 0..r {
         let y_bit = offset_bits[n]; // The constant bit at position (R-1-n)
 

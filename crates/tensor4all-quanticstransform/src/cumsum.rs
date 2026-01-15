@@ -48,6 +48,7 @@ pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
 /// - t[0, 0, y, x] = 1 if y == x (both 0 or both 1)
 /// - t[0, 1, 1, 0] = 1 (y > x at this position)
 /// - t[1, 1, *, *] = 1 (comparison already made)
+#[allow(clippy::needless_range_loop)]
 fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive"));

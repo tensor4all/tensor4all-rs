@@ -6,6 +6,8 @@
 //! 3. Applying the operator using apply_linear_operator
 //! 4. Contracting the result and comparing with expected values
 
+#![allow(clippy::needless_range_loop)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -192,7 +194,7 @@ fn contract_treetn_to_vector(
     // Build mapping from site index ID to position in external indices
     let mut idx_to_pos: HashMap<DynId, usize> = HashMap::new();
     for (pos, idx) in ext_indices.iter().enumerate() {
-        idx_to_pos.insert(idx.id().clone(), pos);
+        idx_to_pos.insert(*idx.id(), pos);
     }
 
     // Build mapping from our site index order to tensor index order
@@ -1527,6 +1529,7 @@ fn test_affine_identity() {
 
     let _op = affine_operator(r, &params, &bc).expect("Failed to create affine operator");
 
+    #[allow(clippy::never_loop)]
     for x in 0..n {
         // Create input state |x⟩
         // For affine with M=1, N=1, site dimension is 2^(M+N) = 4

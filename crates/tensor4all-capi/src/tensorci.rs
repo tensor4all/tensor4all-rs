@@ -486,6 +486,7 @@ mod tests {
     use super::*;
 
     // Simple test callback that returns sum of indices
+    #[allow(dead_code)]
     extern "C" fn sum_callback(
         indices: *const i64,
         n_indices: libc::size_t,
