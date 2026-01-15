@@ -38,3 +38,7 @@ privatedoc/*
 # External repositories (reference only)
 extern/
 external/
+
+# Coverage reports
+lcov*.info
+lcov-patch.info
