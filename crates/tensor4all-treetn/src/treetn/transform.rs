@@ -376,8 +376,7 @@ where
 
             let truncation_options = crate::TruncationOptions {
                 form: options.form,
-                rtol: options.rtol,
-                max_rank: options.max_rank,
+                truncation: options.truncation,
             };
 
             return result

@@ -2,15 +2,15 @@
 //!
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 
+use crate::backend::qr_backend;
 use crate::defaults::DynIndex;
+use crate::global_default::GlobalDefault;
+use crate::truncation::TruncationParams;
 use crate::{unfold_split, StorageScalar, TensorDynLen};
 use num_complex::{Complex64, ComplexFloat};
-use std::sync::atomic::{AtomicU64, Ordering};
+use tensor4all_tensorbackend::faer_traits::ComplexField;
 use tensor4all_tensorbackend::mdarray::{DSlice, DTensor};
 use thiserror::Error;
-
-use crate::backend::qr_backend;
-use tensor4all_tensorbackend::faer_traits::ComplexField;
 
 /// Error type for QR operations in tensor4all-linalg.
 #[derive(Debug, Error)]
@@ -24,28 +24,33 @@ pub enum QrError {
 /// Options for QR decomposition with truncation control.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QrOptions {
-    /// Relative tolerance for truncation based on R's diagonal elements.
-    /// If `None`, uses the global default rtol.
-    /// Columns of R with |R[i, i]| < rtol are truncated.
-    pub rtol: Option<f64>,
+    /// Truncation parameters (rtol only for QR).
+    pub truncation: TruncationParams,
 }
 
 impl QrOptions {
     /// Create new QR options with the specified rtol.
     pub fn with_rtol(rtol: f64) -> Self {
-        Self { rtol: Some(rtol) }
+        Self {
+            truncation: TruncationParams::new().with_rtol(rtol),
+        }
+    }
+
+    /// Get rtol from options (for backwards compatibility).
+    pub fn rtol(&self) -> Option<f64> {
+        self.truncation.rtol
     }
 }
 
-// Global default rtol stored as AtomicU64 (f64::to_bits())
+// Global default rtol using the unified GlobalDefault type
 // Default value: 1e-15 (very strict, near machine precision)
-static DEFAULT_QR_RTOL: AtomicU64 = AtomicU64::new(1e-15_f64.to_bits());
+static DEFAULT_QR_RTOL: GlobalDefault = GlobalDefault::new(1e-15);
 
 /// Get the global default rtol for QR truncation.
 ///
 /// The default value is 1e-15 (very strict, near machine precision).
 pub fn default_qr_rtol() -> f64 {
-    f64::from_bits(DEFAULT_QR_RTOL.load(Ordering::Relaxed))
+    DEFAULT_QR_RTOL.get()
 }
 
 /// Set the global default rtol for QR truncation.
@@ -56,11 +61,9 @@ pub fn default_qr_rtol() -> f64 {
 /// # Errors
 /// Returns `QrError::InvalidRtol` if rtol is not finite or is negative.
 pub fn set_default_qr_rtol(rtol: f64) -> Result<(), QrError> {
-    if !rtol.is_finite() || rtol < 0.0 {
-        return Err(QrError::InvalidRtol(rtol));
-    }
-    DEFAULT_QR_RTOL.store(rtol.to_bits(), Ordering::Relaxed);
-    Ok(())
+    DEFAULT_QR_RTOL
+        .set(rtol)
+        .map_err(|e| QrError::InvalidRtol(e.0))
 }
 
 /// Compute the retained rank based on rtol truncation for QR.
@@ -195,7 +198,7 @@ where
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     // Determine rtol to use
-    let rtol = options.rtol.unwrap_or_else(default_qr_rtol);
+    let rtol = options.truncation.effective_rtol(default_qr_rtol());
     if !rtol.is_finite() || rtol < 0.0 {
         return Err(QrError::InvalidRtol(rtol));
     }

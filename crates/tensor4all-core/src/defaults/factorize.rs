@@ -110,10 +110,13 @@ where
         + MatrixScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    let svd_options = SvdOptions {
-        rtol: options.rtol,
-        max_rank: options.max_rank,
-    };
+    let mut svd_options = SvdOptions::default();
+    if let Some(rtol) = options.rtol {
+        svd_options.truncation.rtol = Some(rtol);
+    }
+    if let Some(max_rank) = options.max_rank {
+        svd_options.truncation.max_rank = Some(max_rank);
+    }
 
     let (u, s, v) = svd_with::<T>(t, left_inds, &svd_options)?;
 
@@ -178,7 +181,10 @@ where
         ));
     }
 
-    let qr_options = QrOptions { rtol: options.rtol };
+    let mut qr_options = QrOptions::default();
+    if let Some(rtol) = options.rtol {
+        qr_options.truncation.rtol = Some(rtol);
+    }
 
     let (q, r) = qr_with::<T>(t, left_inds, &qr_options)?;
 

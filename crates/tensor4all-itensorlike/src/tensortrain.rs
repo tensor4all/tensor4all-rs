@@ -536,8 +536,7 @@ impl TensorTrain {
         let form = truncate_alg_to_form(options.alg);
         let treetn_options = TruncationOptions {
             form,
-            rtol: options.rtol,
-            max_rank: options.max_rank,
+            truncation: options.truncation,
         };
 
         // Truncate towards the last site (rightmost) as the canonical center
@@ -655,13 +654,13 @@ impl TensorTrain {
         let treetn_options =
             TreeTNContractionOptions::new(treetn_method).with_nsweeps(options.nsweeps);
 
-        let treetn_options = if let Some(max_rank) = options.max_rank {
+        let treetn_options = if let Some(max_rank) = options.truncation.max_rank {
             treetn_options.with_max_rank(max_rank)
         } else {
             treetn_options
         };
 
-        let treetn_options = if let Some(rtol) = options.rtol {
+        let treetn_options = if let Some(rtol) = options.truncation.rtol {
             treetn_options.with_rtol(rtol)
         } else {
             treetn_options
@@ -677,8 +676,8 @@ impl TensorTrain {
                     &other.inner,
                     &center,
                     CanonicalForm::Unitary,
-                    options.rtol,
-                    options.max_rank,
+                    options.truncation.rtol,
+                    options.truncation.max_rank,
                 )
                 .map_err(|e| TensorTrainError::InvalidStructure {
                     message: format!("Zip-up contraction failed: {}", e),
@@ -711,7 +710,7 @@ impl Default for TensorTrain {
 /// because both produce orthogonal/isometric tensors.
 fn truncate_alg_to_form(alg: TruncateAlg) -> CanonicalForm {
     match alg {
-        TruncateAlg::SVD => CanonicalForm::Unitary,
+        TruncateAlg::SVD | TruncateAlg::RSVD | TruncateAlg::QR => CanonicalForm::Unitary,
         TruncateAlg::LU => CanonicalForm::LU,
         TruncateAlg::CI => CanonicalForm::CI,
     }

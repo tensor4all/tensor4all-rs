@@ -4,6 +4,10 @@
 
 ### ` fn default() -> Self` (impl TruncateOptions)
 
+### ` fn truncation_params(&self) -> & TruncationParams` (impl TruncateOptions)
+
+### ` fn truncation_params_mut(&mut self) -> & mut TruncationParams` (impl TruncateOptions)
+
 ### `pub fn svd() -> Self` (impl TruncateOptions)
 
 Create options for SVD-based truncation.
@@ -28,7 +32,19 @@ Set the maximum rank (bond dimension).
 
 Set the site range for truncation. The range is 0-indexed with exclusive end. For example, `0..5` truncates bonds between sites 0-1, 1-2, 2-3, 3-4.
 
+### `pub fn rtol(&self) -> Option < f64 >` (impl TruncateOptions)
+
+Get rtol (for backwards compatibility).
+
+### `pub fn max_rank(&self) -> Option < usize >` (impl TruncateOptions)
+
+Get max_rank (for backwards compatibility).
+
 ### ` fn default() -> Self` (impl ContractOptions)
+
+### ` fn truncation_params(&self) -> & TruncationParams` (impl ContractOptions)
+
+### ` fn truncation_params_mut(&mut self) -> & mut TruncationParams` (impl ContractOptions)
 
 ### `pub fn zipup() -> Self` (impl ContractOptions)
 
@@ -54,157 +70,165 @@ Set relative tolerance.
 
 Set number of sweeps for Fit method.
 
+### `pub fn rtol(&self) -> Option < f64 >` (impl ContractOptions)
+
+Get rtol (for backwards compatibility).
+
+### `pub fn max_rank(&self) -> Option < usize >` (impl ContractOptions)
+
+Get max_rank (for backwards compatibility).
+
 ## src/tensortrain.rs
 
-### `pub fn new(tensors: Vec < TensorDynLen < Id , Symm > >) -> Result < Self >` (impl TensorTrain < Id , Symm >)
+### `pub fn new(tensors: Vec < TensorDynLen >) -> Result < Self >` (impl TensorTrain)
 
 Create a new tensor train from a vector of tensors. The tensor train is created with no assumed orthogonality.
 
-### `pub fn with_ortho(tensors: Vec < TensorDynLen < Id , Symm > >, llim: i32, rlim: i32, canonical_form: Option < CanonicalForm >) -> Result < Self >` (impl TensorTrain < Id , Symm >)
+### `pub fn with_ortho(tensors: Vec < TensorDynLen >, llim: i32, rlim: i32, canonical_form: Option < CanonicalForm >) -> Result < Self >` (impl TensorTrain)
 
 Create a new tensor train with specified orthogonality center. This is useful when constructing a tensor train that is already in canonical form.
 
-### `pub fn len(&self) -> usize` (impl TensorTrain < Id , Symm >)
+### `pub fn len(&self) -> usize` (impl TensorTrain)
 
 Number of sites (tensors) in the tensor train.
 
-### `pub fn is_empty(&self) -> bool` (impl TensorTrain < Id , Symm >)
+### `pub fn is_empty(&self) -> bool` (impl TensorTrain)
 
 Check if the tensor train is empty.
 
-### `pub fn llim(&self) -> i32` (impl TensorTrain < Id , Symm >)
+### `pub fn llim(&self) -> i32` (impl TensorTrain)
 
 Left orthogonality limit. Sites `0..llim` are guaranteed to be left-orthogonal. Returns -1 if no sites are left-orthogonal.
 
-### `pub fn rlim(&self) -> i32` (impl TensorTrain < Id , Symm >)
+### `pub fn rlim(&self) -> i32` (impl TensorTrain)
 
 Right orthogonality limit. Sites `rlim..len()` are guaranteed to be right-orthogonal. Returns `len() + 1` if no sites are right-orthogonal.
 
-### `pub fn set_llim(&mut self, llim: i32)` (impl TensorTrain < Id , Symm >)
+### `pub fn set_llim(&mut self, llim: i32)` (impl TensorTrain)
 
 Set the left orthogonality limit.
 
-### `pub fn set_rlim(&mut self, rlim: i32)` (impl TensorTrain < Id , Symm >)
+### `pub fn set_rlim(&mut self, rlim: i32)` (impl TensorTrain)
 
 Set the right orthogonality limit.
 
-### `pub fn ortho_lims(&self) -> Range < usize >` (impl TensorTrain < Id , Symm >)
+### `pub fn ortho_lims(&self) -> Range < usize >` (impl TensorTrain)
 
 Get the orthogonality center range. Returns the range of sites that may not be orthogonal. If the tensor train is fully left-orthogonal, returns an empty range at the end.
 
-### `pub fn isortho(&self) -> bool` (impl TensorTrain < Id , Symm >)
+### `pub fn isortho(&self) -> bool` (impl TensorTrain)
 
 Check if the tensor train has a single orthogonality center. Returns true if there is exactly one site that is not guaranteed to be orthogonal.
 
-### `pub fn orthocenter(&self) -> Option < usize >` (impl TensorTrain < Id , Symm >)
+### `pub fn orthocenter(&self) -> Option < usize >` (impl TensorTrain)
 
 Get the orthogonality center (0-indexed). Returns `Some(site)` if the tensor train has a single orthogonality center, `None` otherwise.
 
-### `pub fn canonical_form(&self) -> Option < CanonicalForm >` (impl TensorTrain < Id , Symm >)
+### `pub fn canonical_form(&self) -> Option < CanonicalForm >` (impl TensorTrain)
 
 Get the canonicalization method used.
 
-### `pub fn set_canonical_form(&mut self, method: Option < CanonicalForm >)` (impl TensorTrain < Id , Symm >)
+### `pub fn set_canonical_form(&mut self, method: Option < CanonicalForm >)` (impl TensorTrain)
 
 Set the canonicalization method.
 
-### `pub fn tensor(&self, site: usize) -> & TensorDynLen < Id , Symm >` (impl TensorTrain < Id , Symm >)
+### `pub fn tensor(&self, site: usize) -> & TensorDynLen` (impl TensorTrain)
 
 Get a reference to the tensor at the given site.
 
-### `pub fn tensor_checked(&self, site: usize) -> Result < & TensorDynLen < Id , Symm > >` (impl TensorTrain < Id , Symm >)
+### `pub fn tensor_checked(&self, site: usize) -> Result < & TensorDynLen >` (impl TensorTrain)
 
 Get a reference to the tensor at the given site. Returns `Err` if `site >= len()`.
 
-### `pub fn tensor_mut(&mut self, site: usize) -> & mut TensorDynLen < Id , Symm >` (impl TensorTrain < Id , Symm >)
+### `pub fn tensor_mut(&mut self, site: usize) -> & mut TensorDynLen` (impl TensorTrain)
 
 Get a mutable reference to the tensor at the given site.
 
-### `pub fn tensors(&self) -> Vec < & TensorDynLen < Id , Symm > >` (impl TensorTrain < Id , Symm >)
+### `pub fn tensors(&self) -> Vec < & TensorDynLen >` (impl TensorTrain)
 
 Get a reference to all tensors.
 
-### `pub fn tensors_mut(&mut self) -> Vec < & mut TensorDynLen < Id , Symm > >` (impl TensorTrain < Id , Symm >)
+### `pub fn tensors_mut(&mut self) -> Vec < & mut TensorDynLen >` (impl TensorTrain)
 
 Get a mutable reference to all tensors.
 
-### `pub fn linkind(&self, i: usize) -> Option < Index < Id , Symm > >` (impl TensorTrain < Id , Symm >)
+### `pub fn linkind(&self, i: usize) -> Option < DynIndex >` (impl TensorTrain)
 
 Get the link index between sites `i` and `i+1`. Returns `None` if `i >= len() - 1` or if no common index exists.
 
-### `pub fn linkinds(&self) -> Vec < Index < Id , Symm > >` (impl TensorTrain < Id , Symm >)
+### `pub fn linkinds(&self) -> Vec < DynIndex >` (impl TensorTrain)
 
 Get all link indices. Returns a vector of length `len() - 1` containing the link indices.
 
-### `pub fn sim_linkinds(&self) -> Self` (impl TensorTrain < Id , Symm >)
+### `pub fn sim_linkinds(&self) -> Self` (impl TensorTrain)
 
 Create a copy with all link indices replaced by new unique IDs. This is useful for computing inner products where two tensor trains share link indices. By simulating (replacing) the link indices in one
 
-### `pub fn siteinds(&self) -> Vec < Vec < Index < Id , Symm > > >` (impl TensorTrain < Id , Symm >)
+### `pub fn siteinds(&self) -> Vec < Vec < DynIndex > >` (impl TensorTrain)
 
 Get the site indices (non-link indices) for all sites. For each site, returns a vector of indices that are not shared with adjacent tensors (i.e., the "physical" or "site" indices).
 
-### `pub fn bond_dim(&self, i: usize) -> Option < usize >` (impl TensorTrain < Id , Symm >)
+### `pub fn bond_dim(&self, i: usize) -> Option < usize >` (impl TensorTrain)
 
 Get the bond dimension at link `i` (between sites `i` and `i+1`). Returns `None` if `i >= len() - 1`.
 
-### `pub fn bond_dims(&self) -> Vec < usize >` (impl TensorTrain < Id , Symm >)
+### `pub fn bond_dims(&self) -> Vec < usize >` (impl TensorTrain)
 
 Get all bond dimensions. Returns a vector of length `len() - 1`.
 
-### `pub fn maxbonddim(&self) -> usize` (impl TensorTrain < Id , Symm >)
+### `pub fn maxbonddim(&self) -> usize` (impl TensorTrain)
 
 Get the maximum bond dimension.
 
-### `pub fn haslink(&self, i: usize) -> bool` (impl TensorTrain < Id , Symm >)
+### `pub fn haslink(&self, i: usize) -> bool` (impl TensorTrain)
 
 Check if two adjacent tensors share an index.
 
-### `pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen < Id , Symm >)` (impl TensorTrain < Id , Symm >)
+### `pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen)` (impl TensorTrain)
 
 Replace the tensor at the given site. This invalidates orthogonality tracking.
 
-### `pub fn orthogonalize(&mut self, site: usize) -> Result < () >` (impl TensorTrain < Id , Symm >)
+### `pub fn orthogonalize(&mut self, site: usize) -> Result < () >` (impl TensorTrain)
 
 Orthogonalize the tensor train to have orthogonality center at the given site. This function performs a series of factorizations to make the tensor train canonical with orthogonality center at `site`.
 
-### `pub fn orthogonalize_with(&mut self, site: usize, form: CanonicalForm) -> Result < () >` (impl TensorTrain < Id , Symm >)
+### `pub fn orthogonalize_with(&mut self, site: usize, form: CanonicalForm) -> Result < () >` (impl TensorTrain)
 
 Orthogonalize with a specified canonical form.
 
-### `pub fn truncate(&mut self, options: & TruncateOptions) -> Result < () >` (impl TensorTrain < Id , Symm >)
+### `pub fn truncate(&mut self, options: & TruncateOptions) -> Result < () >` (impl TensorTrain)
 
 Truncate the tensor train bond dimensions. This delegates to the TreeTN's truncate_mut method, which performs a two-site sweep with Euler tour traversal for optimal truncation.
 
-### `pub fn inner(&self, other: & Self) -> AnyScalar` (impl TensorTrain < Id , Symm >)
+### `pub fn inner(&self, other: & Self) -> AnyScalar` (impl TensorTrain)
 
 Compute the inner product (dot product) of two tensor trains. Computes `<self | other>` = sum over all indices of `conj(self) * other`. Both tensor trains must have the same site indices (same IDs).
 
-### `pub fn norm_squared(&self) -> f64` (impl TensorTrain < Id , Symm >)
+### `pub fn norm_squared(&self) -> f64` (impl TensorTrain)
 
 Compute the squared norm of the tensor train. Returns `<self | self>` = ||self||^2.
 
-### `pub fn norm(&self) -> f64` (impl TensorTrain < Id , Symm >)
+### `pub fn norm(&self) -> f64` (impl TensorTrain)
 
 Compute the norm of the tensor train. Returns ||self|| = sqrt(<self | self>).
 
-### `pub fn contract(&self, other: & Self, options: & ContractOptions) -> Result < Self >` (impl TensorTrain < Id , Symm >)
+### `pub fn contract(&self, other: & Self, options: & ContractOptions) -> Result < Self >` (impl TensorTrain)
 
-Contract two tensor trains with the same site indices. This contracts two tensor trains that share the same site indices, resulting in a new tensor train. The contraction is performed using
+Contract two tensor trains, returning a new tensor train. This performs element-wise contraction of corresponding sites, similar to MPO-MPO contraction in ITensor.
 
-### ` fn default() -> Self` (impl TensorTrain < Id , Symm >)
+### ` fn default() -> Self` (impl TensorTrain)
 
 ### ` fn truncate_alg_to_form(alg: TruncateAlg) -> CanonicalForm`
 
 Convert TruncateAlg to CanonicalForm. Note: SVD truncation algorithm corresponds to Unitary canonical form because both produce orthogonal/isometric tensors.
 
-### ` fn make_tensor(indices: Vec < Index < DynId , NoSymmSpace > >) -> TensorDynLen < DynId , NoSymmSpace >`
+### ` fn make_tensor(indices: Vec < DynIndex >) -> TensorDynLen`
 
-Helper to create a simple tensor for testing using DynId
+Helper to create a simple tensor for testing
 
-### ` fn idx(id: u128, size: usize) -> Index < DynId , NoSymmSpace >`
+### ` fn idx(id: u128, size: usize) -> DynIndex`
 
-Helper to create an index with DynId
+Helper to create a DynIndex
 
 ### ` fn test_empty_tt()`
 

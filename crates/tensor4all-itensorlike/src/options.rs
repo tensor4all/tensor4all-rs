@@ -1,23 +1,19 @@
 //! Configuration options for tensor train operations.
 
 use std::ops::Range;
+use tensor4all_core::truncation::{HasTruncationParams, TruncationParams};
 
 // Re-export CanonicalForm from treetn for convenience
 pub use tensor4all_treetn::algorithm::CanonicalForm;
 
+// Re-export DecompositionAlg for convenience
+pub use tensor4all_core::truncation::DecompositionAlg;
+
 /// Truncation algorithm.
 ///
 /// This specifies which algorithm to use for truncating bond dimensions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TruncateAlg {
-    /// Singular Value Decomposition (optimal truncation).
-    #[default]
-    SVD,
-    /// Rank-revealing LU decomposition.
-    LU,
-    /// Cross Interpolation.
-    CI,
-}
+/// This is an alias for [`DecompositionAlg`] for backwards compatibility.
+pub type TruncateAlg = DecompositionAlg;
 
 /// Options for tensor train truncation.
 ///
@@ -58,21 +54,8 @@ pub struct TruncateOptions {
     /// Algorithm to use for truncation.
     pub alg: TruncateAlg,
 
-    /// Relative tolerance for truncation.
-    ///
-    /// Singular values satisfying `σ_i / σ_max < rtol` are truncated,
-    /// where `σ_max` is the largest singular value.
-    ///
-    /// **Note**: ITensorMPS.jl's `cutoff` = `rtol²` (for normalized tensors).
-    /// Use `rtol = sqrt(cutoff)` to match ITensorMPS.jl behavior.
-    ///
-    /// If `None`, no tolerance-based truncation is applied.
-    pub rtol: Option<f64>,
-
-    /// Maximum bond dimension (rank).
-    ///
-    /// If `None`, no rank limit is applied.
-    pub max_rank: Option<usize>,
+    /// Truncation parameters (rtol, max_rank).
+    pub truncation: TruncationParams,
 
     /// Range of sites to truncate (0-indexed, exclusive end).
     ///
@@ -84,10 +67,19 @@ impl Default for TruncateOptions {
     fn default() -> Self {
         Self {
             alg: TruncateAlg::SVD,
-            rtol: None,
-            max_rank: None,
+            truncation: TruncationParams::default(),
             site_range: None,
         }
+    }
+}
+
+impl HasTruncationParams for TruncateOptions {
+    fn truncation_params(&self) -> &TruncationParams {
+        &self.truncation
+    }
+
+    fn truncation_params_mut(&mut self) -> &mut TruncationParams {
+        &mut self.truncation
     }
 }
 
@@ -118,13 +110,13 @@ impl TruncateOptions {
 
     /// Set the relative tolerance for truncation.
     pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.rtol = Some(rtol);
+        self.truncation.rtol = Some(rtol);
         self
     }
 
     /// Set the maximum rank (bond dimension).
     pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.max_rank = Some(max_rank);
+        self.truncation.max_rank = Some(max_rank);
         self
     }
 
@@ -135,6 +127,16 @@ impl TruncateOptions {
     pub fn with_site_range(mut self, range: Range<usize>) -> Self {
         self.site_range = Some(range);
         self
+    }
+
+    /// Get rtol (for backwards compatibility).
+    pub fn rtol(&self) -> Option<f64> {
+        self.truncation.rtol
+    }
+
+    /// Get max_rank (for backwards compatibility).
+    pub fn max_rank(&self) -> Option<usize> {
+        self.truncation.max_rank
     }
 }
 
@@ -170,10 +172,8 @@ pub enum ContractMethod {
 pub struct ContractOptions {
     /// Contraction method to use.
     pub method: ContractMethod,
-    /// Maximum bond dimension.
-    pub max_rank: Option<usize>,
-    /// Relative tolerance for truncation.
-    pub rtol: Option<f64>,
+    /// Truncation parameters (rtol, max_rank).
+    pub truncation: TruncationParams,
     /// Number of sweeps for Fit method.
     pub nsweeps: usize,
 }
@@ -182,10 +182,19 @@ impl Default for ContractOptions {
     fn default() -> Self {
         Self {
             method: ContractMethod::default(),
-            max_rank: None,
-            rtol: None,
+            truncation: TruncationParams::default(),
             nsweeps: 2,
         }
+    }
+}
+
+impl HasTruncationParams for ContractOptions {
+    fn truncation_params(&self) -> &TruncationParams {
+        &self.truncation
+    }
+
+    fn truncation_params_mut(&mut self) -> &mut TruncationParams {
+        &mut self.truncation
     }
 }
 
@@ -219,13 +228,13 @@ impl ContractOptions {
 
     /// Set maximum bond dimension.
     pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.max_rank = Some(max_rank);
+        self.truncation.max_rank = Some(max_rank);
         self
     }
 
     /// Set relative tolerance.
     pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.rtol = Some(rtol);
+        self.truncation.rtol = Some(rtol);
         self
     }
 
@@ -233,5 +242,15 @@ impl ContractOptions {
     pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
         self.nsweeps = nsweeps;
         self
+    }
+
+    /// Get rtol (for backwards compatibility).
+    pub fn rtol(&self) -> Option<f64> {
+        self.truncation.rtol
+    }
+
+    /// Get max_rank (for backwards compatibility).
+    pub fn max_rank(&self) -> Option<usize> {
+        self.truncation.max_rank
     }
 }

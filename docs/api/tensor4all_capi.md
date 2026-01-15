@@ -102,6 +102,70 @@ Check if an index has a specific tag
 
 ### ` fn test_index_new_with_id()`
 
+## src/simplett.rs
+
+### `pub(crate) fn new(tt: TensorTrain < f64 >) -> Self` (impl t4a_simplett_f64)
+
+### `pub(crate) fn inner(&self) -> & TensorTrain < f64 >` (impl t4a_simplett_f64)
+
+### `pub(crate) fn inner_mut(&mut self) -> & mut TensorTrain < f64 >` (impl t4a_simplett_f64)
+
+### `pub(crate) fn into_inner(self) -> TensorTrain < f64 >` (impl t4a_simplett_f64)
+
+### ` fn drop(&mut self)` (impl t4a_simplett_f64)
+
+### `pub fn t4a_simplett_f64_release(ptr: * mut t4a_simplett_f64)`
+
+Release a SimpleTT tensor train handle.
+
+### `pub fn t4a_simplett_f64_clone(ptr: * const t4a_simplett_f64) -> * mut t4a_simplett_f64`
+
+Clone a SimpleTT tensor train.
+
+### `pub fn t4a_simplett_f64_constant(site_dims: * const libc :: size_t, n_sites: libc :: size_t, value: libc :: c_double) -> * mut t4a_simplett_f64`
+
+Create a constant tensor train.
+
+### `pub fn t4a_simplett_f64_zeros(site_dims: * const libc :: size_t, n_sites: libc :: size_t) -> * mut t4a_simplett_f64`
+
+Create a zero tensor train.
+
+### `pub fn t4a_simplett_f64_len(ptr: * const t4a_simplett_f64, out_len: * mut libc :: size_t) -> StatusCode`
+
+Get the number of sites.
+
+### `pub fn t4a_simplett_f64_site_dims(ptr: * const t4a_simplett_f64, out_dims: * mut libc :: size_t, buf_len: libc :: size_t) -> StatusCode`
+
+Get the site dimensions.
+
+### `pub fn t4a_simplett_f64_link_dims(ptr: * const t4a_simplett_f64, out_dims: * mut libc :: size_t, buf_len: libc :: size_t) -> StatusCode`
+
+Get the link (bond) dimensions.
+
+### `pub fn t4a_simplett_f64_rank(ptr: * const t4a_simplett_f64, out_rank: * mut libc :: size_t) -> StatusCode`
+
+Get the maximum bond dimension (rank).
+
+### `pub fn t4a_simplett_f64_evaluate(ptr: * const t4a_simplett_f64, indices: * const libc :: size_t, n_indices: libc :: size_t, out_value: * mut libc :: c_double) -> StatusCode`
+
+Evaluate the tensor train at a given multi-index.
+
+### `pub fn t4a_simplett_f64_sum(ptr: * const t4a_simplett_f64, out_value: * mut libc :: c_double) -> StatusCode`
+
+Compute the sum over all indices.
+
+### `pub fn t4a_simplett_f64_norm(ptr: * const t4a_simplett_f64, out_value: * mut libc :: c_double) -> StatusCode`
+
+Compute the Frobenius norm.
+
+### `pub fn t4a_simplett_f64_site_tensor(ptr: * const t4a_simplett_f64, site: libc :: size_t, out_data: * mut libc :: c_double, buf_len: libc :: size_t, out_left_dim: * mut libc :: size_t, out_site_dim: * mut libc :: size_t, out_right_dim: * mut libc :: size_t) -> StatusCode`
+
+Get site tensor data at a specific site. The tensor has shape (left_dim, site_dim, right_dim) in row-major order.
+
+### ` fn test_simplett_constant()`
+
+### ` fn test_simplett_evaluate()`
+
 ## src/tensor.rs
 
 ### `pub fn t4a_tensor_get_rank(ptr: * const t4a_tensor, out_rank: * mut libc :: size_t) -> StatusCode`
@@ -141,6 +205,66 @@ Create a new dense complex64 tensor from indices and data.
 ### ` fn test_tensor_accessors()`
 
 ### ` fn test_tensor_c64()`
+
+## src/tensorci.rs
+
+### `pub(crate) fn new(tci: TensorCI2 < f64 >) -> Self` (impl t4a_tci2_f64)
+
+### `pub(crate) fn inner(&self) -> & TensorCI2 < f64 >` (impl t4a_tci2_f64)
+
+### `pub(crate) fn inner_mut(&mut self) -> & mut TensorCI2 < f64 >` (impl t4a_tci2_f64)
+
+### ` fn drop(&mut self)` (impl t4a_tci2_f64)
+
+### `pub fn t4a_tci2_f64_release(ptr: * mut t4a_tci2_f64)`
+
+Release a TensorCI2 handle.
+
+### `pub fn t4a_tci2_f64_new(local_dims: * const libc :: size_t, n_sites: libc :: size_t) -> * mut t4a_tci2_f64`
+
+Create a new TensorCI2 object.
+
+### `pub fn t4a_tci2_f64_len(ptr: * const t4a_tci2_f64, out_len: * mut libc :: size_t) -> StatusCode`
+
+Get the number of sites.
+
+### `pub fn t4a_tci2_f64_rank(ptr: * const t4a_tci2_f64, out_rank: * mut libc :: size_t) -> StatusCode`
+
+Get the current rank (maximum bond dimension).
+
+### `pub fn t4a_tci2_f64_link_dims(ptr: * const t4a_tci2_f64, out_dims: * mut libc :: size_t, buf_len: libc :: size_t) -> StatusCode`
+
+Get the link (bond) dimensions.
+
+### `pub fn t4a_tci2_f64_max_sample_value(ptr: * const t4a_tci2_f64, out_value: * mut libc :: c_double) -> StatusCode`
+
+Get the maximum sample value encountered.
+
+### `pub fn t4a_tci2_f64_max_bond_error(ptr: * const t4a_tci2_f64, out_value: * mut libc :: c_double) -> StatusCode`
+
+Get the maximum bond error from the last sweep.
+
+### `pub fn t4a_tci2_f64_add_global_pivots(ptr: * mut t4a_tci2_f64, pivots: * const libc :: size_t, n_pivots: libc :: size_t, n_sites: libc :: size_t) -> StatusCode`
+
+Add global pivots to the TCI.
+
+### `pub fn t4a_tci2_f64_sweep(ptr: * mut t4a_tci2_f64, eval_fn: EvalCallback, user_data: * mut c_void, abstol: libc :: c_double, max_bonddim: libc :: size_t, n_iters: libc :: size_t, out_error: * mut libc :: c_double) -> StatusCode`
+
+Perform a 2-site sweep. This is the main optimization step. The callback function is called to evaluate the target function at various indices.
+
+### `pub fn t4a_tci2_f64_to_tensor_train(ptr: * const t4a_tci2_f64) -> * mut t4a_simplett_f64`
+
+Convert the TCI to a TensorTrain.
+
+### `pub fn t4a_crossinterpolate2_f64(local_dims: * const libc :: size_t, n_sites: libc :: size_t, initial_pivots: * const libc :: size_t, n_initial_pivots: libc :: size_t, eval_fn: EvalCallback, user_data: * mut c_void, tolerance: libc :: c_double, max_bonddim: libc :: size_t, max_iter: libc :: size_t, out_tci: * mut * mut t4a_tci2_f64, out_final_error: * mut libc :: c_double) -> StatusCode`
+
+Perform cross interpolation of a function. This is the main entry point for TCI. It creates a TCI object, performs optimization sweeps, and returns the result.
+
+### ` fn sum_callback(indices: * const i64, n_indices: libc :: size_t, result: * mut f64, _user_data: * mut c_void) -> i32`
+
+### ` fn test_tci2_new()`
+
+### ` fn test_crossinterpolate2_constant()`
 
 ## src/tensortrain.rs
 
@@ -286,25 +410,9 @@ Get a mutable reference to the inner InternalTensorTrain
 
 ### ` fn from(form: t4a_canonical_form) -> Self` (impl tensor4all_itensorlike :: CanonicalForm)
 
-### ` fn default() -> Self` (impl t4a_factorize_algorithm)
+### ` fn from(alg: tensor4all_core :: FactorizeAlg) -> Self` (impl t4a_factorize_algorithm)
 
-### ` fn from(alg: tensor4all_core :: FactorizeAlgorithm) -> Self` (impl t4a_factorize_algorithm)
-
-### ` fn from(alg: t4a_factorize_algorithm) -> Self` (impl tensor4all_core :: FactorizeAlgorithm)
-
-### ` fn default() -> Self` (impl t4a_contraction_algorithm)
-
-### ` fn from(alg: tensor4all_core :: ContractionAlgorithm) -> Self` (impl t4a_contraction_algorithm)
-
-### ` fn from(alg: t4a_contraction_algorithm) -> Self` (impl tensor4all_core :: ContractionAlgorithm)
-
-### ` fn default() -> Self` (impl t4a_compression_algorithm)
-
-### ` fn from(alg: tensor4all_core :: CompressionAlgorithm) -> Self` (impl t4a_compression_algorithm)
-
-### ` fn from(alg: t4a_compression_algorithm) -> Self` (impl tensor4all_core :: CompressionAlgorithm)
-
-### ` fn default() -> Self` (impl t4a_contract_method)
+### ` fn from(alg: t4a_factorize_algorithm) -> Self` (impl tensor4all_core :: FactorizeAlg)
 
 ### ` fn from(method: tensor4all_itensorlike :: ContractMethod) -> Self` (impl t4a_contract_method)
 

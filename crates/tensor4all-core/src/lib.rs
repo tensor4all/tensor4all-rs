@@ -1,7 +1,9 @@
 // Common (tags, utilities)
+pub mod global_default;
 pub mod index_like;
 pub mod smallstring;
 pub mod tagset;
+pub mod truncation;
 
 // Default concrete type implementations (index, tensor, linalg, etc.)
 pub mod defaults;
@@ -88,3 +90,7 @@ pub use defaults::qr::{
 pub use defaults::svd::{
     default_svd_rtol, set_default_svd_rtol, svd, svd_c64, svd_with, SvdError, SvdOptions,
 };
+
+// Global default and truncation utilities
+pub use global_default::{GlobalDefault, InvalidRtolError};
+pub use truncation::{DecompositionAlg, HasTruncationParams, TruncationParams};

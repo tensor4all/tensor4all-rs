@@ -66,8 +66,8 @@ where
         self.truncate_impl(
             canonical_center,
             options.form,
-            options.rtol,
-            options.max_rank,
+            options.truncation.rtol,
+            options.truncation.max_rank,
             "truncate",
         )?;
         Ok(self)
@@ -88,8 +88,8 @@ where
         self.truncate_impl(
             canonical_center,
             options.form,
-            options.rtol,
-            options.max_rank,
+            options.truncation.rtol,
+            options.truncation.max_rank,
             "truncate_mut",
         )
     }

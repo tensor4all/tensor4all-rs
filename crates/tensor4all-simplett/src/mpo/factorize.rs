@@ -4,12 +4,10 @@
 //! for compressing and reshaping MPO tensors.
 
 use super::error::{MPOError, Result};
-use mdarray::{DSlice, DTensor};
+use super::Matrix2;
+use mdarray::DSlice;
 use num_complex::ComplexFloat;
 use tensor4all_tensorbackend::svd_backend;
-
-/// Type alias for 2D matrix using mdarray
-pub type Matrix2<T> = DTensor<T, 2>;
 
 /// Factorization method to use
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -123,10 +121,8 @@ where
     }
 }
 
-/// Helper function to create a zero-filled 2D tensor
-fn matrix2_zeros<T: Clone + Default>(rows: usize, cols: usize) -> Matrix2<T> {
-    DTensor::<T, 2>::from_elem([rows, cols], T::default())
-}
+// Use the shared matrix2_zeros from the parent module
+use super::matrix2_zeros;
 
 /// Factorize using SVD
 fn factorize_svd<T: SVDScalar>(

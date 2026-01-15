@@ -146,49 +146,45 @@ Contract two tensors via GEMM (matrix multiplication). This function assumes tha
 
 Compute permutation to make contracted axes contiguous. If `axes_at_front` is true, contracted axes are moved to the front (maintaining original order). If false, contracted axes are moved to the end (maintaining original order).
 
-### `pub fn from_vec(vec: Vec < f64 >) -> Self` (impl DiagStorageF64)
+### `pub fn from_vec(vec: Vec < T >) -> Self` (impl DiagStorage < T >)
 
-### `pub fn as_slice(&self) -> & [f64]` (impl DiagStorageF64)
+### `pub fn as_slice(&self) -> & [T]` (impl DiagStorage < T >)
 
-### `pub fn as_mut_slice(&mut self) -> & mut [f64]` (impl DiagStorageF64)
+### `pub fn as_mut_slice(&mut self) -> & mut [T]` (impl DiagStorage < T >)
 
-### `pub fn into_vec(self) -> Vec < f64 >` (impl DiagStorageF64)
+### `pub fn into_vec(self) -> Vec < T >` (impl DiagStorage < T >)
 
-### `pub fn len(&self) -> usize` (impl DiagStorageF64)
+### `pub fn len(&self) -> usize` (impl DiagStorage < T >)
 
-### `pub fn get(&self, i: usize) -> f64` (impl DiagStorageF64)
+### `pub fn is_empty(&self) -> bool` (impl DiagStorage < T >)
 
-### `pub fn set(&mut self, i: usize, val: f64)` (impl DiagStorageF64)
+### `pub fn get(&self, i: usize) -> T` (impl DiagStorage < T >)
 
-### `pub fn to_dense_vec(&self, dims: & [usize]) -> Vec < f64 >` (impl DiagStorageF64)
+### `pub fn set(&mut self, i: usize, val: T)` (impl DiagStorage < T >)
 
-Convert diagonal storage to a dense vector representation. Creates a dense vector with diagonal elements set and off-diagonal elements as zero.
-
-### `pub fn contract_diag_diag(&self, dims: & [usize], other: & Self, other_dims: & [usize], result_dims: & [usize]) -> Storage` (impl DiagStorageF64)
-
-Contract this diagonal storage with another diagonal storage. Returns either a scalar (DenseStorageF64 with one element) or a diagonal storage.
-
-### `pub fn from_vec(vec: Vec < Complex64 >) -> Self` (impl DiagStorageC64)
-
-### `pub fn as_slice(&self) -> & [Complex64]` (impl DiagStorageC64)
-
-### `pub fn as_mut_slice(&mut self) -> & mut [Complex64]` (impl DiagStorageC64)
-
-### `pub fn into_vec(self) -> Vec < Complex64 >` (impl DiagStorageC64)
-
-### `pub fn len(&self) -> usize` (impl DiagStorageC64)
-
-### `pub fn get(&self, i: usize) -> Complex64` (impl DiagStorageC64)
-
-### `pub fn set(&mut self, i: usize, val: Complex64)` (impl DiagStorageC64)
-
-### `pub fn to_dense_vec(&self, dims: & [usize]) -> Vec < Complex64 >` (impl DiagStorageC64)
+### `pub fn to_dense_vec(&self, dims: & [usize]) -> Vec < T >` (impl DiagStorage < T >)
 
 Convert diagonal storage to a dense vector representation. Creates a dense vector with diagonal elements set and off-diagonal elements as zero.
 
-### `pub fn contract_diag_diag(&self, dims: & [usize], other: & Self, other_dims: & [usize], result_dims: & [usize]) -> Storage` (impl DiagStorageC64)
+### `pub fn contract_diag_diag(&self, dims: & [usize], other: & Self, other_dims: & [usize], result_dims: & [usize], make_dense: impl FnOnce (Vec < T >) -> Storage, make_diag: impl FnOnce (Vec < T >) -> Storage) -> Storage` (impl DiagStorage < T >)
 
-Contract this diagonal storage with another diagonal storage. Returns either a scalar (DenseStorageC64 with one element) or a diagonal storage.
+Contract this diagonal storage with another diagonal storage of the same type. Returns either a scalar (Dense with one element) or a diagonal storage.
+
+### `pub fn contract_diag_dense(&self, diag_dims: & [usize], axes_diag: & [usize], dense: & DenseStorage < T >, dense_dims: & [usize], axes_dense: & [usize], result_dims: & [usize], make_storage: impl FnOnce (Vec < T >) -> Storage) -> Storage` (impl DiagStorage < T >)
+
+Contract this diagonal storage with a dense storage.
+
+### ` fn contract_diag_dense_impl(diag: & [T], diag_dims: & [usize], axes_diag: & [usize], dense: & [T], dense_dims: & [usize], axes_dense: & [usize], result_dims: & [usize], make_storage: impl FnOnce (Vec < T >) -> Storage) -> Storage`
+
+Generic implementation of Diag × Dense contraction. This function exploits the diagonal structure: for a diagonal tensor, all indices have the same value t (0 <= t < d). When contracting with
+
+### ` fn compute_strides(dims: & [usize]) -> Vec < usize >`
+
+Compute row-major strides for given dimensions.
+
+### ` fn contract_dense_diag_impl(dense: & DenseStorage < T >, dense_dims: & [usize], axes_dense: & [usize], diag: & DiagStorage < T >, diag_dims: & [usize], axes_diag: & [usize], _result_dims: & [usize], make_storage: impl FnOnce (Vec < T >) -> Storage, make_permuted: impl FnOnce (Storage , & [usize] , & [usize]) -> Storage) -> Storage`
+
+Helper for Dense × Diag contraction: compute as Diag × Dense and permute result. This function handles the case where Dense appears first in the contraction. It computes the contraction using `contract_diag_dense_impl` (which assumes Diag first),
 
 ### `pub fn new_dense(capacity: usize) -> Storage` (trait DenseStorageFactory)
 
@@ -225,6 +221,10 @@ Check if this storage is a Diag storage type.
 ### `pub fn len(&self) -> usize` (impl Storage)
 
 Get the length of the storage (number of elements).
+
+### `pub fn is_empty(&self) -> bool` (impl Storage)
+
+Check if the storage is empty.
 
 ### `pub fn sum_f64(&self) -> f64` (impl Storage)
 
@@ -290,7 +290,15 @@ Get the minimum dimension from a slice of dimensions. This is used for DiagTenso
 
 Contract two storage tensors along specified axes. This is an internal helper function that contracts two `Storage` tensors. For Dense tensors, uses mdarray-linalg's contract method.
 
-### `pub fn extract_dense_view(storage: & 'a Storage) -> Result < & 'a [Self] , String >` (trait StorageScalar)
+### ` fn promote_diag_to_c64(diag: & DiagStorage < f64 >) -> DiagStorage < Complex64 >`
+
+Promote Diag<f64> to Diag<Complex64>
+
+### ` fn promote_dense_to_c64(dense: & DenseStorage < f64 >) -> DenseStorage < Complex64 >`
+
+Promote Dense<f64> to Dense<Complex64>
+
+### `pub fn extract_dense_view(storage: & Storage) -> Result < & [Self] , String >` (trait StorageScalar)
 
 Extract a borrowed view of dense storage data (no copy). Returns an error if the storage is not the matching dense type.
 
@@ -310,11 +318,11 @@ Create `Storage` from owned dense data.
 
 Convert dense storage to a DTensor with rank 2. This function extracts data from dense storage and reshapes it into a `DTensor<T, 2>` with the specified shape `[m, n]`. The data length must match `m * n`.
 
-### ` fn extract_dense_view(storage: & 'a Storage) -> Result < & 'a [Self] , String >` (impl f64)
+### ` fn extract_dense_view(storage: & Storage) -> Result < & [Self] , String >` (impl f64)
 
 ### ` fn dense_storage(data: Vec < Self >) -> Arc < Storage >` (impl f64)
 
-### ` fn extract_dense_view(storage: & 'a Storage) -> Result < & 'a [Self] , String >` (impl Complex64)
+### ` fn extract_dense_view(storage: & Storage) -> Result < & [Self] , String >` (impl Complex64)
 
 ### ` fn dense_storage(data: Vec < Self >) -> Arc < Storage >` (impl Complex64)
 
@@ -325,4 +333,40 @@ Convert dense storage to a DTensor with rank 2. This function extracts data from
 ### ` fn mul(self, scalar: Complex64) -> Self :: Output` (impl & Storage)
 
 ### ` fn mul(self, scalar: AnyScalar) -> Self :: Output` (impl & Storage)
+
+### ` fn extract_f64(storage: & Storage) -> Vec < f64 >`
+
+Helper to extract f64 data from storage
+
+### ` fn extract_c64(storage: & Storage) -> Vec < Complex64 >`
+
+Helper to extract Complex64 data from storage
+
+### ` fn test_diag_storage_generic_f64()`
+
+### ` fn test_diag_storage_generic_c64()`
+
+### ` fn test_diag_to_dense_vec_2d()`
+
+### ` fn test_diag_to_dense_vec_3d()`
+
+### ` fn test_contract_diag_dense_2d_all_contracted()`
+
+### ` fn test_contract_diag_dense_2d_one_axis()`
+
+### ` fn test_contract_dense_diag_2d_one_axis()`
+
+### ` fn test_contract_diag_dense_3d()`
+
+### ` fn test_contract_diag_f64_dense_c64()`
+
+### ` fn test_contract_diag_c64_dense_f64()`
+
+### ` fn test_contract_dense_f64_diag_c64()`
+
+### ` fn test_contract_dense_c64_diag_f64()`
+
+### ` fn test_contract_diag_diag_all_contracted()`
+
+### ` fn test_contract_diag_diag_partial()`
 

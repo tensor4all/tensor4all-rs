@@ -6,15 +6,10 @@
 use super::contraction::ContractionOptions;
 use super::environment::contract_site_tensors;
 use super::error::{MPOError, Result};
-use super::factorize::{factorize, FactorizeOptions, Matrix2, SVDScalar};
+use super::factorize::{factorize, FactorizeOptions, SVDScalar};
 use super::mpo::MPO;
 use super::types::{tensor4_zeros, Tensor4, Tensor4Ops};
-use mdarray::DTensor;
-
-/// Helper function to create a zero-filled 2D tensor
-fn matrix2_zeros<T: Clone + Default>(rows: usize, cols: usize) -> Matrix2<T> {
-    DTensor::<T, 2>::from_elem([rows, cols], T::default())
-}
+use super::{matrix2_zeros, Matrix2};
 
 /// Perform naive contraction of two MPOs
 ///

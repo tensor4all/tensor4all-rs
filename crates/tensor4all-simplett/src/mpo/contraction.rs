@@ -7,17 +7,10 @@ use std::collections::HashMap;
 
 use super::error::{MPOError, Result};
 use super::factorize::SVDScalar;
+use super::matrix2_zeros;
 use super::mpo::MPO;
 use super::types::Tensor4Ops;
-use mdarray::DTensor;
-
-/// Type alias for 2D matrix using mdarray
-pub type Matrix2<T> = DTensor<T, 2>;
-
-/// Helper function to create a zero-filled 2D tensor
-fn matrix2_zeros<T: Clone + Default>(rows: usize, cols: usize) -> Matrix2<T> {
-    DTensor::<T, 2>::from_elem([rows, cols], T::default())
-}
+use super::Matrix2;
 
 /// Options for contraction operations
 #[derive(Debug, Clone)]

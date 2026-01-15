@@ -22,17 +22,41 @@ Convert to integer representation by scaling with LCM of denominators. Returns (
 
 Create an affine transformation operator. This operator transforms a quantics tensor train representing a function f(x_1, ..., x_N) to g(y_1, ..., y_M) where y = A*x + b.
 
+### `pub fn affine_transform_matrix(r: usize, params: & AffineParams, bc: & [BoundaryCondition]) -> Result < CsMat < f64 > >`
+
+Compute the full affine transformation matrix directly (for verification). This computes the transformation matrix by directly evaluating y = A*x + b for all possible input values. The result is a sparse boolean matrix.
+
 ### ` fn affine_transform_mpo(r: usize, params: & AffineParams, bc: & [BoundaryCondition]) -> Result < TensorTrain < Complex64 > >`
 
 Create the affine transformation MPO as a TensorTrain.
 
-### ` fn affine_transform_tensors(r: usize, a_int: & [i64], b_int: & [i64], scale: i64, m: usize, n: usize, bc_periodic: & [bool]) -> Result < Vec < tensor4all_simpletensortrain :: Tensor3 < Complex64 > > >`
+### `pub fn affine_transform_tensors_unfused(r: usize, params: & AffineParams, bc: & [BoundaryCondition]) -> Result < Vec < DTensor < Complex64 , 3 > > >`
+
+Create unfused affine transformation tensors. Returns a vector of R tensors, where each tensor has shape: `[left_bond, 2, 2, ..., 2, right_bond]` with M+N physical indices of dimension 2.
+
+### `pub fn new(params: & AffineParams) -> Self` (impl UnfusedTensorInfo)
+
+Create info for the given affine parameters.
+
+### `pub fn unfused_shape(&self, left_bond: usize, right_bond: usize) -> Vec < usize >` (impl UnfusedTensorInfo)
+
+Get the shape for a fully unfused tensor at a given site. Returns `[left_bond, 2, 2, ..., 2, right_bond]` where there are M+N 2s.
+
+### `pub fn decode_fused_index(&self, fused_idx: usize) -> (Vec < usize > , Vec < usize >)` (impl UnfusedTensorInfo)
+
+Decode a fused site index to individual variable bits. Returns `(y_bits, x_bits)` where: - `y_bits[i]` is the bit for output variable i
+
+### `pub fn encode_fused_index(&self, y_bits: & [usize], x_bits: & [usize]) -> usize` (impl UnfusedTensorInfo)
+
+Encode individual variable bits to a fused site index.
+
+### ` fn affine_transform_tensors(r: usize, a_int: & [i64], b_int: & [i64], scale: i64, m: usize, n: usize, bc_periodic: & [bool]) -> Result < Vec < tensor4all_simplett :: Tensor3 < Complex64 > > >`
 
 Compute the core tensors for the affine transformation. This implements the algorithm from Quantics.jl that handles: - Carry propagation for multi-bit arithmetic
 
-### ` fn affine_transform_core(a_int: & [i64], b_curr: & [i64], scale: i64, m: usize, n: usize, carries_in: & [Vec < i64 >], _is_lsb: bool) -> Result < (Vec < Vec < i64 > > , Vec < Vec < Vec < bool > > >) >`
+### ` fn affine_transform_core(a_int: & [i64], b_curr: & [i64], scale: i64, m: usize, n: usize, carries_in: & [Vec < i64 >]) -> Result < AffineCoreData >`
 
-Compute a single core tensor for the affine transformation. The core tensor encodes: 2 * carry_out = A * x + b_curr - scale * y + carry_in Returns (new_carries, data) where:
+Compute a single core tensor for the affine transformation. The core tensor encodes: 2 * carry_out = A * x + b_curr - scale * y + carry_in Returns AffineCoreData containing:
 
 ### ` fn test_affine_params_new()`
 
@@ -66,6 +90,52 @@ Compute a single core tensor for the affine transformation. The core tensor enco
 
 ### ` fn test_affine_larger_bits()`
 
+### ` fn test_affine_matrix_identity()`
+
+### ` fn test_affine_matrix_shift()`
+
+### ` fn test_affine_matrix_scale_by_two()`
+
+### ` fn test_affine_matrix_sum_2d()`
+
+### ` fn test_affine_matrix_2d_identity()`
+
+### ` fn test_affine_matrix_2d_swap()`
+
+### ` fn test_affine_matrix_half_scale()`
+
+### ` fn mpo_to_dense_matrix(mpo: & TensorTrain < Complex64 >, m: usize, n: usize, r: usize) -> Vec < Vec < Complex64 > >`
+
+Convert MPO (TensorTrain) to dense matrix for comparison. The MPO has R sites. Each site has physical dimension 2^(M+N). The site index encodes: site_idx = y_bits | (x_bits << M)
+
+### ` fn test_affine_mpo_vs_matrix_1d_identity()`
+
+### ` fn test_affine_mpo_vs_matrix_1d_shift()`
+
+### ` fn test_affine_mpo_vs_matrix_simple()`
+
+### ` fn test_affine_matrix_3x3_hard()`
+
+### ` fn test_affine_matrix_rectangular()`
+
+### ` fn test_affine_matrix_denom_odd()`
+
+### ` fn test_affine_matrix_light_cone()`
+
+### ` fn test_affine_matrix_unitarity_full()`
+
+### ` fn test_affine_mpo_vs_matrix_r1()`
+
+### ` fn test_affine_matrix_unitarity_with_shift()`
+
+### ` fn test_affine_unfused_basic()`
+
+### ` fn test_affine_unfused_2d()`
+
+### ` fn test_unfused_tensor_info()`
+
+### ` fn test_unfused_vs_fused_equivalence()`
+
 ## src/binaryop.rs
 
 ### `pub fn new(a: i8, b: i8) -> Result < Self >` (impl BinaryCoeffs)
@@ -96,7 +166,7 @@ Create a binary operation operator for two-variable quantics representation. Thi
 
 Create the binary operation MPO as a TensorTrain. The MPO operates on interleaved sites [x_1, y_1, x_2, y_2, ..., x_R, y_R] and computes two output variables:
 
-### ` fn binaryop_tensor_single(a: i8, b: i8, cin_on: bool, cout_on: bool, bc: i8) -> Vec < Vec < Vec < Vec < Vec < Complex64 > > > > >`
+### ` fn binaryop_tensor_single(a: i8, b: i8, cin_on: bool, cout_on: bool, bc: i8) -> DTensor < Complex64 , 5 >`
 
 Create a single binaryop tensor for one site. This is a direct port of _binaryop_tensor from Quantics.jl. Computes: a*x + b*y + carry_in = 2*carry_out + out
 
@@ -178,11 +248,11 @@ Create a flip operator: f(x) = g(2^R - x) This MPO transforms a function g(x) to
 
 ### ` fn flip_mpo(r: usize, bc: BoundaryCondition) -> Result < TensorTrain < Complex64 > >`
 
-Create the flip MPO as a TensorTrain. The flip operation computes -x using two's complement arithmetic: -x = ~x + 1 (bitwise NOT plus one)
+Create the flip MPO as a TensorTrain. The flip operation computes 2^R - x using two's complement-like arithmetic. Uses big-endian convention: site 0 = MSB, site R-1 = LSB.
 
 ### ` fn single_tensor_flip() -> [[[[Complex64 ; 2] ; 2] ; 2] ; 2]`
 
-Create the single-site tensor for flip operation. Returns a 4D tensor [cin][cout][s_out][s_in] where: - cin: input carry state (0 = carry -1, 1 = carry 0)
+Create the single-site tensor for flip operation. Returns a 4D tensor [cin][cout][a][b] where: - cin: input carry state (0 = carry -1, 1 = carry 0)
 
 ### ` fn test_single_tensor_flip()`
 
@@ -238,7 +308,7 @@ Get Chebyshev grid points and barycentric weights. Returns (grid, bary_weights) 
 
 Evaluate Lagrange polynomial P_alpha(x).
 
-### ` fn build_dft_core_tensor(grid: & [f64], bary_weights: & [f64], sign: f64) -> Vec < Vec < Vec < Vec < Complex64 > > > >`
+### ` fn build_dft_core_tensor(grid: & [f64], bary_weights: & [f64], sign: f64) -> DTensor < Complex64 , 4 >`
 
 Build the DFT core tensor A[alpha, tau, sigma, beta]. A[alpha, tau, sigma, beta] = P_alpha(x) * exp(2πi * sign * x * tau) where x = (sigma + grid[beta]) / 2
 
@@ -286,7 +356,7 @@ Create a shift operator: f(x) = g(x + offset) mod 2^R This MPO transforms a func
 
 ### ` fn shift_mpo(r: usize, offset: i64, bc: BoundaryCondition) -> Result < TensorTrain < Complex64 > >`
 
-Create the shift MPO as a TensorTrain. The shift operation computes x + offset using binary addition with carry propagation. The offset is decomposed into binary: offset = Σ_n offset_n * 2^(R-n)
+Create the shift MPO as a TensorTrain. The shift operation computes x + offset using binary addition with carry propagation. Uses big-endian convention: site n contains bit 2^(R-1-n) (MSB at site 0).
 
 ### ` fn test_shift_mpo_structure()`
 
