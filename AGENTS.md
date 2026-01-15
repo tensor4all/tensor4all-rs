@@ -57,6 +57,8 @@ fn test_op_f64() { test_op_generic::<f64>(); }
 fn test_op_c64() { test_op_generic::<Complex64>(); }
 ```
 
+- **Test tolerance changes**: When relaxing test tolerances (unit tests, codecov targets, etc.), always seek explicit user approval before making changes.
+
 ## API Design
 
 Only make functions `pub` when truly public API.
