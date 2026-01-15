@@ -140,7 +140,8 @@ fn main() -> Result<()> {
     println!("Contracting MPOs using zip-up method...");
     println!(
         "Options: method=Zipup, max_rank={}, rtol={:?}",
-        max_rank, options.rtol()
+        max_rank,
+        options.rtol()
     );
     println!("Note: Each run copies MPOs and includes orthogonalization time");
     println!();
