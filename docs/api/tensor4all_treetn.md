@@ -660,6 +660,30 @@ Get rtol (for backwards compatibility).
 
 Get max_rank (for backwards compatibility).
 
+### ` fn test_canonicalization_options_default()`
+
+### ` fn test_canonicalization_options_new()`
+
+### ` fn test_canonicalization_options_forced()`
+
+### ` fn test_canonicalization_options_builder()`
+
+### ` fn test_truncation_options_default()`
+
+### ` fn test_truncation_options_new()`
+
+### ` fn test_truncation_options_builder()`
+
+### ` fn test_truncation_options_has_truncation_params()`
+
+### ` fn test_split_options_default()`
+
+### ` fn test_split_options_new()`
+
+### ` fn test_split_options_builder()`
+
+### ` fn test_split_options_has_truncation_params()`
+
 ## src/random.rs
 
 ### `pub fn uniform(dim: usize) -> Self` (impl LinkSpace < V >)
@@ -936,9 +960,9 @@ Set maximum bond dimension.
 
 Set relative tolerance.
 
-### `pub fn with_nsweeps(mut self, nsweeps: usize) -> Self` (impl ContractionOptions)
+### `pub fn with_nfullsweeps(mut self, nfullsweeps: usize) -> Self` (impl ContractionOptions)
 
-Set number of sweeps for Fit method.
+Set number of full sweeps for Fit method.
 
 ### `pub fn with_convergence_tol(mut self, tol: f64) -> Self` (impl ContractionOptions)
 
@@ -1044,9 +1068,9 @@ Set the factorization algorithm.
 
 ### ` fn default() -> Self` (impl FitContractionOptions)
 
-### `pub fn new(nsweeps: usize) -> Self` (impl FitContractionOptions)
+### `pub fn new(nfullsweeps: usize) -> Self` (impl FitContractionOptions)
 
-Create new options with specified number of sweeps.
+Create new options with specified number of full sweeps.
 
 ### `pub fn with_max_rank(mut self, max_rank: usize) -> Self` (impl FitContractionOptions)
 
@@ -1092,9 +1116,9 @@ Set maximum bond dimension.
 
 Set relative tolerance.
 
-### `pub fn with_nsweeps(mut self, nsweeps: usize) -> Self` (impl ApplyOptions)
+### `pub fn with_nfullsweeps(mut self, nfullsweeps: usize) -> Self` (impl ApplyOptions)
 
-Set number of sweeps for Fit method.
+Set number of full sweeps for Fit method.
 
 ### `pub fn apply_linear_operator(operator: & LinearOperator < T , V >, state: & TreeTN < T , V >, options: ApplyOptions) -> Result < TreeTN < T , V > >`
 
@@ -1298,13 +1322,13 @@ Apply the local linear operator: `y = a₀ * x + a₁ * H * x` This is used by `
 
 ### ` fn default() -> Self` (impl LinsolveOptions)
 
-### `pub fn new(nsweeps: usize) -> Self` (impl LinsolveOptions)
+### `pub fn new(nfullsweeps: usize) -> Self` (impl LinsolveOptions)
 
-Create new options with specified number of sweeps.
+Create new options with specified number of full sweeps.
 
-### `pub fn with_nsweeps(mut self, nsweeps: usize) -> Self` (impl LinsolveOptions)
+### `pub fn with_nfullsweeps(mut self, nfullsweeps: usize) -> Self` (impl LinsolveOptions)
 
-Set number of sweeps.
+Set number of full sweeps.
 
 ### `pub fn with_truncation(mut self, truncation: TruncationOptions) -> Self` (impl LinsolveOptions)
 

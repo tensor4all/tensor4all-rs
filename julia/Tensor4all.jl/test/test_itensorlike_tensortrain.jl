@@ -254,11 +254,11 @@ using LinearAlgebra
         @test maxbonddim(result_truncated) <= 4
 
         # Test contract with :fit symbol
-        result_fit = contract(tt_a, tt_b; method=:fit, nsweeps=2)
+        result_fit = contract(tt_a, tt_b; method=:fit, nhalfsweeps=2)
         @test length(result_fit) == 3
 
         # Test contract with string "fit"
-        result_fit_str = contract(tt_a, tt_b; method="fit", nsweeps=2)
+        result_fit_str = contract(tt_a, tt_b; method="fit", nhalfsweeps=2)
         @test length(result_fit_str) == 3
 
         # Test contract with string "zipup"

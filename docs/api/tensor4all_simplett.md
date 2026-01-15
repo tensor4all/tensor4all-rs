@@ -246,30 +246,6 @@ Convenience function to compute dot product
 
 ### ` fn test_dot_different_tensors()`
 
-## src/decomposition.rs
-
-### `pub fn qr_decomp(matrix: & Matrix < T >) -> (Matrix < T > , Matrix < T >)`
-
-Compute QR decomposition using rank-revealing LU with left-orthogonal output Returns (Q, R) where Q is left-orthogonal and A ≈ Q * R
-
-### `pub fn lq_decomp(matrix: & Matrix < T >) -> (Matrix < T > , Matrix < T >)`
-
-Compute LQ decomposition (transpose, QR, transpose) Returns (L, Q) where Q is right-orthogonal and A ≈ L * Q
-
-### `pub fn tensor3_to_left_matrix(tensor: & Tensor3 < T >) -> Matrix < T >`
-
-Convert Tensor3 to Matrix with left dimensions flattened Reshapes tensor of shape (left, site, right) to matrix of shape (left * site, right)
-
-### `pub fn tensor3_to_right_matrix(tensor: & Tensor3 < T >) -> Matrix < T >`
-
-Convert Tensor3 to Matrix with right dimensions flattened Reshapes tensor of shape (left, site, right) to matrix of shape (left, site * right)
-
-### ` fn test_qr_decomp_identity()`
-
-### ` fn test_tensor3_to_left_matrix()`
-
-### ` fn test_tensor3_to_right_matrix()`
-
 ## src/mpo/contract_fit.rs
 
 ### ` fn default() -> Self` (impl FitOptions)

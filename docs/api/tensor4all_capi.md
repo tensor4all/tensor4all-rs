@@ -344,7 +344,7 @@ Compute the norm of the tensor train.
 
 Compute the inner product of two tensor trains. Computes <self | other> = sum over all indices of conj(self) * other.
 
-### `pub fn t4a_tt_contract(ptr1: * const t4a_tensortrain, ptr2: * const t4a_tensortrain, method: crate :: types :: t4a_contract_method, max_rank: libc :: size_t, rtol: libc :: c_double, nsweeps: libc :: size_t) -> * mut t4a_tensortrain`
+### `pub fn t4a_tt_contract(ptr1: * const t4a_tensortrain, ptr2: * const t4a_tensortrain, method: crate :: types :: t4a_contract_method, max_rank: libc :: size_t, rtol: libc :: c_double, nhalfsweeps: libc :: size_t) -> * mut t4a_tensortrain`
 
 Contract two tensor trains. Both tensor trains must have the same site indices.
 

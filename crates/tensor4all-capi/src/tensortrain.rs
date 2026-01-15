@@ -628,7 +628,7 @@ pub extern "C" fn t4a_tt_inner(
 /// * `method` - Contract method (Zipup=0, Fit=1)
 /// * `max_rank` - Maximum bond dimension (0 for no limit)
 /// * `rtol` - Relative tolerance (0.0 for default)
-/// * `nsweeps` - Number of sweeps for Fit method
+/// * `nhalfsweeps` - Number of half-sweeps for Fit method (must be a multiple of 2)
 ///
 /// # Returns
 /// A new tensor train handle, or NULL on error
@@ -639,7 +639,7 @@ pub extern "C" fn t4a_tt_contract(
     method: crate::types::t4a_contract_method,
     max_rank: libc::size_t,
     rtol: libc::c_double,
-    nsweeps: libc::size_t,
+    nhalfsweeps: libc::size_t,
 ) -> *mut t4a_tensortrain {
     if ptr1.is_null() || ptr2.is_null() {
         return std::ptr::null_mut();
@@ -665,8 +665,15 @@ pub extern "C" fn t4a_tt_contract(
         if rtol > 0.0 {
             options = options.with_rtol(rtol);
         }
-        if nsweeps > 0 {
-            options = options.with_nsweeps(nsweeps);
+        if nhalfsweeps > 0 {
+            // nhalfsweeps must be a multiple of 2
+            // Round up to nearest even number if odd
+            let nhalfsweeps_even = if nhalfsweeps % 2 == 0 {
+                nhalfsweeps
+            } else {
+                nhalfsweeps + 1
+            };
+            options = options.with_nhalfsweeps(nhalfsweeps_even);
         }
 
         match tt1.inner().contract(tt2.inner(), &options) {

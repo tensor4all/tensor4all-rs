@@ -66,9 +66,9 @@ Set maximum bond dimension.
 
 Set relative tolerance.
 
-### `pub fn with_nsweeps(mut self, nsweeps: usize) -> Self` (impl ContractOptions)
+### `pub fn with_nhalfsweeps(mut self, nhalfsweeps: usize) -> Self` (impl ContractOptions)
 
-Set number of sweeps for Fit method.
+Set number of half-sweeps for Fit method.
 
 ### `pub fn rtol(&self) -> Option < f64 >` (impl ContractOptions)
 
@@ -77,6 +77,26 @@ Get rtol (for backwards compatibility).
 ### `pub fn max_rank(&self) -> Option < usize >` (impl ContractOptions)
 
 Get max_rank (for backwards compatibility).
+
+### ` fn test_truncate_options_builder()`
+
+### ` fn test_truncate_options_algorithms()`
+
+### ` fn test_truncate_options_site_range()`
+
+### ` fn test_truncate_options_default()`
+
+### ` fn test_truncate_options_has_truncation_params()`
+
+### ` fn test_contract_options_builder()`
+
+### ` fn test_contract_options_methods()`
+
+### ` fn test_contract_options_default()`
+
+### ` fn test_contract_options_has_truncation_params()`
+
+### ` fn test_contract_method_default()`
 
 ## src/tensortrain.rs
 

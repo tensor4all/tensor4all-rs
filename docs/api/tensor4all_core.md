@@ -664,6 +664,10 @@ Set a new default value without validation.
 
 ### ` fn test_invalid_values()`
 
+### ` fn test_set_unchecked()`
+
+### ` fn test_error_display()`
+
 ## src/index_like.rs
 
 ### `pub fn id(&self) -> & Self :: Id` (trait IndexLike)
@@ -1183,4 +1187,10 @@ Set the max_rank value (builder pattern).
 ### ` fn test_effective_values()`
 
 ### ` fn test_decomposition_alg()`
+
+### ` fn test_decomposition_alg_default()`
+
+### ` fn test_truncation_params_merge()`
+
+### ` fn test_has_truncation_params_trait()`
 
