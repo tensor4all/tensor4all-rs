@@ -463,6 +463,7 @@ impl<T: DenseScalar> DiagStorage<T> {
     ///
     /// # Returns
     /// The contracted storage (always Dense, since Diag structure is generally lost)
+    #[allow(clippy::too_many_arguments)]
     pub fn contract_diag_dense(
         &self,
         diag_dims: &[usize],
@@ -503,6 +504,7 @@ pub type DiagStorageC64 = DiagStorage<Complex64>;
 ///    - Get diag[t]
 ///    - Extract the slice of dense where all axes_dense have value t
 ///    - Multiply and accumulate into result
+#[allow(clippy::too_many_arguments)]
 fn contract_diag_dense_impl<T: DenseScalar>(
     diag: &[T],
     diag_dims: &[usize],
@@ -562,14 +564,12 @@ fn contract_diag_dense_impl<T: DenseScalar>(
         // For each t, we accumulate diag[t] * dense_slice[t] into result
         let mut result = vec![T::zero(); result_size];
 
-        for t in 0..d.min(diag.len()) {
-            let diag_val = diag[t];
-
+        for (t, &diag_val) in diag.iter().enumerate().take(d.min(diag.len())) {
             // Compute base offset in dense for this t (all contracted axes = t)
             let base_offset: usize = axes_dense.iter().map(|&axis| t * dense_strides[axis]).sum();
 
             // Iterate over all non-contracted positions in dense
-            for flat_idx in 0..dense_slice_size {
+            for (flat_idx, result_item) in result.iter_mut().enumerate().take(dense_slice_size) {
                 // Convert flat_idx to multi-index for non-contracted dims
                 let mut offset = base_offset;
                 let mut remaining = flat_idx;
@@ -579,7 +579,7 @@ fn contract_diag_dense_impl<T: DenseScalar>(
                     offset += idx * dense_strides[global_axis];
                 }
 
-                result[flat_idx] += diag_val * dense[offset];
+                *result_item += diag_val * dense[offset];
             }
         }
 
@@ -595,9 +595,7 @@ fn contract_diag_dense_impl<T: DenseScalar>(
 
         let mut result = vec![T::zero(); result_size];
 
-        for t in 0..d.min(diag.len()) {
-            let diag_val = diag[t];
-
+        for (t, &diag_val) in diag.iter().enumerate().take(d.min(diag.len())) {
             // Compute base offset in dense for this t
             let base_offset_dense: usize =
                 axes_dense.iter().map(|&axis| t * dense_strides[axis]).sum();
@@ -608,6 +606,7 @@ fn contract_diag_dense_impl<T: DenseScalar>(
                 .sum();
 
             // Iterate over all non-contracted positions in dense
+            #[allow(clippy::needless_range_loop)]
             for flat_idx in 0..dense_slice_size {
                 // Convert flat_idx to multi-index for non-contracted dims
                 let mut offset_dense = base_offset_dense;
@@ -647,6 +646,7 @@ fn compute_strides(dims: &[usize]) -> Vec<usize> {
 /// This function handles the case where Dense appears first in the contraction.
 /// It computes the contraction using `contract_diag_dense_impl` (which assumes Diag first),
 /// then permutes the result to match the expected dimension order.
+#[allow(clippy::too_many_arguments)]
 fn contract_dense_diag_impl<T: DenseScalar>(
     dense: &DenseStorage<T>,
     dense_dims: &[usize],
@@ -798,6 +798,11 @@ impl Storage {
             Self::DiagF64(v) => v.len(),
             Self::DiagC64(v) => v.len(),
         }
+    }
+
+    /// Check if the storage is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Sum all elements as f64.
@@ -1593,7 +1598,7 @@ pub trait StorageScalar: Copy + 'static {
     /// Extract a borrowed view of dense storage data (no copy).
     ///
     /// Returns an error if the storage is not the matching dense type.
-    fn extract_dense_view<'a>(storage: &'a Storage) -> Result<&'a [Self], String>;
+    fn extract_dense_view(storage: &Storage) -> Result<&[Self], String>;
 
     /// Extract dense storage data as `Cow` (borrowed if possible, owned if needed).
     ///
@@ -1653,7 +1658,7 @@ pub fn storage_to_dtensor<T: StorageScalar>(
 }
 
 impl StorageScalar for f64 {
-    fn extract_dense_view<'a>(storage: &'a Storage) -> Result<&'a [Self], String> {
+    fn extract_dense_view(storage: &Storage) -> Result<&[Self], String> {
         match storage {
             Storage::DenseF64(ds) => Ok(ds.as_slice()),
             _ => Err(format!("Expected DenseF64 storage, got {:?}", storage)),
@@ -1666,7 +1671,7 @@ impl StorageScalar for f64 {
 }
 
 impl StorageScalar for Complex64 {
-    fn extract_dense_view<'a>(storage: &'a Storage) -> Result<&'a [Self], String> {
+    fn extract_dense_view(storage: &Storage) -> Result<&[Self], String> {
         match storage {
             Storage::DenseC64(ds) => Ok(ds.as_slice()),
             _ => Err(format!("Expected DenseC64 storage, got {:?}", storage)),
