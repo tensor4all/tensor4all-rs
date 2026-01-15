@@ -1000,9 +1000,7 @@ mod tests {
         let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
 
         // Test contract with Fit method
-        let options = ContractOptions::fit()
-            .with_max_rank(10)
-            .with_nhalfsweeps(4); // 4 half-sweeps = 2 full sweeps
+        let options = ContractOptions::fit().with_max_rank(10).with_nhalfsweeps(4); // 4 half-sweeps = 2 full sweeps
         let result = tt1.contract(&tt2, &options);
         assert!(result.is_ok());
         let result_tt = result.unwrap();
@@ -1030,7 +1028,6 @@ mod tests {
         assert_eq!(result_tt.len(), 1);
     }
 
-
     #[test]
     fn test_contract_nhalfsweeps_conversion() {
         use crate::ContractOptions;
@@ -1051,9 +1048,7 @@ mod tests {
 
         // Test that nhalfsweeps is correctly converted to nfullsweeps
         // nhalfsweeps=6 should become nfullsweeps=3
-        let options = ContractOptions::fit()
-            .with_nhalfsweeps(6)
-            .with_max_rank(10);
+        let options = ContractOptions::fit().with_nhalfsweeps(6).with_max_rank(10);
         let result = tt1.contract(&tt2, &options);
         assert!(result.is_ok());
         let result_tt = result.unwrap();
