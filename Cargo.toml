@@ -33,9 +33,9 @@ uint = "0.10"
 libc = "0.2"
 paste = "1.0"
 mdarray = "0.7.2"
-mdarray-linalg = { git = "https://github.com/grothesque/mdarray-linalg", rev = "febdb0756bbe" }
-mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", rev = "febdb0756bbe", package = "mdarray-linalg-faer" }
-mdarray-linalg-lapack = { git = "https://github.com/grothesque/mdarray-linalg", rev = "febdb0756bbe", package = "mdarray-linalg-lapack" }
+mdarray-linalg = { git = "https://github.com/grothesque/mdarray-linalg", rev = "499cf588589e" }
+mdarray-linalg-faer = { git = "https://github.com/grothesque/mdarray-linalg", rev = "499cf588589e", package = "mdarray-linalg-faer" }
+mdarray-linalg-lapack = { git = "https://github.com/grothesque/mdarray-linalg", rev = "499cf588589e", package = "mdarray-linalg-lapack" }
 faer = "0.23"
 faer-traits = "0.23"
 thiserror = "2.0"
