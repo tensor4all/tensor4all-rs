@@ -15,8 +15,8 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::{IndexLike, TensorLike};
 use crate::algorithm::CanonicalForm;
+use tensor4all_core::{IndexLike, TensorLike};
 
 use super::localupdate::{apply_local_update_sweep, LocalUpdateSweepPlan, TruncateUpdater};
 use super::TreeTN;

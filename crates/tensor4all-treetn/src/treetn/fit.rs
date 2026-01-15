@@ -31,7 +31,9 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::{AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{
+    AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
+};
 
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
 use super::TreeTN;
@@ -132,7 +134,8 @@ where
         tn_c: &TreeTN<T, V>,
     ) -> Result<T>
     where
-        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
         V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         // If already cached, return a clone
@@ -170,11 +173,8 @@ where
     /// # Arguments
     /// * `region` - The set of nodes whose tensors were updated
     /// * `tn_c` - The TreeTN (for topology information)
-    pub fn invalidate<'a>(
-        &mut self,
-        region: impl IntoIterator<Item = &'a V>,
-        tn_c: &TreeTN<T, V>,
-    ) where
+    pub fn invalidate<'a>(&mut self, region: impl IntoIterator<Item = &'a V>, tn_c: &TreeTN<T, V>)
+    where
         V: 'a + Send + Sync,
     {
         for t in region {
@@ -559,7 +559,8 @@ where
         }
 
         // Factorize using TensorLike::factorize
-        let factorize_result = ab_uv.factorize(&left_inds, &options)
+        let factorize_result = ab_uv
+            .factorize(&left_inds, &options)
             .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?;
 
         let new_tensor_u = factorize_result.left;

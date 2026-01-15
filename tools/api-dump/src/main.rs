@@ -146,7 +146,7 @@ fn process_crate(crate_path: &Path, output_dir: &Path) -> Result<(), Box<dyn std
     for entry in WalkDir::new(&src_dir)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "rs"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "rs"))
     {
         let file_path = entry.path();
         let relative_path = file_path.strip_prefix(crate_path).unwrap_or(file_path);

@@ -39,15 +39,15 @@ pub mod krylov;
 pub use defaults::tensordynlen as tensor;
 
 pub use any_scalar::AnyScalar;
-pub use storage::{
-    make_mut_storage, mindim, storage_to_dtensor, DenseStorageFactory, Storage, StorageScalar,
-    SumFromStorage,
-};
+pub use defaults::tensor_data::{TensorComponent, TensorData};
 pub use defaults::tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor,
     unfold_split, TensorAccess, TensorDynLen,
 };
-pub use defaults::tensor_data::{TensorComponent, TensorData};
+pub use storage::{
+    make_mut_storage, mindim, storage_to_dtensor, DenseStorageFactory, Storage, StorageScalar,
+    SumFromStorage,
+};
 pub use tensor_like::{
     AllowedPairs, Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions,
     FactorizeResult, TensorLike,

@@ -102,6 +102,7 @@ impl<const MAX_LEN: usize, C: SmallChar> SmallString<MAX_LEN, C> {
     /// - Any character cannot be represented in the character type C
     ///
     /// This function is allocation-free (no heap allocation).
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Self, SmallStringError> {
         let mut data = [C::ZERO; MAX_LEN];
         let mut len = 0;

@@ -1,15 +1,15 @@
+use crate::defaults::{DynId, DynIndex, TensorData};
 use crate::index_like::IndexLike;
 use crate::index_ops::{common_ind_positions, prepare_contraction, prepare_contraction_pairs};
-use crate::defaults::{DynId, DynIndex, TensorData};
 use crate::storage::{
     contract_storage, storage_to_dtensor, AnyScalar, Storage, StorageScalar, SumFromStorage,
 };
 use anyhow::Result;
-use tensor4all_tensorbackend::mdarray::DTensor;
 use num_complex::Complex64;
 use std::collections::HashSet;
 use std::ops::Mul;
 use std::sync::Arc;
+use tensor4all_tensorbackend::mdarray::DTensor;
 
 /// Compute the permutation array from original indices to new indices.
 ///
@@ -148,7 +148,7 @@ impl TensorDynLen {
         }
 
         // Create TensorData from storage
-        let index_ids: Vec<DynId> = indices.iter().map(|idx| idx.id().clone()).collect();
+        let index_ids: Vec<DynId> = indices.iter().map(|idx| *idx.id()).collect();
         let data = TensorData::new(storage, index_ids, dims.clone());
 
         Self {
@@ -216,7 +216,11 @@ impl TensorDynLen {
     ///
     /// This is an internal constructor for building tensors from lazy operations.
     fn from_data(indices: Vec<DynIndex>, dims: Vec<usize>, data: TensorData) -> Self {
-        Self { indices, dims, data }
+        Self {
+            indices,
+            dims,
+            data,
+        }
     }
 
     /// Sum all elements, returning `AnyScalar`.
@@ -353,8 +357,7 @@ impl TensorDynLen {
         );
 
         // Permute indices and dims
-        let new_indices: Vec<DynIndex> =
-            perm.iter().map(|&i| self.indices[i].clone()).collect();
+        let new_indices: Vec<DynIndex> = perm.iter().map(|&i| self.indices[i].clone()).collect();
         let new_dims: Vec<usize> = perm.iter().map(|&i| self.dims[i]).collect();
 
         // Permute storage data
@@ -475,42 +478,43 @@ impl TensorDynLen {
     /// let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), k.clone())]).unwrap();
     /// assert_eq!(result.dims, vec![2, 4]);
     /// ```
-    pub fn tensordot(
-        &self,
-        other: &Self,
-        pairs: &[(DynIndex, DynIndex)],
-    ) -> Result<Self> {
+    pub fn tensordot(&self, other: &Self, pairs: &[(DynIndex, DynIndex)]) -> Result<Self> {
         use crate::index_ops::ContractionError;
 
-        let spec =
-            prepare_contraction_pairs(&self.indices, &self.dims, &other.indices, &other.dims, pairs)
-                .map_err(|e| match e {
-                    ContractionError::NoCommonIndices => {
-                        anyhow::anyhow!("tensordot: No pairs specified for contraction")
-                    }
-                    ContractionError::BatchContractionNotImplemented => anyhow::anyhow!(
-                        "tensordot: Common index found but not in contraction pairs. \
+        let spec = prepare_contraction_pairs(
+            &self.indices,
+            &self.dims,
+            &other.indices,
+            &other.dims,
+            pairs,
+        )
+        .map_err(|e| match e {
+            ContractionError::NoCommonIndices => {
+                anyhow::anyhow!("tensordot: No pairs specified for contraction")
+            }
+            ContractionError::BatchContractionNotImplemented => anyhow::anyhow!(
+                "tensordot: Common index found but not in contraction pairs. \
                          Batch contraction is not yet implemented."
-                    ),
-                    ContractionError::IndexNotFound { tensor } => {
-                        anyhow::anyhow!("tensordot: Index not found in {} tensor", tensor)
-                    }
-                    ContractionError::DimensionMismatch {
-                        pos_a,
-                        pos_b,
-                        dim_a,
-                        dim_b,
-                    } => anyhow::anyhow!(
-                        "tensordot: Dimension mismatch: self[{}]={} != other[{}]={}",
-                        pos_a,
-                        dim_a,
-                        pos_b,
-                        dim_b
-                    ),
-                    ContractionError::DuplicateAxis { tensor, pos } => {
-                        anyhow::anyhow!("tensordot: Duplicate axis {} in {} tensor", pos, tensor)
-                    }
-                })?;
+            ),
+            ContractionError::IndexNotFound { tensor } => {
+                anyhow::anyhow!("tensordot: Index not found in {} tensor", tensor)
+            }
+            ContractionError::DimensionMismatch {
+                pos_a,
+                pos_b,
+                dim_a,
+                dim_b,
+            } => anyhow::anyhow!(
+                "tensordot: Dimension mismatch: self[{}]={} != other[{}]={}",
+                pos_a,
+                dim_a,
+                pos_b,
+                dim_b
+            ),
+            ContractionError::DuplicateAxis { tensor, pos } => {
+                anyhow::anyhow!("tensordot: Duplicate axis {} in {} tensor", pos, tensor)
+            }
+        })?;
 
         let result_storage = Arc::new(contract_storage(
             self.storage(),
@@ -522,7 +526,11 @@ impl TensorDynLen {
             &spec.result_dims,
         ));
 
-        Ok(Self::new(spec.result_indices, spec.result_dims, result_storage))
+        Ok(Self::new(
+            spec.result_indices,
+            spec.result_dims,
+            result_storage,
+        ))
     }
 
     /// Compute the outer product (tensor product) of two tensors.
@@ -825,7 +833,11 @@ impl TensorDynLen {
             .try_add(other_storage.as_ref())
             .map_err(|e| anyhow::anyhow!("Storage addition failed: {}", e))?;
 
-        Ok(Self::new(self.indices.clone(), self.dims.clone(), Arc::new(result_storage)))
+        Ok(Self::new(
+            self.indices.clone(),
+            self.dims.clone(),
+            Arc::new(result_storage),
+        ))
     }
 
     /// Compute a linear combination: `a * self + b * other`.
@@ -842,7 +854,11 @@ impl TensorDynLen {
     pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
         let storage = self.materialize_storage()?;
         let scaled_storage = storage.scale(&scalar);
-        Ok(Self::new(self.indices.clone(), self.dims.clone(), Arc::new(scaled_storage)))
+        Ok(Self::new(
+            self.indices.clone(),
+            self.dims.clone(),
+            Arc::new(scaled_storage),
+        ))
     }
 
     /// Inner product (dot product) of two tensors.
@@ -851,7 +867,8 @@ impl TensorDynLen {
     pub fn inner_product(&self, other: &Self) -> Result<AnyScalar> {
         // Contract self.conj() with other over all indices
         let conj_self = self.conj();
-        let result = super::contract::contract_multi(&[conj_self, other.clone()], crate::AllowedPairs::All)?;
+        let result =
+            super::contract::contract_multi(&[conj_self, other.clone()], crate::AllowedPairs::All)?;
         // Result should be a scalar (no indices)
         Ok(result.sum())
     }
@@ -920,7 +937,7 @@ impl TensorDynLen {
             .collect();
 
         // Create new TensorData with updated index IDs
-        let new_index_ids: Vec<DynId> = new_indices.iter().map(|idx| idx.id().clone()).collect();
+        let new_index_ids: Vec<DynId> = new_indices.iter().map(|idx| *idx.id()).collect();
         let new_data = TensorData::new(self.storage().clone(), new_index_ids, self.dims.clone());
 
         Self::from_data(new_indices, self.dims.clone(), new_data)
@@ -964,11 +981,7 @@ impl TensorDynLen {
     /// assert_eq!(replaced.indices[0].id, new_i.id);
     /// assert_eq!(replaced.indices[1].id, new_j.id);
     /// ```
-    pub fn replaceinds(
-        &self,
-        old_indices: &[DynIndex],
-        new_indices: &[DynIndex],
-    ) -> Self {
+    pub fn replaceinds(&self, old_indices: &[DynIndex], new_indices: &[DynIndex]) -> Self {
         assert_eq!(
             old_indices.len(),
             new_indices.len(),
@@ -976,11 +989,8 @@ impl TensorDynLen {
         );
 
         // Build a map from old indices to new indices
-        let replacement_map: std::collections::HashMap<_, _> = old_indices
-            .iter()
-            .zip(new_indices.iter())
-            .map(|(old, new)| (old, new))
-            .collect();
+        let replacement_map: std::collections::HashMap<_, _> =
+            old_indices.iter().zip(new_indices.iter()).collect();
 
         let new_indices_vec: Vec<_> = self
             .indices
@@ -995,7 +1005,7 @@ impl TensorDynLen {
             .collect();
 
         // Create new TensorData with updated index IDs
-        let new_index_ids: Vec<DynId> = new_indices_vec.iter().map(|idx| idx.id().clone()).collect();
+        let new_index_ids: Vec<DynId> = new_indices_vec.iter().map(|idx| *idx.id()).collect();
         let new_data = TensorData::new(self.storage().clone(), new_index_ids, self.dims.clone());
 
         Self::from_data(new_indices_vec, self.dims.clone(), new_data)
@@ -1182,10 +1192,7 @@ impl std::fmt::Debug for TensorDynLen {
 ///
 /// # Panics
 /// Panics if indices have different dimensions, or if diag_data length doesn't match.
-pub fn diag_tensor_dyn_len(
-    indices: Vec<DynIndex>,
-    diag_data: Vec<f64>,
-) -> TensorDynLen {
+pub fn diag_tensor_dyn_len(indices: Vec<DynIndex>, diag_data: Vec<f64>) -> TensorDynLen {
     let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
     let first_dim = dims[0];
 
@@ -1211,10 +1218,7 @@ pub fn diag_tensor_dyn_len(
 }
 
 /// Create a DiagTensor with dynamic rank from complex diagonal data.
-pub fn diag_tensor_dyn_len_c64(
-    indices: Vec<DynIndex>,
-    diag_data: Vec<Complex64>,
-) -> TensorDynLen {
+pub fn diag_tensor_dyn_len_c64(indices: Vec<DynIndex>, diag_data: Vec<Complex64>) -> TensorDynLen {
     let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
     let first_dim = dims[0];
 
@@ -1263,6 +1267,7 @@ pub fn diag_tensor_dyn_len_c64(
 /// - `left_inds` is empty or contains all indices
 /// - `left_inds` contains indices not in the tensor or duplicates
 /// - Storage type is not supported (must be DenseF64 or DenseC64)
+#[allow(clippy::type_complexity)]
 pub fn unfold_split<T: StorageScalar>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
@@ -1298,10 +1303,7 @@ pub fn unfold_split<T: StorageScalar>(
             tensor_set.contains(left_idx),
             "Index in left_inds not found in tensor"
         );
-        anyhow::ensure!(
-            left_set.insert(left_idx),
-            "Duplicate index in left_inds"
-        );
+        anyhow::ensure!(left_set.insert(left_idx), "Duplicate index in left_inds");
     }
 
     // Build right_inds: all indices not in left_inds, in original order
@@ -1361,11 +1363,7 @@ impl TensorIndex for TensorDynLen {
         Ok(TensorDynLen::replaceind(self, old_index, new_index))
     }
 
-    fn replaceinds(
-        &self,
-        old_indices: &[DynIndex],
-        new_indices: &[DynIndex],
-    ) -> Result<Self> {
+    fn replaceinds(&self, old_indices: &[DynIndex], new_indices: &[DynIndex]) -> Result<Self> {
         // Delegate to the inherent method
         Ok(TensorDynLen::replaceinds(self, old_indices, new_indices))
     }
@@ -1397,7 +1395,10 @@ impl TensorLike for TensorDynLen {
         pairs: &[(DynIndex, DynIndex)],
     ) -> Result<crate::tensor_like::DirectSumResult<Self>> {
         let (tensor, new_indices) = crate::direct_sum::direct_sum(self, other, pairs)?;
-        Ok(crate::tensor_like::DirectSumResult { tensor, new_indices })
+        Ok(crate::tensor_like::DirectSumResult {
+            tensor,
+            new_indices,
+        })
     }
 
     fn outer_product(&self, other: &Self) -> Result<Self> {
@@ -1479,7 +1480,10 @@ impl TensorLike for TensorDynLen {
         }
         let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
         let total_size: usize = dims.iter().product();
-        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; total_size])));
+        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
+            1.0;
+            total_size
+        ])));
         Ok(TensorDynLen::new(indices.to_vec(), dims, storage))
     }
 

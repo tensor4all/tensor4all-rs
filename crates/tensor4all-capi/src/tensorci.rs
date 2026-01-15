@@ -24,8 +24,12 @@ use tensor4all_tensorci::{TCI2Options, TensorCI2};
 /// # Returns
 /// * 0 on success
 /// * Non-zero on error
-pub type EvalCallback =
-    extern "C" fn(indices: *const i64, n_indices: libc::size_t, result: *mut f64, user_data: *mut c_void) -> i32;
+pub type EvalCallback = extern "C" fn(
+    indices: *const i64,
+    n_indices: libc::size_t,
+    result: *mut f64,
+    user_data: *mut c_void,
+) -> i32;
 
 // ============================================================================
 // Opaque handle type
@@ -342,9 +346,7 @@ pub extern "C" fn t4a_tci2_f64_sweep(
 /// # Returns
 /// A new SimpleTT handle, or NULL on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_tci2_f64_to_tensor_train(
-    ptr: *const t4a_tci2_f64,
-) -> *mut t4a_simplett_f64 {
+pub extern "C" fn t4a_tci2_f64_to_tensor_train(ptr: *const t4a_tci2_f64) -> *mut t4a_simplett_f64 {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -457,11 +459,8 @@ pub extern "C" fn t4a_crossinterpolate2_f64(
         // Batch function type: Fn(&[MultiIndex]) -> Vec<f64>
         use tensor4all_tensorci::crossinterpolate2;
         match crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
-            f,
-            None, // no batch function
-            dims,
-            pivots,
-            options,
+            f, None, // no batch function
+            dims, pivots, options,
         ) {
             Ok((tci, _ranks, errors)) => {
                 // Store TCI
@@ -487,6 +486,7 @@ mod tests {
     use super::*;
 
     // Simple test callback that returns sum of indices
+    #[allow(dead_code)]
     extern "C" fn sum_callback(
         indices: *const i64,
         n_indices: libc::size_t,

@@ -161,6 +161,7 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar>
     ///
     /// Whitespace is ignored (similar to ITensors.jl).
     /// Tags are automatically sorted.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Self, TagSetError> {
         <Self as TagSetLike>::from_str(s)
     }

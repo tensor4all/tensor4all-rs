@@ -11,7 +11,7 @@
 //! - TensorDynLen<DynId, NoSymmSpace> -> TensorDynLen
 //! - idx.id -> idx.id() (IndexLike trait method)
 
-use tensor4all_core::{DynIndex, IndexLike, StorageScalar, TensorDynLen, TensorIndex, TensorLike};
+use tensor4all_core::{DynIndex, IndexLike, StorageScalar, TensorDynLen, TensorIndex};
 use tensor4all_treetn::TreeTN;
 
 /// Helper to create a simple tensor with given indices
@@ -132,11 +132,17 @@ fn test_treetn_contract_to_tensor() {
     .unwrap();
 
     // Contract to tensor using the explicit method (exponential cost!)
-    let result = tn.contract_to_tensor().expect("contract_to_tensor should succeed");
+    let result = tn
+        .contract_to_tensor()
+        .expect("contract_to_tensor should succeed");
 
     // Result should be 2x3 (dimensions of i and j)
     assert_eq!(result.external_indices().len(), 2);
-    let dims: Vec<usize> = result.external_indices().iter().map(|idx| idx.dim()).collect();
+    let dims: Vec<usize> = result
+        .external_indices()
+        .iter()
+        .map(|idx| idx.dim())
+        .collect();
     assert!(dims.contains(&2));
     assert!(dims.contains(&3));
 }
@@ -241,23 +247,40 @@ fn test_treetn_replaceind_site_index() {
     .unwrap();
 
     // Debug: print site indices
-    eprintln!("TreeTN external_indices: {:?}", tn.external_indices().iter().map(|idx| idx.id()).collect::<Vec<_>>());
+    eprintln!(
+        "TreeTN external_indices: {:?}",
+        tn.external_indices()
+            .iter()
+            .map(|idx| idx.id())
+            .collect::<Vec<_>>()
+    );
     eprintln!("i.id() = {:?}", i.id());
     eprintln!("j.id() = {:?}", j.id());
     eprintln!("bond.id() = {:?}", bond.id());
 
     // Debug: print site_space for node A
     if let Some(space) = tn.site_space(&"A".to_string()) {
-        eprintln!("Node A site_space IDs: {:?}", space.iter().map(|idx| idx.id()).collect::<Vec<_>>());
+        eprintln!(
+            "Node A site_space IDs: {:?}",
+            space.iter().map(|idx| idx.id()).collect::<Vec<_>>()
+        );
         eprintln!("Node A site_space contains(&i): {}", space.contains(&i));
         // Check by iterating
         for idx in space {
-            eprintln!("  Checking idx.id() == i.id(): {:?} == {:?} => {}", idx.id(), i.id(), idx.id() == i.id());
+            eprintln!(
+                "  Checking idx.id() == i.id(): {:?} == {:?} => {}",
+                idx.id(),
+                i.id(),
+                idx.id() == i.id()
+            );
             eprintln!("  idx == i: {}", *idx == i);
         }
     }
     if let Some(space) = tn.site_space(&"B".to_string()) {
-        eprintln!("Node B site_space IDs: {:?}", space.iter().map(|idx| idx.id()).collect::<Vec<_>>());
+        eprintln!(
+            "Node B site_space IDs: {:?}",
+            space.iter().map(|idx| idx.id()).collect::<Vec<_>>()
+        );
     }
 
     // Create a new index with same dimension
@@ -266,12 +289,20 @@ fn test_treetn_replaceind_site_index() {
     // Debug: clone and check the cloned site_space
     let tn_cloned = tn.clone();
     if let Some(cloned_space) = tn_cloned.site_space(&"A".to_string()) {
-        eprintln!("Cloned Node A site_space IDs: {:?}", cloned_space.iter().map(|idx| idx.id()).collect::<Vec<_>>());
-        eprintln!("Cloned Node A site_space contains(&i): {}", cloned_space.contains(&i));
+        eprintln!(
+            "Cloned Node A site_space IDs: {:?}",
+            cloned_space.iter().map(|idx| idx.id()).collect::<Vec<_>>()
+        );
+        eprintln!(
+            "Cloned Node A site_space contains(&i): {}",
+            cloned_space.contains(&i)
+        );
     }
 
     // Replace i with i_new
-    let tn_replaced = tn.replaceind(&i, &i_new).expect("replaceind should succeed");
+    let tn_replaced = tn
+        .replaceind(&i, &i_new)
+        .expect("replaceind should succeed");
 
     // Check that the new index is present and old is not
     let ext_indices = tn_replaced.external_indices();

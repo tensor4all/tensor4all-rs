@@ -460,7 +460,7 @@ where
     ///
     /// # Arguments
     /// * `target_region` - Set of NodeIndex that forms the canonical center region
-    ///                     (must be non-empty and connected)
+    ///   (must be non-empty and connected)
     ///
     /// # Returns
     /// `CanonicalizeEdges` with all edges pointing towards the target region.
@@ -494,9 +494,12 @@ where
         while let Some(node) = queue.pop_front() {
             let d = dist[&node];
             for neighbor in g.neighbors(node) {
-                if !dist.contains_key(&neighbor) {
-                    dist.insert(neighbor, d + 1);
+                let was_new = !dist.contains_key(&neighbor);
+                dist.entry(neighbor).or_insert_with(|| {
                     parent.insert(neighbor, node);
+                    d + 1
+                });
+                if was_new {
                     queue.push_back(neighbor);
                 }
             }

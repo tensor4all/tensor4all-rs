@@ -110,7 +110,7 @@ where
         + MatrixScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    let svd_options = SvdOptions { 
+    let svd_options = SvdOptions {
         rtol: options.rtol,
         max_rank: options.max_rank,
     };
@@ -120,8 +120,6 @@ where
     // Extract singular values from diagonal tensor
     let singular_values = extract_singular_values(&s);
     let rank = singular_values.len();
-    
-    let bond_index = s.indices[0].clone();
 
     // Get bond indices from S tensor:
     // S has indices [bond_index, sim(bond_index)]
@@ -213,11 +211,9 @@ where
         + MatrixScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-
     // Unfold tensor into matrix
-    let (a_tensor, _, m, n, left_indices, right_indices) =
-        unfold_split::<T>(t, left_inds)
-            .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
+    let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<T>(t, left_inds)
+        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
 
     // Convert to Matrix type for rrlu
     let a_matrix = dtensor_to_matrix(&a_tensor, m, n);
@@ -281,11 +277,9 @@ where
         + MatrixScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-
     // Unfold tensor into matrix
-    let (a_tensor, _, m, n, left_indices, right_indices) =
-        unfold_split::<T>(t, left_inds)
-            .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
+    let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<T>(t, left_inds)
+        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
 
     // Convert to Matrix type for MatrixLUCI
     let a_matrix = dtensor_to_matrix(&a_tensor, m, n);
@@ -355,14 +349,18 @@ fn extract_singular_values(s: &TensorDynLen) -> Vec<f64> {
 }
 
 /// Convert DTensor to Matrix (tensor4all-matrixci format).
-fn dtensor_to_matrix<T>(tensor: &tensor4all_tensorbackend::mdarray::DTensor<T, 2>, m: usize, n: usize) -> matrixci::Matrix<T>
+fn dtensor_to_matrix<T>(
+    tensor: &tensor4all_tensorbackend::mdarray::DTensor<T, 2>,
+    m: usize,
+    n: usize,
+) -> matrixci::Matrix<T>
 where
     T: MatrixScalar + Clone,
 {
     let mut matrix = matrixci::util::zeros(m, n);
     for i in 0..m {
         for j in 0..n {
-            matrix[[i, j]] = tensor[[i, j]].clone();
+            matrix[[i, j]] = tensor[[i, j]];
         }
     }
     matrix

@@ -251,10 +251,8 @@ pub fn binaryop_single_mpo(
                     1i8
                 } else if res >= 0 {
                     0i8
-                } else if res >= -1 {
-                    -1i8
                 } else {
-                    -1i8 // For res = -2, carry = -1
+                    -1i8 // For res < 0, carry = -1
                 };
 
                 for r_idx in 0..right_bond {

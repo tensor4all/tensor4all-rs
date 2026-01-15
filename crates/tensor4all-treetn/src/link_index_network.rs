@@ -107,7 +107,12 @@ where
     ///
     /// # Returns
     /// Ok if successful, Err if old_index was not registered or edge mismatch.
-    pub fn replace_index(&mut self, old_index: &I, new_index: &I, edge: EdgeIndex) -> Result<(), String> {
+    pub fn replace_index(
+        &mut self,
+        old_index: &I,
+        new_index: &I,
+        edge: EdgeIndex,
+    ) -> Result<(), String> {
         match self.index_to_edge.remove(old_index.id()) {
             Some(old_edge) => {
                 if old_edge != edge {
@@ -121,7 +126,10 @@ where
                 self.index_to_edge.insert(new_index.id().clone(), edge);
                 Ok(())
             }
-            None => Err(format!("Index {:?} not found in link_index_network", old_index.id())),
+            None => Err(format!(
+                "Index {:?} not found in link_index_network",
+                old_index.id()
+            )),
         }
     }
 

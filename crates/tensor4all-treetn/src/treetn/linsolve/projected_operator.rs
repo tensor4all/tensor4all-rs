@@ -75,7 +75,8 @@ where
 impl<T, V> ProjectedOperator<T, V>
 where
     T: TensorLike,
-    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
+    <T::Index as IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     /// Create a new ProjectedOperator.
@@ -118,8 +119,8 @@ where
     /// * `region` - The nodes in the open region
     /// * `ket_state` - The current state |ket⟩ (used for ket in environment computation)
     /// * `bra_state` - The reference state ⟨bra| (used for bra in environment computation)
-    ///                 For V_in = V_out, this is the same as ket_state.
-    ///                 For V_in ≠ V_out, this should be a state in V_out.
+    ///   For V_in = V_out, this is the same as ket_state.
+    ///   For V_in ≠ V_out, this should be a state in V_out.
     /// * `topology` - Network topology for traversal
     ///
     /// # Returns

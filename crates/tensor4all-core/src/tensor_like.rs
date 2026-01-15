@@ -255,7 +255,6 @@ pub enum AllowedPairs<'a> {
 /// This separation allows tensor networks (like `TreeTN`) to implement
 /// index operations without implementing contraction/factorization.
 pub trait TensorLike: TensorIndex {
-
     /// Factorize this tensor into left and right factors.
     ///
     /// This function dispatches to the appropriate algorithm based on `options.alg`:
@@ -502,7 +501,10 @@ pub trait TensorLike: TensorIndex {
     /// ```text
     /// diagonal(i, o) = [[1, 0], [0, 1]]
     /// ```
-    fn diagonal(input_index: &<Self as TensorIndex>::Index, output_index: &<Self as TensorIndex>::Index) -> Result<Self>;
+    fn diagonal(
+        input_index: &<Self as TensorIndex>::Index,
+        output_index: &<Self as TensorIndex>::Index,
+    ) -> Result<Self>;
 
     /// Create a delta (identity) tensor as outer product of diagonals.
     ///
@@ -532,7 +534,10 @@ pub trait TensorLike: TensorIndex {
     /// ```text
     /// delta([i], [o]) = [[1, 0], [0, 1]]
     /// ```
-    fn delta(input_indices: &[<Self as TensorIndex>::Index], output_indices: &[<Self as TensorIndex>::Index]) -> Result<Self> {
+    fn delta(
+        input_indices: &[<Self as TensorIndex>::Index],
+        output_indices: &[<Self as TensorIndex>::Index],
+    ) -> Result<Self> {
         // Validate same number of input and output indices
         if input_indices.len() != output_indices.len() {
             return Err(anyhow::anyhow!(

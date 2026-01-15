@@ -1,7 +1,7 @@
 //! Profiled version of benchmark_contract with detailed timing.
 
-use std::time::Instant;
 use rand::thread_rng;
+use std::time::Instant;
 
 use tensor4all_core::{DynIndex, TensorDynLen};
 use tensor4all_itensorlike::{ContractOptions, Result, TensorTrain};
@@ -9,8 +9,8 @@ use tensor4all_itensorlike::{ContractOptions, Result, TensorTrain};
 /// Create a random MPO (Matrix Product Operator).
 fn create_random_mpo(
     length: usize,
-    phys_dim: usize,
-    bond_dim: usize,
+    _phys_dim: usize,
+    _bond_dim: usize,
     input_indices: &[DynIndex],
     output_indices: &[DynIndex],
     link_indices: &[DynIndex],
@@ -19,10 +19,7 @@ fn create_random_mpo(
     let mut tensors = Vec::with_capacity(length);
 
     for i in 0..length {
-        let mut indices = vec![
-            input_indices[i].clone(),
-            output_indices[i].clone(),
-        ];
+        let mut indices = vec![input_indices[i].clone(), output_indices[i].clone()];
 
         if i > 0 {
             indices.push(link_indices[i - 1].clone());
@@ -52,12 +49,8 @@ fn main() -> Result<()> {
 
     // Create MPO A
     let t0 = Instant::now();
-    let input_indices_a: Vec<_> = (0..length)
-        .map(|_| DynIndex::new_dyn(phys_dim))
-        .collect();
-    let output_indices_shared: Vec<_> = (0..length)
-        .map(|_| DynIndex::new_dyn(phys_dim))
-        .collect();
+    let input_indices_a: Vec<_> = (0..length).map(|_| DynIndex::new_dyn(phys_dim)).collect();
+    let output_indices_shared: Vec<_> = (0..length).map(|_| DynIndex::new_dyn(phys_dim)).collect();
     let num_links = if length > 0 { length - 1 } else { 0 };
     let link_indices_a: Vec<_> = (0..num_links)
         .map(|_| DynIndex::new_dyn(bond_dim))
@@ -75,9 +68,7 @@ fn main() -> Result<()> {
 
     // Create MPO B
     let t0 = Instant::now();
-    let output_indices_b: Vec<_> = (0..length)
-        .map(|_| DynIndex::new_dyn(phys_dim))
-        .collect();
+    let output_indices_b: Vec<_> = (0..length).map(|_| DynIndex::new_dyn(phys_dim)).collect();
     let link_indices_b: Vec<_> = (0..num_links)
         .map(|_| DynIndex::new_dyn(bond_dim))
         .collect();
@@ -95,12 +86,13 @@ fn main() -> Result<()> {
 
     // Contract with profiling
     let max_rank = 20;
-    let options = ContractOptions::zipup()
-        .with_max_rank(max_rank);
+    let options = ContractOptions::zipup().with_max_rank(max_rank);
 
     println!("Contracting MPOs using zip-up method...");
-    println!("Options: method=Zipup, max_rank={}, rtol={:?}", 
-             max_rank, options.rtol);
+    println!(
+        "Options: method=Zipup, max_rank={}, rtol={:?}",
+        max_rank, options.rtol
+    );
     println!();
 
     let total_start = Instant::now();

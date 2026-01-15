@@ -20,7 +20,8 @@ use crate::treetn::TreeTN;
 pub struct LocalLinOp<T, V>
 where
     T: TensorLike + 'static,
-    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
+    <T::Index as IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     /// The projected operator (shared, mutable for environment caching)
@@ -42,7 +43,8 @@ impl<T, V> LocalLinOp<T, V>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
-    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
+    <T::Index as IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     /// Create a new LocalLinOp for V_in = V_out case.
@@ -112,13 +114,13 @@ where
             AnyScalar::C64(z) => z.re == 0.0 && z.im == 0.0,
         };
         if a0_is_zero {
-            return hx.scale(self.a1.clone());
+            return hx.scale(self.a1);
         }
 
         // Align hx indices to match x's index order for axpby
         let hx_aligned = hx.permuteinds(&x.external_indices())?;
 
         // Compute y = a₀ * x + a₁ * H * x
-        x.axpby(self.a0.clone(), &hx_aligned, self.a1.clone())
+        x.axpby(self.a0, &hx_aligned, self.a1)
     }
 }

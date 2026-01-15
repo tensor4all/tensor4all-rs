@@ -168,8 +168,10 @@ impl<T: TTScalar> TTCache<T> {
             let tensor = &self.tensors[ell - 1];
 
             let mut result = vec![T::zero(); tensor.right_dim()];
+            #[allow(clippy::needless_range_loop)]
             for r in 0..tensor.right_dim() {
                 let mut sum = T::zero();
+                #[allow(clippy::needless_range_loop)]
                 for l in 0..tensor.left_dim() {
                     sum = sum + left[l] * *tensor.get3(l, flat_idx, r);
                 }
@@ -219,8 +221,10 @@ impl<T: TTScalar> TTCache<T> {
             let tensor = &self.tensors[start];
 
             let mut result = vec![T::zero(); tensor.left_dim()];
+            #[allow(clippy::needless_range_loop)]
             for l in 0..tensor.left_dim() {
                 let mut sum = T::zero();
+                #[allow(clippy::needless_range_loop)]
                 for r in 0..tensor.right_dim() {
                     sum = sum + *tensor.get3(l, flat_idx, r) * right[r];
                 }

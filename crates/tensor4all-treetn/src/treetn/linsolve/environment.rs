@@ -138,8 +138,7 @@ where
 ///
 /// This enables direct use of SiteIndexNetwork for cache invalidation
 /// and environment computation without needing adapter types like StaticTopology.
-impl<NodeName, I> NetworkTopology<NodeName>
-    for SiteIndexNetwork<NodeName, I>
+impl<NodeName, I> NetworkTopology<NodeName> for SiteIndexNetwork<NodeName, I>
 where
     NodeName: Clone + Hash + Eq + Send + Sync + Debug,
     I: IndexLike,

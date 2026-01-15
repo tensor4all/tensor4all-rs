@@ -208,6 +208,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_tensor4_get_set() {
         let mut t: Tensor4<f64> = tensor4_zeros(2, 2, 2, 2);
         t.set4(0, 1, 0, 1, 3.14);
