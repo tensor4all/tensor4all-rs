@@ -104,67 +104,65 @@ mod lapack_impl {
     use super::*;
     use num_complex::Complex;
 
-    /// Helper macro to implement SVD for concrete types.
-    macro_rules! impl_svd_for_type {
-        ($t:ty) => {
-            impl SvdBackendImpl for $t {
-                fn svd_impl(a: &mut DSlice<$t, 2>) -> Result<SvdResult<$t>> {
+    /// Compute SVD decomposition using LAPACK backend.
+    /// 
+    /// LAPACK backend supports f64 and Complex<f64>.
+    pub fn svd_backend<T>(a: &mut DSlice<T, 2>) -> Result<SvdResult<T>>
+    where
+        T: Clone + 'static,
+    {
+        // Dispatch to concrete implementations based on type
+        // This is necessary because LAPACK doesn't expose a generic trait
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f64>() {
+            // For f64
+            let a_f64: &mut DSlice<f64, 2> = unsafe { std::mem::transmute(a) };
                     let bd = Lapack::new();
                     let decomp = bd
-                        .svd(a)
+                .svd(a_f64)
                         .map_err(|e| anyhow::anyhow!("SVD computation failed: {}", e))?;
-
                     let u = tensor_to_dtensor(&decomp.u);
                     let s = tensor_to_dtensor(&decomp.s);
                     let vt = tensor_to_dtensor(&decomp.vt);
-
-                    Ok(SvdResult { u, s, vt })
-                }
-            }
-        };
-    }
-
-    /// Helper macro to implement QR for concrete types.
-    macro_rules! impl_qr_for_type {
-        ($t:ty) => {
-            impl QrBackendImpl for $t {
-                fn qr_impl(a: &mut DSlice<$t, 2>) -> (DTensor<$t, 2>, DTensor<$t, 2>) {
+            Ok(unsafe { std::mem::transmute(SvdResult { u, s, vt }) })
+        } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<Complex<f64>>() {
+            // For Complex<f64>
+            let a_c64: &mut DSlice<Complex<f64>, 2> = unsafe { std::mem::transmute(a) };
                     let bd = Lapack::new();
-                    bd.qr(a)
-                }
-            }
-        };
-    }
-
-    /// Internal trait for SVD backend dispatch.
-    pub trait SvdBackendImpl: Sized + Clone {
-        fn svd_impl(a: &mut DSlice<Self, 2>) -> Result<SvdResult<Self>>;
-    }
-
-    /// Internal trait for QR backend dispatch.
-    pub trait QrBackendImpl: Sized + Clone {
-        fn qr_impl(a: &mut DSlice<Self, 2>) -> (DTensor<Self, 2>, DTensor<Self, 2>);
-    }
-
-    // Implement for concrete types supported by LAPACK
-    impl_svd_for_type!(f32);
-    impl_svd_for_type!(f64);
-    impl_svd_for_type!(Complex<f32>);
-    impl_svd_for_type!(Complex<f64>);
-
-    impl_qr_for_type!(f32);
-    impl_qr_for_type!(f64);
-    impl_qr_for_type!(Complex<f32>);
-    impl_qr_for_type!(Complex<f64>);
-
-    /// Compute SVD decomposition using LAPACK backend.
-    pub fn svd_backend<T: SvdBackendImpl>(a: &mut DSlice<T, 2>) -> Result<SvdResult<T>> {
-        T::svd_impl(a)
+            let decomp = bd
+                .svd(a_c64)
+                .map_err(|e| anyhow::anyhow!("SVD computation failed: {}", e))?;
+            let u = tensor_to_dtensor(&decomp.u);
+            let s = tensor_to_dtensor(&decomp.s);
+            let vt = tensor_to_dtensor(&decomp.vt);
+            Ok(unsafe { std::mem::transmute(SvdResult { u, s, vt }) })
+        } else {
+            Err(anyhow::anyhow!("Unsupported type for LAPACK backend: only f64 and Complex<f64> are supported"))
+        }
     }
 
     /// Compute QR decomposition using LAPACK backend.
-    pub fn qr_backend<T: QrBackendImpl>(a: &mut DSlice<T, 2>) -> (DTensor<T, 2>, DTensor<T, 2>) {
-        T::qr_impl(a)
+    /// 
+    /// LAPACK backend supports f64 and Complex<f64>.
+    pub fn qr_backend<T>(a: &mut DSlice<T, 2>) -> (DTensor<T, 2>, DTensor<T, 2>)
+    where
+        T: Clone + 'static,
+    {
+        // Dispatch to concrete implementations based on type
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f64>() {
+            // For f64
+            let a_f64: &mut DSlice<f64, 2> = unsafe { std::mem::transmute(a) };
+            let bd = Lapack::new();
+            let (q, r) = bd.qr(a_f64);
+            unsafe { (std::mem::transmute(q), std::mem::transmute(r)) }
+        } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<Complex<f64>>() {
+            // For Complex<f64>
+            let a_c64: &mut DSlice<Complex<f64>, 2> = unsafe { std::mem::transmute(a) };
+            let bd = Lapack::new();
+            let (q, r) = bd.qr(a_c64);
+            unsafe { (std::mem::transmute(q), std::mem::transmute(r)) }
+        } else {
+            panic!("Unsupported type for LAPACK backend: only f64 and Complex<f64> are supported")
+        }
     }
 }
 
@@ -178,9 +176,9 @@ pub use faer_impl::{qr_backend, svd_backend};
 #[cfg(all(feature = "backend-lapack", not(feature = "backend-faer")))]
 pub use lapack_impl::{qr_backend, svd_backend};
 
-// When both are enabled, prefer FAER (it's the default)
+// When both are enabled, prefer LAPACK (it's the default)
 #[cfg(all(feature = "backend-faer", feature = "backend-lapack"))]
-pub use faer_impl::{qr_backend, svd_backend};
+pub use lapack_impl::{qr_backend, svd_backend};
 
 #[cfg(not(any(feature = "backend-faer", feature = "backend-lapack")))]
 compile_error!("At least one backend feature must be enabled (backend-faer or backend-lapack)");

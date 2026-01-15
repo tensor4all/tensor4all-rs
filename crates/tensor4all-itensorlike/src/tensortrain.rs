@@ -652,33 +652,33 @@ impl TensorTrain {
                 })?
         } else {
             // Fallback to generic TreeTN contraction implementations (fit/naive).
-            let treetn_method = match options.method {
+        let treetn_method = match options.method {
                 ContractMethod::Zipup => ContractionMethod::Zipup, // unreachable
-                ContractMethod::Fit => ContractionMethod::Fit,
-                ContractMethod::Naive => ContractionMethod::Naive,
-            };
+            ContractMethod::Fit => ContractionMethod::Fit,
+            ContractMethod::Naive => ContractionMethod::Naive,
+        };
 
-            let treetn_options =
-                TreeTNContractionOptions::new(treetn_method).with_nsweeps(options.nsweeps);
+        let treetn_options =
+            TreeTNContractionOptions::new(treetn_method).with_nsweeps(options.nsweeps);
 
-            let treetn_options = if let Some(max_rank) = options.max_rank {
-                treetn_options.with_max_rank(max_rank)
-            } else {
-                treetn_options
-            };
+        let treetn_options = if let Some(max_rank) = options.max_rank {
+            treetn_options.with_max_rank(max_rank)
+        } else {
+            treetn_options
+        };
 
-            let treetn_options = if let Some(rtol) = options.rtol {
-                treetn_options.with_rtol(rtol)
-            } else {
-                treetn_options
-            };
+        let treetn_options = if let Some(rtol) = options.rtol {
+            treetn_options.with_rtol(rtol)
+        } else {
+            treetn_options
+        };
 
             // Use the last site as the canonical center (consistent with existing behavior)
-            let center = self.len() - 1;
+        let center = self.len() - 1;
 
             treetn_contract(&self.inner, &other.inner, &center, treetn_options).map_err(|e| {
                 TensorTrainError::InvalidStructure {
-                    message: format!("TreeTN contraction failed: {}", e),
+                message: format!("TreeTN contraction failed: {}", e),
                 }
             })?
         };
