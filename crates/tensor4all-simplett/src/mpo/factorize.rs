@@ -424,7 +424,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "mdarray-linalg-faer returns V^T instead of V^H for complex SVD"]
     fn test_factorize_svd_complex64() {
         use num_complex::Complex64;
 
