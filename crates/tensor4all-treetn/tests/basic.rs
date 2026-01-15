@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tensor4all_core::storage::DenseStorageF64;
 use tensor4all_core::{DynIndex, IndexLike, Storage, TensorDynLen, TensorIndex};
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
+use tensor4all_treetn::algorithm::CanonicalForm;
 
 // ============================================================================
 // Helper Functions
@@ -2079,3 +2080,279 @@ fn test_fit_vs_naive_5node_chain() {
     compare_fit_vs_naive(&site_network, LinkSpace::uniform(2), "E", 42, 123, 1e-10);
 }
 */
+
+// ============================================================================
+// Tests for contract_zipup_tree_accumulated
+// ============================================================================
+
+/// Helper: Create a simple 2-node TreeTN with String node names for testing
+fn create_two_node_treetn_string() -> TreeTN<TensorDynLen, String> {
+    let mut tn = TreeTN::<TensorDynLen, String>::new();
+
+    let phys1 = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(3);
+    let phys2 = DynIndex::new_dyn(4);
+
+    let tensor1 = TensorDynLen::new(
+        vec![phys1.clone(), bond.clone()],
+        vec![2, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+    );
+    tn.add_tensor("A".to_string(), tensor1).unwrap();
+
+    let tensor2 = TensorDynLen::new(
+        vec![bond.clone(), phys2.clone()],
+        vec![3, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+    );
+    tn.add_tensor("B".to_string(), tensor2).unwrap();
+
+    let n_a = tn.node_index(&"A".to_string()).unwrap();
+    let n_b = tn.node_index(&"B".to_string()).unwrap();
+    tn.connect(n_a, &bond, n_b, &bond).unwrap();
+
+    tn
+}
+
+/// Test single node contraction
+#[test]
+fn test_zipup_accumulated_single_node() {
+    let mut tn_a = TreeTN::<TensorDynLen, String>::new();
+    let mut tn_b = TreeTN::<TensorDynLen, String>::new();
+
+    // Use different indices so contraction produces a result with indices
+    let phys_a = DynIndex::new_dyn(2);
+    let phys_b = DynIndex::new_dyn(2);
+    let tensor_a = TensorDynLen::new(
+        vec![phys_a.clone()],
+        vec![2],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0]))),
+    );
+    let tensor_b = TensorDynLen::new(
+        vec![phys_b.clone()],
+        vec![2],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![3.0, 4.0]))),
+    );
+
+    tn_a.add_tensor("X".to_string(), tensor_a).unwrap();
+    tn_b.add_tensor("X".to_string(), tensor_b).unwrap();
+
+    let result = tn_a
+        .contract_zipup_tree_accumulated(&tn_b, &"X".to_string(), CanonicalForm::Unitary, None, None)
+        .unwrap();
+
+    assert_eq!(result.node_count(), 1);
+    let result_tensor = result.tensor(result.node_index(&"X".to_string()).unwrap()).unwrap();
+    // When indices are different, result should have 2 indices (outer product)
+    // When indices are the same, result is a scalar (0 indices)
+    assert!(result_tensor.external_indices().len() == 0 || result_tensor.external_indices().len() == 2);
+    assert!(result.canonical_center().contains(&"X".to_string()));
+}
+
+/// Test 2-node chain contraction
+#[test]
+fn test_zipup_accumulated_two_node_chain() {
+    let tn_a = create_two_node_treetn_string();
+    let tn_b = create_two_node_treetn_string();
+
+    let result = tn_a
+        .contract_zipup_tree_accumulated(&tn_b, &"B".to_string(), CanonicalForm::Unitary, None, None)
+        .unwrap();
+
+    assert_eq!(result.node_count(), 2);
+    assert!(result.node_index(&"A".to_string()).is_some());
+    assert!(result.node_index(&"B".to_string()).is_some());
+    // Check canonical center is set
+    assert!(result.canonical_center().contains(&"B".to_string()));
+}
+
+/// Test 3-node chain contraction
+#[test]
+fn test_zipup_accumulated_three_node_chain() {
+    let mut tn_a = TreeTN::<TensorDynLen, String>::new();
+    let mut tn_b = TreeTN::<TensorDynLen, String>::new();
+
+    let phys1_a = DynIndex::new_dyn(2);
+    let bond12_a = DynIndex::new_dyn(3);
+    let bond23_a = DynIndex::new_dyn(4);
+    let phys3_a = DynIndex::new_dyn(5);
+
+    let phys1_b = DynIndex::new_dyn(2);
+    let bond12_b = DynIndex::new_dyn(3);
+    let bond23_b = DynIndex::new_dyn(4);
+    let phys3_b = DynIndex::new_dyn(5);
+
+    // Create chain: A -- B -- C (tn_a)
+    let tensor_a = TensorDynLen::new(
+        vec![phys1_a.clone(), bond12_a.clone()],
+        vec![2, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+    );
+    tn_a.add_tensor("A".to_string(), tensor_a).unwrap();
+
+    let tensor_b = TensorDynLen::new(
+        vec![bond12_a.clone(), bond23_a.clone()],
+        vec![3, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+    );
+    tn_a.add_tensor("B".to_string(), tensor_b).unwrap();
+
+    let tensor_c = TensorDynLen::new(
+        vec![bond23_a.clone(), phys3_a.clone()],
+        vec![4, 5],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 20]))),
+    );
+    tn_a.add_tensor("C".to_string(), tensor_c).unwrap();
+
+    // Create chain: A -- B -- C (tn_b) with distinct site indices
+    let tensor_a_b = TensorDynLen::new(
+        vec![phys1_b.clone(), bond12_b.clone()],
+        vec![2, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+    );
+    tn_b.add_tensor("A".to_string(), tensor_a_b).unwrap();
+
+    let tensor_b_b = TensorDynLen::new(
+        vec![bond12_b.clone(), bond23_b.clone()],
+        vec![3, 4],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+    );
+    tn_b.add_tensor("B".to_string(), tensor_b_b).unwrap();
+
+    let tensor_c_b = TensorDynLen::new(
+        vec![bond23_b.clone(), phys3_b.clone()],
+        vec![4, 5],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 20]))),
+    );
+    tn_b.add_tensor("C".to_string(), tensor_c_b).unwrap();
+
+    // Connect nodes
+    let n_a_a = tn_a.node_index(&"A".to_string()).unwrap();
+    let n_b_a = tn_a.node_index(&"B".to_string()).unwrap();
+    let n_c_a = tn_a.node_index(&"C".to_string()).unwrap();
+    tn_a.connect(n_a_a, &bond12_a, n_b_a, &bond12_a).unwrap();
+    tn_a.connect(n_b_a, &bond23_a, n_c_a, &bond23_a).unwrap();
+
+    let n_a_b = tn_b.node_index(&"A".to_string()).unwrap();
+    let n_b_b = tn_b.node_index(&"B".to_string()).unwrap();
+    let n_c_b = tn_b.node_index(&"C".to_string()).unwrap();
+    tn_b.connect(n_a_b, &bond12_b, n_b_b, &bond12_b).unwrap();
+    tn_b.connect(n_b_b, &bond23_b, n_c_b, &bond23_b).unwrap();
+
+    let result = tn_a
+        .contract_zipup_tree_accumulated(&tn_b, &"C".to_string(), CanonicalForm::Unitary, None, None)
+        .unwrap();
+
+    assert_eq!(result.node_count(), 3);
+    assert!(result.canonical_center().contains(&"C".to_string()));
+}
+
+/// Test star topology (multiple leaves connected to root)
+#[test]
+fn test_zipup_accumulated_star_topology() {
+    let mut tn_a = TreeTN::<TensorDynLen, String>::new();
+    let mut tn_b = TreeTN::<TensorDynLen, String>::new();
+
+    // Create star: A, B, C all connected to center D
+    let phys_a = DynIndex::new_dyn(2);
+    let phys_b = DynIndex::new_dyn(2);
+    let phys_c = DynIndex::new_dyn(2);
+    let phys_d = DynIndex::new_dyn(2);
+    let bond_ad = DynIndex::new_dyn(3);
+    let bond_bd = DynIndex::new_dyn(3);
+    let bond_cd = DynIndex::new_dyn(3);
+
+    // Distinct indices for tn_b to avoid contracting site indices
+    let phys_a_b = DynIndex::new_dyn(2);
+    let phys_b_b = DynIndex::new_dyn(2);
+    let phys_c_b = DynIndex::new_dyn(2);
+    let phys_d_b = DynIndex::new_dyn(2);
+    let bond_ad_b = DynIndex::new_dyn(3);
+    let bond_bd_b = DynIndex::new_dyn(3);
+    let bond_cd_b = DynIndex::new_dyn(3);
+
+    // Node A
+    let tensor_a = TensorDynLen::new(
+        vec![phys_a.clone(), bond_ad.clone()],
+        vec![2, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+    );
+    tn_a.add_tensor("A".to_string(), tensor_a.clone()).unwrap();
+    let tensor_a_b = TensorDynLen::new(
+        vec![phys_a_b.clone(), bond_ad_b.clone()],
+        vec![2, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+    );
+    tn_b.add_tensor("A".to_string(), tensor_a_b).unwrap();
+
+    // Node B
+    let tensor_b = TensorDynLen::new(
+        vec![phys_b.clone(), bond_bd.clone()],
+        vec![2, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+    );
+    tn_a.add_tensor("B".to_string(), tensor_b.clone()).unwrap();
+    let tensor_b_b = TensorDynLen::new(
+        vec![phys_b_b.clone(), bond_bd_b.clone()],
+        vec![2, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+    );
+    tn_b.add_tensor("B".to_string(), tensor_b_b).unwrap();
+
+    // Node C
+    let tensor_c = TensorDynLen::new(
+        vec![phys_c.clone(), bond_cd.clone()],
+        vec![2, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+    );
+    tn_a.add_tensor("C".to_string(), tensor_c.clone()).unwrap();
+    let tensor_c_b = TensorDynLen::new(
+        vec![phys_c_b.clone(), bond_cd_b.clone()],
+        vec![2, 3],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+    );
+    tn_b.add_tensor("C".to_string(), tensor_c_b).unwrap();
+
+    // Node D (center)
+    let tensor_d = TensorDynLen::new(
+        vec![bond_ad.clone(), bond_bd.clone(), bond_cd.clone(), phys_d.clone()],
+        vec![3, 3, 3, 2],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 54]))),
+    );
+    tn_a.add_tensor("D".to_string(), tensor_d.clone()).unwrap();
+    let tensor_d_b = TensorDynLen::new(
+        vec![
+            bond_ad_b.clone(),
+            bond_bd_b.clone(),
+            bond_cd_b.clone(),
+            phys_d_b.clone(),
+        ],
+        vec![3, 3, 3, 2],
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 54]))),
+    );
+    tn_b.add_tensor("D".to_string(), tensor_d_b).unwrap();
+
+    // Connect
+    let n_a_a = tn_a.node_index(&"A".to_string()).unwrap();
+    let n_b_a = tn_a.node_index(&"B".to_string()).unwrap();
+    let n_c_a = tn_a.node_index(&"C".to_string()).unwrap();
+    let n_d_a = tn_a.node_index(&"D".to_string()).unwrap();
+    tn_a.connect(n_a_a, &bond_ad, n_d_a, &bond_ad).unwrap();
+    tn_a.connect(n_b_a, &bond_bd, n_d_a, &bond_bd).unwrap();
+    tn_a.connect(n_c_a, &bond_cd, n_d_a, &bond_cd).unwrap();
+
+    let n_a_b = tn_b.node_index(&"A".to_string()).unwrap();
+    let n_b_b = tn_b.node_index(&"B".to_string()).unwrap();
+    let n_c_b = tn_b.node_index(&"C".to_string()).unwrap();
+    let n_d_b = tn_b.node_index(&"D".to_string()).unwrap();
+    tn_b.connect(n_a_b, &bond_ad_b, n_d_b, &bond_ad_b).unwrap();
+    tn_b.connect(n_b_b, &bond_bd_b, n_d_b, &bond_bd_b).unwrap();
+    tn_b.connect(n_c_b, &bond_cd_b, n_d_b, &bond_cd_b).unwrap();
+
+    let result = tn_a
+        .contract_zipup_tree_accumulated(&tn_b, &"D".to_string(), CanonicalForm::Unitary, None, None)
+        .unwrap();
+
+    assert_eq!(result.node_count(), 4);
+    assert!(result.canonical_center().contains(&"D".to_string()));
+}

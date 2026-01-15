@@ -110,13 +110,18 @@ where
         + MatrixScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    let svd_options = SvdOptions { rtol: options.rtol };
+    let svd_options = SvdOptions { 
+        rtol: options.rtol,
+        max_rank: options.max_rank,
+    };
 
     let (u, s, v) = svd_with::<T>(t, left_inds, &svd_options)?;
 
     // Extract singular values from diagonal tensor
     let singular_values = extract_singular_values(&s);
     let rank = singular_values.len();
+    
+    let bond_index = s.indices[0].clone();
 
     // Get bond indices from S tensor:
     // S has indices [bond_index, sim(bond_index)]
