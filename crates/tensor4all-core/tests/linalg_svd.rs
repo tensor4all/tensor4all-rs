@@ -289,7 +289,8 @@ fn test_svd_complex_reconstruction() {
     let tensor: TensorDynLen =
         TensorDynLen::new(vec![i_idx.clone(), j_idx.clone()], vec![2, 2], storage);
 
-    let (u, s, v) = svd_c64(&tensor, std::slice::from_ref(&i_idx)).expect("Complex SVD should succeed");
+    let (u, s, v) =
+        svd_c64(&tensor, std::slice::from_ref(&i_idx)).expect("Complex SVD should succeed");
 
     let u_data = match u.storage().as_ref() {
         Storage::DenseC64(dense) => dense.as_slice(),
@@ -354,7 +355,8 @@ fn test_svd_truncation() {
 
     // Use a more lenient rtol to ensure truncation happens
     let options = SvdOptions::with_rtol(1e-10);
-    let (u, s, v) = svd_with::<f64>(&tensor, std::slice::from_ref(&i), &options).expect("SVD should succeed");
+    let (u, s, v) =
+        svd_with::<f64>(&tensor, std::slice::from_ref(&i), &options).expect("SVD should succeed");
 
     // With rtol=1e-10, the discarded weight ratio is (1e-14)^2 / (1^2 + (1e-14)^2) ≈ 1e-28
     // This is much less than (1e-10)^2 = 1e-20, so truncation should occur
@@ -408,13 +410,13 @@ fn test_svd_with_override() {
 
     // Test with lenient rtol (should truncate)
     let lenient_options = SvdOptions::with_rtol(1e-4);
-    let (u1, s1, _v1) =
-        svd_with::<f64>(&tensor, std::slice::from_ref(&i), &lenient_options).expect("SVD should succeed");
+    let (u1, s1, _v1) = svd_with::<f64>(&tensor, std::slice::from_ref(&i), &lenient_options)
+        .expect("SVD should succeed");
 
     // Test with strict rtol (should not truncate)
     let strict_options = SvdOptions::with_rtol(1e-12);
-    let (u2, s2, _v2) =
-        svd_with::<f64>(&tensor, std::slice::from_ref(&i), &strict_options).expect("SVD should succeed");
+    let (u2, s2, _v2) = svd_with::<f64>(&tensor, std::slice::from_ref(&i), &strict_options)
+        .expect("SVD should succeed");
 
     // With rtol=1e-4, the ratio is (1e-6)^2 / (1^2 + (1e-6)^2) ≈ 1e-12 < (1e-4)^2 = 1e-8
     // So truncation should occur
