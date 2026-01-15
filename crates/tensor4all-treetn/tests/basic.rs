@@ -12,8 +12,8 @@ use petgraph::graph::NodeIndex;
 use std::sync::Arc;
 use tensor4all_core::storage::DenseStorageF64;
 use tensor4all_core::{DynIndex, IndexLike, Storage, TensorDynLen, TensorIndex};
-use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 use tensor4all_treetn::algorithm::CanonicalForm;
+use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 // ============================================================================
 // Helper Functions
@@ -2139,14 +2139,24 @@ fn test_zipup_accumulated_single_node() {
     tn_b.add_tensor("X".to_string(), tensor_b).unwrap();
 
     let result = tn_a
-        .contract_zipup_tree_accumulated(&tn_b, &"X".to_string(), CanonicalForm::Unitary, None, None)
+        .contract_zipup_tree_accumulated(
+            &tn_b,
+            &"X".to_string(),
+            CanonicalForm::Unitary,
+            None,
+            None,
+        )
         .unwrap();
 
     assert_eq!(result.node_count(), 1);
-    let result_tensor = result.tensor(result.node_index(&"X".to_string()).unwrap()).unwrap();
+    let result_tensor = result
+        .tensor(result.node_index(&"X".to_string()).unwrap())
+        .unwrap();
     // When indices are different, result should have 2 indices (outer product)
     // When indices are the same, result is a scalar (0 indices)
-    assert!(result_tensor.external_indices().is_empty() || result_tensor.external_indices().len() == 2);
+    assert!(
+        result_tensor.external_indices().is_empty() || result_tensor.external_indices().len() == 2
+    );
     assert!(result.canonical_center().contains(&"X".to_string()));
 }
 
@@ -2157,7 +2167,13 @@ fn test_zipup_accumulated_two_node_chain() {
     let tn_b = create_two_node_treetn_string();
 
     let result = tn_a
-        .contract_zipup_tree_accumulated(&tn_b, &"B".to_string(), CanonicalForm::Unitary, None, None)
+        .contract_zipup_tree_accumulated(
+            &tn_b,
+            &"B".to_string(),
+            CanonicalForm::Unitary,
+            None,
+            None,
+        )
         .unwrap();
 
     assert_eq!(result.node_count(), 2);
@@ -2241,7 +2257,13 @@ fn test_zipup_accumulated_three_node_chain() {
     tn_b.connect(n_b_b, &bond23_b, n_c_b, &bond23_b).unwrap();
 
     let result = tn_a
-        .contract_zipup_tree_accumulated(&tn_b, &"C".to_string(), CanonicalForm::Unitary, None, None)
+        .contract_zipup_tree_accumulated(
+            &tn_b,
+            &"C".to_string(),
+            CanonicalForm::Unitary,
+            None,
+            None,
+        )
         .unwrap();
 
     assert_eq!(result.node_count(), 3);
@@ -2316,7 +2338,12 @@ fn test_zipup_accumulated_star_topology() {
 
     // Node D (center)
     let tensor_d = TensorDynLen::new(
-        vec![bond_ad.clone(), bond_bd.clone(), bond_cd.clone(), phys_d.clone()],
+        vec![
+            bond_ad.clone(),
+            bond_bd.clone(),
+            bond_cd.clone(),
+            phys_d.clone(),
+        ],
         vec![3, 3, 3, 2],
         Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 54]))),
     );
@@ -2351,7 +2378,13 @@ fn test_zipup_accumulated_star_topology() {
     tn_b.connect(n_c_b, &bond_cd_b, n_d_b, &bond_cd_b).unwrap();
 
     let result = tn_a
-        .contract_zipup_tree_accumulated(&tn_b, &"D".to_string(), CanonicalForm::Unitary, None, None)
+        .contract_zipup_tree_accumulated(
+            &tn_b,
+            &"D".to_string(),
+            CanonicalForm::Unitary,
+            None,
+            None,
+        )
         .unwrap();
 
     assert_eq!(result.node_count(), 4);

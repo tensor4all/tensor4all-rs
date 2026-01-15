@@ -672,16 +672,17 @@ impl TensorTrain {
 
         // For zip-up method, use contract_zipup_tree_accumulated
         let result_inner = if matches!(options.method, ContractMethod::Zipup) {
-            self.inner.contract_zipup_tree_accumulated(
-                &other.inner,
-                &center,
-                CanonicalForm::Unitary,
-                options.rtol,
-                options.max_rank,
-            )
-            .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("Zip-up contraction failed: {}", e),
-            })?
+            self.inner
+                .contract_zipup_tree_accumulated(
+                    &other.inner,
+                    &center,
+                    CanonicalForm::Unitary,
+                    options.rtol,
+                    options.max_rank,
+                )
+                .map_err(|e| TensorTrainError::InvalidStructure {
+                    message: format!("Zip-up contraction failed: {}", e),
+                })?
         } else {
             treetn_contract(&self.inner, &other.inner, &center, treetn_options).map_err(|e| {
                 TensorTrainError::InvalidStructure {

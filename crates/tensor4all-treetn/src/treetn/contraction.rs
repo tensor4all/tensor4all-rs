@@ -425,7 +425,9 @@ where
             let t_factorize = Instant::now();
             let factorize_result = child_tensor
                 .factorize(&left_inds, &factorize_options)
-                .map_err(|e| anyhow::anyhow!("Factorization failed at node {:?}: {}", child_name, e))?;
+                .map_err(|e| {
+                    anyhow::anyhow!("Factorization failed at node {:?}: {}", child_name, e)
+                })?;
             factorize_time += t_factorize.elapsed();
 
             // Store left factor as the updated child tensor
@@ -549,7 +551,8 @@ where
     ) -> Result<Self>
     where
         V: Ord,
-        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         // 1. Verify topologies are compatible
         if !self.same_topology(other) {
@@ -563,34 +566,33 @@ where
         let tn_b = other.sim_internal_inds();
 
         // 3. Get traversal edges from leaves to center (post-order DFS)
-        let edges = tn_a
-            .edges_to_canonicalize_by_names(center)
-            .ok_or_else(|| anyhow::anyhow!("contract_zipup_tree_accumulated: center node {:?} not found", center))?;
+        let edges = tn_a.edges_to_canonicalize_by_names(center).ok_or_else(|| {
+            anyhow::anyhow!(
+                "contract_zipup_tree_accumulated: center node {:?} not found",
+                center
+            )
+        })?;
 
         // 4. Handle single node case
         if edges.is_empty() && self.node_count() == 1 {
-            let node_idx = tn_a
-                .graph
-                .graph()
-                .node_indices()
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("contract_zipup_tree_accumulated: no nodes found"))?;
-            let t_a = tn_a
-                .tensor(node_idx)
-                .ok_or_else(|| anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_a"))?;
+            let node_idx = tn_a.graph.graph().node_indices().next().ok_or_else(|| {
+                anyhow::anyhow!("contract_zipup_tree_accumulated: no nodes found")
+            })?;
+            let t_a = tn_a.tensor(node_idx).ok_or_else(|| {
+                anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_a")
+            })?;
             let t_b = tn_b
-                .tensor(
-                    tn_b.graph.graph().node_indices().next().ok_or_else(|| {
-                        anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_b")
-                    })?,
-                )
-                .ok_or_else(|| anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_b"))?;
+                .tensor(tn_b.graph.graph().node_indices().next().ok_or_else(|| {
+                    anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_b")
+                })?)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("contract_zipup_tree_accumulated: tensor not found in tn_b")
+                })?;
 
             let contracted = T::contract(&[t_a.clone(), t_b.clone()], AllowedPairs::All)?;
-            let node_name = tn_a
-                .graph
-                .node_name(node_idx)
-                .ok_or_else(|| anyhow::anyhow!("contract_zipup_tree_accumulated: node name not found"))?;
+            let node_name = tn_a.graph.node_name(node_idx).ok_or_else(|| {
+                anyhow::anyhow!("contract_zipup_tree_accumulated: node name not found")
+            })?;
 
             let mut result = TreeTN::new();
             result.add_tensor(node_name.clone(), contracted)?;
@@ -609,9 +611,9 @@ where
 
         // Helper: Get bond index between two nodes
         let get_bond_index = |tn: &TreeTN<T, V>, node_a: &V, node_b: &V| -> Result<T::Index> {
-            let edge = tn
-                .edge_between(node_a, node_b)
-                .ok_or_else(|| anyhow::anyhow!("Edge not found between {:?} and {:?}", node_a, node_b))?;
+            let edge = tn.edge_between(node_a, node_b).ok_or_else(|| {
+                anyhow::anyhow!("Edge not found between {:?} and {:?}", node_a, node_b)
+            })?;
             tn.bond_index(edge)
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))
                 .cloned()
@@ -643,16 +645,23 @@ where
 
             let tensor_a = tn_a
                 .tensor(node_a_idx)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in tn_a", source_name))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Tensor not found for node {:?} in tn_a", source_name)
+                })?
                 .clone();
             let tensor_b = tn_b
                 .tensor(node_b_idx)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in tn_b", source_name))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Tensor not found for node {:?} in tn_b", source_name)
+                })?
                 .clone();
 
             // Check if this is a leaf node (no intermediate tensors accumulated yet)
             let is_leaf = !intermediate_tensors.contains_key(source_name)
-                || intermediate_tensors.get(source_name).map(|v| v.is_empty()).unwrap_or(true);
+                || intermediate_tensors
+                    .get(source_name)
+                    .map(|v| v.is_empty())
+                    .unwrap_or(true);
 
             let c_temp = if is_leaf {
                 // Leaf node: contract A[source] * B[source]
@@ -742,12 +751,12 @@ where
             // No intermediate tensors: root is a single node or already processed
             // Check if root tensors need to be contracted
             if !result_tensors.contains_key(&root_name) {
-                let root_a_idx = tn_a
-                    .node_index(&root_name)
-                    .ok_or_else(|| anyhow::anyhow!("Root node {:?} not found in tn_a", root_name))?;
-                let root_b_idx = tn_b
-                    .node_index(&root_name)
-                    .ok_or_else(|| anyhow::anyhow!("Root node {:?} not found in tn_b", root_name))?;
+                let root_a_idx = tn_a.node_index(&root_name).ok_or_else(|| {
+                    anyhow::anyhow!("Root node {:?} not found in tn_a", root_name)
+                })?;
+                let root_b_idx = tn_b.node_index(&root_name).ok_or_else(|| {
+                    anyhow::anyhow!("Root node {:?} not found in tn_b", root_name)
+                })?;
 
                 let root_tensor_a = tn_a
                     .tensor(root_a_idx)
