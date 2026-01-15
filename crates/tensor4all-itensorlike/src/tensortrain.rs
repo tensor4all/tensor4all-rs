@@ -7,7 +7,6 @@
 //! `TreeTN<TensorDynLen, usize>` where node names are site indices (0, 1, 2, ...).
 
 use std::ops::Range;
-
 use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
 use tensor4all_core::{AnyScalar, TensorAccess, TensorDynLen};
 use tensor4all_treetn::treetn::contraction::{
@@ -668,14 +667,28 @@ impl TensorTrain {
             treetn_options
         };
 
-        // Use the last site as the canonical center
+        // Use the last site as the canonical center (consistent with existing behavior)
         let center = self.len() - 1;
 
-        // Call TreeTN contract
-        let result_inner = treetn_contract(&self.inner, &other.inner, &center, treetn_options)
+        // For zip-up method, use contract_zipup_tree_accumulated
+        let result_inner = if matches!(options.method, ContractMethod::Zipup) {
+            self.inner.contract_zipup_tree_accumulated(
+                &other.inner,
+                &center,
+                CanonicalForm::Unitary,
+                options.rtol,
+                options.max_rank,
+            )
             .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("TreeTN contraction failed: {}", e),
-            })?;
+                message: format!("Zip-up contraction failed: {}", e),
+            })?
+        } else {
+            treetn_contract(&self.inner, &other.inner, &center, treetn_options).map_err(|e| {
+                TensorTrainError::InvalidStructure {
+                    message: format!("TreeTN contraction failed: {}", e),
+                }
+            })?
+        };
 
         Ok(Self {
             inner: result_inner,

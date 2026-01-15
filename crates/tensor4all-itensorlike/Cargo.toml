@@ -16,6 +16,8 @@ tensor4all-treetn = { path = "../tensor4all-treetn" }
 num-complex.workspace = true
 thiserror.workspace = true
 petgraph.workspace = true
+rand.workspace = true
+anyhow.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
