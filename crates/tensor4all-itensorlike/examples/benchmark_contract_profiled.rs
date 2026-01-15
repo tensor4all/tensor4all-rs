@@ -9,8 +9,8 @@ use tensor4all_itensorlike::{ContractOptions, Result, TensorTrain};
 /// Create a random MPO (Matrix Product Operator).
 fn create_random_mpo(
     length: usize,
-    phys_dim: usize,
-    bond_dim: usize,
+    _phys_dim: usize,
+    _bond_dim: usize,
     input_indices: &[DynIndex],
     output_indices: &[DynIndex],
     link_indices: &[DynIndex],
@@ -99,7 +99,7 @@ fn main() -> Result<()> {
         .with_max_rank(max_rank);
 
     println!("Contracting MPOs using zip-up method...");
-    println!("Options: method=Zipup, max_rank={}, rtol={:?}", 
+    println!("Options: method=Zipup, max_rank={}, rtol={:?}",
              max_rank, options.rtol);
     println!();
 

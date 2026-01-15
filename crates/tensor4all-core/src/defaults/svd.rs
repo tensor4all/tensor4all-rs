@@ -34,19 +34,10 @@ pub struct SvdOptions {
     pub max_rank: Option<usize>,
 }
 
-impl Default for SvdOptions {
-    fn default() -> Self {
-        Self {
-            rtol: None, // Use global default
-            max_rank: None,
-        }
-    }
-}
-
 impl SvdOptions {
     /// Create new SVD options with the specified rtol.
     pub fn with_rtol(rtol: f64) -> Self {
-        Self { 
+        Self {
             rtol: Some(rtol),
             max_rank: None,
         }
@@ -330,7 +321,7 @@ where
 
     // Compute retained rank based on rtol truncation
     let mut r = compute_retained_rank(&s_vec_full, rtol);
-    
+
     // Apply max_rank limit if specified
     if let Some(max_rank) = options.max_rank {
         r = r.min(max_rank);

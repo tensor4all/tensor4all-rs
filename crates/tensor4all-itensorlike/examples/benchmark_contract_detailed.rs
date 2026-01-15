@@ -9,8 +9,8 @@ use tensor4all_itensorlike::{CanonicalForm, ContractOptions, Result, TensorTrain
 /// Create a random MPO (Matrix Product Operator).
 fn create_random_mpo(
     length: usize,
-    phys_dim: usize,
-    bond_dim: usize,
+    _phys_dim: usize,
+    _bond_dim: usize,
     input_indices: &[DynIndex],
     output_indices: &[DynIndex],
     link_indices: &[DynIndex],
@@ -102,27 +102,27 @@ fn main() -> Result<()> {
 
     println!("Running {} iterations...", n_runs);
     let mut times = Vec::new();
-    
+
     for run in 1..=n_runs {
         println!("\n--- Run {} ---", run);
         let start = Instant::now();
-        
+
         let mut mpo_a = mpo_a_original.clone();
         let mut mpo_b = mpo_b_original.clone();
-        
+
         // Orthogonalize
         let t_ortho = Instant::now();
         mpo_a.orthogonalize_with(length - 1, CanonicalForm::Unitary)?;
         mpo_b.orthogonalize_with(length - 1, CanonicalForm::Unitary)?;
         let ortho_time = t_ortho.elapsed();
         println!("Orthogonalization: {:?}", ortho_time);
-        
+
         // Contract
         let t_contract = Instant::now();
         let result = mpo_a.contract(&mpo_b, &options)?;
         let contract_time = t_contract.elapsed();
         println!("Contraction: {:?}", contract_time);
-        
+
         let total_time = start.elapsed();
         times.push(total_time);
         println!("Total: {:?} (max bond dim: {})", total_time, result.maxbonddim());

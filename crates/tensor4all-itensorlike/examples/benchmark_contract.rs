@@ -26,8 +26,8 @@ use tensor4all_itensorlike::{CanonicalForm, ContractOptions, Result, TensorTrain
 /// * `link_indices` - Link indices (one per bond, length should be length-1)
 fn create_random_mpo(
     length: usize,
-    phys_dim: usize,
-    bond_dim: usize,
+    _phys_dim: usize,
+    _bond_dim: usize,
     input_indices: &[DynIndex],
     output_indices: &[DynIndex],
     link_indices: &[DynIndex],
@@ -139,7 +139,7 @@ fn main() -> Result<()> {
         .with_max_rank(max_rank);
 
     println!("Contracting MPOs using zip-up method...");
-    println!("Options: method=Zipup, max_rank={}, rtol={:?}", 
+    println!("Options: method=Zipup, max_rank={}, rtol={:?}",
              max_rank, options.rtol);
     println!("Note: Each run copies MPOs and includes orthogonalization time");
     println!();
@@ -157,7 +157,7 @@ fn main() -> Result<()> {
     // Contract
     let result_warmup = mpo_a_warmup.contract(&mpo_b_warmup, &options)?;
     let duration_warmup = start_warmup.elapsed();
-    println!("Warmup completed in: {:?}. Result max bond dim: {}", 
+    println!("Warmup completed in: {:?}. Result max bond dim: {}",
              duration_warmup, result_warmup.maxbonddim());
     println!();
 
@@ -165,7 +165,7 @@ fn main() -> Result<()> {
     println!("Running {} iterations for averaging...", n_runs);
     let mut times = Vec::new();
     let mut result_final = None;
-    
+
     for run in 1..=n_runs {
         let start = Instant::now();
         // Copy MPOs for this run
@@ -181,7 +181,7 @@ fn main() -> Result<()> {
         let duration = start.elapsed();
         times.push(duration);
         result_final = Some(result.clone());
-        println!("  Run {}: {:?} (max bond dim: {})", 
+        println!("  Run {}: {:?} (max bond dim: {})",
                  run, duration, result.maxbonddim());
     }
 
@@ -190,7 +190,7 @@ fn main() -> Result<()> {
     let avg_time = total / times.len() as u32;
     let min_time = times.iter().min().unwrap();
     let max_time = times.iter().max().unwrap();
-    
+
     // Calculate standard deviation
     let avg_secs = avg_time.as_secs_f64();
     let variance: f64 = times.iter()

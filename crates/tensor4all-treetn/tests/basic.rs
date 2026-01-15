@@ -2146,7 +2146,7 @@ fn test_zipup_accumulated_single_node() {
     let result_tensor = result.tensor(result.node_index(&"X".to_string()).unwrap()).unwrap();
     // When indices are different, result should have 2 indices (outer product)
     // When indices are the same, result is a scalar (0 indices)
-    assert!(result_tensor.external_indices().len() == 0 || result_tensor.external_indices().len() == 2);
+    assert!(result_tensor.external_indices().is_empty() || result_tensor.external_indices().len() == 2);
     assert!(result.canonical_center().contains(&"X".to_string()));
 }
 

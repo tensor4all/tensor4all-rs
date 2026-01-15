@@ -689,7 +689,7 @@ where
                 // If no left indices remain, pass the tensor directly to destination
                 intermediate_tensors
                     .entry(destination_name.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(c_temp);
                 continue;
             }
@@ -704,7 +704,7 @@ where
             // Store right factor (intermediate tensor R) at destination
             intermediate_tensors
                 .entry(destination_name.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(factorize_result.right);
 
             // Note: bond index update will be handled when building the result TreeTN
