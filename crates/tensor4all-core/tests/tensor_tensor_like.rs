@@ -53,7 +53,7 @@ fn test_tensor_like_contract_basic() {
     let b = TensorDynLen::from_indices(vec![j_copy.clone(), k.clone()], f64::dense_storage(b_data));
 
     // Use TensorLike::contract - auto-detects contractable pairs via is_contractable
-    let c = <TensorDynLen as TensorLike>::contract(&[a, b], AllowedPairs::All)
+    let c = <TensorDynLen as TensorLike>::contract(&[&a, &b], AllowedPairs::All)
         .expect("contract should succeed");
 
     // Result should be 2x4
@@ -89,7 +89,7 @@ fn test_contract_allowed_pairs_specified() {
     // j is contracted between A and B (in pair (0,1))
     // k is contracted between B and C (in pair (1,2))
     let result = <TensorDynLen as TensorLike>::contract(
-        &[a, b, c],
+        &[&a, &b, &c],
         AllowedPairs::Specified(&[(0, 1), (1, 2)]),
     )
     .expect("contract should succeed");
@@ -124,10 +124,7 @@ fn test_contract_specified_empty_with_common_indices_errors() {
 
     // With empty allowed pairs and tensors that share index IDs,
     // outer_product will fail because tensors have common indices
-    let result = <TensorDynLen as TensorLike>::contract(
-        &[a.clone(), b.clone()],
-        AllowedPairs::Specified(&[]),
-    );
+    let result = <TensorDynLen as TensorLike>::contract(&[&a, &b], AllowedPairs::Specified(&[]));
 
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
@@ -152,11 +149,8 @@ fn test_contract_specified_empty_outer_product() {
     let b = TensorDynLen::from_indices(vec![k.clone(), l.clone()], f64::dense_storage(b_data));
 
     // With empty allowed pairs and different index IDs, outer product succeeds
-    let result = <TensorDynLen as TensorLike>::contract(
-        &[a.clone(), b.clone()],
-        AllowedPairs::Specified(&[]),
-    )
-    .unwrap();
+    let result =
+        <TensorDynLen as TensorLike>::contract(&[&a, &b], AllowedPairs::Specified(&[])).unwrap();
 
     // Result should have 4 indices (i, j, k, l)
     assert_eq!(result.dims.len(), 4);
@@ -186,7 +180,7 @@ fn test_contract_specified_disconnected_outer_product() {
     // Disconnected pairs: (0,1) and (2,3)
     // A and B contract i, C and D contract j, then outer product combines results
     let result = <TensorDynLen as TensorLike>::contract(
-        &[a, b, c, d],
+        &[&a, &b, &c, &d],
         AllowedPairs::Specified(&[(0, 1), (2, 3)]),
     )
     .unwrap();

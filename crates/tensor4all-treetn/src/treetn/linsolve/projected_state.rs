@@ -125,7 +125,8 @@ where
         }
 
         // Use T::contract for optimal contraction ordering
-        T::contract(&all_tensors, AllowedPairs::All)
+        let tensor_refs: Vec<&T> = all_tensors.iter().collect();
+        T::contract(&tensor_refs, AllowedPairs::All)
     }
 
     /// Ensure environments are computed for neighbors of the region.
@@ -198,14 +199,14 @@ where
         let bra_conj = tensor_bra.conj();
 
         // Contract bra and ket - T::contract auto-detects contractable pairs
-        let bra_ket = T::contract(&[bra_conj, tensor_ket.clone()], AllowedPairs::All)?;
+        let bra_ket = T::contract(&[&bra_conj, tensor_ket], AllowedPairs::All)?;
 
         // Contract bra*ket with child environments using T::contract
         if child_envs.is_empty() {
             Ok(bra_ket)
         } else {
-            let mut all_tensors: Vec<T> = vec![bra_ket];
-            all_tensors.extend(child_envs);
+            let mut all_tensors: Vec<&T> = vec![&bra_ket];
+            all_tensors.extend(child_envs.iter());
             T::contract(&all_tensors, AllowedPairs::All)
         }
     }

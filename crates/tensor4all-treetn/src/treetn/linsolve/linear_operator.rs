@@ -227,8 +227,7 @@ where
             };
 
             // Step 2: Contract with operator
-            let contracted =
-                T::contract(&[transformed_state, op_tensor.clone()], AllowedPairs::All)?;
+            let contracted = T::contract(&[&transformed_state, op_tensor], AllowedPairs::All)?;
 
             // Step 3: Replace MPO's output indices with true output indices
             let result_tensor = if let Some(mapping) = self.output_mapping.get(node) {
@@ -285,14 +284,14 @@ where
 
             op_tensor = Some(match op_tensor {
                 None => tensor,
-                Some(t) => T::contract(&[t, tensor.clone()], AllowedPairs::All)?,
+                Some(t) => T::contract(&[&t, &tensor], AllowedPairs::All)?,
             });
         }
 
         let op_tensor = op_tensor.ok_or_else(|| anyhow::anyhow!("Empty region"))?;
 
         // Contract transformed tensor with operator
-        let contracted = T::contract(&[transformed, op_tensor], AllowedPairs::All)?;
+        let contracted = T::contract(&[&transformed, &op_tensor], AllowedPairs::All)?;
 
         // Step 3: Replace output indices back to true indices
         let mut result = contracted;

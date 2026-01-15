@@ -184,11 +184,12 @@ pub struct FactorizeResult<T: TensorLike> {
 /// use tensor4all_core::{TensorLike, AllowedPairs};
 ///
 /// // Contract all contractable index pairs (default behavior)
-/// let result = T::contract(&tensors, AllowedPairs::All)?;
+/// let tensor_refs: Vec<&T> = tensors.iter().collect();
+/// let result = T::contract(&tensor_refs, AllowedPairs::All)?;
 ///
 /// // Only contract indices between specified tensor pairs
 /// let edges = vec![(0, 1), (1, 2)];  // tensor 0-1 and tensor 1-2
-/// let result = T::contract(&tensors, AllowedPairs::Specified(&edges))?;
+/// let result = T::contract(&tensor_refs, AllowedPairs::Specified(&edges))?;
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub enum AllowedPairs<'a> {
@@ -230,7 +231,7 @@ pub enum AllowedPairs<'a> {
 /// use tensor4all_core::{TensorLike, AllowedPairs};
 ///
 /// fn contract_pair<T: TensorLike>(a: &T, b: &T) -> Result<T> {
-///     T::contract(&[a.clone(), b.clone()], AllowedPairs::All)
+///     T::contract(&[a, b], AllowedPairs::All)
 /// }
 /// ```
 ///
@@ -395,7 +396,7 @@ pub trait TensorLike: TensorIndex {
     ///
     /// # Arguments
     ///
-    /// * `tensors` - Slice of tensors to contract (must have length >= 1)
+    /// * `tensors` - Slice of tensor references to contract (must have length >= 1)
     /// * `allowed` - Specifies which tensor pairs can have their indices contracted:
     ///   - `AllowedPairs::All`: Contract all contractable index pairs (default behavior)
     ///   - `AllowedPairs::Specified(&[(i, j)])`: Only contract indices between specified tensor pairs
@@ -420,12 +421,12 @@ pub trait TensorLike: TensorIndex {
     ///
     /// ```ignore
     /// // Contract all contractable pairs
-    /// let result = T::contract(&[a, b, c], AllowedPairs::All)?;
+    /// let result = T::contract(&[&a, &b, &c], AllowedPairs::All)?;
     ///
     /// // Only contract between tensor pairs (0,1) and (1,2)
-    /// let result = T::contract(&[a, b, c], AllowedPairs::Specified(&[(0, 1), (1, 2)]))?;
+    /// let result = T::contract(&[&a, &b, &c], AllowedPairs::Specified(&[(0, 1), (1, 2)]))?;
     /// ```
-    fn contract(tensors: &[Self], allowed: AllowedPairs<'_>) -> Result<Self>;
+    fn contract(tensors: &[&Self], allowed: AllowedPairs<'_>) -> Result<Self>;
 
     /// Contract multiple tensors that must form a connected graph.
     ///
@@ -435,7 +436,7 @@ pub trait TensorLike: TensorIndex {
     ///
     /// # Arguments
     ///
-    /// * `tensors` - Slice of tensors to contract (must form a connected graph)
+    /// * `tensors` - Slice of tensor references to contract (must form a connected graph)
     /// * `allowed` - Specifies which tensor pairs can have their indices contracted
     ///
     /// # Returns
@@ -452,9 +453,9 @@ pub trait TensorLike: TensorIndex {
     ///
     /// ```ignore
     /// // All tensors must be connected through contractable indices
-    /// let result = T::contract_connected(&[a, b, c], AllowedPairs::All)?;
+    /// let result = T::contract_connected(&[&a, &b, &c], AllowedPairs::All)?;
     /// ```
-    fn contract_connected(tensors: &[Self], allowed: AllowedPairs<'_>) -> Result<Self>;
+    fn contract_connected(tensors: &[&Self], allowed: AllowedPairs<'_>) -> Result<Self>;
 
     // ========================================================================
     // Vector space operations (for Krylov solvers)

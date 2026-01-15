@@ -569,14 +569,12 @@ where
             .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
         let updated_dst_tensor =
-            T::contract(&[tensor_dst.clone(), right_tensor], AllowedPairs::All).with_context(
-                || {
-                    format!(
-                        "{}: failed to absorb right factor into dst tensor",
-                        context_name
-                    )
-                },
-            )?;
+            T::contract(&[tensor_dst, &right_tensor], AllowedPairs::All).with_context(|| {
+                format!(
+                    "{}: failed to absorb right factor into dst tensor",
+                    context_name
+                )
+            })?;
 
         // Update bond index FIRST, so replace_tensor validation matches
         let new_bond_index = factorize_result.bond_index;

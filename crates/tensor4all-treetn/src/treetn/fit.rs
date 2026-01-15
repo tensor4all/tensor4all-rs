@@ -294,11 +294,8 @@ where
 
     // Contract A × B × conj(C) - collect all tensors and let contract() find the optimal contraction order
     let c_conj = tensor_c.conj();
-    let env = T::contract(
-        &[tensor_a.clone(), tensor_b.clone(), c_conj],
-        AllowedPairs::All,
-    )
-    .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
+    let env = T::contract(&[tensor_a, tensor_b, &c_conj], AllowedPairs::All)
+        .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     Ok(env)
 }
@@ -349,9 +346,9 @@ where
     // Non-leaf: contract A × B × conj(C) × child_envs
     // Collect all tensors and let contract() find the optimal contraction order
     let c_conj = tensor_c.conj();
-    let mut tensor_list = vec![tensor_a.clone(), tensor_b.clone(), c_conj];
-    tensor_list.extend(child_envs.iter().cloned());
-    let result = T::contract(&tensor_list, AllowedPairs::All)
+    let mut tensor_refs: Vec<&T> = vec![tensor_a, tensor_b, &c_conj];
+    tensor_refs.extend(child_envs.iter());
+    let result = T::contract(&tensor_refs, AllowedPairs::All)
         .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     Ok(result)
@@ -488,9 +485,9 @@ where
 
         // Compute optimal 2-site tensor: env × A[u] × B[u] × A[v] × B[v] × env
         // Collect all tensors and let contract() find the optimal contraction order
-        let mut tensor_list = vec![a_u.clone(), b_u.clone(), a_v.clone(), b_v.clone()];
-        tensor_list.extend(env_tensors);
-        let ab_uv = T::contract(&tensor_list, AllowedPairs::All)
+        let mut tensor_refs: Vec<&T> = vec![a_u, b_u, a_v, b_v];
+        tensor_refs.extend(env_tensors.iter());
+        let ab_uv = T::contract(&tensor_refs, AllowedPairs::All)
             .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
         // The result ab_uv is the optimal 2-site tensor

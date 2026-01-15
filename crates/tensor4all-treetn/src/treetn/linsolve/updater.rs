@@ -347,7 +347,8 @@ where
             .collect::<Result<_>>()?;
 
         // Use TensorLike::contract for contraction
-        T::contract(&tensors, AllowedPairs::All)
+        let tensor_refs: Vec<&T> = tensors.iter().collect();
+        T::contract(&tensor_refs, AllowedPairs::All)
     }
 
     /// Build TreeTopology for the subtree region from the solved tensor.
