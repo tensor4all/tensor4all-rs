@@ -7,11 +7,8 @@
 //! `TreeTN<TensorDynLen, usize>` where node names are site indices (0, 1, 2, ...).
 
 use std::ops::Range;
-use std::collections::HashSet;
-
 use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
-use tensor4all_core::{AllowedPairs, AnyScalar, Canonical, FactorizeAlg, FactorizeOptions, TensorAccess, TensorDynLen, TensorLike};
-use tensor4all_core::TensorIndex;
+use tensor4all_core::{AnyScalar, TensorAccess, TensorDynLen};
 use tensor4all_treetn::treetn::contraction::{contract as treetn_contract, ContractionMethod, ContractionOptions as TreeTNContractionOptions};
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
@@ -643,17 +640,9 @@ impl TensorTrain {
             });
         }
 
-        // Zip-up (ITensors-like) fast path for linear chains:
-        // use a sequential "R" environment tensor, matching ITensorMPS.jl's MPO zip-up.
-        let result_inner = if matches!(options.method, ContractMethod::Zipup) {
-            contract_zipup_itensors_like(&self.inner, &other.inner, options.rtol, options.max_rank)
-                .map_err(|e| TensorTrainError::InvalidStructure {
-                    message: format!("Zip-up contraction failed: {}", e),
-                })?
-        } else {
-            // Fallback to generic TreeTN contraction implementations (fit/naive).
+        // Convert ContractOptions to TreeTN ContractionOptions
         let treetn_method = match options.method {
-                ContractMethod::Zipup => ContractionMethod::Zipup, // unreachable
+            ContractMethod::Zipup => ContractionMethod::Zipup,
             ContractMethod::Fit => ContractionMethod::Fit,
             ContractMethod::Naive => ContractionMethod::Naive,
         };
@@ -673,12 +662,25 @@ impl TensorTrain {
             treetn_options
         };
 
-            // Use the last site as the canonical center (consistent with existing behavior)
+        // Use the last site as the canonical center (consistent with existing behavior)
         let center = self.len() - 1;
 
+        // For zip-up method, use contract_zipup_tree_accumulated
+        let result_inner = if matches!(options.method, ContractMethod::Zipup) {
+            self.inner.contract_zipup_tree_accumulated(
+                &other.inner,
+                &center,
+                CanonicalForm::Unitary,
+                options.rtol,
+                options.max_rank,
+            )
+            .map_err(|e| TensorTrainError::InvalidStructure {
+                message: format!("Zip-up contraction failed: {}", e),
+            })?
+        } else {
             treetn_contract(&self.inner, &other.inner, &center, treetn_options).map_err(|e| {
                 TensorTrainError::InvalidStructure {
-                message: format!("TreeTN contraction failed: {}", e),
+                    message: format!("TreeTN contraction failed: {}", e),
                 }
             })?
         };
@@ -688,170 +690,6 @@ impl TensorTrain {
             canonical_form: Some(CanonicalForm::Unitary),
         })
     }
-}
-
-/// ITensorMPS.jl-style zip-up contraction for a linear chain (TT/MPO).
-///
-/// This mirrors the core structure:
-/// - Maintain an "environment" tensor R
-/// - For i = 0..N-3: RAB = R * A[i] * B[i]; factorize -> (C[i], R)
-/// - Final step: RAB = R * A[N-2] * B[N-2] * A[N-1] * B[N-1]; factorize -> (C[N-2], C[N-1])
-fn contract_zipup_itensors_like(
-    a: &TreeTN<TensorDynLen, usize>,
-    b: &TreeTN<TensorDynLen, usize>,
-    rtol: Option<f64>,
-    max_rank: Option<usize>,
-) -> anyhow::Result<TreeTN<TensorDynLen, usize>> {
-    // Simulate internal (bond) indices to avoid accidental contractions between A and B links.
-    let a = a.sim_internal_inds();
-    let b = b.sim_internal_inds();
-
-    let n = a.node_count();
-    if n == 0 {
-        return Ok(TreeTN::<TensorDynLen, usize>::new());
-    }
-
-    // Helper to get tensor at site i (node name = i)
-    let get = |tn: &TreeTN<TensorDynLen, usize>, i: usize| -> anyhow::Result<TensorDynLen> {
-        let node = tn
-            .node_index(&i)
-            .ok_or_else(|| anyhow::anyhow!("Node {} not found", i))?;
-        tn.tensor(node)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {}", i))
-    };
-
-    // Extract "site indices" of a tensor train site i as:
-    // indices(t[i]) minus the (up to) two bond indices shared with neighbors.
-    let site_inds = |tn: &TreeTN<TensorDynLen, usize>, i: usize| -> anyhow::Result<Vec<DynIndex>> {
-        let t = get(tn, i)?;
-        let mut bond_ids: HashSet<<DynIndex as IndexLike>::Id> = HashSet::new();
-
-        if i > 0 {
-            let t_prev = get(tn, i - 1)?;
-            for idx in common_inds::<DynIndex>(t_prev.indices(), t.indices()) {
-                bond_ids.insert(idx.id().clone());
-            }
-        }
-        if i + 1 < n {
-            let t_next = get(tn, i + 1)?;
-            for idx in common_inds::<DynIndex>(t.indices(), t_next.indices()) {
-                bond_ids.insert(idx.id().clone());
-            }
-        }
-
-        Ok(t
-            .external_indices()
-            .into_iter()
-            .filter(|idx| !bond_ids.contains(idx.id()))
-            .collect())
-    };
-
-    // Precompute per-site unique (non-shared) site indices, like ITensors' uniqueinds/siteinds.
-    let mut s_a: Vec<Vec<DynIndex>> = Vec::with_capacity(n);
-    let mut s_b: Vec<Vec<DynIndex>> = Vec::with_capacity(n);
-    for i in 0..n {
-        let a_site = site_inds(&a, i)?;
-        let b_site = site_inds(&b, i)?;
-
-        let a_ids: HashSet<<DynIndex as IndexLike>::Id> = a_site.iter().map(|x| x.id().clone()).collect();
-        let b_ids: HashSet<<DynIndex as IndexLike>::Id> = b_site.iter().map(|x| x.id().clone()).collect();
-
-        let a_unique: Vec<_> = a_site
-            .into_iter()
-            .filter(|x| !b_ids.contains(x.id()))
-            .collect();
-        let b_unique: Vec<_> = b_site
-            .into_iter()
-            .filter(|x| !a_ids.contains(x.id()))
-            .collect();
-
-        s_a.push(a_unique);
-        s_b.push(b_unique);
-    }
-
-        if n == 1 {
-        let a0 = get(&a, 0)?;
-        let b0 = get(&b, 0)?;
-        let c0 = <TensorDynLen as TensorLike>::contract(&[a0, b0], AllowedPairs::All)?;
-        return TreeTN::from_tensors(vec![c0], vec![0]);
-    }
-
-    // Factorization options (SVD) with truncation.
-    let opts_left = FactorizeOptions {
-        alg: FactorizeAlg::SVD,
-        canonical: Canonical::Left,
-        rtol,
-        max_rank,
-    };
-    let opts_right = FactorizeOptions {
-        alg: FactorizeAlg::SVD,
-        canonical: Canonical::Right,
-        rtol,
-        max_rank,
-    };
-
-    let mut c: Vec<Option<TensorDynLen>> = vec![None; n];
-
-    // R starts as scalar identity (ITensor(true) equivalent).
-    let mut r = <TensorDynLen as TensorLike>::scalar_one()?;
-    let mut l_c: Vec<DynIndex> = Vec::new();
-
-    // i = 0..N-3
-    for i in 0..(n - 2) {
-        let ai = get(&a, i)?;
-        let bi = get(&b, i)?;
-
-        // RAB = R * A[i] * B[i]
-        let rab = <TensorDynLen as TensorLike>::contract(&[r, ai, bi], AllowedPairs::All)?;
-
-        // left_inds = unique site indices + incoming C-link(s)
-        let mut left_inds = Vec::new();
-        left_inds.extend_from_slice(&s_a[i]);
-        left_inds.extend_from_slice(&s_b[i]);
-        left_inds.extend_from_slice(&l_c);
-
-        let fact = rab
-            .factorize(&left_inds, &opts_left)
-            .map_err(|e| anyhow::anyhow!("Factorize failed at site {}: {}", i, e))?;
-
-        c[i] = Some(fact.left);
-        r = fact.right;
-
-        // Update l_c = commoninds(C[i], R)
-        let ci = c[i].as_ref().unwrap();
-        l_c = common_inds(ci.indices(), r.indices());
-    }
-
-    // Final step: i = N-2 (contract last two sites together)
-    let i = n - 2;
-    let a_i = get(&a, i)?;
-    let b_i = get(&b, i)?;
-    let a_ip1 = get(&a, i + 1)?;
-    let b_ip1 = get(&b, i + 1)?;
-
-    let rab =
-        <TensorDynLen as TensorLike>::contract(&[r, a_i, b_i, a_ip1, b_ip1], AllowedPairs::All)?;
-
-    let mut left_inds = Vec::new();
-    left_inds.extend_from_slice(&s_a[i]);
-    left_inds.extend_from_slice(&s_b[i]);
-    left_inds.extend_from_slice(&l_c);
-
-    let fact = rab
-        .factorize(&left_inds, &opts_right)
-        .map_err(|e| anyhow::anyhow!("Final factorize failed at site {}: {}", i, e))?;
-
-    c[i] = Some(fact.left);
-    c[i + 1] = Some(fact.right);
-
-    let tensors: Vec<TensorDynLen> = c
-        .into_iter()
-        .enumerate()
-        .map(|(i, t)| t.ok_or_else(|| anyhow::anyhow!("Missing output tensor at site {}", i)))
-        .collect::<anyhow::Result<_>>()?;
-
-    TreeTN::from_tensors(tensors, (0..n).collect())
 }
 
 // Implement Default for TensorTrain to allow std::mem::take
