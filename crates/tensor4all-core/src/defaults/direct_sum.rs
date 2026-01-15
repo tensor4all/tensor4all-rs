@@ -374,10 +374,7 @@ mod tests {
 
         // A[i, j] - 2x3 tensor
         let a = TensorDynLen::new(
-            vec![
-                Index::new(i.id, i.dim()),
-                Index::new(j.id, j.dim()),
-            ],
+            vec![Index::new(i.id, i.dim()), Index::new(j.id, j.dim())],
             vec![2, 3],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
                 1.0, 2.0, 3.0, // i=0
@@ -387,10 +384,7 @@ mod tests {
 
         // B[i, k] - 2x4 tensor
         let b = TensorDynLen::new(
-            vec![
-                Index::new(i.id, i.dim()),
-                Index::new(k.id, k.dim()),
-            ],
+            vec![Index::new(i.id, i.dim()), Index::new(k.id, k.dim())],
             vec![2, 4],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
                 10.0, 20.0, 30.0, 40.0, // i=0
@@ -444,10 +438,7 @@ mod tests {
 
         // A[i, j] - 2x2 tensor
         let a = TensorDynLen::new(
-            vec![
-                Index::new(i.id, i.dim()),
-                Index::new(j.id, j.dim()),
-            ],
+            vec![Index::new(i.id, i.dim()), Index::new(j.id, j.dim())],
             vec![2, 2],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
                 1.0, 2.0, 3.0, 4.0,
@@ -456,10 +447,7 @@ mod tests {
 
         // B[k, l] - 3x3 tensor (no common indices)
         let b = TensorDynLen::new(
-            vec![
-                Index::new(k.id, k.dim()),
-                Index::new(l.id, l.dim()),
-            ],
+            vec![Index::new(k.id, k.dim()), Index::new(l.id, l.dim())],
             vec![3, 3],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
                 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0,

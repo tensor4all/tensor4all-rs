@@ -250,11 +250,7 @@ impl TensorData {
         let contracted = contract_multi(&tensors, AllowedPairs::All)?;
 
         // Check if we need to permute to match external order
-        let contracted_ids: Vec<DynId> = contracted
-            .indices
-            .iter()
-            .map(|idx| idx.id)
-            .collect();
+        let contracted_ids: Vec<DynId> = contracted.indices.iter().map(|idx| idx.id).collect();
 
         if contracted_ids == self.external_index_ids {
             // Already in the right order
@@ -388,11 +384,7 @@ mod tests {
         let id_i = new_id();
         let id_j = new_id();
 
-        let data = TensorData::new(
-            storage.clone(),
-            vec![id_i, id_j],
-            vec![2, 3],
-        );
+        let data = TensorData::new(storage.clone(), vec![id_i, id_j], vec![2, 3]);
 
         let (materialized, dims) = data.materialize().unwrap();
         assert_eq!(dims, vec![2, 3]);

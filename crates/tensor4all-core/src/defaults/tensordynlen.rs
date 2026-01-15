@@ -989,10 +989,8 @@ impl TensorDynLen {
         );
 
         // Build a map from old indices to new indices
-        let replacement_map: std::collections::HashMap<_, _> = old_indices
-            .iter()
-            .zip(new_indices.iter())
-            .collect();
+        let replacement_map: std::collections::HashMap<_, _> =
+            old_indices.iter().zip(new_indices.iter()).collect();
 
         let new_indices_vec: Vec<_> = self
             .indices
@@ -1007,8 +1005,7 @@ impl TensorDynLen {
             .collect();
 
         // Create new TensorData with updated index IDs
-        let new_index_ids: Vec<DynId> =
-            new_indices_vec.iter().map(|idx| *idx.id()).collect();
+        let new_index_ids: Vec<DynId> = new_indices_vec.iter().map(|idx| *idx.id()).collect();
         let new_data = TensorData::new(self.storage().clone(), new_index_ids, self.dims.clone());
 
         Self::from_data(new_indices_vec, self.dims.clone(), new_data)
