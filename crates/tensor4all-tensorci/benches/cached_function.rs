@@ -3,9 +3,10 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::collections::HashMap;
 
-use bnum::types::{U1024, U128 as BnumU128, U256, U512};
+use bnum::types::{U1024, U256, U512};
 
 // Runtime-selectable cache key
+#[allow(dead_code)]
 enum CacheKey {
     U64(u64),
     U128(u128),
@@ -146,6 +147,7 @@ impl DynCache {
     }
 
     /// Select appropriate key type based on max bits needed
+    #[allow(dead_code)]
     fn select(l: usize, bits_per_dim: usize) -> Self {
         let total_bits = l * bits_per_dim;
         if total_bits <= 64 {

@@ -85,7 +85,8 @@ where
         let site_space_set = site_space.into();
         // Update reverse lookup for all indices
         for idx in &site_space_set {
-            self.index_to_node.insert(idx.id().clone(), node_name.clone());
+            self.index_to_node
+                .insert(idx.id().clone(), node_name.clone());
         }
         self.site_spaces.insert(node_name, site_space_set);
         Ok(node_idx)
@@ -136,10 +137,13 @@ where
     ///
     /// Updates both the site space and the reverse lookup.
     pub fn add_site_index(&mut self, node_name: &NodeName, index: I) -> Result<(), String> {
-        let site_space = self.site_spaces.get_mut(node_name)
+        let site_space = self
+            .site_spaces
+            .get_mut(node_name)
             .ok_or_else(|| format!("Node {:?} not found", node_name))?;
         site_space.insert(index.clone());
-        self.index_to_node.insert(index.id().clone(), node_name.clone());
+        self.index_to_node
+            .insert(index.id().clone(), node_name.clone());
         Ok(())
     }
 
@@ -147,7 +151,9 @@ where
     ///
     /// Updates both the site space and the reverse lookup.
     pub fn remove_site_index(&mut self, node_name: &NodeName, index: &I) -> Result<bool, String> {
-        let site_space = self.site_spaces.get_mut(node_name)
+        let site_space = self
+            .site_spaces
+            .get_mut(node_name)
             .ok_or_else(|| format!("Node {:?} not found", node_name))?;
         let removed = site_space.remove(index);
         if removed {
@@ -165,14 +171,21 @@ where
         old_index: &I,
         new_index: I,
     ) -> Result<(), String> {
-        let site_space = self.site_spaces.get_mut(node_name)
+        let site_space = self
+            .site_spaces
+            .get_mut(node_name)
             .ok_or_else(|| format!("Node {:?} not found", node_name))?;
         if !site_space.remove(old_index) {
-            return Err(format!("Index {:?} not found in node {:?}", old_index.id(), node_name));
+            return Err(format!(
+                "Index {:?} not found in node {:?}",
+                old_index.id(),
+                node_name
+            ));
         }
         self.index_to_node.remove(old_index.id());
         site_space.insert(new_index.clone());
-        self.index_to_node.insert(new_index.id().clone(), node_name.clone());
+        self.index_to_node
+            .insert(new_index.id().clone(), node_name.clone());
         Ok(())
     }
 
@@ -185,7 +198,9 @@ where
         node_name: &NodeName,
         new_indices: HashSet<I>,
     ) -> Result<(), String> {
-        let site_space = self.site_spaces.get_mut(node_name)
+        let site_space = self
+            .site_spaces
+            .get_mut(node_name)
             .ok_or_else(|| format!("Node {:?} not found", node_name))?;
 
         // Remove old indices from index_to_node
@@ -195,7 +210,8 @@ where
 
         // Add new indices to index_to_node
         for new_idx in &new_indices {
-            self.index_to_node.insert(new_idx.id().clone(), node_name.clone());
+            self.index_to_node
+                .insert(new_idx.id().clone(), node_name.clone());
         }
 
         // Replace site space
@@ -575,8 +591,7 @@ mod tests {
 
     #[test]
     fn test_is_connected_subset() {
-        let mut net: SiteIndexNetwork<String, DynIndex> =
-            SiteIndexNetwork::new();
+        let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
 
         let empty: HashSet<DynIndex> = HashSet::new();
         let a = net.add_node("A".to_string(), empty.clone()).unwrap();
@@ -595,15 +610,13 @@ mod tests {
 
     #[test]
     fn test_share_equivalent_site_index_network() {
-        let mut net1: SiteIndexNetwork<String, DynIndex> =
-            SiteIndexNetwork::new();
+        let mut net1: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let site1: HashSet<_> = [DynIndex::new_dyn(2)].into();
         net1.add_node("A".to_string(), site1.clone()).unwrap();
         net1.add_node("B".to_string(), HashSet::new()).unwrap();
         net1.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 
-        let mut net2: SiteIndexNetwork<String, DynIndex> =
-            SiteIndexNetwork::new();
+        let mut net2: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         net2.add_node("A".to_string(), site1.clone()).unwrap();
         net2.add_node("B".to_string(), HashSet::new()).unwrap();
         net2.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
@@ -611,8 +624,7 @@ mod tests {
         assert!(net1.share_equivalent_site_index_network(&net2));
 
         // Different site space
-        let mut net3: SiteIndexNetwork<String, DynIndex> =
-            SiteIndexNetwork::new();
+        let mut net3: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let site3: HashSet<_> = [DynIndex::new_dyn(5)].into();
         net3.add_node("A".to_string(), site3).unwrap();
         net3.add_node("B".to_string(), HashSet::new()).unwrap();
@@ -624,8 +636,7 @@ mod tests {
     #[test]
     fn test_apply_operator_topology() {
         // Create state network
-        let mut state: SiteIndexNetwork<String, DynIndex> =
-            SiteIndexNetwork::new();
+        let mut state: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let site1: HashSet<_> = [DynIndex::new_dyn(2)].into();
         let site2: HashSet<_> = [DynIndex::new_dyn(3)].into();
         state.add_node("A".to_string(), site1.clone()).unwrap();
@@ -633,8 +644,7 @@ mod tests {
         state.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 
         // Create operator with same topology
-        let mut operator: SiteIndexNetwork<String, DynIndex> =
-            SiteIndexNetwork::new();
+        let mut operator: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         // Operator has different index IDs but same dimensions
         let op_site1: HashSet<_> = [DynIndex::new_dyn(2)].into();
         let op_site2: HashSet<_> = [DynIndex::new_dyn(3)].into();
@@ -649,8 +659,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Create operator with different topology
-        let mut bad_operator: SiteIndexNetwork<String, DynIndex> =
-            SiteIndexNetwork::new();
+        let mut bad_operator: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         bad_operator
             .add_node("A".to_string(), HashSet::new())
             .unwrap();
@@ -669,15 +678,13 @@ mod tests {
     #[test]
     fn test_compatible_site_dimensions() {
         // Create two networks with same dimensions
-        let mut net1: SiteIndexNetwork<String, DynIndex> =
-            SiteIndexNetwork::new();
+        let mut net1: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let site1: HashSet<_> = [DynIndex::new_dyn(2)].into();
         net1.add_node("A".to_string(), site1).unwrap();
         net1.add_node("B".to_string(), HashSet::new()).unwrap();
         net1.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 
-        let mut net2: SiteIndexNetwork<String, DynIndex> =
-            SiteIndexNetwork::new();
+        let mut net2: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         // Different ID but same dimension
         let site2: HashSet<_> = [DynIndex::new_dyn(2)].into();
         net2.add_node("A".to_string(), site2).unwrap();
@@ -687,8 +694,7 @@ mod tests {
         assert!(net1.compatible_site_dimensions(&net2));
 
         // Create network with different dimension
-        let mut net3: SiteIndexNetwork<String, DynIndex> =
-            SiteIndexNetwork::new();
+        let mut net3: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
         let site3: HashSet<_> = [DynIndex::new_dyn(5)].into(); // Different dim
         net3.add_node("A".to_string(), site3).unwrap();
         net3.add_node("B".to_string(), HashSet::new()).unwrap();

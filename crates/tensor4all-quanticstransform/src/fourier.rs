@@ -289,16 +289,11 @@ fn lagrange_polynomial(grid: &[f64], bary_weights: &[f64], alpha: usize, x: f64)
 /// where x = (sigma + grid[beta]) / 2
 ///
 /// Returns tensor of shape (k+1, 2, 2, k+1)
-fn build_dft_core_tensor(
-    grid: &[f64],
-    bary_weights: &[f64],
-    sign: f64,
-) -> DTensor<Complex64, 4> {
+fn build_dft_core_tensor(grid: &[f64], bary_weights: &[f64], sign: f64) -> DTensor<Complex64, 4> {
     let k = grid.len() - 1;
 
     // tensor[alpha, tau, sigma, beta] - shape: (k+1, 2, 2, k+1)
-    let mut tensor =
-        DTensor::<Complex64, 4>::from_elem([k + 1, 2, 2, k + 1], Complex64::zero());
+    let mut tensor = DTensor::<Complex64, 4>::from_elem([k + 1, 2, 2, k + 1], Complex64::zero());
 
     for alpha in 0..=k {
         for tau in 0..2 {

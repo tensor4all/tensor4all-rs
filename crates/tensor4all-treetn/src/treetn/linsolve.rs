@@ -78,7 +78,8 @@ fn validate_linsolve_inputs<T, V>(
 ) -> Result<()>
 where
     T: TensorLike,
-    <T::Index as tensor4all_core::IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    <T::Index as tensor4all_core::IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     let init_network = init.site_index_network();
@@ -128,7 +129,8 @@ pub fn linsolve<T, V>(
 ) -> Result<LinsolveResult<T, V>>
 where
     T: TensorLike + 'static,
-    <T::Index as tensor4all_core::IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
+    <T::Index as tensor4all_core::IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     // Validate inputs before proceeding

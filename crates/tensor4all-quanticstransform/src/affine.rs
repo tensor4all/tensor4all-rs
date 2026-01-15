@@ -474,9 +474,7 @@ impl UnfusedTensorInfo {
     pub fn unfused_shape(&self, left_bond: usize, right_bond: usize) -> Vec<usize> {
         let mut shape = Vec::with_capacity(2 + self.num_physical_dims);
         shape.push(left_bond);
-        for _ in 0..self.num_physical_dims {
-            shape.push(2);
-        }
+        shape.extend(std::iter::repeat_n(2, self.num_physical_dims));
         shape.push(right_bond);
         shape
     }
@@ -726,7 +724,11 @@ fn affine_transform_core(
             if scale % 2 == 1 {
                 // Scale is odd: unique y that satisfies condition
                 let y: Vec<i64> = z.iter().map(|&zi| zi & 1).collect();
-                let y_bits: usize = y.iter().enumerate().map(|(i, &yi)| (yi as usize) << i).sum();
+                let y_bits: usize = y
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &yi)| (yi as usize) << i)
+                    .sum();
 
                 // Compute carry_out = (z - scale * y) / 2
                 let carry_out: Vec<i64> = z
@@ -738,9 +740,9 @@ fn affine_transform_core(
                 // Site index: y bits in lower positions, x bits in upper positions
                 let site_idx = y_bits | (x_bits << m);
 
-                let entry = carry_out_map
-                    .entry(carry_out)
-                    .or_insert_with(|| DTensor::<bool, 2>::from_elem([num_carry_in, site_dim], false));
+                let entry = carry_out_map.entry(carry_out).or_insert_with(|| {
+                    DTensor::<bool, 2>::from_elem([num_carry_in, site_dim], false)
+                });
                 entry[[c_idx, site_idx]] = true;
             } else {
                 // Scale is even: z must be even for valid y
@@ -761,9 +763,9 @@ fn affine_transform_core(
 
                     let site_idx = y_bits | (x_bits << m);
 
-                    let entry = carry_out_map
-                        .entry(carry_out)
-                        .or_insert_with(|| DTensor::<bool, 2>::from_elem([num_carry_in, site_dim], false));
+                    let entry = carry_out_map.entry(carry_out).or_insert_with(|| {
+                        DTensor::<bool, 2>::from_elem([num_carry_in, site_dim], false)
+                    });
                     entry[[c_idx, site_idx]] = true;
                 }
             }
@@ -1167,6 +1169,7 @@ mod tests {
     /// - y_flat = y[0] + y[1]*2^R + y[2]*2^(2R) + ...
     ///
     /// Big-endian convention: site 0 = MSB, site R-1 = LSB.
+    #[allow(clippy::needless_range_loop)]
     fn mpo_to_dense_matrix(
         mpo: &TensorTrain<Complex64>,
         m: usize,
@@ -1239,6 +1242,7 @@ mod tests {
     // MPO vs matrix comparison tests
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_affine_mpo_vs_matrix_1d_identity() {
         // Test 1D identity: y = x (M=1, N=1)
         let r = 3;
@@ -1267,6 +1271,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_affine_mpo_vs_matrix_1d_shift() {
         // Test 1D shift: y = x + 3 (M=1, N=1)
         let r = 3;
@@ -1295,6 +1300,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_affine_mpo_vs_matrix_simple() {
         // Compare MPO to matrix: A = [[1, 0], [1, 1]], b = [0, 0]
         // From Quantics.jl compare_simple test
@@ -1401,6 +1407,7 @@ mod tests {
 
                 // y = x/3 only valid for x divisible by 3
                 let size = 1 << r;
+                #[allow(clippy::manual_div_ceil)]
                 let expected_nnz = (size + 2) / 3; // Number of multiples of 3 in [0, 2^R)
                 assert_eq!(
                     matrix.nnz(),
@@ -1427,10 +1434,7 @@ mod tests {
                     Rational64::new(1, 2),
                     Rational64::new(-1, 2),
                 ];
-                let b = vec![
-                    Rational64::from_integer(2),
-                    Rational64::from_integer(3),
-                ];
+                let b = vec![Rational64::from_integer(2), Rational64::from_integer(3)];
                 let params = AffineParams::new(a, b, 2, 2).unwrap();
                 let bcs = vec![bc; 2];
 
@@ -1446,6 +1450,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_affine_matrix_unitarity_full() {
         // From Quantics.jl full test - verify T'*T == I for orthogonal transforms
         // A = [[1, 0], [1, 1]], b = [0, 0]
@@ -1488,6 +1493,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_affine_mpo_vs_matrix_r1() {
         // R=1 is a special case where is_msb and is_lsb are both true
         let r = 1;
@@ -1535,6 +1541,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_affine_matrix_unitarity_with_shift() {
         // From Quantics.jl full test with shift - verify T*T' == I
         // A = [[1, 0], [1, 1]], b = [4, 1]
@@ -1641,6 +1648,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_unfused_vs_fused_equivalence() {
         // Verify that unfused tensors give the same matrix as fused
         let r = 2;

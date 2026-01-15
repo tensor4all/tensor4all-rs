@@ -70,7 +70,7 @@ where
             let fit_options = FitOptions {
                 tolerance: options.tolerance,
                 max_bond_dim: options.max_bond_dim,
-                factorize_method: options.factorize_method.clone(),
+                factorize_method: options.factorize_method,
                 ..Default::default()
             };
             contract_fit(mpo_a, mpo_b, &fit_options, None)

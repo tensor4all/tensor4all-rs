@@ -18,6 +18,7 @@ pub struct t4a_simplett_f64 {
     _private: *const c_void,
 }
 
+#[allow(dead_code)]
 impl t4a_simplett_f64 {
     pub(crate) fn new(tt: TensorTrain<f64>) -> Self {
         Self {
@@ -29,10 +30,12 @@ impl t4a_simplett_f64 {
         unsafe { &*(self._private as *const TensorTrain<f64>) }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn inner_mut(&mut self) -> &mut TensorTrain<f64> {
         unsafe { &mut *(self._private as *mut TensorTrain<f64>) }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn into_inner(self) -> TensorTrain<f64> {
         let ptr = self._private as *mut TensorTrain<f64>;
         std::mem::forget(self);
@@ -103,9 +106,7 @@ pub extern "C" fn t4a_simplett_f64_constant(
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let dims: Vec<usize> = (0..n_sites)
-            .map(|i| unsafe { *site_dims.add(i) })
-            .collect();
+        let dims: Vec<usize> = (0..n_sites).map(|i| unsafe { *site_dims.add(i) }).collect();
         let tt = TensorTrain::<f64>::constant(&dims, value);
         Box::into_raw(Box::new(t4a_simplett_f64::new(tt)))
     }));
@@ -131,9 +132,7 @@ pub extern "C" fn t4a_simplett_f64_zeros(
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let dims: Vec<usize> = (0..n_sites)
-            .map(|i| unsafe { *site_dims.add(i) })
-            .collect();
+        let dims: Vec<usize> = (0..n_sites).map(|i| unsafe { *site_dims.add(i) }).collect();
         let tt = TensorTrain::<f64>::zeros(&dims);
         Box::into_raw(Box::new(t4a_simplett_f64::new(tt)))
     }));
@@ -265,9 +264,7 @@ pub extern "C" fn t4a_simplett_f64_evaluate(
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         let tt = unsafe { &*ptr };
-        let idx: Vec<usize> = (0..n_indices)
-            .map(|i| unsafe { *indices.add(i) })
-            .collect();
+        let idx: Vec<usize> = (0..n_indices).map(|i| unsafe { *indices.add(i) }).collect();
 
         match tt.inner().evaluate(&idx) {
             Ok(val) => {

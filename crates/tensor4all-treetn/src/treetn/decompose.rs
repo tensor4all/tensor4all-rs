@@ -147,7 +147,7 @@ where
     }
 
     // Validate that all index positions are valid
-    for (_, positions) in &topology.nodes {
+    for positions in topology.nodes.values() {
         for &pos in positions {
             if pos >= tensor_indices.len() {
                 return Err(anyhow::anyhow!(
@@ -186,7 +186,9 @@ where
         .iter()
         .max_by(|(node_a, neighbors_a), (node_b, neighbors_b)| {
             // First compare by degree, then by node name (ascending) for tie-breaking
-            neighbors_a.len().cmp(&neighbors_b.len())
+            neighbors_a
+                .len()
+                .cmp(&neighbors_b.len())
                 .then_with(|| node_b.cmp(node_a)) // Prefer smaller node name
         })
         .map(|(node, _)| node.clone())
@@ -233,6 +235,7 @@ where
     };
 
     // Process nodes in post-order (leaves first)
+    #[allow(clippy::needless_range_loop)]
     for i in 0..traversal_order.len() - 1 {
         let (node, parent) = &traversal_order[i];
         let parent_node = parent.as_ref().unwrap();

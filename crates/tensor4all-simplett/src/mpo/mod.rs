@@ -35,6 +35,7 @@ pub mod environment;
 pub mod error;
 pub mod factorize;
 pub mod inverse_mpo;
+#[allow(clippy::module_inception)]
 pub mod mpo;
 pub mod site_mpo;
 pub mod tt_contraction;

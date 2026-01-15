@@ -27,8 +27,8 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::{AllowedPairs, FactorizeOptions, IndexLike, TensorLike};
 use crate::algorithm::CanonicalForm;
+use tensor4all_core::{AllowedPairs, FactorizeOptions, IndexLike, TensorLike};
 
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -153,14 +153,16 @@ where
     /// Returns an error if validation fails or connection fails.
     pub fn from_tensors(tensors: Vec<T>, node_names: Vec<V>) -> Result<Self>
     where
-        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
         V: Ord,
     {
         let treetn = Self::from_tensors_unchecked(tensors, node_names)?;
 
         // Verify structural constraints after construction
-        treetn.verify_internal_consistency()
-            .context("TreeTN::from_tensors: constructed TreeTN failed internal consistency check")?;
+        treetn.verify_internal_consistency().context(
+            "TreeTN::from_tensors: constructed TreeTN failed internal consistency check",
+        )?;
 
         Ok(treetn)
     }
@@ -169,7 +171,8 @@ where
     /// Used by `verify_internal_consistency` to avoid infinite recursion.
     fn from_tensors_unchecked(tensors: Vec<T>, node_names: Vec<V>) -> Result<Self>
     where
-        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         // Validate input lengths
         if tensors.len() != node_names.len() {
@@ -193,7 +196,11 @@ where
 
         // Step 2: Build a map from index ID to (node_index, index) pairs in O(n) time
         // Key: index ID, Value: vector of (NodeIndex, Index) pairs
-        let mut index_map: HashMap<<T::Index as IndexLike>::Id, Vec<(NodeIndex, T::Index)>> = HashMap::new();
+        #[allow(clippy::type_complexity)]
+        let mut index_map: HashMap<
+            <T::Index as IndexLike>::Id,
+            Vec<(NodeIndex, T::Index)>,
+        > = HashMap::new();
 
         for node_idx in &node_indices {
             let tensor = treetn
@@ -251,11 +258,7 @@ where
     ///
     /// Also updates the site_index_network with the physical indices (all indices initially,
     /// as no connections exist yet).
-    pub fn add_tensor(
-        &mut self,
-        node_name: V,
-        tensor: T,
-    ) -> Result<NodeIndex> {
+    pub fn add_tensor(&mut self, node_name: V, tensor: T) -> Result<NodeIndex> {
         self.add_tensor_internal(node_name, tensor)
     }
 
@@ -317,11 +320,7 @@ where
     // ------------------------------------------------------------------------
 
     /// Internal method to add a tensor with a node name.
-    pub(crate) fn add_tensor_internal(
-        &mut self,
-        node_name: V,
-        tensor: T,
-    ) -> Result<NodeIndex> {
+    pub(crate) fn add_tensor_internal(&mut self, node_name: V, tensor: T) -> Result<NodeIndex> {
         // Extract physical indices: initially all indices are physical (no connections yet)
         let physical_indices: HashSet<T::Index> = tensor.external_indices().into_iter().collect();
 
@@ -511,8 +510,7 @@ where
         dst: NodeIndex,
         factorize_options: &FactorizeOptions,
         context_name: &str,
-    ) -> Result<()>
-    {
+    ) -> Result<()> {
         // Find edge between src and dst
         let edge = {
             let g = self.graph.graph();
@@ -556,7 +554,8 @@ where
         }
 
         // Perform factorization
-        let factorize_result = tensor_src.factorize(&left_inds, factorize_options)
+        let factorize_result = tensor_src
+            .factorize(&left_inds, factorize_options)
             .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
             .with_context(|| format!("{}: factorization failed", context_name))?;
 
@@ -569,13 +568,15 @@ where
             .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
             .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
-        let updated_dst_tensor = T::contract(&[tensor_dst.clone(), right_tensor], AllowedPairs::All)
-            .with_context(|| {
-                format!(
-                    "{}: failed to absorb right factor into dst tensor",
-                    context_name
-                )
-            })?;
+        let updated_dst_tensor =
+            T::contract(&[tensor_dst.clone(), right_tensor], AllowedPairs::All).with_context(
+                || {
+                    format!(
+                        "{}: failed to absorb right factor into dst tensor",
+                        context_name
+                    )
+                },
+            )?;
 
         // Update bond index FIRST, so replace_tensor validation matches
         let new_bond_index = factorize_result.bond_index;
@@ -620,11 +621,7 @@ where
     /// to this node. Returns an error if any connection index is missing.
     ///
     /// Returns the old tensor if the node exists and validation passes.
-    pub fn replace_tensor(
-        &mut self,
-        node: NodeIndex,
-        new_tensor: T,
-    ) -> Result<Option<T>> {
+    pub fn replace_tensor(&mut self, node: NodeIndex, new_tensor: T) -> Result<Option<T>> {
         // Check if node exists
         if !self.graph.contains_node(node) {
             return Ok(None);
@@ -708,11 +705,7 @@ where
     ///
     /// Also updates site_index_network: the old bond index becomes physical again,
     /// and the new bond index is removed from physical indices.
-    pub fn replace_edge_bond(
-        &mut self,
-        edge: EdgeIndex,
-        new_bond_index: T::Index,
-    ) -> Result<()> {
+    pub fn replace_edge_bond(&mut self, edge: EdgeIndex, new_bond_index: T::Index) -> Result<()> {
         // Validate edge exists and get endpoints
         let (source, target) = self
             .graph
@@ -1218,7 +1211,8 @@ where
     /// `Ok(())` if the internal data is consistent, or `Err` with details about the inconsistency.
     pub fn verify_internal_consistency(&self) -> Result<()>
     where
-        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
         V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         // Step 0a: Verify all tensors are connected (form a single connected component)
@@ -1353,7 +1347,10 @@ where
 
             // Compare tensor indices (as sets, since order may differ)
             let indices_self: HashSet<_> = tensor_self.external_indices().into_iter().collect();
-            let indices_reconstructed: HashSet<_> = tensor_reconstructed.external_indices().into_iter().collect();
+            let indices_reconstructed: HashSet<_> = tensor_reconstructed
+                .external_indices()
+                .into_iter()
+                .collect();
             if indices_self != indices_reconstructed {
                 return Err(anyhow::anyhow!(
                     "Internal inconsistency: tensor indices differ at node {:?}",
@@ -1383,10 +1380,7 @@ where
 // ============================================================================
 
 /// Find common indices between two slices of indices.
-pub(crate) fn common_inds<I: IndexLike>(
-    inds_a: &[I],
-    inds_b: &[I],
-) -> Vec<I> {
+pub(crate) fn common_inds<I: IndexLike>(inds_a: &[I], inds_b: &[I]) -> Vec<I> {
     let set_b: HashSet<_> = inds_b.iter().map(|idx| idx.id()).collect();
     inds_a
         .iter()

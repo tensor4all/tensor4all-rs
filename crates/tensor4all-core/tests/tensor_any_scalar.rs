@@ -303,6 +303,7 @@ fn test_partial_ord() {
 
 #[test]
 fn test_display() {
+    #[allow(clippy::approx_constant)]
     let s1 = AnyScalar::F64(3.14);
     assert_eq!(format!("{}", s1), "3.14");
 

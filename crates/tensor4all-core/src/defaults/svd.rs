@@ -23,7 +23,7 @@ pub enum SvdError {
 }
 
 /// Options for SVD decomposition with truncation control.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SvdOptions {
     /// Relative Frobenius error tolerance for truncation.
     /// If `None`, uses the global default rtol.
@@ -34,19 +34,10 @@ pub struct SvdOptions {
     pub max_rank: Option<usize>,
 }
 
-impl Default for SvdOptions {
-    fn default() -> Self {
-        Self {
-            rtol: None, // Use global default
-            max_rank: None,
-        }
-    }
-}
-
 impl SvdOptions {
     /// Create new SVD options with the specified rtol.
     pub fn with_rtol(rtol: f64) -> Self {
-        Self { 
+        Self {
             rtol: Some(rtol),
             max_rank: None,
         }
@@ -234,7 +225,7 @@ where
 /// - `U` is a tensor with indices `[left_inds..., bond_index]` and dimensions `[left_dims..., r]`
 /// - `S` is a r×r diagonal tensor with indices `[bond_index, bond_index]` (singular values are real)
 /// - `V` is a tensor with indices `[right_inds..., bond_index]` and dimensions `[right_dims..., r]`
-/// where `r` is the retained rank (≤ min(m, n)) determined by rtol truncation.
+///   where `r` is the retained rank (≤ min(m, n)) determined by rtol truncation.
 ///
 /// Note: Singular values `S` are always real, even for complex input tensors.
 ///
@@ -286,7 +277,7 @@ where
 /// - `U` is a tensor with indices `[left_inds..., bond_index]` and dimensions `[left_dims..., r]`
 /// - `S` is a r×r diagonal tensor with indices `[bond_index, bond_index]` (singular values are real)
 /// - `V` is a tensor with indices `[right_inds..., bond_index]` and dimensions `[right_dims..., r]`
-/// where `r` is the retained rank (≤ min(m, n)) determined by rtol truncation.
+///   where `r` is the retained rank (≤ min(m, n)) determined by rtol truncation.
 ///
 /// Note: Singular values `S` are always real, even for complex input tensors.
 ///
@@ -330,7 +321,7 @@ where
 
     // Compute retained rank based on rtol truncation
     let mut r = compute_retained_rank(&s_vec_full, rtol);
-    
+
     // Apply max_rank limit if specified
     if let Some(max_rank) = options.max_rank {
         r = r.min(max_rank);

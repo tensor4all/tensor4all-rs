@@ -485,7 +485,10 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     eprintln!("=== Sweep plan details ===");
     eprintln!("Number of steps: {}", plan.len());
     for (i, step) in plan.iter().enumerate() {
-        eprintln!("  Step {}: nodes={:?}, new_center={:?}", i, step.nodes, step.new_center);
+        eprintln!(
+            "  Step {}: nodes={:?}, new_center={:?}",
+            i, step.nodes, step.new_center
+        );
     }
 
     // Debug: print initial state
@@ -510,7 +513,10 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     use tensor4all_treetn::LocalUpdater;
     eprintln!("=== Starting first sweep ===");
     for (step_idx, step) in plan.iter().enumerate() {
-        eprintln!("  Before step {}: nodes={:?}, new_center={:?}", step_idx, step.nodes, step.new_center);
+        eprintln!(
+            "  Before step {}: nodes={:?}, new_center={:?}",
+            step_idx, step.nodes, step.new_center
+        );
 
         // Print state before step
         let contracted_before = x.contract_to_tensor().unwrap();
@@ -620,7 +626,11 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
         .map(|(&c, &e)| (c - e).powi(2))
         .sum::<f64>()
         .sqrt();
-    let expected_norm: f64 = sorted_expected.iter().map(|&e| e.powi(2)).sum::<f64>().sqrt();
+    let expected_norm: f64 = sorted_expected
+        .iter()
+        .map(|&e| e.powi(2))
+        .sum::<f64>()
+        .sqrt();
     let rel_error = diff_norm / expected_norm.max(1e-14);
 
     assert!(
@@ -1264,6 +1274,7 @@ fn test_linear_operator_apply_local_two_sites() {
 
 /// Helper to create index mappings from MPO and state site indices.
 /// Returns (mpo, input_mapping, output_mapping)
+#[allow(clippy::type_complexity)]
 fn create_index_mappings(
     mpo: TreeTN<TensorDynLen, &'static str>,
     state_site_indices: &[DynIndex],
@@ -1344,8 +1355,14 @@ fn test_linsolve_with_index_mappings_identity() {
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
-    let mut updater =
-        LinsolveUpdater::with_index_mappings(mpo, input_mapping, output_mapping, rhs.clone(), None, options);
+    let mut updater = LinsolveUpdater::with_index_mappings(
+        mpo,
+        input_mapping,
+        output_mapping,
+        rhs.clone(),
+        None,
+        options,
+    );
 
     // Create sweep plan
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0", 2).unwrap();
@@ -1391,8 +1408,14 @@ fn test_linsolve_with_index_mappings_diagonal() {
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
-    let mut updater =
-        LinsolveUpdater::with_index_mappings(mpo, input_mapping, output_mapping, rhs.clone(), None, options);
+    let mut updater = LinsolveUpdater::with_index_mappings(
+        mpo,
+        input_mapping,
+        output_mapping,
+        rhs.clone(),
+        None,
+        options,
+    );
 
     // Create sweep plan
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0", 2).unwrap();
@@ -1508,6 +1531,7 @@ fn create_three_site_mpo_with_internal_indices(
 
 /// Helper to create 3-site index mappings from MPO and state site indices.
 /// Returns (mpo, input_mapping, output_mapping)
+#[allow(clippy::type_complexity)]
 fn create_three_site_index_mappings(
     mpo: TreeTN<TensorDynLen, &'static str>,
     state_site_indices: &[DynIndex],
@@ -1579,8 +1603,14 @@ fn test_linsolve_with_index_mappings_three_site_identity() {
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
-    let mut updater =
-        LinsolveUpdater::with_index_mappings(mpo, input_mapping, output_mapping, rhs.clone(), None, options);
+    let mut updater = LinsolveUpdater::with_index_mappings(
+        mpo,
+        input_mapping,
+        output_mapping,
+        rhs.clone(),
+        None,
+        options,
+    );
 
     // Create sweep plan with 2-site updates
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0", 2).unwrap();
@@ -1628,8 +1658,14 @@ fn test_linsolve_with_index_mappings_three_site_diagonal() {
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
-    let mut updater =
-        LinsolveUpdater::with_index_mappings(mpo, input_mapping, output_mapping, rhs.clone(), None, options);
+    let mut updater = LinsolveUpdater::with_index_mappings(
+        mpo,
+        input_mapping,
+        output_mapping,
+        rhs.clone(),
+        None,
+        options,
+    );
 
     // Create sweep plan with 2-site updates
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0", 2).unwrap();
@@ -1792,7 +1828,7 @@ fn test_linsolve_vin_neq_vout_with_reference_state() {
     output_mapping.insert(
         "site0",
         IndexMapping {
-            true_index: s_in[0].clone(), // Must be same as input for GMRES
+            true_index: s_in[0].clone(),          // Must be same as input for GMRES
             internal_index: s_out_tmp[0].clone(), // MPO output index
         },
     );
@@ -1872,9 +1908,10 @@ fn create_pauli_x_mpo(
 
     // Pauli X matrix: [[0, 1], [1, 0]]
     // As a tensor [out, in]: X[0,0]=0, X[0,1]=1, X[1,0]=1, X[1,1]=0
-    let pauli_x = vec![0.0, 1.0, 1.0, 0.0];
+    let pauli_x = [0.0, 1.0, 1.0, 0.0];
 
     // Site 0 tensor: [s0_out, s0_in, bond] with X matrix
+    #[allow(clippy::needless_range_loop, clippy::identity_op)]
     let mut data0 = vec![0.0; phys_dim * phys_dim * 1];
     for out_idx in 0..phys_dim {
         for in_idx in 0..phys_dim {
@@ -1889,6 +1926,7 @@ fn create_pauli_x_mpo(
     );
 
     // Site 1 tensor: [bond, s1_out, s1_in] with X matrix
+    #[allow(clippy::needless_range_loop, clippy::identity_op)]
     let mut data1 = vec![0.0; 1 * phys_dim * phys_dim];
     for out_idx in 0..phys_dim {
         for in_idx in 0..phys_dim {
@@ -2033,6 +2071,7 @@ fn create_general_2x2_mpo(
     let bond = DynIndex::new_dyn(1);
 
     // Site 0 tensor: [s0_out, s0_in, bond]
+    #[allow(clippy::needless_range_loop, clippy::identity_op)]
     let mut data0 = vec![0.0; phys_dim * phys_dim * 1];
     for out_idx in 0..phys_dim {
         for in_idx in 0..phys_dim {
@@ -2046,6 +2085,7 @@ fn create_general_2x2_mpo(
     );
 
     // Site 1 tensor: [bond, s1_out, s1_in]
+    #[allow(clippy::needless_range_loop, clippy::identity_op)]
     let mut data1 = vec![0.0; 1 * phys_dim * phys_dim];
     for out_idx in 0..phys_dim {
         for in_idx in 0..phys_dim {

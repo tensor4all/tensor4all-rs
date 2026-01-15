@@ -71,7 +71,8 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
     /// # Returns
     ///
     /// A new object with the indices replaced.
-    fn replaceinds(&self, old_indices: &[Self::Index], new_indices: &[Self::Index]) -> Result<Self>;
+    fn replaceinds(&self, old_indices: &[Self::Index], new_indices: &[Self::Index])
+        -> Result<Self>;
 
     /// Replace indices using pairs of (old, new).
     ///
@@ -89,4 +90,3 @@ pub trait TensorIndex: Sized + Clone + Debug + Send + Sync {
         self.replaceinds(&old, &new)
     }
 }
-

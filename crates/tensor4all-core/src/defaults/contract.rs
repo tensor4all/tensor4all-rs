@@ -14,11 +14,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::Result;
 use omeco::{optimize_code, EinCode, GreedyMethod, NestedEinsum};
-use petgraph::prelude::*;
 use petgraph::algo::connected_components;
+use petgraph::prelude::*;
 
-use crate::index_like::IndexLike;
 use crate::defaults::{DynId, DynIndex, Index, TensorDynLen};
+use crate::index_like::IndexLike;
 use crate::tensor_like::AllowedPairs;
 
 /// Contract multiple tensors into a single tensor, handling disconnected components.
@@ -65,7 +65,8 @@ pub fn contract_multi(tensors: &[TensorDynLen], allowed: AllowedPairs<'_>) -> Re
                     if !has_contractable_indices(&tensors[i], &tensors[j]) {
                         return Err(anyhow::anyhow!(
                             "Specified pair ({}, {}) has no contractable indices",
-                            i, j
+                            i,
+                            j
                         ));
                     }
                 }
@@ -86,7 +87,8 @@ pub fn contract_multi(tensors: &[TensorDynLen], allowed: AllowedPairs<'_>) -> Re
 
                     // Remap AllowedPairs for the component
                     let remapped_allowed = remap_allowed_pairs(allowed, component);
-                    let contracted = contract_connected(&component_tensors, remapped_allowed.as_ref())?;
+                    let contracted =
+                        contract_connected(&component_tensors, remapped_allowed.as_ref())?;
                     results.push(contracted);
                 }
 
@@ -131,7 +133,10 @@ pub fn contract_multi(tensors: &[TensorDynLen], allowed: AllowedPairs<'_>) -> Re
 /// let tensors = vec![tensor_a, tensor_b, tensor_c];  // Must be connected
 /// let result = contract_connected(&tensors, AllowedPairs::All)?;
 /// ```
-pub fn contract_connected(tensors: &[TensorDynLen], allowed: AllowedPairs<'_>) -> Result<TensorDynLen> {
+pub fn contract_connected(
+    tensors: &[TensorDynLen],
+    allowed: AllowedPairs<'_>,
+) -> Result<TensorDynLen> {
     match tensors.len() {
         0 => Err(anyhow::anyhow!("No tensors to contract")),
         1 => Ok(tensors[0].clone()),
@@ -428,6 +433,7 @@ fn contract_connected_optimized(
 /// Returns: (ixs, internal_id_to_original)
 /// - ixs: Vec<Vec<usize>> - internal IDs for each tensor's indices
 /// - internal_id_to_original: Maps internal_id -> (tensor_idx, index_position)
+#[allow(clippy::type_complexity)]
 fn build_internal_ids(
     tensors: &[TensorDynLen],
     allowed: AllowedPairs<'_>,
@@ -743,8 +749,7 @@ mod tests {
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let c = make_test_tensor(&[2, 5], &[1, 4]); // i=1, l=4
         let tensors = vec![a, b, c];
-        let result =
-            contract_multi(&tensors, AllowedPairs::Specified(&[(0, 1), (0, 2)])).unwrap();
+        let result = contract_multi(&tensors, AllowedPairs::Specified(&[(0, 1), (0, 2)])).unwrap();
         let mut sorted_dims = result.dims.clone();
         sorted_dims.sort();
         assert_eq!(sorted_dims, vec![4, 5]); // k=4, l=5
@@ -762,7 +767,10 @@ mod tests {
         let tensors = vec![a, b, c];
         let result = contract_multi(&tensors, AllowedPairs::Specified(&[(0, 1), (1, 2)]));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("no contractable indices"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no contractable indices"));
     }
 
     #[test]
@@ -812,16 +820,16 @@ mod tests {
     /// - x is a hyperedge connecting all four tensors
     #[test]
     fn test_omeco_hyperedge_delta() {
-        use omeco::{EinCode, GreedyMethod, optimize_code, contraction_complexity};
+        use omeco::{contraction_complexity, optimize_code, EinCode, GreedyMethod};
         use std::collections::HashMap;
 
         // A(i, x), B(j, x), C(k, x), delta(x)
         // x is the hyperedge (appears in all 4 tensors)
         let ixs: Vec<Vec<char>> = vec![
-            vec!['i', 'x'],  // A
-            vec!['j', 'x'],  // B
-            vec!['k', 'x'],  // C
-            vec!['x'],       // delta (1D)
+            vec!['i', 'x'], // A
+            vec!['j', 'x'], // B
+            vec!['k', 'x'], // C
+            vec!['x'],      // delta (1D)
         ];
         let output = vec!['i', 'j', 'k'];
 
@@ -831,7 +839,7 @@ mod tests {
         sizes.insert('i', 10);
         sizes.insert('j', 10);
         sizes.insert('k', 10);
-        sizes.insert('x', 100);  // hyperedge dimension
+        sizes.insert('x', 100); // hyperedge dimension
 
         let tree = optimize_code(&code, &sizes, &GreedyMethod::default())
             .expect("optimization should succeed");
@@ -840,11 +848,17 @@ mod tests {
 
         // Verify the optimization found a solution
         // Time complexity should be reasonable (not exponentially bad)
-        println!("Hyperedge test - tc: 2^{:.2}, sc: 2^{:.2}", complexity.tc, complexity.sc);
+        println!(
+            "Hyperedge test - tc: 2^{:.2}, sc: 2^{:.2}",
+            complexity.tc, complexity.sc
+        );
 
         // Space complexity should be around log2(10*10*10) = ~10 for output
         // plus some intermediate tensors
-        assert!(complexity.sc < 15.0, "Space complexity should be reasonable");
+        assert!(
+            complexity.sc < 15.0,
+            "Space complexity should be reasonable"
+        );
 
         // The tree should have 4 leaves (one for each input tensor)
         assert_eq!(tree.leaf_count(), 4);
@@ -853,15 +867,15 @@ mod tests {
     /// Test omeco with a simple hyperedge case: U * s * V (SVD-like)
     #[test]
     fn test_omeco_hyperedge_svd() {
-        use omeco::{EinCode, GreedyMethod, optimize_code, contraction_complexity};
+        use omeco::{contraction_complexity, optimize_code, EinCode, GreedyMethod};
         use std::collections::HashMap;
 
         // U(i, j), s(j), V(j, k)
         // j is a hyperedge connecting all 3 tensors
         let ixs: Vec<Vec<char>> = vec![
-            vec!['i', 'j'],  // U
-            vec!['j'],       // s (1D diagonal)
-            vec!['j', 'k'],  // V
+            vec!['i', 'j'], // U
+            vec!['j'],      // s (1D diagonal)
+            vec!['j', 'k'], // V
         ];
         let output = vec!['i', 'k'];
 
@@ -869,7 +883,7 @@ mod tests {
 
         let mut sizes: HashMap<char, usize> = HashMap::new();
         sizes.insert('i', 100);
-        sizes.insert('j', 50);  // bond dimension
+        sizes.insert('j', 50); // bond dimension
         sizes.insert('k', 100);
 
         let tree = optimize_code(&code, &sizes, &GreedyMethod::default())
@@ -877,7 +891,10 @@ mod tests {
 
         let complexity = contraction_complexity(&tree, &sizes, &ixs);
 
-        println!("SVD hyperedge - tc: 2^{:.2}, sc: 2^{:.2}", complexity.tc, complexity.sc);
+        println!(
+            "SVD hyperedge - tc: 2^{:.2}, sc: 2^{:.2}",
+            complexity.tc, complexity.sc
+        );
         println!("Tree structure: {:?}", tree);
 
         // 3 input tensors

@@ -10,7 +10,9 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 use petgraph::stable_graph::NodeIndex;
 
-use tensor4all_core::{AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{
+    AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
+};
 
 use super::TreeTN;
 use crate::options::SplitOptions;
@@ -82,7 +84,7 @@ where
 
             let mut current_nodes_for_target: HashSet<V> = HashSet::new();
             for target_site_idx in target_site_space {
-                if let Some(current_node) = site_to_current_node.get(&target_site_idx.id()) {
+                if let Some(current_node) = site_to_current_node.get(target_site_idx.id()) {
                     current_nodes_for_target.insert(current_node.clone());
                 }
             }
@@ -306,7 +308,7 @@ where
             if let Some(site_space) = self.site_space(&current_node_name) {
                 let mut targets_for_node: HashSet<TargetV> = HashSet::new();
                 for site_idx in site_space {
-                    if let Some(target_name) = site_to_target.get(&site_idx.id()) {
+                    if let Some(target_name) = site_to_target.get(site_idx.id()) {
                         targets_for_node.insert(target_name.clone());
                     } else {
                         return Err(anyhow::anyhow!(
@@ -356,7 +358,10 @@ where
         // Sort by target name for deterministic ordering
         result_tensors.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-        let names: Vec<TargetV> = result_tensors.iter().map(|(name, _)| name.clone()).collect();
+        let names: Vec<TargetV> = result_tensors
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
         let tensors: Vec<T> = result_tensors.into_iter().map(|(_, t)| t).collect();
 
         let result = TreeTN::<T, TargetV>::from_tensors(tensors, names)
@@ -400,7 +405,7 @@ where
         // Group tensor's site indices by their target node
         let mut partition: HashMap<TargetV, HashSet<<T::Index as IndexLike>::Id>> = HashMap::new();
         for idx in tensor.external_indices() {
-            if let Some(target_name) = site_to_target.get(&idx.id()) {
+            if let Some(target_name) = site_to_target.get(idx.id()) {
                 partition
                     .entry(target_name.clone())
                     .or_default()
@@ -434,7 +439,7 @@ where
             let left_inds: Vec<_> = remaining_tensor
                 .external_indices()
                 .iter()
-                .filter(|idx| site_ids_for_target.contains(&idx.id()))
+                .filter(|idx| site_ids_for_target.contains(idx.id()))
                 .cloned()
                 .collect();
 

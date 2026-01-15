@@ -99,19 +99,16 @@ where
     /// # Returns
     ///
     /// A LinearOperator with proper index mappings, or an error if structure is incompatible.
-    pub fn from_mpo_and_state(
-        mpo: TreeTN<T, V>,
-        state: &TreeTN<T, V>,
-    ) -> Result<Self> {
+    pub fn from_mpo_and_state(mpo: TreeTN<T, V>, state: &TreeTN<T, V>) -> Result<Self> {
         let mut input_mapping = HashMap::new();
         let mut output_mapping = HashMap::new();
 
         for node in mpo.site_index_network().node_names() {
             // Get state's site indices for this node
-            let state_site = state.site_space(&node);
+            let state_site = state.site_space(node);
 
             // Get MPO's site indices for this node
-            let mpo_site = mpo.site_space(&node);
+            let mpo_site = mpo.site_space(node);
 
             match (state_site, mpo_site) {
                 (Some(state_indices), Some(mpo_indices)) => {
@@ -133,10 +130,8 @@ where
                         let dim = state_idx.dim();
 
                         // Find MPO indices with matching dimension
-                        let matching_mpo: Vec<_> = mpo_indices
-                            .iter()
-                            .filter(|idx| idx.dim() == dim)
-                            .collect();
+                        let matching_mpo: Vec<_> =
+                            mpo_indices.iter().filter(|idx| idx.dim() == dim).collect();
 
                         if matching_mpo.len() < 2 {
                             return Err(anyhow::anyhow!(
@@ -208,7 +203,7 @@ where
 
         for node in state.site_index_network().node_names() {
             let node_idx = state
-                .node_index(&node)
+                .node_index(node)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in state", node))?;
             let state_tensor = state
                 .tensor(node_idx)
@@ -217,7 +212,7 @@ where
             // Get operator tensor
             let op_node_idx = self
                 .mpo
-                .node_index(&node)
+                .node_index(node)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in MPO", node))?;
             let op_tensor = self
                 .mpo
@@ -225,17 +220,18 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in MPO", node))?;
 
             // Step 1: Replace state's site indices with MPO's input indices
-            let transformed_state = if let Some(mapping) = self.input_mapping.get(&node) {
+            let transformed_state = if let Some(mapping) = self.input_mapping.get(node) {
                 state_tensor.replaceind(&mapping.true_index, &mapping.internal_index)?
             } else {
                 state_tensor.clone()
             };
 
             // Step 2: Contract with operator
-            let contracted = T::contract(&[transformed_state, op_tensor.clone()], AllowedPairs::All)?;
+            let contracted =
+                T::contract(&[transformed_state, op_tensor.clone()], AllowedPairs::All)?;
 
             // Step 3: Replace MPO's output indices with true output indices
-            let result_tensor = if let Some(mapping) = self.output_mapping.get(&node) {
+            let result_tensor = if let Some(mapping) = self.output_mapping.get(node) {
                 contracted.replaceind(&mapping.internal_index, &mapping.true_index)?
             } else {
                 contracted
@@ -269,7 +265,8 @@ where
         let mut transformed = local_tensor.clone();
         for node in region {
             if let Some(mapping) = self.input_mapping.get(node) {
-                transformed = transformed.replaceind(&mapping.true_index, &mapping.internal_index)?;
+                transformed =
+                    transformed.replaceind(&mapping.true_index, &mapping.internal_index)?;
             }
         }
 

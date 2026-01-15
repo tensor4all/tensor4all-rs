@@ -243,9 +243,10 @@ impl From<t4a_canonical_form> for tensor4all_itensorlike::CanonicalForm {
 ///
 /// Corresponds to `FactorizeAlg` in Rust.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum t4a_factorize_algorithm {
     /// Singular Value Decomposition (default)
+    #[default]
     SVD = 0,
     /// LU decomposition with partial pivoting
     LU = 1,
@@ -253,12 +254,6 @@ pub enum t4a_factorize_algorithm {
     CI = 2,
     /// QR decomposition
     QR = 3,
-}
-
-impl Default for t4a_factorize_algorithm {
-    fn default() -> Self {
-        Self::SVD
-    }
 }
 
 impl From<tensor4all_core::FactorizeAlg> for t4a_factorize_algorithm {
@@ -289,20 +284,15 @@ impl From<t4a_factorize_algorithm> for tensor4all_core::FactorizeAlg {
 ///
 /// This is a standalone C API type (not mapped to tensor4all-core type).
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum t4a_contraction_algorithm {
     /// Naive contraction followed by compression (default)
+    #[default]
     Naive = 0,
     /// Zip-up contraction with on-the-fly compression
     ZipUp = 1,
     /// Variational fitting algorithm
     Fit = 2,
-}
-
-impl Default for t4a_contraction_algorithm {
-    fn default() -> Self {
-        Self::Naive
-    }
 }
 
 /// Compression algorithm for C API
@@ -311,9 +301,10 @@ impl Default for t4a_contraction_algorithm {
 ///
 /// This is a standalone C API type (not mapped to tensor4all-core type).
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum t4a_compression_algorithm {
     /// SVD-based compression (default)
+    #[default]
     SVD = 0,
     /// LU-based compression
     LU = 1,
@@ -323,31 +314,20 @@ pub enum t4a_compression_algorithm {
     Variational = 3,
 }
 
-impl Default for t4a_compression_algorithm {
-    fn default() -> Self {
-        Self::SVD
-    }
-}
-
 /// Contract method for tensor train contraction in C API
 ///
 /// Used for tensor train contraction operations.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum t4a_contract_method {
     /// Zip-up contraction (faster, one-pass) - default
+    #[default]
     Zipup = 0,
     /// Fit/variational contraction (iterative optimization)
     Fit = 1,
     /// Naive contraction: contract to full tensor, then decompose back.
     /// Useful for debugging and testing, but O(exp(n)) in memory.
     Naive = 2,
-}
-
-impl Default for t4a_contract_method {
-    fn default() -> Self {
-        Self::Zipup
-    }
 }
 
 impl From<tensor4all_itensorlike::ContractMethod> for t4a_contract_method {

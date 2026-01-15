@@ -51,6 +51,7 @@ where
     /// Returns an error if:
     /// - Networks have incompatible topologies
     /// - Bond indices cannot be found
+    #[allow(clippy::type_complexity)]
     pub fn compute_merged_bond_indices(
         &self,
         other: &Self,
@@ -159,7 +160,8 @@ where
     pub fn add(&self, other: &Self) -> Result<Self>
     where
         V: Ord,
-        <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
         // Verify same topology
         if !self.same_topology(other) {

@@ -48,7 +48,7 @@ fn test_tensor_like_contract_basic() {
     let a = TensorDynLen::from_indices(vec![i.clone(), j.clone()], f64::dense_storage(a_data));
 
     // Tensor B: 3x4 matrix (use a copy of j with same id)
-    let j_copy = Index::new(j.id.clone(), j.dim);
+    let j_copy = Index::new(j.id, j.dim);
     let b_data: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let b = TensorDynLen::from_indices(vec![j_copy.clone(), k.clone()], f64::dense_storage(b_data));
 
@@ -76,12 +76,12 @@ fn test_contract_allowed_pairs_specified() {
     let a = TensorDynLen::from_indices(vec![i.clone(), j.clone()], f64::dense_storage(a_data));
 
     // Tensor B: 3x4 matrix (j, k) - j has same id as A's j
-    let j_copy = Index::new(j.id.clone(), j.dim);
+    let j_copy = Index::new(j.id, j.dim);
     let b_data: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let b = TensorDynLen::from_indices(vec![j_copy.clone(), k.clone()], f64::dense_storage(b_data));
 
     // Tensor C: 4x5 matrix (k, l) - k has same id as B's k
-    let k_copy = Index::new(k.id.clone(), k.dim);
+    let k_copy = Index::new(k.id, k.dim);
     let c_data: Vec<f64> = (0..20).map(|x| x as f64).collect();
     let c = TensorDynLen::from_indices(vec![k_copy.clone(), l.clone()], f64::dense_storage(c_data));
 
@@ -114,10 +114,13 @@ fn test_contract_specified_empty_with_common_indices_errors() {
     let a = TensorDynLen::from_indices(vec![i.clone(), j.clone()], f64::dense_storage(a_data));
 
     // Tensor B: 2x3 matrix (use copies of i and j with same ids)
-    let i_copy = Index::new(i.id.clone(), i.dim);
-    let j_copy = Index::new(j.id.clone(), j.dim);
+    let i_copy = Index::new(i.id, i.dim);
+    let j_copy = Index::new(j.id, j.dim);
     let b_data: Vec<f64> = (0..6).map(|x| x as f64).collect();
-    let b = TensorDynLen::from_indices(vec![i_copy.clone(), j_copy.clone()], f64::dense_storage(b_data));
+    let b = TensorDynLen::from_indices(
+        vec![i_copy.clone(), j_copy.clone()],
+        f64::dense_storage(b_data),
+    );
 
     // With empty allowed pairs and tensors that share index IDs,
     // outer_product will fail because tensors have common indices
@@ -152,7 +155,8 @@ fn test_contract_specified_empty_outer_product() {
     let result = <TensorDynLen as TensorLike>::contract(
         &[a.clone(), b.clone()],
         AllowedPairs::Specified(&[]),
-    ).unwrap();
+    )
+    .unwrap();
 
     // Result should have 4 indices (i, j, k, l)
     assert_eq!(result.dims.len(), 4);
@@ -170,18 +174,22 @@ fn test_contract_specified_disconnected_outer_product() {
     let j = Index::<DynId>::new_dyn(3);
 
     let a = TensorDynLen::from_indices(vec![i.clone()], f64::dense_storage(vec![1.0, 2.0]));
-    let i_copy = Index::new(i.id.clone(), i.dim);
+    let i_copy = Index::new(i.id, i.dim);
     let b = TensorDynLen::from_indices(vec![i_copy.clone()], f64::dense_storage(vec![3.0, 4.0]));
     let c = TensorDynLen::from_indices(vec![j.clone()], f64::dense_storage(vec![5.0, 6.0, 7.0]));
-    let j_copy = Index::new(j.id.clone(), j.dim);
-    let d = TensorDynLen::from_indices(vec![j_copy.clone()], f64::dense_storage(vec![8.0, 9.0, 10.0]));
+    let j_copy = Index::new(j.id, j.dim);
+    let d = TensorDynLen::from_indices(
+        vec![j_copy.clone()],
+        f64::dense_storage(vec![8.0, 9.0, 10.0]),
+    );
 
     // Disconnected pairs: (0,1) and (2,3)
     // A and B contract i, C and D contract j, then outer product combines results
     let result = <TensorDynLen as TensorLike>::contract(
         &[a, b, c, d],
         AllowedPairs::Specified(&[(0, 1), (2, 3)]),
-    ).unwrap();
+    )
+    .unwrap();
 
     // A(i) * B(i) contracts to scalar (dim 0)
     // C(j) * D(j) contracts to scalar (dim 0)

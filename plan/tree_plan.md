@@ -1,142 +1,142 @@
-# Tree Network Zip-up Contraction 実装プラン
+# Tree Network Zip-up Contraction Implementation Plan
 
-## 概要
+## Overview
 
-現在のzip-up contraction実装を、線形チェーン（TensorTrain）から任意のTree Network構造に拡張する。アルゴリズムは「葉からルートへ向かって中間テンソル（環境テンソル）を累積しながら進む」方式を採用する。
+Extend the current zip-up contraction implementation from linear chains (TensorTrain) to arbitrary Tree Network structures. The algorithm adopts a "leaf-to-root traversal with accumulated intermediate tensors (environment tensors)" approach.
 
-## 現状の実装状況
+## Current Implementation Status
 
-### 既存実装
-- **TensorTrain (線形チェーン)**: `contract_zipup_itensors_like` で実装済み
-  - ITensors.jlスタイルの累積R方式
-  - 環境テンソルRを保持しながら順次処理
-- **TreeTN (汎用ツリー)**: `contract_zipup_with` で実装済み
-  - 現在は「各edgeでchild tensorをfactorizeしてparentに吸収」する方式
-  - 中間テンソルを保持しない
+### Existing Implementation
+- **TensorTrain (linear chain)**: Implemented via `contract_zipup_itensors_like`
+  - ITensors.jl-style cumulative R approach
+  - Processes sequentially while maintaining environment tensor R
+- **TreeTN (generic tree)**: Implemented via `contract_zipup_with`
+  - Currently uses "factorize child tensor and absorb into parent" approach per edge
+  - Does not maintain intermediate tensors
 
-### 課題
-- TreeTNのzip-upは、各edgeで独立に処理しているため、効率が悪い可能性がある
-- プランで要求される「中間テンソルを保持しながら進む」方式と異なる
+### Issues
+- TreeTN zip-up processes each edge independently, which may be inefficient
+- Differs from the required "maintain intermediate tensors while progressing" approach
 
-## アルゴリズム設計
+## Algorithm Design
 
-### 基本方針
-1. **Post-order DFSでedgeを取得**: 葉からルートへ向かう順序
-2. **中間テンソル（環境テンソル）を保持**: 各ノードで累積された中間テンソルを管理
-3. **段階的なcontractionとfactorization**: 葉では2つのcoreをcontract、内部ノードでは中間テンソル+2つのcoreをcontract
+### Basic Approach
+1. **Get edges via Post-order DFS**: Order from leaves towards root
+2. **Maintain intermediate tensors (environment tensors)**: Manage accumulated intermediate tensors at each node
+3. **Progressive contraction and factorization**: Contract 2 cores at leaves, contract intermediate tensors + 2 cores at internal nodes
 
-### 詳細アルゴリズム
+### Detailed Algorithm
 
-#### ステップ1: 前処理
-1. トポロジーの検証: `same_topology()` で両ネットワークの構造が一致することを確認
-2. 内部インデックスの分離: `sim_internal_inds()` で両ネットワークのbond indicesを独立化
-3. ルートノードの決定: 指定されたcenterノードをルートとする
-4. Post-order DFS edgeの取得: `edges_to_canonicalize_by_names(center)` で葉→ルートのedge順序を取得
+#### Step 1: Preprocessing
+1. Topology verification: Verify both networks have matching structure via `same_topology()`
+2. Internal index separation: Isolate bond indices of both networks via `sim_internal_inds()`
+3. Root node determination: Use specified center node as root
+4. Post-order DFS edge retrieval: Get leaf→root edge order via `edges_to_canonicalize_by_names(center)`
 
-#### ステップ2: 葉ノードの処理
-各葉ノード（source）について：
+#### Step 2: Leaf Node Processing
+For each leaf node (source):
 
 ```
-入力:
-  - A[source]: ネットワークAのsourceノードのテンソル
-  - B[source]: ネットワークBのsourceノードのテンソル
-  - destination: sourceの親ノード
+Input:
+  - A[source]: Source node tensor from network A
+  - B[source]: Source node tensor from network B
+  - destination: Parent node of source
 
-処理:
-  1. C_temp = contract(A[source], B[source])  // 2つのcoreをcontract
+Processing:
+  1. C_temp = contract(A[source], B[source])  // Contract 2 cores
   2. (C[source], R) = factorize(C_temp, left_inds=site_indices(source) + bond_to_destination)
-     // 左因子はsite indices + destinationへのbond、右因子は環境テンソルR
-  3. 結果のbond indexでedgeを更新: replace_edge_bond(edge(source, destination), new_bond)
-  4. 中間テンソルRをdestinationに登録（まだcontractionは取らない）
-  5. C[source]を結果ネットワークのsourceノードに保存
+     // Left factor = site indices + bond to destination, right factor = environment tensor R
+  3. Update edge with result bond index: replace_edge_bond(edge(source, destination), new_bond)
+  4. Register intermediate tensor R at destination (do not contract yet)
+  5. Store C[source] as result tensor for source node
 ```
 
-**注意点:**
-- `site_indices(source)` は、sourceノードの物理インデックス（bond indicesを除く）
-- `bond_to_destination` は、sourceからdestinationへのbond index
-- この時点では、destinationのテンソルとRのcontractionは**行わない**
- - 既存のTreeTNと同様に、edge bondの更新（`replace_edge_bond`）が必要
+**Notes:**
+- `site_indices(source)` are physical indices of source node (excluding bond indices)
+- `bond_to_destination` is the bond index from source to destination
+- At this point, **do not contract** destination tensor with R
+- Edge bond update (`replace_edge_bond`) is required, similar to existing TreeTN
 
-#### ステップ3: 内部ノードの処理
-各内部ノード（source、ただし葉ではない）について：
+#### Step 3: Internal Node Processing
+For each internal node (source, but not a leaf):
 
 ```
-入力:
-  - R_accumulated: sourceから来た累積中間テンソル（既に登録済み）
-  - A[source]: ネットワークAのsourceノードのテンソル
-  - B[source]: ネットワークBのsourceノードのテンソル
-  - destination: sourceの親ノード
+Input:
+  - R_accumulated: Accumulated intermediate tensors from source (already registered)
+  - A[source]: Source node tensor from network A
+  - B[source]: Source node tensor from network B
+  - destination: Parent node of source
 
-処理:
-  1. テンソルリストを準備: [R_accumulated..., A[source], B[source]]
+Processing:
+  1. Prepare tensor list: [R_accumulated..., A[source], B[source]]
   2. C_temp = contract([R_accumulated..., A[source], B[source]], AllowedPairs::All)
-     // 最適な順番でcontractionが自動的に取られる
+     // Optimal contraction order is automatically selected
   3. (C[source], R_new) = factorize(C_temp, left_inds=site_indices(source) + bond_to_destination)
-  4. 結果のbond indexでedgeを更新: replace_edge_bond(edge(source, destination), new_bond)
-  5. 中間テンソルR_newをdestinationに登録（まだcontractionは取らない）
-  6. C[source]を結果ネットワークのsourceノードに保存
+  4. Update edge with result bond index: replace_edge_bond(edge(source, destination), new_bond)
+  5. Register new intermediate tensor R_new at destination (do not contract yet)
+  6. Store C[source] as result tensor for source node
 ```
 
-**注意点:**
-- `T::contract(&[tensors...], AllowedPairs::All)` は、自動的に最適な順序でcontractionを実行する
-- 複数の中間テンソルは先にまとめず、**一括でcontract**する方針（順序最適化を活かす）
- - edge bondの更新（`replace_edge_bond`）が必要
+**Notes:**
+- `T::contract(&[tensors...], AllowedPairs::All)` automatically executes contraction in optimal order
+- Multiple intermediate tensors are **contracted together** (not pre-contracted) to leverage order optimization
+- Edge bond update (`replace_edge_bond`) is required
 
-#### ステップ4: ルートノードの処理
-ルートノード（全ての中間テンソルが集約される）について：
+#### Step 4: Root Node Processing
+For root node (where all intermediate tensors aggregate):
 
 ```
-入力:
-  - R_list: ルートに接続された全ての子ノードから来た中間テンソルのリスト
-  - A[root]: ネットワークAのルートノードのテンソル
-  - B[root]: ネットワークBのルートノードのテンソル
+Input:
+  - R_list: List of intermediate tensors from all child nodes connected to root
+  - A[root]: Root node tensor from network A
+  - B[root]: Root node tensor from network B
 
-処理:
-  1. テンソルリストを準備: [R_list..., A[root], B[root]]
+Processing:
+  1. Prepare tensor list: [R_list..., A[root], B[root]]
   2. C_temp = contract([R_list..., A[root], B[root]], AllowedPairs::All)
-     // 最適な順番でcontractionが自動的に取られる
-  3. C[root] = C_temp  // ルートではfactorizationは不要（これが最終結果）
-  4. C[root]を結果ネットワークのルートノードに保存
+     // Optimal contraction order is automatically selected
+  3. C[root] = C_temp  // No factorization needed at root (this is the final result)
+  4. Store C[root] as result tensor for root node
 ```
 
-**注意点:**
-- ルートノードは複数の子を持つ可能性がある（星型構造など）
-- 全ての中間テンソルを一度にcontractする必要がある
-- ルートではfactorizationは不要（これが最終的なテンソル）
+**Notes:**
+- Root node may have multiple children (e.g., star structure)
+- All intermediate tensors must be contracted together
+- Factorization is not needed at root (this is the final tensor)
 
-#### ステップ5: 最終結果の正規化中心の設定
-全ての処理が完了した後、結果TreeTNの正規化中心を設定する：
+#### Step 5: Set Canonical Center of Final Result
+After all processing is complete, set the canonical center of the result TreeTN:
 
 ```
-処理:
-  1. 結果TreeTNが構築された後、指定されたcenterノードを正規化中心として設定
+Processing:
+  1. After result TreeTN is constructed, set specified center node as canonical center
   2. result.set_canonical_center(std::iter::once(center.clone()))?;
-  3. これにより、結果のTreeTNは指定されたcenterを正規化中心として持つ
+  3. This makes the result TreeTN have the specified center as its canonical center
 ```
 
-**注意点:**
-- 既存の`contract_zipup_with`実装と同様に、最後に正規化中心を設定する
-- `set_canonical_center`は、centerノードが結果に存在する場合のみ成功する
-- 正規化中心の設定により、結果のTreeTNは正規化された状態になる
-- edgeの `ortho_towards` は **centerに向くように更新**する（既存実装と整合）
+**Notes:**
+- Similar to existing `contract_zipup_with` implementation, set canonical center at the end
+- `set_canonical_center` only succeeds if center node exists in result
+- Setting canonical center makes the result TreeTN canonicalized
+- Update edge `ortho_towards` to **point towards center** (consistent with existing implementation)
 
-## 実装詳細
+## Implementation Details
 
-### データ構造
+### Data Structures
 
 ```rust
-// 中間テンソルを管理するための構造
+// Structure to manage intermediate tensors
 struct IntermediateTensors {
-    // 各ノードに登録された中間テンソルのリスト
-    // キー: ノード名, 値: そのノードに集約される中間テンソルのリスト
+    // List of intermediate tensors registered at each node
+    // Key: node name, Value: list of intermediate tensors aggregated at that node
     accumulated: HashMap<V, Vec<TensorDynLen>>,
 }
 
-// または、よりシンプルに
-// HashMap<V, Vec<TensorDynLen>> として直接管理
+// Or more simply
+// Manage directly as HashMap<V, Vec<TensorDynLen>>
 ```
 
-### 関数シグネチャ（仮）
+### Function Signature (Proposed)
 
 ```rust
 impl<T, V> TreeTN<T, V>
@@ -144,7 +144,7 @@ where
     T: TensorLike,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    /// Tree Network用のzip-up contraction（中間テンソル累積方式）
+    /// Zip-up contraction for Tree Network (accumulated intermediate tensor approach)
     pub fn contract_zipup_tree_accumulated(
         &self,
         other: &Self,
@@ -153,136 +153,136 @@ where
         rtol: Option<f64>,
         max_rank: Option<usize>,
     ) -> Result<Self> {
-        // 実装
+        // Implementation
     }
 }
 ```
 
-### 実装ステップ
+### Implementation Steps
 
-#### Phase 1: 基本構造の実装
-1. **前処理部分**
-   - トポロジー検証
-   - 内部インデックス分離
-   - Post-order DFS edge取得
+#### Phase 1: Basic Structure Implementation
+1. **Preprocessing section**
+   - Topology verification
+   - Internal index separation
+   - Post-order DFS edge retrieval
 
-2. **中間テンソル管理の実装**
-   - `HashMap<V, Vec<TensorDynLen>>` で各ノードに集約される中間テンソルを管理
-   - 中間テンソルの追加・取得関数
+2. **Intermediate tensor management implementation**
+   - Manage intermediate tensors aggregated at each node via `HashMap<V, Vec<TensorDynLen>>`
+   - Functions to add/retrieve intermediate tensors
 
-#### Phase 2: 葉ノード処理の実装
-1. **葉ノードの判定**
-   - Post-order DFS順で処理するため、最初に処理されるノードが葉
-   - または、`graph.neighbors(node).count() == 1` で判定（ルート以外）
+#### Phase 2: Leaf Node Processing Implementation
+1. **Leaf node detection**
+   - Nodes processed first in post-order DFS are leaves
+   - Or detect via `graph.neighbors(node).count() == 1` (excluding root)
 
-2. **葉ノードでのcontraction + factorization**
-   - `T::contract(&[a, b], AllowedPairs::All)` で2つのcoreをcontract
-   - `factorize_with()` でSVD分解
-   - 左因子を結果に保存、右因子（環境テンソル）を親ノードに登録
+2. **Contraction + factorization at leaf nodes**
+   - Contract 2 cores via `T::contract(&[a, b], AllowedPairs::All)`
+   - Factorize via `factorize_with()`
+   - Store left factor as result, register right factor (environment tensor) at parent node
 
-#### Phase 3: 内部ノード処理の実装
-1. **内部ノードの判定**
-   - 葉でもルートでもないノード
+#### Phase 3: Internal Node Processing Implementation
+1. **Internal node detection**
+   - Nodes that are neither leaves nor root
 
-2. **累積中間テンソルの取得**
-   - そのノードに登録された中間テンソルを取得
-   - 複数ある場合は、それらを先にcontractして1つにまとめる
+2. **Accumulated intermediate tensor retrieval**
+   - Retrieve intermediate tensors registered at that node
+   - If multiple exist, contract them together first to consolidate
 
-3. **contraction + factorization**
-   - `T::contract(&[r_accumulated, a, b], AllowedPairs::All)` でcontract
-   - `factorize_with()` でSVD分解
-   - 左因子を結果に保存、右因子を親ノードに登録
+3. **Contraction + factorization**
+   - Contract via `T::contract(&[r_accumulated, a, b], AllowedPairs::All)`
+   - Factorize via `factorize_with()`
+   - Store left factor as result, register right factor at parent node
 
-#### Phase 4: ルートノード処理の実装
-1. **ルートノードでの最終処理**
-   - 全ての中間テンソルを取得
-   - `T::contract(&[r_list..., a_root, b_root], AllowedPairs::All)` でcontract
-   - 結果をそのまま保存（factorization不要）
+#### Phase 4: Root Node Processing Implementation
+1. **Final processing at root node**
+   - Retrieve all intermediate tensors
+   - Contract via `T::contract(&[r_list..., a_root, b_root], AllowedPairs::All)`
+   - Store result as-is (no factorization needed)
 
-2. **最終結果の正規化中心の設定**
-   - 結果TreeTNが構築された後、`result.set_canonical_center(std::iter::once(center.clone()))?` を呼び出す
-   - centerノードが結果に存在することを確認してから設定
-   - これにより、結果のTreeTNは指定されたcenterを正規化中心として持つ
+2. **Set canonical center of final result**
+   - After result TreeTN is constructed, call `result.set_canonical_center(std::iter::once(center.clone()))?`
+   - Verify center node exists in result before setting
+   - This makes the result TreeTN have the specified center as canonical center
 
-#### Phase 5: エッジケースの処理
-1. **単一ノードネットワーク**
-   - ルート = 葉のケース
-   - 直接 `contract(A[root], B[root])` を実行
+#### Phase 5: Edge Case Handling
+1. **Single node network**
+   - Case where root = leaf
+   - Directly execute `contract(A[root], B[root])`
 
-2. **2ノードネットワーク**
-   - ルートと葉のみ
-   - 葉でfactorize、ルートで最終contract
+2. **Two node network**
+   - Only root and leaf
+   - Factorize at leaf, final contract at root
 
-3. **星型構造（ルートに複数の葉が接続）**
-   - 各葉から中間テンソルが集約
-   - ルートで全てをcontract
+3. **Star structure (multiple leaves connected to root)**
+   - Intermediate tensors aggregate from each leaf
+   - Contract all at root
 
-## 技術的な考慮事項
+## Technical Considerations
 
-### 1. Contraction順序の最適化
-- `T::contract(&[tensors...], AllowedPairs::All)` は自動的に最適な順序を選択する
-- ただし、中間テンソルが複数ある場合の順序は明示的に制御する必要がある可能性がある
+### 1. Contraction Order Optimization
+- `T::contract(&[tensors...], AllowedPairs::All)` automatically selects optimal order
+- However, order for multiple intermediate tensors may need explicit control
 
-### 2. Factorizationオプション
-- `FactorizeOptions` で `rtol` と `max_rank` を指定
-- `CanonicalForm::Left`/`Unitary`/`LU`/`CI` の**3形態すべてに対応**
-  - `Unitary`/`LU`/`CI` それぞれに対応する `FactorizeAlg` を使用
-  - left factorが「site indices + bond」を保持する方針は維持
+### 2. Factorization Options
+- Specify `rtol` and `max_rank` via `FactorizeOptions`
+- **Support all three canonical forms**: `Unitary`/`LU`/`CI`
+  - Use corresponding `FactorizeAlg` for each `Unitary`/`LU`/`CI`
+  - Maintain approach where left factor holds "site indices + bond"
 
-### 3. インデックス管理
-- Site indicesの抽出: `external_indices()` からbond indicesを除外
-- Bond indicesの識別: 隣接ノードとの共通インデックス
+### 3. Index Management
+- Site index extraction: Exclude bond indices from `external_indices()`
+- Bond index identification: Common indices with adjacent nodes
 
-### 4. メモリ効率
-- 中間テンソルは必要最小限の期間のみ保持
-- 処理済みノードのテンソルは早期に解放
+### 4. Memory Efficiency
+- Keep intermediate tensors only for minimal necessary duration
+- Early release of processed node tensors
 
-## テスト計画
+## Test Plan
 
-### ユニットテスト
-1. **単一ノード**: 2つのテンソルを直接contract
-2. **2ノードチェーン**: 葉→ルートの処理
-3. **3ノードチェーン**: 葉→内部→ルートの処理
-4. **星型構造**: ルートに3つ以上の葉が接続
-5. **分岐構造**: 内部ノードに複数の子が接続
+### Unit Tests
+1. **Single node**: Directly contract 2 tensors
+2. **2-node chain**: Leaf→root processing
+3. **3-node chain**: Leaf→internal→root processing
+4. **Star structure**: 3 or more leaves connected to root
+5. **Branching structure**: Internal node with multiple children
 
-### 統合テスト
-1. **既存のzip-up実装との結果比較**
-   - 線形チェーンで `contract_zipup_itensors_like` と結果が一致するか
-2. **Naive contractionとの結果比較**
-   - `contract_naive` で得られる結果と数値的に一致するか（truncation誤差を除く）
+### Integration Tests
+1. **Comparison with existing zip-up implementation**
+   - Check if results match `contract_zipup_tree_accumulated` for linear chains
+2. **Comparison with naive contraction**
+   - Check if results numerically match `contract_naive` (excluding truncation error)
 
-### パフォーマンステスト
-1. **大規模ネットワークでのベンチマーク**
-   - ノード数、bond dimension、物理次元を変えて計測
-2. **メモリ使用量の計測**
-   - 中間テンソルの保持によるメモリ増加を確認
+### Performance Tests
+1. **Benchmarks on large networks**
+   - Measure with varying node count, bond dimension, physical dimension
+2. **Memory usage measurement**
+   - Verify memory increase due to intermediate tensor retention
 
-## 既存コードとの統合
+## Integration with Existing Code
 
-### 関数の配置
-- `crates/tensor4all-treetn/src/treetn/contraction.rs` に追加
-- 既存の `contract_zipup_with` は残す（後方互換性のため）
-- 新しい関数名: `contract_zipup_accumulated` または `contract_zipup_tree_accumulated`
+### Function Placement
+- Add to `crates/tensor4all-treetn/src/treetn/contraction.rs`
+- Keep existing `contract_zipup_with` (for backward compatibility)
+- New function name: `contract_zipup_accumulated` or `contract_zipup_tree_accumulated`
 
-### オプションの拡張
-- `ContractionOptions` に新しいメソッドを追加する可能性
-- または、既存の `ContractMethod::Zipup` の実装を置き換える
+### Option Extensions
+- Possibly add new method to `ContractionOptions`
+- Or replace implementation of existing `ContractMethod::Zipup`
 
-## 実装の優先順位
+## Implementation Priority
 
-1. **高優先度**: 基本アルゴリズムの実装（Phase 1-4）
-2. **中優先度**: エッジケースの処理（Phase 5）
-3. **低優先度**: パフォーマンス最適化、メモリ効率化
+1. **High priority**: Basic algorithm implementation (Phase 1-4)
+2. **Medium priority**: Edge case handling (Phase 5)
+3. **Low priority**: Performance optimization, memory efficiency
 
-## 参考資料
+## References
 
-- ITensors.jlのMPO zip-up実装
-- 既存の `contract_zipup_itensors_like` 実装（線形チェーン用）
-- `contract_zipup_with` 実装（現在のTreeTN用）
+- ITensors.jl MPO zip-up implementation
+- Existing `contract_zipup_tree_accumulated` implementation (for Tree Network)
+- `contract_zipup_with` implementation (current TreeTN)
 
-## 注意事項
+## Notes
 
-- 実装は段階的に進める（各Phaseごとにテスト）
-- 既存の実装との互換性を維持
-- エラーハンドリングを適切に実装（各ステップでエラーチェック）
+- Implement incrementally (test after each phase)
+- Maintain compatibility with existing implementations
+- Implement proper error handling (error checks at each step)

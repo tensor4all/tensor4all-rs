@@ -53,6 +53,7 @@ impl TagSet {
     }
 
     /// Create a tag set from a comma-separated string.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Self, TagSetError> {
         Ok(Self(Arc::new(InlineTagSet::from_str(s)?)))
     }
@@ -138,7 +139,7 @@ impl TagSetLike for TagSet {
 
     fn add_tag(&mut self, tag: &str) -> Result<(), TagSetError> {
         // Arc is immutable, so we need to clone and replace
-        let mut inner = (*self.0).clone();
+        let mut inner = *self.0;
         inner.add_tag(tag)?;
         self.0 = Arc::new(inner);
         Ok(())
@@ -146,7 +147,7 @@ impl TagSetLike for TagSet {
 
     fn remove_tag(&mut self, tag: &str) -> bool {
         // Arc is immutable, so we need to clone and replace
-        let mut inner = (*self.0).clone();
+        let mut inner = *self.0;
         let removed = inner.remove_tag(tag);
         if removed {
             self.0 = Arc::new(inner);
@@ -386,7 +387,7 @@ impl IndexLike for DynIndex {
     fn create_dummy_link_pair() -> (Self, Self) {
         let id = DynId(generate_id());
         let idx1 = Index {
-            id: id.clone(),
+            id,
             dim: 1,
             tags: TagSet::default(),
         };
