@@ -1,461 +1,102 @@
 # Agent Guidelines for tensor4all-rs
 
-Before starting work, read the repository root `README.md` as well as this `AGENTS.md`.
-
-## Table of Contents
-
-1. [Development Stage](#development-stage)
-2. [General Guidelines](#general-guidelines)
-3. [Context-Efficient Exploration](#context-efficient-exploration)
-4. [Code Style](#code-style)
-5. [Error Handling](#error-handling)
-6. [Testing](#testing)
-7. [API Design](#api-design)
-8. [C API Design](#c-api-design)
-9. [Language Bindings](#language-bindings)
-10. [Dependencies](#dependencies)
-11. [Git Workflow](#git-workflow)
-
----
+Read `README.md` before starting work.
 
 ## Development Stage
 
-**This project is in early development stage.** Backward compatibility is not required at this time:
-
-- Do not keep legacy/deprecated code for backward compatibility
-- Remove deprecated methods immediately instead of marking them with `#[deprecated]`
-- Prefer clean, simple APIs over maintaining multiple ways to do the same thing
-
----
+**Early development** - no backward compatibility required. Remove deprecated code immediately.
 
 ## General Guidelines
 
-- Use the same language as in past conversations with the user (if it has been Japanese, use Japanese)
-- All source code and documentation must be in English
-- Each crate in `crates/` is an independent Rust package with its own `Cargo.toml`, `src/`, and `tests/` directories
-- When working on a crate, understand the package structure and be aware of dependencies between crates
+- Use same language as past conversations (Japanese if previous was Japanese)
+- Source code and docs in English
+- Each crate in `crates/` is independent with own `Cargo.toml`, `src/`, `tests/`
 
-### Before Starting Work: API Reference
-
-**Always check API docs before reading source code:**
+### API Reference (Check First)
 
 ```bash
 cargo run -p api-dump --release -- . -o docs/api
 ```
 
-This generates Markdown files in `docs/api/` with function signatures and docstrings for each crate.
-
-**Required workflow:**
-1. Run the API dump command above (if outdated)
-2. Read the API docs for crates related to your task (e.g., `docs/api/tensor4all_simpletensortrain.md`)
-3. Understand existing functions before implementing new ones
-4. Only read source files when API doc is insufficient
-
-**Context budget guideline:**
-| Content | Typical Size |
-|---------|--------------|
-| API docs | ~500 lines for a crate summary |
-| Full source file | ~1000+ lines |
-| Grep results | ~50 lines for targeted search |
-
-**When to reference API docs:**
-- Before adding a new function: check if similar functionality exists
-- When implementing a feature: look for helper functions you can reuse
-- When unsure about existing API: read the relevant crate's API doc
-
----
+Read `docs/api/*.md` before source files. Only read source when API doc is insufficient.
 
 ## Context-Efficient Exploration
 
-Large codebases can quickly fill up context windows. Use these strategies to minimize context usage:
-
-### Use Task Tool with Explore Agent
-
-For open-ended exploration, use the Task tool with `subagent_type=Explore` instead of reading files directly:
-
-```
-# Bad: Reading entire files
-"Read all files in src/ to understand the codebase"
-
-# Good: Let Explore agent summarize
-"Use Task tool with Explore agent to understand the tensor contraction implementation"
-```
-
-### Grep for Structure, Not Content
-
-Use Grep to get function signatures and type definitions without reading full files:
-
-```bash
-# Public functions in a crate
-Grep pattern="pub fn \w+" path="crates/tensor4all-simpletensortrain/src"
-
-# Trait implementations
-Grep pattern="impl.*for" path="crates/tensor4all-quanticstransform/src"
-
-# Type definitions
-Grep pattern="^pub (struct|enum|type)" path="crates/tensor4all-index/src"
-```
-
-### Read Specific Lines Only
-
-When you need details, use `offset` and `limit` parameters:
-
-```
-# Read only lines 100-150
-Read file_path="src/lib.rs" offset=100 limit=50
-```
-
-### Prefer API Docs Over Source
-
-The generated `docs/api/*.md` files contain function signatures and docstrings in a compact format. **Always check API docs first** before reading source files.
-
-### Summary
-
-| Task | Approach |
-|------|----------|
-| Understand codebase structure | Task tool with Explore agent |
-| Find function signatures | Grep for `pub fn` |
-| Find trait implementations | Grep for `impl.*for` |
-| Understand specific function | Read API doc, then source if needed |
-| Debug test failure | Read specific test file with line range |
-
----
+- Use Task tool with `subagent_type=Explore` for open-ended exploration
+- Use Grep for structure: `pub fn`, `impl.*for`, `^pub (struct|enum|type)`
+- Read specific lines with `offset`/`limit` parameters
+- Prefer API docs over full source files
 
 ## Code Style
 
-- Follow standard Rust style guidelines
-- Use `rustfmt` for formatting: `cargo fmt`
-- Use `clippy` for linting: `cargo clippy`
-- Prefer explicit error handling over `unwrap()` or `expect()` in library code
-
----
+`cargo fmt` for formatting, `cargo clippy` for linting. Avoid `unwrap()`/`expect()` in library code.
 
 ## Error Handling
 
-### Prefer `anyhow` for Generic Error Handling
-
-For generic error handling and error context propagation, **prefer using `anyhow`**:
-
-```rust
-use anyhow::{Context, Result};
-
-fn some_function() -> Result<()> {
-    let value = some_operation()
-        .context("Failed to perform operation")?;
-    Ok(())
-}
-```
-
-**Converting errors to custom error types:**
-```rust
-use anyhow;
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum MyError {
-    #[error("Operation failed: {0}")]
-    OperationError(#[from] anyhow::Error),
-}
-
-let result = some_operation()
-    .map_err(|e| anyhow::anyhow!("Context: {:?}", e))
-    .map_err(MyError::OperationError)?;
-```
-
-### When to Use `thiserror` vs `anyhow`
-
-| Use Case | Library |
-|----------|---------|
-| Public API error types that callers need to match | `thiserror` |
-| Error types that need serialization | `thiserror` |
-| Internal error handling and propagation | `anyhow` |
-| Adding context to errors | `anyhow` |
-
----
+- `anyhow` for internal error handling and context
+- `thiserror` for public API error types
 
 ## Testing
 
-### Running Tests
-
 ```bash
-# Full test suite for a crate
-cargo test
-
-# Specific test
-cargo test --test test_name
-
-# With output
-cargo test -- --nocapture
-
-# All crates in workspace
-cargo test --workspace
+cargo test                    # Full suite
+cargo test --test test_name   # Specific test
+cargo test --workspace        # All crates
 ```
 
-### Test Organization
-
-- **Private functions**: Add tests at the end of the source file using `#[cfg(test)]` modules
-- **Integration tests**: Place in `tests/` directory with naming convention:
-  - Same name as source: `src/index.rs` → `tests/index.rs`
-  - Feature-specific: `src/index.rs` → `tests/index_ops.rs`
-
-**Example for private functions:**
-```rust
-// src/index.rs
-fn internal_helper() -> usize { 42 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_internal_helper() {
-        assert_eq!(internal_helper(), 42);
-    }
-}
-```
-
-### Generic Tests for Real and Complex Types
-
-**Always use generic test functions** instead of duplicating tests for `f64` and `Complex64`:
+- Private functions: `#[cfg(test)]` module in source file
+- Integration tests: `tests/` directory
+- Use generic test functions for f64/Complex64:
 
 ```rust
-// ✅ GOOD: Generic test helper
-fn test_operation_generic<T: Scalar + PartialEq + std::fmt::Debug>()
-where
-    T: From<f64>,
-{
-    let x = T::from(1.0);
-    let y = T::from(2.0);
-    assert_eq!(operation(x, y), T::from(3.0));
-}
+fn test_op_generic<T: Scalar + From<f64>>() { /* test */ }
 
 #[test]
-fn test_operation_f64() { test_operation_generic::<f64>(); }
-
+fn test_op_f64() { test_op_generic::<f64>(); }
 #[test]
-fn test_operation_c64() { test_operation_generic::<Complex64>(); }
+fn test_op_c64() { test_op_generic::<Complex64>(); }
 ```
-
----
 
 ## API Design
 
-- **Do not make functions `pub` unnecessarily**: Only expose functions that are part of the public API
-- Functions should be `pub` only when used by other crates or documented as public interface
+Only make functions `pub` when truly public API.
 
----
+## C API & Language Bindings
 
-## C API Design
+See `docs/CAPI_DESIGN.md` for C API patterns. Bindings: `julia/Tensor4all.jl/`, `python/tensor4all/`.
 
-When working on the C API (`tensor4all-capi`) or language bindings, refer to the [C API Design Guidelines](docs/CAPI_DESIGN.md) for:
-
-- Opaque type patterns and lifecycle management
-- Error handling with status codes
-- Panic safety requirements
-- Row-major data layout conventions
-- Memory contiguity requirements
-- Column-major to row-major conversion (Julia bindings)
-
-**Important**: All C API functions must follow the patterns documented in `docs/CAPI_DESIGN.md`.
-
-### Ownership Model Summary
-
-| Pattern | Description |
-|---------|-------------|
-| Creation | `t4a_<TYPE>_new()` - caller owns the object |
-| Release | `t4a_<TYPE>_release()` - explicit release required |
-| Borrowing | Functions operate on borrowed references |
-| In-place | Use `_inplace` suffix for in-place operations |
-
-### Implementation Note
-
-- **tensor4all-rs**: Uses `Box<T>` - `clone()` creates full copy, `release()` immediately frees
-- **sparse-ir-rs**: Uses `Box<Arc<T>>` - `clone()` increments refcount (cheap)
-- Consider `Arc<T>` if profiling shows `clone()` is a bottleneck
-
----
-
-## Language Bindings
-
-### Directory Layout
-
-```
-tensor4all-rs/
-├── julia/
-│   └── Tensor4all.jl/
-│       ├── src/
-│       │   ├── Tensor4all.jl    # Main module
-│       │   └── ITensorLike.jl   # Submodule
-│       └── test/
-├── python/
-│   └── tensor4all/
-│       ├── __init__.py
-│       └── tests/
-```
-
-### Namespace Usage
-
-**Julia:**
-```julia
-using Tensor4all           # Core types (Index, Tensor)
-using Tensor4all.ITensorLike  # TensorTrain functionality
-```
-
-**Python:**
-```python
-import tensor4all
-from tensor4all import tensortrain
-```
-
-### Guidelines
-
-- **One submodule per Rust crate**: Each major Rust crate gets its own submodule
-- **Consistent naming**: Same naming convention across languages (adjusted for language style)
-- **Re-export common types**: Main module should re-export commonly used types
-- **Separate test files**: Each submodule should have its own test file
-- **Do not use `bindings/` directory**: Place bindings directly under `julia/` and `python/`
-
-### Truncation Tolerance (cutoff vs rtol)
-
-Language bindings must support **both** parameters:
-
-| Library | Parameter | Semantics |
-|---------|-----------|-----------|
-| tensor4all-rs | `rtol` | Relative Frobenius error: `‖A - A_approx‖_F / ‖A‖_F ≤ rtol` |
-| ITensors.jl | `cutoff` | Squared relative error: `Σ_{discarded} σ²_i / Σ_i σ²_i ≤ cutoff` |
-
-**Conversion:** `cutoff = rtol²` → `rtol = √cutoff`
-
-**Requirements:**
-1. Accept both `cutoff` and `rtol`
-2. Error if both specified (with helpful message)
-3. Read default `rtol` from Rust via C API
-4. Internally convert `cutoff` to `rtol = √cutoff`
-
----
+Truncation tolerance: support both `cutoff` (ITensors) and `rtol` (tensor4all-rs). Conversion: `rtol = √cutoff`.
 
 ## Dependencies
 
-When adding dependencies, consider:
-- Is it already used in another crate?
-- Is it a workspace dependency? (check root `Cargo.toml`)
-- Does it fit the crate's purpose and scope?
-
-### Array and Matrix Libraries
-
-**Prefer `mdarray` over custom implementations:**
-
-| Type | Use Case |
-|------|----------|
-| `DTensor<T, 2>` | 2D matrices (e.g., `DTensor<f64, 2>`) |
-| `DTensor<T, N>` | Fixed-rank tensors |
-| `Tensor<T>` | Dynamic rank tensors |
-
-**Important notes:**
-- `mdarray` uses **row-major (C-order)** layout only
-- For column-major (Julia), handle conversion at binding level
-
-**Use `mdarray-linalg` for linear algebra:**
-- SVD, QR, LU decomposition
-- Eigen decomposition
-- Solve and inverse
-- Supports FAER and LAPACK backends
-
-**⚠️ SVD singular values:** Stored in `s[[0, i]]`, NOT `s[[i, i]]` (LAPACK convention).
-
----
+- Prefer `mdarray` for arrays (row-major only), `mdarray-linalg` for linear algebra
+- SVD singular values: `s[[0, i]]` not `s[[i, i]]`
 
 ## Git Workflow
 
-**Important**: Do NOT execute `git push` or `gh pr create` without explicit user instruction. Always wait for user approval before pushing commits or creating PRs.
-
-### Minor Changes vs Large Features
+**Never push/create PR without user approval.**
 
 | Change Type | Workflow |
 |-------------|----------|
-| Minor fixes (README, docs, delete unused files) | Branch + PR with auto-merge |
-| Large features, refactoring | Worktree + PR with auto-merge |
-
-### Minor Changes (Branch-based)
-
-For small fixes that don't require isolated development:
+| Minor fixes | Branch + PR with auto-merge |
+| Large features | Worktree + PR with auto-merge |
 
 ```bash
-# Create branch
-git checkout -b fix-readme
-# Make changes, commit
-git add -A && git commit -m "Fix README typo"
-git push -u origin fix-readme
-
-# Create PR with auto-merge
-gh pr create --base main --title "Fix README typo" --body "Description"
+# Minor: branch workflow
+git checkout -b fix-name && git add -A && git commit -m "msg"
+git push -u origin fix-name
+gh pr create --base main --title "Title" --body "Desc"
 gh pr merge --auto --squash --delete-branch
-```
 
-### Large Features (Worktree-based)
+# Large: worktree workflow
+git worktree add ../tensor4all-rs-feature -b feature
 
-For substantial development that benefits from isolation:
+# Check PR before update
+gh pr view <NUM> --json state  # Never push to merged PR
 
-```bash
-# Create worktree for new feature
-git worktree add ../tensor4all-rs-feature-name -b feature-name
-cd ../tensor4all-rs-feature-name
-# Work on feature...
-```
-
-Always start from the latest main branch.
-
-### Creating Pull Requests
-
-```bash
-# Create PR
-gh pr create --base main --title "Feature: name" --body "Description"
-
-# Enable auto-merge (recommended)
-gh pr merge --auto --squash --delete-branch
-```
-
-### Updating Pull Requests
-
-**Before updating a PR, always check if it has been merged:**
-
-```bash
-# Check PR state
-gh pr view <PR_NUMBER> --json state
-```
-
-- If `state: "MERGED"` → PR is already merged. Do NOT push updates. Ask user for next steps.
-- If `state: "OPEN"` → Safe to push updates.
-
-**Never push to a merged PR** - the updates will be ignored and waste effort.
-
-### Monitoring CI
-
-```bash
-# Check PR status
-gh pr checks <PR_NUMBER>
-
-# View detailed status
-gh pr view <PR_NUMBER> --json state,statusCheckRollup
-
-# View failed logs
+# Monitor CI
+gh pr checks <NUM>
 gh run view <RUN_ID> --log-failed
 ```
 
-**If CI fails:** Fix the issue, push a new commit, and continue monitoring.
-
-### Branch Protection Rules
-
-- **Never push directly to main branch**: All changes must go through PRs
-- **Never force push to main branch**: Use feature branches for history rewriting
-
-### Before Creating a PR
-
-**Required**: Before creating a PR, always:
-1. Read `README.md` and verify the information is still accurate
-2. Update any outdated sections, especially:
-   - **Project Structure**: Ensure crate list matches actual `crates/` directory
-   - **Sample Code**: Verify examples still compile and reflect current API
-3. Check if new features need to be documented
-
-Do not create a PR with outdated documentation.
+**Before creating PR**: Verify README.md is accurate (project structure, examples).
