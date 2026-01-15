@@ -1031,8 +1031,10 @@ pub struct ContractionOptions {
     pub max_rank: Option<usize>,
     /// Relative tolerance for truncation (optional).
     pub rtol: Option<f64>,
-    /// Number of sweeps for Fit method.
-    pub nsweeps: usize,
+    /// Number of full sweeps for Fit method.
+    /// 
+    /// A full sweep visits each edge twice (forward and backward) using an Euler tour.
+    pub nfullsweeps: usize,
     /// Convergence tolerance for Fit method (None = fixed sweeps).
     pub convergence_tol: Option<f64>,
     /// Factorization algorithm for Fit method.
@@ -1045,7 +1047,7 @@ impl Default for ContractionOptions {
             method: ContractionMethod::default(),
             max_rank: None,
             rtol: None,
-            nsweeps: 2,
+            nfullsweeps: 1,
             convergence_tol: None,
             factorize_alg: FactorizeAlg::default(),
         }
@@ -1083,9 +1085,9 @@ impl ContractionOptions {
         self
     }
 
-    /// Set number of sweeps for Fit method.
-    pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
-        self.nsweeps = nsweeps;
+    /// Set number of full sweeps for Fit method.
+    pub fn with_nfullsweeps(mut self, nfullsweeps: usize) -> Self {
+        self.nfullsweeps = nfullsweeps;
         self
     }
 
@@ -1122,7 +1124,7 @@ where
             tn_a.contract_zipup(tn_b, center, options.rtol, options.max_rank)
         }
         ContractionMethod::Fit => {
-            let fit_options = FitContractionOptions::new(options.nsweeps)
+            let fit_options = FitContractionOptions::new(options.nfullsweeps)
                 .with_factorize_alg(options.factorize_alg);
             let fit_options = if let Some(max_rank) = options.max_rank {
                 fit_options.with_max_rank(max_rank)

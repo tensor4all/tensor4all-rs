@@ -134,7 +134,7 @@ fn test_environment_cache_clear() {
 fn test_linsolve_options_default() {
     let opts = LinsolveOptions::default();
 
-    assert_eq!(opts.nsweeps, 10);
+    assert_eq!(opts.nfullsweeps, 5);
     assert_eq!(opts.krylov_tol, 1e-10);
     assert_eq!(opts.krylov_maxiter, 100);
     assert_eq!(opts.krylov_dim, 30);
@@ -146,14 +146,14 @@ fn test_linsolve_options_default() {
 #[test]
 fn test_linsolve_options_builder() {
     let opts = LinsolveOptions::default()
-        .with_nsweeps(5)
+        .with_nfullsweeps(5)
         .with_krylov_tol(1e-8)
         .with_krylov_maxiter(50)
         .with_krylov_dim(20)
         .with_coefficients(1.0, -1.0)
         .with_convergence_tol(1e-6);
 
-    assert_eq!(opts.nsweeps, 5);
+    assert_eq!(opts.nfullsweeps, 5);
     assert_eq!(opts.krylov_tol, 1e-8);
     assert_eq!(opts.krylov_maxiter, 50);
     assert_eq!(opts.krylov_dim, 20);
@@ -465,7 +465,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     // Solve D * x = b
     // Use more sweeps and higher max_rank for general RHS
     let options = LinsolveOptions::default()
-        .with_nsweeps(10)
+        .with_nfullsweeps(10)
         .with_krylov_tol(1e-12)
         .with_max_rank(8);
 
@@ -932,7 +932,7 @@ fn test_linsolve_3site_identity() {
 
     // Solve I * x = b
     let options = LinsolveOptions::default()
-        .with_nsweeps(2)
+        .with_nfullsweeps(2)
         .with_krylov_tol(1e-8)
         .with_max_rank(4);
 
@@ -1351,7 +1351,7 @@ fn test_linsolve_with_index_mappings_identity() {
 
     // Create LinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
-        .with_nsweeps(1)
+        .with_nfullsweeps(1)
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
@@ -1404,7 +1404,7 @@ fn test_linsolve_with_index_mappings_diagonal() {
 
     // Create LinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
-        .with_nsweeps(3)
+        .with_nfullsweeps(3)
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
@@ -1599,7 +1599,7 @@ fn test_linsolve_with_index_mappings_three_site_identity() {
 
     // Create LinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
-        .with_nsweeps(1)
+        .with_nfullsweeps(1)
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
@@ -1654,7 +1654,7 @@ fn test_linsolve_with_index_mappings_three_site_diagonal() {
 
     // Create LinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
-        .with_nsweeps(5)
+        .with_nfullsweeps(5)
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
@@ -1856,7 +1856,7 @@ fn test_linsolve_vin_neq_vout_with_reference_state() {
 
     // Create LinsolveUpdater with index mappings and reference_state_out for V_in ≠ V_out case
     let options = LinsolveOptions::default()
-        .with_nsweeps(1)
+        .with_nfullsweeps(1)
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
@@ -1990,7 +1990,7 @@ fn test_linsolve_pauli_x() {
 
     // Solve X * x = b
     let options = LinsolveOptions::default()
-        .with_nsweeps(20)
+        .with_nfullsweeps(20)
         .with_krylov_tol(1e-12)
         .with_max_rank(8);
 
@@ -2163,7 +2163,7 @@ fn test_linsolve_general_matrix() {
 
     // Solve A * x = b
     let options = LinsolveOptions::default()
-        .with_nsweeps(30)
+        .with_nfullsweeps(30)
         .with_krylov_tol(1e-12)
         .with_max_rank(8);
 

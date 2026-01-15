@@ -166,7 +166,7 @@ pub enum ContractMethod {
 /// // Fit with relative tolerance
 /// let opts = ContractOptions::fit()
 ///     .with_rtol(1e-10)
-///     .with_nsweeps(5);
+///     .with_nhalfsweeps(10);  // 10 half-sweeps = 5 full sweeps
 /// ```
 #[derive(Debug, Clone)]
 pub struct ContractOptions {
@@ -174,8 +174,11 @@ pub struct ContractOptions {
     pub method: ContractMethod,
     /// Truncation parameters (rtol, max_rank).
     pub truncation: TruncationParams,
-    /// Number of sweeps for Fit method.
-    pub nsweeps: usize,
+    /// Number of half-sweeps for Fit method.
+    /// 
+    /// A half-sweep visits edges in one direction only (forward or backward).
+    /// This must be a multiple of 2 (each full sweep consists of 2 half-sweeps).
+    pub nhalfsweeps: usize,
 }
 
 impl Default for ContractOptions {
@@ -183,7 +186,7 @@ impl Default for ContractOptions {
         Self {
             method: ContractMethod::default(),
             truncation: TruncationParams::default(),
-            nsweeps: 2,
+            nhalfsweeps: 2,
         }
     }
 }
@@ -238,9 +241,21 @@ impl ContractOptions {
         self
     }
 
-    /// Set number of sweeps for Fit method.
-    pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
-        self.nsweeps = nsweeps;
+    /// Set number of half-sweeps for Fit method.
+    /// 
+    /// # Arguments
+    /// * `nhalfsweeps` - Number of half-sweeps (must be a multiple of 2)
+    /// 
+    /// # Panics
+    /// Panics if `nhalfsweeps` is not a multiple of 2.
+    pub fn with_nhalfsweeps(mut self, nhalfsweeps: usize) -> Self {
+        if nhalfsweeps % 2 != 0 {
+            panic!(
+                "nhalfsweeps must be a multiple of 2, got {}",
+                nhalfsweeps
+            );
+        }
+        self.nhalfsweeps = nhalfsweeps;
         self
     }
 
@@ -302,11 +317,11 @@ mod tests {
         let opts = ContractOptions::zipup()
             .with_max_rank(100)
             .with_rtol(1e-12)
-            .with_nsweeps(3);
+            .with_nhalfsweeps(6);  // 6 half-sweeps = 3 full sweeps
         assert_eq!(opts.method, ContractMethod::Zipup);
         assert_eq!(opts.max_rank(), Some(100));
         assert_eq!(opts.rtol(), Some(1e-12));
-        assert_eq!(opts.nsweeps, 3);
+        assert_eq!(opts.nhalfsweeps, 6);
     }
 
     #[test]
@@ -320,7 +335,7 @@ mod tests {
     fn test_contract_options_default() {
         let opts = ContractOptions::default();
         assert_eq!(opts.method, ContractMethod::Zipup);
-        assert_eq!(opts.nsweeps, 2);
+        assert_eq!(opts.nhalfsweeps, 2);
         assert_eq!(opts.rtol(), None);
         assert_eq!(opts.max_rank(), None);
     }

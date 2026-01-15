@@ -1906,7 +1906,7 @@ fn test_fit_contraction_options() {
         .with_max_rank(10)
         .with_rtol(1e-8);
 
-    assert_eq!(options.nsweeps, 5);
+        assert_eq!(options.nfullsweeps, 5);
     assert_eq!(options.max_rank, Some(10));
     assert_eq!(options.rtol, Some(1e-8));
 }

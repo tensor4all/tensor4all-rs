@@ -617,7 +617,7 @@ impl TensorTrain {
     ///
     /// # Arguments
     /// * `other` - The other tensor train to contract with
-    /// * `options` - Contraction options (method, max_rank, rtol, nsweeps)
+    /// * `options` - Contraction options (method, max_rank, rtol, nhalfsweeps)
     ///
     /// # Returns
     /// A new tensor train resulting from the contraction.
@@ -651,8 +651,11 @@ impl TensorTrain {
             ContractMethod::Naive => ContractionMethod::Naive,
         };
 
+        // Convert nhalfsweeps to nfullsweeps (nhalfsweeps / 2)
+        // nhalfsweeps is guaranteed to be a multiple of 2 by ContractOptions::with_nhalfsweeps
+        let nfullsweeps = options.nhalfsweeps / 2;
         let treetn_options =
-            TreeTNContractionOptions::new(treetn_method).with_nsweeps(options.nsweeps);
+            TreeTNContractionOptions::new(treetn_method).with_nfullsweeps(nfullsweeps);
 
         let treetn_options = if let Some(max_rank) = options.truncation.max_rank {
             treetn_options.with_max_rank(max_rank)

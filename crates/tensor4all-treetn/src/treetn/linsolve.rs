@@ -149,7 +149,7 @@ where
     let mut final_sweeps = 0;
 
     // Perform sweeps
-    for sweep in 0..options.nsweeps {
+    for sweep in 0..options.nfullsweeps {
         final_sweeps = sweep + 1;
         apply_local_update_sweep(&mut x, &plan, &mut updater)?;
     }

@@ -33,6 +33,10 @@ let norm = tt.norm();
 - 0-indexed sites (Julia uses 1-indexed)
 - Multiple canonical forms: Unitary (QR), LU, CI
 - Uses `conj` instead of `dag` (no QN direction flipping)
+- **Sweep counting**: Uses `nhalfsweeps` (number of half-sweeps, must be a multiple of 2)
+  - A half-sweep visits edges in one direction only (forward or backward)
+  - `nhalfsweeps=2` means 1 full sweep (forward + backward)
+  - This matches ITensorMPS.jl's `nsweeps` semantics when `reverse_step=false`
 
 ## License
 

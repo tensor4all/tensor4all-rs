@@ -44,6 +44,18 @@ let ttn = ttn.truncate(["B".to_string()], TruncationOptions::default().with_max_
 # Ok::<(), anyhow::Error>(())
 ```
 
+## Sweep Counting
+
+This crate uses **`nfullsweeps`** (number of full sweeps) for iterative algorithms:
+
+- **Full sweep**: Visits each edge twice (forward and backward) using an Euler tour
+- **Half sweep**: Visits edges in one direction only (forward or backward)
+- **Relationship**: `nfullsweeps = nhalfsweeps / 2` (where `nhalfsweeps` is used in `tensor4all-itensorlike`)
+
+For example:
+- `nfullsweeps=1` means each edge is updated twice (once in each direction)
+- `nfullsweeps=2` means each edge is updated 4 times total
+
 ## License
 
 MIT License

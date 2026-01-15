@@ -292,16 +292,9 @@ where
         .tensor(node_idx_c)
         .ok_or_else(|| anyhow::anyhow!("Tensor not found in tn_c"))?;
 
-    // Contract A * B on site indices
-    // T::contract auto-contracts all is_contractable pairs
-    let ab = T::contract(&[tensor_a.clone(), tensor_b.clone()], AllowedPairs::All)
-        .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
-
-    // Contract with conj(C) on remaining site indices
+    // Contract A × B × conj(C) - collect all tensors and let contract() find the optimal contraction order
     let c_conj = tensor_c.conj();
-
-    // Contract AB with conj(C) - T::contract auto-contracts all is_contractable pairs
-    let env = T::contract(&[ab, c_conj], AllowedPairs::All)
+    let env = T::contract(&[tensor_a.clone(), tensor_b.clone(), c_conj], AllowedPairs::All)
         .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     Ok(env)
@@ -351,20 +344,12 @@ where
     }
 
     // Non-leaf: contract A × B × conj(C) × child_envs
-    // T::contract auto-contracts all is_contractable pairs
-    let ab = T::contract(&[tensor_a.clone(), tensor_b.clone()], AllowedPairs::All)
-        .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
-
-    // Contract with conj(C)
+    // Collect all tensors and let contract() find the optimal contraction order
     let c_conj = tensor_c.conj();
-    let mut result = T::contract(&[ab, c_conj], AllowedPairs::All)
+    let mut tensor_list = vec![tensor_a.clone(), tensor_b.clone(), c_conj];
+    tensor_list.extend(child_envs.iter().cloned());
+    let result = T::contract(&tensor_list, AllowedPairs::All)
         .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
-
-    // Contract with child environments
-    for child_env in child_envs {
-        result = T::contract(&[result, child_env.clone()], AllowedPairs::All)
-            .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
-    }
 
     Ok(result)
 }
@@ -499,22 +484,11 @@ where
         }
 
         // Compute optimal 2-site tensor: env × A[u] × B[u] × A[v] × B[v] × env
-        // T::contract auto-contracts all is_contractable pairs
-        let ab_u = T::contract(&[a_u.clone(), b_u.clone()], AllowedPairs::All)
+        // Collect all tensors and let contract() find the optimal contraction order
+        let mut tensor_list = vec![a_u.clone(), b_u.clone(), a_v.clone(), b_v.clone()];
+        tensor_list.extend(env_tensors);
+        let ab_uv = T::contract(&tensor_list, AllowedPairs::All)
             .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
-
-        let ab_v = T::contract(&[a_v.clone(), b_v.clone()], AllowedPairs::All)
-            .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
-
-        // Contract ab_u and ab_v on internal bonds
-        let mut ab_uv = T::contract(&[ab_u, ab_v], AllowedPairs::All)
-            .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
-
-        // Contract with environment tensors
-        for env in env_tensors {
-            ab_uv = T::contract(&[ab_uv, env.clone()], AllowedPairs::All)
-                .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
-        }
 
         // The result ab_uv is the optimal 2-site tensor
         // Factorize to get new C[u] and C[v]
@@ -603,8 +577,10 @@ where
 /// Options for fit contraction.
 #[derive(Debug, Clone)]
 pub struct FitContractionOptions {
-    /// Number of sweeps to perform.
-    pub nsweeps: usize,
+    /// Number of full sweeps to perform.
+    /// 
+    /// A full sweep visits each edge twice (forward and backward) using an Euler tour.
+    pub nfullsweeps: usize,
     /// Maximum bond dimension.
     pub max_rank: Option<usize>,
     /// Relative tolerance for truncation.
@@ -612,7 +588,7 @@ pub struct FitContractionOptions {
     /// Factorization algorithm.
     pub factorize_alg: FactorizeAlg,
     /// Tolerance for early termination based on relative change.
-    /// If `None`, run exactly `nsweeps` sweeps.
+    /// If `None`, run exactly `nfullsweeps` sweeps.
     /// If `Some(tol)`, stop early if `||C_{i+1} - C_i|| / ||C_i|| < tol`.
     pub convergence_tol: Option<f64>,
 }
@@ -620,7 +596,7 @@ pub struct FitContractionOptions {
 impl Default for FitContractionOptions {
     fn default() -> Self {
         Self {
-            nsweeps: 2,
+            nfullsweeps: 1,
             max_rank: None,
             rtol: None,
             factorize_alg: FactorizeAlg::SVD,
@@ -630,10 +606,10 @@ impl Default for FitContractionOptions {
 }
 
 impl FitContractionOptions {
-    /// Create new options with specified number of sweeps.
-    pub fn new(nsweeps: usize) -> Self {
+    /// Create new options with specified number of full sweeps.
+    pub fn new(nfullsweeps: usize) -> Self {
         Self {
-            nsweeps,
+            nfullsweeps,
             ..Default::default()
         }
     }
@@ -712,7 +688,7 @@ where
         .ok_or_else(|| anyhow::anyhow!("Failed to create sweep plan"))?;
 
     // Perform sweeps
-    for _sweep in 0..options.nsweeps {
+    for _sweep in 0..options.nfullsweeps {
         let log_norm_before = if options.convergence_tol.is_some() {
             Some(tn_c.log_norm()?)
         } else {
