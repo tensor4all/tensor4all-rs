@@ -254,3 +254,88 @@ impl ContractOptions {
         self.truncation.max_rank
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_options_builder() {
+        let opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(50);
+        assert_eq!(opts.alg, TruncateAlg::SVD);
+        assert_eq!(opts.rtol(), Some(1e-10));
+        assert_eq!(opts.max_rank(), Some(50));
+    }
+
+    #[test]
+    fn test_truncate_options_algorithms() {
+        assert_eq!(TruncateOptions::svd().alg, TruncateAlg::SVD);
+        assert_eq!(TruncateOptions::lu().alg, TruncateAlg::LU);
+        assert_eq!(TruncateOptions::ci().alg, TruncateAlg::CI);
+    }
+
+    #[test]
+    fn test_truncate_options_site_range() {
+        let opts = TruncateOptions::svd().with_site_range(0..5);
+        assert_eq!(opts.site_range, Some(0..5));
+    }
+
+    #[test]
+    fn test_truncate_options_default() {
+        let opts = TruncateOptions::default();
+        assert_eq!(opts.alg, TruncateAlg::SVD);
+        assert_eq!(opts.rtol(), None);
+        assert_eq!(opts.max_rank(), None);
+        assert!(opts.site_range.is_none());
+    }
+
+    #[test]
+    fn test_truncate_options_has_truncation_params() {
+        let mut opts = TruncateOptions::svd();
+        assert!(opts.truncation_params().rtol.is_none());
+        opts.truncation_params_mut().rtol = Some(1e-8);
+        assert_eq!(opts.truncation_params().rtol, Some(1e-8));
+    }
+
+    #[test]
+    fn test_contract_options_builder() {
+        let opts = ContractOptions::zipup()
+            .with_max_rank(100)
+            .with_rtol(1e-12)
+            .with_nsweeps(3);
+        assert_eq!(opts.method, ContractMethod::Zipup);
+        assert_eq!(opts.max_rank(), Some(100));
+        assert_eq!(opts.rtol(), Some(1e-12));
+        assert_eq!(opts.nsweeps, 3);
+    }
+
+    #[test]
+    fn test_contract_options_methods() {
+        assert_eq!(ContractOptions::zipup().method, ContractMethod::Zipup);
+        assert_eq!(ContractOptions::fit().method, ContractMethod::Fit);
+        assert_eq!(ContractOptions::naive().method, ContractMethod::Naive);
+    }
+
+    #[test]
+    fn test_contract_options_default() {
+        let opts = ContractOptions::default();
+        assert_eq!(opts.method, ContractMethod::Zipup);
+        assert_eq!(opts.nsweeps, 2);
+        assert_eq!(opts.rtol(), None);
+        assert_eq!(opts.max_rank(), None);
+    }
+
+    #[test]
+    fn test_contract_options_has_truncation_params() {
+        let mut opts = ContractOptions::zipup();
+        assert!(opts.truncation_params().rtol.is_none());
+        opts.truncation_params_mut().max_rank = Some(50);
+        assert_eq!(opts.truncation_params().max_rank, Some(50));
+    }
+
+    #[test]
+    fn test_contract_method_default() {
+        let method: ContractMethod = Default::default();
+        assert_eq!(method, ContractMethod::Zipup);
+    }
+}
