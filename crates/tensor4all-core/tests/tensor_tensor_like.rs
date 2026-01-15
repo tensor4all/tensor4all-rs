@@ -48,7 +48,7 @@ fn test_tensor_like_contract_basic() {
     let a = TensorDynLen::from_indices(vec![i.clone(), j.clone()], f64::dense_storage(a_data));
 
     // Tensor B: 3x4 matrix (use a copy of j with same id)
-    let j_copy = Index::new(j.id.clone(), j.dim);
+    let j_copy = Index::new(j.id, j.dim);
     let b_data: Vec<f64> = (0..12).map(|x| x as f64).collect();
     let b = TensorDynLen::from_indices(vec![j_copy.clone(), k.clone()], f64::dense_storage(b_data));
 
@@ -81,7 +81,7 @@ fn test_contract_allowed_pairs_specified() {
     let b = TensorDynLen::from_indices(vec![j_copy.clone(), k.clone()], f64::dense_storage(b_data));
 
     // Tensor C: 4x5 matrix (k, l) - k has same id as B's k
-    let k_copy = Index::new(k.id.clone(), k.dim);
+    let k_copy = Index::new(k.id, k.dim);
     let c_data: Vec<f64> = (0..20).map(|x| x as f64).collect();
     let c = TensorDynLen::from_indices(vec![k_copy.clone(), l.clone()], f64::dense_storage(c_data));
 
@@ -114,8 +114,8 @@ fn test_contract_specified_empty_with_common_indices_errors() {
     let a = TensorDynLen::from_indices(vec![i.clone(), j.clone()], f64::dense_storage(a_data));
 
     // Tensor B: 2x3 matrix (use copies of i and j with same ids)
-    let i_copy = Index::new(i.id.clone(), i.dim);
-    let j_copy = Index::new(j.id.clone(), j.dim);
+    let i_copy = Index::new(i.id, i.dim);
+    let j_copy = Index::new(j.id, j.dim);
     let b_data: Vec<f64> = (0..6).map(|x| x as f64).collect();
     let b = TensorDynLen::from_indices(
         vec![i_copy.clone(), j_copy.clone()],
@@ -174,10 +174,10 @@ fn test_contract_specified_disconnected_outer_product() {
     let j = Index::<DynId>::new_dyn(3);
 
     let a = TensorDynLen::from_indices(vec![i.clone()], f64::dense_storage(vec![1.0, 2.0]));
-    let i_copy = Index::new(i.id.clone(), i.dim);
+    let i_copy = Index::new(i.id, i.dim);
     let b = TensorDynLen::from_indices(vec![i_copy.clone()], f64::dense_storage(vec![3.0, 4.0]));
     let c = TensorDynLen::from_indices(vec![j.clone()], f64::dense_storage(vec![5.0, 6.0, 7.0]));
-    let j_copy = Index::new(j.id.clone(), j.dim);
+    let j_copy = Index::new(j.id, j.dim);
     let d = TensorDynLen::from_indices(
         vec![j_copy.clone()],
         f64::dense_storage(vec![8.0, 9.0, 10.0]),

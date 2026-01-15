@@ -393,8 +393,8 @@ mod tests {
         );
 
         // Direct sum along (j, k)
-        let j_idx: DynIndex = Index::new(j.id.clone(), j.dim());
-        let k_idx: DynIndex = Index::new(k.id.clone(), k.dim());
+        let j_idx: DynIndex = Index::new(j.id, j.dim());
+        let k_idx: DynIndex = Index::new(k.id, k.dim());
         let (result, new_indices) = direct_sum(&a, &b, &[(j_idx, k_idx)]).unwrap();
 
         // Result should be 2x7 (common i, merged j+k)

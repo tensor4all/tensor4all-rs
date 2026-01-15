@@ -261,7 +261,7 @@ impl TensorData {
                 .external_index_ids
                 .iter()
                 .zip(self.external_dims.iter())
-                .map(|(id, &dim)| Index::new(id.clone(), dim))
+                .map(|(id, &dim)| Index::new(*id, dim))
                 .collect();
 
             let permuted = contracted.permuteinds(&target_indices)?;
@@ -448,7 +448,7 @@ mod tests {
         let b = TensorData::new(storage_b, vec![id_j], vec![3]);
 
         let c = TensorData::outer_product(&a, &b);
-        let permuted = c.permute(&[id_j.clone(), id_i.clone()]);
+        let permuted = c.permute(&[id_j, id_i]);
 
         let (materialized, dims) = permuted.materialize().unwrap();
         assert_eq!(dims, vec![3, 2]);

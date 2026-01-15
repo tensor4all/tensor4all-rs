@@ -264,12 +264,12 @@ where
 ///
 /// This function requires the matrixci::Scalar trait.
 /// Use this directly when you need LU-based factorization.
-pub fn factorize_lu<T: SVDScalar>(
+pub fn factorize_lu<T>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<T>>
 where
-    T: matrixci::util::Scalar,
+    T: SVDScalar + matrixci::util::Scalar,
     <T as ComplexFloat>::Real: Into<f64>,
 {
     use matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
@@ -328,12 +328,12 @@ where
 ///
 /// This function requires the matrixci::Scalar trait.
 /// Use this directly when you need CI-based factorization.
-pub fn factorize_ci<T: SVDScalar>(
+pub fn factorize_ci<T>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<T>>
 where
-    T: matrixci::util::Scalar,
+    T: SVDScalar + matrixci::util::Scalar,
     <T as ComplexFloat>::Real: Into<f64>,
 {
     // CI uses the same LUCI implementation as LU
