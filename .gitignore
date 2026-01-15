@@ -1,5 +1,6 @@
 /target/
 Cargo.lock
+.DS_Store
 *.log
 *.so
 *.dylib
@@ -33,3 +34,6 @@ LocalPreferences.toml
 
 # Private documentation (not committed)
 privatedoc/*
+
+# External repositories (reference only)
+extern/
