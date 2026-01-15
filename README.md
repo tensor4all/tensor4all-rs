@@ -268,6 +268,7 @@ For ITensors.jl:
 ## Documentation
 
 - [Index System Design](docs/INDEX_SYSTEM.md) — Overview of the index system, QSpace compatibility, and IndexLike/TensorLike design
+- [Vibe Coding Workflow](docs/vibe_coding_workflow.md) — Development workflow guidelines for rapid, AI-assisted development
 
 ## References
 
