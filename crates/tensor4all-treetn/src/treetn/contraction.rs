@@ -10,6 +10,7 @@
 use petgraph::stable_graph::{EdgeIndex, NodeIndex};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 
@@ -252,21 +253,37 @@ where
         V: Ord,
         <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
+        let total_start = Instant::now();
+        let mut timings: Vec<(&str, std::time::Duration)> = Vec::new();
+        let enable_profiling = std::env::var("T4A_PROFILE_CONTRACTION").is_ok();
+
         // 1. Verify topologies are compatible (same graph structure)
+        let t0 = Instant::now();
         if !self.same_topology(other) {
             return Err(anyhow::anyhow!(
                 "contract_zipup: networks have incompatible topologies"
             ));
         }
+        if enable_profiling {
+            timings.push(("Topology verification", t0.elapsed()));
+        }
 
         // 2. Replace internal indices with fresh IDs to avoid collision
+        let t0 = Instant::now();
         let tn1 = self.sim_internal_inds();
         let tn2 = other.sim_internal_inds();
+        if enable_profiling {
+            timings.push(("Sim internal indices", t0.elapsed()));
+        }
 
         // 3. Get traversal edges from leaves to center
+        let t0 = Instant::now();
         let edges = tn1
             .edges_to_canonicalize_by_names(center)
             .ok_or_else(|| anyhow::anyhow!("contract_zipup: center node {:?} not found", center))?;
+        if enable_profiling {
+            timings.push(("Get edges", t0.elapsed()));
+        }
 
         if edges.is_empty() && self.node_count() == 1 {
             // Single node case: just contract the two tensors
@@ -299,8 +316,10 @@ where
             return Ok(result_tn);
         }
 
-        // 4. Initialize result tensors (start with contracted node tensors)
+        // 4. Initialize result tensors (contract corresponding node tensors)
+        let t0 = Instant::now();
         let mut result_tensors: HashMap<V, T> = HashMap::new();
+        let mut site_contraction_time = std::time::Duration::ZERO;
 
         for node_name in tn1.node_names() {
             let node1 = tn1
@@ -317,26 +336,38 @@ where
                 anyhow::anyhow!("Tensor not found for node {:?} in tn2", node_name)
             })?;
 
-            // Contract along site indices
             // T::contract auto-contracts all is_contractable pairs
+            let t_contract = Instant::now();
             let contracted = T::contract(&[t1.clone(), t2.clone()], AllowedPairs::All)?;
+            site_contraction_time += t_contract.elapsed();
 
             result_tensors.insert(node_name, contracted);
         }
+        if enable_profiling {
+            timings.push(("Initial site contraction", t0.elapsed()));
+            timings.push(("  - Site contraction (sum)", site_contraction_time));
+        }
 
-        // 5. Process edges from leaves to center
+        // 5. Process edges from leaves towards center (zip-up)
+        let t0 = Instant::now();
         let alg = match form {
             CanonicalForm::Unitary => FactorizeAlg::SVD,
             CanonicalForm::LU => FactorizeAlg::LU,
             CanonicalForm::CI => FactorizeAlg::CI,
         };
 
+        let mut factorize_time = std::time::Duration::ZERO;
+        let mut edge_contraction_time = std::time::Duration::ZERO;
+        let mut edge_count: usize = 0;
+
         for (child_name, parent_name) in &edges {
+            edge_count += 1;
+
             let child_tensor = result_tensors
                 .remove(child_name)
                 .ok_or_else(|| anyhow::anyhow!("Child tensor {:?} not found", child_name))?;
 
-            // Get the bond index between child and parent from tn1 (bond1) and tn2 (bond2)
+            // Get the bond indices between child and parent from tn1 (bond1) and tn2 (bond2)
             let edge1 = tn1.edge_between(child_name, parent_name).ok_or_else(|| {
                 anyhow::anyhow!(
                     "Edge not found between {:?} and {:?} in tn1",
@@ -361,7 +392,8 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge in tn2"))?
                 .clone();
 
-            // Factorize: left_inds = all indices except bond1 and bond2 (towards parent)
+            // Keep everything on the child except the two bond indices to the parent.
+            // This includes site indices and any new bonds to children created earlier.
             let left_inds: Vec<_> = child_tensor
                 .external_indices()
                 .into_iter()
@@ -369,15 +401,13 @@ where
                 .collect();
 
             if left_inds.is_empty() {
-                // All indices are bond indices - just absorb into parent
-                // (This happens when site indices are fully contracted, i.e., inner product case)
+                // Inner-product-like case: child has only bond indices, absorb it directly.
                 let parent_tensor = result_tensors
                     .remove(parent_name)
                     .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
 
                 let contracted = T::contract(&[parent_tensor, child_tensor], AllowedPairs::All)?;
                 result_tensors.insert(parent_name.clone(), contracted);
-                // Don't re-insert child - it's been absorbed
                 continue;
             }
 
@@ -388,27 +418,36 @@ where
                 max_rank,
             };
 
-            let factorize_result = child_tensor.factorize(&left_inds, &factorize_options)
-                .map_err(|e| {
-                    anyhow::anyhow!("Factorization failed at node {:?}: {}", child_name, e)
-                })?;
+            let t_factorize = Instant::now();
+            let factorize_result = child_tensor
+                .factorize(&left_inds, &factorize_options)
+                .map_err(|e| anyhow::anyhow!("Factorization failed at node {:?}: {}", child_name, e))?;
+            factorize_time += t_factorize.elapsed();
 
-            // Store left factor as child
+            // Store left factor as the updated child tensor
             result_tensors.insert(child_name.clone(), factorize_result.left);
 
-            // Contract right factor into parent
+            // Absorb right factor into parent
             let parent_tensor = result_tensors
                 .remove(parent_name)
                 .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
 
-            // Right factor has: new_bond (from factorize), bond1, bond2
-            // Parent has: bond1, bond2 (among other indices)
-            // Contract along bond1 and bond2
-            let contracted = T::contract(&[parent_tensor, factorize_result.right], AllowedPairs::All)?;
+            let t_contract = Instant::now();
+            let contracted =
+                T::contract(&[parent_tensor, factorize_result.right], AllowedPairs::All)?;
+            edge_contraction_time += t_contract.elapsed();
             result_tensors.insert(parent_name.clone(), contracted);
         }
 
+        if enable_profiling {
+            timings.push(("Edge processing (total)", t0.elapsed()));
+            timings.push(("  - Factorize (sum)", factorize_time));
+            timings.push(("  - Edge contraction (sum)", edge_contraction_time));
+            eprintln!("  - Number of edges processed: {}", edge_count);
+        }
+
         // 6. Build result TreeTN
+        let t0 = Instant::now();
         let mut result = Self::new();
 
         // Add tensors for nodes that still have tensors
@@ -451,6 +490,25 @@ where
         // Set canonical center (only if it exists in result)
         if result.node_index(center).is_some() {
             result.set_canonical_center(std::iter::once(center.clone()))?;
+        }
+        if enable_profiling {
+            timings.push(("Build result TreeTN", t0.elapsed()));
+        }
+
+        // Print profiling results if enabled
+        if enable_profiling {
+            let total_time = total_start.elapsed();
+            eprintln!("=== contract_zipup Profiling ===");
+            for (name, duration) in &timings {
+                if duration.as_secs() > 0 || duration.as_millis() > 0 {
+                    let percentage = (duration.as_secs_f64() / total_time.as_secs_f64()) * 100.0;
+                    eprintln!("  {}: {:?} ({:.1}%)", name, duration, percentage);
+                } else {
+                    eprintln!("  {}: {:?}", name, duration);
+                }
+            }
+            eprintln!("  Total: {:?}", total_time);
+            eprintln!("=================================");
         }
 
         Ok(result)

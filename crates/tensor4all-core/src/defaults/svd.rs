@@ -29,12 +29,16 @@ pub struct SvdOptions {
     /// If `None`, uses the global default rtol.
     /// The truncation guarantees: ||A - A_approx||_F / ||A||_F <= rtol.
     pub rtol: Option<f64>,
+    /// Maximum rank (bond dimension) for truncation.
+    /// If `None`, no rank limit is applied.
+    pub max_rank: Option<usize>,
 }
 
 impl Default for SvdOptions {
     fn default() -> Self {
         Self {
             rtol: None, // Use global default
+            max_rank: None,
         }
     }
 }
@@ -42,7 +46,10 @@ impl Default for SvdOptions {
 impl SvdOptions {
     /// Create new SVD options with the specified rtol.
     pub fn with_rtol(rtol: f64) -> Self {
-        Self { rtol: Some(rtol) }
+        Self { 
+            rtol: Some(rtol),
+            max_rank: None,
+        }
     }
 }
 
@@ -322,7 +329,12 @@ where
     let (u_vec_full, s_vec_full, v_vec_full) = extract_usv_from_svd_result(decomp, m, n, k);
 
     // Compute retained rank based on rtol truncation
-    let r = compute_retained_rank(&s_vec_full, rtol);
+    let mut r = compute_retained_rank(&s_vec_full, rtol);
+    
+    // Apply max_rank limit if specified
+    if let Some(max_rank) = options.max_rank {
+        r = r.min(max_rank);
+    }
 
     // Truncate to retained rank r
     let s_vec: Vec<f64> = s_vec_full[..r].to_vec();
