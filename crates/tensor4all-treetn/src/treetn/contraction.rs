@@ -410,8 +410,7 @@ where
                     .remove(parent_name)
                     .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
 
-                let contracted =
-                    T::contract(&[&parent_tensor, &child_tensor], AllowedPairs::All)?;
+                let contracted = T::contract(&[&parent_tensor, &child_tensor], AllowedPairs::All)?;
                 result_tensors.insert(parent_name.clone(), contracted);
                 continue;
             }
@@ -440,8 +439,10 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Parent tensor {:?} not found", parent_name))?;
 
             let t_contract = Instant::now();
-            let contracted =
-                T::contract(&[&parent_tensor, &factorize_result.right], AllowedPairs::All)?;
+            let contracted = T::contract(
+                &[&parent_tensor, &factorize_result.right],
+                AllowedPairs::All,
+            )?;
             edge_contraction_time += t_contract.elapsed();
             result_tensors.insert(parent_name.clone(), contracted);
         }

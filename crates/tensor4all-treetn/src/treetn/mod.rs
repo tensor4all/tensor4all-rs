@@ -568,8 +568,8 @@ where
             .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
             .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
-        let updated_dst_tensor =
-            T::contract(&[tensor_dst, &right_tensor], AllowedPairs::All).with_context(|| {
+        let updated_dst_tensor = T::contract(&[tensor_dst, &right_tensor], AllowedPairs::All)
+            .with_context(|| {
                 format!(
                     "{}: failed to absorb right factor into dst tensor",
                     context_name

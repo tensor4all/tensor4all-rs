@@ -777,8 +777,11 @@ mod tests {
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let c = make_test_tensor(&[4, 5], &[4, 5]); // m=4, n=5
         let d = make_test_tensor(&[5, 6], &[5, 6]); // n=5, p=6
-        let result =
-            contract_multi(&[&a, &b, &c, &d], AllowedPairs::Specified(&[(0, 1), (2, 3)])).unwrap();
+        let result = contract_multi(
+            &[&a, &b, &c, &d],
+            AllowedPairs::Specified(&[(0, 1), (2, 3)]),
+        )
+        .unwrap();
         // A-B contracts j: result has i, k (dims 2, 4)
         // C-D contracts n: result has m, p (dims 4, 6)
         // Outer product: result has 4 indices
