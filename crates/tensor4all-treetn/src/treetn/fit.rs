@@ -294,8 +294,11 @@ where
 
     // Contract A × B × conj(C) - collect all tensors and let contract() find the optimal contraction order
     let c_conj = tensor_c.conj();
-    let env = T::contract(&[tensor_a.clone(), tensor_b.clone(), c_conj], AllowedPairs::All)
-        .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
+    let env = T::contract(
+        &[tensor_a.clone(), tensor_b.clone(), c_conj],
+        AllowedPairs::All,
+    )
+    .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
 
     Ok(env)
 }
@@ -578,7 +581,7 @@ where
 #[derive(Debug, Clone)]
 pub struct FitContractionOptions {
     /// Number of full sweeps to perform.
-    /// 
+    ///
     /// A full sweep visits each edge twice (forward and backward) using an Euler tour.
     pub nfullsweeps: usize,
     /// Maximum bond dimension.

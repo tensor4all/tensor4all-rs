@@ -175,7 +175,7 @@ pub struct ContractOptions {
     /// Truncation parameters (rtol, max_rank).
     pub truncation: TruncationParams,
     /// Number of half-sweeps for Fit method.
-    /// 
+    ///
     /// A half-sweep visits edges in one direction only (forward or backward).
     /// This must be a multiple of 2 (each full sweep consists of 2 half-sweeps).
     pub nhalfsweeps: usize,
@@ -242,18 +242,15 @@ impl ContractOptions {
     }
 
     /// Set number of half-sweeps for Fit method.
-    /// 
+    ///
     /// # Arguments
     /// * `nhalfsweeps` - Number of half-sweeps (must be a multiple of 2)
-    /// 
+    ///
     /// # Panics
     /// Panics if `nhalfsweeps` is not a multiple of 2.
     pub fn with_nhalfsweeps(mut self, nhalfsweeps: usize) -> Self {
         if nhalfsweeps % 2 != 0 {
-            panic!(
-                "nhalfsweeps must be a multiple of 2, got {}",
-                nhalfsweeps
-            );
+            panic!("nhalfsweeps must be a multiple of 2, got {}", nhalfsweeps);
         }
         self.nhalfsweeps = nhalfsweeps;
         self
@@ -317,7 +314,7 @@ mod tests {
         let opts = ContractOptions::zipup()
             .with_max_rank(100)
             .with_rtol(1e-12)
-            .with_nhalfsweeps(6);  // 6 half-sweeps = 3 full sweeps
+            .with_nhalfsweeps(6); // 6 half-sweeps = 3 full sweeps
         assert_eq!(opts.method, ContractMethod::Zipup);
         assert_eq!(opts.max_rank(), Some(100));
         assert_eq!(opts.rtol(), Some(1e-12));

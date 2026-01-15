@@ -7,8 +7,8 @@
 //!
 //! Then contracts them using fit (variational) method with max_rank=20.
 
-use std::time::Instant;
 use rand::thread_rng;
+use std::time::Instant;
 
 use tensor4all_core::{DynIndex, TensorDynLen};
 use tensor4all_itensorlike::{CanonicalForm, ContractOptions, Result, TensorTrain};
@@ -37,10 +37,7 @@ fn create_random_mpo(
 
     // Create tensors for each site
     for i in 0..length {
-        let mut indices = vec![
-            input_indices[i].clone(),
-            output_indices[i].clone(),
-        ];
+        let mut indices = vec![input_indices[i].clone(), output_indices[i].clone()];
 
         // Add left link (if not first site)
         if i > 0 {
@@ -66,8 +63,8 @@ fn main() -> Result<()> {
     let phys_dim = 2;
     let bond_dim = 60;
     let max_rank = 60;
-    let n_half_sweeps = 10;  // Number of half-sweeps for fit algorithm (must be multiple of 2)
-    let n_runs = 10;  // Number of runs for averaging
+    let n_half_sweeps = 10; // Number of half-sweeps for fit algorithm (must be multiple of 2)
+    let n_runs = 10; // Number of runs for averaging
 
     println!("=== Random MPO Contraction Benchmark (Rust/tensor4all-rs) ===");
     println!("Algorithm: Fit (variational)");
@@ -75,20 +72,23 @@ fn main() -> Result<()> {
     println!("Physical dimension: {}", phys_dim);
     println!("Bond dimension: {}", bond_dim);
     println!("Max rank: {}", max_rank);
-    println!("Number of half-sweeps: {} ({} full sweeps)", n_half_sweeps, n_half_sweeps / 2);
-    println!("Number of runs: {} (excluding first compilation run)", n_runs);
+    println!(
+        "Number of half-sweeps: {} ({} full sweeps)",
+        n_half_sweeps,
+        n_half_sweeps / 2
+    );
+    println!(
+        "Number of runs: {} (excluding first compilation run)",
+        n_runs
+    );
     println!();
 
     // Create indices for MPO A: A[s_i, s'_i]
     // Input indices (s_i) - unique for MPO A
-    let input_indices_a: Vec<_> = (0..length)
-        .map(|_| DynIndex::new_dyn(phys_dim))
-        .collect();
+    let input_indices_a: Vec<_> = (0..length).map(|_| DynIndex::new_dyn(phys_dim)).collect();
 
     // Output indices (s'_i) - shared between MPO A and MPO B for contraction
-    let output_indices_shared: Vec<_> = (0..length)
-        .map(|_| DynIndex::new_dyn(phys_dim))
-        .collect();
+    let output_indices_shared: Vec<_> = (0..length).map(|_| DynIndex::new_dyn(phys_dim)).collect();
 
     // Link indices for MPO A
     let num_links = if length > 0 { length - 1 } else { 0 };
@@ -107,15 +107,16 @@ fn main() -> Result<()> {
         &output_indices_shared,
         &link_indices_a,
     )?;
-    println!("MPO A created. Max bond dim: {}", mpo_a_original.maxbonddim());
+    println!(
+        "MPO A created. Max bond dim: {}",
+        mpo_a_original.maxbonddim()
+    );
     println!();
 
     // Create indices for MPO B: B[s'_i, s''_i]
     // Input indices (s'_i) - same as output_indices_shared (for contraction)
     // Output indices (s''_i) - unique for MPO B
-    let output_indices_b: Vec<_> = (0..length)
-        .map(|_| DynIndex::new_dyn(phys_dim))
-        .collect();
+    let output_indices_b: Vec<_> = (0..length).map(|_| DynIndex::new_dyn(phys_dim)).collect();
 
     // Link indices for MPO B
     let num_links = if length > 0 { length - 1 } else { 0 };
@@ -134,7 +135,10 @@ fn main() -> Result<()> {
         &output_indices_b,
         &link_indices_b,
     )?;
-    println!("MPO B created. Max bond dim: {}", mpo_b_original.maxbonddim());
+    println!(
+        "MPO B created. Max bond dim: {}",
+        mpo_b_original.maxbonddim()
+    );
     println!();
 
     // Contract options: fit with max_rank=20 and n_half_sweeps=10
@@ -143,8 +147,12 @@ fn main() -> Result<()> {
         .with_nhalfsweeps(n_half_sweeps);
 
     println!("Contracting MPOs using fit (variational) method...");
-    println!("Options: method=Fit, max_rank={}, nhalfsweeps={}, rtol={:?}", 
-             max_rank, n_half_sweeps, options.rtol());
+    println!(
+        "Options: method=Fit, max_rank={}, nhalfsweeps={}, rtol={:?}",
+        max_rank,
+        n_half_sweeps,
+        options.rtol()
+    );
     println!("Note: Each run copies MPOs and includes orthogonalization time");
     println!();
 
@@ -159,15 +167,18 @@ fn main() -> Result<()> {
     // Contract
     let result_warmup = mpo_a_warmup.contract(&mpo_b_warmup, &options)?;
     let duration_warmup = start_warmup.elapsed();
-    println!("Warmup completed in: {:?}. Result max bond dim: {}", 
-             duration_warmup, result_warmup.maxbonddim());
+    println!(
+        "Warmup completed in: {:?}. Result max bond dim: {}",
+        duration_warmup,
+        result_warmup.maxbonddim()
+    );
     println!();
 
     // Multiple runs for averaging
     println!("Running {} iterations for averaging...", n_runs);
     let mut times = Vec::new();
     let mut result_final = None;
-    
+
     for run in 1..=n_runs {
         let start = Instant::now();
         // Copy MPOs for this run
@@ -181,8 +192,12 @@ fn main() -> Result<()> {
         let duration = start.elapsed();
         times.push(duration);
         result_final = Some(result.clone());
-        println!("  Run {}: {:?} (max bond dim: {})", 
-                 run, duration, result.maxbonddim());
+        println!(
+            "  Run {}: {:?} (max bond dim: {})",
+            run,
+            duration,
+            result.maxbonddim()
+        );
     }
 
     // Calculate statistics
@@ -190,15 +205,17 @@ fn main() -> Result<()> {
     let avg_time = total / times.len() as u32;
     let min_time = times.iter().min().unwrap();
     let max_time = times.iter().max().unwrap();
-    
+
     // Calculate standard deviation
     let avg_secs = avg_time.as_secs_f64();
-    let variance: f64 = times.iter()
+    let variance: f64 = times
+        .iter()
         .map(|&d| {
             let diff = d.as_secs_f64() - avg_secs;
             diff * diff
         })
-        .sum::<f64>() / times.len() as f64;
+        .sum::<f64>()
+        / times.len() as f64;
     let std_time = std::time::Duration::from_secs_f64(variance.sqrt());
 
     println!();

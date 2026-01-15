@@ -1032,7 +1032,7 @@ pub struct ContractionOptions {
     /// Relative tolerance for truncation (optional).
     pub rtol: Option<f64>,
     /// Number of full sweeps for Fit method.
-    /// 
+    ///
     /// A full sweep visits each edge twice (forward and backward) using an Euler tour.
     pub nfullsweeps: usize,
     /// Convergence tolerance for Fit method (None = fixed sweeps).

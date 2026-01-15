@@ -6,7 +6,7 @@ use crate::TruncationOptions;
 #[derive(Debug, Clone)]
 pub struct LinsolveOptions {
     /// Number of full sweeps to perform.
-    /// 
+    ///
     /// A full sweep visits each edge twice (forward and backward) using an Euler tour.
     pub nfullsweeps: usize,
     /// Truncation options for factorization.
