@@ -194,8 +194,44 @@ mod tests {
         assert!(!DecompositionAlg::CI.is_svd_based());
 
         assert!(DecompositionAlg::SVD.is_orthogonal());
+        assert!(DecompositionAlg::RSVD.is_orthogonal());
         assert!(DecompositionAlg::QR.is_orthogonal());
         assert!(!DecompositionAlg::LU.is_orthogonal());
         assert!(!DecompositionAlg::CI.is_orthogonal());
+    }
+
+    #[test]
+    fn test_decomposition_alg_default() {
+        let alg: DecompositionAlg = Default::default();
+        assert_eq!(alg, DecompositionAlg::SVD);
+    }
+
+    #[test]
+    fn test_truncation_params_merge() {
+        let params1 = TruncationParams::new().with_rtol(1e-10);
+        let params2 = TruncationParams::new().with_max_rank(50);
+        let merged = params1.merge(&params2);
+
+        assert_eq!(merged.rtol, Some(1e-10));
+        assert_eq!(merged.max_rank, Some(50));
+
+        // Self values take precedence
+        let params3 = TruncationParams::new().with_rtol(1e-8).with_max_rank(100);
+        let merged2 = params3.merge(&params2);
+        assert_eq!(merged2.rtol, Some(1e-8));
+        assert_eq!(merged2.max_rank, Some(100));
+    }
+
+    #[test]
+    fn test_has_truncation_params_trait() {
+        let mut params = TruncationParams::new();
+
+        // Test trait methods
+        assert_eq!(params.rtol(), None);
+        assert_eq!(params.max_rank(), None);
+
+        // Test mutable access
+        params.truncation_params_mut().rtol = Some(1e-6);
+        assert_eq!(params.truncation_params().rtol, Some(1e-6));
     }
 }

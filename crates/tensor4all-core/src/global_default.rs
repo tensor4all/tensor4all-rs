@@ -98,4 +98,20 @@ mod tests {
         assert!(TEST_DEFAULT.set(f64::INFINITY).is_err());
         assert!(TEST_DEFAULT.set(-1.0).is_err());
     }
+
+    #[test]
+    fn test_set_unchecked() {
+        static TEST_DEFAULT: GlobalDefault = GlobalDefault::new(1e-12);
+
+        TEST_DEFAULT.set_unchecked(1e-8);
+        assert!((TEST_DEFAULT.get() - 1e-8).abs() < 1e-20);
+    }
+
+    #[test]
+    fn test_error_display() {
+        let err = InvalidRtolError(-1.0);
+        let msg = format!("{}", err);
+        assert!(msg.contains("-1"));
+        assert!(msg.contains("rtol"));
+    }
 }
