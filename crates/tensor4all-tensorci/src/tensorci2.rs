@@ -6,7 +6,8 @@
 
 use crate::error::{Result, TCIError};
 use crate::indexset::MultiIndex;
-use matrixci::util::{zeros, Scalar};
+use matrixci::util::zeros;
+use matrixci::Scalar;
 use matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
 

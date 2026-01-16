@@ -19,13 +19,13 @@ tensor4all-treetn = { path = "../tensor4all-treetn" }
 tensor4all-core = { path = "../tensor4all-core" }
 tensor4all-simplett = { path = "../tensor4all-simplett" }
 quanticsgrids = { path = "../quanticsgrids" }
-num-complex = { workspace = true }
-num-traits = { workspace = true }
+num-complex.workspace = true
+num-traits.workspace = true
 num-rational = "0.4"
 num-integer = "0.1"
-anyhow = { workspace = true }
-mdarray = { workspace = true }
+anyhow.workspace = true
+mdarray.workspace = true
 sprs = "0.11"
 
 [dev-dependencies]
-approx = { workspace = true }
+approx.workspace = true

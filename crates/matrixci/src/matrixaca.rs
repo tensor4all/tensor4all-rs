@@ -2,9 +2,10 @@
 
 use crate::error::{MatrixCIError, Result};
 use crate::traits::AbstractMatrixCI;
+use crate::scalar::Scalar;
 use crate::util::{
     append_col, append_row, from_vec2d, get_col, get_row, ncols, nrows, submatrix_argmax, zeros,
-    Matrix, Scalar,
+    Matrix,
 };
 
 /// Adaptive Cross Approximation representation

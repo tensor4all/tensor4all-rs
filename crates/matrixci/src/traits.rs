@@ -1,7 +1,8 @@
 //! Abstract traits for matrix cross interpolation
 
 use crate::error::Result;
-use crate::util::{submatrix, zeros, Matrix, Scalar};
+use crate::scalar::Scalar;
+use crate::util::{submatrix, zeros, Matrix};
 
 /// Abstract trait for matrix cross interpolation objects
 ///

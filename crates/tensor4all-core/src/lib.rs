@@ -1,9 +1,12 @@
-// Common (tags, utilities)
+// Common (tags, utilities, scalar)
 pub mod global_default;
 pub mod index_like;
+pub mod scalar;
 pub mod smallstring;
 pub mod tagset;
 pub mod truncation;
+
+pub use scalar::CommonScalar;
 
 // Default concrete type implementations (index, tensor, linalg, etc.)
 pub mod defaults;

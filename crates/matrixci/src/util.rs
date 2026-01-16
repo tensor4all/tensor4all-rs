@@ -1,6 +1,7 @@
 //! Utility functions for matrix cross interpolation
 
-use num_traits::{Float, One, Zero};
+use crate::scalar::Scalar;
+use num_traits::{One, Zero};
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::collections::HashSet;
@@ -191,91 +192,7 @@ pub fn transpose<T: Clone + Zero>(m: &Matrix<T>) -> Matrix<T> {
     result
 }
 
-/// Trait for scalar types used in matrix operations
-pub trait Scalar:
-    Clone
-    + Copy
-    + Zero
-    + One
-    + std::ops::Add<Output = Self>
-    + std::ops::Sub<Output = Self>
-    + std::ops::Mul<Output = Self>
-    + std::ops::Div<Output = Self>
-    + std::ops::Neg<Output = Self>
-    + Send
-    + Sync
-    + 'static
-{
-    /// Absolute value
-    fn abs(self) -> Self;
-
-    /// Square of absolute value (for complex numbers, |z|^2)
-    fn abs_sq(self) -> f64;
-
-    /// Check if value is NaN
-    fn is_nan(self) -> bool;
-
-    /// Small epsilon value for numerical comparisons
-    fn epsilon() -> f64 {
-        1e-30
-    }
-}
-
-impl Scalar for f64 {
-    fn abs(self) -> Self {
-        Float::abs(self)
-    }
-
-    fn abs_sq(self) -> f64 {
-        self * self
-    }
-
-    fn is_nan(self) -> bool {
-        Float::is_nan(self)
-    }
-}
-
-impl Scalar for f32 {
-    fn abs(self) -> Self {
-        Float::abs(self)
-    }
-
-    fn abs_sq(self) -> f64 {
-        (self * self) as f64
-    }
-
-    fn is_nan(self) -> bool {
-        Float::is_nan(self)
-    }
-}
-
-impl Scalar for num_complex::Complex64 {
-    fn abs(self) -> Self {
-        num_complex::Complex64::new(self.norm(), 0.0)
-    }
-
-    fn abs_sq(self) -> f64 {
-        self.norm_sqr()
-    }
-
-    fn is_nan(self) -> bool {
-        self.re.is_nan() || self.im.is_nan()
-    }
-}
-
-impl Scalar for num_complex::Complex32 {
-    fn abs(self) -> Self {
-        num_complex::Complex32::new(self.norm(), 0.0)
-    }
-
-    fn abs_sq(self) -> f64 {
-        self.norm_sqr() as f64
-    }
-
-    fn is_nan(self) -> bool {
-        self.re.is_nan() || self.im.is_nan()
-    }
-}
+// Scalar trait is now defined in crate::scalar module
 
 /// Calculates A * B^{-1} using Gaussian elimination for numerical stability.
 pub fn a_times_b_inv<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {

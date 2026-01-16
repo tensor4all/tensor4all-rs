@@ -36,4 +36,4 @@ pub use tensorci1::{crossinterpolate1, SweepStrategy, TCI1Options, TensorCI1};
 pub use tensorci2::{crossinterpolate2, PivotSearchStrategy, TCI2Options, TensorCI2};
 
 // Re-export Scalar trait from matrixci for downstream crates
-pub use matrixci::util::Scalar;
+pub use matrixci::Scalar;
