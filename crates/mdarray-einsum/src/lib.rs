@@ -43,6 +43,22 @@ use num_traits::{MulAdd, One, Zero};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+/// Either a borrowed view or an owned tensor.
+/// Used to avoid unnecessary copies during contraction.
+enum TensorRef<'a, T, L: Layout> {
+    Borrowed(&'a Slice<T, DynRank, L>),
+    Owned(Tensor<T, DynRank>),
+}
+
+impl<'a, T: Clone, L: Layout> TensorRef<'a, T, L> {
+    fn to_tensor(&self) -> Tensor<T, DynRank> {
+        match self {
+            TensorRef::Borrowed(s) => s.to_tensor(),
+            TensorRef::Owned(t) => t.clone(),
+        }
+    }
+}
+
 use mdarray_linalg::matmul::MatMul;
 
 /// Axis ID trait - any type that can be used as an axis identifier.
@@ -166,10 +182,11 @@ where
     let input_ids: Vec<Vec<ID>> = inputs.iter().map(|(ids, _)| ids.to_vec()).collect();
     let path = hyperedge_optimizer::optimize_hyperedge_greedy(&input_ids, output_ids, sizes);
 
-    // Execute the path
-    let mut operands: Vec<(Vec<ID>, Tensor<T, DynRank>)> = inputs
+    // Execute the path using TensorRef to avoid unnecessary copies of input tensors
+    // Borrowed = original input view, Owned = intermediate result
+    let mut operands: Vec<(Vec<ID>, TensorRef<'_, T, L>)> = inputs
         .iter()
-        .map(|(ids, t)| (ids.to_vec(), t.to_tensor()))
+        .map(|(ids, t)| (ids.to_vec(), TensorRef::Borrowed(*t)))
         .collect();
 
     for step in &path.steps {
@@ -181,44 +198,54 @@ where
             let (ids_b, tensor_b) = operands.remove(j);
             let (ids_a, tensor_a) = operands.remove(i);
 
+            // Convert to owned tensors for sumproduct_pair
+            let tensor_a_owned = tensor_a.to_tensor();
+            let tensor_b_owned = tensor_b.to_tensor();
+
             let result = sumproduct_pair::sumproduct_pair(
                 backend,
-                (&ids_a, &tensor_a),
-                (&ids_b, &tensor_b),
+                (&ids_a, &tensor_a_owned),
+                (&ids_b, &tensor_b_owned),
                 &step.output_ids,
             );
 
-            operands.push((step.output_ids.clone(), result));
+            operands.push((step.output_ids.clone(), TensorRef::Owned(result)));
         } else {
             // Multi-tensor contraction (hyperedge case)
             // Collect all tensors being contracted
             let mut indices: Vec<usize> = step.operand_indices.clone();
             indices.sort_by(|a, b| b.cmp(a)); // Sort descending for safe removal
 
-            let contracted_tensors: Vec<(Vec<ID>, Tensor<T, DynRank>)> = indices
+            let contracted_tensors: Vec<(Vec<ID>, TensorRef<'_, T, L>)> = indices
                 .iter()
                 .map(|&i| operands.remove(i))
                 .collect();
 
-            // Build input for multi_contract
-            let tensor_refs: Vec<(&[ID], &mdarray::Slice<T, DynRank, mdarray::Dense>)> = contracted_tensors
-                .iter()
-                .map(|(ids, t)| (ids.as_slice(), t.as_ref()))
-                .collect();
-
             if let Some(contracted_idx) = &step.contracted_index {
+                // Convert to owned for multi_contract (needs Dense layout)
+                let owned_tensors: Vec<(Vec<ID>, Tensor<T, DynRank>)> = contracted_tensors
+                    .into_iter()
+                    .map(|(ids, t)| (ids, t.to_tensor()))
+                    .collect();
+
+                let tensor_refs: Vec<(&[ID], &mdarray::Slice<T, DynRank, mdarray::Dense>)> =
+                    owned_tensors
+                        .iter()
+                        .map(|(ids, t)| (ids.as_slice(), t.as_ref()))
+                        .collect();
+
                 let result = multi_contract::multi_contract(
                     backend,
                     &tensor_refs,
                     contracted_idx,
                     &step.output_ids,
                 );
-                operands.push((step.output_ids.clone(), result));
+                operands.push((step.output_ids.clone(), TensorRef::Owned(result)));
             } else {
                 // Pure outer product case - chain pairwise
                 // This shouldn't happen for hyperedge case, but handle it
                 let mut result_ids = contracted_tensors[0].0.clone();
-                let mut result = contracted_tensors[0].1.clone();
+                let mut result: Tensor<T, DynRank> = contracted_tensors[0].1.to_tensor();
 
                 for (ids, tensor) in contracted_tensors.into_iter().skip(1) {
                     let mut new_output: Vec<ID> = result_ids.clone();
@@ -227,22 +254,23 @@ where
                             new_output.push(id.clone());
                         }
                     }
+                    let tensor_owned = tensor.to_tensor();
                     result = sumproduct_pair::sumproduct_pair(
                         backend,
                         (&result_ids, &result),
-                        (&ids, &tensor),
+                        (&ids, &tensor_owned),
                         &new_output,
                     );
                     result_ids = new_output;
                 }
-                operands.push((step.output_ids.clone(), result));
+                operands.push((step.output_ids.clone(), TensorRef::Owned(result)));
             }
         }
     }
 
     assert_eq!(operands.len(), 1, "Contraction incomplete");
     let (final_ids, final_tensor) = operands.pop().unwrap();
-    permute_to_output(&final_ids, final_tensor, output_ids)
+    permute_to_output(&final_ids, final_tensor.to_tensor(), output_ids)
 }
 
 /// Execute a NestedEinsum tree recursively.
