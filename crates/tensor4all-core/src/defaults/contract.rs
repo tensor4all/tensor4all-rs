@@ -29,10 +29,12 @@ use num_complex::Complex64;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
 use std::sync::Arc;
-use tensor4all_tensorbackend::mdarray;
-use tensor4all_tensorbackend::mdarray::{DynRank, Tensor};
+use tensor4all_tensorbackend::mdarray::{Dense, DynRank, Slice, Tensor};
 
 use crate::defaults::{DynId, DynIndex, TensorComponent, TensorData, TensorDynLen};
+
+/// Type alias for einsum input references (to satisfy clippy type_complexity).
+type EinsumInput<'a, T> = (&'a [usize], &'a Slice<T, DynRank, Dense>);
 use crate::index_like::IndexLike;
 use crate::storage::{DenseStorageC64, DenseStorageF64, Storage};
 use crate::tensor_like::AllowedPairs;
@@ -207,8 +209,9 @@ impl AxisUnionFind {
 
     /// Add an ID to the structure (as its own set).
     pub fn make_set(&mut self, id: DynId) {
-        if !self.parent.contains_key(&id) {
-            self.parent.insert(id, id);
+        use std::collections::hash_map::Entry;
+        if let Entry::Vacant(e) = self.parent.entry(id) {
+            e.insert(id);
             self.rank.insert(id, 0);
         }
     }
@@ -369,8 +372,6 @@ fn contract_multi_impl(
     allowed: AllowedPairs<'_>,
     _skip_connectivity_check: bool,
 ) -> Result<TensorDynLen> {
-    use tensor4all_tensorbackend::mdarray::Dense;
-
     // 1. Build union-find from Diag tensors to unify diagonal axes
     let mut diag_uf = build_diag_union(tensors);
 
@@ -457,7 +458,7 @@ fn contract_multi_impl(
         // Mixed or all C64: use C64 einsum
         let c64_tensors: Vec<Tensor<Complex64, DynRank>> =
             typed_tensors.iter().map(|t| t.to_c64()).collect();
-        let inputs: Vec<(&[usize], &mdarray::Slice<Complex64, DynRank, Dense>)> = einsum_ids
+        let inputs: Vec<EinsumInput<Complex64>> = einsum_ids
             .iter()
             .zip(c64_tensors.iter())
             .map(|(ids, tensor)| (ids.as_slice(), tensor.as_ref()))
@@ -470,7 +471,7 @@ fn contract_multi_impl(
             .iter()
             .map(|t| t.as_f64().expect("Expected F64 tensor"))
             .collect();
-        let inputs: Vec<(&[usize], &mdarray::Slice<f64, DynRank, Dense>)> = einsum_ids
+        let inputs: Vec<EinsumInput<f64>> = einsum_ids
             .iter()
             .zip(f64_tensors.iter())
             .map(|(ids, tensor)| (ids.as_slice(), tensor.as_ref()))

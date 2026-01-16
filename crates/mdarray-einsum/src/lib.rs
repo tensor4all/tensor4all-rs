@@ -50,6 +50,9 @@ use num_traits::{MulAdd, One, Zero};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+/// Type alias for tensor references with axis IDs (to satisfy clippy type_complexity).
+type TensorRefWithIds<'a, ID, T, L> = (&'a [ID], &'a Slice<T, DynRank, L>);
+
 /// Either a borrowed view or an owned tensor.
 /// Used to avoid unnecessary copies during contraction.
 enum TensorRef<'a, T, L: Layout> {
@@ -131,7 +134,7 @@ where
 
     if all_borrowed {
         // All have same Layout L, can call multi_contract directly
-        let refs: Vec<(&[ID], &Slice<T, DynRank, L>)> = inputs
+        let refs: Vec<TensorRefWithIds<ID, T, L>> = inputs
             .iter()
             .map(|(ids, r)| match r {
                 TensorRef::Borrowed(s) => (ids.as_slice(), *s),
@@ -151,7 +154,7 @@ where
                 (ids.clone(), t)
             })
             .collect();
-        let refs: Vec<(&[ID], &Slice<T, DynRank, mdarray::Dense>)> = owned
+        let refs: Vec<TensorRefWithIds<ID, T, mdarray::Dense>> = owned
             .iter()
             .map(|(ids, t)| (ids.as_slice(), t.as_ref()))
             .collect();

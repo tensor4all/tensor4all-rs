@@ -23,7 +23,7 @@ pub struct ContractionStep<ID> {
 /// The steps are returned in execution order (post-order traversal).
 fn nested_to_steps<L: Label + Clone>(
     nested: &NestedEinsum<L>,
-    input_labels: &[Vec<L>],
+    _input_labels: &[Vec<L>],
     current_idx: &mut usize,
     steps: &mut Vec<ContractionStep<L>>,
     tensor_map: &mut HashMap<usize, usize>, // original tensor index -> current operand index
@@ -39,7 +39,7 @@ fn nested_to_steps<L: Label + Clone>(
             // Process children first
             let mut child_indices = Vec::with_capacity(args.len());
             for arg in args {
-                let idx = nested_to_steps(arg, input_labels, current_idx, steps, tensor_map);
+                let idx = nested_to_steps(arg, _input_labels, current_idx, steps, tensor_map);
                 child_indices.push(idx);
             }
 

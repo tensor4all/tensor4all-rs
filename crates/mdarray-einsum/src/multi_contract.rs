@@ -17,6 +17,9 @@ use num_complex::ComplexFloat;
 use num_traits::{MulAdd, One, Zero};
 use std::collections::{HashMap, HashSet};
 
+/// Type alias for tensor references with axis IDs (to satisfy clippy type_complexity).
+type TensorRefWithIds<'a, ID, T, L> = (&'a [ID], &'a Slice<T, DynRank, L>);
+
 /// Contract multiple tensors sharing a common index (hyperedge contraction).
 ///
 /// This uses batched GEMM by treating the hyperedge index as a batch dimension.
@@ -33,7 +36,7 @@ use std::collections::{HashMap, HashSet};
 /// Contracted tensor with axes ordered according to output_ids
 pub fn multi_contract<T, ID, L>(
     backend: &impl MatMul<T>,
-    inputs: &[(&[ID], &Slice<T, DynRank, L>)],
+    inputs: &[TensorRefWithIds<ID, T, L>],
     contracted_index: &ID,
     output_ids: &[ID],
 ) -> Tensor<T, DynRank>
@@ -108,7 +111,7 @@ where
 /// but uses naive element-wise computation. Primarily for testing.
 #[allow(dead_code)]
 pub fn multi_contract_naive<T, ID, L>(
-    inputs: &[(&[ID], &Slice<T, DynRank, L>)],
+    inputs: &[TensorRefWithIds<ID, T, L>],
     contracted_index: &ID,
     output_ids: &[ID],
 ) -> Tensor<T, DynRank>
@@ -191,7 +194,7 @@ where
 /// For each contracted index, we use `multi_contract` to handle it efficiently.
 pub fn multi_contract_general<T, ID, L>(
     backend: &impl MatMul<T>,
-    inputs: &[(&[ID], &Slice<T, DynRank, L>)],
+    inputs: &[TensorRefWithIds<ID, T, L>],
     contracted_indices: &[ID],
     output_ids: &[ID],
 ) -> Tensor<T, DynRank>
@@ -270,7 +273,7 @@ where
         }
 
         // Build refs for multi_contract
-        let tensor_refs: Vec<(&[ID], &Slice<T, DynRank, mdarray::Dense>)> = contracted_tensors
+        let tensor_refs: Vec<TensorRefWithIds<ID, T, mdarray::Dense>> = contracted_tensors
             .iter()
             .map(|(ids, t)| (ids.as_slice(), t.as_ref()))
             .collect();
@@ -730,7 +733,7 @@ mod tests {
         );
 
         // Compute expected result manually
-        let mut expected = vec![0.0; 2 * 2 * 3];
+        let mut expected = [0.0; 2 * 2 * 3];
         for i in 0..2 {
             for k in 0..2 {
                 for l in 0..3 {

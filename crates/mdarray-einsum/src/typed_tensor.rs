@@ -4,8 +4,11 @@
 //! allowing einsum to accept mixed-type inputs and automatically promote to Complex64
 //! when necessary.
 
-use mdarray::{DynRank, Tensor};
+use mdarray::{DynRank, Slice, Tensor};
 use num_complex::Complex64;
+
+/// Type alias for tensor references with axis IDs (to satisfy clippy type_complexity).
+type TensorRefWithIds<'a, ID, T> = (&'a [ID], &'a Slice<T, DynRank, mdarray::Dense>);
 
 /// Enum wrapping either f64 or Complex64 tensor.
 #[derive(Debug, Clone)]
@@ -127,7 +130,7 @@ where
 
     if all_f64 {
         // All inputs are F64 - perform F64 einsum
-        let f64_inputs: Vec<(&[ID], &mdarray::Slice<f64, DynRank, mdarray::Dense>)> = inputs
+        let f64_inputs: Vec<TensorRefWithIds<ID, f64>> = inputs
             .iter()
             .map(|(ids, t)| {
                 let tensor_ref = t.as_f64().expect("Expected F64 tensor");
@@ -140,7 +143,7 @@ where
         // Mixed types - promote all to C64
         let c64_tensors: Vec<Tensor<Complex64, DynRank>> =
             inputs.iter().map(|(_, t)| t.to_c64()).collect();
-        let c64_inputs: Vec<(&[ID], &mdarray::Slice<Complex64, DynRank, mdarray::Dense>)> = inputs
+        let c64_inputs: Vec<TensorRefWithIds<ID, Complex64>> = inputs
             .iter()
             .zip(c64_tensors.iter())
             .map(|((ids, _), tensor)| (*ids, tensor.as_ref()))
@@ -179,7 +182,7 @@ where
 
     if all_f64 {
         // All inputs are F64 - perform F64 einsum
-        let f64_inputs: Vec<(&[ID], &mdarray::Slice<f64, DynRank, mdarray::Dense>)> = inputs
+        let f64_inputs: Vec<TensorRefWithIds<ID, f64>> = inputs
             .iter()
             .map(|(ids, t)| {
                 let tensor_ref = t.as_f64().expect("Expected F64 tensor");
@@ -192,7 +195,7 @@ where
         // Mixed types - promote all to C64
         let c64_tensors: Vec<Tensor<Complex64, DynRank>> =
             inputs.iter().map(|(_, t)| t.to_c64()).collect();
-        let c64_inputs: Vec<(&[ID], &mdarray::Slice<Complex64, DynRank, mdarray::Dense>)> = inputs
+        let c64_inputs: Vec<TensorRefWithIds<ID, Complex64>> = inputs
             .iter()
             .zip(c64_tensors.iter())
             .map(|((ids, _), tensor)| (*ids, tensor.as_ref()))
@@ -252,8 +255,8 @@ mod tests {
         let f64_tensor = TypedTensor::from_f64(tensor![1.0].into_dyn());
         let c64_tensor = TypedTensor::from_c64(tensor![Complex64::new(1.0, 0.0)].into_dyn());
 
-        assert!(!needs_c64_promotion(&[f64_tensor.clone()]));
-        assert!(needs_c64_promotion(&[c64_tensor.clone()]));
+        assert!(!needs_c64_promotion(std::slice::from_ref(&f64_tensor)));
+        assert!(needs_c64_promotion(std::slice::from_ref(&c64_tensor)));
         assert!(needs_c64_promotion(&[f64_tensor, c64_tensor]));
     }
 }

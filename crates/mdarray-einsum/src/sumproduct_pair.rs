@@ -170,9 +170,8 @@ where
 
     let right_permuted = if right_perm.len() == right_ids.len() && !right_perm.is_empty() {
         right_tensor.permute(right_perm.clone()).to_tensor()
-    } else if right_ids.is_empty() {
-        right_tensor.to_tensor()
     } else {
+        // Both empty and non-matching cases: just copy the tensor
         right_tensor.to_tensor()
     };
 
@@ -272,7 +271,7 @@ where
     let trace_axes: Vec<usize> = ids
         .iter()
         .enumerate()
-        .filter(|(_, id)| trace_ids.iter().any(|t| *t == *id))
+        .filter(|(_, id)| trace_ids.contains(id))
         .map(|(i, _)| i)
         .collect();
 
