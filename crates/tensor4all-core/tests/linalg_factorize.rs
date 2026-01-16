@@ -17,7 +17,10 @@ fn create_test_matrix() -> TensorDynLen {
     let j: DynIndex = Index::new_dyn(3);
 
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data, &[2, 3])));
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+        data,
+        &[2, 3],
+    )));
 
     TensorDynLen::new(vec![i, j], vec![2, 3], storage)
 }
@@ -29,7 +32,10 @@ fn create_rank3_tensor() -> TensorDynLen {
     let k: DynIndex = Index::new_dyn(2);
 
     let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data, &[2, 3, 2])));
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+        data,
+        &[2, 3, 2],
+    )));
 
     TensorDynLen::new(vec![i, j, k], vec![2, 3, 2], storage)
 }
@@ -232,7 +238,10 @@ fn test_diag_dense_contraction_svd_internals() {
     let j: DynIndex = Index::new_dyn(3);
 
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data, &[2, 3])));
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+        data,
+        &[2, 3],
+    )));
 
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
 

@@ -785,7 +785,10 @@ pub trait DenseStorageFactory {
 
 impl DenseStorageFactory for f64 {
     fn new_dense(size: usize) -> Storage {
-        Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; size], &[size]))
+        Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![0.0; size],
+            &[size],
+        ))
     }
 
     fn new_dense_with_shape(dims: &[usize]) -> Storage {
@@ -846,7 +849,10 @@ pub use crate::any_scalar::AnyScalar;
 impl Storage {
     /// Create a new 1D zero-initialized DenseF64 storage with the given size.
     pub fn new_dense_f64(size: usize) -> Self {
-        Self::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; size], &[size]))
+        Self::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![0.0; size],
+            &[size],
+        ))
     }
 
     /// Create a new 1D zero-initialized DenseC64 storage with the given size.
@@ -911,12 +917,14 @@ impl Storage {
                 // Clone preserves shape
                 Storage::DenseC64(v.clone())
             }
-            Storage::DiagF64(d) => {
-                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(d.to_dense_vec(dims), dims))
-            }
-            Storage::DiagC64(d) => {
-                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(d.to_dense_vec(dims), dims))
-            }
+            Storage::DiagF64(d) => Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                d.to_dense_vec(dims),
+                dims,
+            )),
+            Storage::DiagC64(d) => Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+                d.to_dense_vec(dims),
+                dims,
+            )),
         }
     }
 
@@ -965,7 +973,10 @@ impl Storage {
                 // For real storage, imaginary part is zero, preserve shape
                 let d = v.dims();
                 let total_size: usize = d.iter().product();
-                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; total_size], &d))
+                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                    vec![0.0; total_size],
+                    &d,
+                ))
             }
             Storage::DiagF64(_) => {
                 // For real diagonal storage, imaginary part is zero
@@ -1110,7 +1121,9 @@ impl Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x + y)
                     .collect();
-                Ok(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(sum_vec, &dims)))
+                Ok(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                    sum_vec, &dims,
+                )))
             }
             (Storage::DenseC64(a), Storage::DenseC64(b)) => {
                 if a.len() != b.len() {
@@ -1127,7 +1140,9 @@ impl Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x + y)
                     .collect();
-                Ok(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(sum_vec, &dims)))
+                Ok(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+                    sum_vec, &dims,
+                )))
             }
             (Storage::DiagF64(a), Storage::DiagF64(b)) => {
                 if a.len() != b.len() {
@@ -1189,7 +1204,9 @@ impl Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x - y)
                     .collect();
-                Ok(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(diff_vec, &dims)))
+                Ok(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                    diff_vec, &dims,
+                )))
             }
             (Storage::DenseC64(a), Storage::DenseC64(b)) => {
                 if a.len() != b.len() {
@@ -1206,7 +1223,9 @@ impl Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x - y)
                     .collect();
-                Ok(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(diff_vec, &dims)))
+                Ok(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+                    diff_vec, &dims,
+                )))
             }
             (Storage::DiagF64(a), Storage::DiagF64(b)) => {
                 if a.len() != b.len() {

@@ -196,12 +196,15 @@ fn test_contract_mixed_f64_c64() {
     // Create tensor B[j, k] with complex values: [[1+2i, 3+4i], [5+6i, 7+8i]]
     let indices_b = vec![j.clone(), k.clone()];
     let dims_b = vec![2, 2];
-    let storage_b = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(vec![
-        Complex64::new(1.0, 2.0),
-        Complex64::new(3.0, 4.0),
-        Complex64::new(5.0, 6.0),
-        Complex64::new(7.0, 8.0),
-    ], &dims_b));
+    let storage_b = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+        vec![
+            Complex64::new(1.0, 2.0),
+            Complex64::new(3.0, 4.0),
+            Complex64::new(5.0, 6.0),
+            Complex64::new(7.0, 8.0),
+        ],
+        &dims_b,
+    ));
     let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b.clone(), Arc::new(storage_b));
 
     // Contract along j: result should be C[i, k] (Complex64)
@@ -239,12 +242,15 @@ fn test_contract_mixed_c64_f64() {
     // Create tensor A[i, j] with complex values
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 2];
-    let storage_a = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(vec![
-        Complex64::new(1.0, 2.0),
-        Complex64::new(3.0, 4.0),
-        Complex64::new(5.0, 6.0),
-        Complex64::new(7.0, 8.0),
-    ], &dims_a));
+    let storage_a = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+        vec![
+            Complex64::new(1.0, 2.0),
+            Complex64::new(3.0, 4.0),
+            Complex64::new(5.0, 6.0),
+            Complex64::new(7.0, 8.0),
+        ],
+        &dims_a,
+    ));
     let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a.clone(), Arc::new(storage_a));
 
     // Create tensor B[j, k] with all 1.0 (f64)
@@ -485,13 +491,19 @@ fn test_tensordot_common_index_in_pairs_ok() {
     // Create tensor A[i, j]
     let indices_a = vec![i.clone(), j.clone()];
     let dims_a = vec![2, 3];
-    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &dims_a)));
+    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+        vec![1.0; 6],
+        &dims_a,
+    )));
     let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, dims_a.clone(), storage_a);
 
     // Create tensor B[j, k] where j is a common index with A
     let indices_b = vec![j.clone(), k.clone()];
     let dims_b = vec![3, 4];
-    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &dims_b)));
+    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+        vec![1.0; 12],
+        &dims_b,
+    )));
     let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b.clone(), storage_b);
 
     // Contract j with j - this should work because the common index is in pairs

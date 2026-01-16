@@ -316,8 +316,7 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
 
         // Create storage
         let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data_vec,
-            &dims_vec,
+            data_vec, &dims_vec,
         )));
 
         // Create tensor
@@ -387,8 +386,7 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
 
         // Create storage
         let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            data_vec,
-            &dims_vec,
+            data_vec, &dims_vec,
         )));
 
         // Create tensor

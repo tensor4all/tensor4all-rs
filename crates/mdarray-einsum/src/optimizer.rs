@@ -96,7 +96,13 @@ pub fn optimize_greedy<ID: AxisId + Label>(
     let mut current_idx = 0;
     let mut tensor_map = HashMap::new();
 
-    nested_to_steps(&nested, input_ids, &mut current_idx, &mut steps, &mut tensor_map);
+    nested_to_steps(
+        &nested,
+        input_ids,
+        &mut current_idx,
+        &mut steps,
+        &mut tensor_map,
+    );
 
     Some(steps)
 }
@@ -126,8 +132,7 @@ mod tests {
         // ij,jk->ik
         let input_ids = vec![vec!['i', 'j'], vec!['j', 'k']];
         let output_ids = vec!['i', 'k'];
-        let sizes: HashMap<char, usize> =
-            [('i', 10), ('j', 20), ('k', 10)].into_iter().collect();
+        let sizes: HashMap<char, usize> = [('i', 10), ('j', 20), ('k', 10)].into_iter().collect();
 
         let steps = optimize_greedy(&input_ids, &output_ids, &sizes);
         assert!(steps.is_some());

@@ -178,9 +178,15 @@ where
 
     // Reshape to 3D for batched matmul
     let left_dyn = left_permuted.into_dyn();
-    let left_reshaped = left_dyn.reshape([lro_size, lo_size, sum_size]).to_tensor().into_dyn();
+    let left_reshaped = left_dyn
+        .reshape([lro_size, lo_size, sum_size])
+        .to_tensor()
+        .into_dyn();
     let right_dyn = right_permuted.into_dyn();
-    let right_reshaped = right_dyn.reshape([lro_size, sum_size, ro_size]).to_tensor().into_dyn();
+    let right_reshaped = right_dyn
+        .reshape([lro_size, sum_size, ro_size])
+        .to_tensor()
+        .into_dyn();
 
     // Batched matrix multiplication (loop for now)
     let result_3d = batched_matmul(backend, &left_reshaped, &right_reshaped);
@@ -221,7 +227,12 @@ where
     let result_expanded = result_3d.reshape(intermediate_shape);
 
     // Build permutation to match output order
-    let intermediate_ids: Vec<&ID> = lro.iter().chain(lo.iter()).chain(ro.iter()).copied().collect();
+    let intermediate_ids: Vec<&ID> = lro
+        .iter()
+        .chain(lo.iter())
+        .chain(ro.iter())
+        .copied()
+        .collect();
 
     let output_perm: Vec<usize> = output_ids
         .iter()
@@ -365,7 +376,9 @@ where
         }
     }
 
-    Tensor::from(result_data).into_shape([batch, m, n]).into_dyn()
+    Tensor::from(result_data)
+        .into_shape([batch, m, n])
+        .into_dyn()
 }
 
 /// Extract a 2D slice from a 3D tensor at batch index `bi`.
@@ -397,12 +410,7 @@ mod tests {
         let a = tensor![[1.0, 2.0], [3.0, 4.0]].into_dyn();
         let b = tensor![[5.0, 6.0], [7.0, 8.0]].into_dyn();
 
-        let result = sumproduct_pair(
-            &Naive,
-            (&[0u32, 1], &a),
-            (&[1u32, 2], &b),
-            &[0, 2],
-        );
+        let result = sumproduct_pair(&Naive, (&[0u32, 1], &a), (&[1u32, 2], &b), &[0, 2]);
 
         assert_relative_eq!(result[[0, 0]], 19.0, epsilon = 1e-10);
         assert_relative_eq!(result[[0, 1]], 22.0, epsilon = 1e-10);
@@ -446,12 +454,7 @@ mod tests {
         let a = tensor![[[1.0, 0.0], [0.0, 1.0]], [[2.0, 0.0], [0.0, 2.0]]].into_dyn();
         let b = tensor![[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]].into_dyn();
 
-        let result = sumproduct_pair(
-            &Naive,
-            (&[0u32, 1, 2], &a),
-            (&[0u32, 2, 3], &b),
-            &[0, 1, 3],
-        );
+        let result = sumproduct_pair(&Naive, (&[0u32, 1, 2], &a), (&[0u32, 2, 3], &b), &[0, 1, 3]);
 
         // Batch 0: I @ [[1,2],[3,4]] = [[1,2],[3,4]]
         // Batch 1: 2I @ [[5,6],[7,8]] = [[10,12],[14,16]]

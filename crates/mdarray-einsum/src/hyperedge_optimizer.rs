@@ -153,7 +153,10 @@ fn find_smallest_pair<ID: AxisId>(
         .iter()
         .enumerate()
         .map(|(i, ids)| {
-            let size: usize = ids.iter().map(|id| sizes.get(id).copied().unwrap_or(1)).product();
+            let size: usize = ids
+                .iter()
+                .map(|id| sizes.get(id).copied().unwrap_or(1))
+                .product();
             (i, size)
         })
         .collect();
@@ -382,10 +385,9 @@ mod tests {
             vec!['k', 'm'],
         ];
         let output_ids = vec!['i', 'l', 'm'];
-        let sizes: HashMap<char, usize> =
-            [('i', 2), ('j', 2), ('k', 2), ('l', 2), ('m', 2)]
-                .into_iter()
-                .collect();
+        let sizes: HashMap<char, usize> = [('i', 2), ('j', 2), ('k', 2), ('l', 2), ('m', 2)]
+            .into_iter()
+            .collect();
 
         let path = optimize_hyperedge_greedy(&input_ids, &output_ids, &sizes);
 
@@ -479,8 +481,8 @@ mod tests {
         // j appears in tensors 0,1,2 (hyperedge)
         // k appears in tensors 1,2 (normal edge)
         let input_ids = vec![
-            vec!['i', 'j'],    // tensor 0
-            vec!['j', 'k'],    // tensor 1
+            vec!['i', 'j'],      // tensor 0
+            vec!['j', 'k'],      // tensor 1
             vec!['j', 'k', 'l'], // tensor 2
         ];
         let output_ids = vec!['i', 'l'];
@@ -499,11 +501,7 @@ mod tests {
     fn test_hyperedge_with_different_sizes() {
         // Test that optimizer considers sizes when choosing contraction order
         // ij,jk,jl->ikl where j has large dimension
-        let input_ids = vec![
-            vec!['i', 'j'],
-            vec!['j', 'k'],
-            vec!['j', 'l'],
-        ];
+        let input_ids = vec![vec!['i', 'j'], vec!['j', 'k'], vec!['j', 'l']];
         let output_ids = vec!['i', 'k', 'l'];
         let sizes: HashMap<char, usize> = [
             ('i', 10),

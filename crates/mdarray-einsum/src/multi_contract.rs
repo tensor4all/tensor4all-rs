@@ -179,7 +179,9 @@ where
     if output_shape.is_empty() {
         Tensor::from(output_data).into_shape([1]).into_dyn()
     } else {
-        Tensor::from(output_data).into_shape(output_shape).into_dyn()
+        Tensor::from(output_data)
+            .into_shape(output_shape)
+            .into_dyn()
     }
 }
 
@@ -324,7 +326,10 @@ where
         new_data.push(tensor[&full_idx[..]].clone());
     });
 
-    (new_ids, Tensor::from(new_data).into_shape(new_shape).into_dyn())
+    (
+        new_ids,
+        Tensor::from(new_data).into_shape(new_shape).into_dyn(),
+    )
 }
 
 /// Contract a list of tensors pairwise until one remains.
@@ -358,7 +363,8 @@ where
 
         // Compute intermediate output
         let remaining_ids: HashSet<&ID> = operands.iter().flat_map(|(ids, _)| ids.iter()).collect();
-        let intermediate_output = compute_intermediate_output(&ids_a, &ids_b, &output_set, &remaining_ids);
+        let intermediate_output =
+            compute_intermediate_output(&ids_a, &ids_b, &output_set, &remaining_ids);
 
         let result = sumproduct_pair(
             backend,
@@ -633,12 +639,8 @@ mod tests {
 
         let result = multi_contract(
             &Naive,
-            &[
-                (&[0u32, 1], &a),
-                (&[1u32, 2], &b),
-                (&[1u32, 3], &c),
-            ],
-            &1u32, // Contract over j
+            &[(&[0u32, 1], &a), (&[1u32, 2], &b), (&[1u32, 3], &c)],
+            &1u32,      // Contract over j
             &[0, 2, 3], // Output: i, k, l
         );
 
@@ -690,11 +692,7 @@ mod tests {
         // Two hyperedges: j appears in A,B,C and k appears in B,C,D
         // ij,jkl,jk,km->ilm
         let a = tensor![[1.0, 1.0]].into_dyn(); // 1x2 (i,j)
-        let b = tensor![
-            [[1.0, 1.0], [1.0, 1.0]],
-            [[1.0, 1.0], [1.0, 1.0]]
-        ]
-        .into_dyn(); // 2x2x2 (j,k,l)
+        let b = tensor![[[1.0, 1.0], [1.0, 1.0]], [[1.0, 1.0], [1.0, 1.0]]].into_dyn(); // 2x2x2 (j,k,l)
         let c = tensor![[1.0, 1.0], [1.0, 1.0]].into_dyn(); // 2x2 (j,k)
         let d = tensor![[1.0, 1.0], [1.0, 1.0]].into_dyn(); // 2x2 (k,m)
 
@@ -706,7 +704,7 @@ mod tests {
                 (&[1u32, 2], &c),
                 (&[2u32, 4], &d),
             ],
-            &[1, 2], // Contract j and k
+            &[1, 2],    // Contract j and k
             &[0, 3, 4], // Output: i, l, m
         );
 
@@ -726,11 +724,7 @@ mod tests {
 
         let result = multi_contract(
             &Naive,
-            &[
-                (&[0u32, 1], &a),
-                (&[1u32, 2], &b),
-                (&[1u32, 3], &c),
-            ],
+            &[(&[0u32, 1], &a), (&[1u32, 2], &b), (&[1u32, 3], &c)],
             &1u32,
             &[0, 2, 3],
         );
@@ -771,21 +765,13 @@ mod tests {
 
         let result_batched = multi_contract(
             &Naive,
-            &[
-                (&[0u32, 1], &a),
-                (&[1u32, 2], &b),
-                (&[1u32, 3], &c),
-            ],
+            &[(&[0u32, 1], &a), (&[1u32, 2], &b), (&[1u32, 3], &c)],
             &1u32,
             &[0, 2, 3],
         );
 
         let result_naive = multi_contract_naive(
-            &[
-                (&[0u32, 1], &a),
-                (&[1u32, 2], &b),
-                (&[1u32, 3], &c),
-            ],
+            &[(&[0u32, 1], &a), (&[1u32, 2], &b), (&[1u32, 3], &c)],
             &1u32,
             &[0, 2, 3],
         );
@@ -818,7 +804,7 @@ mod tests {
                 (&[1u32, 3], &b), // j=1, a=3
                 (&[2u32, 3], &c), // k=2, a=3
             ],
-            &3u32, // Contract over a
+            &3u32,      // Contract over a
             &[0, 1, 2], // Output: i, j, k
         );
 
@@ -851,7 +837,7 @@ mod tests {
                 (&[1u32, 3], &b), // j=1, a=3
                 (&[3u32, 2], &c), // a=3, k=2
             ],
-            &3u32, // Contract over a
+            &3u32,      // Contract over a
             &[0, 1, 2], // Output: i, j, k
         );
 

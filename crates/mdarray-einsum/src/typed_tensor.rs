@@ -55,7 +55,8 @@ impl TypedTensor {
     pub fn to_c64(&self) -> Tensor<Complex64, DynRank> {
         match self {
             Self::F64(t) => {
-                let data: Vec<Complex64> = t.iter().copied().map(|x| Complex64::new(x, 0.0)).collect();
+                let data: Vec<Complex64> =
+                    t.iter().copied().map(|x| Complex64::new(x, 0.0)).collect();
                 Tensor::from(data).into_shape(t.shape().dims()).into_dyn()
             }
             Self::C64(t) => t.clone(),
@@ -137,10 +138,8 @@ where
         TypedTensor::F64(result)
     } else {
         // Mixed types - promote all to C64
-        let c64_tensors: Vec<Tensor<Complex64, DynRank>> = inputs
-            .iter()
-            .map(|(_, t)| t.to_c64())
-            .collect();
+        let c64_tensors: Vec<Tensor<Complex64, DynRank>> =
+            inputs.iter().map(|(_, t)| t.to_c64()).collect();
         let c64_inputs: Vec<(&[ID], &mdarray::Slice<Complex64, DynRank, mdarray::Dense>)> = inputs
             .iter()
             .zip(c64_tensors.iter())
@@ -191,10 +190,8 @@ where
         TypedTensor::F64(result)
     } else {
         // Mixed types - promote all to C64
-        let c64_tensors: Vec<Tensor<Complex64, DynRank>> = inputs
-            .iter()
-            .map(|(_, t)| t.to_c64())
-            .collect();
+        let c64_tensors: Vec<Tensor<Complex64, DynRank>> =
+            inputs.iter().map(|(_, t)| t.to_c64()).collect();
         let c64_inputs: Vec<(&[ID], &mdarray::Slice<Complex64, DynRank, mdarray::Dense>)> = inputs
             .iter()
             .zip(c64_tensors.iter())

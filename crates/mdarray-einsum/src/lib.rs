@@ -32,10 +32,10 @@ mod sumproduct_pair;
 pub mod typed_tensor;
 
 pub use error::EinsumError;
-pub use typed_tensor::{einsum_typed, einsum_typed_simple, needs_c64_promotion, TypedTensor};
 pub use hyperedge_optimizer::{optimize_hyperedge_greedy, HyperedgePath, HyperedgeStep};
 pub use multi_contract::{multi_contract, multi_contract_general};
 pub use optimizer::{optimize_greedy, ContractionStep};
+pub use typed_tensor::{einsum_typed, einsum_typed_simple, needs_c64_promotion, TypedTensor};
 
 // Re-export omeco's Label trait for convenience
 pub use omeco::Label;
@@ -125,7 +125,9 @@ where
     L: Layout,
 {
     // Check if all are Borrowed (same Layout L)
-    let all_borrowed = inputs.iter().all(|(_, r)| matches!(r, TensorRef::Borrowed(_)));
+    let all_borrowed = inputs
+        .iter()
+        .all(|(_, r)| matches!(r, TensorRef::Borrowed(_)));
 
     if all_borrowed {
         // All have same Layout L, can call multi_contract directly
@@ -238,9 +240,9 @@ where
 
     if let Some(nested) = optimizer.optimize(&code, sizes) {
         // Execute the nested einsum tree directly
-        let tensors: Vec<Tensor<T, DynRank>> =
-            inputs.iter().map(|(_, t)| t.to_tensor()).collect();
-        let (result_ids, result) = execute_nested(backend, &nested, &input_ids, &tensors, output_ids);
+        let tensors: Vec<Tensor<T, DynRank>> = inputs.iter().map(|(_, t)| t.to_tensor()).collect();
+        let (result_ids, result) =
+            execute_nested(backend, &nested, &input_ids, &tensors, output_ids);
 
         // Check if omeco's output matches user's expected output
         if result_ids == output_ids.to_vec() {
@@ -308,10 +310,8 @@ where
             let mut indices: Vec<usize> = step.operand_indices.clone();
             indices.sort_by(|a, b| b.cmp(a)); // Sort descending for safe removal
 
-            let contracted_tensors: Vec<(Vec<ID>, TensorRef<'_, T, L>)> = indices
-                .iter()
-                .map(|&i| operands.remove(i))
-                .collect();
+            let contracted_tensors: Vec<(Vec<ID>, TensorRef<'_, T, L>)> =
+                indices.iter().map(|&i| operands.remove(i)).collect();
 
             if let Some(contracted_idx) = &step.contracted_index {
                 // For multi_contract, we need to build a uniform slice vector.
@@ -384,8 +384,10 @@ where
         omeco::NestedEinsum::Node { args, eins } => {
             assert_eq!(args.len(), 2, "Only binary contraction trees supported");
 
-            let (ids_a, tensor_a) = execute_nested(backend, &args[0], input_ids, tensors, _final_output_ids);
-            let (ids_b, tensor_b) = execute_nested(backend, &args[1], input_ids, tensors, _final_output_ids);
+            let (ids_a, tensor_a) =
+                execute_nested(backend, &args[0], input_ids, tensors, _final_output_ids);
+            let (ids_b, tensor_b) =
+                execute_nested(backend, &args[1], input_ids, tensors, _final_output_ids);
 
             // Always use omeco's computed output for proper intermediate contractions
             let result = sumproduct_pair::sumproduct_pair(
@@ -420,7 +422,10 @@ where
     ID: AxisId,
     L: Layout,
 {
-    assert!(!inputs.is_empty(), "einsum: must provide at least one operand");
+    assert!(
+        !inputs.is_empty(),
+        "einsum: must provide at least one operand"
+    );
 
     if inputs.len() == 1 {
         return einsum_single(backend, inputs[0], output_ids);
@@ -663,10 +668,12 @@ where
     let perm: Vec<usize> = output_ids
         .iter()
         .map(|id| {
-            current_ids
-                .iter()
-                .position(|x| x == id)
-                .unwrap_or_else(|| panic!("Output ID {:?} not found in result (current: {:?})", id, current_ids))
+            current_ids.iter().position(|x| x == id).unwrap_or_else(|| {
+                panic!(
+                    "Output ID {:?} not found in result (current: {:?})",
+                    id, current_ids
+                )
+            })
         })
         .collect();
 
@@ -686,11 +693,7 @@ mod tests {
         let a = tensor![[1.0, 2.0], [3.0, 4.0]].into_dyn();
         let b = tensor![[5.0, 6.0], [7.0, 8.0]].into_dyn();
 
-        let result = einsum(
-            &Naive,
-            &[(&[0u32, 1], &a), (&[1u32, 2], &b)],
-            &[0, 2],
-        );
+        let result = einsum(&Naive, &[(&[0u32, 1], &a), (&[1u32, 2], &b)], &[0, 2]);
 
         // Expected: [[19, 22], [43, 50]]
         let expected = tensor![[19.0, 22.0], [43.0, 50.0]].into_dyn();
@@ -857,9 +860,7 @@ mod tests {
         let b = tensor![[1.0, 2.0], [3.0, 4.0]].into_dyn(); // 2x2
         let c = tensor![[5.0, 6.0, 7.0], [8.0, 9.0, 10.0]].into_dyn(); // 2x3
 
-        let sizes: HashMap<u32, usize> = [(0, 2), (1, 2), (2, 2), (3, 3)]
-            .into_iter()
-            .collect();
+        let sizes: HashMap<u32, usize> = [(0, 2), (1, 2), (2, 2), (3, 3)].into_iter().collect();
 
         let result = einsum_optimized(
             &Naive,
@@ -922,9 +923,7 @@ mod tests {
         let b = tensor![[1.0, 2.0], [3.0, 4.0]].into_dyn(); // 2x2
         let c = tensor![[5.0, 6.0, 7.0], [8.0, 9.0, 10.0]].into_dyn(); // 2x3
 
-        let sizes: HashMap<u32, usize> = [(0, 2), (1, 2), (2, 2), (3, 3)]
-            .into_iter()
-            .collect();
+        let sizes: HashMap<u32, usize> = [(0, 2), (1, 2), (2, 2), (3, 3)].into_iter().collect();
 
         let result = einsum_optimized(
             &Naive,
@@ -958,11 +957,7 @@ mod tests {
         for i in 0..2 {
             for k in 0..2 {
                 for l in 0..3 {
-                    assert_relative_eq!(
-                        result[[i, k, l]],
-                        expected[[i, k, l]],
-                        epsilon = 1e-10
-                    );
+                    assert_relative_eq!(result[[i, k, l]], expected[[i, k, l]], epsilon = 1e-10);
                 }
             }
         }
@@ -1111,8 +1106,12 @@ mod scalar_output_tests {
     #[test]
     fn test_einsum_scalar_output() {
         // Two 1D tensors with the same index - should produce scalar
-        let a: Tensor<f64, DynRank> = Tensor::from(vec![1.0, 2.0]).into_shape([2].as_slice()).into_dyn();
-        let b: Tensor<f64, DynRank> = Tensor::from(vec![3.0, 4.0]).into_shape([2].as_slice()).into_dyn();
+        let a: Tensor<f64, DynRank> = Tensor::from(vec![1.0, 2.0])
+            .into_shape([2].as_slice())
+            .into_dyn();
+        let b: Tensor<f64, DynRank> = Tensor::from(vec![3.0, 4.0])
+            .into_shape([2].as_slice())
+            .into_dyn();
 
         let mut sizes = HashMap::new();
         sizes.insert(0_usize, 2);
@@ -1121,7 +1120,7 @@ mod scalar_output_tests {
         let result = einsum_optimized(
             &Naive,
             &[(&[0_usize][..], a.as_ref()), (&[0_usize][..], b.as_ref())],
-            &[],  // Empty output = scalar
+            &[], // Empty output = scalar
             &sizes,
         );
 
@@ -1131,5 +1130,176 @@ mod scalar_output_tests {
         // Scalar should have empty dims or [1]
         // Expected: 1*3 + 2*4 = 11
         assert!(result.rank() == 0 || (result.rank() == 1 && result.dim(0) == 1));
+    }
+}
+
+#[cfg(test)]
+mod omeco_hyperedge_tests {
+    use super::*;
+    use approx::assert_relative_eq;
+    use mdarray::tensor;
+    use omeco::{CodeOptimizer, EinCode as OmecoEinCode, GreedyMethod};
+    use std::collections::HashMap;
+
+    /// Test case from omeco author: ixs = [[1, 2], [2], [2, 3]], out = [1, 3]
+    /// This is: A[i,j], B[j], C[j,k] -> R[i,k] where j is a hyperedge (in 3 tensors)
+    ///
+    /// This test demonstrates that omeco's optimizer produces incorrect intermediate
+    /// outputs for hyperedge contractions. The first contraction contracts j too early.
+    #[test]
+    fn test_omeco_hyperedge_optimization_shows_bug() {
+        // Check that omeco's optimizer handles this case
+        let ixs = vec![
+            vec![1usize, 2], // tensor 0: indices i, j
+            vec![2usize],    // tensor 1: index j only
+            vec![2usize, 3], // tensor 2: indices j, k
+        ];
+        let out = vec![1usize, 3]; // output: i, k
+
+        let code = OmecoEinCode::new(ixs.clone(), out.clone());
+
+        let mut sizes = HashMap::new();
+        sizes.insert(1usize, 2); // i
+        sizes.insert(2usize, 3); // j
+        sizes.insert(3usize, 2); // k
+
+        let optimizer = GreedyMethod::default();
+
+        // Optimization succeeds (returns Some)
+        let nested = optimizer.optimize(&code, &sizes);
+        assert!(nested.is_some(), "omeco optimization should succeed");
+
+        let nested = nested.unwrap();
+        println!("NestedEinsum from omeco: {:#?}", nested);
+
+        // The tree is binary
+        assert!(nested.is_binary(), "Result should be a binary tree");
+        assert_eq!(nested.leaf_count(), 3, "Should have 3 leaves");
+
+        // BUG DEMONSTRATION:
+        // omeco produces: ((A[i,j] * B[j]) -> [i]) * C[j,k] -> [j,k,i]
+        // The first contraction has iy = [1] meaning j is contracted away!
+        // But j should be preserved because C[j,k] still needs it.
+        //
+        // Expected correct behavior would be:
+        // ((A[i,j] * B[j]) -> [i,j]) * C[j,k] -> [i,k]
+        //
+        // This is why we use hyperedge_optimizer instead of omeco for these cases.
+    }
+
+    /// Test actual computation with hyperedge case using our einsum
+    /// A[i,j] * B[j,k] * C[j,l] -> R[i,k,l] = sum_j (A[i,j] * B[j,k] * C[j,l])
+    ///
+    /// This uses einsum_optimized which correctly detects the hyperedge and
+    /// uses hyperedge_optimizer instead of omeco.
+    #[test]
+    fn test_hyperedge_2d_tensors() {
+        // A is 2x3 (i=2, j=3)
+        let a = tensor![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]].into_dyn();
+        // B is 3x2 (j=3, k=2)
+        let b = tensor![[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]].into_dyn();
+        // C is 3x2 (j=3, l=2)
+        let c = tensor![[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]].into_dyn();
+
+        let sizes: HashMap<usize, usize> = [(1, 2), (2, 3), (3, 2), (4, 2)].into_iter().collect();
+
+        // Use einsum_optimized (which will use hyperedge_optimizer for this case)
+        let result = einsum_optimized(
+            &Naive,
+            &[
+                (&[1usize, 2][..], a.as_ref()), // i, j
+                (&[2usize, 3][..], b.as_ref()), // j, k
+                (&[2usize, 4][..], c.as_ref()), // j, l
+            ],
+            &[1, 3, 4], // output: i, k, l
+            &sizes,
+        );
+
+        // Expected: R[i,k,l] = sum_j (A[i,j] * B[j,k] * C[j,l])
+        // R[0,0,0] = A[0,0]*B[0,0]*C[0,0] + A[0,1]*B[1,0]*C[1,0] + A[0,2]*B[2,0]*C[2,0]
+        //          = 1*1*10 + 2*3*30 + 3*5*50 = 10 + 180 + 750 = 940
+
+        assert_eq!(result.shape().dims(), &[2, 2, 2]);
+        assert_relative_eq!(result[[0, 0, 0]], 940.0, epsilon = 1e-10);
+    }
+
+    /// Compare optimized vs non-optimized for hyperedge case
+    #[test]
+    fn test_hyperedge_optimized_vs_naive() {
+        let a = tensor![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]].into_dyn();
+        let b = tensor![[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]].into_dyn();
+        let c = tensor![[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]].into_dyn();
+
+        let sizes: HashMap<usize, usize> = [(1, 2), (2, 3), (3, 2), (4, 2)].into_iter().collect();
+
+        // Non-optimized (left-to-right)
+        let naive_result = einsum(
+            &Naive,
+            &[
+                (&[1usize, 2][..], a.as_ref()),
+                (&[2usize, 3][..], b.as_ref()),
+                (&[2usize, 4][..], c.as_ref()),
+            ],
+            &[1, 3, 4],
+        );
+
+        // Optimized (uses hyperedge_optimizer for this case)
+        let opt_result = einsum_optimized(
+            &Naive,
+            &[
+                (&[1usize, 2][..], a.as_ref()),
+                (&[2usize, 3][..], b.as_ref()),
+                (&[2usize, 4][..], c.as_ref()),
+            ],
+            &[1, 3, 4],
+            &sizes,
+        );
+
+        // Both should give the same result
+        assert_eq!(naive_result.shape().dims(), opt_result.shape().dims());
+        for i in 0..2 {
+            for k in 0..2 {
+                for l in 0..2 {
+                    assert_relative_eq!(
+                        naive_result[[i, k, l]],
+                        opt_result[[i, k, l]],
+                        epsilon = 1e-10
+                    );
+                }
+            }
+        }
+    }
+
+    /// Test the standard 2D hyperedge case: A[i,j], B[j,k], C[j,l] -> R[i,k,l]
+    /// This is the classic example where j appears in 3 tensors.
+    #[test]
+    fn test_standard_hyperedge_case() {
+        // A is 2x3 (i=2, j=3)
+        let a = tensor![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]].into_dyn();
+        // B is 3x2 (j=3, k=2)
+        let b = tensor![[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]].into_dyn();
+        // C is 3x2 (j=3, l=2)
+        let c = tensor![[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]].into_dyn();
+
+        let sizes: HashMap<usize, usize> = [(0, 2), (1, 3), (2, 2), (3, 2)].into_iter().collect();
+
+        // Use einsum_optimized
+        let result = einsum_optimized(
+            &Naive,
+            &[
+                (&[0usize, 1][..], a.as_ref()), // i, j
+                (&[1usize, 2][..], b.as_ref()), // j, k
+                (&[1usize, 3][..], c.as_ref()), // j, l
+            ],
+            &[0, 2, 3], // output: i, k, l
+            &sizes,
+        );
+
+        // Expected: R[i,k,l] = sum_j (A[i,j] * B[j,k] * C[j,l])
+        assert_eq!(result.shape().dims(), &[2, 2, 2]);
+
+        // R[0,0,0] = sum_j A[0,j]*B[j,0]*C[j,0]
+        //          = 1*1*1 + 2*3*3 + 3*5*5 = 1 + 18 + 75 = 94
+        assert_relative_eq!(result[[0, 0, 0]], 94.0, epsilon = 1e-10);
     }
 }

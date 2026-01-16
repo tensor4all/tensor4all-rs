@@ -324,12 +324,7 @@ pub fn build_diag_union(tensors: &[&TensorDynLen]) -> AxisUnionFind {
 pub fn remap_tensor_ids(tensors: &[&TensorDynLen], uf: &mut AxisUnionFind) -> Vec<Vec<DynId>> {
     tensors
         .iter()
-        .map(|t| {
-            t.indices
-                .iter()
-                .map(|idx| uf.find(*idx.id()))
-                .collect()
-        })
+        .map(|t| t.indices.iter().map(|idx| uf.find(*idx.id())).collect())
         .collect()
 }
 
@@ -729,12 +724,12 @@ fn remap_allowed_pairs(allowed: AllowedPairs<'_>, component: &[usize]) -> Remapp
 
             let remapped: Vec<(usize, usize)> = pairs
                 .iter()
-                .filter_map(|&(i, j)| {
-                    match (orig_to_local.get(&i), orig_to_local.get(&j)) {
+                .filter_map(
+                    |&(i, j)| match (orig_to_local.get(&i), orig_to_local.get(&j)) {
                         (Some(&li), Some(&lj)) => Some((li, lj)),
                         _ => None,
-                    }
-                })
+                    },
+                )
                 .collect();
 
             RemappedAllowedPairs::Specified(remapped)

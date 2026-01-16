@@ -245,8 +245,6 @@ fn test_replaceind_no_match() {
 
 #[test]
 fn test_replaceinds_basic() {
-    
-
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -275,8 +273,6 @@ fn test_replaceinds_basic() {
 
 #[test]
 fn test_replaceinds_partial() {
-    
-
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -301,8 +297,6 @@ fn test_replaceinds_partial() {
 #[test]
 #[should_panic(expected = "old_indices and new_indices must have the same length")]
 fn test_replaceinds_length_mismatch() {
-    
-
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let new_i = Index::new_dyn(2);
@@ -323,8 +317,6 @@ fn test_replaceinds_length_mismatch() {
 
 #[test]
 fn test_storage_conj_f64() {
-    
-
     let data = vec![1.0, 2.0, 3.0, 4.0];
     let storage = make_dense_f64(data.clone(), &[4]);
     let conj_storage = storage.conj();
@@ -340,8 +332,6 @@ fn test_storage_conj_f64() {
 
 #[test]
 fn test_storage_conj_c64() {
-    
-
     let data = vec![
         Complex64::new(1.0, 2.0),
         Complex64::new(3.0, -4.0),
@@ -365,8 +355,6 @@ fn test_storage_conj_c64() {
 
 #[test]
 fn test_storage_conj_diag_c64() {
-    
-
     let data = vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, -2.0)];
     let storage = Storage::DiagC64(DiagStorageC64::from_vec(data));
     let conj_storage = storage.conj();
@@ -382,8 +370,6 @@ fn test_storage_conj_diag_c64() {
 
 #[test]
 fn test_tensor_conj_f64() {
-    
-
     let i = Index::new_dyn(2);
     let data = vec![1.0, 2.0];
     let storage = Arc::new(make_dense_f64(data.clone(), &[2]));
@@ -406,8 +392,6 @@ fn test_tensor_conj_f64() {
 
 #[test]
 fn test_tensor_conj_c64() {
-    
-
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let data = vec![
@@ -451,8 +435,6 @@ fn test_tensor_conj_c64() {
 
 #[test]
 fn test_tensor_has_tensor_data() {
-    
-
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -475,7 +457,6 @@ fn test_tensor_has_tensor_data() {
 
 #[test]
 fn test_tensor_data_lazy_outer_product() {
-    
     use tensor4all_core::TensorData;
 
     let i = Index::new_dyn(2);
@@ -517,7 +498,6 @@ fn test_tensor_data_lazy_outer_product() {
 
 #[test]
 fn test_tensor_data_lazy_outer_product_with_permute() {
-    
     use tensor4all_core::TensorData;
 
     let i = Index::new_dyn(2);
