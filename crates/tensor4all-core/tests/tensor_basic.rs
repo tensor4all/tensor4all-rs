@@ -2,7 +2,7 @@ use num_complex::Complex64;
 use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64, DiagStorageC64};
-use tensor4all_core::{make_mut_storage, AnyScalar, DenseStorageFactory, Storage, TensorDynLen};
+use tensor4all_core::{AnyScalar, DenseStorageFactory, Storage, TensorDynLen};
 
 /// Helper to create DenseF64 storage with shape information
 fn make_dense_f64(data: Vec<f64>, dims: &[usize]) -> Storage {
