@@ -23,7 +23,6 @@ pub mod tensordynlen;
 
 // Contraction
 pub mod contract;
-pub mod contraction_opt;
 
 // Linear algebra modules
 pub mod direct_sum;
@@ -31,10 +30,9 @@ pub mod factorize;
 pub mod qr;
 pub mod svd;
 
-pub use contract::{contract_connected, contract_multi};
-pub use contraction_opt::{
-    build_diag_union, build_diag_union_from_components, build_diag_union_from_data,
-    collect_sizes, contract_multi_diag_aware, remap_output_ids, remap_tensor_ids, AxisUnionFind,
+pub use contract::{
+    build_diag_union, build_diag_union_from_components, build_diag_union_from_data, collect_sizes,
+    contract_connected, contract_multi, remap_output_ids, remap_tensor_ids, AxisUnionFind,
 };
 pub use index::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
 pub use tensor_data::{TensorComponent, TensorData};
