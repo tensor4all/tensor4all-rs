@@ -29,8 +29,10 @@ pub mod hyperedge_optimizer;
 mod multi_contract;
 pub mod optimizer;
 mod sumproduct_pair;
+pub mod typed_tensor;
 
 pub use error::EinsumError;
+pub use typed_tensor::{einsum_typed, einsum_typed_simple, needs_c64_promotion, TypedTensor};
 pub use hyperedge_optimizer::{optimize_hyperedge_greedy, HyperedgePath, HyperedgeStep};
 pub use multi_contract::{multi_contract, multi_contract_general};
 pub use optimizer::{optimize_greedy, ContractionStep};

@@ -21,15 +21,16 @@
 
 use crate::defaults::{DynId, DynIndex, TensorComponent, TensorData, TensorDynLen};
 use crate::index_like::IndexLike;
-use crate::storage::{DenseStorageC64, Storage};
+use crate::storage::{DenseStorageC64, DenseStorageF64, Storage};
 use crate::tensor_like::AllowedPairs;
 
 use anyhow::Result;
-use mdarray_einsum::{einsum_optimized, Naive};
+use mdarray_einsum::{einsum_optimized, Naive, TypedTensor};
 use num_complex::Complex64;
 use petgraph::unionfind::UnionFind;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tensor4all_tensorbackend::mdarray;
 use tensor4all_tensorbackend::mdarray::{DynRank, Tensor};
 
 /// Union-Find data structure for grouping axis IDs.
@@ -254,11 +255,14 @@ pub fn contract_multi_diag_aware(
 ///
 /// For Diag tensors, we pass them as 1D tensors (the diagonal elements) with
 /// a single hyperedge ID. The einsum hyperedge optimizer will handle them correctly.
+///
+/// This implementation preserves storage type: if all inputs are F64, the result
+/// is F64; if any input is C64, the result is C64.
 fn contract_multi_diag_aware_impl(
     tensors: &[&TensorDynLen],
     allowed: AllowedPairs<'_>,
 ) -> Result<TensorDynLen> {
-    use tensor4all_tensorbackend::mdarray::{Dense, Slice};
+    use tensor4all_tensorbackend::mdarray::Dense;
 
     // 1. Build union-find from Diag tensors to unify diagonal axes
     let mut diag_uf = build_diag_union(tensors);
@@ -323,11 +327,12 @@ fn contract_multi_diag_aware_impl(
         }
     }
 
-    // 6. Convert TensorDynLen to mdarray tensors
+    // 6. Convert TensorDynLen to TypedTensor, tracking if any input is C64
     //    - Diag storage: pass as 1D tensor (hyperedge representation)
     //    - Dense storage: pass as-is with original shape
-    let mut mdarray_tensors: Vec<Tensor<Complex64, DynRank>> = Vec::new();
+    let mut typed_tensors: Vec<TypedTensor> = Vec::new();
     let mut einsum_ids: Vec<Vec<usize>> = Vec::new();
+    let mut has_c64_input = false;
 
     for (tensor_idx, tensor) in tensors.iter().enumerate() {
         let storage = tensor.materialize_storage()?;
@@ -336,46 +341,74 @@ fn contract_multi_diag_aware_impl(
         if is_diag {
             // Diag tensor: extract diagonal as 1D tensor
             // All axes have the same internal ID (hyperedge)
-            let diag_data: Vec<Complex64> = match &*storage {
-                Storage::DiagC64(ds) => ds.as_slice().to_vec(),
-                Storage::DiagF64(ds) => ds.as_slice().iter().map(|&x| Complex64::new(x, 0.0)).collect(),
+            let typed = match &*storage {
+                Storage::DiagC64(ds) => {
+                    has_c64_input = true;
+                    let diag_len = ds.as_slice().len();
+                    let tensor_1d = Tensor::from(ds.as_slice().to_vec()).into_shape([diag_len].as_slice()).into_dyn();
+                    TypedTensor::C64(tensor_1d)
+                }
+                Storage::DiagF64(ds) => {
+                    let diag_len = ds.as_slice().len();
+                    let tensor_1d = Tensor::from(ds.as_slice().to_vec()).into_shape([diag_len].as_slice()).into_dyn();
+                    TypedTensor::F64(tensor_1d)
+                }
                 _ => return Err(anyhow::anyhow!("Expected Diag storage")),
             };
-            let diag_len = diag_data.len();
-            let tensor_1d = Tensor::from(diag_data).into_shape([diag_len].as_slice()).into_dyn();
-            mdarray_tensors.push(tensor_1d);
+            typed_tensors.push(typed);
 
             // Diag tensor with unified axes: use single hyperedge ID
             // All original axes map to the same internal ID
             let hyperedge_id = ixs[tensor_idx][0]; // All should be the same
             einsum_ids.push(vec![hyperedge_id]);
         } else {
-            // Dense tensor: convert to Complex64 and pass as-is
-            let tensor_data: Tensor<Complex64, DynRank> = match &*storage {
-                Storage::DenseC64(ds) => ds.tensor().clone(),
+            // Dense tensor
+            let typed = match &*storage {
+                Storage::DenseC64(ds) => {
+                    has_c64_input = true;
+                    TypedTensor::C64(ds.tensor().clone())
+                }
                 Storage::DenseF64(ds) => {
-                    let data: Vec<Complex64> = ds.as_slice().iter().map(|&x| Complex64::new(x, 0.0)).collect();
-                    Tensor::from(data).into_shape(tensor.dims.as_slice()).into_dyn()
+                    TypedTensor::F64(ds.tensor().clone())
                 }
                 _ => return Err(anyhow::anyhow!("Expected Dense storage")),
             };
-            mdarray_tensors.push(tensor_data);
+            typed_tensors.push(typed);
             einsum_ids.push(ixs[tensor_idx].clone());
         }
     }
 
-    // 6. Build einsum inputs: (&[ID], &Slice)
-    let inputs: Vec<(&[usize], &Slice<Complex64, DynRank, Dense>)> = einsum_ids
-        .iter()
-        .zip(mdarray_tensors.iter())
-        .map(|(ids, tensor)| (ids.as_slice(), tensor.as_ref()))
-        .collect();
-
-    // 7. Use mdarray-einsum with hyperedge support
-    let result_mdarray = einsum_optimized(&Naive, &inputs, &output, &sizes);
+    // 7. Perform einsum based on input types
+    let result_typed = if has_c64_input {
+        // Mixed or all C64: use C64 einsum
+        let c64_tensors: Vec<Tensor<Complex64, DynRank>> = typed_tensors
+            .iter()
+            .map(|t| t.to_c64())
+            .collect();
+        let inputs: Vec<(&[usize], &mdarray::Slice<Complex64, DynRank, Dense>)> = einsum_ids
+            .iter()
+            .zip(c64_tensors.iter())
+            .map(|(ids, tensor)| (ids.as_slice(), tensor.as_ref()))
+            .collect();
+        let result = einsum_optimized(&Naive, &inputs, &output, &sizes);
+        TypedTensor::C64(result)
+    } else {
+        // All F64: use F64 einsum
+        let f64_tensors: Vec<&Tensor<f64, DynRank>> = typed_tensors
+            .iter()
+            .map(|t| t.as_f64().expect("Expected F64 tensor"))
+            .collect();
+        let inputs: Vec<(&[usize], &mdarray::Slice<f64, DynRank, Dense>)> = einsum_ids
+            .iter()
+            .zip(f64_tensors.iter())
+            .map(|(ids, tensor)| (ids.as_slice(), tensor.as_ref()))
+            .collect();
+        let result = einsum_optimized(&Naive, &inputs, &output, &sizes);
+        TypedTensor::F64(result)
+    };
 
     // 8. Convert result back to TensorDynLen
-    let result_dims: Vec<usize> = result_mdarray.shape().dims().to_vec();
+    let result_dims: Vec<usize> = result_typed.dims().to_vec();
 
     // Build result indices from output internal IDs
     let restored_indices: Vec<DynIndex> = output
@@ -394,12 +427,17 @@ fn contract_multi_diag_aware_impl(
         (result_dims.clone(), restored_indices)
     };
 
-    // Create storage from result data
-    let result_data: Vec<Complex64> = result_mdarray.into_vec();
-    let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-        result_data,
-        &final_dims,
-    )));
+    // Create storage from result based on type
+    let storage = match result_typed {
+        TypedTensor::F64(t) => {
+            let data: Vec<f64> = t.into_vec();
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data, &final_dims)))
+        }
+        TypedTensor::C64(t) => {
+            let data: Vec<Complex64> = t.into_vec();
+            Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(data, &final_dims)))
+        }
+    };
 
     Ok(TensorDynLen::new(final_indices, final_dims, storage))
 }
