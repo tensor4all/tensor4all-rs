@@ -31,6 +31,8 @@ Read `docs/api/*.md` before source files. Only read source when API doc is insuf
 
 `cargo fmt` for formatting, `cargo clippy` for linting. Avoid `unwrap()`/`expect()` in library code.
 
+**Always run `cargo fmt --all` before committing changes.**
+
 ## Error Handling
 
 - `anyhow` for internal error handling and context
@@ -78,6 +80,16 @@ Truncation tolerance: support both `cutoff` (ITensors) and `rtol` (tensor4all-rs
 
 **Never push/create PR without user approval.**
 
+### Pre-PR Checks
+
+Before creating a PR, always run lint checks locally:
+
+```bash
+cargo fmt --all          # Format all code
+cargo clippy --workspace # Check for common issues
+cargo test --workspace   # Run all tests
+```
+
 | Change Type | Workflow |
 |-------------|----------|
 | Minor fixes | Branch + PR with auto-merge |
@@ -86,6 +98,7 @@ Truncation tolerance: support both `cutoff` (ITensors) and `rtol` (tensor4all-rs
 ```bash
 # Minor: branch workflow
 git checkout -b fix-name && git add -A && git commit -m "msg"
+cargo fmt --all && cargo clippy --workspace  # Lint before push
 git push -u origin fix-name
 gh pr create --base main --title "Title" --body "Desc"
 gh pr merge --auto --squash --delete-branch
