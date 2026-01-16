@@ -13,6 +13,7 @@ categories = ["science", "mathematics"]
 default = ["backend-faer"]
 backend-faer = ["mdarray-linalg-faer"]
 backend-lapack = ["mdarray-linalg-lapack"]
+backend-libtorch = ["tch"]
 
 [dependencies]
 num-complex.workspace = true
@@ -21,12 +22,14 @@ mdarray.workspace = true
 mdarray-linalg.workspace = true
 mdarray-linalg-faer = { workspace = true, optional = true }
 mdarray-linalg-lapack = { workspace = true, optional = true }
+mdarray-einsum = { path = "../mdarray-einsum" }
 faer.workspace = true
 faer-traits.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
+tch = { version = "0.22", optional = true }
 
 [dev-dependencies]
 approx.workspace = true

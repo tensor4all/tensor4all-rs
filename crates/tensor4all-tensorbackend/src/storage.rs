@@ -763,12 +763,19 @@ fn contract_dense_diag_impl<T: DenseScalar>(
 
 /// Storage backend for tensor data.
 /// Supports Dense and Diag storage for f64 and Complex64 element types.
+/// When `backend-libtorch` is enabled, also supports Torch storage for autograd.
 #[derive(Debug, Clone)]
 pub enum Storage {
     DenseF64(DenseStorageF64),
     DenseC64(DenseStorageC64),
     DiagF64(DiagStorageF64),
     DiagC64(DiagStorageC64),
+    /// Torch tensor storage for f64 (requires `backend-libtorch` feature)
+    #[cfg(feature = "backend-libtorch")]
+    TorchF64(crate::torch::TorchStorage<f64>),
+    /// Torch tensor storage for Complex64 (requires `backend-libtorch` feature)
+    #[cfg(feature = "backend-libtorch")]
+    TorchC64(crate::torch::TorchStorage<Complex64>),
 }
 
 /// Type-driven constructor for `Storage`.
@@ -828,6 +835,10 @@ impl SumFromStorage for f64 {
             Storage::DenseC64(v) => v.as_slice().iter().map(|z| z.re).sum(),
             Storage::DiagF64(v) => v.as_slice().iter().copied().sum(),
             Storage::DiagC64(v) => v.as_slice().iter().map(|z| z.re).sum(),
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchF64(v) => v.to_vec().iter().copied().sum(),
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchC64(v) => v.to_vec().iter().map(|z| z.re).sum(),
         }
     }
 }
@@ -839,6 +850,10 @@ impl SumFromStorage for Complex64 {
             Storage::DenseC64(v) => v.as_slice().iter().copied().sum(),
             Storage::DiagF64(v) => Complex64::new(v.as_slice().iter().copied().sum(), 0.0),
             Storage::DiagC64(v) => v.as_slice().iter().copied().sum(),
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchF64(v) => Complex64::new(v.to_vec().iter().copied().sum(), 0.0),
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchC64(v) => v.to_vec().iter().copied().sum(),
         }
     }
 }
@@ -878,6 +893,12 @@ impl Storage {
         matches!(self, Self::DiagF64(_) | Self::DiagC64(_))
     }
 
+    /// Check if this storage is a Torch storage type.
+    #[cfg(feature = "backend-libtorch")]
+    pub fn is_torch(&self) -> bool {
+        matches!(self, Self::TorchF64(_) | Self::TorchC64(_))
+    }
+
     /// Get the length of the storage (number of elements).
     pub fn len(&self) -> usize {
         match self {
@@ -885,12 +906,91 @@ impl Storage {
             Self::DenseC64(v) => v.len(),
             Self::DiagF64(v) => v.len(),
             Self::DiagC64(v) => v.len(),
+            #[cfg(feature = "backend-libtorch")]
+            Self::TorchF64(v) => v.len(),
+            #[cfg(feature = "backend-libtorch")]
+            Self::TorchC64(v) => v.len(),
         }
     }
 
     /// Check if the storage is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    // ========================================================================
+    // Autograd methods (only meaningful for Torch storage)
+    // ========================================================================
+
+    /// Check if this storage requires gradient computation.
+    ///
+    /// Returns `false` for non-Torch storage types.
+    #[cfg(feature = "backend-libtorch")]
+    pub fn requires_grad(&self) -> bool {
+        match self {
+            Self::TorchF64(v) => v.requires_grad(),
+            Self::TorchC64(v) => v.requires_grad(),
+            _ => false,
+        }
+    }
+
+    /// Set whether this storage requires gradient computation.
+    ///
+    /// # Errors
+    /// Returns an error for non-Torch storage types.
+    #[cfg(feature = "backend-libtorch")]
+    pub fn set_requires_grad(&mut self, requires_grad: bool) -> anyhow::Result<()> {
+        match self {
+            Self::TorchF64(v) => {
+                v.set_requires_grad(requires_grad);
+                Ok(())
+            }
+            Self::TorchC64(v) => {
+                v.set_requires_grad(requires_grad);
+                Ok(())
+            }
+            _ => anyhow::bail!("set_requires_grad is only supported for Torch storage"),
+        }
+    }
+
+    /// Get the gradient of this storage, if it exists.
+    ///
+    /// Returns `None` for non-Torch storage or if no gradient has been computed.
+    #[cfg(feature = "backend-libtorch")]
+    pub fn grad(&self) -> Option<Storage> {
+        match self {
+            Self::TorchF64(v) => v.grad().map(Storage::TorchF64),
+            Self::TorchC64(v) => v.grad().map(Storage::TorchC64),
+            _ => None,
+        }
+    }
+
+    /// Compute gradients by backpropagating from this storage.
+    ///
+    /// The storage must contain a scalar (single element).
+    ///
+    /// # Errors
+    /// Returns an error for non-Torch storage types or if the storage is not a scalar.
+    #[cfg(feature = "backend-libtorch")]
+    pub fn backward(&self) -> anyhow::Result<()> {
+        match self {
+            Self::TorchF64(v) => v.backward(),
+            Self::TorchC64(v) => v.backward(),
+            _ => anyhow::bail!("backward is only supported for Torch storage"),
+        }
+    }
+
+    /// Detach this storage from the computation graph.
+    ///
+    /// Returns a new storage that shares data but doesn't track gradients.
+    /// For non-Torch storage, returns a clone.
+    #[cfg(feature = "backend-libtorch")]
+    pub fn detach(&self) -> Storage {
+        match self {
+            Self::TorchF64(v) => Self::TorchF64(v.detach()),
+            Self::TorchC64(v) => Self::TorchC64(v.detach()),
+            _ => self.clone(),
+        }
     }
 
     /// Sum all elements as f64.
@@ -907,6 +1007,7 @@ impl Storage {
     /// For Diag storage, creates a Dense storage with diagonal elements set
     /// and off-diagonal elements as zero.
     /// For Dense storage, returns a copy (clone).
+    /// For Torch storage, converts to mdarray Dense storage.
     pub fn to_dense_storage(&self, dims: &[usize]) -> Storage {
         match self {
             Storage::DenseF64(v) => {
@@ -925,6 +1026,16 @@ impl Storage {
                 d.to_dense_vec(dims),
                 dims,
             )),
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchF64(v) => Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                v.to_vec(),
+                &v.dims(),
+            )),
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchC64(v) => Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+                v.to_vec(),
+                &v.dims(),
+            )),
         }
     }
 
@@ -939,6 +1050,10 @@ impl Storage {
             // For Diag storage, permute is trivial: data doesn't change, only index order changes
             Storage::DiagF64(v) => Storage::DiagF64(v.clone()),
             Storage::DiagC64(v) => Storage::DiagC64(v.clone()),
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchF64(v) => Storage::TorchF64(v.permute(perm)),
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchC64(v) => Storage::TorchC64(v.permute(perm)),
         }
     }
 
@@ -961,6 +1076,15 @@ impl Storage {
             Storage::DiagC64(d) => {
                 let real_vec: Vec<f64> = d.as_slice().iter().map(|z| z.re).collect();
                 Storage::DiagF64(DiagStorageF64::from_vec(real_vec))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchF64(v) => {
+                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(v.to_vec(), &v.dims()))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchC64(v) => {
+                let real_vec: Vec<f64> = v.to_vec().iter().map(|z| z.re).collect();
+                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(real_vec, &v.dims()))
             }
         }
     }
@@ -991,6 +1115,19 @@ impl Storage {
             Storage::DiagC64(d) => {
                 let imag_vec: Vec<f64> = d.as_slice().iter().map(|z| z.im).collect();
                 Storage::DiagF64(DiagStorageF64::from_vec(imag_vec))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchF64(v) => {
+                // For real storage, imaginary part is zero
+                let d = v.dims();
+                let total_size: usize = d.iter().product();
+                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; total_size], &d))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchC64(v) => {
+                let d = v.dims();
+                let imag_vec: Vec<f64> = v.to_vec().iter().map(|z| z.im).collect();
+                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(imag_vec, &d))
             }
         }
     }
@@ -1023,6 +1160,10 @@ impl Storage {
             Storage::DiagC64(d) => {
                 Storage::DiagC64(DiagStorageC64::from_vec(d.as_slice().to_vec()))
             }
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchF64(v) => Storage::TorchC64(v.to_complex()),
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchC64(v) => Storage::TorchC64(v.clone()),
         }
     }
 
@@ -1062,6 +1203,14 @@ impl Storage {
             Storage::DiagC64(d) => {
                 let conj_vec: Vec<Complex64> = d.as_slice().iter().map(|z| z.conj()).collect();
                 Storage::DiagC64(DiagStorageC64::from_vec(conj_vec))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchF64(v) => Storage::TorchF64(v.clone()),
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchC64(v) => {
+                // Use native torch conj() for efficiency and autograd compatibility
+                let conj_tensor = v.tensor().conj();
+                Storage::TorchC64(crate::torch::TorchStorage::from_tensor(conj_tensor))
             }
         }
     }
@@ -1330,6 +1479,142 @@ impl Storage {
                 let scaled: Vec<Complex64> = a.as_slice().iter().map(|&x| x * s).collect();
                 Storage::DiagC64(DiagStorageC64::from_vec(scaled))
             }
+            // Torch variants - convert to mdarray, scale, keep as mdarray for now
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::TorchF64(a), AnyScalar::F64(s)) => {
+                let dims = a.dims();
+                let scaled: Vec<f64> = a.to_vec().iter().map(|&x| x * s).collect();
+                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(scaled, &dims))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::TorchF64(a), AnyScalar::C64(s)) => {
+                let dims = a.dims();
+                let scaled: Vec<Complex64> = a
+                    .to_vec()
+                    .iter()
+                    .map(|&x| Complex64::new(x, 0.0) * s)
+                    .collect();
+                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(scaled, &dims))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::TorchC64(a), AnyScalar::F64(s)) => {
+                let dims = a.dims();
+                let scaled: Vec<Complex64> = a
+                    .to_vec()
+                    .iter()
+                    .map(|&x| x * Complex64::new(*s, 0.0))
+                    .collect();
+                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(scaled, &dims))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::TorchC64(a), AnyScalar::C64(s)) => {
+                let dims = a.dims();
+                let scaled: Vec<Complex64> = a.to_vec().iter().map(|&x| x * s).collect();
+                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(scaled, &dims))
+            }
+            // Torch scalar variants - use native torch operations to preserve autograd
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::DenseF64(a), AnyScalar::TorchF64(s)) => {
+                let tensor = crate::torch::TorchStorage::<f64>::from_vec_with_shape(
+                    a.as_slice().to_vec(),
+                    &a.dims(),
+                );
+                let result = tensor.tensor() * s;
+                Storage::TorchF64(crate::torch::TorchStorage::from_tensor(result))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::DenseF64(a), AnyScalar::TorchC64(s)) => {
+                let data: Vec<Complex64> =
+                    a.as_slice().iter().map(|&x| Complex64::new(x, 0.0)).collect();
+                let tensor =
+                    crate::torch::TorchStorage::<Complex64>::from_vec_with_shape(data, &a.dims());
+                let result = tensor.tensor() * s;
+                Storage::TorchC64(crate::torch::TorchStorage::from_tensor(result))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::DenseC64(a), AnyScalar::TorchF64(s)) => {
+                let tensor = crate::torch::TorchStorage::<Complex64>::from_vec_with_shape(
+                    a.as_slice().to_vec(),
+                    &a.dims(),
+                );
+                let result = tensor.tensor() * s;
+                Storage::TorchC64(crate::torch::TorchStorage::from_tensor(result))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::DenseC64(a), AnyScalar::TorchC64(s)) => {
+                let tensor = crate::torch::TorchStorage::<Complex64>::from_vec_with_shape(
+                    a.as_slice().to_vec(),
+                    &a.dims(),
+                );
+                let result = tensor.tensor() * s;
+                Storage::TorchC64(crate::torch::TorchStorage::from_tensor(result))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::DiagF64(a), AnyScalar::TorchF64(s)) => {
+                // Convert diag to dense first, then scale
+                let dense = a.to_dense_vec(&[a.len(), a.len()]);
+                let tensor = crate::torch::TorchStorage::<f64>::from_vec_with_shape(
+                    dense,
+                    &[a.len(), a.len()],
+                );
+                let result = tensor.tensor() * s;
+                Storage::TorchF64(crate::torch::TorchStorage::from_tensor(result))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::DiagF64(a), AnyScalar::TorchC64(s)) => {
+                let dense: Vec<Complex64> = a
+                    .to_dense_vec(&[a.len(), a.len()])
+                    .into_iter()
+                    .map(|x| Complex64::new(x, 0.0))
+                    .collect();
+                let tensor = crate::torch::TorchStorage::<Complex64>::from_vec_with_shape(
+                    dense,
+                    &[a.len(), a.len()],
+                );
+                let result = tensor.tensor() * s;
+                Storage::TorchC64(crate::torch::TorchStorage::from_tensor(result))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::DiagC64(a), AnyScalar::TorchF64(s)) => {
+                let dense = a.to_dense_vec(&[a.len(), a.len()]);
+                let tensor = crate::torch::TorchStorage::<Complex64>::from_vec_with_shape(
+                    dense,
+                    &[a.len(), a.len()],
+                );
+                let result = tensor.tensor() * s;
+                Storage::TorchC64(crate::torch::TorchStorage::from_tensor(result))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::DiagC64(a), AnyScalar::TorchC64(s)) => {
+                let dense = a.to_dense_vec(&[a.len(), a.len()]);
+                let tensor = crate::torch::TorchStorage::<Complex64>::from_vec_with_shape(
+                    dense,
+                    &[a.len(), a.len()],
+                );
+                let result = tensor.tensor() * s;
+                Storage::TorchC64(crate::torch::TorchStorage::from_tensor(result))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::TorchF64(a), AnyScalar::TorchF64(s)) => {
+                let result = a.tensor() * s;
+                Storage::TorchF64(crate::torch::TorchStorage::from_tensor(result))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::TorchF64(a), AnyScalar::TorchC64(s)) => {
+                let complex = a.to_complex();
+                let result = complex.tensor() * s;
+                Storage::TorchC64(crate::torch::TorchStorage::from_tensor(result))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::TorchC64(a), AnyScalar::TorchF64(s)) => {
+                let result = a.tensor() * s;
+                Storage::TorchC64(crate::torch::TorchStorage::from_tensor(result))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            (Storage::TorchC64(a), AnyScalar::TorchC64(s)) => {
+                let result = a.tensor() * s;
+                Storage::TorchC64(crate::torch::TorchStorage::from_tensor(result))
+            }
         }
     }
 
@@ -1355,15 +1640,28 @@ impl Storage {
         }
 
         // Determine if we need complex output
+        #[cfg(not(feature = "backend-libtorch"))]
         let needs_complex = matches!(a, AnyScalar::C64(_))
             || matches!(b, AnyScalar::C64(_))
             || matches!(self, Storage::DenseC64(_) | Storage::DiagC64(_))
             || matches!(other, Storage::DenseC64(_) | Storage::DiagC64(_));
 
+        #[cfg(feature = "backend-libtorch")]
+        let needs_complex = matches!(a, AnyScalar::C64(_))
+            || matches!(b, AnyScalar::C64(_))
+            || matches!(
+                self,
+                Storage::DenseC64(_) | Storage::DiagC64(_) | Storage::TorchC64(_)
+            )
+            || matches!(
+                other,
+                Storage::DenseC64(_) | Storage::DiagC64(_) | Storage::TorchC64(_)
+            );
+
         if needs_complex {
             // Promote everything to complex
-            let a_c: Complex64 = (*a).into();
-            let b_c: Complex64 = (*b).into();
+            let a_c: Complex64 = a.clone().into();
+            let b_c: Complex64 = b.clone().into();
 
             let (result, dims): (Vec<Complex64>, Vec<usize>) = match (self, other) {
                 (Storage::DenseF64(x), Storage::DenseF64(y)) => (
@@ -1416,10 +1714,18 @@ impl Storage {
             let a_f = match a {
                 AnyScalar::F64(v) => *v,
                 AnyScalar::C64(_) => unreachable!(),
+                #[cfg(feature = "backend-libtorch")]
+                AnyScalar::TorchF64(t) => t.double_value(&[]),
+                #[cfg(feature = "backend-libtorch")]
+                AnyScalar::TorchC64(_) => unreachable!(),
             };
             let b_f = match b {
                 AnyScalar::F64(v) => *v,
                 AnyScalar::C64(_) => unreachable!(),
+                #[cfg(feature = "backend-libtorch")]
+                AnyScalar::TorchF64(t) => t.double_value(&[]),
+                #[cfg(feature = "backend-libtorch")]
+                AnyScalar::TorchC64(_) => unreachable!(),
             };
 
             match (self, other) {
@@ -1695,6 +2001,15 @@ pub fn contract_storage(
                 |s, perm| s.permute_storage(&[], perm),
             )
         }
+
+        // Torch storage: convert to dense and contract
+        #[cfg(feature = "backend-libtorch")]
+        (Storage::TorchF64(_), _) | (Storage::TorchC64(_), _) | (_, Storage::TorchF64(_)) | (_, Storage::TorchC64(_)) => {
+            // Convert both to dense storage and contract
+            let dense_a = storage_a.to_dense_storage(dims_a);
+            let dense_b = storage_b.to_dense_storage(dims_b);
+            contract_storage(&dense_a, dims_a, axes_a, &dense_b, dims_b, axes_b, result_dims)
+        }
     }
 }
 
@@ -1928,6 +2243,22 @@ impl Mul<f64> for &Storage {
                     .collect();
                 Storage::DiagC64(DiagStorageC64::from_vec(scaled_vec))
             }
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchF64(v) => {
+                let dims = v.dims();
+                let scaled_vec: Vec<f64> = v.to_vec().iter().map(|&x| x * scalar).collect();
+                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(scaled_vec, &dims))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchC64(v) => {
+                let dims = v.dims();
+                let scaled_vec: Vec<Complex64> = v
+                    .to_vec()
+                    .iter()
+                    .map(|&z| z * Complex64::new(scalar, 0.0))
+                    .collect();
+                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(scaled_vec, &dims))
+            }
         }
     }
 }
@@ -1966,6 +2297,22 @@ impl Mul<Complex64> for &Storage {
                 let scaled_vec: Vec<Complex64> = d.as_slice().iter().map(|&z| z * scalar).collect();
                 Storage::DiagC64(DiagStorageC64::from_vec(scaled_vec))
             }
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchF64(v) => {
+                let dims = v.dims();
+                let scaled_vec: Vec<Complex64> = v
+                    .to_vec()
+                    .iter()
+                    .map(|&x| Complex64::new(x, 0.0) * scalar)
+                    .collect();
+                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(scaled_vec, &dims))
+            }
+            #[cfg(feature = "backend-libtorch")]
+            Storage::TorchC64(v) => {
+                let dims = v.dims();
+                let scaled_vec: Vec<Complex64> = v.to_vec().iter().map(|&z| z * scalar).collect();
+                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(scaled_vec, &dims))
+            }
         }
     }
 }
@@ -1979,6 +2326,8 @@ impl Mul<AnyScalar> for &Storage {
         match scalar {
             AnyScalar::F64(x) => self * x,
             AnyScalar::C64(z) => self * z,
+            #[cfg(feature = "backend-libtorch")]
+            AnyScalar::TorchF64(_) | AnyScalar::TorchC64(_) => self.scale(&scalar),
         }
     }
 }

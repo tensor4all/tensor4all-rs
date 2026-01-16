@@ -10,6 +10,7 @@ repository.workspace = true
 default = ["backend-faer"]
 backend-faer = ["tensor4all-tensorbackend/backend-faer"]
 backend-lapack = ["tensor4all-tensorbackend/backend-lapack"]
+backend-libtorch = ["tensor4all-tensorbackend/backend-libtorch"]
 
 [dependencies]
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend" }
