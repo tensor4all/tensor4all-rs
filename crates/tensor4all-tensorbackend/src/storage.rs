@@ -1027,15 +1027,13 @@ impl Storage {
                 dims,
             )),
             #[cfg(feature = "backend-libtorch")]
-            Storage::TorchF64(v) => Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                v.to_vec(),
-                &v.dims(),
-            )),
+            Storage::TorchF64(v) => {
+                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(v.to_vec(), &v.dims()))
+            }
             #[cfg(feature = "backend-libtorch")]
-            Storage::TorchC64(v) => Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-                v.to_vec(),
-                &v.dims(),
-            )),
+            Storage::TorchC64(v) => {
+                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(v.to_vec(), &v.dims()))
+            }
         }
     }
 
@@ -1121,7 +1119,10 @@ impl Storage {
                 // For real storage, imaginary part is zero
                 let d = v.dims();
                 let total_size: usize = d.iter().product();
-                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; total_size], &d))
+                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                    vec![0.0; total_size],
+                    &d,
+                ))
             }
             #[cfg(feature = "backend-libtorch")]
             Storage::TorchC64(v) => {
@@ -1524,8 +1525,11 @@ impl Storage {
             }
             #[cfg(feature = "backend-libtorch")]
             (Storage::DenseF64(a), AnyScalar::TorchC64(s)) => {
-                let data: Vec<Complex64> =
-                    a.as_slice().iter().map(|&x| Complex64::new(x, 0.0)).collect();
+                let data: Vec<Complex64> = a
+                    .as_slice()
+                    .iter()
+                    .map(|&x| Complex64::new(x, 0.0))
+                    .collect();
                 let tensor =
                     crate::torch::TorchStorage::<Complex64>::from_vec_with_shape(data, &a.dims());
                 let result = tensor.tensor() * s;
@@ -2004,11 +2008,22 @@ pub fn contract_storage(
 
         // Torch storage: convert to dense and contract
         #[cfg(feature = "backend-libtorch")]
-        (Storage::TorchF64(_), _) | (Storage::TorchC64(_), _) | (_, Storage::TorchF64(_)) | (_, Storage::TorchC64(_)) => {
+        (Storage::TorchF64(_), _)
+        | (Storage::TorchC64(_), _)
+        | (_, Storage::TorchF64(_))
+        | (_, Storage::TorchC64(_)) => {
             // Convert both to dense storage and contract
             let dense_a = storage_a.to_dense_storage(dims_a);
             let dense_b = storage_b.to_dense_storage(dims_b);
-            contract_storage(&dense_a, dims_a, axes_a, &dense_b, dims_b, axes_b, result_dims)
+            contract_storage(
+                &dense_a,
+                dims_a,
+                axes_a,
+                &dense_b,
+                dims_b,
+                axes_b,
+                result_dims,
+            )
         }
     }
 }

@@ -233,10 +233,7 @@ impl TorchStorage<Complex64> {
 /// Maps u32 IDs to letters a-zA-Z (max 52 unique labels).
 /// Returns error if more than 52 unique IDs are needed.
 #[allow(dead_code)]
-pub fn ids_to_equation(
-    input_ids: &[&[u32]],
-    output_ids: &[u32],
-) -> Result<String> {
+pub fn ids_to_equation(input_ids: &[&[u32]], output_ids: &[u32]) -> Result<String> {
     use std::collections::HashMap;
 
     let mut id_to_char: HashMap<u32, char> = HashMap::new();

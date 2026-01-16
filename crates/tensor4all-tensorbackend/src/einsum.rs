@@ -76,12 +76,9 @@ fn einsum_mdarray(inputs: &[EinsumInput<'_>], output_ids: &[usize]) -> Result<St
     use mdarray_einsum::{einsum_optimized, Naive, TypedTensor};
 
     // Determine if we need complex output
-    let has_complex = inputs.iter().any(|input| {
-        matches!(
-            input.storage,
-            Storage::DenseC64(_) | Storage::DiagC64(_)
-        )
-    });
+    let has_complex = inputs
+        .iter()
+        .any(|input| matches!(input.storage, Storage::DenseC64(_) | Storage::DiagC64(_)));
 
     // Build sizes map
     let mut sizes: HashMap<usize, usize> = HashMap::new();
@@ -171,7 +168,10 @@ fn einsum_mdarray(inputs: &[EinsumInput<'_>], output_ids: &[usize]) -> Result<St
         // Scalar output
         (vec![], typed_tensor_to_storage(result_typed, &[]))
     } else {
-        (result_dims.clone(), typed_tensor_to_storage(result_typed, &result_dims))
+        (
+            result_dims.clone(),
+            typed_tensor_to_storage(result_typed, &result_dims),
+        )
     };
 
     // Adjust for scalar case
@@ -244,7 +244,9 @@ fn storage_to_torch_tensor(storage: &Storage, promote_to_complex: bool) -> Resul
         Storage::DenseF64(ds) => {
             let data = ds.as_slice();
             let dims: Vec<i64> = ds.dims().iter().map(|&d| d as i64).collect();
-            let tensor = Tensor::from_slice(data).view(&dims[..]).to_kind(Kind::Double);
+            let tensor = Tensor::from_slice(data)
+                .view(&dims[..])
+                .to_kind(Kind::Double);
             if promote_to_complex {
                 let imag = Tensor::zeros_like(&tensor);
                 Ok(Tensor::complex(&tensor, &imag))
@@ -257,8 +259,12 @@ fn storage_to_torch_tensor(storage: &Storage, promote_to_complex: bool) -> Resul
             let dims: Vec<i64> = ds.dims().iter().map(|&d| d as i64).collect();
             let real: Vec<f64> = data.iter().map(|c| c.re).collect();
             let imag: Vec<f64> = data.iter().map(|c| c.im).collect();
-            let real_tensor = Tensor::from_slice(&real).view(&dims[..]).to_kind(Kind::Double);
-            let imag_tensor = Tensor::from_slice(&imag).view(&dims[..]).to_kind(Kind::Double);
+            let real_tensor = Tensor::from_slice(&real)
+                .view(&dims[..])
+                .to_kind(Kind::Double);
+            let imag_tensor = Tensor::from_slice(&imag)
+                .view(&dims[..])
+                .to_kind(Kind::Double);
             Ok(Tensor::complex(&real_tensor, &imag_tensor))
         }
         Storage::DiagF64(_) | Storage::DiagC64(_) => {
