@@ -2,89 +2,9 @@
 
 use crate::error::Result;
 use crate::types::{LocalIndex, Tensor3, Tensor3Ops};
-use num_traits::{One, Zero};
 
-/// Scalar trait for tensor train elements
-pub trait TTScalar:
-    Clone
-    + Copy
-    + Zero
-    + One
-    + std::ops::Add<Output = Self>
-    + std::ops::Sub<Output = Self>
-    + std::ops::Mul<Output = Self>
-    + std::ops::Div<Output = Self>
-    + std::ops::Neg<Output = Self>
-    + Default
-    + Send
-    + Sync
-    + 'static
-{
-    /// Conjugate
-    fn conj(self) -> Self;
-
-    /// Absolute value squared
-    fn abs_sq(self) -> f64;
-
-    /// Create from f64
-    fn from_f64(val: f64) -> Self;
-}
-
-impl TTScalar for f64 {
-    fn conj(self) -> Self {
-        self
-    }
-
-    fn abs_sq(self) -> f64 {
-        self * self
-    }
-
-    fn from_f64(val: f64) -> Self {
-        val
-    }
-}
-
-impl TTScalar for f32 {
-    fn conj(self) -> Self {
-        self
-    }
-
-    fn abs_sq(self) -> f64 {
-        (self * self) as f64
-    }
-
-    fn from_f64(val: f64) -> Self {
-        val as f32
-    }
-}
-
-impl TTScalar for num_complex::Complex64 {
-    fn conj(self) -> Self {
-        num_complex::Complex64::conj(&self)
-    }
-
-    fn abs_sq(self) -> f64 {
-        self.norm_sqr()
-    }
-
-    fn from_f64(val: f64) -> Self {
-        num_complex::Complex64::new(val, 0.0)
-    }
-}
-
-impl TTScalar for num_complex::Complex32 {
-    fn conj(self) -> Self {
-        num_complex::Complex32::conj(&self)
-    }
-
-    fn abs_sq(self) -> f64 {
-        self.norm_sqr() as f64
-    }
-
-    fn from_f64(val: f64) -> Self {
-        num_complex::Complex32::new(val as f32, 0.0)
-    }
-}
+// Re-export CommonScalar as TTScalar for backwards compatibility
+pub use tensor4all_core::CommonScalar as TTScalar;
 
 /// Abstract trait for tensor train objects
 ///

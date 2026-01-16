@@ -15,7 +15,7 @@ description = "Quantics grid structures for efficient conversion between quantic
 thiserror.workspace = true
 
 [dev-dependencies]
-criterion = "0.5"
+criterion.workspace = true
 
 [[bench]]
 name = "conversions"

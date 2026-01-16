@@ -4,7 +4,7 @@ description = "Tensor Cross Interpolation algorithms for tensor4all"
 version.workspace = true
 edition.workspace = true
 authors = ["Marc Ritter <Ritter.Marc@physik.uni-muenchen.de>", "Hiroshi Shinaoka <h.shinaoka@gmail.com>", "tensor4all contributors"]
-license = "MIT"
+license.workspace = true
 repository.workspace = true
 
 [dependencies]

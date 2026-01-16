@@ -2,7 +2,8 @@
 
 use crate::error::{Result, TCIError};
 use crate::indexset::{IndexSet, MultiIndex};
-use matrixci::util::{a_times_b_inv, zeros, Matrix, Scalar};
+use matrixci::util::{a_times_b_inv, zeros, Matrix};
+use matrixci::Scalar;
 use matrixci::{AbstractMatrixCI, MatrixACA};
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
 

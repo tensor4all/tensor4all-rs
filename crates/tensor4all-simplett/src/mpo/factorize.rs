@@ -162,7 +162,7 @@ where
     // Sum all squared singular values for total weight
     // Singular values are stored in first row: s[[0, i]] (LAPACK-style convention)
     for i in 0..min_dim {
-        let sv: f64 = s[[0, i]].abs().into();
+        let sv: f64 = ComplexFloat::abs(s[[0, i]]).into();
         total_weight += sv * sv;
     }
 
@@ -172,7 +172,7 @@ where
         if rank >= options.max_rank {
             break;
         }
-        let sv: f64 = s[[0, i]].abs().into();
+        let sv: f64 = ComplexFloat::abs(s[[0, i]]).into();
         if sv < options.tolerance {
             break;
         }
@@ -260,7 +260,7 @@ pub fn factorize_lu<T>(
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<T>>
 where
-    T: SVDScalar + matrixci::util::Scalar,
+    T: SVDScalar + matrixci::Scalar,
     <T as ComplexFloat>::Real: Into<f64>,
 {
     use matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
@@ -269,7 +269,7 @@ where
     let n = matrix.dim(1);
 
     // Convert DTensor to matrixci::Matrix (temporary until matrixci migration)
-    let mut mat_ci: matrixci::util::Matrix<T> = matrixci::util::zeros(m, n);
+    let mut mat_ci: matrixci::Matrix<T> = matrixci::util::zeros(m, n);
     for i in 0..m {
         for j in 0..n {
             mat_ci[[i, j]] = matrix[[i, j]];
@@ -324,7 +324,7 @@ pub fn factorize_ci<T>(
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<T>>
 where
-    T: SVDScalar + matrixci::util::Scalar,
+    T: SVDScalar + matrixci::Scalar,
     <T as ComplexFloat>::Real: Into<f64>,
 {
     // CI uses the same LUCI implementation as LU

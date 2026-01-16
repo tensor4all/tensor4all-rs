@@ -15,10 +15,10 @@ description = "High-level Quantics TCI interface for function interpolation"
 tensor4all-tensorci = { path = "../tensor4all-tensorci" }
 tensor4all-simplett = { path = "../tensor4all-simplett" }
 quanticsgrids = { path = "../quanticsgrids" }
-num-complex = { workspace = true }
-num-traits = { workspace = true }
-anyhow = { workspace = true }
-rand = { workspace = true }
+num-complex.workspace = true
+num-traits.workspace = true
+anyhow.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
-approx = { workspace = true }
+approx.workspace = true

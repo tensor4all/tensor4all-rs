@@ -10,7 +10,8 @@ use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
-use matrixci::util::{mat_mul, ncols, nrows, transpose, zeros, Matrix, Scalar};
+use matrixci::util::{mat_mul, ncols, nrows, transpose, zeros, Matrix};
+use matrixci::Scalar;
 use matrixci::{rrlu, RrLUOptions};
 
 /// Compute QR decomposition

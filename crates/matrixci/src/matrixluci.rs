@@ -1,8 +1,9 @@
 //! Matrix LU-based Cross Interpolation (MatrixLUCI) implementation
 
 use crate::matrixlu::{rrlu, RrLU, RrLUOptions};
+use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
-use crate::util::{mat_mul, ncols, nrows, submatrix, zeros, Matrix, Scalar};
+use crate::util::{mat_mul, ncols, nrows, submatrix, zeros, Matrix};
 
 /// Matrix LU-based Cross Interpolation
 ///

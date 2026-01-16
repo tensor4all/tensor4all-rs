@@ -30,6 +30,7 @@ pub mod matrixaca;
 pub mod matrixci;
 pub mod matrixlu;
 pub mod matrixluci;
+pub mod scalar;
 pub mod traits;
 pub mod util;
 
@@ -39,5 +40,6 @@ pub use matrixaca::MatrixACA;
 pub use matrixci::{crossinterpolate, CrossInterpolateOptions, MatrixCI};
 pub use matrixlu::{rrlu, rrlu_inplace, RrLU, RrLUOptions};
 pub use matrixluci::MatrixLUCI;
+pub use scalar::Scalar;
 pub use traits::AbstractMatrixCI;
-pub use util::{from_vec2d, Matrix, Scalar};
+pub use util::{from_vec2d, Matrix};

@@ -1,10 +1,11 @@
 //! Matrix Cross Interpolation (MatrixCI) implementation
 
 use crate::error::{MatrixCIError, Result};
+use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
 use crate::util::{
     a_inv_times_b, a_times_b_inv, append_col, append_row, dot, from_vec2d, get_col, get_row,
-    mat_mul, ncols, nrows, submatrix, submatrix_argmax, zeros, Matrix, Scalar,
+    mat_mul, ncols, nrows, submatrix, submatrix_argmax, zeros, Matrix,
 };
 
 /// Matrix Cross Interpolation representation

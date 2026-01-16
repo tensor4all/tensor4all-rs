@@ -4,7 +4,7 @@ description = "Matrix Cross Interpolation algorithms"
 version.workspace = true
 edition.workspace = true
 authors = ["tensor4all contributors"]
-license = "MIT"
+license.workspace = true
 repository.workspace = true
 
 [dependencies]
@@ -13,6 +13,7 @@ num-traits.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
+paste.workspace = true
 
 [dev-dependencies]
-approx = "0.5"
+approx.workspace = true
