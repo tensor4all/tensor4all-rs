@@ -730,7 +730,7 @@ mod tests {
         let dims: Vec<usize> = indices.iter().map(|i| i.size()).collect();
         let size: usize = dims.iter().product();
         let data: Vec<f64> = (0..size).map(|i| i as f64).collect();
-        let storage = f64::dense_storage(data);
+        let storage = f64::dense_storage_with_shape(data, &dims);
         TensorDynLen::new(indices, dims, storage)
     }
 

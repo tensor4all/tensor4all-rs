@@ -291,7 +291,10 @@ fn direct_sum_f64(
         // else: mixed case stays 0.0
     }
 
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(result_data)));
+    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+        result_data,
+        &setup.result_dims,
+    )));
     let result = TensorDynLen::new(setup.result_indices, setup.result_dims, storage);
     Ok((result, setup.new_indices))
 }
@@ -353,7 +356,10 @@ fn direct_sum_c64(
         // else: mixed case stays 0.0
     }
 
-    let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(result_data)));
+    let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+        result_data,
+        &setup.result_dims,
+    )));
     let result = TensorDynLen::new(setup.result_indices, setup.result_dims, storage);
     Ok((result, setup.new_indices))
 }
@@ -376,20 +382,26 @@ mod tests {
         let a = TensorDynLen::new(
             vec![Index::new(i.id, i.dim()), Index::new(j.id, j.dim())],
             vec![2, 3],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
-                1.0, 2.0, 3.0, // i=0
-                4.0, 5.0, 6.0, // i=1
-            ]))),
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![
+                    1.0, 2.0, 3.0, // i=0
+                    4.0, 5.0, 6.0, // i=1
+                ],
+                &[2, 3],
+            ))),
         );
 
         // B[i, k] - 2x4 tensor
         let b = TensorDynLen::new(
             vec![Index::new(i.id, i.dim()), Index::new(k.id, k.dim())],
             vec![2, 4],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
-                10.0, 20.0, 30.0, 40.0, // i=0
-                50.0, 60.0, 70.0, 80.0, // i=1
-            ]))),
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![
+                    10.0, 20.0, 30.0, 40.0, // i=0
+                    50.0, 60.0, 70.0, 80.0, // i=1
+                ],
+                &[2, 4],
+            ))),
         );
 
         // Direct sum along (j, k)
@@ -440,18 +452,20 @@ mod tests {
         let a = TensorDynLen::new(
             vec![Index::new(i.id, i.dim()), Index::new(j.id, j.dim())],
             vec![2, 2],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
-                1.0, 2.0, 3.0, 4.0,
-            ]))),
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0, 2.0, 3.0, 4.0],
+                &[2, 2],
+            ))),
         );
 
         // B[k, l] - 3x3 tensor (no common indices)
         let b = TensorDynLen::new(
             vec![Index::new(k.id, k.dim()), Index::new(l.id, l.dim())],
             vec![3, 3],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
-                10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0,
-            ]))),
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0],
+                &[3, 3],
+            ))),
         );
 
         // Direct sum along (i, k) and (j, l)

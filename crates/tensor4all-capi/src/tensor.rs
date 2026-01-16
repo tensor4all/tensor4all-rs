@@ -315,7 +315,9 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
         let data_vec: Vec<f64> = unsafe { std::slice::from_raw_parts(data, data_len).to_vec() };
 
         // Create storage
-        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_vec)));
+        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data_vec, &dims_vec,
+        )));
 
         // Create tensor
         let tensor = InternalTensor::new(indices, dims_vec, storage);
@@ -383,7 +385,9 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
             .collect();
 
         // Create storage
-        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data_vec)));
+        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+            data_vec, &dims_vec,
+        )));
 
         // Create tensor
         let tensor = InternalTensor::new(indices, dims_vec, storage);

@@ -14,6 +14,7 @@ backend-lapack = ["tensor4all-tensorbackend/backend-lapack"]
 [dependencies]
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend" }
 matrixci = { path = "../matrixci" }
+mdarray-einsum = { path = "../mdarray-einsum" }
 num-complex.workspace = true
 num-traits.workspace = true
 thiserror.workspace = true

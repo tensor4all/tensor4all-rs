@@ -449,10 +449,12 @@ mod tests {
     use std::sync::Arc;
 
     fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen<DynId, NoSymmSpace> {
-        let total_size: usize = indices.iter().map(|idx| idx.size()).product();
-        let data: Vec<f64> = (0..total_size).map(|i| i as f64).collect();
-        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
         let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
+        let total_size: usize = dims.iter().product();
+        let data: Vec<f64> = (0..total_size).map(|i| i as f64).collect();
+        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data, &dims,
+        )));
         // Convert DynIndex to Index<DynId, NoSymmSpace>
         let indices_no_tags: Vec<Index<DynId, NoSymmSpace>> = indices
             .iter()

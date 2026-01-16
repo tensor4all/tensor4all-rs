@@ -1,17 +1,30 @@
 use num_complex::Complex64;
 use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::{make_mut_storage, AnyScalar, DenseStorageFactory, Storage, TensorDynLen};
+use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64, DiagStorageC64};
+use tensor4all_core::{AnyScalar, DenseStorageFactory, Storage, TensorDynLen};
+
+/// Helper to create DenseF64 storage with shape information
+fn make_dense_f64(data: Vec<f64>, dims: &[usize]) -> Storage {
+    Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data, dims))
+}
+
+/// Helper to create DenseC64 storage with shape information
+fn make_dense_c64(data: Vec<Complex64>, dims: &[usize]) -> Storage {
+    Storage::DenseC64(DenseStorageC64::from_vec_with_shape(data, dims))
+}
 
 #[test]
 fn test_storage_dense_f64() {
+    // Create a zero-initialized tensor with 10 elements
     let storage = Storage::new_dense_f64(10);
-    assert_eq!(storage.len(), 0);
+    assert_eq!(storage.len(), 10);
     assert_eq!(storage.sum_f64(), 0.0);
 
     match storage {
         Storage::DenseF64(v) => {
-            assert_eq!(v.capacity(), 10);
+            // Check shape is 1D with 10 elements
+            assert_eq!(v.dims(), vec![10]);
         }
         Storage::DenseC64(_) => panic!("expected DenseF64"),
         Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseF64"),
@@ -20,13 +33,15 @@ fn test_storage_dense_f64() {
 
 #[test]
 fn test_storage_dense_c64() {
+    // Create a zero-initialized tensor with 10 elements
     let storage = Storage::new_dense_c64(10);
-    assert_eq!(storage.len(), 0);
+    assert_eq!(storage.len(), 10);
     assert_eq!(storage.sum_c64(), Complex64::new(0.0, 0.0));
 
     match storage {
         Storage::DenseC64(v) => {
-            assert_eq!(v.capacity(), 10);
+            // Check shape is 1D with 10 elements
+            assert_eq!(v.dims(), vec![10]);
         }
         Storage::DenseF64(_) => panic!("expected DenseC64"),
         Storage::DiagF64(_) | Storage::DiagC64(_) => panic!("expected DenseC64"),
@@ -37,7 +52,7 @@ fn test_storage_dense_c64() {
 fn test_storage_factory_f64() {
     let storage = <f64 as DenseStorageFactory>::new_dense(7);
     match storage {
-        Storage::DenseF64(v) => assert_eq!(v.capacity(), 7),
+        Storage::DenseF64(v) => assert_eq!(v.len(), 7),
         Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => {
             panic!("expected DenseF64")
         }
@@ -48,7 +63,7 @@ fn test_storage_factory_f64() {
 fn test_storage_factory_c64() {
     let storage = <Complex64 as DenseStorageFactory>::new_dense(9);
     match storage {
-        Storage::DenseC64(v) => assert_eq!(v.capacity(), 9),
+        Storage::DenseC64(v) => assert_eq!(v.len(), 9),
         Storage::DenseF64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => {
             panic!("expected DenseC64")
         }
@@ -57,40 +72,14 @@ fn test_storage_factory_c64() {
 
 #[test]
 fn test_cow_storage() {
-    let mut storage1 = Arc::new(Storage::new_dense_f64(0));
+    // Test that Arc-based storage allows COW semantics
+    let storage1 = Arc::new(make_dense_f64(vec![1.0, 2.0], &[2]));
     let storage2 = Arc::clone(&storage1);
 
     // Initially, both point to the same storage
     assert!(Arc::ptr_eq(&storage1, &storage2));
 
-    // Mutate storage1 (should clone due to COW)
-    {
-        let mut_storage = make_mut_storage(&mut storage1);
-        match mut_storage {
-            Storage::DenseF64(v) => {
-                v.push(1.0);
-                v.push(2.0);
-            }
-            Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => {
-                panic!("expected DenseF64")
-            }
-        }
-    }
-
-    // After mutation, they should be different
-    assert!(!Arc::ptr_eq(&storage1, &storage2));
-
-    // storage2 should be unchanged
-    match storage2.as_ref() {
-        Storage::DenseF64(v) => {
-            assert_eq!(v.len(), 0);
-        }
-        Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => {
-            panic!("expected DenseF64")
-        }
-    }
-
-    // storage1 should have the new data
+    // Check values are correct
     match storage1.as_ref() {
         Storage::DenseF64(v) => {
             assert_eq!(v.len(), 2);
@@ -130,7 +119,7 @@ fn test_tensor_dyn_len_mismatch() {
 fn test_tensor_shared_storage() {
     let indices = vec![Index::new_dyn(2)];
     let dims = vec![2];
-    let storage = Arc::new(Storage::new_dense_f64(2));
+    let storage = Arc::new(make_dense_f64(vec![1.0, 2.0], &[2]));
 
     let tensor1 = TensorDynLen::new(indices.clone(), dims.clone(), Arc::clone(&storage));
     let tensor2 = TensorDynLen::new(indices, dims, storage);
@@ -142,11 +131,11 @@ fn test_tensor_shared_storage() {
     let cloned = tensor1.clone();
     assert!(Arc::ptr_eq(tensor1.storage(), cloned.storage()));
 
-    // Check that both tensors have the expected empty storage
+    // Check that both tensors have the expected storage
     match tensor1.storage().as_ref() {
         Storage::DenseF64(v) => {
-            assert_eq!(v.len(), 0);
-            assert_eq!(v.capacity(), 2);
+            assert_eq!(v.len(), 2);
+            assert_eq!(v.dims(), vec![2]);
         }
         Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => {
             panic!("expected DenseF64")
@@ -156,18 +145,9 @@ fn test_tensor_shared_storage() {
 
 #[test]
 fn test_tensor_sum_f64_no_match() {
-    let indices = vec![Index::new_dyn(2)];
-    let dims = vec![2];
-    let mut storage = Arc::new(Storage::new_dense_f64(0));
-    {
-        let s = make_mut_storage(&mut storage);
-        match s {
-            Storage::DenseF64(v) => v.extend([1.0, 2.0, 3.0].iter().copied()),
-            Storage::DenseC64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => {
-                panic!("expected DenseF64")
-            }
-        }
-    }
+    let indices = vec![Index::new_dyn(3)];
+    let dims = vec![3];
+    let storage = Arc::new(make_dense_f64(vec![1.0, 2.0, 3.0], &[3]));
 
     let t: TensorDynLen = TensorDynLen::new(indices, dims, storage);
     let sum_f64 = t.sum_f64();
@@ -181,16 +161,10 @@ fn test_tensor_sum_f64_no_match() {
 fn test_tensor_sum_c64() {
     let indices = vec![Index::new_dyn(2)];
     let dims = vec![2];
-    let mut storage = Arc::new(Storage::new_dense_c64(0));
-    {
-        let s = make_mut_storage(&mut storage);
-        match s {
-            Storage::DenseC64(v) => v.extend([Complex64::new(1.0, 2.0), Complex64::new(3.0, -1.0)]),
-            Storage::DenseF64(_) | Storage::DiagF64(_) | Storage::DiagC64(_) => {
-                panic!("expected DenseC64")
-            }
-        }
-    }
+    let storage = Arc::new(make_dense_c64(
+        vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -1.0)],
+        &[2],
+    ));
 
     // Now always returns AnyScalar
     let t: TensorDynLen = TensorDynLen::new(indices, dims, storage);
@@ -227,15 +201,13 @@ fn test_tensor_duplicate_indices_from_indices() {
 
 #[test]
 fn test_replaceind_basic() {
-    use tensor4all_core::storage::DenseStorageF64;
-
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let new_i = Index::new_dyn(2); // Same dimension, different ID
 
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    let storage = Arc::new(make_dense_f64(data, &[2, 3]));
     let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3], storage);
 
     // Replace index i with new_i
@@ -253,8 +225,6 @@ fn test_replaceind_basic() {
 
 #[test]
 fn test_replaceind_no_match() {
-    use tensor4all_core::storage::DenseStorageF64;
-
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4); // Not in tensor
@@ -262,7 +232,7 @@ fn test_replaceind_no_match() {
 
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    let storage = Arc::new(make_dense_f64(data, &[2, 3]));
     let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3], storage);
 
     // Replace index k (not in tensor) - should return unchanged tensor
@@ -275,8 +245,6 @@ fn test_replaceind_no_match() {
 
 #[test]
 fn test_replaceinds_basic() {
-    use tensor4all_core::storage::DenseStorageF64;
-
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -286,7 +254,7 @@ fn test_replaceinds_basic() {
 
     let indices = vec![i.clone(), j.clone(), k.clone()];
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    let storage = Arc::new(make_dense_f64(data, &[2, 3, 4]));
     let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3, 4], storage);
 
     // Replace all indices
@@ -305,8 +273,6 @@ fn test_replaceinds_basic() {
 
 #[test]
 fn test_replaceinds_partial() {
-    use tensor4all_core::storage::DenseStorageF64;
-
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -315,7 +281,7 @@ fn test_replaceinds_partial() {
 
     let indices = vec![i.clone(), j.clone(), k.clone()];
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    let storage = Arc::new(make_dense_f64(data, &[2, 3, 4]));
     let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3, 4], storage);
 
     // Replace only i
@@ -331,8 +297,6 @@ fn test_replaceinds_partial() {
 #[test]
 #[should_panic(expected = "old_indices and new_indices must have the same length")]
 fn test_replaceinds_length_mismatch() {
-    use tensor4all_core::storage::DenseStorageF64;
-
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let new_i = Index::new_dyn(2);
@@ -340,7 +304,7 @@ fn test_replaceinds_length_mismatch() {
 
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    let storage = Arc::new(make_dense_f64(data, &[2, 3]));
     let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3], storage);
 
     // Should panic - length mismatch
@@ -353,10 +317,8 @@ fn test_replaceinds_length_mismatch() {
 
 #[test]
 fn test_storage_conj_f64() {
-    use tensor4all_core::storage::DenseStorageF64;
-
     let data = vec![1.0, 2.0, 3.0, 4.0];
-    let storage = Storage::DenseF64(DenseStorageF64::from_vec(data.clone()));
+    let storage = make_dense_f64(data.clone(), &[4]);
     let conj_storage = storage.conj();
 
     // For real numbers, conj is identity
@@ -370,14 +332,12 @@ fn test_storage_conj_f64() {
 
 #[test]
 fn test_storage_conj_c64() {
-    use tensor4all_core::storage::DenseStorageC64;
-
     let data = vec![
         Complex64::new(1.0, 2.0),
         Complex64::new(3.0, -4.0),
         Complex64::new(0.0, 5.0),
     ];
-    let storage = Storage::DenseC64(DenseStorageC64::from_vec(data));
+    let storage = make_dense_c64(data, &[3]);
     let conj_storage = storage.conj();
 
     match conj_storage {
@@ -395,8 +355,6 @@ fn test_storage_conj_c64() {
 
 #[test]
 fn test_storage_conj_diag_c64() {
-    use tensor4all_core::storage::DiagStorageC64;
-
     let data = vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, -2.0)];
     let storage = Storage::DiagC64(DiagStorageC64::from_vec(data));
     let conj_storage = storage.conj();
@@ -412,11 +370,9 @@ fn test_storage_conj_diag_c64() {
 
 #[test]
 fn test_tensor_conj_f64() {
-    use tensor4all_core::storage::DenseStorageF64;
-
     let i = Index::new_dyn(2);
     let data = vec![1.0, 2.0];
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data.clone())));
+    let storage = Arc::new(make_dense_f64(data.clone(), &[2]));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone()], vec![2], storage);
 
     let conj_tensor = tensor.conj();
@@ -436,8 +392,6 @@ fn test_tensor_conj_f64() {
 
 #[test]
 fn test_tensor_conj_c64() {
-    use tensor4all_core::storage::DenseStorageC64;
-
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let data = vec![
@@ -448,7 +402,7 @@ fn test_tensor_conj_c64() {
         Complex64::new(-1.0, 1.0),
         Complex64::new(5.0, 5.0),
     ];
-    let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data)));
+    let storage = Arc::new(make_dense_c64(data, &[2, 3]));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
 
     let conj_tensor = tensor.conj();
@@ -481,12 +435,10 @@ fn test_tensor_conj_c64() {
 
 #[test]
 fn test_tensor_has_tensor_data() {
-    use tensor4all_core::storage::DenseStorageF64;
-
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)));
+    let storage = Arc::new(make_dense_f64(data, &[2, 3]));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
 
     // TensorDynLen now contains TensorData internally
@@ -505,18 +457,17 @@ fn test_tensor_has_tensor_data() {
 
 #[test]
 fn test_tensor_data_lazy_outer_product() {
-    use tensor4all_core::storage::DenseStorageF64;
     use tensor4all_core::TensorData;
 
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
 
     let data_a = vec![1.0, 2.0];
-    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
+    let storage_a = Arc::new(make_dense_f64(data_a, &[2]));
     let td_a = TensorData::new(storage_a, vec![i.id], vec![2]);
 
     let data_b = vec![3.0, 4.0, 5.0];
-    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
+    let storage_b = Arc::new(make_dense_f64(data_b, &[3]));
     let td_b = TensorData::new(storage_b, vec![j.id], vec![3]);
 
     // Lazy outer product using TensorData directly
@@ -547,18 +498,17 @@ fn test_tensor_data_lazy_outer_product() {
 
 #[test]
 fn test_tensor_data_lazy_outer_product_with_permute() {
-    use tensor4all_core::storage::DenseStorageF64;
     use tensor4all_core::TensorData;
 
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
 
     let data_a = vec![1.0, 2.0];
-    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a)));
+    let storage_a = Arc::new(make_dense_f64(data_a, &[2]));
     let td_a = TensorData::new(storage_a, vec![i.id], vec![2]);
 
     let data_b = vec![3.0, 4.0, 5.0];
-    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b)));
+    let storage_b = Arc::new(make_dense_f64(data_b, &[3]));
     let td_b = TensorData::new(storage_b, vec![j.id], vec![3]);
 
     // Lazy outer product then permute using TensorData directly

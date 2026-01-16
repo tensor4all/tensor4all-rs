@@ -16,7 +16,7 @@ fn test_svd_identity() {
     data[3] = 1.0; // [1, 1]
 
     let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec(data),
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
     ));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
 
@@ -60,7 +60,7 @@ fn test_svd_simple_matrix() {
 
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec(data),
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 3]),
     ));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
 
@@ -100,7 +100,7 @@ fn test_svd_reconstruction() {
         1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
     ];
     let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec(data.clone()),
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data.clone(), &[3, 4]),
     ));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![3, 4], storage);
 
@@ -148,7 +148,7 @@ fn test_svd_reconstruction() {
 
     // Create reconstructed tensor for comparison
     let reconstructed_storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec(reconstructed_data),
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(reconstructed_data, &[m, n]),
     ));
     let reconstructed: TensorDynLen = TensorDynLen::new(
         vec![i.clone(), j.clone()],
@@ -225,7 +225,7 @@ fn test_svd_rank3() {
     // Create a 2×3×4 tensor with some data
     let data = (0..24).map(|x| x as f64).collect::<Vec<_>>();
     let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec(data),
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 3, 4]),
     ));
     let tensor: TensorDynLen = TensorDynLen::new(
         vec![i.clone(), j.clone(), k.clone()],
@@ -284,7 +284,7 @@ fn test_svd_complex_reconstruction() {
         Complex64::new(2.0, 0.0),
     ];
     let storage = Arc::new(Storage::DenseC64(
-        tensor4all_core::storage::DenseStorageC64::from_vec(data.clone()),
+        tensor4all_core::storage::DenseStorageC64::from_vec_with_shape(data.clone(), &[2, 2]),
     ));
     let tensor: TensorDynLen =
         TensorDynLen::new(vec![i_idx.clone(), j_idx.clone()], vec![2, 2], storage);
@@ -349,7 +349,7 @@ fn test_svd_truncation() {
     data[3] = 1e-14; // [1, 1] = 1e-14
 
     let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec(data),
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
     ));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
 
@@ -401,7 +401,7 @@ fn test_svd_with_override() {
     data[3] = 1e-6; // [1, 1] = 1e-6
 
     let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec(data),
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
     ));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
 
@@ -490,7 +490,7 @@ fn test_svd_uses_global_default() {
     // Create a simple matrix
     let data = vec![1.0, 0.0, 0.0, 1.0];
     let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec(data),
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
     ));
     let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
 

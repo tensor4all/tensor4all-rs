@@ -40,21 +40,30 @@ fn create_simple_mps_chain() -> (
     let t0 = TensorDynLen::new(
         vec![s0.clone(), b01.clone()],
         vec![2, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 8]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![1.0; 8],
+            &[2, 4],
+        ))),
     );
 
     // Site 1: [b01, s1, b12] shape (4, 2, 4)
     let t1 = TensorDynLen::new(
         vec![b01.clone(), s1.clone(), b12.clone()],
         vec![4, 2, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 32]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![1.0; 32],
+            &[4, 2, 4],
+        ))),
     );
 
     // Site 2: [b12, s2] shape (4, 2)
     let t2 = TensorDynLen::new(
         vec![b12.clone(), s2.clone()],
         vec![4, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 8]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![1.0; 8],
+            &[4, 2],
+        ))),
     );
 
     // Add nodes with string names (add_tensor returns Result)
@@ -94,7 +103,10 @@ fn test_environment_cache_insert_get() {
     let tensor = TensorDynLen::new(
         vec![idx],
         vec![2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![1.0, 2.0],
+            &[2],
+        ))),
     );
 
     cache.insert("a", "b", tensor.clone());
@@ -116,7 +128,10 @@ fn test_environment_cache_clear() {
     let tensor = TensorDynLen::new(
         vec![idx],
         vec![2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![1.0, 2.0],
+            &[2],
+        ))),
     );
 
     cache.insert("a", "b", tensor);
@@ -234,20 +249,26 @@ fn create_two_site_mps() -> (
     let t0 = TensorDynLen::new(
         vec![s0.clone(), b01.clone()],
         vec![2, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
-            1.0, 0.0, // s0=0: b01=0, b01=1
-            0.0, 1.0, // s0=1: b01=0, b01=1
-        ]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![
+                1.0, 0.0, // s0=0: b01=0, b01=1
+                0.0, 1.0, // s0=1: b01=0, b01=1
+            ],
+            &[2, 2],
+        ))),
     );
 
     // Site 1: [b01, s1] shape (2, 2)
     let t1 = TensorDynLen::new(
         vec![b01.clone(), s1.clone()],
         vec![2, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
-            1.0, 0.0, // b01=0: s1=0, s1=1
-            0.0, 1.0, // b01=1: s1=0, s1=1
-        ]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![
+                1.0, 0.0, // b01=0: s1=0, s1=1
+                0.0, 1.0, // b01=1: s1=0, s1=1
+            ],
+            &[2, 2],
+        ))),
     );
 
     // Add nodes with string names
@@ -317,7 +338,10 @@ fn create_diagonal_mpo(
     let t0 = TensorDynLen::new(
         vec![s0_out.clone(), s0_in.clone(), b01.clone()],
         vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data0))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data0,
+            &[phys_dim, phys_dim, 1],
+        ))),
     );
 
     // Diagonal tensor at site 1: [b01, s1_out, s1_in] shape (1, 2, 2)
@@ -328,7 +352,10 @@ fn create_diagonal_mpo(
     let t1 = TensorDynLen::new(
         vec![b01.clone(), s1_out.clone(), s1_in.clone()],
         vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data1,
+            &[1, phys_dim, phys_dim],
+        ))),
     );
 
     // Add nodes
@@ -398,15 +425,19 @@ fn create_mps_from_values(
     let t0 = TensorDynLen::new(
         vec![s0.clone(), b01.clone()],
         vec![phys_dim, bond_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data0))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data0,
+            &[phys_dim, bond_dim],
+        ))),
     );
 
     // Site 1 tensor: [b01, s1] - contains the values
     let t1 = TensorDynLen::new(
         vec![b01.clone(), s1.clone()],
         vec![bond_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
             values.to_vec(),
+            &[bond_dim, phys_dim],
         ))),
     );
 
@@ -713,7 +744,10 @@ fn create_three_site_mps(
     let t0 = TensorDynLen::new(
         vec![s0.clone(), b01.clone()],
         vec![phys_dim, bond_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data0))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data0,
+            &[phys_dim, bond_dim],
+        ))),
     );
 
     // Site 1: [b01, s1, b12] shape (2, 2, 2) - identity-like
@@ -727,7 +761,10 @@ fn create_three_site_mps(
     let t1 = TensorDynLen::new(
         vec![b01.clone(), s1.clone(), b12.clone()],
         vec![bond_dim, phys_dim, bond_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data1,
+            &[bond_dim, phys_dim, bond_dim],
+        ))),
     );
 
     // Site 2: [b12, s2] shape (2, 2) - contains values or identity
@@ -750,7 +787,10 @@ fn create_three_site_mps(
     let t2 = TensorDynLen::new(
         vec![b12.clone(), s2.clone()],
         vec![bond_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data2,
+            &[bond_dim, phys_dim],
+        ))),
     );
 
     let n0 = mps.add_tensor("site0", t0).unwrap();
@@ -806,7 +846,10 @@ fn create_three_site_identity_mpo(
     let t0 = TensorDynLen::new(
         vec![s0_out.clone(), s0_in.clone(), b01.clone()],
         vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data0))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data0,
+            &[phys_dim, phys_dim, 1],
+        ))),
     );
 
     // Site 1: [b01, s1_out, s1_in, b12] - identity on physical indices
@@ -817,7 +860,10 @@ fn create_three_site_identity_mpo(
     let t1 = TensorDynLen::new(
         vec![b01.clone(), s1_out.clone(), s1_in.clone(), b12.clone()],
         vec![1, phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data1,
+            &[1, phys_dim, phys_dim, 1],
+        ))),
     );
 
     // Site 2: [b12, s2_out, s2_in] - identity on physical indices
@@ -828,7 +874,10 @@ fn create_three_site_identity_mpo(
     let t2 = TensorDynLen::new(
         vec![b12.clone(), s2_out.clone(), s2_in.clone()],
         vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data2,
+            &[1, phys_dim, phys_dim],
+        ))),
     );
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -1000,7 +1049,10 @@ fn create_mpo_with_internal_indices(
     let t0 = TensorDynLen::new(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), b01.clone()],
         vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data0))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data0,
+            &[phys_dim, phys_dim, 1],
+        ))),
     );
 
     // Site 1: [b01, s1_out_tmp, s1_in_tmp] - diagonal
@@ -1011,7 +1063,10 @@ fn create_mpo_with_internal_indices(
     let t1 = TensorDynLen::new(
         vec![b01.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
         vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data1,
+            &[1, phys_dim, phys_dim],
+        ))),
     );
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -1127,7 +1182,10 @@ fn test_linear_operator_apply_local() {
     let local_v = TensorDynLen::new(
         vec![site_indices[0].clone()],
         vec![phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 0.0]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![1.0, 0.0],
+            &[phys_dim],
+        ))),
     );
 
     // Apply operator locally at site0
@@ -1221,10 +1279,13 @@ fn test_linear_operator_apply_local_two_sites() {
     let local_v = TensorDynLen::new(
         vec![site_indices[0].clone(), site_indices[1].clone()],
         vec![phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
-            1.0, 0.0, // s0=0: s1=0, s1=1
-            0.0, 0.0, // s0=1: s1=0, s1=1
-        ]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![
+                1.0, 0.0, // s0=0: s1=0, s1=1
+                0.0, 0.0, // s0=1: s1=0, s1=1
+            ],
+            &[phys_dim, phys_dim],
+        ))),
     );
 
     // Apply operator locally at both sites
@@ -1485,7 +1546,10 @@ fn create_three_site_mpo_with_internal_indices(
     let t0 = TensorDynLen::new(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), b01.clone()],
         vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data0))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data0,
+            &[phys_dim, phys_dim, 1],
+        ))),
     );
 
     // Site 1: [b01, s1_out_tmp, s1_in_tmp, b12] - diagonal
@@ -1501,7 +1565,10 @@ fn create_three_site_mpo_with_internal_indices(
             b12.clone(),
         ],
         vec![1, phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data1,
+            &[1, phys_dim, phys_dim, 1],
+        ))),
     );
 
     // Site 2: [b12, s2_out_tmp, s2_in_tmp] - diagonal
@@ -1512,7 +1579,10 @@ fn create_three_site_mpo_with_internal_indices(
     let t2 = TensorDynLen::new(
         vec![b12.clone(), s2_out_tmp.clone(), s2_in_tmp.clone()],
         vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data2,
+            &[1, phys_dim, phys_dim],
+        ))),
     );
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -1702,19 +1772,19 @@ fn create_two_site_mps_with_indices(
     let t0 = TensorDynLen::new(
         vec![site_indices[0].clone(), bond.clone()],
         vec![phys_dim, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![
-            1.0;
-            phys_dim
-                * 2
-        ]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![1.0; phys_dim * 2],
+            &[phys_dim, 2],
+        ))),
     );
 
     // Site 1: [bond, s1]
     let t1 = TensorDynLen::new(
         vec![bond.clone(), site_indices[1].clone()],
         vec![2, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
             vec![1.0; 2 * phys_dim],
+            &[2, phys_dim],
         ))),
     );
 
@@ -1754,7 +1824,10 @@ fn create_two_site_mpo_vin_vout(
     let t0 = TensorDynLen::new(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
         vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data0))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data0,
+            &[phys_dim, phys_dim, 1],
+        ))),
     );
 
     // Site 1: identity matrix [bond, s1_out_tmp, s1_in_tmp]
@@ -1765,7 +1838,10 @@ fn create_two_site_mpo_vin_vout(
     let t1 = TensorDynLen::new(
         vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
         vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data1,
+            &[1, phys_dim, phys_dim],
+        ))),
     );
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -1922,7 +1998,10 @@ fn create_pauli_x_mpo(
     let t0 = TensorDynLen::new(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
         vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data0))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data0,
+            &[phys_dim, phys_dim, 1],
+        ))),
     );
 
     // Site 1 tensor: [bond, s1_out, s1_in] with X matrix
@@ -1937,7 +2016,10 @@ fn create_pauli_x_mpo(
     let t1 = TensorDynLen::new(
         vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
         vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data1,
+            &[1, phys_dim, phys_dim],
+        ))),
     );
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -2081,7 +2163,10 @@ fn create_general_2x2_mpo(
     let t0 = TensorDynLen::new(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
         vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data0))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data0,
+            &[phys_dim, phys_dim, 1],
+        ))),
     );
 
     // Site 1 tensor: [bond, s1_out, s1_in]
@@ -2095,7 +2180,10 @@ fn create_general_2x2_mpo(
     let t1 = TensorDynLen::new(
         vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
         vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data1,
+            &[1, phys_dim, phys_dim],
+        ))),
     );
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();

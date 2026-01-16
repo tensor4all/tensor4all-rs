@@ -249,14 +249,16 @@ where
     let l_vec = matrix_to_vec(&l_matrix);
     let mut l_indices = left_indices.clone();
     l_indices.push(bond_index.clone());
-    let l_storage = T::dense_storage(l_vec);
+    let l_dims: Vec<usize> = l_indices.iter().map(|idx| idx.dim).collect();
+    let l_storage = T::dense_storage_with_shape(l_vec, &l_dims);
     let left = TensorDynLen::from_indices(l_indices, l_storage);
 
     // Convert U matrix back to tensor
     let u_vec = matrix_to_vec(&u_matrix);
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
-    let r_storage = T::dense_storage(u_vec);
+    let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
+    let r_storage = T::dense_storage_with_shape(u_vec, &r_dims);
     let right = TensorDynLen::from_indices(r_indices, r_storage);
 
     Ok(FactorizeResult {
@@ -315,14 +317,16 @@ where
     let l_vec = matrix_to_vec(&l_matrix);
     let mut l_indices = left_indices.clone();
     l_indices.push(bond_index.clone());
-    let l_storage = T::dense_storage(l_vec);
+    let l_dims: Vec<usize> = l_indices.iter().map(|idx| idx.dim).collect();
+    let l_storage = T::dense_storage_with_shape(l_vec, &l_dims);
     let left = TensorDynLen::from_indices(l_indices, l_storage);
 
     // Convert R matrix back to tensor
     let r_vec = matrix_to_vec(&r_matrix);
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
-    let r_storage = T::dense_storage(r_vec);
+    let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
+    let r_storage = T::dense_storage_with_shape(r_vec, &r_dims);
     let right = TensorDynLen::from_indices(r_indices, r_storage);
 
     Ok(FactorizeResult {

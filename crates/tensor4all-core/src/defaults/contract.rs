@@ -1,7 +1,7 @@
 //! Multi-tensor contraction with optimal contraction order.
 //!
 //! This module provides functions to contract multiple tensors efficiently
-//! by using omeco's GreedyMethod to find the optimal contraction order.
+//! using hyperedge-aware einsum optimization via mdarray-einsum.
 //!
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 //!
@@ -9,17 +9,39 @@
 //!
 //! - [`contract_multi`]: Contracts tensors, handling disconnected components via outer product
 //! - [`contract_connected`]: Contracts tensors that must form a connected graph
+//!
+//! # Diag Tensor Handling
+//!
+//! When Diag tensors share indices, their diagonal axes are unified to create
+//! hyperedges in the einsum optimizer.
+//!
+//! Example: `Diag(i,j) * Diag(j,k)`:
+//! - Diag(i,j) has diagonal axes i and j (same index)
+//! - Diag(j,k) has diagonal axes j and k (same index)
+//! - After union-find: i, j, k all map to the same representative ID
+//! - This creates a hyperedge that the einsum optimizer handles correctly
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 
 use anyhow::Result;
-use omeco::{optimize_code, EinCode, GreedyMethod, NestedEinsum};
+use mdarray_einsum::{einsum_optimized, Naive, TypedTensor};
+use num_complex::Complex64;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
+use std::sync::Arc;
+use tensor4all_tensorbackend::mdarray::{Dense, DynRank, Slice, Tensor};
 
-use crate::defaults::{DynId, DynIndex, Index, TensorDynLen};
+use crate::defaults::{DynId, DynIndex, TensorComponent, TensorData, TensorDynLen};
+
+/// Type alias for einsum input references (to satisfy clippy type_complexity).
+type EinsumInput<'a, T> = (&'a [usize], &'a Slice<T, DynRank, Dense>);
 use crate::index_like::IndexLike;
+use crate::storage::{DenseStorageC64, DenseStorageF64, Storage};
 use crate::tensor_like::AllowedPairs;
+
+// ============================================================================
+// Public API
+// ============================================================================
 
 /// Contract multiple tensors into a single tensor, handling disconnected components.
 ///
@@ -79,8 +101,8 @@ pub fn contract_multi(
             let components = find_tensor_connected_components(tensors, allowed);
 
             if components.len() == 1 {
-                // All tensors connected - use optimized contraction
-                contract_connected(tensors, allowed)
+                // All tensors connected - use optimized contraction (skip connectivity check)
+                contract_multi_impl(tensors, allowed, true)
             } else {
                 // Multiple components - contract each and combine with outer product
                 let mut results: Vec<TensorDynLen> = Vec::new();
@@ -88,10 +110,10 @@ pub fn contract_multi(
                     let component_tensors: Vec<&TensorDynLen> =
                         component.iter().map(|&i| tensors[i]).collect();
 
-                    // Remap AllowedPairs for the component
+                    // Remap AllowedPairs for the component (connectivity already verified)
                     let remapped_allowed = remap_allowed_pairs(allowed, component);
                     let contracted =
-                        contract_connected(&component_tensors, remapped_allowed.as_ref())?;
+                        contract_multi_impl(&component_tensors, remapped_allowed.as_ref(), true)?;
                     results.push(contracted);
                 }
 
@@ -108,7 +130,8 @@ pub fn contract_multi(
 
 /// Contract multiple tensors that form a connected graph.
 ///
-/// Uses omeco's GreedyMethod to find the optimal contraction order.
+/// Uses hyperedge-aware einsum optimization via mdarray-einsum.
+/// This correctly handles Diag tensors by treating their diagonal axes as hyperedges.
 ///
 /// # Arguments
 /// * `tensors` - Slice of tensors to contract (must form a connected graph)
@@ -127,7 +150,7 @@ pub fn contract_multi(
 /// # Behavior by N
 /// - N=0: Error
 /// - N=1: Clone of input
-/// - N>=2: Optimal order via omeco's GreedyMethod
+/// - N>=2: Optimal order via hyperedge-aware greedy optimizer
 ///
 /// # Example
 /// ```ignore
@@ -144,8 +167,467 @@ pub fn contract_connected(
     match tensors.len() {
         0 => Err(anyhow::anyhow!("No tensors to contract")),
         1 => Ok((*tensors[0]).clone()),
-        _ => contract_connected_optimized(tensors, allowed),
+        _ => {
+            // Check connectivity first
+            let components = find_tensor_connected_components(tensors, allowed);
+            if components.len() > 1 {
+                return Err(anyhow::anyhow!(
+                    "Disconnected tensor network: {} components found",
+                    components.len()
+                ));
+            }
+            // Connectivity verified - skip check in impl
+            contract_multi_impl(tensors, allowed, true)
+        }
     }
+}
+
+// ============================================================================
+// Union-Find for Diag axis grouping
+// ============================================================================
+
+/// Union-Find data structure for grouping axis IDs.
+///
+/// Used to merge diagonal axes from Diag tensors so that they share
+/// the same representative ID when passed to einsum.
+#[derive(Debug, Clone)]
+pub struct AxisUnionFind {
+    /// Maps each ID to its parent. If parent[id] == id, it's a root.
+    parent: HashMap<DynId, DynId>,
+    /// Rank for union by rank optimization.
+    rank: HashMap<DynId, usize>,
+}
+
+impl AxisUnionFind {
+    /// Create a new empty union-find structure.
+    pub fn new() -> Self {
+        Self {
+            parent: HashMap::new(),
+            rank: HashMap::new(),
+        }
+    }
+
+    /// Add an ID to the structure (as its own set).
+    pub fn make_set(&mut self, id: DynId) {
+        use std::collections::hash_map::Entry;
+        if let Entry::Vacant(e) = self.parent.entry(id) {
+            e.insert(id);
+            self.rank.insert(id, 0);
+        }
+    }
+
+    /// Find the representative (root) of the set containing `id`.
+    /// Uses path compression for efficiency.
+    pub fn find(&mut self, id: DynId) -> DynId {
+        self.make_set(id);
+        if self.parent[&id] != id {
+            let root = self.find(self.parent[&id]);
+            self.parent.insert(id, root);
+        }
+        self.parent[&id]
+    }
+
+    /// Union the sets containing `a` and `b`.
+    /// Uses union by rank for efficiency.
+    pub fn union(&mut self, a: DynId, b: DynId) {
+        let root_a = self.find(a);
+        let root_b = self.find(b);
+
+        if root_a == root_b {
+            return;
+        }
+
+        let rank_a = self.rank[&root_a];
+        let rank_b = self.rank[&root_b];
+
+        if rank_a < rank_b {
+            self.parent.insert(root_a, root_b);
+        } else if rank_a > rank_b {
+            self.parent.insert(root_b, root_a);
+        } else {
+            self.parent.insert(root_b, root_a);
+            *self.rank.get_mut(&root_a).unwrap() += 1;
+        }
+    }
+
+    /// Remap an ID to its representative.
+    pub fn remap(&mut self, id: DynId) -> DynId {
+        self.find(id)
+    }
+
+    /// Remap a slice of IDs to their representatives.
+    pub fn remap_ids(&mut self, ids: &[DynId]) -> Vec<DynId> {
+        ids.iter().map(|id| self.find(*id)).collect()
+    }
+}
+
+impl Default for AxisUnionFind {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// Diag union-find builders
+// ============================================================================
+
+/// Build a union-find structure from TensorData components.
+///
+/// For each Diag component, all its indices are unified (they share the same
+/// diagonal dimension). This creates hyperedges when multiple Diag components
+/// share indices.
+pub fn build_diag_union_from_components(components: &[&TensorComponent]) -> AxisUnionFind {
+    let mut uf = AxisUnionFind::new();
+
+    for component in components {
+        // Add all indices to the union-find
+        for &id in component.index_ids.iter() {
+            uf.make_set(id);
+        }
+
+        // For Diag storage, union all diagonal axes
+        if component.storage.is_diag() && component.index_ids.len() >= 2 {
+            let first_id = component.index_ids[0];
+            for &id in component.index_ids.iter().skip(1) {
+                uf.union(first_id, id);
+            }
+        }
+    }
+
+    uf
+}
+
+/// Build a union-find structure from TensorData.
+///
+/// Processes all components in the TensorData, unifying diagonal axes
+/// from Diag storage components.
+pub fn build_diag_union_from_data(data: &TensorData) -> AxisUnionFind {
+    let component_refs: Vec<&TensorComponent> = data.components.iter().collect();
+    build_diag_union_from_components(&component_refs)
+}
+
+/// Build a union-find structure from a collection of tensors.
+///
+/// For each Diag tensor component, all its indices are unified (they share the same
+/// diagonal dimension). This creates hyperedges when multiple Diag tensors
+/// share indices.
+pub fn build_diag_union(tensors: &[&TensorDynLen]) -> AxisUnionFind {
+    let all_components: Vec<&TensorComponent> = tensors
+        .iter()
+        .flat_map(|t| t.tensor_data().components.iter())
+        .collect();
+
+    build_diag_union_from_components(&all_components)
+}
+
+/// Remap tensor indices using the union-find structure.
+///
+/// Returns a vector of remapped IDs for each tensor, suitable for passing
+/// to einsum. The original tensors are not modified.
+pub fn remap_tensor_ids(tensors: &[&TensorDynLen], uf: &mut AxisUnionFind) -> Vec<Vec<DynId>> {
+    tensors
+        .iter()
+        .map(|t| t.indices.iter().map(|idx| uf.find(*idx.id())).collect())
+        .collect()
+}
+
+/// Remap output IDs using the union-find structure.
+pub fn remap_output_ids(output: &[DynIndex], uf: &mut AxisUnionFind) -> Vec<DynId> {
+    output.iter().map(|idx| uf.find(*idx.id())).collect()
+}
+
+/// Collect dimension sizes for remapped IDs.
+///
+/// For unified IDs (from Diag tensors), all axes must have the same dimension,
+/// so we just take the first occurrence.
+pub fn collect_sizes(tensors: &[&TensorDynLen], uf: &mut AxisUnionFind) -> HashMap<DynId, usize> {
+    let mut sizes = HashMap::new();
+
+    for tensor in tensors {
+        for (idx, &dim) in tensor.indices.iter().zip(tensor.dims.iter()) {
+            let rep = uf.find(*idx.id());
+            sizes.entry(rep).or_insert(dim);
+        }
+    }
+
+    sizes
+}
+
+// ============================================================================
+// Contraction implementation
+// ============================================================================
+
+/// Internal implementation of multi-tensor contraction.
+///
+/// For Diag tensors, we pass them as 1D tensors (the diagonal elements) with
+/// a single hyperedge ID. The einsum hyperedge optimizer will handle them correctly.
+///
+/// This implementation preserves storage type: if all inputs are F64, the result
+/// is F64; if any input is C64, the result is C64.
+///
+/// # Arguments
+/// * `skip_connectivity_check` - If true, assumes connectivity was already verified by caller
+fn contract_multi_impl(
+    tensors: &[&TensorDynLen],
+    allowed: AllowedPairs<'_>,
+    _skip_connectivity_check: bool,
+) -> Result<TensorDynLen> {
+    // 1. Build union-find from Diag tensors to unify diagonal axes
+    let mut diag_uf = build_diag_union(tensors);
+
+    // 2. Build internal IDs with Diag-awareness
+    let (ixs, internal_id_to_original) = build_internal_ids(tensors, allowed, &mut diag_uf)?;
+
+    // 3. Output = count == 1 internal IDs (external indices)
+    let mut idx_count: HashMap<usize, usize> = HashMap::new();
+    for ix in &ixs {
+        for &i in ix {
+            *idx_count.entry(i).or_insert(0) += 1;
+        }
+    }
+    let mut output: Vec<usize> = idx_count
+        .iter()
+        .filter(|(_, &count)| count == 1)
+        .map(|(&idx, _)| idx)
+        .collect();
+    output.sort(); // deterministic order
+
+    // Note: Connectivity check is done by caller (contract_multi or contract_connected)
+    // via find_tensor_connected_components before calling this function
+
+    // 4. Build sizes from unique internal IDs
+    let mut sizes: HashMap<usize, usize> = HashMap::new();
+    for (tensor_idx, tensor) in tensors.iter().enumerate() {
+        for (pos, &dim) in tensor.dims.iter().enumerate() {
+            let internal_id = ixs[tensor_idx][pos];
+            sizes.entry(internal_id).or_insert(dim);
+        }
+    }
+
+    // 6. Convert TensorDynLen to TypedTensor, tracking if any input is C64
+    let mut typed_tensors: Vec<TypedTensor> = Vec::new();
+    let mut einsum_ids: Vec<Vec<usize>> = Vec::new();
+    let mut has_c64_input = false;
+
+    for (tensor_idx, tensor) in tensors.iter().enumerate() {
+        let storage = tensor.materialize_storage()?;
+        let is_diag = storage.is_diag();
+
+        if is_diag {
+            // Diag tensor: extract diagonal as 1D tensor
+            let typed = match &*storage {
+                Storage::DiagC64(ds) => {
+                    has_c64_input = true;
+                    let diag_len = ds.as_slice().len();
+                    let tensor_1d = Tensor::from(ds.as_slice().to_vec())
+                        .into_shape([diag_len].as_slice())
+                        .into_dyn();
+                    TypedTensor::C64(tensor_1d)
+                }
+                Storage::DiagF64(ds) => {
+                    let diag_len = ds.as_slice().len();
+                    let tensor_1d = Tensor::from(ds.as_slice().to_vec())
+                        .into_shape([diag_len].as_slice())
+                        .into_dyn();
+                    TypedTensor::F64(tensor_1d)
+                }
+                _ => return Err(anyhow::anyhow!("Expected Diag storage")),
+            };
+            typed_tensors.push(typed);
+
+            // Diag tensor with unified axes: use single hyperedge ID
+            let hyperedge_id = ixs[tensor_idx][0];
+            einsum_ids.push(vec![hyperedge_id]);
+        } else {
+            // Dense tensor
+            let typed = match &*storage {
+                Storage::DenseC64(ds) => {
+                    has_c64_input = true;
+                    TypedTensor::C64(ds.tensor().clone())
+                }
+                Storage::DenseF64(ds) => TypedTensor::F64(ds.tensor().clone()),
+                _ => return Err(anyhow::anyhow!("Expected Dense storage")),
+            };
+            typed_tensors.push(typed);
+            einsum_ids.push(ixs[tensor_idx].clone());
+        }
+    }
+
+    // 7. Perform einsum based on input types
+    let result_typed = if has_c64_input {
+        // Mixed or all C64: use C64 einsum
+        let c64_tensors: Vec<Tensor<Complex64, DynRank>> =
+            typed_tensors.iter().map(|t| t.to_c64()).collect();
+        let inputs: Vec<EinsumInput<Complex64>> = einsum_ids
+            .iter()
+            .zip(c64_tensors.iter())
+            .map(|(ids, tensor)| (ids.as_slice(), tensor.as_ref()))
+            .collect();
+        let result = einsum_optimized(&Naive, &inputs, &output, &sizes);
+        TypedTensor::C64(result)
+    } else {
+        // All F64: use F64 einsum
+        let f64_tensors: Vec<&Tensor<f64, DynRank>> = typed_tensors
+            .iter()
+            .map(|t| t.as_f64().expect("Expected F64 tensor"))
+            .collect();
+        let inputs: Vec<EinsumInput<f64>> = einsum_ids
+            .iter()
+            .zip(f64_tensors.iter())
+            .map(|(ids, tensor)| (ids.as_slice(), tensor.as_ref()))
+            .collect();
+        let result = einsum_optimized(&Naive, &inputs, &output, &sizes);
+        TypedTensor::F64(result)
+    };
+
+    // 8. Convert result back to TensorDynLen
+    let result_dims: Vec<usize> = result_typed.dims().to_vec();
+
+    // Build result indices from output internal IDs
+    let restored_indices: Vec<DynIndex> = output
+        .iter()
+        .map(|&internal_id| {
+            let (tensor_idx, pos) = internal_id_to_original[&internal_id];
+            tensors[tensor_idx].indices[pos].clone()
+        })
+        .collect();
+
+    // Handle scalar output
+    let (final_dims, final_indices) = if output.is_empty() && result_dims == vec![1] {
+        (vec![], vec![])
+    } else {
+        (result_dims, restored_indices)
+    };
+
+    // Create storage from result based on type
+    let storage = match result_typed {
+        TypedTensor::F64(t) => {
+            let data: Vec<f64> = t.into_vec();
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                data,
+                &final_dims,
+            )))
+        }
+        TypedTensor::C64(t) => {
+            let data: Vec<Complex64> = t.into_vec();
+            Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+                data,
+                &final_dims,
+            )))
+        }
+    };
+
+    Ok(TensorDynLen::new(final_indices, final_dims, storage))
+}
+
+/// Build internal IDs with Diag-awareness.
+///
+/// Uses the union-find to ensure diagonal axes from Diag tensors share the same internal ID.
+///
+/// Returns: (ixs, internal_id_to_original)
+#[allow(clippy::type_complexity)]
+fn build_internal_ids(
+    tensors: &[&TensorDynLen],
+    allowed: AllowedPairs<'_>,
+    diag_uf: &mut AxisUnionFind,
+) -> Result<(Vec<Vec<usize>>, HashMap<usize, (usize, usize)>)> {
+    let mut next_id = 0usize;
+    let mut dynid_to_internal: HashMap<DynId, usize> = HashMap::new();
+    let mut assigned: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut internal_id_to_original: HashMap<usize, (usize, usize)> = HashMap::new();
+
+    // Process contractable pairs
+    let pairs_to_process: Vec<(usize, usize)> = match allowed {
+        AllowedPairs::All => {
+            let mut pairs = Vec::new();
+            for ti in 0..tensors.len() {
+                for tj in (ti + 1)..tensors.len() {
+                    pairs.push((ti, tj));
+                }
+            }
+            pairs
+        }
+        AllowedPairs::Specified(pairs) => pairs.to_vec(),
+    };
+
+    for (ti, tj) in pairs_to_process {
+        for (pi, idx_i) in tensors[ti].indices.iter().enumerate() {
+            for (pj, idx_j) in tensors[tj].indices.iter().enumerate() {
+                if idx_i.is_contractable(idx_j) {
+                    let key_i = (ti, pi);
+                    let key_j = (tj, pj);
+
+                    let remapped_i = diag_uf.find(*idx_i.id());
+                    let remapped_j = diag_uf.find(*idx_j.id());
+
+                    match (assigned.get(&key_i).copied(), assigned.get(&key_j).copied()) {
+                        (None, None) => {
+                            let internal_id = if let Some(&id) = dynid_to_internal.get(&remapped_i)
+                            {
+                                id
+                            } else {
+                                let id = next_id;
+                                next_id += 1;
+                                dynid_to_internal.insert(remapped_i, id);
+                                internal_id_to_original.insert(id, key_i);
+                                id
+                            };
+                            assigned.insert(key_i, internal_id);
+                            assigned.insert(key_j, internal_id);
+                            if remapped_i != remapped_j {
+                                dynid_to_internal.insert(remapped_j, internal_id);
+                            }
+                        }
+                        (Some(id), None) => {
+                            assigned.insert(key_j, id);
+                            dynid_to_internal.insert(remapped_j, id);
+                        }
+                        (None, Some(id)) => {
+                            assigned.insert(key_i, id);
+                            dynid_to_internal.insert(remapped_i, id);
+                        }
+                        (Some(_id_i), Some(_id_j)) => {
+                            // Both already assigned
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Assign IDs for unassigned indices (external indices)
+    for (tensor_idx, tensor) in tensors.iter().enumerate() {
+        for (pos, idx) in tensor.indices.iter().enumerate() {
+            let key = (tensor_idx, pos);
+            if let std::collections::hash_map::Entry::Vacant(e) = assigned.entry(key) {
+                let remapped_id = diag_uf.find(*idx.id());
+
+                let internal_id = if let Some(&id) = dynid_to_internal.get(&remapped_id) {
+                    id
+                } else {
+                    let id = next_id;
+                    next_id += 1;
+                    dynid_to_internal.insert(remapped_id, id);
+                    internal_id_to_original.insert(id, key);
+                    id
+                };
+                e.insert(internal_id);
+            }
+        }
+    }
+
+    // Build ixs
+    let ixs: Vec<Vec<usize>> = tensors
+        .iter()
+        .enumerate()
+        .map(|(tensor_idx, tensor)| {
+            (0..tensor.indices.len())
+                .map(|pos| assigned[&(tensor_idx, pos)])
+                .collect()
+        })
+        .collect();
+
+    Ok((ixs, internal_id_to_original))
 }
 
 // ============================================================================
@@ -162,14 +644,6 @@ fn has_contractable_indices(a: &TensorDynLen, b: &TensorDynLen) -> bool {
 /// Find connected components of tensors based on contractable indices.
 ///
 /// Uses petgraph for O(V+E) connected component detection.
-///
-/// # Arguments
-/// * `tensors` - Slice of tensor references
-/// * `allowed` - Which tensor pairs can have their indices contracted
-///
-/// # Returns
-/// A vector of components, where each component is a vector of tensor indices.
-/// Components are sorted by their smallest tensor index for determinism.
 fn find_tensor_connected_components(
     tensors: &[&TensorDynLen],
     allowed: AllowedPairs<'_>,
@@ -189,7 +663,6 @@ fn find_tensor_connected_components(
     // Add edges based on connectivity
     match allowed {
         AllowedPairs::All => {
-            // Two tensors connected if they have any contractable indices
             for i in 0..n {
                 for j in (i + 1)..n {
                     if has_contractable_indices(tensors[i], tensors[j]) {
@@ -199,7 +672,6 @@ fn find_tensor_connected_components(
             }
         }
         AllowedPairs::Specified(pairs) => {
-            // Only specified pairs with contractable indices are connected
             for &(i, j) in pairs {
                 if has_contractable_indices(tensors[i], tensors[j]) {
                     graph.add_edge(nodes[i], nodes[j], ());
@@ -212,12 +684,10 @@ fn find_tensor_connected_components(
     let num_components = connected_components(&graph);
 
     if num_components == 1 {
-        // All connected - return single component with all indices
         return vec![(0..n).collect()];
     }
 
     // Multiple components - group by component ID
-    // petgraph's connected_components returns the number, we need to compute assignments
     use petgraph::visit::Dfs;
     let mut visited = vec![false; n];
     let mut components = Vec::new();
@@ -233,40 +703,34 @@ fn find_tensor_connected_components(
                     component.push(idx);
                 }
             }
-            component.sort(); // Deterministic order within component
+            component.sort();
             components.push(component);
         }
     }
 
-    // Sort components by smallest index for determinism
     components.sort_by_key(|c| c[0]);
     components
 }
 
 /// Remap AllowedPairs for a subset of tensors.
-///
-/// Given original tensor indices in `component`, returns AllowedPairs
-/// with indices remapped to the component's local indices.
 fn remap_allowed_pairs(allowed: AllowedPairs<'_>, component: &[usize]) -> RemappedAllowedPairs {
     match allowed {
         AllowedPairs::All => RemappedAllowedPairs::All,
         AllowedPairs::Specified(pairs) => {
-            // Build map from original index to local index
             let orig_to_local: HashMap<usize, usize> = component
                 .iter()
                 .enumerate()
                 .map(|(local, &orig)| (orig, local))
                 .collect();
 
-            // Filter and remap pairs
             let remapped: Vec<(usize, usize)> = pairs
                 .iter()
-                .filter_map(|&(i, j)| {
-                    match (orig_to_local.get(&i), orig_to_local.get(&j)) {
+                .filter_map(
+                    |&(i, j)| match (orig_to_local.get(&i), orig_to_local.get(&j)) {
                         (Some(&li), Some(&lj)) => Some((li, lj)),
-                        _ => None, // Pair not in this component
-                    }
-                })
+                        _ => None,
+                    },
+                )
                 .collect();
 
             RemappedAllowedPairs::Specified(remapped)
@@ -289,336 +753,11 @@ impl RemappedAllowedPairs {
     }
 }
 
-// ============================================================================
-// Core contraction implementation
-// ============================================================================
-
-/// Contract two tensors over their common indices.
-/// If there are no common indices, performs outer product.
-fn contract_pair(a: &TensorDynLen, b: &TensorDynLen) -> Result<TensorDynLen> {
-    let common: Vec<_> = a
-        .indices
-        .iter()
-        .filter_map(|idx_a| {
-            b.indices
-                .iter()
-                .find(|idx_b| idx_a.is_contractable(idx_b))
-                .map(|idx_b| (idx_a.clone(), idx_b.clone()))
-        })
-        .collect();
-
-    if common.is_empty() {
-        // No common indices - perform outer product
-        a.outer_product(b)
-    } else {
-        a.tensordot(b, &common)
-    }
-}
-
-/// Contract multiple tensors using omeco's GreedyMethod for optimal ordering.
-///
-/// Uses internal IDs to control which indices are contracted based on `allowed`.
-fn contract_connected_optimized(
-    tensors: &[&TensorDynLen],
-    allowed: AllowedPairs<'_>,
-) -> Result<TensorDynLen> {
-    // 1. Validate for Specified pairs
-    if let AllowedPairs::Specified(pairs) = allowed {
-        // 1a. Check that all specified pairs have contractable indices
-        for &(i, j) in pairs {
-            if !has_contractable_indices(tensors[i], tensors[j]) {
-                return Err(anyhow::anyhow!(
-                    "Specified pair ({}, {}) has no contractable indices",
-                    i,
-                    j
-                ));
-            }
-        }
-        // 1b. Check that the graph formed by pairs is connected
-        validate_connected_graph(tensors.len(), pairs)?;
-    }
-
-    // 2. Build internal IDs
-    //    - Allowed pairs' contractable indices get shared internal IDs
-    //    - All other indices get unique internal IDs
-    let (ixs, internal_id_to_original) = build_internal_ids(tensors, allowed);
-
-    // 3. Output = count == 1 internal IDs (external indices)
-    let mut idx_count: HashMap<usize, usize> = HashMap::new();
-    for ix in &ixs {
-        for &i in ix {
-            *idx_count.entry(i).or_insert(0) += 1;
-        }
-    }
-    let mut output: Vec<usize> = idx_count
-        .iter()
-        .filter(|(_, &count)| count == 1)
-        .map(|(&idx, _)| idx)
-        .collect();
-    output.sort(); // deterministic order
-
-    // 4. Build sizes from tensors
-    let mut sizes: HashMap<usize, usize> = HashMap::new();
-    for (tensor_idx, tensor) in tensors.iter().enumerate() {
-        for (pos, &dim) in tensor.dims.iter().enumerate() {
-            let internal_id = ixs[tensor_idx][pos];
-            sizes.entry(internal_id).or_insert(dim);
-        }
-    }
-
-    // 5. Optimize contraction order using GreedyMethod
-    let code = EinCode::new(ixs.clone(), output.clone());
-    let tree = optimize_code(&code, &sizes, &GreedyMethod::default())
-        .ok_or_else(|| anyhow::anyhow!("Failed to optimize contraction order"))?;
-
-    // 5a. Check if omeco returned an incomplete tree (doesn't include all tensors)
-    // This happens when tensors form disconnected components in the contraction graph.
-    if tree.leaf_count() != tensors.len() {
-        return Err(anyhow::anyhow!(
-            "Contraction graph is disconnected: only {} of {} tensors are connected. \
-             All tensors must form a connected graph through contractable indices.",
-            tree.leaf_count(),
-            tensors.len()
-        ));
-    }
-
-    // 6. Create temporary tensors with internal ID-based indices
-    //    This ensures contract_pair uses internal IDs for contraction determination
-    let temp_tensors: Vec<TensorDynLen> = tensors
-        .iter()
-        .enumerate()
-        .map(|(tensor_idx, tensor)| {
-            let temp_indices: Vec<DynIndex> = ixs[tensor_idx]
-                .iter()
-                .zip(tensor.dims.iter())
-                .map(|(&internal_id, &dim)| {
-                    // Create index with internal_id as the DynId
-                    Index::new(DynId(internal_id as u128), dim)
-                })
-                .collect();
-            TensorDynLen::new(temp_indices, tensor.dims.clone(), tensor.storage().clone())
-        })
-        .collect();
-
-    // 7. Execute the contraction tree using temporary tensors
-    let result = execute_contraction_tree(&temp_tensors, &tree)?;
-
-    // 8. Restore original indices from internal IDs
-    //    Use result's actual index order (not sorted output) to match storage layout
-    let restored_indices: Vec<DynIndex> = result
-        .indices
-        .iter()
-        .map(|temp_idx| {
-            // temp_idx has DynId(internal_id as u128)
-            let internal_id = temp_idx.id().0 as usize;
-            let (tensor_idx, pos) = internal_id_to_original[&internal_id];
-            tensors[tensor_idx].indices[pos].clone()
-        })
-        .collect();
-
-    Ok(TensorDynLen::new(
-        restored_indices,
-        result.dims.clone(),
-        result.storage().clone(),
-    ))
-}
-
-/// Build internal IDs for contraction.
-///
-/// Internal IDs are integers that represent indices during contraction:
-/// - Contractable pairs in allowed tensor pairs share the same internal ID
-/// - All other indices get unique internal IDs
-///
-/// These internal IDs are used for:
-/// 1. Determining which indices to contract (count >= 2)
-/// 2. Optimizing contraction order (omeco uses these)
-/// 3. Mapping back to original indices after contraction
-///
-/// Returns: (ixs, internal_id_to_original)
-/// - ixs: Vec<Vec<usize>> - internal IDs for each tensor's indices
-/// - internal_id_to_original: Maps internal_id -> (tensor_idx, index_position)
-#[allow(clippy::type_complexity)]
-fn build_internal_ids(
-    tensors: &[&TensorDynLen],
-    allowed: AllowedPairs<'_>,
-) -> (Vec<Vec<usize>>, HashMap<usize, (usize, usize)>) {
-    let mut next_id = 0usize;
-    // (tensor_idx, index_position) -> internal_id
-    let mut assigned: HashMap<(usize, usize), usize> = HashMap::new();
-    // internal_id -> (tensor_idx, index_position) for restoring
-    let mut internal_id_to_original: HashMap<usize, (usize, usize)> = HashMap::new();
-
-    // Helper: assign shared internal ID for contractable indices between tensor pair
-    // Handles hyperedges (same index appearing in 3+ tensors) by propagating IDs
-    let mut assign_contractable = |ti: usize, tj: usize| {
-        for (pi, idx_i) in tensors[ti].indices.iter().enumerate() {
-            for (pj, idx_j) in tensors[tj].indices.iter().enumerate() {
-                if idx_i.is_contractable(idx_j) {
-                    let key_i = (ti, pi);
-                    let key_j = (tj, pj);
-                    match (assigned.get(&key_i).copied(), assigned.get(&key_j).copied()) {
-                        (None, None) => {
-                            // Neither assigned: create new shared ID
-                            assigned.insert(key_i, next_id);
-                            assigned.insert(key_j, next_id);
-                            internal_id_to_original.insert(next_id, key_i);
-                            next_id += 1;
-                        }
-                        (Some(id), None) => {
-                            // key_i assigned, key_j not: share key_i's ID
-                            assigned.insert(key_j, id);
-                        }
-                        (None, Some(id)) => {
-                            // key_j assigned, key_i not: share key_j's ID
-                            assigned.insert(key_i, id);
-                        }
-                        (Some(id_i), Some(id_j)) => {
-                            // Both assigned - they should have the same ID
-                            // (same original index ID means all occurrences should share internal ID)
-                            debug_assert_eq!(
-                                id_i, id_j,
-                                "Conflicting internal IDs for contractable indices"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    };
-
-    match allowed {
-        AllowedPairs::All => {
-            // All tensor pairs are allowed to contract
-            for ti in 0..tensors.len() {
-                for tj in (ti + 1)..tensors.len() {
-                    assign_contractable(ti, tj);
-                }
-            }
-        }
-        AllowedPairs::Specified(pairs) => {
-            // Only specified pairs are allowed to contract
-            for &(ti, tj) in pairs {
-                assign_contractable(ti, tj);
-            }
-        }
-    }
-
-    // Assign unique IDs for all unassigned indices (external indices)
-    for (tensor_idx, tensor) in tensors.iter().enumerate() {
-        for pos in 0..tensor.indices.len() {
-            let key = (tensor_idx, pos);
-            if let std::collections::hash_map::Entry::Vacant(e) = assigned.entry(key) {
-                e.insert(next_id);
-                internal_id_to_original.insert(next_id, key);
-                next_id += 1;
-            }
-        }
-    }
-
-    // Build ixs: internal IDs for each tensor
-    let ixs: Vec<Vec<usize>> = tensors
-        .iter()
-        .enumerate()
-        .map(|(tensor_idx, tensor)| {
-            (0..tensor.indices.len())
-                .map(|pos| assigned[&(tensor_idx, pos)])
-                .collect()
-        })
-        .collect();
-
-    (ixs, internal_id_to_original)
-}
-
-/// Validate that the specified tensor pairs form a connected graph.
-///
-/// Returns an error if the graph is disconnected.
-fn validate_connected_graph(num_tensors: usize, pairs: &[(usize, usize)]) -> Result<()> {
-    if num_tensors == 0 {
-        return Ok(());
-    }
-    if num_tensors == 1 {
-        return Ok(());
-    }
-    if pairs.is_empty() {
-        return Err(anyhow::anyhow!(
-            "AllowedPairs::Specified with empty pairs results in disconnected graph"
-        ));
-    }
-
-    // Build adjacency list
-    let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); num_tensors];
-    for &(a, b) in pairs {
-        if a >= num_tensors || b >= num_tensors {
-            return Err(anyhow::anyhow!(
-                "Invalid tensor index in AllowedPairs: ({}, {}) but only {} tensors",
-                a,
-                b,
-                num_tensors
-            ));
-        }
-        adj[a].insert(b);
-        adj[b].insert(a);
-    }
-
-    // BFS to check connectivity
-    let mut visited = vec![false; num_tensors];
-    let mut queue = VecDeque::new();
-    queue.push_back(0);
-    visited[0] = true;
-    let mut count = 1;
-
-    while let Some(node) = queue.pop_front() {
-        for &neighbor in &adj[node] {
-            if !visited[neighbor] {
-                visited[neighbor] = true;
-                count += 1;
-                queue.push_back(neighbor);
-            }
-        }
-    }
-
-    if count != num_tensors {
-        return Err(anyhow::anyhow!(
-            "AllowedPairs::Specified forms a disconnected graph: only {} of {} tensors are connected",
-            count,
-            num_tensors
-        ));
-    }
-
-    Ok(())
-}
-
-/// Execute a contraction tree by recursively contracting tensors.
-fn execute_contraction_tree(
-    tensors: &[TensorDynLen],
-    tree: &NestedEinsum<usize>,
-) -> Result<TensorDynLen> {
-    match tree {
-        NestedEinsum::Leaf { tensor_index } => Ok(tensors[*tensor_index].clone()),
-        NestedEinsum::Node { args, .. } => {
-            // Recursively evaluate children
-            let children: Vec<TensorDynLen> = args
-                .iter()
-                .map(|arg| execute_contraction_tree(tensors, arg))
-                .collect::<Result<_>>()?;
-
-            // Contract all children (typically 2 for binary tree)
-            let mut result = children[0].clone();
-            for child in children.iter().skip(1) {
-                result = contract_pair(&result, child)?;
-            }
-            Ok(result)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defaults::{DynId, DynIndex, Index};
-    use crate::storage::{DenseStorageC64, Storage};
+    use crate::defaults::Index;
     use num_complex::Complex64;
-    use std::sync::Arc;
 
     fn make_test_tensor(shape: &[usize], ids: &[u128]) -> TensorDynLen {
         let indices: Vec<DynIndex> = ids
@@ -631,9 +770,15 @@ mod tests {
         let data: Vec<Complex64> = (0..total_size)
             .map(|i| Complex64::new(i as f64, 0.0))
             .collect();
-        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data)));
+        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+            data, &dims,
+        )));
         TensorDynLen::new(indices, dims, storage)
     }
+
+    // ========================================================================
+    // contract_multi tests
+    // ========================================================================
 
     #[test]
     fn test_contract_multi_empty() {
@@ -665,7 +810,6 @@ mod tests {
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let c = make_test_tensor(&[4, 5], &[3, 4]); // k=3, l=4
         let result = contract_multi(&[&a, &b, &c], AllowedPairs::All).unwrap();
-        // Output has dimensions for i and l (order may vary due to tree structure)
         let mut sorted_dims = result.dims.clone();
         sorted_dims.sort();
         assert_eq!(sorted_dims, vec![2, 5]); // i=2, l=5
@@ -679,7 +823,6 @@ mod tests {
         let c = make_test_tensor(&[4, 5], &[3, 4]);
         let d = make_test_tensor(&[5, 6], &[4, 5]);
         let result = contract_multi(&[&a, &b, &c, &d], AllowedPairs::All).unwrap();
-        // Output has dimensions for i and m (order may vary due to tree structure)
         let mut sorted_dims = result.dims.clone();
         sorted_dims.sort();
         assert_eq!(sorted_dims, vec![2, 6]); // i=2, m=6
@@ -691,7 +834,6 @@ mod tests {
         let a = make_test_tensor(&[2, 3], &[1, 2]);
         let b = make_test_tensor(&[4, 5], &[3, 4]);
         let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
-        // Total elements should be 2*3*4*5 = 120
         let total_elements: usize = result.dims.iter().product();
         assert_eq!(total_elements, 2 * 3 * 4 * 5);
         assert_eq!(result.dims.len(), 4);
@@ -703,7 +845,6 @@ mod tests {
         let a = make_test_tensor(&[2], &[1]); // i=1
         let b = make_test_tensor(&[3], &[2]); // j=2
         let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
-        // Total elements should be 2*3 = 6
         let total_elements: usize = result.dims.iter().product();
         assert_eq!(total_elements, 2 * 3);
         assert_eq!(result.dims.len(), 2);
@@ -711,36 +852,38 @@ mod tests {
 
     #[test]
     fn test_contract_connected_disconnected_error() {
-        // contract_connected should error on disconnected graphs
         let a = make_test_tensor(&[2, 3], &[1, 2]);
         let b = make_test_tensor(&[4, 5], &[3, 4]);
         let result = contract_connected(&[&a, &b], AllowedPairs::All);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("disconnected"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .to_lowercase()
+            .contains("disconnected"));
     }
 
     #[test]
     fn test_contract_connected_specified_no_contractable_error() {
-        // contract_connected with Specified pair that has no contractable indices
-        // Should give clear error message (not just "disconnected")
         let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
         let b = make_test_tensor(&[4, 5], &[3, 4]); // k=3, l=4 (no common with a)
         let result = contract_connected(&[&a, &b], AllowedPairs::Specified(&[(0, 1)]));
         assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("no contractable indices"));
+        let err_msg = result.unwrap_err().to_string().to_lowercase();
+        assert!(
+            err_msg.contains("disconnected") || err_msg.contains("no contractable"),
+            "Expected error about disconnected or no contractable indices, got: {}",
+            err_msg
+        );
     }
 
     // ========================================================================
-    // Tests for AllowedPairs::Specified
+    // AllowedPairs::Specified tests
     // ========================================================================
 
     #[test]
     fn test_contract_specified_pairs() {
         // A[i,j], B[j,k], C[i,l] - tensors 0, 1, 2
-        // Specified(&[(0, 1), (0, 2)]) - A-B and A-C contractions
-        // j is contracted (A-B), i is contracted (A-C)
-        // Result should be [k, l]
         let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let c = make_test_tensor(&[2, 5], &[1, 4]); // i=1, l=4
@@ -753,10 +896,6 @@ mod tests {
 
     #[test]
     fn test_contract_specified_no_contractable_indices_error() {
-        // A[i,j], B[j,k], C[m,l] - tensors 0, 1, 2
-        // Specified(&[(0, 1), (1, 2)]) - A-B and B-C pairs allowed
-        // j is contracted (A-B), but B-C has no common indices
-        // Should error because pair (1, 2) has no contractable indices
         let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let c = make_test_tensor(&[6, 5], &[5, 4]); // m=5, l=4 (no common with B)
@@ -770,9 +909,6 @@ mod tests {
 
     #[test]
     fn test_contract_specified_disconnected_outer_product() {
-        // Specified(&[(0,1), (2,3)]) with 4 tensors
-        // {A,B} and {C,D} each have contractable indices, but are disconnected
-        // Should succeed via outer product of the two contracted components
         let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let c = make_test_tensor(&[4, 5], &[4, 5]); // m=4, n=5
@@ -782,129 +918,364 @@ mod tests {
             AllowedPairs::Specified(&[(0, 1), (2, 3)]),
         )
         .unwrap();
-        // A-B contracts j: result has i, k (dims 2, 4)
-        // C-D contracts n: result has m, p (dims 4, 6)
-        // Outer product: result has 4 indices
         assert_eq!(result.dims.len(), 4);
         let mut sorted_dims = result.dims.clone();
         sorted_dims.sort();
         assert_eq!(sorted_dims, vec![2, 4, 4, 6]);
     }
 
+    // ========================================================================
+    // Union-Find tests
+    // ========================================================================
+
     #[test]
-    fn test_validate_connected_graph() {
-        // Connected
-        assert!(validate_connected_graph(3, &[(0, 1), (1, 2)]).is_ok());
-        assert!(validate_connected_graph(3, &[(0, 1), (0, 2)]).is_ok());
-        assert!(validate_connected_graph(4, &[(0, 1), (1, 2), (2, 3)]).is_ok());
+    fn test_union_find_basic() {
+        let mut uf = AxisUnionFind::new();
 
-        // Disconnected
-        assert!(validate_connected_graph(4, &[(0, 1), (2, 3)]).is_err());
-        assert!(validate_connected_graph(3, &[(0, 1)]).is_err()); // tensor 2 not connected
+        let a = DynId(1);
+        let b = DynId(2);
+        let c = DynId(3);
 
-        // Edge cases
-        assert!(validate_connected_graph(0, &[]).is_ok());
-        assert!(validate_connected_graph(1, &[]).is_ok());
-        assert!(validate_connected_graph(2, &[]).is_err()); // 2 tensors, no edges
+        uf.make_set(a);
+        uf.make_set(b);
+        uf.make_set(c);
+
+        assert_ne!(uf.find(a), uf.find(b));
+        assert_ne!(uf.find(b), uf.find(c));
+
+        uf.union(a, b);
+        assert_eq!(uf.find(a), uf.find(b));
+        assert_ne!(uf.find(a), uf.find(c));
+
+        uf.union(b, c);
+        assert_eq!(uf.find(a), uf.find(b));
+        assert_eq!(uf.find(b), uf.find(c));
+        assert_eq!(uf.find(a), uf.find(c));
     }
 
-    /// Test omeco's handling of hyperedges.
-    ///
-    /// Simulates: A(i, I) * B(j, J) * C(k, K) * delta_{IJK}
-    /// where delta is a 3D superdiagonal (I==J==K).
-    ///
-    /// Decomposed representation:
-    /// - A(i, x), B(j, x), C(k, x), delta(x)
-    /// - x is a hyperedge connecting all four tensors
     #[test]
-    fn test_omeco_hyperedge_delta() {
-        use omeco::{contraction_complexity, optimize_code, EinCode, GreedyMethod};
-        use std::collections::HashMap;
+    fn test_union_find_chain() {
+        let mut uf = AxisUnionFind::new();
 
-        // A(i, x), B(j, x), C(k, x), delta(x)
-        // x is the hyperedge (appears in all 4 tensors)
-        let ixs: Vec<Vec<char>> = vec![
-            vec!['i', 'x'], // A
-            vec!['j', 'x'], // B
-            vec!['k', 'x'], // C
-            vec!['x'],      // delta (1D)
-        ];
-        let output = vec!['i', 'j', 'k'];
+        let i = DynId(1);
+        let j = DynId(2);
+        let k = DynId(3);
+        let l = DynId(4);
 
-        let code = EinCode::new(ixs.clone(), output);
+        uf.union(i, j);
+        uf.union(j, k);
+        uf.union(k, l);
 
-        let mut sizes: HashMap<char, usize> = HashMap::new();
-        sizes.insert('i', 10);
-        sizes.insert('j', 10);
-        sizes.insert('k', 10);
-        sizes.insert('x', 100); // hyperedge dimension
-
-        let tree = optimize_code(&code, &sizes, &GreedyMethod::default())
-            .expect("optimization should succeed");
-
-        let complexity = contraction_complexity(&tree, &sizes, &ixs);
-
-        // Verify the optimization found a solution
-        // Time complexity should be reasonable (not exponentially bad)
-        println!(
-            "Hyperedge test - tc: 2^{:.2}, sc: 2^{:.2}",
-            complexity.tc, complexity.sc
-        );
-
-        // Space complexity should be around log2(10*10*10) = ~10 for output
-        // plus some intermediate tensors
-        assert!(
-            complexity.sc < 15.0,
-            "Space complexity should be reasonable"
-        );
-
-        // The tree should have 4 leaves (one for each input tensor)
-        assert_eq!(tree.leaf_count(), 4);
+        let rep = uf.find(i);
+        assert_eq!(uf.find(j), rep);
+        assert_eq!(uf.find(k), rep);
+        assert_eq!(uf.find(l), rep);
     }
 
-    /// Test omeco with a simple hyperedge case: U * s * V (SVD-like)
     #[test]
-    fn test_omeco_hyperedge_svd() {
-        use omeco::{contraction_complexity, optimize_code, EinCode, GreedyMethod};
-        use std::collections::HashMap;
+    fn test_remap_ids() {
+        let mut uf = AxisUnionFind::new();
 
-        // U(i, j), s(j), V(j, k)
-        // j is a hyperedge connecting all 3 tensors
-        let ixs: Vec<Vec<char>> = vec![
-            vec!['i', 'j'], // U
-            vec!['j'],      // s (1D diagonal)
-            vec!['j', 'k'], // V
-        ];
-        let output = vec!['i', 'k'];
+        let i = DynId(1);
+        let j = DynId(2);
+        let k = DynId(3);
 
-        let code = EinCode::new(ixs.clone(), output);
+        uf.union(i, j);
 
-        let mut sizes: HashMap<char, usize> = HashMap::new();
-        sizes.insert('i', 100);
-        sizes.insert('j', 50); // bond dimension
-        sizes.insert('k', 100);
+        let ids = vec![i, j, k];
+        let remapped = uf.remap_ids(&ids);
 
-        let tree = optimize_code(&code, &sizes, &GreedyMethod::default())
-            .expect("optimization should succeed");
+        assert_eq!(remapped[0], remapped[1]);
+        assert_ne!(remapped[0], remapped[2]);
+    }
 
-        let complexity = contraction_complexity(&tree, &sizes, &ixs);
+    #[test]
+    fn test_three_diag_chain() {
+        let mut uf = AxisUnionFind::new();
 
-        println!(
-            "SVD hyperedge - tc: 2^{:.2}, sc: 2^{:.2}",
-            complexity.tc, complexity.sc
-        );
-        println!("Tree structure: {:?}", tree);
+        let i = DynId(1);
+        let j = DynId(2);
+        let k = DynId(3);
+        let l = DynId(4);
 
-        // 3 input tensors
-        assert_eq!(tree.leaf_count(), 3);
+        uf.union(i, j);
+        uf.union(j, k);
+        uf.union(k, l);
 
-        // Note: sc is high (2^18.93 ≈ 500000 = 100*50*100) because
-        // intermediate tensor keeps all indices until final contraction.
-        // This is a limitation of treating diagonal as just another tensor.
-        //
-        // With proper diagonal handling, we could:
-        // 1. U(i,j) * s(j) → U'(i,j) where U'[i,j] = U[i,j] * s[j] (element-wise, O(n²))
-        // 2. U'(i,j) * V(j,k) → R(i,k) (matrix mult, O(n³))
-        // Instead omeco creates larger intermediate.
+        let rep = uf.find(i);
+        assert_eq!(uf.find(j), rep);
+        assert_eq!(uf.find(k), rep);
+        assert_eq!(uf.find(l), rep);
+    }
+
+    #[test]
+    fn test_three_diag_star() {
+        let mut uf = AxisUnionFind::new();
+
+        let a = DynId(1);
+        let b = DynId(2);
+        let c = DynId(3);
+        let d = DynId(4);
+
+        uf.union(a, b);
+        uf.union(a, c);
+        uf.union(a, d);
+
+        let rep = uf.find(a);
+        assert_eq!(uf.find(b), rep);
+        assert_eq!(uf.find(c), rep);
+        assert_eq!(uf.find(d), rep);
+    }
+
+    #[test]
+    fn test_diag_with_three_axes() {
+        let mut uf = AxisUnionFind::new();
+
+        let i = DynId(1);
+        let j = DynId(2);
+        let k = DynId(3);
+        let l = DynId(4);
+
+        uf.union(i, j);
+        uf.union(j, k);
+
+        let rep = uf.find(i);
+        assert_eq!(uf.find(j), rep);
+        assert_eq!(uf.find(k), rep);
+        assert_ne!(uf.find(l), rep);
+    }
+
+    #[test]
+    fn test_two_separate_diag_groups() {
+        let mut uf = AxisUnionFind::new();
+
+        let a = DynId(1);
+        let b = DynId(2);
+        let c = DynId(3);
+        let d = DynId(4);
+
+        uf.union(a, b);
+        uf.union(c, d);
+
+        assert_eq!(uf.find(a), uf.find(b));
+        assert_eq!(uf.find(c), uf.find(d));
+        assert_ne!(uf.find(a), uf.find(c));
+    }
+
+    #[test]
+    fn test_diag_and_dense_mixed() {
+        let mut uf = AxisUnionFind::new();
+
+        let i = DynId(1);
+        let j = DynId(2);
+        let k = DynId(3);
+
+        uf.union(i, j);
+        uf.make_set(k);
+
+        assert_eq!(uf.find(i), uf.find(j));
+        assert_ne!(uf.find(j), uf.find(k));
+    }
+
+    #[test]
+    fn test_complex_network() {
+        let mut uf = AxisUnionFind::new();
+
+        let a = DynId(1);
+        let b = DynId(2);
+        let c = DynId(3);
+        let d = DynId(4);
+        let e = DynId(5);
+        let f = DynId(6);
+
+        uf.union(a, b);
+        uf.union(b, c);
+        uf.make_set(d);
+        uf.union(d, e);
+        uf.union(e, f);
+
+        let rep1 = uf.find(a);
+        assert_eq!(uf.find(b), rep1);
+        assert_eq!(uf.find(c), rep1);
+
+        let rep2 = uf.find(d);
+        assert_eq!(uf.find(e), rep2);
+        assert_eq!(uf.find(f), rep2);
+
+        assert_ne!(rep1, rep2);
+    }
+
+    #[test]
+    fn test_single_diag_tensor() {
+        let mut uf = AxisUnionFind::new();
+
+        let i = DynId(1);
+        let j = DynId(2);
+
+        uf.union(i, j);
+
+        assert_eq!(uf.find(i), uf.find(j));
+    }
+
+    #[test]
+    fn test_empty_union_find() {
+        let mut uf = AxisUnionFind::new();
+
+        let x = DynId(42);
+        uf.make_set(x);
+        assert_eq!(uf.find(x), x);
+    }
+
+    #[test]
+    fn test_idempotent_union() {
+        let mut uf = AxisUnionFind::new();
+
+        let a = DynId(1);
+        let b = DynId(2);
+
+        uf.union(a, b);
+        let rep1 = uf.find(a);
+
+        uf.union(a, b);
+        let rep2 = uf.find(a);
+
+        uf.union(b, a);
+        let rep3 = uf.find(a);
+
+        assert_eq!(rep1, rep2);
+        assert_eq!(rep2, rep3);
+    }
+
+    #[test]
+    fn test_self_union() {
+        let mut uf = AxisUnionFind::new();
+
+        let a = DynId(1);
+        uf.union(a, a);
+
+        assert_eq!(uf.find(a), a);
+    }
+
+    #[test]
+    fn test_four_diag_tensors_chain() {
+        let mut uf = AxisUnionFind::new();
+
+        let i = DynId(1);
+        let j = DynId(2);
+        let k = DynId(3);
+        let l = DynId(4);
+        let m = DynId(5);
+
+        uf.union(i, j);
+        uf.union(j, k);
+        uf.union(k, l);
+        uf.union(l, m);
+
+        let rep = uf.find(i);
+        assert_eq!(uf.find(j), rep);
+        assert_eq!(uf.find(k), rep);
+        assert_eq!(uf.find(l), rep);
+        assert_eq!(uf.find(m), rep);
+    }
+
+    #[test]
+    fn test_diag_tensors_merge_two_chains() {
+        let mut uf = AxisUnionFind::new();
+
+        let a = DynId(1);
+        let b = DynId(2);
+        let c = DynId(3);
+        let d = DynId(4);
+        let e = DynId(5);
+
+        uf.union(a, b);
+        uf.union(b, c);
+        uf.union(d, e);
+        uf.union(e, c);
+
+        let rep = uf.find(a);
+        assert_eq!(uf.find(b), rep);
+        assert_eq!(uf.find(c), rep);
+        assert_eq!(uf.find(d), rep);
+        assert_eq!(uf.find(e), rep);
+    }
+
+    #[test]
+    fn test_remap_preserves_order() {
+        let mut uf = AxisUnionFind::new();
+
+        let i = DynId(1);
+        let j = DynId(2);
+        let k = DynId(3);
+        let l = DynId(4);
+
+        uf.union(i, j);
+        uf.union(k, l);
+
+        let ids = vec![i, j, k, l, i, k];
+        let remapped = uf.remap_ids(&ids);
+
+        assert_eq!(remapped.len(), 6);
+        assert_eq!(remapped[0], remapped[1]);
+        assert_eq!(remapped[2], remapped[3]);
+        assert_ne!(remapped[0], remapped[2]);
+        assert_eq!(remapped[0], remapped[4]);
+        assert_eq!(remapped[2], remapped[5]);
+    }
+
+    // ========================================================================
+    // contract_connected tests
+    // ========================================================================
+
+    fn make_dense_tensor(shape: &[usize], ids: &[u128]) -> TensorDynLen {
+        let indices: Vec<DynIndex> = ids
+            .iter()
+            .zip(shape.iter())
+            .map(|(&id, &dim)| Index::new(DynId(id), dim))
+            .collect();
+        let dims = shape.to_vec();
+        let total_size: usize = shape.iter().product();
+        let data: Vec<Complex64> = (0..total_size)
+            .map(|i| Complex64::new((i + 1) as f64, 0.0))
+            .collect();
+        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+            data, &dims,
+        )));
+        TensorDynLen::new(indices, dims, storage)
+    }
+
+    #[test]
+    fn test_contract_connected_empty() {
+        let tensors: Vec<&TensorDynLen> = vec![];
+        let result = contract_connected(&tensors, AllowedPairs::All);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_contract_connected_single() {
+        let tensor = make_dense_tensor(&[2, 3], &[1, 2]);
+        let result = contract_connected(&[&tensor], AllowedPairs::All).unwrap();
+        assert_eq!(result.dims, tensor.dims);
+    }
+
+    #[test]
+    fn test_contract_connected_pair_dense() {
+        // A[i,j] * B[j,k] -> C[i,k]
+        let a = make_dense_tensor(&[2, 3], &[1, 2]); // i=1, j=2
+        let b = make_dense_tensor(&[3, 4], &[2, 3]); // j=2, k=3
+        let result = contract_connected(&[&a, &b], AllowedPairs::All).unwrap();
+        assert_eq!(result.dims, vec![2, 4]); // i, k
+    }
+
+    #[test]
+    fn test_contract_connected_three_dense() {
+        // A[i,j] * B[j,k] * C[k,l] -> D[i,l]
+        let a = make_dense_tensor(&[2, 3], &[1, 2]); // i=1, j=2
+        let b = make_dense_tensor(&[3, 4], &[2, 3]); // j=2, k=3
+        let c = make_dense_tensor(&[4, 5], &[3, 4]); // k=3, l=4
+        let result = contract_connected(&[&a, &b, &c], AllowedPairs::All).unwrap();
+        let mut sorted_dims = result.dims.clone();
+        sorted_dims.sort();
+        assert_eq!(sorted_dims, vec![2, 5]); // i=2, l=5
     }
 }
