@@ -802,4 +802,67 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_multi_contract_hyperedge_on_right() {
+        // ia,ja,ka->ijk (hyperedge 'a' is on the right side of all tensors)
+        // This tests the case where the contracted index is not at position 0
+        let a = tensor![[1.0, 2.0], [3.0, 4.0]].into_dyn(); // 2x2 (i,a)
+        let b = tensor![[1.0, 2.0], [3.0, 4.0]].into_dyn(); // 2x2 (j,a)
+        let c = tensor![[5.0, 6.0], [7.0, 8.0]].into_dyn(); // 2x2 (k,a)
+
+        let result = multi_contract(
+            &Naive,
+            &[
+                (&[0u32, 3], &a), // i=0, a=3
+                (&[1u32, 3], &b), // j=1, a=3
+                (&[2u32, 3], &c), // k=2, a=3
+            ],
+            &3u32, // Contract over a
+            &[0, 1, 2], // Output: i, j, k
+        );
+
+        // Manual calculation:
+        // result[i,j,k] = sum_a A[i,a] * B[j,a] * C[k,a]
+        // result[0,0,0] = A[0,0]*B[0,0]*C[0,0] + A[0,1]*B[0,1]*C[0,1]
+        //               = 1*1*5 + 2*2*6 = 5 + 24 = 29
+        assert_relative_eq!(result[[0, 0, 0]], 29.0, epsilon = 1e-10);
+
+        // result[1,1,1] = A[1,0]*B[1,0]*C[1,0] + A[1,1]*B[1,1]*C[1,1]
+        //               = 3*3*7 + 4*4*8 = 63 + 128 = 191
+        assert_relative_eq!(result[[1, 1, 1]], 191.0, epsilon = 1e-10);
+
+        // result[0,1,0] = A[0,0]*B[1,0]*C[0,0] + A[0,1]*B[1,1]*C[0,1]
+        //               = 1*3*5 + 2*4*6 = 15 + 48 = 63
+        assert_relative_eq!(result[[0, 1, 0]], 63.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_multi_contract_hyperedge_mixed_positions() {
+        // ai,ja,ak->ijk (hyperedge 'a' at different positions in each tensor)
+        let a = tensor![[1.0, 2.0], [3.0, 4.0]].into_dyn(); // 2x2 (a,i)
+        let b = tensor![[1.0, 2.0], [3.0, 4.0]].into_dyn(); // 2x2 (j,a)
+        let c = tensor![[5.0, 6.0], [7.0, 8.0]].into_dyn(); // 2x2 (a,k)
+
+        let result = multi_contract(
+            &Naive,
+            &[
+                (&[3u32, 0], &a), // a=3, i=0
+                (&[1u32, 3], &b), // j=1, a=3
+                (&[3u32, 2], &c), // a=3, k=2
+            ],
+            &3u32, // Contract over a
+            &[0, 1, 2], // Output: i, j, k
+        );
+
+        // Manual calculation:
+        // result[i,j,k] = sum_a A[a,i] * B[j,a] * C[a,k]
+        // result[0,0,0] = A[0,0]*B[0,0]*C[0,0] + A[1,0]*B[0,1]*C[1,0]
+        //               = 1*1*5 + 3*2*7 = 5 + 42 = 47
+        assert_relative_eq!(result[[0, 0, 0]], 47.0, epsilon = 1e-10);
+
+        // result[1,1,1] = A[0,1]*B[1,0]*C[0,1] + A[1,1]*B[1,1]*C[1,1]
+        //               = 2*3*6 + 4*4*8 = 36 + 128 = 164
+        assert_relative_eq!(result[[1, 1, 1]], 164.0, epsilon = 1e-10);
+    }
 }
