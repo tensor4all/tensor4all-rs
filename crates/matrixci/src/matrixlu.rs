@@ -2,9 +2,7 @@
 
 use crate::error::Result;
 use crate::scalar::Scalar;
-use crate::util::{
-    ncols, nrows, submatrix_argmax, swap_cols, swap_rows, transpose, zeros, Matrix,
-};
+use crate::util::{ncols, nrows, submatrix_argmax, swap_cols, swap_rows, transpose, zeros, Matrix};
 
 /// Rank-Revealing LU decomposition
 ///
