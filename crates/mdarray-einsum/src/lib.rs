@@ -50,12 +50,103 @@ enum TensorRef<'a, T, L: Layout> {
     Owned(Tensor<T, DynRank>),
 }
 
-impl<'a, T: Clone, L: Layout> TensorRef<'a, T, L> {
-    fn to_tensor(&self) -> Tensor<T, DynRank> {
-        match self {
-            TensorRef::Borrowed(s) => s.to_tensor(),
-            TensorRef::Owned(t) => t.clone(),
+/// Call sumproduct_pair with two TensorRefs, avoiding unnecessary copies when possible.
+/// When both are Borrowed (same Layout), no copy is needed.
+/// When mixed, Borrowed is converted to Dense.
+fn sumproduct_pair_refs<T, ID, L>(
+    backend: &impl MatMul<T>,
+    left: (&[ID], &TensorRef<'_, T, L>),
+    right: (&[ID], &TensorRef<'_, T, L>),
+    output_ids: &[ID],
+) -> Tensor<T, DynRank>
+where
+    T: ComplexFloat + Zero + One + MulAdd<Output = T> + Default + 'static,
+    ID: AxisId,
+    L: Layout,
+{
+    let (ids_a, ref_a) = left;
+    let (ids_b, ref_b) = right;
+    match (ref_a, ref_b) {
+        (TensorRef::Borrowed(a), TensorRef::Borrowed(b)) => {
+            // Both have same Layout L
+            sumproduct_pair::sumproduct_pair(backend, (ids_a, *a), (ids_b, *b), output_ids)
         }
+        (TensorRef::Borrowed(a), TensorRef::Owned(b)) => {
+            // Mixed: convert Borrowed to Dense
+            let a_dense = a.to_tensor();
+            sumproduct_pair::sumproduct_pair(
+                backend,
+                (ids_a, a_dense.as_ref()),
+                (ids_b, b.as_ref()),
+                output_ids,
+            )
+        }
+        (TensorRef::Owned(a), TensorRef::Borrowed(b)) => {
+            // Mixed: convert Borrowed to Dense
+            let b_dense = b.to_tensor();
+            sumproduct_pair::sumproduct_pair(
+                backend,
+                (ids_a, a.as_ref()),
+                (ids_b, b_dense.as_ref()),
+                output_ids,
+            )
+        }
+        (TensorRef::Owned(a), TensorRef::Owned(b)) => {
+            // Both Dense
+            sumproduct_pair::sumproduct_pair(
+                backend,
+                (ids_a, a.as_ref()),
+                (ids_b, b.as_ref()),
+                output_ids,
+            )
+        }
+    }
+}
+
+/// Call multi_contract with TensorRefs.
+/// For hyperedge contraction (3+ tensors), we need uniform Layout.
+/// Borrowed tensors are converted to Dense only when mixed with Owned.
+fn multi_contract_refs<T, ID, L>(
+    backend: &impl MatMul<T>,
+    inputs: &[(Vec<ID>, TensorRef<'_, T, L>)],
+    contracted_index: &ID,
+    output_ids: &[ID],
+) -> Tensor<T, DynRank>
+where
+    T: ComplexFloat + Zero + One + MulAdd<Output = T> + Default + 'static,
+    ID: AxisId,
+    L: Layout,
+{
+    // Check if all are Borrowed (same Layout L)
+    let all_borrowed = inputs.iter().all(|(_, r)| matches!(r, TensorRef::Borrowed(_)));
+
+    if all_borrowed {
+        // All have same Layout L, can call multi_contract directly
+        let refs: Vec<(&[ID], &Slice<T, DynRank, L>)> = inputs
+            .iter()
+            .map(|(ids, r)| match r {
+                TensorRef::Borrowed(s) => (ids.as_slice(), *s),
+                TensorRef::Owned(_) => unreachable!(),
+            })
+            .collect();
+        multi_contract::multi_contract(backend, &refs, contracted_index, output_ids)
+    } else {
+        // Mixed layouts - convert all to Dense
+        let owned: Vec<(Vec<ID>, Tensor<T, DynRank>)> = inputs
+            .iter()
+            .map(|(ids, r)| {
+                let t = match r {
+                    TensorRef::Borrowed(s) => s.to_tensor(),
+                    TensorRef::Owned(t) => t.clone(),
+                };
+                (ids.clone(), t)
+            })
+            .collect();
+        let refs: Vec<(&[ID], &Slice<T, DynRank, mdarray::Dense>)> = owned
+            .iter()
+            .map(|(ids, t)| (ids.as_slice(), t.as_ref()))
+            .collect();
+        multi_contract::multi_contract(backend, &refs, contracted_index, output_ids)
     }
 }
 
@@ -198,14 +289,10 @@ where
             let (ids_b, tensor_b) = operands.remove(j);
             let (ids_a, tensor_a) = operands.remove(i);
 
-            // Convert to owned tensors for sumproduct_pair
-            let tensor_a_owned = tensor_a.to_tensor();
-            let tensor_b_owned = tensor_b.to_tensor();
-
-            let result = sumproduct_pair::sumproduct_pair(
+            let result = sumproduct_pair_refs(
                 backend,
-                (&ids_a, &tensor_a_owned),
-                (&ids_b, &tensor_b_owned),
+                (&ids_a, &tensor_a),
+                (&ids_b, &tensor_b),
                 &step.output_ids,
             );
 
@@ -222,21 +309,11 @@ where
                 .collect();
 
             if let Some(contracted_idx) = &step.contracted_index {
-                // Convert to owned for multi_contract (needs Dense layout)
-                let owned_tensors: Vec<(Vec<ID>, Tensor<T, DynRank>)> = contracted_tensors
-                    .into_iter()
-                    .map(|(ids, t)| (ids, t.to_tensor()))
-                    .collect();
-
-                let tensor_refs: Vec<(&[ID], &mdarray::Slice<T, DynRank, mdarray::Dense>)> =
-                    owned_tensors
-                        .iter()
-                        .map(|(ids, t)| (ids.as_slice(), t.as_ref()))
-                        .collect();
-
-                let result = multi_contract::multi_contract(
+                // For multi_contract, we need to build a uniform slice vector.
+                // Convert Borrowed to Dense via to_tensor only when needed.
+                let result = multi_contract_refs(
                     backend,
-                    &tensor_refs,
+                    &contracted_tensors,
                     contracted_idx,
                     &step.output_ids,
                 );
@@ -244,21 +321,25 @@ where
             } else {
                 // Pure outer product case - chain pairwise
                 // This shouldn't happen for hyperedge case, but handle it
-                let mut result_ids = contracted_tensors[0].0.clone();
-                let mut result: Tensor<T, DynRank> = contracted_tensors[0].1.to_tensor();
+                let (first_ids, first_tensor) = &contracted_tensors[0];
+                let mut result_ids = first_ids.clone();
+                let mut result: Tensor<T, DynRank> = match first_tensor {
+                    TensorRef::Borrowed(s) => s.to_tensor(),
+                    TensorRef::Owned(t) => t.clone(),
+                };
 
-                for (ids, tensor) in contracted_tensors.into_iter().skip(1) {
+                for (ids, tensor) in contracted_tensors.iter().skip(1) {
                     let mut new_output: Vec<ID> = result_ids.clone();
-                    for id in &ids {
+                    for id in ids {
                         if !new_output.contains(id) {
                             new_output.push(id.clone());
                         }
                     }
-                    let tensor_owned = tensor.to_tensor();
-                    result = sumproduct_pair::sumproduct_pair(
+                    let result_ref = TensorRef::Owned(result);
+                    result = sumproduct_pair_refs(
                         backend,
-                        (&result_ids, &result),
-                        (&ids, &tensor_owned),
+                        (&result_ids, &result_ref),
+                        (ids, tensor),
                         &new_output,
                     );
                     result_ids = new_output;
@@ -270,7 +351,11 @@ where
 
     assert_eq!(operands.len(), 1, "Contraction incomplete");
     let (final_ids, final_tensor) = operands.pop().unwrap();
-    permute_to_output(&final_ids, final_tensor.to_tensor(), output_ids)
+    let final_owned = match final_tensor {
+        TensorRef::Borrowed(s) => s.to_tensor(),
+        TensorRef::Owned(t) => t,
+    };
+    permute_to_output(&final_ids, final_owned, output_ids)
 }
 
 /// Execute a NestedEinsum tree recursively.
