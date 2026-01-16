@@ -72,9 +72,10 @@ pub fn build_identity_operator_tensor_c64(
     }
 
     if site_indices.is_empty() {
-        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(vec![
-            Complex64::new(1.0, 0.0),
-        ])));
+        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+            vec![Complex64::new(1.0, 0.0)],
+            &[],
+        )));
         return Ok(TensorDynLen::new(vec![], vec![], storage));
     }
 
@@ -125,7 +126,9 @@ pub fn build_identity_operator_tensor_c64(
         data[linear_idx] = Complex64::new(1.0, 0.0);
     }
 
-    let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data)));
+    let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+        data, &dims,
+    )));
     Ok(TensorDynLen::new(all_indices, dims, storage))
 }
 

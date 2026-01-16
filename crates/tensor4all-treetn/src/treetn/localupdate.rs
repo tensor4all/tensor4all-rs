@@ -830,7 +830,10 @@ mod tests {
         let tensor_a = TensorDynLen::new(
             vec![site_a.clone(), bond_ab.clone()],
             vec![2, 3],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0; 6],
+                &[2, 3],
+            ))),
         );
         tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
@@ -838,7 +841,10 @@ mod tests {
         let tensor_b = TensorDynLen::new(
             vec![bond_ab.clone(), bond_bc.clone(), bond_bd.clone()],
             vec![3, 3, 3],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 27]))),
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0; 27],
+                &[3, 3, 3],
+            ))),
         );
         tn.add_tensor("B".to_string(), tensor_b).unwrap();
 
@@ -846,7 +852,10 @@ mod tests {
         let tensor_c = TensorDynLen::new(
             vec![bond_bc.clone(), site_c.clone()],
             vec![3, 2],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0; 6],
+                &[3, 2],
+            ))),
         );
         tn.add_tensor("C".to_string(), tensor_c).unwrap();
 
@@ -854,7 +863,10 @@ mod tests {
         let tensor_d = TensorDynLen::new(
             vec![bond_bd.clone(), site_d.clone()],
             vec![3, 2],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0; 6],
+                &[3, 2],
+            ))),
         );
         tn.add_tensor("D".to_string(), tensor_d).unwrap();
 
@@ -1162,7 +1174,10 @@ mod tests {
         let tensor_a = TensorDynLen::new(
             vec![site_a.clone(), bond_ab.clone()],
             vec![2, 4],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 8]))),
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0; 8],
+                &[2, 4],
+            ))),
         );
         tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
@@ -1170,7 +1185,10 @@ mod tests {
         let tensor_b = TensorDynLen::new(
             vec![bond_ab.clone(), site_b.clone(), bond_bc.clone()],
             vec![4, 2, 4],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 32]))),
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0; 32],
+                &[4, 2, 4],
+            ))),
         );
         tn.add_tensor("B".to_string(), tensor_b).unwrap();
 
@@ -1178,7 +1196,10 @@ mod tests {
         let tensor_c = TensorDynLen::new(
             vec![bond_bc.clone(), site_c.clone()],
             vec![4, 2],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 8]))),
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0; 8],
+                &[4, 2],
+            ))),
         );
         tn.add_tensor("C".to_string(), tensor_c).unwrap();
 

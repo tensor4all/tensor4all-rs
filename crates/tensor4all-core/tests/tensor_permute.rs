@@ -1,6 +1,7 @@
 use num_complex::Complex64;
 use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
+use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64};
 use tensor4all_core::{compute_permutation_from_indices, Storage, TensorDynLen};
 
 #[test]
@@ -69,13 +70,10 @@ fn test_permute_dyn_f64_2d() {
     let indices = vec![i.clone(), j.clone()];
     let dims = vec![2, 3];
 
-    let mut storage = Storage::new_dense_f64(6);
-    match &mut storage {
-        Storage::DenseF64(v) => {
-            v.extend_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-        }
-        _ => panic!("expected DenseF64"),
-    }
+    let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        &dims,
+    ));
 
     let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
 
@@ -104,20 +102,17 @@ fn test_permute_dyn_c64_2d() {
     let indices = vec![i.clone(), j.clone()];
     let dims = vec![2, 3];
 
-    let mut storage = Storage::new_dense_c64(6);
-    match &mut storage {
-        Storage::DenseC64(v) => {
-            v.extend_from_slice(&[
-                Complex64::new(1.0, 0.0),
-                Complex64::new(2.0, 0.0),
-                Complex64::new(3.0, 0.0),
-                Complex64::new(4.0, 0.0),
-                Complex64::new(5.0, 0.0),
-                Complex64::new(6.0, 0.0),
-            ]);
-        }
-        _ => panic!("expected DenseC64"),
-    }
+    let storage = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+            Complex64::new(5.0, 0.0),
+            Complex64::new(6.0, 0.0),
+        ],
+        &dims,
+    ));
 
     let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
 
@@ -150,16 +145,9 @@ fn test_permute_dyn_f64_3d() {
     let indices = vec![i.clone(), j.clone(), k.clone()];
     let dims = vec![2, 3, 4];
 
-    let mut storage = Storage::new_dense_f64(24);
-    match &mut storage {
-        Storage::DenseF64(v) => {
-            // Fill with sequential values
-            for i in 1..=24 {
-                v.push(i as f64);
-            }
-        }
-        _ => panic!("expected DenseF64"),
-    }
+    // Fill with sequential values
+    let data: Vec<f64> = (1..=24).map(|i| i as f64).collect();
+    let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data, &dims));
 
     let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
 
@@ -193,13 +181,10 @@ fn test_permute_identity() {
     let indices = vec![i.clone(), j.clone()];
     let dims = vec![2, 3];
 
-    let mut storage = Storage::new_dense_f64(6);
-    match &mut storage {
-        Storage::DenseF64(v) => {
-            v.extend_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-        }
-        _ => panic!("expected DenseF64"),
-    }
+    let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        &dims,
+    ));
 
     let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
 
@@ -226,13 +211,10 @@ fn test_permute_indices_dyn_f64_2d() {
     let indices = vec![i.clone(), j.clone()];
     let dims = vec![2, 3];
 
-    let mut storage = Storage::new_dense_f64(6);
-    match &mut storage {
-        Storage::DenseF64(v) => {
-            v.extend_from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-        }
-        _ => panic!("expected DenseF64"),
-    }
+    let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        &dims,
+    ));
 
     let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
 
@@ -259,20 +241,17 @@ fn test_permute_indices_c64() {
     let indices = vec![i.clone(), j.clone()];
     let dims = vec![2, 3];
 
-    let mut storage = Storage::new_dense_c64(6);
-    match &mut storage {
-        Storage::DenseC64(v) => {
-            v.extend_from_slice(&[
-                Complex64::new(1.0, 0.0),
-                Complex64::new(2.0, 0.0),
-                Complex64::new(3.0, 0.0),
-                Complex64::new(4.0, 0.0),
-                Complex64::new(5.0, 0.0),
-                Complex64::new(6.0, 0.0),
-            ]);
-        }
-        _ => panic!("expected DenseC64"),
-    }
+    let storage = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+            Complex64::new(5.0, 0.0),
+            Complex64::new(6.0, 0.0),
+        ],
+        &dims,
+    ));
 
     let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
 

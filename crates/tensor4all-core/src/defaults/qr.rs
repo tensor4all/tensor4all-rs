@@ -242,13 +242,15 @@ where
     // Create Q tensor: [left_inds..., bond_index]
     let mut q_indices = left_indices.clone();
     q_indices.push(bond_index.clone());
-    let q_storage = T::dense_storage(q_vec);
+    let q_dims: Vec<usize> = q_indices.iter().map(|idx| idx.dim).collect();
+    let q_storage = T::dense_storage_with_shape(q_vec, &q_dims);
     let q = TensorDynLen::from_indices(q_indices, q_storage);
 
     // Create R tensor: [bond_index, right_inds...]
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
-    let r_storage = T::dense_storage(r_vec);
+    let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
+    let r_storage = T::dense_storage_with_shape(r_vec, &r_dims);
     let r = TensorDynLen::from_indices(r_indices, r_storage);
 
     Ok((q, r))

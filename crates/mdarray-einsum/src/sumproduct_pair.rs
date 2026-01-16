@@ -197,8 +197,8 @@ where
     }
 
     if output_shape.is_empty() {
-        // Scalar output
-        return result_3d;
+        // Scalar output - result_3d is [1,1,1], reshape to scalar [1]
+        return result_3d.reshape([1]).to_tensor().into_dyn();
     }
 
     // Reshape result to output shape
@@ -435,7 +435,9 @@ mod tests {
         let result = sumproduct_pair(&Naive, (&[0u32], &a), (&[0u32], &b), &[]);
 
         // 1*4 + 2*5 + 3*6 = 32
-        assert_relative_eq!(result[[0, 0, 0]].re(), 32.0, epsilon = 1e-10);
+        // Scalar result is [1] shaped
+        assert_eq!(result.shape().dims(), &[1]);
+        assert_relative_eq!(result[[0]].re(), 32.0, epsilon = 1e-10);
     }
 
     #[test]

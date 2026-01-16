@@ -374,7 +374,8 @@ where
     // Create U tensor: [left_inds..., bond_index]
     let mut u_indices = left_indices.clone();
     u_indices.push(bond_index.clone());
-    let u_storage = T::dense_storage(u_vec);
+    let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
+    let u_storage = T::dense_storage_with_shape(u_vec, &u_dims);
     let u = TensorDynLen::from_indices(u_indices, u_storage);
 
     // Create S tensor: [bond_index, bond_index.sim()] (diagonal)
@@ -387,7 +388,8 @@ where
     // Create V tensor: [right_inds..., bond_index]
     let mut v_indices = right_indices.clone();
     v_indices.push(bond_index.clone());
-    let v_storage = T::dense_storage(v_vec);
+    let v_dims: Vec<usize> = v_indices.iter().map(|idx| idx.dim).collect();
+    let v_storage = T::dense_storage_with_shape(v_vec, &v_dims);
     let v = TensorDynLen::from_indices(v_indices, v_storage);
 
     Ok((u, s, v))

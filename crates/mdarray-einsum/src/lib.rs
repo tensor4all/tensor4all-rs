@@ -37,6 +37,11 @@ pub use optimizer::{optimize_greedy, ContractionStep};
 
 // Re-export omeco's Label trait for convenience
 pub use omeco::Label;
+
+// Re-export matmul trait and backends for convenience
+pub use mdarray_linalg::matmul::MatMul;
+pub use mdarray_linalg::Naive;
+
 use mdarray::{DynRank, Layout, Slice, Tensor};
 use num_complex::ComplexFloat;
 use num_traits::{MulAdd, One, Zero};
@@ -149,8 +154,6 @@ where
         multi_contract::multi_contract(backend, &refs, contracted_index, output_ids)
     }
 }
-
-use mdarray_linalg::matmul::MatMul;
 
 /// Axis ID trait - any type that can be used as an axis identifier.
 pub trait AxisId: Clone + Eq + Hash + std::fmt::Debug {}
@@ -1094,5 +1097,37 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod scalar_output_tests {
+    use super::*;
+    use mdarray::{DynRank, Tensor};
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_einsum_scalar_output() {
+        // Two 1D tensors with the same index - should produce scalar
+        let a: Tensor<f64, DynRank> = Tensor::from(vec![1.0, 2.0]).into_shape([2].as_slice()).into_dyn();
+        let b: Tensor<f64, DynRank> = Tensor::from(vec![3.0, 4.0]).into_shape([2].as_slice()).into_dyn();
+
+        let mut sizes = HashMap::new();
+        sizes.insert(0_usize, 2);
+
+        // Contract i,i -> (scalar)
+        let result = einsum_optimized(
+            &Naive,
+            &[(&[0_usize][..], a.as_ref()), (&[0_usize][..], b.as_ref())],
+            &[],  // Empty output = scalar
+            &sizes,
+        );
+
+        println!("Result shape: {:?}", result.shape().dims());
+        println!("Result rank: {:?}", result.rank());
+
+        // Scalar should have empty dims or [1]
+        // Expected: 1*3 + 2*4 = 11
+        assert!(result.rank() == 0 || (result.rank() == 1 && result.dim(0) == 1));
     }
 }

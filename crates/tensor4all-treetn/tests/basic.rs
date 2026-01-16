@@ -39,14 +39,14 @@ fn create_two_node_treetn() -> (
     let tensor1 = TensorDynLen::new(
         vec![phys1.clone(), bond.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3]))),
     );
     let node1 = tn.add_tensor_auto_name(tensor1);
 
     let tensor2 = TensorDynLen::new(
         vec![bond.clone(), phys2.clone()],
         vec![3, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[3, 4]))),
     );
     let node2 = tn.add_tensor_auto_name(tensor2);
 
@@ -76,21 +76,21 @@ fn create_three_node_chain() -> (
     let tensor1 = TensorDynLen::new(
         vec![phys1.clone(), bond12.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3]))),
     );
     let node1 = tn.add_tensor_auto_name(tensor1);
 
     let tensor2 = TensorDynLen::new(
         vec![bond12.clone(), bond23.clone()],
         vec![3, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[3, 4]))),
     );
     let node2 = tn.add_tensor_auto_name(tensor2);
 
     let tensor3 = TensorDynLen::new(
         vec![bond23.clone(), phys3.clone()],
         vec![4, 5],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 20]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 20], &[4, 5]))),
     );
     let node3 = tn.add_tensor_auto_name(tensor3);
 
@@ -553,7 +553,7 @@ fn test_canonicalize_simple() {
     let tensor1 = TensorDynLen::new(
         vec![phys1.clone(), bond.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data1, &[2, 3]))),
     );
     let n1 = tn.add_tensor_auto_name(tensor1);
 
@@ -561,7 +561,7 @@ fn test_canonicalize_simple() {
     let tensor2 = TensorDynLen::new(
         vec![bond.clone(), phys2.clone()],
         vec![3, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data2, &[3, 4]))),
     );
     let n2 = tn.add_tensor_auto_name(tensor2);
 
@@ -593,7 +593,7 @@ fn test_contract_two_nodes() {
     let tensor1 = TensorDynLen::new(
         vec![i.clone(), bond.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data1, &[2, 3]))),
     );
     let n1 = tn.add_tensor_auto_name(tensor1);
 
@@ -601,7 +601,7 @@ fn test_contract_two_nodes() {
     let tensor2 = TensorDynLen::new(
         vec![bond.clone(), k.clone()],
         vec![3, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data2, &[3, 4]))),
     );
     let n2 = tn.add_tensor_auto_name(tensor2);
 
@@ -643,14 +643,14 @@ fn test_contract_to_tensor_index_ordering() {
     let tensor_b = TensorDynLen::new(
         vec![bond.clone(), site_b.clone()],
         vec![4, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[4, 3]))),
     );
     tn.add_tensor("B".to_string(), tensor_b).unwrap();
 
     let tensor_a = TensorDynLen::new(
         vec![site_a.clone(), bond.clone()],
         vec![2, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 8]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 8], &[2, 4]))),
     );
     tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
@@ -686,7 +686,7 @@ fn test_contract_to_tensor_index_ordering_reverse() {
     let tensor_z = TensorDynLen::new(
         vec![site_z.clone(), bond.clone()],
         vec![4, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[4, 3]))),
     );
     tn.add_tensor("Z".to_string(), tensor_z).unwrap();
 
@@ -694,7 +694,7 @@ fn test_contract_to_tensor_index_ordering_reverse() {
     let tensor_a = TensorDynLen::new(
         vec![bond.clone(), site_a.clone()],
         vec![3, 5],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 15]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 15], &[3, 5]))),
     );
     tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
@@ -732,7 +732,7 @@ fn test_log_norm_simple() {
     let tensor1 = TensorDynLen::new(
         vec![i.clone(), bond.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data1, &[2, 3]))),
     );
     let n1 = tn.add_tensor_auto_name(tensor1);
 
@@ -740,7 +740,7 @@ fn test_log_norm_simple() {
     let tensor2 = TensorDynLen::new(
         vec![bond.clone(), k.clone()],
         vec![3, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data2, &[3, 4]))),
     );
     let n2 = tn.add_tensor_auto_name(tensor2);
 
@@ -771,7 +771,7 @@ fn test_log_norm_simple() {
 //     let tensor_a = TensorDynLen::new(
 //         vec![i.clone(), j.clone()],
 //         vec![2, 3],
-//         Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a))),
+//         Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_a, &[2, 3]))),
 //     );
 //     tn_a.add_tensor(0, tensor_a).unwrap();
 //
@@ -779,7 +779,7 @@ fn test_log_norm_simple() {
 //     let tensor_b = TensorDynLen::new(
 //         vec![i.clone(), j.clone()],
 //         vec![2, 3],
-//         Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b))),
+//         Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_b, &[2, 3]))),
 //     );
 //     tn_b.add_tensor(0, tensor_b).unwrap();
 //
@@ -866,7 +866,7 @@ fn test_truncate_simple() {
     let tensor1 = TensorDynLen::new(
         vec![i.clone(), bond.clone()],
         vec![2, 10],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data1, &[2, 10]))),
     );
     let n1 = tn.add_tensor_auto_name(tensor1);
 
@@ -879,7 +879,7 @@ fn test_truncate_simple() {
     let tensor2 = TensorDynLen::new(
         vec![bond.clone(), k.clone()],
         vec![10, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data2, &[10, 4]))),
     );
     let n2 = tn.add_tensor_auto_name(tensor2);
 
@@ -913,7 +913,7 @@ fn test_truncate_mut_simple() {
     let tensor1 = TensorDynLen::new(
         vec![i.clone(), bond.clone()],
         vec![2, 8],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data1, &[2, 8]))),
     );
     let n1 = tn.add_tensor_auto_name(tensor1);
 
@@ -921,7 +921,7 @@ fn test_truncate_mut_simple() {
     let tensor2 = TensorDynLen::new(
         vec![bond.clone(), k.clone()],
         vec![8, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data2, &[8, 4]))),
     );
     let n2 = tn.add_tensor_auto_name(tensor2);
 
@@ -982,7 +982,7 @@ fn test_truncate_with_rtol() {
     let tensor1 = TensorDynLen::new(
         vec![i.clone(), bond.clone()],
         vec![2, 5],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data1))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data1, &[2, 5]))),
     );
     let n1 = tn.add_tensor_auto_name(tensor1);
 
@@ -993,7 +993,7 @@ fn test_truncate_with_rtol() {
     let tensor2 = TensorDynLen::new(
         vec![bond.clone(), k.clone()],
         vec![5, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data2))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data2, &[5, 3]))),
     );
     let n2 = tn.add_tensor_auto_name(tensor2);
 
@@ -1161,14 +1161,14 @@ fn test_contract_zipup_shared_site_indices() {
     let tensor_a1 = TensorDynLen::new(
         vec![site_a.clone(), bond1.clone()],
         vec![2, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 8]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 8], &[2, 4]))),
     );
 
     // Create tensor for node B in network 1: B1[bond1, site_b]
     let tensor_b1 = TensorDynLen::new(
         vec![bond1.clone(), site_b.clone()],
         vec![4, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[4, 3]))),
     );
 
     // Create TreeTN 1
@@ -1183,7 +1183,7 @@ fn test_contract_zipup_shared_site_indices() {
     let tensor_a2 = TensorDynLen::new(
         vec![site_a.clone(), bond2.clone()],
         vec![2, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![2.0; 8]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![2.0; 8], &[2, 4]))),
     );
 
     // Create tensor for node B in network 2: B2[bond2, site_b]
@@ -1191,7 +1191,7 @@ fn test_contract_zipup_shared_site_indices() {
     let tensor_b2 = TensorDynLen::new(
         vec![bond2.clone(), site_b.clone()],
         vec![4, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![2.0; 12]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![2.0; 12], &[4, 3]))),
     );
 
     // Create TreeTN 2
@@ -1246,13 +1246,13 @@ fn test_contract_zipup_partial_contraction() {
     let tensor_a1 = TensorDynLen::new(
         vec![site_a.clone(), bond1.clone()],
         vec![2, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 8]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 8], &[2, 4]))),
     );
 
     let tensor_b1 = TensorDynLen::new(
         vec![bond1.clone(), site_b.clone()],
         vec![4, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[4, 3]))),
     );
 
     let tn1: TreeTN<TensorDynLen, String> = TreeTN::from_tensors(
@@ -1267,13 +1267,13 @@ fn test_contract_zipup_partial_contraction() {
     let tensor_a2 = TensorDynLen::new(
         vec![site_a.clone(), site_external_a.clone(), bond2.clone()],
         vec![2, 2, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![2.0; 16]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![2.0; 16], &[2, 2, 4]))),
     );
 
     let tensor_b2 = TensorDynLen::new(
         vec![bond2.clone(), site_b.clone(), site_external_b.clone()],
         vec![4, 3, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![2.0; 36]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![2.0; 36], &[4, 3, 3]))),
     );
 
     let tn2: TreeTN<TensorDynLen, String> = TreeTN::from_tensors(
@@ -1644,13 +1644,13 @@ fn test_verify_internal_consistency_with_string_node_names() {
     let tensor_a = TensorDynLen::new(
         vec![site_a.clone(), bond.clone()],
         vec![2, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 8]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 8], &[2, 4]))),
     );
 
     let tensor_b = TensorDynLen::new(
         vec![bond.clone(), site_b.clone()],
         vec![4, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[4, 3]))),
     );
 
     tn.add_tensor("A".to_string(), tensor_a).unwrap();
@@ -1782,7 +1782,7 @@ fn create_mps_chain_for_fit() -> TreeTN<TensorDynLen, String> {
     let tensor_a = TensorDynLen::new(
         vec![site_a.clone(), bond_ab.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_a, &[2, 3]))),
     );
     tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
@@ -1791,7 +1791,7 @@ fn create_mps_chain_for_fit() -> TreeTN<TensorDynLen, String> {
     let tensor_b = TensorDynLen::new(
         vec![bond_ab.clone(), site_b.clone(), bond_bc.clone()],
         vec![3, 2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_b, &[3, 2, 3]))),
     );
     tn.add_tensor("B".to_string(), tensor_b).unwrap();
 
@@ -1800,7 +1800,7 @@ fn create_mps_chain_for_fit() -> TreeTN<TensorDynLen, String> {
     let tensor_c = TensorDynLen::new(
         vec![bond_bc.clone(), site_c.clone()],
         vec![3, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_c))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_c, &[3, 2]))),
     );
     tn.add_tensor("C".to_string(), tensor_c).unwrap();
 
@@ -1848,7 +1848,7 @@ fn create_mpo_chain_for_fit() -> TreeTN<TensorDynLen, String> {
     let tensor_a = TensorDynLen::new(
         vec![site_a_in.clone(), site_a_out.clone(), bond_ab.clone()],
         vec![2, 2, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_a))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_a, &[2, 2, 2]))),
     );
     tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
@@ -1862,7 +1862,7 @@ fn create_mpo_chain_for_fit() -> TreeTN<TensorDynLen, String> {
             bond_bc.clone(),
         ],
         vec![2, 2, 2, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_b))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_b, &[2, 2, 2, 2]))),
     );
     tn.add_tensor("B".to_string(), tensor_b).unwrap();
 
@@ -1871,7 +1871,7 @@ fn create_mpo_chain_for_fit() -> TreeTN<TensorDynLen, String> {
     let tensor_c = TensorDynLen::new(
         vec![bond_bc.clone(), site_c_in.clone(), site_c_out.clone()],
         vec![2, 2, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data_c))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_c, &[2, 2, 2]))),
     );
     tn.add_tensor("C".to_string(), tensor_c).unwrap();
 
@@ -2097,14 +2097,14 @@ fn create_two_node_treetn_string() -> TreeTN<TensorDynLen, String> {
     let tensor1 = TensorDynLen::new(
         vec![phys1.clone(), bond.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3]))),
     );
     tn.add_tensor("A".to_string(), tensor1).unwrap();
 
     let tensor2 = TensorDynLen::new(
         vec![bond.clone(), phys2.clone()],
         vec![3, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[3, 4]))),
     );
     tn.add_tensor("B".to_string(), tensor2).unwrap();
 
@@ -2127,12 +2127,12 @@ fn test_zipup_accumulated_single_node() {
     let tensor_a = TensorDynLen::new(
         vec![phys_a.clone()],
         vec![2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0, 2.0]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0, 2.0], &[2]))),
     );
     let tensor_b = TensorDynLen::new(
         vec![phys_b.clone()],
         vec![2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![3.0, 4.0]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![3.0, 4.0], &[2]))),
     );
 
     tn_a.add_tensor("X".to_string(), tensor_a).unwrap();
@@ -2203,21 +2203,21 @@ fn test_zipup_accumulated_three_node_chain() {
     let tensor_a = TensorDynLen::new(
         vec![phys1_a.clone(), bond12_a.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3]))),
     );
     tn_a.add_tensor("A".to_string(), tensor_a).unwrap();
 
     let tensor_b = TensorDynLen::new(
         vec![bond12_a.clone(), bond23_a.clone()],
         vec![3, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[3, 4]))),
     );
     tn_a.add_tensor("B".to_string(), tensor_b).unwrap();
 
     let tensor_c = TensorDynLen::new(
         vec![bond23_a.clone(), phys3_a.clone()],
         vec![4, 5],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 20]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 20], &[4, 5]))),
     );
     tn_a.add_tensor("C".to_string(), tensor_c).unwrap();
 
@@ -2225,21 +2225,21 @@ fn test_zipup_accumulated_three_node_chain() {
     let tensor_a_b = TensorDynLen::new(
         vec![phys1_b.clone(), bond12_b.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3]))),
     );
     tn_b.add_tensor("A".to_string(), tensor_a_b).unwrap();
 
     let tensor_b_b = TensorDynLen::new(
         vec![bond12_b.clone(), bond23_b.clone()],
         vec![3, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 12]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[3, 4]))),
     );
     tn_b.add_tensor("B".to_string(), tensor_b_b).unwrap();
 
     let tensor_c_b = TensorDynLen::new(
         vec![bond23_b.clone(), phys3_b.clone()],
         vec![4, 5],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 20]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 20], &[4, 5]))),
     );
     tn_b.add_tensor("C".to_string(), tensor_c_b).unwrap();
 
@@ -2298,13 +2298,13 @@ fn test_zipup_accumulated_star_topology() {
     let tensor_a = TensorDynLen::new(
         vec![phys_a.clone(), bond_ad.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3]))),
     );
     tn_a.add_tensor("A".to_string(), tensor_a.clone()).unwrap();
     let tensor_a_b = TensorDynLen::new(
         vec![phys_a_b.clone(), bond_ad_b.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3]))),
     );
     tn_b.add_tensor("A".to_string(), tensor_a_b).unwrap();
 
@@ -2312,13 +2312,13 @@ fn test_zipup_accumulated_star_topology() {
     let tensor_b = TensorDynLen::new(
         vec![phys_b.clone(), bond_bd.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3]))),
     );
     tn_a.add_tensor("B".to_string(), tensor_b.clone()).unwrap();
     let tensor_b_b = TensorDynLen::new(
         vec![phys_b_b.clone(), bond_bd_b.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3]))),
     );
     tn_b.add_tensor("B".to_string(), tensor_b_b).unwrap();
 
@@ -2326,13 +2326,13 @@ fn test_zipup_accumulated_star_topology() {
     let tensor_c = TensorDynLen::new(
         vec![phys_c.clone(), bond_cd.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3]))),
     );
     tn_a.add_tensor("C".to_string(), tensor_c.clone()).unwrap();
     let tensor_c_b = TensorDynLen::new(
         vec![phys_c_b.clone(), bond_cd_b.clone()],
         vec![2, 3],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 6]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3]))),
     );
     tn_b.add_tensor("C".to_string(), tensor_c_b).unwrap();
 
@@ -2345,7 +2345,7 @@ fn test_zipup_accumulated_star_topology() {
             phys_d.clone(),
         ],
         vec![3, 3, 3, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 54]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 54], &[3, 3, 3, 2]))),
     );
     tn_a.add_tensor("D".to_string(), tensor_d.clone()).unwrap();
     let tensor_d_b = TensorDynLen::new(
@@ -2356,7 +2356,7 @@ fn test_zipup_accumulated_star_topology() {
             phys_d_b.clone(),
         ],
         vec![3, 3, 3, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(vec![1.0; 54]))),
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 54], &[3, 3, 3, 2]))),
     );
     tn_b.add_tensor("D".to_string(), tensor_d_b).unwrap();
 

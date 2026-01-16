@@ -16,9 +16,10 @@ use tensor4all_treetn::TreeTN;
 
 /// Helper to create a simple tensor with given indices
 fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
-    let total_size: usize = indices.iter().map(|idx| idx.dim()).product();
+    let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
+    let total_size: usize = dims.iter().product();
     let data: Vec<f64> = (0..total_size).map(|i| i as f64).collect();
-    let storage = f64::dense_storage(data);
+    let storage = f64::dense_storage_with_shape(data, &dims);
     TensorDynLen::from_indices(indices, storage)
 }
 
@@ -116,13 +117,13 @@ fn test_treetn_contract_to_tensor() {
     // Tensor A: 2x2 with values
     let tensor_a = TensorDynLen::from_indices(
         vec![i.clone(), bond.clone()],
-        f64::dense_storage(vec![1.0, 0.0, 0.0, 1.0]), // identity-like
+        f64::dense_storage_with_shape(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]), // identity-like
     );
 
     // Tensor B: 2x3 with values
     let tensor_b = TensorDynLen::from_indices(
         vec![bond.clone(), j.clone()],
-        f64::dense_storage(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        f64::dense_storage_with_shape(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]),
     );
 
     let tn = TreeTN::<TensorDynLen, String>::from_tensors(

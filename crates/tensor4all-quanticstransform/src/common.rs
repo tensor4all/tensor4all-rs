@@ -183,7 +183,10 @@ pub fn tensortrain_to_linear_operator(
             }
         }
 
-        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data)));
+        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+            data,
+            &dims_vec,
+        )));
         let tensor_dyn = TensorDynLen::new(indices, dims_vec, storage);
         tensors.push(tensor_dyn);
         node_names.push(i);
@@ -363,7 +366,10 @@ pub fn tensortrain_to_linear_operator_asymmetric(
             }
         }
 
-        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec(data)));
+        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+            data,
+            &dims_vec,
+        )));
         let tensor_dyn = TensorDynLen::new(indices, dims_vec, storage);
         tensors.push(tensor_dyn);
         node_names.push(i);

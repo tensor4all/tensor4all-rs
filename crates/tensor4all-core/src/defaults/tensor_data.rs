@@ -286,8 +286,10 @@ mod tests {
     use super::*;
     use crate::storage::{DenseStorageF64, Storage};
 
-    fn make_test_storage(data: Vec<f64>) -> Arc<Storage> {
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec(data)))
+    fn make_test_storage(data: Vec<f64>, dims: &[usize]) -> Arc<Storage> {
+        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            data, dims,
+        )))
     }
 
     fn new_id() -> DynId {
@@ -298,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_tensor_data_simple() {
-        let storage = make_test_storage(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let storage = make_test_storage(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
         let id_i = new_id();
         let id_j = new_id();
 
@@ -312,8 +314,8 @@ mod tests {
 
     #[test]
     fn test_outer_product() {
-        let storage_a = make_test_storage(vec![1.0, 2.0]);
-        let storage_b = make_test_storage(vec![3.0, 4.0, 5.0]);
+        let storage_a = make_test_storage(vec![1.0, 2.0], &[2]);
+        let storage_b = make_test_storage(vec![3.0, 4.0, 5.0], &[3]);
 
         let id_i = new_id();
         let id_j = new_id();
@@ -333,7 +335,7 @@ mod tests {
 
     #[test]
     fn test_permute() {
-        let storage = make_test_storage(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let storage = make_test_storage(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
         let id_i = new_id();
         let id_j = new_id();
 
@@ -356,8 +358,8 @@ mod tests {
 
     #[test]
     fn test_permute_outer_product() {
-        let storage_a = make_test_storage(vec![1.0, 2.0]);
-        let storage_b = make_test_storage(vec![3.0, 4.0, 5.0]);
+        let storage_a = make_test_storage(vec![1.0, 2.0], &[2]);
+        let storage_b = make_test_storage(vec![3.0, 4.0, 5.0], &[3]);
 
         let id_i = new_id();
         let id_j = new_id();
@@ -381,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_materialize_simple() {
-        let storage = make_test_storage(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let storage = make_test_storage(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
         let id_i = new_id();
         let id_j = new_id();
 
@@ -405,8 +407,8 @@ mod tests {
         // outer product a ⊗ b should be:
         // [[1*3, 1*4, 1*5], [2*3, 2*4, 2*5]] = [[3, 4, 5], [6, 8, 10]]
         // In row-major: [3, 4, 5, 6, 8, 10]
-        let storage_a = make_test_storage(vec![1.0, 2.0]);
-        let storage_b = make_test_storage(vec![3.0, 4.0, 5.0]);
+        let storage_a = make_test_storage(vec![1.0, 2.0], &[2]);
+        let storage_b = make_test_storage(vec![3.0, 4.0, 5.0], &[3]);
 
         let id_i = new_id();
         let id_j = new_id();
@@ -439,8 +441,8 @@ mod tests {
         // outer product a ⊗ b with indices [i, j] gives [[3, 4, 5], [6, 8, 10]]
         // After permute to [j, i], should be transposed:
         // [[3, 6], [4, 8], [5, 10]] in row-major: [3, 6, 4, 8, 5, 10]
-        let storage_a = make_test_storage(vec![1.0, 2.0]);
-        let storage_b = make_test_storage(vec![3.0, 4.0, 5.0]);
+        let storage_a = make_test_storage(vec![1.0, 2.0], &[2]);
+        let storage_b = make_test_storage(vec![3.0, 4.0, 5.0], &[3]);
 
         let id_i = new_id();
         let id_j = new_id();
