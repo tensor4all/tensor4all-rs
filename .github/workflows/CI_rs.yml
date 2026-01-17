@@ -62,6 +62,45 @@ jobs:
       - name: Run tests
         run: cargo test --release --workspace
 
+  test-libtorch:
+    name: Test (libtorch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-libtorch-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-libtorch-
+
+      - name: Cache libtorch
+        id: cache-libtorch
+        uses: actions/cache@v4
+        with:
+          path: ~/libtorch
+          key: libtorch-2.5.1-cpu-linux
+
+      - name: Download libtorch
+        if: steps.cache-libtorch.outputs.cache-hit != 'true'
+        run: |
+          wget -q https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.5.1%2Bcpu.zip -O libtorch.zip
+          unzip -q libtorch.zip -d ~/
+
+      - name: Run tests with libtorch
+        env:
+          LIBTORCH: ~/libtorch
+          LD_LIBRARY_PATH: ~/libtorch/lib
+        run: cargo test --release -p tensor4all-tensorbackend --features backend-libtorch
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
@@ -104,6 +143,7 @@ jobs:
     needs:
       - lint
       - test
+      - test-libtorch
       - coverage
     if: always()
     steps:
