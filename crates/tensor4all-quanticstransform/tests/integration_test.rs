@@ -9,14 +9,12 @@
 #![allow(clippy::needless_range_loop)]
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use approx::assert_relative_eq;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
 
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::storage::{DenseStorageC64, Storage};
 use tensor4all_core::{IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
 use tensor4all_treetn::{apply_linear_operator, ApplyOptions, TreeTN};
@@ -129,10 +127,7 @@ fn tensortrain_to_treetn(
             }
         }
 
-        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            data, &dims_vec,
-        )));
-        let tensor_dyn = TensorDynLen::new(indices, dims_vec, storage);
+        let tensor_dyn = TensorDynLen::from_dense_c64(indices, data);
         tensors.push(tensor_dyn);
     }
 
@@ -213,13 +208,9 @@ fn contract_treetn_to_vector(
     let mut result = vec![Complex64::zero(); n];
 
     // Get data from storage
-    let storage = full_tensor
-        .materialize_storage()
-        .expect("Failed to materialize storage");
-    let data = match storage.as_ref() {
-        Storage::DenseC64(dense) => dense.as_slice(),
-        _ => panic!("Expected DenseC64 storage"),
-    };
+    let data = full_tensor
+        .as_slice_c64()
+        .expect("Expected DenseC64 storage");
     let dims = &full_tensor.dims;
 
     eprintln!("  data len: {}", data.len());

@@ -899,6 +899,33 @@ impl Storage {
         matches!(self, Self::TorchF64(_) | Self::TorchC64(_))
     }
 
+    /// Check if this storage uses f64 scalar type.
+    pub fn is_f64(&self) -> bool {
+        match self {
+            Self::DenseF64(_) | Self::DiagF64(_) => true,
+            #[cfg(feature = "backend-libtorch")]
+            Self::TorchF64(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Check if this storage uses Complex64 scalar type.
+    pub fn is_c64(&self) -> bool {
+        match self {
+            Self::DenseC64(_) | Self::DiagC64(_) => true,
+            #[cfg(feature = "backend-libtorch")]
+            Self::TorchC64(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Check if this storage uses complex scalar type.
+    ///
+    /// This is an alias for `is_c64()`.
+    pub fn is_complex(&self) -> bool {
+        self.is_c64()
+    }
+
     /// Get the length of the storage (number of elements).
     pub fn len(&self) -> usize {
         match self {

@@ -4,11 +4,8 @@
 
 use std::panic::catch_unwind;
 use std::ptr;
-use std::sync::Arc;
 
 use num_complex::Complex64;
-use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64};
-use tensor4all_core::Storage;
 
 use crate::types::{t4a_index, t4a_storage_kind, t4a_tensor, InternalIndex, InternalTensor};
 use crate::{
@@ -178,9 +175,9 @@ pub extern "C" fn t4a_tensor_get_data_f64(
     let result = catch_unwind(|| {
         let tensor = unsafe { &*ptr };
 
-        let data = match tensor.inner().storage().as_ref() {
-            Storage::DenseF64(ds) => ds.as_slice(),
-            _ => return T4A_INVALID_ARGUMENT,
+        let data = match tensor.inner().as_slice_f64() {
+            Ok(s) => s,
+            Err(_) => return T4A_INVALID_ARGUMENT,
         };
 
         unsafe { *out_len = data.len() };
@@ -235,9 +232,9 @@ pub extern "C" fn t4a_tensor_get_data_c64(
     let result = catch_unwind(|| {
         let tensor = unsafe { &*ptr };
 
-        let data = match tensor.inner().storage().as_ref() {
-            Storage::DenseC64(ds) => ds.as_slice(),
-            _ => return T4A_INVALID_ARGUMENT,
+        let data = match tensor.inner().as_slice_c64() {
+            Ok(s) => s,
+            Err(_) => return T4A_INVALID_ARGUMENT,
         };
 
         unsafe { *out_len = data.len() };
@@ -314,13 +311,8 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
         // Copy data
         let data_vec: Vec<f64> = unsafe { std::slice::from_raw_parts(data, data_len).to_vec() };
 
-        // Create storage
-        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data_vec, &dims_vec,
-        )));
-
-        // Create tensor
-        let tensor = InternalTensor::new(indices, dims_vec, storage);
+        // Create tensor using high-level API
+        let tensor = InternalTensor::from_dense_f64(indices, data_vec);
 
         Box::into_raw(Box::new(t4a_tensor::new(tensor)))
     });
@@ -384,13 +376,8 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
             .map(|i| unsafe { Complex64::new(*data_re.add(i), *data_im.add(i)) })
             .collect();
 
-        // Create storage
-        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            data_vec, &dims_vec,
-        )));
-
-        // Create tensor
-        let tensor = InternalTensor::new(indices, dims_vec, storage);
+        // Create tensor using high-level API
+        let tensor = InternalTensor::from_dense_c64(indices, data_vec);
 
         Box::into_raw(Box::new(t4a_tensor::new(tensor)))
     });

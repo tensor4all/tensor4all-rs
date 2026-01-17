@@ -82,11 +82,16 @@ pub enum t4a_storage_kind {
 impl t4a_storage_kind {
     /// Convert from Rust Storage to t4a_storage_kind
     pub(crate) fn from_storage(storage: &Storage) -> Self {
-        match storage {
-            Storage::DenseF64(_) => Self::DenseF64,
-            Storage::DenseC64(_) => Self::DenseC64,
-            Storage::DiagF64(_) => Self::DiagF64,
-            Storage::DiagC64(_) => Self::DiagC64,
+        if storage.is_diag() {
+            if storage.is_f64() {
+                Self::DiagF64
+            } else {
+                Self::DiagC64
+            }
+        } else if storage.is_f64() {
+            Self::DenseF64
+        } else {
+            Self::DenseC64
         }
     }
 }
