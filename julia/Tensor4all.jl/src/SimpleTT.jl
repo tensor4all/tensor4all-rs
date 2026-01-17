@@ -3,7 +3,8 @@
 
 High-level Julia wrappers for SimpleTT tensor trains from tensor4all-simplett.
 
-This provides a simple tensor train representation designed for TCI operations.
+SimpleTT is a simple tensor train (TT/MPS) library with statically determined shapes
+(site dimensions are fixed at construction time).
 """
 module SimpleTT
 
@@ -15,7 +16,10 @@ export SimpleTensorTrain
 """
     SimpleTensorTrain{T<:Real}
 
-A simple tensor train (MPS) wrapper for tensor4all-simplett.
+A simple tensor train (TT/MPS) with statically determined shapes.
+
+SimpleTensorTrain is a simple tensor train library where site dimensions are fixed
+at construction time.
 
 Currently only supports `Float64` values.
 """
