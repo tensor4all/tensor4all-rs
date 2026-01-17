@@ -856,4 +856,47 @@ mod tests {
         crate::t4a_index_release(s0);
         crate::t4a_index_release(s0_clone);
     }
+
+    #[test]
+    fn test_tt_inner() {
+        use crate::{t4a_index_clone, t4a_index_new, t4a_tensor_new_dense_f64};
+
+        // Build two 1-site tensor trains with the same site index
+        let s0 = t4a_index_new(2);
+        let s0_clone = t4a_index_clone(s0);
+
+        // Create vector [1, 0] normalized
+        let data_a: Vec<f64> = vec![1.0, 0.0];
+        // Create vector [0, 1]
+        let data_b: Vec<f64> = vec![0.0, 1.0];
+
+        let inds_a: [*const t4a_index; 1] = [s0];
+        let dims_a: [libc::size_t; 1] = [2];
+        let t0 = t4a_tensor_new_dense_f64(1, inds_a.as_ptr(), dims_a.as_ptr(), data_a.as_ptr(), 2);
+
+        let inds_b: [*const t4a_index; 1] = [s0_clone];
+        let dims_b: [libc::size_t; 1] = [2];
+        let t1 = t4a_tensor_new_dense_f64(1, inds_b.as_ptr(), dims_b.as_ptr(), data_b.as_ptr(), 2);
+
+        let tensors0: [*const t4a_tensor; 1] = [t0];
+        let tensors1: [*const t4a_tensor; 1] = [t1];
+        let tt0 = t4a_tt_new(tensors0.as_ptr(), 1);
+        let tt1 = t4a_tt_new(tensors1.as_ptr(), 1);
+
+        // Compute inner product - should be 0 for orthogonal vectors
+        let mut re: f64 = 0.0;
+        let mut im: f64 = 0.0;
+        let status = t4a_tt_inner(tt0, tt1, &mut re, &mut im);
+        assert_eq!(status, T4A_SUCCESS);
+        assert!((re - 0.0).abs() < 1e-10);
+        assert!((im - 0.0).abs() < 1e-10);
+
+        // Cleanup
+        t4a_tensortrain_release(tt0);
+        t4a_tensortrain_release(tt1);
+        crate::t4a_tensor_release(t0);
+        crate::t4a_tensor_release(t1);
+        crate::t4a_index_release(s0);
+        crate::t4a_index_release(s0_clone);
+    }
 }

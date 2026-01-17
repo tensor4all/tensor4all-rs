@@ -2697,4 +2697,55 @@ mod tests {
             _ => panic!("Expected DiagF64"),
         }
     }
+
+    // ===== Type inspection tests =====
+
+    #[test]
+    fn test_is_f64() {
+        let dense_f64 = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
+        let dense_c64 = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+            vec![Complex64::new(1.0, 0.0)],
+            &[1],
+        ));
+        let diag_f64 = Storage::DiagF64(DiagStorage::from_vec(vec![1.0]));
+        let diag_c64 = Storage::DiagC64(DiagStorage::from_vec(vec![Complex64::new(1.0, 0.0)]));
+
+        assert!(dense_f64.is_f64());
+        assert!(!dense_c64.is_f64());
+        assert!(diag_f64.is_f64());
+        assert!(!diag_c64.is_f64());
+    }
+
+    #[test]
+    fn test_is_c64() {
+        let dense_f64 = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
+        let dense_c64 = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+            vec![Complex64::new(1.0, 0.0)],
+            &[1],
+        ));
+        let diag_f64 = Storage::DiagF64(DiagStorage::from_vec(vec![1.0]));
+        let diag_c64 = Storage::DiagC64(DiagStorage::from_vec(vec![Complex64::new(1.0, 0.0)]));
+
+        assert!(!dense_f64.is_c64());
+        assert!(dense_c64.is_c64());
+        assert!(!diag_f64.is_c64());
+        assert!(diag_c64.is_c64());
+    }
+
+    #[test]
+    fn test_is_complex() {
+        let dense_f64 = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
+        let dense_c64 = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+            vec![Complex64::new(1.0, 0.0)],
+            &[1],
+        ));
+        let diag_f64 = Storage::DiagF64(DiagStorage::from_vec(vec![1.0]));
+        let diag_c64 = Storage::DiagC64(DiagStorage::from_vec(vec![Complex64::new(1.0, 0.0)]));
+
+        // is_complex is an alias for is_c64
+        assert!(!dense_f64.is_complex());
+        assert!(dense_c64.is_complex());
+        assert!(!diag_f64.is_complex());
+        assert!(diag_c64.is_complex());
+    }
 }

@@ -231,4 +231,30 @@ mod tests {
         assert_eq!(data[2], Complex64::new(0.0, 0.0));
         assert_eq!(data[3], Complex64::new(1.0, 0.0));
     }
+
+    #[test]
+    fn test_identity_c64_multi_site() {
+        // Test with multiple sites to cover the main loop in build_identity_operator_tensor_c64
+        let s1_in = make_index(2);
+        let s1_out = make_index(2);
+        let s2_in = make_index(2);
+        let s2_out = make_index(2);
+
+        let tensor =
+            build_identity_operator_tensor_c64(&[s1_in, s2_in], &[s1_out, s2_out]).unwrap();
+
+        // Shape should be [2, 2, 2, 2] = 16 elements
+        assert_eq!(tensor.dims, vec![2, 2, 2, 2]);
+        let data = get_c64_data(&tensor);
+        assert_eq!(data.len(), 16);
+
+        // Diagonal elements should be 1, others 0
+        // In identity operator, data[i, i, j, j] = 1 for all i, j
+        // Linear index: (i1, o1, i2, o2) -> i1*8 + o1*4 + i2*2 + o2
+        // (0,0,0,0)=0, (0,0,1,1)=3, (1,1,0,0)=12, (1,1,1,1)=15
+        assert_eq!(data[0], Complex64::new(1.0, 0.0));
+        assert_eq!(data[3], Complex64::new(1.0, 0.0));
+        assert_eq!(data[12], Complex64::new(1.0, 0.0));
+        assert_eq!(data[15], Complex64::new(1.0, 0.0));
+    }
 }
