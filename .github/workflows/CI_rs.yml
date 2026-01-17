@@ -86,19 +86,20 @@ jobs:
         id: cache-libtorch
         uses: actions/cache@v4
         with:
-          path: ~/libtorch
-          key: libtorch-2.7.1-cpu-linux
+          path: ${{ github.workspace }}/libtorch
+          key: libtorch-2.9.0-cpu-linux
 
       - name: Download libtorch
         if: steps.cache-libtorch.outputs.cache-hit != 'true'
         run: |
-          wget -q https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip -O libtorch.zip
-          unzip -q libtorch.zip -d ~/
+          wget -q https://download.pytorch.org/libtorch/cpu/libtorch-shared-with-deps-2.9.0%2Bcpu.zip -O libtorch.zip
+          unzip -q libtorch.zip
 
       - name: Run tests with libtorch
         env:
-          LIBTORCH: ~/libtorch
-          LD_LIBRARY_PATH: ~/libtorch/lib
+          LIBTORCH: ${{ github.workspace }}/libtorch
+          LD_LIBRARY_PATH: ${{ github.workspace }}/libtorch/lib
+          LIBTORCH_CXX11_ABI: 0
         run: cargo test --release -p tensor4all-tensorbackend --features backend-libtorch
 
   coverage:

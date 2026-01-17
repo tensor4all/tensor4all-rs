@@ -29,7 +29,7 @@ thiserror.workspace = true
 anyhow.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
-tch = { version = "0.20", optional = true }
+tch = { version = "0.22", optional = true }
 
 [dev-dependencies]
 approx.workspace = true
