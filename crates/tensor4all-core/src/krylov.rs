@@ -179,7 +179,7 @@ where
 
             for v_i in v_basis.iter().take(j + 1) {
                 let h_ij = v_i.inner_product(&w_orth)?;
-                h_col.push(h_ij);
+                h_col.push(h_ij.clone());
                 // w_orth = w_orth - h_ij * v_i = 1.0 * w_orth + (-h_ij) * v_i
                 let neg_h_ij = AnyScalar::F64(0.0) - h_ij;
                 w_orth = w_orth.axpby(AnyScalar::F64(1.0), v_i, neg_h_ij)?;
@@ -192,8 +192,8 @@ where
             // Apply previous Givens rotations to new column
             #[allow(clippy::needless_range_loop)]
             for i in 0..j {
-                let h_i = h_col[i];
-                let h_ip1 = h_col[i + 1];
+                let h_i = h_col[i].clone();
+                let h_ip1 = h_col[i + 1].clone();
                 let (new_hi, new_hip1) = apply_givens_rotation(&cs[i], &sn[i], &h_i, &h_ip1);
                 h_col[i] = new_hi;
                 h_col[i + 1] = new_hip1;
@@ -201,8 +201,8 @@ where
 
             // Compute new Givens rotation for h_col[j] and h_col[j+1]
             let (c_j, s_j) = compute_givens_rotation(&h_col[j], &h_col[j + 1]);
-            cs.push(c_j);
-            sn.push(s_j);
+            cs.push(c_j.clone());
+            sn.push(s_j.clone());
 
             // Apply new rotation to eliminate h_col[j+1]
             let (new_hj, _) = apply_givens_rotation(&c_j, &s_j, &h_col[j], &h_col[j + 1]);
@@ -210,16 +210,16 @@ where
             h_col[j + 1] = AnyScalar::F64(0.0);
 
             // Apply rotation to g
-            let g_j = g[j];
+            let g_j = g[j].clone();
             let g_jp1 = AnyScalar::F64(0.0);
             let (new_gj, new_gjp1) = apply_givens_rotation(&c_j, &s_j, &g_j, &g_jp1);
             g[j] = new_gj;
+            let res_norm = new_gjp1.abs();
             g.push(new_gjp1);
 
             h_matrix.push(h_col);
 
             // Check convergence
-            let res_norm = new_gjp1.abs();
             let rel_res = res_norm / b_norm;
 
             if options.verbose && (j + 1) % 10 == 0 {
@@ -277,59 +277,42 @@ where
 }
 
 /// Compute Givens rotation coefficients to eliminate b in (a, b).
+///
+/// This function works with any AnyScalar variant by converting to Complex64
+/// for computation, then returning results in the appropriate type.
 fn compute_givens_rotation(a: &AnyScalar, b: &AnyScalar) -> (AnyScalar, AnyScalar) {
     use num_complex::Complex64;
 
-    match (a, b) {
-        (AnyScalar::F64(a_val), AnyScalar::F64(b_val)) => {
-            let r = (a_val * a_val + b_val * b_val).sqrt();
-            if r < 1e-15 {
-                (AnyScalar::F64(1.0), AnyScalar::F64(0.0))
-            } else {
-                (AnyScalar::F64(a_val / r), AnyScalar::F64(b_val / r))
-            }
+    // Handle the simple f64-only case without conversion
+    if !a.is_complex() && !b.is_complex() {
+        let a_val = a.real();
+        let b_val = b.real();
+        let r = (a_val * a_val + b_val * b_val).sqrt();
+        if r < 1e-15 {
+            return (AnyScalar::F64(1.0), AnyScalar::F64(0.0));
         }
-        (AnyScalar::C64(a_val), AnyScalar::C64(b_val)) => {
-            let r = (a_val.norm_sqr() + b_val.norm_sqr()).sqrt();
-            if r < 1e-15 {
-                (
-                    AnyScalar::C64(Complex64::new(1.0, 0.0)),
-                    AnyScalar::C64(Complex64::new(0.0, 0.0)),
-                )
-            } else {
-                (AnyScalar::C64(*a_val / r), AnyScalar::C64(*b_val / r))
-            }
-        }
-        // Mixed real/complex - promote to complex
-        (AnyScalar::F64(a_val), AnyScalar::C64(b_val)) => {
-            let a_c = Complex64::new(*a_val, 0.0);
-            let r = (a_c.norm_sqr() + b_val.norm_sqr()).sqrt();
-            if r < 1e-15 {
-                (
-                    AnyScalar::C64(Complex64::new(1.0, 0.0)),
-                    AnyScalar::C64(Complex64::new(0.0, 0.0)),
-                )
-            } else {
-                (AnyScalar::C64(a_c / r), AnyScalar::C64(*b_val / r))
-            }
-        }
-        (AnyScalar::C64(a_val), AnyScalar::F64(b_val)) => {
-            let b_c = Complex64::new(*b_val, 0.0);
-            let r = (a_val.norm_sqr() + b_c.norm_sqr()).sqrt();
-            if r < 1e-15 {
-                (
-                    AnyScalar::C64(Complex64::new(1.0, 0.0)),
-                    AnyScalar::C64(Complex64::new(0.0, 0.0)),
-                )
-            } else {
-                (AnyScalar::C64(*a_val / r), AnyScalar::C64(b_c / r))
-            }
-        }
+        return (AnyScalar::F64(a_val / r), AnyScalar::F64(b_val / r));
+    }
+
+    // For complex or mixed cases, convert to Complex64
+    let a_c: Complex64 = a.clone().into();
+    let b_c: Complex64 = b.clone().into();
+    let r = (a_c.norm_sqr() + b_c.norm_sqr()).sqrt();
+    if r < 1e-15 {
+        (
+            AnyScalar::C64(Complex64::new(1.0, 0.0)),
+            AnyScalar::C64(Complex64::new(0.0, 0.0)),
+        )
+    } else {
+        (AnyScalar::C64(a_c / r), AnyScalar::C64(b_c / r))
     }
 }
 
 /// Apply Givens rotation: (c, s) @ (x, y) -> (c*x + s*y, -conj(s)*x + c*y) for complex
 /// or (c*x + s*y, -s*x + c*y) for real.
+///
+/// This function works with any AnyScalar variant by converting to Complex64
+/// for computation when needed.
 fn apply_givens_rotation(
     c: &AnyScalar,
     s: &AnyScalar,
@@ -338,41 +321,26 @@ fn apply_givens_rotation(
 ) -> (AnyScalar, AnyScalar) {
     use num_complex::Complex64;
 
-    match (c, s, x, y) {
-        (
-            AnyScalar::F64(c_val),
-            AnyScalar::F64(s_val),
-            AnyScalar::F64(x_val),
-            AnyScalar::F64(y_val),
-        ) => {
-            let new_x = c_val * x_val + s_val * y_val;
-            let new_y = -s_val * x_val + c_val * y_val;
-            (AnyScalar::F64(new_x), AnyScalar::F64(new_y))
-        }
-        _ => {
-            // Promote all to complex
-            let c_c = match c {
-                AnyScalar::F64(v) => Complex64::new(*v, 0.0),
-                AnyScalar::C64(v) => *v,
-            };
-            let s_c = match s {
-                AnyScalar::F64(v) => Complex64::new(*v, 0.0),
-                AnyScalar::C64(v) => *v,
-            };
-            let x_c = match x {
-                AnyScalar::F64(v) => Complex64::new(*v, 0.0),
-                AnyScalar::C64(v) => *v,
-            };
-            let y_c = match y {
-                AnyScalar::F64(v) => Complex64::new(*v, 0.0),
-                AnyScalar::C64(v) => *v,
-            };
-
-            let new_x = c_c * x_c + s_c * y_c;
-            let new_y = -s_c.conj() * x_c + c_c * y_c;
-            (AnyScalar::C64(new_x), AnyScalar::C64(new_y))
-        }
+    // Handle the simple f64-only case without conversion
+    if !c.is_complex() && !s.is_complex() && !x.is_complex() && !y.is_complex() {
+        let c_val = c.real();
+        let s_val = s.real();
+        let x_val = x.real();
+        let y_val = y.real();
+        let new_x = c_val * x_val + s_val * y_val;
+        let new_y = -s_val * x_val + c_val * y_val;
+        return (AnyScalar::F64(new_x), AnyScalar::F64(new_y));
     }
+
+    // For complex or mixed cases, convert to Complex64
+    let c_c: Complex64 = c.clone().into();
+    let s_c: Complex64 = s.clone().into();
+    let x_c: Complex64 = x.clone().into();
+    let y_c: Complex64 = y.clone().into();
+
+    let new_x = c_c * x_c + s_c * y_c;
+    let new_y = -s_c.conj() * x_c + c_c * y_c;
+    (AnyScalar::C64(new_x), AnyScalar::C64(new_y))
 }
 
 /// Solve upper triangular system R y = g using back substitution.
@@ -385,11 +353,11 @@ fn solve_upper_triangular(h: &[Vec<AnyScalar>], g: &[AnyScalar]) -> Result<Vec<A
     let mut y = vec![AnyScalar::F64(0.0); n];
 
     for i in (0..n).rev() {
-        let mut sum = g[i];
+        let mut sum = g[i].clone();
 
         for j in (i + 1)..n {
             // sum = sum - h[j][i] * y[j]
-            let prod = h[j][i] * y[j];
+            let prod = h[j][i].clone() * y[j].clone();
             sum = sum - prod;
         }
 
@@ -400,7 +368,7 @@ fn solve_upper_triangular(h: &[Vec<AnyScalar>], g: &[AnyScalar]) -> Result<Vec<A
             ));
         }
 
-        y[i] = sum / *h_ii;
+        y[i] = sum / h_ii.clone();
     }
 
     Ok(y)
@@ -411,7 +379,7 @@ fn update_solution<T: TensorLike>(x: &T, v_basis: &[T], y: &[AnyScalar]) -> Resu
     let mut result = x.clone();
 
     for (vi, yi) in v_basis.iter().zip(y.iter()) {
-        let scaled_vi = vi.scale(*yi)?;
+        let scaled_vi = vi.scale(yi.clone())?;
         // result = result + scaled_vi = 1.0 * result + 1.0 * scaled_vi
         result = result.axpby(AnyScalar::F64(1.0), &scaled_vi, AnyScalar::F64(1.0))?;
     }
@@ -442,38 +410,32 @@ mod tests {
 
     #[test]
     fn test_givens_rotation_real() {
-        let a = AnyScalar::F64(3.0);
-        let b = AnyScalar::F64(4.0);
+        let a = AnyScalar::new_real(3.0);
+        let b = AnyScalar::new_real(4.0);
         let (c, s) = compute_givens_rotation(&a, &b);
 
         // c = 3/5 = 0.6, s = 4/5 = 0.8
-        match (c, s) {
-            (AnyScalar::F64(c_val), AnyScalar::F64(s_val)) => {
-                assert!((c_val - 0.6).abs() < 1e-10);
-                assert!((s_val - 0.8).abs() < 1e-10);
-            }
-            _ => panic!("Expected real values"),
-        }
+        assert!(!c.is_complex());
+        assert!(!s.is_complex());
+        assert!((c.real() - 0.6).abs() < 1e-10);
+        assert!((s.real() - 0.8).abs() < 1e-10);
     }
 
     #[test]
     fn test_apply_givens_rotation_real() {
-        let c = AnyScalar::F64(0.6);
-        let s = AnyScalar::F64(0.8);
-        let x = AnyScalar::F64(3.0);
-        let y = AnyScalar::F64(4.0);
+        let c = AnyScalar::new_real(0.6);
+        let s = AnyScalar::new_real(0.8);
+        let x = AnyScalar::new_real(3.0);
+        let y = AnyScalar::new_real(4.0);
 
         let (new_x, new_y) = apply_givens_rotation(&c, &s, &x, &y);
 
         // new_x = 0.6*3 + 0.8*4 = 1.8 + 3.2 = 5.0
         // new_y = -0.8*3 + 0.6*4 = -2.4 + 2.4 = 0.0
-        match (new_x, new_y) {
-            (AnyScalar::F64(new_x_val), AnyScalar::F64(new_y_val)) => {
-                assert!((new_x_val - 5.0).abs() < 1e-10);
-                assert!(new_y_val.abs() < 1e-10);
-            }
-            _ => panic!("Expected real values"),
-        }
+        assert!(!new_x.is_complex());
+        assert!(!new_y.is_complex());
+        assert!((new_x.real() - 5.0).abs() < 1e-10);
+        assert!(new_y.real().abs() < 1e-10);
     }
 
     #[test]

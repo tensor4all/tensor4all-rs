@@ -31,6 +31,8 @@ Read `docs/api/*.md` before source files. Only read source when API doc is insuf
 
 `cargo fmt` for formatting, `cargo clippy` for linting. Avoid `unwrap()`/`expect()` in library code.
 
+**Always run `cargo fmt --all` before committing changes.**
+
 ## Error Handling
 
 - `anyhow` for internal error handling and context
@@ -46,7 +48,29 @@ cargo test --workspace        # All crates
 
 - Private functions: `#[cfg(test)]` module in source file
 - Integration tests: `tests/` directory
-- Use generic test functions for f64/Complex64:
+- **Test tolerance changes**: When relaxing test tolerances (unit tests, codecov targets, etc.), always seek explicit user approval before making changes.
+
+## API Design
+
+Only make functions `pub` when truly public API.
+
+### Layering and Maintainability
+
+**Respect crate boundaries and abstraction layers.**
+
+- **Never access low-level APIs or internal data structures from downstream crates.** Use high-level public methods instead of directly manipulating internal representations.
+- **Use high-level APIs.** If downstream code needs low-level access, create appropriate high-level APIs rather than exposing internal details.
+- **Examples:**
+  - Instead of `match scalar { AnyScalar::F64(x) => ... }`, use `scalar.real()`, `scalar.is_complex()`, `scalar.is_zero()`
+  - Instead of `AnyScalar::F64(1.0)`, use `AnyScalar::new_real(1.0)`
+  - Instead of `AnyScalar::C64(z)`, use `AnyScalar::new_complex(re, im)`
+
+**This applies to both library code and test code.** Tests should also use public APIs to maintain consistency and reduce maintenance burden when internal representations change.
+
+### Code Deduplication
+
+- **Avoid duplicate test code.** Use macros, functions, or generic functions to share test logic.
+- **Example pattern for testing f64/Complex64:**
 
 ```rust
 fn test_op_generic<T: Scalar + From<f64>>() { /* test */ }
@@ -56,12 +80,6 @@ fn test_op_f64() { test_op_generic::<f64>(); }
 #[test]
 fn test_op_c64() { test_op_generic::<Complex64>(); }
 ```
-
-- **Test tolerance changes**: When relaxing test tolerances (unit tests, codecov targets, etc.), always seek explicit user approval before making changes.
-
-## API Design
-
-Only make functions `pub` when truly public API.
 
 ## C API & Language Bindings
 
@@ -78,6 +96,16 @@ Truncation tolerance: support both `cutoff` (ITensors) and `rtol` (tensor4all-rs
 
 **Never push/create PR without user approval.**
 
+### Pre-PR Checks
+
+Before creating a PR, always run lint checks locally:
+
+```bash
+cargo fmt --all          # Format all code
+cargo clippy --workspace # Check for common issues
+cargo test --workspace   # Run all tests
+```
+
 | Change Type | Workflow |
 |-------------|----------|
 | Minor fixes | Branch + PR with auto-merge |
@@ -86,6 +114,7 @@ Truncation tolerance: support both `cutoff` (ITensors) and `rtol` (tensor4all-rs
 ```bash
 # Minor: branch workflow
 git checkout -b fix-name && git add -A && git commit -m "msg"
+cargo fmt --all && cargo clippy --workspace  # Lint before push
 git push -u origin fix-name
 gh pr create --base main --title "Title" --body "Desc"
 gh pr merge --auto --squash --delete-branch

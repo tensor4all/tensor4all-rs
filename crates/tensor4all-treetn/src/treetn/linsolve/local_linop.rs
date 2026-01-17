@@ -109,18 +109,14 @@ where
 
         // When a0 = 0, just return a1 * H * x (avoids axpby which requires same indices)
         // This is important for space_in != space_out cases
-        let a0_is_zero = match &self.a0 {
-            AnyScalar::F64(x) => *x == 0.0,
-            AnyScalar::C64(z) => z.re == 0.0 && z.im == 0.0,
-        };
-        if a0_is_zero {
-            return hx.scale(self.a1);
+        if self.a0.is_zero() {
+            return hx.scale(self.a1.clone());
         }
 
         // Align hx indices to match x's index order for axpby
         let hx_aligned = hx.permuteinds(&x.external_indices())?;
 
         // Compute y = a₀ * x + a₁ * H * x
-        x.axpby(self.a0, &hx_aligned, self.a1)
+        x.axpby(self.a0.clone(), &hx_aligned, self.a1.clone())
     }
 }

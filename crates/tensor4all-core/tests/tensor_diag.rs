@@ -34,7 +34,8 @@ fn test_diag_tensor_sum() {
 
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data);
     let sum: AnyScalar = tensor.sum();
-    assert_eq!(sum, AnyScalar::F64(6.0));
+    assert!(!sum.is_complex());
+    assert!((sum.real() - 6.0).abs() < 1e-10);
 }
 
 #[test]
@@ -196,7 +197,8 @@ fn test_diag_tensor_rank3() {
 
     // Sum should work
     let sum: AnyScalar = tensor.sum();
-    assert_eq!(sum, AnyScalar::F64(3.0));
+    assert!(!sum.is_complex());
+    assert!((sum.real() - 3.0).abs() < 1e-10);
 }
 
 #[test]
@@ -211,7 +213,10 @@ fn test_diag_tensor_complex() {
 
     // Sum should work
     let sum: AnyScalar = tensor.sum();
-    assert_eq!(sum, AnyScalar::C64(Complex64::new(3.0, 1.5)));
+    assert!(sum.is_complex());
+    let z: Complex64 = sum.into();
+    assert!((z.re - 3.0).abs() < 1e-10);
+    assert!((z.im - 1.5).abs() < 1e-10);
 }
 
 #[test]

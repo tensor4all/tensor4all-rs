@@ -154,7 +154,8 @@ fn test_tensor_sum_f64_no_match() {
     assert_eq!(sum_f64, 6.0);
 
     let sum_any: AnyScalar = t.sum();
-    assert_eq!(sum_any, AnyScalar::F64(6.0));
+    assert!(!sum_any.is_complex());
+    assert!((sum_any.real() - 6.0).abs() < 1e-10);
 }
 
 #[test]
@@ -169,7 +170,10 @@ fn test_tensor_sum_c64() {
     // Now always returns AnyScalar
     let t: TensorDynLen = TensorDynLen::new(indices, dims, storage);
     let sum_any: AnyScalar = t.sum();
-    assert_eq!(sum_any, AnyScalar::C64(Complex64::new(4.0, 1.0)));
+    assert!(sum_any.is_complex());
+    let z: Complex64 = sum_any.into();
+    assert!((z.re - 4.0).abs() < 1e-10);
+    assert!((z.im - 1.0).abs() < 1e-10);
 }
 
 #[test]
