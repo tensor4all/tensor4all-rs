@@ -844,9 +844,10 @@ function Base.deepcopy(t::Tensor)
 end
 
 # ============================================================================
-# SimpleTT Submodule (Simple Tensor Train for TCI)
+# SimpleTT Submodule (Simple Tensor Train)
 # ============================================================================
-# SimpleTT provides a simple tensor train interface designed for TCI operations.
+# SimpleTT is a simple tensor train (TT/MPS) library with statically determined shapes
+# (site dimensions are fixed at construction time).
 # Use: using Tensor4all.SimpleTT
 include("SimpleTT.jl")
 

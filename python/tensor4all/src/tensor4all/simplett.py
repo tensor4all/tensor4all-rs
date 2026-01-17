@@ -1,7 +1,8 @@
-"""SimpleTensorTrain - Simple tensor train wrapper for TCI operations.
+"""SimpleTensorTrain - Simple tensor train (TT/MPS) with statically determined shapes.
 
 This module provides a Python interface to the SimpleTT tensor train
-from tensor4all-simplett, designed for tensor cross interpolation.
+from tensor4all-simplett. SimpleTensorTrain is a simple tensor train library
+where site dimensions are fixed at construction time.
 
 Examples
 --------
@@ -29,10 +30,11 @@ from ._capi import get_lib, check_status
 
 
 class SimpleTensorTrain:
-    """A simple tensor train (MPS) wrapper for TCI operations.
+    """A simple tensor train (TT/MPS) with statically determined shapes.
 
-    This class wraps the Rust SimpleTT from tensor4all-simplett, providing
-    a simple interface for tensor trains created by cross interpolation.
+    This class wraps the Rust SimpleTT from tensor4all-simplett.
+    SimpleTensorTrain is a simple tensor train library where site dimensions
+    are fixed at construction time.
 
     Currently only supports Float64 values.
 
