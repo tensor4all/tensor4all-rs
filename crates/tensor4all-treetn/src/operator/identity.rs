@@ -5,12 +5,9 @@
 //!
 //! This module provides convenience wrappers around `TensorLike::delta()`.
 
-use std::sync::Arc;
-
 use anyhow::Result;
 use num_complex::Complex64;
 
-use tensor4all_core::storage::{DenseStorageC64, Storage};
 use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorLike};
 
 /// Build an identity operator tensor for a gap node.
@@ -72,11 +69,7 @@ pub fn build_identity_operator_tensor_c64(
     }
 
     if site_indices.is_empty() {
-        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            vec![Complex64::new(1.0, 0.0)],
-            &[],
-        )));
-        return Ok(TensorDynLen::new(vec![], vec![], storage));
+        return Ok(TensorDynLen::scalar_c64(Complex64::new(1.0, 0.0)));
     }
 
     // Build combined index list
@@ -126,10 +119,7 @@ pub fn build_identity_operator_tensor_c64(
         data[linear_idx] = Complex64::new(1.0, 0.0);
     }
 
-    let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-        data, &dims,
-    )));
-    Ok(TensorDynLen::new(all_indices, dims, storage))
+    Ok(TensorDynLen::from_dense_c64(all_indices, data))
 }
 
 #[cfg(test)]
@@ -142,17 +132,11 @@ mod tests {
     }
 
     fn get_f64_data(tensor: &TensorDynLen) -> &[f64] {
-        match tensor.storage().as_ref() {
-            Storage::DenseF64(d) => d.as_slice(),
-            _ => panic!("Expected DenseF64 storage"),
-        }
+        tensor.as_slice_f64().expect("Expected DenseF64 storage")
     }
 
     fn get_c64_data(tensor: &TensorDynLen) -> &[Complex64] {
-        match tensor.storage().as_ref() {
-            Storage::DenseC64(d) => d.as_slice(),
-            _ => panic!("Expected DenseC64 storage"),
-        }
+        tensor.as_slice_c64().expect("Expected DenseC64 storage")
     }
 
     #[test]

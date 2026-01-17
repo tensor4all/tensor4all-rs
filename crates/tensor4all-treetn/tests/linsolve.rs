@@ -4,10 +4,8 @@
 //! for Tree Tensor Networks.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use tensor4all_core::storage::DenseStorageF64;
-use tensor4all_core::{DynIndex, IndexLike, Storage, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_treetn::{
     EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveUpdater,
     ProjectedOperator, ProjectedState, TreeTN,
@@ -37,34 +35,14 @@ fn create_simple_mps_chain() -> (
 
     // Create tensors with random data
     // Site 0: [s0, b01] shape (2, 4)
-    let t0 = TensorDynLen::new(
-        vec![s0.clone(), b01.clone()],
-        vec![2, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0; 8],
-            &[2, 4],
-        ))),
-    );
+    let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], vec![1.0; 8]);
 
     // Site 1: [b01, s1, b12] shape (4, 2, 4)
-    let t1 = TensorDynLen::new(
-        vec![b01.clone(), s1.clone(), b12.clone()],
-        vec![4, 2, 4],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0; 32],
-            &[4, 2, 4],
-        ))),
-    );
+    let t1 =
+        TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 32]);
 
     // Site 2: [b12, s2] shape (4, 2)
-    let t2 = TensorDynLen::new(
-        vec![b12.clone(), s2.clone()],
-        vec![4, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0; 8],
-            &[4, 2],
-        ))),
-    );
+    let t2 = TensorDynLen::from_dense_f64(vec![b12.clone(), s2.clone()], vec![1.0; 8]);
 
     // Add nodes with string names (add_tensor returns Result)
     let n0 = mps.add_tensor("site0", t0).unwrap();
@@ -100,14 +78,7 @@ fn test_environment_cache_insert_get() {
 
     // Create a simple tensor to cache
     let idx = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::new(
-        vec![idx],
-        vec![2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0, 2.0],
-            &[2],
-        ))),
-    );
+    let tensor = TensorDynLen::from_dense_f64(vec![idx], vec![1.0, 2.0]);
 
     cache.insert("a", "b", tensor.clone());
 
@@ -125,14 +96,7 @@ fn test_environment_cache_clear() {
     let mut cache: EnvironmentCache<TensorDynLen, &str> = EnvironmentCache::new();
 
     let idx = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::new(
-        vec![idx],
-        vec![2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0, 2.0],
-            &[2],
-        ))),
-    );
+    let tensor = TensorDynLen::from_dense_f64(vec![idx], vec![1.0, 2.0]);
 
     cache.insert("a", "b", tensor);
     assert_eq!(cache.len(), 1);
@@ -246,29 +210,21 @@ fn create_two_site_mps() -> (
 
     // Create tensors with normalized data
     // Site 0: [s0, b01] shape (2, 2)
-    let t0 = TensorDynLen::new(
+    let t0 = TensorDynLen::from_dense_f64(
         vec![s0.clone(), b01.clone()],
-        vec![2, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![
-                1.0, 0.0, // s0=0: b01=0, b01=1
-                0.0, 1.0, // s0=1: b01=0, b01=1
-            ],
-            &[2, 2],
-        ))),
+        vec![
+            1.0, 0.0, // s0=0: b01=0, b01=1
+            0.0, 1.0, // s0=1: b01=0, b01=1
+        ],
     );
 
     // Site 1: [b01, s1] shape (2, 2)
-    let t1 = TensorDynLen::new(
+    let t1 = TensorDynLen::from_dense_f64(
         vec![b01.clone(), s1.clone()],
-        vec![2, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![
-                1.0, 0.0, // b01=0: s1=0, s1=1
-                0.0, 1.0, // b01=1: s1=0, s1=1
-            ],
-            &[2, 2],
-        ))),
+        vec![
+            1.0, 0.0, // b01=0: s1=0, s1=1
+            0.0, 1.0, // b01=1: s1=0, s1=1
+        ],
     );
 
     // Add nodes with string names
@@ -335,28 +291,14 @@ fn create_diagonal_mpo(
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = diag_values[0];
     }
-    let t0 = TensorDynLen::new(
-        vec![s0_out.clone(), s0_in.clone(), b01.clone()],
-        vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data0,
-            &[phys_dim, phys_dim, 1],
-        ))),
-    );
+    let t0 = TensorDynLen::from_dense_f64(vec![s0_out.clone(), s0_in.clone(), b01.clone()], data0);
 
     // Diagonal tensor at site 1: [b01, s1_out, s1_in] shape (1, 2, 2)
     let mut data1 = vec![0.0; phys_dim * phys_dim];
     for i in 0..phys_dim {
         data1[i * phys_dim + i] = diag_values[1];
     }
-    let t1 = TensorDynLen::new(
-        vec![b01.clone(), s1_out.clone(), s1_in.clone()],
-        vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data1,
-            &[1, phys_dim, phys_dim],
-        ))),
-    );
+    let t1 = TensorDynLen::from_dense_f64(vec![b01.clone(), s1_out.clone(), s1_in.clone()], data1);
 
     // Add nodes
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -422,24 +364,10 @@ fn create_mps_from_values(
     for i in 0..phys_dim.min(bond_dim) {
         data0[i * bond_dim + i] = 1.0;
     }
-    let t0 = TensorDynLen::new(
-        vec![s0.clone(), b01.clone()],
-        vec![phys_dim, bond_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data0,
-            &[phys_dim, bond_dim],
-        ))),
-    );
+    let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], data0);
 
     // Site 1 tensor: [b01, s1] - contains the values
-    let t1 = TensorDynLen::new(
-        vec![b01.clone(), s1.clone()],
-        vec![bond_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            values.to_vec(),
-            &[bond_dim, phys_dim],
-        ))),
-    );
+    let t1 = TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone()], values.to_vec());
 
     let n0 = mps.add_tensor("site0", t0).unwrap();
     let n1 = mps.add_tensor("site1", t1).unwrap();
@@ -460,7 +388,6 @@ fn create_mps_from_values(
 /// * `b_values` - RHS values for each configuration [b_00, b_01, b_10, b_11]
 /// * `tol` - Tolerance for comparing solution
 fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], tol: f64) {
-    use tensor4all_core::storage::StorageScalar;
     use tensor4all_treetn::{
         apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
     };
@@ -524,18 +451,14 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
 
     // Debug: print initial state
     let contracted_init = x.contract_to_tensor().unwrap();
-    let sol_init: Vec<f64> = f64::extract_dense_view(contracted_init.storage().as_ref())
-        .expect("Failed to extract initial")
-        .to_vec();
+    let sol_init: Vec<f64> = contracted_init.to_vec_f64().unwrap();
     eprintln!("Initial state: {:?}", sol_init);
 
     // Debug: print each tensor in the initial state
     for node_name in x.node_names() {
         let node_idx = x.node_index(&node_name).unwrap();
         let tensor = x.tensor(node_idx).unwrap();
-        let data: Vec<f64> = f64::extract_dense_view(tensor.storage().as_ref())
-            .expect("Failed to extract tensor")
-            .to_vec();
+        let data: Vec<f64> = tensor.to_vec_f64().unwrap();
         let dims: Vec<usize> = tensor.external_indices().iter().map(|i| i.dim()).collect();
         eprintln!("  Tensor {:?}: dims={:?}, data={:?}", node_name, dims, data);
     }
@@ -551,18 +474,14 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
 
         // Print state before step
         let contracted_before = x.contract_to_tensor().unwrap();
-        let sol_before: Vec<f64> = f64::extract_dense_view(contracted_before.storage().as_ref())
-            .expect("Failed to extract")
-            .to_vec();
+        let sol_before: Vec<f64> = contracted_before.to_vec_f64().unwrap();
         eprintln!("    State before step: {:?}", sol_before);
 
         // Print each tensor
         for node_name in x.node_names() {
             let node_idx = x.node_index(&node_name).unwrap();
             let tensor = x.tensor(node_idx).unwrap();
-            let data: Vec<f64> = f64::extract_dense_view(tensor.storage().as_ref())
-                .expect("Failed to extract tensor")
-                .to_vec();
+            let data: Vec<f64> = tensor.to_vec_f64().unwrap();
             eprintln!("      Tensor {:?}: {:?}", node_name, data);
         }
 
@@ -575,9 +494,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
         for node_name in subtree.node_names() {
             let node_idx = subtree.node_index(&node_name).unwrap();
             let tensor = subtree.tensor(node_idx).unwrap();
-            let data: Vec<f64> = f64::extract_dense_view(tensor.storage().as_ref())
-                .expect("Failed to extract tensor")
-                .to_vec();
+            let data: Vec<f64> = tensor.to_vec_f64().unwrap();
             eprintln!("      Subtree {:?}: {:?}", node_name, data);
         }
 
@@ -588,9 +505,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
         for node_name in updated_subtree.node_names() {
             let node_idx = updated_subtree.node_index(&node_name).unwrap();
             let tensor = updated_subtree.tensor(node_idx).unwrap();
-            let data: Vec<f64> = f64::extract_dense_view(tensor.storage().as_ref())
-                .expect("Failed to extract tensor")
-                .to_vec();
+            let data: Vec<f64> = tensor.to_vec_f64().unwrap();
             eprintln!("      Updated {:?}: {:?}", node_name, data);
         }
         x.replace_subtree(&step.nodes, &updated_subtree).unwrap();
@@ -599,18 +514,14 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
 
         // Print state after step
         let contracted_after = x.contract_to_tensor().unwrap();
-        let sol_after: Vec<f64> = f64::extract_dense_view(contracted_after.storage().as_ref())
-            .expect("Failed to extract")
-            .to_vec();
+        let sol_after: Vec<f64> = contracted_after.to_vec_f64().unwrap();
         eprintln!("    State after step: {:?}", sol_after);
 
         // Print each tensor after
         for node_name in x.node_names() {
             let node_idx = x.node_index(&node_name).unwrap();
             let tensor = x.tensor(node_idx).unwrap();
-            let data: Vec<f64> = f64::extract_dense_view(tensor.storage().as_ref())
-                .expect("Failed to extract tensor")
-                .to_vec();
+            let data: Vec<f64> = tensor.to_vec_f64().unwrap();
             eprintln!("      Tensor {:?}: {:?}", node_name, data);
         }
     }
@@ -620,9 +531,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     for sweep in 1..10 {
         apply_local_update_sweep(&mut x, &plan, &mut updater).unwrap();
         let contracted_debug = x.contract_to_tensor().unwrap();
-        let sol_debug: Vec<f64> = f64::extract_dense_view(contracted_debug.storage().as_ref())
-            .expect("Failed to extract solution")
-            .to_vec();
+        let sol_debug: Vec<f64> = contracted_debug.to_vec_f64().unwrap();
         eprintln!("Sweep {}: raw solution = {:?}", sweep, sol_debug);
     }
 
@@ -630,9 +539,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     let contracted = x.contract_to_tensor().unwrap();
 
     // Extract solution values
-    let solution_values: Vec<f64> = f64::extract_dense_view(contracted.storage().as_ref())
-        .expect("Failed to extract solution")
-        .to_vec();
+    let solution_values: Vec<f64> = contracted.to_vec_f64().unwrap();
 
     // Compare with exact solution using relative norm
     // Note: contract_to_tensor may produce indices in different order than expected.
@@ -741,14 +648,7 @@ fn create_three_site_mps(
     for i in 0..phys_dim.min(bond_dim) {
         data0[i * bond_dim + i] = 1.0;
     }
-    let t0 = TensorDynLen::new(
-        vec![s0.clone(), b01.clone()],
-        vec![phys_dim, bond_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data0,
-            &[phys_dim, bond_dim],
-        ))),
-    );
+    let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], data0);
 
     // Site 1: [b01, s1, b12] shape (2, 2, 2) - identity-like
     // B[b, s, b'] = delta(b, s) * delta(s, b')
@@ -758,14 +658,7 @@ fn create_three_site_mps(
         let idx = i * phys_dim * bond_dim + i * bond_dim + i;
         data1[idx] = 1.0;
     }
-    let t1 = TensorDynLen::new(
-        vec![b01.clone(), s1.clone(), b12.clone()],
-        vec![bond_dim, phys_dim, bond_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data1,
-            &[bond_dim, phys_dim, bond_dim],
-        ))),
-    );
+    let t1 = TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone(), b12.clone()], data1);
 
     // Site 2: [b12, s2] shape (2, 2) - contains values or identity
     let data2 = if let Some(vals) = values {
@@ -784,14 +677,7 @@ fn create_three_site_mps(
         }
         d
     };
-    let t2 = TensorDynLen::new(
-        vec![b12.clone(), s2.clone()],
-        vec![bond_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data2,
-            &[bond_dim, phys_dim],
-        ))),
-    );
+    let t2 = TensorDynLen::from_dense_f64(vec![b12.clone(), s2.clone()], data2);
 
     let n0 = mps.add_tensor("site0", t0).unwrap();
     let n1 = mps.add_tensor("site1", t1).unwrap();
@@ -843,27 +729,16 @@ fn create_three_site_identity_mpo(
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = 1.0;
     }
-    let t0 = TensorDynLen::new(
-        vec![s0_out.clone(), s0_in.clone(), b01.clone()],
-        vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data0,
-            &[phys_dim, phys_dim, 1],
-        ))),
-    );
+    let t0 = TensorDynLen::from_dense_f64(vec![s0_out.clone(), s0_in.clone(), b01.clone()], data0);
 
     // Site 1: [b01, s1_out, s1_in, b12] - identity on physical indices
     let mut data1 = vec![0.0; phys_dim * phys_dim];
     for i in 0..phys_dim {
         data1[i * phys_dim + i] = 1.0;
     }
-    let t1 = TensorDynLen::new(
+    let t1 = TensorDynLen::from_dense_f64(
         vec![b01.clone(), s1_out.clone(), s1_in.clone(), b12.clone()],
-        vec![1, phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data1,
-            &[1, phys_dim, phys_dim, 1],
-        ))),
+        data1,
     );
 
     // Site 2: [b12, s2_out, s2_in] - identity on physical indices
@@ -871,14 +746,7 @@ fn create_three_site_identity_mpo(
     for i in 0..phys_dim {
         data2[i * phys_dim + i] = 1.0;
     }
-    let t2 = TensorDynLen::new(
-        vec![b12.clone(), s2_out.clone(), s2_in.clone()],
-        vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data2,
-            &[1, phys_dim, phys_dim],
-        ))),
-    );
+    let t2 = TensorDynLen::from_dense_f64(vec![b12.clone(), s2_out.clone(), s2_in.clone()], data2);
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
     let n1 = mpo.add_tensor("site1", t1).unwrap();
@@ -1046,13 +914,9 @@ fn create_mpo_with_internal_indices(
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = diag_values[0];
     }
-    let t0 = TensorDynLen::new(
+    let t0 = TensorDynLen::from_dense_f64(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), b01.clone()],
-        vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data0,
-            &[phys_dim, phys_dim, 1],
-        ))),
+        data0,
     );
 
     // Site 1: [b01, s1_out_tmp, s1_in_tmp] - diagonal
@@ -1060,13 +924,9 @@ fn create_mpo_with_internal_indices(
     for i in 0..phys_dim {
         data1[i * phys_dim + i] = diag_values[1];
     }
-    let t1 = TensorDynLen::new(
+    let t1 = TensorDynLen::from_dense_f64(
         vec![b01.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
-        vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data1,
-            &[1, phys_dim, phys_dim],
-        ))),
+        data1,
     );
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -1179,14 +1039,7 @@ fn test_linear_operator_apply_local() {
 
     // Create a local tensor for site0 only
     // v = [1.0, 0.0] representing |0⟩ at site0
-    let local_v = TensorDynLen::new(
-        vec![site_indices[0].clone()],
-        vec![phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0, 0.0],
-            &[phys_dim],
-        ))),
-    );
+    let local_v = TensorDynLen::from_dense_f64(vec![site_indices[0].clone()], vec![1.0, 0.0]);
 
     // Apply operator locally at site0
     let result = linear_op.apply_local(&local_v, &["site0"]);
@@ -1213,10 +1066,7 @@ fn test_linear_operator_apply_local() {
 
     // Check values - the diagonal operator at site0 has value 2.0
     // D|0⟩ = 2.0 * |0⟩ = [2.0, 0.0]
-    use tensor4all_core::storage::StorageScalar;
-    let values: Vec<f64> = f64::extract_dense_view(result_tensor.storage().as_ref())
-        .expect("Failed to extract values")
-        .to_vec();
+    let values: Vec<f64> = result_tensor.to_vec_f64().unwrap();
 
     // Output shape is (phys_dim, bond_dim) = (2, 1) so values has 2 elements
     assert!(
@@ -1276,16 +1126,12 @@ fn test_linear_operator_apply_local_two_sites() {
 
     // Create a local tensor for both sites (merged region)
     // v = |00⟩ = [1, 0, 0, 0] in (s0, s1) basis
-    let local_v = TensorDynLen::new(
+    let local_v = TensorDynLen::from_dense_f64(
         vec![site_indices[0].clone(), site_indices[1].clone()],
-        vec![phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![
-                1.0, 0.0, // s0=0: s1=0, s1=1
-                0.0, 0.0, // s0=1: s1=0, s1=1
-            ],
-            &[phys_dim, phys_dim],
-        ))),
+        vec![
+            1.0, 0.0, // s0=0: s1=0, s1=1
+            0.0, 0.0, // s0=1: s1=0, s1=1
+        ],
     );
 
     // Apply operator locally at both sites
@@ -1311,10 +1157,7 @@ fn test_linear_operator_apply_local_two_sites() {
     assert!(has_site1, "Result should have site1's true index");
 
     // Check values
-    use tensor4all_core::storage::StorageScalar;
-    let values: Vec<f64> = f64::extract_dense_view(result_tensor.storage().as_ref())
-        .expect("Failed to extract values")
-        .to_vec();
+    let values: Vec<f64> = result_tensor.to_vec_f64().unwrap();
 
     // D|00⟩ = 6.0 * |00⟩
     assert!(
@@ -1438,7 +1281,6 @@ fn test_linsolve_with_index_mappings_identity() {
 
 #[test]
 fn test_linsolve_with_index_mappings_diagonal() {
-    use tensor4all_core::storage::StorageScalar;
     use tensor4all_treetn::{
         apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
     };
@@ -1489,9 +1331,7 @@ fn test_linsolve_with_index_mappings_diagonal() {
     // Expected solution: D*x = b => x = b/6 = [1, 0, 0, 0]
     // Contract solution to get full tensor using contract_to_tensor
     let contracted = x.contract_to_tensor().unwrap();
-    let values: Vec<f64> = f64::extract_dense_view(contracted.storage().as_ref())
-        .expect("Failed to extract values")
-        .to_vec();
+    let values: Vec<f64> = contracted.to_vec_f64().unwrap();
 
     // Solution should be approximately [1, 0, 0, 0]
     println!("Solution values: {:?}", values);
@@ -1543,13 +1383,9 @@ fn create_three_site_mpo_with_internal_indices(
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = diag_values[0];
     }
-    let t0 = TensorDynLen::new(
+    let t0 = TensorDynLen::from_dense_f64(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), b01.clone()],
-        vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data0,
-            &[phys_dim, phys_dim, 1],
-        ))),
+        data0,
     );
 
     // Site 1: [b01, s1_out_tmp, s1_in_tmp, b12] - diagonal
@@ -1557,18 +1393,14 @@ fn create_three_site_mpo_with_internal_indices(
     for i in 0..phys_dim {
         data1[i * phys_dim + i] = diag_values[1];
     }
-    let t1 = TensorDynLen::new(
+    let t1 = TensorDynLen::from_dense_f64(
         vec![
             b01.clone(),
             s1_out_tmp.clone(),
             s1_in_tmp.clone(),
             b12.clone(),
         ],
-        vec![1, phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data1,
-            &[1, phys_dim, phys_dim, 1],
-        ))),
+        data1,
     );
 
     // Site 2: [b12, s2_out_tmp, s2_in_tmp] - diagonal
@@ -1576,13 +1408,9 @@ fn create_three_site_mpo_with_internal_indices(
     for i in 0..phys_dim {
         data2[i * phys_dim + i] = diag_values[2];
     }
-    let t2 = TensorDynLen::new(
+    let t2 = TensorDynLen::from_dense_f64(
         vec![b12.clone(), s2_out_tmp.clone(), s2_in_tmp.clone()],
-        vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data2,
-            &[1, phys_dim, phys_dim],
-        ))),
+        data2,
     );
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -1769,23 +1597,15 @@ fn create_two_site_mps_with_indices(
     let bond = DynIndex::new_dyn(2);
 
     // Site 0: [s0, bond]
-    let t0 = TensorDynLen::new(
+    let t0 = TensorDynLen::from_dense_f64(
         vec![site_indices[0].clone(), bond.clone()],
-        vec![phys_dim, 2],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0; phys_dim * 2],
-            &[phys_dim, 2],
-        ))),
+        vec![1.0; phys_dim * 2],
     );
 
     // Site 1: [bond, s1]
-    let t1 = TensorDynLen::new(
+    let t1 = TensorDynLen::from_dense_f64(
         vec![bond.clone(), site_indices[1].clone()],
-        vec![2, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0; 2 * phys_dim],
-            &[2, phys_dim],
-        ))),
+        vec![1.0; 2 * phys_dim],
     );
 
     let n0 = mps.add_tensor("site0", t0).unwrap();
@@ -1821,13 +1641,9 @@ fn create_two_site_mpo_vin_vout(
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = 1.0;
     }
-    let t0 = TensorDynLen::new(
+    let t0 = TensorDynLen::from_dense_f64(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
-        vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data0,
-            &[phys_dim, phys_dim, 1],
-        ))),
+        data0,
     );
 
     // Site 1: identity matrix [bond, s1_out_tmp, s1_in_tmp]
@@ -1835,13 +1651,9 @@ fn create_two_site_mpo_vin_vout(
     for i in 0..phys_dim {
         data1[i * phys_dim + i] = 1.0;
     }
-    let t1 = TensorDynLen::new(
+    let t1 = TensorDynLen::from_dense_f64(
         vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
-        vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data1,
-            &[1, phys_dim, phys_dim],
-        ))),
+        data1,
     );
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -1995,13 +1807,9 @@ fn create_pauli_x_mpo(
             data0[out_idx * phys_dim + in_idx] = pauli_x[out_idx * phys_dim + in_idx];
         }
     }
-    let t0 = TensorDynLen::new(
+    let t0 = TensorDynLen::from_dense_f64(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
-        vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data0,
-            &[phys_dim, phys_dim, 1],
-        ))),
+        data0,
     );
 
     // Site 1 tensor: [bond, s1_out, s1_in] with X matrix
@@ -2013,13 +1821,9 @@ fn create_pauli_x_mpo(
             data1[out_idx * phys_dim + in_idx] = pauli_x[out_idx * phys_dim + in_idx];
         }
     }
-    let t1 = TensorDynLen::new(
+    let t1 = TensorDynLen::from_dense_f64(
         vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
-        vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data1,
-            &[1, phys_dim, phys_dim],
-        ))),
+        data1,
     );
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -2040,7 +1844,6 @@ fn create_pauli_x_mpo(
 /// Then x = X * b = |11⟩ = [0, 0, 0, 1]
 #[test]
 fn test_linsolve_pauli_x() {
-    use tensor4all_core::storage::StorageScalar;
     use tensor4all_treetn::{
         apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
     };
@@ -2097,9 +1900,7 @@ fn test_linsolve_pauli_x() {
     let contracted = x.contract_to_tensor().unwrap();
 
     // Extract solution values
-    let solution_values: Vec<f64> = f64::extract_dense_view(contracted.storage().as_ref())
-        .expect("Failed to extract solution")
-        .to_vec();
+    let solution_values: Vec<f64> = contracted.to_vec_f64().unwrap();
 
     // Compare with exact solution
     assert_eq!(
@@ -2160,13 +1961,9 @@ fn create_general_2x2_mpo(
             data0[out_idx * phys_dim + in_idx] = mat[out_idx * phys_dim + in_idx];
         }
     }
-    let t0 = TensorDynLen::new(
+    let t0 = TensorDynLen::from_dense_f64(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
-        vec![phys_dim, phys_dim, 1],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data0,
-            &[phys_dim, phys_dim, 1],
-        ))),
+        data0,
     );
 
     // Site 1 tensor: [bond, s1_out, s1_in]
@@ -2177,13 +1974,9 @@ fn create_general_2x2_mpo(
             data1[out_idx * phys_dim + in_idx] = mat[out_idx * phys_dim + in_idx];
         }
     }
-    let t1 = TensorDynLen::new(
+    let t1 = TensorDynLen::from_dense_f64(
         vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
-        vec![1, phys_dim, phys_dim],
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data1,
-            &[1, phys_dim, phys_dim],
-        ))),
+        data1,
     );
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -2204,7 +1997,6 @@ fn create_general_2x2_mpo(
 /// A_total is a 4x4 matrix.
 #[test]
 fn test_linsolve_general_matrix() {
-    use tensor4all_core::storage::StorageScalar;
     use tensor4all_treetn::{
         apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
     };
@@ -2276,9 +2068,7 @@ fn test_linsolve_general_matrix() {
     let contracted = x.contract_to_tensor().unwrap();
 
     // Extract solution values
-    let solution_values: Vec<f64> = f64::extract_dense_view(contracted.storage().as_ref())
-        .expect("Failed to extract solution")
-        .to_vec();
+    let solution_values: Vec<f64> = contracted.to_vec_f64().unwrap();
 
     // Compare with exact solution
     assert_eq!(

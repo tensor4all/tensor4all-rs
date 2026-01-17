@@ -800,8 +800,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use tensor4all_core::storage::{DenseStorageF64, Storage};
     use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex};
 
     /// Create a 4-node Y-shape TreeTN:
@@ -827,47 +825,25 @@ mod tests {
         let bond_bd = DynIndex::new_dyn(3);
 
         // Tensor A: [site_a, bond_ab]
-        let tensor_a = TensorDynLen::new(
-            vec![site_a.clone(), bond_ab.clone()],
-            vec![2, 3],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![1.0; 6],
-                &[2, 3],
-            ))),
-        );
+        let tensor_a =
+            TensorDynLen::from_dense_f64(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]);
         tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
         // Tensor B: [bond_ab, bond_bc, bond_bd]
-        let tensor_b = TensorDynLen::new(
+        let tensor_b = TensorDynLen::from_dense_f64(
             vec![bond_ab.clone(), bond_bc.clone(), bond_bd.clone()],
-            vec![3, 3, 3],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![1.0; 27],
-                &[3, 3, 3],
-            ))),
+            vec![1.0; 27],
         );
         tn.add_tensor("B".to_string(), tensor_b).unwrap();
 
         // Tensor C: [bond_bc, site_c]
-        let tensor_c = TensorDynLen::new(
-            vec![bond_bc.clone(), site_c.clone()],
-            vec![3, 2],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![1.0; 6],
-                &[3, 2],
-            ))),
-        );
+        let tensor_c =
+            TensorDynLen::from_dense_f64(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]);
         tn.add_tensor("C".to_string(), tensor_c).unwrap();
 
         // Tensor D: [bond_bd, site_d]
-        let tensor_d = TensorDynLen::new(
-            vec![bond_bd.clone(), site_d.clone()],
-            vec![3, 2],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![1.0; 6],
-                &[3, 2],
-            ))),
-        );
+        let tensor_d =
+            TensorDynLen::from_dense_f64(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]);
         tn.add_tensor("D".to_string(), tensor_d).unwrap();
 
         // Connect
@@ -1171,36 +1147,20 @@ mod tests {
         let bond_bc = DynIndex::new_dyn(4);
 
         // Tensor A: [site_a, bond_ab] dim 2x4
-        let tensor_a = TensorDynLen::new(
-            vec![site_a.clone(), bond_ab.clone()],
-            vec![2, 4],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![1.0; 8],
-                &[2, 4],
-            ))),
-        );
+        let tensor_a =
+            TensorDynLen::from_dense_f64(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 8]);
         tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
         // Tensor B: [bond_ab, site_b, bond_bc] dim 4x2x4
-        let tensor_b = TensorDynLen::new(
+        let tensor_b = TensorDynLen::from_dense_f64(
             vec![bond_ab.clone(), site_b.clone(), bond_bc.clone()],
-            vec![4, 2, 4],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![1.0; 32],
-                &[4, 2, 4],
-            ))),
+            vec![1.0; 32],
         );
         tn.add_tensor("B".to_string(), tensor_b).unwrap();
 
         // Tensor C: [bond_bc, site_c] dim 4x2
-        let tensor_c = TensorDynLen::new(
-            vec![bond_bc.clone(), site_c.clone()],
-            vec![4, 2],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![1.0; 8],
-                &[4, 2],
-            ))),
-        );
+        let tensor_c =
+            TensorDynLen::from_dense_f64(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 8]);
         tn.add_tensor("C".to_string(), tensor_c).unwrap();
 
         // Connect

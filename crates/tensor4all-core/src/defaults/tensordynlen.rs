@@ -1493,3 +1493,215 @@ impl TensorLike for TensorDynLen {
 
     // delta() uses the default implementation via diagonal() and outer_product()
 }
+
+// ============================================================================
+// High-level API for tensor construction (avoids direct Storage access)
+// ============================================================================
+
+impl TensorDynLen {
+    /// Create a tensor from dense data with explicit indices.
+    ///
+    /// This is the recommended high-level API for creating tensors from raw data.
+    /// It avoids direct access to `Storage` internals.
+    ///
+    /// # Type Parameters
+    /// * `T` - Scalar type (`f64` or `Complex64`)
+    ///
+    /// # Arguments
+    /// * `indices` - Vector of indices for the tensor
+    /// * `data` - Tensor data in row-major order
+    ///
+    /// # Panics
+    /// Panics if data length doesn't match the product of index dimensions.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    /// let tensor: TensorDynLen = TensorDynLen::from_dense_data(vec![i, j], data);
+    /// assert_eq!(tensor.dims, vec![2, 3]);
+    /// ```
+    pub fn from_dense_data<T: StorageScalar>(indices: Vec<DynIndex>, data: Vec<T>) -> Self {
+        let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
+        let storage = T::dense_storage_with_shape(data, &dims);
+        Self::new(indices, dims, storage)
+    }
+
+    /// Create a tensor from f64 data with explicit indices.
+    ///
+    /// This is equivalent to `from_dense_data::<f64>(indices, data)`.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let tensor = TensorDynLen::from_dense_f64(vec![i, j], vec![1.0; 6]);
+    /// assert_eq!(tensor.dims, vec![2, 3]);
+    /// ```
+    pub fn from_dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> Self {
+        Self::from_dense_data(indices, data)
+    }
+
+    /// Create a tensor from Complex64 data with explicit indices.
+    ///
+    /// This is equivalent to `from_dense_data::<Complex64>(indices, data)`.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+    /// use num_complex::Complex64;
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let data: Vec<Complex64> = vec![Complex64::new(1.0, 0.0); 6];
+    /// let tensor = TensorDynLen::from_dense_c64(vec![i, j], data);
+    /// assert_eq!(tensor.dims, vec![2, 3]);
+    /// ```
+    pub fn from_dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> Self {
+        Self::from_dense_data(indices, data)
+    }
+
+    /// Create a scalar (0-dimensional) tensor from an f64 value.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core::TensorDynLen;
+    ///
+    /// let scalar = TensorDynLen::scalar_f64(42.0);
+    /// assert_eq!(scalar.dims, Vec::<usize>::new());
+    /// assert_eq!(scalar.only().real(), 42.0);
+    /// ```
+    pub fn scalar_f64(value: f64) -> Self {
+        Self::from_dense_data(vec![], vec![value])
+    }
+
+    /// Create a scalar (0-dimensional) tensor from a Complex64 value.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core::TensorDynLen;
+    /// use num_complex::Complex64;
+    ///
+    /// let z = Complex64::new(1.0, 2.0);
+    /// let scalar = TensorDynLen::scalar_c64(z);
+    /// assert_eq!(scalar.dims, Vec::<usize>::new());
+    /// ```
+    pub fn scalar_c64(value: Complex64) -> Self {
+        Self::from_dense_data(vec![], vec![value])
+    }
+
+    /// Create a tensor filled with zeros.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(3);
+    /// let tensor = TensorDynLen::zeros_f64(vec![i, j]);
+    /// assert_eq!(tensor.dims, vec![2, 3]);
+    /// ```
+    pub fn zeros_f64(indices: Vec<DynIndex>) -> Self {
+        let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
+        let size: usize = dims.iter().product();
+        Self::from_dense_data(indices, vec![0.0_f64; size])
+    }
+
+    /// Create a complex tensor filled with zeros.
+    pub fn zeros_c64(indices: Vec<DynIndex>) -> Self {
+        let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
+        let size: usize = dims.iter().product();
+        Self::from_dense_data(indices, vec![Complex64::new(0.0, 0.0); size])
+    }
+}
+
+// ============================================================================
+// High-level API for data extraction (avoids direct .storage() access)
+// ============================================================================
+
+impl TensorDynLen {
+    /// Extract tensor data as f64 slice.
+    ///
+    /// # Returns
+    /// A slice of the tensor data if the storage is DenseF64.
+    ///
+    /// # Errors
+    /// Returns an error if the storage is not DenseF64.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense_f64(vec![i], vec![1.0, 2.0]);
+    /// let data = tensor.as_slice_f64().unwrap();
+    /// assert_eq!(data, &[1.0, 2.0]);
+    /// ```
+    pub fn as_slice_f64(&self) -> Result<&[f64]> {
+        f64::extract_dense_view(self.storage()).map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    /// Extract tensor data as Complex64 slice.
+    ///
+    /// # Returns
+    /// A slice of the tensor data if the storage is DenseC64.
+    ///
+    /// # Errors
+    /// Returns an error if the storage is not DenseC64.
+    pub fn as_slice_c64(&self) -> Result<&[Complex64]> {
+        Complex64::extract_dense_view(self.storage()).map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    /// Convert tensor data to Vec<f64>.
+    ///
+    /// # Returns
+    /// A vector containing a copy of the tensor data.
+    ///
+    /// # Errors
+    /// Returns an error if the storage is not DenseF64.
+    pub fn to_vec_f64(&self) -> Result<Vec<f64>> {
+        f64::extract_dense(self.storage()).map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    /// Convert tensor data to Vec<Complex64>.
+    ///
+    /// # Returns
+    /// A vector containing a copy of the tensor data.
+    ///
+    /// # Errors
+    /// Returns an error if the storage is not DenseC64.
+    pub fn to_vec_c64(&self) -> Result<Vec<Complex64>> {
+        Complex64::extract_dense(self.storage()).map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    /// Check if the tensor has f64 storage.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_core::TensorDynLen;
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense_f64(vec![i], vec![1.0, 2.0]);
+    /// assert!(tensor.is_f64());
+    /// assert!(!tensor.is_complex());
+    /// ```
+    pub fn is_f64(&self) -> bool {
+        self.storage().is_f64()
+    }
+
+    /// Check if the tensor has complex storage (C64).
+    pub fn is_complex(&self) -> bool {
+        self.storage().is_complex()
+    }
+}

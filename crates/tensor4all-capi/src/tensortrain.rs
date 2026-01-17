@@ -594,23 +594,16 @@ pub extern "C" fn t4a_tt_inner(
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        use tensor4all_core::AnyScalar;
+        use num_complex::Complex64;
 
         let tt1 = unsafe { &*ptr1 };
         let tt2 = unsafe { &*ptr2 };
 
         let inner = tt1.inner().inner(tt2.inner());
+        let z: Complex64 = inner.into();
         unsafe {
-            match inner {
-                AnyScalar::F64(x) => {
-                    *out_re = x;
-                    *out_im = 0.0;
-                }
-                AnyScalar::C64(z) => {
-                    *out_re = z.re;
-                    *out_im = z.im;
-                }
-            }
+            *out_re = z.re;
+            *out_im = z.im;
         }
         T4A_SUCCESS
     }));

@@ -523,8 +523,8 @@ where
         let bra_state = self.reference_state_out.clone();
 
         // Convert coefficients to AnyScalar
-        let a0 = AnyScalar::F64(self.options.a0);
-        let a1 = AnyScalar::F64(self.options.a1);
+        let a0 = AnyScalar::new_real(self.options.a0);
+        let a1 = AnyScalar::new_real(self.options.a1);
 
         // Create local linear operator
         // ProjectedOperator handles both environment computation and index mappings

@@ -1,13 +1,11 @@
 //! Common types and helper functions for quantics transformations.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::One;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::storage::{DenseStorageC64, Storage};
 use tensor4all_core::TensorDynLen;
 use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
 use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
@@ -183,10 +181,7 @@ pub fn tensortrain_to_linear_operator(
             }
         }
 
-        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            data, &dims_vec,
-        )));
-        let tensor_dyn = TensorDynLen::new(indices, dims_vec, storage);
+        let tensor_dyn = TensorDynLen::from_dense_c64(indices, data);
         tensors.push(tensor_dyn);
         node_names.push(i);
     }
@@ -365,10 +360,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
             }
         }
 
-        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            data, &dims_vec,
-        )));
-        let tensor_dyn = TensorDynLen::new(indices, dims_vec, storage);
+        let tensor_dyn = TensorDynLen::from_dense_c64(indices, data);
         tensors.push(tensor_dyn);
         node_names.push(i);
     }

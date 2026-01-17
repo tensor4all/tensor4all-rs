@@ -370,7 +370,6 @@ mod tests {
     use super::*;
     use crate::random::{random_treetn_f64, LinkSpace};
     use tensor4all_core::index::{DynId, Index, TagSet};
-    use tensor4all_core::storage::Storage;
     use tensor4all_core::TensorDynLen;
 
     type DynIndex = Index<DynId, TagSet>;
@@ -940,10 +939,7 @@ mod tests {
         );
 
         // Check it's effectively an identity (only diagonal elements are non-zero)
-        let data = match n1_tensor.storage().as_ref() {
-            Storage::DenseF64(d) => d.as_slice(),
-            _ => panic!("Expected DenseF64"),
-        };
+        let data = n1_tensor.as_slice_f64().expect("Expected DenseF64");
 
         // For identity with dim-1 dummy links, data is still [1,0,0, 0,1,0, 0,0,1]
         let expected = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];

@@ -568,7 +568,7 @@ impl TensorTrain {
         );
 
         if self.is_empty() {
-            return AnyScalar::F64(0.0);
+            return AnyScalar::new_real(0.0);
         }
 
         // Replace link indices in other with unique IDs
