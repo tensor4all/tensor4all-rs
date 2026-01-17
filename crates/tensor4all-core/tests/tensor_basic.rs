@@ -539,3 +539,95 @@ fn test_tensor_data_lazy_outer_product_with_permute() {
         _ => panic!("Expected DenseF64"),
     }
 }
+
+// ============================================================================
+// High-level API tests for TensorDynLen
+// ============================================================================
+
+#[test]
+fn test_from_dense_f64() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let tensor = TensorDynLen::from_dense_f64(vec![i, j], data.clone());
+
+    assert_eq!(tensor.dims, vec![2, 3]);
+    assert!(tensor.is_f64());
+    assert!(!tensor.is_complex());
+    assert_eq!(tensor.as_slice_f64().unwrap(), &data[..]);
+    assert_eq!(tensor.to_vec_f64().unwrap(), data);
+}
+
+#[test]
+fn test_from_dense_c64() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let data: Vec<Complex64> = (1..=6)
+        .map(|x| Complex64::new(x as f64, x as f64))
+        .collect();
+    let tensor = TensorDynLen::from_dense_c64(vec![i, j], data.clone());
+
+    assert_eq!(tensor.dims, vec![2, 3]);
+    assert!(!tensor.is_f64());
+    assert!(tensor.is_complex());
+    assert_eq!(tensor.as_slice_c64().unwrap(), &data[..]);
+    assert_eq!(tensor.to_vec_c64().unwrap(), data);
+}
+
+#[test]
+fn test_scalar_f64() {
+    let scalar = TensorDynLen::scalar_f64(42.0);
+    assert_eq!(scalar.dims, Vec::<usize>::new());
+    assert!(scalar.is_f64());
+    assert_eq!(scalar.as_slice_f64().unwrap(), &[42.0]);
+}
+
+#[test]
+fn test_scalar_c64() {
+    let z = Complex64::new(1.0, 2.0);
+    let scalar = TensorDynLen::scalar_c64(z);
+    assert_eq!(scalar.dims, Vec::<usize>::new());
+    assert!(scalar.is_complex());
+    assert_eq!(scalar.as_slice_c64().unwrap(), &[z]);
+}
+
+#[test]
+fn test_zeros_f64() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let tensor = TensorDynLen::zeros_f64(vec![i, j]);
+
+    assert_eq!(tensor.dims, vec![2, 3]);
+    assert!(tensor.is_f64());
+    let data = tensor.as_slice_f64().unwrap();
+    assert!(data.iter().all(|&x| x == 0.0));
+}
+
+#[test]
+fn test_zeros_c64() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let tensor = TensorDynLen::zeros_c64(vec![i, j]);
+
+    assert_eq!(tensor.dims, vec![2, 3]);
+    assert!(tensor.is_complex());
+    let data = tensor.as_slice_c64().unwrap();
+    assert!(data.iter().all(|&x| x == Complex64::new(0.0, 0.0)));
+}
+
+#[test]
+fn test_as_slice_error_on_wrong_type() {
+    let i = Index::new_dyn(2);
+    // Create f64 tensor but try to get c64 slice
+    let tensor_f64 = TensorDynLen::from_dense_f64(vec![i.clone()], vec![1.0, 2.0]);
+    assert!(tensor_f64.as_slice_c64().is_err());
+    assert!(tensor_f64.to_vec_c64().is_err());
+
+    // Create c64 tensor but try to get f64 slice
+    let tensor_c64 = TensorDynLen::from_dense_c64(
+        vec![i],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    );
+    assert!(tensor_c64.as_slice_f64().is_err());
+    assert!(tensor_c64.to_vec_f64().is_err());
+}
