@@ -164,7 +164,7 @@ fn einsum_mdarray(inputs: &[EinsumInput<'_>], output_ids: &[usize]) -> Result<St
 
     // Convert result to Storage
     let result_dims: Vec<usize> = result_typed.dims().to_vec();
-    let (final_dims, storage) = if output_ids.is_empty() && result_dims == vec![1] {
+    let (_final_dims, storage) = if output_ids.is_empty() && result_dims == vec![1] {
         // Scalar output
         (vec![], typed_tensor_to_storage(result_typed, &[]))
     } else {
@@ -174,12 +174,7 @@ fn einsum_mdarray(inputs: &[EinsumInput<'_>], output_ids: &[usize]) -> Result<St
         )
     };
 
-    // Adjust for scalar case
-    if final_dims.is_empty() {
-        Ok(storage)
-    } else {
-        Ok(storage)
-    }
+    Ok(storage)
 }
 
 /// Perform einsum using torch backend.

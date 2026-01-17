@@ -215,6 +215,25 @@ impl AnyScalar {
             AnyScalar::TorchC64(t) => AnyScalar::TorchC64(t.pow_tensor_scalar(exp as f64)),
         }
     }
+
+    /// Check if this scalar is zero.
+    ///
+    /// This method is provided directly on `AnyScalar` so that downstream crates
+    /// don't need to import the `num_traits::Zero` trait.
+    ///
+    /// Note: For Torch scalars, this extracts the value and breaks the autograd graph.
+    pub fn is_zero(&self) -> bool {
+        match self {
+            AnyScalar::F64(x) => *x == 0.0,
+            AnyScalar::C64(z) => z.re == 0.0 && z.im == 0.0,
+            #[cfg(feature = "backend-libtorch")]
+            AnyScalar::TorchF64(t) => t.double_value(&[]) == 0.0,
+            #[cfg(feature = "backend-libtorch")]
+            AnyScalar::TorchC64(t) => {
+                t.real().double_value(&[]) == 0.0 && t.imag().double_value(&[]) == 0.0
+            }
+        }
+    }
 }
 
 // Autograd methods for AnyScalar
