@@ -941,6 +941,56 @@ fn test_sim_internal_inds() {
 }
 
 // ============================================================================
+// sim_linkinds Tests
+// ============================================================================
+
+#[test]
+fn test_sim_linkinds() {
+    let (tn, node1, node2, _edge, phys1, bond, phys2) = create_two_node_treetn();
+
+    let original_bond_id = *bond.id();
+    let original_bond_size = bond.size();
+
+    // Create a copy with simulated link indices (ITensorMPS-like)
+    let tn_sim = tn.sim_linkinds().unwrap();
+
+    // Should remain structurally consistent
+    tn_sim.verify_internal_consistency().unwrap();
+
+    // Check that bond index has new ID but same size
+    let new_edge = tn_sim.edges_for_node(node1)[0].0;
+    let new_bond = tn_sim.bond_index(new_edge).unwrap();
+    assert_eq!(new_bond.size(), original_bond_size);
+    assert_ne!(
+        *new_bond.id(),
+        original_bond_id,
+        "Bond ID should be different after sim_linkinds"
+    );
+
+    // Physical indices are unchanged
+    let tensor1 = tn_sim.tensor(node1).unwrap();
+    let tensor2 = tn_sim.tensor(node2).unwrap();
+    assert!(
+        tensor1.indices.iter().any(|idx| idx.same_id(&phys1)),
+        "Physical index 1 should be preserved"
+    );
+    assert!(
+        tensor2.indices.iter().any(|idx| idx.same_id(&phys2)),
+        "Physical index 2 should be preserved"
+    );
+
+    // Tensors contain the new bond index
+    assert!(
+        tensor1.indices.iter().any(|idx| idx.same_id(new_bond)),
+        "Tensor 1 should have new bond index"
+    );
+    assert!(
+        tensor2.indices.iter().any(|idx| idx.same_id(new_bond)),
+        "Tensor 2 should have new bond index"
+    );
+}
+
+// ============================================================================
 // DynTreeTN Tests (in dyn_treetn module)
 // ============================================================================
 

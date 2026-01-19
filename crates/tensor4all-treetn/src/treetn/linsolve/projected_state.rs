@@ -73,8 +73,10 @@ where
         ket_state: &TreeTN<T, V>,
         topology: &NT,
     ) -> Result<T> {
-        // For V_in = V_out case, use ket_state as bra_state
-        self.local_constant_term_with_bra(region, ket_state, ket_state, topology)
+        // For V_in = V_out case, use a copied bra_state with fresh link IDs.
+        // This avoids accidental link-index collisions between bra/ket networks.
+        let bra_state = ket_state.sim_linkinds()?;
+        self.local_constant_term_with_bra(region, ket_state, &bra_state, topology)
     }
 
     /// Compute the local constant term `<b|_local` for the given region with explicit bra state.

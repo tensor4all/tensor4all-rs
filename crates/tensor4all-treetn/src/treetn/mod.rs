@@ -734,6 +734,16 @@ where
             .bond_index_mut(edge)
             .ok_or_else(|| anyhow::anyhow!("Bond index not found"))? = new_bond_index.clone();
 
+        // Update link_index_network: old id -> new id
+        self.link_index_network
+            .replace_index(&old_bond_index, &new_bond_index, edge)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        // Update ortho_towards key if present
+        if let Some(dir) = self.ortho_towards.remove(&old_bond_index) {
+            self.ortho_towards.insert(new_bond_index.clone(), dir);
+        }
+
         // Update site_index_network:
         // - Old bond index becomes physical again
         // - New bond index is removed from physical
@@ -746,6 +756,89 @@ where
             site_space_b.remove(&new_bond_index);
         }
 
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // ITensorMPS-like index relabeling helpers
+    // ------------------------------------------------------------------------
+
+    /// Return a copy with all link/bond indices replaced by fresh IDs.
+    ///
+    /// This is analogous to ITensorMPS.jl's `sim(linkinds, M)` / `sim!(linkinds, M)`,
+    /// and is mainly useful to avoid accidental index-ID collisions when combining
+    /// multiple networks.
+    ///
+    /// Notes:
+    /// - This keeps dimensions and conjugate states, but changes identities.
+    /// - This updates both endpoint tensors and internal bookkeeping.
+    pub fn sim_linkinds(&self) -> Result<Self>
+    where
+        T::Index: IndexLike,
+    {
+        let mut result = self.clone();
+        result.sim_linkinds_mut()?;
+        Ok(result)
+    }
+
+    /// Replace all link/bond indices with fresh IDs in-place.
+    ///
+    /// See [`Self::sim_linkinds`] for details.
+    pub fn sim_linkinds_mut(&mut self) -> Result<()>
+    where
+        T::Index: IndexLike,
+    {
+        // Snapshot edges first since replacements may touch internal maps.
+        let edges: Vec<EdgeIndex> = self.graph.graph().edge_indices().collect();
+        for edge in edges {
+            let old_bond = self
+                .bond_index(edge)
+                .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge {:?}", edge))?
+                .clone();
+            let new_bond = old_bond.sim();
+
+            // Update edge weight first so endpoint tensors can be validated against the new bond.
+            *self
+                .bond_index_mut(edge)
+                .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge {:?}", edge))? =
+                new_bond.clone();
+
+            // Update endpoint tensors by matching the old bond by ID.
+            let (node_a, node_b) = self
+                .graph
+                .graph()
+                .edge_endpoints(edge)
+                .ok_or_else(|| anyhow::anyhow!("Edge {:?} not found", edge))?;
+            for node in [node_a, node_b] {
+                let tensor = self
+                    .tensor(node)
+                    .ok_or_else(|| anyhow::anyhow!("Tensor not found"))?;
+                let old_in_tensor = tensor
+                    .external_indices()
+                    .iter()
+                    .find(|idx| idx.id() == old_bond.id())
+                    .ok_or_else(|| anyhow::anyhow!("Bond index not found in endpoint tensor"))?
+                    .clone();
+                let new_tensor = tensor.replaceind(&old_in_tensor, &new_bond)?;
+                self.replace_tensor(node, new_tensor)?;
+            }
+
+            // Update ortho_towards key for this bond (if present), matched by ID.
+            if let Some((key, dir)) = self
+                .ortho_towards
+                .iter()
+                .find(|(k, _)| k.id() == old_bond.id())
+                .map(|(k, v)| (k.clone(), v.clone()))
+            {
+                self.ortho_towards.remove(&key);
+                self.ortho_towards.insert(new_bond.clone(), dir);
+            }
+
+            // Update reverse lookup map (id -> edge).
+            self.link_index_network
+                .replace_index(&old_bond, &new_bond, edge)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+        }
         Ok(())
     }
 

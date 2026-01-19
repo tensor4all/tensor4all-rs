@@ -84,8 +84,21 @@ where
             let tensor = result
                 .tensor(node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_name))?;
-            let new_tensor = tensor.replaceind(old_index, new_index)?;
+            let old_in_tensor = tensor
+                .external_indices()
+                .iter()
+                .find(|idx| idx.id() == old_index.id())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Index not found in tensor at node {:?}", node_name)
+                })?
+                .clone();
+            let new_tensor = tensor.replaceind(&old_in_tensor, new_index)?;
             result.replace_tensor(node_idx, new_tensor)?;
+
+            // Keep ortho_towards consistent (if present)
+            if let Some(dir) = result.ortho_towards.remove(old_index) {
+                result.ortho_towards.insert(new_index.clone(), dir);
+            }
 
             return Ok(result);
         }
@@ -98,19 +111,30 @@ where
                 .edge_endpoints(edge)
                 .ok_or_else(|| anyhow::anyhow!("Edge {:?} not found", edge))?;
 
+            // IMPORTANT: Update edge weight FIRST so replace_tensor validation matches.
+            *result
+                .bond_index_mut(edge)
+                .ok_or_else(|| anyhow::anyhow!("Bond index not found"))? = new_index.clone();
+
             // Replace in both endpoint tensors - this also updates site_index_network
             for node in [node_a, node_b] {
                 let tensor = result
                     .tensor(node)
                     .ok_or_else(|| anyhow::anyhow!("Tensor not found"))?;
-                let new_tensor = tensor.replaceind(old_index, new_index)?;
+                let old_in_tensor = tensor
+                    .external_indices()
+                    .iter()
+                    .find(|idx| idx.id() == old_index.id())
+                    .ok_or_else(|| anyhow::anyhow!("Bond index not found in endpoint tensor"))?
+                    .clone();
+                let new_tensor = tensor.replaceind(&old_in_tensor, new_index)?;
                 result.replace_tensor(node, new_tensor)?;
             }
 
-            // Replace in graph edge weight
-            *result
-                .bond_index_mut(edge)
-                .ok_or_else(|| anyhow::anyhow!("Bond index not found"))? = new_index.clone();
+            // Keep ortho_towards consistent (if present)
+            if let Some(dir) = result.ortho_towards.remove(old_index) {
+                result.ortho_towards.insert(new_index.clone(), dir);
+            }
 
             // Replace in link_index_network
             result
