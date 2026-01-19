@@ -2343,8 +2343,8 @@ fn test_linsolve_n_site_identity_impl(n_sites: usize) {
     let (mpo, input_mapping, output_mapping) =
         create_n_site_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
 
-    // Create initial guess (clone of RHS)
-    let init = rhs.clone();
+    // Create initial guess (sim_linkinds to get independent bond indices)
+    let init = rhs.sim_linkinds().unwrap();
 
     // Canonicalize init towards site0
     let mut x = init
