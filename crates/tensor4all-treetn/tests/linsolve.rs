@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_treetn::{
     EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveUpdater,
-    ProjectedOperator, ProjectedState, TreeTN,
+    NetworkTopology, ProjectedOperator, ProjectedState, TreeTN,
 };
 
 // ============================================================================
@@ -152,6 +152,34 @@ fn test_projected_state_creation() {
 
     // Verify initial state
     assert!(projected_state.envs.is_empty());
+}
+
+#[test]
+fn test_projected_state_local_constant_term_vin_eq_vout() {
+    // Exercise the V_in = V_out path (uses sim_linkinds internally to avoid bra/ket collisions).
+    let (mps, _sites, _bonds) = create_simple_mps_chain();
+    let mut projected_state = ProjectedState::new(mps.clone());
+
+    struct Chain3;
+    impl NetworkTopology<&'static str> for Chain3 {
+        type Neighbors<'a>
+            = std::vec::IntoIter<&'static str>
+        where
+            Self: 'a;
+
+        fn neighbors(&self, node: &&'static str) -> Self::Neighbors<'_> {
+            match *node {
+                "site0" => vec!["site1"].into_iter(),
+                "site1" => vec!["site0", "site2"].into_iter(),
+                "site2" => vec!["site1"].into_iter(),
+                _ => Vec::new().into_iter(),
+            }
+        }
+    }
+
+    let topo = Chain3;
+    let local = projected_state.local_constant_term(&["site1"], &mps, &topo);
+    assert!(local.is_ok());
 }
 
 // ============================================================================

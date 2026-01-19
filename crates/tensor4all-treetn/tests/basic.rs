@@ -251,15 +251,25 @@ fn test_treetn_bond_index() {
 
 #[test]
 fn test_treetn_replace_edge_bond() {
-    let (mut tn, _node1, _node2, edge, _phys1, _bond, _phys2) = create_two_node_treetn();
+    let (mut tn, node1, _node2, edge, _phys1, _bond, _phys2) = create_two_node_treetn();
 
     assert_eq!(tn.bond_index(edge).unwrap().size(), 3);
+
+    // Ensure ortho_towards is set for the old bond, and remains valid after replacement.
+    tn.set_edge_ortho_towards(edge, Some(node1)).unwrap();
+    assert_eq!(tn.ortho_towards_node(edge), Some(&node1));
+
+    let old_bond_id = *tn.bond_index(edge).unwrap().id();
 
     // Replace with new bond index
     let new_idx = DynIndex::new_dyn(5);
     let result = tn.replace_edge_bond(edge, new_idx);
     assert!(result.is_ok());
     assert_eq!(tn.bond_index(edge).unwrap().size(), 5);
+
+    // Bond ID should change, and ortho_towards should still point to the same node.
+    assert_ne!(*tn.bond_index(edge).unwrap().id(), old_bond_id);
+    assert_eq!(tn.ortho_towards_node(edge), Some(&node1));
 }
 
 // ============================================================================
@@ -938,6 +948,79 @@ fn test_sim_internal_inds() {
         has_old_bond,
         "Original tensor should still have original bond"
     );
+}
+
+// ============================================================================
+// sim_linkinds Tests
+// ============================================================================
+
+#[test]
+fn test_sim_linkinds() {
+    let (tn, node1, node2, _edge, phys1, bond, phys2) = create_two_node_treetn();
+
+    let original_bond_id = *bond.id();
+    let original_bond_size = bond.size();
+
+    // Create a copy with simulated link indices (ITensorMPS-like)
+    let tn_sim = tn.sim_linkinds().unwrap();
+
+    // Should remain structurally consistent
+    tn_sim.verify_internal_consistency().unwrap();
+
+    // Check that bond index has new ID but same size
+    let new_edge = tn_sim.edges_for_node(node1)[0].0;
+    let new_bond = tn_sim.bond_index(new_edge).unwrap();
+    assert_eq!(new_bond.size(), original_bond_size);
+    assert_ne!(
+        *new_bond.id(),
+        original_bond_id,
+        "Bond ID should be different after sim_linkinds"
+    );
+
+    // Physical indices are unchanged
+    let tensor1 = tn_sim.tensor(node1).unwrap();
+    let tensor2 = tn_sim.tensor(node2).unwrap();
+    assert!(
+        tensor1.indices.iter().any(|idx| idx.same_id(&phys1)),
+        "Physical index 1 should be preserved"
+    );
+    assert!(
+        tensor2.indices.iter().any(|idx| idx.same_id(&phys2)),
+        "Physical index 2 should be preserved"
+    );
+
+    // Tensors contain the new bond index
+    assert!(
+        tensor1.indices.iter().any(|idx| idx.same_id(new_bond)),
+        "Tensor 1 should have new bond index"
+    );
+    assert!(
+        tensor2.indices.iter().any(|idx| idx.same_id(new_bond)),
+        "Tensor 2 should have new bond index"
+    );
+}
+
+#[test]
+fn test_sim_linkinds_mut_in_place() {
+    let (mut tn, node1, node2, _edge, phys1, bond, phys2) = create_two_node_treetn();
+
+    let original_bond_id = *bond.id();
+    let original_bond_size = bond.size();
+
+    tn.sim_linkinds_mut().unwrap();
+    tn.verify_internal_consistency().unwrap();
+
+    let new_edge = tn.edges_for_node(node1)[0].0;
+    let new_bond = tn.bond_index(new_edge).unwrap();
+    assert_eq!(new_bond.size(), original_bond_size);
+    assert_ne!(*new_bond.id(), original_bond_id);
+
+    let tensor1 = tn.tensor(node1).unwrap();
+    let tensor2 = tn.tensor(node2).unwrap();
+    assert!(tensor1.indices.iter().any(|idx| idx.same_id(&phys1)));
+    assert!(tensor2.indices.iter().any(|idx| idx.same_id(&phys2)));
+    assert!(tensor1.indices.iter().any(|idx| idx.same_id(new_bond)));
+    assert!(tensor2.indices.iter().any(|idx| idx.same_id(new_bond)));
 }
 
 // ============================================================================
