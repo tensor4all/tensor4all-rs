@@ -460,7 +460,6 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
         input_mapping,
         output_mapping,
         rhs.clone(),
-        None,
         options,
     );
 
@@ -886,7 +885,6 @@ fn test_linsolve_3site_identity() {
         input_mapping,
         output_mapping,
         rhs.clone(),
-        None,
         options,
     );
 
@@ -1292,7 +1290,6 @@ fn test_linsolve_with_index_mappings_identity() {
         input_mapping,
         output_mapping,
         rhs.clone(),
-        None,
         options,
     );
 
@@ -1344,7 +1341,6 @@ fn test_linsolve_with_index_mappings_diagonal() {
         input_mapping,
         output_mapping,
         rhs.clone(),
-        None,
         options,
     );
 
@@ -1534,7 +1530,6 @@ fn test_linsolve_with_index_mappings_three_site_identity() {
         input_mapping,
         output_mapping,
         rhs.clone(),
-        None,
         options,
     );
 
@@ -1589,7 +1584,6 @@ fn test_linsolve_with_index_mappings_three_site_diagonal() {
         input_mapping,
         output_mapping,
         rhs.clone(),
-        None,
         options,
     );
 
@@ -1605,195 +1599,6 @@ fn test_linsolve_with_index_mappings_three_site_diagonal() {
     // For diagonal operator D and solution x, the residual should be small
     assert_eq!(x.node_count(), 3);
     println!("3-site diagonal test with index mappings: PASSED");
-}
-
-// ============================================================================
-// V_in ≠ V_out Tests
-// ============================================================================
-
-/// Create a 2-site MPS with specific site indices.
-/// This is used to create states in different spaces (V_in vs V_out).
-fn create_two_site_mps_with_indices(
-    site_indices: &[DynIndex],
-) -> TreeTN<TensorDynLen, &'static str> {
-    assert_eq!(site_indices.len(), 2);
-    let phys_dim = site_indices[0].dim();
-
-    let mut mps = TreeTN::<TensorDynLen, &'static str>::new();
-
-    // Bond index
-    let bond = DynIndex::new_dyn(2);
-
-    // Site 0: [s0, bond]
-    let t0 = TensorDynLen::from_dense_f64(
-        vec![site_indices[0].clone(), bond.clone()],
-        vec![1.0; phys_dim * 2],
-    );
-
-    // Site 1: [bond, s1]
-    let t1 = TensorDynLen::from_dense_f64(
-        vec![bond.clone(), site_indices[1].clone()],
-        vec![1.0; 2 * phys_dim],
-    );
-
-    let n0 = mps.add_tensor("site0", t0).unwrap();
-    let n1 = mps.add_tensor("site1", t1).unwrap();
-
-    mps.connect(n0, &bond, n1, &bond).unwrap();
-
-    mps
-}
-
-/// Create a 2-site MPO that maps V_in → V_out with identity operation.
-/// s_in_tmp and s_out_tmp are internal MPO indices.
-fn create_two_site_mpo_vin_vout(
-    phys_dim: usize,
-) -> (
-    TreeTN<TensorDynLen, &'static str>,
-    Vec<DynIndex>, // s_in_tmp
-    Vec<DynIndex>, // s_out_tmp
-) {
-    let mut mpo = TreeTN::<TensorDynLen, &'static str>::new();
-
-    // Internal indices (independent IDs for s_in and s_out)
-    let s0_in_tmp = DynIndex::new_dyn(phys_dim);
-    let s0_out_tmp = DynIndex::new_dyn(phys_dim);
-    let s1_in_tmp = DynIndex::new_dyn(phys_dim);
-    let s1_out_tmp = DynIndex::new_dyn(phys_dim);
-
-    // Bond index
-    let bond = DynIndex::new_dyn(1);
-
-    // Site 0: identity matrix [s0_out_tmp, s0_in_tmp, bond]
-    let mut data0 = vec![0.0; phys_dim * phys_dim];
-    for i in 0..phys_dim {
-        data0[i * phys_dim + i] = 1.0;
-    }
-    let t0 = TensorDynLen::from_dense_f64(
-        vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
-        data0,
-    );
-
-    // Site 1: identity matrix [bond, s1_out_tmp, s1_in_tmp]
-    let mut data1 = vec![0.0; phys_dim * phys_dim];
-    for i in 0..phys_dim {
-        data1[i * phys_dim + i] = 1.0;
-    }
-    let t1 = TensorDynLen::from_dense_f64(
-        vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
-        data1,
-    );
-
-    let n0 = mpo.add_tensor("site0", t0).unwrap();
-    let n1 = mpo.add_tensor("site1", t1).unwrap();
-
-    mpo.connect(n0, &bond, n1, &bond).unwrap();
-
-    (
-        mpo,
-        vec![s0_in_tmp, s1_in_tmp],
-        vec![s0_out_tmp, s1_out_tmp],
-    )
-}
-
-/// Test linsolve with V_in ≠ V_out using with_reference_state.
-///
-/// This test verifies that the solver can handle operators that map between
-/// different input and output spaces.
-#[test]
-fn test_linsolve_vin_neq_vout_with_reference_state() {
-    use tensor4all_treetn::{
-        apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
-    };
-
-    let phys_dim = 2;
-
-    // Create V_in site indices
-    let s_in = vec![DynIndex::new_dyn(phys_dim), DynIndex::new_dyn(phys_dim)];
-
-    // Create V_out site indices (different IDs!)
-    let s_out = vec![DynIndex::new_dyn(phys_dim), DynIndex::new_dyn(phys_dim)];
-
-    // Create state x in V_in
-    let x_init = create_two_site_mps_with_indices(&s_in);
-
-    // Create RHS b in V_out
-    let rhs = create_two_site_mps_with_indices(&s_out);
-
-    // Create reference state in V_out (for environment computation)
-    let ref_out = create_two_site_mps_with_indices(&s_out);
-
-    // Create MPO with internal indices
-    let (mpo, s_in_tmp, s_out_tmp) = create_two_site_mpo_vin_vout(phys_dim);
-
-    // Create index mappings:
-    // - input_mapping: s_in (from x) → s_in_tmp (MPO input)
-    // - output_mapping: s_in (same as input!) → s_out_tmp (MPO output)
-    // Note: For GMRES to work, output must map back to the same space as input
-    let mut input_mapping = HashMap::new();
-    let mut output_mapping = HashMap::new();
-
-    // Site 0 mappings
-    input_mapping.insert(
-        "site0",
-        IndexMapping {
-            true_index: s_in[0].clone(),         // x's site index
-            internal_index: s_in_tmp[0].clone(), // MPO input index
-        },
-    );
-    output_mapping.insert(
-        "site0",
-        IndexMapping {
-            true_index: s_in[0].clone(),          // Must be same as input for GMRES
-            internal_index: s_out_tmp[0].clone(), // MPO output index
-        },
-    );
-
-    // Site 1 mappings
-    input_mapping.insert(
-        "site1",
-        IndexMapping {
-            true_index: s_in[1].clone(),
-            internal_index: s_in_tmp[1].clone(),
-        },
-    );
-    output_mapping.insert(
-        "site1",
-        IndexMapping {
-            true_index: s_in[1].clone(), // Must be same as input for GMRES
-            internal_index: s_out_tmp[1].clone(),
-        },
-    );
-
-    // Canonicalize x towards site0
-    let mut x = x_init
-        .canonicalize(["site0"], CanonicalizationOptions::default())
-        .unwrap();
-
-    // Create LinsolveUpdater with index mappings and reference_state_out for V_in ≠ V_out case
-    let options = LinsolveOptions::default()
-        .with_nfullsweeps(1)
-        .with_krylov_tol(1e-10)
-        .with_max_rank(4);
-
-    let mut updater = LinsolveUpdater::with_index_mappings(
-        mpo,
-        input_mapping,
-        output_mapping,
-        rhs.clone(),
-        Some(ref_out), // <-- V_in ≠ V_out: provide reference state in V_out
-        options,
-    );
-
-    // Create sweep plan
-    let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0", 2).unwrap();
-
-    // Run one sweep - this should work without errors
-    apply_local_update_sweep(&mut x, &plan, &mut updater).unwrap();
-
-    // Verify the solution structure
-    assert_eq!(x.node_count(), 2);
-    println!("V_in ≠ V_out test with reference_state: PASSED");
 }
 
 // ============================================================================
@@ -1912,7 +1717,6 @@ fn test_linsolve_pauli_x() {
         input_mapping,
         output_mapping,
         rhs.clone(),
-        None,
         options,
     );
 
@@ -2080,7 +1884,6 @@ fn test_linsolve_general_matrix() {
         input_mapping,
         output_mapping,
         rhs.clone(),
-        None,
         options,
     );
 
@@ -2362,7 +2165,6 @@ fn test_linsolve_n_site_identity_impl(n_sites: usize) {
         input_mapping,
         output_mapping,
         rhs.clone(),
-        None,
         options,
     );
 
