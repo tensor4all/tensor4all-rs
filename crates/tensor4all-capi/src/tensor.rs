@@ -62,14 +62,14 @@ pub extern "C" fn t4a_tensor_get_dims(
 
     let result = catch_unwind(|| {
         let tensor = unsafe { &*ptr };
-        let dims = &tensor.inner().dims;
+        let dims = tensor.inner().dims();
 
         if buf_len < dims.len() {
             return T4A_BUFFER_TOO_SMALL;
         }
 
         unsafe {
-            for (i, &dim) in dims.iter().enumerate() {
+            for (i, dim) in dims.iter().copied().enumerate() {
                 *out_dims.add(i) = dim;
             }
         }

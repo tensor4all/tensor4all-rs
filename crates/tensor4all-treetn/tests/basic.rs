@@ -95,7 +95,7 @@ fn test_treetn_add_tensor() {
 
     let retrieved = tn.tensor(node);
     assert!(retrieved.is_some());
-    assert_eq!(retrieved.unwrap().dims, vec![2, 3]);
+    assert_eq!(retrieved.unwrap().dims(), vec![2, 3]);
 }
 
 #[test]
@@ -533,7 +533,7 @@ fn test_contract_two_nodes() {
     let result = tn.contract_to_tensor().unwrap();
 
     // Result should have physical indices [i, k] with dims [2, 4]
-    assert_eq!(result.dims, vec![2, 4]);
+    assert_eq!(result.dims(), vec![2, 4]);
     assert_eq!(result.indices.len(), 2);
 }
 
@@ -544,7 +544,7 @@ fn test_contract_chain() {
     let result = tn.contract_to_tensor().unwrap();
 
     // Result should have physical indices from n1 and n3
-    assert_eq!(result.dims, vec![2, 5]);
+    assert_eq!(result.dims(), vec![2, 5]);
 }
 
 /// Test that contract_to_tensor returns indices in canonical order.
@@ -584,7 +584,7 @@ fn test_contract_to_tensor_index_ordering() {
     assert_eq!(result_indices[1].id(), site_b.id());
 
     // Dimensions should match: [2, 3]
-    assert_eq!(result.dims, vec![2, 3]);
+    assert_eq!(result.dims(), vec![2, 3]);
 }
 
 /// Test contract_to_tensor index ordering with reverse alphabetical node names.
@@ -620,7 +620,7 @@ fn test_contract_to_tensor_index_ordering_reverse() {
     assert_eq!(result_indices[1].id(), site_z.id());
 
     // Dimensions should be [5, 4] (site_a dim=5, site_z dim=4)
-    assert_eq!(result.dims, vec![5, 4]);
+    assert_eq!(result.dims(), vec![5, 4]);
 }
 
 // ============================================================================

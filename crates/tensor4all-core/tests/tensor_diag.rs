@@ -12,7 +12,7 @@ fn test_diag_tensor_creation() {
     let diag_data = vec![1.0, 2.0, 3.0];
 
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data.clone());
-    assert_eq!(tensor.dims, vec![3, 3]);
+    assert_eq!(tensor.dims(), vec![3, 3]);
     assert!(is_diag_tensor(&tensor));
 }
 
@@ -49,7 +49,7 @@ fn test_diag_tensor_permute() {
 
     // Permute: data should not change for DiagTensor
     let permuted = tensor.permute(&[2, 0, 1]);
-    assert_eq!(permuted.dims, vec![3, 3, 3]);
+    assert_eq!(permuted.dims(), vec![3, 3, 3]);
 
     // Verify diagonal data is unchanged
     if let Storage::DiagF64(ref diag) = **permuted.storage() {
@@ -74,7 +74,7 @@ fn test_diag_tensor_contract_diag_diag_all_contracted() {
     let result = tensor_a.contract(&tensor_b);
 
     // Result should be scalar: 1*3 + 2*4 = 11
-    assert_eq!(result.dims.len(), 0);
+    assert_eq!(result.dims().len(), 0);
     if let Storage::DenseF64(ref vec) = **result.storage() {
         assert_eq!(vec.len(), 1);
         assert_eq!(vec.as_slice()[0], 11.0);
@@ -98,7 +98,7 @@ fn test_diag_tensor_contract_diag_diag_partial() {
     // Contract along j: result should be DiagTensor[i, k]
     let result = tensor_a.contract(&tensor_b);
 
-    assert_eq!(result.dims, vec![3, 3]);
+    assert_eq!(result.dims(), vec![3, 3]);
     assert!(is_diag_tensor(&result));
 
     // Result diagonal should be element-wise product: [1*4, 2*5, 3*6] = [4, 10, 18]
@@ -124,12 +124,12 @@ fn test_diag_tensor_contract_diag_dense() {
     let dims_b = vec![2, 2];
     use tensor4all_core::storage::DenseStorageF64;
     let storage_b = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 4], &dims_b));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, dims_b.clone(), Arc::new(storage_b));
+    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, Arc::new(storage_b));
 
     // Contract along j: result should be DenseTensor[i, k]
     let result = tensor_a.contract(&tensor_b);
 
-    assert_eq!(result.dims, vec![2, 2]);
+    assert_eq!(result.dims(), vec![2, 2]);
     // Result should be DenseTensor (Diag×Dense converts Diag to Dense first)
     if let Storage::DenseF64(ref vec) = **result.storage() {
         assert_eq!(vec.len(), 4);
@@ -162,7 +162,8 @@ fn test_diag_tensor_convert_to_dense() {
     let diag_data = vec![1.0, 2.0, 3.0];
 
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data);
-    let dense_storage = tensor.storage().to_dense_storage(&tensor.dims);
+    let dims = tensor.dims();
+    let dense_storage = tensor.storage().to_dense_storage(&dims);
 
     if let Storage::DenseF64(ref vec) = dense_storage {
         assert_eq!(vec.len(), 9); // 3x3 = 9
@@ -192,7 +193,7 @@ fn test_diag_tensor_rank3() {
     let diag_data = vec![1.0, 2.0];
 
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone(), k.clone()], diag_data.clone());
-    assert_eq!(tensor.dims, vec![2, 2, 2]);
+    assert_eq!(tensor.dims(), vec![2, 2, 2]);
     assert!(is_diag_tensor(&tensor));
 
     // Sum should work
@@ -208,7 +209,7 @@ fn test_diag_tensor_complex() {
     let diag_data = vec![Complex64::new(1.0, 0.5), Complex64::new(2.0, 1.0)];
 
     let tensor = diag_tensor_dyn_len_c64(vec![i.clone(), j.clone()], diag_data.clone());
-    assert_eq!(tensor.dims, vec![2, 2]);
+    assert_eq!(tensor.dims(), vec![2, 2]);
     assert!(is_diag_tensor(&tensor));
 
     // Sum should work
@@ -235,7 +236,7 @@ fn test_diag_tensor_contract_rank3() {
     // Contract along k: result should be DiagTensor[i, j, l]
     let result = tensor_a.contract(&tensor_b);
 
-    assert_eq!(result.dims, vec![2, 2, 2]);
+    assert_eq!(result.dims(), vec![2, 2, 2]);
     assert!(is_diag_tensor(&result));
 
     // Result diagonal should be element-wise product: [1*3, 2*4] = [3, 8]

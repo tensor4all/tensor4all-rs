@@ -95,10 +95,9 @@ fn test_cow_storage() {
 #[test]
 fn test_tensor_dyn_len_creation() {
     let indices = vec![Index::new_dyn(2), Index::new_dyn(3)];
-    let dims = vec![2, 3];
     let storage = Arc::new(Storage::new_dense_f64(6));
 
-    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
     assert_eq!(tensor.indices.len(), 2);
     let dims = tensor.dims();
     assert_eq!(dims.len(), 2);
@@ -107,23 +106,12 @@ fn test_tensor_dyn_len_creation() {
 }
 
 #[test]
-#[should_panic(expected = "indices and dims must have the same length")]
-fn test_tensor_dyn_len_mismatch() {
-    let indices = vec![Index::new_dyn(2)];
-    let dims = vec![2, 3]; // mismatch
-    let storage = Arc::new(Storage::new_dense_f64(6));
-
-    let _tensor: TensorDynLen = TensorDynLen::new(indices, dims, storage);
-}
-
-#[test]
 fn test_tensor_shared_storage() {
     let indices = vec![Index::new_dyn(2)];
-    let dims = vec![2];
     let storage = Arc::new(make_dense_f64(vec![1.0, 2.0], &[2]));
 
-    let tensor1 = TensorDynLen::new(indices.clone(), dims.clone(), Arc::clone(&storage));
-    let tensor2 = TensorDynLen::new(indices, dims, storage);
+    let tensor1 = TensorDynLen::new(indices.clone(), Arc::clone(&storage));
+    let tensor2 = TensorDynLen::new(indices, storage);
 
     // Both tensors share the same storage
     assert!(Arc::ptr_eq(tensor1.storage(), tensor2.storage()));
@@ -147,10 +135,9 @@ fn test_tensor_shared_storage() {
 #[test]
 fn test_tensor_sum_f64_no_match() {
     let indices = vec![Index::new_dyn(3)];
-    let dims = vec![3];
     let storage = Arc::new(make_dense_f64(vec![1.0, 2.0, 3.0], &[3]));
 
-    let t: TensorDynLen = TensorDynLen::new(indices, dims, storage);
+    let t: TensorDynLen = TensorDynLen::new(indices, storage);
     let sum_f64 = t.sum_f64();
     assert_eq!(sum_f64, 6.0);
 
@@ -162,14 +149,13 @@ fn test_tensor_sum_f64_no_match() {
 #[test]
 fn test_tensor_sum_c64() {
     let indices = vec![Index::new_dyn(2)];
-    let dims = vec![2];
     let storage = Arc::new(make_dense_c64(
         vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -1.0)],
         &[2],
     ));
 
     // Now always returns AnyScalar
-    let t: TensorDynLen = TensorDynLen::new(indices, dims, storage);
+    let t: TensorDynLen = TensorDynLen::new(indices, storage);
     let sum_any: AnyScalar = t.sum();
     assert!(sum_any.is_complex());
     let z: Complex64 = sum_any.into();
@@ -183,10 +169,9 @@ fn test_tensor_duplicate_indices_new() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone(), i.clone()]; // duplicate i
-    let dims = vec![2, 3, 2];
     let storage = Arc::new(Storage::new_dense_f64(12));
 
-    let _tensor: TensorDynLen = TensorDynLen::new(indices, dims, storage);
+    let _tensor: TensorDynLen = TensorDynLen::new(indices, storage);
 }
 
 #[test]
@@ -260,7 +245,7 @@ fn test_replaceinds_basic() {
     let indices = vec![i.clone(), j.clone(), k.clone()];
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
     let storage = Arc::new(make_dense_f64(data, &[2, 3, 4]));
-    let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3, 4], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
 
     // Replace all indices
     let replaced = tensor.replaceinds(
@@ -273,7 +258,7 @@ fn test_replaceinds_basic() {
     assert_eq!(replaced.indices[1].id, new_j.id);
     assert_eq!(replaced.indices[2].id, new_k.id);
     // Check that dimensions are unchanged
-    assert_eq!(replaced.dims, vec![2, 3, 4]);
+    assert_eq!(replaced.dims(), vec![2, 3, 4]);
 }
 
 #[test]
@@ -287,7 +272,7 @@ fn test_replaceinds_partial() {
     let indices = vec![i.clone(), j.clone(), k.clone()];
     let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
     let storage = Arc::new(make_dense_f64(data, &[2, 3, 4]));
-    let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3, 4], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
 
     // Replace only i
     let replaced = tensor.replaceinds(std::slice::from_ref(&i), std::slice::from_ref(&new_i));
@@ -378,7 +363,7 @@ fn test_tensor_conj_f64() {
     let i = Index::new_dyn(2);
     let data = vec![1.0, 2.0];
     let storage = Arc::new(make_dense_f64(data.clone(), &[2]));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone()], vec![2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone()], storage);
 
     let conj_tensor = tensor.conj();
 
@@ -408,7 +393,7 @@ fn test_tensor_conj_c64() {
         Complex64::new(5.0, 5.0),
     ];
     let storage = Arc::new(make_dense_c64(data, &[2, 3]));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     let conj_tensor = tensor.conj();
 
@@ -444,7 +429,7 @@ fn test_tensor_has_tensor_data() {
     let j = Index::new_dyn(3);
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(make_dense_f64(data, &[2, 3]));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     // TensorDynLen now contains TensorData internally
     let tensor_data = tensor.tensor_data();
@@ -578,7 +563,7 @@ fn test_from_dense_c64() {
 #[test]
 fn test_scalar_f64() {
     let scalar = TensorDynLen::scalar_f64(42.0);
-    assert_eq!(scalar.dims, Vec::<usize>::new());
+    assert_eq!(scalar.dims(), Vec::<usize>::new());
     assert!(scalar.is_f64());
     assert_eq!(scalar.as_slice_f64().unwrap(), &[42.0]);
 }
@@ -587,7 +572,7 @@ fn test_scalar_f64() {
 fn test_scalar_c64() {
     let z = Complex64::new(1.0, 2.0);
     let scalar = TensorDynLen::scalar_c64(z);
-    assert_eq!(scalar.dims, Vec::<usize>::new());
+    assert_eq!(scalar.dims(), Vec::<usize>::new());
     assert!(scalar.is_complex());
     assert_eq!(scalar.as_slice_c64().unwrap(), &[z]);
 }

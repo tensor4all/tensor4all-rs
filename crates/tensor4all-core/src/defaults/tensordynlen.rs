@@ -774,12 +774,12 @@ impl TensorDynLen {
     /// let indices_a = vec![i.clone(), j.clone()];
     /// let data_a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     /// let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_a, &[2, 3])));
-    /// let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, vec![2, 3], storage_a);
+    /// let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
     ///
     /// let indices_b = vec![i.clone(), j.clone()];
     /// let data_b = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
     /// let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_b, &[2, 3])));
-    /// let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, vec![2, 3], storage_b);
+    /// let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
     ///
     /// let sum = tensor_a.add(&tensor_b).unwrap();
     /// // sum = [[2, 3, 4], [5, 6, 7]]
@@ -1139,8 +1139,8 @@ impl TensorDynLen {
     /// let data_b = vec![1.0, 0.0];  // Same tensor
     /// let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_a, &[2])));
     /// let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_b, &[2])));
-    /// let tensor_a: TensorDynLen = TensorDynLen::new(vec![i.clone()], vec![2], storage_a);
-    /// let tensor_b: TensorDynLen = TensorDynLen::new(vec![i.clone()], vec![2], storage_b);
+    /// let tensor_a: TensorDynLen = TensorDynLen::new(vec![i.clone()], storage_a);
+    /// let tensor_b: TensorDynLen = TensorDynLen::new(vec![i.clone()], storage_b);
     ///
     /// assert!(tensor_a.distance(&tensor_b) < 1e-10);  // Zero distance
     /// ```
