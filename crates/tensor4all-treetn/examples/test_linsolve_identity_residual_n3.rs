@@ -1,12 +1,12 @@
-//! Test: linsolve identity residual (N=3).
+//! Test: linsolve identity residual (N=3, init=rhs).
 //!
 //! Fixed conditions:
 //! - N = 3
 //! - A = identity (diagonal MPO with all diag values = 1.0) with internal indices + index mappings
-//! - init = rhs.sim_linkinds() (same physical indices, independent bond/link index IDs)
+//! - init = rhs (exact solution for A=I)
 //! - coefficients: a0 = 0, a1 = 1, so the equation is A x = b
 //!
-//! This example runs 5 times 2-site sweep and prints the relative residual:
+//! This example runs 20 times 2-site sweep and prints the relative residual:
 //!   ||r||_2 / ||b||_2, where r = A x - b.
 //!
 //! Run:
@@ -14,11 +14,84 @@
 
 use std::collections::HashMap;
 
-use tensor4all_core::{DynIndex, TensorDynLen};
+use anyhow::Context;
+use tensor4all_core::{DynIndex, IndexLike, TagSetLike, TensorDynLen, TensorIndex};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
     IndexMapping, LinearOperator, LinsolveOptions, LinsolveUpdater, LocalUpdateSweepPlan, TreeTN,
 };
+
+fn fmt_indices(indices: &[DynIndex]) -> Vec<String> {
+    indices
+        .iter()
+        .map(|idx| {
+            let tags: Vec<String> = idx.tags().iter().collect();
+            format!("{:?}(dim={},tags={:?})", idx.id(), idx.dim(), tags)
+        })
+        .collect()
+}
+
+fn fmt_index(idx: &DynIndex) -> String {
+    let tags: Vec<String> = idx.tags().iter().collect();
+    format!("{:?}(dim={},tags={:?})", idx.id(), idx.dim(), tags)
+}
+
+fn dump_treetn_indices(label: &str, ttn: &TreeTN<TensorDynLen, String>) {
+    eprintln!("=== {label} ===");
+    let mut names = ttn.node_names();
+    names.sort();
+    for name in names {
+        let node = match ttn.node_index(&name) {
+            Some(n) => n,
+            None => continue,
+        };
+        let t = match ttn.tensor(node) {
+            Some(t) => t,
+            None => continue,
+        };
+        eprintln!("  node {name}:");
+        eprintln!(
+            "    indices(order) = {:?}",
+            fmt_indices(&t.external_indices())
+        );
+        if let Some(site_space) = ttn.site_space(&name) {
+            let mut v: Vec<_> = site_space.iter().cloned().collect();
+            // Sort deterministically by (dim, id debug string)
+            v.sort_by_key(|idx| (idx.dim(), format!("{:?}", idx.id())));
+            eprintln!("    site_space      = {:?}", fmt_indices(&v));
+        } else {
+            eprintln!("    site_space      = <none>");
+        }
+    }
+}
+
+fn dump_operator_mappings(
+    input_mapping: &HashMap<String, IndexMapping<DynIndex>>,
+    output_mapping: &HashMap<String, IndexMapping<DynIndex>>,
+) {
+    eprintln!("=== index mappings (true -> internal) ===");
+    let mut keys: Vec<_> = input_mapping.keys().cloned().collect();
+    keys.sort();
+    for k in keys {
+        let in_map = input_mapping.get(&k);
+        let out_map = output_mapping.get(&k);
+        eprintln!("  node {k}:");
+        if let Some(m) = in_map {
+            eprintln!(
+                "    input : true={} -> internal={}",
+                fmt_index(&m.true_index),
+                fmt_index(&m.internal_index),
+            );
+        }
+        if let Some(m) = out_map {
+            eprintln!(
+                "    output: true={} -> internal={}",
+                fmt_index(&m.true_index),
+                fmt_index(&m.internal_index),
+            );
+        }
+    }
+}
 
 /// Create an N-site MPS chain with identity-like structure.
 /// Returns (mps, site_indices).
@@ -31,12 +104,14 @@ fn create_n_site_mps(
 
     let mut mps = TreeTN::<TensorDynLen, String>::new();
 
-    // Physical indices
-    let site_indices: Vec<DynIndex> = (0..n_sites).map(|_| DynIndex::new_dyn(phys_dim)).collect();
+    // Physical indices with tags (for readable debug output)
+    let site_indices: Vec<DynIndex> = (0..n_sites)
+        .map(|i| DynIndex::new_dyn_with_tag(phys_dim, &format!("site{i}")).unwrap())
+        .collect();
 
     // Bond indices (n_sites - 1 bonds)
     let bond_indices: Vec<DynIndex> = (0..n_sites - 1)
-        .map(|_| DynIndex::new_dyn(bond_dim))
+        .map(|i| DynIndex::new_dyn_with_tag(bond_dim, &format!("bond{i}")).unwrap())
         .collect();
 
     // Create tensors for each site (index order matches tests/linsolve.rs)
@@ -203,7 +278,8 @@ fn create_n_site_index_mappings(
 fn main() -> anyhow::Result<()> {
     let n_sites = 3usize;
     let phys_dim = 2usize;
-    let bond_dim = 2usize;
+    // RHS bond dimension (non-trivial but still small)
+    let bond_dim = 1usize;
 
     // RHS
     let (rhs, site_indices) = create_n_site_mps(n_sites, phys_dim, bond_dim);
@@ -215,8 +291,8 @@ fn main() -> anyhow::Result<()> {
     let (input_mapping, output_mapping) =
         create_n_site_index_mappings(&site_indices, &s_in_tmp, &s_out_tmp);
 
-    // init fixed: rhs with independent link indices
-    let init = rhs.sim_linkinds()?;
+    // init = rhs (exact solution for A=I)
+    let init = rhs.clone();
     let mut x = init.canonicalize(["site0".to_string()], CanonicalizationOptions::default())?;
 
     // linsolve: fixed coefficients a0=0, a1=1 (A x = b)
@@ -234,11 +310,42 @@ fn main() -> anyhow::Result<()> {
         options,
     );
 
-    // 5 times 2-site sweep
+    // 20 times 2-site sweep
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0".to_string(), 2)
         .ok_or_else(|| anyhow::anyhow!("Failed to create 2-site sweep plan"))?;
-    for _ in 0..5 {
-        apply_local_update_sweep(&mut x, &plan, &mut updater)?;
+    for sweep in 1..=20 {
+        // Disable environment caching across sweeps (force recomputation).
+        // Note: this does not disable caching *within* a single sweep step, but removes
+        // any reuse between sweeps.
+        {
+            let mut proj_op = updater.projected_operator.write().unwrap();
+            proj_op.envs.clear();
+        }
+        updater.projected_state.envs.clear();
+
+        // Run step-by-step to identify which update step fails (if any).
+        for (step_idx, step) in plan.steps.iter().cloned().enumerate() {
+            let one_step = LocalUpdateSweepPlan {
+                steps: vec![step.clone()],
+                nsite: plan.nsite,
+            };
+            if let Err(e) = apply_local_update_sweep(&mut x, &one_step, &mut updater) {
+                eprintln!(
+                    "=== failure just before returning error ===\n  sweep={sweep}, step_idx={step_idx}, nodes={:?}, new_center={:?}",
+                    step.nodes, step.new_center
+                );
+                dump_treetn_indices("A (operator MPO)", &mpo);
+                dump_operator_mappings(&input_mapping, &output_mapping);
+                dump_treetn_indices("x (current state)", &x);
+                dump_treetn_indices("b (rhs)", &rhs);
+                return Err(e).with_context(|| {
+                    format!(
+                        "failed at sweep {sweep}, step {step_idx}: nodes={:?}, new_center={:?}",
+                        step.nodes, step.new_center
+                    )
+                });
+            }
+        }
     }
 
     // Residual r = A x - b (measured in full contracted space)
