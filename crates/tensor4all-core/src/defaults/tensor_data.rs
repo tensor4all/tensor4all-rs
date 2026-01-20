@@ -242,7 +242,7 @@ impl TensorData {
                     .zip(comp.dims.iter())
                     .map(|(id, &dim)| Index::new(*id, dim))
                     .collect();
-                TensorDynLen::new(indices, comp.dims.clone(), comp.storage.clone())
+                TensorDynLen::new(indices, comp.storage.clone())
             })
             .collect();
 
@@ -255,7 +255,7 @@ impl TensorData {
 
         if contracted_ids == self.external_index_ids {
             // Already in the right order
-            Ok((contracted.storage().clone(), contracted.dims))
+            Ok((contracted.storage().clone(), contracted.dims()))
         } else {
             // Need to permute
             let target_indices: Vec<DynIndex> = self
@@ -266,7 +266,7 @@ impl TensorData {
                 .collect();
 
             let permuted = contracted.permuteinds(&target_indices)?;
-            Ok((permuted.storage().clone(), permuted.dims))
+            Ok((permuted.storage().clone(), permuted.dims()))
         }
     }
 

@@ -134,11 +134,13 @@ fn setup_direct_sum(
             if b_paired_ids.contains(a_id) {
                 continue;
             }
-            if a.dims[a_pos] != b.dims[b_pos] {
+            let a_dims = a.dims();
+            let b_dims = b.dims();
+            if a_dims[a_pos] != b_dims[b_pos] {
                 return Err(anyhow::anyhow!(
                     "Dimension mismatch for common index: {} vs {}",
-                    a.dims[a_pos],
-                    b.dims[b_pos]
+                    a_dims[a_pos],
+                    b_dims[b_pos]
                 ));
             }
             common_a_positions.push(a_pos);
@@ -155,8 +157,10 @@ fn setup_direct_sum(
         .iter()
         .map(|(_, b_idx)| b_idx_map[b_idx.id()])
         .collect();
-    let paired_dims_a: Vec<usize> = paired_a_positions.iter().map(|&p| a.dims[p]).collect();
-    let paired_dims_b: Vec<usize> = paired_b_positions.iter().map(|&p| b.dims[p]).collect();
+    let a_dims = a.dims();
+    let b_dims = b.dims();
+    let paired_dims_a: Vec<usize> = paired_a_positions.iter().map(|&p| a_dims[p]).collect();
+    let paired_dims_b: Vec<usize> = paired_b_positions.iter().map(|&p| b_dims[p]).collect();
 
     // Create new indices for paired dimensions
     let mut new_indices: Vec<DynIndex> = Vec::new();
@@ -172,9 +176,10 @@ fn setup_direct_sum(
     let mut result_dims: Vec<usize> = Vec::new();
 
     // Common indices first
+    let a_dims = a.dims();
     for &a_pos in &common_a_positions {
         result_indices.push(a.indices[a_pos].clone());
-        result_dims.push(a.dims[a_pos]);
+        result_dims.push(a_dims[a_pos]);
     }
 
     // New indices from pairs
@@ -190,14 +195,16 @@ fn setup_direct_sum(
         result_strides[i] = result_strides[i + 1] * result_dims[i + 1];
     }
 
-    let mut a_strides: Vec<usize> = vec![1; a.dims.len()];
-    for i in (0..a.dims.len().saturating_sub(1)).rev() {
-        a_strides[i] = a_strides[i + 1] * a.dims[i + 1];
+    let a_dims = a.dims();
+    let b_dims = b.dims();
+    let mut a_strides: Vec<usize> = vec![1; a_dims.len()];
+    for i in (0..a_dims.len().saturating_sub(1)).rev() {
+        a_strides[i] = a_strides[i + 1] * a_dims[i + 1];
     }
 
-    let mut b_strides: Vec<usize> = vec![1; b.dims.len()];
-    for i in (0..b.dims.len().saturating_sub(1)).rev() {
-        b_strides[i] = b_strides[i + 1] * b.dims[i + 1];
+    let mut b_strides: Vec<usize> = vec![1; b_dims.len()];
+    for i in (0..b_dims.len().saturating_sub(1)).rev() {
+        b_strides[i] = b_strides[i + 1] * b_dims[i + 1];
     }
 
     let n_common = common_a_positions.len();
@@ -268,7 +275,8 @@ fn direct_sum_f64(
             .all(|(i, &pm)| pm >= setup.paired_dims_a[i]);
 
         if all_from_a {
-            let mut a_multi = vec![0usize; a.dims.len()];
+            let a_dims = a.dims();
+            let mut a_multi = vec![0usize; a_dims.len()];
             for (i, &cp) in setup.common_a_positions.iter().enumerate() {
                 a_multi[cp] = common_multi[i];
             }
@@ -278,7 +286,8 @@ fn direct_sum_f64(
             let a_linear = multi_to_linear(&a_multi, &setup.a_strides);
             result_data[result_linear] = a_data[a_linear];
         } else if all_from_b {
-            let mut b_multi = vec![0usize; b.dims.len()];
+            let b_dims = b.dims();
+            let mut b_multi = vec![0usize; b_dims.len()];
             for (i, &cp) in setup.common_b_positions.iter().enumerate() {
                 b_multi[cp] = common_multi[i];
             }
@@ -295,7 +304,7 @@ fn direct_sum_f64(
         result_data,
         &setup.result_dims,
     )));
-    let result = TensorDynLen::new(setup.result_indices, setup.result_dims, storage);
+    let result = TensorDynLen::new(setup.result_indices, storage);
     Ok((result, setup.new_indices))
 }
 
@@ -333,7 +342,8 @@ fn direct_sum_c64(
             .all(|(i, &pm)| pm >= setup.paired_dims_a[i]);
 
         if all_from_a {
-            let mut a_multi = vec![0usize; a.dims.len()];
+            let a_dims = a.dims();
+            let mut a_multi = vec![0usize; a_dims.len()];
             for (i, &cp) in setup.common_a_positions.iter().enumerate() {
                 a_multi[cp] = common_multi[i];
             }
@@ -343,7 +353,8 @@ fn direct_sum_c64(
             let a_linear = multi_to_linear(&a_multi, &setup.a_strides);
             result_data[result_linear] = a_data[a_linear];
         } else if all_from_b {
-            let mut b_multi = vec![0usize; b.dims.len()];
+            let b_dims = b.dims();
+            let mut b_multi = vec![0usize; b_dims.len()];
             for (i, &cp) in setup.common_b_positions.iter().enumerate() {
                 b_multi[cp] = common_multi[i];
             }
@@ -360,7 +371,7 @@ fn direct_sum_c64(
         result_data,
         &setup.result_dims,
     )));
-    let result = TensorDynLen::new(setup.result_indices, setup.result_dims, storage);
+    let result = TensorDynLen::new(setup.result_indices, storage);
     Ok((result, setup.new_indices))
 }
 
@@ -381,7 +392,6 @@ mod tests {
         // A[i, j] - 2x3 tensor
         let a = TensorDynLen::new(
             vec![Index::new(i.id, i.dim()), Index::new(j.id, j.dim())],
-            vec![2, 3],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                 vec![
                     1.0, 2.0, 3.0, // i=0
@@ -394,7 +404,6 @@ mod tests {
         // B[i, k] - 2x4 tensor
         let b = TensorDynLen::new(
             vec![Index::new(i.id, i.dim()), Index::new(k.id, k.dim())],
-            vec![2, 4],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                 vec![
                     10.0, 20.0, 30.0, 40.0, // i=0
@@ -410,9 +419,10 @@ mod tests {
         let (result, new_indices) = direct_sum(&a, &b, &[(j_idx, k_idx)]).unwrap();
 
         // Result should be 2x7 (common i, merged j+k)
-        assert_eq!(result.dims.len(), 2);
-        assert_eq!(result.dims[0], 2); // i dimension
-        assert_eq!(result.dims[1], 7); // j+k dimension (3+4)
+        assert_eq!(result.dims().len(), 2);
+        let result_dims = result.dims();
+        assert_eq!(result_dims[0], 2); // i dimension
+        assert_eq!(result_dims[1], 7); // j+k dimension (3+4)
         assert_eq!(new_indices.len(), 1);
         assert_eq!(new_indices[0].dim(), 7);
 
@@ -451,7 +461,6 @@ mod tests {
         // A[i, j] - 2x2 tensor
         let a = TensorDynLen::new(
             vec![Index::new(i.id, i.dim()), Index::new(j.id, j.dim())],
-            vec![2, 2],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                 vec![1.0, 2.0, 3.0, 4.0],
                 &[2, 2],
@@ -461,7 +470,6 @@ mod tests {
         // B[k, l] - 3x3 tensor (no common indices)
         let b = TensorDynLen::new(
             vec![Index::new(k.id, k.dim()), Index::new(l.id, l.dim())],
-            vec![3, 3],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                 vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0],
                 &[3, 3],
@@ -476,9 +484,10 @@ mod tests {
         let (result, new_indices) = direct_sum(&a, &b, &[(i_idx, k_idx), (j_idx, l_idx)]).unwrap();
 
         // Result should be 5x5 (2+3, 2+3)
-        assert_eq!(result.dims.len(), 2);
-        assert_eq!(result.dims[0], 5);
-        assert_eq!(result.dims[1], 5);
+        assert_eq!(result.dims().len(), 2);
+        let result_dims = result.dims();
+        assert_eq!(result_dims[0], 5);
+        assert_eq!(result_dims[1], 5);
         assert_eq!(new_indices.len(), 2);
     }
 }

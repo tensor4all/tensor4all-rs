@@ -100,9 +100,10 @@ fn test_tensor_dyn_len_creation() {
 
     let tensor: TensorDynLen = TensorDynLen::new(indices, dims, storage);
     assert_eq!(tensor.indices.len(), 2);
-    assert_eq!(tensor.dims.len(), 2);
-    assert_eq!(tensor.dims[0], 2);
-    assert_eq!(tensor.dims[1], 3);
+    let dims = tensor.dims();
+    assert_eq!(dims.len(), 2);
+    assert_eq!(dims[0], 2);
+    assert_eq!(dims[1], 3);
 }
 
 #[test]
@@ -212,7 +213,7 @@ fn test_replaceind_basic() {
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(make_dense_f64(data, &[2, 3]));
-    let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
 
     // Replace index i with new_i
     let replaced = tensor.replaceind(&i, &new_i);
@@ -222,7 +223,7 @@ fn test_replaceind_basic() {
     // Check that the second index was not affected
     assert_eq!(replaced.indices[1].id, j.id);
     // Check that dimensions are unchanged
-    assert_eq!(replaced.dims, vec![2, 3]);
+    assert_eq!(replaced.dims(), vec![2, 3]);
     // Check that storage is shared (no data copy)
     assert!(Arc::ptr_eq(tensor.storage(), replaced.storage()));
 }
@@ -237,7 +238,7 @@ fn test_replaceind_no_match() {
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(make_dense_f64(data, &[2, 3]));
-    let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
 
     // Replace index k (not in tensor) - should return unchanged tensor
     let replaced = tensor.replaceind(&k, &new_k);
@@ -309,7 +310,7 @@ fn test_replaceinds_length_mismatch() {
     let indices = vec![i.clone(), j.clone()];
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let storage = Arc::new(make_dense_f64(data, &[2, 3]));
-    let tensor: TensorDynLen = TensorDynLen::new(indices, vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
 
     // Should panic - length mismatch
     let _replaced = tensor.replaceinds(std::slice::from_ref(&i), &[new_i, new_j]);
@@ -384,7 +385,7 @@ fn test_tensor_conj_f64() {
     // Indices should be the same
     assert_eq!(conj_tensor.indices[0].id, i.id);
     // Dims should be the same
-    assert_eq!(conj_tensor.dims, vec![2]);
+    assert_eq!(conj_tensor.dims(), vec![2]);
     // Data should be the same (real conj is identity)
     match conj_tensor.storage().as_ref() {
         Storage::DenseF64(v) => {
@@ -415,7 +416,7 @@ fn test_tensor_conj_c64() {
     assert_eq!(conj_tensor.indices[0].id, i.id);
     assert_eq!(conj_tensor.indices[1].id, j.id);
     // Dims should be preserved
-    assert_eq!(conj_tensor.dims, vec![2, 3]);
+    assert_eq!(conj_tensor.dims(), vec![2, 3]);
     // Data should be conjugated
     match conj_tensor.storage().as_ref() {
         Storage::DenseC64(v) => {
@@ -551,7 +552,7 @@ fn test_from_dense_f64() {
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let tensor = TensorDynLen::from_dense_f64(vec![i, j], data.clone());
 
-    assert_eq!(tensor.dims, vec![2, 3]);
+    assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(tensor.is_f64());
     assert!(!tensor.is_complex());
     assert_eq!(tensor.as_slice_f64().unwrap(), &data[..]);
@@ -567,7 +568,7 @@ fn test_from_dense_c64() {
         .collect();
     let tensor = TensorDynLen::from_dense_c64(vec![i, j], data.clone());
 
-    assert_eq!(tensor.dims, vec![2, 3]);
+    assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(!tensor.is_f64());
     assert!(tensor.is_complex());
     assert_eq!(tensor.as_slice_c64().unwrap(), &data[..]);
@@ -597,7 +598,7 @@ fn test_zeros_f64() {
     let j = Index::new_dyn(3);
     let tensor = TensorDynLen::zeros_f64(vec![i, j]);
 
-    assert_eq!(tensor.dims, vec![2, 3]);
+    assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(tensor.is_f64());
     let data = tensor.as_slice_f64().unwrap();
     assert!(data.iter().all(|&x| x == 0.0));
@@ -609,7 +610,7 @@ fn test_zeros_c64() {
     let j = Index::new_dyn(3);
     let tensor = TensorDynLen::zeros_c64(vec![i, j]);
 
-    assert_eq!(tensor.dims, vec![2, 3]);
+    assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(tensor.is_complex());
     let data = tensor.as_slice_c64().unwrap();
     assert!(data.iter().all(|&x| x == Complex64::new(0.0, 0.0)));

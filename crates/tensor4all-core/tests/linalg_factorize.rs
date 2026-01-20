@@ -22,7 +22,7 @@ fn create_test_matrix() -> TensorDynLen {
         &[2, 3],
     )));
 
-    TensorDynLen::new(vec![i, j], vec![2, 3], storage)
+    TensorDynLen::new(vec![i, j], storage)
 }
 
 /// Helper to create a rank-3 tensor for testing.
@@ -37,7 +37,7 @@ fn create_rank3_tensor() -> TensorDynLen {
         &[2, 3, 2],
     )));
 
-    TensorDynLen::new(vec![i, j, k], vec![2, 3, 2], storage)
+    TensorDynLen::new(vec![i, j, k], storage)
 }
 
 // ============================================================================
@@ -259,10 +259,10 @@ fn test_diag_dense_contraction_svd_internals() {
 
     // Contractions should work
     let sv = s.contract(&v);
-    assert_eq!(sv.dims.len(), 2, "S*V should be a 2D tensor");
+    assert_eq!(sv.dims().len(), 2, "S*V should be a 2D tensor");
 
     let us = u.contract(&s);
-    assert_eq!(us.dims.len(), 2, "U*S should be a 2D tensor");
+    assert_eq!(us.dims().len(), 2, "U*S should be a 2D tensor");
 }
 
 // ============================================================================
@@ -270,7 +270,7 @@ fn test_diag_dense_contraction_svd_internals() {
 // ============================================================================
 
 fn assert_tensors_approx_equal(a: &TensorDynLen, b: &TensorDynLen, tol: f64) {
-    assert_eq!(a.dims, b.dims, "Tensor dimensions don't match");
+    assert_eq!(a.dims(), b.dims(), "Tensor dimensions don't match");
 
     match (a.storage().as_ref(), b.storage().as_ref()) {
         (Storage::DenseF64(a_data), Storage::DenseF64(b_data)) => {
