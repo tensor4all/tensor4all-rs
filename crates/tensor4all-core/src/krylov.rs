@@ -400,7 +400,6 @@ mod tests {
         let n = data.len();
         TensorDynLen::new(
             vec![idx.clone()],
-            vec![n],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                 data,
                 &[n],
@@ -495,10 +494,9 @@ mod tests {
                 .zip(diag.iter())
                 .map(|(&xi, &di)| xi * di)
                 .collect();
-            let dims = x.dims.clone();
+            let dims = x.dims();
             Ok(TensorDynLen::new(
                 x.indices.clone(),
-                dims.clone(),
                 Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                     result_data,
                     &dims,
@@ -558,10 +556,9 @@ mod tests {
                 a_data[0] * x_data[0] + a_data[1] * x_data[1],
                 a_data[2] * x_data[0] + a_data[3] * x_data[1],
             ];
-            let dims = x.dims.clone();
+            let dims = x.dims();
             Ok(TensorDynLen::new(
                 x.indices.clone(),
-                dims.clone(),
                 Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                     result_data,
                     &dims,

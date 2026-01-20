@@ -344,7 +344,8 @@ pub fn collect_sizes(tensors: &[&TensorDynLen], uf: &mut AxisUnionFind) -> HashM
     let mut sizes = HashMap::new();
 
     for tensor in tensors {
-        for (idx, &dim) in tensor.indices.iter().zip(tensor.dims.iter()) {
+        let dims = tensor.dims();
+        for (idx, &dim) in tensor.indices.iter().zip(dims.iter()) {
             let rep = uf.find(*idx.id());
             sizes.entry(rep).or_insert(dim);
         }
@@ -398,7 +399,8 @@ fn contract_multi_impl(
     // 4. Build sizes from unique internal IDs
     let mut sizes: HashMap<usize, usize> = HashMap::new();
     for (tensor_idx, tensor) in tensors.iter().enumerate() {
-        for (pos, &dim) in tensor.dims.iter().enumerate() {
+        let dims = tensor.dims();
+        for (pos, &dim) in dims.iter().enumerate() {
             let internal_id = ixs[tensor_idx][pos];
             sizes.entry(internal_id).or_insert(dim);
         }
@@ -517,7 +519,7 @@ fn contract_multi_impl(
         }
     };
 
-    Ok(TensorDynLen::new(final_indices, final_dims, storage))
+    Ok(TensorDynLen::new(final_indices, storage))
 }
 
 /// Build internal IDs with Diag-awareness.
@@ -773,7 +775,7 @@ mod tests {
         let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
             data, &dims,
         )));
-        TensorDynLen::new(indices, dims, storage)
+        TensorDynLen::new(indices, storage)
     }
 
     // ========================================================================
@@ -791,7 +793,7 @@ mod tests {
     fn test_contract_multi_single() {
         let tensor = make_test_tensor(&[2, 3], &[1, 2]);
         let result = contract_multi(&[&tensor], AllowedPairs::All).unwrap();
-        assert_eq!(result.dims, tensor.dims);
+        assert_eq!(result.dims(), tensor.dims());
     }
 
     #[test]
@@ -800,7 +802,7 @@ mod tests {
         let a = make_test_tensor(&[2, 3], &[1, 2]); // i=1, j=2
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
-        assert_eq!(result.dims, vec![2, 4]); // i, k
+        assert_eq!(result.dims(), vec![2, 4]); // i, k
     }
 
     #[test]
@@ -810,7 +812,7 @@ mod tests {
         let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let c = make_test_tensor(&[4, 5], &[3, 4]); // k=3, l=4
         let result = contract_multi(&[&a, &b, &c], AllowedPairs::All).unwrap();
-        let mut sorted_dims = result.dims.clone();
+        let mut sorted_dims = result.dims();
         sorted_dims.sort();
         assert_eq!(sorted_dims, vec![2, 5]); // i=2, l=5
     }
@@ -823,7 +825,7 @@ mod tests {
         let c = make_test_tensor(&[4, 5], &[3, 4]);
         let d = make_test_tensor(&[5, 6], &[4, 5]);
         let result = contract_multi(&[&a, &b, &c, &d], AllowedPairs::All).unwrap();
-        let mut sorted_dims = result.dims.clone();
+        let mut sorted_dims = result.dims();
         sorted_dims.sort();
         assert_eq!(sorted_dims, vec![2, 6]); // i=2, m=6
     }
@@ -834,9 +836,10 @@ mod tests {
         let a = make_test_tensor(&[2, 3], &[1, 2]);
         let b = make_test_tensor(&[4, 5], &[3, 4]);
         let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
-        let total_elements: usize = result.dims.iter().product();
+        let result_dims = result.dims();
+        let total_elements: usize = result_dims.iter().product();
         assert_eq!(total_elements, 2 * 3 * 4 * 5);
-        assert_eq!(result.dims.len(), 4);
+        assert_eq!(result_dims.len(), 4);
     }
 
     #[test]
@@ -845,9 +848,10 @@ mod tests {
         let a = make_test_tensor(&[2], &[1]); // i=1
         let b = make_test_tensor(&[3], &[2]); // j=2
         let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
-        let total_elements: usize = result.dims.iter().product();
+        let result_dims = result.dims();
+        let total_elements: usize = result_dims.iter().product();
         assert_eq!(total_elements, 2 * 3);
-        assert_eq!(result.dims.len(), 2);
+        assert_eq!(result.dims().len(), 2);
     }
 
     #[test]
@@ -889,7 +893,7 @@ mod tests {
         let c = make_test_tensor(&[2, 5], &[1, 4]); // i=1, l=4
         let result =
             contract_multi(&[&a, &b, &c], AllowedPairs::Specified(&[(0, 1), (0, 2)])).unwrap();
-        let mut sorted_dims = result.dims.clone();
+        let mut sorted_dims = result.dims();
         sorted_dims.sort();
         assert_eq!(sorted_dims, vec![4, 5]); // k=4, l=5
     }
@@ -918,8 +922,8 @@ mod tests {
             AllowedPairs::Specified(&[(0, 1), (2, 3)]),
         )
         .unwrap();
-        assert_eq!(result.dims.len(), 4);
-        let mut sorted_dims = result.dims.clone();
+        assert_eq!(result.dims().len(), 4);
+        let mut sorted_dims = result.dims();
         sorted_dims.sort();
         assert_eq!(sorted_dims, vec![2, 4, 4, 6]);
     }
@@ -1241,7 +1245,7 @@ mod tests {
         let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
             data, &dims,
         )));
-        TensorDynLen::new(indices, dims, storage)
+        TensorDynLen::new(indices, storage)
     }
 
     #[test]
@@ -1255,7 +1259,7 @@ mod tests {
     fn test_contract_connected_single() {
         let tensor = make_dense_tensor(&[2, 3], &[1, 2]);
         let result = contract_connected(&[&tensor], AllowedPairs::All).unwrap();
-        assert_eq!(result.dims, tensor.dims);
+        assert_eq!(result.dims(), tensor.dims());
     }
 
     #[test]
@@ -1264,7 +1268,7 @@ mod tests {
         let a = make_dense_tensor(&[2, 3], &[1, 2]); // i=1, j=2
         let b = make_dense_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let result = contract_connected(&[&a, &b], AllowedPairs::All).unwrap();
-        assert_eq!(result.dims, vec![2, 4]); // i, k
+        assert_eq!(result.dims(), vec![2, 4]); // i, k
     }
 
     #[test]
@@ -1274,7 +1278,7 @@ mod tests {
         let b = make_dense_tensor(&[3, 4], &[2, 3]); // j=2, k=3
         let c = make_dense_tensor(&[4, 5], &[3, 4]); // k=3, l=4
         let result = contract_connected(&[&a, &b, &c], AllowedPairs::All).unwrap();
-        let mut sorted_dims = result.dims.clone();
+        let mut sorted_dims = result.dims();
         sorted_dims.sort();
         assert_eq!(sorted_dims, vec![2, 5]); // i=2, l=5
     }

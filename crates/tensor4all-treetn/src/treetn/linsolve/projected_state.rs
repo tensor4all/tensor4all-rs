@@ -61,34 +61,25 @@ where
     ///
     /// This returns the local RHS tensors contracted with environments.
     ///
+    /// **Note:** Only V_in = V_out is currently supported. The ket_state is used
+    /// for both bra and ket in environment computations.
+    ///
     /// # Arguments
     /// * `region` - The nodes in the local update region
-    /// * `ket_state` - The current solution state (in V_in)
+    /// * `ket_state` - The current solution state
     /// * `topology` - The network topology
-    ///
-    /// For V_in ≠ V_out case, use `local_constant_term_with_bra` instead.
     pub fn local_constant_term<NT: NetworkTopology<V>>(
         &mut self,
         region: &[V],
         ket_state: &TreeTN<T, V>,
         topology: &NT,
     ) -> Result<T> {
-        // For V_in = V_out case, use a copied bra_state with fresh link IDs.
-        // This avoids accidental link-index collisions between bra/ket networks.
-        let bra_state = ket_state.sim_linkinds()?;
-        self.local_constant_term_with_bra(region, ket_state, &bra_state, topology)
+        // Use ket_state directly as bra_state (V_in = V_out)
+        self.local_constant_term_impl(region, ket_state, ket_state, topology)
     }
 
-    /// Compute the local constant term `<b|_local` for the given region with explicit bra state.
-    ///
-    /// For V_in ≠ V_out case, provides a reference state in V_out for environment computation.
-    ///
-    /// # Arguments
-    /// * `region` - The nodes in the local update region
-    /// * `ket_state` - The current solution state (in V_in)
-    /// * `bra_state` - Reference state for bra in environment computation (in V_out)
-    /// * `topology` - The network topology
-    pub fn local_constant_term_with_bra<NT: NetworkTopology<V>>(
+    /// Internal implementation for computing local constant term with explicit bra state.
+    fn local_constant_term_impl<NT: NetworkTopology<V>>(
         &mut self,
         region: &[V],
         _ket_state: &TreeTN<T, V>,

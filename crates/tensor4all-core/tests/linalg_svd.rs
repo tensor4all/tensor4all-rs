@@ -18,14 +18,14 @@ fn test_svd_identity() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
     ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
     // Check dimensions
-    assert_eq!(u.dims, vec![2, 2]);
-    assert_eq!(s.dims, vec![2, 2]);
-    assert_eq!(v.dims, vec![2, 2]);
+    assert_eq!(u.dims(), vec![2, 2]);
+    assert_eq!(s.dims(), vec![2, 2]);
+    assert_eq!(v.dims(), vec![2, 2]);
 
     // Check indices
     assert_eq!(u.indices.len(), 2);
@@ -62,14 +62,14 @@ fn test_svd_simple_matrix() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 3]),
     ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
     // Check dimensions: m=2, n=3, k=min(2,3)=2
-    assert_eq!(u.dims, vec![2, 2]);
-    assert_eq!(s.dims, vec![2, 2]);
-    assert_eq!(v.dims, vec![3, 2]);
+    assert_eq!(u.dims(), vec![2, 2]);
+    assert_eq!(s.dims(), vec![2, 2]);
+    assert_eq!(v.dims(), vec![3, 2]);
 
     // Check indices
     assert_eq!(u.indices.len(), 2);
@@ -102,7 +102,7 @@ fn test_svd_reconstruction() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data.clone(), &[3, 4]),
     ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![3, 4], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
@@ -132,9 +132,11 @@ fn test_svd_reconstruction() {
     };
 
     // Reconstruct: A[i,j] = sum_r U[i,r] * S[r] * V[j,r]
-    let m = u.dims[0];
-    let n = v.dims[0];
-    let k = u.dims[1];
+    let u_dims = u.dims();
+    let v_dims = v.dims();
+    let m = u_dims[0];
+    let n = v_dims[0];
+    let k = u_dims[1];
     let mut reconstructed_data = vec![0.0; m * n];
     for i in 0..m {
         for j in 0..n {
@@ -150,14 +152,11 @@ fn test_svd_reconstruction() {
     let reconstructed_storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(reconstructed_data, &[m, n]),
     ));
-    let reconstructed: TensorDynLen = TensorDynLen::new(
-        vec![i.clone(), j.clone()],
-        vec![m, n],
-        reconstructed_storage,
-    );
+    let reconstructed: TensorDynLen =
+        TensorDynLen::new(vec![i.clone(), j.clone()], reconstructed_storage);
 
     // Check dimensions match
-    assert_eq!(reconstructed.dims, vec![3, 4]);
+    assert_eq!(reconstructed.dims(), vec![3, 4]);
 
     // Extract reconstructed data
     let reconstructed_data_vec = match reconstructed.storage().as_ref() {
@@ -184,7 +183,7 @@ fn test_svd_invalid_rank() {
     let i = Index::new_dyn(2);
 
     let storage = Arc::new(Storage::new_dense_f64(2));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone()], vec![2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone()], storage);
 
     let result = svd::<f64>(&tensor, std::slice::from_ref(&i));
     assert!(result.is_err());
@@ -201,7 +200,7 @@ fn test_svd_invalid_split() {
     let j = Index::new_dyn(3);
 
     let storage = Arc::new(Storage::new_dense_f64(6));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     // Empty left_inds should fail
     let result = svd::<f64>(&tensor, &[]);
@@ -227,11 +226,7 @@ fn test_svd_rank3() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 3, 4]),
     ));
-    let tensor: TensorDynLen = TensorDynLen::new(
-        vec![i.clone(), j.clone(), k.clone()],
-        vec![2, 3, 4],
-        storage,
-    );
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone(), k.clone()], storage);
 
     // Split: left = [i], right = [j, k]
     // This unfolds to a 2×12 matrix
@@ -241,9 +236,9 @@ fn test_svd_rank3() {
     // U should be [i, bond] = [2, min(2, 12)] = [2, 2]
     // S should be [bond, bond] = [2, 2]
     // V should be [j, k, bond] = [3, 4, 2]
-    assert_eq!(u.dims, vec![2, 2]);
-    assert_eq!(s.dims, vec![2, 2]);
-    assert_eq!(v.dims, vec![3, 4, 2]);
+    assert_eq!(u.dims(), vec![2, 2]);
+    assert_eq!(s.dims(), vec![2, 2]);
+    assert_eq!(v.dims(), vec![3, 4, 2]);
 
     // Check indices
     assert_eq!(u.indices.len(), 2);
@@ -286,8 +281,7 @@ fn test_svd_complex_reconstruction() {
     let storage = Arc::new(Storage::DenseC64(
         tensor4all_core::storage::DenseStorageC64::from_vec_with_shape(data.clone(), &[2, 2]),
     ));
-    let tensor: TensorDynLen =
-        TensorDynLen::new(vec![i_idx.clone(), j_idx.clone()], vec![2, 2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i_idx.clone(), j_idx.clone()], storage);
 
     let (u, s, v) =
         svd_c64(&tensor, std::slice::from_ref(&i_idx)).expect("Complex SVD should succeed");
@@ -305,9 +299,11 @@ fn test_svd_complex_reconstruction() {
         _ => panic!("V should be dense complex"),
     };
 
-    let m = u.dims[0];
-    let n = v.dims[0];
-    let k = u.dims[1];
+    let u_dims = u.dims();
+    let v_dims = v.dims();
+    let m = u_dims[0];
+    let n = v_dims[0];
+    let k = u_dims[1];
 
     // A[i,j] = Σ_r U[i,r] * S[r] * conj(V[j,r]), where S[r] is real.
     let mut reconstructed = vec![Complex64::new(0.0, 0.0); m * n];
@@ -351,7 +347,7 @@ fn test_svd_truncation() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
     ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     // Use a more lenient rtol to ensure truncation happens
     let options = SvdOptions::with_rtol(1e-10);
@@ -368,9 +364,9 @@ fn test_svd_truncation() {
     // So rank 1 should be retained
 
     // Check that truncation occurred: bond dimension should be 1
-    assert_eq!(u.dims, vec![2, 1], "U should be truncated to rank 1");
-    assert_eq!(s.dims, vec![1, 1], "S should be truncated to rank 1");
-    assert_eq!(v.dims, vec![2, 1], "V should be truncated to rank 1");
+    assert_eq!(u.dims(), vec![2, 1], "U should be truncated to rank 1");
+    assert_eq!(s.dims(), vec![1, 1], "S should be truncated to rank 1");
+    assert_eq!(v.dims(), vec![2, 1], "V should be truncated to rank 1");
 
     // Check singular value
     match s.storage().as_ref() {
@@ -403,7 +399,7 @@ fn test_svd_with_override() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
     ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     // Save original default
     let original_rtol = default_svd_rtol();
@@ -420,15 +416,19 @@ fn test_svd_with_override() {
 
     // With rtol=1e-4, the ratio is (1e-6)^2 / (1^2 + (1e-6)^2) ≈ 1e-12 < (1e-4)^2 = 1e-8
     // So truncation should occur
-    assert_eq!(u1.dims[1], 1, "Lenient rtol should truncate to rank 1");
-    assert_eq!(s1.dims[0], 1, "Lenient rtol should truncate to rank 1");
+    let u1_dims = u1.dims();
+    let s1_dims = s1.dims();
+    assert_eq!(u1_dims[1], 1, "Lenient rtol should truncate to rank 1");
+    assert_eq!(s1_dims[0], 1, "Lenient rtol should truncate to rank 1");
 
     // With rtol=1e-12, the ratio is 1e-12 < (1e-12)^2 = 1e-24 (not satisfied)
     // Actually, let's recalculate: (1e-6)^2 / (1^2 + (1e-6)^2) ≈ 1e-12
     // For rtol=1e-12, we need 1e-12 <= (1e-12)^2 = 1e-24, which is false
     // So with rtol=1e-12, we should NOT truncate (keep rank 2)
-    assert_eq!(u2.dims[1], 2, "Strict rtol should keep full rank");
-    assert_eq!(s2.dims[0], 2, "Strict rtol should keep full rank");
+    let u2_dims = u2.dims();
+    let s2_dims = s2.dims();
+    assert_eq!(u2_dims[1], 2, "Strict rtol should keep full rank");
+    assert_eq!(s2_dims[0], 2, "Strict rtol should keep full rank");
 
     // Restore original default
     set_default_svd_rtol(original_rtol).expect("Should restore original rtol");
@@ -492,7 +492,7 @@ fn test_svd_uses_global_default() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
     ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     // Save original default
     let original_rtol = default_svd_rtol();
@@ -504,8 +504,10 @@ fn test_svd_uses_global_default() {
     let (u, s, _v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
     // With rtol=1e-6, identity matrix should keep full rank (both singular values are 1.0)
-    assert_eq!(u.dims[1], 2, "Identity matrix should keep full rank");
-    assert_eq!(s.dims[0], 2, "Identity matrix should keep full rank");
+    let u_dims = u.dims();
+    let s_dims = s.dims();
+    assert_eq!(u_dims[1], 2, "Identity matrix should keep full rank");
+    assert_eq!(s_dims[0], 2, "Identity matrix should keep full rank");
 
     // Restore original
     set_default_svd_rtol(original_rtol).expect("Should restore original rtol");

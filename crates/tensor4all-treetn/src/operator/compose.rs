@@ -925,14 +925,15 @@ mod tests {
         // N1 has 2 neighbors (N0 and N2), so 2 dummy links of dim 1 are added
         // Shape should be [3, 3, 1, 1] (site_in, site_out, dummy_link1, dummy_link2)
         // The order may vary, but total size should be 3*3*1*1 = 9
-        let total_size: usize = n1_tensor.dims.iter().product();
+        let n1_dims = n1_tensor.dims();
+        let total_size: usize = n1_dims.iter().product();
         assert_eq!(
             total_size, 9,
             "Total tensor size should be 9 (3x3 identity with dim-1 links)"
         );
 
         // Check that site dimensions 3 appear exactly twice
-        let dim3_count = n1_tensor.dims.iter().filter(|&&d| d == 3).count();
+        let dim3_count = n1_dims.iter().filter(|&&d| d == 3).count();
         assert_eq!(
             dim3_count, 2,
             "Should have exactly 2 site dimensions of size 3"

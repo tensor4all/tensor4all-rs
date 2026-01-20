@@ -75,14 +75,14 @@ fn test_permute_dyn_f64_2d() {
         &dims,
     ));
 
-    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, Arc::new(storage));
 
     // Permute to 3×2: swap dimensions
     // Expected: [[1, 4], [2, 5], [3, 6]]
     // In row-major: [1, 4, 2, 5, 3, 6]
     let permuted = tensor.permute(&[1, 0]);
 
-    assert_eq!(permuted.dims, vec![3, 2]);
+    assert_eq!(permuted.dims(), vec![3, 2]);
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
 
@@ -114,12 +114,12 @@ fn test_permute_dyn_c64_2d() {
         &dims,
     ));
 
-    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, Arc::new(storage));
 
     // Permute to 3×2
     let permuted = tensor.permute(&[1, 0]);
 
-    assert_eq!(permuted.dims, vec![3, 2]);
+    assert_eq!(permuted.dims(), vec![3, 2]);
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
 
@@ -149,12 +149,12 @@ fn test_permute_dyn_f64_3d() {
     let data: Vec<f64> = (1..=24).map(|i| i as f64).collect();
     let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data, &dims));
 
-    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, Arc::new(storage));
 
     // Permute to 4×2×3: [2, 0, 1]
     let permuted = tensor.permute(&[2, 0, 1]);
 
-    assert_eq!(permuted.dims, vec![4, 2, 3]);
+    assert_eq!(permuted.dims(), vec![4, 2, 3]);
     assert_eq!(permuted.indices[0].id, k.id);
     assert_eq!(permuted.indices[1].id, i.id);
     assert_eq!(permuted.indices[2].id, j.id);
@@ -186,12 +186,12 @@ fn test_permute_identity() {
         &dims,
     ));
 
-    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, Arc::new(storage));
 
     // Identity permutation should not change anything
     let permuted = tensor.permute(&[0, 1]);
 
-    assert_eq!(permuted.dims, vec![2, 3]);
+    assert_eq!(permuted.dims(), vec![2, 3]);
     assert_eq!(permuted.indices[0].id, i.id);
     assert_eq!(permuted.indices[1].id, j.id);
 
@@ -216,12 +216,12 @@ fn test_permute_indices_dyn_f64_2d() {
         &dims,
     ));
 
-    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, Arc::new(storage));
 
     // Permute to 3×2: swap the two dimensions by providing new indices order
     let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);
 
-    assert_eq!(permuted.dims, vec![3, 2]);
+    assert_eq!(permuted.dims(), vec![3, 2]);
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
 
@@ -253,12 +253,12 @@ fn test_permute_indices_c64() {
         &dims,
     ));
 
-    let tensor: TensorDynLen = TensorDynLen::new(indices, dims, Arc::new(storage));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, Arc::new(storage));
 
     // Permute to 3×2
     let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);
 
-    assert_eq!(permuted.dims, vec![3, 2]);
+    assert_eq!(permuted.dims(), vec![3, 2]);
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
 

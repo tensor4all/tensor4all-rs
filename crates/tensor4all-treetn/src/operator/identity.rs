@@ -151,7 +151,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(tensor.indices.len(), 2);
-        assert_eq!(tensor.dims, vec![2, 2]);
+        assert_eq!(tensor.dims(), vec![2, 2]);
 
         // Check diagonal elements are 1
         let data = get_f64_data(&tensor);
@@ -177,10 +177,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(tensor.indices.len(), 4);
-        assert_eq!(tensor.dims, vec![2, 2, 3, 3]);
+        assert_eq!(tensor.dims(), vec![2, 2, 3, 3]);
 
         let data = get_f64_data(&tensor);
-        let total_size: usize = tensor.dims.iter().product();
+        let dims = tensor.dims();
+        let total_size: usize = dims.iter().product();
         assert_eq!(data.len(), total_size);
 
         // Count non-zero elements: should be 2*3 = 6 (diagonal)
@@ -207,7 +208,7 @@ mod tests {
         let tensor = build_identity_operator_tensor(&[], &[]).unwrap();
 
         assert_eq!(tensor.indices.len(), 0);
-        assert_eq!(tensor.dims.len(), 0);
+        assert_eq!(tensor.dims().len(), 0);
 
         let data = get_f64_data(&tensor);
         assert_eq!(data.len(), 1);
@@ -244,7 +245,7 @@ mod tests {
             build_identity_operator_tensor_c64(&[s1_in, s2_in], &[s1_out, s2_out]).unwrap();
 
         // Shape should be [2, 2, 2, 2] = 16 elements
-        assert_eq!(tensor.dims, vec![2, 2, 2, 2]);
+        assert_eq!(tensor.dims(), vec![2, 2, 2, 2]);
         let data = get_c64_data(&tensor);
         assert_eq!(data.len(), 16);
 

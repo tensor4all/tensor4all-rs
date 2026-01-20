@@ -182,7 +182,7 @@ fn contract_treetn_to_vector(
         "  full_tensor.indices: {:?}",
         ext_indices.iter().map(|i| i.id()).collect::<Vec<_>>()
     );
-    eprintln!("  full_tensor.dims: {:?}", full_tensor.dims);
+    eprintln!("  full_tensor.dims: {:?}", full_tensor.dims());
     eprintln!(
         "  site_indices requested: {:?}",
         site_indices.iter().map(|i| i.id()).collect::<Vec<_>>()
@@ -211,7 +211,7 @@ fn contract_treetn_to_vector(
     let data = full_tensor
         .as_slice_c64()
         .expect("Expected DenseC64 storage");
-    let dims = &full_tensor.dims;
+    let dims = full_tensor.dims();
 
     eprintln!("  data len: {}", data.len());
 

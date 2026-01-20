@@ -113,14 +113,12 @@ impl<V: std::fmt::Debug> std::fmt::Display for LinsolveVerifyReport<V> {
 /// 3. Solve local linear system using GMRES
 /// 4. Factorize the result and update the state
 ///
-/// # Input/Output Space Support
+/// # Current Limitations
 ///
-/// For operators where input space V_in ≠ output space V_out:
-/// - Use `with_reference_state` constructor to specify a reference state in V_out
-/// - The reference state is used as the "bra" in environment computations
-/// - The current solution x (in V_in) is used as the "ket"
+/// **Only V_in = V_out is supported.** The operator must have the same input and output
+/// index spaces. Support for V_in ≠ V_out may be added in future versions.
 ///
-/// For V_in = V_out (default): The current solution x is used for both bra and ket.
+/// The current solution x is used for both bra and ket in environment computations.
 pub struct LinsolveUpdater<T, V>
 where
     T: TensorLike,
@@ -130,9 +128,6 @@ where
     pub projected_operator: Arc<RwLock<ProjectedOperator<T, V>>>,
     /// Projected state for RHS (2-chain)
     pub projected_state: ProjectedState<T, V>,
-    /// Reference state for bra in environment computation (V_out space)
-    /// If None, uses the current solution x (V_in = V_out case)
-    pub reference_state_out: Option<TreeTN<T, V>>,
     /// Solver options
     pub options: LinsolveOptions,
 }
@@ -145,33 +140,14 @@ where
         Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
-    /// Create a new LinsolveUpdater for V_in = V_out case.
+    /// Create a new LinsolveUpdater.
+    ///
+    /// **Note:** Only V_in = V_out is supported. The operator must have the same
+    /// input and output index spaces.
     pub fn new(operator: TreeTN<T, V>, rhs: TreeTN<T, V>, options: LinsolveOptions) -> Self {
         Self {
             projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
             projected_state: ProjectedState::new(rhs),
-            reference_state_out: None,
-            options,
-        }
-    }
-
-    /// Create a new LinsolveUpdater for V_in ≠ V_out case with explicit reference state.
-    ///
-    /// # Arguments
-    /// * `operator` - The operator A mapping V_in → V_out
-    /// * `rhs` - The RHS b in V_out
-    /// * `reference_state_out` - Reference state in V_out for bra in environment computation
-    /// * `options` - Solver options
-    pub fn with_reference_state(
-        operator: TreeTN<T, V>,
-        rhs: TreeTN<T, V>,
-        reference_state_out: TreeTN<T, V>,
-        options: LinsolveOptions,
-    ) -> Self {
-        Self {
-            projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
-            projected_state: ProjectedState::new(rhs),
-            reference_state_out: Some(reference_state_out),
             options,
         }
     }
@@ -181,19 +157,20 @@ where
     /// Use this when the MPO uses internal indices (s_in_tmp, s_out_tmp) that differ
     /// from the state's site indices. The mappings define how to translate between them.
     ///
+    /// **Note:** Only V_in = V_out is supported. The operator must have the same
+    /// input and output index spaces.
+    ///
     /// # Arguments
     /// * `operator` - The MPO with internal index IDs
     /// * `input_mapping` - Mapping from true input indices to MPO's internal indices
     /// * `output_mapping` - Mapping from true output indices to MPO's internal indices
     /// * `rhs` - The RHS b
-    /// * `reference_state_out` - Optional reference state for V_in ≠ V_out case
     /// * `options` - Solver options
     pub fn with_index_mappings(
         operator: TreeTN<T, V>,
         input_mapping: HashMap<V, IndexMapping<T::Index>>,
         output_mapping: HashMap<V, IndexMapping<T::Index>>,
         rhs: TreeTN<T, V>,
-        reference_state_out: Option<TreeTN<T, V>>,
         options: LinsolveOptions,
     ) -> Self {
         let projected_operator =
@@ -201,15 +178,8 @@ where
         Self {
             projected_operator: Arc::new(RwLock::new(projected_operator)),
             projected_state: ProjectedState::new(rhs),
-            reference_state_out,
             options,
         }
-    }
-
-    /// Get the bra state for environment computation.
-    /// Returns reference_state_out if set, otherwise returns the ket_state (V_in = V_out case).
-    pub fn get_bra_state<'a>(&'a self, ket_state: &'a TreeTN<T, V>) -> &'a TreeTN<T, V> {
-        self.reference_state_out.as_ref().unwrap_or(ket_state)
     }
 
     /// Verify internal data consistency between operator, RHS, and state.
@@ -482,16 +452,10 @@ where
         // Use state's SiteIndexNetwork directly (implements NetworkTopology)
         let topology = state.site_index_network();
 
-        // Get local RHS: <b|_local
-        // For V_in ≠ V_out case, use reference_state_out for bra in environment computation
-        let rhs_local_raw = match &self.reference_state_out {
-            Some(ref_out) => self
-                .projected_state
-                .local_constant_term_with_bra(region, state, ref_out, topology)?,
-            None => self
-                .projected_state
-                .local_constant_term(region, state, topology)?,
-        };
+        // Get local RHS: <b|_local (V_in = V_out case only)
+        let rhs_local_raw = self
+            .projected_state
+            .local_constant_term(region, state, topology)?;
 
         // Align RHS indices with init indices.
         // The RHS may have indices from the `rhs` TreeTN, while init has indices from
@@ -518,33 +482,18 @@ where
             ));
         };
 
-        // For V_in ≠ V_out case, we use reference_state_out as the bra state.
-        // For V_in = V_out case (reference_state_out is None), the state is used as both ket and bra.
-        let bra_state = self.reference_state_out.clone();
-
         // Convert coefficients to AnyScalar
         let a0 = AnyScalar::new_real(self.options.a0);
         let a1 = AnyScalar::new_real(self.options.a1);
 
-        // Create local linear operator
-        // ProjectedOperator handles both environment computation and index mappings
-        let linop = match bra_state {
-            Some(bra) => LocalLinOp::with_bra_state(
-                Arc::clone(&self.projected_operator),
-                region.to_vec(),
-                state.clone(),
-                bra,
-                a0,
-                a1,
-            ),
-            None => LocalLinOp::new(
-                Arc::clone(&self.projected_operator),
-                region.to_vec(),
-                state.clone(),
-                a0,
-                a1,
-            ),
-        };
+        // Create local linear operator (V_in = V_out: state is used as both ket and bra)
+        let linop = LocalLinOp::new(
+            Arc::clone(&self.projected_operator),
+            region.to_vec(),
+            state.clone(),
+            a0,
+            a1,
+        );
 
         // Create closure for GMRES that applies the linear operator
         let apply_a = |x: &T| linop.apply(x);
