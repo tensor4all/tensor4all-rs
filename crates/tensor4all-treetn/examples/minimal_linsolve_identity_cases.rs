@@ -116,16 +116,18 @@ fn create_random_mps_chain_with_sites(
 }
 
 /// Create an N-site identity MPO with internal indices (bond dim = 1).
+type IdentityMpoWithMappings = (
+    TreeTN<TensorDynLen, String>,
+    HashMap<String, IndexMapping<DynIndex>>,
+    HashMap<String, IndexMapping<DynIndex>>,
+);
+
 fn create_identity_mpo_chain_with_internal_indices(
     n: usize,
     phys_dim: usize,
     true_site_indices: &[DynIndex],
     used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<(
-    TreeTN<TensorDynLen, String>,
-    HashMap<String, IndexMapping<DynIndex>>,
-    HashMap<String, IndexMapping<DynIndex>>,
-)> {
+) -> anyhow::Result<IdentityMpoWithMappings> {
     anyhow::ensure!(true_site_indices.len() == n, "site index count mismatch");
 
     let mut mpo = TreeTN::<TensorDynLen, String>::new();
@@ -308,7 +310,7 @@ fn case_fail_identity_2site_sweep() -> anyhow::Result<()> {
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &root, nsite)
         .ok_or_else(|| anyhow::anyhow!("Failed to create 2-site sweep plan"))?;
     anyhow::ensure!(!plan.steps.is_empty(), "2-site plan unexpectedly empty");
-    let steps: Vec<_> = plan.steps.iter().cloned().take(max_steps).collect();
+    let steps: Vec<_> = plan.steps.iter().take(max_steps).cloned().collect();
     let subplan = LocalUpdateSweepPlan { steps, nsite };
 
     let mut updater =
