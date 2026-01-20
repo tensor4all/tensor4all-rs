@@ -1998,13 +1998,12 @@ fn create_n_site_mps(
     }
 
     // Connect adjacent sites
-    for i in 0..n_sites - 1 {
+    for (i, bond) in bond_indices.iter().enumerate() {
         let name_i = format!("site{}", i);
         let name_j = format!("site{}", i + 1);
         let ni = mps.node_index(&name_i).unwrap();
         let nj = mps.node_index(&name_j).unwrap();
-        mps.connect(ni, &bond_indices[i], nj, &bond_indices[i])
-            .unwrap();
+        mps.connect(ni, bond, nj, bond).unwrap();
     }
 
     (mps, site_indices, bond_indices)
@@ -2072,13 +2071,12 @@ fn create_n_site_mpo_with_internal_indices(
     }
 
     // Connect adjacent sites
-    for i in 0..n_sites - 1 {
+    for (i, bond) in bond_indices.iter().enumerate() {
         let name_i = format!("site{}", i);
         let name_j = format!("site{}", i + 1);
         let ni = mpo.node_index(&name_i).unwrap();
         let nj = mpo.node_index(&name_j).unwrap();
-        mpo.connect(ni, &bond_indices[i], nj, &bond_indices[i])
-            .unwrap();
+        mpo.connect(ni, bond, nj, bond).unwrap();
     }
 
     (mpo, s_in_tmp, s_out_tmp)
