@@ -63,7 +63,7 @@ fn test_tensor_like_contract_basic() {
         .expect("contract should succeed");
 
     // Result should be 2x4
-    assert_eq!(c.dims, vec![2, 4]);
+    assert_eq!(c.dims(), vec![2, 4]);
 }
 
 #[test]
@@ -111,8 +111,8 @@ fn test_contract_allowed_pairs_specified() {
 
     // Result should have: i (from A, dim=2), l (from C, dim=5)
     // j and k are contracted
-    assert_eq!(result.dims.len(), 2);
-    let mut sorted_dims = result.dims.clone();
+    let mut sorted_dims = result.dims();
+    assert_eq!(sorted_dims.len(), 2);
     sorted_dims.sort();
     assert_eq!(sorted_dims, vec![2, 5]);
 }
@@ -177,8 +177,8 @@ fn test_contract_specified_empty_outer_product() {
         <TensorDynLen as TensorLike>::contract(&[&a, &b], AllowedPairs::Specified(&[])).unwrap();
 
     // Result should have 4 indices (i, j, k, l)
-    assert_eq!(result.dims.len(), 4);
-    let mut sorted_dims = result.dims.clone();
+    let mut sorted_dims = result.dims();
+    assert_eq!(sorted_dims.len(), 4);
     sorted_dims.sort();
     assert_eq!(sorted_dims, vec![2, 3, 4, 5]);
 }
@@ -221,7 +221,7 @@ fn test_contract_specified_disconnected_outer_product() {
     // A(i) * B(i) contracts to scalar (dim 0)
     // C(j) * D(j) contracts to scalar (dim 0)
     // Outer product of two scalars is a scalar
-    assert_eq!(result.dims.len(), 0);
+    assert_eq!(result.dims().len(), 0);
 }
 
 // Note: trait object tests removed - TensorLike is now fully generic and does not support dyn

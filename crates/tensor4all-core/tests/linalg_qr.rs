@@ -18,13 +18,13 @@ fn test_qr_identity() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
     ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     let (q, r) = qr::<f64>(&tensor, std::slice::from_ref(&i)).expect("QR should succeed");
 
     // Check dimensions
-    assert_eq!(q.dims, vec![2, 2]);
-    assert_eq!(r.dims, vec![2, 2]);
+    assert_eq!(q.dims(), vec![2, 2]);
+    assert_eq!(r.dims(), vec![2, 2]);
 
     // Check indices
     assert_eq!(q.indices.len(), 2);
@@ -48,13 +48,13 @@ fn test_qr_simple_matrix() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 3]),
     ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     let (q, r) = qr::<f64>(&tensor, std::slice::from_ref(&i)).expect("QR should succeed");
 
     // Check dimensions: m=2, n=3, k=min(2,3)=2
-    assert_eq!(q.dims, vec![2, 2]);
-    assert_eq!(r.dims, vec![2, 3]);
+    assert_eq!(q.dims(), vec![2, 2]);
+    assert_eq!(r.dims(), vec![2, 3]);
 
     // Check indices
     assert_eq!(q.indices.len(), 2);
@@ -81,7 +81,7 @@ fn test_qr_reconstruction() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data.clone(), &[3, 4]),
     ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![3, 4], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     let (q, r) = qr::<f64>(&tensor, std::slice::from_ref(&i)).expect("QR should succeed");
 
@@ -97,9 +97,11 @@ fn test_qr_reconstruction() {
     };
 
     // Reconstruct: A[i,j] = sum_r Q[i,r] * R[r,j]
-    let m = q.dims[0];
-    let n = r.dims[1];
-    let k = q.dims[1];
+    let q_dims = q.dims();
+    let r_dims = r.dims();
+    let m = q_dims[0];
+    let n = r_dims[1];
+    let k = q_dims[1];
     let mut reconstructed_data = vec![0.0; m * n];
     for i in 0..m {
         for j in 0..n {
@@ -115,14 +117,11 @@ fn test_qr_reconstruction() {
     let reconstructed_storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(reconstructed_data, &[m, n]),
     ));
-    let reconstructed: TensorDynLen = TensorDynLen::new(
-        vec![i.clone(), j.clone()],
-        vec![m, n],
-        reconstructed_storage,
-    );
+    let reconstructed: TensorDynLen =
+        TensorDynLen::new(vec![i.clone(), j.clone()], reconstructed_storage);
 
     // Check dimensions match
-    assert_eq!(reconstructed.dims, vec![3, 4]);
+    assert_eq!(reconstructed.dims(), vec![3, 4]);
 
     // Extract reconstructed data
     let reconstructed_data_vec = match reconstructed.storage().as_ref() {
@@ -149,7 +148,7 @@ fn test_qr_invalid_rank() {
     let i = Index::new_dyn(2);
 
     let storage = Arc::new(Storage::new_dense_f64(2));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone()], vec![2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone()], storage);
 
     let result = qr::<f64>(&tensor, std::slice::from_ref(&i));
     assert!(result.is_err());
@@ -166,7 +165,7 @@ fn test_qr_invalid_split() {
     let j = Index::new_dyn(3);
 
     let storage = Arc::new(Storage::new_dense_f64(6));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], vec![2, 3], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
 
     // Empty left_inds should fail
     let result = qr::<f64>(&tensor, &[]);
@@ -192,11 +191,7 @@ fn test_qr_rank3() {
     let storage = Arc::new(Storage::DenseF64(
         tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 3, 4]),
     ));
-    let tensor: TensorDynLen = TensorDynLen::new(
-        vec![i.clone(), j.clone(), k.clone()],
-        vec![2, 3, 4],
-        storage,
-    );
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone(), k.clone()], storage);
 
     // Split: left = [i], right = [j, k]
     // This unfolds to a 2×12 matrix
@@ -205,8 +200,8 @@ fn test_qr_rank3() {
     // Check dimensions:
     // Q should be [i, bond] = [2, min(2, 12)] = [2, 2]
     // R should be [bond, j, k] = [2, 3, 4]
-    assert_eq!(q.dims, vec![2, 2]);
-    assert_eq!(r.dims, vec![2, 3, 4]);
+    assert_eq!(q.dims(), vec![2, 2]);
+    assert_eq!(r.dims(), vec![2, 3, 4]);
 
     // Check indices
     assert_eq!(q.indices.len(), 2);
@@ -243,8 +238,7 @@ fn test_qr_complex_reconstruction() {
     let storage = Arc::new(Storage::DenseC64(
         tensor4all_core::storage::DenseStorageC64::from_vec_with_shape(data.clone(), &[2, 2]),
     ));
-    let tensor: TensorDynLen =
-        TensorDynLen::new(vec![i_idx.clone(), j_idx.clone()], vec![2, 2], storage);
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i_idx.clone(), j_idx.clone()], storage);
 
     let (q, r) = qr_c64(&tensor, std::slice::from_ref(&i_idx)).expect("Complex QR should succeed");
 
@@ -257,9 +251,11 @@ fn test_qr_complex_reconstruction() {
         _ => panic!("R should be dense complex"),
     };
 
-    let m = q.dims[0];
-    let n = r.dims[1];
-    let k = q.dims[1];
+    let q_dims = q.dims();
+    let r_dims = r.dims();
+    let m = q_dims[0];
+    let n = r_dims[1];
+    let k = q_dims[1];
 
     // A[i,j] = Σ_r Q[i,r] * R[r,j] (no conjugation needed for QR)
     let mut reconstructed = vec![Complex64::new(0.0, 0.0); m * n];

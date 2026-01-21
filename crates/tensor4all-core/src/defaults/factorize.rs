@@ -191,7 +191,8 @@ where
     // Get bond index from Q tensor (last index)
     let bond_index = q.indices.last().unwrap().clone();
     // Rank is the last dimension of Q
-    let rank = *q.dims.last().unwrap();
+    let q_dims = q.dims();
+    let rank = *q_dims.last().unwrap();
 
     Ok(FactorizeResult {
         left: q,
@@ -348,11 +349,13 @@ fn extract_singular_values(s: &TensorDynLen) -> Vec<f64> {
         }
         Storage::DenseF64(dense) => {
             // Extract diagonal from dense matrix
-            let n = s.dims[0];
+            let s_dims = s.dims();
+            let n = s_dims[0];
             (0..n).map(|i| dense.get(i * n + i)).collect()
         }
         Storage::DenseC64(dense) => {
-            let n = s.dims[0];
+            let s_dims = s.dims();
+            let n = s_dims[0];
             (0..n).map(|i| dense.get(i * n + i).re).collect()
         }
     }
