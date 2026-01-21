@@ -24,11 +24,12 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use mdarray_einsum::{einsum_optimized, Naive, TypedTensor};
+use mdarray_einsum::{einsum_optimized, TypedTensor};
 use num_complex::Complex64;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
 use std::sync::Arc;
+use tensor4all_tensorbackend::backend::matmul_backend;
 use tensor4all_tensorbackend::mdarray::{Dense, DynRank, Slice, Tensor};
 
 use crate::defaults::{DynId, DynIndex, TensorComponent, TensorData, TensorDynLen};
@@ -463,7 +464,7 @@ fn contract_multi_impl(
             .zip(c64_tensors.iter())
             .map(|(ids, tensor)| (ids.as_slice(), tensor.as_ref()))
             .collect();
-        let result = einsum_optimized(&Naive, &inputs, &output, &sizes);
+        let result = einsum_optimized(&matmul_backend(), &inputs, &output, &sizes);
         TypedTensor::C64(result)
     } else {
         // All F64: use F64 einsum
@@ -476,7 +477,7 @@ fn contract_multi_impl(
             .zip(f64_tensors.iter())
             .map(|(ids, tensor)| (ids.as_slice(), tensor.as_ref()))
             .collect();
-        let result = einsum_optimized(&Naive, &inputs, &output, &sizes);
+        let result = einsum_optimized(&matmul_backend(), &inputs, &output, &sizes);
         TypedTensor::F64(result)
     };
 
