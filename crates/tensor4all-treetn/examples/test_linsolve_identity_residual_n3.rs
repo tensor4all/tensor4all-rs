@@ -1,9 +1,9 @@
-//! Test: linsolve identity residual (N=3, init=rhs).
+//! Test: linsolve identity residual (N=3, init=random).
 //!
 //! Fixed conditions:
 //! - N = 3
 //! - A = identity (diagonal MPO with all diag values = 1.0) with internal indices + index mappings
-//! - init = rhs (exact solution for A=I)
+//! - init = random (same physical indices, independent bonds)
 //! - coefficients: a0 = 0, a1 = 1, so the equation is A x = b
 //!
 //! This example runs 20 times 2-site sweep and prints the relative residual:
@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{DynIndex, IndexLike, TagSetLike, TensorDynLen, TensorIndex};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
@@ -94,12 +96,12 @@ fn dump_operator_mappings(
 }
 
 /// Create an N-site MPS chain with identity-like structure.
-/// Returns (mps, site_indices).
+/// Returns (mps, site_indices, bond_indices).
 fn create_n_site_mps(
     n_sites: usize,
     phys_dim: usize,
     bond_dim: usize,
-) -> (TreeTN<TensorDynLen, String>, Vec<DynIndex>) {
+) -> (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>) {
     assert!(n_sites >= 2, "Need at least 2 sites");
 
     let mut mps = TreeTN::<TensorDynLen, String>::new();
@@ -165,7 +167,109 @@ fn create_n_site_mps(
         mps.connect(ni, bond, nj, bond).unwrap();
     }
 
-    (mps, site_indices)
+    (mps, site_indices, bond_indices)
+}
+
+fn create_random_mps_with_same_sites(
+    n_sites: usize,
+    bond_dim: usize,
+    site_indices: &[DynIndex],
+    seed: u64,
+) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+    anyhow::ensure!(site_indices.len() == n_sites, "site index count mismatch");
+
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let bond_indices: Vec<DynIndex> = (0..n_sites - 1)
+        .map(|_| DynIndex::new_dyn(bond_dim))
+        .collect();
+
+    let mut mps = TreeTN::<TensorDynLen, String>::new();
+
+    for i in 0..n_sites {
+        let name = format!("site{i}");
+        let tensor = if i == 0 {
+            TensorDynLen::random_f64(
+                &mut rng,
+                vec![site_indices[i].clone(), bond_indices[i].clone()],
+            )
+        } else if i == n_sites - 1 {
+            TensorDynLen::random_f64(
+                &mut rng,
+                vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
+            )
+        } else {
+            TensorDynLen::random_f64(
+                &mut rng,
+                vec![
+                    bond_indices[i - 1].clone(),
+                    site_indices[i].clone(),
+                    bond_indices[i].clone(),
+                ],
+            )
+        };
+        mps.add_tensor(name, tensor).unwrap();
+    }
+
+    for (i, bond) in bond_indices.iter().enumerate() {
+        let name_i = format!("site{i}");
+        let name_j = format!("site{}", i + 1);
+        let ni = mps.node_index(&name_i).unwrap();
+        let nj = mps.node_index(&name_j).unwrap();
+        mps.connect(ni, bond, nj, bond).unwrap();
+    }
+
+    Ok(mps)
+}
+
+fn create_random_mps_with_same_sites_and_bonds(
+    n_sites: usize,
+    site_indices: &[DynIndex],
+    bond_indices: &[DynIndex],
+    seed: u64,
+) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
+    anyhow::ensure!(site_indices.len() == n_sites, "site index count mismatch");
+    anyhow::ensure!(
+        bond_indices.len() == n_sites.saturating_sub(1),
+        "bond index count mismatch"
+    );
+
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let mut mps = TreeTN::<TensorDynLen, String>::new();
+
+    for i in 0..n_sites {
+        let name = format!("site{i}");
+        let tensor = if i == 0 {
+            TensorDynLen::random_f64(
+                &mut rng,
+                vec![site_indices[i].clone(), bond_indices[i].clone()],
+            )
+        } else if i == n_sites - 1 {
+            TensorDynLen::random_f64(
+                &mut rng,
+                vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
+            )
+        } else {
+            TensorDynLen::random_f64(
+                &mut rng,
+                vec![
+                    bond_indices[i - 1].clone(),
+                    site_indices[i].clone(),
+                    bond_indices[i].clone(),
+                ],
+            )
+        };
+        mps.add_tensor(name, tensor).unwrap();
+    }
+
+    for (i, bond) in bond_indices.iter().enumerate() {
+        let name_i = format!("site{i}");
+        let name_j = format!("site{}", i + 1);
+        let ni = mps.node_index(&name_i).unwrap();
+        let nj = mps.node_index(&name_j).unwrap();
+        mps.connect(ni, bond, nj, bond).unwrap();
+    }
+
+    Ok(mps)
 }
 
 /// Create an N-site diagonal (identity) MPO with internal indices.
@@ -275,14 +379,15 @@ fn create_n_site_index_mappings(
     (input_mapping, output_mapping)
 }
 
-fn main() -> anyhow::Result<()> {
+fn run_linsolve_test(
+    init_mode: &str,
+    bond_dim: usize,
+) -> anyhow::Result<()> {
     let n_sites = 3usize;
     let phys_dim = 2usize;
-    // RHS bond dimension (non-trivial but still small)
-    let bond_dim = 1usize;
 
     // RHS
-    let (rhs, site_indices) = create_n_site_mps(n_sites, phys_dim, bond_dim);
+    let (rhs, site_indices, rhs_bond_indices) = create_n_site_mps(n_sites, phys_dim, bond_dim);
 
     // A = I (diagonal MPO with ones)
     let diag_values: Vec<f64> = vec![1.0; n_sites];
@@ -291,8 +396,18 @@ fn main() -> anyhow::Result<()> {
     let (input_mapping, output_mapping) =
         create_n_site_index_mappings(&site_indices, &s_in_tmp, &s_out_tmp);
 
-    // init = rhs (exact solution for A=I)
-    let init = rhs.clone();
+    // init selection
+    let init = match init_mode {
+        "rhs" => rhs.clone(),
+        "random" => create_random_mps_with_same_sites(n_sites, bond_dim, &site_indices, 0)?,
+        "random-same-links" => create_random_mps_with_same_sites_and_bonds(
+            n_sites,
+            &site_indices,
+            &rhs_bond_indices,
+            0,
+        )?,
+        other => anyhow::bail!("unknown init_mode {other:?} (expected rhs|random|random-same-links)"),
+    };
     let mut x = init.canonicalize(["site0".to_string()], CanonicalizationOptions::default())?;
 
     // linsolve: fixed coefficients a0=0, a1=1 (A x = b)
@@ -308,6 +423,37 @@ fn main() -> anyhow::Result<()> {
         output_mapping.clone(),
         rhs.clone(),
         options,
+    );
+
+    // Helper: compute relative residual ||A x - b|| / ||b|| in full space.
+    let compute_rel_residual = |x: &TreeTN<TensorDynLen, String>| -> anyhow::Result<f64> {
+        let linop = LinearOperator::new(mpo.clone(), input_mapping.clone(), output_mapping.clone());
+        let ax = apply_linear_operator(&linop, x, ApplyOptions::default())?;
+
+        let ax_full = ax.contract_to_tensor()?;
+        let b_full = rhs.contract_to_tensor()?;
+        let ax_vec = ax_full.to_vec_f64()?;
+        let b_vec = b_full.to_vec_f64()?;
+        anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
+
+        let mut r2 = 0.0_f64;
+        let mut b2 = 0.0_f64;
+        for (ax_i, b_i) in ax_vec.iter().zip(b_vec.iter()) {
+            let r_i = ax_i - b_i;
+            r2 += r_i * r_i;
+            b2 += b_i * b_i;
+        }
+        Ok(if b2 > 0.0 {
+            (r2 / b2).sqrt()
+        } else {
+            r2.sqrt()
+        })
+    };
+
+    // Print initial residual (before any sweeps).
+    println!(
+        "[init={init_mode}] initial ||r||_2 / ||b||_2 = {:.3e}",
+        compute_rel_residual(&x)?
     );
 
     // 20 times 2-site sweep
@@ -331,7 +477,7 @@ fn main() -> anyhow::Result<()> {
             };
             if let Err(e) = apply_local_update_sweep(&mut x, &one_step, &mut updater) {
                 eprintln!(
-                    "=== failure just before returning error ===\n  sweep={sweep}, step_idx={step_idx}, nodes={:?}, new_center={:?}",
+                    "=== failure just before returning error ===\n  init={init_mode}, sweep={sweep}, step_idx={step_idx}, nodes={:?}, new_center={:?}",
                     step.nodes, step.new_center
                 );
                 dump_treetn_indices("A (operator MPO)", &mpo);
@@ -340,7 +486,7 @@ fn main() -> anyhow::Result<()> {
                 dump_treetn_indices("b (rhs)", &rhs);
                 return Err(e).with_context(|| {
                     format!(
-                        "failed at sweep {sweep}, step {step_idx}: nodes={:?}, new_center={:?}",
+                        "init={init_mode}: failed at sweep {sweep}, step {step_idx}: nodes={:?}, new_center={:?}",
                         step.nodes, step.new_center
                     )
                 });
@@ -349,29 +495,45 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Residual r = A x - b (measured in full contracted space)
-    let linop = LinearOperator::new(mpo, input_mapping, output_mapping);
-    let ax = apply_linear_operator(&linop, &x, ApplyOptions::default())?;
+    println!(
+        "[init={init_mode}] N={n_sites}, a0=0, a1=1, final ||r||_2 / ||b||_2 = {:.3e}",
+        compute_rel_residual(&x)?
+    );
 
-    let ax_full = ax.contract_to_tensor()?;
-    let b_full = rhs.contract_to_tensor()?;
-    let ax_vec = ax_full.to_vec_f64()?;
-    let b_vec = b_full.to_vec_f64()?;
-    anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
+    Ok(())
+}
 
-    let mut r2 = 0.0_f64;
-    let mut b2 = 0.0_f64;
-    for (ax_i, b_i) in ax_vec.iter().zip(b_vec.iter()) {
-        let r_i = ax_i - b_i;
-        r2 += r_i * r_i;
-        b2 += b_i * b_i;
+fn main() -> anyhow::Result<()> {
+    // Simple CLI:
+    //   --bond-dim <usize>   (default: 1)
+    //
+    // Example:
+    //   cargo run -p tensor4all-treetn --example test_linsolve_identity_residual_n3 --release -- --bond-dim 4
+    let mut bond_dim: usize = 1;
+    {
+        let mut args = std::env::args().skip(1);
+        while let Some(a) = args.next() {
+            match a.as_str() {
+                "--bond-dim" => {
+                    let v = args
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("--bond-dim requires a value"))?;
+                    bond_dim = v
+                        .parse::<usize>()
+                        .map_err(|e| anyhow::anyhow!("invalid --bond-dim {v:?}: {e}"))?;
+                }
+                _ => {}
+            }
+        }
     }
-    let rel_r2 = if b2 > 0.0 {
-        (r2 / b2).sqrt()
-    } else {
-        r2.sqrt()
-    };
-    println!("N={n_sites}, a0=0, a1=1");
-    println!("||r||_2 / ||b||_2 = {:.3e}", rel_r2);
+
+    anyhow::ensure!(bond_dim >= 1, "bond_dim must be >= 1");
+
+    println!("=== Testing linsolve with init=rhs ===");
+    run_linsolve_test("rhs", bond_dim)?;
+
+    println!("\n=== Testing linsolve with init=random ===");
+    run_linsolve_test("random", bond_dim)?;
 
     Ok(())
 }
