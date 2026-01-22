@@ -72,8 +72,9 @@ pub fn einsum_storage(inputs: &[EinsumInput<'_>], output_ids: &[usize]) -> Resul
 
 /// Perform einsum using mdarray-einsum backend.
 fn einsum_mdarray(inputs: &[EinsumInput<'_>], output_ids: &[usize]) -> Result<Storage> {
+    use crate::backend::matmul_backend;
     use mdarray::{Dense, DynRank, Slice, Tensor};
-    use mdarray_einsum::{einsum_optimized, Naive, TypedTensor};
+    use mdarray_einsum::{einsum_optimized, TypedTensor};
 
     // Determine if we need complex output
     let has_complex = inputs
@@ -145,7 +146,7 @@ fn einsum_mdarray(inputs: &[EinsumInput<'_>], output_ids: &[usize]) -> Result<St
             .zip(c64_tensors.iter())
             .map(|(ids, tensor)| (ids.as_slice(), tensor.as_ref()))
             .collect();
-        let result = einsum_optimized(&Naive, &einsum_inputs, output_ids, &sizes);
+        let result = einsum_optimized(&matmul_backend(), &einsum_inputs, output_ids, &sizes);
         TypedTensor::C64(result)
     } else {
         // All F64
@@ -158,7 +159,7 @@ fn einsum_mdarray(inputs: &[EinsumInput<'_>], output_ids: &[usize]) -> Result<St
             .zip(f64_tensors.iter())
             .map(|(ids, tensor)| (ids.as_slice(), tensor.as_ref()))
             .collect();
-        let result = einsum_optimized(&Naive, &einsum_inputs, output_ids, &sizes);
+        let result = einsum_optimized(&matmul_backend(), &einsum_inputs, output_ids, &sizes);
         TypedTensor::F64(result)
     };
 

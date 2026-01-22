@@ -1,6 +1,6 @@
 //! Backend dispatch helpers for linear algebra operations.
 //!
-//! This module provides centralized backend selection for SVD and QR operations,
+//! This module provides centralized backend selection for SVD, QR, and MatMul operations,
 //! reducing code duplication between decomposition implementations.
 //!
 //! All mdarray-linalg types are wrapped to avoid exposing upstream API changes
@@ -16,6 +16,9 @@ use mdarray_linalg_faer::Faer;
 
 #[cfg(feature = "backend-lapack")]
 use mdarray_linalg_lapack::Lapack;
+
+// Re-export MatMul trait for einsum backend
+pub use mdarray_linalg::matmul::MatMul;
 
 /// Result of SVD decomposition.
 ///
@@ -184,3 +187,27 @@ pub use faer_impl::{qr_backend, svd_backend};
 
 #[cfg(not(any(feature = "backend-faer", feature = "backend-lapack")))]
 compile_error!("At least one backend feature must be enabled (backend-faer or backend-lapack)");
+
+// ============================================================================
+// MatMul Backend for einsum operations
+// ============================================================================
+
+/// Returns the MatMul backend for einsum operations.
+///
+/// This function returns the appropriate backend based on enabled features:
+/// - `backend-faer` (default): Returns `Faer` backend
+/// - `backend-lapack`: Returns `Faer` backend (LAPACK doesn't provide MatMul)
+///
+/// Note: LAPACK provides SVD/QR but not general matrix multiplication traits.
+/// For MatMul, we always use Faer when backend-faer is enabled.
+#[cfg(feature = "backend-faer")]
+pub fn matmul_backend() -> Faer {
+    Faer
+}
+
+/// Fallback: use Naive backend when faer is not available.
+/// This should rarely happen as backend-faer is the default.
+#[cfg(not(feature = "backend-faer"))]
+pub fn matmul_backend() -> mdarray_linalg::Naive {
+    mdarray_linalg::Naive
+}
