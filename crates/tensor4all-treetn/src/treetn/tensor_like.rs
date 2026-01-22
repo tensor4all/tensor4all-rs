@@ -72,6 +72,15 @@ where
     /// Note: `replace_tensor` automatically updates the `site_index_network` based on
     /// the new tensor's indices, so we don't need to manually call `replace_site_index`.
     fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self> {
+        // Validate dimension match
+        if old_index.dim() != new_index.dim() {
+            return Err(anyhow::anyhow!(
+                "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
+                old_index.dim(),
+                new_index.dim()
+            ));
+        }
+
         let mut result = self.clone();
 
         // Check if it's a site index

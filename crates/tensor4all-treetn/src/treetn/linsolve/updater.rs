@@ -471,8 +471,8 @@ where
             if indices_match {
                 rhs_local_raw
             } else {
-                // Replace RHS indices with init indices
-                rhs_local_raw.replaceinds(&rhs_indices, &init_indices)?
+                // Permute RHS indices to init index order
+                rhs_local_raw.permuteinds(&init_indices)?
             }
         } else {
             return Err(anyhow::anyhow!(

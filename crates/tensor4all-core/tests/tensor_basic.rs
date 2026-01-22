@@ -301,6 +301,207 @@ fn test_replaceinds_length_mismatch() {
     let _replaced = tensor.replaceinds(std::slice::from_ref(&i), &[new_i, new_j]);
 }
 
+#[test]
+#[should_panic(expected = "Index space mismatch")]
+fn test_replaceind_dimension_mismatch() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let wrong_size = Index::new_dyn(5); // Different dimension
+
+    let indices = vec![i.clone(), j.clone()];
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage = Arc::new(make_dense_f64(data, &[2, 3]));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+
+    // Should panic - dimension mismatch
+    let _replaced = tensor.replaceind(&i, &wrong_size);
+}
+
+#[test]
+#[should_panic(expected = "Index space mismatch")]
+fn test_replaceinds_dimension_mismatch() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let new_i = Index::new_dyn(2);
+    let wrong_size = Index::new_dyn(5); // Different dimension
+
+    let indices = vec![i.clone(), j.clone()];
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage = Arc::new(make_dense_f64(data, &[2, 3]));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+
+    // Should panic - dimension mismatch
+    let _replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i, wrong_size]);
+}
+
+#[test]
+fn test_replaceinds_does_not_reorder_data() {
+    // Test that replaceinds changes index IDs but does NOT reorder storage data.
+    // This is the key difference from permuteinds.
+    //
+    // Create a 2×3 tensor with data [1, 2, 3, 4, 5, 6]
+    // In row-major order: [[1, 2, 3], [4, 5, 6]]
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let indices = vec![i.clone(), j.clone()];
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage = Arc::new(make_dense_f64(data.clone(), &[2, 3]));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+
+    // Create new indices with same dimensions but different IDs
+    let new_i = Index::new_dyn(2);
+    let new_j = Index::new_dyn(3);
+
+    // Use replaceinds to change index IDs (but keep same order)
+    let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()]);
+
+    // Check indices were replaced
+    assert_eq!(replaced.indices[0].id, new_i.id);
+    assert_eq!(replaced.indices[1].id, new_j.id);
+    assert_eq!(replaced.dims(), vec![2, 3]);
+
+    // CRITICAL: replaceinds does NOT reorder data
+    // The storage data should remain unchanged
+    match replaced.storage().as_ref() {
+        Storage::DenseF64(v) => {
+            assert_eq!(v.as_slice(), &data, "replaceinds should not reorder data");
+        }
+        _ => panic!("expected DenseF64"),
+    }
+}
+
+#[test]
+fn test_replaceinds_with_different_order_does_not_reorder_data() {
+    // Test that replaceinds with indices in different order still does NOT reorder data.
+    // This demonstrates the bug: if you need to reorder indices, use permuteinds instead.
+    //
+    // Create a 2×3 tensor: [[1, 2, 3], [4, 5, 6]]
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let indices = vec![i.clone(), j.clone()];
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage = Arc::new(make_dense_f64(data.clone(), &[2, 3]));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+
+    // Create new indices with same dimensions
+    let new_i = Index::new_dyn(2);
+    let new_j = Index::new_dyn(3);
+
+    // Use replaceinds with indices in different order
+    // This changes the index order in the result, but does NOT reorder the data
+    // NOTE: replaceinds requires matching dimensions, so we can't directly swap i and j
+    // This test demonstrates that replaceinds doesn't reorder data even when used correctly
+    // For actual index reordering, use permuteinds instead
+    let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()]);
+
+    // Check indices were replaced (order unchanged, just IDs changed)
+    assert_eq!(replaced.indices[0].id, new_i.id);
+    assert_eq!(replaced.indices[1].id, new_j.id);
+    // Dimensions remain the same: [2, 3]
+    assert_eq!(replaced.dims(), vec![2, 3]);
+
+    // CRITICAL: replaceinds does NOT reorder data
+    // The storage data remains unchanged
+    match replaced.storage().as_ref() {
+        Storage::DenseF64(v) => {
+            // Data is unchanged
+            assert_eq!(v.as_slice(), &data, "replaceinds should not reorder data");
+        }
+        _ => panic!("expected DenseF64"),
+    }
+}
+
+#[test]
+fn test_permuteinds_reorders_data() {
+    // Test that permuteinds changes index order AND reorders storage data.
+    // This is the correct way to reorder indices.
+    //
+    // Create a 2×3 tensor: [[1, 2, 3], [4, 5, 6]]
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let indices = vec![i.clone(), j.clone()];
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage = Arc::new(make_dense_f64(data, &[2, 3]));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+
+    // Use permuteinds to swap indices: [j, i] instead of [i, j]
+    // This should reorder both indices AND data
+    let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);
+
+    // Check indices were permuted
+    assert_eq!(permuted.indices[0].id, j.id);
+    assert_eq!(permuted.indices[1].id, i.id);
+    assert_eq!(permuted.dims(), vec![3, 2]);
+
+    // CRITICAL: permuteinds DOES reorder data
+    // The data should be reordered to match the new index order
+    // Original: [[1, 2, 3], [4, 5, 6]] (shape [2, 3])
+    // Permuted: [[1, 4], [2, 5], [3, 6]] (shape [3, 2])
+    // In row-major: [1, 4, 2, 5, 3, 6]
+    match permuted.storage().as_ref() {
+        Storage::DenseF64(v) => {
+            assert_eq!(
+                v.as_slice(),
+                &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
+                "permuteinds should reorder data to match new index order"
+            );
+        }
+        _ => panic!("expected DenseF64"),
+    }
+}
+
+#[test]
+fn test_replaceinds_vs_permuteinds_comparison() {
+    // Direct comparison: replaceinds vs permuteinds when index order changes.
+    // This test demonstrates why permuteinds should be used when reordering indices.
+    //
+    // Create a 2×3 tensor: [[1, 2, 3], [4, 5, 6]]
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let indices = vec![i.clone(), j.clone()];
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage = Arc::new(make_dense_f64(data, &[2, 3]));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+
+    // Create new indices with same dimensions
+    let new_i = Index::new_dyn(2);
+    let new_j = Index::new_dyn(3);
+
+    // Method 1: replaceinds (only changes IDs, not order)
+    // This changes index IDs but NOT data order
+    // Note: replaceinds requires matching dimensions, so we can't swap i and j directly
+    // This test demonstrates that replaceinds doesn't reorder data
+    // In practice, you should use permuteinds when you need to change index order
+    let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()]);
+    assert_eq!(replaced.dims(), vec![2, 3]);
+    let replaced_data = match replaced.storage().as_ref() {
+        Storage::DenseF64(v) => v.as_slice().to_vec(),
+        _ => panic!("expected DenseF64"),
+    };
+
+    // Method 2: permuteinds (CORRECT when order changes)
+    // This changes both index order AND data order
+    let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);
+    assert_eq!(permuted.dims(), vec![3, 2]);
+    let permuted_data = match permuted.storage().as_ref() {
+        Storage::DenseF64(v) => v.as_slice().to_vec(),
+        _ => panic!("expected DenseF64"),
+    };
+
+    // The data should be DIFFERENT because permuteinds reorders data
+    // replaced: [1, 2, 3, 4, 5, 6] (unchanged, same shape [2, 3])
+    // permuted: [1, 4, 2, 5, 3, 6] (reordered, shape [3, 2])
+    assert_ne!(
+        replaced_data, permuted_data,
+        "replaceinds and permuteinds should produce different data: replaceinds doesn't reorder, permuteinds does"
+    );
+    assert_eq!(
+        permuted_data,
+        vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
+        "permuteinds should correctly reorder data"
+    );
+}
+
 // ============================================================================
 // Complex Conjugation Tests
 // ============================================================================
