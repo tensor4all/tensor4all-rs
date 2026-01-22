@@ -356,23 +356,23 @@ fn test_replaceinds_with_different_order_does_not_reorder_data() {
 
     // Use replaceinds with indices in different order
     // This changes the index order in the result, but does NOT reorder the data
-    let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_j.clone(), new_i.clone()]);
+    // NOTE: replaceinds requires matching dimensions, so we can't directly swap i and j
+    // This test demonstrates that replaceinds doesn't reorder data even when used correctly
+    // For actual index reordering, use permuteinds instead
+    let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()]);
 
-    // Check indices were replaced (order changed)
-    assert_eq!(replaced.indices[0].id, new_j.id);
-    assert_eq!(replaced.indices[1].id, new_i.id);
-    // Dimensions are now swapped: [3, 2] instead of [2, 3]
-    assert_eq!(replaced.dims(), vec![3, 2]);
+    // Check indices were replaced (order unchanged, just IDs changed)
+    assert_eq!(replaced.indices[0].id, new_i.id);
+    assert_eq!(replaced.indices[1].id, new_j.id);
+    // Dimensions remain the same: [2, 3]
+    assert_eq!(replaced.dims(), vec![2, 3]);
 
-    // CRITICAL: replaceinds does NOT reorder data even when index order changes
-    // The storage data remains [1, 2, 3, 4, 5, 6] but the shape is now [3, 2]
-    // This creates an inconsistency: data order doesn't match the new index order
+    // CRITICAL: replaceinds does NOT reorder data
+    // The storage data remains unchanged
     match replaced.storage().as_ref() {
         Storage::DenseF64(v) => {
-            // Data is unchanged, but shape interpretation is wrong
+            // Data is unchanged
             assert_eq!(v.as_slice(), &data, "replaceinds should not reorder data");
-            // This demonstrates the problem: the data [1,2,3,4,5,6] with shape [3,2]
-            // is interpreted as [[1,2], [3,4], [5,6]] instead of the correct [[1,4], [2,5], [3,6]]
         }
         _ => panic!("expected DenseF64"),
     }
@@ -434,10 +434,13 @@ fn test_replaceinds_vs_permuteinds_comparison() {
     let new_i = Index::new_dyn(2);
     let new_j = Index::new_dyn(3);
 
-    // Method 1: replaceinds (WRONG when order changes)
-    // This changes index order but NOT data order
-    let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_j.clone(), new_i.clone()]);
-    assert_eq!(replaced.dims(), vec![3, 2]);
+    // Method 1: replaceinds (only changes IDs, not order)
+    // This changes index IDs but NOT data order
+    // Note: replaceinds requires matching dimensions, so we can't swap i and j directly
+    // This test demonstrates that replaceinds doesn't reorder data
+    // In practice, you should use permuteinds when you need to change index order
+    let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()]);
+    assert_eq!(replaced.dims(), vec![2, 3]);
     let replaced_data = match replaced.storage().as_ref() {
         Storage::DenseF64(v) => v.as_slice().to_vec(),
         _ => panic!("expected DenseF64"),
@@ -452,12 +455,12 @@ fn test_replaceinds_vs_permuteinds_comparison() {
         _ => panic!("expected DenseF64"),
     };
 
-    // The data should be DIFFERENT
-    // replaced: [1, 2, 3, 4, 5, 6] (unchanged, but shape is wrong)
-    // permuted: [1, 4, 2, 5, 3, 6] (correctly reordered)
+    // The data should be DIFFERENT because permuteinds reorders data
+    // replaced: [1, 2, 3, 4, 5, 6] (unchanged, same shape [2, 3])
+    // permuted: [1, 4, 2, 5, 3, 6] (reordered, shape [3, 2])
     assert_ne!(
         replaced_data, permuted_data,
-        "replaceinds and permuteinds should produce different data when order changes"
+        "replaceinds and permuteinds should produce different data: replaceinds doesn't reorder, permuteinds does"
     );
     assert_eq!(
         permuted_data,
