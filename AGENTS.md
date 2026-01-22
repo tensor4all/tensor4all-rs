@@ -11,6 +11,7 @@ Read `README.md` before starting work.
 - Use same language as past conversations (Japanese if previous was Japanese)
 - Source code and docs in English
 - Each crate in `crates/` is independent with own `Cargo.toml`, `src/`, `tests/`
+- **Bug fixing**: When a bug is discovered, always check related files for similar bugs and propose to the user to inspect them
 
 ### API Reference (Check First)
 

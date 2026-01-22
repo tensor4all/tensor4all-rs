@@ -915,6 +915,15 @@ impl TensorDynLen {
     /// assert_eq!(replaced.indices[1].id, j.id);
     /// ```
     pub fn replaceind(&self, old_index: &DynIndex, new_index: &DynIndex) -> Self {
+        // Validate dimension match
+        if old_index.dim() != new_index.dim() {
+            panic!(
+                "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
+                old_index.dim(),
+                new_index.dim()
+            );
+        }
+
         let new_indices: Vec<_> = self
             .indices
             .iter()
@@ -979,6 +988,17 @@ impl TensorDynLen {
             new_indices.len(),
             "old_indices and new_indices must have the same length"
         );
+
+        // Validate dimension matches for all replacements
+        for (old, new) in old_indices.iter().zip(new_indices.iter()) {
+            if old.dim() != new.dim() {
+                panic!(
+                    "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
+                    old.dim(),
+                    new.dim()
+                );
+            }
+        }
 
         // Build a map from old indices to new indices
         let replacement_map: std::collections::HashMap<_, _> =

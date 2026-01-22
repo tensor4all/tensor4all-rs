@@ -320,6 +320,15 @@ where
     ///
     /// This updates the mapping but does NOT modify the internal MPO tensors.
     fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self> {
+        // Validate dimension match
+        if old_index.dim() != new_index.dim() {
+            return Err(anyhow::anyhow!(
+                "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
+                old_index.dim(),
+                new_index.dim()
+            ));
+        }
+
         let mut result = self.clone();
 
         // Check input mappings
