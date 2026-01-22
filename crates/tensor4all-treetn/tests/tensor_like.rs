@@ -333,6 +333,33 @@ fn test_treetn_replaceind_not_found() {
 }
 
 #[test]
+fn test_treetn_replaceind_dimension_mismatch() {
+    // Test that replaceind fails when dimensions don't match
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+
+    let tensor = make_tensor(vec![i.clone(), j.clone()]);
+    let tn =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![tensor], vec!["A".to_string()]).unwrap();
+
+    // Try to replace with index of different dimension
+    let wrong_size = DynIndex::new_dyn(5);
+
+    let result = tn.replaceind(&i, &wrong_size);
+    assert!(
+        result.is_err(),
+        "replaceind should fail for dimension mismatch"
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Index space mismatch"),
+        "Error should mention dimension mismatch"
+    );
+}
+
+#[test]
 fn test_treetn_replaceinds_multiple() {
     // Test replacing multiple indices at once
     let i = DynIndex::new_dyn(2);

@@ -1202,6 +1202,53 @@ fn test_linear_operator_apply_local_two_sites() {
     }
 }
 
+#[test]
+fn test_linear_operator_replaceind_dimension_mismatch() {
+    // Test that LinearOperator::replaceind fails when dimensions don't match
+    let phys_dim = 2;
+    let (_mps, site_indices, _bonds) = create_two_site_mps();
+
+    // Create diagonal MPO with values [2.0, 3.0]
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[2.0, 3.0], phys_dim);
+
+    // Create index mappings
+    let mut input_mapping = std::collections::HashMap::new();
+    let mut output_mapping = std::collections::HashMap::new();
+
+    input_mapping.insert(
+        "site0",
+        IndexMapping {
+            true_index: site_indices[0].clone(),
+            internal_index: s_in_tmp[0].clone(),
+        },
+    );
+    output_mapping.insert(
+        "site0",
+        IndexMapping {
+            true_index: site_indices[0].clone(),
+            internal_index: s_out_tmp[0].clone(),
+        },
+    );
+
+    let linear_op = LinearOperator::new(mpo, input_mapping, output_mapping);
+
+    // Try to replace with index of different dimension
+    let wrong_size = DynIndex::new_dyn(5);
+
+    let result = linear_op.replaceind(&site_indices[0], &wrong_size);
+    assert!(
+        result.is_err(),
+        "replaceind should fail for dimension mismatch"
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Index space mismatch"),
+        "Error should mention dimension mismatch"
+    );
+}
+
 /// Helper to create index mappings from MPO and state site indices.
 /// Returns (mpo, input_mapping, output_mapping)
 #[allow(clippy::type_complexity)]

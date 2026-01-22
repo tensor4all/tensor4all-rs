@@ -302,6 +302,39 @@ fn test_replaceinds_length_mismatch() {
 }
 
 #[test]
+#[should_panic(expected = "Index space mismatch")]
+fn test_replaceind_dimension_mismatch() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let wrong_size = Index::new_dyn(5); // Different dimension
+
+    let indices = vec![i.clone(), j.clone()];
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage = Arc::new(make_dense_f64(data, &[2, 3]));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+
+    // Should panic - dimension mismatch
+    let _replaced = tensor.replaceind(&i, &wrong_size);
+}
+
+#[test]
+#[should_panic(expected = "Index space mismatch")]
+fn test_replaceinds_dimension_mismatch() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let new_i = Index::new_dyn(2);
+    let wrong_size = Index::new_dyn(5); // Different dimension
+
+    let indices = vec![i.clone(), j.clone()];
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let storage = Arc::new(make_dense_f64(data, &[2, 3]));
+    let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+
+    // Should panic - dimension mismatch
+    let _replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i, wrong_size]);
+}
+
+#[test]
 fn test_replaceinds_does_not_reorder_data() {
     // Test that replaceinds changes index IDs but does NOT reorder storage data.
     // This is the key difference from permuteinds.
