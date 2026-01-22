@@ -400,16 +400,14 @@ where
                 // Check if there's an edge between these nodes
                 if let Some(decomp_edge) = decomposed.edge_between(node_a, node_b) {
                     if let Some(decomp_bond) = decomposed.bond_index(decomp_edge) {
-                        // Create a new bond index with original ID structure
-                        // Use sim() once for this edge
+                        // Create a new bond index matching decomposed bond dimension.
+                        // Use sim() once for this edge to avoid ID collisions.
                         if let Some(orig_edge) = subtree.edge_between(node_a, node_b) {
-                            if let Some(orig_bond) = subtree.bond_index(orig_edge) {
-                                let new_bond = orig_bond.sim();
-                                bond_mapping.insert(decomp_bond.id().clone(), new_bond.clone());
+                            let new_bond = decomp_bond.sim();
+                            bond_mapping.insert(decomp_bond.id().clone(), new_bond.clone());
 
-                                // Update the edge bond in subtree
-                                subtree.replace_edge_bond(orig_edge, new_bond)?;
-                            }
+                            // Update the edge bond in subtree
+                            subtree.replace_edge_bond(orig_edge, new_bond)?;
                         }
                     }
                 }
