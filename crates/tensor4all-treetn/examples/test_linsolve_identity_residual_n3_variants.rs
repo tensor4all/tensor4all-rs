@@ -248,6 +248,24 @@ fn create_n_site_mpo_with_internal_indices(
     (mpo, s_in_tmp, s_out_tmp)
 }
 
+/// Print bond dimensions of a TreeTN MPS.
+fn print_bond_dims(mps: &TreeTN<TensorDynLen, String>, label: &str) {
+    let edges: Vec<_> = mps.site_index_network().edges().collect();
+    if edges.is_empty() {
+        println!("{label}: no bonds");
+        return;
+    }
+    let mut dims = Vec::new();
+    for (node_a, node_b) in edges {
+        if let Some(edge) = mps.edge_between(&node_a, &node_b) {
+            if let Some(bond) = mps.bond_index(edge) {
+                dims.push(bond.dim);
+            }
+        }
+    }
+    println!("{label}: bond_dims = {:?}", dims);
+}
+
 /// Create N-site index mappings from MPO and state site indices.
 /// Returns (input_mapping, output_mapping).
 fn create_n_site_index_mappings(
@@ -292,6 +310,12 @@ fn run_test_case(a0: f64, a1: f64, init_mode: &str, bond_dim: usize) -> anyhow::
 
     // RHS
     let (rhs, site_indices, _rhs_bond_indices) = create_n_site_mps(n_sites, phys_dim, bond_dim);
+    print_bond_dims(&rhs, &format!("b (RHS) bond dimensions (requested bond_dim={bond_dim})"));
+    
+    // Print the actual vector representation of b
+    let b_full = rhs.contract_to_tensor()?;
+    let b_vec = b_full.to_vec_f64()?;
+    println!("b (RHS) vector: {:?}", b_vec);
 
     // A = I (diagonal MPO with ones)
     let diag_values: Vec<f64> = vec![1.0; n_sites];
