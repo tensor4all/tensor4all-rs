@@ -2,6 +2,7 @@ pub mod algorithm;
 // dyn_treetn.rs has been removed.
 // TreeTN uses the `T: TensorLike` pattern, making a separate dyn wrapper unnecessary.
 pub mod link_index_network;
+pub mod linsolve;
 pub mod named_graph;
 pub mod node_name_network;
 pub mod operator;
@@ -17,8 +18,9 @@ pub use link_index_network::LinkIndexNetwork;
 pub use named_graph::NamedGraph;
 pub use node_name_network::{CanonicalizeEdges, NodeNameNetwork};
 pub use operator::{
-    are_exclusive_operators, build_identity_operator_tensor, build_identity_operator_tensor_c64,
-    compose_exclusive_linear_operators, compose_exclusive_operators, Operator,
+    apply_linear_operator, are_exclusive_operators, build_identity_operator_tensor,
+    build_identity_operator_tensor_c64, compose_exclusive_linear_operators, ApplyOptions,
+    ArcLinearOperator, IndexMapping, LinearOperator, Operator,
 };
 pub use options::{CanonicalizationOptions, SplitOptions, TruncationOptions};
 pub use random::{random_treetn_c64, random_treetn_f64, LinkSpace};
@@ -29,6 +31,8 @@ pub use treetn::{
     // Decomposition
     factorize_tensor_to_treetn,
     factorize_tensor_to_treetn_with,
+    get_boundary_edges,
+    BoundaryEdge,
     LocalUpdateStep,
     LocalUpdateSweepPlan,
     LocalUpdater,
@@ -38,11 +42,11 @@ pub use treetn::{
     TruncateUpdater,
 };
 
-// Re-export linsolve types
-pub use treetn::linsolve::{
-    apply_linear_operator, linsolve, ApplyOptions, ArcLinearOperator, EnvironmentCache,
-    IndexMapping, LinearOperator, LinsolveOptions, LinsolveResult, LinsolveUpdater,
-    LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator, ProjectedState,
+// Re-export linsolve types from new location
+pub use linsolve::{
+    square_linsolve, EnvironmentCache, LinsolveOptions, LinsolveVerifyReport, NetworkTopology,
+    NodeVerifyDetail, ProjectedOperator, ProjectedState, SquareLinsolveResult,
+    SquareLinsolveUpdater,
 };
 
 use petgraph::graph::NodeIndex;

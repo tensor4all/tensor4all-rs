@@ -1,7 +1,8 @@
-//! Linear equation solver for Tree Tensor Networks.
+//! Linear equation solver for Tree Tensor Networks (V_in = V_out case).
 //!
-//! This module provides the `linsolve` function for solving linear systems
-//! of the form `(a₀ + a₁ * A) * x = b` where A is a TTN operator and x, b are TTN states.
+//! This module provides the `square_linsolve` function for solving linear systems
+//! of the form `(a₀ + a₁ * A) * x = b` where A is a TTN operator and x, b are TTN states,
+//! and the input and output spaces are the same (V_in = V_out).
 //!
 //! # Algorithm
 //!
@@ -22,22 +23,12 @@
 //!
 //! - Phys. Rev. B 72, 180403 (2005) - Noise term technique (not implemented in initial version)
 
-mod apply;
-mod environment;
-mod linear_operator;
 mod local_linop;
-mod options;
-mod projected_operator;
 mod projected_state;
 mod updater;
 
-pub use apply::{apply_linear_operator, ApplyOptions, ArcLinearOperator};
-pub use environment::{EnvironmentCache, NetworkTopology};
-pub use linear_operator::LinearOperator;
-pub use options::LinsolveOptions;
-pub use projected_operator::{IndexMapping, ProjectedOperator};
 pub use projected_state::ProjectedState;
-pub use updater::{LinsolveUpdater, LinsolveVerifyReport, NodeVerifyDetail};
+pub use updater::{LinsolveVerifyReport, NodeVerifyDetail, SquareLinsolveUpdater};
 
 use std::hash::Hash;
 
@@ -45,13 +36,12 @@ use anyhow::Result;
 
 use tensor4all_core::TensorLike;
 
-use super::localupdate::{apply_local_update_sweep, LocalUpdateSweepPlan};
-use super::TreeTN;
-use crate::CanonicalizationOptions;
+use crate::linsolve::common::LinsolveOptions;
+use crate::{apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan, TreeTN};
 
-/// Result of linsolve operation.
+/// Result of square_linsolve operation.
 #[derive(Debug, Clone)]
-pub struct LinsolveResult<T, V>
+pub struct SquareLinsolveResult<T, V>
 where
     T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
@@ -103,6 +93,8 @@ where
 
 /// Solve the linear system `(a₀ + a₁ * H) |x⟩ = |b⟩` for TreeTN.
 ///
+/// This solver is for the square case where V_in = V_out (input and output spaces are the same).
+///
 /// # Arguments
 ///
 /// * `operator` - The operator H as a TreeTN (must have compatible structure with `rhs`)
@@ -118,15 +110,15 @@ where
 /// # Example
 ///
 /// ```ignore
-/// let solution = linsolve(&h_mpo, &b_mps, x0_mps, "center", LinsolveOptions::default())?;
+/// let solution = square_linsolve(&h_mpo, &b_mps, x0_mps, "center", LinsolveOptions::default())?;
 /// ```
-pub fn linsolve<T, V>(
+pub fn square_linsolve<T, V>(
     operator: &TreeTN<T, V>,
     rhs: &TreeTN<T, V>,
     init: TreeTN<T, V>,
     center: &V,
     options: LinsolveOptions,
-) -> Result<LinsolveResult<T, V>>
+) -> Result<SquareLinsolveResult<T, V>>
 where
     T: TensorLike + 'static,
     <T::Index as tensor4all_core::IndexLike>::Id:
@@ -139,8 +131,8 @@ where
     // Canonicalize initial guess towards center
     let mut x = init.canonicalize([center.clone()], CanonicalizationOptions::default())?;
 
-    // Create LinsolveUpdater
-    let mut updater = LinsolveUpdater::new(operator.clone(), rhs.clone(), options.clone());
+    // Create SquareLinsolveUpdater
+    let mut updater = SquareLinsolveUpdater::new(operator.clone(), rhs.clone(), options.clone());
 
     // Create sweep plan (nsite=2 for 2-site updates)
     let plan = LocalUpdateSweepPlan::from_treetn(&x, center, 2)
@@ -156,7 +148,7 @@ where
 
     // Note: Residual computation (||Hx - b|| / ||b||) and convergence checking
     // are not yet implemented. Currently, all requested sweeps are performed.
-    Ok(LinsolveResult {
+    Ok(SquareLinsolveResult {
         solution: x,
         sweeps: final_sweeps,
         residual: None,

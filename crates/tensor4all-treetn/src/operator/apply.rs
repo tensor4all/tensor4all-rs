@@ -27,9 +27,10 @@ use anyhow::{Context, Result};
 
 use tensor4all_core::{IndexLike, TensorIndex, TensorLike};
 
+use super::index_mapping::IndexMapping;
 use super::linear_operator::LinearOperator;
-use super::projected_operator::IndexMapping;
-use crate::operator::{compose_exclusive_linear_operators, Operator};
+use super::Operator;
+use crate::operator::compose_exclusive_linear_operators;
 use crate::treetn::contraction::{contract, ContractionMethod, ContractionOptions};
 use crate::treetn::TreeTN;
 
@@ -123,7 +124,7 @@ impl ApplyOptions {
 /// # Example
 ///
 /// ```ignore
-/// use tensor4all_treetn::linsolve::{apply_linear_operator, ApplyOptions};
+/// use tensor4all_treetn::operator::{apply_linear_operator, ApplyOptions};
 ///
 /// // Apply with default options (ZipUp)
 /// let result = apply_linear_operator(&operator, &state, ApplyOptions::default())?;
@@ -201,6 +202,9 @@ where
 /// Extend a partial operator to cover the full state space.
 ///
 /// Uses `compose_exclusive_linear_operators` to fill gap nodes with identity operators.
+/// For gap nodes, creates proper index mappings where:
+/// - True indices = state's actual site indices
+/// - Internal indices = new simulated indices for the MPO tensor
 fn extend_operator_to_full_space<T, V>(
     operator: &LinearOperator<T, V>,
     state: &TreeTN<T, V>,
@@ -216,32 +220,69 @@ where
     let state_nodes: HashSet<V> = state.node_names().into_iter().collect();
     let gap_nodes: Vec<V> = state_nodes.difference(&op_nodes).cloned().collect();
 
-    // Build gap site indices: for each gap node, create identity mapping
-    // (input index = output index for identity)
+    // Build gap site indices: for each gap node, create internal indices for the identity tensor.
+    // The (input_internal, output_internal) pairs are used to build the delta tensor.
     #[allow(clippy::type_complexity)]
     let mut gap_site_indices: HashMap<V, Vec<(T::Index, T::Index)>> = HashMap::new();
+
+    // Also track true<->internal mappings for gap nodes
+    #[allow(clippy::type_complexity)]
+    let mut gap_input_mappings: HashMap<V, IndexMapping<T::Index>> = HashMap::new();
+    #[allow(clippy::type_complexity)]
+    let mut gap_output_mappings: HashMap<V, IndexMapping<T::Index>> = HashMap::new();
 
     for gap_name in &gap_nodes {
         let site_space = state
             .site_space(gap_name)
             .ok_or_else(|| anyhow::anyhow!("Gap node {:?} has no site space", gap_name))?;
 
-        // For identity, we need (input, output) pairs with same dimension
-        // Create sim indices for internal use
-        let pairs: Vec<(T::Index, T::Index)> = site_space
-            .iter()
-            .map(|idx| {
-                let input_internal = idx.sim();
-                let output_internal = idx.sim();
-                (input_internal, output_internal)
-            })
-            .collect();
+        // For identity at gap nodes:
+        // - True indices = state's site indices (what apply_linear_operator maps from/to)
+        // - Internal indices = new simulated indices for the MPO tensor
+        let mut pairs: Vec<(T::Index, T::Index)> = Vec::new();
+
+        for (i, true_idx) in site_space.iter().enumerate() {
+            let input_internal = true_idx.sim();
+            let output_internal = true_idx.sim();
+            pairs.push((input_internal.clone(), output_internal.clone()));
+
+            // Store mapping for the first site index of each gap node
+            if i == 0 {
+                gap_input_mappings.insert(
+                    gap_name.clone(),
+                    IndexMapping {
+                        true_index: true_idx.clone(),
+                        internal_index: input_internal,
+                    },
+                );
+                gap_output_mappings.insert(
+                    gap_name.clone(),
+                    IndexMapping {
+                        true_index: true_idx.clone(),
+                        internal_index: output_internal,
+                    },
+                );
+            }
+        }
 
         gap_site_indices.insert(gap_name.clone(), pairs);
     }
 
-    compose_exclusive_linear_operators(state_network, &[operator], &gap_site_indices)
-        .context("Failed to compose operator with identity gaps")
+    // Compose the operator with identity at gaps
+    let mut composed =
+        compose_exclusive_linear_operators(state_network, &[operator], &gap_site_indices)
+            .context("Failed to compose operator with identity gaps")?;
+
+    // Override the mappings for gap nodes to use the correct true indices
+    // (compose_exclusive_linear_operators uses the internal indices as true indices for gaps)
+    for (gap_name, mapping) in gap_input_mappings {
+        composed.input_mapping.insert(gap_name, mapping);
+    }
+    for (gap_name, mapping) in gap_output_mappings {
+        composed.output_mapping.insert(gap_name, mapping);
+    }
+
+    Ok(composed)
 }
 
 /// Transform state's site indices to operator's input indices.
@@ -504,21 +545,6 @@ mod tests {
 
     fn make_index(dim: usize) -> DynIndex {
         Index::new_dyn(dim)
-    }
-
-    fn create_chain_site_network(n: usize) -> SiteIndexNetwork<String, DynIndex> {
-        let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
-        for i in 0..n {
-            let name = format!("N{}", i);
-            let site_idx = make_index(2);
-            net.add_node(name, [site_idx].into_iter().collect::<HashSet<_>>())
-                .unwrap();
-        }
-        for i in 0..(n - 1) {
-            net.add_edge(&format!("N{}", i), &format!("N{}", i + 1))
-                .unwrap();
-        }
-        net
     }
 
     #[test]

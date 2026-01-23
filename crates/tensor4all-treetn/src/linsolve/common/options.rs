@@ -1,4 +1,4 @@
-//! Options for linsolve algorithm.
+//! Common options for linsolve algorithms.
 
 use crate::TruncationOptions;
 

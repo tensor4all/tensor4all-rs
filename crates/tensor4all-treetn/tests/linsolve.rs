@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_treetn::{
-    EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, LinsolveUpdater,
-    NetworkTopology, ProjectedOperator, ProjectedState, TreeTN,
+    EnvironmentCache, IndexMapping, LinearOperator, LinsolveOptions, NetworkTopology,
+    ProjectedOperator, ProjectedState, SquareLinsolveUpdater, TreeTN,
 };
 
 // ============================================================================
@@ -405,7 +405,7 @@ fn create_mps_from_values(
 }
 
 /// Test helper: Solve diagonal linear system and verify against exact solution.
-/// Uses the new API with LinsolveUpdater::with_index_mappings.
+/// Uses the new API with SquareLinsolveUpdater::with_index_mappings.
 ///
 /// For a diagonal operator D with D[s0,s1] = diag_values[0] * diag_values[1] on diagonal,
 /// solving D*x = b gives x[s0,s1] = b[s0,s1] / (diag_values[0] * diag_values[1])
@@ -455,7 +455,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
         .with_krylov_tol(1e-12)
         .with_max_rank(8);
 
-    let mut updater = LinsolveUpdater::with_index_mappings(
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
         input_mapping,
         output_mapping,
@@ -787,7 +787,7 @@ fn create_three_site_identity_mpo(
 
 #[test]
 fn test_linsolve_2site_verify() {
-    use tensor4all_treetn::LinsolveUpdater;
+    use tensor4all_treetn::SquareLinsolveUpdater;
 
     // Create 2-site MPS (same as test_linsolve_simple_two_site)
     let (rhs, site_indices, _bonds) = create_two_site_mps();
@@ -800,7 +800,7 @@ fn test_linsolve_2site_verify() {
 
     // Create updater and verify
     let options = LinsolveOptions::default();
-    let updater = LinsolveUpdater::new(identity_mpo.clone(), rhs.clone(), options);
+    let updater = SquareLinsolveUpdater::new(identity_mpo.clone(), rhs.clone(), options);
 
     let report = updater.verify(&init).expect("verify failed");
     println!("=== 2-site verify ===");
@@ -816,7 +816,7 @@ fn test_linsolve_2site_verify() {
 
 #[test]
 fn test_linsolve_3site_verify() {
-    use tensor4all_treetn::LinsolveUpdater;
+    use tensor4all_treetn::SquareLinsolveUpdater;
 
     // Create 3-site MPS
     let (rhs, site_indices, _bonds) = create_three_site_mps(None);
@@ -829,7 +829,7 @@ fn test_linsolve_3site_verify() {
 
     // Create updater and verify
     let options = LinsolveOptions::default();
-    let updater = LinsolveUpdater::new(identity_mpo.clone(), rhs.clone(), options);
+    let updater = SquareLinsolveUpdater::new(identity_mpo.clone(), rhs.clone(), options);
 
     let report = updater.verify(&init).expect("verify failed");
     println!("{}", report);
@@ -880,7 +880,7 @@ fn test_linsolve_3site_identity() {
         .with_krylov_tol(1e-8)
         .with_max_rank(4);
 
-    let mut updater = LinsolveUpdater::with_index_mappings(
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
         input_mapping,
         output_mapping,
@@ -1326,13 +1326,13 @@ fn test_linsolve_with_index_mappings_identity() {
         .canonicalize(["site0"], CanonicalizationOptions::default())
         .unwrap();
 
-    // Create LinsolveUpdater with index mappings
+    // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
-    let mut updater = LinsolveUpdater::with_index_mappings(
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
         input_mapping,
         output_mapping,
@@ -1377,13 +1377,13 @@ fn test_linsolve_with_index_mappings_diagonal() {
         .canonicalize(["site0"], CanonicalizationOptions::default())
         .unwrap();
 
-    // Create LinsolveUpdater with index mappings
+    // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(3)
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
-    let mut updater = LinsolveUpdater::with_index_mappings(
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
         input_mapping,
         output_mapping,
@@ -1566,13 +1566,13 @@ fn test_linsolve_with_index_mappings_three_site_identity() {
         .canonicalize(["site0"], CanonicalizationOptions::default())
         .unwrap();
 
-    // Create LinsolveUpdater with index mappings
+    // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
-    let mut updater = LinsolveUpdater::with_index_mappings(
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
         input_mapping,
         output_mapping,
@@ -1620,13 +1620,13 @@ fn test_linsolve_with_index_mappings_three_site_diagonal() {
         .canonicalize(["site0"], CanonicalizationOptions::default())
         .unwrap();
 
-    // Create LinsolveUpdater with index mappings
+    // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(5)
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
-    let mut updater = LinsolveUpdater::with_index_mappings(
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
         input_mapping,
         output_mapping,
@@ -1759,7 +1759,7 @@ fn test_linsolve_pauli_x() {
         .with_krylov_tol(1e-12)
         .with_max_rank(8);
 
-    let mut updater = LinsolveUpdater::with_index_mappings(
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
         input_mapping,
         output_mapping,
@@ -1926,7 +1926,7 @@ fn test_linsolve_general_matrix() {
         .with_krylov_tol(1e-12)
         .with_max_rank(8);
 
-    let mut updater = LinsolveUpdater::with_index_mappings(
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
         input_mapping,
         output_mapping,
@@ -2199,13 +2199,13 @@ fn test_linsolve_n_site_identity_impl(n_sites: usize) {
         .canonicalize(["site0".to_string()], CanonicalizationOptions::default())
         .unwrap();
 
-    // Create LinsolveUpdater with index mappings
+    // Create SquareLinsolveUpdater with index mappings
     let options = LinsolveOptions::default()
         .with_nfullsweeps(1)
         .with_krylov_tol(1e-10)
         .with_max_rank(4);
 
-    let mut updater = LinsolveUpdater::with_index_mappings(
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
         input_mapping,
         output_mapping,

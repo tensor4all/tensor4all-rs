@@ -22,7 +22,8 @@ use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{DynIndex, TensorDynLen};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
-    IndexMapping, LinearOperator, LinsolveOptions, LinsolveUpdater, LocalUpdateSweepPlan, TreeTN,
+    IndexMapping, LinearOperator, LinsolveOptions, LocalUpdateSweepPlan, SquareLinsolveUpdater,
+    TreeTN,
 };
 
 /// Create an N-site MPS chain with identity-like structure.
@@ -289,7 +290,7 @@ fn run_test_case(init_mode: &str, bond_dim: usize) -> anyhow::Result<()> {
         .with_max_rank(4)
         .with_coefficients(a0, a1);
 
-    let mut updater = LinsolveUpdater::with_index_mappings(
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo.clone(),
         input_mapping.clone(),
         output_mapping.clone(),
