@@ -310,8 +310,11 @@ fn run_test_case(a0: f64, a1: f64, init_mode: &str, bond_dim: usize) -> anyhow::
 
     // RHS
     let (rhs, site_indices, _rhs_bond_indices) = create_n_site_mps(n_sites, phys_dim, bond_dim);
-    print_bond_dims(&rhs, &format!("b (RHS) bond dimensions (requested bond_dim={bond_dim})"));
-    
+    print_bond_dims(
+        &rhs,
+        &format!("b (RHS) bond dimensions (requested bond_dim={bond_dim})"),
+    );
+
     // Print the actual vector representation of b
     let b_full = rhs.contract_to_tensor()?;
     let b_vec = b_full.to_vec_f64()?;
@@ -333,6 +336,41 @@ fn run_test_case(a0: f64, a1: f64, init_mode: &str, bond_dim: usize) -> anyhow::
         "random" => create_random_mps_with_same_sites(n_sites, &site_indices, init_bond_dim, 0)?,
         other => anyhow::bail!("unknown init_mode {other:?} (expected rhs|rhs/2|random)"),
     };
+
+    // Check residual before canonicalize (if init is rhs, this should be ~0)
+    let compute_rel_residual_before_setup =
+        |x: &TreeTN<TensorDynLen, String>| -> anyhow::Result<f64> {
+            let linop =
+                LinearOperator::new(mpo.clone(), input_mapping.clone(), output_mapping.clone());
+            let ax = apply_linear_operator(&linop, x, ApplyOptions::default())?;
+            let ax_full = ax.contract_to_tensor()?;
+            let x_full = x.contract_to_tensor()?;
+            let b_full = rhs.contract_to_tensor()?;
+            let ax_vec = ax_full.to_vec_f64()?;
+            let x_vec = x_full.to_vec_f64()?;
+            let b_vec = b_full.to_vec_f64()?;
+            let mut r2 = 0.0_f64;
+            let mut b2 = 0.0_f64;
+            for ((ax_i, x_i), b_i) in ax_vec.iter().zip(x_vec.iter()).zip(b_vec.iter()) {
+                let opx_i = a0 * x_i + a1 * ax_i;
+                let r_i = opx_i - b_i;
+                r2 += r_i * r_i;
+                b2 += b_i * b_i;
+            }
+            Ok(if b2 > 0.0 {
+                (r2 / b2).sqrt()
+            } else {
+                r2.sqrt()
+            })
+        };
+
+    print_bond_dims(&init, "Initial state (before canonicalize)");
+    let residual_before_canonicalize = compute_rel_residual_before_setup(&init)?;
+    println!(
+        "Residual before canonicalize: {:.3e}",
+        residual_before_canonicalize
+    );
+
     let mut x = init.canonicalize(["site0".to_string()], CanonicalizationOptions::default())?;
 
     // Setup linsolve options and updater
@@ -379,19 +417,37 @@ fn run_test_case(a0: f64, a1: f64, init_mode: &str, bond_dim: usize) -> anyhow::
         })
     };
 
-    // Print initial residual
+    // Print initial state
+    print_bond_dims(&x, "Initial x (after canonicalize)");
     let initial_residual = compute_rel_residual(&x)?;
     println!(
         "a0={a0}, a1={a1}, init={init_mode}: initial ||r||_2 / ||b||_2 = {:.3e}",
         initial_residual
     );
 
-    // Run 20 sweeps
+    // Run 20 sweeps with detailed output
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0".to_string(), 2)
         .ok_or_else(|| anyhow::anyhow!("Failed to create 2-site sweep plan"))?;
 
-    for _sweep in 1..=20 {
+    for sweep in 1..=20 {
+        let residual_before = compute_rel_residual(&x)?;
+        print_bond_dims(&x, &format!("Before sweep {sweep}"));
+
         apply_local_update_sweep(&mut x, &plan, &mut updater)?;
+
+        let residual_after = compute_rel_residual(&x)?;
+        print_bond_dims(&x, &format!("After sweep {sweep}"));
+        println!(
+            "  Sweep {sweep}: residual {:.3e} -> {:.3e} (change: {:.3e})",
+            residual_before,
+            residual_after,
+            residual_after - residual_before
+        );
+
+        // Stop early if residual increases significantly (possible issue)
+        if residual_after > residual_before * 1.1 && residual_before < 1e-10 {
+            println!("  WARNING: Residual increased significantly!");
+        }
     }
 
     // Print final residual

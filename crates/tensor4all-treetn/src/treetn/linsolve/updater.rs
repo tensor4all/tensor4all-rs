@@ -11,13 +11,15 @@ use anyhow::Result;
 
 use tensor4all_core::any_scalar::AnyScalar;
 use tensor4all_core::krylov::{gmres, GmresOptions};
-use tensor4all_core::{AllowedPairs, FactorizeAlg, IndexLike, TensorLike};
+use tensor4all_core::{
+    AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
+};
 
 use super::local_linop::LocalLinOp;
 use super::options::LinsolveOptions;
 use super::projected_operator::{IndexMapping, ProjectedOperator};
 use super::projected_state::ProjectedState;
-use crate::treetn::decompose::{factorize_tensor_to_treetn_with, TreeTopology};
+use crate::treetn::decompose::{factorize_tensor_to_treetn_with_options, TreeTopology};
 use crate::treetn::localupdate::{LocalUpdateStep, LocalUpdater};
 use crate::treetn::TreeTN;
 
@@ -504,16 +506,106 @@ where
             verbose: false,
         };
 
+        // Debug: Log tensor shapes
+        let init_shape: Vec<usize> = init.external_indices().iter().map(|i| i.dim()).collect();
+        let rhs_shape: Vec<usize> = rhs_local
+            .external_indices()
+            .iter()
+            .map(|i| i.dim())
+            .collect();
+        eprintln!(
+            "  [solve_local] region={:?}, init_shape={:?}, rhs_shape={:?}",
+            region, init_shape, rhs_shape
+        );
+
+        // Debug: Check if init is already the solution for local problem
+        // Compute A_local * init and compare with b_local
+        let a_init = linop.apply(init)?;
+        let init_norm = init.norm();
+        let rhs_norm = rhs_local.norm();
+        let a_init_norm = a_init.norm();
+
+        // Check if this is bond_dim=2 first step for detailed logging
+        let region_str = format!("{:?}", region);
+        let is_first_step =
+            region.len() == 2 && region_str.contains("site0") && region_str.contains("site1");
+        let is_bond_dim_2 = is_first_step && init_shape == vec![2, 2, 2];
+
+        // Compute residual: r = b_local - A_local * init
+        // For (a0 + a1*A)*x = b, we have: (a0*I + a1*A)*init
+        // But LocalLinOp already handles this, so a_init = (a0*I + a1*A)*init
+        let residual = rhs_local.axpby(AnyScalar::F64(1.0), &a_init, AnyScalar::F64(-1.0))?;
+        let residual_norm = residual.norm();
+        let rel_residual = if rhs_norm > 1e-15 {
+            residual_norm / rhs_norm
+        } else {
+            residual_norm
+        };
+
+        eprintln!(
+            "  [solve_local] init_norm={:.6e}, rhs_norm={:.6e}, a_init_norm={:.6e}",
+            init_norm, rhs_norm, a_init_norm
+        );
+        eprintln!(
+            "  [solve_local] ||b_local - A_local*x0||={:.6e}, rel_residual={:.6e}, rtol={:.6e}",
+            residual_norm, rel_residual, gmres_options.rtol
+        );
+
+        // Detailed logging for bond_dim=2 first step
+        if is_bond_dim_2 {
+            static LOGGED_BOND_DIM_2: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !LOGGED_BOND_DIM_2.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                eprintln!(
+                    "  [solve_local] BOND_DIM_2 DEBUG: init_shape={:?}, a_init_shape={:?}",
+                    init_shape,
+                    a_init
+                        .external_indices()
+                        .iter()
+                        .map(|i| i.dim())
+                        .collect::<Vec<_>>()
+                );
+                eprintln!(
+                    "  [solve_local] BOND_DIM_2 DEBUG: init_norm={:.6e}, a_init_norm={:.6e}, ratio={:.6e}",
+                    init_norm, a_init_norm, if init_norm > 0.0 { a_init_norm / init_norm } else { 0.0 }
+                );
+                // For A=I, we expect a_init_norm ≈ init_norm
+                if self.options.a0 == 0.0 && self.options.a1 == 1.0 {
+                    eprintln!(
+                        "  [solve_local] BOND_DIM_2 DEBUG: For A=I, a0=0, a1=1: expected a_init_norm ≈ init_norm, but got {} vs {}",
+                        a_init_norm, init_norm
+                    );
+                }
+            }
+        }
+
+        if rel_residual < gmres_options.rtol {
+            eprintln!("  [solve_local] WARNING: Initial guess should converge with iterations=0, but GMRES may still iterate");
+        }
+
         // Solve using GMRES (works directly with TensorDynLen)
         let result = gmres(apply_a, &rhs_local, init, &gmres_options)?;
 
-        // Log convergence info if needed
+        // Log convergence info
+        eprintln!(
+            "  [solve_local] GMRES: converged={}, iterations={}, residual_norm={:.6e}",
+            result.converged, result.iterations, result.residual_norm
+        );
+
         if !result.converged {
             eprintln!(
                 "Warning: GMRES did not converge (iterations: {}, residual: {:.6e})",
                 result.iterations, result.residual_norm
             );
         }
+
+        let solution_shape: Vec<usize> = result
+            .solution
+            .external_indices()
+            .iter()
+            .map(|i| i.dim())
+            .collect();
+        eprintln!("  [solve_local] solution_shape={:?}", solution_shape);
 
         Ok(result.solution)
     }
@@ -533,23 +625,225 @@ where
         step: &LocalUpdateStep<V>,
         full_treetn: &TreeTN<T, V>,
     ) -> Result<TreeTN<T, V>> {
+        static UPDATE_CALL_COUNT: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+        let update_call_id =
+            UPDATE_CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        eprintln!(
+            "  [update] step: nodes={:?}, new_center={:?}",
+            step.nodes, step.new_center
+        );
+
+        if update_call_id == 21 || update_call_id == 22 {
+            let full_norm = full_treetn.contract_to_tensor().ok().map(|t| t.norm());
+            eprintln!(
+                "  [update] DEBUG: call #{} full_treetn norm (before solve) = {:?}",
+                update_call_id, full_norm
+            );
+            for node in &step.nodes {
+                if let Some(idx) = subtree.node_index(node) {
+                    if let Some(tensor) = subtree.tensor(idx) {
+                        eprintln!(
+                            "  [update] DEBUG: call #{} local tensor {:?} norm (before solve) = {:.6e}",
+                            update_call_id, node, tensor.norm()
+                        );
+                    }
+                }
+            }
+        }
         // Contract tensors in the region into a single local tensor
         let init_local = self.contract_region(&subtree, &step.nodes)?;
+
+        {
+            let full_norm = full_treetn.contract_to_tensor().ok().map(|t| t.norm());
+            let norm_changed = full_norm.map(|n| (n - 1.0).abs() > 1e-12).unwrap_or(false);
+            if norm_changed {
+                eprintln!(
+                    "  [update] DEBUG: call #{} full_treetn norm (before solve) = {:?} (region={:?})",
+                    update_call_id, full_norm, step.nodes
+                );
+                let init_local_norm = init_local.norm();
+                eprintln!(
+                    "  [update] DEBUG: call #{} init_local norm = {:.6e}",
+                    update_call_id, init_local_norm
+                );
+            }
+        }
+
+        // Debug: Check init_local tensor
+        let init_local_shape: Vec<usize> = init_local
+            .external_indices()
+            .iter()
+            .map(|i| i.dim())
+            .collect();
+        eprintln!("  [update] init_local: shape={:?}", init_local_shape);
+
         // Solve local linear problem using GMRES
         let solved_local = self.solve_local(&step.nodes, &init_local, full_treetn)?;
+
+        {
+            let full_norm = full_treetn.contract_to_tensor().ok().map(|t| t.norm());
+            let norm_changed = full_norm.map(|n| (n - 1.0).abs() > 1e-12).unwrap_or(false);
+            if norm_changed {
+                let solved_local_norm = solved_local.norm();
+                eprintln!(
+                    "  [update] DEBUG: call #{} solved_local norm = {:.6e}",
+                    update_call_id, solved_local_norm
+                );
+            }
+        }
+
+        // Debug: Check solved_local tensor
+        let solved_local_shape: Vec<usize> = solved_local
+            .external_indices()
+            .iter()
+            .map(|i| i.dim())
+            .collect();
+        eprintln!("  [update] solved_local: shape={:?}", solved_local_shape);
 
         // Build TreeTopology for the subtree region
         let topology = self.build_subtree_topology(&solved_local, &step.nodes, full_treetn)?;
 
-        // Decompose solved tensor back into TreeTN using factorize_tensor_to_treetn
-        let decomposed =
-            factorize_tensor_to_treetn_with(&solved_local, &topology, FactorizeAlg::SVD)?;
+        // Set up factorization options with max_rank from LinsolveOptions
+        let factorize_options = FactorizeOptions {
+            alg: FactorizeAlg::SVD,
+            canonical: Canonical::Left,
+            rtol: self.options.truncation.rtol(),
+            max_rank: self.options.truncation.max_rank(),
+        };
+
+        eprintln!(
+            "  [update] factorize_options: rtol={:?}, max_rank={:?}",
+            factorize_options.rtol, factorize_options.max_rank
+        );
+
+        // Decompose solved tensor back into TreeTN using factorize_tensor_to_treetn_with_options
+        let decomposed = factorize_tensor_to_treetn_with_options(
+            &solved_local,
+            &topology,
+            FactorizeAlg::SVD,
+            Some(factorize_options),
+        )?;
+
+        // Debug: Check decomposed bond dimensions
+        let decomposed_bond_dims: Vec<usize> = decomposed
+            .site_index_network()
+            .edges()
+            .filter_map(|(a, b)| {
+                decomposed
+                    .edge_between(&a, &b)
+                    .and_then(|e| decomposed.bond_index(e))
+                    .map(|bond| bond.dim())
+            })
+            .collect();
+        eprintln!(
+            "  [update] decomposed bond_dims: {:?}",
+            decomposed_bond_dims
+        );
+
+        // Debug: Check reconstruction error after factorize
+        // Contract decomposed back to tensor and compare with solved_local
+        let reconstructed = decomposed.contract_to_tensor().ok();
+        if let Some(reconstructed_tensor) = reconstructed {
+            let reconstructed_shape: Vec<usize> = reconstructed_tensor
+                .external_indices()
+                .iter()
+                .map(|i| i.dim())
+                .collect();
+            let solved_shape: Vec<usize> = solved_local
+                .external_indices()
+                .iter()
+                .map(|i| i.dim())
+                .collect();
+            eprintln!(
+                "  [update] reconstruction: solved_shape={:?}, reconstructed_shape={:?}",
+                solved_shape, reconstructed_shape
+            );
+
+            // Check if shapes match (indices may be in different order)
+            if solved_shape.len() == reconstructed_shape.len() {
+                let shapes_match = solved_shape
+                    .iter()
+                    .zip(reconstructed_shape.iter())
+                    .all(|(a, b)| a == b);
+                if !shapes_match {
+                    eprintln!("  [update] WARNING: Shape mismatch after reconstruction!");
+                }
+            }
+        } else {
+            eprintln!("  [update] WARNING: Failed to contract decomposed tensor");
+        }
 
         // Copy decomposed tensors back to subtree, preserving original bond IDs
         self.copy_decomposed_to_subtree(&mut subtree, &decomposed, &step.nodes, full_treetn)?;
 
+        // Rebuild ortho_towards directions for internal bonds in the region
+        // so that all bonds point toward the new center.
+        if step.nodes.len() >= 2 {
+            let topology = full_treetn.site_index_network();
+            let center_idx = topology.node_index(&step.new_center).ok_or_else(|| {
+                anyhow::anyhow!("Center node {:?} not found in topology", step.new_center)
+            })?;
+            for (i, node_a) in step.nodes.iter().enumerate() {
+                for node_b in step.nodes.iter().skip(i + 1) {
+                    if let Some(edge) = subtree.edge_between(node_a, node_b) {
+                        let a_idx = topology.node_index(node_a).ok_or_else(|| {
+                            anyhow::anyhow!("Node {:?} not found in topology", node_a)
+                        })?;
+                        let b_idx = topology.node_index(node_b).ok_or_else(|| {
+                            anyhow::anyhow!("Node {:?} not found in topology", node_b)
+                        })?;
+                        let path = topology.path_between(a_idx, center_idx).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "No path between {:?} and center {:?}",
+                                node_a,
+                                step.new_center
+                            )
+                        })?;
+                        let dir = if path.len() >= 2 && path[1] == b_idx {
+                            node_b.clone()
+                        } else {
+                            node_a.clone()
+                        };
+                        subtree.set_edge_ortho_towards(edge, Some(dir))?;
+                    }
+                }
+            }
+        }
+
+        if update_call_id == 21 || update_call_id == 22 {
+            let full_norm_after = subtree.contract_to_tensor().ok().map(|t| t.norm());
+            eprintln!(
+                "  [update] DEBUG: call #{} subtree norm (after copy) = {:?}",
+                update_call_id, full_norm_after
+            );
+            for node in &step.nodes {
+                if let Some(idx) = subtree.node_index(node) {
+                    if let Some(tensor) = subtree.tensor(idx) {
+                        eprintln!(
+                            "  [update] DEBUG: call #{} local tensor {:?} norm (after copy) = {:.6e}",
+                            update_call_id, node, tensor.norm()
+                        );
+                    }
+                }
+            }
+        }
+
         // Set canonical center
         subtree.set_canonical_center([step.new_center.clone()])?;
+
+        // Debug: Check final subtree bond dimensions
+        let final_bond_dims: Vec<usize> = subtree
+            .site_index_network()
+            .edges()
+            .filter_map(|(a, b)| {
+                subtree
+                    .edge_between(&a, &b)
+                    .and_then(|e| subtree.bond_index(e))
+                    .map(|bond| bond.dim())
+            })
+            .collect();
+        eprintln!("  [update] final subtree bond_dims: {:?}", final_bond_dims);
 
         Ok(subtree)
     }
@@ -559,6 +853,10 @@ where
         step: &LocalUpdateStep<V>,
         full_treetn_after: &TreeTN<T, V>,
     ) -> Result<()> {
+        static AFTER_STEP_COUNT: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+        let after_call_id = AFTER_STEP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+
         // Use state's SiteIndexNetwork directly (implements NetworkTopology)
         let topology = full_treetn_after.site_index_network();
 
@@ -568,6 +866,20 @@ where
             proj_op.invalidate(&step.nodes, topology);
         }
         self.projected_state.invalidate(&step.nodes, topology);
+
+        {
+            let full_norm = full_treetn_after
+                .contract_to_tensor()
+                .ok()
+                .map(|t| t.norm());
+            let norm_changed = full_norm.map(|n| (n - 1.0).abs() > 1e-12).unwrap_or(false);
+            if norm_changed {
+                eprintln!(
+                    "  [after_step] DEBUG: call #{} full_treetn norm (after update) = {:?} (region={:?})",
+                    after_call_id, full_norm, step.nodes
+                );
+            }
+        }
 
         Ok(())
     }

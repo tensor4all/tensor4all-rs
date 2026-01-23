@@ -134,6 +134,45 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
+    factorize_tensor_to_treetn_with_options(tensor, topology, alg, None)
+}
+
+/// Factorize a dense tensor into a TreeTN using a specified factorization algorithm with options.
+///
+/// This function takes a dense tensor and a tree topology specification, then
+/// recursively decomposes the tensor using the specified algorithm to create a TreeTN.
+///
+/// # Algorithm
+///
+/// 1. Start from a leaf node, factorize to separate that node's physical indices
+/// 2. Contract the right factor with remaining tensor, repeat for next edge
+/// 3. Continue until all edges are processed
+///
+/// # Arguments
+/// * `tensor` - The dense tensor to decompose
+/// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
+/// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
+/// * `options` - Optional FactorizeOptions for truncation (max_rank, rtol)
+///
+/// # Returns
+/// A TreeTN representing the decomposed tensor.
+///
+/// # Errors
+/// Returns an error if:
+/// - The topology is invalid
+/// - Physical index positions don't match the tensor
+/// - Factorization fails
+pub fn factorize_tensor_to_treetn_with_options<T, V>(
+    tensor: &T,
+    topology: &TreeTopology<V>,
+    alg: FactorizeAlg,
+    options: Option<FactorizeOptions>,
+) -> Result<TreeTN<T, V>>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+{
     topology.validate()?;
 
     let tensor_indices = tensor.external_indices();
@@ -227,12 +266,12 @@ where
     let mut _bond_indices: HashMap<(V, V), (T::Index, T::Index)> = HashMap::new();
 
     // Set up factorization options
-    let factorize_options = FactorizeOptions {
+    let factorize_options = options.unwrap_or_else(|| FactorizeOptions {
         alg,
         canonical: Canonical::Left,
         rtol: None,
         max_rank: None,
-    };
+    });
 
     // Process nodes in post-order (leaves first)
     #[allow(clippy::needless_range_loop)]
