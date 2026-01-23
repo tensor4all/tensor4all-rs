@@ -310,8 +310,11 @@ fn run_test_case(a0: f64, a1: f64, init_mode: &str, bond_dim: usize) -> anyhow::
 
     // RHS
     let (rhs, site_indices, _rhs_bond_indices) = create_n_site_mps(n_sites, phys_dim, bond_dim);
-    print_bond_dims(&rhs, &format!("b (RHS) bond dimensions (requested bond_dim={bond_dim})"));
-    
+    print_bond_dims(
+        &rhs,
+        &format!("b (RHS) bond dimensions (requested bond_dim={bond_dim})"),
+    );
+
     // Print the actual vector representation of b
     let b_full = rhs.contract_to_tensor()?;
     let b_vec = b_full.to_vec_f64()?;

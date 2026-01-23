@@ -18,7 +18,7 @@ use super::options::LinsolveOptions;
 use super::projected_operator::{IndexMapping, ProjectedOperator};
 use super::projected_state::ProjectedState;
 use crate::treetn::decompose::{factorize_tensor_to_treetn_with, TreeTopology};
-use crate::treetn::localupdate::{LocalUpdateStep, LocalUpdater};
+use crate::treetn::localupdate::{get_boundary_edges, LocalUpdateStep, LocalUpdater};
 use crate::treetn::TreeTN;
 
 /// Report from LinsolveUpdater::verify().
@@ -130,6 +130,13 @@ where
     pub projected_state: ProjectedState<T, V>,
     /// Solver options
     pub options: LinsolveOptions,
+    /// Bra state (separate from ket to avoid unintended contractions).
+    /// Link indices are different from ket_state to prevent bra↔ket link contractions.
+    /// Boundary bonds (region ↔ outside) maintain stable IDs for cache consistency.
+    bra_state: TreeTN<T, V>,
+    /// Mapping from boundary edge (node_in_region, neighbor_outside) to bra-side bond index.
+    /// This ensures boundary bonds keep stable IDs across updates for environment cache reuse.
+    boundary_bond_map: HashMap<(V, V), T::Index>,
 }
 
 impl<T, V> LinsolveUpdater<T, V>
@@ -144,11 +151,15 @@ where
     ///
     /// **Note:** Only V_in = V_out is supported. The operator must have the same
     /// input and output index spaces.
+    ///
+    /// The bra_state will be initialized lazily on the first `before_step` call.
     pub fn new(operator: TreeTN<T, V>, rhs: TreeTN<T, V>, options: LinsolveOptions) -> Self {
         Self {
             projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
             projected_state: ProjectedState::new(rhs),
             options,
+            bra_state: TreeTN::new(),
+            boundary_bond_map: HashMap::new(),
         }
     }
 
@@ -159,6 +170,8 @@ where
     ///
     /// **Note:** Only V_in = V_out is supported. The operator must have the same
     /// input and output index spaces.
+    ///
+    /// The bra_state will be initialized lazily on the first `before_step` call.
     ///
     /// # Arguments
     /// * `operator` - The MPO with internal index IDs
@@ -179,7 +192,37 @@ where
             projected_operator: Arc::new(RwLock::new(projected_operator)),
             projected_state: ProjectedState::new(rhs),
             options,
+            bra_state: TreeTN::new(),
+            boundary_bond_map: HashMap::new(),
         }
+    }
+
+    /// Initialize bra_state from ket_state if not already initialized.
+    ///
+    /// Creates bra_state by relabeling link indices (using sim() for internal bonds,
+    /// preserving boundary bonds for cache consistency).
+    ///
+    /// This is called lazily on the first `before_step` to ensure we have the initial ket_state.
+    fn ensure_bra_state_initialized(&mut self, ket_state: &TreeTN<T, V>) -> Result<()> {
+        // Check if bra_state is already initialized (has nodes)
+        if !self.bra_state.node_names().is_empty() {
+            return Ok(());
+        }
+
+        // Initialize bra_state by cloning ket_state and relabeling link indices
+        // For boundary bonds, we'll preserve the mapping for later reuse
+        let mut bra_state = ket_state.clone();
+
+        // Get all edges to determine which are boundary bonds
+        // Since we don't have a region yet, we'll relabel all links initially
+        // Boundary bonds will be stabilized in after_step when we know the region
+        bra_state.sim_linkinds_mut()?;
+
+        // Initialize boundary_bond_map as empty (will be populated per-region in after_step)
+        self.boundary_bond_map.clear();
+
+        self.bra_state = bra_state;
+        Ok(())
     }
 
     /// Verify internal data consistency between operator, RHS, and state.
@@ -484,11 +527,13 @@ where
         let a0 = AnyScalar::new_real(self.options.a0);
         let a1 = AnyScalar::new_real(self.options.a1);
 
-        // Create local linear operator (V_in = V_out: state is used as both ket and bra)
-        let linop = LocalLinOp::new(
+        // Create local linear operator with separate bra_state
+        // This prevents unintended bra↔ket link contractions in environment computation
+        let linop = LocalLinOp::with_bra_state(
             Arc::clone(&self.projected_operator),
             region.to_vec(),
             state.clone(),
+            self.bra_state.clone(),
             a0,
             a1,
         );
@@ -517,6 +562,119 @@ where
 
         Ok(result.solution)
     }
+
+    /// Synchronize bra_state region with ket_state, preserving boundary bond IDs.
+    ///
+    /// This ensures bra_state stays in sync with ket_state updates while maintaining
+    /// stable boundary bond IDs for environment cache reuse.
+    fn sync_bra_state_region(
+        &mut self,
+        step: &LocalUpdateStep<V>,
+        ket_state: &TreeTN<T, V>,
+    ) -> Result<()> {
+        // Extract updated region from ket_state
+        let ket_region = ket_state.extract_subtree(&step.nodes)?;
+
+        // Build mapping from ket bond IDs to bra bond indices for *all* bonds incident to the region.
+        //
+        // Important: bra_state bond IDs must remain stable across steps, even when an edge alternates
+        // between being a boundary edge and an internal edge in different steps (as happens in sweeps).
+        // Therefore, we always reuse the current bra_state bond indices, and never create fresh IDs here.
+        let mut ket_to_bra_bond_map: HashMap<<T::Index as IndexLike>::Id, T::Index> =
+            HashMap::new();
+
+        // Populate mapping for all edges incident to region nodes (including boundary edges)
+        for node in &step.nodes {
+            for neighbor in ket_state.site_index_network().neighbors(node) {
+                let ket_edge = match ket_state.edge_between(node, &neighbor) {
+                    Some(e) => e,
+                    None => continue,
+                };
+                let bra_edge = match self.bra_state.edge_between(node, &neighbor) {
+                    Some(e) => e,
+                    None => continue,
+                };
+                let ket_bond = match ket_state.bond_index(ket_edge) {
+                    Some(b) => b,
+                    None => continue,
+                };
+                let bra_bond = match self.bra_state.bond_index(bra_edge) {
+                    Some(b) => b,
+                    None => continue,
+                };
+                ket_to_bra_bond_map.insert(ket_bond.id().clone(), bra_bond.clone());
+            }
+        }
+
+        // Keep a small explicit cache for boundary edges (region ↔ outside) for inspection/debugging.
+        // This is not used to drive the mapping logic.
+        for boundary_edge in get_boundary_edges(ket_state, &step.nodes)? {
+            if let Some(edge) = self.bra_state.edge_between(
+                &boundary_edge.node_in_region,
+                &boundary_edge.neighbor_outside,
+            ) {
+                if let Some(bra_bond) = self.bra_state.bond_index(edge) {
+                    self.boundary_bond_map.insert(
+                        (
+                            boundary_edge.node_in_region.clone(),
+                            boundary_edge.neighbor_outside.clone(),
+                        ),
+                        bra_bond.clone(),
+                    );
+                }
+            }
+        }
+
+        // Create new bra_region by copying ket_region
+        let mut bra_region = ket_region.clone();
+
+        // First, update edge bonds in bra_region to bra-side IDs
+        // This must be done before replacing tensors to ensure consistency
+        let mut edges_to_update: Vec<(V, V, T::Index)> = Vec::new();
+        for node in &step.nodes {
+            let neighbors: Vec<V> = bra_region.site_index_network().neighbors(node).collect();
+            for neighbor in neighbors {
+                if let Some(edge) = bra_region.edge_between(node, &neighbor) {
+                    if let Some(bond) = bra_region.bond_index(edge) {
+                        if let Some(new_bond) = ket_to_bra_bond_map.get(bond.id()) {
+                            edges_to_update.push((node.clone(), neighbor, new_bond.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        // Update edges (bra_region is no longer borrowed)
+        for (node, neighbor, new_bond) in edges_to_update {
+            if let Some(edge) = bra_region.edge_between(&node, &neighbor) {
+                bra_region.replace_edge_bond(edge, new_bond)?;
+            }
+        }
+
+        // Now replace all bond indices (including boundary bonds) in bra_region tensors with bra-side IDs
+        for node in &step.nodes {
+            if let Some(node_idx) = bra_region.node_index(node) {
+                if let Some(tensor) = bra_region.tensor(node_idx) {
+                    let mut new_tensor = tensor.clone();
+                    let tensor_indices = tensor.external_indices();
+
+                    for ket_idx in &tensor_indices {
+                        // Replace if this index is one of the region's bond indices (internal or boundary)
+                        if let Some(bra_bond) = ket_to_bra_bond_map.get(ket_idx.id()) {
+                            new_tensor = new_tensor.replaceind(ket_idx, bra_bond)?;
+                        }
+                        // Site indices are kept as-is (same IDs in bra and ket)
+                    }
+
+                    bra_region.replace_tensor(node_idx, new_tensor)?;
+                }
+            }
+        }
+
+        // Replace the region back into bra_state
+        self.bra_state.replace_subtree(&step.nodes, &bra_region)?;
+
+        Ok(())
+    }
 }
 
 impl<T, V> LocalUpdater<T, V> for LinsolveUpdater<T, V>
@@ -527,6 +685,16 @@ where
         Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
+    fn before_step(
+        &mut self,
+        _step: &LocalUpdateStep<V>,
+        full_treetn_before: &TreeTN<T, V>,
+    ) -> Result<()> {
+        // Initialize bra_state lazily on first call
+        self.ensure_bra_state_initialized(full_treetn_before)?;
+        Ok(())
+    }
+
     fn update(
         &mut self,
         mut subtree: TreeTN<T, V>,
@@ -561,6 +729,10 @@ where
     ) -> Result<()> {
         // Use state's SiteIndexNetwork directly (implements NetworkTopology)
         let topology = full_treetn_after.site_index_network();
+
+        // Synchronize bra_state with ket_state (full_treetn_after) for the updated region
+        // while preserving boundary bond IDs for cache consistency
+        self.sync_bra_state_region(step, full_treetn_after)?;
 
         // Invalidate all caches affected by the updated region
         {

@@ -99,13 +99,51 @@ where
         let bra_state = self.get_bra_state();
         let mut proj_op = self.projected_operator.write().unwrap();
 
-        let hx = proj_op.apply(
+        let mut hx = proj_op.apply(
             x,
             &self.region,
             &self.state,
             bra_state,
             self.state.site_index_network(),
         )?;
+
+        // If we are using a distinct bra_state, the projected operator application produces
+        // an output tensor whose boundary bond indices live in the bra namespace.
+        // For GMRES, we need the output tensor to live in the same vector space as `x`
+        // (i.e., same index set), so we map boundary bra-bonds back to ket-bonds.
+        if let Some(ref bra_state) = self.bra_state {
+            for node in &self.region {
+                for neighbor in self.state.site_index_network().neighbors(node) {
+                    if !self.region.contains(&neighbor) {
+                        let ket_edge = match self.state.edge_between(node, &neighbor) {
+                            Some(e) => e,
+                            None => continue,
+                        };
+                        let bra_edge = match bra_state.edge_between(node, &neighbor) {
+                            Some(e) => e,
+                            None => continue,
+                        };
+                        let ket_bond = match self.state.bond_index(ket_edge) {
+                            Some(b) => b,
+                            None => continue,
+                        };
+                        let bra_bond = match bra_state.bond_index(bra_edge) {
+                            Some(b) => b,
+                            None => continue,
+                        };
+
+                        // Only replace if hx actually contains the bra bond.
+                        if hx
+                            .external_indices()
+                            .iter()
+                            .any(|idx| idx.id() == bra_bond.id())
+                        {
+                            hx = hx.replaceind(bra_bond, ket_bond)?;
+                        }
+                    }
+                }
+            }
+        }
 
         // When a0 = 0, just return a1 * H * x (avoids axpby which requires same indices)
         // This is important for space_in != space_out cases
