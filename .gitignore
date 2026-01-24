@@ -42,3 +42,6 @@ external/
 # Coverage reports
 lcov*.info
 lcov-patch.info
+
+# Test files (temporary, push when working)
+crates/tensor4all-treetn/examples/test_linsolve_exact_solution_n3.rs
