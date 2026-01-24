@@ -584,14 +584,14 @@ where
         let mut ket_to_ref_bond_map: HashMap<<T::Index as IndexLike>::Id, T::Index> =
             HashMap::new();
 
-        // Populate mapping for all edges incident to region nodes (including boundary edges)
+        // Populate mapping for all edges incident to region nodes.
+        // - Boundary edges (region ↔ outside): use reference_state's existing bond IDs for cache stability
+        // - Internal edges (within region): use sim() to create new IDs distinct from ket
+        // This ensures reference_state bond IDs are always different from ket_state bond IDs.
+        let region_nodes: std::collections::HashSet<_> = step.nodes.iter().collect();
         for node in &step.nodes {
             for neighbor in ket_state.site_index_network().neighbors(node) {
                 let ket_edge = match ket_state.edge_between(node, &neighbor) {
-                    Some(e) => e,
-                    None => continue,
-                };
-                let ref_edge = match self.reference_state.edge_between(node, &neighbor) {
                     Some(e) => e,
                     None => continue,
                 };
@@ -599,11 +599,22 @@ where
                     Some(b) => b,
                     None => continue,
                 };
-                let ref_bond = match self.reference_state.bond_index(ref_edge) {
-                    Some(b) => b,
-                    None => continue,
+
+                let ref_bond = if region_nodes.contains(&neighbor) {
+                    // Internal edge: create new ID using sim()
+                    ket_bond.sim()
+                } else {
+                    // Boundary edge: use reference_state's existing bond ID
+                    let ref_edge = match self.reference_state.edge_between(node, &neighbor) {
+                        Some(e) => e,
+                        None => continue,
+                    };
+                    match self.reference_state.bond_index(ref_edge) {
+                        Some(b) => b.clone(),
+                        None => continue,
+                    }
                 };
-                ket_to_ref_bond_map.insert(ket_bond.id().clone(), ref_bond.clone());
+                ket_to_ref_bond_map.insert(ket_bond.id().clone(), ref_bond);
             }
         }
 
