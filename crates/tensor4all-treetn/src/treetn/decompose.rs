@@ -8,7 +8,7 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{Canonical, FactorizeOptions, IndexLike, TensorLike};
 
 use super::TreeTN;
 
@@ -97,10 +97,10 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
-    factorize_tensor_to_treetn_with(tensor, topology, FactorizeAlg::QR)
+    factorize_tensor_to_treetn_with(tensor, topology, FactorizeOptions::qr())
 }
 
-/// Factorize a dense tensor into a TreeTN using a specified factorization algorithm.
+/// Factorize a dense tensor into a TreeTN using specified factorization options.
 ///
 /// This function takes a dense tensor and a tree topology specification, then
 /// recursively decomposes the tensor using the specified algorithm to create a TreeTN.
@@ -114,7 +114,7 @@ where
 /// # Arguments
 /// * `tensor` - The dense tensor to decompose
 /// * `topology` - Tree topology specifying nodes, edges, and physical index assignments
-/// * `alg` - The factorization algorithm to use (QR, SVD, LU, or CI)
+/// * `options` - Factorization options (algorithm, max_rank, rtol, etc.)
 ///
 /// # Returns
 /// A TreeTN representing the decomposed tensor.
@@ -127,7 +127,7 @@ where
 pub fn factorize_tensor_to_treetn_with<T, V>(
     tensor: &T,
     topology: &TreeTopology<V>,
-    alg: FactorizeAlg,
+    options: FactorizeOptions,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
@@ -226,12 +226,10 @@ where
     // Store bond indices between nodes: (node_a, node_b) -> (index_on_a, index_on_b)
     let mut _bond_indices: HashMap<(V, V), (T::Index, T::Index)> = HashMap::new();
 
-    // Set up factorization options
+    // Use provided factorization options with Left canonical direction
     let factorize_options = FactorizeOptions {
-        alg,
         canonical: Canonical::Left,
-        rtol: None,
-        max_rank: None,
+        ..options
     };
 
     // Process nodes in post-order (leaves first)

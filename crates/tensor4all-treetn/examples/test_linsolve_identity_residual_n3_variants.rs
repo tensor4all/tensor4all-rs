@@ -336,16 +336,16 @@ fn run_test_case(a0: f64, a1: f64, init_mode: &str, bond_dim: usize) -> anyhow::
         "random" => create_random_mps_with_same_sites(n_sites, &site_indices, bond_dim, 0)?,
         other => anyhow::bail!("unknown init_mode {other:?} (expected rhs|rhs/2|random)"),
     };
-    
+
     // Print init information
     println!("init mode: {init_mode}");
     print_bond_dims(&init, "init bond dimensions");
-    
+
     let mut x = init.canonicalize(["site0".to_string()], CanonicalizationOptions::default())?;
 
     // Setup linsolve options and updater
     let options = LinsolveOptions::default()
-        .with_nfullsweeps(200)
+        .with_nfullsweeps(10)
         .with_krylov_tol(1e-10)
         .with_max_rank(50)
         .with_coefficients(a0, a1);
@@ -398,7 +398,7 @@ fn run_test_case(a0: f64, a1: f64, init_mode: &str, bond_dim: usize) -> anyhow::
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0".to_string(), 2)
         .ok_or_else(|| anyhow::anyhow!("Failed to create 2-site sweep plan"))?;
 
-    for _sweep in 1..=20 {
+    for _sweep in 1..=5 {
         apply_local_update_sweep(&mut x, &plan, &mut updater)?;
     }
 

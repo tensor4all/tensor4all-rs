@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 
 use tensor4all_core::any_scalar::AnyScalar;
 use tensor4all_core::krylov::{gmres, GmresOptions};
-use tensor4all_core::{AllowedPairs, FactorizeAlg, IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, FactorizeOptions, IndexLike, TensorLike};
 
 use super::local_linop::LocalLinOp;
 use super::projected_state::ProjectedState;
@@ -723,8 +723,12 @@ where
         let topology = self.build_subtree_topology(&solved_local, &step.nodes, full_treetn)?;
 
         // Decompose solved tensor back into TreeTN using factorize_tensor_to_treetn
+        let mut factorize_options = FactorizeOptions::svd();
+        if let Some(max_rank) = self.options.truncation.max_rank() {
+            factorize_options = factorize_options.with_max_rank(max_rank);
+        }
         let decomposed =
-            factorize_tensor_to_treetn_with(&solved_local, &topology, FactorizeAlg::SVD)?;
+            factorize_tensor_to_treetn_with(&solved_local, &topology, factorize_options)?;
 
         // Copy decomposed tensors back to subtree, preserving original bond IDs
         self.copy_decomposed_to_subtree(&mut subtree, &decomposed, &step.nodes, full_treetn)?;

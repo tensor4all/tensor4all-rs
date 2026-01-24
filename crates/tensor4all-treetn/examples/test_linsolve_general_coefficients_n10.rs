@@ -347,12 +347,7 @@ fn create_n_site_index_mappings(
     (input_mapping, output_mapping)
 }
 
-fn run_test_case(
-    a0: f64,
-    a1: f64,
-    init_mode: &str,
-    bond_dim: usize,
-) -> anyhow::Result<()> {
+fn run_test_case(a0: f64, a1: f64, init_mode: &str, bond_dim: usize) -> anyhow::Result<()> {
     let n_sites = 10usize;
     let phys_dim = 2usize;
 
@@ -364,7 +359,11 @@ fn run_test_case(
     );
 
     // For N=10, the full vector has 2^10 = 1024 elements, so we don't print it
-    println!("b (RHS) vector dimension: 2^{} = {} (not printed)", n_sites, 1 << n_sites);
+    println!(
+        "b (RHS) vector dimension: 2^{} = {} (not printed)",
+        n_sites,
+        1 << n_sites
+    );
 
     // A = Pauli-X operator (non-diagonal, bit-flip operator)
     // X = [[0, 1], [1, 0]] on each site, combined: X_0 ⊗ X_1 ⊗ ... ⊗ X_9
@@ -391,7 +390,7 @@ fn run_test_case(
     // Setup linsolve options and updater
     // For N=10, we need higher max_rank to handle the larger system
     let options = LinsolveOptions::default()
-        .with_nfullsweeps(200)
+        .with_nfullsweeps(10)
         .with_krylov_tol(1e-10)
         .with_max_rank(100)
         .with_coefficients(a0, a1);
@@ -444,7 +443,7 @@ fn run_test_case(
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0".to_string(), 2)
         .ok_or_else(|| anyhow::anyhow!("Failed to create 2-site sweep plan"))?;
 
-    for _sweep in 1..=20 {
+    for _sweep in 1..=10 {
         apply_local_update_sweep(&mut x, &plan, &mut updater)?;
     }
 

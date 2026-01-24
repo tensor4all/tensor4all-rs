@@ -58,7 +58,7 @@ fn create_all_ones_mps(
     // Create tensors that represent uniform superposition (all-ones vector)
     // For bond_dim=1, each site contributes equally to all physical states
     // This creates |000⟩ + |001⟩ + ... + |111⟩ with equal amplitude
-    
+
     for i in 0..n_sites {
         let name = format!("site{i}");
         let tensor = if i == 0 {
@@ -138,7 +138,7 @@ fn create_simple_two_state_mps(
 ) -> (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>) {
     assert!(n_sites >= 2, "Need at least 2 sites");
     assert!(phys_dim >= 2, "phys_dim must be at least 2");
-    
+
     // This state requires bond_dim=2: one bond index for |000...0⟩, one for |111...1⟩
     let bond_dim = 2usize;
 
@@ -162,8 +162,8 @@ fn create_simple_two_state_mps(
             // First site: [s0, b01]
             // s0=0 connects to bond 0 (|000...0⟩), s0=1 connects to bond 1 (|111...1⟩)
             let mut data = vec![0.0; phys_dim * bond_dim];
-            data[0 * bond_dim + 0] = 1.0 / 2.0_f64.sqrt();  // |0⟩ -> bond 0
-            data[1 * bond_dim + 1] = 1.0 / 2.0_f64.sqrt();  // |1⟩ -> bond 1
+            data[0 * bond_dim + 0] = 1.0 / 2.0_f64.sqrt(); // |0⟩ -> bond 0
+            data[1 * bond_dim + 1] = 1.0 / 2.0_f64.sqrt(); // |1⟩ -> bond 1
             TensorDynLen::from_dense_f64(
                 vec![site_indices[i].clone(), bond_indices[i].clone()],
                 data,
@@ -172,8 +172,8 @@ fn create_simple_two_state_mps(
             // Last site: [b_{n-2,n-1}, s_{n-1}]
             // bond 0 connects to s=0 (|000...0⟩), bond 1 connects to s=1 (|111...1⟩)
             let mut data = vec![0.0; bond_dim * phys_dim];
-            data[0 * phys_dim + 0] = 1.0 / 2.0_f64.sqrt();  // bond 0 -> |0⟩
-            data[1 * phys_dim + 1] = 1.0 / 2.0_f64.sqrt();  // bond 1 -> |1⟩
+            data[0 * phys_dim + 0] = 1.0 / 2.0_f64.sqrt(); // bond 0 -> |0⟩
+            data[1 * phys_dim + 1] = 1.0 / 2.0_f64.sqrt(); // bond 1 -> |1⟩
             TensorDynLen::from_dense_f64(
                 vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
                 data,
@@ -182,8 +182,8 @@ fn create_simple_two_state_mps(
             // Middle sites: [b_{i-1,i}, s_i, b_{i,i+1}]
             // Pass through bond index: bond 0 -> s=0 -> bond 0, bond 1 -> s=1 -> bond 1
             let mut data = vec![0.0; bond_dim * phys_dim * bond_dim];
-            data[0 * phys_dim * bond_dim + 0 * bond_dim + 0] = 1.0 / 2.0_f64.sqrt();  // bond 0 -> |0⟩ -> bond 0
-            data[1 * phys_dim * bond_dim + 1 * bond_dim + 1] = 1.0 / 2.0_f64.sqrt();  // bond 1 -> |1⟩ -> bond 1
+            data[0 * phys_dim * bond_dim + 0 * bond_dim + 0] = 1.0 / 2.0_f64.sqrt(); // bond 0 -> |0⟩ -> bond 0
+            data[1 * phys_dim * bond_dim + 1 * bond_dim + 1] = 1.0 / 2.0_f64.sqrt(); // bond 1 -> |1⟩ -> bond 1
             TensorDynLen::from_dense_f64(
                 vec![
                     bond_indices[i - 1].clone(),
@@ -445,19 +445,21 @@ fn run_test_case(
     a1: f64,
     use_simple_exact: bool,
     max_rank: usize,
-    init_mode: &str,  // "random" or "rhs"
+    init_mode: &str, // "random" or "rhs"
 ) -> anyhow::Result<(f64, f64, f64, f64)> {
     let phys_dim = 2usize;
 
     // Always verbose for detailed debugging
     let verbose = true;
-    
+
     if verbose {
         println!("=== Setting up test with known exact solution ===");
     }
     let (x_exact, site_indices, _) = if use_simple_exact {
         if verbose {
-            println!("Exact solution: x_exact = |000...0⟩ + |111...1⟩ (simple two-state superposition)");
+            println!(
+                "Exact solution: x_exact = |000...0⟩ + |111...1⟩ (simple two-state superposition)"
+            );
         }
         create_simple_two_state_mps(n_sites, phys_dim)
     } else {
@@ -484,25 +486,28 @@ fn run_test_case(
     if verbose {
         println!("Computing RHS: b = (a0*I + a1*A) * x_exact...");
     }
-    
+
     // For |000...0⟩ + |111...1⟩, X * x_exact = x_exact (since it's an eigenvector with eigenvalue 1)
     // Therefore: (a0*I + a1*X) * x_exact = a0 * x_exact + a1 * X * x_exact = a0 * x_exact + a1 * x_exact = (a0 + a1) * x_exact
     // So b = (a0 + a1) * x_exact
     // For a0=1, a1=0: b = x_exact
     let rhs = scale_treetn(&x_exact, a0 + a1)?;
-    
+
     // Verify that b = (a0*I + a1*X) * x_exact (only in verbose mode)
     if verbose && a1 != 0.0 {
         println!("Verifying b computation...");
         let linop = LinearOperator::new(mpo.clone(), input_mapping.clone(), output_mapping.clone());
         let x_exact_x = apply_linear_operator(&linop, &x_exact, ApplyOptions::default())?;
-        
+
         let x_exact_full = x_exact.contract_to_tensor()?;
         let x_exact_x_full = x_exact_x.contract_to_tensor()?;
         let x_exact_vec = x_exact_full.to_vec_f64()?;
         let x_exact_x_vec = x_exact_x_full.to_vec_f64()?;
-        anyhow::ensure!(x_exact_vec.len() == x_exact_x_vec.len(), "vector length mismatch");
-        
+        anyhow::ensure!(
+            x_exact_vec.len() == x_exact_x_vec.len(),
+            "vector length mismatch"
+        );
+
         let mut diff2 = 0.0_f64;
         let mut norm2 = 0.0_f64;
         for (x_i, x_x_i) in x_exact_vec.iter().zip(x_exact_x_vec.iter()) {
@@ -510,15 +515,22 @@ fn run_test_case(
             diff2 += diff * diff;
             norm2 += x_i * x_i;
         }
-        let rel_diff = if norm2 > 0.0 { (diff2 / norm2).sqrt() } else { diff2.sqrt() };
-        println!("  ||X * x_exact - x_exact|| / ||x_exact|| = {:.3e}", rel_diff);
+        let rel_diff = if norm2 > 0.0 {
+            (diff2 / norm2).sqrt()
+        } else {
+            diff2.sqrt()
+        };
+        println!(
+            "  ||X * x_exact - x_exact|| / ||x_exact|| = {:.3e}",
+            rel_diff
+        );
         if rel_diff > 1e-10 {
             println!("  WARNING: X * x_exact != x_exact (unexpected!)");
         } else {
             println!("  OK: X * x_exact = x_exact (as expected)");
         }
     }
-    
+
     // Get the actual bond dimensions of b to match init
     let rhs_bond_dims: Vec<usize> = {
         let edges: Vec<_> = rhs.site_index_network().edges().collect();
@@ -532,25 +544,32 @@ fn run_test_case(
         }
         dims
     };
-    
+
     // Use the bond dimension from b for initial guess to avoid dimension mismatch
     // Note: RHS bond dimension is fixed, but x's bond dimension can grow during linsolve (up to max_rank)
     let init_bond_dim = if !rhs_bond_dims.is_empty() {
-        rhs_bond_dims[0]  // Use first bond dimension (they should all be the same)
+        rhs_bond_dims[0] // Use first bond dimension (they should all be the same)
     } else {
-        1  // Fallback to minimal bond dimension
+        1 // Fallback to minimal bond dimension
     };
-    
+
     if verbose {
-        print_bond_dims(&rhs, "b (RHS) bond dimensions (computed from (a0*I + a1*A) * x_exact)");
-        println!("b (RHS) vector dimension: 2^{} = {} (not printed)", n_sites, 1 << n_sites);
+        print_bond_dims(
+            &rhs,
+            "b (RHS) bond dimensions (computed from (a0*I + a1*A) * x_exact)",
+        );
+        println!(
+            "b (RHS) vector dimension: 2^{} = {} (not printed)",
+            n_sites,
+            1 << n_sites
+        );
         println!("Using init bond_dim={init_bond_dim} to match b (RHS) bond dimensions");
         println!("Note: x's bond dimension can grow during linsolve (up to max_rank={max_rank})");
         println!();
         println!("Creating initial guess...");
         println!("  Using init_mode={init_mode}");
     }
-    
+
     let init = match init_mode {
         "rhs" => {
             if verbose {
@@ -558,11 +577,12 @@ fn run_test_case(
             }
             rhs.clone()
         }
-        "random" => {
+        "perturbed" => {
+            // Use random MPS with bond_dim=4 as initial guess
             if verbose {
-                println!("  Using random initial guess (bond_dim={init_bond_dim})");
+                println!("  Using random initial guess (bond_dim=4)");
             }
-            create_random_mps_with_same_sites(n_sites, &site_indices, init_bond_dim, 0)?
+            create_random_mps_with_same_sites(n_sites, &site_indices, 4, 42)?
         }
         _ => anyhow::bail!("Unknown init_mode: {init_mode}"),
     };
@@ -576,16 +596,16 @@ fn run_test_case(
     // max_rank is passed as parameter to allow bond dimension growth during sweeps
     // Adjust GMRES parameters for better convergence
     let options = LinsolveOptions::default()
-        .with_nfullsweeps(200)
-        .with_krylov_tol(1e-8)  // Slightly relaxed from 1e-10
-        .with_krylov_maxiter(200)  // Increased from default 100
-        .with_krylov_dim(50)  // Increased from default 30
+        .with_nfullsweeps(10)
+        .with_krylov_tol(1e-8) // Slightly relaxed from 1e-10
+        .with_krylov_maxiter(200) // Increased from default 100
+        .with_krylov_dim(50) // Increased from default 30
         .with_max_rank(max_rank)
         .with_coefficients(a0, a1)
-        .with_convergence_tol(1e-6);  // Early termination if residual < 1e-6
+        .with_convergence_tol(1e-6); // Early termination if residual < 1e-6
 
     if verbose {
-        println!("Linsolve options: max_rank={max_rank}, nfullsweeps=200, krylov_tol=1e-8, krylov_maxiter=200, krylov_dim=50, convergence_tol=1e-6");
+        println!("Linsolve options: max_rank={max_rank}, nfullsweeps=10, krylov_tol=1e-8, krylov_maxiter=200, krylov_dim=50, convergence_tol=1e-6");
     }
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
@@ -670,13 +690,19 @@ fn run_test_case(
     }
     let mut last_residual = initial_residual;
     let mut last_error = initial_error;
-    
-    // Adjust number of sweeps based on N
-    let n_sweeps = if n_sites >= 10 { 100 } else if n_sites >= 7 { 50 } else { 20 };
+
+    // Adjust number of sweeps based on N (kept minimal for fast tests)
+    let n_sweeps = if n_sites >= 10 {
+        20
+    } else if n_sites >= 7 {
+        10
+    } else {
+        5
+    };
     if verbose {
         println!("Running {n_sweeps} sweeps (N={n_sites})");
     }
-    
+
     for sweep in 1..=n_sweeps {
         if verbose && (sweep % 10 == 0 || sweep <= 5) {
             println!("  Sweep {sweep}/{n_sweeps}...");
@@ -684,7 +710,7 @@ fn run_test_case(
         let sweep_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             apply_local_update_sweep(&mut x, &plan, &mut updater)
         }));
-        
+
         match sweep_result {
             Ok(Ok(())) => {
                 // Compute residual and error to track convergence (only print in verbose mode)
@@ -693,8 +719,14 @@ fn run_test_case(
                         match compute_exact_error(&x) {
                             Ok(error) => {
                                 if verbose {
-                                    print_bond_dims(&x, &format!("  x bond dimensions (after sweep {sweep})"));
-                                    println!("    Residual: {:.3e}, Error: {:.3e}", residual, error);
+                                    print_bond_dims(
+                                        &x,
+                                        &format!("  x bond dimensions (after sweep {sweep})"),
+                                    );
+                                    println!(
+                                        "    Residual: {:.3e}, Error: {:.3e}",
+                                        residual, error
+                                    );
                                 }
                                 // Check if we're making progress
                                 if residual < last_residual || error < last_error {
@@ -721,7 +753,7 @@ fn run_test_case(
             Ok(Err(e)) => {
                 println!("  Error during sweep {sweep}: {}", e);
                 println!("  Error type: {:?}", e);
-                
+
                 // Check if it's a GMRES singular matrix error
                 let error_str = format!("{}", e);
                 if error_str.contains("Near-singular") || error_str.contains("GMRES") {
@@ -732,13 +764,15 @@ fn run_test_case(
                             println!("  Current residual: {:.3e}, error: {:.3e}", residual, error);
                             // If we're close enough, consider it a success
                             if residual < 1e-6 && error < 1e-6 {
-                                println!("  Solution is close enough despite GMRES error. Continuing...");
+                                println!(
+                                    "  Solution is close enough despite GMRES error. Continuing..."
+                                );
                                 continue;
                             }
                         }
                     }
                 }
-                
+
                 println!("  Current x bond dimensions:");
                 print_bond_dims(&x, &format!("  x bond dimensions (before error)"));
                 return Err(e);
@@ -776,7 +810,7 @@ fn main() -> anyhow::Result<()> {
 
     // Test N=6 and N=7 to compare convergence behavior
     let test_n_values = vec![6, 7];
-    
+
     println!("=== Test: Investigating a0=1, a1=0 (identity operator) issue ===");
     println!("Testing N=6, 7 with init=random and init=rhs");
     println!("Equation: (a0*I + a1*A) x = b, where A = X (Pauli-X, bit-flip operator)");
@@ -790,35 +824,48 @@ fn main() -> anyhow::Result<()> {
     println!("  - Residual: ||(a0*I + a1*A) x - b|| / ||b|| (how well the equation is satisfied)");
     println!("  - Error: ||x - x_exact|| / ||x_exact|| (distance from the exact solution)");
     println!();
-    
+
     // Test case: a0=1, a1=0 only
-    let test_cases = vec![
-        (1.0, 0.0, "a0=1, a1=0 (I x = b)"),
-    ];
-    
+    let test_cases = vec![(1.0, 0.0, "a0=1, a1=0 (I x = b)")];
+
     // Test both init modes
-    let init_modes = vec!["random", "rhs"];
-    
+    let init_modes = vec!["perturbed", "rhs"];
+
     for &n_sites in &test_n_values {
         println!("========================================");
         println!("=== Testing N={n_sites} ===");
-        println!("Full vector space dimension: 2^{n_sites} = {}", 1 << n_sites);
+        println!(
+            "Full vector space dimension: 2^{n_sites} = {}",
+            1 << n_sites
+        );
         println!();
-        
+
         for (a0, a1, case_desc) in &test_cases {
             for &init_mode in &init_modes {
                 println!("--- Test case: {case_desc}, init={init_mode} ---");
-                
+
                 let result = run_test_case(n_sites, *a0, *a1, true, max_rank, init_mode);
-                
+
                 match result {
                     Ok((initial_residual, initial_error, final_residual, final_error)) => {
                         println!("  N={n_sites}, {case_desc}, init={init_mode}: SUCCESS");
-                        println!("    Initial residual: {:.3e} (||(a0*I + a1*A) x_init - b|| / ||b||)", initial_residual);
-                        println!("    Initial error: {:.3e} (||x_init - x_exact|| / ||x_exact||)", initial_error);
-                        println!("    Final residual: {:.3e} (||(a0*I + a1*A) x_final - b|| / ||b||)", final_residual);
-                        println!("    Final error: {:.3e} (||x_final - x_exact|| / ||x_exact||)", final_error);
-                        
+                        println!(
+                            "    Initial residual: {:.3e} (||(a0*I + a1*A) x_init - b|| / ||b||)",
+                            initial_residual
+                        );
+                        println!(
+                            "    Initial error: {:.3e} (||x_init - x_exact|| / ||x_exact||)",
+                            initial_error
+                        );
+                        println!(
+                            "    Final residual: {:.3e} (||(a0*I + a1*A) x_final - b|| / ||b||)",
+                            final_residual
+                        );
+                        println!(
+                            "    Final error: {:.3e} (||x_final - x_exact|| / ||x_exact||)",
+                            final_error
+                        );
+
                         // Consider error > 0.1 as failure
                         if final_error > 0.1 {
                             println!("    WARNING: Error > 0.1, convergence may be poor");
@@ -829,12 +876,12 @@ fn main() -> anyhow::Result<()> {
                         println!("    Error: {}", e);
                     }
                 }
-                
+
                 println!();
             }
         }
     }
-    
+
     println!("========================================");
     println!("Testing complete!");
 

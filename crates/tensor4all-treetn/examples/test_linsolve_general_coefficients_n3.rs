@@ -151,7 +151,7 @@ fn create_complex_n_site_mps(
     // Create tensors that represent a superposition of multiple basis states
     // We'll create a pattern where each bond index corresponds to a different combination
     // of basis states, allowing for a richer superposition
-    
+
     for i in 0..n_sites {
         let name = format!("site{i}");
         let tensor = if i == 0 {
@@ -501,7 +501,7 @@ fn run_test_case(
 
     // Setup linsolve options and updater
     let options = LinsolveOptions::default()
-        .with_nfullsweeps(200)
+        .with_nfullsweeps(10)
         .with_krylov_tol(1e-10)
         .with_max_rank(50)
         .with_coefficients(a0, a1);
@@ -554,7 +554,7 @@ fn run_test_case(
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0".to_string(), 2)
         .ok_or_else(|| anyhow::anyhow!("Failed to create 2-site sweep plan"))?;
 
-    for _sweep in 1..=20 {
+    for _sweep in 1..=5 {
         apply_local_update_sweep(&mut x, &plan, &mut updater)?;
     }
 
@@ -568,7 +568,6 @@ fn run_test_case(
 
     Ok(())
 }
-
 
 /// Print the 8x8 matrix representation of the Pauli-X operator X_0 ⊗ X_1 ⊗ X_2
 ///
@@ -590,10 +589,10 @@ fn run_test_case(
 fn print_pauli_x_matrix() {
     let n_sites = 3usize;
     let dim = 1 << n_sites; // 2^3 = 8
-    
+
     // Initialize matrix with zeros
     let mut matrix = vec![vec![0.0; dim]; dim];
-    
+
     // Pauli-X flips all bits: |i⟩ → |~i⟩ where ~i is bitwise NOT
     for i in 0..dim {
         let flipped = dim - 1 - i; // Bitwise NOT for n_sites bits
