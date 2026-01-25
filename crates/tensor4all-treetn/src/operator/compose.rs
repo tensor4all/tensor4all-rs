@@ -12,9 +12,10 @@ use petgraph::stable_graph::NodeIndex;
 
 use tensor4all_core::{IndexLike, TensorLike};
 
+use super::index_mapping::IndexMapping;
+use super::linear_operator::LinearOperator;
 use super::Operator;
 use crate::site_index_network::SiteIndexNetwork;
-use crate::treetn::linsolve::{IndexMapping, LinearOperator};
 use crate::treetn::TreeTN;
 
 /// Check if a set of operators are exclusive (non-overlapping) on the target network.
@@ -338,30 +339,6 @@ where
         mpo,
         combined_input_mapping,
         combined_output_mapping,
-    ))
-}
-
-/// Compose exclusive operators into a single operator (convenience wrapper).
-///
-/// This is a generic version that accepts any type implementing the Operator trait.
-/// For actual composition, use [`compose_exclusive_linear_operators`] with LinearOperator inputs.
-#[allow(clippy::type_complexity)]
-pub fn compose_exclusive_operators<T, V, O>(
-    _target: &SiteIndexNetwork<V, T::Index>,
-    _operators: &[&O],
-    _gap_site_indices: &HashMap<V, Vec<(T::Index, T::Index)>>,
-) -> Result<LinearOperator<T, V>>
-where
-    T: TensorLike,
-    T::Index: Clone + Hash + Eq + Debug,
-    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
-    O: Operator<T, V>,
-{
-    // This function requires operators to be LinearOperator
-    // Use compose_exclusive_linear_operators directly for LinearOperator inputs
-    Err(anyhow::anyhow!(
-        "Generic compose_exclusive_operators requires LinearOperator inputs. \
-         Use compose_exclusive_linear_operators directly."
     ))
 }
 

@@ -29,16 +29,10 @@ use tensor4all_core::AllowedPairs;
 use tensor4all_core::IndexLike;
 use tensor4all_core::TensorLike;
 
-use super::projected_operator::IndexMapping;
+use super::index_mapping::IndexMapping;
 use crate::treetn::TreeTN;
 
 /// LinearOperator: Wraps an MPO with index mapping for automatic transformations.
-///
-/// # Deprecated
-///
-/// This type is deprecated. Use `LinsolveUpdater::with_index_mappings()` instead,
-/// which directly accepts index mappings without the intermediate `LinearOperator` wrapper.
-/// The index mappings are now handled internally by `ProjectedOperator`.
 ///
 /// # Type Parameters
 ///
@@ -179,72 +173,6 @@ where
             input_mapping,
             output_mapping,
         })
-    }
-
-    /// Apply the operator to a state: compute `A|x⟩`.
-    ///
-    /// This handles index transformations automatically:
-    /// 1. Replace state's site indices with MPO's input indices (s_in_tmp)
-    /// 2. Contract state with MPO
-    /// 3. Replace MPO's output indices (s_out_tmp) with true output indices
-    ///
-    /// # Arguments
-    ///
-    /// * `state` - The input state |x⟩
-    ///
-    /// # Returns
-    ///
-    /// The result `A|x⟩` with correct output indices.
-    pub fn apply(&self, state: &TreeTN<T, V>) -> Result<TreeTN<T, V>> {
-        // For now, implement a simple node-by-node application
-        // This is a placeholder - full implementation requires proper TTN contraction
-
-        let mut result_tensors: HashMap<V, T> = HashMap::new();
-
-        for node in state.site_index_network().node_names() {
-            let node_idx = state
-                .node_index(node)
-                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in state", node))?;
-            let state_tensor = state
-                .tensor(node_idx)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node))?;
-
-            // Get operator tensor
-            let op_node_idx = self
-                .mpo
-                .node_index(node)
-                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in MPO", node))?;
-            let op_tensor = self
-                .mpo
-                .tensor(op_node_idx)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in MPO", node))?;
-
-            // Step 1: Replace state's site indices with MPO's input indices
-            let transformed_state = if let Some(mapping) = self.input_mapping.get(node) {
-                state_tensor.replaceind(&mapping.true_index, &mapping.internal_index)?
-            } else {
-                state_tensor.clone()
-            };
-
-            // Step 2: Contract with operator
-            let contracted = T::contract(&[&transformed_state, op_tensor], AllowedPairs::All)?;
-
-            // Step 3: Replace MPO's output indices with true output indices
-            let result_tensor = if let Some(mapping) = self.output_mapping.get(node) {
-                contracted.replaceind(&mapping.internal_index, &mapping.true_index)?
-            } else {
-                contracted
-            };
-
-            result_tensors.insert(node.clone(), result_tensor);
-        }
-
-        // Build result TreeTN from tensors
-        // For now, return a simple error - we need to implement proper TreeTN construction
-        Err(anyhow::anyhow!(
-            "LinearOperator::apply: Full TTN contraction not yet implemented. \
-             Use apply_local for local tensor application."
-        ))
     }
 
     /// Apply the operator to a local tensor at a specific region.

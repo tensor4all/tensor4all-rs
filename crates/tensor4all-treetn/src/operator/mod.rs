@@ -6,7 +6,9 @@
 //! # Key Types
 //!
 //! - [`Operator`]: Trait for objects that can act as operators on tensor network states
-//! - [`compose_exclusive_operators`]: Compose non-overlapping operators into a single operator
+//! - [`LinearOperator`]: MPO wrapper with index mapping for automatic transformations
+//! - [`IndexMapping`]: Mapping between true site indices and internal MPO indices
+//! - [`compose_exclusive_linear_operators`]: Compose non-overlapping LinearOperators into a single operator
 //!
 //! # Example
 //!
@@ -19,19 +21,23 @@
 //! let target = state.site_index_network();
 //!
 //! // Compose into single operator on full space (identity at gap x)
-//! let composed = compose_exclusive_operators(target, &[&op1, &op2])?;
+//! let composed = compose_exclusive_linear_operators(target, &[&op1, &op2], &gap_indices)?;
 //!
 //! // Apply composed operator
 //! let result = state.contract_zipup(&composed, center, rtol, max_rank)?;
 //! ```
 
+mod apply;
 mod compose;
 mod identity;
+mod index_mapping;
+mod linear_operator;
 
-pub use compose::{
-    are_exclusive_operators, compose_exclusive_linear_operators, compose_exclusive_operators,
-};
+pub use apply::{apply_linear_operator, ApplyOptions, ArcLinearOperator};
+pub use compose::{are_exclusive_operators, compose_exclusive_linear_operators};
 pub use identity::{build_identity_operator_tensor, build_identity_operator_tensor_c64};
+pub use index_mapping::IndexMapping;
+pub use linear_operator::LinearOperator;
 
 use std::collections::HashSet;
 use std::fmt::Debug;

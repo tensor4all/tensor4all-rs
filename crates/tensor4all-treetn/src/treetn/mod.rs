@@ -11,7 +11,6 @@ mod canonicalize;
 pub mod contraction;
 mod decompose;
 mod fit;
-pub mod linsolve;
 mod localupdate;
 mod operator_impl;
 mod ops;
@@ -38,14 +37,8 @@ pub use decompose::{factorize_tensor_to_treetn, factorize_tensor_to_treetn_with,
 
 // Re-export local update types
 pub use localupdate::{
-    apply_local_update_sweep, LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
-};
-
-// Re-export linsolve types
-pub use linsolve::{
-    apply_linear_operator, linsolve, ApplyOptions, ArcLinearOperator, EnvironmentCache,
-    IndexMapping, LinearOperator, LinsolveOptions, LinsolveResult, LinsolveUpdater,
-    LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator, ProjectedState,
+    apply_local_update_sweep, get_boundary_edges, BoundaryEdge, LocalUpdateStep,
+    LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
 };
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).

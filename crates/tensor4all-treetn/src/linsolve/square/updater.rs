@@ -1,27 +1,29 @@
-//! LinsolveUpdater: Local update implementation for linsolve.
+//! SquareLinsolveUpdater: Local update implementation for square linsolve.
 //!
 //! Uses GMRES (via tensor4all_core::krylov) to solve the local linear problem at each sweep step.
+//! This is the V_in = V_out specialized version.
 
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use tensor4all_core::any_scalar::AnyScalar;
 use tensor4all_core::krylov::{gmres, GmresOptions};
-use tensor4all_core::{AllowedPairs, FactorizeAlg, IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, FactorizeOptions, IndexLike, TensorLike};
 
 use super::local_linop::LocalLinOp;
-use super::options::LinsolveOptions;
-use super::projected_operator::{IndexMapping, ProjectedOperator};
 use super::projected_state::ProjectedState;
-use crate::treetn::decompose::{factorize_tensor_to_treetn_with, TreeTopology};
-use crate::treetn::localupdate::{LocalUpdateStep, LocalUpdater};
-use crate::treetn::TreeTN;
+use crate::linsolve::common::{LinsolveOptions, ProjectedOperator};
+use crate::operator::IndexMapping;
+use crate::{
+    factorize_tensor_to_treetn_with, get_boundary_edges, LocalUpdateStep, LocalUpdater, TreeTN,
+    TreeTopology,
+};
 
-/// Report from LinsolveUpdater::verify().
+/// Report from SquareLinsolveUpdater::verify().
 #[derive(Debug, Clone)]
 pub struct LinsolveVerifyReport<V> {
     /// Whether the configuration is valid
@@ -105,7 +107,7 @@ impl<V: std::fmt::Debug> std::fmt::Display for LinsolveVerifyReport<V> {
     }
 }
 
-/// LinsolveUpdater: Implements LocalUpdater for the linsolve algorithm.
+/// SquareLinsolveUpdater: Implements LocalUpdater for the square linsolve algorithm.
 ///
 /// At each sweep step:
 /// 1. Compute local operator (from ProjectedOperator environments)
@@ -113,13 +115,10 @@ impl<V: std::fmt::Debug> std::fmt::Display for LinsolveVerifyReport<V> {
 /// 3. Solve local linear system using GMRES
 /// 4. Factorize the result and update the state
 ///
-/// # Current Limitations
-///
-/// **Only V_in = V_out is supported.** The operator must have the same input and output
-/// index spaces. Support for V_in ≠ V_out may be added in future versions.
-///
-/// The current solution x is used for both bra and ket in environment computations.
-pub struct LinsolveUpdater<T, V>
+/// This is the V_in = V_out specialized version. The current solution x is used
+/// with a separate reference state (with different bond indices) for stable
+/// environment computation.
+pub struct SquareLinsolveUpdater<T, V>
 where
     T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
@@ -130,9 +129,16 @@ where
     pub projected_state: ProjectedState<T, V>,
     /// Solver options
     pub options: LinsolveOptions,
+    /// Reference state (separate from ket to avoid unintended contractions).
+    /// Link indices are different from ket_state to prevent bra↔ket link contractions.
+    /// Boundary bonds (region ↔ outside) maintain stable IDs for cache consistency.
+    reference_state: TreeTN<T, V>,
+    /// Mapping from boundary edge (node_in_region, neighbor_outside) to reference-side bond index.
+    /// This ensures boundary bonds keep stable IDs across updates for environment cache reuse.
+    boundary_bond_map: HashMap<(V, V), T::Index>,
 }
 
-impl<T, V> LinsolveUpdater<T, V>
+impl<T, V> SquareLinsolveUpdater<T, V>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
@@ -140,25 +146,25 @@ where
         Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
-    /// Create a new LinsolveUpdater.
+    /// Create a new SquareLinsolveUpdater.
     ///
-    /// **Note:** Only V_in = V_out is supported. The operator must have the same
-    /// input and output index spaces.
+    /// The reference_state will be initialized lazily on the first `before_step` call.
     pub fn new(operator: TreeTN<T, V>, rhs: TreeTN<T, V>, options: LinsolveOptions) -> Self {
         Self {
             projected_operator: Arc::new(RwLock::new(ProjectedOperator::new(operator))),
             projected_state: ProjectedState::new(rhs),
             options,
+            reference_state: TreeTN::new(),
+            boundary_bond_map: HashMap::new(),
         }
     }
 
-    /// Create a new LinsolveUpdater with index mappings for correct index handling.
+    /// Create a new SquareLinsolveUpdater with index mappings for correct index handling.
     ///
     /// Use this when the MPO uses internal indices (s_in_tmp, s_out_tmp) that differ
     /// from the state's site indices. The mappings define how to translate between them.
     ///
-    /// **Note:** Only V_in = V_out is supported. The operator must have the same
-    /// input and output index spaces.
+    /// The reference_state will be initialized lazily on the first `before_step` call.
     ///
     /// # Arguments
     /// * `operator` - The MPO with internal index IDs
@@ -179,7 +185,37 @@ where
             projected_operator: Arc::new(RwLock::new(projected_operator)),
             projected_state: ProjectedState::new(rhs),
             options,
+            reference_state: TreeTN::new(),
+            boundary_bond_map: HashMap::new(),
         }
+    }
+
+    /// Initialize reference_state from ket_state if not already initialized.
+    ///
+    /// Creates reference_state by relabeling link indices (using sim() for internal bonds,
+    /// preserving boundary bonds for cache consistency).
+    ///
+    /// This is called lazily on the first `before_step` to ensure we have the initial ket_state.
+    fn ensure_reference_state_initialized(&mut self, ket_state: &TreeTN<T, V>) -> Result<()> {
+        // Check if reference_state is already initialized (has nodes)
+        if !self.reference_state.node_names().is_empty() {
+            return Ok(());
+        }
+
+        // Initialize reference_state by cloning ket_state and relabeling link indices
+        // For boundary bonds, we'll preserve the mapping for later reuse
+        let mut reference_state = ket_state.clone();
+
+        // Get all edges to determine which are boundary bonds
+        // Since we don't have a region yet, we'll relabel all links initially
+        // Boundary bonds will be stabilized in after_step when we know the region
+        reference_state.sim_linkinds_mut()?;
+
+        // Initialize boundary_bond_map as empty (will be populated per-region in after_step)
+        self.boundary_bond_map.clear();
+
+        self.reference_state = reference_state;
+        Ok(())
     }
 
     /// Verify internal data consistency between operator, RHS, and state.
@@ -193,7 +229,13 @@ where
     pub fn verify(&self, state: &TreeTN<T, V>) -> Result<LinsolveVerifyReport<V>> {
         let mut report = LinsolveVerifyReport::default();
 
-        let proj_op = self.projected_operator.read().unwrap();
+        let proj_op = self
+            .projected_operator
+            .read()
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to acquire read lock on projected_operator: {}", e)
+            })
+            .context("verify: lock poisoned")?;
         let operator = &proj_op.operator;
         let rhs = &self.projected_state.rhs;
 
@@ -400,16 +442,14 @@ where
                 // Check if there's an edge between these nodes
                 if let Some(decomp_edge) = decomposed.edge_between(node_a, node_b) {
                     if let Some(decomp_bond) = decomposed.bond_index(decomp_edge) {
-                        // Create a new bond index with original ID structure
-                        // Use sim() once for this edge
+                        // Create a new bond index matching decomposed bond dimension.
+                        // Use sim() once for this edge to avoid ID collisions.
                         if let Some(orig_edge) = subtree.edge_between(node_a, node_b) {
-                            if let Some(orig_bond) = subtree.bond_index(orig_edge) {
-                                let new_bond = orig_bond.sim();
-                                bond_mapping.insert(decomp_bond.id().clone(), new_bond.clone());
+                            let new_bond = decomp_bond.sim();
+                            bond_mapping.insert(decomp_bond.id().clone(), new_bond.clone());
 
-                                // Update the edge bond in subtree
-                                subtree.replace_edge_bond(orig_edge, new_bond)?;
-                            }
+                            // Update the edge bond in subtree
+                            subtree.replace_edge_bond(orig_edge, new_bond)?;
                         }
                     }
                 }
@@ -421,7 +461,10 @@ where
             let decomp_idx = decomposed
                 .node_index(node)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in decomposed TreeTN", node))?;
-            let mut new_tensor = decomposed.tensor(decomp_idx).unwrap().clone();
+            let mut new_tensor = decomposed
+                .tensor(decomp_idx)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node))?
+                .clone();
 
             // Replace bond indices using the pre-computed mapping
             for neighbor in full_treetn.site_index_network().neighbors(node) {
@@ -438,7 +481,9 @@ where
             }
 
             // Update the tensor in subtree
-            let subtree_idx = subtree.node_index(node).unwrap();
+            let subtree_idx = subtree
+                .node_index(node)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in subtree", node))?;
             subtree.replace_tensor(subtree_idx, new_tensor)?;
         }
 
@@ -452,7 +497,7 @@ where
         // Use state's SiteIndexNetwork directly (implements NetworkTopology)
         let topology = state.site_index_network();
 
-        // Get local RHS: <b|_local (V_in = V_out case only)
+        // Get local RHS: <b|_local
         let rhs_local_raw = self
             .projected_state
             .local_constant_term(region, state, topology)?;
@@ -486,11 +531,13 @@ where
         let a0 = AnyScalar::new_real(self.options.a0);
         let a1 = AnyScalar::new_real(self.options.a1);
 
-        // Create local linear operator (V_in = V_out: state is used as both ket and bra)
+        // Create local linear operator with separate reference_state
+        // This prevents unintended bra↔ket link contractions in environment computation
         let linop = LocalLinOp::new(
             Arc::clone(&self.projected_operator),
             region.to_vec(),
             state.clone(),
+            self.reference_state.clone(),
             a0,
             a1,
         );
@@ -509,19 +556,141 @@ where
         // Solve using GMRES (works directly with TensorDynLen)
         let result = gmres(apply_a, &rhs_local, init, &gmres_options)?;
 
-        // Log convergence info if needed
-        if !result.converged {
-            eprintln!(
-                "Warning: GMRES did not converge (iterations: {}, residual: {:.6e})",
-                result.iterations, result.residual_norm
-            );
-        }
+        // Note: GMRES convergence info (result.converged, result.iterations, result.residual_norm)
+        // is not currently exposed. Consider adding tracing or returning via a result struct
+        // if convergence diagnostics are needed.
+        let _ = result.converged; // Suppress unused variable warning
 
         Ok(result.solution)
     }
+
+    /// Synchronize reference_state region with ket_state, preserving boundary bond IDs.
+    ///
+    /// This ensures reference_state stays in sync with ket_state updates while maintaining
+    /// stable boundary bond IDs for environment cache reuse.
+    fn sync_reference_state_region(
+        &mut self,
+        step: &LocalUpdateStep<V>,
+        ket_state: &TreeTN<T, V>,
+    ) -> Result<()> {
+        // Extract updated region from ket_state
+        let ket_region = ket_state.extract_subtree(&step.nodes)?;
+
+        // Build mapping from ket bond IDs to reference bond indices for *all* bonds incident to the region.
+        //
+        // Important: reference_state bond IDs must remain stable across steps, even when an edge alternates
+        // between being a boundary edge and an internal edge in different steps (as happens in sweeps).
+        // Therefore, we always reuse the current reference_state bond indices, and never create fresh IDs here.
+        let mut ket_to_ref_bond_map: HashMap<<T::Index as IndexLike>::Id, T::Index> =
+            HashMap::new();
+
+        // Populate mapping for all edges incident to region nodes.
+        // - Boundary edges (region ↔ outside): use reference_state's existing bond IDs for cache stability
+        // - Internal edges (within region): use sim() to create new IDs distinct from ket
+        // This ensures reference_state bond IDs are always different from ket_state bond IDs.
+        let region_nodes: std::collections::HashSet<_> = step.nodes.iter().collect();
+        for node in &step.nodes {
+            for neighbor in ket_state.site_index_network().neighbors(node) {
+                let ket_edge = match ket_state.edge_between(node, &neighbor) {
+                    Some(e) => e,
+                    None => continue,
+                };
+                let ket_bond = match ket_state.bond_index(ket_edge) {
+                    Some(b) => b,
+                    None => continue,
+                };
+
+                let ref_bond = if region_nodes.contains(&neighbor) {
+                    // Internal edge: create new ID using sim()
+                    ket_bond.sim()
+                } else {
+                    // Boundary edge: use reference_state's existing bond ID
+                    let ref_edge = match self.reference_state.edge_between(node, &neighbor) {
+                        Some(e) => e,
+                        None => continue,
+                    };
+                    match self.reference_state.bond_index(ref_edge) {
+                        Some(b) => b.clone(),
+                        None => continue,
+                    }
+                };
+                ket_to_ref_bond_map.insert(ket_bond.id().clone(), ref_bond);
+            }
+        }
+
+        // Keep a small explicit cache for boundary edges (region ↔ outside) for inspection/debugging.
+        // This is not used to drive the mapping logic.
+        for boundary_edge in get_boundary_edges(ket_state, &step.nodes)? {
+            if let Some(edge) = self.reference_state.edge_between(
+                &boundary_edge.node_in_region,
+                &boundary_edge.neighbor_outside,
+            ) {
+                if let Some(ref_bond) = self.reference_state.bond_index(edge) {
+                    self.boundary_bond_map.insert(
+                        (
+                            boundary_edge.node_in_region.clone(),
+                            boundary_edge.neighbor_outside.clone(),
+                        ),
+                        ref_bond.clone(),
+                    );
+                }
+            }
+        }
+
+        // Create new ref_region by copying ket_region
+        let mut ref_region = ket_region.clone();
+
+        // First, update edge bonds in ref_region to reference-side IDs
+        // This must be done before replacing tensors to ensure consistency
+        let mut edges_to_update: Vec<(V, V, T::Index)> = Vec::new();
+        for node in &step.nodes {
+            let neighbors: Vec<V> = ref_region.site_index_network().neighbors(node).collect();
+            for neighbor in neighbors {
+                if let Some(edge) = ref_region.edge_between(node, &neighbor) {
+                    if let Some(bond) = ref_region.bond_index(edge) {
+                        if let Some(new_bond) = ket_to_ref_bond_map.get(bond.id()) {
+                            edges_to_update.push((node.clone(), neighbor, new_bond.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        // Update edges (ref_region is no longer borrowed)
+        for (node, neighbor, new_bond) in edges_to_update {
+            if let Some(edge) = ref_region.edge_between(&node, &neighbor) {
+                ref_region.replace_edge_bond(edge, new_bond)?;
+            }
+        }
+
+        // Now replace all bond indices (including boundary bonds) in ref_region tensors with reference-side IDs
+        for node in &step.nodes {
+            if let Some(node_idx) = ref_region.node_index(node) {
+                if let Some(tensor) = ref_region.tensor(node_idx) {
+                    let mut new_tensor = tensor.clone();
+                    let tensor_indices = tensor.external_indices();
+
+                    for ket_idx in &tensor_indices {
+                        // Replace if this index is one of the region's bond indices (internal or boundary)
+                        if let Some(ref_bond) = ket_to_ref_bond_map.get(ket_idx.id()) {
+                            new_tensor = new_tensor.replaceind(ket_idx, ref_bond)?;
+                        }
+                        // Site indices are kept as-is (same IDs in reference and ket)
+                    }
+
+                    ref_region.replace_tensor(node_idx, new_tensor)?;
+                }
+            }
+        }
+
+        // Replace the region back into reference_state
+        self.reference_state
+            .replace_subtree(&step.nodes, &ref_region)?;
+
+        Ok(())
+    }
 }
 
-impl<T, V> LocalUpdater<T, V> for LinsolveUpdater<T, V>
+impl<T, V> LocalUpdater<T, V> for SquareLinsolveUpdater<T, V>
 where
     T: TensorLike + 'static,
     T::Index: IndexLike,
@@ -529,6 +698,16 @@ where
         Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
+    fn before_step(
+        &mut self,
+        _step: &LocalUpdateStep<V>,
+        full_treetn_before: &TreeTN<T, V>,
+    ) -> Result<()> {
+        // Initialize reference_state lazily on first call
+        self.ensure_reference_state_initialized(full_treetn_before)?;
+        Ok(())
+    }
+
     fn update(
         &mut self,
         mut subtree: TreeTN<T, V>,
@@ -544,8 +723,12 @@ where
         let topology = self.build_subtree_topology(&solved_local, &step.nodes, full_treetn)?;
 
         // Decompose solved tensor back into TreeTN using factorize_tensor_to_treetn
+        let mut factorize_options = FactorizeOptions::svd();
+        if let Some(max_rank) = self.options.truncation.max_rank() {
+            factorize_options = factorize_options.with_max_rank(max_rank);
+        }
         let decomposed =
-            factorize_tensor_to_treetn_with(&solved_local, &topology, FactorizeAlg::SVD)?;
+            factorize_tensor_to_treetn_with(&solved_local, &topology, factorize_options)?;
 
         // Copy decomposed tensors back to subtree, preserving original bond IDs
         self.copy_decomposed_to_subtree(&mut subtree, &decomposed, &step.nodes, full_treetn)?;
@@ -564,9 +747,17 @@ where
         // Use state's SiteIndexNetwork directly (implements NetworkTopology)
         let topology = full_treetn_after.site_index_network();
 
+        // Synchronize reference_state with ket_state (full_treetn_after) for the updated region
+        // while preserving boundary bond IDs for cache consistency
+        self.sync_reference_state_region(step, full_treetn_after)?;
+
         // Invalidate all caches affected by the updated region
         {
-            let mut proj_op = self.projected_operator.write().unwrap();
+            let mut proj_op = self
+                .projected_operator
+                .write()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire write lock: {}", e))
+                .context("after_step: lock poisoned")?;
             proj_op.invalidate(&step.nodes, topology);
         }
         self.projected_state.invalidate(&step.nodes, topology);

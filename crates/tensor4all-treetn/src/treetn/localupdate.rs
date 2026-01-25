@@ -183,6 +183,70 @@ where
 }
 
 // ============================================================================
+// Boundary edge/bond utilities
+// ============================================================================
+
+/// Boundary edge information: (node_in_region, neighbor_outside, bond_index).
+///
+/// Represents an edge connecting a node inside the region to a neighbor outside the region.
+#[derive(Debug, Clone)]
+pub struct BoundaryEdge<T, V>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq,
+{
+    /// Node inside the region
+    pub node_in_region: V,
+    /// Neighbor outside the region
+    pub neighbor_outside: V,
+    /// Bond index connecting node_in_region to neighbor_outside
+    pub bond_index: T::Index,
+}
+
+/// Get all boundary edges for a given region in a TreeTN.
+///
+/// Returns edges connecting nodes inside the region to neighbors outside the region.
+/// This is useful for maintaining stable bond IDs across updates (e.g., for environment cache consistency).
+///
+/// # Arguments
+/// * `treetn` - The TreeTN to analyze
+/// * `region` - Nodes that are inside the region
+///
+/// # Returns
+/// Vector of boundary edges, each containing the node in region, neighbor outside, and bond index.
+pub fn get_boundary_edges<T, V>(
+    treetn: &TreeTN<T, V>,
+    region: &[V],
+) -> Result<Vec<BoundaryEdge<T, V>>>
+where
+    T: TensorLike,
+    T::Index: IndexLike,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    let mut boundary_edges = Vec::new();
+    let region_set: HashSet<&V> = region.iter().collect();
+
+    for node in region {
+        for neighbor in treetn.site_index_network().neighbors(node) {
+            if !region_set.contains(&neighbor) {
+                // This is a boundary edge: node is in region, neighbor is outside
+                if let Some(edge) = treetn.edge_between(node, &neighbor) {
+                    if let Some(bond) = treetn.bond_index(edge) {
+                        boundary_edges.push(BoundaryEdge {
+                            node_in_region: node.clone(),
+                            neighbor_outside: neighbor.clone(),
+                            bond_index: bond.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(boundary_edges)
+}
+
+// ============================================================================
 // LocalUpdater trait
 // ============================================================================
 

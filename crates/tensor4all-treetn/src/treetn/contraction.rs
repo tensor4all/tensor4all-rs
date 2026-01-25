@@ -1214,7 +1214,7 @@ where
 
     // 3. Decompose back to TreeTN
     let mut result =
-        factorize_tensor_to_treetn_with(&contracted_tensor, &topology, FactorizeAlg::SVD)?;
+        factorize_tensor_to_treetn_with(&contracted_tensor, &topology, FactorizeOptions::svd())?;
 
     // Set canonical center
     if result.node_index(center).is_some() {

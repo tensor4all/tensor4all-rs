@@ -1,6 +1,7 @@
-//! ProjectedState: 2-chain environment for RHS computation.
+//! ProjectedState: 2-chain environment for RHS computation (square case).
 //!
 //! Computes `<b|x_local>` efficiently for Tree Tensor Networks.
+//! This is the V_in = V_out specialized version.
 
 use std::hash::Hash;
 
@@ -8,7 +9,7 @@ use anyhow::Result;
 
 use tensor4all_core::{AllowedPairs, IndexLike, TensorLike};
 
-use super::environment::{EnvironmentCache, NetworkTopology};
+use crate::linsolve::common::{EnvironmentCache, NetworkTopology};
 use crate::treetn::TreeTN;
 
 /// ProjectedState: Manages 2-chain environments for RHS computation.
@@ -60,34 +61,21 @@ where
     /// Compute the local constant term `<b|_local` for the given region.
     ///
     /// This returns the local RHS tensors contracted with environments.
-    ///
-    /// **Note:** Only V_in = V_out is currently supported. The ket_state is used
-    /// for both bra and ket in environment computations.
+    /// For V_in = V_out, the reference_state is used for both bra and ket
+    /// in environment computations.
     ///
     /// # Arguments
     /// * `region` - The nodes in the local update region
-    /// * `ket_state` - The current solution state
+    /// * `reference_state` - The current solution state (used as reference for environments)
     /// * `topology` - The network topology
     pub fn local_constant_term<NT: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        ket_state: &TreeTN<T, V>,
-        topology: &NT,
-    ) -> Result<T> {
-        // Use ket_state directly as bra_state (V_in = V_out)
-        self.local_constant_term_impl(region, ket_state, ket_state, topology)
-    }
-
-    /// Internal implementation for computing local constant term with explicit bra state.
-    fn local_constant_term_impl<NT: NetworkTopology<V>>(
-        &mut self,
-        region: &[V],
-        _ket_state: &TreeTN<T, V>,
-        bra_state: &TreeTN<T, V>,
+        reference_state: &TreeTN<T, V>,
         topology: &NT,
     ) -> Result<T> {
         // Ensure environments are computed
-        self.ensure_environments(region, bra_state, topology)?;
+        self.ensure_environments(region, reference_state, topology)?;
 
         // Collect all tensors to contract: local RHS tensors + environments
         let mut all_tensors: Vec<T> = Vec::new();
@@ -123,19 +111,17 @@ where
     }
 
     /// Ensure environments are computed for neighbors of the region.
-    ///
-    /// # Arguments
-    /// * `bra_state` - Reference state in V_out for environment computation
     fn ensure_environments<NT: NetworkTopology<V>>(
         &mut self,
         region: &[V],
-        bra_state: &TreeTN<T, V>,
+        reference_state: &TreeTN<T, V>,
         topology: &NT,
     ) -> Result<()> {
         for node in region {
             for neighbor in topology.neighbors(node) {
                 if !region.contains(&neighbor) && !self.envs.contains(&neighbor, node) {
-                    let env = self.compute_environment(&neighbor, node, bra_state, topology)?;
+                    let env =
+                        self.compute_environment(&neighbor, node, reference_state, topology)?;
                     self.envs.insert(neighbor.clone(), node.clone(), env);
                 }
             }
@@ -145,15 +131,12 @@ where
 
     /// Recursively compute environment for edge (from, to).
     ///
-    /// Computes `<b|ref_out>` partial contraction at node `from`.
-    ///
-    /// # Arguments
-    /// * `bra_state` - Reference state in V_out for environment computation
+    /// Computes `<b|ref>` partial contraction at node `from`.
     fn compute_environment<NT: NetworkTopology<V>>(
         &mut self,
         from: &V,
         to: &V,
-        bra_state: &TreeTN<T, V>,
+        reference_state: &TreeTN<T, V>,
         topology: &NT,
     ) -> Result<T> {
         // First, ensure child environments are computed
@@ -161,7 +144,7 @@ where
 
         for child in &child_neighbors {
             if !self.envs.contains(child, from) {
-                let child_env = self.compute_environment(child, from, bra_state, topology)?;
+                let child_env = self.compute_environment(child, from, reference_state, topology)?;
                 self.envs.insert(child.clone(), from.clone(), child_env);
             }
         }
@@ -172,22 +155,22 @@ where
             .filter_map(|child| self.envs.get(child, from).cloned())
             .collect();
 
-        // Contract bra (RHS) with ket (bra_state as reference) at this node
+        // Contract bra (RHS) with ket (reference_state) at this node
         let node_idx_bra = self
             .rhs
             .node_index(from)
             .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in RHS", from))?;
-        let node_idx_ket = bra_state
+        let node_idx_ket = reference_state
             .node_index(from)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in bra_state", from))?;
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in reference_state", from))?;
 
         let tensor_bra = self
             .rhs
             .tensor(node_idx_bra)
             .ok_or_else(|| anyhow::anyhow!("Tensor not found in RHS"))?;
-        let tensor_ket = bra_state
+        let tensor_ket = reference_state
             .tensor(node_idx_ket)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found in bra_state"))?;
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found in reference_state"))?;
 
         let bra_conj = tensor_bra.conj();
 

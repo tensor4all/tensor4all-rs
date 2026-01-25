@@ -18,7 +18,7 @@ use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorDynLen};
 use tensor4all_treetn::{
     apply_local_update_sweep, CanonicalizationOptions, IndexMapping, LinsolveOptions,
-    LinsolveUpdater, LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, TreeTN,
+    LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater, SquareLinsolveUpdater, TreeTN,
 };
 
 fn make_node_name(i: usize) -> String {
@@ -251,8 +251,13 @@ fn case_ok_identity_single_1site_step() -> anyhow::Result<()> {
         .with_coefficients(0.0, 1.0);
 
     let mut x = init.canonicalize([center.clone()], CanonicalizationOptions::default())?;
-    let mut updater =
-        LinsolveUpdater::with_index_mappings(operator, input_mapping, output_mapping, rhs, options);
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
+        operator,
+        input_mapping,
+        output_mapping,
+        rhs,
+        options,
+    );
 
     // Single 1-site local update at the canonical center (no sweep).
     let step = LocalUpdateStep {
@@ -313,8 +318,13 @@ fn case_fail_identity_2site_sweep() -> anyhow::Result<()> {
     let steps: Vec<_> = plan.steps.iter().take(max_steps).cloned().collect();
     let subplan = LocalUpdateSweepPlan { steps, nsite };
 
-    let mut updater =
-        LinsolveUpdater::with_index_mappings(operator, input_mapping, output_mapping, rhs, options);
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
+        operator,
+        input_mapping,
+        output_mapping,
+        rhs,
+        options,
+    );
 
     // Expected to fail (repro):
     // Dimension mismatch after alignment: self has dims [2, 2, 20, 8], other has [2, 20, 2, 8]
