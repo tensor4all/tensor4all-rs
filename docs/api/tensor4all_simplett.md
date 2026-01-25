@@ -90,17 +90,29 @@ Evaluate from the right starting at site `start` `indices` contains indices for 
 
 Evaluate the tensor train at a given index set using cache
 
-### `pub fn batch_evaluate(&mut self, left_indices: & [MultiIndex], right_indices: & [MultiIndex], n_center: usize) -> Result < (Vec < T > , Vec < usize >) >` (impl TTCache < T >)
+### `pub fn evaluate_many(&mut self, indices: & [MultiIndex]) -> Result < Vec < T > >` (impl TTCache < T >)
 
-Batch evaluate the tensor train Evaluates for all combinations of left_indices and right_indices, with `n_center` free indices in the middle.
+Batch evaluate at multiple index sets This method efficiently evaluates the tensor train at multiple indices by automatically finding the optimal split position to maximize cache reuse.
+
+### ` fn find_optimal_split(&self, indices: & [MultiIndex]) -> usize` (impl TTCache < T >)
+
+Find the optimal split position that minimizes the number of unique left and right parts (maximizing cache reuse)
 
 ### ` fn test_ttcache_evaluate()`
 
 ### ` fn test_ttcache_caching()`
 
-### ` fn test_ttcache_batch_evaluate()`
-
 ### ` fn test_ttcache_clear()`
+
+### ` fn test_ttcache_evaluate_many()`
+
+### ` fn test_ttcache_evaluate_many_matches_single()`
+
+### ` fn test_ttcache_evaluate_many_cache_efficiency()`
+
+### ` fn test_ttcache_evaluate_many_empty()`
+
+### ` fn test_find_optimal_split()`
 
 ## src/canonical.rs
 
@@ -186,19 +198,47 @@ Set two adjacent site tensors (useful for TEBD-like algorithms)
 
 Center canonicalize a vector of tensors in place
 
-### ` fn test_site_tensor_train_creation()`
+### ` fn test_site_tensor_train_creation_generic()`
 
-### ` fn test_site_tensor_train_preserves_values()`
+### ` fn test_site_tensor_train_preserves_values_generic()`
 
-### ` fn test_move_center()`
+### ` fn test_move_center_generic()`
 
-### ` fn test_set_center()`
+### ` fn test_set_center_generic()`
 
-### ` fn test_to_tensor_train()`
+### ` fn test_to_tensor_train_generic()`
 
-### ` fn test_center_canonicalize_function()`
+### ` fn test_center_canonicalize_function_generic()`
 
-### ` fn test_evaluate_matches_original()`
+### ` fn test_evaluate_matches_original_generic()`
+
+### ` fn test_site_tensor_train_creation_f64()`
+
+### ` fn test_site_tensor_train_preserves_values_f64()`
+
+### ` fn test_move_center_f64()`
+
+### ` fn test_set_center_f64()`
+
+### ` fn test_to_tensor_train_f64()`
+
+### ` fn test_center_canonicalize_function_f64()`
+
+### ` fn test_evaluate_matches_original_f64()`
+
+### ` fn test_site_tensor_train_creation_c64()`
+
+### ` fn test_site_tensor_train_preserves_values_c64()`
+
+### ` fn test_move_center_c64()`
+
+### ` fn test_set_center_c64()`
+
+### ` fn test_to_tensor_train_c64()`
+
+### ` fn test_center_canonicalize_function_c64()`
+
+### ` fn test_evaluate_matches_original_c64()`
 
 ## src/compression.rs
 
@@ -224,11 +264,23 @@ Compress the tensor train in-place using the specified method This performs a tw
 
 Create a compressed copy of the tensor train
 
-### ` fn test_compress_constant()`
+### ` fn test_compress_constant_generic()`
 
-### ` fn test_compress_preserves_values()`
+### ` fn test_compress_preserves_values_generic()`
 
-### ` fn test_compress_with_max_bond_dim()`
+### ` fn test_compress_with_max_bond_dim_generic()`
+
+### ` fn test_compress_constant_f64()`
+
+### ` fn test_compress_preserves_values_f64()`
+
+### ` fn test_compress_with_max_bond_dim_f64()`
+
+### ` fn test_compress_constant_c64()`
+
+### ` fn test_compress_preserves_values_c64()`
+
+### ` fn test_compress_with_max_bond_dim_c64()`
 
 ## src/contraction.rs
 
@@ -850,63 +902,67 @@ Convert the tensor train to a full tensor Returns a flat vector containing all t
 
 ### ` fn site_tensors(&self) -> & [Tensor3 < T >]` (impl TensorTrain < T >)
 
-### ` fn test_tensortrain_zeros()`
+### ` fn test_tensortrain_zeros_generic()`
 
-### ` fn test_tensortrain_constant()`
+### ` fn test_tensortrain_constant_generic()`
 
-### ` fn test_tensortrain_evaluate()`
+### ` fn test_tensortrain_evaluate_generic()`
 
-### ` fn test_tensortrain_scale()`
+### ` fn test_tensortrain_scale_generic()`
 
-### ` fn test_tensortrain_reverse()`
+### ` fn test_tensortrain_reverse_generic()`
 
-### ` fn test_fulltensor()`
+### ` fn test_fulltensor_generic()`
 
-### ` fn test_fulltensor_matches_evaluate()`
+### ` fn test_fulltensor_matches_evaluate_generic()`
 
-### ` fn test_log_norm_matches_norm()`
+### ` fn test_log_norm_matches_norm_generic()`
 
-### ` fn test_log_norm_with_varied_values()`
+### ` fn test_log_norm_with_varied_values_generic()`
 
-### ` fn test_log_norm_zero_tensor()`
+### ` fn test_log_norm_zero_tensor_generic()`
+
+### ` fn test_tensortrain_zeros_f64()`
+
+### ` fn test_tensortrain_constant_f64()`
+
+### ` fn test_tensortrain_evaluate_f64()`
+
+### ` fn test_tensortrain_scale_f64()`
+
+### ` fn test_tensortrain_reverse_f64()`
+
+### ` fn test_fulltensor_f64()`
+
+### ` fn test_fulltensor_matches_evaluate_f64()`
+
+### ` fn test_log_norm_matches_norm_f64()`
+
+### ` fn test_log_norm_with_varied_values_f64()`
+
+### ` fn test_log_norm_zero_tensor_f64()`
+
+### ` fn test_tensortrain_zeros_c64()`
+
+### ` fn test_tensortrain_constant_c64()`
+
+### ` fn test_tensortrain_evaluate_c64()`
+
+### ` fn test_tensortrain_scale_c64()`
+
+### ` fn test_tensortrain_reverse_c64()`
+
+### ` fn test_fulltensor_c64()`
+
+### ` fn test_fulltensor_matches_evaluate_c64()`
+
+### ` fn test_log_norm_matches_norm_c64()`
+
+### ` fn test_log_norm_with_varied_values_c64()`
+
+### ` fn test_log_norm_zero_tensor_c64()`
 
 ## src/traits.rs
-
-### `pub fn conj(self) -> Self` (trait TTScalar)
-
-Conjugate
-
-### `pub fn abs_sq(self) -> f64` (trait TTScalar)
-
-Absolute value squared
-
-### `pub fn from_f64(val: f64) -> Self` (trait TTScalar)
-
-Create from f64
-
-### ` fn conj(self) -> Self` (impl f64)
-
-### ` fn abs_sq(self) -> f64` (impl f64)
-
-### ` fn from_f64(val: f64) -> Self` (impl f64)
-
-### ` fn conj(self) -> Self` (impl f32)
-
-### ` fn abs_sq(self) -> f64` (impl f32)
-
-### ` fn from_f64(val: f64) -> Self` (impl f32)
-
-### ` fn conj(self) -> Self` (impl num_complex :: Complex64)
-
-### ` fn abs_sq(self) -> f64` (impl num_complex :: Complex64)
-
-### ` fn from_f64(val: f64) -> Self` (impl num_complex :: Complex64)
-
-### ` fn conj(self) -> Self` (impl num_complex :: Complex32)
-
-### ` fn abs_sq(self) -> f64` (impl num_complex :: Complex32)
-
-### ` fn from_f64(val: f64) -> Self` (impl num_complex :: Complex32)
 
 ### `pub fn len(&self) -> usize` (trait AbstractTensorTrain)
 
