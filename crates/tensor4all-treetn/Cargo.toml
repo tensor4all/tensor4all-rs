@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Tree tensor networks with arbitrary graph topology for tensor4all"
 
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core" }

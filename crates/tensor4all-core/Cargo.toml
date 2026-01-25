@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Core tensor types, indices, and operations (SVD, QR, contraction) for tensor4all"
 
 [features]
 default = ["backend-faer"]
