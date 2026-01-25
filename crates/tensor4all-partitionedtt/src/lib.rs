@@ -16,6 +16,9 @@ mod patching;
 mod projector;
 mod subdomain_tt;
 
+#[cfg(test)]
+mod test_utils;
+
 pub use contract::{contract, proj_contract};
 pub use error::{PartitionedTTError, Result};
 pub use partitioned_tt::PartitionedTT;

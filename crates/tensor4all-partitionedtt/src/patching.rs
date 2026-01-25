@@ -2,8 +2,12 @@
 //!
 //! This module provides functions for adding SubDomainTTs with automatic
 //! splitting when bond dimensions exceed limits.
+//!
+//! **Note**: These functions are experimental and may change or fail for
+//! complex use cases. The core functionality relies on TT addition which
+//! is now implemented.
 
-use crate::error::Result;
+use crate::error::{PartitionedTTError, Result};
 use crate::partitioned_tt::PartitionedTT;
 use crate::subdomain_tt::SubDomainTT;
 use tensor4all_core::DynIndex;
@@ -31,40 +35,68 @@ impl Default for PatchingOptions {
 
 /// Add SubDomainTTs with automatic patching.
 ///
-/// If the resulting bond dimension exceeds `max_bond_dim`, the sum is
-/// recursively partitioned into smaller patches.
+/// Creates a PartitionedTT from the given subdomains. If subdomains have
+/// disjoint projectors, they are kept separate. If any subdomains share
+/// the same projector, they are summed using TT addition.
 ///
-/// Note: This is a placeholder implementation. Full patching requires
-/// tensor train addition and truncation algorithms.
+/// # Errors
+///
+/// Returns an error if:
+/// - Subdomains have overlapping (but not identical) projectors
+/// - TT addition fails due to incompatible structures
+///
+/// # Note
+///
+/// The `max_bond_dim` option in PatchingOptions is **not yet implemented**.
+/// If you need bond dimension control after summing, use
+/// `PartitionedTT::to_tensor_train()` followed by explicit truncation.
 pub fn add_with_patching(
     subdomains: Vec<SubDomainTT>,
-    _options: &PatchingOptions,
+    options: &PatchingOptions,
 ) -> Result<PartitionedTT> {
-    // Placeholder: just create a PartitionedTT from the subdomains
-    // A full implementation would:
-    // 1. Attempt to sum subdomains with the same projector
-    // 2. If max_bond_dim is exceeded, split into smaller patches
-    // 3. Recursively apply patching to the split patches
+    // Check if any subdomains would require actual patching
+    let max_bond = subdomains
+        .iter()
+        .map(|s| s.max_bond_dim())
+        .max()
+        .unwrap_or(0);
+
+    if max_bond > options.max_bond_dim && !options.patch_order.is_empty() {
+        return Err(PartitionedTTError::NotImplemented(
+            "Adaptive patching with bond dimension splitting is not yet implemented. \
+             Use PartitionedTT::from_subdomains() for simple cases."
+                .to_string(),
+        ));
+    }
 
     PartitionedTT::from_subdomains(subdomains)
 }
 
 /// Truncate a PartitionedTT with adaptive weighting.
 ///
-/// Each SubDomainTT is truncated with a cutoff adjusted by its relative norm.
+/// # Errors
+///
+/// This function is **not yet implemented** and will return an error.
+/// For truncation, access individual SubDomainTTs via `iter()` or `values()`
+/// and truncate them directly.
+///
+/// # Future Implementation
+///
+/// A full implementation would:
+/// 1. Compute norm of each subdomain
+/// 2. Adjust cutoff based on relative norms
+/// 3. Truncate each subdomain with adjusted cutoff
+/// 4. Optionally iterate to refine weights
 pub fn truncate_adaptive(
-    partitioned: &PartitionedTT,
+    _partitioned: &PartitionedTT,
     _rtol: f64,
     _max_bond_dim: usize,
 ) -> Result<PartitionedTT> {
-    // Placeholder: return a clone
-    // A full implementation would:
-    // 1. Compute norm of each subdomain
-    // 2. Adjust cutoff based on relative norms
-    // 3. Truncate each subdomain with adjusted cutoff
-    // 4. Optionally iterate to refine weights
-
-    Ok(partitioned.clone())
+    Err(PartitionedTTError::NotImplemented(
+        "truncate_adaptive is not yet implemented. \
+         Access subdomains via iter() and truncate them individually."
+            .to_string(),
+    ))
 }
 
 #[cfg(test)]
@@ -119,18 +151,41 @@ mod tests {
     }
 
     #[test]
-    fn test_truncate_adaptive() {
+    fn test_add_with_patching_requires_splitting_fails() {
         let (site_inds, link_ind) = make_shared_indices();
 
         let tt1 = make_tt_with_indices(&site_inds, &link_ind);
         let subdomain1 = SubDomainTT::new(tt1, Projector::from_pairs([(site_inds[0].clone(), 0)]));
 
-        let tt2 = make_tt_with_indices(&site_inds, &link_ind);
-        let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[0].clone(), 1)]));
+        // Options that require splitting (max_bond_dim smaller than actual)
+        let options = PatchingOptions {
+            rtol: 1e-12,
+            max_bond_dim: 1,                         // Force splitting
+            patch_order: vec![site_inds[0].clone()], // Non-empty patch order triggers check
+        };
 
-        let partitioned = PartitionedTT::from_subdomains(vec![subdomain1, subdomain2]).unwrap();
+        let result = add_with_patching(vec![subdomain1], &options);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            PartitionedTTError::NotImplemented(_)
+        ));
+    }
 
-        let result = truncate_adaptive(&partitioned, 1e-12, 100).unwrap();
-        assert_eq!(result.len(), 2);
+    #[test]
+    fn test_truncate_adaptive_not_implemented() {
+        let (site_inds, link_ind) = make_shared_indices();
+
+        let tt1 = make_tt_with_indices(&site_inds, &link_ind);
+        let subdomain1 = SubDomainTT::new(tt1, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+
+        let partitioned = PartitionedTT::from_subdomains(vec![subdomain1]).unwrap();
+
+        let result = truncate_adaptive(&partitioned, 1e-12, 100);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            PartitionedTTError::NotImplemented(_)
+        ));
     }
 }

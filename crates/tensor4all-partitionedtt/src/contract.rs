@@ -143,7 +143,7 @@ mod tests {
         let m2 = SubDomainTT::new(tt2, Projector::from_pairs([(s2.clone(), 0)]));
 
         // Projectors are compatible (different indices)
-        assert!(m1.projector().has_overlap(m2.projector()));
+        assert!(m1.projector().is_compatible_with(m2.projector()));
     }
 
     #[test]
@@ -158,7 +158,7 @@ mod tests {
         let m2 = SubDomainTT::new(tt2, Projector::from_pairs([(s1.clone(), 1)]));
 
         // Projectors conflict (s1=0 vs s1=1)
-        assert!(!m1.projector().has_overlap(m2.projector()));
+        assert!(!m1.projector().is_compatible_with(m2.projector()));
     }
 
     #[test]

@@ -31,4 +31,8 @@ pub enum PartitionedTTError {
     /// Error from underlying tensor train operations
     #[error("Tensor train error: {0}")]
     TensorTrainError(String),
+
+    /// Feature not yet implemented
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }

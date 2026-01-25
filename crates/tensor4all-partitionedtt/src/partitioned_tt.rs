@@ -110,7 +110,7 @@ impl PartitionedTT {
         // Check for overlap
         for proj in other.data.keys() {
             for existing_proj in self.data.keys() {
-                if proj.has_overlap(existing_proj) {
+                if proj.is_compatible_with(existing_proj) {
                     return Err(PartitionedTTError::OverlappingProjectors);
                 }
             }
@@ -150,9 +150,14 @@ impl PartitionedTT {
             if let Some(contracted) = m1.contract(&m2, options)? {
                 // Check if we already have a subdomain with the same projector
                 if let Some(existing) = result.get_mut(&proj) {
-                    // Sum the subdomains (would need proper implementation)
-                    // For now, just replace
-                    *existing = contracted;
+                    // Sum the subdomains using TT addition
+                    let summed_tt = existing.data().add(contracted.data()).map_err(|e| {
+                        PartitionedTTError::TensorTrainError(format!(
+                            "TT addition in contract failed: {}",
+                            e
+                        ))
+                    })?;
+                    *existing = SubDomainTT::new(summed_tt, proj.clone());
                 } else {
                     result.insert(contracted);
                 }
@@ -172,7 +177,7 @@ impl PartitionedTT {
         for m1 in self.data.values() {
             for m2 in other.data.values() {
                 // Check if projectors are compatible
-                if m1.projector().has_overlap(m2.projector()) {
+                if m1.projector().is_compatible_with(m2.projector()) {
                     // Compute the projector after contraction
                     let indices1: std::collections::HashSet<_> =
                         m1.all_indices().into_iter().collect();
@@ -214,15 +219,58 @@ impl PartitionedTT {
 
     /// Convert to a single TensorTrain by summing all subdomains.
     ///
-    /// Note: This is a placeholder. A proper implementation would use
-    /// direct sum followed by truncation.
+    /// Uses direct-sum (block) addition to combine all SubDomainTT tensors.
+    /// The result has bond dimension equal to the sum of individual bond dimensions.
+    ///
+    /// Subdomains are processed in a deterministic order (sorted by projector)
+    /// to ensure reproducible results.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The PartitionedTT is empty
+    /// - The subdomains have incompatible structures (different lengths)
     pub fn to_tensor_train(&self) -> Result<TensorTrain> {
         if self.is_empty() {
             return Err(PartitionedTTError::Empty);
         }
 
-        // Just return the first subdomain's tensor train for now
-        Ok(self.data.values().next().unwrap().data().clone())
+        // Sort subdomains by projector for deterministic ordering
+        let mut sorted: Vec<_> = self.data.iter().collect();
+        sorted.sort_by(|(p1, _), (p2, _)| Self::projector_cmp(p1, p2));
+
+        let mut iter = sorted.into_iter().map(|(_, subdomain)| subdomain);
+        let first = iter.next().unwrap();
+        let mut result = first.data().clone();
+
+        for subdomain in iter {
+            result = result.add(subdomain.data()).map_err(|e| {
+                PartitionedTTError::TensorTrainError(format!("TT addition failed: {}", e))
+            })?;
+        }
+
+        Ok(result)
+    }
+
+    /// Compare two projectors for deterministic ordering.
+    ///
+    /// Orders by: number of projections, then by sorted (index_id, value) pairs.
+    fn projector_cmp(a: &Projector, b: &Projector) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+
+        // First compare by length
+        match a.len().cmp(&b.len()) {
+            Ordering::Equal => {}
+            ord => return ord,
+        }
+
+        // Then compare by sorted (id, value) pairs
+        let mut a_pairs: Vec<_> = a.iter().map(|(idx, &val)| (idx.id, val)).collect();
+        let mut b_pairs: Vec<_> = b.iter().map(|(idx, &val)| (idx.id, val)).collect();
+        a_pairs.sort();
+        b_pairs.sort();
+
+        a_pairs.cmp(&b_pairs)
     }
 }
 
@@ -538,9 +586,8 @@ mod tests {
         // Compute expected norm if projection were applied:
         // For s0=0, we keep only indices 0, 1 (first row of 2x2 matrix)
         let mut projected_sum_sq = 0.0;
-        for i in 0..site_inds[1].dim {
-            // s0=0, s1=i
-            projected_sum_sq += full_data[0 * site_inds[1].dim + i].powi(2);
+        for &x in full_data.iter().take(site_inds[1].dim) {
+            projected_sum_sq += x.powi(2);
         }
         let _expected_projected_norm = projected_sum_sq.sqrt();
 

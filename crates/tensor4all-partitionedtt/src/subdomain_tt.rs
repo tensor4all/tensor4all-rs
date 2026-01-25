@@ -122,7 +122,7 @@ impl SubDomainTT {
     /// projection doesn't match.
     pub fn project(&self, projector: &Projector) -> Option<Self> {
         // Check if projectors are compatible
-        if !self.projector.has_overlap(projector) {
+        if !self.projector.is_compatible_with(projector) {
             return None;
         }
 
@@ -255,7 +255,7 @@ impl SubDomainTT {
     /// (values outside the subdomain are zeroed out).
     pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Option<Self>> {
         // Check if projectors are compatible
-        if !self.projector.has_overlap(other.projector()) {
+        if !self.projector.is_compatible_with(other.projector()) {
             return Ok(None);
         }
 

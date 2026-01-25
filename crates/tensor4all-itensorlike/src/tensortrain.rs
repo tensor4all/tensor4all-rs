@@ -736,6 +736,56 @@ impl TensorTrain {
             canonical_form: Some(CanonicalForm::Unitary),
         })
     }
+
+    /// Add two tensor trains using direct-sum construction.
+    ///
+    /// This creates a new tensor train where each tensor is the direct sum of the
+    /// corresponding tensors from self and other, with bond dimensions merged.
+    /// The result has bond dimensions equal to the sum of the input bond dimensions.
+    ///
+    /// # Arguments
+    /// * `other` - The other tensor train to add
+    ///
+    /// # Returns
+    /// A new tensor train representing the sum.
+    ///
+    /// # Errors
+    /// Returns an error if the tensor trains have incompatible structures.
+    pub fn add(&self, other: &Self) -> Result<Self> {
+        if self.is_empty() && other.is_empty() {
+            return Ok(Self::default());
+        }
+
+        if self.is_empty() {
+            return Ok(other.clone());
+        }
+
+        if other.is_empty() {
+            return Ok(self.clone());
+        }
+
+        if self.len() != other.len() {
+            return Err(TensorTrainError::InvalidStructure {
+                message: format!(
+                    "Tensor trains must have the same length for addition: {} vs {}",
+                    self.len(),
+                    other.len()
+                ),
+            });
+        }
+
+        let result_inner =
+            self.inner
+                .add(&other.inner)
+                .map_err(|e| TensorTrainError::InvalidStructure {
+                    message: format!("TT addition failed: {}", e),
+                })?;
+
+        Ok(Self {
+            inner: result_inner,
+            canonical_form: None, // Addition destroys canonical form
+        })
+    }
 }
 
 // Implement Default for TensorTrain to allow std::mem::take
@@ -1209,6 +1259,97 @@ mod tests {
     fn test_to_dense_empty() {
         let tt = TensorTrain::new(vec![]).unwrap();
         let result = tt.to_dense();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_add_simple() {
+        // Create two TTs with the same structure
+        // Both TTs must have the same site indices AND link indices
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+
+        // First TT with data [1, 2, 3, ...]
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+        let tt1 = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        // Second TT with same structure (clone and modify data for testing)
+        let tt2 = tt1.clone();
+
+        // Add them
+        let sum = tt1.add(&tt2).unwrap();
+
+        // Result should have double bond dimension
+        assert_eq!(sum.len(), 2);
+        assert_eq!(sum.bond_dims(), vec![6]); // 3 + 3
+
+        // Verify numerically: sum.to_dense() == tt1.to_dense() + tt2.to_dense()
+        let sum_dense = sum.to_dense().unwrap();
+        let tt1_dense = tt1.to_dense().unwrap();
+        let tt2_dense = tt2.to_dense().unwrap();
+
+        let sum_data = sum_dense.as_slice_f64().unwrap();
+        let tt1_data = tt1_dense.as_slice_f64().unwrap();
+        let tt2_data = tt2_dense.as_slice_f64().unwrap();
+
+        assert_eq!(sum_data.len(), tt1_data.len());
+        for i in 0..sum_data.len() {
+            let expected = tt1_data[i] + tt2_data[i];
+            assert!(
+                (sum_data[i] - expected).abs() < 1e-10,
+                "Mismatch at {}: {} vs {}",
+                i,
+                sum_data[i],
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_add_empty() {
+        let empty = TensorTrain::new(vec![]).unwrap();
+
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        // empty + tt = tt
+        let result = empty.add(&tt).unwrap();
+        assert_eq!(result.len(), tt.len());
+
+        // tt + empty = tt
+        let result = tt.add(&empty).unwrap();
+        assert_eq!(result.len(), tt.len());
+
+        // empty + empty = empty
+        let result = empty.add(&empty).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_add_length_mismatch() {
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+        let l12 = idx(3, 3);
+        let s2 = idx(4, 2);
+
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+        let tt1 = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        let t0_2 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1_2 = make_tensor(vec![l01.clone(), s1.clone(), l12.clone()]);
+        let t2_2 = make_tensor(vec![l12.clone(), s2.clone()]);
+        let tt2 = TensorTrain::new(vec![t0_2, t1_2, t2_2]).unwrap();
+
+        // Length mismatch should fail
+        let result = tt1.add(&tt2);
         assert!(result.is_err());
     }
 }

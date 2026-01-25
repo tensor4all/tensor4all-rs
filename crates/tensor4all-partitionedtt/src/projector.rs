@@ -73,9 +73,9 @@ impl Projector {
         self.data.is_empty()
     }
 
-    /// Get the internal data as a reference
-    pub fn data(&self) -> &HashMap<DynIndex, usize> {
-        &self.data
+    /// Iterate over (index, value) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&DynIndex, &usize)> {
+        self.data.iter()
     }
 
     /// Insert or update a projection
@@ -111,13 +111,17 @@ impl Projector {
         Some(Self { data: result })
     }
 
-    /// Union: keeps only indices where both projectors agree.
+    /// Common restriction: keeps only indices where both projectors agree.
     ///
     /// The result contains only indices that are projected in both projectors
-    /// with the same value.
+    /// with the same value. This is the "agreement" or "common restriction"
+    /// of two projectors.
+    ///
+    /// Note: This is NOT a set-theoretic union. It returns the common
+    /// projections where both projectors project the same index to the same value.
     ///
     /// This corresponds to Julia's `a | b` operator.
-    pub fn union(&self, other: &Self) -> Self {
+    pub fn common_restriction(&self, other: &Self) -> Self {
         let mut result = HashMap::new();
 
         for (index, &value) in &self.data {
@@ -132,7 +136,7 @@ impl Projector {
     /// Check if two projectors have overlapping (compatible) regions.
     ///
     /// Returns true if the projectors can be merged without conflict.
-    pub fn has_overlap(&self, other: &Self) -> bool {
+    pub fn is_compatible_with(&self, other: &Self) -> bool {
         self.intersection(other).is_some()
     }
 
@@ -162,7 +166,7 @@ impl Projector {
     pub fn are_disjoint(projectors: &[Self]) -> bool {
         for (i, a) in projectors.iter().enumerate() {
             for b in projectors.iter().skip(i + 1) {
-                if a.has_overlap(b) {
+                if a.is_compatible_with(b) {
                     return false;
                 }
             }
@@ -305,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn test_projector_union() {
+    fn test_projector_common_restriction() {
         let idx0 = make_index(2);
         let idx1 = make_index(2);
         let idx2 = make_index(2);
@@ -313,16 +317,17 @@ mod tests {
         let a = Projector::from_pairs([(idx0.clone(), 1), (idx1.clone(), 0)]);
         let b = Projector::from_pairs([(idx1.clone(), 0), (idx2.clone(), 1)]);
 
-        let u = a.union(&b);
-        assert_eq!(u.len(), 1);
-        assert!(!u.is_projected_at(&idx0));
-        assert!(u.is_projected_at(&idx1));
-        assert_eq!(u.get(&idx1), Some(0));
-        assert!(!u.is_projected_at(&idx2));
+        // Only idx1 is in both with the same value
+        let common = a.common_restriction(&b);
+        assert_eq!(common.len(), 1);
+        assert!(!common.is_projected_at(&idx0));
+        assert!(common.is_projected_at(&idx1));
+        assert_eq!(common.get(&idx1), Some(0));
+        assert!(!common.is_projected_at(&idx2));
     }
 
     #[test]
-    fn test_projector_has_overlap() {
+    fn test_projector_is_compatible_with() {
         let idx0 = make_index(2);
         let idx1 = make_index(2);
 
@@ -330,8 +335,8 @@ mod tests {
         let b = Projector::from_pairs([(idx1.clone(), 0)]);
         let c = Projector::from_pairs([(idx0.clone(), 0)]); // Different value at same index
 
-        assert!(a.has_overlap(&b)); // No common indices, compatible
-        assert!(!a.has_overlap(&c)); // Same index, different values
+        assert!(a.is_compatible_with(&b)); // No common indices, compatible
+        assert!(!a.is_compatible_with(&c)); // Same index, different values
     }
 
     #[test]

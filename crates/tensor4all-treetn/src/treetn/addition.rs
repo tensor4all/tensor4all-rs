@@ -170,6 +170,11 @@ where
             ));
         }
 
+        // Track merged indices for each edge.
+        // Key: (smaller_node_name, larger_node_name) for canonical ordering
+        // Value: the merged bond index to use for this edge
+        let mut edge_merged_indices: HashMap<(V, V), T::Index> = HashMap::new();
+
         // For each node, compute the direct sum of tensors
         let mut result_tensors: Vec<T> = Vec::new();
         let mut result_node_names: Vec<V> = Vec::new();
@@ -181,8 +186,9 @@ where
             let tensor_a = self.tensor(self_idx).unwrap();
             let tensor_b = other.tensor(other_idx).unwrap();
 
-            // Find bond index pairs for this node
+            // Find bond index pairs for this node and track neighbors
             let mut bond_pairs: Vec<(T::Index, T::Index)> = Vec::new();
+            let mut neighbors_for_edges: Vec<V> = Vec::new();
 
             for neighbor in self.site_index_network().neighbors(&node_name) {
                 // Get bond index from self
@@ -194,11 +200,36 @@ where
                 let other_bond = other.bond_index(other_edge).unwrap();
 
                 bond_pairs.push((self_bond.clone(), other_bond.clone()));
+                neighbors_for_edges.push(neighbor);
             }
 
             // Compute direct sum
             let direct_sum_result = tensor_a.direct_sum(tensor_b, &bond_pairs)?;
-            result_tensors.push(direct_sum_result.tensor);
+            let mut result_tensor = direct_sum_result.tensor;
+
+            // For each edge, ensure we use consistent merged indices:
+            // - If we've already seen this edge, replace the auto-generated index with the stored one
+            // - If this is the first time seeing this edge, store the auto-generated index
+            for (i, neighbor) in neighbors_for_edges.iter().enumerate() {
+                // Create canonical edge key (smaller name first)
+                let edge_key = if node_name < *neighbor {
+                    (node_name.clone(), neighbor.clone())
+                } else {
+                    (neighbor.clone(), node_name.clone())
+                };
+
+                let new_index = &direct_sum_result.new_indices[i];
+
+                if let Some(stored_index) = edge_merged_indices.get(&edge_key) {
+                    // Edge already processed - replace auto-generated index with stored one
+                    result_tensor = result_tensor.replaceind(new_index, stored_index)?;
+                } else {
+                    // First time seeing this edge - store the auto-generated index
+                    edge_merged_indices.insert(edge_key, new_index.clone());
+                }
+            }
+
+            result_tensors.push(result_tensor);
             result_node_names.push(node_name);
         }
 
