@@ -42,5 +42,3 @@ external/
 # Coverage reports
 lcov*.info
 lcov-patch.info
-
-# Test files (temporary, push when working)
