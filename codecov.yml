@@ -33,3 +33,7 @@ flags:
     paths:
       - crates/
     carryforward: true
+
+ignore:
+  - "xtask/**"
+  - "tools/**"
