@@ -582,8 +582,8 @@ fn run_test_case(
 ///
 /// **3-site Pauli-X** (X_0 ⊗ X_1 ⊗ X_2):
 ///   - Flips all bits simultaneously
-///   - Mapping: |000⟩ → |111⟩, |001⟩ → |110⟩, |010⟩ → |101⟩, |011⟩ → |100⟩
-///              |100⟩ → |011⟩, |101⟩ → |010⟩, |110⟩ → |001⟩, |111⟩ → |000⟩
+///   - Mapping: |000⟩ → |111⟩, |001⟩ → |110⟩, |010⟩ → |101⟩, |011⟩ → |100⟩,
+///     |100⟩ → |011⟩, |101⟩ → |010⟩, |110⟩ → |001⟩, |111⟩ → |000⟩
 ///   - The 8×8 matrix is an anti-diagonal matrix (all 1s on the anti-diagonal, zeros elsewhere)
 ///
 fn print_pauli_x_matrix() {
@@ -594,6 +594,7 @@ fn print_pauli_x_matrix() {
     let mut matrix = vec![vec![0.0; dim]; dim];
 
     // Pauli-X flips all bits: |i⟩ → |~i⟩ where ~i is bitwise NOT
+    #[allow(clippy::needless_range_loop)]
     for i in 0..dim {
         let flipped = dim - 1 - i; // Bitwise NOT for n_sites bits
         matrix[flipped][i] = 1.0;
@@ -608,10 +609,10 @@ fn print_pauli_x_matrix() {
         print!("|{:03b}⟩  ", j);
     }
     println!();
-    for i in 0..dim {
+    for (i, row) in matrix.iter().enumerate().take(dim) {
         print!("|{:03b}⟩ ", i);
-        for j in 0..dim {
-            print!("{:4.0}  ", matrix[i][j]);
+        for val in row.iter().take(dim) {
+            print!("{:4.0}  ", val);
         }
         println!();
     }

@@ -162,8 +162,8 @@ fn create_simple_two_state_mps(
             // First site: [s0, b01]
             // s0=0 connects to bond 0 (|000...0⟩), s0=1 connects to bond 1 (|111...1⟩)
             let mut data = vec![0.0; phys_dim * bond_dim];
-            data[0 * bond_dim + 0] = 1.0 / 2.0_f64.sqrt(); // |0⟩ -> bond 0
-            data[1 * bond_dim + 1] = 1.0 / 2.0_f64.sqrt(); // |1⟩ -> bond 1
+            data[0] = 1.0 / 2.0_f64.sqrt(); // |0⟩ -> bond 0
+            data[bond_dim + 1] = 1.0 / 2.0_f64.sqrt(); // |1⟩ -> bond 1
             TensorDynLen::from_dense_f64(
                 vec![site_indices[i].clone(), bond_indices[i].clone()],
                 data,
@@ -172,8 +172,8 @@ fn create_simple_two_state_mps(
             // Last site: [b_{n-2,n-1}, s_{n-1}]
             // bond 0 connects to s=0 (|000...0⟩), bond 1 connects to s=1 (|111...1⟩)
             let mut data = vec![0.0; bond_dim * phys_dim];
-            data[0 * phys_dim + 0] = 1.0 / 2.0_f64.sqrt(); // bond 0 -> |0⟩
-            data[1 * phys_dim + 1] = 1.0 / 2.0_f64.sqrt(); // bond 1 -> |1⟩
+            data[0] = 1.0 / 2.0_f64.sqrt(); // bond 0 -> |0⟩
+            data[phys_dim + 1] = 1.0 / 2.0_f64.sqrt(); // bond 1 -> |1⟩
             TensorDynLen::from_dense_f64(
                 vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
                 data,
@@ -182,8 +182,8 @@ fn create_simple_two_state_mps(
             // Middle sites: [b_{i-1,i}, s_i, b_{i,i+1}]
             // Pass through bond index: bond 0 -> s=0 -> bond 0, bond 1 -> s=1 -> bond 1
             let mut data = vec![0.0; bond_dim * phys_dim * bond_dim];
-            data[0 * phys_dim * bond_dim + 0 * bond_dim + 0] = 1.0 / 2.0_f64.sqrt(); // bond 0 -> |0⟩ -> bond 0
-            data[1 * phys_dim * bond_dim + 1 * bond_dim + 1] = 1.0 / 2.0_f64.sqrt(); // bond 1 -> |1⟩ -> bond 1
+            data[0] = 1.0 / 2.0_f64.sqrt(); // bond 0 -> |0⟩ -> bond 0
+            data[phys_dim * bond_dim + bond_dim + 1] = 1.0 / 2.0_f64.sqrt(); // bond 1 -> |1⟩ -> bond 1
             TensorDynLen::from_dense_f64(
                 vec![
                     bond_indices[i - 1].clone(),
@@ -774,13 +774,13 @@ fn run_test_case(
                 }
 
                 println!("  Current x bond dimensions:");
-                print_bond_dims(&x, &format!("  x bond dimensions (before error)"));
+                print_bond_dims(&x, "  x bond dimensions (before error)");
                 return Err(e);
             }
             Err(_) => {
                 println!("  Panic during sweep {sweep} (likely dimension mismatch)");
                 println!("  Current x bond dimensions:");
-                print_bond_dims(&x, &format!("  x bond dimensions (before panic)"));
+                print_bond_dims(&x, "  x bond dimensions (before panic)");
                 anyhow::bail!("Panic during sweep {sweep}");
             }
         }
