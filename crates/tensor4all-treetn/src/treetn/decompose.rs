@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn test_tree_topology_validate() {
         // Test empty topology
-        let empty = TreeTopology::new(HashMap::new(), Vec::new());
+        let empty: TreeTopology<String> = TreeTopology::new(HashMap::new(), Vec::new());
         assert!(empty.validate().is_err());
 
         // Test single node (valid)
