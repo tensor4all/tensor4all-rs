@@ -155,3 +155,115 @@ where
         converged: false,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tensor4all_core::{DynIndex, TensorDynLen};
+
+    fn create_simple_2site_mps() -> TreeTN<TensorDynLen, String> {
+        let mut mps = TreeTN::<TensorDynLen, String>::new();
+        let s0 = DynIndex::new_dyn(2);
+        let s1 = DynIndex::new_dyn(2);
+        let b01 = DynIndex::new_dyn(2);
+
+        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], vec![1.0; 4]);
+        let t1 = TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone()], vec![1.0; 4]);
+
+        let n0 = mps.add_tensor("site0".to_string(), t0).unwrap();
+        let n1 = mps.add_tensor("site1".to_string(), t1).unwrap();
+        mps.connect(n0, &b01, n1, &b01).unwrap();
+
+        mps
+    }
+
+    fn create_simple_2site_mpo() -> TreeTN<TensorDynLen, String> {
+        let mut mpo = TreeTN::<TensorDynLen, String>::new();
+        let s0_in = DynIndex::new_dyn(2);
+        let s0_out = DynIndex::new_dyn(2);
+        let s1_in = DynIndex::new_dyn(2);
+        let s1_out = DynIndex::new_dyn(2);
+        let b_mpo = DynIndex::new_dyn(1);
+
+        let id_data = vec![1.0, 0.0, 0.0, 1.0]; // Identity matrix
+        let t0_mpo = TensorDynLen::from_dense_f64(
+            vec![s0_out.clone(), s0_in.clone(), b_mpo.clone()],
+            id_data.clone(),
+        );
+        let t1_mpo = TensorDynLen::from_dense_f64(
+            vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()],
+            id_data,
+        );
+
+        let n0_mpo = mpo.add_tensor("site0".to_string(), t0_mpo).unwrap();
+        let n1_mpo = mpo.add_tensor("site1".to_string(), t1_mpo).unwrap();
+        mpo.connect(n0_mpo, &b_mpo, n1_mpo, &b_mpo).unwrap();
+
+        mpo
+    }
+
+    #[test]
+    fn test_validate_linsolve_inputs_success() {
+        let operator = create_simple_2site_mpo();
+        let rhs = create_simple_2site_mps();
+        let init = create_simple_2site_mps();
+
+        // Should succeed for compatible inputs
+        let result = validate_linsolve_inputs(&operator, &rhs, &init);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_linsolve_inputs_incompatible_dimensions() {
+        let operator = create_simple_2site_mpo();
+        let rhs = create_simple_2site_mps();
+
+        // Create init with different dimensions
+        let mut init = TreeTN::<TensorDynLen, String>::new();
+        let s0 = DynIndex::new_dyn(3); // Different dimension
+        let s1 = DynIndex::new_dyn(3);
+        let b01 = DynIndex::new_dyn(2);
+
+        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], vec![1.0; 6]);
+        let t1 = TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone()], vec![1.0; 6]);
+
+        let n0 = init.add_tensor("site0".to_string(), t0).unwrap();
+        let n1 = init.add_tensor("site1".to_string(), t1).unwrap();
+        init.connect(n0, &b01, n1, &b01).unwrap();
+
+        // Should fail due to incompatible dimensions
+        let result = validate_linsolve_inputs(&operator, &rhs, &init);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_square_linsolve_basic() {
+        let operator = create_simple_2site_mpo();
+        let rhs = create_simple_2site_mps();
+        let init = create_simple_2site_mps();
+
+        let options = LinsolveOptions::default().with_nfullsweeps(1);
+        let result = square_linsolve(&operator, &rhs, init, &"site0".to_string(), options);
+
+        assert!(result.is_ok());
+        let solution = result.unwrap();
+        assert_eq!(solution.solution.node_count(), 2);
+        assert_eq!(solution.sweeps, 1);
+        assert!(!solution.converged);
+    }
+
+    #[test]
+    fn test_square_linsolve_result_fields() {
+        let operator = create_simple_2site_mpo();
+        let rhs = create_simple_2site_mps();
+        let init = create_simple_2site_mps();
+
+        let options = LinsolveOptions::default().with_nfullsweeps(2);
+        let result = square_linsolve(&operator, &rhs, init, &"site0".to_string(), options).unwrap();
+
+        assert_eq!(result.sweeps, 2);
+        assert_eq!(result.residual, None);
+        assert!(!result.converged);
+        assert_eq!(result.solution.node_count(), 2);
+    }
+}
