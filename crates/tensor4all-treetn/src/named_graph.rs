@@ -1,5 +1,5 @@
 //! Named graph wrapper inspired by NamedGraphs.jl
-//! (https://github.com/mtfishman/NamedGraphs.jl)
+//! (<https://github.com/mtfishman/NamedGraphs.jl>)
 //!
 //! Provides a mapping between arbitrary node name types (NodeName) and internal NodeIndex.
 //! This allows using meaningful identifiers (coordinates, strings, etc.) instead of raw indices.
@@ -252,7 +252,7 @@ where
 
     /// Perform an Euler tour traversal starting from the given root NodeIndex.
     ///
-    /// See [`euler_tour_edges`] for details.
+    /// See [`Self::euler_tour_edges`] for details.
     pub fn euler_tour_edges_by_index(&self, root: NodeIndex) -> Vec<(NodeIndex, NodeIndex)> {
         let mut visited_edges: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
         let mut tour = Vec::new();
@@ -308,7 +308,7 @@ where
 
     /// Perform an Euler tour traversal and return the vertex sequence by NodeIndex.
     ///
-    /// See [`euler_tour_vertices`] for details.
+    /// See [`Self::euler_tour_vertices`] for details.
     pub fn euler_tour_vertices_by_index(&self, root: NodeIndex) -> Vec<NodeIndex> {
         let edges = self.euler_tour_edges_by_index(root);
         if edges.is_empty() {

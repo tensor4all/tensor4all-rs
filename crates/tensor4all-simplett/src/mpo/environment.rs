@@ -115,10 +115,10 @@ where
 
 /// Compute the left environment at site i for MPO contraction
 ///
-/// The left environment L[i] represents the contraction of all sites 0..i
+/// The left environment L\[i\] represents the contraction of all sites 0..i
 /// for the product of two MPOs A and B.
 ///
-/// L[i] has shape (left_a_i, left_b_i) representing the accumulated
+/// L\[i\] has shape (left_a_i, left_b_i) representing the accumulated
 /// contraction from the left.
 pub fn left_environment<T: SVDScalar>(
     mpo_a: &MPO<T>,
@@ -201,10 +201,10 @@ where
 
 /// Compute the right environment at site i for MPO contraction
 ///
-/// The right environment R[i] represents the contraction of all sites i+1..L
+/// The right environment R\[i\] represents the contraction of all sites i+1..L
 /// for the product of two MPOs A and B.
 ///
-/// R[i] has shape (right_a_i, right_b_i) representing the accumulated
+/// R\[i\] has shape (right_a_i, right_b_i) representing the accumulated
 /// contraction from the right.
 pub fn right_environment<T: SVDScalar>(
     mpo_a: &MPO<T>,

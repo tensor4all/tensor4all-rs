@@ -17,8 +17,10 @@ use thiserror::Error;
 /// Error type for SVD operations in tensor4all-linalg.
 #[derive(Debug, Error)]
 pub enum SvdError {
+    /// SVD computation failed.
     #[error("SVD computation failed: {0}")]
     ComputationError(#[from] anyhow::Error),
+    /// Invalid relative tolerance value (must be finite and non-negative).
     #[error("Invalid rtol value: {0}. rtol must be finite and non-negative.")]
     InvalidRtol(f64),
 }

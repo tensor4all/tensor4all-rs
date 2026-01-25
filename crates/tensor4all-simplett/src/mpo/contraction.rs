@@ -209,7 +209,7 @@ where
 
     /// Evaluate the left environment up to site n (exclusive)
     ///
-    /// Returns L[n] = product of sites 0..n
+    /// Returns L\[n\] = product of sites 0..n
     pub fn evaluate_left(&mut self, n: usize, indices: &[(usize, usize)]) -> Result<Matrix2<T>> {
         if n > self.len() {
             return Err(MPOError::InvalidOperation {
@@ -259,7 +259,7 @@ where
 
     /// Evaluate the right environment from site n (exclusive) to the end
     ///
-    /// Returns R[n] = product of sites n..L
+    /// Returns R\[n\] = product of sites n..L
     pub fn evaluate_right(&mut self, n: usize, indices: &[(usize, usize)]) -> Result<Matrix2<T>> {
         let len = self.len();
         if n > len {

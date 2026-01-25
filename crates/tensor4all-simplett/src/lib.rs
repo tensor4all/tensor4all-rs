@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Tensor Train (MPS) library
 //!
 //! This crate provides tensor train (also known as Matrix Product State) algorithms,

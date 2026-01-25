@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Tensor Cross Interpolation (TCI) library
 //!
 //! This crate provides tensor cross interpolation algorithms for efficiently

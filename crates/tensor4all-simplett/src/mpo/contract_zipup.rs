@@ -17,9 +17,9 @@ use super::{matrix2_zeros, Matrix2};
 /// compression at each step.
 ///
 /// The zip-up algorithm:
-/// 1. Start from the left with a remainder tensor R = [[1]]
+/// 1. Start from the left with a remainder tensor R = \[\[1\]\]
 /// 2. At each site:
-///    a. Contract R with A[i] and B[i]
+///    a. Contract R with A\[i\] and B\[i\]
 ///    b. Reshape to matrix
 ///    c. Factorize into left and right factors
 ///    d. Store left factor as result tensor

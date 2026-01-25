@@ -10,19 +10,31 @@ pub type Result<T> = std::result::Result<T, TCIError>;
 pub enum TCIError {
     /// Dimension mismatch
     #[error("Dimension mismatch: {message}")]
-    DimensionMismatch { message: String },
+    DimensionMismatch {
+        /// Description of the dimension mismatch
+        message: String,
+    },
 
     /// Invalid index
     #[error("Index out of bounds: {message}")]
-    IndexOutOfBounds { message: String },
+    IndexOutOfBounds {
+        /// Description of the index error
+        message: String,
+    },
 
     /// Invalid pivot
     #[error("Invalid pivot: {message}")]
-    InvalidPivot { message: String },
+    InvalidPivot {
+        /// Description of the invalid pivot
+        message: String,
+    },
 
     /// Convergence failure
     #[error("Failed to converge after {iterations} iterations")]
-    ConvergenceFailure { iterations: usize },
+    ConvergenceFailure {
+        /// Number of iterations before failure
+        iterations: usize,
+    },
 
     /// Empty tensor train
     #[error("Empty tensor structure")]
@@ -30,7 +42,10 @@ pub enum TCIError {
 
     /// Invalid operation
     #[error("Invalid operation: {message}")]
-    InvalidOperation { message: String },
+    InvalidOperation {
+        /// Description of the invalid operation
+        message: String,
+    },
 
     /// Matrix CI error
     #[error("Matrix CI error: {0}")]

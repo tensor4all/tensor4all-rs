@@ -123,7 +123,7 @@ where
     T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
-    /// Projected operator (3-chain), wrapped in Arc<RwLock> for GMRES
+    /// Projected operator (3-chain), wrapped in `Arc<RwLock>` for GMRES.
     pub projected_operator: Arc<RwLock<ProjectedOperator<T, V>>>,
     /// Projected state for RHS (2-chain)
     pub projected_state: ProjectedState<T, V>,

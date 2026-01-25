@@ -187,8 +187,11 @@ impl TagSetLike for TagSet {
 /// ```
 #[derive(Debug, Clone)]
 pub struct Index<Id, Tags = TagSet> {
+    /// The unique identifier for this index.
     pub id: Id,
+    /// The dimension (size) of this index.
     pub dim: usize,
+    /// The tag set associated with this index.
     pub tags: Tags,
 }
 

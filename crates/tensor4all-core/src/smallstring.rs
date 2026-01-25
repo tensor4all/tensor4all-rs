@@ -82,8 +82,18 @@ pub struct SmallString<const MAX_LEN: usize, C: SmallChar = u16> {
 /// Error type for SmallString operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmallStringError {
-    TooLong { actual: usize, max: usize },
-    InvalidChar { char_value: char },
+    /// The string exceeds the maximum length.
+    TooLong {
+        /// The actual length of the string.
+        actual: usize,
+        /// The maximum allowed length.
+        max: usize,
+    },
+    /// A character cannot be represented in the target character type.
+    InvalidChar {
+        /// The character that could not be converted.
+        char_value: char,
+    },
 }
 
 impl<const MAX_LEN: usize, C: SmallChar> SmallString<MAX_LEN, C> {

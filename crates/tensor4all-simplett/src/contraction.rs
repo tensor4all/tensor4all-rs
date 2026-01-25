@@ -35,7 +35,7 @@ impl Default for ContractionOptions {
 impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
     /// Compute the inner product (dot product) of two tensor trains
     ///
-    /// Returns: sum over all indices i of self[i] * other[i]
+    /// Returns: sum over all indices i of self\[i\] * other\[i\]
     pub fn dot(&self, other: &Self) -> Result<T> {
         if self.len() != other.len() {
             return Err(TensorTrainError::InvalidOperation {

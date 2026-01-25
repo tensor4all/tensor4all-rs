@@ -8,9 +8,13 @@ pub enum MatrixCIError {
     /// Dimension mismatch between matrix and MatrixCI object
     #[error("Dimension mismatch: expected ({expected_rows}, {expected_cols}), got ({actual_rows}, {actual_cols})")]
     DimensionMismatch {
+        /// Expected number of rows
         expected_rows: usize,
+        /// Expected number of columns
         expected_cols: usize,
+        /// Actual number of rows
         actual_rows: usize,
+        /// Actual number of columns
         actual_cols: usize,
     },
 
@@ -19,19 +23,29 @@ pub enum MatrixCIError {
         "Index out of bounds: ({row}, {col}) is out of bounds for a ({nrows}, {ncols}) matrix"
     )]
     IndexOutOfBounds {
+        /// Row index that was out of bounds
         row: usize,
+        /// Column index that was out of bounds
         col: usize,
+        /// Number of rows in the matrix
         nrows: usize,
+        /// Number of columns in the matrix
         ncols: usize,
     },
 
     /// Duplicate pivot row
     #[error("Cannot add pivot: row {row} already has a pivot")]
-    DuplicatePivotRow { row: usize },
+    DuplicatePivotRow {
+        /// Row index that already has a pivot
+        row: usize,
+    },
 
     /// Duplicate pivot column
     #[error("Cannot add pivot: column {col} already has a pivot")]
-    DuplicatePivotCol { col: usize },
+    DuplicatePivotCol {
+        /// Column index that already has a pivot
+        col: usize,
+    },
 
     /// Matrix is already full rank
     #[error("Cannot find a new pivot: matrix is already full rank")]
@@ -39,11 +53,17 @@ pub enum MatrixCIError {
 
     /// Empty row or column set
     #[error("Cannot find a new pivot in an empty set of {dimension}")]
-    EmptyIndexSet { dimension: String },
+    EmptyIndexSet {
+        /// Description of the empty dimension ("rows" or "columns")
+        dimension: String,
+    },
 
     /// Invalid argument
     #[error("Invalid argument: {message}")]
-    InvalidArgument { message: String },
+    InvalidArgument {
+        /// Description of the invalid argument
+        message: String,
+    },
 
     /// Singular matrix encountered
     #[error("Singular matrix encountered during decomposition")]
@@ -55,7 +75,10 @@ pub enum MatrixCIError {
 
     /// NaN values encountered
     #[error("NaN values encountered in {matrix}")]
-    NaNEncountered { matrix: String },
+    NaNEncountered {
+        /// Name of the matrix where NaN was encountered
+        matrix: String,
+    },
 }
 
 /// Result type for matrix CI operations

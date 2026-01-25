@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Einstein summation (einsum) for mdarray with ID-based axis specification.
 //!
 //! This crate provides einsum functionality similar to PyTorch's `torch.einsum`,

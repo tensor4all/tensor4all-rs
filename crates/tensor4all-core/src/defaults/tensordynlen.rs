@@ -1676,7 +1676,7 @@ impl TensorDynLen {
         Complex64::extract_dense_view(self.storage()).map_err(|e| anyhow::anyhow!("{}", e))
     }
 
-    /// Convert tensor data to Vec<f64>.
+    /// Convert tensor data to `Vec<f64>`.
     ///
     /// # Returns
     /// A vector containing a copy of the tensor data.
@@ -1687,7 +1687,7 @@ impl TensorDynLen {
         f64::extract_dense(self.storage()).map_err(|e| anyhow::anyhow!("{}", e))
     }
 
-    /// Convert tensor data to Vec<Complex64>.
+    /// Convert tensor data to `Vec<Complex64>`.
     ///
     /// # Returns
     /// A vector containing a copy of the tensor data.

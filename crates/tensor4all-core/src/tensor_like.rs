@@ -26,31 +26,58 @@ use thiserror::Error;
 /// Error type for factorize operations.
 #[derive(Debug, Error)]
 pub enum FactorizeError {
+    /// Factorization computation failed.
     #[error("Factorization failed: {0}")]
-    ComputationError(#[from] anyhow::Error),
+    ComputationError(
+        /// The underlying error
+        #[from]
+        anyhow::Error,
+    ),
+    /// Invalid relative tolerance value (must be finite and non-negative).
     #[error("Invalid rtol value: {0}. rtol must be finite and non-negative.")]
-    InvalidRtol(f64),
+    InvalidRtol(
+        /// The invalid rtol value
+        f64,
+    ),
+    /// The storage type is not supported for this operation.
     #[error("Unsupported storage type: {0}")]
-    UnsupportedStorage(&'static str),
+    UnsupportedStorage(
+        /// Description of the unsupported storage type
+        &'static str,
+    ),
+    /// The canonical direction is not supported for this algorithm.
     #[error("Unsupported canonical direction for this algorithm: {0}")]
-    UnsupportedCanonical(&'static str),
+    UnsupportedCanonical(
+        /// Description of the unsupported canonical direction
+        &'static str,
+    ),
+    /// Error from SVD operation.
     #[error("SVD error: {0}")]
-    SvdError(#[from] crate::svd::SvdError),
+    SvdError(
+        /// The underlying SVD error
+        #[from]
+        crate::svd::SvdError,
+    ),
+    /// Error from QR operation.
     #[error("QR error: {0}")]
-    QrError(#[from] crate::qr::QrError),
+    QrError(
+        /// The underlying QR error
+        #[from]
+        crate::qr::QrError,
+    ),
 }
 
 /// Factorization algorithm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FactorizeAlg {
-    /// Singular Value Decomposition
+    /// Singular Value Decomposition.
     #[default]
     SVD,
-    /// QR decomposition
+    /// QR decomposition.
     QR,
-    /// Rank-revealing LU decomposition
+    /// Rank-revealing LU decomposition.
     LU,
-    /// Cross Interpolation (LU-based)
+    /// Cross Interpolation (LU-based).
     CI,
 }
 
@@ -431,7 +458,7 @@ pub trait TensorLike: TensorIndex {
     /// Contract multiple tensors that must form a connected graph.
     ///
     /// This is the core contraction method that requires all tensors to be
-    /// connected through contractable indices. Use [`contract`] if you want
+    /// connected through contractable indices. Use [`Self::contract`] if you want
     /// automatic handling of disconnected components via outer product.
     ///
     /// # Arguments

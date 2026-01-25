@@ -14,23 +14,39 @@ pub enum TensorTrainError {
 
     /// Site index is out of bounds.
     #[error("Site index {site} is out of bounds (tensor train has {length} sites)")]
-    SiteOutOfBounds { site: usize, length: usize },
+    SiteOutOfBounds {
+        /// The requested site index.
+        site: usize,
+        /// The total number of sites in the tensor train.
+        length: usize,
+    },
 
     /// Bond dimension mismatch between adjacent tensors.
     #[error("Bond dimension mismatch at site {site}: left tensor has right dim {left_dim}, right tensor has left dim {right_dim}")]
     BondDimensionMismatch {
+        /// The site index where the mismatch occurred.
         site: usize,
+        /// The right bond dimension of the left tensor.
         left_dim: usize,
+        /// The left bond dimension of the right tensor.
         right_dim: usize,
     },
 
     /// Tensor train does not have a well-defined orthogonality center.
     #[error("Tensor train does not have a well-defined orthogonality center (ortho_lims = {start}..{end})")]
-    NoOrthogonalityCenter { start: usize, end: usize },
+    NoOrthogonalityCenter {
+        /// The start of the orthogonality limits range.
+        start: usize,
+        /// The end of the orthogonality limits range.
+        end: usize,
+    },
 
     /// Invalid tensor structure for tensor train.
     #[error("Invalid tensor structure: {message}")]
-    InvalidStructure { message: String },
+    InvalidStructure {
+        /// A description of the structural issue.
+        message: String,
+    },
 
     /// Factorization error.
     #[error("Factorization error: {0}")]
@@ -38,5 +54,8 @@ pub enum TensorTrainError {
 
     /// General operation error.
     #[error("Operation error: {message}")]
-    OperationError { message: String },
+    OperationError {
+        /// A description of the operation error.
+        message: String,
+    },
 }

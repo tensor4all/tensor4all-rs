@@ -517,33 +517,45 @@ pub fn common_ind_positions<I: IndexLike>(indices_a: &[I], indices_b: &[I]) -> V
 /// - The resulting indices and dimensions after contraction
 #[derive(Debug, Clone)]
 pub struct ContractionSpec<I: IndexLike> {
-    /// Axes to contract from the first tensor (positions in indices_a)
+    /// Axes to contract from the first tensor (positions in `indices_a`).
     pub axes_a: Vec<usize>,
-    /// Axes to contract from the second tensor (positions in indices_b)
+    /// Axes to contract from the second tensor (positions in `indices_b`).
     pub axes_b: Vec<usize>,
-    /// Indices of the result tensor (non-contracted indices from both tensors)
+    /// Indices of the result tensor (non-contracted indices from both tensors).
     pub result_indices: Vec<I>,
-    /// Dimensions of the result tensor
+    /// Dimensions of the result tensor.
     pub result_dims: Vec<usize>,
 }
 
 /// Error type for contraction preparation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContractionError {
-    /// No common indices found for contraction
+    /// No common indices found for contraction.
     NoCommonIndices,
-    /// Dimension mismatch for a common index
+    /// Dimension mismatch for a common index.
     DimensionMismatch {
+        /// Position in the first tensor.
         pos_a: usize,
+        /// Position in the second tensor.
         pos_b: usize,
+        /// Dimension in the first tensor.
         dim_a: usize,
+        /// Dimension in the second tensor.
         dim_b: usize,
     },
-    /// Duplicate axis specified in contraction
-    DuplicateAxis { tensor: &'static str, pos: usize },
-    /// Index not found in tensor
-    IndexNotFound { tensor: &'static str },
-    /// Batch contraction not yet implemented
+    /// Duplicate axis specified in contraction.
+    DuplicateAxis {
+        /// Which tensor has the duplicate ("self" or "other").
+        tensor: &'static str,
+        /// Position of the duplicate axis.
+        pos: usize,
+    },
+    /// Index not found in tensor.
+    IndexNotFound {
+        /// Which tensor the index was not found in.
+        tensor: &'static str,
+    },
+    /// Batch contraction not yet implemented.
     BatchContractionNotImplemented,
 }
 

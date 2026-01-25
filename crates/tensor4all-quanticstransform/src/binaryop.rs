@@ -17,7 +17,9 @@ use crate::common::{tensortrain_to_linear_operator, BoundaryCondition, QuanticsO
 /// The pair (a, b) = (-1, -1) is not directly supported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BinaryCoeffs {
+    /// Coefficient for the first variable x. Must be -1, 0, or 1.
     pub a: i8,
+    /// Coefficient for the second variable y. Must be -1, 0, or 1.
     pub b: i8,
 }
 

@@ -9,16 +9,17 @@
 //! - [`TensorDynLen`]: Dense tensor with dynamic rank
 //!
 //! Linear algebra operations:
-//! - [`svd`]: Singular Value Decomposition
-//! - [`qr`]: QR decomposition
-//! - [`factorize`]: Unified factorization interface
-//! - [`direct_sum`]: Direct sum of tensors
+//! - [`svd::svd`]: Singular Value Decomposition
+//! - [`qr::qr`]: QR decomposition
+//! - [`factorize::factorize`]: Unified factorization interface
+//! - [`direct_sum::direct_sum`]: Direct sum of tensors
 //!
 //! These types are suitable for most tensor network applications and provide
 //! a good balance of flexibility and performance.
 
 pub mod index;
 pub mod tensor_data;
+/// Dynamic-length tensor implementation.
 pub mod tensordynlen;
 
 // Contraction

@@ -79,7 +79,7 @@ where
 
     /// Canonicalize the network in-place towards the specified center using options.
     ///
-    /// This is the `&mut self` version of [`canonicalize`].
+    /// This is the `&mut self` version of [`Self::canonicalize`].
     pub fn canonicalize_mut(
         &mut self,
         canonical_center: impl IntoIterator<Item = V>,
