@@ -140,3 +140,36 @@ where
         x.axpby(self.a0.clone(), &hx_aligned, self.a1.clone())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+
+    #[test]
+    fn test_local_linop_new() {
+        use crate::linsolve::common::ProjectedOperator;
+        use crate::treetn::TreeTN;
+
+        let mut state = TreeTN::<TensorDynLen, String>::new();
+        let s0 = DynIndex::new_dyn(2);
+        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone()], vec![1.0, 2.0]);
+        state.add_tensor("site0".to_string(), t0).unwrap();
+
+        let reference_state = state.clone();
+        let projected_op = Arc::new(RwLock::new(ProjectedOperator::new(state.clone())));
+
+        let linop = LocalLinOp::new(
+            projected_op,
+            vec!["site0".to_string()],
+            state,
+            reference_state,
+            AnyScalar::F64(1.0),
+            AnyScalar::F64(0.0),
+        );
+
+        assert_eq!(linop.region.len(), 1);
+        assert_eq!(linop.a0, AnyScalar::F64(1.0));
+        assert_eq!(linop.a1, AnyScalar::F64(0.0));
+    }
+}

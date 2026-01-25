@@ -305,3 +305,48 @@ where
 
     TreeTN::from_tensors(tensors, node_names)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_tree_topology_validate() {
+        // Test empty topology
+        let empty = TreeTopology::new(HashMap::new(), Vec::new());
+        assert!(empty.validate().is_err());
+
+        // Test single node (valid)
+        let mut nodes = HashMap::new();
+        nodes.insert("node0".to_string(), vec![0]);
+        let single = TreeTopology::new(nodes, Vec::new());
+        assert!(single.validate().is_ok());
+
+        // Test valid tree (2 nodes, 1 edge)
+        let mut nodes = HashMap::new();
+        nodes.insert("node0".to_string(), vec![0]);
+        nodes.insert("node1".to_string(), vec![1]);
+        let edges = vec![("node0".to_string(), "node1".to_string())];
+        let tree = TreeTopology::new(nodes, edges);
+        assert!(tree.validate().is_ok());
+
+        // Test invalid: wrong number of edges
+        let mut nodes = HashMap::new();
+        nodes.insert("node0".to_string(), vec![0]);
+        nodes.insert("node1".to_string(), vec![1]);
+        let edges = vec![
+            ("node0".to_string(), "node1".to_string()),
+            ("node0".to_string(), "node1".to_string()),
+        ];
+        let invalid = TreeTopology::new(nodes, edges);
+        assert!(invalid.validate().is_err());
+
+        // Test invalid: edge references unknown node
+        let mut nodes = HashMap::new();
+        nodes.insert("node0".to_string(), vec![0]);
+        let edges = vec![("node0".to_string(), "node2".to_string())];
+        let invalid = TreeTopology::new(nodes, edges);
+        assert!(invalid.validate().is_err());
+    }
+}
