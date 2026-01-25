@@ -10,7 +10,7 @@ use crate::error::{PartitionedTTError, Result};
 use crate::projector::Projector;
 use crate::subdomain_tt::SubDomainTT;
 use tensor4all_core::DynIndex;
-use tensor4all_itensorlike::{ContractOptions, TensorTrain};
+use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// A partitioned tensor train: a collection of non-overlapping SubDomainTTs.
 ///
@@ -151,9 +151,21 @@ impl PartitionedTT {
                 // Check if we already have a subdomain with the same projector
                 if let Some(existing) = result.get_mut(&proj) {
                     // Sum the subdomains using TT addition
-                    let summed_tt = existing.data().add(contracted.data()).map_err(|e| {
+                    let mut summed_tt = existing.data().add(contracted.data()).map_err(|e| {
                         PartitionedTTError::TensorTrainError(format!(
                             "TT addition in contract failed: {}",
+                            e
+                        ))
+                    })?;
+                    // Truncate after addition using the same truncation params as contraction
+                    let truncate_opts = TruncateOptions {
+                        alg: tensor4all_itensorlike::TruncateAlg::SVD,
+                        truncation: options.truncation,
+                        site_range: None,
+                    };
+                    summed_tt.truncate(&truncate_opts).map_err(|e| {
+                        PartitionedTTError::TensorTrainError(format!(
+                            "TT truncation after addition failed: {}",
                             e
                         ))
                     })?;
@@ -161,6 +173,69 @@ impl PartitionedTT {
                 } else {
                     result.insert(contracted);
                 }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Add another PartitionedTT patch-by-patch.
+    ///
+    /// Both PartitionedTTs must have compatible patch structures:
+    /// - The union of all projectors from both must be pairwise disjoint
+    /// - Missing patches in either side are allowed (treated as zero)
+    ///
+    /// For each projector present in both, the corresponding TTs are added
+    /// and then truncated according to the provided options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The projectors are not pairwise disjoint (overlapping patches)
+    /// - TT addition or truncation fails
+    pub fn add(&self, other: &Self, options: &TruncateOptions) -> Result<Self> {
+        // Collect unique projectors from both (union)
+        let mut unique_projectors: std::collections::HashSet<Projector> =
+            self.projectors().cloned().collect();
+        unique_projectors.extend(other.projectors().cloned());
+        let all_projectors: Vec<Projector> = unique_projectors.into_iter().collect();
+
+        // Check that all unique projectors are pairwise disjoint
+        if !Projector::are_disjoint(&all_projectors) {
+            return Err(PartitionedTTError::IncompatibleProjectors(
+                "Projectors must be pairwise disjoint for patch-wise addition".to_string(),
+            ));
+        }
+
+        let mut result = Self::new();
+
+        // Process projectors from self
+        for (proj, subdomain) in self.iter() {
+            if let Some(other_subdomain) = other.get(proj) {
+                // Both have this projector: add and truncate
+                let mut summed_tt = subdomain.data().add(other_subdomain.data()).map_err(|e| {
+                    PartitionedTTError::TensorTrainError(format!(
+                        "TT addition in add failed: {}",
+                        e
+                    ))
+                })?;
+                summed_tt.truncate(options).map_err(|e| {
+                    PartitionedTTError::TensorTrainError(format!(
+                        "TT truncation after addition failed: {}",
+                        e
+                    ))
+                })?;
+                result.insert(SubDomainTT::new(summed_tt, proj.clone()));
+            } else {
+                // Only self has this projector: clone it
+                result.insert(subdomain.clone());
+            }
+        }
+
+        // Process projectors only in other (not in self)
+        for (proj, subdomain) in other.iter() {
+            if !self.contains(proj) {
+                result.insert(subdomain.clone());
             }
         }
 
@@ -594,5 +669,106 @@ mod tests {
         // Note: Current implementation returns raw TT norm, not projected norm
         // If we want projected norm, we'd need to modify the implementation
         // For now, this test just verifies current behavior is consistent
+    }
+
+    #[test]
+    fn test_partitioned_tt_add_same_structure() {
+        let (site_inds, link_ind) = make_shared_indices();
+
+        // Create two PartitionedTTs with the same patch structure
+        let tt1 = make_tt_with_indices(&site_inds, &link_ind);
+        let subdomain1 = SubDomainTT::new(tt1, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+        let partitioned1 = PartitionedTT::from_subdomain(subdomain1);
+
+        let tt2 = make_tt_with_indices(&site_inds, &link_ind);
+        let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+        let partitioned2 = PartitionedTT::from_subdomain(subdomain2);
+
+        // Add them
+        let options = TruncateOptions::svd();
+        let result = partitioned1.add(&partitioned2, &options).unwrap();
+
+        // Result should have 1 subdomain (same projector)
+        assert_eq!(result.len(), 1);
+
+        // The sum should be 2x the original (same TT added to itself)
+        let proj = Projector::from_pairs([(site_inds[0].clone(), 0)]);
+        let summed = result.get(&proj).unwrap();
+        let summed_dense = summed.data().to_dense().unwrap();
+        let summed_data = summed_dense.as_slice_f64().unwrap();
+
+        let original = make_tt_with_indices(&site_inds, &link_ind);
+        let original_dense = original.to_dense().unwrap();
+        let original_data = original_dense.as_slice_f64().unwrap();
+
+        for (i, (&s, &o)) in summed_data.iter().zip(original_data.iter()).enumerate() {
+            assert!(
+                (s - 2.0 * o).abs() < 1e-10,
+                "Mismatch at index {}: summed={}, expected={}",
+                i,
+                s,
+                2.0 * o
+            );
+        }
+    }
+
+    #[test]
+    fn test_partitioned_tt_add_missing_patch() {
+        let (site_inds, link_ind) = make_shared_indices();
+
+        // partitioned1 has patches for s0=0 and s0=1
+        let tt1_a = make_tt_with_indices(&site_inds, &link_ind);
+        let tt1_b = make_tt_with_indices(&site_inds, &link_ind);
+        let subdomain1_a =
+            SubDomainTT::new(tt1_a, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+        let subdomain1_b =
+            SubDomainTT::new(tt1_b, Projector::from_pairs([(site_inds[0].clone(), 1)]));
+        let partitioned1 =
+            PartitionedTT::from_subdomains(vec![subdomain1_a, subdomain1_b]).unwrap();
+
+        // partitioned2 has only patch for s0=0
+        let tt2 = make_tt_with_indices(&site_inds, &link_ind);
+        let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+        let partitioned2 = PartitionedTT::from_subdomain(subdomain2);
+
+        // Add them
+        let options = TruncateOptions::svd();
+        let result = partitioned1.add(&partitioned2, &options).unwrap();
+
+        // Result should have 2 subdomains
+        assert_eq!(result.len(), 2);
+
+        // s0=0 patch should be summed (2x)
+        let proj0 = Projector::from_pairs([(site_inds[0].clone(), 0)]);
+        let summed0 = result.get(&proj0).unwrap();
+        let original = make_tt_with_indices(&site_inds, &link_ind);
+        let original_norm = original.norm();
+        // Norm of 2*TT is 2*norm(TT)
+        assert!((summed0.norm() - 2.0 * original_norm).abs() < 1e-10);
+
+        // s0=1 patch should be unchanged (only in partitioned1)
+        let proj1 = Projector::from_pairs([(site_inds[0].clone(), 1)]);
+        let unchanged = result.get(&proj1).unwrap();
+        assert!((unchanged.norm() - original_norm).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_partitioned_tt_add_overlapping_fails() {
+        let (site_inds, link_ind) = make_shared_indices();
+
+        // partitioned1 has patch for s0=0
+        let tt1 = make_tt_with_indices(&site_inds, &link_ind);
+        let subdomain1 = SubDomainTT::new(tt1, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+        let partitioned1 = PartitionedTT::from_subdomain(subdomain1);
+
+        // partitioned2 has patch for s1=0 (overlaps with s0=0 since they're compatible)
+        let tt2 = make_tt_with_indices(&site_inds, &link_ind);
+        let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[1].clone(), 0)]));
+        let partitioned2 = PartitionedTT::from_subdomain(subdomain2);
+
+        // Add should fail because projectors are compatible (not disjoint)
+        let options = TruncateOptions::svd();
+        let result = partitioned1.add(&partitioned2, &options);
+        assert!(result.is_err());
     }
 }

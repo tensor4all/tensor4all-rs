@@ -35,4 +35,8 @@ pub enum PartitionedTTError {
     /// Feature not yet implemented
     #[error("Not implemented: {0}")]
     NotImplemented(String),
+
+    /// Incompatible projector structure
+    #[error("Incompatible projectors: {0}")]
+    IncompatibleProjectors(String),
 }
