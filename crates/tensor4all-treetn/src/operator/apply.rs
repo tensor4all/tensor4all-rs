@@ -925,7 +925,10 @@ mod tests {
         let new_idx1 = make_index(2);
         let new_idx2 = make_index(2);
         let replaced = lin_op
-            .replaceinds(&[true_s0.clone()], &[new_idx1.clone()])
+            .replaceinds(
+                std::slice::from_ref(&true_s0),
+                std::slice::from_ref(&new_idx1),
+            )
             .unwrap();
         assert!(replaced.get_input_mapping(&"N0".to_string()).is_some());
 
@@ -937,7 +940,10 @@ mod tests {
         assert!(replaced2.get_input_mapping(&"N0".to_string()).is_some());
 
         // Test replaceinds error case (length mismatch)
-        let result = lin_op.replaceinds(&[true_s0.clone()], &[new_idx1.clone(), new_idx1]);
+        let result = lin_op.replaceinds(
+            std::slice::from_ref(&true_s0),
+            &[new_idx1.clone(), new_idx1],
+        );
         assert!(result.is_err());
     }
 }
