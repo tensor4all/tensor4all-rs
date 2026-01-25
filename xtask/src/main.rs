@@ -67,7 +67,10 @@ fn cmd_doc(open: bool) -> Result<()> {
         #[cfg(target_os = "linux")]
         Command::new("xdg-open").arg(&index_path).status().ok();
         #[cfg(target_os = "windows")]
-        Command::new("cmd").args(["/c", "start", "", index_path.to_str().unwrap()]).status().ok();
+        Command::new("cmd")
+            .args(["/c", "start", "", index_path.to_str().unwrap()])
+            .status()
+            .ok();
     }
 
     println!("✅ Documentation generated at target/doc/index.html");
@@ -155,7 +158,11 @@ fn generate_doc_index(root: &Path) -> Result<()> {
 "#,
             doc_name,
             name,
-            if desc.is_empty() { "(no description)" } else { desc }
+            if desc.is_empty() {
+                "(no description)"
+            } else {
+                desc
+            }
         ));
     }
 
