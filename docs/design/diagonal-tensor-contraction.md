@@ -13,36 +13,19 @@ When contracting tensors with diagonal structure (e.g., SVD: U * s * V where s i
 
 ### omeco's Hyperedge Handling
 
-omeco correctly:
+omeco (v0.2.1+) correctly:
 - Tracks hyperedges via `IncidenceList::is_external()`
 - Computes contraction costs correctly for hyperedges
 - Returns optimal contraction paths
+- Preserves indices in intermediate outputs when needed for subsequent contractions
 
-omeco's limitation:
-- `contraction_output()` in `expr_tree.rs` only checks `final_output`, not remaining tensors
-- This causes incorrect intermediate outputs in `NestedEinsum` for hyperedges
-
-Example test case (in `contract.rs`):
-```rust
-// U(i, j), s(j), V(j, k) - j is hyperedge connecting all 3 tensors
-let ixs = vec![vec!['i', 'j'], vec!['j'], vec!['j', 'k']];
-let output = vec!['i', 'k'];
-
-// omeco's tree: U*s → output 'i' only (j incorrectly contracted!)
-// Correct: U*s → output 'i', 'j' (j must remain for V)
-```
+**Note:** Prior to v0.2.1, omeco had a bug where hyperedge indices could be incorrectly
+contracted too early. This has been fixed in v0.2.1 (released January 2025).
 
 ### Solution Architecture
 
-Use omeco for path optimization only. Execute contractions ourselves with "external indices" tracking:
-
-```
-Tensors → omeco.optimize_code() → NestedEinsum (path only)
-                                        ↓
-                             Custom execution with:
-                             - Track which tensors still need each index
-                             - Only contract index when all tensors using it are consumed
-```
+We use omeco directly for both path optimization and execution. No custom workarounds
+are needed as of omeco v0.2.1.
 
 ## DiagOuter Storage Design
 
