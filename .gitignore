@@ -42,3 +42,6 @@ external/
 # Coverage reports
 lcov*.info
 lcov-patch.info
+
+# Generated API documentation
+docs/api/

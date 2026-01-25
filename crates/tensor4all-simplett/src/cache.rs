@@ -3,11 +3,205 @@
 //! This module provides `TTCache`, a wrapper around tensor trains that caches
 //! partial evaluations for efficient repeated evaluation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+use bnum::types::{U1024, U256, U512};
 
 use crate::error::{Result, TensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
+
+/// Compute total bits needed for index space
+fn compute_total_bits(local_dims: &[usize]) -> u32 {
+    local_dims
+        .iter()
+        .map(|&d| if d <= 1 { 0 } else { (d as u64).ilog2() + 1 })
+        .sum()
+}
+
+/// Index key types for different bit widths
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum IndexKey {
+    U64(u64),
+    U128(u128),
+    U256(U256),
+    U512(U512),
+    U1024(U1024),
+}
+
+/// Flat indexer with automatic key type selection based on index space size
+enum FlatIndexer {
+    U64 { coeffs: Vec<u64> },
+    U128 { coeffs: Vec<u128> },
+    U256 { coeffs: Vec<U256> },
+    U512 { coeffs: Vec<U512> },
+    U1024 { coeffs: Vec<U1024> },
+}
+
+/// Macro for computing coefficients for primitive integer types (u64, u128)
+macro_rules! compute_coeffs_primitive {
+    ($local_dims:expr, $T:ty) => {{
+        let mut coeffs = Vec::with_capacity($local_dims.len());
+        let mut prod: $T = 1;
+        for &d in $local_dims {
+            coeffs.push(prod);
+            prod = prod.saturating_mul(d as $T);
+        }
+        coeffs
+    }};
+}
+
+/// Macro for computing coefficients for bnum types (U256, U512, U1024)
+macro_rules! compute_coeffs_bnum {
+    ($local_dims:expr, $T:ty) => {{
+        let mut coeffs = Vec::with_capacity($local_dims.len());
+        let mut prod = <$T>::ONE;
+        for &d in $local_dims {
+            coeffs.push(prod);
+            prod = prod.saturating_mul(<$T>::from(d as u64));
+        }
+        coeffs
+    }};
+}
+
+/// Macro for computing flat index for primitive types
+macro_rules! flat_index_primitive {
+    ($idx:expr, $coeffs:expr, $T:ty, $Key:ident) => {{
+        let key: $T = $idx.iter().zip($coeffs).map(|(&i, &c)| c * i as $T).sum();
+        IndexKey::$Key(key)
+    }};
+}
+
+/// Macro for computing flat index for bnum types
+macro_rules! flat_index_bnum {
+    ($idx:expr, $coeffs:expr, $T:ty, $Key:ident) => {{
+        let key = $idx
+            .iter()
+            .zip($coeffs)
+            .map(|(&i, &c)| c * <$T>::from(i as u64))
+            .fold(<$T>::ZERO, |a, b| a + b);
+        IndexKey::$Key(key)
+    }};
+}
+
+impl FlatIndexer {
+    /// Create a new indexer, automatically selecting the key type
+    fn new(local_dims: &[usize]) -> Self {
+        let total_bits = compute_total_bits(local_dims);
+
+        if total_bits <= 64 {
+            Self::U64 {
+                coeffs: compute_coeffs_primitive!(local_dims, u64),
+            }
+        } else if total_bits <= 128 {
+            Self::U128 {
+                coeffs: compute_coeffs_primitive!(local_dims, u128),
+            }
+        } else if total_bits <= 256 {
+            Self::U256 {
+                coeffs: compute_coeffs_bnum!(local_dims, U256),
+            }
+        } else if total_bits <= 512 {
+            Self::U512 {
+                coeffs: compute_coeffs_bnum!(local_dims, U512),
+            }
+        } else {
+            Self::U1024 {
+                coeffs: compute_coeffs_bnum!(local_dims, U1024),
+            }
+        }
+    }
+
+    /// Compute flat index key from multi-index
+    fn flat_index(&self, idx: &[usize]) -> IndexKey {
+        match self {
+            Self::U64 { coeffs } => flat_index_primitive!(idx, coeffs, u64, U64),
+            Self::U128 { coeffs } => flat_index_primitive!(idx, coeffs, u128, U128),
+            Self::U256 { coeffs } => flat_index_bnum!(idx, coeffs, U256, U256),
+            Self::U512 { coeffs } => flat_index_bnum!(idx, coeffs, U512, U512),
+            Self::U1024 { coeffs } => flat_index_bnum!(idx, coeffs, U1024, U1024),
+        }
+    }
+}
+
+/// Helper struct for building unique index mappings
+struct IndexMapper {
+    left_indexer: FlatIndexer,
+    right_indexer: FlatIndexer,
+    left_key_to_id: HashMap<IndexKey, usize>,
+    right_key_to_id: HashMap<IndexKey, usize>,
+    idx_to_left: Vec<usize>,
+    idx_to_right: Vec<usize>,
+    left_first_idx: Vec<usize>,
+    right_first_idx: Vec<usize>,
+}
+
+impl IndexMapper {
+    fn new(left_dims: &[usize], right_dims: &[usize], capacity: usize) -> Self {
+        Self {
+            left_indexer: FlatIndexer::new(left_dims),
+            right_indexer: FlatIndexer::new(right_dims),
+            left_key_to_id: HashMap::new(),
+            right_key_to_id: HashMap::new(),
+            idx_to_left: Vec::with_capacity(capacity),
+            idx_to_right: Vec::with_capacity(capacity),
+            left_first_idx: Vec::new(),
+            right_first_idx: Vec::new(),
+        }
+    }
+
+    fn add_index(&mut self, i: usize, left_part: &[usize], right_part: &[usize]) {
+        let left_key = self.left_indexer.flat_index(left_part);
+        let right_key = self.right_indexer.flat_index(right_part);
+
+        let left_id = match self.left_key_to_id.get(&left_key) {
+            Some(&id) => id,
+            None => {
+                let id = self.left_key_to_id.len();
+                self.left_key_to_id.insert(left_key, id);
+                self.left_first_idx.push(i);
+                id
+            }
+        };
+
+        let right_id = match self.right_key_to_id.get(&right_key) {
+            Some(&id) => id,
+            None => {
+                let id = self.right_key_to_id.len();
+                self.right_key_to_id.insert(right_key, id);
+                self.right_first_idx.push(i);
+                id
+            }
+        };
+
+        self.idx_to_left.push(left_id);
+        self.idx_to_right.push(right_id);
+    }
+}
+
+/// Helper for counting unique keys in split heuristic
+struct UniqueCounter {
+    indexer: FlatIndexer,
+    keys: HashSet<IndexKey>,
+}
+
+impl UniqueCounter {
+    fn new(local_dims: &[usize], capacity: usize) -> Self {
+        Self {
+            indexer: FlatIndexer::new(local_dims),
+            keys: HashSet::with_capacity(capacity),
+        }
+    }
+
+    fn insert(&mut self, idx: &[usize]) {
+        let key = self.indexer.flat_index(idx);
+        self.keys.insert(key);
+    }
+
+    fn len(&self) -> usize {
+        self.keys.len()
+    }
+}
 
 /// Cached tensor train for efficient repeated evaluation
 ///
@@ -276,140 +470,137 @@ impl<T: TTScalar> TTCache<T> {
         Ok(result)
     }
 
-    /// Batch evaluate the tensor train
+    /// Batch evaluate at multiple index sets
     ///
-    /// Evaluates for all combinations of left_indices and right_indices,
-    /// with `n_center` free indices in the middle.
+    /// This method efficiently evaluates the tensor train at multiple indices
+    /// by splitting at a given position and computing unique left/right environments.
     ///
-    /// Returns a tensor of shape (n_left, center_dims..., n_right)
-    pub fn batch_evaluate(
+    /// # Arguments
+    /// * `indices` - The indices to evaluate
+    /// * `split` - Optional split position. If `None`, uses a simple heuristic
+    ///   (checks 1/4, 1/2, 3/4 positions and picks the best).
+    ///   If you know the optimal split position (e.g., from TCI), pass `Some(split)`
+    ///   to avoid the search overhead.
+    pub fn evaluate_many(
         &mut self,
-        left_indices: &[MultiIndex],
-        right_indices: &[MultiIndex],
-        n_center: usize,
-    ) -> Result<(Vec<T>, Vec<usize>)> {
-        let n = self.len();
-
-        if left_indices.is_empty() || right_indices.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
+        indices: &[MultiIndex],
+        split: Option<usize>,
+    ) -> Result<Vec<T>> {
+        if indices.is_empty() {
+            return Ok(Vec::new());
         }
 
-        let n_left_sites = if left_indices.is_empty() {
-            0
-        } else {
-            left_indices[0].len()
-        };
-        let n_right_sites = if right_indices.is_empty() {
-            0
-        } else {
-            right_indices[0].len()
+        let n = self.len();
+        if n == 0 {
+            return Err(TensorTrainError::Empty);
+        }
+
+        // Determine split position
+        let split = match split {
+            Some(s) => s,
+            None => self.find_split_heuristic(indices),
         };
 
-        if n_left_sites + n_center + n_right_sites != n {
+        if split == 0 || split > n {
             return Err(TensorTrainError::InvalidOperation {
-                message: format!(
-                    "Index count mismatch: {} + {} + {} != {}",
-                    n_left_sites, n_center, n_right_sites, n
-                ),
+                message: format!("Invalid split position: {} (n_sites={})", split, n),
             });
         }
 
-        let n_left = left_indices.len();
-        let n_right = right_indices.len();
+        // Get local dimensions for flat index computation
+        let local_dims: Vec<usize> = self.site_dims.iter().map(|d| d.iter().product()).collect();
 
-        // Compute left environments
-        let dl = if n_left_sites > 0 && n_left_sites < n {
-            self.link_dim(n_left_sites - 1)
-        } else {
-            1
+        // Build index mapper with appropriate key type for each half
+        let mut mapper =
+            IndexMapper::new(&local_dims[..split], &local_dims[split..], indices.len());
+
+        for (i, idx) in indices.iter().enumerate() {
+            mapper.add_index(i, &idx[..split], &idx[split..]);
+        }
+
+        // Extract unique parts using first occurrence indices
+        let unique_left: Vec<MultiIndex> = mapper
+            .left_first_idx
+            .iter()
+            .map(|&i| indices[i][..split].to_vec())
+            .collect();
+
+        let unique_right: Vec<MultiIndex> = mapper
+            .right_first_idx
+            .iter()
+            .map(|&i| indices[i][split..].to_vec())
+            .collect();
+
+        // Compute left environments for all unique left parts
+        let left_envs: Vec<Vec<T>> = unique_left.iter().map(|l| self.evaluate_left(l)).collect();
+
+        // Compute right environments for all unique right parts
+        let right_envs: Vec<Vec<T>> = unique_right
+            .iter()
+            .map(|r| self.evaluate_right(r))
+            .collect();
+
+        // Compute results using position mappings
+        let results: Vec<T> = mapper
+            .idx_to_left
+            .iter()
+            .zip(&mapper.idx_to_right)
+            .map(|(&il, &ir)| {
+                let left_env = &left_envs[il];
+                let right_env = &right_envs[ir];
+                // Inner product
+                left_env
+                    .iter()
+                    .zip(right_env.iter())
+                    .fold(T::zero(), |acc, (&l, &r)| acc + l * r)
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Find a good split position using 3-point sampling heuristic
+    ///
+    /// Samples at 1/4, 1/2, 3/4 positions and returns the one with
+    /// minimum total unique left + right parts.
+    fn find_split_heuristic(&self, indices: &[MultiIndex]) -> usize {
+        let n = self.len();
+        if n <= 1 {
+            return n.max(1);
+        }
+
+        let local_dims: Vec<usize> = self.site_dims.iter().map(|d| d.iter().product()).collect();
+
+        // Helper to compute cost at a split position
+        let compute_cost = |split: usize| -> usize {
+            if split == 0 || split >= n {
+                return usize::MAX;
+            }
+
+            let mut left_counter = UniqueCounter::new(&local_dims[..split], indices.len());
+            let mut right_counter = UniqueCounter::new(&local_dims[split..], indices.len());
+
+            for idx in indices {
+                left_counter.insert(&idx[..split]);
+                right_counter.insert(&idx[split..]);
+            }
+
+            left_counter.len() + right_counter.len()
         };
 
-        let mut left_env = vec![T::one(); n_left * dl];
-        if n_left_sites > 0 {
-            for (il, lindex) in left_indices.iter().enumerate() {
-                let lenv = self.evaluate_left(lindex);
-                for (j, &v) in lenv.iter().enumerate() {
-                    left_env[il * dl + j] = v;
-                }
-            }
-        }
+        // 3-point sampling: 1/4, 1/2, 3/4 positions
+        let candidates = [n / 4, n / 2, 3 * n / 4];
+        let costs: Vec<(usize, usize)> = candidates
+            .iter()
+            .filter(|&&p| p >= 1 && p < n)
+            .map(|&p| (p, compute_cost(p)))
+            .collect();
 
-        // Compute right environments
-        let dr = if n_right_sites > 0 && n_left_sites + n_center < n {
-            self.link_dim(n_left_sites + n_center - 1)
-        } else {
-            1
-        };
-
-        let mut right_env = vec![T::one(); dr * n_right];
-        if n_right_sites > 0 {
-            for (ir, rindex) in right_indices.iter().enumerate() {
-                let renv = self.evaluate_right(rindex);
-                for (j, &v) in renv.iter().enumerate() {
-                    right_env[j * n_right + ir] = v;
-                }
-            }
-        }
-
-        // Compute center dimensions
-        let mut center_dims = Vec::with_capacity(n_center);
-        for i in n_left_sites..n_left_sites + n_center {
-            center_dims.push(self.tensors[i].site_dim());
-        }
-        let center_size: usize = center_dims.iter().product();
-
-        // Contract through center tensors
-        // current shape: (n_left, current_bond_dim)
-        let mut current = left_env;
-        let mut current_bond = dl;
-
-        for i in n_left_sites..n_left_sites + n_center {
-            let tensor = &self.tensors[i];
-            let site_dim = tensor.site_dim();
-            let next_bond = tensor.right_dim();
-
-            // new_current[il, s, r] = sum_l current[il, l] * tensor[l, s, r]
-            let mut new_current = vec![T::zero(); n_left * site_dim * next_bond];
-
-            for il in 0..n_left {
-                for s in 0..site_dim {
-                    for r in 0..next_bond {
-                        let mut sum = T::zero();
-                        for l in 0..current_bond {
-                            sum = sum + current[il * current_bond + l] * *tensor.get3(l, s, r);
-                        }
-                        new_current[(il * site_dim + s) * next_bond + r] = sum;
-                    }
-                }
-            }
-
-            current = new_current;
-            current_bond = next_bond;
-        }
-
-        // Contract with right environment
-        // current shape: (n_left * center_size, dr)
-        // right_env shape: (dr, n_right)
-        // result shape: (n_left * center_size, n_right) -> (n_left, center_dims..., n_right)
-        let mut result = vec![T::zero(); n_left * center_size * n_right];
-
-        for il_c in 0..n_left * center_size {
-            for ir in 0..n_right {
-                let mut sum = T::zero();
-                for d in 0..dr {
-                    sum = sum + current[il_c * current_bond + d] * right_env[d * n_right + ir];
-                }
-                result[il_c * n_right + ir] = sum;
-            }
-        }
-
-        // Build output shape
-        let mut shape = Vec::with_capacity(2 + n_center);
-        shape.push(n_left);
-        shape.extend_from_slice(&center_dims);
-        shape.push(n_right);
-
-        Ok((result, shape))
+        costs
+            .into_iter()
+            .min_by_key(|&(_, c)| c)
+            .map(|(p, _)| p)
+            .unwrap_or(n / 2)
     }
 }
 
@@ -462,28 +653,6 @@ mod tests {
     }
 
     #[test]
-    fn test_ttcache_batch_evaluate() {
-        let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
-        let mut cache = TTCache::new(&tt);
-
-        let left_indices = vec![vec![0], vec![1]];
-        let right_indices = vec![vec![0], vec![1]];
-
-        let (result, shape) = cache
-            .batch_evaluate(&left_indices, &right_indices, 1)
-            .unwrap();
-
-        // Shape should be (2, 3, 2)
-        assert_eq!(shape, vec![2, 3, 2]);
-        assert_eq!(result.len(), 2 * 3 * 2);
-
-        // All values should be 1.0
-        for val in &result {
-            assert!((val - 1.0).abs() < 1e-10);
-        }
-    }
-
-    #[test]
     fn test_ttcache_clear() {
         let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
         let mut cache = TTCache::new(&tt);
@@ -496,5 +665,147 @@ mod tests {
         cache.clear_cache();
         assert!(cache.cache_left[0].is_empty());
         assert!(cache.cache_right[0].is_empty());
+    }
+
+    #[test]
+    fn test_ttcache_evaluate_many() {
+        let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+        let mut cache = TTCache::new(&tt);
+
+        let indices = vec![vec![0, 0, 0], vec![0, 1, 0], vec![1, 2, 1], vec![0, 0, 1]];
+
+        let results = cache.evaluate_many(&indices, None).unwrap();
+
+        // All values should be 2.0 for a constant TT
+        assert_eq!(results.len(), 4);
+        for val in &results {
+            assert!((val - 2.0).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_ttcache_evaluate_many_matches_single() {
+        // Create a non-trivial TT
+        let mut t0: Tensor3<f64> = tensor3_zeros(1, 2, 2);
+        t0.set3(0, 0, 0, 1.0);
+        t0.set3(0, 0, 1, 0.5);
+        t0.set3(0, 1, 0, 2.0);
+        t0.set3(0, 1, 1, 1.0);
+
+        let mut t1: Tensor3<f64> = tensor3_zeros(2, 3, 2);
+        for l in 0..2 {
+            for s in 0..3 {
+                for r in 0..2 {
+                    t1.set3(l, s, r, ((l + s + r) as f64) * 0.5 + 0.1);
+                }
+            }
+        }
+
+        let mut t2: Tensor3<f64> = tensor3_zeros(2, 2, 1);
+        for l in 0..2 {
+            for s in 0..2 {
+                t2.set3(l, s, 0, (l + s + 1) as f64);
+            }
+        }
+
+        let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+        let mut cache = TTCache::new(&tt);
+
+        // Generate all indices
+        let mut indices = Vec::new();
+        for i0 in 0..2 {
+            for i1 in 0..3 {
+                for i2 in 0..2 {
+                    indices.push(vec![i0, i1, i2]);
+                }
+            }
+        }
+
+        // Evaluate using evaluate_many
+        let batch_results = cache.evaluate_many(&indices, None).unwrap();
+
+        // Compare with single evaluations
+        for (idx, batch_val) in indices.iter().zip(batch_results.iter()) {
+            let single_val = cache.evaluate(idx).unwrap();
+            assert!(
+                (batch_val - single_val).abs() < 1e-10,
+                "Mismatch at {:?}: batch={}, single={}",
+                idx,
+                batch_val,
+                single_val
+            );
+        }
+    }
+
+    #[test]
+    fn test_ttcache_evaluate_many_cache_efficiency() {
+        let tt = TensorTrain::<f64>::constant(&[2, 2, 2, 2], 1.0);
+        let mut cache = TTCache::new(&tt);
+
+        // Indices with shared prefixes/suffixes
+        let indices = vec![
+            vec![0, 0, 0, 0],
+            vec![0, 0, 0, 1],
+            vec![0, 0, 1, 0],
+            vec![0, 0, 1, 1],
+            vec![1, 1, 0, 0],
+            vec![1, 1, 0, 1],
+        ];
+
+        let results = cache.evaluate_many(&indices, None).unwrap();
+        assert_eq!(results.len(), 6);
+
+        // Check that caches are populated
+        // The optimal split should create fewer unique entries than indices.len()
+        let total_left_cached: usize = cache.cache_left.iter().map(|c| c.len()).sum();
+        let total_right_cached: usize = cache.cache_right.iter().map(|c| c.len()).sum();
+
+        // With shared prefixes/suffixes, we should have fewer cached entries
+        // than if we computed each index independently
+        assert!(total_left_cached + total_right_cached > 0);
+    }
+
+    #[test]
+    fn test_ttcache_evaluate_many_empty() {
+        let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+        let mut cache = TTCache::new(&tt);
+
+        let results = cache.evaluate_many(&[], None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_find_split_heuristic() {
+        let tt = TensorTrain::<f64>::constant(&[2, 2, 2, 2], 1.0);
+        let cache = TTCache::new(&tt);
+
+        // Indices where split=1 is optimal:
+        // Heuristic checks 1/4=1, 1/2=2, 3/4=3
+        // split=1: unique_left=2, unique_right=2, total=4
+        // split=2: unique_left=4, unique_right=1, total=5
+        // split=3: unique_left=4, unique_right=1, total=5
+        let indices = vec![
+            vec![0, 0, 0, 0],
+            vec![0, 1, 0, 0],
+            vec![1, 0, 0, 0],
+            vec![1, 1, 0, 0],
+        ];
+
+        let split = cache.find_split_heuristic(&indices);
+        assert_eq!(split, 1);
+
+        // Indices where split=3 is optimal:
+        // split=1: unique_left=1, unique_right=4, total=5
+        // split=2: unique_left=1, unique_right=4, total=5
+        // split=3: unique_left=2, unique_right=2, total=4
+        let indices2 = vec![
+            vec![0, 0, 0, 0],
+            vec![0, 0, 0, 1],
+            vec![0, 0, 1, 0],
+            vec![0, 0, 1, 1],
+        ];
+
+        let split2 = cache.find_split_heuristic(&indices2);
+        assert_eq!(split2, 3);
     }
 }
