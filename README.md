@@ -53,6 +53,7 @@ tensor4all-rs/
 ├── julia/Tensor4all.jl/              # Julia bindings
 ├── python/tensor4all/                # Python bindings
 ├── tools/api-dump/                   # API documentation generator
+├── xtask/                            # Development task runner
 └── docs/                             # Design documents
 ```
 
@@ -269,6 +270,21 @@ For ITensors.jl:
 - Complex SVD: mdarray-linalg-faer returns V^T instead of V^H for complex matrices
 
 ## Development
+
+### Development Tasks (xtask)
+
+This project uses `cargo xtask` for common development tasks:
+
+```bash
+# Generate documentation with custom index page
+cargo xtask doc
+
+# Generate and open documentation in browser
+cargo xtask doc --open
+
+# Run all CI checks (fmt, clippy, test, doc)
+cargo xtask ci
+```
 
 ### Pre-commit Checks
 
