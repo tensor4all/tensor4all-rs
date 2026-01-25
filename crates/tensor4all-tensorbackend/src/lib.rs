@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Tensor storage and linear algebra backend for tensor4all.
 //!
 //! This crate provides:
@@ -14,9 +15,13 @@
 //! - `backend-lapack`: Use LAPACK for linear algebra operations
 //! - `backend-libtorch`: Enable PyTorch/libtorch backend for tensor operations and autograd
 
+/// Dynamic scalar types supporting f64 and Complex64.
 pub mod any_scalar;
+/// Backend dispatch for SVD and QR operations.
 pub mod backend;
+/// Einstein summation operations.
 pub mod einsum;
+/// Tensor storage types (Dense and Diagonal).
 pub mod storage;
 
 // Torch backend module (feature-gated)

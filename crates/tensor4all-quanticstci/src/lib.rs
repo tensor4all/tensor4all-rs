@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! High-level Quantics TCI interface for function interpolation.
 //!
 //! This crate provides a user-friendly interface for interpolating functions

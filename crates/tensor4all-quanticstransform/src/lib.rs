@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Quantics transformation operators for tensor train methods.
 //!
 //! This crate provides LinearOperator constructors for various transformations

@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! ITensorMPS.jl-inspired Tensor Train library with orthogonality tracking
 //!
 //! This crate provides a Rust implementation of Tensor Trains (also known as MPS)

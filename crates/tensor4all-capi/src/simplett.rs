@@ -12,7 +12,7 @@ use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
 // Opaque handle type
 // ============================================================================
 
-/// Opaque handle for a SimpleTT TensorTrain<f64>
+/// Opaque handle for a SimpleTT `TensorTrain<f64>`
 #[repr(C)]
 pub struct t4a_simplett_f64 {
     _private: *const c_void,

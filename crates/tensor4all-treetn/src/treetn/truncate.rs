@@ -75,7 +75,7 @@ where
 
     /// Truncate the network in-place towards the specified center using options.
     ///
-    /// This is the `&mut self` version of [`truncate`].
+    /// This is the `&mut self` version of [`Self::truncate`].
     pub fn truncate_mut(
         &mut self,
         canonical_center: impl IntoIterator<Item = V>,

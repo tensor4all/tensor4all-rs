@@ -35,7 +35,7 @@ pub type EvalCallback = extern "C" fn(
 // Opaque handle type
 // ============================================================================
 
-/// Opaque handle for TensorCI2<f64>
+/// Opaque handle for `TensorCI2<f64>`
 #[repr(C)]
 pub struct t4a_tci2_f64 {
     _private: *const c_void,

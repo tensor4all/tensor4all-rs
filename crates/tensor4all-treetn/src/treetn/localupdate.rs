@@ -35,8 +35,8 @@ pub struct LocalUpdateStep<V> {
     pub nodes: Vec<V>,
 
     /// The canonical center after this update step.
-    /// For nsite=1: same as nodes[0]
-    /// For nsite=2: the node in the direction of the next step
+    /// For nsite=1: same as `nodes[0]`.
+    /// For nsite=2: the node in the direction of the next step.
     pub new_center: V,
 }
 

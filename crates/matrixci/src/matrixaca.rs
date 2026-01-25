@@ -14,7 +14,7 @@ use crate::util::{
 /// The approximation is stored as:
 /// A ≈ U * diag(alpha) * V
 ///
-/// where alpha[k] = 1/delta[k] for efficiency.
+/// where `alpha[k] = 1/delta[k]` for efficiency.
 #[derive(Debug, Clone)]
 pub struct MatrixACA<T: Scalar> {
     /// Row indices (I set)

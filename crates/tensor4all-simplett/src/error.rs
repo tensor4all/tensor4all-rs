@@ -10,19 +10,30 @@ pub type Result<T> = std::result::Result<T, TensorTrainError>;
 pub enum TensorTrainError {
     /// Dimension mismatch between tensors
     #[error("Dimension mismatch: tensor at site {site} has incompatible dimensions")]
-    DimensionMismatch { site: usize },
+    DimensionMismatch {
+        /// The site index where the mismatch occurred
+        site: usize,
+    },
 
     /// Invalid index provided
     #[error("Index out of bounds: index {index} at site {site} (max: {max})")]
     IndexOutOfBounds {
+        /// The site index where the error occurred
         site: usize,
+        /// The invalid index value
         index: usize,
+        /// The maximum allowed index value
         max: usize,
     },
 
     /// Length mismatch in index set
     #[error("Index set length mismatch: expected {expected}, got {got}")]
-    IndexLengthMismatch { expected: usize, got: usize },
+    IndexLengthMismatch {
+        /// The expected length
+        expected: usize,
+        /// The actual length provided
+        got: usize,
+    },
 
     /// Empty tensor train
     #[error("Tensor train is empty")]
@@ -30,5 +41,8 @@ pub enum TensorTrainError {
 
     /// Invalid operation
     #[error("Invalid operation: {message}")]
-    InvalidOperation { message: String },
+    InvalidOperation {
+        /// Description of the invalid operation
+        message: String,
+    },
 }

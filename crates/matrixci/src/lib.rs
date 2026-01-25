@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Matrix Cross Interpolation library
 //!
 //! This crate provides matrix cross interpolation algorithms, including:

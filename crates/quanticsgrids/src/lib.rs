@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Quantics grid structures for efficient conversion between quantics indices,
 //! grid indices, and original coordinates.
 //!
@@ -142,10 +143,10 @@ pub use inherent_discrete_grid::{InherentDiscreteGrid, InherentDiscreteGridBuild
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UnfoldingScheme {
     /// Each quantics index gets its own tensor core, alternating between variables.
-    /// For variables (a, b) with Rs=(2, 2), produces: [a1], [b1], [a2], [b2]
+    /// For variables (a, b) with Rs=(2, 2), produces: `[a1]`, `[b1]`, `[a2]`, `[b2]`
     Interleaved,
     /// Quantics indices at the same bit level are fused into one tensor core.
-    /// For variables (a, b) with Rs=(2, 2), produces: [b1, a1], [b2, a2]
+    /// For variables (a, b) with Rs=(2, 2), produces: `[b1, a1]`, `[b2, a2]`
     #[default]
     Fused,
 }

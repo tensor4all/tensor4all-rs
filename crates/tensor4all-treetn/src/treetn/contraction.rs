@@ -529,9 +529,9 @@ where
     /// ITensors.jl's MPO zip-up algorithm.
     ///
     /// # Algorithm
-    /// 1. Process leaves: contract A[leaf] * B[leaf], factorize, store R at parent
-    /// 2. Process internal nodes: contract [R_accumulated..., A[node], B[node]], factorize, store R_new at parent
-    /// 3. Process root: contract [R_list..., A[root], B[root]], store as final result
+    /// 1. Process leaves: contract `A[leaf] * B[leaf]`, factorize, store R at parent
+    /// 2. Process internal nodes: contract `[R_accumulated..., A[node], B[node]]`, factorize, store R\_new at parent
+    /// 3. Process root: contract `[R_list..., A[root], B[root]]`, store as final result
     /// 4. Set canonical center
     ///
     /// # Arguments

@@ -1,3 +1,24 @@
+//! Tree Tensor Network (TreeTN) library for tensor4all.
+//!
+//! This crate provides data structures and algorithms for working with tree tensor networks,
+//! a generalization of matrix product states (MPS) to tree-shaped graphs. Tree tensor networks
+//! are useful for representing quantum states and operators on systems with tree-like connectivity.
+//!
+//! # Key Types
+//!
+//! - [`TreeTN`]: The main tree tensor network type, parameterized by tensor and node name types.
+//! - [`DefaultTreeTN`]: A convenient alias for `TreeTN<TensorDynLen, NodeIndex>`.
+//! - [`NamedGraph`]: A graph wrapper that maps node names to internal graph indices.
+//!
+//! # Features
+//!
+//! - **Canonicalization**: Transform networks into canonical forms (unitary, LU, CI).
+//! - **Truncation**: Compress networks using SVD-based truncation.
+//! - **Contraction**: Contract two networks using zip-up or fit algorithms.
+//! - **Linear operators**: Apply and compose linear operators on tree tensor networks.
+//! - **Linear solvers**: Solve linear systems involving tree tensor network operators.
+
+#![warn(missing_docs)]
 pub mod algorithm;
 // dyn_treetn.rs has been removed.
 // TreeTN uses the `T: TensorLike` pattern, making a separate dyn wrapper unnecessary.

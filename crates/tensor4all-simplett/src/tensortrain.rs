@@ -9,9 +9,9 @@ use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 /// A tensor train represents a high-dimensional tensor as a product of
 /// lower-dimensional tensors:
 ///
-/// T[i1, i2, ..., iL] = A1[i1] * A2[i2] * ... * AL[iL]
+/// T\[i1, i2, ..., iL\] = A1\[i1\] * A2\[i2\] * ... * AL\[iL\]
 ///
-/// where each Ak[ik] is a matrix of shape (rk-1, rk).
+/// where each Ak\[ik\] is a matrix of shape (rk-1, rk).
 #[derive(Debug, Clone)]
 pub struct TensorTrain<T: TTScalar> {
     /// The tensors that make up the tensor train

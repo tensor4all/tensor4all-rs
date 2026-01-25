@@ -13,7 +13,9 @@ type TensorRefWithIds<'a, ID, T> = (&'a [ID], &'a Slice<T, DynRank, mdarray::Den
 /// Enum wrapping either f64 or Complex64 tensor.
 #[derive(Debug, Clone)]
 pub enum TypedTensor {
+    /// A tensor containing f64 (real) values.
     F64(Tensor<f64, DynRank>),
+    /// A tensor containing Complex64 (complex) values.
     C64(Tensor<Complex64, DynRank>),
 }
 

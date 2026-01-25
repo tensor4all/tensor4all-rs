@@ -12,9 +12,9 @@
 //!
 //! # Contraction Algorithms
 //!
-//! - [`contract_naive`]: Naive contraction (exact but memory-intensive)
-//! - [`contract_zipup`]: Zip-up contraction with on-the-fly compression
-//! - [`contract_fit`]: Variational fitting algorithm
+//! - [`fn@contract_naive`]: Naive contraction (exact but memory-intensive)
+//! - [`fn@contract_zipup`]: Zip-up contraction with on-the-fly compression
+//! - [`fn@contract_fit`]: Variational fitting algorithm
 //!
 //! # Example
 //!

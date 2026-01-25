@@ -1,8 +1,34 @@
+//! Core tensor operations and types for tensor4all-rs.
+//!
+//! This crate provides the foundational types and operations for tensor networks:
+//!
+//! - **Index types**: [`DynIndex`], [`Index`], [`DynId`] for tensor indices
+//! - **Tag sets**: [`TagSet`], [`TagSetLike`] for metadata tagging
+//! - **Tensors**: [`TensorDynLen`] for dynamic-rank dense tensors
+//! - **Operations**: Contraction, SVD, QR decomposition, factorization
+//!
+//! # Example
+//!
+//! ```
+//! use tensor4all_core::{Index, DynIndex, TensorDynLen};
+//!
+//! // Create indices with dynamic identity
+//! let i = Index::new_dyn(2);
+//! let j = Index::new_dyn(3);
+//!
+//! // Create a tensor
+//! let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+//! let t = TensorDynLen::from_dense_f64(vec![i.clone(), j.clone()], data);
+//! ```
+
+#![warn(missing_docs)]
 // Common (tags, utilities, scalar)
 pub mod global_default;
 pub mod index_like;
 pub mod scalar;
+/// Stack-allocated fixed-capacity string types for ITensors.jl compatibility.
 pub mod smallstring;
+/// Tag set types for tensor metadata.
 pub mod tagset;
 pub mod truncation;
 
@@ -18,7 +44,7 @@ pub use defaults::index;
 pub use defaults::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
 pub use index_like::{ConjState, IndexLike};
 
-// Index operations (uses defaults::*)
+/// Index operations (replacement, set operations, contraction preparation).
 pub mod index_ops;
 pub use index_ops::{
     check_unique_indices, common_ind_positions, common_inds, hascommoninds, hasind, hasinds,

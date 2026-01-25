@@ -11,9 +11,9 @@ use crate::traits::TTScalar;
 /// Vidal canonical form of MPO
 ///
 /// The Vidal form represents the MPO as:
-/// O = Γ[1] · Λ[1] · Γ[2] · Λ[2] · ... · Γ[L]
+/// O = Gamma\[1\] * Lambda\[1\] * Gamma\[2\] * Lambda\[2\] * ... * Gamma\[L\]
 ///
-/// where Γ[i] are tensors and Λ[i] are diagonal matrices of singular values.
+/// where Gamma\[i\] are tensors and Lambda\[i\] are diagonal matrices of singular values.
 #[derive(Debug, Clone)]
 pub struct VidalMPO<T: TTScalar> {
     /// The Gamma tensors (4D tensors with normalized bond indices)

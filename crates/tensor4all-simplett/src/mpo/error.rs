@@ -10,33 +10,50 @@ pub type Result<T> = std::result::Result<T, MPOError>;
 pub enum MPOError {
     /// Dimension mismatch between tensors
     #[error("Dimension mismatch: tensor at site {site} has incompatible dimensions")]
-    DimensionMismatch { site: usize },
+    DimensionMismatch {
+        /// The site index where the mismatch occurred
+        site: usize,
+    },
 
     /// Bond dimension mismatch between adjacent tensors
     #[error("Bond dimension mismatch at site {site}: left tensor has right_dim={left_right}, right tensor has left_dim={right_left}")]
     BondDimensionMismatch {
+        /// The site index where the mismatch occurred
         site: usize,
+        /// Right dimension of the left tensor
         left_right: usize,
+        /// Left dimension of the right tensor
         right_left: usize,
     },
 
     /// Shared dimension mismatch between two MPOs
     #[error("Shared dimension mismatch at site {site}: MPO A has site_dim_2={dim_a}, MPO B has site_dim_1={dim_b}")]
     SharedDimensionMismatch {
+        /// The site index where the mismatch occurred
         site: usize,
+        /// Second site dimension of MPO A
         dim_a: usize,
+        /// First site dimension of MPO B
         dim_b: usize,
     },
 
     /// Length mismatch between two MPOs
     #[error("MPO length mismatch: expected {expected}, got {got}")]
-    LengthMismatch { expected: usize, got: usize },
+    LengthMismatch {
+        /// The expected length
+        expected: usize,
+        /// The actual length provided
+        got: usize,
+    },
 
     /// Invalid index provided
     #[error("Index out of bounds: index {index} at site {site} (max: {max})")]
     IndexOutOfBounds {
+        /// The site index where the error occurred
         site: usize,
+        /// The invalid index value
         index: usize,
+        /// The maximum allowed index value
         max: usize,
     },
 
@@ -50,17 +67,33 @@ pub enum MPOError {
 
     /// Invalid orthogonality center
     #[error("Invalid orthogonality center: {center} is out of range [0, {max})")]
-    InvalidCenter { center: usize, max: usize },
+    InvalidCenter {
+        /// The invalid center value
+        center: usize,
+        /// The maximum allowed center value
+        max: usize,
+    },
 
     /// Factorization error
     #[error("Factorization failed: {message}")]
-    FactorizationError { message: String },
+    FactorizationError {
+        /// Description of the factorization failure
+        message: String,
+    },
 
     /// Invalid operation
     #[error("Invalid operation: {message}")]
-    InvalidOperation { message: String },
+    InvalidOperation {
+        /// Description of the invalid operation
+        message: String,
+    },
 
     /// Convergence failure
     #[error("Failed to converge after {sweeps} sweeps (final error: {error})")]
-    ConvergenceFailure { sweeps: usize, error: f64 },
+    ConvergenceFailure {
+        /// The number of sweeps performed before failure
+        sweeps: usize,
+        /// The final error value achieved
+        error: f64,
+    },
 }

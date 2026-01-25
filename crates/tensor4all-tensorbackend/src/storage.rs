@@ -408,38 +408,46 @@ fn compute_contraction_permutation(
 pub struct DiagStorage<T>(Vec<T>);
 
 impl<T> DiagStorage<T> {
+    /// Create a new diagonal storage from a vector of diagonal elements.
     pub fn from_vec(vec: Vec<T>) -> Self {
         Self(vec)
     }
 
+    /// Get a slice of the diagonal elements.
     pub fn as_slice(&self) -> &[T] {
         &self.0
     }
 
+    /// Get a mutable slice of the diagonal elements.
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         &mut self.0
     }
 
+    /// Consume the storage and return the underlying vector.
     pub fn into_vec(self) -> Vec<T> {
         self.0
     }
 
+    /// Return the number of diagonal elements.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    /// Return true if the storage has no elements.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 }
 
 impl<T: Clone> DiagStorage<T> {
+    /// Get a clone of the diagonal element at index `i`.
     pub fn get(&self, i: usize) -> T {
         self.0[i].clone()
     }
 }
 
 impl<T: Copy> DiagStorage<T> {
+    /// Set the diagonal element at index `i` to `val`.
     pub fn set(&mut self, i: usize, val: T) {
         self.0[i] = val;
     }
@@ -766,14 +774,18 @@ fn contract_dense_diag_impl<T: DenseScalar>(
 /// When `backend-libtorch` is enabled, also supports Torch storage for autograd.
 #[derive(Debug, Clone)]
 pub enum Storage {
+    /// Dense storage with f64 elements.
     DenseF64(DenseStorageF64),
+    /// Dense storage with Complex64 elements.
     DenseC64(DenseStorageC64),
+    /// Diagonal storage with f64 elements.
     DiagF64(DiagStorageF64),
+    /// Diagonal storage with Complex64 elements.
     DiagC64(DiagStorageC64),
-    /// Torch tensor storage for f64 (requires `backend-libtorch` feature)
+    /// Torch tensor storage for f64 (requires `backend-libtorch` feature).
     #[cfg(feature = "backend-libtorch")]
     TorchF64(crate::torch::TorchStorage<f64>),
-    /// Torch tensor storage for Complex64 (requires `backend-libtorch` feature)
+    /// Torch tensor storage for Complex64 (requires `backend-libtorch` feature).
     #[cfg(feature = "backend-libtorch")]
     TorchC64(crate::torch::TorchStorage<Complex64>),
 }
@@ -825,6 +837,7 @@ impl DenseStorageFactory for Complex64 {
 ///
 /// This lets callers write `let s: T = tensor.sum();` without matching on storage.
 pub trait SumFromStorage: Sized {
+    /// Compute the sum of all elements in the storage.
     fn sum_from_storage(storage: &Storage) -> Self;
 }
 
