@@ -1,0 +1,19 @@
+[package]
+name = "tensor4all-partitionedtt"
+description = "Partitioned Tensor Train for tensor4all"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+num-complex.workspace = true
+num-traits.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tensor4all-core = { path = "../tensor4all-core" }
+tensor4all-itensorlike = { path = "../tensor4all-itensorlike" }
+
+[dev-dependencies]
+approx.workspace = true

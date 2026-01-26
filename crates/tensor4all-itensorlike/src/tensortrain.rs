@@ -610,6 +610,44 @@ impl TensorTrain {
         self.norm_squared().sqrt()
     }
 
+    /// Convert the tensor train to a single dense tensor.
+    ///
+    /// This contracts all tensors in the train along their link indices,
+    /// producing a single tensor with only site indices.
+    ///
+    /// # Warning
+    /// This operation can be very expensive for large tensor trains,
+    /// as the result size grows exponentially with the number of sites.
+    ///
+    /// # Returns
+    /// A single tensor containing all site indices, or an error if the
+    /// tensor train is empty.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+    /// let dense = tt.to_dense().unwrap();
+    /// // dense now has all site indices from t0, t1, t2 (link indices contracted)
+    /// ```
+    pub fn to_dense(&self) -> Result<TensorDynLen> {
+        if self.is_empty() {
+            return Err(TensorTrainError::InvalidStructure {
+                message: "Cannot convert empty tensor train to dense".to_string(),
+            });
+        }
+
+        // Start with the first tensor
+        let mut result = self.tensor(0).clone();
+
+        // Contract with each subsequent tensor
+        for site in 1..self.len() {
+            let tensor = self.tensor(site);
+            result = result.contract(tensor);
+        }
+
+        Ok(result)
+    }
+
     /// Contract two tensor trains, returning a new tensor train.
     ///
     /// This performs element-wise contraction of corresponding sites,
@@ -696,6 +734,56 @@ impl TensorTrain {
         Ok(Self {
             inner: result_inner,
             canonical_form: Some(CanonicalForm::Unitary),
+        })
+    }
+
+    /// Add two tensor trains using direct-sum construction.
+    ///
+    /// This creates a new tensor train where each tensor is the direct sum of the
+    /// corresponding tensors from self and other, with bond dimensions merged.
+    /// The result has bond dimensions equal to the sum of the input bond dimensions.
+    ///
+    /// # Arguments
+    /// * `other` - The other tensor train to add
+    ///
+    /// # Returns
+    /// A new tensor train representing the sum.
+    ///
+    /// # Errors
+    /// Returns an error if the tensor trains have incompatible structures.
+    pub fn add(&self, other: &Self) -> Result<Self> {
+        if self.is_empty() && other.is_empty() {
+            return Ok(Self::default());
+        }
+
+        if self.is_empty() {
+            return Ok(other.clone());
+        }
+
+        if other.is_empty() {
+            return Ok(self.clone());
+        }
+
+        if self.len() != other.len() {
+            return Err(TensorTrainError::InvalidStructure {
+                message: format!(
+                    "Tensor trains must have the same length for addition: {} vs {}",
+                    self.len(),
+                    other.len()
+                ),
+            });
+        }
+
+        let result_inner =
+            self.inner
+                .add(&other.inner)
+                .map_err(|e| TensorTrainError::InvalidStructure {
+                    message: format!("TT addition failed: {}", e),
+                })?;
+
+        Ok(Self {
+            inner: result_inner,
+            canonical_form: None, // Addition destroys canonical form
         })
     }
 }
@@ -1073,5 +1161,195 @@ mod tests {
         // Compute norm
         let norm = tt.norm();
         assert!((norm * norm - norm_sq).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_to_dense() {
+        // Create a 2-site TT: s0 -- l01 -- s1
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+        let tt = TensorTrain::new(vec![t0.clone(), t1.clone()]).unwrap();
+
+        // Convert to dense
+        let dense = tt.to_dense().unwrap();
+
+        // Expected: contract t0 and t1 along l01
+        let expected = t0.contract(&t1);
+
+        // Compare results
+        let dense_data = dense.as_slice_f64().unwrap();
+        let expected_data = expected.as_slice_f64().unwrap();
+
+        assert_eq!(dense_data.len(), expected_data.len());
+        for (i, (&d, &e)) in dense_data.iter().zip(expected_data.iter()).enumerate() {
+            assert!(
+                (d - e).abs() < 1e-10,
+                "Mismatch at index {}: got {}, expected {}",
+                i,
+                d,
+                e
+            );
+        }
+    }
+
+    #[test]
+    fn test_to_dense_single_site() {
+        // Single site TT should return the tensor as-is
+        let s0 = idx(0, 4);
+        let t0 = make_tensor(vec![s0.clone()]);
+
+        let tt = TensorTrain::new(vec![t0.clone()]).unwrap();
+        let dense = tt.to_dense().unwrap();
+
+        let dense_data = dense.as_slice_f64().unwrap();
+        let expected_data = t0.as_slice_f64().unwrap();
+
+        assert_eq!(dense_data.len(), expected_data.len());
+        for (i, (&d, &e)) in dense_data.iter().zip(expected_data.iter()).enumerate() {
+            assert!(
+                (d - e).abs() < 1e-10,
+                "Mismatch at index {}: got {}, expected {}",
+                i,
+                d,
+                e
+            );
+        }
+    }
+
+    #[test]
+    fn test_to_dense_three_sites() {
+        // 3-site TT: s0 -- l01 -- s1 -- l12 -- s2
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+        let l12 = idx(3, 3);
+        let s2 = idx(4, 2);
+
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone(), l12.clone()]);
+        let t2 = make_tensor(vec![l12.clone(), s2.clone()]);
+
+        let tt = TensorTrain::new(vec![t0.clone(), t1.clone(), t2.clone()]).unwrap();
+        let dense = tt.to_dense().unwrap();
+
+        // Expected: contract t0, t1, t2 sequentially
+        let expected = t0.contract(&t1).contract(&t2);
+
+        let dense_data = dense.as_slice_f64().unwrap();
+        let expected_data = expected.as_slice_f64().unwrap();
+
+        assert_eq!(dense_data.len(), expected_data.len());
+        for (i, (&d, &e)) in dense_data.iter().zip(expected_data.iter()).enumerate() {
+            assert!(
+                (d - e).abs() < 1e-10,
+                "Mismatch at index {}: got {}, expected {}",
+                i,
+                d,
+                e
+            );
+        }
+    }
+
+    #[test]
+    fn test_to_dense_empty() {
+        let tt = TensorTrain::new(vec![]).unwrap();
+        let result = tt.to_dense();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_add_simple() {
+        // Create two TTs with the same structure
+        // Both TTs must have the same site indices AND link indices
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+
+        // First TT with data [1, 2, 3, ...]
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+        let tt1 = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        // Second TT with same structure (clone and modify data for testing)
+        let tt2 = tt1.clone();
+
+        // Add them
+        let sum = tt1.add(&tt2).unwrap();
+
+        // Result should have double bond dimension
+        assert_eq!(sum.len(), 2);
+        assert_eq!(sum.bond_dims(), vec![6]); // 3 + 3
+
+        // Verify numerically: sum.to_dense() == tt1.to_dense() + tt2.to_dense()
+        let sum_dense = sum.to_dense().unwrap();
+        let tt1_dense = tt1.to_dense().unwrap();
+        let tt2_dense = tt2.to_dense().unwrap();
+
+        let sum_data = sum_dense.as_slice_f64().unwrap();
+        let tt1_data = tt1_dense.as_slice_f64().unwrap();
+        let tt2_data = tt2_dense.as_slice_f64().unwrap();
+
+        assert_eq!(sum_data.len(), tt1_data.len());
+        for i in 0..sum_data.len() {
+            let expected = tt1_data[i] + tt2_data[i];
+            assert!(
+                (sum_data[i] - expected).abs() < 1e-10,
+                "Mismatch at {}: {} vs {}",
+                i,
+                sum_data[i],
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_add_empty() {
+        let empty = TensorTrain::new(vec![]).unwrap();
+
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        // empty + tt = tt
+        let result = empty.add(&tt).unwrap();
+        assert_eq!(result.len(), tt.len());
+
+        // tt + empty = tt
+        let result = tt.add(&empty).unwrap();
+        assert_eq!(result.len(), tt.len());
+
+        // empty + empty = empty
+        let result = empty.add(&empty).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_add_length_mismatch() {
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+        let l12 = idx(3, 3);
+        let s2 = idx(4, 2);
+
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+        let tt1 = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        let t0_2 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1_2 = make_tensor(vec![l01.clone(), s1.clone(), l12.clone()]);
+        let t2_2 = make_tensor(vec![l12.clone(), s2.clone()]);
+        let tt2 = TensorTrain::new(vec![t0_2, t1_2, t2_2]).unwrap();
+
+        // Length mismatch should fail
+        let result = tt1.add(&tt2);
+        assert!(result.is_err());
     }
 }
