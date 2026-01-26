@@ -46,18 +46,26 @@ let rhs_local = if init_indices.len() == rhs_indices.len() {
 - MPS: site indices + bond indices → 数が一致
 - MPO: external indices の扱いが不明確で、縮約後のインデックス数が合わない
 
-### 2. `ProjectedState::compute_environment` (projected_state.rs:178) - 根本的な問題
+### 2. `ProjectedState::compute_environment` (projected_state.rs:178) - bra/ket が逆 (バグ)
 
 ```rust
+let bra_conj = tensor_bra.conj();  // tensor_bra は self.rhs (= b) から
 let bra_ket = T::contract(&[&bra_conj, tensor_ket], AllowedPairs::All)?;
+// tensor_ket は reference_state から
 ```
 
-**問題**: `AllowedPairs::All` で b† と reference_state (=x) の**全ての共通インデックス**を縮約。
+**問題**: `<b|ref>` を計算しているが、`ProjectedOperator` との一貫性から `<ref|b>` を計算すべき。
 
-- MPS: site index σ が 1 つ → 縮約されて OK
-- MPO: site indices (σ_in, σ_out) が 2 つ
-  - 縮約すべき: bond 方向のインデックス
-  - **縮約すべきでない**: external indices
+- `ProjectedOperator`: `<ref|H|x>` を計算（bra = ref†, ket = x）
+- `ProjectedState`: `<ref|b>` を計算すべき（bra = ref†, ket = b）
+- 現在のコード: `<b|ref>` を計算している（bra = b†, ket = ref）→ **逆**
+
+正しくは：
+```rust
+let bra_conj = tensor_ref.conj();  // ref† を作る
+let ket = tensor_b;                 // b
+let bra_ket = T::contract(&[&bra_conj, &ket], ...)?;  // <ref|b>
+```
 
 ### 3. `ProjectedState::local_constant_term` (projected_state.rs:108-110)
 
@@ -115,13 +123,7 @@ x, b に対して「どのインデックスが A と縮約され、どれが ex
 - `SquareLinsolveUpdater` に external indices の情報を渡す
 - A の input/output mapping から自動的に判定
 
-### 2. 縮約時に common indices を明示的に指定
-
-`AllowedPairs::All` ではなく、縮約すべきインデックスを明示的に指定:
-- `AllowedPairs::Only(indices)` で縮約するインデックスを指定
-- または `AllowedPairs::Excluding(indices)` で external indices を除外
-
-### 3. A の input 側と x の common indices を使用
+### 2. A の input 側と x の common indices を使用
 
 現在:
 ```rust
@@ -137,7 +139,7 @@ let contracted_indices = common_indices(&a_input_indices, &x_indices);
 let external_indices = x_indices.difference(&contracted_indices);
 ```
 
-### 4. インデックス構造の検証を修正
+### 3. インデックス構造の検証を修正
 
 `solve_local` で単純な len 比較ではなく、正しいインデックス構造の検証を行う:
 - x の external indices と b の external indices が一致するか
