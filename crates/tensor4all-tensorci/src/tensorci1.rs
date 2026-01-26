@@ -1042,6 +1042,24 @@ mod tests {
     }
 
     #[test]
+    fn test_add_pivot_row_inconsistent_index() {
+        let mut tci = TensorCI1::<f64>::new(vec![2, 2]);
+        let f = |_idx: &MultiIndex| 1.0;
+
+        let err = tci.add_pivot_row(0, 0, &f).unwrap_err();
+        assert!(matches!(err, TCIError::IndexInconsistency { .. }));
+    }
+
+    #[test]
+    fn test_add_pivot_col_inconsistent_index() {
+        let mut tci = TensorCI1::<f64>::new(vec![2, 2]);
+        let f = |_idx: &MultiIndex| 1.0;
+
+        let err = tci.add_pivot_col(0, 0, &f).unwrap_err();
+        assert!(matches!(err, TCIError::IndexInconsistency { .. }));
+    }
+
+    #[test]
     fn test_crossinterpolate1_to_tensor_train() {
         let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
         let local_dims = vec![3, 3];
