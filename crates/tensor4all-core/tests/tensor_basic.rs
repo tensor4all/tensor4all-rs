@@ -704,7 +704,9 @@ fn test_tensor_data_lazy_outer_product_with_permute() {
 
     // Lazy outer product then permute using TensorData directly
     let lazy_result = TensorData::outer_product(&td_a, &td_b);
-    let permuted = lazy_result.permute(&[j.id, i.id]);
+    let permuted = lazy_result
+        .permute(&[j.id, i.id])
+        .expect("permute should succeed");
 
     // Check permuted dimensions
     assert_eq!(permuted.dims(), &[3, 2]);

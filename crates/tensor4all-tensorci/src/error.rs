@@ -46,6 +46,12 @@ pub enum TCIError {
         /// Description of the invalid operation
         message: String,
     },
+    /// Internal index inconsistency
+    #[error("Index inconsistency: {message}")]
+    IndexInconsistency {
+        /// Description of the inconsistency
+        message: String,
+    },
 
     /// Matrix CI error
     #[error("Matrix CI error: {0}")]

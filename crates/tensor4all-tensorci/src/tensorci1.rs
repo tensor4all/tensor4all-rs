@@ -498,7 +498,7 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
     }
 
     /// Add a pivot row at bond p
-    fn add_pivot_row<F>(&mut self, p: usize, new_i: usize, f: &F)
+    fn add_pivot_row<F>(&mut self, p: usize, new_i: usize, f: &F) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
     {
@@ -506,7 +506,13 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
         let _ = self.aca[p].add_pivot_row(&self.pi[p], new_i);
 
         // Add to I set at p+1
-        let new_i_multi = self.pi_i_set[p].get(new_i).unwrap().clone();
+        let new_i_multi =
+            self.pi_i_set[p]
+                .get(new_i)
+                .cloned()
+                .ok_or_else(|| TCIError::IndexInconsistency {
+                    message: format!("Missing pivot row index: bond={}, row={}", p, new_i),
+                })?;
         self.i_set[p + 1].push(new_i_multi);
 
         // Update T[p+1] - get all pivot rows from Pi
@@ -534,10 +540,11 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
         if p < self.len() - 2 {
             self.update_pi_rows(p + 1, f);
         }
+        Ok(())
     }
 
     /// Add a pivot col at bond p
-    fn add_pivot_col<F>(&mut self, p: usize, new_j: usize, f: &F)
+    fn add_pivot_col<F>(&mut self, p: usize, new_j: usize, f: &F) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
     {
@@ -545,7 +552,11 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
         let _ = self.aca[p].add_pivot_col(&self.pi[p], new_j);
 
         // Add to J set at p
-        let new_j_multi = self.pi_j_set[p + 1].get(new_j).unwrap().clone();
+        let new_j_multi = self.pi_j_set[p + 1].get(new_j).cloned().ok_or_else(|| {
+            TCIError::IndexInconsistency {
+                message: format!("Missing pivot col index: bond={}, col={}", p, new_j),
+            }
+        })?;
         self.j_set[p].push(new_j_multi);
 
         // Update T[p] - get all pivot columns from Pi
@@ -573,6 +584,7 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
         if p > 0 {
             self.update_pi_cols(p - 1, f);
         }
+        Ok(())
     }
 
     /// Update P matrix at bond p from current I and J sets
@@ -595,12 +607,12 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
     }
 
     /// Add a pivot at bond p
-    fn add_pivot<F>(&mut self, p: usize, f: &F, tolerance: f64)
+    fn add_pivot<F>(&mut self, p: usize, f: &F, tolerance: f64) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
     {
         if p >= self.len() - 1 {
-            return;
+            return Ok(());
         }
 
         // Check if we've reached full rank
@@ -608,7 +620,7 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
         let pi_cols = self.pi[p].ncols();
         if self.aca[p].rank() >= pi_rows.min(pi_cols) {
             self.pivot_errors[p] = 0.0;
-            return;
+            return Ok(());
         }
 
         // Find new pivot using ACA
@@ -620,17 +632,18 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
                 self.pivot_errors[p] = error_val;
 
                 if error_val < tolerance {
-                    return;
+                    return Ok(());
                 }
 
                 // Add pivot column first, then row
-                self.add_pivot_col(p, new_j, f);
-                self.add_pivot_row(p, new_i, f);
+                self.add_pivot_col(p, new_j, f)?;
+                self.add_pivot_row(p, new_i, f)?;
             }
             Err(_) => {
                 self.pivot_errors[p] = 0.0;
             }
         }
+        Ok(())
     }
 
     /// Initialize from function with first pivot
@@ -891,11 +904,11 @@ where
         // Sweep
         if forward_sweep(options.sweep_strategy, iter) {
             for bond_index in 0..n - 1 {
-                tci.add_pivot(bond_index, &f, options.pivot_tolerance);
+                tci.add_pivot(bond_index, &f, options.pivot_tolerance)?;
             }
         } else {
             for bond_index in (0..n - 1).rev() {
-                tci.add_pivot(bond_index, &f, options.pivot_tolerance);
+                tci.add_pivot(bond_index, &f, options.pivot_tolerance)?;
             }
         }
 
@@ -1026,6 +1039,24 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn test_add_pivot_row_inconsistent_index() {
+        let mut tci = TensorCI1::<f64>::new(vec![2, 2]);
+        let f = |_idx: &MultiIndex| 1.0;
+
+        let err = tci.add_pivot_row(0, 0, &f).unwrap_err();
+        assert!(matches!(err, TCIError::IndexInconsistency { .. }));
+    }
+
+    #[test]
+    fn test_add_pivot_col_inconsistent_index() {
+        let mut tci = TensorCI1::<f64>::new(vec![2, 2]);
+        let f = |_idx: &MultiIndex| 1.0;
+
+        let err = tci.add_pivot_col(0, 0, &f).unwrap_err();
+        assert!(matches!(err, TCIError::IndexInconsistency { .. }));
     }
 
     #[test]

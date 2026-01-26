@@ -214,7 +214,17 @@ where
         }
 
         // Compute and cache
-        let coords = grid_clone.quantics_to_origcoord(&q_i64).unwrap();
+        let coords = match grid_clone.quantics_to_origcoord(&q_i64) {
+            Ok(coords) => coords,
+            Err(err) => {
+                debug_assert!(
+                    false,
+                    "Quantics index conversion failed for {:?}: {}",
+                    q_i64, err
+                );
+                return V::default();
+            }
+        };
         let value = f(&coords);
         #[allow(clippy::clone_on_copy)]
         cache_clone.borrow_mut().insert(q_i64, value.clone());
@@ -286,6 +296,13 @@ where
     V: Scalar + TTScalar + Default + Clone + 'static,
     F: Fn(&[f64]) -> V + 'static,
 {
+    if xvals.is_empty() {
+        return Err(anyhow!("xvals must not be empty"));
+    }
+    if xvals.iter().any(|x| x.is_empty()) {
+        return Err(anyhow!("xvals must not contain empty dimensions"));
+    }
+
     // Validate inputs
     let dimensions: Vec<f64> = xvals.iter().map(|x| (x.len() as f64).log2()).collect();
 
@@ -304,8 +321,22 @@ where
     }
 
     let rs: Vec<usize> = dimensions.iter().map(|&d| d as usize).collect();
-    let lower: Vec<f64> = xvals.iter().map(|x| *x.first().unwrap()).collect();
-    let upper: Vec<f64> = xvals.iter().map(|x| *x.last().unwrap()).collect();
+    let lower: Vec<f64> = xvals
+        .iter()
+        .map(|x| {
+            x.first()
+                .copied()
+                .ok_or_else(|| anyhow!("xvals must not be empty"))
+        })
+        .collect::<Result<Vec<f64>>>()?;
+    let upper: Vec<f64> = xvals
+        .iter()
+        .map(|x| {
+            x.last()
+                .copied()
+                .ok_or_else(|| anyhow!("xvals must not be empty"))
+        })
+        .collect::<Result<Vec<f64>>>()?;
 
     // Build grid
     let grid = DiscretizedGrid::builder(&rs)
@@ -515,6 +546,23 @@ mod tests {
         // Non-power of 2 should fail
         let sizes = vec![5, 5];
         let result = quanticscrossinterpolate_discrete(&sizes, f, None, QtciOptions::default());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_arrays_empty_inputs() {
+        let f = |_coords: &[f64]| 1.0_f64;
+        let result =
+            quanticscrossinterpolate_from_arrays::<f64, _>(&[], f, None, QtciOptions::default());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_arrays_empty_dimension() {
+        let f = |_coords: &[f64]| 1.0_f64;
+        let xvals = vec![vec![], vec![0.0, 1.0]];
+        let result =
+            quanticscrossinterpolate_from_arrays::<f64, _>(&xvals, f, None, QtciOptions::default());
         assert!(result.is_err());
     }
 
