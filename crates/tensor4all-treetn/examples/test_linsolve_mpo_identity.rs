@@ -70,6 +70,7 @@ fn bond_indices(indices: &[DynIndex]) -> Vec<DynIndex> {
 
 /// Create an N-site identity MPO with internal indices (bond dim = 1).
 /// Returns (mpo, input_mapping, output_mapping).
+#[allow(clippy::type_complexity)]
 fn create_identity_mpo_with_mappings(
     n: usize,
     phys_dim: usize,
@@ -211,6 +212,7 @@ fn create_random_mpo_matching_structure_c64(
 /// Tensors have [s_out, s_in] (+ bonds) with no separate "external" index.
 /// Mappings use true_site_indices for state connection. This avoids duplicate
 /// true_site in ProjectedOperator::apply output (op has no true_site).
+#[allow(clippy::type_complexity)]
 fn create_identity_mpo_operator_only(
     n: usize,
     phys_dim: usize,

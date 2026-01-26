@@ -45,6 +45,7 @@ fn one_node_mpo_like_state(
 }
 
 /// Create a 1-node identity MPO with internal indices, plus index mappings to a true index.
+#[allow(clippy::type_complexity)]
 fn one_node_identity_operator_with_mappings(
     phys_dim: usize,
     true_contracted: DynIndex,
@@ -130,4 +131,51 @@ fn test_linsolve_allows_two_site_indices_per_node_for_rhs_alignment() -> anyhow:
     updater.after_step(&step, &x)?;
 
     Ok(())
+}
+
+/// Init and rhs with different index structures must fail precheck with a clear mismatch message.
+#[test]
+fn test_linsolve_precheck_fails_when_init_rhs_index_structure_mismatch() {
+    let phys_dim = 2usize;
+    let external_dim = 3usize;
+
+    let mut used = HashSet::<DynId>::new();
+    let contracted_rhs = unique_dyn_index(&mut used, phys_dim);
+    let external_rhs = unique_dyn_index(&mut used, external_dim);
+
+    let rhs = one_node_mpo_like_state(external_rhs.clone(), contracted_rhs.clone());
+
+    let contracted_init = unique_dyn_index(&mut used, phys_dim);
+    let external_init = unique_dyn_index(&mut used, external_dim);
+    let init = one_node_mpo_like_state(external_init, contracted_init);
+
+    let (op, in_map, out_map) =
+        one_node_identity_operator_with_mappings(phys_dim, contracted_rhs.clone(), &mut used);
+
+    let options = LinsolveOptions::default()
+        .with_nfullsweeps(1)
+        .with_krylov_tol(1e-8)
+        .with_krylov_maxiter(10)
+        .with_krylov_dim(10)
+        .with_max_rank(4)
+        .with_coefficients(0.0, 1.0);
+
+    let x = init
+        .canonicalize(["site0".to_string()], CanonicalizationOptions::default())
+        .unwrap();
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(op, in_map, out_map, rhs, options);
+
+    let step = LocalUpdateStep {
+        nodes: vec!["site0".to_string()],
+        new_center: "site0".to_string(),
+    };
+
+    let err = updater.before_step(&step, &x).unwrap_err();
+    assert!(
+        err.to_string().contains("precheck failed")
+            || err.to_string().contains("index structure mismatch")
+            || err.to_string().contains("Index structure mismatch"),
+        "expected precheck mismatch error, got: {}",
+        err
+    );
 }
