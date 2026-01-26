@@ -17,6 +17,18 @@ use std::sync::Arc;
 
 use crate::defaults::DynId;
 use crate::storage::Storage;
+use thiserror::Error;
+
+/// Errors that can occur when manipulating TensorData.
+#[derive(Debug, Error)]
+pub enum TensorDataError {
+    /// Invalid permutation input.
+    #[error("Invalid permutation: {message}")]
+    InvalidPermutation {
+        /// Description of the invalid permutation.
+        message: String,
+    },
+}
 
 /// A component of a TensorData, representing a single Storage with its index mapping.
 #[derive(Debug, Clone)]
@@ -162,12 +174,16 @@ impl TensorData {
     /// # Arguments
     /// * `new_order` - The new index order as a list of DynIds.
     ///   Must be a permutation of external_index_ids.
-    pub fn permute(&self, new_order: &[DynId]) -> Self {
-        assert_eq!(
-            new_order.len(),
-            self.external_index_ids.len(),
-            "new_order must have the same length as external_index_ids"
-        );
+    pub fn permute(&self, new_order: &[DynId]) -> Result<Self, TensorDataError> {
+        if new_order.len() != self.external_index_ids.len() {
+            return Err(TensorDataError::InvalidPermutation {
+                message: format!(
+                    "new_order must have the same length as external_index_ids (expected {}, got {})",
+                    self.external_index_ids.len(),
+                    new_order.len()
+                ),
+            });
+        }
 
         // Build the permutation and new dims
         let mut new_dims = Vec::with_capacity(new_order.len());
@@ -176,15 +192,17 @@ impl TensorData {
                 .external_index_ids
                 .iter()
                 .position(|id| id == new_id)
-                .expect("new_order must be a permutation of external_index_ids");
+                .ok_or_else(|| TensorDataError::InvalidPermutation {
+                    message: "new_order must be a permutation of external_index_ids".to_string(),
+                })?;
             new_dims.push(self.external_dims[pos]);
         }
 
-        Self {
+        Ok(Self {
             components: self.components.clone(),
             external_index_ids: new_order.to_vec(),
             external_dims: new_dims,
-        }
+        })
     }
 
     /// Permute using a permutation array.
@@ -192,12 +210,31 @@ impl TensorData {
     /// # Arguments
     /// * `perm` - Permutation array where `perm[i]` is the old position of
     ///   the index that should be at new position `i`.
-    pub fn permute_by_perm(&self, perm: &[usize]) -> Self {
-        assert_eq!(
-            perm.len(),
-            self.external_index_ids.len(),
-            "perm must have the same length as external_index_ids"
-        );
+    pub fn permute_by_perm(&self, perm: &[usize]) -> Result<Self, TensorDataError> {
+        if perm.len() != self.external_index_ids.len() {
+            return Err(TensorDataError::InvalidPermutation {
+                message: format!(
+                    "perm must have the same length as external_index_ids (expected {}, got {})",
+                    self.external_index_ids.len(),
+                    perm.len()
+                ),
+            });
+        }
+        let len = perm.len();
+        let mut seen = vec![false; len];
+        for &idx in perm {
+            if idx >= len {
+                return Err(TensorDataError::InvalidPermutation {
+                    message: format!("perm index out of range: {}", idx),
+                });
+            }
+            if seen[idx] {
+                return Err(TensorDataError::InvalidPermutation {
+                    message: format!("perm contains duplicate index: {}", idx),
+                });
+            }
+            seen[idx] = true;
+        }
 
         let new_order: Vec<DynId> = perm
             .iter()
@@ -209,11 +246,11 @@ impl TensorData {
             .map(|&old_pos| self.external_dims[old_pos])
             .collect();
 
-        Self {
+        Ok(Self {
             components: self.components.clone(),
             external_index_ids: new_order,
             external_dims: new_dims,
-        }
+        })
     }
 
     /// Materialize the tensor into a single Storage with the external index order.
@@ -342,7 +379,7 @@ mod tests {
         let data = TensorData::new(storage, vec![id_i, id_j], vec![2, 3]);
 
         // Permute to [j, i]
-        let permuted = data.permute(&[id_j, id_i]);
+        let permuted = data.permute(&[id_j, id_i]).unwrap();
 
         // After permute, external order differs from storage order, so not simple
         assert!(!permuted.is_simple());
@@ -370,7 +407,7 @@ mod tests {
         let c = TensorData::outer_product(&a, &b);
 
         // Permute to [j, i]
-        let permuted = c.permute(&[id_j, id_i]);
+        let permuted = c.permute(&[id_j, id_i]).unwrap();
 
         assert_eq!(permuted.external_index_ids, vec![id_j, id_i]);
         assert_eq!(permuted.external_dims, vec![3, 2]);
@@ -451,7 +488,7 @@ mod tests {
         let b = TensorData::new(storage_b, vec![id_j], vec![3]);
 
         let c = TensorData::outer_product(&a, &b);
-        let permuted = c.permute(&[id_j, id_i]);
+        let permuted = c.permute(&[id_j, id_i]).unwrap();
 
         let (materialized, dims) = permuted.materialize().unwrap();
         assert_eq!(dims, vec![3, 2]);
