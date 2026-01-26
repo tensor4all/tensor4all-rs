@@ -112,6 +112,101 @@ b: RHS (MPO)
 
 **重要**: A の input 側の site indices と x の indices を比較するときは、**common indices** を使う必要がある。
 
+## External Indices の縮約タイミング
+
+nsite=1 update のダイアグラム分析 (diagram.jpg 参照):
+
+```
+方程式: <x|H|x> = <x|b>  (T_ref を使用)
+
+左側 (環境計算):          右側 (ローカル update):
+x* ─□─ ─□─□             x* ╭─□─ ─□─□
+    │   │ │                 │
+H  ─□─ ─□─□             x  ╰─□─ ─□─□
+    │   │ │
+x  ─□─ ─□─□
+    ╰───╯ ╰─ external indices
+```
+
+### 環境内での external indices の扱い
+
+- **環境計算**: external indices は縮約される (正しい)
+  - x* と x が同じ external index ID を持つ → 縮約
+  - ref と b が同じ external index ID を持つ → 縮約
+
+- **ローカル update**: external indices は縮約しない (正しい動作)
+  - active site の x には external indices が開いたまま残る
+  - active site の b にも external indices が開いたまま残る
+  - これらは同じ ID なので、local linear system の構造として一致する
+
+### 現状の動作確認
+
+現在のコードでは、active site において external indices は開いたまま残っている。
+なぜなら環境テンソルには active site の indices が含まれず、
+`local_constant_term` で active site の b テンソルと環境を縮約しても、
+b の external indices は縮約対象がないため残る。
+
+## 初期検証: External Indices の一致チェック
+
+x と b の external indices は各サイトで（集合として）一致している必要がある。
+これを `SquareLinsolveUpdater` の初期化時に検証すべき。
+
+### 計算方法
+
+```rust
+// x の external indices = x.site_indices - input_mapping.true_index
+// b の external indices = b.site_indices - output_mapping.true_index
+```
+
+- `input_mapping[node].true_index`: x のうち A と縮約されるインデックス
+- `output_mapping[node].true_index`: b のうち A の output に対応するインデックス
+
+### 検証ロジック (追加予定)
+
+```rust
+fn validate_external_indices<T, V>(
+    state: &TreeTN<T, V>,           // x
+    rhs: &TreeTN<T, V>,             // b
+    input_mapping: &HashMap<V, IndexMapping<T::Index>>,
+    output_mapping: &HashMap<V, IndexMapping<T::Index>>,
+) -> Result<()> {
+    for node in state.node_names() {
+        // x の site indices から input_mapping の true_index を除く
+        let x_site_ids: HashSet<_> = state.site_space(&node)
+            .map(|s| s.iter().map(|i| i.id().clone()).collect())
+            .unwrap_or_default();
+        let x_contracted = input_mapping.get(&node)
+            .map(|m| m.true_index.id().clone());
+        let x_external: HashSet<_> = x_site_ids.iter()
+            .filter(|id| Some(*id) != x_contracted.as_ref())
+            .cloned().collect();
+
+        // b についても同様
+        let b_site_ids: HashSet<_> = rhs.site_space(&node)
+            .map(|s| s.iter().map(|i| i.id().clone()).collect())
+            .unwrap_or_default();
+        let b_contracted = output_mapping.get(&node)
+            .map(|m| m.true_index.id().clone());
+        let b_external: HashSet<_> = b_site_ids.iter()
+            .filter(|id| Some(*id) != b_contracted.as_ref())
+            .cloned().collect();
+
+        if x_external != b_external {
+            return Err(anyhow!(
+                "External indices mismatch at node {:?}: x has {:?}, b has {:?}",
+                node, x_external, b_external
+            ));
+        }
+    }
+    Ok(())
+}
+```
+
+### 追加場所
+
+1. `with_index_mappings()`: 早期エラーとして返す
+2. `verify()`: レポートにも含める
+
 ## 必要な修正の方向性
 
 ### 1. external indices の概念を導入
