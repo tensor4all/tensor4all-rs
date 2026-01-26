@@ -94,9 +94,11 @@ where
     /// Apply the operator to a local tensor: compute `H|v⟩` at the current position.
     ///
     /// If index mappings are set (via `with_index_mappings`), this method:
-    /// 1. Transforms input `v`'s site indices to MPO's internal input indices
+    /// 1. Transforms input `v`'s site indices using **unique** temp indices (avoids duplicate IDs)
     /// 2. Contracts with MPO tensors and environment tensors
-    /// 3. Transforms result's internal output indices back to true site indices
+    /// 3. Transforms result's temp output indices back to true site indices
+    /// 4. Replaces bra-side boundary bonds with ket-side so output lives in same space as `v`
+    /// 5. Permutes result to `v`'s index order so output structure matches input
     ///
     /// # Arguments
     /// * `v` - The local tensor to apply the operator to
@@ -108,7 +110,7 @@ where
     /// * `topology` - Network topology for traversal
     ///
     /// # Returns
-    /// The result of applying H to v: `H|v⟩`
+    /// The result of applying H to v: `H|v⟩`, with same index set and order as `v`.
     pub fn apply<NT: NetworkTopology<V>>(
         &mut self,
         v: &T,
@@ -120,64 +122,131 @@ where
         // Ensure environments are computed
         self.ensure_environments(region, ket_state, bra_state, topology)?;
 
-        // Collect all tensors to contract: operator tensors + environments + input v
         let mut all_tensors: Vec<T> = Vec::new();
+        let mut temp_out_to_true: Vec<(T::Index, T::Index)> = Vec::new();
 
-        // Step 1: Transform input tensor - replace true site indices with internal indices
-        let transformed_v = if let Some(ref input_mapping) = self.input_mapping {
-            let mut result = v.clone();
+        if let (Some(ref input_mapping), Some(ref output_mapping)) =
+            (&self.input_mapping, &self.output_mapping)
+        {
+            // MPO-with-mappings path: use unique temp indices to avoid duplicate IDs.
+            // Replace true_index -> temp_in on v (never use internal_index on v).
+            // Use same temp_in/temp_out on op tensors so they contract with v.
+            let mut per_node: Vec<(T::Index, T::Index, T::Index)> = Vec::new();
             for node in region {
-                if let Some(mapping) = input_mapping.get(node) {
-                    result = result.replaceind(&mapping.true_index, &mapping.internal_index)?;
-                }
+                let im = input_mapping
+                    .get(node)
+                    .ok_or_else(|| anyhow::anyhow!("Missing input_mapping for node {:?}", node))?;
+                let om = output_mapping
+                    .get(node)
+                    .ok_or_else(|| anyhow::anyhow!("Missing output_mapping for node {:?}", node))?;
+                let temp_in = im.internal_index.sim();
+                let temp_out = om.internal_index.sim();
+                per_node.push((temp_in, temp_out, om.true_index.clone()));
             }
-            result
-        } else {
-            v.clone()
-        };
-        all_tensors.push(transformed_v);
 
-        // Step 2: Collect local operator tensors
-        for node in region {
-            let node_idx = self
-                .operator
-                .node_index(node)
-                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", node))?;
-            let tensor = self
-                .operator
-                .tensor(node_idx)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?
-                .clone();
-            all_tensors.push(tensor);
+            let mut transformed_v = v.clone();
+            for (node, (temp_in, _temp_out, _)) in region.iter().zip(per_node.iter()) {
+                let im = input_mapping.get(node).unwrap();
+                transformed_v = transformed_v.replaceind(&im.true_index, temp_in)?;
+            }
+            all_tensors.push(transformed_v);
+
+            for (node, (temp_in, temp_out, true_idx)) in region.iter().zip(per_node.iter()) {
+                let im = input_mapping.get(node).unwrap();
+                let om = output_mapping.get(node).unwrap();
+                let node_idx = self
+                    .operator
+                    .node_index(node)
+                    .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", node))?;
+                let mut t = self
+                    .operator
+                    .tensor(node_idx)
+                    .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?
+                    .clone();
+                t = t.replaceind(&im.internal_index, temp_in)?;
+                t = t.replaceind(&om.internal_index, temp_out)?;
+                all_tensors.push(t);
+                temp_out_to_true.push((temp_out.clone(), true_idx.clone()));
+            }
+        } else {
+            // No mappings: plain path
+            all_tensors.push(v.clone());
+            for node in region {
+                let node_idx = self
+                    .operator
+                    .node_index(node)
+                    .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", node))?;
+                let tensor = self
+                    .operator
+                    .tensor(node_idx)
+                    .ok_or_else(|| anyhow::anyhow!("Tensor not found in operator"))?
+                    .clone();
+                all_tensors.push(tensor);
+            }
         }
 
-        // Step 3: Collect environments from neighbors outside the region
+        // Collect environments from neighbors outside the region
         for node in region {
             for neighbor in topology.neighbors(node) {
-                if !region.contains(&neighbor) {
-                    if let Some(env) = self.envs.get(&neighbor, node) {
-                        all_tensors.push(env.clone());
-                    }
+                if region.contains(&neighbor) {
+                    continue;
+                }
+                if let Some(env) = self.envs.get(&neighbor, node) {
+                    all_tensors.push(env.clone());
                 }
             }
         }
 
-        // Contract all tensors
         let tensor_refs: Vec<&T> = all_tensors.iter().collect();
-        let contracted = T::contract(&tensor_refs, AllowedPairs::All)?;
+        let mut contracted = T::contract(&tensor_refs, AllowedPairs::All)?;
 
-        // Step 4: Transform output - replace internal output indices with true indices
-        if let Some(ref output_mapping) = self.output_mapping {
-            let mut result = contracted;
-            for node in region {
-                if let Some(mapping) = output_mapping.get(node) {
-                    result = result.replaceind(&mapping.internal_index, &mapping.true_index)?;
+        // Replace temp_out -> true_index
+        for (temp_out, true_idx) in &temp_out_to_true {
+            contracted = contracted.replaceind(temp_out, true_idx)?;
+        }
+
+        // Bra -> ket boundary bonds in result so output lives in same space as v (ket bonds).
+        for node in region {
+            for neighbor in topology.neighbors(node) {
+                if region.contains(&neighbor) {
+                    continue;
+                }
+                let ket_edge = match ket_state.edge_between(node, &neighbor) {
+                    Some(e) => e,
+                    None => continue,
+                };
+                let bra_edge = match bra_state.edge_between(node, &neighbor) {
+                    Some(e) => e,
+                    None => continue,
+                };
+                let ket_bond = match ket_state.bond_index(ket_edge) {
+                    Some(b) => b.clone(),
+                    None => continue,
+                };
+                let bra_bond = match bra_state.bond_index(bra_edge) {
+                    Some(b) => b.clone(),
+                    None => continue,
+                };
+                if contracted
+                    .external_indices()
+                    .iter()
+                    .any(|i| i.id() == bra_bond.id())
+                {
+                    contracted = contracted.replaceind(&bra_bond, &ket_bond)?;
                 }
             }
-            Ok(result)
-        } else {
-            Ok(contracted)
         }
+
+        // Align result to v's index order
+        let v_inds = v.external_indices();
+        let res_inds = contracted.external_indices();
+        let v_ids: std::collections::HashSet<_> = v_inds.iter().map(|i| i.id()).collect();
+        let res_ids: std::collections::HashSet<_> = res_inds.iter().map(|i| i.id()).collect();
+        if v_ids == res_ids && v_inds.len() == res_inds.len() {
+            contracted = contracted.permuteinds(&v_inds)?;
+        }
+
+        Ok(contracted)
     }
 
     /// Ensure environments are computed for neighbors of the region.

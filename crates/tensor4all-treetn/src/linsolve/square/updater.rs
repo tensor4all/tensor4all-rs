@@ -136,6 +136,10 @@ where
     /// Mapping from boundary edge (node_in_region, neighbor_outside) to reference-side bond index.
     /// This ensures boundary bonds keep stable IDs across updates for environment cache reuse.
     boundary_bond_map: HashMap<(V, V), T::Index>,
+    /// Run the bra/ket convention precheck only once.
+    did_ref_bra_ket_precheck: bool,
+    /// Run MPO structure validation only once.
+    did_mpo_validation: bool,
 }
 
 impl<T, V> SquareLinsolveUpdater<T, V>
@@ -156,6 +160,8 @@ where
             options,
             reference_state: TreeTN::new(),
             boundary_bond_map: HashMap::new(),
+            did_ref_bra_ket_precheck: false,
+            did_mpo_validation: false,
         }
     }
 
@@ -187,6 +193,8 @@ where
             options,
             reference_state: TreeTN::new(),
             boundary_bond_map: HashMap::new(),
+            did_ref_bra_ket_precheck: false,
+            did_mpo_validation: false,
         }
     }
 
@@ -505,25 +513,34 @@ where
         // Align RHS indices with init indices.
         // The RHS may have indices from the `rhs` TreeTN, while init has indices from
         // the current `state`. For GMRES operations (like b - A*x), they must match.
+        //
+        // For MPO cases, external indices should match (validated earlier), but the order
+        // may differ. We use ID-based matching to align them.
         let init_indices = init.external_indices();
         let rhs_indices = rhs_local_raw.external_indices();
 
-        let rhs_local = if init_indices.len() == rhs_indices.len() {
+        let rhs_local = if self.index_sets_match(&init_indices, &rhs_indices) {
+            // Same set of indices (by ID) and same count - check if order matches
             let indices_match = init_indices
                 .iter()
                 .zip(rhs_indices.iter())
-                .all(|(ii, ri)| ii == ri);
+                .all(|(ii, ri)| ii.id() == ri.id() && ii.dim() == ri.dim());
             if indices_match {
                 rhs_local_raw
             } else {
-                // Permute RHS indices to init index order
+                // Permute RHS indices to init index order (matched by ID)
+                // Note: permuteinds requires same length, which we've already checked
                 rhs_local_raw.permuteinds(&init_indices)?
             }
         } else {
             return Err(anyhow::anyhow!(
-                "Index count mismatch between init ({}) and RHS ({})",
-                init_indices.len(),
-                rhs_indices.len()
+                "{}",
+                self.index_structure_mismatch_message(
+                    &init_indices,
+                    &rhs_indices,
+                    "Index structure mismatch between init and RHS (local tensors)",
+                    "This suggests:\n  - ProjectedState environment construction may have contracted/left open unexpected indices\n  - External indices may not be properly aligned between x and b\n  - AllowedPairs::All may have over-contracted external indices in the environment\n\nSee `plan/linsolve-mpo.md` for analysis of external index handling.",
+                )
             ));
         };
 
@@ -700,11 +717,24 @@ where
 {
     fn before_step(
         &mut self,
-        _step: &LocalUpdateStep<V>,
+        step: &LocalUpdateStep<V>,
         full_treetn_before: &TreeTN<T, V>,
     ) -> Result<()> {
         // Initialize reference_state lazily on first call
         self.ensure_reference_state_initialized(full_treetn_before)?;
+
+        // (1) Precheck: ensure local RHS indices align with local init indices
+        // (bra/ket convention sanity for `<ref|H|x>` vs `<ref|b>`).
+        if !self.did_ref_bra_ket_precheck {
+            self.precheck_ref_bra_ket_convention(step, full_treetn_before)?;
+            self.did_ref_bra_ket_precheck = true;
+        }
+
+        // (3) MPO structure validation (fail fast) – run once.
+        if !self.did_mpo_validation {
+            self.validate_mpo_external_indices(full_treetn_before)?;
+            self.did_mpo_validation = true;
+        }
         Ok(())
     }
 
@@ -761,6 +791,188 @@ where
             proj_op.invalidate(&step.nodes, topology);
         }
         self.projected_state.invalidate(&step.nodes, topology);
+
+        Ok(())
+    }
+}
+
+impl<T, V> SquareLinsolveUpdater<T, V>
+where
+    T: TensorLike + 'static,
+    T::Index: IndexLike,
+    <T::Index as IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
+{
+    fn index_sets_match(&self, init_indices: &[T::Index], rhs_indices: &[T::Index]) -> bool {
+        if init_indices.len() != rhs_indices.len() {
+            return false;
+        }
+        let init_ids: std::collections::HashSet<_> = init_indices.iter().map(|i| i.id()).collect();
+        let rhs_ids: std::collections::HashSet<_> = rhs_indices.iter().map(|i| i.id()).collect();
+        init_ids == rhs_ids
+    }
+
+    fn index_structure_mismatch_message(
+        &self,
+        init_indices: &[T::Index],
+        rhs_indices: &[T::Index],
+        header: &str,
+        footer: &str,
+    ) -> String {
+        let init_ids: std::collections::HashSet<_> = init_indices.iter().map(|i| i.id()).collect();
+        let rhs_ids: std::collections::HashSet<_> = rhs_indices.iter().map(|i| i.id()).collect();
+        let extra_in_rhs: Vec<_> = rhs_ids
+            .difference(&init_ids)
+            .map(|id| {
+                rhs_indices
+                    .iter()
+                    .find(|i| i.id() == *id)
+                    .map(|i| format!("{:?}:{}", id, i.dim()))
+                    .unwrap_or_else(|| format!("{:?}:?", id))
+            })
+            .collect();
+        let missing_in_rhs: Vec<_> = init_ids
+            .difference(&rhs_ids)
+            .map(|id| {
+                init_indices
+                    .iter()
+                    .find(|i| i.id() == *id)
+                    .map(|i| format!("{:?}:{}", id, i.dim()))
+                    .unwrap_or_else(|| format!("{:?}:?", id))
+            })
+            .collect();
+
+        format!(
+            "{header}:\n  init has {} indices: {:?}\n  rhs has {} indices: {:?}\n  extra in rhs (not in init): {:?}\n  missing in rhs (in init but not in rhs): {:?}\n\n{footer}",
+            init_indices.len(),
+            init_indices
+                .iter()
+                .map(|i| format!("{:?}:{}", i.id(), i.dim()))
+                .collect::<Vec<_>>(),
+            rhs_indices.len(),
+            rhs_indices
+                .iter()
+                .map(|i| format!("{:?}:{}", i.id(), i.dim()))
+                .collect::<Vec<_>>(),
+            extra_in_rhs,
+            missing_in_rhs,
+        )
+    }
+
+    fn precheck_ref_bra_ket_convention(
+        &mut self,
+        step: &LocalUpdateStep<V>,
+        full_treetn_before: &TreeTN<T, V>,
+    ) -> Result<()> {
+        let subtree = full_treetn_before.extract_subtree(&step.nodes)?;
+        let init_local = self.contract_region(&subtree, &step.nodes)?;
+
+        let topology = full_treetn_before.site_index_network();
+        let rhs_local_raw =
+            self.projected_state
+                .local_constant_term(&step.nodes, full_treetn_before, topology)?;
+
+        let init_indices = init_local.external_indices();
+        let rhs_indices = rhs_local_raw.external_indices();
+
+        if !self.index_sets_match(&init_indices, &rhs_indices) {
+            return Err(anyhow::anyhow!(
+                "{}",
+                self.index_structure_mismatch_message(
+                    &init_indices,
+                    &rhs_indices,
+                    "linsolve precheck failed (local index structure mismatch)",
+                    "This suggests `<ref|H|x>` vs `<ref|b>` conventions (or external-index contraction rules) are inconsistent for the current region. See `plan/linsolve-mpo.md` for analysis.",
+                )
+            ));
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn validate_mpo_external_indices(&mut self, state: &TreeTN<T, V>) -> Result<()> {
+        // Only validate when operator mappings exist (MPO-with-mappings path).
+        let (input_mapping, output_mapping): (
+            HashMap<V, IndexMapping<T::Index>>,
+            HashMap<V, IndexMapping<T::Index>>,
+        ) = {
+            let proj_op = self.projected_operator.read().map_err(|e| {
+                anyhow::anyhow!("validate_mpo_external_indices: lock poisoned: {e}")
+            })?;
+            let Some(input) = proj_op.input_mapping.as_ref() else {
+                return Ok(());
+            };
+            let Some(output) = proj_op.output_mapping.as_ref() else {
+                return Ok(());
+            };
+            (input.clone(), output.clone())
+        };
+
+        for node in state.node_names() {
+            let Some(x_sites) = state.site_space(&node) else {
+                continue;
+            };
+            let Some(b_sites) = self.projected_state.rhs.site_space(&node) else {
+                continue;
+            };
+
+            // Only apply strict MPO validation when both look like MPO (2 site indices).
+            if x_sites.len() != 2 || b_sites.len() != 2 {
+                continue;
+            }
+
+            let x_contracted = input_mapping
+                .get(&node)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("MPO validation: missing input_mapping for node {:?}", node)
+                })?
+                .true_index
+                .clone();
+            let b_contracted = output_mapping
+                .get(&node)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("MPO validation: missing output_mapping for node {:?}", node)
+                })?
+                .true_index
+                .clone();
+
+            let x_external: Vec<_> = x_sites
+                .iter()
+                .filter(|idx| !idx.same_id(&x_contracted))
+                .cloned()
+                .collect();
+            let b_external: Vec<_> = b_sites
+                .iter()
+                .filter(|idx| !idx.same_id(&b_contracted))
+                .cloned()
+                .collect();
+
+            if x_external.len() != 1 || b_external.len() != 1 {
+                return Err(anyhow::anyhow!(
+                    "MPO validation: expected exactly 1 external site index after removing contracted index. node={:?}, x_site_len={}, b_site_len={}, x_external={:?}, b_external={:?}",
+                    node,
+                    x_sites.len(),
+                    b_sites.len(),
+                    x_external.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
+                    b_external.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
+                ));
+            }
+
+            let x_ext = &x_external[0];
+            let b_ext = &b_external[0];
+            if !x_ext.same_id(b_ext) || x_ext.dim() != b_ext.dim() {
+                return Err(anyhow::anyhow!(
+                    "MPO validation: external index mismatch at node {:?}: x has {:?}:{}, b has {:?}:{}",
+                    node,
+                    x_ext.id(),
+                    x_ext.dim(),
+                    b_ext.id(),
+                    b_ext.dim(),
+                ));
+            }
+        }
 
         Ok(())
     }

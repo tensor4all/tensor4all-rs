@@ -134,7 +134,26 @@ where
         }
 
         // Align hx indices to match x's index order for axpby
-        let hx_aligned = hx.permuteinds(&x.external_indices())?;
+        // Check that hx and x have the same index structure (by ID and count)
+        let x_indices = x.external_indices();
+        let hx_indices = hx.external_indices();
+        let x_ids: std::collections::HashSet<_> = x_indices.iter().map(|i| i.id()).collect();
+        let hx_ids: std::collections::HashSet<_> = hx_indices.iter().map(|i| i.id()).collect();
+
+        let hx_aligned = if x_ids == hx_ids && x_indices.len() == hx_indices.len() {
+            // Same index set and count - permute to match order
+            hx.permuteinds(&x_indices)?
+        } else {
+            return Err(anyhow::anyhow!(
+                "LocalLinOp::apply: index structure mismatch between operator output (hx) and input (x):\n  x has {} indices: {:?}\n  hx has {} indices: {:?}\n  x IDs: {:?}\n  hx IDs: {:?}\n\nThis suggests the projected operator application produced output with different index structure than expected.",
+                x_indices.len(),
+                x_indices.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
+                hx_indices.len(),
+                hx_indices.iter().map(|i| format!("{:?}:{}", i.id(), i.dim())).collect::<Vec<_>>(),
+                x_ids.iter().collect::<Vec<_>>(),
+                hx_ids.iter().collect::<Vec<_>>(),
+            ));
+        };
 
         // Compute y = a₀ * x + a₁ * H * x
         x.axpby(self.a0.clone(), &hx_aligned, self.a1.clone())
