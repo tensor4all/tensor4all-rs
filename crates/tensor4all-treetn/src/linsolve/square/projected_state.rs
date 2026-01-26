@@ -1,6 +1,12 @@
 //! ProjectedState: 2-chain environment for RHS computation (square case).
 //!
-//! Computes `<b|x_local>` efficiently for Tree Tensor Networks.
+//! Computes the local RHS term consistent with the square linsolve setup:
+//! - ProjectedOperator builds `<ref|H|x>`
+//! - ProjectedState builds `<ref|b>`
+//!
+//! This returns a local tensor with open indices aligned to the current solution's
+//! local tensor (up to permutation), so GMRES can operate in the same vector space.
+//!
 //! This is the V_in = V_out specialized version.
 
 use std::hash::Hash;
@@ -58,11 +64,12 @@ where
         }
     }
 
-    /// Compute the local constant term `<b|_local` for the given region.
+    /// Compute the local constant term (local RHS) for the given region.
     ///
     /// This returns the local RHS tensors contracted with environments.
-    /// For V_in = V_out, the reference_state is used for both bra and ket
-    /// in environment computations.
+    ///
+    /// For the square case, the `reference_state` is used as the bra (conjugated),
+    /// and `rhs` is used as the ket, i.e. environments are constructed for `<ref|b>`.
     ///
     /// # Arguments
     /// * `region` - The nodes in the local update region
@@ -80,7 +87,7 @@ where
         // Collect all tensors to contract: local RHS tensors + environments
         let mut all_tensors: Vec<T> = Vec::new();
 
-        // Collect local RHS tensors (conjugated)
+        // Collect local RHS tensors (ket side; do NOT conjugate)
         for node in region {
             let node_idx = self
                 .rhs
@@ -90,7 +97,7 @@ where
                 .rhs
                 .tensor(node_idx)
                 .ok_or_else(|| anyhow::anyhow!("Tensor not found in RHS"))?
-                .conj();
+                .clone();
             all_tensors.push(tensor);
         }
 
@@ -131,7 +138,7 @@ where
 
     /// Recursively compute environment for edge (from, to).
     ///
-    /// Computes `<b|ref>` partial contraction at node `from`.
+    /// Computes `<ref|b>` partial contraction at node `from`.
     fn compute_environment<NT: NetworkTopology<V>>(
         &mut self,
         from: &V,
@@ -155,27 +162,27 @@ where
             .filter_map(|child| self.envs.get(child, from).cloned())
             .collect();
 
-        // Contract bra (RHS) with ket (reference_state) at this node
-        let node_idx_bra = self
+        // Contract bra (reference_state) with ket (RHS) at this node
+        let node_idx_ref = reference_state
+            .node_index(from)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in reference_state", from))?;
+        let node_idx_b = self
             .rhs
             .node_index(from)
             .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in RHS", from))?;
-        let node_idx_ket = reference_state
-            .node_index(from)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in reference_state", from))?;
 
-        let tensor_bra = self
-            .rhs
-            .tensor(node_idx_bra)
-            .ok_or_else(|| anyhow::anyhow!("Tensor not found in RHS"))?;
-        let tensor_ket = reference_state
-            .tensor(node_idx_ket)
+        let tensor_ref = reference_state
+            .tensor(node_idx_ref)
             .ok_or_else(|| anyhow::anyhow!("Tensor not found in reference_state"))?;
+        let tensor_b = self
+            .rhs
+            .tensor(node_idx_b)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found in RHS"))?;
 
-        let bra_conj = tensor_bra.conj();
+        let bra_conj = tensor_ref.conj();
 
         // Contract bra and ket - T::contract auto-detects contractable pairs
-        let bra_ket = T::contract(&[&bra_conj, tensor_ket], AllowedPairs::All)?;
+        let bra_ket = T::contract(&[&bra_conj, tensor_b], AllowedPairs::All)?;
 
         // Contract bra*ket with child environments using T::contract
         if child_envs.is_empty() {
