@@ -394,6 +394,51 @@ mod tests {
     }
 
     #[test]
+    fn test_permute_invalid_length() {
+        let storage = make_test_storage(vec![1.0, 2.0], &[2]);
+        let id_i = new_id();
+        let id_j = new_id();
+
+        let data = TensorData::new(storage, vec![id_i, id_j], vec![2, 1]);
+        let err = data.permute(&[id_i]).unwrap_err();
+        assert!(matches!(err, TensorDataError::InvalidPermutation { .. }));
+    }
+
+    #[test]
+    fn test_permute_invalid_id() {
+        let storage = make_test_storage(vec![1.0, 2.0], &[2]);
+        let id_i = new_id();
+        let id_j = new_id();
+        let id_k = new_id();
+
+        let data = TensorData::new(storage, vec![id_i, id_j], vec![2, 1]);
+        let err = data.permute(&[id_i, id_k]).unwrap_err();
+        assert!(matches!(err, TensorDataError::InvalidPermutation { .. }));
+    }
+
+    #[test]
+    fn test_permute_by_perm_out_of_range() {
+        let storage = make_test_storage(vec![1.0, 2.0], &[2]);
+        let id_i = new_id();
+        let id_j = new_id();
+
+        let data = TensorData::new(storage, vec![id_i, id_j], vec![2, 1]);
+        let err = data.permute_by_perm(&[0, 2]).unwrap_err();
+        assert!(matches!(err, TensorDataError::InvalidPermutation { .. }));
+    }
+
+    #[test]
+    fn test_permute_by_perm_duplicate() {
+        let storage = make_test_storage(vec![1.0, 2.0], &[2]);
+        let id_i = new_id();
+        let id_j = new_id();
+
+        let data = TensorData::new(storage, vec![id_i, id_j], vec![2, 1]);
+        let err = data.permute_by_perm(&[1, 1]).unwrap_err();
+        assert!(matches!(err, TensorDataError::InvalidPermutation { .. }));
+    }
+
+    #[test]
     fn test_permute_outer_product() {
         let storage_a = make_test_storage(vec![1.0, 2.0], &[2]);
         let storage_b = make_test_storage(vec![3.0, 4.0, 5.0], &[3]);

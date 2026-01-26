@@ -550,6 +550,23 @@ mod tests {
     }
 
     #[test]
+    fn test_from_arrays_empty_inputs() {
+        let f = |_coords: &[f64]| 1.0_f64;
+        let result =
+            quanticscrossinterpolate_from_arrays::<f64, _>(&[], f, None, QtciOptions::default());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_arrays_empty_dimension() {
+        let f = |_coords: &[f64]| 1.0_f64;
+        let xvals = vec![vec![], vec![0.0, 1.0]];
+        let result =
+            quanticscrossinterpolate_from_arrays::<f64, _>(&xvals, f, None, QtciOptions::default());
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_options_builder() {
         let opts = QtciOptions::default()
             .with_tolerance(1e-6)
