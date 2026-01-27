@@ -15,6 +15,7 @@ num-complex.workspace = true
 dyn-clone.workspace = true
 rand.workspace = true
 kryst.workspace = true
+faer = { workspace = true }
 
 [dev-dependencies]
 rand_chacha.workspace = true
