@@ -24,6 +24,8 @@ use tensor4all_treetn::{
     TreeTN,
 };
 
+type TnWithInternalIndices = (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>);
+
 fn make_node_name(i: usize) -> String {
     format!("site{i}")
 }
@@ -75,7 +77,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
     n_sites: usize,
     phys_dim: usize,
     used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<(TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>)> {
+) -> anyhow::Result<TnWithInternalIndices> {
     anyhow::ensure!(n_sites >= 1, "Need at least 1 site");
     anyhow::ensure!(phys_dim == 2, "Pauli-X requires phys_dim=2");
 
@@ -144,85 +146,8 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
     }
 
     // Connect adjacent sites
-    for i in 0..n_sites.saturating_sub(1) {
-        mpo.connect(nodes[i], &bond_indices[i], nodes[i + 1], &bond_indices[i])
-            .unwrap();
-    }
-
-    Ok((mpo, s_in_tmp, s_out_tmp))
-}
-
-/// Create an N-site MPO operator where all matrix elements are 1.0.
-/// Returns (mpo, s_in_tmp, s_out_tmp) where s_in_tmp and s_out_tmp are internal indices.
-fn create_n_site_ones_mpo_with_internal_indices(
-    n_sites: usize,
-    phys_dim: usize,
-    used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<(TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>)> {
-    anyhow::ensure!(n_sites >= 1, "Need at least 1 site");
-
-    let mut mpo = TreeTN::<TensorDynLen, String>::new();
-
-    // Internal indices (independent IDs)
-    let s_in_tmp: Vec<DynIndex> = (0..n_sites)
-        .map(|_| unique_dyn_index(used_ids, phys_dim))
-        .collect();
-    let s_out_tmp: Vec<DynIndex> = (0..n_sites)
-        .map(|_| unique_dyn_index(used_ids, phys_dim))
-        .collect();
-
-    // Bond indices (dim 1 for all-ones operator)
-    let bond_indices: Vec<DynIndex> = (0..n_sites.saturating_sub(1))
-        .map(|_| unique_dyn_index(used_ids, 1))
-        .collect();
-
-    // All-ones matrix: [[1, 1], [1, 1]] or [[1, 1, 1], [1, 1, 1], [1, 1, 1]] for phys_dim=3
-    let ones = vec![1.0; phys_dim * phys_dim];
-
-    let mut nodes = Vec::with_capacity(n_sites);
-    for i in 0..n_sites {
-        let name = make_node_name(i);
-        let data = ones.clone();
-
-        let tensor = if n_sites == 1 {
-            TensorDynLen::from_dense_f64(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data)
-        } else if i == 0 {
-            TensorDynLen::from_dense_f64(
-                vec![
-                    s_out_tmp[i].clone(),
-                    s_in_tmp[i].clone(),
-                    bond_indices[i].clone(),
-                ],
-                data,
-            )
-        } else if i == n_sites - 1 {
-            TensorDynLen::from_dense_f64(
-                vec![
-                    bond_indices[i - 1].clone(),
-                    s_out_tmp[i].clone(),
-                    s_in_tmp[i].clone(),
-                ],
-                data,
-            )
-        } else {
-            TensorDynLen::from_dense_f64(
-                vec![
-                    bond_indices[i - 1].clone(),
-                    s_out_tmp[i].clone(),
-                    s_in_tmp[i].clone(),
-                    bond_indices[i].clone(),
-                ],
-                data,
-            )
-        };
-        let node = mpo.add_tensor(name, tensor).unwrap();
-        nodes.push(node);
-    }
-
-    // Connect adjacent sites
-    for i in 0..n_sites.saturating_sub(1) {
-        mpo.connect(nodes[i], &bond_indices[i], nodes[i + 1], &bond_indices[i])
-            .unwrap();
+    for (i, bond) in bond_indices.iter().enumerate() {
+        mpo.connect(nodes[i], bond, nodes[i + 1], bond).unwrap();
     }
 
     Ok((mpo, s_in_tmp, s_out_tmp))

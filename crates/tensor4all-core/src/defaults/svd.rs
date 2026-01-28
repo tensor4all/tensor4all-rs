@@ -228,6 +228,16 @@ where
     v_vec
 }
 
+type SvdTruncatedUsvhResult<T> = (
+    Vec<T>,
+    Vec<f64>,
+    Vec<T>,
+    DynIndex,
+    Vec<DynIndex>,
+    Vec<DynIndex>,
+    usize,
+);
+
 /// Internal helper: compute truncated U, singular values, and V^H in matrix form.
 ///
 /// Returns:
@@ -240,18 +250,7 @@ fn svd_truncated_usvh<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     options: &SvdOptions,
-) -> Result<
-    (
-        Vec<T>,
-        Vec<f64>,
-        Vec<T>,
-        DynIndex,
-        Vec<DynIndex>,
-        Vec<DynIndex>,
-        usize,
-    ),
-    SvdError,
->
+) -> Result<SvdTruncatedUsvhResult<T>, SvdError>
 where
     T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,

@@ -11,6 +11,11 @@ use tensor4all_treetn::{
     ProjectedOperator, ProjectedState, SquareLinsolveUpdater, TreeTN,
 };
 
+type FixedSiteMappings = (
+    HashMap<&'static str, IndexMapping<DynIndex>>,
+    HashMap<&'static str, IndexMapping<DynIndex>>,
+);
+
 // ============================================================================
 // Test Helpers
 // ============================================================================
@@ -23,10 +28,7 @@ fn create_fixed_site_index_mappings<const N: usize>(
     state_site_indices: &[DynIndex],
     s_in_tmp: &[DynIndex],
     s_out_tmp: &[DynIndex],
-) -> (
-    HashMap<&'static str, IndexMapping<DynIndex>>,
-    HashMap<&'static str, IndexMapping<DynIndex>>,
-) {
+) -> FixedSiteMappings {
     assert_eq!(state_site_indices.len(), N);
     assert_eq!(s_in_tmp.len(), N);
     assert_eq!(s_out_tmp.len(), N);

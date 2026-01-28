@@ -15,6 +15,8 @@ use tensor4all_treetn::{
     TreeTN,
 };
 
+type MpoWithInternalIndices = (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>);
+
 fn make_node_name(i: usize) -> String {
     format!("site{i}")
 }
@@ -59,8 +61,8 @@ fn create_random_mps_chain_with_sites_c64(
         nodes.push(node);
     }
 
-    for i in 0..n.saturating_sub(1) {
-        mps.connect(nodes[i], &bonds[i], nodes[i + 1], &bonds[i])?;
+    for (i, bond) in bonds.iter().enumerate() {
+        mps.connect(nodes[i], bond, nodes[i + 1], bond)?;
     }
 
     Ok(mps)
@@ -103,8 +105,8 @@ fn create_random_mps_chain_with_sites_real_c64(
         nodes.push(node);
     }
 
-    for i in 0..n.saturating_sub(1) {
-        mps.connect(nodes[i], &bonds[i], nodes[i + 1], &bonds[i])?;
+    for (i, bond) in bonds.iter().enumerate() {
+        mps.connect(nodes[i], bond, nodes[i + 1], bond)?;
     }
 
     Ok(mps)
@@ -147,8 +149,8 @@ fn create_random_mps_chain_with_sites_imag_c64(
         nodes.push(node);
     }
 
-    for i in 0..n.saturating_sub(1) {
-        mps.connect(nodes[i], &bonds[i], nodes[i + 1], &bonds[i])?;
+    for (i, bond) in bonds.iter().enumerate() {
+        mps.connect(nodes[i], bond, nodes[i + 1], bond)?;
     }
 
     Ok(mps)
@@ -158,7 +160,7 @@ fn create_identity_mpo_with_internal_indices(
     n: usize,
     phys_dim: usize,
     used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<(TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>)> {
+) -> anyhow::Result<MpoWithInternalIndices> {
     anyhow::ensure!(n >= 1, "need at least 1 site");
     let mut mpo = TreeTN::<TensorDynLen, String>::new();
 
@@ -201,12 +203,10 @@ fn create_identity_mpo_with_internal_indices(
         mpo.add_tensor(name, tensor)?;
     }
 
-    for i in 0..n.saturating_sub(1) {
-        let a = i;
-        let b = i + 1;
-        let node_a = mpo.node_index(&make_node_name(a)).unwrap();
-        let node_b = mpo.node_index(&make_node_name(b)).unwrap();
-        mpo.connect(node_a, &bonds[i], node_b, &bonds[i])?;
+    for (i, bond) in bonds.iter().enumerate() {
+        let node_a = mpo.node_index(&make_node_name(i)).unwrap();
+        let node_b = mpo.node_index(&make_node_name(i + 1)).unwrap();
+        mpo.connect(node_a, bond, node_b, bond)?;
     }
 
     Ok((mpo, s_in_tmp, s_out_tmp))

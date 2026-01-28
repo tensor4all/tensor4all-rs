@@ -24,6 +24,8 @@ use tensor4all_treetn::{
     TreeTN,
 };
 
+type TnWithInternalIndices = (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>);
+
 fn make_node_name(i: usize) -> String {
     format!("site{i}")
 }
@@ -43,7 +45,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
     n_sites: usize,
     phys_dim: usize,
     used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<(TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>)> {
+) -> anyhow::Result<TnWithInternalIndices> {
     anyhow::ensure!(n_sites >= 1, "Need at least 1 site");
     anyhow::ensure!(phys_dim == 2, "Pauli-X requires phys_dim=2");
 
@@ -100,9 +102,8 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
         nodes.push(node);
     }
 
-    for i in 0..n_sites.saturating_sub(1) {
-        mpo.connect(nodes[i], &bonds[i], nodes[i + 1], &bonds[i])
-            .unwrap();
+    for (i, bond) in bonds.iter().enumerate() {
+        mpo.connect(nodes[i], bond, nodes[i + 1], bond).unwrap();
     }
 
     Ok((mpo, s_in_tmp, s_out_tmp))
