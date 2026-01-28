@@ -18,12 +18,13 @@
 //! ```
 
 use crate::defaults::DynIndex;
+use crate::index_like::IndexLike;
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use num_complex::{Complex64, ComplexFloat};
 
 use crate::qr::{qr_with, QrOptions};
-use crate::svd::{svd_with, SvdOptions};
+use crate::svd::{svd_for_factorize, SvdOptions};
 use tensor4all_tensorbackend::faer_traits::ComplexField;
 
 // Re-export types from tensor_like for backwards compatibility
@@ -118,24 +119,28 @@ where
         svd_options.truncation.max_rank = Some(max_rank);
     }
 
-    let (u, s, v) = svd_with::<T>(t, left_inds, &svd_options)?;
+    // Use svd_for_factorize which returns V^H directly (not V).
+    // This avoids tensor-level conjugation: A = U * S * V^H is reconstructed
+    // using the V^H tensor directly at the matrix level.
+    let result = svd_for_factorize::<T>(t, left_inds, &svd_options)?;
+    let u = result.u;
+    let vh = result.vh;
+    let bond_index = result.bond_index;
+    let singular_values = result.singular_values;
+    let rank = result.rank;
 
-    // Extract singular values from diagonal tensor
-    let singular_values = extract_singular_values(&s);
-    let rank = singular_values.len();
-
-    // Get bond indices from S tensor:
-    // S has indices [bond_index, sim(bond_index)]
-    // - U shares bond_index (S.indices[0])
-    // - V shares bond_index (S.indices[0])
-    // After contraction, we need to ensure left and right share the same bond index
-    let bond_index = s.indices[0].clone();
-    let sim_bond_index = s.indices[1].clone();
+    // V^H has indices [bond_index, right_inds...]
+    // U has indices [left_inds..., bond_index]
+    // A = U * S * V^H (reconstructed via tensor contraction on bond_index)
+    let sim_bond_index = bond_index.sim();
+    let s_indices = vec![bond_index.clone(), sim_bond_index.clone()];
+    let s_storage = std::sync::Arc::new(crate::Storage::new_diag_f64(singular_values.clone()));
+    let s = TensorDynLen::from_indices(s_indices, s_storage);
 
     match options.canonical {
         Canonical::Left => {
-            // L = U, R = S * V
-            let right_contracted = s.contract(&v);
+            // L = U (orthogonal), R = S * V^H
+            let right_contracted = s.contract(&vh);
             let right = right_contracted.replaceind(&sim_bond_index, &bond_index);
             Ok(FactorizeResult {
                 left: u,
@@ -146,12 +151,12 @@ where
             })
         }
         Canonical::Right => {
-            // L = U * S, R = V
+            // L = U * S, R = V^H
             let left_contracted = u.contract(&s);
             let left = left_contracted.replaceind(&sim_bond_index, &bond_index);
             Ok(FactorizeResult {
                 left,
-                right: v,
+                right: vh,
                 bond_index,
                 singular_values: Some(singular_values),
                 rank,
@@ -337,28 +342,6 @@ where
         singular_values: None,
         rank,
     })
-}
-
-/// Extract singular values from a diagonal tensor.
-fn extract_singular_values(s: &TensorDynLen) -> Vec<f64> {
-    match s.storage().as_ref() {
-        Storage::DiagF64(diag) => diag.as_slice().to_vec(),
-        Storage::DiagC64(diag) => {
-            // Singular values should be real
-            diag.as_slice().iter().map(|c| c.re).collect()
-        }
-        Storage::DenseF64(dense) => {
-            // Extract diagonal from dense matrix
-            let s_dims = s.dims();
-            let n = s_dims[0];
-            (0..n).map(|i| dense.get(i * n + i)).collect()
-        }
-        Storage::DenseC64(dense) => {
-            let s_dims = s.dims();
-            let n = s_dims[0];
-            (0..n).map(|i| dense.get(i * n + i).re).collect()
-        }
-    }
 }
 
 /// Convert DTensor to Matrix (tensor4all-matrixci format).

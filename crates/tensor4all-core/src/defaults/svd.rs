@@ -141,12 +141,12 @@ fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
     r.max(1)
 }
 
-/// Extract U, S, V from tensorbackend's SvdResult (which returns U, S, Vt).
+/// Extract U, S, V^H from tensorbackend's SvdResult.
 ///
 /// This helper function converts the backend's SVD result to our desired format:
 /// - Extracts singular values from the diagonal view (first row)
 /// - Converts U from m×m to m×k (takes first k columns)
-/// - Converts Vt to V (takes first k rows and (conjugate-)transposes)
+/// - Extracts V^H as k×n (takes first k rows of the backend's vt)
 ///
 /// # Arguments
 /// * `decomp` - SVD decomposition from tensorbackend
@@ -155,11 +155,11 @@ fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
 /// * `k` - Bond dimension (min(m, n))
 ///
 /// # Returns
-/// A tuple `(u_vec, s_vec, v_vec)` where:
-/// - `u_vec` is a vector of length `m * k` containing U matrix data
+/// A tuple `(u_vec, s_vec, vh_vec)` where:
+/// - `u_vec` is a vector of length `m * k` containing U matrix data (row-major)
 /// - `s_vec` is a vector of length `k` containing singular values (real, f64)
-/// - `v_vec` is a vector of length `n * k` containing V matrix data
-fn extract_usv_from_svd_result<T>(
+/// - `vh_vec` is a vector of length `k * n` containing V^H matrix data (row-major)
+fn extract_usvh_from_svd_result<T>(
     decomp: SvdResult<T>,
     m: usize,
     n: usize,
@@ -197,26 +197,121 @@ where
         }
     }
 
-    // Convert backend `vt` (V^T / V^H) to V (n×k).
+    // Extract V^H as k×n (first k rows of the backend's vt).
     //
-    // `mdarray-linalg` returns `vt` as (conceptually) V^T for real types or V^H for complex types.
-    // We want V (not Vt), so we take the first k rows of V^T/V^H and (conjugate-)transpose.
-    let mut vt_vec = Vec::with_capacity(k * n);
+    // `mdarray-linalg` returns `vt` as V^T for real types or V^H for complex types.
+    // We keep V^H directly (no conjugate-transpose) so that:
+    // - `svd_with` can derive V from V^H
+    // - `factorize_svd` can use V^H directly for correct reconstruction A = U * S * V^H
+    let mut vh_vec = Vec::with_capacity(k * n);
     for i in 0..k {
         for j in 0..n {
-            vt_vec.push(vt[[i, j]]);
+            vh_vec.push(vt[[i, j]]);
         }
     }
 
+    (u_vec, s_vec, vh_vec)
+}
+
+/// Derive V (n×k) from V^H (k×n) via conjugate-transpose.
+fn vh_to_v<T>(vh_vec: &[T], n: usize, k: usize) -> Vec<T>
+where
+    T: ComplexFloat,
+{
     let mut v_vec = Vec::with_capacity(n * k);
     for j in 0..n {
         for i in 0..k {
-            // `ComplexFloat::conj` is a no-op for real types.
-            v_vec.push(vt_vec[i * n + j].conj());
+            // V[j][i] = conj(V^H[i][j])
+            v_vec.push(vh_vec[i * n + j].conj());
+        }
+    }
+    v_vec
+}
+
+type SvdTruncatedUsvhResult<T> = (
+    Vec<T>,
+    Vec<f64>,
+    Vec<T>,
+    DynIndex,
+    Vec<DynIndex>,
+    Vec<DynIndex>,
+    usize,
+);
+
+/// Internal helper: compute truncated U, singular values, and V^H in matrix form.
+///
+/// Returns:
+/// - `u_vec`: m×r row-major
+/// - `singular_values`: length r
+/// - `vh_vec`: r×n row-major (V^H)
+/// - `bond_index`: dimension r
+/// - `left_indices`, `right_indices`: tensor indices corresponding to unfolding split
+fn svd_truncated_usvh<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    options: &SvdOptions,
+) -> Result<SvdTruncatedUsvhResult<T>, SvdError>
+where
+    T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
+{
+    // Determine rtol to use
+    let rtol = options.truncation.effective_rtol(default_svd_rtol());
+    if !rtol.is_finite() || rtol < 0.0 {
+        return Err(SvdError::InvalidRtol(rtol));
+    }
+
+    // Unfold tensor into matrix (returns DTensor<T, 2>)
+    let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<T>(t, left_inds)
+        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
+        .map_err(SvdError::ComputationError)?;
+    let k = m.min(n);
+
+    // Call SVD using selected backend
+    let a_slice: &mut DSlice<T, 2> = a_tensor.as_mut();
+    let decomp = svd_backend(a_slice).map_err(SvdError::ComputationError)?;
+
+    // Extract U, S, V^H from the decomposition (full rank k)
+    let (u_vec_full, s_vec_full, vh_vec_full) = extract_usvh_from_svd_result(decomp, m, n, k);
+
+    // Compute retained rank based on rtol truncation
+    let mut r = compute_retained_rank(&s_vec_full, rtol);
+    if let Some(max_rank) = options.truncation.max_rank {
+        r = r.min(max_rank);
+    }
+
+    let singular_values: Vec<f64> = s_vec_full[..r].to_vec();
+
+    // Truncate U: m×r
+    let mut u_vec = Vec::with_capacity(m * r);
+    for i in 0..m {
+        for j in 0..r {
+            u_vec.push(u_vec_full[i * k + j]);
         }
     }
 
-    (u_vec, s_vec, v_vec)
+    // Truncate V^H: r×n
+    let mut vh_vec = Vec::with_capacity(r * n);
+    for i in 0..r {
+        for j in 0..n {
+            vh_vec.push(vh_vec_full[i * n + j]);
+        }
+    }
+
+    // Create bond index with "Link" tag (dimension r, not k)
+    let bond_index = DynIndex::new_bond(r)
+        .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))
+        .map_err(SvdError::ComputationError)?;
+
+    Ok((
+        u_vec,
+        singular_values,
+        vh_vec,
+        bond_index,
+        left_indices,
+        right_indices,
+        n,
+    ))
 }
 
 /// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
@@ -321,60 +416,13 @@ where
     T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
-    // Determine rtol to use
-    let rtol = options.truncation.effective_rtol(default_svd_rtol());
-    if !rtol.is_finite() || rtol < 0.0 {
-        return Err(SvdError::InvalidRtol(rtol));
-    }
-
-    // Unfold tensor into matrix (returns DTensor<T, 2>)
-    let (mut a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<T>(t, left_inds)
-        .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
-        .map_err(SvdError::ComputationError)?;
-    let k = m.min(n);
-
-    // Call SVD using selected backend
-    // DTensor can be converted to DSlice via as_mut()
-    let a_slice: &mut DSlice<T, 2> = a_tensor.as_mut();
-    let decomp = svd_backend(a_slice).map_err(SvdError::ComputationError)?;
-
-    // Extract U, S, V from the decomposition (full rank k)
-    let (u_vec_full, s_vec_full, v_vec_full) = extract_usv_from_svd_result(decomp, m, n, k);
-
-    // Compute retained rank based on rtol truncation
-    let mut r = compute_retained_rank(&s_vec_full, rtol);
-
-    // Apply max_rank limit if specified
-    if let Some(max_rank) = options.truncation.max_rank {
-        r = r.min(max_rank);
-    }
-
-    // Truncate to retained rank r
-    let s_vec: Vec<f64> = s_vec_full[..r].to_vec();
-
-    // Truncate U: keep first r columns (m×r)
-    let mut u_vec = Vec::with_capacity(m * r);
-    for i in 0..m {
-        for j in 0..r {
-            u_vec.push(u_vec_full[i * k + j]);
-        }
-    }
-
-    // Truncate V: keep first r columns (n×r)
-    let mut v_vec = Vec::with_capacity(n * r);
-    for i in 0..n {
-        for j in 0..r {
-            v_vec.push(v_vec_full[i * k + j]);
-        }
-    }
-
-    // Create bond index with "Link" tag (dimension r, not k)
-    let bond_index = DynIndex::new_bond(r)
-        .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))
-        .map_err(SvdError::ComputationError)?;
+    let (u_vec, s_vec, vh_vec, bond_index, left_indices, right_indices, n) =
+        svd_truncated_usvh::<T>(t, left_inds, options)?;
+    let r = s_vec.len();
+    let v_vec = vh_to_v(&vh_vec, n, r);
 
     // Create U tensor: [left_inds..., bond_index]
-    let mut u_indices = left_indices.clone();
+    let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
     let u_storage = T::dense_storage_with_shape(u_vec, &u_dims);
@@ -418,4 +466,56 @@ pub fn svd_c64(
     left_inds: &[DynIndex],
 ) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
     svd::<Complex64>(t, left_inds)
+}
+
+/// SVD result for factorization: returns (U, singular_values, V^H) as tensors.
+///
+/// Unlike `svd_with`, this returns V^H (not V) to avoid the need for tensor-level
+/// conjugation in factorize. V^H has indices `[bond_index, right_inds...]`.
+///
+/// This is `pub(crate)` because it is only used by the factorization module.
+#[allow(private_bounds)]
+pub(crate) fn svd_for_factorize<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    options: &SvdOptions,
+) -> Result<SvdFactorizeResult, SvdError>
+where
+    T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
+{
+    let (u_vec, singular_values, vh_vec, bond_index, left_indices, right_indices, _n) =
+        svd_truncated_usvh::<T>(t, left_inds, options)?;
+    let r = singular_values.len();
+
+    // U tensor: [left_inds..., bond_index]
+    let mut u_indices = left_indices;
+    u_indices.push(bond_index.clone());
+    let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
+    let u_storage = T::dense_storage_with_shape(u_vec, &u_dims);
+    let u = TensorDynLen::from_indices(u_indices, u_storage);
+
+    // V^H tensor: [bond_index, right_inds...]
+    let mut vh_indices = vec![bond_index.clone()];
+    vh_indices.extend(right_indices);
+    let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
+    let vh_storage = T::dense_storage_with_shape(vh_vec, &vh_dims);
+    let vh = TensorDynLen::from_indices(vh_indices, vh_storage);
+
+    Ok(SvdFactorizeResult {
+        u,
+        vh,
+        bond_index,
+        singular_values,
+        rank: r,
+    })
+}
+
+/// Result of SVD for factorization (returns V^H instead of V).
+pub(crate) struct SvdFactorizeResult {
+    pub u: TensorDynLen,
+    pub vh: TensorDynLen,
+    pub bond_index: DynIndex,
+    pub singular_values: Vec<f64>,
+    pub rank: usize,
 }
