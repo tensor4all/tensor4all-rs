@@ -614,6 +614,117 @@ mod tests {
         assert_eq!(result.iterations, 0, "Should converge with 0 iterations");
     }
 
+    /// Helper to create a 1D complex tensor (vector) with given data and shared index.
+    fn make_vector_c64_with_index(
+        data: Vec<num_complex::Complex64>,
+        idx: &DynIndex,
+    ) -> TensorDynLen {
+        TensorDynLen::from_dense_c64(vec![idx.clone()], data)
+    }
+
+    #[test]
+    fn test_gmres_identity_operator_c64() {
+        // Solve A x = b where A = I (identity), b is complex
+        // Solution: x = b
+        use num_complex::Complex64;
+
+        let idx = DynIndex::new_dyn(4);
+        let b = make_vector_c64_with_index(
+            vec![
+                Complex64::new(1.0, 2.0),
+                Complex64::new(-3.0, 0.5),
+                Complex64::new(0.0, -1.0),
+                Complex64::new(2.5, 3.5),
+            ],
+            &idx,
+        );
+        let x0 = make_vector_c64_with_index(vec![Complex64::new(0.0, 0.0); 4], &idx);
+
+        // Identity operator: A x = x
+        let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { Ok(x.clone()) };
+
+        let options = GmresOptions {
+            max_iter: 20,
+            rtol: 1e-10,
+            max_restarts: 1,
+            verbose: false,
+        };
+
+        let result = gmres(apply_a, &b, &x0, &options).unwrap();
+
+        // Check solution matches b
+        let diff = result
+            .solution
+            .axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))
+            .unwrap();
+        let err = diff.norm();
+
+        assert!(result.converged, "GMRES should converge for identity (c64)");
+        assert!(
+            result.residual_norm < 1e-10,
+            "Residual should be small: {}",
+            result.residual_norm
+        );
+        assert!(err < 1e-8, "Solution should equal b, error: {}", err);
+    }
+
+    #[test]
+    fn test_gmres_diagonal_c64() {
+        // Solve A x = b where A = diag(2+i, 3-i, 1+2i, 4)
+        use num_complex::Complex64;
+
+        let idx = DynIndex::new_dyn(4);
+        let diag = [
+            Complex64::new(2.0, 1.0),
+            Complex64::new(3.0, -1.0),
+            Complex64::new(1.0, 2.0),
+            Complex64::new(4.0, 0.0),
+        ];
+        let x_true = [
+            Complex64::new(1.0, -1.0),
+            Complex64::new(0.5, 2.0),
+            Complex64::new(-1.0, 0.0),
+            Complex64::new(0.0, 1.0),
+        ];
+        let b_data: Vec<Complex64> = diag.iter().zip(x_true.iter()).map(|(d, x)| d * x).collect();
+
+        let b = make_vector_c64_with_index(b_data, &idx);
+        let x0 = make_vector_c64_with_index(vec![Complex64::new(0.0, 0.0); 4], &idx);
+        let expected = make_vector_c64_with_index(x_true.to_vec(), &idx);
+
+        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
+            let x_data = x.to_vec_c64()?;
+            let result_data: Vec<Complex64> = x_data
+                .iter()
+                .zip(diag.iter())
+                .map(|(&xi, &di)| di * xi)
+                .collect();
+            Ok(TensorDynLen::from_dense_c64(x.indices.clone(), result_data))
+        };
+
+        let options = GmresOptions {
+            max_iter: 20,
+            rtol: 1e-10,
+            max_restarts: 1,
+            verbose: false,
+        };
+
+        let result = gmres(apply_a, &b, &x0, &options).unwrap();
+
+        let diff = result
+            .solution
+            .axpby(
+                AnyScalar::new_real(1.0),
+                &expected,
+                AnyScalar::new_real(-1.0),
+            )
+            .unwrap();
+        let err = diff.norm();
+
+        assert!(result.converged, "GMRES should converge for diagonal (c64)");
+        assert!(err < 1e-8, "Solution error too large: {}", err);
+    }
+
     #[test]
     fn test_gmres_zero_rhs() {
         // Solve A x = 0 → x = 0 (for any invertible A)

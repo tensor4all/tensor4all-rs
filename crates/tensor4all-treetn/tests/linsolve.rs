@@ -15,6 +15,48 @@ use tensor4all_treetn::{
 // Test Helpers
 // ============================================================================
 
+/// Create index mappings for a fixed set of site names.
+///
+/// This avoids duplicating nearly identical 2-site/3-site mapping builders.
+fn create_fixed_site_index_mappings<const N: usize>(
+    site_names: [&'static str; N],
+    state_site_indices: &[DynIndex],
+    s_in_tmp: &[DynIndex],
+    s_out_tmp: &[DynIndex],
+) -> (
+    HashMap<&'static str, IndexMapping<DynIndex>>,
+    HashMap<&'static str, IndexMapping<DynIndex>>,
+) {
+    assert_eq!(state_site_indices.len(), N);
+    assert_eq!(s_in_tmp.len(), N);
+    assert_eq!(s_out_tmp.len(), N);
+
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+
+    for i in 0..N {
+        let site = site_names[i];
+        input_mapping.insert(
+            site,
+            IndexMapping {
+                true_index: state_site_indices[i].clone(),
+                internal_index: s_in_tmp[i].clone(),
+            },
+        );
+        output_mapping.insert(
+            site,
+            IndexMapping {
+                true_index: state_site_indices[i].clone(),
+                internal_index: s_out_tmp[i].clone(),
+            },
+        );
+    }
+
+    (input_mapping, output_mapping)
+}
+
+// NOTE: prefer `create_fixed_site_index_mappings` directly; keep the test helper surface small.
+
 /// Create a simple 3-site MPS chain for testing.
 /// Returns (mps, site indices, bond indices)
 fn create_simple_mps_chain() -> (
@@ -437,8 +479,8 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(diag_values, phys_dim);
 
     // Create index mappings
-    let (mpo, input_mapping, output_mapping) =
-        create_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
 
     // Create initial guess (use normalized version of RHS)
     let init = rhs.clone();
@@ -449,11 +491,15 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
         .unwrap();
 
     // Solve D * x = b
-    // Use more sweeps and higher max_rank for general RHS
+    // Keep this test fast: small Krylov dimension/tolerance and few sweeps are enough
+    // for a 2-site diagonal operator.
     let options = LinsolveOptions::default()
-        .with_nfullsweeps(10)
-        .with_krylov_tol(1e-12)
-        .with_max_rank(8);
+        .with_nfullsweeps(5)
+        .with_krylov_tol(1e-10)
+        .with_krylov_dim(10)
+        .with_krylov_maxiter(30)
+        .with_max_rank(4);
+    let nsweeps = options.nfullsweeps;
 
     let mut updater = SquareLinsolveUpdater::with_index_mappings(
         mpo,
@@ -466,100 +512,8 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     // Create sweep plan with 2-site updates
     let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0", 2).unwrap();
 
-    // Debug: print sweep plan details
-    eprintln!("=== Sweep plan details ===");
-    eprintln!("Number of steps: {}", plan.len());
-    for (i, step) in plan.iter().enumerate() {
-        eprintln!(
-            "  Step {}: nodes={:?}, new_center={:?}",
-            i, step.nodes, step.new_center
-        );
-    }
-
-    // Debug: print initial state
-    let contracted_init = x.contract_to_tensor().unwrap();
-    let sol_init: Vec<f64> = contracted_init.to_vec_f64().unwrap();
-    eprintln!("Initial state: {:?}", sol_init);
-
-    // Debug: print each tensor in the initial state
-    for node_name in x.node_names() {
-        let node_idx = x.node_index(&node_name).unwrap();
-        let tensor = x.tensor(node_idx).unwrap();
-        let data: Vec<f64> = tensor.to_vec_f64().unwrap();
-        let dims: Vec<usize> = tensor.external_indices().iter().map(|i| i.dim()).collect();
-        eprintln!("  Tensor {:?}: dims={:?}, data={:?}", node_name, dims, data);
-    }
-
-    // Run only 1 sweep for debugging, with step-by-step output
-    use tensor4all_treetn::LocalUpdater;
-    eprintln!("=== Starting first sweep ===");
-    for (step_idx, step) in plan.iter().enumerate() {
-        eprintln!(
-            "  Before step {}: nodes={:?}, new_center={:?}",
-            step_idx, step.nodes, step.new_center
-        );
-
-        // Print state before step
-        let contracted_before = x.contract_to_tensor().unwrap();
-        let sol_before: Vec<f64> = contracted_before.to_vec_f64().unwrap();
-        eprintln!("    State before step: {:?}", sol_before);
-
-        // Print each tensor
-        for node_name in x.node_names() {
-            let node_idx = x.node_index(&node_name).unwrap();
-            let tensor = x.tensor(node_idx).unwrap();
-            let data: Vec<f64> = tensor.to_vec_f64().unwrap();
-            eprintln!("      Tensor {:?}: {:?}", node_name, data);
-        }
-
-        // Execute step manually
-        updater.before_step(step, &x).unwrap();
-        let subtree = x.extract_subtree(&step.nodes).unwrap();
-
-        // Debug: print subtree tensors before update
-        eprintln!("    Subtree before update:");
-        for node_name in subtree.node_names() {
-            let node_idx = subtree.node_index(&node_name).unwrap();
-            let tensor = subtree.tensor(node_idx).unwrap();
-            let data: Vec<f64> = tensor.to_vec_f64().unwrap();
-            eprintln!("      Subtree {:?}: {:?}", node_name, data);
-        }
-
-        let updated_subtree = updater.update(subtree, step, &x).unwrap();
-
-        // Debug: print updated subtree tensors
-        eprintln!("    Updated subtree:");
-        for node_name in updated_subtree.node_names() {
-            let node_idx = updated_subtree.node_index(&node_name).unwrap();
-            let tensor = updated_subtree.tensor(node_idx).unwrap();
-            let data: Vec<f64> = tensor.to_vec_f64().unwrap();
-            eprintln!("      Updated {:?}: {:?}", node_name, data);
-        }
-        x.replace_subtree(&step.nodes, &updated_subtree).unwrap();
-        x.set_canonical_center([step.new_center]).unwrap();
-        updater.after_step(step, &x).unwrap();
-
-        // Print state after step
-        let contracted_after = x.contract_to_tensor().unwrap();
-        let sol_after: Vec<f64> = contracted_after.to_vec_f64().unwrap();
-        eprintln!("    State after step: {:?}", sol_after);
-
-        // Print each tensor after
-        for node_name in x.node_names() {
-            let node_idx = x.node_index(&node_name).unwrap();
-            let tensor = x.tensor(node_idx).unwrap();
-            let data: Vec<f64> = tensor.to_vec_f64().unwrap();
-            eprintln!("      Tensor {:?}: {:?}", node_name, data);
-        }
-    }
-    eprintln!("=== End of first sweep ===");
-
-    // Continue with remaining sweeps
-    for sweep in 1..10 {
+    for _ in 0..nsweeps {
         apply_local_update_sweep(&mut x, &plan, &mut updater).unwrap();
-        let contracted_debug = x.contract_to_tensor().unwrap();
-        let sol_debug: Vec<f64> = contracted_debug.to_vec_f64().unwrap();
-        eprintln!("Sweep {}: raw solution = {:?}", sweep, sol_debug);
     }
 
     // Contract solution MPS to get full state vector using contract_to_tensor
@@ -568,30 +522,22 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     // Extract solution values
     let solution_values: Vec<f64> = contracted.to_vec_f64().unwrap();
 
-    // Compare with exact solution using relative norm
-    // Note: contract_to_tensor may produce indices in different order than expected.
-    // The index ordering depends on how TreeTN traverses nodes.
-    // Use norm-based comparison which is order-independent for the same multiset of values.
+    // Compare with exact solution.
+    // `TreeTN::contract_to_tensor` permutes indices into canonical site order, so
+    // the vector ordering matches `[site0, site1]` for this test setup.
     assert_eq!(
         solution_values.len(),
         exact_solution.len(),
         "Solution dimension mismatch"
     );
 
-    // Compute relative error using L2 norm
-    // Since indices may be permuted, we compare norms of sorted vectors
-    let mut sorted_computed: Vec<f64> = solution_values.clone();
-    let mut sorted_expected: Vec<f64> = exact_solution.clone();
-    sorted_computed.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    sorted_expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-    let diff_norm: f64 = sorted_computed
+    let diff_norm: f64 = solution_values
         .iter()
-        .zip(sorted_expected.iter())
+        .zip(exact_solution.iter())
         .map(|(&c, &e)| (c - e).powi(2))
         .sum::<f64>()
         .sqrt();
-    let expected_norm: f64 = sorted_expected
+    let expected_norm: f64 = exact_solution
         .iter()
         .map(|&e| e.powi(2))
         .sum::<f64>()
@@ -600,11 +546,11 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
 
     assert!(
         rel_error < tol,
-        "Solution mismatch: relative L2 error = {} (tol = {})\ncomputed (sorted): {:?}\nexpected (sorted): {:?}",
+        "Solution mismatch: relative L2 error = {} (tol = {})\ncomputed: {:?}\nexpected: {:?}",
         rel_error,
         tol,
-        sorted_computed,
-        sorted_expected
+        solution_values,
+        exact_solution
     );
 }
 
@@ -803,15 +749,7 @@ fn test_linsolve_2site_verify() {
     let updater = SquareLinsolveUpdater::new(identity_mpo.clone(), rhs.clone(), options);
 
     let report = updater.verify(&init).expect("verify failed");
-    println!("=== 2-site verify ===");
-    println!("{}", report);
-
-    for detail in &report.node_details {
-        println!(
-            "Node {:?}: common_index_count = {}",
-            detail.node, detail.common_index_count
-        );
-    }
+    assert!(report.is_valid, "verify should succeed: {}", report);
 }
 
 #[test]
@@ -832,19 +770,7 @@ fn test_linsolve_3site_verify() {
     let updater = SquareLinsolveUpdater::new(identity_mpo.clone(), rhs.clone(), options);
 
     let report = updater.verify(&init).expect("verify failed");
-    println!("{}", report);
-
-    // The issue: MPO input indices don't match state site indices
-    // This should show warnings about no common indices
-    for detail in &report.node_details {
-        println!(
-            "Node {:?}: common_index_count = {}",
-            detail.node, detail.common_index_count
-        );
-    }
-
-    // Check what indices the state has vs what the operator has
-    // This will help diagnose the issue
+    assert!(report.is_valid, "verify should succeed: {}", report);
 }
 
 #[test]
@@ -863,8 +789,12 @@ fn test_linsolve_3site_identity() {
         create_three_site_mpo_with_internal_indices(&[1.0, 1.0, 1.0], phys_dim);
 
     // Create index mappings
-    let (mpo, input_mapping, output_mapping) =
-        create_three_site_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
+    let (input_mapping, output_mapping) = create_fixed_site_index_mappings(
+        ["site0", "site1", "site2"],
+        &site_indices,
+        &s_in_tmp,
+        &s_out_tmp,
+    );
 
     // Initial guess same as RHS
     let init = rhs.clone();
@@ -898,7 +828,6 @@ fn test_linsolve_3site_identity() {
 
     // For identity operator, solution should equal RHS
     assert_eq!(x.node_count(), 3);
-    println!("3-site identity test: PASSED");
 }
 
 // ============================================================================
@@ -1249,56 +1178,7 @@ fn test_linear_operator_replaceind_dimension_mismatch() {
     );
 }
 
-/// Helper to create index mappings from MPO and state site indices.
-/// Returns (mpo, input_mapping, output_mapping)
-#[allow(clippy::type_complexity)]
-fn create_index_mappings(
-    mpo: TreeTN<TensorDynLen, &'static str>,
-    state_site_indices: &[DynIndex],
-    s_in_tmp: &[DynIndex],
-    s_out_tmp: &[DynIndex],
-) -> (
-    TreeTN<TensorDynLen, &'static str>,
-    HashMap<&'static str, IndexMapping<DynIndex>>,
-    HashMap<&'static str, IndexMapping<DynIndex>>,
-) {
-    let mut input_mapping = HashMap::new();
-    let mut output_mapping = HashMap::new();
-
-    // site0 mapping
-    input_mapping.insert(
-        "site0",
-        IndexMapping {
-            true_index: state_site_indices[0].clone(),
-            internal_index: s_in_tmp[0].clone(),
-        },
-    );
-    output_mapping.insert(
-        "site0",
-        IndexMapping {
-            true_index: state_site_indices[0].clone(),
-            internal_index: s_out_tmp[0].clone(),
-        },
-    );
-
-    // site1 mapping
-    input_mapping.insert(
-        "site1",
-        IndexMapping {
-            true_index: state_site_indices[1].clone(),
-            internal_index: s_in_tmp[1].clone(),
-        },
-    );
-    output_mapping.insert(
-        "site1",
-        IndexMapping {
-            true_index: state_site_indices[1].clone(),
-            internal_index: s_out_tmp[1].clone(),
-        },
-    );
-
-    (mpo, input_mapping, output_mapping)
-}
+// NOTE: 2-site mappings use `create_fixed_site_index_mappings`.
 
 #[test]
 fn test_linsolve_with_index_mappings_identity() {
@@ -1315,8 +1195,8 @@ fn test_linsolve_with_index_mappings_identity() {
     let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[1.0, 1.0], phys_dim);
 
     // Create index mappings
-    let (mpo, input_mapping, output_mapping) =
-        create_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
 
     // Create initial guess (clone of RHS)
     let init = rhs.clone();
@@ -1366,8 +1246,8 @@ fn test_linsolve_with_index_mappings_diagonal() {
     let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[2.0, 3.0], phys_dim);
 
     // Create index mappings
-    let (mpo, input_mapping, output_mapping) =
-        create_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
 
     // Create initial guess
     let init = rhs.clone();
@@ -1405,7 +1285,6 @@ fn test_linsolve_with_index_mappings_diagonal() {
     let values: Vec<f64> = contracted.to_vec_f64().unwrap();
 
     // Solution should be approximately [1, 0, 0, 0]
-    println!("Solution values: {:?}", values);
     assert!(
         (values[0] - 1.0).abs() < 0.1,
         "Expected ~1.0, got {}",
@@ -1498,46 +1377,7 @@ fn create_three_site_mpo_with_internal_indices(
     )
 }
 
-/// Helper to create 3-site index mappings from MPO and state site indices.
-/// Returns (mpo, input_mapping, output_mapping)
-#[allow(clippy::type_complexity)]
-fn create_three_site_index_mappings(
-    mpo: TreeTN<TensorDynLen, &'static str>,
-    state_site_indices: &[DynIndex],
-    s_in_tmp: &[DynIndex],
-    s_out_tmp: &[DynIndex],
-) -> (
-    TreeTN<TensorDynLen, &'static str>,
-    HashMap<&'static str, IndexMapping<DynIndex>>,
-    HashMap<&'static str, IndexMapping<DynIndex>>,
-) {
-    assert_eq!(state_site_indices.len(), 3);
-    assert_eq!(s_in_tmp.len(), 3);
-    assert_eq!(s_out_tmp.len(), 3);
-
-    let mut input_mapping = HashMap::new();
-    let mut output_mapping = HashMap::new();
-
-    let sites = ["site0", "site1", "site2"];
-    for (i, site) in sites.iter().enumerate() {
-        input_mapping.insert(
-            *site,
-            IndexMapping {
-                true_index: state_site_indices[i].clone(),
-                internal_index: s_in_tmp[i].clone(),
-            },
-        );
-        output_mapping.insert(
-            *site,
-            IndexMapping {
-                true_index: state_site_indices[i].clone(),
-                internal_index: s_out_tmp[i].clone(),
-            },
-        );
-    }
-
-    (mpo, input_mapping, output_mapping)
-}
+// NOTE: 3-site mappings use `create_fixed_site_index_mappings`.
 
 #[test]
 fn test_linsolve_with_index_mappings_three_site_identity() {
@@ -1555,8 +1395,12 @@ fn test_linsolve_with_index_mappings_three_site_identity() {
         create_three_site_mpo_with_internal_indices(&[1.0, 1.0, 1.0], phys_dim);
 
     // Create index mappings
-    let (mpo, input_mapping, output_mapping) =
-        create_three_site_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
+    let (input_mapping, output_mapping) = create_fixed_site_index_mappings(
+        ["site0", "site1", "site2"],
+        &site_indices,
+        &s_in_tmp,
+        &s_out_tmp,
+    );
 
     // Create initial guess (clone of RHS)
     let init = rhs.clone();
@@ -1589,7 +1433,6 @@ fn test_linsolve_with_index_mappings_three_site_identity() {
     // For identity operator, solution should equal RHS
     // Just verify it runs without error
     assert_eq!(x.node_count(), 3);
-    println!("3-site identity test with index mappings: PASSED");
 }
 
 #[test]
@@ -1609,8 +1452,12 @@ fn test_linsolve_with_index_mappings_three_site_diagonal() {
         create_three_site_mpo_with_internal_indices(&[2.0, 3.0, 1.0], phys_dim);
 
     // Create index mappings
-    let (mpo, input_mapping, output_mapping) =
-        create_three_site_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
+    let (input_mapping, output_mapping) = create_fixed_site_index_mappings(
+        ["site0", "site1", "site2"],
+        &site_indices,
+        &s_in_tmp,
+        &s_out_tmp,
+    );
 
     // Create initial guess
     let init = rhs.clone();
@@ -1645,7 +1492,6 @@ fn test_linsolve_with_index_mappings_three_site_diagonal() {
     // Verify the solution by checking that D*x ≈ b
     // For diagonal operator D and solution x, the residual should be small
     assert_eq!(x.node_count(), 3);
-    println!("3-site diagonal test with index mappings: PASSED");
 }
 
 // ============================================================================
@@ -1742,8 +1588,8 @@ fn test_linsolve_pauli_x() {
     let (mpo, s_in_tmp, s_out_tmp) = create_pauli_x_mpo(phys_dim);
 
     // Create index mappings
-    let (mpo, input_mapping, output_mapping) =
-        create_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
 
     // Create initial guess
     let init = rhs.clone();
@@ -1909,8 +1755,8 @@ fn test_linsolve_general_matrix() {
     let (mpo, s_in_tmp, s_out_tmp) = create_general_2x2_mpo(&mat, phys_dim);
 
     // Create index mappings
-    let (mpo, input_mapping, output_mapping) =
-        create_index_mappings(mpo, &site_indices, &s_in_tmp, &s_out_tmp);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
 
     // Create initial guess
     let init = rhs.clone();
@@ -2222,7 +2068,6 @@ fn test_linsolve_n_site_identity_impl(n_sites: usize) {
     // For identity operator, solution should equal RHS
     // Verify it runs without error and has correct structure
     assert_eq!(x.node_count(), n_sites);
-    println!("{}-site identity test with index mappings: PASSED", n_sites);
 }
 
 #[test]

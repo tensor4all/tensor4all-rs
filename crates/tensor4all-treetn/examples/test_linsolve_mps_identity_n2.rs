@@ -197,8 +197,8 @@ fn multiply_treetn_by_scalar(
     s: num_complex::Complex64,
 ) -> anyhow::Result<()> {
     // multiply first node's tensor by scalar s (scales whole state)
-        if let Some(name) = t.node_names().first().cloned() {
-            let idx = t.node_index(&name).unwrap();
+    if let Some(name) = t.node_names().first().cloned() {
+        let idx = t.node_index(&name).unwrap();
         let tensor = t.tensor(idx).unwrap().clone();
         let inds = tensor.external_indices();
         let mut data = tensor.to_vec_c64()?;
@@ -295,33 +295,6 @@ fn compute_residual(
     Ok((abs, rel))
 }
 
-fn treetn_to_vec_c64(t: &TreeTN<TensorDynLen, String>) -> anyhow::Result<Vec<num_complex::Complex64>> {
-    let full = t.contract_to_tensor()?;
-    full.to_vec_c64()
-}
-
-fn print_vec_c64(label: &str, v: &[num_complex::Complex64]) {
-    println!("    {} (len={}):", label, v.len());
-    for (i, val) in v.iter().enumerate() {
-        println!("        [{}] = {:+.6e} {:+.6e}i", i, val.re, val.im);
-    }
-}
-
-fn force_pure_imag(t: &mut TreeTN<TensorDynLen, String>) -> anyhow::Result<()> {
-    for name in t.node_names() {
-        let idx = t.node_index(&name).unwrap();
-        let tensor = t.tensor(idx).unwrap().clone();
-        let inds = tensor.external_indices();
-        let mut data = tensor.to_vec_c64()?;
-        for v in data.iter_mut() {
-            *v = num_complex::Complex64::new(0.0, v.im);
-        }
-        let newt = TensorDynLen::from_dense_c64(inds, data);
-        t.replace_tensor(idx, newt)?;
-    }
-    Ok(())
-}
-
 fn run_case(phys_dim: usize) -> anyhow::Result<()> {
     let n = 2usize;
     let bond_dim = 6usize;
@@ -377,14 +350,8 @@ fn run_case(phys_dim: usize) -> anyhow::Result<()> {
         ApplyOptions::default(),
     )?;
 
-    // For debugging: print x_true vector when phys_dim==2 (the non-converging case)
-    if phys_dim == 2 {
-        let x_true_vec = treetn_to_vec_c64(&x_true)?;
-        print_vec_c64(
-            &format!("x_true vector (identity MPO, random complex MPS, n=2, phys_dim={})", phys_dim),
-            &x_true_vec,
-        );
-    }
+    // Note: keep this example minimal. For debugging, add systematic tests instead of
+    // extending examples on main.
 
     let options = LinsolveOptions::default()
         .with_nfullsweeps(5)
@@ -404,26 +371,13 @@ fn run_case(phys_dim: usize) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("plan failed"))?;
 
     let (init_abs, init_rel) = compute_residual(&operator, &in_map, &out_map, &x, &b)?;
-        println!(
+    println!(
             "    initial (identity MPO, random complex MPS, n=2, phys_dim={}): |Ax-b| = {:.6e}, rel = {:.6e}",
             phys_dim, init_abs, init_rel
         );
 
     for sweep in 1..=5 {
         apply_local_update_sweep(&mut x, &plan, &mut updater)?;
-        if sweep == 1 {
-            // For debugging: print vector after 1 sweep for phys_dim==2
-            if phys_dim == 2 {
-                let x_after1_vec = treetn_to_vec_c64(&x)?;
-                print_vec_c64(
-                    &format!(
-                        "x after 1 sweep (identity MPO, random complex MPS, n=2, phys_dim={})",
-                        phys_dim
-                    ),
-                    &x_after1_vec,
-                );
-            }
-        }
         if sweep == 1 || sweep == 5 {
             let (_abs, rel) = compute_residual(&operator, &in_map, &out_map, &x, &b)?;
             println!(
@@ -435,10 +389,10 @@ fn run_case(phys_dim: usize) -> anyhow::Result<()> {
 
     // --- Now test with real random MPS (stored as Complex64 with zero imaginary parts) ---
     println!("");
-        println!(
-            "=== Test: identity MPO A, real-random MPS (Complex64 imag=0), n=2, phys_dim={} ===",
-            phys_dim
-        );
+    println!(
+        "=== Test: identity MPO A, real-random MPS (Complex64 imag=0), n=2, phys_dim={} ===",
+        phys_dim
+    );
     let mut used2 = used.clone();
     let mut rng2 = ChaCha8Rng::seed_from_u64(12345);
     let mut x_true_real =
@@ -488,22 +442,9 @@ fn run_case(phys_dim: usize) -> anyhow::Result<()> {
     );
     let mut used3 = used.clone();
     let mut rng3 = ChaCha8Rng::seed_from_u64(98765);
-    // Prepare pure-imag global state by creating all-ones MPS and multiplying by i
-    let mut x_true_imag = create_all_ones_mps_chain_c64(n, bond_dim, &sites, &mut used3)?;
-    // normalize by bond_dim so each contracted amplitude becomes 1.0i
-    multiply_treetn_by_scalar(
-        &mut x_true_imag,
-        num_complex::Complex64::new(0.0, 1.0 / (bond_dim as f64)),
-    )?;
+    let mut x_true_imag =
+        create_random_mps_chain_with_sites_imag_c64(&mut rng3, n, bond_dim, &sites, &mut used3)?;
     x_true_imag = x_true_imag.canonicalize([center.clone()], CanonicalizationOptions::default())?;
-
-    if phys_dim == 2 {
-        let x_true_imag_vec = treetn_to_vec_c64(&x_true_imag)?;
-        print_vec_c64(
-            &format!("x_true (pure-imag) vector (n=2, phys_dim={})", phys_dim),
-            &x_true_imag_vec,
-        );
-    }
 
     let b_imag = apply_linear_operator(
         &LinearOperator::new(operator.clone(), in_map.clone(), out_map.clone()),
@@ -522,7 +463,8 @@ fn run_case(phys_dim: usize) -> anyhow::Result<()> {
     let plan_imag = LocalUpdateSweepPlan::from_treetn(&x_imag, &center, 2)
         .ok_or_else(|| anyhow::anyhow!("plan failed"))?;
 
-    let (init_abs_i, init_rel_i) = compute_residual(&operator, &in_map, &out_map, &x_imag, &b_imag)?;
+    let (init_abs_i, init_rel_i) =
+        compute_residual(&operator, &in_map, &out_map, &x_imag, &b_imag)?;
     println!(
         "    initial (identity MPO, pure-imag MPS, n=2, phys_dim={}): |Ax-b| = {:.6e}, rel = {:.6e}",
         phys_dim, init_abs_i, init_rel_i
@@ -530,15 +472,6 @@ fn run_case(phys_dim: usize) -> anyhow::Result<()> {
 
     for sweep in 1..=5 {
         apply_local_update_sweep(&mut x_imag, &plan_imag, &mut updater_imag)?;
-        if sweep == 1 {
-            if phys_dim == 2 {
-                let x_imag_after1 = treetn_to_vec_c64(&x_imag)?;
-                print_vec_c64(
-                    &format!("x (after1) pure-imag (n=2, phys_dim={})", phys_dim),
-                    &x_imag_after1,
-                );
-            }
-        }
         if sweep == 1 || sweep == 5 {
             let (_abs, rel) = compute_residual(&operator, &in_map, &out_map, &x_imag, &b_imag)?;
             println!(

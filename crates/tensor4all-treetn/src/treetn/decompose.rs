@@ -16,22 +16,26 @@ use super::TreeTN;
 // TreeTopology specification
 // ============================================================================
 
-/// Specification for tree topology: defines nodes and edges.
+/// Specification for tree topology: defines nodes and index ID assignments.
+///
+/// `I` is the index ID type (e.g., `DynId`). Each node maps to the IDs of its
+/// physical indices in the input tensor. This ensures correct index lookup
+/// regardless of tensor index ordering, which can change during factorization.
 #[derive(Debug, Clone)]
-pub struct TreeTopology<V> {
-    /// Nodes in the tree (node name -> set of physical index positions in the input tensor)
-    pub nodes: HashMap<V, Vec<usize>>,
+pub struct TreeTopology<V, I> {
+    /// Nodes in the tree (node name -> list of index IDs belonging to this node)
+    pub nodes: HashMap<V, Vec<I>>,
     /// Edges in the tree: (node_a, node_b)
     pub edges: Vec<(V, V)>,
 }
 
-impl<V: Clone + Hash + Eq> TreeTopology<V> {
+impl<V: Clone + Hash + Eq, I: Clone + Eq> TreeTopology<V, I> {
     /// Create a new tree topology with the given nodes and edges.
     ///
     /// # Arguments
-    /// * `nodes` - Map from node name to the positions of physical indices in the input tensor
+    /// * `nodes` - Map from node name to the index IDs belonging to that node
     /// * `edges` - List of edges as (node_a, node_b) pairs
-    pub fn new(nodes: HashMap<V, Vec<usize>>, edges: Vec<(V, V)>) -> Self {
+    pub fn new(nodes: HashMap<V, Vec<I>>, edges: Vec<(V, V)>) -> Self {
         Self { nodes, edges }
     }
 
@@ -90,7 +94,7 @@ impl<V: Clone + Hash + Eq> TreeTopology<V> {
 /// - Factorization fails
 pub fn factorize_tensor_to_treetn<T, V>(
     tensor: &T,
-    topology: &TreeTopology<V>,
+    topology: &TreeTopology<V, <T::Index as IndexLike>::Id>,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
@@ -126,7 +130,7 @@ where
 /// - Factorization fails
 pub fn factorize_tensor_to_treetn_with<T, V>(
     tensor: &T,
-    topology: &TreeTopology<V>,
+    topology: &TreeTopology<V, <T::Index as IndexLike>::Id>,
     options: FactorizeOptions,
 ) -> Result<TreeTN<T, V>>
 where
@@ -146,14 +150,32 @@ where
         return Ok(tn);
     }
 
-    // Validate that all index positions are valid
-    for positions in topology.nodes.values() {
-        for &pos in positions {
-            if pos >= tensor_indices.len() {
+    // Validate that all index IDs exist in the tensor
+    let tensor_ids: HashSet<_> = tensor_indices.iter().map(|idx| idx.id().clone()).collect();
+    for (node, ids) in &topology.nodes {
+        for id in ids {
+            if !tensor_ids.contains(id) {
                 return Err(anyhow::anyhow!(
-                    "Index position {} out of bounds (tensor has {} indices)",
-                    pos,
+                    "Index ID {:?} for node {:?} not found in tensor (tensor has {} indices)",
+                    id,
+                    node,
                     tensor_indices.len()
+                ));
+            }
+        }
+    }
+
+    // Validate that each physical index ID is assigned to at most one node.
+    // Duplicate assignment is almost always a topology specification bug and will
+    // lead to ambiguous/missing node tensors during decomposition.
+    let mut assigned_ids: HashSet<<T::Index as IndexLike>::Id> = HashSet::new();
+    for (node, ids) in &topology.nodes {
+        for id in ids {
+            if !assigned_ids.insert(id.clone()) {
+                return Err(anyhow::anyhow!(
+                    "Index ID {:?} is assigned to multiple nodes (at least {:?})",
+                    id,
+                    node
                 ));
             }
         }
@@ -172,13 +194,6 @@ where
     for neighbors in adj.values_mut() {
         neighbors.sort();
     }
-
-    // Find leaves (nodes with degree 1) - not currently used but kept for reference
-    let _leaves: Vec<V> = adj
-        .iter()
-        .filter(|(_, neighbors)| neighbors.len() == 1)
-        .map(|(node, _)| node.clone())
-        .collect();
 
     // Choose root as the node with highest degree
     // Use min() to ensure deterministic selection when multiple nodes have the same degree
@@ -223,9 +238,6 @@ where
     // Store the resulting node tensors
     let mut node_tensors: HashMap<V, T> = HashMap::new();
 
-    // Store bond indices between nodes: (node_a, node_b) -> (index_on_a, index_on_b)
-    let mut _bond_indices: HashMap<(V, V), (T::Index, T::Index)> = HashMap::new();
-
     // Use provided factorization options with Left canonical direction
     let factorize_options = FactorizeOptions {
         canonical: Canonical::Left,
@@ -235,23 +247,30 @@ where
     // Process nodes in post-order (leaves first)
     #[allow(clippy::needless_range_loop)]
     for i in 0..traversal_order.len() - 1 {
-        let (node, parent) = &traversal_order[i];
-        let parent_node = parent.as_ref().unwrap();
+        let (node, _parent) = &traversal_order[i];
+        // Get the index IDs for this node
+        let node_ids = topology.nodes.get(node).unwrap();
 
-        // Get the physical index positions for this node
-        let node_positions = topology.nodes.get(node).unwrap();
-
-        // Find physical indices for this node in current_tensor
+        // Find physical indices for this node in current_tensor by matching IDs
         let current_indices = current_tensor.external_indices();
-        let left_inds: Vec<_> = node_positions
+        let left_inds: Vec<_> = node_ids
             .iter()
-            .filter_map(|&pos| current_indices.get(pos).cloned())
+            .filter_map(|id| current_indices.iter().find(|idx| idx.id() == id).cloned())
             .collect();
 
         if left_inds.is_empty() && current_indices.len() > 1 {
-            // No physical indices to separate - use first index
-            // This happens when indices have already been separated
-            continue;
+            // This indicates an inconsistent topology specification for the current tensor.
+            // Previously we "skipped" such nodes, but that can lead to missing tensors and
+            // panics later when building the TreeTN.
+            return Err(anyhow::anyhow!(
+                "No physical indices found for node {:?} (requested ids={:?}) in current tensor indices={:?}",
+                node,
+                node_ids,
+                current_indices
+                    .iter()
+                    .map(|idx| idx.id().clone())
+                    .collect::<Vec<_>>()
+            ));
         }
 
         // Perform factorization using TensorLike::factorize
@@ -261,32 +280,11 @@ where
             .factorize(&left_inds, &factorize_options)
             .map_err(|e| anyhow::anyhow!("Factorization failed: {:?}", e))?;
 
-        let left = factorize_result.left;
-        let right = factorize_result.right;
-        let bond_index = factorize_result.bond_index;
-
         // Store left as the node's tensor (with physical indices + bond to parent)
-        node_tensors.insert(node.clone(), left);
-
-        // Store the bond index connecting this node to its parent
-        // The bond_index is shared between left and right
-        let bond_idx_node = bond_index.clone();
-        let bond_idx_parent = bond_index;
-
-        // Store in canonical order
-        let key = if *node < *parent_node {
-            (node.clone(), parent_node.clone())
-        } else {
-            (parent_node.clone(), node.clone())
-        };
-        if *node < *parent_node {
-            _bond_indices.insert(key, (bond_idx_node, bond_idx_parent));
-        } else {
-            _bond_indices.insert(key, (bond_idx_parent, bond_idx_node));
-        }
+        node_tensors.insert(node.clone(), factorize_result.left);
 
         // right becomes the current tensor for the next iteration
-        current_tensor = right;
+        current_tensor = factorize_result.right;
     }
 
     // The last node (root) gets the remaining tensor
@@ -310,31 +308,32 @@ where
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use tensor4all_core::{DynIndex, TensorDynLen};
 
     #[test]
     fn test_tree_topology_validate() {
-        // Test empty topology
-        let empty: TreeTopology<String> = TreeTopology::new(HashMap::new(), Vec::new());
+        // Test empty topology (use usize as a dummy ID type)
+        let empty: TreeTopology<String, usize> = TreeTopology::new(HashMap::new(), Vec::new());
         assert!(empty.validate().is_err());
 
         // Test single node (valid)
         let mut nodes = HashMap::new();
-        nodes.insert("node0".to_string(), vec![0]);
+        nodes.insert("node0".to_string(), vec![0usize]);
         let single = TreeTopology::new(nodes, Vec::new());
         assert!(single.validate().is_ok());
 
         // Test valid tree (2 nodes, 1 edge)
         let mut nodes = HashMap::new();
-        nodes.insert("node0".to_string(), vec![0]);
-        nodes.insert("node1".to_string(), vec![1]);
+        nodes.insert("node0".to_string(), vec![0usize]);
+        nodes.insert("node1".to_string(), vec![1usize]);
         let edges = vec![("node0".to_string(), "node1".to_string())];
         let tree = TreeTopology::new(nodes, edges);
         assert!(tree.validate().is_ok());
 
         // Test invalid: wrong number of edges
         let mut nodes = HashMap::new();
-        nodes.insert("node0".to_string(), vec![0]);
-        nodes.insert("node1".to_string(), vec![1]);
+        nodes.insert("node0".to_string(), vec![0usize]);
+        nodes.insert("node1".to_string(), vec![1usize]);
         let edges = vec![
             ("node0".to_string(), "node1".to_string()),
             ("node0".to_string(), "node1".to_string()),
@@ -344,9 +343,26 @@ mod tests {
 
         // Test invalid: edge references unknown node
         let mut nodes = HashMap::new();
-        nodes.insert("node0".to_string(), vec![0]);
+        nodes.insert("node0".to_string(), vec![0usize]);
         let edges = vec![("node0".to_string(), "node2".to_string())];
         let invalid = TreeTopology::new(nodes, edges);
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn test_factorize_tensor_to_treetn_rejects_duplicate_index_ids() {
+        let i0 = DynIndex::new_dyn(2);
+        let i1 = DynIndex::new_dyn(2);
+        let tensor =
+            TensorDynLen::from_dense_f64(vec![i0.clone(), i1.clone()], vec![1.0, 0.0, 0.0, 1.0]);
+
+        let mut nodes: HashMap<String, Vec<<DynIndex as IndexLike>::Id>> = HashMap::new();
+        nodes.insert("node0".to_string(), vec![i0.id().clone()]);
+        nodes.insert("node1".to_string(), vec![i0.id().clone()]); // duplicate on purpose
+
+        let topo = TreeTopology::new(nodes, vec![("node0".to_string(), "node1".to_string())]);
+
+        let result = factorize_tensor_to_treetn_with(&tensor, &topo, FactorizeOptions::qr());
+        assert!(result.is_err());
     }
 }

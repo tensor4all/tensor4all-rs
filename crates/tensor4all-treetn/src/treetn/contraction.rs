@@ -1177,24 +1177,42 @@ where
     // 2. Build topology from tn_a's structure and decompose
     use super::decompose::factorize_tensor_to_treetn_with;
 
-    // Build topology
-    let mut nodes: HashMap<V, Vec<usize>> = HashMap::new();
-    let mut idx_position = 0usize;
+    // Build topology using index IDs (not positions).
+    // Consider site indices from BOTH tn_a and tn_b, since the contracted result
+    // may contain indices from either network (non-contracted ones remain).
+    let mut nodes: HashMap<V, Vec<<T::Index as IndexLike>::Id>> = HashMap::new();
+    let contracted_indices = contracted_tensor.external_indices();
+    let contracted_ids: HashSet<_> = contracted_indices
+        .iter()
+        .map(|ci| ci.id().clone())
+        .collect();
 
-    // Collect node names in sorted order for deterministic index assignment
+    // Collect node names in sorted order for deterministic assignment
     let mut node_names: Vec<_> = tn_a.node_names();
     node_names.sort();
 
     for node_name in &node_names {
-        let site_space = tn_a
-            .site_index_network
-            .site_space(node_name)
-            .ok_or_else(|| anyhow::anyhow!("Site space not found for node {:?}", node_name))?;
+        let mut ids: Vec<<T::Index as IndexLike>::Id> = Vec::new();
 
-        // Each site index becomes a position in the contracted tensor
-        let positions: Vec<usize> = (idx_position..idx_position + site_space.len()).collect();
-        idx_position += site_space.len();
-        nodes.insert(node_name.clone(), positions);
+        // Collect remaining site indices from tn_a at this node
+        if let Some(site_space_a) = tn_a.site_index_network.site_space(node_name) {
+            for site_idx in site_space_a {
+                if contracted_ids.contains(site_idx.id()) {
+                    ids.push(site_idx.id().clone());
+                }
+            }
+        }
+
+        // Also collect remaining site indices from tn_b at the same node
+        if let Some(site_space_b) = tn_b.site_index_network.site_space(node_name) {
+            for site_idx in site_space_b {
+                if contracted_ids.contains(site_idx.id()) && !ids.contains(site_idx.id()) {
+                    ids.push(site_idx.id().clone());
+                }
+            }
+        }
+
+        nodes.insert(node_name.clone(), ids);
     }
 
     // Get edges from the graph

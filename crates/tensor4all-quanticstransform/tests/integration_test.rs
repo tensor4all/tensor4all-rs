@@ -176,18 +176,6 @@ fn contract_treetn_to_vector(
     // The tensor has indices ordered by the indices field
     let ext_indices = &full_tensor.indices;
 
-    // Debug
-    eprintln!("contract_treetn_to_vector:");
-    eprintln!(
-        "  full_tensor.indices: {:?}",
-        ext_indices.iter().map(|i| i.id()).collect::<Vec<_>>()
-    );
-    eprintln!("  full_tensor.dims: {:?}", full_tensor.dims());
-    eprintln!(
-        "  site_indices requested: {:?}",
-        site_indices.iter().map(|i| i.id()).collect::<Vec<_>>()
-    );
-
     // Build mapping from site index ID to position in external indices
     let mut idx_to_pos: HashMap<DynId, usize> = HashMap::new();
     for (pos, idx) in ext_indices.iter().enumerate() {
@@ -200,7 +188,6 @@ fn contract_treetn_to_vector(
         let pos = idx_to_pos
             .get(&site_idx.id().clone())
             .expect("Site index not found in contracted tensor");
-        eprintln!("  site_indices[{}] -> tensor position {}", i, pos);
         site_to_tensor.push(*pos);
     }
 
@@ -212,8 +199,6 @@ fn contract_treetn_to_vector(
         .as_slice_c64()
         .expect("Expected DenseC64 storage");
     let dims = full_tensor.dims();
-
-    eprintln!("  data len: {}", data.len());
 
     // Iterate over all x values
     for x in 0..n {
@@ -234,13 +219,6 @@ fn contract_treetn_to_vector(
         }
 
         result[x] = data[flat_idx];
-
-        if data[flat_idx].norm() > 1e-10 {
-            eprintln!(
-                "  x={} (binary: {:03b}) -> multi_idx={:?} -> flat_idx={} -> value={:?}",
-                x, x, multi_idx, flat_idx, data[flat_idx]
-            );
-        }
     }
 
     result

@@ -279,7 +279,6 @@ where
         for node in &state_nodes {
             let state_site = state.site_space(node);
             let op_site = operator.site_space(node);
-            let _rhs_site = rhs.site_space(node);
 
             // Get state tensor indices
             if let Some(state_idx) = state.node_index(node) {
@@ -373,30 +372,30 @@ where
 
     /// Build TreeTopology for the subtree region from the solved tensor.
     ///
-    /// Maps each node to the positions of its indices in the solved tensor.
+    /// Maps each node to the index IDs belonging to it in the solved tensor.
     fn build_subtree_topology(
         &self,
         solved_tensor: &T,
         region: &[V],
         full_treetn: &TreeTN<T, V>,
-    ) -> Result<TreeTopology<V>> {
+    ) -> Result<TreeTopology<V, <T::Index as IndexLike>::Id>> {
         use std::collections::HashMap;
 
-        let mut nodes: HashMap<V, Vec<usize>> = HashMap::new();
+        let mut nodes: HashMap<V, Vec<<T::Index as IndexLike>::Id>> = HashMap::new();
         let mut edges: Vec<(V, V)> = Vec::new();
 
         let solved_indices = solved_tensor.external_indices();
 
-        // For each node in the region, find which indices belong to it
+        // For each node in the region, find which index IDs belong to it
         for node in region {
-            let mut positions = Vec::new();
+            let mut ids = Vec::new();
 
             // Get site indices for this node
             if let Some(site_indices) = full_treetn.site_space(node) {
                 for site_idx in site_indices {
-                    // Find position in solved_tensor
-                    if let Some(pos) = solved_indices.iter().position(|idx| idx == site_idx) {
-                        positions.push(pos);
+                    // Verify the index exists in solved_tensor and collect its ID
+                    if solved_indices.iter().any(|idx| idx.id() == site_idx.id()) {
+                        ids.push(site_idx.id().clone());
                     }
                 }
             }
@@ -407,15 +406,15 @@ where
                     // This is an external neighbor - the bond belongs to this node
                     if let Some(edge) = full_treetn.edge_between(node, &neighbor) {
                         if let Some(bond) = full_treetn.bond_index(edge) {
-                            if let Some(pos) = solved_indices.iter().position(|idx| idx == bond) {
-                                positions.push(pos);
+                            if solved_indices.iter().any(|idx| idx.id() == bond.id()) {
+                                ids.push(bond.id().clone());
                             }
                         }
                     }
                 }
             }
 
-            nodes.insert(node.clone(), positions);
+            nodes.insert(node.clone(), ids);
         }
 
         // Build edges between nodes in the region
@@ -572,11 +571,6 @@ where
 
         // Solve using GMRES (works directly with TensorDynLen)
         let result = gmres(apply_a, &rhs_local, init, &gmres_options)?;
-
-        // Note: GMRES convergence info (result.converged, result.iterations, result.residual_norm)
-        // is not currently exposed. Consider adding tracing or returning via a result struct
-        // if convergence diagnostics are needed.
-        let _ = result.converged; // Suppress unused variable warning
 
         Ok(result.solution)
     }
