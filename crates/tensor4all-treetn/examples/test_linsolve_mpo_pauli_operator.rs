@@ -71,11 +71,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
     n_sites: usize,
     phys_dim: usize,
     used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<(
-    TreeTN<TensorDynLen, String>,
-    Vec<DynIndex>,
-    Vec<DynIndex>,
-)> {
+) -> anyhow::Result<(TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>)> {
     anyhow::ensure!(n_sites >= 1, "Need at least 1 site");
     anyhow::ensure!(phys_dim == 2, "Pauli-X requires phys_dim=2");
 
@@ -109,10 +105,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
         }
 
         let tensor = if n_sites == 1 {
-            TensorDynLen::from_dense_f64(
-                vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()],
-                data,
-            )
+            TensorDynLen::from_dense_f64(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data)
         } else if i == 0 {
             TensorDynLen::from_dense_f64(
                 vec![
@@ -635,10 +628,16 @@ fn main() -> anyhow::Result<()> {
         &x_1,
         &b_tree_1,
     )?;
-    println!("    Initial residual: |Ax - b| = {:.6e}, |Ax - b| / |b| = {:.6e}", init_abs_1, init_rel_1);
+    println!(
+        "    Initial residual: |Ax - b| = {:.6e}, |Ax - b| / |b| = {:.6e}",
+        init_abs_1, init_rel_1
+    );
 
     let (init_abs_state_1, init_rel_state_1) = compute_state_error(&x_1, &x_true)?;
-    println!("    Initial state error: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}", init_abs_state_1, init_rel_state_1);
+    println!(
+        "    Initial state error: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
+        init_abs_state_1, init_rel_state_1
+    );
 
     for _sweep in 1..=n_sweeps {
         apply_local_update_sweep(&mut x_1, &plan_1, &mut updater_1)?;
@@ -685,14 +684,14 @@ fn main() -> anyhow::Result<()> {
     );
     let i_x = apply_linear_operator(&linop_i, &x_true, ApplyOptions::default())?;
     let a_x = apply_linear_operator(&linop_a, &x_true, ApplyOptions::default())?;
-    
+
     // Scale I*x by 2 using scale_treetn
     use tensor4all_core::AnyScalar;
     let i_x_scaled = scale_treetn(&i_x, AnyScalar::F64(2.0))?;
-    
+
     // Add i_x_scaled and a_x using TreeTN::add (direct-sum construction)
     let b_tree_2 = i_x_scaled.add(&a_x)?;
-    
+
     print_bond_dims(&b_tree_2, "b = (2I + A)*x_true bond dimensions");
     println!();
 
@@ -729,10 +728,16 @@ fn main() -> anyhow::Result<()> {
         &x_2,
         &b_tree_2,
     )?;
-    println!("    Initial residual: |(2I + A)x - b| = {:.6e}, |(2I + A)x - b| / |b| = {:.6e}", init_abs_2, init_rel_2);
+    println!(
+        "    Initial residual: |(2I + A)x - b| = {:.6e}, |(2I + A)x - b| / |b| = {:.6e}",
+        init_abs_2, init_rel_2
+    );
 
     let (init_abs_state_2, init_rel_state_2) = compute_state_error(&x_2, &x_true)?;
-    println!("    Initial state error: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}", init_abs_state_2, init_rel_state_2);
+    println!(
+        "    Initial state error: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
+        init_abs_state_2, init_rel_state_2
+    );
 
     for _sweep in 1..=n_sweeps {
         apply_local_update_sweep(&mut x_2, &plan_2, &mut updater_2)?;

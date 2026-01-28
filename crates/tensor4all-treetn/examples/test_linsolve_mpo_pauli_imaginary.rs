@@ -16,9 +16,8 @@ use std::collections::{HashMap, HashSet};
 use num_complex::Complex64;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{
-    index::DynId, AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
-};
+use tensor4all_core::index::DynId;
+use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
     IndexMapping, LinearOperator, LinsolveOptions, LocalUpdateSweepPlan, SquareLinsolveUpdater,
@@ -76,11 +75,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
     n_sites: usize,
     phys_dim: usize,
     used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<(
-    TreeTN<TensorDynLen, String>,
-    Vec<DynIndex>,
-    Vec<DynIndex>,
-)> {
+) -> anyhow::Result<(TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>)> {
     anyhow::ensure!(n_sites >= 1, "Need at least 1 site");
     anyhow::ensure!(phys_dim == 2, "Pauli-X requires phys_dim=2");
 
@@ -114,10 +109,83 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
         }
 
         let tensor = if n_sites == 1 {
+            TensorDynLen::from_dense_f64(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data)
+        } else if i == 0 {
             TensorDynLen::from_dense_f64(
-                vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()],
+                vec![
+                    s_out_tmp[i].clone(),
+                    s_in_tmp[i].clone(),
+                    bond_indices[i].clone(),
+                ],
                 data,
             )
+        } else if i == n_sites - 1 {
+            TensorDynLen::from_dense_f64(
+                vec![
+                    bond_indices[i - 1].clone(),
+                    s_out_tmp[i].clone(),
+                    s_in_tmp[i].clone(),
+                ],
+                data,
+            )
+        } else {
+            TensorDynLen::from_dense_f64(
+                vec![
+                    bond_indices[i - 1].clone(),
+                    s_out_tmp[i].clone(),
+                    s_in_tmp[i].clone(),
+                    bond_indices[i].clone(),
+                ],
+                data,
+            )
+        };
+        let node = mpo.add_tensor(name, tensor).unwrap();
+        nodes.push(node);
+    }
+
+    // Connect adjacent sites
+    for i in 0..n_sites.saturating_sub(1) {
+        mpo.connect(nodes[i], &bond_indices[i], nodes[i + 1], &bond_indices[i])
+            .unwrap();
+    }
+
+    Ok((mpo, s_in_tmp, s_out_tmp))
+}
+
+/// Create an N-site MPO operator where all matrix elements are 1.0.
+/// Returns (mpo, s_in_tmp, s_out_tmp) where s_in_tmp and s_out_tmp are internal indices.
+fn create_n_site_ones_mpo_with_internal_indices(
+    n_sites: usize,
+    phys_dim: usize,
+    used_ids: &mut HashSet<DynId>,
+) -> anyhow::Result<(TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>)> {
+    anyhow::ensure!(n_sites >= 1, "Need at least 1 site");
+
+    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+
+    // Internal indices (independent IDs)
+    let s_in_tmp: Vec<DynIndex> = (0..n_sites)
+        .map(|_| unique_dyn_index(used_ids, phys_dim))
+        .collect();
+    let s_out_tmp: Vec<DynIndex> = (0..n_sites)
+        .map(|_| unique_dyn_index(used_ids, phys_dim))
+        .collect();
+
+    // Bond indices (dim 1 for all-ones operator)
+    let bond_indices: Vec<DynIndex> = (0..n_sites.saturating_sub(1))
+        .map(|_| unique_dyn_index(used_ids, 1))
+        .collect();
+
+    // All-ones matrix: [[1, 1], [1, 1]] or [[1, 1, 1], [1, 1, 1], [1, 1, 1]] for phys_dim=3
+    let ones = vec![1.0; phys_dim * phys_dim];
+
+    let mut nodes = Vec::with_capacity(n_sites);
+    for i in 0..n_sites {
+        let name = make_node_name(i);
+        let data = ones.clone();
+
+        let tensor = if n_sites == 1 {
+            TensorDynLen::from_dense_f64(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data)
         } else if i == 0 {
             TensorDynLen::from_dense_f64(
                 vec![
@@ -351,7 +419,97 @@ fn create_identity_mpo_state_c64(
         } else {
             // Add bond indices via outer product
             let bond_indices = bond_indices(&indices);
-            let ones = TensorDynLen::from_dense_c64(bond_indices, vec![Complex64::new(1.0, 0.0); 1]);
+            let ones =
+                TensorDynLen::from_dense_c64(bond_indices, vec![Complex64::new(1.0, 0.0); 1]);
+            TensorDynLen::outer_product(&base, &ones)?
+        };
+
+        let node = mpo.add_tensor(node_name.clone(), t).unwrap();
+        nodes.push(node);
+
+        input_mapping.insert(
+            node_name.clone(),
+            IndexMapping {
+                true_index: true_site_indices[i].clone(),
+                internal_index: s_in_tmp[i].clone(),
+            },
+        );
+        output_mapping.insert(
+            node_name,
+            IndexMapping {
+                true_index: true_site_indices[i].clone(),
+                internal_index: s_out_tmp[i].clone(),
+            },
+        );
+    }
+
+    for i in 0..n.saturating_sub(1) {
+        mpo.connect(nodes[i], &bonds[i], nodes[i + 1], &bonds[i])
+            .unwrap();
+    }
+
+    Ok((mpo, input_mapping, output_mapping))
+}
+
+/// Create an all-ones MPO state (for x) with external indices (complex version).
+/// Returns (mpo, input_mapping, output_mapping).
+///
+/// Each local tensor has shape [external, s_out, s_in] and is filled with 1+0i.
+/// This provides a simple, deterministic x_true with the same index structure as
+/// `create_random_mpo_state_c64` / `create_identity_mpo_state_c64`.
+#[allow(clippy::type_complexity)]
+fn create_all_ones_mpo_state_c64(
+    n: usize,
+    phys_dim: usize,
+    true_site_indices: &[DynIndex],
+    used_ids: &mut HashSet<DynId>,
+) -> anyhow::Result<(
+    TreeTN<TensorDynLen, String>,
+    HashMap<String, IndexMapping<DynIndex>>,
+    HashMap<String, IndexMapping<DynIndex>>,
+)> {
+    anyhow::ensure!(true_site_indices.len() == n, "site index count mismatch");
+
+    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+
+    // MPO bonds: dim 1
+    let bonds: Vec<_> = (0..n.saturating_sub(1))
+        .map(|_| unique_dyn_index(used_ids, 1))
+        .collect();
+
+    // Internal indices (MPO-only)
+    let s_in_tmp: Vec<_> = (0..n)
+        .map(|_| unique_dyn_index(used_ids, phys_dim))
+        .collect();
+    let s_out_tmp: Vec<_> = (0..n)
+        .map(|_| unique_dyn_index(used_ids, phys_dim))
+        .collect();
+
+    let mut input_mapping: HashMap<String, IndexMapping<DynIndex>> = HashMap::new();
+    let mut output_mapping: HashMap<String, IndexMapping<DynIndex>> = HashMap::new();
+
+    let mut nodes = Vec::with_capacity(n);
+    for i in 0..n {
+        let node_name = make_node_name(i);
+        let indices = mpo_node_indices(n, i, &bonds, &s_out_tmp, &s_in_tmp);
+
+        // All-ones on (external, s_out, s_in)
+        let base_data = vec![Complex64::new(1.0, 0.0); phys_dim * phys_dim * phys_dim];
+        let base = TensorDynLen::from_dense_c64(
+            vec![
+                true_site_indices[i].clone(),
+                s_out_tmp[i].clone(),
+                s_in_tmp[i].clone(),
+            ],
+            base_data,
+        );
+
+        let t = if indices.len() == 2 {
+            base
+        } else {
+            let bond_indices = bond_indices(&indices);
+            let ones =
+                TensorDynLen::from_dense_c64(bond_indices, vec![Complex64::new(1.0, 0.0); 1]);
             TensorDynLen::outer_product(&base, &ones)?
         };
 
@@ -428,6 +586,80 @@ fn scale_treetn(
     }
 
     Ok(scaled)
+}
+
+fn print_operator_dense_matrix(
+    op: &TreeTN<TensorDynLen, String>,
+    s_out: &[DynIndex],
+    s_in: &[DynIndex],
+    label: &str,
+) -> anyhow::Result<()> {
+    let t = op.contract_to_tensor()?;
+    let external = t.external_indices();
+    let by_id: HashMap<DynId, DynIndex> = external.into_iter().map(|i| (*i.id(), i)).collect();
+
+    let mut desired_order = Vec::with_capacity(s_out.len() + s_in.len());
+    for idx in s_out.iter().chain(s_in.iter()) {
+        desired_order.push(
+            by_id
+                .get(idx.id())
+                .ok_or_else(|| anyhow::anyhow!("matrix print: index {:?} not found", idx.id()))?
+                .clone(),
+        );
+    }
+
+    let t = t.permuteinds(&desired_order)?;
+
+    let dim_out: usize = s_out.iter().map(|i| i.dim).product();
+    let dim_in: usize = s_in.iter().map(|i| i.dim).product();
+    let expected_len = dim_out
+        .checked_mul(dim_in)
+        .ok_or_else(|| anyhow::anyhow!("matrix print: dimension overflow"))?;
+
+    println!("{label} (dense matrix {dim_out}x{dim_in}):");
+    if t.is_complex() {
+        let data = t.to_vec_c64()?;
+        anyhow::ensure!(
+            data.len() == expected_len,
+            "matrix print: length mismatch (got {}, expected {})",
+            data.len(),
+            expected_len
+        );
+        for r in 0..dim_out {
+            print!("[");
+            for c in 0..dim_in {
+                let v = data[r * dim_in + c];
+                if c + 1 == dim_in {
+                    print!("{:+.6}{:+.6}i", v.re, v.im);
+                } else {
+                    print!("{:+.6}{:+.6}i, ", v.re, v.im);
+                }
+            }
+            println!("]");
+        }
+    } else {
+        let data = t.to_vec_f64()?;
+        anyhow::ensure!(
+            data.len() == expected_len,
+            "matrix print: length mismatch (got {}, expected {})",
+            data.len(),
+            expected_len
+        );
+        for r in 0..dim_out {
+            print!("[");
+            for c in 0..dim_in {
+                let v = data[r * dim_in + c];
+                if c + 1 == dim_in {
+                    print!("{:+.6}", v);
+                } else {
+                    print!("{:+.6}, ", v);
+                }
+            }
+            println!("]");
+        }
+    }
+
+    Ok(())
 }
 
 fn compute_residual(
@@ -573,8 +805,9 @@ fn compute_state_error(
     }
 }
 
+// Ensure the function is called in the main logic
 fn main() -> anyhow::Result<()> {
-    let n = 3usize;
+    let n = 2usize;
     let phys_dim = 2usize;
 
     println!("=== Test: linsolve with pure imaginary Pauli-X operator (i*X) ===");
@@ -594,25 +827,61 @@ fn main() -> anyhow::Result<()> {
         create_n_site_pauli_x_mpo_with_internal_indices(n, phys_dim, &mut used_ids)?;
     let (a_input_mapping_x, a_output_mapping_x) =
         create_index_mappings(&site_indices, &s_in_tmp_x, &s_out_tmp_x);
-    
+
     // Scale Pauli-X by i (pure imaginary)
     let imag_scalar = AnyScalar::C64(Complex64::new(0.0, 1.0));
     let operator_i_x = scale_treetn(&operator_x, imag_scalar.clone())?;
-    print_bond_dims(&operator_i_x, "A = i*X (pure imaginary * Pauli-X operator) bond dimensions");
+    print_bond_dims(
+        &operator_i_x,
+        "A = i*X (pure imaginary * Pauli-X operator) bond dimensions",
+    );
+    println!();
+
+    // Print dense matrix representation of A = i*X
+    print_operator_dense_matrix(&operator_i_x, &s_out_tmp_x, &s_in_tmp_x, "A = i*X")?;
     println!();
 
     // Test case 1: x = complex random MPO
     println!("=== Test case 1: A = i*X, x = complex random MPO ===");
     println!("Test setup: A = i*X (pure imaginary * Pauli-X operator), x = complex random MPO (state), b = A*x.");
     println!("Then solve (i*X)*x = b with init=x_true (exact solution).");
-    println!("This test demonstrates numerical instability: even when starting from the exact solution,");
+    println!(
+        "This test demonstrates numerical instability: even when starting from the exact solution,"
+    );
     println!("numerical errors can accumulate and cause the solution to diverge.");
     println!();
 
     // Create complex random MPO state x (the true solution)
     let (x_true_c64, _x_input_mapping_c64, _x_output_mapping_c64) =
         create_random_mpo_state_c64(n, phys_dim, &site_indices, &mut used_ids, 99999)?;
-    print_bond_dims(&x_true_c64, "x_true (complex random MPO state) bond dimensions");
+    print_bond_dims(
+        &x_true_c64,
+        "x_true (complex random MPO state) bond dimensions",
+    );
+
+    // Display the vector representation of x_true
+    let x_true_tensor = x_true_c64.contract_to_tensor()?;
+    let x_true_vec = x_true_tensor.to_vec_c64()?;
+
+    // Display x_true as matrix (n=2 sites with phys_dim=2 each gives 4x4 matrix)
+    println!(
+        "x_true as matrix ({phys_dim}^{n} x {phys_dim}^{n} = {} x {}):",
+        phys_dim.pow(n as u32),
+        phys_dim.pow(n as u32)
+    );
+    let dim_per_axis = phys_dim.pow(n as u32);
+    for r in 0..dim_per_axis {
+        print!("[");
+        for c in 0..dim_per_axis {
+            let v = x_true_vec[r * dim_per_axis + c];
+            if c + 1 == dim_per_axis {
+                print!("{:+.4}{:+.4}i", v.re, v.im);
+            } else {
+                print!("{:+.4}{:+.4}i, ", v.re, v.im);
+            }
+        }
+        println!("]");
+    }
     println!();
 
     // Compute b = (i*X) * x_true_c64
@@ -661,10 +930,16 @@ fn main() -> anyhow::Result<()> {
         &x,
         &b_tree,
     )?;
-    println!("    Initial residual: |(i*X)x - b| = {:.6e}, |(i*X)x - b| / |b| = {:.6e}", init_abs, init_rel);
+    println!(
+        "    Initial residual: |(i*X)x - b| = {:.6e}, |(i*X)x - b| / |b| = {:.6e}",
+        init_abs, init_rel
+    );
 
     let (init_abs_state, init_rel_state) = compute_state_error(&x, &x_true_c64)?;
-    println!("    Initial state error: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}", init_abs_state, init_rel_state);
+    println!(
+        "    Initial state error: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
+        init_abs_state, init_rel_state
+    );
 
     // Use more sweeps for complex case
     for sweep in 1..=n_sweeps {
@@ -682,6 +957,22 @@ fn main() -> anyhow::Result<()> {
             )?;
             let (_inter_abs_state, inter_rel_state) = compute_state_error(&x, &x_true_c64)?;
             println!("    After {sweep} sweeps: |(i*X)x - b| / |b| = {:.6e}, |x - x_true| / |x_true| = {:.6e}", inter_rel, inter_rel_state);
+        }
+        // Print residual after the first sweep
+        if sweep == 1 {
+            let (first_abs, first_rel) = compute_residual(
+                &operator_i_x,
+                &a_input_mapping_x,
+                &a_output_mapping_x,
+                0.0,
+                1.0,
+                &x,
+                &b_tree,
+            )?;
+            println!(
+                "    After 1 sweep: |(i*X)x - b| = {:.6e}, |(i*X)x - b| / |b| = {:.6e}",
+                first_abs, first_rel
+            );
         }
     }
 
@@ -708,8 +999,95 @@ fn main() -> anyhow::Result<()> {
     print_bond_dims(&x, "    x bond dimensions (final)");
     println!();
 
-    // Test case 2: A = i*X, x = I (identity operator as state MPO)
-    println!("=== Test case 2: A = i*X, x = I (identity operator as state MPO) ===");
+    // Test case 2: A = i*X, x = complex random MPO (same x_true_c64)
+    println!("=== Test case 2: A = i*X, x = complex random MPO (same as test case 1) ===");
+    println!("Test setup: A = i*X (pure imaginary * Pauli-X operator), x = complex random MPO (state), b = A*x.");
+    println!(
+        "This test uses the same x_true_c64 to verify consistency across different algorithms."
+    );
+    println!();
+
+    // Compute b = (i*X) * x_true_c64 (same x_true as test case 1)
+    let b_tree_2 = apply_linear_operator(&linop_i_x, &x_true_c64, ApplyOptions::default())?;
+    print_bond_dims(&b_tree_2, "b = (i*X)*x_true bond dimensions");
+    println!();
+
+    println!("--- Solving (i*X)*x = b with init=x_true (exact solution) ---");
+    let mut x_2 = x_true_c64.clone();
+    x_2 = x_2.canonicalize([center.clone()], CanonicalizationOptions::default())?;
+
+    let mut updater_2 = SquareLinsolveUpdater::with_index_mappings(
+        operator_i_x.clone(),
+        a_input_mapping_x.clone(),
+        a_output_mapping_x.clone(),
+        b_tree_2.clone(),
+        options.clone(),
+    );
+    let plan_2 = LocalUpdateSweepPlan::from_treetn(&x_2, &center, 2)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create 2-site sweep plan"))?;
+
+    let (init_abs_2, init_rel_2) = compute_residual(
+        &operator_i_x,
+        &a_input_mapping_x,
+        &a_output_mapping_x,
+        0.0,
+        1.0,
+        &x_2,
+        &b_tree_2,
+    )?;
+    println!(
+        "    Initial residual: |(i*X)x - b| = {:.6e}, |(i*X)x - b| / |b| = {:.6e}",
+        init_abs_2, init_rel_2
+    );
+
+    let (init_abs_state_2, init_rel_state_2) = compute_state_error(&x_2, &x_true_c64)?;
+    println!(
+        "    Initial state error: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
+        init_abs_state_2, init_rel_state_2
+    );
+
+    for sweep in 1..=n_sweeps {
+        apply_local_update_sweep(&mut x_2, &plan_2, &mut updater_2)?;
+        if sweep == 1 || sweep % 5 == 0 || sweep == n_sweeps {
+            let (_inter_abs, inter_rel) = compute_residual(
+                &operator_i_x,
+                &a_input_mapping_x,
+                &a_output_mapping_x,
+                0.0,
+                1.0,
+                &x_2,
+                &b_tree_2,
+            )?;
+            let (_inter_abs_state, inter_rel_state) = compute_state_error(&x_2, &x_true_c64)?;
+            println!("    After {sweep} sweeps: |(i*X)x - b| / |b| = {:.6e}, |x - x_true| / |x_true| = {:.6e}", inter_rel, inter_rel_state);
+        }
+    }
+
+    let (final_abs_2, final_rel_2) = compute_residual(
+        &operator_i_x,
+        &a_input_mapping_x,
+        &a_output_mapping_x,
+        0.0,
+        1.0,
+        &x_2,
+        &b_tree_2,
+    )?;
+    println!(
+        "    After {} sweeps: |(i*X)x - b| = {:.6e}, |(i*X)x - b| / |b| = {:.6e}",
+        n_sweeps, final_abs_2, final_rel_2
+    );
+
+    let (final_abs_state_2, final_rel_state_2) = compute_state_error(&x_2, &x_true_c64)?;
+    println!(
+        "    After {} sweeps: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
+        n_sweeps, final_abs_state_2, final_rel_state_2
+    );
+
+    print_bond_dims(&x_2, "    x bond dimensions (final)");
+    println!();
+
+    // Test case 3: A = i*X, x = I (identity operator as state MPO)
+    println!("=== Test case 3: A = i*X, x = I (identity operator as state MPO) ===");
     println!("Test setup: A = i*X (pure imaginary * Pauli-X operator), x = I (identity MPO state), b = (i*X)*I = i*X.");
     println!("Then solve (i*X)*x = b with init=I (identity operator).");
     println!("This test checks if the solver converges when x is the identity operator.");
@@ -718,18 +1096,23 @@ fn main() -> anyhow::Result<()> {
     // Create identity MPO state x (the true solution) - complex version
     let (x_true_identity, _x_input_mapping_identity, _x_output_mapping_identity) =
         create_identity_mpo_state_c64(n, phys_dim, &site_indices, &mut used_ids)?;
-    print_bond_dims(&x_true_identity, "x_true (identity MPO state) bond dimensions");
+    print_bond_dims(
+        &x_true_identity,
+        "x_true (identity MPO state) bond dimensions",
+    );
     println!();
 
     // Compute b = (i*X) * x_true_identity = (i*X) * I = i*X
-    let b_tree_identity = apply_linear_operator(&linop_i_x, &x_true_identity, ApplyOptions::default())?;
+    let b_tree_identity =
+        apply_linear_operator(&linop_i_x, &x_true_identity, ApplyOptions::default())?;
     print_bond_dims(&b_tree_identity, "b = (i*X)*I = i*X bond dimensions");
     println!();
 
     println!("--- Solving (i*X)*x = b with init=I (identity operator) ---");
     println!("    Initial value: x^(0) = I (identity operator)");
     let init_identity = x_true_identity.clone();
-    let mut x_identity = init_identity.canonicalize([center.clone()], CanonicalizationOptions::default())?;
+    let mut x_identity =
+        init_identity.canonicalize([center.clone()], CanonicalizationOptions::default())?;
 
     let mut updater_identity = SquareLinsolveUpdater::with_index_mappings(
         operator_i_x.clone(),
@@ -750,10 +1133,17 @@ fn main() -> anyhow::Result<()> {
         &x_identity,
         &b_tree_identity,
     )?;
-    println!("    Initial residual: |(i*X)x - b| = {:.6e}, |(i*X)x - b| / |b| = {:.6e}", init_abs_identity, init_rel_identity);
+    println!(
+        "    Initial residual: |(i*X)x - b| = {:.6e}, |(i*X)x - b| / |b| = {:.6e}",
+        init_abs_identity, init_rel_identity
+    );
 
-    let (init_abs_state_identity, init_rel_state_identity) = compute_state_error(&x_identity, &x_true_identity)?;
-    println!("    Initial state error: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}", init_abs_state_identity, init_rel_state_identity);
+    let (init_abs_state_identity, init_rel_state_identity) =
+        compute_state_error(&x_identity, &x_true_identity)?;
+    println!(
+        "    Initial state error: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
+        init_abs_state_identity, init_rel_state_identity
+    );
 
     // Use more sweeps for complex case
     for sweep in 1..=n_sweeps {
@@ -769,7 +1159,8 @@ fn main() -> anyhow::Result<()> {
                 &x_identity,
                 &b_tree_identity,
             )?;
-            let (_inter_abs_state, inter_rel_state) = compute_state_error(&x_identity, &x_true_identity)?;
+            let (_inter_abs_state, inter_rel_state) =
+                compute_state_error(&x_identity, &x_true_identity)?;
             println!("    After {sweep} sweeps: |(i*X)x - b| / |b| = {:.6e}, |x - x_true| / |x_true| = {:.6e}", inter_rel, inter_rel_state);
         }
     }
@@ -788,13 +1179,309 @@ fn main() -> anyhow::Result<()> {
         n_sweeps, final_abs_identity, final_rel_identity
     );
 
-    let (final_abs_state_identity, final_rel_state_identity) = compute_state_error(&x_identity, &x_true_identity)?;
+    let (final_abs_state_identity, final_rel_state_identity) =
+        compute_state_error(&x_identity, &x_true_identity)?;
     println!(
         "    After {} sweeps: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
         n_sweeps, final_abs_state_identity, final_rel_state_identity
     );
 
     print_bond_dims(&x_identity, "    x bond dimensions (final)");
+    println!();
+
+    // Test case: Scale Pauli-X by 2 (real scalar)
+    let real_scalar = AnyScalar::F64(2.0);
+    let operator_2_x = scale_treetn(&operator_x, real_scalar.clone())?;
+    print_bond_dims(
+        &operator_2_x,
+        "A = 2*X (real scalar * Pauli-X operator) bond dimensions",
+    );
+    println!();
+
+    // Print dense matrix representation of A = 2*X
+    print_operator_dense_matrix(&operator_2_x, &s_out_tmp_x, &s_in_tmp_x, "A = 2*X")?;
+    println!();
+
+    // Additional test setup for A = 2*X
+    println!("=== Test case: A = 2*X, x = complex random MPO ===");
+    println!("Test setup: A = 2*X (real scalar * Pauli-X operator), x = complex random MPO (state), b = A*x.");
+    println!("Then solve (2*X)*x = b with init=x_true (exact solution).\n");
+
+    // Compute b = (2*X) * x_true_c64
+    let linop_2_x = LinearOperator::new(
+        operator_2_x.clone(),
+        a_input_mapping_x.clone(),
+        a_output_mapping_x.clone(),
+    );
+    let b_tree_2_x = apply_linear_operator(&linop_2_x, &x_true_c64, ApplyOptions::default())?;
+    print_bond_dims(&b_tree_2_x, "b = (2*X)*x_true bond dimensions");
+    println!();
+
+    // Solve (2*X)*x = b with init=x_true
+    println!("--- Solving (2*X)*x = b with init=x_true (exact solution) ---");
+    let mut x_2_x = x_true_c64.clone();
+    // Canonicalize x_2_x before applying local update sweeps
+    x_2_x = x_2_x.canonicalize([center.clone()], CanonicalizationOptions::default())?;
+
+    let mut updater_2_x = SquareLinsolveUpdater::with_index_mappings(
+        operator_2_x.clone(),
+        a_input_mapping_x.clone(),
+        a_output_mapping_x.clone(),
+        b_tree_2_x.clone(),
+        options.clone(),
+    );
+    let plan_2_x = LocalUpdateSweepPlan::from_treetn(&x_2_x, &center, 2)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create 2-site sweep plan"))?;
+
+    let (init_abs_2_x, init_rel_2_x) = compute_residual(
+        &operator_2_x,
+        &a_input_mapping_x,
+        &a_output_mapping_x,
+        0.0,
+        1.0,
+        &x_2_x,
+        &b_tree_2_x,
+    )?;
+    println!(
+        "    Initial residual: |(2*X)x - b| = {:.6e}, |(2*X)x - b| / |b| = {:.6e}",
+        init_abs_2_x, init_rel_2_x
+    );
+
+    let (init_abs_state_2_x, init_rel_state_2_x) = compute_state_error(&x_2_x, &x_true_c64)?;
+    println!(
+        "    Initial state error: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
+        init_abs_state_2_x, init_rel_state_2_x
+    );
+
+    for sweep in 1..=n_sweeps {
+        apply_local_update_sweep(&mut x_2_x, &plan_2_x, &mut updater_2_x)?;
+        if sweep % 5 == 0 || sweep == n_sweeps {
+            let (_inter_abs, inter_rel) = compute_residual(
+                &operator_2_x,
+                &a_input_mapping_x,
+                &a_output_mapping_x,
+                0.0,
+                1.0,
+                &x_2_x,
+                &b_tree_2_x,
+            )?;
+            let (_inter_abs_state, inter_rel_state) = compute_state_error(&x_2_x, &x_true_c64)?;
+            println!("    After {sweep} sweeps: |(2*X)x - b| / |b| = {:.6e}, |x - x_true| / |x_true| = {:.6e}", inter_rel, inter_rel_state);
+        }
+    }
+
+    let (final_abs_2_x, final_rel_2_x) = compute_residual(
+        &operator_2_x,
+        &a_input_mapping_x,
+        &a_output_mapping_x,
+        0.0,
+        1.0,
+        &x_2_x,
+        &b_tree_2_x,
+    )?;
+    println!(
+        "    After {} sweeps: |(2*X)x - b| = {:.6e}, |(2*X)x - b| / |b| = {:.6e}",
+        n_sweeps, final_abs_2_x, final_rel_2_x
+    );
+
+    let (final_abs_state_2_x, final_rel_state_2_x) = compute_state_error(&x_2_x, &x_true_c64)?;
+    println!(
+        "    After {} sweeps: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
+        n_sweeps, final_abs_state_2_x, final_rel_state_2_x
+    );
+
+    print_bond_dims(&x_2_x, "    x bond dimensions (final)");
+    println!();
+
+    // Test case: A = 2*X, x_true = all-twos MPO state (2.0 * all-ones)
+    println!("=== Test case: A = 2*X, x_true = All-twos MPO state ===");
+    println!("Test setup: A = 2*X (real scalar * Pauli-X operator), x_true = all-twos MPO state (2.0 * all-ones), b = A*x_true.");
+    println!("Then solve (2*X)*x = b with init=x_true (exact solution).\n");
+
+    let (x_true_ones_state, _, _) =
+        create_all_ones_mpo_state_c64(n, phys_dim, &site_indices, &mut used_ids)?;
+    let x_true_twos_state = scale_treetn(&x_true_ones_state, AnyScalar::F64(2.0))?;
+    print_bond_dims(
+        &x_true_twos_state,
+        "x_true (all-twos MPO state) bond dimensions",
+    );
+    println!();
+
+    let b_tree_2_x_twos =
+        apply_linear_operator(&linop_2_x, &x_true_twos_state, ApplyOptions::default())?;
+    print_bond_dims(&b_tree_2_x_twos, "b = (2*X)*x_true_twos bond dimensions");
+    println!();
+
+    println!("--- Solving (2*X)*x = b with init=x_true (all-twos MPO state) ---");
+    let mut x_2_x_twos = x_true_twos_state.clone();
+    x_2_x_twos = x_2_x_twos.canonicalize([center.clone()], CanonicalizationOptions::default())?;
+
+    let mut updater_2_x_twos = SquareLinsolveUpdater::with_index_mappings(
+        operator_2_x.clone(),
+        a_input_mapping_x.clone(),
+        a_output_mapping_x.clone(),
+        b_tree_2_x_twos.clone(),
+        options.clone(),
+    );
+    let plan_2_x_twos = LocalUpdateSweepPlan::from_treetn(&x_2_x_twos, &center, 2)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create 2-site sweep plan"))?;
+
+    let (init_abs_2_x_twos, init_rel_2_x_twos) = compute_residual(
+        &operator_2_x,
+        &a_input_mapping_x,
+        &a_output_mapping_x,
+        0.0,
+        1.0,
+        &x_2_x_twos,
+        &b_tree_2_x_twos,
+    )?;
+    println!(
+        "    Initial residual: |(2*X)x - b| = {:.6e}, |(2*X)x - b| / |b| = {:.6e}",
+        init_abs_2_x_twos, init_rel_2_x_twos
+    );
+
+    let (init_abs_state_2_x_twos, init_rel_state_2_x_twos) =
+        compute_state_error(&x_2_x_twos, &x_true_twos_state)?;
+    println!(
+        "    Initial state error: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
+        init_abs_state_2_x_twos, init_rel_state_2_x_twos
+    );
+
+    for sweep in 1..=n_sweeps {
+        apply_local_update_sweep(&mut x_2_x_twos, &plan_2_x_twos, &mut updater_2_x_twos)?;
+        if sweep == 1 || sweep % 5 == 0 || sweep == n_sweeps {
+            let (_inter_abs, inter_rel) = compute_residual(
+                &operator_2_x,
+                &a_input_mapping_x,
+                &a_output_mapping_x,
+                0.0,
+                1.0,
+                &x_2_x_twos,
+                &b_tree_2_x_twos,
+            )?;
+            let (_inter_abs_state, inter_rel_state) =
+                compute_state_error(&x_2_x_twos, &x_true_twos_state)?;
+            println!("    After {sweep} sweeps: |(2*X)x - b| / |b| = {:.6e}, |x - x_true| / |x_true| = {:.6e}", inter_rel, inter_rel_state);
+        }
+    }
+
+    let (final_abs_2_x_twos, final_rel_2_x_twos) = compute_residual(
+        &operator_2_x,
+        &a_input_mapping_x,
+        &a_output_mapping_x,
+        0.0,
+        1.0,
+        &x_2_x_twos,
+        &b_tree_2_x_twos,
+    )?;
+    println!(
+        "    After {} sweeps: |(2*X)x - b| = {:.6e}, |(2*X)x - b| / |b| = {:.6e}",
+        n_sweeps, final_abs_2_x_twos, final_rel_2_x_twos
+    );
+
+    let (final_abs_state_2_x_twos, final_rel_state_2_x_twos) =
+        compute_state_error(&x_2_x_twos, &x_true_twos_state)?;
+    println!(
+        "    After {} sweeps: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
+        n_sweeps, final_abs_state_2_x_twos, final_rel_state_2_x_twos
+    );
+
+    print_bond_dims(&x_2_x_twos, "    x bond dimensions (final)");
+    println!();
+
+    // Test case: A = 2*X, x_true = all-pure imaginary i MPO state (i * all-ones)
+    println!("=== Test case: A = 2*X, x_true = All-pure imaginary i MPO state ===");
+    println!("Test setup: A = 2*X (real scalar * Pauli-X operator), x_true = all-pure imaginary i MPO state (i * all-ones), b = A*x_true.");
+    println!("Then solve (2*X)*x = b with init=x_true (exact solution).\n");
+
+    let imag_i = AnyScalar::C64(Complex64::new(0.0, 1.0));
+    let x_true_imag_state = scale_treetn(&x_true_ones_state, imag_i)?;
+    print_bond_dims(
+        &x_true_imag_state,
+        "x_true (all-pure imaginary i MPO state) bond dimensions",
+    );
+    println!();
+
+    let b_tree_2_x_imag =
+        apply_linear_operator(&linop_2_x, &x_true_imag_state, ApplyOptions::default())?;
+    print_bond_dims(&b_tree_2_x_imag, "b = (2*X)*x_true_imag bond dimensions");
+    println!();
+
+    println!("--- Solving (2*X)*x = b with init=x_true (all-pure imaginary i MPO state) ---");
+    let mut x_2_x_imag = x_true_imag_state.clone();
+    x_2_x_imag = x_2_x_imag.canonicalize([center.clone()], CanonicalizationOptions::default())?;
+
+    let mut updater_2_x_imag = SquareLinsolveUpdater::with_index_mappings(
+        operator_2_x.clone(),
+        a_input_mapping_x.clone(),
+        a_output_mapping_x.clone(),
+        b_tree_2_x_imag.clone(),
+        options.clone(),
+    );
+    let plan_2_x_imag = LocalUpdateSweepPlan::from_treetn(&x_2_x_imag, &center, 2)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create 2-site sweep plan"))?;
+
+    let (init_abs_2_x_imag, init_rel_2_x_imag) = compute_residual(
+        &operator_2_x,
+        &a_input_mapping_x,
+        &a_output_mapping_x,
+        0.0,
+        1.0,
+        &x_2_x_imag,
+        &b_tree_2_x_imag,
+    )?;
+    println!(
+        "    Initial residual: |(2*X)x - b| = {:.6e}, |(2*X)x - b| / |b| = {:.6e}",
+        init_abs_2_x_imag, init_rel_2_x_imag
+    );
+
+    let (init_abs_state_2_x_imag, init_rel_state_2_x_imag) =
+        compute_state_error(&x_2_x_imag, &x_true_imag_state)?;
+    println!(
+        "    Initial state error: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
+        init_abs_state_2_x_imag, init_rel_state_2_x_imag
+    );
+
+    for sweep in 1..=n_sweeps {
+        apply_local_update_sweep(&mut x_2_x_imag, &plan_2_x_imag, &mut updater_2_x_imag)?;
+        if sweep == 1 || sweep % 5 == 0 || sweep == n_sweeps {
+            let (_inter_abs, inter_rel) = compute_residual(
+                &operator_2_x,
+                &a_input_mapping_x,
+                &a_output_mapping_x,
+                0.0,
+                1.0,
+                &x_2_x_imag,
+                &b_tree_2_x_imag,
+            )?;
+            let (_inter_abs_state, inter_rel_state) =
+                compute_state_error(&x_2_x_imag, &x_true_imag_state)?;
+            println!("    After {sweep} sweeps: |(2*X)x - b| / |b| = {:.6e}, |x - x_true| / |x_true| = {:.6e}", inter_rel, inter_rel_state);
+        }
+    }
+
+    let (final_abs_2_x_imag, final_rel_2_x_imag) = compute_residual(
+        &operator_2_x,
+        &a_input_mapping_x,
+        &a_output_mapping_x,
+        0.0,
+        1.0,
+        &x_2_x_imag,
+        &b_tree_2_x_imag,
+    )?;
+    println!(
+        "    After {} sweeps: |(2*X)x - b| = {:.6e}, |(2*X)x - b| / |b| = {:.6e}",
+        n_sweeps, final_abs_2_x_imag, final_rel_2_x_imag
+    );
+
+    let (final_abs_state_2_x_imag, final_rel_state_2_x_imag) =
+        compute_state_error(&x_2_x_imag, &x_true_imag_state)?;
+    println!(
+        "    After {} sweeps: |x - x_true| = {:.6e}, |x - x_true| / |x_true| = {:.6e}",
+        n_sweeps, final_abs_state_2_x_imag, final_rel_state_2_x_imag
+    );
+
+    print_bond_dims(&x_2_x_imag, "    x bond dimensions (final)");
     println!();
 
     println!("=== All tests completed ===");
