@@ -357,8 +357,8 @@ mod tests {
             TensorDynLen::from_dense_f64(vec![i0.clone(), i1.clone()], vec![1.0, 0.0, 0.0, 1.0]);
 
         let mut nodes: HashMap<String, Vec<<DynIndex as IndexLike>::Id>> = HashMap::new();
-        nodes.insert("node0".to_string(), vec![i0.id().clone()]);
-        nodes.insert("node1".to_string(), vec![i0.id().clone()]); // duplicate on purpose
+        nodes.insert("node0".to_string(), vec![*i0.id()]);
+        nodes.insert("node1".to_string(), vec![*i0.id()]); // duplicate on purpose
 
         let topo = TreeTopology::new(nodes, vec![("node0".to_string(), "node1".to_string())]);
 

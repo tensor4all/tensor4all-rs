@@ -184,7 +184,7 @@ fn contract_treetn_to_vector(
 
     // Build mapping from our site index order to tensor index order
     let mut site_to_tensor: Vec<usize> = Vec::with_capacity(r);
-    for (i, site_idx) in site_indices.iter().enumerate() {
+    for site_idx in site_indices.iter() {
         let pos = idx_to_pos
             .get(&site_idx.id().clone())
             .expect("Site index not found in contracted tensor");

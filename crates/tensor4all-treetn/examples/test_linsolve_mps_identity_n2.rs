@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorDynLen};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
     IndexMapping, LinearOperator, LinsolveOptions, LocalUpdateSweepPlan, SquareLinsolveUpdater,
@@ -152,63 +152,6 @@ fn create_random_mps_chain_with_sites_imag_c64(
     }
 
     Ok(mps)
-}
-
-fn create_all_ones_mps_chain_c64(
-    n: usize,
-    bond_dim: usize,
-    sites: &[DynIndex],
-    used_ids: &mut HashSet<DynId>,
-) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
-    anyhow::ensure!(sites.len() == n, "sites.len() must equal n");
-    let mut mps = TreeTN::<TensorDynLen, String>::new();
-    let bonds: Vec<_> = (0..n.saturating_sub(1))
-        .map(|_| unique_dyn_index(used_ids, bond_dim))
-        .collect();
-
-    let mut nodes = Vec::with_capacity(n);
-    for i in 0..n {
-        let indices = if n == 1 {
-            vec![sites[i].clone()]
-        } else if i == 0 {
-            vec![sites[i].clone(), bonds[i].clone()]
-        } else if i + 1 == n {
-            vec![bonds[i - 1].clone(), sites[i].clone()]
-        } else {
-            vec![bonds[i - 1].clone(), sites[i].clone(), bonds[i].clone()]
-        };
-
-        let nelem: usize = indices.iter().map(|idx| idx.dim()).product();
-        let data = vec![num_complex::Complex64::new(1.0, 0.0); nelem];
-        let t = TensorDynLen::from_dense_c64(indices, data);
-        let node = mps.add_tensor(make_node_name(i), t).unwrap();
-        nodes.push(node);
-    }
-
-    for i in 0..n.saturating_sub(1) {
-        mps.connect(nodes[i], &bonds[i], nodes[i + 1], &bonds[i])?;
-    }
-
-    Ok(mps)
-}
-
-fn multiply_treetn_by_scalar(
-    t: &mut TreeTN<TensorDynLen, String>,
-    s: num_complex::Complex64,
-) -> anyhow::Result<()> {
-    // multiply first node's tensor by scalar s (scales whole state)
-    if let Some(name) = t.node_names().first().cloned() {
-        let idx = t.node_index(&name).unwrap();
-        let tensor = t.tensor(idx).unwrap().clone();
-        let inds = tensor.external_indices();
-        let mut data = tensor.to_vec_c64()?;
-        for v in data.iter_mut() {
-            *v *= s;
-        }
-        let newt = TensorDynLen::from_dense_c64(inds, data);
-        t.replace_tensor(idx, newt)?;
-    }
-    Ok(())
 }
 
 fn create_identity_mpo_with_internal_indices(
@@ -388,7 +331,7 @@ fn run_case(phys_dim: usize) -> anyhow::Result<()> {
     }
 
     // --- Now test with real random MPS (stored as Complex64 with zero imaginary parts) ---
-    println!("");
+    println!();
     println!(
         "=== Test: identity MPO A, real-random MPS (Complex64 imag=0), n=2, phys_dim={} ===",
         phys_dim
@@ -435,7 +378,7 @@ fn run_case(phys_dim: usize) -> anyhow::Result<()> {
     }
 
     // --- Fifth test: x_true all-pure-imaginary ---
-    println!("");
+    println!();
     println!(
         "=== Test: identity MPO A, pure-imaginary MPS (Complex64 imag!=0, real=0), n=2, phys_dim={} ===",
         phys_dim
