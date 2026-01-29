@@ -95,13 +95,14 @@ impl<V: Clone + Hash + Eq, I: Clone + Eq> TreeTopology<V, I> {
 pub fn factorize_tensor_to_treetn<T, V>(
     tensor: &T,
     topology: &TreeTopology<V, <T::Index as IndexLike>::Id>,
+    root: &V,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
-    factorize_tensor_to_treetn_with(tensor, topology, FactorizeOptions::qr())
+    factorize_tensor_to_treetn_with(tensor, topology, FactorizeOptions::qr(), root)
 }
 
 /// Factorize a dense tensor into a TreeTN using specified factorization options.
@@ -132,6 +133,21 @@ pub fn factorize_tensor_to_treetn_with<T, V>(
     tensor: &T,
     topology: &TreeTopology<V, <T::Index as IndexLike>::Id>,
     options: FactorizeOptions,
+    root: &V,
+) -> Result<TreeTN<T, V>>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+{
+    factorize_tensor_to_treetn_with_root_impl(tensor, topology, options, root)
+}
+
+fn factorize_tensor_to_treetn_with_root_impl<T, V>(
+    tensor: &T,
+    topology: &TreeTopology<V, <T::Index as IndexLike>::Id>,
+    options: FactorizeOptions,
+    root: &V,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
@@ -145,8 +161,12 @@ where
     if topology.nodes.len() == 1 {
         // Single node - just wrap the tensor
         let node_name = topology.nodes.keys().next().unwrap().clone();
+        if &node_name != root {
+            return Err(anyhow::anyhow!("Requested root node not found in topology"));
+        }
         let mut tn = TreeTN::<T, V>::new();
-        tn.add_tensor(node_name, tensor.clone())?;
+        tn.add_tensor(node_name.clone(), tensor.clone())?;
+        tn.set_canonical_center([node_name])?;
         return Ok(tn);
     }
 
@@ -195,19 +215,11 @@ where
         neighbors.sort();
     }
 
-    // Choose root as the node with highest degree
-    // Use min() to ensure deterministic selection when multiple nodes have the same degree
-    let root = adj
-        .iter()
-        .max_by(|(node_a, neighbors_a), (node_b, neighbors_b)| {
-            // First compare by degree, then by node name (ascending) for tie-breaking
-            neighbors_a
-                .len()
-                .cmp(&neighbors_b.len())
-                .then_with(|| node_b.cmp(node_a)) // Prefer smaller node name
-        })
-        .map(|(node, _)| node.clone())
-        .ok_or_else(|| anyhow::anyhow!("Cannot find root node"))?;
+    // Root is required. This ensures the norm-carrying tensor (the final `S*Vh` in
+    // a left-canonical decomposition) ends up on a caller-chosen node.
+    if !adj.contains_key(root) {
+        return Err(anyhow::anyhow!("Requested root node not found in topology"));
+    }
 
     // Build traversal order using BFS from root
     let mut traversal_order: Vec<(V, Option<V>)> = Vec::new(); // (node, parent)
@@ -301,7 +313,9 @@ where
         .map(|name| node_tensors.get(name).cloned().unwrap())
         .collect();
 
-    TreeTN::from_tensors(tensors, node_names)
+    let mut tn = TreeTN::from_tensors(tensors, node_names)?;
+    tn.set_canonical_center([root.clone()])?;
+    Ok(tn)
 }
 
 #[cfg(test)]
@@ -362,7 +376,12 @@ mod tests {
 
         let topo = TreeTopology::new(nodes, vec![("node0".to_string(), "node1".to_string())]);
 
-        let result = factorize_tensor_to_treetn_with(&tensor, &topo, FactorizeOptions::qr());
+        let result = factorize_tensor_to_treetn_with(
+            &tensor,
+            &topo,
+            FactorizeOptions::qr(),
+            &"node0".to_string(),
+        );
         assert!(result.is_err());
     }
 }
