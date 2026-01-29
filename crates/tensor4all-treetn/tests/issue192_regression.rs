@@ -8,11 +8,14 @@ use tensor4all_treetn::{
     TruncationOptions,
 };
 
+type MpsWithSiteIndices = (TreeTN<TensorDynLen, String>, Vec<DynIndex>);
+type MpoWithInternalIndices = (TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>);
+
 fn create_n_site_ones_mps(
     n_sites: usize,
     phys_dim: usize,
     bond_dim: usize,
-) -> anyhow::Result<(TreeTN<TensorDynLen, String>, Vec<DynIndex>)> {
+) -> anyhow::Result<MpsWithSiteIndices> {
     anyhow::ensure!(n_sites >= 2, "Need at least 2 sites");
 
     let mut mps = TreeTN::<TensorDynLen, String>::new();
@@ -64,7 +67,7 @@ fn create_n_site_ones_mps(
 fn create_identity_chain_mpo_with_internal_indices(
     n_sites: usize,
     phys_dim: usize,
-) -> anyhow::Result<(TreeTN<TensorDynLen, String>, Vec<DynIndex>, Vec<DynIndex>)> {
+) -> anyhow::Result<MpoWithInternalIndices> {
     anyhow::ensure!(n_sites >= 2, "Need at least 2 sites");
 
     let mut mpo = TreeTN::<TensorDynLen, String>::new();
