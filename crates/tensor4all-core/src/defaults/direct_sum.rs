@@ -378,20 +378,17 @@ fn direct_sum_c64(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defaults::{DynId, TagSet};
-
-    type TestIndex = Index<DynId, TagSet>;
 
     #[test]
     fn test_direct_sum_simple() {
         // Create two tensors with one common index
-        let i = TestIndex::new_dyn(2);
-        let j = TestIndex::new_dyn(3);
-        let k = TestIndex::new_dyn(4);
+        let i = DynIndex::new_dyn(2);
+        let j = DynIndex::new_dyn(3);
+        let k = DynIndex::new_dyn(4);
 
         // A[i, j] - 2x3 tensor
         let a = TensorDynLen::new(
-            vec![Index::new(i.id, i.dim()), Index::new(j.id, j.dim())],
+            vec![i.clone(), j.clone()],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                 vec![
                     1.0, 2.0, 3.0, // i=0
@@ -403,7 +400,7 @@ mod tests {
 
         // B[i, k] - 2x4 tensor
         let b = TensorDynLen::new(
-            vec![Index::new(i.id, i.dim()), Index::new(k.id, k.dim())],
+            vec![i.clone(), k.clone()],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                 vec![
                     10.0, 20.0, 30.0, 40.0, // i=0
@@ -414,9 +411,7 @@ mod tests {
         );
 
         // Direct sum along (j, k)
-        let j_idx: DynIndex = Index::new(j.id, j.dim());
-        let k_idx: DynIndex = Index::new(k.id, k.dim());
-        let (result, new_indices) = direct_sum(&a, &b, &[(j_idx, k_idx)]).unwrap();
+        let (result, new_indices) = direct_sum(&a, &b, &[(j.clone(), k.clone())]).unwrap();
 
         // Result should be 2x7 (common i, merged j+k)
         assert_eq!(result.dims().len(), 2);
@@ -453,14 +448,14 @@ mod tests {
     #[test]
     fn test_direct_sum_multiple_pairs() {
         // Create tensors with two indices to be paired
-        let i = TestIndex::new_dyn(2);
-        let j = TestIndex::new_dyn(2);
-        let k = TestIndex::new_dyn(3);
-        let l = TestIndex::new_dyn(3);
+        let i = DynIndex::new_dyn(2);
+        let j = DynIndex::new_dyn(2);
+        let k = DynIndex::new_dyn(3);
+        let l = DynIndex::new_dyn(3);
 
         // A[i, j] - 2x2 tensor
         let a = TensorDynLen::new(
-            vec![Index::new(i.id, i.dim()), Index::new(j.id, j.dim())],
+            vec![i.clone(), j.clone()],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                 vec![1.0, 2.0, 3.0, 4.0],
                 &[2, 2],
@@ -469,7 +464,7 @@ mod tests {
 
         // B[k, l] - 3x3 tensor (no common indices)
         let b = TensorDynLen::new(
-            vec![Index::new(k.id, k.dim()), Index::new(l.id, l.dim())],
+            vec![k.clone(), l.clone()],
             Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                 vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0],
                 &[3, 3],
@@ -477,11 +472,8 @@ mod tests {
         );
 
         // Direct sum along (i, k) and (j, l)
-        let i_idx: DynIndex = Index::new(i.id, i.dim());
-        let j_idx: DynIndex = Index::new(j.id, j.dim());
-        let k_idx: DynIndex = Index::new(k.id, k.dim());
-        let l_idx: DynIndex = Index::new(l.id, l.dim());
-        let (result, new_indices) = direct_sum(&a, &b, &[(i_idx, k_idx), (j_idx, l_idx)]).unwrap();
+        let (result, new_indices) =
+            direct_sum(&a, &b, &[(i.clone(), k.clone()), (j.clone(), l.clone())]).unwrap();
 
         // Result should be 5x5 (2+3, 2+3)
         assert_eq!(result.dims().len(), 2);
