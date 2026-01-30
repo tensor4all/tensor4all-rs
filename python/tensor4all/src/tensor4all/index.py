@@ -11,7 +11,7 @@ class Index:
 
     An Index represents one dimension of a tensor and has:
     - A dimension (size)
-    - A unique 128-bit ID
+    - A unique 64-bit ID (compatible with ITensors.jl)
     - Optional tags (string labels like "Site", "n=1")
 
     Examples
@@ -31,7 +31,7 @@ class Index:
         dim: int,
         *,
         tags: str = "",
-        id: tuple[int, int] | None = None,
+        id: int | None = None,
     ):
         """Create a new Index.
 
@@ -41,8 +41,8 @@ class Index:
             The dimension (size) of the index. Must be > 0.
         tags : str, optional
             Comma-separated tags, e.g., "Site,n=1". Default is no tags.
-        id : tuple[int, int], optional
-            128-bit ID as (high_64_bits, low_64_bits). If None, a random ID is generated.
+        id : int, optional
+            64-bit ID (compatible with ITensors.jl's UInt64). If None, a random ID is generated.
 
         Raises
         ------
@@ -57,9 +57,8 @@ class Index:
         lib = get_lib()
 
         if id is not None:
-            id_hi, id_lo = id
             tags_bytes = tags.encode("utf-8") if tags else ffi.NULL
-            ptr = lib.t4a_index_new_with_id(dim, id_hi, id_lo, tags_bytes)
+            ptr = lib.t4a_index_new_with_id(dim, id, tags_bytes)
         elif tags:
             tags_bytes = tags.encode("utf-8")
             ptr = lib.t4a_index_new_with_tags(dim, tags_bytes)
@@ -94,14 +93,14 @@ class Index:
         return f"Index(dim={self.dim})"
 
     def __eq__(self, other: object) -> bool:
-        """Two indices are equal if they have the same ID."""
+        """Two indices are equal if they have the same ID and tags."""
         if not isinstance(other, Index):
             return NotImplemented
-        return self.id == other.id
+        return self.id == other.id and self.tags == other.tags
 
     def __hash__(self) -> int:
-        """Hash based on ID."""
-        return hash(self.id)
+        """Hash based on ID and tags."""
+        return hash((self.id, self.tags))
 
     @property
     def dim(self) -> int:
@@ -113,14 +112,13 @@ class Index:
         return out[0]
 
     @property
-    def id(self) -> tuple[int, int]:
-        """Get the 128-bit ID as (high_64_bits, low_64_bits)."""
+    def id(self) -> int:
+        """Get the 64-bit ID (compatible with ITensors.jl's UInt64)."""
         lib = get_lib()
-        out_hi = ffi.new("uint64_t*")
-        out_lo = ffi.new("uint64_t*")
-        status = lib.t4a_index_id_u128(self._ptr, out_hi, out_lo)
+        out_id = ffi.new("uint64_t*")
+        status = lib.t4a_index_id(self._ptr, out_id)
         check_status(status, "Failed to get index ID")
-        return (out_hi[0], out_lo[0])
+        return out_id[0]
 
     @property
     def tags(self) -> str:

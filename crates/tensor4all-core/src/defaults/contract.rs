@@ -762,7 +762,7 @@ mod tests {
     use crate::defaults::Index;
     use num_complex::Complex64;
 
-    fn make_test_tensor(shape: &[usize], ids: &[u128]) -> TensorDynLen {
+    fn make_test_tensor(shape: &[usize], ids: &[u64]) -> TensorDynLen {
         let indices: Vec<DynIndex> = ids
             .iter()
             .zip(shape.iter())
@@ -1232,7 +1232,7 @@ mod tests {
     // contract_connected tests
     // ========================================================================
 
-    fn make_dense_tensor(shape: &[usize], ids: &[u128]) -> TensorDynLen {
+    fn make_dense_tensor(shape: &[usize], ids: &[u64]) -> TensorDynLen {
         let indices: Vec<DynIndex> = ids
             .iter()
             .zip(shape.iter())

@@ -23,12 +23,11 @@ class TestIndexBasic:
 
     def test_create_with_id(self):
         """Test creating an index with explicit ID."""
-        id_hi = 0x12345678_9ABCDEF0
-        id_lo = 0xFEDCBA98_76543210
-        idx = Index(7, id=(id_hi, id_lo), tags="Custom")
+        index_id = 0x12345678_9ABCDEF0
+        idx = Index(7, id=index_id, tags="Custom")
 
         assert idx.dim == 7
-        assert idx.id == (id_hi, id_lo)
+        assert idx.id == index_id
         assert idx.has_tag("Custom")
 
     def test_invalid_dim(self):

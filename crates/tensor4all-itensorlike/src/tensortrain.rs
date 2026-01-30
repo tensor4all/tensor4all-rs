@@ -823,7 +823,7 @@ mod tests {
     }
 
     /// Helper to create a DynIndex
-    fn idx(id: u128, size: usize) -> DynIndex {
+    fn idx(id: u64, size: usize) -> DynIndex {
         Index::new_with_size(DynId(id), size)
     }
 

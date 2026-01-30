@@ -19,7 +19,7 @@ j = Index(3; tags="Site,n=1")
 
 # Access properties
 dim(i)   # dimension
-id(i)    # unique ID (UInt128)
+id(i)    # unique ID (UInt64)
 tags(i)  # tags as comma-separated string
 ```
 
@@ -77,12 +77,12 @@ ITensors.jl's `Index{Int}` (no quantum number symmetry).
 
 - `Index(dim::Integer)` - Create index with dimension
 - `Index(dim::Integer; tags::AbstractString)` - Create with tags
-- `Index(dim::Integer, id::UInt128; tags::AbstractString)` - Create with specific ID
+- `Index(dim::Integer, id::UInt64; tags::AbstractString)` - Create with specific ID
 
 # Properties
 
 - `dim(i::Index)` - Get the dimension
-- `id(i::Index)` - Get the unique ID as UInt128
+- `id(i::Index)` - Get the unique ID as UInt64
 - `tags(i::Index)` - Get tags as comma-separated string
 - `hastag(i::Index, tag::AbstractString)` - Check if index has a tag
 """
@@ -112,11 +112,9 @@ function Index(dim::Integer; tags::AbstractString="")
     return Index(ptr)
 end
 
-function Index(dim::Integer, id::UInt128; tags::AbstractString="")
+function Index(dim::Integer, id::UInt64; tags::AbstractString="")
     dim > 0 || throw(ArgumentError("Index dimension must be positive, got $dim"))
-    id_hi = UInt64(id >> 64)
-    id_lo = UInt64(id & 0xFFFFFFFFFFFFFFFF)
-    ptr = C_API.t4a_index_new_with_id(dim, id_hi, id_lo, tags)
+    ptr = C_API.t4a_index_new_with_id(dim, id, tags)
     return Index(ptr)
 end
 
@@ -134,16 +132,15 @@ function dim(i::Index)
 end
 
 """
-    id(i::Index) -> UInt128
+    id(i::Index) -> UInt64
 
 Get the unique ID of an index.
 """
 function id(i::Index)
-    hi = Ref{UInt64}(0)
-    lo = Ref{UInt64}(0)
-    status = C_API.t4a_index_id_u128(i.ptr, hi, lo)
+    out_id = Ref{UInt64}(0)
+    status = C_API.t4a_index_id(i.ptr, out_id)
     C_API.check_status(status)
-    return (UInt128(hi[]) << 64) | UInt128(lo[])
+    return out_id[]
 end
 
 """
@@ -186,7 +183,8 @@ function Base.show(io::IO, i::Index)
     d = dim(i)
     t = tags(i)
     id_val = id(i)
-    id_short = string(id_val, base=16)[end-7:end]  # Last 8 hex digits
+    id_hex = string(id_val, base=16)
+    id_short = length(id_hex) >= 8 ? id_hex[end-7:end] : id_hex  # Last 8 hex digits
     if isempty(t)
         print(io, "(dim=$d|id=...$id_short)")
     else
@@ -216,13 +214,13 @@ function Base.deepcopy(i::Index)
     return Index(ptr)
 end
 
-# Equality based on ID (same as Rust side)
+# Equality based on ID + tags (matching ITensors.jl semantics with plev=0)
 function Base.:(==)(i1::Index, i2::Index)
-    return id(i1) == id(i2)
+    return id(i1) == id(i2) && tags(i1) == tags(i2)
 end
 
 function Base.hash(i::Index, h::UInt)
-    return hash(id(i), h)
+    return hash(tags(i), hash(id(i), h))
 end
 
 # ============================================================================
@@ -364,7 +362,7 @@ A predicate type for checking if an object has common indices with a given set.
 Used internally by `hascommoninds(is)` curried form.
 """
 struct HasCommonIndsPredicate
-    target_ids::Set{UInt128}
+    target_ids::Set{UInt64}
 end
 
 function (p::HasCommonIndsPredicate)(x)

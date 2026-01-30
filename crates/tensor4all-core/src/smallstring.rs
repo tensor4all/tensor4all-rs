@@ -5,7 +5,7 @@
 /// - `char`: Full Unicode code point (4 bytes), supports all Unicode characters
 ///
 /// Default is `u16` for memory efficiency and ITensors.jl compatibility.
-pub trait SmallChar: Copy + Default + Ord + Eq + std::fmt::Debug {
+pub trait SmallChar: Copy + Default + Ord + Eq + std::hash::Hash + std::fmt::Debug {
     /// The null/zero value for this character type.
     const ZERO: Self;
 
@@ -181,6 +181,12 @@ impl<const MAX_LEN: usize, C: SmallChar> PartialEq for SmallString<MAX_LEN, C> {
 }
 
 impl<const MAX_LEN: usize, C: SmallChar> Eq for SmallString<MAX_LEN, C> {}
+
+impl<const MAX_LEN: usize, C: SmallChar> std::hash::Hash for SmallString<MAX_LEN, C> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.data[..self.len].hash(state);
+    }
+}
 
 impl<const MAX_LEN: usize, C: SmallChar> PartialOrd for SmallString<MAX_LEN, C> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {

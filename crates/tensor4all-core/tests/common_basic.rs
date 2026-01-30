@@ -32,8 +32,8 @@ fn test_index_with_custom_id() {
 
 #[test]
 fn test_index_size() {
-    // With Arc<TagSet>, Index is now only 32 bytes (16 + 8 + 8)
-    assert_eq!(std::mem::size_of::<Index<DynId>>(), 32);
+    // With u64 DynId and Arc<TagSet>, Index is 24 bytes (8 + 8 + 8)
+    assert_eq!(std::mem::size_of::<Index<DynId>>(), 24);
 }
 
 #[test]

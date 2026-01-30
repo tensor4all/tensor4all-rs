@@ -28,14 +28,14 @@ ffi.cdef("""
     // Lifecycle
     t4a_index* t4a_index_new(size_t dim);
     t4a_index* t4a_index_new_with_tags(size_t dim, const char* tags_csv);
-    t4a_index* t4a_index_new_with_id(size_t dim, uint64_t id_hi, uint64_t id_lo, const char* tags_csv);
+    t4a_index* t4a_index_new_with_id(size_t dim, uint64_t id, const char* tags_csv);
     void t4a_index_release(t4a_index* ptr);
     t4a_index* t4a_index_clone(const t4a_index* ptr);
     int t4a_index_is_assigned(const t4a_index* ptr);
 
     // Accessors
     StatusCode t4a_index_dim(const t4a_index* ptr, size_t* out_dim);
-    StatusCode t4a_index_id_u128(const t4a_index* ptr, uint64_t* out_hi, uint64_t* out_lo);
+    StatusCode t4a_index_id(const t4a_index* ptr, uint64_t* out_id);
     StatusCode t4a_index_get_tags(const t4a_index* ptr, uint8_t* buf, size_t buf_len, size_t* out_len);
     int t4a_index_has_tag(const t4a_index* ptr, const char* tag);
 

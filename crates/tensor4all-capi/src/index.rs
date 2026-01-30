@@ -79,8 +79,7 @@ pub extern "C" fn t4a_index_new_with_tags(dim: usize, tags_csv: *const c_char) -
 ///
 /// # Arguments
 /// * `dim` - The dimension of the index (must be > 0)
-/// * `id_hi` - Upper 64 bits of the 128-bit ID
-/// * `id_lo` - Lower 64 bits of the 128-bit ID
+/// * `id` - The 64-bit ID (compatible with ITensors.jl's `IDType = UInt64`)
 /// * `tags_csv` - Comma-separated tags (e.g., "Site,n=1"), or null for no tags
 ///
 /// # Returns
@@ -88,8 +87,7 @@ pub extern "C" fn t4a_index_new_with_tags(dim: usize, tags_csv: *const c_char) -
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_index_new_with_id(
     dim: usize,
-    id_hi: u64,
-    id_lo: u64,
+    id: u64,
     tags_csv: *const c_char,
 ) -> *mut t4a_index {
     if dim == 0 {
@@ -98,8 +96,6 @@ pub extern "C" fn t4a_index_new_with_id(
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         use tensor4all_core::index::{DynId, TagSet};
-
-        let id = ((id_hi as u128) << 64) | (id_lo as u128);
 
         let tags = if tags_csv.is_null() {
             TagSet::new()
@@ -149,30 +145,25 @@ pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> S
     result.unwrap_or(T4A_INTERNAL_ERROR)
 }
 
-/// Get the 128-bit ID of an index as two 64-bit values
+/// Get the 64-bit ID of an index
+///
+/// Compatible with ITensors.jl's `IDType = UInt64`.
 ///
 /// # Arguments
 /// * `ptr` - Pointer to the index
-/// * `out_hi` - Output pointer for upper 64 bits
-/// * `out_lo` - Output pointer for lower 64 bits
+/// * `out_id` - Output pointer for the ID
 ///
 /// # Returns
 /// Status code (T4A_SUCCESS or error code)
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_index_id_u128(
-    ptr: *const t4a_index,
-    out_hi: *mut u64,
-    out_lo: *mut u64,
-) -> StatusCode {
-    if ptr.is_null() || out_hi.is_null() || out_lo.is_null() {
+pub extern "C" fn t4a_index_id(ptr: *const t4a_index, out_id: *mut u64) -> StatusCode {
+    if ptr.is_null() || out_id.is_null() {
         return T4A_NULL_POINTER;
     }
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let index = &*ptr;
-        let id = index.inner().id.0;
-        *out_hi = (id >> 64) as u64;
-        *out_lo = id as u64;
+        *out_id = index.inner().id.0;
         T4A_SUCCESS
     }));
 
@@ -425,13 +416,12 @@ mod tests {
         let idx = t4a_index_new(4);
         assert!(!idx.is_null());
 
-        let mut hi: u64 = 0;
-        let mut lo: u64 = 0;
-        let status = t4a_index_id_u128(idx, &mut hi, &mut lo);
+        let mut id: u64 = 0;
+        let status = t4a_index_id(idx, &mut id);
         assert_eq!(status, T4A_SUCCESS);
 
         // ID should be non-zero (random)
-        assert!(hi != 0 || lo != 0);
+        assert_ne!(id, 0);
 
         t4a_index_release(idx);
     }
@@ -452,12 +442,10 @@ mod tests {
         assert_eq!(dim1, dim2);
 
         // Both should have same ID
-        let (mut hi1, mut lo1) = (0u64, 0u64);
-        let (mut hi2, mut lo2) = (0u64, 0u64);
-        t4a_index_id_u128(idx, &mut hi1, &mut lo1);
-        t4a_index_id_u128(cloned, &mut hi2, &mut lo2);
-        assert_eq!(hi1, hi2);
-        assert_eq!(lo1, lo2);
+        let (mut id1, mut id2) = (0u64, 0u64);
+        t4a_index_id(idx, &mut id1);
+        t4a_index_id(cloned, &mut id2);
+        assert_eq!(id1, id2);
 
         t4a_index_release(idx);
         t4a_index_release(cloned);
@@ -465,18 +453,16 @@ mod tests {
 
     #[test]
     fn test_index_new_with_id() {
-        let id_hi: u64 = 0x12345678_9ABCDEF0;
-        let id_lo: u64 = 0xFEDCBA98_76543210;
+        let id: u64 = 0x12345678_9ABCDEF0;
         let tags = CString::new("Custom").unwrap();
 
-        let idx = t4a_index_new_with_id(7, id_hi, id_lo, tags.as_ptr());
+        let idx = t4a_index_new_with_id(7, id, tags.as_ptr());
         assert!(!idx.is_null());
 
         // Verify ID
-        let (mut hi, mut lo) = (0u64, 0u64);
-        t4a_index_id_u128(idx, &mut hi, &mut lo);
-        assert_eq!(hi, id_hi);
-        assert_eq!(lo, id_lo);
+        let mut out_id: u64 = 0;
+        t4a_index_id(idx, &mut out_id);
+        assert_eq!(out_id, id);
 
         // Verify dimension
         let mut dim: usize = 0;

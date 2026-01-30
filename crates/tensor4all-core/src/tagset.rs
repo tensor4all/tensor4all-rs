@@ -350,6 +350,14 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> Eq
 {
 }
 
+impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar> std::hash::Hash
+    for TagSet<MAX_TAGS, MAX_TAG_LEN, C>
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.tags[..self.length].hash(state);
+    }
+}
+
 /// Default tag type (max 16 characters, u16 storage, matching ITensors.jl's `SmallString`).
 pub type Tag = SmallString<16>;
 
