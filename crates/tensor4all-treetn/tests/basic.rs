@@ -429,6 +429,85 @@ fn test_clear_canonical_region() {
 }
 
 // ============================================================================
+// add_to/remove_from_canonical_region Tests
+// ============================================================================
+
+#[test]
+fn test_add_to_canonical_region() {
+    let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
+
+    let i = DynIndex::new_dyn(2);
+    let tensor = TensorDynLen::from_dense_f64(vec![i], vec![0.0; 2]);
+    let node = tn.add_tensor_auto_name(tensor);
+
+    // Add valid node to canonical region
+    tn.add_to_canonical_region(node).unwrap();
+    assert!(tn.is_canonicalized());
+    assert!(tn.canonical_region().contains(&node));
+}
+
+#[test]
+fn test_add_to_canonical_region_invalid_node() {
+    let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
+
+    let invalid_node = NodeIndex::new(999);
+    let result = tn.add_to_canonical_region(invalid_node);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_remove_from_canonical_region() {
+    let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
+
+    let i = DynIndex::new_dyn(2);
+    let tensor = TensorDynLen::from_dense_f64(vec![i], vec![0.0; 2]);
+    let node = tn.add_tensor_auto_name(tensor);
+
+    tn.set_canonical_region(vec![node]).unwrap();
+    assert!(tn.canonical_region().contains(&node));
+
+    // Remove existing node
+    let removed = tn.remove_from_canonical_region(&node);
+    assert!(removed);
+    assert!(!tn.canonical_region().contains(&node));
+
+    // Remove non-existing node
+    let removed = tn.remove_from_canonical_region(&node);
+    assert!(!removed);
+}
+
+// ============================================================================
+// Debug / Clone Tests
+// ============================================================================
+
+#[test]
+fn test_treetn_debug_format() {
+    let (tn, _n1, _n2, _edge, _phys1, _bond, _phys2) = create_two_node_treetn();
+    let debug_str = format!("{:?}", tn);
+    assert!(debug_str.contains("TreeTN"));
+    assert!(debug_str.contains("node_count"));
+    assert!(debug_str.contains("canonical_region"));
+}
+
+// ============================================================================
+// Log Norm - Multi-site Canonical Region Path
+// ============================================================================
+
+#[test]
+fn test_log_norm_already_canonicalized_single_site() {
+    let (mut tn, n1, _n2, _edge, _phys1, _bond, _phys2) = create_two_node_treetn();
+
+    // Canonicalize to single site with Unitary form
+    tn = tn
+        .canonicalize([n1], CanonicalizationOptions::default())
+        .unwrap();
+    assert!(tn.is_canonicalized());
+
+    let log_norm = tn.log_norm().unwrap();
+    assert!(log_norm.is_finite());
+}
+
+// ============================================================================
 // Validate Ortho Consistency Tests
 // ============================================================================
 

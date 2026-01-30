@@ -1327,6 +1327,28 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_local_update_sweep_multi_node_canonical_region() {
+        // Test that apply_local_update_sweep fails when canonical_region has multiple nodes
+        let mut tn = create_chain_treetn();
+
+        // Manually set canonical_region to two nodes (A and B)
+        tn.set_canonical_region(["A".to_string(), "B".to_string()])
+            .unwrap();
+
+        let plan = LocalUpdateSweepPlan::from_treetn(&tn, &"B".to_string(), 2).unwrap();
+        let mut updater = TruncateUpdater::new(Some(2), None);
+
+        let result = apply_local_update_sweep(&mut tn, &plan, &mut updater);
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("single node"),
+            "Unexpected error message: {}",
+            err_msg
+        );
+    }
+
+    #[test]
     fn test_sweep_plan_from_treetn() {
         let tn = create_chain_treetn();
 
