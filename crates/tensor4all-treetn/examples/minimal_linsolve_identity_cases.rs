@@ -268,7 +268,7 @@ fn case_ok_identity_single_1site_step() -> anyhow::Result<()> {
     let subtree = x.extract_subtree(&step.nodes)?;
     let updated_subtree = updater.update(subtree, &step, &x)?;
     x.replace_subtree(&step.nodes, &updated_subtree)?;
-    x.set_canonical_center([step.new_center.clone()])?;
+    x.set_canonical_region([step.new_center.clone()])?;
     updater.after_step(&step, &x)?;
 
     println!("OK case succeeded (identity MPO, single 1-site update).");

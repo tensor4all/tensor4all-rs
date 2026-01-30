@@ -140,7 +140,7 @@ impl TensorTrain {
         // When llim + 2 == rlim, ortho center is at llim + 1
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < tt.len() as i32 {
             let center = (llim + 1) as usize;
-            tt.inner.set_canonical_center(vec![center]).map_err(|e| {
+            tt.inner.set_canonical_region(vec![center]).map_err(|e| {
                 TensorTrainError::InvalidStructure {
                     message: format!("Failed to set ortho region: {}", e),
                 }
@@ -194,10 +194,10 @@ impl TensorTrain {
         let rlim = self.rlim();
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < self.len() as i32 {
             let center = (llim + 1) as usize;
-            let _ = self.inner.set_canonical_center(vec![center]);
+            let _ = self.inner.set_canonical_region(vec![center]);
         } else {
             // Clear ortho region if not a single center
-            let _ = self.inner.set_canonical_center(Vec::<usize>::new());
+            let _ = self.inner.set_canonical_region(Vec::<usize>::new());
         }
     }
 
@@ -208,10 +208,10 @@ impl TensorTrain {
         let llim = self.llim();
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < self.len() as i32 {
             let center = (llim + 1) as usize;
-            let _ = self.inner.set_canonical_center(vec![center]);
+            let _ = self.inner.set_canonical_region(vec![center]);
         } else {
             // Clear ortho region if not a single center
-            let _ = self.inner.set_canonical_center(Vec::<usize>::new());
+            let _ = self.inner.set_canonical_region(Vec::<usize>::new());
         }
     }
 
@@ -233,7 +233,7 @@ impl TensorTrain {
     /// Returns true if there is exactly one site that is not guaranteed to be orthogonal.
     #[inline]
     pub fn isortho(&self) -> bool {
-        self.inner.canonical_center().len() == 1
+        self.inner.canonical_region().len() == 1
     }
 
     /// Get the orthogonality center (0-indexed).
@@ -241,7 +241,7 @@ impl TensorTrain {
     /// Returns `Some(site)` if the tensor train has a single orthogonality center,
     /// `None` otherwise.
     pub fn orthocenter(&self) -> Option<usize> {
-        let region = self.inner.canonical_center();
+        let region = self.inner.canonical_region();
         if region.len() == 1 {
             // Node name IS the site index since V = usize
             Some(*region.iter().next().unwrap())
@@ -468,7 +468,7 @@ impl TensorTrain {
         let node_idx = self.inner.node_index(&site).expect("Site out of bounds");
         let _ = self.inner.replace_tensor(node_idx, tensor);
         // Invalidate orthogonality
-        let _ = self.inner.set_canonical_center(Vec::<usize>::new());
+        let _ = self.inner.set_canonical_region(Vec::<usize>::new());
     }
 
     /// Orthogonalize the tensor train to have orthogonality center at the given site.

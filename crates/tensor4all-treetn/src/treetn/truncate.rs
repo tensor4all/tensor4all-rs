@@ -56,7 +56,7 @@ where
     /// ```
     pub fn truncate(
         mut self,
-        canonical_center: impl IntoIterator<Item = V>,
+        canonical_region: impl IntoIterator<Item = V>,
         options: TruncationOptions,
     ) -> Result<Self>
     where
@@ -64,7 +64,7 @@ where
         <T::Index as IndexLike>::Id: Ord,
     {
         self.truncate_impl(
-            canonical_center,
+            canonical_region,
             options.form,
             options.truncation.rtol,
             options.truncation.max_rank,
@@ -78,7 +78,7 @@ where
     /// This is the `&mut self` version of [`Self::truncate`].
     pub fn truncate_mut(
         &mut self,
-        canonical_center: impl IntoIterator<Item = V>,
+        canonical_region: impl IntoIterator<Item = V>,
         options: TruncationOptions,
     ) -> Result<()>
     where
@@ -86,7 +86,7 @@ where
         <T::Index as IndexLike>::Id: Ord,
     {
         self.truncate_impl(
-            canonical_center,
+            canonical_region,
             options.form,
             options.truncation.rtol,
             options.truncation.max_rank,
@@ -99,7 +99,7 @@ where
     /// Uses LocalUpdateSweepPlan with TruncateUpdater for full two-site sweeps.
     pub(crate) fn truncate_impl(
         &mut self,
-        canonical_center: impl IntoIterator<Item = V>,
+        canonical_region: impl IntoIterator<Item = V>,
         form: CanonicalForm,
         rtol: Option<f64>,
         max_rank: Option<usize>,
@@ -110,7 +110,7 @@ where
         <T::Index as IndexLike>::Id: Ord,
     {
         // Collect center nodes
-        let center_nodes: HashSet<V> = canonical_center.into_iter().collect();
+        let center_nodes: HashSet<V> = canonical_region.into_iter().collect();
 
         if center_nodes.is_empty() {
             return Ok(()); // Nothing to do

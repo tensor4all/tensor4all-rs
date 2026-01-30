@@ -554,7 +554,7 @@ where
 
         // Set ortho_towards
         subtree.set_ortho_towards(&new_bond, Some(step.new_center.clone()));
-        subtree.set_canonical_center([step.new_center.clone()])?;
+        subtree.set_canonical_region([step.new_center.clone()])?;
 
         Ok(subtree)
     }

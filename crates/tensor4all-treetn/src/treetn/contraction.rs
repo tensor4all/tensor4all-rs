@@ -497,7 +497,7 @@ where
 
         // Set canonical center (only if it exists in result)
         if result.node_index(center).is_some() {
-            result.set_canonical_center(std::iter::once(center.clone()))?;
+            result.set_canonical_region(std::iter::once(center.clone()))?;
         }
         if enable_profiling {
             timings.push(("Build result TreeTN", t0.elapsed()));
@@ -598,7 +598,7 @@ where
 
             let mut result = TreeTN::new();
             result.add_tensor(node_name.clone(), contracted)?;
-            result.set_canonical_center(std::iter::once(center.clone()))?;
+            result.set_canonical_region(std::iter::once(center.clone()))?;
             return Ok(result);
         }
 
@@ -806,7 +806,7 @@ where
 
         // 11. Set canonical center
         if result.node_index(center).is_some() {
-            result.set_canonical_center(std::iter::once(center.clone()))?;
+            result.set_canonical_region(std::iter::once(center.clone()))?;
         }
 
         Ok(result)
@@ -862,43 +862,43 @@ where
         T::contract(&[&tensor1, &tensor2], AllowedPairs::All)
     }
 
-    /// Validate that `canonical_center` and edge `ortho_towards` are consistent.
+    /// Validate that `canonical_region` and edge `ortho_towards` are consistent.
     ///
     /// Rules:
-    /// - If `canonical_center` is empty (not canonicalized), all indices must have `ortho_towards == None`.
-    /// - If `canonical_center` is non-empty:
+    /// - If `canonical_region` is empty (not canonicalized), all indices must have `ortho_towards == None`.
+    /// - If `canonical_region` is non-empty:
     ///   - It must form a connected subtree
     ///   - All edges from outside the center region must have `ortho_towards` pointing towards the center
     ///   - Edges entirely inside the center region may have `ortho_towards == None`
     pub fn validate_ortho_consistency(&self) -> Result<()> {
         // If not canonicalized, require no ortho_towards at all
-        if self.canonical_center.is_empty() {
+        if self.canonical_region.is_empty() {
             if !self.ortho_towards.is_empty() {
                 return Err(anyhow::anyhow!(
-                    "Found {} ortho_towards entries but canonical_center is empty",
+                    "Found {} ortho_towards entries but canonical_region is empty",
                     self.ortho_towards.len()
                 ))
                 .context(
-                    "validate_ortho_consistency: canonical_center empty implies no ortho_towards",
+                    "validate_ortho_consistency: canonical_region empty implies no ortho_towards",
                 );
             }
             return Ok(());
         }
 
-        // Validate all canonical_center nodes exist and convert to NodeIndex
+        // Validate all canonical_region nodes exist and convert to NodeIndex
         let mut center_indices = HashSet::new();
-        for c in &self.canonical_center {
+        for c in &self.canonical_region {
             let idx = self
                 .graph
                 .node_index(c)
-                .ok_or_else(|| anyhow::anyhow!("canonical_center node {:?} does not exist", c))?;
+                .ok_or_else(|| anyhow::anyhow!("canonical_region node {:?} does not exist", c))?;
             center_indices.insert(idx);
         }
 
-        // Check canonical_center connectivity
+        // Check canonical_region connectivity
         if !self.site_index_network.is_connected_subset(&center_indices) {
-            return Err(anyhow::anyhow!("canonical_center is not connected")).context(
-                "validate_ortho_consistency: canonical_center must form a connected subtree",
+            return Err(anyhow::anyhow!("canonical_region is not connected")).context(
+                "validate_ortho_consistency: canonical_region must form a connected subtree",
             );
         }
 
@@ -970,9 +970,9 @@ where
 
         for idx in self.ortho_towards.keys() {
             if bond_indices.contains(idx) && !expected_directions.contains_key(idx) {
-                // This is a bond inside the canonical_center - should not have ortho_towards
+                // This is a bond inside the canonical_region - should not have ortho_towards
                 return Err(anyhow::anyhow!(
-                    "Unexpected ortho_towards for bond {:?} (inside canonical_center)",
+                    "Unexpected ortho_towards for bond {:?} (inside canonical_region)",
                     idx
                 ))
                 .context(
