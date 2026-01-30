@@ -346,9 +346,9 @@ where
 ///
 /// # Errors
 /// Returns an error if:
-/// - TreeTN is not canonicalized (canonical_center is empty)
-/// - canonical_center is not a single node
-/// - canonical_center is not within the extracted subtree
+/// - TreeTN is not canonicalized (canonical_region is empty)
+/// - canonical_region is not a single node
+/// - canonical_region is not within the extracted subtree
 /// - Subtree extraction fails
 /// - The updater returns an error
 /// - Subtree replacement fails
@@ -364,31 +364,31 @@ where
     U: LocalUpdater<T, V>,
 {
     for step in plan.iter() {
-        // Validate: canonical_center must be a single node within the step's nodes
-        let canonical_center = treetn.canonical_center();
-        if canonical_center.is_empty() {
+        // Validate: canonical_region must be a single node within the step's nodes
+        let canonical_region = treetn.canonical_region();
+        if canonical_region.is_empty() {
             return Err(anyhow::anyhow!(
-                "TreeTN is not canonicalized: canonical_center is empty"
+                "TreeTN is not canonicalized: canonical_region is empty"
             ))
             .context("apply_local_update_sweep: TreeTN must be canonicalized before sweep");
         }
-        if canonical_center.len() != 1 {
+        if canonical_region.len() != 1 {
             return Err(anyhow::anyhow!(
-                "canonical_center must be a single node, got {} nodes",
-                canonical_center.len()
+                "canonical_region must be a single node, got {} nodes",
+                canonical_region.len()
             ))
-            .context("apply_local_update_sweep: canonical_center must be a single node");
+            .context("apply_local_update_sweep: canonical_region must be a single node");
         }
-        let center_node = canonical_center.iter().next().unwrap();
+        let center_node = canonical_region.iter().next().unwrap();
         let step_nodes_set: HashSet<V> = step.nodes.iter().cloned().collect();
         if !step_nodes_set.contains(center_node) {
             return Err(anyhow::anyhow!(
-                "canonical_center {:?} is not within the extracted subtree {:?}",
+                "canonical_region {:?} is not within the extracted subtree {:?}",
                 center_node,
                 step.nodes
             ))
             .context(
-                "apply_local_update_sweep: canonical_center must be within extracted subtree",
+                "apply_local_update_sweep: canonical_region must be within extracted subtree",
             );
         }
 
@@ -406,7 +406,7 @@ where
         treetn.replace_subtree(&step.nodes, &updated_subtree)?;
 
         // Update canonical center
-        treetn.set_canonical_center([step.new_center.clone()])?;
+        treetn.set_canonical_region([step.new_center.clone()])?;
 
         updater
             .after_step(step, treetn)
@@ -542,7 +542,7 @@ where
         subtree.set_ortho_towards(&new_bond, Some(step.new_center.clone()));
 
         // Set canonical center to the new center
-        subtree.set_canonical_center([step.new_center.clone()])?;
+        subtree.set_canonical_region([step.new_center.clone()])?;
 
         Ok(subtree)
     }
@@ -574,7 +574,7 @@ where
     /// - Bond indices between included nodes are preserved
     /// - Bond indices to excluded nodes become external (site) indices in the sub-tree
     /// - ortho_towards directions are copied for edges within the sub-tree
-    /// - canonical_center is intersected with the extracted nodes
+    /// - canonical_region is intersected with the extracted nodes
     pub fn extract_subtree(&self, node_names: &[V]) -> Result<Self>
     where
         <T::Index as IndexLike>::Id:
@@ -686,16 +686,16 @@ where
             }
         }
 
-        // Step 3: Set canonical_center to intersection with extracted nodes
+        // Step 3: Set canonical_region to intersection with extracted nodes
         let new_center: HashSet<V> = self
-            .canonical_center
+            .canonical_region
             .intersection(&node_name_set)
             .cloned()
             .collect();
-        subtree.canonical_center = new_center;
+        subtree.canonical_region = new_center;
 
         // Copy canonical_form if any center nodes were included
-        if !subtree.canonical_center.is_empty() {
+        if !subtree.canonical_region.is_empty() {
             subtree.canonical_form = self.canonical_form;
         }
 
@@ -842,13 +842,13 @@ where
                 })?;
         }
 
-        // Update canonical_center: remove old nodes, add from replacement
+        // Update canonical_region: remove old nodes, add from replacement
         for name in node_names {
-            self.canonical_center.remove(name);
+            self.canonical_region.remove(name);
         }
-        for name in &replacement.canonical_center {
+        for name in &replacement.canonical_region {
             if node_name_set.contains(name) {
-                self.canonical_center.insert(name.clone());
+                self.canonical_region.insert(name.clone());
             }
         }
 
@@ -1320,7 +1320,29 @@ mod tests {
         assert!(result.is_err());
         let err_msg = format!("{:?}", result.unwrap_err());
         assert!(
-            err_msg.contains("not canonicalized") || err_msg.contains("canonical_center is empty"),
+            err_msg.contains("not canonicalized") || err_msg.contains("canonical_region is empty"),
+            "Unexpected error message: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_apply_local_update_sweep_multi_node_canonical_region() {
+        // Test that apply_local_update_sweep fails when canonical_region has multiple nodes
+        let mut tn = create_chain_treetn();
+
+        // Manually set canonical_region to two nodes (A and B)
+        tn.set_canonical_region(["A".to_string(), "B".to_string()])
+            .unwrap();
+
+        let plan = LocalUpdateSweepPlan::from_treetn(&tn, &"B".to_string(), 2).unwrap();
+        let mut updater = TruncateUpdater::new(Some(2), None);
+
+        let result = apply_local_update_sweep(&mut tn, &plan, &mut updater);
+        assert!(result.is_err());
+        let err_msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            err_msg.contains("single node"),
             "Unexpected error message: {}",
             err_msg
         );

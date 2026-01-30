@@ -38,7 +38,7 @@ where
     fn clone(&self) -> Self {
         Self {
             graph: self.graph.clone(),
-            canonical_center: self.canonical_center.clone(),
+            canonical_region: self.canonical_region.clone(),
             canonical_form: self.canonical_form,
             site_index_network: self.site_index_network.clone(),
             link_index_network: self.link_index_network.clone(),
@@ -60,7 +60,7 @@ where
         f.debug_struct("TreeTN")
             .field("node_count", &self.node_count())
             .field("edge_count", &self.edge_count())
-            .field("canonical_center", &self.canonical_center)
+            .field("canonical_region", &self.canonical_region)
             .finish_non_exhaustive()
     }
 }
@@ -107,12 +107,12 @@ where
         // Determine the single center site (by name)
         let center_name: V =
             if self.is_canonicalized() && self.canonical_form() == Some(CanonicalForm::Unitary) {
-                if self.canonical_center.len() == 1 {
+                if self.canonical_region.len() == 1 {
                     // Already Unitary canonicalized to single site - use it
-                    self.canonical_center.iter().next().unwrap().clone()
+                    self.canonical_region.iter().next().unwrap().clone()
                 } else {
                     // Unitary canonicalized to multiple sites - canonicalize to min site
-                    let min_center = self.canonical_center.iter().min().unwrap().clone();
+                    let min_center = self.canonical_region.iter().min().unwrap().clone();
                     self.canonicalize_mut(
                         std::iter::once(min_center.clone()),
                         CanonicalizationOptions::default(),

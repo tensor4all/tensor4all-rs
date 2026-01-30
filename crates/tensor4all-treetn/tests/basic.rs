@@ -381,14 +381,14 @@ fn test_treetn_validate_tree_empty() {
 // ============================================================================
 
 #[test]
-fn test_canonical_center_empty() {
+fn test_canonical_region_empty() {
     let tn = TreeTN::<TensorDynLen, NodeIndex>::new();
     assert!(!tn.is_canonicalized());
-    assert!(tn.canonical_center().is_empty());
+    assert!(tn.canonical_region().is_empty());
 }
 
 #[test]
-fn test_set_canonical_center() {
+fn test_set_canonical_region() {
     let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
 
     let i = DynIndex::new_dyn(2);
@@ -397,35 +397,114 @@ fn test_set_canonical_center() {
 
     assert!(!tn.is_canonicalized());
 
-    let result = tn.set_canonical_center(vec![node]);
+    let result = tn.set_canonical_region(vec![node]);
     assert!(result.is_ok());
     assert!(tn.is_canonicalized());
-    assert!(tn.canonical_center().contains(&node));
+    assert!(tn.canonical_region().contains(&node));
 }
 
 #[test]
-fn test_set_canonical_center_invalid_node() {
+fn test_set_canonical_region_invalid_node() {
     let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
 
     let invalid_node = NodeIndex::new(999);
-    let result = tn.set_canonical_center(vec![invalid_node]);
+    let result = tn.set_canonical_region(vec![invalid_node]);
     assert!(result.is_err());
 }
 
 #[test]
-fn test_clear_canonical_center() {
+fn test_clear_canonical_region() {
     let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
 
     let i = DynIndex::new_dyn(2);
     let tensor = TensorDynLen::from_dense_f64(vec![i], vec![0.0; 2]);
     let node = tn.add_tensor_auto_name(tensor);
 
-    tn.set_canonical_center(vec![node]).unwrap();
+    tn.set_canonical_region(vec![node]).unwrap();
     assert!(tn.is_canonicalized());
 
-    tn.clear_canonical_center();
+    tn.clear_canonical_region();
     assert!(!tn.is_canonicalized());
-    assert!(tn.canonical_center().is_empty());
+    assert!(tn.canonical_region().is_empty());
+}
+
+// ============================================================================
+// add_to/remove_from_canonical_region Tests
+// ============================================================================
+
+#[test]
+fn test_add_to_canonical_region() {
+    let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
+
+    let i = DynIndex::new_dyn(2);
+    let tensor = TensorDynLen::from_dense_f64(vec![i], vec![0.0; 2]);
+    let node = tn.add_tensor_auto_name(tensor);
+
+    // Add valid node to canonical region
+    tn.add_to_canonical_region(node).unwrap();
+    assert!(tn.is_canonicalized());
+    assert!(tn.canonical_region().contains(&node));
+}
+
+#[test]
+fn test_add_to_canonical_region_invalid_node() {
+    let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
+
+    let invalid_node = NodeIndex::new(999);
+    let result = tn.add_to_canonical_region(invalid_node);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_remove_from_canonical_region() {
+    let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
+
+    let i = DynIndex::new_dyn(2);
+    let tensor = TensorDynLen::from_dense_f64(vec![i], vec![0.0; 2]);
+    let node = tn.add_tensor_auto_name(tensor);
+
+    tn.set_canonical_region(vec![node]).unwrap();
+    assert!(tn.canonical_region().contains(&node));
+
+    // Remove existing node
+    let removed = tn.remove_from_canonical_region(&node);
+    assert!(removed);
+    assert!(!tn.canonical_region().contains(&node));
+
+    // Remove non-existing node
+    let removed = tn.remove_from_canonical_region(&node);
+    assert!(!removed);
+}
+
+// ============================================================================
+// Debug / Clone Tests
+// ============================================================================
+
+#[test]
+fn test_treetn_debug_format() {
+    let (tn, _n1, _n2, _edge, _phys1, _bond, _phys2) = create_two_node_treetn();
+    let debug_str = format!("{:?}", tn);
+    assert!(debug_str.contains("TreeTN"));
+    assert!(debug_str.contains("node_count"));
+    assert!(debug_str.contains("canonical_region"));
+}
+
+// ============================================================================
+// Log Norm - Multi-site Canonical Region Path
+// ============================================================================
+
+#[test]
+fn test_log_norm_already_canonicalized_single_site() {
+    let (mut tn, n1, _n2, _edge, _phys1, _bond, _phys2) = create_two_node_treetn();
+
+    // Canonicalize to single site with Unitary form
+    tn = tn
+        .canonicalize([n1], CanonicalizationOptions::default())
+        .unwrap();
+    assert!(tn.is_canonicalized());
+
+    let log_norm = tn.log_norm().unwrap();
+    assert!(log_norm.is_finite());
 }
 
 // ============================================================================
@@ -446,7 +525,7 @@ fn test_validate_ortho_consistency_disconnected_centers() {
     let n2 = tn.add_tensor_auto_name(tensor2);
 
     // Two centers that are not connected should fail
-    tn.set_canonical_center(vec![n1, n2]).unwrap();
+    tn.set_canonical_region(vec![n1, n2]).unwrap();
     assert!(tn.validate_ortho_consistency().is_err());
 }
 
@@ -455,7 +534,7 @@ fn test_validate_ortho_consistency_none_only_inside_centers() {
     let (mut tn, _node1, node2, edge, _phys1, _bond, _phys2) = create_two_node_treetn();
 
     // Only node2 is center
-    tn.set_canonical_center(vec![node2]).unwrap();
+    tn.set_canonical_region(vec![node2]).unwrap();
 
     // Clear ortho_towards on a boundary edge (should be forbidden)
     tn.set_edge_ortho_towards(edge, None).unwrap();
@@ -467,7 +546,7 @@ fn test_validate_ortho_consistency_chain_pointing_towards_center() {
     let (mut tn, _n1, n2, _n3, e12, e23, _b12, _b23) = create_three_node_chain();
 
     // n2 is center
-    tn.set_canonical_center(vec![n2]).unwrap();
+    tn.set_canonical_region(vec![n2]).unwrap();
 
     // Both boundary edges must point into center
     tn.set_edge_ortho_towards(e12, Some(n2)).unwrap();
@@ -504,7 +583,7 @@ fn test_canonicalize_simple() {
         .unwrap();
 
     assert!(tn_canon.is_canonicalized());
-    assert!(tn_canon.canonical_center().contains(&n2));
+    assert!(tn_canon.canonical_region().contains(&n2));
     assert!(tn_canon.validate_ortho_consistency().is_ok());
 }
 
@@ -2034,7 +2113,7 @@ fn test_zipup_accumulated_single_node() {
     assert!(
         result_tensor.external_indices().is_empty() || result_tensor.external_indices().len() == 2
     );
-    assert!(result.canonical_center().contains(&"X".to_string()));
+    assert!(result.canonical_region().contains(&"X".to_string()));
 }
 
 /// Test 2-node chain contraction
@@ -2057,7 +2136,7 @@ fn test_zipup_accumulated_two_node_chain() {
     assert!(result.node_index(&"A".to_string()).is_some());
     assert!(result.node_index(&"B".to_string()).is_some());
     // Check canonical center is set
-    assert!(result.canonical_center().contains(&"B".to_string()));
+    assert!(result.canonical_region().contains(&"B".to_string()));
 }
 
 /// Test 3-node chain contraction
@@ -2126,7 +2205,7 @@ fn test_zipup_accumulated_three_node_chain() {
         .unwrap();
 
     assert_eq!(result.node_count(), 3);
-    assert!(result.canonical_center().contains(&"C".to_string()));
+    assert!(result.canonical_region().contains(&"C".to_string()));
 }
 
 /// Test star topology (multiple leaves connected to root)
@@ -2227,5 +2306,5 @@ fn test_zipup_accumulated_star_topology() {
         .unwrap();
 
     assert_eq!(result.node_count(), 4);
-    assert!(result.canonical_center().contains(&"D".to_string()));
+    assert!(result.canonical_region().contains(&"D".to_string()));
 }

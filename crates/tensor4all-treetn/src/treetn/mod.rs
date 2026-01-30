@@ -67,13 +67,13 @@ where
     /// Named graph wrapper: provides mapping between node names (V) and NodeIndex
     /// Edges store the bond Index directly.
     pub(crate) graph: NamedGraph<V, T, T::Index>,
-    /// Orthogonalization region (canonical_center).
+    /// Orthogonalization region (canonical_region).
     /// When empty, the network is not canonicalized.
     /// When non-empty, contains the node names (V) of the orthogonalization region.
     /// The region must form a connected subtree in the network.
-    pub(crate) canonical_center: HashSet<V>,
+    pub(crate) canonical_region: HashSet<V>,
     /// Canonical form used for the current canonicalization.
-    /// `None` if not canonicalized (canonical_center is empty).
+    /// `None` if not canonicalized (canonical_region is empty).
     /// `Some(form)` if canonicalized with the specified form.
     pub(crate) canonical_form: Option<CanonicalForm>,
     /// Site index network: manages topology and site space (physical indices).
@@ -116,7 +116,7 @@ where
     pub fn new() -> Self {
         Self {
             graph: NamedGraph::new(),
-            canonical_center: HashSet::new(),
+            canonical_region: HashSet::new(),
             canonical_form: None,
             site_index_network: SiteIndexNetwork::new(),
             link_index_network: crate::link_index_network::LinkIndexNetwork::new(),
@@ -427,49 +427,49 @@ where
     ///
     /// This method:
     /// 1. Validates tree structure
-    /// 2. Sets canonical_center and validates connectivity
+    /// 2. Sets canonical_region and validates connectivity
     /// 3. Computes edges from leaves towards center using edges_to_canonicalize_to_region
     ///
     /// # Arguments
-    /// * `canonical_center` - The node names that will serve as centers
+    /// * `canonical_region` - The node names that will serve as centers
     /// * `context_name` - Name for error context (e.g., "canonicalize_with")
     ///
     /// # Returns
     /// A SweepContext if successful, or an error if validation fails.
     pub(crate) fn prepare_sweep_to_center(
         &mut self,
-        canonical_center: impl IntoIterator<Item = V>,
+        canonical_region: impl IntoIterator<Item = V>,
         context_name: &str,
     ) -> Result<Option<SweepContext>> {
         // 1. Validate tree structure
         self.validate_tree()
             .with_context(|| format!("{}: graph must be a tree", context_name))?;
 
-        // 2. Set canonical_center
-        let canonical_center_v: Vec<V> = canonical_center.into_iter().collect();
-        self.set_canonical_center(canonical_center_v)
-            .with_context(|| format!("{}: failed to set canonical_center", context_name))?;
+        // 2. Set canonical_region
+        let canonical_region_v: Vec<V> = canonical_region.into_iter().collect();
+        self.set_canonical_region(canonical_region_v)
+            .with_context(|| format!("{}: failed to set canonical_region", context_name))?;
 
-        if self.canonical_center.is_empty() {
+        if self.canonical_region.is_empty() {
             return Ok(None); // Nothing to do if no centers
         }
 
-        // 3. Convert canonical_center names to NodeIndex set
+        // 3. Convert canonical_region names to NodeIndex set
         let center_indices: HashSet<NodeIndex> = self
-            .canonical_center
+            .canonical_region
             .iter()
             .filter_map(|name| self.graph.node_index(name))
             .collect();
 
-        // 4. Validate canonical_center connectivity
+        // 4. Validate canonical_region connectivity
         if !self.site_index_network.is_connected_subset(&center_indices) {
             return Err(anyhow::anyhow!(
-                "canonical_center is not connected: {} centers but not all reachable",
-                self.canonical_center.len()
+                "canonical_region is not connected: {} centers but not all reachable",
+                self.canonical_region.len()
             ))
             .with_context(|| {
                 format!(
-                    "{}: canonical_center must form a connected subtree",
+                    "{}: canonical_region must form a connected subtree",
                     context_name
                 )
             });
@@ -580,7 +580,7 @@ where
         self.replace_tensor(dst, updated_dst_tensor)
             .with_context(|| format!("{}: failed to replace tensor at dst node", context_name))?;
 
-        // Set ortho_towards to point towards dst (canonical_center direction)
+        // Set ortho_towards to point towards dst (canonical_region direction)
         let dst_name = self
             .graph
             .node_name(dst)
@@ -1032,21 +1032,21 @@ where
     /// Get a reference to the orthogonalization region (using node names).
     ///
     /// When empty, the network is not canonicalized.
-    pub fn canonical_center(&self) -> &HashSet<V> {
-        &self.canonical_center
+    pub fn canonical_region(&self) -> &HashSet<V> {
+        &self.canonical_region
     }
 
     /// Check if the network is canonicalized.
     ///
-    /// Returns `true` if `canonical_center` is non-empty, `false` otherwise.
+    /// Returns `true` if `canonical_region` is non-empty, `false` otherwise.
     pub fn is_canonicalized(&self) -> bool {
-        !self.canonical_center.is_empty()
+        !self.canonical_region.is_empty()
     }
 
     /// Set the orthogonalization region (using node names).
     ///
     /// Validates that all specified nodes exist in the graph.
-    pub fn set_canonical_center(&mut self, region: impl IntoIterator<Item = V>) -> Result<()> {
+    pub fn set_canonical_region(&mut self, region: impl IntoIterator<Item = V>) -> Result<()> {
         let region: HashSet<V> = region.into_iter().collect();
 
         // Validate that all nodes exist in the graph
@@ -1056,19 +1056,19 @@ where
                     "Node {:?} does not exist in the graph",
                     node_name
                 ))
-                .context("set_canonical_center: all nodes must be valid");
+                .context("set_canonical_region: all nodes must be valid");
             }
         }
 
-        self.canonical_center = region;
+        self.canonical_region = region;
         Ok(())
     }
 
     /// Clear the orthogonalization region (mark network as not canonicalized).
     ///
     /// Also clears the canonical form.
-    pub fn clear_canonical_center(&mut self) {
-        self.canonical_center.clear();
+    pub fn clear_canonical_region(&mut self) {
+        self.canonical_region.clear();
         self.canonical_form = None;
     }
 
@@ -1082,23 +1082,23 @@ where
     /// Add a node to the orthogonalization region.
     ///
     /// Validates that the node exists in the graph.
-    pub fn add_to_canonical_center(&mut self, node_name: V) -> Result<()> {
+    pub fn add_to_canonical_region(&mut self, node_name: V) -> Result<()> {
         if !self.graph.has_node(&node_name) {
             return Err(anyhow::anyhow!(
                 "Node {:?} does not exist in the graph",
                 node_name
             ))
-            .context("add_to_canonical_center: node must be valid");
+            .context("add_to_canonical_region: node must be valid");
         }
-        self.canonical_center.insert(node_name);
+        self.canonical_region.insert(node_name);
         Ok(())
     }
 
     /// Remove a node from the orthogonalization region.
     ///
     /// Returns `true` if the node was in the region, `false` otherwise.
-    pub fn remove_from_canonical_center(&mut self, node_name: &V) -> bool {
-        self.canonical_center.remove(node_name)
+    pub fn remove_from_canonical_region(&mut self, node_name: &V) -> bool {
+        self.canonical_region.remove(node_name)
     }
 
     /// Get a reference to the site index network.

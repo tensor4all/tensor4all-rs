@@ -140,7 +140,7 @@ impl TensorTrain {
         // When llim + 2 == rlim, ortho center is at llim + 1
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < tt.len() as i32 {
             let center = (llim + 1) as usize;
-            tt.inner.set_canonical_center(vec![center]).map_err(|e| {
+            tt.inner.set_canonical_region(vec![center]).map_err(|e| {
                 TensorTrainError::InvalidStructure {
                     message: format!("Failed to set ortho region: {}", e),
                 }
@@ -194,10 +194,10 @@ impl TensorTrain {
         let rlim = self.rlim();
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < self.len() as i32 {
             let center = (llim + 1) as usize;
-            let _ = self.inner.set_canonical_center(vec![center]);
+            let _ = self.inner.set_canonical_region(vec![center]);
         } else {
             // Clear ortho region if not a single center
-            let _ = self.inner.set_canonical_center(Vec::<usize>::new());
+            let _ = self.inner.set_canonical_region(Vec::<usize>::new());
         }
     }
 
@@ -208,10 +208,10 @@ impl TensorTrain {
         let llim = self.llim();
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < self.len() as i32 {
             let center = (llim + 1) as usize;
-            let _ = self.inner.set_canonical_center(vec![center]);
+            let _ = self.inner.set_canonical_region(vec![center]);
         } else {
             // Clear ortho region if not a single center
-            let _ = self.inner.set_canonical_center(Vec::<usize>::new());
+            let _ = self.inner.set_canonical_region(Vec::<usize>::new());
         }
     }
 
@@ -233,7 +233,7 @@ impl TensorTrain {
     /// Returns true if there is exactly one site that is not guaranteed to be orthogonal.
     #[inline]
     pub fn isortho(&self) -> bool {
-        self.inner.canonical_center().len() == 1
+        self.inner.canonical_region().len() == 1
     }
 
     /// Get the orthogonality center (0-indexed).
@@ -241,7 +241,7 @@ impl TensorTrain {
     /// Returns `Some(site)` if the tensor train has a single orthogonality center,
     /// `None` otherwise.
     pub fn orthocenter(&self) -> Option<usize> {
-        let region = self.inner.canonical_center();
+        let region = self.inner.canonical_region();
         if region.len() == 1 {
             // Node name IS the site index since V = usize
             Some(*region.iter().next().unwrap())
@@ -468,7 +468,7 @@ impl TensorTrain {
         let node_idx = self.inner.node_index(&site).expect("Site out of bounds");
         let _ = self.inner.replace_tensor(node_idx, tensor);
         // Invalidate orthogonality
-        let _ = self.inner.set_canonical_center(Vec::<usize>::new());
+        let _ = self.inner.set_canonical_region(Vec::<usize>::new());
     }
 
     /// Orthogonalize the tensor train to have orthogonality center at the given site.
@@ -1351,5 +1351,76 @@ mod tests {
         // Length mismatch should fail
         let result = tt1.add(&tt2);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_set_llim_updates_canonical_region() {
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+
+        let t0 = make_tensor(vec![s0, l01.clone()]);
+        let t1 = make_tensor(vec![l01, s1]);
+
+        let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        // Set llim=-1, rlim already 1 => center at 0
+        tt.set_llim(-1);
+        // With rlim=1 (which is the default for non-ortho TT) and llim=-1, center should be at 0
+        // But this depends on the rlim value, let's explicitly set both
+        let mut tt2 = TensorTrain::with_ortho(
+            vec![
+                make_tensor(vec![idx(0, 2), idx(1, 3)]),
+                make_tensor(vec![idx(1, 3), idx(2, 2)]),
+            ],
+            -1,
+            1,
+            Some(CanonicalForm::Unitary),
+        )
+        .unwrap();
+        assert!(tt2.isortho());
+        assert_eq!(tt2.orthocenter(), Some(0));
+
+        // Setting llim to a value that breaks single-center should clear ortho
+        tt2.set_llim(5);
+        assert!(!tt2.isortho());
+    }
+
+    #[test]
+    fn test_set_rlim_updates_canonical_region() {
+        let mut tt = TensorTrain::with_ortho(
+            vec![
+                make_tensor(vec![idx(0, 2), idx(1, 3)]),
+                make_tensor(vec![idx(1, 3), idx(2, 2)]),
+            ],
+            -1,
+            1,
+            Some(CanonicalForm::Unitary),
+        )
+        .unwrap();
+        assert!(tt.isortho());
+
+        // Setting rlim to a value that breaks single-center should clear ortho
+        tt.set_rlim(5);
+        assert!(!tt.isortho());
+    }
+
+    #[test]
+    fn test_set_tensor_invalidates_ortho() {
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+        let mut tt =
+            TensorTrain::with_ortho(vec![t0, t1], -1, 1, Some(CanonicalForm::Unitary)).unwrap();
+        assert!(tt.isortho());
+
+        // Replace tensor at site 0
+        let new_tensor = make_tensor(vec![s0, l01]);
+        tt.set_tensor(0, new_tensor);
+        assert!(!tt.isortho());
     }
 }

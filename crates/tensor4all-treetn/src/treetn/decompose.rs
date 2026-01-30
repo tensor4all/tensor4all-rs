@@ -166,7 +166,7 @@ where
         }
         let mut tn = TreeTN::<T, V>::new();
         tn.add_tensor(node_name.clone(), tensor.clone())?;
-        tn.set_canonical_center([node_name])?;
+        tn.set_canonical_region([node_name])?;
         return Ok(tn);
     }
 
@@ -314,7 +314,7 @@ where
         .collect();
 
     let mut tn = TreeTN::from_tensors(tensors, node_names)?;
-    tn.set_canonical_center([root.clone()])?;
+    tn.set_canonical_region([root.clone()])?;
     Ok(tn)
 }
 

@@ -46,10 +46,10 @@ where
     /// ```
     pub fn canonicalize(
         mut self,
-        canonical_center: impl IntoIterator<Item = V>,
+        canonical_region: impl IntoIterator<Item = V>,
         options: CanonicalizationOptions,
     ) -> Result<Self> {
-        let center_v: HashSet<V> = canonical_center.into_iter().collect();
+        let center_v: HashSet<V> = canonical_region.into_iter().collect();
 
         // Smart behavior when not forced
         if !options.force {
@@ -67,7 +67,7 @@ where
             }
 
             // Check if already at target
-            if self.canonical_center == center_v && self.canonical_form == Some(options.form) {
+            if self.canonical_region == center_v && self.canonical_form == Some(options.form) {
                 return Ok(self);
             }
         }
@@ -82,14 +82,14 @@ where
     /// This is the `&mut self` version of [`Self::canonicalize`].
     pub fn canonicalize_mut(
         &mut self,
-        canonical_center: impl IntoIterator<Item = V>,
+        canonical_region: impl IntoIterator<Item = V>,
         options: CanonicalizationOptions,
     ) -> Result<()>
     where
         Self: Default,
     {
         let taken = std::mem::take(self);
-        match taken.canonicalize(canonical_center, options) {
+        match taken.canonicalize(canonical_region, options) {
             Ok(result) => {
                 *self = result;
                 Ok(())
@@ -103,7 +103,7 @@ where
     /// This is the core canonicalization logic that public methods delegate to.
     pub(crate) fn canonicalize_impl(
         &mut self,
-        canonical_center: impl IntoIterator<Item = V>,
+        canonical_region: impl IntoIterator<Item = V>,
         form: CanonicalForm,
         context_name: &str,
     ) -> Result<()> {
@@ -115,7 +115,7 @@ where
         };
 
         // Prepare sweep context
-        let sweep_ctx = self.prepare_sweep_to_center(canonical_center, context_name)?;
+        let sweep_ctx = self.prepare_sweep_to_center(canonical_region, context_name)?;
 
         // If no centers (empty), nothing to do
         let sweep_ctx = match sweep_ctx {
