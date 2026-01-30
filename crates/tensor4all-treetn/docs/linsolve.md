@@ -129,7 +129,7 @@ Once GMRES returns `solved_local: T`, the updater factorizes it back into a smal
 the region topology:
 
 - Build a `TreeTopology` describing how indices in `solved_local` correspond to region nodes/edges
-- `factorize_tensor_to_treetn_with(&solved_local, &topology, FactorizeAlg::SVD)`
+- `factorize_tensor_to_treetn_with(&solved_local, &topology, FactorizeAlg::SVD, root=&new_center)`
 
 Relevant files:
 - `crates/tensor4all-treetn/src/linsolve/square/updater.rs`
@@ -209,7 +209,7 @@ apply_local_update_sweep(state: TreeTN, plan, updater)
        │    │              │    │    └─ compute_environment(from, to, ket_state, reference_state, topology)   // recursive
        │    │              │    └─ contract([v, op(region), envs(outside)]) -> H_local * v
        │    │              └─ return (a0 * x_local + a1 * (H_local * x_local))
-       │    ├─ factorize_tensor_to_treetn_with(solved_local, topology, SVD) -> decomposed_region: TreeTN
+      │    ├─ factorize_tensor_to_treetn_with(solved_local, topology, SVD, root=new_center) -> decomposed_region: TreeTN
        │    └─ copy_decomposed_to_subtree(subtree, decomposed_region, step.nodes, full_treetn)
        ├─ (insert updated subtree back into full_treetn)
        └─ SquareLinsolveUpdater::after_step(step, full_treetn_after)

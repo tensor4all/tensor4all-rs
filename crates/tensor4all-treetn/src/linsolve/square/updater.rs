@@ -751,14 +751,32 @@ where
         if let Some(max_rank) = self.options.truncation.max_rank() {
             factorize_options = factorize_options.with_max_rank(max_rank);
         }
-        let decomposed =
-            factorize_tensor_to_treetn_with(&solved_local, &topology, factorize_options)?;
+        if let Some(rtol) = self.options.truncation.rtol() {
+            factorize_options = factorize_options.with_rtol(rtol);
+        }
+        // Force decomposition root to be consistent with the sweep plan's new center.
+        // This keeps the norm-carrying tensor on the declared canonical center.
+        let decomposed = factorize_tensor_to_treetn_with(
+            &solved_local,
+            &topology,
+            factorize_options,
+            &step.new_center,
+        )?;
 
         // Copy decomposed tensors back to subtree, preserving original bond IDs
         self.copy_decomposed_to_subtree(&mut subtree, &decomposed, &step.nodes, full_treetn)?;
 
-        // Set canonical center
+        // Force-move the canonical center metadata AND the bond ortho directions to the new center.
+        // (apply_local_update_sweep also updates canonical_center on the full TreeTN, but we keep
+        // the subtree self-consistent here.)
         subtree.set_canonical_center([step.new_center.clone()])?;
+        if let Some(edges) = subtree.edges_to_canonicalize_by_names(&step.new_center) {
+            for (from, to) in edges {
+                if let Some(edge) = subtree.edge_between(&from, &to) {
+                    subtree.set_edge_ortho_towards(edge, Some(to))?;
+                }
+            }
+        }
 
         Ok(subtree)
     }
