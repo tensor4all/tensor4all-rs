@@ -15,7 +15,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{
     index::{DynId, Index},
-    DynIndex, IndexLike, TensorDynLen, TensorLike,
+    seed_id_rng, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
 };
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
@@ -216,67 +216,88 @@ fn create_random_operator(
     Ok((mpo, input_mapping, output_mapping))
 }
 
-/// Create an N-site all-ones MPO for x_true.
-/// Returns (mpo, input_mapping, output_mapping).
-#[allow(clippy::type_complexity)]
-fn create_ones_mpo(
+/// Create an N-site identity-like MPO for x_true.
+///
+/// Structure matches `test_linsolve_mpo_identity.rs`:
+/// - x has indices [external, s_out_tmp, s_in_tmp, bonds]
+/// - external = true_site_indices (the contracted index with operator)
+/// - s_out_tmp, s_in_tmp = x's own internal MPO indices (remain after contraction)
+/// - The tensor data has identity structure: δ(s_out_tmp, s_in_tmp) for each external value
+///
+/// When operator A acts on x:
+/// - x's external contracts with A's s_in (via input_mapping)
+/// - Result has A's s_out (mapped back to external) + x's s_out_tmp, s_in_tmp
+fn create_identity_mpo_state(
     n: usize,
     phys_dim: usize,
     bond_dim: usize,
-    true_site_indices: &[DynIndex],
+    true_site_indices: &[DynIndex], // external indices (contracted with operator)
     used_ids: &mut HashSet<DynId>,
     rng: &mut StdRng,
-) -> anyhow::Result<(
-    TreeTN<TensorDynLen, String>,
-    HashMap<String, IndexMapping<DynIndex>>,
-    HashMap<String, IndexMapping<DynIndex>>,
-)> {
+) -> anyhow::Result<TreeTN<TensorDynLen, String>> {
     anyhow::ensure!(true_site_indices.len() == n, "site index count mismatch");
 
     let mut mpo = TreeTN::<TensorDynLen, String>::new();
 
+    // MPO bonds (dim 1 for identity-like structure)
     let bonds: Vec<_> = (0..n.saturating_sub(1))
         .map(|_| unique_dyn_index(used_ids, bond_dim, rng))
         .collect();
 
-    let s_in_tmp: Vec<_> = (0..n)
-        .map(|_| unique_dyn_index(used_ids, phys_dim, rng))
-        .collect();
+    // x's own internal MPO indices (NOT the operator's)
     let s_out_tmp: Vec<_> = (0..n)
         .map(|_| unique_dyn_index(used_ids, phys_dim, rng))
         .collect();
-
-    let mut input_mapping: HashMap<String, IndexMapping<DynIndex>> = HashMap::new();
-    let mut output_mapping: HashMap<String, IndexMapping<DynIndex>> = HashMap::new();
+    let s_in_tmp: Vec<_> = (0..n)
+        .map(|_| unique_dyn_index(used_ids, phys_dim, rng))
+        .collect();
 
     let mut nodes = Vec::with_capacity(n);
     for i in 0..n {
         let node_name = make_node_name(i);
-        let indices = mpo_node_indices(n, i, &bonds, &s_out_tmp, &s_in_tmp);
 
-        // Include true_site_index as external index
-        let mut all_indices = vec![true_site_indices[i].clone()];
-        all_indices.extend(indices.iter().cloned());
+        // Base tensor: [external, s_out_tmp, s_in_tmp] with identity structure
+        // I[ext, s_out, s_in] = δ(s_out, s_in) for each ext value
+        let mut base_data = vec![0.0_f64; phys_dim * phys_dim * phys_dim];
+        for ext_val in 0..phys_dim {
+            for k in 0..phys_dim {
+                // Identity on (s_out, s_in): δ(s_out, s_in)
+                // Index order: [external, s_out, s_in]
+                let idx = ext_val * phys_dim * phys_dim + k * phys_dim + k;
+                base_data[idx] = 1.0;
+            }
+        }
+        let base = TensorDynLen::from_dense_f64(
+            vec![
+                true_site_indices[i].clone(), // external (contracted with operator)
+                s_out_tmp[i].clone(),
+                s_in_tmp[i].clone(),
+            ],
+            base_data,
+        );
 
-        let t = TensorDynLen::ones(&all_indices)?;
+        // Add bond indices via outer product if needed
+        let t = if n == 1 {
+            base
+        } else {
+            let mut bond_inds = Vec::new();
+            if i > 0 {
+                bond_inds.push(bonds[i - 1].clone());
+            }
+            if i < n - 1 {
+                bond_inds.push(bonds[i].clone());
+            }
+            if bond_inds.is_empty() {
+                base
+            } else {
+                let bond_size: usize = bond_inds.iter().map(|b| b.dim()).product();
+                let ones = TensorDynLen::from_dense_f64(bond_inds, vec![1.0_f64; bond_size]);
+                TensorDynLen::outer_product(&base, &ones)?
+            }
+        };
 
         let node = mpo.add_tensor(node_name.clone(), t).unwrap();
         nodes.push(node);
-
-        input_mapping.insert(
-            node_name.clone(),
-            IndexMapping {
-                true_index: true_site_indices[i].clone(),
-                internal_index: s_in_tmp[i].clone(),
-            },
-        );
-        output_mapping.insert(
-            node_name,
-            IndexMapping {
-                true_index: true_site_indices[i].clone(),
-                internal_index: s_out_tmp[i].clone(),
-            },
-        );
     }
 
     for i in 0..n.saturating_sub(1) {
@@ -284,7 +305,7 @@ fn create_ones_mpo(
             .unwrap();
     }
 
-    Ok((mpo, input_mapping, output_mapping))
+    Ok(mpo)
 }
 
 fn compute_rel_residual(
@@ -303,8 +324,32 @@ fn compute_rel_residual(
     let x_full = x.contract_to_tensor()?;
     let b_full = rhs.contract_to_tensor()?;
 
-    let ax_vec = ax_full.to_vec_f64()?;
-    let x_vec = x_full.to_vec_f64()?;
+    // Align indices using b_full as reference (like test_linsolve_mpo_identity.rs)
+    let ref_order: Vec<DynIndex> = b_full.external_indices();
+
+    let order_for = |tensor: &TensorDynLen| -> anyhow::Result<Vec<DynIndex>> {
+        let inds: Vec<DynIndex> = tensor.external_indices();
+        let by_id: HashMap<DynId, DynIndex> =
+            inds.into_iter().map(|i: DynIndex| (*i.id(), i)).collect();
+        let mut out = Vec::with_capacity(ref_order.len());
+        for r in ref_order.iter() {
+            let id: DynId = *r.id();
+            let idx = by_id
+                .get(&id)
+                .ok_or_else(|| anyhow::anyhow!("residual: index {:?} not found in tensor", id))?
+                .clone();
+            out.push(idx);
+        }
+        Ok(out)
+    };
+
+    let order_x = order_for(&x_full)?;
+    let order_ax = order_for(&ax_full)?;
+    let x_aligned = x_full.permuteinds(&order_x)?;
+    let ax_aligned = ax_full.permuteinds(&order_ax)?;
+
+    let ax_vec = ax_aligned.to_vec_f64()?;
+    let x_vec = x_aligned.to_vec_f64()?;
     let b_vec = b_full.to_vec_f64()?;
 
     anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
@@ -393,6 +438,9 @@ fn main() -> anyhow::Result<()> {
     let n_sweeps = 5usize;
     let seed = 1234_u64;
 
+    // Seed the ID RNG for deterministic sim() calls during linsolve
+    seed_id_rng(seed + 1000);
+
     println!("=== Minimal Reproduction Test for linsolve ===");
     println!("N = {n_sites}, phys_dim = {phys_dim}, bond_dim = {bond_dim}");
     println!("n_sweeps = {n_sweeps}, seed = {seed}");
@@ -407,9 +455,9 @@ fn main() -> anyhow::Result<()> {
         .collect();
 
     // ========================================
-    // Test 1: A = Identity operator
+    // Test 1: Same as test_linsolve_mpo_identity.rs (a0=1, a1=0)
     // ========================================
-    println!("=== Test 1: A = Identity operator ===");
+    println!("=== Test 1: Same as test_linsolve_mpo_identity.rs (I*x = b, a0=1, a1=0) ===");
 
     let (identity_op, id_input_mapping, id_output_mapping) = create_identity_operator(
         n_sites,
@@ -419,8 +467,9 @@ fn main() -> anyhow::Result<()> {
         &mut rng,
     )?;
 
-    // x_true = all-ones MPO (bond_dim=1 for simplicity with identity)
-    let (x_true_id, _, _) = create_ones_mpo(
+    // x_true = identity MPO with same external indices as operator's true indices
+    // Structure: [external, s_out_tmp, s_in_tmp, bonds]
+    let x_true_id = create_identity_mpo_state(
         n_sites,
         phys_dim,
         1, // bond_dim = 1 for identity test
@@ -429,22 +478,43 @@ fn main() -> anyhow::Result<()> {
         &mut rng,
     )?;
 
-    // b = A * x_true = I * x_true = x_true
+    // Use x_true directly as RHS (like test_linsolve_mpo_identity.rs)
+    // NOT computing b = A * x_true
+    let rhs_id = x_true_id.clone();
+
+    // Equation: (a0*I + a1*A)*x = b with a0=1, a1=0 => I*x = b
+    // This is exactly how test_linsolve_mpo_identity.rs works
+    run_linsolve_test(
+        "I*x = b (a0=1, a1=0), same as test_linsolve_mpo_identity.rs",
+        &identity_op,
+        &id_input_mapping,
+        &id_output_mapping,
+        &rhs_id,
+        1.0, // a0: coefficient for identity
+        0.0, // a1: coefficient for A (not used)
+        n_sweeps,
+        4,
+    )?;
+
+    // ========================================
+    // Test 1b: A*x = b with A=I, b=A*x_true (a0=0, a1=1)
+    // ========================================
+    println!("=== Test 1b: A*x = b with A=I, b=A*x_true (a0=0, a1=1) ===");
+
+    // Compute b = A * x_true (should equal x_true since A=I)
     let linop_id = LinearOperator::new(
         identity_op.clone(),
         id_input_mapping.clone(),
         id_output_mapping.clone(),
     );
-    let rhs_id = apply_linear_operator(&linop_id, &x_true_id, ApplyOptions::default())?;
+    let rhs_id_computed = apply_linear_operator(&linop_id, &x_true_id, ApplyOptions::default())?;
 
-    // Equation: I * x = b (a0=1, a1=0 means (1*I + 0*A)*x = b => I*x = b)
-    // But for A*x = b, we use a0=0, a1=1
     run_linsolve_test(
-        "Identity operator: A*x = b where A=I, b=A*x_true",
+        "A*x = b where A=I, b=A*x_true (a0=0, a1=1)",
         &identity_op,
         &id_input_mapping,
         &id_output_mapping,
-        &rhs_id,
+        &rhs_id_computed,
         0.0, // a0
         1.0, // a1: (0*I + 1*A)*x = b => A*x = b
         n_sweeps,
@@ -465,8 +535,8 @@ fn main() -> anyhow::Result<()> {
         &mut rng,
     )?;
 
-    // x_true = all-ones MPO
-    let (x_true_rand, _, _) = create_ones_mpo(
+    // x_true = all-ones MPO with same external indices as operator's true indices
+    let x_true_rand = create_identity_mpo_state(
         n_sites,
         phys_dim,
         bond_dim,
@@ -517,7 +587,7 @@ fn main() -> anyhow::Result<()> {
         &mut rng2,
     )?;
 
-    let (x_true_rand2, _, _) = create_ones_mpo(
+    let x_true_rand2 = create_identity_mpo_state(
         n_sites,
         phys_dim,
         bond_dim,

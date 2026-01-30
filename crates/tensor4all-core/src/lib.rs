@@ -41,6 +41,7 @@ pub mod defaults;
 // This allows `tensor4all_core::index::...` to work
 pub use defaults::index;
 
+pub use defaults::index::{seed_id_rng, unseed_id_rng};
 pub use defaults::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
 pub use index_like::{ConjState, IndexLike};
 

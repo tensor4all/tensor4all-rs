@@ -328,6 +328,10 @@ thread_local! {
     /// Each thread has its own RNG, similar to ITensors.jl's task-local RNG.
     /// This provides thread-safe ID generation without global synchronization.
     static ID_RNG: RefCell<rand::rngs::ThreadRng> = RefCell::new(rand::thread_rng());
+
+    /// Optional seeded RNG for deterministic ID generation.
+    /// When set, this takes priority over ID_RNG for reproducible results.
+    static SEEDED_RNG: RefCell<Option<rand::rngs::StdRng>> = const { RefCell::new(None) };
 }
 
 /// Generate a unique random ID for dynamic indices (thread-safe).
@@ -385,6 +389,14 @@ impl IndexLike for DynIndex {
     fn sim(&self) -> Self {
         Index {
             id: DynId(generate_id()),
+            dim: self.dim,
+            tags: self.tags.clone(),
+        }
+    }
+
+    fn sim_with_rng<R: rand::Rng>(&self, rng: &mut R) -> Self {
+        Index {
+            id: DynId(rng.gen()),
             dim: self.dim,
             tags: self.tags.clone(),
         }
