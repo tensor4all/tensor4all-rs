@@ -22,9 +22,9 @@ use std::sync::Arc;
 
 /// Runtime ID for ITensors-like dynamic identity.
 ///
-/// Uses UInt128 for extremely low collision probability (see design.md for analysis).
+/// Uses UInt64 for compatibility with ITensors.jl's `IDType = UInt64`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DynId(pub u128);
+pub struct DynId(pub u64);
 
 /// Tag set wrapper using `Arc` for efficient cloning.
 ///
@@ -43,7 +43,7 @@ pub struct DynId(pub u128);
 /// assert!(tags.has_tag("Site"));
 /// assert!(tags.has_tag("Link"));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct TagSet(Arc<InlineTagSet>);
 
 impl TagSet {
@@ -167,11 +167,12 @@ impl TagSetLike for TagSet {
 ///
 /// # Memory Layout
 /// With default types (`DynId`, `TagSet`):
-/// - Size: 24 bytes (16 + 8)
+/// - Size: 24 bytes (8 + 8 + 8)
 /// - Tags are shared via `Arc`, so cloning is cheap (reference count increment only)
 ///
-/// **Equality**: Two `Index` values are considered equal if and only if their `id` fields match.
-/// Tags are not used for equality comparison.
+/// **Equality**: Two `Index` values are considered equal if and only if their `id` and `tags`
+/// fields match (matching ITensors.jl semantics where equality = id + plev + tags, with plev
+/// fixed at 0).
 ///
 /// # Example
 /// ```
@@ -301,18 +302,20 @@ impl Index<DynId, TagSet> {
     }
 }
 
-// Equality and Hash implementations: only compare by `id`
-impl<Id: PartialEq, Tags> PartialEq for Index<Id, Tags> {
+// Equality and Hash implementations: compare by `id` and `tags`
+// (matching ITensors.jl semantics where equality = id + plev + tags, with plev fixed at 0)
+impl<Id: PartialEq, Tags: PartialEq> PartialEq for Index<Id, Tags> {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.id == other.id && self.tags == other.tags
     }
 }
 
-impl<Id: Eq, Tags> Eq for Index<Id, Tags> {}
+impl<Id: Eq, Tags: Eq> Eq for Index<Id, Tags> {}
 
-impl<Id: std::hash::Hash, Tags> std::hash::Hash for Index<Id, Tags> {
+impl<Id: std::hash::Hash, Tags: std::hash::Hash> std::hash::Hash for Index<Id, Tags> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
+        self.tags.hash(state);
     }
 }
 
@@ -329,9 +332,9 @@ thread_local! {
 
 /// Generate a unique random ID for dynamic indices (thread-safe).
 ///
-/// Uses thread-local random number generator to generate UInt128 IDs,
-/// providing extremely low collision probability (see design.md for analysis).
-pub(crate) fn generate_id() -> u128 {
+/// Uses thread-local random number generator to generate UInt64 IDs,
+/// compatible with ITensors.jl's `IDType = UInt64`.
+pub(crate) fn generate_id() -> u64 {
     ID_RNG.with(|rng| rng.borrow_mut().gen())
 }
 
@@ -436,7 +439,7 @@ mod tests {
         assert_ne!(id2, id3);
         assert_ne!(id1, id3);
 
-        // IDs should be non-zero (very high probability with u128)
+        // IDs should be non-zero (very high probability with u64)
         assert_ne!(id1, 0);
         assert_ne!(id2, 0);
         assert_ne!(id3, 0);

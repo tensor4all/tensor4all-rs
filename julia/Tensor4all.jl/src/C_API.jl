@@ -118,18 +118,17 @@ function t4a_index_new_with_tags(dim::Integer, tags::AbstractString)
 end
 
 """
-    t4a_index_new_with_id(dim::Integer, id_hi::UInt64, id_lo::UInt64, tags::AbstractString) -> Ptr{Cvoid}
+    t4a_index_new_with_id(dim::Integer, id::UInt64, tags::AbstractString) -> Ptr{Cvoid}
 
 Create a new index with specified dimension, ID, and tags.
 """
-function t4a_index_new_with_id(dim::Integer, id_hi::UInt64, id_lo::UInt64, tags::AbstractString)
+function t4a_index_new_with_id(dim::Integer, id::UInt64, tags::AbstractString)
     return ccall(
         (:t4a_index_new_with_id, libpath()),
         Ptr{Cvoid},
-        (Csize_t, UInt64, UInt64, Cstring),
+        (Csize_t, UInt64, Cstring),
         Csize_t(dim),
-        id_hi,
-        id_lo,
+        id,
         isempty(tags) ? C_NULL : tags
     )
 end
@@ -198,18 +197,17 @@ function t4a_index_dim(ptr::Ptr{Cvoid}, out_dim::Ref{Csize_t})
 end
 
 """
-    t4a_index_id_u128(ptr::Ptr{Cvoid}, out_hi::Ref{UInt64}, out_lo::Ref{UInt64}) -> Cint
+    t4a_index_id(ptr::Ptr{Cvoid}, out_id::Ref{UInt64}) -> Cint
 
-Get the 128-bit ID of an index as two 64-bit values.
+Get the 64-bit ID of an index (compatible with ITensors.jl's IDType = UInt64).
 """
-function t4a_index_id_u128(ptr::Ptr{Cvoid}, out_hi::Ref{UInt64}, out_lo::Ref{UInt64})
+function t4a_index_id(ptr::Ptr{Cvoid}, out_id::Ref{UInt64})
     return ccall(
-        (:t4a_index_id_u128, libpath()),
+        (:t4a_index_id, libpath()),
         Cint,
-        (Ptr{Cvoid}, Ptr{UInt64}, Ptr{UInt64}),
+        (Ptr{Cvoid}, Ptr{UInt64}),
         ptr,
-        out_hi,
-        out_lo
+        out_id
     )
 end
 

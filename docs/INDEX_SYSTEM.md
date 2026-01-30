@@ -35,7 +35,7 @@ The index system in tensor4all-rs is designed to support both:
 | Aspect | ITensors.jl | QSpace | tensor4all-rs |
 |--------|-------------|--------|---------------|
 | **Central entity** | Index | Tensor | Configurable (Index-centric by default) |
-| **Index identity** | UUID (auto-generated at creation) | itag name (string, assigned later) | `Id` associated type (UUID by default) |
+| **Index identity** | UUID (auto-generated at creation) | itag name (string, assigned later) | `Id` associated type (u64 UUID by default) |
 | **Connection mechanism** | Share same Index object | Same itag name + opposite direction | Same `Id` value + compatible `ConjState` |
 | **Direction** | Undirected (default) | Directed (Ket/Bra via `*` suffix) | Both supported via `ConjState` |
 | **Symmetry / quantum numbers** | Usually implicit (dense tensors) | Explicit symmetry sectors / block structure | Not in defaults; modeled by symmetry-aware concrete types |
@@ -412,12 +412,12 @@ This design intentionally separates two concepts:
 
 **Note on `Eq`/`Hash` semantics**:
 - `IndexLike` requires `Eq + Hash` so indices can be used as keys (e.g. `HashSet`, `HashMap`), but it does **not** force a single universal notion of equality.
-- The **default `DynIndex`** uses **ID-only** equality/hashing (ITensors.jl-like identity semantics).
-- For **directed** index implementations (QSpace-like), it can be useful for `Eq`/`Hash` to include direction (`ConjState`) to avoid accidental mixing in hash-based collections.
+- The **default `DynIndex`** uses **ID + tags** equality/hashing (ITensors.jl-compatible semantics with plev=0).
+- For **directed** index implementations (QSpace-like), it can be useful for `Eq`/`Hash` to also include direction (`ConjState`) to avoid accidental mixing in hash-based collections.
 - Regardless of how `Eq`/`Hash` is defined, **contraction must use `is_contractable()`**.
 
 For the default `DynIndex` implementation:
-- `==` compares **ID only** (not dimension, not tags, not ConjState)
+- `==` compares **ID and tags** (not dimension, not ConjState)
 - `is_contractable()` checks ID, dimension, AND ConjState compatibility
 
 This distinction matters for directed indices:
@@ -489,7 +489,7 @@ pub struct Index<Id, Tags = TagSet> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DynId(pub u128);  // 128-bit UUID
+pub struct DynId(pub u64);  // 64-bit UUID (compatible with ITensors.jl IDType)
 ```
 
 ### ID Generation
@@ -501,38 +501,41 @@ thread_local! {
     static ID_RNG: RefCell<rand::rngs::ThreadRng> = RefCell::new(rand::thread_rng());
 }
 
-pub(crate) fn generate_id() -> u128 {
+pub(crate) fn generate_id() -> u64 {
     ID_RNG.with(|rng| rng.borrow_mut().gen())
 }
 ```
 
 This provides:
-- **Extremely low collision probability** with 128-bit random IDs
+- **Low collision probability** with 64-bit random IDs (compatible with ITensors.jl's `IDType = UInt64`)
 - **Thread-safe generation** without global locks
-- **Similar semantics to ITensors.jl** task-local RNG
+- **Identical semantics to ITensors.jl** task-local RNG
 
 ### Equality and Hashing
 
-**Important**: `DynIndex` equality and hashing are based on **ID only**:
+**Important**: `DynIndex` equality and hashing are based on **ID + tags** (compatible with ITensors.jl where equality = id + plev + tags, with plev fixed at 0):
 
 ```rust
-impl<Id: PartialEq, Tags> PartialEq for Index<Id, Tags> {
+impl<Id: PartialEq, Tags: PartialEq> PartialEq for Index<Id, Tags> {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id  // ID only! Not dim, not tags
+        self.id == other.id && self.tags == other.tags  // ID + tags
     }
 }
 
-impl<Id: Hash, Tags> Hash for Index<Id, Tags> {
+impl<Id: Hash, Tags: Hash> Hash for Index<Id, Tags> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);  // ID only!
+        self.id.hash(state);
+        self.tags.hash(state);  // ID + tags
     }
 }
 ```
 
 This means:
-- Two indices with the same ID are equal, even if they have different dimensions or tags
+- Two indices with the same ID **and** same tags are equal
+- Two indices with the same ID but different tags are **not** equal
 - This enables efficient `HashMap<Index, ...>` and `HashSet<Index>` lookups
 - Dimension mismatches are caught by `is_contractable()`, not by `==`
+- Use `same_id()` for ID-only comparison when needed
 
 ### IndexLike Implementation
 
@@ -638,13 +641,15 @@ By forbidding mixing, we ensure clear semantics:
 - Directed indices work with opposite-directed indices (QSpace-like)
 - No ambiguity about which indices can contract
 
-### Why ID-only Equality for DynIndex?
+### Why ID + Tags Equality for DynIndex?
 
-Using ID-only equality (not including dimension or tags) provides:
+Using ID + tags equality (not including dimension) provides:
 
-1. **Efficient lookups**: `HashMap<Index, Value>` works correctly even if dimension info is stored separately
-2. **Consistent with ITensors.jl**: In ITensors.jl, Index identity is determined by UUID
-3. **Separation of concerns**: Equality answers "same logical index?", `is_contractable()` answers "can contract?"
+1. **ITensors.jl compatibility**: In ITensors.jl, Index equality is determined by `id + plev + tags`. Since tensor4all-rs does not use `plev` (conceptually fixed at 0), equality is `id + tags`.
+2. **HDF5 format compatibility**: The same equality semantics enable round-trip compatibility with ITensors.jl HDF5 files.
+3. **Efficient lookups**: `HashMap<Index, Value>` and `HashSet<Index>` work correctly with this equality.
+4. **Separation of concerns**: Equality answers "same logical index?", `is_contractable()` answers "can contract?"
+5. **Explicit ID-only comparison**: Use `same_id()` when you need to compare only by ID (e.g., for contraction pairing).
 
 The tradeoff is that dimension mismatches are caught at contraction time, not at equality check time. This is acceptable because:
 - Dimension mismatches are programming errors (should not happen in correct code)
@@ -792,7 +797,7 @@ fn import_qspace_tensor(qspace: QSpaceTensor) -> Tensor<DynIndex> {
         // For directed indices, you'd use a DirectedIndex type
         // For simplicity, using DynIndex (undirected):
         Index {
-            id: DynId(itag_to_id(name) as u128),
+            id: DynId(itag_to_id(name)),
             dim: /* get from qspace */,
             tags: TagSet::from_str(name).unwrap(),
         }

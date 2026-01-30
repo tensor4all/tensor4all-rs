@@ -182,9 +182,9 @@ fn setup_direct_sum(
         result_dims.push(a_dims[a_pos]);
     }
 
-    // New indices from pairs
+    // New indices from pairs (preserve tags for id+tags equality)
     for new_idx in &new_indices {
-        result_indices.push(Index::new(*new_idx.id(), new_idx.dim()));
+        result_indices.push(new_idx.clone());
         result_dims.push(new_idx.dim());
     }
 

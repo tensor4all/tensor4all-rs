@@ -20,7 +20,7 @@
     end
 
     @testset "custom ID" begin
-        id_val = UInt128(0x12345678_9ABCDEF0_FEDCBA98_76543210)
+        id_val = UInt64(0x12345678_9ABCDEF0)
         i = T4AIndex(4, id_val; tags="Custom")
         @test Tensor4all.dim(i) == 4
         @test Tensor4all.id(i) == id_val

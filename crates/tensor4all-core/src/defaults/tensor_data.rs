@@ -332,7 +332,7 @@ mod tests {
     fn new_id() -> DynId {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(1);
-        DynId(COUNTER.fetch_add(1, Ordering::Relaxed) as u128)
+        DynId(COUNTER.fetch_add(1, Ordering::Relaxed))
     }
 
     #[test]
