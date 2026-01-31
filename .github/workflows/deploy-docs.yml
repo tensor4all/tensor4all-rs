@@ -22,6 +22,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install HDF5
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -32,7 +35,7 @@ jobs:
         run: mdbook build docs/book
 
       - name: Build rustdoc
-        run: cargo doc --workspace --no-deps
+        run: cargo xtask doc
 
       - name: Combine documentation
         run: |
