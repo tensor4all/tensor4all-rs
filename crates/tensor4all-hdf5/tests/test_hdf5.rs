@@ -211,3 +211,21 @@ fn test_mps_ortho_roundtrip() {
 
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn test_type_mismatch_error() {
+    // Write an ITensor, then try to load it as MPS → should get a clear error
+    let path = temp_path("type_mismatch");
+    let tensor = make_test_tensor_f64();
+    save_itensor(&path, "obj", &tensor).unwrap();
+
+    let err = load_mps(&path, "obj").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Expected HDF5 type 'MPS'"),
+        "Expected type mismatch error, got: {}",
+        msg
+    );
+
+    std::fs::remove_file(&path).ok();
+}

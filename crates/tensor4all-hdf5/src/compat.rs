@@ -4,57 +4,56 @@
 //! while our Rust code uses variable-length Unicode strings. This module provides
 //! functions that can read both formats.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Result};
 use hdf5::types::{FixedUnicode, VarLenUnicode};
 use hdf5::{Attribute, Dataset};
+
+/// Try multiple string-reading strategies, returning the first success.
+///
+/// HDF5 strings may be stored as VarLenUnicode (our format), FixedUnicode
+/// (ITensors.jl format), or VarLenAscii. This helper abstracts that logic.
+fn try_read_string<F1, F2, F3>(try_varlen: F1, try_fixed: F2, try_ascii: F3) -> Result<String>
+where
+    F1: FnOnce() -> hdf5::Result<VarLenUnicode>,
+    F2: FnOnce() -> hdf5::Result<FixedUnicode<256>>,
+    F3: FnOnce() -> hdf5::Result<hdf5::types::VarLenAscii>,
+{
+    if let Ok(val) = try_varlen() {
+        return Ok(val.as_str().to_string());
+    }
+    if let Ok(val) = try_fixed() {
+        return Ok(val.as_str().trim_end_matches('\0').to_string());
+    }
+    if let Ok(val) = try_ascii() {
+        return Ok(val.as_str().to_string());
+    }
+    bail!("Failed to read HDF5 string: unsupported string type (tried VarLenUnicode, FixedUnicode, VarLenAscii)")
+}
 
 /// Read a string attribute that may be stored as either fixed-length or
 /// variable-length Unicode.
 pub(crate) fn read_string_attr(attr: &Attribute) -> Result<String> {
-    // Try variable-length Unicode first (our format)
-    if let Ok(val) = attr.as_reader().read_scalar::<VarLenUnicode>() {
-        return Ok(val.as_str().to_string());
-    }
-
-    // Try fixed-length Unicode with a large buffer (ITensors.jl format).
-    // HDF5 will pad shorter strings with nulls, which we trim.
-    if let Ok(val) = attr.as_reader().read_scalar::<FixedUnicode<256>>() {
-        return Ok(val.as_str().trim_end_matches('\0').to_string());
-    }
-
-    // Fallback: try reading as VarLenAscii
-    if let Ok(val) = attr.as_reader().read_scalar::<hdf5::types::VarLenAscii>() {
-        return Ok(val.as_str().to_string());
-    }
-
-    anyhow::bail!("Failed to read string attribute: unsupported string type")
+    try_read_string(
+        || attr.as_reader().read_scalar::<VarLenUnicode>(),
+        || attr.as_reader().read_scalar::<FixedUnicode<256>>(),
+        || attr.as_reader().read_scalar::<hdf5::types::VarLenAscii>(),
+    )
 }
 
 /// Read a string scalar dataset that may be stored as either fixed-length or
 /// variable-length Unicode.
 pub(crate) fn read_string_dataset(ds: &Dataset) -> Result<String> {
-    // Try variable-length Unicode first (our format)
-    if let Ok(val) = ds.as_reader().read_scalar::<VarLenUnicode>() {
-        return Ok(val.as_str().to_string());
-    }
-
-    // Try fixed-length Unicode with a large buffer (ITensors.jl format)
-    if let Ok(val) = ds.as_reader().read_scalar::<FixedUnicode<256>>() {
-        return Ok(val.as_str().trim_end_matches('\0').to_string());
-    }
-
-    // Fallback: try reading as VarLenAscii
-    if let Ok(val) = ds.as_reader().read_scalar::<hdf5::types::VarLenAscii>() {
-        return Ok(val.as_str().to_string());
-    }
-
-    anyhow::bail!("Failed to read string dataset: unsupported string type")
+    try_read_string(
+        || ds.as_reader().read_scalar::<VarLenUnicode>(),
+        || ds.as_reader().read_scalar::<FixedUnicode<256>>(),
+        || ds.as_reader().read_scalar::<hdf5::types::VarLenAscii>(),
+    )
 }
 
 /// Read a string attribute by name from a group.
 pub(crate) fn read_string_attr_by_name(group: &hdf5::Group, name: &str) -> Result<String> {
     let attr = group
         .attr(name)
-        .context(format!("Attribute '{}' not found", name))?;
+        .map_err(|_| anyhow::anyhow!("Attribute '{}' not found", name))?;
     read_string_attr(&attr)
 }

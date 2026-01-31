@@ -6,16 +6,36 @@ use std::ffi::CStr;
 use std::panic::catch_unwind;
 
 use crate::types::{t4a_tensor, t4a_tensortrain};
-use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_NULL_POINTER, T4A_SUCCESS};
+use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 
-/// Helper to convert a C string pointer to a Rust &str.
-///
-/// Returns None if the pointer is null or the string is not valid UTF-8.
-fn cstr_to_str<'a>(ptr: *const libc::c_char) -> Option<&'a str> {
+/// Convert a C string pointer to a Rust `&str`, distinguishing null from invalid UTF-8.
+fn cstr_to_str_checked<'a>(ptr: *const libc::c_char) -> Result<&'a str, StatusCode> {
     if ptr.is_null() {
-        return None;
+        return Err(T4A_NULL_POINTER);
     }
-    unsafe { CStr::from_ptr(ptr) }.to_str().ok()
+    unsafe { CStr::from_ptr(ptr) }
+        .to_str()
+        .map_err(|_| T4A_INVALID_ARGUMENT)
+}
+
+/// Extract two C strings and run a closure inside `catch_unwind`.
+fn with_two_cstrs_and_unwind<F>(
+    s1: *const libc::c_char,
+    s2: *const libc::c_char,
+    f: F,
+) -> StatusCode
+where
+    F: FnOnce(&str, &str) -> StatusCode + std::panic::UnwindSafe,
+{
+    let s1 = match cstr_to_str_checked(s1) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    let s2 = match cstr_to_str_checked(s2) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    catch_unwind(|| f(s1, s2)).unwrap_or(T4A_INTERNAL_ERROR)
 }
 
 /// Save a tensor as an ITensors.jl-compatible `ITensor` in an HDF5 file.
@@ -36,27 +56,16 @@ pub extern "C" fn t4a_hdf5_save_itensor(
     name: *const libc::c_char,
     tensor: *const t4a_tensor,
 ) -> StatusCode {
-    let filepath = match cstr_to_str(filepath) {
-        Some(s) => s,
-        None => return T4A_NULL_POINTER,
-    };
-    let name = match cstr_to_str(name) {
-        Some(s) => s,
-        None => return T4A_NULL_POINTER,
-    };
     if tensor.is_null() {
         return T4A_NULL_POINTER;
     }
-
-    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+    with_two_cstrs_and_unwind(filepath, name, |fp, nm| {
         let tensor_ref = unsafe { &*tensor };
-        match tensor4all_hdf5::save_itensor(filepath, name, tensor_ref.inner()) {
+        match tensor4all_hdf5::save_itensor(fp, nm, tensor_ref.inner()) {
             Ok(()) => T4A_SUCCESS,
             Err(_) => T4A_INTERNAL_ERROR,
         }
-    }));
-
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    })
 }
 
 /// Load a tensor from an ITensors.jl-compatible `ITensor` in an HDF5 file.
@@ -78,20 +87,13 @@ pub extern "C" fn t4a_hdf5_load_itensor(
     name: *const libc::c_char,
     out: *mut *mut t4a_tensor,
 ) -> StatusCode {
-    let filepath = match cstr_to_str(filepath) {
-        Some(s) => s,
-        None => return T4A_NULL_POINTER,
-    };
-    let name = match cstr_to_str(name) {
-        Some(s) => s,
-        None => return T4A_NULL_POINTER,
-    };
     if out.is_null() {
         return T4A_NULL_POINTER;
     }
-
-    let result = catch_unwind(std::panic::AssertUnwindSafe(
-        || match tensor4all_hdf5::load_itensor(filepath, name) {
+    with_two_cstrs_and_unwind(
+        filepath,
+        name,
+        |fp, nm| match tensor4all_hdf5::load_itensor(fp, nm) {
             Ok(tensor) => {
                 let boxed = Box::new(t4a_tensor::new(tensor));
                 unsafe { *out = Box::into_raw(boxed) };
@@ -99,9 +101,7 @@ pub extern "C" fn t4a_hdf5_load_itensor(
             }
             Err(_) => T4A_INTERNAL_ERROR,
         },
-    ));
-
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    )
 }
 
 /// Save a tensor train as an ITensorMPS.jl-compatible `MPS` in an HDF5 file.
@@ -122,27 +122,16 @@ pub extern "C" fn t4a_hdf5_save_mps(
     name: *const libc::c_char,
     tt: *const t4a_tensortrain,
 ) -> StatusCode {
-    let filepath = match cstr_to_str(filepath) {
-        Some(s) => s,
-        None => return T4A_NULL_POINTER,
-    };
-    let name = match cstr_to_str(name) {
-        Some(s) => s,
-        None => return T4A_NULL_POINTER,
-    };
     if tt.is_null() {
         return T4A_NULL_POINTER;
     }
-
-    let result = catch_unwind(std::panic::AssertUnwindSafe(|| {
+    with_two_cstrs_and_unwind(filepath, name, |fp, nm| {
         let tt_ref = unsafe { &*tt };
-        match tensor4all_hdf5::save_mps(filepath, name, tt_ref.inner()) {
+        match tensor4all_hdf5::save_mps(fp, nm, tt_ref.inner()) {
             Ok(()) => T4A_SUCCESS,
             Err(_) => T4A_INTERNAL_ERROR,
         }
-    }));
-
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    })
 }
 
 /// Load a tensor train from an ITensorMPS.jl-compatible `MPS` in an HDF5 file.
@@ -164,28 +153,17 @@ pub extern "C" fn t4a_hdf5_load_mps(
     name: *const libc::c_char,
     out: *mut *mut t4a_tensortrain,
 ) -> StatusCode {
-    let filepath = match cstr_to_str(filepath) {
-        Some(s) => s,
-        None => return T4A_NULL_POINTER,
-    };
-    let name = match cstr_to_str(name) {
-        Some(s) => s,
-        None => return T4A_NULL_POINTER,
-    };
     if out.is_null() {
         return T4A_NULL_POINTER;
     }
-
-    let result = catch_unwind(std::panic::AssertUnwindSafe(
-        || match tensor4all_hdf5::load_mps(filepath, name) {
+    with_two_cstrs_and_unwind(filepath, name, |fp, nm| {
+        match tensor4all_hdf5::load_mps(fp, nm) {
             Ok(tt) => {
                 let boxed = Box::new(t4a_tensortrain::new(tt));
                 unsafe { *out = Box::into_raw(boxed) };
                 T4A_SUCCESS
             }
             Err(_) => T4A_INTERNAL_ERROR,
-        },
-    ));
-
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+        }
+    })
 }

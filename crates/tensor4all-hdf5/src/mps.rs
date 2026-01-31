@@ -4,12 +4,11 @@
 //! so this module is a thin wrapper around [`crate::itensor`].
 
 use anyhow::{Context, Result};
-use hdf5::types::VarLenUnicode;
 use hdf5::Group;
-use std::str::FromStr;
 use tensor4all_itensorlike::TensorTrain;
 
 use crate::itensor;
+use crate::schema;
 
 /// Write a [`TensorTrain`] as an ITensorMPS.jl `MPS` to an HDF5 group.
 ///
@@ -25,14 +24,7 @@ use crate::itensor;
 ///   MPS[2]/ ...
 /// ```
 pub(crate) fn write_mps(group: &Group, tt: &TensorTrain) -> Result<()> {
-    // Type and version attributes
-    let type_attr = group.new_attr::<VarLenUnicode>().shape(()).create("type")?;
-    type_attr
-        .as_writer()
-        .write_scalar(&VarLenUnicode::from_str("MPS")?)?;
-
-    let version_attr = group.new_attr::<i64>().shape(()).create("version")?;
-    version_attr.as_writer().write_scalar(&1i64)?;
+    schema::write_type_version(group, "MPS", 1)?;
 
     // Metadata datasets
     let length = tt.len() as i64;
@@ -58,6 +50,8 @@ pub(crate) fn write_mps(group: &Group, tt: &TensorTrain) -> Result<()> {
 
 /// Read a [`TensorTrain`] from an ITensorMPS.jl `MPS` in an HDF5 group.
 pub(crate) fn read_mps(group: &Group) -> Result<TensorTrain> {
+    schema::require_type_version(group, "MPS", 1)?;
+
     let length: i64 = group
         .dataset("length")?
         .as_reader()

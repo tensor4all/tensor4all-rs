@@ -16,7 +16,9 @@
 mod compat;
 mod index;
 mod itensor;
+mod layout;
 mod mps;
+mod schema;
 
 use anyhow::Result;
 use hdf5::File;

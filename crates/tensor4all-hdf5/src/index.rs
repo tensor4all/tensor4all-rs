@@ -6,25 +6,8 @@ use hdf5::Group;
 use std::str::FromStr;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
 use tensor4all_core::tagset::TagSetLike;
-use tensor4all_core::ConjState;
 
-/// Convert a [`ConjState`] to ITensors.jl `Arrow` integer.
-fn conj_state_to_dir(state: ConjState) -> i64 {
-    match state {
-        ConjState::Undirected => 0,
-        ConjState::Ket => -1, // Arrow.In
-        ConjState::Bra => 1,  // Arrow.Out
-    }
-}
-
-/// Convert an ITensors.jl `Arrow` integer to [`ConjState`].
-fn dir_to_conj_state(dir: i64) -> ConjState {
-    match dir {
-        -1 => ConjState::Ket,
-        1 => ConjState::Bra,
-        _ => ConjState::Undirected,
-    }
-}
+use crate::schema;
 
 /// Convert a [`TagSet`] to a comma-separated string (ITensors.jl format).
 fn tagset_to_string(tags: &TagSet) -> String {
@@ -42,13 +25,7 @@ fn tagset_to_string(tags: &TagSet) -> String {
 ///   tags: String  (comma-separated)
 /// ```
 pub(crate) fn write_tagset(group: &Group, tags: &TagSet) -> Result<()> {
-    let type_attr = group.new_attr::<VarLenUnicode>().shape(()).create("type")?;
-    type_attr
-        .as_writer()
-        .write_scalar(&VarLenUnicode::from_str("TagSet")?)?;
-
-    let version_attr = group.new_attr::<i64>().shape(()).create("version")?;
-    version_attr.as_writer().write_scalar(&1i64)?;
+    schema::write_type_version(group, "TagSet", 1)?;
 
     let tag_string = tagset_to_string(tags);
     let ds = group
@@ -63,6 +40,8 @@ pub(crate) fn write_tagset(group: &Group, tags: &TagSet) -> Result<()> {
 
 /// Read a TagSet from an HDF5 group.
 pub(crate) fn read_tagset(group: &Group) -> Result<TagSet> {
+    schema::require_type_version(group, "TagSet", 1)?;
+
     let ds = group.dataset("tags")?;
     let s = crate::compat::read_string_dataset(&ds)?;
     if s.is_empty() {
@@ -83,19 +62,12 @@ pub(crate) fn read_tagset(group: &Group) -> Result<TagSet> {
 ///   @space_type = "Int"
 ///   id: UInt64
 ///   dim: Int64
-///   dir: Int64       (In=-1, Out=1, Neither=0)
+///   dir: Int64       (always 0 — direction is unused in tensor4all-rs)
 ///   plev: Int64      (always 0)
 ///   tags/            (TagSet group)
 /// ```
 pub(crate) fn write_index(group: &Group, index: &DynIndex) -> Result<()> {
-    // Attributes
-    let type_attr = group.new_attr::<VarLenUnicode>().shape(()).create("type")?;
-    type_attr
-        .as_writer()
-        .write_scalar(&VarLenUnicode::from_str("Index")?)?;
-
-    let version_attr = group.new_attr::<i64>().shape(()).create("version")?;
-    version_attr.as_writer().write_scalar(&1i64)?;
+    schema::write_type_version(group, "Index", 1)?;
 
     let space_type_attr = group
         .new_attr::<VarLenUnicode>()
@@ -112,9 +84,9 @@ pub(crate) fn write_index(group: &Group, index: &DynIndex) -> Result<()> {
     let dim_ds = group.new_dataset::<i64>().shape(()).create("dim")?;
     dim_ds.as_writer().write_scalar(&(index.dim as i64))?;
 
-    let dir = conj_state_to_dir(index.conj_state());
+    // dir: always 0 (direction is unused in tensor4all-rs)
     let dir_ds = group.new_dataset::<i64>().shape(()).create("dir")?;
-    dir_ds.as_writer().write_scalar(&dir)?;
+    dir_ds.as_writer().write_scalar(&0i64)?;
 
     let plev_ds = group.new_dataset::<i64>().shape(()).create("plev")?;
     plev_ds.as_writer().write_scalar(&0i64)?;
@@ -128,6 +100,8 @@ pub(crate) fn write_index(group: &Group, index: &DynIndex) -> Result<()> {
 
 /// Read a DynIndex from an HDF5 group.
 pub(crate) fn read_index(group: &Group) -> Result<DynIndex> {
+    schema::require_type_version(group, "Index", 1)?;
+
     let id: u64 = group
         .dataset("id")?
         .as_reader()
@@ -140,6 +114,7 @@ pub(crate) fn read_index(group: &Group) -> Result<DynIndex> {
         .read_scalar()
         .context("Failed to read index dim")?;
 
+    // dir is read for schema compatibility but ignored
     let _dir: i64 = group
         .dataset("dir")?
         .as_reader()
@@ -156,11 +131,6 @@ pub(crate) fn read_index(group: &Group) -> Result<DynIndex> {
     let tags_group = group.group("tags")?;
     let tags = read_tagset(&tags_group)?;
 
-    // Note: dir_to_conj_state(_dir) would give us ConjState, but DynIndex
-    // is always Undirected. We store dir for round-trip fidelity but
-    // DynIndex doesn't use it internally.
-    let _conj_state = dir_to_conj_state(_dir);
-
     Ok(Index::new_with_tags(DynId(id), dim as usize, tags))
 }
 
@@ -176,13 +146,7 @@ pub(crate) fn read_index(group: &Group) -> Result<DynIndex> {
 ///   index_2/ ...
 /// ```
 pub(crate) fn write_index_set(group: &Group, indices: &[DynIndex]) -> Result<()> {
-    let type_attr = group.new_attr::<VarLenUnicode>().shape(()).create("type")?;
-    type_attr
-        .as_writer()
-        .write_scalar(&VarLenUnicode::from_str("IndexSet")?)?;
-
-    let version_attr = group.new_attr::<i64>().shape(()).create("version")?;
-    version_attr.as_writer().write_scalar(&1i64)?;
+    schema::write_type_version(group, "IndexSet", 1)?;
 
     let length_ds = group.new_dataset::<i64>().shape(()).create("length")?;
     length_ds
@@ -200,6 +164,8 @@ pub(crate) fn write_index_set(group: &Group, indices: &[DynIndex]) -> Result<()>
 
 /// Read an IndexSet from an HDF5 group.
 pub(crate) fn read_index_set(group: &Group) -> Result<Vec<DynIndex>> {
+    schema::require_type_version(group, "IndexSet", 1)?;
+
     let length: i64 = group
         .dataset("length")?
         .as_reader()
@@ -216,30 +182,9 @@ pub(crate) fn read_index_set(group: &Group) -> Result<Vec<DynIndex>> {
     Ok(indices)
 }
 
-// conj_state_to_dir and dir_to_conj_state are used in index module only
-// but kept accessible for potential future use via ConjState field on DynIndex.
-
-use tensor4all_core::index_like::IndexLike;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_conj_state_dir_roundtrip() {
-        assert_eq!(
-            dir_to_conj_state(conj_state_to_dir(ConjState::Undirected)),
-            ConjState::Undirected
-        );
-        assert_eq!(
-            dir_to_conj_state(conj_state_to_dir(ConjState::Ket)),
-            ConjState::Ket
-        );
-        assert_eq!(
-            dir_to_conj_state(conj_state_to_dir(ConjState::Bra)),
-            ConjState::Bra
-        );
-    }
 
     #[test]
     fn test_tagset_to_string() {
