@@ -525,6 +525,7 @@ Convert column-major array to row-major flat vector for Rust.
 """
 function _column_to_row_major(arr::AbstractArray)
     arr = _ensure_contiguous(arr)
+    ndims(arr) == 0 && return vec(arr)
     # Reverse dimensions to get row-major layout
     perm = reverse(1:ndims(arr))
     permuted = permutedims(arr, perm)
@@ -538,6 +539,7 @@ end
 Convert row-major flat vector from Rust to column-major Julia array.
 """
 function _row_to_column_major(data::Vector{T}, dims::Tuple) where T
+    isempty(dims) && return reshape(data, 1)
     # Data is row-major, so reverse dims for reshape
     arr = reshape(data, reverse(dims)...)
     # Reverse back to get column-major
