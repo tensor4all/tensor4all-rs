@@ -41,6 +41,9 @@ from .simplett import SimpleTensorTrain
 # TensorCI types (tensor4all-tensorci)
 from .tensorci import TensorCI2, crossinterpolate2
 
+# HDF5 functions (ITensors.jl compatible)
+from .hdf5 import save_itensor, load_itensor
+
 # DISABLED - pending simpletensortrain integration
 # MPO types (tensor4all-mpocontraction)
 # from . import mpo
@@ -74,6 +77,9 @@ __all__ = [
     # TensorCI types
     "TensorCI2",
     "crossinterpolate2",
+    # HDF5 functions
+    "save_itensor",
+    "load_itensor",
     # DISABLED - pending simpletensortrain integration
     # MPO module
     # "mpo",

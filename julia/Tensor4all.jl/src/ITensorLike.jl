@@ -890,4 +890,45 @@ end
 
 export random_tt
 
+# ============================================================================
+# HDF5 Save/Load for TensorTrain (ITensorMPS.jl compatible)
+# ============================================================================
+
+"""
+    save_mps(filepath::AbstractString, name::AbstractString, tt::TensorTrain)
+
+Save a tensor train to an HDF5 file in ITensorMPS.jl-compatible MPS format.
+
+# Arguments
+- `filepath`: Path to the HDF5 file (will be created/overwritten)
+- `name`: Name of the HDF5 group to write the MPS to
+- `tt`: Tensor train to save
+"""
+function save_mps(filepath::AbstractString, name::AbstractString, tt::TensorTrain)
+    status = C_API.t4a_hdf5_save_mps(filepath, name, tt.ptr)
+    C_API.check_status(status)
+    return nothing
+end
+
+"""
+    load_mps(filepath::AbstractString, name::AbstractString) -> TensorTrain
+
+Load a tensor train from an HDF5 file in ITensorMPS.jl-compatible MPS format.
+
+# Arguments
+- `filepath`: Path to the HDF5 file
+- `name`: Name of the HDF5 group containing the MPS
+
+# Returns
+A `TensorTrain` loaded from the file.
+"""
+function load_mps(filepath::AbstractString, name::AbstractString)
+    out = Ref{Ptr{Cvoid}}(C_NULL)
+    status = C_API.t4a_hdf5_load_mps(filepath, name, out)
+    C_API.check_status(status)
+    return TensorTrain(out[])
+end
+
+export save_mps, load_mps
+
 end # module ITensorLike

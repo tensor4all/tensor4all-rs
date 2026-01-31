@@ -10,5 +10,7 @@ const T4ATensor = Tensor4all.Tensor
     include("test_index.jl")
     include("test_tensor.jl")
     include("test_itensorlike_tensortrain.jl")
+    include("test_hdf5.jl")
     include("itensors_ext_test.jl")
+    include("test_hdf5_itensors_compat.jl")
 end
