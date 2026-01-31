@@ -45,7 +45,9 @@ jobs:
 
       - name: Install HDF5 (macOS)
         if: runner.os == 'macOS'
-        run: brew install hdf5
+        run: |
+          brew install hdf5
+          echo "HDF5_DIR=$(brew --prefix hdf5)" >> $GITHUB_ENV
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
