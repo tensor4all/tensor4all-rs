@@ -23,16 +23,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Julia LTS on ubuntu-22.04: avoids libcurl/OpenSSL conflict
-          # between Julia LTS's bundled libraries and ubuntu-latest (24.04).
           - julia-version: 'lts'
-            os: ubuntu-22.04
+            os: ubuntu-latest
+            # Julia LTS bundles libcurl incompatible with system HDF5 on
+            # ubuntu-latest. Build C-API without HDF5 to avoid the conflict.
+            no-hdf5: true
           - julia-version: '1'
             os: ubuntu-latest
+            no-hdf5: false
           - julia-version: 'lts'
             os: macos-latest
+            no-hdf5: false
           - julia-version: '1'
             os: macos-latest
+            no-hdf5: false
           # Windows not yet tested
           # - julia-version: '1'
           #   os: windows-latest
@@ -42,7 +46,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install HDF5 (Ubuntu)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !matrix.no-hdf5
         run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
 
       - name: Install HDF5 (macOS)
@@ -74,7 +78,7 @@ jobs:
         uses: julia-actions/cache@v2
 
       - name: Run Julia tests
-        run: ./scripts/run_julia_tests.sh
+        run: ./scripts/run_julia_tests.sh ${{ matrix.no-hdf5 && '--no-hdf5' || '' }}
 
   rollup-jl:
     runs-on: ubuntu-latest
