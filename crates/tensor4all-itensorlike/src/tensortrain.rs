@@ -9,15 +9,11 @@
 use std::ops::Range;
 use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
 use tensor4all_core::{AnyScalar, TensorAccess, TensorDynLen};
-use tensor4all_treetn::treetn::contraction::{
-    contract as treetn_contract, ContractionMethod, ContractionOptions as TreeTNContractionOptions,
-};
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 use crate::error::{Result, TensorTrainError};
-use crate::options::{
-    CanonicalForm, ContractMethod, ContractOptions, TruncateAlg, TruncateOptions,
-};
+use crate::options::{validate_truncation_params, CanonicalForm, TruncateAlg, TruncateOptions};
+use tensor4all_core::truncation::HasTruncationParams;
 
 /// Tensor Train with orthogonality tracking.
 ///
@@ -42,7 +38,7 @@ use crate::options::{
 pub struct TensorTrain {
     /// The underlying TreeTN with linear chain topology.
     /// Node names are usize (0, 1, 2, ...) representing site indices.
-    inner: TreeTN<TensorDynLen, usize>,
+    pub(crate) treetn: TreeTN<TensorDynLen, usize>,
     /// The canonical form used (if known).
     canonical_form: Option<CanonicalForm>,
 }
@@ -67,9 +63,9 @@ impl TensorTrain {
     pub fn new(tensors: Vec<TensorDynLen>) -> Result<Self> {
         if tensors.is_empty() {
             // Create an empty TreeTN
-            let inner = TreeTN::<TensorDynLen, usize>::new();
+            let treetn = TreeTN::<TensorDynLen, usize>::new();
             return Ok(Self {
-                inner,
+                treetn,
                 canonical_form: None,
             });
         }
@@ -105,7 +101,7 @@ impl TensorTrain {
         let node_names: Vec<usize> = (0..tensors.len()).collect();
 
         // Create TreeTN with from_tensors (auto-connects by shared index IDs)
-        let inner =
+        let treetn =
             TreeTN::<TensorDynLen, usize>::from_tensors(tensors, node_names).map_err(|e| {
                 TensorTrainError::InvalidStructure {
                     message: format!("Failed to create TreeTN: {}", e),
@@ -113,7 +109,7 @@ impl TensorTrain {
             })?;
 
         Ok(Self {
-            inner,
+            treetn,
             canonical_form: None,
         })
     }
@@ -140,7 +136,7 @@ impl TensorTrain {
         // When llim + 2 == rlim, ortho center is at llim + 1
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < tt.len() as i32 {
             let center = (llim + 1) as usize;
-            tt.inner.set_canonical_region(vec![center]).map_err(|e| {
+            tt.treetn.set_canonical_region(vec![center]).map_err(|e| {
                 TensorTrainError::InvalidStructure {
                     message: format!("Failed to set ortho region: {}", e),
                 }
@@ -151,16 +147,36 @@ impl TensorTrain {
         Ok(tt)
     }
 
+    /// Create a TensorTrain from an existing TreeTN and canonical form.
+    ///
+    /// This is a crate-internal constructor used by `contract` and `linsolve`.
+    pub(crate) fn from_inner(
+        treetn: TreeTN<TensorDynLen, usize>,
+        canonical_form: Option<CanonicalForm>,
+    ) -> Self {
+        Self {
+            treetn,
+            canonical_form,
+        }
+    }
+
+    /// Get a reference to the underlying TreeTN.
+    ///
+    /// This is a crate-internal accessor used by `contract` and `linsolve`.
+    pub(crate) fn as_treetn(&self) -> &TreeTN<TensorDynLen, usize> {
+        &self.treetn
+    }
+
     /// Number of sites (tensors) in the tensor train.
     #[inline]
     pub fn len(&self) -> usize {
-        self.inner.node_count()
+        self.treetn.node_count()
     }
 
     /// Check if the tensor train is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.inner.node_count() == 0
+        self.treetn.node_count() == 0
     }
 
     /// Left orthogonality limit.
@@ -194,10 +210,10 @@ impl TensorTrain {
         let rlim = self.rlim();
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < self.len() as i32 {
             let center = (llim + 1) as usize;
-            let _ = self.inner.set_canonical_region(vec![center]);
+            let _ = self.treetn.set_canonical_region(vec![center]);
         } else {
             // Clear ortho region if not a single center
-            let _ = self.inner.set_canonical_region(Vec::<usize>::new());
+            let _ = self.treetn.set_canonical_region(Vec::<usize>::new());
         }
     }
 
@@ -208,10 +224,10 @@ impl TensorTrain {
         let llim = self.llim();
         if llim + 2 == rlim && llim >= -1 && (llim + 1) < self.len() as i32 {
             let center = (llim + 1) as usize;
-            let _ = self.inner.set_canonical_region(vec![center]);
+            let _ = self.treetn.set_canonical_region(vec![center]);
         } else {
             // Clear ortho region if not a single center
-            let _ = self.inner.set_canonical_region(Vec::<usize>::new());
+            let _ = self.treetn.set_canonical_region(Vec::<usize>::new());
         }
     }
 
@@ -233,7 +249,7 @@ impl TensorTrain {
     /// Returns true if there is exactly one site that is not guaranteed to be orthogonal.
     #[inline]
     pub fn isortho(&self) -> bool {
-        self.inner.canonical_region().len() == 1
+        self.treetn.canonical_region().len() == 1
     }
 
     /// Get the orthogonality center (0-indexed).
@@ -241,7 +257,7 @@ impl TensorTrain {
     /// Returns `Some(site)` if the tensor train has a single orthogonality center,
     /// `None` otherwise.
     pub fn orthocenter(&self) -> Option<usize> {
-        let region = self.inner.canonical_region();
+        let region = self.treetn.canonical_region();
         if region.len() == 1 {
             // Node name IS the site index since V = usize
             Some(*region.iter().next().unwrap())
@@ -269,8 +285,8 @@ impl TensorTrain {
     /// Panics if `site >= len()`.
     #[inline]
     pub fn tensor(&self, site: usize) -> &TensorDynLen {
-        let node_idx = self.inner.node_index(&site).expect("Site out of bounds");
-        self.inner.tensor(node_idx).expect("Tensor not found")
+        let node_idx = self.treetn.node_index(&site).expect("Site out of bounds");
+        self.treetn.tensor(node_idx).expect("Tensor not found")
     }
 
     /// Get a reference to the tensor at the given site.
@@ -284,13 +300,13 @@ impl TensorTrain {
             });
         }
         let node_idx =
-            self.inner
+            self.treetn
                 .node_index(&site)
                 .ok_or_else(|| TensorTrainError::SiteOutOfBounds {
                     site,
                     length: self.len(),
                 })?;
-        self.inner
+        self.treetn
             .tensor(node_idx)
             .ok_or_else(|| TensorTrainError::SiteOutOfBounds {
                 site,
@@ -305,8 +321,8 @@ impl TensorTrain {
     /// Panics if `site >= len()`.
     #[inline]
     pub fn tensor_mut(&mut self, site: usize) -> &mut TensorDynLen {
-        let node_idx = self.inner.node_index(&site).expect("Site out of bounds");
-        self.inner.tensor_mut(node_idx).expect("Tensor not found")
+        let node_idx = self.treetn.node_index(&site).expect("Site out of bounds");
+        self.treetn.tensor_mut(node_idx).expect("Tensor not found")
     }
 
     /// Get a reference to all tensors.
@@ -314,8 +330,8 @@ impl TensorTrain {
     pub fn tensors(&self) -> Vec<&TensorDynLen> {
         (0..self.len())
             .filter_map(|site| {
-                let node_idx = self.inner.node_index(&site)?;
-                self.inner.tensor(node_idx)
+                let node_idx = self.treetn.node_index(&site)?;
+                self.treetn.tensor(node_idx)
             })
             .collect()
     }
@@ -337,10 +353,10 @@ impl TensorTrain {
             return None;
         }
 
-        let left_node = self.inner.node_index(&i)?;
-        let right_node = self.inner.node_index(&(i + 1))?;
-        let left = self.inner.tensor(left_node)?;
-        let right = self.inner.tensor(right_node)?;
+        let left_node = self.treetn.node_index(&i)?;
+        let right_node = self.treetn.node_index(&(i + 1))?;
+        let left = self.treetn.tensor(left_node)?;
+        let right = self.treetn.tensor(right_node)?;
         let common = common_inds(left.indices(), right.indices());
         common.into_iter().next()
     }
@@ -446,12 +462,12 @@ impl TensorTrain {
         if i >= self.len().saturating_sub(1) {
             return false;
         }
-        let left_node = self.inner.node_index(&i);
-        let right_node = self.inner.node_index(&(i + 1));
+        let left_node = self.treetn.node_index(&i);
+        let right_node = self.treetn.node_index(&(i + 1));
         match (left_node, right_node) {
             (Some(l), Some(r)) => {
-                let left = self.inner.tensor(l);
-                let right = self.inner.tensor(r);
+                let left = self.treetn.tensor(l);
+                let right = self.treetn.tensor(r);
                 match (left, right) {
                     (Some(l), Some(r)) => hascommoninds(l.indices(), r.indices()),
                     _ => false,
@@ -465,10 +481,10 @@ impl TensorTrain {
     ///
     /// This invalidates orthogonality tracking.
     pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen) {
-        let node_idx = self.inner.node_index(&site).expect("Site out of bounds");
-        let _ = self.inner.replace_tensor(node_idx, tensor);
+        let node_idx = self.treetn.node_index(&site).expect("Site out of bounds");
+        let _ = self.treetn.replace_tensor(node_idx, tensor);
         // Invalidate orthogonality
-        let _ = self.inner.set_canonical_region(Vec::<usize>::new());
+        let _ = self.treetn.set_canonical_region(Vec::<usize>::new());
     }
 
     /// Orthogonalize the tensor train to have orthogonality center at the given site.
@@ -510,7 +526,7 @@ impl TensorTrain {
         // Use TreeTN's canonicalize (accepts node names and CanonicalizationOptions)
         // Since V = usize, node names are site indices
         let options = CanonicalizationOptions::forced().with_form(form);
-        self.inner = std::mem::take(&mut self.inner)
+        self.treetn = std::mem::take(&mut self.treetn)
             .canonicalize(vec![site], options)
             .map_err(|e| TensorTrainError::InvalidStructure {
                 message: format!("Canonicalize failed: {}", e),
@@ -532,18 +548,20 @@ impl TensorTrain {
             return Ok(());
         }
 
+        validate_truncation_params(options.truncation_params())?;
+
         // Convert TruncateOptions to TruncationOptions
-        let form = truncate_alg_to_form(options.alg);
+        let form = truncate_alg_to_form(options.alg());
         let treetn_options = TruncationOptions {
             form,
-            truncation: options.truncation,
+            truncation: options.truncation(),
         };
 
         // Truncate towards the last site (rightmost) as the canonical center
         // This matches ITensor convention where truncation sweeps left-to-right
         let center = self.len() - 1;
 
-        self.inner
+        self.treetn
             .truncate_mut([center], treetn_options)
             .map_err(|e| TensorTrainError::InvalidStructure {
                 message: format!("TreeTN truncation failed: {}", e),
@@ -648,95 +666,6 @@ impl TensorTrain {
         Ok(result)
     }
 
-    /// Contract two tensor trains, returning a new tensor train.
-    ///
-    /// This performs element-wise contraction of corresponding sites,
-    /// similar to MPO-MPO contraction in ITensor.
-    ///
-    /// # Arguments
-    /// * `other` - The other tensor train to contract with
-    /// * `options` - Contraction options (method, max_rank, rtol, nhalfsweeps)
-    ///
-    /// # Returns
-    /// A new tensor train resulting from the contraction.
-    ///
-    /// # Errors
-    /// Returns an error if:
-    /// - Either tensor train is empty
-    /// - The tensor trains have different lengths
-    /// - The contraction algorithm fails
-    pub fn contract(&self, other: &Self, options: &ContractOptions) -> Result<Self> {
-        if self.is_empty() || other.is_empty() {
-            return Err(TensorTrainError::InvalidStructure {
-                message: "Cannot contract empty tensor trains".to_string(),
-            });
-        }
-
-        if self.len() != other.len() {
-            return Err(TensorTrainError::InvalidStructure {
-                message: format!(
-                    "Tensor trains must have the same length for contraction: {} vs {}",
-                    self.len(),
-                    other.len()
-                ),
-            });
-        }
-
-        // Convert ContractOptions to TreeTN ContractionOptions
-        let treetn_method = match options.method {
-            ContractMethod::Zipup => ContractionMethod::Zipup,
-            ContractMethod::Fit => ContractionMethod::Fit,
-            ContractMethod::Naive => ContractionMethod::Naive,
-        };
-
-        // Convert nhalfsweeps to nfullsweeps (nhalfsweeps / 2)
-        // nhalfsweeps is guaranteed to be a multiple of 2 by ContractOptions::with_nhalfsweeps
-        let nfullsweeps = options.nhalfsweeps / 2;
-        let treetn_options =
-            TreeTNContractionOptions::new(treetn_method).with_nfullsweeps(nfullsweeps);
-
-        let treetn_options = if let Some(max_rank) = options.truncation.max_rank {
-            treetn_options.with_max_rank(max_rank)
-        } else {
-            treetn_options
-        };
-
-        let treetn_options = if let Some(rtol) = options.truncation.rtol {
-            treetn_options.with_rtol(rtol)
-        } else {
-            treetn_options
-        };
-
-        // Use the last site as the canonical center (consistent with existing behavior)
-        let center = self.len() - 1;
-
-        // For zip-up method, use contract_zipup_tree_accumulated
-        let result_inner = if matches!(options.method, ContractMethod::Zipup) {
-            self.inner
-                .contract_zipup_tree_accumulated(
-                    &other.inner,
-                    &center,
-                    CanonicalForm::Unitary,
-                    options.truncation.rtol,
-                    options.truncation.max_rank,
-                )
-                .map_err(|e| TensorTrainError::InvalidStructure {
-                    message: format!("Zip-up contraction failed: {}", e),
-                })?
-        } else {
-            treetn_contract(&self.inner, &other.inner, &center, treetn_options).map_err(|e| {
-                TensorTrainError::InvalidStructure {
-                    message: format!("TreeTN contraction failed: {}", e),
-                }
-            })?
-        };
-
-        Ok(Self {
-            inner: result_inner,
-            canonical_form: Some(CanonicalForm::Unitary),
-        })
-    }
-
     /// Add two tensor trains using direct-sum construction.
     ///
     /// This creates a new tensor train where each tensor is the direct sum of the
@@ -775,14 +704,14 @@ impl TensorTrain {
         }
 
         let result_inner =
-            self.inner
-                .add(&other.inner)
+            self.treetn
+                .add(&other.treetn)
                 .map_err(|e| TensorTrainError::InvalidStructure {
                     message: format!("TT addition failed: {}", e),
                 })?;
 
         Ok(Self {
-            inner: result_inner,
+            treetn: result_inner,
             canonical_form: None, // Addition destroys canonical form
         })
     }
@@ -799,7 +728,7 @@ impl Default for TensorTrain {
 ///
 /// Note: SVD truncation algorithm corresponds to Unitary canonical form
 /// because both produce orthogonal/isometric tensors.
-fn truncate_alg_to_form(alg: TruncateAlg) -> CanonicalForm {
+pub(crate) fn truncate_alg_to_form(alg: TruncateAlg) -> CanonicalForm {
     match alg {
         TruncateAlg::SVD | TruncateAlg::RSVD | TruncateAlg::QR => CanonicalForm::Unitary,
         TruncateAlg::LU => CanonicalForm::LU,
@@ -1141,6 +1070,43 @@ mod tests {
         assert!(result.is_ok());
         let result_tt = result.unwrap();
         assert_eq!(result_tt.len(), 1);
+    }
+
+    #[test]
+    fn test_contract_fit_odd_nhalfsweeps_errors() {
+        use crate::ContractOptions;
+
+        let s0 = idx(400, 2);
+        let s1 = idx(401, 2);
+        let l01_a = idx(402, 3);
+        let l01_b = idx(403, 3);
+
+        let t1_0 = make_tensor(vec![s0.clone(), l01_a.clone()]);
+        let t1_1 = make_tensor(vec![l01_a.clone(), s1.clone()]);
+        let tt1 = TensorTrain::new(vec![t1_0, t1_1]).unwrap();
+
+        let t2_0 = make_tensor(vec![s0.clone(), l01_b.clone()]);
+        let t2_1 = make_tensor(vec![l01_b.clone(), s1.clone()]);
+        let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
+
+        let options = ContractOptions::fit().with_nhalfsweeps(1).with_max_rank(10);
+        let err = tt1.contract(&tt2, &options).unwrap_err();
+        assert!(matches!(err, TensorTrainError::OperationError { .. }));
+    }
+
+    #[test]
+    fn test_truncate_invalid_rtol_errors() {
+        let s0 = idx(500, 2);
+        let l01 = idx(501, 3);
+        let s1 = idx(502, 2);
+
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+        let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+        let options = TruncateOptions::svd().with_rtol(-1.0);
+        let err = tt.truncate(&options).unwrap_err();
+        assert!(matches!(err, TensorTrainError::OperationError { .. }));
     }
 
     #[test]
