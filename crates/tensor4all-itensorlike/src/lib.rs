@@ -39,10 +39,28 @@
 //! - Uses `conj` instead of `dag` (no index direction flipping without QN support)
 //! - Each site can have multiple site indices (not just one physical index per site)
 
+pub mod contract;
 pub mod error;
+pub mod linsolve;
 pub mod options;
 pub mod tensortrain;
 
+pub use contract::contract;
 pub use error::{Result, TensorTrainError};
-pub use options::{CanonicalForm, ContractMethod, ContractOptions, TruncateAlg, TruncateOptions};
+pub use linsolve::linsolve;
+pub use options::{
+    CanonicalForm, ContractMethod, ContractOptions, LinsolveOptions, TruncateAlg, TruncateOptions,
+};
 pub use tensortrain::TensorTrain;
+
+/// Type alias for Matrix Product State (MPS).
+///
+/// In ITensors.jl, MPS and MPO share the same underlying type.
+/// Here, both are aliases for [`TensorTrain`].
+pub type MPS = TensorTrain;
+
+/// Type alias for Matrix Product Operator (MPO).
+///
+/// In ITensors.jl, MPS and MPO share the same underlying type.
+/// Here, both are aliases for [`TensorTrain`].
+pub type MPO = TensorTrain;

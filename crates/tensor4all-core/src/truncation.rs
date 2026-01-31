@@ -66,6 +66,15 @@ pub struct TruncationParams {
     ///
     /// If `None`, no rank limit is applied.
     pub max_rank: Option<usize>,
+
+    /// Cutoff value (ITensorMPS.jl convention).
+    ///
+    /// When set via [`with_cutoff`](TruncationParams::with_cutoff), `rtol` is
+    /// automatically set to `√cutoff`. This field tracks the original cutoff
+    /// value for inspection; `rtol` is always the authoritative tolerance.
+    ///
+    /// If `None`, cutoff was not used.
+    pub cutoff: Option<f64>,
 }
 
 impl TruncationParams {
@@ -76,9 +85,12 @@ impl TruncationParams {
     }
 
     /// Set the relative tolerance.
+    ///
+    /// Clears any previously set cutoff origin.
     #[must_use]
     pub fn with_rtol(mut self, rtol: f64) -> Self {
         self.rtol = Some(rtol);
+        self.cutoff = None;
         self
     }
 
@@ -86,6 +98,26 @@ impl TruncationParams {
     #[must_use]
     pub fn with_max_rank(mut self, max_rank: usize) -> Self {
         self.max_rank = Some(max_rank);
+        self
+    }
+
+    /// Set cutoff (ITensorMPS.jl convention).
+    ///
+    /// Internally converted to `rtol = √cutoff`. Clears any previously set
+    /// `rtol` origin so `cutoff` becomes the authoritative tolerance source.
+    #[must_use]
+    pub fn with_cutoff(mut self, cutoff: f64) -> Self {
+        self.cutoff = Some(cutoff);
+        self.rtol = Some(cutoff.sqrt());
+        self
+    }
+
+    /// Set maxdim (alias for [`with_max_rank`](Self::with_max_rank)).
+    ///
+    /// This is provided for ITensorMPS.jl compatibility.
+    #[must_use]
+    pub fn with_maxdim(mut self, maxdim: usize) -> Self {
+        self.max_rank = Some(maxdim);
         self
     }
 
@@ -107,6 +139,7 @@ impl TruncationParams {
         Self {
             rtol: self.rtol.or(other.rtol),
             max_rank: self.max_rank.or(other.max_rank),
+            cutoff: self.cutoff.or(other.cutoff),
         }
     }
 }
@@ -133,11 +166,15 @@ pub trait HasTruncationParams {
     }
 
     /// Set the rtol value (builder pattern).
+    ///
+    /// Clears any previously set cutoff origin.
     fn with_rtol(mut self, rtol: f64) -> Self
     where
         Self: Sized,
     {
-        self.truncation_params_mut().rtol = Some(rtol);
+        let p = self.truncation_params_mut();
+        p.rtol = Some(rtol);
+        p.cutoff = None;
         self
     }
 
@@ -148,6 +185,40 @@ pub trait HasTruncationParams {
     {
         self.truncation_params_mut().max_rank = Some(max_rank);
         self
+    }
+
+    /// Set cutoff (ITensorMPS.jl convention, builder pattern).
+    ///
+    /// Internally converted to `rtol = √cutoff`.
+    fn with_cutoff(mut self, cutoff: f64) -> Self
+    where
+        Self: Sized,
+    {
+        let p = self.truncation_params_mut();
+        p.cutoff = Some(cutoff);
+        p.rtol = Some(cutoff.sqrt());
+        self
+    }
+
+    /// Set maxdim (alias for max_rank, builder pattern).
+    fn with_maxdim(mut self, maxdim: usize) -> Self
+    where
+        Self: Sized,
+    {
+        self.truncation_params_mut().max_rank = Some(maxdim);
+        self
+    }
+
+    /// Set cutoff via mutable reference.
+    fn set_cutoff(&mut self, cutoff: f64) {
+        let p = self.truncation_params_mut();
+        p.cutoff = Some(cutoff);
+        p.rtol = Some(cutoff.sqrt());
+    }
+
+    /// Set maxdim via mutable reference (alias for max_rank).
+    fn set_maxdim(&mut self, maxdim: usize) {
+        self.truncation_params_mut().max_rank = Some(maxdim);
     }
 }
 
@@ -233,5 +304,42 @@ mod tests {
         // Test mutable access
         params.truncation_params_mut().rtol = Some(1e-6);
         assert_eq!(params.truncation_params().rtol, Some(1e-6));
+    }
+
+    #[test]
+    fn test_with_cutoff() {
+        let params = TruncationParams::new().with_cutoff(1e-10);
+        assert_eq!(params.cutoff, Some(1e-10));
+        assert!((params.rtol.unwrap() - 1e-5).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_with_maxdim() {
+        let params = TruncationParams::new().with_maxdim(50);
+        assert_eq!(params.max_rank, Some(50));
+    }
+
+    #[test]
+    fn test_cutoff_rtol_priority_last_wins() {
+        // cutoff then rtol: rtol wins, cutoff cleared
+        let params = TruncationParams::new().with_cutoff(1e-10).with_rtol(1e-3);
+        assert_eq!(params.rtol, Some(1e-3));
+        assert_eq!(params.cutoff, None);
+
+        // rtol then cutoff: cutoff wins
+        let params = TruncationParams::new().with_rtol(1e-3).with_cutoff(1e-10);
+        assert_eq!(params.cutoff, Some(1e-10));
+        assert!((params.rtol.unwrap() - 1e-5).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_has_truncation_params_cutoff() {
+        let mut params = TruncationParams::new();
+        params.set_cutoff(1e-8);
+        assert_eq!(params.cutoff, Some(1e-8));
+        assert!((params.rtol.unwrap() - 1e-4).abs() < 1e-15);
+
+        params.set_maxdim(100);
+        assert_eq!(params.max_rank, Some(100));
     }
 }

@@ -158,11 +158,13 @@ impl PartitionedTT {
                         ))
                     })?;
                     // Truncate after addition using the same truncation params as contraction
-                    let truncate_opts = TruncateOptions {
-                        alg: tensor4all_itensorlike::TruncateAlg::SVD,
-                        truncation: options.truncation,
-                        site_range: None,
-                    };
+                    let mut truncate_opts = TruncateOptions::svd();
+                    if let Some(rtol) = options.rtol() {
+                        truncate_opts = truncate_opts.with_rtol(rtol);
+                    }
+                    if let Some(max_rank) = options.max_rank() {
+                        truncate_opts = truncate_opts.with_max_rank(max_rank);
+                    }
                     summed_tt.truncate(&truncate_opts).map_err(|e| {
                         PartitionedTTError::TensorTrainError(format!(
                             "TT truncation after addition failed: {}",
