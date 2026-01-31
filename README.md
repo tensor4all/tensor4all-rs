@@ -22,7 +22,7 @@ A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assis
 |-------------|-----------|---------------|
 | `Index{Int}` | — | `Index<Id, NoSymmSpace>` |
 | `Index{QNBlocks}` | `QIDX` | `Index<Id, QNSpace>` (future) |
-| `ITensor` | `QSpace` | `TensorDynLen<Id, Symm>` |
+| `ITensor` | `QSpace` | `TensorDynLen` |
 | `Dense` | `DATA` | `Storage::DenseF64/C64` |
 | `Diag` | — | `Storage::DiagF64/C64` |
 | `A * B` | — | `a.contract(&b)` |
@@ -40,16 +40,19 @@ A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assis
 tensor4all-rs/
 ├── crates/
 │   ├── tensor4all-tensorbackend/     # Scalar types, storage backends
-│   ├── tensor4all-core/              # Core: Index, Tensor, SVD, QR
+│   ├── tensor4all-core/              # Core: Index, Tensor, TensorLike trait, SVD, QR
+│   ├── tensor4all-treetn/            # Tree Tensor Networks with arbitrary topology
+│   ├── tensor4all-itensorlike/       # ITensorMPS.jl-like TensorTrain API
 │   ├── tensor4all-simplett/          # Simple TT/MPS implementation
 │   ├── tensor4all-tensorci/          # Tensor Cross Interpolation
 │   ├── tensor4all-quanticstci/       # High-level Quantics TCI (QuanticsTCI.jl port)
+│   ├── tensor4all-quanticstransform/ # Quantics transformation operators
+│   ├── tensor4all-partitionedtt/     # Partitioned Tensor Train
+│   ├── tensor4all-hdf5/              # ITensors.jl-compatible HDF5 serialization
 │   ├── tensor4all-capi/              # C API for language bindings
 │   ├── matrixci/                     # Matrix Cross Interpolation (internal)
 │   ├── quanticsgrids/                # Quantics grid structures (internal)
-│   ├── tensor4all-treetn/            # Tree Tensor Networks (WIP, excluded)
-│   ├── tensor4all-itensorlike/       # ITensor-like TensorTrain API (WIP, excluded)
-│   └── tensor4all-quanticstransform/# Quantics transformation operators (WIP, excluded)
+│   └── mdarray-einsum/               # Einstein summation for mdarray (internal)
 ├── julia/Tensor4all.jl/              # Julia bindings
 ├── python/tensor4all/                # Python bindings
 ├── tools/api-dump/                   # API documentation generator
@@ -59,26 +62,22 @@ tensor4all-rs/
 
 ### Crate Documentation
 
-**Active crates** (in workspace):
-
 | Crate | Description |
 |-------|-------------|
 | [tensor4all-tensorbackend](crates/tensor4all-tensorbackend/) | Scalar types (f64, Complex64) and storage backends |
-| [tensor4all-core](crates/tensor4all-core/) | Core types: Index, Tensor, SVD, QR, LU |
+| [tensor4all-core](crates/tensor4all-core/) | Core types: Index, Tensor, TensorLike trait, SVD, QR, LU |
+| [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology |
+| [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensorMPS.jl-like TensorTrain API |
 | [tensor4all-simplett](crates/tensor4all-simplett/) | Simple TT/MPS with multiple canonical forms |
 | [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI) algorithms |
 | [tensor4all-quanticstci](crates/tensor4all-quanticstci/) | High-level Quantics TCI interface |
+| [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
+| [tensor4all-partitionedtt](crates/tensor4all-partitionedtt/) | Partitioned Tensor Train |
+| [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
 | [matrixci](crates/matrixci/) | Matrix Cross Interpolation |
 | [quanticsgrids](crates/quanticsgrids/) | Quantics grid structures |
-
-**Work-in-progress crates** (excluded from workspace, need TensorLike update):
-
-| Crate | Description |
-|-------|-------------|
-| [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology |
-| [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensors.jl-like TensorTrain API |
-| [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
+| [mdarray-einsum](crates/mdarray-einsum/) | Einstein summation for mdarray |
 
 ## Usage Example (Rust)
 
@@ -158,6 +157,9 @@ i = Index(2, tags="Site,n=1")
 j = Index(3, tags="Link")
 k = Index(2, tags="Site,n=2")
 
+# Create a one-hot tensor (ITensors.jl-compatible, 1-based)
+v = onehot(i => 1, j => 2)
+
 # Create random tensors
 t1 = Tensor([i, j], randn(2, 3))
 t2 = Tensor([j, k], randn(3, 2))
@@ -213,6 +215,9 @@ import numpy as np
 i = Index(2, tags="Site")
 j = Index(3, tags="Link")
 
+# Create a one-hot tensor (0-based indexing)
+v = Tensor.onehot((i, 0), (j, 1))
+
 # Create tensor from NumPy array
 data = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float64)
 t = Tensor([i, j], data)
@@ -256,14 +261,7 @@ For ITensors.jl:
 ### Incomplete Implementations
 
 - **MPO canonical forms**: VidalMPO and InverseMPO conversions not yet implemented
-- **TreeTN refactoring**: Operator and random modules disabled pending TensorLike pattern update
 - **C API TCI2 sweep**: Currently only supports initial pivot; full sweep not exposed
-
-### WIP Crates (excluded from workspace)
-
-- `tensor4all-treetn` — Tree tensor networks
-- `tensor4all-itensorlike` — ITensors.jl-like API
-- `tensor4all-quanticstransform` — Quantics transformation operators
 
 ### Known Backend Issues
 
