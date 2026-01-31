@@ -30,6 +30,8 @@
 mod macros;
 
 mod algorithm;
+#[cfg(feature = "hdf5")]
+mod hdf5;
 mod index;
 mod simplett;
 mod tensor;
@@ -38,6 +40,8 @@ mod tensortrain;
 mod types;
 
 pub use algorithm::*;
+#[cfg(feature = "hdf5")]
+pub use hdf5::*;
 pub use index::*;
 pub use simplett::*;
 pub use tensor::*;

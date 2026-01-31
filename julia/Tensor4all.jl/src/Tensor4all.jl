@@ -842,6 +842,47 @@ function Base.deepcopy(t::Tensor)
 end
 
 # ============================================================================
+# HDF5 Save/Load for Tensor (ITensors.jl compatible)
+# ============================================================================
+
+"""
+    save_itensor(filepath::AbstractString, name::AbstractString, t::Tensor)
+
+Save a tensor to an HDF5 file in ITensors.jl-compatible format.
+
+# Arguments
+- `filepath`: Path to the HDF5 file (will be created/overwritten)
+- `name`: Name of the HDF5 group to write the tensor to
+- `t`: Tensor to save
+"""
+function save_itensor(filepath::AbstractString, name::AbstractString, t::Tensor)
+    status = C_API.t4a_hdf5_save_itensor(filepath, name, t.ptr)
+    C_API.check_status(status)
+    return nothing
+end
+
+"""
+    load_itensor(filepath::AbstractString, name::AbstractString) -> Tensor
+
+Load a tensor from an HDF5 file in ITensors.jl-compatible format.
+
+# Arguments
+- `filepath`: Path to the HDF5 file
+- `name`: Name of the HDF5 group containing the tensor
+
+# Returns
+A `Tensor` loaded from the file.
+"""
+function load_itensor(filepath::AbstractString, name::AbstractString)
+    out = Ref{Ptr{Cvoid}}(C_NULL)
+    status = C_API.t4a_hdf5_load_itensor(filepath, name, out)
+    C_API.check_status(status)
+    return Tensor(out[])
+end
+
+export save_itensor, load_itensor
+
+# ============================================================================
 # SimpleTT Submodule (Simple Tensor Train)
 # ============================================================================
 # SimpleTT is a simple tensor train (TT/MPS) library with statically determined shapes

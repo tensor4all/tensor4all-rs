@@ -25,12 +25,18 @@ jobs:
         include:
           - julia-version: 'lts'
             os: ubuntu-latest
+            # Julia LTS bundles libcurl incompatible with system HDF5 on
+            # ubuntu-latest. Build C-API without HDF5 to avoid the conflict.
+            no-hdf5: true
           - julia-version: '1'
             os: ubuntu-latest
+            no-hdf5: false
           - julia-version: 'lts'
             os: macos-latest
+            no-hdf5: false
           - julia-version: '1'
             os: macos-latest
+            no-hdf5: false
           # Windows not yet tested
           # - julia-version: '1'
           #   os: windows-latest
@@ -38,6 +44,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install HDF5 (Ubuntu)
+        if: runner.os == 'Linux' && !matrix.no-hdf5
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
+      - name: Install HDF5 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install hdf5
+          echo "HDF5_DIR=$(brew --prefix hdf5)" >> $GITHUB_ENV
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -62,7 +78,7 @@ jobs:
         uses: julia-actions/cache@v2
 
       - name: Run Julia tests
-        run: ./scripts/run_julia_tests.sh
+        run: ./scripts/run_julia_tests.sh ${{ matrix.no-hdf5 && '--no-hdf5' || '' }}
 
   rollup-jl:
     runs-on: ubuntu-latest

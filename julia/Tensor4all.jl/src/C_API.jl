@@ -1255,4 +1255,72 @@ function t4a_crossinterpolate2_f64(
     )
 end
 
+# ============================================================================
+# HDF5 save/load functions
+# ============================================================================
+
+"""
+    t4a_hdf5_save_itensor(filepath::AbstractString, name::AbstractString, tensor::Ptr{Cvoid}) -> Cint
+
+Save a tensor as an ITensors.jl-compatible ITensor in an HDF5 file.
+"""
+function t4a_hdf5_save_itensor(filepath::AbstractString, name::AbstractString, tensor::Ptr{Cvoid})
+    return ccall(
+        (:t4a_hdf5_save_itensor, libpath()),
+        Cint,
+        (Cstring, Cstring, Ptr{Cvoid}),
+        filepath,
+        name,
+        tensor
+    )
+end
+
+"""
+    t4a_hdf5_load_itensor(filepath::AbstractString, name::AbstractString, out::Ref{Ptr{Cvoid}}) -> Cint
+
+Load a tensor from an ITensors.jl-compatible ITensor in an HDF5 file.
+"""
+function t4a_hdf5_load_itensor(filepath::AbstractString, name::AbstractString, out::Ref{Ptr{Cvoid}})
+    return ccall(
+        (:t4a_hdf5_load_itensor, libpath()),
+        Cint,
+        (Cstring, Cstring, Ptr{Ptr{Cvoid}}),
+        filepath,
+        name,
+        out
+    )
+end
+
+"""
+    t4a_hdf5_save_mps(filepath::AbstractString, name::AbstractString, tt::Ptr{Cvoid}) -> Cint
+
+Save a tensor train as an ITensorMPS.jl-compatible MPS in an HDF5 file.
+"""
+function t4a_hdf5_save_mps(filepath::AbstractString, name::AbstractString, tt::Ptr{Cvoid})
+    return ccall(
+        (:t4a_hdf5_save_mps, libpath()),
+        Cint,
+        (Cstring, Cstring, Ptr{Cvoid}),
+        filepath,
+        name,
+        tt
+    )
+end
+
+"""
+    t4a_hdf5_load_mps(filepath::AbstractString, name::AbstractString, out::Ref{Ptr{Cvoid}}) -> Cint
+
+Load a tensor train from an ITensorMPS.jl-compatible MPS in an HDF5 file.
+"""
+function t4a_hdf5_load_mps(filepath::AbstractString, name::AbstractString, out::Ref{Ptr{Cvoid}})
+    return ccall(
+        (:t4a_hdf5_load_mps, libpath()),
+        Cint,
+        (Cstring, Cstring, Ptr{Ptr{Cvoid}}),
+        filepath,
+        name,
+        out
+    )
+end
+
 end # module C_API

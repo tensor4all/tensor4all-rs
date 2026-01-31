@@ -12,6 +12,7 @@ ffi.cdef("""
     // Opaque types
     typedef struct { void* _private; } t4a_index;
     typedef struct { void* _private; } t4a_tensor;
+    typedef struct { void* _private; } t4a_tensortrain;
 
     // Storage kind enum
     typedef enum {
@@ -335,5 +336,33 @@ ffi.cdef("""
         size_t max_iter,
         t4a_tci2_f64** out_tci,
         double* out_final_error
+    );
+
+    // ========================================================================
+    // HDF5 functions (ITensors.jl compatible format)
+    // ========================================================================
+
+    StatusCode t4a_hdf5_save_itensor(
+        const char* filepath,
+        const char* name,
+        const t4a_tensor* tensor
+    );
+
+    StatusCode t4a_hdf5_load_itensor(
+        const char* filepath,
+        const char* name,
+        t4a_tensor** out
+    );
+
+    StatusCode t4a_hdf5_save_mps(
+        const char* filepath,
+        const char* name,
+        const t4a_tensortrain* tt
+    );
+
+    StatusCode t4a_hdf5_load_mps(
+        const char* filepath,
+        const char* name,
+        t4a_tensortrain** out
     );
 """)
