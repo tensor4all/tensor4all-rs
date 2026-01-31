@@ -482,6 +482,23 @@ function t4a_tensor_new_dense_c64(rank::Integer, index_ptrs::Vector{Ptr{Cvoid}},
     )
 end
 
+"""
+    t4a_tensor_onehot(rank::Integer, index_ptrs::Vector{Ptr{Cvoid}}, vals::Vector{Csize_t}) -> Ptr{Cvoid}
+
+Create a one-hot tensor with value 1.0 at the specified positions (0-indexed).
+"""
+function t4a_tensor_onehot(rank::Integer, index_ptrs::Vector{Ptr{Cvoid}}, vals::Vector{Csize_t})
+    return ccall(
+        (:t4a_tensor_onehot, libpath()),
+        Ptr{Cvoid},
+        (Csize_t, Ptr{Ptr{Cvoid}}, Ptr{Csize_t}, Csize_t),
+        Csize_t(rank),
+        index_ptrs,
+        vals,
+        Csize_t(rank)
+    )
+end
+
 # ============================================================================
 # TensorTrain lifecycle functions
 # ============================================================================

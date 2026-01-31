@@ -224,4 +224,82 @@ fn test_contract_specified_disconnected_outer_product() {
     assert_eq!(result.dims().len(), 0);
 }
 
+// ============================================================================
+// onehot tests
+// ============================================================================
+
+#[test]
+fn test_onehot_1d() {
+    let i = Index::new_dyn(3);
+    let t = TensorDynLen::onehot(&[(i.clone(), 0)]).unwrap();
+    assert_eq!(t.dims(), vec![3]);
+    let data = t.to_vec_f64().unwrap();
+    assert_eq!(data, vec![1.0, 0.0, 0.0]);
+}
+
+#[test]
+fn test_onehot_2d() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(4);
+    let t = TensorDynLen::onehot(&[(i.clone(), 1), (j.clone(), 2)]).unwrap();
+    assert_eq!(t.dims(), vec![3, 4]);
+    let data = t.to_vec_f64().unwrap();
+    // Row-major: position (1,2) in 3×4 = 1*4 + 2 = 6
+    let mut expected = vec![0.0; 12];
+    expected[6] = 1.0;
+    assert_eq!(data, expected);
+}
+
+#[test]
+fn test_onehot_boundary() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(4);
+    // Last position in each dimension
+    let t = TensorDynLen::onehot(&[(i.clone(), 2), (j.clone(), 3)]).unwrap();
+    let data = t.to_vec_f64().unwrap();
+    // Position (2,3) in 3×4 = 2*4 + 3 = 11
+    let mut expected = vec![0.0; 12];
+    expected[11] = 1.0;
+    assert_eq!(data, expected);
+}
+
+#[test]
+fn test_onehot_error_out_of_bounds() {
+    let i = Index::new_dyn(3);
+    let result = TensorDynLen::onehot(&[(i.clone(), 3)]);
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(err_msg.contains("onehot"));
+}
+
+#[test]
+fn test_onehot_empty() {
+    // Empty input should return scalar 1.0
+    let t = TensorDynLen::onehot(&[]).unwrap();
+    assert_eq!(t.dims().len(), 0);
+}
+
+#[test]
+fn test_onehot_contraction() {
+    use tensor4all_core::AllowedPairs;
+
+    // Create a tensor A(i,j) and a onehot V(i)
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(4);
+    let a = TensorDynLen::from_dense_f64(
+        vec![i.clone(), j.clone()],
+        (0..12).map(|x| x as f64).collect(),
+    );
+
+    // onehot selecting i=1
+    let v = TensorDynLen::onehot(&[(i.clone(), 1)]).unwrap();
+
+    // Contract: V(i) * A(i,j) = A[1,:]
+    let result = <TensorDynLen as TensorLike>::contract(&[&v, &a], AllowedPairs::All).unwrap();
+    assert_eq!(result.dims(), vec![4]);
+    let data = result.to_vec_f64().unwrap();
+    // Row [1] of 3×4 matrix: [4, 5, 6, 7]
+    assert_eq!(data, vec![4.0, 5.0, 6.0, 7.0]);
+}
+
 // Note: trait object tests removed - TensorLike is now fully generic and does not support dyn

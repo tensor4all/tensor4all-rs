@@ -606,6 +606,17 @@ pub trait TensorLike: TensorIndex {
     /// let t_with_l = t.outer_product(&ones)?;
     /// ```
     fn ones(indices: &[<Self as TensorIndex>::Index]) -> Result<Self>;
+
+    /// Create a one-hot tensor with value 1.0 at the specified index positions.
+    ///
+    /// Similar to ITensors.jl's `onehot(i => 1, j => 2)`.
+    ///
+    /// # Arguments
+    /// * `index_vals` - Pairs of (Index, 0-indexed position)
+    ///
+    /// # Errors
+    /// Returns error if any value >= corresponding index dimension.
+    fn onehot(index_vals: &[(<Self as TensorIndex>::Index, usize)]) -> Result<Self>;
 }
 
 /// Result of direct sum operation.

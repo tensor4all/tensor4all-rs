@@ -117,6 +117,64 @@ class Tensor:
         self._ptr = ptr
 
     @classmethod
+    def onehot(cls, *index_vals: tuple[Index, int]) -> Tensor:
+        """Create a one-hot tensor with value 1.0 at the specified positions.
+
+        Parameters
+        ----------
+        index_vals : tuple[Index, int]
+            Pairs of (Index, 0-indexed position).
+
+        Returns
+        -------
+        Tensor
+            A tensor with all zeros except 1.0 at the specified position.
+
+        Raises
+        ------
+        ValueError
+            If any position is out of range for its index dimension.
+        T4AError
+            If creation fails.
+
+        Examples
+        --------
+        >>> i = Index(3)
+        >>> j = Index(4)
+        >>> t = Tensor.onehot((i, 1), (j, 2))
+        """
+        lib = get_lib()
+        if not index_vals:
+            ptr = lib.t4a_tensor_onehot(0, ffi.NULL, ffi.NULL, 0)
+            if ptr == ffi.NULL:
+                raise T4AError("Failed to create onehot Tensor")
+            return cls._from_ptr(ptr)
+
+        for k, (idx, v) in enumerate(index_vals):
+            if v < 0 or v >= idx.dim:
+                raise ValueError(
+                    f"onehot: position {v} at argument {k} is out of range [0, {idx.dim})"
+                )
+
+        rank = len(index_vals)
+
+        index_ptrs = ffi.new(f"t4a_index*[{rank}]")
+        vals = ffi.new(f"size_t[{rank}]")
+        for k, (idx, v) in enumerate(index_vals):
+            index_ptrs[k] = idx._ptr
+            vals[k] = v
+
+        ptr = lib.t4a_tensor_onehot(
+            rank,
+            ffi.cast("const t4a_index**", index_ptrs),
+            vals,
+            rank,
+        )
+        if ptr == ffi.NULL:
+            raise T4AError("Failed to create onehot Tensor")
+        return cls._from_ptr(ptr)
+
+    @classmethod
     def _from_ptr(cls, ptr) -> Tensor:
         """Create a Tensor from an existing C pointer (internal use)."""
         if ptr == ffi.NULL:

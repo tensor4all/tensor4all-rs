@@ -525,6 +525,7 @@ Convert column-major array to row-major flat vector for Rust.
 """
 function _column_to_row_major(arr::AbstractArray)
     arr = _ensure_contiguous(arr)
+    ndims(arr) == 0 && return vec(arr)
     # Reverse dimensions to get row-major layout
     perm = reverse(1:ndims(arr))
     permuted = permutedims(arr, perm)
@@ -538,6 +539,7 @@ end
 Convert row-major flat vector from Rust to column-major Julia array.
 """
 function _row_to_column_major(data::Vector{T}, dims::Tuple) where T
+    isempty(dims) && return reshape(data, 1)
     # Data is row-major, so reverse dims for reshape
     arr = reshape(data, reverse(dims)...)
     # Reverse back to get column-major
@@ -596,6 +598,42 @@ function Tensor(inds::Vector{Index}, data::AbstractArray{ComplexF64})
     ptr = C_API.t4a_tensor_new_dense_c64(r, index_ptrs, dims_vec, data_re, data_im)
     return Tensor(ptr)
 end
+
+"""
+    onehot(ivs::Pair{Index,<:Integer}...)
+
+Create a one-hot tensor with value 1.0 at the specified index positions.
+Compatible with ITensors.jl's `onehot(i => 1, j => 2)`.
+
+Uses 1-based indexing (converted to 0-based internally for Rust).
+
+# Examples
+```julia
+i = Index(3)
+j = Index(4)
+A = onehot(i => 1)           # A[i=>1] == 1.0
+B = onehot(i => 2, j => 3)   # B[i=>2,j=>3] == 1.0
+```
+"""
+function onehot(ivs::Pair{Index,<:Integer}...)
+    if isempty(ivs)
+        ptr = C_API.t4a_tensor_onehot(0, Ptr{Cvoid}[], Csize_t[])
+        return Tensor(ptr)
+    end
+    for (k, iv) in enumerate(ivs)
+        v = iv.second
+        d = dim(iv.first)
+        (1 <= v <= d) || throw(ArgumentError("onehot: value $v at position $k is out of range 1:$d"))
+    end
+    r = length(ivs)
+    index_ptrs = Ptr{Cvoid}[iv.first.ptr for iv in ivs]
+    # Convert 1-based Julia to 0-based Rust
+    vals = Csize_t[iv.second - 1 for iv in ivs]
+    ptr = C_API.t4a_tensor_onehot(r, index_ptrs, vals)
+    return Tensor(ptr)
+end
+
+export onehot
 
 # ============================================================================
 # Tensor Accessors
