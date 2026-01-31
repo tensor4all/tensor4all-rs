@@ -777,16 +777,19 @@ end
     t4a_tt_truncate(ptr::Ptr{Cvoid}, rtol::Float64, max_rank::Integer) -> Cint
 
 Truncate the tensor train bond dimensions.
-rtol: relative tolerance (use 0.0 for default)
+rtol: relative tolerance (use 0.0 for not set)
+cutoff: ITensorMPS.jl cutoff (use 0.0 for not set). Converted to rtol = √cutoff.
+  If both rtol and cutoff are positive, cutoff takes precedence.
 max_rank: maximum bond dimension (use 0 for no limit)
 """
-function t4a_tt_truncate(ptr::Ptr{Cvoid}, rtol::Float64, max_rank::Integer)
+function t4a_tt_truncate(ptr::Ptr{Cvoid}, rtol::Float64, cutoff::Float64, max_rank::Integer)
     return ccall(
         (:t4a_tt_truncate, libpath()),
         Cint,
-        (Ptr{Cvoid}, Cdouble, Csize_t),
+        (Ptr{Cvoid}, Cdouble, Cdouble, Csize_t),
         ptr,
         rtol,
+        cutoff,
         Csize_t(max_rank)
     )
 end
@@ -824,25 +827,84 @@ function t4a_tt_inner(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, out_re::Ref{Cdouble}, 
 end
 
 """
-    t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, max_rank::Integer, rtol::Float64, nhalfsweeps::Integer) -> Ptr{Cvoid}
+    t4a_tt_contract(ptr1, ptr2, method, max_rank, rtol, cutoff, nhalfsweeps) -> Ptr{Cvoid}
 
 Contract two tensor trains.
-method: 0=Zipup, 1=Fit
+method: 0=Zipup, 1=Fit, 2=Naive
 max_rank: maximum bond dimension (use 0 for no limit)
-rtol: relative tolerance (use 0.0 for default)
+rtol: relative tolerance (use 0.0 for not set)
+cutoff: ITensorMPS.jl cutoff (use 0.0 for not set). If both rtol and cutoff are positive, cutoff takes precedence.
 nhalfsweeps: number of half-sweeps for Fit method (must be a multiple of 2)
 """
-function t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, max_rank::Integer, rtol::Float64, nhalfsweeps::Integer)
+function t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, max_rank::Integer, rtol::Float64, cutoff::Float64, nhalfsweeps::Integer)
     return ccall(
         (:t4a_tt_contract, libpath()),
         Ptr{Cvoid},
-        (Ptr{Cvoid}, Ptr{Cvoid}, Cint, Csize_t, Cdouble, Csize_t),
+        (Ptr{Cvoid}, Ptr{Cvoid}, Cint, Csize_t, Cdouble, Cdouble, Csize_t),
         ptr1,
         ptr2,
         Cint(method),
         Csize_t(max_rank),
         rtol,
+        cutoff,
         Csize_t(nhalfsweeps)
+    )
+end
+
+"""
+    t4a_tt_add(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}) -> Ptr{Cvoid}
+
+Add two tensor trains using direct-sum construction.
+"""
+function t4a_tt_add(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid})
+    return ccall(
+        (:t4a_tt_add, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Ptr{Cvoid}),
+        ptr1,
+        ptr2
+    )
+end
+
+"""
+    t4a_tt_to_dense(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
+
+Convert tensor train to a dense tensor by contracting all link indices.
+Returns a tensor handle.
+"""
+function t4a_tt_to_dense(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_tt_to_dense, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+"""
+    t4a_tt_linsolve(operator, rhs, init, nhalfsweeps, max_rank, rtol, cutoff,
+                    krylov_tol, krylov_maxiter, krylov_dim, a0, a1, convergence_tol) -> Ptr{Cvoid}
+
+Solve (a0 + a1 * A) * x = b for x using DMRG-like sweeps with local GMRES.
+"""
+function t4a_tt_linsolve(operator::Ptr{Cvoid}, rhs::Ptr{Cvoid}, init::Ptr{Cvoid},
+                         nhalfsweeps::Integer, max_rank::Integer,
+                         rtol::Float64, cutoff::Float64,
+                         krylov_tol::Float64, krylov_maxiter::Integer,
+                         krylov_dim::Integer,
+                         a0::Float64, a1::Float64,
+                         convergence_tol::Float64)
+    return ccall(
+        (:t4a_tt_linsolve, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid},
+         Csize_t, Csize_t, Cdouble, Cdouble,
+         Cdouble, Csize_t, Csize_t,
+         Cdouble, Cdouble, Cdouble),
+        operator, rhs, init,
+        Csize_t(nhalfsweeps), Csize_t(max_rank), rtol, cutoff,
+        krylov_tol, Csize_t(krylov_maxiter), Csize_t(krylov_dim),
+        a0, a1, convergence_tol
     )
 end
 
