@@ -7,6 +7,8 @@ use std::ptr;
 
 use num_complex::Complex64;
 
+use tensor4all_core::TensorLike;
+
 use crate::types::{t4a_index, t4a_storage_kind, t4a_tensor, InternalIndex, InternalTensor};
 use crate::{
     StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER,
@@ -15,6 +17,36 @@ use crate::{
 
 // Generate lifecycle functions: t4a_tensor_release, t4a_tensor_clone, t4a_tensor_is_assigned
 impl_opaque_type_common!(tensor);
+
+fn read_indices_from_ptrs(
+    rank: libc::size_t,
+    index_ptrs: *const *const t4a_index,
+) -> Option<Vec<InternalIndex>> {
+    if index_ptrs.is_null() {
+        return None;
+    }
+    let mut indices: Vec<InternalIndex> = Vec::with_capacity(rank);
+    for i in 0..rank {
+        let idx_ptr = unsafe { *index_ptrs.add(i) };
+        if idx_ptr.is_null() {
+            return None;
+        }
+        let idx = unsafe { &*idx_ptr };
+        indices.push(idx.inner().clone());
+    }
+    Some(indices)
+}
+
+fn read_dims_from_ptr(rank: libc::size_t, dims: *const libc::size_t) -> Option<Vec<usize>> {
+    if dims.is_null() {
+        return None;
+    }
+    Some((0..rank).map(|i| unsafe { *dims.add(i) }).collect())
+}
+
+fn indices_dims(indices: &[InternalIndex]) -> Vec<usize> {
+    indices.iter().map(|idx| idx.size()).collect()
+}
 
 /// Get the rank (number of indices) of a tensor.
 ///
@@ -288,22 +320,20 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
     }
 
     let result = catch_unwind(|| {
-        // Extract indices
-        let mut indices: Vec<InternalIndex> = Vec::with_capacity(rank);
-        for i in 0..rank {
-            let idx_ptr = unsafe { *index_ptrs.add(i) };
-            if idx_ptr.is_null() {
-                return ptr::null_mut();
-            }
-            let idx = unsafe { &*idx_ptr };
-            indices.push(idx.inner().clone());
+        let Some(indices) = read_indices_from_ptrs(rank, index_ptrs) else {
+            return ptr::null_mut();
+        };
+
+        let Some(input_dims) = read_dims_from_ptr(rank, dims) else {
+            return ptr::null_mut();
+        };
+        let expected_dims = indices_dims(&indices);
+        if input_dims != expected_dims {
+            return ptr::null_mut();
         }
 
-        // Extract dimensions
-        let dims_vec: Vec<usize> = (0..rank).map(|i| unsafe { *dims.add(i) }).collect();
-
         // Validate data length
-        let expected_len: usize = dims_vec.iter().product();
+        let expected_len: usize = expected_dims.iter().product();
         if data_len != expected_len {
             return ptr::null_mut();
         }
@@ -351,22 +381,20 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
     }
 
     let result = catch_unwind(|| {
-        // Extract indices
-        let mut indices: Vec<InternalIndex> = Vec::with_capacity(rank);
-        for i in 0..rank {
-            let idx_ptr = unsafe { *index_ptrs.add(i) };
-            if idx_ptr.is_null() {
-                return ptr::null_mut();
-            }
-            let idx = unsafe { &*idx_ptr };
-            indices.push(idx.inner().clone());
+        let Some(indices) = read_indices_from_ptrs(rank, index_ptrs) else {
+            return ptr::null_mut();
+        };
+
+        let Some(input_dims) = read_dims_from_ptr(rank, dims) else {
+            return ptr::null_mut();
+        };
+        let expected_dims = indices_dims(&indices);
+        if input_dims != expected_dims {
+            return ptr::null_mut();
         }
 
-        // Extract dimensions
-        let dims_vec: Vec<usize> = (0..rank).map(|i| unsafe { *dims.add(i) }).collect();
-
         // Validate data length
-        let expected_len: usize = dims_vec.iter().product();
+        let expected_len: usize = expected_dims.iter().product();
         if data_len != expected_len {
             return ptr::null_mut();
         }
@@ -380,6 +408,57 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
         let tensor = InternalTensor::from_dense_c64(indices, data_vec);
 
         Box::into_raw(Box::new(t4a_tensor::new(tensor)))
+    });
+
+    result.unwrap_or(ptr::null_mut())
+}
+
+/// Create a one-hot tensor with value 1.0 at the specified index positions.
+///
+/// # Arguments
+/// - `rank`: Number of indices
+/// - `index_ptrs`: Array of t4a_index pointers (length = rank)
+/// - `vals`: Array of 0-indexed positions (length = vals_len)
+/// - `vals_len`: Length of vals array (must equal rank)
+///
+/// # Returns
+/// - Pointer to new t4a_tensor on success
+/// - NULL on error
+///
+/// # Safety
+/// - All pointers must be valid
+/// - Caller owns the returned tensor and must call t4a_tensor_release
+#[no_mangle]
+pub extern "C" fn t4a_tensor_onehot(
+    rank: libc::size_t,
+    index_ptrs: *const *const t4a_index,
+    vals: *const libc::size_t,
+    vals_len: libc::size_t,
+) -> *mut t4a_tensor {
+    if rank > 0 && (index_ptrs.is_null() || vals.is_null()) {
+        return ptr::null_mut();
+    }
+    if vals_len != rank {
+        return ptr::null_mut();
+    }
+
+    let result = catch_unwind(|| {
+        // Extract indices
+        let mut index_vals: Vec<(InternalIndex, usize)> = Vec::with_capacity(rank);
+        for i in 0..rank {
+            let idx_ptr = unsafe { *index_ptrs.add(i) };
+            if idx_ptr.is_null() {
+                return ptr::null_mut();
+            }
+            let idx = unsafe { &*idx_ptr };
+            let val = unsafe { *vals.add(i) };
+            index_vals.push((idx.inner().clone(), val));
+        }
+
+        match InternalTensor::onehot(&index_vals) {
+            Ok(tensor) => Box::into_raw(Box::new(t4a_tensor::new(tensor))),
+            Err(_) => ptr::null_mut(),
+        }
     });
 
     result.unwrap_or(ptr::null_mut())
@@ -550,6 +629,109 @@ mod tests {
 
         // Clean up
         t4a_tensor_release(tensor);
+        t4a_index_release(i);
+        t4a_index_release(j);
+    }
+
+    #[test]
+    fn test_tensor_onehot() {
+        let i = t4a_index_new(3);
+        let j = t4a_index_new(4);
+        assert!(!i.is_null());
+        assert!(!j.is_null());
+
+        let index_ptrs = [i as *const _, j as *const _];
+        let vals = [1_usize, 2_usize];
+
+        let tensor = t4a_tensor_onehot(2, index_ptrs.as_ptr(), vals.as_ptr(), 2);
+        assert!(!tensor.is_null());
+
+        // Verify rank
+        let mut rank = 0_usize;
+        assert_eq!(
+            t4a_tensor_get_rank(tensor as *const _, &mut rank),
+            T4A_SUCCESS
+        );
+        assert_eq!(rank, 2);
+
+        // Verify dims
+        let mut dims = [0_usize; 2];
+        assert_eq!(
+            t4a_tensor_get_dims(tensor as *const _, dims.as_mut_ptr(), 2),
+            T4A_SUCCESS
+        );
+        assert_eq!(dims, [3, 4]);
+
+        // Verify data: position (1,2) in 3×4 = offset 6
+        let mut out_len = 0_usize;
+        let mut data = [0.0_f64; 12];
+        assert_eq!(
+            t4a_tensor_get_data_f64(tensor as *const _, data.as_mut_ptr(), 12, &mut out_len),
+            T4A_SUCCESS
+        );
+        assert_eq!(out_len, 12);
+        let mut expected = [0.0_f64; 12];
+        expected[6] = 1.0;
+        assert_eq!(data, expected);
+
+        // Clean up
+        t4a_tensor_release(tensor);
+        t4a_index_release(i);
+        t4a_index_release(j);
+    }
+
+    #[test]
+    fn test_tensor_onehot_null_guards() {
+        // Null index_ptrs
+        let vals = [0_usize];
+        let result = t4a_tensor_onehot(1, ptr::null(), vals.as_ptr(), 1);
+        assert!(result.is_null());
+
+        // Null vals
+        let i = t4a_index_new(3);
+        let index_ptrs = [i as *const _];
+        let result = t4a_tensor_onehot(1, index_ptrs.as_ptr(), ptr::null(), 1);
+        assert!(result.is_null());
+
+        // Mismatched rank and vals_len
+        let result = t4a_tensor_onehot(1, index_ptrs.as_ptr(), vals.as_ptr(), 2);
+        assert!(result.is_null());
+
+        t4a_index_release(i);
+    }
+
+    #[test]
+    fn test_tensor_onehot_empty() {
+        // rank=0 should return a scalar tensor
+        let tensor = t4a_tensor_onehot(0, ptr::null(), ptr::null(), 0);
+        assert!(!tensor.is_null());
+
+        let mut rank = 99_usize;
+        assert_eq!(
+            t4a_tensor_get_rank(tensor as *const _, &mut rank),
+            T4A_SUCCESS
+        );
+        assert_eq!(rank, 0);
+
+        t4a_tensor_release(tensor);
+    }
+
+    #[test]
+    fn test_tensor_new_dense_f64_dims_mismatch_rejected() {
+        let i = t4a_index_new(2);
+        let j = t4a_index_new(3);
+        assert!(!i.is_null());
+        assert!(!j.is_null());
+
+        let index_ptrs = [i as *const _, j as *const _];
+        // Mismatch: actual dims should be [2,3]
+        let dims = [2_usize, 4_usize];
+        let data = [0.0_f64; 8];
+
+        let tensor =
+            t4a_tensor_new_dense_f64(2, index_ptrs.as_ptr(), dims.as_ptr(), data.as_ptr(), 8);
+        assert!(tensor.is_null());
+
         t4a_index_release(i);
         t4a_index_release(j);
     }

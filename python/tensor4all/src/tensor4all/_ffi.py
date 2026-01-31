@@ -69,6 +69,12 @@ ffi.cdef("""
         const double* data_im,
         size_t data_len
     );
+    t4a_tensor* t4a_tensor_onehot(
+        size_t rank,
+        const t4a_index** index_ptrs,
+        const size_t* vals,
+        size_t vals_len
+    );
 
     // Accessors
     StatusCode t4a_tensor_get_rank(const t4a_tensor* ptr, size_t* out_rank);

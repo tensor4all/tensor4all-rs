@@ -1497,7 +1497,7 @@ impl TensorLike for TensorDynLen {
             return Self::scalar_one();
         }
         let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
-        let total_size: usize = dims.iter().product();
+        let total_size = checked_total_size(&dims)?;
         let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
             vec![1.0; total_size],
             &dims,
@@ -1505,7 +1505,82 @@ impl TensorLike for TensorDynLen {
         Ok(TensorDynLen::new(indices.to_vec(), storage))
     }
 
+    fn onehot(index_vals: &[(DynIndex, usize)]) -> Result<Self> {
+        if index_vals.is_empty() {
+            return Self::scalar_one();
+        }
+        let indices: Vec<DynIndex> = index_vals.iter().map(|(idx, _)| idx.clone()).collect();
+        let vals: Vec<usize> = index_vals.iter().map(|(_, v)| *v).collect();
+        let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
+
+        for (k, (&v, &d)) in vals.iter().zip(dims.iter()).enumerate() {
+            if v >= d {
+                return Err(anyhow::anyhow!(
+                    "onehot: value {} at position {} is >= dimension {}",
+                    v,
+                    k,
+                    d
+                ));
+            }
+        }
+
+        let total_size = checked_total_size(&dims)?;
+        let mut data = vec![0.0_f64; total_size];
+
+        let offset = row_major_offset(&dims, &vals)?;
+        data[offset] = 1.0;
+
+        Ok(Self::from_dense_f64(indices, data))
+    }
+
     // delta() uses the default implementation via diagonal() and outer_product()
+}
+
+fn checked_total_size(dims: &[usize]) -> Result<usize> {
+    dims.iter().try_fold(1_usize, |acc, &d| {
+        if d == 0 {
+            return Err(anyhow::anyhow!("invalid dimension 0"));
+        }
+        acc.checked_mul(d)
+            .ok_or_else(|| anyhow::anyhow!("tensor size overflow"))
+    })
+}
+
+fn row_major_offset(dims: &[usize], vals: &[usize]) -> Result<usize> {
+    if dims.len() != vals.len() {
+        return Err(anyhow::anyhow!(
+            "row_major_offset: dims.len() != vals.len()"
+        ));
+    }
+    let total_size = checked_total_size(dims)?;
+
+    // Row-major linear index: offset = Σ v_k * Π_{l>k} d_l
+    let mut offset = 0usize;
+    let mut stride = total_size;
+    for (k, (&v, &d)) in vals.iter().zip(dims.iter()).enumerate() {
+        if d == 0 {
+            return Err(anyhow::anyhow!("invalid dimension 0 at position {}", k));
+        }
+        if v >= d {
+            return Err(anyhow::anyhow!(
+                "row_major_offset: value {} at position {} is >= dimension {}",
+                v,
+                k,
+                d
+            ));
+        }
+        if stride % d != 0 {
+            return Err(anyhow::anyhow!("row_major_offset: non-divisible stride"));
+        }
+        stride /= d;
+        let term = v
+            .checked_mul(stride)
+            .ok_or_else(|| anyhow::anyhow!("row_major_offset: overflow"))?;
+        offset = offset
+            .checked_add(term)
+            .ok_or_else(|| anyhow::anyhow!("row_major_offset: overflow"))?;
+    }
+    Ok(offset)
 }
 
 // ============================================================================

@@ -173,4 +173,49 @@
         @test Tensor4all.dims(t2) == (3, 4)
         @test Tensor4all.data(t2) ≈ data
     end
+
+    @testset "onehot 1D" begin
+        i = T4AIndex(3)
+        t = Tensor4all.onehot(i => 1)
+        @test Tensor4all.rank(t) == 1
+        @test Tensor4all.dims(t) == (3,)
+        d = Tensor4all.data(t)
+        @test d ≈ [1.0, 0.0, 0.0]
+    end
+
+    @testset "onehot 2D" begin
+        i = T4AIndex(3)
+        j = T4AIndex(4)
+        t = Tensor4all.onehot(i => 2, j => 3)
+        @test Tensor4all.rank(t) == 2
+        @test Tensor4all.dims(t) == (3, 4)
+        d = Tensor4all.data(t)
+        expected = zeros(3, 4)
+        expected[2, 3] = 1.0
+        @test d ≈ expected
+    end
+
+    @testset "onehot boundary" begin
+        i = T4AIndex(3)
+        j = T4AIndex(4)
+        t = Tensor4all.onehot(i => 3, j => 4)
+        d = Tensor4all.data(t)
+        expected = zeros(3, 4)
+        expected[3, 4] = 1.0
+        @test d ≈ expected
+    end
+
+    @testset "onehot error" begin
+        i = T4AIndex(3)
+        @test_throws ArgumentError Tensor4all.onehot(i => 0)  # 0 is out of 1-based range
+        @test_throws ArgumentError Tensor4all.onehot(i => 4)  # 4 > dim=3
+    end
+
+    @testset "onehot empty" begin
+        t = Tensor4all.onehot()
+        @test Tensor4all.rank(t) == 0
+        @test Tensor4all.dims(t) == ()
+        d = Tensor4all.data(t)
+        @test d[] ≈ 1.0
+    end
 end

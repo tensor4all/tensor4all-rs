@@ -173,3 +173,57 @@ class TestTensorRepr:
         assert "rank=2" in r
         assert "dims=(2, 3)" in r
         assert "DenseF64" in r
+
+
+class TestTensorOnehot:
+    """Tests for Tensor.onehot()."""
+
+    def test_onehot_1d(self):
+        """Test 1D one-hot tensor."""
+        i = Index(3)
+        t = Tensor.onehot((i, 0))
+        assert t.rank == 1
+        assert t.dims == (3,)
+        data = t.to_numpy()
+        np.testing.assert_array_equal(data, [1.0, 0.0, 0.0])
+
+    def test_onehot_2d(self):
+        """Test 2D one-hot tensor."""
+        i = Index(3)
+        j = Index(4)
+        t = Tensor.onehot((i, 1), (j, 2))
+        assert t.rank == 2
+        assert t.dims == (3, 4)
+        data = t.to_numpy()
+        expected = np.zeros((3, 4))
+        expected[1, 2] = 1.0
+        np.testing.assert_array_equal(data, expected)
+
+    def test_onehot_boundary(self):
+        """Test one-hot at last position of each dimension."""
+        i = Index(3)
+        j = Index(4)
+        t = Tensor.onehot((i, 2), (j, 3))
+        data = t.to_numpy()
+        expected = np.zeros((3, 4))
+        expected[2, 3] = 1.0
+        np.testing.assert_array_equal(data, expected)
+
+    def test_onehot_error_out_of_range(self):
+        """Test that out-of-range position raises ValueError."""
+        i = Index(3)
+        with pytest.raises(ValueError, match="out of range"):
+            Tensor.onehot((i, 3))
+
+    def test_onehot_error_negative(self):
+        """Test that negative position raises ValueError."""
+        i = Index(3)
+        with pytest.raises(ValueError, match="out of range"):
+            Tensor.onehot((i, -1))
+
+    def test_onehot_empty_scalar(self):
+        """Test that empty input returns scalar 1.0 tensor."""
+        t = Tensor.onehot()
+        assert t.rank == 0
+        assert t.dims == ()
+        np.testing.assert_array_equal(t.to_numpy(), np.array(1.0))
