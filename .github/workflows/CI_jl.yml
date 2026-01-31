@@ -23,8 +23,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Julia LTS on ubuntu-22.04: avoids libcurl/OpenSSL conflict
+          # between Julia LTS's bundled libraries and ubuntu-latest (24.04).
           - julia-version: 'lts'
-            os: ubuntu-latest
+            os: ubuntu-22.04
           - julia-version: '1'
             os: ubuntu-latest
           - julia-version: 'lts'
@@ -73,10 +75,6 @@ jobs:
 
       - name: Run Julia tests
         run: ./scripts/run_julia_tests.sh
-        env:
-          # Julia LTS bundles old libcurl/OpenSSL that conflict with system HDF5.
-          # Preloading system SSL stack ensures consistent library versions.
-          LD_PRELOAD: ${{ runner.os == 'Linux' && '/usr/lib/x86_64-linux-gnu/libcurl.so.4:/usr/lib/x86_64-linux-gnu/libssl.so.3:/usr/lib/x86_64-linux-gnu/libcrypto.so.3' || '' }}
 
   rollup-jl:
     runs-on: ubuntu-latest
