@@ -41,12 +41,13 @@ from .simplett import SimpleTensorTrain
 # TensorCI types (tensor4all-tensorci)
 from .tensorci import TensorCI2, crossinterpolate2
 
+# ITensorLike types (tensor4all-itensorlike)
+from .tensortrain import TensorTrain, MPS, MPO
+from .tensortrain import linsolve as tt_linsolve
+from .tensortrain import contract as tt_contract
+
 # HDF5 functions (ITensors.jl compatible)
 from .hdf5 import save_itensor, load_itensor
-
-# DISABLED - pending simpletensortrain integration
-# MPO types (tensor4all-mpocontraction)
-# from . import mpo
 
 # Exceptions
 from ._capi import (
@@ -77,12 +78,15 @@ __all__ = [
     # TensorCI types
     "TensorCI2",
     "crossinterpolate2",
+    # ITensorLike types
+    "TensorTrain",
+    "MPS",
+    "MPO",
+    "tt_linsolve",
+    "tt_contract",
     # HDF5 functions
     "save_itensor",
     "load_itensor",
-    # DISABLED - pending simpletensortrain integration
-    # MPO module
-    # "mpo",
     # Exceptions
     "T4AError",
     "NullPointerError",

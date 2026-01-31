@@ -35,7 +35,7 @@ T4ATensorTrain* tt = t4a_tt_new(&tensors, 3);
 
 // Orthogonalize and truncate
 t4a_tt_orthogonalize(tt, 1);
-t4a_tt_truncate(tt, 1e-10, 20);
+t4a_tt_truncate(tt, 1e-10, 0.0, 20);  // rtol=1e-10, cutoff=0, maxdim=20
 
 // Clean up
 t4a_tt_release(tt);

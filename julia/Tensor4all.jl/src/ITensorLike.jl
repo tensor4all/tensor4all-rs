@@ -367,16 +367,18 @@ end
 export orthogonalize!
 
 """
-    truncate!(tt::TensorTrain; rtol::Float64=0.0, maxdim::Integer=0)
+    truncate!(tt::TensorTrain; rtol=0.0, cutoff=0.0, maxdim=0)
 
 Truncate the tensor train bond dimensions in-place.
 
 # Arguments
-- `rtol`: Relative tolerance for truncation (use 0.0 for default)
+- `rtol`: Relative tolerance for truncation (use 0.0 for not set)
+- `cutoff`: ITensorMPS.jl cutoff (use 0.0 for not set). Converted to rtol = √cutoff.
+  If both `rtol` and `cutoff` are positive, `cutoff` takes precedence.
 - `maxdim`: Maximum bond dimension (use 0 for no limit)
 """
-function truncate!(tt::TensorTrain; rtol::Float64=0.0, maxdim::Integer=0)
-    status = C_API.t4a_tt_truncate(tt.ptr, rtol, maxdim)
+function truncate!(tt::TensorTrain; rtol::Real=0.0, cutoff::Real=0.0, maxdim::Integer=0)
+    status = C_API.t4a_tt_truncate(tt.ptr, Float64(rtol), Float64(cutoff), maxdim)
     C_API.check_status(status)
     return tt
 end
@@ -384,20 +386,22 @@ end
 export truncate!
 
 """
-    truncate(tt::TensorTrain; rtol::Float64=0.0, maxdim::Integer=0) -> TensorTrain
+    truncate(tt::TensorTrain; rtol=0.0, cutoff=0.0, maxdim=0) -> TensorTrain
 
 Return a truncated copy of the tensor train (immutable version).
 
 # Arguments
-- `rtol`: Relative tolerance for truncation (use 0.0 for default)
+- `rtol`: Relative tolerance for truncation (use 0.0 for not set)
+- `cutoff`: ITensorMPS.jl cutoff (use 0.0 for not set). Converted to rtol = √cutoff.
+  If both `rtol` and `cutoff` are positive, `cutoff` takes precedence.
 - `maxdim`: Maximum bond dimension (use 0 for no limit)
 
 # Returns
 A new truncated tensor train.
 """
-function truncate(tt::TensorTrain; rtol::Float64=0.0, maxdim::Integer=0)
+function truncate(tt::TensorTrain; rtol::Real=0.0, cutoff::Real=0.0, maxdim::Integer=0)
     tt_copy = copy(tt)
-    truncate!(tt_copy; rtol=rtol, maxdim=maxdim)
+    truncate!(tt_copy; rtol=rtol, cutoff=cutoff, maxdim=maxdim)
     return tt_copy
 end
 
@@ -434,6 +438,18 @@ export inner
 # TensorTrain Contract
 # ============================================================================
 
+# Internal: resolve full/half sweep parameters.
+#
+# ITensorMPS.jl convention:
+# - nsweeps: number of full sweeps
+# - nhalfsweeps: number of half-sweeps (forward or backward)
+# A full sweep = 2 half-sweeps.
+#
+# Policy here: explicit `nhalfsweeps` takes precedence over derived `nsweeps`.
+function _resolve_nhalfsweeps(nsweeps::Integer, nhalfsweeps::Integer)
+    return nhalfsweeps > 0 ? nhalfsweeps : (nsweeps > 0 ? nsweeps * 2 : 0)
+end
+
 # Internal: convert method specification to C API integer
 # Supports Symbol (:zipup, :fit, :naive), String ("zipup", "fit", "naive"), or Integer (0, 1, 2)
 function _contract_method_to_int(method::Symbol)
@@ -454,7 +470,7 @@ end
 _contract_method_to_int(method::Integer) = Int(method)
 
 """
-    contract(tt1::TensorTrain, tt2::TensorTrain; method=:zipup, maxdim=0, rtol=0.0, nsweeps=2) -> TensorTrain
+    contract(tt1::TensorTrain, tt2::TensorTrain; kwargs...) -> TensorTrain
 
 Contract two tensor trains with the same site indices.
 
@@ -466,8 +482,12 @@ Contract two tensor trains with the same site indices.
   - `:fit`: Variational optimization with sweeps
   - `:naive`: Contract to full tensor and decompose back (O(exp(n)) memory, for debugging)
 - `maxdim`: Maximum bond dimension (0 for no limit)
-- `rtol`: Relative tolerance for truncation (0.0 for default)
-- `nsweeps`: Number of sweeps for fit method
+- `rtol`: Relative tolerance (0.0 = not set)
+- `cutoff`: ITensorMPS.jl cutoff (0.0 = not set). Converted to rtol = √cutoff.
+  If both `rtol` and `cutoff` are positive, `cutoff` takes precedence.
+- `nsweeps`: Number of full sweeps for fit method (0 = use Rust default)
+- `nhalfsweeps`: Number of half-sweeps for fit method (0 = use Rust default).
+  If `nhalfsweeps > 0`, it takes precedence over `nsweeps`.
 
 # Returns
 A new tensor train representing the contraction result.
@@ -491,14 +511,129 @@ function contract(tt1::TensorTrain, tt2::TensorTrain;
                   method::Union{Symbol, AbstractString, Integer}=:zipup,
                   maxdim::Integer=0,
                   rtol::Real=0.0,
-                  nhalfsweeps::Integer=2)
+                  cutoff::Real=0.0,
+                  nsweeps::Integer=0,
+                  nhalfsweeps::Integer=0)
     method_int = _contract_method_to_int(method)
-    ptr = C_API.t4a_tt_contract(tt1.ptr, tt2.ptr, method_int, maxdim, Float64(rtol), nhalfsweeps)
+    actual_nhalfsweeps = _resolve_nhalfsweeps(nsweeps, nhalfsweeps)
+    ptr = C_API.t4a_tt_contract(tt1.ptr, tt2.ptr, method_int, maxdim,
+                                Float64(rtol), Float64(cutoff), actual_nhalfsweeps)
     ptr == C_NULL && error("Tensor train contraction failed")
     return TensorTrain(ptr)
 end
 
 export contract
+
+# ============================================================================
+# TensorTrain Addition
+# ============================================================================
+
+"""
+    add(tt1::TensorTrain, tt2::TensorTrain) -> TensorTrain
+
+Add two tensor trains using direct-sum construction.
+The result has bond dimensions that are the sum of the inputs' bond dimensions.
+"""
+function add(tt1::TensorTrain, tt2::TensorTrain)
+    ptr = C_API.t4a_tt_add(tt1.ptr, tt2.ptr)
+    ptr == C_NULL && error("Tensor train addition failed")
+    return TensorTrain(ptr)
+end
+
+Base.:+(tt1::TensorTrain, tt2::TensorTrain) = add(tt1, tt2)
+
+export add
+
+# ============================================================================
+# TensorTrain Dense Conversion
+# ============================================================================
+
+"""
+    to_dense(tt::TensorTrain) -> Tensor
+
+Convert the tensor train to a dense tensor by contracting all link indices.
+"""
+function to_dense(tt::TensorTrain)
+    ptr = C_API.t4a_tt_to_dense(tt.ptr)
+    ptr == C_NULL && error("to_dense failed")
+    return Tensor(ptr)
+end
+
+export to_dense
+
+# ============================================================================
+# TensorTrain Linear Solver
+# ============================================================================
+
+"""
+    linsolve(operator::TensorTrain, rhs::TensorTrain, init::TensorTrain; kwargs...) -> TensorTrain
+
+Solve `(a0 + a1 * A) * x = b` for `x` using DMRG-like sweeps with local GMRES.
+
+# Arguments
+- `operator`: The operator A (MPO as TensorTrain)
+- `rhs`: The right-hand side b (MPS as TensorTrain)
+- `init`: Initial guess for x (MPS as TensorTrain)
+
+# Keyword Arguments
+- `nsweeps::Integer=5`: Number of full sweeps (each sweep = 2 half-sweeps)
+- `nhalfsweeps::Integer=0`: Number of half-sweeps (overrides nsweeps if > 0)
+- `maxdim::Integer=0`: Maximum bond dimension (0 = no limit)
+- `rtol::Real=0.0`: Relative tolerance (0.0 = not set)
+- `cutoff::Real=0.0`: ITensorMPS.jl cutoff (0.0 = not set). Converted to rtol = √cutoff.
+- `krylov_tol::Real=0.0`: GMRES tolerance (0.0 = use default 1e-10)
+- `krylov_maxiter::Integer=0`: Max GMRES iterations (0 = use default 100)
+- `krylov_dim::Integer=0`: Krylov subspace dimension (0 = use default 30)
+- `a0::Real=0.0`: Coefficient a₀ in (a₀ + a₁*A)*x = b
+- `a1::Real=1.0`: Coefficient a₁ in (a₀ + a₁*A)*x = b
+- `convergence_tol::Real=-1.0`: Early termination tolerance (negative = disabled)
+
+# Returns
+The solution `x` as a TensorTrain.
+"""
+function linsolve(operator::TensorTrain, rhs::TensorTrain, init::TensorTrain;
+                  nsweeps::Integer=5,
+                  nhalfsweeps::Integer=0,
+                  maxdim::Integer=0,
+                  rtol::Real=0.0,
+                  cutoff::Real=0.0,
+                  krylov_tol::Real=0.0,
+                  krylov_maxiter::Integer=0,
+                  krylov_dim::Integer=0,
+                  a0::Real=0.0,
+                  a1::Real=1.0,
+                  convergence_tol::Real=-1.0)
+    actual_nhalfsweeps = _resolve_nhalfsweeps(nsweeps, nhalfsweeps)
+    ptr = C_API.t4a_tt_linsolve(operator.ptr, rhs.ptr, init.ptr,
+                                actual_nhalfsweeps, maxdim,
+                                Float64(rtol), Float64(cutoff),
+                                Float64(krylov_tol), krylov_maxiter, krylov_dim,
+                                Float64(a0), Float64(a1), Float64(convergence_tol))
+    ptr == C_NULL && error("linsolve failed")
+    return TensorTrain(ptr)
+end
+
+export linsolve
+
+# ============================================================================
+# Type Aliases (ITensorMPS.jl compatibility)
+# ============================================================================
+
+"""
+    MPS
+
+Type alias for `TensorTrain` (Matrix Product State).
+"""
+const MPS = TensorTrain
+
+"""
+    MPO
+
+Type alias for `TensorTrain` (Matrix Product Operator).
+"""
+const MPO = TensorTrain
+
+export MPS, MPO
 
 # ============================================================================
 # TensorTrain Display
