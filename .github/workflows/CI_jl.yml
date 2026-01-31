@@ -71,18 +71,12 @@ jobs:
       - name: Cache Julia
         uses: julia-actions/cache@v2
 
-      - name: Set LD_PRELOAD for system libcurl (Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          # Julia LTS bundles its own libcurl which conflicts with system HDF5.
-          # Preloading the system libcurl resolves the CURL_OPENSSL_4 symbol issue.
-          CURL_LIB=$(find /usr/lib -name 'libcurl.so.4' 2>/dev/null | head -1)
-          if [ -n "$CURL_LIB" ]; then
-            echo "LD_PRELOAD=$CURL_LIB" >> $GITHUB_ENV
-          fi
-
       - name: Run Julia tests
         run: ./scripts/run_julia_tests.sh
+        env:
+          # Julia LTS bundles old libcurl/OpenSSL that conflict with system HDF5.
+          # Preloading system SSL stack ensures consistent library versions.
+          LD_PRELOAD: ${{ runner.os == 'Linux' && '/usr/lib/x86_64-linux-gnu/libcurl.so.4:/usr/lib/x86_64-linux-gnu/libssl.so.3:/usr/lib/x86_64-linux-gnu/libcrypto.so.3' || '' }}
 
   rollup-jl:
     runs-on: ubuntu-latest
