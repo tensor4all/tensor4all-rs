@@ -1256,4 +1256,336 @@ mod tests {
         crate::t4a_index_release(s0);
         crate::t4a_index_release(s0_clone);
     }
+
+    // ========================================================================
+    // Null pointer guard tests
+    // ========================================================================
+
+    #[test]
+    fn test_tt_new_null_with_nonzero_count() {
+        let result = t4a_tt_new(std::ptr::null(), 3);
+        assert!(result.is_null());
+    }
+
+    #[test]
+    fn test_tt_add_null_pointers() {
+        let (tt, tensors, indices) = make_two_site_tt();
+        assert!(t4a_tt_add(std::ptr::null(), tt).is_null());
+        assert!(t4a_tt_add(tt, std::ptr::null()).is_null());
+        t4a_tensortrain_release(tt);
+        for t in tensors {
+            crate::t4a_tensor_release(t);
+        }
+        for i in indices {
+            crate::t4a_index_release(i);
+        }
+    }
+
+    #[test]
+    fn test_tt_to_dense_null() {
+        assert!(t4a_tt_to_dense(std::ptr::null()).is_null());
+    }
+
+    #[test]
+    fn test_tt_linsolve_null() {
+        assert!(t4a_tt_linsolve(
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            0,
+            0,
+            0.0,
+            1.0,
+            -1.0
+        )
+        .is_null());
+    }
+
+    #[test]
+    fn test_tt_truncate_null() {
+        assert_eq!(
+            t4a_tt_truncate(std::ptr::null_mut(), 0.0, 0.0, 0),
+            T4A_NULL_POINTER
+        );
+    }
+
+    #[test]
+    fn test_tt_contract_null() {
+        let (tt, tensors, indices) = make_two_site_tt();
+        assert!(t4a_tt_contract(
+            std::ptr::null(),
+            tt,
+            crate::types::t4a_contract_method::Zipup,
+            0,
+            0.0,
+            0.0,
+            0
+        )
+        .is_null());
+        assert!(t4a_tt_contract(
+            tt,
+            std::ptr::null(),
+            crate::types::t4a_contract_method::Zipup,
+            0,
+            0.0,
+            0.0,
+            0
+        )
+        .is_null());
+        t4a_tensortrain_release(tt);
+        for t in tensors {
+            crate::t4a_tensor_release(t);
+        }
+        for i in indices {
+            crate::t4a_index_release(i);
+        }
+    }
+
+    // ========================================================================
+    // Tolerance branch coverage
+    // ========================================================================
+
+    #[test]
+    fn test_tt_truncate_with_rtol() {
+        let (tt, tensors, indices) = make_two_site_tt();
+
+        // Truncate with rtol (covers Tol::Rtol branch in truncate)
+        let status = t4a_tt_truncate(tt, 1e-5, 0.0, 0);
+        assert_eq!(status, T4A_SUCCESS);
+        assert!(t4a_tt_maxbonddim_value(tt) >= 1);
+
+        t4a_tensortrain_release(tt);
+        for t in tensors {
+            crate::t4a_tensor_release(t);
+        }
+        for i in indices {
+            crate::t4a_index_release(i);
+        }
+    }
+
+    #[test]
+    fn test_tt_contract_with_rtol() {
+        use crate::{t4a_index_clone, t4a_index_new, t4a_tensor_new_dense_f64};
+
+        let s0 = t4a_index_new(2);
+        let s0_clone = t4a_index_clone(s0);
+
+        let data: Vec<f64> = vec![1.0, 2.0];
+
+        let inds0: [*const t4a_index; 1] = [s0];
+        let dims: [libc::size_t; 1] = [2];
+        let t0 = t4a_tensor_new_dense_f64(1, inds0.as_ptr(), dims.as_ptr(), data.as_ptr(), 2);
+
+        let inds1: [*const t4a_index; 1] = [s0_clone];
+        let t1 = t4a_tensor_new_dense_f64(1, inds1.as_ptr(), dims.as_ptr(), data.as_ptr(), 2);
+
+        let tensors0: [*const t4a_tensor; 1] = [t0];
+        let tensors1: [*const t4a_tensor; 1] = [t1];
+        let tt0 = t4a_tt_new(tensors0.as_ptr(), 1);
+        let tt1 = t4a_tt_new(tensors1.as_ptr(), 1);
+
+        // Contract with rtol (covers Tol::Rtol branch in contract)
+        let result = t4a_tt_contract(
+            tt0,
+            tt1,
+            crate::types::t4a_contract_method::Zipup,
+            0,
+            1e-5,
+            0.0,
+            0,
+        );
+        assert!(!result.is_null());
+
+        t4a_tensortrain_release(result);
+        t4a_tensortrain_release(tt0);
+        t4a_tensortrain_release(tt1);
+        crate::t4a_tensor_release(t0);
+        crate::t4a_tensor_release(t1);
+        crate::t4a_index_release(s0);
+        crate::t4a_index_release(s0_clone);
+    }
+
+    // ========================================================================
+    // Linsolve test
+    // ========================================================================
+
+    #[test]
+    fn test_tt_linsolve() {
+        use crate::{t4a_index_clone, t4a_index_new, t4a_tensor_new_dense_f64};
+
+        // Build a simple 1-site identity MPO and a 1-site MPS.
+        // Solve I * x = b  =>  x = b.
+        let s0 = t4a_index_new(2);
+        let s0p = t4a_index_new(2); // primed site index for MPO
+
+        // Identity matrix as MPO tensor: shape [s0, s0p] = [[1,0],[0,1]]
+        let identity: Vec<f64> = vec![1.0, 0.0, 0.0, 1.0];
+        let mpo_inds: [*const t4a_index; 2] = [s0, s0p];
+        let mpo_dims: [libc::size_t; 2] = [2, 2];
+        let mpo_t = t4a_tensor_new_dense_f64(
+            2,
+            mpo_inds.as_ptr(),
+            mpo_dims.as_ptr(),
+            identity.as_ptr(),
+            4,
+        );
+        let mpo_tensors: [*const t4a_tensor; 1] = [mpo_t];
+        let mpo = t4a_tt_new(mpo_tensors.as_ptr(), 1);
+        assert!(!mpo.is_null());
+
+        // RHS vector b = [3, 4] with index s0p
+        let s0p_clone = t4a_index_clone(s0p);
+        let rhs_data: Vec<f64> = vec![3.0, 4.0];
+        let rhs_inds: [*const t4a_index; 1] = [s0p_clone];
+        let rhs_dims: [libc::size_t; 1] = [2];
+        let rhs_t = t4a_tensor_new_dense_f64(
+            1,
+            rhs_inds.as_ptr(),
+            rhs_dims.as_ptr(),
+            rhs_data.as_ptr(),
+            2,
+        );
+        let rhs_tensors: [*const t4a_tensor; 1] = [rhs_t];
+        let rhs = t4a_tt_new(rhs_tensors.as_ptr(), 1);
+        assert!(!rhs.is_null());
+
+        // Initial guess x0 = [1, 1] with index s0 (cloned)
+        let s0_clone = t4a_index_clone(s0);
+        let init_data: Vec<f64> = vec![1.0, 1.0];
+        let init_inds: [*const t4a_index; 1] = [s0_clone];
+        let init_dims: [libc::size_t; 1] = [2];
+        let init_t = t4a_tensor_new_dense_f64(
+            1,
+            init_inds.as_ptr(),
+            init_dims.as_ptr(),
+            init_data.as_ptr(),
+            2,
+        );
+        let init_tensors: [*const t4a_tensor; 1] = [init_t];
+        let init = t4a_tt_new(init_tensors.as_ptr(), 1);
+        assert!(!init.is_null());
+
+        // Solve with various options to cover branches
+        let result = t4a_tt_linsolve(
+            mpo, rhs, init, 4,     // nhalfsweeps (even)
+            10,    // max_rank
+            1e-10, // rtol (covers Tol::Rtol since cutoff=0)
+            0.0,   // cutoff
+            1e-12, // krylov_tol
+            50,    // krylov_maxiter
+            20,    // krylov_dim
+            0.0,   // a0
+            1.0,   // a1
+            1e-8,  // convergence_tol (non-negative, covers that branch)
+        );
+        assert!(!result.is_null());
+
+        // Verify result has 1 site
+        let mut len: libc::size_t = 0;
+        let status = t4a_tt_len(result, &mut len);
+        assert_eq!(status, T4A_SUCCESS);
+        assert_eq!(len, 1);
+
+        // Cleanup
+        t4a_tensortrain_release(result);
+        t4a_tensortrain_release(mpo);
+        t4a_tensortrain_release(rhs);
+        t4a_tensortrain_release(init);
+        crate::t4a_tensor_release(mpo_t);
+        crate::t4a_tensor_release(rhs_t);
+        crate::t4a_tensor_release(init_t);
+        crate::t4a_index_release(s0);
+        crate::t4a_index_release(s0p);
+        crate::t4a_index_release(s0p_clone);
+        crate::t4a_index_release(s0_clone);
+    }
+
+    #[test]
+    fn test_tt_linsolve_with_cutoff() {
+        use crate::{t4a_index_clone, t4a_index_new, t4a_tensor_new_dense_f64};
+
+        let s0 = t4a_index_new(2);
+        let s0p = t4a_index_new(2);
+
+        let identity: Vec<f64> = vec![1.0, 0.0, 0.0, 1.0];
+        let mpo_inds: [*const t4a_index; 2] = [s0, s0p];
+        let mpo_dims: [libc::size_t; 2] = [2, 2];
+        let mpo_t = t4a_tensor_new_dense_f64(
+            2,
+            mpo_inds.as_ptr(),
+            mpo_dims.as_ptr(),
+            identity.as_ptr(),
+            4,
+        );
+        let mpo_tensors: [*const t4a_tensor; 1] = [mpo_t];
+        let mpo = t4a_tt_new(mpo_tensors.as_ptr(), 1);
+
+        let s0p_clone = t4a_index_clone(s0p);
+        let rhs_data: Vec<f64> = vec![3.0, 4.0];
+        let rhs_inds: [*const t4a_index; 1] = [s0p_clone];
+        let rhs_dims: [libc::size_t; 1] = [2];
+        let rhs_t = t4a_tensor_new_dense_f64(
+            1,
+            rhs_inds.as_ptr(),
+            rhs_dims.as_ptr(),
+            rhs_data.as_ptr(),
+            2,
+        );
+        let rhs_tensors: [*const t4a_tensor; 1] = [rhs_t];
+        let rhs = t4a_tt_new(rhs_tensors.as_ptr(), 1);
+
+        let s0_clone = t4a_index_clone(s0);
+        let init_data: Vec<f64> = vec![1.0, 1.0];
+        let init_inds: [*const t4a_index; 1] = [s0_clone];
+        let init_dims: [libc::size_t; 1] = [2];
+        let init_t = t4a_tensor_new_dense_f64(
+            1,
+            init_inds.as_ptr(),
+            init_dims.as_ptr(),
+            init_data.as_ptr(),
+            2,
+        );
+        let init_tensors: [*const t4a_tensor; 1] = [init_t];
+        let init = t4a_tt_new(init_tensors.as_ptr(), 1);
+
+        // Solve with cutoff (covers Tol::Cutoff branch in linsolve)
+        // and odd nhalfsweeps (covers round_up_even in linsolve)
+        let result = t4a_tt_linsolve(
+            mpo, rhs, init, 3,     // odd nhalfsweeps → rounds up to 4
+            0,     // no max_rank
+            0.0,   // rtol
+            1e-10, // cutoff (covers Tol::Cutoff)
+            0.0,   // default krylov_tol
+            0,     // default krylov_maxiter
+            0,     // default krylov_dim
+            0.0,   // a0
+            1.0,   // a1
+            -1.0,  // convergence_tol disabled
+        );
+        assert!(!result.is_null());
+
+        t4a_tensortrain_release(result);
+        t4a_tensortrain_release(mpo);
+        t4a_tensortrain_release(rhs);
+        t4a_tensortrain_release(init);
+        crate::t4a_tensor_release(mpo_t);
+        crate::t4a_tensor_release(rhs_t);
+        crate::t4a_tensor_release(init_t);
+        crate::t4a_index_release(s0);
+        crate::t4a_index_release(s0p);
+        crate::t4a_index_release(s0p_clone);
+        crate::t4a_index_release(s0_clone);
+    }
+
+    /// Helper: get maxbonddim as a value (avoids repeated boilerplate)
+    fn t4a_tt_maxbonddim_value(tt: *const t4a_tensortrain) -> libc::size_t {
+        let mut val: libc::size_t = 0;
+        t4a_tt_maxbonddim(tt, &mut val);
+        val
+    }
 }
