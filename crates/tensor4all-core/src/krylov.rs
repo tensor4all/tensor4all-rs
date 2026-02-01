@@ -222,7 +222,7 @@ where
             // Check convergence
             let rel_res = res_norm / b_norm;
 
-            if options.verbose && (j + 1) % 10 == 0 {
+            if options.verbose {
                 eprintln!("GMRES iter {}: residual = {:.6e}", j + 1, rel_res);
             }
 
@@ -264,6 +264,199 @@ where
     }
 
     // Compute final residual
+    let ax_final = apply_a(&x)?;
+    let r_final = b.axpby(AnyScalar::F64(1.0), &ax_final, AnyScalar::F64(-1.0))?;
+    let final_res = r_final.norm() / b_norm;
+
+    Ok(GmresResult {
+        solution: x,
+        iterations: total_iters,
+        residual_norm: final_res,
+        converged: final_res < options.rtol,
+    })
+}
+
+/// Solve `A x = b` using GMRES with optional truncation after each iteration.
+///
+/// This is an extension of [`gmres`] that allows truncating Krylov basis vectors
+/// to control bond dimension growth in tensor network representations.
+///
+/// # Type Parameters
+///
+/// * `T` - A tensor type implementing `TensorLike`
+/// * `F` - A function that applies the linear operator: `F(x) = A x`
+/// * `Tr` - A function that truncates a tensor in-place: `Tr(&mut x)`
+///
+/// # Arguments
+///
+/// * `apply_a` - Function that applies the linear operator A to a tensor
+/// * `b` - Right-hand side tensor
+/// * `x0` - Initial guess
+/// * `options` - Solver options
+/// * `truncate` - Function that truncates a tensor to control bond dimension
+///
+/// # Note
+///
+/// Truncation is applied after each Gram-Schmidt orthogonalization step
+/// and after the final solution update. This helps control the bond dimension
+/// growth that would otherwise occur in MPS/MPO representations.
+pub fn gmres_with_truncation<T, F, Tr>(
+    apply_a: F,
+    b: &T,
+    x0: &T,
+    options: &GmresOptions,
+    truncate: Tr,
+) -> Result<GmresResult<T>>
+where
+    T: TensorLike,
+    F: Fn(&T) -> Result<T>,
+    Tr: Fn(&mut T) -> Result<()>,
+{
+    let b_norm = b.norm();
+    if b_norm < 1e-15 {
+        return Ok(GmresResult {
+            solution: x0.clone(),
+            iterations: 0,
+            residual_norm: 0.0,
+            converged: true,
+        });
+    }
+
+    let mut x = x0.clone();
+    let mut total_iters = 0;
+
+    for _restart in 0..options.max_restarts {
+        let ax = apply_a(&x)?;
+        let mut r = b.axpby(AnyScalar::F64(1.0), &ax, AnyScalar::F64(-1.0))?;
+        truncate(&mut r)?;
+        let r_norm = r.norm();
+        let rel_res = r_norm / b_norm;
+
+        if options.verbose {
+            eprintln!(
+                "GMRES restart {}: initial residual = {:.6e}",
+                _restart, rel_res
+            );
+        }
+
+        if rel_res < options.rtol {
+            return Ok(GmresResult {
+                solution: x,
+                iterations: total_iters,
+                residual_norm: rel_res,
+                converged: true,
+            });
+        }
+
+        let mut v_basis: Vec<T> = Vec::with_capacity(options.max_iter + 1);
+        let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(options.max_iter);
+
+        let mut v0 = r.scale(AnyScalar::F64(1.0 / r_norm))?;
+        truncate(&mut v0)?;
+        // Re-normalize after truncation
+        let v0_norm = v0.norm();
+        if v0_norm > 1e-15 {
+            v0 = v0.scale(AnyScalar::F64(1.0 / v0_norm))?;
+        }
+        v_basis.push(v0);
+
+        let mut cs: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
+        let mut sn: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
+        let mut g: Vec<AnyScalar> = vec![AnyScalar::F64(r_norm)];
+
+        for j in 0..options.max_iter {
+            total_iters += 1;
+
+            let w = apply_a(&v_basis[j])?;
+
+            let mut h_col: Vec<AnyScalar> = Vec::with_capacity(j + 2);
+            let mut w_orth = w;
+
+            for v_i in v_basis.iter().take(j + 1) {
+                let h_ij = v_i.inner_product(&w_orth)?;
+                h_col.push(h_ij.clone());
+                let neg_h_ij = AnyScalar::F64(0.0) - h_ij;
+                w_orth = w_orth.axpby(AnyScalar::F64(1.0), v_i, neg_h_ij)?;
+            }
+
+            // Truncate after orthogonalization
+            truncate(&mut w_orth)?;
+
+            let h_jp1_j_real = w_orth.norm();
+            let h_jp1_j = AnyScalar::F64(h_jp1_j_real);
+            h_col.push(h_jp1_j);
+
+            #[allow(clippy::needless_range_loop)]
+            for i in 0..j {
+                let h_i = h_col[i].clone();
+                let h_ip1 = h_col[i + 1].clone();
+                let (new_hi, new_hip1) = apply_givens_rotation(&cs[i], &sn[i], &h_i, &h_ip1);
+                h_col[i] = new_hi;
+                h_col[i + 1] = new_hip1;
+            }
+
+            let (c_j, s_j) = compute_givens_rotation(&h_col[j], &h_col[j + 1]);
+            cs.push(c_j.clone());
+            sn.push(s_j.clone());
+
+            let (new_hj, _) = apply_givens_rotation(&c_j, &s_j, &h_col[j], &h_col[j + 1]);
+            h_col[j] = new_hj;
+            h_col[j + 1] = AnyScalar::F64(0.0);
+
+            let g_j = g[j].clone();
+            let g_jp1 = AnyScalar::F64(0.0);
+            let (new_gj, new_gjp1) = apply_givens_rotation(&c_j, &s_j, &g_j, &g_jp1);
+            g[j] = new_gj;
+            let res_norm = new_gjp1.abs();
+            g.push(new_gjp1);
+
+            h_matrix.push(h_col);
+
+            let rel_res = res_norm / b_norm;
+
+            if options.verbose {
+                eprintln!("GMRES iter {}: residual = {:.6e}", j + 1, rel_res);
+            }
+
+            if rel_res < options.rtol {
+                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                x = update_solution_truncated(&x, &v_basis[..=j], &y, &truncate)?;
+                return Ok(GmresResult {
+                    solution: x,
+                    iterations: total_iters,
+                    residual_norm: rel_res,
+                    converged: true,
+                });
+            }
+
+            if h_jp1_j_real > 1e-14 {
+                let mut v_jp1 = w_orth.scale(AnyScalar::F64(1.0 / h_jp1_j_real))?;
+                truncate(&mut v_jp1)?;
+                // Re-normalize after truncation
+                let v_norm = v_jp1.norm();
+                if v_norm > 1e-15 {
+                    v_jp1 = v_jp1.scale(AnyScalar::F64(1.0 / v_norm))?;
+                }
+                v_basis.push(v_jp1);
+            } else {
+                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                x = update_solution_truncated(&x, &v_basis[..=j], &y, &truncate)?;
+                let ax_final = apply_a(&x)?;
+                let r_final = b.axpby(AnyScalar::F64(1.0), &ax_final, AnyScalar::F64(-1.0))?;
+                let final_res = r_final.norm() / b_norm;
+                return Ok(GmresResult {
+                    solution: x,
+                    iterations: total_iters,
+                    residual_norm: final_res,
+                    converged: final_res < options.rtol,
+                });
+            }
+        }
+
+        let y = solve_upper_triangular(&h_matrix, &g[..options.max_iter])?;
+        x = update_solution_truncated(&x, &v_basis[..options.max_iter], &y, &truncate)?;
+    }
+
     let ax_final = apply_a(&x)?;
     let r_final = b.axpby(AnyScalar::F64(1.0), &ax_final, AnyScalar::F64(-1.0))?;
     let final_res = r_final.norm() / b_norm;
@@ -382,6 +575,29 @@ fn update_solution<T: TensorLike>(x: &T, v_basis: &[T], y: &[AnyScalar]) -> Resu
         let scaled_vi = vi.scale(yi.clone())?;
         // result = result + scaled_vi = 1.0 * result + 1.0 * scaled_vi
         result = result.axpby(AnyScalar::F64(1.0), &scaled_vi, AnyScalar::F64(1.0))?;
+    }
+
+    Ok(result)
+}
+
+/// Update solution with truncation: x_new = truncate(x + sum_i y_i * v_i)
+fn update_solution_truncated<T, Tr>(
+    x: &T,
+    v_basis: &[T],
+    y: &[AnyScalar],
+    truncate: &Tr,
+) -> Result<T>
+where
+    T: TensorLike,
+    Tr: Fn(&mut T) -> Result<()>,
+{
+    let mut result = x.clone();
+
+    for (vi, yi) in v_basis.iter().zip(y.iter()) {
+        let scaled_vi = vi.scale(yi.clone())?;
+        result = result.axpby(AnyScalar::F64(1.0), &scaled_vi, AnyScalar::F64(1.0))?;
+        // Truncate after each addition to control bond dimension growth
+        truncate(&mut result)?;
     }
 
     Ok(result)

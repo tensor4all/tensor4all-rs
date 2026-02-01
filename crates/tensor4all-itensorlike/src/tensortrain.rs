@@ -620,8 +620,12 @@ impl TensorTrain {
     /// Compute the squared norm of the tensor train.
     ///
     /// Returns `<self | self>` = ||self||^2.
+    ///
+    /// # Note
+    /// Due to numerical errors, the inner product can be very slightly negative.
+    /// This method clamps the result to be non-negative.
     pub fn norm_squared(&self) -> f64 {
-        self.inner(self).real()
+        self.inner(self).real().max(0.0)
     }
 
     /// Compute the norm of the tensor train.
@@ -746,11 +750,12 @@ impl TensorTrain {
             let tensor = self.tensor(site);
             if site == 0 {
                 // Scale only the first tensor
-                let scaled = tensor.scale(scalar.clone()).map_err(|e| {
-                    TensorTrainError::OperationError {
-                        message: format!("Failed to scale tensor at site 0: {}", e),
-                    }
-                })?;
+                let scaled =
+                    tensor
+                        .scale(scalar.clone())
+                        .map_err(|e| TensorTrainError::OperationError {
+                            message: format!("Failed to scale tensor at site 0: {}", e),
+                        })?;
                 tensors.push(scaled);
             } else {
                 tensors.push(tensor.clone());
