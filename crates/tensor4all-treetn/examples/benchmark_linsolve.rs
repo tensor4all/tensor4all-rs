@@ -169,7 +169,7 @@ fn summarize_times(label: &str, times: &[Duration]) {
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
-    let n_sites: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);
+    let n_sites: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(3);
     let bond_dim: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(20);
 
     anyhow::ensure!(n_sites >= 2, "This benchmark currently requires N>=2");
