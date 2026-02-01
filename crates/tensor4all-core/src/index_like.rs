@@ -180,21 +180,6 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     where
         Self: Sized;
 
-    /// Create a similar index with a new identity using a provided RNG.
-    ///
-    /// This is the deterministic version of [`sim`](Self::sim) that uses the provided
-    /// random number generator instead of the thread-local RNG. Use this when you need
-    /// reproducible results with the same seed.
-    ///
-    /// # Arguments
-    /// * `rng` - A random number generator to use for ID generation
-    ///
-    /// # Returns
-    /// A new index with a fresh identity and the same structure as `self`.
-    fn sim_with_rng<R: rand::Rng>(&self, rng: &mut R) -> Self
-    where
-        Self: Sized;
-
     /// Create a pair of contractable dummy indices with dimension 1.
     ///
     /// These are used for structural connections that don't carry quantum numbers,

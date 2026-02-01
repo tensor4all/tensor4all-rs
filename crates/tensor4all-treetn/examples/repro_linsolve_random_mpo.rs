@@ -15,7 +15,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{
     index::{DynId, Index},
-    seed_id_rng, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
+    DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
 };
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalizationOptions,
@@ -437,9 +437,6 @@ fn main() -> anyhow::Result<()> {
     let bond_dim = 4usize; // Small bond dimension for testing
     let n_sweeps = 5usize;
     let seed = 1234_u64;
-
-    // Seed the ID RNG for deterministic sim() calls during linsolve
-    seed_id_rng(seed + 1000);
 
     println!("=== Minimal Reproduction Test for linsolve ===");
     println!("N = {n_sites}, phys_dim = {phys_dim}, bond_dim = {bond_dim}");

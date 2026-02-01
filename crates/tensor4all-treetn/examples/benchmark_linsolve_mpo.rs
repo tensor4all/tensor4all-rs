@@ -19,7 +19,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tensor4all_core::{
     index::{DynId, Index},
-    seed_id_rng, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
+    DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
 };
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, ApplyOptions, CanonicalForm,
@@ -409,9 +409,6 @@ fn main() -> anyhow::Result<()> {
     println!("Warmup run (excluded from stats)...");
     let warmup_start = Instant::now();
 
-    // Seed the ID RNG for deterministic sim() calls during linsolve
-    seed_id_rng(seed + 1000);
-
     // Initial guess x0 = rhs (same as Julia benchmark)
     let init = rhs.clone();
     let canon_opts = CanonicalizationOptions::default().with_form(CanonicalForm::Unitary);
@@ -446,10 +443,6 @@ fn main() -> anyhow::Result<()> {
     let mut x_last: Option<TreeTN<TensorDynLen, String>> = None;
 
     for run in 1..=n_runs {
-        // Seed the ID RNG for deterministic sim() calls
-        // Use same seed for all runs to test reproducibility
-        seed_id_rng(seed + 2000);
-
         let start = Instant::now();
 
         let init = rhs.clone();
