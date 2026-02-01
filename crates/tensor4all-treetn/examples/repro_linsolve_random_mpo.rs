@@ -370,6 +370,7 @@ fn compute_rel_residual(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_linsolve_test(
     test_name: &str,
     operator: &TreeTN<TensorDynLen, String>,
