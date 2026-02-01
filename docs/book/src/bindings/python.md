@@ -8,74 +8,19 @@ The Python bindings provide a Pythonic interface to tensor4all-rs.
 pip install git+https://github.com/tensor4all/tensor4all-rs#subdirectory=python
 ```
 
-## Basic Usage
+## Overview
 
-### Tensor Cross Interpolation
-
-```python
-from tensor4all import crossinterpolate2
-
-# Define a function to interpolate
-def f(i, j, k):
-    return float((1 + i) * (1 + j) * (1 + k))
-
-# Perform cross interpolation
-tt, err = crossinterpolate2(f, [4, 4, 4], tolerance=1e-10)
-
-# Evaluate the tensor train
-print(tt(0, 0, 0))  # 1.0
-print(tt(1, 1, 1))  # 8.0
-print(tt(3, 3, 3))  # 64.0
-
-# Check properties
-print("Rank:", tt.rank)
-print("Site dims:", tt.site_dims)
-print("Sum:", tt.sum())
-```
-
-## Index and Tensor (Advanced)
-
-For more control, use the low-level Index and Tensor types:
-
-```python
-from tensor4all import Index, Tensor
-import numpy as np
-
-# Create indices
-i = Index(2, tags="Site")
-j = Index(3, tags="Link")
-
-# Create tensor from NumPy array
-data = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float64)
-t = Tensor([i, j], data)
-
-# Convert back to NumPy
-arr = t.to_numpy()
-```
-
-## NumPy Integration
-
-All tensor data can be converted to and from NumPy arrays:
-
-```python
-import numpy as np
-from tensor4all import TensorTrain
-
-# Create a tensor train
-tt = TensorTrain.constant([2, 3, 4], 1.0)
-
-# Get cores as NumPy arrays
-cores = [tt.core(i) for i in range(tt.num_sites)]
-
-# Sum over all indices
-total = tt.sum()
-print(f"Sum: {total}")  # 24.0 (= 2 * 3 * 4)
-```
+The Python package is organized into submodules; each submodule has its own page with executable examples.
 
 ## Module Structure
 
 | Module | Description |
 |--------|-------------|
-| `tensor4all` | Main module with high-level functions |
-| `tensor4all.tensortrain` | Tensor train operations |
-| `tensor4all.tci` | Cross interpolation |
+| `tensor4all` | Re-exports commonly used APIs |
+| `tensor4all.index` | `Index` and index utilities |
+| `tensor4all.tensor` | `Tensor` and `StorageKind` |
+| `tensor4all.simplett` | `SimpleTensorTrain` |
+| `tensor4all.tensorci` | `TensorCI2`, `crossinterpolate2` |
+| `tensor4all.tensortrain` | `TensorTrain` (MPS/MPO) |
+| `tensor4all.algorithm` | Algorithm enums and tolerance helpers |
+| `tensor4all.hdf5` | HDF5 I/O helpers |

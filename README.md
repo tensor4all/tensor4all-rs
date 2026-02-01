@@ -1,7 +1,7 @@
 # tensor4all-rs
 
-[![CI](https://github.com/shinaoka/tensor4all-rs/actions/workflows/CI_rs.yml/badge.svg)](https://github.com/shinaoka/tensor4all-rs/actions/workflows/CI_rs.yml)
-[![codecov](https://codecov.io/gh/shinaoka/tensor4all-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/shinaoka/tensor4all-rs)
+[![CI](https://github.com/tensor4all/tensor4all-rs/actions/workflows/CI_rs.yml/badge.svg)](https://github.com/tensor4all/tensor4all-rs/actions/workflows/CI_rs.yml)
+[![codecov](https://codecov.io/gh/tensor4all/tensor4all-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/tensor4all/tensor4all-rs)
 
 A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assisted development with fast trial-and-error cycles.
 
@@ -125,106 +125,96 @@ println!("Rank: {}, Final error: {:.2e}", tci.rank(), errors.last().unwrap());
 
 ## Language Bindings
 
+Both bindings require a Rust toolchain. Install from <https://rustup.rs/>.
+
+Binding documentation in this repo is built as an mdBook (`docs/book/`). Code blocks in the book are included from standalone scripts under `docs/examples/` and are executed in CI.
+
 ### Julia
+
+#### Install (development mode, requires Rust toolchain)
+
+```julia
+using Pkg
+Pkg.develop(url="https://github.com/tensor4all/tensor4all-rs", subdir="julia/Tensor4all.jl")
+```
+
+This clones the repository to `~/.julia/dev/Tensor4all/` and builds the Rust C library automatically via `deps/build.jl`.
+
+#### Rebuild after Rust code changes
+
+```julia
+using Pkg; Pkg.build("Tensor4all")
+Base.compilecache(Base.identify_package("Tensor4all"))
+```
+
+#### Quick example
 
 ```julia
 using Tensor4all
 using Tensor4all.TensorCI
 
-# Cross interpolation of a function
 f(i, j, k) = Float64((1 + i) * (1 + j) * (1 + k))
 tt, err = crossinterpolate2(f, [4, 4, 4]; tolerance=1e-10)
-
-# Evaluate the tensor train
 println(tt(0, 0, 0))  # 1.0
-println(tt(1, 1, 1))  # 8.0
-println(tt(3, 3, 3))  # 64.0
-
-# Check properties
-using Tensor4all.SimpleTT: rank, site_dims
-println("Rank: ", rank(tt))
-println("Site dims: ", site_dims(tt))
-println("Sum: ", sum(tt))
 ```
 
-#### ITensorLike interface (advanced)
+#### Executable documentation examples
 
-```julia
-using Tensor4all.ITensorLike
+All Julia documentation examples live in `docs/examples/julia/` and can be run with:
 
-# Create indices
-i = Index(2, tags="Site,n=1")
-j = Index(3, tags="Link")
-k = Index(2, tags="Site,n=2")
-
-# Create a one-hot tensor (ITensors.jl-compatible, 1-based)
-v = onehot(i => 1, j => 2)
-
-# Create random tensors
-t1 = Tensor([i, j], randn(2, 3))
-t2 = Tensor([j, k], randn(3, 2))
-
-# Contract tensors
-result = contract(t1, t2)
-
-# Create TensorTrain
-link1 = Index(4, tags="Link,l=1")
-link2 = Index(4, tags="Link,l=2")
-tensors = [
-    Tensor([i, link1], randn(2, 4)),
-    Tensor([link1, j, link2], randn(4, 3, 4)),
-    Tensor([link2, k], randn(4, 2)),
-]
-tt = TensorTrain(tensors)
-
-# Orthogonalize and truncate
-orthogonalize!(tt, 2)
-truncate!(tt; maxdim=3, rtol=1e-10)
+```bash
+for f in docs/examples/julia/*.jl; do
+  julia --project=julia/Tensor4all.jl "$f"
+done
 ```
+
+CI runs these examples as part of `./scripts/run_julia_tests.sh`.
 
 ### Python
+
+#### Install from GitHub (requires Rust toolchain)
+
+```bash
+uv pip install "tensor4all @ git+https://github.com/tensor4all/tensor4all-rs#subdirectory=python/tensor4all"
+```
+
+#### Development install
+
+```bash
+cd python/tensor4all
+python scripts/build_capi.py   # Build the Rust C library
+uv pip install -e .
+```
+
+After Rust code changes, re-run `python scripts/build_capi.py`.
+
+#### Quick example
 
 ```python
 from tensor4all import crossinterpolate2
 
-# Define a function to interpolate
 def f(i, j, k):
     return float((1 + i) * (1 + j) * (1 + k))
 
-# Perform cross interpolation
 tt, err = crossinterpolate2(f, [4, 4, 4], tolerance=1e-10)
-
-# Evaluate the tensor train
 print(tt(0, 0, 0))  # 1.0
-print(tt(1, 1, 1))  # 8.0
-print(tt(3, 3, 3))  # 64.0
-
-# Check properties
-print("Rank:", tt.rank)
-print("Site dims:", tt.site_dims)
-print("Sum:", tt.sum())
 ```
 
-#### Index and Tensor (advanced)
+#### Executable documentation examples
 
-```python
-from tensor4all import Index, Tensor
-import numpy as np
+All Python documentation examples live in `docs/examples/python/` and are executed from the repo root:
 
-# Create indices
-i = Index(2, tags="Site")
-j = Index(3, tags="Link")
-
-# Create a one-hot tensor (0-based indexing)
-v = Tensor.onehot((i, 0), (j, 1))
-
-# Create tensor from NumPy array
-data = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float64)
-t = Tensor([i, j], data)
-
-# Convert back to NumPy
-arr = t.to_numpy()
+```bash
+cd python/tensor4all
+python scripts/build_capi.py
+uv pip install -e .
+cd ../..
+for f in docs/examples/python/*.py; do
+  python "$f"
+done
 ```
+
+CI runs these examples as part of `./scripts/run_python_tests.sh`.
 
 ## Future Extensions
 
@@ -312,6 +302,7 @@ These checks are also enforced in CI, so ensuring they pass locally will prevent
 
 - [Index System Design](docs/INDEX_SYSTEM.md) — Overview of the index system, QSpace compatibility, and IndexLike/TensorLike design
 - [Vibe Coding Workflow](docs/vibe_coding_workflow.md) — Development workflow guidelines for rapid, AI-assisted development
+- mdBook user guide: `mdbook build docs/book` (output: `docs/book/book/`)
 
 ## References
 

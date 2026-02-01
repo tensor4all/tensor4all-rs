@@ -68,4 +68,15 @@ julia --project=. -e '
     Pkg.test()
 '
 
+echo "=== Running Julia doc examples ==="
+cd "$REPO_ROOT"
+for f in docs/examples/julia/*.jl; do
+    if [ "$SKIP_HDF5" = true ] && [[ "$f" == *"/hdf5.jl" ]]; then
+        echo "=== Skipping $f (HDF5 disabled) ==="
+        continue
+    fi
+    echo "=== Running $f ==="
+    julia --project=julia/Tensor4all.jl "$f"
+done
+
 echo "=== All tests passed ==="

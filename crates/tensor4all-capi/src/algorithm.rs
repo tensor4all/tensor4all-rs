@@ -10,6 +10,16 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 
 // ============================================================================
+// Defaults
+// ============================================================================
+
+/// Get the default SVD relative tolerance used by the Rust library.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_get_default_svd_rtol() -> f64 {
+    tensor4all_core::default_svd_rtol()
+}
+
+// ============================================================================
 // Factorize Algorithm
 // ============================================================================
 

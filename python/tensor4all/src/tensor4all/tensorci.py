@@ -223,6 +223,31 @@ def crossinterpolate2(
     >>> print(tt(0, 0, 0))  # 1.0
     >>> print(tt(1, 1, 1))  # 8.0
     """
+    tci, err = crossinterpolate2_tci(
+        f,
+        local_dims,
+        initial_pivots=initial_pivots,
+        tolerance=tolerance,
+        max_bonddim=max_bonddim,
+        max_iter=max_iter,
+    )
+    return tci.to_tensor_train(), err
+
+
+def crossinterpolate2_tci(
+    f: Callable[..., float],
+    local_dims: Sequence[int],
+    *,
+    initial_pivots: Optional[Sequence[Sequence[int]]] = None,
+    tolerance: float = 1e-8,
+    max_bonddim: int = 0,
+    max_iter: int = 20,
+) -> Tuple[TensorCI2, float]:
+    """Perform cross interpolation of a function and return the underlying TensorCI2 object.
+
+    This is the low-level form of :func:`crossinterpolate2` that also exposes the
+    intermediate `TensorCI2` state.
+    """
     lib = get_lib()
     n_sites = len(local_dims)
 
@@ -253,28 +278,21 @@ def crossinterpolate2(
     @ffi.callback("int(int64_t*, size_t, double*, void*)")
     def eval_callback(indices_ptr, n_indices, result_ptr, user_data):
         try:
-            # Convert indices to Python list
             indices = [indices_ptr[i] for i in range(n_indices)]
-            # Call the user function
-            value = float(f(*indices))
-            result_ptr[0] = value
+            result_ptr[0] = float(f(*indices))
             return 0
         except Exception as e:
-            # Log error and return error status
             import sys
             print(f"Error in TCI callback: {e}", file=sys.stderr)
             return -1
 
-    # Keep callback reference alive
     callback_id = id(f)
     _callback_refs[callback_id] = eval_callback
 
     try:
-        # Output variables
         out_tci = ffi.new("t4a_tci2_f64**")
         out_final_error = ffi.new("double*")
 
-        # Call C API
         status = lib.t4a_crossinterpolate2_f64(
             dims_arr,
             n_sites,
@@ -289,14 +307,7 @@ def crossinterpolate2(
             out_final_error,
         )
 
-        check_status(status, "crossinterpolate2")
-
-        # Wrap result
-        tci = TensorCI2(out_tci[0], _from_ptr=True)
-        tt = tci.to_tensor_train()
-
-        return tt, out_final_error[0]
-
+        check_status(status, "crossinterpolate2_tci")
+        return TensorCI2(out_tci[0], _from_ptr=True), out_final_error[0]
     finally:
-        # Clean up callback reference
         del _callback_refs[callback_id]

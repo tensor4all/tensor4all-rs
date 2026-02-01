@@ -39,7 +39,7 @@ from .algorithm import (
 from .simplett import SimpleTensorTrain
 
 # TensorCI types (tensor4all-tensorci)
-from .tensorci import TensorCI2, crossinterpolate2
+from .tensorci import TensorCI2, crossinterpolate2, crossinterpolate2_tci
 
 # ITensorLike types (tensor4all-itensorlike)
 from .tensortrain import TensorTrain, MPS, MPO
@@ -78,6 +78,7 @@ __all__ = [
     # TensorCI types
     "TensorCI2",
     "crossinterpolate2",
+    "crossinterpolate2_tci",
     # ITensorLike types
     "TensorTrain",
     "MPS",
