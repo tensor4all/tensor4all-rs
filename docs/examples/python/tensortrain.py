@@ -49,8 +49,36 @@ tt_b = tt.copy()
 tt_sum = tt_a + tt_b
 assert len(tt_sum) == len(tt)
 
-tt_contracted = tt_a.contract(tt_b, method="zipup", maxdim=8, rtol=1e-12)
-assert len(tt_contracted) == len(tt)
+# MPO × MPO contraction: only the "inner" indices (s0m/s1m) are shared
+s0m = Index(2, tags="Site,n=1,Mid")
+s1m = Index(2, tags="Site,n=2,Mid")
+la = Index(2, tags="Link,a")
+lb = Index(2, tags="Link,b")
+
+mpo_a = TensorTrain([
+    Tensor([s0, s0m, la], np.ones((2, 2, 2))),
+    Tensor([la, s1, s1m], np.ones((2, 2, 2))),
+])
+s0out = Index(2, tags="Site,n=1,Out")
+s1out = Index(2, tags="Site,n=2,Out")
+mpo_b = TensorTrain([
+    Tensor([s0m, s0out, lb], np.ones((2, 2, 2))),
+    Tensor([lb, s1m, s1out], np.ones((2, 2, 2))),
+])
+mpo_contracted = mpo_a.contract(
+    mpo_b, method="zipup", maxdim=8, rtol=1e-12,
+)
+assert len(mpo_contracted) == len(mpo_a)
+
+# Verify via dense arrays: contract shared indices with einsum
+# mpo_a dense indices: [s0, s0m, s1, s1m]
+# mpo_b dense indices: [s0m, s0out, s1m, s1out]
+arr_a = mpo_a.to_dense().to_numpy()
+arr_b = mpo_b.to_dense().to_numpy()
+arr_c = mpo_contracted.to_dense().to_numpy()
+expected = np.einsum("ijkl,jmln->imkn", arr_a, arr_b)
+assert np.allclose(arr_c, expected)
+
 assert tt_a.norm() > 0.0
 _ = tt_a.inner(tt_a)
 _ = tt_a.to_dense()
@@ -59,7 +87,8 @@ _ = tt_a.to_dense()
 
 # ANCHOR: linsolve
 # 1-site example (matches the C-API test structure):
-# operator is a 2-index tensor (matrix), rhs/init are 1-index tensors (vectors).
+# operator: 2-index tensor (matrix)
+# rhs/init: 1-index tensors (vectors).
 s = Index(2, tags="s")
 sp = Index(2, tags="sP")
 
@@ -72,6 +101,10 @@ rhs = TensorTrain([rhs_t])
 init_t = Tensor([s], np.array([1.0, 1.0], dtype=np.float64))
 init = TensorTrain([init_t])
 
-sol = tt_linsolve(op, rhs, init, nhalfsweeps=4, maxdim=10, rtol=1e-10, krylov_tol=1e-12, convergence_tol=1e-8)
+sol = tt_linsolve(
+    op, rhs, init,
+    nhalfsweeps=4, maxdim=10, rtol=1e-10,
+    krylov_tol=1e-12, convergence_tol=1e-8,
+)
 assert len(sol) == 1
 # ANCHOR_END: linsolve

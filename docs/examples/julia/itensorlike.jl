@@ -46,8 +46,38 @@ tt_b = copy(tt)
 tt_sum = tt_a + tt_b
 @assert length(tt_sum) == length(tt)
 
-tt_contracted = contract(tt_a, tt_b)
-@assert length(tt_contracted) > 0
+# MPO × MPO contraction: only the "inner" indices (s1m/s2m) are shared
+s1m = Index(2; tags="Site,n=1,Mid")
+s2m = Index(2; tags="Site,n=2,Mid")
+la = Index(2; tags="Link,a")
+lb = Index(2; tags="Link,b")
+
+mpo_a = TensorTrain([
+    Tensor([s1, s1m, la], ones(2, 2, 2)),
+    Tensor([la, s2, s2m], ones(2, 2, 2)),
+])
+s1out = Index(2; tags="Site,n=1,Out")
+s2out = Index(2; tags="Site,n=2,Out")
+mpo_b = TensorTrain([
+    Tensor([s1m, s1out, lb], ones(2, 2, 2)),
+    Tensor([lb, s2m, s2out], ones(2, 2, 2)),
+])
+mpo_contracted = contract(mpo_a, mpo_b)
+@assert length(mpo_contracted) == length(mpo_a)
+
+# Verify via dense arrays
+da = to_dense(mpo_a)
+db = to_dense(mpo_b)
+dc = to_dense(mpo_contracted)
+arr_a = Array(da, [s1, s1m, s2, s2m])   # i,j,k,l
+arr_b = Array(db, [s1m, s1out, s2m, s2out])  # j,m,l,n
+arr_c = Array(dc, [s1, s1out, s2, s2out])    # i,m,k,n
+# Contract shared indices (s1m, s2m) manually
+expected = zeros(2, 2, 2, 2)
+for i in 1:2, j in 1:2, k in 1:2, l in 1:2, m in 1:2, n in 1:2
+    expected[i, m, k, n] += arr_a[i, j, k, l] * arr_b[j, m, l, n]
+end
+@assert isapprox(arr_c, expected; atol=1e-12)
 
 @assert norm(tt_a) > 0
 @assert inner(tt_a, tt_a) isa ComplexF64
