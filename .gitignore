@@ -45,3 +45,6 @@ lcov-patch.info
 
 # Generated API documentation
 docs/api/
+
+# Git worktrees
+.worktrees/
