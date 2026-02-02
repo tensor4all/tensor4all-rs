@@ -353,16 +353,25 @@ where
 
         let mut v0 = r.scale(AnyScalar::F64(1.0 / r_norm))?;
         truncate(&mut v0)?;
-        // Re-normalize after truncation
+        // After truncation, v0 might not be unit norm and might point in a different direction.
+        // We need to:
+        // 1. Renormalize v0 to unit norm for numerical stability
+        // 2. Recompute g[0] = <r, v0> to maintain the correct relationship
         let v0_norm = v0.norm();
-        if v0_norm > 1e-15 {
+        let effective_g0 = if v0_norm > 1e-15 {
             v0 = v0.scale(AnyScalar::F64(1.0 / v0_norm))?;
-        }
+            // g[0] should be the component of r in the direction of v0
+            // Since r was truncated and v0 = truncate(r/||r||)/||truncate(r/||r||)||,
+            // g[0] = <r, v0> ≈ ||r|| * ||truncate(r/||r||)|| = r_norm * v0_norm
+            r_norm * v0_norm
+        } else {
+            r_norm
+        };
         v_basis.push(v0);
 
         let mut cs: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
         let mut sn: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
-        let mut g: Vec<AnyScalar> = vec![AnyScalar::F64(r_norm)];
+        let mut g: Vec<AnyScalar> = vec![AnyScalar::F64(effective_g0)];
 
         for j in 0..options.max_iter {
             total_iters += 1;
@@ -379,8 +388,51 @@ where
                 w_orth = w_orth.axpby(AnyScalar::F64(1.0), v_i, neg_h_ij)?;
             }
 
-            // Truncate after orthogonalization
-            truncate(&mut w_orth)?;
+            // Iterative reorthogonalization with truncation
+            // Truncation can change the direction of w_orth, breaking orthogonality.
+            // We iterate until all corrections are below a threshold to ensure
+            // the Krylov basis remains orthogonal despite truncation.
+            const REORTH_THRESHOLD: f64 = 1e-12;
+            const MAX_REORTH_ITERS: usize = 10;
+
+            let mut reorth_iter_count = 0;
+            for reorth_iter in 0..MAX_REORTH_ITERS {
+                reorth_iter_count = reorth_iter + 1;
+                let norm_before_truncate = w_orth.norm();
+                truncate(&mut w_orth)?;
+                let norm_after_truncate = w_orth.norm();
+
+                let mut max_correction = 0.0;
+                for (i, v_i) in v_basis.iter().enumerate() {
+                    let correction = v_i.inner_product(&w_orth)?;
+                    let correction_abs = correction.abs();
+                    if correction_abs > max_correction {
+                        max_correction = correction_abs;
+                    }
+                    if correction_abs > REORTH_THRESHOLD {
+                        let neg_correction = AnyScalar::F64(0.0) - correction.clone();
+                        w_orth = w_orth.axpby(AnyScalar::F64(1.0), v_i, neg_correction)?;
+                        // Update Hessenberg matrix entry to include correction
+                        h_col[i] = h_col[i].clone() + correction;
+                    }
+                }
+
+                if options.verbose {
+                    eprintln!(
+                        "  reorth iter {}: norm {:.6e} -> {:.6e}, max_correction = {:.6e}",
+                        reorth_iter, norm_before_truncate, norm_after_truncate, max_correction
+                    );
+                }
+
+                // If all corrections are small enough, we're done
+                if max_correction < REORTH_THRESHOLD {
+                    break;
+                }
+            }
+
+            if options.verbose && reorth_iter_count > 1 {
+                eprintln!("  (needed {} reorth iterations)", reorth_iter_count);
+            }
 
             let h_jp1_j_real = w_orth.norm();
             let h_jp1_j = AnyScalar::F64(h_jp1_j_real);
@@ -430,13 +482,12 @@ where
             }
 
             if h_jp1_j_real > 1e-14 {
-                let mut v_jp1 = w_orth.scale(AnyScalar::F64(1.0 / h_jp1_j_real))?;
-                truncate(&mut v_jp1)?;
-                // Re-normalize after truncation
-                let v_norm = v_jp1.norm();
-                if v_norm > 1e-15 {
-                    v_jp1 = v_jp1.scale(AnyScalar::F64(1.0 / v_norm))?;
-                }
+                // Create v_{j+1} = w_orth / ||w_orth||
+                // w_orth has already been truncated twice (after orthogonalization and after reorthogonalization)
+                // so we don't need to truncate again. Scale doesn't increase bond dimensions.
+                let v_jp1 = w_orth.scale(AnyScalar::F64(1.0 / h_jp1_j_real))?;
+                // v_jp1 should have norm ~1.0 by construction
+                // The Arnoldi relation h_{j+1,j} * v_{j+1} = w_orth is maintained exactly
                 v_basis.push(v_jp1);
             } else {
                 let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
