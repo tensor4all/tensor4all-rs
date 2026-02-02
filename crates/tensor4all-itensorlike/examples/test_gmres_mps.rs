@@ -564,7 +564,11 @@ fn create_imaginary_identity_mpo(indices: &SharedIndices) -> anyhow::Result<Tens
         let s_out = indices.mpo_outputs[i].clone();
 
         // Identity with i factor on first site
-        let factor = if i == 0 { i_unit } else { Complex64::new(1.0, 0.0) };
+        let factor = if i == 0 {
+            i_unit
+        } else {
+            Complex64::new(1.0, 0.0)
+        };
 
         if i == 0 && n == 1 {
             // Single site: [s_in, s_out]
