@@ -229,7 +229,10 @@ fn test_restart_gmres_hard(n: usize) -> anyhow::Result<(bool, usize, f64)> {
     // Condition number = (3/2)^N
     let mpo = create_diagonal_mpo(&indices)?;
     let cond_number = (1.5_f64).powi(n as i32);
-    println!("Diagonal MPO created, condition number ≈ {:.2}", cond_number);
+    println!(
+        "Diagonal MPO created, condition number ≈ {:.2}",
+        cond_number
+    );
 
     // Create x_true (all ones MPS)
     let x_true = create_ones_mps(&indices)?;
@@ -282,9 +285,10 @@ fn test_restart_gmres_hard(n: usize) -> anyhow::Result<(bool, usize, f64)> {
     println!("Bond dims: {:?}", result.solution.bond_dims());
 
     // Compute error ||x_sol - x_true||
-    let diff = result
-        .solution
-        .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
+    let diff =
+        result
+            .solution
+            .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
     println!("Error ||x - x_true||: {:.6e}", diff.norm());
 
     Ok((result.converged, result.outer_iterations, true_residual))
