@@ -520,6 +520,295 @@ where
     })
 }
 
+/// Options for restarted GMRES with truncation.
+///
+/// This is used by [`restart_gmres_with_truncation`] which wraps the standard GMRES
+/// with an outer loop that recomputes the true residual at each restart.
+#[derive(Debug, Clone)]
+pub struct RestartGmresOptions {
+    /// Maximum number of outer restart iterations.
+    /// Default: 20
+    pub max_outer_iters: usize,
+
+    /// Convergence tolerance for relative residual norm (based on true residual).
+    /// The solver stops when `||b - A*x|| / ||b|| < rtol`.
+    /// Default: 1e-10
+    pub rtol: f64,
+
+    /// Maximum iterations per inner GMRES cycle.
+    /// Default: 10
+    pub inner_max_iter: usize,
+
+    /// Number of restarts within each inner GMRES (usually 0).
+    /// Default: 0
+    pub inner_max_restarts: usize,
+
+    /// Stagnation detection threshold.
+    /// If the residual reduction ratio exceeds this value (i.e., residual doesn't decrease enough),
+    /// the solver considers it stagnated.
+    /// For example, 0.99 means stagnation is detected when residual decreases by less than 1%.
+    /// Default: None (no stagnation detection)
+    pub min_reduction: Option<f64>,
+
+    /// Inner GMRES relative tolerance.
+    /// If None, uses 0.1 (solve inner problem loosely).
+    /// Default: None
+    pub inner_rtol: Option<f64>,
+
+    /// Whether to print convergence information.
+    /// Default: false
+    pub verbose: bool,
+}
+
+impl Default for RestartGmresOptions {
+    fn default() -> Self {
+        Self {
+            max_outer_iters: 20,
+            rtol: 1e-10,
+            inner_max_iter: 10,
+            inner_max_restarts: 0,
+            min_reduction: None,
+            inner_rtol: None,
+            verbose: false,
+        }
+    }
+}
+
+impl RestartGmresOptions {
+    /// Create new options with default values.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set maximum number of outer iterations.
+    pub fn with_max_outer_iters(mut self, max_outer_iters: usize) -> Self {
+        self.max_outer_iters = max_outer_iters;
+        self
+    }
+
+    /// Set convergence tolerance.
+    pub fn with_rtol(mut self, rtol: f64) -> Self {
+        self.rtol = rtol;
+        self
+    }
+
+    /// Set maximum iterations per inner GMRES cycle.
+    pub fn with_inner_max_iter(mut self, inner_max_iter: usize) -> Self {
+        self.inner_max_iter = inner_max_iter;
+        self
+    }
+
+    /// Set number of restarts within each inner GMRES.
+    pub fn with_inner_max_restarts(mut self, inner_max_restarts: usize) -> Self {
+        self.inner_max_restarts = inner_max_restarts;
+        self
+    }
+
+    /// Set stagnation detection threshold.
+    pub fn with_min_reduction(mut self, min_reduction: f64) -> Self {
+        self.min_reduction = Some(min_reduction);
+        self
+    }
+
+    /// Set inner GMRES relative tolerance.
+    pub fn with_inner_rtol(mut self, inner_rtol: f64) -> Self {
+        self.inner_rtol = Some(inner_rtol);
+        self
+    }
+
+    /// Enable verbose output.
+    pub fn with_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
+        self
+    }
+}
+
+/// Result of restarted GMRES solver.
+#[derive(Debug, Clone)]
+pub struct RestartGmresResult<T> {
+    /// The solution vector.
+    pub solution: T,
+
+    /// Total number of inner GMRES iterations performed.
+    pub iterations: usize,
+
+    /// Number of outer restart iterations performed.
+    pub outer_iterations: usize,
+
+    /// Final relative residual norm (true residual).
+    pub residual_norm: f64,
+
+    /// Whether the solver converged.
+    pub converged: bool,
+}
+
+/// Solve `A x = b` using restarted GMRES with truncation.
+///
+/// This wraps [`gmres_with_truncation`] with an outer loop that recomputes the true residual
+/// at each restart. This is particularly useful for MPS/MPO computations where truncation
+/// can cause the inner GMRES residual to be inaccurate.
+///
+/// # Algorithm
+///
+/// ```text
+/// for outer_iter in 0..max_outer_iters:
+///     r = b - A*x0          // Compute true residual
+///     r = truncate(r)
+///     if ||r|| / ||b|| < rtol:
+///         return x0         // Converged
+///     x' = gmres_with_truncation(A, r, 0, inner_options, truncate)
+///     x0 = truncate(x0 + x')
+/// ```
+///
+/// # Type Parameters
+///
+/// * `T` - A tensor type implementing `TensorLike`
+/// * `F` - A function that applies the linear operator: `F(x) = A x`
+/// * `Tr` - A function that truncates a tensor in-place: `Tr(&mut x)`
+///
+/// # Arguments
+///
+/// * `apply_a` - Function that applies the linear operator A to a tensor
+/// * `b` - Right-hand side tensor
+/// * `x0` - Initial guess (if None, starts from zero)
+/// * `options` - Solver options
+/// * `truncate` - Function that truncates a tensor to control bond dimension
+///
+/// # Returns
+///
+/// A `RestartGmresResult` containing the solution and convergence information.
+pub fn restart_gmres_with_truncation<T, F, Tr>(
+    apply_a: F,
+    b: &T,
+    x0: Option<&T>,
+    options: &RestartGmresOptions,
+    truncate: Tr,
+) -> Result<RestartGmresResult<T>>
+where
+    T: TensorLike,
+    F: Fn(&T) -> Result<T>,
+    Tr: Fn(&mut T) -> Result<()>,
+{
+    let b_norm = b.norm();
+    if b_norm < 1e-15 {
+        // b is effectively zero, return x0 or zero
+        let solution = match x0 {
+            Some(x) => x.clone(),
+            None => b.scale(AnyScalar::F64(0.0))?,
+        };
+        return Ok(RestartGmresResult {
+            solution,
+            iterations: 0,
+            outer_iterations: 0,
+            residual_norm: 0.0,
+            converged: true,
+        });
+    }
+
+    // Initialize x: use x0 if provided, otherwise start from zero
+    let mut x = match x0 {
+        Some(x) => x.clone(),
+        None => b.scale(AnyScalar::F64(0.0))?,
+    };
+
+    let mut total_inner_iters = 0;
+    let mut prev_residual_norm = f64::INFINITY;
+
+    // Inner GMRES options
+    let inner_options = GmresOptions {
+        max_iter: options.inner_max_iter,
+        rtol: options.inner_rtol.unwrap_or(0.1), // Solve loosely by default
+        max_restarts: options.inner_max_restarts + 1, // +1 because max_restarts=0 means 1 cycle
+        verbose: options.verbose,
+    };
+
+    for outer_iter in 0..options.max_outer_iters {
+        // Compute true residual: r = b - A*x
+        let ax = apply_a(&x)?;
+        let mut r = b.axpby(AnyScalar::F64(1.0), &ax, AnyScalar::F64(-1.0))?;
+        truncate(&mut r)?;
+
+        let r_norm = r.norm();
+        let rel_res = r_norm / b_norm;
+
+        if options.verbose {
+            eprintln!(
+                "Restart GMRES outer iter {}: true residual = {:.6e}",
+                outer_iter, rel_res
+            );
+        }
+
+        // Check convergence
+        if rel_res < options.rtol {
+            return Ok(RestartGmresResult {
+                solution: x,
+                iterations: total_inner_iters,
+                outer_iterations: outer_iter,
+                residual_norm: rel_res,
+                converged: true,
+            });
+        }
+
+        // Check stagnation
+        if let Some(min_reduction) = options.min_reduction {
+            if outer_iter > 0 && rel_res > prev_residual_norm * min_reduction {
+                if options.verbose {
+                    eprintln!(
+                        "Restart GMRES stagnated: residual ratio = {:.6e} > {:.6e}",
+                        rel_res / prev_residual_norm,
+                        min_reduction
+                    );
+                }
+                return Ok(RestartGmresResult {
+                    solution: x,
+                    iterations: total_inner_iters,
+                    outer_iterations: outer_iter,
+                    residual_norm: rel_res,
+                    converged: false,
+                });
+            }
+        }
+        prev_residual_norm = rel_res;
+
+        // Solve A*x' = r using inner GMRES with zero initial guess
+        // The zero initial guess is created by scaling r by 0
+        let zero = r.scale(AnyScalar::F64(0.0))?;
+        let inner_result = gmres_with_truncation(&apply_a, &r, &zero, &inner_options, &truncate)?;
+
+        total_inner_iters += inner_result.iterations;
+
+        if options.verbose {
+            eprintln!(
+                "  Inner GMRES: {} iterations, residual = {:.6e}, converged = {}",
+                inner_result.iterations, inner_result.residual_norm, inner_result.converged
+            );
+        }
+
+        // Update solution: x = x + x'
+        x = x.axpby(
+            AnyScalar::F64(1.0),
+            &inner_result.solution,
+            AnyScalar::F64(1.0),
+        )?;
+        truncate(&mut x)?;
+    }
+
+    // Did not converge within max_outer_iters
+    // Compute final residual
+    let ax = apply_a(&x)?;
+    let mut r = b.axpby(AnyScalar::F64(1.0), &ax, AnyScalar::F64(-1.0))?;
+    truncate(&mut r)?;
+    let final_rel_res = r.norm() / b_norm;
+
+    Ok(RestartGmresResult {
+        solution: x,
+        iterations: total_inner_iters,
+        outer_iterations: options.max_outer_iters,
+        residual_norm: final_rel_res,
+        converged: false,
+    })
+}
+
 /// Compute Givens rotation coefficients to eliminate b in (a, b).
 ///
 /// This function works with any AnyScalar variant by converting to Complex64
@@ -1007,5 +1296,247 @@ mod tests {
 
         // With zero RHS, should return initial guess immediately
         assert!(result.converged);
+    }
+
+    // ==========================================================================
+    // Tests for restart_gmres_with_truncation
+    // ==========================================================================
+
+    #[test]
+    fn test_restart_gmres_identity_operator() {
+        // Solve A x = b where A = I (identity)
+        let idx = DynIndex::new_dyn(3);
+        let b = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
+
+        let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { Ok(x.clone()) };
+
+        // No-op truncation
+        let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+        let options = RestartGmresOptions::default();
+
+        let result = restart_gmres_with_truncation(apply_a, &b, None, &options, truncate).unwrap();
+
+        assert!(
+            result.converged,
+            "Restart GMRES should converge for identity"
+        );
+        assert!(
+            result.residual_norm < 1e-10,
+            "Residual should be small: {}",
+            result.residual_norm
+        );
+
+        // Check solution matches b
+        let diff = result
+            .solution
+            .axpby(AnyScalar::F64(1.0), &b, AnyScalar::F64(-1.0))
+            .unwrap();
+        assert!(diff.norm() < 1e-10, "Solution should equal b");
+    }
+
+    #[test]
+    fn test_restart_gmres_diagonal_matrix() {
+        // Solve A x = b where A = diag(2, 3, 4)
+        // b = [2, 6, 12] → x = [1, 2, 3]
+        let idx = DynIndex::new_dyn(3);
+        let b = make_vector_with_index(vec![2.0, 6.0, 12.0], &idx);
+        let expected_x = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
+
+        let diag = [2.0, 3.0, 4.0];
+        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
+            let x_data = match x.storage().as_ref() {
+                Storage::DenseF64(d) => d.as_slice().to_vec(),
+                _ => panic!("Expected DenseF64"),
+            };
+            let result_data: Vec<f64> = x_data
+                .iter()
+                .zip(diag.iter())
+                .map(|(&xi, &di)| xi * di)
+                .collect();
+            let dims = x.dims();
+            Ok(TensorDynLen::new(
+                x.indices.clone(),
+                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                    result_data,
+                    &dims,
+                ))),
+            ))
+        };
+
+        // No-op truncation
+        let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+        let options = RestartGmresOptions {
+            max_outer_iters: 10,
+            rtol: 1e-10,
+            inner_max_iter: 5,
+            inner_max_restarts: 0,
+            min_reduction: None,
+            inner_rtol: None,
+            verbose: false,
+        };
+
+        let result = restart_gmres_with_truncation(apply_a, &b, None, &options, truncate).unwrap();
+
+        assert!(result.converged, "Restart GMRES should converge");
+        assert!(
+            result.residual_norm < 1e-10,
+            "Residual should be small: {}",
+            result.residual_norm
+        );
+
+        // Check solution
+        let diff = result
+            .solution
+            .axpby(AnyScalar::F64(1.0), &expected_x, AnyScalar::F64(-1.0))
+            .unwrap();
+        assert!(
+            diff.norm() < 1e-8,
+            "Solution error too large: {}",
+            diff.norm()
+        );
+    }
+
+    #[test]
+    fn test_restart_gmres_with_initial_guess() {
+        // Solve A x = b with a good initial guess
+        let idx = DynIndex::new_dyn(3);
+        let b = make_vector_with_index(vec![2.0, 6.0, 12.0], &idx);
+        let x0 = make_vector_with_index(vec![0.9, 1.9, 2.9], &idx); // Close to [1, 2, 3]
+        let expected_x = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
+
+        let diag = [2.0, 3.0, 4.0];
+        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
+            let x_data = match x.storage().as_ref() {
+                Storage::DenseF64(d) => d.as_slice().to_vec(),
+                _ => panic!("Expected DenseF64"),
+            };
+            let result_data: Vec<f64> = x_data
+                .iter()
+                .zip(diag.iter())
+                .map(|(&xi, &di)| xi * di)
+                .collect();
+            let dims = x.dims();
+            Ok(TensorDynLen::new(
+                x.indices.clone(),
+                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                    result_data,
+                    &dims,
+                ))),
+            ))
+        };
+
+        let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+        let options = RestartGmresOptions::default();
+
+        let result =
+            restart_gmres_with_truncation(apply_a, &b, Some(&x0), &options, truncate).unwrap();
+
+        assert!(result.converged, "Should converge with good initial guess");
+
+        let diff = result
+            .solution
+            .axpby(AnyScalar::F64(1.0), &expected_x, AnyScalar::F64(-1.0))
+            .unwrap();
+        assert!(
+            diff.norm() < 1e-8,
+            "Solution error too large: {}",
+            diff.norm()
+        );
+    }
+
+    #[test]
+    fn test_restart_gmres_outer_iterations_tracked() {
+        // Verify that outer_iterations is tracked correctly
+        let idx = DynIndex::new_dyn(3);
+        let b = make_vector_with_index(vec![2.0, 6.0, 12.0], &idx);
+
+        let diag = [2.0, 3.0, 4.0];
+        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
+            let x_data = match x.storage().as_ref() {
+                Storage::DenseF64(d) => d.as_slice().to_vec(),
+                _ => panic!("Expected DenseF64"),
+            };
+            let result_data: Vec<f64> = x_data
+                .iter()
+                .zip(diag.iter())
+                .map(|(&xi, &di)| xi * di)
+                .collect();
+            let dims = x.dims();
+            Ok(TensorDynLen::new(
+                x.indices.clone(),
+                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                    result_data,
+                    &dims,
+                ))),
+            ))
+        };
+
+        let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+        // Use small inner_max_iter to encourage multiple outer iterations
+        let options = RestartGmresOptions {
+            max_outer_iters: 20,
+            rtol: 1e-10,
+            inner_max_iter: 2,
+            inner_max_restarts: 0,
+            min_reduction: None,
+            inner_rtol: Some(0.1),
+            verbose: false,
+        };
+
+        let result = restart_gmres_with_truncation(apply_a, &b, None, &options, truncate).unwrap();
+
+        assert!(result.converged, "Should converge");
+        // Verify iteration counts are reasonable
+        assert!(
+            result.iterations >= 1,
+            "Should have at least 1 inner iteration"
+        );
+        // outer_iterations can be 0 if converged at first check
+        assert!(
+            result.outer_iterations <= options.max_outer_iters,
+            "outer_iterations should not exceed max_outer_iters"
+        );
+    }
+
+    #[test]
+    fn test_restart_gmres_zero_rhs() {
+        // Solve A x = 0 → x = 0
+        let idx = DynIndex::new_dyn(3);
+        let b = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
+
+        let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { Ok(x.clone()) };
+        let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+        let options = RestartGmresOptions::default();
+
+        let result = restart_gmres_with_truncation(apply_a, &b, None, &options, truncate).unwrap();
+
+        assert!(result.converged, "Should converge for zero RHS");
+        assert_eq!(result.iterations, 0, "Should converge immediately");
+        assert_eq!(result.outer_iterations, 0, "Should have 0 outer iterations");
+    }
+
+    #[test]
+    fn test_restart_gmres_options_builder() {
+        let options = RestartGmresOptions::new()
+            .with_max_outer_iters(30)
+            .with_rtol(1e-12)
+            .with_inner_max_iter(15)
+            .with_inner_max_restarts(1)
+            .with_min_reduction(0.95)
+            .with_inner_rtol(0.01)
+            .with_verbose(true);
+
+        assert_eq!(options.max_outer_iters, 30);
+        assert!((options.rtol - 1e-12).abs() < 1e-15);
+        assert_eq!(options.inner_max_iter, 15);
+        assert_eq!(options.inner_max_restarts, 1);
+        assert_eq!(options.min_reduction, Some(0.95));
+        assert_eq!(options.inner_rtol, Some(0.01));
+        assert!(options.verbose);
     }
 }
