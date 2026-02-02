@@ -228,7 +228,8 @@ function main()
         x0 = deepcopy(b0)
 
         r0 = rel_residual(; A=A, b=b, x=x0, a0=a0, a1=a1, maxdim=maxdim, cutoff=cutoff)
-        x = KrylovKit.linsolve(
+        # Use ITensorMPS.linsolve (local sweep + local GMRES), not global KrylovKit GMRES
+        x = linsolve(
             A, b, x0, a0, a1;
             nsweeps=nsweeps,
             maxdim=maxdim,
@@ -250,7 +251,8 @@ function main()
             b = deepcopy(b0)
             # initialize x with RHS b (x^(0) = b)
             x0 = deepcopy(b0)
-            x = KrylovKit.linsolve(
+            # Use ITensorMPS.linsolve (local sweep + local GMRES)
+            x = linsolve(
                 A, b, x0, a0, a1;
                 nsweeps=nsweeps,
                 maxdim=maxdim,

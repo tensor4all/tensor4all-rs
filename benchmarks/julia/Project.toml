@@ -1,3 +1,5 @@
 [deps]
+FastMPOContractions = "f6e391d2-8ffa-4d7a-98cd-7e70024481ca"
 ITensorMPS = "0d1a4710-d33b-49a5-8f18-73bdf49b47e2"
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
+VectorInterface = "409d34a3-91d5-4945-b6ec-7529ddf182d8"

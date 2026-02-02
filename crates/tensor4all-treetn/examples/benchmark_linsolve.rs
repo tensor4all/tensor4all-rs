@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{index::DynId, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
 use tensor4all_treetn::{
     apply_linear_operator, apply_local_update_sweep, random_treetn_f64, ApplyOptions,
     CanonicalForm, CanonicalizationOptions, IndexMapping, LinearOperator, LinkSpace,
@@ -169,7 +169,7 @@ fn summarize_times(label: &str, times: &[Duration]) {
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
-    let n_sites: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);
+    let n_sites: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(3);
     let bond_dim: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(20);
 
     anyhow::ensure!(n_sites >= 2, "This benchmark currently requires N>=2");
@@ -247,8 +247,31 @@ fn main() -> anyhow::Result<()> {
         let ax_full = ax.contract_to_tensor()?;
         let x_full = x.contract_to_tensor()?;
         let b_full = rhs.contract_to_tensor()?;
-        let ax_vec = ax_full.to_vec_f64()?;
-        let x_vec = x_full.to_vec_f64()?;
+
+        // Align tensor indices to b's order before converting to vectors
+        let ref_order = b_full.external_indices();
+        let order_for = |tensor: &TensorDynLen| -> anyhow::Result<Vec<DynIndex>> {
+            let inds = tensor.external_indices();
+            let by_id: HashMap<DynId, DynIndex> = inds.into_iter().map(|i| (*i.id(), i)).collect();
+            let mut out = Vec::with_capacity(ref_order.len());
+            for r in &ref_order {
+                let id = *r.id();
+                let idx = by_id
+                    .get(&id)
+                    .ok_or_else(|| anyhow::anyhow!("residual: index {:?} not found in tensor", id))?
+                    .clone();
+                out.push(idx);
+            }
+            Ok(out)
+        };
+
+        let order_x = order_for(&x_full)?;
+        let order_ax = order_for(&ax_full)?;
+        let x_aligned = x_full.permuteinds(&order_x)?;
+        let ax_aligned = ax_full.permuteinds(&order_ax)?;
+
+        let ax_vec = ax_aligned.to_vec_f64()?;
+        let x_vec = x_aligned.to_vec_f64()?;
         let b_vec = b_full.to_vec_f64()?;
         anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
         anyhow::ensure!(x_vec.len() == b_vec.len(), "vector length mismatch");
