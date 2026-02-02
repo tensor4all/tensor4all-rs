@@ -14,6 +14,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core" }
 tensor4all-itensorlike = { path = "../tensor4all-itensorlike" }
+tensor4all-treetn = { path = "../tensor4all-treetn" }
 tensor4all-simplett = { path = "../tensor4all-simplett" }
 tensor4all-tensorci = { path = "../tensor4all-tensorci" }
 tensor4all-hdf5 = { path = "../tensor4all-hdf5", optional = true }

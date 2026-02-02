@@ -6,6 +6,7 @@
 use std::ffi::c_void;
 use tensor4all_core::{DynIndex, Storage, TensorDynLen};
 use tensor4all_itensorlike::TensorTrain;
+use tensor4all_treetn::DefaultTreeTN;
 
 /// The internal index type we're wrapping (DynIndex = Index<DynId, TagSet>)
 pub(crate) type InternalIndex = DynIndex;
@@ -178,6 +179,7 @@ impl t4a_tensortrain {
     }
 
     /// Get a mutable reference to the inner InternalTensorTrain
+    #[allow(dead_code)]
     pub(crate) fn inner_mut(&mut self) -> &mut InternalTensorTrain {
         unsafe { &mut *(self._private as *mut InternalTensorTrain) }
     }
@@ -203,6 +205,64 @@ impl Drop for t4a_tensortrain {
 // Safety: t4a_tensortrain is Send + Sync because InternalTensorTrain is Send + Sync
 unsafe impl Send for t4a_tensortrain {}
 unsafe impl Sync for t4a_tensortrain {}
+
+// ============================================================================
+// TreeTN type
+// ============================================================================
+
+/// The internal tree tensor network type we're wrapping.
+pub(crate) type InternalTreeTN = DefaultTreeTN<usize>;
+
+/// Opaque tree tensor network type for C API
+///
+/// Wraps `DefaultTreeTN<usize>` which is a tree-shaped tensor network
+/// generalizing MPS/TT to tree topologies.
+///
+/// The internal structure is hidden using a void pointer.
+#[repr(C)]
+pub struct t4a_treetn {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_treetn {
+    /// Create a new t4a_treetn from an InternalTreeTN
+    pub(crate) fn new(treetn: InternalTreeTN) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(treetn)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner InternalTreeTN
+    pub(crate) fn inner(&self) -> &InternalTreeTN {
+        unsafe { &*(self._private as *const InternalTreeTN) }
+    }
+
+    /// Get a mutable reference to the inner InternalTreeTN
+    pub(crate) fn inner_mut(&mut self) -> &mut InternalTreeTN {
+        unsafe { &mut *(self._private as *mut InternalTreeTN) }
+    }
+}
+
+impl Clone for t4a_treetn {
+    fn clone(&self) -> Self {
+        let inner = self.inner().clone();
+        Self::new(inner)
+    }
+}
+
+impl Drop for t4a_treetn {
+    fn drop(&mut self) {
+        unsafe {
+            if !self._private.is_null() {
+                let _ = Box::from_raw(self._private as *mut InternalTreeTN);
+            }
+        }
+    }
+}
+
+// Safety: t4a_treetn is Send + Sync because InternalTreeTN is Send + Sync
+unsafe impl Send for t4a_treetn {}
+unsafe impl Sync for t4a_treetn {}
 
 /// Canonical form enum for C API
 ///
@@ -237,6 +297,9 @@ impl From<t4a_canonical_form> for tensor4all_itensorlike::CanonicalForm {
         }
     }
 }
+
+// Note: tensor4all_itensorlike::CanonicalForm IS tensor4all_treetn::CanonicalForm
+// (re-exported), so the From impls above also cover the treetn crate.
 
 // ============================================================================
 // Algorithm types
@@ -346,6 +409,26 @@ impl From<tensor4all_itensorlike::ContractMethod> for t4a_contract_method {
 }
 
 impl From<t4a_contract_method> for tensor4all_itensorlike::ContractMethod {
+    fn from(method: t4a_contract_method) -> Self {
+        match method {
+            t4a_contract_method::Zipup => Self::Zipup,
+            t4a_contract_method::Fit => Self::Fit,
+            t4a_contract_method::Naive => Self::Naive,
+        }
+    }
+}
+
+impl From<tensor4all_treetn::treetn::contraction::ContractionMethod> for t4a_contract_method {
+    fn from(method: tensor4all_treetn::treetn::contraction::ContractionMethod) -> Self {
+        match method {
+            tensor4all_treetn::treetn::contraction::ContractionMethod::Zipup => Self::Zipup,
+            tensor4all_treetn::treetn::contraction::ContractionMethod::Fit => Self::Fit,
+            tensor4all_treetn::treetn::contraction::ContractionMethod::Naive => Self::Naive,
+        }
+    }
+}
+
+impl From<t4a_contract_method> for tensor4all_treetn::treetn::contraction::ContractionMethod {
     fn from(method: t4a_contract_method) -> Self {
         match method {
             t4a_contract_method::Zipup => Self::Zipup,

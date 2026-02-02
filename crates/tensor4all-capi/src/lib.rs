@@ -36,7 +36,7 @@ mod index;
 mod simplett;
 mod tensor;
 mod tensorci;
-mod tensortrain;
+mod treetn;
 mod types;
 
 pub use algorithm::*;
@@ -46,7 +46,7 @@ pub use index::*;
 pub use simplett::*;
 pub use tensor::*;
 pub use tensorci::*;
-pub use tensortrain::*;
+pub use treetn::*;
 pub use types::*;
 
 /// Status code type for C API

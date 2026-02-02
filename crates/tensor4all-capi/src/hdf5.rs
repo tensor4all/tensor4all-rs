@@ -8,6 +8,10 @@ use std::panic::catch_unwind;
 use crate::types::{t4a_tensor, t4a_tensortrain};
 use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 
+// Generate release/clone/is_assigned for t4a_tensortrain (needed for HDF5 MPS functions).
+// The main tensortrain.rs was removed; these lifecycle functions are still needed here.
+impl_opaque_type_common!(tensortrain);
+
 /// Convert a C string pointer to a Rust `&str`, distinguishing null from invalid UTF-8.
 fn cstr_to_str_checked<'a>(ptr: *const libc::c_char) -> Result<&'a str, StatusCode> {
     if ptr.is_null() {
