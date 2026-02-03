@@ -379,6 +379,134 @@ impl From<t4a_contract_method> for tensor4all_treetn::treetn::contraction::Contr
     }
 }
 
+// ============================================================================
+// QuanticsGrids types
+// ============================================================================
+
+/// The internal DiscretizedGrid type we're wrapping.
+pub(crate) type InternalDiscretizedGrid = quanticsgrids::DiscretizedGrid;
+
+/// Opaque discretized grid type for C API
+///
+/// Wraps `quanticsgrids::DiscretizedGrid` which provides coordinate conversions
+/// between continuous coordinates, grid indices, and quantics indices.
+#[repr(C)]
+pub struct t4a_qgrid_disc {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_qgrid_disc {
+    /// Create a new t4a_qgrid_disc from an InternalDiscretizedGrid
+    pub(crate) fn new(grid: InternalDiscretizedGrid) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(grid)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner InternalDiscretizedGrid
+    pub(crate) fn inner(&self) -> &InternalDiscretizedGrid {
+        unsafe { &*(self._private as *const InternalDiscretizedGrid) }
+    }
+}
+
+impl Clone for t4a_qgrid_disc {
+    fn clone(&self) -> Self {
+        let inner = self.inner().clone();
+        Self::new(inner)
+    }
+}
+
+impl Drop for t4a_qgrid_disc {
+    fn drop(&mut self) {
+        unsafe {
+            if !self._private.is_null() {
+                let _ = Box::from_raw(self._private as *mut InternalDiscretizedGrid);
+            }
+        }
+    }
+}
+
+// Safety: t4a_qgrid_disc is Send + Sync because InternalDiscretizedGrid is Send + Sync
+unsafe impl Send for t4a_qgrid_disc {}
+unsafe impl Sync for t4a_qgrid_disc {}
+
+/// The internal InherentDiscreteGrid type we're wrapping.
+pub(crate) type InternalInherentDiscreteGrid = quanticsgrids::InherentDiscreteGrid;
+
+/// Opaque inherent discrete grid type for C API
+///
+/// Wraps `quanticsgrids::InherentDiscreteGrid` which provides coordinate conversions
+/// between integer coordinates, grid indices, and quantics indices.
+#[repr(C)]
+pub struct t4a_qgrid_int {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_qgrid_int {
+    /// Create a new t4a_qgrid_int from an InternalInherentDiscreteGrid
+    pub(crate) fn new(grid: InternalInherentDiscreteGrid) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(grid)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner InternalInherentDiscreteGrid
+    pub(crate) fn inner(&self) -> &InternalInherentDiscreteGrid {
+        unsafe { &*(self._private as *const InternalInherentDiscreteGrid) }
+    }
+}
+
+impl Clone for t4a_qgrid_int {
+    fn clone(&self) -> Self {
+        let inner = self.inner().clone();
+        Self::new(inner)
+    }
+}
+
+impl Drop for t4a_qgrid_int {
+    fn drop(&mut self) {
+        unsafe {
+            if !self._private.is_null() {
+                let _ = Box::from_raw(self._private as *mut InternalInherentDiscreteGrid);
+            }
+        }
+    }
+}
+
+// Safety: t4a_qgrid_int is Send + Sync because InternalInherentDiscreteGrid is Send + Sync
+unsafe impl Send for t4a_qgrid_int {}
+unsafe impl Sync for t4a_qgrid_int {}
+
+/// Unfolding scheme enum for C API
+///
+/// Represents the tensor train layout for quantics grids.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum t4a_unfolding_scheme {
+    /// Fused scheme: indices at same bit level grouped together
+    Fused = 0,
+    /// Interleaved scheme: indices alternate between dimensions
+    Interleaved = 1,
+}
+
+impl From<t4a_unfolding_scheme> for quanticsgrids::UnfoldingScheme {
+    fn from(scheme: t4a_unfolding_scheme) -> Self {
+        match scheme {
+            t4a_unfolding_scheme::Fused => Self::Fused,
+            t4a_unfolding_scheme::Interleaved => Self::Interleaved,
+        }
+    }
+}
+
+impl From<quanticsgrids::UnfoldingScheme> for t4a_unfolding_scheme {
+    fn from(scheme: quanticsgrids::UnfoldingScheme) -> Self {
+        match scheme {
+            quanticsgrids::UnfoldingScheme::Fused => Self::Fused,
+            quanticsgrids::UnfoldingScheme::Interleaved => Self::Interleaved,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

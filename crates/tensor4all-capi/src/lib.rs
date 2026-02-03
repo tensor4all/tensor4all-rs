@@ -33,6 +33,7 @@ mod algorithm;
 #[cfg(feature = "hdf5")]
 mod hdf5;
 mod index;
+mod quanticsgrids;
 mod simplett;
 mod tensor;
 mod tensorci;
@@ -43,6 +44,7 @@ pub use algorithm::*;
 #[cfg(feature = "hdf5")]
 pub use hdf5::*;
 pub use index::*;
+pub use quanticsgrids::*;
 pub use simplett::*;
 pub use tensor::*;
 pub use tensorci::*;
