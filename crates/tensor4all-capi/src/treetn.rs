@@ -1240,9 +1240,9 @@ mod tests {
         assert_eq!(n_out, 1); // one site index at vertex 0
 
         // Clean up returned indices
-        for i in 0..n_out {
-            if !idx_buf[i].is_null() {
-                crate::t4a_index_release(idx_buf[i]);
+        for idx in idx_buf.iter().take(n_out) {
+            if !idx.is_null() {
+                crate::t4a_index_release(*idx);
             }
         }
 
