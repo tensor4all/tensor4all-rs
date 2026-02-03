@@ -51,6 +51,13 @@ from .treetn import contract as ttn_contract
 # QuanticsGrids types
 from .quanticsgrids import DiscretizedGrid, InherentDiscreteGrid
 
+# QuanticsTCI types
+from .quanticstci import (
+    QuanticsTensorCI2,
+    quanticscrossinterpolate,
+    quanticscrossinterpolate_discrete,
+)
+
 # HDF5 functions (ITensors.jl compatible)
 from .hdf5 import save_itensor, load_itensor, save_mps, load_mps
 
@@ -95,6 +102,10 @@ __all__ = [
     # QuanticsGrids types
     "DiscretizedGrid",
     "InherentDiscreteGrid",
+    # QuanticsTCI types
+    "QuanticsTensorCI2",
+    "quanticscrossinterpolate",
+    "quanticscrossinterpolate_discrete",
     # HDF5 functions
     "save_itensor",
     "load_itensor",

@@ -554,4 +554,51 @@ ffi.cdef("""
         const t4a_qgrid_int* grid, const int64_t* quantics_arr, size_t n_quantics,
         int64_t* out_arr, size_t buf_size, size_t* n_out
     );
+
+    // ========================================================================
+    // QuanticsTCI functions
+    // ========================================================================
+
+    // Opaque type
+    typedef struct { void* _private; } t4a_qtci_f64;
+
+    // Callback types for QTCI
+    typedef int (*t4a_qtci_eval_callback_f64)(const double* coords, size_t ndims, double* result, void* user_data);
+    typedef int (*t4a_qtci_eval_callback_i64)(const int64_t* indices, size_t ndims, double* result, void* user_data);
+
+    // Lifecycle
+    void t4a_qtci_f64_release(t4a_qtci_f64* ptr);
+
+    // High-level interpolation
+    StatusCode t4a_quanticscrossinterpolate_f64(
+        const t4a_qgrid_disc* grid,
+        t4a_qtci_eval_callback_f64 eval_fn,
+        void* user_data,
+        double tolerance,
+        size_t max_bonddim,
+        size_t max_iter,
+        t4a_qtci_f64** out_qtci
+    );
+
+    StatusCode t4a_quanticscrossinterpolate_discrete_f64(
+        const size_t* sizes,
+        size_t ndims,
+        t4a_qtci_eval_callback_i64 eval_fn,
+        void* user_data,
+        double tolerance,
+        size_t max_bonddim,
+        size_t max_iter,
+        int unfoldingscheme,
+        t4a_qtci_f64** out_qtci
+    );
+
+    // Accessors
+    StatusCode t4a_qtci_f64_rank(const t4a_qtci_f64* ptr, size_t* out_rank);
+    StatusCode t4a_qtci_f64_link_dims(const t4a_qtci_f64* ptr, size_t* out_dims, size_t buf_len);
+
+    // Operations
+    StatusCode t4a_qtci_f64_evaluate(const t4a_qtci_f64* ptr, const int64_t* indices, size_t n_indices, double* out_value);
+    StatusCode t4a_qtci_f64_sum(const t4a_qtci_f64* ptr, double* out_value);
+    StatusCode t4a_qtci_f64_integral(const t4a_qtci_f64* ptr, double* out_value);
+    t4a_simplett_f64* t4a_qtci_f64_to_tensor_train(const t4a_qtci_f64* ptr);
 """)
