@@ -1828,4 +1828,130 @@ function t4a_qgrid_int_quantics_to_grididx(ptr::Ptr{Cvoid}, quantics_arr, n_quan
     )
 end
 
+# ============================================================================
+# QuanticsTCI: QTCI lifecycle functions
+# ============================================================================
+
+function t4a_qtci_f64_release(ptr::Ptr{Cvoid})
+    ptr == C_NULL && return
+    ccall(
+        (:t4a_qtci_f64_release, libpath()),
+        Cvoid,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+# ============================================================================
+# QuanticsTCI: High-level interpolation functions
+# ============================================================================
+
+"""
+    t4a_quanticscrossinterpolate_f64(grid, eval_fn, user_data, tolerance, max_bonddim, max_iter, out_qtci) -> Cint
+
+Continuous domain interpolation using a DiscretizedGrid.
+"""
+function t4a_quanticscrossinterpolate_f64(
+    grid::Ptr{Cvoid},
+    eval_fn::Ptr{Cvoid},
+    user_data::Ptr{Cvoid},
+    tolerance::Cdouble,
+    max_bonddim::Csize_t,
+    max_iter::Csize_t,
+    out_qtci::Ref{Ptr{Cvoid}},
+)
+    return ccall(
+        (:t4a_quanticscrossinterpolate_f64, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}, Cdouble, Csize_t, Csize_t, Ptr{Ptr{Cvoid}}),
+        grid, eval_fn, user_data, tolerance, max_bonddim, max_iter, out_qtci
+    )
+end
+
+"""
+    t4a_quanticscrossinterpolate_discrete_f64(sizes, ndims, eval_fn, user_data, tolerance, max_bonddim, max_iter, unfoldingscheme, out_qtci) -> Cint
+
+Discrete domain interpolation with integer indices.
+"""
+function t4a_quanticscrossinterpolate_discrete_f64(
+    sizes::Vector{Csize_t},
+    ndims::Csize_t,
+    eval_fn::Ptr{Cvoid},
+    user_data::Ptr{Cvoid},
+    tolerance::Cdouble,
+    max_bonddim::Csize_t,
+    max_iter::Csize_t,
+    unfoldingscheme::Cint,
+    out_qtci::Ref{Ptr{Cvoid}},
+)
+    return ccall(
+        (:t4a_quanticscrossinterpolate_discrete_f64, libpath()),
+        Cint,
+        (Ptr{Csize_t}, Csize_t, Ptr{Cvoid}, Ptr{Cvoid}, Cdouble, Csize_t, Csize_t, Cint, Ptr{Ptr{Cvoid}}),
+        sizes, ndims, eval_fn, user_data, tolerance, max_bonddim, max_iter, unfoldingscheme, out_qtci
+    )
+end
+
+# ============================================================================
+# QuanticsTCI: Accessors
+# ============================================================================
+
+function t4a_qtci_f64_rank(ptr::Ptr{Cvoid}, out_rank::Ref{Csize_t})
+    return ccall(
+        (:t4a_qtci_f64_rank, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr, out_rank
+    )
+end
+
+function t4a_qtci_f64_link_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t}, buf_len::Csize_t)
+    return ccall(
+        (:t4a_qtci_f64_link_dims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t),
+        ptr, out_dims, buf_len
+    )
+end
+
+# ============================================================================
+# QuanticsTCI: Operations
+# ============================================================================
+
+function t4a_qtci_f64_evaluate(ptr::Ptr{Cvoid}, indices::Vector{Int64}, n_indices::Csize_t, out_value::Ref{Cdouble})
+    return ccall(
+        (:t4a_qtci_f64_evaluate, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Cdouble}),
+        ptr, indices, n_indices, out_value
+    )
+end
+
+function t4a_qtci_f64_sum(ptr::Ptr{Cvoid}, out_value::Ref{Cdouble})
+    return ccall(
+        (:t4a_qtci_f64_sum, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr, out_value
+    )
+end
+
+function t4a_qtci_f64_integral(ptr::Ptr{Cvoid}, out_value::Ref{Cdouble})
+    return ccall(
+        (:t4a_qtci_f64_integral, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr, out_value
+    )
+end
+
+function t4a_qtci_f64_to_tensor_train(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_qtci_f64_to_tensor_train, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
 end # module C_API

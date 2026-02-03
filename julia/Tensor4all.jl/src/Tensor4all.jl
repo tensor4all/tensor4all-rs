@@ -949,4 +949,11 @@ include("TreeTN.jl")
 # Use: using Tensor4all.QuanticsGrids
 include("QuanticsGrids.jl")
 
+# ============================================================================
+# QuanticsTCI Submodule (Quantics Tensor Cross Interpolation)
+# ============================================================================
+# Quantics TCI combines TCI with quantics grid representations.
+# Use: using Tensor4all.QuanticsTCI
+include("QuanticsTCI.jl")
+
 end # module
