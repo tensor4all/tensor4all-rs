@@ -129,66 +129,14 @@ Binding documentation in this repo is built as an mdBook (`docs/book/`). Code bl
 
 ### Julia
 
-**Note:** No Rust installation required. The build script uses [RustToolChain.jl](https://github.com/AtelierArith/RustToolChain.jl) to automatically download and manage the Rust toolchain.
-
-#### Install from GitHub
+Julia bindings are maintained in a separate repository: **[Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl)**
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/tensor4all/tensor4all-rs", subdir="julia/Tensor4all.jl")
+Pkg.add(url="https://github.com/tensor4all/Tensor4all.jl")
 ```
 
-#### Development mode
-
-```julia
-using Pkg
-Pkg.develop(url="https://github.com/tensor4all/tensor4all-rs", subdir="julia/Tensor4all.jl")
-```
-
-#### Local development with tensor4all-rs
-
-For active development on both Julia and Rust code, place both repositories side by side:
-
-```
-your-projects/
-├── tensor4all-rs/    # Rust workspace
-└── Tensor4all.jl/    # Julia package (or ~/.julia/dev/Tensor4all/)
-```
-
-The build script automatically detects `../tensor4all-rs/` and uses it for building. Alternatively, set the environment variable:
-
-```julia
-ENV["TENSOR4ALL_RS_PATH"] = "/path/to/tensor4all-rs"
-Pkg.build("Tensor4all")
-```
-
-#### Rebuild after Rust code changes
-
-```julia
-using Pkg; Pkg.build("Tensor4all")
-```
-
-#### Quick example
-
-```julia
-using Tensor4all
-using Tensor4all.TensorCI
-
-f(i, j, k) = Float64((1 + i) * (1 + j) * (1 + k))
-tt, err = crossinterpolate2(f, [4, 4, 4]; tolerance=1e-10)
-println(tt(0, 0, 0))  # 1.0
-```
-
-#### Available modules
-
-| Module | Description |
-|--------|-------------|
-| `Tensor4all.TreeTN` | Tree tensor networks (MPS, MPO, TTN) |
-| `Tensor4all.TensorCI` | Tensor cross interpolation |
-| `Tensor4all.QuanticsGrids` | Quantics grid representations |
-| `Tensor4all.QuanticsTCI` | Quantics TCI for function interpolation |
-| `Tensor4all.QuanticsTransform` | Quantics operators (shift, flip, Fourier) |
-| `Tensor4all.SimpleTT` | Simple tensor trains |
+See the [Tensor4all.jl README](https://github.com/tensor4all/Tensor4all.jl) for detailed installation and usage instructions.
 
 #### Executable documentation examples
 

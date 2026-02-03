@@ -84,7 +84,7 @@ fn test_op_c64() { test_op_generic::<Complex64>(); }
 
 ## C API & Language Bindings
 
-See `docs/CAPI_DESIGN.md` for C API patterns. Bindings: `julia/Tensor4all.jl/`, `python/tensor4all/`.
+See `docs/CAPI_DESIGN.md` for C API patterns. Bindings: [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl) (separate repo), `python/tensor4all/`.
 
 Truncation tolerance: support both `cutoff` (ITensors) and `rtol` (tensor4all-rs). Conversion: `rtol = √cutoff`.
 

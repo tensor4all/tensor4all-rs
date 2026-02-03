@@ -1,4 +1,0 @@
-# Built shared libraries (platform-specific)
-*.dylib
-*.so
-*.dll
