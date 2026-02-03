@@ -5,7 +5,7 @@
 
 using Random
 using Tensor4all
-using Tensor4all.ITensorLike
+using Tensor4all.TreeTN
 
 # ANCHOR: save_load_tensor
 mktempdir() do dir
@@ -27,12 +27,12 @@ mktempdir() do dir
     path = joinpath(dir, "mps.h5")
     Random.seed!(1)
     sites = [Index(2; tags="Site,n=$n") for n in 1:3]
-    tt = random_tt(sites; linkdims=2)
+    mps = random_mps(sites; linkdims=2)
 
-    save_mps(path, "psi", tt)
-    tt2 = load_mps(path, "psi")
+    save_mps(path, "psi", mps)
+    mps2 = load_mps(path, "psi")
 
-    @assert length(tt2) == length(tt)
+    @assert length(mps2) == length(mps)
 end
 # ANCHOR_END: save_load_mps
 

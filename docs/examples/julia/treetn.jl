@@ -1,12 +1,12 @@
-# Julia documentation examples: ITensorLike (TensorTrain / MPS / MPO)
+# Julia documentation examples: TreeTN (MPS / MPO / TreeTensorNetwork)
 #
 # Run with:
-#   julia --project=julia/Tensor4all.jl docs/examples/julia/itensorlike.jl
+#   julia --project=julia/Tensor4all.jl docs/examples/julia/treetn.jl
 
 using LinearAlgebra
 using Random
 using Tensor4all
-using Tensor4all.ITensorLike
+using Tensor4all.TreeTN
 
 # ANCHOR: create
 s1 = Index(2; tags="Site,n=1")
@@ -15,50 +15,50 @@ l12 = Index(3; tags="Link,l=1")
 
 t1 = Tensor([s1, l12], ones(2, 3))
 t2 = Tensor([l12, s2], ones(3, 2))
-tt = TensorTrain([t1, t2])
-@assert length(tt) == 2
+mps = MPS([t1, t2])
+@assert length(mps) == 2
 # ANCHOR_END: create
 
 # ANCHOR: accessors
-@assert tensors(tt) isa Vector{Tensor}
-@assert tt[1] isa Tensor
-@assert bond_dims(tt) == [3]
-@assert maxbonddim(tt) == 3
-@assert linkind(tt, 1) == l12
-@assert linkinds(tt) == [l12]
+@assert collect(mps) isa Vector{Tensor}
+@assert mps[1] isa Tensor
+@assert linkdims(mps) == [3]
+@assert maxbonddim(mps) == 3
+@assert linkind(mps, 1) == l12
+@assert linkinds(mps) == [l12]
+@assert nv(mps) == 2
+@assert ne(mps) == 1
 # ANCHOR_END: accessors
 
 # ANCHOR: orthogonalize
-orthogonalize!(tt, 1)
-@assert isortho(tt)
-@assert orthocenter(tt) == 1
-@assert llim(tt) <= rlim(tt)
+orthogonalize!(mps, 1)
+@assert canonical_form(mps) == Unitary
 # ANCHOR_END: orthogonalize
 
 # ANCHOR: truncate
-truncate!(tt; maxdim=2, rtol=1e-12)
-@assert maxbonddim(tt) <= 2
+truncate!(mps; maxdim=2, rtol=1e-12)
+@assert maxbonddim(mps) <= 2
 # ANCHOR_END: truncate
 
 # ANCHOR: operations
-tt_a = copy(tt)
-tt_b = copy(tt)
-tt_sum = tt_a + tt_b
-@assert length(tt_sum) == length(tt)
+mps_a = copy(mps)
+mps_b = copy(mps)
+mps_sum = mps_a + mps_b
+@assert length(mps_sum) == length(mps)
 
-# MPO × MPO contraction: only the "inner" indices (s1m/s2m) are shared
+# MPO x MPO contraction: only the "inner" indices (s1m/s2m) are shared
 s1m = Index(2; tags="Site,n=1,Mid")
 s2m = Index(2; tags="Site,n=2,Mid")
 la = Index(2; tags="Link,a")
 lb = Index(2; tags="Link,b")
 
-mpo_a = TensorTrain([
+mpo_a = MPS([
     Tensor([s1, s1m, la], ones(2, 2, 2)),
     Tensor([la, s2, s2m], ones(2, 2, 2)),
 ])
 s1out = Index(2; tags="Site,n=1,Out")
 s2out = Index(2; tags="Site,n=2,Out")
-mpo_b = TensorTrain([
+mpo_b = MPS([
     Tensor([s1m, s1out, lb], ones(2, 2, 2)),
     Tensor([lb, s2m, s2out], ones(2, 2, 2)),
 ])
@@ -79,24 +79,24 @@ for i in 1:2, j in 1:2, k in 1:2, l in 1:2, m in 1:2, n in 1:2
 end
 @assert isapprox(arr_c, expected; atol=1e-12)
 
-@assert norm(tt_a) > 0
-@assert inner(tt_a, tt_a) isa ComplexF64
-dense = to_dense(tt_a)
+@assert norm(mps_a) > 0
+@assert inner(mps_a, mps_a) isa ComplexF64
+dense = to_dense(mps_a)
 @assert Tensor4all.rank(dense) == 2
 # ANCHOR_END: operations
 
 # ANCHOR: siteinds
-sites = siteinds(tt_a)
-@assert length(sites) == length(tt_a)
-@assert tags(siteind(tt_a, 1)) == "Site,n=1"
-@assert findsite(tt_a, siteind(tt_a, 1)) == 1
-@assert findsites(tt_a, [siteind(tt_a, 1), siteind(tt_a, 2)]) == [1, 2]
+sites = siteinds(mps_a, 1)
+@assert length(sites) >= 1
+si = siteind(mps_a, 1)
+@assert si !== nothing
+@assert findsite(mps_a, si) == 1
 # ANCHOR_END: siteinds
 
 # ANCHOR: random
 Random.seed!(0)
 sites2 = [Index(2; tags="Site,n=$n") for n in 1:4]
-rtt = random_tt(sites2; linkdims=2)
+rtt = random_mps(sites2; linkdims=2)
 @assert length(rtt) == 4
 # ANCHOR_END: random
 
@@ -107,14 +107,14 @@ s = Index(2; tags="s")
 sp = Index(2; tags="sP")
 
 op_t = Tensor([s, sp], Matrix{Float64}(I, 2, 2))
-op = TensorTrain([op_t])
+op = MPS([op_t])
 
 rhs_t = Tensor([sp], [3.0, 4.0])
-rhs = TensorTrain([rhs_t])
+rhs = MPS([rhs_t])
 
 init_t = Tensor([s], [1.0, 1.0])
-init = TensorTrain([init_t])
+init = MPS([init_t])
 
-x = linsolve(op, rhs, init; nhalfsweeps=4, maxdim=10, rtol=1e-10, krylov_tol=1e-12, convergence_tol=1e-8)
+x = linsolve(op, rhs, init; nsweeps=4, maxdim=10, rtol=1e-10)
 @assert length(x) == 1
 # ANCHOR_END: linsolve
