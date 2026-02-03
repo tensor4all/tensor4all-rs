@@ -11,7 +11,7 @@ module TensorCI
 using ..C_API
 using ..SimpleTT: SimpleTensorTrain
 
-export TensorCI2, crossinterpolate2
+export TensorCI2, crossinterpolate2, crossinterpolate2_tci
 
 # ============================================================================
 # Callback infrastructure for passing Julia functions to Rust
@@ -254,7 +254,7 @@ tt, err = crossinterpolate2(f, [10, 10, 10]; tolerance=1e-10)
 tt(0, 5, 3)  # Should be close to f(0, 5, 3)
 ```
 """
-function crossinterpolate2(
+function crossinterpolate2_tci(
     f,
     local_dims::Vector{<:Integer};
     initial_pivots::Vector{Vector{Int}} = [zeros(Int, length(local_dims))],
@@ -303,9 +303,32 @@ function crossinterpolate2(
 
     # Wrap result
     tci = TensorCI2{Float64}(out_tci[], Int.(local_dims))
-    tt = to_tensor_train(tci)
+    return tci, out_final_error[]
+end
 
-    return tt, out_final_error[]
+"""
+    crossinterpolate2(f, local_dims; kwargs...) -> (SimpleTensorTrain, Float64)
+
+High-level wrapper that returns a `SimpleTensorTrain`. For advanced use, see
+[`crossinterpolate2_tci`](@ref), which also returns the underlying `TensorCI2`.
+"""
+function crossinterpolate2(
+    f,
+    local_dims::Vector{<:Integer};
+    initial_pivots::Vector{Vector{Int}} = [zeros(Int, length(local_dims))],
+    tolerance::Float64 = 1e-8,
+    max_bonddim::Int = 0,  # 0 means unlimited
+    max_iter::Int = 20
+)
+    tci, err = crossinterpolate2_tci(
+        f,
+        local_dims;
+        initial_pivots=initial_pivots,
+        tolerance=tolerance,
+        max_bonddim=max_bonddim,
+        max_iter=max_iter,
+    )
+    return to_tensor_train(tci), err
 end
 
 end # module TensorCI

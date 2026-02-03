@@ -1,11 +1,16 @@
 //! C API for HDF5 serialization (ITensors.jl compatible format).
 //!
 //! Provides save/load functions for tensors and tensor trains in HDF5 format.
+//! The HDF5 crate internally works with `TensorTrain`, but the C API exposes
+//! `t4a_treetn` (DefaultTreeTN). Conversions happen at the boundary.
 
 use std::ffi::CStr;
 use std::panic::catch_unwind;
 
-use crate::types::{t4a_tensor, t4a_tensortrain};
+use tensor4all_itensorlike::TensorTrain;
+use tensor4all_treetn::DefaultTreeTN;
+
+use crate::types::{t4a_tensor, t4a_treetn};
 use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 
 /// Convert a C string pointer to a Rust `&str`, distinguishing null from invalid UTF-8.
@@ -104,12 +109,14 @@ pub extern "C" fn t4a_hdf5_load_itensor(
     )
 }
 
-/// Save a tensor train as an ITensorMPS.jl-compatible `MPS` in an HDF5 file.
+/// Save a tree tensor network (MPS) as an ITensorMPS.jl-compatible `MPS` in an HDF5 file.
+///
+/// Internally converts the `DefaultTreeTN<usize>` to a `TensorTrain` for HDF5 serialization.
 ///
 /// # Arguments
 /// - `filepath`: Path to the HDF5 file (will be created/overwritten)
 /// - `name`: Name of the HDF5 group to write the MPS to
-/// - `tt`: Tensor train to save
+/// - `ttn`: Tree tensor network (MPS) to save
 ///
 /// # Returns
 /// `T4A_SUCCESS` on success, or an error code on failure.
@@ -120,38 +127,53 @@ pub extern "C" fn t4a_hdf5_load_itensor(
 pub extern "C" fn t4a_hdf5_save_mps(
     filepath: *const libc::c_char,
     name: *const libc::c_char,
-    tt: *const t4a_tensortrain,
+    ttn: *const t4a_treetn,
 ) -> StatusCode {
-    if tt.is_null() {
+    if ttn.is_null() {
         return T4A_NULL_POINTER;
     }
     with_two_cstrs_and_unwind(filepath, name, |fp, nm| {
-        let tt_ref = unsafe { &*tt };
-        match tensor4all_hdf5::save_mps(fp, nm, tt_ref.inner()) {
-            Ok(()) => T4A_SUCCESS,
+        let ttn_ref = unsafe { &*ttn };
+        let treetn: &DefaultTreeTN<usize> = ttn_ref.inner();
+        // Convert DefaultTreeTN → TensorTrain for HDF5 serialization
+        let tensors: Vec<_> = treetn
+            .node_names()
+            .iter()
+            .filter_map(|name| {
+                let node_idx = treetn.node_index(name)?;
+                treetn.tensor(node_idx).cloned()
+            })
+            .collect();
+        match TensorTrain::new(tensors) {
+            Ok(tt) => match tensor4all_hdf5::save_mps(fp, nm, &tt) {
+                Ok(()) => T4A_SUCCESS,
+                Err(_) => T4A_INTERNAL_ERROR,
+            },
             Err(_) => T4A_INTERNAL_ERROR,
         }
     })
 }
 
-/// Load a tensor train from an ITensorMPS.jl-compatible `MPS` in an HDF5 file.
+/// Load a tree tensor network (MPS) from an ITensorMPS.jl-compatible `MPS` in an HDF5 file.
+///
+/// Internally loads as a `TensorTrain` and converts to `DefaultTreeTN<usize>`.
 ///
 /// # Arguments
 /// - `filepath`: Path to the HDF5 file
 /// - `name`: Name of the HDF5 group containing the MPS
-/// - `out`: Output pointer to write the loaded tensor train
+/// - `out`: Output pointer to write the loaded tree tensor network
 ///
 /// # Returns
 /// `T4A_SUCCESS` on success, or an error code on failure.
 ///
 /// # Safety
 /// All pointers must be valid. String pointers must be null-terminated UTF-8.
-/// The returned tensor train must be freed with `t4a_tensortrain_release()`.
+/// The returned tree tensor network must be freed with `t4a_treetn_release()`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_hdf5_load_mps(
     filepath: *const libc::c_char,
     name: *const libc::c_char,
-    out: *mut *mut t4a_tensortrain,
+    out: *mut *mut t4a_treetn,
 ) -> StatusCode {
     if out.is_null() {
         return T4A_NULL_POINTER;
@@ -159,9 +181,17 @@ pub extern "C" fn t4a_hdf5_load_mps(
     with_two_cstrs_and_unwind(filepath, name, |fp, nm| {
         match tensor4all_hdf5::load_mps(fp, nm) {
             Ok(tt) => {
-                let boxed = Box::new(t4a_tensortrain::new(tt));
-                unsafe { *out = Box::into_raw(boxed) };
-                T4A_SUCCESS
+                // Convert TensorTrain → DefaultTreeTN<usize>
+                let tensors: Vec<_> = tt.tensors().into_iter().cloned().collect();
+                let node_names: Vec<usize> = (0..tensors.len()).collect();
+                match DefaultTreeTN::from_tensors(tensors, node_names) {
+                    Ok(treetn) => {
+                        let boxed = Box::new(t4a_treetn::new(treetn));
+                        unsafe { *out = Box::into_raw(boxed) };
+                        T4A_SUCCESS
+                    }
+                    Err(_) => T4A_INTERNAL_ERROR,
+                }
             }
             Err(_) => T4A_INTERNAL_ERROR,
         }

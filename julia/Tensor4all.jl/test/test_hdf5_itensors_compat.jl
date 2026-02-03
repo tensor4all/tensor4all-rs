@@ -2,9 +2,8 @@ using Test
 using Tensor4all: Index as T4AIndex, Tensor as T4ATensor
 using Tensor4all: dim, id, tags, rank, dims, indices, data
 using Tensor4all: save_itensor, load_itensor
-using Tensor4all.ITensorLike: TensorTrain as T4ATT
-using Tensor4all.ITensorLike: tensors, bond_dims, save_mps, load_mps
-using Tensor4all.ITensorLike: random_tt
+using Tensor4all.TreeTN: MPS, linkdims, save_mps, load_mps
+using Tensor4all.TreeTN: random_mps
 import ITensors
 import HDF5
 

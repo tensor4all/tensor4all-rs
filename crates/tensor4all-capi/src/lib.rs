@@ -33,20 +33,26 @@ mod algorithm;
 #[cfg(feature = "hdf5")]
 mod hdf5;
 mod index;
+mod quanticsgrids;
+mod quanticstci;
+mod quanticstransform;
 mod simplett;
 mod tensor;
 mod tensorci;
-mod tensortrain;
+mod treetn;
 mod types;
 
 pub use algorithm::*;
 #[cfg(feature = "hdf5")]
 pub use hdf5::*;
 pub use index::*;
+pub use quanticsgrids::*;
+pub use quanticstci::*;
+pub use quanticstransform::*;
 pub use simplett::*;
 pub use tensor::*;
 pub use tensorci::*;
-pub use tensortrain::*;
+pub use treetn::*;
 pub use types::*;
 
 /// Status code type for C API

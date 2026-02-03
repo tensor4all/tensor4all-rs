@@ -500,46 +500,18 @@ function t4a_tensor_onehot(rank::Integer, index_ptrs::Vector{Ptr{Cvoid}}, vals::
 end
 
 # ============================================================================
-# TensorTrain lifecycle functions
+# TreeTN lifecycle functions
 # ============================================================================
 
 """
-    t4a_tt_new_empty() -> Ptr{Cvoid}
+    t4a_treetn_release(ptr::Ptr{Cvoid})
 
-Create an empty tensor train.
+Release a tree tensor network (called by finalizer).
 """
-function t4a_tt_new_empty()
-    return ccall(
-        (:t4a_tt_new_empty, libpath()),
-        Ptr{Cvoid},
-        ()
-    )
-end
-
-"""
-    t4a_tt_new(tensor_ptrs::Vector{Ptr{Cvoid}}, num_tensors::Integer) -> Ptr{Cvoid}
-
-Create a tensor train from an array of tensors.
-"""
-function t4a_tt_new(tensor_ptrs::Vector{Ptr{Cvoid}}, num_tensors::Integer)
-    return ccall(
-        (:t4a_tt_new, libpath()),
-        Ptr{Cvoid},
-        (Ptr{Ptr{Cvoid}}, Csize_t),
-        tensor_ptrs,
-        Csize_t(num_tensors)
-    )
-end
-
-"""
-    t4a_tensortrain_release(ptr::Ptr{Cvoid})
-
-Release a tensor train (called by finalizer).
-"""
-function t4a_tensortrain_release(ptr::Ptr{Cvoid})
+function t4a_treetn_release(ptr::Ptr{Cvoid})
     ptr == C_NULL && return
     ccall(
-        (:t4a_tensortrain_release, libpath()),
+        (:t4a_treetn_release, libpath()),
         Cvoid,
         (Ptr{Cvoid},),
         ptr
@@ -547,381 +519,470 @@ function t4a_tensortrain_release(ptr::Ptr{Cvoid})
 end
 
 """
-    t4a_tensortrain_clone(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
+    t4a_treetn_clone(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
 
-Clone a tensor train.
+Clone a tree tensor network.
 """
-function t4a_tensortrain_clone(ptr::Ptr{Cvoid})
+function t4a_treetn_clone(ptr::Ptr{Cvoid})
     return ccall(
-        (:t4a_tensortrain_clone, libpath()),
+        (:t4a_treetn_clone, libpath()),
         Ptr{Cvoid},
         (Ptr{Cvoid},),
         ptr
     )
 end
 
+"""
+    t4a_treetn_is_assigned(ptr::Ptr{Cvoid}) -> Bool
+
+Check if a tree tensor network pointer is valid.
+"""
+function t4a_treetn_is_assigned(ptr::Ptr{Cvoid})
+    result = ccall(
+        (:t4a_treetn_is_assigned, libpath()),
+        Cint,
+        (Ptr{Cvoid},),
+        ptr
+    )
+    return result == 1
+end
+
 # ============================================================================
-# TensorTrain accessors
+# TreeTN constructors
 # ============================================================================
 
 """
-    t4a_tt_len(ptr::Ptr{Cvoid}, out_len::Ref{Csize_t}) -> Cint
+    t4a_treetn_new(tensors::Ptr{Ptr{Cvoid}}, n_tensors::Integer, out::Ref{Ptr{Cvoid}}) -> Cint
 
-Get the number of sites in the tensor train.
+Create a tree tensor network from an array of tensors.
+Node names are assigned as 0, 1, ..., n_tensors-1.
 """
-function t4a_tt_len(ptr::Ptr{Cvoid}, out_len::Ref{Csize_t})
+function t4a_treetn_new(tensors, n_tensors::Integer, out)
     return ccall(
-        (:t4a_tt_len, libpath()),
+        (:t4a_treetn_new, libpath()),
+        Cint,
+        (Ptr{Ptr{Cvoid}}, Csize_t, Ptr{Ptr{Cvoid}}),
+        tensors,
+        Csize_t(n_tensors),
+        out
+    )
+end
+
+# ============================================================================
+# TreeTN accessors
+# ============================================================================
+
+"""
+    t4a_treetn_num_vertices(ptr::Ptr{Cvoid}, out::Ref{Csize_t}) -> Cint
+
+Get the number of vertices (nodes) in the tree tensor network.
+"""
+function t4a_treetn_num_vertices(ptr::Ptr{Cvoid}, out::Ref{Csize_t})
+    return ccall(
+        (:t4a_treetn_num_vertices, libpath()),
         Cint,
         (Ptr{Cvoid}, Ptr{Csize_t}),
         ptr,
-        out_len
+        out
     )
 end
 
 """
-    t4a_tt_is_empty(ptr::Ptr{Cvoid}) -> Cint
+    t4a_treetn_num_edges(ptr::Ptr{Cvoid}, out::Ref{Csize_t}) -> Cint
 
-Check if the tensor train is empty.
-Returns 1 if empty, 0 if not, negative on error.
+Get the number of edges (bonds) in the tree tensor network.
 """
-function t4a_tt_is_empty(ptr::Ptr{Cvoid})
+function t4a_treetn_num_edges(ptr::Ptr{Cvoid}, out::Ref{Csize_t})
     return ccall(
-        (:t4a_tt_is_empty, libpath()),
+        (:t4a_treetn_num_edges, libpath()),
         Cint,
-        (Ptr{Cvoid},),
-        ptr
-    )
-end
-
-"""
-    t4a_tt_tensor(ptr::Ptr{Cvoid}, site::Integer) -> Ptr{Cvoid}
-
-Get the tensor at a specific site (0-indexed).
-Returns a new tensor handle that the caller owns.
-"""
-function t4a_tt_tensor(ptr::Ptr{Cvoid}, site::Integer)
-    return ccall(
-        (:t4a_tt_tensor, libpath()),
-        Ptr{Cvoid},
-        (Ptr{Cvoid}, Csize_t),
+        (Ptr{Cvoid}, Ptr{Csize_t}),
         ptr,
-        Csize_t(site)
+        out
     )
 end
 
 """
-    t4a_tt_set_tensor(ptr::Ptr{Cvoid}, site::Integer, tensor::Ptr{Cvoid}) -> Cint
+    t4a_treetn_tensor(ptr::Ptr{Cvoid}, vertex::Integer, out::Ref{Ptr{Cvoid}}) -> Cint
 
-Set the tensor at a specific site (0-indexed).
-The tensor is cloned into the tensor train. This invalidates orthogonality.
+Get the tensor at a specific vertex (0-indexed).
 """
-function t4a_tt_set_tensor(ptr::Ptr{Cvoid}, site::Integer, tensor::Ptr{Cvoid})
+function t4a_treetn_tensor(ptr::Ptr{Cvoid}, vertex::Integer, out)
     return ccall(
-        (:t4a_tt_set_tensor, libpath()),
+        (:t4a_treetn_tensor, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Ptr{Ptr{Cvoid}}),
+        ptr,
+        Csize_t(vertex),
+        out
+    )
+end
+
+"""
+    t4a_treetn_set_tensor(ptr::Ptr{Cvoid}, vertex::Integer, tensor::Ptr{Cvoid}) -> Cint
+
+Set the tensor at a specific vertex (0-indexed).
+"""
+function t4a_treetn_set_tensor(ptr::Ptr{Cvoid}, vertex::Integer, tensor::Ptr{Cvoid})
+    return ccall(
+        (:t4a_treetn_set_tensor, libpath()),
         Cint,
         (Ptr{Cvoid}, Csize_t, Ptr{Cvoid}),
         ptr,
-        Csize_t(site),
+        Csize_t(vertex),
         tensor
     )
 end
 
 """
-    t4a_tt_bond_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t}, buf_len::Integer) -> Cint
+    t4a_treetn_neighbors(ptr::Ptr{Cvoid}, vertex::Integer, out_buf, buf_size::Integer, n_out::Ref{Csize_t}) -> Cint
 
-Get the bond dimensions of the tensor train.
+Get the neighbors of a vertex.
 """
-function t4a_tt_bond_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t}, buf_len::Integer)
+function t4a_treetn_neighbors(ptr::Ptr{Cvoid}, vertex::Integer, out_buf, buf_size::Integer, n_out::Ref{Csize_t})
     return ccall(
-        (:t4a_tt_bond_dims, libpath()),
+        (:t4a_treetn_neighbors, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Ptr{Csize_t}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        Csize_t(vertex),
+        out_buf,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+"""
+    t4a_treetn_linkind(ptr::Ptr{Cvoid}, v1::Integer, v2::Integer, out::Ref{Ptr{Cvoid}}) -> Cint
+
+Get the link (bond) index on the edge between two vertices.
+"""
+function t4a_treetn_linkind(ptr::Ptr{Cvoid}, v1::Integer, v2::Integer, out)
+    return ccall(
+        (:t4a_treetn_linkind, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Csize_t, Ptr{Ptr{Cvoid}}),
+        ptr,
+        Csize_t(v1),
+        Csize_t(v2),
+        out
+    )
+end
+
+"""
+    t4a_treetn_siteinds(ptr::Ptr{Cvoid}, vertex::Integer, out_buf, buf_size::Integer, n_out::Ref{Csize_t}) -> Cint
+
+Get the site (physical) indices at a vertex.
+"""
+function t4a_treetn_siteinds(ptr::Ptr{Cvoid}, vertex::Integer, out_buf, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_treetn_siteinds, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Ptr{Ptr{Cvoid}}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        Csize_t(vertex),
+        out_buf,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+"""
+    t4a_treetn_bond_dim(ptr::Ptr{Cvoid}, v1::Integer, v2::Integer, out::Ref{Csize_t}) -> Cint
+
+Get the bond dimension on the edge between two vertices.
+"""
+function t4a_treetn_bond_dim(ptr::Ptr{Cvoid}, v1::Integer, v2::Integer, out::Ref{Csize_t})
+    return ccall(
+        (:t4a_treetn_bond_dim, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Csize_t, Ptr{Csize_t}),
+        ptr,
+        Csize_t(v1),
+        Csize_t(v2),
+        out
+    )
+end
+
+# ============================================================================
+# TreeTN MPS convenience functions
+# ============================================================================
+
+"""
+    t4a_treetn_linkind_at(ptr::Ptr{Cvoid}, i::Integer, out::Ref{Ptr{Cvoid}}) -> Cint
+
+Get the link index between vertex i and i+1 (MPS convention, 0-indexed).
+"""
+function t4a_treetn_linkind_at(ptr::Ptr{Cvoid}, i::Integer, out)
+    return ccall(
+        (:t4a_treetn_linkind_at, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Ptr{Ptr{Cvoid}}),
+        ptr,
+        Csize_t(i),
+        out
+    )
+end
+
+"""
+    t4a_treetn_bond_dim_at(ptr::Ptr{Cvoid}, i::Integer, out::Ref{Csize_t}) -> Cint
+
+Get the bond dimension between vertex i and i+1 (MPS convention, 0-indexed).
+"""
+function t4a_treetn_bond_dim_at(ptr::Ptr{Cvoid}, i::Integer, out::Ref{Csize_t})
+    return ccall(
+        (:t4a_treetn_bond_dim_at, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        Csize_t(i),
+        out
+    )
+end
+
+"""
+    t4a_treetn_bond_dims(ptr::Ptr{Cvoid}, out, n::Integer) -> Cint
+
+Get all bond dimensions for an MPS-like TreeTN (vertices 0, 1, ..., n-1).
+Writes n-1 bond dimensions.
+"""
+function t4a_treetn_bond_dims(ptr::Ptr{Cvoid}, out, n::Integer)
+    return ccall(
+        (:t4a_treetn_bond_dims, libpath()),
         Cint,
         (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t),
         ptr,
-        out_dims,
-        Csize_t(buf_len)
+        out,
+        Csize_t(n)
     )
 end
 
 """
-    t4a_tt_maxbonddim(ptr::Ptr{Cvoid}, out_max::Ref{Csize_t}) -> Cint
+    t4a_treetn_maxbonddim(ptr::Ptr{Cvoid}, out::Ref{Csize_t}) -> Cint
 
-Get the maximum bond dimension of the tensor train.
+Get the maximum bond dimension of an MPS-like TreeTN.
 """
-function t4a_tt_maxbonddim(ptr::Ptr{Cvoid}, out_max::Ref{Csize_t})
+function t4a_treetn_maxbonddim(ptr::Ptr{Cvoid}, out::Ref{Csize_t})
     return ccall(
-        (:t4a_tt_maxbonddim, libpath()),
+        (:t4a_treetn_maxbonddim, libpath()),
         Cint,
         (Ptr{Cvoid}, Ptr{Csize_t}),
         ptr,
-        out_max
-    )
-end
-
-"""
-    t4a_tt_linkind(ptr::Ptr{Cvoid}, site::Integer) -> Ptr{Cvoid}
-
-Get the link index between sites `site` and `site+1` (0-indexed).
-Returns a new index handle that the caller owns, or NULL if no link exists.
-"""
-function t4a_tt_linkind(ptr::Ptr{Cvoid}, site::Integer)
-    return ccall(
-        (:t4a_tt_linkind, libpath()),
-        Ptr{Cvoid},
-        (Ptr{Cvoid}, Csize_t),
-        ptr,
-        Csize_t(site)
+        out
     )
 end
 
 # ============================================================================
-# TensorTrain orthogonality
+# TreeTN orthogonalization
 # ============================================================================
 
 """
-    t4a_tt_isortho(ptr::Ptr{Cvoid}) -> Cint
+    t4a_treetn_orthogonalize(ptr::Ptr{Cvoid}, vertex::Integer) -> Cint
 
-Check if the tensor train has a single orthogonality center.
-Returns 1 if yes, 0 if no, negative on error.
+Orthogonalize the tree tensor network to a single vertex.
+Uses QR decomposition (Unitary canonical form) by default.
 """
-function t4a_tt_isortho(ptr::Ptr{Cvoid})
+function t4a_treetn_orthogonalize(ptr::Ptr{Cvoid}, vertex::Integer)
     return ccall(
-        (:t4a_tt_isortho, libpath()),
-        Cint,
-        (Ptr{Cvoid},),
-        ptr
-    )
-end
-
-"""
-    t4a_tt_orthocenter(ptr::Ptr{Cvoid}, out_center::Ref{Csize_t}) -> Cint
-
-Get the orthogonality center (0-indexed).
-"""
-function t4a_tt_orthocenter(ptr::Ptr{Cvoid}, out_center::Ref{Csize_t})
-    return ccall(
-        (:t4a_tt_orthocenter, libpath()),
-        Cint,
-        (Ptr{Cvoid}, Ptr{Csize_t}),
-        ptr,
-        out_center
-    )
-end
-
-"""
-    t4a_tt_llim(ptr::Ptr{Cvoid}, out_llim::Ref{Cint}) -> Cint
-
-Get the left orthogonality limit.
-"""
-function t4a_tt_llim(ptr::Ptr{Cvoid}, out_llim::Ref{Cint})
-    return ccall(
-        (:t4a_tt_llim, libpath()),
-        Cint,
-        (Ptr{Cvoid}, Ptr{Cint}),
-        ptr,
-        out_llim
-    )
-end
-
-"""
-    t4a_tt_rlim(ptr::Ptr{Cvoid}, out_rlim::Ref{Cint}) -> Cint
-
-Get the right orthogonality limit.
-"""
-function t4a_tt_rlim(ptr::Ptr{Cvoid}, out_rlim::Ref{Cint})
-    return ccall(
-        (:t4a_tt_rlim, libpath()),
-        Cint,
-        (Ptr{Cvoid}, Ptr{Cint}),
-        ptr,
-        out_rlim
-    )
-end
-
-"""
-    t4a_tt_canonical_form(ptr::Ptr{Cvoid}, out_form::Ref{Cint}) -> Cint
-
-Get the canonical form of the tensor train.
-"""
-function t4a_tt_canonical_form(ptr::Ptr{Cvoid}, out_form::Ref{Cint})
-    return ccall(
-        (:t4a_tt_canonical_form, libpath()),
-        Cint,
-        (Ptr{Cvoid}, Ptr{Cint}),
-        ptr,
-        out_form
-    )
-end
-
-# ============================================================================
-# TensorTrain operations
-# ============================================================================
-
-"""
-    t4a_tt_orthogonalize(ptr::Ptr{Cvoid}, site::Integer) -> Cint
-
-Orthogonalize the tensor train to have orthogonality center at the given site.
-Uses QR decomposition (Unitary canonical form).
-"""
-function t4a_tt_orthogonalize(ptr::Ptr{Cvoid}, site::Integer)
-    return ccall(
-        (:t4a_tt_orthogonalize, libpath()),
+        (:t4a_treetn_orthogonalize, libpath()),
         Cint,
         (Ptr{Cvoid}, Csize_t),
         ptr,
-        Csize_t(site)
+        Csize_t(vertex)
     )
 end
 
 """
-    t4a_tt_orthogonalize_with(ptr::Ptr{Cvoid}, site::Integer, form::Cint) -> Cint
+    t4a_treetn_orthogonalize_with(ptr::Ptr{Cvoid}, vertex::Integer, form::Integer) -> Cint
 
-Orthogonalize the tensor train with a specific canonical form.
+Orthogonalize the tree tensor network to a vertex with a specific canonical form.
 form: 0=Unitary, 1=LU, 2=CI
 """
-function t4a_tt_orthogonalize_with(ptr::Ptr{Cvoid}, site::Integer, form::Integer)
+function t4a_treetn_orthogonalize_with(ptr::Ptr{Cvoid}, vertex::Integer, form::Integer)
     return ccall(
-        (:t4a_tt_orthogonalize_with, libpath()),
+        (:t4a_treetn_orthogonalize_with, libpath()),
         Cint,
         (Ptr{Cvoid}, Csize_t, Cint),
         ptr,
-        Csize_t(site),
+        Csize_t(vertex),
         Cint(form)
     )
 end
 
 """
-    t4a_tt_truncate(ptr::Ptr{Cvoid}, rtol::Float64, max_rank::Integer) -> Cint
+    t4a_treetn_ortho_center(ptr::Ptr{Cvoid}, out_vertices, buf_size::Integer, n_out::Ref{Csize_t}) -> Cint
 
-Truncate the tensor train bond dimensions.
-rtol: relative tolerance (use 0.0 for not set)
-cutoff: ITensorMPS.jl cutoff (use 0.0 for not set). Converted to rtol = √cutoff.
-  If both rtol and cutoff are positive, cutoff takes precedence.
-max_rank: maximum bond dimension (use 0 for no limit)
+Get the canonical (orthogonality) region of the tree tensor network.
 """
-function t4a_tt_truncate(ptr::Ptr{Cvoid}, rtol::Float64, cutoff::Float64, max_rank::Integer)
+function t4a_treetn_ortho_center(ptr::Ptr{Cvoid}, out_vertices, buf_size::Integer, n_out::Ref{Csize_t})
     return ccall(
-        (:t4a_tt_truncate, libpath()),
+        (:t4a_treetn_ortho_center, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        out_vertices,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+"""
+    t4a_treetn_canonical_form(ptr::Ptr{Cvoid}, out::Ref{Cint}) -> Cint
+
+Get the canonical form used for the tree tensor network.
+"""
+function t4a_treetn_canonical_form(ptr::Ptr{Cvoid}, out)
+    return ccall(
+        (:t4a_treetn_canonical_form, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cint}),
+        ptr,
+        out
+    )
+end
+
+# ============================================================================
+# TreeTN operations
+# ============================================================================
+
+"""
+    t4a_treetn_truncate(ptr::Ptr{Cvoid}, rtol::Float64, cutoff::Float64, maxdim::Integer) -> Cint
+
+Truncate the tree tensor network bond dimensions.
+rtol: relative tolerance (0.0 for not set)
+cutoff: ITensorMPS.jl cutoff (0.0 for not set). Converted to rtol = sqrt(cutoff).
+maxdim: maximum bond dimension (0 for no limit)
+"""
+function t4a_treetn_truncate(ptr::Ptr{Cvoid}, rtol::Float64, cutoff::Float64, maxdim::Integer)
+    return ccall(
+        (:t4a_treetn_truncate, libpath()),
         Cint,
         (Ptr{Cvoid}, Cdouble, Cdouble, Csize_t),
         ptr,
         rtol,
         cutoff,
-        Csize_t(max_rank)
+        Csize_t(maxdim)
     )
 end
 
 """
-    t4a_tt_norm(ptr::Ptr{Cvoid}, out_norm::Ref{Cdouble}) -> Cint
+    t4a_treetn_inner(a::Ptr{Cvoid}, b::Ptr{Cvoid}, out_re::Ref{Cdouble}, out_im::Ref{Cdouble}) -> Cint
 
-Compute the norm of the tensor train.
+Compute the inner product of two tree tensor networks.
 """
-function t4a_tt_norm(ptr::Ptr{Cvoid}, out_norm::Ref{Cdouble})
+function t4a_treetn_inner(a::Ptr{Cvoid}, b::Ptr{Cvoid}, out_re::Ref{Cdouble}, out_im::Ref{Cdouble})
     return ccall(
-        (:t4a_tt_norm, libpath()),
-        Cint,
-        (Ptr{Cvoid}, Ptr{Cdouble}),
-        ptr,
-        out_norm
-    )
-end
-
-"""
-    t4a_tt_inner(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, out_re::Ref{Cdouble}, out_im::Ref{Cdouble}) -> Cint
-
-Compute the inner product of two tensor trains.
-"""
-function t4a_tt_inner(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, out_re::Ref{Cdouble}, out_im::Ref{Cdouble})
-    return ccall(
-        (:t4a_tt_inner, libpath()),
+        (:t4a_treetn_inner, libpath()),
         Cint,
         (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cdouble}, Ptr{Cdouble}),
-        ptr1,
-        ptr2,
+        a,
+        b,
         out_re,
         out_im
     )
 end
 
 """
-    t4a_tt_contract(ptr1, ptr2, method, max_rank, rtol, cutoff, nhalfsweeps) -> Ptr{Cvoid}
+    t4a_treetn_norm(ptr::Ptr{Cvoid}, out::Ref{Cdouble}) -> Cint
 
-Contract two tensor trains.
-method: 0=Zipup, 1=Fit, 2=Naive
-max_rank: maximum bond dimension (use 0 for no limit)
-rtol: relative tolerance (use 0.0 for not set)
-cutoff: ITensorMPS.jl cutoff (use 0.0 for not set). If both rtol and cutoff are positive, cutoff takes precedence.
-nhalfsweeps: number of half-sweeps for Fit method (must be a multiple of 2)
+Compute the norm of the tree tensor network.
 """
-function t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, max_rank::Integer, rtol::Float64, cutoff::Float64, nhalfsweeps::Integer)
+function t4a_treetn_norm(ptr::Ptr{Cvoid}, out::Ref{Cdouble})
     return ccall(
-        (:t4a_tt_contract, libpath()),
-        Ptr{Cvoid},
-        (Ptr{Cvoid}, Ptr{Cvoid}, Cint, Csize_t, Cdouble, Cdouble, Csize_t),
-        ptr1,
-        ptr2,
+        (:t4a_treetn_norm, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr,
+        out
+    )
+end
+
+"""
+    t4a_treetn_lognorm(ptr::Ptr{Cvoid}, out::Ref{Cdouble}) -> Cint
+
+Compute the log-norm of the tree tensor network.
+"""
+function t4a_treetn_lognorm(ptr::Ptr{Cvoid}, out::Ref{Cdouble})
+    return ccall(
+        (:t4a_treetn_lognorm, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr,
+        out
+    )
+end
+
+"""
+    t4a_treetn_add(a::Ptr{Cvoid}, b::Ptr{Cvoid}, out::Ref{Ptr{Cvoid}}) -> Cint
+
+Add two tree tensor networks using direct-sum construction.
+"""
+function t4a_treetn_add(a::Ptr{Cvoid}, b::Ptr{Cvoid}, out)
+    return ccall(
+        (:t4a_treetn_add, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Ptr{Cvoid}}),
+        a,
+        b,
+        out
+    )
+end
+
+"""
+    t4a_treetn_contract(a, b, method, rtol, cutoff, maxdim, out) -> Cint
+
+Contract two tree tensor networks.
+method: 0=Zipup, 1=Fit, 2=Naive
+"""
+function t4a_treetn_contract(a::Ptr{Cvoid}, b::Ptr{Cvoid}, method::Integer,
+                             rtol::Float64, cutoff::Float64, maxdim::Integer, out)
+    return ccall(
+        (:t4a_treetn_contract, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cvoid}, Cint, Cdouble, Cdouble, Csize_t, Ptr{Ptr{Cvoid}}),
+        a,
+        b,
         Cint(method),
-        Csize_t(max_rank),
         rtol,
         cutoff,
-        Csize_t(nhalfsweeps)
+        Csize_t(maxdim),
+        out
     )
 end
 
 """
-    t4a_tt_add(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}) -> Ptr{Cvoid}
+    t4a_treetn_to_dense(ptr::Ptr{Cvoid}, out::Ref{Ptr{Cvoid}}) -> Cint
 
-Add two tensor trains using direct-sum construction.
+Convert tree tensor network to a dense tensor by contracting all link indices.
 """
-function t4a_tt_add(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid})
+function t4a_treetn_to_dense(ptr::Ptr{Cvoid}, out)
     return ccall(
-        (:t4a_tt_add, libpath()),
-        Ptr{Cvoid},
-        (Ptr{Cvoid}, Ptr{Cvoid}),
-        ptr1,
-        ptr2
+        (:t4a_treetn_to_dense, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Ptr{Cvoid}}),
+        ptr,
+        out
     )
 end
 
 """
-    t4a_tt_to_dense(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
+    t4a_treetn_linsolve(operator, rhs, init, a0, a1, nsweeps, rtol, cutoff, maxdim, out) -> Cint
 
-Convert tensor train to a dense tensor by contracting all link indices.
-Returns a tensor handle.
+Solve (a0 + a1 * A) * x = b for x using DMRG-like sweeps.
 """
-function t4a_tt_to_dense(ptr::Ptr{Cvoid})
+function t4a_treetn_linsolve(operator::Ptr{Cvoid}, rhs::Ptr{Cvoid}, init::Ptr{Cvoid},
+                             a0::Float64, a1::Float64, nsweeps::Integer,
+                             rtol::Float64, cutoff::Float64, maxdim::Integer, out)
     return ccall(
-        (:t4a_tt_to_dense, libpath()),
-        Ptr{Cvoid},
-        (Ptr{Cvoid},),
-        ptr
-    )
-end
-
-"""
-    t4a_tt_linsolve(operator, rhs, init, nhalfsweeps, max_rank, rtol, cutoff,
-                    krylov_tol, krylov_maxiter, krylov_dim, a0, a1, convergence_tol) -> Ptr{Cvoid}
-
-Solve (a0 + a1 * A) * x = b for x using DMRG-like sweeps with local GMRES.
-"""
-function t4a_tt_linsolve(operator::Ptr{Cvoid}, rhs::Ptr{Cvoid}, init::Ptr{Cvoid},
-                         nhalfsweeps::Integer, max_rank::Integer,
-                         rtol::Float64, cutoff::Float64,
-                         krylov_tol::Float64, krylov_maxiter::Integer,
-                         krylov_dim::Integer,
-                         a0::Float64, a1::Float64,
-                         convergence_tol::Float64)
-    return ccall(
-        (:t4a_tt_linsolve, libpath()),
-        Ptr{Cvoid},
+        (:t4a_treetn_linsolve, libpath()),
+        Cint,
         (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid},
-         Csize_t, Csize_t, Cdouble, Cdouble,
-         Cdouble, Csize_t, Csize_t,
-         Cdouble, Cdouble, Cdouble),
+         Cdouble, Cdouble, Csize_t,
+         Cdouble, Cdouble, Csize_t, Ptr{Ptr{Cvoid}}),
         operator, rhs, init,
-        Csize_t(nhalfsweeps), Csize_t(max_rank), rtol, cutoff,
-        krylov_tol, Csize_t(krylov_maxiter), Csize_t(krylov_dim),
-        a0, a1, convergence_tol
+        a0, a1, Csize_t(nsweeps),
+        rtol, cutoff, Csize_t(maxdim),
+        out
     )
 end
 
@@ -1371,25 +1432,26 @@ function t4a_hdf5_load_itensor(filepath::AbstractString, name::AbstractString, o
 end
 
 """
-    t4a_hdf5_save_mps(filepath::AbstractString, name::AbstractString, tt::Ptr{Cvoid}) -> Cint
+    t4a_hdf5_save_mps(filepath::AbstractString, name::AbstractString, ttn::Ptr{Cvoid}) -> Cint
 
-Save a tensor train as an ITensorMPS.jl-compatible MPS in an HDF5 file.
+Save a tree tensor network (MPS) as an ITensorMPS.jl-compatible MPS in an HDF5 file.
 """
-function t4a_hdf5_save_mps(filepath::AbstractString, name::AbstractString, tt::Ptr{Cvoid})
+function t4a_hdf5_save_mps(filepath::AbstractString, name::AbstractString, ttn::Ptr{Cvoid})
     return ccall(
         (:t4a_hdf5_save_mps, libpath()),
         Cint,
         (Cstring, Cstring, Ptr{Cvoid}),
         filepath,
         name,
-        tt
+        ttn
     )
 end
 
 """
     t4a_hdf5_load_mps(filepath::AbstractString, name::AbstractString, out::Ref{Ptr{Cvoid}}) -> Cint
 
-Load a tensor train from an ITensorMPS.jl-compatible MPS in an HDF5 file.
+Load a tree tensor network (MPS) from an ITensorMPS.jl-compatible MPS in an HDF5 file.
+Returns a `t4a_treetn` handle.
 """
 function t4a_hdf5_load_mps(filepath::AbstractString, name::AbstractString, out::Ref{Ptr{Cvoid}})
     return ccall(
@@ -1399,6 +1461,636 @@ function t4a_hdf5_load_mps(filepath::AbstractString, name::AbstractString, out::
         filepath,
         name,
         out
+    )
+end
+
+# ============================================================================
+# QuanticsGrids: DiscretizedGrid functions
+# ============================================================================
+
+# Unfolding scheme enum (must match Rust side)
+const UNFOLDING_FUSED = Cint(0)
+const UNFOLDING_INTERLEAVED = Cint(1)
+
+"""
+    t4a_qgrid_disc_new(ndims, rs_arr, lower_arr, upper_arr, unfolding, out) -> Cint
+"""
+function t4a_qgrid_disc_new(ndims::Integer, rs_arr, lower_arr, upper_arr, unfolding::Integer, out)
+    return ccall(
+        (:t4a_qgrid_disc_new, libpath()),
+        Cint,
+        (Csize_t, Ptr{Csize_t}, Ptr{Cdouble}, Ptr{Cdouble}, Cint, Ptr{Ptr{Cvoid}}),
+        Csize_t(ndims),
+        rs_arr,
+        lower_arr,
+        upper_arr,
+        Cint(unfolding),
+        out
+    )
+end
+
+function t4a_qgrid_disc_release(ptr::Ptr{Cvoid})
+    ptr == C_NULL && return
+    ccall(
+        (:t4a_qgrid_disc_release, libpath()),
+        Cvoid,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+function t4a_qgrid_disc_clone(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_qgrid_disc_clone, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+function t4a_qgrid_disc_ndims(ptr::Ptr{Cvoid}, out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_disc_ndims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out
+    )
+end
+
+function t4a_qgrid_disc_rs(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_rs, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t),
+        ptr,
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_local_dims(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_disc_local_dims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+function t4a_qgrid_disc_lower_bound(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_lower_bound, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}, Csize_t),
+        ptr,
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_upper_bound(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_upper_bound, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}, Csize_t),
+        ptr,
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_grid_step(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_grid_step, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}, Csize_t),
+        ptr,
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_origcoord_to_quantics(ptr::Ptr{Cvoid}, coord_arr, ndims::Integer,
+                                                out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_disc_origcoord_to_quantics, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}, Csize_t, Ptr{Int64}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        coord_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+function t4a_qgrid_disc_quantics_to_origcoord(ptr::Ptr{Cvoid}, quantics_arr, n_quantics::Integer,
+                                                out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_quantics_to_origcoord, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Cdouble}, Csize_t),
+        ptr,
+        quantics_arr,
+        Csize_t(n_quantics),
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_origcoord_to_grididx(ptr::Ptr{Cvoid}, coord_arr, ndims::Integer,
+                                               out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_origcoord_to_grididx, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}, Csize_t, Ptr{Int64}, Csize_t),
+        ptr,
+        coord_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_grididx_to_origcoord(ptr::Ptr{Cvoid}, grididx_arr, ndims::Integer,
+                                               out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_grididx_to_origcoord, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Cdouble}, Csize_t),
+        ptr,
+        grididx_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_grididx_to_quantics(ptr::Ptr{Cvoid}, grididx_arr, ndims::Integer,
+                                              out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_disc_grididx_to_quantics, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        grididx_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+function t4a_qgrid_disc_quantics_to_grididx(ptr::Ptr{Cvoid}, quantics_arr, n_quantics::Integer,
+                                              out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_disc_quantics_to_grididx, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        quantics_arr,
+        Csize_t(n_quantics),
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+# ============================================================================
+# QuanticsGrids: InherentDiscreteGrid functions
+# ============================================================================
+
+function t4a_qgrid_int_new(ndims::Integer, rs_arr, origin_arr, unfolding::Integer, out)
+    return ccall(
+        (:t4a_qgrid_int_new, libpath()),
+        Cint,
+        (Csize_t, Ptr{Csize_t}, Ptr{Int64}, Cint, Ptr{Ptr{Cvoid}}),
+        Csize_t(ndims),
+        rs_arr,
+        origin_arr,
+        Cint(unfolding),
+        out
+    )
+end
+
+function t4a_qgrid_int_release(ptr::Ptr{Cvoid})
+    ptr == C_NULL && return
+    ccall(
+        (:t4a_qgrid_int_release, libpath()),
+        Cvoid,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+function t4a_qgrid_int_clone(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_qgrid_int_clone, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+function t4a_qgrid_int_ndims(ptr::Ptr{Cvoid}, out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_int_ndims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out
+    )
+end
+
+function t4a_qgrid_int_rs(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_int_rs, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t),
+        ptr,
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_int_local_dims(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_int_local_dims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+function t4a_qgrid_int_origin(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_int_origin, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t),
+        ptr,
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_int_origcoord_to_quantics(ptr::Ptr{Cvoid}, coord_arr, ndims::Integer,
+                                               out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_int_origcoord_to_quantics, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        coord_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+function t4a_qgrid_int_quantics_to_origcoord(ptr::Ptr{Cvoid}, quantics_arr, n_quantics::Integer,
+                                               out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_int_quantics_to_origcoord, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t),
+        ptr,
+        quantics_arr,
+        Csize_t(n_quantics),
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_int_origcoord_to_grididx(ptr::Ptr{Cvoid}, coord_arr, ndims::Integer,
+                                              out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_int_origcoord_to_grididx, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t),
+        ptr,
+        coord_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_int_grididx_to_origcoord(ptr::Ptr{Cvoid}, grididx_arr, ndims::Integer,
+                                              out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_int_grididx_to_origcoord, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t),
+        ptr,
+        grididx_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_int_grididx_to_quantics(ptr::Ptr{Cvoid}, grididx_arr, ndims::Integer,
+                                             out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_int_grididx_to_quantics, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        grididx_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+function t4a_qgrid_int_quantics_to_grididx(ptr::Ptr{Cvoid}, quantics_arr, n_quantics::Integer,
+                                             out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_int_quantics_to_grididx, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        quantics_arr,
+        Csize_t(n_quantics),
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+# ============================================================================
+# QuanticsTCI: QTCI lifecycle functions
+# ============================================================================
+
+function t4a_qtci_f64_release(ptr::Ptr{Cvoid})
+    ptr == C_NULL && return
+    ccall(
+        (:t4a_qtci_f64_release, libpath()),
+        Cvoid,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+# ============================================================================
+# QuanticsTCI: High-level interpolation functions
+# ============================================================================
+
+"""
+    t4a_quanticscrossinterpolate_f64(grid, eval_fn, user_data, tolerance, max_bonddim, max_iter, out_qtci) -> Cint
+
+Continuous domain interpolation using a DiscretizedGrid.
+"""
+function t4a_quanticscrossinterpolate_f64(
+    grid::Ptr{Cvoid},
+    eval_fn::Ptr{Cvoid},
+    user_data::Ptr{Cvoid},
+    tolerance::Cdouble,
+    max_bonddim::Csize_t,
+    max_iter::Csize_t,
+    out_qtci::Ref{Ptr{Cvoid}},
+)
+    return ccall(
+        (:t4a_quanticscrossinterpolate_f64, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}, Cdouble, Csize_t, Csize_t, Ptr{Ptr{Cvoid}}),
+        grid, eval_fn, user_data, tolerance, max_bonddim, max_iter, out_qtci
+    )
+end
+
+"""
+    t4a_quanticscrossinterpolate_discrete_f64(sizes, ndims, eval_fn, user_data, tolerance, max_bonddim, max_iter, unfoldingscheme, out_qtci) -> Cint
+
+Discrete domain interpolation with integer indices.
+"""
+function t4a_quanticscrossinterpolate_discrete_f64(
+    sizes::Vector{Csize_t},
+    ndims::Csize_t,
+    eval_fn::Ptr{Cvoid},
+    user_data::Ptr{Cvoid},
+    tolerance::Cdouble,
+    max_bonddim::Csize_t,
+    max_iter::Csize_t,
+    unfoldingscheme::Cint,
+    out_qtci::Ref{Ptr{Cvoid}},
+)
+    return ccall(
+        (:t4a_quanticscrossinterpolate_discrete_f64, libpath()),
+        Cint,
+        (Ptr{Csize_t}, Csize_t, Ptr{Cvoid}, Ptr{Cvoid}, Cdouble, Csize_t, Csize_t, Cint, Ptr{Ptr{Cvoid}}),
+        sizes, ndims, eval_fn, user_data, tolerance, max_bonddim, max_iter, unfoldingscheme, out_qtci
+    )
+end
+
+# ============================================================================
+# QuanticsTCI: Accessors
+# ============================================================================
+
+function t4a_qtci_f64_rank(ptr::Ptr{Cvoid}, out_rank::Ref{Csize_t})
+    return ccall(
+        (:t4a_qtci_f64_rank, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr, out_rank
+    )
+end
+
+function t4a_qtci_f64_link_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t}, buf_len::Csize_t)
+    return ccall(
+        (:t4a_qtci_f64_link_dims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t),
+        ptr, out_dims, buf_len
+    )
+end
+
+# ============================================================================
+# QuanticsTCI: Operations
+# ============================================================================
+
+function t4a_qtci_f64_evaluate(ptr::Ptr{Cvoid}, indices::Vector{Int64}, n_indices::Csize_t, out_value::Ref{Cdouble})
+    return ccall(
+        (:t4a_qtci_f64_evaluate, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Cdouble}),
+        ptr, indices, n_indices, out_value
+    )
+end
+
+function t4a_qtci_f64_sum(ptr::Ptr{Cvoid}, out_value::Ref{Cdouble})
+    return ccall(
+        (:t4a_qtci_f64_sum, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr, out_value
+    )
+end
+
+function t4a_qtci_f64_integral(ptr::Ptr{Cvoid}, out_value::Ref{Cdouble})
+    return ccall(
+        (:t4a_qtci_f64_integral, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr, out_value
+    )
+end
+
+function t4a_qtci_f64_to_tensor_train(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_qtci_f64_to_tensor_train, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+# ============================================================================
+# LinearOperator (linop) lifecycle functions
+# ============================================================================
+
+"""
+    t4a_linop_release(ptr::Ptr{Cvoid})
+
+Release a linear operator (called by finalizer).
+"""
+function t4a_linop_release(ptr::Ptr{Cvoid})
+    ptr == C_NULL && return
+    ccall(
+        (:t4a_linop_release, libpath()),
+        Cvoid,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+"""
+    t4a_linop_clone(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
+
+Clone a linear operator.
+"""
+function t4a_linop_clone(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_linop_clone, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+"""
+    t4a_linop_is_assigned(ptr::Ptr{Cvoid}) -> Bool
+
+Check if a linear operator pointer is valid.
+"""
+function t4a_linop_is_assigned(ptr::Ptr{Cvoid})
+    result = ccall(
+        (:t4a_linop_is_assigned, libpath()),
+        Cint,
+        (Ptr{Cvoid},),
+        ptr
+    )
+    return result == 1
+end
+
+# ============================================================================
+# QuanticsTransform operator construction functions
+# ============================================================================
+
+"""
+    t4a_qtransform_shift(r, offset, bc, out) -> Cint
+
+Create a shift operator: f(x) = g(x + offset) mod 2^r.
+"""
+function t4a_qtransform_shift(r::Csize_t, offset::Int64, bc::Cint, out)
+    return ccall(
+        (:t4a_qtransform_shift, libpath()),
+        Cint,
+        (Csize_t, Int64, Cint, Ptr{Ptr{Cvoid}}),
+        r, offset, bc, out
+    )
+end
+
+"""
+    t4a_qtransform_flip(r, bc, out) -> Cint
+
+Create a flip operator: f(x) = g(2^r - x).
+"""
+function t4a_qtransform_flip(r::Csize_t, bc::Cint, out)
+    return ccall(
+        (:t4a_qtransform_flip, libpath()),
+        Cint,
+        (Csize_t, Cint, Ptr{Ptr{Cvoid}}),
+        r, bc, out
+    )
+end
+
+"""
+    t4a_qtransform_phase_rotation(r, theta, out) -> Cint
+
+Create a phase rotation operator: f(x) = exp(i*theta*x) * g(x).
+"""
+function t4a_qtransform_phase_rotation(r::Csize_t, theta::Cdouble, out)
+    return ccall(
+        (:t4a_qtransform_phase_rotation, libpath()),
+        Cint,
+        (Csize_t, Cdouble, Ptr{Ptr{Cvoid}}),
+        r, theta, out
+    )
+end
+
+"""
+    t4a_qtransform_cumsum(r, out) -> Cint
+
+Create a cumulative sum operator: y_i = sum_{j<i} x_j.
+"""
+function t4a_qtransform_cumsum(r::Csize_t, out)
+    return ccall(
+        (:t4a_qtransform_cumsum, libpath()),
+        Cint,
+        (Csize_t, Ptr{Ptr{Cvoid}}),
+        r, out
+    )
+end
+
+"""
+    t4a_qtransform_fourier(r, forward, maxbonddim, tolerance, out) -> Cint
+
+Create a Fourier transform operator.
+forward: 1 for forward, 0 for inverse.
+maxbonddim: 0 = default (12). tolerance: 0.0 = default (1e-14).
+"""
+function t4a_qtransform_fourier(r::Csize_t, forward::Cint, maxbonddim::Csize_t, tolerance::Cdouble, out)
+    return ccall(
+        (:t4a_qtransform_fourier, libpath()),
+        Cint,
+        (Csize_t, Cint, Csize_t, Cdouble, Ptr{Ptr{Cvoid}}),
+        r, forward, maxbonddim, tolerance, out
+    )
+end
+
+"""
+    t4a_linop_apply(op, state, method, rtol, maxdim, out) -> Cint
+
+Apply a linear operator to a TreeTN state.
+method: 0=Naive, 1=Zipup, 2=Fit.
+"""
+function t4a_linop_apply(op::Ptr{Cvoid}, state::Ptr{Cvoid}, method::Cint,
+                         rtol::Cdouble, maxdim::Csize_t, out)
+    return ccall(
+        (:t4a_linop_apply, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cvoid}, Cint, Cdouble, Csize_t, Ptr{Ptr{Cvoid}}),
+        op, state, method, rtol, maxdim, out
     )
 end
 

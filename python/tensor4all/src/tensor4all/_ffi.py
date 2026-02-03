@@ -12,7 +12,6 @@ ffi.cdef("""
     // Opaque types
     typedef struct { void* _private; } t4a_index;
     typedef struct { void* _private; } t4a_tensor;
-    typedef struct { void* _private; } t4a_tensortrain;
 
     // Storage kind enum
     typedef enum {
@@ -345,59 +344,84 @@ ffi.cdef("""
     );
 
     // ========================================================================
-    // TensorTrain (ITensorLike) functions
+    // TreeTN functions (tree tensor network)
     // ========================================================================
 
+    // Opaque type
+    typedef struct { void* _private; } t4a_treetn;
+
     // Lifecycle
-    void t4a_tensortrain_release(t4a_tensortrain* ptr);
-    t4a_tensortrain* t4a_tensortrain_clone(const t4a_tensortrain* ptr);
-    int t4a_tensortrain_is_assigned(const t4a_tensortrain* ptr);
+    void t4a_treetn_release(t4a_treetn* ptr);
+    t4a_treetn* t4a_treetn_clone(const t4a_treetn* ptr);
+    int t4a_treetn_is_assigned(const t4a_treetn* ptr);
 
     // Constructors
-    t4a_tensortrain* t4a_tt_new(const t4a_tensor** tensors, size_t num_tensors);
-    t4a_tensortrain* t4a_tt_new_empty(void);
-
-    // Accessors
-    StatusCode t4a_tt_len(const t4a_tensortrain* ptr, size_t* out_len);
-    int t4a_tt_is_empty(const t4a_tensortrain* ptr);
-    t4a_tensor* t4a_tt_tensor(const t4a_tensortrain* ptr, size_t site);
-    StatusCode t4a_tt_set_tensor(t4a_tensortrain* ptr, size_t site, const t4a_tensor* tensor);
-    StatusCode t4a_tt_bond_dims(const t4a_tensortrain* ptr, size_t* out_dims, size_t buf_len);
-    StatusCode t4a_tt_maxbonddim(const t4a_tensortrain* ptr, size_t* out_max);
-    t4a_index* t4a_tt_linkind(const t4a_tensortrain* ptr, size_t site);
-
-    // Orthogonality
-    int t4a_tt_isortho(const t4a_tensortrain* ptr);
-    StatusCode t4a_tt_orthocenter(const t4a_tensortrain* ptr, size_t* out_center);
-    StatusCode t4a_tt_llim(const t4a_tensortrain* ptr, int* out_llim);
-    StatusCode t4a_tt_rlim(const t4a_tensortrain* ptr, int* out_rlim);
-    StatusCode t4a_tt_canonical_form(const t4a_tensortrain* ptr, int* out_form);
-
-    // Operations
-    StatusCode t4a_tt_orthogonalize(t4a_tensortrain* ptr, size_t site);
-    StatusCode t4a_tt_orthogonalize_with(t4a_tensortrain* ptr, size_t site, int form);
-    StatusCode t4a_tt_truncate(t4a_tensortrain* ptr, double rtol, double cutoff, size_t max_rank);
-    StatusCode t4a_tt_norm(const t4a_tensortrain* ptr, double* out_norm);
-    StatusCode t4a_tt_inner(const t4a_tensortrain* p1, const t4a_tensortrain* p2, double* out_re, double* out_im);
-
-    // Contraction
-    t4a_tensortrain* t4a_tt_contract(
-        const t4a_tensortrain* p1, const t4a_tensortrain* p2,
-        int method, size_t max_rank, double rtol, double cutoff, size_t nhalfsweeps
+    StatusCode t4a_treetn_new(
+        const t4a_tensor** tensors,
+        size_t n_tensors,
+        t4a_treetn** out
     );
 
-    // Addition
-    t4a_tensortrain* t4a_tt_add(const t4a_tensortrain* p1, const t4a_tensortrain* p2);
+    // Accessors
+    StatusCode t4a_treetn_num_vertices(const t4a_treetn* treetn, size_t* out);
+    StatusCode t4a_treetn_num_edges(const t4a_treetn* treetn, size_t* out);
+    StatusCode t4a_treetn_tensor(const t4a_treetn* treetn, size_t vertex, t4a_tensor** out);
+    StatusCode t4a_treetn_set_tensor(t4a_treetn* treetn, size_t vertex, const t4a_tensor* tensor);
+    StatusCode t4a_treetn_neighbors(
+        const t4a_treetn* treetn, size_t vertex,
+        size_t* out_buf, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_treetn_linkind(
+        const t4a_treetn* treetn, size_t v1, size_t v2,
+        t4a_index** out
+    );
+    StatusCode t4a_treetn_siteinds(
+        const t4a_treetn* treetn, size_t vertex,
+        t4a_index** out_buf, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_treetn_bond_dim(
+        const t4a_treetn* treetn, size_t v1, size_t v2,
+        size_t* out
+    );
 
-    // Dense conversion
-    t4a_tensor* t4a_tt_to_dense(const t4a_tensortrain* ptr);
+    // MPS convenience
+    StatusCode t4a_treetn_linkind_at(const t4a_treetn* treetn, size_t i, t4a_index** out);
+    StatusCode t4a_treetn_bond_dim_at(const t4a_treetn* treetn, size_t i, size_t* out);
+    StatusCode t4a_treetn_bond_dims(const t4a_treetn* treetn, size_t* out, size_t n);
+    StatusCode t4a_treetn_maxbonddim(const t4a_treetn* treetn, size_t* out);
 
-    // Linear solver
-    t4a_tensortrain* t4a_tt_linsolve(
-        const t4a_tensortrain* op, const t4a_tensortrain* rhs, const t4a_tensortrain* init,
-        size_t nhalfsweeps, size_t max_rank, double rtol, double cutoff,
-        double krylov_tol, size_t krylov_maxiter, size_t krylov_dim,
-        double a0, double a1, double convergence_tol
+    // Orthogonalization
+    StatusCode t4a_treetn_orthogonalize(t4a_treetn* treetn, size_t vertex);
+    StatusCode t4a_treetn_orthogonalize_with(t4a_treetn* treetn, size_t vertex, int form);
+    StatusCode t4a_treetn_ortho_center(
+        const t4a_treetn* treetn,
+        size_t* out_vertices, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_treetn_canonical_form(const t4a_treetn* treetn, int* out);
+
+    // Operations
+    StatusCode t4a_treetn_truncate(t4a_treetn* treetn, double rtol, double cutoff, size_t maxdim);
+    StatusCode t4a_treetn_inner(
+        const t4a_treetn* a, const t4a_treetn* b,
+        double* out_re, double* out_im
+    );
+    StatusCode t4a_treetn_norm(t4a_treetn* treetn, double* out);
+    StatusCode t4a_treetn_lognorm(t4a_treetn* treetn, double* out);
+    StatusCode t4a_treetn_add(
+        const t4a_treetn* a, const t4a_treetn* b,
+        t4a_treetn** out
+    );
+    StatusCode t4a_treetn_contract(
+        const t4a_treetn* a, const t4a_treetn* b,
+        int method, double rtol, double cutoff, size_t maxdim,
+        t4a_treetn** out
+    );
+    StatusCode t4a_treetn_to_dense(const t4a_treetn* treetn, t4a_tensor** out);
+    StatusCode t4a_treetn_linsolve(
+        const t4a_treetn* op, const t4a_treetn* rhs, const t4a_treetn* init,
+        double a0, double a1, size_t nsweeps,
+        double rtol, double cutoff, size_t maxdim,
+        t4a_treetn** out
     );
 
     // ========================================================================
@@ -419,12 +443,197 @@ ffi.cdef("""
     StatusCode t4a_hdf5_save_mps(
         const char* filepath,
         const char* name,
-        const t4a_tensortrain* tt
+        const t4a_treetn* ttn
     );
 
     StatusCode t4a_hdf5_load_mps(
         const char* filepath,
         const char* name,
-        t4a_tensortrain** out
+        t4a_treetn** out
+    );
+
+    // ========================================================================
+    // QuanticsGrids functions
+    // ========================================================================
+
+    // Opaque types
+    typedef struct { void* _private; } t4a_qgrid_disc;
+    typedef struct { void* _private; } t4a_qgrid_int;
+
+    // Unfolding scheme enum
+    typedef enum {
+        T4A_UNFOLDING_FUSED = 0,
+        T4A_UNFOLDING_INTERLEAVED = 1,
+    } t4a_unfolding_scheme;
+
+    // DiscretizedGrid lifecycle
+    StatusCode t4a_qgrid_disc_new(
+        size_t ndims,
+        const size_t* rs_arr,
+        const double* lower_arr,
+        const double* upper_arr,
+        t4a_unfolding_scheme unfolding,
+        t4a_qgrid_disc** out
+    );
+    void t4a_qgrid_disc_release(t4a_qgrid_disc* ptr);
+    t4a_qgrid_disc* t4a_qgrid_disc_clone(const t4a_qgrid_disc* ptr);
+
+    // DiscretizedGrid properties
+    StatusCode t4a_qgrid_disc_ndims(const t4a_qgrid_disc* grid, size_t* out);
+    StatusCode t4a_qgrid_disc_rs(const t4a_qgrid_disc* grid, size_t* out_arr, size_t buf_size);
+    StatusCode t4a_qgrid_disc_local_dims(const t4a_qgrid_disc* grid, size_t* out_arr, size_t buf_size, size_t* n_out);
+    StatusCode t4a_qgrid_disc_lower_bound(const t4a_qgrid_disc* grid, double* out_arr, size_t buf_size);
+    StatusCode t4a_qgrid_disc_upper_bound(const t4a_qgrid_disc* grid, double* out_arr, size_t buf_size);
+    StatusCode t4a_qgrid_disc_grid_step(const t4a_qgrid_disc* grid, double* out_arr, size_t buf_size);
+
+    // DiscretizedGrid coordinate conversions
+    StatusCode t4a_qgrid_disc_origcoord_to_quantics(
+        const t4a_qgrid_disc* grid, const double* coord_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_qgrid_disc_quantics_to_origcoord(
+        const t4a_qgrid_disc* grid, const int64_t* quantics_arr, size_t n_quantics,
+        double* out_arr, size_t buf_size
+    );
+    StatusCode t4a_qgrid_disc_origcoord_to_grididx(
+        const t4a_qgrid_disc* grid, const double* coord_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size
+    );
+    StatusCode t4a_qgrid_disc_grididx_to_origcoord(
+        const t4a_qgrid_disc* grid, const int64_t* grididx_arr, size_t ndims,
+        double* out_arr, size_t buf_size
+    );
+    StatusCode t4a_qgrid_disc_grididx_to_quantics(
+        const t4a_qgrid_disc* grid, const int64_t* grididx_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_qgrid_disc_quantics_to_grididx(
+        const t4a_qgrid_disc* grid, const int64_t* quantics_arr, size_t n_quantics,
+        int64_t* out_arr, size_t buf_size, size_t* n_out
+    );
+
+    // InherentDiscreteGrid lifecycle
+    StatusCode t4a_qgrid_int_new(
+        size_t ndims,
+        const size_t* rs_arr,
+        const int64_t* origin_arr,
+        t4a_unfolding_scheme unfolding,
+        t4a_qgrid_int** out
+    );
+    void t4a_qgrid_int_release(t4a_qgrid_int* ptr);
+    t4a_qgrid_int* t4a_qgrid_int_clone(const t4a_qgrid_int* ptr);
+
+    // InherentDiscreteGrid properties
+    StatusCode t4a_qgrid_int_ndims(const t4a_qgrid_int* grid, size_t* out);
+    StatusCode t4a_qgrid_int_rs(const t4a_qgrid_int* grid, size_t* out_arr, size_t buf_size);
+    StatusCode t4a_qgrid_int_local_dims(const t4a_qgrid_int* grid, size_t* out_arr, size_t buf_size, size_t* n_out);
+    StatusCode t4a_qgrid_int_origin(const t4a_qgrid_int* grid, int64_t* out_arr, size_t buf_size);
+
+    // InherentDiscreteGrid coordinate conversions
+    StatusCode t4a_qgrid_int_origcoord_to_quantics(
+        const t4a_qgrid_int* grid, const int64_t* coord_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_qgrid_int_quantics_to_origcoord(
+        const t4a_qgrid_int* grid, const int64_t* quantics_arr, size_t n_quantics,
+        int64_t* out_arr, size_t buf_size
+    );
+    StatusCode t4a_qgrid_int_origcoord_to_grididx(
+        const t4a_qgrid_int* grid, const int64_t* coord_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size
+    );
+    StatusCode t4a_qgrid_int_grididx_to_origcoord(
+        const t4a_qgrid_int* grid, const int64_t* grididx_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size
+    );
+    StatusCode t4a_qgrid_int_grididx_to_quantics(
+        const t4a_qgrid_int* grid, const int64_t* grididx_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_qgrid_int_quantics_to_grididx(
+        const t4a_qgrid_int* grid, const int64_t* quantics_arr, size_t n_quantics,
+        int64_t* out_arr, size_t buf_size, size_t* n_out
+    );
+
+    // ========================================================================
+    // QuanticsTCI functions
+    // ========================================================================
+
+    // Opaque type
+    typedef struct { void* _private; } t4a_qtci_f64;
+
+    // Callback types for QTCI
+    typedef int (*t4a_qtci_eval_callback_f64)(const double* coords, size_t ndims, double* result, void* user_data);
+    typedef int (*t4a_qtci_eval_callback_i64)(const int64_t* indices, size_t ndims, double* result, void* user_data);
+
+    // Lifecycle
+    void t4a_qtci_f64_release(t4a_qtci_f64* ptr);
+
+    // High-level interpolation
+    StatusCode t4a_quanticscrossinterpolate_f64(
+        const t4a_qgrid_disc* grid,
+        t4a_qtci_eval_callback_f64 eval_fn,
+        void* user_data,
+        double tolerance,
+        size_t max_bonddim,
+        size_t max_iter,
+        t4a_qtci_f64** out_qtci
+    );
+
+    StatusCode t4a_quanticscrossinterpolate_discrete_f64(
+        const size_t* sizes,
+        size_t ndims,
+        t4a_qtci_eval_callback_i64 eval_fn,
+        void* user_data,
+        double tolerance,
+        size_t max_bonddim,
+        size_t max_iter,
+        int unfoldingscheme,
+        t4a_qtci_f64** out_qtci
+    );
+
+    // Accessors
+    StatusCode t4a_qtci_f64_rank(const t4a_qtci_f64* ptr, size_t* out_rank);
+    StatusCode t4a_qtci_f64_link_dims(const t4a_qtci_f64* ptr, size_t* out_dims, size_t buf_len);
+
+    // Operations
+    StatusCode t4a_qtci_f64_evaluate(const t4a_qtci_f64* ptr, const int64_t* indices, size_t n_indices, double* out_value);
+    StatusCode t4a_qtci_f64_sum(const t4a_qtci_f64* ptr, double* out_value);
+    StatusCode t4a_qtci_f64_integral(const t4a_qtci_f64* ptr, double* out_value);
+    t4a_simplett_f64* t4a_qtci_f64_to_tensor_train(const t4a_qtci_f64* ptr);
+
+    // ========================================================================
+    // QuanticsTransform functions
+    // ========================================================================
+
+    // Opaque type
+    typedef struct { void* _private; } t4a_linop;
+
+    // Boundary condition enum
+    typedef enum {
+        T4A_BC_PERIODIC = 0,
+        T4A_BC_OPEN = 1,
+    } t4a_boundary_condition;
+
+    // Lifecycle
+    void t4a_linop_release(t4a_linop* ptr);
+    t4a_linop* t4a_linop_clone(const t4a_linop* ptr);
+    int t4a_linop_is_assigned(const t4a_linop* ptr);
+
+    // Operator construction
+    StatusCode t4a_qtransform_shift(size_t r, int64_t offset, int bc, t4a_linop** out);
+    StatusCode t4a_qtransform_flip(size_t r, int bc, t4a_linop** out);
+    StatusCode t4a_qtransform_phase_rotation(size_t r, double theta, t4a_linop** out);
+    StatusCode t4a_qtransform_cumsum(size_t r, t4a_linop** out);
+    StatusCode t4a_qtransform_fourier(size_t r, int forward, size_t maxbonddim, double tolerance, t4a_linop** out);
+
+    // Operator application
+    StatusCode t4a_linop_apply(
+        const t4a_linop* op,
+        const t4a_treetn* state,
+        int method,
+        double rtol,
+        size_t maxdim,
+        t4a_treetn** out
     );
 """)

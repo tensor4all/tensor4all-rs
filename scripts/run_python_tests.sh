@@ -24,6 +24,11 @@ if command -v uv &> /dev/null; then
     uv pip install -e ".[dev]"
     echo "=== Running Python tests ==="
     uv run pytest -v
+    echo "=== Running Python doc examples ==="
+    for f in "$REPO_ROOT"/docs/examples/python/*.py; do
+        echo "=== Running $f ==="
+        uv run python "$f"
+    done
 else
     python3 scripts/build_capi.py
     echo "Using pip..."
@@ -31,6 +36,11 @@ else
     pip install -e ".[dev]"
     echo "=== Running Python tests ==="
     pytest -v
+    echo "=== Running Python doc examples ==="
+    for f in "$REPO_ROOT"/docs/examples/python/*.py; do
+        echo "=== Running $f ==="
+        python3 "$f"
+    done
 fi
 
 echo "=== All Python tests passed ==="

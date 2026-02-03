@@ -2,9 +2,8 @@ using Test
 using Tensor4all: Index as T4AIndex, Tensor as T4ATensor
 using Tensor4all: dim, id, tags, rank, dims, indices, data
 using Tensor4all: save_itensor, load_itensor
-using Tensor4all.ITensorLike: TensorTrain as T4ATT
-using Tensor4all.ITensorLike: tensors, bond_dims, save_mps, load_mps, llim, rlim
-using Tensor4all.ITensorLike: random_tt
+using Tensor4all.TreeTN: MPS, linkdims, save_mps, load_mps
+using Tensor4all.TreeTN: random_mps
 
 function temp_path(name::AbstractString)
     return joinpath(tempdir(), "tensor4all_jl_hdf5_test_$(name).h5")
@@ -80,15 +79,15 @@ end
     @testset "MPS roundtrip" begin
         filepath = temp_path("mps")
         sites = [T4AIndex(2; tags="Site,n=$i") for i in 1:3]
-        tt = random_tt(sites; linkdims=4)
+        mps = random_mps(sites; linkdims=4)
 
-        save_mps(filepath, "mps", tt)
+        save_mps(filepath, "mps", mps)
         loaded = load_mps(filepath, "mps")
 
-        @test length(loaded) == length(tt)
+        @test length(loaded) == length(mps)
 
-        orig_tensors = tensors(tt)
-        loaded_tensors = tensors(loaded)
+        orig_tensors = collect(mps)
+        loaded_tensors = collect(loaded)
         for (i, (ot, lt)) in enumerate(zip(orig_tensors, loaded_tensors))
             @test dims(ot) == dims(lt)
 
@@ -103,23 +102,6 @@ end
             # Check data
             @test data(ot) ≈ data(lt) atol=1e-14
         end
-
-        rm(filepath; force=true)
-    end
-
-    @testset "MPS ortho roundtrip" begin
-        filepath = temp_path("mps_ortho")
-        sites = [T4AIndex(2; tags="Site,n=$i") for i in 1:3]
-        tt = random_tt(sites; linkdims=4)
-
-        orig_llim = llim(tt)
-        orig_rlim = rlim(tt)
-
-        save_mps(filepath, "mps", tt)
-        loaded = load_mps(filepath, "mps")
-
-        @test llim(loaded) == orig_llim
-        @test rlim(loaded) == orig_rlim
 
         rm(filepath; force=true)
     end

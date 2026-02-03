@@ -18,7 +18,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     # Only run on the main repository, not on forks
-    if: github.repository == 'shinaoka/tensor4all-rs'
+    if: github.repository == 'tensor4all/tensor4all-rs'
     steps:
       - uses: actions/checkout@v4
 
@@ -58,7 +58,8 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: build
-    if: github.repository == 'shinaoka/tensor4all-rs'
+    if: github.repository == 'tensor4all/tensor4all-rs'
+
     steps:
       - name: Deploy to GitHub Pages
         id: deployment

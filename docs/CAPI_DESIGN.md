@@ -987,12 +987,19 @@ Organize C API code by type. The structure may vary depending on the crate's sco
 **Example structure for `tensor4all-capi`:**
 ```
 src/
-├── lib.rs          # Main module, exports, status codes
-├── types.rs        # Opaque type definitions
-├── macros.rs       # Common macros (impl_opaque_type_common!)
-├── index.rs        # Index C API functions
-├── tensor.rs       # Tensor C API functions
-└── ...
+├── lib.rs               # Main module, exports, status codes
+├── types.rs             # Opaque type definitions and enums
+├── macros.rs            # Common macros (impl_opaque_type_common!)
+├── index.rs             # Index C API
+├── tensor.rs            # Tensor C API
+├── treetn.rs            # Tree tensor network (MPS/MPO) C API
+├── simplett.rs          # Simple tensor train C API
+├── tensorci.rs          # Tensor cross interpolation C API
+├── quanticsgrids.rs     # Quantics grids C API
+├── quanticstci.rs       # Quantics TCI C API
+├── quanticstransform.rs # Quantics transformation operators C API
+├── algorithm.rs         # Algorithm types and options
+└── hdf5.rs              # HDF5 I/O (optional feature)
 ```
 
 **General guidelines:**
@@ -1154,10 +1161,10 @@ When adding a new opaque type to a C API crate:
 
 ### tensor4all-capi
 
-The `tensor4all-capi` crate provides C bindings for core tensor types:
+The `tensor4all-capi` crate provides C bindings for all tensor4all functionality:
 - Uses `t4a_` prefix for all functions and types
 - Uses `T4A_` prefix for status codes
-- Provides Index and Tensor types
+- Provides: Index, Tensor, TreeTN (MPS/MPO), SimpleTT, TensorCI, QuanticsGrids, QuanticsTCI, QuanticsTransform, and HDF5
 - See `crates/tensor4all-capi/` for implementation details
 
 ### Future C-API Crates
@@ -1167,6 +1174,52 @@ When creating new C-API crates:
 2. Follow all patterns in this document
 3. Document the prefix choice in the crate's README
 4. Ensure no naming conflicts with existing C-API crates
+
+## Crate-Specific Type Reference (tensor4all-capi)
+
+### Opaque Types
+
+| Type | Wraps | Module | Description |
+|------|-------|--------|-------------|
+| `t4a_index` | `DynIndex` | `index.rs` | Tensor index with dimension, ID, and tags |
+| `t4a_tensor` | `TensorDynLen` | `tensor.rs` | Dynamic-rank tensor (dense or diagonal) |
+| `t4a_treetn` | `DefaultTreeTN<usize>` | `treetn.rs` | Tree tensor network (MPS, MPO, general TTN) |
+| `t4a_simplett_f64` | `TensorTrain<f64>` | `simplett.rs` | Simple tensor train (f64) |
+| `t4a_tci2_f64` | `TensorCI2<f64>` | `tensorci.rs` | Tensor cross interpolation (f64) |
+| `t4a_qtci_f64` | `QuanticsTensorCI2<f64>` | `quanticstci.rs` | Quantics TCI result (f64) |
+| `t4a_qgrid_disc` | `DiscretizedGrid` | `quanticsgrids.rs` | Discretized continuous grid |
+| `t4a_qgrid_int` | `InherentDiscreteGrid` | `quanticsgrids.rs` | Integer discrete grid |
+| `t4a_linop` | `LinearOperator<TensorDynLen, usize>` | `quanticstransform.rs` | Quantics linear operator (shift, flip, Fourier, etc.) |
+
+### Enums
+
+| Type | Values | Module | Description |
+|------|--------|--------|-------------|
+| `t4a_storage_kind` | DenseF64=0, DenseC64=1, DiagF64=2, DiagC64=3 | `types.rs` | Tensor storage kind |
+| `t4a_unfolding_scheme` | Fused=0, Interleaved=1 | `types.rs` | Quantics unfolding scheme |
+| `t4a_boundary_condition` | Periodic=0, Open=1 | `types.rs` | Boundary condition for quantics operators |
+
+### Callback Types
+
+| Type | Signature | Module | Description |
+|------|-----------|--------|-------------|
+| `EvalCallback` | `fn(indices: *const i64, n: size_t, result: *mut f64, user_data: *mut void) -> i32` | `tensorci.rs` | TCI evaluation callback |
+| `QtciEvalCallbackF64` | `fn(coords: *const f64, n: size_t, result: *mut f64, user_data: *mut void) -> i32` | `quanticstci.rs` | QTCI continuous domain callback |
+| `QtciEvalCallbackI64` | `fn(indices: *const i64, n: size_t, result: *mut f64, user_data: *mut void) -> i32` | `quanticstci.rs` | QTCI discrete domain callback |
+
+### Module Overview
+
+| Module | Functions | Description |
+|--------|-----------|-------------|
+| `index.rs` | `t4a_index_*` | Index creation, tags, dimensions |
+| `tensor.rs` | `t4a_tensor_*` | Tensor creation, data access, contraction |
+| `treetn.rs` | `t4a_treetn_*` | Tree tensor networks: construction, orthogonalization, truncation, inner, norm, contract, linsolve |
+| `simplett.rs` | `t4a_simplett_f64_*` | Simple TT operations |
+| `tensorci.rs` | `t4a_tci2_f64_*`, `t4a_crossinterpolate2_f64` | Tensor cross interpolation |
+| `quanticsgrids.rs` | `t4a_qgrid_disc_*`, `t4a_qgrid_int_*` | Quantics grid coordinate conversions |
+| `quanticstci.rs` | `t4a_qtci_f64_*`, `t4a_quanticscrossinterpolate_*` | Quantics TCI interpolation |
+| `quanticstransform.rs` | `t4a_qtransform_*`, `t4a_linop_*` | Quantics transformation operators |
+| `hdf5.rs` | `t4a_hdf5_*` | HDF5 serialization (ITensors.jl compatible) |
 
 ## References
 

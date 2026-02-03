@@ -936,10 +936,31 @@ include("SimpleTT.jl")
 include("TensorCI.jl")
 
 # ============================================================================
-# ITensorLike Submodule (TensorTrain)
+# TreeTN Submodule (Tree Tensor Network: MPS, MPO, TTN)
 # ============================================================================
-# TensorTrain functionality is in a separate submodule.
-# Use: using Tensor4all.ITensorLike
-include("ITensorLike.jl")
+# Tree tensor network functionality is in a separate submodule.
+# Use: using Tensor4all.TreeTN
+include("TreeTN.jl")
+
+# ============================================================================
+# QuanticsGrids Submodule
+# ============================================================================
+# Quantics grid types for coordinate conversions in QTT methods.
+# Use: using Tensor4all.QuanticsGrids
+include("QuanticsGrids.jl")
+
+# ============================================================================
+# QuanticsTCI Submodule (Quantics Tensor Cross Interpolation)
+# ============================================================================
+# Quantics TCI combines TCI with quantics grid representations.
+# Use: using Tensor4all.QuanticsTCI
+include("QuanticsTCI.jl")
+
+# ============================================================================
+# QuanticsTransform Submodule
+# ============================================================================
+# Quantics transformation operators (shift, flip, phase rotation, cumsum, Fourier).
+# Use: using Tensor4all.QuanticsTransform
+include("QuanticsTransform.jl")
 
 end # module

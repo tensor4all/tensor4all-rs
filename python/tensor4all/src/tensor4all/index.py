@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Sequence
+
 from ._capi import check_status, get_lib, T4AError
 from ._ffi import ffi
 
@@ -200,3 +202,89 @@ class Index:
         if ptr == ffi.NULL:
             raise T4AError("Failed to clone Index")
         return Index._from_ptr(ptr)
+
+
+def sim(index: Index) -> Index:
+    """Create a "similar" index with the same dim/tags but a new ID."""
+    return Index(index.dim, tags=index.tags)
+
+
+def hasind(inds: Sequence[Index], ind: Index) -> bool:
+    """Return True if `ind` is present in `inds`."""
+    return ind in inds
+
+
+def hasinds(inds: Sequence[Index], query: Sequence[Index]) -> bool:
+    """Return True if all indices in `query` are present in `inds`."""
+    return all(q in inds for q in query)
+
+
+def commoninds(inds1: Sequence[Index], inds2: Sequence[Index]) -> list[Index]:
+    """Return indices common to both lists, preserving the order of `inds1`."""
+    inds2_set = set(inds2)
+    return [i for i in inds1 if i in inds2_set]
+
+
+def hascommoninds(inds1: Sequence[Index], inds2: Sequence[Index]) -> bool:
+    """Return True if there is at least one common index."""
+    return len(commoninds(inds1, inds2)) > 0
+
+
+def commonind(inds1: Sequence[Index], inds2: Sequence[Index]) -> Index:
+    """Return the unique common index (error if not exactly one)."""
+    cs = commoninds(inds1, inds2)
+    if len(cs) != 1:
+        raise ValueError(f"Expected exactly 1 common index, got {len(cs)}")
+    return cs[0]
+
+
+def uniqueinds(inds1: Sequence[Index], inds2: Sequence[Index]) -> list[Index]:
+    """Return indices that are in `inds1` but not in `inds2`, preserving order."""
+    inds2_set = set(inds2)
+    return [i for i in inds1 if i not in inds2_set]
+
+
+def uniqueind(inds1: Sequence[Index], inds2: Sequence[Index]) -> Index:
+    """Return the unique index in `inds1` not present in `inds2` (error if not exactly one)."""
+    us = uniqueinds(inds1, inds2)
+    if len(us) != 1:
+        raise ValueError(f"Expected exactly 1 unique index, got {len(us)}")
+    return us[0]
+
+
+def noncommoninds(inds1: Sequence[Index], inds2: Sequence[Index]) -> list[Index]:
+    """Return indices that are not shared between the two lists."""
+    return uniqueinds(inds1, inds2) + uniqueinds(inds2, inds1)
+
+
+def replaceinds(
+    inds: Sequence[Index],
+    old_inds: Sequence[Index],
+    new_inds: Sequence[Index],
+) -> list[Index]:
+    """Replace indices in `inds` by mapping `old_inds[i] -> new_inds[i]`."""
+    if len(old_inds) != len(new_inds):
+        raise ValueError("old_inds and new_inds must have the same length")
+    mapping = {old: new for old, new in zip(old_inds, new_inds)}
+    return [mapping.get(i, i) for i in inds]
+
+
+def replaceind(inds: Sequence[Index], old_ind: Index, new_ind: Index) -> list[Index]:
+    """Replace a single index in `inds`."""
+    return replaceinds(inds, [old_ind], [new_ind])
+
+
+__all__ = [
+    "Index",
+    "sim",
+    "hasind",
+    "hasinds",
+    "hascommoninds",
+    "commoninds",
+    "commonind",
+    "uniqueinds",
+    "uniqueind",
+    "noncommoninds",
+    "replaceinds",
+    "replaceind",
+]

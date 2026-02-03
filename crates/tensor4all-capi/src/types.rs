@@ -5,7 +5,8 @@
 
 use std::ffi::c_void;
 use tensor4all_core::{DynIndex, Storage, TensorDynLen};
-use tensor4all_itensorlike::TensorTrain;
+use tensor4all_quanticstci::QuanticsTensorCI2;
+use tensor4all_treetn::{DefaultTreeTN, LinearOperator};
 
 /// The internal index type we're wrapping (DynIndex = Index<DynId, TagSet>)
 pub(crate) type InternalIndex = DynIndex;
@@ -148,61 +149,62 @@ unsafe impl Send for t4a_tensor {}
 unsafe impl Sync for t4a_tensor {}
 
 // ============================================================================
-// TensorTrain type
+// TreeTN type
 // ============================================================================
 
-/// The internal tensor train type we're wrapping (TensorTrain is a concrete type, not generic)
-pub(crate) type InternalTensorTrain = TensorTrain;
+/// The internal tree tensor network type we're wrapping.
+pub(crate) type InternalTreeTN = DefaultTreeTN<usize>;
 
-/// Opaque tensor train type for C API
+/// Opaque tree tensor network type for C API
 ///
-/// Wraps `TensorTrain` which corresponds to ITensorMPS.jl's `MPS`.
+/// Wraps `DefaultTreeTN<usize>` which is a tree-shaped tensor network
+/// generalizing MPS/TT to tree topologies.
 ///
 /// The internal structure is hidden using a void pointer.
 #[repr(C)]
-pub struct t4a_tensortrain {
+pub struct t4a_treetn {
     pub(crate) _private: *const c_void,
 }
 
-impl t4a_tensortrain {
-    /// Create a new t4a_tensortrain from an InternalTensorTrain
-    pub(crate) fn new(tt: InternalTensorTrain) -> Self {
+impl t4a_treetn {
+    /// Create a new t4a_treetn from an InternalTreeTN
+    pub(crate) fn new(treetn: InternalTreeTN) -> Self {
         Self {
-            _private: Box::into_raw(Box::new(tt)) as *const c_void,
+            _private: Box::into_raw(Box::new(treetn)) as *const c_void,
         }
     }
 
-    /// Get a reference to the inner InternalTensorTrain
-    pub(crate) fn inner(&self) -> &InternalTensorTrain {
-        unsafe { &*(self._private as *const InternalTensorTrain) }
+    /// Get a reference to the inner InternalTreeTN
+    pub(crate) fn inner(&self) -> &InternalTreeTN {
+        unsafe { &*(self._private as *const InternalTreeTN) }
     }
 
-    /// Get a mutable reference to the inner InternalTensorTrain
-    pub(crate) fn inner_mut(&mut self) -> &mut InternalTensorTrain {
-        unsafe { &mut *(self._private as *mut InternalTensorTrain) }
+    /// Get a mutable reference to the inner InternalTreeTN
+    pub(crate) fn inner_mut(&mut self) -> &mut InternalTreeTN {
+        unsafe { &mut *(self._private as *mut InternalTreeTN) }
     }
 }
 
-impl Clone for t4a_tensortrain {
+impl Clone for t4a_treetn {
     fn clone(&self) -> Self {
         let inner = self.inner().clone();
         Self::new(inner)
     }
 }
 
-impl Drop for t4a_tensortrain {
+impl Drop for t4a_treetn {
     fn drop(&mut self) {
         unsafe {
             if !self._private.is_null() {
-                let _ = Box::from_raw(self._private as *mut InternalTensorTrain);
+                let _ = Box::from_raw(self._private as *mut InternalTreeTN);
             }
         }
     }
 }
 
-// Safety: t4a_tensortrain is Send + Sync because InternalTensorTrain is Send + Sync
-unsafe impl Send for t4a_tensortrain {}
-unsafe impl Sync for t4a_tensortrain {}
+// Safety: t4a_treetn is Send + Sync because InternalTreeTN is Send + Sync
+unsafe impl Send for t4a_treetn {}
+unsafe impl Sync for t4a_treetn {}
 
 /// Canonical form enum for C API
 ///
@@ -237,6 +239,9 @@ impl From<t4a_canonical_form> for tensor4all_itensorlike::CanonicalForm {
         }
     }
 }
+
+// Note: tensor4all_itensorlike::CanonicalForm IS tensor4all_treetn::CanonicalForm
+// (re-exported), so the From impls above also cover the treetn crate.
 
 // ============================================================================
 // Algorithm types
@@ -351,6 +356,298 @@ impl From<t4a_contract_method> for tensor4all_itensorlike::ContractMethod {
             t4a_contract_method::Zipup => Self::Zipup,
             t4a_contract_method::Fit => Self::Fit,
             t4a_contract_method::Naive => Self::Naive,
+        }
+    }
+}
+
+impl From<tensor4all_treetn::treetn::contraction::ContractionMethod> for t4a_contract_method {
+    fn from(method: tensor4all_treetn::treetn::contraction::ContractionMethod) -> Self {
+        match method {
+            tensor4all_treetn::treetn::contraction::ContractionMethod::Zipup => Self::Zipup,
+            tensor4all_treetn::treetn::contraction::ContractionMethod::Fit => Self::Fit,
+            tensor4all_treetn::treetn::contraction::ContractionMethod::Naive => Self::Naive,
+        }
+    }
+}
+
+impl From<t4a_contract_method> for tensor4all_treetn::treetn::contraction::ContractionMethod {
+    fn from(method: t4a_contract_method) -> Self {
+        match method {
+            t4a_contract_method::Zipup => Self::Zipup,
+            t4a_contract_method::Fit => Self::Fit,
+            t4a_contract_method::Naive => Self::Naive,
+        }
+    }
+}
+
+// ============================================================================
+// QuanticsGrids types
+// ============================================================================
+
+/// The internal DiscretizedGrid type we're wrapping.
+pub(crate) type InternalDiscretizedGrid = quanticsgrids::DiscretizedGrid;
+
+/// Opaque discretized grid type for C API
+///
+/// Wraps `quanticsgrids::DiscretizedGrid` which provides coordinate conversions
+/// between continuous coordinates, grid indices, and quantics indices.
+#[repr(C)]
+pub struct t4a_qgrid_disc {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_qgrid_disc {
+    /// Create a new t4a_qgrid_disc from an InternalDiscretizedGrid
+    pub(crate) fn new(grid: InternalDiscretizedGrid) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(grid)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner InternalDiscretizedGrid
+    pub(crate) fn inner(&self) -> &InternalDiscretizedGrid {
+        unsafe { &*(self._private as *const InternalDiscretizedGrid) }
+    }
+}
+
+impl Clone for t4a_qgrid_disc {
+    fn clone(&self) -> Self {
+        let inner = self.inner().clone();
+        Self::new(inner)
+    }
+}
+
+impl Drop for t4a_qgrid_disc {
+    fn drop(&mut self) {
+        unsafe {
+            if !self._private.is_null() {
+                let _ = Box::from_raw(self._private as *mut InternalDiscretizedGrid);
+            }
+        }
+    }
+}
+
+// Safety: t4a_qgrid_disc is Send + Sync because InternalDiscretizedGrid is Send + Sync
+unsafe impl Send for t4a_qgrid_disc {}
+unsafe impl Sync for t4a_qgrid_disc {}
+
+/// The internal InherentDiscreteGrid type we're wrapping.
+pub(crate) type InternalInherentDiscreteGrid = quanticsgrids::InherentDiscreteGrid;
+
+/// Opaque inherent discrete grid type for C API
+///
+/// Wraps `quanticsgrids::InherentDiscreteGrid` which provides coordinate conversions
+/// between integer coordinates, grid indices, and quantics indices.
+#[repr(C)]
+pub struct t4a_qgrid_int {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_qgrid_int {
+    /// Create a new t4a_qgrid_int from an InternalInherentDiscreteGrid
+    pub(crate) fn new(grid: InternalInherentDiscreteGrid) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(grid)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner InternalInherentDiscreteGrid
+    pub(crate) fn inner(&self) -> &InternalInherentDiscreteGrid {
+        unsafe { &*(self._private as *const InternalInherentDiscreteGrid) }
+    }
+}
+
+impl Clone for t4a_qgrid_int {
+    fn clone(&self) -> Self {
+        let inner = self.inner().clone();
+        Self::new(inner)
+    }
+}
+
+impl Drop for t4a_qgrid_int {
+    fn drop(&mut self) {
+        unsafe {
+            if !self._private.is_null() {
+                let _ = Box::from_raw(self._private as *mut InternalInherentDiscreteGrid);
+            }
+        }
+    }
+}
+
+// Safety: t4a_qgrid_int is Send + Sync because InternalInherentDiscreteGrid is Send + Sync
+unsafe impl Send for t4a_qgrid_int {}
+unsafe impl Sync for t4a_qgrid_int {}
+
+/// Unfolding scheme enum for C API
+///
+/// Represents the tensor train layout for quantics grids.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum t4a_unfolding_scheme {
+    /// Fused scheme: indices at same bit level grouped together
+    Fused = 0,
+    /// Interleaved scheme: indices alternate between dimensions
+    Interleaved = 1,
+}
+
+impl From<t4a_unfolding_scheme> for quanticsgrids::UnfoldingScheme {
+    fn from(scheme: t4a_unfolding_scheme) -> Self {
+        match scheme {
+            t4a_unfolding_scheme::Fused => Self::Fused,
+            t4a_unfolding_scheme::Interleaved => Self::Interleaved,
+        }
+    }
+}
+
+impl From<quanticsgrids::UnfoldingScheme> for t4a_unfolding_scheme {
+    fn from(scheme: quanticsgrids::UnfoldingScheme) -> Self {
+        match scheme {
+            quanticsgrids::UnfoldingScheme::Fused => Self::Fused,
+            quanticsgrids::UnfoldingScheme::Interleaved => Self::Interleaved,
+        }
+    }
+}
+
+// ============================================================================
+// QuanticsTCI type
+// ============================================================================
+
+/// The internal QuanticsTensorCI2 type we're wrapping.
+pub(crate) type InternalQuanticsTCI = QuanticsTensorCI2<f64>;
+
+/// Opaque quantics TCI type for C API
+///
+/// Wraps `QuanticsTensorCI2<f64>` which combines TCI with quantics grid information
+/// for seamless interpolation of functions on quantics grids.
+///
+/// The internal structure is hidden using a void pointer.
+#[repr(C)]
+pub struct t4a_qtci_f64 {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_qtci_f64 {
+    /// Create a new t4a_qtci_f64 from an InternalQuanticsTCI
+    pub(crate) fn new(qtci: InternalQuanticsTCI) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(qtci)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner InternalQuanticsTCI
+    pub(crate) fn inner(&self) -> &InternalQuanticsTCI {
+        unsafe { &*(self._private as *const InternalQuanticsTCI) }
+    }
+
+    /// Get a mutable reference to the inner InternalQuanticsTCI
+    #[allow(dead_code)]
+    pub(crate) fn inner_mut(&mut self) -> &mut InternalQuanticsTCI {
+        unsafe { &mut *(self._private as *mut InternalQuanticsTCI) }
+    }
+}
+
+impl Drop for t4a_qtci_f64 {
+    fn drop(&mut self) {
+        unsafe {
+            if !self._private.is_null() {
+                let _ = Box::from_raw(self._private as *mut InternalQuanticsTCI);
+            }
+        }
+    }
+}
+
+// Safety: t4a_qtci_f64 is Send + Sync because InternalQuanticsTCI is Send + Sync
+unsafe impl Send for t4a_qtci_f64 {}
+unsafe impl Sync for t4a_qtci_f64 {}
+
+// ============================================================================
+// LinearOperator (QuanticsTransform) type
+// ============================================================================
+
+/// The internal LinearOperator type we're wrapping.
+/// This is the same as `QuanticsOperator` in tensor4all-quanticstransform.
+pub(crate) type InternalLinearOperator = LinearOperator<TensorDynLen, usize>;
+
+/// Opaque linear operator type for C API
+///
+/// Wraps `LinearOperator<TensorDynLen, usize>` (= `QuanticsOperator`) which represents
+/// a quantics transformation operator (shift, flip, Fourier, etc.).
+///
+/// The internal structure is hidden using a void pointer.
+#[repr(C)]
+pub struct t4a_linop {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_linop {
+    /// Create a new t4a_linop from an InternalLinearOperator
+    pub(crate) fn new(op: InternalLinearOperator) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(op)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner InternalLinearOperator
+    pub(crate) fn inner(&self) -> &InternalLinearOperator {
+        unsafe { &*(self._private as *const InternalLinearOperator) }
+    }
+
+    /// Get a mutable reference to the inner InternalLinearOperator
+    #[allow(dead_code)]
+    pub(crate) fn inner_mut(&mut self) -> &mut InternalLinearOperator {
+        unsafe { &mut *(self._private as *mut InternalLinearOperator) }
+    }
+}
+
+impl Clone for t4a_linop {
+    fn clone(&self) -> Self {
+        let inner = self.inner().clone();
+        Self::new(inner)
+    }
+}
+
+impl Drop for t4a_linop {
+    fn drop(&mut self) {
+        unsafe {
+            if !self._private.is_null() {
+                let _ = Box::from_raw(self._private as *mut InternalLinearOperator);
+            }
+        }
+    }
+}
+
+// Safety: t4a_linop is Send + Sync because InternalLinearOperator is Send + Sync
+unsafe impl Send for t4a_linop {}
+unsafe impl Sync for t4a_linop {}
+
+/// Boundary condition enum for C API
+///
+/// Used for quantics transformation operators (shift, flip).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum t4a_boundary_condition {
+    /// Periodic boundary condition
+    Periodic = 0,
+    /// Open boundary condition
+    Open = 1,
+}
+
+impl From<t4a_boundary_condition> for tensor4all_quanticstransform::BoundaryCondition {
+    fn from(bc: t4a_boundary_condition) -> Self {
+        match bc {
+            t4a_boundary_condition::Periodic => {
+                tensor4all_quanticstransform::BoundaryCondition::Periodic
+            }
+            t4a_boundary_condition::Open => tensor4all_quanticstransform::BoundaryCondition::Open,
+        }
+    }
+}
+
+impl From<tensor4all_quanticstransform::BoundaryCondition> for t4a_boundary_condition {
+    fn from(bc: tensor4all_quanticstransform::BoundaryCondition) -> Self {
+        match bc {
+            tensor4all_quanticstransform::BoundaryCondition::Periodic => Self::Periodic,
+            tensor4all_quanticstransform::BoundaryCondition::Open => Self::Open,
         }
     }
 }
