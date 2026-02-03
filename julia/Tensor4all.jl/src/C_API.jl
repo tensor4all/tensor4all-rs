@@ -1954,4 +1954,144 @@ function t4a_qtci_f64_to_tensor_train(ptr::Ptr{Cvoid})
     )
 end
 
+# ============================================================================
+# LinearOperator (linop) lifecycle functions
+# ============================================================================
+
+"""
+    t4a_linop_release(ptr::Ptr{Cvoid})
+
+Release a linear operator (called by finalizer).
+"""
+function t4a_linop_release(ptr::Ptr{Cvoid})
+    ptr == C_NULL && return
+    ccall(
+        (:t4a_linop_release, libpath()),
+        Cvoid,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+"""
+    t4a_linop_clone(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
+
+Clone a linear operator.
+"""
+function t4a_linop_clone(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_linop_clone, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+"""
+    t4a_linop_is_assigned(ptr::Ptr{Cvoid}) -> Bool
+
+Check if a linear operator pointer is valid.
+"""
+function t4a_linop_is_assigned(ptr::Ptr{Cvoid})
+    result = ccall(
+        (:t4a_linop_is_assigned, libpath()),
+        Cint,
+        (Ptr{Cvoid},),
+        ptr
+    )
+    return result == 1
+end
+
+# ============================================================================
+# QuanticsTransform operator construction functions
+# ============================================================================
+
+"""
+    t4a_qtransform_shift(r, offset, bc, out) -> Cint
+
+Create a shift operator: f(x) = g(x + offset) mod 2^r.
+"""
+function t4a_qtransform_shift(r::Csize_t, offset::Int64, bc::Cint, out)
+    return ccall(
+        (:t4a_qtransform_shift, libpath()),
+        Cint,
+        (Csize_t, Int64, Cint, Ptr{Ptr{Cvoid}}),
+        r, offset, bc, out
+    )
+end
+
+"""
+    t4a_qtransform_flip(r, bc, out) -> Cint
+
+Create a flip operator: f(x) = g(2^r - x).
+"""
+function t4a_qtransform_flip(r::Csize_t, bc::Cint, out)
+    return ccall(
+        (:t4a_qtransform_flip, libpath()),
+        Cint,
+        (Csize_t, Cint, Ptr{Ptr{Cvoid}}),
+        r, bc, out
+    )
+end
+
+"""
+    t4a_qtransform_phase_rotation(r, theta, out) -> Cint
+
+Create a phase rotation operator: f(x) = exp(i*theta*x) * g(x).
+"""
+function t4a_qtransform_phase_rotation(r::Csize_t, theta::Cdouble, out)
+    return ccall(
+        (:t4a_qtransform_phase_rotation, libpath()),
+        Cint,
+        (Csize_t, Cdouble, Ptr{Ptr{Cvoid}}),
+        r, theta, out
+    )
+end
+
+"""
+    t4a_qtransform_cumsum(r, out) -> Cint
+
+Create a cumulative sum operator: y_i = sum_{j<i} x_j.
+"""
+function t4a_qtransform_cumsum(r::Csize_t, out)
+    return ccall(
+        (:t4a_qtransform_cumsum, libpath()),
+        Cint,
+        (Csize_t, Ptr{Ptr{Cvoid}}),
+        r, out
+    )
+end
+
+"""
+    t4a_qtransform_fourier(r, forward, maxbonddim, tolerance, out) -> Cint
+
+Create a Fourier transform operator.
+forward: 1 for forward, 0 for inverse.
+maxbonddim: 0 = default (12). tolerance: 0.0 = default (1e-14).
+"""
+function t4a_qtransform_fourier(r::Csize_t, forward::Cint, maxbonddim::Csize_t, tolerance::Cdouble, out)
+    return ccall(
+        (:t4a_qtransform_fourier, libpath()),
+        Cint,
+        (Csize_t, Cint, Csize_t, Cdouble, Ptr{Ptr{Cvoid}}),
+        r, forward, maxbonddim, tolerance, out
+    )
+end
+
+"""
+    t4a_linop_apply(op, state, method, rtol, maxdim, out) -> Cint
+
+Apply a linear operator to a TreeTN state.
+method: 0=Naive, 1=Zipup, 2=Fit.
+"""
+function t4a_linop_apply(op::Ptr{Cvoid}, state::Ptr{Cvoid}, method::Cint,
+                         rtol::Cdouble, maxdim::Csize_t, out)
+    return ccall(
+        (:t4a_linop_apply, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cvoid}, Cint, Cdouble, Csize_t, Ptr{Ptr{Cvoid}}),
+        op, state, method, rtol, maxdim, out
+    )
+end
+
 end # module C_API

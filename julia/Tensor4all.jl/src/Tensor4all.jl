@@ -956,4 +956,11 @@ include("QuanticsGrids.jl")
 # Use: using Tensor4all.QuanticsTCI
 include("QuanticsTCI.jl")
 
+# ============================================================================
+# QuanticsTransform Submodule
+# ============================================================================
+# Quantics transformation operators (shift, flip, phase rotation, cumsum, Fourier).
+# Use: using Tensor4all.QuanticsTransform
+include("QuanticsTransform.jl")
+
 end # module
