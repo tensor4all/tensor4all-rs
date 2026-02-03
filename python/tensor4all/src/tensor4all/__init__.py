@@ -48,6 +48,9 @@ from .treetn import lognorm as ttn_lognorm
 from .treetn import linsolve as ttn_linsolve
 from .treetn import contract as ttn_contract
 
+# QuanticsGrids types
+from .quanticsgrids import DiscretizedGrid, InherentDiscreteGrid
+
 # HDF5 functions (ITensors.jl compatible)
 from .hdf5 import save_itensor, load_itensor, save_mps, load_mps
 
@@ -89,6 +92,9 @@ __all__ = [
     "ttn_lognorm",
     "ttn_linsolve",
     "ttn_contract",
+    # QuanticsGrids types
+    "DiscretizedGrid",
+    "InherentDiscreteGrid",
     # HDF5 functions
     "save_itensor",
     "load_itensor",

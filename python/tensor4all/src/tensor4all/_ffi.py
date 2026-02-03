@@ -451,4 +451,107 @@ ffi.cdef("""
         const char* name,
         t4a_treetn** out
     );
+
+    // ========================================================================
+    // QuanticsGrids functions
+    // ========================================================================
+
+    // Opaque types
+    typedef struct { void* _private; } t4a_qgrid_disc;
+    typedef struct { void* _private; } t4a_qgrid_int;
+
+    // Unfolding scheme enum
+    typedef enum {
+        T4A_UNFOLDING_FUSED = 0,
+        T4A_UNFOLDING_INTERLEAVED = 1,
+    } t4a_unfolding_scheme;
+
+    // DiscretizedGrid lifecycle
+    StatusCode t4a_qgrid_disc_new(
+        size_t ndims,
+        const size_t* rs_arr,
+        const double* lower_arr,
+        const double* upper_arr,
+        t4a_unfolding_scheme unfolding,
+        t4a_qgrid_disc** out
+    );
+    void t4a_qgrid_disc_release(t4a_qgrid_disc* ptr);
+    t4a_qgrid_disc* t4a_qgrid_disc_clone(const t4a_qgrid_disc* ptr);
+
+    // DiscretizedGrid properties
+    StatusCode t4a_qgrid_disc_ndims(const t4a_qgrid_disc* grid, size_t* out);
+    StatusCode t4a_qgrid_disc_rs(const t4a_qgrid_disc* grid, size_t* out_arr, size_t buf_size);
+    StatusCode t4a_qgrid_disc_local_dims(const t4a_qgrid_disc* grid, size_t* out_arr, size_t buf_size, size_t* n_out);
+    StatusCode t4a_qgrid_disc_lower_bound(const t4a_qgrid_disc* grid, double* out_arr, size_t buf_size);
+    StatusCode t4a_qgrid_disc_upper_bound(const t4a_qgrid_disc* grid, double* out_arr, size_t buf_size);
+    StatusCode t4a_qgrid_disc_grid_step(const t4a_qgrid_disc* grid, double* out_arr, size_t buf_size);
+
+    // DiscretizedGrid coordinate conversions
+    StatusCode t4a_qgrid_disc_origcoord_to_quantics(
+        const t4a_qgrid_disc* grid, const double* coord_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_qgrid_disc_quantics_to_origcoord(
+        const t4a_qgrid_disc* grid, const int64_t* quantics_arr, size_t n_quantics,
+        double* out_arr, size_t buf_size
+    );
+    StatusCode t4a_qgrid_disc_origcoord_to_grididx(
+        const t4a_qgrid_disc* grid, const double* coord_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size
+    );
+    StatusCode t4a_qgrid_disc_grididx_to_origcoord(
+        const t4a_qgrid_disc* grid, const int64_t* grididx_arr, size_t ndims,
+        double* out_arr, size_t buf_size
+    );
+    StatusCode t4a_qgrid_disc_grididx_to_quantics(
+        const t4a_qgrid_disc* grid, const int64_t* grididx_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_qgrid_disc_quantics_to_grididx(
+        const t4a_qgrid_disc* grid, const int64_t* quantics_arr, size_t n_quantics,
+        int64_t* out_arr, size_t buf_size, size_t* n_out
+    );
+
+    // InherentDiscreteGrid lifecycle
+    StatusCode t4a_qgrid_int_new(
+        size_t ndims,
+        const size_t* rs_arr,
+        const int64_t* origin_arr,
+        t4a_unfolding_scheme unfolding,
+        t4a_qgrid_int** out
+    );
+    void t4a_qgrid_int_release(t4a_qgrid_int* ptr);
+    t4a_qgrid_int* t4a_qgrid_int_clone(const t4a_qgrid_int* ptr);
+
+    // InherentDiscreteGrid properties
+    StatusCode t4a_qgrid_int_ndims(const t4a_qgrid_int* grid, size_t* out);
+    StatusCode t4a_qgrid_int_rs(const t4a_qgrid_int* grid, size_t* out_arr, size_t buf_size);
+    StatusCode t4a_qgrid_int_local_dims(const t4a_qgrid_int* grid, size_t* out_arr, size_t buf_size, size_t* n_out);
+    StatusCode t4a_qgrid_int_origin(const t4a_qgrid_int* grid, int64_t* out_arr, size_t buf_size);
+
+    // InherentDiscreteGrid coordinate conversions
+    StatusCode t4a_qgrid_int_origcoord_to_quantics(
+        const t4a_qgrid_int* grid, const int64_t* coord_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_qgrid_int_quantics_to_origcoord(
+        const t4a_qgrid_int* grid, const int64_t* quantics_arr, size_t n_quantics,
+        int64_t* out_arr, size_t buf_size
+    );
+    StatusCode t4a_qgrid_int_origcoord_to_grididx(
+        const t4a_qgrid_int* grid, const int64_t* coord_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size
+    );
+    StatusCode t4a_qgrid_int_grididx_to_origcoord(
+        const t4a_qgrid_int* grid, const int64_t* grididx_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size
+    );
+    StatusCode t4a_qgrid_int_grididx_to_quantics(
+        const t4a_qgrid_int* grid, const int64_t* grididx_arr, size_t ndims,
+        int64_t* out_arr, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_qgrid_int_quantics_to_grididx(
+        const t4a_qgrid_int* grid, const int64_t* quantics_arr, size_t n_quantics,
+        int64_t* out_arr, size_t buf_size, size_t* n_out
+    );
 """)
