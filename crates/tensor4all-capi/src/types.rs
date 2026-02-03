@@ -5,6 +5,7 @@
 
 use std::ffi::c_void;
 use tensor4all_core::{DynIndex, Storage, TensorDynLen};
+use tensor4all_quanticstci::QuanticsTensorCI2;
 use tensor4all_treetn::DefaultTreeTN;
 
 /// The internal index type we're wrapping (DynIndex = Index<DynId, TagSet>)
@@ -506,6 +507,58 @@ impl From<quanticsgrids::UnfoldingScheme> for t4a_unfolding_scheme {
         }
     }
 }
+
+// ============================================================================
+// QuanticsTCI type
+// ============================================================================
+
+/// The internal QuanticsTensorCI2 type we're wrapping.
+pub(crate) type InternalQuanticsTCI = QuanticsTensorCI2<f64>;
+
+/// Opaque quantics TCI type for C API
+///
+/// Wraps `QuanticsTensorCI2<f64>` which combines TCI with quantics grid information
+/// for seamless interpolation of functions on quantics grids.
+///
+/// The internal structure is hidden using a void pointer.
+#[repr(C)]
+pub struct t4a_qtci_f64 {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_qtci_f64 {
+    /// Create a new t4a_qtci_f64 from an InternalQuanticsTCI
+    pub(crate) fn new(qtci: InternalQuanticsTCI) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(qtci)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner InternalQuanticsTCI
+    pub(crate) fn inner(&self) -> &InternalQuanticsTCI {
+        unsafe { &*(self._private as *const InternalQuanticsTCI) }
+    }
+
+    /// Get a mutable reference to the inner InternalQuanticsTCI
+    #[allow(dead_code)]
+    pub(crate) fn inner_mut(&mut self) -> &mut InternalQuanticsTCI {
+        unsafe { &mut *(self._private as *mut InternalQuanticsTCI) }
+    }
+}
+
+impl Drop for t4a_qtci_f64 {
+    fn drop(&mut self) {
+        unsafe {
+            if !self._private.is_null() {
+                let _ = Box::from_raw(self._private as *mut InternalQuanticsTCI);
+            }
+        }
+    }
+}
+
+// Safety: t4a_qtci_f64 is Send + Sync because InternalQuanticsTCI is Send + Sync
+unsafe impl Send for t4a_qtci_f64 {}
+unsafe impl Sync for t4a_qtci_f64 {}
 
 #[cfg(test)]
 mod tests {
