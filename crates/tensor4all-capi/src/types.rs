@@ -6,7 +6,7 @@
 use std::ffi::c_void;
 use tensor4all_core::{DynIndex, Storage, TensorDynLen};
 use tensor4all_quanticstci::QuanticsTensorCI2;
-use tensor4all_treetn::DefaultTreeTN;
+use tensor4all_treetn::{DefaultTreeTN, LinearOperator};
 
 /// The internal index type we're wrapping (DynIndex = Index<DynId, TagSet>)
 pub(crate) type InternalIndex = DynIndex;
@@ -559,6 +559,98 @@ impl Drop for t4a_qtci_f64 {
 // Safety: t4a_qtci_f64 is Send + Sync because InternalQuanticsTCI is Send + Sync
 unsafe impl Send for t4a_qtci_f64 {}
 unsafe impl Sync for t4a_qtci_f64 {}
+
+// ============================================================================
+// LinearOperator (QuanticsTransform) type
+// ============================================================================
+
+/// The internal LinearOperator type we're wrapping.
+/// This is the same as `QuanticsOperator` in tensor4all-quanticstransform.
+pub(crate) type InternalLinearOperator = LinearOperator<TensorDynLen, usize>;
+
+/// Opaque linear operator type for C API
+///
+/// Wraps `LinearOperator<TensorDynLen, usize>` (= `QuanticsOperator`) which represents
+/// a quantics transformation operator (shift, flip, Fourier, etc.).
+///
+/// The internal structure is hidden using a void pointer.
+#[repr(C)]
+pub struct t4a_linop {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_linop {
+    /// Create a new t4a_linop from an InternalLinearOperator
+    pub(crate) fn new(op: InternalLinearOperator) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(op)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner InternalLinearOperator
+    pub(crate) fn inner(&self) -> &InternalLinearOperator {
+        unsafe { &*(self._private as *const InternalLinearOperator) }
+    }
+
+    /// Get a mutable reference to the inner InternalLinearOperator
+    #[allow(dead_code)]
+    pub(crate) fn inner_mut(&mut self) -> &mut InternalLinearOperator {
+        unsafe { &mut *(self._private as *mut InternalLinearOperator) }
+    }
+}
+
+impl Clone for t4a_linop {
+    fn clone(&self) -> Self {
+        let inner = self.inner().clone();
+        Self::new(inner)
+    }
+}
+
+impl Drop for t4a_linop {
+    fn drop(&mut self) {
+        unsafe {
+            if !self._private.is_null() {
+                let _ = Box::from_raw(self._private as *mut InternalLinearOperator);
+            }
+        }
+    }
+}
+
+// Safety: t4a_linop is Send + Sync because InternalLinearOperator is Send + Sync
+unsafe impl Send for t4a_linop {}
+unsafe impl Sync for t4a_linop {}
+
+/// Boundary condition enum for C API
+///
+/// Used for quantics transformation operators (shift, flip).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum t4a_boundary_condition {
+    /// Periodic boundary condition
+    Periodic = 0,
+    /// Open boundary condition
+    Open = 1,
+}
+
+impl From<t4a_boundary_condition> for tensor4all_quanticstransform::BoundaryCondition {
+    fn from(bc: t4a_boundary_condition) -> Self {
+        match bc {
+            t4a_boundary_condition::Periodic => {
+                tensor4all_quanticstransform::BoundaryCondition::Periodic
+            }
+            t4a_boundary_condition::Open => tensor4all_quanticstransform::BoundaryCondition::Open,
+        }
+    }
+}
+
+impl From<tensor4all_quanticstransform::BoundaryCondition> for t4a_boundary_condition {
+    fn from(bc: tensor4all_quanticstransform::BoundaryCondition) -> Self {
+        match bc {
+            tensor4all_quanticstransform::BoundaryCondition::Periodic => Self::Periodic,
+            tensor4all_quanticstransform::BoundaryCondition::Open => Self::Open,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
