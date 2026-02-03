@@ -345,59 +345,91 @@ ffi.cdef("""
     );
 
     // ========================================================================
-    // TensorTrain (ITensorLike) functions
+    // TensorTrain (legacy, kept for HDF5 compatibility)
     // ========================================================================
 
-    // Lifecycle
     void t4a_tensortrain_release(t4a_tensortrain* ptr);
     t4a_tensortrain* t4a_tensortrain_clone(const t4a_tensortrain* ptr);
-    int t4a_tensortrain_is_assigned(const t4a_tensortrain* ptr);
+
+    // ========================================================================
+    // TreeTN functions (tree tensor network)
+    // ========================================================================
+
+    // Opaque type
+    typedef struct { void* _private; } t4a_treetn;
+
+    // Lifecycle
+    void t4a_treetn_release(t4a_treetn* ptr);
+    t4a_treetn* t4a_treetn_clone(const t4a_treetn* ptr);
+    int t4a_treetn_is_assigned(const t4a_treetn* ptr);
 
     // Constructors
-    t4a_tensortrain* t4a_tt_new(const t4a_tensor** tensors, size_t num_tensors);
-    t4a_tensortrain* t4a_tt_new_empty(void);
-
-    // Accessors
-    StatusCode t4a_tt_len(const t4a_tensortrain* ptr, size_t* out_len);
-    int t4a_tt_is_empty(const t4a_tensortrain* ptr);
-    t4a_tensor* t4a_tt_tensor(const t4a_tensortrain* ptr, size_t site);
-    StatusCode t4a_tt_set_tensor(t4a_tensortrain* ptr, size_t site, const t4a_tensor* tensor);
-    StatusCode t4a_tt_bond_dims(const t4a_tensortrain* ptr, size_t* out_dims, size_t buf_len);
-    StatusCode t4a_tt_maxbonddim(const t4a_tensortrain* ptr, size_t* out_max);
-    t4a_index* t4a_tt_linkind(const t4a_tensortrain* ptr, size_t site);
-
-    // Orthogonality
-    int t4a_tt_isortho(const t4a_tensortrain* ptr);
-    StatusCode t4a_tt_orthocenter(const t4a_tensortrain* ptr, size_t* out_center);
-    StatusCode t4a_tt_llim(const t4a_tensortrain* ptr, int* out_llim);
-    StatusCode t4a_tt_rlim(const t4a_tensortrain* ptr, int* out_rlim);
-    StatusCode t4a_tt_canonical_form(const t4a_tensortrain* ptr, int* out_form);
-
-    // Operations
-    StatusCode t4a_tt_orthogonalize(t4a_tensortrain* ptr, size_t site);
-    StatusCode t4a_tt_orthogonalize_with(t4a_tensortrain* ptr, size_t site, int form);
-    StatusCode t4a_tt_truncate(t4a_tensortrain* ptr, double rtol, double cutoff, size_t max_rank);
-    StatusCode t4a_tt_norm(const t4a_tensortrain* ptr, double* out_norm);
-    StatusCode t4a_tt_inner(const t4a_tensortrain* p1, const t4a_tensortrain* p2, double* out_re, double* out_im);
-
-    // Contraction
-    t4a_tensortrain* t4a_tt_contract(
-        const t4a_tensortrain* p1, const t4a_tensortrain* p2,
-        int method, size_t max_rank, double rtol, double cutoff, size_t nhalfsweeps
+    StatusCode t4a_treetn_new(
+        const t4a_tensor** tensors,
+        size_t n_tensors,
+        t4a_treetn** out
     );
 
-    // Addition
-    t4a_tensortrain* t4a_tt_add(const t4a_tensortrain* p1, const t4a_tensortrain* p2);
+    // Accessors
+    StatusCode t4a_treetn_num_vertices(const t4a_treetn* treetn, size_t* out);
+    StatusCode t4a_treetn_num_edges(const t4a_treetn* treetn, size_t* out);
+    StatusCode t4a_treetn_tensor(const t4a_treetn* treetn, size_t vertex, t4a_tensor** out);
+    StatusCode t4a_treetn_set_tensor(t4a_treetn* treetn, size_t vertex, const t4a_tensor* tensor);
+    StatusCode t4a_treetn_neighbors(
+        const t4a_treetn* treetn, size_t vertex,
+        size_t* out_buf, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_treetn_linkind(
+        const t4a_treetn* treetn, size_t v1, size_t v2,
+        t4a_index** out
+    );
+    StatusCode t4a_treetn_siteinds(
+        const t4a_treetn* treetn, size_t vertex,
+        t4a_index** out_buf, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_treetn_bond_dim(
+        const t4a_treetn* treetn, size_t v1, size_t v2,
+        size_t* out
+    );
 
-    // Dense conversion
-    t4a_tensor* t4a_tt_to_dense(const t4a_tensortrain* ptr);
+    // MPS convenience
+    StatusCode t4a_treetn_linkind_at(const t4a_treetn* treetn, size_t i, t4a_index** out);
+    StatusCode t4a_treetn_bond_dim_at(const t4a_treetn* treetn, size_t i, size_t* out);
+    StatusCode t4a_treetn_bond_dims(const t4a_treetn* treetn, size_t* out, size_t n);
+    StatusCode t4a_treetn_maxbonddim(const t4a_treetn* treetn, size_t* out);
 
-    // Linear solver
-    t4a_tensortrain* t4a_tt_linsolve(
-        const t4a_tensortrain* op, const t4a_tensortrain* rhs, const t4a_tensortrain* init,
-        size_t nhalfsweeps, size_t max_rank, double rtol, double cutoff,
-        double krylov_tol, size_t krylov_maxiter, size_t krylov_dim,
-        double a0, double a1, double convergence_tol
+    // Orthogonalization
+    StatusCode t4a_treetn_orthogonalize(t4a_treetn* treetn, size_t vertex);
+    StatusCode t4a_treetn_orthogonalize_with(t4a_treetn* treetn, size_t vertex, int form);
+    StatusCode t4a_treetn_ortho_center(
+        const t4a_treetn* treetn,
+        size_t* out_vertices, size_t buf_size, size_t* n_out
+    );
+    StatusCode t4a_treetn_canonical_form(const t4a_treetn* treetn, int* out);
+
+    // Operations
+    StatusCode t4a_treetn_truncate(t4a_treetn* treetn, double rtol, double cutoff, size_t maxdim);
+    StatusCode t4a_treetn_inner(
+        const t4a_treetn* a, const t4a_treetn* b,
+        double* out_re, double* out_im
+    );
+    StatusCode t4a_treetn_norm(t4a_treetn* treetn, double* out);
+    StatusCode t4a_treetn_lognorm(t4a_treetn* treetn, double* out);
+    StatusCode t4a_treetn_add(
+        const t4a_treetn* a, const t4a_treetn* b,
+        t4a_treetn** out
+    );
+    StatusCode t4a_treetn_contract(
+        const t4a_treetn* a, const t4a_treetn* b,
+        int method, double rtol, double cutoff, size_t maxdim,
+        t4a_treetn** out
+    );
+    StatusCode t4a_treetn_to_dense(const t4a_treetn* treetn, t4a_tensor** out);
+    StatusCode t4a_treetn_linsolve(
+        const t4a_treetn* op, const t4a_treetn* rhs, const t4a_treetn* init,
+        double a0, double a1, size_t nsweeps,
+        double rtol, double cutoff, size_t maxdim,
+        t4a_treetn** out
     );
 
     // ========================================================================

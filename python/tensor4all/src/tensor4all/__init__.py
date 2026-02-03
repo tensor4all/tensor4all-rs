@@ -41,10 +41,12 @@ from .simplett import SimpleTensorTrain
 # TensorCI types (tensor4all-tensorci)
 from .tensorci import TensorCI2, crossinterpolate2, crossinterpolate2_tci
 
-# ITensorLike types (tensor4all-itensorlike)
-from .tensortrain import TensorTrain, MPS, MPO
-from .tensortrain import linsolve as tt_linsolve
-from .tensortrain import contract as tt_contract
+# TreeTN types (tree tensor network: MPS, MPO, TTN)
+from .treetn import TreeTensorNetwork, MPS, MPO
+from .treetn import inner as ttn_inner
+from .treetn import lognorm as ttn_lognorm
+from .treetn import linsolve as ttn_linsolve
+from .treetn import contract as ttn_contract
 
 # HDF5 functions (ITensors.jl compatible)
 from .hdf5 import save_itensor, load_itensor
@@ -79,12 +81,14 @@ __all__ = [
     "TensorCI2",
     "crossinterpolate2",
     "crossinterpolate2_tci",
-    # ITensorLike types
-    "TensorTrain",
+    # TreeTN types
+    "TreeTensorNetwork",
     "MPS",
     "MPO",
-    "tt_linsolve",
-    "tt_contract",
+    "ttn_inner",
+    "ttn_lognorm",
+    "ttn_linsolve",
+    "ttn_contract",
     # HDF5 functions
     "save_itensor",
     "load_itensor",
