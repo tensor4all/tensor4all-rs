@@ -936,10 +936,10 @@ include("SimpleTT.jl")
 include("TensorCI.jl")
 
 # ============================================================================
-# ITensorLike Submodule (TensorTrain)
+# TreeTN Submodule (Tree Tensor Network: MPS, MPO, TTN)
 # ============================================================================
-# TensorTrain functionality is in a separate submodule.
-# Use: using Tensor4all.ITensorLike
-include("ITensorLike.jl")
+# Tree tensor network functionality is in a separate submodule.
+# Use: using Tensor4all.TreeTN
+include("TreeTN.jl")
 
 end # module
