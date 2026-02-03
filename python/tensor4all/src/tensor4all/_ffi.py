@@ -601,4 +601,39 @@ ffi.cdef("""
     StatusCode t4a_qtci_f64_sum(const t4a_qtci_f64* ptr, double* out_value);
     StatusCode t4a_qtci_f64_integral(const t4a_qtci_f64* ptr, double* out_value);
     t4a_simplett_f64* t4a_qtci_f64_to_tensor_train(const t4a_qtci_f64* ptr);
+
+    // ========================================================================
+    // QuanticsTransform functions
+    // ========================================================================
+
+    // Opaque type
+    typedef struct { void* _private; } t4a_linop;
+
+    // Boundary condition enum
+    typedef enum {
+        T4A_BC_PERIODIC = 0,
+        T4A_BC_OPEN = 1,
+    } t4a_boundary_condition;
+
+    // Lifecycle
+    void t4a_linop_release(t4a_linop* ptr);
+    t4a_linop* t4a_linop_clone(const t4a_linop* ptr);
+    int t4a_linop_is_assigned(const t4a_linop* ptr);
+
+    // Operator construction
+    StatusCode t4a_qtransform_shift(size_t r, int64_t offset, int bc, t4a_linop** out);
+    StatusCode t4a_qtransform_flip(size_t r, int bc, t4a_linop** out);
+    StatusCode t4a_qtransform_phase_rotation(size_t r, double theta, t4a_linop** out);
+    StatusCode t4a_qtransform_cumsum(size_t r, t4a_linop** out);
+    StatusCode t4a_qtransform_fourier(size_t r, int forward, size_t maxbonddim, double tolerance, t4a_linop** out);
+
+    // Operator application
+    StatusCode t4a_linop_apply(
+        const t4a_linop* op,
+        const t4a_treetn* state,
+        int method,
+        double rtol,
+        size_t maxdim,
+        t4a_treetn** out
+    );
 """)

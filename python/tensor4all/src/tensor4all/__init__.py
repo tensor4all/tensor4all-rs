@@ -58,6 +58,17 @@ from .quanticstci import (
     quanticscrossinterpolate_discrete,
 )
 
+# QuanticsTransform types
+from .quanticstransform import (
+    LinearOperator,
+    BoundaryCondition,
+    shift_operator,
+    flip_operator,
+    phase_rotation_operator,
+    cumsum_operator,
+    fourier_operator,
+)
+
 # HDF5 functions (ITensors.jl compatible)
 from .hdf5 import save_itensor, load_itensor, save_mps, load_mps
 
@@ -106,6 +117,14 @@ __all__ = [
     "QuanticsTensorCI2",
     "quanticscrossinterpolate",
     "quanticscrossinterpolate_discrete",
+    # QuanticsTransform types
+    "LinearOperator",
+    "BoundaryCondition",
+    "shift_operator",
+    "flip_operator",
+    "phase_rotation_operator",
+    "cumsum_operator",
+    "fourier_operator",
     # HDF5 functions
     "save_itensor",
     "load_itensor",
