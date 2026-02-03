@@ -125,26 +125,47 @@ println!("Rank: {}, Final error: {:.2e}", tci.rank(), errors.last().unwrap());
 
 ## Language Bindings
 
-Both bindings require a Rust toolchain. Install from <https://rustup.rs/>.
-
 Binding documentation in this repo is built as an mdBook (`docs/book/`). Code blocks in the book are included from standalone scripts under `docs/examples/` and are executed in CI.
 
 ### Julia
 
-#### Install (development mode, requires Rust toolchain)
+**Note:** No Rust installation required. The build script uses [RustToolChain.jl](https://github.com/AtelierArith/RustToolChain.jl) to automatically download and manage the Rust toolchain.
+
+#### Install from GitHub
+
+```julia
+using Pkg
+Pkg.add(url="https://github.com/tensor4all/tensor4all-rs", subdir="julia/Tensor4all.jl")
+```
+
+#### Development mode
 
 ```julia
 using Pkg
 Pkg.develop(url="https://github.com/tensor4all/tensor4all-rs", subdir="julia/Tensor4all.jl")
 ```
 
-This clones the repository to `~/.julia/dev/Tensor4all/` and builds the Rust C library automatically via `deps/build.jl`.
+#### Local development with tensor4all-rs
+
+For active development on both Julia and Rust code, place both repositories side by side:
+
+```
+your-projects/
+├── tensor4all-rs/    # Rust workspace
+└── Tensor4all.jl/    # Julia package (or ~/.julia/dev/Tensor4all/)
+```
+
+The build script automatically detects `../tensor4all-rs/` and uses it for building. Alternatively, set the environment variable:
+
+```julia
+ENV["TENSOR4ALL_RS_PATH"] = "/path/to/tensor4all-rs"
+Pkg.build("Tensor4all")
+```
 
 #### Rebuild after Rust code changes
 
 ```julia
 using Pkg; Pkg.build("Tensor4all")
-Base.compilecache(Base.identify_package("Tensor4all"))
 ```
 
 #### Quick example
@@ -183,7 +204,9 @@ CI runs these examples as part of `./scripts/run_julia_tests.sh`.
 
 ### Python
 
-#### Install from GitHub (requires Rust toolchain)
+**Note:** Python bindings require a Rust toolchain. Install from <https://rustup.rs/>.
+
+#### Install from GitHub
 
 ```bash
 uv pip install "tensor4all @ git+https://github.com/tensor4all/tensor4all-rs#subdirectory=python/tensor4all"
