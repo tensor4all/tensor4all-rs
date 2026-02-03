@@ -14,6 +14,7 @@ using ..SimpleTT: SimpleTensorTrain
 
 export QuanticsTensorCI2
 export quanticscrossinterpolate, quanticscrossinterpolate_discrete
+export rank, link_dims, evaluate, sum, integral, to_tensor_train
 
 # ============================================================================
 # Callback infrastructure for passing Julia functions to Rust

@@ -9,7 +9,7 @@ using Tensor4all.QuanticsGrids
 # ANCHOR: discretized
 grid = DiscretizedGrid(2, [3, 3], [0.0, 0.0], [1.0, 1.0])
 @assert ndims(grid) == 2
-@assert length(local_dims(grid)) > 0
+@assert length(QuanticsGrids.local_dimensions(grid)) > 0
 # ANCHOR_END: discretized
 
 # ANCHOR: coord_conversion
@@ -23,7 +23,7 @@ coord_back = quantics_to_origcoord(grid, q)
 # ANCHOR_END: coord_conversion
 
 # ANCHOR: inherent_discrete
-igrid = InherentDiscreteGrid(1, [4], [0])
+igrid = InherentDiscreteGrid(1, [4]; origin=[0])
 @assert ndims(igrid) == 1
 
 # Integer coordinates -> quantics -> back

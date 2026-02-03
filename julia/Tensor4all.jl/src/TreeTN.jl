@@ -154,12 +154,9 @@ function MPS(tensors::Vector{Tensor})
     return TreeTensorNetwork{Int}(out[], node_map, node_names)
 end
 
-"""
-    MPO(tensors::Vector{Tensor})
-
-Create an MPO from a vector of tensors. Vertices are named 1, 2, ..., n (1-indexed).
-"""
-MPO(tensors::Vector{Tensor}) = MPS(tensors)
+# Note: MPO(tensors::Vector{Tensor}) is not defined separately because
+# MPO === MPS === TreeTensorNetwork{Int}, so MPS(tensors) works for both.
+# Defining a separate function would overwrite the MPS constructor.
 
 # ============================================================================
 # General TreeTN constructor

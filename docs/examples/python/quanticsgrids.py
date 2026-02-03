@@ -7,9 +7,9 @@ from tensor4all import DiscretizedGrid, InherentDiscreteGrid
 
 
 # ANCHOR: discretized
-grid = DiscretizedGrid(ndims=2, rs=[3, 3], lower=[0.0, 0.0], upper=[1.0, 1.0])
+grid = DiscretizedGrid(ndims=2, R=[3, 3], lower=[0.0, 0.0], upper=[1.0, 1.0])
 assert grid.ndims == 2
-assert len(grid.local_dims) > 0
+assert len(grid.local_dimensions) > 0
 # ANCHOR_END: discretized
 
 
@@ -25,7 +25,7 @@ assert all(abs(a - b) < 0.2 for a, b in zip(coord, coord_back))
 
 
 # ANCHOR: inherent_discrete
-igrid = InherentDiscreteGrid(ndims=1, rs=[4], origin=[0])
+igrid = InherentDiscreteGrid(ndims=1, R=[4], origin=[0])
 assert igrid.ndims == 1
 
 # Integer coordinates -> quantics -> back

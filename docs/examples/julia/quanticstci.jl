@@ -11,8 +11,8 @@ using Tensor4all.SimpleTT: evaluate
 # Interpolate a simple function on a 2D discrete grid
 # Grid indices are 1-indexed: i ∈ {1, ..., 4}, j ∈ {1, ..., 4}
 f(i, j) = Float64(i + j)
-qtci = quanticscrossinterpolate_discrete([4, 4], f; tolerance=1e-10)
-@assert rank(qtci) > 0
+qtci = quanticscrossinterpolate_discrete([4, 4], f; tolerance=1e-10, unfoldingscheme=:fused)
+@assert QuanticsTCI.rank(qtci) > 0
 # ANCHOR_END: discrete
 
 # ANCHOR: evaluate
@@ -22,7 +22,7 @@ val = qtci(3, 4)
 # ANCHOR_END: evaluate
 
 # ANCHOR: sum
-s = sum(qtci)
+s = QuanticsTCI.sum(qtci)
 @assert isfinite(s)
 @assert s > 0
 # ANCHOR_END: sum
@@ -38,7 +38,7 @@ using Tensor4all.QuanticsGrids
 grid = DiscretizedGrid(1, [4], [0.0], [1.0])
 g(x) = x^2
 qtci2 = quanticscrossinterpolate(grid, g; tolerance=1e-8)
-@assert rank(qtci2) > 0
+@assert QuanticsTCI.rank(qtci2) > 0
 
 # Integral of x^2 from 0 to 1 should be ≈ 1/3
 integ = integral(qtci2)

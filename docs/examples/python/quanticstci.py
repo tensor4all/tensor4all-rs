@@ -18,7 +18,7 @@ def f(i, j):
     return float(i + j)
 
 
-qtci = quanticscrossinterpolate_discrete([4, 4], f, tolerance=1e-10)
+qtci = quanticscrossinterpolate_discrete([4, 4], f, tolerance=1e-10, unfoldingscheme="fused")
 assert qtci.rank > 0
 # ANCHOR_END: discrete
 
@@ -44,7 +44,7 @@ assert tt.n_sites > 0
 
 # ANCHOR: continuous
 # Interpolate on a continuous domain using a DiscretizedGrid
-grid = DiscretizedGrid(ndims=1, rs=[4], lower=[0.0], upper=[1.0])
+grid = DiscretizedGrid(ndims=1, R=[4], lower=[0.0], upper=[1.0])
 
 
 def g(x):
