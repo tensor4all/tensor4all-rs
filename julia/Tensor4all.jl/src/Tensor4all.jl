@@ -942,4 +942,11 @@ include("TensorCI.jl")
 # Use: using Tensor4all.TreeTN
 include("TreeTN.jl")
 
+# ============================================================================
+# QuanticsGrids Submodule
+# ============================================================================
+# Quantics grid types for coordinate conversions in QTT methods.
+# Use: using Tensor4all.QuanticsGrids
+include("QuanticsGrids.jl")
+
 end # module

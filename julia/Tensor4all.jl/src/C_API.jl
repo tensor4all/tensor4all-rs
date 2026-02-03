@@ -1464,4 +1464,368 @@ function t4a_hdf5_load_mps(filepath::AbstractString, name::AbstractString, out::
     )
 end
 
+# ============================================================================
+# QuanticsGrids: DiscretizedGrid functions
+# ============================================================================
+
+# Unfolding scheme enum (must match Rust side)
+const UNFOLDING_FUSED = Cint(0)
+const UNFOLDING_INTERLEAVED = Cint(1)
+
+"""
+    t4a_qgrid_disc_new(ndims, rs_arr, lower_arr, upper_arr, unfolding, out) -> Cint
+"""
+function t4a_qgrid_disc_new(ndims::Integer, rs_arr, lower_arr, upper_arr, unfolding::Integer, out)
+    return ccall(
+        (:t4a_qgrid_disc_new, libpath()),
+        Cint,
+        (Csize_t, Ptr{Csize_t}, Ptr{Cdouble}, Ptr{Cdouble}, Cint, Ptr{Ptr{Cvoid}}),
+        Csize_t(ndims),
+        rs_arr,
+        lower_arr,
+        upper_arr,
+        Cint(unfolding),
+        out
+    )
+end
+
+function t4a_qgrid_disc_release(ptr::Ptr{Cvoid})
+    ptr == C_NULL && return
+    ccall(
+        (:t4a_qgrid_disc_release, libpath()),
+        Cvoid,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+function t4a_qgrid_disc_clone(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_qgrid_disc_clone, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+function t4a_qgrid_disc_ndims(ptr::Ptr{Cvoid}, out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_disc_ndims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out
+    )
+end
+
+function t4a_qgrid_disc_rs(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_rs, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t),
+        ptr,
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_local_dims(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_disc_local_dims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+function t4a_qgrid_disc_lower_bound(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_lower_bound, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}, Csize_t),
+        ptr,
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_upper_bound(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_upper_bound, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}, Csize_t),
+        ptr,
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_grid_step(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_grid_step, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}, Csize_t),
+        ptr,
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_origcoord_to_quantics(ptr::Ptr{Cvoid}, coord_arr, ndims::Integer,
+                                                out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_disc_origcoord_to_quantics, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}, Csize_t, Ptr{Int64}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        coord_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+function t4a_qgrid_disc_quantics_to_origcoord(ptr::Ptr{Cvoid}, quantics_arr, n_quantics::Integer,
+                                                out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_quantics_to_origcoord, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Cdouble}, Csize_t),
+        ptr,
+        quantics_arr,
+        Csize_t(n_quantics),
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_origcoord_to_grididx(ptr::Ptr{Cvoid}, coord_arr, ndims::Integer,
+                                               out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_origcoord_to_grididx, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}, Csize_t, Ptr{Int64}, Csize_t),
+        ptr,
+        coord_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_grididx_to_origcoord(ptr::Ptr{Cvoid}, grididx_arr, ndims::Integer,
+                                               out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_disc_grididx_to_origcoord, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Cdouble}, Csize_t),
+        ptr,
+        grididx_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_disc_grididx_to_quantics(ptr::Ptr{Cvoid}, grididx_arr, ndims::Integer,
+                                              out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_disc_grididx_to_quantics, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        grididx_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+function t4a_qgrid_disc_quantics_to_grididx(ptr::Ptr{Cvoid}, quantics_arr, n_quantics::Integer,
+                                              out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_disc_quantics_to_grididx, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        quantics_arr,
+        Csize_t(n_quantics),
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+# ============================================================================
+# QuanticsGrids: InherentDiscreteGrid functions
+# ============================================================================
+
+function t4a_qgrid_int_new(ndims::Integer, rs_arr, origin_arr, unfolding::Integer, out)
+    return ccall(
+        (:t4a_qgrid_int_new, libpath()),
+        Cint,
+        (Csize_t, Ptr{Csize_t}, Ptr{Int64}, Cint, Ptr{Ptr{Cvoid}}),
+        Csize_t(ndims),
+        rs_arr,
+        origin_arr,
+        Cint(unfolding),
+        out
+    )
+end
+
+function t4a_qgrid_int_release(ptr::Ptr{Cvoid})
+    ptr == C_NULL && return
+    ccall(
+        (:t4a_qgrid_int_release, libpath()),
+        Cvoid,
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+function t4a_qgrid_int_clone(ptr::Ptr{Cvoid})
+    return ccall(
+        (:t4a_qgrid_int_clone, libpath()),
+        Ptr{Cvoid},
+        (Ptr{Cvoid},),
+        ptr
+    )
+end
+
+function t4a_qgrid_int_ndims(ptr::Ptr{Cvoid}, out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_int_ndims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out
+    )
+end
+
+function t4a_qgrid_int_rs(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_int_rs, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t),
+        ptr,
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_int_local_dims(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_int_local_dims, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+function t4a_qgrid_int_origin(ptr::Ptr{Cvoid}, out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_int_origin, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t),
+        ptr,
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_int_origcoord_to_quantics(ptr::Ptr{Cvoid}, coord_arr, ndims::Integer,
+                                               out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_int_origcoord_to_quantics, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        coord_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+function t4a_qgrid_int_quantics_to_origcoord(ptr::Ptr{Cvoid}, quantics_arr, n_quantics::Integer,
+                                               out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_int_quantics_to_origcoord, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t),
+        ptr,
+        quantics_arr,
+        Csize_t(n_quantics),
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_int_origcoord_to_grididx(ptr::Ptr{Cvoid}, coord_arr, ndims::Integer,
+                                              out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_int_origcoord_to_grididx, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t),
+        ptr,
+        coord_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_int_grididx_to_origcoord(ptr::Ptr{Cvoid}, grididx_arr, ndims::Integer,
+                                              out_arr, buf_size::Integer)
+    return ccall(
+        (:t4a_qgrid_int_grididx_to_origcoord, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t),
+        ptr,
+        grididx_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size)
+    )
+end
+
+function t4a_qgrid_int_grididx_to_quantics(ptr::Ptr{Cvoid}, grididx_arr, ndims::Integer,
+                                             out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_int_grididx_to_quantics, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        grididx_arr,
+        Csize_t(ndims),
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+function t4a_qgrid_int_quantics_to_grididx(ptr::Ptr{Cvoid}, quantics_arr, n_quantics::Integer,
+                                             out_arr, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_qgrid_int_quantics_to_grididx, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Int64}, Csize_t, Ptr{Int64}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        quantics_arr,
+        Csize_t(n_quantics),
+        out_arr,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
 end # module C_API
