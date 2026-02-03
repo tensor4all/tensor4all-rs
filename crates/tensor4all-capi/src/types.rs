@@ -5,7 +5,6 @@
 
 use std::ffi::c_void;
 use tensor4all_core::{DynIndex, Storage, TensorDynLen};
-use tensor4all_itensorlike::TensorTrain;
 use tensor4all_treetn::DefaultTreeTN;
 
 /// The internal index type we're wrapping (DynIndex = Index<DynId, TagSet>)
@@ -147,64 +146,6 @@ impl Drop for t4a_tensor {
 // Safety: t4a_tensor is Send + Sync because InternalTensor is Send + Sync
 unsafe impl Send for t4a_tensor {}
 unsafe impl Sync for t4a_tensor {}
-
-// ============================================================================
-// TensorTrain type
-// ============================================================================
-
-/// The internal tensor train type we're wrapping (TensorTrain is a concrete type, not generic)
-pub(crate) type InternalTensorTrain = TensorTrain;
-
-/// Opaque tensor train type for C API
-///
-/// Wraps `TensorTrain` which corresponds to ITensorMPS.jl's `MPS`.
-///
-/// The internal structure is hidden using a void pointer.
-#[repr(C)]
-pub struct t4a_tensortrain {
-    pub(crate) _private: *const c_void,
-}
-
-impl t4a_tensortrain {
-    /// Create a new t4a_tensortrain from an InternalTensorTrain
-    pub(crate) fn new(tt: InternalTensorTrain) -> Self {
-        Self {
-            _private: Box::into_raw(Box::new(tt)) as *const c_void,
-        }
-    }
-
-    /// Get a reference to the inner InternalTensorTrain
-    pub(crate) fn inner(&self) -> &InternalTensorTrain {
-        unsafe { &*(self._private as *const InternalTensorTrain) }
-    }
-
-    /// Get a mutable reference to the inner InternalTensorTrain
-    #[allow(dead_code)]
-    pub(crate) fn inner_mut(&mut self) -> &mut InternalTensorTrain {
-        unsafe { &mut *(self._private as *mut InternalTensorTrain) }
-    }
-}
-
-impl Clone for t4a_tensortrain {
-    fn clone(&self) -> Self {
-        let inner = self.inner().clone();
-        Self::new(inner)
-    }
-}
-
-impl Drop for t4a_tensortrain {
-    fn drop(&mut self) {
-        unsafe {
-            if !self._private.is_null() {
-                let _ = Box::from_raw(self._private as *mut InternalTensorTrain);
-            }
-        }
-    }
-}
-
-// Safety: t4a_tensortrain is Send + Sync because InternalTensorTrain is Send + Sync
-unsafe impl Send for t4a_tensortrain {}
-unsafe impl Sync for t4a_tensortrain {}
 
 // ============================================================================
 // TreeTN type

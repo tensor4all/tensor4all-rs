@@ -49,7 +49,7 @@ from .treetn import linsolve as ttn_linsolve
 from .treetn import contract as ttn_contract
 
 # HDF5 functions (ITensors.jl compatible)
-from .hdf5 import save_itensor, load_itensor
+from .hdf5 import save_itensor, load_itensor, save_mps, load_mps
 
 # Exceptions
 from ._capi import (
@@ -92,6 +92,8 @@ __all__ = [
     # HDF5 functions
     "save_itensor",
     "load_itensor",
+    "save_mps",
+    "load_mps",
     # Exceptions
     "T4AError",
     "NullPointerError",

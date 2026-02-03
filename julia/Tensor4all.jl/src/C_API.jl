@@ -500,39 +500,6 @@ function t4a_tensor_onehot(rank::Integer, index_ptrs::Vector{Ptr{Cvoid}}, vals::
 end
 
 # ============================================================================
-# TensorTrain lifecycle functions (kept for HDF5 compatibility)
-# ============================================================================
-
-"""
-    t4a_tensortrain_release(ptr::Ptr{Cvoid})
-
-Release a tensor train (called by finalizer). Kept for HDF5 compatibility.
-"""
-function t4a_tensortrain_release(ptr::Ptr{Cvoid})
-    ptr == C_NULL && return
-    ccall(
-        (:t4a_tensortrain_release, libpath()),
-        Cvoid,
-        (Ptr{Cvoid},),
-        ptr
-    )
-end
-
-"""
-    t4a_tensortrain_clone(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
-
-Clone a tensor train. Kept for HDF5 compatibility.
-"""
-function t4a_tensortrain_clone(ptr::Ptr{Cvoid})
-    return ccall(
-        (:t4a_tensortrain_clone, libpath()),
-        Ptr{Cvoid},
-        (Ptr{Cvoid},),
-        ptr
-    )
-end
-
-# ============================================================================
 # TreeTN lifecycle functions
 # ============================================================================
 
@@ -1465,25 +1432,26 @@ function t4a_hdf5_load_itensor(filepath::AbstractString, name::AbstractString, o
 end
 
 """
-    t4a_hdf5_save_mps(filepath::AbstractString, name::AbstractString, tt::Ptr{Cvoid}) -> Cint
+    t4a_hdf5_save_mps(filepath::AbstractString, name::AbstractString, ttn::Ptr{Cvoid}) -> Cint
 
-Save a tensor train as an ITensorMPS.jl-compatible MPS in an HDF5 file.
+Save a tree tensor network (MPS) as an ITensorMPS.jl-compatible MPS in an HDF5 file.
 """
-function t4a_hdf5_save_mps(filepath::AbstractString, name::AbstractString, tt::Ptr{Cvoid})
+function t4a_hdf5_save_mps(filepath::AbstractString, name::AbstractString, ttn::Ptr{Cvoid})
     return ccall(
         (:t4a_hdf5_save_mps, libpath()),
         Cint,
         (Cstring, Cstring, Ptr{Cvoid}),
         filepath,
         name,
-        tt
+        ttn
     )
 end
 
 """
     t4a_hdf5_load_mps(filepath::AbstractString, name::AbstractString, out::Ref{Ptr{Cvoid}}) -> Cint
 
-Load a tensor train from an ITensorMPS.jl-compatible MPS in an HDF5 file.
+Load a tree tensor network (MPS) from an ITensorMPS.jl-compatible MPS in an HDF5 file.
+Returns a `t4a_treetn` handle.
 """
 function t4a_hdf5_load_mps(filepath::AbstractString, name::AbstractString, out::Ref{Ptr{Cvoid}})
     return ccall(

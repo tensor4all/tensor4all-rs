@@ -12,7 +12,6 @@ ffi.cdef("""
     // Opaque types
     typedef struct { void* _private; } t4a_index;
     typedef struct { void* _private; } t4a_tensor;
-    typedef struct { void* _private; } t4a_tensortrain;
 
     // Storage kind enum
     typedef enum {
@@ -345,13 +344,6 @@ ffi.cdef("""
     );
 
     // ========================================================================
-    // TensorTrain (legacy, kept for HDF5 compatibility)
-    // ========================================================================
-
-    void t4a_tensortrain_release(t4a_tensortrain* ptr);
-    t4a_tensortrain* t4a_tensortrain_clone(const t4a_tensortrain* ptr);
-
-    // ========================================================================
     // TreeTN functions (tree tensor network)
     // ========================================================================
 
@@ -451,12 +443,12 @@ ffi.cdef("""
     StatusCode t4a_hdf5_save_mps(
         const char* filepath,
         const char* name,
-        const t4a_tensortrain* tt
+        const t4a_treetn* ttn
     );
 
     StatusCode t4a_hdf5_load_mps(
         const char* filepath,
         const char* name,
-        t4a_tensortrain** out
+        t4a_treetn** out
     );
 """)

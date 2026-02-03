@@ -920,33 +920,26 @@ end
     load_mps(filepath::AbstractString, name::AbstractString) -> MPS
 
 Load an MPS from an HDF5 file in ITensorMPS.jl-compatible format.
+
+Returns a `TreeTensorNetwork{Int}` (MPS) with vertices named 1, 2, ..., n.
 """
 function load_mps(filepath::AbstractString, name::AbstractString)
     out = Ref{Ptr{Cvoid}}(C_NULL)
     status = C_API.t4a_hdf5_load_mps(filepath, name, out)
     C_API.check_status(status)
 
-    # We need to figure out how many vertices the loaded MPS has
-    # Query num_vertices from the handle
+    # The C API now returns a t4a_treetn handle directly.
+    # Query num_vertices to build the node map.
     n_out = Ref{Csize_t}(0)
-    # The HDF5 functions return a t4a_tensortrain, not t4a_treetn.
-    # We need to wrap it as a TensorTrain handle for HDF5 compatibility.
-    # For now, wrap the returned tensortrain handle directly.
-    # Note: HDF5 save/load still uses the old t4a_tensortrain type internally.
-    # The returned pointer is a t4a_tensortrain, not a t4a_treetn.
-    # We cannot directly use it as a TreeTN handle.
-    # We need to release via t4a_tensortrain_release.
-    # For now, we store it and release via the old function.
+    status = C_API.t4a_treetn_num_vertices(out[], n_out)
+    C_API.check_status(status)
+    n = Int(n_out[])
 
-    # Actually, let's check if the C API still returns t4a_tensortrain for HDF5.
-    # Since the HDF5 functions still use t4a_tensortrain internally, the returned
-    # handle cannot be used with treetn functions. We need a conversion or
-    # the user should handle this at a higher level.
-    #
-    # For now, just release the pointer and re-construct.
-    # TODO: This needs proper handling when HDF5 is updated to use treetn.
-    C_API.t4a_tensortrain_release(out[])
-    error("load_mps via HDF5 is not yet supported with TreeTN. HDF5 still uses the old t4a_tensortrain type.")
+    # Build node map: Julia 1-indexed -> C 0-indexed
+    node_map = Dict{Int, Int}(i => i - 1 for i in 1:n)
+    node_names = collect(1:n)
+
+    return TreeTensorNetwork{Int}(out[], node_map, node_names)
 end
 
 export save_mps, load_mps
