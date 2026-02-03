@@ -158,6 +158,17 @@ tt, err = crossinterpolate2(f, [4, 4, 4]; tolerance=1e-10)
 println(tt(0, 0, 0))  # 1.0
 ```
 
+#### Available modules
+
+| Module | Description |
+|--------|-------------|
+| `Tensor4all.TreeTN` | Tree tensor networks (MPS, MPO, TTN) |
+| `Tensor4all.TensorCI` | Tensor cross interpolation |
+| `Tensor4all.QuanticsGrids` | Quantics grid representations |
+| `Tensor4all.QuanticsTCI` | Quantics TCI for function interpolation |
+| `Tensor4all.QuanticsTransform` | Quantics operators (shift, flip, Fourier) |
+| `Tensor4all.SimpleTT` | Simple tensor trains |
+
 #### Executable documentation examples
 
 All Julia documentation examples live in `docs/examples/julia/` and can be run with:
@@ -199,6 +210,17 @@ def f(i, j, k):
 tt, err = crossinterpolate2(f, [4, 4, 4], tolerance=1e-10)
 print(tt(0, 0, 0))  # 1.0
 ```
+
+#### Available modules
+
+| Module | Description |
+|--------|-------------|
+| `tensor4all.treetn` | Tree tensor networks (MPS, MPO, TTN) |
+| `tensor4all.tensorci` | Tensor cross interpolation |
+| `tensor4all.quanticsgrids` | Quantics grid representations |
+| `tensor4all.quanticstci` | Quantics TCI for function interpolation |
+| `tensor4all.quanticstransform` | Quantics operators (shift, flip, Fourier) |
+| `tensor4all.simplett` | Simple tensor trains |
 
 #### Executable documentation examples
 
@@ -251,7 +273,7 @@ For ITensors.jl:
 ### Incomplete Implementations
 
 - **MPO canonical forms**: VidalMPO and InverseMPO conversions not yet implemented
-- **C API TCI2 sweep**: Currently only supports initial pivot; full sweep not exposed
+- **C API `t4a_treetn_evaluate`**: TreeTN evaluate function not yet exposed in C API
 
 ### Known Backend Issues
 
