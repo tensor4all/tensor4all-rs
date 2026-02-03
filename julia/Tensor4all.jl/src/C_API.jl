@@ -500,41 +500,13 @@ function t4a_tensor_onehot(rank::Integer, index_ptrs::Vector{Ptr{Cvoid}}, vals::
 end
 
 # ============================================================================
-# TensorTrain lifecycle functions
+# TensorTrain lifecycle functions (kept for HDF5 compatibility)
 # ============================================================================
-
-"""
-    t4a_tt_new_empty() -> Ptr{Cvoid}
-
-Create an empty tensor train.
-"""
-function t4a_tt_new_empty()
-    return ccall(
-        (:t4a_tt_new_empty, libpath()),
-        Ptr{Cvoid},
-        ()
-    )
-end
-
-"""
-    t4a_tt_new(tensor_ptrs::Vector{Ptr{Cvoid}}, num_tensors::Integer) -> Ptr{Cvoid}
-
-Create a tensor train from an array of tensors.
-"""
-function t4a_tt_new(tensor_ptrs::Vector{Ptr{Cvoid}}, num_tensors::Integer)
-    return ccall(
-        (:t4a_tt_new, libpath()),
-        Ptr{Cvoid},
-        (Ptr{Ptr{Cvoid}}, Csize_t),
-        tensor_ptrs,
-        Csize_t(num_tensors)
-    )
-end
 
 """
     t4a_tensortrain_release(ptr::Ptr{Cvoid})
 
-Release a tensor train (called by finalizer).
+Release a tensor train (called by finalizer). Kept for HDF5 compatibility.
 """
 function t4a_tensortrain_release(ptr::Ptr{Cvoid})
     ptr == C_NULL && return
@@ -549,7 +521,7 @@ end
 """
     t4a_tensortrain_clone(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
 
-Clone a tensor train.
+Clone a tensor train. Kept for HDF5 compatibility.
 """
 function t4a_tensortrain_clone(ptr::Ptr{Cvoid})
     return ccall(
@@ -561,367 +533,489 @@ function t4a_tensortrain_clone(ptr::Ptr{Cvoid})
 end
 
 # ============================================================================
-# TensorTrain accessors
+# TreeTN lifecycle functions
 # ============================================================================
 
 """
-    t4a_tt_len(ptr::Ptr{Cvoid}, out_len::Ref{Csize_t}) -> Cint
+    t4a_treetn_release(ptr::Ptr{Cvoid})
 
-Get the number of sites in the tensor train.
+Release a tree tensor network (called by finalizer).
 """
-function t4a_tt_len(ptr::Ptr{Cvoid}, out_len::Ref{Csize_t})
-    return ccall(
-        (:t4a_tt_len, libpath()),
-        Cint,
-        (Ptr{Cvoid}, Ptr{Csize_t}),
-        ptr,
-        out_len
-    )
-end
-
-"""
-    t4a_tt_is_empty(ptr::Ptr{Cvoid}) -> Cint
-
-Check if the tensor train is empty.
-Returns 1 if empty, 0 if not, negative on error.
-"""
-function t4a_tt_is_empty(ptr::Ptr{Cvoid})
-    return ccall(
-        (:t4a_tt_is_empty, libpath()),
-        Cint,
+function t4a_treetn_release(ptr::Ptr{Cvoid})
+    ptr == C_NULL && return
+    ccall(
+        (:t4a_treetn_release, libpath()),
+        Cvoid,
         (Ptr{Cvoid},),
         ptr
     )
 end
 
 """
-    t4a_tt_tensor(ptr::Ptr{Cvoid}, site::Integer) -> Ptr{Cvoid}
+    t4a_treetn_clone(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
 
-Get the tensor at a specific site (0-indexed).
-Returns a new tensor handle that the caller owns.
+Clone a tree tensor network.
 """
-function t4a_tt_tensor(ptr::Ptr{Cvoid}, site::Integer)
+function t4a_treetn_clone(ptr::Ptr{Cvoid})
     return ccall(
-        (:t4a_tt_tensor, libpath()),
+        (:t4a_treetn_clone, libpath()),
         Ptr{Cvoid},
-        (Ptr{Cvoid}, Csize_t),
-        ptr,
-        Csize_t(site)
+        (Ptr{Cvoid},),
+        ptr
     )
 end
 
 """
-    t4a_tt_set_tensor(ptr::Ptr{Cvoid}, site::Integer, tensor::Ptr{Cvoid}) -> Cint
+    t4a_treetn_is_assigned(ptr::Ptr{Cvoid}) -> Bool
 
-Set the tensor at a specific site (0-indexed).
-The tensor is cloned into the tensor train. This invalidates orthogonality.
+Check if a tree tensor network pointer is valid.
 """
-function t4a_tt_set_tensor(ptr::Ptr{Cvoid}, site::Integer, tensor::Ptr{Cvoid})
+function t4a_treetn_is_assigned(ptr::Ptr{Cvoid})
+    result = ccall(
+        (:t4a_treetn_is_assigned, libpath()),
+        Cint,
+        (Ptr{Cvoid},),
+        ptr
+    )
+    return result == 1
+end
+
+# ============================================================================
+# TreeTN constructors
+# ============================================================================
+
+"""
+    t4a_treetn_new(tensors::Ptr{Ptr{Cvoid}}, n_tensors::Integer, out::Ref{Ptr{Cvoid}}) -> Cint
+
+Create a tree tensor network from an array of tensors.
+Node names are assigned as 0, 1, ..., n_tensors-1.
+"""
+function t4a_treetn_new(tensors, n_tensors::Integer, out)
     return ccall(
-        (:t4a_tt_set_tensor, libpath()),
+        (:t4a_treetn_new, libpath()),
+        Cint,
+        (Ptr{Ptr{Cvoid}}, Csize_t, Ptr{Ptr{Cvoid}}),
+        tensors,
+        Csize_t(n_tensors),
+        out
+    )
+end
+
+# ============================================================================
+# TreeTN accessors
+# ============================================================================
+
+"""
+    t4a_treetn_num_vertices(ptr::Ptr{Cvoid}, out::Ref{Csize_t}) -> Cint
+
+Get the number of vertices (nodes) in the tree tensor network.
+"""
+function t4a_treetn_num_vertices(ptr::Ptr{Cvoid}, out::Ref{Csize_t})
+    return ccall(
+        (:t4a_treetn_num_vertices, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out
+    )
+end
+
+"""
+    t4a_treetn_num_edges(ptr::Ptr{Cvoid}, out::Ref{Csize_t}) -> Cint
+
+Get the number of edges (bonds) in the tree tensor network.
+"""
+function t4a_treetn_num_edges(ptr::Ptr{Cvoid}, out::Ref{Csize_t})
+    return ccall(
+        (:t4a_treetn_num_edges, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}),
+        ptr,
+        out
+    )
+end
+
+"""
+    t4a_treetn_tensor(ptr::Ptr{Cvoid}, vertex::Integer, out::Ref{Ptr{Cvoid}}) -> Cint
+
+Get the tensor at a specific vertex (0-indexed).
+"""
+function t4a_treetn_tensor(ptr::Ptr{Cvoid}, vertex::Integer, out)
+    return ccall(
+        (:t4a_treetn_tensor, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Ptr{Ptr{Cvoid}}),
+        ptr,
+        Csize_t(vertex),
+        out
+    )
+end
+
+"""
+    t4a_treetn_set_tensor(ptr::Ptr{Cvoid}, vertex::Integer, tensor::Ptr{Cvoid}) -> Cint
+
+Set the tensor at a specific vertex (0-indexed).
+"""
+function t4a_treetn_set_tensor(ptr::Ptr{Cvoid}, vertex::Integer, tensor::Ptr{Cvoid})
+    return ccall(
+        (:t4a_treetn_set_tensor, libpath()),
         Cint,
         (Ptr{Cvoid}, Csize_t, Ptr{Cvoid}),
         ptr,
-        Csize_t(site),
+        Csize_t(vertex),
         tensor
     )
 end
 
 """
-    t4a_tt_bond_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t}, buf_len::Integer) -> Cint
+    t4a_treetn_neighbors(ptr::Ptr{Cvoid}, vertex::Integer, out_buf, buf_size::Integer, n_out::Ref{Csize_t}) -> Cint
 
-Get the bond dimensions of the tensor train.
+Get the neighbors of a vertex.
 """
-function t4a_tt_bond_dims(ptr::Ptr{Cvoid}, out_dims::Vector{Csize_t}, buf_len::Integer)
+function t4a_treetn_neighbors(ptr::Ptr{Cvoid}, vertex::Integer, out_buf, buf_size::Integer, n_out::Ref{Csize_t})
     return ccall(
-        (:t4a_tt_bond_dims, libpath()),
+        (:t4a_treetn_neighbors, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Ptr{Csize_t}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        Csize_t(vertex),
+        out_buf,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+"""
+    t4a_treetn_linkind(ptr::Ptr{Cvoid}, v1::Integer, v2::Integer, out::Ref{Ptr{Cvoid}}) -> Cint
+
+Get the link (bond) index on the edge between two vertices.
+"""
+function t4a_treetn_linkind(ptr::Ptr{Cvoid}, v1::Integer, v2::Integer, out)
+    return ccall(
+        (:t4a_treetn_linkind, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Csize_t, Ptr{Ptr{Cvoid}}),
+        ptr,
+        Csize_t(v1),
+        Csize_t(v2),
+        out
+    )
+end
+
+"""
+    t4a_treetn_siteinds(ptr::Ptr{Cvoid}, vertex::Integer, out_buf, buf_size::Integer, n_out::Ref{Csize_t}) -> Cint
+
+Get the site (physical) indices at a vertex.
+"""
+function t4a_treetn_siteinds(ptr::Ptr{Cvoid}, vertex::Integer, out_buf, buf_size::Integer, n_out::Ref{Csize_t})
+    return ccall(
+        (:t4a_treetn_siteinds, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Ptr{Ptr{Cvoid}}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        Csize_t(vertex),
+        out_buf,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+"""
+    t4a_treetn_bond_dim(ptr::Ptr{Cvoid}, v1::Integer, v2::Integer, out::Ref{Csize_t}) -> Cint
+
+Get the bond dimension on the edge between two vertices.
+"""
+function t4a_treetn_bond_dim(ptr::Ptr{Cvoid}, v1::Integer, v2::Integer, out::Ref{Csize_t})
+    return ccall(
+        (:t4a_treetn_bond_dim, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Csize_t, Ptr{Csize_t}),
+        ptr,
+        Csize_t(v1),
+        Csize_t(v2),
+        out
+    )
+end
+
+# ============================================================================
+# TreeTN MPS convenience functions
+# ============================================================================
+
+"""
+    t4a_treetn_linkind_at(ptr::Ptr{Cvoid}, i::Integer, out::Ref{Ptr{Cvoid}}) -> Cint
+
+Get the link index between vertex i and i+1 (MPS convention, 0-indexed).
+"""
+function t4a_treetn_linkind_at(ptr::Ptr{Cvoid}, i::Integer, out)
+    return ccall(
+        (:t4a_treetn_linkind_at, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Ptr{Ptr{Cvoid}}),
+        ptr,
+        Csize_t(i),
+        out
+    )
+end
+
+"""
+    t4a_treetn_bond_dim_at(ptr::Ptr{Cvoid}, i::Integer, out::Ref{Csize_t}) -> Cint
+
+Get the bond dimension between vertex i and i+1 (MPS convention, 0-indexed).
+"""
+function t4a_treetn_bond_dim_at(ptr::Ptr{Cvoid}, i::Integer, out::Ref{Csize_t})
+    return ccall(
+        (:t4a_treetn_bond_dim_at, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        Csize_t(i),
+        out
+    )
+end
+
+"""
+    t4a_treetn_bond_dims(ptr::Ptr{Cvoid}, out, n::Integer) -> Cint
+
+Get all bond dimensions for an MPS-like TreeTN (vertices 0, 1, ..., n-1).
+Writes n-1 bond dimensions.
+"""
+function t4a_treetn_bond_dims(ptr::Ptr{Cvoid}, out, n::Integer)
+    return ccall(
+        (:t4a_treetn_bond_dims, libpath()),
         Cint,
         (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t),
         ptr,
-        out_dims,
-        Csize_t(buf_len)
+        out,
+        Csize_t(n)
     )
 end
 
 """
-    t4a_tt_maxbonddim(ptr::Ptr{Cvoid}, out_max::Ref{Csize_t}) -> Cint
+    t4a_treetn_maxbonddim(ptr::Ptr{Cvoid}, out::Ref{Csize_t}) -> Cint
 
-Get the maximum bond dimension of the tensor train.
+Get the maximum bond dimension of an MPS-like TreeTN.
 """
-function t4a_tt_maxbonddim(ptr::Ptr{Cvoid}, out_max::Ref{Csize_t})
+function t4a_treetn_maxbonddim(ptr::Ptr{Cvoid}, out::Ref{Csize_t})
     return ccall(
-        (:t4a_tt_maxbonddim, libpath()),
+        (:t4a_treetn_maxbonddim, libpath()),
         Cint,
         (Ptr{Cvoid}, Ptr{Csize_t}),
         ptr,
-        out_max
-    )
-end
-
-"""
-    t4a_tt_linkind(ptr::Ptr{Cvoid}, site::Integer) -> Ptr{Cvoid}
-
-Get the link index between sites `site` and `site+1` (0-indexed).
-Returns a new index handle that the caller owns, or NULL if no link exists.
-"""
-function t4a_tt_linkind(ptr::Ptr{Cvoid}, site::Integer)
-    return ccall(
-        (:t4a_tt_linkind, libpath()),
-        Ptr{Cvoid},
-        (Ptr{Cvoid}, Csize_t),
-        ptr,
-        Csize_t(site)
+        out
     )
 end
 
 # ============================================================================
-# TensorTrain orthogonality
+# TreeTN orthogonalization
 # ============================================================================
 
 """
-    t4a_tt_isortho(ptr::Ptr{Cvoid}) -> Cint
+    t4a_treetn_orthogonalize(ptr::Ptr{Cvoid}, vertex::Integer) -> Cint
 
-Check if the tensor train has a single orthogonality center.
-Returns 1 if yes, 0 if no, negative on error.
+Orthogonalize the tree tensor network to a single vertex.
+Uses QR decomposition (Unitary canonical form) by default.
 """
-function t4a_tt_isortho(ptr::Ptr{Cvoid})
+function t4a_treetn_orthogonalize(ptr::Ptr{Cvoid}, vertex::Integer)
     return ccall(
-        (:t4a_tt_isortho, libpath()),
-        Cint,
-        (Ptr{Cvoid},),
-        ptr
-    )
-end
-
-"""
-    t4a_tt_orthocenter(ptr::Ptr{Cvoid}, out_center::Ref{Csize_t}) -> Cint
-
-Get the orthogonality center (0-indexed).
-"""
-function t4a_tt_orthocenter(ptr::Ptr{Cvoid}, out_center::Ref{Csize_t})
-    return ccall(
-        (:t4a_tt_orthocenter, libpath()),
-        Cint,
-        (Ptr{Cvoid}, Ptr{Csize_t}),
-        ptr,
-        out_center
-    )
-end
-
-"""
-    t4a_tt_llim(ptr::Ptr{Cvoid}, out_llim::Ref{Cint}) -> Cint
-
-Get the left orthogonality limit.
-"""
-function t4a_tt_llim(ptr::Ptr{Cvoid}, out_llim::Ref{Cint})
-    return ccall(
-        (:t4a_tt_llim, libpath()),
-        Cint,
-        (Ptr{Cvoid}, Ptr{Cint}),
-        ptr,
-        out_llim
-    )
-end
-
-"""
-    t4a_tt_rlim(ptr::Ptr{Cvoid}, out_rlim::Ref{Cint}) -> Cint
-
-Get the right orthogonality limit.
-"""
-function t4a_tt_rlim(ptr::Ptr{Cvoid}, out_rlim::Ref{Cint})
-    return ccall(
-        (:t4a_tt_rlim, libpath()),
-        Cint,
-        (Ptr{Cvoid}, Ptr{Cint}),
-        ptr,
-        out_rlim
-    )
-end
-
-"""
-    t4a_tt_canonical_form(ptr::Ptr{Cvoid}, out_form::Ref{Cint}) -> Cint
-
-Get the canonical form of the tensor train.
-"""
-function t4a_tt_canonical_form(ptr::Ptr{Cvoid}, out_form::Ref{Cint})
-    return ccall(
-        (:t4a_tt_canonical_form, libpath()),
-        Cint,
-        (Ptr{Cvoid}, Ptr{Cint}),
-        ptr,
-        out_form
-    )
-end
-
-# ============================================================================
-# TensorTrain operations
-# ============================================================================
-
-"""
-    t4a_tt_orthogonalize(ptr::Ptr{Cvoid}, site::Integer) -> Cint
-
-Orthogonalize the tensor train to have orthogonality center at the given site.
-Uses QR decomposition (Unitary canonical form).
-"""
-function t4a_tt_orthogonalize(ptr::Ptr{Cvoid}, site::Integer)
-    return ccall(
-        (:t4a_tt_orthogonalize, libpath()),
+        (:t4a_treetn_orthogonalize, libpath()),
         Cint,
         (Ptr{Cvoid}, Csize_t),
         ptr,
-        Csize_t(site)
+        Csize_t(vertex)
     )
 end
 
 """
-    t4a_tt_orthogonalize_with(ptr::Ptr{Cvoid}, site::Integer, form::Cint) -> Cint
+    t4a_treetn_orthogonalize_with(ptr::Ptr{Cvoid}, vertex::Integer, form::Integer) -> Cint
 
-Orthogonalize the tensor train with a specific canonical form.
+Orthogonalize the tree tensor network to a vertex with a specific canonical form.
 form: 0=Unitary, 1=LU, 2=CI
 """
-function t4a_tt_orthogonalize_with(ptr::Ptr{Cvoid}, site::Integer, form::Integer)
+function t4a_treetn_orthogonalize_with(ptr::Ptr{Cvoid}, vertex::Integer, form::Integer)
     return ccall(
-        (:t4a_tt_orthogonalize_with, libpath()),
+        (:t4a_treetn_orthogonalize_with, libpath()),
         Cint,
         (Ptr{Cvoid}, Csize_t, Cint),
         ptr,
-        Csize_t(site),
+        Csize_t(vertex),
         Cint(form)
     )
 end
 
 """
-    t4a_tt_truncate(ptr::Ptr{Cvoid}, rtol::Float64, max_rank::Integer) -> Cint
+    t4a_treetn_ortho_center(ptr::Ptr{Cvoid}, out_vertices, buf_size::Integer, n_out::Ref{Csize_t}) -> Cint
 
-Truncate the tensor train bond dimensions.
-rtol: relative tolerance (use 0.0 for not set)
-cutoff: ITensorMPS.jl cutoff (use 0.0 for not set). Converted to rtol = √cutoff.
-  If both rtol and cutoff are positive, cutoff takes precedence.
-max_rank: maximum bond dimension (use 0 for no limit)
+Get the canonical (orthogonality) region of the tree tensor network.
 """
-function t4a_tt_truncate(ptr::Ptr{Cvoid}, rtol::Float64, cutoff::Float64, max_rank::Integer)
+function t4a_treetn_ortho_center(ptr::Ptr{Cvoid}, out_vertices, buf_size::Integer, n_out::Ref{Csize_t})
     return ccall(
-        (:t4a_tt_truncate, libpath()),
+        (:t4a_treetn_ortho_center, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Csize_t}, Csize_t, Ptr{Csize_t}),
+        ptr,
+        out_vertices,
+        Csize_t(buf_size),
+        n_out
+    )
+end
+
+"""
+    t4a_treetn_canonical_form(ptr::Ptr{Cvoid}, out::Ref{Cint}) -> Cint
+
+Get the canonical form used for the tree tensor network.
+"""
+function t4a_treetn_canonical_form(ptr::Ptr{Cvoid}, out)
+    return ccall(
+        (:t4a_treetn_canonical_form, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cint}),
+        ptr,
+        out
+    )
+end
+
+# ============================================================================
+# TreeTN operations
+# ============================================================================
+
+"""
+    t4a_treetn_truncate(ptr::Ptr{Cvoid}, rtol::Float64, cutoff::Float64, maxdim::Integer) -> Cint
+
+Truncate the tree tensor network bond dimensions.
+rtol: relative tolerance (0.0 for not set)
+cutoff: ITensorMPS.jl cutoff (0.0 for not set). Converted to rtol = sqrt(cutoff).
+maxdim: maximum bond dimension (0 for no limit)
+"""
+function t4a_treetn_truncate(ptr::Ptr{Cvoid}, rtol::Float64, cutoff::Float64, maxdim::Integer)
+    return ccall(
+        (:t4a_treetn_truncate, libpath()),
         Cint,
         (Ptr{Cvoid}, Cdouble, Cdouble, Csize_t),
         ptr,
         rtol,
         cutoff,
-        Csize_t(max_rank)
+        Csize_t(maxdim)
     )
 end
 
 """
-    t4a_tt_norm(ptr::Ptr{Cvoid}, out_norm::Ref{Cdouble}) -> Cint
+    t4a_treetn_inner(a::Ptr{Cvoid}, b::Ptr{Cvoid}, out_re::Ref{Cdouble}, out_im::Ref{Cdouble}) -> Cint
 
-Compute the norm of the tensor train.
+Compute the inner product of two tree tensor networks.
 """
-function t4a_tt_norm(ptr::Ptr{Cvoid}, out_norm::Ref{Cdouble})
+function t4a_treetn_inner(a::Ptr{Cvoid}, b::Ptr{Cvoid}, out_re::Ref{Cdouble}, out_im::Ref{Cdouble})
     return ccall(
-        (:t4a_tt_norm, libpath()),
-        Cint,
-        (Ptr{Cvoid}, Ptr{Cdouble}),
-        ptr,
-        out_norm
-    )
-end
-
-"""
-    t4a_tt_inner(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, out_re::Ref{Cdouble}, out_im::Ref{Cdouble}) -> Cint
-
-Compute the inner product of two tensor trains.
-"""
-function t4a_tt_inner(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, out_re::Ref{Cdouble}, out_im::Ref{Cdouble})
-    return ccall(
-        (:t4a_tt_inner, libpath()),
+        (:t4a_treetn_inner, libpath()),
         Cint,
         (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cdouble}, Ptr{Cdouble}),
-        ptr1,
-        ptr2,
+        a,
+        b,
         out_re,
         out_im
     )
 end
 
 """
-    t4a_tt_contract(ptr1, ptr2, method, max_rank, rtol, cutoff, nhalfsweeps) -> Ptr{Cvoid}
+    t4a_treetn_norm(ptr::Ptr{Cvoid}, out::Ref{Cdouble}) -> Cint
 
-Contract two tensor trains.
-method: 0=Zipup, 1=Fit, 2=Naive
-max_rank: maximum bond dimension (use 0 for no limit)
-rtol: relative tolerance (use 0.0 for not set)
-cutoff: ITensorMPS.jl cutoff (use 0.0 for not set). If both rtol and cutoff are positive, cutoff takes precedence.
-nhalfsweeps: number of half-sweeps for Fit method (must be a multiple of 2)
+Compute the norm of the tree tensor network.
 """
-function t4a_tt_contract(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}, method::Integer, max_rank::Integer, rtol::Float64, cutoff::Float64, nhalfsweeps::Integer)
+function t4a_treetn_norm(ptr::Ptr{Cvoid}, out::Ref{Cdouble})
     return ccall(
-        (:t4a_tt_contract, libpath()),
-        Ptr{Cvoid},
-        (Ptr{Cvoid}, Ptr{Cvoid}, Cint, Csize_t, Cdouble, Cdouble, Csize_t),
-        ptr1,
-        ptr2,
+        (:t4a_treetn_norm, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr,
+        out
+    )
+end
+
+"""
+    t4a_treetn_lognorm(ptr::Ptr{Cvoid}, out::Ref{Cdouble}) -> Cint
+
+Compute the log-norm of the tree tensor network.
+"""
+function t4a_treetn_lognorm(ptr::Ptr{Cvoid}, out::Ref{Cdouble})
+    return ccall(
+        (:t4a_treetn_lognorm, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cdouble}),
+        ptr,
+        out
+    )
+end
+
+"""
+    t4a_treetn_add(a::Ptr{Cvoid}, b::Ptr{Cvoid}, out::Ref{Ptr{Cvoid}}) -> Cint
+
+Add two tree tensor networks using direct-sum construction.
+"""
+function t4a_treetn_add(a::Ptr{Cvoid}, b::Ptr{Cvoid}, out)
+    return ccall(
+        (:t4a_treetn_add, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Ptr{Cvoid}}),
+        a,
+        b,
+        out
+    )
+end
+
+"""
+    t4a_treetn_contract(a, b, method, rtol, cutoff, maxdim, out) -> Cint
+
+Contract two tree tensor networks.
+method: 0=Zipup, 1=Fit, 2=Naive
+"""
+function t4a_treetn_contract(a::Ptr{Cvoid}, b::Ptr{Cvoid}, method::Integer,
+                             rtol::Float64, cutoff::Float64, maxdim::Integer, out)
+    return ccall(
+        (:t4a_treetn_contract, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Cvoid}, Cint, Cdouble, Cdouble, Csize_t, Ptr{Ptr{Cvoid}}),
+        a,
+        b,
         Cint(method),
-        Csize_t(max_rank),
         rtol,
         cutoff,
-        Csize_t(nhalfsweeps)
+        Csize_t(maxdim),
+        out
     )
 end
 
 """
-    t4a_tt_add(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid}) -> Ptr{Cvoid}
+    t4a_treetn_to_dense(ptr::Ptr{Cvoid}, out::Ref{Ptr{Cvoid}}) -> Cint
 
-Add two tensor trains using direct-sum construction.
+Convert tree tensor network to a dense tensor by contracting all link indices.
 """
-function t4a_tt_add(ptr1::Ptr{Cvoid}, ptr2::Ptr{Cvoid})
+function t4a_treetn_to_dense(ptr::Ptr{Cvoid}, out)
     return ccall(
-        (:t4a_tt_add, libpath()),
-        Ptr{Cvoid},
-        (Ptr{Cvoid}, Ptr{Cvoid}),
-        ptr1,
-        ptr2
+        (:t4a_treetn_to_dense, libpath()),
+        Cint,
+        (Ptr{Cvoid}, Ptr{Ptr{Cvoid}}),
+        ptr,
+        out
     )
 end
 
 """
-    t4a_tt_to_dense(ptr::Ptr{Cvoid}) -> Ptr{Cvoid}
+    t4a_treetn_linsolve(operator, rhs, init, a0, a1, nsweeps, rtol, cutoff, maxdim, out) -> Cint
 
-Convert tensor train to a dense tensor by contracting all link indices.
-Returns a tensor handle.
+Solve (a0 + a1 * A) * x = b for x using DMRG-like sweeps.
 """
-function t4a_tt_to_dense(ptr::Ptr{Cvoid})
+function t4a_treetn_linsolve(operator::Ptr{Cvoid}, rhs::Ptr{Cvoid}, init::Ptr{Cvoid},
+                             a0::Float64, a1::Float64, nsweeps::Integer,
+                             rtol::Float64, cutoff::Float64, maxdim::Integer, out)
     return ccall(
-        (:t4a_tt_to_dense, libpath()),
-        Ptr{Cvoid},
-        (Ptr{Cvoid},),
-        ptr
-    )
-end
-
-"""
-    t4a_tt_linsolve(operator, rhs, init, nhalfsweeps, max_rank, rtol, cutoff,
-                    krylov_tol, krylov_maxiter, krylov_dim, a0, a1, convergence_tol) -> Ptr{Cvoid}
-
-Solve (a0 + a1 * A) * x = b for x using DMRG-like sweeps with local GMRES.
-"""
-function t4a_tt_linsolve(operator::Ptr{Cvoid}, rhs::Ptr{Cvoid}, init::Ptr{Cvoid},
-                         nhalfsweeps::Integer, max_rank::Integer,
-                         rtol::Float64, cutoff::Float64,
-                         krylov_tol::Float64, krylov_maxiter::Integer,
-                         krylov_dim::Integer,
-                         a0::Float64, a1::Float64,
-                         convergence_tol::Float64)
-    return ccall(
-        (:t4a_tt_linsolve, libpath()),
-        Ptr{Cvoid},
+        (:t4a_treetn_linsolve, libpath()),
+        Cint,
         (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid},
-         Csize_t, Csize_t, Cdouble, Cdouble,
-         Cdouble, Csize_t, Csize_t,
-         Cdouble, Cdouble, Cdouble),
+         Cdouble, Cdouble, Csize_t,
+         Cdouble, Cdouble, Csize_t, Ptr{Ptr{Cvoid}}),
         operator, rhs, init,
-        Csize_t(nhalfsweeps), Csize_t(max_rank), rtol, cutoff,
-        krylov_tol, Csize_t(krylov_maxiter), Csize_t(krylov_dim),
-        a0, a1, convergence_tol
+        a0, a1, Csize_t(nsweeps),
+        rtol, cutoff, Csize_t(maxdim),
+        out
     )
 end
 
