@@ -16,8 +16,10 @@ static INIT: Once = Once::new();
 #[cfg(all(feature = "link", not(feature = "runtime-loading")))]
 #[inline]
 pub fn ensure_hdf5_init() {
-    INIT.call_once(|| unsafe {
-        hdf5_sys::h5::H5open();
+    INIT.call_once(|| {
+        crate::sync::sync(|| unsafe {
+            hdf5_sys::h5::H5open();
+        });
     });
 }
 
