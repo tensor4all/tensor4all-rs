@@ -27,8 +27,10 @@ mod link_impl {
     /// Ensure HDF5 is initialized before accessing globals.
     #[inline]
     fn ensure_init() {
-        INIT.call_once(|| unsafe {
-            hdf5_sys::h5::H5open();
+        INIT.call_once(|| {
+            crate::sync::sync(|| unsafe {
+                hdf5_sys::h5::H5open();
+            });
         });
     }
 

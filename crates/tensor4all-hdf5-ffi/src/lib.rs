@@ -3,6 +3,7 @@
 #![allow(clippy::unnecessary_cast)]
 #![allow(clippy::missing_transmute_annotations)]
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
+#![allow(clippy::derivable_impls)]
 #![allow(dead_code)]
 #![allow(unexpected_cfgs)]
 #![allow(non_snake_case)]
