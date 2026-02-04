@@ -69,7 +69,9 @@ jobs:
         run: cargo test --release --workspace --exclude tensor4all-hdf5 --exclude tensor4all-hdf5-ffi
 
       - name: Run HDF5 tests (sequential - HDF5 library may not be threadsafe)
-        run: cargo test --release -p tensor4all-hdf5 -p tensor4all-hdf5-ffi -- --test-threads=1
+        run: |
+          cargo test --release -p tensor4all-hdf5-ffi -- --test-threads=1
+          cargo test --release -p tensor4all-hdf5 -- --test-threads=1
 
   test-libtorch:
     name: Test (libtorch)
@@ -142,11 +144,13 @@ jobs:
         run: cargo llvm-cov --workspace --exclude tensor4all-hdf5 --exclude tensor4all-hdf5-ffi --lcov --output-path lcov-main.info
 
       - name: Generate coverage report (HDF5 - sequential)
-        run: cargo llvm-cov -p tensor4all-hdf5 -p tensor4all-hdf5-ffi --lcov --output-path lcov-hdf5.info -- --test-threads=1
+        run: |
+          cargo llvm-cov -p tensor4all-hdf5-ffi --lcov --output-path lcov-hdf5-ffi.info -- --test-threads=1
+          cargo llvm-cov -p tensor4all-hdf5 --lcov --output-path lcov-hdf5.info -- --test-threads=1
 
       - name: Merge coverage reports
         run: |
-          cat lcov-main.info lcov-hdf5.info > lcov.info
+          cat lcov-main.info lcov-hdf5-ffi.info lcov-hdf5.info > lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
