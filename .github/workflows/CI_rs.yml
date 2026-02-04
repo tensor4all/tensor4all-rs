@@ -66,7 +66,11 @@ jobs:
             ${{ runner.os }}-cargo-test-
 
       - name: Run tests
-        run: cargo test --release --workspace
+        run: |
+          # Run HDF5 tests sequentially due to thread-safety requirements
+          cargo test --release -p tensor4all-hdf5 -- --test-threads=1
+          # Run other tests in parallel
+          cargo test --release --workspace --exclude tensor4all-hdf5
 
   test-libtorch:
     name: Test (libtorch)
@@ -136,7 +140,11 @@ jobs:
             ${{ runner.os }}-cargo-cov-
 
       - name: Generate coverage report
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+        run: |
+          # Run HDF5 tests sequentially first
+          cargo llvm-cov --no-report -p tensor4all-hdf5 -- --test-threads=1
+          # Run remaining tests and generate report
+          cargo llvm-cov --workspace --exclude tensor4all-hdf5 --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
