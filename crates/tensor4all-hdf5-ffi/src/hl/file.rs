@@ -125,31 +125,35 @@ impl FileBuilder {
             .ok_or_else(|| crate::Error::Internal("Invalid path encoding".into()))?;
         let c_path = to_cstring(path_str)?;
 
-        let id = sync(|| unsafe {
-            match self.mode {
-                OpenMode::Read => H5Fopen(c_path.as_ptr(), H5F_ACC_RDONLY, H5P_DEFAULT),
-                OpenMode::ReadWrite => H5Fopen(c_path.as_ptr(), H5F_ACC_RDWR, H5P_DEFAULT),
-                OpenMode::Create => {
-                    H5Fcreate(c_path.as_ptr(), H5F_ACC_EXCL, H5P_DEFAULT, H5P_DEFAULT)
+        // Keep the entire open/create and validation in a single sync block
+        let mode = self.mode;
+        sync(|| {
+            let id = unsafe {
+                match mode {
+                    OpenMode::Read => H5Fopen(c_path.as_ptr(), H5F_ACC_RDONLY, H5P_DEFAULT),
+                    OpenMode::ReadWrite => H5Fopen(c_path.as_ptr(), H5F_ACC_RDWR, H5P_DEFAULT),
+                    OpenMode::Create => {
+                        H5Fcreate(c_path.as_ptr(), H5F_ACC_EXCL, H5P_DEFAULT, H5P_DEFAULT)
+                    }
+                    OpenMode::Truncate => {
+                        H5Fcreate(c_path.as_ptr(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT)
+                    }
                 }
-                OpenMode::Truncate => {
-                    H5Fcreate(c_path.as_ptr(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT)
-                }
+            };
+
+            if id < 0 {
+                return Err(crate::Error::Hdf5(format!(
+                    "Failed to {} file: {}",
+                    match mode {
+                        OpenMode::Read | OpenMode::ReadWrite => "open",
+                        OpenMode::Create | OpenMode::Truncate => "create",
+                    },
+                    path_str
+                )));
             }
-        });
 
-        if id < 0 {
-            return Err(crate::Error::Hdf5(format!(
-                "Failed to {} file: {}",
-                match self.mode {
-                    OpenMode::Read | OpenMode::ReadWrite => "open",
-                    OpenMode::Create | OpenMode::Truncate => "create",
-                },
-                path_str
-            )));
-        }
-
-        File::from_id(id)
+            File::from_id(id)
+        })
     }
 }
 

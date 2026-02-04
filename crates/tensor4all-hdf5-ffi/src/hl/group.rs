@@ -50,39 +50,45 @@ impl Group {
     /// Create a group within any location (file or group).
     fn create_in(loc_id: hid_t, name: &str) -> Result<Self> {
         let c_name = to_cstring(name)?;
-        let id = sync(|| unsafe {
-            H5Gcreate2(
-                loc_id,
-                c_name.as_ptr(),
-                H5P_DEFAULT,
-                H5P_DEFAULT,
-                H5P_DEFAULT,
-            )
-        });
+        // Keep the entire creation and validation in a single sync block
+        sync(|| {
+            let id = unsafe {
+                H5Gcreate2(
+                    loc_id,
+                    c_name.as_ptr(),
+                    H5P_DEFAULT,
+                    H5P_DEFAULT,
+                    H5P_DEFAULT,
+                )
+            };
 
-        if id < 0 {
-            return Err(crate::Error::Hdf5(format!(
-                "Failed to create group: {}",
-                name
-            )));
-        }
+            if id < 0 {
+                return Err(crate::Error::Hdf5(format!(
+                    "Failed to create group: {}",
+                    name
+                )));
+            }
 
-        Group::from_id(id)
+            Group::from_id(id)
+        })
     }
 
     /// Open a group within any location (file or group).
     fn open_in(loc_id: hid_t, name: &str) -> Result<Self> {
         let c_name = to_cstring(name)?;
-        let id = sync(|| unsafe { H5Gopen2(loc_id, c_name.as_ptr(), H5P_DEFAULT) });
+        // Keep the entire open and validation in a single sync block
+        sync(|| {
+            let id = unsafe { H5Gopen2(loc_id, c_name.as_ptr(), H5P_DEFAULT) };
 
-        if id < 0 {
-            return Err(crate::Error::Hdf5(format!(
-                "Failed to open group: {}",
-                name
-            )));
-        }
+            if id < 0 {
+                return Err(crate::Error::Hdf5(format!(
+                    "Failed to open group: {}",
+                    name
+                )));
+            }
 
-        Group::from_id(id)
+            Group::from_id(id)
+        })
     }
 
     /// Get the group's ID.

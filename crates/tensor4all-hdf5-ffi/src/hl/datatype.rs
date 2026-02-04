@@ -39,12 +39,14 @@ impl std::fmt::Debug for Datatype {
 impl Datatype {
     /// Create a datatype from native HDF5 type ID.
     pub fn from_type_id(type_id: hid_t) -> Result<Self> {
-        // Copy the type to get our own handle
-        let id = sync(|| unsafe { H5Tcopy(type_id) });
-        if id < 0 {
-            return Err(crate::Error::Hdf5("Failed to copy datatype".into()));
-        }
-        Datatype::from_id(id)
+        // Keep the entire copy and validation in a single sync block
+        sync(|| {
+            let id = unsafe { H5Tcopy(type_id) };
+            if id < 0 {
+                return Err(crate::Error::Hdf5("Failed to copy datatype".into()));
+            }
+            Datatype::from_id(id)
+        })
     }
 
     /// Get the datatype's ID.

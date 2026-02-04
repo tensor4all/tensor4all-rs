@@ -40,37 +40,43 @@ impl Dataset {
     /// Open an existing dataset.
     pub fn open(loc_id: hid_t, name: &str) -> Result<Self> {
         let c_name = to_cstring(name)?;
-        let id = sync(|| unsafe { H5Dopen2(loc_id, c_name.as_ptr(), H5P_DEFAULT) });
-        if id < 0 {
-            return Err(crate::Error::Hdf5(format!(
-                "Failed to open dataset: {}",
-                name
-            )));
-        }
-        Dataset::from_id(id)
+        // Keep the entire open and validation in a single sync block
+        sync(|| {
+            let id = unsafe { H5Dopen2(loc_id, c_name.as_ptr(), H5P_DEFAULT) };
+            if id < 0 {
+                return Err(crate::Error::Hdf5(format!(
+                    "Failed to open dataset: {}",
+                    name
+                )));
+            }
+            Dataset::from_id(id)
+        })
     }
 
     /// Create a new dataset.
     pub fn create(loc_id: hid_t, name: &str, dtype: &Datatype, space: &Dataspace) -> Result<Self> {
         let c_name = to_cstring(name)?;
-        let id = sync(|| unsafe {
-            H5Dcreate2(
-                loc_id,
-                c_name.as_ptr(),
-                dtype.id(),
-                space.id(),
-                H5P_DEFAULT,
-                H5P_DEFAULT,
-                H5P_DEFAULT,
-            )
-        });
-        if id < 0 {
-            return Err(crate::Error::Hdf5(format!(
-                "Failed to create dataset: {}",
-                name
-            )));
-        }
-        Dataset::from_id(id)
+        // Keep the entire creation and validation in a single sync block
+        sync(|| {
+            let id = unsafe {
+                H5Dcreate2(
+                    loc_id,
+                    c_name.as_ptr(),
+                    dtype.id(),
+                    space.id(),
+                    H5P_DEFAULT,
+                    H5P_DEFAULT,
+                    H5P_DEFAULT,
+                )
+            };
+            if id < 0 {
+                return Err(crate::Error::Hdf5(format!(
+                    "Failed to create dataset: {}",
+                    name
+                )));
+            }
+            Dataset::from_id(id)
+        })
     }
 
     /// Get the dataset's ID.
@@ -80,20 +86,26 @@ impl Dataset {
 
     /// Get the dataspace.
     pub fn space(&self) -> Result<Dataspace> {
-        let id = sync(|| unsafe { H5Dget_space(self.id()) });
-        if id < 0 {
-            return Err(crate::Error::Hdf5("Failed to get dataset space".into()));
-        }
-        Dataspace::from_id(id)
+        // Keep the entire get and validation in a single sync block
+        sync(|| {
+            let id = unsafe { H5Dget_space(self.id()) };
+            if id < 0 {
+                return Err(crate::Error::Hdf5("Failed to get dataset space".into()));
+            }
+            Dataspace::from_id(id)
+        })
     }
 
     /// Get the datatype.
     pub fn dtype(&self) -> Result<Datatype> {
-        let id = sync(|| unsafe { H5Dget_type(self.id()) });
-        if id < 0 {
-            return Err(crate::Error::Hdf5("Failed to get dataset type".into()));
-        }
-        Datatype::from_id(id)
+        // Keep the entire get and validation in a single sync block
+        sync(|| {
+            let id = unsafe { H5Dget_type(self.id()) };
+            if id < 0 {
+                return Err(crate::Error::Hdf5("Failed to get dataset type".into()));
+            }
+            Datatype::from_id(id)
+        })
     }
 
     /// Get the shape dimensions.
