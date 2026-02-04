@@ -70,6 +70,7 @@ jobs:
 
       - name: Run HDF5 tests (sequential - HDF5 library may not be threadsafe)
         run: |
+          cargo test --release -p tensor4all-hdf5-ffi --test diagnose_h5i -- --test-threads=1 --nocapture
           cargo test --release -p tensor4all-hdf5-ffi -- --test-threads=1
           cargo test --release -p tensor4all-hdf5 -- --test-threads=1
 
