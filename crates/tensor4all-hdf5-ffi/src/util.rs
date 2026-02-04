@@ -40,7 +40,7 @@ pub fn string_from_fixed_bytes(bytes: &[c_char], len: usize) -> String {
 /// Write a string into a fixed-length char buffer (possibly truncating it).
 pub fn string_to_fixed_bytes(s: &str, buf: &mut [c_char]) {
     let mut s = s;
-    while s.as_bytes().len() > buf.len() {
+    while s.len() > buf.len() {
         s = &s[..(s.len() - 1)];
     }
     let bytes = s.as_bytes();

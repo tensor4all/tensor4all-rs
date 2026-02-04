@@ -21,7 +21,7 @@ pub trait Dimension {
     }
 }
 
-impl<'a, T: Dimension + ?Sized> Dimension for &'a T {
+impl<T: Dimension + ?Sized> Dimension for &T {
     fn ndim(&self) -> usize {
         Dimension::ndim(*self)
     }

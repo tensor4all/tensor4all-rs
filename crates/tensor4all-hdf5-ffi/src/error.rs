@@ -71,7 +71,7 @@ impl From<ShapeError> for Error {
 
 impl From<Error> for io::Error {
     fn from(err: Error) -> Self {
-        Self::new(io::ErrorKind::Other, err)
+        Self::other(err)
     }
 }
 
