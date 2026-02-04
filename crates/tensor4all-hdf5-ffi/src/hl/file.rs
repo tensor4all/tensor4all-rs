@@ -5,7 +5,6 @@ use std::path::Path;
 use crate::class::ObjectClass;
 use crate::error::Result;
 use crate::globals::H5P_DEFAULT;
-use crate::h5call;
 use crate::handle::Handle;
 use crate::init::ensure_hdf5_init;
 use crate::sync::sync;

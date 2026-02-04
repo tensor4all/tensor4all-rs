@@ -3,7 +3,6 @@
 use crate::class::ObjectClass;
 use crate::dim::Dimension;
 use crate::error::Result;
-use crate::h5call;
 use crate::handle::Handle;
 use crate::sync::sync;
 use crate::sys::h5i::H5I_DATASPACE;

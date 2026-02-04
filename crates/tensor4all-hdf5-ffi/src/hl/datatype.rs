@@ -3,7 +3,6 @@
 use crate::class::ObjectClass;
 use crate::error::Result;
 use crate::globals;
-use crate::h5call;
 use crate::handle::Handle;
 use crate::sync::sync;
 use crate::sys::h5i::H5I_DATATYPE;
