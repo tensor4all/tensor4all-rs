@@ -7,6 +7,7 @@
 #![allow(non_upper_case_globals, non_snake_case)]
 
 use crate::sys::hid_t;
+use std::sync::LazyLock;
 
 /// H5P_DEFAULT constant (always 0 in HDF5)
 pub const H5P_DEFAULT: hid_t = 0;
@@ -20,16 +21,12 @@ pub const H5I_INVALID_HID: hid_t = -1;
 #[cfg(all(feature = "link", not(feature = "runtime-loading")))]
 mod link_impl {
     use super::*;
-    use std::sync::Once;
 
-    static INIT: Once = Once::new();
-
-    /// Ensure HDF5 is initialized before accessing globals.
+    /// Force library initialization before accessing any global constant.
+    /// This matches hdf5-metno's pattern.
     #[inline]
     fn ensure_init() {
-        INIT.call_once(|| unsafe {
-            hdf5_sys::h5::H5open();
-        });
+        LazyLock::force(&crate::sync::LIBRARY_INIT);
     }
 
     pub fn H5T_NATIVE_INT() -> hid_t {
@@ -143,6 +140,9 @@ mod runtime_impl {
 
     fn get_globals() -> &'static GlobalConstants {
         GLOBALS.get_or_init(|| {
+            // Force library initialization first
+            LazyLock::force(&crate::sync::LIBRARY_INIT);
+
             // Access the library through our sys module
             let lib = crate::sys::funcs::get_library()
                 .expect("HDF5 library not loaded - call hdf5_init() first");

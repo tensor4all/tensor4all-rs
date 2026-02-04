@@ -125,7 +125,9 @@ impl FileBuilder {
             .ok_or_else(|| crate::Error::Internal("Invalid path encoding".into()))?;
         let c_path = to_cstring(path_str)?;
 
-        let id = sync(|| unsafe {
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe {
             match self.mode {
                 OpenMode::Read => H5Fopen(c_path.as_ptr(), H5F_ACC_RDONLY, H5P_DEFAULT),
                 OpenMode::ReadWrite => H5Fopen(c_path.as_ptr(), H5F_ACC_RDWR, H5P_DEFAULT),
@@ -136,19 +138,7 @@ impl FileBuilder {
                     H5Fcreate(c_path.as_ptr(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT)
                 }
             }
-        });
-
-        if id < 0 {
-            return Err(crate::Error::Hdf5(format!(
-                "Failed to {} file: {}",
-                match self.mode {
-                    OpenMode::Read | OpenMode::ReadWrite => "open",
-                    OpenMode::Create | OpenMode::Truncate => "create",
-                },
-                path_str
-            )));
-        }
-
+        })?;
         File::from_id(id)
     }
 }

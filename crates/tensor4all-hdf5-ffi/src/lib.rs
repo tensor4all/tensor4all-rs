@@ -1,3 +1,15 @@
+// Allow various clippy warnings for FFI code ported from hdf5-metno
+#![allow(clippy::missing_safety_doc)]
+#![allow(clippy::unnecessary_cast)]
+#![allow(clippy::missing_transmute_annotations)]
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
+#![allow(clippy::derivable_impls)]
+#![allow(clippy::assertions_on_constants)]
+#![allow(dead_code)]
+#![allow(unexpected_cfgs)]
+#![allow(non_snake_case)]
+#![allow(mismatched_lifetime_syntaxes)]
+
 //! HDF5 bindings with runtime library loading (dlopen) for tensor4all-rs.
 //!
 //! This crate provides HDF5 functionality compatible with `hdf5-metno`, but loads

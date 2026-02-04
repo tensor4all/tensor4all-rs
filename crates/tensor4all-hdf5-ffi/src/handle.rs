@@ -15,7 +15,10 @@ pub struct Handle {
 }
 
 impl Handle {
-    /// Create a handle from object ID, taking ownership of it
+    /// Create a handle from object ID, taking ownership of it.
+    ///
+    /// Uses `H5Iis_valid` to check if the ID is valid. If `H5Iis_valid` is
+    /// unreliable (as seen on some HDF5 builds), use `try_new_trusted` instead.
     pub fn try_new(id: hid_t) -> Result<Self> {
         let handle = Self { id };
         if handle.is_valid_user_id() {
@@ -24,6 +27,25 @@ impl Handle {
             // Drop on an invalid handle could cause closing an unrelated object
             // in the destructor, hence it's important to prevent the drop here.
             mem::forget(handle);
+            Err(From::from(format!("Invalid handle id: {id}")))
+        }
+    }
+
+    /// Create a handle from an ID returned directly from an HDF5 API call.
+    ///
+    /// This method trusts that the caller has verified the ID is valid
+    /// (e.g., the HDF5 function returned a non-negative value). It does NOT
+    /// call any HDF5 validation functions (H5Iis_valid, H5Iget_type), which
+    /// may be unreliable on some HDF5 builds.
+    ///
+    /// # Safety
+    /// Caller must ensure the ID was just returned from an HDF5 API call
+    /// that returned success (non-negative value).
+    pub fn try_new_trusted(id: hid_t) -> Result<Self> {
+        // Trust the ID if it's positive - no HDF5 validation calls
+        if id > 0 {
+            Ok(Self { id })
+        } else {
             Err(From::from(format!("Invalid handle id: {id}")))
         }
     }

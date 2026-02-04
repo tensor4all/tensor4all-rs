@@ -131,7 +131,7 @@ impl CompoundType {
             max_align = max_align.max(align);
             offset += f.ty.size();
             layout.size = offset;
-            while layout.size % max_align != 0 {
+            while !layout.size.is_multiple_of(max_align) {
                 layout.size += 1;
             }
         }

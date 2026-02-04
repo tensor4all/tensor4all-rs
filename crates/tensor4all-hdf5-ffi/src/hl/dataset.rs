@@ -40,20 +40,18 @@ impl Dataset {
     /// Open an existing dataset.
     pub fn open(loc_id: hid_t, name: &str) -> Result<Self> {
         let c_name = to_cstring(name)?;
-        let id = sync(|| unsafe { H5Dopen2(loc_id, c_name.as_ptr(), H5P_DEFAULT) });
-        if id < 0 {
-            return Err(crate::Error::Hdf5(format!(
-                "Failed to open dataset: {}",
-                name
-            )));
-        }
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe { H5Dopen2(loc_id, c_name.as_ptr(), H5P_DEFAULT) })?;
         Dataset::from_id(id)
     }
 
     /// Create a new dataset.
     pub fn create(loc_id: hid_t, name: &str, dtype: &Datatype, space: &Dataspace) -> Result<Self> {
         let c_name = to_cstring(name)?;
-        let id = sync(|| unsafe {
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe {
             H5Dcreate2(
                 loc_id,
                 c_name.as_ptr(),
@@ -63,13 +61,7 @@ impl Dataset {
                 H5P_DEFAULT,
                 H5P_DEFAULT,
             )
-        });
-        if id < 0 {
-            return Err(crate::Error::Hdf5(format!(
-                "Failed to create dataset: {}",
-                name
-            )));
-        }
+        })?;
         Dataset::from_id(id)
     }
 
@@ -80,19 +72,17 @@ impl Dataset {
 
     /// Get the dataspace.
     pub fn space(&self) -> Result<Dataspace> {
-        let id = sync(|| unsafe { H5Dget_space(self.id()) });
-        if id < 0 {
-            return Err(crate::Error::Hdf5("Failed to get dataset space".into()));
-        }
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe { H5Dget_space(self.id()) })?;
         Dataspace::from_id(id)
     }
 
     /// Get the datatype.
     pub fn dtype(&self) -> Result<Datatype> {
-        let id = sync(|| unsafe { H5Dget_type(self.id()) });
-        if id < 0 {
-            return Err(crate::Error::Hdf5("Failed to get dataset type".into()));
-        }
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe { H5Dget_type(self.id()) })?;
         Datatype::from_id(id)
     }
 

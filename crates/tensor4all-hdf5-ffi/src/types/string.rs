@@ -558,7 +558,7 @@ impl<const N: usize> FromStr for FixedUnicode<N> {
     type Err = StringError;
 
     fn from_str(s: &str) -> Result<Self, <Self as FromStr>::Err> {
-        if s.as_bytes().len() <= N {
+        if s.len() <= N {
             unsafe { Ok(Self::from_bytes(s.as_bytes())) }
         } else {
             Err(StringError::InsufficientCapacity)

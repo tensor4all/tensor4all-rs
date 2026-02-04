@@ -13,7 +13,7 @@ concurrency:
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -44,7 +44,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -65,8 +65,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-test-
 
-      - name: Run tests
-        run: cargo test --release --workspace
+      - name: Run tests (non-HDF5)
+        run: cargo test --release --workspace --exclude tensor4all-hdf5 --exclude tensor4all-hdf5-ffi
+
+      - name: Run HDF5 tests (sequential - HDF5 library may not be threadsafe)
+        run: |
+          cargo test --release -p tensor4all-hdf5-ffi --test diagnose_h5i -- --test-threads=1 --nocapture
+          cargo test --release -p tensor4all-hdf5-ffi -- --test-threads=1
+          cargo test --release -p tensor4all-hdf5 -- --test-threads=1
 
   test-libtorch:
     name: Test (libtorch)
@@ -109,7 +115,7 @@ jobs:
 
   coverage:
     name: Coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -135,8 +141,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-cov-
 
-      - name: Generate coverage report
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - name: Generate coverage report (non-HDF5)
+        run: cargo llvm-cov --workspace --exclude tensor4all-hdf5 --exclude tensor4all-hdf5-ffi --lcov --output-path lcov-main.info
+
+      - name: Generate coverage report (HDF5 - sequential)
+        run: |
+          cargo llvm-cov -p tensor4all-hdf5-ffi --lcov --output-path lcov-hdf5-ffi.info -- --test-threads=1
+          cargo llvm-cov -p tensor4all-hdf5 --lcov --output-path lcov-hdf5.info -- --test-threads=1
+
+      - name: Merge coverage reports
+        run: |
+          cat lcov-main.info lcov-hdf5-ffi.info lcov-hdf5.info > lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

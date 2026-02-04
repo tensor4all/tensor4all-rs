@@ -38,12 +38,9 @@ impl std::fmt::Debug for Dataspace {
 impl Dataspace {
     /// Create a scalar dataspace.
     pub fn new_scalar() -> Result<Self> {
-        let id = sync(|| unsafe { H5Screate(H5S_SCALAR as i32) });
-        if id < 0 {
-            return Err(crate::Error::Hdf5(
-                "Failed to create scalar dataspace".into(),
-            ));
-        }
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe { H5Screate(H5S_SCALAR as i32) })?;
         Dataspace::from_id(id)
     }
 
@@ -55,15 +52,11 @@ impl Dataspace {
         }
 
         let h5_dims: Vec<hsize_t> = dims_vec.iter().map(|&d| d as hsize_t).collect();
-        let id = sync(|| unsafe {
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe {
             H5Screate_simple(h5_dims.len() as i32, h5_dims.as_ptr(), std::ptr::null())
-        });
-
-        if id < 0 {
-            return Err(crate::Error::Hdf5(
-                "Failed to create simple dataspace".into(),
-            ));
-        }
+        })?;
         Dataspace::from_id(id)
     }
 
