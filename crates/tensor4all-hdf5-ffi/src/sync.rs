@@ -58,11 +58,7 @@ mod tests {
     #[test]
     pub fn test_sync_reentrant() {
         // Test that sync is reentrant (can be called nested)
-        let result = sync(|| {
-            sync(|| {
-                sync(|| 42)
-            })
-        });
+        let result = sync(|| sync(|| sync(|| 42)));
         assert_eq!(result, 42);
     }
 }
