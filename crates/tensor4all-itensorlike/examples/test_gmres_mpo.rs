@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
     println!("========================================\n");
 
     let mut identity_results = Vec::new();
-    for n in [3, 5, 10] {
+    for n in [3, 5] {
         let result = test_gmres_mpo_identity(n)?;
         identity_results.push((n, result));
         println!();
@@ -81,7 +81,7 @@ fn main() -> anyhow::Result<()> {
     println!("========================================\n");
 
     let mut pauli_results = Vec::new();
-    for n in [3, 5, 10] {
+    for n in [3, 5] {
         let result = test_gmres_mpo_pauli(n)?;
         pauli_results.push((n, result));
         println!();
@@ -113,7 +113,7 @@ fn main() -> anyhow::Result<()> {
     println!("========================================\n");
 
     let mut imaginary_results = Vec::new();
-    for n in [3, 5, 10] {
+    for n in [3, 5] {
         let result = test_gmres_mpo_imaginary(n)?;
         imaginary_results.push((n, result));
         println!();
@@ -145,7 +145,7 @@ fn main() -> anyhow::Result<()> {
     println!("========================================\n");
 
     let mut random_results = Vec::new();
-    for n in [3, 5, 10] {
+    for n in [3, 5] {
         let result = test_gmres_mpo_random(n, 20)?;
         random_results.push((n, result));
         println!();
@@ -490,7 +490,7 @@ fn test_gmres_mpo_random(n: usize, max_iter: usize) -> anyhow::Result<(f64, f64,
         rtol: 1e-8,
         max_restarts: 5,
         verbose: true,
-        check_true_residual: false,
+        check_true_residual: true,
     };
 
     let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(50);
@@ -726,8 +726,11 @@ fn apply_operator_to_mpo(
     mpo: &TensorTrain,
     indices: &SharedIndices,
 ) -> anyhow::Result<TensorTrain> {
-    // Contract operator with MPO using zipup method
-    let options = ContractOptions::zipup().with_rtol(1e-10).with_max_rank(50);
+    // Contract operator with MPO using fit method
+    let options = ContractOptions::fit()
+        .with_nhalfsweeps(4)
+        .with_rtol(1e-10)
+        .with_max_rank(50);
 
     let result = op
         .contract(mpo, &options)

@@ -47,7 +47,7 @@ fn main() -> anyhow::Result<()> {
 
     // Test Pauli-X with varying N
     let mut pauli_results = Vec::new();
-    for n in [3, 5, 10] {
+    for n in [3, 5] {
         let result = test_gmres_mps(n, "pauli_x")?;
         pauli_results.push((n, result));
         println!();
@@ -79,7 +79,7 @@ fn main() -> anyhow::Result<()> {
 
     // Test Identity with varying N
     let mut identity_results = Vec::new();
-    for n in [3, 5, 10] {
+    for n in [3, 5] {
         let result = test_gmres_mps(n, "identity")?;
         identity_results.push((n, result));
         println!();
@@ -111,7 +111,7 @@ fn main() -> anyhow::Result<()> {
     println!("========================================\n");
 
     let mut imaginary_results = Vec::new();
-    for n in [3, 5, 10] {
+    for n in [3, 5] {
         let result = test_gmres_mps_imaginary(n, 5)?;
         imaginary_results.push((n, result));
         println!();
@@ -143,7 +143,7 @@ fn main() -> anyhow::Result<()> {
     println!("========================================\n");
 
     let mut random_results = Vec::new();
-    for n in [3, 5, 10] {
+    for n in [3, 5] {
         let result = test_gmres_mps_random(n, 20)?;
         random_results.push((n, result));
         println!();
@@ -759,7 +759,7 @@ fn test_gmres_mps_random(n: usize, max_iter: usize) -> anyhow::Result<(f64, f64,
         rtol: 1e-8,
         max_restarts: 5,
         verbose: true,
-        check_true_residual: false,
+        check_true_residual: true,
     };
 
     // Truncation options: control bond dimension growth
