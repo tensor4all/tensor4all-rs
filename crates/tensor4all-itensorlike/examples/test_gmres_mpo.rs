@@ -218,6 +218,7 @@ fn test_gmres_mpo_identity(n: usize) -> anyhow::Result<(f64, f64, usize)> {
         rtol: 1e-8,
         max_restarts: 1,
         verbose: true,
+        check_true_residual: false,
     };
 
     let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(20);
@@ -310,6 +311,7 @@ fn test_gmres_mpo_pauli(n: usize) -> anyhow::Result<(f64, f64, usize)> {
         rtol: 1e-8,
         max_restarts: 1,
         verbose: true,
+        check_true_residual: false,
     };
 
     let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(20);
@@ -395,6 +397,7 @@ fn test_gmres_mpo_imaginary(n: usize) -> anyhow::Result<(f64, f64, usize)> {
         rtol: 1e-8,
         max_restarts: 1,
         verbose: true,
+        check_true_residual: false,
     };
 
     let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(20);
@@ -487,6 +490,7 @@ fn test_gmres_mpo_random(n: usize, max_iter: usize) -> anyhow::Result<(f64, f64,
         rtol: 1e-8,
         max_restarts: 5,
         verbose: true,
+        check_true_residual: false,
     };
 
     let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(50);

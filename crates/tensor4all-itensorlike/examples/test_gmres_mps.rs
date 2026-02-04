@@ -229,6 +229,7 @@ fn test_gmres_mps(n: usize, operator: &str) -> anyhow::Result<(f64, f64, usize)>
         rtol: 1e-8, // Strict tolerance to force multiple iterations
         max_restarts: 1,
         verbose: true,
+        check_true_residual: false,
     };
 
     // Truncation options: control bond dimension growth
@@ -497,6 +498,7 @@ fn test_gmres_mps_imaginary(n: usize, max_iter: usize) -> anyhow::Result<(f64, f
         rtol: 1e-8,
         max_restarts: 1,
         verbose: true,
+        check_true_residual: false,
     };
 
     // Truncation options: control bond dimension growth
@@ -757,6 +759,7 @@ fn test_gmres_mps_random(n: usize, max_iter: usize) -> anyhow::Result<(f64, f64,
         rtol: 1e-8,
         max_restarts: 5,
         verbose: true,
+        check_true_residual: false,
     };
 
     // Truncation options: control bond dimension growth

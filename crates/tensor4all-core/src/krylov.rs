@@ -50,6 +50,13 @@ pub struct GmresOptions {
     /// Whether to print convergence information.
     /// Default: false
     pub verbose: bool,
+
+    /// When true, verify convergence by computing the true residual `||b - A*x|| / ||b||`
+    /// before declaring convergence. This prevents false convergence caused by
+    /// truncation corrupting the Krylov basis orthogonality (see Issue #207).
+    /// Costs one additional `apply_a` call when convergence is detected.
+    /// Default: false
+    pub check_true_residual: bool,
 }
 
 impl Default for GmresOptions {
@@ -59,6 +66,7 @@ impl Default for GmresOptions {
             rtol: 1e-10,
             max_restarts: 10,
             verbose: false,
+            check_true_residual: false,
         }
     }
 }
@@ -372,6 +380,7 @@ where
         let mut cs: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
         let mut sn: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
         let mut g: Vec<AnyScalar> = vec![AnyScalar::F64(effective_g0)];
+        let mut solution_already_updated = false;
 
         for j in 0..options.max_iter {
             total_iters += 1;
@@ -473,12 +482,42 @@ where
             if rel_res < options.rtol {
                 let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
                 x = update_solution_truncated(&x, &v_basis[..=j], &y, &truncate)?;
-                return Ok(GmresResult {
-                    solution: x,
-                    iterations: total_iters,
-                    residual_norm: rel_res,
-                    converged: true,
-                });
+
+                if options.check_true_residual {
+                    // Verify with true residual to prevent false convergence
+                    let ax_check = apply_a(&x)?;
+                    let mut r_check =
+                        b.axpby(AnyScalar::F64(1.0), &ax_check, AnyScalar::F64(-1.0))?;
+                    truncate(&mut r_check)?;
+                    let true_rel_res = r_check.norm() / b_norm;
+
+                    if options.verbose {
+                        eprintln!(
+                            "GMRES true residual check: hessenberg={:.6e}, checked={:.6e}",
+                            rel_res, true_rel_res
+                        );
+                    }
+
+                    if true_rel_res < options.rtol {
+                        return Ok(GmresResult {
+                            solution: x,
+                            iterations: total_iters,
+                            residual_norm: true_rel_res,
+                            converged: true,
+                        });
+                    }
+                    // False convergence detected: x is already updated above,
+                    // so skip the end-of-cycle update and go to next restart
+                    solution_already_updated = true;
+                    break;
+                } else {
+                    return Ok(GmresResult {
+                        solution: x,
+                        iterations: total_iters,
+                        residual_norm: rel_res,
+                        converged: true,
+                    });
+                }
             }
 
             if h_jp1_j_real > 1e-14 {
@@ -504,8 +543,11 @@ where
             }
         }
 
-        let y = solve_upper_triangular(&h_matrix, &g[..options.max_iter])?;
-        x = update_solution_truncated(&x, &v_basis[..options.max_iter], &y, &truncate)?;
+        if !solution_already_updated {
+            let actual_iters = v_basis.len().min(options.max_iter);
+            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters])?;
+            x = update_solution_truncated(&x, &v_basis[..actual_iters], &y, &truncate)?;
+        }
     }
 
     let ax_final = apply_a(&x)?;
@@ -720,6 +762,7 @@ where
         rtol: options.inner_rtol.unwrap_or(0.1), // Solve loosely by default
         max_restarts: options.inner_max_restarts + 1, // +1 because max_restarts=0 means 1 cycle
         verbose: options.verbose,
+        check_true_residual: true, // Always check in restart context to avoid false convergence
     };
 
     for outer_iter in 0..options.max_outer_iters {
@@ -1009,6 +1052,7 @@ mod tests {
             rtol: 1e-10,
             max_restarts: 1,
             verbose: false,
+            check_true_residual: false,
         };
 
         let result = gmres(apply_a, &b, &x0, &options).unwrap();
@@ -1065,6 +1109,7 @@ mod tests {
             rtol: 1e-10,
             max_restarts: 1,
             verbose: false,
+            check_true_residual: false,
         };
 
         let result = gmres(apply_a, &b, &x0, &options).unwrap();
@@ -1127,6 +1172,7 @@ mod tests {
             rtol: 1e-10,
             max_restarts: 1,
             verbose: false,
+            check_true_residual: false,
         };
 
         let result = gmres(apply_a, &b, &x0, &options).unwrap();
@@ -1162,6 +1208,7 @@ mod tests {
             rtol: 1e-10,
             max_restarts: 1,
             verbose: false,
+            check_true_residual: false,
         };
 
         let result = gmres(apply_a, &b, &x0, &options).unwrap();
@@ -1204,6 +1251,7 @@ mod tests {
             rtol: 1e-10,
             max_restarts: 1,
             verbose: false,
+            check_true_residual: false,
         };
 
         let result = gmres(apply_a, &b, &x0, &options).unwrap();
@@ -1263,6 +1311,7 @@ mod tests {
             rtol: 1e-10,
             max_restarts: 1,
             verbose: false,
+            check_true_residual: false,
         };
 
         let result = gmres(apply_a, &b, &x0, &options).unwrap();
@@ -1538,5 +1587,141 @@ mod tests {
         assert_eq!(options.min_reduction, Some(0.95));
         assert_eq!(options.inner_rtol, Some(0.01));
         assert!(options.verbose);
+    }
+
+    #[test]
+    fn test_gmres_with_truncation_check_true_residual_safe() {
+        // When check_true_residual is enabled and convergence is reported,
+        // the residual_norm should reflect the checked residual (not the
+        // potentially inaccurate Hessenberg estimate).
+        let idx = DynIndex::new_dyn(3);
+        let b = make_vector_with_index(vec![2.0, 6.0, 12.0], &idx);
+        let x0 = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
+
+        let diag = [2.0, 3.0, 4.0];
+        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
+            let x_data = match x.storage().as_ref() {
+                Storage::DenseF64(d) => d.as_slice().to_vec(),
+                _ => anyhow::bail!("Expected DenseF64"),
+            };
+            let result_data: Vec<f64> = x_data
+                .iter()
+                .zip(diag.iter())
+                .map(|(&xi, &di)| xi * di)
+                .collect();
+            let dims = x.dims();
+            Ok(TensorDynLen::new(
+                x.indices.clone(),
+                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                    result_data,
+                    &dims,
+                ))),
+            ))
+        };
+
+        // No-op truncation: convergence should work normally with check enabled
+        let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+        let options = GmresOptions {
+            max_iter: 10,
+            rtol: 1e-10,
+            max_restarts: 3,
+            verbose: false,
+            check_true_residual: true,
+        };
+
+        let result = gmres_with_truncation(&apply_a, &b, &x0, &options, &truncate).unwrap();
+
+        assert!(
+            result.converged,
+            "Should converge with true residual check and no-op truncation"
+        );
+
+        // Verify the reported residual is actually the checked residual
+        let ax = apply_a(&result.solution).unwrap();
+        let r = ax
+            .axpby(AnyScalar::F64(1.0), &b, AnyScalar::F64(-1.0))
+            .unwrap();
+        let true_rel_res = r.norm() / b.norm();
+        assert!(
+            true_rel_res < 1e-8,
+            "True residual should be small: {}",
+            true_rel_res
+        );
+    }
+
+    #[test]
+    fn test_gmres_with_truncation_check_true_residual_consistency() {
+        // Test that when check_true_residual is enabled, the reported residual_norm
+        // is consistent with the actual checked (truncated) residual.
+        let idx = DynIndex::new_dyn(4);
+        let b = make_vector_with_index(vec![1.0, 2.0, 3.0, 4.0], &idx);
+        let x0 = make_vector_with_index(vec![0.0, 0.0, 0.0, 0.0], &idx);
+
+        // A = diag(1, 2, 3, 4)
+        let diag = [1.0, 2.0, 3.0, 4.0];
+        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
+            let x_data = match x.storage().as_ref() {
+                Storage::DenseF64(d) => d.as_slice().to_vec(),
+                _ => anyhow::bail!("Expected DenseF64"),
+            };
+            let result_data: Vec<f64> = x_data
+                .iter()
+                .zip(diag.iter())
+                .map(|(&xi, &di)| xi * di)
+                .collect();
+            let dims = x.dims();
+            Ok(TensorDynLen::new(
+                x.indices.clone(),
+                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                    result_data,
+                    &dims,
+                ))),
+            ))
+        };
+
+        // No-op truncation: the solver should converge normally
+        let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+        // Without check: converged with Hessenberg residual
+        let options_no_check = GmresOptions {
+            max_iter: 10,
+            rtol: 1e-10,
+            max_restarts: 3,
+            verbose: false,
+            check_true_residual: false,
+        };
+        let result_no_check =
+            gmres_with_truncation(&apply_a, &b, &x0, &options_no_check, &truncate).unwrap();
+
+        // With check: converged with verified residual
+        let options_check = GmresOptions {
+            max_iter: 10,
+            rtol: 1e-10,
+            max_restarts: 3,
+            verbose: false,
+            check_true_residual: true,
+        };
+        let result_check =
+            gmres_with_truncation(&apply_a, &b, &x0, &options_check, &truncate).unwrap();
+
+        // Both should converge for this simple problem
+        assert!(result_no_check.converged, "No-check should converge");
+        assert!(result_check.converged, "With-check should converge");
+
+        // With check, the reported residual should be the true residual
+        let ax = apply_a(&result_check.solution).unwrap();
+        let r = ax
+            .axpby(AnyScalar::F64(1.0), &b, AnyScalar::F64(-1.0))
+            .unwrap();
+        let true_rel_res = r.norm() / b.norm();
+
+        // The reported residual should match the true residual closely
+        assert!(
+            (result_check.residual_norm - true_rel_res).abs() < 1e-8,
+            "Reported residual ({:.6e}) should match true residual ({:.6e})",
+            result_check.residual_norm,
+            true_rel_res
+        );
     }
 }

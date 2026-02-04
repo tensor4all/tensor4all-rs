@@ -590,6 +590,7 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
         rtol: 1e-8,
         max_restarts: 1,
         verbose: true,
+        check_true_residual: false,
     };
     let x0_for_gmres = b.scale(AnyScalar::new_real(0.5))?;
     let gmres_result = gmres(&apply_a_clone, &b, &x0_for_gmres, &options)?;
@@ -1242,6 +1243,7 @@ fn test_gmres_with_both(
         rtol: 1e-8,
         max_restarts: 1,
         verbose: true, // Enable verbose to see iteration details
+        check_true_residual: false,
     };
 
     // Test WITHOUT truncation first

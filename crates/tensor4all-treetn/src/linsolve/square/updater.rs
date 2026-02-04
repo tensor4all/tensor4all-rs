@@ -567,6 +567,7 @@ where
             rtol: self.options.krylov_tol,
             max_restarts: (self.options.krylov_maxiter / self.options.krylov_dim).max(1),
             verbose: false,
+            check_true_residual: false,
         };
 
         // Solve using GMRES (works directly with TensorDynLen)
