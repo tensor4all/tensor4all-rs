@@ -5,22 +5,16 @@
 //! - `runtime-loading` feature: Must call `hdf5_init()` before using HDF5 operations
 
 use crate::error::Result;
-use std::sync::Once;
-
-static INIT: Once = Once::new();
+use std::sync::LazyLock;
 
 /// Ensure HDF5 is initialized. Called internally before HDF5 operations.
 ///
-/// In link mode, this calls H5open() to initialize the library.
+/// In link mode, this forces LIBRARY_INIT which calls H5dont_atexit() and H5open().
 /// In runtime-loading mode, this is a no-op (user must call hdf5_init first).
 #[cfg(all(feature = "link", not(feature = "runtime-loading")))]
 #[inline]
 pub fn ensure_hdf5_init() {
-    INIT.call_once(|| {
-        crate::sync::sync(|| unsafe {
-            hdf5_sys::h5::H5open();
-        });
-    });
+    LazyLock::force(&crate::sync::LIBRARY_INIT);
 }
 
 /// Ensure HDF5 is initialized. Called internally before HDF5 operations.
@@ -32,6 +26,7 @@ pub fn ensure_hdf5_init() {
     if !crate::sys::is_initialized() {
         panic!("HDF5 library not initialized. Call hdf5_init() first.");
     }
+    LazyLock::force(&crate::sync::LIBRARY_INIT);
 }
 
 /// Initialize HDF5 by loading the library from the given path.

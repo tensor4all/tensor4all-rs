@@ -66,10 +66,7 @@ jobs:
             ${{ runner.os }}-cargo-test-
 
       - name: Run tests
-        run: |
-          # TODO: HDF5 tests fail on Ubuntu due to thread-safety issues with system HDF5
-          # Exclude tensor4all-hdf5 and tensor4all-hdf5-ffi until resolved
-          cargo test --release --workspace --exclude tensor4all-hdf5 --exclude tensor4all-hdf5-ffi
+        run: cargo test --release --workspace
 
   test-libtorch:
     name: Test (libtorch)
@@ -139,10 +136,7 @@ jobs:
             ${{ runner.os }}-cargo-cov-
 
       - name: Generate coverage report
-        run: |
-          # TODO: HDF5 tests fail on Ubuntu due to thread-safety issues with system HDF5
-          # Exclude tensor4all-hdf5 and tensor4all-hdf5-ffi until resolved
-          cargo llvm-cov --workspace --exclude tensor4all-hdf5 --exclude tensor4all-hdf5-ffi --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
