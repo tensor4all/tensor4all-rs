@@ -4,6 +4,7 @@ use crate::class::ObjectClass;
 use crate::dim::Dimension;
 use crate::error::Result;
 use crate::globals::H5P_DEFAULT;
+use crate::h5call;
 use crate::handle::Handle;
 use crate::sync::sync;
 use crate::sys::h5i::H5I_GROUP;
@@ -50,45 +51,27 @@ impl Group {
     /// Create a group within any location (file or group).
     fn create_in(loc_id: hid_t, name: &str) -> Result<Self> {
         let c_name = to_cstring(name)?;
-        // Keep the entire creation and validation in a single sync block
-        sync(|| {
-            let id = unsafe {
-                H5Gcreate2(
-                    loc_id,
-                    c_name.as_ptr(),
-                    H5P_DEFAULT,
-                    H5P_DEFAULT,
-                    H5P_DEFAULT,
-                )
-            };
-
-            if id < 0 {
-                return Err(crate::Error::Hdf5(format!(
-                    "Failed to create group: {}",
-                    name
-                )));
-            }
-
-            Group::from_id(id)
-        })
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe {
+            H5Gcreate2(
+                loc_id,
+                c_name.as_ptr(),
+                H5P_DEFAULT,
+                H5P_DEFAULT,
+                H5P_DEFAULT,
+            )
+        })?;
+        Group::from_id(id)
     }
 
     /// Open a group within any location (file or group).
     fn open_in(loc_id: hid_t, name: &str) -> Result<Self> {
         let c_name = to_cstring(name)?;
-        // Keep the entire open and validation in a single sync block
-        sync(|| {
-            let id = unsafe { H5Gopen2(loc_id, c_name.as_ptr(), H5P_DEFAULT) };
-
-            if id < 0 {
-                return Err(crate::Error::Hdf5(format!(
-                    "Failed to open group: {}",
-                    name
-                )));
-            }
-
-            Group::from_id(id)
-        })
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe { H5Gopen2(loc_id, c_name.as_ptr(), H5P_DEFAULT) })?;
+        Group::from_id(id)
     }
 
     /// Get the group's ID.

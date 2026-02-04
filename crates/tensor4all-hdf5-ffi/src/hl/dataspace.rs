@@ -3,6 +3,7 @@
 use crate::class::ObjectClass;
 use crate::dim::Dimension;
 use crate::error::Result;
+use crate::h5call;
 use crate::handle::Handle;
 use crate::sync::sync;
 use crate::sys::h5i::H5I_DATASPACE;
@@ -38,16 +39,10 @@ impl std::fmt::Debug for Dataspace {
 impl Dataspace {
     /// Create a scalar dataspace.
     pub fn new_scalar() -> Result<Self> {
-        // Keep the entire creation and validation in a single sync block
-        sync(|| {
-            let id = unsafe { H5Screate(H5S_SCALAR as i32) };
-            if id < 0 {
-                return Err(crate::Error::Hdf5(
-                    "Failed to create scalar dataspace".into(),
-                ));
-            }
-            Dataspace::from_id(id)
-        })
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe { H5Screate(H5S_SCALAR as i32) })?;
+        Dataspace::from_id(id)
     }
 
     /// Create a simple dataspace with the given dimensions.
@@ -58,19 +53,12 @@ impl Dataspace {
         }
 
         let h5_dims: Vec<hsize_t> = dims_vec.iter().map(|&d| d as hsize_t).collect();
-        // Keep the entire creation and validation in a single sync block
-        sync(|| {
-            let id = unsafe {
-                H5Screate_simple(h5_dims.len() as i32, h5_dims.as_ptr(), std::ptr::null())
-            };
-
-            if id < 0 {
-                return Err(crate::Error::Hdf5(
-                    "Failed to create simple dataspace".into(),
-                ));
-            }
-            Dataspace::from_id(id)
-        })
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe {
+            H5Screate_simple(h5_dims.len() as i32, h5_dims.as_ptr(), std::ptr::null())
+        })?;
+        Dataspace::from_id(id)
     }
 
     /// Get the number of dimensions.

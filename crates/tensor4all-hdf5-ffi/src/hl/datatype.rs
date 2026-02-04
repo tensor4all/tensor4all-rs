@@ -3,6 +3,7 @@
 use crate::class::ObjectClass;
 use crate::error::Result;
 use crate::globals;
+use crate::h5call;
 use crate::handle::Handle;
 use crate::sync::sync;
 use crate::sys::h5i::H5I_DATATYPE;
@@ -39,14 +40,10 @@ impl std::fmt::Debug for Datatype {
 impl Datatype {
     /// Create a datatype from native HDF5 type ID.
     pub fn from_type_id(type_id: hid_t) -> Result<Self> {
-        // Keep the entire copy and validation in a single sync block
-        sync(|| {
-            let id = unsafe { H5Tcopy(type_id) };
-            if id < 0 {
-                return Err(crate::Error::Hdf5("Failed to copy datatype".into()));
-            }
-            Datatype::from_id(id)
-        })
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe { H5Tcopy(type_id) })?;
+        Datatype::from_id(id)
     }
 
     /// Get the datatype's ID.
@@ -120,7 +117,9 @@ impl Datatype {
 
     /// Create a variable-length UTF-8 string datatype.
     pub fn varlen_string() -> Result<Self> {
-        sync(|| {
+        // Multiple HDF5 calls need the lock, but from_id should be outside
+        // (matching hdf5-metno's pattern)
+        let id = sync(|| {
             let id = unsafe { H5Tcopy(globals::H5T_C_S1()) };
             if id < 0 {
                 return Err(crate::Error::Hdf5(
@@ -146,13 +145,16 @@ impl Datatype {
                 return Err(crate::Error::Hdf5("Failed to set null-terminated".into()));
             }
 
-            Datatype::from_id(id)
-        })
+            Ok(id)
+        })?;
+        Datatype::from_id(id)
     }
 
     /// Create a fixed-length UTF-8 string datatype.
     pub fn fixed_string(len: usize) -> Result<Self> {
-        sync(|| {
+        // Multiple HDF5 calls need the lock, but from_id should be outside
+        // (matching hdf5-metno's pattern)
+        let id = sync(|| {
             let id = unsafe { H5Tcopy(globals::H5T_C_S1()) };
             if id < 0 {
                 return Err(crate::Error::Hdf5(
@@ -172,8 +174,9 @@ impl Datatype {
                 return Err(crate::Error::Hdf5("Failed to set UTF-8 charset".into()));
             }
 
-            Datatype::from_id(id)
-        })
+            Ok(id)
+        })?;
+        Datatype::from_id(id)
     }
 
     /// Create a Complex64 compound datatype (compatible with ITensors.jl).
@@ -183,7 +186,9 @@ impl Datatype {
         let r_name = to_cstring("r")?;
         let i_name = to_cstring("i")?;
 
-        sync(|| {
+        // Multiple HDF5 calls need the lock, but from_id should be outside
+        // (matching hdf5-metno's pattern)
+        let id = sync(|| {
             // Create compound type with size of two f64
             let id = unsafe { H5Tcreate(H5T_COMPOUND as i32, 16) }; // 2 * sizeof(f64)
             if id < 0 {
@@ -204,8 +209,9 @@ impl Datatype {
                 return Err(crate::Error::Hdf5("Failed to insert 'i' field".into()));
             }
 
-            Datatype::from_id(id)
-        })
+            Ok(id)
+        })?;
+        Datatype::from_id(id)
     }
 
     /// Create a Complex32 compound datatype.
@@ -215,7 +221,9 @@ impl Datatype {
         let r_name = to_cstring("r")?;
         let i_name = to_cstring("i")?;
 
-        sync(|| {
+        // Multiple HDF5 calls need the lock, but from_id should be outside
+        // (matching hdf5-metno's pattern)
+        let id = sync(|| {
             // Create compound type with size of two f32
             let id = unsafe { H5Tcreate(H5T_COMPOUND as i32, 8) }; // 2 * sizeof(f32)
             if id < 0 {
@@ -236,22 +244,22 @@ impl Datatype {
                 return Err(crate::Error::Hdf5("Failed to insert 'i' field".into()));
             }
 
-            Datatype::from_id(id)
-        })
+            Ok(id)
+        })?;
+        Datatype::from_id(id)
     }
 }
 
 impl Clone for Datatype {
     fn clone(&self) -> Self {
-        // Keep the entire copy and validation in a single sync block
-        sync(|| {
-            let id = unsafe { H5Tcopy(self.id()) };
-            if id < 0 {
-                Self::from_handle(Handle::invalid())
-            } else {
-                Self::from_id(id).unwrap_or_else(|_| Self::from_handle(Handle::invalid()))
-            }
-        })
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = sync(|| unsafe { H5Tcopy(self.id()) });
+        if id < 0 {
+            Self::from_handle(Handle::invalid())
+        } else {
+            Self::from_id(id).unwrap_or_else(|_| Self::from_handle(Handle::invalid()))
+        }
     }
 }
 

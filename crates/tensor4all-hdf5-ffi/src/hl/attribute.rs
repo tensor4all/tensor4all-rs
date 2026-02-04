@@ -3,6 +3,7 @@
 use crate::class::ObjectClass;
 use crate::error::Result;
 use crate::globals::H5P_DEFAULT;
+use crate::h5call;
 use crate::handle::Handle;
 use crate::sync::sync;
 use crate::sys::h5i::H5I_ATTR;
@@ -41,43 +42,28 @@ impl Attribute {
     /// Open an existing attribute.
     pub fn open(loc_id: hid_t, name: &str) -> Result<Self> {
         let c_name = to_cstring(name)?;
-        // Keep the entire open and validation in a single sync block
-        sync(|| {
-            let id = unsafe { H5Aopen(loc_id, c_name.as_ptr(), H5P_DEFAULT) };
-            if id < 0 {
-                return Err(crate::Error::Hdf5(format!(
-                    "Failed to open attribute: {}",
-                    name
-                )));
-            }
-            Attribute::from_id(id)
-        })
+        // Call H5Aopen with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe { H5Aopen(loc_id, c_name.as_ptr(), H5P_DEFAULT) })?;
+        Attribute::from_id(id)
     }
 
     /// Create a new attribute.
     pub fn create(loc_id: hid_t, name: &str, dtype: &Datatype, space: &Dataspace) -> Result<Self> {
         let c_name = to_cstring(name)?;
-        // Keep the entire creation and validation in a single sync block
-        // to prevent race conditions between ID creation and validation
-        sync(|| {
-            let id = unsafe {
-                H5Acreate2(
-                    loc_id,
-                    c_name.as_ptr(),
-                    dtype.id(),
-                    space.id(),
-                    H5P_DEFAULT,
-                    H5P_DEFAULT,
-                )
-            };
-            if id < 0 {
-                return Err(crate::Error::Hdf5(format!(
-                    "Failed to create attribute: {}",
-                    name
-                )));
-            }
-            Attribute::from_id(id)
-        })
+        // Call H5Acreate2 with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern: h5try! releases lock before from_id)
+        let id = h5call!(unsafe {
+            H5Acreate2(
+                loc_id,
+                c_name.as_ptr(),
+                dtype.id(),
+                space.id(),
+                H5P_DEFAULT,
+                H5P_DEFAULT,
+            )
+        })?;
+        Attribute::from_id(id)
     }
 
     /// Get the attribute's ID.
@@ -87,26 +73,18 @@ impl Attribute {
 
     /// Get the dataspace.
     pub fn space(&self) -> Result<Dataspace> {
-        // Keep the entire get and validation in a single sync block
-        sync(|| {
-            let id = unsafe { H5Aget_space(self.id()) };
-            if id < 0 {
-                return Err(crate::Error::Hdf5("Failed to get attribute space".into()));
-            }
-            Dataspace::from_id(id)
-        })
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe { H5Aget_space(self.id()) })?;
+        Dataspace::from_id(id)
     }
 
     /// Get the datatype.
     pub fn dtype(&self) -> Result<Datatype> {
-        // Keep the entire get and validation in a single sync block
-        sync(|| {
-            let id = unsafe { H5Aget_type(self.id()) };
-            if id < 0 {
-                return Err(crate::Error::Hdf5("Failed to get attribute type".into()));
-            }
-            Datatype::from_id(id)
-        })
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe { H5Aget_type(self.id()) })?;
+        Datatype::from_id(id)
     }
 
     /// Read raw data into a buffer.

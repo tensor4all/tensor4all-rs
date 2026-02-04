@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::class::ObjectClass;
 use crate::error::Result;
 use crate::globals::H5P_DEFAULT;
+use crate::h5call;
 use crate::handle::Handle;
 use crate::init::ensure_hdf5_init;
 use crate::sync::sync;
@@ -125,35 +126,21 @@ impl FileBuilder {
             .ok_or_else(|| crate::Error::Internal("Invalid path encoding".into()))?;
         let c_path = to_cstring(path_str)?;
 
-        // Keep the entire open/create and validation in a single sync block
-        let mode = self.mode;
-        sync(|| {
-            let id = unsafe {
-                match mode {
-                    OpenMode::Read => H5Fopen(c_path.as_ptr(), H5F_ACC_RDONLY, H5P_DEFAULT),
-                    OpenMode::ReadWrite => H5Fopen(c_path.as_ptr(), H5F_ACC_RDWR, H5P_DEFAULT),
-                    OpenMode::Create => {
-                        H5Fcreate(c_path.as_ptr(), H5F_ACC_EXCL, H5P_DEFAULT, H5P_DEFAULT)
-                    }
-                    OpenMode::Truncate => {
-                        H5Fcreate(c_path.as_ptr(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT)
-                    }
+        // Call HDF5 API with lock, then release lock before from_id
+        // (matching hdf5-metno's pattern)
+        let id = h5call!(unsafe {
+            match self.mode {
+                OpenMode::Read => H5Fopen(c_path.as_ptr(), H5F_ACC_RDONLY, H5P_DEFAULT),
+                OpenMode::ReadWrite => H5Fopen(c_path.as_ptr(), H5F_ACC_RDWR, H5P_DEFAULT),
+                OpenMode::Create => {
+                    H5Fcreate(c_path.as_ptr(), H5F_ACC_EXCL, H5P_DEFAULT, H5P_DEFAULT)
                 }
-            };
-
-            if id < 0 {
-                return Err(crate::Error::Hdf5(format!(
-                    "Failed to {} file: {}",
-                    match mode {
-                        OpenMode::Read | OpenMode::ReadWrite => "open",
-                        OpenMode::Create | OpenMode::Truncate => "create",
-                    },
-                    path_str
-                )));
+                OpenMode::Truncate => {
+                    H5Fcreate(c_path.as_ptr(), H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT)
+                }
             }
-
-            File::from_id(id)
-        })
+        })?;
+        File::from_id(id)
     }
 }
 
