@@ -34,20 +34,18 @@ impl Handle {
     /// Create a handle from an ID returned directly from an HDF5 API call.
     ///
     /// This method trusts that the caller has verified the ID is valid
-    /// (e.g., the HDF5 function returned a non-negative value). It validates
-    /// the ID type but does NOT call `H5Iis_valid`, which may be unreliable
-    /// on some HDF5 builds.
+    /// (e.g., the HDF5 function returned a non-negative value). It does NOT
+    /// call any HDF5 validation functions (H5Iis_valid, H5Iget_type), which
+    /// may be unreliable on some HDF5 builds.
     ///
     /// # Safety
     /// Caller must ensure the ID was just returned from an HDF5 API call
     /// that returned success (non-negative value).
     pub fn try_new_trusted(id: hid_t) -> Result<Self> {
-        let handle = Self { id };
-        // Check ID is positive and has a valid type, but don't call H5Iis_valid
-        if id > 0 && handle.is_valid_id() {
-            Ok(handle)
+        // Trust the ID if it's positive - no HDF5 validation calls
+        if id > 0 {
+            Ok(Self { id })
         } else {
-            mem::forget(handle);
             Err(From::from(format!("Invalid handle id: {id}")))
         }
     }
