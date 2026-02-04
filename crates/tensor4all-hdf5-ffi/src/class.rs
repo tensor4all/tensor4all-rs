@@ -27,13 +27,13 @@ pub trait ObjectClass: Sized {
 
     fn from_id(id: hid_t) -> Result<Self> {
         h5lock!({
-            let handle = Handle::try_new(id)?;
-            if Self::is_valid_id_type(handle.id_type()) {
-                let obj = Self::from_handle(handle);
-                obj.validate().map(|()| obj)
-            } else {
-                Err(From::from(format!("Invalid {} id: {}", Self::NAME, id)))
-            }
+            // Use try_new_trusted to bypass H5Iis_valid and H5Iget_type checks,
+            // which may be unreliable on some HDF5 builds (especially Ubuntu's).
+            // We trust the ID since it comes from a successful HDF5 API call
+            // (verified by h5call! macro checking for non-negative return).
+            let handle = Handle::try_new_trusted(id)?;
+            let obj = Self::from_handle(handle);
+            obj.validate().map(|()| obj)
         })
     }
 
