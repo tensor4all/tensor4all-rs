@@ -96,6 +96,17 @@ fn main() -> anyhow::Result<()> {
         result.0, result.1, result.2
     );
 
+    // Test with complex problem: imaginary diagonal MPO * imaginary ones MPS
+    println!("\n========================================");
+    println!("  Imaginary Diagonal MPO Tests (A = i*diag, x = i*ones)");
+    println!("========================================\n");
+
+    let result = test_restart_gmres_imaginary_diagonal(3)?;
+    println!(
+        "N=3 Imaginary Diagonal: converged={}, outer_iters={}, true_residual={:.2e}\n",
+        result.0, result.1, result.2
+    );
+
     println!("\n========================================");
     println!("  All tests completed!");
     println!("========================================");
@@ -290,6 +301,94 @@ fn test_restart_gmres_hard(n: usize) -> anyhow::Result<(bool, usize, f64)> {
             .solution
             .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
     println!("Error ||x - x_true||: {:.6e}", diff.norm());
+
+    Ok((result.converged, result.outer_iterations, true_residual))
+}
+
+/// Test restart GMRES with imaginary diagonal MPO and imaginary ones MPS.
+/// A = i * diag(2, 3), x_true = i * ones, b = A * x_true
+/// Returns (converged, outer_iterations, true_residual)
+fn test_restart_gmres_imaginary_diagonal(n: usize) -> anyhow::Result<(bool, usize, f64)> {
+    let phys_dim = 2;
+    println!("--- N={}, operator=i*diagonal, x_true=i*ones ---", n);
+
+    let indices = SharedIndices::new(n, phys_dim);
+
+    // Create A = i * diag(2, 3) MPO
+    let mpo_real = create_diagonal_mpo(&indices)?;
+    let mpo = mpo_real.scale(AnyScalar::new_complex(0.0, 1.0))?;
+    let cond_number = (1.5_f64).powi(n as i32);
+    println!(
+        "Imaginary diagonal MPO created (i * diag(2,3)), condition number ≈ {:.2}",
+        cond_number
+    );
+
+    // Create x_true = i * ones MPS
+    let ones_real = create_ones_mps(&indices)?;
+    let x_true = ones_real.scale(AnyScalar::new_complex(0.0, 1.0))?;
+    println!("x_true (i * ones MPS) norm: {:.6}", x_true.norm());
+
+    // Compute b = A * x_true
+    let b = apply_mpo(&mpo, &x_true, &indices)?;
+    let b_norm = b.norm();
+    println!("b = A * x_true, norm: {:.6}", b_norm);
+
+    // Aggressive truncation
+    let truncate_opts = TruncateOptions::svd().with_rtol(1e-6).with_max_rank(5);
+    let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
+        x.truncate(&truncate_opts)?;
+        Ok(())
+    };
+
+    let apply_a = |x: &TensorTrain| -> anyhow::Result<TensorTrain> { apply_mpo(&mpo, x, &indices) };
+
+    println!(
+        "Truncation: rtol={:.0e}, max_rank={}",
+        truncate_opts.rtol().unwrap_or(0.0),
+        truncate_opts.max_rank().unwrap_or(0)
+    );
+
+    // Restart GMRES options - small inner iterations to force multiple outer iterations
+    let options = RestartGmresOptions {
+        max_outer_iters: 50,
+        rtol: 1e-6,
+        inner_max_iter: 3,
+        inner_max_restarts: 0,
+        min_reduction: None,
+        inner_rtol: Some(0.5),
+        verbose: true,
+    };
+
+    let result = restart_gmres_with_truncation(&apply_a, &b, None, &options, &truncate_fn)?;
+
+    // Compute true residual
+    let ax = apply_a(&result.solution)?;
+    let r = ax.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
+    let true_residual = r.norm() / b_norm;
+
+    println!("Converged: {}", result.converged);
+    println!("Outer iterations: {}", result.outer_iterations);
+    println!("Total inner iterations: {}", result.iterations);
+    println!("True residual: {:.6e}", true_residual);
+    println!("Bond dims: {:?}", result.solution.bond_dims());
+
+    // Compute error ||x_sol - x_true||
+    // Note: solution may be F64 (real b after contraction) while x_true is C64
+    match result
+        .solution
+        .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))
+    {
+        Ok(diff) => println!("Error ||x - x_true||: {:.6e}", diff.norm()),
+        Err(_) => {
+            // F64/C64 storage mismatch: compute via norms
+            let sol_norm = result.solution.norm();
+            let xt_norm = x_true.norm();
+            println!(
+                "Error (norm comparison): ||x||={:.6e}, ||x_true||={:.6e}",
+                sol_norm, xt_norm
+            );
+        }
+    }
 
     Ok((result.converged, result.outer_iterations, true_residual))
 }
