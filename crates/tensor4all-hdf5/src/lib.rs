@@ -21,9 +21,12 @@ mod mps;
 mod schema;
 
 use anyhow::Result;
-use hdf5::File;
 use tensor4all_core::TensorDynLen;
+use tensor4all_hdf5_ffi::File;
 use tensor4all_itensorlike::TensorTrain;
+
+// Re-export the HDF5 initialization function for users to initialize the library
+pub use tensor4all_hdf5_ffi::{hdf5_init, hdf5_is_initialized, hdf5_library_path};
 
 /// Save a [`TensorDynLen`] as an ITensors.jl-compatible `ITensor` in an HDF5 file.
 pub fn save_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result<()> {

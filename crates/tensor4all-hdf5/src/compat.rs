@@ -5,8 +5,7 @@
 //! functions that can read both formats.
 
 use anyhow::{bail, Result};
-use hdf5::types::{FixedUnicode, VarLenUnicode};
-use hdf5::{Attribute, Dataset};
+use tensor4all_hdf5_ffi::{Attribute, Dataset, FixedUnicode, Group, VarLenAscii, VarLenUnicode};
 
 /// Try multiple string-reading strategies, returning the first success.
 ///
@@ -14,9 +13,9 @@ use hdf5::{Attribute, Dataset};
 /// (ITensors.jl format), or VarLenAscii. This helper abstracts that logic.
 fn try_read_string<F1, F2, F3>(try_varlen: F1, try_fixed: F2, try_ascii: F3) -> Result<String>
 where
-    F1: FnOnce() -> hdf5::Result<VarLenUnicode>,
-    F2: FnOnce() -> hdf5::Result<FixedUnicode<256>>,
-    F3: FnOnce() -> hdf5::Result<hdf5::types::VarLenAscii>,
+    F1: FnOnce() -> tensor4all_hdf5_ffi::Result<VarLenUnicode>,
+    F2: FnOnce() -> tensor4all_hdf5_ffi::Result<FixedUnicode<256>>,
+    F3: FnOnce() -> tensor4all_hdf5_ffi::Result<VarLenAscii>,
 {
     if let Ok(val) = try_varlen() {
         return Ok(val.as_str().to_string());
@@ -36,7 +35,7 @@ pub(crate) fn read_string_attr(attr: &Attribute) -> Result<String> {
     try_read_string(
         || attr.as_reader().read_scalar::<VarLenUnicode>(),
         || attr.as_reader().read_scalar::<FixedUnicode<256>>(),
-        || attr.as_reader().read_scalar::<hdf5::types::VarLenAscii>(),
+        || attr.as_reader().read_scalar::<VarLenAscii>(),
     )
 }
 
@@ -46,12 +45,12 @@ pub(crate) fn read_string_dataset(ds: &Dataset) -> Result<String> {
     try_read_string(
         || ds.as_reader().read_scalar::<VarLenUnicode>(),
         || ds.as_reader().read_scalar::<FixedUnicode<256>>(),
-        || ds.as_reader().read_scalar::<hdf5::types::VarLenAscii>(),
+        || ds.as_reader().read_scalar::<VarLenAscii>(),
     )
 }
 
 /// Read a string attribute by name from a group.
-pub(crate) fn read_string_attr_by_name(group: &hdf5::Group, name: &str) -> Result<String> {
+pub(crate) fn read_string_attr_by_name(group: &Group, name: &str) -> Result<String> {
     let attr = group
         .attr(name)
         .map_err(|_| anyhow::anyhow!("Attribute '{}' not found", name))?;

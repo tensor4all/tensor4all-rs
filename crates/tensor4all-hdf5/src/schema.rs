@@ -6,9 +6,8 @@
 //! boilerplate across index, itensor, and mps modules.
 
 use anyhow::{bail, Result};
-use hdf5::types::VarLenUnicode;
-use hdf5::Group;
 use std::str::FromStr;
+use tensor4all_hdf5_ffi::{Group, VarLenUnicode};
 
 /// Write `@type` and `@version` attributes to an HDF5 group.
 pub(crate) fn write_type_version(group: &Group, type_name: &str, version: i64) -> Result<()> {
@@ -70,12 +69,34 @@ pub(crate) fn require_type_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tensor4all_hdf5_ffi::File;
+
+    fn init_hdf5() {
+        // Initialize HDF5 library for tests
+        if !tensor4all_hdf5_ffi::hdf5_is_initialized() {
+            // Try common library paths
+            let paths = [
+                "/usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5.so",
+                "/usr/lib/libhdf5.so",
+                "/opt/homebrew/lib/libhdf5.dylib",
+                "/usr/local/lib/libhdf5.dylib",
+            ];
+            for path in &paths {
+                if std::path::Path::new(path).exists() {
+                    let _ = tensor4all_hdf5_ffi::hdf5_init(path);
+                    break;
+                }
+            }
+        }
+    }
 
     #[test]
+    #[ignore = "requires HDF5 library"]
     fn test_write_read_type_version() {
+        init_hdf5();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.h5");
-        let file = hdf5::File::create(&path).unwrap();
+        let file = File::create(path.to_str().unwrap()).unwrap();
         let group = file.create_group("test").unwrap();
 
         write_type_version(&group, "ITensor", 1).unwrap();
@@ -85,10 +106,12 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires HDF5 library"]
     fn test_require_type_version_ok() {
+        init_hdf5();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.h5");
-        let file = hdf5::File::create(&path).unwrap();
+        let file = File::create(path.to_str().unwrap()).unwrap();
         let group = file.create_group("test").unwrap();
 
         write_type_version(&group, "MPS", 1).unwrap();
@@ -97,10 +120,12 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires HDF5 library"]
     fn test_require_type_version_wrong_type() {
+        init_hdf5();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.h5");
-        let file = hdf5::File::create(&path).unwrap();
+        let file = File::create(path.to_str().unwrap()).unwrap();
         let group = file.create_group("test").unwrap();
 
         write_type_version(&group, "ITensor", 1).unwrap();
@@ -109,10 +134,12 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires HDF5 library"]
     fn test_require_type_version_too_new() {
+        init_hdf5();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.h5");
-        let file = hdf5::File::create(&path).unwrap();
+        let file = File::create(path.to_str().unwrap()).unwrap();
         let group = file.create_group("test").unwrap();
 
         write_type_version(&group, "ITensor", 99).unwrap();

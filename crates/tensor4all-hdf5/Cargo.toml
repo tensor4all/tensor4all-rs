@@ -9,9 +9,9 @@ description = "HDF5 serialization for tensor4all-rs (ITensors.jl compatible form
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core" }
 tensor4all-itensorlike = { path = "../tensor4all-itensorlike" }
+tensor4all-hdf5-ffi = { path = "../tensor4all-hdf5-ffi", features = ["complex"] }
 num-complex = { workspace = true }
 anyhow = { workspace = true }
-hdf5 = { package = "hdf5-metno", version = "0.12", features = ["complex"] }
 ndarray = "0.16"
 
 [dev-dependencies]

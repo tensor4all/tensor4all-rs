@@ -13,6 +13,7 @@ members = [
     "crates/tensor4all-quanticstci",
     "crates/tensor4all-capi",
     "crates/tensor4all-hdf5",
+    "crates/tensor4all-hdf5-ffi",
     "crates/mdarray-einsum",
     "tools/api-dump",
     "xtask",

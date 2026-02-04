@@ -4,7 +4,7 @@
 //! so this module is a thin wrapper around [`crate::itensor`].
 
 use anyhow::{Context, Result};
-use hdf5::Group;
+use tensor4all_hdf5_ffi::Group;
 use tensor4all_itensorlike::TensorTrain;
 
 use crate::itensor;
