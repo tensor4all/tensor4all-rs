@@ -243,12 +243,15 @@ impl Datatype {
 
 impl Clone for Datatype {
     fn clone(&self) -> Self {
-        let id = sync(|| unsafe { H5Tcopy(self.id()) });
-        if id < 0 {
-            Self::from_handle(Handle::invalid())
-        } else {
-            Self::from_id(id).unwrap_or_else(|_| Self::from_handle(Handle::invalid()))
-        }
+        // Keep the entire copy and validation in a single sync block
+        sync(|| {
+            let id = unsafe { H5Tcopy(self.id()) };
+            if id < 0 {
+                Self::from_handle(Handle::invalid())
+            } else {
+                Self::from_id(id).unwrap_or_else(|_| Self::from_handle(Handle::invalid()))
+            }
+        })
     }
 }
 
