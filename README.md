@@ -49,11 +49,11 @@ tensor4all-rs/
 │   ├── tensor4all-quanticstransform/ # Quantics transformation operators
 │   ├── tensor4all-partitionedtt/     # Partitioned Tensor Train
 │   ├── tensor4all-hdf5/              # ITensors.jl-compatible HDF5 serialization
+│   ├── tensor4all-hdf5-ffi/          # HDF5 FFI with runtime loading support
 │   ├── tensor4all-capi/              # C API for language bindings
 │   ├── matrixci/                     # Matrix Cross Interpolation (internal)
 │   ├── quanticsgrids/                # Quantics grid structures (internal)
 │   └── mdarray-einsum/               # Einstein summation for mdarray (internal)
-├── julia/Tensor4all.jl/              # Julia bindings
 ├── python/tensor4all/                # Python bindings
 ├── tools/api-dump/                   # API documentation generator
 ├── xtask/                            # Development task runner
@@ -74,6 +74,7 @@ tensor4all-rs/
 | [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
 | [tensor4all-partitionedtt](crates/tensor4all-partitionedtt/) | Partitioned Tensor Train |
 | [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
+| [tensor4all-hdf5-ffi](crates/tensor4all-hdf5-ffi/) | HDF5 FFI with build-time linking and runtime loading |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
 | [matrixci](crates/matrixci/) | Matrix Cross Interpolation |
 | [quanticsgrids](crates/quanticsgrids/) | Quantics grid structures |
@@ -137,18 +138,6 @@ Pkg.add(url="https://github.com/tensor4all/Tensor4all.jl")
 ```
 
 See the [Tensor4all.jl README](https://github.com/tensor4all/Tensor4all.jl) for detailed installation and usage instructions.
-
-#### Executable documentation examples
-
-All Julia documentation examples live in `docs/examples/julia/` and can be run with:
-
-```bash
-for f in docs/examples/julia/*.jl; do
-  julia --project=julia/Tensor4all.jl "$f"
-done
-```
-
-CI runs these examples as part of `./scripts/run_julia_tests.sh`.
 
 ### Python
 
