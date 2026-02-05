@@ -125,15 +125,22 @@ jobs:
             cargo clippy -p tensor4all-hdf5-ffi --features "${{ matrix.features }}" -- -D warnings
           fi
 
+      - name: Find HDF5 library path
+        id: hdf5
+        run: |
+          HDF5_LIB=$(find /usr -name "libhdf5*.so*" -type f 2>/dev/null | grep -v hl | head -1)
+          echo "Found HDF5 library: $HDF5_LIB"
+          echo "path=$HDF5_LIB" >> $GITHUB_OUTPUT
+
       - name: Run tests (${{ matrix.name }})
         run: |
-          # Set HDF5_LIB for runtime-loading only mode tests
-          export HDF5_LIB=/usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5.so
           if [ "${{ matrix.no_default }}" = "true" ]; then
             cargo test --release -p tensor4all-hdf5-ffi --no-default-features --features "${{ matrix.features }}" -- --test-threads=1
           else
             cargo test --release -p tensor4all-hdf5-ffi --features "${{ matrix.features }}" -- --test-threads=1
           fi
+        env:
+          HDF5_LIB: ${{ steps.hdf5.outputs.path }}
 
   test-julia:
     name: Test (Julia)
@@ -166,11 +173,18 @@ jobs:
       - name: Build cdylib with runtime-loading
         run: cargo build --release -p tensor4all-hdf5-ffi --no-default-features --features "runtime-loading"
 
+      - name: Find HDF5 library path
+        id: hdf5
+        run: |
+          HDF5_LIB=$(find /usr -name "libhdf5*.so*" -type f 2>/dev/null | grep -v hl | head -1)
+          echo "Found HDF5 library: $HDF5_LIB"
+          echo "path=$HDF5_LIB" >> $GITHUB_OUTPUT
+
       - name: Run Julia integration test
         run: julia tests/julia/test_hdf5_ffi.jl
         env:
           TENSOR4ALL_LIB: ${{ github.workspace }}/target/release/libtensor4all_hdf5_ffi.so
-          HDF5_LIB: /usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5.so
+          HDF5_LIB: ${{ steps.hdf5.outputs.path }}
 
   test-python:
     name: Test (Python)
@@ -203,11 +217,18 @@ jobs:
       - name: Build cdylib with runtime-loading
         run: cargo build --release -p tensor4all-hdf5-ffi --no-default-features --features "runtime-loading"
 
+      - name: Find HDF5 library path
+        id: hdf5
+        run: |
+          HDF5_LIB=$(find /usr -name "libhdf5*.so*" -type f 2>/dev/null | grep -v hl | head -1)
+          echo "Found HDF5 library: $HDF5_LIB"
+          echo "path=$HDF5_LIB" >> $GITHUB_OUTPUT
+
       - name: Run Python integration test
         run: python tests/python/test_hdf5_ffi.py
         env:
           TENSOR4ALL_LIB: ${{ github.workspace }}/target/release/libtensor4all_hdf5_ffi.so
-          HDF5_LIB: /usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5.so
+          HDF5_LIB: ${{ steps.hdf5.outputs.path }}
 
   test-libtorch:
     name: Test (libtorch)
