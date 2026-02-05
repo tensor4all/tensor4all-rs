@@ -334,6 +334,7 @@ mod link_impl {
 // Only compiled when link feature is not enabled.
 // =============================================================================
 #[cfg(all(feature = "runtime-loading", not(feature = "link")))]
+#[allow(clippy::useless_transmute)] // Required for generic function pointer casting in load_func macro
 mod runtime_impl {
     use super::*;
     use libloading::{Library, Symbol};
