@@ -26,6 +26,36 @@ end
 println("Testing tensor4all-hdf5-ffi from Julia")
 println("  TENSOR4ALL_LIB: $tensor4all_lib")
 println("  HDF5_LIB: $hdf5_lib")
+
+# Diagnostic: check if HDF5 library file exists and is accessible
+println("\nDiagnostics:")
+if isfile(hdf5_lib)
+    println("  HDF5 file exists: yes")
+    println("  HDF5 file size: $(filesize(hdf5_lib)) bytes")
+else
+    println("  HDF5 file exists: no")
+    # Try to find what HDF5 files are available
+    hdf5_dir = dirname(hdf5_lib)
+    if isdir(hdf5_dir)
+        println("  Files in $(hdf5_dir) matching libhdf5*:")
+        for f in readdir(hdf5_dir)
+            if startswith(f, "libhdf5")
+                println("    $f")
+            end
+        end
+    end
+end
+
+# Diagnostic: try to dlopen HDF5 directly from Julia
+println("\n  Testing direct dlopen of HDF5 from Julia...")
+try
+    hdf5_handle = Libdl.dlopen(hdf5_lib)
+    println("  Direct HDF5 dlopen: success")
+    Libdl.dlclose(hdf5_handle)
+catch e
+    println("  Direct HDF5 dlopen: FAILED - $e")
+end
+
 println()
 
 # Load the tensor4all library
@@ -60,8 +90,8 @@ println("  Is initialized: $is_init")
 
 # Initialize HDF5 with runtime loading
 println("\nTesting hdf5_ffi_init with HDF5 library...")
-hdf5_lib_cstr = Base.cconvert(Cstring, hdf5_lib)
-status = GC.@preserve hdf5_lib_cstr ccall(hdf5_ffi_init, Cint, (Cstring,), hdf5_lib_cstr)
+# Use standard Julia ccall pattern - Julia handles string conversion automatically
+status = ccall(hdf5_ffi_init, Cint, (Cstring,), hdf5_lib)
 status_msg = get_status_message(status)
 println("  Init status: $status ($status_msg)")
 @assert status == 0 "hdf5_ffi_init failed with status $status: $status_msg"
