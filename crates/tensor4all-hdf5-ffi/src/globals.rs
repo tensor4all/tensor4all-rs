@@ -149,23 +149,24 @@ mod runtime_impl {
             let lib = crate::sys::funcs::get_library()
                 .expect("HDF5 library not loaded - call hdf5_init() first");
 
+            // HDF5 exports predefined type IDs with _g suffix (e.g., H5T_NATIVE_INT_g)
             unsafe {
                 GlobalConstants {
-                    h5t_native_int: load_global(lib, "H5T_NATIVE_INT"),
-                    h5t_native_float: load_global(lib, "H5T_NATIVE_FLOAT"),
-                    h5t_native_double: load_global(lib, "H5T_NATIVE_DOUBLE"),
-                    h5t_native_int8: load_global(lib, "H5T_NATIVE_INT8"),
-                    h5t_native_int16: load_global(lib, "H5T_NATIVE_INT16"),
-                    h5t_native_int32: load_global(lib, "H5T_NATIVE_INT32"),
-                    h5t_native_int64: load_global(lib, "H5T_NATIVE_INT64"),
-                    h5t_native_uint8: load_global(lib, "H5T_NATIVE_UINT8"),
-                    h5t_native_uint16: load_global(lib, "H5T_NATIVE_UINT16"),
-                    h5t_native_uint32: load_global(lib, "H5T_NATIVE_UINT32"),
-                    h5t_native_uint64: load_global(lib, "H5T_NATIVE_UINT64"),
-                    h5t_c_s1: load_global(lib, "H5T_C_S1"),
-                    h5p_file_access: load_global(lib, "H5P_CLS_FILE_ACCESS"),
-                    h5p_dataset_create: load_global(lib, "H5P_CLS_DATASET_CREATE"),
-                    h5p_attribute_create: load_global(lib, "H5P_CLS_ATTRIBUTE_CREATE"),
+                    h5t_native_int: load_global(lib, "H5T_NATIVE_INT_g"),
+                    h5t_native_float: load_global(lib, "H5T_NATIVE_FLOAT_g"),
+                    h5t_native_double: load_global(lib, "H5T_NATIVE_DOUBLE_g"),
+                    h5t_native_int8: load_global(lib, "H5T_NATIVE_INT8_g"),
+                    h5t_native_int16: load_global(lib, "H5T_NATIVE_INT16_g"),
+                    h5t_native_int32: load_global(lib, "H5T_NATIVE_INT32_g"),
+                    h5t_native_int64: load_global(lib, "H5T_NATIVE_INT64_g"),
+                    h5t_native_uint8: load_global(lib, "H5T_NATIVE_UINT8_g"),
+                    h5t_native_uint16: load_global(lib, "H5T_NATIVE_UINT16_g"),
+                    h5t_native_uint32: load_global(lib, "H5T_NATIVE_UINT32_g"),
+                    h5t_native_uint64: load_global(lib, "H5T_NATIVE_UINT64_g"),
+                    h5t_c_s1: load_global(lib, "H5T_C_S1_g"),
+                    h5p_file_access: load_global(lib, "H5P_CLS_FILE_ACCESS_ID_g"),
+                    h5p_dataset_create: load_global(lib, "H5P_CLS_DATASET_CREATE_ID_g"),
+                    h5p_attribute_create: load_global(lib, "H5P_CLS_ATTRIBUTE_CREATE_ID_g"),
                 }
             }
         })
