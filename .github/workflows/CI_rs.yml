@@ -74,6 +74,141 @@ jobs:
           cargo test --release -p tensor4all-hdf5-ffi -- --test-threads=1
           cargo test --release -p tensor4all-hdf5 -- --test-threads=1
 
+  test-runtime-loading:
+    name: Test (runtime-loading)
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Test with both features (link takes precedence)
+          - name: "link + runtime-loading"
+            features: "runtime-loading"
+            no_default: false
+          # Test runtime-loading only mode
+          - name: "runtime-loading only"
+            features: "runtime-loading"
+            no_default: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install HDF5
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-runtime-${{ matrix.name }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-runtime-
+
+      - name: Build (${{ matrix.name }})
+        run: |
+          if [ "${{ matrix.no_default }}" = "true" ]; then
+            cargo build --release -p tensor4all-hdf5-ffi --no-default-features --features "${{ matrix.features }}"
+          else
+            cargo build --release -p tensor4all-hdf5-ffi --features "${{ matrix.features }}"
+          fi
+
+      - name: Run clippy (${{ matrix.name }})
+        run: |
+          if [ "${{ matrix.no_default }}" = "true" ]; then
+            cargo clippy -p tensor4all-hdf5-ffi --no-default-features --features "${{ matrix.features }}" -- -D warnings
+          else
+            cargo clippy -p tensor4all-hdf5-ffi --features "${{ matrix.features }}" -- -D warnings
+          fi
+
+      - name: Run tests (${{ matrix.name }})
+        run: |
+          # Set HDF5_LIB for runtime-loading only mode tests
+          export HDF5_LIB=/usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5.so
+          if [ "${{ matrix.no_default }}" = "true" ]; then
+            cargo test --release -p tensor4all-hdf5-ffi --no-default-features --features "${{ matrix.features }}" -- --test-threads=1
+          else
+            cargo test --release -p tensor4all-hdf5-ffi --features "${{ matrix.features }}" -- --test-threads=1
+          fi
+
+  test-julia:
+    name: Test (Julia)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install HDF5
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Julia
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.10'
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-julia-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-julia-
+
+      - name: Build cdylib with runtime-loading
+        run: cargo build --release -p tensor4all-hdf5-ffi --no-default-features --features "runtime-loading"
+
+      - name: Run Julia integration test
+        run: julia tests/julia/test_hdf5_ffi.jl
+        env:
+          TENSOR4ALL_LIB: ${{ github.workspace }}/target/release/libtensor4all_hdf5_ffi.so
+          HDF5_LIB: /usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5.so
+
+  test-python:
+    name: Test (Python)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install HDF5
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-python-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-python-
+
+      - name: Build cdylib with runtime-loading
+        run: cargo build --release -p tensor4all-hdf5-ffi --no-default-features --features "runtime-loading"
+
+      - name: Run Python integration test
+        run: python tests/python/test_hdf5_ffi.py
+        env:
+          TENSOR4ALL_LIB: ${{ github.workspace }}/target/release/libtensor4all_hdf5_ffi.so
+          HDF5_LIB: /usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5.so
+
   test-libtorch:
     name: Test (libtorch)
     runs-on: ubuntu-latest
@@ -167,6 +302,9 @@ jobs:
     needs:
       - lint
       - test
+      - test-runtime-loading
+      - test-julia
+      - test-python
       - test-libtorch
       - coverage
     if: always()

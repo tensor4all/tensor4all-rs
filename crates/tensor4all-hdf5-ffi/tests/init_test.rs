@@ -13,8 +13,9 @@ fn test_not_initialized() {
 }
 
 /// Test that initialization with invalid path fails (runtime-loading mode only).
+/// This test only applies when link feature is NOT enabled (true runtime loading).
 #[test]
-#[cfg(feature = "runtime-loading")]
+#[cfg(all(feature = "runtime-loading", not(feature = "link")))]
 fn test_init_invalid_path() {
     use tensor4all_hdf5_ffi::Error;
 
@@ -23,6 +24,18 @@ fn test_init_invalid_path() {
     if let Err(Error::LibraryLoad { path, .. }) = result {
         assert!(path.contains("nonexistent"));
     }
+}
+
+/// Test that initialization succeeds in link mode (with runtime-loading feature also enabled).
+/// When both features are enabled, link mode takes precedence.
+#[test]
+#[cfg(all(feature = "link", feature = "runtime-loading"))]
+fn test_init_link_mode_with_runtime_loading() {
+    // When both features are enabled, link mode takes precedence
+    // so hdf5_init is a no-op and always succeeds
+    let result = hdf5_init("");
+    assert!(result.is_ok());
+    assert!(hdf5_is_initialized());
 }
 
 /// Test that initialization succeeds in link mode (no-op).

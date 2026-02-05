@@ -2,6 +2,12 @@
 //!
 //! This test is designed to run on CI and print detailed information about
 //! how HDF5 ID validation functions behave.
+//!
+//! Note: This test requires HDF5 to be linked at build time. In runtime-loading
+//! mode without the link feature, the test is skipped unless HDF5_LIB is set.
+
+// Only compile this test when link feature is available, or when testing runtime-loading
+#![cfg(any(feature = "link", feature = "runtime-loading"))]
 
 use std::ffi::CString;
 use std::ptr;
@@ -12,6 +18,32 @@ use tensor4all_hdf5_ffi::sys::{
     self, hid_t, H5Acreate2, H5Awrite, H5Fclose, H5Fcreate, H5Gclose, H5Gcreate2, H5Idec_ref,
     H5Iget_type, H5Iis_valid, H5Sclose, H5Screate_simple,
 };
+
+/// Initialize HDF5 if in runtime-loading mode
+#[cfg(all(feature = "runtime-loading", not(feature = "link")))]
+fn ensure_hdf5_init() -> bool {
+    use tensor4all_hdf5_ffi::hdf5_init;
+
+    if tensor4all_hdf5_ffi::hdf5_is_initialized() {
+        return true;
+    }
+
+    match std::env::var("HDF5_LIB") {
+        Ok(path) => {
+            hdf5_init(&path).expect("Failed to initialize HDF5");
+            true
+        }
+        Err(_) => {
+            eprintln!("Skipping test: HDF5_LIB environment variable not set");
+            false
+        }
+    }
+}
+
+#[cfg(feature = "link")]
+fn ensure_hdf5_init() -> bool {
+    true
+}
 
 fn get_hdf5_version() -> (u32, u32, u32) {
     let mut major: u32 = 0;
@@ -41,6 +73,10 @@ fn diagnose_id(name: &str, id: hid_t) {
 
 #[test]
 fn test_diagnose_h5iis_valid() {
+    if !ensure_hdf5_init() {
+        return; // Skip test if HDF5 is not available
+    }
+
     let (major, minor, release) = get_hdf5_version();
     println!("\n");
     println!("========================================");

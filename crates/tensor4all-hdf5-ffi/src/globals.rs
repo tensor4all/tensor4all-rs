@@ -17,8 +17,9 @@ pub const H5I_INVALID_HID: hid_t = -1;
 
 // =============================================================================
 // Link mode: use hdf5-sys constants
+// Link mode takes precedence when both features are enabled.
 // =============================================================================
-#[cfg(all(feature = "link", not(feature = "runtime-loading")))]
+#[cfg(feature = "link")]
 mod link_impl {
     use super::*;
 
@@ -107,8 +108,9 @@ mod link_impl {
 
 // =============================================================================
 // Runtime loading mode: load constants from library
+// Only used when link feature is not enabled.
 // =============================================================================
-#[cfg(feature = "runtime-loading")]
+#[cfg(all(feature = "runtime-loading", not(feature = "link")))]
 mod runtime_impl {
     use super::*;
     use libloading::Symbol;
@@ -251,10 +253,11 @@ mod runtime_impl {
 
 // =============================================================================
 // Public API: re-export from the appropriate implementation
+// Link mode takes precedence when both features are enabled.
 // =============================================================================
 
-#[cfg(all(feature = "link", not(feature = "runtime-loading")))]
+#[cfg(feature = "link")]
 pub use link_impl::*;
 
-#[cfg(feature = "runtime-loading")]
+#[cfg(all(feature = "runtime-loading", not(feature = "link")))]
 pub use runtime_impl::*;

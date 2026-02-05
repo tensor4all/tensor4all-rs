@@ -44,7 +44,8 @@ pub use types::*;
 // Re-export function loading (conditional)
 pub use funcs::{is_initialized, library_path};
 
-#[cfg(feature = "runtime-loading")]
+// load_library is only available in runtime-loading mode without link
+#[cfg(all(feature = "runtime-loading", not(feature = "link")))]
 pub use funcs::load_library;
 
 // Re-export wrapper functions

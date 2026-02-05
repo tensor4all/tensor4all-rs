@@ -11,14 +11,16 @@ use std::sync::LazyLock;
 ///
 /// In link mode, this forces LIBRARY_INIT which calls H5dont_atexit() and H5open().
 /// In runtime-loading mode, this is a no-op (user must call hdf5_init first).
-#[cfg(all(feature = "link", not(feature = "runtime-loading")))]
+///
+/// Note: link mode takes precedence when both features are enabled.
+#[cfg(feature = "link")]
 #[inline]
 pub fn ensure_hdf5_init() {
     LazyLock::force(&crate::sync::LIBRARY_INIT);
 }
 
 /// Ensure HDF5 is initialized. Called internally before HDF5 operations.
-#[cfg(feature = "runtime-loading")]
+#[cfg(all(feature = "runtime-loading", not(feature = "link")))]
 #[inline]
 pub fn ensure_hdf5_init() {
     // In runtime-loading mode, user must call hdf5_init() first.
@@ -62,7 +64,9 @@ pub fn ensure_hdf5_init() {
 /// // This call is a no-op - HDF5 is already linked
 /// hdf5_init("")?;
 /// ```
-#[cfg(feature = "runtime-loading")]
+///
+/// Note: link mode takes precedence when both features are enabled.
+#[cfg(all(feature = "runtime-loading", not(feature = "link")))]
 pub fn hdf5_init(library_path: &str) -> Result<()> {
     crate::sys::load_library(library_path)
 }
@@ -71,7 +75,7 @@ pub fn hdf5_init(library_path: &str) -> Result<()> {
 ///
 /// With the `link` feature, HDF5 is already linked at build time, so this
 /// function does nothing and always returns `Ok(())`.
-#[cfg(all(feature = "link", not(feature = "runtime-loading")))]
+#[cfg(feature = "link")]
 pub fn hdf5_init(_library_path: &str) -> Result<()> {
     ensure_hdf5_init();
     Ok(())
@@ -86,13 +90,15 @@ pub fn hdf5_init(_library_path: &str) -> Result<()> {
 /// # Runtime-loading mode
 ///
 /// Returns `true` if [`hdf5_init`] has been successfully called, `false` otherwise.
-#[cfg(feature = "runtime-loading")]
+///
+/// Note: link mode takes precedence when both features are enabled.
+#[cfg(all(feature = "runtime-loading", not(feature = "link")))]
 pub fn hdf5_is_initialized() -> bool {
     crate::sys::is_initialized()
 }
 
 /// Check if HDF5 has been initialized (always true with link feature).
-#[cfg(all(feature = "link", not(feature = "runtime-loading")))]
+#[cfg(feature = "link")]
 pub fn hdf5_is_initialized() -> bool {
     true
 }
@@ -106,13 +112,15 @@ pub fn hdf5_is_initialized() -> bool {
 /// # Runtime-loading mode
 ///
 /// Returns `Some(path)` if initialized, `None` otherwise.
-#[cfg(feature = "runtime-loading")]
+///
+/// Note: link mode takes precedence when both features are enabled.
+#[cfg(all(feature = "runtime-loading", not(feature = "link")))]
 pub fn hdf5_library_path() -> Option<String> {
     crate::sys::library_path()
 }
 
 /// Get the path used for HDF5 initialization (None with link feature).
-#[cfg(all(feature = "link", not(feature = "runtime-loading")))]
+#[cfg(feature = "link")]
 pub fn hdf5_library_path() -> Option<String> {
     None
 }

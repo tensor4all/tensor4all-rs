@@ -331,8 +331,9 @@ mod link_impl {
 
 // =============================================================================
 // Runtime loading mode: use libloading (dlopen)
+// Only compiled when link feature is not enabled.
 // =============================================================================
-#[cfg(feature = "runtime-loading")]
+#[cfg(all(feature = "runtime-loading", not(feature = "link")))]
 mod runtime_impl {
     use super::*;
     use libloading::{Library, Symbol};
@@ -891,14 +892,16 @@ mod runtime_impl {
 // Public API: re-export from the appropriate implementation
 // =============================================================================
 
-#[cfg(all(feature = "link", not(feature = "runtime-loading")))]
+// Link mode takes precedence when both features are enabled
+#[cfg(feature = "link")]
 pub use link_impl::*;
 
-#[cfg(feature = "runtime-loading")]
+// Runtime-loading mode only when link is not enabled
+#[cfg(all(feature = "runtime-loading", not(feature = "link")))]
 pub use runtime_impl::*;
 
-#[cfg(feature = "runtime-loading")]
-pub use runtime_impl::load_library;
+#[cfg(all(feature = "runtime-loading", not(feature = "link")))]
+pub use runtime_impl::{get_library, load_library};
 
 // Compile error if neither feature is enabled
 #[cfg(not(any(feature = "link", feature = "runtime-loading")))]
