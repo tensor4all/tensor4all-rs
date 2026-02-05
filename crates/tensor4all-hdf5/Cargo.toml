@@ -9,7 +9,7 @@ description = "HDF5 serialization for tensor4all-rs (ITensors.jl compatible form
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core" }
 tensor4all-itensorlike = { path = "../tensor4all-itensorlike" }
-tensor4all-hdf5-ffi = { workspace = true, features = ["complex"] }
+tensor4all-hdf5-ffi = { workspace = true, default-features = false, features = ["complex", "runtime-loading"] }
 num-complex = { workspace = true }
 anyhow = { workspace = true }
 ndarray = "0.16"
