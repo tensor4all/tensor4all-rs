@@ -50,7 +50,7 @@ where
 ///
 /// # Arguments
 /// - `library_path`: Path to the HDF5 shared library (e.g., libhdf5.so or libhdf5.dylib).
-///                   If null, attempts to use a default system path.
+///   If null, attempts to use a default system path.
 ///
 /// # Returns
 /// `T4A_SUCCESS` on success, or an error code on failure.
