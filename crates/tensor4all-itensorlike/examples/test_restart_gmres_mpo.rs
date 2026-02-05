@@ -1,4 +1,5 @@
 #![allow(clippy::needless_borrows_for_generic_args)]
+#![allow(clippy::type_complexity)]
 //! Test: Restart GMRES solver with MPO format for x and b
 //!
 //! Unlike test_restart_gmres_mps.rs where x is an MPS (vector),
