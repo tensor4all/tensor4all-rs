@@ -124,9 +124,12 @@ fn setup_direct_sum(
     }
 
     // Identify common (non-paired) indices
+    // Iterate over a.indices (Vec) to preserve deterministic order,
+    // using b_idx_map only for lookups.
     let mut common_a_positions: Vec<usize> = Vec::new();
     let mut common_b_positions: Vec<usize> = Vec::new();
-    for (a_id, &a_pos) in &a_idx_map {
+    for (a_pos, a_idx) in a.indices.iter().enumerate() {
+        let a_id = a_idx.id();
         if a_paired_ids.contains(a_id) {
             continue;
         }

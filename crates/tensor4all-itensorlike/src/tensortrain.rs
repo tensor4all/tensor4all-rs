@@ -8,7 +8,10 @@
 
 use std::ops::Range;
 use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
-use tensor4all_core::{AnyScalar, TensorAccess, TensorDynLen};
+use tensor4all_core::{
+    AllowedPairs, AnyScalar, DirectSumResult, FactorizeError, FactorizeOptions, FactorizeResult,
+    TensorAccess, TensorDynLen, TensorIndex, TensorLike,
+};
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 use crate::error::{Result, TensorTrainError};
@@ -617,8 +620,12 @@ impl TensorTrain {
     /// Compute the squared norm of the tensor train.
     ///
     /// Returns `<self | self>` = ||self||^2.
+    ///
+    /// # Note
+    /// Due to numerical errors, the inner product can be very slightly negative.
+    /// This method clamps the result to be non-negative.
     pub fn norm_squared(&self) -> f64 {
-        self.inner(self).real()
+        self.inner(self).real().max(0.0)
     }
 
     /// Compute the norm of the tensor train.
@@ -715,6 +722,69 @@ impl TensorTrain {
             canonical_form: None, // Addition destroys canonical form
         })
     }
+
+    /// Scale the tensor train by a scalar.
+    ///
+    /// Only one tensor (the first non-empty site) is scaled to avoid scalar^n scaling.
+    /// This is correct because the tensor train represents a product of tensors,
+    /// so scaling one factor scales the entire product.
+    ///
+    /// # Arguments
+    /// * `scalar` - The scalar to multiply by
+    ///
+    /// # Returns
+    /// A new tensor train scaled by the given scalar.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let scaled = tt.scale(AnyScalar::F64(2.0))?;
+    /// // scaled represents 2 * tt
+    /// ```
+    pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
+        if self.is_empty() {
+            return Ok(self.clone());
+        }
+
+        let mut tensors = Vec::with_capacity(self.len());
+        for site in 0..self.len() {
+            let tensor = self.tensor(site);
+            if site == 0 {
+                // Scale only the first tensor
+                let scaled =
+                    tensor
+                        .scale(scalar.clone())
+                        .map_err(|e| TensorTrainError::OperationError {
+                            message: format!("Failed to scale tensor at site 0: {}", e),
+                        })?;
+                tensors.push(scaled);
+            } else {
+                tensors.push(tensor.clone());
+            }
+        }
+
+        Self::new(tensors)
+    }
+
+    /// Compute a linear combination: `a * self + b * other`.
+    ///
+    /// This is equivalent to `self.scale(a)?.add(&other.scale(b)?)`.
+    ///
+    /// # Arguments
+    /// * `a` - Scalar coefficient for self
+    /// * `other` - The other tensor train
+    /// * `b` - Scalar coefficient for other
+    ///
+    /// # Returns
+    /// A new tensor train representing `a * self + b * other`.
+    ///
+    /// # Note
+    /// The bond dimension of the result is the sum of the bond dimensions
+    /// of the two input tensor trains (before any truncation).
+    pub fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
+        let scaled_self = self.scale(a)?;
+        let scaled_other = other.scale(b)?;
+        scaled_self.add(&scaled_other)
+    }
 }
 
 // Implement Default for TensorTrain to allow std::mem::take
@@ -733,6 +803,131 @@ pub(crate) fn truncate_alg_to_form(alg: TruncateAlg) -> CanonicalForm {
         TruncateAlg::SVD | TruncateAlg::RSVD | TruncateAlg::QR => CanonicalForm::Unitary,
         TruncateAlg::LU => CanonicalForm::LU,
         TruncateAlg::CI => CanonicalForm::CI,
+    }
+}
+
+// ============================================================================
+// TensorIndex implementation for TensorTrain
+// ============================================================================
+
+impl TensorIndex for TensorTrain {
+    type Index = DynIndex;
+
+    fn external_indices(&self) -> Vec<Self::Index> {
+        // Delegate to the internal TreeTN's TensorIndex implementation
+        self.treetn.external_indices()
+    }
+
+    fn num_external_indices(&self) -> usize {
+        self.treetn.num_external_indices()
+    }
+
+    fn replaceind(&self, old: &Self::Index, new: &Self::Index) -> anyhow::Result<Self> {
+        // Delegate to the internal TreeTN's replaceind
+        // After replacement, canonical form may be invalid, so set to None
+        let treetn = self.treetn.replaceind(old, new)?;
+        Ok(Self::from_inner(treetn, None))
+    }
+
+    fn replaceinds(&self, old: &[Self::Index], new: &[Self::Index]) -> anyhow::Result<Self> {
+        let treetn = self.treetn.replaceinds(old, new)?;
+        Ok(Self::from_inner(treetn, None))
+    }
+}
+
+// ============================================================================
+// TensorLike implementation for TensorTrain
+// ============================================================================
+
+impl TensorLike for TensorTrain {
+    // ========================================================================
+    // GMRES-required methods (fully supported)
+    // ========================================================================
+
+    fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> anyhow::Result<Self> {
+        TensorTrain::axpby(self, a, other, b).map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    fn scale(&self, scalar: AnyScalar) -> anyhow::Result<Self> {
+        TensorTrain::scale(self, scalar).map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    fn inner_product(&self, other: &Self) -> anyhow::Result<AnyScalar> {
+        Ok(self.inner(other))
+    }
+
+    fn norm_squared(&self) -> f64 {
+        TensorTrain::norm_squared(self)
+    }
+
+    fn conj(&self) -> Self {
+        // Clone and conjugate each site tensor
+        // Note: conj() cannot return Result, so we ensure this never fails
+        let mut result = self.clone();
+        for site in 0..result.len() {
+            let t = result.tensor(site).conj();
+            result.set_tensor(site, t);
+        }
+        result
+    }
+
+    // ========================================================================
+    // Methods not supported by TensorTrain
+    // ========================================================================
+
+    fn factorize(
+        &self,
+        _left_inds: &[Self::Index],
+        _options: &FactorizeOptions,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        Err(FactorizeError::UnsupportedStorage(
+            "TensorTrain does not support factorize; use orthogonalize() instead",
+        ))
+    }
+
+    fn contract(_tensors: &[&Self], _allowed: AllowedPairs<'_>) -> anyhow::Result<Self> {
+        anyhow::bail!("TensorTrain does not support TensorLike::contract; use TensorTrain::contract() method instead")
+    }
+
+    fn contract_connected(_tensors: &[&Self], _allowed: AllowedPairs<'_>) -> anyhow::Result<Self> {
+        anyhow::bail!("TensorTrain does not support TensorLike::contract_connected; use TensorTrain::contract() method instead")
+    }
+
+    fn direct_sum(
+        &self,
+        _other: &Self,
+        _pairs: &[(Self::Index, Self::Index)],
+    ) -> anyhow::Result<DirectSumResult<Self>> {
+        anyhow::bail!("TensorTrain does not support direct_sum; use add() instead")
+    }
+
+    fn outer_product(&self, _other: &Self) -> anyhow::Result<Self> {
+        anyhow::bail!("TensorTrain does not support outer_product")
+    }
+
+    fn permuteinds(&self, _new_order: &[Self::Index]) -> anyhow::Result<Self> {
+        anyhow::bail!("TensorTrain does not support permuteinds")
+    }
+
+    fn diagonal(input: &Self::Index, output: &Self::Index) -> anyhow::Result<Self> {
+        // Create a single-site TensorTrain with an identity tensor
+        let delta = TensorDynLen::diagonal(input, output)?;
+        Self::new(vec![delta]).map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    fn scalar_one() -> anyhow::Result<Self> {
+        // Empty tensor train represents scalar 1
+        Self::new(vec![]).map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    fn ones(indices: &[Self::Index]) -> anyhow::Result<Self> {
+        let t = TensorDynLen::ones(indices)?;
+        Self::new(vec![t]).map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    fn onehot(index_vals: &[(Self::Index, usize)]) -> anyhow::Result<Self> {
+        let t = TensorDynLen::onehot(index_vals)?;
+        Self::new(vec![t]).map_err(|e| anyhow::anyhow!("{}", e))
     }
 }
 
@@ -1388,5 +1583,128 @@ mod tests {
         let new_tensor = make_tensor(vec![s0, l01]);
         tt.set_tensor(0, new_tensor);
         assert!(!tt.isortho());
+    }
+
+    #[test]
+    fn test_scale() {
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        // Scale by 2.0
+        let scaled = tt.scale(AnyScalar::F64(2.0)).unwrap();
+
+        // Verify: norm of scaled should be 2 * norm of original
+        let orig_norm = tt.norm();
+        let scaled_norm = scaled.norm();
+        assert!(
+            (scaled_norm - 2.0 * orig_norm).abs() < 1e-10,
+            "Expected scaled_norm = {}, got {}",
+            2.0 * orig_norm,
+            scaled_norm
+        );
+    }
+
+    #[test]
+    fn test_scale_empty() {
+        let tt = TensorTrain::new(vec![]).unwrap();
+        let scaled = tt.scale(AnyScalar::F64(2.0)).unwrap();
+        assert!(scaled.is_empty());
+    }
+
+    #[test]
+    fn test_axpby() {
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+        let tt1 = TensorTrain::new(vec![t0.clone(), t1.clone()]).unwrap();
+        let tt2 = tt1.clone();
+
+        // Compute 2*tt1 + 3*tt2 = 5*tt1 (since tt1 == tt2)
+        let result = tt1
+            .axpby(AnyScalar::F64(2.0), &tt2, AnyScalar::F64(3.0))
+            .unwrap();
+
+        // Verify numerically via to_dense
+        let result_dense = result.to_dense().unwrap();
+        let tt1_dense = tt1.to_dense().unwrap();
+
+        let result_data = result_dense.as_slice_f64().unwrap();
+        let tt1_data = tt1_dense.as_slice_f64().unwrap();
+
+        assert_eq!(result_data.len(), tt1_data.len());
+        for i in 0..result_data.len() {
+            let expected = 5.0 * tt1_data[i]; // 2*tt1 + 3*tt2 = 5*tt1
+            assert!(
+                (result_data[i] - expected).abs() < 1e-10,
+                "Mismatch at {}: {} vs {}",
+                i,
+                result_data[i],
+                expected
+            );
+        }
+
+        // Bond dimension should be 6 (3 + 3)
+        assert_eq!(result.bond_dims(), vec![6]);
+    }
+
+    #[test]
+    fn test_tensor_like_scale() {
+        use tensor4all_core::TensorLike;
+
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        // Use TensorLike::scale
+        let scaled = TensorLike::scale(&tt, AnyScalar::F64(2.0)).unwrap();
+
+        let orig_norm = tt.norm();
+        let scaled_norm = TensorLike::norm(&scaled);
+        assert!(
+            (scaled_norm - 2.0 * orig_norm).abs() < 1e-10,
+            "Expected scaled_norm = {}, got {}",
+            2.0 * orig_norm,
+            scaled_norm
+        );
+    }
+
+    #[test]
+    fn test_tensor_like_inner_product() {
+        use tensor4all_core::TensorLike;
+
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        // TensorLike::inner_product should equal TensorTrain::inner
+        let inner_via_trait = TensorLike::inner_product(&tt, &tt).unwrap();
+        let inner_direct = tt.inner(&tt);
+
+        assert!(
+            (inner_via_trait.real() - inner_direct.real()).abs() < 1e-10,
+            "Inner product mismatch: {} vs {}",
+            inner_via_trait.real(),
+            inner_direct.real()
+        );
     }
 }
