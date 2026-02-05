@@ -1,3 +1,5 @@
+#![allow(clippy::needless_borrows_for_generic_args)]
+#![allow(clippy::identity_op)]
 //! Test: GMRES solver with MPS/MPO format
 //!
 //! A = Pauli-X MPO (spin flip operator at each site)

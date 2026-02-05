@@ -1,3 +1,6 @@
+#![allow(clippy::needless_borrows_for_generic_args)]
+#![allow(clippy::identity_op)]
+#![allow(clippy::type_complexity)]
 //! Test GMRES solver with MPO (Matrix Product Operator) format for x and b.
 //!
 //! Unlike test_gmres_mps.rs where x and b are MPS (vectors), here x and b are MPOs (operators).

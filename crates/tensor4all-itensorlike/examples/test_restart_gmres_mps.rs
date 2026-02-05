@@ -1,4 +1,5 @@
 #![allow(clippy::needless_borrows_for_generic_args)]
+#![allow(clippy::identity_op)]
 //! Test: Restart GMRES solver with MPS/MPO format
 //!
 //! Tests with Identity MPO and Pauli-X MPO first (N=2,3),
