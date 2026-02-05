@@ -185,6 +185,9 @@ jobs:
         env:
           TENSOR4ALL_LIB: ${{ github.workspace }}/target/release/libtensor4all_hdf5_ffi.so
           HDF5_LIB: ${{ steps.hdf5.outputs.path }}
+          # Prioritize system libraries over Julia's bundled versions to avoid
+          # libcurl version conflicts (Julia's libcurl lacks CURL_OPENSSL_4)
+          LD_LIBRARY_PATH: /usr/lib/x86_64-linux-gnu:${{ env.LD_LIBRARY_PATH }}
 
   test-python:
     name: Test (Python)
