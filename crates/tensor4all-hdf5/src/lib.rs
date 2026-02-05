@@ -22,11 +22,11 @@ mod schema;
 
 use anyhow::Result;
 use tensor4all_core::TensorDynLen;
-use tensor4all_hdf5_ffi::File;
+use hdf5_rt::File;
 use tensor4all_itensorlike::TensorTrain;
 
 // Re-export the HDF5 initialization functions for users
-pub use tensor4all_hdf5_ffi::sys::{
+pub use hdf5_rt::sys::{
     init as hdf5_init, is_initialized as hdf5_is_initialized, library_path as hdf5_library_path,
 };
 

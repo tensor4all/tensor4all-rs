@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use num_complex::Complex64;
 use tensor4all_core::defaults::tensordynlen::TensorAccess;
 use tensor4all_core::TensorDynLen;
-use tensor4all_hdf5_ffi::Group;
+use hdf5_rt::Group;
 
 use crate::index;
 use crate::layout;

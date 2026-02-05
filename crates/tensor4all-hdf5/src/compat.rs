@@ -5,8 +5,8 @@
 //! functions that can read both formats.
 
 use anyhow::{bail, Result};
-use tensor4all_hdf5_ffi::types::{FixedUnicode, VarLenAscii, VarLenUnicode};
-use tensor4all_hdf5_ffi::{Attribute, Dataset, Group};
+use hdf5_rt::types::{FixedUnicode, VarLenAscii, VarLenUnicode};
+use hdf5_rt::{Attribute, Dataset, Group};
 
 /// Try multiple string-reading strategies, returning the first success.
 ///
@@ -14,9 +14,9 @@ use tensor4all_hdf5_ffi::{Attribute, Dataset, Group};
 /// (ITensors.jl format), or VarLenAscii. This helper abstracts that logic.
 fn try_read_string<F1, F2, F3>(try_varlen: F1, try_fixed: F2, try_ascii: F3) -> Result<String>
 where
-    F1: FnOnce() -> tensor4all_hdf5_ffi::Result<VarLenUnicode>,
-    F2: FnOnce() -> tensor4all_hdf5_ffi::Result<FixedUnicode<256>>,
-    F3: FnOnce() -> tensor4all_hdf5_ffi::Result<VarLenAscii>,
+    F1: FnOnce() -> hdf5_rt::Result<VarLenUnicode>,
+    F2: FnOnce() -> hdf5_rt::Result<FixedUnicode<256>>,
+    F3: FnOnce() -> hdf5_rt::Result<VarLenAscii>,
 {
     if let Ok(val) = try_varlen() {
         return Ok(val.as_str().to_string());
