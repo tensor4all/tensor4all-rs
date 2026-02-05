@@ -13,7 +13,6 @@ members = [
     "crates/tensor4all-quanticstci",
     "crates/tensor4all-capi",
     "crates/tensor4all-hdf5",
-    "crates/tensor4all-hdf5-ffi",
     "crates/mdarray-einsum",
     "tools/api-dump",
     "xtask",
@@ -51,4 +50,5 @@ petgraph = "0.7"
 dyn-clone = "1.0"
 kryst = { version = "2.4", default-features = false, features = ["rayon", "logging"] }
 omeco = "0.2.1"
+tensor4all-hdf5-ffi = { git = "https://github.com/tensor4all/tensor4all-hdf5-ffi" }
 

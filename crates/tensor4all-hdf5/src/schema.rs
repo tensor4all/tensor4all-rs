@@ -7,7 +7,8 @@
 
 use anyhow::{bail, Result};
 use std::str::FromStr;
-use tensor4all_hdf5_ffi::{Group, VarLenUnicode};
+use tensor4all_hdf5_ffi::types::VarLenUnicode;
+use tensor4all_hdf5_ffi::Group;
 
 /// Write `@type` and `@version` attributes to an HDF5 group.
 pub(crate) fn write_type_version(group: &Group, type_name: &str, version: i64) -> Result<()> {
@@ -73,7 +74,7 @@ mod tests {
 
     fn init_hdf5() {
         // Initialize HDF5 library for tests
-        if !tensor4all_hdf5_ffi::hdf5_is_initialized() {
+        if !tensor4all_hdf5_ffi::sys::is_initialized() {
             // Try common library paths
             let paths = [
                 "/usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5.so",
@@ -83,7 +84,7 @@ mod tests {
             ];
             for path in &paths {
                 if std::path::Path::new(path).exists() {
-                    let _ = tensor4all_hdf5_ffi::hdf5_init(path);
+                    let _ = tensor4all_hdf5_ffi::sys::init(Some(path));
                     break;
                 }
             }
