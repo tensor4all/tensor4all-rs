@@ -21,8 +21,8 @@ mod mps;
 mod schema;
 
 use anyhow::Result;
-use tensor4all_core::TensorDynLen;
 use hdf5_rt::File;
+use tensor4all_core::TensorDynLen;
 use tensor4all_itensorlike::TensorTrain;
 
 // Re-export the HDF5 initialization functions for users

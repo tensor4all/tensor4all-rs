@@ -1,11 +1,11 @@
 //! Layer 0: Index / TagSet HDF5 read/write (ITensors.jl compatible).
 
 use anyhow::{Context, Result};
+use hdf5_rt::types::VarLenUnicode;
+use hdf5_rt::Group;
 use std::str::FromStr;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
 use tensor4all_core::tagset::TagSetLike;
-use hdf5_rt::types::VarLenUnicode;
-use hdf5_rt::Group;
 
 use crate::schema;
 

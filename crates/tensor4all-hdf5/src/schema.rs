@@ -6,9 +6,9 @@
 //! boilerplate across index, itensor, and mps modules.
 
 use anyhow::{bail, Result};
-use std::str::FromStr;
 use hdf5_rt::types::VarLenUnicode;
 use hdf5_rt::Group;
+use std::str::FromStr;
 
 /// Write `@type` and `@version` attributes to an HDF5 group.
 pub(crate) fn write_type_version(group: &Group, type_name: &str, version: i64) -> Result<()> {
