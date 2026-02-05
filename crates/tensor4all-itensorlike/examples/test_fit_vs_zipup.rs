@@ -1,3 +1,6 @@
+#![allow(clippy::needless_borrows_for_generic_args)]
+#![allow(clippy::println_empty_string)]
+#![allow(unused_variables)]
 //! Minimal test to compare ContractOptions::fit() vs zipup() for MPO×MPO contraction.
 //!
 //! Run:
