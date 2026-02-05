@@ -1630,7 +1630,7 @@ mod tests {
             check_true_residual: true,
         };
 
-        let result = gmres_with_truncation(&apply_a, &b, &x0, &options, &truncate).unwrap();
+        let result = gmres_with_truncation(apply_a, &b, &x0, &options, truncate).unwrap();
 
         assert!(
             result.converged,
