@@ -43,6 +43,47 @@ where
     catch_unwind(|| f(s1, s2)).unwrap_or(T4A_INTERNAL_ERROR)
 }
 
+/// Initialize the HDF5 library by loading it from the specified path.
+///
+/// This must be called before using any HDF5 functions when the library is built
+/// with runtime-loading mode. In link mode, this is a no-op.
+///
+/// # Arguments
+/// - `library_path`: Path to the HDF5 shared library (e.g., libhdf5.so or libhdf5.dylib).
+///                   If null, attempts to use a default system path.
+///
+/// # Returns
+/// `T4A_SUCCESS` on success, or an error code on failure.
+///
+/// # Safety
+/// The library path must be a valid null-terminated UTF-8 string if non-null.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_hdf5_init(library_path: *const libc::c_char) -> StatusCode {
+    let path = if library_path.is_null() {
+        None
+    } else {
+        match cstr_to_str_checked(library_path) {
+            Ok(s) => Some(s),
+            Err(code) => return code,
+        }
+    };
+
+    match catch_unwind(|| tensor4all_hdf5::hdf5_init(path)) {
+        Ok(Ok(())) => T4A_SUCCESS,
+        Ok(Err(_)) => T4A_INTERNAL_ERROR,
+        Err(_) => T4A_INTERNAL_ERROR,
+    }
+}
+
+/// Check if the HDF5 library is initialized.
+///
+/// # Returns
+/// `true` if HDF5 is initialized and ready to use, `false` otherwise.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_hdf5_is_initialized() -> bool {
+    tensor4all_hdf5::hdf5_is_initialized()
+}
+
 /// Save a tensor as an ITensors.jl-compatible `ITensor` in an HDF5 file.
 ///
 /// # Arguments
