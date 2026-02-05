@@ -5,7 +5,8 @@
 //! functions that can read both formats.
 
 use anyhow::{bail, Result};
-use tensor4all_hdf5_ffi::{Attribute, Dataset, FixedUnicode, Group, VarLenAscii, VarLenUnicode};
+use tensor4all_hdf5_ffi::types::{FixedUnicode, VarLenAscii, VarLenUnicode};
+use tensor4all_hdf5_ffi::{Attribute, Dataset, Group};
 
 /// Try multiple string-reading strategies, returning the first success.
 ///
