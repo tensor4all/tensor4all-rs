@@ -1651,6 +1651,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_borrows_for_generic_args)]
     fn test_gmres_with_truncation_check_true_residual_consistency() {
         // Test that when check_true_residual is enabled, the reported residual_norm
         // is consistent with the actual checked (truncated) residual.
