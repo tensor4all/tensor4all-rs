@@ -97,7 +97,7 @@ fn create_random_mps_chain_with_sites_real_c64(
         let nelem: usize = indices.iter().map(|idx| idx.dim()).product();
         let mut data = Vec::with_capacity(nelem);
         for _ in 0..nelem {
-            let r: f64 = rng.gen();
+            let r: f64 = rng.random();
             data.push(num_complex::Complex64::new(r, 0.0));
         }
         let t = TensorDynLen::from_dense_c64(indices, data);
@@ -141,7 +141,7 @@ fn create_random_mps_chain_with_sites_imag_c64(
         let nelem: usize = indices.iter().map(|idx| idx.dim()).product();
         let mut data = Vec::with_capacity(nelem);
         for _ in 0..nelem {
-            let im: f64 = rng.gen();
+            let im: f64 = rng.random();
             data.push(num_complex::Complex64::new(0.0, im));
         }
         let t = TensorDynLen::from_dense_c64(indices, data);

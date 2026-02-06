@@ -34,7 +34,7 @@ fn make_node_name(i: usize) -> String {
 /// Create a DynIndex with a deterministic ID from the seeded RNG.
 fn unique_dyn_index(used: &mut HashSet<DynId>, dim: usize, rng: &mut StdRng) -> DynIndex {
     loop {
-        let id = DynId(rng.gen());
+        let id = DynId(rng.random());
         if used.insert(id) {
             return Index::new(id, dim);
         }

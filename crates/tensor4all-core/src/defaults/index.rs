@@ -327,7 +327,7 @@ thread_local! {
     ///
     /// Each thread has its own RNG, similar to ITensors.jl's task-local RNG.
     /// This provides thread-safe ID generation without global synchronization.
-    static ID_RNG: RefCell<rand::rngs::ThreadRng> = RefCell::new(rand::thread_rng());
+    static ID_RNG: RefCell<rand::rngs::ThreadRng> = RefCell::new(rand::rng());
 }
 
 /// Generate a unique random ID for dynamic indices (thread-safe).
@@ -335,7 +335,7 @@ thread_local! {
 /// Uses thread-local random number generator to generate UInt64 IDs,
 /// compatible with ITensors.jl's `IDType = UInt64`.
 pub(crate) fn generate_id() -> u64 {
-    ID_RNG.with(|rng| rng.borrow_mut().gen())
+    ID_RNG.with(|rng| rng.borrow_mut().random())
 }
 
 /// Default Index type alias (same as `Index<Id>` with default tags).

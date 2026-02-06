@@ -7,7 +7,7 @@
 //!
 //! Then contracts them using zip-up method with cutoff=0 (no truncation).
 
-use rand::thread_rng;
+use rand::rng;
 use std::time::Instant;
 
 use tensor4all_core::{DynIndex, TensorDynLen};
@@ -32,7 +32,7 @@ fn create_random_mpo(
     output_indices: &[DynIndex],
     link_indices: &[DynIndex],
 ) -> Result<TensorTrain> {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mut tensors = Vec::with_capacity(length);
 
     // Create tensors for each site

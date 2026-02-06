@@ -834,10 +834,10 @@ fn create_random_mpo(indices: &SharedIndices, seed: u64) -> anyhow::Result<Tenso
             for k in 0..site_dim {
                 if j == k {
                     // Diagonal: 2.0 + random in [0, 1)
-                    data.push(2.0 + rng.gen::<f64>());
+                    data.push(2.0 + rng.random::<f64>());
                 } else {
                     // Off-diagonal: small random value
-                    data.push(0.1 * (rng.gen::<f64>() - 0.5));
+                    data.push(0.1 * (rng.random::<f64>() - 0.5));
                 }
             }
         }

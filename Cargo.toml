@@ -43,13 +43,14 @@ mdarray-linalg-lapack = { git = "https://github.com/grothesque/mdarray-linalg", 
 faer = "0.23"
 faer-traits = "0.23"
 thiserror = "2.0"
-rand = "0.8"
-rand_chacha = "0.3"
-rand_distr = "0.4"
+rand = "0.9"
+rand_chacha = "0.9"
+rand_distr = "0.5"
 petgraph = "0.7"
 dyn-clone = "1.0"
 kryst = { version = "2.4", default-features = false, features = ["rayon", "logging"] }
 omeco = "0.2.1"
 hdf5-metno = { version = "0.12", default-features = false }
+ndarray = "0.17"
 hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", default-features = false }
 
