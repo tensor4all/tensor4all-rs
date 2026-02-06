@@ -3,8 +3,8 @@
 //! MPS is simply metadata (length, llim, rlim) + a sequence of ITensors,
 //! so this module is a thin wrapper around [`crate::itensor`].
 
+use crate::backend::Group;
 use anyhow::{Context, Result};
-use tensor4all_hdf5_ffi::Group;
 use tensor4all_itensorlike::TensorTrain;
 
 use crate::itensor;

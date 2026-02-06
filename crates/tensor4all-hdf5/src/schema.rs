@@ -5,10 +5,10 @@
 //! provides helpers to write and read them, replacing copy-pasted
 //! boilerplate across index, itensor, and mps modules.
 
+use crate::backend::types::VarLenUnicode;
+use crate::backend::Group;
 use anyhow::{bail, Result};
 use std::str::FromStr;
-use tensor4all_hdf5_ffi::types::VarLenUnicode;
-use tensor4all_hdf5_ffi::Group;
 
 /// Write `@type` and `@version` attributes to an HDF5 group.
 pub(crate) fn write_type_version(group: &Group, type_name: &str, version: i64) -> Result<()> {
@@ -70,12 +70,12 @@ pub(crate) fn require_type_version(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor4all_hdf5_ffi::File;
+    use crate::backend::File;
 
+    #[cfg(feature = "runtime-loading")]
     fn init_hdf5() {
-        // Initialize HDF5 library for tests
-        if !tensor4all_hdf5_ffi::sys::is_initialized() {
-            // Try common library paths
+        // Initialize HDF5 library for tests (runtime-loading mode)
+        if !hdf5_rt::sys::is_initialized() {
             let paths = [
                 "/usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5.so",
                 "/usr/lib/libhdf5.so",
@@ -84,11 +84,16 @@ mod tests {
             ];
             for path in &paths {
                 if std::path::Path::new(path).exists() {
-                    let _ = tensor4all_hdf5_ffi::sys::init(Some(path));
+                    let _ = hdf5_rt::sys::init(Some(path));
                     break;
                 }
             }
         }
+    }
+
+    #[cfg(all(feature = "link", not(feature = "runtime-loading")))]
+    fn init_hdf5() {
+        // No initialization needed for link mode
     }
 
     #[test]

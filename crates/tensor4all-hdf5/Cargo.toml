@@ -6,10 +6,16 @@ authors.workspace = true
 license.workspace = true
 description = "HDF5 serialization for tensor4all-rs (ITensors.jl compatible format)"
 
+[features]
+default = ["link"]
+link = ["dep:hdf5-metno"]
+runtime-loading = ["dep:hdf5-rt"]
+
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core" }
 tensor4all-itensorlike = { path = "../tensor4all-itensorlike" }
-tensor4all-hdf5-ffi = { workspace = true, features = ["complex"] }
+hdf5-metno = { workspace = true, default-features = false, features = ["complex"], optional = true }
+hdf5-rt = { workspace = true, default-features = false, features = ["complex"], optional = true }
 num-complex = { workspace = true }
 anyhow = { workspace = true }
 ndarray = "0.16"
