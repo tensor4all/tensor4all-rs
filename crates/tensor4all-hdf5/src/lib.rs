@@ -12,7 +12,13 @@
 //!
 //! tensor4all-rs uses row-major (C order) while ITensors.jl uses column-major
 //! (Fortran order). This crate handles the conversion transparently.
+//!
+//! # Backend selection
+//!
+//! - `link` feature (default): uses `hdf5-metno` with compile-time linking
+//! - `runtime-loading` feature: uses `hdf5-rt` with dlopen (for Julia/Python FFI)
 
+pub(crate) mod backend;
 mod compat;
 mod index;
 mod itensor;
@@ -21,11 +27,12 @@ mod mps;
 mod schema;
 
 use anyhow::Result;
-use hdf5_rt::File;
+use backend::File;
 use tensor4all_core::TensorDynLen;
 use tensor4all_itensorlike::TensorTrain;
 
-// Re-export the HDF5 initialization functions for users
+// Re-export the HDF5 initialization functions (runtime-loading mode only)
+#[cfg(feature = "runtime-loading")]
 pub use hdf5_rt::sys::{
     init as hdf5_init, is_initialized as hdf5_is_initialized, library_path as hdf5_library_path,
 };

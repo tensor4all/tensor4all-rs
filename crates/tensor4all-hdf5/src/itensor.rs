@@ -1,7 +1,7 @@
 //! Layer 1: ITensor (TensorDynLen) HDF5 read/write (ITensors.jl compatible).
 
+use crate::backend::Group;
 use anyhow::{bail, Context, Result};
-use hdf5_rt::Group;
 use num_complex::Complex64;
 use tensor4all_core::defaults::tensordynlen::TensorAccess;
 use tensor4all_core::TensorDynLen;

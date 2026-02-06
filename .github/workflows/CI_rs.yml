@@ -69,8 +69,6 @@ jobs:
         run: cargo test --release --workspace --exclude tensor4all-hdf5
 
       - name: Run HDF5 tests (sequential - HDF5 library may not be threadsafe)
-        env:
-          LD_LIBRARY_PATH: /usr/lib/x86_64-linux-gnu/hdf5/serial
         run: cargo test --release -p tensor4all-hdf5 -- --test-threads=1
 
   test-libtorch:
@@ -144,8 +142,6 @@ jobs:
         run: cargo llvm-cov --workspace --exclude tensor4all-hdf5 --lcov --output-path lcov-main.info
 
       - name: Generate coverage report (HDF5 - sequential)
-        env:
-          LD_LIBRARY_PATH: /usr/lib/x86_64-linux-gnu/hdf5/serial
         run: cargo llvm-cov -p tensor4all-hdf5 --lcov --output-path lcov-hdf5.info -- --test-threads=1
 
       - name: Merge coverage reports

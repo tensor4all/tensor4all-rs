@@ -5,9 +5,9 @@
 //! provides helpers to write and read them, replacing copy-pasted
 //! boilerplate across index, itensor, and mps modules.
 
+use crate::backend::types::VarLenUnicode;
+use crate::backend::Group;
 use anyhow::{bail, Result};
-use hdf5_rt::types::VarLenUnicode;
-use hdf5_rt::Group;
 use std::str::FromStr;
 
 /// Write `@type` and `@version` attributes to an HDF5 group.
@@ -70,12 +70,12 @@ pub(crate) fn require_type_version(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hdf5_rt::File;
+    use crate::backend::File;
 
+    #[cfg(feature = "runtime-loading")]
     fn init_hdf5() {
-        // Initialize HDF5 library for tests
+        // Initialize HDF5 library for tests (runtime-loading mode)
         if !hdf5_rt::sys::is_initialized() {
-            // Try common library paths
             let paths = [
                 "/usr/lib/x86_64-linux-gnu/hdf5/serial/libhdf5.so",
                 "/usr/lib/libhdf5.so",
@@ -89,6 +89,11 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[cfg(feature = "link")]
+    fn init_hdf5() {
+        // No initialization needed for link mode
     }
 
     #[test]

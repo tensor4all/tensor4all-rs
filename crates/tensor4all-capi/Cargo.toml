@@ -19,7 +19,7 @@ tensor4all-simplett = { path = "../tensor4all-simplett" }
 tensor4all-tensorci = { path = "../tensor4all-tensorci" }
 tensor4all-quanticstci = { path = "../tensor4all-quanticstci" }
 tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform" }
-tensor4all-hdf5 = { path = "../tensor4all-hdf5", optional = true }
+tensor4all-hdf5 = { path = "../tensor4all-hdf5", default-features = false, features = ["runtime-loading"], optional = true }
 quanticsgrids = { path = "../quanticsgrids" }
 libc.workspace = true
 thiserror.workspace = true
