@@ -424,7 +424,7 @@ mod tests {
 
         // Create TreeTNs with these networks
         let link_space = LinkSpace::uniform(2);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let op1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
         let op2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
 
@@ -454,7 +454,7 @@ mod tests {
             .unwrap();
 
         let link_space = LinkSpace::uniform(2);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let op1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
         let op2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
 
@@ -475,7 +475,7 @@ mod tests {
         op2_net.add_node("N2".to_string(), HashSet::new()).unwrap();
 
         let link_space = LinkSpace::uniform(2);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let op1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
         let op2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
 
@@ -548,7 +548,7 @@ mod tests {
 
         // Create TreeTNs for the operators
         let link_space = LinkSpace::uniform(2);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mpo1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
         let mpo2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
 
@@ -655,7 +655,7 @@ mod tests {
 
         // Create TreeTNs
         let link_space = LinkSpace::uniform(2);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mpo1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
         let mpo2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
 
@@ -729,7 +729,7 @@ mod tests {
 
         // Create TreeTNs
         let link_space = LinkSpace::uniform(2);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mpo1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
         let mpo2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
 
@@ -811,7 +811,7 @@ mod tests {
             .unwrap();
 
         let link_space = LinkSpace::uniform(2);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mpo1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
         let mpo2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
 
@@ -863,7 +863,7 @@ mod tests {
             .unwrap();
 
         let link_space = LinkSpace::uniform(2);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mpo1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
         let mpo2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
 

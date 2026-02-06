@@ -1,6 +1,6 @@
 //! Profiled version of benchmark_contract with detailed timing.
 
-use rand::thread_rng;
+use rand::rng;
 use std::time::Instant;
 
 use tensor4all_core::{DynIndex, TensorDynLen};
@@ -15,7 +15,7 @@ fn create_random_mpo(
     output_indices: &[DynIndex],
     link_indices: &[DynIndex],
 ) -> Result<TensorTrain> {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mut tensors = Vec::with_capacity(length);
 
     for i in 0..length {

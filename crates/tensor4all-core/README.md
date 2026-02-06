@@ -14,7 +14,7 @@ Foundation library providing core data structures and algorithms for tensor oper
 
 ```rust
 use anyhow::Result;
-use rand::thread_rng;
+use rand::rng;
 use tensor4all_core::index::{DynId, Index};
 use tensor4all_core::{factorize, FactorizeOptions, TensorDynLen};
 
@@ -23,7 +23,7 @@ let i = Index::<DynId>::new_dyn_with_tag(3, "i")?;
 let j = Index::<DynId>::new_dyn_with_tag(4, "j")?;
 
 // Create a random tensor
-let mut rng = thread_rng();
+let mut rng = rng();
 let tensor = TensorDynLen::random_f64(&mut rng, vec![i.clone(), j.clone()]);
 
 // SVD factorization with truncation
@@ -42,7 +42,7 @@ The library provides flexible multi-tensor contraction with control over which t
 
 ```rust
 use anyhow::Result;
-use rand::thread_rng;
+use rand::rng;
 use tensor4all_core::index::{DynId, Index};
 use tensor4all_core::{contract_multi, contract_connected, AllowedPairs, TensorDynLen};
 
@@ -52,7 +52,7 @@ let j = Index::<DynId>::new_dyn_with_tag(3, "j")?;
 let k = Index::<DynId>::new_dyn_with_tag(4, "k")?;
 let l = Index::<DynId>::new_dyn_with_tag(5, "l")?;
 
-let mut rng = thread_rng();
+let mut rng = rng();
 let a = TensorDynLen::random_f64(&mut rng, vec![i.clone(), j.clone()]);
 let b = TensorDynLen::random_f64(&mut rng, vec![j.clone(), k.clone()]);
 let c = TensorDynLen::random_f64(&mut rng, vec![k.clone(), l.clone()]);

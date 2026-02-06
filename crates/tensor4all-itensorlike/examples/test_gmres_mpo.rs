@@ -691,9 +691,9 @@ fn create_random_operator_mpo(indices: &SharedIndices, seed: u64) -> anyhow::Res
         for j in 0..in_dim {
             for k in 0..in_dim {
                 if j == k {
-                    data.push(2.0 + rng.gen::<f64>());
+                    data.push(2.0 + rng.random::<f64>());
                 } else {
-                    data.push(0.1 * (rng.gen::<f64>() - 0.5));
+                    data.push(0.1 * (rng.random::<f64>() - 0.5));
                 }
             }
         }
