@@ -91,7 +91,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "link")]
+    #[cfg(all(feature = "link", not(feature = "runtime-loading")))]
     fn init_hdf5() {
         // No initialization needed for link mode
     }
