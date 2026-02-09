@@ -248,9 +248,9 @@ where
     };
 
     // Add random initial pivots (0-indexed for TCI)
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     for _ in 0..options.nrandominitpivot {
-        let pivot: Vec<usize> = local_dims.iter().map(|&d| rng.gen_range(0..d)).collect();
+        let pivot: Vec<usize> = local_dims.iter().map(|&d| rng.random_range(0..d)).collect();
         qinitialpivots.push(pivot);
     }
 
@@ -438,9 +438,9 @@ where
     };
 
     // Add random initial pivots (0-indexed for TCI)
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     for _ in 0..options.nrandominitpivot {
-        let pivot: Vec<usize> = local_dims.iter().map(|&d| rng.gen_range(0..d)).collect();
+        let pivot: Vec<usize> = local_dims.iter().map(|&d| rng.random_range(0..d)).collect();
         qinitialpivots.push(pivot);
     }
 

@@ -16,7 +16,7 @@ Tree tensor network (TreeTN) implementation for general tensor networks beyond l
 
 ```rust
 use anyhow::Result;
-use rand::thread_rng;
+use rand::rng;
 use tensor4all_core::index::{DynId, Index};
 use tensor4all_core::TensorDynLen;
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
@@ -26,7 +26,7 @@ let bond = Index::<DynId>::new_dyn(10);
 let a_site = Index::<DynId>::new_dyn(2);
 let b_site = Index::<DynId>::new_dyn(2);
 
-let mut rng = thread_rng();
+let mut rng = rng();
 let a = TensorDynLen::random_f64(&mut rng, vec![a_site.clone(), bond.clone()]);
 let b = TensorDynLen::random_f64(&mut rng, vec![bond.clone(), b_site.clone()]);
 

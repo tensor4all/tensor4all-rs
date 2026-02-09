@@ -571,7 +571,7 @@ mod tests {
         .unwrap();
 
         let link_space = LinkSpace::uniform(2);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mpo = random_treetn_f64(&mut rng, &net, link_space);
 
         let true_s0 = make_index(2);
@@ -616,7 +616,7 @@ mod tests {
         .unwrap();
 
         let link_space = LinkSpace::uniform(2);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mpo = random_treetn_f64(&mut rng, &net, link_space);
 
         let arc_op = ArcLinearOperator::new(mpo, HashMap::new(), HashMap::new());
@@ -897,7 +897,7 @@ mod tests {
         .unwrap();
 
         let link_space = LinkSpace::uniform(2);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mpo = random_treetn_f64(&mut rng, &net, link_space);
 
         let true_s0 = make_index(2);

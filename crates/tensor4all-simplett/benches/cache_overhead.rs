@@ -21,13 +21,13 @@ fn generate_tci_like_indices(
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
     let left_parts: Vec<Vec<usize>> = (0..n_left)
-        .map(|_| (0..split).map(|_| rng.gen_range(0..local_dim)).collect())
+        .map(|_| (0..split).map(|_| rng.random_range(0..local_dim)).collect())
         .collect();
 
     let right_parts: Vec<Vec<usize>> = (0..n_right)
         .map(|_| {
             (0..n_sites - split)
-                .map(|_| rng.gen_range(0..local_dim))
+                .map(|_| rng.random_range(0..local_dim))
                 .collect()
         })
         .collect();
@@ -56,7 +56,7 @@ fn create_tt_with_bond_dim(n_sites: usize, local_dim: usize, bond_dim: usize) ->
         for l in 0..left_dim {
             for s in 0..local_dim {
                 for r in 0..right_dim {
-                    t.set3(l, s, r, rng.gen::<f64>());
+                    t.set3(l, s, r, rng.random::<f64>());
                 }
             }
         }
