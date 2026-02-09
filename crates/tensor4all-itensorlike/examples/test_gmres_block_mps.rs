@@ -7,6 +7,9 @@
 //! Run:
 //!   cargo run -p tensor4all-itensorlike --example test_gmres_block_mps --release
 
+use std::time::Instant;
+
+use num_complex::Complex64;
 use tensor4all_core::block_tensor::BlockTensor;
 use tensor4all_core::krylov::{
     gmres_with_truncation, restart_gmres_with_truncation, GmresOptions, RestartGmresOptions,
@@ -19,11 +22,10 @@ use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 // BlockSharedIndices: Index management for block MPS
 // ============================================================================
 
-/// Shared indices for each block MPS.
+/// Shared indices for block MPS.
 ///
-/// Each block has independent indices (different DynId).
-/// For non-diagonal blocks (e.g., upper triangular B), the operator must
-/// map between block index spaces.
+/// All blocks share the same site and MPO output indices (same DynId).
+/// Bond indices remain independent per block.
 #[allow(dead_code)]
 struct BlockSharedIndices {
     /// Number of blocks
@@ -33,32 +35,38 @@ struct BlockSharedIndices {
     /// Physical dimension (stored for potential future use)
     phys_dim: usize,
     /// Site indices for each block: sites[block_idx][site_idx]
+    /// All blocks share the same DynIndex IDs (cloned from one set).
     sites: Vec<Vec<DynIndex>>,
     /// Bond indices for each block: bonds[block_idx][bond_idx]
     bonds: Vec<Vec<DynIndex>>,
     /// MPO output indices for each block: mpo_outputs[block_idx][site_idx]
+    /// All blocks share the same DynIndex IDs (cloned from one set).
     mpo_outputs: Vec<Vec<DynIndex>>,
 }
 
 impl BlockSharedIndices {
     fn new(num_blocks: usize, n_sites: usize, phys_dim: usize) -> Self {
+        // Shared site indices: all blocks share the same physical indices
+        let shared_sites: Vec<DynIndex> =
+            (0..n_sites).map(|_| DynIndex::new_dyn(phys_dim)).collect();
+
+        // Shared MPO output indices
+        let shared_mpo_outputs: Vec<DynIndex> =
+            (0..n_sites).map(|_| DynIndex::new_dyn(phys_dim)).collect();
+
+        // Build per-block arrays by cloning shared index sets
         let mut sites = Vec::with_capacity(num_blocks);
         let mut bonds = Vec::with_capacity(num_blocks);
         let mut mpo_outputs = Vec::with_capacity(num_blocks);
 
         for _ in 0..num_blocks {
-            // Each block gets independent indices
-            let block_sites: Vec<DynIndex> =
-                (0..n_sites).map(|_| DynIndex::new_dyn(phys_dim)).collect();
-            let block_bonds: Vec<DynIndex> = (0..n_sites.saturating_sub(1))
-                .map(|_| DynIndex::new_dyn(1))
-                .collect();
-            let block_mpo_outputs: Vec<DynIndex> =
-                (0..n_sites).map(|_| DynIndex::new_dyn(phys_dim)).collect();
-
-            sites.push(block_sites);
-            bonds.push(block_bonds);
-            mpo_outputs.push(block_mpo_outputs);
+            sites.push(shared_sites.clone());
+            bonds.push(
+                (0..n_sites.saturating_sub(1))
+                    .map(|_| DynIndex::new_dyn(1))
+                    .collect(),
+            );
+            mpo_outputs.push(shared_mpo_outputs.clone());
         }
 
         BlockSharedIndices {
@@ -255,6 +263,99 @@ fn create_diagonal_mpo_for_block(
                 vec![left_bond, s_in, s_out, right_bond],
                 diag_data.to_vec(),
             );
+            tensors.push(tensor);
+        }
+    }
+
+    TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("{}", e))
+}
+
+/// Create an MPS with all elements = i (pure imaginary ones) for a specific block.
+/// All cores use DenseC64 storage.
+fn create_complex_ones_mps_for_block(
+    indices: &BlockSharedIndices,
+    block_idx: usize,
+    value: Complex64,
+) -> anyhow::Result<TensorTrain> {
+    let n = indices.n_sites;
+    let mut tensors = Vec::with_capacity(n);
+
+    // Factor goes on first site only, rest get 1+0i
+    let one = Complex64::new(1.0, 0.0);
+
+    for i in 0..n {
+        let site_dim = indices.sites[block_idx][i].dim();
+        let site_idx = indices.sites[block_idx][i].clone();
+        let fill = if i == 0 { value } else { one };
+
+        if i == 0 && n == 1 {
+            let data = vec![fill; site_dim];
+            let tensor = TensorDynLen::from_dense_c64(vec![site_idx], data);
+            tensors.push(tensor);
+        } else if i == 0 {
+            let right_bond = indices.bonds[block_idx][i].clone();
+            let data = vec![fill; site_dim];
+            let tensor = TensorDynLen::from_dense_c64(vec![site_idx, right_bond], data);
+            tensors.push(tensor);
+        } else if i == n - 1 {
+            let left_bond = indices.bonds[block_idx][i - 1].clone();
+            let data = vec![fill; site_dim];
+            let tensor = TensorDynLen::from_dense_c64(vec![left_bond, site_idx], data);
+            tensors.push(tensor);
+        } else {
+            let left_bond = indices.bonds[block_idx][i - 1].clone();
+            let right_bond = indices.bonds[block_idx][i].clone();
+            let data = vec![fill; site_dim];
+            let tensor = TensorDynLen::from_dense_c64(vec![left_bond, site_idx, right_bond], data);
+            tensors.push(tensor);
+        }
+    }
+
+    TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("{}", e))
+}
+
+/// Create an i*Pauli-X MPO that maps from block src_idx to block dst_idx (all cores DenseC64).
+/// Input indices: sites[src_idx], Output indices: mpo_outputs[dst_idx]
+fn create_i_pauli_x_cross_block_mpo(
+    indices: &BlockSharedIndices,
+    src_idx: usize,
+    dst_idx: usize,
+) -> anyhow::Result<TensorTrain> {
+    let n = indices.n_sites;
+    let mut tensors = Vec::with_capacity(n);
+
+    let mpo_bonds: Vec<DynIndex> = (0..n.saturating_sub(1))
+        .map(|_| DynIndex::new_dyn(1))
+        .collect();
+
+    let i_unit = Complex64::new(0.0, 1.0);
+    let one = Complex64::new(1.0, 0.0);
+    let zero = Complex64::new(0.0, 0.0);
+
+    for i in 0..n {
+        let s_in = indices.sites[src_idx][i].clone();
+        let s_out = indices.mpo_outputs[dst_idx][i].clone();
+
+        // i*σ_x on first site, σ_x (stored as complex) on remaining sites
+        let factor = if i == 0 { i_unit } else { one };
+        let data = vec![zero, factor, factor, zero];
+
+        if i == 0 && n == 1 {
+            let tensor = TensorDynLen::from_dense_c64(vec![s_in, s_out], data);
+            tensors.push(tensor);
+        } else if i == 0 {
+            let right_bond = mpo_bonds[i].clone();
+            let tensor = TensorDynLen::from_dense_c64(vec![s_in, s_out, right_bond], data);
+            tensors.push(tensor);
+        } else if i == n - 1 {
+            let left_bond = mpo_bonds[i - 1].clone();
+            let tensor = TensorDynLen::from_dense_c64(vec![left_bond, s_in, s_out], data);
+            tensors.push(tensor);
+        } else {
+            let left_bond = mpo_bonds[i - 1].clone();
+            let right_bond = mpo_bonds[i].clone();
+            let tensor =
+                TensorDynLen::from_dense_c64(vec![left_bond, s_in, s_out, right_bond], data);
             tensors.push(tensor);
         }
     }
@@ -795,6 +896,456 @@ fn test_restart_gmres_block_mps() -> anyhow::Result<()> {
 }
 
 // ============================================================================
+// Test 5: Block diagonal complex operator (i * Pauli-X)
+// ============================================================================
+
+fn test_block_offdiagonal_complex_pauli_x() -> anyhow::Result<()> {
+    println!("=== Test 5: Block Off-Diagonal Complex i*σ_x (MPS) ===");
+
+    let num_blocks = 2;
+    let n_sites = 2;
+    let phys_dim = 2;
+
+    println!(
+        "Block structure: {}x1, each block: N={} sites, phys_dim={}",
+        num_blocks, n_sites, phys_dim
+    );
+    println!("A = [[0, i*σ_x], [i*σ_x, 0]]");
+    println!("x_true = [i*ones, 2i*ones]^T");
+    println!("b = Ax = [i*σ_x * 2i*ones, i*σ_x * i*ones]^T = [-2*ones, -ones]^T");
+
+    let indices = BlockSharedIndices::new(num_blocks, n_sites, phys_dim);
+
+    // Create cross-block i*σ_x MPOs (all cores DenseC64):
+    // mpo_1to0: acts on block 1, produces result in block 0's index space
+    // mpo_0to1: acts on block 0, produces result in block 1's index space
+    let mpo_1to0 = create_i_pauli_x_cross_block_mpo(&indices, 1, 0)?;
+    let mpo_0to1 = create_i_pauli_x_cross_block_mpo(&indices, 0, 1)?;
+
+    // x_true = [i*ones, 2i*ones]^T (all cores DenseC64)
+    // σ_x * ones = ones (uniform superposition is invariant under spin flip)
+    // A * x_true = [i*σ_x * 2i*ones, i*σ_x * i*ones]^T = [-2*ones, -ones]^T
+    let x1_true = create_complex_ones_mps_for_block(&indices, 0, Complex64::new(0.0, 1.0))?;
+    let x2_true = create_complex_ones_mps_for_block(&indices, 1, Complex64::new(0.0, 2.0))?;
+    let x_true = BlockTensor::new(vec![x1_true, x2_true], (num_blocks, 1));
+    println!("x_true created, norm: {:.6}", x_true.norm());
+
+    // Define off-diagonal block operator: A = [[0, i*σ_x], [i*σ_x, 0]]
+    // y1 = i*σ_x * x2, y2 = i*σ_x * x1
+    let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
+        let x1 = x.get(0, 0);
+        let x2 = x.get(1, 0);
+
+        // y1 = i*σ_x * x2 (cross-block: src=1 -> dst=0)
+        let y1 = apply_cross_block_mpo(&mpo_1to0, x2, &indices, 0)?;
+        // y2 = i*σ_x * x1 (cross-block: src=0 -> dst=1)
+        let y2 = apply_cross_block_mpo(&mpo_0to1, x1, &indices, 1)?;
+
+        BlockTensor::try_new(vec![y1, y2], (num_blocks, 1))
+    };
+
+    // Compute b = A * x_true
+    let b = apply_a(&x_true)?;
+    let b_norm = b.norm();
+    println!("b = A * x_true computed, norm: {:.6}", b_norm);
+
+    // Initial guess: x0 = complex zero (all cores DenseC64)
+    let x0_blocks: Vec<TensorTrain> = (0..num_blocks)
+        .map(|block_idx| {
+            create_complex_ones_mps_for_block(&indices, block_idx, Complex64::new(0.0, 0.0))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let x0 = BlockTensor::new(x0_blocks, (num_blocks, 1));
+    println!("x0 (complex zero) created, norm: {:.6}", x0.norm());
+
+    // GMRES options
+    let options = GmresOptions {
+        max_iter: 20,
+        rtol: 1e-8,
+        max_restarts: 1,
+        verbose: true,
+        check_true_residual: false,
+    };
+
+    // Truncation
+    let truncate_opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(30);
+    let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
+        truncate_block_tensor(x, &truncate_opts)
+    };
+
+    println!("\nRunning GMRES...");
+    let result = gmres_with_truncation(&apply_a, &b, &x0, &options, truncate_fn)?;
+
+    // Compute true residual
+    let ax_sol = apply_a(&result.solution)?;
+    let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
+    let final_residual = r_final.norm() / b_norm;
+
+    // Compute error ||x_sol - x_true||
+    let diff =
+        result
+            .solution
+            .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
+    let error = diff.norm();
+
+    println!("\nResults:");
+    println!("Converged: {}", result.converged);
+    println!("Iterations: {}", result.iterations);
+    println!("GMRES residual: {:.6e}", result.residual_norm);
+    println!("True residual:  {:.6e}", final_residual);
+    println!("Error ||x - x_true||: {:.6e}", error);
+
+    // Verify convergence
+    assert!(
+        result.converged,
+        "GMRES should converge for off-diagonal complex i*σ_x operator"
+    );
+    assert!(
+        final_residual < 1e-6,
+        "True residual should be small: {}",
+        final_residual
+    );
+
+    println!("Test 5 PASSED\n");
+    Ok(())
+}
+
+// ============================================================================
+// Test 6: 3x3 block anti-diagonal complex operator (i * Pauli-X)
+// ============================================================================
+
+fn test_3x3_block_antidiagonal_complex_pauli_x() -> anyhow::Result<()> {
+    println!("=== Test 6: 3x3 Block Anti-Diagonal Complex i*σ_x (MPS) ===");
+
+    let num_blocks = 3;
+    let n_sites = 2;
+    let phys_dim = 2;
+
+    println!(
+        "Block structure: {}x1, each block: N={} sites, phys_dim={}",
+        num_blocks, n_sites, phys_dim
+    );
+    println!("A = [[0, 0, i*σ_x], [0, i*σ_x, 0], [i*σ_x, 0, 0]]");
+    println!("x_true = [i*ones, 2i*ones, 3i*ones]^T");
+    println!("b = Ax = [-3*ones, -2*ones, -ones]^T");
+
+    let indices = BlockSharedIndices::new(num_blocks, n_sites, phys_dim);
+
+    // Create cross-block i*σ_x MPOs (all cores DenseC64):
+    // A[0,2]: src=2 -> dst=0
+    let mpo_2to0 = create_i_pauli_x_cross_block_mpo(&indices, 2, 0)?;
+    // A[1,1]: src=1 -> dst=1 (diagonal block)
+    let mpo_1to1 = create_i_pauli_x_cross_block_mpo(&indices, 1, 1)?;
+    // A[2,0]: src=0 -> dst=2
+    let mpo_0to2 = create_i_pauli_x_cross_block_mpo(&indices, 0, 2)?;
+
+    // x_true = [i*ones, 2i*ones, 3i*ones]^T (all cores DenseC64)
+    let x0_true = create_complex_ones_mps_for_block(&indices, 0, Complex64::new(0.0, 1.0))?;
+    let x1_true = create_complex_ones_mps_for_block(&indices, 1, Complex64::new(0.0, 2.0))?;
+    let x2_true = create_complex_ones_mps_for_block(&indices, 2, Complex64::new(0.0, 3.0))?;
+    let x_true = BlockTensor::new(vec![x0_true, x1_true, x2_true], (num_blocks, 1));
+    println!("x_true created, norm: {:.6}", x_true.norm());
+
+    // Define anti-diagonal block operator:
+    // y0 = i*σ_x * x2, y1 = i*σ_x * x1, y2 = i*σ_x * x0
+    let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
+        let x0 = x.get(0, 0);
+        let x1 = x.get(1, 0);
+        let x2 = x.get(2, 0);
+
+        let y0 = apply_cross_block_mpo(&mpo_2to0, x2, &indices, 0)?;
+        let y1 = apply_cross_block_mpo(&mpo_1to1, x1, &indices, 1)?;
+        let y2 = apply_cross_block_mpo(&mpo_0to2, x0, &indices, 2)?;
+
+        BlockTensor::try_new(vec![y0, y1, y2], (num_blocks, 1))
+    };
+
+    // Compute b = A * x_true
+    let b = apply_a(&x_true)?;
+    let b_norm = b.norm();
+    println!("b = A * x_true computed, norm: {:.6}", b_norm);
+
+    // Initial guess: x0 = complex zero (all cores DenseC64)
+    let x0_blocks: Vec<TensorTrain> = (0..num_blocks)
+        .map(|block_idx| {
+            create_complex_ones_mps_for_block(&indices, block_idx, Complex64::new(0.0, 0.0))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let x0 = BlockTensor::new(x0_blocks, (num_blocks, 1));
+    println!("x0 (complex zero) created, norm: {:.6}", x0.norm());
+
+    // GMRES options
+    let options = GmresOptions {
+        max_iter: 30,
+        rtol: 1e-8,
+        max_restarts: 1,
+        verbose: true,
+        check_true_residual: false,
+    };
+
+    // Truncation
+    let truncate_opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(30);
+    let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
+        truncate_block_tensor(x, &truncate_opts)
+    };
+
+    println!("\nRunning GMRES...");
+    let result = gmres_with_truncation(&apply_a, &b, &x0, &options, truncate_fn)?;
+
+    // Compute true residual
+    let ax_sol = apply_a(&result.solution)?;
+    let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
+    let final_residual = r_final.norm() / b_norm;
+
+    // Compute error ||x_sol - x_true||
+    let diff =
+        result
+            .solution
+            .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
+    let error = diff.norm();
+
+    println!("\nResults:");
+    println!("Converged: {}", result.converged);
+    println!("Iterations: {}", result.iterations);
+    println!("GMRES residual: {:.6e}", result.residual_norm);
+    println!("True residual:  {:.6e}", final_residual);
+    println!("Error ||x - x_true||: {:.6e}", error);
+
+    // Verify convergence
+    assert!(
+        result.converged,
+        "GMRES should converge for 3x3 anti-diagonal complex i*σ_x operator"
+    );
+    assert!(
+        final_residual < 1e-6,
+        "True residual should be small: {}",
+        final_residual
+    );
+
+    println!("Test 6 PASSED\n");
+    Ok(())
+}
+
+// ============================================================================
+// Scaling study: vary n_sites for 2x2 off-diagonal i*σ_x
+// ============================================================================
+
+fn scaling_offdiagonal_complex_pauli_x(n_sites: usize) -> anyhow::Result<()> {
+    let num_blocks = 2;
+    let phys_dim = 2;
+    let block_dim = (phys_dim as u64).pow(n_sites as u32);
+
+    println!(
+        "  N={:>2}: block_dim=2^{}={}, total_dim={}",
+        n_sites,
+        n_sites,
+        block_dim,
+        block_dim * num_blocks as u64
+    );
+
+    let indices = BlockSharedIndices::new(num_blocks, n_sites, phys_dim);
+
+    // Cross-block i*σ_x MPOs
+    let mpo_1to0 = create_i_pauli_x_cross_block_mpo(&indices, 1, 0)?;
+    let mpo_0to1 = create_i_pauli_x_cross_block_mpo(&indices, 0, 1)?;
+
+    // x_true = [i*ones, 2i*ones]^T
+    let x1_true = create_complex_ones_mps_for_block(&indices, 0, Complex64::new(0.0, 1.0))?;
+    let x2_true = create_complex_ones_mps_for_block(&indices, 1, Complex64::new(0.0, 2.0))?;
+    let x_true = BlockTensor::new(vec![x1_true, x2_true], (num_blocks, 1));
+
+    // A = [[0, i*σ_x], [i*σ_x, 0]]
+    let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
+        let x1 = x.get(0, 0);
+        let x2 = x.get(1, 0);
+        let y1 = apply_cross_block_mpo(&mpo_1to0, x2, &indices, 0)?;
+        let y2 = apply_cross_block_mpo(&mpo_0to1, x1, &indices, 1)?;
+        BlockTensor::try_new(vec![y1, y2], (num_blocks, 1))
+    };
+
+    let b = apply_a(&x_true)?;
+    let b_norm = b.norm();
+
+    // x0 = complex zero
+    let x0_blocks: Vec<TensorTrain> = (0..num_blocks)
+        .map(|block_idx| {
+            create_complex_ones_mps_for_block(&indices, block_idx, Complex64::new(0.0, 0.0))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let x0 = BlockTensor::new(x0_blocks, (num_blocks, 1));
+
+    let options = GmresOptions {
+        max_iter: 30,
+        rtol: 1e-8,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: false,
+    };
+
+    let truncate_opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(30);
+    let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
+        truncate_block_tensor(x, &truncate_opts)
+    };
+
+    let start = Instant::now();
+    let result = gmres_with_truncation(&apply_a, &b, &x0, &options, truncate_fn)?;
+    let elapsed = start.elapsed();
+
+    // True residual
+    let ax_sol = apply_a(&result.solution)?;
+    let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
+    let final_residual = r_final.norm() / b_norm;
+
+    // Error
+    let diff =
+        result
+            .solution
+            .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
+    let error = diff.norm();
+
+    println!(
+        "         iters={}, residual={:.2e}, error={:.2e}, time={:.3}s, converged={}",
+        result.iterations,
+        final_residual,
+        error,
+        elapsed.as_secs_f64(),
+        result.converged
+    );
+
+    assert!(result.converged, "GMRES should converge for N={}", n_sites);
+    assert!(
+        final_residual < 1e-6,
+        "True residual too large for N={}: {}",
+        n_sites,
+        final_residual
+    );
+
+    Ok(())
+}
+
+fn scaling_3x3_antidiagonal_complex_pauli_x(n_sites: usize) -> anyhow::Result<()> {
+    let num_blocks = 3;
+    let phys_dim = 2;
+    let block_dim = (phys_dim as u64).pow(n_sites as u32);
+
+    println!(
+        "  N={:>2}: block_dim=2^{}={}, total_dim={}",
+        n_sites,
+        n_sites,
+        block_dim,
+        block_dim * num_blocks as u64
+    );
+
+    let indices = BlockSharedIndices::new(num_blocks, n_sites, phys_dim);
+
+    // A[0,2]: src=2 -> dst=0
+    let mpo_2to0 = create_i_pauli_x_cross_block_mpo(&indices, 2, 0)?;
+    // A[1,1]: src=1 -> dst=1
+    let mpo_1to1 = create_i_pauli_x_cross_block_mpo(&indices, 1, 1)?;
+    // A[2,0]: src=0 -> dst=2
+    let mpo_0to2 = create_i_pauli_x_cross_block_mpo(&indices, 0, 2)?;
+
+    // x_true = [i*ones, 2i*ones, 3i*ones]^T
+    let x0_true = create_complex_ones_mps_for_block(&indices, 0, Complex64::new(0.0, 1.0))?;
+    let x1_true = create_complex_ones_mps_for_block(&indices, 1, Complex64::new(0.0, 2.0))?;
+    let x2_true = create_complex_ones_mps_for_block(&indices, 2, Complex64::new(0.0, 3.0))?;
+    let x_true = BlockTensor::new(vec![x0_true, x1_true, x2_true], (num_blocks, 1));
+
+    // A = [[0, 0, i*σ_x], [0, i*σ_x, 0], [i*σ_x, 0, 0]]
+    let apply_a = |x: &BlockTensor<TensorTrain>| -> anyhow::Result<BlockTensor<TensorTrain>> {
+        let x0 = x.get(0, 0);
+        let x1 = x.get(1, 0);
+        let x2 = x.get(2, 0);
+        let y0 = apply_cross_block_mpo(&mpo_2to0, x2, &indices, 0)?;
+        let y1 = apply_cross_block_mpo(&mpo_1to1, x1, &indices, 1)?;
+        let y2 = apply_cross_block_mpo(&mpo_0to2, x0, &indices, 2)?;
+        BlockTensor::try_new(vec![y0, y1, y2], (num_blocks, 1))
+    };
+
+    let b = apply_a(&x_true)?;
+    let b_norm = b.norm();
+
+    // x0 = complex zero
+    let x0_blocks: Vec<TensorTrain> = (0..num_blocks)
+        .map(|block_idx| {
+            create_complex_ones_mps_for_block(&indices, block_idx, Complex64::new(0.0, 0.0))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let x0 = BlockTensor::new(x0_blocks, (num_blocks, 1));
+
+    let options = GmresOptions {
+        max_iter: 30,
+        rtol: 1e-8,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: false,
+    };
+
+    let truncate_opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(30);
+    let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
+        truncate_block_tensor(x, &truncate_opts)
+    };
+
+    let start = Instant::now();
+    let result = gmres_with_truncation(&apply_a, &b, &x0, &options, truncate_fn)?;
+    let elapsed = start.elapsed();
+
+    // True residual
+    let ax_sol = apply_a(&result.solution)?;
+    let r_final = ax_sol.axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))?;
+    let final_residual = r_final.norm() / b_norm;
+
+    // Error
+    let diff =
+        result
+            .solution
+            .axpby(AnyScalar::new_real(1.0), &x_true, AnyScalar::new_real(-1.0))?;
+    let error = diff.norm();
+
+    println!(
+        "         iters={}, residual={:.2e}, error={:.2e}, time={:.3}s, converged={}",
+        result.iterations,
+        final_residual,
+        error,
+        elapsed.as_secs_f64(),
+        result.converged
+    );
+
+    assert!(
+        result.converged,
+        "GMRES should converge for 3x3 N={}",
+        n_sites
+    );
+    assert!(
+        final_residual < 1e-6,
+        "True residual too large for 3x3 N={}: {}",
+        n_sites,
+        final_residual
+    );
+
+    Ok(())
+}
+
+fn test_scaling_study() -> anyhow::Result<()> {
+    println!("=== Scaling Study: 2x2 Off-Diagonal i*σ_x vs n_sites ===");
+    println!("A = [[0, i*σ_x], [i*σ_x, 0]], phys_dim=2\n");
+
+    for &n_sites in &[2, 4, 6, 8, 10, 14, 20] {
+        scaling_offdiagonal_complex_pauli_x(n_sites)?;
+    }
+
+    println!("\n=== Scaling Study: 3x3 Anti-Diagonal i*σ_x vs n_sites ===");
+    println!("A = [[0,0,i*σ_x],[0,i*σ_x,0],[i*σ_x,0,0]], phys_dim=2\n");
+
+    for &n_sites in &[2, 4, 6, 8, 10, 14, 20] {
+        scaling_3x3_antidiagonal_complex_pauli_x(n_sites)?;
+    }
+
+    println!("\nScaling study PASSED\n");
+    Ok(())
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -814,6 +1365,15 @@ fn main() -> anyhow::Result<()> {
 
     // Test 4: Restart GMRES with block MPS
     test_restart_gmres_block_mps()?;
+
+    // Test 5: Off-diagonal complex operator (i * Pauli-X)
+    test_block_offdiagonal_complex_pauli_x()?;
+
+    // Test 6: 3x3 block anti-diagonal complex operator (i * Pauli-X)
+    test_3x3_block_antidiagonal_complex_pauli_x()?;
+
+    // Scaling study: vary n_sites
+    test_scaling_study()?;
 
     println!("========================================");
     println!("  All tests completed!");

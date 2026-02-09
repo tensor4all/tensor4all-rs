@@ -21,7 +21,10 @@
 //! let result = gmres(apply_a, &b, &x0, &GmresOptions::default())?;
 //! ```
 
+use std::collections::HashSet;
+
 use crate::any_scalar::AnyScalar;
+use crate::index_like::IndexLike;
 use crate::tensor_index::TensorIndex;
 use crate::tensor_like::{
     AllowedPairs, DirectSumResult, FactorizeError, FactorizeOptions, FactorizeResult, TensorLike,
@@ -128,6 +131,97 @@ impl<T: TensorLike> BlockTensor<T> {
     pub fn into_blocks(self) -> Vec<T> {
         self.blocks
     }
+
+    /// Validate that blocks share external indices consistently.
+    ///
+    /// For column vectors (cols=1), no index sharing is required between
+    /// blocks. Different rows can have independent physical indices
+    /// (the operator determines their relationship).
+    ///
+    /// For matrices (rows x cols), checks that:
+    /// - All blocks have the same number of external indices.
+    /// - Blocks in the same row share some common index IDs (output indices).
+    /// - Blocks in the same column share some common index IDs (input indices).
+    pub fn validate_indices(&self) -> Result<()> {
+        let (rows, cols) = self.shape;
+
+        if cols <= 1 {
+            // Column vector: blocks in different rows can have independent indices.
+            // The operator determines the relationship between blocks.
+            return Ok(());
+        }
+
+        // Matrix: check all blocks have the same number of external indices
+        let first_count = self.blocks[0].num_external_indices();
+        for (i, block) in self.blocks.iter().enumerate().skip(1) {
+            let n = block.num_external_indices();
+            anyhow::ensure!(
+                n == first_count,
+                "Block {} has {} external indices, but block 0 has {}",
+                i,
+                n,
+                first_count
+            );
+        }
+
+        // Same row: blocks should share some common index IDs (output indices)
+        for row in 0..rows {
+            let ref_ids: HashSet<_> = self
+                .get(row, 0)
+                .external_indices()
+                .iter()
+                .map(|idx| idx.id().clone())
+                .collect();
+            for col in 1..cols {
+                let ids: HashSet<_> = self
+                    .get(row, col)
+                    .external_indices()
+                    .iter()
+                    .map(|idx| idx.id().clone())
+                    .collect();
+                let common_count = ref_ids.intersection(&ids).count();
+                anyhow::ensure!(
+                    common_count > 0,
+                    "Matrix row {}: blocks ({},{}) and ({},{}) share no index IDs",
+                    row,
+                    row,
+                    0,
+                    row,
+                    col
+                );
+            }
+        }
+
+        // Same column: blocks should share some common index IDs (input indices)
+        for col in 0..cols {
+            let ref_ids: HashSet<_> = self
+                .get(0, col)
+                .external_indices()
+                .iter()
+                .map(|idx| idx.id().clone())
+                .collect();
+            for row in 1..rows {
+                let ids: HashSet<_> = self
+                    .get(row, col)
+                    .external_indices()
+                    .iter()
+                    .map(|idx| idx.id().clone())
+                    .collect();
+                let common_count = ref_ids.intersection(&ids).count();
+                anyhow::ensure!(
+                    common_count > 0,
+                    "Matrix col {}: blocks ({},{}) and ({},{}) share no index IDs",
+                    col,
+                    0,
+                    col,
+                    row,
+                    col
+                );
+            }
+        }
+
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -138,13 +232,17 @@ impl<T: TensorLike> TensorIndex for BlockTensor<T> {
     type Index = T::Index;
 
     fn external_indices(&self) -> Vec<Self::Index> {
-        // BlockTensor as a whole doesn't expose external indices
-        // Each block has its own indices, but they are internal to the block structure
-        vec![]
-    }
-
-    fn num_external_indices(&self) -> usize {
-        0
+        // Collect unique external indices across all blocks (deduplicated by ID).
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for block in &self.blocks {
+            for idx in block.external_indices() {
+                if seen.insert(idx.id().clone()) {
+                    result.push(idx);
+                }
+            }
+        }
+        result
     }
 
     fn replaceind(&self, old_index: &Self::Index, new_index: &Self::Index) -> Result<Self> {
@@ -240,6 +338,10 @@ impl<T: TensorLike> TensorLike for BlockTensor<T> {
             blocks: conjugated,
             shape: self.shape,
         }
+    }
+
+    fn validate(&self) -> Result<()> {
+        self.validate_indices()
     }
 
     // ------------------------------------------------------------------------
@@ -643,5 +745,136 @@ mod tests {
             .axpby(AnyScalar::F64(1.0), &block, AnyScalar::F64(-1.0))
             .unwrap();
         assert!(diff.norm() < 1e-10);
+    }
+
+    // ========================================================================
+    // validate_indices tests
+    // ========================================================================
+
+    #[test]
+    fn test_validate_indices_column_shared() {
+        // Column vector with shared index → should pass
+        let idx = DynIndex::new_dyn(2);
+        let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
+        let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
+        let block = BlockTensor::new(vec![b1, b2], (2, 1));
+        assert!(block.validate_indices().is_ok());
+    }
+
+    #[test]
+    fn test_validate_indices_column_independent() {
+        // Column vector with independent indices → should also pass
+        // (different rows can have independent indices; the operator determines relationships)
+        let idx1 = DynIndex::new_dyn(2);
+        let idx2 = DynIndex::new_dyn(2);
+        let b1 = make_vector_with_index(vec![1.0, 2.0], &idx1);
+        let b2 = make_vector_with_index(vec![3.0, 4.0], &idx2);
+        let block = BlockTensor::new(vec![b1, b2], (2, 1));
+        assert!(block.validate_indices().is_ok());
+    }
+
+    #[test]
+    fn test_validate_indices_matrix_shared() {
+        // 2x2 matrix: same-row blocks share one index, same-column blocks share another
+        let row0_idx = DynIndex::new_dyn(2);
+        let row1_idx = DynIndex::new_dyn(2);
+        let col0_idx = DynIndex::new_dyn(3);
+        let col1_idx = DynIndex::new_dyn(3);
+
+        // Block (0,0): [col0_idx, row0_idx]
+        let b00 = TensorDynLen::new(
+            vec![col0_idx.clone(), row0_idx.clone()],
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![0.0; 6],
+                &[3, 2],
+            ))),
+        );
+        // Block (0,1): [col1_idx, row0_idx] — same row → shares row0_idx
+        let b01 = TensorDynLen::new(
+            vec![col1_idx.clone(), row0_idx.clone()],
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![0.0; 6],
+                &[3, 2],
+            ))),
+        );
+        // Block (1,0): [col0_idx, row1_idx] — same column → shares col0_idx
+        let b10 = TensorDynLen::new(
+            vec![col0_idx.clone(), row1_idx.clone()],
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![0.0; 6],
+                &[3, 2],
+            ))),
+        );
+        // Block (1,1): [col1_idx, row1_idx]
+        let b11 = TensorDynLen::new(
+            vec![col1_idx.clone(), row1_idx.clone()],
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![0.0; 6],
+                &[3, 2],
+            ))),
+        );
+
+        let block = BlockTensor::new(vec![b00, b01, b10, b11], (2, 2));
+        assert!(block.validate_indices().is_ok());
+    }
+
+    #[test]
+    fn test_validate_indices_matrix_no_row_sharing() {
+        // 2x2 matrix: all indices independent → should fail (no common IDs in same row)
+        let b00 = TensorDynLen::new(
+            vec![DynIndex::new_dyn(2)],
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![0.0; 2],
+                &[2],
+            ))),
+        );
+        let b01 = TensorDynLen::new(
+            vec![DynIndex::new_dyn(2)],
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![0.0; 2],
+                &[2],
+            ))),
+        );
+        let b10 = TensorDynLen::new(
+            vec![DynIndex::new_dyn(2)],
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![0.0; 2],
+                &[2],
+            ))),
+        );
+        let b11 = TensorDynLen::new(
+            vec![DynIndex::new_dyn(2)],
+            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![0.0; 2],
+                &[2],
+            ))),
+        );
+
+        let block = BlockTensor::new(vec![b00, b01, b10, b11], (2, 2));
+        assert!(block.validate_indices().is_err());
+    }
+
+    #[test]
+    fn test_external_indices_deduplication() {
+        // Column vector with shared index → external_indices should return 1 unique index
+        let idx = DynIndex::new_dyn(2);
+        let b1 = make_vector_with_index(vec![1.0, 2.0], &idx);
+        let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
+        let block = BlockTensor::new(vec![b1, b2], (2, 1));
+        let ext = block.external_indices();
+        assert_eq!(ext.len(), 1, "Shared index should appear once");
+        assert!(ext[0].same_id(&idx));
+    }
+
+    #[test]
+    fn test_external_indices_independent() {
+        // Column vector with independent indices → external_indices returns 2 unique indices
+        let idx1 = DynIndex::new_dyn(2);
+        let idx2 = DynIndex::new_dyn(2);
+        let b1 = make_vector_with_index(vec![1.0, 2.0], &idx1);
+        let b2 = make_vector_with_index(vec![3.0, 4.0], &idx2);
+        let block = BlockTensor::new(vec![b1, b2], (2, 1));
+        let ext = block.external_indices();
+        assert_eq!(ext.len(), 2, "Independent indices should both appear");
     }
 }
