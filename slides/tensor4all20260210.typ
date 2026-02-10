@@ -88,6 +88,7 @@
     - Complex128 (first-class, day one)
     - Optimized einsum (contraction tree + GEMM)
     - TN algorithms (MPS/TT, TreeTN, TCI)
+    - AD support (reverse / forward / HVP)
   - Distribute as *installable packages* for Julia / Python
     - C-API + runtime loading (no Rust toolchain required by end users — _in the future_)
 ]
@@ -115,7 +116,7 @@
 
   #v(0.4em)
   #text(size: 14pt)[
-    Interop (for Julia/Python): hdf5-rt, rsmpi-rt.
+    Interop (for Julia/Python): hdf5-rt, rsmpi-rt, cblas-inject, lapack-inject
   ]
 ]
 
@@ -123,19 +124,19 @@
 // Slide 3: Recent progress — 3 items
 // =====================================================================
 #slide("Recent progress")[
-  + *Tensor4all.jl: installable Julia package*
+  1. *Tensor4all.jl: installable Julia package*
     - `Pkg.add` + `Pkg.build` auto-compiles the Rust backend via C-FFI
     - Runtime library sharing (HDF5, MPI) solved with hdf5-rt / rsmpi-rt
 
   #v(0.3em)
 
-  + *strided-rs: Rust einsum on par with OMEinsum.jl*
+  2. *strided-rs: Rust einsum on par with OMEinsum.jl*
     - Contraction-tree optimizer + cache-optimized kernels
     - Benchmarked on 8 standardized einsum instances (same contraction path)
 
   #v(0.3em)
 
-  + *ndtensors-rs: proof of concept*
+  3. *ndtensors-rs: proof of concept*
     - Tensor types (Dense / BlockSparse / Diag) + AD prototypes in Rust
     - C-API callable from Julia / Python
 ]
@@ -143,7 +144,7 @@
 // =====================================================================
 // Slide 4a: Tensor4all.jl — build mechanism
 // =====================================================================
-#slide("1. Tensor4all.jl: build mechanism")[
+#slide("1.1 Tensor4all.jl: build mechanism")[
   - *RustToolChain.jl* (by Satoshi Terasaki) provides `cargo` to Julia
     - No system Rust installation needed — Julia artifact handles it
 
@@ -165,7 +166,7 @@
 // =====================================================================
 // Slide 4b: Sharing runtime libraries (HDF5 / MPI)
 // =====================================================================
-#slide("1. Sharing runtime libraries")[
+#slide("1.2 Sharing runtime libraries")[
   *Key constraint:* Julia/Python and Rust must share the same C libraries at runtime
 
   #v(0.3em)
@@ -188,7 +189,7 @@
 // =====================================================================
 // Slide 4c: Tensor4all.jl — usage example
 // =====================================================================
-#slide("1. Tensor4all.jl: usage example")[
+#slide("1.3 Tensor4all.jl: usage example")[
   #code-block[
     ```julia
     using Pkg
