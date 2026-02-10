@@ -124,6 +124,10 @@ where
     T: TensorLike,
     F: Fn(&T) -> Result<T>,
 {
+    // Validate structural consistency of inputs
+    b.validate()?;
+    x0.validate()?;
+
     let b_norm = b.norm();
     if b_norm < 1e-15 {
         // b is effectively zero, return x0
@@ -141,6 +145,10 @@ where
     for _restart in 0..options.max_restarts {
         // Compute initial residual: r = b - A*x
         let ax = apply_a(&x)?;
+        // Validate operator output on first restart
+        if _restart == 0 {
+            ax.validate()?;
+        }
         // r = 1.0 * b + (-1.0) * ax
         let r = b.axpby(AnyScalar::F64(1.0), &ax, AnyScalar::F64(-1.0))?;
         let r_norm = r.norm();
@@ -320,6 +328,10 @@ where
     F: Fn(&T) -> Result<T>,
     Tr: Fn(&mut T) -> Result<()>,
 {
+    // Validate structural consistency of inputs
+    b.validate()?;
+    x0.validate()?;
+
     let b_norm = b.norm();
     if b_norm < 1e-15 {
         return Ok(GmresResult {
@@ -335,6 +347,10 @@ where
 
     for _restart in 0..options.max_restarts {
         let ax = apply_a(&x)?;
+        // Validate operator output on first restart
+        if _restart == 0 {
+            ax.validate()?;
+        }
         let mut r = b.axpby(AnyScalar::F64(1.0), &ax, AnyScalar::F64(-1.0))?;
         truncate(&mut r)?;
         let r_norm = r.norm();
@@ -731,6 +747,12 @@ where
     F: Fn(&T) -> Result<T>,
     Tr: Fn(&mut T) -> Result<()>,
 {
+    // Validate structural consistency of inputs
+    b.validate()?;
+    if let Some(x) = x0 {
+        x.validate()?;
+    }
+
     let b_norm = b.norm();
     if b_norm < 1e-15 {
         // b is effectively zero, return x0 or zero
@@ -768,6 +790,10 @@ where
     for outer_iter in 0..options.max_outer_iters {
         // Compute true residual: r = b - A*x
         let ax = apply_a(&x)?;
+        // Validate operator output on first outer iteration
+        if outer_iter == 0 {
+            ax.validate()?;
+        }
         let mut r = b.axpby(AnyScalar::F64(1.0), &ax, AnyScalar::F64(-1.0))?;
         truncate(&mut r)?;
 

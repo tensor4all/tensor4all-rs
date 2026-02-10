@@ -506,6 +506,15 @@ pub trait TensorLike: TensorIndex {
         self.norm_squared().sqrt()
     }
 
+    /// Validate structural consistency of this tensor.
+    ///
+    /// The default implementation does nothing (always succeeds).
+    /// Types with internal structure (e.g., [`BlockTensor`]) can override
+    /// this to check invariants such as index sharing between blocks.
+    fn validate(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Create a diagonal (Kronecker delta) tensor for a single index pair.
     ///
     /// Creates a 2D tensor `T[i, o]` where `T[i, o] = δ_{i,o}` (1 if i==o, 0 otherwise).

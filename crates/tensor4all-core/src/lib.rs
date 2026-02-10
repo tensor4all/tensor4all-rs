@@ -66,6 +66,9 @@ pub use tensor_index::TensorIndex;
 // Krylov subspace methods (GMRES, etc.)
 pub mod krylov;
 
+// Block tensor for block matrix GMRES
+pub mod block_tensor;
+
 // Backwards compatibility: re-export defaults::tensordynlen as tensor
 pub use defaults::tensordynlen as tensor;
 
