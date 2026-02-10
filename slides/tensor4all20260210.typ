@@ -50,7 +50,7 @@
 #let slide(title, body) = {
   pagebreak()
   block(width: 100%, height: 100%)[
-    #text(size: 36pt, weight: "bold", fill: rgb("#2563eb"))[#title]
+    #text(size: 28pt, weight: "bold", fill: rgb("#2563eb"))[#title]
     #v(0.8em)
     #line(length: 100%, stroke: 0.5pt + rgb("#2563eb"))
     #v(1em)
@@ -69,7 +69,9 @@
   ]
 }
 
-// Slide 1: Title
+// =====================================================================
+// Slide 0: Title
+// =====================================================================
 #title-slide(
   "Tensor4all: a pure-Rust tensor stack",
   author: "Hiroshi Shinaoka",
@@ -77,7 +79,22 @@
   acknowledgements: "Acknowledgements: Jing-Guo Liu, Satoshi Terasaki, Ken Inayoshi",
 )
 
-// Slide 3: Stack overview
+// =====================================================================
+// Slide 1: Goal
+// =====================================================================
+#slide("Goal")[
+  - Build a *pure-Rust tensor stack* for physics & tensor network computation
+  - Provide the minimal core needed for research:
+    - Complex128 (first-class, day one)
+    - Optimized einsum (contraction tree + GEMM)
+    - TN algorithms (MPS/TT, TreeTN, TCI)
+  - Distribute as *installable packages* for Julia / Python
+    - C-API + runtime loading (no Rust toolchain required by end users — _in the future_)
+]
+
+// =====================================================================
+// Slide 2: Architecture — 4 layers
+// =====================================================================
 #slide("Architecture: 4 layers")[
   #text(size: 14pt)[
     #table(
@@ -85,14 +102,14 @@
       stroke: 0.5pt,
       inset: 6pt,
       [*Layer*], [*What it provides (and repos)*],
-      [4. Bindings], [*Compatibility & distribution (optional)*\
-        Tensor4all.jl, Python: tensor4all-rs/python/tensor4all],
+      [4. Bindings], [*Compatibility & distribution*\
+        Tensor4all.jl · Python bindings (planned)],
       [3. Tensor networks], [*TT/MPS, TreeTN, TCI, C-API, HDF5 serialization*\
         tensor4all-rs],
       [2. Tensor layer], [*Dense / BlockSparse / Diag + AD integration*\
-        ndtensors-rs],
-      [1. Backend], [*Arrays + linalg + einsum frontend (powered by strided-rs (New!))*\
-        mdarray, mdarray-linalg, mdarray-opteinsum, strided-rs (New!)],
+        ndtensors-rs (proof of concept)],
+      [1. Backend], [*Arrays + linalg + einsum*\
+        mdarray · mdarray-linalg · strided-rs],
     )
   ]
 
@@ -102,19 +119,85 @@
   ]
 ]
 
-// Slide 4: Quick usage
-#slide("Minimal usage (Julia)")[
-  - Install + build (auto-compiles the Rust backend):
+// =====================================================================
+// Slide 3: Recent progress — 3 items
+// =====================================================================
+#slide("Recent progress")[
+  + *Tensor4all.jl: installable Julia package*
+    - `Pkg.add` + `Pkg.build` auto-compiles the Rust backend via C-FFI
+    - Runtime library sharing (HDF5, MPI) solved with hdf5-rt / rsmpi-rt
 
+  #v(0.3em)
+
+  + *strided-rs: Rust einsum on par with OMEinsum.jl*
+    - Contraction-tree optimizer + cache-optimized kernels
+    - Benchmarked on 8 standardized einsum instances (same contraction path)
+
+  #v(0.3em)
+
+  + *ndtensors-rs: proof of concept*
+    - Tensor types (Dense / BlockSparse / Diag) + AD prototypes in Rust
+    - C-API callable from Julia / Python
+]
+
+// =====================================================================
+// Slide 4a: Tensor4all.jl — build mechanism
+// =====================================================================
+#slide("1. Tensor4all.jl: build mechanism")[
+  - *RustToolChain.jl* (by Satoshi Terasaki) provides `cargo` to Julia
+    - No system Rust installation needed — Julia artifact handles it
+
+  #v(0.3em)
+
+  - `Pkg.build("Tensor4all")` workflow:
+    + Find Rust source (env var / sibling dir / GitHub clone)
+    + `cargo build -p tensor4all-capi --release`
+    + Copy the shared library (`.so` / `.dylib`) into `deps/`
+    + Julia loads the C-FFI library via `Libdl.dlopen`
+
+  #v(0.3em)
+
+  - *Future:* distribute pre-built binary artifacts (no build step)
+  - *Now:* local cargo build — very convenient for development & debugging
+    - Edit Rust code → `Pkg.build` → test immediately in Julia
+]
+
+// =====================================================================
+// Slide 4b: Sharing runtime libraries (HDF5 / MPI)
+// =====================================================================
+#slide("1. Sharing runtime libraries")[
+  *Key constraint:* Julia/Python and Rust must share the same C libraries at runtime
+
+  #v(0.3em)
+
+  - *hdf5-rt* — runtime HDF5 loading via `dlopen`
+    - Reuses the HDF5 library already loaded by HDF5.jl / h5py
+
+  #v(0.3em)
+
+  - *rsmpi-rt* — MPI via MPItrampoline / MPIABI + `dlopen`
+    - Shares `MPI_COMM_WORLD` with MPI.jl / mpi4py
+
+  #v(0.3em)
+
+  - *cblas-inject* / *lapack-inject* — BLAS/LAPACK via C-pointer injection
+    - Inject function pointers (e.g. `dgemm`, `zgesvd`) from host language at runtime
+    - Rust side calls through function pointers — no link-time BLAS dependency
+]
+
+// =====================================================================
+// Slide 4c: Tensor4all.jl — usage example
+// =====================================================================
+#slide("1. Tensor4all.jl: usage example")[
   #code-block[
     ```julia
     using Pkg
-    Pkg.add("Tensor4all")
+    Pkg.add(url="https://github.com/tensor4all/Tensor4all.jl")
     Pkg.build("Tensor4all")
     ```
   ]
 
-  #v(0.5em)
+  #v(0.3em)
 
   #code-block[
     ```julia
@@ -122,190 +205,205 @@
 
     i = Index(2)
     j = Index(3; tags="Site,n=1")
-    t = Tensor([i, j], rand(2, 3))
+    A = Tensor([i, j], rand(2, 3))
+    B = Tensor([j, i], rand(3, 2))
 
-    dims(t)
-    arr = Array(t, [j, i])
+    C = contract(A, B)           # einsum contraction
+    U, S, V = svd(A, [i])        # SVD with index selection
+    arr = Array(C, [i, i'])      # export to Julia array
     ```
+  ]
+
+  #v(0.3em)
+  #text(size: 14pt)[
+    TODO: more examples — MPS construction, TCI, TreeTN
   ]
 ]
 
-// Slide 6: Interop for bindings
-#slide("Interop for bindings: reuse HDF5/MPI runtimes")[
-  - *HDF5*: `hdf5-rt` (runtime loading via dlopen)
-    - GitHub: #link("https://github.com/tensor4all/hdf5-rt")[https://github.com/tensor4all/hdf5-rt]
-    - Reuse the HDF5 library already loaded by HDF5.jl / h5py
+// =====================================================================
+// Slide 5: strided-rs
+// =====================================================================
+#slide("2. strided-rs: Rust einsum on par with OMEinsum.jl")[
+  - GitHub: #link("https://github.com/tensor4all/strided-rs")[github.com/tensor4all/strided-rs]
+  #v(0.3em)
+
+  #text(size: 14pt)[
+    #table(
+      columns: (1.6fr, 3.4fr),
+      stroke: 0.5pt,
+      inset: 6pt,
+      [*Crate*], [*Role*],
+      [`strided-view`], [Dynamic-rank strided views (zero-copy permute/reshape)],
+      [`strided-kernel`], [Cache-optimized map / reduce / broadcast (L1-tiled)],
+      [`strided-einsum2`], [Binary einsum (GEMM-based building block)],
+      [`strided-opteinsum`], [N-ary einsum + contraction-tree optimizer],
+    )
+  ]
+
+  #v(0.3em)
+  - Two GEMM backends: *faer* (pure Rust) or *OpenBLAS*
+  - Allows arbitrary strides (more general than mdarray): can be integrated into the mdtensor ecosystem in the future?
+]
+
+// =====================================================================
+// Slide 6: Benchmark suite
+// =====================================================================
+#slide("Benchmark suite")[
+  - GitHub: #link("https://github.com/tensor4all/strided-rs-benchmark-suite")[github.com/tensor4all/strided-rs-benchmark-suite]
+  - Based on #link("https://benchmark.einsum.org/")[einsum benchmark] (168 standardized problems / 7 categories)
+  - JSON metadata only — tensors generated at runtime (zero-filled)
+
+  #v(0.3em)
+
+  - Runners:
+    - Rust: `strided-opteinsum` (faer + OpenBLAS backends)
+    - Julia: OMEinsum.jl (same pre-computed contraction path — fair kernel-level comparison)
+
+  #v(0.3em)
+
+  - Instance categories: graphical models, language models, matrix chains, MPS, MERA
+  - Thread control: `OMP_NUM_THREADS`, `RAYON_NUM_THREADS`, `JULIA_NUM_THREADS`
+]
+
+// =====================================================================
+// Slide 7: Results (1 thread)
+// =====================================================================
+#slide("Results: 1 thread (opt_flops)")[
+  #text(size: 14pt)[
+    Apple Silicon M2 · median of 5 runs (2 warmup) · 2026-02-10
+  ]
+
+  #v(0.4em)
+
+  #text(size: 12pt)[
+    #table(
+      columns: (2.9fr, 1.2fr, 1.4fr, 1.6fr),
+      stroke: 0.5pt,
+      inset: 6pt,
+      [*Instance*], [*faer (ms)*], [*OpenBLAS (ms)*], [*OMEinsum (ms)*],
+      [gm_queen5_5_3.wcsp], [3668], [4370], [-],
+      [lm_batch_likelihood_brackets_4_4d], [*16.6*], [19.2], [20.3],
+      [lm_batch_likelihood_sentence_3_12d], [*44.1*], [48.3], [53.2],
+      [lm_batch_likelihood_sentence_4_4d], [*18.5*], [20.2], [19.9],
+      [str_matrix_chain_multiplication_100], [11.3], [*10.4*], [15.6],
+      [str_mps_varying_inner_product_200], [16.8], [18.1], [*16.5*],
+      [str_nw_mera_closed_120], [*1107*], [1118], [1118],
+      [str_nw_mera_open_26], [*709*], [710], [789],
+    )
+  ]
+]
+
+// =====================================================================
+// Slide 8: Results (4 threads)
+// =====================================================================
+#slide("Results: 4 threads (opt_flops)")[
+  #text(size: 14pt)[
+    Apple Silicon M2 · median of 5 runs (2 warmup) · 2026-02-10
+  ]
+
+  #v(0.4em)
+
+  #text(size: 12pt)[
+    #table(
+      columns: (2.9fr, 1.2fr, 1.4fr, 1.6fr),
+      stroke: 0.5pt,
+      inset: 6pt,
+      [*Instance*], [*faer (ms)*], [*OpenBLAS (ms)*], [*OMEinsum (ms)*],
+      [gm_queen5_5_3.wcsp], [3597], [4016], [-],
+      [lm_batch_likelihood_brackets_4_4d], [*14.8*], [16.9], [22.7],
+      [lm_batch_likelihood_sentence_3_12d], [*23.3*], [25.7], [35.6],
+      [lm_batch_likelihood_sentence_4_4d], [*16.0*], [17.7], [20.9],
+      [str_matrix_chain_multiplication_100], [*8.7*], [9.1], [16.7],
+      [str_mps_varying_inner_product_200], [18.1], [21.8], [*15.0*],
+      [str_nw_mera_closed_120], [380], [377], [*370*],
+      [str_nw_mera_open_26], [227], [*226*], [266],
+    )
+  ]
+]
+
+// =====================================================================
+// Slide 9: Benchmark notes
+// =====================================================================
+#slide("Benchmark notes")[
+  - `-` = instance skipped (e.g. duplicate axis labels not yet supported)
+  - strided-rs and OMEinsum.jl use the *same contraction path* — pure kernel-level comparison
+  - *faer* = pure Rust GEMM #h(1em) *OpenBLAS* = vendor BLAS via `cblas-sys`
+  - Row-major (NumPy benchmark) ↔ column-major (strided-rs) conversion is metadata-only
+
+  #v(0.4em)
+
+  - *Takeaway:* strided-rs (faer) is competitive with or faster than OMEinsum.jl (OpenBLAS) on most instances, especially for small-tensor workloads (LM, matrix chain)
+]
+
+// =====================================================================
+// Slide 10: ndtensors-rs — proof of concept
+// =====================================================================
+#slide("3. ndtensors-rs: proof of concept")[
+  - GitHub: #link("https://github.com/tensor4all/ndtensors-rs")[github.com/tensor4all/ndtensors-rs]
+  - Experimental Rust port of NDTensors.jl — feasibility study
+
+  #v(0.3em)
+
+  - *What it demonstrates:*
+    - Storage types: Dense, BlockSparse, Diag, Combiner
+    - Ops: contract (GEMM), permute/reshape, SVD/QR/eigen
+    - AD prototypes: backward (tape), forward (dual), HVP (FoR)
+    - C-API: callable from Julia, Python, C++
+
+  #v(0.3em)
+
+  - *Key idea:* compatibility without rewriting Julia
+    - Inject BLAS/LAPACK function pointers from Julia at runtime
+    - One C-API enables multi-language backends
+  - Status: POC complete — design feeds into *tenet* (next steps)
+]
+
+// =====================================================================
+// Slide 11: Next — tenet
+// =====================================================================
+#slide("Next: tenet (GPU + Burn + Wirtinger AD)")[
+  - *tenet*: physics-oriented tensor computing framework built on strided-rs
+
+  #v(0.3em)
+
+  #text(size: 14pt)[
+    #table(
+      columns: (1.6fr, 3.4fr),
+      stroke: 0.5pt,
+      inset: 6pt,
+      [*Component*], [*Role*],
+      [`tenet-core`], [GPU dispatch — cuBLAS / hipBLAS via dlopen · CubeCL JIT kernels],
+      [`tenet-ad`], [Wirtinger-aware reverse-mode AD (Complex128)],
+      [`tenet-block`], [Generic block-sparse tensor (symmetry-agnostic)],
+      [`tenet-burn`], [Burn interop — reuse NN modules (Linear, Attention, …)],
+    )
+  ]
+
+  #v(0.3em)
+
+  - Primary types: f64, Complex128 (scientific computing)
+  - GPU: NVIDIA (cudarc) + AMD ROCm — zero build-time GPU deps (all dlopen)
+  - No Apple Metal GPU (no f64 ALUs) — Apple Silicon uses CPU via Accelerate
+]
+
+// =====================================================================
+// Slide 12: Summary
+// =====================================================================
+#slide("Summary")[
+  #text(size: 16pt)[
+    #table(
+      columns: (0.4fr, 1.6fr, 3fr),
+      stroke: 0.5pt,
+      inset: 6pt,
+      [*\#*], [*What*], [*Status*],
+      [1], [*Tensor4all.jl*], [`Pkg.add` + `Pkg.build` works · hdf5-rt / rsmpi-rt for runtime sharing],
+      [2], [*strided-rs*], [Einsum on par with OMEinsum.jl · benchmarked on 8 instances],
+      [3], [*ndtensors-rs*], [POC complete — Dense/BlockSparse/Diag + AD + C-API],
+    )
+  ]
 
   #v(0.5em)
 
-  - *MPI*: `rsmpi-rt` (MPItrampoline/MPIABI + dlopen)
-    - GitHub: #link("https://github.com/tensor4all/rsmpi-rt")[https://github.com/tensor4all/rsmpi-rt]
-    - Goal: run alongside MPI.jl / mpi4py, sharing `MPI_COMM_WORLD`
-    - Runtime: set `MPI_RT_LIB` to the MPIwrapper library path
-]
-
-// Slide 7: Layer 3
-#slide("Layer 3: tensor4all-rs (tensor networks)")[
-  - GitHub: #link("https://github.com/tensor4all/tensor4all-rs")[https://github.com/tensor4all/tensor4all-rs]
-  - Provides: TT/MPS, TreeTN, TCI, C-API, and HDF5 serialization
-  - Designed as a Rust-native library; also consumable from Julia/Python via the C-API
-]
-
-// Slide 8: Layer 2 (overview)
-#slide("Layer 2: the tensor layer (types + AD foundation)")[
-  - Storage flavors: Dense / Diagonal / BlockSparse
-  - AD: host-language AD + native Rust AD prototypes
-  - Main repo: ndtensors-rs (#link("https://github.com/tensor4all/ndtensors-rs")[github.com/tensor4all/ndtensors-rs])
-]
-
-// Slide 9: ndtensors-rs
-#slide("ndtensors-rs (experimental): goals & approach")[
-  - GitHub: #link("https://github.com/tensor4all/ndtensors-rs")[https://github.com/tensor4all/ndtensors-rs]
-  - Unofficial experimental Rust port of NDTensors.jl (feasibility study)
-  - Target stack:
-    - ITensors.jl → NDTensors.jl (Julia wrapper) → `ndtensors-rs` (Rust via C API)
-  - Key idea: *compatibility without rewriting Julia*
-    - Inject BLAS/LAPACK function pointers from Julia at runtime (C-pointer injection)
-    - Select backends dynamically at runtime (e.g., CPU vs accelerator)
-  - One C API enables multi-language backends (Julia / Python / C++)
-]
-
-// Slide 10: ndtensors-rs details
-#slide("ndtensors-rs: AD + implementation status (high level)")[
-  #text(size: 16pt)[
-    - Automatic differentiation (multi-host):
-      - Julia: ChainRules.jl rrule/frule
-      - Python: JAX `custom_vjp/jvp`, PyTorch `autograd.Function`
-      - Native Rust prototypes: backward (tape), forward (dual), HVP (FoR)
-
-    #v(0.4em)
-
-    - Implementation status (selected):
-      - Storage/tensors: Dense, BlockSparse, Diag, Combiner
-      - Ops: contract (GEMM), permute/reshape, norms, SVD/QR/eigen
-      - C API: f64 DenseTensor basics; complex / block-sparse is WIP
-  ]
-]
-
-// Slide 11: Layer 1
-#slide("Layer 1: backend (arrays + linalg + einsum)")[
-  - `mdarray`: core multidimensional arrays
-    - GitHub: #link("https://github.com/fre-hu/mdarray")[https://github.com/fre-hu/mdarray]
-  - `mdarray-linalg`: SVD/QR/LU/eigen backends
-    - GitHub: #link("https://github.com/grothesque/mdarray-linalg")[https://github.com/grothesque/mdarray-linalg]
-  - `mdarray-opteinsum` (developed by us): N-ary einsum for mdarray, powered by `strided-opteinsum` (in `strided-rs` (*New!*))
-    - Repo: #link("https://github.com/tensor4all/strided-rs/tree/main/mdarray-opteinsum")[strided-rs/mdarray-opteinsum]
-]
-
-// Slide 12: strided-rs
-#slide("strided-rs: an einsum engine in Rust")[
-  - GitHub: #link("https://github.com/tensor4all/strided-rs")[https://github.com/tensor4all/strided-rs]
-  - A Rust workspace for strided tensor views, kernels, and einsum
-  - Components:
-    - `strided-view`: dynamic-rank strided views
-    - `strided-kernel`: cache-optimized map/reduce/broadcast
-    - `strided-einsum2`: binary einsum (`einsum2_into`) with a GEMM backend
-    - `strided-opteinsum`: N-ary einsum + contraction-order optimization
-  - Two GEMM backends (benchmark-suite): `faer` (pure Rust) or OpenBLAS
-]
-
-// Slide 13: einsum2
-#slide("strided-einsum2: fast binary einsum")[
-  - A focused kernel for *two-input* einsum (GEMM-based)
-  - Intended as the building block for N-ary contraction trees
-  - Works on strided tensors/views (zero-copy transpose/permute metadata)
-]
-
-// Slide 14: Benchmark suite
-#slide("Benchmark suite: fair Rust vs Julia comparison")[
-  - GitHub: #link("https://github.com/tensor4all/strided-rs-benchmark-suite")[https://github.com/tensor4all/strided-rs-benchmark-suite]
-  - Based on einsum benchmark (168 standardized problems / 7 categories)
-  - Stores only metadata as JSON; tensors are generated at runtime (zero-filled)
-  - Runners:
-    - Rust: `strided-opteinsum` (faer + OpenBLAS)
-    - Julia: OMEinsum.jl + TensorOperations.jl
-  - Fairness: strided-rs and OMEinsum.jl follow the same pre-computed contraction path
-  - Threads: `OMP_NUM_THREADS`, `RAYON_NUM_THREADS`, `JULIA_NUM_THREADS`
-]
-
-// Slide 15: Results (1 thread)
-#slide("Results (1 thread, opt_flops)")[
-  #text(size: 14pt)[
-    Environment: Apple Silicon M4. Median time (ms) of 5 runs (2 warmup).
-  ]
-
-  #v(0.4em)
-
-  #text(size: 14pt)[
-    #table(
-      columns: (2.8fr, 1.2fr, 1.4fr, 1.6fr),
-      stroke: 0.5pt,
-      inset: 6pt,
-      [*Instance*], [*faer (ms)*], [*OpenBLAS (ms)*], [*OMEinsum (ms)*],
-      [lm_batch_likelihood_brackets_4_4d], [*18.764*], [20.782], [20.838],
-      [lm_batch_likelihood_sentence_3_12d], [*50.148*], [55.970], [61.733],
-      [lm_batch_likelihood_sentence_4_4d], [21.200], [*21.036*], [24.490],
-      [str_matrix_chain_multiplication_100], [13.497], [*11.450*], [19.548],
-    )
-  ]
-
-  #v(0.4em)
-  #text(size: 14pt)[
-    TensorOperations.jl (matrix chain): 69.269 ms
-  ]
-]
-
-// Slide 16: Results (4 threads)
-#slide("Results (4 threads, opt_flops)")[
-  #text(size: 14pt)[
-    Environment: Apple Silicon M4. Median time (ms) of 5 runs (2 warmup).
-  ]
-
-  #v(0.4em)
-
-  #text(size: 14pt)[
-    #table(
-      columns: (2.8fr, 1.2fr, 1.4fr, 1.6fr),
-      stroke: 0.5pt,
-      inset: 6pt,
-      [*Instance*], [*faer (ms)*], [*OpenBLAS (ms)*], [*OMEinsum (ms)*],
-      [lm_batch_likelihood_brackets_4_4d], [*14.946*], [16.315], [19.981],
-      [lm_batch_likelihood_sentence_3_12d], [*25.458*], [28.477], [44.182],
-      [lm_batch_likelihood_sentence_4_4d], [*16.360*], [17.363], [18.960],
-      [str_matrix_chain_multiplication_100], [9.821], [*8.051*], [14.033],
-    )
-  ]
-
-  #v(0.4em)
-  #text(size: 14pt)[
-    TensorOperations.jl (matrix chain): 25.583 ms
-  ]
-]
-
-// Slide 17: Notes
-#slide("Notes")[
-  - `-` in the benchmark tables indicates TensorOperations.jl could not handle the LM instances
-  - strided-rs vs OMEinsum.jl uses the same contraction path (kernel-level comparison)
-  - `faer` = pure Rust GEMM; OpenBLAS = `cblas-sys`
-  - Row-major (NumPy) ↔ column-major (strided-rs) conversion is metadata-only
-]
-
-// Slide 18: Wrap-up
-#slide("Wrap-up")[
-  #text(size: 14pt)[
-    #table(
-      columns: (1.2fr, 3.8fr),
-      stroke: 0.5pt,
-      inset: 6pt,
-      [*Layer*], [*What it provides (and crates)*],
-      [4. Bindings], [*Compatibility & distribution (optional)*\
-        Tensor4all.jl, Python: tensor4all-rs/python/tensor4all],
-      [3. Tensor networks], [*TT/MPS, TreeTN, TCI, C-API, HDF5 serialization*\
-        tensor4all-rs],
-      [2. Tensor layer], [*Dense / BlockSparse / Diag + AD integration*\
-        ndtensors-rs],
-      [1. Backend], [*Arrays + linalg + einsum frontend (powered by strided-rs (New!))*\
-        mdarray, mdarray-linalg, mdarray-opteinsum, strided-rs (New!)],
-    )
-  ]
+  - *Next:* tenet — GPU acceleration, Wirtinger AD, Burn bridge
+  - *Goal:* a Rust-native, `cargo add`-able alternative to the libtorch subset used in physics
 ]
