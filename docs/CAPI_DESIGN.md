@@ -211,7 +211,7 @@ These operations create new objects and leave the original unchanged:
 /// Scale a tensor train by a factor, returning a new object
 ///
 /// The original tensor train is unchanged.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tt_scaled(
     ptr: *const t4a_tensortrain,
     factor: libc::c_double,
@@ -234,7 +234,7 @@ These operations modify the object in place:
 ///
 /// Modifies the tensor train in place. More memory-efficient than scaled()
 /// when you don't need the original.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tt_scale_inplace(
     ptr: *mut t4a_tensortrain,
     factor: libc::c_double,
@@ -359,7 +359,7 @@ impl Clone for spir_sve_result {
 
 ## Lifecycle Management
 
-Every opaque type must provide three standard lifecycle functions:
+Every opaque type should provide three standard lifecycle functions:
 
 1. **`t4a_<TYPE>_release()`** - Release (drop) the object
 2. **`t4a_<TYPE>_clone()`** - Create a clone
@@ -374,6 +374,20 @@ impl_opaque_type_common!(index);
 // Generates: t4a_index_release, t4a_index_clone, t4a_index_is_assigned
 ```
 
+### Current Implementation Status (tensor4all-capi)
+
+| Type | `_release` | `_clone` | `_is_assigned` | Notes |
+|------|:---:|:---:|:---:|-------|
+| `t4a_index` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_tensor` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_treetn` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_qgrid_disc` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_qgrid_int` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_linop` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_simplett_f64` | Yes | Yes | No | Manual impl |
+| `t4a_tci2_f64` | Yes | No | No | No `Clone` impl |
+| `t4a_qtci_f64` | No | No | No | No `Clone` impl |
+
 ### Manual Implementation
 
 If you need custom behavior, implement manually following this pattern:
@@ -383,7 +397,7 @@ If you need custom behavior, implement manually following this pattern:
 ///
 /// # Safety
 /// The caller must ensure that the pointer is valid and not used after this call.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_<TYPE>_release(obj: *mut t4a_<TYPE>) {
     if obj.is_null() {
         return;
@@ -398,7 +412,7 @@ pub extern "C" fn t4a_<TYPE>_release(obj: *mut t4a_<TYPE>) {
 /// # Safety
 /// The caller must ensure that the source pointer is valid.
 /// The returned pointer must be freed with `t4a_<TYPE>_release()`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_<TYPE>_clone(src: *const t4a_<TYPE>) -> *mut t4a_<TYPE> {
     if src.is_null() {
         return std::ptr::null_mut();
@@ -417,7 +431,7 @@ pub extern "C" fn t4a_<TYPE>_clone(src: *const t4a_<TYPE>) -> *mut t4a_<TYPE> {
 ///
 /// # Returns
 /// 1 if the object is valid, 0 otherwise
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_<TYPE>_is_assigned(obj: *const t4a_<TYPE>) -> i32 {
     if obj.is_null() {
         return 0;
@@ -455,7 +469,7 @@ pub const T4A_INTERNAL_ERROR: StatusCode = -6;
 Functions that can fail should return `StatusCode`:
 
 ```rust
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_<TYPE>_<operation>(
     ptr: *const t4a_<TYPE>,
     out_value: *mut SomeType,
@@ -482,7 +496,7 @@ pub extern "C" fn t4a_<TYPE>_<operation>(
 Constructors that can fail should return `*mut t4a_<TYPE>` (null on error):
 
 ```rust
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_<TYPE>_new(...) -> *mut t4a_<TYPE> {
     // Validation
     if invalid {
@@ -535,7 +549,7 @@ When returning variable-length data, use the "query-then-fill" pattern:
 ### Pattern
 
 ```rust
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_<TYPE>_get_data(
     ptr: *const t4a_<TYPE>,
     buf: *mut u8,           // Can be NULL to query length
@@ -627,7 +641,7 @@ Always document row-major layout in functions that handle tensor data:
 /// - T4A_SUCCESS on success
 /// - T4A_BUFFER_TOO_SMALL if buffer is too small (out_len is still written)
 /// - T4A_INVALID_ARGUMENT if storage is not DenseF64
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_get_data_f64(
     ptr: *const t4a_tensor,
     buf: *mut libc::c_double,
@@ -653,7 +667,7 @@ When creating tensors from C data, the input data must be in row-major order:
 /// - `data_len`: Length of data array
 ///
 /// The data must be provided in row-major (C-style) layout.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_new_dense_f64(
     rank: libc::size_t,
     index_ptrs: *const *const t4a_index,
@@ -937,11 +951,11 @@ Document thread safety guarantees in function documentation:
 ### Attributes
 
 Always use:
-- `#[no_mangle]` - Prevent name mangling
+- `#[unsafe(no_mangle)]` - Prevent name mangling (Rust 2024 edition syntax)
 - `pub extern "C"` - C calling convention
 
 ```rust
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_<TYPE>_<operation>(...) -> ReturnType {
     // ...
 }
@@ -969,7 +983,7 @@ Document all public functions with:
 /// # Safety
 /// - `ptr` must be a valid pointer to a t4a_tensor
 /// - `out_rank` must be a valid pointer to write the rank
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_get_rank(
     ptr: *const t4a_tensor,
     out_rank: *mut libc::size_t,
@@ -1104,7 +1118,7 @@ use std::panic::catch_unwind;
 
 impl_opaque_type_common!(mytype);
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_mytype_new(value: i32) -> *mut t4a_mytype {
     if value < 0 {
         return std::ptr::null_mut();
@@ -1118,7 +1132,7 @@ pub extern "C" fn t4a_mytype_new(value: i32) -> *mut t4a_mytype {
     result.unwrap_or(std::ptr::null_mut())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_mytype_get_value(
     ptr: *const t4a_mytype,
     out_value: *mut i32,
@@ -1149,7 +1163,7 @@ When adding a new opaque type to a C API crate:
 - [ ] Use `impl_opaque_type_common!` macro for lifecycle functions (or implement manually)
 - [ ] Wrap all functions in `catch_unwind` for panic safety
 - [ ] Define status codes with your crate's prefix
-- [ ] Add `#[no_mangle]` and `extern "C"` to all exported functions
+- [ ] Add `#[unsafe(no_mangle)]` and `extern "C"` to all exported functions
 - [ ] Document all functions with safety requirements
 - [ ] Document row-major layout for data access/creation functions (if applicable)
 - [ ] Ensure memory contiguity requirements are met (language bindings)

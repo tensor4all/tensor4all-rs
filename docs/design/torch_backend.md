@@ -1,16 +1,24 @@
-# Issue #139: Libtorch (tch-rs) backend integration plan (CPU, autodiff-first)
+# Libtorch (tch-rs) Backend Integration
 
-This document is the **only source of truth** for the current Torch backend integration work (Issue [#139](https://github.com/shinaoka/tensor4all-rs/issues/139)).
-It intentionally ignores older plans unrelated to Torch integration.
+Design and implementation record for the Torch backend integration (Issue [#139](https://github.com/shinaoka/tensor4all-rs/issues/139), merged in PR [#143](https://github.com/tensor4all/tensor4all-rs/pull/143)).
 
-## Goal (v1)
+## Goal
 
-Add a **feature-gated libtorch backend** so tensor operations can run on **PyTorch tensors** and participate in **autograd**.
+Feature-gated libtorch backend for **PyTorch tensor** operations with **autograd** support.
 
 - **CPU only**
-- **Default = mdarray**, Torch is **optional**
-- **Coexistence is supported**: when Torch feature is enabled, both mdarray and torch storage types can be used in the same build
+- **Default = mdarray**, Torch is **optional** (`backend-libtorch` feature)
+- **Coexistence**: both mdarray and torch storage types can be used in the same build
 - **Correctness first**, performance follow-ups are acceptable
+
+## Implementation Status
+
+| Phase | Status | PR |
+|---|---|---|
+| PR 1: Feature wiring + tch dependency | **Done** | #143 |
+| PR 2: Storage coexistence + einsum facade | **Done** | #143 |
+| PR 3: Wire tensor4all-core contraction routing | **Not started** | - |
+| PR 4: Autograd surface on TorchStorage | **Done** | #143 |
 
 ## Dependency policy (important)
 
@@ -47,7 +55,7 @@ This lets us ship **autodiff-capable contraction** early, then expand parity for
 
 ## Concrete implementation plan (PR-sized)
 
-### PR 1 — Feature wiring + Torch dependency (no behavior change by default)
+### PR 1 — Feature wiring + Torch dependency (no behavior change by default) [DONE]
 
 Files:
 - `crates/tensor4all-tensorbackend/Cargo.toml`
@@ -57,7 +65,7 @@ Changes:
 - Add a new feature:
   - `backend-libtorch` (off by default)
 - Add optional dependency from crates.io (feature-gated):
-  - `tch = { version = "0.22", optional = true }` (version is bikesheddable; keep in sync with a known-good libtorch)
+  - `tch = { version = "0.20", optional = true }`
 - Keep existing defaults unchanged (`backend-faer` etc.).
 
 Build notes:
@@ -71,7 +79,7 @@ Acceptance:
 
 ---
 
-### PR 2 — Storage coexistence model + backend-neutral einsum facade
+### PR 2 — Storage coexistence model + backend-neutral einsum facade [DONE]
 
 Files (new + edits):
 - **new** `crates/tensor4all-tensorbackend/src/einsum.rs`
@@ -145,7 +153,7 @@ Acceptance:
 
 ---
 
-### PR 3 — Wire `tensor4all-core` contraction to the einsum facade under libtorch
+### PR 3 — Wire `tensor4all-core` contraction to the einsum facade under libtorch [NOT STARTED]
 
 Files:
 - `crates/tensor4all-core/src/defaults/contract.rs`
@@ -170,26 +178,21 @@ Acceptance:
 
 ---
 
-### PR 4 — Autograd surface (minimal, Dense f64 first)
+### PR 4 — Autograd surface (minimal, Dense f64 first) [DONE]
 
 Files:
 - `crates/tensor4all-tensorbackend/src/storage.rs` (torch-only additions behind cfg)
 - **new** `crates/tensor4all-tensorbackend/tests/torch_autograd.rs` (cfg-gated)
 
-API (v1 minimal):
-- Expose autodiff-oriented methods on the unified `Storage` surface:
-  - `Storage::requires_grad() -> bool`
-  - `Storage::set_requires_grad(bool)`
-  - `Storage::grad() -> Option<Storage>` (or a tensorbackend-specific wrapper)
-  - `Storage::backward()` for scalar output
+API (implemented on `TorchStorage<T>`):
+- `TorchStorage::requires_grad() -> bool`
+- `TorchStorage::set_requires_grad(bool) -> &mut Self`
+- `TorchStorage::grad() -> Option<TorchStorage<T>>`
+- `TorchStorage::backward() -> Result<()>` (scalar output only)
+- `TorchStorage::detach() -> Self`
 
-Runtime error requirement (explicit)
-- If the underlying storage is **mdarray**, calling autodiff APIs must return a **runtime error**
-  (not a silent no-op), e.g.:
-  - `requires_grad` may return `false`
-  - `set_requires_grad(true)` → error
-  - `grad()` / `backward()` → error
-  - Error message must clearly state: “autodiff is only supported for torch storage; enable `backend-libtorch` and use TorchStorage”.
+Note: Autograd methods are on `TorchStorage` directly, not on the unified `Storage` enum.
+Users must work with `TorchStorage` to use autograd.
 
 Tests:
 - `x` scalar: `y = x * x` gradient is `2x`
@@ -202,6 +205,20 @@ Tests:
 
 Acceptance:
 - `cargo test -p tensor4all-tensorbackend --features backend-libtorch` passes locally with libtorch installed.
+
+## Implemented Files
+
+```
+crates/tensor4all-tensorbackend/
+├── Cargo.toml                          # backend-libtorch feature, tch = "0.20"
+├── src/
+│   ├── lib.rs                          # re-exports torch module
+│   ├── einsum.rs                       # backend-neutral einsum facade
+│   ├── storage.rs                      # Storage enum with TorchF64/TorchC64 variants
+│   └── torch/
+│       ├── mod.rs                      # torch module
+│       └── storage.rs                  # TorchStorage<T> + autograd + tests
+```
 
 ## Non-goals (v1)
 
