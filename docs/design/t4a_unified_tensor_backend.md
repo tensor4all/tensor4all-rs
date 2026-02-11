@@ -194,21 +194,76 @@ Full dispatch table including GPU:
 | CPU | N-ary (>2 inputs) | opt-einsum optimizer | `strided_opteinsum::einsum` (pairwise dispatch) |
 | GPU | f32/f64/Complex | **cuTENSOR** | `cudarc::cutensor` |
 
+**Runtime backend selection** (PyTorch-style):
+
+t4a-tensor provides **runtime** GEMM backend selection, analogous to PyTorch's `torch.backends.cuda.preferred_blas_library()`. This is built on top of strided-einsum2's `einsum2_with_backend_into<T, B>`, which accepts the backend as a type parameter.
+
+Prerequisite: strided-einsum2 must allow multiple backends to coexist in the same binary (see [strided-rs#86](https://github.com/tensor4all/strided-rs/issues/86)). Specifically:
+- `faer` + `cblas-inject` compiled simultaneously (default)
+- `faer` + `blas` (system CBLAS) also allowed
+- `blas` + `cblas-inject` still mutually exclusive (symbol conflict)
+- `ActiveBackend` deprecated; `einsum2_with_backend_into` becomes the primary API
+
+```rust
+/// Runtime-selectable einsum backend
+pub enum EinsumBackend {
+    /// Pure-Rust GEMM via faer (default)
+    Faer,
+    /// CBLAS (system or injected from Julia)
+    Blas,
+    /// Loop-based, no GEMM (any ScalarBase)
+    Naive,
+    /// GPU via cuTENSOR
+    #[cfg(feature = "cuda")]
+    CuTensor,
+    /// Auto-select based on buffer location, scalar type, and tensor size
+    Auto,
+}
+```
+
 **Unified einsum entry point**:
 ```rust
 pub fn einsum<T: ScalarBase>(
     inputs: &[&Tensor<T>],
     input_labels: &[&[i32]],
     output_labels: &[i32],
+    backend: EinsumBackend,       // runtime backend selection
 ) -> Result<Tensor<T>>;
 ```
 
-Dispatch logic:
-1. If **any** input is on GPU → all inputs moved to GPU, use cuTENSOR
+Runtime dispatch via `match` — each branch calls a monomorphized function, so **zero dynamic dispatch overhead** in the hot loop:
+```rust
+match backend {
+    EinsumBackend::Faer =>
+        einsum2_with_backend_into::<T, FaerBackend>(...),
+    EinsumBackend::Blas =>
+        einsum2_with_backend_into::<T, BlasBackend>(...),
+    EinsumBackend::Naive =>
+        einsum2_naive_into(...),
+    #[cfg(feature = "cuda")]
+    EinsumBackend::CuTensor =>
+        cutensor_contract(...),
+    EinsumBackend::Auto =>
+        // resolved before match (see dispatch logic below)
+        unreachable!(),
+}
+```
+
+**`Auto` dispatch logic** (default):
+1. If **any** input is on GPU → all inputs moved to GPU, use CuTensor
 2. If all on CPU, N-ary (>2 inputs) → `strided_opteinsum` for contraction order optimization, then pairwise dispatch via steps 3–5
-3. If `T: Scalar` (has ElementOpApply + GEMM backend) → `einsum2_into`
+3. If `T: Scalar` (f32/f64/Complex) → Faer (default) or Blas (if configured)
 4. If `T: ScalarBase` and a `BgemmBackend<T>` is registered → `einsum2_with_backend_into`
-5. Fallback: `einsum2_naive_into` with identity mappers
+5. Fallback: Naive (`einsum2_naive_into` with identity mappers)
+
+**Global default configuration**:
+```rust
+// Set global default (thread-safe)
+t4a::set_default_einsum_backend(EinsumBackend::Blas);
+
+// Per-call override
+einsum(&[&a, &b], &[&la, &lb], &lc, EinsumBackend::Faer)?;
+```
 
 **cuTENSOR integration** (GPU einsum):
 - cuTENSOR natively supports N-ary tensor contraction with optimization
@@ -217,10 +272,10 @@ Dispatch logic:
 - Contraction path optimization built-in (like opt-einsum)
 - Feature-gated: `cuda` feature in t4a-buffer propagates to t4a-tensor
 
-**CPU GEMM backends**: strided-einsum2 supports pluggable backends:
+**CPU GEMM backends** (compiled simultaneously via strided-einsum2):
 - `faer` (default): pure-Rust GEMM via faer
-- `blas`: system CBLAS
-- `blas-inject`: injected CBLAS (e.g., from Julia's OpenBLAS)
+- `cblas-inject` (default): injected CBLAS (e.g., from Julia's OpenBLAS)
+- `blas` (optional): system CBLAS — mutually exclusive with `cblas-inject`
 - Custom: implement `BgemmBackend<T>` + `BackendConfig` for any `T: ScalarBase`
 
 These features propagate through t4a-tensor's Cargo.toml.
