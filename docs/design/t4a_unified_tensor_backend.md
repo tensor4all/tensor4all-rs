@@ -656,3 +656,91 @@ Port the Python wrapper layer to use t4a-capi instead of ndtensors-capi:
 - Complex tensor support (TensorC64) for JAX/PyTorch
 - JVP support for JAX (`jax.custom_jvp`) via `t4a_contract_jvp_f64`
 - SVD/QR with VJP/JVP for differentiable linear algebra from Python
+
+### GPU array support via cudarc
+
+t4a-tensor should support GPU (CUDA) device arrays, enabling GEMM and SVD on GPU. This extends the scope beyond CPU-only.
+
+#### Motivation
+
+- Tensor network contraction (einsum) and linear algebra (SVD, QR) are the dominant cost in TCI/Quantics algorithms
+- GPU acceleration for these operations provides significant speedup for large tensors
+- cudarc is already used in the tensor4all ecosystem (`extern/scirs2`, version 0.18, CUDA 12.0)
+- Burn's CUDA backend also uses cudarc, confirming its viability
+
+#### Design: GPU storage variant
+
+Extend `t4a-storage` with a device-aware storage type behind a `cuda` feature gate:
+
+```rust
+// t4a-storage/src/lib.rs
+
+pub struct CpuStorage<T: ScalarBase> {
+    data: Vec<T>,
+}
+
+#[cfg(feature = "cuda")]
+pub struct GpuStorage<T: ScalarBase> {
+    data: cudarc::driver::CudaSlice<T>,
+    device: Arc<cudarc::driver::CudaDevice>,
+}
+
+pub enum Storage<T: ScalarBase> {
+    Cpu(Arc<CpuStorage<T>>),
+    #[cfg(feature = "cuda")]
+    Gpu(Arc<GpuStorage<T>>),
+}
+```
+
+**Tensor<T>** remains the same (sizes + strides + offset over Storage), but operations dispatch based on storage backend.
+
+#### GPU operations via cudarc
+
+| Operation | CUDA Library | cudarc Module |
+|---|---|---|
+| GEMM (einsum) | cuBLAS | `cudarc::cublas` |
+| SVD | cuSOLVER (cusolverDn) | `cudarc::cusolver` |
+| QR | cuSOLVER (cusolverDn) | `cudarc::cusolver` |
+| Element-wise ops | Custom CUDA kernels | `cudarc::driver` + NVRTC |
+| Einsum (general) | cuTENSOR (optional) | `cudarc::cutensor` |
+
+#### Memory management
+
+- **RAII**: `CudaSlice<T>` auto-frees on drop
+- **Host↔Device transfer**: `htod_sync_copy()` / `dtoh_sync_copy()` for data movement
+- **Stream-ordered**: Asynchronous operations via `CudaStream`
+- **COW**: Same `Arc`-based COW pattern as CPU storage; `Arc::make_mut` triggers device-side copy
+
+#### Feature gating
+
+```toml
+# t4a-storage/Cargo.toml
+[features]
+default = []
+cuda = ["dep:cudarc"]
+
+[dependencies]
+cudarc = { version = "0.18", optional = true, features = ["cuda-12000", "driver", "cublas", "cusolver"] }
+
+[target.'cfg(all(target_arch = "x86_64", any(target_os = "linux", target_os = "windows")))'.dependencies]
+cudarc = { version = "0.18", optional = true }
+```
+
+Platform-conditional (x86_64 Linux/Windows only), matching the pattern in `extern/scirs2`.
+
+#### Integration with autograd
+
+GPU tensors participate in the same computation graph as CPU tensors:
+- `TrackedTensor<T>` wraps `Tensor<T>` regardless of storage location
+- VJP/JVP operations dispatch to GPU when inputs are on GPU
+- Gradient tensors are allocated on the same device as the primal tensors
+- `backward()` traverses the graph; each `GradFn` operates on the device of its inputs
+
+#### Phasing
+
+This is a follow-up to the core CPU implementation (Phases 1–4). Suggested order:
+1. GPU storage + host↔device transfer (t4a-storage `cuda` feature)
+2. GEMM on GPU via cuBLAS (t4a-tensor einsum GPU path)
+3. SVD/QR on GPU via cuSOLVER (t4a-linalg GPU path)
+4. Autograd with GPU tensors (t4a-autograd, no new graph logic needed)
+5. Custom CUDA kernels for element-wise ops (NVRTC compilation)
