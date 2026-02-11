@@ -24,12 +24,12 @@ These have significant overlap (3 einsum implementations, 3 scalar trait definit
 ```
 t4a/ (workspace)
 ├── t4a-scalar          # Scalar trait hierarchy
-├── t4a-storage         # Raw data buffer (Arc-based COW)
-├── t4a-tensor          # Tensor type (sizes + strides + offset over Storage)
+├── t4a-buffer          # Raw data buffer: DataBuffer (Arc-based COW, CPU/GPU)
+├── t4a-tensor          # Tensor type (sizes + strides + offset over DataBuffer)
 ├── t4a-linalg          # SVD, QR, eigen, polar (via faer)
 ├── t4a-autograd        # TrackedTensor, DualTensor, computation graph [PRIMARY AD]
-├── t4a-blocksparse     # BlockSparseTensor
-├── t4a-diag            # DiagTensor
+├── t4a-blocksparse     # BlockSparseTensor (single DataBuffer + block offsets)
+├── t4a-diag            # DiagTensor (1D Tensor of diagonal elements)
 ├── t4a-capi            # C FFI (tensor ops + VJP/JVP for ChainRules.jl)
 └── burn-t4a            # Burn Backend bridge [OPTIONAL, for NN only]
 ```
@@ -45,7 +45,7 @@ strided-kernel (map/reduce/broadcast)      strided-einsum2 (binary einsum + GEMM
     |                                           |
     +------------ t4a-scalar ← num-traits, num-complex
                       |
-                  t4a-storage
+                  t4a-buffer
                       |
                   t4a-tensor ← strided-view, strided-kernel, strided-einsum2, strided-opteinsum
                       |
@@ -63,7 +63,27 @@ strided-kernel (map/reduce/broadcast)      strided-einsum2 (binary einsum + GEMM
 
 ---
 
-## Phase 1: t4a-scalar + t4a-storage + t4a-tensor
+## Type Hierarchy
+
+```
+t4a-buffer: DataBuffer<T>  ← 1D flat memory (CPU Vec<T> or GPU CudaSlice<T>)
+    │
+t4a-tensor: Tensor<T>     ← strided view over DataBuffer (sizes + strides + offset)
+    │                        = "Dense tensor". The fundamental primitive.
+    │
+    ├── t4a-diag: DiagTensor<T>
+    │     diagonal elements stored as 1D Tensor<T>
+    │
+    └── t4a-blocksparse: BlockSparseTensor<T>
+          single DataBuffer + block offsets (ITensors.jl pattern)
+          each block is a Tensor<T> view into the shared buffer
+```
+
+**Naming convention**: `DataBuffer` is the raw 1D memory buffer (replaces the confusing name "Storage" which could be mistaken for DenseStorage/DiagStorage/BlockSparseStorage in tensor4all-rs). `Tensor<T>` is a strided view over a `DataBuffer`, equivalent to "dense tensor".
+
+---
+
+## Phase 1: t4a-scalar + t4a-buffer + t4a-tensor
 
 ### t4a-scalar
 
@@ -98,21 +118,33 @@ pub trait RealScalar: Scalar<Real = Self> + PartialOrd {
 
 **Custom types**: Tropical semiring only needs `ScalarBase` (no `Scalar` or GEMM required). Uses `einsum2_naive_into`.
 
-### t4a-storage
+### t4a-buffer
 
 ```rust
-pub struct Storage<T: ScalarBase> {
+pub struct CpuBuffer<T: ScalarBase> {
     data: Vec<T>,
+}
+
+#[cfg(feature = "cuda")]
+pub struct GpuBuffer<T: ScalarBase> {
+    data: cudarc::driver::CudaSlice<T>,
+    device: Arc<cudarc::driver::CudaDevice>,
+}
+
+pub enum DataBuffer<T: ScalarBase> {
+    Cpu(Arc<CpuBuffer<T>>),
+    #[cfg(feature = "cuda")]
+    Gpu(Arc<GpuBuffer<T>>),
 }
 ```
 
-Shared ownership via `Arc<Storage<T>>`. COW via `Arc::make_mut`.
+Shared ownership via `Arc` inside enum variants. COW via `Arc::make_mut`.
 
 ### t4a-tensor
 
 ```rust
 pub struct Tensor<T: ScalarBase> {
-    storage: Arc<Storage<T>>,
+    buffer: DataBuffer<T>,            // flat 1D memory (CPU or GPU)
     sizes: SmallVec<[usize; 6]>,
     strides: SmallVec<[isize; 6]>,   // isize for flip() support
     storage_offset: usize,
@@ -148,7 +180,7 @@ These features propagate through t4a-tensor's Cargo.toml.
 **Source files to create**:
 - `t4a-scalar/src/lib.rs` — trait hierarchy
 - `t4a-scalar/src/impls.rs` — f32, f64, Complex impls
-- `t4a-storage/src/lib.rs` — Storage<T>
+- `t4a-buffer/src/lib.rs` — DataBuffer<T>, CpuBuffer<T>, GpuBuffer<T>
 - `t4a-tensor/src/lib.rs` — Tensor<T>, view ops, bridge to strided-rs
 - `t4a-tensor/src/ops.rs` — element-wise ops via strided-kernel
 - `t4a-tensor/src/einsum.rs` — contraction wrappers (Scalar tier + ScalarBase tier)
@@ -352,15 +384,65 @@ end
 
 ## Phase 5: t4a-blocksparse + t4a-diag
 
-Port from ndtensors-rs. Separate types (not subtypes of Tensor<T>).
+Higher-level tensor types built on top of `Tensor<T>` (which is the fundamental primitive).
 
-**t4a-blocksparse**: `BlockSparseTensor<T>` with block-wise GEMM contraction.
-**t4a-diag**: `DiagTensor<T>` with O(n) diagonal operations.
+### t4a-diag
+
+```rust
+pub struct DiagTensor<T: ScalarBase> {
+    diag: Tensor<T>,          // 1D Tensor storing diagonal elements
+    full_sizes: Vec<usize>,   // logical shape of the full tensor
+}
+```
+
+O(n) diagonal operations. Contraction with dense tensors avoids materializing the full matrix.
+
+### t4a-blocksparse
+
+Follows the **ITensors.jl/NDTensors pattern**: all blocks stored in a **single contiguous `DataBuffer`** with block offset mapping.
+
+```rust
+pub struct BlockSparseTensor<T: ScalarBase> {
+    buffer: DataBuffer<T>,                           // single flat buffer for ALL blocks
+    block_offsets: HashMap<BlockIndex, usize>,        // block → offset into buffer
+    block_sizes: HashMap<BlockIndex, Vec<usize>>,     // block → shape per block
+    full_sizes: Vec<usize>,                           // logical shape of the full tensor
+}
+
+pub type BlockIndex = SmallVec<[usize; 4]>;  // N-dimensional block index
+```
+
+**Memory layout** (matching ITensors.jl `BlockSparse{ElT,VecT,N}`):
+```
+buffer: [block_1_elems..., block_2_elems..., block_3_elems...]
+         ↑ offset=0        ↑ offset=n₁       ↑ offset=n₁+n₂
+
+block_offsets:
+  (0,1) → 0
+  (1,0) → n₁
+  (2,1) → n₁+n₂
+```
+
+Each block is accessed as a `Tensor<T>` view into the shared buffer (zero-copy):
+```rust
+impl<T: ScalarBase> BlockSparseTensor<T> {
+    pub fn block_view(&self, index: &BlockIndex) -> Option<Tensor<T>>;
+}
+```
+
+**Advantages of single-buffer layout**:
+- Cache locality for sequential block access
+- Single allocation / deallocation
+- Compatible with GPU: entire buffer can reside in `GpuBuffer<T>`
+- New blocks appended without reorganizing existing data
+
+**Contraction**: block-wise GEMM using block sparsity structure (only non-zero block pairs contracted).
 
 **Existing code to reuse**:
 - `ndtensors-rs/crates/ndtensors/src/operations/blocksparse.rs`
 - `ndtensors-rs/crates/ndtensors/src/operations/diag.rs`
 - `ndtensors-rs/crates/ndtensors/src/contract/blocksparse.rs`
+- ITensors.jl reference: `~/git/ITensors.jl/NDTensors/src/blocksparse/blocksparse.jl`
 
 ---
 
@@ -480,8 +562,8 @@ let c = einsum_naive("ij,jk->ik", &[&a, &b])?;
 
 ### Phase 6b: Replace tensor4all-rs's tensorbackend with t4a
 
-1. Replace `tensor4all-tensorbackend::Storage` with `t4a-tensor::Tensor<T>`
-2. Replace `DenseStorage<T>` (mdarray-based) with `Tensor<T>` (strided-view-based)
+1. Replace `tensor4all-tensorbackend::Storage` with t4a types (`Tensor<T>`, `DiagTensor<T>`, `BlockSparseTensor<T>`)
+2. Replace `DenseStorage<T>` (mdarray-based) with `Tensor<T>` (strided-view over `DataBuffer`)
 3. Adapt `TensorLike` trait to use t4a Tensor
 4. Remove mdarray dependency from tensor4all-rs core
 
@@ -493,7 +575,7 @@ This phase is OUT OF SCOPE for this plan — it happens after t4a is stable.
 
 ### After Phase 1 (core):
 ```bash
-cd t4a && cargo test -p t4a-scalar -p t4a-storage -p t4a-tensor
+cd t4a && cargo test -p t4a-scalar -p t4a-buffer -p t4a-tensor
 ```
 - Unit tests for all Tensor operations (permute, slice, reshape, etc.)
 - Zero-copy verification: assert same Arc pointer after view ops
@@ -668,31 +750,11 @@ t4a-tensor should support GPU (CUDA) device arrays, enabling GEMM and SVD on GPU
 - cudarc is already used in the tensor4all ecosystem (`extern/scirs2`, version 0.18, CUDA 12.0)
 - Burn's CUDA backend also uses cudarc, confirming its viability
 
-#### Design: GPU storage variant
+#### Design: GPU buffer variant
 
-Extend `t4a-storage` with a device-aware storage type behind a `cuda` feature gate:
+`DataBuffer<T>` (defined in t4a-buffer) already includes `Cpu` and `Gpu` variants (see Phase 1). The `cuda` feature gate enables the `Gpu` variant with `cudarc::driver::CudaSlice<T>`.
 
-```rust
-// t4a-storage/src/lib.rs
-
-pub struct CpuStorage<T: ScalarBase> {
-    data: Vec<T>,
-}
-
-#[cfg(feature = "cuda")]
-pub struct GpuStorage<T: ScalarBase> {
-    data: cudarc::driver::CudaSlice<T>,
-    device: Arc<cudarc::driver::CudaDevice>,
-}
-
-pub enum Storage<T: ScalarBase> {
-    Cpu(Arc<CpuStorage<T>>),
-    #[cfg(feature = "cuda")]
-    Gpu(Arc<GpuStorage<T>>),
-}
-```
-
-**Tensor<T>** remains the same (sizes + strides + offset over Storage), but operations dispatch based on storage backend.
+**Tensor<T>** remains the same (sizes + strides + offset over DataBuffer), but operations dispatch based on buffer backend. BlockSparseTensor also benefits: its single `DataBuffer` can reside on GPU.
 
 #### GPU operations via cudarc
 
@@ -714,7 +776,7 @@ pub enum Storage<T: ScalarBase> {
 #### Feature gating
 
 ```toml
-# t4a-storage/Cargo.toml
+# t4a-buffer/Cargo.toml
 [features]
 default = []
 cuda = ["dep:cudarc"]
@@ -739,7 +801,7 @@ GPU tensors participate in the same computation graph as CPU tensors:
 #### Phasing
 
 This is a follow-up to the core CPU implementation (Phases 1–4). Suggested order:
-1. GPU storage + host↔device transfer (t4a-storage `cuda` feature)
+1. GPU buffer + host↔device transfer (t4a-buffer `cuda` feature)
 2. GEMM on GPU via cuBLAS (t4a-tensor einsum GPU path)
 3. SVD/QR on GPU via cuSOLVER (t4a-linalg GPU path)
 4. Autograd with GPU tensors (t4a-autograd, no new graph logic needed)
