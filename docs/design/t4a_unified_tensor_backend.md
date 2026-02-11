@@ -589,3 +589,70 @@ This enables users to provide their own GEMM implementation for custom types tha
 - **Multiprecision** (e.g., `BigFloat`): GEMM via naive loops or specialized libraries
 
 The `GemmScalar` trait would extend `ScalarBase` with a GEMM kernel registration mechanism, allowing strided-einsum2 to dispatch to user-provided GEMM at the einsum level without modifying the core library.
+
+### JAX / PyTorch integration via C-FFI
+
+t4a-capi should support integration with JAX and PyTorch, enabling Rust-accelerated tensor contraction with autodiff support in Python ML frameworks. **This pattern is already implemented in ndtensors-rs** and should be ported to t4a.
+
+#### Existing implementation in ndtensors-rs
+
+**Architecture** (no PyO3 — pure ctypes over C API):
+
+```
+JAX / PyTorch
+    ↓
+Python wrapper (jax_ops.py / torch_ops.py)
+    ↓
+jax.pure_callback / torch.autograd.Function
+    ↓
+ctypes FFI (_lib.py)
+    ↓
+C API (ndtensors-capi)
+    ↓
+Rust (ndtensors)
+```
+
+**JAX integration** (`ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/jax_ops.py`):
+- `jax.custom_vjp` with `nondiff_argnums` for labels
+- Forward: `jax.pure_callback()` → ctypes → Rust `contract()`
+- Backward: `jax.pure_callback()` → ctypes → Rust `contract_vjp()`
+- JIT-compatible via `pure_callback` with `ShapeDtypeStruct`
+
+**PyTorch integration** (`ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/torch_ops.py`):
+- `torch.autograd.Function` subclass with custom forward/backward
+- Forward: `ctx.save_for_backward()` → ctypes → Rust `contract()`
+- Backward: ctypes → Rust `contract_vjp()` → gradients on same device
+
+**Key design decisions**:
+- ctypes (not PyO3) for zero build dependency on Python
+- `cdylib` crate type for shared library
+- Opaque pointer wrapping `Box<Tensor<f64>>`, Python `__del__` calls release
+- `catch_unwind()` at FFI boundary for panic safety
+- Status codes for error propagation (not exceptions)
+- numpy as data interchange format (column-major via `to_numpy()` / `from_numpy()`)
+
+#### t4a-capi plan
+
+Port the Python wrapper layer to use t4a-capi instead of ndtensors-capi:
+
+**Files to create**:
+- `python/t4a/src/t4a/_lib.py` — ctypes declarations for t4a-capi
+- `python/t4a/src/t4a/tensor.py` — TensorF64 / TensorC64 wrapper
+- `python/t4a/src/t4a/ops.py` — contract, contract_vjp, contract_jvp
+- `python/t4a/src/t4a/jax_ops.py` — `jax.custom_vjp` wrapper
+- `python/t4a/src/t4a/torch_ops.py` — `torch.autograd.Function` wrapper
+- `python/t4a/pyproject.toml` — hatchling build with custom Rust compile hook
+
+**Existing code to reuse** (direct port):
+- `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/jax_ops.py`
+- `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/torch_ops.py`
+- `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/_lib.py`
+- `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/tensor.py`
+- `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/ops.py`
+- `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/_status.py`
+- `ndtensors-rs/python/ndtensors_rs/hatch_build.py`
+
+**Extensions beyond ndtensors-rs**:
+- Complex tensor support (TensorC64) for JAX/PyTorch
+- JVP support for JAX (`jax.custom_jvp`) via `t4a_contract_jvp_f64`
+- SVD/QR with VJP/JVP for differentiable linear algebra from Python
