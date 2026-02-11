@@ -114,9 +114,13 @@ pub trait RealScalar: Scalar<Real = Self> + PartialOrd {
 
 **Implementations**: f32, f64, Complex<f32>, Complex<f64>.
 
-**Bridge**: ScalarBase aligns with strided-rs's ScalarBase. faer::ComplexField is enforced only at t4a-linalg level.
+**Relation to strided-rs traits**:
+- `ScalarBase` = re-exported from `strided_traits::ScalarBase` (Copy+Send+Sync+Mul+Add+Zero+One+PartialEq)
+- `ElementOpApply` = re-exported from `strided_traits::ElementOpApply` (conj, transpose, adjoint methods; opt-in)
+- strided-einsum2's `Scalar` trait alias (feature-dependent: `ScalarBase + ElementOpApply + ComplexField/BlasGemm`) is **not** re-exported — t4a-scalar defines its own `Scalar` with richer semantics (complex support, division)
+- `faer::ComplexField` is enforced only at t4a-linalg level
 
-**Custom types**: Tropical semiring only needs `ScalarBase` (no `Scalar` or GEMM required). Uses `einsum2_naive_into`.
+**Custom types**: Tropical semiring only needs `ScalarBase` (no `Scalar`, `ElementOpApply`, or GEMM required). Uses `einsum2_naive_into`. Types with custom GEMM can implement `BgemmBackend<T>` and use `einsum2_with_backend_into`.
 
 ### t4a-buffer
 
@@ -165,14 +169,30 @@ impl<T: ScalarBase> Tensor<T> {
 - `map`, `zip_map`, `reduce`, `sum`, `fill`
 - Arithmetic operators: Add, Sub, Mul (element-wise)
 
-**Contraction / Einsum** — dispatched by buffer location and scalar type:
+**Contraction / Einsum** — dispatched by buffer location, scalar type, and backend:
 
-| Buffer | Scalar Tier | Backend | Function |
+strided-rs provides three CPU einsum functions with increasing trait requirements:
+
+| Function | Trait Bound on T | Element Ops | Backend | Use Case |
+|---|---|---|---|---|
+| `einsum2_naive_into` | `ScalarBase` | custom `Fn(T)->T` mappers | loop-based | Tropical, custom types |
+| `einsum2_with_backend_into` | `ScalarBase` + `BgemmBackend<T>` | Identity only | user-provided GEMM | Interval, dual, multiprecision |
+| `einsum2_into` | `Scalar` (feature-dependent) | `ElementOp<T>` (conj, etc.) | faer/BLAS | f32, f64, Complex32, Complex64 |
+
+where `Scalar` is a **feature-dependent trait alias** defined in strided-einsum2:
+- With `faer`: `ScalarBase + ElementOpApply + faer_traits::ComplexField`
+- With `blas`/`blas-inject`: `ScalarBase + ElementOpApply + BlasGemm`
+- Without backends: `ScalarBase + ElementOpApply`
+
+Full dispatch table including GPU:
+
+| Buffer | Trait Bound | Backend | strided-rs Function |
 |---|---|---|---|
-| CPU | `ScalarBase` (any) | loop-based | `strided_einsum2::einsum2_naive_into` |
-| CPU | `Scalar` (f32/f64/Complex) | GEMM (faer/BLAS) | `strided_einsum2::einsum2_into` |
-| CPU | N-ary | opt-einsum optimizer | `strided_opteinsum::einsum` |
-| GPU | `Scalar` (f32/f64/Complex) | **cuTENSOR** | `cudarc::cutensor` |
+| CPU | `ScalarBase` (any) | loop-based | `einsum2_naive_into` |
+| CPU | `ScalarBase` + `BgemmBackend<T>` | user-provided GEMM | `einsum2_with_backend_into` |
+| CPU | `Scalar` (f32/f64/Complex) | faer/BLAS GEMM | `einsum2_into` |
+| CPU | N-ary (>2 inputs) | opt-einsum optimizer | `strided_opteinsum::einsum` (pairwise dispatch) |
+| GPU | f32/f64/Complex | **cuTENSOR** | `cudarc::cutensor` |
 
 **Unified einsum entry point**:
 ```rust
@@ -185,9 +205,10 @@ pub fn einsum<T: ScalarBase>(
 
 Dispatch logic:
 1. If **any** input is on GPU → all inputs moved to GPU, use cuTENSOR
-2. If all inputs are on CPU and `T: Scalar` → use GEMM-accelerated `einsum2_into`
-3. If all inputs are on CPU and `T: ScalarBase` only → use `einsum2_naive_into`
-4. For N-ary (>2 inputs) on CPU → use `strided_opteinsum` for contraction order optimization, then pairwise dispatch
+2. If all on CPU, N-ary (>2 inputs) → `strided_opteinsum` for contraction order optimization, then pairwise dispatch via steps 3–5
+3. If `T: Scalar` (has ElementOpApply + GEMM backend) → `einsum2_into`
+4. If `T: ScalarBase` and a `BgemmBackend<T>` is registered → `einsum2_with_backend_into`
+5. Fallback: `einsum2_naive_into` with identity mappers
 
 **cuTENSOR integration** (GPU einsum):
 - cuTENSOR natively supports N-ary tensor contraction with optimization
@@ -196,10 +217,11 @@ Dispatch logic:
 - Contraction path optimization built-in (like opt-einsum)
 - Feature-gated: `cuda` feature in t4a-buffer propagates to t4a-tensor
 
-**CPU GEMM backends**: strided-einsum2 already supports pluggable backends via cargo features:
+**CPU GEMM backends**: strided-einsum2 supports pluggable backends:
 - `faer` (default): pure-Rust GEMM via faer
 - `blas`: system CBLAS
 - `blas-inject`: injected CBLAS (e.g., from Julia's OpenBLAS)
+- Custom: implement `BgemmBackend<T>` + `BackendConfig` for any `T: ScalarBase`
 
 These features propagate through t4a-tensor's Cargo.toml.
 
@@ -648,12 +670,17 @@ cargo test -p burn-backend-tests --features t4a
 
 | Component | Source | Purpose |
 |---|---|---|
-| ScalarBase trait | `strided-rs/strided-traits/src/scalar.rs:10` | Re-export as t4a-scalar::ScalarBase |
-| StridedView | `strided-rs/strided-view/src/view.rs:88` | Bridge target for Tensor<T> |
+| ScalarBase trait | `strided-rs/strided-traits/src/scalar.rs` | Re-export as t4a-scalar::ScalarBase |
+| ElementOpApply | `strided-rs/strided-traits/src/element_op.rs` | conj/transpose/adjoint (opt-in) |
+| ElementOp\<T\> | `strided-rs/strided-traits/src/element_op.rs` | Generic element op (Identity for any Copy) |
+| BgemmBackend\<T\> | `strided-rs/strided-einsum2/src/backend.rs` | Pluggable GEMM (no bounds on T) |
+| BackendConfig | `strided-rs/strided-einsum2/src/backend.rs` | Backend capabilities marker |
+| StridedView | `strided-rs/strided-view/src/view.rs` | Bridge target for Tensor<T> |
 | Kernel ops | `strided-rs/strided-kernel/src/lib.rs` | map_into, reduce, sum, dot |
-| einsum2_into | `strided-rs/strided-einsum2/src/lib.rs:183` | GEMM-accelerated contraction |
-| einsum2_naive | `strided-rs/strided-einsum2/src/lib.rs:287` | Generic contraction (any ScalarBase) |
-| opteinsum | `strided-rs/strided-opteinsum/src/lib.rs:46` | N-ary einsum |
+| einsum2_into | `strided-rs/strided-einsum2/src/lib.rs` | GEMM-accelerated (T: Scalar) |
+| einsum2_naive_into | `strided-rs/strided-einsum2/src/lib.rs` | Loop-based (T: ScalarBase, custom mappers) |
+| einsum2_with_backend_into | `strided-rs/strided-einsum2/src/lib.rs` | Pluggable GEMM (T: ScalarBase + BgemmBackend) |
+| opteinsum | `strided-rs/strided-opteinsum/src/lib.rs` | N-ary einsum with contraction order optimization |
 | faer bridge | `ndtensors-rs/crates/ndtensors/src/backend/faer_interop.rs` | Tensor↔faer conversion |
 | contract_vjp | `ndtensors-rs/crates/ndtensors/src/contract/naive.rs:222` | VJP implementation |
 | dual_contract | `ndtensors-rs/crates/ndtensors/src/autodiff/ops/dual_contract.rs:55` | JVP implementation |
@@ -683,20 +710,20 @@ These should be consulted when implementing VJP/JVP for t4a-linalg operations (P
 
 ### GEMM-capable custom scalar types
 
-The current two-tier architecture (ScalarBase → naive einsum, Scalar → GEMM einsum) assumes custom types cannot use GEMM. A third tier should be considered:
+**Already supported** in strided-rs via `einsum2_with_backend_into` and `BgemmBackend<T>` trait. The three-tier architecture is:
 
 | Tier | Trait Bound | GEMM | Einsum Function | Types |
 |---|---|---|---|---|
 | Generic | `ScalarBase` | No | `einsum2_naive_into` | Tropical, log-semiring, boolean |
-| Custom GEMM | `ScalarBase` + `GemmScalar` | User-provided | `einsum2_into` with custom backend | Interval arithmetic, AD scalars, multiprecision |
-| Optimized | `Scalar` + built-in backend | Yes (faer/BLAS) | `einsum2_into` | f32, f64, Complex32, Complex64 |
+| Custom GEMM | `ScalarBase` + `BgemmBackend<T>` | User-provided | `einsum2_with_backend_into` | Interval, dual, multiprecision |
+| Optimized | `Scalar` (feature-dependent) | faer/BLAS | `einsum2_into` | f32, f64, Complex32, Complex64 |
 
-This enables users to provide their own GEMM implementation for custom types that have matrix multiplication semantics but are not standard floating-point types. Examples:
-- **Interval arithmetic** (e.g., `Interval<f64>`): GEMM is mathematically valid, just needs custom implementation
-- **AD scalars** (e.g., dual numbers `Dual<f64>`): element-wise GEMM is correct
-- **Multiprecision** (e.g., `BigFloat`): GEMM via naive loops or specialized libraries
+Users implement `BgemmBackend<T>` + `BackendConfig` for their custom type (no trait bounds on T required by the trait itself). Examples:
+- **Interval arithmetic** (`Interval<f64>`): GEMM is mathematically valid, just needs custom implementation
+- **AD scalars** (dual numbers `Dual<f64>`): element-wise GEMM is correct
+- **Multiprecision** (`BigFloat`): GEMM via naive loops or specialized libraries
 
-The `GemmScalar` trait would extend `ScalarBase` with a GEMM kernel registration mechanism, allowing strided-einsum2 to dispatch to user-provided GEMM at the einsum level without modifying the core library.
+t4a-tensor exposes this through the unified `einsum()` entry point (see dispatch logic in Phase 1).
 
 ### JAX / PyTorch integration via C-FFI
 
