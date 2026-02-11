@@ -165,12 +165,38 @@ impl<T: ScalarBase> Tensor<T> {
 - `map`, `zip_map`, `reduce`, `sum`, `fill`
 - Arithmetic operators: Add, Sub, Mul (element-wise)
 
-**Contraction / Einsum** — two tiers:
-1. `einsum<T: Scalar>()` → `strided_einsum2::einsum2_into` (GEMM-accelerated, for f32/f64/Complex)
-2. `einsum_naive<T: ScalarBase>()` → `strided_einsum2::einsum2_naive_into` (loop-based, for ANY ScalarBase)
-3. `einsum_nary()` → `strided_opteinsum::einsum` (N-ary with optimization)
+**Contraction / Einsum** — dispatched by buffer location and scalar type:
 
-**Custom GEMM backends**: strided-einsum2 already supports pluggable backends via cargo features:
+| Buffer | Scalar Tier | Backend | Function |
+|---|---|---|---|
+| CPU | `ScalarBase` (any) | loop-based | `strided_einsum2::einsum2_naive_into` |
+| CPU | `Scalar` (f32/f64/Complex) | GEMM (faer/BLAS) | `strided_einsum2::einsum2_into` |
+| CPU | N-ary | opt-einsum optimizer | `strided_opteinsum::einsum` |
+| GPU | `Scalar` (f32/f64/Complex) | **cuTENSOR** | `cudarc::cutensor` |
+
+**Unified einsum entry point**:
+```rust
+pub fn einsum<T: ScalarBase>(
+    inputs: &[&Tensor<T>],
+    input_labels: &[&[i32]],
+    output_labels: &[i32],
+) -> Result<Tensor<T>>;
+```
+
+Dispatch logic:
+1. If **any** input is on GPU → all inputs moved to GPU, use cuTENSOR
+2. If all inputs are on CPU and `T: Scalar` → use GEMM-accelerated `einsum2_into`
+3. If all inputs are on CPU and `T: ScalarBase` only → use `einsum2_naive_into`
+4. For N-ary (>2 inputs) on CPU → use `strided_opteinsum` for contraction order optimization, then pairwise dispatch
+
+**cuTENSOR integration** (GPU einsum):
+- cuTENSOR natively supports N-ary tensor contraction with optimization
+- Accepts strided tensors (no need to make contiguous first)
+- Supports f32, f64, Complex32, Complex64
+- Contraction path optimization built-in (like opt-einsum)
+- Feature-gated: `cuda` feature in t4a-buffer propagates to t4a-tensor
+
+**CPU GEMM backends**: strided-einsum2 already supports pluggable backends via cargo features:
 - `faer` (default): pure-Rust GEMM via faer
 - `blas`: system CBLAS
 - `blas-inject`: injected CBLAS (e.g., from Julia's OpenBLAS)
@@ -760,11 +786,12 @@ t4a-tensor should support GPU (CUDA) device arrays, enabling GEMM and SVD on GPU
 
 | Operation | CUDA Library | cudarc Module |
 |---|---|---|
-| GEMM (einsum) | cuBLAS | `cudarc::cublas` |
+| **Einsum (contraction)** | **cuTENSOR** | `cudarc::cutensor` |
 | SVD | cuSOLVER (cusolverDn) | `cudarc::cusolver` |
 | QR | cuSOLVER (cusolverDn) | `cudarc::cusolver` |
 | Element-wise ops | Custom CUDA kernels | `cudarc::driver` + NVRTC |
-| Einsum (general) | cuTENSOR (optional) | `cudarc::cutensor` |
+
+**Note**: GPU einsum uses cuTENSOR (not cuBLAS GEMM). cuTENSOR provides native N-ary tensor contraction with built-in contraction path optimization, strided tensor support, and complex dtype support — making it the natural GPU counterpart to strided-einsum2 + strided-opteinsum on CPU. See the unified einsum dispatch table in Phase 1.
 
 #### Memory management
 
