@@ -860,3 +860,94 @@ This is a follow-up to the core CPU implementation (Phases 1–4). Suggested ord
 3. SVD/QR on GPU via cuSOLVER (t4a-linalg GPU path)
 4. Autograd with GPU tensors (t4a-autograd, no new graph logic needed)
 5. Custom CUDA kernels for element-wise ops (NVRTC compilation)
+
+### Insights from ITensor Julia ecosystem (TensorAlgebra.jl + sub-packages)
+
+Analysis of the modern ITensor Julia ecosystem (TensorAlgebra.jl, SparseArraysBase.jl, BlockSparseArrays.jl, GradedArrays.jl, DiagonalArrays.jl, FusionTensors.jl, MapBroadcast.jl, NestedPermutedDimsArrays.jl) yielded several design insights for t4a.
+
+#### Comparison: t4a vs ITensor ecosystem
+
+| Aspect | ITensor Julia | t4a (Rust) | Notes |
+|---|---|---|---|
+| **Sparse storage** | DOK-of-Arrays (each block is independent Array) | Single contiguous DataBuffer + offset map | t4a's single buffer is GPU-friendly; ITensor's DOK is more flexible for dynamic block insertion |
+| **Diagonal** | DiagonalArrays.jl: N-dim diagonal with stored/unstored interface | DiagTensor: 1D Tensor of diagonal elements | Functionally equivalent |
+| **Contraction** | Matricize → GEMM → unmatricize (TensorAlgebra.jl) | einsum-based dispatch (strided-einsum2) | Different strategy; both valid |
+| **Axis fusion** | FusionStyle dispatch (ReshapeFusion → BlockReshapeFusion → SectorFusion) | Not yet designed | Critical for future quantum number tensor support |
+| **Lazy evaluation** | MapBroadcast.jl (Mapped, Summed, LinearCombination) | Not planned | Useful optimization, low priority |
+| **AD** | ChainRules.jl ecosystem (external) | t4a-autograd (built-in VJP/JVP) | t4a has tighter integration |
+
+#### Key takeaways for t4a
+
+1. **FusionStyle hierarchy for quantum number tensors**
+
+   TensorAlgebra.jl uses a `FusionStyle` dispatch mechanism to control how tensor indices are fused (combined) during matricization:
+   - `ReshapeFusion`: Simple reshape for dense arrays (OneTo axes → product of lengths)
+   - `BlockReshapeFusion`: Block-structure-preserving fusion for block-sparse arrays (block ranges fused pairwise)
+   - `SectorFusion`: Full quantum number fusion with sector (quantum number) arithmetic and fusion rules
+
+   **Implication for t4a**: When adding quantum number tensor support (e.g., for symmetry-preserving tensor networks), we will need an analogous dispatch mechanism. This could be:
+   - A `FusionStyle` trait in t4a-blocksparse with implementations per tensor type
+   - Or, since Rust has static dispatch via generics, a type-level strategy pattern on `BlockSparseTensor<T, FusionRule>`
+
+   This is **not needed for Phases 1–5** but should be kept in mind when designing the blocksparse API to avoid painting ourselves into a corner.
+
+2. **SparseArraysBase: stored/unstored dual interface**
+
+   SparseArraysBase.jl defines a clean abstraction for sparse arrays with 5 core functions:
+   - `isstored(a, I...)` — check if an element is explicitly stored
+   - `getstoredindex(a, I...)` — get value from storage (error if not stored)
+   - `getunstoredindex(a, I...)` — get background/default value
+   - `setstoredindex!(a, v, I...)` — update existing stored element
+   - `setunstoredindex!(a, v, I...)` — insert new stored element
+
+   Standard `getindex` dispatches: `isstored ? getstoredindex : getunstoredindex`.
+
+   **Implication for t4a**: Consider a `SparseArray` trait for t4a-blocksparse and t4a-diag:
+   ```rust
+   pub trait SparseArray<T> {
+       fn is_stored(&self, index: &[usize]) -> bool;
+       fn get_stored(&self, index: &[usize]) -> Option<&T>;
+       fn stored_indices(&self) -> impl Iterator<Item = Vec<usize>>;
+       fn stored_count(&self) -> usize;
+   }
+   ```
+   This would unify iteration and access patterns across DiagTensor and BlockSparseTensor.
+
+3. **ContractAlgorithm: pluggable contraction strategies**
+
+   TensorAlgebra.jl uses `contract(alg::ContractAlgorithm, ...)` to allow different contraction implementations (GEMM-based, einsum-based, specialized algorithms). This is analogous to t4a's einsum dispatch table but more general.
+
+   **Implication for t4a**: The current dispatch-by-trait approach (ScalarBase → Scalar → GPU) is sufficient for Phase 1. If we later need user-selectable algorithms (e.g., "use GEMM matricize for this contraction" vs "use direct einsum"), we can add an `Algorithm` parameter to `einsum()` without breaking changes.
+
+4. **TruncationDegenerate: SVD truncation with degenerate singular values**
+
+   TensorAlgebra.jl handles degenerate (repeated) singular values during truncated SVD by including/excluding the entire degenerate subspace rather than arbitrarily cutting. This is important for symmetry-preserving truncation.
+
+   **Implication for t4a-linalg**: `svd_truncated()` should have an option to handle degenerate singular values correctly. This aligns with the BackwardsLinalg.jl reference already noted for complex SVD differentiation.
+
+5. **GradedArrays.jl: quantum number grading**
+
+   GradedArrays.jl defines `SectorRange`/`GradedUnitRange` — axis ranges where each block is labeled by a quantum number (sector). Sector arithmetic governs which blocks exist (fusion rules). This is the foundation for symmetry-exploiting tensor networks.
+
+   **Implication for t4a**: Not needed in v1, but the Type Hierarchy should eventually extend to:
+   ```
+   t4a-tensor: Tensor<T>
+       ├── t4a-diag: DiagTensor<T>
+       ├── t4a-blocksparse: BlockSparseTensor<T>
+       └── t4a-graded: GradedTensor<T, S: Sector>  [future]
+               BlockSparseTensor with sector-labeled block indices
+               and fusion-rule-constrained block structure
+   ```
+
+#### ITensor ecosystem package reference
+
+| Package | Purpose | t4a Relevance |
+|---|---|---|
+| [TensorAlgebra.jl](https://github.com/ITensor/TensorAlgebra.jl) | FusionStyle, matricize/unmatricize, contract | Contraction strategy, FusionStyle pattern |
+| [SparseArraysBase.jl](https://github.com/ITensor/SparseArraysBase.jl) | stored/unstored interface, SparseArrayDOK | SparseArray trait inspiration |
+| [BlockSparseArrays.jl](https://github.com/ITensor/BlockSparseArrays.jl) | DOK-of-Arrays block sparse | Design comparison (vs single-buffer) |
+| [GradedArrays.jl](https://github.com/ITensor/GradedArrays.jl) | Quantum number graded axes | Future symmetry tensor support |
+| [DiagonalArrays.jl](https://github.com/ITensor/DiagonalArrays.jl) | N-dim diagonal with unstored | Confirms t4a-diag design |
+| [FusionTensors.jl](https://github.com/ITensor/FusionTensors.jl) | SU(2) / non-abelian fusion | Future: non-abelian symmetry |
+| [MapBroadcast.jl](https://github.com/ITensor/MapBroadcast.jl) | Lazy Mapped/Summed arrays | Low priority optimization |
+| [NestedPermutedDimsArrays.jl](https://github.com/ITensor/NestedPermutedDimsArrays.jl) | View-based nested permutation | Zero-copy view pattern (already in t4a) |
