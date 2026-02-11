@@ -555,3 +555,37 @@ cargo test -p burn-backend-tests --features t4a
 | Burn Backend | `~/git/burn/crates/burn-backend/src/backend/base.rs` | Backend + AutodiffBackend traits |
 | NdArrayTensor | `~/git/burn/crates/burn-ndarray/src/tensor.rs:23` | Reference enum pattern |
 | Burn complex | `github.com/shinaoka/burn/issues/1` | ComplexTensorBackend design |
+
+---
+
+## Future Considerations
+
+### Complex-valued differentiation rules for linear algebra
+
+Complex SVD, QR, eigen decompositions require non-trivial backward rules (Wirtinger calculus, structured perturbation theory). Key references:
+
+- **[BackwardsLinalg.jl](https://github.com/GiggleLiu/BackwardsLinalg.jl)**: Reference implementations of backward rules for SVD, QR, Cholesky, eigen, etc. in the complex case. Includes handling of degenerate singular values and correct conjugation patterns.
+- **[MatrixFactorizations.jl](https://github.com/JuliaLinearAlgebra/MatrixFactorizations.jl)**: Extended matrix factorizations (QL, positive QR, etc.) with ChainRules.jl integration. Provides frule/rrule implementations that serve as correctness references.
+
+These should be consulted when implementing VJP/JVP for t4a-linalg operations (Phase 2 + Phase 3 intersection), especially for:
+- SVD backward with degenerate/near-degenerate singular values
+- QR backward for complex matrices (sign conventions differ from real case)
+- Eigendecomposition backward with repeated eigenvalues
+- Truncated SVD gradient (requires careful handling of discarded singular vectors)
+
+### GEMM-capable custom scalar types
+
+The current two-tier architecture (ScalarBase → naive einsum, Scalar → GEMM einsum) assumes custom types cannot use GEMM. A third tier should be considered:
+
+| Tier | Trait Bound | GEMM | Einsum Function | Types |
+|---|---|---|---|---|
+| Generic | `ScalarBase` | No | `einsum2_naive_into` | Tropical, log-semiring, boolean |
+| Custom GEMM | `ScalarBase` + `GemmScalar` | User-provided | `einsum2_into` with custom backend | Interval arithmetic, AD scalars, multiprecision |
+| Optimized | `Scalar` + built-in backend | Yes (faer/BLAS) | `einsum2_into` | f32, f64, Complex32, Complex64 |
+
+This enables users to provide their own GEMM implementation for custom types that have matrix multiplication semantics but are not standard floating-point types. Examples:
+- **Interval arithmetic** (e.g., `Interval<f64>`): GEMM is mathematically valid, just needs custom implementation
+- **AD scalars** (e.g., dual numbers `Dual<f64>`): element-wise GEMM is correct
+- **Multiprecision** (e.g., `BigFloat`): GEMM via naive loops or specialized libraries
+
+The `GemmScalar` trait would extend `ScalarBase` with a GEMM kernel registration mechanism, allowing strided-einsum2 to dispatch to user-provided GEMM at the einsum level without modifying the core library.
