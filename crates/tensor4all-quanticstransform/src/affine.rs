@@ -1375,112 +1375,24 @@ mod tests {
     // MPO vs matrix comparison tests
 
     #[test]
-    #[allow(clippy::needless_range_loop)]
     fn test_affine_mpo_vs_matrix_1d_identity() {
-        // Test 1D identity: y = x (M=1, N=1)
-        let r = 3;
         let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
         let bc = vec![BoundaryCondition::Periodic];
-
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
-        let mpo_matrix = mpo_to_dense_matrix(&mpo, 1, 1, r);
-
-        let size = 1 << r;
-        for y in 0..size {
-            for x in 0..size {
-                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
-                let mpo_val = mpo_matrix[y][x].re;
-                assert!(
-                    (sparse_val - mpo_val).abs() < 1e-10,
-                    "Mismatch at ({}, {}): sparse={}, mpo={}",
-                    y,
-                    x,
-                    sparse_val,
-                    mpo_val
-                );
-            }
-        }
+        assert_affine_mpo_matches_matrix(3, &params, &bc);
     }
 
     #[test]
-    #[allow(clippy::needless_range_loop)]
     fn test_affine_mpo_vs_matrix_1d_shift() {
-        // Test 1D shift: y = x + 3 (M=1, N=1)
-        let r = 3;
         let params = AffineParams::from_integers(vec![1], vec![3], 1, 1).unwrap();
         let bc = vec![BoundaryCondition::Periodic];
-
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
-        let mpo_matrix = mpo_to_dense_matrix(&mpo, 1, 1, r);
-
-        let size = 1 << r;
-        for y in 0..size {
-            for x in 0..size {
-                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
-                let mpo_val = mpo_matrix[y][x].re;
-                assert!(
-                    (sparse_val - mpo_val).abs() < 1e-10,
-                    "Mismatch at ({}, {}): sparse={}, mpo={}",
-                    y,
-                    x,
-                    sparse_val,
-                    mpo_val
-                );
-            }
-        }
+        assert_affine_mpo_matches_matrix(3, &params, &bc);
     }
 
     #[test]
-    #[allow(clippy::needless_range_loop)]
     fn test_affine_mpo_vs_matrix_simple() {
-        // Compare MPO to matrix: A = [[1, 0], [1, 1]], b = [0, 0]
-        // From Quantics.jl compare_simple test
-        //
-        // A = [[1, 0], [1, 1]] means:
-        //   y1 = 1*x1 + 0*x2 = x1
-        //   y2 = 1*x1 + 1*x2 = x1 + x2
-        //
-        // Flat index convention: flat = var0 + var1 * 2^R
-        // For r=3: x_flat = x1 + 8*x2, y_flat = y1 + 8*y2
-        //
-        // Example: x1=1, x2=1 => y1=1, y2=2
-        //   x_flat = 1 + 8*1 = 9
-        //   y_flat = 1 + 8*2 = 17
-        //   So matrix[17,9] = 1
-        //
-        // But y_flat=1 means y1=1, y2=0 (since 1 = 1 + 8*0)
-        // For y1=1, y2=0: need x1=1, x2=-x1=-1 (invalid) or via modular arithmetic
-        // Actually y2 = x1+x2 = 0 mod 8 means x1+x2 = 0 or 8
-        // If x1=1, then x2=7 for x1+x2=8, so y1=1, y2=0 (mod 8)
-        // x_flat = 1 + 8*7 = 57, so matrix[1,57] = 1
-        let r = 3;
-        let a = vec![1i64, 0, 1, 1]; // [[1, 0], [1, 1]] row-major
-        let b = vec![0i64, 0];
-        let params = AffineParams::from_integers(a, b, 2, 2).unwrap();
+        let params = AffineParams::from_integers(vec![1, 0, 1, 1], vec![0, 0], 2, 2).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 2];
-
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
-        let mpo_matrix = mpo_to_dense_matrix(&mpo, 2, 2, r);
-
-        // Compare
-        let size = 1 << (2 * r);
-        for y in 0..size {
-            for x in 0..size {
-                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
-                let mpo_val = mpo_matrix[y][x].re;
-                assert!(
-                    (sparse_val - mpo_val).abs() < 1e-10,
-                    "Mismatch at ({}, {}): sparse={}, mpo={}",
-                    y,
-                    x,
-                    sparse_val,
-                    mpo_val
-                );
-            }
-        }
+        assert_affine_mpo_matches_matrix(3, &params, &bc);
     }
 
     #[test]
@@ -1488,41 +1400,23 @@ mod tests {
         // From Quantics.jl compare_hard test
         // A = [1 0 1; 1 2 -1; 0 1 1], b = [11; 23; -15]
         let r = 4;
-        let a = vec![1i64, 0, 1, 1, 2, -1, 0, 1, 1]; // 3×3 row-major
+        let a = vec![1i64, 0, 1, 1, 2, -1, 0, 1, 1];
         let b = vec![11i64, 23, -15];
         let params = AffineParams::from_integers(a, b, 3, 3).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 3];
-
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-
-        // Verify dimensions
-        let input_size = 1 << (3 * r); // 2^12 = 4096
-        let output_size = 1 << (3 * r); // 2^12 = 4096
-        assert_eq!(matrix.rows(), output_size);
-        assert_eq!(matrix.cols(), input_size);
-
-        // Verify non-zero count is reasonable (permutation-like)
-        assert!(matrix.nnz() > 0);
-        assert!(matrix.nnz() <= input_size);
+        assert_affine_mpo_matches_matrix(r, &params, &bc);
     }
 
     #[test]
     fn test_affine_matrix_rectangular() {
         // From Quantics.jl compare_rect test
-        // A = [1 0 1; 1 2 0] (2×3), b = [11; -3]
+        // A = [1 0 1; 1 2 0] (2x3), b = [11; -3]
         let r = 4;
-        let a = vec![1i64, 0, 1, 1, 2, 0]; // 2×3 row-major
+        let a = vec![1i64, 0, 1, 1, 2, 0];
         let b = vec![11i64, -3];
         let params = AffineParams::from_integers(a, b, 2, 3).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 2];
-
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-
-        // Verify dimensions
-        let input_size = 1 << (3 * r); // 2^12 = 4096
-        let output_size = 1 << (2 * r); // 2^8 = 256
-        assert_eq!(matrix.rows(), output_size);
-        assert_eq!(matrix.cols(), input_size);
+        assert_affine_mpo_matches_matrix(r, &params, &bc);
     }
 
     #[test]
@@ -1535,22 +1429,7 @@ mod tests {
                 let b = vec![Rational64::from_integer(0)];
                 let params = AffineParams::new(a, b, 1, 1).unwrap();
                 let bcs = vec![bc];
-
-                let matrix = affine_transform_matrix(r, &params, &bcs).unwrap();
-
-                // y = x/3 only valid for x divisible by 3
-                let size = 1 << r;
-                #[allow(clippy::manual_div_ceil)]
-                let expected_nnz = (size + 2) / 3; // Number of multiples of 3 in [0, 2^R)
-                assert_eq!(
-                    matrix.nnz(),
-                    expected_nnz,
-                    "R={}, bc={:?}: expected {} non-zeros, got {}",
-                    r,
-                    bc,
-                    expected_nnz,
-                    matrix.nnz()
-                );
+                assert_affine_mpo_matches_matrix(r, &params, &bcs);
             }
         }
     }
@@ -1570,14 +1449,8 @@ mod tests {
                 let b = vec![Rational64::from_integer(2), Rational64::from_integer(3)];
                 let params = AffineParams::new(a, b, 2, 2).unwrap();
                 let bcs = vec![bc; 2];
-
-                let result = affine_transform_matrix(r, &params, &bcs);
-                assert!(
-                    result.is_ok(),
-                    "R={}, bc={:?}: failed to create matrix",
-                    r,
-                    bc
-                );
+                assert_affine_matrix_correctness(r, &params, &bcs);
+                assert_affine_mpo_matches_matrix(r, &params, &bcs);
             }
         }
     }
@@ -1626,51 +1499,14 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::needless_range_loop)]
     fn test_affine_mpo_vs_matrix_r1() {
-        // R=1 is a special case where is_msb and is_lsb are both true
-        let r = 1;
-
+        let bc = vec![BoundaryCondition::Periodic];
         // Identity R=1
         let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
-        let bc = vec![BoundaryCondition::Periodic];
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
-        let mpo_matrix = mpo_to_dense_matrix(&mpo, 1, 1, r);
-        for y in 0..2 {
-            for x in 0..2 {
-                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
-                let mpo_val = mpo_matrix[y][x].re;
-                assert!(
-                    (sparse_val - mpo_val).abs() < 1e-10,
-                    "R=1 identity mismatch at ({},{}): sparse={}, mpo={}",
-                    y,
-                    x,
-                    sparse_val,
-                    mpo_val
-                );
-            }
-        }
-
+        assert_affine_mpo_matches_matrix(1, &params, &bc);
         // Shift R=1 (y = x + 1 mod 2)
         let params = AffineParams::from_integers(vec![1], vec![1], 1, 1).unwrap();
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
-        let mpo_matrix = mpo_to_dense_matrix(&mpo, 1, 1, r);
-        for y in 0..2 {
-            for x in 0..2 {
-                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
-                let mpo_val = mpo_matrix[y][x].re;
-                assert!(
-                    (sparse_val - mpo_val).abs() < 1e-10,
-                    "R=1 shift mismatch at ({},{}): sparse={}, mpo={}",
-                    y,
-                    x,
-                    sparse_val,
-                    mpo_val
-                );
-            }
-        }
+        assert_affine_mpo_matches_matrix(1, &params, &bc);
     }
 
     #[test]
