@@ -542,7 +542,7 @@ fn affine_transform_tensors(
             .collect();
 
         // Compute core tensor for this site
-        let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries)?;
+        let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries, true)?;
 
         carries = core_data.carries_out.clone();
         core_data_list.push(core_data);
@@ -688,15 +688,18 @@ fn affine_transform_core(
     m: usize,
     n: usize,
     carries_in: &[Vec<i64>],
+    activebit: bool,
 ) -> Result<AffineCoreData> {
     let mut carry_out_map: HashMap<Vec<i64>, DTensor<bool, 2>> = HashMap::new();
-    let site_dim = 1 << (m + n);
+    let x_range = if activebit { 1 << n } else { 1 };
+    let y_range = if activebit { 1 << m } else { 1 };
+    let site_dim = x_range * y_range;
     let num_carry_in = carries_in.len();
 
     // Iterate over all input carries
     for (c_idx, carry_in) in carries_in.iter().enumerate() {
         // Iterate over all possible x values (N bits)
-        for x_bits in 0..(1 << n) {
+        for x_bits in 0..x_range {
             let x: Vec<i64> = (0..n).map(|j| ((x_bits >> j) & 1) as i64).collect();
 
             // Compute z = A*x + b + carry_in
@@ -711,6 +714,12 @@ fn affine_transform_core(
             if scale % 2 == 1 {
                 // Scale is odd: unique y that satisfies condition
                 let y: Vec<i64> = z.iter().map(|&zi| zi & 1).collect();
+
+                // When bits are inactive, y must be zero (Julia PR #45 fix)
+                if !activebit && y.iter().any(|&yi| yi != 0) {
+                    continue;
+                }
+
                 let y_bits: usize = y
                     .iter()
                     .enumerate()
@@ -738,7 +747,7 @@ fn affine_transform_core(
                 }
 
                 // y can be any value
-                for y_bits in 0..(1 << m) {
+                for y_bits in 0..y_range {
                     let y: Vec<i64> = (0..m).map(|i| ((y_bits >> i) & 1) as i64).collect();
 
                     // Compute carry_out = (z - scale * y) / 2
