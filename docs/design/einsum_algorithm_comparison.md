@@ -71,7 +71,7 @@ Simpler matricization pipeline:
 | Owned-input optimization | Transfers ownership → zero-copy | Always allocates new buffer | **Adopt** ownership transfer |
 | Backend requirements | Compile-time `BackendConfig` trait | Hardcoded | **Adopt** trait-based config |
 | Tropical dispatch | Not supported | `TypeId` runtime dispatch | **Adopt** omeinsum approach |
-| Batch placement | Batch-first `[batch, lo, sum]` | Batch-last `[left, contracted, batch]` | Evaluate; batch-last may be better for col-major |
+| Batch placement | Batch-first `[batch, lo, sum]` (bug) | Batch-last `[left, contracted, batch]` | **Adopt** batch-last (col-major: batch-last = largest stride → each batch slice contiguous) |
 
 ## 2. N-ary Einsum (Contraction Tree)
 
