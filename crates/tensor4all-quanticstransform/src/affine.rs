@@ -1239,6 +1239,139 @@ mod tests {
         matrix
     }
 
+    /// Assert that the MPO representation matches the direct sparse matrix computation
+    /// for all elements. This is the primary correctness check: two independent algorithms
+    /// (carry-based MPO vs direct enumeration) must agree.
+    fn assert_affine_mpo_matches_matrix(r: usize, params: &AffineParams, bc: &[BoundaryCondition]) {
+        let m = params.m;
+        let n = params.n;
+
+        let matrix = affine_transform_matrix(r, params, bc).unwrap();
+        let mpo = affine_transform_mpo(r, params, bc).unwrap();
+        let mpo_matrix = mpo_to_dense_matrix(&mpo, m, n, r);
+
+        let output_size = 1 << (m * r);
+        let input_size = 1 << (n * r);
+
+        for y in 0..output_size {
+            for x in 0..input_size {
+                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
+                let mpo_val = mpo_matrix[y][x].re;
+                assert!(
+                    (sparse_val - mpo_val).abs() < 1e-10,
+                    "MPO vs matrix mismatch at ({}, {}): sparse={}, mpo={} \
+                     [r={}, m={}, n={}, bc={:?}]",
+                    y,
+                    x,
+                    sparse_val,
+                    mpo_val,
+                    r,
+                    m,
+                    n,
+                    bc
+                );
+            }
+        }
+    }
+
+    /// Assert that affine_transform_matrix produces correct results by independently
+    /// computing y = A*x + b using Rational64 arithmetic (no integer scaling).
+    /// Equivalent to Julia's test_affine_transform_matrix_multi_variables.
+    fn assert_affine_matrix_correctness(r: usize, params: &AffineParams, bc: &[BoundaryCondition]) {
+        let m = params.m;
+        let n = params.n;
+        let modulus = 1i64 << r;
+
+        let matrix = affine_transform_matrix(r, params, bc).unwrap();
+
+        let input_size = 1usize << (r * n);
+        let output_size = 1usize << (r * m);
+
+        // Build expected matrix independently using Rational64
+        for x_flat in 0..input_size {
+            // Decode x_flat to N-dimensional vector
+            let x_vals: Vec<i64> = (0..n)
+                .map(|var| ((x_flat >> (var * r)) & ((1 << r) - 1)) as i64)
+                .collect();
+
+            // Compute y = A*x + b using Rational64 (independent of to_integer_scaled)
+            let y_rational: Vec<Rational64> = (0..m)
+                .map(|i| {
+                    let mut val = params.b[i];
+                    for j in 0..n {
+                        val += params.a[i * n + j] * Rational64::from_integer(x_vals[j]);
+                    }
+                    val
+                })
+                .collect();
+
+            // Check if all y values are integers
+            if y_rational.iter().any(|y| !y.is_integer()) {
+                // No valid output for this input - all entries in this column must be 0
+                for y_flat in 0..output_size {
+                    let val = *matrix.get(y_flat, x_flat).unwrap_or(&0.0);
+                    assert!(
+                        val.abs() < 1e-10,
+                        "Expected zero at ({}, {}) for non-integer y, got {} [r={}, bc={:?}]",
+                        y_flat,
+                        x_flat,
+                        val,
+                        r,
+                        bc
+                    );
+                }
+                continue;
+            }
+
+            let y_int: Vec<i64> = y_rational.iter().map(|y| y.to_integer()).collect();
+
+            // Apply boundary conditions
+            let bc_periodic: Vec<bool> = bc
+                .iter()
+                .map(|b| matches!(b, BoundaryCondition::Periodic))
+                .collect();
+
+            let y_bounded: Vec<i64> = y_int
+                .iter()
+                .enumerate()
+                .map(|(i, &yi)| {
+                    if bc_periodic[i] {
+                        ((yi % modulus) + modulus) % modulus
+                    } else {
+                        yi
+                    }
+                })
+                .collect();
+
+            let valid = y_bounded
+                .iter()
+                .enumerate()
+                .all(|(i, &yi)| bc_periodic[i] || (yi >= 0 && yi < modulus));
+
+            if valid {
+                let y_flat: usize = y_bounded
+                    .iter()
+                    .enumerate()
+                    .map(|(var, &yi)| (yi as usize) << (var * r))
+                    .sum();
+
+                // This (y_flat, x_flat) should be 1
+                let val = *matrix.get(y_flat, x_flat).unwrap_or(&0.0);
+                assert!(
+                    (val - 1.0).abs() < 1e-10,
+                    "Expected 1 at ({}, {}) but got {} [r={}, x={:?}, y={:?}, bc={:?}]",
+                    y_flat,
+                    x_flat,
+                    val,
+                    r,
+                    x_vals,
+                    y_bounded,
+                    bc
+                );
+            }
+        }
+    }
+
     // MPO vs matrix comparison tests
 
     #[test]
