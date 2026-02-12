@@ -214,7 +214,11 @@ pub fn affine_transform_matrix(
     let mut cols = Vec::new();
     let mut vals = Vec::new();
 
-    // Iterate over all x ∈ {0, ..., 2^R-1}^N
+    let mask = modulus - 1; // 2^R - 1
+
+    // Iterate over all (x, y) pairs, matching Julia's approach.
+    // For periodic BC with scale > 1, multiple y values can satisfy
+    // scale * y ≡ A*x + b (mod 2^R), so we must check all pairs.
     for x_flat in 0..input_size {
         // Decode x_flat to N-dimensional x vector
         // x_flat = x[0] + x[1]*2^R + x[2]*2^(2R) + ...
@@ -222,58 +226,41 @@ pub fn affine_transform_matrix(
             .map(|var| ((x_flat >> (var * r)) & ((1 << r) - 1)) as i64)
             .collect();
 
-        // Compute y = A*x + b (unscaled, then divide by scale)
-        let mut y_unscaled: Vec<i64> = vec![0; m];
+        // Compute v = A*x + b (unscaled)
+        let mut v: Vec<i64> = vec![0; m];
         for i in 0..m {
-            y_unscaled[i] = b_int[i];
+            v[i] = b_int[i];
             for j in 0..n {
-                y_unscaled[i] += a_int[i * n + j] * x[j];
+                v[i] += a_int[i * n + j] * x[j];
             }
         }
 
-        // Check if y is divisible by scale
-        if y_unscaled.iter().any(|&yi| yi % scale != 0) {
-            continue; // No valid output for this input
-        }
+        for y_flat in 0..output_size {
+            // Decode y_flat to M-dimensional y vector
+            let y: Vec<i64> = (0..m)
+                .map(|var| ((y_flat >> (var * r)) & ((1 << r) - 1)) as i64)
+                .collect();
 
-        let y: Vec<i64> = y_unscaled.iter().map(|&yi| yi / scale).collect();
+            // Compute scale * y
+            let sy: Vec<i64> = y.iter().map(|&yi| scale * yi).collect();
 
-        // Apply boundary conditions
-        let y_bounded: Vec<i64> = y
-            .iter()
-            .enumerate()
-            .map(|(i, &yi)| {
+            // Check equiv(v, s*y, R, boundary) per component
+            let equiv = v.iter().zip(sy.iter()).enumerate().all(|(i, (&vi, &syi))| {
                 if bc_periodic[i] {
-                    // Periodic: wrap around
-                    ((yi % modulus) + modulus) % modulus
+                    // Periodic: v ≡ s*y (mod 2^R)
+                    (vi - syi) & mask == 0
                 } else {
-                    // Open: must be in range [0, 2^R)
-                    yi
+                    // Open: v == s*y (exact)
+                    vi == syi
                 }
-            })
-            .collect();
+            });
 
-        // Check if output is valid (in range for open boundaries)
-        let valid = y_bounded
-            .iter()
-            .enumerate()
-            .all(|(i, &yi)| bc_periodic[i] || (yi >= 0 && yi < modulus));
-
-        if !valid {
-            continue;
+            if equiv {
+                rows.push(y_flat);
+                cols.push(x_flat);
+                vals.push(1.0);
+            }
         }
-
-        // Encode y to flat index
-        // y_flat = y[0] + y[1]*2^R + y[2]*2^(2R) + ...
-        let y_flat: usize = y_bounded
-            .iter()
-            .enumerate()
-            .map(|(var, &yi)| (yi as usize) << (var * r))
-            .sum();
-
-        rows.push(y_flat);
-        cols.push(x_flat);
-        vals.push(1.0);
     }
 
     // Build sparse matrix in CSR format
