@@ -1,65 +1,120 @@
 # t4a: Unified Tensor Backend Design Plan
 
+> **Note on naming**: `t4a` is a **working name** (short for tensor4all). The
+> final project name is undecided. One candidate is
+> **[tensoratu](https://gricad-gitlab.univ-grenoble-alpes.fr/theorypheliqs/tensoratu)**,
+> proposed by the Grenoble team (TheoryPheliqs) as a tensor toolkit with
+> hybrid indexing for tensor networks. Adopting `tensoratu` would change the
+> crate prefix from `t4a-*` to `tensoratu-*` (e.g., `tensoratu-view`,
+> `tensoratu-omeinsum`). Throughout this document, `t4a-*` should be read
+> as a placeholder for whatever prefix is ultimately chosen.
+
 ## Context
 
 Three independent Rust projects exist in tensor4all:
 - **strided-rs**: Cache-optimized strided array kernels (view, map/reduce, einsum)
+- **omeinsum-rs**: Einsum with tropical algebra, gradient support, GPU dispatch
 - **ndtensors-rs**: Tensor types with storage hierarchy, linear algebra, autograd
 - **tensor4all-rs**: Tensor network algorithms (TCI, Quantics, MPS) with ad-hoc tensor backend
 
 These have significant overlap (3 einsum implementations, 3 scalar trait definitions, 3 dense storage types) yet critical gaps. The goal is to unify into a coherent, reusable tensor backend library **t4a-\*** that:
 
-1. Is a standalone tensor library with built-in AD (default path)
-2. Can optionally bridge to Burn for NN workloads
+1. Integrates strided-rs and omeinsum-rs components directly (not as external dependencies)
+2. Provides unified CPU/GPU dispatch for both element-wise ops and einsum
 3. Supports complex numbers natively
-4. Exposes VJP/JVP through C API for Julia ChainRules.jl
-5. Supports custom scalar types (tropical semiring, etc.) with pluggable GEMM backends
+4. Supports custom scalar types (tropical semiring, etc.) with pluggable GEMM backends
+5. Exposes VJP/JVP through C API for Julia ChainRules.jl
+6. Can optionally bridge to Burn for NN workloads
 
-**Key design principle**: t4a-* is self-contained. Burn is only used when NN modules are needed.
+**Key design principles**:
+- **Unified workspace**: All dense array infrastructure lives in one workspace (`t4a-rs`). No external strided-rs dependency.
+- **Builder pattern for API stability**: All configuration (backend selection, options) uses builder pattern. New fields can be added to `BackendConfig` and other config types without breaking existing call sites. This is preferred over positional arguments or enum-heavy APIs.
+- **Unified backend dispatch**: CPU/GPU dispatch is managed by `t4a-backend` (`BackendConfig`). Computation crates query this config — not the tensor layer above.
+- **t4a-view is pure type design**: "strided" is about data layout, not operations. The view crate has no GPU dependencies.
 
 ---
 
 ## Crate Structure
 
 ```
-t4a/ (workspace)
-├── t4a-scalar          # Scalar trait hierarchy
-├── t4a-buffer          # Raw data buffer: DataBuffer (Arc-based COW, CPU/GPU)
-├── t4a-tensor          # Tensor type (sizes + strides + offset over DataBuffer)
-├── t4a-linalg          # SVD, QR, eigen, polar (via faer)
-├── t4a-autograd        # TrackedTensor, DualTensor, computation graph [PRIMARY AD]
-├── t4a-blocksparse     # BlockSparseTensor (single DataBuffer + block offsets)
-├── t4a-diag            # DiagTensor (1D Tensor of diagonal elements)
-├── t4a-capi            # C FFI (tensor ops + VJP/JVP for ChainRules.jl)
-└── burn-t4a            # Burn Backend bridge [OPTIONAL, for NN only]
+t4a-rs/ (workspace)
+│
+│ ── Dense array foundation ──────────────────────
+│
+├── t4a-scalar           # Scalar trait hierarchy (ScalarBase, ElementOp, Scalar)
+├── t4a-view             # StridedArrayView/Mut (zero-copy strided views over &[T])
+├── t4a-buffer           # DataBuffer<T>: CPU Vec<T> / GPU CudaSlice<T> (Arc-based COW)
+├── t4a-algebra          # Semiring/Algebra traits, tropical types (MaxPlus, MinPlus, MaxMul)
+├── t4a-backend          # Unified backend dispatch (BackendConfig builder, global default)
+├── t4a-mapreduce        # map/reduce/broadcast (CPU: cache-optimized, GPU: CubeCL)
+├── t4a-omeinsum         # Einsum engine (CPU: GEMM backends, GPU: cuTENSOR)
+│                        #   Binary contraction + N-ary optimizer (omeco)
+│                        #   Respects OMEinsum.jl naming
+│
+│ ── High-level tensor API ───────────────────────
+│
+├── t4a-tensor           # Tensor<T> = DataBuffer + sizes + strides + offset
+│                        #   User-facing API, delegates to t4a-mapreduce / t4a-omeinsum
+├── t4a-linalg           # SVD, QR, eigen, polar (CPU: faer, GPU: cuSOLVER)
+├── t4a-autograd         # TrackedTensor, DualTensor, VJP/JVP
+├── t4a-blocksparse      # BlockSparseTensor (single DataBuffer + block offsets)
+├── t4a-diag             # DiagTensor (1D Tensor of diagonal elements)
+├── t4a-capi             # C FFI (tensor ops + VJP/JVP for ChainRules.jl)
+└── burn-t4a             # Burn Backend bridge [OPTIONAL, for NN only]
 ```
 
 ### Dependency Graph
 
 ```
-strided-traits (ScalarBase, ElementOp)
-    |
-strided-view (StridedView, StridedArray)
-    |
-strided-kernel (map/reduce/broadcast)      strided-einsum2 (binary einsum + GEMM)
-    |                                           |
-    +------------ t4a-scalar ← num-traits, num-complex
-                      |
-                  t4a-buffer
-                      |
-                  t4a-tensor ← strided-view, strided-kernel, strided-einsum2, strided-opteinsum
-                      |
-          +-----------+-----------+
-          |           |           |
-    t4a-linalg    t4a-autograd   t4a-blocksparse
-    (← faer)          |          t4a-diag
-                      |
-                  t4a-capi ← t4a-tensor, t4a-autograd, t4a-linalg
+t4a-scalar
+    │
+    ├──────────────────────────────┐
+    ↓                              ↓
+t4a-view                      t4a-buffer
+    │                              │
+    ├──── t4a-algebra ←────────────┤
+    │         │                    │
+    ↓         ↓                    ↓
+t4a-backend ←──────────────────────┘  (BackendConfig, global default)
+    │
+    ├──────────────────────────────┐
+    ↓                              ↓
+t4a-mapreduce                 t4a-omeinsum
+(queries t4a-backend)         (queries t4a-backend)
+    │                              │
+    └──────────────┬───────────────┘
+                   ↓
+              t4a-tensor
+                   │
+         ┌─────────┼───────────────┐
+         ↓         ↓               ↓
+   t4a-linalg  t4a-autograd   t4a-blocksparse
+   (← faer)       │          t4a-diag
+                   ↓
+               t4a-capi
 
-    [optional]
-    burn-t4a ← t4a-tensor, burn-backend
-    burn-complex ← burn-backend (decorator for complex in Burn)
+[optional]
+burn-t4a ← t4a-tensor, burn-backend
 ```
+
+### Origin of Each Crate
+
+| t4a crate | Origin | What changes |
+|-----------|--------|--------------|
+| t4a-scalar | strided-traits | Adds `Scalar` (division, complex), `RealScalar` |
+| t4a-view | strided-view | Rename only |
+| t4a-buffer | New | CPU/GPU buffer abstraction |
+| t4a-algebra | omeinsum-rs (Algebra traits) | Standalone crate for Semiring/tropical types |
+| t4a-backend | New | Unified dispatch config (BackendConfig builder) |
+| t4a-mapreduce | strided-kernel | Rename + add GPU dispatch via CubeCL |
+| t4a-omeinsum | strided-einsum2 + strided-opteinsum + omeinsum-rs | Merge all einsum into one, add GPU dispatch |
+| t4a-tensor | New | Tensor<T> API over DataBuffer |
+| t4a-linalg | ndtensors-rs (linalg) | Port SVD/QR/eigen |
+| t4a-autograd | ndtensors-rs (autodiff) | Port TrackedTensor/DualTensor |
+| t4a-blocksparse | ndtensors-rs (blocksparse) | Port with single-buffer layout |
+| t4a-diag | ndtensors-rs (diag) | Port DiagTensor |
+| t4a-capi | ndtensors-rs (capi) + tensor4all-rs (capi) | Port C FFI |
+| burn-t4a | New | Burn Backend bridge |
 
 ---
 
@@ -68,7 +123,7 @@ strided-kernel (map/reduce/broadcast)      strided-einsum2 (binary einsum + GEMM
 ```
 t4a-buffer: DataBuffer<T>  ← 1D flat memory (CPU Vec<T> or GPU CudaSlice<T>)
     │
-t4a-tensor: Tensor<T>     ← strided view over DataBuffer (sizes + strides + offset)
+t4a-tensor: Tensor<T>     ← strides + sizes + offset over DataBuffer
     │                        = "Dense tensor". The fundamental primitive.
     │
     ├── t4a-diag: DiagTensor<T>
@@ -79,22 +134,31 @@ t4a-tensor: Tensor<T>     ← strided view over DataBuffer (sizes + strides + of
           each block is a Tensor<T> view into the shared buffer
 ```
 
-**Naming convention**: `DataBuffer` is the raw 1D memory buffer (replaces the confusing name "Storage" which could be mistaken for DenseStorage/DiagStorage/BlockSparseStorage in tensor4all-rs). `Tensor<T>` is a strided view over a `DataBuffer`, equivalent to "dense tensor".
-
 ---
 
-## Phase 1: t4a-scalar + t4a-buffer + t4a-tensor
+## Phase 1: Dense Array Foundation
 
 ### t4a-scalar
 
-Re-export `strided_traits::ScalarBase` as `t4a_scalar::ScalarBase` (option (a) from design doc — avoids orphan rule issues).
-
 ```rust
 // t4a-scalar/src/lib.rs
-pub use strided_traits::ScalarBase;   // minimal: Copy+Send+Sync+Mul+Add+Zero+One+PartialEq
-pub use strided_traits::ElementOpApply;
 
-pub trait Scalar: ScalarBase + Div<Output=Self> + DivAssign + Sub<Output=Self> + Neg<Output=Self> + SubAssign {
+/// Minimal scalar trait for map/reduce/einsum.
+/// Copy + Send + Sync + basic arithmetic.
+pub trait ScalarBase: Copy + Send + Sync + Add<Output=Self> + Mul<Output=Self>
+    + Zero + One + PartialEq + Debug {}
+
+/// Element operation applied lazily on access (Identity, Conj, Transpose, Adjoint).
+pub trait ElementOpApply: ScalarBase {
+    fn conjugate(self) -> Self;
+    fn transpose(self) -> Self;
+    fn adjoint(self) -> Self;
+}
+
+/// Rich scalar for linalg and standard numeric types.
+pub trait Scalar: ScalarBase + ElementOpApply
+    + Div<Output=Self> + Sub<Output=Self> + Neg<Output=Self> + SubAssign + DivAssign
+{
     type Real: RealScalar;
     fn conjugate(self) -> Self;
     fn real_part(self) -> Self::Real;
@@ -112,15 +176,34 @@ pub trait RealScalar: Scalar<Real = Self> + PartialOrd {
 }
 ```
 
-**Implementations**: f32, f64, Complex<f32>, Complex<f64>.
+**Implementations**:
 
-**Relation to strided-rs traits**:
-- `ScalarBase` = re-exported from `strided_traits::ScalarBase` (Copy+Send+Sync+Mul+Add+Zero+One+PartialEq)
-- `ElementOpApply` = re-exported from `strided_traits::ElementOpApply` (conj, transpose, adjoint methods; opt-in)
-- strided-einsum2's `Scalar` trait alias (feature-dependent: `ScalarBase + ElementOpApply + ComplexField/BlasGemm`) is **not** re-exported — t4a-scalar defines its own `Scalar` with richer semantics (complex support, division)
-- `faer::ComplexField` is enforced only at t4a-linalg level
+| Trait | Types |
+|-------|-------|
+| `ScalarBase` | f32, f64, Complex\<f32\>, Complex\<f64\>, i32, i64, u32, u64 |
+| `ElementOpApply` | f32, f64, Complex\<f32\>, Complex\<f64\> |
+| `Scalar` | f32, f64, Complex\<f32\>, Complex\<f64\> |
+| `RealScalar` | f32, f64 |
 
-**Custom types**: Tropical semiring only needs `ScalarBase` (no `Scalar`, `ElementOpApply`, or GEMM required). Uses `einsum2_naive_into`. Types with custom GEMM can implement `BgemmBackend<T>` and use `einsum2_with_backend_into`.
+Integer types implement `ScalarBase` only — sufficient for einsum via naive
+backend and map/reduce operations. They do not implement `Scalar` (no
+conjugate, division semantics differ) or `ElementOpApply`.
+
+**Custom types**: Tropical semiring only needs `ScalarBase`. Types with custom GEMM implement `BgemmBackend<T>`.
+
+### t4a-view
+
+Renamed from strided-view. No functional changes.
+
+```rust
+pub struct StridedArrayView<'a, T, const N: usize, Op = Identity> { ... }
+pub struct StridedArrayViewMut<'a, T, const N: usize, Op = Identity> { ... }
+```
+
+- Borrows `&'a [T]` — pure CPU, no GPU dependencies
+- Const-generic rank `N`
+- Zero-copy: slice, reshape, permute, transpose
+- Lazy element operations via `Op` type parameter (Identity, Conj, Transpose, Adjoint)
 
 ### t4a-buffer
 
@@ -142,166 +225,283 @@ pub enum DataBuffer<T: ScalarBase> {
 }
 ```
 
-Shared ownership via `Arc` inside enum variants. COW via `Arc::make_mut`.
+Shared ownership via `Arc`. COW via `Arc::make_mut`.
+
+### t4a-algebra
+
+Semiring/Algebra abstraction from omeinsum-rs, as a standalone crate:
+
+```rust
+pub trait Semiring: ScalarBase {
+    fn sem_zero() -> Self;
+    fn sem_one() -> Self;
+    fn sem_add(self, rhs: Self) -> Self;
+    fn sem_mul(self, rhs: Self) -> Self;
+}
+
+/// Standard linear algebra: sem_add = +, sem_mul = ×
+pub struct Standard<T>(pub T);
+
+/// Tropical (max-plus): sem_add = max, sem_mul = +
+pub struct MaxPlus<T>(pub T);
+
+/// Tropical (min-plus): sem_add = min, sem_mul = +
+pub struct MinPlus<T>(pub T);
+
+/// Tropical (max-mul): sem_add = max, sem_mul = ×
+pub struct MaxMul<T>(pub T);
+```
+
+Also provides:
+- Argmax tracking for tropical backward pass
+- Algebra trait extending Semiring with optional backward/gradient support
+
+### t4a-backend
+
+Unified backend dispatch configuration. All computation crates (t4a-mapreduce,
+t4a-omeinsum, t4a-linalg) query this crate for backend selection instead of
+managing dispatch independently.
+
+**BackendConfig builder** (Rust builder pattern for stable, extensible API):
+
+```rust
+/// Backend configuration. Built via builder pattern.
+/// New fields can be added without breaking existing code.
+#[derive(Clone, Debug)]
+pub struct BackendConfig {
+    device: ComputeDevice,
+    gemm: GemmBackend,
+    linalg: LinalgBackend,
+    mapreduce: MapReduceBackend,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum ComputeDevice {
+    #[default]
+    Cpu,
+    #[cfg(feature = "cuda")]
+    Cuda(usize),  // device_id
+    Auto,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum GemmBackend {
+    #[default]
+    Faer,
+    Naive,
+    // Future extensions (added without breaking API thanks to builder pattern):
+    // Blas,          // OpenBLAS / MKL via cblas-inject or system CBLAS
+    // TropicalGemm,  // SIMD-optimized tropical algebra GEMM
+    // #[cfg(feature = "cuda")]
+    // CuTensor,      // GPU via cuTENSOR
+    Auto,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum LinalgBackend {
+    #[default]
+    Faer,
+    #[cfg(feature = "cuda")]
+    CuSolver,
+    Auto,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum MapReduceBackend {
+    #[default]
+    Cpu,
+    #[cfg(feature = "cubecl")]
+    CubeCL,
+    Auto,
+}
+
+impl BackendConfig {
+    pub fn new() -> Self { Self::default() }
+
+    pub fn device(mut self, device: ComputeDevice) -> Self {
+        self.device = device; self
+    }
+    pub fn gemm(mut self, gemm: GemmBackend) -> Self {
+        self.gemm = gemm; self
+    }
+    pub fn linalg(mut self, linalg: LinalgBackend) -> Self {
+        self.linalg = linalg; self
+    }
+    pub fn mapreduce(mut self, mr: MapReduceBackend) -> Self {
+        self.mapreduce = mr; self
+    }
+}
+```
+
+**Two-tier dispatch: global default + per-call override**:
+
+```rust
+// 1. Set global default (once at startup)
+t4a_backend::set_global_default(
+    BackendConfig::new()
+        .device(ComputeDevice::Cpu)
+        .gemm(GemmBackend::Faer)
+);
+
+// 2. Simple API — uses global default
+einsum(&[&a, &b], &labels)?;
+reduce(&src, &dst, |a, b| a + b)?;
+
+// 3. Per-call override via _with variant
+let cfg = BackendConfig::new().gemm(GemmBackend::Blas);
+einsum_with(&[&a, &b], &labels, &cfg)?;
+```
+
+Thread-local scoped override is intentionally omitted — it is error-prone
+in async/multithreaded Rust. The two-tier model (global + per-call) is
+sufficient and predictable.
+
+**`Auto` resolution**: When a field is `Auto`, t4a-backend resolves it based
+on context (e.g., `ComputeDevice::Auto` → GPU if any input is on GPU, else CPU).
+Resolution happens once at call entry, producing a fully-resolved `BackendConfig`.
+
+### t4a-mapreduce
+
+Absorbs strided-kernel. Adds GPU dispatch.
+
+**CPU path** (from strided-kernel):
+- Cache-optimized kernels: dimension fusion, stride-based reordering, L1 tiled iteration
+- `map_into`, `zip_map2_into`, `zip_map3_into`, `zip_map4_into`
+- `reduce`, `reduce_axis`, `mapreducedim_into`
+- `broadcast_into`, `CaptureArgs`
+- Contiguous fast paths bypass blocking for direct iteration
+
+**GPU path** (feature-gated: `cubecl`):
+- Custom GPU kernels via [CubeCL](https://github.com/tracel-ai/cubecl)
+- CubeCL compiles Rust kernel code to CUDA/WebGPU/etc.
+- Map/reduce/broadcast dispatched by `DataBuffer` variant
+
+**Dispatch via t4a-backend**: queries `BackendConfig::mapreduce()` to select
+CPU or GPU path. Per-call override via `_with` variants.
+
+### t4a-omeinsum
+
+Merges strided-einsum2 + strided-opteinsum + omeinsum-rs. Named after OMEinsum.jl.
+
+**Pluggable backend trait hierarchy** — two levels of abstraction:
+
+```rust
+/// Level 1: Batched GEMM (minimal custom backend)
+/// t4a-omeinsum handles permute → reshape → bgemm pipeline
+trait BgemmBackend<T: ScalarBase> {
+    fn bgemm(/* alpha, a, b, beta, c, batch, m, n, k, strides */) -> Result<()>;
+}
+
+/// Level 2: Direct tensor contraction (cuTENSOR-like)
+/// Backend handles the entire contraction — no permute/reshape needed
+trait TensordotBackend<T: ScalarBase> {
+    fn tensordot(
+        a: /* buffer + sizes + strides */,
+        b: /* buffer + sizes + strides */,
+        contracted: &[(usize, usize)],
+        out: /* buffer */,
+    ) -> Result<()>;
+}
+```
+
+**Dispatch priority** (t4a-omeinsum resolves per contraction):
+1. `TensordotBackend` available? → direct tensor contraction (cuTENSOR, etc.)
+2. `BgemmBackend` available? → permute → reshape → bgemm (faer, custom GEMM)
+3. Neither? → naive loop fallback (any `ScalarBase`)
+
+**Built-in implementations**:
+
+| Backend | Implements | Types | Notes |
+|---|---|---|---|
+| FaerBackend | `BgemmBackend<T>` | f32, f64, Complex32, Complex64 | Default CPU GEMM |
+| NaiveBackend | (fallback) | any `ScalarBase` | Loop-based, no GEMM |
+| CuTensorBackend | `TensordotBackend<T>` | f32, f64, Complex32, Complex64 | GPU, future |
+
+**User extension points**:
+- **Custom CPU GEMM**: implement `BgemmBackend<MyType>` — t4a-omeinsum
+  orchestrates the permute/reshape/bgemm pipeline automatically
+- **Custom GPU/accelerator**: implement `TensordotBackend<MyType>` — bypasses
+  the reshape-to-GEMM path entirely for maximum performance
+- **No implementation needed**: `ScalarBase` types fallback to naive loop
+
+**CPU performance optimizations** (from strided-rs):
+- Element-wise bypass: all-batch (no contraction) → `zip_map2_into` instead of GEMM
+- Single-tensor fast paths: direct trace loop, partial trace, zero-copy permutation
+- Fusability-aware reshape-to-GEMM: `try_fuse_group` avoids unnecessary copies
+- Buffer pool: intermediate tensors recycled across contraction steps
+
+**N-ary optimization**: omeco contraction tree optimizer (Greedy, TreeSA)
+
+**Algebra support**: dispatch GEMM backend based on algebra and scalar type:
+- `Standard<f64>` / `Standard<f32>` / `Standard<Complex64>` → faer GEMM
+- `Standard<i32>` / `Standard<i64>` / `Standard<u32>` / `Standard<u64>` → naive loop
+- `MaxPlus<f64>` → tropical-gemm (SIMD, future)
+- Custom → user-provided `BgemmBackend`
+
+**Dispatch via t4a-backend**: queries `BackendConfig::gemm()` and
+`BackendConfig::device()` to select CPU GEMM backend or GPU cuTENSOR.
+Per-call override via `einsum_with` / `einsum2_with`.
+
+**`Auto` resolution** (when `GemmBackend::Auto` or `ComputeDevice::Auto`):
+1. If any input is on GPU → cuTENSOR (future)
+2. If N-ary (>2 inputs) → omeco contraction order optimization, then pairwise dispatch
+3. If `T: Scalar` (f32/f64/Complex) → Faer
+4. If `T: ScalarBase` + `BgemmBackend<T>` → `einsum2_with_backend_into`
+5. Fallback: naive loop (integers, tropical, custom ScalarBase types)
+
+**Initial CPU backend**: faer only (pure Rust, no external dependencies).
+BLAS backends (cblas-inject, system CBLAS) and tropical-gemm are deferred to
+later phases. The builder pattern (`BackendConfig`) ensures these can be added
+as new `GemmBackend` variants without breaking existing call sites.
+
+**Future GEMM backends** (added via feature flags):
+- `blas`: system CBLAS (OpenBLAS, MKL)
+- `cblas-inject`: runtime-injected CBLAS (e.g., from Julia's OpenBLAS)
+- `tropical-gemm`: SIMD-optimized tropical algebra GEMM
+- Custom: implement `BgemmBackend<T>`
 
 ### t4a-tensor
 
 ```rust
 pub struct Tensor<T: ScalarBase> {
-    buffer: DataBuffer<T>,            // flat 1D memory (CPU or GPU)
+    buffer: DataBuffer<T>,
     sizes: SmallVec<[usize; 6]>,
-    strides: SmallVec<[isize; 6]>,   // isize for flip() support
+    strides: SmallVec<[isize; 6]>,
     storage_offset: usize,
 }
 ```
 
-**Bridge to strided-rs**:
+**Bridge to t4a-view** (CPU path):
 ```rust
 impl<T: ScalarBase> Tensor<T> {
-    pub fn as_strided_view(&self) -> StridedView<'_, T, Identity>;
-    pub fn as_strided_view_mut(&mut self) -> StridedViewMut<'_, T>;  // triggers COW
+    pub fn as_strided_view(&self) -> StridedArrayView<'_, T, N, Identity>;
+    pub fn as_strided_view_mut(&mut self) -> StridedArrayViewMut<'_, T, N>;  // triggers COW
 }
 ```
 
 **Zero-copy view operations**: permute, transpose, slice, select, expand, flip, diagonal — all modify metadata only.
 
-**Element-wise operations** (via strided-kernel):
+**Element-wise operations** (delegates to t4a-mapreduce):
 - `map`, `zip_map`, `reduce`, `sum`, `fill`
 - Arithmetic operators: Add, Sub, Mul (element-wise)
 
-**Contraction / Einsum** — dispatched by buffer location, scalar type, and backend:
-
-strided-rs provides three CPU einsum functions with increasing trait requirements:
-
-| Function | Trait Bound on T | Element Ops | Backend | Use Case |
-|---|---|---|---|---|
-| `einsum2_naive_into` | `ScalarBase` | custom `Fn(T)->T` mappers | loop-based | Tropical, custom types |
-| `einsum2_with_backend_into` | `ScalarBase` + `BgemmBackend<T>` | Identity only | user-provided GEMM | Interval, dual, multiprecision |
-| `einsum2_into` | `Scalar` (feature-dependent) | `ElementOp<T>` (conj, etc.) | faer/BLAS | f32, f64, Complex32, Complex64 |
-
-where `Scalar` is a **feature-dependent trait alias** defined in strided-einsum2:
-- With `faer`: `ScalarBase + ElementOpApply + faer_traits::ComplexField`
-- With `blas`/`blas-inject`: `ScalarBase + ElementOpApply + BlasGemm`
-- Without backends: `ScalarBase + ElementOpApply`
-
-Full dispatch table including GPU:
-
-| Buffer | Trait Bound | Backend | strided-rs Function |
-|---|---|---|---|
-| CPU | `ScalarBase` (any) | loop-based | `einsum2_naive_into` |
-| CPU | `ScalarBase` + `BgemmBackend<T>` | user-provided GEMM | `einsum2_with_backend_into` |
-| CPU | `Scalar` (f32/f64/Complex) | faer/BLAS GEMM | `einsum2_into` |
-| CPU | N-ary (>2 inputs) | opt-einsum optimizer | `strided_opteinsum::einsum` (pairwise dispatch) |
-| GPU | f32/f64/Complex | **cuTENSOR** | `cudarc::cutensor` |
-
-**Runtime backend selection** (PyTorch-style):
-
-t4a-tensor provides **runtime** GEMM backend selection, analogous to PyTorch's `torch.backends.cuda.preferred_blas_library()`. This is built on top of strided-einsum2's `einsum2_with_backend_into<T, B>`, which accepts the backend as a type parameter.
-
-Prerequisite: strided-einsum2 must allow multiple backends to coexist in the same binary (see [strided-rs#86](https://github.com/tensor4all/strided-rs/issues/86)). Specifically:
-- `faer` + `cblas-inject` compiled simultaneously (default)
-- `faer` + `blas` (system CBLAS) also allowed
-- `blas` + `cblas-inject` still mutually exclusive (symbol conflict)
-- `ActiveBackend` deprecated; `einsum2_with_backend_into` becomes the primary API
-
+**Einsum** (delegates to t4a-omeinsum):
 ```rust
-/// Runtime-selectable einsum backend
-pub enum EinsumBackend {
-    /// Pure-Rust GEMM via faer (default)
-    Faer,
-    /// CBLAS (system or injected from Julia)
-    Blas,
-    /// Loop-based, no GEMM (any ScalarBase)
-    Naive,
-    /// GPU via cuTENSOR
-    #[cfg(feature = "cuda")]
-    CuTensor,
-    /// Auto-select based on buffer location, scalar type, and tensor size
-    Auto,
-}
-```
-
-**Unified einsum entry point**:
-```rust
+// Simple API — uses global default BackendConfig
 pub fn einsum<T: ScalarBase>(
     inputs: &[&Tensor<T>],
     input_labels: &[&[i32]],
     output_labels: &[i32],
-    backend: EinsumBackend,       // runtime backend selection
 ) -> Result<Tensor<T>>;
-```
-
-Runtime dispatch via `match` — each branch calls a monomorphized function, so **zero dynamic dispatch overhead** in the hot loop:
-```rust
-match backend {
-    EinsumBackend::Faer =>
-        einsum2_with_backend_into::<T, FaerBackend>(...),
-    EinsumBackend::Blas =>
-        einsum2_with_backend_into::<T, BlasBackend>(...),
-    EinsumBackend::Naive =>
-        einsum2_naive_into(...),
-    #[cfg(feature = "cuda")]
-    EinsumBackend::CuTensor =>
-        cutensor_contract(...),
-    EinsumBackend::Auto =>
-        // resolved before match (see dispatch logic below)
-        unreachable!(),
-}
-```
-
-**`Auto` dispatch logic** (default):
-1. If **any** input is on GPU → all inputs moved to GPU, use CuTensor
-2. If all on CPU, N-ary (>2 inputs) → `strided_opteinsum` for contraction order optimization, then pairwise dispatch via steps 3–5
-3. If `T: Scalar` (f32/f64/Complex) → Faer (default) or Blas (if configured)
-4. If `T: ScalarBase` and a `BgemmBackend<T>` is registered → `einsum2_with_backend_into`
-5. Fallback: Naive (`einsum2_naive_into` with identity mappers)
-
-**Global default configuration**:
-```rust
-// Set global default (thread-safe)
-t4a::set_default_einsum_backend(EinsumBackend::Blas);
 
 // Per-call override
-einsum(&[&a, &b], &[&la, &lb], &lc, EinsumBackend::Faer)?;
+pub fn einsum_with<T: ScalarBase>(
+    inputs: &[&Tensor<T>],
+    input_labels: &[&[i32]],
+    output_labels: &[i32],
+    backend: &BackendConfig,
+) -> Result<Tensor<T>>;
 ```
-
-**cuTENSOR integration** (GPU einsum):
-- cuTENSOR natively supports N-ary tensor contraction with optimization
-- Accepts strided tensors (no need to make contiguous first)
-- Supports f32, f64, Complex32, Complex64
-- Contraction path optimization built-in (like opt-einsum)
-- Feature-gated: `cuda` feature in t4a-buffer propagates to t4a-tensor
-
-**CPU GEMM backends** (compiled simultaneously via strided-einsum2):
-- `faer` (default): pure-Rust GEMM via faer
-- `cblas-inject` (default): injected CBLAS (e.g., from Julia's OpenBLAS)
-- `blas` (optional): system CBLAS — mutually exclusive with `cblas-inject`
-- Custom: implement `BgemmBackend<T>` + `BackendConfig` for any `T: ScalarBase`
-
-These features propagate through t4a-tensor's Cargo.toml.
-
-**Source files to create**:
-- `t4a-scalar/src/lib.rs` — trait hierarchy
-- `t4a-scalar/src/impls.rs` — f32, f64, Complex impls
-- `t4a-buffer/src/lib.rs` — DataBuffer<T>, CpuBuffer<T>, GpuBuffer<T>
-- `t4a-tensor/src/lib.rs` — Tensor<T>, view ops, bridge to strided-rs
-- `t4a-tensor/src/ops.rs` — element-wise ops via strided-kernel
-- `t4a-tensor/src/einsum.rs` — contraction wrappers (Scalar tier + ScalarBase tier)
-- `t4a-tensor/src/contiguous.rs` — contiguous/col-major materialization
-
-**Existing code to reuse**:
-- `strided-rs/strided-traits/src/scalar.rs` — ScalarBase definition
-- `strided-rs/strided-view/src/view.rs` — StridedView type (bridge target)
-- `strided-rs/strided-kernel/src/lib.rs` — map_into, zip_map2_into, reduce, sum, dot
-- `strided-rs/strided-einsum2/src/lib.rs:183` — einsum2_into
-- `strided-rs/strided-einsum2/src/lib.rs:287` — einsum2_naive_into
-- `strided-rs/strided-opteinsum/src/lib.rs:46` — einsum (N-ary)
-
-**Verification**:
-- `cargo test` passes all unit tests
-- Benchmark: zero-copy permute chain (5 permutes) vs data-copying permute
-- Benchmark: einsum via strided-rs vs current tensor4all-rs mdarray-einsum
-- Test: tropical semiring contraction via einsum_naive
 
 ---
 
@@ -318,6 +518,17 @@ All decomposition functions:
 **N-D tensor decomposition**: specify left_dims for "row" side, reshape to 2D, decompose, reshape back.
 
 **Trait bound**: `T: Scalar + faer::ComplexField` (enforced here, not in t4a-scalar/tensor).
+
+**Dispatch via t4a-backend**: queries `BackendConfig::linalg()` to select
+CPU (faer) or GPU (cuSOLVER). Same two-tier pattern:
+
+```rust
+// Simple API — uses global default
+pub fn svd<T: Scalar>(tensor: &Tensor<T>) -> Result<SvdResult<T>>;
+
+// Per-call override
+pub fn svd_with<T: Scalar>(tensor: &Tensor<T>, backend: &BackendConfig) -> Result<SvdResult<T>>;
+```
 
 **Source files to create**:
 - `t4a-linalg/src/lib.rs` — public API
@@ -366,8 +577,6 @@ pub struct DualTensor<T: Scalar> {
 
 ### Contraction VJP/JVP
 
-Port from ndtensors-rs (`crates/ndtensors/src/contract/naive.rs:189-400`):
-
 ```rust
 // VJP: grad_A = contract(grad_C, labels_gc, B, labels_b_vjp)
 //      grad_B = contract(A, labels_a_vjp, grad_C, labels_gc)
@@ -384,21 +593,10 @@ pub fn dual_contract<T: Scalar>(
 ) -> Result<DualTensor<T>>;
 ```
 
-**Source files to create**:
-- `t4a-autograd/src/lib.rs`
-- `t4a-autograd/src/graph.rs` — ComputationGraph, Node, NodeId
-- `t4a-autograd/src/tracked.rs` — TrackedTensor
-- `t4a-autograd/src/dual.rs` — DualTensor
-- `t4a-autograd/src/backward.rs` — backward pass (topological sort + gradient propagation)
-- `t4a-autograd/src/ops/contract.rs` — contract_vjp, dual_contract
-- `t4a-autograd/src/gradients.rs` — Gradients container
-
 **Existing code to reuse**:
-- `ndtensors-rs/crates/ndtensors/src/autodiff/backward.rs` — backward pass logic
-- `ndtensors-rs/crates/ndtensors/src/autodiff/graph.rs` — ComputationGraph, GradFn
-- `ndtensors-rs/crates/ndtensors/src/autodiff/tensor.rs` — TrackedTensor
-- `ndtensors-rs/crates/ndtensors/src/autodiff/ops/dual_contract.rs` — JVP for contraction
+- `ndtensors-rs/crates/ndtensors/src/autodiff/` — backward pass, graph, TrackedTensor
 - `ndtensors-rs/crates/ndtensors/src/contract/naive.rs:222` — contract_vjp
+- `ndtensors-rs/crates/ndtensors/src/autodiff/ops/dual_contract.rs` — JVP
 
 **Verification**:
 - Numerical gradient checks (finite difference vs AD)
@@ -453,41 +651,17 @@ t4a_tensor_f64* t4a_contract_jvp_f64(
 // Duplicate for _c64 variants
 ```
 
-**Julia side** (in Tensor4all.jl):
-```julia
-function ChainRules.rrule(::typeof(contract), A, labels_a, B, labels_b)
-    C = contract(A, labels_a, B, labels_b)
-    function contract_pullback(ΔC)
-        grad_a, grad_b = ccall((:t4a_contract_vjp_f64, libt4a), ...)
-        return NoTangent(), grad_a, NoTangent(), grad_b, NoTangent()
-    end
-    return C, contract_pullback
-end
-
-function ChainRules.frule((_, ΔA, _, ΔB, _), ::typeof(contract), A, labels_a, B, labels_b)
-    C = contract(A, labels_a, B, labels_b)
-    ΔC = ccall((:t4a_contract_jvp_f64, libt4a), ...)
-    return C, ΔC
-end
-```
-
 **Uses integer labels** (i32, matching ndtensors-rs convention: negative = contracted, positive = output), not string notation, for C API ergonomics.
-
-**Source files to create**:
-- `t4a-capi/src/lib.rs`
-- `t4a-capi/src/tensor.rs` — opaque tensor types + lifecycle
-- `t4a-capi/src/contract.rs` — contraction + VJP/JVP
-- `t4a-capi/src/linalg.rs` — SVD, QR exports
 
 **Existing code to reuse**:
 - `ndtensors-rs/crates/ndtensors-capi/src/lib.rs` — C API patterns
-- `tensor4all-rs/crates/tensor4all-capi/src/` — opaque type patterns, status codes, macros
+- `tensor4all-rs/crates/tensor4all-capi/src/` — opaque type patterns, status codes
 
 ---
 
 ## Phase 5: t4a-blocksparse + t4a-diag
 
-Higher-level tensor types built on top of `Tensor<T>` (which is the fundamental primitive).
+Higher-level tensor types built on top of `Tensor<T>`.
 
 ### t4a-diag
 
@@ -498,179 +672,146 @@ pub struct DiagTensor<T: ScalarBase> {
 }
 ```
 
-O(n) diagonal operations. Contraction with dense tensors avoids materializing the full matrix.
-
 ### t4a-blocksparse
 
-Follows the **ITensors.jl/NDTensors pattern**: all blocks stored in a **single contiguous `DataBuffer`** with block offset mapping.
+Follows the **ITensors.jl/NDTensors pattern**: all blocks in a **single contiguous `DataBuffer`** with block offset mapping.
 
 ```rust
 pub struct BlockSparseTensor<T: ScalarBase> {
-    buffer: DataBuffer<T>,                           // single flat buffer for ALL blocks
-    block_offsets: HashMap<BlockIndex, usize>,        // block → offset into buffer
-    block_sizes: HashMap<BlockIndex, Vec<usize>>,     // block → shape per block
-    full_sizes: Vec<usize>,                           // logical shape of the full tensor
+    buffer: DataBuffer<T>,
+    block_offsets: HashMap<BlockIndex, usize>,
+    block_sizes: HashMap<BlockIndex, Vec<usize>>,
+    full_sizes: Vec<usize>,
 }
 
-pub type BlockIndex = SmallVec<[usize; 4]>;  // N-dimensional block index
+pub type BlockIndex = SmallVec<[usize; 4]>;
 ```
 
-**Memory layout** (matching ITensors.jl `BlockSparse{ElT,VecT,N}`):
-```
-buffer: [block_1_elems..., block_2_elems..., block_3_elems...]
-         ↑ offset=0        ↑ offset=n₁       ↑ offset=n₁+n₂
-
-block_offsets:
-  (0,1) → 0
-  (1,0) → n₁
-  (2,1) → n₁+n₂
-```
-
-Each block is accessed as a `Tensor<T>` view into the shared buffer (zero-copy):
-```rust
-impl<T: ScalarBase> BlockSparseTensor<T> {
-    pub fn block_view(&self, index: &BlockIndex) -> Option<Tensor<T>>;
-}
-```
-
-**Advantages of single-buffer layout**:
-- Cache locality for sequential block access
-- Single allocation / deallocation
-- Compatible with GPU: entire buffer can reside in `GpuBuffer<T>`
-- New blocks appended without reorganizing existing data
-
-**Contraction**: block-wise GEMM using block sparsity structure (only non-zero block pairs contracted).
+Each block accessed as a `Tensor<T>` view into the shared buffer (zero-copy).
 
 **Existing code to reuse**:
 - `ndtensors-rs/crates/ndtensors/src/operations/blocksparse.rs`
-- `ndtensors-rs/crates/ndtensors/src/operations/diag.rs`
 - `ndtensors-rs/crates/ndtensors/src/contract/blocksparse.rs`
-- ITensors.jl reference: `~/git/ITensors.jl/NDTensors/src/blocksparse/blocksparse.jl`
 
 ---
 
 ## Phase 6: burn-t4a (Optional Burn Backend for NN)
 
-**Only needed when**: Users want to use Burn's NN modules (conv, attention, optimizers) with t4a tensors.
-
-### Architecture
+**Only needed when**: Users want Burn's NN modules (conv, attention, optimizers) with t4a tensors.
 
 ```rust
-// burn-t4a/src/lib.rs
-
-/// Dynamic-dtype tensor enum (follows burn-ndarray's NdArrayTensor pattern)
 #[derive(Debug, Clone)]
 pub enum T4aBurnTensor {
     F64(t4a_tensor::Tensor<f64>),
     F32(t4a_tensor::Tensor<f32>),
     I64(t4a_tensor::Tensor<i64>),
     I32(t4a_tensor::Tensor<i32>),
-    // ... other dtypes
-    Bool(t4a_tensor::Tensor<bool>),  // bool does NOT impl ScalarBase; needs special handling
+    Bool(t4a_tensor::Tensor<bool>),
 }
 
-#[derive(Clone, Copy, Default, Debug)]
-pub struct BurnT4a;
-
-impl Backend for BurnT4a {
-    type Device = T4aDevice;
-    type FloatTensorPrimitive = T4aBurnTensor;
-    type FloatElem = f64;
-    type IntTensorPrimitive = T4aBurnTensor;
-    type IntElem = i64;
-    type BoolTensorPrimitive = T4aBurnTensor;
-    type BoolElem = bool;
-    // ...
-}
+impl Backend for BurnT4a { ... }
 ```
-
-### FloatTensorOps mapping
 
 | Burn Method | t4a Implementation |
 |---|---|
-| `float_add` | `strided_kernel::zip_map2_into(dst, a, b, \|a,b\| a+b)` |
-| `float_matmul` | `strided_einsum2::einsum2_into` |
-| `float_exp/sin/cos/...` | `strided_kernel::map_into(dst, src, f64::exp)` |
-| `float_reshape` | Metadata-only (zero-copy) |
-| `float_permute` | Metadata-only (zero-copy) |
-| `float_slice` | Adjust offset+strides (zero-copy) |
-| `float_sum` | `strided_kernel::reduce` |
-| `float_sum_dim` | `strided_kernel::reduce_axis` |
+| `float_add` | `t4a_mapreduce::zip_map2_into` |
+| `float_matmul` | `t4a_omeinsum::einsum2_into` |
+| `float_exp/sin/...` | `t4a_mapreduce::map_into` |
+| `float_reshape/permute/slice` | Metadata-only (zero-copy) |
+| `float_sum/sum_dim` | `t4a_mapreduce::reduce` / `reduce_axis` |
 
-### Autograd for NN: Use burn-autodiff
+For NN autograd: `Autodiff<BurnT4a>` (Burn's decorator pattern).
+For tensor network AD: Use t4a-autograd directly.
 
-When NN autograd is needed: `Autodiff<BurnT4a>` (Burn's decorator pattern).
-This wraps BurnT4a's FloatTensorPrimitive with graph nodes automatically.
+---
 
-For tensor network AD (contraction VJP/JVP): Use t4a-autograd directly (not through Burn).
+## GPU Strategy
 
-### burn-complex (Complex support in Burn)
+### Design Principle
 
-Per `github.com/shinaoka/burn/issues/1`:
-- Decorator pattern with `ComplexTensorBackend` trait
-- `ComplexTensorOps` with ~60 methods
-- Interleaved memory layout `[re0, im0, re1, im1, ...]`
-- burn-t4a can provide optimized implementation using native `Tensor<Complex64>`
+All CPU/GPU dispatch is managed through **t4a-backend** (`BackendConfig`).
+Computation crates query `BackendConfig` and route accordingly:
 
-**Source files**:
-- `burn-t4a/src/backend.rs` — Backend impl
-- `burn-t4a/src/tensor.rs` — T4aBurnTensor enum + TensorMetadata
-- `burn-t4a/src/ops/float.rs` — FloatTensorOps (~80 methods)
-- `burn-t4a/src/ops/int.rs` — IntTensorOps (~40 methods)
-- `burn-t4a/src/ops/bool.rs` — BoolTensorOps (~30 methods)
-- `burn-t4a/src/ops/modules.rs` — ModuleOps (conv, pool, attention)
-- `burn-complex/src/lib.rs` — Complex decorator
+| Crate | BackendConfig field | CPU | GPU |
+|-------|---------------------|-----|-----|
+| t4a-mapreduce | `mapreduce()` | Cache-optimized kernels | CubeCL custom kernels |
+| t4a-omeinsum | `gemm()` + `device()` | faer, BLAS, naive, tropical-gemm | cuTENSOR |
+| t4a-linalg | `linalg()` | faer | cuSOLVER |
+
+Users control dispatch via global default or per-call `_with` variants — not
+by feature flags or buffer introspection at the call site.
+
+### CubeCL for map/reduce/broadcast
+
+[CubeCL](https://github.com/tracel-ai/cubecl) compiles Rust kernel code to CUDA/WebGPU. This enables GPU map/reduce/broadcast without hand-written CUDA:
+
+```rust
+// Example: element-wise map kernel (CubeCL)
+#[cube(launch)]
+fn map_kernel<T: Numeric>(input: &Tensor<T>, output: &mut Tensor<T>) {
+    let idx = ABSOLUTE_POS;
+    output[idx] = some_op(input[idx]);
+}
+```
+
+Feature-gated: `cubecl` feature in t4a-mapreduce.
+
+### cuTENSOR for einsum
+
+- Native N-ary tensor contraction with optimization
+- Accepts strided tensors (no need to make contiguous)
+- Supports f32, f64, Complex32, Complex64
+- Feature-gated: `cuda` feature in t4a-omeinsum
+
+### GPU buffer (t4a-buffer)
+
+```toml
+# t4a-buffer/Cargo.toml
+[features]
+default = []
+cuda = ["dep:cudarc"]
+```
+
+GPU tensors participate in the same computation graph as CPU tensors (t4a-autograd).
 
 ---
 
 ## Custom Scalar Type Support
 
-### Two-Tier Architecture
+### Three-Tier Dispatch
 
-| Tier | Trait Bound | GEMM | Einsum Function | Types |
-|---|---|---|---|---|
-| Generic | `ScalarBase` | No | `einsum2_naive_into` | Tropical, log-semiring, boolean, custom |
-| Optimized | `Scalar` + backend | Yes (faer/BLAS) | `einsum2_into` | f32, f64, Complex32, Complex64 |
+| Tier | Trait Bound | Backend | Types |
+|---|---|---|---|
+| Optimized (tensordot) | `TensordotBackend<T>` | Direct contraction | GPU (cuTENSOR), custom accelerators |
+| Optimized (GEMM) | `BgemmBackend<T>` | permute→reshape→bgemm | f32, f64, Complex (faer), custom GEMM |
+| Generic | `ScalarBase` only | naive loop | Integers, tropical, boolean, any custom type |
 
-### Custom GEMM Backend
+Users extend the system by implementing traits at the appropriate level:
+- **Simple custom type**: implement `ScalarBase` → naive loop works automatically
+- **Custom type with fast GEMM**: also implement `BgemmBackend<T>`
+- **Custom accelerator**: implement `TensordotBackend<T>` for full control
 
-strided-einsum2 already supports this via cargo features:
-```toml
-[features]
-default = ["faer"]
-faer = ["dep:faer"]
-blas = ["dep:cblas-sys"]
-blas-inject = ["dep:cblas-inject"]  # Julia's OpenBLAS via runtime injection
-```
+### Algebra-Aware Dispatch
 
-To add a NEW custom GEMM backend:
-1. Implement `BgemmBackend` trait in strided-einsum2
-2. Add new feature flag
-3. t4a-tensor propagates the feature
-
-For truly custom scalar types (no GEMM at all):
-```rust
-// User code
-use t4a_tensor::Tensor;
-use t4a_tensor::einsum_naive;
-
-let a = Tensor::<Tropical>::from_vec(data_a, &[2, 3]);
-let b = Tensor::<Tropical>::from_vec(data_b, &[3, 4]);
-let c = einsum_naive("ij,jk->ik", &[&a, &b])?;
-```
+t4a-omeinsum dispatches backend based on algebra and scalar type:
+- `Standard<f64>` / `Standard<f32>` / `Standard<Complex64>` → faer `BgemmBackend`
+- `Standard<i32>` / `Standard<i64>` / `Standard<u32>` / `Standard<u64>` → naive loop
+- `MaxPlus<f64>` → tropical-gemm `BgemmBackend` (future)
+- GPU tensors → cuTENSOR `TensordotBackend` (future)
+- Custom algebras → user-provided `BgemmBackend` or `TensordotBackend`
 
 ---
 
 ## Migration Strategy (tensor4all-rs)
 
-### Phase 6b: Replace tensor4all-rs's tensorbackend with t4a
+### Replace tensor4all-rs's tensorbackend with t4a
 
 1. Replace `tensor4all-tensorbackend::Storage` with t4a types (`Tensor<T>`, `DiagTensor<T>`, `BlockSparseTensor<T>`)
-2. Replace `DenseStorage<T>` (mdarray-based) with `Tensor<T>` (strided-view over `DataBuffer`)
+2. Replace `DenseStorage<T>` (mdarray-based) with `Tensor<T>`
 3. Adapt `TensorLike` trait to use t4a Tensor
 4. Remove mdarray dependency from tensor4all-rs core
 
-This phase is OUT OF SCOPE for this plan — it happens after t4a is stable.
+This happens **after t4a core is stable**.
 
 ---
 
@@ -678,26 +819,35 @@ This phase is OUT OF SCOPE for this plan — it happens after t4a is stable.
 
 ### After Phase 1 (core):
 ```bash
-cd t4a && cargo test -p t4a-scalar -p t4a-buffer -p t4a-tensor
+cd t4a-rs && cargo test -p t4a-scalar -p t4a-view -p t4a-buffer -p t4a-algebra -p t4a-backend -p t4a-mapreduce -p t4a-omeinsum -p t4a-tensor
 ```
 - Unit tests for all Tensor operations (permute, slice, reshape, etc.)
 - Zero-copy verification: assert same Arc pointer after view ops
-- Tropical semiring contraction test
-- Benchmark: strided-rs einsum vs mdarray-einsum
+- Tropical semiring contraction test (t4a-algebra + naive backend)
+- Integer type einsum test (i32, i64 via naive backend)
+- **Custom type extensibility tests** (CRITICAL for maintaining system extensibility):
+  - Define a test-only custom scalar type (e.g., `ModInt<P>` — integers mod P)
+    that implements only `ScalarBase` → verify einsum works via naive fallback
+  - Define a test-only custom `BgemmBackend<ModInt<P>>` → verify einsum uses
+    the custom GEMM path (permute→reshape→bgemm)
+  - Define a test-only custom `TensordotBackend<ModInt<P>>` → verify einsum
+    bypasses the GEMM path and calls tensordot directly
+  - These tests guarantee that downstream users can extend the system without
+    touching t4a internals
+- Benchmark: t4a einsum vs current tensor4all-rs mdarray-einsum
 
 ### After Phase 2 (linalg):
 ```bash
 cargo test -p t4a-linalg
 ```
 - Cross-validate SVD/QR results against ndtensors-rs
-- Verify truncated SVD rank selection
 - Complex SVD test
 
 ### After Phase 3 (autograd):
 ```bash
 cargo test -p t4a-autograd
 ```
-- Numerical gradient checks (finite diff vs reverse-mode AD)
+- Numerical gradient checks (finite difference vs reverse-mode AD)
 - Forward-mode vs reverse-mode consistency for contraction
 - Complex-valued gradient test (Wirtinger calculus)
 
@@ -710,41 +860,28 @@ julia -e 'using Tensor4all; Tensor4all.test_chainrules()'
 - Round-trip test: Julia → C API → Rust → C API → Julia
 - ChainRules.jl integration test with Zygote.jl
 
-### After Phase 6 (burn-t4a):
-```bash
-cargo test -p burn-t4a
-# Run Burn's backend test suite
-cargo test -p burn-backend-tests --features t4a
-```
-- Pass Burn's standard backend test suite
-- Autodiff<BurnT4a> works for simple NN model
-
 ---
 
 ## Key Files Reference
 
-| Component | Source | Purpose |
+| Component | Source | Destination |
 |---|---|---|
-| ScalarBase trait | `strided-rs/strided-traits/src/scalar.rs` | Re-export as t4a-scalar::ScalarBase |
-| ElementOpApply | `strided-rs/strided-traits/src/element_op.rs` | conj/transpose/adjoint (opt-in) |
-| ElementOp\<T\> | `strided-rs/strided-traits/src/element_op.rs` | Generic element op (Identity for any Copy) |
-| BgemmBackend\<T\> | `strided-rs/strided-einsum2/src/backend.rs` | Pluggable GEMM (no bounds on T) |
-| BackendConfig | `strided-rs/strided-einsum2/src/backend.rs` | Backend capabilities marker |
-| StridedView | `strided-rs/strided-view/src/view.rs` | Bridge target for Tensor<T> |
-| Kernel ops | `strided-rs/strided-kernel/src/lib.rs` | map_into, reduce, sum, dot |
-| einsum2_into | `strided-rs/strided-einsum2/src/lib.rs` | GEMM-accelerated (T: Scalar) |
-| einsum2_naive_into | `strided-rs/strided-einsum2/src/lib.rs` | Loop-based (T: ScalarBase, custom mappers) |
-| einsum2_with_backend_into | `strided-rs/strided-einsum2/src/lib.rs` | Pluggable GEMM (T: ScalarBase + BgemmBackend) |
-| opteinsum | `strided-rs/strided-opteinsum/src/lib.rs` | N-ary einsum with contraction order optimization |
-| faer bridge | `ndtensors-rs/crates/ndtensors/src/backend/faer_interop.rs` | Tensor↔faer conversion |
-| contract_vjp | `ndtensors-rs/crates/ndtensors/src/contract/naive.rs:222` | VJP implementation |
-| dual_contract | `ndtensors-rs/crates/ndtensors/src/autodiff/ops/dual_contract.rs:55` | JVP implementation |
-| TrackedTensor | `ndtensors-rs/crates/ndtensors/src/autodiff/tensor.rs` | Reverse-mode AD tensor |
-| backward pass | `ndtensors-rs/crates/ndtensors/src/autodiff/backward.rs:45` | Topological sort + grad propagation |
-| C API patterns | `tensor4all-rs/crates/tensor4all-capi/src/` | Opaque types, status codes |
-| Burn Backend | `~/git/burn/crates/burn-backend/src/backend/base.rs` | Backend + AutodiffBackend traits |
-| NdArrayTensor | `~/git/burn/crates/burn-ndarray/src/tensor.rs:23` | Reference enum pattern |
-| Burn complex | `github.com/shinaoka/burn/issues/1` | ComplexTensorBackend design |
+| ScalarBase trait | `strided-rs/strided-traits/src/scalar.rs` | t4a-scalar |
+| ElementOp | `strided-rs/strided-traits/src/element_op.rs` | t4a-scalar |
+| StridedArrayView | `strided-rs/strided-view/src/view.rs` | t4a-view |
+| map/reduce kernels | `strided-rs/strided-kernel/src/` | t4a-mapreduce |
+| einsum2_into | `strided-rs/strided-einsum2/src/lib.rs` | t4a-omeinsum |
+| einsum2_naive_into | `strided-rs/strided-einsum2/src/lib.rs` | t4a-omeinsum |
+| BgemmBackend | `strided-rs/strided-einsum2/src/backend.rs` | t4a-omeinsum |
+| opteinsum | `strided-rs/strided-opteinsum/src/lib.rs` | t4a-omeinsum |
+| Algebra traits | `omeinsum-rs/src/` | t4a-algebra |
+| BackendConfig | New | t4a-backend |
+| tropical-gemm | `omeinsum-rs` (dependency) | t4a-omeinsum |
+| faer bridge | `ndtensors-rs/.../faer_interop.rs` | t4a-linalg |
+| contract_vjp | `ndtensors-rs/.../contract/naive.rs` | t4a-autograd |
+| TrackedTensor | `ndtensors-rs/.../autodiff/tensor.rs` | t4a-autograd |
+| backward pass | `ndtensors-rs/.../autodiff/backward.rs` | t4a-autograd |
+| C API patterns | `tensor4all-rs/crates/tensor4all-capi/src/` | t4a-capi |
 
 ---
 
@@ -754,255 +891,82 @@ cargo test -p burn-backend-tests --features t4a
 
 Complex SVD, QR, eigen decompositions require non-trivial backward rules (Wirtinger calculus, structured perturbation theory). Key references:
 
-- **[BackwardsLinalg.jl](https://github.com/GiggleLiu/BackwardsLinalg.jl)**: Reference implementations of backward rules for SVD, QR, Cholesky, eigen, etc. in the complex case. Includes handling of degenerate singular values and correct conjugation patterns.
-- **[MatrixFactorizations.jl](https://github.com/JuliaLinearAlgebra/MatrixFactorizations.jl)**: Extended matrix factorizations (QL, positive QR, etc.) with ChainRules.jl integration. Provides frule/rrule implementations that serve as correctness references.
-
-These should be consulted when implementing VJP/JVP for t4a-linalg operations (Phase 2 + Phase 3 intersection), especially for:
-- SVD backward with degenerate/near-degenerate singular values
-- QR backward for complex matrices (sign conventions differ from real case)
-- Eigendecomposition backward with repeated eigenvalues
-- Truncated SVD gradient (requires careful handling of discarded singular vectors)
-
-### GEMM-capable custom scalar types
-
-**Already supported** in strided-rs via `einsum2_with_backend_into` and `BgemmBackend<T>` trait. The three-tier architecture is:
-
-| Tier | Trait Bound | GEMM | Einsum Function | Types |
-|---|---|---|---|---|
-| Generic | `ScalarBase` | No | `einsum2_naive_into` | Tropical, log-semiring, boolean |
-| Custom GEMM | `ScalarBase` + `BgemmBackend<T>` | User-provided | `einsum2_with_backend_into` | Interval, dual, multiprecision |
-| Optimized | `Scalar` (feature-dependent) | faer/BLAS | `einsum2_into` | f32, f64, Complex32, Complex64 |
-
-Users implement `BgemmBackend<T>` + `BackendConfig` for their custom type (no trait bounds on T required by the trait itself). Examples:
-- **Interval arithmetic** (`Interval<f64>`): GEMM is mathematically valid, just needs custom implementation
-- **AD scalars** (dual numbers `Dual<f64>`): element-wise GEMM is correct
-- **Multiprecision** (`BigFloat`): GEMM via naive loops or specialized libraries
-
-t4a-tensor exposes this through the unified `einsum()` entry point (see dispatch logic in Phase 1).
+- **[BackwardsLinalg.jl](https://github.com/GiggleLiu/BackwardsLinalg.jl)**: Reference implementations for SVD, QR, Cholesky, eigen backward rules in the complex case.
+- **[MatrixFactorizations.jl](https://github.com/JuliaLinearAlgebra/MatrixFactorizations.jl)**: Extended factorizations with ChainRules.jl integration.
 
 ### JAX / PyTorch integration via C-FFI
 
-t4a-capi should support integration with JAX and PyTorch, enabling Rust-accelerated tensor contraction with autodiff support in Python ML frameworks. **This pattern is already implemented in ndtensors-rs** and should be ported to t4a.
-
-#### Existing implementation in ndtensors-rs
-
-**Architecture** (no PyO3 — pure ctypes over C API):
+t4a-capi should support integration with JAX and PyTorch via ctypes (no PyO3). Pattern already implemented in ndtensors-rs:
 
 ```
-JAX / PyTorch
-    ↓
-Python wrapper (jax_ops.py / torch_ops.py)
-    ↓
-jax.pure_callback / torch.autograd.Function
-    ↓
-ctypes FFI (_lib.py)
-    ↓
-C API (ndtensors-capi)
-    ↓
-Rust (ndtensors)
+JAX / PyTorch → Python wrapper → ctypes FFI → t4a-capi → Rust
 ```
 
-**JAX integration** (`ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/jax_ops.py`):
-- `jax.custom_vjp` with `nondiff_argnums` for labels
-- Forward: `jax.pure_callback()` → ctypes → Rust `contract()`
-- Backward: `jax.pure_callback()` → ctypes → Rust `contract_vjp()`
-- JIT-compatible via `pure_callback` with `ShapeDtypeStruct`
+- JAX: `jax.custom_vjp` + `jax.pure_callback()`
+- PyTorch: `torch.autograd.Function` with custom forward/backward
 
-**PyTorch integration** (`ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/torch_ops.py`):
-- `torch.autograd.Function` subclass with custom forward/backward
-- Forward: `ctx.save_for_backward()` → ctypes → Rust `contract()`
-- Backward: ctypes → Rust `contract_vjp()` → gradients on same device
+**Existing code to port**: `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/`
 
-**Key design decisions**:
-- ctypes (not PyO3) for zero build dependency on Python
-- `cdylib` crate type for shared library
-- Opaque pointer wrapping `Box<Tensor<f64>>`, Python `__del__` calls release
-- `catch_unwind()` at FFI boundary for panic safety
-- Status codes for error propagation (not exceptions)
-- numpy as data interchange format (column-major via `to_numpy()` / `from_numpy()`)
+### Insights from ITensor Julia ecosystem
 
-#### t4a-capi plan
-
-Port the Python wrapper layer to use t4a-capi instead of ndtensors-capi:
-
-**Files to create**:
-- `python/t4a/src/t4a/_lib.py` — ctypes declarations for t4a-capi
-- `python/t4a/src/t4a/tensor.py` — TensorF64 / TensorC64 wrapper
-- `python/t4a/src/t4a/ops.py` — contract, contract_vjp, contract_jvp
-- `python/t4a/src/t4a/jax_ops.py` — `jax.custom_vjp` wrapper
-- `python/t4a/src/t4a/torch_ops.py` — `torch.autograd.Function` wrapper
-- `python/t4a/pyproject.toml` — hatchling build with custom Rust compile hook
-
-**Existing code to reuse** (direct port):
-- `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/jax_ops.py`
-- `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/torch_ops.py`
-- `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/_lib.py`
-- `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/tensor.py`
-- `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/ops.py`
-- `ndtensors-rs/python/ndtensors_rs/src/ndtensors_rs/_status.py`
-- `ndtensors-rs/python/ndtensors_rs/hatch_build.py`
-
-**Extensions beyond ndtensors-rs**:
-- Complex tensor support (TensorC64) for JAX/PyTorch
-- JVP support for JAX (`jax.custom_jvp`) via `t4a_contract_jvp_f64`
-- SVD/QR with VJP/JVP for differentiable linear algebra from Python
-
-### GPU array support via cudarc
-
-t4a-tensor should support GPU (CUDA) device arrays, enabling GEMM and SVD on GPU. This extends the scope beyond CPU-only.
-
-#### Motivation
-
-- Tensor network contraction (einsum) and linear algebra (SVD, QR) are the dominant cost in TCI/Quantics algorithms
-- GPU acceleration for these operations provides significant speedup for large tensors
-- cudarc is already used in the tensor4all ecosystem (`extern/scirs2`, version 0.18, CUDA 12.0)
-- Burn's CUDA backend also uses cudarc, confirming its viability
-
-#### Design: GPU buffer variant
-
-`DataBuffer<T>` (defined in t4a-buffer) already includes `Cpu` and `Gpu` variants (see Phase 1). The `cuda` feature gate enables the `Gpu` variant with `cudarc::driver::CudaSlice<T>`.
-
-**Tensor<T>** remains the same (sizes + strides + offset over DataBuffer), but operations dispatch based on buffer backend. BlockSparseTensor also benefits: its single `DataBuffer` can reside on GPU.
-
-#### GPU operations via cudarc
-
-| Operation | CUDA Library | cudarc Module |
-|---|---|---|
-| **Einsum (contraction)** | **cuTENSOR** | `cudarc::cutensor` |
-| SVD | cuSOLVER (cusolverDn) | `cudarc::cusolver` |
-| QR | cuSOLVER (cusolverDn) | `cudarc::cusolver` |
-| Element-wise ops | Custom CUDA kernels | `cudarc::driver` + NVRTC |
-
-**Note**: GPU einsum uses cuTENSOR (not cuBLAS GEMM). cuTENSOR provides native N-ary tensor contraction with built-in contraction path optimization, strided tensor support, and complex dtype support — making it the natural GPU counterpart to strided-einsum2 + strided-opteinsum on CPU. See the unified einsum dispatch table in Phase 1.
-
-#### Memory management
-
-- **RAII**: `CudaSlice<T>` auto-frees on drop
-- **Host↔Device transfer**: `htod_sync_copy()` / `dtoh_sync_copy()` for data movement
-- **Stream-ordered**: Asynchronous operations via `CudaStream`
-- **COW**: Same `Arc`-based COW pattern as CPU storage; `Arc::make_mut` triggers device-side copy
-
-#### Feature gating
-
-```toml
-# t4a-buffer/Cargo.toml
-[features]
-default = []
-cuda = ["dep:cudarc"]
-
-[dependencies]
-cudarc = { version = "0.18", optional = true, features = ["cuda-12000", "driver", "cublas", "cusolver"] }
-
-[target.'cfg(all(target_arch = "x86_64", any(target_os = "linux", target_os = "windows")))'.dependencies]
-cudarc = { version = "0.18", optional = true }
-```
-
-Platform-conditional (x86_64 Linux/Windows only), matching the pattern in `extern/scirs2`.
-
-#### Integration with autograd
-
-GPU tensors participate in the same computation graph as CPU tensors:
-- `TrackedTensor<T>` wraps `Tensor<T>` regardless of storage location
-- VJP/JVP operations dispatch to GPU when inputs are on GPU
-- Gradient tensors are allocated on the same device as the primal tensors
-- `backward()` traverses the graph; each `GradFn` operates on the device of its inputs
-
-#### Phasing
-
-This is a follow-up to the core CPU implementation (Phases 1–4). Suggested order:
-1. GPU buffer + host↔device transfer (t4a-buffer `cuda` feature)
-2. GEMM on GPU via cuBLAS (t4a-tensor einsum GPU path)
-3. SVD/QR on GPU via cuSOLVER (t4a-linalg GPU path)
-4. Autograd with GPU tensors (t4a-autograd, no new graph logic needed)
-5. Custom CUDA kernels for element-wise ops (NVRTC compilation)
-
-### Insights from ITensor Julia ecosystem (TensorAlgebra.jl + sub-packages)
-
-Analysis of the modern ITensor Julia ecosystem (TensorAlgebra.jl, SparseArraysBase.jl, BlockSparseArrays.jl, GradedArrays.jl, DiagonalArrays.jl, FusionTensors.jl, MapBroadcast.jl, NestedPermutedDimsArrays.jl) yielded several design insights for t4a.
-
-#### Comparison: t4a vs ITensor ecosystem
-
-| Aspect | ITensor Julia | t4a (Rust) | Notes |
+| Aspect | ITensor Julia | t4a | Notes |
 |---|---|---|---|
-| **Sparse storage** | DOK-of-Arrays (each block is independent Array) | Single contiguous DataBuffer + offset map | t4a's single buffer is GPU-friendly; ITensor's DOK is more flexible for dynamic block insertion |
-| **Diagonal** | DiagonalArrays.jl: N-dim diagonal with stored/unstored interface | DiagTensor: 1D Tensor of diagonal elements | Functionally equivalent |
-| **Contraction** | Matricize → GEMM → unmatricize (TensorAlgebra.jl) | einsum-based dispatch (strided-einsum2) | Different strategy; both valid |
-| **Axis fusion** | FusionStyle dispatch (ReshapeFusion → BlockReshapeFusion → SectorFusion) | Not yet designed | Critical for future quantum number tensor support |
-| **Lazy evaluation** | MapBroadcast.jl (Mapped, Summed, LinearCombination) | Not planned | Useful optimization, low priority |
-| **AD** | ChainRules.jl ecosystem (external) | t4a-autograd (built-in VJP/JVP) | t4a has tighter integration |
+| Sparse storage | DOK-of-Arrays | Single DataBuffer + offset map | t4a is GPU-friendly |
+| Axis fusion | FusionStyle dispatch | Not yet designed | Critical for quantum number tensors |
+| Lazy evaluation | MapBroadcast.jl | Not planned | Low priority |
 
-#### Key takeaways for t4a
+Key takeaways:
+1. **FusionStyle hierarchy**: Needed for quantum number tensors (future). Keep blocksparse API extensible.
+2. **SparseArraysBase pattern**: Consider `SparseArray` trait for t4a-blocksparse and t4a-diag.
+3. **GradedArrays.jl**: Future `GradedTensor<T, S: Sector>` for symmetry-exploiting tensor networks.
 
-1. **FusionStyle hierarchy for quantum number tensors**
+---
 
-   TensorAlgebra.jl uses a `FusionStyle` dispatch mechanism to control how tensor indices are fused (combined) during matricization:
-   - `ReshapeFusion`: Simple reshape for dense arrays (OneTo axes → product of lengths)
-   - `BlockReshapeFusion`: Block-structure-preserving fusion for block-sparse arrays (block ranges fused pairwise)
-   - `SectorFusion`: Full quantum number fusion with sector (quantum number) arithmetic and fusion rules
+## Relationship with mdarray / mdarray-linalg
 
-   **Implication for t4a**: When adding quantum number tensor support (e.g., for symmetry-preserving tensor networks), we will need an analogous dispatch mechanism. This could be:
-   - A `FusionStyle` trait in t4a-blocksparse with implementations per tensor type
-   - Or, since Rust has static dispatch via generics, a type-level strategy pattern on `BlockSparseTensor<T, FusionRule>`
+### Two complementary layers
 
-   This is **not needed for Phases 1–5** but should be kept in mind when designing the blocksparse API to avoid painting ourselves into a corner.
-
-2. **SparseArraysBase: stored/unstored dual interface**
-
-   SparseArraysBase.jl defines a clean abstraction for sparse arrays with 5 core functions:
-   - `isstored(a, I...)` — check if an element is explicitly stored
-   - `getstoredindex(a, I...)` — get value from storage (error if not stored)
-   - `getunstoredindex(a, I...)` — get background/default value
-   - `setstoredindex!(a, v, I...)` — update existing stored element
-   - `setunstoredindex!(a, v, I...)` — insert new stored element
-
-   Standard `getindex` dispatches: `isstored ? getstoredindex : getunstoredindex`.
-
-   **Implication for t4a**: Consider a `SparseArray` trait for t4a-blocksparse and t4a-diag:
-   ```rust
-   pub trait SparseArray<T> {
-       fn is_stored(&self, index: &[usize]) -> bool;
-       fn get_stored(&self, index: &[usize]) -> Option<&T>;
-       fn stored_indices(&self) -> impl Iterator<Item = Vec<usize>>;
-       fn stored_count(&self) -> usize;
-   }
-   ```
-   This would unify iteration and access patterns across DiagTensor and BlockSparseTensor.
-
-3. **ContractAlgorithm: pluggable contraction strategies**
-
-   TensorAlgebra.jl uses `contract(alg::ContractAlgorithm, ...)` to allow different contraction implementations (GEMM-based, einsum-based, specialized algorithms). This is analogous to t4a's einsum dispatch table but more general.
-
-   **Implication for t4a**: The current dispatch-by-trait approach (ScalarBase → Scalar → GPU) is sufficient for Phase 1. If we later need user-selectable algorithms (e.g., "use GEMM matricize for this contraction" vs "use direct einsum"), we can add an `Algorithm` parameter to `einsum()` without breaking changes.
-
-4. **TruncationDegenerate: SVD truncation with degenerate singular values**
-
-   TensorAlgebra.jl handles degenerate (repeated) singular values during truncated SVD by including/excluding the entire degenerate subspace rather than arbitrarily cutting. This is important for symmetry-preserving truncation.
-
-   **Implication for t4a-linalg**: `svd_truncated()` should have an option to handle degenerate singular values correctly. This aligns with the BackwardsLinalg.jl reference already noted for complex SVD differentiation.
-
-5. **GradedArrays.jl: quantum number grading**
-
-   GradedArrays.jl defines `SectorRange`/`GradedUnitRange` — axis ranges where each block is labeled by a quantum number (sector). Sector arithmetic governs which blocks exist (fusion rules). This is the foundation for symmetry-exploiting tensor networks.
-
-   **Implication for t4a**: Not needed in v1, but the Type Hierarchy should eventually extend to:
-   ```
-   t4a-tensor: Tensor<T>
-       ├── t4a-diag: DiagTensor<T>
-       ├── t4a-blocksparse: BlockSparseTensor<T>
-       └── t4a-graded: GradedTensor<T, S: Sector>  [future]
-               BlockSparseTensor with sector-labeled block indices
-               and fusion-rule-constrained block structure
-   ```
-
-#### ITensor ecosystem package reference
-
-| Package | Purpose | t4a Relevance |
+| | mdarray / mdarray-linalg | t4a-* |
 |---|---|---|
-| [TensorAlgebra.jl](https://github.com/ITensor/TensorAlgebra.jl) | FusionStyle, matricize/unmatricize, contract | Contraction strategy, FusionStyle pattern |
-| [SparseArraysBase.jl](https://github.com/ITensor/SparseArraysBase.jl) | stored/unstored interface, SparseArrayDOK | SparseArray trait inspiration |
-| [BlockSparseArrays.jl](https://github.com/ITensor/BlockSparseArrays.jl) | DOK-of-Arrays block sparse | Design comparison (vs single-buffer) |
-| [GradedArrays.jl](https://github.com/ITensor/GradedArrays.jl) | Quantum number graded axes | Future symmetry tensor support |
-| [DiagonalArrays.jl](https://github.com/ITensor/DiagonalArrays.jl) | N-dim diagonal with unstored | Confirms t4a-diag design |
-| [FusionTensors.jl](https://github.com/ITensor/FusionTensors.jl) | SU(2) / non-abelian fusion | Future: non-abelian symmetry |
-| [MapBroadcast.jl](https://github.com/ITensor/MapBroadcast.jl) | Lazy Mapped/Summed arrays | Low priority optimization |
-| [NestedPermutedDimsArrays.jl](https://github.com/ITensor/NestedPermutedDimsArrays.jl) | View-based nested permutation | Zero-copy view pattern (already in t4a) |
+| Role | **numpy equivalent** — general-purpose multidimensional array | **PyTorch equivalent** — high-performance tensor library |
+| Memory | Owned `Array<T, D>` | `DataBuffer<T>` (Arc-based COW, CPU/GPU) |
+| GPU | No | CubeCL, cuTENSOR, cuSOLVER |
+| Autodiff | No | t4a-autograd (VJP/JVP) |
+| Einsum | No | t4a-omeinsum (contraction tree optimization) |
+| Dispatch | Direct function calls | BackendConfig (runtime backend selection) |
+| Use cases | Lightweight, embeddable, general numerics | Tensor networks, ML, large-scale scientific computing |
+
+Both are needed. mdarray is a foundational array library (simple, no heavy
+dependencies); t4a builds a richer tensor ecosystem on top of different
+abstractions.
+
+### Why t4a does NOT go through mdarray-linalg
+
+t4a-linalg and mdarray-linalg are **parallel** (both call faer directly),
+not **serial** (t4a does not call mdarray-linalg):
+
+```
+faer (SVD, QR, eigen)
+    ↑                ↑
+t4a-linalg       mdarray-linalg-faer
+(Tensor<T>       (Array<T, D>
+ → MatRef)        → MatRef)
+```
+
+Reasons:
+1. **No conversion overhead**: `Tensor<T>` bridges to `faer::MatRef` directly
+   via raw pointer + strides. Going through mdarray would add unnecessary
+   `Tensor<T>` → `Array<T>` → faer → `Array<T>` → `Tensor<T>` round-trips.
+2. **GPU dispatch**: t4a-linalg dispatches to cuSOLVER via `BackendConfig`.
+   mdarray-linalg has no GPU concept.
+3. **BackendConfig integration**: Runtime backend selection is a t4a concern
+   that doesn't exist in mdarray-linalg's design.
+4. **Different memory models**: `DataBuffer<T>` (Arc, COW, CPU/GPU) vs
+   mdarray's owned `Vec<T>` storage. The bridge abstractions are different.
+
+### mdarray as a dependency
+
+strided-view (now t4a-view) currently depends on mdarray for the base `Array`
+type used in some constructors and tests. This dependency is lightweight and
+may be retained for interop convenience, but t4a's core data path
+(`DataBuffer<T>` → `Tensor<T>` → faer) does not go through mdarray.
