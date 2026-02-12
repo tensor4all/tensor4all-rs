@@ -261,8 +261,8 @@ Adopt omeinsum-rs's cuTENSOR integration pattern:
    plan caching.
 5. **TreeSA optimizer** — simulated annealing for better contraction orders
    (in addition to greedy).
-6. **Column-major + batch-last layout** — evaluate whether this is better
-   than batch-first for the unified system.
+6. **Column-major + batch-last layout** — both codebases now use batch-last
+   (strided-rs bug fixed in PR #87).
 
 ### Neither (new for t4a-omeinsum)
 
