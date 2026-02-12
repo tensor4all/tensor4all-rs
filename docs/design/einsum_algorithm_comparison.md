@@ -15,8 +15,9 @@ Six-step reshape-to-GEMM pipeline:
    the reduce when needed, so the conj flag passed to GEMM becomes `false`.
 
 2. **Permutation to canonical order** — operands are reordered to
-   `A[batch, lo, sum]`, `B[batch, sum, ro]`, `C[batch, lo, ro]` via
-   `Einsum2Plan::new()`.
+   ~~`A[batch, lo, sum]`, `B[batch, sum, ro]`, `C[batch, lo, ro]`~~
+   `A[lo, sum, batch]`, `B[sum, ro, batch]`, `C[lo, ro, batch]` via
+   `Einsum2Plan::new()`. (Fixed: batch-last for col-major contiguity.)
 
 3. **Element-wise fast path** — when sum, lo, and ro are all empty (pure
    Hadamard product), bypass GEMM entirely and call `zip_map2_into()`.
@@ -71,7 +72,7 @@ Simpler matricization pipeline:
 | Owned-input optimization | Transfers ownership → zero-copy | Always allocates new buffer | **Adopt** ownership transfer |
 | Backend requirements | Compile-time `BackendConfig` trait | Hardcoded | **Adopt** trait-based config |
 | Tropical dispatch | Not supported | `TypeId` runtime dispatch | **Adopt** omeinsum approach |
-| Batch placement | Batch-first `[batch, lo, sum]` (bug) | Batch-last `[left, contracted, batch]` | **Adopt** batch-last (col-major: batch-last = largest stride → each batch slice contiguous) |
+| Batch placement | ~~Batch-first `[batch, lo, sum]`~~ Fixed to batch-last | Batch-last `[left, contracted, batch]` | Both now batch-last |
 
 ## 2. N-ary Einsum (Contraction Tree)
 
