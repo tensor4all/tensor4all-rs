@@ -112,7 +112,7 @@ Simpler matricization pipeline:
 |--------|-----------|-------------|----------------------------|
 | Borrowed-view passthrough | Yes (Leaf → borrow) | No (Leaf → Arc clone) | **Adopt** borrowed views |
 | Permutation-only detection | Yes (metadata-only) | No | **Adopt** permutation detection |
-| Buffer pool | HashMap by size | None | **Adopt** buffer pool |
+| Buffer pool | HashMap by size | None | **Adopt** as opt-in option (trades memory for speed) |
 | Root writes into user output | Yes (`execute_nested_into`) | No | **Adopt** direct root write |
 | Contraction optimizer | omeco greedy | omeco greedy + TreeSA | **Adopt** both optimizers |
 | Unoptimized fallback | 3+ child → inline optimize | Left-to-right pairwise | Either acceptable |
@@ -239,7 +239,8 @@ Adopt omeinsum-rs's cuTENSOR integration pattern:
 3. **Trace pre-reduction** — sum trace axes before GEMM with integrated conj
    materialization.
 4. **Owned-input optimization** — transfer ownership to avoid allocation.
-5. **Buffer pool** — reuse intermediate buffers across pairwise contractions.
+5. **Buffer pool** (opt-in) — reuse intermediate buffers across pairwise
+    contractions. Opt-in because it increases peak memory usage.
 6. **Borrowed-view passthrough** — Leaf nodes return borrows, not clones.
 7. **Permutation-only detection** — metadata-only transformation in
    contraction tree.
