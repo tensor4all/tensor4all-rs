@@ -1954,6 +1954,7 @@ fn test_affine_mpo_matches_matrix() {
 #[test]
 fn test_affine_transform_matrix_properties() {
     // Test cases: (a_flat (row-major MxN), b (length M), m, n, bc)
+    #[allow(clippy::type_complexity)]
     let test_cases: Vec<(Vec<i64>, Vec<i64>, usize, usize, Vec<BoundaryCondition>)> = vec![
         // y = x (identity, 1D)
         (vec![1], vec![0], 1, 1, vec![BoundaryCondition::Periodic]),
