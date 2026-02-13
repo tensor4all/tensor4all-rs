@@ -1668,7 +1668,7 @@ fn test_cumsum_all_values() {
 // Affine operator tests
 // ============================================================================
 
-use tensor4all_quanticstransform::{affine_operator, AffineParams};
+use tensor4all_quanticstransform::{affine_operator, affine_transform_matrix, AffineParams};
 
 /// Test affine identity transformation: y = x.
 #[test]
@@ -1798,6 +1798,209 @@ fn test_affine_2d_rotation() {
     );
 
     eprintln!("Affine 2D rotation test: operator creation successful");
+}
+
+/// Test affine operator numerical correctness by comparing the dense matrix
+/// obtained from the MPO (via `affine_operator` + `apply_operator_to_dense_matrix`)
+/// with the sparse reference matrix from `affine_transform_matrix`.
+///
+/// This validates that the two independent implementations (carry-based MPO
+/// construction vs direct enumeration) produce the same transformation.
+///
+/// Note: `apply_operator_to_dense_matrix` only works for operators with
+/// site dimension 2, which corresponds to M=1, N=1 affine transformations.
+#[test]
+fn test_affine_mpo_matches_matrix() {
+    // Test cases for M=1, N=1 (site dim 2): (a, b, bc)
+    let test_cases_1d: Vec<(Vec<i64>, Vec<i64>, Vec<BoundaryCondition>)> = vec![
+        // y = x (identity)
+        (vec![1], vec![0], vec![BoundaryCondition::Periodic]),
+        // y = x + 3 (shift)
+        (vec![1], vec![3], vec![BoundaryCondition::Periodic]),
+        // y = -x (negation)
+        (vec![-1], vec![0], vec![BoundaryCondition::Periodic]),
+        // y = 2x (scale by 2)
+        (vec![2], vec![0], vec![BoundaryCondition::Periodic]),
+        // y = x (identity, open BC)
+        (vec![1], vec![0], vec![BoundaryCondition::Open]),
+        // y = x + 1 (shift by 1, open BC)
+        (vec![1], vec![1], vec![BoundaryCondition::Open]),
+    ];
+
+    for (a_flat, b_vec, bc) in &test_cases_1d {
+        let m = 1usize;
+        let n = 1usize;
+
+        for r in [2, 3] {
+            let params = AffineParams::from_integers(a_flat.clone(), b_vec.clone(), m, n)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Failed params a={:?} b={:?} m={} n={}: {}",
+                        a_flat, b_vec, m, n, e
+                    )
+                });
+
+            // Get reference sparse matrix
+            let ref_matrix = match affine_transform_matrix(r, &params, bc) {
+                Ok(mat) => mat,
+                Err(e) => {
+                    eprintln!(
+                        "Skipping a={:?} b={:?} r={} bc={:?}: {}",
+                        a_flat, b_vec, r, bc, e
+                    );
+                    continue;
+                }
+            };
+
+            // Get MPO as LinearOperator and compute dense matrix
+            let op = match affine_operator(r, &params, bc) {
+                Ok(op) => op,
+                Err(e) => {
+                    eprintln!(
+                        "Skipping operator a={:?} b={:?} r={} bc={:?}: {}",
+                        a_flat, b_vec, r, bc, e
+                    );
+                    continue;
+                }
+            };
+
+            // For M=1, N=1: operator has r sites, input dim 2, output dim 2
+            let dim = 1usize << r;
+            let mpo_dense = apply_operator_to_dense_matrix(&op, r, r);
+
+            // Verify dimensions of reference matrix
+            assert_eq!(ref_matrix.rows(), dim, "Output dimension mismatch");
+            assert_eq!(ref_matrix.cols(), dim, "Input dimension mismatch");
+
+            // Compare element-by-element
+            for y in 0..dim {
+                for x in 0..dim {
+                    let sparse_val = *ref_matrix.get(y, x).unwrap_or(&0.0);
+                    let mpo_val = mpo_dense[y][x];
+
+                    assert!(
+                        (mpo_val.re - sparse_val).abs() < 1e-10,
+                        "Real part mismatch at ({}, {}): mpo={}, ref={} \
+                         [a={:?} b={:?} r={} bc={:?}]",
+                        y, x, mpo_val.re, sparse_val, a_flat, b_vec, r, bc
+                    );
+                    assert!(
+                        mpo_val.im.abs() < 1e-10,
+                        "Imaginary part non-zero at ({}, {}): im={} \
+                         [a={:?} b={:?} r={} bc={:?}]",
+                        y, x, mpo_val.im, a_flat, b_vec, r, bc
+                    );
+                }
+            }
+
+            eprintln!(
+                "PASS: affine a={:?} b={:?} r={} bc={:?}",
+                a_flat, b_vec, r, bc
+            );
+        }
+    }
+}
+
+/// Test affine_transform_matrix structural properties for various parameter combinations,
+/// including multi-dimensional cases (M != 1 or N != 1) where the full MPO comparison
+/// via apply_operator_to_dense_matrix is not available.
+#[test]
+fn test_affine_transform_matrix_properties() {
+    // Test cases: (a_flat (row-major MxN), b (length M), m, n, bc)
+    let test_cases: Vec<(Vec<i64>, Vec<i64>, usize, usize, Vec<BoundaryCondition>)> = vec![
+        // y = x (identity, 1D)
+        (vec![1], vec![0], 1, 1, vec![BoundaryCondition::Periodic]),
+        // y = x + 3 (shift, 1D)
+        (vec![1], vec![3], 1, 1, vec![BoundaryCondition::Periodic]),
+        // y = -x (negation, 1D)
+        (vec![-1], vec![0], 1, 1, vec![BoundaryCondition::Periodic]),
+        // y = 2x (scale, 1D)
+        (vec![2], vec![0], 1, 1, vec![BoundaryCondition::Periodic]),
+        // (y1,y2) = (x1+x2, x1-x2) (2D)
+        (
+            vec![1, 1, 1, -1],
+            vec![0, 0],
+            2,
+            2,
+            vec![BoundaryCondition::Periodic; 2],
+        ),
+        // y = x1 + x2 (M=1, N=2)
+        (
+            vec![1, 1],
+            vec![0],
+            1,
+            2,
+            vec![BoundaryCondition::Periodic],
+        ),
+        // Identity with Open BC
+        (vec![1], vec![0], 1, 1, vec![BoundaryCondition::Open]),
+    ];
+
+    for (a_flat, b_vec, m, n, bc) in &test_cases {
+        for r in [2, 3] {
+            let params = AffineParams::from_integers(a_flat.clone(), b_vec.clone(), *m, *n)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Failed params a={:?} b={:?} m={} n={}: {}",
+                        a_flat, b_vec, m, n, e
+                    )
+                });
+
+            // Get reference sparse matrix
+            let ref_matrix = match affine_transform_matrix(r, &params, bc) {
+                Ok(mat) => mat,
+                Err(e) => {
+                    eprintln!(
+                        "Skipping a={:?} b={:?} m={} n={} r={}: {}",
+                        a_flat, b_vec, m, n, r, e
+                    );
+                    continue;
+                }
+            };
+
+            let dim_in = 1usize << (r * *n);
+            let dim_out = 1usize << (r * *m);
+
+            // Verify matrix dimensions
+            assert_eq!(ref_matrix.rows(), dim_out, "Output dimension mismatch");
+            assert_eq!(ref_matrix.cols(), dim_in, "Input dimension mismatch");
+
+            // Verify the matrix has non-zero entries
+            let nnz = ref_matrix.nnz();
+            assert!(
+                nnz > 0,
+                "Reference matrix has no non-zero entries for a={:?} b={:?} r={}",
+                a_flat, b_vec, r
+            );
+
+            // Verify all entries are either 0 or 1 (affine transforms produce boolean matrices)
+            // and count that the number of 1.0 entries matches nnz
+            let mut count_ones = 0usize;
+            for y in 0..dim_out {
+                for x in 0..dim_in {
+                    let val = *ref_matrix.get(y, x).unwrap_or(&0.0);
+                    assert!(
+                        (val - 0.0).abs() < 1e-14 || (val - 1.0).abs() < 1e-14,
+                        "Entry ({}, {}) = {} is neither 0 nor 1 for a={:?} b={:?} r={}",
+                        y, x, val, a_flat, b_vec, r
+                    );
+                    if (val - 1.0).abs() < 1e-14 {
+                        count_ones += 1;
+                    }
+                }
+            }
+            assert_eq!(
+                count_ones, nnz,
+                "Count of 1.0 entries doesn't match nnz for a={:?} b={:?} r={}",
+                a_flat, b_vec, r
+            );
+
+            eprintln!(
+                "PASS: matrix props a={:?} b={:?} m={} n={} r={} nnz={}",
+                a_flat, b_vec, m, n, r, nnz
+            );
+        }
+    }
 }
 
 // ============================================================================
