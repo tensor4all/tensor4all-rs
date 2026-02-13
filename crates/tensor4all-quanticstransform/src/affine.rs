@@ -1295,6 +1295,7 @@ mod tests {
     /// Assert that the MPO representation matches the direct sparse matrix computation
     /// for all elements. This is the primary correctness check: two independent algorithms
     /// (carry-based MPO vs direct enumeration) must agree.
+    #[allow(clippy::needless_range_loop)]
     fn assert_affine_mpo_matches_matrix(r: usize, params: &AffineParams, bc: &[BoundaryCondition]) {
         let m = params.m;
         let n = params.n;
@@ -1330,6 +1331,7 @@ mod tests {
     /// Assert that affine_transform_matrix produces correct results by independently
     /// computing y = A*x + b using Rational64 arithmetic (no integer scaling).
     /// Equivalent to Julia's test_affine_transform_matrix_multi_variables.
+    #[allow(clippy::needless_range_loop)]
     fn assert_affine_matrix_correctness(r: usize, params: &AffineParams, bc: &[BoundaryCondition]) {
         let m = params.m;
         let n = params.n;
