@@ -1741,4 +1741,111 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_affine_parametric_full() {
+        // From Quantics.jl "full R=$R, boundary=$boundary, M=$M, N=$N" test
+        struct TestCase {
+            a: Vec<i64>,
+            b: Vec<i64>,
+            m: usize,
+            n: usize,
+        }
+
+        let cases = vec![
+            TestCase {
+                a: vec![1],
+                b: vec![1],
+                m: 1,
+                n: 1,
+            },
+            TestCase {
+                a: vec![1, 0],
+                b: vec![0],
+                m: 1,
+                n: 2,
+            },
+            TestCase {
+                a: vec![2, -1],
+                b: vec![1],
+                m: 1,
+                n: 2,
+            },
+            TestCase {
+                a: vec![1, 0],
+                b: vec![0, 0],
+                m: 2,
+                n: 1,
+            },
+            TestCase {
+                a: vec![2, -1],
+                b: vec![1, -1],
+                m: 2,
+                n: 1,
+            },
+            TestCase {
+                a: vec![1, 0, 1, 1],
+                b: vec![0, 1],
+                m: 2,
+                n: 2,
+            },
+            TestCase {
+                a: vec![2, 0, 4, 1],
+                b: vec![100, -1],
+                m: 2,
+                n: 2,
+            },
+        ];
+
+        for r in [1, 2] {
+            for bc_type in [BoundaryCondition::Open, BoundaryCondition::Periodic] {
+                for case in &cases {
+                    let params =
+                        AffineParams::from_integers(case.a.clone(), case.b.clone(), case.m, case.n)
+                            .unwrap();
+                    let bc = vec![bc_type; case.m];
+                    assert_affine_matrix_correctness(r, &params, &bc);
+                    assert_affine_mpo_matches_matrix(r, &params, &bc);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_affine_denom_even() {
+        // From Quantics.jl compare_denom_even test
+        let a = vec![Rational64::new(1, 2)];
+        for b_val in [3i64, 5, -3, -5] {
+            let b = vec![Rational64::from_integer(b_val)];
+            let params = AffineParams::new(a.clone(), b, 1, 1).unwrap();
+            let bc = vec![BoundaryCondition::Periodic];
+            for r in [3, 5] {
+                assert_affine_mpo_matches_matrix(r, &params, &bc);
+            }
+        }
+    }
+
+    #[test]
+    fn test_affine_extension_loop() {
+        // Test abs(b) >= 2^R with Open BC (requires extension loop)
+
+        // b=[-32, 32] with R=5, identity matrix: abs(32)=2^5=2^R triggers extension
+        let r = 5;
+        let params = AffineParams::from_integers(vec![1, 0, 0, 1], vec![-32, 32], 2, 2).unwrap();
+        let bc = vec![BoundaryCondition::Open; 2];
+        assert_affine_mpo_matches_matrix(r, &params, &bc);
+        assert_affine_matrix_correctness(r, &params, &bc);
+
+        // abs(b) clearly exceeds 2^R: 2^4=16, abs(b)=32 > 16
+        let r = 4;
+        assert_affine_mpo_matches_matrix(r, &params, &bc);
+        assert_affine_matrix_correctness(r, &params, &bc);
+
+        // 1D case: y = x + 64 with R=6, Open BC
+        let r = 6;
+        let params = AffineParams::from_integers(vec![1], vec![64], 1, 1).unwrap();
+        let bc = vec![BoundaryCondition::Open];
+        assert_affine_mpo_matches_matrix(r, &params, &bc);
+        assert_affine_matrix_correctness(r, &params, &bc);
+    }
 }
