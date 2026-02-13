@@ -1182,7 +1182,8 @@ mod tests {
 
     #[test]
     fn test_affine_matrix_half_scale() {
-        // y = x/2 (only even inputs have valid output)
+        // y = x/2, scale=2, R=3, Periodic BC
+        // Condition: 2*y ≡ x (mod 2^R=8), so each even x has 2 solutions
         let r = 3;
         let a = vec![Rational64::new(1, 2)];
         let b = vec![Rational64::from_integer(0)];
@@ -1191,13 +1192,19 @@ mod tests {
 
         let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
 
-        // Only even x values map: x=0->0, x=2->1, x=4->2, x=6->3
-        assert_eq!(matrix.nnz(), 4);
+        // x=0: y∈{0,4}, x=2: y∈{1,5}, x=4: y∈{2,6}, x=6: y∈{3,7}
+        assert_eq!(matrix.nnz(), 8);
 
         assert_eq!(*matrix.get(0, 0).unwrap_or(&0.0), 1.0);
+        assert_eq!(*matrix.get(4, 0).unwrap_or(&0.0), 1.0);
         assert_eq!(*matrix.get(1, 2).unwrap_or(&0.0), 1.0);
+        assert_eq!(*matrix.get(5, 2).unwrap_or(&0.0), 1.0);
         assert_eq!(*matrix.get(2, 4).unwrap_or(&0.0), 1.0);
+        assert_eq!(*matrix.get(6, 4).unwrap_or(&0.0), 1.0);
         assert_eq!(*matrix.get(3, 6).unwrap_or(&0.0), 1.0);
+        assert_eq!(*matrix.get(7, 6).unwrap_or(&0.0), 1.0);
+
+        assert_affine_mpo_matches_matrix(r, &params, &bc);
     }
 
     // ========== MPO vs Matrix comparison tests (from Quantics.jl) ==========
