@@ -1882,13 +1882,26 @@ fn test_affine_mpo_matches_matrix() {
                         (mpo_val.re - sparse_val).abs() < 1e-10,
                         "Real part mismatch at ({}, {}): mpo={}, ref={} \
                          [a={:?} b={:?} r={} bc={:?}]",
-                        y, x, mpo_val.re, sparse_val, a_flat, b_vec, r, bc
+                        y,
+                        x,
+                        mpo_val.re,
+                        sparse_val,
+                        a_flat,
+                        b_vec,
+                        r,
+                        bc
                     );
                     assert!(
                         mpo_val.im.abs() < 1e-10,
                         "Imaginary part non-zero at ({}, {}): im={} \
                          [a={:?} b={:?} r={} bc={:?}]",
-                        y, x, mpo_val.im, a_flat, b_vec, r, bc
+                        y,
+                        x,
+                        mpo_val.im,
+                        a_flat,
+                        b_vec,
+                        r,
+                        bc
                     );
                 }
             }
@@ -1925,13 +1938,7 @@ fn test_affine_transform_matrix_properties() {
             vec![BoundaryCondition::Periodic; 2],
         ),
         // y = x1 + x2 (M=1, N=2)
-        (
-            vec![1, 1],
-            vec![0],
-            1,
-            2,
-            vec![BoundaryCondition::Periodic],
-        ),
+        (vec![1, 1], vec![0], 1, 2, vec![BoundaryCondition::Periodic]),
         // Identity with Open BC
         (vec![1], vec![0], 1, 1, vec![BoundaryCondition::Open]),
     ];
@@ -1970,7 +1977,9 @@ fn test_affine_transform_matrix_properties() {
             assert!(
                 nnz > 0,
                 "Reference matrix has no non-zero entries for a={:?} b={:?} r={}",
-                a_flat, b_vec, r
+                a_flat,
+                b_vec,
+                r
             );
 
             // Verify all entries are either 0 or 1 (affine transforms produce boolean matrices)
@@ -1982,7 +1991,12 @@ fn test_affine_transform_matrix_properties() {
                     assert!(
                         (val - 0.0).abs() < 1e-14 || (val - 1.0).abs() < 1e-14,
                         "Entry ({}, {}) = {} is neither 0 nor 1 for a={:?} b={:?} r={}",
-                        y, x, val, a_flat, b_vec, r
+                        y,
+                        x,
+                        val,
+                        a_flat,
+                        b_vec,
+                        r
                     );
                     if (val - 1.0).abs() < 1e-14 {
                         count_ones += 1;
@@ -2143,11 +2157,7 @@ fn test_operator_linearity() {
         ),
         (
             "phase_rotation(pi/4)",
-            apply_operator_to_dense_matrix(
-                &phase_rotation_operator(r, PI / 4.0).unwrap(),
-                r,
-                r,
-            ),
+            apply_operator_to_dense_matrix(&phase_rotation_operator(r, PI / 4.0).unwrap(), r, r),
         ),
         (
             "cumsum",
@@ -2186,9 +2196,7 @@ fn test_operator_linearity() {
 
     for (_name, matrix) in &operators {
         // Compute Op(α*a + β*b) via matrix-vector multiply
-        let combined: Vec<Complex64> = (0..n)
-            .map(|i| alpha * a_vec[i] + beta * b_vec[i])
-            .collect();
+        let combined: Vec<Complex64> = (0..n).map(|i| alpha * a_vec[i] + beta * b_vec[i]).collect();
         let result_combined: Vec<Complex64> = (0..n)
             .map(|y| {
                 (0..n)
@@ -2199,18 +2207,10 @@ fn test_operator_linearity() {
 
         // Compute α*Op(a) + β*Op(b)
         let result_a: Vec<Complex64> = (0..n)
-            .map(|y| {
-                (0..n)
-                    .map(|x| matrix[y][x] * a_vec[x])
-                    .sum::<Complex64>()
-            })
+            .map(|y| (0..n).map(|x| matrix[y][x] * a_vec[x]).sum::<Complex64>())
             .collect();
         let result_b: Vec<Complex64> = (0..n)
-            .map(|y| {
-                (0..n)
-                    .map(|x| matrix[y][x] * b_vec[x])
-                    .sum::<Complex64>()
-            })
+            .map(|y| (0..n).map(|x| matrix[y][x] * b_vec[x]).sum::<Complex64>())
             .collect();
         let result_linear: Vec<Complex64> = (0..n)
             .map(|i| alpha * result_a[i] + beta * result_b[i])
@@ -2218,16 +2218,8 @@ fn test_operator_linearity() {
 
         // Compare
         for y in 0..n {
-            assert_relative_eq!(
-                result_combined[y].re,
-                result_linear[y].re,
-                epsilon = 1e-8,
-            );
-            assert_relative_eq!(
-                result_combined[y].im,
-                result_linear[y].im,
-                epsilon = 1e-8,
-            );
+            assert_relative_eq!(result_combined[y].re, result_linear[y].re, epsilon = 1e-8,);
+            assert_relative_eq!(result_combined[y].im, result_linear[y].im, epsilon = 1e-8,);
         }
     }
 }
@@ -2344,10 +2336,7 @@ fn test_binaryop_dual_output_numerical() {
 
                         let bc = [BoundaryCondition::Periodic; 2];
                         let op = binaryop_operator(r, coeffs1, coeffs2, bc).unwrap_or_else(|e| {
-                            panic!(
-                                "Failed for ({},{},{},{}) r={}: {}",
-                                a, b, c, d, r, e
-                            )
+                            panic!("Failed for ({},{},{},{}) r={}: {}", a, b, c, d, r, e)
                         });
 
                         let matrix = apply_operator_to_dense_matrix(&op, n_sites, n_sites);
@@ -2357,10 +2346,8 @@ fn test_binaryop_dual_output_numerical() {
                                 let input_idx = interleave_bits(x, y, r);
 
                                 // Compute expected outputs
-                                let z1_raw =
-                                    (a as i64) * (x as i64) + (b as i64) * (y as i64);
-                                let z2_raw =
-                                    (c as i64) * (x as i64) + (d as i64) * (y as i64);
+                                let z1_raw = (a as i64) * (x as i64) + (b as i64) * (y as i64);
+                                let z2_raw = (c as i64) * (x as i64) + (d as i64) * (y as i64);
 
                                 let z1 = z1_raw.rem_euclid(n as i64) as usize;
                                 let z2 = z2_raw.rem_euclid(n as i64) as usize;
@@ -2382,11 +2369,22 @@ fn test_binaryop_dual_output_numerical() {
                                              got ({:.6}, {:.6}) expected ({:.6}, {:.6})\n\
                                              input_idx={}, expected_output_idx={}, \
                                              z1={}, z2={}",
-                                            a, b, c, d, r, x, y, out_idx,
+                                            a,
+                                            b,
+                                            c,
+                                            d,
+                                            r,
+                                            x,
+                                            y,
+                                            out_idx,
                                             matrix[out_idx][input_idx].re,
                                             matrix[out_idx][input_idx].im,
-                                            expected.re, expected.im,
-                                            input_idx, expected_output_idx, z1, z2
+                                            expected.re,
+                                            expected.im,
+                                            input_idx,
+                                            expected_output_idx,
+                                            z1,
+                                            z2
                                         );
                                     }
                                 }
