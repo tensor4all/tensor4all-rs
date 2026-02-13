@@ -9,6 +9,17 @@ use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
 use crate::common::{tensortrain_to_linear_operator, QuanticsOperator};
 
+/// Type of triangular matrix for cumsum-like operators.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TriangleType {
+    /// Strict lower triangle: M[i,j] = 1 when i > j.
+    /// Computes y_i = Σ_{j < i} x_j (prefix sum).
+    Lower,
+    /// Strict upper triangle: M[i,j] = 1 when i < j.
+    /// Computes y_i = Σ_{j > i} x_j (suffix sum).
+    Upper,
+}
+
 /// Create a cumulative sum operator: y_i = Σ_{j < i} x_j
 ///
 /// This MPO implements a strict upper triangular matrix filled with ones.
@@ -33,6 +44,24 @@ pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
     }
 
     let mpo = cumsum_mpo(r)?;
+    let site_dims = vec![2; r];
+    tensortrain_to_linear_operator(&mpo, &site_dims)
+}
+
+/// Create a triangular matrix operator with the specified triangle type.
+///
+/// - `Lower`: M[i,j] = 1 when i > j (prefix sum: y_i = Σ_{j < i} x_j)
+/// - `Upper`: M[i,j] = 1 when i < j (suffix sum: y_i = Σ_{j > i} x_j)
+///
+/// # Arguments
+/// * `r` - Number of bits (sites)
+/// * `triangle` - Which triangle to use
+pub fn triangle_operator(r: usize, triangle: TriangleType) -> Result<QuanticsOperator> {
+    if r == 0 {
+        return Err(anyhow::anyhow!("Number of sites must be positive"));
+    }
+
+    let mpo = triangle_mpo(r, triangle)?;
     let site_dims = vec![2; r];
     tensortrain_to_linear_operator(&mpo, &site_dims)
 }
@@ -116,6 +145,74 @@ fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
     TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("Failed to create cumsum MPO: {}", e))
 }
 
+/// Create a triangular matrix MPO as a TensorTrain.
+///
+/// This is a generalization of `cumsum_mpo` that supports both upper and lower triangles.
+#[allow(clippy::needless_range_loop)]
+fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<TensorTrain<Complex64>> {
+    if r == 0 {
+        return Err(anyhow::anyhow!("Number of sites must be positive"));
+    }
+
+    // upper_triangle_tensor() has y>x transition → M[i,j]=1 when i>j = Lower triangle
+    // lower_triangle_tensor() has y<x transition → M[i,j]=1 when i<j = Upper triangle
+    let single_tensor = match triangle {
+        TriangleType::Lower => upper_triangle_tensor(),
+        TriangleType::Upper => lower_triangle_tensor(),
+    };
+    let mut tensors = Vec::with_capacity(r);
+
+    for n in 0..r {
+        if n == 0 {
+            let mut t = tensor3_zeros(1, 4, 2);
+            for cout in 0..2 {
+                for y_bit in 0..2 {
+                    for x_bit in 0..2 {
+                        let val = single_tensor[0][cout][y_bit][x_bit];
+                        let s = y_bit * 2 + x_bit;
+                        t.set3(0, s, cout, val);
+                    }
+                }
+            }
+            tensors.push(t);
+        } else if n == r - 1 {
+            let mut t = tensor3_zeros(2, 4, 1);
+            for cin in 0..2 {
+                for y_bit in 0..2 {
+                    for x_bit in 0..2 {
+                        let mut sum = Complex64::zero();
+                        for cout in 0..2 {
+                            let val = single_tensor[cin][cout][y_bit][x_bit];
+                            if cout == 1 {
+                                sum += val;
+                            }
+                        }
+                        let s = y_bit * 2 + x_bit;
+                        t.set3(cin, s, 0, sum);
+                    }
+                }
+            }
+            tensors.push(t);
+        } else {
+            let mut t = tensor3_zeros(2, 4, 2);
+            for cin in 0..2 {
+                for cout in 0..2 {
+                    for y_bit in 0..2 {
+                        for x_bit in 0..2 {
+                            let val = single_tensor[cin][cout][y_bit][x_bit];
+                            let s = y_bit * 2 + x_bit;
+                            t.set3(cin, s, cout, val);
+                        }
+                    }
+                }
+            }
+            tensors.push(t);
+        }
+    }
+
+    TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("Failed to create triangle MPO: {}", e))
+}
+
 /// Create the single-site tensor for upper triangular matrix.
 ///
 /// Returns a 4D tensor [cin][cout][y_bit][x_bit] where:
@@ -139,6 +236,31 @@ fn upper_triangle_tensor() -> [[[[Complex64; 2]; 2]; 2]; 2] {
 
     // State 0 -> nowhere: y < x (this entry is 0, not in upper triangle)
     // tensor[0][*][0][1] = 0 (implicit)
+
+    // State 1 -> State 1: Comparison already made, all entries are 1
+    tensor[1][1][0][0] = Complex64::one();
+    tensor[1][1][0][1] = Complex64::one();
+    tensor[1][1][1][0] = Complex64::one();
+    tensor[1][1][1][1] = Complex64::one();
+
+    tensor
+}
+
+/// Create the single-site tensor for strict upper triangle (i < j).
+///
+/// M[i,j] = 1 when i < j (suffix sum: y_i = Σ_{j > i} x_j).
+///
+/// The tensor is identical to lower_triangle but with the transition
+/// on y < x (y=0, x=1) instead of y > x (y=1, x=0).
+fn lower_triangle_tensor() -> [[[[Complex64; 2]; 2]; 2]; 2] {
+    let mut tensor = [[[[Complex64::zero(); 2]; 2]; 2]; 2];
+
+    // State 0 -> State 0: y == x (continue comparing)
+    tensor[0][0][0][0] = Complex64::one(); // y=0, x=0
+    tensor[0][0][1][1] = Complex64::one(); // y=1, x=1
+
+    // State 0 -> State 1: y < x (comparison made, x is greater)
+    tensor[0][1][0][1] = Complex64::one(); // y=0, x=1 (y < x at this bit)
 
     // State 1 -> State 1: Comparison already made, all entries are 1
     tensor[1][1][0][0] = Complex64::one();

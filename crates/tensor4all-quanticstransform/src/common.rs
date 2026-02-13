@@ -392,6 +392,99 @@ pub fn tensortrain_to_linear_operator_asymmetric(
     Ok(LinearOperator::new(treetn, input_mapping, output_mapping))
 }
 
+/// Embed a single-variable MPO into a multi-variable context.
+///
+/// The original MPO acts on one variable (site_dim = d*d for d=2, i.e., in/out dim 2).
+/// The embedded MPO acts on `nvariables` variables, applying the original
+/// operator to `target_var` and identity on all others.
+///
+/// Site index encoding in the embedded MPO:
+/// `s = s_out * (2^nvariables) + s_in` where
+/// `s_out = var0_out + 2*var1_out + ...` and similarly for `s_in`.
+///
+/// # Arguments
+/// * `mpo` - Single-variable MPO (R sites, site_dim = 4)
+/// * `nvariables` - Total number of variables (must be >= 2)
+/// * `target_var` - Which variable to apply the operator to (0-indexed)
+pub(crate) fn embed_single_var_mpo(
+    mpo: &TensorTrain<Complex64>,
+    nvariables: usize,
+    target_var: usize,
+) -> Result<TensorTrain<Complex64>> {
+    if target_var >= nvariables {
+        return Err(anyhow::anyhow!(
+            "target_var {} must be less than nvariables {}",
+            target_var,
+            nvariables
+        ));
+    }
+    if nvariables < 2 {
+        return Err(anyhow::anyhow!("nvariables must be at least 2"));
+    }
+
+    let r = mpo.len();
+    let dim_multi = 1usize << nvariables; // 2^nvars
+    let site_dim_new = dim_multi * dim_multi;
+
+    let mut new_tensors = Vec::with_capacity(r);
+
+    for i in 0..r {
+        let tensor = mpo.site_tensor(i);
+        let left_dim = tensor.left_dim();
+        let right_dim = tensor.right_dim();
+
+        assert_eq!(
+            tensor.site_dim(),
+            4,
+            "Input MPO must have site_dim=4 (single variable)"
+        );
+
+        let mut t = tensor3_zeros(left_dim, site_dim_new, right_dim);
+
+        for s_out_multi in 0..dim_multi {
+            for s_in_multi in 0..dim_multi {
+                // Check identity constraint on non-target variables
+                let mut identity_ok = true;
+                for v in 0..nvariables {
+                    if v != target_var {
+                        let out_bit = (s_out_multi >> v) & 1;
+                        let in_bit = (s_in_multi >> v) & 1;
+                        if out_bit != in_bit {
+                            identity_ok = false;
+                            break;
+                        }
+                    }
+                }
+                if !identity_ok {
+                    continue;
+                }
+
+                // Extract target variable bits
+                let target_out = (s_out_multi >> target_var) & 1;
+                let target_in = (s_in_multi >> target_var) & 1;
+                let s_orig = target_out * 2 + target_in;
+
+                // New fused site index
+                let s_new = s_out_multi * dim_multi + s_in_multi;
+
+                for l in 0..left_dim {
+                    for rr in 0..right_dim {
+                        let val = *tensor.get3(l, s_orig, rr);
+                        if val != Complex64::new(0.0, 0.0) {
+                            t.set3(l, s_new, rr, val);
+                        }
+                    }
+                }
+            }
+        }
+
+        new_tensors.push(t);
+    }
+
+    TensorTrain::new(new_tensors)
+        .map_err(|e| anyhow::anyhow!("Failed to create embedded MPO: {}", e))
+}
+
 /// Create an identity MPO for r sites with dimension 2.
 #[allow(dead_code)]
 pub fn identity_mpo(r: usize) -> Result<TensorTrain<Complex64>> {

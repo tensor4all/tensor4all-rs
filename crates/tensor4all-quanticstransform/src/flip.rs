@@ -7,7 +7,10 @@ use num_complex::Complex64;
 use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
-use crate::common::{tensortrain_to_linear_operator, BoundaryCondition, QuanticsOperator};
+use crate::common::{
+    embed_single_var_mpo, tensortrain_to_linear_operator,
+    tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
+};
 
 /// Create a flip operator: f(x) = g(2^R - x)
 ///
@@ -39,6 +42,37 @@ pub fn flip_operator(r: usize, bc: BoundaryCondition) -> Result<QuanticsOperator
     let mpo = flip_mpo(r, bc)?;
     let site_dims = vec![2; r];
     tensortrain_to_linear_operator(&mpo, &site_dims)
+}
+
+/// Create a flip operator for one variable in a multi-variable system.
+///
+/// Acts as flip on `target_var` and identity on all other variables.
+///
+/// # Arguments
+/// * `r` - Number of bits (sites)
+/// * `bc` - Boundary condition
+/// * `nvariables` - Total number of variables
+/// * `target_var` - Which variable to flip (0-indexed)
+pub fn flip_operator_multivar(
+    r: usize,
+    bc: BoundaryCondition,
+    nvariables: usize,
+    target_var: usize,
+) -> Result<QuanticsOperator> {
+    if r == 0 {
+        return Err(anyhow::anyhow!("Number of sites must be positive"));
+    }
+    if r == 1 {
+        return Err(anyhow::anyhow!(
+            "MPO with one tensor is not supported for flip operator"
+        ));
+    }
+
+    let mpo = flip_mpo(r, bc)?;
+    let embedded = embed_single_var_mpo(&mpo, nvariables, target_var)?;
+    let dim_multi = 1 << nvariables;
+    let dims = vec![dim_multi; r];
+    tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }
 
 /// Create the flip MPO as a TensorTrain.

@@ -8,7 +8,10 @@ use num_traits::One;
 use std::f64::consts::PI;
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
-use crate::common::{tensortrain_to_linear_operator, QuanticsOperator};
+use crate::common::{
+    embed_single_var_mpo, tensortrain_to_linear_operator,
+    tensortrain_to_linear_operator_asymmetric, QuanticsOperator,
+};
 
 /// Create a phase rotation operator: f(x) = exp(i*θ*x) * g(x)
 ///
@@ -43,6 +46,32 @@ pub fn phase_rotation_operator(r: usize, theta: f64) -> Result<QuanticsOperator>
     let mpo = phase_rotation_mpo(r, theta)?;
     let site_dims = vec![2; r];
     tensortrain_to_linear_operator(&mpo, &site_dims)
+}
+
+/// Create a phase rotation operator for one variable in a multi-variable system.
+///
+/// Acts as phase rotation on `target_var` and identity on all other variables.
+///
+/// # Arguments
+/// * `r` - Number of bits (sites)
+/// * `theta` - Phase angle in radians
+/// * `nvariables` - Total number of variables
+/// * `target_var` - Which variable to apply phase rotation to (0-indexed)
+pub fn phase_rotation_operator_multivar(
+    r: usize,
+    theta: f64,
+    nvariables: usize,
+    target_var: usize,
+) -> Result<QuanticsOperator> {
+    if r == 0 {
+        return Err(anyhow::anyhow!("Number of sites must be positive"));
+    }
+
+    let mpo = phase_rotation_mpo(r, theta)?;
+    let embedded = embed_single_var_mpo(&mpo, nvariables, target_var)?;
+    let dim_multi = 1 << nvariables;
+    let dims = vec![dim_multi; r];
+    tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }
 
 /// Create the phase rotation MPO as a TensorTrain.

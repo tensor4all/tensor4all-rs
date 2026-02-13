@@ -20,8 +20,10 @@ use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops,
 use tensor4all_treetn::{apply_linear_operator, ApplyOptions, LinearOperator, TreeTN};
 
 use tensor4all_quanticstransform::{
-    binaryop_operator, binaryop_single_operator, flip_operator, quantics_fourier_operator,
-    shift_operator, BinaryCoeffs, BoundaryCondition, FTCore, FourierOptions,
+    binaryop_operator, binaryop_single_operator, flip_operator, flip_operator_multivar,
+    phase_rotation_operator_multivar, quantics_fourier_operator, shift_operator,
+    shift_operator_multivar, triangle_operator, BinaryCoeffs, BoundaryCondition, FTCore,
+    FourierOptions, TriangleType,
 };
 
 /// Type alias for the default index type.
@@ -2423,6 +2425,482 @@ fn test_binaryop_dual_output_numerical() {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Multi-variable operator tests (P2)
+// ============================================================================
+
+/// Create a product state MPS for a multi-variable system.
+///
+/// `values` is a slice of R values, one per variable.
+/// `nvariables` is the number of variables.
+/// `r` is the number of bits per variable.
+///
+/// The interleaved site index at site n encodes the n-th bits of all variables:
+/// s = Σ_v bit_v * 2^v  (variable 0 in LSB)
+fn create_multivar_product_state_mps(
+    values: &[usize],
+    nvariables: usize,
+    r: usize,
+) -> TensorTrain<Complex64> {
+    assert_eq!(values.len(), nvariables);
+    let site_dim = 1 << nvariables;
+    let mut tensors = Vec::with_capacity(r);
+
+    for n in 0..r {
+        let mut s = 0usize;
+        for v in 0..nvariables {
+            // Big-endian: site n contains bit 2^(R-1-n) of variable v
+            let bit = (values[v] >> (r - 1 - n)) & 1;
+            s |= bit << v;
+        }
+        let mut t = tensor3_zeros(1, site_dim, 1);
+        t.set3(0, s, 0, Complex64::one());
+        tensors.push(t);
+    }
+
+    TensorTrain::new(tensors).expect("Failed to create multivar product state MPS")
+}
+
+/// Contract a TreeTN with site indices to a flat vector, supporting arbitrary site dimensions.
+///
+/// Each site can have any dimension (not just 2). Returns a vector of length Π site_dims[i].
+fn contract_treetn_to_vector_general(
+    treetn: &TreeTN<TensorDynLen, usize>,
+    site_indices: &[DynIndex],
+    site_dims: &[usize],
+) -> Vec<Complex64> {
+    let r = site_indices.len();
+    assert_eq!(r, site_dims.len());
+    let total: usize = site_dims.iter().product();
+
+    let full_tensor = treetn
+        .contract_to_tensor()
+        .expect("Failed to contract TreeTN");
+
+    let ext_indices = &full_tensor.indices;
+    let mut idx_to_pos: HashMap<DynId, usize> = HashMap::new();
+    for (pos, idx) in ext_indices.iter().enumerate() {
+        idx_to_pos.insert(*idx.id(), pos);
+    }
+
+    let mut site_to_tensor: Vec<usize> = Vec::with_capacity(r);
+    for site_idx in site_indices.iter() {
+        let pos = idx_to_pos
+            .get(&site_idx.id().clone())
+            .expect("Site index not found in contracted tensor");
+        site_to_tensor.push(*pos);
+    }
+
+    let data = full_tensor
+        .as_slice_c64()
+        .expect("Expected DenseC64 storage");
+    let dims = full_tensor.dims();
+
+    let mut result = vec![Complex64::zero(); total];
+
+    for x in 0..total {
+        // Decompose flat index x into per-site values using site_dims (big-endian)
+        let mut multi_idx = vec![0usize; r];
+        let mut remainder = x;
+        for i in 0..r {
+            let stride: usize = site_dims[i + 1..].iter().product();
+            let site_val = remainder / stride;
+            remainder %= stride;
+            multi_idx[site_to_tensor[i]] = site_val;
+        }
+
+        // Convert multi-index to flat storage index (row-major)
+        let mut flat_idx = 0;
+        let mut stride = 1;
+        for i in (0..r).rev() {
+            flat_idx += multi_idx[i] * stride;
+            stride *= dims[i];
+        }
+
+        result[x] = data[flat_idx];
+    }
+
+    result
+}
+
+/// Build the dense matrix for a multi-variable operator.
+///
+/// The operator has `r` sites, each with input/output dimension 2^nvariables.
+fn apply_multivar_operator_to_dense_matrix(
+    op: &LinearOperator<TensorDynLen, usize>,
+    r: usize,
+    nvariables: usize,
+) -> Vec<Vec<Complex64>> {
+    let site_dim: usize = 1 << nvariables;
+    let total_dim: usize = site_dim.pow(r as u32);
+    let mut matrix = vec![vec![Complex64::zero(); total_dim]; total_dim];
+
+    for input_idx in 0..total_dim {
+        // Decode input_idx into per-variable values
+        let mut values = vec![0usize; nvariables];
+        let mut remainder = input_idx;
+        for n in 0..r {
+            let stride = site_dim.pow((r - 1 - n) as u32);
+            let site_val = remainder / stride;
+            remainder %= stride;
+            for v in 0..nvariables {
+                let bit = (site_val >> v) & 1;
+                values[v] |= bit << (r - 1 - n);
+            }
+        }
+
+        let mps = create_multivar_product_state_mps(&values, nvariables, r);
+        let (treetn, site_indices) = tensortrain_to_treetn(&mps);
+
+        // Remap site indices to operator input
+        let mut treetn_remapped = treetn;
+        for i in 0..r {
+            let op_input = op
+                .get_input_mapping(&i)
+                .expect("Missing input mapping")
+                .true_index
+                .clone();
+            treetn_remapped = treetn_remapped
+                .replaceind(&site_indices[i], &op_input)
+                .expect("Failed to replace index");
+        }
+
+        // Apply operator
+        let result_treetn = apply_linear_operator(op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
+
+        // Get output indices
+        let output_indices: Vec<DynIndex> = (0..r)
+            .map(|i| {
+                op.get_output_mapping(&i)
+                    .expect("Missing output mapping")
+                    .true_index
+                    .clone()
+            })
+            .collect();
+
+        // Contract result with general site dimensions
+        let out_dims = vec![site_dim; r];
+        let result_vec =
+            contract_treetn_to_vector_general(&result_treetn, &output_indices, &out_dims);
+
+        for out_idx in 0..total_dim {
+            matrix[out_idx][input_idx] = result_vec[out_idx];
+        }
+    }
+
+    matrix
+}
+
+/// Encode per-variable values into a flat multi-variable index.
+///
+/// For nvariables variables each with r bits, the flat index encodes
+/// site-by-site with variable bits interleaved within each site:
+/// idx = Σ_n s_n * (2^nvars)^(R-1-n)
+/// where s_n = Σ_v bit_v(n) * 2^v
+fn multivar_flat_index(values: &[usize], nvariables: usize, r: usize) -> usize {
+    let site_dim = 1 << nvariables;
+    let mut idx = 0;
+    for n in 0..r {
+        let mut s = 0usize;
+        for v in 0..nvariables {
+            let bit = (values[v] >> (r - 1 - n)) & 1;
+            s |= bit << v;
+        }
+        idx = idx * site_dim + s;
+    }
+    idx
+}
+
+/// Test flip_operator_multivar: each variable flipped independently in a 2D system.
+#[test]
+fn test_flip_2d() {
+    let r = 3;
+    let n = 1usize << r;
+    let nvariables = 2;
+
+    for target_var in 0..nvariables {
+        let op =
+            flip_operator_multivar(r, BoundaryCondition::Periodic, nvariables, target_var).unwrap();
+        let matrix = apply_multivar_operator_to_dense_matrix(&op, r, nvariables);
+
+        let total_dim = (1usize << nvariables).pow(r as u32);
+
+        for x0 in 0..n {
+            for x1 in 0..n {
+                let input_vals = [x0, x1];
+                let input_idx = multivar_flat_index(&input_vals, nvariables, r);
+
+                // Flip with Periodic BC: f(x) = g((2^R - x) mod 2^R) for the target variable
+                // flip(0) = 0, flip(1) = 2^R - 1, flip(2) = 2^R - 2, ...
+                let mut out_vals = [x0, x1];
+                let v = input_vals[target_var];
+                out_vals[target_var] = if v == 0 { 0 } else { n - v };
+                let expected_idx = multivar_flat_index(&out_vals, nvariables, r);
+
+                for out_idx in 0..total_dim {
+                    let expected = if out_idx == expected_idx {
+                        Complex64::one()
+                    } else {
+                        Complex64::zero()
+                    };
+                    if (matrix[out_idx][input_idx] - expected).norm() > 1e-10 {
+                        panic!(
+                            "flip_2d: target_var={} input=({},{}) out_idx={} \
+                             got ({:.6},{:.6}) expected ({:.6},{:.6})",
+                            target_var,
+                            x0,
+                            x1,
+                            out_idx,
+                            matrix[out_idx][input_idx].re,
+                            matrix[out_idx][input_idx].im,
+                            expected.re,
+                            expected.im
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Test shift_operator_multivar: each variable shifted independently in a 2D system.
+#[test]
+fn test_shift_2d() {
+    let r = 3;
+    let n = 1usize << r;
+    let nvariables = 2;
+
+    for target_var in 0..nvariables {
+        for offset in [1i64, 3, -2, 7] {
+            let op = shift_operator_multivar(
+                r,
+                offset,
+                BoundaryCondition::Periodic,
+                nvariables,
+                target_var,
+            )
+            .unwrap();
+            let matrix = apply_multivar_operator_to_dense_matrix(&op, r, nvariables);
+
+            let total_dim = (1usize << nvariables).pow(r as u32);
+
+            for x0 in 0..n {
+                for x1 in 0..n {
+                    let input_vals = [x0, x1];
+                    let input_idx = multivar_flat_index(&input_vals, nvariables, r);
+
+                    // Shift: f(x) = g(x + offset), so output at y has input at y - offset
+                    // Matrix: M[y, x] = 1 iff y = (x + offset) mod 2^R
+                    let mut out_vals = input_vals;
+                    out_vals[target_var] =
+                        (input_vals[target_var] as i64 + offset).rem_euclid(n as i64) as usize;
+                    let expected_idx = multivar_flat_index(&out_vals, nvariables, r);
+
+                    for out_idx in 0..total_dim {
+                        let expected = if out_idx == expected_idx {
+                            Complex64::one()
+                        } else {
+                            Complex64::zero()
+                        };
+                        if (matrix[out_idx][input_idx] - expected).norm() > 1e-10 {
+                            panic!(
+                                "shift_2d: target_var={} offset={} input=({},{}) out_idx={} \
+                                 got ({:.6},{:.6}) expected ({:.6},{:.6})",
+                                target_var,
+                                offset,
+                                x0,
+                                x1,
+                                out_idx,
+                                matrix[out_idx][input_idx].re,
+                                matrix[out_idx][input_idx].im,
+                                expected.re,
+                                expected.im
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Test phase_rotation_operator_multivar: each variable gets independent phase.
+#[test]
+fn test_phase_rotation_2d() {
+    use std::f64::consts::PI;
+
+    let r = 3;
+    let n = 1usize << r;
+    let nvariables = 2;
+
+    for target_var in 0..nvariables {
+        let theta = PI / 3.0;
+        let op = phase_rotation_operator_multivar(r, theta, nvariables, target_var).unwrap();
+        let matrix = apply_multivar_operator_to_dense_matrix(&op, r, nvariables);
+
+        let total_dim = (1usize << nvariables).pow(r as u32);
+
+        for x0 in 0..n {
+            for x1 in 0..n {
+                let input_vals = [x0, x1];
+                let input_idx = multivar_flat_index(&input_vals, nvariables, r);
+
+                // Phase rotation is diagonal: M[y, x] = exp(i*θ*x_target) * δ(y, x)
+                let target_x = input_vals[target_var];
+                let phase = theta * (target_x as f64);
+                let expected_diag = Complex64::new(phase.cos(), phase.sin());
+
+                for out_idx in 0..total_dim {
+                    let expected = if out_idx == input_idx {
+                        expected_diag
+                    } else {
+                        Complex64::zero()
+                    };
+                    if (matrix[out_idx][input_idx] - expected).norm() > 1e-10 {
+                        panic!(
+                            "phase_rotation_2d: target_var={} input=({},{}) out_idx={} \
+                             got ({:.6},{:.6}) expected ({:.6},{:.6})",
+                            target_var,
+                            x0,
+                            x1,
+                            out_idx,
+                            matrix[out_idx][input_idx].re,
+                            matrix[out_idx][input_idx].im,
+                            expected.re,
+                            expected.im
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Triangle operator tests (P3)
+// ============================================================================
+
+/// Test that triangle_operator with Lower produces M[i,j] = 1 when i > j.
+#[test]
+fn test_triangle_lower() {
+    for r in 2..=4 {
+        let n = 1usize << r;
+        let op = triangle_operator(r, TriangleType::Lower).unwrap();
+        let matrix = apply_operator_to_dense_matrix(&op, r, r);
+
+        for i in 0..n {
+            for j in 0..n {
+                let expected = if i > j {
+                    Complex64::one()
+                } else {
+                    Complex64::zero()
+                };
+                if (matrix[i][j] - expected).norm() > 1e-10 {
+                    panic!(
+                        "triangle_lower: r={} M[{},{}] = ({:.6},{:.6}) expected ({:.6},{:.6})",
+                        r, i, j, matrix[i][j].re, matrix[i][j].im, expected.re, expected.im
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Test that triangle_operator with Upper produces M[i,j] = 1 when i < j.
+#[test]
+fn test_triangle_upper() {
+    for r in 2..=4 {
+        let n = 1usize << r;
+        let op = triangle_operator(r, TriangleType::Upper).unwrap();
+        let matrix = apply_operator_to_dense_matrix(&op, r, r);
+
+        for i in 0..n {
+            for j in 0..n {
+                let expected = if i < j {
+                    Complex64::one()
+                } else {
+                    Complex64::zero()
+                };
+                if (matrix[i][j] - expected).norm() > 1e-10 {
+                    panic!(
+                        "triangle_upper: r={} M[{},{}] = ({:.6},{:.6}) expected ({:.6},{:.6})",
+                        r, i, j, matrix[i][j].re, matrix[i][j].im, expected.re, expected.im
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Test that cumsum_operator matches triangle_operator with Lower (strict lower triangle).
+///
+/// cumsum_operator produces M[i,j]=1 when i>j (prefix sum: y_i = Σ_{j<i} x_j).
+#[test]
+fn test_cumsum_matches_lower_triangle() {
+    use tensor4all_quanticstransform::cumsum_operator;
+
+    for r in 2..=4 {
+        let cumsum_op = cumsum_operator(r).unwrap();
+        let triangle_op = triangle_operator(r, TriangleType::Lower).unwrap();
+
+        let cumsum_mat = apply_operator_to_dense_matrix(&cumsum_op, r, r);
+        let triangle_mat = apply_operator_to_dense_matrix(&triangle_op, r, r);
+
+        let n = 1usize << r;
+        for i in 0..n {
+            for j in 0..n {
+                if (cumsum_mat[i][j] - triangle_mat[i][j]).norm() > 1e-10 {
+                    panic!(
+                        "cumsum vs upper_triangle mismatch at r={} [{},{}]: \
+                         cumsum=({:.6},{:.6}) triangle=({:.6},{:.6})",
+                        r,
+                        i,
+                        j,
+                        cumsum_mat[i][j].re,
+                        cumsum_mat[i][j].im,
+                        triangle_mat[i][j].re,
+                        triangle_mat[i][j].im
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Test that Upper + Lower + Identity = J (all-ones matrix).
+///
+/// For an N×N matrix: strict_upper + strict_lower + identity = all-ones matrix.
+#[test]
+fn test_upper_plus_lower_is_complement() {
+    for r in 2..=4 {
+        let n = 1usize << r;
+        let upper_op = triangle_operator(r, TriangleType::Upper).unwrap();
+        let lower_op = triangle_operator(r, TriangleType::Lower).unwrap();
+
+        let upper_mat = apply_operator_to_dense_matrix(&upper_op, r, r);
+        let lower_mat = apply_operator_to_dense_matrix(&lower_op, r, r);
+
+        for i in 0..n {
+            for j in 0..n {
+                let identity = if i == j {
+                    Complex64::one()
+                } else {
+                    Complex64::zero()
+                };
+                let sum = upper_mat[i][j] + lower_mat[i][j] + identity;
+                let expected = Complex64::one();
+                if (sum - expected).norm() > 1e-10 {
+                    panic!(
+                        "upper+lower+I != J at r={} [{},{}]: sum=({:.6},{:.6})",
+                        r, i, j, sum.re, sum.im
+                    );
                 }
             }
         }

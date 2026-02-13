@@ -7,7 +7,10 @@ use num_complex::Complex64;
 use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
-use crate::common::{tensortrain_to_linear_operator, BoundaryCondition, QuanticsOperator};
+use crate::common::{
+    embed_single_var_mpo, tensortrain_to_linear_operator,
+    tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
+};
 
 /// Create a shift operator: f(x) = g(x + offset) mod 2^R
 ///
@@ -36,6 +39,34 @@ pub fn shift_operator(r: usize, offset: i64, bc: BoundaryCondition) -> Result<Qu
     let mpo = shift_mpo(r, offset, bc)?;
     let site_dims = vec![2; r];
     tensortrain_to_linear_operator(&mpo, &site_dims)
+}
+
+/// Create a shift operator for one variable in a multi-variable system.
+///
+/// Acts as shift on `target_var` and identity on all other variables.
+///
+/// # Arguments
+/// * `r` - Number of bits (sites)
+/// * `offset` - Shift amount (can be negative)
+/// * `bc` - Boundary condition
+/// * `nvariables` - Total number of variables
+/// * `target_var` - Which variable to shift (0-indexed)
+pub fn shift_operator_multivar(
+    r: usize,
+    offset: i64,
+    bc: BoundaryCondition,
+    nvariables: usize,
+    target_var: usize,
+) -> Result<QuanticsOperator> {
+    if r == 0 {
+        return Err(anyhow::anyhow!("Number of sites must be positive"));
+    }
+
+    let mpo = shift_mpo(r, offset, bc)?;
+    let embedded = embed_single_var_mpo(&mpo, nvariables, target_var)?;
+    let dim_multi = 1 << nvariables;
+    let dims = vec![dim_multi; r];
+    tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }
 
 /// Create the shift MPO as a TensorTrain.
