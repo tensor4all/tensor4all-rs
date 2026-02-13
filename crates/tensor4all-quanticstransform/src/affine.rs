@@ -594,10 +594,10 @@ fn affine_transform_tensors(
         for ext_data in ext_data_list.iter().rev() {
             let (_, num_cin, _) = *ext_data.tensor.shape();
             let mut new_weights = vec![0.0; num_cin];
-            for cin_idx in 0..num_cin {
+            for (cin_idx, nw) in new_weights.iter_mut().enumerate() {
                 for (cout_idx, &w) in current_weights.iter().enumerate() {
                     if w != 0.0 && ext_data.tensor[[cout_idx, cin_idx, 0]] {
-                        new_weights[cin_idx] += w;
+                        *nw += w;
                     }
                 }
             }
