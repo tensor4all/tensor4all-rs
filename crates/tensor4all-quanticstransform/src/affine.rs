@@ -519,39 +519,117 @@ fn affine_transform_tensors(
 ) -> Result<Vec<tensor4all_simplett::Tensor3<Complex64>>> {
     let site_dim = 1 << (m + n); // 2^(M+N) for fused representation
 
-    // Process from LSB (site R-1) to MSB (site 0)
-    // This allows carry to propagate correctly: LSB → MSB
-    //
-    // Initial carry at LSB is zero vector
-    let mut carries: Vec<Vec<i64>> = vec![vec![0i64; m]];
+    // Track sign separately and work with absolute value
+    // so that right-shifting always terminates (Julia PR #45 approach)
+    let bsign: Vec<i64> = b_int.iter().map(|&b| if b >= 0 { 1 } else { -1 }).collect();
+    let mut b_work: Vec<i64> = b_int.iter().map(|&b| b.abs()).collect();
 
-    // Store core data for each site (will be in reverse order: R-1, R-2, ..., 0)
+    // Process from LSB (site R-1) to MSB (site 0)
+    let mut carries: Vec<Vec<i64>> = vec![vec![0i64; m]];
     let mut core_data_list: Vec<AffineCoreData> = Vec::with_capacity(r);
 
-    for site in (0..r).rev() {
-        // site goes R-1, R-2, ..., 0
-        let bit_pos = r - 1 - site; // bit position: site R-1 → bit 0 (LSB), site 0 → bit R-1 (MSB)
-
-        // Extract bit at position bit_pos from b
-        let b_curr: Vec<i64> = b_int
+    for _site in (0..r).rev() {
+        // Extract current bit: (b_work & 1) * bsign
+        let b_curr: Vec<i64> = b_work
             .iter()
-            .map(|&b| {
-                let sign = if b >= 0 { 1 } else { -1 };
-                sign * ((b.abs() >> bit_pos) & 1)
-            })
+            .zip(bsign.iter())
+            .map(|(&b, &s)| (b & 1) * s)
             .collect();
 
-        // Compute core tensor for this site
         let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries, true)?;
-
         carries = core_data.carries_out.clone();
         core_data_list.push(core_data);
+
+        // Shift right
+        b_work.iter_mut().for_each(|b| *b >>= 1);
     }
 
     // core_data_list is now in order: [site R-1, site R-2, ..., site 0]
 
+    // Extension loop: handle remaining bits of b for Open BC
+    // When abs(b) >= 2^R, high bits of b contribute to carries that affect validity.
+    // Extension tensors have site_dim=1 (activebit=false: only x=0, y=0).
+    // We fold them into the MSB tensor as a "cap matrix" (Julia approach).
+    let cap_matrix: Option<Vec<f64>> = if !bc_periodic.iter().all(|&p| p)
+        && b_work.iter().any(|&b| b > 0)
+    {
+        let mut ext_data_list: Vec<AffineCoreData> = Vec::new();
+        while b_work.iter().any(|&b| b > 0) {
+            let b_curr: Vec<i64> = b_work
+                .iter()
+                .zip(bsign.iter())
+                .map(|(&b, &s)| (b & 1) * s)
+                .collect();
+
+            let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries, false)?;
+            carries = core_data.carries_out.clone();
+            ext_data_list.push(core_data);
+
+            b_work.iter_mut().for_each(|b| *b >>= 1);
+        }
+
+        // Build cap matrix by contracting extension tensors with BC weights.
+        // Extension tensors have site_dim=1, so they are carry transition matrices:
+        //   ext_matrix[cout_idx, cin_idx] = core_data.tensor[[cout_idx, cin_idx, 0]]
+        //
+        // Process: outermost (last computed) gets BC weights applied,
+        // then multiply inward toward the main tensor chain.
+
+        // Start with BC weights on the final carries
+        let bc_weights: Vec<f64> = carries
+            .iter()
+            .map(|c| {
+                if c.iter().all(|&ci| ci == 0) {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+
+        // Contract extension tensors from outermost to innermost
+        // ext_data_list is [innermost, ..., outermost] (order of computation)
+        // We process from outermost to innermost
+        let mut current_weights = bc_weights;
+        for ext_data in ext_data_list.iter().rev() {
+            let (_, num_cin, _) = *ext_data.tensor.shape();
+            let mut new_weights = vec![0.0; num_cin];
+            for cin_idx in 0..num_cin {
+                for (cout_idx, &w) in current_weights.iter().enumerate() {
+                    if w != 0.0 && ext_data.tensor[[cout_idx, cin_idx, 0]] {
+                        new_weights[cin_idx] += w;
+                    }
+                }
+            }
+            current_weights = new_weights;
+        }
+
+        // current_weights now maps: MSB carry_out index -> effective BC weight
+        Some(current_weights)
+    } else {
+        None
+    };
+
     // Build tensors in the same order, then reverse to get [site 0, site 1, ..., site R-1]
     let mut tensors = Vec::with_capacity(r);
+
+    // Helper: compute BC weight for a carry-out index
+    let compute_bc_weight = |cout_idx: usize, core_data: &AffineCoreData| -> Complex64 {
+        if bc_periodic.iter().all(|&p| p) {
+            Complex64::one()
+        } else if let Some(ref cap) = cap_matrix {
+            // Extension loop was used: weight comes from cap matrix
+            Complex64::new(cap[cout_idx], 0.0)
+        } else {
+            // No extension: weight is 1 if carry is zero, 0 otherwise
+            let carry = &core_data.carries_out[cout_idx];
+            if carry.iter().all(|&c| c == 0) {
+                Complex64::one()
+            } else {
+                Complex64::new(0.0, 0.0)
+            }
+        }
+    };
 
     for (idx, core_data) in core_data_list.iter().enumerate() {
         // idx=0 corresponds to site R-1 (LSB), idx=R-1 corresponds to site 0 (MSB)
@@ -575,25 +653,11 @@ fn affine_transform_tensors(
             tensor3_zeros(left_dim, site_dim, right_dim);
 
         if is_lsb && is_msb {
-            // R==1: single site case where LSB and MSB are the same
-            // Shape (1, site_dim, 1)
-            // Initial carry_in=0 (only index 0), apply BC on carry_out
+            // R==1: single site case
             for cout_idx in 0..num_carry_out {
-                let carry = &core_data.carries_out[cout_idx];
-                let bc_weight = if bc_periodic.iter().all(|&p| p) {
-                    // All periodic: any final carry is acceptable
-                    Complex64::one()
-                } else {
-                    // Open boundaries: final carry must be zero for valid output
-                    if carry.iter().all(|&c| c == 0) {
-                        Complex64::one()
-                    } else {
-                        Complex64::new(0.0, 0.0)
-                    }
-                };
+                let bc_weight = compute_bc_weight(cout_idx, core_data);
 
                 for site_idx in 0..site_dim {
-                    // Only carry_in_idx=0 (initial carry is zero vector)
                     if core_data.tensor[[cout_idx, 0, site_idx]] {
                         let old = t.get3(0, site_idx, 0);
                         t.set3(0, site_idx, 0, *old + bc_weight);
@@ -614,26 +678,12 @@ fn affine_transform_tensors(
             }
         } else if is_msb {
             // MSB (site 0): apply BC on carry_out, receive carry from right
-            // Shape (1, site_dim, num_carry_in)
-            // Apply BC based on final outgoing carry
             for cout_idx in 0..num_carry_out {
-                let carry = &core_data.carries_out[cout_idx];
-                let bc_weight = if bc_periodic.iter().all(|&p| p) {
-                    // All periodic: any final carry is acceptable
-                    Complex64::one()
-                } else {
-                    // Open boundaries: final carry must be zero for valid output
-                    if carry.iter().all(|&c| c == 0) {
-                        Complex64::one()
-                    } else {
-                        Complex64::new(0.0, 0.0)
-                    }
-                };
+                let bc_weight = compute_bc_weight(cout_idx, core_data);
 
                 for cin_idx in 0..num_carry_in {
                     for site_idx in 0..site_dim {
                         if core_data.tensor[[cout_idx, cin_idx, site_idx]] {
-                            // Sum over carry_out (contract with BC weight)
                             let old = t.get3(0, site_idx, cin_idx);
                             t.set3(0, site_idx, cin_idx, *old + bc_weight);
                         }
