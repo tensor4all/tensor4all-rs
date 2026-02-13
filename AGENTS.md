@@ -42,10 +42,12 @@ Read `docs/api/*.md` before source files. Only read source when API doc is insuf
 ## Testing
 
 ```bash
-cargo test                    # Full suite
-cargo test --test test_name   # Specific test
-cargo test --workspace        # All crates
+cargo test --release                    # Full suite
+cargo test --release --test test_name   # Specific test
+cargo test --release --workspace        # All crates
 ```
+
+**Always use `--release` mode for tests** to avoid excessive execution time in debug builds.
 
 - Private functions: `#[cfg(test)]` module in source file
 - Integration tests: `tests/` directory

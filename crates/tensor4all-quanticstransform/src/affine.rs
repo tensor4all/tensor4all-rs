@@ -214,7 +214,11 @@ pub fn affine_transform_matrix(
     let mut cols = Vec::new();
     let mut vals = Vec::new();
 
-    // Iterate over all x ∈ {0, ..., 2^R-1}^N
+    let mask = modulus - 1; // 2^R - 1
+
+    // Iterate over all (x, y) pairs, matching Julia's approach.
+    // For periodic BC with scale > 1, multiple y values can satisfy
+    // scale * y ≡ A*x + b (mod 2^R), so we must check all pairs.
     for x_flat in 0..input_size {
         // Decode x_flat to N-dimensional x vector
         // x_flat = x[0] + x[1]*2^R + x[2]*2^(2R) + ...
@@ -222,58 +226,41 @@ pub fn affine_transform_matrix(
             .map(|var| ((x_flat >> (var * r)) & ((1 << r) - 1)) as i64)
             .collect();
 
-        // Compute y = A*x + b (unscaled, then divide by scale)
-        let mut y_unscaled: Vec<i64> = vec![0; m];
+        // Compute v = A*x + b (unscaled)
+        let mut v: Vec<i64> = vec![0; m];
         for i in 0..m {
-            y_unscaled[i] = b_int[i];
+            v[i] = b_int[i];
             for j in 0..n {
-                y_unscaled[i] += a_int[i * n + j] * x[j];
+                v[i] += a_int[i * n + j] * x[j];
             }
         }
 
-        // Check if y is divisible by scale
-        if y_unscaled.iter().any(|&yi| yi % scale != 0) {
-            continue; // No valid output for this input
-        }
+        for y_flat in 0..output_size {
+            // Decode y_flat to M-dimensional y vector
+            let y: Vec<i64> = (0..m)
+                .map(|var| ((y_flat >> (var * r)) & ((1 << r) - 1)) as i64)
+                .collect();
 
-        let y: Vec<i64> = y_unscaled.iter().map(|&yi| yi / scale).collect();
+            // Compute scale * y
+            let sy: Vec<i64> = y.iter().map(|&yi| scale * yi).collect();
 
-        // Apply boundary conditions
-        let y_bounded: Vec<i64> = y
-            .iter()
-            .enumerate()
-            .map(|(i, &yi)| {
+            // Check equiv(v, s*y, R, boundary) per component
+            let equiv = v.iter().zip(sy.iter()).enumerate().all(|(i, (&vi, &syi))| {
                 if bc_periodic[i] {
-                    // Periodic: wrap around
-                    ((yi % modulus) + modulus) % modulus
+                    // Periodic: v ≡ s*y (mod 2^R)
+                    (vi - syi) & mask == 0
                 } else {
-                    // Open: must be in range [0, 2^R)
-                    yi
+                    // Open: v == s*y (exact)
+                    vi == syi
                 }
-            })
-            .collect();
+            });
 
-        // Check if output is valid (in range for open boundaries)
-        let valid = y_bounded
-            .iter()
-            .enumerate()
-            .all(|(i, &yi)| bc_periodic[i] || (yi >= 0 && yi < modulus));
-
-        if !valid {
-            continue;
+            if equiv {
+                rows.push(y_flat);
+                cols.push(x_flat);
+                vals.push(1.0);
+            }
         }
-
-        // Encode y to flat index
-        // y_flat = y[0] + y[1]*2^R + y[2]*2^(2R) + ...
-        let y_flat: usize = y_bounded
-            .iter()
-            .enumerate()
-            .map(|(var, &yi)| (yi as usize) << (var * r))
-            .sum();
-
-        rows.push(y_flat);
-        cols.push(x_flat);
-        vals.push(1.0);
     }
 
     // Build sparse matrix in CSR format
@@ -532,39 +519,117 @@ fn affine_transform_tensors(
 ) -> Result<Vec<tensor4all_simplett::Tensor3<Complex64>>> {
     let site_dim = 1 << (m + n); // 2^(M+N) for fused representation
 
-    // Process from LSB (site R-1) to MSB (site 0)
-    // This allows carry to propagate correctly: LSB → MSB
-    //
-    // Initial carry at LSB is zero vector
-    let mut carries: Vec<Vec<i64>> = vec![vec![0i64; m]];
+    // Track sign separately and work with absolute value
+    // so that right-shifting always terminates (Julia PR #45 approach)
+    let bsign: Vec<i64> = b_int.iter().map(|&b| if b >= 0 { 1 } else { -1 }).collect();
+    let mut b_work: Vec<i64> = b_int.iter().map(|&b| b.abs()).collect();
 
-    // Store core data for each site (will be in reverse order: R-1, R-2, ..., 0)
+    // Process from LSB (site R-1) to MSB (site 0)
+    let mut carries: Vec<Vec<i64>> = vec![vec![0i64; m]];
     let mut core_data_list: Vec<AffineCoreData> = Vec::with_capacity(r);
 
-    for site in (0..r).rev() {
-        // site goes R-1, R-2, ..., 0
-        let bit_pos = r - 1 - site; // bit position: site R-1 → bit 0 (LSB), site 0 → bit R-1 (MSB)
-
-        // Extract bit at position bit_pos from b
-        let b_curr: Vec<i64> = b_int
+    for _site in (0..r).rev() {
+        // Extract current bit: (b_work & 1) * bsign
+        let b_curr: Vec<i64> = b_work
             .iter()
-            .map(|&b| {
-                let sign = if b >= 0 { 1 } else { -1 };
-                sign * ((b.abs() >> bit_pos) & 1)
-            })
+            .zip(bsign.iter())
+            .map(|(&b, &s)| (b & 1) * s)
             .collect();
 
-        // Compute core tensor for this site
-        let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries)?;
-
+        let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries, true)?;
         carries = core_data.carries_out.clone();
         core_data_list.push(core_data);
+
+        // Shift right
+        b_work.iter_mut().for_each(|b| *b >>= 1);
     }
 
     // core_data_list is now in order: [site R-1, site R-2, ..., site 0]
 
+    // Extension loop: handle remaining bits of b for Open BC
+    // When abs(b) >= 2^R, high bits of b contribute to carries that affect validity.
+    // Extension tensors have site_dim=1 (activebit=false: only x=0, y=0).
+    // We fold them into the MSB tensor as a "cap matrix" (Julia approach).
+    let cap_matrix: Option<Vec<f64>> = if !bc_periodic.iter().all(|&p| p)
+        && b_work.iter().any(|&b| b > 0)
+    {
+        let mut ext_data_list: Vec<AffineCoreData> = Vec::new();
+        while b_work.iter().any(|&b| b > 0) {
+            let b_curr: Vec<i64> = b_work
+                .iter()
+                .zip(bsign.iter())
+                .map(|(&b, &s)| (b & 1) * s)
+                .collect();
+
+            let core_data = affine_transform_core(a_int, &b_curr, scale, m, n, &carries, false)?;
+            carries = core_data.carries_out.clone();
+            ext_data_list.push(core_data);
+
+            b_work.iter_mut().for_each(|b| *b >>= 1);
+        }
+
+        // Build cap matrix by contracting extension tensors with BC weights.
+        // Extension tensors have site_dim=1, so they are carry transition matrices:
+        //   ext_matrix[cout_idx, cin_idx] = core_data.tensor[[cout_idx, cin_idx, 0]]
+        //
+        // Process: outermost (last computed) gets BC weights applied,
+        // then multiply inward toward the main tensor chain.
+
+        // Start with BC weights on the final carries
+        let bc_weights: Vec<f64> = carries
+            .iter()
+            .map(|c| {
+                if c.iter().all(|&ci| ci == 0) {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+
+        // Contract extension tensors from outermost to innermost
+        // ext_data_list is [innermost, ..., outermost] (order of computation)
+        // We process from outermost to innermost
+        let mut current_weights = bc_weights;
+        for ext_data in ext_data_list.iter().rev() {
+            let (_, num_cin, _) = *ext_data.tensor.shape();
+            let mut new_weights = vec![0.0; num_cin];
+            for (cin_idx, nw) in new_weights.iter_mut().enumerate() {
+                for (cout_idx, &w) in current_weights.iter().enumerate() {
+                    if w != 0.0 && ext_data.tensor[[cout_idx, cin_idx, 0]] {
+                        *nw += w;
+                    }
+                }
+            }
+            current_weights = new_weights;
+        }
+
+        // current_weights now maps: MSB carry_out index -> effective BC weight
+        Some(current_weights)
+    } else {
+        None
+    };
+
     // Build tensors in the same order, then reverse to get [site 0, site 1, ..., site R-1]
     let mut tensors = Vec::with_capacity(r);
+
+    // Helper: compute BC weight for a carry-out index
+    let compute_bc_weight = |cout_idx: usize, core_data: &AffineCoreData| -> Complex64 {
+        if bc_periodic.iter().all(|&p| p) {
+            Complex64::one()
+        } else if let Some(ref cap) = cap_matrix {
+            // Extension loop was used: weight comes from cap matrix
+            Complex64::new(cap[cout_idx], 0.0)
+        } else {
+            // No extension: weight is 1 if carry is zero, 0 otherwise
+            let carry = &core_data.carries_out[cout_idx];
+            if carry.iter().all(|&c| c == 0) {
+                Complex64::one()
+            } else {
+                Complex64::new(0.0, 0.0)
+            }
+        }
+    };
 
     for (idx, core_data) in core_data_list.iter().enumerate() {
         // idx=0 corresponds to site R-1 (LSB), idx=R-1 corresponds to site 0 (MSB)
@@ -588,25 +653,11 @@ fn affine_transform_tensors(
             tensor3_zeros(left_dim, site_dim, right_dim);
 
         if is_lsb && is_msb {
-            // R==1: single site case where LSB and MSB are the same
-            // Shape (1, site_dim, 1)
-            // Initial carry_in=0 (only index 0), apply BC on carry_out
+            // R==1: single site case
             for cout_idx in 0..num_carry_out {
-                let carry = &core_data.carries_out[cout_idx];
-                let bc_weight = if bc_periodic.iter().all(|&p| p) {
-                    // All periodic: any final carry is acceptable
-                    Complex64::one()
-                } else {
-                    // Open boundaries: final carry must be zero for valid output
-                    if carry.iter().all(|&c| c == 0) {
-                        Complex64::one()
-                    } else {
-                        Complex64::new(0.0, 0.0)
-                    }
-                };
+                let bc_weight = compute_bc_weight(cout_idx, core_data);
 
                 for site_idx in 0..site_dim {
-                    // Only carry_in_idx=0 (initial carry is zero vector)
                     if core_data.tensor[[cout_idx, 0, site_idx]] {
                         let old = t.get3(0, site_idx, 0);
                         t.set3(0, site_idx, 0, *old + bc_weight);
@@ -627,26 +678,12 @@ fn affine_transform_tensors(
             }
         } else if is_msb {
             // MSB (site 0): apply BC on carry_out, receive carry from right
-            // Shape (1, site_dim, num_carry_in)
-            // Apply BC based on final outgoing carry
             for cout_idx in 0..num_carry_out {
-                let carry = &core_data.carries_out[cout_idx];
-                let bc_weight = if bc_periodic.iter().all(|&p| p) {
-                    // All periodic: any final carry is acceptable
-                    Complex64::one()
-                } else {
-                    // Open boundaries: final carry must be zero for valid output
-                    if carry.iter().all(|&c| c == 0) {
-                        Complex64::one()
-                    } else {
-                        Complex64::new(0.0, 0.0)
-                    }
-                };
+                let bc_weight = compute_bc_weight(cout_idx, core_data);
 
                 for cin_idx in 0..num_carry_in {
                     for site_idx in 0..site_dim {
                         if core_data.tensor[[cout_idx, cin_idx, site_idx]] {
-                            // Sum over carry_out (contract with BC weight)
                             let old = t.get3(0, site_idx, cin_idx);
                             t.set3(0, site_idx, cin_idx, *old + bc_weight);
                         }
@@ -701,15 +738,18 @@ fn affine_transform_core(
     m: usize,
     n: usize,
     carries_in: &[Vec<i64>],
+    activebit: bool,
 ) -> Result<AffineCoreData> {
     let mut carry_out_map: HashMap<Vec<i64>, DTensor<bool, 2>> = HashMap::new();
-    let site_dim = 1 << (m + n);
+    let x_range = if activebit { 1 << n } else { 1 };
+    let y_range = if activebit { 1 << m } else { 1 };
+    let site_dim = x_range * y_range;
     let num_carry_in = carries_in.len();
 
     // Iterate over all input carries
     for (c_idx, carry_in) in carries_in.iter().enumerate() {
         // Iterate over all possible x values (N bits)
-        for x_bits in 0..(1 << n) {
+        for x_bits in 0..x_range {
             let x: Vec<i64> = (0..n).map(|j| ((x_bits >> j) & 1) as i64).collect();
 
             // Compute z = A*x + b + carry_in
@@ -724,6 +764,12 @@ fn affine_transform_core(
             if scale % 2 == 1 {
                 // Scale is odd: unique y that satisfies condition
                 let y: Vec<i64> = z.iter().map(|&zi| zi & 1).collect();
+
+                // When bits are inactive, y must be zero (Julia PR #45 fix)
+                if !activebit && y.iter().any(|&yi| yi != 0) {
+                    continue;
+                }
+
                 let y_bits: usize = y
                     .iter()
                     .enumerate()
@@ -751,7 +797,7 @@ fn affine_transform_core(
                 }
 
                 // y can be any value
-                for y_bits in 0..(1 << m) {
+                for y_bits in 0..y_range {
                     let y: Vec<i64> = (0..m).map(|i| ((y_bits >> i) & 1) as i64).collect();
 
                     // Compute carry_out = (z - scale * y) / 2
@@ -1136,7 +1182,8 @@ mod tests {
 
     #[test]
     fn test_affine_matrix_half_scale() {
-        // y = x/2 (only even inputs have valid output)
+        // y = x/2, scale=2, R=3, Periodic BC
+        // Condition: 2*y ≡ x (mod 2^R=8), so each even x has 2 solutions
         let r = 3;
         let a = vec![Rational64::new(1, 2)];
         let b = vec![Rational64::from_integer(0)];
@@ -1145,13 +1192,19 @@ mod tests {
 
         let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
 
-        // Only even x values map: x=0->0, x=2->1, x=4->2, x=6->3
-        assert_eq!(matrix.nnz(), 4);
+        // x=0: y∈{0,4}, x=2: y∈{1,5}, x=4: y∈{2,6}, x=6: y∈{3,7}
+        assert_eq!(matrix.nnz(), 8);
 
         assert_eq!(*matrix.get(0, 0).unwrap_or(&0.0), 1.0);
+        assert_eq!(*matrix.get(4, 0).unwrap_or(&0.0), 1.0);
         assert_eq!(*matrix.get(1, 2).unwrap_or(&0.0), 1.0);
+        assert_eq!(*matrix.get(5, 2).unwrap_or(&0.0), 1.0);
         assert_eq!(*matrix.get(2, 4).unwrap_or(&0.0), 1.0);
+        assert_eq!(*matrix.get(6, 4).unwrap_or(&0.0), 1.0);
         assert_eq!(*matrix.get(3, 6).unwrap_or(&0.0), 1.0);
+        assert_eq!(*matrix.get(7, 6).unwrap_or(&0.0), 1.0);
+
+        assert_affine_mpo_matches_matrix(r, &params, &bc);
     }
 
     // ========== MPO vs Matrix comparison tests (from Quantics.jl) ==========
@@ -1239,157 +1292,186 @@ mod tests {
         matrix
     }
 
+    /// Assert that the MPO representation matches the direct sparse matrix computation
+    /// for all elements. This is the primary correctness check: two independent algorithms
+    /// (carry-based MPO vs direct enumeration) must agree.
+    #[allow(clippy::needless_range_loop)]
+    fn assert_affine_mpo_matches_matrix(r: usize, params: &AffineParams, bc: &[BoundaryCondition]) {
+        let m = params.m;
+        let n = params.n;
+
+        let matrix = affine_transform_matrix(r, params, bc).unwrap();
+        let mpo = affine_transform_mpo(r, params, bc).unwrap();
+        let mpo_matrix = mpo_to_dense_matrix(&mpo, m, n, r);
+
+        let output_size = 1 << (m * r);
+        let input_size = 1 << (n * r);
+
+        for y in 0..output_size {
+            for x in 0..input_size {
+                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
+                let mpo_val = mpo_matrix[y][x].re;
+                assert!(
+                    (sparse_val - mpo_val).abs() < 1e-10,
+                    "MPO vs matrix mismatch at ({}, {}): sparse={}, mpo={} \
+                     [r={}, m={}, n={}, bc={:?}]",
+                    y,
+                    x,
+                    sparse_val,
+                    mpo_val,
+                    r,
+                    m,
+                    n,
+                    bc
+                );
+            }
+        }
+    }
+
+    /// Assert that affine_transform_matrix produces correct results by independently
+    /// computing y = A*x + b using Rational64 arithmetic (no integer scaling).
+    /// Equivalent to Julia's test_affine_transform_matrix_multi_variables.
+    #[allow(clippy::needless_range_loop)]
+    fn assert_affine_matrix_correctness(r: usize, params: &AffineParams, bc: &[BoundaryCondition]) {
+        let m = params.m;
+        let n = params.n;
+        let modulus = 1i64 << r;
+
+        let matrix = affine_transform_matrix(r, params, bc).unwrap();
+
+        let input_size = 1usize << (r * n);
+        let output_size = 1usize << (r * m);
+
+        // Build expected matrix independently using Rational64
+        for x_flat in 0..input_size {
+            // Decode x_flat to N-dimensional vector
+            let x_vals: Vec<i64> = (0..n)
+                .map(|var| ((x_flat >> (var * r)) & ((1 << r) - 1)) as i64)
+                .collect();
+
+            // Compute y = A*x + b using Rational64 (independent of to_integer_scaled)
+            let y_rational: Vec<Rational64> = (0..m)
+                .map(|i| {
+                    let mut val = params.b[i];
+                    for j in 0..n {
+                        val += params.a[i * n + j] * Rational64::from_integer(x_vals[j]);
+                    }
+                    val
+                })
+                .collect();
+
+            // Check if all y values are integers
+            if y_rational.iter().any(|y| !y.is_integer()) {
+                // No valid output for this input - all entries in this column must be 0
+                for y_flat in 0..output_size {
+                    let val = *matrix.get(y_flat, x_flat).unwrap_or(&0.0);
+                    assert!(
+                        val.abs() < 1e-10,
+                        "Expected zero at ({}, {}) for non-integer y, got {} [r={}, bc={:?}]",
+                        y_flat,
+                        x_flat,
+                        val,
+                        r,
+                        bc
+                    );
+                }
+                continue;
+            }
+
+            let y_int: Vec<i64> = y_rational.iter().map(|y| y.to_integer()).collect();
+
+            // Apply boundary conditions
+            let bc_periodic: Vec<bool> = bc
+                .iter()
+                .map(|b| matches!(b, BoundaryCondition::Periodic))
+                .collect();
+
+            let y_bounded: Vec<i64> = y_int
+                .iter()
+                .enumerate()
+                .map(|(i, &yi)| {
+                    if bc_periodic[i] {
+                        ((yi % modulus) + modulus) % modulus
+                    } else {
+                        yi
+                    }
+                })
+                .collect();
+
+            let valid = y_bounded
+                .iter()
+                .enumerate()
+                .all(|(i, &yi)| bc_periodic[i] || (yi >= 0 && yi < modulus));
+
+            if valid {
+                let y_flat: usize = y_bounded
+                    .iter()
+                    .enumerate()
+                    .map(|(var, &yi)| (yi as usize) << (var * r))
+                    .sum();
+
+                // This (y_flat, x_flat) should be 1
+                let val = *matrix.get(y_flat, x_flat).unwrap_or(&0.0);
+                assert!(
+                    (val - 1.0).abs() < 1e-10,
+                    "Expected 1 at ({}, {}) but got {} [r={}, x={:?}, y={:?}, bc={:?}]",
+                    y_flat,
+                    x_flat,
+                    val,
+                    r,
+                    x_vals,
+                    y_bounded,
+                    bc
+                );
+            }
+        }
+    }
+
     // MPO vs matrix comparison tests
 
     #[test]
-    #[allow(clippy::needless_range_loop)]
     fn test_affine_mpo_vs_matrix_1d_identity() {
-        // Test 1D identity: y = x (M=1, N=1)
-        let r = 3;
         let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
         let bc = vec![BoundaryCondition::Periodic];
-
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
-        let mpo_matrix = mpo_to_dense_matrix(&mpo, 1, 1, r);
-
-        let size = 1 << r;
-        for y in 0..size {
-            for x in 0..size {
-                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
-                let mpo_val = mpo_matrix[y][x].re;
-                assert!(
-                    (sparse_val - mpo_val).abs() < 1e-10,
-                    "Mismatch at ({}, {}): sparse={}, mpo={}",
-                    y,
-                    x,
-                    sparse_val,
-                    mpo_val
-                );
-            }
-        }
+        assert_affine_mpo_matches_matrix(3, &params, &bc);
     }
 
     #[test]
-    #[allow(clippy::needless_range_loop)]
     fn test_affine_mpo_vs_matrix_1d_shift() {
-        // Test 1D shift: y = x + 3 (M=1, N=1)
-        let r = 3;
         let params = AffineParams::from_integers(vec![1], vec![3], 1, 1).unwrap();
         let bc = vec![BoundaryCondition::Periodic];
-
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
-        let mpo_matrix = mpo_to_dense_matrix(&mpo, 1, 1, r);
-
-        let size = 1 << r;
-        for y in 0..size {
-            for x in 0..size {
-                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
-                let mpo_val = mpo_matrix[y][x].re;
-                assert!(
-                    (sparse_val - mpo_val).abs() < 1e-10,
-                    "Mismatch at ({}, {}): sparse={}, mpo={}",
-                    y,
-                    x,
-                    sparse_val,
-                    mpo_val
-                );
-            }
-        }
+        assert_affine_mpo_matches_matrix(3, &params, &bc);
     }
 
     #[test]
-    #[allow(clippy::needless_range_loop)]
     fn test_affine_mpo_vs_matrix_simple() {
-        // Compare MPO to matrix: A = [[1, 0], [1, 1]], b = [0, 0]
-        // From Quantics.jl compare_simple test
-        //
-        // A = [[1, 0], [1, 1]] means:
-        //   y1 = 1*x1 + 0*x2 = x1
-        //   y2 = 1*x1 + 1*x2 = x1 + x2
-        //
-        // Flat index convention: flat = var0 + var1 * 2^R
-        // For r=3: x_flat = x1 + 8*x2, y_flat = y1 + 8*y2
-        //
-        // Example: x1=1, x2=1 => y1=1, y2=2
-        //   x_flat = 1 + 8*1 = 9
-        //   y_flat = 1 + 8*2 = 17
-        //   So matrix[17,9] = 1
-        //
-        // But y_flat=1 means y1=1, y2=0 (since 1 = 1 + 8*0)
-        // For y1=1, y2=0: need x1=1, x2=-x1=-1 (invalid) or via modular arithmetic
-        // Actually y2 = x1+x2 = 0 mod 8 means x1+x2 = 0 or 8
-        // If x1=1, then x2=7 for x1+x2=8, so y1=1, y2=0 (mod 8)
-        // x_flat = 1 + 8*7 = 57, so matrix[1,57] = 1
-        let r = 3;
-        let a = vec![1i64, 0, 1, 1]; // [[1, 0], [1, 1]] row-major
-        let b = vec![0i64, 0];
-        let params = AffineParams::from_integers(a, b, 2, 2).unwrap();
+        let params = AffineParams::from_integers(vec![1, 0, 1, 1], vec![0, 0], 2, 2).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 2];
-
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
-        let mpo_matrix = mpo_to_dense_matrix(&mpo, 2, 2, r);
-
-        // Compare
-        let size = 1 << (2 * r);
-        for y in 0..size {
-            for x in 0..size {
-                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
-                let mpo_val = mpo_matrix[y][x].re;
-                assert!(
-                    (sparse_val - mpo_val).abs() < 1e-10,
-                    "Mismatch at ({}, {}): sparse={}, mpo={}",
-                    y,
-                    x,
-                    sparse_val,
-                    mpo_val
-                );
-            }
-        }
+        assert_affine_mpo_matches_matrix(3, &params, &bc);
     }
 
     #[test]
     fn test_affine_matrix_3x3_hard() {
         // From Quantics.jl compare_hard test
         // A = [1 0 1; 1 2 -1; 0 1 1], b = [11; 23; -15]
-        let r = 4;
-        let a = vec![1i64, 0, 1, 1, 2, -1, 0, 1, 1]; // 3×3 row-major
+        let r = 3;
+        let a = vec![1i64, 0, 1, 1, 2, -1, 0, 1, 1];
         let b = vec![11i64, 23, -15];
         let params = AffineParams::from_integers(a, b, 3, 3).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 3];
-
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-
-        // Verify dimensions
-        let input_size = 1 << (3 * r); // 2^12 = 4096
-        let output_size = 1 << (3 * r); // 2^12 = 4096
-        assert_eq!(matrix.rows(), output_size);
-        assert_eq!(matrix.cols(), input_size);
-
-        // Verify non-zero count is reasonable (permutation-like)
-        assert!(matrix.nnz() > 0);
-        assert!(matrix.nnz() <= input_size);
+        assert_affine_mpo_matches_matrix(r, &params, &bc);
     }
 
     #[test]
     fn test_affine_matrix_rectangular() {
         // From Quantics.jl compare_rect test
-        // A = [1 0 1; 1 2 0] (2×3), b = [11; -3]
+        // A = [1 0 1; 1 2 0] (2x3), b = [11; -3]
         let r = 4;
-        let a = vec![1i64, 0, 1, 1, 2, 0]; // 2×3 row-major
+        let a = vec![1i64, 0, 1, 1, 2, 0];
         let b = vec![11i64, -3];
         let params = AffineParams::from_integers(a, b, 2, 3).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 2];
-
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-
-        // Verify dimensions
-        let input_size = 1 << (3 * r); // 2^12 = 4096
-        let output_size = 1 << (2 * r); // 2^8 = 256
-        assert_eq!(matrix.rows(), output_size);
-        assert_eq!(matrix.cols(), input_size);
+        assert_affine_mpo_matches_matrix(r, &params, &bc);
     }
 
     #[test]
@@ -1402,22 +1484,7 @@ mod tests {
                 let b = vec![Rational64::from_integer(0)];
                 let params = AffineParams::new(a, b, 1, 1).unwrap();
                 let bcs = vec![bc];
-
-                let matrix = affine_transform_matrix(r, &params, &bcs).unwrap();
-
-                // y = x/3 only valid for x divisible by 3
-                let size = 1 << r;
-                #[allow(clippy::manual_div_ceil)]
-                let expected_nnz = (size + 2) / 3; // Number of multiples of 3 in [0, 2^R)
-                assert_eq!(
-                    matrix.nnz(),
-                    expected_nnz,
-                    "R={}, bc={:?}: expected {} non-zeros, got {}",
-                    r,
-                    bc,
-                    expected_nnz,
-                    matrix.nnz()
-                );
+                assert_affine_mpo_matches_matrix(r, &params, &bcs);
             }
         }
     }
@@ -1437,14 +1504,8 @@ mod tests {
                 let b = vec![Rational64::from_integer(2), Rational64::from_integer(3)];
                 let params = AffineParams::new(a, b, 2, 2).unwrap();
                 let bcs = vec![bc; 2];
-
-                let result = affine_transform_matrix(r, &params, &bcs);
-                assert!(
-                    result.is_ok(),
-                    "R={}, bc={:?}: failed to create matrix",
-                    r,
-                    bc
-                );
+                assert_affine_matrix_correctness(r, &params, &bcs);
+                assert_affine_mpo_matches_matrix(r, &params, &bcs);
             }
         }
     }
@@ -1493,51 +1554,14 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::needless_range_loop)]
     fn test_affine_mpo_vs_matrix_r1() {
-        // R=1 is a special case where is_msb and is_lsb are both true
-        let r = 1;
-
+        let bc = vec![BoundaryCondition::Periodic];
         // Identity R=1
         let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
-        let bc = vec![BoundaryCondition::Periodic];
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
-        let mpo_matrix = mpo_to_dense_matrix(&mpo, 1, 1, r);
-        for y in 0..2 {
-            for x in 0..2 {
-                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
-                let mpo_val = mpo_matrix[y][x].re;
-                assert!(
-                    (sparse_val - mpo_val).abs() < 1e-10,
-                    "R=1 identity mismatch at ({},{}): sparse={}, mpo={}",
-                    y,
-                    x,
-                    sparse_val,
-                    mpo_val
-                );
-            }
-        }
-
+        assert_affine_mpo_matches_matrix(1, &params, &bc);
         // Shift R=1 (y = x + 1 mod 2)
         let params = AffineParams::from_integers(vec![1], vec![1], 1, 1).unwrap();
-        let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
-        let mpo = affine_transform_mpo(r, &params, &bc).unwrap();
-        let mpo_matrix = mpo_to_dense_matrix(&mpo, 1, 1, r);
-        for y in 0..2 {
-            for x in 0..2 {
-                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
-                let mpo_val = mpo_matrix[y][x].re;
-                assert!(
-                    (sparse_val - mpo_val).abs() < 1e-10,
-                    "R=1 shift mismatch at ({},{}): sparse={}, mpo={}",
-                    y,
-                    x,
-                    sparse_val,
-                    mpo_val
-                );
-            }
-        }
+        assert_affine_mpo_matches_matrix(1, &params, &bc);
     }
 
     #[test]
@@ -1725,5 +1749,112 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_affine_parametric_full() {
+        // From Quantics.jl "full R=$R, boundary=$boundary, M=$M, N=$N" test
+        struct TestCase {
+            a: Vec<i64>,
+            b: Vec<i64>,
+            m: usize,
+            n: usize,
+        }
+
+        let cases = vec![
+            TestCase {
+                a: vec![1],
+                b: vec![1],
+                m: 1,
+                n: 1,
+            },
+            TestCase {
+                a: vec![1, 0],
+                b: vec![0],
+                m: 1,
+                n: 2,
+            },
+            TestCase {
+                a: vec![2, -1],
+                b: vec![1],
+                m: 1,
+                n: 2,
+            },
+            TestCase {
+                a: vec![1, 0],
+                b: vec![0, 0],
+                m: 2,
+                n: 1,
+            },
+            TestCase {
+                a: vec![2, -1],
+                b: vec![1, -1],
+                m: 2,
+                n: 1,
+            },
+            TestCase {
+                a: vec![1, 0, 1, 1],
+                b: vec![0, 1],
+                m: 2,
+                n: 2,
+            },
+            TestCase {
+                a: vec![2, 0, 4, 1],
+                b: vec![100, -1],
+                m: 2,
+                n: 2,
+            },
+        ];
+
+        for r in [1, 2] {
+            for bc_type in [BoundaryCondition::Open, BoundaryCondition::Periodic] {
+                for case in &cases {
+                    let params =
+                        AffineParams::from_integers(case.a.clone(), case.b.clone(), case.m, case.n)
+                            .unwrap();
+                    let bc = vec![bc_type; case.m];
+                    assert_affine_matrix_correctness(r, &params, &bc);
+                    assert_affine_mpo_matches_matrix(r, &params, &bc);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_affine_denom_even() {
+        // From Quantics.jl compare_denom_even test
+        let a = vec![Rational64::new(1, 2)];
+        for b_val in [3i64, 5, -3, -5] {
+            let b = vec![Rational64::from_integer(b_val)];
+            let params = AffineParams::new(a.clone(), b, 1, 1).unwrap();
+            let bc = vec![BoundaryCondition::Periodic];
+            for r in [3, 5] {
+                assert_affine_mpo_matches_matrix(r, &params, &bc);
+            }
+        }
+    }
+
+    #[test]
+    fn test_affine_extension_loop() {
+        // Test abs(b) >= 2^R with Open BC (requires extension loop)
+
+        // b=[-32, 32] with R=5, identity matrix: abs(32)=2^5=2^R triggers extension
+        let r = 5;
+        let params = AffineParams::from_integers(vec![1, 0, 0, 1], vec![-32, 32], 2, 2).unwrap();
+        let bc = vec![BoundaryCondition::Open; 2];
+        assert_affine_mpo_matches_matrix(r, &params, &bc);
+        assert_affine_matrix_correctness(r, &params, &bc);
+
+        // abs(b) clearly exceeds 2^R: 2^4=16, abs(b)=32 > 16
+        let r = 4;
+        assert_affine_mpo_matches_matrix(r, &params, &bc);
+        assert_affine_matrix_correctness(r, &params, &bc);
+
+        // 1D case: y = x + 64 with R=6, Open BC
+        let r = 6;
+        let params = AffineParams::from_integers(vec![1], vec![64], 1, 1).unwrap();
+        let bc = vec![BoundaryCondition::Open];
+        assert_affine_mpo_matches_matrix(r, &params, &bc);
+        assert_affine_matrix_correctness(r, &params, &bc);
     }
 }
