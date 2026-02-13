@@ -110,20 +110,112 @@ pub fn binaryop_operator(
 fn binaryop_mpo(
     r: usize,
     coeffs1: BinaryCoeffs,
-    _coeffs2: BinaryCoeffs,
+    coeffs2: BinaryCoeffs,
     bc: [BoundaryCondition; 2],
 ) -> Result<TensorTrain<Complex64>> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of bits must be positive"));
     }
 
-    // For full 2-variable transformation, we use the single operator approach
-    // applied twice (once for each output variable)
-    // This is a simplified implementation that handles the most common cases
+    let bc_val1: i8 = match bc[0] {
+        BoundaryCondition::Periodic => 1,
+        BoundaryCondition::Open => 0,
+    };
+    let bc_val2: i8 = match bc[1] {
+        BoundaryCondition::Periodic => 1,
+        BoundaryCondition::Open => 0,
+    };
 
-    // For now, we implement only the first transformation
-    // A full implementation would need to compose two transformations
-    binaryop_single_mpo(r, coeffs1.a, coeffs1.b, bc[0])
+    let a1 = coeffs1.a;
+    let b1 = coeffs1.b;
+    let a2 = coeffs2.a;
+    let b2 = coeffs2.b;
+
+    let mut tensors = Vec::with_capacity(2 * r);
+
+    for n in 0..r {
+        let cin_on = n > 0;
+        let cout_on = n < r - 1;
+
+        let cin_dim = if cin_on { 3usize } else { 1 };
+        let cout_dim = if cout_on { 3usize } else { 1 };
+
+        // Combined carry dimensions for two outputs
+        let left_bond = cin_dim * cin_dim; // (cin1, cin2)
+        let right_bond = cout_dim * cout_dim; // (cout1, cout2)
+
+        // Mid-bond encodes (cin_combined, z1, x) = left_bond * 4
+        // This allows the y-site to verify z1 consistency and compute z2
+        let mid_bond = left_bond * 4;
+
+        // Get individual carry tensors for each output
+        // Shape: (cin_dim, cout_dim, 2, 2, 2) = [cin, cout, x, y, out]
+        let t1 = binaryop_tensor_single(a1, b1, cin_on, cout_on, bc_val1);
+        let t2 = binaryop_tensor_single(a2, b2, cin_on, cout_on, bc_val2);
+
+        // X-site tensor: T_x[left_bond, 4, mid_bond]
+        // For each (cin_combined, z1, x):
+        //   T_x[cin_combined, z1*2+x, cin_combined*4+z1*2+x] = 1
+        // This stores all information in mid-bond; y-site resolves z1.
+        let mut t_x = tensor3_zeros(left_bond, 4, mid_bond);
+        for cc in 0..left_bond {
+            for z1 in 0..2usize {
+                for x in 0..2usize {
+                    let s_x = z1 * 2 + x;
+                    let mid = cc * 4 + z1 * 2 + x;
+                    t_x.set3(cc, s_x, mid, Complex64::one());
+                }
+            }
+        }
+
+        // Y-site tensor: T_y[mid_bond, 4, right_bond]
+        // For each (cin_combined, z1, x, y):
+        //   Check if z1 is consistent with (a1*x + b1*y + cin1)
+        //   If yes, compute z2 from (a2*x + b2*y + cin2)
+        //   Set T_y[mid, z2*2+y, cout_combined] = v1 * v2
+        let mut t_y = tensor3_zeros(mid_bond, 4, right_bond);
+        for cc in 0..left_bond {
+            let cin1_idx = cc / cin_dim;
+            let cin2_idx = cc % cin_dim;
+
+            for z1 in 0..2usize {
+                for x in 0..2usize {
+                    let mid = cc * 4 + z1 * 2 + x;
+
+                    for y in 0..2usize {
+                        // Find valid cout1 for output 1 (at most one)
+                        for cout1_idx in 0..cout_dim {
+                            let v1 = t1[[cin1_idx, cout1_idx, x, y, z1]];
+                            if v1 == Complex64::zero() {
+                                continue;
+                            }
+
+                            // z1 is consistent; now find z2 and cout2
+                            for z2 in 0..2usize {
+                                for cout2_idx in 0..cout_dim {
+                                    let v2 = t2[[cin2_idx, cout2_idx, x, y, z2]];
+                                    if v2 == Complex64::zero() {
+                                        continue;
+                                    }
+
+                                    let cout_combined = cout1_idx * cout_dim + cout2_idx;
+                                    let s_y = z2 * 2 + y;
+                                    let weight = v1 * v2;
+                                    t_y.set3(mid, s_y, cout_combined, weight);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        tensors.push(t_x);
+        tensors.push(t_y);
+    }
+
+    TensorTrain::new(tensors)
+        .map_err(|e| anyhow::anyhow!("Failed to create binaryop MPO: {}", e))
 }
 
 /// Create a single binaryop tensor for one site.
@@ -142,7 +234,6 @@ fn binaryop_mpo(
 /// - cin_size = 3 if cin_on else 1
 /// - cout_size = 3 if cout_on else 1
 /// - Last three dimensions are (x, y, out)
-#[allow(dead_code)]
 fn binaryop_tensor_single(
     a: i8,
     b: i8,

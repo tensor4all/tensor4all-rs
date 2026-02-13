@@ -20,8 +20,8 @@ use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops,
 use tensor4all_treetn::{apply_linear_operator, ApplyOptions, LinearOperator, TreeTN};
 
 use tensor4all_quanticstransform::{
-    binaryop_single_operator, flip_operator, quantics_fourier_operator, shift_operator,
-    BinaryCoeffs, BoundaryCondition, FTCore, FourierOptions,
+    binaryop_operator, binaryop_single_operator, flip_operator, quantics_fourier_operator,
+    shift_operator, BinaryCoeffs, BoundaryCondition, FTCore, FourierOptions,
 };
 
 /// Type alias for the default index type.
@@ -2303,6 +2303,93 @@ fn test_binaryop_single_numerical_correctness() {
                                     expected.re, expected.im,
                                     input_idx, expected_output_idx, z_raw, z_mod, nbc
                                 );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Binaryop dual-output (multi-variable) tests
+// ============================================================================
+
+/// Test binaryop with two output variables: (z1, z2) = (a*x+b*y, c*x+d*y).
+///
+/// Port of Julia's _binaryop test pattern. Tests all valid (a,b,c,d) combinations
+/// where neither (a,b) nor (c,d) is (-1,-1).
+/// With periodic BC, this covers 64 of the 81 combinations in {-1,0,1}^4.
+#[test]
+fn test_binaryop_dual_output_numerical() {
+    for r in [2, 3] {
+        let n = 1usize << r;
+        let n_sites = 2 * r;
+        let dim = 1usize << n_sites;
+
+        for a in -1i8..=1 {
+            for b in -1i8..=1 {
+                for c in -1i8..=1 {
+                    for d in -1i8..=1 {
+                        // Skip invalid coeffs: each pair must not be (-1,-1)
+                        let coeffs1 = match BinaryCoeffs::new(a, b) {
+                            Ok(c) => c,
+                            Err(_) => continue,
+                        };
+                        let coeffs2 = match BinaryCoeffs::new(c, d) {
+                            Ok(c) => c,
+                            Err(_) => continue,
+                        };
+
+                        let bc = [BoundaryCondition::Periodic; 2];
+                        let op = binaryop_operator(r, coeffs1, coeffs2, bc).unwrap_or_else(|e| {
+                            panic!(
+                                "Failed for ({},{},{},{}) r={}: {}",
+                                a, b, c, d, r, e
+                            )
+                        });
+
+                        let matrix = apply_operator_to_dense_matrix(&op, n_sites, n_sites);
+
+                        for x in 0..n {
+                            for y in 0..n {
+                                let input_idx = interleave_bits(x, y, r);
+
+                                // Compute expected outputs
+                                let z1_raw =
+                                    (a as i64) * (x as i64) + (b as i64) * (y as i64);
+                                let z2_raw =
+                                    (c as i64) * (x as i64) + (d as i64) * (y as i64);
+
+                                let z1 = z1_raw.rem_euclid(n as i64) as usize;
+                                let z2 = z2_raw.rem_euclid(n as i64) as usize;
+
+                                // For Periodic BC with bc_val=1, sign is always 1
+                                let expected_output_idx = interleave_bits(z1, z2, r);
+
+                                for out_idx in 0..dim {
+                                    let expected = if out_idx == expected_output_idx {
+                                        Complex64::new(1.0, 0.0)
+                                    } else {
+                                        Complex64::zero()
+                                    };
+
+                                    if (matrix[out_idx][input_idx] - expected).norm() > 1e-8 {
+                                        panic!(
+                                            "Mismatch at ({},{},{},{}) r={}: \
+                                             input (x={}, y={}) -> out_idx={} \
+                                             got ({:.6}, {:.6}) expected ({:.6}, {:.6})\n\
+                                             input_idx={}, expected_output_idx={}, \
+                                             z1={}, z2={}",
+                                            a, b, c, d, r, x, y, out_idx,
+                                            matrix[out_idx][input_idx].re,
+                                            matrix[out_idx][input_idx].im,
+                                            expected.re, expected.im,
+                                            input_idx, expected_output_idx, z1, z2
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
