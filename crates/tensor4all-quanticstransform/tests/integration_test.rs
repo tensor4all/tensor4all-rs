@@ -17,7 +17,7 @@ use num_traits::{One, Zero};
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::{IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
-use tensor4all_treetn::{apply_linear_operator, ApplyOptions, TreeTN};
+use tensor4all_treetn::{apply_linear_operator, ApplyOptions, LinearOperator, TreeTN};
 
 use tensor4all_quanticstransform::{
     flip_operator, quantics_fourier_operator, shift_operator, BoundaryCondition, FTCore,
@@ -240,6 +240,91 @@ fn evaluate_mps_all(mps: &TensorTrain<Complex64>) -> Vec<Complex64> {
         result.push(val);
     }
     result
+}
+
+/// Apply a QuanticsOperator to all product state inputs and collect results as a dense matrix.
+///
+/// For an operator with `n_in` input sites (each dim 2), this creates all 2^n_in
+/// product state inputs, applies the operator, and returns a 2^n_out x 2^n_in matrix
+/// where M[y][x] = <y|Op|x>.
+///
+/// # Arguments
+/// * `op` - The operator to test
+/// * `n_in` - Number of input sites
+/// * `n_out` - Number of output sites (may differ from n_in for asymmetric operators)
+fn apply_operator_to_dense_matrix(
+    op: &LinearOperator<TensorDynLen, usize>,
+    n_in: usize,
+    n_out: usize,
+) -> Vec<Vec<Complex64>> {
+    let dim_in = 1 << n_in;
+    let dim_out = 1 << n_out;
+    let mut matrix = vec![vec![Complex64::zero(); dim_in]; dim_out];
+
+    for x in 0..dim_in {
+        let mps = create_product_state_mps(x, n_in);
+        let (treetn, site_indices) = tensortrain_to_treetn(&mps);
+
+        // Remap site indices to operator input
+        let mut treetn_remapped = treetn;
+        for i in 0..n_in {
+            let op_input = op
+                .get_input_mapping(&i)
+                .expect("Missing input mapping")
+                .true_index
+                .clone();
+            treetn_remapped = treetn_remapped
+                .replaceind(&site_indices[i], &op_input)
+                .expect("Failed to replace index");
+        }
+
+        // Apply operator
+        let result_treetn = apply_linear_operator(op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
+
+        // Get output indices
+        let output_indices: Vec<DynIndex> = (0..n_out)
+            .map(|i| {
+                op.get_output_mapping(&i)
+                    .expect("Missing output mapping")
+                    .true_index
+                    .clone()
+            })
+            .collect();
+
+        // Contract result
+        let result_vec = contract_treetn_to_vector(&result_treetn, &output_indices);
+
+        for y in 0..dim_out {
+            matrix[y][x] = result_vec[y];
+        }
+    }
+
+    matrix
+}
+
+// ============================================================================
+// Dense matrix helper validation tests
+// ============================================================================
+
+/// Smoke test for apply_operator_to_dense_matrix using flip (known-correct operator)
+#[test]
+fn test_dense_matrix_helper_with_flip() {
+    let r = 3;
+    let n = 1 << r;
+
+    let op = flip_operator(r, BoundaryCondition::Periodic).expect("Failed to create flip");
+    let matrix = apply_operator_to_dense_matrix(&op, r, r);
+
+    // flip(0) = 0, flip(x) = N - x for x > 0
+    for x in 0..n {
+        let expected_y = if x == 0 { 0 } else { n - x };
+        for y in 0..n {
+            let expected = if y == expected_y { 1.0 } else { 0.0 };
+            assert_relative_eq!(matrix[y][x].re, expected, epsilon = 1e-10);
+            assert_relative_eq!(matrix[y][x].im, 0.0, epsilon = 1e-10);
+        }
+    }
 }
 
 // ============================================================================
