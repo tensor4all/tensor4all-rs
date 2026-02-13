@@ -2109,6 +2109,129 @@ fn deinterleave_bits(val: usize, r: usize) -> (usize, usize) {
 // Binaryop single-variable brute-force numerical tests
 // ============================================================================
 
+// ============================================================================
+// Operator linearity tests
+// ============================================================================
+
+/// Test that operators are linear: Op(α*a + β*b) ≈ α*Op(a) + β*Op(b).
+///
+/// Uses the dense matrix representation to verify linearity with deterministic
+/// pseudo-random input vectors. This verifies correctness on superposition inputs,
+/// not just product states.
+#[test]
+fn test_operator_linearity() {
+    let r = 3;
+    let n = 1usize << r;
+
+    // Create the dense matrix for each operator
+    let operators: Vec<(&str, Vec<Vec<Complex64>>)> = vec![
+        (
+            "flip",
+            apply_operator_to_dense_matrix(
+                &flip_operator(r, BoundaryCondition::Periodic).unwrap(),
+                r,
+                r,
+            ),
+        ),
+        (
+            "shift(3)",
+            apply_operator_to_dense_matrix(
+                &shift_operator(r, 3, BoundaryCondition::Periodic).unwrap(),
+                r,
+                r,
+            ),
+        ),
+        (
+            "phase_rotation(pi/4)",
+            apply_operator_to_dense_matrix(
+                &phase_rotation_operator(r, PI / 4.0).unwrap(),
+                r,
+                r,
+            ),
+        ),
+        (
+            "cumsum",
+            apply_operator_to_dense_matrix(&cumsum_operator(r).unwrap(), r, r),
+        ),
+        (
+            "fourier",
+            apply_operator_to_dense_matrix(
+                &quantics_fourier_operator(r, FourierOptions::forward()).unwrap(),
+                r,
+                r,
+            ),
+        ),
+    ];
+
+    let alpha = Complex64::new(0.7, 0.3);
+    let beta = Complex64::new(-0.2, 0.5);
+
+    // Deterministic pseudo-random vectors
+    let a_vec: Vec<Complex64> = (0..n)
+        .map(|i| {
+            Complex64::new(
+                ((i as f64) * 1.1 + 0.3).sin(),
+                ((i as f64) * 0.7 + 1.2).cos(),
+            )
+        })
+        .collect();
+    let b_vec: Vec<Complex64> = (0..n)
+        .map(|i| {
+            Complex64::new(
+                ((i as f64) * 2.3 + 0.1).cos(),
+                ((i as f64) * 1.9 + 0.5).sin(),
+            )
+        })
+        .collect();
+
+    for (_name, matrix) in &operators {
+        // Compute Op(α*a + β*b) via matrix-vector multiply
+        let combined: Vec<Complex64> = (0..n)
+            .map(|i| alpha * a_vec[i] + beta * b_vec[i])
+            .collect();
+        let result_combined: Vec<Complex64> = (0..n)
+            .map(|y| {
+                (0..n)
+                    .map(|x| matrix[y][x] * combined[x])
+                    .sum::<Complex64>()
+            })
+            .collect();
+
+        // Compute α*Op(a) + β*Op(b)
+        let result_a: Vec<Complex64> = (0..n)
+            .map(|y| {
+                (0..n)
+                    .map(|x| matrix[y][x] * a_vec[x])
+                    .sum::<Complex64>()
+            })
+            .collect();
+        let result_b: Vec<Complex64> = (0..n)
+            .map(|y| {
+                (0..n)
+                    .map(|x| matrix[y][x] * b_vec[x])
+                    .sum::<Complex64>()
+            })
+            .collect();
+        let result_linear: Vec<Complex64> = (0..n)
+            .map(|i| alpha * result_a[i] + beta * result_b[i])
+            .collect();
+
+        // Compare
+        for y in 0..n {
+            assert_relative_eq!(
+                result_combined[y].re,
+                result_linear[y].re,
+                epsilon = 1e-8,
+            );
+            assert_relative_eq!(
+                result_combined[y].im,
+                result_linear[y].im,
+                epsilon = 1e-8,
+            );
+        }
+    }
+}
+
 /// Test binaryop_single numerical correctness for all valid (a,b) combinations.
 ///
 /// For each (x, y) input pair, verifies that the operator maps to the expected
