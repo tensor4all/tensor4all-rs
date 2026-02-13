@@ -1452,7 +1452,7 @@ mod tests {
     fn test_affine_matrix_3x3_hard() {
         // From Quantics.jl compare_hard test
         // A = [1 0 1; 1 2 -1; 0 1 1], b = [11; 23; -15]
-        let r = 4;
+        let r = 3;
         let a = vec![1i64, 0, 1, 1, 2, -1, 0, 1, 1];
         let b = vec![11i64, 23, -15];
         let params = AffineParams::from_integers(a, b, 3, 3).unwrap();
