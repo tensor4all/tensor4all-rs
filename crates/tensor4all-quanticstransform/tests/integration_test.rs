@@ -986,6 +986,107 @@ fn test_fourier_inverse_application() {
 }
 
 // ============================================================================
+// Fourier phase verification and roundtrip tests
+// ============================================================================
+
+use std::f64::consts::PI;
+
+/// Compute reference DFT matrix: F[k, x] = (1/sqrt(N)) * exp(sign * 2*pi*i * k * x / N)
+fn reference_dft_matrix(n: usize, sign: f64) -> Vec<Vec<Complex64>> {
+    let mut matrix = vec![vec![Complex64::zero(); n]; n];
+    let norm = 1.0 / (n as f64).sqrt();
+    for k in 0..n {
+        for x in 0..n {
+            let phase = sign * 2.0 * PI * (k as f64) * (x as f64) / (n as f64);
+            matrix[k][x] = Complex64::new(phase.cos(), phase.sin()) * norm;
+        }
+    }
+    matrix
+}
+
+/// Test Fourier transform phase correctness against reference DFT matrix.
+///
+/// Port of Julia's _qft_ref test: computes full DFT matrix and compares element-wise.
+/// Tests both forward (sign=-1) and inverse (sign=+1) for R=2,3,4.
+#[test]
+fn test_fourier_phase_correctness() {
+    for r in [2, 3, 4] {
+        let n = 1usize << r;
+
+        // Forward Fourier (sign = -1 in Rust's convention)
+        let forward_op = quantics_fourier_operator(r, FourierOptions::forward())
+            .expect("Failed to create forward Fourier");
+        let forward_matrix = apply_operator_to_dense_matrix(&forward_op, r, r);
+        let forward_ref = reference_dft_matrix(n, -1.0);
+
+        for k in 0..n {
+            for x in 0..n {
+                assert_relative_eq!(
+                    forward_matrix[k][x].re,
+                    forward_ref[k][x].re,
+                    epsilon = 1e-6,
+                );
+                assert_relative_eq!(
+                    forward_matrix[k][x].im,
+                    forward_ref[k][x].im,
+                    epsilon = 1e-6,
+                );
+            }
+        }
+
+        // Inverse Fourier (sign = +1)
+        let inverse_op = quantics_fourier_operator(r, FourierOptions::inverse())
+            .expect("Failed to create inverse Fourier");
+        let inverse_matrix = apply_operator_to_dense_matrix(&inverse_op, r, r);
+        let inverse_ref = reference_dft_matrix(n, 1.0);
+
+        for k in 0..n {
+            for x in 0..n {
+                assert_relative_eq!(
+                    inverse_matrix[k][x].re,
+                    inverse_ref[k][x].re,
+                    epsilon = 1e-6,
+                );
+                assert_relative_eq!(
+                    inverse_matrix[k][x].im,
+                    inverse_ref[k][x].im,
+                    epsilon = 1e-6,
+                );
+            }
+        }
+    }
+}
+
+/// Test Fourier roundtrip: F^{-1} * F ≈ I (as dense matrices).
+#[test]
+fn test_fourier_roundtrip_matrix() {
+    for r in [2, 3, 4] {
+        let n = 1usize << r;
+
+        let forward_op = quantics_fourier_operator(r, FourierOptions::forward())
+            .expect("Failed to create forward Fourier");
+        let inverse_op = quantics_fourier_operator(r, FourierOptions::inverse())
+            .expect("Failed to create inverse Fourier");
+
+        let f_mat = apply_operator_to_dense_matrix(&forward_op, r, r);
+        let fi_mat = apply_operator_to_dense_matrix(&inverse_op, r, r);
+
+        // Compute F^{-1} * F and verify ≈ I
+        for i in 0..n {
+            for j in 0..n {
+                let mut product = Complex64::zero();
+                for k in 0..n {
+                    product += fi_mat[i][k] * f_mat[k][j];
+                }
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert_relative_eq!(product.re, expected, epsilon = 1e-5);
+                assert_relative_eq!(product.im, 0.0, epsilon = 1e-5);
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Open boundary condition tests
 // ============================================================================
 
@@ -1215,7 +1316,6 @@ fn test_flip_open_boundary() {
 // Phase rotation operator tests
 // ============================================================================
 
-use std::f64::consts::PI;
 use tensor4all_quanticstransform::phase_rotation_operator;
 
 /// Test phase rotation operator for all x values.
