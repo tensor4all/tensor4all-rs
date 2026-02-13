@@ -20,8 +20,8 @@ use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops,
 use tensor4all_treetn::{apply_linear_operator, ApplyOptions, LinearOperator, TreeTN};
 
 use tensor4all_quanticstransform::{
-    flip_operator, quantics_fourier_operator, shift_operator, BoundaryCondition, FTCore,
-    FourierOptions,
+    binaryop_single_operator, flip_operator, quantics_fourier_operator, shift_operator,
+    BinaryCoeffs, BoundaryCondition, FTCore, FourierOptions,
 };
 
 /// Type alias for the default index type.
@@ -1704,8 +1704,6 @@ fn test_affine_2d_rotation() {
 // Binary operator tests
 // ============================================================================
 
-use tensor4all_quanticstransform::{binaryop_single_operator, BinaryCoeffs};
-
 /// Test binaryop identity on first variable: out = (x, y).
 #[test]
 fn test_binaryop_identity_x() {
@@ -1771,4 +1769,119 @@ fn test_binary_coeffs_constructors() {
     assert_eq!(select_y.b, 1);
 
     eprintln!("BinaryCoeffs constructors test passed!");
+}
+
+// ============================================================================
+// Bit interleaving helpers for binaryop tests
+// ============================================================================
+
+/// Interleave bits of two R-bit integers x and y into a 2R-bit integer.
+/// Big-endian: MSB first. Result = [x_{R-1}, y_{R-1}, ..., x_0, y_0]
+fn interleave_bits(x: usize, y: usize, r: usize) -> usize {
+    let mut result = 0;
+    for i in 0..r {
+        let x_bit = (x >> (r - 1 - i)) & 1;
+        let y_bit = (y >> (r - 1 - i)) & 1;
+        result |= x_bit << (2 * (r - 1 - i) + 1);
+        result |= y_bit << (2 * (r - 1 - i));
+    }
+    result
+}
+
+/// De-interleave a 2R-bit integer into two R-bit integers (x, y).
+#[allow(dead_code)]
+fn deinterleave_bits(val: usize, r: usize) -> (usize, usize) {
+    let mut x = 0;
+    let mut y = 0;
+    for i in 0..r {
+        let x_bit = (val >> (2 * (r - 1 - i) + 1)) & 1;
+        let y_bit = (val >> (2 * (r - 1 - i))) & 1;
+        x |= x_bit << (r - 1 - i);
+        y |= y_bit << (r - 1 - i);
+    }
+    (x, y)
+}
+
+// ============================================================================
+// Binaryop single-variable brute-force numerical tests
+// ============================================================================
+
+/// Test binaryop_single numerical correctness for all valid (a,b) combinations.
+///
+/// For each (x, y) input pair, verifies that the operator maps to the expected
+/// output (z, y) where z = (a*x + b*y) mod 2^R with appropriate boundary condition sign.
+#[test]
+fn test_binaryop_single_numerical_correctness() {
+    let valid_coeffs: Vec<(i8, i8)> = vec![
+        (1, 0),  // select x
+        (0, 1),  // select y
+        (1, 1),  // x + y
+        (1, -1), // x - y
+        (-1, 1), // -x + y
+        (0, 0),  // zero
+    ];
+
+    for r in [2, 3] {
+        let n = 1usize << r;
+
+        for &(a, b) in &valid_coeffs {
+            for bc in [BoundaryCondition::Periodic, BoundaryCondition::Open] {
+                let op = binaryop_single_operator(r, a, b, bc)
+                    .unwrap_or_else(|e| panic!("Failed for a={}, b={}, r={}: {}", a, b, r, e));
+
+                let n_sites = 2 * r;
+                let dim = 1usize << n_sites;
+                let matrix = apply_operator_to_dense_matrix(&op, n_sites, n_sites);
+
+                let bc_val: i64 = match bc {
+                    BoundaryCondition::Periodic => 1,
+                    BoundaryCondition::Open => 0,
+                };
+
+                for x in 0..n {
+                    for y in 0..n {
+                        let input_idx = interleave_bits(x, y, r);
+
+                        // Compute expected: z = a*x + b*y
+                        let z_raw = (a as i64) * (x as i64) + (b as i64) * (y as i64);
+                        let n_i64 = n as i64;
+                        let z_mod = z_raw.rem_euclid(n_i64) as usize;
+                        let nbc = (z_raw - z_mod as i64) / n_i64;
+
+                        // BC sign factor
+                        let expected_sign: f64 = if nbc == 0 {
+                            1.0
+                        } else if bc_val == 0 {
+                            0.0 // Open BC: overflow -> zero
+                        } else {
+                            (bc_val as f64).powi(nbc.unsigned_abs() as i32)
+                        };
+
+                        // Output: (z_mod, y) interleaved
+                        let expected_output_idx = interleave_bits(z_mod, y, r);
+
+                        for out_idx in 0..dim {
+                            let expected = if out_idx == expected_output_idx {
+                                Complex64::new(expected_sign, 0.0)
+                            } else {
+                                Complex64::zero()
+                            };
+
+                            if (matrix[out_idx][input_idx] - expected).norm() > 1e-8 {
+                                panic!(
+                                    "Mismatch at a={}, b={}, r={}, bc={:?}: input (x={}, y={}) -> \
+                                     out_idx={} got ({:.4}, {:.4}) expected ({:.4}, {:.4})\n\
+                                     input_idx={}, expected_output_idx={}, z_raw={}, z_mod={}, nbc={}",
+                                    a, b, r, bc, x, y, out_idx,
+                                    matrix[out_idx][input_idx].re, matrix[out_idx][input_idx].im,
+                                    expected.re, expected.im,
+                                    input_idx, expected_output_idx, z_raw, z_mod, nbc
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
