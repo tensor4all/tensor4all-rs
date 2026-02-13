@@ -44,8 +44,8 @@ pub use affine::{
 };
 pub use binaryop::{binaryop_operator, binaryop_single_operator, BinaryCoeffs};
 pub use common::{BoundaryCondition, CarryDirection};
-pub use cumsum::cumsum_operator;
-pub use flip::flip_operator;
+pub use cumsum::{cumsum_operator, triangle_operator, TriangleType};
+pub use flip::{flip_operator, flip_operator_multivar};
 pub use fourier::{quantics_fourier_operator, FTCore, FourierOptions};
-pub use phase_rotation::phase_rotation_operator;
-pub use shift::shift_operator;
+pub use phase_rotation::{phase_rotation_operator, phase_rotation_operator_multivar};
+pub use shift::{shift_operator, shift_operator_multivar};

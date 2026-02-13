@@ -15,7 +15,7 @@ use num_integer::Integer;
 use num_rational::Rational64;
 use num_traits::One;
 use sprs::CsMat;
-use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
 
 use crate::common::{
     tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
@@ -109,6 +109,54 @@ impl AffineParams {
     }
 }
 
+/// Remap site indices of the affine MPO from internal encoding to the convention
+/// expected by `tensortrain_to_linear_operator_asymmetric`.
+///
+/// Internal encoding: `site_idx = y_bits | (x_bits << m)` (y-minor, x-major)
+/// Expected encoding: `s = s_out * in_dim + s_in = y_bits * 2^n + x_bits` (x-minor, y-major)
+fn remap_affine_site_indices(
+    mpo: &TensorTrain<Complex64>,
+    m: usize,
+    n: usize,
+    site_dim: usize,
+) -> Result<TensorTrain<Complex64>> {
+    let input_dim = 1 << n;
+
+    // Build permutation table: perm[old_idx] = remapped index
+    let perm: Vec<usize> = (0..site_dim)
+        .map(|old_idx| {
+            let y_bits = old_idx & ((1 << m) - 1);
+            let x_bits = old_idx >> m;
+            y_bits * input_dim + x_bits
+        })
+        .collect();
+
+    let r = mpo.len();
+    let mut new_tensors = Vec::with_capacity(r);
+
+    for i in 0..r {
+        let tensor = mpo.site_tensor(i);
+        let left_dim = tensor.left_dim();
+        let right_dim = tensor.right_dim();
+
+        let mut t = tensor3_zeros(left_dim, site_dim, right_dim);
+        for l in 0..left_dim {
+            for (old_s, &new_s) in perm.iter().enumerate() {
+                for rr in 0..right_dim {
+                    let val = *tensor.get3(l, old_s, rr);
+                    if val != Complex64::new(0.0, 0.0) {
+                        t.set3(l, new_s, rr, val);
+                    }
+                }
+            }
+        }
+        new_tensors.push(t);
+    }
+
+    TensorTrain::new(new_tensors)
+        .map_err(|e| anyhow::anyhow!("Failed to create remapped MPO: {}", e))
+}
+
 /// Create an affine transformation operator.
 ///
 /// This operator transforms a quantics tensor train representing a function
@@ -157,11 +205,21 @@ pub fn affine_operator(
     // Site dimensions: M output variables, N input variables
     // Input dimension per site: 2^N (N input bits)
     // Output dimension per site: 2^M (M output bits)
-    let input_dim = 1 << params.n;
-    let output_dim = 1 << params.m;
+    let m = params.m;
+    let n = params.n;
+    let input_dim = 1 << n;
+    let output_dim = 1 << m;
+
+    // The internal affine MPO uses site encoding: site_idx = y_bits | (x_bits << m)
+    // (y-minor, x-major). But tensortrain_to_linear_operator_asymmetric expects
+    // s = s_out * in_dim + s_in = y_bits * 2^N + x_bits (x-minor, y-major).
+    // We need to remap the site indices.
+    let site_dim = input_dim * output_dim;
+    let remapped_mpo = remap_affine_site_indices(&mpo, m, n, site_dim)?;
+
     let input_dims = vec![input_dim; r];
     let output_dims = vec![output_dim; r];
-    tensortrain_to_linear_operator_asymmetric(&mpo, &input_dims, &output_dims)
+    tensortrain_to_linear_operator_asymmetric(&remapped_mpo, &input_dims, &output_dims)
 }
 
 /// Compute the full affine transformation matrix directly (for verification).

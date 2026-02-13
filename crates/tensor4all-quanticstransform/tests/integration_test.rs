@@ -17,11 +17,13 @@ use num_traits::{One, Zero};
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::{IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
-use tensor4all_treetn::{apply_linear_operator, ApplyOptions, TreeTN};
+use tensor4all_treetn::{apply_linear_operator, ApplyOptions, LinearOperator, TreeTN};
 
 use tensor4all_quanticstransform::{
-    flip_operator, quantics_fourier_operator, shift_operator, BoundaryCondition, FTCore,
-    FourierOptions,
+    binaryop_operator, binaryop_single_operator, flip_operator, flip_operator_multivar,
+    phase_rotation_operator_multivar, quantics_fourier_operator, shift_operator,
+    shift_operator_multivar, triangle_operator, BinaryCoeffs, BoundaryCondition, FTCore,
+    FourierOptions, TriangleType,
 };
 
 /// Type alias for the default index type.
@@ -240,6 +242,91 @@ fn evaluate_mps_all(mps: &TensorTrain<Complex64>) -> Vec<Complex64> {
         result.push(val);
     }
     result
+}
+
+/// Apply a QuanticsOperator to all product state inputs and collect results as a dense matrix.
+///
+/// For an operator with `n_in` input sites (each dim 2), this creates all 2^n_in
+/// product state inputs, applies the operator, and returns a 2^n_out x 2^n_in matrix
+/// where M[y][x] = <y|Op|x>.
+///
+/// # Arguments
+/// * `op` - The operator to test
+/// * `n_in` - Number of input sites
+/// * `n_out` - Number of output sites (may differ from n_in for asymmetric operators)
+fn apply_operator_to_dense_matrix(
+    op: &LinearOperator<TensorDynLen, usize>,
+    n_in: usize,
+    n_out: usize,
+) -> Vec<Vec<Complex64>> {
+    let dim_in = 1 << n_in;
+    let dim_out = 1 << n_out;
+    let mut matrix = vec![vec![Complex64::zero(); dim_in]; dim_out];
+
+    for x in 0..dim_in {
+        let mps = create_product_state_mps(x, n_in);
+        let (treetn, site_indices) = tensortrain_to_treetn(&mps);
+
+        // Remap site indices to operator input
+        let mut treetn_remapped = treetn;
+        for i in 0..n_in {
+            let op_input = op
+                .get_input_mapping(&i)
+                .expect("Missing input mapping")
+                .true_index
+                .clone();
+            treetn_remapped = treetn_remapped
+                .replaceind(&site_indices[i], &op_input)
+                .expect("Failed to replace index");
+        }
+
+        // Apply operator
+        let result_treetn = apply_linear_operator(op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
+
+        // Get output indices
+        let output_indices: Vec<DynIndex> = (0..n_out)
+            .map(|i| {
+                op.get_output_mapping(&i)
+                    .expect("Missing output mapping")
+                    .true_index
+                    .clone()
+            })
+            .collect();
+
+        // Contract result
+        let result_vec = contract_treetn_to_vector(&result_treetn, &output_indices);
+
+        for y in 0..dim_out {
+            matrix[y][x] = result_vec[y];
+        }
+    }
+
+    matrix
+}
+
+// ============================================================================
+// Dense matrix helper validation tests
+// ============================================================================
+
+/// Smoke test for apply_operator_to_dense_matrix using flip (known-correct operator)
+#[test]
+fn test_dense_matrix_helper_with_flip() {
+    let r = 3;
+    let n = 1 << r;
+
+    let op = flip_operator(r, BoundaryCondition::Periodic).expect("Failed to create flip");
+    let matrix = apply_operator_to_dense_matrix(&op, r, r);
+
+    // flip(0) = 0, flip(x) = N - x for x > 0
+    for x in 0..n {
+        let expected_y = if x == 0 { 0 } else { n - x };
+        for y in 0..n {
+            let expected = if y == expected_y { 1.0 } else { 0.0 };
+            assert_relative_eq!(matrix[y][x].re, expected, epsilon = 1e-10);
+            assert_relative_eq!(matrix[y][x].im, 0.0, epsilon = 1e-10);
+        }
+    }
 }
 
 // ============================================================================
@@ -901,6 +988,139 @@ fn test_fourier_inverse_application() {
 }
 
 // ============================================================================
+// Fourier phase verification and roundtrip tests
+// ============================================================================
+
+use std::f64::consts::PI;
+
+/// Compute reference DFT matrix: F[k, x] = (1/sqrt(N)) * exp(sign * 2*pi*i * k * x / N)
+fn reference_dft_matrix(n: usize, sign: f64) -> Vec<Vec<Complex64>> {
+    let mut matrix = vec![vec![Complex64::zero(); n]; n];
+    let norm = 1.0 / (n as f64).sqrt();
+    for k in 0..n {
+        for x in 0..n {
+            let phase = sign * 2.0 * PI * (k as f64) * (x as f64) / (n as f64);
+            matrix[k][x] = Complex64::new(phase.cos(), phase.sin()) * norm;
+        }
+    }
+    matrix
+}
+
+/// Reverse the bits of an R-bit integer.
+///
+/// The QTT Fourier transform produces output with bit-reversed ordering:
+/// site 0 becomes LSB (instead of MSB) after transformation. When we
+/// extract the output using big-endian convention, the indices are
+/// bit-reversed relative to the standard DFT matrix.
+fn bit_reverse(x: usize, r: usize) -> usize {
+    let mut result = 0;
+    for i in 0..r {
+        result |= ((x >> i) & 1) << (r - 1 - i);
+    }
+    result
+}
+
+/// Test Fourier transform phase correctness against reference DFT matrix.
+///
+/// Port of Julia's _qft_ref test: computes full DFT matrix and compares element-wise.
+/// Tests both forward (sign=-1) and inverse (sign=+1) for R=2,3,4.
+///
+/// Note: The QTT Fourier transform produces output with bit-reversed ordering
+/// (site 0 becomes LSB after transform). When extracting the dense matrix
+/// using big-endian convention, the output indices are bit-reversed relative
+/// to the standard DFT matrix. We account for this by comparing
+/// forward_matrix[k][x] with forward_ref[bit_reverse(k)][x].
+#[test]
+fn test_fourier_phase_correctness() {
+    for r in [2, 3, 4] {
+        let n = 1usize << r;
+
+        // Forward Fourier (sign = -1 in Rust's convention)
+        let forward_op = quantics_fourier_operator(r, FourierOptions::forward())
+            .expect("Failed to create forward Fourier");
+        let forward_matrix = apply_operator_to_dense_matrix(&forward_op, r, r);
+        let forward_ref = reference_dft_matrix(n, -1.0);
+
+        for k in 0..n {
+            let k_br = bit_reverse(k, r);
+            for x in 0..n {
+                assert_relative_eq!(
+                    forward_matrix[k][x].re,
+                    forward_ref[k_br][x].re,
+                    epsilon = 1e-6,
+                );
+                assert_relative_eq!(
+                    forward_matrix[k][x].im,
+                    forward_ref[k_br][x].im,
+                    epsilon = 1e-6,
+                );
+            }
+        }
+
+        // Inverse Fourier (sign = +1)
+        let inverse_op = quantics_fourier_operator(r, FourierOptions::inverse())
+            .expect("Failed to create inverse Fourier");
+        let inverse_matrix = apply_operator_to_dense_matrix(&inverse_op, r, r);
+        let inverse_ref = reference_dft_matrix(n, 1.0);
+
+        for k in 0..n {
+            let k_br = bit_reverse(k, r);
+            for x in 0..n {
+                assert_relative_eq!(
+                    inverse_matrix[k][x].re,
+                    inverse_ref[k_br][x].re,
+                    epsilon = 1e-6,
+                );
+                assert_relative_eq!(
+                    inverse_matrix[k][x].im,
+                    inverse_ref[k_br][x].im,
+                    epsilon = 1e-6,
+                );
+            }
+        }
+    }
+}
+
+/// Test Fourier roundtrip: F^{-1} * F ≈ I (as dense matrices).
+///
+/// The QTT Fourier output has bit-reversed ordering: the dense matrix
+/// M[k][x] corresponds to F[bit_reverse(k), x]. To compute the true
+/// product F^{-1} * F, we un-permute the row indices before multiplying:
+///   (F^{-1} * F)[i][j] = Σ_k M_inv[BR(i)][k] * M_fwd[BR(k)][j]
+#[test]
+fn test_fourier_roundtrip_matrix() {
+    for r in [2, 3, 4] {
+        let n = 1usize << r;
+
+        let forward_op = quantics_fourier_operator(r, FourierOptions::forward())
+            .expect("Failed to create forward Fourier");
+        let inverse_op = quantics_fourier_operator(r, FourierOptions::inverse())
+            .expect("Failed to create inverse Fourier");
+
+        let f_mat = apply_operator_to_dense_matrix(&forward_op, r, r);
+        let fi_mat = apply_operator_to_dense_matrix(&inverse_op, r, r);
+
+        // Compute F^{-1} * F with bit-reversal un-permutation:
+        // true_F[i][j] = f_mat[BR(i)][j], true_Fi[i][j] = fi_mat[BR(i)][j]
+        // product[i][j] = Σ_k true_Fi[i][k] * true_F[k][j]
+        //               = Σ_k fi_mat[BR(i)][k] * f_mat[BR(k)][j]
+        for i in 0..n {
+            let i_br = bit_reverse(i, r);
+            for j in 0..n {
+                let mut product = Complex64::zero();
+                for k in 0..n {
+                    let k_br = bit_reverse(k, r);
+                    product += fi_mat[i_br][k] * f_mat[k_br][j];
+                }
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert_relative_eq!(product.re, expected, epsilon = 1e-5);
+                assert_relative_eq!(product.im, 0.0, epsilon = 1e-5);
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Open boundary condition tests
 // ============================================================================
 
@@ -1130,7 +1350,6 @@ fn test_flip_open_boundary() {
 // Phase rotation operator tests
 // ============================================================================
 
-use std::f64::consts::PI;
 use tensor4all_quanticstransform::phase_rotation_operator;
 
 /// Test phase rotation operator for all x values.
@@ -1483,7 +1702,7 @@ fn test_cumsum_all_values() {
 // Affine operator tests
 // ============================================================================
 
-use tensor4all_quanticstransform::{affine_operator, AffineParams};
+use tensor4all_quanticstransform::{affine_operator, affine_transform_matrix, AffineParams};
 
 /// Test affine identity transformation: y = x.
 #[test]
@@ -1615,11 +1834,227 @@ fn test_affine_2d_rotation() {
     eprintln!("Affine 2D rotation test: operator creation successful");
 }
 
+/// Test affine operator numerical correctness by comparing the dense matrix
+/// obtained from the MPO (via `affine_operator` + `apply_operator_to_dense_matrix`)
+/// with the sparse reference matrix from `affine_transform_matrix`.
+///
+/// This validates that the two independent implementations (carry-based MPO
+/// construction vs direct enumeration) produce the same transformation.
+///
+/// Note: `apply_operator_to_dense_matrix` only works for operators with
+/// site dimension 2, which corresponds to M=1, N=1 affine transformations.
+#[test]
+fn test_affine_mpo_matches_matrix() {
+    // Test cases for M=1, N=1 (site dim 2): (a, b, bc)
+    let test_cases_1d: Vec<(Vec<i64>, Vec<i64>, Vec<BoundaryCondition>)> = vec![
+        // y = x (identity)
+        (vec![1], vec![0], vec![BoundaryCondition::Periodic]),
+        // y = x + 3 (shift)
+        (vec![1], vec![3], vec![BoundaryCondition::Periodic]),
+        // y = -x (negation)
+        (vec![-1], vec![0], vec![BoundaryCondition::Periodic]),
+        // y = 2x (scale by 2)
+        (vec![2], vec![0], vec![BoundaryCondition::Periodic]),
+        // y = x (identity, open BC)
+        (vec![1], vec![0], vec![BoundaryCondition::Open]),
+        // y = x + 1 (shift by 1, open BC)
+        (vec![1], vec![1], vec![BoundaryCondition::Open]),
+    ];
+
+    for (a_flat, b_vec, bc) in &test_cases_1d {
+        let m = 1usize;
+        let n = 1usize;
+
+        for r in [2, 3] {
+            let params = AffineParams::from_integers(a_flat.clone(), b_vec.clone(), m, n)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Failed params a={:?} b={:?} m={} n={}: {}",
+                        a_flat, b_vec, m, n, e
+                    )
+                });
+
+            // Get reference sparse matrix
+            let ref_matrix = match affine_transform_matrix(r, &params, bc) {
+                Ok(mat) => mat,
+                Err(e) => {
+                    eprintln!(
+                        "Skipping a={:?} b={:?} r={} bc={:?}: {}",
+                        a_flat, b_vec, r, bc, e
+                    );
+                    continue;
+                }
+            };
+
+            // Get MPO as LinearOperator and compute dense matrix
+            let op = match affine_operator(r, &params, bc) {
+                Ok(op) => op,
+                Err(e) => {
+                    eprintln!(
+                        "Skipping operator a={:?} b={:?} r={} bc={:?}: {}",
+                        a_flat, b_vec, r, bc, e
+                    );
+                    continue;
+                }
+            };
+
+            // For M=1, N=1: operator has r sites, input dim 2, output dim 2
+            let dim = 1usize << r;
+            let mpo_dense = apply_operator_to_dense_matrix(&op, r, r);
+
+            // Verify dimensions of reference matrix
+            assert_eq!(ref_matrix.rows(), dim, "Output dimension mismatch");
+            assert_eq!(ref_matrix.cols(), dim, "Input dimension mismatch");
+
+            // Compare element-by-element
+            for y in 0..dim {
+                for x in 0..dim {
+                    let sparse_val = *ref_matrix.get(y, x).unwrap_or(&0.0);
+                    let mpo_val = mpo_dense[y][x];
+
+                    assert!(
+                        (mpo_val.re - sparse_val).abs() < 1e-10,
+                        "Real part mismatch at ({}, {}): mpo={}, ref={} \
+                         [a={:?} b={:?} r={} bc={:?}]",
+                        y,
+                        x,
+                        mpo_val.re,
+                        sparse_val,
+                        a_flat,
+                        b_vec,
+                        r,
+                        bc
+                    );
+                    assert!(
+                        mpo_val.im.abs() < 1e-10,
+                        "Imaginary part non-zero at ({}, {}): im={} \
+                         [a={:?} b={:?} r={} bc={:?}]",
+                        y,
+                        x,
+                        mpo_val.im,
+                        a_flat,
+                        b_vec,
+                        r,
+                        bc
+                    );
+                }
+            }
+
+            eprintln!(
+                "PASS: affine a={:?} b={:?} r={} bc={:?}",
+                a_flat, b_vec, r, bc
+            );
+        }
+    }
+}
+
+/// Test affine_transform_matrix structural properties for various parameter combinations,
+/// including multi-dimensional cases (M != 1 or N != 1) where the full MPO comparison
+/// via apply_operator_to_dense_matrix is not available.
+#[test]
+fn test_affine_transform_matrix_properties() {
+    // Test cases: (a_flat (row-major MxN), b (length M), m, n, bc)
+    #[allow(clippy::type_complexity)]
+    let test_cases: Vec<(Vec<i64>, Vec<i64>, usize, usize, Vec<BoundaryCondition>)> = vec![
+        // y = x (identity, 1D)
+        (vec![1], vec![0], 1, 1, vec![BoundaryCondition::Periodic]),
+        // y = x + 3 (shift, 1D)
+        (vec![1], vec![3], 1, 1, vec![BoundaryCondition::Periodic]),
+        // y = -x (negation, 1D)
+        (vec![-1], vec![0], 1, 1, vec![BoundaryCondition::Periodic]),
+        // y = 2x (scale, 1D)
+        (vec![2], vec![0], 1, 1, vec![BoundaryCondition::Periodic]),
+        // (y1,y2) = (x1+x2, x1-x2) (2D)
+        (
+            vec![1, 1, 1, -1],
+            vec![0, 0],
+            2,
+            2,
+            vec![BoundaryCondition::Periodic; 2],
+        ),
+        // y = x1 + x2 (M=1, N=2)
+        (vec![1, 1], vec![0], 1, 2, vec![BoundaryCondition::Periodic]),
+        // Identity with Open BC
+        (vec![1], vec![0], 1, 1, vec![BoundaryCondition::Open]),
+    ];
+
+    for (a_flat, b_vec, m, n, bc) in &test_cases {
+        for r in [2, 3] {
+            let params = AffineParams::from_integers(a_flat.clone(), b_vec.clone(), *m, *n)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Failed params a={:?} b={:?} m={} n={}: {}",
+                        a_flat, b_vec, m, n, e
+                    )
+                });
+
+            // Get reference sparse matrix
+            let ref_matrix = match affine_transform_matrix(r, &params, bc) {
+                Ok(mat) => mat,
+                Err(e) => {
+                    eprintln!(
+                        "Skipping a={:?} b={:?} m={} n={} r={}: {}",
+                        a_flat, b_vec, m, n, r, e
+                    );
+                    continue;
+                }
+            };
+
+            let dim_in = 1usize << (r * *n);
+            let dim_out = 1usize << (r * *m);
+
+            // Verify matrix dimensions
+            assert_eq!(ref_matrix.rows(), dim_out, "Output dimension mismatch");
+            assert_eq!(ref_matrix.cols(), dim_in, "Input dimension mismatch");
+
+            // Verify the matrix has non-zero entries
+            let nnz = ref_matrix.nnz();
+            assert!(
+                nnz > 0,
+                "Reference matrix has no non-zero entries for a={:?} b={:?} r={}",
+                a_flat,
+                b_vec,
+                r
+            );
+
+            // Verify all entries are either 0 or 1 (affine transforms produce boolean matrices)
+            // and count that the number of 1.0 entries matches nnz
+            let mut count_ones = 0usize;
+            for y in 0..dim_out {
+                for x in 0..dim_in {
+                    let val = *ref_matrix.get(y, x).unwrap_or(&0.0);
+                    assert!(
+                        (val - 0.0).abs() < 1e-14 || (val - 1.0).abs() < 1e-14,
+                        "Entry ({}, {}) = {} is neither 0 nor 1 for a={:?} b={:?} r={}",
+                        y,
+                        x,
+                        val,
+                        a_flat,
+                        b_vec,
+                        r
+                    );
+                    if (val - 1.0).abs() < 1e-14 {
+                        count_ones += 1;
+                    }
+                }
+            }
+            assert_eq!(
+                count_ones, nnz,
+                "Count of 1.0 entries doesn't match nnz for a={:?} b={:?} r={}",
+                a_flat, b_vec, r
+            );
+
+            eprintln!(
+                "PASS: matrix props a={:?} b={:?} m={} n={} r={} nnz={}",
+                a_flat, b_vec, m, n, r, nnz
+            );
+        }
+    }
+}
+
 // ============================================================================
 // Binary operator tests
 // ============================================================================
-
-use tensor4all_quanticstransform::{binaryop_single_operator, BinaryCoeffs};
 
 /// Test binaryop identity on first variable: out = (x, y).
 #[test]
@@ -1686,4 +2121,789 @@ fn test_binary_coeffs_constructors() {
     assert_eq!(select_y.b, 1);
 
     eprintln!("BinaryCoeffs constructors test passed!");
+}
+
+// ============================================================================
+// Bit interleaving helpers for binaryop tests
+// ============================================================================
+
+/// Interleave bits of two R-bit integers x and y into a 2R-bit integer.
+/// Big-endian: MSB first. Result = [x_{R-1}, y_{R-1}, ..., x_0, y_0]
+fn interleave_bits(x: usize, y: usize, r: usize) -> usize {
+    let mut result = 0;
+    for i in 0..r {
+        let x_bit = (x >> (r - 1 - i)) & 1;
+        let y_bit = (y >> (r - 1 - i)) & 1;
+        result |= x_bit << (2 * (r - 1 - i) + 1);
+        result |= y_bit << (2 * (r - 1 - i));
+    }
+    result
+}
+
+/// De-interleave a 2R-bit integer into two R-bit integers (x, y).
+#[allow(dead_code)]
+fn deinterleave_bits(val: usize, r: usize) -> (usize, usize) {
+    let mut x = 0;
+    let mut y = 0;
+    for i in 0..r {
+        let x_bit = (val >> (2 * (r - 1 - i) + 1)) & 1;
+        let y_bit = (val >> (2 * (r - 1 - i))) & 1;
+        x |= x_bit << (r - 1 - i);
+        y |= y_bit << (r - 1 - i);
+    }
+    (x, y)
+}
+
+// ============================================================================
+// Binaryop single-variable brute-force numerical tests
+// ============================================================================
+
+// ============================================================================
+// Operator linearity tests
+// ============================================================================
+
+/// Test that operators are linear: Op(α*a + β*b) ≈ α*Op(a) + β*Op(b).
+///
+/// Uses the dense matrix representation to verify linearity with deterministic
+/// pseudo-random input vectors. This verifies correctness on superposition inputs,
+/// not just product states.
+#[test]
+fn test_operator_linearity() {
+    let r = 3;
+    let n = 1usize << r;
+
+    // Create the dense matrix for each operator
+    let operators: Vec<(&str, Vec<Vec<Complex64>>)> = vec![
+        (
+            "flip",
+            apply_operator_to_dense_matrix(
+                &flip_operator(r, BoundaryCondition::Periodic).unwrap(),
+                r,
+                r,
+            ),
+        ),
+        (
+            "shift(3)",
+            apply_operator_to_dense_matrix(
+                &shift_operator(r, 3, BoundaryCondition::Periodic).unwrap(),
+                r,
+                r,
+            ),
+        ),
+        (
+            "phase_rotation(pi/4)",
+            apply_operator_to_dense_matrix(&phase_rotation_operator(r, PI / 4.0).unwrap(), r, r),
+        ),
+        (
+            "cumsum",
+            apply_operator_to_dense_matrix(&cumsum_operator(r).unwrap(), r, r),
+        ),
+        (
+            "fourier",
+            apply_operator_to_dense_matrix(
+                &quantics_fourier_operator(r, FourierOptions::forward()).unwrap(),
+                r,
+                r,
+            ),
+        ),
+    ];
+
+    let alpha = Complex64::new(0.7, 0.3);
+    let beta = Complex64::new(-0.2, 0.5);
+
+    // Deterministic pseudo-random vectors
+    let a_vec: Vec<Complex64> = (0..n)
+        .map(|i| {
+            Complex64::new(
+                ((i as f64) * 1.1 + 0.3).sin(),
+                ((i as f64) * 0.7 + 1.2).cos(),
+            )
+        })
+        .collect();
+    let b_vec: Vec<Complex64> = (0..n)
+        .map(|i| {
+            Complex64::new(
+                ((i as f64) * 2.3 + 0.1).cos(),
+                ((i as f64) * 1.9 + 0.5).sin(),
+            )
+        })
+        .collect();
+
+    for (_name, matrix) in &operators {
+        // Compute Op(α*a + β*b) via matrix-vector multiply
+        let combined: Vec<Complex64> = (0..n).map(|i| alpha * a_vec[i] + beta * b_vec[i]).collect();
+        let result_combined: Vec<Complex64> = (0..n)
+            .map(|y| {
+                (0..n)
+                    .map(|x| matrix[y][x] * combined[x])
+                    .sum::<Complex64>()
+            })
+            .collect();
+
+        // Compute α*Op(a) + β*Op(b)
+        let result_a: Vec<Complex64> = (0..n)
+            .map(|y| (0..n).map(|x| matrix[y][x] * a_vec[x]).sum::<Complex64>())
+            .collect();
+        let result_b: Vec<Complex64> = (0..n)
+            .map(|y| (0..n).map(|x| matrix[y][x] * b_vec[x]).sum::<Complex64>())
+            .collect();
+        let result_linear: Vec<Complex64> = (0..n)
+            .map(|i| alpha * result_a[i] + beta * result_b[i])
+            .collect();
+
+        // Compare
+        for y in 0..n {
+            assert_relative_eq!(result_combined[y].re, result_linear[y].re, epsilon = 1e-8,);
+            assert_relative_eq!(result_combined[y].im, result_linear[y].im, epsilon = 1e-8,);
+        }
+    }
+}
+
+/// Test binaryop_single numerical correctness for all valid (a,b) combinations.
+///
+/// For each (x, y) input pair, verifies that the operator maps to the expected
+/// output (z, y) where z = (a*x + b*y) mod 2^R with appropriate boundary condition sign.
+#[test]
+fn test_binaryop_single_numerical_correctness() {
+    let valid_coeffs: Vec<(i8, i8)> = vec![
+        (1, 0),  // select x
+        (0, 1),  // select y
+        (1, 1),  // x + y
+        (1, -1), // x - y
+        (-1, 1), // -x + y
+        (0, 0),  // zero
+    ];
+
+    for r in [2, 3] {
+        let n = 1usize << r;
+
+        for &(a, b) in &valid_coeffs {
+            for bc in [BoundaryCondition::Periodic, BoundaryCondition::Open] {
+                let op = binaryop_single_operator(r, a, b, bc)
+                    .unwrap_or_else(|e| panic!("Failed for a={}, b={}, r={}: {}", a, b, r, e));
+
+                let n_sites = 2 * r;
+                let dim = 1usize << n_sites;
+                let matrix = apply_operator_to_dense_matrix(&op, n_sites, n_sites);
+
+                let bc_val: i64 = match bc {
+                    BoundaryCondition::Periodic => 1,
+                    BoundaryCondition::Open => 0,
+                };
+
+                for x in 0..n {
+                    for y in 0..n {
+                        let input_idx = interleave_bits(x, y, r);
+
+                        // Compute expected: z = a*x + b*y
+                        let z_raw = (a as i64) * (x as i64) + (b as i64) * (y as i64);
+                        let n_i64 = n as i64;
+                        let z_mod = z_raw.rem_euclid(n_i64) as usize;
+                        let nbc = (z_raw - z_mod as i64) / n_i64;
+
+                        // BC sign factor
+                        let expected_sign: f64 = if nbc == 0 {
+                            1.0
+                        } else if bc_val == 0 {
+                            0.0 // Open BC: overflow -> zero
+                        } else {
+                            (bc_val as f64).powi(nbc.unsigned_abs() as i32)
+                        };
+
+                        // Output: (z_mod, y) interleaved
+                        let expected_output_idx = interleave_bits(z_mod, y, r);
+
+                        for out_idx in 0..dim {
+                            let expected = if out_idx == expected_output_idx {
+                                Complex64::new(expected_sign, 0.0)
+                            } else {
+                                Complex64::zero()
+                            };
+
+                            if (matrix[out_idx][input_idx] - expected).norm() > 1e-8 {
+                                panic!(
+                                    "Mismatch at a={}, b={}, r={}, bc={:?}: input (x={}, y={}) -> \
+                                     out_idx={} got ({:.4}, {:.4}) expected ({:.4}, {:.4})\n\
+                                     input_idx={}, expected_output_idx={}, z_raw={}, z_mod={}, nbc={}",
+                                    a, b, r, bc, x, y, out_idx,
+                                    matrix[out_idx][input_idx].re, matrix[out_idx][input_idx].im,
+                                    expected.re, expected.im,
+                                    input_idx, expected_output_idx, z_raw, z_mod, nbc
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Binaryop dual-output (multi-variable) tests
+// ============================================================================
+
+/// Test binaryop with two output variables: (z1, z2) = (a*x+b*y, c*x+d*y).
+///
+/// Port of Julia's _binaryop test pattern. Tests all valid (a,b,c,d) combinations
+/// where neither (a,b) nor (c,d) is (-1,-1).
+/// With periodic BC, this covers 64 of the 81 combinations in {-1,0,1}^4.
+#[test]
+fn test_binaryop_dual_output_numerical() {
+    for r in [2, 3] {
+        let n = 1usize << r;
+        let n_sites = 2 * r;
+        let dim = 1usize << n_sites;
+
+        for a in -1i8..=1 {
+            for b in -1i8..=1 {
+                for c in -1i8..=1 {
+                    for d in -1i8..=1 {
+                        // Skip invalid coeffs: each pair must not be (-1,-1)
+                        let coeffs1 = match BinaryCoeffs::new(a, b) {
+                            Ok(c) => c,
+                            Err(_) => continue,
+                        };
+                        let coeffs2 = match BinaryCoeffs::new(c, d) {
+                            Ok(c) => c,
+                            Err(_) => continue,
+                        };
+
+                        let bc = [BoundaryCondition::Periodic; 2];
+                        let op = binaryop_operator(r, coeffs1, coeffs2, bc).unwrap_or_else(|e| {
+                            panic!("Failed for ({},{},{},{}) r={}: {}", a, b, c, d, r, e)
+                        });
+
+                        let matrix = apply_operator_to_dense_matrix(&op, n_sites, n_sites);
+
+                        for x in 0..n {
+                            for y in 0..n {
+                                let input_idx = interleave_bits(x, y, r);
+
+                                // Compute expected outputs
+                                let z1_raw = (a as i64) * (x as i64) + (b as i64) * (y as i64);
+                                let z2_raw = (c as i64) * (x as i64) + (d as i64) * (y as i64);
+
+                                let z1 = z1_raw.rem_euclid(n as i64) as usize;
+                                let z2 = z2_raw.rem_euclid(n as i64) as usize;
+
+                                // For Periodic BC with bc_val=1, sign is always 1
+                                let expected_output_idx = interleave_bits(z1, z2, r);
+
+                                for out_idx in 0..dim {
+                                    let expected = if out_idx == expected_output_idx {
+                                        Complex64::new(1.0, 0.0)
+                                    } else {
+                                        Complex64::zero()
+                                    };
+
+                                    if (matrix[out_idx][input_idx] - expected).norm() > 1e-8 {
+                                        panic!(
+                                            "Mismatch at ({},{},{},{}) r={}: \
+                                             input (x={}, y={}) -> out_idx={} \
+                                             got ({:.6}, {:.6}) expected ({:.6}, {:.6})\n\
+                                             input_idx={}, expected_output_idx={}, \
+                                             z1={}, z2={}",
+                                            a,
+                                            b,
+                                            c,
+                                            d,
+                                            r,
+                                            x,
+                                            y,
+                                            out_idx,
+                                            matrix[out_idx][input_idx].re,
+                                            matrix[out_idx][input_idx].im,
+                                            expected.re,
+                                            expected.im,
+                                            input_idx,
+                                            expected_output_idx,
+                                            z1,
+                                            z2
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Multi-variable operator tests (P2)
+// ============================================================================
+
+/// Create a product state MPS for a multi-variable system.
+///
+/// `values` is a slice of R values, one per variable.
+/// `nvariables` is the number of variables.
+/// `r` is the number of bits per variable.
+///
+/// The interleaved site index at site n encodes the n-th bits of all variables:
+/// s = Σ_v bit_v * 2^v  (variable 0 in LSB)
+fn create_multivar_product_state_mps(
+    values: &[usize],
+    nvariables: usize,
+    r: usize,
+) -> TensorTrain<Complex64> {
+    assert_eq!(values.len(), nvariables);
+    let site_dim = 1 << nvariables;
+    let mut tensors = Vec::with_capacity(r);
+
+    for n in 0..r {
+        let mut s = 0usize;
+        for v in 0..nvariables {
+            // Big-endian: site n contains bit 2^(R-1-n) of variable v
+            let bit = (values[v] >> (r - 1 - n)) & 1;
+            s |= bit << v;
+        }
+        let mut t = tensor3_zeros(1, site_dim, 1);
+        t.set3(0, s, 0, Complex64::one());
+        tensors.push(t);
+    }
+
+    TensorTrain::new(tensors).expect("Failed to create multivar product state MPS")
+}
+
+/// Contract a TreeTN with site indices to a flat vector, supporting arbitrary site dimensions.
+///
+/// Each site can have any dimension (not just 2). Returns a vector of length Π site_dims[i].
+fn contract_treetn_to_vector_general(
+    treetn: &TreeTN<TensorDynLen, usize>,
+    site_indices: &[DynIndex],
+    site_dims: &[usize],
+) -> Vec<Complex64> {
+    let r = site_indices.len();
+    assert_eq!(r, site_dims.len());
+    let total: usize = site_dims.iter().product();
+
+    let full_tensor = treetn
+        .contract_to_tensor()
+        .expect("Failed to contract TreeTN");
+
+    let ext_indices = &full_tensor.indices;
+    let mut idx_to_pos: HashMap<DynId, usize> = HashMap::new();
+    for (pos, idx) in ext_indices.iter().enumerate() {
+        idx_to_pos.insert(*idx.id(), pos);
+    }
+
+    let mut site_to_tensor: Vec<usize> = Vec::with_capacity(r);
+    for site_idx in site_indices.iter() {
+        let pos = idx_to_pos
+            .get(&site_idx.id().clone())
+            .expect("Site index not found in contracted tensor");
+        site_to_tensor.push(*pos);
+    }
+
+    let data = full_tensor
+        .as_slice_c64()
+        .expect("Expected DenseC64 storage");
+    let dims = full_tensor.dims();
+
+    let mut result = vec![Complex64::zero(); total];
+
+    for x in 0..total {
+        // Decompose flat index x into per-site values using site_dims (big-endian)
+        let mut multi_idx = vec![0usize; r];
+        let mut remainder = x;
+        for i in 0..r {
+            let stride: usize = site_dims[i + 1..].iter().product();
+            let site_val = remainder / stride;
+            remainder %= stride;
+            multi_idx[site_to_tensor[i]] = site_val;
+        }
+
+        // Convert multi-index to flat storage index (row-major)
+        let mut flat_idx = 0;
+        let mut stride = 1;
+        for i in (0..r).rev() {
+            flat_idx += multi_idx[i] * stride;
+            stride *= dims[i];
+        }
+
+        result[x] = data[flat_idx];
+    }
+
+    result
+}
+
+/// Build the dense matrix for a multi-variable operator.
+///
+/// The operator has `r` sites, each with input/output dimension 2^nvariables.
+fn apply_multivar_operator_to_dense_matrix(
+    op: &LinearOperator<TensorDynLen, usize>,
+    r: usize,
+    nvariables: usize,
+) -> Vec<Vec<Complex64>> {
+    let site_dim: usize = 1 << nvariables;
+    let total_dim: usize = site_dim.pow(r as u32);
+    let mut matrix = vec![vec![Complex64::zero(); total_dim]; total_dim];
+
+    for input_idx in 0..total_dim {
+        // Decode input_idx into per-variable values
+        let mut values = vec![0usize; nvariables];
+        let mut remainder = input_idx;
+        for n in 0..r {
+            let stride = site_dim.pow((r - 1 - n) as u32);
+            let site_val = remainder / stride;
+            remainder %= stride;
+            for v in 0..nvariables {
+                let bit = (site_val >> v) & 1;
+                values[v] |= bit << (r - 1 - n);
+            }
+        }
+
+        let mps = create_multivar_product_state_mps(&values, nvariables, r);
+        let (treetn, site_indices) = tensortrain_to_treetn(&mps);
+
+        // Remap site indices to operator input
+        let mut treetn_remapped = treetn;
+        for i in 0..r {
+            let op_input = op
+                .get_input_mapping(&i)
+                .expect("Missing input mapping")
+                .true_index
+                .clone();
+            treetn_remapped = treetn_remapped
+                .replaceind(&site_indices[i], &op_input)
+                .expect("Failed to replace index");
+        }
+
+        // Apply operator
+        let result_treetn = apply_linear_operator(op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
+
+        // Get output indices
+        let output_indices: Vec<DynIndex> = (0..r)
+            .map(|i| {
+                op.get_output_mapping(&i)
+                    .expect("Missing output mapping")
+                    .true_index
+                    .clone()
+            })
+            .collect();
+
+        // Contract result with general site dimensions
+        let out_dims = vec![site_dim; r];
+        let result_vec =
+            contract_treetn_to_vector_general(&result_treetn, &output_indices, &out_dims);
+
+        for out_idx in 0..total_dim {
+            matrix[out_idx][input_idx] = result_vec[out_idx];
+        }
+    }
+
+    matrix
+}
+
+/// Encode per-variable values into a flat multi-variable index.
+///
+/// For nvariables variables each with r bits, the flat index encodes
+/// site-by-site with variable bits interleaved within each site:
+/// idx = Σ_n s_n * (2^nvars)^(R-1-n)
+/// where s_n = Σ_v bit_v(n) * 2^v
+fn multivar_flat_index(values: &[usize], nvariables: usize, r: usize) -> usize {
+    let site_dim = 1 << nvariables;
+    let mut idx = 0;
+    for n in 0..r {
+        let mut s = 0usize;
+        for v in 0..nvariables {
+            let bit = (values[v] >> (r - 1 - n)) & 1;
+            s |= bit << v;
+        }
+        idx = idx * site_dim + s;
+    }
+    idx
+}
+
+/// Test flip_operator_multivar: each variable flipped independently in a 2D system.
+#[test]
+fn test_flip_2d() {
+    let r = 3;
+    let n = 1usize << r;
+    let nvariables = 2;
+
+    for target_var in 0..nvariables {
+        let op =
+            flip_operator_multivar(r, BoundaryCondition::Periodic, nvariables, target_var).unwrap();
+        let matrix = apply_multivar_operator_to_dense_matrix(&op, r, nvariables);
+
+        let total_dim = (1usize << nvariables).pow(r as u32);
+
+        for x0 in 0..n {
+            for x1 in 0..n {
+                let input_vals = [x0, x1];
+                let input_idx = multivar_flat_index(&input_vals, nvariables, r);
+
+                // Flip with Periodic BC: f(x) = g((2^R - x) mod 2^R) for the target variable
+                // flip(0) = 0, flip(1) = 2^R - 1, flip(2) = 2^R - 2, ...
+                let mut out_vals = [x0, x1];
+                let v = input_vals[target_var];
+                out_vals[target_var] = if v == 0 { 0 } else { n - v };
+                let expected_idx = multivar_flat_index(&out_vals, nvariables, r);
+
+                for out_idx in 0..total_dim {
+                    let expected = if out_idx == expected_idx {
+                        Complex64::one()
+                    } else {
+                        Complex64::zero()
+                    };
+                    if (matrix[out_idx][input_idx] - expected).norm() > 1e-10 {
+                        panic!(
+                            "flip_2d: target_var={} input=({},{}) out_idx={} \
+                             got ({:.6},{:.6}) expected ({:.6},{:.6})",
+                            target_var,
+                            x0,
+                            x1,
+                            out_idx,
+                            matrix[out_idx][input_idx].re,
+                            matrix[out_idx][input_idx].im,
+                            expected.re,
+                            expected.im
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Test shift_operator_multivar: each variable shifted independently in a 2D system.
+#[test]
+fn test_shift_2d() {
+    let r = 3;
+    let n = 1usize << r;
+    let nvariables = 2;
+
+    for target_var in 0..nvariables {
+        for offset in [1i64, 3, -2, 7] {
+            let op = shift_operator_multivar(
+                r,
+                offset,
+                BoundaryCondition::Periodic,
+                nvariables,
+                target_var,
+            )
+            .unwrap();
+            let matrix = apply_multivar_operator_to_dense_matrix(&op, r, nvariables);
+
+            let total_dim = (1usize << nvariables).pow(r as u32);
+
+            for x0 in 0..n {
+                for x1 in 0..n {
+                    let input_vals = [x0, x1];
+                    let input_idx = multivar_flat_index(&input_vals, nvariables, r);
+
+                    // Shift: f(x) = g(x + offset), so output at y has input at y - offset
+                    // Matrix: M[y, x] = 1 iff y = (x + offset) mod 2^R
+                    let mut out_vals = input_vals;
+                    out_vals[target_var] =
+                        (input_vals[target_var] as i64 + offset).rem_euclid(n as i64) as usize;
+                    let expected_idx = multivar_flat_index(&out_vals, nvariables, r);
+
+                    for out_idx in 0..total_dim {
+                        let expected = if out_idx == expected_idx {
+                            Complex64::one()
+                        } else {
+                            Complex64::zero()
+                        };
+                        if (matrix[out_idx][input_idx] - expected).norm() > 1e-10 {
+                            panic!(
+                                "shift_2d: target_var={} offset={} input=({},{}) out_idx={} \
+                                 got ({:.6},{:.6}) expected ({:.6},{:.6})",
+                                target_var,
+                                offset,
+                                x0,
+                                x1,
+                                out_idx,
+                                matrix[out_idx][input_idx].re,
+                                matrix[out_idx][input_idx].im,
+                                expected.re,
+                                expected.im
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Test phase_rotation_operator_multivar: each variable gets independent phase.
+#[test]
+fn test_phase_rotation_2d() {
+    use std::f64::consts::PI;
+
+    let r = 3;
+    let n = 1usize << r;
+    let nvariables = 2;
+
+    for target_var in 0..nvariables {
+        let theta = PI / 3.0;
+        let op = phase_rotation_operator_multivar(r, theta, nvariables, target_var).unwrap();
+        let matrix = apply_multivar_operator_to_dense_matrix(&op, r, nvariables);
+
+        let total_dim = (1usize << nvariables).pow(r as u32);
+
+        for x0 in 0..n {
+            for x1 in 0..n {
+                let input_vals = [x0, x1];
+                let input_idx = multivar_flat_index(&input_vals, nvariables, r);
+
+                // Phase rotation is diagonal: M[y, x] = exp(i*θ*x_target) * δ(y, x)
+                let target_x = input_vals[target_var];
+                let phase = theta * (target_x as f64);
+                let expected_diag = Complex64::new(phase.cos(), phase.sin());
+
+                for out_idx in 0..total_dim {
+                    let expected = if out_idx == input_idx {
+                        expected_diag
+                    } else {
+                        Complex64::zero()
+                    };
+                    if (matrix[out_idx][input_idx] - expected).norm() > 1e-10 {
+                        panic!(
+                            "phase_rotation_2d: target_var={} input=({},{}) out_idx={} \
+                             got ({:.6},{:.6}) expected ({:.6},{:.6})",
+                            target_var,
+                            x0,
+                            x1,
+                            out_idx,
+                            matrix[out_idx][input_idx].re,
+                            matrix[out_idx][input_idx].im,
+                            expected.re,
+                            expected.im
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Triangle operator tests (P3)
+// ============================================================================
+
+/// Test that triangle_operator with Lower produces M[i,j] = 1 when i > j.
+#[test]
+fn test_triangle_lower() {
+    for r in 2..=4 {
+        let n = 1usize << r;
+        let op = triangle_operator(r, TriangleType::Lower).unwrap();
+        let matrix = apply_operator_to_dense_matrix(&op, r, r);
+
+        for i in 0..n {
+            for j in 0..n {
+                let expected = if i > j {
+                    Complex64::one()
+                } else {
+                    Complex64::zero()
+                };
+                if (matrix[i][j] - expected).norm() > 1e-10 {
+                    panic!(
+                        "triangle_lower: r={} M[{},{}] = ({:.6},{:.6}) expected ({:.6},{:.6})",
+                        r, i, j, matrix[i][j].re, matrix[i][j].im, expected.re, expected.im
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Test that triangle_operator with Upper produces M[i,j] = 1 when i < j.
+#[test]
+fn test_triangle_upper() {
+    for r in 2..=4 {
+        let n = 1usize << r;
+        let op = triangle_operator(r, TriangleType::Upper).unwrap();
+        let matrix = apply_operator_to_dense_matrix(&op, r, r);
+
+        for i in 0..n {
+            for j in 0..n {
+                let expected = if i < j {
+                    Complex64::one()
+                } else {
+                    Complex64::zero()
+                };
+                if (matrix[i][j] - expected).norm() > 1e-10 {
+                    panic!(
+                        "triangle_upper: r={} M[{},{}] = ({:.6},{:.6}) expected ({:.6},{:.6})",
+                        r, i, j, matrix[i][j].re, matrix[i][j].im, expected.re, expected.im
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Test that cumsum_operator matches triangle_operator with Lower (strict lower triangle).
+///
+/// cumsum_operator produces M[i,j]=1 when i>j (prefix sum: y_i = Σ_{j<i} x_j).
+#[test]
+fn test_cumsum_matches_lower_triangle() {
+    use tensor4all_quanticstransform::cumsum_operator;
+
+    for r in 2..=4 {
+        let cumsum_op = cumsum_operator(r).unwrap();
+        let triangle_op = triangle_operator(r, TriangleType::Lower).unwrap();
+
+        let cumsum_mat = apply_operator_to_dense_matrix(&cumsum_op, r, r);
+        let triangle_mat = apply_operator_to_dense_matrix(&triangle_op, r, r);
+
+        let n = 1usize << r;
+        for i in 0..n {
+            for j in 0..n {
+                if (cumsum_mat[i][j] - triangle_mat[i][j]).norm() > 1e-10 {
+                    panic!(
+                        "cumsum vs upper_triangle mismatch at r={} [{},{}]: \
+                         cumsum=({:.6},{:.6}) triangle=({:.6},{:.6})",
+                        r,
+                        i,
+                        j,
+                        cumsum_mat[i][j].re,
+                        cumsum_mat[i][j].im,
+                        triangle_mat[i][j].re,
+                        triangle_mat[i][j].im
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Test that Upper + Lower + Identity = J (all-ones matrix).
+///
+/// For an N×N matrix: strict_upper + strict_lower + identity = all-ones matrix.
+#[test]
+fn test_upper_plus_lower_is_complement() {
+    for r in 2..=4 {
+        let n = 1usize << r;
+        let upper_op = triangle_operator(r, TriangleType::Upper).unwrap();
+        let lower_op = triangle_operator(r, TriangleType::Lower).unwrap();
+
+        let upper_mat = apply_operator_to_dense_matrix(&upper_op, r, r);
+        let lower_mat = apply_operator_to_dense_matrix(&lower_op, r, r);
+
+        for i in 0..n {
+            for j in 0..n {
+                let identity = if i == j {
+                    Complex64::one()
+                } else {
+                    Complex64::zero()
+                };
+                let sum = upper_mat[i][j] + lower_mat[i][j] + identity;
+                let expected = Complex64::one();
+                if (sum - expected).norm() > 1e-10 {
+                    panic!(
+                        "upper+lower+I != J at r={} [{},{}]: sum=({:.6},{:.6})",
+                        r, i, j, sum.re, sum.im
+                    );
+                }
+            }
+        }
+    }
 }

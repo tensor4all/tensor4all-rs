@@ -110,20 +110,109 @@ pub fn binaryop_operator(
 fn binaryop_mpo(
     r: usize,
     coeffs1: BinaryCoeffs,
-    _coeffs2: BinaryCoeffs,
+    coeffs2: BinaryCoeffs,
     bc: [BoundaryCondition; 2],
 ) -> Result<TensorTrain<Complex64>> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of bits must be positive"));
     }
 
-    // For full 2-variable transformation, we use the single operator approach
-    // applied twice (once for each output variable)
-    // This is a simplified implementation that handles the most common cases
+    let bc_val1: i8 = match bc[0] {
+        BoundaryCondition::Periodic => 1,
+        BoundaryCondition::Open => 0,
+    };
+    let bc_val2: i8 = match bc[1] {
+        BoundaryCondition::Periodic => 1,
+        BoundaryCondition::Open => 0,
+    };
 
-    // For now, we implement only the first transformation
-    // A full implementation would need to compose two transformations
-    binaryop_single_mpo(r, coeffs1.a, coeffs1.b, bc[0])
+    let a1 = coeffs1.a;
+    let b1 = coeffs1.b;
+    let a2 = coeffs2.a;
+    let b2 = coeffs2.b;
+
+    let mut tensors = Vec::with_capacity(2 * r);
+
+    for n in 0..r {
+        // Carry flows LSB→MSB (right-to-left in TT), matching shift_mpo convention.
+        // cin enters from the RIGHT (from position n+1, less significant bits).
+        // cout exits to the LEFT (to position n-1, more significant bits).
+        // At MSB (n=0): cout absorbed by BC (cout_on=false), cin from right (cin_on=true).
+        // At LSB (n=r-1): cin=0 (cin_on=false), cout goes left (cout_on=true).
+        let cin_on = n < r - 1; // cin from right, not at LSB
+        let cout_on = n > 0; // cout to left, not at MSB
+
+        let cin_dim = if cin_on { 3usize } else { 1 };
+        let cout_dim = if cout_on { 3usize } else { 1 };
+
+        // Left bond carries cout (toward MSB), right bond carries cin (from LSB)
+        let left_bond = cout_dim * cout_dim; // (cout1, cout2)
+        let right_bond = cin_dim * cin_dim; // (cin1, cin2)
+
+        // Mid-bond encodes (cout_combined, z1, x) = left_bond * 4
+        let mid_bond = left_bond * 4;
+
+        // Get individual carry tensors for each output
+        // Shape: (cin_dim, cout_dim, 2, 2, 2) = [cin, cout, x, y, out]
+        let t1 = binaryop_tensor_single(a1, b1, cin_on, cout_on, bc_val1);
+        let t2 = binaryop_tensor_single(a2, b2, cin_on, cout_on, bc_val2);
+
+        // X-site tensor: T_x[left=cout_combined, s_x=z1*2+x, mid]
+        // Pass through cout_combined, z1, x into mid-bond.
+        let mut t_x = tensor3_zeros(left_bond, 4, mid_bond);
+        for cc in 0..left_bond {
+            for z1 in 0..2usize {
+                for x in 0..2usize {
+                    let s_x = z1 * 2 + x;
+                    let mid = cc * 4 + z1 * 2 + x;
+                    t_x.set3(cc, s_x, mid, Complex64::one());
+                }
+            }
+        }
+
+        // Y-site tensor: T_y[mid, s_y=z2*2+y, right=cin_combined]
+        // Given cout (from mid), z1, x, y, cin (from right), verify carry equations
+        // and compute z2.
+        let mut t_y = tensor3_zeros(mid_bond, 4, right_bond);
+        for cc_out in 0..left_bond {
+            let cout1_idx = cc_out / cout_dim;
+            let cout2_idx = cc_out % cout_dim;
+
+            for z1 in 0..2usize {
+                for x in 0..2usize {
+                    let mid = cc_out * 4 + z1 * 2 + x;
+
+                    for y in 0..2usize {
+                        for cin1_idx in 0..cin_dim {
+                            let v1 = t1[[cin1_idx, cout1_idx, x, y, z1]];
+                            if v1 == Complex64::zero() {
+                                continue;
+                            }
+
+                            for z2 in 0..2usize {
+                                for cin2_idx in 0..cin_dim {
+                                    let v2 = t2[[cin2_idx, cout2_idx, x, y, z2]];
+                                    if v2 == Complex64::zero() {
+                                        continue;
+                                    }
+
+                                    let cin_combined = cin1_idx * cin_dim + cin2_idx;
+                                    let s_y = z2 * 2 + y;
+                                    let weight = v1 * v2;
+                                    t_y.set3(mid, s_y, cin_combined, weight);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        tensors.push(t_x);
+        tensors.push(t_y);
+    }
+
+    TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("Failed to create binaryop MPO: {}", e))
 }
 
 /// Create a single binaryop tensor for one site.
@@ -142,7 +231,6 @@ fn binaryop_mpo(
 /// - cin_size = 3 if cin_on else 1
 /// - cout_size = 3 if cout_on else 1
 /// - Last three dimensions are (x, y, out)
-#[allow(dead_code)]
 fn binaryop_tensor_single(
     a: i8,
     b: i8,
@@ -186,117 +274,16 @@ fn binaryop_tensor_single(
 /// Create a binaryop MPO for a simpler case: single output variable.
 ///
 /// This computes f(x, y) = g(a*x + b*y, y) where x and y are interleaved.
+/// Delegates to `binaryop_mpo` with coeffs2 = (0, 1) (identity on y).
 pub fn binaryop_single_mpo(
     r: usize,
     a: i8,
     b: i8,
     bc: BoundaryCondition,
 ) -> Result<TensorTrain<Complex64>> {
-    if r == 0 {
-        return Err(anyhow::anyhow!("Number of bits must be positive"));
-    }
-    if a.abs() > 1 || b.abs() > 1 {
-        return Err(anyhow::anyhow!("Coefficients must be -1, 0, or 1"));
-    }
-    if a == -1 && b == -1 {
-        return Err(anyhow::anyhow!("(a, b) = (-1, -1) is not supported"));
-    }
-
-    let bc_val = match bc {
-        BoundaryCondition::Periodic => 1i8,
-        BoundaryCondition::Open => 0i8,
-    };
-
-    let mut tensors = Vec::with_capacity(2 * r);
-
-    // For each bit position, we have x_n and y_n
-    // The output is interleaved: out_x_n, out_y_n
-    // where out_x = a*x + b*y (transformed)
-    //       out_y = y (unchanged)
-
-    for n in 0..r {
-        // For simplicity, create a combined tensor for the (x_n, y_n) pair
-        // Then split into two site tensors
-
-        let left_bond = if n == 0 { 1 } else { 3 };
-        let right_bond = if n == r - 1 { 1 } else { 3 };
-
-        // Site x_n tensor: (left_bond, 4, mid_bond)
-        // where mid_bond carries (carry_state, x_value)
-        let mid_bond = (if n == r - 1 { 1 } else { 3 }) * 2; // carry × x
-
-        let mut t_x: tensor4all_simplett::Tensor3<Complex64> =
-            tensor3_zeros(left_bond, 4, mid_bond);
-        let mut t_y: tensor4all_simplett::Tensor3<Complex64> =
-            tensor3_zeros(mid_bond, 4, right_bond);
-
-        for l in 0..left_bond {
-            for x in 0..2usize {
-                // Store (carry_in, x) in mid index
-                let mid = (if n == 0 { 0 } else { l }) * 2 + x;
-                if mid < mid_bond {
-                    let s = x * 2 + x; // out = in (identity on x for now)
-                    t_x.set3(l, s, mid, Complex64::one());
-                }
-            }
-        }
-
-        for m in 0..mid_bond {
-            let carry_idx = m / 2;
-            let x = m % 2;
-            let carry_in = if n == 0 { 0i8 } else { (carry_idx as i8) - 1 };
-
-            for y in 0..2usize {
-                let res = a as i16 * x as i16 + b as i16 * y as i16 + carry_in as i16;
-                let out_bit = (res.abs() % 2) as usize;
-                let carry_out = if res >= 2 {
-                    1i8
-                } else if res >= 0 {
-                    0i8
-                } else {
-                    -1i8 // For res < 0, carry = -1
-                };
-
-                for r_idx in 0..right_bond {
-                    let weight = if n == r - 1 {
-                        // Last position: apply boundary condition
-                        if carry_out == 0 {
-                            Complex64::one()
-                        } else {
-                            Complex64::new(bc_val as f64, 0.0)
-                        }
-                    } else {
-                        // Check if carry matches
-                        let expected_carry = (r_idx as i8) - 1;
-                        if carry_out == expected_carry {
-                            Complex64::one()
-                        } else {
-                            Complex64::zero()
-                        }
-                    };
-
-                    if weight != Complex64::zero() {
-                        // For y site: out = y (identity), transformed output goes to out_x
-                        // But we're doing interleaved, so this site's output IS y
-                        // The binaryop output (a*x + b*y) should go to the x position
-                        // This requires rethinking the tensor structure...
-
-                        // For now, let's make y site output the binaryop result
-                        // and x site output x unchanged
-                        // This gives: (x, a*x + b*y) output from (x, y) input
-                        let s = out_bit * 2 + y;
-                        let r_idx_final = if n == r - 1 { 0 } else { r_idx };
-                        t_y.set3(m, s, r_idx_final, weight);
-                    }
-                }
-            }
-        }
-
-        tensors.push(t_x);
-        tensors.push(t_y);
-    }
-
-    TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("Failed to create binaryop MPO: {}", e))
+    let coeffs1 = BinaryCoeffs::new(a, b)?;
+    let coeffs2 = BinaryCoeffs::select_y(); // z2 = y (identity)
+    binaryop_mpo(r, coeffs1, coeffs2, [bc, BoundaryCondition::Periodic])
 }
 
 /// Create a binary operation operator for a single transformation.
