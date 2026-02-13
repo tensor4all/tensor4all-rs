@@ -1004,10 +1004,30 @@ fn reference_dft_matrix(n: usize, sign: f64) -> Vec<Vec<Complex64>> {
     matrix
 }
 
+/// Reverse the bits of an R-bit integer.
+///
+/// The QTT Fourier transform produces output with bit-reversed ordering:
+/// site 0 becomes LSB (instead of MSB) after transformation. When we
+/// extract the output using big-endian convention, the indices are
+/// bit-reversed relative to the standard DFT matrix.
+fn bit_reverse(x: usize, r: usize) -> usize {
+    let mut result = 0;
+    for i in 0..r {
+        result |= ((x >> i) & 1) << (r - 1 - i);
+    }
+    result
+}
+
 /// Test Fourier transform phase correctness against reference DFT matrix.
 ///
 /// Port of Julia's _qft_ref test: computes full DFT matrix and compares element-wise.
 /// Tests both forward (sign=-1) and inverse (sign=+1) for R=2,3,4.
+///
+/// Note: The QTT Fourier transform produces output with bit-reversed ordering
+/// (site 0 becomes LSB after transform). When extracting the dense matrix
+/// using big-endian convention, the output indices are bit-reversed relative
+/// to the standard DFT matrix. We account for this by comparing
+/// forward_matrix[k][x] with forward_ref[bit_reverse(k)][x].
 #[test]
 fn test_fourier_phase_correctness() {
     for r in [2, 3, 4] {
@@ -1020,15 +1040,16 @@ fn test_fourier_phase_correctness() {
         let forward_ref = reference_dft_matrix(n, -1.0);
 
         for k in 0..n {
+            let k_br = bit_reverse(k, r);
             for x in 0..n {
                 assert_relative_eq!(
                     forward_matrix[k][x].re,
-                    forward_ref[k][x].re,
+                    forward_ref[k_br][x].re,
                     epsilon = 1e-6,
                 );
                 assert_relative_eq!(
                     forward_matrix[k][x].im,
-                    forward_ref[k][x].im,
+                    forward_ref[k_br][x].im,
                     epsilon = 1e-6,
                 );
             }
@@ -1041,15 +1062,16 @@ fn test_fourier_phase_correctness() {
         let inverse_ref = reference_dft_matrix(n, 1.0);
 
         for k in 0..n {
+            let k_br = bit_reverse(k, r);
             for x in 0..n {
                 assert_relative_eq!(
                     inverse_matrix[k][x].re,
-                    inverse_ref[k][x].re,
+                    inverse_ref[k_br][x].re,
                     epsilon = 1e-6,
                 );
                 assert_relative_eq!(
                     inverse_matrix[k][x].im,
-                    inverse_ref[k][x].im,
+                    inverse_ref[k_br][x].im,
                     epsilon = 1e-6,
                 );
             }
@@ -1058,6 +1080,11 @@ fn test_fourier_phase_correctness() {
 }
 
 /// Test Fourier roundtrip: F^{-1} * F ≈ I (as dense matrices).
+///
+/// The QTT Fourier output has bit-reversed ordering: the dense matrix
+/// M[k][x] corresponds to F[bit_reverse(k), x]. To compute the true
+/// product F^{-1} * F, we un-permute the row indices before multiplying:
+///   (F^{-1} * F)[i][j] = Σ_k M_inv[BR(i)][k] * M_fwd[BR(k)][j]
 #[test]
 fn test_fourier_roundtrip_matrix() {
     for r in [2, 3, 4] {
@@ -1071,12 +1098,17 @@ fn test_fourier_roundtrip_matrix() {
         let f_mat = apply_operator_to_dense_matrix(&forward_op, r, r);
         let fi_mat = apply_operator_to_dense_matrix(&inverse_op, r, r);
 
-        // Compute F^{-1} * F and verify ≈ I
+        // Compute F^{-1} * F with bit-reversal un-permutation:
+        // true_F[i][j] = f_mat[BR(i)][j], true_Fi[i][j] = fi_mat[BR(i)][j]
+        // product[i][j] = Σ_k true_Fi[i][k] * true_F[k][j]
+        //               = Σ_k fi_mat[BR(i)][k] * f_mat[BR(k)][j]
         for i in 0..n {
+            let i_br = bit_reverse(i, r);
             for j in 0..n {
                 let mut product = Complex64::zero();
                 for k in 0..n {
-                    product += fi_mat[i][k] * f_mat[k][j];
+                    let k_br = bit_reverse(k, r);
+                    product += fi_mat[i_br][k] * f_mat[k_br][j];
                 }
                 let expected = if i == j { 1.0 } else { 0.0 };
                 assert_relative_eq!(product.re, expected, epsilon = 1e-5);
