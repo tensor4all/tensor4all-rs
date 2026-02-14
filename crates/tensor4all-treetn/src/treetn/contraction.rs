@@ -1342,6 +1342,20 @@ mod tests {
 
         let result = tn.contract_to_tensor().unwrap();
         assert_eq!(result.external_indices().len(), 2);
+
+        // Verify the contracted single-node TN returns the tensor data itself
+        let result_data = result.to_vec_f64().unwrap();
+        let expected = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        assert_eq!(result_data.len(), expected.len());
+        for (i, (&got, &exp)) in result_data.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-10,
+                "Element {} mismatch: got {} expected {}",
+                i,
+                got,
+                exp
+            );
+        }
     }
 
     #[test]
@@ -1354,6 +1368,37 @@ mod tests {
         assert_eq!(ext_ids.len(), 2);
         assert!(ext_ids.contains(s0.id()));
         assert!(ext_ids.contains(s1.id()));
+
+        // Verify values by naive contraction.
+        // t0[s0, bond] shape (2,3): [1,0,0, 0,1,0]
+        // t1[bond, s1] shape (3,2): [1,0, 0,1, 0,0]
+        // result[s0, s1] = sum_bond t0[s0,bond]*t1[bond,s1]
+        let t0_data = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]; // (2,3)
+        let t1_data = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]; // (3,2)
+        let (dim_s0, dim_bond, dim_s1) = (2usize, 3usize, 2usize);
+
+        let mut expected = vec![0.0f64; dim_s0 * dim_s1];
+        for i_s0 in 0..dim_s0 {
+            for i_s1 in 0..dim_s1 {
+                let mut sum = 0.0;
+                for i_bond in 0..dim_bond {
+                    sum += t0_data[i_s0 * dim_bond + i_bond] * t1_data[i_bond * dim_s1 + i_s1];
+                }
+                expected[i_s0 * dim_s1 + i_s1] = sum;
+            }
+        }
+
+        let result_data = result.to_vec_f64().unwrap();
+        assert_eq!(result_data.len(), expected.len());
+        for (i, (&got, &exp)) in result_data.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-10,
+                "Element {} mismatch: got {} expected {}",
+                i,
+                got,
+                exp
+            );
+        }
     }
 
     #[test]

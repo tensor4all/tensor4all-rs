@@ -343,10 +343,19 @@ mod tests {
         let data_b = tensor_b.to_vec_f64().unwrap();
         let data_sum = tensor_sum.to_vec_f64().unwrap();
 
-        // We need to compare the actual values, but dimensions may be permuted.
-        // For a simple case, just verify dimensionality
+        // Verify element-wise: contract(result) ≈ contract(tn_a) + contract(tn_b)
         assert_eq!(data_sum.len(), data_a.len());
         assert_eq!(data_sum.len(), data_b.len());
+        for i in 0..data_a.len() {
+            assert!(
+                (data_sum[i] - (data_a[i] + data_b[i])).abs() < 1e-10,
+                "Element {} mismatch: {} != {} + {}",
+                i,
+                data_sum[i],
+                data_a[i],
+                data_b[i]
+            );
+        }
     }
 
     #[test]

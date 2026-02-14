@@ -365,8 +365,14 @@ mod tests {
         (mpo, state, s, s_in_tmp, s_out_tmp)
     }
 
-    #[test]
-    fn test_linear_operator_new() {
+    /// Create a simple LinearOperator for testing.
+    /// Returns (operator, s, s_in_tmp, s_out_tmp)
+    fn make_linear_operator() -> (
+        LinearOperator<TensorDynLen, String>,
+        DynIndex, // s (true site index)
+        DynIndex, // s_in_tmp
+        DynIndex, // s_out_tmp
+    ) {
         let (mpo, _state, s, s_in_tmp, s_out_tmp) = make_simple_mpo_and_state();
 
         let mut input_mapping = HashMap::new();
@@ -388,6 +394,12 @@ mod tests {
         );
 
         let op = LinearOperator::new(mpo, input_mapping, output_mapping);
+        (op, s, s_in_tmp, s_out_tmp)
+    }
+
+    #[test]
+    fn test_linear_operator_new() {
+        let (op, _s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
 
         assert!(op.get_input_mapping(&"A".to_string()).is_some());
         assert!(op.get_output_mapping(&"A".to_string()).is_some());
@@ -397,27 +409,7 @@ mod tests {
 
     #[test]
     fn test_linear_operator_mpo_accessor() {
-        let (mpo, _state, s, s_in_tmp, s_out_tmp) = make_simple_mpo_and_state();
-
-        let mut input_mapping = HashMap::new();
-        input_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_in_tmp.clone(),
-            },
-        );
-
-        let mut output_mapping = HashMap::new();
-        output_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_out_tmp.clone(),
-            },
-        );
-
-        let op = LinearOperator::new(mpo, input_mapping, output_mapping);
+        let (op, _s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
 
         // Test mpo() accessor
         assert_eq!(op.mpo().node_count(), 1);
@@ -425,27 +417,7 @@ mod tests {
 
     #[test]
     fn test_linear_operator_input_output_site_indices() {
-        let (mpo, _state, s, s_in_tmp, s_out_tmp) = make_simple_mpo_and_state();
-
-        let mut input_mapping = HashMap::new();
-        input_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_in_tmp.clone(),
-            },
-        );
-
-        let mut output_mapping = HashMap::new();
-        output_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_out_tmp.clone(),
-            },
-        );
-
-        let op = LinearOperator::new(mpo, input_mapping, output_mapping);
+        let (op, s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
 
         let input_indices = op.input_site_indices();
         assert_eq!(input_indices.len(), 1);
@@ -458,27 +430,7 @@ mod tests {
 
     #[test]
     fn test_linear_operator_input_output_mappings() {
-        let (mpo, _state, s, s_in_tmp, s_out_tmp) = make_simple_mpo_and_state();
-
-        let mut input_mapping = HashMap::new();
-        input_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_in_tmp.clone(),
-            },
-        );
-
-        let mut output_mapping = HashMap::new();
-        output_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_out_tmp.clone(),
-            },
-        );
-
-        let op = LinearOperator::new(mpo, input_mapping, output_mapping);
+        let (op, _s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
 
         assert_eq!(op.input_mappings().len(), 1);
         assert_eq!(op.output_mappings().len(), 1);
@@ -486,27 +438,7 @@ mod tests {
 
     #[test]
     fn test_linear_operator_operator_trait_site_indices() {
-        let (mpo, _state, s, s_in_tmp, s_out_tmp) = make_simple_mpo_and_state();
-
-        let mut input_mapping = HashMap::new();
-        input_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_in_tmp.clone(),
-            },
-        );
-
-        let mut output_mapping = HashMap::new();
-        output_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_out_tmp.clone(),
-            },
-        );
-
-        let op = LinearOperator::new(mpo, input_mapping, output_mapping);
+        let (op, _s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
 
         // Operator trait: site_indices returns union of true input and output indices
         let site_indices = Operator::site_indices(&op);
@@ -516,27 +448,7 @@ mod tests {
 
     #[test]
     fn test_linear_operator_operator_trait_node_names() {
-        let (mpo, _state, s, s_in_tmp, s_out_tmp) = make_simple_mpo_and_state();
-
-        let mut input_mapping = HashMap::new();
-        input_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_in_tmp.clone(),
-            },
-        );
-
-        let mut output_mapping = HashMap::new();
-        output_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_out_tmp.clone(),
-            },
-        );
-
-        let op = LinearOperator::new(mpo, input_mapping, output_mapping);
+        let (op, _s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
 
         let names = Operator::node_names(&op);
         assert_eq!(names.len(), 1);
@@ -545,27 +457,7 @@ mod tests {
 
     #[test]
     fn test_linear_operator_apply_local_identity() {
-        let (mpo, _state, s, s_in_tmp, s_out_tmp) = make_simple_mpo_and_state();
-
-        let mut input_mapping = HashMap::new();
-        input_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_in_tmp.clone(),
-            },
-        );
-
-        let mut output_mapping = HashMap::new();
-        output_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_out_tmp.clone(),
-            },
-        );
-
-        let op = LinearOperator::new(mpo, input_mapping, output_mapping);
+        let (op, s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
 
         // Create a local tensor to apply operator to: |0> = [1, 0]
         let local_tensor = TensorDynLen::from_dense_f64(vec![s.clone()], vec![1.0, 0.0]);
@@ -582,27 +474,7 @@ mod tests {
 
     #[test]
     fn test_linear_operator_operator_trait_site_index_network() {
-        let (mpo, _state, s, s_in_tmp, s_out_tmp) = make_simple_mpo_and_state();
-
-        let mut input_mapping = HashMap::new();
-        input_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_in_tmp.clone(),
-            },
-        );
-
-        let mut output_mapping = HashMap::new();
-        output_mapping.insert(
-            "A".to_string(),
-            IndexMapping {
-                true_index: s.clone(),
-                internal_index: s_out_tmp.clone(),
-            },
-        );
-
-        let op = LinearOperator::new(mpo, input_mapping, output_mapping);
+        let (op, _s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
 
         let sin = Operator::site_index_network(&op);
         assert_eq!(sin.node_names().len(), 1);
