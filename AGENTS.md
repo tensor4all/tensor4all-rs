@@ -39,6 +39,17 @@ Read `docs/api/*.md` before source files. Only read source when API doc is insuf
 - `anyhow` for internal error handling and context
 - `thiserror` for public API error types
 
+### C API Error Handling (Known Issue)
+
+**IMPORTANT**: The C API (`tensor4all-capi`) currently discards all error details at the FFI boundary. See [#228](https://github.com/tensor4all/tensor4all-rs/issues/228).
+
+- `catch_unwind` catches panics but the panic message is lost (`result.unwrap_or(T4A_INTERNAL_ERROR)`)
+- `Err(e)` variants are discarded (`Err(_) => T4A_INTERNAL_ERROR`)
+- FFI consumers (Julia, Python) only see a generic "Internal error" with no diagnostic info
+- **~76 `catch_unwind` sites** and **~47 `Err(_)` discard sites** across the capi crate need updating
+- **Do not add new `catch_unwind` / `Err(_) => T4A_INTERNAL_ERROR` patterns** without preserving error messages
+- When #228 is resolved, use the `t4a_last_error_message` API and `run_catching` helper for all new FFI functions
+
 ## Testing
 
 ```bash
