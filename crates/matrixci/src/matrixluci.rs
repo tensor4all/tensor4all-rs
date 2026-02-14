@@ -16,10 +16,10 @@ pub struct MatrixLUCI<T: Scalar> {
 
 impl<T: Scalar> MatrixLUCI<T> {
     /// Create a MatrixLUCI from a matrix
-    pub fn from_matrix(a: &Matrix<T>, options: Option<RrLUOptions>) -> Self {
-        Self {
-            lu: rrlu(a, options),
-        }
+    pub fn from_matrix(a: &Matrix<T>, options: Option<RrLUOptions>) -> crate::error::Result<Self> {
+        Ok(Self {
+            lu: rrlu(a, options)?,
+        })
     }
 
     /// Create from an existing rrLU decomposition
@@ -248,7 +248,7 @@ mod tests {
             vec![7.0, 8.0, 10.0],
         ]);
 
-        let luci = MatrixLUCI::from_matrix(&m, None);
+        let luci = MatrixLUCI::from_matrix(&m, None).unwrap();
         assert_eq!(luci.nrows(), 3);
         assert_eq!(luci.ncols(), 3);
         assert_eq!(luci.rank(), 3);
@@ -258,7 +258,7 @@ mod tests {
     fn test_matrixluci_reconstruct() {
         let m = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
 
-        let luci = MatrixLUCI::from_matrix(&m, None);
+        let luci = MatrixLUCI::from_matrix(&m, None).unwrap();
         let approx = luci.to_matrix();
 
         for i in 0..2 {
@@ -284,7 +284,7 @@ mod tests {
             vec![3.0, 6.0, 9.0],
         ]);
 
-        let luci = MatrixLUCI::from_matrix(&m, None);
+        let luci = MatrixLUCI::from_matrix(&m, None).unwrap();
         assert_eq!(luci.rank(), 1);
     }
 }

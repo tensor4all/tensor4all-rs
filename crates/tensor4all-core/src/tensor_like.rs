@@ -65,6 +65,13 @@ pub enum FactorizeError {
         #[from]
         crate::qr::QrError,
     ),
+    /// Error from matrix CI operation.
+    #[error("Matrix CI error: {0}")]
+    MatrixCIError(
+        /// The underlying matrix CI error
+        #[from]
+        matrixci::MatrixCIError,
+    ),
 }
 
 /// Factorization algorithm.

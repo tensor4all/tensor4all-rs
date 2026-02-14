@@ -430,7 +430,7 @@ where
         left_orthogonal,
     };
 
-    let luci = MatrixLUCI::from_matrix(&pi, Some(lu_options));
+    let luci = MatrixLUCI::from_matrix(&pi, Some(lu_options))?;
 
     // Update I and J sets
     let row_indices = luci.row_indices();

@@ -48,9 +48,12 @@ pub trait Scalar:
     /// Check if value is NaN.
     fn is_nan(self) -> bool;
 
-    /// Small epsilon value for numerical comparisons.
+    /// Machine epsilon for numerical comparisons.
+    ///
+    /// Returns `f64::EPSILON` (~2.2e-16) by default. This is the smallest value
+    /// such that `1.0 + epsilon != 1.0`.
     fn epsilon() -> f64 {
-        1e-30
+        f64::EPSILON
     }
 }
 

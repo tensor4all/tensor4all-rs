@@ -240,7 +240,7 @@ where
     };
 
     // Perform LU decomposition
-    let lu = rrlu(&a_matrix, Some(lu_options));
+    let lu = rrlu(&a_matrix, Some(lu_options))?;
     let rank = lu.npivots();
 
     // Extract L and U matrices (permuted)
@@ -308,7 +308,7 @@ where
     };
 
     // Perform CI decomposition
-    let ci = MatrixLUCI::from_matrix(&a_matrix, Some(lu_options));
+    let ci = MatrixLUCI::from_matrix(&a_matrix, Some(lu_options))?;
     let rank = ci.rank();
 
     // Get left and right matrices from CI

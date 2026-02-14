@@ -22,7 +22,7 @@ fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> (Matrix<T>, Matrix<T>)
         abs_tol: 0.0,
         left_orthogonal: true,
     };
-    let lu = rrlu(matrix, Some(options));
+    let lu = rrlu(matrix, Some(options)).expect("rrlu failed in QR decomposition");
     (lu.left(true), lu.right(true))
 }
 

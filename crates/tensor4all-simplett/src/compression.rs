@@ -89,7 +89,7 @@ fn factorize<T: TTScalar + Scalar>(
     tolerance: f64,
     max_bond_dim: usize,
     left_orthogonal: bool,
-) -> (Matrix<T>, Matrix<T>, usize) {
+) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)> {
     let reltol = if tolerance > 0.0 { tolerance } else { 1e-14 };
     let abstol = 0.0;
 
@@ -102,27 +102,27 @@ fn factorize<T: TTScalar + Scalar>(
 
     match method {
         CompressionMethod::LU => {
-            let lu = rrlu(matrix, Some(options));
+            let lu = rrlu(matrix, Some(options))?;
             let left = lu.left(true); // permuted
             let right = lu.right(true); // permuted
             let npivots = lu.npivots();
-            (left, right, npivots)
+            Ok((left, right, npivots))
         }
         CompressionMethod::CI => {
-            let luci = MatrixLUCI::from_matrix(matrix, Some(options));
+            let luci = MatrixLUCI::from_matrix(matrix, Some(options))?;
             let left = luci.left();
             let right = luci.right();
             let npivots = luci.rank();
-            (left, right, npivots)
+            Ok((left, right, npivots))
         }
         CompressionMethod::SVD => {
             // For SVD, we'd need a linear algebra library
             // For now, fall back to LU
-            let lu = rrlu(matrix, Some(options));
+            let lu = rrlu(matrix, Some(options))?;
             let left = lu.left(true);
             let right = lu.right(true);
             let npivots = lu.npivots();
-            (left, right, npivots)
+            Ok((left, right, npivots))
         }
     }
 }
@@ -156,7 +156,7 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
                 0.0,        // No truncation in left sweep
                 usize::MAX, // No max bond dim in left sweep
                 true,       // left orthogonal
-            );
+            )?;
 
             // Update current tensor
             let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim);
@@ -209,7 +209,7 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
                 options.tolerance,
                 options.max_bond_dim,
                 false, // right orthogonal
-            );
+            )?;
 
             // Update current tensor from right_factor
             let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim);

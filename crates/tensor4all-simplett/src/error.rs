@@ -45,4 +45,8 @@ pub enum TensorTrainError {
         /// Description of the invalid operation
         message: String,
     },
+
+    /// Matrix CI error
+    #[error("Matrix CI error: {0}")]
+    MatrixCI(#[from] matrixci::MatrixCIError),
 }
