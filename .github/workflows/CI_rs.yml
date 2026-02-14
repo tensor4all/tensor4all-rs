@@ -49,8 +49,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Run tests
-        run: cargo nextest run --release --workspace
+      - name: Run tests (non-HDF5)
+        run: cargo nextest run --release --workspace --exclude tensor4all-hdf5
+
+      - name: Run HDF5 tests
+        run: cargo test --release -p tensor4all-hdf5
 
   test-libtorch:
     name: Test (libtorch)
