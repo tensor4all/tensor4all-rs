@@ -159,6 +159,35 @@ mod tests {
         Index::new_with_size(DynId(id), size)
     }
 
+    /// Helper: compare TT contraction result against naive dense contraction.
+    ///
+    /// Converts both TTs to dense, contracts the dense tensors, then compares
+    /// element-wise with the TT contraction result converted to dense via `to_dense()`.
+    fn assert_matches_naive(tt1: &TensorTrain, tt2: &TensorTrain, result: &TensorTrain) {
+        let naive_result = tt1.to_dense().unwrap().contract(&tt2.to_dense().unwrap());
+        let naive_data = naive_result.to_vec_f64().unwrap();
+
+        let result_dense = result.to_dense().unwrap();
+        let result_data = result_dense.to_vec_f64().unwrap();
+
+        assert_eq!(
+            result_data.len(),
+            naive_data.len(),
+            "Data length mismatch: result={} vs naive={}",
+            result_data.len(),
+            naive_data.len()
+        );
+        for (i, (&got, &exp)) in result_data.iter().zip(naive_data.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-10,
+                "Element {} mismatch: {} vs {}",
+                i,
+                got,
+                exp
+            );
+        }
+    }
+
     #[test]
     fn test_contract_free_fn_empty_first() {
         let empty = TensorTrain::new(vec![]).unwrap();
@@ -239,6 +268,7 @@ mod tests {
         let options = ContractOptions::zipup();
         let result = contract(&tt1, &tt2, &options).unwrap();
         assert_eq!(result.len(), 1);
+        assert_matches_naive(&tt1, &tt2, &result);
     }
 
     #[test]
@@ -261,6 +291,7 @@ mod tests {
         let result = contract(&tt1, &tt2, &options).unwrap();
         // Result should contract over shared site indices
         assert_eq!(result.len(), 1);
+        assert_matches_naive(&tt1, &tt2, &result);
     }
 
     #[test]
@@ -281,6 +312,7 @@ mod tests {
         let options = ContractOptions::zipup().with_rtol(1e-10);
         let result = contract(&tt1, &tt2, &options).unwrap();
         assert_eq!(result.len(), 1);
+        assert_matches_naive(&tt1, &tt2, &result);
     }
 
     #[test]
@@ -296,6 +328,7 @@ mod tests {
         let options = ContractOptions::naive();
         let result = contract(&tt1, &tt2, &options).unwrap();
         assert_eq!(result.len(), 1);
+        assert_matches_naive(&tt1, &tt2, &result);
     }
 
     #[test]
@@ -316,6 +349,7 @@ mod tests {
         let options = ContractOptions::fit().with_max_rank(10).with_nhalfsweeps(4);
         let result = contract(&tt1, &tt2, &options).unwrap();
         assert_eq!(result.len(), 1);
+        assert_matches_naive(&tt1, &tt2, &result);
     }
 
     #[test]
@@ -340,8 +374,9 @@ mod tests {
         let tt2 = TensorTrain::new(vec![t0]).unwrap();
 
         let options = ContractOptions::fit().with_nhalfsweeps(0).with_max_rank(10);
-        let result = contract(&tt1, &tt2, &options);
-        assert!(result.is_ok());
+        let result = contract(&tt1, &tt2, &options).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_matches_naive(&tt1, &tt2, &result);
     }
 
     #[test]
@@ -358,6 +393,24 @@ mod tests {
 
         // Both should produce TTs with the same length
         assert_eq!(result_free.len(), result_method.len());
+
+        // Both should match naive dense contraction
+        assert_matches_naive(&tt1, &tt2, &result_free);
+        assert_matches_naive(&tt1, &tt2, &result_method);
+
+        // Both should produce identical dense results
+        let free_data = result_free.to_dense().unwrap().to_vec_f64().unwrap();
+        let method_data = result_method.to_dense().unwrap().to_vec_f64().unwrap();
+        assert_eq!(free_data.len(), method_data.len());
+        for (i, (&a, &b)) in free_data.iter().zip(method_data.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-10,
+                "Element {} mismatch between free fn and method: {} vs {}",
+                i,
+                a,
+                b
+            );
+        }
     }
 
     #[test]

@@ -661,16 +661,11 @@ impl TensorTrain {
             });
         }
 
-        // Start with the first tensor
-        let mut result = self.tensor(0).clone();
-
-        // Contract with each subsequent tensor
-        for site in 1..self.len() {
-            let tensor = self.tensor(site);
-            result = result.contract(tensor);
-        }
-
-        Ok(result)
+        self.treetn
+            .contract_to_tensor()
+            .map_err(|e| TensorTrainError::InvalidStructure {
+                message: format!("Failed to contract to dense: {}", e),
+            })
     }
 
     /// Add two tensor trains using direct-sum construction.

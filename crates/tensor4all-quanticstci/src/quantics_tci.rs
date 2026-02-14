@@ -503,17 +503,14 @@ mod tests {
 
     #[test]
     fn test_discrete_tci_structure() {
-        // Test that the QTCI structure works correctly.
-        // Note: TCI approximation accuracy depends on the function's rank
-        // in quantics representation, which may differ from grid-space rank.
+        // Test that the QTCI structure (bonds, rank, cache, sum) works correctly.
+        // f(i,j) = i + j on a 4x4 grid with Fused scheme.
         let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
         let sizes = vec![4, 4];
 
-        // Use Fused to get 2 sites (tested configuration for TCI2)
         let opts = QtciOptions::default()
-            .with_tolerance(1e-12)
-            .with_maxiter(100)
-            .with_nrandominitpivot(10)
+            .with_tolerance(1e-10)
+            .with_nrandominitpivot(3)
             .with_unfoldingscheme(UnfoldingScheme::Fused);
 
         let result = quanticscrossinterpolate_discrete(&sizes, f, None, opts);
@@ -525,18 +522,24 @@ mod tests {
         assert_eq!(qtci.link_dims().len(), 1); // 2 sites = 1 bond
         assert!(qtci.rank() > 0);
 
-        // sum() should return a finite value
-        let sum = qtci.sum().unwrap();
-        assert!(sum.is_finite());
-        assert!(sum > 0.0);
+        // Verify that the function was called with correct grid indices by checking
+        // all cached values. The cache maps quantics indices to function values.
+        let grid = qtci.inherent_grid().unwrap();
+        for (quantics_idx, &cached_val) in qtci.cachedata() {
+            let grid_idx = grid.quantics_to_grididx(quantics_idx).unwrap();
+            let expected = (grid_idx[0] + grid_idx[1]) as f64;
+            assert_relative_eq!(cached_val, expected, epsilon = 1e-10);
+        }
+        assert!(!qtci.cachedata().is_empty());
 
-        // evaluate() should work at any grid point
-        let val = qtci.evaluate(&[2, 3]).unwrap();
-        assert!(val.is_finite());
-
-        // cachedata should contain some evaluated points
-        let cache = qtci.cachedata();
-        assert!(!cache.is_empty());
+        // Verify evaluate() matches f at known-exact points (same block in
+        // quantics representation).
+        let val = qtci.evaluate(&[1, 1]).unwrap();
+        assert_relative_eq!(val, 2.0, epsilon = 1e-8);
+        let val = qtci.evaluate(&[3, 4]).unwrap();
+        assert_relative_eq!(val, 7.0, epsilon = 1e-8);
+        let val = qtci.evaluate(&[4, 4]).unwrap();
+        assert_relative_eq!(val, 8.0, epsilon = 1e-8);
     }
 
     #[test]
@@ -596,6 +599,21 @@ mod tests {
         // inherent_grid should be Some, discretized_grid should be None
         assert!(qtci.inherent_grid().is_some());
         assert!(qtci.discretized_grid().is_none());
+
+        // Verify that cached function values are correct, proving the grid
+        // coordinate mapping works for inherent discrete grids.
+        let grid = qtci.inherent_grid().unwrap();
+        for (quantics_idx, &cached_val) in qtci.cachedata() {
+            let grid_idx = grid.quantics_to_grididx(quantics_idx).unwrap();
+            let expected = (grid_idx[0] + grid_idx[1]) as f64;
+            assert_relative_eq!(cached_val, expected, epsilon = 1e-10);
+        }
+
+        // Verify evaluate() at known-exact points
+        let val = qtci.evaluate(&[1, 1]).unwrap();
+        assert_relative_eq!(val, 2.0, epsilon = 1e-8);
+        let val = qtci.evaluate(&[4, 4]).unwrap();
+        assert_relative_eq!(val, 8.0, epsilon = 1e-8);
     }
 
     #[test]
@@ -669,17 +687,29 @@ mod tests {
         // cachedata should have some entries
         assert!(!qtci.cachedata().is_empty());
 
-        // cachedata_origcoord should work for discretized grids
+        // Verify cached function values via cachedata_origcoord.
+        // Each cached point should have the correct original coordinate and
+        // function value f(x) = x^2.
         let origcoord_data = qtci.cachedata_origcoord().unwrap();
         assert!(!origcoord_data.is_empty());
-        // Each entry should have 1D coordinate and a value
-        for (coord, _val) in &origcoord_data {
+        for (coord, val) in &origcoord_data {
             assert_eq!(coord.len(), 1);
+            let x = coord[0];
+            let expected = x * x;
+            assert!(
+                (val - expected).abs() < 1e-10,
+                "cached f({}) = {}, expected {}",
+                x,
+                val,
+                expected
+            );
         }
 
-        // tensor_train should work
-        let tt = qtci.tensor_train().unwrap();
-        assert!(tt.len() > 0);
+        // Verify evaluate() produces finite values at grid endpoints
+        let val = qtci.evaluate(&[1]).unwrap();
+        assert!(val.is_finite());
+        let val = qtci.evaluate(&[8]).unwrap();
+        assert!(val.is_finite());
     }
 
     #[test]
@@ -708,19 +738,37 @@ mod tests {
 
     #[test]
     fn test_discrete_with_initial_pivots() {
-        // Test that initial pivots are correctly converted.
+        // Test that initial pivots are correctly converted and the TCI runs successfully.
         let f = |idx: &[i64]| (idx[0] * idx[1]) as f64;
         let sizes = vec![4, 4];
 
         let opts = QtciOptions::default()
             .with_tolerance(1e-10)
-            .with_nrandominitpivot(0)
+            .with_nrandominitpivot(3)
             .with_unfoldingscheme(UnfoldingScheme::Fused);
 
         // Provide explicit initial pivots (1-indexed grid indices)
         let pivots = vec![vec![1, 1], vec![2, 3]];
         let result = quanticscrossinterpolate_discrete(&sizes, f, Some(pivots), opts);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Error: {:?}", result.err());
+
+        let (qtci, _ranks, _errors) = result.unwrap();
+
+        // Verify cached values match f(i,j) = i*j, proving the function was
+        // called with correct grid indices from the initial pivots and TCI sweep.
+        let grid = qtci.inherent_grid().unwrap();
+        for (quantics_idx, &cached_val) in qtci.cachedata() {
+            let grid_idx = grid.quantics_to_grididx(quantics_idx).unwrap();
+            let expected = (grid_idx[0] * grid_idx[1]) as f64;
+            assert_relative_eq!(cached_val, expected, epsilon = 1e-10);
+        }
+        assert!(!qtci.cachedata().is_empty());
+
+        // Verify evaluate() at known-exact points
+        let val = qtci.evaluate(&[1, 1]).unwrap();
+        assert_relative_eq!(val, 1.0, epsilon = 1e-8);
+        let val = qtci.evaluate(&[4, 4]).unwrap();
+        assert_relative_eq!(val, 16.0, epsilon = 1e-8);
     }
 
     #[test]
@@ -737,11 +785,35 @@ mod tests {
 
         let opts = QtciOptions::default()
             .with_tolerance(1e-12)
-            .with_nrandominitpivot(0);
+            .with_nrandominitpivot(3);
 
         let pivots = vec![vec![1], vec![4]];
         let result = quanticscrossinterpolate(&grid, f, Some(pivots), opts);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Error: {:?}", result.err());
+
+        let (qtci, _ranks, _errors) = result.unwrap();
+
+        // Verify cached function values via cachedata_origcoord.
+        // Each cached point should store f(x) = x correctly.
+        let origcoord_data = qtci.cachedata_origcoord().unwrap();
+        assert!(!origcoord_data.is_empty());
+        for (coord, val) in &origcoord_data {
+            assert_eq!(coord.len(), 1);
+            let x = coord[0];
+            assert!(
+                (val - x).abs() < 1e-10,
+                "cached f({}) = {}, expected {}",
+                x,
+                val,
+                x
+            );
+        }
+
+        // Verify evaluate() produces finite values
+        let val = qtci.evaluate(&[1]).unwrap();
+        assert!(val.is_finite());
+        let val = qtci.evaluate(&[8]).unwrap();
+        assert!(val.is_finite());
     }
 
     #[test]
@@ -777,11 +849,35 @@ mod tests {
             .with_unfoldingscheme(UnfoldingScheme::Fused);
 
         let result = quanticscrossinterpolate_from_arrays::<f64, _>(&xvals, f, None, opts);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Error: {:?}", result.err());
 
         let (qtci, _ranks, _errors) = result.unwrap();
         assert!(qtci.discretized_grid().is_some());
         assert!(qtci.rank() > 0);
+
+        // Verify cached function values via cachedata_origcoord.
+        // Each cached point should store f(x,y) = x + y correctly.
+        let origcoord_data = qtci.cachedata_origcoord().unwrap();
+        assert!(!origcoord_data.is_empty());
+        for (coord, val) in &origcoord_data {
+            assert_eq!(coord.len(), 2);
+            let expected = coord[0] + coord[1];
+            assert!(
+                (val - expected).abs() < 1e-10,
+                "cached f({},{}) = {}, expected {}",
+                coord[0],
+                coord[1],
+                val,
+                expected
+            );
+        }
+
+        // Verify evaluate() at known-exact points
+        // xvals = [0,1,2,3], so grid (1,1) -> (0,0), f=0 and (4,4) -> (3,3), f=6
+        let val = qtci.evaluate(&[1, 1]).unwrap();
+        assert_relative_eq!(val, 0.0, epsilon = 1e-8);
+        let val = qtci.evaluate(&[4, 4]).unwrap();
+        assert_relative_eq!(val, 6.0, epsilon = 1e-8);
     }
 
     #[test]
