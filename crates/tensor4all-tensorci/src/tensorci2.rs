@@ -716,4 +716,49 @@ mod tests {
         let sum = tt.sum();
         assert!((sum - 80.0).abs() < 1e-8, "Expected sum=80, got {}", sum);
     }
+
+    /// Regression test for issue #227:
+    /// crossinterpolate2 panics with NaN in LU for oscillatory functions (e.g. sin)
+    /// Reproduces the exact scenario from the issue: sin(10*x) on a quantics grid.
+    #[test]
+    fn test_crossinterpolate2_sin_quantics() {
+        let r = 6;
+        let local_dims = vec![2; r];
+
+        // Quantics-to-coordinate mapping: indices [q0,..,q5] (each 0 or 1)
+        // -> integer = sum q_i * 2^(R-1-i), coordinate x = integer / 2^R
+        let f = |indices: &MultiIndex| -> f64 {
+            let mut int_idx: usize = 0;
+            for (i, &q) in indices.iter().enumerate() {
+                int_idx += q * (1 << (r - 1 - i));
+            }
+            let x = int_idx as f64 / (1u64 << r) as f64;
+            (10.0 * x).sin()
+        };
+
+        // Use [0,1,0,0,0,0] as initial pivot so f != 0
+        // (x = 0.5, sin(10*0.5) = sin(5) ≈ -0.959)
+        let first_pivot = vec![vec![0, 1, 0, 0, 0, 0]];
+        let options = TCI2Options {
+            tolerance: 1e-10,
+            max_bond_dim: usize::MAX,
+            max_iter: 20,
+            ..Default::default()
+        };
+
+        // This previously panicked with "NaN in L matrix" inside rrlu_inplace
+        let result = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+            f,
+            None,
+            local_dims,
+            first_pivot,
+            options,
+        );
+
+        assert!(
+            result.is_ok(),
+            "crossinterpolate2 failed for sin(10x): {:?}",
+            result.err()
+        );
+    }
 }
