@@ -138,3 +138,113 @@ pub fn tensor3_from_data<T: Clone>(
         data[(l * site_dim + s) * right_dim + r].clone()
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tensor3_zeros() {
+        let t: Tensor3<f64> = tensor3_zeros(2, 3, 4);
+        assert_eq!(t.left_dim(), 2);
+        assert_eq!(t.site_dim(), 3);
+        assert_eq!(t.right_dim(), 4);
+
+        for l in 0..2 {
+            for s in 0..3 {
+                for r in 0..4 {
+                    assert_eq!(*t.get3(l, s, r), 0.0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_tensor3_from_data() {
+        let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
+        let t = tensor3_from_data(data, 2, 3, 4);
+
+        assert_eq!(t.left_dim(), 2);
+        assert_eq!(t.site_dim(), 3);
+        assert_eq!(t.right_dim(), 4);
+
+        assert_eq!(*t.get3(0, 0, 0), 0.0);
+        assert_eq!(*t.get3(0, 0, 1), 1.0);
+        assert_eq!(*t.get3(0, 0, 3), 3.0);
+        assert_eq!(*t.get3(0, 1, 0), 4.0);
+        assert_eq!(*t.get3(1, 0, 0), 12.0);
+        assert_eq!(*t.get3(1, 2, 3), 23.0);
+    }
+
+    #[test]
+    fn test_get3_set3_get3_mut() {
+        let mut t: Tensor3<f64> = tensor3_zeros(2, 3, 4);
+
+        t.set3(1, 2, 3, 42.0);
+        assert_eq!(*t.get3(1, 2, 3), 42.0);
+        assert_eq!(*t.get3(0, 0, 0), 0.0);
+
+        *t.get3_mut(0, 1, 2) = 7.5;
+        assert_eq!(*t.get3(0, 1, 2), 7.5);
+    }
+
+    #[test]
+    fn test_slice_site() {
+        let mut t: Tensor3<f64> = tensor3_zeros(2, 3, 4);
+        for l in 0..2 {
+            for r in 0..4 {
+                t.set3(l, 1, r, (l * 4 + r) as f64);
+            }
+        }
+
+        let slice = t.slice_site(1);
+        assert_eq!(slice.len(), 8); // 2 * 4
+        assert_eq!(slice[0], 0.0); // l=0, r=0
+        assert_eq!(slice[1], 1.0); // l=0, r=1
+        assert_eq!(slice[2], 2.0); // l=0, r=2
+        assert_eq!(slice[3], 3.0); // l=0, r=3
+        assert_eq!(slice[4], 4.0); // l=1, r=0
+        assert_eq!(slice[5], 5.0); // l=1, r=1
+
+        let slice_zero = t.slice_site(0);
+        assert!(slice_zero.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn test_as_left_matrix() {
+        let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
+        let t = tensor3_from_data(data, 2, 3, 4);
+
+        let (mat, rows, cols) = t.as_left_matrix();
+        assert_eq!(rows, 6); // 2 * 3
+        assert_eq!(cols, 4);
+        assert_eq!(mat.len(), 24);
+
+        // The data should be laid out as (l, s, r) -> row = l*site_dim + s, col = r
+        // First row (l=0, s=0): elements 0,1,2,3
+        assert_eq!(mat[0], 0.0);
+        assert_eq!(mat[1], 1.0);
+        assert_eq!(mat[2], 2.0);
+        assert_eq!(mat[3], 3.0);
+        // Second row (l=0, s=1): elements 4,5,6,7
+        assert_eq!(mat[4], 4.0);
+    }
+
+    #[test]
+    fn test_as_right_matrix() {
+        let data: Vec<f64> = (0..24).map(|x| x as f64).collect();
+        let t = tensor3_from_data(data, 2, 3, 4);
+
+        let (mat, rows, cols) = t.as_right_matrix();
+        assert_eq!(rows, 2); // left_dim
+        assert_eq!(cols, 12); // 3 * 4
+        assert_eq!(mat.len(), 24);
+
+        // First row (l=0): elements 0..12
+        assert_eq!(mat[0], 0.0);
+        assert_eq!(mat[11], 11.0);
+        // Second row (l=1): elements 12..24
+        assert_eq!(mat[12], 12.0);
+        assert_eq!(mat[23], 23.0);
+    }
+}

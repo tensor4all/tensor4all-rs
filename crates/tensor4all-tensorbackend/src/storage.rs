@@ -2761,4 +2761,422 @@ mod tests {
         assert!(!diag_f64.is_complex());
         assert!(diag_c64.is_complex());
     }
+
+    // ===== DenseStorage basic operations tests =====
+
+    #[test]
+    fn test_dense_from_scalar() {
+        let ds = DenseStorage::from_scalar(42.0_f64);
+        assert_eq!(ds.rank(), 0);
+        assert_eq!(ds.len(), 1);
+        assert!(!ds.is_empty());
+        assert_eq!(ds.dims(), Vec::<usize>::new());
+        assert_eq!(ds.as_slice(), &[42.0]);
+    }
+
+    #[test]
+    fn test_dense_from_scalar_c64() {
+        let val = Complex64::new(1.0, 2.0);
+        let ds = DenseStorage::from_scalar(val);
+        assert_eq!(ds.rank(), 0);
+        assert_eq!(ds.len(), 1);
+        assert_eq!(ds.as_slice(), &[val]);
+    }
+
+    #[test]
+    fn test_dense_from_tensor_into_tensor_roundtrip() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let ds = DenseStorage::from_vec_with_shape(data.clone(), &[2, 3]);
+        let tensor = ds.into_tensor();
+        assert_eq!(tensor.len(), 6);
+        let ds2 = DenseStorage::from_tensor(tensor);
+        assert_eq!(ds2.dims(), vec![2, 3]);
+        assert_eq!(ds2.as_slice(), &data[..]);
+    }
+
+    #[test]
+    fn test_dense_get_set() {
+        let mut ds = DenseStorage::from_vec_with_shape(vec![10.0, 20.0, 30.0], &[3]);
+        assert_eq!(ds.get(0), 10.0);
+        assert_eq!(ds.get(1), 20.0);
+        assert_eq!(ds.get(2), 30.0);
+
+        ds.set(1, 99.0);
+        assert_eq!(ds.get(1), 99.0);
+    }
+
+    #[test]
+    fn test_dense_len_is_empty_dims_rank() {
+        let ds = DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        assert_eq!(ds.len(), 4);
+        assert!(!ds.is_empty());
+        assert_eq!(ds.dims(), vec![2, 2]);
+        assert_eq!(ds.rank(), 2);
+    }
+
+    #[test]
+    fn test_dense_iter() {
+        let ds = DenseStorage::from_vec_with_shape(vec![5.0, 10.0, 15.0], &[3]);
+        let collected: Vec<f64> = ds.iter().copied().collect();
+        assert_eq!(collected, vec![5.0, 10.0, 15.0]);
+    }
+
+    #[test]
+    fn test_dense_as_slice_as_mut_slice() {
+        let mut ds = DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0], &[3]);
+        assert_eq!(ds.as_slice(), &[1.0, 2.0, 3.0]);
+
+        let slice = ds.as_mut_slice();
+        slice[0] = 100.0;
+        assert_eq!(ds.as_slice(), &[100.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_dense_into_vec() {
+        let ds = DenseStorage::from_vec_with_shape(vec![7.0, 8.0, 9.0], &[3]);
+        let v = ds.into_vec();
+        assert_eq!(v, vec![7.0, 8.0, 9.0]);
+    }
+
+    #[test]
+    fn test_dense_permute() {
+        // 2x3 tensor, permute to 3x2
+        let ds = DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let permuted = ds.permute(&[1, 0]);
+        assert_eq!(permuted.dims(), vec![3, 2]);
+        // Original row-major [2,3]: [[1,2,3],[4,5,6]]
+        // Transposed row-major [3,2]: [[1,4],[2,5],[3,6]]
+        assert_eq!(permuted.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    }
+
+    #[test]
+    fn test_dense_contract_matrix_multiply() {
+        // Matrix multiply: [2,3] x [3,2] -> [2,2]
+        let a = DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let b = DenseStorage::from_vec_with_shape(vec![7.0, 8.0, 9.0, 10.0, 11.0, 12.0], &[3, 2]);
+        let result = a.contract(&[1], &b, &[0]);
+        assert_eq!(result.dims(), vec![2, 2]);
+        // C[0,0] = 1*7 + 2*9 + 3*11 = 7+18+33 = 58
+        // C[0,1] = 1*8 + 2*10 + 3*12 = 8+20+36 = 64
+        // C[1,0] = 4*7 + 5*9 + 6*11 = 28+45+66 = 139
+        // C[1,1] = 4*8 + 5*10 + 6*12 = 32+50+72 = 154
+        let data = result.as_slice();
+        assert!((data[0] - 58.0).abs() < 1e-10);
+        assert!((data[1] - 64.0).abs() < 1e-10);
+        assert!((data[2] - 139.0).abs() < 1e-10);
+        assert!((data[3] - 154.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_dense_contract_inner_product() {
+        // Inner product: [3] x [3] -> scalar
+        let a = DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0], &[3]);
+        let b = DenseStorage::from_vec_with_shape(vec![4.0, 5.0, 6.0], &[3]);
+        let result = a.contract(&[0], &b, &[0]);
+        // 1*4 + 2*5 + 3*6 = 4+10+18 = 32
+        assert_eq!(result.len(), 1);
+        assert!((result.as_slice()[0] - 32.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_dense_random_f64() {
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+        let mut rng = StdRng::seed_from_u64(42);
+        let ds = DenseStorage::<f64>::random(&mut rng, &[3, 4]);
+        assert_eq!(ds.dims(), vec![3, 4]);
+        assert_eq!(ds.len(), 12);
+        // Values should not all be zero (with overwhelming probability)
+        let nonzero = ds.as_slice().iter().any(|&x| x.abs() > 1e-10);
+        assert!(nonzero);
+    }
+
+    #[test]
+    fn test_dense_random_1d_f64() {
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+        let mut rng = StdRng::seed_from_u64(123);
+        let ds = DenseStorage::<f64>::random_1d(&mut rng, 5);
+        assert_eq!(ds.dims(), vec![5]);
+        assert_eq!(ds.len(), 5);
+    }
+
+    #[test]
+    fn test_dense_random_c64() {
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+        let mut rng = StdRng::seed_from_u64(42);
+        let ds = DenseStorage::<Complex64>::random(&mut rng, &[2, 3]);
+        assert_eq!(ds.dims(), vec![2, 3]);
+        assert_eq!(ds.len(), 6);
+        // At least one element should have nonzero imaginary part
+        let has_imag = ds.as_slice().iter().any(|z| z.im.abs() > 1e-10);
+        assert!(has_imag);
+    }
+
+    #[test]
+    fn test_dense_random_1d_c64() {
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+        let mut rng = StdRng::seed_from_u64(99);
+        let ds = DenseStorage::<Complex64>::random_1d(&mut rng, 4);
+        assert_eq!(ds.dims(), vec![4]);
+        assert_eq!(ds.len(), 4);
+    }
+
+    // ===== DiagStorage additional tests =====
+
+    #[test]
+    fn test_diag_as_slice_as_mut_slice() {
+        let mut diag = DiagStorage::from_vec(vec![10.0, 20.0, 30.0]);
+        assert_eq!(diag.as_slice(), &[10.0, 20.0, 30.0]);
+
+        let slice = diag.as_mut_slice();
+        slice[1] = 99.0;
+        assert_eq!(diag.as_slice(), &[10.0, 99.0, 30.0]);
+    }
+
+    #[test]
+    fn test_diag_into_vec() {
+        let diag = DiagStorage::from_vec(vec![5.0, 6.0, 7.0]);
+        let v = diag.into_vec();
+        assert_eq!(v, vec![5.0, 6.0, 7.0]);
+    }
+
+    #[test]
+    fn test_diag_is_empty() {
+        let empty: DiagStorage<f64> = DiagStorage::from_vec(vec![]);
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+
+        let nonempty = DiagStorage::from_vec(vec![1.0]);
+        assert!(!nonempty.is_empty());
+    }
+
+    #[test]
+    fn test_diag_set() {
+        let mut diag = DiagStorage::from_vec(vec![1.0, 2.0, 3.0]);
+        diag.set(0, 100.0);
+        diag.set(2, 300.0);
+        assert_eq!(diag.get(0), 100.0);
+        assert_eq!(diag.get(1), 2.0);
+        assert_eq!(diag.get(2), 300.0);
+    }
+
+    #[test]
+    fn test_diag_to_dense_vec_1d() {
+        // 1D diagonal tensor [3] with diag = [1, 2, 3]
+        // This is just the vector itself
+        let diag = DiagStorage::from_vec(vec![1.0, 2.0, 3.0]);
+        let dense = diag.to_dense_vec(&[3]);
+        assert_eq!(dense, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_diag_to_dense_vec_c64() {
+        let diag = DiagStorage::from_vec(vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)]);
+        let dense = diag.to_dense_vec(&[2, 2]);
+        // [[1+2i, 0], [0, 3+4i]] in row-major
+        assert_eq!(dense[0], Complex64::new(1.0, 2.0));
+        assert_eq!(dense[1], Complex64::zero());
+        assert_eq!(dense[2], Complex64::zero());
+        assert_eq!(dense[3], Complex64::new(3.0, 4.0));
+    }
+
+    #[test]
+    fn test_diag_contract_diag_diag_scalar_result() {
+        // All indices contracted: inner product
+        let d1 = DiagStorage::from_vec(vec![1.0, 2.0, 3.0]);
+        let d2 = DiagStorage::from_vec(vec![4.0, 5.0, 6.0]);
+        let result = d1.contract_diag_diag(
+            &[3, 3],
+            &d2,
+            &[3, 3],
+            &[],
+            |v| Storage::DenseF64(DenseStorage::from_vec_with_shape(v, &[])),
+            |v| Storage::DiagF64(DiagStorage::from_vec(v)),
+        );
+        let data = extract_f64(&result);
+        assert_eq!(data.len(), 1);
+        // 1*4 + 2*5 + 3*6 = 32
+        assert!((data[0] - 32.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_diag_contract_diag_diag_diag_result() {
+        // Partial contraction: element-wise product
+        let d1 = DiagStorage::from_vec(vec![2.0, 3.0]);
+        let d2 = DiagStorage::from_vec(vec![5.0, 7.0]);
+        let result = d1.contract_diag_diag(
+            &[2, 2],
+            &d2,
+            &[2, 2],
+            &[2, 2],
+            |v| Storage::DenseF64(DenseStorage::from_vec_with_shape(v, &[2, 2])),
+            |v| Storage::DiagF64(DiagStorage::from_vec(v)),
+        );
+        match &result {
+            Storage::DiagF64(d) => {
+                assert_eq!(d.as_slice(), &[10.0, 21.0]);
+            }
+            _ => panic!("Expected DiagF64"),
+        }
+    }
+
+    #[test]
+    fn test_diag_contract_diag_dense_basic() {
+        // Diag [2,2] diag=[1,2], Dense [2,3] = [[1,2,3],[4,5,6]]
+        // Contract axis 1 of diag with axis 0 of dense
+        // Result[i,j] = diag[i] * dense[i,j]
+        let diag = DiagStorage::from_vec(vec![1.0, 2.0]);
+        let dense = DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let result = diag.contract_diag_dense(&[2, 2], &[1], &dense, &[2, 3], &[0], &[2, 3], |v| {
+            Storage::DenseF64(DenseStorage::from_vec_with_shape(v, &[2, 3]))
+        });
+        let data = extract_f64(&result);
+        assert_eq!(data.len(), 6);
+        // Result = [[1*1, 1*2, 1*3], [2*4, 2*5, 2*6]] = [[1,2,3],[8,10,12]]
+        assert!((data[0] - 1.0).abs() < 1e-10);
+        assert!((data[1] - 2.0).abs() < 1e-10);
+        assert!((data[2] - 3.0).abs() < 1e-10);
+        assert!((data[3] - 8.0).abs() < 1e-10);
+        assert!((data[4] - 10.0).abs() < 1e-10);
+        assert!((data[5] - 12.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_dense_tensor_ref_and_mut() {
+        let mut ds = DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0], &[3]);
+        // Test tensor() for read access
+        assert_eq!(ds.tensor().len(), 3);
+        // Test tensor_mut() for write access
+        ds.tensor_mut()[0] = 99.0;
+        assert_eq!(ds.get(0), 99.0);
+    }
+
+    #[test]
+    fn test_dense_deref() {
+        let ds = DenseStorage::from_vec_with_shape(vec![1.0, 2.0], &[2]);
+        // Deref gives access to tensor methods
+        let _len = ds.len();
+        assert_eq!(_len, 2);
+    }
+
+    #[test]
+    fn test_dense_contract_c64() {
+        // Verify contraction works for Complex64 too
+        let a = DenseStorage::from_vec_with_shape(
+            vec![
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.0, 1.0),
+                Complex64::new(1.0, 1.0),
+                Complex64::new(2.0, 0.0),
+            ],
+            &[2, 2],
+        );
+        let b = DenseStorage::from_vec_with_shape(
+            vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)],
+            &[2],
+        );
+        let result = a.contract(&[1], &b, &[0]);
+        assert_eq!(result.dims(), vec![2]);
+        // C[0] = (1+0i)*(1+0i) + (0+1i)*(0+1i) = 1 + (-1) = 0
+        // C[1] = (1+1i)*(1+0i) + (2+0i)*(0+1i) = 1+1i + 0+2i = 1+3i
+        assert!((result.as_slice()[0] - Complex64::new(0.0, 0.0)).norm() < 1e-10);
+        assert!((result.as_slice()[1] - Complex64::new(1.0, 3.0)).norm() < 1e-10);
+    }
+
+    #[test]
+    fn test_dense_permute_3d() {
+        // 3D tensor [2, 3, 1], permute to [3, 1, 2]
+        let ds = DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3, 1]);
+        let permuted = ds.permute(&[1, 2, 0]);
+        assert_eq!(permuted.dims(), vec![3, 1, 2]);
+        assert_eq!(permuted.len(), 6);
+    }
+
+    // ===== Storage-level tests for is_diag =====
+
+    #[test]
+    fn test_storage_is_diag() {
+        let dense = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
+        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0]));
+        assert!(!dense.is_diag());
+        assert!(diag.is_diag());
+    }
+
+    // ===== Storage len / is_empty =====
+
+    #[test]
+    fn test_storage_len_is_empty() {
+        let dense = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0, 2.0], &[2]));
+        assert_eq!(dense.len(), 2);
+        assert!(!dense.is_empty());
+
+        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![]));
+        assert_eq!(diag.len(), 0);
+        assert!(diag.is_empty());
+    }
+
+    // ===== DenseStorageFactory tests =====
+
+    #[test]
+    fn test_dense_storage_factory_f64() {
+        let s = <f64 as DenseStorageFactory>::new_dense(3);
+        assert_eq!(s.len(), 3);
+        assert!(s.is_f64());
+        let data = extract_f64(&s);
+        assert_eq!(data, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_dense_storage_factory_c64() {
+        let s = <Complex64 as DenseStorageFactory>::new_dense(2);
+        assert_eq!(s.len(), 2);
+        assert!(s.is_c64());
+    }
+
+    #[test]
+    fn test_dense_storage_factory_with_shape_f64() {
+        let s = <f64 as DenseStorageFactory>::new_dense_with_shape(&[2, 3]);
+        assert_eq!(s.len(), 6);
+    }
+
+    #[test]
+    fn test_dense_storage_factory_with_shape_c64() {
+        let s = <Complex64 as DenseStorageFactory>::new_dense_with_shape(&[3, 2]);
+        assert_eq!(s.len(), 6);
+    }
+
+    // ===== SumFromStorage tests =====
+
+    #[test]
+    fn test_sum_from_storage_f64() {
+        let s = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0], &[3]));
+        let sum: f64 = f64::sum_from_storage(&s);
+        assert!((sum - 6.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sum_from_storage_diag_f64() {
+        let s = Storage::DiagF64(DiagStorage::from_vec(vec![10.0, 20.0]));
+        let sum: f64 = f64::sum_from_storage(&s);
+        assert!((sum - 30.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_storage_sum_f64_method() {
+        let s = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0], &[3]));
+        assert!((s.sum_f64() - 6.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_storage_sum_c64_method() {
+        let s = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+            vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
+            &[2],
+        ));
+        let sum = s.sum_c64();
+        assert!((sum - Complex64::new(4.0, 6.0)).norm() < 1e-10);
+    }
 }

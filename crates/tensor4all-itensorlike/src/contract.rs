@@ -138,3 +138,249 @@ impl TensorTrain {
         contract(self, other, options)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TensorTrainError;
+    use tensor4all_core::{DynId, DynIndex, Index, StorageScalar, TensorDynLen};
+
+    /// Helper to create a simple tensor for testing
+    fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
+        let dims: Vec<usize> = indices.iter().map(|i| i.size()).collect();
+        let size: usize = dims.iter().product();
+        let data: Vec<f64> = (0..size).map(|i| (i + 1) as f64).collect();
+        let storage = f64::dense_storage_with_shape(data, &dims);
+        TensorDynLen::new(indices, storage)
+    }
+
+    /// Helper to create a DynIndex
+    fn idx(id: u64, size: usize) -> DynIndex {
+        Index::new_with_size(DynId(id), size)
+    }
+
+    #[test]
+    fn test_contract_free_fn_empty_first() {
+        let empty = TensorTrain::new(vec![]).unwrap();
+
+        let s0 = idx(1000, 2);
+        let t0 = make_tensor(vec![s0.clone()]);
+        let non_empty = TensorTrain::new(vec![t0]).unwrap();
+
+        let options = ContractOptions::zipup();
+        let err = contract(&empty, &non_empty, &options).unwrap_err();
+        assert!(matches!(err, TensorTrainError::InvalidStructure { .. }));
+    }
+
+    #[test]
+    fn test_contract_free_fn_empty_second() {
+        let s0 = idx(1001, 2);
+        let t0 = make_tensor(vec![s0.clone()]);
+        let non_empty = TensorTrain::new(vec![t0]).unwrap();
+        let empty = TensorTrain::new(vec![]).unwrap();
+
+        let options = ContractOptions::zipup();
+        let err = contract(&non_empty, &empty, &options).unwrap_err();
+        assert!(matches!(err, TensorTrainError::InvalidStructure { .. }));
+    }
+
+    #[test]
+    fn test_contract_free_fn_length_mismatch() {
+        let s0 = idx(1002, 2);
+        let l01 = idx(1003, 3);
+        let s1 = idx(1004, 2);
+
+        let t0 = make_tensor(vec![s0.clone()]);
+        let tt1 = TensorTrain::new(vec![t0]).unwrap();
+
+        let t0_2 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1_2 = make_tensor(vec![l01.clone(), s1.clone()]);
+        let tt2 = TensorTrain::new(vec![t0_2, t1_2]).unwrap();
+
+        let options = ContractOptions::zipup();
+        let err = contract(&tt1, &tt2, &options).unwrap_err();
+        assert!(matches!(err, TensorTrainError::InvalidStructure { .. }));
+    }
+
+    #[test]
+    fn test_contract_free_fn_invalid_rtol() {
+        let s0 = idx(1005, 2);
+        let t0 = make_tensor(vec![s0.clone()]);
+        let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
+        let tt2 = TensorTrain::new(vec![t0]).unwrap();
+
+        let options = ContractOptions::zipup().with_rtol(-1.0);
+        let err = contract(&tt1, &tt2, &options).unwrap_err();
+        assert!(matches!(err, TensorTrainError::OperationError { .. }));
+    }
+
+    #[test]
+    fn test_contract_free_fn_invalid_max_rank_zero() {
+        let s0 = idx(1006, 2);
+        let t0 = make_tensor(vec![s0.clone()]);
+        let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
+        let tt2 = TensorTrain::new(vec![t0]).unwrap();
+
+        let options = ContractOptions::zipup().with_max_rank(0);
+        let err = contract(&tt1, &tt2, &options).unwrap_err();
+        assert!(matches!(err, TensorTrainError::OperationError { .. }));
+    }
+
+    #[test]
+    fn test_contract_zipup_single_site() {
+        // Two single-site TTs with a shared site index
+        let s0 = idx(1010, 3);
+        let t1 = make_tensor(vec![s0.clone()]);
+        let tt1 = TensorTrain::new(vec![t1]).unwrap();
+
+        let t2 = make_tensor(vec![s0.clone()]);
+        let tt2 = TensorTrain::new(vec![t2]).unwrap();
+
+        let options = ContractOptions::zipup();
+        let result = contract(&tt1, &tt2, &options).unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_contract_zipup_two_sites() {
+        // Two 2-site TTs with shared site indices
+        let s0 = idx(1020, 2);
+        let s1 = idx(1021, 2);
+        let l01_a = idx(1022, 3);
+        let l01_b = idx(1023, 3);
+
+        let t1_0 = make_tensor(vec![s0.clone(), l01_a.clone()]);
+        let t1_1 = make_tensor(vec![l01_a.clone(), s1.clone()]);
+        let tt1 = TensorTrain::new(vec![t1_0, t1_1]).unwrap();
+
+        let t2_0 = make_tensor(vec![s0.clone(), l01_b.clone()]);
+        let t2_1 = make_tensor(vec![l01_b.clone(), s1.clone()]);
+        let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
+
+        let options = ContractOptions::zipup().with_max_rank(10);
+        let result = contract(&tt1, &tt2, &options).unwrap();
+        // Result should contract over shared site indices
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_contract_zipup_with_rtol() {
+        let s0 = idx(1030, 2);
+        let s1 = idx(1031, 2);
+        let l01_a = idx(1032, 3);
+        let l01_b = idx(1033, 3);
+
+        let t1_0 = make_tensor(vec![s0.clone(), l01_a.clone()]);
+        let t1_1 = make_tensor(vec![l01_a.clone(), s1.clone()]);
+        let tt1 = TensorTrain::new(vec![t1_0, t1_1]).unwrap();
+
+        let t2_0 = make_tensor(vec![s0.clone(), l01_b.clone()]);
+        let t2_1 = make_tensor(vec![l01_b.clone(), s1.clone()]);
+        let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
+
+        let options = ContractOptions::zipup().with_rtol(1e-10);
+        let result = contract(&tt1, &tt2, &options).unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_contract_naive_single_site() {
+        // Naive method works for single-site TTs with a shared site index
+        let s0 = idx(1040, 3);
+        let t1 = make_tensor(vec![s0.clone()]);
+        let tt1 = TensorTrain::new(vec![t1]).unwrap();
+
+        let t2 = make_tensor(vec![s0.clone()]);
+        let tt2 = TensorTrain::new(vec![t2]).unwrap();
+
+        let options = ContractOptions::naive();
+        let result = contract(&tt1, &tt2, &options).unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_contract_fit_two_sites() {
+        let s0 = idx(1050, 2);
+        let s1 = idx(1051, 2);
+        let l01_a = idx(1052, 3);
+        let l01_b = idx(1053, 3);
+
+        let t1_0 = make_tensor(vec![s0.clone(), l01_a.clone()]);
+        let t1_1 = make_tensor(vec![l01_a.clone(), s1.clone()]);
+        let tt1 = TensorTrain::new(vec![t1_0, t1_1]).unwrap();
+
+        let t2_0 = make_tensor(vec![s0.clone(), l01_b.clone()]);
+        let t2_1 = make_tensor(vec![l01_b.clone(), s1.clone()]);
+        let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
+
+        let options = ContractOptions::fit().with_max_rank(10).with_nhalfsweeps(4);
+        let result = contract(&tt1, &tt2, &options).unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_contract_fit_odd_nhalfsweeps() {
+        let s0 = idx(1060, 2);
+        let t0 = make_tensor(vec![s0.clone()]);
+        let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
+        let tt2 = TensorTrain::new(vec![t0]).unwrap();
+
+        // Odd nhalfsweeps should fail for Fit method
+        let options = ContractOptions::fit().with_nhalfsweeps(3).with_max_rank(10);
+        let err = contract(&tt1, &tt2, &options).unwrap_err();
+        assert!(matches!(err, TensorTrainError::OperationError { .. }));
+    }
+
+    #[test]
+    fn test_contract_fit_nhalfsweeps_zero_ok() {
+        // nhalfsweeps=0 is a multiple of 2, should be accepted
+        let s0 = idx(1070, 2);
+        let t0 = make_tensor(vec![s0.clone()]);
+        let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
+        let tt2 = TensorTrain::new(vec![t0]).unwrap();
+
+        let options = ContractOptions::fit().with_nhalfsweeps(0).with_max_rank(10);
+        let result = contract(&tt1, &tt2, &options);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_contract_method_uses_tt_contract() {
+        // Verify that TensorTrain::contract delegates to the free function
+        let s0 = idx(1080, 2);
+        let t0 = make_tensor(vec![s0.clone()]);
+        let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
+        let tt2 = TensorTrain::new(vec![t0]).unwrap();
+
+        let options = ContractOptions::zipup();
+        let result_free = contract(&tt1, &tt2, &options).unwrap();
+        let result_method = tt1.contract(&tt2, &options).unwrap();
+
+        // Both should produce TTs with the same length
+        assert_eq!(result_free.len(), result_method.len());
+    }
+
+    #[test]
+    fn test_contract_free_fn_nan_rtol() {
+        let s0 = idx(1090, 2);
+        let t0 = make_tensor(vec![s0.clone()]);
+        let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
+        let tt2 = TensorTrain::new(vec![t0]).unwrap();
+
+        let options = ContractOptions::zipup().with_rtol(f64::NAN);
+        let err = contract(&tt1, &tt2, &options).unwrap_err();
+        assert!(matches!(err, TensorTrainError::OperationError { .. }));
+    }
+
+    #[test]
+    fn test_contract_free_fn_inf_rtol() {
+        let s0 = idx(1091, 2);
+        let t0 = make_tensor(vec![s0.clone()]);
+        let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
+        let tt2 = TensorTrain::new(vec![t0]).unwrap();
+
+        let options = ContractOptions::zipup().with_rtol(f64::INFINITY);
+        let err = contract(&tt1, &tt2, &options).unwrap_err();
+        assert!(matches!(err, TensorTrainError::OperationError { .. }));
+    }
+}
