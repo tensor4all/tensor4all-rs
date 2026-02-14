@@ -414,6 +414,66 @@ mod tests {
     }
 
     #[test]
+    fn test_contract_zipup_with_truncation() {
+        // 3-site TTs with shared site indices, bond dim 2
+        // Contraction without truncation would produce bond dim up to 4.
+        // Truncate to max_rank=1 and verify:
+        //   (a) bond dims are actually truncated
+        //   (b) result is approximately correct (not exact due to truncation)
+        let s0 = idx(2000, 2);
+        let s1 = idx(2001, 2);
+        let s2 = idx(2002, 2);
+        let l01_a = idx(2010, 2);
+        let l12_a = idx(2011, 2);
+        let l01_b = idx(2020, 2);
+        let l12_b = idx(2021, 2);
+
+        let tt1 = TensorTrain::new(vec![
+            make_tensor(vec![s0.clone(), l01_a.clone()]),
+            make_tensor(vec![l01_a.clone(), s1.clone(), l12_a.clone()]),
+            make_tensor(vec![l12_a.clone(), s2.clone()]),
+        ])
+        .unwrap();
+
+        let tt2 = TensorTrain::new(vec![
+            make_tensor(vec![s0.clone(), l01_b.clone()]),
+            make_tensor(vec![l01_b.clone(), s1.clone(), l12_b.clone()]),
+            make_tensor(vec![l12_b.clone(), s2.clone()]),
+        ])
+        .unwrap();
+
+        // Contract with truncation: max_rank=1
+        let options = ContractOptions::zipup().with_max_rank(1);
+        let result = contract(&tt1, &tt2, &options).unwrap();
+
+        // Verify truncation actually happened: all bond dims should be <= 1
+        for bd in result.bond_dims() {
+            assert!(bd <= 1, "Bond dim {} exceeds max_rank=1", bd);
+        }
+
+        // Compare with naive (exact) result — should be approximate, not exact
+        let naive_result = tt1.to_dense().unwrap().contract(&tt2.to_dense().unwrap());
+        let naive_data = naive_result.to_vec_f64().unwrap();
+        let result_data = result.to_dense().unwrap().to_vec_f64().unwrap();
+
+        assert_eq!(result_data.len(), naive_data.len());
+        let naive_norm: f64 = naive_data.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let error_norm: f64 = result_data
+            .iter()
+            .zip(naive_data.iter())
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        // Relative error should be bounded (not exact, but reasonable)
+        let rel_error = error_norm / naive_norm;
+        assert!(
+            rel_error < 1.0,
+            "Relative error {} is too large for truncated contraction",
+            rel_error
+        );
+    }
+
+    #[test]
     fn test_contract_free_fn_nan_rtol() {
         let s0 = idx(1090, 2);
         let t0 = make_tensor(vec![s0.clone()]);
