@@ -283,7 +283,7 @@ where
         left_orthogonal: options.left_orthogonal,
     };
 
-    let luci = MatrixLUCI::from_matrix(&mat_ci, Some(lu_options));
+    let luci = MatrixLUCI::from_matrix(&mat_ci, Some(lu_options))?;
     let left_ci = luci.left();
     let right_ci = luci.right();
     let rank = luci.rank().max(1);

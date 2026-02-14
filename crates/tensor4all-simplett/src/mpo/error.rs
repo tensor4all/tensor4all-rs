@@ -88,6 +88,10 @@ pub enum MPOError {
         message: String,
     },
 
+    /// Matrix CI error
+    #[error("Matrix CI error: {0}")]
+    MatrixCI(#[from] matrixci::MatrixCIError),
+
     /// Convergence failure
     #[error("Failed to converge after {sweeps} sweeps (final error: {error})")]
     ConvergenceFailure {
