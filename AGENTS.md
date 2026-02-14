@@ -53,9 +53,9 @@ Read `docs/api/*.md` before source files. Only read source when API doc is insuf
 ## Testing
 
 ```bash
-cargo test --release                    # Full suite
-cargo test --release --test test_name   # Specific test
-cargo test --release --workspace        # All crates
+cargo nextest run --release --workspace          # Full suite
+cargo nextest run --release --test test_name     # Specific test
+cargo nextest run --release -p crate_name        # Single crate
 ```
 
 **Always use `--release` mode for tests** to avoid excessive execution time in debug builds.
@@ -115,9 +115,9 @@ Truncation tolerance: support both `cutoff` (ITensors) and `rtol` (tensor4all-rs
 Before creating a PR, always run lint checks locally:
 
 ```bash
-cargo fmt --all          # Format all code
-cargo clippy --workspace # Check for common issues
-cargo test --workspace   # Run all tests
+cargo fmt --all                        # Format all code
+cargo clippy --workspace               # Check for common issues
+cargo nextest run --release --workspace # Run all tests
 ```
 
 | Change Type | Workflow |
