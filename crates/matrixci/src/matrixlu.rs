@@ -718,7 +718,7 @@ mod tests {
         };
         let lu = rrlu(&m, Some(opts)).unwrap();
         assert_eq!(lu.npivots(), 1);
-        assert!(lu.pivot_errors().len() > 0);
+        assert!(!lu.pivot_errors().is_empty());
         assert!(lu.last_pivot_error() > 0.0);
     }
 
