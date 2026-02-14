@@ -93,9 +93,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install HDF5
-        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -105,23 +102,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Generate coverage report (non-HDF5)
-        run: cargo llvm-cov --workspace --exclude tensor4all-hdf5 --lcov --output-path lcov-main.info
+      - name: Generate coverage JSON
+        run: cargo llvm-cov --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 
-      - name: Generate coverage report (HDF5)
-        run: cargo llvm-cov -p tensor4all-hdf5 --lcov --output-path lcov-hdf5.info
-
-      - name: Merge coverage reports
-        run: cat lcov-main.info lcov-hdf5.info > lcov.info
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
-          fail_ci_if_error: true
-          verbose: true
+      - name: Check per-file thresholds
+        run: python3 scripts/check-coverage.py coverage.json
 
   rollup-rs:
     runs-on: ubuntu-latest
