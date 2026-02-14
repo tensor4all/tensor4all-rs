@@ -1350,11 +1350,7 @@ mod tests {
         let result = tn.contract_to_tensor().unwrap();
 
         // Result should have the two site indices
-        let ext_ids: Vec<_> = result
-            .external_indices()
-            .iter()
-            .map(|i| i.id().clone())
-            .collect();
+        let ext_ids: Vec<_> = result.external_indices().iter().map(|i| *i.id()).collect();
         assert_eq!(ext_ids.len(), 2);
         assert!(ext_ids.contains(s0.id()));
         assert!(ext_ids.contains(s1.id()));
@@ -1376,11 +1372,11 @@ mod tests {
 
         // Site indices should still exist (same IDs)
         let site_a = sim_tn.site_space(&"A".to_string()).unwrap();
-        let site_a_ids: Vec<_> = site_a.iter().map(|i| i.id().clone()).collect();
+        let site_a_ids: Vec<_> = site_a.iter().map(|i| *i.id()).collect();
         assert!(site_a_ids.contains(s0.id()));
 
         let site_b = sim_tn.site_space(&"B".to_string()).unwrap();
-        let site_b_ids: Vec<_> = site_b.iter().map(|i| i.id().clone()).collect();
+        let site_b_ids: Vec<_> = site_b.iter().map(|i| *i.id()).collect();
         assert!(site_b_ids.contains(s1.id()));
     }
 

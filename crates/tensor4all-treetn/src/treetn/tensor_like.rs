@@ -223,7 +223,7 @@ mod tests {
         let ext = tn.external_indices();
         assert_eq!(ext.len(), 2);
 
-        let ext_ids: Vec<_> = ext.iter().map(|i| i.id().clone()).collect();
+        let ext_ids: Vec<_> = ext.iter().map(|i| *i.id()).collect();
         assert!(ext_ids.contains(s0.id()));
         assert!(ext_ids.contains(s1.id()));
         // Bond should NOT be in external indices
@@ -254,11 +254,7 @@ mod tests {
         let s0_new = DynIndex::new_dyn(2);
         let tn2 = tn.replaceind(&s0, &s0_new).unwrap();
 
-        let ext_ids: Vec<_> = tn2
-            .external_indices()
-            .iter()
-            .map(|i| i.id().clone())
-            .collect();
+        let ext_ids: Vec<_> = tn2.external_indices().iter().map(|i| *i.id()).collect();
         assert!(!ext_ids.contains(s0.id()));
         assert!(ext_ids.contains(s0_new.id()));
         assert!(ext_ids.contains(s1.id()));
@@ -272,11 +268,7 @@ mod tests {
         let tn2 = tn.sim_linkinds().unwrap();
 
         // Site indices should remain unchanged
-        let ext_ids: Vec<_> = tn2
-            .external_indices()
-            .iter()
-            .map(|i| i.id().clone())
-            .collect();
+        let ext_ids: Vec<_> = tn2.external_indices().iter().map(|i| *i.id()).collect();
         assert!(ext_ids.contains(s0.id()));
         assert!(ext_ids.contains(s1.id()));
 
@@ -323,11 +315,7 @@ mod tests {
             .replaceinds(&[s0.clone(), s1.clone()], &[s0_new.clone(), s1_new.clone()])
             .unwrap();
 
-        let ext_ids: Vec<_> = tn2
-            .external_indices()
-            .iter()
-            .map(|i| i.id().clone())
-            .collect();
+        let ext_ids: Vec<_> = tn2.external_indices().iter().map(|i| *i.id()).collect();
         assert!(!ext_ids.contains(s0.id()));
         assert!(!ext_ids.contains(s1.id()));
         assert!(ext_ids.contains(s0_new.id()));
@@ -341,7 +329,7 @@ mod tests {
         let s0_new = DynIndex::new_dyn(2);
         let s1_new = DynIndex::new_dyn(2);
 
-        let result = tn.replaceinds(&[s0.clone()], &[s0_new.clone(), s1_new.clone()]);
+        let result = tn.replaceinds(std::slice::from_ref(&s0), &[s0_new.clone(), s1_new.clone()]);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Length mismatch"));
     }

@@ -316,11 +316,7 @@ mod tests {
         assert_eq!(result.edge_count(), 1);
 
         // Result should have the same site indices
-        let ext_ids: Vec<_> = result
-            .external_indices()
-            .iter()
-            .map(|i| i.id().clone())
-            .collect();
+        let ext_ids: Vec<_> = result.external_indices().iter().map(|i| *i.id()).collect();
         assert_eq!(ext_ids.len(), 2);
         assert!(ext_ids.contains(s0.id()));
         assert!(ext_ids.contains(s1.id()));

@@ -80,7 +80,7 @@ mod tests {
         let site_indices = tn.site_indices();
 
         // Site indices should include s0 and s1
-        let site_ids: HashSet<_> = site_indices.iter().map(|i| i.id().clone()).collect();
+        let site_ids: HashSet<_> = site_indices.iter().map(|i| *i.id()).collect();
         assert!(site_ids.contains(s0.id()));
         assert!(site_ids.contains(s1.id()));
         // Bond should NOT be a site index

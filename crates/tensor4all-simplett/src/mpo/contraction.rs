@@ -366,7 +366,7 @@ mod tests {
         let result = Contraction::new(mpo_a, mpo_b);
         assert!(result.is_err());
         assert!(matches!(
-            result.as_ref().map_err(|e| e),
+            result.as_ref(),
             Err(MPOError::LengthMismatch {
                 expected: 2,
                 got: 3
@@ -383,7 +383,7 @@ mod tests {
         let result = Contraction::new(mpo_a, mpo_b);
         assert!(result.is_err());
         assert!(matches!(
-            result.as_ref().map_err(|e| e),
+            result.as_ref(),
             Err(MPOError::SharedDimensionMismatch {
                 site: 0,
                 dim_a: 3,
