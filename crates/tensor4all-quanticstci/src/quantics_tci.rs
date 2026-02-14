@@ -577,4 +577,219 @@ mod tests {
         assert_eq!(opts.maxbonddim, Some(50));
         assert_eq!(opts.unfoldingscheme, UnfoldingScheme::Fused);
     }
+
+    #[test]
+    fn test_discrete_inherent_grid_accessor() {
+        // quanticscrossinterpolate_discrete uses from_inherent internally.
+        // Verify that inherent_grid() returns Some and discretized_grid() returns None.
+        let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
+        let sizes = vec![4, 4];
+
+        let opts = QtciOptions::default()
+            .with_tolerance(1e-10)
+            .with_nrandominitpivot(3)
+            .with_unfoldingscheme(UnfoldingScheme::Fused);
+
+        let (qtci, _ranks, _errors) =
+            quanticscrossinterpolate_discrete(&sizes, f, None, opts).unwrap();
+
+        // inherent_grid should be Some, discretized_grid should be None
+        assert!(qtci.inherent_grid().is_some());
+        assert!(qtci.discretized_grid().is_none());
+    }
+
+    #[test]
+    fn test_discrete_cachedata_origcoord_error() {
+        // cachedata_origcoord() should return an error for inherent discrete grids
+        // because there are no original continuous coordinates.
+        let f = |idx: &[i64]| idx[0] as f64;
+        let sizes = vec![4];
+
+        let opts = QtciOptions::default()
+            .with_tolerance(1e-10)
+            .with_nrandominitpivot(1)
+            .with_unfoldingscheme(UnfoldingScheme::Fused);
+
+        let (qtci, _ranks, _errors) =
+            quanticscrossinterpolate_discrete(&sizes, f, None, opts).unwrap();
+
+        let result = qtci.cachedata_origcoord();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Original coordinates only available for discretized grids"));
+    }
+
+    #[test]
+    fn test_discrete_integral_returns_sum() {
+        // For inherent discrete grids, integral() should just return the sum.
+        // f(i) = 1 for all i, on a grid of size 4 => sum = 4
+        let f = |_idx: &[i64]| 1.0_f64;
+        let sizes = vec![4];
+
+        let opts = QtciOptions::default()
+            .with_tolerance(1e-10)
+            .with_nrandominitpivot(3)
+            .with_unfoldingscheme(UnfoldingScheme::Fused);
+
+        let (qtci, _ranks, _errors) =
+            quanticscrossinterpolate_discrete(&sizes, f, None, opts).unwrap();
+
+        let integral = qtci.integral().unwrap();
+        let sum = qtci.sum().unwrap();
+        // For inherent grids, integral == sum
+        assert_relative_eq!(integral, sum, epsilon = 1e-10);
+        assert_relative_eq!(integral, 4.0, epsilon = 1e-8);
+    }
+
+    #[test]
+    fn test_continuous_grid_interpolation() {
+        // Test quanticscrossinterpolate with a DiscretizedGrid.
+        // f(x) = x^2 on [0, 1], 8 grid points (3 bits)
+        let grid = DiscretizedGrid::builder(&[3])
+            .with_lower_bound(&[0.0])
+            .with_upper_bound(&[1.0])
+            .include_endpoint(true)
+            .build()
+            .unwrap();
+
+        let f = |coords: &[f64]| coords[0] * coords[0];
+
+        let opts = QtciOptions::default()
+            .with_tolerance(1e-12)
+            .with_nrandominitpivot(5)
+            .with_unfoldingscheme(UnfoldingScheme::Interleaved);
+
+        let (qtci, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, opts).unwrap();
+
+        // Verify accessors
+        assert!(qtci.discretized_grid().is_some());
+        assert!(qtci.inherent_grid().is_none());
+        assert!(qtci.rank() > 0);
+
+        // cachedata should have some entries
+        assert!(!qtci.cachedata().is_empty());
+
+        // cachedata_origcoord should work for discretized grids
+        let origcoord_data = qtci.cachedata_origcoord().unwrap();
+        assert!(!origcoord_data.is_empty());
+        // Each entry should have 1D coordinate and a value
+        for (coord, _val) in &origcoord_data {
+            assert_eq!(coord.len(), 1);
+        }
+
+        // tensor_train should work
+        let tt = qtci.tensor_train().unwrap();
+        assert!(tt.len() > 0);
+    }
+
+    #[test]
+    fn test_continuous_grid_integral() {
+        // Integral of f(x) = 1 over [0, 1] with 16 points should be ~1.0
+        // (sum of 16 ones * step = 16 * (1/16) = 1.0 for non-endpoint grids)
+        let grid = DiscretizedGrid::builder(&[4]) // 2^4 = 16 points
+            .with_lower_bound(&[0.0])
+            .with_upper_bound(&[1.0])
+            .build()
+            .unwrap();
+
+        let f = |_coords: &[f64]| 1.0_f64;
+
+        let opts = QtciOptions::default()
+            .with_tolerance(1e-12)
+            .with_nrandominitpivot(3);
+
+        let (qtci, _ranks, _errors) = quanticscrossinterpolate(&grid, f, None, opts).unwrap();
+
+        let integral = qtci.integral().unwrap();
+        // integral = sum * step_size
+        // sum = 16.0, step_size = 1/16 = 0.0625 => integral = 1.0
+        assert_relative_eq!(integral, 1.0, epsilon = 1e-8);
+    }
+
+    #[test]
+    fn test_discrete_with_initial_pivots() {
+        // Test that initial pivots are correctly converted.
+        let f = |idx: &[i64]| (idx[0] * idx[1]) as f64;
+        let sizes = vec![4, 4];
+
+        let opts = QtciOptions::default()
+            .with_tolerance(1e-10)
+            .with_nrandominitpivot(0)
+            .with_unfoldingscheme(UnfoldingScheme::Fused);
+
+        // Provide explicit initial pivots (1-indexed grid indices)
+        let pivots = vec![vec![1, 1], vec![2, 3]];
+        let result = quanticscrossinterpolate_discrete(&sizes, f, Some(pivots), opts);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_continuous_grid_with_initial_pivots() {
+        // Test quanticscrossinterpolate with initial pivots.
+        let grid = DiscretizedGrid::builder(&[3])
+            .with_lower_bound(&[0.0])
+            .with_upper_bound(&[1.0])
+            .include_endpoint(true)
+            .build()
+            .unwrap();
+
+        let f = |coords: &[f64]| coords[0];
+
+        let opts = QtciOptions::default()
+            .with_tolerance(1e-12)
+            .with_nrandominitpivot(0);
+
+        let pivots = vec![vec![1], vec![4]];
+        let result = quanticscrossinterpolate(&grid, f, Some(pivots), opts);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_from_arrays_non_power_of_two() {
+        let f = |_coords: &[f64]| 1.0_f64;
+        let xvals = vec![vec![0.0, 1.0, 2.0]]; // 3 points, not power of 2
+        let result =
+            quanticscrossinterpolate_from_arrays::<f64, _>(&xvals, f, None, QtciOptions::default());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_arrays_unequal_dimensions() {
+        let f = |_coords: &[f64]| 1.0_f64;
+        // 4 points vs 8 points => different dimensions
+        let xvals = vec![
+            vec![0.0, 1.0, 2.0, 3.0],
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+        ];
+        let result =
+            quanticscrossinterpolate_from_arrays::<f64, _>(&xvals, f, None, QtciOptions::default());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_arrays_valid() {
+        let f = |coords: &[f64]| coords[0] + coords[1];
+        let xvals = vec![vec![0.0, 1.0, 2.0, 3.0], vec![0.0, 1.0, 2.0, 3.0]];
+
+        let opts = QtciOptions::default()
+            .with_tolerance(1e-10)
+            .with_nrandominitpivot(3)
+            .with_unfoldingscheme(UnfoldingScheme::Fused);
+
+        let result = quanticscrossinterpolate_from_arrays::<f64, _>(&xvals, f, None, opts);
+        assert!(result.is_ok());
+
+        let (qtci, _ranks, _errors) = result.unwrap();
+        assert!(qtci.discretized_grid().is_some());
+        assert!(qtci.rank() > 0);
+    }
+
+    #[test]
+    fn test_discrete_unequal_dimensions_error() {
+        let f = |_idx: &[i64]| 1.0_f64;
+        // 4 vs 8 => unequal
+        let sizes = vec![4, 8];
+        let result = quanticscrossinterpolate_discrete(&sizes, f, None, QtciOptions::default());
+        assert!(result.is_err());
+    }
 }

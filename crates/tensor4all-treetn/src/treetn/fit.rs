@@ -711,3 +711,198 @@ where
 
     Ok(tn_c)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tensor4all_core::{DynIndex, TensorDynLen};
+
+    /// Create a simple 2-node TreeTN: A -- bond -- B
+    fn make_two_node_treetn() -> TreeTN<TensorDynLen, String> {
+        let s0 = DynIndex::new_dyn(2);
+        let bond = DynIndex::new_dyn(3);
+        let s1 = DynIndex::new_dyn(2);
+
+        let t0 = TensorDynLen::from_dense_f64(
+            vec![s0.clone(), bond.clone()],
+            vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        );
+        let t1 = TensorDynLen::from_dense_f64(
+            vec![bond.clone(), s1.clone()],
+            vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        );
+
+        TreeTN::<TensorDynLen, String>::from_tensors(
+            vec![t0, t1],
+            vec!["A".to_string(), "B".to_string()],
+        )
+        .unwrap()
+    }
+
+    // ========================================================================
+    // FitEnvironment tests
+    // ========================================================================
+
+    #[test]
+    fn test_fit_environment_new() {
+        let env = FitEnvironment::<TensorDynLen, String>::new();
+        assert!(env.is_empty());
+        assert_eq!(env.len(), 0);
+    }
+
+    #[test]
+    fn test_fit_environment_default() {
+        let env = FitEnvironment::<TensorDynLen, String>::default();
+        assert!(env.is_empty());
+        assert_eq!(env.len(), 0);
+    }
+
+    #[test]
+    fn test_fit_environment_insert_and_get() {
+        let mut env = FitEnvironment::<TensorDynLen, String>::new();
+
+        let s = DynIndex::new_dyn(2);
+        let t = TensorDynLen::from_dense_f64(vec![s.clone()], vec![1.0, 2.0]);
+
+        env.insert("A".to_string(), "B".to_string(), t.clone());
+
+        assert!(!env.is_empty());
+        assert_eq!(env.len(), 1);
+        assert!(env.contains(&"A".to_string(), &"B".to_string()));
+        assert!(!env.contains(&"B".to_string(), &"A".to_string()));
+
+        let retrieved = env.get(&"A".to_string(), &"B".to_string());
+        assert!(retrieved.is_some());
+    }
+
+    #[test]
+    fn test_fit_environment_get_nonexistent() {
+        let env = FitEnvironment::<TensorDynLen, String>::new();
+        assert!(env.get(&"A".to_string(), &"B".to_string()).is_none());
+    }
+
+    #[test]
+    fn test_fit_environment_clear() {
+        let mut env = FitEnvironment::<TensorDynLen, String>::new();
+
+        let s = DynIndex::new_dyn(2);
+        let t = TensorDynLen::from_dense_f64(vec![s.clone()], vec![1.0, 2.0]);
+
+        env.insert("A".to_string(), "B".to_string(), t.clone());
+        env.insert("B".to_string(), "A".to_string(), t.clone());
+        assert_eq!(env.len(), 2);
+
+        env.clear();
+        assert!(env.is_empty());
+        assert_eq!(env.len(), 0);
+        assert!(!env.contains(&"A".to_string(), &"B".to_string()));
+    }
+
+    #[test]
+    fn test_fit_environment_invalidate() {
+        let mut env = FitEnvironment::<TensorDynLen, String>::new();
+        let tn = make_two_node_treetn();
+
+        let s = DynIndex::new_dyn(2);
+        let t = TensorDynLen::from_dense_f64(vec![s.clone()], vec![1.0, 2.0]);
+
+        // Insert environments for both directions
+        env.insert("A".to_string(), "B".to_string(), t.clone());
+        env.insert("B".to_string(), "A".to_string(), t.clone());
+        assert_eq!(env.len(), 2);
+
+        // Invalidate node A - should remove env[(A, B)] and propagate
+        env.invalidate(&["A".to_string()], &tn);
+
+        // env[(A, B)] should be removed
+        assert!(!env.contains(&"A".to_string(), &"B".to_string()));
+        // env[(B, A)] should also be removed via propagation from A
+        // (A's neighbor is B, so we remove env[(A, B)]; then propagate from A to B,
+        //  but env[(B, A)] needs to check: from=A, to=B removes env[(A,B)],
+        //  then propagates to env[(B, neighbor)] for neighbor != A - there are none for B except A)
+        // Actually, invalidate_recursive removes env[(from, to)] = env[(A, B)],
+        // then recursively goes to env[(B, x)] for x != A. B has no neighbors except A, so stops.
+        // env[(B, A)] is NOT removed by invalidation of A.
+        assert!(env.contains(&"B".to_string(), &"A".to_string()));
+    }
+
+    #[test]
+    fn test_fit_environment_verify_structural_consistency_empty() {
+        let env = FitEnvironment::<TensorDynLen, String>::new();
+        let tn = make_two_node_treetn();
+        assert!(env.verify_structural_consistency(&tn).is_ok());
+    }
+
+    #[test]
+    fn test_fit_environment_verify_structural_consistency_valid() {
+        let mut env = FitEnvironment::<TensorDynLen, String>::new();
+        let tn = make_two_node_treetn();
+
+        let s = DynIndex::new_dyn(2);
+        let t = TensorDynLen::from_dense_f64(vec![s.clone()], vec![1.0, 2.0]);
+
+        // A is a leaf with only neighbor B. env[(A, B)] is valid alone.
+        env.insert("A".to_string(), "B".to_string(), t.clone());
+        assert!(env.verify_structural_consistency(&tn).is_ok());
+    }
+
+    // ========================================================================
+    // FitContractionOptions tests
+    // ========================================================================
+
+    #[test]
+    fn test_fit_contraction_options_default() {
+        let opts = FitContractionOptions::default();
+        assert_eq!(opts.nfullsweeps, 1);
+        assert!(opts.max_rank.is_none());
+        assert!(opts.rtol.is_none());
+        assert_eq!(opts.factorize_alg, FactorizeAlg::SVD);
+        assert!(opts.convergence_tol.is_none());
+    }
+
+    #[test]
+    fn test_fit_contraction_options_new() {
+        let opts = FitContractionOptions::new(5);
+        assert_eq!(opts.nfullsweeps, 5);
+    }
+
+    #[test]
+    fn test_fit_contraction_options_builders() {
+        let opts = FitContractionOptions::new(2)
+            .with_max_rank(10)
+            .with_rtol(1e-8)
+            .with_factorize_alg(FactorizeAlg::LU)
+            .with_convergence_tol(1e-6);
+
+        assert_eq!(opts.nfullsweeps, 2);
+        assert_eq!(opts.max_rank, Some(10));
+        assert_eq!(opts.rtol, Some(1e-8));
+        assert_eq!(opts.factorize_alg, FactorizeAlg::LU);
+        assert_eq!(opts.convergence_tol, Some(1e-6));
+    }
+
+    // ========================================================================
+    // FitUpdater tests
+    // ========================================================================
+
+    #[test]
+    fn test_fit_updater_new() {
+        let tn_a = make_two_node_treetn();
+        let tn_b = make_two_node_treetn();
+
+        let updater = FitUpdater::new(tn_a, tn_b, Some(5), Some(1e-8));
+        assert_eq!(updater.max_rank, Some(5));
+        assert_eq!(updater.rtol, Some(1e-8));
+        assert_eq!(updater.factorize_alg, FactorizeAlg::SVD);
+        assert!(updater.envs.is_empty());
+    }
+
+    #[test]
+    fn test_fit_updater_with_factorize_alg() {
+        let tn_a = make_two_node_treetn();
+        let tn_b = make_two_node_treetn();
+
+        let updater = FitUpdater::new(tn_a, tn_b, None, None).with_factorize_alg(FactorizeAlg::LU);
+        assert_eq!(updater.factorize_alg, FactorizeAlg::LU);
+    }
+}
