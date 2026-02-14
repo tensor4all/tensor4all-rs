@@ -269,4 +269,137 @@ mod tests {
         let expected_11 = tt_a.evaluate(&[1, 1]).unwrap() + tt_b.evaluate(&[1, 1]).unwrap();
         assert!((val_11 - expected_11).abs() < 1e-10);
     }
+
+    #[test]
+    fn test_add_length_mismatch() {
+        let tt1 = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+        let tt2 = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+        assert!(tt1.add(&tt2).is_err());
+    }
+
+    #[test]
+    fn test_add_site_dim_mismatch() {
+        let tt1 = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+        let tt2 = TensorTrain::<f64>::constant(&[2, 4], 1.0);
+        assert!(tt1.add(&tt2).is_err());
+    }
+
+    #[test]
+    fn test_add_empty() {
+        let tt1 = TensorTrain::<f64>::from_tensors_unchecked(Vec::new());
+        let tt2 = TensorTrain::<f64>::from_tensors_unchecked(Vec::new());
+        let result = tt1.add(&tt2).unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_sub_length_mismatch() {
+        let tt1 = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+        let tt2 = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+        assert!(tt1.sub(&tt2).is_err());
+    }
+
+    #[test]
+    fn test_add_three_sites() {
+        // 3 sites to exercise the middle-tensor block-diagonal path
+        let tt1 = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+        let tt2 = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+        let result = tt1.add(&tt2).unwrap();
+        // Sum should be (1+2)*2*3*2 = 36
+        assert!((result.sum() - 36.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sub_by_value_operator() {
+        let tt1 = TensorTrain::<f64>::constant(&[2, 3], 5.0);
+        let tt2 = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+        let result = (tt1 - tt2).unwrap();
+        // (5-2)*2*3 = 18
+        assert!((result.sum() - 18.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_add_by_value_operator() {
+        let tt1 = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+        let tt2 = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+        let result = (tt1 + tt2).unwrap();
+        assert!((result.sum() - 18.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_neg_by_value_operator() {
+        let tt = TensorTrain::<f64>::constant(&[2, 2], 3.0);
+        let neg_tt = -tt;
+        assert!((neg_tt.sum() + 12.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_neg_by_ref_operator() {
+        let tt = TensorTrain::<f64>::constant(&[2, 2], 3.0);
+        let neg_tt = -&tt;
+        assert!((neg_tt.sum() + 12.0).abs() < 1e-10);
+        // Original should still be accessible
+        assert!((tt.sum() - 12.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_mul_by_value_operator() {
+        let tt = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+        let result = tt * 3.0;
+        // 2*3 * 2*3 = 36
+        assert!((result.sum() - 36.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_mul_by_ref_operator() {
+        let tt = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+        let result = &tt * 3.0;
+        assert!((result.sum() - 36.0).abs() < 1e-10);
+        // Original accessible
+        assert!((tt.sum() - 12.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sub_by_ref_operator() {
+        let tt1 = TensorTrain::<f64>::constant(&[2, 3], 5.0);
+        let tt2 = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+        let result = (&tt1 - &tt2).unwrap();
+        assert!((result.sum() - 18.0).abs() < 1e-10);
+    }
+
+    fn test_arithmetic_generic<T: TTScalar>() {
+        let tt1 = TensorTrain::<T>::constant(&[2, 3], T::from_f64(1.0));
+        let tt2 = TensorTrain::<T>::constant(&[2, 3], T::from_f64(2.0));
+
+        let add_result = tt1.add(&tt2).unwrap();
+        let add_sum = add_result.sum();
+        assert!(
+            (add_sum - T::from_f64(18.0)).abs_sq().sqrt() < 1e-10,
+            "add sum mismatch"
+        );
+
+        let sub_result = tt1.sub(&tt2).unwrap();
+        let sub_sum = sub_result.sum();
+        assert!(
+            (sub_sum - T::from_f64(-6.0)).abs_sq().sqrt() < 1e-10,
+            "sub sum mismatch"
+        );
+
+        let neg_result = tt1.negate();
+        let neg_sum = neg_result.sum();
+        assert!(
+            (neg_sum - T::from_f64(-6.0)).abs_sq().sqrt() < 1e-10,
+            "negate sum mismatch"
+        );
+    }
+
+    #[test]
+    fn test_arithmetic_f64() {
+        test_arithmetic_generic::<f64>();
+    }
+
+    #[test]
+    fn test_arithmetic_c64() {
+        test_arithmetic_generic::<num_complex::Complex64>();
+    }
 }
