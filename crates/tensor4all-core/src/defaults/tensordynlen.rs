@@ -7,7 +7,7 @@ use crate::storage::{
 use anyhow::Result;
 use num_complex::Complex64;
 use std::collections::HashSet;
-use std::ops::Mul;
+use std::ops::{Mul, Neg, Sub};
 use std::sync::Arc;
 use tensor4all_tensorbackend::mdarray::DTensor;
 
@@ -740,6 +740,60 @@ impl Mul<&TensorDynLen> for TensorDynLen {
     }
 }
 
+impl Sub<&TensorDynLen> for &TensorDynLen {
+    type Output = TensorDynLen;
+
+    fn sub(self, other: &TensorDynLen) -> Self::Output {
+        TensorDynLen::axpby(
+            self,
+            AnyScalar::new_real(1.0),
+            other,
+            AnyScalar::new_real(-1.0),
+        )
+        .expect("tensor subtraction failed")
+    }
+}
+
+impl Sub<TensorDynLen> for TensorDynLen {
+    type Output = TensorDynLen;
+
+    fn sub(self, other: TensorDynLen) -> Self::Output {
+        Sub::sub(&self, &other)
+    }
+}
+
+impl Sub<TensorDynLen> for &TensorDynLen {
+    type Output = TensorDynLen;
+
+    fn sub(self, other: TensorDynLen) -> Self::Output {
+        Sub::sub(self, &other)
+    }
+}
+
+impl Sub<&TensorDynLen> for TensorDynLen {
+    type Output = TensorDynLen;
+
+    fn sub(self, other: &TensorDynLen) -> Self::Output {
+        Sub::sub(&self, other)
+    }
+}
+
+impl Neg for &TensorDynLen {
+    type Output = TensorDynLen;
+
+    fn neg(self) -> Self::Output {
+        TensorDynLen::scale(self, AnyScalar::new_real(-1.0)).expect("tensor negation failed")
+    }
+}
+
+impl Neg for TensorDynLen {
+    type Output = TensorDynLen;
+
+    fn neg(self) -> Self::Output {
+        Neg::neg(&self)
+    }
+}
+
 /// Check if a tensor is a DiagTensor (has Diag storage).
 pub fn is_diag_tensor(tensor: &TensorDynLen) -> bool {
     tensor.storage().as_ref().is_diag()
@@ -1129,6 +1183,21 @@ impl TensorDynLen {
         self.norm_squared().sqrt()
     }
 
+    /// Maximum absolute value of all elements (L-infinity norm).
+    pub fn maxabs(&self) -> f64 {
+        if self.indices.is_empty() {
+            return self.sum().abs();
+        }
+        // Materialize to dense and scan elements
+        if let Ok(data) = self.to_vec_f64() {
+            data.iter().map(|x| x.abs()).fold(0.0_f64, f64::max)
+        } else if let Ok(data) = self.to_vec_c64() {
+            data.iter().map(|z| z.norm()).fold(0.0_f64, f64::max)
+        } else {
+            0.0
+        }
+    }
+
     /// Compute the relative distance between two tensors.
     ///
     /// Returns `||A - B|| / ||A||` (Frobenius norm).
@@ -1422,6 +1491,10 @@ impl TensorLike for TensorDynLen {
     fn norm_squared(&self) -> f64 {
         // Delegate to the inherent method
         TensorDynLen::norm_squared(self)
+    }
+
+    fn maxabs(&self) -> f64 {
+        TensorDynLen::maxabs(self)
     }
 
     fn permuteinds(&self, new_order: &[DynIndex]) -> Result<Self> {
