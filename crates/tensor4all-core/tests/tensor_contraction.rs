@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::common_inds;
 use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64};
-use tensor4all_core::{Storage, TensorDynLen};
+use tensor4all_core::{Storage, TensorDynLen, TensorLike};
 
 #[test]
 fn test_common_inds() {
@@ -120,8 +120,7 @@ fn test_mul_operator_owned() {
 }
 
 #[test]
-#[should_panic(expected = "NoCommonIndices")]
-fn test_contract_no_common_indices() {
+fn test_contract_no_common_indices_gives_outer_product() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
@@ -134,8 +133,10 @@ fn test_contract_no_common_indices() {
     let storage_b = Arc::new(Storage::new_dense_f64(4));
     let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
 
-    // This should panic because there are no common indices
-    let _result = tensor_a.contract(&tensor_b);
+    // No common indices → outer product
+    let result = tensor_a.contract(&tensor_b);
+    assert_eq!(result.dims(), vec![2, 3, 4]);
+    assert_eq!(result.indices.len(), 3);
 }
 
 #[test]
@@ -499,4 +500,77 @@ fn test_tensordot_common_index_in_pairs_ok() {
     assert!(result.is_ok());
     let result = result.unwrap();
     assert_eq!(result.dims(), vec![2, 4]);
+}
+
+// --- Scalar (identity) tensor contraction tests ---
+
+#[test]
+fn test_scalar_times_tensor() {
+    // scalar_one() * tensor = tensor
+    let scalar = TensorDynLen::scalar_one().unwrap();
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let tensor = TensorDynLen::from_dense_f64(vec![i.clone(), j.clone()], data.clone());
+
+    let result = scalar.contract(&tensor);
+    assert_eq!(result.dims(), vec![2, 3]);
+    assert_eq!(result.to_vec_f64().unwrap(), data);
+}
+
+#[test]
+fn test_tensor_times_scalar() {
+    // tensor * scalar_one() = tensor
+    let scalar = TensorDynLen::scalar_one().unwrap();
+    let i = Index::new_dyn(2);
+    let data = vec![10.0, 20.0];
+    let tensor = TensorDynLen::from_dense_f64(vec![i.clone()], data.clone());
+
+    let result = tensor.contract(&scalar);
+    assert_eq!(result.dims(), vec![2]);
+    assert_eq!(result.to_vec_f64().unwrap(), data);
+}
+
+#[test]
+fn test_scalar_times_scalar() {
+    let s1 = TensorDynLen::scalar_f64(3.0);
+    let s2 = TensorDynLen::scalar_f64(5.0);
+
+    let result = s1.contract(&s2);
+    assert_eq!(result.dims().len(), 0);
+    let val = result.to_vec_f64().unwrap();
+    assert_eq!(val.len(), 1);
+    assert!((val[0] - 15.0).abs() < 1e-10);
+}
+
+#[test]
+fn test_mul_operator_scalar_times_tensor() {
+    // &scalar * &tensor via Mul trait
+    let scalar = TensorDynLen::scalar_one().unwrap();
+    let i = Index::new_dyn(3);
+    let data = vec![1.0, 2.0, 3.0];
+    let tensor = TensorDynLen::from_dense_f64(vec![i.clone()], data.clone());
+
+    let result = &scalar * &tensor;
+    assert_eq!(result.dims(), vec![3]);
+    assert_eq!(result.to_vec_f64().unwrap(), data);
+}
+
+#[test]
+fn test_foldl_sequential_contraction() {
+    // Simulate foldl-style: acc = scalar_one; acc = acc * a; acc = acc * b;
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let a = TensorDynLen::from_dense_f64(vec![i.clone(), j.clone()], vec![1.0; 6]);
+    let b = TensorDynLen::from_dense_f64(vec![j.clone(), i.clone()], vec![2.0; 6]);
+
+    let mut acc = TensorDynLen::scalar_one().unwrap();
+    acc = &acc * &a; // acc = a (outer product with scalar)
+    acc = &acc * &b; // acc = contract(a, b) over i and j
+
+    // a[i,j] * b[j,i] = sum_j(a[i,j]*b[j,i]) summed over both → scalar
+    assert_eq!(acc.dims().len(), 0);
+    let val = acc.to_vec_f64().unwrap();
+    // All elements are 1.0*2.0 = 2.0, summed over 2*3 = 6 elements → 12.0
+    assert!((val[0] - 12.0).abs() < 1e-10);
 }

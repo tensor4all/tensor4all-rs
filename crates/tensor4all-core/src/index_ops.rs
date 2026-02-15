@@ -622,11 +622,9 @@ pub fn prepare_contraction<I: IndexLike>(
     indices_b: &[I],
     dims_b: &[usize],
 ) -> Result<ContractionSpec<I>, ContractionError> {
-    // Find common indices and their positions
+    // Find common indices and their positions.
+    // If no common indices exist, this becomes an outer product (empty axes).
     let positions = common_ind_positions(indices_a, indices_b);
-    if positions.is_empty() {
-        return Err(ContractionError::NoCommonIndices);
-    }
 
     let (axes_a, axes_b): (Vec<_>, Vec<_>) = positions.iter().copied().unzip();
 
