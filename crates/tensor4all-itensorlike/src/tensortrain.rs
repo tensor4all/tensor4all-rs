@@ -855,6 +855,10 @@ impl TensorLike for TensorTrain {
         TensorTrain::norm_squared(self)
     }
 
+    fn maxabs(&self) -> f64 {
+        self.to_dense().map(|t| t.maxabs()).unwrap_or(0.0)
+    }
+
     fn conj(&self) -> Self {
         // Clone and conjugate each site tensor
         // Note: conj() cannot return Result, so we ensure this never fails

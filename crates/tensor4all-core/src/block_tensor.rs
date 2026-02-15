@@ -287,6 +287,13 @@ impl<T: TensorLike> TensorLike for BlockTensor<T> {
         self.blocks.iter().map(|b| b.norm_squared()).sum()
     }
 
+    fn maxabs(&self) -> f64 {
+        self.blocks
+            .iter()
+            .map(|b| b.maxabs())
+            .fold(0.0_f64, f64::max)
+    }
+
     fn scale(&self, scalar: AnyScalar) -> Result<Self> {
         let scaled: Result<Vec<T>> = self
             .blocks
