@@ -513,6 +513,33 @@ pub trait TensorLike: TensorIndex {
         self.norm_squared().sqrt()
     }
 
+    /// Maximum absolute value of all elements (L-infinity norm).
+    fn maxabs(&self) -> f64;
+
+    /// Element-wise subtraction: `self - other`.
+    ///
+    /// Indices are automatically permuted to match `self`'s order via `axpby`.
+    fn sub(&self, other: &Self) -> Result<Self> {
+        self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))
+    }
+
+    /// Negate all elements: `-self`.
+    fn neg(&self) -> Result<Self> {
+        self.scale(AnyScalar::new_real(-1.0))
+    }
+
+    /// Approximate equality check (Julia `isapprox` semantics).
+    ///
+    /// Returns `true` if `||self - other|| <= max(atol, rtol * max(||self||, ||other||))`.
+    fn isapprox(&self, other: &Self, atol: f64, rtol: f64) -> bool {
+        let diff = match self.sub(other) {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+        let diff_norm = diff.norm();
+        diff_norm <= atol.max(rtol * self.norm().max(other.norm()))
+    }
+
     /// Validate structural consistency of this tensor.
     ///
     /// The default implementation does nothing (always succeeds).
