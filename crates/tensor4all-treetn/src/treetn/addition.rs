@@ -240,7 +240,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
+    use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
 
     use crate::treetn::TreeTN;
 
@@ -338,24 +338,19 @@ mod tests {
         let tensor_b = tn_b.contract_to_tensor().unwrap();
         let tensor_sum = result.contract_to_tensor().unwrap();
 
-        // Get dense data for comparison
-        let data_a = tensor_a.to_vec_f64().unwrap();
-        let data_b = tensor_b.to_vec_f64().unwrap();
-        let data_sum = tensor_sum.to_vec_f64().unwrap();
-
-        // Verify element-wise: contract(result) ≈ contract(tn_a) + contract(tn_b)
-        assert_eq!(data_sum.len(), data_a.len());
-        assert_eq!(data_sum.len(), data_b.len());
-        for i in 0..data_a.len() {
-            assert!(
-                (data_sum[i] - (data_a[i] + data_b[i])).abs() < 1e-10,
-                "Element {} mismatch: {} != {} + {}",
-                i,
-                data_sum[i],
-                data_a[i],
-                data_b[i]
-            );
-        }
+        // expected = tensor_a + tensor_b
+        let expected = tensor_a
+            .axpby(
+                tensor4all_core::AnyScalar::new_real(1.0),
+                &tensor_b,
+                tensor4all_core::AnyScalar::new_real(1.0),
+            )
+            .unwrap();
+        assert!(
+            tensor_sum.isapprox(&expected, 1e-10, 0.0),
+            "contract(result) != contract(tn_a) + contract(tn_b): maxabs diff = {}",
+            (&tensor_sum - &expected).maxabs()
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@ use tensor4all_core::index::Index;
 use tensor4all_core::{
     factorize, Canonical, DynIndex, FactorizeAlg, FactorizeError, FactorizeOptions,
 };
-use tensor4all_core::{storage::DenseStorageF64, Storage, TensorDynLen};
+use tensor4all_core::{storage::DenseStorageF64, Storage, TensorDynLen, TensorLike};
 
 // ============================================================================
 // Test Data Helpers
@@ -270,26 +270,9 @@ fn test_diag_dense_contraction_svd_internals() {
 // ============================================================================
 
 fn assert_tensors_approx_equal(a: &TensorDynLen, b: &TensorDynLen, tol: f64) {
-    assert_eq!(a.dims(), b.dims(), "Tensor dimensions don't match");
-
-    match (a.storage().as_ref(), b.storage().as_ref()) {
-        (Storage::DenseF64(a_data), Storage::DenseF64(b_data)) => {
-            let a_slice = a_data.as_slice();
-            let b_slice = b_data.as_slice();
-            assert_eq!(a_slice.len(), b_slice.len(), "Storage lengths don't match");
-
-            for (i, (&av, &bv)) in a_slice.iter().zip(b_slice.iter()).enumerate() {
-                let diff = (av - bv).abs();
-                assert!(
-                    diff < tol,
-                    "Element {} differs: {} vs {} (diff={})",
-                    i,
-                    av,
-                    bv,
-                    diff
-                );
-            }
-        }
-        _ => panic!("Unsupported storage types for comparison"),
-    }
+    assert!(
+        a.isapprox(b, tol, 0.0),
+        "Tensors differ: maxabs diff = {}",
+        (a - b).maxabs()
+    );
 }

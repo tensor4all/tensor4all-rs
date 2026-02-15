@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
 use tensor4all_treetn::TreeTN;
 
 // ============================================================================
@@ -229,19 +229,11 @@ fn test_to_dense_single_node() {
     let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0.clone()], vec![0]).unwrap();
 
     let dense = tn.to_dense().unwrap();
-    let dense_data = dense.as_slice_f64().unwrap();
-    let expected_data = t0.as_slice_f64().unwrap();
-
-    assert_eq!(dense_data.len(), expected_data.len());
-    for (i, (&d, &e)) in dense_data.iter().zip(expected_data.iter()).enumerate() {
-        assert!(
-            (d - e).abs() < 1e-10,
-            "to_dense mismatch at {}: {} vs {}",
-            i,
-            d,
-            e
-        );
-    }
+    assert!(
+        dense.isapprox(&t0, 1e-10, 0.0),
+        "to_dense mismatch: maxabs diff = {}",
+        (&dense - &t0).maxabs()
+    );
 }
 
 #[test]
@@ -393,23 +385,13 @@ fn test_add_two_nodes() {
 
     let sum = tn_a.add(&tn_b).unwrap();
 
-    // Verify numerically: sum.to_dense() == tn_a.to_dense() + tn_b.to_dense()
+    // Verify numerically: sum.to_dense() == 2 * tn_a.to_dense()
     let sum_dense = sum.to_dense().unwrap();
     let a_dense = tn_a.to_dense().unwrap();
-
-    // sum should equal 2 * a_dense
-    let sum_data = sum_dense.as_slice_f64().unwrap();
-    let a_data = a_dense.as_slice_f64().unwrap();
-
-    assert_eq!(sum_data.len(), a_data.len());
-    for (i, (&s, &a)) in sum_data.iter().zip(a_data.iter()).enumerate() {
-        let expected = 2.0 * a;
-        assert!(
-            (s - expected).abs() < 1e-10,
-            "add mismatch at {}: {} vs {}",
-            i,
-            s,
-            expected
-        );
-    }
+    let expected = a_dense.scale(AnyScalar::new_real(2.0)).unwrap();
+    assert!(
+        sum_dense.isapprox(&expected, 1e-10, 0.0),
+        "add mismatch: maxabs diff = {}",
+        (&sum_dense - &expected).maxabs()
+    );
 }
