@@ -2,7 +2,7 @@ use num_complex::Complex64;
 use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::{qr, qr_c64};
-use tensor4all_core::{Storage, TensorDynLen};
+use tensor4all_core::{Storage, TensorDynLen, TensorLike};
 
 #[test]
 fn test_qr_identity() {
@@ -123,23 +123,12 @@ fn test_qr_reconstruction() {
     // Check dimensions match
     assert_eq!(reconstructed.dims(), vec![3, 4]);
 
-    // Extract reconstructed data
-    let reconstructed_data_vec = match reconstructed.storage().as_ref() {
-        Storage::DenseF64(dense) => dense.as_slice().to_vec(),
-        _ => panic!("Reconstructed should be dense"),
-    };
-
-    // Check reconstruction accuracy (within tolerance)
-    for (idx, (orig, recon)) in data.iter().zip(reconstructed_data_vec.iter()).enumerate() {
-        assert!(
-            (orig - recon).abs() < 1e-8,
-            "Element {}: original={}, reconstructed={}, diff={}",
-            idx,
-            orig,
-            recon,
-            (orig - recon).abs()
-        );
-    }
+    // Check reconstruction accuracy
+    assert!(
+        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        "QR reconstruction failed: maxabs diff = {}",
+        (&tensor - &reconstructed).maxabs()
+    );
 }
 
 #[test]

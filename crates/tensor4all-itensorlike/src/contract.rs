@@ -143,7 +143,7 @@ impl TensorTrain {
 mod tests {
     use super::*;
     use crate::TensorTrainError;
-    use tensor4all_core::{DynId, DynIndex, Index, StorageScalar, TensorDynLen};
+    use tensor4all_core::{DynId, DynIndex, Index, StorageScalar, TensorDynLen, TensorLike};
 
     /// Helper to create a simple tensor for testing
     fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
@@ -162,30 +162,15 @@ mod tests {
     /// Helper: compare TT contraction result against naive dense contraction.
     ///
     /// Converts both TTs to dense, contracts the dense tensors, then compares
-    /// element-wise with the TT contraction result converted to dense via `to_dense()`.
+    /// with the TT contraction result using `isapprox`.
     fn assert_matches_naive(tt1: &TensorTrain, tt2: &TensorTrain, result: &TensorTrain) {
         let naive_result = tt1.to_dense().unwrap().contract(&tt2.to_dense().unwrap());
-        let naive_data = naive_result.to_vec_f64().unwrap();
-
         let result_dense = result.to_dense().unwrap();
-        let result_data = result_dense.to_vec_f64().unwrap();
-
-        assert_eq!(
-            result_data.len(),
-            naive_data.len(),
-            "Data length mismatch: result={} vs naive={}",
-            result_data.len(),
-            naive_data.len()
+        assert!(
+            result_dense.isapprox(&naive_result, 1e-10, 0.0),
+            "TT contraction result does not match naive: maxabs diff = {}",
+            (&result_dense - &naive_result).maxabs()
         );
-        for (i, (&got, &exp)) in result_data.iter().zip(naive_data.iter()).enumerate() {
-            assert!(
-                (got - exp).abs() < 1e-10,
-                "Element {} mismatch: {} vs {}",
-                i,
-                got,
-                exp
-            );
-        }
     }
 
     #[test]
