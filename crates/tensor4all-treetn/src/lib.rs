@@ -57,6 +57,11 @@ pub use treetn::{
     LocalUpdateStep,
     LocalUpdateSweepPlan,
     LocalUpdater,
+    // Swap
+    SwapOptions,
+    SwapPlan,
+    SwapStep,
+    SwapUpdater,
     // Core type
     TreeTN,
     TreeTopology,
