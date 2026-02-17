@@ -118,8 +118,8 @@ fn test_swap_two_node_chain() {
     assert!(net.find_node_by_index_id(s1.id()).map(|n| n.as_str()) == Some("B"));
 
     let mut target = HashMap::new();
-    target.insert(s0.id().clone(), "B".to_string());
-    target.insert(s1.id().clone(), "A".to_string());
+    target.insert(s0.id().to_owned(), "B".to_string());
+    target.insert(s1.id().to_owned(), "A".to_string());
 
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
@@ -142,7 +142,7 @@ fn test_swap_partial() {
     let (mut tn, s0, s1) = two_node_chain();
     // Only move s0 to B; s1 not in target. On a 2-node chain one factorize can only 1-1 split.
     let mut target = HashMap::new();
-    target.insert(s0.id().clone(), "B".to_string());
+    target.insert(s0.id().to_owned(), "B".to_string());
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
     let net = tn.site_index_network();
@@ -169,9 +169,9 @@ fn test_swap_three_node_chain() {
 
     // Swap so that s0->"2", s1->"0", s2->"1"
     let mut target = HashMap::new();
-    target.insert(s0.id().clone(), "2".to_string());
-    target.insert(s1.id().clone(), "0".to_string());
-    target.insert(s2.id().clone(), "1".to_string());
+    target.insert(s0.id().to_owned(), "2".to_string());
+    target.insert(s1.id().to_owned(), "0".to_string());
+    target.insert(s2.id().to_owned(), "1".to_string());
 
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
@@ -196,10 +196,10 @@ fn test_swap_four_node_chain() {
     let (mut tn, s0, s1, s2, s3) = four_node_chain();
     // Swap adjacent pairs: (0,1) and (2,3) so s0<->s1, s2<->s3
     let mut target = HashMap::new();
-    target.insert(s0.id().clone(), "1".to_string());
-    target.insert(s1.id().clone(), "0".to_string());
-    target.insert(s2.id().clone(), "3".to_string());
-    target.insert(s3.id().clone(), "2".to_string());
+    target.insert(s0.id().to_owned(), "1".to_string());
+    target.insert(s1.id().to_owned(), "0".to_string());
+    target.insert(s2.id().to_owned(), "3".to_string());
+    target.insert(s3.id().to_owned(), "2".to_string());
 
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
@@ -274,10 +274,10 @@ fn test_swap_2r_interleave() {
 
     // Target: x0 at "0", y0 at "1", x1 at "2", y1 at "3" (interleaved)
     let mut target = HashMap::new();
-    target.insert(x0.id().clone(), "0".to_string());
-    target.insert(y0.id().clone(), "1".to_string());
-    target.insert(x1.id().clone(), "2".to_string());
-    target.insert(y1.id().clone(), "3".to_string());
+    target.insert(x0.id().to_owned(), "0".to_string());
+    target.insert(y0.id().to_owned(), "1".to_string());
+    target.insert(x1.id().to_owned(), "2".to_string());
+    target.insert(y1.id().to_owned(), "3".to_string());
 
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
@@ -351,8 +351,8 @@ fn test_swap_y_shape() {
     let (mut tn, s0, s1, s2) = y_shape_tree();
     // Swap s0 and s1 between L0 and L1 (path crosses center)
     let mut target = HashMap::new();
-    target.insert(s0.id().clone(), "L1".to_string());
-    target.insert(s1.id().clone(), "L0".to_string());
+    target.insert(s0.id().to_owned(), "L1".to_string());
+    target.insert(s1.id().to_owned(), "L0".to_string());
 
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
@@ -382,8 +382,8 @@ fn test_swap_correctness_contract() {
     let before = tn.contract_to_tensor().unwrap();
 
     let mut target = HashMap::new();
-    target.insert(s0.id().clone(), "B".to_string());
-    target.insert(s1.id().clone(), "A".to_string());
+    target.insert(s0.id().to_owned(), "B".to_string());
+    target.insert(s1.id().to_owned(), "A".to_string());
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
 
@@ -402,7 +402,7 @@ fn test_swap_correctness_contract() {
 fn test_swap_invalid_target_nonexistent_node() {
     let (mut tn, s0, _s1) = two_node_chain();
     let mut target = HashMap::new();
-    target.insert(s0.id().clone(), "Z".to_string()); // "Z" does not exist
+    target.insert(s0.id().to_owned(), "Z".to_string()); // "Z" does not exist
     let result = tn.swap_site_indices(&target, &SwapOptions::default());
     assert!(
         result.is_err(),
@@ -413,7 +413,7 @@ fn test_swap_invalid_target_nonexistent_node() {
 #[test]
 fn test_swap_invalid_target_unknown_index_id() {
     let (mut tn, _s0, _s1) = two_node_chain();
-    let unknown_id = tensor4all_core::DynIndex::new_dyn(2).id().clone();
+    let unknown_id = tensor4all_core::DynIndex::new_dyn(2).id().to_owned();
     let mut target = HashMap::new();
     target.insert(unknown_id, "A".to_string());
     let result = tn.swap_site_indices(&target, &SwapOptions::default());
@@ -477,8 +477,8 @@ fn test_swap_two_node_chain_c64() {
     );
 
     let mut target = HashMap::new();
-    target.insert(s0.id().clone(), "B".to_string());
-    target.insert(s1.id().clone(), "A".to_string());
+    target.insert(s0.id().to_owned(), "B".to_string());
+    target.insert(s1.id().to_owned(), "A".to_string());
     tn.swap_site_indices(&target, &SwapOptions::default())
         .unwrap();
 

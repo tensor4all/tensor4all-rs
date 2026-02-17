@@ -193,7 +193,7 @@ where
     for node_name in treetn.node_names() {
         if let Some(site_space) = treetn.site_space(&node_name) {
             for idx in site_space {
-                out.insert(idx.id().clone(), node_name.clone());
+                out.insert(idx.id().to_owned(), node_name.clone());
             }
         }
     }
@@ -333,7 +333,7 @@ where
             let target = self.target_assignment.get(idx.id());
             let stay_on_a = target.is_none_or(|t| is_target_on_a_side(topology, node_a, node_b, t));
             if stay_on_a {
-                left_id_set.insert(idx.id().clone());
+                left_id_set.insert(idx.id().to_owned());
             }
         }
         for idx in &site_at_b {
@@ -341,7 +341,7 @@ where
             let move_to_a =
                 target.is_some_and(|t| is_target_on_a_side(topology, node_a, node_b, t));
             if move_to_a {
-                left_id_set.insert(idx.id().clone());
+                left_id_set.insert(idx.id().to_owned());
             }
         }
 
@@ -465,8 +465,8 @@ mod tests {
         let mut current = HashMap::new();
         let ix = DynIndex::new_dyn(2);
         let iy = DynIndex::new_dyn(2);
-        current.insert(ix.id().clone(), "A".to_string());
-        current.insert(iy.id().clone(), "B".to_string());
+        current.insert(ix.id().to_owned(), "A".to_string());
+        current.insert(iy.id().to_owned(), "B".to_string());
         let target = HashMap::new();
 
         let plan = SwapPlan::<String, DynIndex>::new(&current, &target, &topo).unwrap();
@@ -479,11 +479,11 @@ mod tests {
         let mut current = HashMap::new();
         let ix = DynIndex::new_dyn(2);
         let iy = DynIndex::new_dyn(2);
-        current.insert(ix.id().clone(), "A".to_string());
-        current.insert(iy.id().clone(), "B".to_string());
+        current.insert(ix.id().to_owned(), "A".to_string());
+        current.insert(iy.id().to_owned(), "B".to_string());
         let mut target = HashMap::new();
-        target.insert(ix.id().clone(), "B".to_string());
-        target.insert(iy.id().clone(), "A".to_string());
+        target.insert(ix.id().to_owned(), "B".to_string());
+        target.insert(iy.id().to_owned(), "A".to_string());
 
         let plan = SwapPlan::<String, DynIndex>::new(&current, &target, &topo).unwrap();
         let edges = plan.edges_with_swaps();
@@ -496,9 +496,9 @@ mod tests {
         let topo = build_chain_topology();
         let ix = DynIndex::new_dyn(2);
         let mut current = HashMap::new();
-        current.insert(ix.id().clone(), "A".to_string());
+        current.insert(ix.id().to_owned(), "A".to_string());
         let mut target = HashMap::new();
-        target.insert(ix.id().clone(), "Z".to_string()); // Z not in topology
+        target.insert(ix.id().to_owned(), "Z".to_string()); // Z not in topology
 
         let res = SwapPlan::<String, DynIndex>::new(&current, &target, &topo);
         assert!(res.is_err());
@@ -510,9 +510,9 @@ mod tests {
         let ix = DynIndex::new_dyn(2);
         let iy = DynIndex::new_dyn(2);
         let mut current = HashMap::new();
-        current.insert(ix.id().clone(), "A".to_string());
+        current.insert(ix.id().to_owned(), "A".to_string());
         let mut target = HashMap::new();
-        target.insert(iy.id().clone(), "B".to_string()); // iy not in current (different id)
+        target.insert(iy.id().to_owned(), "B".to_string()); // iy not in current (different id)
 
         let res = SwapPlan::<String, DynIndex>::new(&current, &target, &topo);
         assert!(res.is_err());
