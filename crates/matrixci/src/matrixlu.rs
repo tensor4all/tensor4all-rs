@@ -215,11 +215,11 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
 
         // Swap rows and columns
         if pivot_row != k {
-            *a = swap_rows(a, k, pivot_row);
+            swap_rows(a, k, pivot_row);
             lu.row_permutation.swap(k, pivot_row);
         }
         if pivot_col != k {
-            *a = swap_cols(a, k, pivot_col);
+            swap_cols(a, k, pivot_col);
             lu.col_permutation.swap(k, pivot_col);
         }
 

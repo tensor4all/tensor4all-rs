@@ -153,32 +153,28 @@ pub fn append_row<T: Clone + Zero>(m: &Matrix<T>, row: &[T]) -> Matrix<T> {
     result
 }
 
-/// Swap two rows in a matrix (in-place style, returns new matrix)
-pub fn swap_rows<T: Clone + Zero>(m: &Matrix<T>, a: usize, b: usize) -> Matrix<T> {
+/// Swap two rows in a matrix in-place
+pub fn swap_rows<T>(m: &mut Matrix<T>, a: usize, b: usize) {
     if a == b {
-        return m.clone();
+        return;
     }
-    let mut result = m.clone();
     for j in 0..m.ncols {
-        let tmp = result[[a, j]].clone();
-        result[[a, j]] = result[[b, j]].clone();
-        result[[b, j]] = tmp;
+        let idx_a = a * m.ncols + j;
+        let idx_b = b * m.ncols + j;
+        m.data.swap(idx_a, idx_b);
     }
-    result
 }
 
-/// Swap two columns in a matrix (in-place style, returns new matrix)
-pub fn swap_cols<T: Clone + Zero>(m: &Matrix<T>, a: usize, b: usize) -> Matrix<T> {
+/// Swap two columns in a matrix in-place
+pub fn swap_cols<T>(m: &mut Matrix<T>, a: usize, b: usize) {
     if a == b {
-        return m.clone();
+        return;
     }
-    let mut result = m.clone();
     for i in 0..m.nrows {
-        let tmp = result[[i, a]].clone();
-        result[[i, a]] = result[[i, b]].clone();
-        result[[i, b]] = tmp;
+        let idx_a = i * m.ncols + a;
+        let idx_b = i * m.ncols + b;
+        m.data.swap(idx_a, idx_b);
     }
-    result
 }
 
 /// Transpose the matrix
