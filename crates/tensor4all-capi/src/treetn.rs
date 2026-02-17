@@ -5,7 +5,7 @@
 //! `tensor4all_treetn::DefaultTreeTN<usize>`.
 
 use crate::types::{t4a_canonical_form, t4a_index, t4a_tensor, t4a_treetn, InternalTreeTN};
-use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
+use crate::{StatusCode, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tensor4all_treetn::treetn::contraction::{ContractionMethod, ContractionOptions};
@@ -107,11 +107,11 @@ pub extern "C" fn t4a_treetn_new(
                 unsafe { *out = Box::into_raw(Box::new(t4a_treetn::new(treetn))) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -141,7 +141,7 @@ pub extern "C" fn t4a_treetn_num_vertices(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the number of edges (bonds) in the tree tensor network.
@@ -167,7 +167,7 @@ pub extern "C" fn t4a_treetn_num_edges(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the tensor at a specific vertex.
@@ -205,7 +205,7 @@ pub extern "C" fn t4a_treetn_tensor(
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Set the tensor at a specific vertex.
@@ -239,11 +239,11 @@ pub extern "C" fn t4a_treetn_set_tensor(
             .replace_tensor(node_idx, tensor_inner.inner().clone())
         {
             Ok(_) => T4A_SUCCESS,
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the neighbors of a vertex.
@@ -285,7 +285,7 @@ pub extern "C" fn t4a_treetn_neighbors(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the link (bond) index on the edge between two vertices.
@@ -324,7 +324,7 @@ pub extern "C" fn t4a_treetn_linkind(
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the site (physical) indices at a vertex.
@@ -370,7 +370,7 @@ pub extern "C" fn t4a_treetn_siteinds(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the bond dimension on the edge between two vertices.
@@ -410,7 +410,7 @@ pub extern "C" fn t4a_treetn_bond_dim(
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -501,7 +501,7 @@ pub extern "C" fn t4a_treetn_bond_dims(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the maximum bond dimension of an MPS-like TreeTN.
@@ -551,7 +551,7 @@ pub extern "C" fn t4a_treetn_maxbonddim(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -585,11 +585,11 @@ pub extern "C" fn t4a_treetn_orthogonalize(
             .canonicalize_mut(std::iter::once(vertex), options)
         {
             Ok(()) => T4A_SUCCESS,
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Orthogonalize the tree tensor network to a vertex with a specific canonical form.
@@ -620,11 +620,11 @@ pub extern "C" fn t4a_treetn_orthogonalize_with(
             .canonicalize_mut(std::iter::once(vertex), options)
         {
             Ok(()) => T4A_SUCCESS,
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the canonical (orthogonality) region of the tree tensor network.
@@ -667,7 +667,7 @@ pub extern "C" fn t4a_treetn_ortho_center(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the canonical form used for the tree tensor network.
@@ -698,7 +698,7 @@ pub extern "C" fn t4a_treetn_canonical_form(
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -753,11 +753,11 @@ pub extern "C" fn t4a_treetn_truncate(
             .truncate_mut(std::iter::once(center), options)
         {
             Ok(()) => T4A_SUCCESS,
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Compute the inner product of two tree tensor networks.
@@ -798,11 +798,11 @@ pub extern "C" fn t4a_treetn_inner(
                 }
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Compute the norm of the tree tensor network.
@@ -826,11 +826,11 @@ pub extern "C" fn t4a_treetn_norm(treetn: *mut t4a_treetn, out: *mut libc::c_dou
                 unsafe { *out = norm };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Compute the log-norm of the tree tensor network.
@@ -857,11 +857,11 @@ pub extern "C" fn t4a_treetn_lognorm(
                 unsafe { *out = lognorm };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Add two tree tensor networks using direct-sum construction.
@@ -892,11 +892,11 @@ pub extern "C" fn t4a_treetn_add(
                 unsafe { *out = Box::into_raw(Box::new(t4a_treetn::new(result))) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Contract two tree tensor networks.
@@ -957,11 +957,11 @@ pub extern "C" fn t4a_treetn_contract(
                 unsafe { *out = Box::into_raw(Box::new(t4a_treetn::new(result))) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Convert tree tensor network to a dense tensor by contracting all link indices.
@@ -988,11 +988,11 @@ pub extern "C" fn t4a_treetn_to_dense(
                 unsafe { *out = Box::into_raw(Box::new(t4a_tensor::new(tensor))) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Solve `(a0 + a1 * A) * x = b` for `x` using DMRG-like sweeps.
@@ -1063,11 +1063,11 @@ pub extern "C" fn t4a_treetn_linsolve(
                 unsafe { *out = Box::into_raw(Box::new(t4a_treetn::new(result.solution))) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================

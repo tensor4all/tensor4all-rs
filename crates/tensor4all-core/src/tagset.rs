@@ -129,9 +129,10 @@ pub struct TagSet<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar 
 }
 
 /// Error type for TagSet operations.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum TagSetError {
     /// Too many tags in the tag set (capacity exceeded).
+    #[error("Too many tags ({actual} > {max})")]
     TooManyTags {
         /// The actual number of tags attempted.
         actual: usize,
@@ -139,6 +140,7 @@ pub enum TagSetError {
         max: usize,
     },
     /// A tag is too long.
+    #[error("Tag too long ({actual} > {max})")]
     TagTooLong {
         /// The actual length of the tag.
         actual: usize,
@@ -146,8 +148,10 @@ pub enum TagSetError {
         max: usize,
     },
     /// A tag contains invalid characters.
+    #[error("Invalid tag: {0}")]
     InvalidTag(SmallStringError),
     /// Tag contains a comma, which is reserved as a separator in from_str.
+    #[error("Tag contains comma: {tag:?}")]
     TagContainsComma {
         /// The tag that contains a comma.
         tag: String,

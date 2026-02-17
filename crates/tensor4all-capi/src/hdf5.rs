@@ -18,9 +18,10 @@ fn cstr_to_str_checked<'a>(ptr: *const libc::c_char) -> Result<&'a str, StatusCo
     if ptr.is_null() {
         return Err(T4A_NULL_POINTER);
     }
-    unsafe { CStr::from_ptr(ptr) }
-        .to_str()
-        .map_err(|_| T4A_INVALID_ARGUMENT)
+    unsafe { CStr::from_ptr(ptr) }.to_str().map_err(|e| {
+        crate::set_last_error(&e.to_string());
+        T4A_INVALID_ARGUMENT
+    })
 }
 
 /// Extract two C strings and run a closure inside `catch_unwind`.
@@ -40,7 +41,7 @@ where
         Ok(s) => s,
         Err(code) => return code,
     };
-    catch_unwind(|| f(s1, s2)).unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(catch_unwind(|| f(s1, s2)))
 }
 
 /// Initialize the HDF5 library by loading it from the specified path.
@@ -68,11 +69,10 @@ pub extern "C" fn t4a_hdf5_init(library_path: *const libc::c_char) -> StatusCode
         }
     };
 
-    match catch_unwind(|| tensor4all_hdf5::hdf5_init(path)) {
-        Ok(Ok(())) => T4A_SUCCESS,
-        Ok(Err(_)) => T4A_INTERNAL_ERROR,
-        Err(_) => T4A_INTERNAL_ERROR,
-    }
+    crate::unwrap_catch(catch_unwind(|| match tensor4all_hdf5::hdf5_init(path) {
+        Ok(()) => T4A_SUCCESS,
+        Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+    }))
 }
 
 /// Check if the HDF5 library is initialized.
@@ -109,7 +109,7 @@ pub extern "C" fn t4a_hdf5_save_itensor(
         let tensor_ref = unsafe { &*tensor };
         match tensor4all_hdf5::save_itensor(fp, nm, tensor_ref.inner()) {
             Ok(()) => T4A_SUCCESS,
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     })
 }
@@ -145,7 +145,7 @@ pub extern "C" fn t4a_hdf5_load_itensor(
                 unsafe { *out = Box::into_raw(boxed) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         },
     )
 }
@@ -188,9 +188,9 @@ pub extern "C" fn t4a_hdf5_save_mps(
         match TensorTrain::new(tensors) {
             Ok(tt) => match tensor4all_hdf5::save_mps(fp, nm, &tt) {
                 Ok(()) => T4A_SUCCESS,
-                Err(_) => T4A_INTERNAL_ERROR,
+                Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
             },
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     })
 }
@@ -231,10 +231,10 @@ pub extern "C" fn t4a_hdf5_load_mps(
                         unsafe { *out = Box::into_raw(boxed) };
                         T4A_SUCCESS
                     }
-                    Err(_) => T4A_INTERNAL_ERROR,
+                    Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
                 }
             }
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     })
 }

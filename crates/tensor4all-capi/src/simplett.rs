@@ -3,7 +3,7 @@
 //! This provides a simpler TensorTrain interface designed for TCI operations.
 //! The tensors are stored as flat arrays with explicit dimensions.
 
-use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
+use crate::{StatusCode, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
@@ -79,7 +79,7 @@ pub extern "C" fn t4a_simplett_f64_clone(ptr: *const t4a_simplett_f64) -> *mut t
         Box::into_raw(Box::new(t4a_simplett_f64::new(tt.inner().clone())))
     }));
 
-    result.unwrap_or(std::ptr::null_mut())
+    crate::unwrap_catch_ptr(result)
 }
 
 // ============================================================================
@@ -111,7 +111,7 @@ pub extern "C" fn t4a_simplett_f64_constant(
         Box::into_raw(Box::new(t4a_simplett_f64::new(tt)))
     }));
 
-    result.unwrap_or(std::ptr::null_mut())
+    crate::unwrap_catch_ptr(result)
 }
 
 /// Create a zero tensor train.
@@ -137,7 +137,7 @@ pub extern "C" fn t4a_simplett_f64_zeros(
         Box::into_raw(Box::new(t4a_simplett_f64::new(tt)))
     }));
 
-    result.unwrap_or(std::ptr::null_mut())
+    crate::unwrap_catch_ptr(result)
 }
 
 // ============================================================================
@@ -160,7 +160,7 @@ pub extern "C" fn t4a_simplett_f64_len(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the site dimensions.
@@ -191,7 +191,7 @@ pub extern "C" fn t4a_simplett_f64_site_dims(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the link (bond) dimensions.
@@ -222,7 +222,7 @@ pub extern "C" fn t4a_simplett_f64_link_dims(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the maximum bond dimension (rank).
@@ -241,7 +241,7 @@ pub extern "C" fn t4a_simplett_f64_rank(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Evaluate the tensor train at a given multi-index.
@@ -271,11 +271,11 @@ pub extern "C" fn t4a_simplett_f64_evaluate(
                 unsafe { *out_value = val };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Compute the sum over all indices.
@@ -294,7 +294,7 @@ pub extern "C" fn t4a_simplett_f64_sum(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Compute the Frobenius norm.
@@ -313,7 +313,7 @@ pub extern "C" fn t4a_simplett_f64_norm(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get site tensor data at a specific site.
@@ -384,7 +384,7 @@ pub extern "C" fn t4a_simplett_f64_site_tensor(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 #[cfg(test)]

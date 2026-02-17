@@ -132,11 +132,11 @@ pub extern "C" fn t4a_quanticscrossinterpolate_f64(
                 unsafe { *out_qtci = Box::into_raw(Box::new(t4a_qtci_f64::new(qtci))) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Perform quantics cross interpolation on a discrete integer domain.
@@ -206,11 +206,11 @@ pub extern "C" fn t4a_quanticscrossinterpolate_discrete_f64(
                 unsafe { *out_qtci = Box::into_raw(Box::new(t4a_qtci_f64::new(qtci))) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -233,7 +233,7 @@ pub extern "C" fn t4a_qtci_f64_rank(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the link (bond) dimensions.
@@ -264,7 +264,7 @@ pub extern "C" fn t4a_qtci_f64_link_dims(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -298,11 +298,11 @@ pub extern "C" fn t4a_qtci_f64_evaluate(
                 unsafe { *out_value = val };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Compute the factorized sum over all grid points.
@@ -322,11 +322,11 @@ pub extern "C" fn t4a_qtci_f64_sum(
                 unsafe { *out_value = val };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Compute the integral over the continuous domain.
@@ -350,11 +350,11 @@ pub extern "C" fn t4a_qtci_f64_integral(
                 unsafe { *out_value = val };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Convert the QTCI to a SimpleTT tensor train.
@@ -376,11 +376,11 @@ pub extern "C" fn t4a_qtci_f64_to_tensor_train(
         let qtci = unsafe { &*ptr };
         match qtci.inner().tensor_train() {
             Ok(tt) => Box::into_raw(Box::new(crate::simplett::t4a_simplett_f64::new(tt))),
-            Err(_) => std::ptr::null_mut(),
+            Err(e) => crate::err_null(e),
         }
     }));
 
-    result.unwrap_or(std::ptr::null_mut())
+    crate::unwrap_catch_ptr(result)
 }
 
 // ============================================================================

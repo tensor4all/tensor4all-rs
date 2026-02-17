@@ -109,11 +109,11 @@ pub extern "C" fn t4a_tci2_f64_new(
 
         match TensorCI2::<f64>::new(dims) {
             Ok(tci) => Box::into_raw(Box::new(t4a_tci2_f64::new(tci))),
-            Err(_) => std::ptr::null_mut(),
+            Err(e) => crate::err_null(e),
         }
     }));
 
-    result.unwrap_or(std::ptr::null_mut())
+    crate::unwrap_catch_ptr(result)
 }
 
 // ============================================================================
@@ -136,7 +136,7 @@ pub extern "C" fn t4a_tci2_f64_len(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the current rank (maximum bond dimension).
@@ -155,7 +155,7 @@ pub extern "C" fn t4a_tci2_f64_rank(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the link (bond) dimensions.
@@ -181,7 +181,7 @@ pub extern "C" fn t4a_tci2_f64_link_dims(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the maximum sample value encountered.
@@ -200,7 +200,7 @@ pub extern "C" fn t4a_tci2_f64_max_sample_value(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the maximum bond error from the last sweep.
@@ -219,7 +219,7 @@ pub extern "C" fn t4a_tci2_f64_max_bond_error(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -259,11 +259,11 @@ pub extern "C" fn t4a_tci2_f64_add_global_pivots(
 
         match tci.inner_mut().add_global_pivots(&pivot_vec) {
             Ok(()) => T4A_SUCCESS,
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -331,7 +331,7 @@ pub extern "C" fn t4a_tci2_f64_sweep(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -355,11 +355,11 @@ pub extern "C" fn t4a_tci2_f64_to_tensor_train(ptr: *const t4a_tci2_f64) -> *mut
         let tci = unsafe { &*ptr };
         match tci.inner().to_tensor_train() {
             Ok(tt) => Box::into_raw(Box::new(t4a_simplett_f64::new(tt))),
-            Err(_) => std::ptr::null_mut(),
+            Err(e) => crate::err_null(e),
         }
     }));
 
-    result.unwrap_or(std::ptr::null_mut())
+    crate::unwrap_catch_ptr(result)
 }
 
 // ============================================================================
@@ -474,11 +474,11 @@ pub extern "C" fn t4a_crossinterpolate2_f64(
 
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 #[cfg(test)]

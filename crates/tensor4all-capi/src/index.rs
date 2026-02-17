@@ -4,8 +4,8 @@
 
 use crate::types::{t4a_index, InternalIndex};
 use crate::{
-    StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER,
-    T4A_SUCCESS, T4A_TAG_OVERFLOW, T4A_TAG_TOO_LONG,
+    StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
+    T4A_TAG_OVERFLOW, T4A_TAG_TOO_LONG,
 };
 use std::ffi::{c_char, CStr};
 use tensor4all_core::index::Index;
@@ -36,7 +36,7 @@ pub extern "C" fn t4a_index_new(dim: usize) -> *mut t4a_index {
         Box::into_raw(Box::new(t4a_index::new(index)))
     }));
 
-    result.unwrap_or(std::ptr::null_mut())
+    crate::unwrap_catch_ptr(result)
 }
 
 /// Create a new index with the given dimension and tags (comma-separated)
@@ -62,17 +62,17 @@ pub extern "C" fn t4a_index_new_with_tags(dim: usize, tags_csv: *const c_char) -
         let c_str = unsafe { CStr::from_ptr(tags_csv) };
         let tags_str = match c_str.to_str() {
             Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
+            Err(e) => return crate::err_null(e),
         };
 
         // Use new_dyn_with_tag which handles comma-separated tags
         match Index::new_dyn_with_tag(dim, tags_str) {
             Ok(index) => Box::into_raw(Box::new(t4a_index::new(index))),
-            Err(_) => std::ptr::null_mut(),
+            Err(e) => crate::err_null(e),
         }
     }));
 
-    result.unwrap_or(std::ptr::null_mut())
+    crate::unwrap_catch_ptr(result)
 }
 
 /// Create a new index with the given dimension, id, and tags
@@ -103,11 +103,11 @@ pub extern "C" fn t4a_index_new_with_id(
             let c_str = unsafe { CStr::from_ptr(tags_csv) };
             let tags_str = match c_str.to_str() {
                 Ok(s) => s,
-                Err(_) => return std::ptr::null_mut(),
+                Err(e) => return crate::err_null(e),
             };
             match TagSet::from_str(tags_str) {
                 Ok(t) => t,
-                Err(_) => return std::ptr::null_mut(),
+                Err(e) => return crate::err_null(e),
             }
         };
 
@@ -115,7 +115,7 @@ pub extern "C" fn t4a_index_new_with_id(
         Box::into_raw(Box::new(t4a_index::new(index)))
     }));
 
-    result.unwrap_or(std::ptr::null_mut())
+    crate::unwrap_catch_ptr(result)
 }
 
 // ============================================================================
@@ -142,7 +142,7 @@ pub extern "C" fn t4a_index_dim(ptr: *const t4a_index, out_dim: *mut usize) -> S
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the 64-bit ID of an index
@@ -167,7 +167,7 @@ pub extern "C" fn t4a_index_id(ptr: *const t4a_index, out_id: *mut u64) -> Statu
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the tags of an index as a comma-separated UTF-8 string
@@ -220,7 +220,7 @@ pub extern "C" fn t4a_index_get_tags(
         T4A_SUCCESS
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -249,7 +249,7 @@ pub extern "C" fn t4a_index_add_tag(ptr: *mut t4a_index, tag: *const c_char) -> 
 
         let tag_str = match c_str.to_str() {
             Ok(s) => s,
-            Err(_) => return T4A_INVALID_ARGUMENT,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
         };
 
         // TagSet is Arc-wrapped, use TagSetLike::add_tag which does copy-on-write
@@ -257,11 +257,11 @@ pub extern "C" fn t4a_index_add_tag(ptr: *mut t4a_index, tag: *const c_char) -> 
             Ok(()) => T4A_SUCCESS,
             Err(TagSetError::TooManyTags { .. }) => T4A_TAG_OVERFLOW,
             Err(TagSetError::TagTooLong { .. }) => T4A_TAG_TOO_LONG,
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Set all tags from a comma-separated string (replaces existing tags)
@@ -289,7 +289,7 @@ pub extern "C" fn t4a_index_set_tags_csv(
 
         let tags_str = match c_str.to_str() {
             Ok(s) => s,
-            Err(_) => return T4A_INVALID_ARGUMENT,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
         };
 
         // Create new TagSet from the comma-separated string and replace existing
@@ -300,11 +300,11 @@ pub extern "C" fn t4a_index_set_tags_csv(
             }
             Err(TagSetError::TooManyTags { .. }) => T4A_TAG_OVERFLOW,
             Err(TagSetError::TagTooLong { .. }) => T4A_TAG_TOO_LONG,
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Check if an index has a specific tag
@@ -327,7 +327,7 @@ pub extern "C" fn t4a_index_has_tag(ptr: *const t4a_index, tag: *const c_char) -
 
         let tag_str = match c_str.to_str() {
             Ok(s) => s,
-            Err(_) => return -1,
+            Err(e) => return crate::err_status(e, -1),
         };
 
         if index.inner().tags().has_tag(tag_str) {
@@ -337,7 +337,7 @@ pub extern "C" fn t4a_index_has_tag(ptr: *const t4a_index, tag: *const c_char) -
         }
     }));
 
-    result.unwrap_or(-1)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================

@@ -55,11 +55,11 @@ pub extern "C" fn t4a_qtransform_shift(
                 unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Create a flip operator: f(x) = g(2^r - x)
@@ -91,11 +91,11 @@ pub extern "C" fn t4a_qtransform_flip(
                 unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Create a phase rotation operator: f(x) = exp(i*theta*x) * g(x)
@@ -126,11 +126,11 @@ pub extern "C" fn t4a_qtransform_phase_rotation(
                 unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Create a cumulative sum operator: y_i = sum_{j<i} x_j
@@ -155,10 +155,10 @@ pub extern "C" fn t4a_qtransform_cumsum(r: libc::size_t, out: *mut *mut t4a_lino
             unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
             T4A_SUCCESS
         }
-        Err(_) => T4A_INTERNAL_ERROR,
+        Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Create a Fourier transform operator.
@@ -206,11 +206,11 @@ pub extern "C" fn t4a_qtransform_fourier(
                 unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -272,11 +272,11 @@ pub extern "C" fn t4a_linop_apply(
                 unsafe { *out = Box::into_raw(Box::new(t4a_treetn::new(result_treetn))) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INTERNAL_ERROR,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
