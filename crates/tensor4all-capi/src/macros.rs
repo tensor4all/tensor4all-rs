@@ -62,7 +62,7 @@ macro_rules! impl_opaque_type_common {
                     Box::into_raw(Box::new(cloned))
                 }));
 
-                crate::unwrap_catch_ptr(result)
+                $crate::unwrap_catch_ptr(result)
             }
 
             /// Check if the object pointer is valid (non-null and dereferenceable)
@@ -82,7 +82,14 @@ macro_rules! impl_opaque_type_common {
                     1
                 }));
 
-                result.unwrap_or(0)
+                match result {
+                    Ok(v) => v,
+                    Err(panic) => {
+                        let msg = $crate::panic_message(&*panic);
+                        $crate::set_last_error(&msg);
+                        0
+                    }
+                }
             }
         }
     };

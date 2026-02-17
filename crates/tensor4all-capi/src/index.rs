@@ -4,8 +4,8 @@
 
 use crate::types::{t4a_index, InternalIndex};
 use crate::{
-    StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER,
-    T4A_SUCCESS, T4A_TAG_OVERFLOW, T4A_TAG_TOO_LONG,
+    StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
+    T4A_TAG_OVERFLOW, T4A_TAG_TOO_LONG,
 };
 use std::ffi::{c_char, CStr};
 use tensor4all_core::index::Index;

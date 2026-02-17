@@ -11,8 +11,7 @@ use tensor4all_core::TensorLike;
 
 use crate::types::{t4a_index, t4a_storage_kind, t4a_tensor, InternalIndex, InternalTensor};
 use crate::{
-    StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER,
-    T4A_SUCCESS,
+    StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 
 // Generate lifecycle functions: t4a_tensor_release, t4a_tensor_clone, t4a_tensor_is_assigned
