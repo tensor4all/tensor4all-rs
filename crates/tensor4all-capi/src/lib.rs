@@ -84,9 +84,19 @@ thread_local! {
 }
 
 /// Store an error message in thread-local storage.
+///
+/// When the `RUST_BACKTRACE` environment variable is set (to `1` or `full`),
+/// a backtrace is captured and appended to the message.
 pub(crate) fn set_last_error(msg: &str) {
+    let bt = std::backtrace::Backtrace::capture();
+    let full_msg = match bt.status() {
+        std::backtrace::BacktraceStatus::Captured => {
+            format!("{msg}\n\nRust backtrace:\n{bt}")
+        }
+        _ => msg.to_string(),
+    };
     LAST_ERROR.with(|cell| {
-        *cell.borrow_mut() = msg.to_string();
+        *cell.borrow_mut() = full_msg;
     });
 }
 
