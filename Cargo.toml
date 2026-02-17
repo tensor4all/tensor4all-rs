@@ -26,6 +26,9 @@ authors = ["tensor4all collaboration"]
 license = "MIT"
 repository = "https://github.com/tensor4all/tensor4all-rs"
 
+[profile.release]
+debug = true  # Include debug info in release builds (enables detailed RUST_BACKTRACE)
+
 [workspace.dependencies]
 num-complex = "0.4"
 num-traits = "0.2"
