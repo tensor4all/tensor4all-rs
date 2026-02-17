@@ -183,9 +183,7 @@ impl<T: Scalar> MatrixACA<T> {
     pub fn add_best_pivot(&mut self, a: &Matrix<T>) -> Result<(usize, usize)> {
         if self.is_empty() {
             // Find global maximum
-            let rows: Vec<usize> = (0..self.nrows()).collect();
-            let cols: Vec<usize> = (0..self.ncols()).collect();
-            let (i, j, _) = submatrix_argmax(a, &rows, &cols);
+            let (i, j, _) = submatrix_argmax(a, 0..self.nrows(), 0..self.ncols());
             self.add_pivot(a, (i, j))?;
             return Ok((i, j));
         }

@@ -184,15 +184,13 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
 
     while lu.n_pivot < max_rank {
         let k = lu.n_pivot;
-        let rows: Vec<usize> = (k..nr).collect();
-        let cols: Vec<usize> = (k..nc).collect();
 
-        if rows.is_empty() || cols.is_empty() {
+        if k >= nr || k >= nc {
             break;
         }
 
         // Find pivot with maximum absolute value in submatrix
-        let (pivot_row, pivot_col, pivot_val) = submatrix_argmax(a, &rows, &cols);
+        let (pivot_row, pivot_col, pivot_val) = submatrix_argmax(a, k..nr, k..nc);
 
         let pivot_abs = f64::sqrt(pivot_val.abs_sq());
         lu.error = pivot_abs;

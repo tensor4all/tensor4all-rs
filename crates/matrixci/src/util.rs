@@ -283,21 +283,21 @@ fn solve_linear_system<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
     from_vec2d(x)
 }
 
-/// Find the position of maximum absolute value in a submatrix
+/// Find the position of maximum absolute value in a submatrix defined by row/column ranges
 pub fn submatrix_argmax<T: Scalar>(
     a: &Matrix<T>,
-    rows: &[usize],
-    cols: &[usize],
+    rows: std::ops::Range<usize>,
+    cols: std::ops::Range<usize>,
 ) -> (usize, usize, T) {
     assert!(!rows.is_empty(), "rows must not be empty");
     assert!(!cols.is_empty(), "cols must not be empty");
 
-    let mut max_val: f64 = a[[rows[0], cols[0]]].abs_sq();
-    let mut max_row = rows[0];
-    let mut max_col = cols[0];
+    let mut max_val: f64 = a[[rows.start, cols.start]].abs_sq();
+    let mut max_row = rows.start;
+    let mut max_col = cols.start;
 
-    for &r in rows {
-        for &c in cols {
+    for r in rows {
+        for c in cols.clone() {
             let val: f64 = a[[r, c]].abs_sq();
             if val > max_val {
                 max_val = val;
@@ -396,9 +396,7 @@ mod tests {
             vec![7.0, 8.0, 9.0],
         ]);
 
-        let rows: Vec<usize> = vec![0, 1, 2];
-        let cols: Vec<usize> = vec![0, 1, 2];
-        let (r, c, _) = submatrix_argmax(&m, &rows, &cols);
+        let (r, c, _) = submatrix_argmax(&m, 0..3, 0..3);
         assert_eq!((r, c), (2, 2));
     }
 
