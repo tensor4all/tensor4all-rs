@@ -226,7 +226,7 @@ pub extern "C" fn t4a_factorize_algorithm_from_name(
     let name_str = unsafe {
         match CStr::from_ptr(name).to_str() {
             Ok(s) => s,
-            Err(_) => return T4A_INVALID_ARGUMENT,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     };
 
@@ -266,7 +266,7 @@ pub extern "C" fn t4a_contraction_algorithm_from_name(
     let name_str = unsafe {
         match CStr::from_ptr(name).to_str() {
             Ok(s) => s,
-            Err(_) => return T4A_INVALID_ARGUMENT,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     };
 
@@ -305,7 +305,7 @@ pub extern "C" fn t4a_compression_algorithm_from_name(
     let name_str = unsafe {
         match CStr::from_ptr(name).to_str() {
             Ok(s) => s,
-            Err(_) => return T4A_INVALID_ARGUMENT,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     };
 

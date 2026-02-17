@@ -4,7 +4,7 @@
 //! for quantics tensor train representations.
 
 use crate::types::{t4a_qgrid_disc, t4a_qgrid_int, t4a_unfolding_scheme};
-use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
+use crate::{StatusCode, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 
 // ============================================================================
 // DiscretizedGrid lifecycle functions
@@ -58,11 +58,11 @@ pub extern "C" fn t4a_qgrid_disc_new(
                 unsafe { *out = Box::into_raw(boxed) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -83,7 +83,7 @@ pub extern "C" fn t4a_qgrid_disc_ndims(
         *out = g.inner().ndims();
         T4A_SUCCESS
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the resolution (bits) per dimension.
@@ -106,7 +106,7 @@ pub extern "C" fn t4a_qgrid_disc_rs(
         out_slice.copy_from_slice(rs);
         T4A_SUCCESS
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the local dimensions of all tensor sites.
@@ -131,7 +131,7 @@ pub extern "C" fn t4a_qgrid_disc_local_dims(
         out_slice.copy_from_slice(&dims);
         T4A_SUCCESS
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the lower bounds per dimension.
@@ -154,7 +154,7 @@ pub extern "C" fn t4a_qgrid_disc_lower_bound(
         out_slice.copy_from_slice(lb);
         T4A_SUCCESS
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the upper bounds per dimension.
@@ -177,7 +177,7 @@ pub extern "C" fn t4a_qgrid_disc_upper_bound(
         out_slice.copy_from_slice(ub);
         T4A_SUCCESS
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the grid step per dimension.
@@ -200,7 +200,7 @@ pub extern "C" fn t4a_qgrid_disc_grid_step(
         out_slice.copy_from_slice(&step);
         T4A_SUCCESS
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -241,10 +241,10 @@ pub extern "C" fn t4a_qgrid_disc_origcoord_to_quantics(
                 out_slice.copy_from_slice(&quantics);
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Convert quantics indices to original (continuous) coordinates.
@@ -271,10 +271,10 @@ pub extern "C" fn t4a_qgrid_disc_quantics_to_origcoord(
                 out_slice.copy_from_slice(&coord);
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Convert original coordinates to grid indices.
@@ -301,10 +301,10 @@ pub extern "C" fn t4a_qgrid_disc_origcoord_to_grididx(
                 out_slice.copy_from_slice(&grididx);
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Convert grid indices to original coordinates.
@@ -331,10 +331,10 @@ pub extern "C" fn t4a_qgrid_disc_grididx_to_origcoord(
                 out_slice.copy_from_slice(&coord);
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Convert grid indices to quantics indices.
@@ -363,10 +363,10 @@ pub extern "C" fn t4a_qgrid_disc_grididx_to_quantics(
                 out_slice.copy_from_slice(&quantics);
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Convert quantics indices to grid indices.
@@ -395,10 +395,10 @@ pub extern "C" fn t4a_qgrid_disc_quantics_to_grididx(
                 out_slice.copy_from_slice(&grididx);
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -449,11 +449,11 @@ pub extern "C" fn t4a_qgrid_int_new(
                 unsafe { *out = Box::into_raw(boxed) };
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -474,7 +474,7 @@ pub extern "C" fn t4a_qgrid_int_ndims(
         *out = g.inner().ndims();
         T4A_SUCCESS
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the resolution (bits) per dimension.
@@ -497,7 +497,7 @@ pub extern "C" fn t4a_qgrid_int_rs(
         out_slice.copy_from_slice(rs);
         T4A_SUCCESS
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the local dimensions of all tensor sites.
@@ -522,7 +522,7 @@ pub extern "C" fn t4a_qgrid_int_local_dims(
         out_slice.copy_from_slice(&dims);
         T4A_SUCCESS
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the origin per dimension.
@@ -545,7 +545,7 @@ pub extern "C" fn t4a_qgrid_int_origin(
         out_slice.copy_from_slice(origin);
         T4A_SUCCESS
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================
@@ -578,10 +578,10 @@ pub extern "C" fn t4a_qgrid_int_origcoord_to_quantics(
                 out_slice.copy_from_slice(&quantics);
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Convert quantics indices to original (integer) coordinates.
@@ -608,10 +608,10 @@ pub extern "C" fn t4a_qgrid_int_quantics_to_origcoord(
                 out_slice.copy_from_slice(&coord);
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Convert original coordinates to grid indices.
@@ -638,10 +638,10 @@ pub extern "C" fn t4a_qgrid_int_origcoord_to_grididx(
                 out_slice.copy_from_slice(&grididx);
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Convert grid indices to original coordinates.
@@ -668,10 +668,10 @@ pub extern "C" fn t4a_qgrid_int_grididx_to_origcoord(
                 out_slice.copy_from_slice(&coord);
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Convert grid indices to quantics indices.
@@ -700,10 +700,10 @@ pub extern "C" fn t4a_qgrid_int_grididx_to_quantics(
                 out_slice.copy_from_slice(&quantics);
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Convert quantics indices to grid indices.
@@ -732,10 +732,10 @@ pub extern "C" fn t4a_qgrid_int_quantics_to_grididx(
                 out_slice.copy_from_slice(&grididx);
                 T4A_SUCCESS
             }
-            Err(_) => T4A_INVALID_ARGUMENT,
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 // ============================================================================

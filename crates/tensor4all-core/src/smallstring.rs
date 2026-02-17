@@ -80,9 +80,10 @@ pub struct SmallString<const MAX_LEN: usize, C: SmallChar = u16> {
 }
 
 /// Error type for SmallString operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmallStringError {
     /// The string exceeds the maximum length.
+    #[error("String too long ({actual} > {max})")]
     TooLong {
         /// The actual length of the string.
         actual: usize,
@@ -90,6 +91,7 @@ pub enum SmallStringError {
         max: usize,
     },
     /// A character cannot be represented in the target character type.
+    #[error("Invalid character: {char_value:?}")]
     InvalidChar {
         /// The character that could not be converted.
         char_value: char,

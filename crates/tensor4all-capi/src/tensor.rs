@@ -11,7 +11,7 @@ use tensor4all_core::TensorLike;
 
 use crate::types::{t4a_index, t4a_storage_kind, t4a_tensor, InternalIndex, InternalTensor};
 use crate::{
-    StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER,
+    StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER,
     T4A_SUCCESS,
 };
 
@@ -69,7 +69,7 @@ pub extern "C" fn t4a_tensor_get_rank(
         T4A_SUCCESS
     });
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the dimensions of a tensor.
@@ -108,7 +108,7 @@ pub extern "C" fn t4a_tensor_get_dims(
         T4A_SUCCESS
     });
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the indices of a tensor as cloned t4a_index handles.
@@ -149,7 +149,7 @@ pub extern "C" fn t4a_tensor_get_indices(
         T4A_SUCCESS
     });
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the storage kind of a tensor.
@@ -173,7 +173,7 @@ pub extern "C" fn t4a_tensor_get_storage_kind(
         T4A_SUCCESS
     });
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the dense f64 data from a tensor in row-major order.
@@ -209,7 +209,7 @@ pub extern "C" fn t4a_tensor_get_data_f64(
 
         let data = match tensor.inner().as_slice_f64() {
             Ok(s) => s,
-            Err(_) => return T4A_INVALID_ARGUMENT,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
         };
 
         unsafe { *out_len = data.len() };
@@ -228,7 +228,7 @@ pub extern "C" fn t4a_tensor_get_data_f64(
         T4A_SUCCESS
     });
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Get the dense complex64 data from a tensor in row-major order.
@@ -266,7 +266,7 @@ pub extern "C" fn t4a_tensor_get_data_c64(
 
         let data = match tensor.inner().as_slice_c64() {
             Ok(s) => s,
-            Err(_) => return T4A_INVALID_ARGUMENT,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
         };
 
         unsafe { *out_len = data.len() };
@@ -288,7 +288,7 @@ pub extern "C" fn t4a_tensor_get_data_c64(
         T4A_SUCCESS
     });
 
-    result.unwrap_or(T4A_INTERNAL_ERROR)
+    crate::unwrap_catch(result)
 }
 
 /// Create a new dense f64 tensor from indices and data.
@@ -347,7 +347,7 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
         Box::into_raw(Box::new(t4a_tensor::new(tensor)))
     });
 
-    result.unwrap_or(ptr::null_mut())
+    crate::unwrap_catch_ptr(result)
 }
 
 /// Create a new dense complex64 tensor from indices and data.
@@ -410,7 +410,7 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
         Box::into_raw(Box::new(t4a_tensor::new(tensor)))
     });
 
-    result.unwrap_or(ptr::null_mut())
+    crate::unwrap_catch_ptr(result)
 }
 
 /// Create a one-hot tensor with value 1.0 at the specified index positions.
@@ -457,11 +457,11 @@ pub extern "C" fn t4a_tensor_onehot(
 
         match InternalTensor::onehot(&index_vals) {
             Ok(tensor) => Box::into_raw(Box::new(t4a_tensor::new(tensor))),
-            Err(_) => ptr::null_mut(),
+            Err(e) => crate::err_null(e),
         }
     });
 
-    result.unwrap_or(ptr::null_mut())
+    crate::unwrap_catch_ptr(result)
 }
 
 #[cfg(test)]

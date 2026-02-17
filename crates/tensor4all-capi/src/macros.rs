@@ -62,7 +62,7 @@ macro_rules! impl_opaque_type_common {
                     Box::into_raw(Box::new(cloned))
                 }));
 
-                result.unwrap_or(std::ptr::null_mut())
+                crate::unwrap_catch_ptr(result)
             }
 
             /// Check if the object pointer is valid (non-null and dereferenceable)

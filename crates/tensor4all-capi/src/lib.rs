@@ -72,3 +72,111 @@ pub const T4A_TAG_TOO_LONG: StatusCode = -4;
 pub const T4A_BUFFER_TOO_SMALL: StatusCode = -5;
 /// An internal error occurred (e.g., a panic was caught).
 pub const T4A_INTERNAL_ERROR: StatusCode = -6;
+
+// ============================================================================
+// Thread-local error message storage
+// ============================================================================
+
+use std::cell::RefCell;
+
+thread_local! {
+    static LAST_ERROR: RefCell<String> = RefCell::new(String::new());
+}
+
+/// Store an error message in thread-local storage.
+fn set_last_error(msg: &str) {
+    LAST_ERROR.with(|cell| {
+        *cell.borrow_mut() = msg.to_string();
+    });
+}
+
+/// Store an error and return a status code.
+pub(crate) fn err_status<E: std::fmt::Display>(err: E, code: StatusCode) -> StatusCode {
+    set_last_error(&err.to_string());
+    code
+}
+
+/// Store an error and return a null pointer.
+pub(crate) fn err_null<T, E: std::fmt::Display>(err: E) -> *mut T {
+    set_last_error(&err.to_string());
+    std::ptr::null_mut()
+}
+
+/// Unwrap a `catch_unwind` result, storing any panic message.
+pub(crate) fn unwrap_catch(result: std::thread::Result<StatusCode>) -> StatusCode {
+    match result {
+        Ok(code) => code,
+        Err(panic) => {
+            let msg = panic_message(&panic);
+            set_last_error(&msg);
+            T4A_INTERNAL_ERROR
+        }
+    }
+}
+
+/// Unwrap a `catch_unwind` pointer result, storing any panic message.
+pub(crate) fn unwrap_catch_ptr<T>(result: std::thread::Result<*mut T>) -> *mut T {
+    match result {
+        Ok(ptr) => ptr,
+        Err(panic) => {
+            let msg = panic_message(&panic);
+            set_last_error(&msg);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+fn panic_message(info: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = info.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = info.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Unknown panic".to_string()
+    }
+}
+
+/// Retrieve the last error message.
+///
+/// # Arguments
+/// * `buf` - Output buffer for the error message (UTF-8, null-terminated).
+///           Pass null to query required length only.
+/// * `buf_len` - Size of the buffer in bytes.
+/// * `out_len` - Output: required buffer length including null terminator.
+///
+/// # Returns
+/// * `T4A_SUCCESS` - Message written (or length query succeeded).
+/// * `T4A_NULL_POINTER` - `out_len` is null.
+/// * `T4A_BUFFER_TOO_SMALL` - Buffer too small; `out_len` has the required size.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_last_error_message(
+    buf: *mut u8,
+    buf_len: libc::size_t,
+    out_len: *mut libc::size_t,
+) -> StatusCode {
+    if out_len.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    LAST_ERROR.with(|cell| {
+        let msg = cell.borrow();
+        let required_len = msg.len() + 1; // +1 for null terminator
+
+        unsafe { *out_len = required_len };
+
+        if buf.is_null() {
+            return T4A_SUCCESS;
+        }
+
+        if buf_len < required_len {
+            return T4A_BUFFER_TOO_SMALL;
+        }
+
+        unsafe {
+            std::ptr::copy_nonoverlapping(msg.as_ptr(), buf, msg.len());
+            *buf.add(msg.len()) = 0; // null terminator
+        }
+
+        T4A_SUCCESS
+    })
+}
