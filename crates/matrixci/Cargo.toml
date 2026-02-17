@@ -17,3 +17,10 @@ paste.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
+criterion.workspace = true
+faer.workspace = true
+rand_chacha.workspace = true
+
+[[bench]]
+name = "rrlu_bench"
+harness = false
