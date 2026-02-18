@@ -307,9 +307,7 @@ pub fn crossinterpolate<T: Scalar>(
     let opts = options.unwrap_or_default();
 
     // Find initial pivot (maximum absolute value)
-    let rows: Vec<usize> = (0..nrows(a)).collect();
-    let cols: Vec<usize> = (0..ncols(a)).collect();
-    let (first_i, first_j, _) = submatrix_argmax(a, &rows, &cols);
+    let (first_i, first_j, _) = submatrix_argmax(a, 0..nrows(a), 0..ncols(a));
 
     let mut ci = MatrixCI::from_matrix_with_pivot(a, (first_i, first_j));
 
