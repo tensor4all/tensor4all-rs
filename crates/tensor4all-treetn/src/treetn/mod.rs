@@ -14,6 +14,7 @@ mod fit;
 mod localupdate;
 mod operator_impl;
 mod ops;
+mod swap;
 mod tensor_like;
 mod transform;
 mod truncate;
@@ -40,6 +41,9 @@ pub use localupdate::{
     apply_local_update_sweep, get_boundary_edges, BoundaryEdge, LocalUpdateStep,
     LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
 };
+
+// Re-export swap types
+pub use swap::{SwapOptions, SwapPlan, SwapStep, SwapUpdater};
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
 ///
@@ -1270,6 +1274,92 @@ where
         }
 
         true
+    }
+
+    /// Reorder site indices so that each index id ends up at the target node.
+    ///
+    /// Uses a 2-site sweep: at each edge, indices that should move to the other node
+    /// are moved via contract + SVD factorize. Partial assignment is supported:
+    /// indices not in `target_assignment` stay in place.
+    ///
+    /// # Arguments
+    /// * `target_assignment` - Map from site index id to target node name.
+    /// * `options` - Truncation options for each SVD (default: no truncation, exact).
+    ///
+    /// # Errors
+    /// Returns an error if target nodes are missing, an index id is unknown, or sweep fails.
+    pub fn swap_site_indices(
+        &mut self,
+        target_assignment: &HashMap<<T::Index as IndexLike>::Id, V>,
+        options: &swap::SwapOptions,
+    ) -> Result<()>
+    where
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        V: Ord,
+    {
+        if target_assignment.is_empty() {
+            return Ok(());
+        }
+        let current = swap::current_site_assignment(self);
+        let _plan = swap::SwapPlan::<V, T::Index>::new(
+            &current,
+            target_assignment,
+            self.site_index_network().topology(),
+        )
+        .context("swap_site_indices: invalid target assignment")?;
+
+        if !self.is_canonicalized() {
+            let root = self
+                .node_names()
+                .into_iter()
+                .min()
+                .ok_or_else(|| anyhow::anyhow!("swap_site_indices: empty network"))?;
+            self.canonicalize_mut(
+                std::iter::once(root.clone()),
+                crate::options::CanonicalizationOptions::default(),
+            )
+            .context("swap_site_indices: canonicalize")?;
+        }
+
+        let is_target_satisfied = |current: &HashMap<<T::Index as IndexLike>::Id, V>| {
+            target_assignment
+                .iter()
+                .all(|(idx_id, target_node)| current.get(idx_id) == Some(target_node))
+        };
+
+        let max_passes = (self.node_count().max(1) * target_assignment.len().max(1)).max(4);
+        let mut updater = swap::SwapUpdater::new(target_assignment.clone(), options);
+        let mut pass = 0usize;
+        while pass < max_passes {
+            let current = swap::current_site_assignment(self);
+            if is_target_satisfied(&current) {
+                return Ok(());
+            }
+
+            let root = self
+                .canonical_region()
+                .iter()
+                .next()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("swap_site_indices: no canonical center"))?;
+            let plan = LocalUpdateSweepPlan::from_treetn(self, &root, 2)
+                .ok_or_else(|| anyhow::anyhow!("swap_site_indices: failed to build sweep plan"))?;
+
+            apply_local_update_sweep(self, &plan, &mut updater)
+                .context("swap_site_indices: sweep failed")?;
+            pass += 1;
+        }
+
+        let current = swap::current_site_assignment(self);
+        if is_target_satisfied(&current) {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "swap_site_indices: did not converge within {} passes",
+            max_passes
+        ))
+        .context("swap_site_indices: incomplete assignment")
     }
 
     /// Verify internal data consistency by checking structural invariants and reconstructing the TreeTN.
