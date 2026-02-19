@@ -49,12 +49,7 @@ fn create_mps_with_bond_dim(n: usize, phys_dim: usize, num_states: usize) -> Res
     assert_eq!(phys_dim, 2, "Only phys_dim=2 supported");
     let sites: Vec<DynIndex> = (0..n).map(|_| DynIndex::new_dyn(phys_dim)).collect();
 
-    let patterns: Vec<[f64; 2]> = vec![
-        [1.0, 0.0],
-        [0.0, 1.0],
-        [1.0, 1.0],
-        [1.0, -1.0],
-    ];
+    let patterns: Vec<[f64; 2]> = vec![[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, -1.0]];
 
     let mut b: Option<TensorTrain> = None;
     for i in 0..num_states {
@@ -73,10 +68,7 @@ fn create_mps_with_bond_dim(n: usize, phys_dim: usize, num_states: usize) -> Res
 
 /// Run GMRES with identity operator and report results.
 /// Returns (converged, reported_residual, actual_error).
-fn run_identity_gmres(
-    b: &TensorTrain,
-    max_outer_iters: usize,
-) -> Result<(bool, f64, f64)> {
+fn run_identity_gmres(b: &TensorTrain, max_outer_iters: usize) -> Result<(bool, f64, f64)> {
     let b_norm = b.norm();
 
     let apply_identity = |x: &TensorTrain| -> Result<TensorTrain> { Ok(x.clone()) };
@@ -97,8 +89,7 @@ fn run_identity_gmres(
         verbose: false,
     };
 
-    let result =
-        restart_gmres_with_truncation(&apply_identity, b, None, &options, &truncate_fn)?;
+    let result = restart_gmres_with_truncation(&apply_identity, b, None, &options, &truncate_fn)?;
 
     // Independently check ||x - b|| / ||b||
     let diff = result
@@ -141,12 +132,7 @@ fn main() -> Result<()> {
 
         eprintln!(
             "{:<20} {:?} {:<12} {:<15.2e} {:<15.2e} {}",
-            label,
-            bond_dims,
-            converged,
-            residual,
-            actual_err,
-            status
+            label, bond_dims, converged, residual, actual_err, status
         );
     }
 
