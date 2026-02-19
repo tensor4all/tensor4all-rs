@@ -769,7 +769,10 @@ where
         });
     }
 
-    // Initialize x: use x0 if provided, otherwise start from zero
+    // Initialize x: use x0 if provided, otherwise start from zero.
+    // Track whether x is zero to avoid unnecessary bond dimension doubling
+    // when adding the first correction via axpby.
+    let mut x_is_zero = x0.is_none();
     let mut x = match x0 {
         Some(x) => x.clone(),
         None => b.scale(AnyScalar::F64(0.0))?,
@@ -854,11 +857,18 @@ where
         }
 
         // Update solution: x = x + x'
-        x = x.axpby(
-            AnyScalar::F64(1.0),
-            &inner_result.solution,
-            AnyScalar::F64(1.0),
-        )?;
+        // When x is zero (first iteration with no initial guess), use x' directly
+        // to avoid bond dimension doubling from axpby with a zero tensor.
+        if x_is_zero {
+            x = inner_result.solution;
+            x_is_zero = false;
+        } else {
+            x = x.axpby(
+                AnyScalar::F64(1.0),
+                &inner_result.solution,
+                AnyScalar::F64(1.0),
+            )?;
+        }
         truncate(&mut x)?;
     }
 
@@ -1001,10 +1011,20 @@ where
     Tr: Fn(&mut T) -> Result<()>,
 {
     let mut result = x.clone();
+    // Detect if x is effectively zero.
+    // When x is created via scale(0.0), it preserves the original bond structure
+    // (e.g., bond dim 4), causing axpby to double bond dimensions unnecessarily.
+    // By detecting zero, we can use scaled_vi directly, avoiding the doubling.
+    let mut result_is_zero = x.norm() == 0.0;
 
     for (vi, yi) in v_basis.iter().zip(y.iter()) {
         let scaled_vi = vi.scale(yi.clone())?;
-        result = result.axpby(AnyScalar::F64(1.0), &scaled_vi, AnyScalar::F64(1.0))?;
+        if result_is_zero {
+            result = scaled_vi;
+            result_is_zero = false;
+        } else {
+            result = result.axpby(AnyScalar::F64(1.0), &scaled_vi, AnyScalar::F64(1.0))?;
+        }
         // Truncate after each addition to control bond dimension growth
         truncate(&mut result)?;
     }
