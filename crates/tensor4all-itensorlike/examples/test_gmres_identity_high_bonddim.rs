@@ -89,7 +89,7 @@ fn run_identity_gmres(b: &TensorTrain, max_outer_iters: usize) -> Result<(bool, 
         verbose: false,
     };
 
-    let result = restart_gmres_with_truncation(&apply_identity, b, None, &options, &truncate_fn)?;
+    let result = restart_gmres_with_truncation(apply_identity, b, None, &options, truncate_fn)?;
 
     // Independently check ||x - b|| / ||b||
     let diff = result
