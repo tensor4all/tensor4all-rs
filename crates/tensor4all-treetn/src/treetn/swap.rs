@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use anyhow::{Context, Result};
+use petgraph::stable_graph::NodeIndex;
 
 use tensor4all_core::{AllowedPairs, Canonical, FactorizeOptions, IndexLike, TensorLike};
 
@@ -235,6 +236,108 @@ where
     };
     // Path from A to T: path[0]=A, path[1]=first neighbor. If that neighbor is B, T is on B-side.
     !(path.len() >= 2 && path[1] == b_idx)
+}
+
+// ============================================================================
+// SubtreeOracle
+// ============================================================================
+
+/// Pre-computed DFS timestamps enabling O(1) "which side of edge?" queries.
+///
+/// For an edge (A, B): `is_target_on_a_side(A, B, target)` returns true iff
+/// `target` is in the component containing A when the edge is removed.
+pub(crate) struct SubtreeOracle<V> {
+    in_time: HashMap<V, usize>,
+    out_time: HashMap<V, usize>,
+}
+
+impl<V> SubtreeOracle<V>
+where
+    V: Clone + Hash + Eq + std::fmt::Debug + Send + Sync,
+{
+    /// Build from a tree topology rooted at `root`.
+    /// DFS entry/exit timestamps are computed iteratively.
+    pub(crate) fn new(topology: &NodeNameNetwork<V>, root: &V) -> Result<Self> {
+        let root_idx = topology
+            .node_index(root)
+            .ok_or_else(|| anyhow::anyhow!("SubtreeOracle: root {:?} not in topology", root))?;
+
+        let mut in_time: HashMap<V, usize> = HashMap::new();
+        let mut out_time: HashMap<V, usize> = HashMap::new();
+        let mut timer = 0usize;
+
+        // Stack: (node_idx, parent_idx, is_exit)
+        let mut stack: Vec<(NodeIndex, Option<NodeIndex>, bool)> = vec![(root_idx, None, false)];
+
+        while let Some((node_idx, parent_idx, is_exit)) = stack.pop() {
+            let name = topology
+                .node_name(node_idx)
+                .ok_or_else(|| anyhow::anyhow!("SubtreeOracle: node name not found"))?
+                .clone();
+            if is_exit {
+                out_time.insert(name, timer);
+                timer += 1;
+            } else {
+                in_time.insert(name, timer);
+                timer += 1;
+                // Push exit marker (processed after all children)
+                stack.push((node_idx, parent_idx, true));
+                // Push children (all neighbors except parent)
+                let graph = topology.graph();
+                for neighbor in graph.neighbors(node_idx) {
+                    if Some(neighbor) != parent_idx {
+                        stack.push((neighbor, Some(node_idx), false));
+                    }
+                }
+            }
+        }
+
+        Ok(Self { in_time, out_time })
+    }
+
+    /// Returns `true` iff `target` is on the A-side of edge (A, B).
+    ///
+    /// A-side = the connected component containing A after the (A,B) edge is removed.
+    pub(crate) fn is_target_on_a_side(&self, node_a: &V, node_b: &V, target: &V) -> bool {
+        if target == node_a {
+            return true;
+        }
+        if target == node_b {
+            return false;
+        }
+        let in_a = match self.in_time.get(node_a) {
+            Some(&t) => t,
+            None => return false,
+        };
+        let out_a = match self.out_time.get(node_a) {
+            Some(&t) => t,
+            None => return false,
+        };
+        let in_b = match self.in_time.get(node_b) {
+            Some(&t) => t,
+            None => return false,
+        };
+        let out_b = match self.out_time.get(node_b) {
+            Some(&t) => t,
+            None => return false,
+        };
+        let in_t = match self.in_time.get(target) {
+            Some(&t) => t,
+            None => return false,
+        };
+        let out_t = match self.out_time.get(target) {
+            Some(&t) => t,
+            None => return false,
+        };
+
+        // Is A the ancestor of B in the DFS tree? Then A-side = NOT in subtree(B).
+        if in_a <= in_b && out_b <= out_a {
+            !(in_b <= in_t && out_t <= out_b)
+        } else {
+            // B is ancestor of A; A-side = subtree(A).
+            in_a <= in_t && out_t <= out_a
+        }
+    }
 }
 
 // ============================================================================

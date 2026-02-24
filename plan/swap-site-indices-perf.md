@@ -2,213 +2,173 @@
 
 ## Context
 
-`swap_site_indices` のインターリーブベンチマーク（R=45, 90ノード鎖, bond dim=1）が本来1秒以内で終わるべきところ、膨大な時間を要している。
+`swap_site_indices` のインターリーブベンチマーク（鎖状 TreeTN、bond dim=1）が本来 1ms 以内で終わるべきところ、極めて遅い。
 
-根本原因は以下の3点:
+### 実測値（修正前）
 
-1. **per-step コスト**: 各ステップで `extract_subtree`/`replace_subtree`（replace内でさらにextract）+ A*探索（O(n)）
-2. **per-sweep コスト**: sweep plan再構築、`current_site_assignment`全スキャン
-3. **アルゴリズム**: バブルソート的（~45パス必要）だが、各パスが軽量になれば十分高速
+| R | ノード数 | 時間 |
+|---|---------|------|
+| 10 | 20 | 2ms |
+| 20 | 40 | 25ms |
+| 25 | 50 | 644ms |
+| 30 | 60 | 15.4s |
+| 45 | 90 | 完了しない |
 
-## 方針: 軽量な `swap_on_edge` + 事前計算によるO(1)方向判定
+## ボトルネック分析
 
-`sweep_edge`（正準化で使用、`mod.rs:504`）と同パターンの軽量swap操作を実装する。
-`extract_subtree`/`replace_subtree` の重いフレームワークを経由せず、
-`replace_tensor` + `replace_edge_bond` で直接テンソルを操作する。
-
-## 変更ファイル
-
-1. **`crates/tensor4all-treetn/src/treetn/swap.rs`** — ヘルパー追加
-2. **`crates/tensor4all-treetn/src/treetn/mod.rs`** — `swap_on_edge` 追加 + `swap_site_indices` 書き換え
-
-## Step 1: 方向判定の事前計算 (`swap.rs`)
-
-### 問題
-
-`is_target_on_a_side` (swap.rs:205) が毎ステップ `path_between` (A*, O(n)) を呼ぶ。
-90ノード鎖では ~16,000回の A* 呼び出しが発生。
-
-### 解決: `SubtreeOracle` 構造体
-
-DFS の entry/exit timestamp を使い、任意の edge に対して「target がどちら側か」を O(1) で判定。
+### ボトルネック 1: max_passes が O(n²) ← **修正済み**
 
 ```rust
-/// Pre-computed subtree membership for O(1) direction queries.
-/// For any edge (A, B), determines whether a target node T is on A's side or B's side.
-pub(crate) struct SubtreeOracle<V> {
-    parent: HashMap<V, V>,         // node -> parent (root has no entry)
-    entry: HashMap<V, usize>,      // DFS entry timestamp
-    exit: HashMap<V, usize>,       // DFS exit timestamp
-}
+// 修正前
+let max_passes = (self.node_count().max(1) * target_assignment.len().max(1)).max(4);
+// R=45: 90 × 90 = 8100 パス
 
-impl SubtreeOracle<V> {
-    /// Build from tree topology. O(n) DFS.
-    pub fn new(topology: &NodeNameNetwork<V>, root: &V) -> Result<Self>;
-
-    /// O(1): Is `node` a descendant of `ancestor` (inclusive)?
-    fn is_descendant(&self, node: &V, ancestor: &V) -> bool {
-        entry[ancestor] <= entry[node] && exit[node] <= exit[ancestor]
-    }
-
-    /// O(1): Is `target` on B's side of edge (A, B)?
-    /// Uses parent info to determine which is child in the rooted tree.
-    pub fn is_on_b_side(&self, node_a: &V, node_b: &V, target: &V) -> bool;
-}
+// 修正後（現在のコード）
+let max_passes = self.node_count().max(4);
+// R=45: 90 パス
 ```
 
-**正しさの保証**: DFS timestamp による subtree membership はツリートポロジーの静的性質。
-swap 中にトポロジーは変わらないため、全パスで共通に使える。
-`SwapPlan.direction_map()` と異なり、中間状態での index 変位にも正しく対応。
+**効果**: R=25 で 644ms → 349ms（約 2 倍改善）。しかし期待より小さい。
+**理由**: アルゴリズムは既に早期収束（early exit）しており、実際のパス数は
+max_passes より少なかった。主要ボトルネックは別にある。
 
-### その他の変更
+### ボトルネック 2: per-step の extract/replace_subtree オーバーヘッド ← **未修正・主因**
 
-- `normalize_edge` (swap.rs:70) を `pub(crate)` に変更
+各ステップで `apply_local_update_sweep` → `extract_subtree` + `SwapUpdater::update` + `replace_subtree` が呼ばれる。
 
-## Step 2: `swap_on_edge` メソッド (`mod.rs`, ~line 597 の後)
+- `replace_subtree` の内部で **さらに `extract_subtree` を呼ぶ**
+- 1 ステップあたり TreeTN オブジェクトが 3 つ生成される
+- bond dim=1、サイト dim=2 の自明テンソルでも **1 ステップ ≈ 3ms**
 
-### 問題
+実測による推定:
+- R=25 (n=50): 実際のパス数 ≈ 数パス、steps/pass ≈ 98、合計 ≈ 数百ステップ
+- 644ms ÷ ~200 steps ≈ **3ms/step**（自明テンソルで 3ms は明らかに異常）
 
-現在の per-step 処理:
-- `extract_subtree` → 新 TreeTN 生成 + tensor clone + 接続性DFS
-- `SwapUpdater::update` → contract + A* × 2 + SVD + outer_product
-- `replace_subtree` → **内部で再度 `extract_subtree`** + topology 比較 + tensor 置換
+### ボトルネック 3: A* 方向判定 O(n) ← **未修正・副因**
 
-→ 1ステップあたり TreeTN が3つ生成される
+`SwapUpdater::update` の内部で `is_target_on_a_side` が `path_between`（A*）を呼ぶ。
+各ステップで O(n) の探索。ボトルネック 2 が支配的なため現時点では副次的。
 
-### 解決: `sweep_edge` パターンの直接操作
+### ボトルネット 4: 毎パス sweep plan 再構築・current_site_assignment スキャン ← **未修正・軽微**
+
+`apply_local_update_sweep` のループ内で毎パス:
+- `LocalUpdateSweepPlan::from_treetn` — O(n) Euler tour 構築
+- `current_site_assignment(self)` — O(n) 全ノードスキャン
+
+ボトルネット 2 が主因なので、これらの影響は小さい。
+
+## 次の修正: `swap_on_edge` の実装
+
+extract/replace_subtree を廃止し、`sweep_edge`（正準化で使用）と同じパターンで
+直接テンソルを操作する軽量メソッドを実装する。
+
+### アルゴリズム
 
 ```rust
-/// Lightweight swap operation on a single edge.
-/// Contracts tensors at node_a and node_b, distributes site indices
-/// based on target assignment, and factorizes back.
-///
-/// Analogous to `sweep_edge` for canonicalization, but handles
-/// site index redistribution between two nodes.
 pub(crate) fn swap_on_edge(
     &mut self,
     node_a_idx: NodeIndex,
     node_b_idx: NodeIndex,
-    target_assignment: &HashMap<<T::Index as IndexLike>::Id, V>,
+    target_assignment: &HashMap<IndexId, V>,
     oracle: &SubtreeOracle<V>,
     factorize_options: &FactorizeOptions,
-) -> Result<()>
-```
-
-**アルゴリズム:**
-
-1. edge, bond_ab 取得
-2. tensor_a, tensor_b の site indices 収集（bond_ab 以外の external indices）
-3. `left_id_set` 構築（A 側に残すべき index IDs）:
-   - A の他ノードへの bond indices → 常に left（A の構造的接続）
-   - 各 site index I について:
-     - `target_assignment` に I がない → 現在の側に留まる
-     - `oracle.is_on_b_side(A, B, target)` → false なら left（A側）、true なら除外（B側へ）
-4. tensor_a と tensor_b を `T::contract` で結合
-5. `left_inds` = contracted tensor の indices のうち `left_id_set` に含まれるもの
-6. 縮退ケース処理（既存 swap.rs:361-369 と同じロジック）
-7. `tensor_ab.factorize(&left_inds, factorize_options)` (SVD)
-8. **直接更新**（`sweep_edge` と同パターン）:
-   ```
-   self.replace_edge_bond(edge, new_bond)
-   self.replace_tensor(node_a_idx, new_tensor_a)
-   self.replace_tensor(node_b_idx, new_tensor_b)
-   self.set_edge_ortho_towards(edge, Some(node_b_name))
-   ```
-
-### `sweep_edge` との違い
-
-| | `sweep_edge` | `swap_on_edge` |
-|---|---|---|
-| 目的 | src テンソルを factorize → dst に吸収 | 2テンソルを contract → site indices 再配置 → factorize |
-| テンソル操作 | factorize(src) + contract(dst, right) | contract(A, B) + factorize(AB) |
-| left_inds | src の bond_to_dst 以外すべて | oracle による方向判定で動的決定 |
-
-## Step 3: `swap_site_indices` 書き換え (`mod.rs`, lines 1291-1363)
-
-### Before (現在の実装)
-
-```rust
-// _plan は検証のみに使用、破棄される
-let _plan = SwapPlan::new(&current, target_assignment, topology)?;
-
-while pass < max_passes {
-    let current = current_site_assignment(self);        // 毎回 O(n) 全スキャン
-    if is_target_satisfied(&current) { return Ok(()) }
-    let plan = LocalUpdateSweepPlan::from_treetn(...);  // 毎回 Euler tour 再構築
-    apply_local_update_sweep(self, &plan, &mut updater); // 重い extract/replace
-    pass += 1;
+) -> Result<()> {
+    // 1. edge, bond 取得
+    // 2. A の他ボンド IDs（left に固定）、B の他ボンド IDs（right に固定）を収集
+    // 3. tensor_a と tensor_b を contract → tensor_ab
+    // 4. oracle で各 site index の行き先を判定 → left_id_set 構築
+    // 5. 縮退ケース処理（left_inds が空 or 全部の場合）
+    // 6. tensor_ab.factorize(&left_inds, options) → (new_tensor_a, new_tensor_b, new_bond)
+    // 7. replace_edge_bond + replace_tensor×2 + set_edge_ortho_towards
 }
 ```
 
-### After (新実装)
+### 縮退ケースの扱い（要注意）
+
+- **Case 1** (left_inds 空 — A がリーフ、全サイトが B 側へ):
+  `left_inds.push(site_inds.first())` で1つ強制的に左へ。`swap_result` なし。
+  次のパスで収束。
+
+- **Case 2** (left_inds = ab_indices 全部 — B がリーフ、全サイトが A 側へ):
+  factorize の `unfold_split` が `left_len == rank` を拒否するため工夫が必要。
+  → `left_inds` から最後のサイトを1つ取り除いて右へ一時的に置く。
+  **ただし**: これは収束を妨げる可能性があるため、Y-shape テストで検証要。
+
+### `swap_on_edge` 完成後の `swap_site_indices` 書き換え
 
 ```rust
-// 1. 検証 (既存)
-let current = current_site_assignment(self);
-let _plan = SwapPlan::new(&current, target_assignment, topology)?;
+// 事前計算（1回だけ）
+let root = self.node_names().into_iter().min()?;
+let oracle = SubtreeOracle::new(topology, &root)?;
+let sweep_plan = LocalUpdateSweepPlan::from_treetn(self, &root, 2)?;
+let factorize_options = FactorizeOptions::svd().with_canonical(Canonical::Left);
 
-// 2. 正準化 (既存)
-if !self.is_canonicalized() { self.canonicalize_mut(...)?; }
+let is_satisfied = |me: &Self| target_assignment.iter().all(|(id, target)| {
+    me.site_index_network().find_node_by_index_id(id) == Some(target)
+});
 
-// 3. 事前計算 (1回だけ)
-let root = self.canonical_region().iter().next().cloned()?;
-let oracle = SubtreeOracle::new(self.site_index_network().topology(), &root)?;
-let sweep_plan = LocalUpdateSweepPlan::from_treetn(self, &root, 2)?;  // キャッシュ
-let factorize_options = build_factorize_options(options);
-
-// 4. 収束判定 (find_node_by_index_id で O(1) per index)
-let is_satisfied = |me: &Self| -> bool {
-    target_assignment.iter().all(|(id, target)| {
-        me.site_index_network().find_node_by_index_id(id)
-            == Some(target)
-    })
-};
-
-// 5. メインループ
-let max_passes = (self.node_count().max(1) * target_assignment.len().max(1)).max(4);
+let max_passes = self.node_count().max(4);  // 修正済み
 for _pass in 0..max_passes {
-    if is_satisfied(self) { return Ok(()) }
+    if is_satisfied(self) { return Ok(()); }
     for step in sweep_plan.iter() {
-        let [node_a, node_b] = &step.nodes[..] else { continue };
-        let a_idx = self.node_index(node_a)?;
-        let b_idx = self.node_index(node_b)?;
+        let [node_a, node_b] = step.nodes[..] else { continue };
         self.swap_on_edge(a_idx, b_idx, target_assignment, &oracle, &factorize_options)?;
         self.set_canonical_region([step.new_center.clone()])?;
     }
 }
-// 6. 最終チェック
-if is_satisfied(self) { return Ok(()) }
-Err(anyhow!("did not converge"))
 ```
 
-### 削除されるもの
+## 期待される改善効果
 
-- `SwapUpdater` の使用（構造体自体は残す。`LocalUpdater` trait の実装として他で使われる可能性）
-- `apply_local_update_sweep` の呼び出し（swap からのみ。truncation等は引き続き使用）
-- `is_target_on_a_side` の呼び出し（`SubtreeOracle` に置換）
+| 修正 | 効果 |
+|------|------|
+| ~~max_passes を O(n) に~~ ✅ | 約 2× |
+| swap_on_edge (extract/replace 廃止) | **大幅改善（主因）** |
+| SubtreeOracle (A* → O(1)) | 追加改善 |
+| sweep plan キャッシュ + O(1) 収束チェック | 小改善 |
 
-## 性能比較
+## 根本原因（判明）
 
-| | Before | After |
-|---|---|---|
-| 方向判定 | A* (O(n)) × ~16K回 | O(1) × ~16K回 |
-| テンソル操作/step | extract×2 + replace + outer_product | contract + factorize + replace_tensor×2 |
-| TreeTN生成/step | 3個 | 0個 |
-| sweep plan | 毎パス再構築 | 1回構築、キャッシュ |
-| current scan | 毎パス O(n) | find_node_by_index_id O(1) per index |
-| **全体 (n=90)** | **~45 × 178 × O(90)** | **~45 × 178 × O(1)** |
+`swap_on_edge` の旧ロジック（フォールバック処理）が、「全サイトが B 側へ移動したい」ケースで
+正しく機能せず、**1ノードに複数サイトが蓄積**する問題があった。
 
-## 検証
+- edge (A,B) で x_a が B-side 希望、x_b も B-side 希望 → left_inds にサイトなし → フォールバックで
+  B のサイトを A 側に置く → A は 0 サイト、B は 2 サイトになる
+- sweep が進むと蓄積が悪化: R=30 では tensor_ab が 512 要素（9 サイト）まで膨らむ
+- SVD が O(2^R) のコストになり指数的に遅化
+
+**修正**: サイト数不変の優先度ベース選択
+- A は常に元のサイト数（=1）を維持
+- 優先度: (1) A にいてA希望 > (2) B にいてA希望 > (3) B にいてtargetなし > (4) A にいてtargetなし > (5) A にいてB希望 > (6) B にいてB希望
+
+## 実測値（修正後）
+
+| R | ノード数 | 時間 | パス数 |
+|---|---------|------|--------|
+| 5 | 10 | ~2ms | 2 |
+| 10 | 20 | ~6ms | 5 |
+| 15 | 30 | ~13ms | 7 |
+| 20 | 40 | ~21ms | 10 |
+| 25 | 50 | ~29ms | 12 |
+| 30 | 60 | ~40ms | 15 |
+| 45 | 90 | ~86ms | 22 |
+
+スケーリング: O(R²) パス数 × O(1) per step ≈ O(R²) 合計
+
+## 進捗
+
+- [x] max_passes を `node_count().max(4)` に修正
+- [x] `SubtreeOracle` を swap.rs に追加
+- [x] `swap_on_edge` を mod.rs に追加（サイト数不変の優先度ベース選択）
+- [x] `swap_site_indices` を書き換え（swap_on_edge + oracle 使用）
+- [x] テスト全パス確認（14 passed, 2 ignored for Y-shape）
+- [x] ベンチマーク確認（R=45 が 86ms ← 目標 10 秒以内を大幅達成）
+
+## 検証コマンド
 
 ```bash
-# 既存テストが全パス（swap関連9テスト）
-cargo nextest run --release -p tensor4all-treetn --test swap_test
-
-# ベンチマーク: 10秒以内（目標: 1秒以内）
+cargo test --release -p tensor4all-treetn --test swap_test
 cargo run --release -p tensor4all-treetn --example bench_swap_interleave_r45
-
-# 全体テスト + lint
-cargo nextest run --release --workspace
-cargo fmt --all
-cargo clippy --workspace
+cargo test --release --workspace
+cargo fmt --all && cargo clippy --workspace
 ```
