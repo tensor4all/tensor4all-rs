@@ -43,7 +43,7 @@ pub use localupdate::{
 };
 
 // Re-export swap types
-pub use swap::{SwapOptions, SwapPlan, SwapStep, SwapUpdater};
+pub use swap::{SwapOptions, SwapPlan, SwapStep};
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
 ///

@@ -61,7 +61,6 @@ pub use treetn::{
     SwapOptions,
     SwapPlan,
     SwapStep,
-    SwapUpdater,
     // Core type
     TreeTN,
     TreeTopology,

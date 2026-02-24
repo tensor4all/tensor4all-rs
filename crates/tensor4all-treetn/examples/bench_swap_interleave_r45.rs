@@ -26,10 +26,10 @@ fn run(r: usize) {
         let t = TensorDynLen::from_dense_data(indices, vec![1.0; size]);
         tn.add_tensor(i.to_string(), t).unwrap();
     }
-    for i in 0..n - 1 {
+    for (i, bond) in bonds.iter().enumerate() {
         let ni = tn.node_index(&i.to_string()).unwrap();
         let nj = tn.node_index(&(i + 1).to_string()).unwrap();
-        tn.connect(ni, &bonds[i], nj, &bonds[i]).unwrap();
+        tn.connect(ni, bond, nj, bond).unwrap();
     }
     let mut target = HashMap::new();
     for k in 0..r {
