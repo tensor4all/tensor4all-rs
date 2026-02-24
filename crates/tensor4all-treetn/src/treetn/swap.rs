@@ -339,32 +339,16 @@ mod tests {
 
         // Edge (A, B): A-side = {A}, B-side = {B, C}
         assert!(oracle.is_target_on_a_side(&"A".to_string(), &"B".to_string(), &"A".to_string()));
-        assert!(!oracle.is_target_on_a_side(
-            &"A".to_string(),
-            &"B".to_string(),
-            &"B".to_string()
-        ));
-        assert!(!oracle.is_target_on_a_side(
-            &"A".to_string(),
-            &"B".to_string(),
-            &"C".to_string()
-        ));
+        assert!(!oracle.is_target_on_a_side(&"A".to_string(), &"B".to_string(), &"B".to_string()));
+        assert!(!oracle.is_target_on_a_side(&"A".to_string(), &"B".to_string(), &"C".to_string()));
 
         // Edge (B, C): B-side = {A, B}, C-side = {C}
         assert!(oracle.is_target_on_a_side(&"B".to_string(), &"C".to_string(), &"A".to_string()));
         assert!(oracle.is_target_on_a_side(&"B".to_string(), &"C".to_string(), &"B".to_string()));
-        assert!(!oracle.is_target_on_a_side(
-            &"B".to_string(),
-            &"C".to_string(),
-            &"C".to_string()
-        ));
+        assert!(!oracle.is_target_on_a_side(&"B".to_string(), &"C".to_string(), &"C".to_string()));
 
         // Reversed edge (B, A): B-side = {B, C}, A-side = {A}
-        assert!(!oracle.is_target_on_a_side(
-            &"B".to_string(),
-            &"A".to_string(),
-            &"A".to_string()
-        ));
+        assert!(!oracle.is_target_on_a_side(&"B".to_string(), &"A".to_string(), &"A".to_string()));
         assert!(oracle.is_target_on_a_side(&"B".to_string(), &"A".to_string(), &"B".to_string()));
         assert!(oracle.is_target_on_a_side(&"B".to_string(), &"A".to_string(), &"C".to_string()));
     }
@@ -377,11 +361,7 @@ mod tests {
 
         // Edge (B, C): B-side = {A, B}, C-side = {C, D}
         assert!(oracle.is_target_on_a_side(&"B".to_string(), &"C".to_string(), &"A".to_string()));
-        assert!(!oracle.is_target_on_a_side(
-            &"B".to_string(),
-            &"C".to_string(),
-            &"D".to_string()
-        ));
+        assert!(!oracle.is_target_on_a_side(&"B".to_string(), &"C".to_string(), &"D".to_string()));
     }
 
     #[test]
