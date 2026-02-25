@@ -1441,9 +1441,13 @@ where
 
     /// Reorder site indices so that each index id ends up at the target node.
     ///
-    /// Uses a 2-site sweep: at each edge, indices that should move to the other node
-    /// are moved via contract + SVD factorize. Partial assignment is supported:
-    /// indices not in `target_assignment` stay in place.
+    /// Uses a 2-site sweep: at each edge, the two adjacent tensors are contracted and
+    /// re-factorized via SVD so that indices move toward their target nodes.
+    /// Partial assignment is supported: only the indices listed in `target_assignment`
+    /// are guaranteed to reach their target nodes.  Indices not in `target_assignment`
+    /// may be redistributed between adjacent nodes during the sweep to satisfy the
+    /// site-count-preserving invariant (each node retains the same number of site
+    /// indices it started with).
     ///
     /// # Arguments
     /// * `target_assignment` - Map from site index id to target node name.
