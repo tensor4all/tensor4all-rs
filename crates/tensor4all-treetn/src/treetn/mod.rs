@@ -28,7 +28,7 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
-use tensor4all_core::{AllowedPairs, FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, Canonical, FactorizeOptions, IndexLike, TensorLike};
 
 use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
@@ -43,7 +43,7 @@ pub use localupdate::{
 };
 
 // Re-export swap types
-pub use swap::{SwapOptions, SwapPlan, SwapStep, SwapUpdater};
+pub use swap::{SwapOptions, SwapPlan, SwapStep};
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
 ///
@@ -1276,11 +1276,178 @@ where
         true
     }
 
+    /// Perform an in-place adjacent swap on the edge (node_a, node_b).
+    ///
+    /// Contracts the two tensors, decides which indices go to which side
+    /// using `oracle` and `target_assignment`, then factorizes back in-place.
+    /// No subtree extraction — operates directly on the full TreeTN.
+    ///
+    /// Degenerate cases:
+    /// - `left_inds` empty (Case 1): prefer a site from B as placeholder so
+    ///   A's sites can migrate to B.
+    /// - `left_inds` = all indices (Case 2): remove last site from left_inds
+    ///   (temporarily places it on B so factorize is valid).
+    pub(crate) fn swap_on_edge(
+        &mut self,
+        node_a_idx: NodeIndex,
+        node_b_idx: NodeIndex,
+        target_assignment: &HashMap<<T::Index as IndexLike>::Id, V>,
+        oracle: &swap::SubtreeOracle<V>,
+        factorize_options: &FactorizeOptions,
+    ) -> Result<()>
+    where
+        <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        V: Ord,
+    {
+        let node_a_name = self
+            .graph
+            .node_name(node_a_idx)
+            .ok_or_else(|| anyhow::anyhow!("swap_on_edge: node_a not found"))?
+            .clone();
+        let node_b_name = self
+            .graph
+            .node_name(node_b_idx)
+            .ok_or_else(|| anyhow::anyhow!("swap_on_edge: node_b not found"))?
+            .clone();
+
+        let edge = {
+            let g = self.graph.graph();
+            g.edges_connecting(node_a_idx, node_b_idx)
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("swap_on_edge: no edge between nodes"))?
+                .id()
+        };
+        let bond_ab = self
+            .bond_index(edge)
+            .ok_or_else(|| anyhow::anyhow!("swap_on_edge: bond not found"))?
+            .clone();
+
+        // Structural bond ids of A and B (bonds other than bond_ab)
+        let other_bond_ids_a: HashSet<<T::Index as IndexLike>::Id> = self
+            .edges_for_node(node_a_idx)
+            .iter()
+            .filter_map(|(e, _)| self.bond_index(*e).cloned())
+            .filter(|b| b.id() != bond_ab.id())
+            .map(|b| b.id().to_owned())
+            .collect();
+        let other_bond_ids_b: HashSet<<T::Index as IndexLike>::Id> = self
+            .edges_for_node(node_b_idx)
+            .iter()
+            .filter_map(|(e, _)| self.bond_index(*e).cloned())
+            .filter(|b| b.id() != bond_ab.id())
+            .map(|b| b.id().to_owned())
+            .collect();
+
+        let tensor_a = self
+            .tensor(node_a_idx)
+            .ok_or_else(|| anyhow::anyhow!("swap_on_edge: tensor_a not found"))?
+            .clone();
+        let tensor_b = self
+            .tensor(node_b_idx)
+            .ok_or_else(|| anyhow::anyhow!("swap_on_edge: tensor_b not found"))?
+            .clone();
+
+        // Site ids currently at each node (all non-bond indices)
+        let site_ids_a: HashSet<<T::Index as IndexLike>::Id> = tensor_a
+            .external_indices()
+            .iter()
+            .filter(|i| i.id() != bond_ab.id() && !other_bond_ids_a.contains(i.id()))
+            .map(|i| i.id().to_owned())
+            .collect();
+        let site_ids_b: HashSet<<T::Index as IndexLike>::Id> = tensor_b
+            .external_indices()
+            .iter()
+            .filter(|i| i.id() != bond_ab.id() && !other_bond_ids_b.contains(i.id()))
+            .map(|i| i.id().to_owned())
+            .collect();
+
+        let tensor_ab = T::contract(&[&tensor_a, &tensor_b], AllowedPairs::All)
+            .context("swap_on_edge: contract")?;
+
+        let ab_indices = tensor_ab.external_indices();
+
+        // Build left_inds with site-count preservation.
+        //
+        // Invariant: after factorize, A keeps exactly |site_ids_a| site indices
+        // and B keeps exactly |site_ids_b| site indices.  This prevents sites from
+        // accumulating on a single node across successive swap_on_edge calls.
+        //
+        // Priority for assigning a site to A-side (lower = preferred for A):
+        //   1: originally on A, target is A-side  (keep in place — best)
+        //   2: originally on B, target is A-side  (genuine swap — improves placement)
+        //   3: originally on B, no target          (indifferent; can come to A, frees B-slot)
+        //   4: originally on A, no target          (indifferent; stays on A)
+        //   5: originally on A, target is B-side   (stays on A temporarily; blocked)
+        //   6: originally on B, target is B-side   (worst; forced onto A only if unavoidable)
+        let target_a_site_count = site_ids_a.len();
+        let mut site_candidates: Vec<(T::Index, u8)> = Vec::new();
+        for idx in &ab_indices {
+            let id = idx.id();
+            if site_ids_a.contains(id) {
+                let priority = match target_assignment.get(id) {
+                    None => 4,
+                    Some(t) => {
+                        if oracle.is_target_on_a_side(&node_a_name, &node_b_name, t) {
+                            1
+                        } else {
+                            5
+                        }
+                    }
+                };
+                site_candidates.push((idx.clone(), priority));
+            } else if site_ids_b.contains(id) {
+                let priority = match target_assignment.get(id) {
+                    None => 3,
+                    Some(t) => {
+                        if oracle.is_target_on_a_side(&node_a_name, &node_b_name, t) {
+                            2
+                        } else {
+                            6
+                        }
+                    }
+                };
+                site_candidates.push((idx.clone(), priority));
+            }
+        }
+        site_candidates.sort_by_key(|(_, p)| *p);
+        let site_ids_for_a: HashSet<<T::Index as IndexLike>::Id> = site_candidates
+            .iter()
+            .take(target_a_site_count)
+            .map(|(idx, _)| idx.id().clone())
+            .collect();
+
+        // left_inds = structural bonds of A + sites chosen for A
+        let left_inds: Vec<T::Index> = ab_indices
+            .iter()
+            .filter(|i| other_bond_ids_a.contains(i.id()) || site_ids_for_a.contains(i.id()))
+            .cloned()
+            .collect();
+
+        let result = tensor_ab
+            .factorize(&left_inds, factorize_options)
+            .map_err(|e| anyhow::anyhow!("swap_on_edge: factorize failed: {}", e))?;
+
+        self.replace_edge_bond(edge, result.bond_index)
+            .context("swap_on_edge: replace_edge_bond")?;
+        self.replace_tensor(node_a_idx, result.left)
+            .context("swap_on_edge: replace tensor_a")?;
+        self.replace_tensor(node_b_idx, result.right)
+            .context("swap_on_edge: replace tensor_b")?;
+        self.set_edge_ortho_towards(edge, Some(node_b_name))
+            .context("swap_on_edge: set_edge_ortho_towards")?;
+
+        Ok(())
+    }
+
     /// Reorder site indices so that each index id ends up at the target node.
     ///
-    /// Uses a 2-site sweep: at each edge, indices that should move to the other node
-    /// are moved via contract + SVD factorize. Partial assignment is supported:
-    /// indices not in `target_assignment` stay in place.
+    /// Uses a 2-site sweep: at each edge, the two adjacent tensors are contracted and
+    /// re-factorized via SVD so that indices move toward their target nodes.
+    /// Partial assignment is supported: only the indices listed in `target_assignment`
+    /// are guaranteed to reach their target nodes.  Indices not in `target_assignment`
+    /// may be redistributed between adjacent nodes during the sweep to satisfy the
+    /// site-count-preserving invariant (each node retains the same number of site
+    /// indices it started with).
     ///
     /// # Arguments
     /// * `target_assignment` - Map from site index id to target node name.
@@ -1301,6 +1468,8 @@ where
         if target_assignment.is_empty() {
             return Ok(());
         }
+
+        // Validate: all target nodes exist and all index ids are in the network.
         let current = swap::current_site_assignment(self);
         let _plan = swap::SwapPlan::<V, T::Index>::new(
             &current,
@@ -1322,37 +1491,58 @@ where
             .context("swap_site_indices: canonicalize")?;
         }
 
-        let is_target_satisfied = |current: &HashMap<<T::Index as IndexLike>::Id, V>| {
-            target_assignment
-                .iter()
-                .all(|(idx_id, target_node)| current.get(idx_id) == Some(target_node))
-        };
+        // Build oracle and sweep plan once (topology does not change during swaps).
+        let root = self
+            .node_names()
+            .into_iter()
+            .min()
+            .ok_or_else(|| anyhow::anyhow!("swap_site_indices: empty network"))?;
+        let oracle = swap::SubtreeOracle::new(self.site_index_network().topology(), &root)
+            .context("swap_site_indices: build oracle")?;
+        let sweep_plan = LocalUpdateSweepPlan::from_treetn(self, &root, 2)
+            .ok_or_else(|| anyhow::anyhow!("swap_site_indices: failed to build sweep plan"))?;
 
-        let max_passes = (self.node_count().max(1) * target_assignment.len().max(1)).max(4);
-        let mut updater = swap::SwapUpdater::new(target_assignment.clone(), options);
-        let mut pass = 0usize;
-        while pass < max_passes {
-            let current = swap::current_site_assignment(self);
-            if is_target_satisfied(&current) {
-                return Ok(());
-            }
-
-            let root = self
-                .canonical_region()
-                .iter()
-                .next()
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("swap_site_indices: no canonical center"))?;
-            let plan = LocalUpdateSweepPlan::from_treetn(self, &root, 2)
-                .ok_or_else(|| anyhow::anyhow!("swap_site_indices: failed to build sweep plan"))?;
-
-            apply_local_update_sweep(self, &plan, &mut updater)
-                .context("swap_site_indices: sweep failed")?;
-            pass += 1;
+        let mut factorize_options = FactorizeOptions::svd().with_canonical(Canonical::Left);
+        if let Some(mr) = options.max_rank {
+            factorize_options = factorize_options.with_max_rank(mr);
+        }
+        if let Some(rtol) = options.rtol {
+            factorize_options = factorize_options.with_rtol(rtol);
         }
 
-        let current = swap::current_site_assignment(self);
-        if is_target_satisfied(&current) {
+        let is_satisfied = |treetn: &Self| {
+            target_assignment.iter().all(|(idx_id, target_node)| {
+                treetn
+                    .site_space(target_node)
+                    .is_some_and(|ss| ss.iter().any(|i| i.id() == idx_id))
+            })
+        };
+
+        let max_passes = self.node_count().max(4);
+        for _pass in 0..max_passes {
+            if is_satisfied(self) {
+                return Ok(());
+            }
+            for step in sweep_plan.iter() {
+                if step.nodes.len() != 2 {
+                    continue;
+                }
+                let node_a = &step.nodes[0];
+                let node_b = &step.nodes[1];
+                let a_idx = self.node_index(node_a).ok_or_else(|| {
+                    anyhow::anyhow!("swap_site_indices: node {:?} not found", node_a)
+                })?;
+                let b_idx = self.node_index(node_b).ok_or_else(|| {
+                    anyhow::anyhow!("swap_site_indices: node {:?} not found", node_b)
+                })?;
+                self.swap_on_edge(a_idx, b_idx, target_assignment, &oracle, &factorize_options)
+                    .context("swap_site_indices: swap_on_edge")?;
+                self.set_canonical_region([step.new_center.clone()])
+                    .context("swap_site_indices: set_canonical_region")?;
+            }
+        }
+
+        if is_satisfied(self) {
             return Ok(());
         }
         Err(anyhow::anyhow!(
