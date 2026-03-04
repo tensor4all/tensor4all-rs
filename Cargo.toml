@@ -51,10 +51,10 @@ omeco = "0.2.1"
 hdf5-metno = { version = "0.12", default-features = false }
 ndarray = "0.17"
 hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", default-features = false }
-tenferro-algebra = { git = "https://github.com/tensor4all/tenferro-rs", rev = "c80d3409caa72135d5ac9d160a7a5ff4be17138d" }
-tenferro-device = { git = "https://github.com/tensor4all/tenferro-rs", rev = "c80d3409caa72135d5ac9d160a7a5ff4be17138d" }
-tenferro-prims = { git = "https://github.com/tensor4all/tenferro-rs", rev = "c80d3409caa72135d5ac9d160a7a5ff4be17138d" }
-tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs", rev = "c80d3409caa72135d5ac9d160a7a5ff4be17138d" }
-tenferro-einsum = { git = "https://github.com/tensor4all/tenferro-rs", rev = "c80d3409caa72135d5ac9d160a7a5ff4be17138d" }
-tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs", rev = "c80d3409caa72135d5ac9d160a7a5ff4be17138d" }
-tenferro-dyadtensor = { git = "https://github.com/tensor4all/tenferro-rs", rev = "c80d3409caa72135d5ac9d160a7a5ff4be17138d" }
+tenferro-algebra = { git = "https://github.com/tensor4all/tenferro-rs", rev = "f574e5ce6adb5be6c8f63c86a2395067aa724106" }
+tenferro-device = { git = "https://github.com/tensor4all/tenferro-rs", rev = "f574e5ce6adb5be6c8f63c86a2395067aa724106" }
+tenferro-prims = { git = "https://github.com/tensor4all/tenferro-rs", rev = "f574e5ce6adb5be6c8f63c86a2395067aa724106" }
+tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs", rev = "f574e5ce6adb5be6c8f63c86a2395067aa724106" }
+tenferro-einsum = { git = "https://github.com/tensor4all/tenferro-rs", rev = "f574e5ce6adb5be6c8f63c86a2395067aa724106" }
+tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs", rev = "f574e5ce6adb5be6c8f63c86a2395067aa724106" }
+tenferro-dyadtensor = { git = "https://github.com/tensor4all/tenferro-rs", rev = "f574e5ce6adb5be6c8f63c86a2395067aa724106" }
