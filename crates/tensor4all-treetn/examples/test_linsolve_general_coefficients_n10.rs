@@ -188,7 +188,7 @@ fn scale_treetn(
     for node_name in &node_names {
         let node_idx = treetn.node_index(node_name).unwrap();
         let tensor = treetn.tensor(node_idx).unwrap();
-        let scaled_tensor = tensor.scale(AnyScalar::F64(scalar))?;
+        let scaled_tensor = tensor.scale(AnyScalar::new_real(scalar))?;
         scaled.add_tensor(node_name.clone(), scaled_tensor)?;
     }
 

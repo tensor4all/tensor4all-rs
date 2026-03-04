@@ -9,7 +9,6 @@ use crate::truncation::{HasTruncationParams, TruncationParams};
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use num_complex::{Complex64, ComplexFloat};
 use std::sync::Arc;
-use tensor4all_tensorbackend::faer_traits::ComplexField;
 use tensor4all_tensorbackend::mdarray::DSlice;
 use tensor4all_tensorbackend::{svd_backend, SvdResult};
 use thiserror::Error;
@@ -174,10 +173,8 @@ where
     // Extract singular values and convert to real type.
     //
     // NOTE:
-    // `mdarray-linalg-faer` writes singular values into a diagonal view created by
-    // `into_faer_diag_mut`, which (by design) treats the **first row** as the
-    // singular-value buffer (LAPACK-style convention). Therefore, the values live at
-    // `s[0, i]`, not necessarily at `s[i, i]`.
+    // `svd_backend` stores singular values in the first row (`s[0, i]`)
+    // to match tensor4all's existing SVD result convention.
     //
     // Singular values are always real (f64), even for complex matrices.
     let mut s_vec: Vec<f64> = Vec::with_capacity(k);
@@ -199,7 +196,7 @@ where
 
     // Extract V^H as k×n (first k rows of the backend's vt).
     //
-    // `mdarray-linalg` returns `vt` as V^T for real types or V^H for complex types.
+    // Backend `vt` corresponds to V^T for real types or V^H for complex types.
     // We keep V^H directly (no conjugate-transpose) so that:
     // - `svd_with` can derive V from V^H
     // - `factorize_svd` can use V^H directly for correct reconstruction A = U * S * V^H
@@ -252,7 +249,11 @@ fn svd_truncated_usvh<T>(
     options: &SvdOptions,
 ) -> Result<SvdTruncatedUsvhResult<T>, SvdError>
 where
-    T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
+    T: StorageScalar
+        + ComplexFloat
+        + Default
+        + From<<T as ComplexFloat>::Real>
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     // Determine rtol to use
@@ -330,7 +331,7 @@ where
 /// \[ A = U * Σ * V^H \]
 /// where \(V^H\) is the conjugate-transpose of \(V\).
 ///
-/// `mdarray-linalg` returns `vt` (conceptually \(V^T\) / \(V^H\) depending on scalar type),
+/// Backend SVD returns `vt` (conceptually \(V^T\) / \(V^H\) depending on scalar type),
 /// and we return **V** (not Vt), so we build V by (conjugate-)transposing the leading k rows.
 ///
 /// # Arguments
@@ -359,7 +360,11 @@ pub fn svd<T>(
     left_inds: &[DynIndex],
 ) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError>
 where
-    T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
+    T: StorageScalar
+        + ComplexFloat
+        + Default
+        + From<<T as ComplexFloat>::Real>
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     svd_with::<T>(t, left_inds, &SvdOptions::default())
@@ -381,7 +386,7 @@ where
 /// \[ A = U * Σ * V^H \]
 /// where \(V^H\) is the conjugate-transpose of \(V\).
 ///
-/// `mdarray-linalg` returns `vt` (conceptually \(V^T\) / \(V^H\) depending on scalar type),
+/// Backend SVD returns `vt` (conceptually \(V^T\) / \(V^H\) depending on scalar type),
 /// and we return **V** (not Vt), so we build V by (conjugate-)transposing the leading k rows.
 ///
 /// # Arguments
@@ -413,7 +418,11 @@ pub fn svd_with<T>(
     options: &SvdOptions,
 ) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError>
 where
-    T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
+    T: StorageScalar
+        + ComplexFloat
+        + Default
+        + From<<T as ComplexFloat>::Real>
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     let (u_vec, s_vec, vh_vec, bond_index, left_indices, right_indices, n) =
@@ -456,7 +465,7 @@ where
 /// The input tensor can have any rank >= 2, and indices are split into left and right groups.
 /// The tensor is unfolded into a matrix by grouping left indices as rows and right indices as columns.
 ///
-/// `mdarray-linalg` returns `vt` (conceptually \(V^T\) / \(V^H\) depending on scalar type),
+/// Backend SVD returns `vt` (conceptually \(V^T\) / \(V^H\) depending on scalar type),
 /// and we return **V** (not Vt), so we build V by conjugate-transposing the leading k rows.
 ///
 /// Note: Singular values `S` are always real (f64), even for complex input tensors.
@@ -481,7 +490,11 @@ pub(crate) fn svd_for_factorize<T>(
     options: &SvdOptions,
 ) -> Result<SvdFactorizeResult, SvdError>
 where
-    T: StorageScalar + ComplexFloat + ComplexField + Default + From<<T as ComplexFloat>::Real>,
+    T: StorageScalar
+        + ComplexFloat
+        + Default
+        + From<<T as ComplexFloat>::Real>
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     let (u_vec, singular_values, vh_vec, bond_index, left_indices, right_indices, _n) =

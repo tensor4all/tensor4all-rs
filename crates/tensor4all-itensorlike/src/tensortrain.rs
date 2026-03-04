@@ -732,7 +732,7 @@ impl TensorTrain {
     ///
     /// # Example
     /// ```ignore
-    /// let scaled = tt.scale(AnyScalar::F64(2.0))?;
+    /// let scaled = tt.scale(AnyScalar::new_real(2.0))?;
     /// // scaled represents 2 * tt
     /// ```
     pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
@@ -1596,7 +1596,7 @@ mod tests {
         let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
         // Scale by 2.0
-        let scaled = tt.scale(AnyScalar::F64(2.0)).unwrap();
+        let scaled = tt.scale(AnyScalar::new_real(2.0)).unwrap();
 
         // Verify: norm of scaled should be 2 * norm of original
         let orig_norm = tt.norm();
@@ -1612,7 +1612,7 @@ mod tests {
     #[test]
     fn test_scale_empty() {
         let tt = TensorTrain::new(vec![]).unwrap();
-        let scaled = tt.scale(AnyScalar::F64(2.0)).unwrap();
+        let scaled = tt.scale(AnyScalar::new_real(2.0)).unwrap();
         assert!(scaled.is_empty());
     }
 
@@ -1630,7 +1630,7 @@ mod tests {
 
         // Compute 2*tt1 + 3*tt2 = 5*tt1 (since tt1 == tt2)
         let result = tt1
-            .axpby(AnyScalar::F64(2.0), &tt2, AnyScalar::F64(3.0))
+            .axpby(AnyScalar::new_real(2.0), &tt2, AnyScalar::new_real(3.0))
             .unwrap();
 
         // Verify numerically via to_dense
@@ -1670,7 +1670,7 @@ mod tests {
         let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
         // Use TensorLike::scale
-        let scaled = TensorLike::scale(&tt, AnyScalar::F64(2.0)).unwrap();
+        let scaled = TensorLike::scale(&tt, AnyScalar::new_real(2.0)).unwrap();
 
         let orig_norm = tt.norm();
         let scaled_norm = TensorLike::norm(&scaled);

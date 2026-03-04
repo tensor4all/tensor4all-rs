@@ -86,42 +86,7 @@ fn test_qr_reconstruction() {
     let (q, r) = qr::<f64>(&tensor, std::slice::from_ref(&i)).expect("QR should succeed");
 
     // Reconstruct: A = Q * R
-    // Extract Q and R data
-    let q_data = match q.storage().as_ref() {
-        Storage::DenseF64(dense) => dense.as_slice(),
-        _ => panic!("Q should be dense"),
-    };
-    let r_data = match r.storage().as_ref() {
-        Storage::DenseF64(dense) => dense.as_slice(),
-        _ => panic!("R should be dense"),
-    };
-
-    // Reconstruct: A[i,j] = sum_r Q[i,r] * R[r,j]
-    let q_dims = q.dims();
-    let r_dims = r.dims();
-    let m = q_dims[0];
-    let n = r_dims[1];
-    let k = q_dims[1];
-    let mut reconstructed_data = vec![0.0; m * n];
-    for i in 0..m {
-        for j in 0..n {
-            let mut sum = 0.0;
-            for r in 0..k {
-                sum += q_data[i * k + r] * r_data[r * n + j];
-            }
-            reconstructed_data[i * n + j] = sum;
-        }
-    }
-
-    // Create reconstructed tensor for comparison
-    let reconstructed_storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(reconstructed_data, &[m, n]),
-    ));
-    let reconstructed: TensorDynLen =
-        TensorDynLen::new(vec![i.clone(), j.clone()], reconstructed_storage);
-
-    // Check dimensions match
-    assert_eq!(reconstructed.dims(), vec![3, 4]);
+    let reconstructed = q.contract(&r);
 
     // Check reconstruction accuracy
     assert!(
@@ -231,42 +196,10 @@ fn test_qr_complex_reconstruction() {
 
     let (q, r) = qr_c64(&tensor, std::slice::from_ref(&i_idx)).expect("Complex QR should succeed");
 
-    let q_data = match q.storage().as_ref() {
-        Storage::DenseC64(dense) => dense.as_slice(),
-        _ => panic!("Q should be dense complex"),
-    };
-    let r_data = match r.storage().as_ref() {
-        Storage::DenseC64(dense) => dense.as_slice(),
-        _ => panic!("R should be dense complex"),
-    };
-
-    let q_dims = q.dims();
-    let r_dims = r.dims();
-    let m = q_dims[0];
-    let n = r_dims[1];
-    let k = q_dims[1];
-
-    // A[i,j] = Σ_r Q[i,r] * R[r,j] (no conjugation needed for QR)
-    let mut reconstructed = vec![Complex64::new(0.0, 0.0); m * n];
-    for i in 0..m {
-        for j in 0..n {
-            let mut sum = Complex64::new(0.0, 0.0);
-            for r in 0..k {
-                sum += q_data[i * k + r] * r_data[r * n + j];
-            }
-            reconstructed[i * n + j] = sum;
-        }
-    }
-
-    for (idx, (orig, recon)) in data.iter().zip(reconstructed.iter()).enumerate() {
-        let diff = *orig - *recon;
-        assert!(
-            diff.norm() < 1e-8,
-            "Element {}: original={:?}, reconstructed={:?}, diff={:?}",
-            idx,
-            orig,
-            recon,
-            diff
-        );
-    }
+    let reconstructed = q.contract(&r);
+    assert!(
+        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        "Complex QR reconstruction failed: maxabs diff = {}",
+        (&tensor - &reconstructed).maxabs()
+    );
 }

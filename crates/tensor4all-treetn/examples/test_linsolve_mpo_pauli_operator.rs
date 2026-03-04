@@ -688,7 +688,7 @@ fn main() -> anyhow::Result<()> {
 
     // Scale I*x by 2 using scale_treetn
     use tensor4all_core::AnyScalar;
-    let i_x_scaled = scale_treetn(&i_x, AnyScalar::F64(2.0))?;
+    let i_x_scaled = scale_treetn(&i_x, AnyScalar::new_real(2.0))?;
 
     // Add i_x_scaled and a_x using TreeTN::add (direct-sum construction)
     let b_tree_2 = i_x_scaled.add(&a_x)?;

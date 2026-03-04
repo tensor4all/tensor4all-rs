@@ -12,9 +12,8 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["backend-faer"]
-backend-faer = ["tensor4all-tensorbackend/backend-faer"]
-backend-lapack = ["tensor4all-tensorbackend/backend-lapack"]
+default = ["backend-tenferro"]
+backend-tenferro = ["tensor4all-tensorbackend/backend-tenferro"]
 
 [dependencies]
 num-complex.workspace = true
@@ -23,7 +22,6 @@ anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
 mdarray.workspace = true
-faer-traits.workspace = true
 bnum.workspace = true
 matrixci = { path = "../matrixci" }
 tensor4all-core = { path = "../tensor4all-core" }

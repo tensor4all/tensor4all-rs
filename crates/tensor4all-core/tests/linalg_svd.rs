@@ -4,6 +4,27 @@ use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::{default_svd_rtol, set_default_svd_rtol, svd, svd_c64, svd_with, SvdOptions};
 use tensor4all_core::{Storage, TensorDynLen, TensorLike};
 
+fn vh_from_v(v: &TensorDynLen) -> TensorDynLen {
+    assert!(
+        !v.indices.is_empty(),
+        "V tensor must have at least one (bond) index"
+    );
+    let v_conj = v.conj();
+    let ndim = v_conj.indices.len();
+    let mut perm = vec![ndim - 1];
+    perm.extend(0..(ndim - 1));
+    v_conj.permute(&perm)
+}
+
+fn reconstruct_from_svd(u: &TensorDynLen, s: &TensorDynLen, v: &TensorDynLen) -> TensorDynLen {
+    let vh = vh_from_v(v);
+    let svh = s.contract(&vh);
+    let sim_bond = s.indices[1].clone();
+    let bond = v.indices[v.indices.len() - 1].clone();
+    let svh = svh.replaceind(&sim_bond, &bond);
+    u.contract(&svh)
+}
+
 #[test]
 fn test_svd_identity() {
     // Test SVD of a 2×2 identity matrix
@@ -32,24 +53,10 @@ fn test_svd_identity() {
     assert_eq!(s.indices.len(), 2);
     assert_eq!(v.indices.len(), 2);
 
-    // For identity matrix, singular values should be [1, 1] (in some order)
-    // Extract singular values from diagonal storage
-    match s.storage().as_ref() {
-        Storage::DiagF64(diag) => {
-            let s_vals = diag.as_slice();
-            assert_eq!(s_vals.len(), 2);
-            // Singular values should be 1.0 (may be in any order)
-            let s0_ok = (s_vals[0] - 1.0).abs() < 1e-10;
-            let s1_ok = (s_vals[1] - 1.0).abs() < 1e-10;
-            assert!(
-                s0_ok && s1_ok,
-                "Singular values should be [1, 1], got [{}, {}]",
-                s_vals[0],
-                s_vals[1]
-            );
-        }
-        _ => panic!("S should be diagonal storage"),
-    }
+    // For identity matrix, singular values should be [1, 1].
+    // We avoid direct storage slice inspection and verify through tensor invariants.
+    assert!((s.sum().real() - 2.0).abs() < 1e-10);
+    assert!((s.norm_squared() - 2.0).abs() < 1e-10);
 }
 
 #[test]
@@ -106,57 +113,8 @@ fn test_svd_reconstruction() {
 
     let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
-    // Reconstruct: A = U * S * V^T
-    // Note: Our SVD returns V (not V^T), so we need to compute U * S * V^T
-    // First: S * V^T
-    // V is n×k, V^T is k×n
-    // We need to permute V's indices to get V^T shape, but the data needs to be transposed
-    // Actually, let's contract S with V first, then with U
-    // S is k×k (diagonal), V is n×k
-    // To compute S * V^T, we need V^T which is k×n
-    // But we have V which is n×k, so we need to transpose it
-
-    // For now, let's use a simpler approach: manually reconstruct
-    // Extract U, S, V data
-    let u_data = match u.storage().as_ref() {
-        Storage::DenseF64(dense) => dense.as_slice(),
-        _ => panic!("U should be dense"),
-    };
-    let s_data = match s.storage().as_ref() {
-        Storage::DiagF64(diag) => diag.as_slice(),
-        _ => panic!("S should be diagonal"),
-    };
-    let v_data = match v.storage().as_ref() {
-        Storage::DenseF64(dense) => dense.as_slice(),
-        _ => panic!("V should be dense"),
-    };
-
-    // Reconstruct: A[i,j] = sum_r U[i,r] * S[r] * V[j,r]
-    let u_dims = u.dims();
-    let v_dims = v.dims();
-    let m = u_dims[0];
-    let n = v_dims[0];
-    let k = u_dims[1];
-    let mut reconstructed_data = vec![0.0; m * n];
-    for i in 0..m {
-        for j in 0..n {
-            let mut sum = 0.0;
-            for r in 0..k {
-                sum += u_data[i * k + r] * s_data[r] * v_data[j * k + r];
-            }
-            reconstructed_data[i * n + j] = sum;
-        }
-    }
-
-    // Create reconstructed tensor for comparison
-    let reconstructed_storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(reconstructed_data, &[m, n]),
-    ));
-    let reconstructed: TensorDynLen =
-        TensorDynLen::new(vec![i.clone(), j.clone()], reconstructed_storage);
-
-    // Check dimensions match
-    assert_eq!(reconstructed.dims(), vec![3, 4]);
+    // Reconstruct: A = U * S * V^H
+    let reconstructed = reconstruct_from_svd(&u, &s, &v);
 
     // Check reconstruction accuracy
     assert!(
@@ -275,48 +233,12 @@ fn test_svd_complex_reconstruction() {
     let (u, s, v) =
         svd_c64(&tensor, std::slice::from_ref(&i_idx)).expect("Complex SVD should succeed");
 
-    let u_data = match u.storage().as_ref() {
-        Storage::DenseC64(dense) => dense.as_slice(),
-        _ => panic!("U should be dense complex"),
-    };
-    let s_data = match s.storage().as_ref() {
-        Storage::DiagF64(diag) => diag.as_slice(),
-        _ => panic!("S should be diagonal real (f64)"),
-    };
-    let v_data = match v.storage().as_ref() {
-        Storage::DenseC64(dense) => dense.as_slice(),
-        _ => panic!("V should be dense complex"),
-    };
-
-    let u_dims = u.dims();
-    let v_dims = v.dims();
-    let m = u_dims[0];
-    let n = v_dims[0];
-    let k = u_dims[1];
-
-    // A[i,j] = Σ_r U[i,r] * S[r] * conj(V[j,r]), where S[r] is real.
-    let mut reconstructed = vec![Complex64::new(0.0, 0.0); m * n];
-    for i in 0..m {
-        for j in 0..n {
-            let mut sum = Complex64::new(0.0, 0.0);
-            for r in 0..k {
-                sum += u_data[i * k + r] * s_data[r] * v_data[j * k + r].conj();
-            }
-            reconstructed[i * n + j] = sum;
-        }
-    }
-
-    for (idx, (orig, recon)) in data.iter().zip(reconstructed.iter()).enumerate() {
-        let diff = *orig - *recon;
-        assert!(
-            diff.norm() < 1e-8,
-            "Element {}: original={:?}, reconstructed={:?}, diff={:?}",
-            idx,
-            orig,
-            recon,
-            diff
-        );
-    }
+    let reconstructed = reconstruct_from_svd(&u, &s, &v);
+    assert!(
+        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        "Complex SVD reconstruction failed: maxabs diff = {}",
+        (&tensor - &reconstructed).maxabs()
+    );
 }
 
 #[test]
@@ -357,20 +279,9 @@ fn test_svd_truncation() {
     assert_eq!(s.dims(), vec![1, 1], "S should be truncated to rank 1");
     assert_eq!(v.dims(), vec![2, 1], "V should be truncated to rank 1");
 
-    // Check singular value
-    match s.storage().as_ref() {
-        Storage::DiagF64(diag) => {
-            let s_vals = diag.as_slice();
-            assert_eq!(s_vals.len(), 1);
-            // The retained singular value should be approximately 1.0
-            assert!(
-                (s_vals[0] - 1.0).abs() < 1e-10,
-                "Retained singular value should be ~1.0, got {}",
-                s_vals[0]
-            );
-        }
-        _ => panic!("S should be diagonal storage"),
-    }
+    // Retained singular value should be approximately 1.0
+    assert!((s.sum().real() - 1.0).abs() < 1e-10);
+    assert!((s.norm_squared() - 1.0).abs() < 1e-10);
 }
 
 #[test]

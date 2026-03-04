@@ -754,7 +754,7 @@ fn main() -> anyhow::Result<()> {
         create_index_mappings(&site_indices, &s_in_tmp_x, &s_out_tmp_x);
 
     // Scale Pauli-X by i (pure imaginary)
-    let imag_scalar = AnyScalar::C64(Complex64::new(0.0, 1.0));
+    let imag_scalar = AnyScalar::from(Complex64::new(0.0, 1.0));
     let operator_i_x = scale_treetn(&operator_x, imag_scalar.clone())?;
     print_bond_dims(
         &operator_i_x,
@@ -1115,7 +1115,7 @@ fn main() -> anyhow::Result<()> {
     println!();
 
     // Test case: Scale Pauli-X by 2 (real scalar)
-    let real_scalar = AnyScalar::F64(2.0);
+    let real_scalar = AnyScalar::new_real(2.0);
     let operator_2_x = scale_treetn(&operator_x, real_scalar.clone())?;
     print_bond_dims(
         &operator_2_x,
@@ -1225,7 +1225,7 @@ fn main() -> anyhow::Result<()> {
 
     let (x_true_ones_state, _, _) =
         create_all_ones_mpo_state_c64(n, phys_dim, &site_indices, &mut used_ids)?;
-    let x_true_twos_state = scale_treetn(&x_true_ones_state, AnyScalar::F64(2.0))?;
+    let x_true_twos_state = scale_treetn(&x_true_ones_state, AnyScalar::new_real(2.0))?;
     print_bond_dims(
         &x_true_twos_state,
         "x_true (all-twos MPO state) bond dimensions",
@@ -1319,7 +1319,7 @@ fn main() -> anyhow::Result<()> {
     println!("Test setup: A = 2*X (real scalar * Pauli-X operator), x_true = all-pure imaginary i MPO state (i * all-ones), b = A*x_true.");
     println!("Then solve (2*X)*x = b with init=x_true (exact solution).\n");
 
-    let imag_i = AnyScalar::C64(Complex64::new(0.0, 1.0));
+    let imag_i = AnyScalar::from(Complex64::new(0.0, 1.0));
     let x_true_imag_state = scale_treetn(&x_true_ones_state, imag_i)?;
     print_bond_dims(
         &x_true_imag_state,

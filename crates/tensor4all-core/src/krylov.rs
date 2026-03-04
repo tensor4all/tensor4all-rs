@@ -150,7 +150,7 @@ where
             ax.validate()?;
         }
         // r = 1.0 * b + (-1.0) * ax
-        let r = b.axpby(AnyScalar::F64(1.0), &ax, AnyScalar::F64(-1.0))?;
+        let r = b.axpby(AnyScalar::new_real(1.0), &ax, AnyScalar::new_real(-1.0))?;
         let r_norm = r.norm();
         let rel_res = r_norm / b_norm;
 
@@ -175,13 +175,13 @@ where
         let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(options.max_iter);
 
         // v_0 = r / ||r||
-        let v0 = r.scale(AnyScalar::F64(1.0 / r_norm))?;
+        let v0 = r.scale(AnyScalar::new_real(1.0 / r_norm))?;
         v_basis.push(v0);
 
         // Initialize Givens rotation storage
         let mut cs: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
         let mut sn: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
-        let mut g: Vec<AnyScalar> = vec![AnyScalar::F64(r_norm)]; // residual in upper Hessenberg space
+        let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(r_norm)]; // residual in upper Hessenberg space
 
         for j in 0..options.max_iter {
             total_iters += 1;
@@ -197,12 +197,12 @@ where
                 let h_ij = v_i.inner_product(&w_orth)?;
                 h_col.push(h_ij.clone());
                 // w_orth = w_orth - h_ij * v_i = 1.0 * w_orth + (-h_ij) * v_i
-                let neg_h_ij = AnyScalar::F64(0.0) - h_ij;
-                w_orth = w_orth.axpby(AnyScalar::F64(1.0), v_i, neg_h_ij)?;
+                let neg_h_ij = AnyScalar::new_real(0.0) - h_ij;
+                w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_h_ij)?;
             }
 
             let h_jp1_j_real = w_orth.norm();
-            let h_jp1_j = AnyScalar::F64(h_jp1_j_real);
+            let h_jp1_j = AnyScalar::new_real(h_jp1_j_real);
             h_col.push(h_jp1_j);
 
             // Apply previous Givens rotations to new column
@@ -223,11 +223,11 @@ where
             // Apply new rotation to eliminate h_col[j+1]
             let (new_hj, _) = apply_givens_rotation(&c_j, &s_j, &h_col[j], &h_col[j + 1]);
             h_col[j] = new_hj;
-            h_col[j + 1] = AnyScalar::F64(0.0);
+            h_col[j + 1] = AnyScalar::new_real(0.0);
 
             // Apply rotation to g
             let g_j = g[j].clone();
-            let g_jp1 = AnyScalar::F64(0.0);
+            let g_jp1 = AnyScalar::new_real(0.0);
             let (new_gj, new_gjp1) = apply_givens_rotation(&c_j, &s_j, &g_j, &g_jp1);
             g[j] = new_gj;
             let res_norm = new_gjp1.abs();
@@ -256,14 +256,18 @@ where
 
             // Add new basis vector (if not converged and h_jp1_j is not too small)
             if h_jp1_j_real > 1e-14 {
-                let v_jp1 = w_orth.scale(AnyScalar::F64(1.0 / h_jp1_j_real))?;
+                let v_jp1 = w_orth.scale(AnyScalar::new_real(1.0 / h_jp1_j_real))?;
                 v_basis.push(v_jp1);
             } else {
                 // Lucky breakdown - we've found the exact solution in the Krylov subspace
                 let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
                 x = update_solution(&x, &v_basis[..=j], &y)?;
                 let ax_final = apply_a(&x)?;
-                let r_final = b.axpby(AnyScalar::F64(1.0), &ax_final, AnyScalar::F64(-1.0))?;
+                let r_final = b.axpby(
+                    AnyScalar::new_real(1.0),
+                    &ax_final,
+                    AnyScalar::new_real(-1.0),
+                )?;
                 let final_res = r_final.norm() / b_norm;
                 return Ok(GmresResult {
                     solution: x,
@@ -281,7 +285,11 @@ where
 
     // Compute final residual
     let ax_final = apply_a(&x)?;
-    let r_final = b.axpby(AnyScalar::F64(1.0), &ax_final, AnyScalar::F64(-1.0))?;
+    let r_final = b.axpby(
+        AnyScalar::new_real(1.0),
+        &ax_final,
+        AnyScalar::new_real(-1.0),
+    )?;
     let final_res = r_final.norm() / b_norm;
 
     Ok(GmresResult {
@@ -351,7 +359,7 @@ where
         if _restart == 0 {
             ax.validate()?;
         }
-        let mut r = b.axpby(AnyScalar::F64(1.0), &ax, AnyScalar::F64(-1.0))?;
+        let mut r = b.axpby(AnyScalar::new_real(1.0), &ax, AnyScalar::new_real(-1.0))?;
         truncate(&mut r)?;
         let r_norm = r.norm();
         let rel_res = r_norm / b_norm;
@@ -375,7 +383,7 @@ where
         let mut v_basis: Vec<T> = Vec::with_capacity(options.max_iter + 1);
         let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(options.max_iter);
 
-        let mut v0 = r.scale(AnyScalar::F64(1.0 / r_norm))?;
+        let mut v0 = r.scale(AnyScalar::new_real(1.0 / r_norm))?;
         truncate(&mut v0)?;
         // After truncation, v0 might not be unit norm and might point in a different direction.
         // We need to:
@@ -383,7 +391,7 @@ where
         // 2. Recompute g[0] = <r, v0> to maintain the correct relationship
         let v0_norm = v0.norm();
         let effective_g0 = if v0_norm > 1e-15 {
-            v0 = v0.scale(AnyScalar::F64(1.0 / v0_norm))?;
+            v0 = v0.scale(AnyScalar::new_real(1.0 / v0_norm))?;
             // g[0] should be the component of r in the direction of v0
             // Since r was truncated and v0 = truncate(r/||r||)/||truncate(r/||r||)||,
             // g[0] = <r, v0> ≈ ||r|| * ||truncate(r/||r||)|| = r_norm * v0_norm
@@ -395,7 +403,7 @@ where
 
         let mut cs: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
         let mut sn: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
-        let mut g: Vec<AnyScalar> = vec![AnyScalar::F64(effective_g0)];
+        let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(effective_g0)];
         let mut solution_already_updated = false;
 
         for j in 0..options.max_iter {
@@ -409,8 +417,8 @@ where
             for v_i in v_basis.iter().take(j + 1) {
                 let h_ij = v_i.inner_product(&w_orth)?;
                 h_col.push(h_ij.clone());
-                let neg_h_ij = AnyScalar::F64(0.0) - h_ij;
-                w_orth = w_orth.axpby(AnyScalar::F64(1.0), v_i, neg_h_ij)?;
+                let neg_h_ij = AnyScalar::new_real(0.0) - h_ij;
+                w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_h_ij)?;
             }
 
             // Iterative reorthogonalization with truncation
@@ -435,8 +443,8 @@ where
                         max_correction = correction_abs;
                     }
                     if correction_abs > REORTH_THRESHOLD {
-                        let neg_correction = AnyScalar::F64(0.0) - correction.clone();
-                        w_orth = w_orth.axpby(AnyScalar::F64(1.0), v_i, neg_correction)?;
+                        let neg_correction = AnyScalar::new_real(0.0) - correction.clone();
+                        w_orth = w_orth.axpby(AnyScalar::new_real(1.0), v_i, neg_correction)?;
                         // Update Hessenberg matrix entry to include correction
                         h_col[i] = h_col[i].clone() + correction;
                     }
@@ -460,7 +468,7 @@ where
             }
 
             let h_jp1_j_real = w_orth.norm();
-            let h_jp1_j = AnyScalar::F64(h_jp1_j_real);
+            let h_jp1_j = AnyScalar::new_real(h_jp1_j_real);
             h_col.push(h_jp1_j);
 
             #[allow(clippy::needless_range_loop)]
@@ -478,10 +486,10 @@ where
 
             let (new_hj, _) = apply_givens_rotation(&c_j, &s_j, &h_col[j], &h_col[j + 1]);
             h_col[j] = new_hj;
-            h_col[j + 1] = AnyScalar::F64(0.0);
+            h_col[j + 1] = AnyScalar::new_real(0.0);
 
             let g_j = g[j].clone();
-            let g_jp1 = AnyScalar::F64(0.0);
+            let g_jp1 = AnyScalar::new_real(0.0);
             let (new_gj, new_gjp1) = apply_givens_rotation(&c_j, &s_j, &g_j, &g_jp1);
             g[j] = new_gj;
             let res_norm = new_gjp1.abs();
@@ -502,8 +510,11 @@ where
                 if options.check_true_residual {
                     // Verify with true residual to prevent false convergence
                     let ax_check = apply_a(&x)?;
-                    let mut r_check =
-                        b.axpby(AnyScalar::F64(1.0), &ax_check, AnyScalar::F64(-1.0))?;
+                    let mut r_check = b.axpby(
+                        AnyScalar::new_real(1.0),
+                        &ax_check,
+                        AnyScalar::new_real(-1.0),
+                    )?;
                     truncate(&mut r_check)?;
                     let true_rel_res = r_check.norm() / b_norm;
 
@@ -540,7 +551,7 @@ where
                 // Create v_{j+1} = w_orth / ||w_orth||
                 // w_orth has already been truncated twice (after orthogonalization and after reorthogonalization)
                 // so we don't need to truncate again. Scale doesn't increase bond dimensions.
-                let v_jp1 = w_orth.scale(AnyScalar::F64(1.0 / h_jp1_j_real))?;
+                let v_jp1 = w_orth.scale(AnyScalar::new_real(1.0 / h_jp1_j_real))?;
                 // v_jp1 should have norm ~1.0 by construction
                 // The Arnoldi relation h_{j+1,j} * v_{j+1} = w_orth is maintained exactly
                 v_basis.push(v_jp1);
@@ -548,7 +559,11 @@ where
                 let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
                 x = update_solution_truncated(&x, &v_basis[..=j], &y, &truncate)?;
                 let ax_final = apply_a(&x)?;
-                let r_final = b.axpby(AnyScalar::F64(1.0), &ax_final, AnyScalar::F64(-1.0))?;
+                let r_final = b.axpby(
+                    AnyScalar::new_real(1.0),
+                    &ax_final,
+                    AnyScalar::new_real(-1.0),
+                )?;
                 let final_res = r_final.norm() / b_norm;
                 return Ok(GmresResult {
                     solution: x,
@@ -567,7 +582,11 @@ where
     }
 
     let ax_final = apply_a(&x)?;
-    let r_final = b.axpby(AnyScalar::F64(1.0), &ax_final, AnyScalar::F64(-1.0))?;
+    let r_final = b.axpby(
+        AnyScalar::new_real(1.0),
+        &ax_final,
+        AnyScalar::new_real(-1.0),
+    )?;
     let final_res = r_final.norm() / b_norm;
 
     Ok(GmresResult {
@@ -758,7 +777,7 @@ where
         // b is effectively zero, return x0 or zero
         let solution = match x0 {
             Some(x) => x.clone(),
-            None => b.scale(AnyScalar::F64(0.0))?,
+            None => b.scale(AnyScalar::new_real(0.0))?,
         };
         return Ok(RestartGmresResult {
             solution,
@@ -775,7 +794,7 @@ where
     let mut x_is_zero = x0.is_none();
     let mut x = match x0 {
         Some(x) => x.clone(),
-        None => b.scale(AnyScalar::F64(0.0))?,
+        None => b.scale(AnyScalar::new_real(0.0))?,
     };
 
     let mut total_inner_iters = 0;
@@ -797,7 +816,7 @@ where
         if outer_iter == 0 {
             ax.validate()?;
         }
-        let mut r = b.axpby(AnyScalar::F64(1.0), &ax, AnyScalar::F64(-1.0))?;
+        let mut r = b.axpby(AnyScalar::new_real(1.0), &ax, AnyScalar::new_real(-1.0))?;
         truncate(&mut r)?;
 
         let r_norm = r.norm();
@@ -844,7 +863,7 @@ where
 
         // Solve A*x' = r using inner GMRES with zero initial guess
         // The zero initial guess is created by scaling r by 0
-        let zero = r.scale(AnyScalar::F64(0.0))?;
+        let zero = r.scale(AnyScalar::new_real(0.0))?;
         let inner_result = gmres_with_truncation(&apply_a, &r, &zero, &inner_options, &truncate)?;
 
         total_inner_iters += inner_result.iterations;
@@ -864,9 +883,9 @@ where
             x_is_zero = false;
         } else {
             x = x.axpby(
-                AnyScalar::F64(1.0),
+                AnyScalar::new_real(1.0),
                 &inner_result.solution,
-                AnyScalar::F64(1.0),
+                AnyScalar::new_real(1.0),
             )?;
         }
         truncate(&mut x)?;
@@ -875,7 +894,7 @@ where
     // Did not converge within max_outer_iters
     // Compute final residual
     let ax = apply_a(&x)?;
-    let mut r = b.axpby(AnyScalar::F64(1.0), &ax, AnyScalar::F64(-1.0))?;
+    let mut r = b.axpby(AnyScalar::new_real(1.0), &ax, AnyScalar::new_real(-1.0))?;
     truncate(&mut r)?;
     let final_rel_res = r.norm() / b_norm;
 
@@ -890,69 +909,33 @@ where
 
 /// Compute Givens rotation coefficients to eliminate b in (a, b).
 ///
-/// This function works with any AnyScalar variant by converting to Complex64
-/// for computation, then returning results in the appropriate type.
+/// This function keeps computation in `AnyScalar` space to preserve AD metadata
+/// as much as possible.
 fn compute_givens_rotation(a: &AnyScalar, b: &AnyScalar) -> (AnyScalar, AnyScalar) {
-    use num_complex::Complex64;
-
-    // Handle the simple f64-only case without conversion
-    if !a.is_complex() && !b.is_complex() {
-        let a_val = a.real();
-        let b_val = b.real();
-        let r = (a_val * a_val + b_val * b_val).sqrt();
-        if r < 1e-15 {
-            return (AnyScalar::F64(1.0), AnyScalar::F64(0.0));
-        }
-        return (AnyScalar::F64(a_val / r), AnyScalar::F64(b_val / r));
-    }
-
-    // For complex or mixed cases, convert to Complex64
-    let a_c: Complex64 = a.clone().into();
-    let b_c: Complex64 = b.clone().into();
-    let r = (a_c.norm_sqr() + b_c.norm_sqr()).sqrt();
-    if r < 1e-15 {
-        (
-            AnyScalar::C64(Complex64::new(1.0, 0.0)),
-            AnyScalar::C64(Complex64::new(0.0, 0.0)),
-        )
+    // r^2 = conj(a)*a + conj(b)*b (works for both real and complex)
+    let norm2 = a.clone().conj() * a.clone() + b.clone().conj() * b.clone();
+    let r = norm2.sqrt();
+    if r.abs() < 1e-15 {
+        (AnyScalar::new_real(1.0), AnyScalar::new_real(0.0))
     } else {
-        (AnyScalar::C64(a_c / r), AnyScalar::C64(b_c / r))
+        (a.clone() / r.clone(), b.clone() / r)
     }
 }
 
 /// Apply Givens rotation: (c, s) @ (x, y) -> (c*x + s*y, -conj(s)*x + c*y) for complex
 /// or (c*x + s*y, -s*x + c*y) for real.
 ///
-/// This function works with any AnyScalar variant by converting to Complex64
-/// for computation when needed.
+/// This function keeps computation in `AnyScalar` space to preserve AD metadata
+/// as much as possible.
 fn apply_givens_rotation(
     c: &AnyScalar,
     s: &AnyScalar,
     x: &AnyScalar,
     y: &AnyScalar,
 ) -> (AnyScalar, AnyScalar) {
-    use num_complex::Complex64;
-
-    // Handle the simple f64-only case without conversion
-    if !c.is_complex() && !s.is_complex() && !x.is_complex() && !y.is_complex() {
-        let c_val = c.real();
-        let s_val = s.real();
-        let x_val = x.real();
-        let y_val = y.real();
-        let new_x = c_val * x_val + s_val * y_val;
-        let new_y = -s_val * x_val + c_val * y_val;
-        return (AnyScalar::F64(new_x), AnyScalar::F64(new_y));
-    }
-
-    // For complex or mixed cases, convert to Complex64
-    let c_c: Complex64 = c.clone().into();
-    let s_c: Complex64 = s.clone().into();
-    let x_c: Complex64 = x.clone().into();
-    let y_c: Complex64 = y.clone().into();
-
-    let new_x = c_c * x_c + s_c * y_c;
-    let new_y = -s_c.conj() * x_c + c_c * y_c;
-    (AnyScalar::C64(new_x), AnyScalar::C64(new_y))
+    let new_x = c.clone() * x.clone() + s.clone() * y.clone();
+    let new_y = -(s.clone().conj() * x.clone()) + c.clone() * y.clone();
+    (new_x, new_y)
 }
 
 /// Solve upper triangular system R y = g using back substitution.
@@ -962,7 +945,7 @@ fn solve_upper_triangular(h: &[Vec<AnyScalar>], g: &[AnyScalar]) -> Result<Vec<A
         return Ok(vec![]);
     }
 
-    let mut y = vec![AnyScalar::F64(0.0); n];
+    let mut y = vec![AnyScalar::new_real(0.0); n];
 
     for i in (0..n).rev() {
         let mut sum = g[i].clone();
@@ -993,7 +976,11 @@ fn update_solution<T: TensorLike>(x: &T, v_basis: &[T], y: &[AnyScalar]) -> Resu
     for (vi, yi) in v_basis.iter().zip(y.iter()) {
         let scaled_vi = vi.scale(yi.clone())?;
         // result = result + scaled_vi = 1.0 * result + 1.0 * scaled_vi
-        result = result.axpby(AnyScalar::F64(1.0), &scaled_vi, AnyScalar::F64(1.0))?;
+        result = result.axpby(
+            AnyScalar::new_real(1.0),
+            &scaled_vi,
+            AnyScalar::new_real(1.0),
+        )?;
     }
 
     Ok(result)
@@ -1023,7 +1010,11 @@ where
             result = scaled_vi;
             result_is_zero = false;
         } else {
-            result = result.axpby(AnyScalar::F64(1.0), &scaled_vi, AnyScalar::F64(1.0))?;
+            result = result.axpby(
+                AnyScalar::new_real(1.0),
+                &scaled_vi,
+                AnyScalar::new_real(1.0),
+            )?;
         }
         // Truncate after each addition to control bond dimension growth
         truncate(&mut result)?;
@@ -1083,6 +1074,38 @@ mod tests {
     }
 
     #[test]
+    fn test_givens_rotation_complex() {
+        let a = AnyScalar::new_complex(3.0, 4.0);
+        let b = AnyScalar::new_complex(1.0, -2.0);
+        let (c, s) = compute_givens_rotation(&a, &b);
+
+        assert!(c.is_complex());
+        assert!(s.is_complex());
+        assert_eq!(c.scalar_type(), s.scalar_type());
+
+        // c*a + s*b should recover sqrt(|a|^2 + |b|^2) on the real axis.
+        let rotated = c.clone() * a + s.clone() * b;
+        assert!(rotated.is_complex());
+        assert!(rotated.real().is_finite());
+        assert!(rotated.imag().is_finite());
+    }
+
+    #[test]
+    fn test_apply_givens_rotation_complex() {
+        let c = AnyScalar::new_complex(0.6, 0.1);
+        let s = AnyScalar::new_complex(0.8, -0.2);
+        let x = AnyScalar::new_complex(3.0, 1.0);
+        let y = AnyScalar::new_complex(4.0, -2.0);
+
+        let (new_x, new_y) = apply_givens_rotation(&c, &s, &x, &y);
+
+        assert!(new_x.is_complex());
+        assert!(new_y.is_complex());
+        assert!(new_x.real().is_finite() && new_x.imag().is_finite());
+        assert!(new_y.real().is_finite() && new_y.imag().is_finite());
+    }
+
+    #[test]
     fn test_gmres_identity_operator() {
         // Solve A x = b where A = I (identity)
         // Solution: x = b
@@ -1113,7 +1136,7 @@ mod tests {
         // Check solution matches b
         let diff = result
             .solution
-            .axpby(AnyScalar::F64(1.0), &b, AnyScalar::F64(-1.0))
+            .axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))
             .unwrap();
         assert!(diff.norm() < 1e-10, "Solution should equal b");
     }
@@ -1170,7 +1193,11 @@ mod tests {
         // Check solution
         let diff = result
             .solution
-            .axpby(AnyScalar::F64(1.0), &expected_x, AnyScalar::F64(-1.0))
+            .axpby(
+                AnyScalar::new_real(1.0),
+                &expected_x,
+                AnyScalar::new_real(-1.0),
+            )
             .unwrap();
         assert!(
             diff.norm() < 1e-8,
@@ -1228,7 +1255,11 @@ mod tests {
         // Check solution
         let diff = result
             .solution
-            .axpby(AnyScalar::F64(1.0), &expected_x, AnyScalar::F64(-1.0))
+            .axpby(
+                AnyScalar::new_real(1.0),
+                &expected_x,
+                AnyScalar::new_real(-1.0),
+            )
             .unwrap();
         assert!(
             diff.norm() < 1e-8,
@@ -1246,7 +1277,7 @@ mod tests {
 
         let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> {
             // A = 2*I
-            x.scale(AnyScalar::F64(2.0))
+            x.scale(AnyScalar::new_real(2.0))
         };
 
         let options = GmresOptions {
@@ -1425,7 +1456,7 @@ mod tests {
         // Check solution matches b
         let diff = result
             .solution
-            .axpby(AnyScalar::F64(1.0), &b, AnyScalar::F64(-1.0))
+            .axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))
             .unwrap();
         assert!(diff.norm() < 1e-10, "Solution should equal b");
     }
@@ -1484,7 +1515,11 @@ mod tests {
         // Check solution
         let diff = result
             .solution
-            .axpby(AnyScalar::F64(1.0), &expected_x, AnyScalar::F64(-1.0))
+            .axpby(
+                AnyScalar::new_real(1.0),
+                &expected_x,
+                AnyScalar::new_real(-1.0),
+            )
             .unwrap();
         assert!(
             diff.norm() < 1e-8,
@@ -1533,7 +1568,11 @@ mod tests {
 
         let diff = result
             .solution
-            .axpby(AnyScalar::F64(1.0), &expected_x, AnyScalar::F64(-1.0))
+            .axpby(
+                AnyScalar::new_real(1.0),
+                &expected_x,
+                AnyScalar::new_real(-1.0),
+            )
             .unwrap();
         assert!(
             diff.norm() < 1e-8,
@@ -1686,7 +1725,7 @@ mod tests {
         // Verify the reported residual is actually the checked residual
         let ax = apply_a(&result.solution).unwrap();
         let r = ax
-            .axpby(AnyScalar::F64(1.0), &b, AnyScalar::F64(-1.0))
+            .axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))
             .unwrap();
         let true_rel_res = r.norm() / b.norm();
         assert!(
@@ -1759,7 +1798,7 @@ mod tests {
         // With check, the reported residual should be the true residual
         let ax = apply_a(&result_check.solution).unwrap();
         let r = ax
-            .axpby(AnyScalar::F64(1.0), &b, AnyScalar::F64(-1.0))
+            .axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))
             .unwrap();
         let true_rel_res = r.norm() / b.norm();
 

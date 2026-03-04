@@ -52,8 +52,7 @@ tensor4all-rs/
 │   ├── tensor4all-hdf5-ffi/          # HDF5 FFI with runtime loading support
 │   ├── tensor4all-capi/              # C API for language bindings
 │   ├── matrixci/                     # Matrix Cross Interpolation (internal)
-│   ├── quanticsgrids/                # Quantics grid structures (internal)
-│   └── mdarray-einsum/               # Einstein summation for mdarray (internal)
+│   └── quanticsgrids/                # Quantics grid structures (internal)
 ├── python/tensor4all/                # Python bindings
 ├── tools/api-dump/                   # API documentation generator
 ├── xtask/                            # Development task runner
@@ -78,7 +77,6 @@ tensor4all-rs/
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
 | [matrixci](crates/matrixci/) | Matrix Cross Interpolation |
 | [quanticsgrids](crates/quanticsgrids/) | Quantics grid structures |
-| [mdarray-einsum](crates/mdarray-einsum/) | Einstein summation for mdarray |
 
 ## Usage Example (Rust)
 
@@ -234,10 +232,6 @@ For ITensors.jl:
 
 - **MPO canonical forms**: VidalMPO and InverseMPO conversions not yet implemented
 - **C API `t4a_treetn_evaluate`**: TreeTN evaluate function not yet exposed in C API
-
-### Known Backend Issues
-
-- Complex SVD: mdarray-linalg-faer returns V^T instead of V^H for complex matrices
 
 ## Development
 

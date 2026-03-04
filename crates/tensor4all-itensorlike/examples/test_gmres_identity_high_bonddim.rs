@@ -60,7 +60,7 @@ fn create_mps_with_bond_dim(n: usize, phys_dim: usize, num_states: usize) -> Res
         let mps = create_product_mps(&sites, &bonds, &values)?;
         b = Some(match b {
             None => mps,
-            Some(prev) => prev.axpby(AnyScalar::F64(1.0), &mps, AnyScalar::F64(1.0))?,
+            Some(prev) => prev.axpby(AnyScalar::new_real(1.0), &mps, AnyScalar::new_real(1.0))?,
         });
     }
     Ok(b.unwrap())
@@ -94,7 +94,7 @@ fn run_identity_gmres(b: &TensorTrain, max_outer_iters: usize) -> Result<(bool, 
     // Independently check ||x - b|| / ||b||
     let diff = result
         .solution
-        .axpby(AnyScalar::F64(1.0), b, AnyScalar::F64(-1.0))?;
+        .axpby(AnyScalar::new_real(1.0), b, AnyScalar::new_real(-1.0))?;
     let actual_err = diff.norm() / b_norm;
 
     Ok((result.converged, result.residual_norm, actual_err))

@@ -276,7 +276,7 @@ fn scale_treetn(
         let tensor = treetn.tensor(node_idx).unwrap();
         let scaled_tensor = if i == last_idx {
             // Scale only the last tensor
-            tensor.scale(AnyScalar::F64(scalar))?
+            tensor.scale(AnyScalar::new_real(scalar))?
         } else {
             // Copy other tensors without scaling
             tensor.clone()

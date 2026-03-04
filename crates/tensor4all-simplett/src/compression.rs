@@ -16,7 +16,7 @@ pub enum CompressionMethod {
     LU,
     /// Cross interpolation based
     CI,
-    /// SVD decomposition (requires lapack feature)
+    /// SVD decomposition
     SVD,
 }
 

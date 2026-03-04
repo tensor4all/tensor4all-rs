@@ -198,13 +198,13 @@ mod tests {
             vec!["site0".to_string()],
             state,
             reference_state,
-            AnyScalar::F64(1.0),
-            AnyScalar::F64(0.0),
+            AnyScalar::new_real(1.0),
+            AnyScalar::new_real(0.0),
         );
 
         assert_eq!(linop.region.len(), 1);
-        assert_eq!(linop.a0, AnyScalar::F64(1.0));
-        assert_eq!(linop.a1, AnyScalar::F64(0.0));
+        assert_eq!(linop.a0, AnyScalar::new_real(1.0));
+        assert_eq!(linop.a1, AnyScalar::new_real(0.0));
     }
 
     /// Apply with a0=0 hits the early return path (scale only, no index alignment).
@@ -225,8 +225,8 @@ mod tests {
             vec!["site0".to_string()],
             state.clone(),
             reference_state,
-            AnyScalar::F64(0.0),
-            AnyScalar::F64(1.0),
+            AnyScalar::new_real(0.0),
+            AnyScalar::new_real(1.0),
         );
 
         let site0 = "site0".to_string();
@@ -256,8 +256,8 @@ mod tests {
             vec!["site0".to_string()],
             state,
             reference_state,
-            AnyScalar::F64(1.0),
-            AnyScalar::F64(0.0),
+            AnyScalar::new_real(1.0),
+            AnyScalar::new_real(0.0),
         );
 
         let other = DynIndex::new_dyn(2);
@@ -322,8 +322,8 @@ mod tests {
             vec!["site0".to_string()],
             state.clone(),
             reference_state,
-            AnyScalar::F64(1.0),
-            AnyScalar::F64(0.0),
+            AnyScalar::new_real(1.0),
+            AnyScalar::new_real(0.0),
         );
 
         let site0 = "site0".to_string();

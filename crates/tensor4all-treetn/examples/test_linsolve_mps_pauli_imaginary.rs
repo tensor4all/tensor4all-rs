@@ -385,7 +385,7 @@ fn main() -> anyhow::Result<()> {
         create_n_site_pauli_x_mpo_with_internal_indices(n, phys_dim, &mut used_ids)?;
     let (a_input_mapping, a_output_mapping) = create_index_mappings(&sites, &s_in_tmp, &s_out_tmp);
 
-    let operator_i_x = scale_treetn(&operator_x, AnyScalar::C64(Complex64::new(0.0, 1.0)))?;
+    let operator_i_x = scale_treetn(&operator_x, AnyScalar::from(Complex64::new(0.0, 1.0)))?;
     let linop_i_x = LinearOperator::new(
         operator_i_x.clone(),
         a_input_mapping.clone(),

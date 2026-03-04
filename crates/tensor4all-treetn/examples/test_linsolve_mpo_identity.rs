@@ -498,7 +498,7 @@ fn main() -> anyhow::Result<()> {
 
     println!();
     println!("--- Case 2: Pure imaginary RHS (b = i*I), init=rhs / init=random ---");
-    let imag_scalar = AnyScalar::C64(Complex64::new(0.0, 1.0));
+    let imag_scalar = AnyScalar::from(Complex64::new(0.0, 1.0));
     let b_imag = scale_treetn(&b_mpo, imag_scalar.clone())?;
 
     for init_mode in ["rhs", "random"] {
@@ -554,7 +554,7 @@ fn main() -> anyhow::Result<()> {
 
     println!();
     println!("--- Case 3: A = i*I, b = -I (solution x = i*I), init=rhs / init=random ---");
-    let neg_one = AnyScalar::C64(Complex64::new(-1.0, 0.0));
+    let neg_one = AnyScalar::from(Complex64::new(-1.0, 0.0));
     let a_case3 = scale_treetn(&operator_a, imag_scalar)?;
     let b_case3 = scale_treetn(&b_mpo, neg_one)?;
     let options_case3 = LinsolveOptions::default()

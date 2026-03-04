@@ -374,7 +374,7 @@ fn test_gmres_mpo_imaginary(n: usize) -> anyhow::Result<(f64, f64, usize)> {
 
     // b = A(x_true) = i * (i * I) = -I
     // Apply i to x_true
-    let b = x_true.scale(AnyScalar::C64(Complex64::new(0.0, 1.0)))?;
+    let b = x_true.scale(AnyScalar::from(Complex64::new(0.0, 1.0)))?;
     println!("b = i * x_true computed, norm: {:.6}", b.norm());
 
     // Initial guess: b
@@ -383,7 +383,7 @@ fn test_gmres_mpo_imaginary(n: usize) -> anyhow::Result<(f64, f64, usize)> {
 
     // Define apply_a closure: A(X) = i * X
     let apply_a = |x: &TensorTrain| -> anyhow::Result<TensorTrain> {
-        Ok(x.scale(AnyScalar::C64(Complex64::new(0.0, 1.0)))?)
+        Ok(x.scale(AnyScalar::from(Complex64::new(0.0, 1.0)))?)
     };
 
     // Compute initial residual

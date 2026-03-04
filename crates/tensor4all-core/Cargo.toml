@@ -8,15 +8,12 @@ repository.workspace = true
 description = "Core tensor types, indices, and operations (SVD, QR, contraction) for tensor4all"
 
 [features]
-default = ["backend-faer"]
-backend-faer = ["tensor4all-tensorbackend/backend-faer"]
-backend-lapack = ["tensor4all-tensorbackend/backend-lapack"]
-backend-libtorch = ["tensor4all-tensorbackend/backend-libtorch"]
+default = ["backend-tenferro"]
+backend-tenferro = ["tensor4all-tensorbackend/backend-tenferro"]
 
 [dependencies]
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend" }
 matrixci = { path = "../matrixci" }
-mdarray-einsum = { path = "../mdarray-einsum" }
 num-complex.workspace = true
 num-traits.workspace = true
 thiserror.workspace = true

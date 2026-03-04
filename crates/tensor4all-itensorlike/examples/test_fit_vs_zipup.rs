@@ -218,10 +218,7 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     // h11 = <w, v1>
     let h11 = w.inner(&v1);
     println!("h11 = <A(v1), v1> = {:?}", h11);
-    let h11_val = match h11 {
-        AnyScalar::F64(x) => x,
-        AnyScalar::C64(x) => x.re,
-    };
+    let h11_val = h11.real();
 
     // v2_tilde = w - h11 * v1
     let v2_tilde = w.axpby(AnyScalar::new_real(1.0), &v1, AnyScalar::new_real(-h11_val))?;
@@ -245,14 +242,8 @@ fn trace_arnoldi_n3() -> anyhow::Result<()> {
     let h22 = w2.inner(&v2);
     println!("h12 = <A(v2), v1> = {:?}", h12);
     println!("h22 = <A(v2), v2> = {:?}", h22);
-    let h12_val = match h12 {
-        AnyScalar::F64(x) => x,
-        AnyScalar::C64(x) => x.re,
-    };
-    let h22_val = match h22 {
-        AnyScalar::F64(x) => x,
-        AnyScalar::C64(x) => x.re,
-    };
+    let h12_val = h12.real();
+    let h22_val = h22.real();
 
     // v3_tilde = w2 - h12*v1 - h22*v2
     let v3_tilde_temp = w2.axpby(AnyScalar::new_real(1.0), &v1, AnyScalar::new_real(-h12_val))?;
@@ -434,10 +425,7 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
     // h00 = <v0, w>
     let h00 = v0.inner(&w);
     println!("h00 = <v0, A*v0> = {:?}", h00);
-    let h00_val = match h00 {
-        AnyScalar::F64(x) => x,
-        AnyScalar::C64(x) => x.re,
-    };
+    let h00_val = h00.real();
 
     // w_orth = w - h00*v0
     let w_orth = w.axpby(AnyScalar::new_real(1.0), &v0, AnyScalar::new_real(-h00_val))?;
@@ -458,14 +446,8 @@ fn debug_gmres_internal() -> anyhow::Result<()> {
     let h11 = v1.inner(&w2);
     println!("h01 = <v0, A*v1> = {:?}", h01);
     println!("h11 = <v1, A*v1> = {:?}", h11);
-    let h01_val = match h01 {
-        AnyScalar::F64(x) => x,
-        AnyScalar::C64(x) => x.re,
-    };
-    let h11_val = match h11 {
-        AnyScalar::F64(x) => x,
-        AnyScalar::C64(x) => x.re,
-    };
+    let h01_val = h01.real();
+    let h11_val = h11.real();
 
     // w2_orth = w2 - h01*v0 - h11*v1
     let temp = w2.axpby(AnyScalar::new_real(1.0), &v0, AnyScalar::new_real(-h01_val))?;
@@ -885,10 +867,7 @@ fn test_truncation_effect() -> anyhow::Result<()> {
     // h10 = <v0, w>
     let h10 = v0.inner(&w);
     println!("h10 = <v0, w>: {:?}", h10);
-    let h10_val = match h10 {
-        AnyScalar::F64(x) => x,
-        AnyScalar::C64(x) => x.re,
-    };
+    let h10_val = h10.real();
 
     // w_orth = w - h10 * v0
     let mut w_orth = w.axpby(AnyScalar::new_real(1.0), &v0, AnyScalar::new_real(-h10_val))?;
@@ -932,14 +911,8 @@ fn test_truncation_effect() -> anyhow::Result<()> {
     println!("\n=== Second iteration ===");
     println!("h11 = <v0, A*v1>: {:?}", h11);
     println!("h21 = <v1, A*v1>: {:?}", h21);
-    let h11_val = match h11 {
-        AnyScalar::F64(x) => x,
-        AnyScalar::C64(x) => x.re,
-    };
-    let h21_val = match h21 {
-        AnyScalar::F64(x) => x,
-        AnyScalar::C64(x) => x.re,
-    };
+    let h11_val = h11.real();
+    let h21_val = h21.real();
 
     // w2_orth = w2 - h11*v0 - h21*v1
     let temp = w2.axpby(AnyScalar::new_real(1.0), &v0, AnyScalar::new_real(-h11_val))?;
@@ -1117,14 +1090,8 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
     println!("<w_fit, v1_zipup>: {:?}", cross2);
 
     // v2_tilde = w - h11 * v1
-    let h11_val_zipup = match h11_zipup {
-        AnyScalar::F64(x) => x,
-        AnyScalar::C64(x) => x.re,
-    };
-    let h11_val_fit = match h11_fit {
-        AnyScalar::F64(x) => x,
-        AnyScalar::C64(x) => x.re,
-    };
+    let h11_val_zipup = h11_zipup.real();
+    let h11_val_fit = h11_fit.real();
 
     let v2_tilde_zipup = w_zipup.axpby(
         AnyScalar::new_real(1.0),
@@ -1186,40 +1153,12 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
     // We minimize ||beta*e1 - H*y||
 
     println!("Hessenberg matrix (zipup):");
-    println!(
-        "  H = [[{:.6}, {:.6}],",
-        h11_val_zipup,
-        match h12_zipup {
-            AnyScalar::F64(x) => x,
-            AnyScalar::C64(x) => x.re,
-        }
-    );
-    println!(
-        "       [{:.6}, {:.6}]]",
-        h21_zipup,
-        match h22_zipup {
-            AnyScalar::F64(x) => x,
-            AnyScalar::C64(x) => x.re,
-        }
-    );
+    println!("  H = [[{:.6}, {:.6}],", h11_val_zipup, h12_zipup.real());
+    println!("       [{:.6}, {:.6}]]", h21_zipup, h22_zipup.real());
 
     println!("Hessenberg matrix (fit):");
-    println!(
-        "  H = [[{:.6}, {:.6}],",
-        h11_val_fit,
-        match h12_fit {
-            AnyScalar::F64(x) => x,
-            AnyScalar::C64(x) => x.re,
-        }
-    );
-    println!(
-        "       [{:.6}, {:.6}]]",
-        h21_fit,
-        match h22_fit {
-            AnyScalar::F64(x) => x,
-            AnyScalar::C64(x) => x.re,
-        }
-    );
+    println!("  H = [[{:.6}, {:.6}],", h11_val_fit, h12_fit.real());
+    println!("       [{:.6}, {:.6}]]", h21_fit, h22_fit.real());
 
     println!("\nbeta (zipup): {:.6}", beta_zipup);
     println!("beta (fit):   {:.6}", beta_fit);

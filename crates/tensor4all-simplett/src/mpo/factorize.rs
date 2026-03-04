@@ -70,9 +70,9 @@ pub struct FactorizeResult<T> {
 pub trait SVDScalar:
     crate::traits::TTScalar
     + ComplexFloat
-    + faer_traits::ComplexField
     + Default
     + From<<Self as ComplexFloat>::Real>
+    + tensor4all_tensorbackend::backend::BackendLinalgScalar
     + 'static
 where
     <Self as ComplexFloat>::Real: Into<f64>,
@@ -83,9 +83,9 @@ impl<T> SVDScalar for T
 where
     T: crate::traits::TTScalar
         + ComplexFloat
-        + faer_traits::ComplexField
         + Default
         + From<<T as ComplexFloat>::Real>
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64>,
 {
@@ -144,7 +144,7 @@ where
     // Clone matrix for SVD (it may be modified)
     let mut a = matrix.clone();
 
-    // Compute SVD using tensorbackend (handles faer/lapack switching internally)
+    // Compute SVD using tensorbackend (tenferro-backed implementation)
     let a_slice: &mut DSlice<T, 2> = a.as_mut();
     let svd_result = svd_backend(a_slice).map_err(|e| MPOError::FactorizationError {
         message: format!("SVD computation failed: {:?}", e),
@@ -197,10 +197,8 @@ where
     if options.left_orthogonal {
         // Left = U[:, :rank], Right = diag(S[:rank]) * Vt[:rank, :]
         //
-        // NOTE: For complex matrices, mdarray-linalg-faer currently returns V^T
-        // instead of V^H. This is a known issue and will be fixed upstream.
-        // See: mdarray_linalg_faer_complex_svd_issue.md
-        // Once fixed, the code below should work correctly for both real and complex.
+        // `svd_backend` returns `vt` in backend convention
+        // (V^T for real and V^H for complex), which is used directly here.
         for i in 0..m {
             for j in 0..rank {
                 left[[i, j]] = u[[i, j]];

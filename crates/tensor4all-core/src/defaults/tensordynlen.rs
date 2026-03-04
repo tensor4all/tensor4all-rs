@@ -901,12 +901,46 @@ impl TensorDynLen {
 
     /// Compute a linear combination: `a * self + b * other`.
     pub fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
-        // Scale self by a
-        let scaled_self = self.scale(a)?;
-        // Scale other by b
-        let scaled_other = other.scale(b)?;
-        // Add the two
-        scaled_self.add(&scaled_other)
+        // Validate that both tensors have the same number of indices.
+        if self.indices.len() != other.indices.len() {
+            return Err(anyhow::anyhow!(
+                "Index count mismatch: self has {} indices, other has {}",
+                self.indices.len(),
+                other.indices.len()
+            ));
+        }
+
+        // Validate that both tensors have the same set of indices.
+        let self_set: HashSet<_> = self.indices.iter().collect();
+        let other_set: HashSet<_> = other.indices.iter().collect();
+        if self_set != other_set {
+            return Err(anyhow::anyhow!(
+                "Index set mismatch: tensors must have the same indices"
+            ));
+        }
+
+        // Align other tensor axis order to self.
+        let other_aligned = other.permute_indices(&self.indices);
+
+        // Validate dimensions match after alignment.
+        let self_expected_dims = Self::expected_dims_from_indices(&self.indices);
+        let other_expected_dims = Self::expected_dims_from_indices(&other_aligned.indices);
+        if self_expected_dims != other_expected_dims {
+            return Err(anyhow::anyhow!(
+                "Dimension mismatch after alignment: self={:?}, other_aligned={:?}",
+                self_expected_dims,
+                other_expected_dims
+            ));
+        }
+
+        // Reuse storage-level fused axpby to avoid materializing two scaled temporaries.
+        let self_storage = self.materialize_storage()?;
+        let other_storage = other_aligned.materialize_storage()?;
+        let result_storage = self_storage
+            .as_ref()
+            .axpby(&a, other_storage.as_ref(), &b)
+            .map_err(|e| anyhow::anyhow!("Storage axpby failed: {}", e))?;
+        Ok(Self::new(self.indices.clone(), Arc::new(result_storage)))
     }
 
     /// Scalar multiplication.
@@ -1185,17 +1219,9 @@ impl TensorDynLen {
 
     /// Maximum absolute value of all elements (L-infinity norm).
     pub fn maxabs(&self) -> f64 {
-        if self.indices.is_empty() {
-            return self.sum().abs();
-        }
-        // Materialize to dense and scan elements
-        if let Ok(data) = self.to_vec_f64() {
-            data.iter().map(|x| x.abs()).fold(0.0_f64, f64::max)
-        } else if let Ok(data) = self.to_vec_c64() {
-            data.iter().map(|z| z.norm()).fold(0.0_f64, f64::max)
-        } else {
-            0.0
-        }
+        self.materialize_storage()
+            .map(|storage| storage.max_abs())
+            .unwrap_or(0.0)
     }
 
     /// Compute the relative distance between two tensors.

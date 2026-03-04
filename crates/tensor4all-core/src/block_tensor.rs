@@ -332,7 +332,7 @@ impl<T: TensorLike> TensorLike for BlockTensor<T> {
             self.shape,
             other.shape
         );
-        let mut sum = AnyScalar::F64(0.0);
+        let mut sum = AnyScalar::new_real(0.0);
         for (s, o) in self.blocks.iter().zip(other.blocks.iter()) {
             sum = sum + s.inner_product(o)?;
         }
@@ -468,7 +468,11 @@ mod tests {
         let block_2x1 = BlockTensor::new(vec![b1.clone(), b2], (2, 1));
         let block_1x1 = BlockTensor::new(vec![b3], (1, 1));
 
-        let result = block_2x1.axpby(AnyScalar::F64(1.0), &block_1x1, AnyScalar::F64(1.0));
+        let result = block_2x1.axpby(
+            AnyScalar::new_real(1.0),
+            &block_1x1,
+            AnyScalar::new_real(1.0),
+        );
         assert!(result.is_err());
     }
 
@@ -528,7 +532,7 @@ mod tests {
         // Check solution matches b
         let diff = result
             .solution
-            .axpby(AnyScalar::F64(1.0), &b, AnyScalar::F64(-1.0))
+            .axpby(AnyScalar::new_real(1.0), &b, AnyScalar::new_real(-1.0))
             .unwrap();
         assert!(diff.norm() < 1e-10, "Solution should equal b");
     }
@@ -617,7 +621,11 @@ mod tests {
         // Check solution
         let diff = result
             .solution
-            .axpby(AnyScalar::F64(1.0), &expected, AnyScalar::F64(-1.0))
+            .axpby(
+                AnyScalar::new_real(1.0),
+                &expected,
+                AnyScalar::new_real(-1.0),
+            )
             .unwrap();
         assert!(
             diff.norm() < 1e-8,
@@ -656,7 +664,7 @@ mod tests {
             let x2 = x.get(1, 0);
 
             // y1 = x1 + x2
-            let y1 = x1.axpby(AnyScalar::F64(1.0), x2, AnyScalar::F64(1.0))?;
+            let y1 = x1.axpby(AnyScalar::new_real(1.0), x2, AnyScalar::new_real(1.0))?;
             // y2 = x2
             let y2 = x2.clone();
 
@@ -678,7 +686,11 @@ mod tests {
         // Check solution
         let diff = result
             .solution
-            .axpby(AnyScalar::F64(1.0), &expected, AnyScalar::F64(-1.0))
+            .axpby(
+                AnyScalar::new_real(1.0),
+                &expected,
+                AnyScalar::new_real(-1.0),
+            )
             .unwrap();
         assert!(
             diff.norm() < 1e-8,
@@ -710,7 +722,7 @@ mod tests {
         let b2 = make_vector_with_index(vec![3.0, 4.0], &idx);
         let block = BlockTensor::new(vec![b1, b2], (2, 1));
 
-        let scaled = block.scale(AnyScalar::F64(2.0)).unwrap();
+        let scaled = block.scale(AnyScalar::new_real(2.0)).unwrap();
 
         // Check scaled values
         let expected1 = make_vector_with_index(vec![2.0, 4.0], &idx);
@@ -718,7 +730,11 @@ mod tests {
         let expected = BlockTensor::new(vec![expected1, expected2], (2, 1));
 
         let diff = scaled
-            .axpby(AnyScalar::F64(1.0), &expected, AnyScalar::F64(-1.0))
+            .axpby(
+                AnyScalar::new_real(1.0),
+                &expected,
+                AnyScalar::new_real(-1.0),
+            )
             .unwrap();
         assert!(diff.norm() < 1e-10);
     }
@@ -749,7 +765,7 @@ mod tests {
         // For real tensors, conj should be identity
         let conjugated = block.conj();
         let diff = conjugated
-            .axpby(AnyScalar::F64(1.0), &block, AnyScalar::F64(-1.0))
+            .axpby(AnyScalar::new_real(1.0), &block, AnyScalar::new_real(-1.0))
             .unwrap();
         assert!(diff.norm() < 1e-10);
     }
