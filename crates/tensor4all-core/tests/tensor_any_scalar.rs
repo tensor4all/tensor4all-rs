@@ -273,3 +273,61 @@ fn test_display() {
     let display_str = format!("{}", s2);
     assert!(display_str.contains("1") && display_str.contains("2"));
 }
+
+#[test]
+fn test_is_real() {
+    assert!(AnyScalar::new_real(3.0).is_real());
+    assert!(!AnyScalar::new_complex(3.0, 1.0).is_real());
+}
+
+#[test]
+fn test_real_imag_part_preserve_scalar_kind() {
+    let x = AnyScalar::new_complex(2.5, -1.25);
+    let xr = x.real_part();
+    let xi = x.imag_part();
+    assert!(xr.is_real());
+    assert!(xi.is_real());
+    assert!((xr.real() - 2.5).abs() < 1e-12);
+    assert!((xi.real() - (-1.25)).abs() < 1e-12);
+
+    let y = AnyScalar::new_real(-3.0);
+    let yr = y.real_part();
+    let yi = y.imag_part();
+    assert!(yr.is_real());
+    assert!(yi.is_real());
+    assert!((yr.real() - (-3.0)).abs() < 1e-12);
+    assert!(yi.is_zero());
+}
+
+#[test]
+fn test_compose_complex_from_real_parts() {
+    let re = AnyScalar::new_real(1.5);
+    let im = AnyScalar::new_real(-2.0);
+    let z = AnyScalar::compose_complex(re, im).unwrap();
+    assert!(z.is_complex());
+    let c: Complex64 = z.into();
+    assert!((c.re - 1.5).abs() < 1e-12);
+    assert!((c.im + 2.0).abs() < 1e-12);
+}
+
+#[test]
+fn test_compose_complex_rejects_non_real_inputs() {
+    let re = AnyScalar::new_complex(1.0, 0.0);
+    let im = AnyScalar::new_real(2.0);
+    assert!(AnyScalar::compose_complex(re, im).is_err());
+}
+
+#[test]
+fn test_scalar_lhs_rhs_mixed_ops() {
+    let x = AnyScalar::new_complex(1.0, -2.0);
+    let y = 2.0_f64 * x.clone();
+    let z: Complex64 = y.into();
+    assert!((z.re - 2.0).abs() < 1e-12);
+    assert!((z.im + 4.0).abs() < 1e-12);
+
+    let x = AnyScalar::new_real(2.0);
+    let y = Complex64::new(4.0, -2.0) / x;
+    let z: Complex64 = y.into();
+    assert!((z.re - 2.0).abs() < 1e-12);
+    assert!((z.im + 1.0).abs() < 1e-12);
+}
