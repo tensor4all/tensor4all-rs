@@ -58,3 +58,12 @@ tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs", rev = "99
 tenferro-einsum = { git = "https://github.com/tensor4all/tenferro-rs", rev = "99c38bbafaa18dd565edf32851f29d7c200c3fbb" }
 tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs", rev = "99c38bbafaa18dd565edf32851f29d7c200c3fbb" }
 tenferro-dyadtensor = { git = "https://github.com/tensor4all/tenferro-rs", rev = "99c38bbafaa18dd565edf32851f29d7c200c3fbb" }
+
+[patch."https://github.com/tensor4all/tenferro-rs"]
+tenferro-algebra = { path = "../../../tenferro-rs/tenferro-algebra" }
+tenferro-device = { path = "../../../tenferro-rs/tenferro-device" }
+tenferro-prims = { path = "../../../tenferro-rs/tenferro-prims" }
+tenferro-tensor = { path = "../../../tenferro-rs/tenferro-tensor" }
+tenferro-einsum = { path = "../../../tenferro-rs/tenferro-einsum" }
+tenferro-linalg = { path = "../../../tenferro-rs/tenferro-linalg" }
+tenferro-dyadtensor = { path = "../../../tenferro-rs/extension/tenferro-dyadtensor" }

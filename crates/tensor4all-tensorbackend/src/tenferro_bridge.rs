@@ -11,7 +11,7 @@ use std::sync::{Mutex, OnceLock};
 use tenferro_algebra::Scalar;
 use tenferro_dyadtensor::{
     ad, set_default_runtime, AdTensor, AdValue, DynAdScalar, DynAdTensor, RuntimeContext,
-    ScalarType,
+    ScalarType, StructuredTensor,
 };
 use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -184,18 +184,18 @@ fn tensor_c64_to_storage(tensor: &Tensor<num_complex::Complex64>) -> Result<Stor
     )))
 }
 
-fn scalar_from_tensor_element<T>(tensor: &Tensor<T>) -> Result<T>
+fn scalar_from_structured_tensor_element<T>(tensor: &StructuredTensor<T>) -> Result<T>
 where
     T: Scalar + Copy,
 {
-    let len: usize = tensor.dims().iter().product();
+    let len: usize = tensor.logical_dims().iter().product();
     if len != 1 {
         return Err(anyhow!(
             "tensor-to-scalar conversion requires exactly one element, got dims {:?}",
-            tensor.dims()
+            tensor.logical_dims()
         ));
     }
-    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
+    let row_major = tensor.payload().contiguous(MemoryOrder::RowMajor);
     row_major
         .buffer()
         .as_slice()
@@ -208,10 +208,12 @@ where
     T: Scalar + Copy,
 {
     match tensor.clone().into_value() {
-        AdValue::Primal(primal) => Ok(AdValue::Primal(scalar_from_tensor_element(&primal)?)),
+        AdValue::Primal(primal) => Ok(AdValue::Primal(scalar_from_structured_tensor_element(
+            &primal,
+        )?)),
         AdValue::Forward { primal, tangent } => Ok(AdValue::Forward {
-            primal: scalar_from_tensor_element(&primal)?,
-            tangent: scalar_from_tensor_element(&tangent)?,
+            primal: scalar_from_structured_tensor_element(&primal)?,
+            tangent: scalar_from_structured_tensor_element(&tangent)?,
         }),
         AdValue::Reverse {
             primal,
@@ -219,12 +221,12 @@ where
             tape,
             tangent,
         } => Ok(AdValue::Reverse {
-            primal: scalar_from_tensor_element(&primal)?,
+            primal: scalar_from_structured_tensor_element(&primal)?,
             node,
             tape,
             tangent: tangent
                 .as_ref()
-                .map(scalar_from_tensor_element)
+                .map(scalar_from_structured_tensor_element)
                 .transpose()?,
         }),
     }
@@ -977,7 +979,7 @@ mod tests {
         let tangent =
             tenferro_tensor::Tensor::<f64>::from_slice(&[0.25, -0.75], &[2], MemoryOrder::RowMajor)
                 .unwrap();
-        let native = DynAdTensor::from(AdTensor::new_forward(primal, tangent));
+        let native = DynAdTensor::from(AdTensor::new_forward(primal, tangent).unwrap());
 
         let sum = sum_dyn_ad_tensor_native(&native).unwrap();
 

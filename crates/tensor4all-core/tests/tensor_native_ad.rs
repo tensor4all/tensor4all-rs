@@ -7,7 +7,7 @@ fn native_f64_tensor(primal: &[f64], tangent: &[f64], dims: &[usize]) -> DynAdTe
         .expect("valid primal tensor");
     let tangent = Tensor::<f64>::from_slice(tangent, dims, MemoryOrder::RowMajor)
         .expect("valid tangent tensor");
-    AdTensor::new_forward(primal, tangent).into()
+    AdTensor::new_forward(primal, tangent).unwrap().into()
 }
 
 #[test]
