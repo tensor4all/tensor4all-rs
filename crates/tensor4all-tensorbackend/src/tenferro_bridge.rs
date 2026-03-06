@@ -4,8 +4,15 @@
 //! implementation-agnostic (CPU today, GPU-ready extension point).
 
 use anyhow::{anyhow, Result};
+use num_complex::{Complex32, Complex64};
+use std::collections::HashMap;
 use std::env;
-use tenferro_dyadtensor::{AdTensor, DynAdTensor};
+use std::sync::{Mutex, OnceLock};
+use tenferro_algebra::Scalar;
+use tenferro_dyadtensor::{
+    ad, set_default_runtime, AdTensor, AdValue, DynAdScalar, DynAdTensor, RuntimeContext,
+    ScalarType,
+};
 use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -30,6 +37,11 @@ pub enum RuntimeKind {
 ///
 /// This alias keeps backend selection localized to this bridge module.
 pub(crate) type ActivePrimsBackend = CpuBackend;
+
+fn runtime_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 fn parse_runtime_kind() -> RuntimeKind {
     match env::var("T4A_TENFERRO_RUNTIME") {
@@ -63,6 +75,26 @@ pub fn with_tenferro_ctx<R>(
         RuntimeKind::Cpu => {
             let mut ctx = CpuContext::new(cpu_threads());
             f(&mut ctx)
+        }
+        RuntimeKind::Cuda => Err(anyhow!(
+            "{}: CUDA runtime is not yet wired in tensor4all tenferro backend",
+            op
+        )),
+        RuntimeKind::Rocm => Err(anyhow!(
+            "{}: ROCm runtime is not yet wired in tensor4all tenferro backend",
+            op
+        )),
+    }
+}
+
+fn with_default_runtime<R>(op: &'static str, f: impl FnOnce() -> Result<R>) -> Result<R> {
+    let _guard = runtime_lock()
+        .lock()
+        .map_err(|_| anyhow!("{op}: native runtime lock poisoned"))?;
+    match parse_runtime_kind() {
+        RuntimeKind::Cpu => {
+            let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(cpu_threads())));
+            f()
         }
         RuntimeKind::Cuda => Err(anyhow!(
             "{}: CUDA runtime is not yet wired in tensor4all tenferro backend",
@@ -152,9 +184,200 @@ fn tensor_c64_to_storage(tensor: &Tensor<num_complex::Complex64>) -> Result<Stor
     )))
 }
 
+fn scalar_from_tensor_element<T>(tensor: &Tensor<T>) -> Result<T>
+where
+    T: Scalar + Copy,
+{
+    let len: usize = tensor.dims().iter().product();
+    if len != 1 {
+        return Err(anyhow!(
+            "tensor-to-scalar conversion requires exactly one element, got dims {:?}",
+            tensor.dims()
+        ));
+    }
+    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
+    row_major
+        .buffer()
+        .as_slice()
+        .and_then(|slice| slice.first().copied())
+        .ok_or_else(|| anyhow!("expected host-accessible scalar tensor buffer"))
+}
+
+fn ad_tensor_to_scalar_typed<T>(tensor: &AdTensor<T>) -> Result<AdValue<T>>
+where
+    T: Scalar + Copy,
+{
+    match tensor.clone().into_value() {
+        AdValue::Primal(primal) => Ok(AdValue::Primal(scalar_from_tensor_element(&primal)?)),
+        AdValue::Forward { primal, tangent } => Ok(AdValue::Forward {
+            primal: scalar_from_tensor_element(&primal)?,
+            tangent: scalar_from_tensor_element(&tangent)?,
+        }),
+        AdValue::Reverse {
+            primal,
+            node,
+            tape,
+            tangent,
+        } => Ok(AdValue::Reverse {
+            primal: scalar_from_tensor_element(&primal)?,
+            node,
+            tape,
+            tangent: tangent
+                .as_ref()
+                .map(scalar_from_tensor_element)
+                .transpose()?,
+        }),
+    }
+}
+
+fn scalar_type_to_minus_one(scalar_type: ScalarType) -> DynAdScalar {
+    match scalar_type {
+        ScalarType::F32 => DynAdScalar::from(-1.0_f32),
+        ScalarType::F64 => DynAdScalar::from(-1.0_f64),
+        ScalarType::C32 => DynAdScalar::from(Complex32::new(-1.0, 0.0)),
+        ScalarType::C64 => DynAdScalar::from(Complex64::new(-1.0, 0.0)),
+    }
+}
+
+fn promote_real_tensor_to_complex(tensor: &DynAdTensor) -> Result<DynAdTensor> {
+    match tensor.scalar_type() {
+        ScalarType::F32 | ScalarType::F64 => {
+            let imag = tensor.imag_part()?;
+            DynAdTensor::compose_complex(tensor.clone(), imag)
+                .map_err(|e| anyhow!("native real->complex promotion failed: {e}"))
+        }
+        ScalarType::C32 | ScalarType::C64 => Ok(tensor.clone()),
+    }
+}
+
+fn promote_native_operands(
+    lhs: &DynAdTensor,
+    rhs: &DynAdTensor,
+) -> Result<(DynAdTensor, DynAdTensor)> {
+    match (lhs.scalar_type(), rhs.scalar_type()) {
+        (ScalarType::F32, ScalarType::F32)
+        | (ScalarType::F64, ScalarType::F64)
+        | (ScalarType::C32, ScalarType::C32)
+        | (ScalarType::C64, ScalarType::C64) => Ok((lhs.clone(), rhs.clone())),
+        (ScalarType::F32, ScalarType::C32) | (ScalarType::C32, ScalarType::F32) => Ok((
+            promote_real_tensor_to_complex(lhs)?,
+            promote_real_tensor_to_complex(rhs)?,
+        )),
+        (ScalarType::F64, ScalarType::C64) | (ScalarType::C64, ScalarType::F64) => Ok((
+            promote_real_tensor_to_complex(lhs)?,
+            promote_real_tensor_to_complex(rhs)?,
+        )),
+        _ => Err(anyhow!(
+            "native tensor promotion does not support lhs={:?}, rhs={:?}",
+            lhs.scalar_type(),
+            rhs.scalar_type()
+        )),
+    }
+}
+
+fn labels_to_notation(inputs: &[Vec<usize>], output: &[usize]) -> Result<String> {
+    let mut id_to_char = HashMap::new();
+    let mut next_code = 'a' as u32;
+
+    let mut alloc_label = |id: usize| -> Result<char> {
+        if let Some(&ch) = id_to_char.get(&id) {
+            return Ok(ch);
+        }
+        loop {
+            let Some(ch) = char::from_u32(next_code) else {
+                return Err(anyhow!("ran out of einsum label codepoints"));
+            };
+            next_code += 1;
+            if ch.is_alphanumeric() {
+                id_to_char.insert(id, ch);
+                return Ok(ch);
+            }
+        }
+    };
+
+    let input_terms: Result<Vec<String>> = inputs
+        .iter()
+        .map(|ids| ids.iter().map(|&id| alloc_label(id)).collect())
+        .collect();
+    let output_term: Result<String> = output.iter().map(|&id| alloc_label(id)).collect();
+
+    Ok(format!("{}->{}", input_terms?.join(","), output_term?))
+}
+
+fn dyn_ad_einsum_typed(
+    notation: &str,
+    operands: &[&DynAdTensor],
+    scalar_type: ScalarType,
+) -> Result<DynAdTensor> {
+    with_default_runtime("dyn_ad_einsum", || match scalar_type {
+        ScalarType::F32 => {
+            let typed: Result<Vec<&AdTensor<f32>>> = operands
+                .iter()
+                .map(|operand| {
+                    operand
+                        .as_f32()
+                        .ok_or_else(|| anyhow!("expected f32 operand in native einsum"))
+                })
+                .collect();
+            Ok(DynAdTensor::from(ad::einsum(notation, &typed?).map_err(
+                |e| anyhow!("native einsum failed for f32 tensor: {e}"),
+            )?))
+        }
+        ScalarType::F64 => {
+            let typed: Result<Vec<&AdTensor<f64>>> = operands
+                .iter()
+                .map(|operand| {
+                    operand
+                        .as_f64()
+                        .ok_or_else(|| anyhow!("expected f64 operand in native einsum"))
+                })
+                .collect();
+            Ok(DynAdTensor::from(ad::einsum(notation, &typed?).map_err(
+                |e| anyhow!("native einsum failed for f64 tensor: {e}"),
+            )?))
+        }
+        ScalarType::C32 => {
+            let typed: Result<Vec<&AdTensor<Complex32>>> = operands
+                .iter()
+                .map(|operand| {
+                    operand
+                        .as_c32()
+                        .ok_or_else(|| anyhow!("expected c32 operand in native einsum"))
+                })
+                .collect();
+            Ok(DynAdTensor::from(ad::einsum(notation, &typed?).map_err(
+                |e| anyhow!("native einsum failed for c32 tensor: {e}"),
+            )?))
+        }
+        ScalarType::C64 => {
+            let typed: Result<Vec<&AdTensor<Complex64>>> = operands
+                .iter()
+                .map(|operand| {
+                    operand
+                        .as_c64()
+                        .ok_or_else(|| anyhow!("expected c64 operand in native einsum"))
+                })
+                .collect();
+            Ok(DynAdTensor::from(ad::einsum(notation, &typed?).map_err(
+                |e| anyhow!("native einsum failed for c64 tensor: {e}"),
+            )?))
+        }
+    })
+}
+
+fn dyn_ad_tensor_to_scalar_native(tensor: &DynAdTensor) -> Result<DynAdScalar> {
+    match tensor {
+        DynAdTensor::F32(t) => Ok(DynAdScalar::F32(ad_tensor_to_scalar_typed(t)?)),
+        DynAdTensor::F64(t) => Ok(DynAdScalar::F64(ad_tensor_to_scalar_typed(t)?)),
+        DynAdTensor::C32(t) => Ok(DynAdScalar::C32(ad_tensor_to_scalar_typed(t)?)),
+        DynAdTensor::C64(t) => Ok(DynAdScalar::C64(ad_tensor_to_scalar_typed(t)?)),
+    }
+}
+
 /// Convert legacy [`Storage`] into a primal-mode [`DynAdTensor`].
 ///
-/// Diagonal storage is materialized to dense storage for now.
+/// Diagonal storage is materialized to dense storage because tenferro's
+/// current AD carrier is dense-only.
 pub fn storage_to_dyn_ad_tensor(storage: &Storage, logical_dims: &[usize]) -> Result<DynAdTensor> {
     match storage {
         Storage::DenseF64(_) | Storage::DiagF64(_) => Ok(DynAdTensor::from(AdTensor::new_primal(
@@ -177,6 +400,82 @@ pub fn dyn_ad_tensor_primal_to_storage(tensor: &DynAdTensor) -> Result<Storage> 
         DynAdTensor::F64(t) => tensor_f64_to_storage(t.primal()),
         DynAdTensor::C64(t) => tensor_c64_to_storage(t.primal()),
     }
+}
+
+/// Sum all elements of a native AD tensor while preserving AD mode.
+pub fn sum_dyn_ad_tensor_native(tensor: &DynAdTensor) -> Result<DynAdScalar> {
+    if tensor.ndim() == 0 {
+        return dyn_ad_tensor_to_scalar_native(tensor);
+    }
+    let input_ids = vec![(0..tensor.ndim()).collect::<Vec<_>>()];
+    let notation = labels_to_notation(&input_ids, &[])?;
+    let reduced = dyn_ad_einsum_typed(&notation, &[tensor], tensor.scalar_type())?;
+    dyn_ad_tensor_to_scalar_native(&reduced)
+}
+
+/// Permute a native AD tensor through AD-aware einsum.
+pub fn permute_dyn_ad_tensor_native(tensor: &DynAdTensor, perm: &[usize]) -> Result<DynAdTensor> {
+    if perm.len() != tensor.ndim() {
+        return Err(anyhow!(
+            "native permute rank mismatch: rank={}, perm={:?}",
+            tensor.ndim(),
+            perm
+        ));
+    }
+    if perm.iter().enumerate().all(|(i, &p)| i == p) {
+        return Ok(tensor.clone());
+    }
+    let input_ids: Vec<usize> = (0..tensor.ndim()).collect();
+    let output_ids: Vec<usize> = perm
+        .iter()
+        .map(|&axis| {
+            input_ids.get(axis).copied().ok_or_else(|| {
+                anyhow!(
+                    "native permute axis {} out of range for rank {}",
+                    axis,
+                    tensor.ndim()
+                )
+            })
+        })
+        .collect::<Result<_>>()?;
+    let notation = labels_to_notation(&[input_ids], &output_ids)?;
+    dyn_ad_einsum_typed(&notation, &[tensor], tensor.scalar_type())
+}
+
+/// Contract two native AD tensors with AD-preserving mixed real/complex promotion.
+pub fn contract_dyn_ad_tensor_native(
+    lhs: &DynAdTensor,
+    axes_lhs: &[usize],
+    rhs: &DynAdTensor,
+    axes_rhs: &[usize],
+) -> Result<DynAdTensor> {
+    let (lhs, rhs) = promote_native_operands(lhs, rhs)?;
+    let (lhs_ids, rhs_ids, output_ids) =
+        build_binary_einsum_ids(lhs.ndim(), axes_lhs, rhs.ndim(), axes_rhs)?;
+    let notation = labels_to_notation(&[lhs_ids, rhs_ids], &output_ids)?;
+    dyn_ad_einsum_typed(&notation, &[&lhs, &rhs], lhs.scalar_type())
+}
+
+/// Compute outer product of two native AD tensors.
+pub fn outer_product_dyn_ad_tensor_native(
+    lhs: &DynAdTensor,
+    rhs: &DynAdTensor,
+) -> Result<DynAdTensor> {
+    contract_dyn_ad_tensor_native(lhs, &[], rhs, &[])
+}
+
+/// Conjugate a native AD tensor while preserving AD metadata.
+pub fn conj_dyn_ad_tensor_native(tensor: &DynAdTensor) -> Result<DynAdTensor> {
+    if tensor.is_real() {
+        return Ok(tensor.clone());
+    }
+    let real = tensor.real_part()?;
+    let imag = tensor.imag_part()?;
+    let neg_imag = imag
+        .scale(&scalar_type_to_minus_one(imag.scalar_type()))
+        .map_err(|e| anyhow!("native conjugation failed while negating imag part: {e}"))?;
+    DynAdTensor::compose_complex(real, neg_imag)
+        .map_err(|e| anyhow!("native conjugation failed: {e}"))
 }
 
 /// Permute storage through tenferro-native execution for dense tensors.
@@ -418,6 +717,8 @@ mod tests {
     use crate::storage::{DenseStorageC64, DenseStorageF64, DiagStorageF64, Storage};
     use num_complex::Complex64;
     use std::sync::{Mutex, OnceLock};
+    use tenferro_dyadtensor::AdMode;
+    use tenferro_tensor::MemoryOrder;
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -666,5 +967,62 @@ mod tests {
 
         assert_storage_eq(&native, &legacy);
         assert!(matches!(native, Storage::DiagF64(_)));
+    }
+
+    #[test]
+    fn sum_dyn_ad_tensor_native_preserves_forward_mode() {
+        let primal =
+            tenferro_tensor::Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::RowMajor)
+                .unwrap();
+        let tangent =
+            tenferro_tensor::Tensor::<f64>::from_slice(&[0.25, -0.75], &[2], MemoryOrder::RowMajor)
+                .unwrap();
+        let native = DynAdTensor::from(AdTensor::new_forward(primal, tangent));
+
+        let sum = sum_dyn_ad_tensor_native(&native).unwrap();
+
+        assert_eq!(sum.mode(), AdMode::Forward);
+        assert_eq!(sum.primal().as_f64(), Some(3.0));
+        assert_eq!(sum.tangent().and_then(|x| x.as_f64()), Some(-0.5));
+    }
+
+    #[test]
+    fn permute_dyn_ad_tensor_native_matches_primal_parity() {
+        let native = storage_to_dyn_ad_tensor(
+            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                &[2, 3],
+            )),
+            &[2, 3],
+        )
+        .unwrap();
+
+        let permuted = permute_dyn_ad_tensor_native(&native, &[1, 0]).unwrap();
+        let storage = dyn_ad_tensor_primal_to_storage(&permuted).unwrap();
+        let expected = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
+            &[3, 2],
+        ));
+        assert_storage_eq(&storage, &expected);
+    }
+
+    #[test]
+    fn contract_dyn_ad_tensor_native_matches_primal_parity() {
+        let lhs = storage_to_dyn_ad_tensor(
+            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3])),
+            &[2, 3],
+        )
+        .unwrap();
+        let rhs = storage_to_dyn_ad_tensor(
+            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[3, 4])),
+            &[3, 4],
+        )
+        .unwrap();
+
+        let contracted = contract_dyn_ad_tensor_native(&lhs, &[1], &rhs, &[0]).unwrap();
+        let storage = dyn_ad_tensor_primal_to_storage(&contracted).unwrap();
+        let expected =
+            Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![3.0; 8], &[2, 4]));
+        assert_storage_eq(&storage, &expected);
     }
 }
