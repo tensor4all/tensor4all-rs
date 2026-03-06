@@ -30,6 +30,10 @@ pub use storage::{
     DenseStorageC64, DenseStorageF64, DenseStorageFactory, DiagStorage, DiagStorageC64,
     DiagStorageF64, Storage, StorageScalar, SumFromStorage,
 };
+pub use tenferro_bridge::{
+    axpby_storage_native, dyn_ad_tensor_primal_to_storage, scale_storage_native,
+    storage_to_dyn_ad_tensor,
+};
 
 // Re-export underlying crates for downstream use.
 pub use mdarray;

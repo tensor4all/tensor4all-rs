@@ -40,6 +40,19 @@ fn test_diag_tensor_sum() {
 }
 
 #[test]
+fn test_diag_tensor_scale_preserves_diag_structure() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+    let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![1.0, -2.0, 4.0]);
+
+    let scaled = tensor.scale(AnyScalar::new_real(-0.5)).unwrap();
+
+    assert!(is_diag_tensor(&scaled));
+    let expected = diag_tensor_dyn_len(vec![i, j], vec![-0.5, 1.0, -2.0]);
+    assert!(scaled.isapprox(&expected, 1e-12, 0.0));
+}
+
+#[test]
 fn test_diag_tensor_permute() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(3);
@@ -177,6 +190,31 @@ fn test_diag_tensor_complex() {
     let z: Complex64 = sum.into();
     assert!((z.re - 3.0).abs() < 1e-10);
     assert!((z.im - 1.5).abs() < 1e-10);
+}
+
+#[test]
+fn test_diag_tensor_complex_axpby_preserves_diag_structure() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let diag_a = vec![Complex64::new(1.0, 0.5), Complex64::new(-2.0, 1.0)];
+    let diag_b = vec![Complex64::new(0.5, -1.0), Complex64::new(3.0, 0.25)];
+
+    let tensor_a = diag_tensor_dyn_len_c64(vec![i.clone(), j.clone()], diag_a.clone());
+    let tensor_b = diag_tensor_dyn_len_c64(vec![i.clone(), j.clone()], diag_b.clone());
+
+    let a = AnyScalar::new_real(2.0);
+    let b = AnyScalar::new_complex(-0.5, 1.0);
+    let result = tensor_a.axpby(a, &tensor_b, b).unwrap();
+
+    assert!(is_diag_tensor(&result));
+    let b_c = Complex64::new(-0.5, 1.0);
+    let expected_diag: Vec<Complex64> = diag_a
+        .iter()
+        .zip(diag_b.iter())
+        .map(|(&x, &y)| Complex64::new(2.0, 0.0) * x + b_c * y)
+        .collect();
+    let expected = diag_tensor_dyn_len_c64(vec![i, j], expected_diag);
+    assert!(result.isapprox(&expected, 1e-12, 0.0));
 }
 
 #[test]

@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::ops::{Mul, Neg, Sub};
 use std::sync::Arc;
 use tensor4all_tensorbackend::mdarray::DTensor;
+use tensor4all_tensorbackend::{axpby_storage_native, scale_storage_native};
 
 /// Compute the permutation array from original indices to new indices.
 ///
@@ -936,17 +937,22 @@ impl TensorDynLen {
         // Reuse storage-level fused axpby to avoid materializing two scaled temporaries.
         let self_storage = self.materialize_storage()?;
         let other_storage = other_aligned.materialize_storage()?;
-        let result_storage = self_storage
-            .as_ref()
-            .axpby(&a, other_storage.as_ref(), &b)
-            .map_err(|e| anyhow::anyhow!("Storage axpby failed: {}", e))?;
+        let result_storage = axpby_storage_native(
+            self_storage.as_ref(),
+            &self_expected_dims,
+            &a,
+            other_storage.as_ref(),
+            &other_expected_dims,
+            &b,
+        )?;
         Ok(Self::new(self.indices.clone(), Arc::new(result_storage)))
     }
 
     /// Scalar multiplication.
     pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
         let storage = self.materialize_storage()?;
-        let scaled_storage = storage.scale(&scalar);
+        let dims = Self::expected_dims_from_indices(&self.indices);
+        let scaled_storage = scale_storage_native(storage.as_ref(), &dims, &scalar)?;
         Ok(Self::new(self.indices.clone(), Arc::new(scaled_storage)))
     }
 
