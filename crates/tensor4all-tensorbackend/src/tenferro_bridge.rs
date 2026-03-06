@@ -9,7 +9,10 @@ use tenferro_dyadtensor::{AdTensor, DynAdTensor};
 use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::storage::{DenseStorageC64, DenseStorageF64, DiagStorageC64, DiagStorageF64, Storage};
+use crate::einsum::{einsum_storage, EinsumInput as BackendEinsumInput};
+use crate::storage::{
+    contract_storage, DenseStorageC64, DenseStorageF64, DiagStorageC64, DiagStorageF64, Storage,
+};
 use crate::AnyScalar;
 
 /// Runtime kind for tenferro execution.
@@ -174,6 +177,146 @@ pub fn dyn_ad_tensor_primal_to_storage(tensor: &DynAdTensor) -> Result<Storage> 
         DynAdTensor::F64(t) => tensor_f64_to_storage(t.primal()),
         DynAdTensor::C64(t) => tensor_c64_to_storage(t.primal()),
     }
+}
+
+/// Permute storage through tenferro-native execution for dense tensors.
+///
+/// Diagonal storage only changes metadata, so it is returned unchanged.
+pub fn permute_storage_native(
+    storage: &Storage,
+    logical_dims: &[usize],
+    perm: &[usize],
+) -> Result<Storage> {
+    match storage {
+        Storage::DiagF64(_) | Storage::DiagC64(_) => {
+            Ok(storage.permute_storage(logical_dims, perm))
+        }
+        Storage::DenseF64(_) => {
+            let tensor = dense_f64_to_tensor(storage, logical_dims)?;
+            let permuted = tensor
+                .permute(perm)
+                .map_err(|e| anyhow!("native permute failed for f64 tensor: {e}"))?;
+            tensor_f64_to_storage(&permuted)
+        }
+        Storage::DenseC64(_) => {
+            let tensor = dense_c64_to_tensor(storage, logical_dims)?;
+            let permuted = tensor
+                .permute(perm)
+                .map_err(|e| anyhow!("native permute failed for c64 tensor: {e}"))?;
+            tensor_c64_to_storage(&permuted)
+        }
+    }
+}
+
+fn build_binary_einsum_ids(
+    rank_a: usize,
+    axes_a: &[usize],
+    rank_b: usize,
+    axes_b: &[usize],
+) -> Result<(Vec<usize>, Vec<usize>, Vec<usize>)> {
+    if axes_a.len() != axes_b.len() {
+        return Err(anyhow!(
+            "binary contraction axes length mismatch: lhs={}, rhs={}",
+            axes_a.len(),
+            axes_b.len()
+        ));
+    }
+
+    let mut lhs_ids = vec![usize::MAX; rank_a];
+    let mut rhs_ids = vec![usize::MAX; rank_b];
+    let mut next_id = 0usize;
+
+    for (&lhs_axis, &rhs_axis) in axes_a.iter().zip(axes_b.iter()) {
+        if lhs_axis >= rank_a || rhs_axis >= rank_b {
+            return Err(anyhow!(
+                "binary contraction axis out of range: lhs_axis={}, rhs_axis={}, lhs_rank={}, rhs_rank={}",
+                lhs_axis,
+                rhs_axis,
+                rank_a,
+                rank_b
+            ));
+        }
+        if lhs_ids[lhs_axis] != usize::MAX || rhs_ids[rhs_axis] != usize::MAX {
+            return Err(anyhow!(
+                "duplicate contraction axis in native binary contraction: lhs_axis={}, rhs_axis={}",
+                lhs_axis,
+                rhs_axis
+            ));
+        }
+        lhs_ids[lhs_axis] = next_id;
+        rhs_ids[rhs_axis] = next_id;
+        next_id += 1;
+    }
+
+    let mut output_ids = Vec::with_capacity(rank_a + rank_b - 2 * axes_a.len());
+    for slot in &mut lhs_ids {
+        if *slot == usize::MAX {
+            *slot = next_id;
+            output_ids.push(next_id);
+            next_id += 1;
+        }
+    }
+    for slot in &mut rhs_ids {
+        if *slot == usize::MAX {
+            *slot = next_id;
+            output_ids.push(next_id);
+            next_id += 1;
+        }
+    }
+
+    Ok((lhs_ids, rhs_ids, output_ids))
+}
+
+/// Contract two storages through tenferro-native execution for dense tensors.
+///
+/// Cases involving diagonal storage fall back to the existing structured path.
+pub fn contract_storage_native(
+    storage_a: &Storage,
+    dims_a: &[usize],
+    axes_a: &[usize],
+    storage_b: &Storage,
+    dims_b: &[usize],
+    axes_b: &[usize],
+    result_dims: &[usize],
+) -> Result<Storage> {
+    if storage_a.is_diag() || storage_b.is_diag() {
+        return Ok(contract_storage(
+            storage_a,
+            dims_a,
+            axes_a,
+            storage_b,
+            dims_b,
+            axes_b,
+            result_dims,
+        ));
+    }
+
+    let (lhs_ids, rhs_ids, output_ids) =
+        build_binary_einsum_ids(dims_a.len(), axes_a, dims_b.len(), axes_b)?;
+    let inputs = [
+        BackendEinsumInput {
+            ids: lhs_ids.as_slice(),
+            storage: storage_a,
+            dims: dims_a,
+        },
+        BackendEinsumInput {
+            ids: rhs_ids.as_slice(),
+            storage: storage_b,
+            dims: dims_b,
+        },
+    ];
+    einsum_storage(&inputs, &output_ids)
+}
+
+/// Compute an outer product through tenferro-native execution for dense tensors.
+pub fn outer_product_storage_native(
+    lhs: &Storage,
+    lhs_dims: &[usize],
+    rhs: &Storage,
+    rhs_dims: &[usize],
+    result_dims: &[usize],
+) -> Result<Storage> {
+    contract_storage_native(lhs, lhs_dims, &[], rhs, rhs_dims, &[], result_dims)
 }
 
 /// Apply native tenferro mixed scalar/tensor scaling at the storage boundary.
@@ -457,5 +600,71 @@ mod tests {
             &[2],
         ));
         assert_storage_eq(&roundtrip, &expected);
+    }
+
+    #[test]
+    fn permute_storage_native_dense_matches_legacy() {
+        let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+        ));
+
+        let native = permute_storage_native(&storage, &[2, 3], &[1, 0]).unwrap();
+        let legacy = storage.permute_storage(&[2, 3], &[1, 0]);
+
+        assert_storage_eq(&native, &legacy);
+    }
+
+    #[test]
+    fn contract_storage_native_dense_mixed_matches_legacy() {
+        let lhs = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![1.0, 2.0, 3.0, 4.0],
+            &[2, 2],
+        ));
+        let rhs = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+            vec![
+                Complex64::new(1.0, -1.0),
+                Complex64::new(2.0, 0.5),
+                Complex64::new(3.0, 1.5),
+                Complex64::new(-4.0, 2.0),
+            ],
+            &[2, 2],
+        ));
+
+        let native =
+            contract_storage_native(&lhs, &[2, 2], &[1], &rhs, &[2, 2], &[0], &[2, 2]).unwrap();
+        let legacy = contract_storage(&lhs, &[2, 2], &[1], &rhs, &[2, 2], &[0], &[2, 2]);
+
+        assert_storage_eq(&native, &legacy);
+    }
+
+    #[test]
+    fn outer_product_storage_native_dense_matches_legacy() {
+        let lhs = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+            vec![Complex64::new(1.0, 0.25), Complex64::new(-2.0, 1.0)],
+            &[2],
+        ));
+        let rhs = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![3.0, -1.0, 0.5],
+            &[3],
+        ));
+
+        let native = outer_product_storage_native(&lhs, &[2], &rhs, &[3], &[2, 3]).unwrap();
+        let legacy = contract_storage(&lhs, &[2], &[], &rhs, &[3], &[], &[2, 3]);
+
+        assert_storage_eq(&native, &legacy);
+    }
+
+    #[test]
+    fn contract_storage_native_diag_falls_back_to_legacy() {
+        let lhs = Storage::DiagF64(DiagStorageF64::from_vec(vec![1.0, 2.0, 3.0]));
+        let rhs = Storage::DiagF64(DiagStorageF64::from_vec(vec![4.0, 5.0, 6.0]));
+
+        let native =
+            contract_storage_native(&lhs, &[3, 3], &[1], &rhs, &[3, 3], &[0], &[3, 3]).unwrap();
+        let legacy = contract_storage(&lhs, &[3, 3], &[1], &rhs, &[3, 3], &[0], &[3, 3]);
+
+        assert_storage_eq(&native, &legacy);
+        assert!(matches!(native, Storage::DiagF64(_)));
     }
 }

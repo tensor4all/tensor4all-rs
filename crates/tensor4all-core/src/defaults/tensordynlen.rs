@@ -10,7 +10,10 @@ use std::collections::HashSet;
 use std::ops::{Mul, Neg, Sub};
 use std::sync::Arc;
 use tensor4all_tensorbackend::mdarray::DTensor;
-use tensor4all_tensorbackend::{axpby_storage_native, scale_storage_native};
+use tensor4all_tensorbackend::{
+    axpby_storage_native, contract_storage_native, outer_product_storage_native,
+    permute_storage_native, scale_storage_native,
+};
 
 /// Compute the permutation array from original indices to new indices.
 ///
@@ -313,7 +316,10 @@ impl TensorDynLen {
 
         // Permute storage data using the computed permutation
         let base_dims = Self::expected_dims_from_indices(&self.indices);
-        let new_storage = Arc::new(self.storage().permute_storage(&base_dims, &perm));
+        let new_storage = Arc::new(
+            permute_storage_native(self.storage(), &base_dims, &perm)
+                .expect("native permute_indices failed"),
+        );
 
         Self::new(new_indices.to_vec(), new_storage)
     }
@@ -363,7 +369,10 @@ impl TensorDynLen {
         let new_indices: Vec<DynIndex> = perm.iter().map(|&i| self.indices[i].clone()).collect();
 
         // Permute storage data
-        let new_storage = Arc::new(self.storage().permute_storage(&base_dims, perm));
+        let new_storage = Arc::new(
+            permute_storage_native(self.storage(), &base_dims, perm)
+                .expect("native permute failed"),
+        );
 
         Self::new(new_indices, new_storage)
     }
@@ -417,15 +426,18 @@ impl TensorDynLen {
             .expect("contraction preparation failed");
 
         let result_dims = Self::expected_dims_from_indices(&spec.result_indices);
-        let result_storage = Arc::new(contract_storage(
-            self.storage(),
-            &self_dims,
-            &spec.axes_a,
-            other.storage(),
-            &other_dims,
-            &spec.axes_b,
-            &result_dims,
-        ));
+        let result_storage = Arc::new(
+            contract_storage_native(
+                self.storage(),
+                &self_dims,
+                &spec.axes_a,
+                other.storage(),
+                &other_dims,
+                &spec.axes_b,
+                &result_dims,
+            )
+            .expect("native contract failed"),
+        );
 
         Self::new(spec.result_indices, result_storage)
     }
@@ -571,7 +583,6 @@ impl TensorDynLen {
     /// assert_eq!(result.dims(), vec![2, 3]);
     /// ```
     pub fn outer_product(&self, other: &Self) -> Result<Self> {
-        use crate::storage::contract_storage;
         use anyhow::Context;
 
         // Check for common indices - outer product should have none
@@ -598,15 +609,16 @@ impl TensorDynLen {
         let result_dims = Self::expected_dims_from_indices(&result_indices);
 
         // Perform outer product using contract_storage with empty axes
-        let result_storage = Arc::new(contract_storage(
-            self.storage(),
-            &self_dims,
-            &[], // No axes to contract from self
-            other.storage(),
-            &other_dims,
-            &[], // No axes to contract from other
-            &result_dims,
-        ));
+        let result_storage = Arc::new(
+            outer_product_storage_native(
+                self.storage(),
+                &self_dims,
+                other.storage(),
+                &other_dims,
+                &result_dims,
+            )
+            .expect("native outer product failed"),
+        );
 
         Ok(Self::new(result_indices, result_storage))
     }

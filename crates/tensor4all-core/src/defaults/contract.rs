@@ -115,8 +115,9 @@ pub fn contract_multi(
                 }
 
                 // Combine with outer product
-                let mut result = results.pop().unwrap();
-                for other in results.into_iter().rev() {
+                let mut results_iter = results.into_iter();
+                let mut result = results_iter.next().unwrap();
+                for other in results_iter {
                     result = result.outer_product(&other)?;
                 }
                 Ok(result)

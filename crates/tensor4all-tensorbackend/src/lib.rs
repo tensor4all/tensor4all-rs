@@ -31,7 +31,8 @@ pub use storage::{
     DiagStorageF64, Storage, StorageScalar, SumFromStorage,
 };
 pub use tenferro_bridge::{
-    axpby_storage_native, dyn_ad_tensor_primal_to_storage, scale_storage_native,
+    axpby_storage_native, contract_storage_native, dyn_ad_tensor_primal_to_storage,
+    outer_product_storage_native, permute_storage_native, scale_storage_native,
     storage_to_dyn_ad_tensor,
 };
 

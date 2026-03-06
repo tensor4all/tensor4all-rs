@@ -140,6 +140,27 @@ fn test_contract_no_common_indices_gives_outer_product() {
 }
 
 #[test]
+fn test_contract_no_common_indices_preserves_left_then_right_index_order_and_values() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+
+    let tensor_a = TensorDynLen::from_dense_f64(vec![i.clone()], vec![2.0, -1.0]);
+    let tensor_b = TensorDynLen::from_dense_f64(vec![j.clone()], vec![3.0, 4.0, -2.0]);
+
+    let result = tensor_a.contract(&tensor_b);
+
+    assert_eq!(result.indices, vec![i, j]);
+    let expected = TensorDynLen::from_dense_f64(
+        result.indices.clone(),
+        vec![
+            6.0, 8.0, -4.0, //
+            -3.0, -4.0, 2.0,
+        ],
+    );
+    assert!(result.isapprox(&expected, 1e-12, 0.0));
+}
+
+#[test]
 fn test_contract_three_indices() {
     // Create A[i, j, k] and B[j, k, l]
     // Contract along j and k: result should be C[i, l]
