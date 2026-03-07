@@ -197,11 +197,7 @@ fn shift_mpo(r: usize, offset: i64, bc: BoundaryCondition) -> Result<TensorTrain
         let bc_factor = match bc {
             BoundaryCondition::Periodic => Complex64::one(),
             BoundaryCondition::Open => {
-                if nbc > 0 {
-                    Complex64::zero() // Shifted out of bounds
-                } else {
-                    Complex64::one()
-                }
+                Complex64::zero() // Any full-cycle offset is out of bounds
             }
         };
         mpo.scale(bc_factor);
@@ -283,5 +279,45 @@ mod tests {
     fn test_shift_error_zero_sites() {
         let result = shift_operator(0, 0, BoundaryCondition::Periodic);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_shift_mpo_open_bc_negative_full_cycle_returns_zero() {
+        // offset = -16 with R=4 means nbc = -1 (one full cycle backward)
+        // Open BC should give zero MPO for any full-cycle offset
+        let mpo = shift_mpo(4, -16, BoundaryCondition::Open).unwrap();
+        // scale() applies to last tensor only, so check that contraction gives zero
+        // Evaluate the MPO on all inputs to verify it's the zero operator
+        let last = mpo.site_tensor(mpo.len() - 1);
+        for l in 0..last.left_dim() {
+            for s in 0..last.site_dim() {
+                for r in 0..last.right_dim() {
+                    assert_eq!(
+                        *last.get3(l, s, r),
+                        Complex64::zero(),
+                        "Expected zero in last tensor at ({l},{s},{r})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_shift_mpo_open_bc_positive_full_cycle_returns_zero() {
+        // offset = 16 with R=4 means nbc = 1 (one full cycle forward)
+        // Open BC should give zero MPO for any full-cycle offset
+        let mpo = shift_mpo(4, 16, BoundaryCondition::Open).unwrap();
+        let last = mpo.site_tensor(mpo.len() - 1);
+        for l in 0..last.left_dim() {
+            for s in 0..last.site_dim() {
+                for r in 0..last.right_dim() {
+                    assert_eq!(
+                        *last.get3(l, s, r),
+                        Complex64::zero(),
+                        "Expected zero in last tensor at ({l},{s},{r})"
+                    );
+                }
+            }
+        }
     }
 }

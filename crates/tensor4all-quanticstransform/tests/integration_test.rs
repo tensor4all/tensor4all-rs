@@ -1138,41 +1138,34 @@ fn test_shift_open_boundary() {
     );
 
     // Test cases: (x, offset, expected)
-    // With Open BC, the result depends on whether x + offset_mod causes carry overflow.
+    // With Open BC, the result depends on whether x + offset is in [0, N).
     //
     // Implementation detail:
     // - offset is normalized to offset_mod = offset.rem_euclid(N) in [0, N)
     // - nbc = (offset - offset_mod) / N tracks full cycles
-    // - If nbc > 0 (positive overflow beyond N), entire MPO is zeroed
-    // - If nbc < 0 (negative offset), no global zeroing, but local carry may still zero
+    // - If nbc != 0 (any full cycle), entire MPO is zeroed for Open BC
     // - Local carry overflow at MSB zeros the result via bc_val = 0
     //
     // So for Open BC:
-    // - shift(x, offset) with offset >= 0: result is zero if x + offset >= N
-    // - shift(x, offset) with offset < 0:
-    //   - offset_mod = N + offset (e.g., -1 mod 8 = 7)
-    //   - nbc = -1 (no global zeroing)
-    //   - But x + offset_mod may cause local carry overflow
-    //   - e.g., shift(7, -3): offset_mod = 5, 7 + 5 = 12 >= 8, overflow -> zero
-    //   - e.g., shift(0, -1): offset_mod = 7, 0 + 7 = 7 < 8, no overflow -> result = 7
+    // - shift(x, offset) with nbc != 0: always zero (full cycle out of bounds)
+    // - shift(x, offset) with nbc == 0: zero if x + offset >= N (carry overflow)
     //
     let test_cases: Vec<(usize, i64, Option<usize>)> = vec![
-        // No overflow cases (positive offset)
+        // No overflow cases (positive offset, nbc == 0)
         (0, 0, Some(0)), // 0 + 0 = 0, in range
         (3, 2, Some(5)), // 3 + 2 = 5, in range
         (0, 7, Some(7)), // 0 + 7 = 7, in range
         (1, 3, Some(4)), // 1 + 3 = 4, in range
-        // Overflow cases (positive offset)
+        // Overflow cases (positive offset, nbc == 0)
         (7, 1, None), // 7 + 1 = 8 >= 8, overflow
         (6, 3, None), // 6 + 3 = 9 >= 8, overflow
         (4, 5, None), // 4 + 5 = 9 >= 8, overflow
-        // Negative offset cases
-        // shift(x, -k) -> offset_mod = 8 - k, x + offset_mod >= 8 iff x >= k
-        (0, -1, Some(7)), // offset_mod = 7, 0 + 7 = 7 < 8, no overflow
-        (0, -7, Some(1)), // offset_mod = 1, 0 + 1 = 1 < 8, no overflow
-        (1, -1, None),    // offset_mod = 7, 1 + 7 = 8 >= 8, overflow
-        (2, -1, None),    // offset_mod = 7, 2 + 7 = 9 >= 8, overflow
-        (7, -7, None),    // offset_mod = 1, 7 + 1 = 8 >= 8, overflow
+        // Negative offset cases (all have nbc == -1, so entire MPO is zeroed)
+        (0, -1, None), // nbc = -1, entire MPO zeroed for Open BC
+        (0, -7, None), // nbc = -1, entire MPO zeroed for Open BC
+        (1, -1, None), // nbc = -1, entire MPO zeroed for Open BC
+        (2, -1, None), // nbc = -1, entire MPO zeroed for Open BC
+        (7, -7, None), // nbc = -1, entire MPO zeroed for Open BC
     ];
 
     for (x, offset, expected) in test_cases {
