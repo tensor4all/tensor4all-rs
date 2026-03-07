@@ -84,11 +84,12 @@ impl<T: Scalar> MatrixLUCI<T> {
             };
 
             // Solve: result[n:, :] = L[n:, :] * L[0:n, 0:n]^{-1}
-            // This is forward substitution
+            // L_pivot is lower triangular, so we use backward substitution
+            // (processing columns from right to left)
             for i in 0..(nr - n) {
-                for j in 0..n {
+                for j in (0..n).rev() {
                     let mut val = l_sub[[i, j]];
-                    for k in 0..j {
+                    for k in (j + 1)..n {
                         val = val - actual_result[[n + i, k]] * l_pivot[[k, j]];
                     }
                     let diag = l_pivot[[j, j]];
@@ -269,6 +270,43 @@ mod tests {
                     "Reconstruction error at ({}, {}): {}",
                     i,
                     j,
+                    diff
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_matrixluci_rank2_iplusj_left_orthogonal() {
+        // Pi matrix for f(i,j) = i + j on 4x4 grid
+        let m = from_vec2d(vec![
+            vec![0.0, 1.0, 2.0, 3.0],
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![2.0, 3.0, 4.0, 5.0],
+            vec![3.0, 4.0, 5.0, 6.0],
+        ]);
+
+        let opts = RrLUOptions {
+            left_orthogonal: true,
+            ..Default::default()
+        };
+        let luci = MatrixLUCI::from_matrix(&m, Some(opts)).unwrap();
+        assert_eq!(luci.rank(), 2);
+
+        // Check left() * right() = Pi
+        let left = luci.left();
+        let right = luci.right();
+        let reconstructed = mat_mul(&left, &right);
+        for i in 0..4 {
+            for j in 0..4 {
+                let diff = (m[[i, j]] - reconstructed[[i, j]]).abs();
+                assert!(
+                    diff < 1e-10,
+                    "Reconstruction error at ({}, {}): expected {} got {} (diff {})",
+                    i,
+                    j,
+                    m[[i, j]],
+                    reconstructed[[i, j]],
                     diff
                 );
             }
