@@ -80,7 +80,11 @@ impl<T: TTScalar> TensorTrain<T> {
         tensors.push(first);
 
         // Middle tensors: all ones
-        for &d in &site_dims[1..n - 1] {
+        for &d in if n > 2 {
+            &site_dims[1..n - 1]
+        } else {
+            &[] as &[usize]
+        } {
             let mut tensor = tensor3_zeros(1, d, 1);
             for s in 0..d {
                 tensor.set3(0, s, 0, T::one());
