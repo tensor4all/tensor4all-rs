@@ -470,6 +470,12 @@ where
                             "native SVD lost payload during permutation"
                         ))
                     })?
+                    .contiguous(MemoryOrder::RowMajor)
+                    .map_err(|e| {
+                        SvdError::ComputationError(anyhow::anyhow!(
+                            "native SVD row-major normalization failed: {e}"
+                        ))
+                    })?
                     .reshape(&[m, n])
                     .map_err(|e| {
                         SvdError::ComputationError(anyhow::anyhow!(

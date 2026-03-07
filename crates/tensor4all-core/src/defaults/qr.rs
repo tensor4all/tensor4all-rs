@@ -277,6 +277,12 @@ where
                         "native QR lost payload during permutation"
                     ))
                 })?
+                .contiguous(MemoryOrder::RowMajor)
+                .map_err(|e| {
+                    QrError::ComputationError(anyhow::anyhow!(
+                        "native QR row-major normalization failed: {e}"
+                    ))
+                })?
                 .reshape(&[m, n])
                 .map_err(|e| {
                     QrError::ComputationError(anyhow::anyhow!(

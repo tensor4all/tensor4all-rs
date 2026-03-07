@@ -131,6 +131,27 @@ fn dense_f64_to_tensor(storage: &Storage, logical_dims: &[usize]) -> Result<Tens
     }
 }
 
+fn diag_f64_to_structured(
+    storage: &Storage,
+    logical_dims: &[usize],
+) -> Result<StructuredTensor<f64>> {
+    match storage {
+        Storage::DiagF64(ds) => {
+            let payload = Tensor::from_slice(ds.as_slice(), &[ds.len()], MemoryOrder::RowMajor)
+                .map_err(|e| anyhow!("failed to build f64 diagonal payload from storage: {e}"))?;
+            StructuredTensor::from_diagonal_vector(payload, logical_dims.len())
+                .map_err(|e| anyhow!("failed to build f64 structured diagonal tensor: {e}"))
+        }
+        Storage::DenseF64(_) => Ok(StructuredTensor::from_dense(dense_f64_to_tensor(
+            storage,
+            logical_dims,
+        )?)),
+        Storage::DenseC64(_) | Storage::DiagC64(_) => Err(anyhow!(
+            "complex storage cannot be converted to f64 DynAdTensor"
+        )),
+    }
+}
+
 fn dense_c64_to_tensor(
     storage: &Storage,
     logical_dims: &[usize],
@@ -152,6 +173,27 @@ fn dense_c64_to_tensor(
         Storage::DiagC64(_) => {
             dense_c64_to_tensor(&storage.to_dense_storage(logical_dims), logical_dims)
         }
+        Storage::DenseF64(_) | Storage::DiagF64(_) => Err(anyhow!(
+            "real storage cannot be converted to c64 DynAdTensor without promotion"
+        )),
+    }
+}
+
+fn diag_c64_to_structured(
+    storage: &Storage,
+    logical_dims: &[usize],
+) -> Result<StructuredTensor<num_complex::Complex64>> {
+    match storage {
+        Storage::DiagC64(ds) => {
+            let payload = Tensor::from_slice(ds.as_slice(), &[ds.len()], MemoryOrder::RowMajor)
+                .map_err(|e| anyhow!("failed to build c64 diagonal payload from storage: {e}"))?;
+            StructuredTensor::from_diagonal_vector(payload, logical_dims.len())
+                .map_err(|e| anyhow!("failed to build c64 structured diagonal tensor: {e}"))
+        }
+        Storage::DenseC64(_) => Ok(StructuredTensor::from_dense(dense_c64_to_tensor(
+            storage,
+            logical_dims,
+        )?)),
         Storage::DenseF64(_) | Storage::DiagF64(_) => Err(anyhow!(
             "real storage cannot be converted to c64 DynAdTensor without promotion"
         )),
@@ -325,6 +367,57 @@ fn promote_native_operands(
     }
 }
 
+fn target_scalar_type_for_operands(operands: &[&DynAdTensor]) -> Result<ScalarType> {
+    let mut saw_f32 = false;
+    let mut saw_f64 = false;
+    let mut saw_c32 = false;
+    let mut saw_c64 = false;
+
+    for operand in operands {
+        match operand.scalar_type() {
+            ScalarType::F32 => saw_f32 = true,
+            ScalarType::F64 => saw_f64 = true,
+            ScalarType::C32 => saw_c32 = true,
+            ScalarType::C64 => saw_c64 = true,
+        }
+    }
+
+    match (saw_f32, saw_f64, saw_c32, saw_c64) {
+        (true, false, false, false) => Ok(ScalarType::F32),
+        (false, true, false, false) => Ok(ScalarType::F64),
+        (false, false, true, false) | (true, false, true, false) => Ok(ScalarType::C32),
+        (false, false, false, true) | (false, true, false, true) => Ok(ScalarType::C64),
+        _ => Err(anyhow!(
+            "native tensor promotion does not support operand scalar types {:?}",
+            operands
+                .iter()
+                .map(|operand| operand.scalar_type())
+                .collect::<Vec<_>>()
+        )),
+    }
+}
+
+fn promote_native_operands_many(
+    operands: &[&DynAdTensor],
+) -> Result<(Vec<DynAdTensor>, ScalarType)> {
+    let target = target_scalar_type_for_operands(operands)?;
+    let promoted = operands
+        .iter()
+        .map(|operand| match (operand.scalar_type(), target) {
+            (src, dst) if src == dst => Ok((*operand).clone()),
+            (ScalarType::F32, ScalarType::C32) | (ScalarType::F64, ScalarType::C64) => {
+                promote_real_tensor_to_complex(operand)
+            }
+            _ => Err(anyhow!(
+                "native tensor promotion does not support operand {:?} to {:?}",
+                operand.scalar_type(),
+                target
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((promoted, target))
+}
+
 fn labels_to_notation(inputs: &[Vec<usize>], output: &[usize]) -> Result<String> {
     let mut id_to_char = HashMap::new();
     let mut next_code = 'a' as u32;
@@ -415,6 +508,24 @@ fn dyn_ad_einsum_typed(
     })
 }
 
+/// Execute native structured einsum on multiple AD tensors.
+pub fn einsum_dyn_ad_tensors_native(
+    operands: &[(&DynAdTensor, &[usize])],
+    output_ids: &[usize],
+) -> Result<DynAdTensor> {
+    if operands.is_empty() {
+        return Err(anyhow!("native einsum requires at least one operand"));
+    }
+
+    let operand_refs: Vec<&DynAdTensor> = operands.iter().map(|(tensor, _)| *tensor).collect();
+    let (promoted, scalar_type) = promote_native_operands_many(&operand_refs)?;
+    let input_ids: Vec<Vec<usize>> = operands.iter().map(|(_, ids)| ids.to_vec()).collect();
+    let notation = labels_to_notation(&input_ids, output_ids)?;
+    let promoted_refs: Vec<&DynAdTensor> = promoted.iter().collect();
+
+    dyn_ad_einsum_typed(&notation, &promoted_refs, scalar_type)
+}
+
 fn dyn_ad_tensor_to_scalar_native(tensor: &DynAdTensor) -> Result<DynAdScalar> {
     match tensor {
         DynAdTensor::F32(t) => Ok(DynAdScalar::F32(ad_tensor_to_scalar_typed(t)?)),
@@ -425,16 +536,19 @@ fn dyn_ad_tensor_to_scalar_native(tensor: &DynAdTensor) -> Result<DynAdScalar> {
 }
 
 /// Convert legacy [`Storage`] into a primal-mode [`DynAdTensor`].
-///
-/// Diagonal storage is materialized to dense storage because tenferro's
-/// current AD carrier is dense-only.
 pub fn storage_to_dyn_ad_tensor(storage: &Storage, logical_dims: &[usize]) -> Result<DynAdTensor> {
     match storage {
-        Storage::DenseF64(_) | Storage::DiagF64(_) => Ok(DynAdTensor::from(AdTensor::new_primal(
+        Storage::DenseF64(_) => Ok(DynAdTensor::from(AdTensor::new_primal(
             dense_f64_to_tensor(storage, logical_dims)?,
         ))),
-        Storage::DenseC64(_) | Storage::DiagC64(_) => Ok(DynAdTensor::from(AdTensor::new_primal(
+        Storage::DiagF64(_) => Ok(DynAdTensor::from(AdTensor::new_primal(
+            diag_f64_to_structured(storage, logical_dims)?,
+        ))),
+        Storage::DenseC64(_) => Ok(DynAdTensor::from(AdTensor::new_primal(
             dense_c64_to_tensor(storage, logical_dims)?,
+        ))),
+        Storage::DiagC64(_) => Ok(DynAdTensor::from(AdTensor::new_primal(
+            diag_c64_to_structured(storage, logical_dims)?,
         ))),
     }
 }
@@ -966,14 +1080,14 @@ mod tests {
     }
 
     #[test]
-    fn storage_dyn_ad_tensor_roundtrip_diag_materializes_to_dense() {
+    fn storage_dyn_ad_tensor_roundtrip_diag_preserves_diag_layout() {
         let storage = Storage::DiagF64(DiagStorageF64::from_vec(vec![2.0, -1.0, 4.0]));
 
         let native = storage_to_dyn_ad_tensor(&storage, &[3, 3]).unwrap();
         let roundtrip = dyn_ad_tensor_primal_to_storage(&native).unwrap();
 
-        let expected = storage.to_dense_storage(&[3, 3]);
-        assert_storage_eq(&roundtrip, &expected);
+        assert!(native.is_diag());
+        assert_storage_eq(&roundtrip, &storage);
     }
 
     #[test]
@@ -1101,6 +1215,40 @@ mod tests {
             &[3, 2],
         ));
         assert_storage_eq(&storage, &expected);
+    }
+
+    #[test]
+    fn einsum_dyn_ad_tensors_native_preserves_diag_and_forward_mode() {
+        let diag = Storage::DiagF64(DiagStorageF64::from_vec(vec![2.0, 3.0]));
+        let native_diag = storage_to_dyn_ad_tensor(&diag, &[2, 2]).unwrap();
+
+        let primal =
+            tenferro_tensor::Tensor::<f64>::from_slice(&[1.0, 4.0], &[2], MemoryOrder::RowMajor)
+                .unwrap();
+        let tangent =
+            tenferro_tensor::Tensor::<f64>::from_slice(&[0.5, -1.0], &[2], MemoryOrder::RowMajor)
+                .unwrap();
+        let native_vec = DynAdTensor::from(AdTensor::new_forward(primal, tangent).unwrap());
+
+        let result =
+            einsum_dyn_ad_tensors_native(&[(&native_diag, &[0, 1]), (&native_vec, &[1])], &[0])
+                .unwrap();
+        let roundtrip = dyn_ad_tensor_primal_to_storage(&result).unwrap();
+
+        assert_eq!(result.mode(), AdMode::Forward);
+        assert_storage_eq(
+            &roundtrip,
+            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![2.0, 12.0], &[2])),
+        );
+        let tangent = sum_dyn_ad_tensor_native(&result)
+            .unwrap()
+            .tangent()
+            .and_then(|x| x.as_f64())
+            .unwrap();
+        assert!(
+            (tangent + 2.0).abs() < 1e-12,
+            "unexpected native einsum tangent: {tangent}"
+        );
     }
 
     #[test]

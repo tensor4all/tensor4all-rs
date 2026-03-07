@@ -29,6 +29,7 @@ use petgraph::algo::connected_components;
 use petgraph::prelude::*;
 use std::sync::Arc;
 use tensor4all_tensorbackend::einsum::{einsum_storage, EinsumInput as BackendEinsumInput};
+use tensor4all_tensorbackend::einsum_dyn_ad_tensors_native;
 
 use crate::defaults::{DynId, DynIndex, TensorComponent, TensorData, TensorDynLen};
 
@@ -404,10 +405,37 @@ fn contract_multi_impl(
         }
     }
 
+    if tensors.iter().all(|tensor| tensor.as_native().is_some()) {
+        let native_operands: Vec<(&tensor4all_tensorbackend::DynAdTensor, &[usize])> = tensors
+            .iter()
+            .enumerate()
+            .map(|(tensor_idx, tensor)| {
+                (
+                    tensor.as_native().expect("checked native payload"),
+                    ixs[tensor_idx].as_slice(),
+                )
+            })
+            .collect();
+
+        let result_native = einsum_dyn_ad_tensors_native(&native_operands, &output)?;
+        let final_indices = if output.is_empty() {
+            vec![]
+        } else {
+            output
+                .iter()
+                .map(|&internal_id| {
+                    let (tensor_idx, pos) = internal_id_to_original[&internal_id];
+                    tensors[tensor_idx].indices[pos].clone()
+                })
+                .collect()
+        };
+        return TensorDynLen::from_native(final_indices, result_native);
+    }
+
     // 6. Build backend einsum inputs directly from TensorData components.
     //
-    // This avoids eagerly materializing each TensorDynLen into a single storage
-    // and preserves lazy permutation/component structure until contraction.
+    // This preserves lazy permutation/component structure until contraction
+    // for tensors that do not yet carry a native tenferro payload.
     let per_tensor_id_map: Vec<HashMap<DynId, usize>> = tensors
         .iter()
         .enumerate()

@@ -213,6 +213,29 @@ fn test_svd_rank3() {
 }
 
 #[test]
+fn test_svd_nontrivial_split_reconstruction() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let l = Index::new_dyn(2);
+
+    let data = (1..=24).map(|x| x as f64).collect::<Vec<_>>();
+    let storage = Arc::new(Storage::DenseF64(
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 3, 2, 2]),
+    ));
+    let tensor = TensorDynLen::new(vec![i.clone(), j.clone(), k.clone(), l.clone()], storage);
+
+    let (u, s, v) = svd::<f64>(&tensor, &[i.clone(), k.clone()]).expect("SVD should succeed");
+    let reconstructed = reconstruct_from_svd(&u, &s, &v);
+
+    assert!(
+        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        "SVD nontrivial split reconstruction failed: maxabs diff = {}",
+        (&tensor - &reconstructed).maxabs()
+    );
+}
+
+#[test]
 fn test_svd_complex_reconstruction() {
     // Complex diagonal-ish matrix where conjugation matters in principle:
     // A = [[i, 0], [0, 2]]

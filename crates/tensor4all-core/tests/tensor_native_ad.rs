@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tensor4all_core::{
     factorize, qr, svd, AnyScalar, Canonical, FactorizeOptions, Index, Storage, TensorDynLen,
 };
@@ -166,9 +168,26 @@ fn rank1_native_snapshots_stay_dense() {
 }
 
 #[test]
-fn plain_dense_storage_does_not_auto_seed_native_payload() {
+fn plain_dense_storage_auto_seeds_native_payload() {
     let i = Index::new_dyn(2);
     let tensor = TensorDynLen::from_dense_f64(vec![i], vec![1.0, 2.0]);
 
-    assert!(tensor.as_native().is_none());
+    assert_eq!(
+        tensor.as_native().map(DynAdTensor::mode),
+        Some(AdMode::Primal)
+    );
+}
+
+#[test]
+fn plain_diag_storage_auto_seeds_native_diag_payload() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+    let tensor = TensorDynLen::new(
+        vec![i, j],
+        Arc::new(Storage::new_diag_f64(vec![1.0, 2.0, 3.0])),
+    );
+
+    let native = tensor.as_native().expect("missing native payload");
+    assert_eq!(native.mode(), AdMode::Primal);
+    assert!(native.is_diag());
 }

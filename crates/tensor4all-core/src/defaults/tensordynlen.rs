@@ -14,7 +14,7 @@ use tensor4all_tensorbackend::{
     axpby_storage_native, conj_dyn_ad_tensor_native, contract_dyn_ad_tensor_native,
     contract_storage_native, dyn_ad_tensor_primal_to_storage, outer_product_dyn_ad_tensor_native,
     outer_product_storage_native, permute_dyn_ad_tensor_native, permute_storage_native,
-    scale_storage_native, sum_dyn_ad_tensor_native, DynAdTensor,
+    scale_storage_native, storage_to_dyn_ad_tensor, sum_dyn_ad_tensor_native, DynAdTensor,
 };
 
 /// Compute the permutation array from original indices to new indices.
@@ -147,8 +147,8 @@ impl TensorDynLen {
         TensorData::new(storage, index_ids, dims)
     }
 
-    fn seed_native_payload(_storage: &Storage, _dims: &[usize]) -> Option<DynAdTensor> {
-        None
+    fn seed_native_payload(storage: &Storage, dims: &[usize]) -> Option<DynAdTensor> {
+        storage_to_dyn_ad_tensor(storage, dims).ok()
     }
 
     fn from_storage_and_native(

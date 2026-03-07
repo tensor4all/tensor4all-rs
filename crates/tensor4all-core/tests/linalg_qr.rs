@@ -178,6 +178,29 @@ fn test_qr_rank3() {
 }
 
 #[test]
+fn test_qr_nontrivial_split_reconstruction() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let l = Index::new_dyn(2);
+
+    let data = (1..=24).map(|x| x as f64).collect::<Vec<_>>();
+    let storage = Arc::new(Storage::DenseF64(
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 3, 2, 2]),
+    ));
+    let tensor = TensorDynLen::new(vec![i.clone(), j.clone(), k.clone(), l.clone()], storage);
+
+    let (q, r) = qr::<f64>(&tensor, &[i.clone(), k.clone()]).expect("QR should succeed");
+    let reconstructed = q.contract(&r);
+
+    assert!(
+        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        "QR nontrivial split reconstruction failed: maxabs diff = {}",
+        (&tensor - &reconstructed).maxabs()
+    );
+}
+
+#[test]
 fn test_qr_complex_reconstruction() {
     // Complex matrix: [[i, 0], [0, 2]]
     let i_idx = Index::new_dyn(2);
