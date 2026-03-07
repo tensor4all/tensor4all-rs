@@ -7,7 +7,7 @@
 //! - `SiteTensorTrain`: Center-canonical form
 //! - `VidalTensorTrain`: Vidal canonical form with explicit singular values
 //! - `InverseTensorTrain`: Inverse form for efficient local updates
-//! - Compression algorithms (LU, CI, SVD)
+//! - Compression algorithms (LU, CI, and an explicit error for unimplemented SVD)
 //! - Arithmetic operations (add, subtract, scale)
 //!
 //! # Example
