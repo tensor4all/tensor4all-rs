@@ -244,61 +244,114 @@ fn evaluate_mps_all(mps: &TensorTrain<Complex64>) -> Vec<Complex64> {
     result
 }
 
-/// Apply a QuanticsOperator to all product state inputs and collect results as a dense matrix.
+/// Apply a QuanticsOperator and collect results as a dense matrix.
 ///
-/// For an operator with `n_in` input sites (each dim 2), this creates all 2^n_in
-/// product state inputs, applies the operator, and returns a 2^n_out x 2^n_in matrix
-/// where M[y][x] = <y|Op|x>.
+/// Contracts the MPO directly to obtain the dense matrix representation.
+/// M[y][x] = <y|Op|x> where each site has dimension 2.
 ///
 /// # Arguments
 /// * `op` - The operator to test
-/// * `n_in` - Number of input sites
-/// * `n_out` - Number of output sites (may differ from n_in for asymmetric operators)
+/// * `n_in` - Number of input sites (must equal n_out)
+/// * `n_out` - Number of output sites (must equal n_in)
 fn apply_operator_to_dense_matrix(
     op: &LinearOperator<TensorDynLen, usize>,
     n_in: usize,
     n_out: usize,
 ) -> Vec<Vec<Complex64>> {
-    let dim_in = 1 << n_in;
-    let dim_out = 1 << n_out;
-    let mut matrix = vec![vec![Complex64::zero(); dim_in]; dim_out];
+    assert_eq!(n_in, n_out, "n_in and n_out must be equal");
+    contract_operator_to_dense_matrix(op, n_in, 2)
+}
 
-    for x in 0..dim_in {
-        let mps = create_product_state_mps(x, n_in);
-        let (treetn, site_indices) = tensortrain_to_treetn(&mps);
+/// Contract an operator's MPO directly to a dense matrix (fast path).
+///
+/// Instead of applying the operator to each basis vector one by one,
+/// this contracts the MPO TreeTN in a single operation and reshapes to a matrix.
+///
+/// # Arguments
+/// * `op` - The linear operator
+/// * `n_sites` - Number of sites (same for input and output)
+/// * `site_dim` - Dimension per site (2 for binary, 2^nvariables for multi-variable)
+///
+/// # Returns
+/// A dim × dim matrix where dim = site_dim^n_sites
+fn contract_operator_to_dense_matrix(
+    op: &LinearOperator<TensorDynLen, usize>,
+    n_sites: usize,
+    site_dim: usize,
+) -> Vec<Vec<Complex64>> {
+    let dim: usize = site_dim.pow(n_sites as u32);
 
-        // Remap site indices to operator input
-        let mut treetn_remapped = treetn;
-        for i in 0..n_in {
-            let op_input = op
+    // Contract the MPO to a single dense tensor
+    let dense_tensor = op.mpo.contract_to_tensor().expect("Failed to contract MPO");
+
+    let ext_indices = &dense_tensor.indices;
+    let data = dense_tensor
+        .as_slice_c64()
+        .expect("Expected DenseC64 storage");
+    let tensor_dims = dense_tensor.dims();
+    let ndims = tensor_dims.len();
+
+    // Build mapping from index ID to position in tensor
+    let mut id_to_pos: HashMap<DynId, usize> = HashMap::new();
+    for (pos, idx) in ext_indices.iter().enumerate() {
+        id_to_pos.insert(*idx.id(), pos);
+    }
+
+    // Map input internal indices to tensor positions (site order: 0, 1, ..., n_sites-1)
+    let input_positions: Vec<usize> = (0..n_sites)
+        .map(|i| {
+            let internal_id = *op
                 .get_input_mapping(&i)
                 .expect("Missing input mapping")
-                .true_index
-                .clone();
-            treetn_remapped = treetn_remapped
-                .replaceind(&site_indices[i], &op_input)
-                .expect("Failed to replace index");
-        }
+                .internal_index
+                .id();
+            *id_to_pos
+                .get(&internal_id)
+                .expect("Input index not found in contracted tensor")
+        })
+        .collect();
 
-        // Apply operator
-        let result_treetn = apply_linear_operator(op, &treetn_remapped, ApplyOptions::naive())
-            .expect("Failed to apply operator");
+    // Map output internal indices to tensor positions
+    let output_positions: Vec<usize> = (0..n_sites)
+        .map(|i| {
+            let internal_id = *op
+                .get_output_mapping(&i)
+                .expect("Missing output mapping")
+                .internal_index
+                .id();
+            *id_to_pos
+                .get(&internal_id)
+                .expect("Output index not found in contracted tensor")
+        })
+        .collect();
 
-        // Get output indices
-        let output_indices: Vec<DynIndex> = (0..n_out)
-            .map(|i| {
-                op.get_output_mapping(&i)
-                    .expect("Missing output mapping")
-                    .true_index
-                    .clone()
-            })
-            .collect();
+    // Build the matrix
+    let mut matrix = vec![vec![Complex64::zero(); dim]; dim];
 
-        // Contract result
-        let result_vec = contract_treetn_to_vector(&result_treetn, &output_indices);
+    for out_idx in 0..dim {
+        for in_idx in 0..dim {
+            // Decompose flat indices into per-site values (big-endian, base site_dim)
+            let mut multi_idx = vec![0usize; ndims];
 
-        for y in 0..dim_out {
-            matrix[y][x] = result_vec[y];
+            let mut out_remainder = out_idx;
+            let mut in_remainder = in_idx;
+            for i in 0..n_sites {
+                let stride = site_dim.pow((n_sites - 1 - i) as u32);
+                multi_idx[output_positions[i]] = out_remainder / stride;
+                out_remainder %= stride;
+                multi_idx[input_positions[i]] = in_remainder / stride;
+                in_remainder %= stride;
+            }
+
+            // Convert multi-index to flat storage index (row-major)
+            let mut flat_idx = 0;
+            let mut stride = 1;
+            for i in (0..ndims).rev() {
+                flat_idx += multi_idx[i] * stride;
+                stride *= tensor_dims[i];
+            }
+
+            matrix[out_idx][in_idx] = data[flat_idx];
         }
     }
 
@@ -2436,167 +2489,16 @@ fn test_binaryop_dual_output_numerical() {
 // Multi-variable operator tests (P2)
 // ============================================================================
 
-/// Create a product state MPS for a multi-variable system.
-///
-/// `values` is a slice of R values, one per variable.
-/// `nvariables` is the number of variables.
-/// `r` is the number of bits per variable.
-///
-/// The interleaved site index at site n encodes the n-th bits of all variables:
-/// s = Σ_v bit_v * 2^v  (variable 0 in LSB)
-fn create_multivar_product_state_mps(
-    values: &[usize],
-    nvariables: usize,
-    r: usize,
-) -> TensorTrain<Complex64> {
-    assert_eq!(values.len(), nvariables);
-    let site_dim = 1 << nvariables;
-    let mut tensors = Vec::with_capacity(r);
-
-    for n in 0..r {
-        let mut s = 0usize;
-        for v in 0..nvariables {
-            // Big-endian: site n contains bit 2^(R-1-n) of variable v
-            let bit = (values[v] >> (r - 1 - n)) & 1;
-            s |= bit << v;
-        }
-        let mut t = tensor3_zeros(1, site_dim, 1);
-        t.set3(0, s, 0, Complex64::one());
-        tensors.push(t);
-    }
-
-    TensorTrain::new(tensors).expect("Failed to create multivar product state MPS")
-}
-
-/// Contract a TreeTN with site indices to a flat vector, supporting arbitrary site dimensions.
-///
-/// Each site can have any dimension (not just 2). Returns a vector of length Π site_dims[i].
-fn contract_treetn_to_vector_general(
-    treetn: &TreeTN<TensorDynLen, usize>,
-    site_indices: &[DynIndex],
-    site_dims: &[usize],
-) -> Vec<Complex64> {
-    let r = site_indices.len();
-    assert_eq!(r, site_dims.len());
-    let total: usize = site_dims.iter().product();
-
-    let full_tensor = treetn
-        .contract_to_tensor()
-        .expect("Failed to contract TreeTN");
-
-    let ext_indices = &full_tensor.indices;
-    let mut idx_to_pos: HashMap<DynId, usize> = HashMap::new();
-    for (pos, idx) in ext_indices.iter().enumerate() {
-        idx_to_pos.insert(*idx.id(), pos);
-    }
-
-    let mut site_to_tensor: Vec<usize> = Vec::with_capacity(r);
-    for site_idx in site_indices.iter() {
-        let pos = idx_to_pos
-            .get(&site_idx.id().clone())
-            .expect("Site index not found in contracted tensor");
-        site_to_tensor.push(*pos);
-    }
-
-    let data = full_tensor
-        .as_slice_c64()
-        .expect("Expected DenseC64 storage");
-    let dims = full_tensor.dims();
-
-    let mut result = vec![Complex64::zero(); total];
-
-    for x in 0..total {
-        // Decompose flat index x into per-site values using site_dims (big-endian)
-        let mut multi_idx = vec![0usize; r];
-        let mut remainder = x;
-        for i in 0..r {
-            let stride: usize = site_dims[i + 1..].iter().product();
-            let site_val = remainder / stride;
-            remainder %= stride;
-            multi_idx[site_to_tensor[i]] = site_val;
-        }
-
-        // Convert multi-index to flat storage index (row-major)
-        let mut flat_idx = 0;
-        let mut stride = 1;
-        for i in (0..r).rev() {
-            flat_idx += multi_idx[i] * stride;
-            stride *= dims[i];
-        }
-
-        result[x] = data[flat_idx];
-    }
-
-    result
-}
-
 /// Build the dense matrix for a multi-variable operator.
 ///
+/// Contracts the MPO directly to obtain the dense matrix representation.
 /// The operator has `r` sites, each with input/output dimension 2^nvariables.
 fn apply_multivar_operator_to_dense_matrix(
     op: &LinearOperator<TensorDynLen, usize>,
     r: usize,
     nvariables: usize,
 ) -> Vec<Vec<Complex64>> {
-    let site_dim: usize = 1 << nvariables;
-    let total_dim: usize = site_dim.pow(r as u32);
-    let mut matrix = vec![vec![Complex64::zero(); total_dim]; total_dim];
-
-    for input_idx in 0..total_dim {
-        // Decode input_idx into per-variable values
-        let mut values = vec![0usize; nvariables];
-        let mut remainder = input_idx;
-        for n in 0..r {
-            let stride = site_dim.pow((r - 1 - n) as u32);
-            let site_val = remainder / stride;
-            remainder %= stride;
-            for v in 0..nvariables {
-                let bit = (site_val >> v) & 1;
-                values[v] |= bit << (r - 1 - n);
-            }
-        }
-
-        let mps = create_multivar_product_state_mps(&values, nvariables, r);
-        let (treetn, site_indices) = tensortrain_to_treetn(&mps);
-
-        // Remap site indices to operator input
-        let mut treetn_remapped = treetn;
-        for i in 0..r {
-            let op_input = op
-                .get_input_mapping(&i)
-                .expect("Missing input mapping")
-                .true_index
-                .clone();
-            treetn_remapped = treetn_remapped
-                .replaceind(&site_indices[i], &op_input)
-                .expect("Failed to replace index");
-        }
-
-        // Apply operator
-        let result_treetn = apply_linear_operator(op, &treetn_remapped, ApplyOptions::naive())
-            .expect("Failed to apply operator");
-
-        // Get output indices
-        let output_indices: Vec<DynIndex> = (0..r)
-            .map(|i| {
-                op.get_output_mapping(&i)
-                    .expect("Missing output mapping")
-                    .true_index
-                    .clone()
-            })
-            .collect();
-
-        // Contract result with general site dimensions
-        let out_dims = vec![site_dim; r];
-        let result_vec =
-            contract_treetn_to_vector_general(&result_treetn, &output_indices, &out_dims);
-
-        for out_idx in 0..total_dim {
-            matrix[out_idx][input_idx] = result_vec[out_idx];
-        }
-    }
-
-    matrix
+    contract_operator_to_dense_matrix(op, r, 1 << nvariables)
 }
 
 /// Encode per-variable values into a flat multi-variable index.
