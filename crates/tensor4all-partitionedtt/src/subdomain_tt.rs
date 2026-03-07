@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use crate::error::{PartitionedTTError, Result};
 use crate::projector::Projector;
 use tensor4all_core::{AnyScalar, DynIndex, TensorAccess, TensorDynLen};
-use tensor4all_itensorlike::{ContractMethod, ContractOptions, TensorTrain, TruncateOptions};
+use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// A tensor train with an associated projector defining its subdomain.
 ///
@@ -267,38 +267,11 @@ impl SubDomainTT {
         let self_projected = self.apply_projection();
         let other_projected = other.apply_projection();
 
-        let has_projection = !self.projector.is_empty() || !other.projector.is_empty();
-        let contract_options = if has_projection && options.method() != ContractMethod::Naive {
-            ContractOptions::naive()
-        } else {
-            options.clone()
-        };
-
-        // Projected inputs currently need the exact path for correctness.
-        let mut contracted_data = self_projected
-            .contract(&other_projected, &contract_options)
+        let contracted_data = self_projected
+            .contract(&other_projected, options)
             .map_err(|e| {
                 PartitionedTTError::TensorTrainError(format!("Contraction failed: {}", e))
             })?;
-
-        if has_projection
-            && options.method() != ContractMethod::Naive
-            && (options.rtol().is_some() || options.max_rank().is_some())
-        {
-            let mut truncate_options = TruncateOptions::svd();
-            if let Some(rtol) = options.rtol() {
-                truncate_options = truncate_options.with_rtol(rtol);
-            }
-            if let Some(max_rank) = options.max_rank() {
-                truncate_options = truncate_options.with_max_rank(max_rank);
-            }
-            contracted_data.truncate(&truncate_options).map_err(|e| {
-                PartitionedTTError::TensorTrainError(format!(
-                    "Projected contraction truncation failed: {}",
-                    e
-                ))
-            })?;
-        }
 
         // Create result with the new projector
         let result = Self::new(contracted_data, proj_after);
