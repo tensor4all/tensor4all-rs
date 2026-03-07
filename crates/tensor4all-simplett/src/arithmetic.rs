@@ -47,7 +47,14 @@ impl<T: TTScalar> TensorTrain<T> {
 
             let site_dim = a.site_dim();
 
-            if i == 0 {
+            if n == 1 {
+                // Single-site TT: element-wise sum with shape (1, site_dim, 1)
+                let mut new_tensor = tensor3_zeros(1, site_dim, 1);
+                for s in 0..site_dim {
+                    new_tensor.set3(0, s, 0, *a.get3(0, s, 0) + *b.get3(0, s, 0));
+                }
+                tensors.push(new_tensor);
+            } else if i == 0 {
                 // First tensor: [A | B] horizontally
                 let new_right_dim = a.right_dim() + b.right_dim();
                 let mut new_tensor = tensor3_zeros(1, site_dim, new_right_dim);
@@ -401,5 +408,45 @@ mod tests {
     #[test]
     fn test_arithmetic_c64() {
         test_arithmetic_generic::<num_complex::Complex64>();
+    }
+
+    fn test_add_single_site_generic<T: TTScalar>() {
+        let tt1 = TensorTrain::<T>::constant(&[3], T::from_f64(2.0));
+        let tt2 = TensorTrain::<T>::constant(&[3], T::from_f64(5.0));
+
+        let result = tt1.add(&tt2).unwrap();
+
+        // Single-site TT: shape must be (1, site_dim, 1)
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.site_tensor(0).left_dim(), 1);
+        assert_eq!(result.site_tensor(0).site_dim(), 3);
+        assert_eq!(result.site_tensor(0).right_dim(), 1);
+
+        // Sum should be (2 + 5) * 3 = 21
+        let sum = result.sum();
+        assert!(
+            (sum - T::from_f64(21.0)).abs_sq().sqrt() < 1e-10,
+            "single site add sum mismatch"
+        );
+
+        // Each element should evaluate correctly
+        for s in 0..3 {
+            let val = result.evaluate(&[s]).unwrap();
+            let expected = tt1.evaluate(&[s]).unwrap() + tt2.evaluate(&[s]).unwrap();
+            assert!(
+                (val - expected).abs_sq().sqrt() < 1e-10,
+                "single site add evaluation mismatch at index {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_add_single_site_f64() {
+        test_add_single_site_generic::<f64>();
+    }
+
+    #[test]
+    fn test_add_single_site_c64() {
+        test_add_single_site_generic::<num_complex::Complex64>();
     }
 }
