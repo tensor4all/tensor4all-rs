@@ -761,4 +761,44 @@ mod tests {
             result.err()
         );
     }
+
+    #[test]
+    fn test_crossinterpolate2_rank2_full_grid_reconstruction() {
+        // Reproduce issue #259: f(i,j) = i + j should be reconstructed exactly
+        let f = |idx: &MultiIndex| (idx[0] + idx[1]) as f64;
+        let local_dims = vec![4, 4];
+        let first_pivot = vec![vec![1, 1]];
+        let options = TCI2Options {
+            tolerance: 1e-12,
+            max_iter: 20,
+            max_bond_dim: usize::MAX,
+            ..Default::default()
+        };
+
+        let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+            f,
+            None,
+            local_dims,
+            first_pivot,
+            options,
+        )
+        .unwrap();
+
+        let tt = tci.to_tensor_train().unwrap();
+
+        let mut max_error = 0.0f64;
+        for i in 0..4 {
+            for j in 0..4 {
+                let expected = (i + j) as f64;
+                let actual = tt.evaluate(&[i, j]).unwrap();
+                max_error = max_error.max((actual - expected).abs());
+            }
+        }
+        eprintln!("rank={} max_error={:.6e}", tci.rank(), max_error);
+        assert!(
+            max_error < 1e-10,
+            "Full-grid reconstruction error too large: {max_error:.6e} (rank={})",
+            tci.rank()
+        );
+    }
 }
