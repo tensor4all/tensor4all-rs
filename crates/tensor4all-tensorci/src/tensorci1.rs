@@ -693,7 +693,7 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
             );
 
             // Initialize ACA from Pi with the pivot
-            self.aca[p] = MatrixACA::from_matrix_with_pivot(&self.pi[p], local_pivot);
+            self.aca[p] = MatrixACA::from_matrix_with_pivot(&self.pi[p], local_pivot)?;
 
             // Update T tensors
             if p == 0 {
