@@ -15,7 +15,7 @@ use tensor4all_treetn::{SwapOptions, TreeTN};
 fn make_2site_mps(s1: &DynIndex, s2: &DynIndex, data: &[f64]) -> Vec<TensorDynLen> {
     let dense = TensorDynLen::from_dense_f64(vec![s1.clone(), s2.clone()], data.to_vec());
     let fr = dense
-        .factorize(&[s1.clone()], &FactorizeOptions::qr())
+        .factorize(std::slice::from_ref(s1), &FactorizeOptions::qr())
         .unwrap();
     vec![fr.left, fr.right]
 }
@@ -155,12 +155,12 @@ fn test_contract_factorize_roundtrip() {
     let t1_ids: std::collections::HashSet<_> = t1
         .external_indices()
         .iter()
-        .map(|i: &DynIndex| i.id().clone())
+        .map(|i: &DynIndex| *i.id())
         .collect();
     let t2_ids: std::collections::HashSet<_> = t2
         .external_indices()
         .iter()
-        .map(|i: &DynIndex| i.id().clone())
+        .map(|i: &DynIndex| *i.id())
         .collect();
     let mut left_inds: Vec<DynIndex> = Vec::new();
     for idx in contracted.external_indices() {
@@ -224,7 +224,7 @@ fn test_manual_sweep_edge_steps() {
         let ids: std::collections::HashSet<_> = a
             .external_indices()
             .iter()
-            .map(|i: &DynIndex| i.id().clone())
+            .map(|i: &DynIndex| *i.id())
             .collect();
         b.external_indices()
             .iter()

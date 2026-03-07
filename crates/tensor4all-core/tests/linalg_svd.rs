@@ -472,7 +472,7 @@ fn test_svd_reconstruction_with_unit_dim_axis() {
     );
 
     // left=[i1], right=[i2, i3]: 1×4 wide matrix
-    let err = svd_reconstruction_error_f64(&tensor, &[i1.clone()]);
+    let err = svd_reconstruction_error_f64(&tensor, std::slice::from_ref(&i1));
     assert!(
         err < 1e-10,
         "SVD roundtrip with left=[d=1], right=[d=2,d=2] error: {err:.3e}"

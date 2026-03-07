@@ -351,7 +351,7 @@ fn test_qr_reconstruction_with_unit_dim_axis() {
     );
 
     // left=[i1], right=[i2, i3]: 1×4 wide matrix
-    let err = qr_reconstruction_error_f64(&tensor, &[i1.clone()]);
+    let err = qr_reconstruction_error_f64(&tensor, std::slice::from_ref(&i1));
     assert!(
         err < 1e-10,
         "QR roundtrip with left=[d=1], right=[d=2,d=2] error: {err:.3e}"
@@ -387,7 +387,7 @@ fn test_qr_reconstruction_with_multiple_unit_dims() {
         "QR multi-unit-dim [i2,i4] vs [i1,i3] error: {err:.3e}"
     );
 
-    let err = qr_reconstruction_error_f64(&tensor, &[i1.clone()]);
+    let err = qr_reconstruction_error_f64(&tensor, std::slice::from_ref(&i1));
     assert!(
         err < 1e-10,
         "QR multi-unit-dim [i1] vs [i2,i3,i4] error: {err:.3e}"
