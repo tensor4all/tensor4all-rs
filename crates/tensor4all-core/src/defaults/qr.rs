@@ -70,13 +70,18 @@ pub fn set_default_qr_rtol(rtol: f64) -> Result<(), QrError> {
 
 /// Compute the retained rank based on rtol truncation for QR.
 ///
-/// This checks R's diagonal elements and truncates columns where |R[i, i]| < rtol.
+/// For non-pivoting QR, the diagonal elements of R are NOT necessarily in
+/// decreasing order, and a zero diagonal element does NOT mean the row is
+/// negligible (off-diagonal elements in that row may be significant).
+///
+/// We use row norms of R: a row is negligible when its norm is below
+/// `rtol * max_row_norm`. This is more robust than checking only diagonals.
 ///
 /// # Arguments
 /// * `r_full` - Full R matrix (k×n, upper triangular)
 /// * `k` - Number of rows in R (min(m, n))
 /// * `n` - Number of columns in R
-/// * `rtol` - Relative tolerance for diagonal elements
+/// * `rtol` - Relative tolerance for row norms
 ///
 /// # Returns
 /// The retained rank `r` (at least 1, at most k)
@@ -89,17 +94,33 @@ where
         return 1;
     }
 
-    // Check diagonal elements of R (R is k×n, upper triangular)
-    // Diagonal elements are at R[0,0], R[1,1], ..., R[min(k,n)-1, min(k,n)-1]
     let max_diag = k.min(n);
-    let mut r = max_diag;
 
+    // Compute the norm of each row of R (upper triangular: row i has entries from column i..n)
+    let mut row_norms = Vec::with_capacity(max_diag);
     for i in 0..max_diag {
-        let r_ii = r_full[[i, i]];
-        let abs_r_ii: f64 = r_ii.abs().into();
-        if abs_r_ii < rtol {
-            r = i;
-            break;
+        let mut norm_sq: f64 = 0.0;
+        for j in i..n {
+            let val: f64 = r_full[[i, j]].abs().into();
+            norm_sq += val * val;
+        }
+        row_norms.push(norm_sq.sqrt());
+    }
+
+    // Find max row norm
+    let max_row_norm = row_norms.iter().cloned().fold(0.0_f64, f64::max);
+
+    if max_row_norm == 0.0 {
+        return 1;
+    }
+
+    let threshold = rtol * max_row_norm;
+
+    // Count rows with norm above threshold
+    let mut r = 0;
+    for &norm in &row_norms {
+        if norm >= threshold {
+            r += 1;
         }
     }
 
