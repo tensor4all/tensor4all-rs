@@ -325,3 +325,71 @@ fn test_qr_complex_rank3_reconstruction() {
         "complex rank-3 QR [i] vs [j,k] error: {err:.3e}"
     );
 }
+
+/// Regression: QR roundtrip with dim-1 axes.
+///
+/// Tensors with unit dimensions cause tenferro's `reshape()` to assign
+/// column-major strides, corrupting element ordering.
+#[test]
+fn test_qr_reconstruction_with_unit_dim_axis() {
+    // [d=1, d=2, d=2] factorized with left_inds=[d=2, d=2]
+    // → matrix shape (4, 1): column vector triggers the bug.
+    let i1 = Index::new_dyn(1);
+    let i2 = Index::new_dyn(2);
+    let i3 = Index::new_dyn(2);
+    let data = vec![1.0, 2.0, 3.0, 4.0];
+    let storage = Arc::new(Storage::DenseF64(
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[1, 2, 2]),
+    ));
+    let tensor = TensorDynLen::new(vec![i1.clone(), i2.clone(), i3.clone()], storage);
+
+    // left=[i2, i3], right=[i1]: 4×1 tall matrix
+    let err = qr_reconstruction_error_f64(&tensor, &[i2.clone(), i3.clone()]);
+    assert!(
+        err < 1e-10,
+        "QR roundtrip with left=[d=2,d=2], right=[d=1] error: {err:.3e}"
+    );
+
+    // left=[i1], right=[i2, i3]: 1×4 wide matrix
+    let err = qr_reconstruction_error_f64(&tensor, std::slice::from_ref(&i1));
+    assert!(
+        err < 1e-10,
+        "QR roundtrip with left=[d=1], right=[d=2,d=2] error: {err:.3e}"
+    );
+}
+
+#[test]
+fn test_qr_reconstruction_with_multiple_unit_dims() {
+    // [d=1, d=3, d=1, d=2] — multiple unit dimensions.
+    let i1 = Index::new_dyn(1);
+    let i2 = Index::new_dyn(3);
+    let i3 = Index::new_dyn(1);
+    let i4 = Index::new_dyn(2);
+    let data: Vec<f64> = (1..=6).map(|x| x as f64).collect();
+    let storage = Arc::new(Storage::DenseF64(
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[1, 3, 1, 2]),
+    ));
+    let tensor = TensorDynLen::new(
+        vec![i1.clone(), i2.clone(), i3.clone(), i4.clone()],
+        storage,
+    );
+
+    // Various splits all involving unit-dim axes
+    let err = qr_reconstruction_error_f64(&tensor, &[i1.clone(), i2.clone()]);
+    assert!(
+        err < 1e-10,
+        "QR multi-unit-dim [i1,i2] vs [i3,i4] error: {err:.3e}"
+    );
+
+    let err = qr_reconstruction_error_f64(&tensor, &[i2.clone(), i4.clone()]);
+    assert!(
+        err < 1e-10,
+        "QR multi-unit-dim [i2,i4] vs [i1,i3] error: {err:.3e}"
+    );
+
+    let err = qr_reconstruction_error_f64(&tensor, std::slice::from_ref(&i1));
+    assert!(
+        err < 1e-10,
+        "QR multi-unit-dim [i1] vs [i2,i3,i4] error: {err:.3e}"
+    );
+}

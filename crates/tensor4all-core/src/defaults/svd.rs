@@ -11,9 +11,9 @@ use num_complex::{Complex64, ComplexFloat};
 use std::any::TypeId;
 use std::sync::Arc;
 use tensor4all_tensorbackend::mdarray::DSlice;
-use tensor4all_tensorbackend::tenferro_tensor::MemoryOrder;
 use tensor4all_tensorbackend::{
-    dyn_ad_tensor_primal_to_storage, svd_backend, svd_dyn_ad_tensor_native, SvdResult,
+    dyn_ad_tensor_primal_to_storage, reshape_row_major_dyn_ad_tensor, svd_backend,
+    svd_dyn_ad_tensor_native, SvdResult,
 };
 use thiserror::Error;
 
@@ -463,18 +463,14 @@ where
             let mut permuted_indices = left_indices.clone();
             permuted_indices.extend(right_indices.iter().cloned());
             let permuted = t.permute_indices(&permuted_indices);
-            let matrix_native = permuted
-                .as_native()
-                .contiguous(MemoryOrder::RowMajor)
+            // Use AD-aware reshape to flatten to 2D matrix.
+            // Direct .as_native().contiguous(RowMajor).reshape() can produce
+            // wrong element ordering due to column-major/row-major ambiguity
+            // in the tenferro reshape implementation.
+            let matrix_native = reshape_row_major_dyn_ad_tensor(permuted.as_native(), &[m, n])
                 .map_err(|e| {
                     SvdError::ComputationError(anyhow::anyhow!(
-                        "native SVD row-major normalization failed: {e}"
-                    ))
-                })?
-                .reshape(&[m, n])
-                .map_err(|e| {
-                    SvdError::ComputationError(anyhow::anyhow!(
-                        "native SVD reshape to matrix failed: {e}"
+                        "native SVD matrix conversion failed: {e}"
                     ))
                 })?;
             let (mut u_native, mut s_native, mut vt_native) =
@@ -511,16 +507,10 @@ where
             let mut u_indices = left_indices.clone();
             u_indices.push(bond_index.clone());
             let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
-            let u_native = u_native
-                .contiguous(MemoryOrder::RowMajor)
-                .map_err(|e| SvdError::ComputationError(anyhow::anyhow!(e)))?
-                .reshape(&u_dims)
-                .map_err(|e| {
-                    SvdError::ComputationError(anyhow::anyhow!(
-                        "native SVD reshape of U failed: {e}"
-                    ))
-                })?;
-            let u = TensorDynLen::from_native(u_indices, u_native)
+            let u_reshaped = reshape_row_major_dyn_ad_tensor(&u_native, &u_dims).map_err(|e| {
+                SvdError::ComputationError(anyhow::anyhow!("native SVD U reshape failed: {e}"))
+            })?;
+            let u = TensorDynLen::from_native(u_indices, u_reshaped)
                 .map_err(SvdError::ComputationError)?;
 
             let s_indices = vec![bond_index.clone(), bond_index.sim()];
@@ -535,16 +525,13 @@ where
             let mut vh_indices = vec![bond_index.clone()];
             vh_indices.extend(right_indices.clone());
             let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
-            let vt_native = vt_native
-                .contiguous(MemoryOrder::RowMajor)
-                .map_err(|e| SvdError::ComputationError(anyhow::anyhow!(e)))?
-                .reshape(&vh_dims)
-                .map_err(|e| {
+            let vt_reshaped =
+                reshape_row_major_dyn_ad_tensor(&vt_native, &vh_dims).map_err(|e| {
                     SvdError::ComputationError(anyhow::anyhow!(
-                        "native SVD reshape of V^T failed: {e}"
+                        "native SVD V^T reshape failed: {e}"
                     ))
                 })?;
-            let vh = TensorDynLen::from_native(vh_indices, vt_native)
+            let vh = TensorDynLen::from_native(vh_indices, vt_reshaped)
                 .map_err(SvdError::ComputationError)?;
             let perm: Vec<usize> = (1..vh.indices.len()).chain(std::iter::once(0)).collect();
             let v = vh.conj().permute(&perm);

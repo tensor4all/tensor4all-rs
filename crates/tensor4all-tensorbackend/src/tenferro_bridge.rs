@@ -566,6 +566,93 @@ pub fn dyn_ad_tensor_primal_to_storage(tensor: &DynAdTensor) -> Result<Storage> 
     }
 }
 
+/// Reshape a raw `Tensor<T>` to `new_dims` with guaranteed row-major strides.
+///
+/// Calls `contiguous(RowMajor)` then rebuilds the tensor via `from_slice`
+/// to avoid tenferro's `reshape()` column-major priority bug when
+/// dimensions contain 1.
+fn reshape_tensor_row_major<T: Scalar + Copy>(
+    tensor: &Tensor<T>,
+    new_dims: &[usize],
+) -> Result<Tensor<T>> {
+    let c = tensor.contiguous(MemoryOrder::RowMajor);
+    let buf = c
+        .buffer()
+        .as_slice()
+        .ok_or_else(|| anyhow!("reshape_row_major: cannot get buffer slice"))?;
+    let off = c.offset() as usize;
+    let len: usize = new_dims.iter().product();
+    let total = buf.len() - off;
+    if len != total {
+        return Err(anyhow!(
+            "reshape_row_major: size mismatch: tensor has {total} elements but new shape requires {len}"
+        ));
+    }
+    Tensor::from_slice(&buf[off..off + len], new_dims, MemoryOrder::RowMajor)
+        .map_err(|e| anyhow!("reshape_row_major from_slice failed: {e}"))
+}
+
+/// Reshape a `StructuredTensor<T>` to `new_dims` with guaranteed row-major strides.
+fn reshape_structured_row_major<T: Scalar + Copy>(
+    st: &StructuredTensor<T>,
+    new_dims: &[usize],
+) -> Result<StructuredTensor<T>> {
+    let new_payload = reshape_tensor_row_major(st.payload(), new_dims)?;
+    Ok(StructuredTensor::from_dense(new_payload))
+}
+
+/// Reshape an `AdTensor<T>` to `new_dims` preserving AD mode and tangent.
+fn reshape_ad_tensor_row_major<T: Scalar + Copy>(
+    ad: &AdTensor<T>,
+    new_dims: &[usize],
+) -> Result<AdTensor<T>> {
+    let new_primal = reshape_structured_row_major(ad.structured_primal(), new_dims)?;
+    match ad.as_value() {
+        AdValue::Primal(_) => Ok(AdTensor::new_primal(new_primal)),
+        AdValue::Forward { tangent, .. } => {
+            let new_tangent = reshape_structured_row_major(tangent, new_dims)?;
+            AdTensor::new_forward(new_primal, new_tangent)
+                .map_err(|e| anyhow!("reshape_ad forward failed: {e}"))
+        }
+        AdValue::Reverse {
+            node,
+            tape,
+            tangent,
+            ..
+        } => {
+            let new_tangent = tangent
+                .as_ref()
+                .map(|t| reshape_structured_row_major(t, new_dims))
+                .transpose()?;
+            AdTensor::new_reverse(new_primal, *node, *tape, new_tangent)
+                .map_err(|e| anyhow!("reshape_ad reverse failed: {e}"))
+        }
+    }
+}
+
+/// Reshape a [`DynAdTensor`] to `new_dims` with guaranteed row-major layout,
+/// preserving AD metadata (forward-mode tangent, reverse-mode graph info).
+///
+/// This avoids tenferro's `Tensor::reshape()` which can incorrectly assign
+/// column-major strides when dimensions contain 1.
+pub fn reshape_row_major_dyn_ad_tensor(
+    tensor: &DynAdTensor,
+    new_dims: &[usize],
+) -> Result<DynAdTensor> {
+    match tensor {
+        DynAdTensor::F64(ad) => Ok(DynAdTensor::from(reshape_ad_tensor_row_major(
+            ad, new_dims,
+        )?)),
+        DynAdTensor::C64(ad) => Ok(DynAdTensor::from(reshape_ad_tensor_row_major(
+            ad, new_dims,
+        )?)),
+        _ => Err(anyhow!(
+            "reshape_row_major_dyn_ad_tensor: unsupported scalar type {:?}",
+            tensor.scalar_type()
+        )),
+    }
+}
+
 /// Compute native QR while preserving AD metadata.
 pub fn qr_dyn_ad_tensor_native(tensor: &DynAdTensor) -> Result<(DynAdTensor, DynAdTensor)> {
     with_default_runtime("native_qr", || match tensor {
@@ -1375,6 +1462,85 @@ mod tests {
             assert_eq!(s.dims(), vec![2]);
             assert_eq!(vt.dims(), vec![2, 2]);
         });
+    }
+
+    #[test]
+    fn reshape_row_major_primal_column_vector() {
+        // A [4,1] column vector reshaped to [2,2] — this is the exact case
+        // that triggered the bug (reshape assigned column-major strides).
+        let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[4, 1], MemoryOrder::RowMajor)
+            .unwrap();
+        let native = DynAdTensor::from(AdTensor::new_primal(t));
+        let reshaped = reshape_row_major_dyn_ad_tensor(&native, &[2, 2]).unwrap();
+
+        assert_eq!(reshaped.dims(), &[2, 2]);
+        let storage = dyn_ad_tensor_primal_to_storage(&reshaped).unwrap();
+        match &storage {
+            Storage::DenseF64(d) => {
+                assert_eq!(d.as_slice(), &[1.0, 2.0, 3.0, 4.0]);
+            }
+            _ => panic!("expected DenseF64"),
+        }
+    }
+
+    #[test]
+    fn reshape_row_major_primal_with_unit_dim() {
+        // [2,2,1] reshaped to [4] — another unit-dim case.
+        let t =
+            Tensor::<f64>::from_slice(&[10.0, 20.0, 30.0, 40.0], &[2, 2, 1], MemoryOrder::RowMajor)
+                .unwrap();
+        let native = DynAdTensor::from(AdTensor::new_primal(t));
+        let reshaped = reshape_row_major_dyn_ad_tensor(&native, &[4]).unwrap();
+
+        assert_eq!(reshaped.dims(), &[4]);
+        let storage = dyn_ad_tensor_primal_to_storage(&reshaped).unwrap();
+        match &storage {
+            Storage::DenseF64(d) => {
+                assert_eq!(d.as_slice(), &[10.0, 20.0, 30.0, 40.0]);
+            }
+            _ => panic!("expected DenseF64"),
+        }
+    }
+
+    #[test]
+    fn reshape_row_major_preserves_forward_mode() {
+        // Forward-mode AD: reshape should preserve both primal and tangent.
+        let primal =
+            Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[4, 1], MemoryOrder::RowMajor)
+                .unwrap();
+        let tangent =
+            Tensor::<f64>::from_slice(&[0.1, 0.2, 0.3, 0.4], &[4, 1], MemoryOrder::RowMajor)
+                .unwrap();
+        let native = DynAdTensor::from(AdTensor::new_forward(primal, tangent).unwrap());
+
+        let reshaped = reshape_row_major_dyn_ad_tensor(&native, &[2, 2]).unwrap();
+
+        assert_eq!(reshaped.dims(), &[2, 2]);
+        assert_eq!(reshaped.mode(), AdMode::Forward);
+
+        // Check primal values
+        let p_storage = dyn_ad_tensor_primal_to_storage(&reshaped).unwrap();
+        match &p_storage {
+            Storage::DenseF64(d) => assert_eq!(d.as_slice(), &[1.0, 2.0, 3.0, 4.0]),
+            _ => panic!("expected DenseF64"),
+        }
+
+        // Check tangent values via sum
+        let sum = sum_dyn_ad_tensor_native(&reshaped).unwrap();
+        let tangent_sum = sum.tangent().and_then(|x| x.as_f64()).unwrap();
+        assert!(
+            (tangent_sum - 1.0).abs() < 1e-12,
+            "tangent sum should be 1.0, got {tangent_sum}"
+        );
+    }
+
+    #[test]
+    fn reshape_row_major_mismatched_size_errors() {
+        let t =
+            Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[4], MemoryOrder::RowMajor).unwrap();
+        let native = DynAdTensor::from(AdTensor::new_primal(t));
+        let result = reshape_row_major_dyn_ad_tensor(&native, &[3]);
+        assert!(result.is_err(), "reshape with mismatched size should fail");
     }
 
     #[test]
