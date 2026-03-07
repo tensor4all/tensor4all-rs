@@ -16,7 +16,7 @@ pub enum CompressionMethod {
     LU,
     /// Cross interpolation based
     CI,
-    /// SVD decomposition
+    /// SVD compression (currently unimplemented and returns an error)
     SVD,
 }
 
@@ -115,15 +115,9 @@ fn factorize<T: TTScalar + Scalar>(
             let npivots = luci.rank();
             Ok((left, right, npivots))
         }
-        CompressionMethod::SVD => {
-            // For SVD, we'd need a linear algebra library
-            // For now, fall back to LU
-            let lu = rrlu(matrix, Some(options))?;
-            let left = lu.left(true);
-            let right = lu.right(true);
-            let npivots = lu.npivots();
-            Ok((left, right, npivots))
-        }
+        CompressionMethod::SVD => Err(crate::error::TensorTrainError::InvalidOperation {
+            message: "SVD compression is not yet implemented".to_string(),
+        }),
     }
 }
 
@@ -373,5 +367,23 @@ mod tests {
     #[test]
     fn test_compress_with_max_bond_dim_c64() {
         test_compress_with_max_bond_dim_generic::<Complex64>();
+    }
+
+    #[test]
+    fn test_compress_svd_returns_error() {
+        let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+        let mut tt_compressed = tt.clone();
+        let options = CompressionOptions {
+            method: CompressionMethod::SVD,
+            ..Default::default()
+        };
+        let result = tt_compressed.compress(&options);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("SVD compression is not yet implemented"),
+            "Expected error about SVD not implemented, got: {}",
+            err_msg
+        );
     }
 }

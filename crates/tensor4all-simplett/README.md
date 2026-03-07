@@ -8,7 +8,7 @@ Simple, efficient Tensor Train (MPS) implementation focused on practical computa
 - **SiteTensorTrain**: Center-canonical MPS with specified orthogonality center
 - **VidalTensorTrain**: Vidal canonical form with explicit singular values
 - **TTCache**: Caching mechanism for fast repeated evaluation
-- **Compression**: LU, CI, and SVD compression methods
+- **Compression**: LU and CI compression methods, plus an explicit error for unimplemented SVD compression
 
 ## Usage
 
