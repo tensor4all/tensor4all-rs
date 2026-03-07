@@ -280,13 +280,10 @@ impl PartitionedTT {
                     }
                     let proj_after = Projector::from_pairs(proj_data);
 
-                    // Project inputs to the combined projector
-                    let merged_proj = m1.projector().intersection(m2.projector());
-                    if let Some(merged) = merged_proj {
-                        let m1_proj = m1.project(&merged).unwrap_or_else(|| m1.clone());
-                        let m2_proj = m2.project(&merged).unwrap_or_else(|| m2.clone());
-                        tasks.push((proj_after, m1_proj, m2_proj));
-                    }
+                    // SubDomainTT::contract already applies each input projector.
+                    // Pre-projecting here is redundant and can attach projector
+                    // metadata for indices that are not present in a subdomain.
+                    tasks.push((proj_after, m1.clone(), m2.clone()));
                 }
             }
         }

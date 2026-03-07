@@ -184,6 +184,54 @@ fn tensor_c64_to_storage(tensor: &Tensor<num_complex::Complex64>) -> Result<Stor
     )))
 }
 
+fn structured_f64_to_storage(tensor: &StructuredTensor<f64>) -> Result<Storage> {
+    if tensor.is_diag() && tensor.logical_dims().len() >= 2 {
+        let row_major = tensor.payload().contiguous(MemoryOrder::RowMajor);
+        let data = row_major
+            .buffer()
+            .as_slice()
+            .ok_or_else(|| anyhow!("expected host-accessible f64 diagonal tensor buffer"))?
+            .to_vec();
+        return Ok(Storage::DiagF64(DiagStorageF64::from_vec(data)));
+    }
+    if tensor.is_dense() || tensor.logical_dims().len() <= 1 {
+        return tensor_f64_to_storage(
+            &tensor
+                .payload()
+                .contiguous(MemoryOrder::RowMajor)
+                .reshape(tensor.logical_dims())
+                .map_err(|e| anyhow!("failed to reshape dense f64 structured tensor: {e}"))?,
+        );
+    }
+    Err(anyhow!(
+        "tensor4all native bridge does not yet support snapshotting non-dense/non-diag structured f64 tensors"
+    ))
+}
+
+fn structured_c64_to_storage(tensor: &StructuredTensor<num_complex::Complex64>) -> Result<Storage> {
+    if tensor.is_diag() && tensor.logical_dims().len() >= 2 {
+        let row_major = tensor.payload().contiguous(MemoryOrder::RowMajor);
+        let data = row_major
+            .buffer()
+            .as_slice()
+            .ok_or_else(|| anyhow!("expected host-accessible c64 diagonal tensor buffer"))?
+            .to_vec();
+        return Ok(Storage::DiagC64(DiagStorageC64::from_vec(data)));
+    }
+    if tensor.is_dense() || tensor.logical_dims().len() <= 1 {
+        return tensor_c64_to_storage(
+            &tensor
+                .payload()
+                .contiguous(MemoryOrder::RowMajor)
+                .reshape(tensor.logical_dims())
+                .map_err(|e| anyhow!("failed to reshape dense c64 structured tensor: {e}"))?,
+        );
+    }
+    Err(anyhow!(
+        "tensor4all native bridge does not yet support snapshotting non-dense/non-diag structured c64 tensors"
+    ))
+}
+
 fn scalar_from_structured_tensor_element<T>(tensor: &StructuredTensor<T>) -> Result<T>
 where
     T: Scalar + Copy,
@@ -399,9 +447,56 @@ pub fn dyn_ad_tensor_primal_to_storage(tensor: &DynAdTensor) -> Result<Storage> 
         DynAdTensor::F32(_) | DynAdTensor::C32(_) => Err(anyhow!(
             "tensor4all native bridge currently supports only f64/Complex64 tensors"
         )),
-        DynAdTensor::F64(t) => tensor_f64_to_storage(t.primal()),
-        DynAdTensor::C64(t) => tensor_c64_to_storage(t.primal()),
+        DynAdTensor::F64(t) => structured_f64_to_storage(t.structured_primal()),
+        DynAdTensor::C64(t) => structured_c64_to_storage(t.structured_primal()),
     }
+}
+
+/// Compute native QR while preserving AD metadata.
+pub fn qr_dyn_ad_tensor_native(tensor: &DynAdTensor) -> Result<(DynAdTensor, DynAdTensor)> {
+    with_default_runtime("native_qr", || match tensor {
+        DynAdTensor::F32(t) => {
+            let out = ad::qr(t).map_err(|e| anyhow!("native qr failed for f32 tensor: {e}"))?;
+            Ok((DynAdTensor::from(out.q), DynAdTensor::from(out.r)))
+        }
+        DynAdTensor::F64(t) => {
+            let out = ad::qr(t).map_err(|e| anyhow!("native qr failed for f64 tensor: {e}"))?;
+            Ok((DynAdTensor::from(out.q), DynAdTensor::from(out.r)))
+        }
+        DynAdTensor::C32(_) | DynAdTensor::C64(_) => Err(anyhow!(
+            "native qr bridge currently supports only real tensors"
+        )),
+    })
+}
+
+/// Compute native SVD while preserving AD metadata.
+///
+/// Returns `(u, s, vt)` with the same conventions as tenferro linalg:
+/// `u` is `(m, k)`, `s` is rank-1 `(k)`, `vt` is `(k, n)`.
+pub fn svd_dyn_ad_tensor_native(
+    tensor: &DynAdTensor,
+) -> Result<(DynAdTensor, DynAdTensor, DynAdTensor)> {
+    with_default_runtime("native_svd", || match tensor {
+        DynAdTensor::F32(t) => {
+            let out = ad::svd(t).map_err(|e| anyhow!("native svd failed for f32 tensor: {e}"))?;
+            Ok((
+                DynAdTensor::from(out.u),
+                DynAdTensor::from(out.s),
+                DynAdTensor::from(out.vt),
+            ))
+        }
+        DynAdTensor::F64(t) => {
+            let out = ad::svd(t).map_err(|e| anyhow!("native svd failed for f64 tensor: {e}"))?;
+            Ok((
+                DynAdTensor::from(out.u),
+                DynAdTensor::from(out.s),
+                DynAdTensor::from(out.vt),
+            ))
+        }
+        DynAdTensor::C32(_) | DynAdTensor::C64(_) => Err(anyhow!(
+            "native svd bridge currently supports only real tensors"
+        )),
+    })
 }
 
 /// Sum all elements of a native AD tensor while preserving AD mode.

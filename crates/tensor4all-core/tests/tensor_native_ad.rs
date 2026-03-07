@@ -1,4 +1,6 @@
-use tensor4all_core::{Index, TensorDynLen};
+use tensor4all_core::{
+    factorize, qr, svd, AnyScalar, Canonical, FactorizeOptions, Index, Storage, TensorDynLen,
+};
 use tensor4all_tensorbackend::tenferro_dyadtensor::{AdMode, AdTensor, DynAdTensor};
 use tensor4all_tensorbackend::tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -59,4 +61,114 @@ fn inner_product_preserves_forward_native_payload() {
         (tangent - 0.1).abs() < 1e-12,
         "unexpected tangent: {tangent}"
     );
+}
+
+#[test]
+fn qr_preserves_forward_native_payload() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let tensor = TensorDynLen::from_native(
+        vec![i.clone(), j.clone()],
+        native_f64_tensor(&[3.0, 0.0, 0.0, 2.0], &[0.5, 0.0, 0.0, -0.25], &[2, 2]),
+    )
+    .unwrap();
+
+    let (q, r) = qr::<f64>(&tensor, std::slice::from_ref(&i)).unwrap();
+
+    assert_eq!(q.as_native().map(DynAdTensor::mode), Some(AdMode::Forward));
+    assert_eq!(r.as_native().map(DynAdTensor::mode), Some(AdMode::Forward));
+    assert!(
+        (q.sum()
+            .tangent()
+            .and_then(|x| x.as_f64())
+            .unwrap_or_default())
+        .abs()
+            < 1e-12
+    );
+    let r_tangent = r.sum().tangent().and_then(|x| x.as_f64()).unwrap();
+    assert!(
+        (r_tangent - 0.25).abs() < 1e-12,
+        "unexpected QR tangent: {r_tangent}"
+    );
+}
+
+#[test]
+fn svd_preserves_forward_native_payload() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let tensor = TensorDynLen::from_native(
+        vec![i.clone(), j.clone()],
+        native_f64_tensor(&[3.0, 0.0, 0.0, 2.0], &[0.5, 0.0, 0.0, -0.25], &[2, 2]),
+    )
+    .unwrap();
+
+    let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).unwrap();
+
+    assert_eq!(u.as_native().map(DynAdTensor::mode), Some(AdMode::Forward));
+    assert_eq!(s.as_native().map(DynAdTensor::mode), Some(AdMode::Forward));
+    assert_eq!(v.as_native().map(DynAdTensor::mode), Some(AdMode::Forward));
+    let s_tangent = s.sum().tangent().and_then(|x| x.as_f64()).unwrap();
+    assert!(
+        (s_tangent - 0.25).abs() < 1e-12,
+        "unexpected SVD tangent: {s_tangent}"
+    );
+}
+
+#[test]
+fn factorize_svd_preserves_forward_native_payload() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let tensor = TensorDynLen::from_native(
+        vec![i.clone(), j.clone()],
+        native_f64_tensor(&[3.0, 0.0, 0.0, 2.0], &[0.5, 0.0, 0.0, -0.25], &[2, 2]),
+    )
+    .unwrap();
+
+    let result = factorize(
+        &tensor,
+        std::slice::from_ref(&i),
+        &FactorizeOptions::svd().with_canonical(Canonical::Left),
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.left.as_native().map(DynAdTensor::mode),
+        Some(AdMode::Forward)
+    );
+    assert_eq!(
+        result.right.as_native().map(DynAdTensor::mode),
+        Some(AdMode::Forward)
+    );
+    let right_tangent = result
+        .right
+        .sum()
+        .tangent()
+        .and_then(|x| x.as_f64())
+        .unwrap();
+    assert!(
+        (right_tangent - 0.25).abs() < 1e-12,
+        "unexpected factorize tangent: {right_tangent}"
+    );
+}
+
+#[test]
+fn rank1_native_snapshots_stay_dense() {
+    let i = Index::new_dyn(3);
+    let tensor = TensorDynLen::from_native(
+        vec![i],
+        native_f64_tensor(&[1.0, 2.0, 3.0], &[0.0, 0.0, 0.0], &[3]),
+    )
+    .unwrap();
+
+    let scaled = tensor.scale(AnyScalar::new_real(2.0)).unwrap();
+
+    assert!(matches!(scaled.storage().as_ref(), Storage::DenseF64(_)));
+}
+
+#[test]
+fn plain_dense_storage_does_not_auto_seed_native_payload() {
+    let i = Index::new_dyn(2);
+    let tensor = TensorDynLen::from_dense_f64(vec![i], vec![1.0, 2.0]);
+
+    assert!(tensor.as_native().is_none());
 }

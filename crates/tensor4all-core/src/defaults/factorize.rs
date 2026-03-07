@@ -18,13 +18,12 @@
 //! ```
 
 use crate::defaults::DynIndex;
-use crate::index_like::IndexLike;
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use num_complex::{Complex64, ComplexFloat};
 
 use crate::qr::{qr_with, QrOptions};
-use crate::svd::{svd_for_factorize, SvdOptions};
+use crate::svd::{svd_with, SvdOptions};
 
 // Re-export types from tensor_like for backwards compatibility
 pub use crate::tensor_like::{
@@ -84,7 +83,8 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar
+        + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     match options.alg {
@@ -107,7 +107,8 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar
+        + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     let mut svd_options = SvdOptions::default();
@@ -118,23 +119,23 @@ where
         svd_options.truncation.max_rank = Some(max_rank);
     }
 
-    // Use svd_for_factorize which returns V^H directly (not V).
-    // This avoids tensor-level conjugation: A = U * S * V^H is reconstructed
-    // using the V^H tensor directly at the matrix level.
-    let result = svd_for_factorize::<T>(t, left_inds, &svd_options)?;
-    let u = result.u;
-    let vh = result.vh;
-    let bond_index = result.bond_index;
-    let singular_values = result.singular_values;
-    let rank = result.rank;
-
-    // V^H has indices [bond_index, right_inds...]
-    // U has indices [left_inds..., bond_index]
-    // A = U * S * V^H (reconstructed via tensor contraction on bond_index)
-    let sim_bond_index = bond_index.sim();
-    let s_indices = vec![bond_index.clone(), sim_bond_index.clone()];
-    let s_storage = std::sync::Arc::new(crate::Storage::new_diag_f64(singular_values.clone()));
-    let s = TensorDynLen::from_indices(s_indices, s_storage);
+    let (u, s, v) = svd_with::<T>(t, left_inds, &svd_options)?;
+    let bond_index = u.indices.last().unwrap().clone();
+    let sim_bond_index = s.indices[1].clone();
+    let singular_values = match s.storage().as_ref() {
+        Storage::DiagF64(data) => data.as_slice().to_vec(),
+        other => {
+            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+                "factorize_svd expected diagonal singular-value tensor, got {:?}",
+                std::mem::discriminant(other)
+            )));
+        }
+    };
+    let rank = singular_values.len();
+    let perm_vh: Vec<usize> = std::iter::once(v.indices.len() - 1)
+        .chain(0..v.indices.len() - 1)
+        .collect();
+    let vh = v.conj().permute(&perm_vh);
 
     match options.canonical {
         Canonical::Left => {
@@ -176,7 +177,8 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar
+        + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     if options.canonical == Canonical::Right {
@@ -219,7 +221,8 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar
+        + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     // Unfold tensor into matrix
@@ -287,7 +290,8 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar
+        + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     // Unfold tensor into matrix

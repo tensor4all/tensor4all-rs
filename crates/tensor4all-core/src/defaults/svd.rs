@@ -8,9 +8,13 @@ use crate::index_like::IndexLike;
 use crate::truncation::{HasTruncationParams, TruncationParams};
 use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
 use num_complex::{Complex64, ComplexFloat};
+use std::any::TypeId;
 use std::sync::Arc;
 use tensor4all_tensorbackend::mdarray::DSlice;
-use tensor4all_tensorbackend::{svd_backend, SvdResult};
+use tensor4all_tensorbackend::tenferro_tensor::MemoryOrder;
+use tensor4all_tensorbackend::{
+    dyn_ad_tensor_primal_to_storage, svd_backend, svd_dyn_ad_tensor_native, SvdResult,
+};
 use thiserror::Error;
 
 /// Error type for SVD operations in tensor4all-linalg.
@@ -140,6 +144,18 @@ fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
     r.max(1)
 }
 
+fn singular_values_from_storage(storage: &Storage) -> Result<Vec<f64>, SvdError> {
+    match storage {
+        Storage::DenseF64(data) => Ok(data.as_slice().to_vec()),
+        Storage::DiagF64(data) => Ok(data.as_slice().to_vec()),
+        Storage::DenseC64(data) => Ok(data.as_slice().iter().map(|x| x.re).collect()),
+        other => Err(SvdError::ComputationError(anyhow::anyhow!(
+            "native SVD expected real singular-value storage, got {:?}",
+            std::mem::discriminant(other)
+        ))),
+    }
+}
+
 /// Extract U, S, V^H from tensorbackend's SvdResult.
 ///
 /// This helper function converts the backend's SVD result to our desired format:
@@ -253,7 +269,8 @@ where
         + ComplexFloat
         + Default
         + From<<T as ComplexFloat>::Real>
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar
+        + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     // Determine rtol to use
@@ -364,7 +381,8 @@ where
         + ComplexFloat
         + Default
         + From<<T as ComplexFloat>::Real>
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar
+        + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     svd_with::<T>(t, left_inds, &SvdOptions::default())
@@ -422,11 +440,121 @@ where
         + ComplexFloat
         + Default
         + From<<T as ComplexFloat>::Real>
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
+        + tensor4all_tensorbackend::backend::BackendLinalgScalar
+        + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
+    let rtol = options.truncation.effective_rtol(default_svd_rtol());
+    if !rtol.is_finite() || rtol < 0.0 {
+        return Err(SvdError::InvalidRtol(rtol));
+    }
+
     let (u_vec, s_vec, vh_vec, bond_index, left_indices, right_indices, n) =
-        svd_truncated_usvh::<T>(t, left_inds, options)?;
+        if let Some(native) = t.as_native() {
+            let supports_native = native.is_dense()
+                && TypeId::of::<T>() == TypeId::of::<f64>()
+                && native.scalar_type()
+                    == tensor4all_tensorbackend::tenferro_dyadtensor::ScalarType::F64;
+            if supports_native {
+                let (.., m, n, left_indices, right_indices) = unfold_split::<T>(t, left_inds)
+                    .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
+                    .map_err(SvdError::ComputationError)?;
+                let k = m.min(n);
+                let mut permuted_indices = left_indices.clone();
+                permuted_indices.extend(right_indices.iter().cloned());
+                let permuted = t.permute_indices(&permuted_indices);
+                let matrix_native = permuted
+                    .as_native()
+                    .ok_or_else(|| {
+                        SvdError::ComputationError(anyhow::anyhow!(
+                            "native SVD lost payload during permutation"
+                        ))
+                    })?
+                    .reshape(&[m, n])
+                    .map_err(|e| {
+                        SvdError::ComputationError(anyhow::anyhow!(
+                            "native SVD reshape to matrix failed: {e}"
+                        ))
+                    })?;
+                let (mut u_native, mut s_native, mut vt_native) =
+                    svd_dyn_ad_tensor_native(&matrix_native).map_err(SvdError::ComputationError)?;
+                let full_s = dyn_ad_tensor_primal_to_storage(&s_native)
+                    .map_err(SvdError::ComputationError)?;
+                let s_full = singular_values_from_storage(&full_s)?;
+                let mut r = compute_retained_rank(&s_full, rtol);
+                if let Some(max_rank) = options.truncation.max_rank {
+                    r = r.min(max_rank);
+                }
+                if r < k {
+                    u_native = u_native.take_prefix(1, r).map_err(|e| {
+                        SvdError::ComputationError(anyhow::anyhow!(
+                            "native SVD truncation on U failed: {e}"
+                        ))
+                    })?;
+                    s_native = s_native.take_prefix(0, r).map_err(|e| {
+                        SvdError::ComputationError(anyhow::anyhow!(
+                            "native SVD truncation on singular values failed: {e}"
+                        ))
+                    })?;
+                    vt_native = vt_native.take_prefix(0, r).map_err(|e| {
+                        SvdError::ComputationError(anyhow::anyhow!(
+                            "native SVD truncation on V^T failed: {e}"
+                        ))
+                    })?;
+                }
+
+                let bond_index = DynIndex::new_bond(r)
+                    .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))
+                    .map_err(SvdError::ComputationError)?;
+
+                let mut u_indices = left_indices.clone();
+                u_indices.push(bond_index.clone());
+                let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
+                let u_native = u_native
+                    .contiguous(MemoryOrder::RowMajor)
+                    .map_err(|e| SvdError::ComputationError(anyhow::anyhow!(e)))?
+                    .reshape(&u_dims)
+                    .map_err(|e| {
+                        SvdError::ComputationError(anyhow::anyhow!(
+                            "native SVD reshape of U failed: {e}"
+                        ))
+                    })?;
+                let u = TensorDynLen::from_native(u_indices, u_native)
+                    .map_err(SvdError::ComputationError)?;
+
+                let s_indices = vec![bond_index.clone(), bond_index.sim()];
+                let s_native = s_native.diag_embed(2).map_err(|e| {
+                    SvdError::ComputationError(anyhow::anyhow!(
+                        "native SVD diagonal embedding failed: {e}"
+                    ))
+                })?;
+                let s = TensorDynLen::from_native(s_indices, s_native)
+                    .map_err(SvdError::ComputationError)?;
+
+                let mut vh_indices = vec![bond_index.clone()];
+                vh_indices.extend(right_indices.clone());
+                let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
+                let vt_native = vt_native
+                    .contiguous(MemoryOrder::RowMajor)
+                    .map_err(|e| SvdError::ComputationError(anyhow::anyhow!(e)))?
+                    .reshape(&vh_dims)
+                    .map_err(|e| {
+                        SvdError::ComputationError(anyhow::anyhow!(
+                            "native SVD reshape of V^T failed: {e}"
+                        ))
+                    })?;
+                let vh = TensorDynLen::from_native(vh_indices, vt_native)
+                    .map_err(SvdError::ComputationError)?;
+                let perm: Vec<usize> = (1..vh.indices.len()).chain(std::iter::once(0)).collect();
+                let v = vh.conj().permute(&perm);
+
+                return Ok((u, s, v));
+            } else {
+                svd_truncated_usvh::<T>(t, left_inds, options)?
+            }
+        } else {
+            svd_truncated_usvh::<T>(t, left_inds, options)?
+        };
     let r = s_vec.len();
     let v_vec = vh_to_v(&vh_vec, n, r);
 
@@ -475,60 +603,4 @@ pub fn svd_c64(
     left_inds: &[DynIndex],
 ) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
     svd::<Complex64>(t, left_inds)
-}
-
-/// SVD result for factorization: returns (U, singular_values, V^H) as tensors.
-///
-/// Unlike `svd_with`, this returns V^H (not V) to avoid the need for tensor-level
-/// conjugation in factorize. V^H has indices `[bond_index, right_inds...]`.
-///
-/// This is `pub(crate)` because it is only used by the factorization module.
-#[allow(private_bounds)]
-pub(crate) fn svd_for_factorize<T>(
-    t: &TensorDynLen,
-    left_inds: &[DynIndex],
-    options: &SvdOptions,
-) -> Result<SvdFactorizeResult, SvdError>
-where
-    T: StorageScalar
-        + ComplexFloat
-        + Default
-        + From<<T as ComplexFloat>::Real>
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar,
-    <T as ComplexFloat>::Real: Into<f64> + 'static,
-{
-    let (u_vec, singular_values, vh_vec, bond_index, left_indices, right_indices, _n) =
-        svd_truncated_usvh::<T>(t, left_inds, options)?;
-    let r = singular_values.len();
-
-    // U tensor: [left_inds..., bond_index]
-    let mut u_indices = left_indices;
-    u_indices.push(bond_index.clone());
-    let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
-    let u_storage = T::dense_storage_with_shape(u_vec, &u_dims);
-    let u = TensorDynLen::from_indices(u_indices, u_storage);
-
-    // V^H tensor: [bond_index, right_inds...]
-    let mut vh_indices = vec![bond_index.clone()];
-    vh_indices.extend(right_indices);
-    let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
-    let vh_storage = T::dense_storage_with_shape(vh_vec, &vh_dims);
-    let vh = TensorDynLen::from_indices(vh_indices, vh_storage);
-
-    Ok(SvdFactorizeResult {
-        u,
-        vh,
-        bond_index,
-        singular_values,
-        rank: r,
-    })
-}
-
-/// Result of SVD for factorization (returns V^H instead of V).
-pub(crate) struct SvdFactorizeResult {
-    pub u: TensorDynLen,
-    pub vh: TensorDynLen,
-    pub bond_index: DynIndex,
-    pub singular_values: Vec<f64>,
-    pub rank: usize,
 }
