@@ -203,9 +203,13 @@ where
             .get_mut(node_name)
             .ok_or_else(|| format!("Node {:?} not found", node_name))?;
 
-        // Remove old indices from index_to_node
+        // Remove old indices from index_to_node, but only if still mapped to this node.
+        // (An index may have already been reassigned to another node by a prior
+        // set_site_space call during a multi-node update such as swap_on_edge.)
         for old_idx in site_space.iter() {
-            self.index_to_node.remove(old_idx.id());
+            if self.index_to_node.get(old_idx.id()) == Some(node_name) {
+                self.index_to_node.remove(old_idx.id());
+            }
         }
 
         // Add new indices to index_to_node

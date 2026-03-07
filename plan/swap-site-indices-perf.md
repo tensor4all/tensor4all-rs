@@ -164,6 +164,43 @@ for _pass in 0..max_passes {
 - [x] テスト全パス確認（14 passed, 2 ignored for Y-shape）
 - [x] ベンチマーク確認（R=45 が 86ms ← 目標 10 秒以内を大幅達成）
 
+## 次の改善案: インデックス移動不要なエッジのスキップ
+
+### 問題
+
+現在の `swap_site_indices` は各パスで**全エッジ**を走査し、インデックスの移動が不要なエッジでも `swap_on_edge`（contract + SVD）を実行している。
+
+初期状態のインデックス配置とゴールのインデックス配置は事前にわかっているため、あるエッジにおいて両側のインデックスが既にゴール通りに配置されていれば、そのエッジの contract + SVD は完全に不要。
+
+### 影響の見積もり
+
+R=45 のインターリーブ（90ノード鎖）の場合：
+- 実際に必要なswap回数: N(N-1)/2 = 45×44/2 = **990回**
+- 現在の実装: 22パス × 89エッジ = **~1958回**のエッジ訪問（約半分が不要）
+- bond dim=1 で 86ms → スキップにより ~40-50ms に改善見込み
+
+bond dim が大きい場合（例: D=16）は contract + SVD のコストが増えるため、スキップの効果はさらに大きくなる。
+
+### 実装案
+
+`swap_on_edge` の冒頭で、エッジを越えて移動すべきインデックスがあるかチェック：
+
+```rust
+// swap_on_edge の冒頭に追加
+let needs_swap = site_ids_a.iter().any(|id| {
+    target_assignment.get(id).is_some_and(|t| !oracle.is_target_on_a_side(node_a, node_b, t))
+}) || site_ids_b.iter().any(|id| {
+    target_assignment.get(id).is_some_and(|t| oracle.is_target_on_a_side(node_a, node_b, t))
+});
+if !needs_swap {
+    return Ok(());  // このエッジでは何もしない
+}
+```
+
+### 動機
+
+quanticsnegf-rs の BSE right-hand side 計算（`bse_rhs_block`）で `rearrange_siteinds` → `swap_site_indices` を呼んでおり、R=45 の実データ（bond dim ≤ 16）で 9ブロック分の rearrange が必要。このスキップ最適化により bse_rhs 全体の実行時間を短縮できる。
+
 ## 検証コマンド
 
 ```bash

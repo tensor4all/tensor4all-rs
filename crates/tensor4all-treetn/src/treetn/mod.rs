@@ -1361,6 +1361,20 @@ where
             .map(|i| i.id().to_owned())
             .collect();
 
+        // Skip edges where no site index needs to cross.
+        let needs_swap = site_ids_a.iter().any(|id| {
+            target_assignment
+                .get(id)
+                .is_some_and(|t| !oracle.is_target_on_a_side(&node_a_name, &node_b_name, t))
+        }) || site_ids_b.iter().any(|id| {
+            target_assignment
+                .get(id)
+                .is_some_and(|t| oracle.is_target_on_a_side(&node_a_name, &node_b_name, t))
+        });
+        if !needs_swap {
+            return Ok(());
+        }
+
         let tensor_ab = T::contract(&[&tensor_a, &tensor_b], AllowedPairs::All)
             .context("swap_on_edge: contract")?;
 
