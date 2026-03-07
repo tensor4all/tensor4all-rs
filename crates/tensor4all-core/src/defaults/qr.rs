@@ -396,3 +396,160 @@ pub fn qr_c64(
 ) -> Result<(TensorDynLen, TensorDynLen), QrError> {
     qr::<Complex64>(t, left_inds)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::index::DefaultIndex as Index;
+    use std::sync::Arc;
+
+    #[test]
+    fn compute_retained_rank_qr_from_storage_truncates_and_keeps_one() {
+        let r_full = Storage::DenseF64(
+            tensor4all_tensorbackend::DenseStorageF64::from_vec_with_shape(
+                vec![3.0, 1.0, 0.0, 1.0e-14],
+                &[2, 2],
+            ),
+        );
+
+        let retained = compute_retained_rank_qr_from_storage(&r_full, 2, 2, 1.0e-10).unwrap();
+        assert_eq!(retained, 1);
+
+        let zero = Storage::DenseF64(
+            tensor4all_tensorbackend::DenseStorageF64::from_vec_with_shape(
+                vec![0.0, 0.0, 0.0, 0.0],
+                &[2, 2],
+            ),
+        );
+        let retained_zero = compute_retained_rank_qr_from_storage(&zero, 2, 2, 1.0).unwrap();
+        assert_eq!(retained_zero, 1);
+    }
+
+    #[test]
+    fn compute_retained_rank_qr_from_storage_rejects_non_dense_r() {
+        let diag = Storage::new_diag_f64(vec![1.0, 2.0]);
+        let err = compute_retained_rank_qr_from_storage(&diag, 2, 2, 1.0e-12).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("native QR expected dense R storage"));
+    }
+
+    #[test]
+    fn compute_retained_rank_qr_from_storage_handles_empty_and_complex_dense() {
+        let empty = Storage::DenseC64(
+            tensor4all_tensorbackend::DenseStorageC64::from_vec_with_shape(vec![], &[0]),
+        );
+        assert_eq!(
+            compute_retained_rank_qr_from_storage(&empty, 0, 2, 1.0e-12).unwrap(),
+            1
+        );
+
+        let dense_c64 = Storage::DenseC64(
+            tensor4all_tensorbackend::DenseStorageC64::from_vec_with_shape(
+                vec![
+                    Complex64::new(2.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(1.0e-14, 0.0),
+                ],
+                &[2, 2],
+            ),
+        );
+        assert_eq!(
+            compute_retained_rank_qr_from_storage(&dense_c64, 2, 2, 1.0e-10).unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn set_default_qr_rtol_rejects_invalid_values() {
+        let original = default_qr_rtol();
+        assert!(set_default_qr_rtol(f64::NAN).is_err());
+        assert!(set_default_qr_rtol(-1.0).is_err());
+        set_default_qr_rtol(original).unwrap();
+    }
+
+    #[test]
+    fn qr_options_report_rtol_and_default_roundtrips() {
+        let original = default_qr_rtol();
+        let options = QrOptions::with_rtol(1.0e-7);
+        assert_eq!(options.rtol(), Some(1.0e-7));
+        assert_eq!(QrOptions::default().rtol(), None);
+
+        set_default_qr_rtol(1.0e-9).unwrap();
+        assert_eq!(default_qr_rtol(), 1.0e-9);
+        set_default_qr_rtol(original).unwrap();
+    }
+
+    #[test]
+    fn qr_with_invalid_rtol_is_rejected_before_linalg() {
+        let i = Index::new_dyn(2);
+        let j = Index::new_dyn(2);
+        let tensor = TensorDynLen::new(
+            vec![i.clone(), j.clone()],
+            Arc::new(Storage::new_dense_f64(4)),
+        );
+
+        let nan = qr_with::<f64>(
+            &tensor,
+            std::slice::from_ref(&i),
+            &QrOptions::with_rtol(f64::NAN),
+        );
+        assert!(matches!(nan, Err(QrError::InvalidRtol(v)) if v.is_nan()));
+
+        let negative = qr_with::<f64>(
+            &tensor,
+            std::slice::from_ref(&i),
+            &QrOptions::with_rtol(-1.0),
+        );
+        assert!(matches!(negative, Err(QrError::InvalidRtol(v)) if v == -1.0));
+    }
+
+    #[test]
+    fn qr_with_native_truncation_reduces_bond_dimension() {
+        let i = Index::new_dyn(2);
+        let j = Index::new_dyn(2);
+        let mut data = vec![0.0; 4];
+        data[0] = 1.0;
+        data[3] = 1.0e-14;
+        let tensor = TensorDynLen::new(
+            vec![i.clone(), j.clone()],
+            Arc::new(Storage::DenseF64(
+                tensor4all_tensorbackend::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
+            )),
+        );
+
+        let (q, r) = qr_with::<f64>(
+            &tensor,
+            std::slice::from_ref(&i),
+            &QrOptions::with_rtol(1.0e-10),
+        )
+        .unwrap();
+        assert_eq!(q.dims(), vec![2, 1]);
+        assert_eq!(r.dims(), vec![1, 2]);
+    }
+
+    #[test]
+    fn qr_with_complex_fallback_truncation_reduces_bond_dimension() {
+        let i = Index::new_dyn(2);
+        let j = Index::new_dyn(2);
+        let mut data = vec![Complex64::new(0.0, 0.0); 4];
+        data[0] = Complex64::new(1.0, 0.0);
+        data[3] = Complex64::new(1.0e-14, 0.0);
+        let tensor = TensorDynLen::new(
+            vec![i.clone(), j.clone()],
+            Arc::new(Storage::DenseC64(
+                tensor4all_tensorbackend::DenseStorageC64::from_vec_with_shape(data, &[2, 2]),
+            )),
+        );
+
+        let (q, r) = qr_with::<Complex64>(
+            &tensor,
+            std::slice::from_ref(&i),
+            &QrOptions::with_rtol(1.0e-10),
+        )
+        .unwrap();
+        assert_eq!(q.dims(), vec![2, 1]);
+        assert_eq!(r.dims(), vec![1, 2]);
+    }
+}

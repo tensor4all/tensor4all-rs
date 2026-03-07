@@ -603,3 +603,94 @@ pub fn svd_c64(
 ) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
     svd::<Complex64>(t, left_inds)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::index::DefaultIndex as Index;
+
+    #[test]
+    fn compute_retained_rank_handles_edge_cases() {
+        assert_eq!(compute_retained_rank(&[], 1.0e-12), 1);
+        assert_eq!(compute_retained_rank(&[0.0, 0.0], 1.0e-6), 1);
+        assert_eq!(compute_retained_rank(&[5.0, 1.0e-9], 1.0e-6), 1);
+        assert_eq!(compute_retained_rank(&[5.0, 1.0], 1.0e-12), 2);
+    }
+
+    #[test]
+    fn singular_values_from_storage_accepts_real_and_complex_dense() {
+        let dense = Storage::DenseF64(
+            tensor4all_tensorbackend::DenseStorageF64::from_vec_with_shape(vec![3.0, 1.5], &[2]),
+        );
+        assert_eq!(
+            singular_values_from_storage(&dense).unwrap(),
+            vec![3.0, 1.5]
+        );
+
+        let diag = Storage::new_diag_f64(vec![2.0, 0.5]);
+        assert_eq!(singular_values_from_storage(&diag).unwrap(), vec![2.0, 0.5]);
+
+        let complex = Storage::DenseC64(
+            tensor4all_tensorbackend::DenseStorageC64::from_vec_with_shape(
+                vec![Complex64::new(1.0, 2.0), Complex64::new(0.5, -4.0)],
+                &[2],
+            ),
+        );
+        assert_eq!(
+            singular_values_from_storage(&complex).unwrap(),
+            vec![1.0, 0.5]
+        );
+    }
+
+    #[test]
+    fn vh_to_v_conjugate_transposes_complex_data() {
+        let vh = vec![
+            Complex64::new(1.0, 2.0),
+            Complex64::new(3.0, -1.0),
+            Complex64::new(0.5, 4.0),
+            Complex64::new(-2.0, 0.25),
+        ];
+        let v = vh_to_v(&vh, 2, 2);
+        assert_eq!(
+            v,
+            vec![
+                Complex64::new(1.0, -2.0),
+                Complex64::new(0.5, -4.0),
+                Complex64::new(3.0, 1.0),
+                Complex64::new(-2.0, -0.25),
+            ]
+        );
+    }
+
+    #[test]
+    fn set_default_svd_rtol_rejects_invalid_values() {
+        let original = default_svd_rtol();
+        assert!(set_default_svd_rtol(f64::NAN).is_err());
+        assert!(set_default_svd_rtol(-1.0).is_err());
+        set_default_svd_rtol(original).unwrap();
+    }
+
+    #[test]
+    fn svd_with_invalid_rtol_is_rejected_before_linalg() {
+        let i = Index::new_dyn(2);
+        let j = Index::new_dyn(2);
+        let tensor = TensorDynLen::new(
+            vec![i.clone(), j.clone()],
+            Arc::new(Storage::new_dense_f64(4)),
+        );
+
+        let nan = svd_with::<f64>(
+            &tensor,
+            std::slice::from_ref(&i),
+            &SvdOptions::with_rtol(f64::NAN),
+        );
+        assert!(matches!(nan, Err(SvdError::InvalidRtol(v)) if v.is_nan()));
+
+        let negative = svd_with::<f64>(
+            &tensor,
+            std::slice::from_ref(&i),
+            &SvdOptions::with_rtol(-1.0),
+        );
+        assert!(matches!(negative, Err(SvdError::InvalidRtol(v)) if v == -1.0));
+    }
+}

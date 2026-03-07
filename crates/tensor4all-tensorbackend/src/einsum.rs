@@ -270,119 +270,149 @@ pub fn einsum_storage(inputs: &[EinsumInput<'_>], output_ids: &[usize]) -> Resul
 mod tests {
     use super::*;
     use crate::storage::{contract_storage, DenseStorageF64};
+    use std::env;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn with_cpu_env(f: impl FnOnce()) {
+        let _guard = env_lock().lock().unwrap();
+        let prev_runtime = env::var("T4A_TENFERRO_RUNTIME").ok();
+        let prev_threads = env::var("T4A_TENFERRO_CPU_THREADS").ok();
+        env::remove_var("T4A_TENFERRO_RUNTIME");
+        env::remove_var("T4A_TENFERRO_CPU_THREADS");
+        f();
+        match prev_runtime {
+            Some(v) => env::set_var("T4A_TENFERRO_RUNTIME", v),
+            None => env::remove_var("T4A_TENFERRO_RUNTIME"),
+        }
+        match prev_threads {
+            Some(v) => env::set_var("T4A_TENFERRO_CPU_THREADS", v),
+            None => env::remove_var("T4A_TENFERRO_CPU_THREADS"),
+        }
+    }
 
     #[test]
     fn test_einsum_storage_respects_output_axis_order() {
-        // A[i,j] with dims [2,3], row-major data:
-        // [[1,2,3],
-        //  [4,5,6]]
-        let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            &[2, 3],
-        ));
-        let input = EinsumInput {
-            ids: &[0, 1],
-            storage: &storage,
-            dims: &[2, 3],
-        };
+        with_cpu_env(|| {
+            // A[i,j] with dims [2,3], row-major data:
+            // [[1,2,3],
+            //  [4,5,6]]
+            let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                &[2, 3],
+            ));
+            let input = EinsumInput {
+                ids: &[0, 1],
+                storage: &storage,
+                dims: &[2, 3],
+            };
 
-        // Reorder output axes: [j, i]
-        let result = einsum_storage(&[input], &[1, 0]).expect("einsum should succeed");
-        match result {
-            Storage::DenseF64(ds) => {
-                assert_eq!(ds.dims(), vec![3, 2]);
-                // Expected transpose:
-                // [[1,4],
-                //  [2,5],
-                //  [3,6]]
-                assert_eq!(ds.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+            // Reorder output axes: [j, i]
+            let result = einsum_storage(&[input], &[1, 0]).expect("einsum should succeed");
+            match result {
+                Storage::DenseF64(ds) => {
+                    assert_eq!(ds.dims(), vec![3, 2]);
+                    // Expected transpose:
+                    // [[1,4],
+                    //  [2,5],
+                    //  [3,6]]
+                    assert_eq!(ds.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+                }
+                other => panic!("expected DenseF64, got {other:?}"),
             }
-            other => panic!("expected DenseF64, got {other:?}"),
-        }
+        });
     }
 
     #[test]
     fn test_einsum_storage_respects_output_axis_order_after_contraction() {
-        // A[i,j] (2x3)
-        let a = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            &[2, 3],
-        ));
-        // B[j,k] (3x4)
-        let b = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![
-                1.0, 2.0, 3.0, 4.0, //
-                5.0, 6.0, 7.0, 8.0, //
-                9.0, 10.0, 11.0, 12.0,
-            ],
-            &[3, 4],
-        ));
+        with_cpu_env(|| {
+            // A[i,j] (2x3)
+            let a = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                &[2, 3],
+            ));
+            // B[j,k] (3x4)
+            let b = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![
+                    1.0, 2.0, 3.0, 4.0, //
+                    5.0, 6.0, 7.0, 8.0, //
+                    9.0, 10.0, 11.0, 12.0,
+                ],
+                &[3, 4],
+            ));
 
-        let inputs = vec![
-            EinsumInput {
-                ids: &[0, 1], // i,j
-                storage: &a,
-                dims: &[2, 3],
-            },
-            EinsumInput {
-                ids: &[1, 2], // j,k
-                storage: &b,
-                dims: &[3, 4],
-            },
-        ];
+            let inputs = vec![
+                EinsumInput {
+                    ids: &[0, 1], // i,j
+                    storage: &a,
+                    dims: &[2, 3],
+                },
+                EinsumInput {
+                    ids: &[1, 2], // j,k
+                    storage: &b,
+                    dims: &[3, 4],
+                },
+            ];
 
-        // Output in reversed remaining axis order: [k, i]
-        let result = einsum_storage(&inputs, &[2, 0]).expect("einsum should succeed");
-        match result {
-            Storage::DenseF64(ds) => {
-                assert_eq!(ds.dims(), vec![4, 2]);
-                assert_eq!(
-                    ds.as_slice(),
-                    &[38.0, 83.0, 44.0, 98.0, 50.0, 113.0, 56.0, 128.0]
-                );
+            // Output in reversed remaining axis order: [k, i]
+            let result = einsum_storage(&inputs, &[2, 0]).expect("einsum should succeed");
+            match result {
+                Storage::DenseF64(ds) => {
+                    assert_eq!(ds.dims(), vec![4, 2]);
+                    assert_eq!(
+                        ds.as_slice(),
+                        &[38.0, 83.0, 44.0, 98.0, 50.0, 113.0, 56.0, 128.0]
+                    );
+                }
+                other => panic!("expected DenseF64, got {other:?}"),
             }
-            other => panic!("expected DenseF64, got {other:?}"),
-        }
+        });
     }
 
     #[test]
     fn test_einsum_storage_matches_binary_contract_for_rank3_rank2() {
-        // A[a,b,c] with dims [3,2,3]
-        let a = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            (1..=18).map(|x| x as f64).collect(),
-            &[3, 2, 3],
-        ));
-        // B[c,d] with dims [3,2]
-        let b = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            (1..=6).map(|x| x as f64).collect(),
-            &[3, 2],
-        ));
+        with_cpu_env(|| {
+            // A[a,b,c] with dims [3,2,3]
+            let a = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                (1..=18).map(|x| x as f64).collect(),
+                &[3, 2, 3],
+            ));
+            // B[c,d] with dims [3,2]
+            let b = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                (1..=6).map(|x| x as f64).collect(),
+                &[3, 2],
+            ));
 
-        // Einsum path: contract on c => output [a,b,d]
-        let inputs = vec![
-            EinsumInput {
-                ids: &[0, 1, 2],
-                storage: &a,
-                dims: &[3, 2, 3],
-            },
-            EinsumInput {
-                ids: &[2, 3],
-                storage: &b,
-                dims: &[3, 2],
-            },
-        ];
-        let einsum = einsum_storage(&inputs, &[0, 1, 3]).expect("einsum should succeed");
+            // Einsum path: contract on c => output [a,b,d]
+            let inputs = vec![
+                EinsumInput {
+                    ids: &[0, 1, 2],
+                    storage: &a,
+                    dims: &[3, 2, 3],
+                },
+                EinsumInput {
+                    ids: &[2, 3],
+                    storage: &b,
+                    dims: &[3, 2],
+                },
+            ];
+            let einsum = einsum_storage(&inputs, &[0, 1, 3]).expect("einsum should succeed");
 
-        // Binary dense contraction path (reference)
-        let expected = contract_storage(&a, &[3, 2, 3], &[2], &b, &[3, 2], &[0], &[3, 2, 2]);
+            // Binary dense contraction path (reference)
+            let expected = contract_storage(&a, &[3, 2, 3], &[2], &b, &[3, 2], &[0], &[3, 2, 2]);
 
-        match (einsum, expected) {
-            (Storage::DenseF64(e), Storage::DenseF64(x)) => {
-                assert_eq!(e.dims(), x.dims());
-                assert_eq!(e.as_slice(), x.as_slice());
+            match (einsum, expected) {
+                (Storage::DenseF64(e), Storage::DenseF64(x)) => {
+                    assert_eq!(e.dims(), x.dims());
+                    assert_eq!(e.as_slice(), x.as_slice());
+                }
+                (e, x) => panic!("expected DenseF64/DenseF64, got {e:?} and {x:?}"),
             }
-            (e, x) => panic!("expected DenseF64/DenseF64, got {e:?} and {x:?}"),
-        }
+        });
     }
 
     #[test]
@@ -407,74 +437,78 @@ mod tests {
 
     #[test]
     fn test_einsum_storage_three_inputs_matches_sequential_binary_contract() {
-        let t0 = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            (1..=6).map(|x| x as f64).collect(),
-            &[2, 3],
-        )); // [i,a]
-        let t1 = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            (1..=18).map(|x| x as f64).collect(),
-            &[3, 2, 3],
-        )); // [a,b,c]
-        let t2 = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            (1..=6).map(|x| x as f64).collect(),
-            &[3, 2],
-        )); // [c,k]
+        with_cpu_env(|| {
+            let t0 = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                (1..=6).map(|x| x as f64).collect(),
+                &[2, 3],
+            )); // [i,a]
+            let t1 = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                (1..=18).map(|x| x as f64).collect(),
+                &[3, 2, 3],
+            )); // [a,b,c]
+            let t2 = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                (1..=6).map(|x| x as f64).collect(),
+                &[3, 2],
+            )); // [c,k]
 
-        let inputs = vec![
-            EinsumInput {
-                ids: &[0, 1], // i,a
-                storage: &t0,
-                dims: &[2, 3],
-            },
-            EinsumInput {
-                ids: &[1, 2, 3], // a,b,c
-                storage: &t1,
-                dims: &[3, 2, 3],
-            },
-            EinsumInput {
-                ids: &[3, 4], // c,k
-                storage: &t2,
-                dims: &[3, 2],
-            },
-        ];
+            let inputs = vec![
+                EinsumInput {
+                    ids: &[0, 1], // i,a
+                    storage: &t0,
+                    dims: &[2, 3],
+                },
+                EinsumInput {
+                    ids: &[1, 2, 3], // a,b,c
+                    storage: &t1,
+                    dims: &[3, 2, 3],
+                },
+                EinsumInput {
+                    ids: &[3, 4], // c,k
+                    storage: &t2,
+                    dims: &[3, 2],
+                },
+            ];
 
-        let einsum = einsum_storage(&inputs, &[0, 2, 4]).expect("einsum should succeed");
+            let einsum = einsum_storage(&inputs, &[0, 2, 4]).expect("einsum should succeed");
 
-        // Sequential binary contraction reference:
-        // ((t0 * t1 over a) * t2 over c)
-        let tmp = contract_storage(&t0, &[2, 3], &[1], &t1, &[3, 2, 3], &[0], &[2, 2, 3]);
-        let expected = contract_storage(&tmp, &[2, 2, 3], &[2], &t2, &[3, 2], &[0], &[2, 2, 2]);
+            // Sequential binary contraction reference:
+            // ((t0 * t1 over a) * t2 over c)
+            let tmp = contract_storage(&t0, &[2, 3], &[1], &t1, &[3, 2, 3], &[0], &[2, 2, 3]);
+            let expected = contract_storage(&tmp, &[2, 2, 3], &[2], &t2, &[3, 2], &[0], &[2, 2, 2]);
 
-        match (einsum, expected) {
-            (Storage::DenseF64(e), Storage::DenseF64(x)) => {
-                assert_eq!(e.dims(), x.dims());
-                assert_eq!(e.as_slice(), x.as_slice());
+            match (einsum, expected) {
+                (Storage::DenseF64(e), Storage::DenseF64(x)) => {
+                    assert_eq!(e.dims(), x.dims());
+                    assert_eq!(e.as_slice(), x.as_slice());
+                }
+                (e, x) => panic!("expected DenseF64/DenseF64, got {e:?} and {x:?}"),
             }
-            (e, x) => panic!("expected DenseF64/DenseF64, got {e:?} and {x:?}"),
-        }
+        });
     }
 
     #[test]
     fn test_einsum_storage_uses_logical_dims_not_storage_rank() {
-        // Storage shape (rank-6) can differ from logical tensor shape (rank-3)
-        // as long as total element count matches. einsum should use logical dims.
-        let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![2.0],
-            &[1, 1, 1, 1, 1, 1],
-        ));
-        let input = EinsumInput {
-            ids: &[0, 1, 2],
-            storage: &storage,
-            dims: &[1, 1, 1],
-        };
+        with_cpu_env(|| {
+            // Storage shape (rank-6) can differ from logical tensor shape (rank-3)
+            // as long as total element count matches. einsum should use logical dims.
+            let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![2.0],
+                &[1, 1, 1, 1, 1, 1],
+            ));
+            let input = EinsumInput {
+                ids: &[0, 1, 2],
+                storage: &storage,
+                dims: &[1, 1, 1],
+            };
 
-        let result = einsum_storage(&[input], &[0, 1, 2]).expect("einsum should succeed");
-        match result {
-            Storage::DenseF64(ds) => {
-                assert_eq!(ds.dims(), vec![1, 1, 1]);
-                assert_eq!(ds.as_slice(), &[2.0]);
+            let result = einsum_storage(&[input], &[0, 1, 2]).expect("einsum should succeed");
+            match result {
+                Storage::DenseF64(ds) => {
+                    assert_eq!(ds.dims(), vec![1, 1, 1]);
+                    assert_eq!(ds.as_slice(), &[2.0]);
+                }
+                other => panic!("expected DenseF64, got {other:?}"),
             }
-            other => panic!("expected DenseF64, got {other:?}"),
-        }
+        });
     }
 }

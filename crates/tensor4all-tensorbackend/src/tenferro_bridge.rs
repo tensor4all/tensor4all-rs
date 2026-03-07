@@ -1116,55 +1116,61 @@ mod tests {
 
     #[test]
     fn permute_storage_native_dense_matches_legacy() {
-        let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            &[2, 3],
-        ));
+        with_env(None, None, || {
+            let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                &[2, 3],
+            ));
 
-        let native = permute_storage_native(&storage, &[2, 3], &[1, 0]).unwrap();
-        let legacy = storage.permute_storage(&[2, 3], &[1, 0]);
+            let native = permute_storage_native(&storage, &[2, 3], &[1, 0]).unwrap();
+            let legacy = storage.permute_storage(&[2, 3], &[1, 0]);
 
-        assert_storage_eq(&native, &legacy);
+            assert_storage_eq(&native, &legacy);
+        });
     }
 
     #[test]
     fn contract_storage_native_dense_mixed_matches_legacy() {
-        let lhs = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0, 2.0, 3.0, 4.0],
-            &[2, 2],
-        ));
-        let rhs = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            vec![
-                Complex64::new(1.0, -1.0),
-                Complex64::new(2.0, 0.5),
-                Complex64::new(3.0, 1.5),
-                Complex64::new(-4.0, 2.0),
-            ],
-            &[2, 2],
-        ));
+        with_env(None, None, || {
+            let lhs = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0, 2.0, 3.0, 4.0],
+                &[2, 2],
+            ));
+            let rhs = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+                vec![
+                    Complex64::new(1.0, -1.0),
+                    Complex64::new(2.0, 0.5),
+                    Complex64::new(3.0, 1.5),
+                    Complex64::new(-4.0, 2.0),
+                ],
+                &[2, 2],
+            ));
 
-        let native =
-            contract_storage_native(&lhs, &[2, 2], &[1], &rhs, &[2, 2], &[0], &[2, 2]).unwrap();
-        let legacy = contract_storage(&lhs, &[2, 2], &[1], &rhs, &[2, 2], &[0], &[2, 2]);
+            let native =
+                contract_storage_native(&lhs, &[2, 2], &[1], &rhs, &[2, 2], &[0], &[2, 2]).unwrap();
+            let legacy = contract_storage(&lhs, &[2, 2], &[1], &rhs, &[2, 2], &[0], &[2, 2]);
 
-        assert_storage_eq(&native, &legacy);
+            assert_storage_eq(&native, &legacy);
+        });
     }
 
     #[test]
     fn outer_product_storage_native_dense_matches_legacy() {
-        let lhs = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            vec![Complex64::new(1.0, 0.25), Complex64::new(-2.0, 1.0)],
-            &[2],
-        ));
-        let rhs = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![3.0, -1.0, 0.5],
-            &[3],
-        ));
+        with_env(None, None, || {
+            let lhs = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+                vec![Complex64::new(1.0, 0.25), Complex64::new(-2.0, 1.0)],
+                &[2],
+            ));
+            let rhs = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![3.0, -1.0, 0.5],
+                &[3],
+            ));
 
-        let native = outer_product_storage_native(&lhs, &[2], &rhs, &[3], &[2, 3]).unwrap();
-        let legacy = contract_storage(&lhs, &[2], &[], &rhs, &[3], &[], &[2, 3]);
+            let native = outer_product_storage_native(&lhs, &[2], &rhs, &[3], &[2, 3]).unwrap();
+            let legacy = contract_storage(&lhs, &[2], &[], &rhs, &[3], &[], &[2, 3]);
 
-        assert_storage_eq(&native, &legacy);
+            assert_storage_eq(&native, &legacy);
+        });
     }
 
     #[test]
@@ -1199,75 +1205,201 @@ mod tests {
 
     #[test]
     fn permute_dyn_ad_tensor_native_matches_primal_parity() {
-        let native = storage_to_dyn_ad_tensor(
-            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        with_env(None, None, || {
+            let native = storage_to_dyn_ad_tensor(
+                &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                    &[2, 3],
+                )),
                 &[2, 3],
-            )),
-            &[2, 3],
-        )
-        .unwrap();
+            )
+            .unwrap();
 
-        let permuted = permute_dyn_ad_tensor_native(&native, &[1, 0]).unwrap();
-        let storage = dyn_ad_tensor_primal_to_storage(&permuted).unwrap();
-        let expected = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
-            &[3, 2],
-        ));
-        assert_storage_eq(&storage, &expected);
+            let permuted = permute_dyn_ad_tensor_native(&native, &[1, 0]).unwrap();
+            let storage = dyn_ad_tensor_primal_to_storage(&permuted).unwrap();
+            let expected = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
+                &[3, 2],
+            ));
+            assert_storage_eq(&storage, &expected);
+        });
     }
 
     #[test]
     fn einsum_dyn_ad_tensors_native_preserves_diag_and_forward_mode() {
-        let diag = Storage::DiagF64(DiagStorageF64::from_vec(vec![2.0, 3.0]));
-        let native_diag = storage_to_dyn_ad_tensor(&diag, &[2, 2]).unwrap();
+        with_env(None, None, || {
+            let diag = Storage::DiagF64(DiagStorageF64::from_vec(vec![2.0, 3.0]));
+            let native_diag = storage_to_dyn_ad_tensor(&diag, &[2, 2]).unwrap();
 
-        let primal =
-            tenferro_tensor::Tensor::<f64>::from_slice(&[1.0, 4.0], &[2], MemoryOrder::RowMajor)
-                .unwrap();
-        let tangent =
-            tenferro_tensor::Tensor::<f64>::from_slice(&[0.5, -1.0], &[2], MemoryOrder::RowMajor)
-                .unwrap();
-        let native_vec = DynAdTensor::from(AdTensor::new_forward(primal, tangent).unwrap());
-
-        let result =
-            einsum_dyn_ad_tensors_native(&[(&native_diag, &[0, 1]), (&native_vec, &[1])], &[0])
-                .unwrap();
-        let roundtrip = dyn_ad_tensor_primal_to_storage(&result).unwrap();
-
-        assert_eq!(result.mode(), AdMode::Forward);
-        assert_storage_eq(
-            &roundtrip,
-            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![2.0, 12.0], &[2])),
-        );
-        let tangent = sum_dyn_ad_tensor_native(&result)
-            .unwrap()
-            .tangent()
-            .and_then(|x| x.as_f64())
+            let primal = tenferro_tensor::Tensor::<f64>::from_slice(
+                &[1.0, 4.0],
+                &[2],
+                MemoryOrder::RowMajor,
+            )
             .unwrap();
-        assert!(
-            (tangent + 2.0).abs() < 1e-12,
-            "unexpected native einsum tangent: {tangent}"
-        );
+            let tangent = tenferro_tensor::Tensor::<f64>::from_slice(
+                &[0.5, -1.0],
+                &[2],
+                MemoryOrder::RowMajor,
+            )
+            .unwrap();
+            let native_vec = DynAdTensor::from(AdTensor::new_forward(primal, tangent).unwrap());
+
+            let result =
+                einsum_dyn_ad_tensors_native(&[(&native_diag, &[0, 1]), (&native_vec, &[1])], &[0])
+                    .unwrap();
+            let roundtrip = dyn_ad_tensor_primal_to_storage(&result).unwrap();
+
+            assert_eq!(result.mode(), AdMode::Forward);
+            assert_storage_eq(
+                &roundtrip,
+                &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![2.0, 12.0], &[2])),
+            );
+            let tangent = sum_dyn_ad_tensor_native(&result)
+                .unwrap()
+                .tangent()
+                .and_then(|x| x.as_f64())
+                .unwrap();
+            assert!(
+                (tangent + 2.0).abs() < 1e-12,
+                "unexpected native einsum tangent: {tangent}"
+            );
+        });
     }
 
     #[test]
     fn contract_dyn_ad_tensor_native_matches_primal_parity() {
-        let lhs = storage_to_dyn_ad_tensor(
-            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3])),
-            &[2, 3],
-        )
-        .unwrap();
-        let rhs = storage_to_dyn_ad_tensor(
-            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[3, 4])),
-            &[3, 4],
+        with_env(None, None, || {
+            let lhs = storage_to_dyn_ad_tensor(
+                &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &[2, 3])),
+                &[2, 3],
+            )
+            .unwrap();
+            let rhs = storage_to_dyn_ad_tensor(
+                &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &[3, 4])),
+                &[3, 4],
+            )
+            .unwrap();
+
+            let contracted = contract_dyn_ad_tensor_native(&lhs, &[1], &rhs, &[0]).unwrap();
+            let storage = dyn_ad_tensor_primal_to_storage(&contracted).unwrap();
+            let expected =
+                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![3.0; 8], &[2, 4]));
+            assert_storage_eq(&storage, &expected);
+        });
+    }
+
+    #[test]
+    fn storage_dyn_ad_tensor_roundtrip_diag_c64_preserves_diag_layout() {
+        let storage = Storage::DiagC64(crate::storage::DiagStorageC64::from_vec(vec![
+            Complex64::new(1.0, -0.5),
+            Complex64::new(-2.0, 3.0),
+        ]));
+
+        let native = storage_to_dyn_ad_tensor(&storage, &[2, 2]).unwrap();
+        let roundtrip = dyn_ad_tensor_primal_to_storage(&native).unwrap();
+
+        assert!(native.is_diag());
+        assert_storage_eq(&roundtrip, &storage);
+    }
+
+    #[test]
+    fn scale_storage_native_accepts_real_scalar_for_complex_dense() {
+        let storage = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+            vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
+            &[2],
+        ));
+
+        let scaled =
+            scale_storage_native(&storage, &[2], &crate::AnyScalar::new_real(2.0)).unwrap();
+        let expected = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+            vec![Complex64::new(2.0, 4.0), Complex64::new(-6.0, 1.0)],
+            &[2],
+        ));
+        assert_storage_eq(&scaled, &expected);
+    }
+
+    #[test]
+    fn axpby_storage_native_promotes_mixed_diag_operands_to_complex_diag() {
+        let lhs = Storage::DiagF64(DiagStorageF64::from_vec(vec![1.0, 2.0]));
+        let rhs = Storage::DiagC64(crate::storage::DiagStorageC64::from_vec(vec![
+            Complex64::new(0.0, 1.0),
+            Complex64::new(2.0, -1.0),
+        ]));
+
+        let combined = axpby_storage_native(
+            &lhs,
+            &[2, 2],
+            &crate::AnyScalar::new_real(2.0),
+            &rhs,
+            &[2, 2],
+            &crate::AnyScalar::new_complex(-1.0, 0.5),
         )
         .unwrap();
 
-        let contracted = contract_dyn_ad_tensor_native(&lhs, &[1], &rhs, &[0]).unwrap();
-        let storage = dyn_ad_tensor_primal_to_storage(&contracted).unwrap();
-        let expected =
-            Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![3.0; 8], &[2, 4]));
+        let expected = Storage::DiagC64(crate::storage::DiagStorageC64::from_vec(vec![
+            Complex64::new(1.5, -1.0),
+            Complex64::new(2.5, 2.0),
+        ]));
+        assert_storage_eq(&combined, &expected);
+    }
+
+    #[test]
+    fn qr_and_svd_native_helpers_preserve_forward_mode() {
+        with_env(None, None, || {
+            let primal = tenferro_tensor::Tensor::<f64>::from_slice(
+                &[3.0, 1.0, 0.0, 2.0],
+                &[2, 2],
+                MemoryOrder::RowMajor,
+            )
+            .unwrap();
+            let tangent = tenferro_tensor::Tensor::<f64>::from_slice(
+                &[0.5, -0.25, 0.0, 1.0],
+                &[2, 2],
+                MemoryOrder::RowMajor,
+            )
+            .unwrap();
+            let native = DynAdTensor::from(AdTensor::new_forward(primal, tangent).unwrap());
+
+            let (q, r) = qr_dyn_ad_tensor_native(&native).unwrap();
+            assert_eq!(q.mode(), AdMode::Forward);
+            assert_eq!(r.mode(), AdMode::Forward);
+            assert_eq!(q.dims(), vec![2, 2]);
+            assert_eq!(r.dims(), vec![2, 2]);
+
+            let (u, s, vt) = svd_dyn_ad_tensor_native(&native).unwrap();
+            assert_eq!(u.mode(), AdMode::Forward);
+            assert_eq!(s.mode(), AdMode::Forward);
+            assert_eq!(vt.mode(), AdMode::Forward);
+            assert_eq!(u.dims(), vec![2, 2]);
+            assert_eq!(s.dims(), vec![2]);
+            assert_eq!(vt.dims(), vec![2, 2]);
+        });
+    }
+
+    #[test]
+    fn conj_dyn_ad_tensor_native_preserves_complex_forward_mode() {
+        let primal = tenferro_tensor::Tensor::<Complex64>::from_slice(
+            &[Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
+            &[2],
+            MemoryOrder::RowMajor,
+        )
+        .unwrap();
+        let tangent = tenferro_tensor::Tensor::<Complex64>::from_slice(
+            &[Complex64::new(0.25, -0.5), Complex64::new(1.0, 1.5)],
+            &[2],
+            MemoryOrder::RowMajor,
+        )
+        .unwrap();
+        let native = DynAdTensor::from(AdTensor::new_forward(primal, tangent).unwrap());
+
+        let conjugated = conj_dyn_ad_tensor_native(&native).unwrap();
+        assert_eq!(conjugated.mode(), AdMode::Forward);
+        let storage = dyn_ad_tensor_primal_to_storage(&conjugated).unwrap();
+        let expected = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+            vec![Complex64::new(1.0, -2.0), Complex64::new(-3.0, -0.5)],
+            &[2],
+        ));
         assert_storage_eq(&storage, &expected);
     }
 }
