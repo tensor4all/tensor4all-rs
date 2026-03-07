@@ -184,6 +184,37 @@ fn test_contract_specified_empty_outer_product() {
 }
 
 #[test]
+fn test_contract_specified_empty_outer_product_preserves_input_component_order() {
+    let i = Index::<DynId>::new_dyn(2);
+    let j = Index::<DynId>::new_dyn(3);
+
+    let a = TensorDynLen::from_indices(
+        vec![i.clone()],
+        f64::dense_storage_with_shape(vec![2.0, -1.0], &[2]),
+    );
+    let b = TensorDynLen::from_indices(
+        vec![j.clone()],
+        f64::dense_storage_with_shape(vec![3.0, 4.0, -2.0], &[3]),
+    );
+
+    let result =
+        <TensorDynLen as TensorLike>::contract(&[&a, &b], AllowedPairs::Specified(&[])).unwrap();
+
+    assert_eq!(result.indices, vec![i, j]);
+    let expected = TensorDynLen::from_indices(
+        result.indices.clone(),
+        f64::dense_storage_with_shape(
+            vec![
+                6.0, 8.0, -4.0, //
+                -3.0, -4.0, 2.0,
+            ],
+            &[2, 3],
+        ),
+    );
+    assert!(result.isapprox(&expected, 1e-12, 0.0));
+}
+
+#[test]
 fn test_contract_specified_disconnected_outer_product() {
     // AllowedPairs::Specified(&[(0,1), (2,3)]) with 4 tensors
     // This creates a disconnected graph: {A,B} and {C,D}

@@ -30,6 +30,16 @@ pub use storage::{
     DenseStorageC64, DenseStorageF64, DenseStorageFactory, DiagStorage, DiagStorageC64,
     DiagStorageF64, Storage, StorageScalar, SumFromStorage,
 };
+pub use tenferro_bridge::{
+    axpby_storage_native, conj_dyn_ad_tensor_native, contract_dyn_ad_tensor_native,
+    contract_storage_native, dyn_ad_tensor_primal_to_storage, einsum_dyn_ad_tensors_native,
+    outer_product_dyn_ad_tensor_native, outer_product_storage_native, permute_dyn_ad_tensor_native,
+    permute_storage_native, qr_dyn_ad_tensor_native, scale_storage_native,
+    storage_to_dyn_ad_tensor, sum_dyn_ad_tensor_native, svd_dyn_ad_tensor_native,
+};
+pub use tenferro_dyadtensor::{DynAdScalar, DynAdTensor};
 
 // Re-export underlying crates for downstream use.
 pub use mdarray;
+pub use tenferro_dyadtensor;
+pub use tenferro_tensor;

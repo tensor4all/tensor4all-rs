@@ -1,6 +1,5 @@
 use approx::assert_abs_diff_eq;
 use num_complex::Complex64;
-use tensor4all_core::defaults::tensordynlen::TensorAccess;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
 use tensor4all_core::TensorDynLen;
 use tensor4all_hdf5::{load_itensor, load_mps, save_itensor, save_mps};

@@ -131,11 +131,11 @@ mod tests {
         Index::new_dyn(dim)
     }
 
-    fn get_f64_data(tensor: &TensorDynLen) -> &[f64] {
+    fn get_f64_data(tensor: &TensorDynLen) -> Vec<f64> {
         tensor.as_slice_f64().expect("Expected DenseF64 storage")
     }
 
-    fn get_c64_data(tensor: &TensorDynLen) -> &[Complex64] {
+    fn get_c64_data(tensor: &TensorDynLen) -> Vec<Complex64> {
         tensor.as_slice_c64().expect("Expected DenseC64 storage")
     }
 

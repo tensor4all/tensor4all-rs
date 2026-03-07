@@ -89,26 +89,10 @@ pub fn contract(
     // Use the last site as the canonical center (consistent with existing behavior)
     let center = a.len() - 1;
 
-    // For zip-up method, use contract_zipup_tree_accumulated
-    let result_inner = if matches!(options.method(), ContractMethod::Zipup) {
-        a.as_treetn()
-            .contract_zipup_tree_accumulated(
-                b.as_treetn(),
-                &center,
-                CanonicalForm::Unitary,
-                options.rtol(),
-                options.max_rank(),
-            )
-            .map_err(|e| TensorTrainError::InvalidStructure {
-                message: format!("Zip-up contraction failed: {}", e),
-            })?
-    } else {
-        treetn_contract(a.as_treetn(), b.as_treetn(), &center, treetn_options).map_err(|e| {
-            TensorTrainError::InvalidStructure {
-                message: format!("TreeTN contraction failed: {}", e),
-            }
-        })?
-    };
+    let result_inner = treetn_contract(a.as_treetn(), b.as_treetn(), &center, treetn_options)
+        .map_err(|e| TensorTrainError::InvalidStructure {
+            message: format!("TreeTN contraction failed: {}", e),
+        })?;
 
     Ok(TensorTrain::from_inner(
         result_inner,
@@ -297,6 +281,76 @@ mod tests {
         let options = ContractOptions::zipup().with_rtol(1e-10);
         let result = contract(&tt1, &tt2, &options).unwrap();
         assert_eq!(result.len(), 1);
+        assert_matches_naive(&tt1, &tt2, &result);
+    }
+
+    #[test]
+    fn test_contract_zipup_matches_naive_for_zero_masked_inputs() {
+        let s0 = idx(1034, 2);
+        let s1 = idx(1035, 2);
+        let s2 = idx(1036, 2);
+        let l01 = idx(1037, 3);
+        let l12 = idx(1038, 3);
+
+        let tt1 = TensorTrain::new(vec![
+            TensorDynLen::from_dense_f64(
+                vec![s0.clone(), l01.clone()],
+                vec![0.0, 0.0, 0.0, 4.0, 5.0, 6.0],
+            ),
+            make_tensor(vec![l01.clone(), s1.clone()]),
+        ])
+        .unwrap();
+
+        let tt2 = TensorTrain::new(vec![
+            make_tensor(vec![s1.clone(), l12.clone()]),
+            TensorDynLen::from_dense_f64(
+                vec![l12.clone(), s2.clone()],
+                vec![1.0, 0.0, 3.0, 0.0, 5.0, 0.0],
+            ),
+        ])
+        .unwrap();
+
+        let result = contract(&tt1, &tt2, &ContractOptions::zipup()).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_matches_naive(&tt1, &tt2, &result);
+    }
+
+    #[test]
+    fn test_treetn_zipup_matches_naive_for_zero_masked_inputs() {
+        let s0 = idx(1039, 2);
+        let s1 = idx(1040, 2);
+        let s2 = idx(1041, 2);
+        let l01 = idx(1042, 3);
+        let l12 = idx(1043, 3);
+
+        let tt1 = TensorTrain::new(vec![
+            TensorDynLen::from_dense_f64(
+                vec![s0.clone(), l01.clone()],
+                vec![0.0, 0.0, 0.0, 4.0, 5.0, 6.0],
+            ),
+            make_tensor(vec![l01.clone(), s1.clone()]),
+        ])
+        .unwrap();
+
+        let tt2 = TensorTrain::new(vec![
+            make_tensor(vec![s1.clone(), l12.clone()]),
+            TensorDynLen::from_dense_f64(
+                vec![l12.clone(), s2.clone()],
+                vec![1.0, 0.0, 3.0, 0.0, 5.0, 0.0],
+            ),
+        ])
+        .unwrap();
+
+        let center = tt1.len() - 1;
+        let result_inner = treetn_contract(
+            tt1.as_treetn(),
+            tt2.as_treetn(),
+            &center,
+            TreeTNContractionOptions::zipup(),
+        )
+        .unwrap();
+        let result = TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary));
+        assert_eq!(result.len(), 2);
         assert_matches_naive(&tt1, &tt2, &result);
     }
 

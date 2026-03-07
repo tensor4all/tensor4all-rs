@@ -2664,4 +2664,167 @@ mod tests {
         let sum = s.sum_c64();
         assert!((sum - Complex64::new(4.0, 6.0)).norm() < 1e-10);
     }
+
+    #[test]
+    fn test_storage_max_abs_and_to_dense_storage_cover_complex_and_diag() {
+        let dense_c64 = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+            vec![Complex64::new(3.0, 4.0), Complex64::new(1.0, -1.0)],
+            &[2],
+        ));
+        assert!((dense_c64.max_abs() - 5.0).abs() < 1e-10);
+        match dense_c64.to_dense_storage(&[2]) {
+            Storage::DenseC64(ds) => assert_eq!(
+                ds.as_slice(),
+                &[Complex64::new(3.0, 4.0), Complex64::new(1.0, -1.0)]
+            ),
+            other => panic!("expected DenseC64, got {other:?}"),
+        }
+
+        let diag_c64 = Storage::DiagC64(DiagStorage::from_vec(vec![
+            Complex64::new(0.0, 2.0),
+            Complex64::new(3.0, 4.0),
+        ]));
+        assert!((diag_c64.max_abs() - 5.0).abs() < 1e-10);
+        match diag_c64.to_dense_storage(&[2, 2]) {
+            Storage::DenseC64(ds) => {
+                assert_eq!(
+                    ds.as_slice(),
+                    &[
+                        Complex64::new(0.0, 2.0),
+                        Complex64::new(0.0, 0.0),
+                        Complex64::new(0.0, 0.0),
+                        Complex64::new(3.0, 4.0),
+                    ]
+                );
+            }
+            other => panic!("expected DenseC64, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_storage_projection_promotion_and_conjugation_helpers() {
+        let dense_c64 = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+            vec![Complex64::new(1.0, -2.0), Complex64::new(3.0, 4.0)],
+            &[2],
+        ));
+        match dense_c64.extract_real_part() {
+            Storage::DenseF64(ds) => assert_eq!(ds.as_slice(), &[1.0, 3.0]),
+            other => panic!("expected DenseF64, got {other:?}"),
+        }
+        match dense_c64.extract_imag_part(&[2]) {
+            Storage::DenseF64(ds) => assert_eq!(ds.as_slice(), &[-2.0, 4.0]),
+            other => panic!("expected DenseF64, got {other:?}"),
+        }
+        match dense_c64.conj() {
+            Storage::DenseC64(ds) => {
+                assert_eq!(
+                    ds.as_slice(),
+                    &[Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)]
+                )
+            }
+            other => panic!("expected DenseC64, got {other:?}"),
+        }
+
+        let diag_f64 = Storage::DiagF64(DiagStorage::from_vec(vec![2.0, -1.0]));
+        match diag_f64.extract_imag_part(&[2, 2]) {
+            Storage::DiagF64(ds) => assert_eq!(ds.as_slice(), &[0.0, 0.0]),
+            other => panic!("expected DiagF64, got {other:?}"),
+        }
+        match diag_f64.to_complex_storage() {
+            Storage::DiagC64(ds) => {
+                assert_eq!(
+                    ds.as_slice(),
+                    &[Complex64::new(2.0, 0.0), Complex64::new(-1.0, 0.0)]
+                )
+            }
+            other => panic!("expected DiagC64, got {other:?}"),
+        }
+        let real = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0, 2.0], &[2]));
+        let imag = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![0.5, -1.5], &[2]));
+        match Storage::combine_to_complex(&real, &imag) {
+            Storage::DenseC64(ds) => {
+                assert_eq!(
+                    ds.as_slice(),
+                    &[Complex64::new(1.0, 0.5), Complex64::new(2.0, -1.5)]
+                )
+            }
+            other => panic!("expected DenseC64, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_storage_try_add_and_try_sub_cover_all_variants_and_errors() {
+        let dense_f64_a =
+            Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0, 2.0], &[2]));
+        let dense_f64_b =
+            Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![3.0, -1.0], &[2]));
+        match dense_f64_a.try_add(&dense_f64_b).unwrap() {
+            Storage::DenseF64(ds) => assert_eq!(ds.as_slice(), &[4.0, 1.0]),
+            other => panic!("expected DenseF64, got {other:?}"),
+        }
+        match dense_f64_a.try_sub(&dense_f64_b).unwrap() {
+            Storage::DenseF64(ds) => assert_eq!(ds.as_slice(), &[-2.0, 3.0]),
+            other => panic!("expected DenseF64, got {other:?}"),
+        }
+
+        let dense_c64_a = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+            vec![Complex64::new(1.0, 1.0), Complex64::new(0.0, -2.0)],
+            &[2],
+        ));
+        let dense_c64_b = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+            vec![Complex64::new(-1.0, 0.5), Complex64::new(3.0, 1.0)],
+            &[2],
+        ));
+        assert!(matches!(
+            dense_c64_a.try_add(&dense_c64_b).unwrap(),
+            Storage::DenseC64(_)
+        ));
+        assert!(matches!(
+            dense_c64_a.try_sub(&dense_c64_b).unwrap(),
+            Storage::DenseC64(_)
+        ));
+
+        let diag_f64_a = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0]));
+        let diag_f64_b = Storage::DiagF64(DiagStorage::from_vec(vec![0.5, -3.0]));
+        assert!(matches!(
+            diag_f64_a.try_add(&diag_f64_b).unwrap(),
+            Storage::DiagF64(_)
+        ));
+        assert!(matches!(
+            diag_f64_a.try_sub(&diag_f64_b).unwrap(),
+            Storage::DiagF64(_)
+        ));
+
+        let diag_c64_a = Storage::DiagC64(DiagStorage::from_vec(vec![
+            Complex64::new(1.0, -1.0),
+            Complex64::new(0.0, 2.0),
+        ]));
+        let diag_c64_b = Storage::DiagC64(DiagStorage::from_vec(vec![
+            Complex64::new(0.5, 0.5),
+            Complex64::new(-3.0, 1.0),
+        ]));
+        assert!(matches!(
+            diag_c64_a.try_add(&diag_c64_b).unwrap(),
+            Storage::DiagC64(_)
+        ));
+        assert!(matches!(
+            diag_c64_a.try_sub(&diag_c64_b).unwrap(),
+            Storage::DiagC64(_)
+        ));
+
+        let mismatched_len = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
+        let err = dense_f64_a.try_add(&mismatched_len).unwrap_err();
+        assert!(err.contains("Storage lengths must match for addition"));
+        let err = dense_f64_a.try_sub(&mismatched_len).unwrap_err();
+        assert!(err.contains("Storage lengths must match for subtraction"));
+
+        let mismatched_type = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+            vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+            &[2],
+        ));
+        let err = dense_f64_a.try_add(&mismatched_type).unwrap_err();
+        assert!(err.contains("Storage types must match for addition"));
+        let err = dense_f64_a.try_sub(&mismatched_type).unwrap_err();
+        assert!(err.contains("Storage types must match for subtraction"));
+    }
 }

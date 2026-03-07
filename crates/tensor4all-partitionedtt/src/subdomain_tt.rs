@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use crate::error::{PartitionedTTError, Result};
 use crate::projector::Projector;
-use tensor4all_core::{AnyScalar, DynIndex, TensorAccess, TensorDynLen};
+use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// A tensor train with an associated projector defining its subdomain.
@@ -200,7 +200,7 @@ impl SubDomainTT {
 
             // Create result tensor based on scalar type
             if tensor.is_f64() {
-                let src_data = tensor.as_slice_f64().unwrap_or(&[]);
+                let src_data = tensor.as_slice_f64().unwrap_or_default();
                 let mut result_data = vec![0.0_f64; total_size];
 
                 for flat_idx in 0..total_size {
@@ -212,7 +212,7 @@ impl SubDomainTT {
 
                 TensorDynLen::from_dense_f64(indices.to_vec(), result_data)
             } else {
-                let src_data = tensor.as_slice_c64().unwrap_or(&[]);
+                let src_data = tensor.as_slice_c64().unwrap_or_default();
                 let mut result_data = vec![Complex64::new(0.0, 0.0); total_size];
 
                 for flat_idx in 0..total_size {
@@ -267,7 +267,6 @@ impl SubDomainTT {
         let self_projected = self.apply_projection();
         let other_projected = other.apply_projection();
 
-        // Contract the projected tensor trains
         let contracted_data = self_projected
             .contract(&other_projected, options)
             .map_err(|e| {
@@ -406,6 +405,25 @@ mod tests {
         let projected = projected.unwrap();
         assert!(projected.is_projected_at(&site_inds[0]));
         assert_eq!(projected.projector().get(&site_inds[0]), Some(1));
+    }
+
+    #[test]
+    fn test_subdomain_tt_project_value_one_numeric() {
+        let (tt, site_inds, _) = make_simple_tt();
+        let full = tt.to_dense().unwrap();
+        let full_data = full.as_slice_f64().unwrap();
+
+        let subdomain = SubDomainTT::from_tt(tt);
+        let projector = Projector::from_pairs([(site_inds[0].clone(), 1)]);
+        let projected = subdomain.project(&projector).unwrap();
+        let projected_full = projected.data().to_dense().unwrap();
+        let projected_data = projected_full.as_slice_f64().unwrap();
+
+        assert_eq!(projected_data.len(), full_data.len());
+        assert_eq!(projected_data[0], 0.0);
+        assert_eq!(projected_data[1], 0.0);
+        assert_eq!(projected_data[2], full_data[2]);
+        assert_eq!(projected_data[3], full_data[3]);
     }
 
     #[test]

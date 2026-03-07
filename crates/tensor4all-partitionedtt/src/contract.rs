@@ -63,8 +63,8 @@ mod tests {
         /// Create zero value
         fn zero_val() -> Self;
 
-        /// Extract data slice from tensor
-        fn extract_slice(tensor: &TensorDynLen) -> &[Self];
+        /// Extract dense data from tensor.
+        fn extract_slice(tensor: &TensorDynLen) -> Vec<Self>;
     }
 
     impl TestScalar for f64 {
@@ -76,7 +76,7 @@ mod tests {
             0.0
         }
 
-        fn extract_slice(tensor: &TensorDynLen) -> &[Self] {
+        fn extract_slice(tensor: &TensorDynLen) -> Vec<Self> {
             tensor.as_slice_f64().unwrap()
         }
     }
@@ -90,7 +90,7 @@ mod tests {
             Complex64::new(0.0, 0.0)
         }
 
-        fn extract_slice(tensor: &TensorDynLen) -> &[Self] {
+        fn extract_slice(tensor: &TensorDynLen) -> Vec<Self> {
             tensor.as_slice_c64().unwrap()
         }
     }
@@ -426,6 +426,77 @@ mod tests {
     #[test]
     fn test_contract_with_projectors_numerical_correctness_c64() {
         test_contract_with_projectors_numerical_correctness_generic::<Complex64>();
+    }
+
+    fn test_contract_with_projectors_numerical_correctness_default_zipup_generic<T: TestScalar>() {
+        let (s0, l01, s1, l12, s2) = make_contraction_indices();
+
+        for s0_val in 0..s0.dim {
+            for s2_val in 0..s2.dim {
+                let tt1 = make_tt_generic::<T>(&s0, &l01, &s1);
+                let tt2 = make_tt_generic::<T>(&s1, &l12, &s2);
+
+                let t1_full = tt1.to_dense().unwrap();
+                let t2_full = tt2.to_dense().unwrap();
+
+                let proj1 = Projector::from_pairs([(s0.clone(), s0_val)]);
+                let proj2 = Projector::from_pairs([(s2.clone(), s2_val)]);
+
+                let m1 = SubDomainTT::new(tt1, proj1);
+                let m2 = SubDomainTT::new(tt2, proj2);
+
+                let result = contract(&m1, &m2, &ContractOptions::default())
+                    .unwrap()
+                    .unwrap();
+                let contracted_full = result.data().to_dense().unwrap();
+
+                let t1_data = T::extract_slice(&t1_full);
+                let mut t1_proj_data = vec![T::zero_val(); t1_data.len()];
+                for s1_idx in 0..s1.dim {
+                    t1_proj_data[s0_val * s1.dim + s1_idx] = t1_data[s0_val * s1.dim + s1_idx];
+                }
+                let t1_proj =
+                    TensorDynLen::from_dense_data(vec![s0.clone(), s1.clone()], t1_proj_data);
+
+                let t2_data = T::extract_slice(&t2_full);
+                let mut t2_proj_data = vec![T::zero_val(); t2_data.len()];
+                for s1_idx in 0..s1.dim {
+                    t2_proj_data[s1_idx * s2.dim + s2_val] = t2_data[s1_idx * s2.dim + s2_val];
+                }
+                let t2_proj =
+                    TensorDynLen::from_dense_data(vec![s1.clone(), s2.clone()], t2_proj_data);
+
+                let expected = t1_proj.contract(&t2_proj);
+
+                let contracted_data = T::extract_slice(&contracted_full);
+                let expected_data = T::extract_slice(&expected);
+
+                assert_eq!(contracted_data.len(), expected_data.len());
+                for (i, (&actual, &exp)) in
+                    contracted_data.iter().zip(expected_data.iter()).enumerate()
+                {
+                    assert!(
+                        T::abs_diff(actual, exp) < 1e-10,
+                        "Mismatch at s0={}, s2={}, index {}: actual={:?}, expected={:?}",
+                        s0_val,
+                        s2_val,
+                        i,
+                        actual,
+                        exp
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_contract_with_projectors_numerical_correctness_default_zipup_f64() {
+        test_contract_with_projectors_numerical_correctness_default_zipup_generic::<f64>();
+    }
+
+    #[test]
+    fn test_contract_with_projectors_numerical_correctness_default_zipup_c64() {
+        test_contract_with_projectors_numerical_correctness_default_zipup_generic::<Complex64>();
     }
 
     /// Generic test for contraction when the contracted index has a projector

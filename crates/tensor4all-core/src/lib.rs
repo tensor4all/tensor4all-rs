@@ -73,7 +73,6 @@ pub mod block_tensor;
 pub use defaults::tensordynlen as tensor;
 
 pub use any_scalar::AnyScalar;
-pub use defaults::tensor_data::{TensorComponent, TensorData, TensorDataError};
 pub use defaults::tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor,
     unfold_split, TensorAccess, TensorDynLen,
