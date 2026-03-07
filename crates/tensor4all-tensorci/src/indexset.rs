@@ -30,16 +30,19 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
     }
 
     /// Create an index set from a vector
+    ///
+    /// Duplicate values are removed, keeping the first occurrence.
     pub fn from_vec(values: Vec<T>) -> Self {
-        let to_int: HashMap<T, usize> = values
-            .iter()
-            .enumerate()
-            .map(|(i, v)| (v.clone(), i))
-            .collect();
-        Self {
-            to_int,
-            from_int: values,
+        let mut to_int = HashMap::new();
+        let mut from_int = Vec::new();
+        for value in values {
+            if !to_int.contains_key(&value) {
+                let idx = from_int.len();
+                to_int.insert(value.clone(), idx);
+                from_int.push(value);
+            }
         }
+        Self { to_int, from_int }
     }
 
     /// Get the value at integer index
@@ -58,7 +61,12 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
     }
 
     /// Push a new value to the set
+    ///
+    /// If the value already exists in the set, this is a no-op.
     pub fn push(&mut self, value: T) {
+        if self.to_int.contains_key(&value) {
+            return;
+        }
         let idx = self.from_int.len();
         self.from_int.push(value.clone());
         self.to_int.insert(value, idx);
@@ -160,5 +168,32 @@ mod tests {
         let set = IndexSet::from_vec(vec![10, 20, 30]);
         let collected: Vec<_> = set.iter().copied().collect();
         assert_eq!(collected, vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn test_indexset_push_duplicate_is_noop() {
+        let mut set: IndexSet<i32> = IndexSet::new();
+        set.push(1);
+        set.push(2);
+        set.push(1); // duplicate - should be no-op
+
+        assert_eq!(set.len(), 2);
+        assert_eq!(set.pos(&1), Some(0)); // original index preserved
+        assert_eq!(set.pos(&2), Some(1));
+        assert_eq!(set.get(0), Some(&1));
+        assert_eq!(set.get(1), Some(&2));
+    }
+
+    #[test]
+    fn test_indexset_from_vec_with_duplicates() {
+        let set = IndexSet::from_vec(vec![1, 2, 3, 2, 1]);
+
+        assert_eq!(set.len(), 3); // only unique values
+        assert_eq!(set.pos(&1), Some(0)); // first occurrence index
+        assert_eq!(set.pos(&2), Some(1));
+        assert_eq!(set.pos(&3), Some(2));
+        assert_eq!(set.get(0), Some(&1));
+        assert_eq!(set.get(1), Some(&2));
+        assert_eq!(set.get(2), Some(&3));
     }
 }
