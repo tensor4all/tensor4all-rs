@@ -141,23 +141,36 @@ fn compute_retained_rank_qr_from_storage(
     }
 
     let max_diag = k.min(n);
-    let mut r = max_diag;
-    match r_full {
+
+    // Compute row norms of upper-triangular R and use rtol * max_row_norm as threshold.
+    // This is more robust than checking only diagonal elements, because a zero diagonal
+    // does NOT mean the row is negligible (off-diagonal elements may be significant).
+    let row_norms: Vec<f64> = match r_full {
         Storage::DenseF64(data) => {
-            for i in 0..max_diag {
-                if data.as_slice()[i * n + i].abs() < rtol {
-                    r = i;
-                    break;
-                }
-            }
+            let slice = data.as_slice();
+            (0..max_diag)
+                .map(|i| {
+                    let mut norm_sq = 0.0_f64;
+                    for j in i..n {
+                        let val = slice[i * n + j];
+                        norm_sq += val * val;
+                    }
+                    norm_sq.sqrt()
+                })
+                .collect()
         }
         Storage::DenseC64(data) => {
-            for i in 0..max_diag {
-                if data.as_slice()[i * n + i].abs() < rtol {
-                    r = i;
-                    break;
-                }
-            }
+            let slice = data.as_slice();
+            (0..max_diag)
+                .map(|i| {
+                    let mut norm_sq = 0.0_f64;
+                    for j in i..n {
+                        let val = slice[i * n + j].norm();
+                        norm_sq += val * val;
+                    }
+                    norm_sq.sqrt()
+                })
+                .collect()
         }
         other => {
             return Err(QrError::ComputationError(anyhow::anyhow!(
@@ -165,7 +178,21 @@ fn compute_retained_rank_qr_from_storage(
                 std::mem::discriminant(other)
             )));
         }
+    };
+
+    let max_row_norm = row_norms.iter().cloned().fold(0.0_f64, f64::max);
+    if max_row_norm == 0.0 {
+        return Ok(1);
     }
+
+    let threshold = rtol * max_row_norm;
+    let mut r = 0;
+    for &norm in &row_norms {
+        if norm >= threshold {
+            r += 1;
+        }
+    }
+
     Ok(r.max(1))
 }
 
@@ -650,6 +677,34 @@ mod tests {
     fn test_retained_rank_zero_matrix() {
         let r = DTensor::<f64, 2>::from_fn([3, 3], |_| 0.0);
         assert_eq!(compute_retained_rank_qr(&r, 3, 3, 1e-15), 1);
+    }
+
+    #[test]
+    fn test_retained_rank_from_storage_tiny_diag_large_offdiag() {
+        // R matrix with tiny diagonal at (1,1) but large off-diagonal in row 1.
+        // Old code used diagonal-element comparison and would truncate to rank 1.
+        // Row-norm-based approach correctly keeps rank 2.
+        //
+        // R = [[10.0, 0.0],
+        //      [ 0.0, 1e-16]]  <- old code: |1e-16| < rtol -> truncate
+        // But if off-diagonal is large:
+        // R = [[10.0, 0.0 ],
+        //      [ 0.0, 1e-16, 10.0]]  for 2x3 matrix
+        // Row 1 norm = sqrt(1e-32 + 100) ~ 10.0 >> rtol * max_row_norm
+        let r_full = Storage::DenseF64(
+            tensor4all_tensorbackend::DenseStorageF64::from_vec_with_shape(
+                vec![10.0, 0.0, 0.0, 1e-16, 10.0, 0.0],
+                &[2, 3],
+            ),
+        );
+        // Row 0 norm = 10.0, Row 1 norm ~ 10.0
+        // With rtol=1e-10, threshold = 1e-10 * 10 = 1e-9
+        // Both rows have norm ~ 10.0 >> 1e-9, so rank should be 2
+        let retained = compute_retained_rank_qr_from_storage(&r_full, 2, 3, 1e-10).unwrap();
+        assert_eq!(
+            retained, 2,
+            "Row with tiny diagonal but large off-diagonal should be kept"
+        );
     }
 
     #[test]
