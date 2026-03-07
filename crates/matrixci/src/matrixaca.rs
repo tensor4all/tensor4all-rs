@@ -42,9 +42,15 @@ impl<T: Scalar> MatrixACA<T> {
     }
 
     /// Create a MatrixACA from a matrix with an initial pivot
-    pub fn from_matrix_with_pivot(a: &Matrix<T>, first_pivot: (usize, usize)) -> Self {
+    ///
+    /// Returns an error if the pivot value is zero or near-zero.
+    pub fn from_matrix_with_pivot(a: &Matrix<T>, first_pivot: (usize, usize)) -> Result<Self> {
         let (i, j) = first_pivot;
         let pivot_val = a[[i, j]];
+
+        if pivot_val.abs_sq() < f64::EPSILON * f64::EPSILON {
+            return Err(MatrixCIError::SingularMatrix);
+        }
 
         // u = A[:, j]
         let u_col = get_col(a, j);
@@ -56,13 +62,13 @@ impl<T: Scalar> MatrixACA<T> {
 
         let alpha = vec![T::one() / pivot_val];
 
-        Self {
+        Ok(Self {
             row_indices: vec![i],
             col_indices: vec![j],
             u,
             v,
             alpha,
-        }
+        })
     }
 
     /// Number of pivots
@@ -86,7 +92,7 @@ impl<T: Scalar> MatrixACA<T> {
     }
 
     /// Compute u_k(x) for all x (the k-th column of U after adding a new pivot column)
-    fn compute_uk(&self, a: &Matrix<T>) -> Vec<T> {
+    fn compute_uk(&self, a: &Matrix<T>) -> Result<Vec<T>> {
         let k = self.col_indices.len();
         let yk = self.col_indices[k - 1];
 
@@ -98,6 +104,9 @@ impl<T: Scalar> MatrixACA<T> {
             let xl = self.row_indices[l];
             let v_l_yk = self.v[[l, yk]];
             let u_xl_l = self.u[[xl, l]];
+            if u_xl_l.abs_sq() < f64::EPSILON * f64::EPSILON {
+                return Err(MatrixCIError::SingularMatrix);
+            }
             let factor = v_l_yk / u_xl_l;
 
             for (i, res) in result.iter_mut().enumerate() {
@@ -105,11 +114,11 @@ impl<T: Scalar> MatrixACA<T> {
             }
         }
 
-        result
+        Ok(result)
     }
 
     /// Compute v_k(y) for all y (the k-th row of V after adding a new pivot row)
-    fn compute_vk(&self, a: &Matrix<T>) -> Vec<T> {
+    fn compute_vk(&self, a: &Matrix<T>) -> Result<Vec<T>> {
         let k = self.row_indices.len();
         let xk = self.row_indices[k - 1];
 
@@ -121,6 +130,9 @@ impl<T: Scalar> MatrixACA<T> {
             let xl = self.row_indices[l];
             let u_xk_l = self.u[[xk, l]];
             let u_xl_l = self.u[[xl, l]];
+            if u_xl_l.abs_sq() < f64::EPSILON * f64::EPSILON {
+                return Err(MatrixCIError::SingularMatrix);
+            }
             let factor = u_xk_l / u_xl_l;
 
             for (j, res) in result.iter_mut().enumerate() {
@@ -128,7 +140,7 @@ impl<T: Scalar> MatrixACA<T> {
             }
         }
 
-        result
+        Ok(result)
     }
 
     /// Add a pivot column
@@ -143,7 +155,7 @@ impl<T: Scalar> MatrixACA<T> {
         }
 
         self.col_indices.push(col_index);
-        let uk = self.compute_uk(a);
+        let uk = self.compute_uk(a)?;
         self.u = append_col(&self.u, &uk);
 
         Ok(())
@@ -161,12 +173,15 @@ impl<T: Scalar> MatrixACA<T> {
         }
 
         self.row_indices.push(row_index);
-        let vk = self.compute_vk(a);
+        let vk = self.compute_vk(a)?;
         self.v = append_row(&self.v, &vk);
 
         // Update alpha
         let xk = row_index;
         let u_xk_last = self.u[[xk, ncols(&self.u) - 1]];
+        if u_xk_last.abs_sq() < f64::EPSILON * f64::EPSILON {
+            return Err(MatrixCIError::SingularMatrix);
+        }
         self.alpha.push(T::one() / u_xk_last);
 
         Ok(())
@@ -373,7 +388,7 @@ mod tests {
             vec![7.0, 8.0, 9.0],
         ]);
 
-        let aca = MatrixACA::from_matrix_with_pivot(&m, (1, 1));
+        let aca = MatrixACA::from_matrix_with_pivot(&m, (1, 1)).unwrap();
         assert_eq!(aca.nrows(), 3);
         assert_eq!(aca.ncols(), 3);
         assert_eq!(aca.rank(), 1);
@@ -391,8 +406,37 @@ mod tests {
             vec![7.0, 8.0, 9.0],
         ]);
 
-        let mut aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0));
+        let mut aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
         assert!(aca.add_pivot(&m, (1, 1)).is_ok());
         assert_eq!(aca.rank(), 2);
+    }
+
+    #[test]
+    fn test_matrixaca_zero_pivot_returns_error() {
+        let m = from_vec2d(vec![vec![0.0, 1.0], vec![1.0, 1.0]]);
+        // Pivot at (0,0) which is 0.0 should fail
+        let result = MatrixACA::from_matrix_with_pivot(&m, (0, 0));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_matrixaca_near_zero_pivot_returns_error() {
+        let m = from_vec2d(vec![vec![1e-200, 1.0], vec![1.0, 1.0]]);
+        let result = MatrixACA::from_matrix_with_pivot(&m, (0, 0));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_matrixaca_add_pivot_row_zero_diagonal() {
+        // Matrix where second pivot would cause division by zero
+        let m = from_vec2d(vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 0.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ]);
+        let mut aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
+        // Adding pivot at (1,1) where value is 0 should fail during add_pivot_row
+        let result = aca.add_pivot(&m, (1, 1));
+        assert!(result.is_err());
     }
 }
