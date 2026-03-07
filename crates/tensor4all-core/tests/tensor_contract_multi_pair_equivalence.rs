@@ -137,7 +137,7 @@ fn test_zipup_zero_masked_root_multi_matches_sequential_binary_contract() {
         .expect("leaf contract");
     let permuted_leaf = leaf.permute_indices(&[s0.clone(), s1.clone(), l01.clone(), l12.clone()]);
     let expected_permuted_storage =
-        permute_storage_native(leaf.storage(), &leaf.dims(), &[0, 2, 1, 3])
+        permute_storage_native(leaf.storage().as_ref(), &leaf.dims(), &[0, 2, 1, 3])
             .expect("expected permute storage");
     let expected_permuted = TensorDynLen::new(
         vec![s0.clone(), s1.clone(), l01.clone(), l12.clone()],

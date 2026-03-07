@@ -63,8 +63,8 @@ mod tests {
         /// Create zero value
         fn zero_val() -> Self;
 
-        /// Extract data slice from tensor
-        fn extract_slice(tensor: &TensorDynLen) -> &[Self];
+        /// Extract dense data from tensor.
+        fn extract_slice(tensor: &TensorDynLen) -> Vec<Self>;
     }
 
     impl TestScalar for f64 {
@@ -76,7 +76,7 @@ mod tests {
             0.0
         }
 
-        fn extract_slice(tensor: &TensorDynLen) -> &[Self] {
+        fn extract_slice(tensor: &TensorDynLen) -> Vec<Self> {
             tensor.as_slice_f64().unwrap()
         }
     }
@@ -90,7 +90,7 @@ mod tests {
             Complex64::new(0.0, 0.0)
         }
 
-        fn extract_slice(tensor: &TensorDynLen) -> &[Self] {
+        fn extract_slice(tensor: &TensorDynLen) -> Vec<Self> {
             tensor.as_slice_c64().unwrap()
         }
     }

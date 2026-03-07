@@ -10,7 +10,7 @@ use std::ops::Range;
 use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
 use tensor4all_core::{
     AllowedPairs, AnyScalar, DirectSumResult, FactorizeError, FactorizeOptions, FactorizeResult,
-    TensorAccess, TensorDynLen, TensorIndex, TensorLike,
+    TensorDynLen, TensorIndex, TensorLike,
 };
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 

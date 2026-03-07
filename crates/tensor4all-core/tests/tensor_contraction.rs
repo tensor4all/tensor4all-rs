@@ -47,7 +47,7 @@ fn test_contract_dyn_len_matrix_multiplication() {
     assert_eq!(result.indices[1].id, k.id);
 
     // Check that all elements are 3.0
-    if let Storage::DenseF64(ref vec) = **result.storage() {
+    if let Storage::DenseF64(ref vec) = *result.storage() {
         assert_eq!(vec.len(), 8); // 2 * 4 = 8
         for &val in vec.iter() {
             assert_eq!(val, 3.0);
@@ -86,7 +86,7 @@ fn test_mul_operator_contraction() {
     assert_eq!(result.indices[1].id, k.id);
 
     // Check that all elements are 3.0
-    if let Storage::DenseF64(ref vec) = **result.storage() {
+    if let Storage::DenseF64(ref vec) = *result.storage() {
         assert_eq!(vec.len(), 8); // 2 * 4 = 8
         for &val in vec.iter() {
             assert_eq!(val, 3.0);
@@ -189,7 +189,7 @@ fn test_contract_three_indices() {
     assert_eq!(result.indices[1].id, l.id);
 
     // Check that all elements are 12.0
-    if let Storage::DenseF64(ref vec) = **result.storage() {
+    if let Storage::DenseF64(ref vec) = *result.storage() {
         assert_eq!(vec.len(), 10); // 2 * 5 = 10
         for &val in vec.as_slice().iter() {
             assert_eq!(val, 12.0);
@@ -237,7 +237,7 @@ fn test_contract_mixed_f64_c64() {
     assert_eq!(result.indices[1].id, k.id);
 
     // Check result storage type and values
-    if let Storage::DenseC64(ref vec) = **result.storage() {
+    if let Storage::DenseC64(ref vec) = *result.storage() {
         assert_eq!(vec.len(), 4);
         // All elements should be the same: sum of first column and sum of second column
         // First row: [6+8i, 10+12i]
@@ -291,7 +291,7 @@ fn test_contract_mixed_c64_f64() {
     assert_eq!(result.dims(), vec![2, 2]);
 
     // Check result storage type
-    if let Storage::DenseC64(ref vec) = **result.storage() {
+    if let Storage::DenseC64(ref vec) = *result.storage() {
         assert_eq!(vec.len(), 4);
         // Check actual computed values
         assert!((vec.get(0) - Complex64::new(4.0, 6.0)).norm() < 1e-10);
@@ -333,7 +333,7 @@ fn test_tensordot_different_ids() {
     assert_eq!(result.indices[1].id, l.id);
 
     // Check that all elements are 3.0
-    if let Storage::DenseF64(ref vec) = **result.storage() {
+    if let Storage::DenseF64(ref vec) = *result.storage() {
         assert_eq!(vec.len(), 8);
         for &val in vec.iter() {
             assert_eq!(val, 3.0);

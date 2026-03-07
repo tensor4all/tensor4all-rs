@@ -251,11 +251,13 @@ fn direct_sum_f64(
 ) -> Result<(TensorDynLen, Vec<DynIndex>)> {
     let setup = setup_direct_sum(a, b, pairs)?;
 
-    let a_data = match a.storage().as_ref() {
+    let a_storage = a.storage();
+    let a_data = match a_storage.as_ref() {
         Storage::DenseF64(s) => s.as_slice(),
         _ => return Err(anyhow::anyhow!("Expected DenseF64 storage")),
     };
-    let b_data = match b.storage().as_ref() {
+    let b_storage = b.storage();
+    let b_data = match b_storage.as_ref() {
         Storage::DenseF64(s) => s.as_slice(),
         _ => return Err(anyhow::anyhow!("Expected DenseF64 storage")),
     };
@@ -318,11 +320,13 @@ fn direct_sum_c64(
 ) -> Result<(TensorDynLen, Vec<DynIndex>)> {
     let setup = setup_direct_sum(a, b, pairs)?;
 
-    let a_data = match a.storage().as_ref() {
+    let a_storage = a.storage();
+    let a_data = match a_storage.as_ref() {
         Storage::DenseC64(s) => s.as_slice(),
         _ => return Err(anyhow::anyhow!("Expected DenseC64 storage")),
     };
-    let b_data = match b.storage().as_ref() {
+    let b_storage = b.storage();
+    let b_data = match b_storage.as_ref() {
         Storage::DenseC64(s) => s.as_slice(),
         _ => return Err(anyhow::anyhow!("Expected DenseC64 storage")),
     };
@@ -425,7 +429,8 @@ mod tests {
         assert_eq!(new_indices[0].dim(), 7);
 
         // Check data
-        let data = match result.storage().as_ref() {
+        let result_storage = result.storage();
+        let data = match result_storage.as_ref() {
             Storage::DenseF64(s) => s.as_slice(),
             _ => panic!("Expected DenseF64"),
         };

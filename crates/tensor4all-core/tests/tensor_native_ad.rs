@@ -77,8 +77,8 @@ fn qr_preserves_forward_native_payload() {
 
     let (q, r) = qr::<f64>(&tensor, std::slice::from_ref(&i)).unwrap();
 
-    assert_eq!(q.as_native().map(DynAdTensor::mode), Some(AdMode::Forward));
-    assert_eq!(r.as_native().map(DynAdTensor::mode), Some(AdMode::Forward));
+    assert_eq!(q.as_native().mode(), AdMode::Forward);
+    assert_eq!(r.as_native().mode(), AdMode::Forward);
     assert!(
         (q.sum()
             .tangent()
@@ -106,9 +106,9 @@ fn svd_preserves_forward_native_payload() {
 
     let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).unwrap();
 
-    assert_eq!(u.as_native().map(DynAdTensor::mode), Some(AdMode::Forward));
-    assert_eq!(s.as_native().map(DynAdTensor::mode), Some(AdMode::Forward));
-    assert_eq!(v.as_native().map(DynAdTensor::mode), Some(AdMode::Forward));
+    assert_eq!(u.as_native().mode(), AdMode::Forward);
+    assert_eq!(s.as_native().mode(), AdMode::Forward);
+    assert_eq!(v.as_native().mode(), AdMode::Forward);
     let s_tangent = s.sum().tangent().and_then(|x| x.as_f64()).unwrap();
     assert!(
         (s_tangent - 0.25).abs() < 1e-12,
@@ -133,14 +133,8 @@ fn factorize_svd_preserves_forward_native_payload() {
     )
     .unwrap();
 
-    assert_eq!(
-        result.left.as_native().map(DynAdTensor::mode),
-        Some(AdMode::Forward)
-    );
-    assert_eq!(
-        result.right.as_native().map(DynAdTensor::mode),
-        Some(AdMode::Forward)
-    );
+    assert_eq!(result.left.as_native().mode(), AdMode::Forward);
+    assert_eq!(result.right.as_native().mode(), AdMode::Forward);
     let right_tangent = result
         .right
         .sum()
@@ -170,24 +164,43 @@ fn rank1_native_snapshots_stay_dense() {
 #[test]
 fn plain_dense_storage_auto_seeds_native_payload() {
     let i = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_dense_f64(vec![i], vec![1.0, 2.0]);
+    let tensor = TensorDynLen::from_storage(
+        vec![i],
+        Arc::new(Storage::DenseF64(
+            tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(vec![1.0, 2.0], &[2]),
+        )),
+    )
+    .unwrap();
 
-    assert_eq!(
-        tensor.as_native().map(DynAdTensor::mode),
-        Some(AdMode::Primal)
-    );
+    assert_eq!(tensor.as_native().mode(), AdMode::Primal);
 }
 
 #[test]
 fn plain_diag_storage_auto_seeds_native_diag_payload() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(3);
-    let tensor = TensorDynLen::new(
+    let tensor = TensorDynLen::from_storage(
         vec![i, j],
         Arc::new(Storage::new_diag_f64(vec![1.0, 2.0, 3.0])),
-    );
+    )
+    .unwrap();
 
-    let native = tensor.as_native().expect("missing native payload");
+    let native = tensor.as_native();
     assert_eq!(native.mode(), AdMode::Primal);
     assert!(native.is_diag());
+}
+
+#[test]
+fn from_native_into_native_round_trips_mode_and_dims() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let tensor = TensorDynLen::from_native(
+        vec![i, j],
+        native_f64_tensor(&[1.0, 2.0, 3.0, 4.0], &[0.5, 0.0, 0.0, -0.25], &[2, 2]),
+    )
+    .unwrap();
+
+    let native = tensor.into_native();
+    assert_eq!(native.mode(), AdMode::Forward);
+    assert_eq!(native.dims(), vec![2, 2]);
 }

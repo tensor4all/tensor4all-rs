@@ -18,7 +18,6 @@
 //! a good balance of flexibility and performance.
 
 pub mod index;
-pub mod tensor_data;
 /// Dynamic-length tensor implementation.
 pub mod tensordynlen;
 
@@ -32,11 +31,10 @@ pub mod qr;
 pub mod svd;
 
 pub use contract::{
-    build_diag_union, build_diag_union_from_components, build_diag_union_from_data, collect_sizes,
-    contract_connected, contract_multi, remap_output_ids, remap_tensor_ids, AxisUnionFind,
+    build_diag_union, collect_sizes, contract_connected, contract_multi, remap_output_ids,
+    remap_tensor_ids, AxisUnionFind,
 };
 pub use index::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
-pub use tensor_data::{TensorComponent, TensorData};
 pub use tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor,
     unfold_split, TensorAccess, TensorDynLen,

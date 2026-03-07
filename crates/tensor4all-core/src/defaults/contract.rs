@@ -27,14 +27,11 @@ use std::collections::HashMap;
 use anyhow::Result;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
-use std::sync::Arc;
-use tensor4all_tensorbackend::einsum::{einsum_storage, EinsumInput as BackendEinsumInput};
 use tensor4all_tensorbackend::einsum_dyn_ad_tensors_native;
 
-use crate::defaults::{DynId, DynIndex, TensorComponent, TensorData, TensorDynLen};
+use crate::defaults::{DynId, DynIndex, TensorDynLen};
 
 use crate::index_like::IndexLike;
-use crate::storage::Storage;
 use crate::tensor_like::AllowedPairs;
 
 // ============================================================================
@@ -270,53 +267,28 @@ impl Default for AxisUnionFind {
 // Diag union-find builders
 // ============================================================================
 
-/// Build a union-find structure from TensorData components.
-///
-/// For each Diag component, all its indices are unified (they share the same
-/// diagonal dimension). This creates hyperedges when multiple Diag components
-/// share indices.
-pub fn build_diag_union_from_components(components: &[&TensorComponent]) -> AxisUnionFind {
-    let mut uf = AxisUnionFind::new();
-
-    for component in components {
-        // Add all indices to the union-find
-        for &id in component.index_ids.iter() {
-            uf.make_set(id);
-        }
-
-        // For Diag storage, union all diagonal axes
-        if component.storage.is_diag() && component.index_ids.len() >= 2 {
-            let first_id = component.index_ids[0];
-            for &id in component.index_ids.iter().skip(1) {
-                uf.union(first_id, id);
-            }
-        }
-    }
-
-    uf
-}
-
-/// Build a union-find structure from TensorData.
-///
-/// Processes all components in the TensorData, unifying diagonal axes
-/// from Diag storage components.
-pub fn build_diag_union_from_data(data: &TensorData) -> AxisUnionFind {
-    let component_refs: Vec<&TensorComponent> = data.components.iter().collect();
-    build_diag_union_from_components(&component_refs)
-}
-
 /// Build a union-find structure from a collection of tensors.
 ///
 /// For each Diag tensor component, all its indices are unified (they share the same
 /// diagonal dimension). This creates hyperedges when multiple Diag tensors
 /// share indices.
 pub fn build_diag_union(tensors: &[&TensorDynLen]) -> AxisUnionFind {
-    let all_components: Vec<&TensorComponent> = tensors
-        .iter()
-        .flat_map(|t| t.tensor_data().components.iter())
-        .collect();
+    let mut uf = AxisUnionFind::new();
 
-    build_diag_union_from_components(&all_components)
+    for tensor in tensors {
+        for idx in tensor.indices() {
+            uf.make_set(*idx.id());
+        }
+
+        if tensor.as_native().is_diag() && tensor.indices().len() >= 2 {
+            let first_id = *tensor.indices()[0].id();
+            for idx in tensor.indices().iter().skip(1) {
+                uf.union(first_id, *idx.id());
+            }
+        }
+    }
+
+    uf
 }
 
 /// Remap tensor indices using the union-find structure.
@@ -405,112 +377,25 @@ fn contract_multi_impl(
         }
     }
 
-    if tensors.iter().all(|tensor| tensor.as_native().is_some()) {
-        let native_operands: Vec<(&tensor4all_tensorbackend::DynAdTensor, &[usize])> = tensors
-            .iter()
-            .enumerate()
-            .map(|(tensor_idx, tensor)| {
-                (
-                    tensor.as_native().expect("checked native payload"),
-                    ixs[tensor_idx].as_slice(),
-                )
-            })
-            .collect();
-
-        let result_native = einsum_dyn_ad_tensors_native(&native_operands, &output)?;
-        let final_indices = if output.is_empty() {
-            vec![]
-        } else {
-            output
-                .iter()
-                .map(|&internal_id| {
-                    let (tensor_idx, pos) = internal_id_to_original[&internal_id];
-                    tensors[tensor_idx].indices[pos].clone()
-                })
-                .collect()
-        };
-        return TensorDynLen::from_native(final_indices, result_native);
-    }
-
-    // 6. Build backend einsum inputs directly from TensorData components.
-    //
-    // This preserves lazy permutation/component structure until contraction
-    // for tensors that do not yet carry a native tenferro payload.
-    let per_tensor_id_map: Vec<HashMap<DynId, usize>> = tensors
+    let native_operands: Vec<(&tensor4all_tensorbackend::DynAdTensor, &[usize])> = tensors
         .iter()
         .enumerate()
-        .map(|(tensor_idx, tensor)| {
-            tensor
-                .indices
-                .iter()
-                .enumerate()
-                .map(|(axis_pos, idx)| (*idx.id(), ixs[tensor_idx][axis_pos]))
-                .collect()
-        })
+        .map(|(tensor_idx, tensor)| (tensor.as_native(), ixs[tensor_idx].as_slice()))
         .collect();
 
-    let mut storages: Vec<Arc<Storage>> = Vec::new();
-    let mut einsum_ids: Vec<Vec<usize>> = Vec::new();
-    let mut einsum_dims: Vec<Vec<usize>> = Vec::new();
-
-    for (tensor_idx, tensor) in tensors.iter().enumerate() {
-        let id_map = &per_tensor_id_map[tensor_idx];
-        for component in tensor.tensor_data().components() {
-            let mut ids: Vec<usize> = component
-                .index_ids
-                .iter()
-                .map(|id| {
-                    id_map.get(id).copied().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "internal error: missing internal id for component axis id {:?}",
-                            id
-                        )
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            if component.storage.is_diag() && !ids.is_empty() {
-                // Diag storage is represented by one logical axis in backend einsum.
-                ids = vec![ids[0]];
-            }
-
-            storages.push(component.storage.clone());
-            einsum_ids.push(ids);
-            einsum_dims.push(component.dims.clone());
-        }
-    }
-
-    let einsum_inputs: Vec<BackendEinsumInput<'_>> = (0..storages.len())
-        .map(|i| BackendEinsumInput {
-            ids: einsum_ids[i].as_slice(),
-            storage: storages[i].as_ref(),
-            dims: einsum_dims[i].as_slice(),
-        })
-        .collect();
-
-    // 7. Perform contraction through tensorbackend einsum (tenferro-backed).
-    let result_storage = Arc::new(einsum_storage(&einsum_inputs, &output)?);
-
-    // 8. Convert result back to TensorDynLen.
-    let result_dims: Vec<usize> = output.iter().map(|id| sizes[id]).collect();
-
-    // Build result indices from output internal IDs
-    let restored_indices: Vec<DynIndex> = output
-        .iter()
-        .map(|&internal_id| {
-            let (tensor_idx, pos) = internal_id_to_original[&internal_id];
-            tensors[tensor_idx].indices[pos].clone()
-        })
-        .collect();
-
-    let _result_dims = result_dims;
+    let result_native = einsum_dyn_ad_tensors_native(&native_operands, &output)?;
     let final_indices = if output.is_empty() {
         vec![]
     } else {
-        restored_indices
+        output
+            .iter()
+            .map(|&internal_id| {
+                let (tensor_idx, pos) = internal_id_to_original[&internal_id];
+                tensors[tensor_idx].indices[pos].clone()
+            })
+            .collect()
     };
-
-    Ok(TensorDynLen::new(final_indices, result_storage))
+    TensorDynLen::from_native(final_indices, result_native)
 }
 
 /// Build internal IDs with Diag-awareness.
@@ -750,8 +635,9 @@ impl RemappedAllowedPairs {
 mod tests {
     use super::*;
     use crate::defaults::Index;
-    use crate::storage::DenseStorageC64;
+    use crate::storage::{DenseStorageC64, Storage};
     use num_complex::Complex64;
+    use std::sync::Arc;
 
     fn make_test_tensor(shape: &[usize], ids: &[u64]) -> TensorDynLen {
         let indices: Vec<DynIndex> = ids

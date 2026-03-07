@@ -38,8 +38,8 @@ fn orthogonalize_preserves_forward_native_payload() {
 
     for site in 0..tt.len() {
         let tensor = tt.tensor(site);
-        let mode = tensor.as_native().map(DynAdTensor::mode);
-        assert_eq!(mode, Some(AdMode::Forward), "site {site} lost native mode");
+        let mode = tensor.as_native().mode();
+        assert_eq!(mode, AdMode::Forward, "site {site} lost native mode");
         assert!(
             tensor.sum().tangent().is_some(),
             "site {site} lost tangent information"
@@ -58,8 +58,8 @@ fn truncate_preserves_forward_native_payload() {
     assert_eq!(tt.tensor(1).dims()[0], 1);
     for site in 0..tt.len() {
         let tensor = tt.tensor(site);
-        let mode = tensor.as_native().map(DynAdTensor::mode);
-        assert_eq!(mode, Some(AdMode::Forward), "site {site} lost native mode");
+        let mode = tensor.as_native().mode();
+        assert_eq!(mode, AdMode::Forward, "site {site} lost native mode");
         assert!(
             tensor.sum().tangent().is_some(),
             "site {site} lost tangent information"

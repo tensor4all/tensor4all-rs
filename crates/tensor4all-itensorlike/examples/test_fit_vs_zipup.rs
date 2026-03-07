@@ -7,7 +7,7 @@
 //!   cargo run -p tensor4all-itensorlike --example test_fit_vs_zipup --release
 
 use tensor4all_core::krylov::{gmres, gmres_with_truncation, GmresOptions};
-use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorAccess, TensorDynLen, TensorIndex};
+use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// Shared indices for MPO operations.

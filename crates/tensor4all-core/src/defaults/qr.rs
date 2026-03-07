@@ -261,85 +261,74 @@ where
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
         .map_err(QrError::ComputationError)?;
 
-    if let Some(native) = t.as_native() {
-        let supports_native = native.is_dense()
-            && TypeId::of::<T>() == TypeId::of::<f64>()
-            && native.scalar_type()
-                == tensor4all_tensorbackend::tenferro_dyadtensor::ScalarType::F64;
-        if supports_native {
-            let mut permuted_indices = left_indices.clone();
-            permuted_indices.extend(right_indices.iter().cloned());
-            let permuted = t.permute_indices(&permuted_indices);
-            let matrix_native = permuted
-                .as_native()
-                .ok_or_else(|| {
-                    QrError::ComputationError(anyhow::anyhow!(
-                        "native QR lost payload during permutation"
-                    ))
-                })?
-                .contiguous(MemoryOrder::RowMajor)
-                .map_err(|e| {
-                    QrError::ComputationError(anyhow::anyhow!(
-                        "native QR row-major normalization failed: {e}"
-                    ))
-                })?
-                .reshape(&[m, n])
-                .map_err(|e| {
-                    QrError::ComputationError(anyhow::anyhow!(
-                        "native QR reshape to matrix failed: {e}"
-                    ))
-                })?;
-            let (mut q_native, mut r_native) =
-                qr_dyn_ad_tensor_native(&matrix_native).map_err(QrError::ComputationError)?;
-            let k = m.min(n);
-            let r_storage =
-                dyn_ad_tensor_primal_to_storage(&r_native).map_err(QrError::ComputationError)?;
-            let r = compute_retained_rank_qr_from_storage(&r_storage, k, n, rtol)?;
-            if r < k {
-                q_native = q_native.take_prefix(1, r).map_err(|e| {
-                    QrError::ComputationError(anyhow::anyhow!(
-                        "native QR truncation on Q failed: {e}"
-                    ))
-                })?;
-                r_native = r_native.take_prefix(0, r).map_err(|e| {
-                    QrError::ComputationError(anyhow::anyhow!(
-                        "native QR truncation on R failed: {e}"
-                    ))
-                })?;
-            }
-
-            let bond_index = DynIndex::new_bond(r)
-                .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))
-                .map_err(QrError::ComputationError)?;
-
-            let mut q_indices = left_indices.clone();
-            q_indices.push(bond_index.clone());
-            let q_dims: Vec<usize> = q_indices.iter().map(|idx| idx.dim).collect();
-            let q_native = q_native
-                .contiguous(MemoryOrder::RowMajor)
-                .map_err(|e| QrError::ComputationError(anyhow::anyhow!(e)))?
-                .reshape(&q_dims)
-                .map_err(|e| {
-                    QrError::ComputationError(anyhow::anyhow!("native QR reshape of Q failed: {e}"))
-                })?;
-            let q = TensorDynLen::from_native(q_indices, q_native)
-                .map_err(QrError::ComputationError)?;
-
-            let mut r_indices = vec![bond_index.clone()];
-            r_indices.extend_from_slice(&right_indices);
-            let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
-            let r_native = r_native
-                .contiguous(MemoryOrder::RowMajor)
-                .map_err(|e| QrError::ComputationError(anyhow::anyhow!(e)))?
-                .reshape(&r_dims)
-                .map_err(|e| {
-                    QrError::ComputationError(anyhow::anyhow!("native QR reshape of R failed: {e}"))
-                })?;
-            let r_tensor = TensorDynLen::from_native(r_indices, r_native)
-                .map_err(QrError::ComputationError)?;
-
-            return Ok((q, r_tensor));
+    let native = t.as_native();
+    let supports_native = native.is_dense()
+        && TypeId::of::<T>() == TypeId::of::<f64>()
+        && native.scalar_type() == tensor4all_tensorbackend::tenferro_dyadtensor::ScalarType::F64;
+    if supports_native {
+        let mut permuted_indices = left_indices.clone();
+        permuted_indices.extend(right_indices.iter().cloned());
+        let permuted = t.permute_indices(&permuted_indices);
+        let matrix_native = permuted
+            .as_native()
+            .contiguous(MemoryOrder::RowMajor)
+            .map_err(|e| {
+                QrError::ComputationError(anyhow::anyhow!(
+                    "native QR row-major normalization failed: {e}"
+                ))
+            })?
+            .reshape(&[m, n])
+            .map_err(|e| {
+                QrError::ComputationError(anyhow::anyhow!(
+                    "native QR reshape to matrix failed: {e}"
+                ))
+            })?;
+        let (mut q_native, mut r_native) =
+            qr_dyn_ad_tensor_native(&matrix_native).map_err(QrError::ComputationError)?;
+        let k = m.min(n);
+        let r_storage =
+            dyn_ad_tensor_primal_to_storage(&r_native).map_err(QrError::ComputationError)?;
+        let r = compute_retained_rank_qr_from_storage(&r_storage, k, n, rtol)?;
+        if r < k {
+            q_native = q_native.take_prefix(1, r).map_err(|e| {
+                QrError::ComputationError(anyhow::anyhow!("native QR truncation on Q failed: {e}"))
+            })?;
+            r_native = r_native.take_prefix(0, r).map_err(|e| {
+                QrError::ComputationError(anyhow::anyhow!("native QR truncation on R failed: {e}"))
+            })?;
         }
+
+        let bond_index = DynIndex::new_bond(r)
+            .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))
+            .map_err(QrError::ComputationError)?;
+
+        let mut q_indices = left_indices.clone();
+        q_indices.push(bond_index.clone());
+        let q_dims: Vec<usize> = q_indices.iter().map(|idx| idx.dim).collect();
+        let q_native = q_native
+            .contiguous(MemoryOrder::RowMajor)
+            .map_err(|e| QrError::ComputationError(anyhow::anyhow!(e)))?
+            .reshape(&q_dims)
+            .map_err(|e| {
+                QrError::ComputationError(anyhow::anyhow!("native QR reshape of Q failed: {e}"))
+            })?;
+        let q =
+            TensorDynLen::from_native(q_indices, q_native).map_err(QrError::ComputationError)?;
+
+        let mut r_indices = vec![bond_index.clone()];
+        r_indices.extend_from_slice(&right_indices);
+        let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
+        let r_native = r_native
+            .contiguous(MemoryOrder::RowMajor)
+            .map_err(|e| QrError::ComputationError(anyhow::anyhow!(e)))?
+            .reshape(&r_dims)
+            .map_err(|e| {
+                QrError::ComputationError(anyhow::anyhow!("native QR reshape of R failed: {e}"))
+            })?;
+        let r_tensor =
+            TensorDynLen::from_native(r_indices, r_native).map_err(QrError::ComputationError)?;
+
+        return Ok((q, r_tensor));
     }
     let k = m.min(n);
 

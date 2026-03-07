@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use crate::error::{PartitionedTTError, Result};
 use crate::projector::Projector;
-use tensor4all_core::{AnyScalar, DynIndex, TensorAccess, TensorDynLen};
+use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// A tensor train with an associated projector defining its subdomain.
@@ -200,7 +200,7 @@ impl SubDomainTT {
 
             // Create result tensor based on scalar type
             if tensor.is_f64() {
-                let src_data = tensor.as_slice_f64().unwrap_or(&[]);
+                let src_data = tensor.as_slice_f64().unwrap_or_default();
                 let mut result_data = vec![0.0_f64; total_size];
 
                 for flat_idx in 0..total_size {
@@ -212,7 +212,7 @@ impl SubDomainTT {
 
                 TensorDynLen::from_dense_f64(indices.to_vec(), result_data)
             } else {
-                let src_data = tensor.as_slice_c64().unwrap_or(&[]);
+                let src_data = tensor.as_slice_c64().unwrap_or_default();
                 let mut result_data = vec![Complex64::new(0.0, 0.0); total_size];
 
                 for flat_idx in 0..total_size {

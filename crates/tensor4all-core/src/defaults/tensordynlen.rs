@@ -1,9 +1,7 @@
-use crate::defaults::{DynId, DynIndex, TensorData};
+use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::index_ops::{common_ind_positions, prepare_contraction, prepare_contraction_pairs};
-use crate::storage::{
-    contract_storage, storage_to_dtensor, AnyScalar, Storage, StorageScalar, SumFromStorage,
-};
+use crate::storage::{storage_to_dtensor, AnyScalar, Storage, StorageScalar};
 use anyhow::Result;
 use num_complex::Complex64;
 use std::collections::HashSet;
@@ -11,10 +9,9 @@ use std::ops::{Mul, Neg, Sub};
 use std::sync::Arc;
 use tensor4all_tensorbackend::mdarray::DTensor;
 use tensor4all_tensorbackend::{
-    axpby_storage_native, conj_dyn_ad_tensor_native, contract_dyn_ad_tensor_native,
-    contract_storage_native, dyn_ad_tensor_primal_to_storage, outer_product_dyn_ad_tensor_native,
-    outer_product_storage_native, permute_dyn_ad_tensor_native, permute_storage_native,
-    scale_storage_native, storage_to_dyn_ad_tensor, sum_dyn_ad_tensor_native, DynAdTensor,
+    conj_dyn_ad_tensor_native, contract_dyn_ad_tensor_native, dyn_ad_tensor_primal_to_storage,
+    outer_product_dyn_ad_tensor_native, permute_dyn_ad_tensor_native, storage_to_dyn_ad_tensor,
+    sum_dyn_ad_tensor_native, DynAdTensor,
 };
 
 /// Compute the permutation array from original indices to new indices.
@@ -79,48 +76,33 @@ pub fn compute_permutation_from_indices(
     perm
 }
 
-/// Trait for accessing tensor fields.
-///
-/// This trait provides access to the internal fields of tensor types,
-/// allowing generic code to work with tensors without knowing the exact type.
+/// Trait for accessing tensor index metadata.
 pub trait TensorAccess {
     /// Get a reference to the indices.
     fn indices(&self) -> &[DynIndex];
-
-    /// Get a reference to the underlying data (Storage).
-    fn data(&self) -> &Storage;
 }
 
 /// Tensor with dynamic rank (number of indices) and dynamic scalar type.
 ///
 /// This is a concrete type using `DynIndex` (= `Index<DynId, TagSet>`).
 ///
-/// Internally contains a `TensorData` which supports lazy operations like
-/// outer product and permutation.
+/// The canonical numeric payload is always [`DynAdTensor`].
 #[derive(Clone)]
 pub struct TensorDynLen {
     /// Full index information (includes tags and other metadata).
     pub indices: Vec<DynIndex>,
-    /// Internal lazy tensor data representation.
-    data: TensorData,
-    /// Optional dense native payload preserving AD metadata.
-    native: Option<DynAdTensor>,
+    /// Canonical native payload preserving AD metadata.
+    native: DynAdTensor,
 }
 
 impl TensorAccess for TensorDynLen {
     fn indices(&self) -> &[DynIndex] {
         &self.indices
     }
-
-    fn data(&self) -> &Storage {
-        // For simple tensors, return the underlying storage directly
-        // For lazy tensors, this would need materialization
-        TensorDynLen::storage(self)
-    }
 }
 
 impl TensorDynLen {
-    fn validate_indices_and_storage(indices: &[DynIndex], storage: &Storage, dims: &[usize]) {
+    fn validate_indices(indices: &[DynIndex]) {
         let mut seen = HashSet::new();
         for idx in indices {
             assert!(
@@ -128,42 +110,23 @@ impl TensorDynLen {
                 "Tensor indices must all be unique (no duplicate IDs)"
             );
         }
+    }
 
-        if storage.is_diag() && !dims.is_empty() {
+    fn validate_diag_dims(dims: &[usize]) -> Result<()> {
+        if !dims.is_empty() {
             let first_dim = dims[0];
             for (i, &dim) in dims.iter().enumerate() {
-                assert_eq!(
-                    dim, first_dim,
-                    "DiagTensor requires all indices to have the same dimension, but dims[{}] = {} != dims[0] = {}",
-                    i, dim, first_dim
+                anyhow::ensure!(
+                    dim == first_dim,
+                    "DiagTensor requires all indices to have the same dimension, but dims[{i}] = {dim} != dims[0] = {first_dim}"
                 );
             }
         }
+        Ok(())
     }
 
-    fn build_data(indices: &[DynIndex], storage: Arc<Storage>) -> TensorData {
-        let index_ids: Vec<DynId> = indices.iter().map(|idx| *idx.id()).collect();
-        let dims = Self::expected_dims_from_indices(indices);
-        TensorData::new(storage, index_ids, dims)
-    }
-
-    fn seed_native_payload(storage: &Storage, dims: &[usize]) -> Option<DynAdTensor> {
-        storage_to_dyn_ad_tensor(storage, dims).ok()
-    }
-
-    fn from_storage_and_native(
-        indices: Vec<DynIndex>,
-        storage: Arc<Storage>,
-        native: Option<DynAdTensor>,
-    ) -> Self {
-        let dims = Self::expected_dims_from_indices(&indices);
-        Self::validate_indices_and_storage(&indices, storage.as_ref(), &dims);
-        let data = Self::build_data(&indices, storage);
-        Self {
-            indices,
-            data,
-            native,
-        }
+    fn seed_native_payload(storage: &Storage, dims: &[usize]) -> Result<DynAdTensor> {
+        storage_to_dyn_ad_tensor(storage, dims)
     }
 
     /// Compute dims from `indices` order.
@@ -185,9 +148,10 @@ impl TensorDynLen {
     /// Panics if the storage is Diag and not all indices have the same dimension.
     /// Panics if there are duplicate indices.
     pub fn new(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Self {
-        let dims = Self::expected_dims_from_indices(&indices);
-        let native = Self::seed_native_payload(storage.as_ref(), &dims);
-        Self::from_storage_and_native(indices, storage, native)
+        match Self::from_storage(indices, storage) {
+            Ok(tensor) => tensor,
+            Err(err) => panic!("TensorDynLen::new failed: {err}"),
+        }
     }
 
     /// Create a new tensor with dynamic rank, automatically computing dimensions from indices.
@@ -201,9 +165,21 @@ impl TensorDynLen {
         Self::new(indices, storage)
     }
 
-    /// Create a tensor from a native tenferro payload while keeping a primal snapshot.
+    /// Create a tensor from explicit storage by seeding a canonical native payload.
+    pub fn from_storage(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
+        let dims = Self::expected_dims_from_indices(&indices);
+        Self::validate_indices(&indices);
+        if storage.is_diag() {
+            Self::validate_diag_dims(&dims)?;
+        }
+        let native = Self::seed_native_payload(storage.as_ref(), &dims)?;
+        Self::from_native(indices, native)
+    }
+
+    /// Create a tensor from a native tenferro payload.
     pub fn from_native(indices: Vec<DynIndex>, native: DynAdTensor) -> Result<Self> {
         let dims = Self::expected_dims_from_indices(&indices);
+        Self::validate_indices(&indices);
         if dims != native.dims() {
             return Err(anyhow::anyhow!(
                 "native payload dims {:?} do not match indices dims {:?}",
@@ -211,83 +187,46 @@ impl TensorDynLen {
                 dims
             ));
         }
-        let storage = Arc::new(dyn_ad_tensor_primal_to_storage(&native)?);
-        Ok(Self::from_storage_and_native(
-            indices,
-            storage,
-            Some(native),
-        ))
+        if native.is_diag() {
+            Self::validate_diag_dims(&dims)?;
+        }
+        Ok(Self { indices, native })
     }
 
-    /// Borrow the native payload when available.
-    pub fn as_native(&self) -> Option<&DynAdTensor> {
-        self.native.as_ref()
+    /// Borrow the indices.
+    pub fn indices(&self) -> &[DynIndex] {
+        &self.indices
     }
 
-    /// Check if this tensor is simple (single storage, no lazy operations pending).
+    /// Borrow the native payload.
+    pub fn as_native(&self) -> &DynAdTensor {
+        &self.native
+    }
+
+    /// Consume the tensor and return its canonical native payload.
+    pub fn into_native(self) -> DynAdTensor {
+        self.native
+    }
+
+    /// Check if this tensor is already in canonical form.
     pub fn is_simple(&self) -> bool {
-        self.data.is_simple()
+        true
     }
 
-    /// Get the storage (for simple tensors only).
-    ///
-    /// # Panics
-    /// Panics if the tensor has pending lazy operations.
-    /// Use `try_storage()` or `materialize_storage()` for safe access.
-    pub fn storage(&self) -> &Arc<Storage> {
-        self.data
-            .storage()
-            .expect("storage() called on lazy tensor - use try_storage() or materialize_storage()")
+    /// Materialize the primal snapshot as storage.
+    pub fn to_storage(&self) -> Result<Arc<Storage>> {
+        Ok(Arc::new(dyn_ad_tensor_primal_to_storage(&self.native)?))
     }
 
-    /// Try to get the storage without materializing.
-    ///
-    /// Returns `None` if the tensor has pending lazy operations.
-    /// Use `materialize_storage()` to force materialization.
-    pub fn try_storage(&self) -> Option<&Arc<Storage>> {
-        self.data.storage()
-    }
-
-    /// Get the storage, materializing if necessary.
-    ///
-    /// For simple tensors, returns the underlying storage without copying.
-    /// For lazy tensors, performs any pending operations and returns the result.
-    pub fn materialize_storage(&self) -> Result<Arc<Storage>> {
-        if self.data.is_simple() {
-            Ok(self.data.storage().unwrap().clone())
-        } else {
-            let (storage, _dims) = self.data.materialize()?;
-            Ok(storage)
-        }
-    }
-
-    /// Get the internal TensorData reference.
-    pub fn tensor_data(&self) -> &TensorData {
-        &self.data
-    }
-
-    /// Create TensorDynLen directly from TensorData and indices.
-    ///
-    /// This is an internal constructor for building tensors from lazy operations.
-    fn from_data(indices: Vec<DynIndex>, data: TensorData) -> Self {
-        // Keep TensorData external metadata consistent with `indices` (no materialization).
-        let expected_dims = Self::expected_dims_from_indices(&indices);
-        let mut data = data;
-        data.external_index_ids = indices.iter().map(|idx| *idx.id()).collect();
-        data.external_dims = expected_dims;
-        Self {
-            indices,
-            data,
-            native: None,
-        }
+    /// Materialize the primal snapshot as storage.
+    pub fn storage(&self) -> Arc<Storage> {
+        self.to_storage()
+            .expect("TensorDynLen::storage snapshot materialization failed")
     }
 
     /// Sum all elements, returning `AnyScalar`.
     pub fn sum(&self) -> AnyScalar {
-        if let Some(native) = &self.native {
-            return sum_dyn_ad_tensor_native(native).expect("native sum failed");
-        }
-        AnyScalar::sum_from_storage(self.storage())
+        sum_dyn_ad_tensor_native(&self.native).expect("native sum failed")
     }
 
     /// Sum all elements as f64.
@@ -368,21 +307,10 @@ impl TensorDynLen {
         // Compute permutation by matching IDs
         let perm = compute_permutation_from_indices(&self.indices, new_indices);
 
-        if let Some(native) = &self.native {
-            let permuted_native =
-                permute_dyn_ad_tensor_native(native, &perm).expect("native permute_indices failed");
-            return Self::from_native(new_indices.to_vec(), permuted_native)
-                .expect("native permute_indices snapshot failed");
-        }
-
-        // Permute storage data using the computed permutation
-        let base_dims = Self::expected_dims_from_indices(&self.indices);
-        let new_storage = Arc::new(
-            permute_storage_native(self.storage(), &base_dims, &perm)
-                .expect("native permute_indices failed"),
-        );
-
-        Self::new(new_indices.to_vec(), new_storage)
+        let permuted_native = permute_dyn_ad_tensor_native(&self.native, &perm)
+            .expect("native permute_indices failed");
+        Self::from_native(new_indices.to_vec(), permuted_native)
+            .expect("native permute_indices snapshot failed")
     }
 
     /// Permute the tensor dimensions, returning a new tensor.
@@ -424,25 +352,11 @@ impl TensorDynLen {
             "permutation length must match tensor rank"
         );
 
-        let base_dims = Self::expected_dims_from_indices(&self.indices);
-
         // Permute indices
         let new_indices: Vec<DynIndex> = perm.iter().map(|&i| self.indices[i].clone()).collect();
-
-        if let Some(native) = &self.native {
-            let permuted_native =
-                permute_dyn_ad_tensor_native(native, perm).expect("native permute failed");
-            return Self::from_native(new_indices, permuted_native)
-                .expect("native permute snapshot failed");
-        }
-
-        // Permute storage data
-        let new_storage = Arc::new(
-            permute_storage_native(self.storage(), &base_dims, perm)
-                .expect("native permute failed"),
-        );
-
-        Self::new(new_indices, new_storage)
+        let permuted_native =
+            permute_dyn_ad_tensor_native(&self.native, perm).expect("native permute failed");
+        Self::from_native(new_indices, permuted_native).expect("native permute snapshot failed")
     }
 
     /// Contract this tensor with another tensor along common indices.
@@ -493,29 +407,11 @@ impl TensorDynLen {
         let spec = prepare_contraction(&self.indices, &self_dims, &other.indices, &other_dims)
             .expect("contraction preparation failed");
 
-        let result_dims = Self::expected_dims_from_indices(&spec.result_indices);
-        if let (Some(lhs_native), Some(rhs_native)) = (&self.native, &other.native) {
-            let result_native =
-                contract_dyn_ad_tensor_native(lhs_native, &spec.axes_a, rhs_native, &spec.axes_b)
-                    .expect("native contract failed");
-            return Self::from_native(spec.result_indices, result_native)
-                .expect("native contract snapshot failed");
-        }
-
-        let result_storage = Arc::new(
-            contract_storage_native(
-                self.storage(),
-                &self_dims,
-                &spec.axes_a,
-                other.storage(),
-                &other_dims,
-                &spec.axes_b,
-                &result_dims,
-            )
-            .expect("native contract failed"),
-        );
-
-        Self::new(spec.result_indices, result_storage)
+        let result_native =
+            contract_dyn_ad_tensor_native(&self.native, &spec.axes_a, &other.native, &spec.axes_b)
+                .expect("native contract failed");
+        Self::from_native(spec.result_indices, result_native)
+            .expect("native contract snapshot failed")
     }
 
     /// Contract this tensor with another tensor along explicitly specified index pairs.
@@ -607,24 +503,9 @@ impl TensorDynLen {
             }
         })?;
 
-        let result_dims = Self::expected_dims_from_indices(&spec.result_indices);
-        if let (Some(lhs_native), Some(rhs_native)) = (&self.native, &other.native) {
-            let result_native =
-                contract_dyn_ad_tensor_native(lhs_native, &spec.axes_a, rhs_native, &spec.axes_b)?;
-            return Self::from_native(spec.result_indices, result_native);
-        }
-
-        let result_storage = Arc::new(contract_storage(
-            self.storage(),
-            &self_dims,
-            &spec.axes_a,
-            other.storage(),
-            &other_dims,
-            &spec.axes_b,
-            &result_dims,
-        ));
-
-        Ok(Self::new(spec.result_indices, result_storage))
+        let result_native =
+            contract_dyn_ad_tensor_native(&self.native, &spec.axes_a, &other.native, &spec.axes_b)?;
+        Self::from_native(spec.result_indices, result_native)
     }
 
     /// Compute the outer product (tensor product) of two tensors.
@@ -686,29 +567,9 @@ impl TensorDynLen {
         // Build result indices and dimensions
         let mut result_indices = self.indices.clone();
         result_indices.extend(other.indices.iter().cloned());
-        let self_dims = Self::expected_dims_from_indices(&self.indices);
-        let other_dims = Self::expected_dims_from_indices(&other.indices);
-        let result_dims = Self::expected_dims_from_indices(&result_indices);
-
-        if let (Some(lhs_native), Some(rhs_native)) = (&self.native, &other.native) {
-            let result_native = outer_product_dyn_ad_tensor_native(lhs_native, rhs_native)
-                .expect("native outer product failed");
-            return Self::from_native(result_indices, result_native);
-        }
-
-        // Perform outer product using contract_storage with empty axes
-        let result_storage = Arc::new(
-            outer_product_storage_native(
-                self.storage(),
-                &self_dims,
-                other.storage(),
-                &other_dims,
-                &result_dims,
-            )
-            .expect("native outer product failed"),
-        );
-
-        Ok(Self::new(result_indices, result_storage))
+        let result_native = outer_product_dyn_ad_tensor_native(&self.native, &other.native)
+            .expect("native outer product failed");
+        Self::from_native(result_indices, result_native)
     }
 }
 
@@ -897,7 +758,7 @@ impl Neg for TensorDynLen {
 
 /// Check if a tensor is a DiagTensor (has Diag storage).
 pub fn is_diag_tensor(tensor: &TensorDynLen) -> bool {
-    tensor.storage().as_ref().is_diag()
+    tensor.native.is_diag()
 }
 
 impl TensorDynLen {
@@ -987,17 +848,11 @@ impl TensorDynLen {
             ));
         }
 
-        // Get storages (materializes lazy tensors if needed)
-        let self_storage = self.materialize_storage()?;
-        let other_storage = other_aligned.materialize_storage()?;
-
-        // Add storages using try_add (returns Result instead of panicking)
-        let result_storage = self_storage
-            .as_ref()
-            .try_add(other_storage.as_ref())
-            .map_err(|e| anyhow::anyhow!("Storage addition failed: {}", e))?;
-
-        Ok(Self::new(self.indices.clone(), Arc::new(result_storage)))
+        self.axpby(
+            AnyScalar::new_real(1.0),
+            &other_aligned,
+            AnyScalar::new_real(1.0),
+        )
     }
 
     /// Compute a linear combination: `a * self + b * other`.
@@ -1035,38 +890,20 @@ impl TensorDynLen {
         }
 
         // Reuse storage-level fused axpby to avoid materializing two scaled temporaries.
-        if let (Some(lhs_native), Some(rhs_native)) = (&self.native, &other_aligned.native) {
-            let combined = lhs_native
-                .axpby(&a, rhs_native, &b)
-                .map_err(|e| anyhow::anyhow!("native axpby failed: {e}"))?;
-            return Self::from_native(self.indices.clone(), combined);
-        }
-
-        let self_storage = self.materialize_storage()?;
-        let other_storage = other_aligned.materialize_storage()?;
-        let result_storage = axpby_storage_native(
-            self_storage.as_ref(),
-            &self_expected_dims,
-            &a,
-            other_storage.as_ref(),
-            &other_expected_dims,
-            &b,
-        )?;
-        Ok(Self::new(self.indices.clone(), Arc::new(result_storage)))
+        let combined = self
+            .native
+            .axpby(&a, &other_aligned.native, &b)
+            .map_err(|e| anyhow::anyhow!("native axpby failed: {e}"))?;
+        Self::from_native(self.indices.clone(), combined)
     }
 
     /// Scalar multiplication.
     pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
-        if let Some(native) = &self.native {
-            let scaled = native
-                .scale(&scalar)
-                .map_err(|e| anyhow::anyhow!("native scale failed: {e}"))?;
-            return Self::from_native(self.indices.clone(), scaled);
-        }
-        let storage = self.materialize_storage()?;
-        let dims = Self::expected_dims_from_indices(&self.indices);
-        let scaled_storage = scale_storage_native(storage.as_ref(), &dims, &scalar)?;
-        Ok(Self::new(self.indices.clone(), Arc::new(scaled_storage)))
+        let scaled = self
+            .native
+            .scale(&scalar)
+            .map_err(|e| anyhow::anyhow!("native scale failed: {e}"))?;
+        Self::from_native(self.indices.clone(), scaled)
     }
 
     /// Inner product (dot product) of two tensors.
@@ -1078,14 +915,11 @@ impl TensorDynLen {
             let other_set: HashSet<_> = other.indices.iter().collect();
             if self_set == other_set {
                 let other_aligned = other.permute_indices(&self.indices);
-                if let (Some(lhs_native), Some(rhs_native)) = (&self.native, &other_aligned.native)
-                {
-                    let conj_self = conj_dyn_ad_tensor_native(lhs_native)?;
-                    let axes: Vec<usize> = (0..self.indices.len()).collect();
-                    let result_native =
-                        contract_dyn_ad_tensor_native(&conj_self, &axes, rhs_native, &axes)?;
-                    return sum_dyn_ad_tensor_native(&result_native);
-                }
+                let conj_self = conj_dyn_ad_tensor_native(&self.native)?;
+                let axes: Vec<usize> = (0..self.indices.len()).collect();
+                let result_native =
+                    contract_dyn_ad_tensor_native(&conj_self, &axes, &other_aligned.native, &axes)?;
+                return sum_dyn_ad_tensor_native(&result_native);
             }
         }
 
@@ -1159,19 +993,8 @@ impl TensorDynLen {
             })
             .collect();
 
-        // Create new TensorData with updated index IDs
-        let new_index_ids: Vec<DynId> = new_indices.iter().map(|idx| *idx.id()).collect();
-        let new_dims = Self::expected_dims_from_indices(&new_indices);
-        if let Some(native) = &self.native {
-            return Self::from_storage_and_native(
-                new_indices,
-                self.storage().clone(),
-                Some(native.clone()),
-            );
-        }
-
-        let new_data = TensorData::new(self.storage().clone(), new_index_ids, new_dims);
-        Self::from_data(new_indices, new_data)
+        Self::from_native(new_indices, self.native.clone())
+            .expect("replaceind should preserve native payload dims")
     }
 
     /// Replace multiple indices in the tensor.
@@ -1246,19 +1069,8 @@ impl TensorDynLen {
             })
             .collect();
 
-        // Create new TensorData with updated index IDs
-        let new_index_ids: Vec<DynId> = new_indices_vec.iter().map(|idx| *idx.id()).collect();
-        let new_dims = Self::expected_dims_from_indices(&new_indices_vec);
-        if let Some(native) = &self.native {
-            return Self::from_storage_and_native(
-                new_indices_vec,
-                self.storage().clone(),
-                Some(native.clone()),
-            );
-        }
-
-        let new_data = TensorData::new(self.storage().clone(), new_index_ids, new_dims);
-        Self::from_data(new_indices_vec, new_data)
+        Self::from_native(new_indices_vec, self.native.clone())
+            .expect("replaceinds should preserve native payload dims")
     }
 }
 
@@ -1298,13 +1110,9 @@ impl TensorDynLen {
         // For default undirected indices, conj() is a no-op, so this is future-proof
         // for QSpace-compatible directed indices where conj() flips Ket <-> Bra
         let new_indices: Vec<DynIndex> = self.indices.iter().map(|idx| idx.conj()).collect();
-        if let Some(native) = &self.native {
-            let conj_native = conj_dyn_ad_tensor_native(native).expect("native conjugation failed");
-            return Self::from_native(new_indices, conj_native)
-                .expect("native conjugation snapshot failed");
-        }
-        let new_storage = Arc::new(self.storage().conj());
-        Self::new(new_indices, new_storage)
+        let conj_native =
+            conj_dyn_ad_tensor_native(&self.native).expect("native conjugation failed");
+        Self::from_native(new_indices, conj_native).expect("native conjugation snapshot failed")
     }
 }
 
@@ -1373,7 +1181,7 @@ impl TensorDynLen {
 
     /// Maximum absolute value of all elements (L-infinity norm).
     pub fn maxabs(&self) -> f64 {
-        self.materialize_storage()
+        self.to_storage()
             .map(|storage| storage.max_abs())
             .unwrap_or(0.0)
     }
@@ -1417,11 +1225,9 @@ impl TensorDynLen {
         let norm_self = self.norm();
 
         // Compute A - B = A + (-1) * B
-        let neg_other_storage = other.storage().as_ref() * (-1.0_f64);
-        let neg_other = Self::new(
-            other.indices.clone(),
-            std::sync::Arc::new(neg_other_storage),
-        );
+        let neg_other = other
+            .scale(AnyScalar::new_real(-1.0))
+            .expect("distance: tensor scaling failed");
         let diff = self
             .add(&neg_other)
             .expect("distance: tensors must have same indices");
@@ -1440,7 +1246,8 @@ impl std::fmt::Debug for TensorDynLen {
         f.debug_struct("TensorDynLen")
             .field("indices", &self.indices)
             .field("dims", &self.dims())
-            .field("data", &self.data)
+            .field("is_diag", &self.native.is_diag())
+            .field("mode", &self.native.mode())
             .finish()
     }
 }
@@ -1588,8 +1395,8 @@ pub fn unfold_split<T: StorageScalar>(
     let m: usize = unfolded_dims[..left_len].iter().product();
     let n: usize = unfolded_dims[left_len..].iter().product();
 
-    // Create DTensor directly from storage
-    let matrix_tensor = storage_to_dtensor::<T>(unfolded.storage().as_ref(), [m, n])
+    let unfolded_storage = unfolded.storage();
+    let matrix_tensor = storage_to_dtensor::<T>(unfolded_storage.as_ref(), [m, n])
         .map_err(|e| anyhow::anyhow!("Failed to create DTensor: {}", e))?;
 
     Ok((
@@ -1989,8 +1796,8 @@ impl TensorDynLen {
     /// let data = tensor.as_slice_f64().unwrap();
     /// assert_eq!(data, &[1.0, 2.0]);
     /// ```
-    pub fn as_slice_f64(&self) -> Result<&[f64]> {
-        f64::extract_dense_view(self.storage()).map_err(|e| anyhow::anyhow!("{}", e))
+    pub fn as_slice_f64(&self) -> Result<Vec<f64>> {
+        self.to_vec_f64()
     }
 
     /// Extract tensor data as Complex64 slice.
@@ -2000,8 +1807,8 @@ impl TensorDynLen {
     ///
     /// # Errors
     /// Returns an error if the storage is not DenseC64.
-    pub fn as_slice_c64(&self) -> Result<&[Complex64]> {
-        Complex64::extract_dense_view(self.storage()).map_err(|e| anyhow::anyhow!("{}", e))
+    pub fn as_slice_c64(&self) -> Result<Vec<Complex64>> {
+        self.to_vec_c64()
     }
 
     /// Convert tensor data to `Vec<f64>`.
@@ -2012,7 +1819,8 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error if the storage is not DenseF64.
     pub fn to_vec_f64(&self) -> Result<Vec<f64>> {
-        f64::extract_dense(self.storage()).map_err(|e| anyhow::anyhow!("{}", e))
+        let storage = self.to_storage()?;
+        f64::extract_dense(storage.as_ref()).map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     /// Convert tensor data to `Vec<Complex64>`.
@@ -2023,7 +1831,8 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error if the storage is not DenseC64.
     pub fn to_vec_c64(&self) -> Result<Vec<Complex64>> {
-        Complex64::extract_dense(self.storage()).map_err(|e| anyhow::anyhow!("{}", e))
+        let storage = self.to_storage()?;
+        Complex64::extract_dense(storage.as_ref()).map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     /// Check if the tensor has f64 storage.
@@ -2039,11 +1848,11 @@ impl TensorDynLen {
     /// assert!(!tensor.is_complex());
     /// ```
     pub fn is_f64(&self) -> bool {
-        self.storage().is_f64()
+        matches!(self.native, DynAdTensor::F64(_))
     }
 
     /// Check if the tensor has complex storage (C64).
     pub fn is_complex(&self) -> bool {
-        self.storage().is_complex()
+        matches!(self.native, DynAdTensor::C64(_))
     }
 }
