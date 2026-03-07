@@ -1,7 +1,7 @@
 use num_complex::Complex64;
 use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::{qr, qr_c64};
+use tensor4all_core::{qr, qr_c64, DynIndex};
 use tensor4all_core::{Storage, TensorDynLen, TensorLike};
 
 #[test]
@@ -224,5 +224,104 @@ fn test_qr_complex_reconstruction() {
         tensor.isapprox(&reconstructed, 1e-8, 0.0),
         "Complex QR reconstruction failed: maxabs diff = {}",
         (&tensor - &reconstructed).maxabs()
+    );
+}
+
+/// Helper: compute ||Q*R - T|| via tensor contraction for any tensor shape.
+fn qr_reconstruction_error_f64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
+    let (q, r) = qr::<f64>(t, left_inds).expect("QR should succeed");
+    let recon = q.contract(&r);
+    let neg = recon
+        .scale(tensor4all_core::AnyScalar::new_real(-1.0))
+        .unwrap();
+    let diff = t.add(&neg).unwrap();
+    diff.norm()
+}
+
+fn qr_reconstruction_error_c64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
+    let (q, r) = qr_c64(t, left_inds).expect("QR should succeed");
+    let recon = q.contract(&r);
+    let neg = recon
+        .scale(tensor4all_core::AnyScalar::new_real(-1.0))
+        .unwrap();
+    let diff = t.add(&neg).unwrap();
+    diff.norm()
+}
+
+#[test]
+fn test_qr_rank3_reconstruction_via_contract() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(4);
+    let k = Index::new_dyn(5);
+
+    let data: Vec<f64> = (0..60).map(|x| (x as f64) * 0.1 + 0.01).collect();
+    let storage = Arc::new(Storage::DenseF64(
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[3, 4, 5]),
+    ));
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone(), k.clone()], storage);
+
+    // Split [i] vs [j, k]: 3×20 matrix
+    let err = qr_reconstruction_error_f64(&tensor, std::slice::from_ref(&i));
+    assert!(err < 1e-10, "rank-3 QR reconstruction error: {err:.3e}");
+
+    // Split [i, j] vs [k]: 12×5 matrix
+    let err = qr_reconstruction_error_f64(&tensor, &[i, j]);
+    assert!(err < 1e-10, "rank-3 QR reconstruction error: {err:.3e}");
+}
+
+#[test]
+fn test_qr_rank4_reconstruction_via_contract() {
+    let a = Index::new_dyn(3);
+    let b = Index::new_dyn(2);
+    let c = Index::new_dyn(4);
+    let d = Index::new_dyn(2);
+
+    let data: Vec<f64> = (0..48).map(|x| (x as f64).sin()).collect();
+    let storage = Arc::new(Storage::DenseF64(
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[3, 2, 4, 2]),
+    ));
+    let tensor: TensorDynLen =
+        TensorDynLen::new(vec![a.clone(), b.clone(), c.clone(), d.clone()], storage);
+
+    // Split [a, b] vs [c, d]: 6×8 matrix
+    let err = qr_reconstruction_error_f64(&tensor, &[a.clone(), b.clone()]);
+    assert!(err < 1e-10, "rank-4 QR [a,b] vs [c,d] error: {err:.3e}");
+
+    // Split [a] vs [b, c, d]: 3×16 matrix
+    let err = qr_reconstruction_error_f64(&tensor, std::slice::from_ref(&a));
+    assert!(err < 1e-10, "rank-4 QR [a] vs [b,c,d] error: {err:.3e}");
+
+    // Non-contiguous split [a, c] vs [b, d]: 12×4 matrix
+    let err = qr_reconstruction_error_f64(&tensor, &[a, c]);
+    assert!(
+        err < 1e-10,
+        "rank-4 QR non-contiguous [a,c] vs [b,d] error: {err:.3e}"
+    );
+}
+
+#[test]
+fn test_qr_complex_rank3_reconstruction() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(4);
+    let k = Index::new_dyn(2);
+
+    let data: Vec<Complex64> = (0..24)
+        .map(|x| Complex64::new((x as f64).sin(), (x as f64).cos()))
+        .collect();
+    let storage = Arc::new(Storage::DenseC64(
+        tensor4all_core::storage::DenseStorageC64::from_vec_with_shape(data, &[3, 4, 2]),
+    ));
+    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone(), k.clone()], storage);
+
+    let err = qr_reconstruction_error_c64(&tensor, &[i.clone(), j.clone()]);
+    assert!(
+        err < 1e-10,
+        "complex rank-3 QR [i,j] vs [k] error: {err:.3e}"
+    );
+
+    let err = qr_reconstruction_error_c64(&tensor, &[i]);
+    assert!(
+        err < 1e-10,
+        "complex rank-3 QR [i] vs [j,k] error: {err:.3e}"
     );
 }

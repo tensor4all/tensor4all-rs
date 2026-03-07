@@ -72,13 +72,18 @@ pub fn set_default_qr_rtol(rtol: f64) -> Result<(), QrError> {
 
 /// Compute the retained rank based on rtol truncation for QR.
 ///
-/// This checks R's diagonal elements and truncates columns where |R[i, i]| < rtol.
+/// For non-pivoting QR, the diagonal elements of R are NOT necessarily in
+/// decreasing order, and a zero diagonal element does NOT mean the row is
+/// negligible (off-diagonal elements in that row may be significant).
+///
+/// We use row norms of R: a row is negligible when its norm is below
+/// `rtol * max_row_norm`. This is more robust than checking only diagonals.
 ///
 /// # Arguments
 /// * `r_full` - Full R matrix (k×n, upper triangular)
 /// * `k` - Number of rows in R (min(m, n))
 /// * `n` - Number of columns in R
-/// * `rtol` - Relative tolerance for diagonal elements
+/// * `rtol` - Relative tolerance for row norms
 ///
 /// # Returns
 /// The retained rank `r` (at least 1, at most k)
@@ -91,17 +96,33 @@ where
         return 1;
     }
 
-    // Check diagonal elements of R (R is k×n, upper triangular)
-    // Diagonal elements are at R[0,0], R[1,1], ..., R[min(k,n)-1, min(k,n)-1]
     let max_diag = k.min(n);
-    let mut r = max_diag;
 
+    // Compute the norm of each row of R (upper triangular: row i has entries from column i..n)
+    let mut row_norms = Vec::with_capacity(max_diag);
     for i in 0..max_diag {
-        let r_ii = r_full[[i, i]];
-        let abs_r_ii: f64 = r_ii.abs().into();
-        if abs_r_ii < rtol {
-            r = i;
-            break;
+        let mut norm_sq: f64 = 0.0;
+        for j in i..n {
+            let val: f64 = r_full[[i, j]].abs().into();
+            norm_sq += val * val;
+        }
+        row_norms.push(norm_sq.sqrt());
+    }
+
+    // Find max row norm
+    let max_row_norm = row_norms.iter().cloned().fold(0.0_f64, f64::max);
+
+    if max_row_norm == 0.0 {
+        return 1;
+    }
+
+    let threshold = rtol * max_row_norm;
+
+    // Count rows with norm above threshold
+    let mut r = 0;
+    for &norm in &row_norms {
+        if norm >= threshold {
+            r += 1;
         }
     }
 
@@ -402,6 +423,7 @@ mod tests {
     use super::*;
     use crate::index::DefaultIndex as Index;
     use std::sync::Arc;
+    use tensor4all_tensorbackend::mdarray::DTensor;
 
     #[test]
     fn compute_retained_rank_qr_from_storage_truncates_and_keeps_one() {
@@ -551,5 +573,97 @@ mod tests {
         .unwrap();
         assert_eq!(q.dims(), vec![2, 1]);
         assert_eq!(r.dims(), vec![1, 2]);
+    }
+
+    /// Helper: build an upper-triangular R matrix from diagonal and off-diagonal entries.
+    fn make_upper_triangular(n: usize, entries: &[(usize, usize, f64)]) -> DTensor<f64, 2> {
+        DTensor::<f64, 2>::from_fn([n, n], |idx| {
+            entries
+                .iter()
+                .find(|(i, j, _)| *i == idx[0] && *j == idx[1])
+                .map(|(_, _, v)| *v)
+                .unwrap_or(0.0)
+        })
+    }
+
+    #[test]
+    fn test_retained_rank_zero_diagonal_nonzero_offdiag() {
+        // 3×4 R with zero diagonal at row 1 but nonzero off-diag
+        // R = [[10, 1, 1, 1],
+        //      [ 0, 0, 5, 5],   ← diagonal=0, but row norm = sqrt(50) ≈ 7.07
+        //      [ 0, 0, 0, 1]]
+        let r = DTensor::<f64, 2>::from_fn([3, 4], |idx| match (idx[0], idx[1]) {
+            (0, 0) => 10.0,
+            (0, 1) => 1.0,
+            (0, 2) => 1.0,
+            (0, 3) => 1.0,
+            (1, 2) => 5.0,
+            (1, 3) => 5.0,
+            (2, 3) => 1.0,
+            _ => 0.0,
+        });
+        // rtol=1e-15: all rows should be retained
+        assert_eq!(compute_retained_rank_qr(&r, 3, 4, 1e-15), 3);
+    }
+
+    #[test]
+    fn test_retained_rank_all_zero_rows() {
+        // R with only row 0 non-zero
+        let r = make_upper_triangular(3, &[(0, 0, 5.0), (0, 1, 3.0), (0, 2, 1.0)]);
+        assert_eq!(compute_retained_rank_qr(&r, 3, 3, 1e-15), 1);
+    }
+
+    #[test]
+    fn test_retained_rank_full_rank() {
+        // Fully non-degenerate upper triangular
+        let r = make_upper_triangular(
+            3,
+            &[
+                (0, 0, 10.0),
+                (0, 1, 1.0),
+                (0, 2, 1.0),
+                (1, 1, 8.0),
+                (1, 2, 1.0),
+                (2, 2, 6.0),
+            ],
+        );
+        assert_eq!(compute_retained_rank_qr(&r, 3, 3, 1e-15), 3);
+    }
+
+    #[test]
+    fn test_retained_rank_rtol_truncation() {
+        let r = make_upper_triangular(
+            3,
+            &[
+                (0, 0, 10.0),
+                (0, 1, 0.5),
+                (0, 2, 0.1),
+                (1, 1, 0.01),
+                (2, 2, 0.001),
+            ],
+        );
+        assert_eq!(compute_retained_rank_qr(&r, 3, 3, 0.01), 1);
+        assert_eq!(compute_retained_rank_qr(&r, 3, 3, 1e-4), 2);
+    }
+
+    #[test]
+    fn test_retained_rank_zero_matrix() {
+        let r = DTensor::<f64, 2>::from_fn([3, 3], |_| 0.0);
+        assert_eq!(compute_retained_rank_qr(&r, 3, 3, 1e-15), 1);
+    }
+
+    #[test]
+    fn test_retained_rank_complex() {
+        use num_complex::Complex64;
+        let r = DTensor::<Complex64, 2>::from_fn([2, 3], |idx| match (idx[0], idx[1]) {
+            (0, 0) => Complex64::new(5.0, 3.0),
+            (0, 1) => Complex64::new(1.0, 0.0),
+            (0, 2) => Complex64::new(0.0, 1.0),
+            (1, 1) => Complex64::new(0.0, 0.0), // zero diagonal
+            (1, 2) => Complex64::new(3.0, 4.0), // norm = 5.0
+            _ => Complex64::new(0.0, 0.0),
+        });
+        // Row 1 has zero diagonal but norm = 5.0, should NOT be truncated
+        assert_eq!(compute_retained_rank_qr(&r, 2, 3, 1e-15), 2);
     }
 }
