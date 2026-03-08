@@ -49,11 +49,11 @@ fn create_matrix_tt(
     let mut tensors = Vec::with_capacity(n_sites);
     let opts = FactorizeOptions::qr().with_rtol(0.0);
 
-    for i in 0..n_sites - 1 {
+    for site_idx in site_indices.iter().take(n_sites - 1) {
         let remaining_indices = remaining.indices().to_vec();
         let mut left_inds = Vec::new();
         for idx in &remaining_indices {
-            if idx.id() == site_indices[i].id() {
+            if idx.id() == site_idx.id() {
                 left_inds.push(idx.clone());
                 break;
             }
@@ -89,7 +89,7 @@ fn as_diagonal(
     let data = tensor.to_vec_f64().unwrap();
     let mut new_data = vec![0.0f64; total_new];
 
-    for flat in 0..total_old {
+    for (flat, &val) in data.iter().enumerate() {
         let mut rem = flat;
         let mut old_idx = vec![0usize; dims.len()];
         for i in (0..dims.len()).rev() {
@@ -103,7 +103,7 @@ fn as_diagonal(
         for (i, &d) in new_dims.iter().enumerate() {
             nf = nf * d + new_idx[i];
         }
-        new_data[nf] = data[flat];
+        new_data[nf] = val;
     }
     TensorDynLen::from_dense_f64(new_indices, new_data)
 }
@@ -129,7 +129,7 @@ fn extract_diagonal(tensor: &TensorDynLen, s: &DynIndex, s_result: &DynIndex) ->
     let data = tensor.to_vec_f64().unwrap();
     let mut new_data = vec![0.0f64; new_total];
 
-    for flat in 0..total {
+    for (flat, &val) in data.iter().enumerate() {
         let mut rem = flat;
         let mut idx = vec![0usize; dims.len()];
         for i in (0..dims.len()).rev() {
@@ -149,7 +149,7 @@ fn extract_diagonal(tensor: &TensorDynLen, s: &DynIndex, s_result: &DynIndex) ->
         for (i, &d) in new_dims.iter().enumerate() {
             nf = nf * d + new_idx[i];
         }
-        new_data[nf] = data[flat];
+        new_data[nf] = val;
     }
     TensorDynLen::from_dense_f64(new_indices, new_data)
 }
