@@ -750,8 +750,70 @@ pub fn contract_dyn_ad_tensor_native(
     let (lhs, rhs) = promote_native_operands(lhs, rhs)?;
     let (lhs_ids, rhs_ids, output_ids) =
         build_binary_einsum_ids(lhs.ndim(), axes_lhs, rhs.ndim(), axes_rhs)?;
-    let notation = labels_to_notation(&[lhs_ids, rhs_ids], &output_ids)?;
-    dyn_ad_einsum_typed(&notation, &[&lhs, &rhs], lhs.scalar_type())
+
+    // Workaround for tenferro einsum bug: the einsum may ignore label
+    // permutations in non-first operands, treating e.g. "abc,ba->c" as
+    // "abc,ab->c". Fix: permute rhs so its labels are in ascending positional
+    // order, then permute the output back to restore expected free-axis ordering.
+    let is_rhs_sorted = rhs_ids.windows(2).all(|w| w[0] < w[1]);
+    if !is_rhs_sorted {
+        // Permute rhs to sort its labels
+        let mut rhs_perm: Vec<usize> = (0..rhs_ids.len()).collect();
+        rhs_perm.sort_by_key(|&i| rhs_ids[i]);
+        let sorted_rhs_ids: Vec<usize> = rhs_perm.iter().map(|&i| rhs_ids[i]).collect();
+        let permuted_rhs = permute_dyn_ad_tensor_native(&rhs, &rhs_perm)?;
+
+        // Determine the expected output: free axes from lhs (unchanged) then
+        // free axes from rhs in their ORIGINAL positional order.
+        // After sorting rhs, the free axes may be in a different order.
+        // Compute the output permutation to restore expected ordering.
+        let contracted_rhs: std::collections::HashSet<usize> = axes_rhs.iter().copied().collect();
+        // Free rhs labels in original positional order
+        let orig_free_labels: Vec<usize> = (0..rhs_ids.len())
+            .filter(|i| !contracted_rhs.contains(i))
+            .map(|i| rhs_ids[i])
+            .collect();
+        // Free rhs labels in sorted (permuted) positional order
+        let contracted_sorted: std::collections::HashSet<usize> = sorted_rhs_ids
+            .iter()
+            .copied()
+            .filter(|id| {
+                // A label is contracted if it also appears in lhs_ids
+                lhs_ids.contains(id)
+            })
+            .collect();
+        let sorted_free_labels: Vec<usize> = sorted_rhs_ids
+            .iter()
+            .copied()
+            .filter(|id| !contracted_sorted.contains(id))
+            .collect();
+
+        let notation = labels_to_notation(&[lhs_ids.clone(), sorted_rhs_ids], &output_ids)?;
+        let result = dyn_ad_einsum_typed(&notation, &[&lhs, &permuted_rhs], lhs.scalar_type())?;
+
+        // If free rhs labels are in a different order, permute output
+        if orig_free_labels != sorted_free_labels && !orig_free_labels.is_empty() {
+            let lhs_contracted: std::collections::HashSet<usize> =
+                axes_lhs.iter().copied().collect();
+            let num_lhs_free = lhs.ndim() - lhs_contracted.len();
+
+            // Build output permutation: lhs free axes stay, rhs free axes reorder
+            let mut out_perm: Vec<usize> = (0..num_lhs_free).collect();
+            for orig_label in &orig_free_labels {
+                let pos_in_sorted = sorted_free_labels
+                    .iter()
+                    .position(|l| l == orig_label)
+                    .expect("label not found in sorted free labels");
+                out_perm.push(num_lhs_free + pos_in_sorted);
+            }
+            permute_dyn_ad_tensor_native(&result, &out_perm)
+        } else {
+            Ok(result)
+        }
+    } else {
+        let notation = labels_to_notation(&[lhs_ids, rhs_ids], &output_ids)?;
+        dyn_ad_einsum_typed(&notation, &[&lhs, &rhs], lhs.scalar_type())
+    }
 }
 
 /// Compute outer product of two native AD tensors.
