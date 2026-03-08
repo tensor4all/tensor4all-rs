@@ -520,10 +520,30 @@ pub fn einsum_dyn_ad_tensors_native(
     let operand_refs: Vec<&DynAdTensor> = operands.iter().map(|(tensor, _)| *tensor).collect();
     let (promoted, scalar_type) = promote_native_operands_many(&operand_refs)?;
     let input_ids: Vec<Vec<usize>> = operands.iter().map(|(_, ids)| ids.to_vec()).collect();
-    let notation = labels_to_notation(&input_ids, output_ids)?;
-    let promoted_refs: Vec<&DynAdTensor> = promoted.iter().collect();
 
-    dyn_ad_einsum_typed(&notation, &promoted_refs, scalar_type)
+    // Workaround for tenferro einsum bug: the einsum may ignore label
+    // permutations in non-first operands. Fix: permute non-first operands
+    // so their labels are in ascending positional order.
+    let mut sorted_input_ids = input_ids.clone();
+    let mut permuted: Vec<Option<DynAdTensor>> = vec![None; promoted.len()];
+    for (i, ids) in input_ids.iter().enumerate().skip(1) {
+        let is_sorted = ids.windows(2).all(|w| w[0] < w[1]);
+        if !is_sorted {
+            let mut perm: Vec<usize> = (0..ids.len()).collect();
+            perm.sort_by_key(|&j| ids[j]);
+            sorted_input_ids[i] = perm.iter().map(|&j| ids[j]).collect();
+            permuted[i] = Some(permute_dyn_ad_tensor_native(&promoted[i], &perm)?);
+        }
+    }
+
+    let notation = labels_to_notation(&sorted_input_ids, output_ids)?;
+    let final_refs: Vec<&DynAdTensor> = promoted
+        .iter()
+        .enumerate()
+        .map(|(i, orig)| permuted[i].as_ref().unwrap_or(orig))
+        .collect();
+
+    dyn_ad_einsum_typed(&notation, &final_refs, scalar_type)
 }
 
 fn dyn_ad_tensor_to_scalar_native(tensor: &DynAdTensor) -> Result<DynAdScalar> {
