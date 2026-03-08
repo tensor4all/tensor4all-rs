@@ -685,15 +685,15 @@ mod tests {
         // Old code used diagonal-element comparison and would truncate to rank 1.
         // Row-norm-based approach correctly keeps rank 2.
         //
-        // R = [[10.0, 0.0],
-        //      [ 0.0, 1e-16]]  <- old code: |1e-16| < rtol -> truncate
-        // But if off-diagonal is large:
-        // R = [[10.0, 0.0 ],
-        //      [ 0.0, 1e-16, 10.0]]  for 2x3 matrix
+        // R = [[10.0, 0.0, 0.0],
+        //      [ 0.0, 1e-16, 10.0]]
+        //
+        // Old code would inspect only the diagonal and truncate because
+        // |R[1, 1]| = 1e-16 < rtol, even though row 1 is significant.
         // Row 1 norm = sqrt(1e-32 + 100) ~ 10.0 >> rtol * max_row_norm
         let r_full = Storage::DenseF64(
             tensor4all_tensorbackend::DenseStorageF64::from_vec_with_shape(
-                vec![10.0, 0.0, 0.0, 1e-16, 10.0, 0.0],
+                vec![10.0, 0.0, 0.0, 0.0, 1e-16, 10.0],
                 &[2, 3],
             ),
         );
