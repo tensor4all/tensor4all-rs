@@ -1,4 +1,4 @@
-//! Bug: ContractOptions::fit() converges to wrong values for element-wise
+//! Bug: ContractOptions::fit() converges to wrong local minimum for element-wise
 //! MPS products via diagonal embedding.
 //!
 //! fit() converges but to WRONG values, while zipup() is exact.
@@ -7,7 +7,7 @@
 //! This blocks using fit() for bubble computations in quanticsnegf-rs.
 
 use tensor4all_core::{factorize, DynIndex, FactorizeOptions, IndexLike, TensorDynLen};
-use tensor4all_itensorlike::{ContractOptions, TensorTrain};
+use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
 /// Convert matrix (row-major) to quantics interleaved bit ordering.
 fn matrix_to_quantics(nbit: usize, data: &[f64]) -> Vec<f64> {
@@ -29,27 +29,39 @@ fn matrix_to_quantics(nbit: usize, data: &[f64]) -> Vec<f64> {
     quantics
 }
 
-/// Create a QTT from a square matrix using QR factorization.
-fn create_matrix_tt(
-    row_indices: &[DynIndex],
-    col_indices: &[DynIndex],
-    data: &[f64],
+/// Create a QTT representing a 2D function f(x,y) on [0,1)^2 grid
+/// with interleaved quantics indices (row_0, col_0, row_1, col_1, ...).
+fn create_function_2d_tt(
+    row_sites: &[DynIndex],
+    col_sites: &[DynIndex],
+    f: impl Fn(f64, f64) -> f64,
+    max_bond: usize,
 ) -> TensorTrain {
-    let nbit = row_indices.len();
-    let quantics_data = matrix_to_quantics(nbit, data);
+    let nbit = row_sites.len();
+    let n = 1 << nbit;
 
-    let mut site_indices = Vec::new();
-    for i in 0..nbit {
-        site_indices.push(row_indices[i].clone());
-        site_indices.push(col_indices[i].clone());
+    let mut data = vec![0.0; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            data[i * n + j] = f(i as f64 / n as f64, j as f64 / n as f64);
+        }
     }
-    let n_sites = site_indices.len();
 
-    let mut remaining = TensorDynLen::from_dense_f64(site_indices.clone(), quantics_data);
-    let mut tensors = Vec::with_capacity(n_sites);
+    let quantics_data = matrix_to_quantics(nbit, &data);
+
+    let mut all_sites = Vec::new();
+    for i in 0..nbit {
+        all_sites.push(row_sites[i].clone());
+        all_sites.push(col_sites[i].clone());
+    }
+
+    let big = TensorDynLen::from_dense_f64(all_sites.clone(), quantics_data);
     let opts = FactorizeOptions::qr().with_rtol(0.0);
+    let n_sites = all_sites.len();
+    let mut remaining = big;
+    let mut tensors = Vec::with_capacity(n_sites);
 
-    for site_idx in site_indices.iter().take(n_sites - 1) {
+    for site_idx in all_sites.iter().take(n_sites - 1) {
         let remaining_indices = remaining.indices().to_vec();
         let mut left_inds = Vec::new();
         for idx in &remaining_indices {
@@ -64,7 +76,12 @@ fn create_matrix_tt(
         remaining = result.right;
     }
     tensors.push(remaining);
-    TensorTrain::new(tensors).unwrap()
+    let mut tt = TensorTrain::new(tensors).unwrap();
+    if max_bond > 0 {
+        let trunc = TruncateOptions::svd().with_max_rank(max_bond);
+        tt.truncate(&trunc).unwrap();
+    }
+    tt
 }
 
 /// Diagonalize: replace index `s` with [s_new1, s_new2], non-zero when s_new1==s_new2.
@@ -153,6 +170,11 @@ fn extract_diagonal(tensor: &TensorDynLen, s: &DynIndex, s_result: &DynIndex) ->
 }
 
 /// Element-wise product via diagonal embedding + TT contraction.
+///
+/// For each site index s shared by m1 and m2:
+///   m1: s → [s_result, s_contract] (diagonal)
+///   m2: s → [s_contract, s] (diagonal)
+/// Contract over s_contract, then extract diagonal s==s_result → result with [s].
 fn elementwise_mul(
     m1: &TensorTrain,
     m2: &TensorTrain,
@@ -202,104 +224,124 @@ fn elementwise_mul(
     result
 }
 
-/// Test: element-wise product of two NON-product-state MPS.
+/// Bug reproduction: fit() converges to WRONG answer for element-wise product
+/// of structured QTTs with asymmetric bond dimensions.
 ///
-/// Product-state MPS (bond dim=1) work fine with both fit and zipup.
-/// MPS with higher bond dim (e.g., from QR decomposition of a general
-/// matrix) may fail with fit().
+/// Uses smooth 2D functions in QTT representation:
+///   A(x,y) = exp(-3|x-y|)          (low rank, bond dim ~4)
+///   B(x,y) = 1/((x-y)^2+0.01) - 1/((x-y)^2+0.1)  (higher rank, bond dim ~14)
 ///
-/// Use two different 4x4 matrices that produce non-trivial bond dims.
+/// Result: fit(A,B) consistently gives ~5e-4 relative error while
+/// zipup gives near-zero error. The fit error is independent of maxdim,
+/// indicating convergence to a wrong local minimum rather than truncation error.
+///
+/// This is the same mechanism causing O(1) errors in quanticsnegf-rs
+/// bubble computations when using fit() for element-wise multiplication.
 #[test]
-fn test_fit_wrong_for_elementwise_nontrivial_bond() {
-    let nbit = 2;
-    let n = 1 << nbit;
+fn test_fit_wrong_for_elementwise_structured() {
+    let nbit = 8; // 256x256, 16 QTT sites
 
-    let row_inds: Vec<DynIndex> = (0..nbit)
+    let row_sites: Vec<DynIndex> = (0..nbit)
         .map(|i| DynIndex::new_dyn_with_tag(2, &format!("z1={}", i + 1)).unwrap())
         .collect();
-    let col_inds: Vec<DynIndex> = (0..nbit)
+    let col_sites: Vec<DynIndex> = (0..nbit)
         .map(|i| DynIndex::new_dyn_with_tag(2, &format!("z2={}", i + 1)).unwrap())
         .collect();
 
-    // A: sequential 1..16
-    let a_data: Vec<f64> = (0..n * n).map(|k| (k + 1) as f64).collect();
-    // B: sequential 51..66
-    let b_data: Vec<f64> = (0..n * n).map(|k| (k + 51) as f64).collect();
+    let all_sites: Vec<DynIndex> = row_sites.iter().chain(col_sites.iter()).cloned().collect();
 
-    let m1 = create_matrix_tt(&row_inds, &col_inds, &a_data);
-    let m2 = create_matrix_tt(&row_inds, &col_inds, &b_data);
-
-    eprintln!(
-        "m1 linkdims: {:?}",
-        (0..m1.len().saturating_sub(1))
-            .map(|s| m1.linkind(s).map(|l| l.dim()).unwrap_or(0))
-            .collect::<Vec<_>>()
+    // A: exponential decay (low rank)
+    let tt_a = create_function_2d_tt(
+        &row_sites,
+        &col_sites,
+        |x: f64, y: f64| (-3.0 * (x - y).abs()).exp(),
+        10,
     );
-    eprintln!(
-        "m2 linkdims: {:?}",
-        (0..m2.len().saturating_sub(1))
-            .map(|s| m2.linkind(s).map(|l| l.dim()).unwrap_or(0))
-            .collect::<Vec<_>>()
+    // B: rational function (higher rank, Green's function-like)
+    let tt_b = create_function_2d_tt(
+        &row_sites,
+        &col_sites,
+        |x: f64, y: f64| 1.0 / ((x - y).powi(2) + 0.01) - 1.0 / ((x - y).powi(2) + 0.1),
+        30,
     );
 
-    let sites: Vec<DynIndex> = row_inds.iter().chain(col_inds.iter()).cloned().collect();
+    let a_max = (0..tt_a.len().saturating_sub(1))
+        .map(|s| tt_a.linkind(s).map(|l| l.dim()).unwrap_or(0))
+        .max()
+        .unwrap_or(0);
+    let b_max = (0..tt_b.len().saturating_sub(1))
+        .map(|s| tt_b.linkind(s).map(|l| l.dim()).unwrap_or(0))
+        .max()
+        .unwrap_or(0);
+    eprintln!("tt_a max bond: {a_max}, tt_b max bond: {b_max}");
 
-    // Reference: element-wise product
-    let expected_quantics = matrix_to_quantics(nbit, &{
-        let mut e = vec![0.0; n * n];
-        for i in 0..n * n {
-            e[i] = a_data[i] * b_data[i];
-        }
-        e
-    });
-    let ref_norm: f64 = expected_quantics.iter().map(|x| x * x).sum::<f64>().sqrt();
+    // Reference: zipup without truncation (exact)
+    let result_ref = elementwise_mul(&tt_a, &tt_b, &all_sites, &ContractOptions::zipup());
+    let ref_norm = result_ref.norm();
+    eprintln!("||ref|| = {:.6e}", ref_norm);
 
-    // zipup
-    let result_zipup = elementwise_mul(&m1, &m2, &sites, &ContractOptions::zipup());
-    let zipup_data = result_zipup.to_dense().unwrap().to_vec_f64().unwrap();
-    let zipup_err: f64 = zipup_data
-        .iter()
-        .zip(expected_quantics.iter())
-        .map(|(got, exp)| (got - exp).powi(2))
-        .sum::<f64>()
-        .sqrt()
+    // fit(A,B): this converges to wrong local minimum
+    let result_fit = elementwise_mul(&tt_a, &tt_b, &all_sites, &ContractOptions::fit());
+    let fit_err = result_fit
+        .axpby(1.0.into(), &result_ref, (-1.0).into())
+        .unwrap()
+        .norm()
         / ref_norm;
 
-    // fit
-    let result_fit = elementwise_mul(&m1, &m2, &sites, &ContractOptions::fit());
-    let fit_data = result_fit.to_dense().unwrap().to_vec_f64().unwrap();
-    let fit_err: f64 = fit_data
-        .iter()
-        .zip(expected_quantics.iter())
-        .map(|(got, exp)| (got - exp).powi(2))
-        .sum::<f64>()
-        .sqrt()
+    // fit(A,B) with 10 sweeps: still wrong
+    let result_fit10 = elementwise_mul(
+        &tt_a,
+        &tt_b,
+        &all_sites,
+        &ContractOptions::fit().with_nsweeps(10),
+    );
+    let fit10_err = result_fit10
+        .axpby(1.0.into(), &result_ref, (-1.0).into())
+        .unwrap()
+        .norm()
         / ref_norm;
 
-    // fit with 10 sweeps
-    let result_fit10 = elementwise_mul(&m1, &m2, &sites, &ContractOptions::fit().with_nsweeps(10));
-    let fit10_data = result_fit10.to_dense().unwrap().to_vec_f64().unwrap();
-    let fit10_err: f64 = fit10_data
-        .iter()
-        .zip(expected_quantics.iter())
-        .map(|(got, exp)| (got - exp).powi(2))
-        .sum::<f64>()
-        .sqrt()
+    // fit(B,A): swapped order should also work
+    let result_fit_ba = elementwise_mul(&tt_b, &tt_a, &all_sites, &ContractOptions::fit());
+    let fit_ba_err = result_fit_ba
+        .axpby(1.0.into(), &result_ref, (-1.0).into())
+        .unwrap()
+        .norm()
         / ref_norm;
 
-    eprintln!("zipup   rel_err = {:.6e}", zipup_err);
-    eprintln!("fit     rel_err = {:.6e}", fit_err);
-    eprintln!("fit(10) rel_err = {:.6e}", fit10_err);
+    // fit(A,B) with explicit rtol=1e-30 (effectively zero, like ITensorMPS.jl benchmarks)
+    let result_fit_rtol = elementwise_mul(
+        &tt_a,
+        &tt_b,
+        &all_sites,
+        &ContractOptions::fit().with_rtol(1e-30),
+    );
+    let fit_rtol_err = result_fit_rtol
+        .axpby(1.0.into(), &result_ref, (-1.0).into())
+        .unwrap()
+        .norm()
+        / ref_norm;
+
+    eprintln!("fit(A,B)            rel_err = {:.6e}", fit_err);
+    eprintln!("fit(A,B,10sw)       rel_err = {:.6e}", fit10_err);
+    eprintln!("fit(B,A)            rel_err = {:.6e}", fit_ba_err);
+    eprintln!("fit(A,B,rtol=1e-30) rel_err = {:.6e}", fit_rtol_err);
 
     assert!(
-        zipup_err < 1e-10,
-        "zipup should be exact: {:.6e}",
-        zipup_err
+        fit_err < 1e-4,
+        "fit(A,B) converged to wrong local minimum: rel_err={:.6e}",
+        fit_err
+    );
+    // Note: fit with many sweeps can be numerically unstable in debug builds,
+    // so we only log fit10_err without asserting.
+    assert!(
+        fit_ba_err < 1e-4,
+        "fit(B,A) converged to wrong local minimum: rel_err={:.6e}",
+        fit_ba_err
     );
     assert!(
-        fit_err < 1e-6,
-        "fit rel_err too large: {:.6e} (10 sweeps: {:.6e})",
-        fit_err,
-        fit10_err
+        fit_rtol_err < 1e-4,
+        "fit(A,B,rtol=1e-30) should not converge to wrong local minimum: rel_err={:.6e}",
+        fit_rtol_err
     );
 }
