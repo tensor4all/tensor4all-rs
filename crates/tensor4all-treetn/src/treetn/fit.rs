@@ -525,11 +525,24 @@ where
         };
         options = options.with_canonical(Canonical::Left);
 
-        if let Some(max_rank) = self.max_rank {
-            options = options.with_max_rank(max_rank);
-        }
-        if let Some(rtol) = self.rtol {
-            options = options.with_rtol(rtol);
+        // Use user's explicit rtol if specified, otherwise rtol=0.
+        // We must NOT let the default_svd_rtol fallback (1e-12) be applied,
+        // so we always set an explicit value here.
+        options = options.with_rtol(self.rtol.unwrap_or(0.0));
+
+        // Cap the bond dimension during sweeps.
+        // By default, fit preserves the bond dimensions from the initial zipup
+        // guess and does not allow them to grow. This prevents numerical
+        // instability from unbounded bond dimension increase during 2-site updates.
+        // If the user specifies max_rank, that value is used instead.
+        let bond_cap = self.max_rank.or_else(|| {
+            subtree
+                .edge_between(node_u, node_v)
+                .and_then(|e| subtree.bond_index(e))
+                .map(|b| b.dim())
+        });
+        if let Some(cap) = bond_cap {
+            options = options.with_max_rank(cap);
         }
 
         // Factorize using TensorLike::factorize
@@ -673,8 +686,12 @@ where
         ));
     }
 
-    // Initialize C using zipup (arguments: rtol, max_rank)
-    let mut tn_c = tn_a.contract_zipup(tn_b, center, options.rtol, options.max_rank)?;
+    // Initialize C using zipup (arguments: rtol, max_rank).
+    // When rtol is not specified, use 0.0 to prevent the default_svd_rtol
+    // fallback (1e-12) from being applied. This is consistent with how
+    // rtol is handled during sweeps.
+    let zipup_rtol = Some(options.rtol.unwrap_or(0.0));
+    let mut tn_c = tn_a.contract_zipup(tn_b, center, zipup_rtol, options.max_rank)?;
 
     // Canonicalize towards center
     tn_c = tn_c.canonicalize([center.clone()], CanonicalizationOptions::default())?;
