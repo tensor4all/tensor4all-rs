@@ -206,7 +206,8 @@ fn compute_retained_rank_qr_from_storage(
 /// The input tensor can have any rank >= 2, and indices are split into left and right groups.
 /// The tensor is unfolded into a matrix by grouping left indices as rows and right indices as columns.
 ///
-/// Truncation is performed based on R's diagonal elements: columns with |R[i, i]| < rtol are truncated.
+/// Truncation is performed based on R's row norms: rows whose norm is below
+/// `rtol * max_row_norm` are discarded.
 ///
 /// For the mathematical convention:
 /// \[ A = Q * R \]
@@ -257,7 +258,8 @@ where
 /// The input tensor can have any rank >= 2, and indices are split into left and right groups.
 /// The tensor is unfolded into a matrix by grouping left indices as rows and right indices as columns.
 ///
-/// Truncation is performed based on R's diagonal elements: columns with |R[i, i]| < rtol are truncated.
+/// Truncation is performed based on R's row norms: rows whose norm is below
+/// `rtol * max_row_norm` are discarded.
 ///
 /// For the mathematical convention:
 /// \[ A = Q * R \]

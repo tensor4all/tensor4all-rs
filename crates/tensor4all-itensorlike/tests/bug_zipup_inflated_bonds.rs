@@ -137,7 +137,7 @@ fn test_truncate_drops_significant_singular_values() {
     let rel_err = diff.norm() / f_dense_before.norm();
     eprintln!("rel_err = {:.6e}", rel_err);
 
-    // truncate with rtol=0.0 also gives wrong results!
+    // truncate with rtol=0.0 should also preserve the function
     let mut f_trunc0 = f.clone();
     f_trunc0
         .truncate(&TruncateOptions::svd().with_rtol(0.0))
@@ -148,13 +148,13 @@ fn test_truncate_drops_significant_singular_values() {
         .unwrap();
     let rel_err_0 = diff_0.norm() / f_dense_before.norm();
     eprintln!(
-        "truncate(rtol=0.0): bonds={:?} rel_err={:.6e} (also wrong!)",
+        "truncate(rtol=0.0): bonds={:?} rel_err={:.6e}",
         bond_dims(&f_trunc0),
         rel_err_0
     );
     assert!(
         rel_err_0 < 1e-12,
-        "truncate(rtol=0.0) also changed the function! rel_err={:.6e}",
+        "truncate(rtol=0.0) changed the function! rel_err={:.6e}",
         rel_err_0,
     );
 
