@@ -143,23 +143,39 @@ fn compute_retained_rank_qr_from_storage(
     }
 
     let max_diag = k.min(n);
-    let mut r = max_diag;
-    match r_full {
+
+    // Compute row norms of R (upper triangular: row i has entries from column i..n).
+    // Use relative comparison against the maximum row norm, matching
+    // compute_retained_rank_qr. The previous implementation compared diagonal
+    // elements absolutely and broke at the first small value, which is incorrect
+    // for non-pivoted QR where diagonal elements are not necessarily in
+    // decreasing order.
+    let row_norms: Vec<f64> = match r_full {
         Storage::DenseF64(data) => {
-            for i in 0..max_diag {
-                if data.as_slice()[i * n + i].abs() < rtol {
-                    r = i;
-                    break;
-                }
-            }
+            let s = data.as_slice();
+            (0..max_diag)
+                .map(|i| {
+                    let mut norm_sq: f64 = 0.0;
+                    for j in i..n {
+                        let val = s[i * n + j].abs();
+                        norm_sq += val * val;
+                    }
+                    norm_sq.sqrt()
+                })
+                .collect()
         }
         Storage::DenseC64(data) => {
-            for i in 0..max_diag {
-                if data.as_slice()[i * n + i].abs() < rtol {
-                    r = i;
-                    break;
-                }
-            }
+            let s = data.as_slice();
+            (0..max_diag)
+                .map(|i| {
+                    let mut norm_sq: f64 = 0.0;
+                    for j in i..n {
+                        let val = s[i * n + j].abs();
+                        norm_sq += val * val;
+                    }
+                    norm_sq.sqrt()
+                })
+                .collect()
         }
         other => {
             return Err(QrError::ComputationError(anyhow::anyhow!(
@@ -167,7 +183,15 @@ fn compute_retained_rank_qr_from_storage(
                 std::mem::discriminant(other)
             )));
         }
+    };
+
+    let max_row_norm = row_norms.iter().cloned().fold(0.0_f64, f64::max);
+    if max_row_norm == 0.0 {
+        return Ok(1);
     }
+
+    let threshold = rtol * max_row_norm;
+    let r = row_norms.iter().filter(|&&norm| norm >= threshold).count();
     Ok(r.max(1))
 }
 

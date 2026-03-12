@@ -224,8 +224,9 @@ fn test_truncate_drops_sv_various_sizes() {
     }
 }
 
-/// Zipup gives small but systematic errors with inflated bond dimensions.
-/// This is a secondary issue — the truncate bug above is more critical.
+/// Zipup should give identical results for direct and accumulated TTs.
+/// Compare using dense tensors to avoid catastrophic cancellation in
+/// TT norm of the direct-sum difference.
 #[test]
 fn test_zipup_small_error_with_accumulated_tt() {
     for nbit in [3, 4] {
@@ -266,10 +267,13 @@ fn test_zipup_small_error_with_accumulated_tt() {
         let result_direct = f_direct.contract(&g, &options).unwrap();
         let result_accum = f_accumulated.contract(&g, &options).unwrap();
 
-        let diff = result_direct
-            .add(&result_accum.scale(AnyScalar::new_real(-1.0)).unwrap())
+        // Compare dense representations to avoid catastrophic cancellation
+        let dense_direct = result_direct.to_dense().unwrap();
+        let dense_accum = result_accum.to_dense().unwrap();
+        let diff = dense_direct
+            .add(&dense_accum.scale(AnyScalar::new_real(-1.0)).unwrap())
             .unwrap();
-        let rel_err = diff.norm() / result_direct.norm();
+        let rel_err = diff.norm() / dense_direct.norm();
 
         eprintln!(
             "nbit={}: bonds direct={:?} accum={:?} rel_err={:.6e}",
