@@ -530,17 +530,24 @@ where
         // so we always set an explicit value here.
         options = options.with_rtol(self.rtol.unwrap_or(0.0));
 
-        // Cap the bond dimension during sweeps.
-        // By default, fit preserves the bond dimensions from the initial zipup
-        // guess and does not allow them to grow. This prevents numerical
-        // instability from unbounded bond dimension increase during 2-site updates.
-        // If the user specifies max_rank, that value is used instead.
-        let bond_cap = self.max_rank.or_else(|| {
+        // Determine bond dimension cap for this factorization step.
+        // - If max_rank is explicitly specified, use it.
+        // - If a positive rtol is specified (but max_rank is not), allow bonds
+        //   to grow freely — truncation is controlled only by rtol, matching
+        //   Julia's ITensorMPS.jl where maxdim defaults to typemax(Int).
+        // - Otherwise (neither specified, or rtol=0), cap at the existing bond
+        //   dimension to preserve the zipup initialization size. This ensures
+        //   that with_rtol(0.0) and no rtol behave identically (both cap bonds).
+        let bond_cap = if self.max_rank.is_some() {
+            self.max_rank
+        } else if self.rtol.is_some_and(|r| r > 0.0) {
+            None // positive rtol controls truncation; no bond cap
+        } else {
             subtree
                 .edge_between(node_u, node_v)
                 .and_then(|e| subtree.bond_index(e))
                 .map(|b| b.dim())
-        });
+        };
         if let Some(cap) = bond_cap {
             options = options.with_max_rank(cap);
         }
