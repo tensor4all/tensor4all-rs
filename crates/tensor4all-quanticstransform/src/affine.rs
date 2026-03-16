@@ -24,13 +24,13 @@ use crate::common::{
 /// Affine transformation parameters.
 ///
 /// Represents the transformation y = A*x + b where:
-/// - A is an M×N matrix (stored row-major)
+/// - A is an M×N matrix stored in column-major order
 /// - b is an M-dimensional vector
 /// - x is an N-dimensional input
 /// - y is an M-dimensional output
 #[derive(Clone, Debug)]
 pub struct AffineParams {
-    /// Transformation matrix A (M×N), stored row-major
+    /// Transformation matrix A (M×N), stored in column-major order
     pub a: Vec<Rational64>,
     /// Translation vector b (M elements)
     pub b: Vec<Rational64>,
@@ -44,7 +44,7 @@ impl AffineParams {
     /// Create new affine parameters.
     ///
     /// # Arguments
-    /// * `a` - M×N matrix in row-major order
+    /// * `a` - M×N matrix in column-major order
     /// * `b` - M-dimensional translation vector
     /// * `m` - Number of output dimensions
     /// * `n` - Number of input dimensions
@@ -78,7 +78,7 @@ impl AffineParams {
     /// Get element A[i, j] (0-indexed)
     #[allow(dead_code)]
     fn get_a(&self, i: usize, j: usize) -> Rational64 {
-        self.a[i * self.n + j]
+        self.a[i + self.m * j]
     }
 
     /// Convert to integer representation by scaling with LCM of denominators.
@@ -289,7 +289,7 @@ pub fn affine_transform_matrix(
         for i in 0..m {
             v[i] = b_int[i];
             for j in 0..n {
-                v[i] += a_int[i * n + j] * x[j];
+                v[i] += a_int[i + m * j] * x[j];
             }
         }
 
@@ -370,7 +370,7 @@ fn affine_transform_mpo(
 /// ```ignore
 /// use tensor4all_quantics_transform::{affine_transform_tensors_unfused, AffineParams, BoundaryCondition};
 ///
-/// let params = AffineParams::from_integers(vec![1, 0, 1, 1], vec![0, 0], 2, 2).unwrap();
+/// let params = AffineParams::from_integers(vec![1, 1, 0, 1], vec![0, 0], 2, 2).unwrap();
 /// let bc = vec![BoundaryCondition::Periodic; 2];
 /// let tensors = affine_transform_tensors_unfused(4, &params, &bc).unwrap();
 /// // Each tensor has shape [left, 2, 2, 2, 2, right] for M=2, N=2
@@ -413,8 +413,7 @@ pub fn affine_transform_tensors_unfused(
     // and   x_bits = x[0] + 2*x[1] + ... + 2^(N-1)*x[N-1]
     //
     // Quantics.jl order: (y[0], y[1], ..., y[M-1], x[0], x[1], ..., x[N-1])
-    // For DTensor with row-major (C order), rightmost index varies fastest.
-    // We want the order to match Quantics.jl, so:
+    // We preserve that semantic index order:
     // unfused[left, y0, y1, ..., yM-1, x0, x1, ..., xN-1, right]
 
     let mut unfused_tensors = Vec::with_capacity(r);
@@ -440,14 +439,8 @@ pub fn affine_transform_tensors_unfused(
         // fused site_idx -> (y0, y1, ..., yM-1, x0, x1, ..., xN-1)
         // site_idx = y0 + 2*y1 + ... + 2^(M-1)*yM-1 + 2^M * (x0 + 2*x1 + ...)
 
-        // For Quantics.jl compatibility, we need to reorder the data.
-        // Julia uses column-major (Fortran order), Rust/C uses row-major.
-        // In Julia: tensor[link_in, link_out, y1, y2, ..., yM, x1, x2, ..., xN]
-        // ITensor reshapes this appropriately.
-        //
-        // For Rust with row-major:
-        // We'll create a tensor where the physical indices are in the order
-        // (y0, y1, ..., yM-1, x0, x1, ..., xN-1) matching Quantics.jl
+        // Preserve the Quantics.jl physical index order
+        // (y0, y1, ..., yM-1, x0, x1, ..., xN-1).
 
         let mut unfused_data = vec![Complex64::new(0.0, 0.0); left_dim * site_dim * right_dim];
 
@@ -815,7 +808,7 @@ fn affine_transform_core(
             for i in 0..m {
                 z[i] = carry_in[i] + b_curr[i];
                 for j in 0..n {
-                    z[i] += a_int[i * n + j] * x[j];
+                    z[i] += a_int[i + m * j] * x[j];
                 }
             }
 
@@ -926,6 +919,19 @@ mod tests {
     }
 
     #[test]
+    fn test_affine_params_column_major_indexing() {
+        // Matrix [[1, 2, 3], [4, 5, 6]] stored column-major.
+        let params = AffineParams::from_integers(vec![1, 4, 2, 5, 3, 6], vec![0, 0], 2, 3).unwrap();
+
+        assert_eq!(params.get_a(0, 0), Rational64::from_integer(1));
+        assert_eq!(params.get_a(1, 0), Rational64::from_integer(4));
+        assert_eq!(params.get_a(0, 1), Rational64::from_integer(2));
+        assert_eq!(params.get_a(1, 1), Rational64::from_integer(5));
+        assert_eq!(params.get_a(0, 2), Rational64::from_integer(3));
+        assert_eq!(params.get_a(1, 2), Rational64::from_integer(6));
+    }
+
+    #[test]
     fn test_affine_params_to_integer_scaled() {
         // Test with rational coefficients
         let a = vec![
@@ -958,7 +964,7 @@ mod tests {
     #[test]
     fn test_affine_operator_creation() {
         // Simple 2D transformation
-        let a = vec![1i64, 1, 1, -1]; // [[1, 1], [1, -1]]
+        let a = vec![1i64, 1, 1, -1]; // [[1, 1], [1, -1]] in column-major
         let b = vec![0i64, 0];
         let params = AffineParams::from_integers(a, b, 2, 2).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 2];
@@ -1400,7 +1406,7 @@ mod tests {
                 .map(|i| {
                     let mut val = params.b[i];
                     for j in 0..n {
-                        val += params.a[i * n + j] * Rational64::from_integer(x_vals[j]);
+                        val += params.a[i + m * j] * Rational64::from_integer(x_vals[j]);
                     }
                     val
                 })
@@ -1491,7 +1497,7 @@ mod tests {
 
     #[test]
     fn test_affine_mpo_vs_matrix_simple() {
-        let params = AffineParams::from_integers(vec![1, 0, 1, 1], vec![0, 0], 2, 2).unwrap();
+        let params = AffineParams::from_integers(vec![1, 1, 0, 1], vec![0, 0], 2, 2).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 2];
         assert_affine_mpo_matches_matrix(3, &params, &bc);
     }
@@ -1501,7 +1507,7 @@ mod tests {
         // From Quantics.jl compare_hard test
         // A = [1 0 1; 1 2 -1; 0 1 1], b = [11; 23; -15]
         let r = 3;
-        let a = vec![1i64, 0, 1, 1, 2, -1, 0, 1, 1];
+        let a = vec![1i64, 1, 0, 0, 2, 1, 1, -1, 1];
         let b = vec![11i64, 23, -15];
         let params = AffineParams::from_integers(a, b, 3, 3).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 3];
@@ -1513,7 +1519,7 @@ mod tests {
         // From Quantics.jl compare_rect test
         // A = [1 0 1; 1 2 0] (2x3), b = [11; -3]
         let r = 4;
-        let a = vec![1i64, 0, 1, 1, 2, 0];
+        let a = vec![1i64, 1, 0, 2, 1, 0];
         let b = vec![11i64, -3];
         let params = AffineParams::from_integers(a, b, 2, 3).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 2];
@@ -1562,7 +1568,7 @@ mod tests {
         // From Quantics.jl full test - verify T'*T == I for orthogonal transforms
         // A = [[1, 0], [1, 1]], b = [0, 0]
         let r = 4;
-        let a = vec![1i64, 0, 1, 1]; // [[1, 0], [1, 1]]
+        let a = vec![1i64, 1, 0, 1]; // [[1, 0], [1, 1]] in column-major
         let b = vec![0i64, 0];
         let params = AffineParams::from_integers(a, b, 2, 2).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 2];
@@ -1616,7 +1622,7 @@ mod tests {
         // From Quantics.jl full test with shift - verify T*T' == I
         // A = [[1, 0], [1, 1]], b = [4, 1]
         let r = 4;
-        let a = vec![1i64, 0, 1, 1];
+        let a = vec![1i64, 1, 0, 1];
         let b = vec![4i64, 1];
         let params = AffineParams::from_integers(a, b, 2, 2).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 2];
@@ -1722,7 +1728,7 @@ mod tests {
     fn test_unfused_vs_fused_equivalence() {
         // Verify that unfused tensors give the same matrix as fused
         let r = 2;
-        let params = AffineParams::from_integers(vec![1, 0, 1, 1], vec![0, 0], 2, 2).unwrap();
+        let params = AffineParams::from_integers(vec![1, 1, 0, 1], vec![0, 0], 2, 2).unwrap();
         let bc = vec![BoundaryCondition::Periodic; 2];
 
         let matrix = affine_transform_matrix(r, &params, &bc).unwrap();
@@ -1839,13 +1845,13 @@ mod tests {
                 n: 1,
             },
             TestCase {
-                a: vec![1, 0, 1, 1],
+                a: vec![1, 1, 0, 1],
                 b: vec![0, 1],
                 m: 2,
                 n: 2,
             },
             TestCase {
-                a: vec![2, 0, 4, 1],
+                a: vec![2, 4, 0, 1],
                 b: vec![100, -1],
                 m: 2,
                 n: 2,

@@ -1963,7 +1963,7 @@ fn test_affine_2d_rotation() {
 
     // 2D rotation: [[1, 1], [1, -1]] * [x1, x2]
     let params = AffineParams::from_integers(
-        vec![1, 1, 1, -1], // Row major: [1,1] for row 0, [1,-1] for row 1
+        vec![1, 1, 1, -1], // Column-major: col 0 = [1, 1], col 1 = [1, -1]
         vec![0, 0],
         2,
         2,
@@ -2099,7 +2099,7 @@ fn test_affine_mpo_matches_matrix() {
 /// via apply_operator_to_dense_matrix is not available.
 #[test]
 fn test_affine_transform_matrix_properties() {
-    // Test cases: (a_flat (row-major MxN), b (length M), m, n, bc)
+    // Test cases: (a_flat (column-major MxN), b (length M), m, n, bc)
     #[allow(clippy::type_complexity)]
     let test_cases: Vec<(Vec<i64>, Vec<i64>, usize, usize, Vec<BoundaryCondition>)> = vec![
         // y = x (identity, 1D)
