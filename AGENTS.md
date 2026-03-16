@@ -75,6 +75,7 @@ Only make functions `pub` when truly public API.
 
 - **Never access low-level APIs or internal data structures from downstream crates.** Use high-level public methods instead of directly manipulating internal representations.
 - **Use high-level APIs.** If downstream code needs low-level access, create appropriate high-level APIs rather than exposing internal details.
+- **Prefer type-generic Rust APIs.** If a public Rust library API can be expressed generically, do not introduce scalar-specific entry points such as `*_f64` / `*_c64`. Add or use a generic API instead, and prefer the generic form in library code, tests, examples, and docs. This rule does not apply to the C API / FFI boundary, where scalar-specific names may be appropriate.
 - **Examples:**
   - Instead of `match scalar { AnyScalar::F64(x) => ... }`, use `scalar.real()`, `scalar.is_complex()`, `scalar.is_zero()`
   - Instead of `AnyScalar::F64(1.0)`, use `AnyScalar::new_real(1.0)`
