@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Deref, DerefMut, Mul};
 use std::sync::Arc;
 
-use crate::layout::dense_strides;
+use crate::layout::storage_strides;
 use crate::tensor_element::TensorElement;
 
 /// Trait for scalar types that can be used in dense storage.
@@ -555,7 +555,7 @@ fn contract_diag_dense_impl<T: DenseScalar>(
     let result_size = if result_size == 0 { 1 } else { result_size };
 
     // Compute strides for dense tensor (row-major)
-    let dense_axis_strides = dense_strides(dense_dims);
+    let dense_axis_strides = storage_strides(dense_dims);
 
     // Compute the size of the non-contracted part of dense
     let dense_non_contracted_dims: Vec<usize> = dense_non_contracted
@@ -570,7 +570,7 @@ fn contract_diag_dense_impl<T: DenseScalar>(
     };
 
     // Compute strides for the non-contracted dense dimensions
-    let dense_non_contracted_strides = dense_strides(&dense_non_contracted_dims);
+    let dense_non_contracted_strides = storage_strides(&dense_non_contracted_dims);
 
     // If all diag axes are contracted, result has shape = dense_non_contracted_dims
     // If some diag axes remain, result has shape = [d, d, ...] (diag non-contracted) + dense_non_contracted_dims
@@ -611,7 +611,7 @@ fn contract_diag_dense_impl<T: DenseScalar>(
         // Result is effectively: for each t, result[t,t,...,dense_indices] = diag[t] * dense_slice
 
         // Compute result strides
-        let result_strides = dense_strides(result_dims);
+        let result_strides = storage_strides(result_dims);
 
         let mut result = vec![T::zero(); result_size];
 
@@ -1833,6 +1833,7 @@ impl Mul<AnyScalar> for &Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::storage_strides;
     use crate::{dense_linear_multi_index, dense_linear_offset};
 
     /// Helper to extract f64 data from storage
@@ -2428,31 +2429,31 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_strides_freezes_current_row_major_semantics() {
-        assert_eq!(dense_strides(&[]), Vec::<usize>::new());
-        assert_eq!(dense_strides(&[4]), vec![1]);
-        assert_eq!(dense_strides(&[2, 3]), vec![3, 1]);
-        assert_eq!(dense_strides(&[2, 3, 4]), vec![12, 4, 1]);
-        assert_eq!(dense_strides(&[2, 1, 3]), vec![3, 3, 1]);
+    fn test_storage_strides_freeze_current_mdarray_backing_order() {
+        assert_eq!(storage_strides(&[]), Vec::<usize>::new());
+        assert_eq!(storage_strides(&[4]), vec![1]);
+        assert_eq!(storage_strides(&[2, 3]), vec![3, 1]);
+        assert_eq!(storage_strides(&[2, 3, 4]), vec![12, 4, 1]);
+        assert_eq!(storage_strides(&[2, 1, 3]), vec![3, 3, 1]);
     }
 
     #[test]
-    fn test_compute_strides_matches_current_row_major_linearization() {
+    fn test_compute_strides_matches_current_column_major_linearization() {
         let dims = [2, 3, 4];
         assert_eq!(dense_linear_offset(&dims, &[0, 0, 0]).unwrap(), 0);
-        assert_eq!(dense_linear_offset(&dims, &[0, 0, 1]).unwrap(), 1);
-        assert_eq!(dense_linear_offset(&dims, &[0, 1, 0]).unwrap(), 4);
-        assert_eq!(dense_linear_offset(&dims, &[1, 0, 0]).unwrap(), 12);
+        assert_eq!(dense_linear_offset(&dims, &[1, 0, 0]).unwrap(), 1);
+        assert_eq!(dense_linear_offset(&dims, &[0, 1, 0]).unwrap(), 2);
+        assert_eq!(dense_linear_offset(&dims, &[0, 0, 1]).unwrap(), 6);
         assert_eq!(dense_linear_offset(&dims, &[1, 2, 3]).unwrap(), 23);
     }
 
     #[test]
-    fn test_dense_linear_multi_index_matches_current_row_major_linearization() {
+    fn test_dense_linear_multi_index_matches_current_column_major_linearization() {
         let dims = [2, 3, 4];
         assert_eq!(dense_linear_multi_index(&dims, 0).unwrap(), vec![0, 0, 0]);
-        assert_eq!(dense_linear_multi_index(&dims, 1).unwrap(), vec![0, 0, 1]);
-        assert_eq!(dense_linear_multi_index(&dims, 4).unwrap(), vec![0, 1, 0]);
-        assert_eq!(dense_linear_multi_index(&dims, 12).unwrap(), vec![1, 0, 0]);
+        assert_eq!(dense_linear_multi_index(&dims, 1).unwrap(), vec![1, 0, 0]);
+        assert_eq!(dense_linear_multi_index(&dims, 2).unwrap(), vec![0, 1, 0]);
+        assert_eq!(dense_linear_multi_index(&dims, 6).unwrap(), vec![0, 0, 1]);
         assert_eq!(dense_linear_multi_index(&dims, 23).unwrap(), vec![1, 2, 3]);
     }
 

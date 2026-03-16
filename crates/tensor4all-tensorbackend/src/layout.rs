@@ -2,9 +2,20 @@ use anyhow::{anyhow, Result};
 
 /// Compute dense strides for the current backend linearization semantics.
 ///
-/// The current semantics are row-major; the column-major migration will flip
-/// this implementation in one place.
-pub(crate) fn dense_strides(dims: &[usize]) -> Vec<usize> {
+/// The current public dense linearization is column-major.
+fn dense_linear_strides(dims: &[usize]) -> Vec<usize> {
+    if dims.is_empty() {
+        return vec![];
+    }
+    let mut strides = vec![1; dims.len()];
+    for i in 1..dims.len() {
+        strides[i] = strides[i - 1] * dims[i - 1];
+    }
+    strides
+}
+
+/// Compute strides for the current mdarray-backed physical storage order.
+pub(crate) fn storage_strides(dims: &[usize]) -> Vec<usize> {
     if dims.is_empty() {
         return vec![];
     }
@@ -25,7 +36,7 @@ pub fn dense_linear_offset(dims: &[usize], idx: &[usize]) -> Result<usize> {
         ));
     }
 
-    let strides = dense_strides(dims);
+    let strides = dense_linear_strides(dims);
     let mut offset = 0usize;
     for (axis, ((&dim, &value), stride)) in dims
         .iter()
@@ -67,10 +78,12 @@ pub fn dense_linear_multi_index(dims: &[usize], linear: usize) -> Result<Vec<usi
         ));
     }
 
-    let strides = dense_strides(dims);
+    let strides = dense_linear_strides(dims);
     let mut remaining = linear;
     let mut multi = vec![0; dims.len()];
-    for (axis, (&dim, &stride)) in dims.iter().zip(strides.iter()).enumerate() {
+    for axis in (0..dims.len()).rev() {
+        let dim = dims[axis];
+        let stride = strides[axis];
         if dim == 0 {
             return Err(anyhow!(
                 "dense_linear_multi_index: zero dimension at axis {}",

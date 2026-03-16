@@ -21,7 +21,8 @@ pub trait TensorElement: Copy + Send + Sync + 'static {
     /// Build a rank-0 native tensor.
     fn scalar_native_tensor(value: Self) -> Result<NativeTensor>;
 
-    /// Materialize dense row-major primal values from a native tensor.
+    /// Materialize dense primal values from a native tensor using tensor4all's
+    /// current boundary linearization convention.
     fn dense_values_from_native(tensor: &NativeTensor) -> Result<Vec<Self>>;
 
     /// Materialize diagonal payload values from a native diagonal tensor.
@@ -32,19 +33,19 @@ fn materialize_typed_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Res
 where
     T: tenferro_algebra::Scalar + Copy + Conjugate,
 {
-    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
-    let is_conjugated = row_major.is_conjugated();
-    let row_major = if row_major.logical_memory_space() == LogicalMemorySpace::MainMemory {
-        row_major
+    let linearized = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let is_conjugated = linearized.is_conjugated();
+    let linearized = if linearized.logical_memory_space() == LogicalMemorySpace::MainMemory {
+        linearized
     } else {
-        row_major
+        linearized
             .to_memory_space_async(LogicalMemorySpace::MainMemory)
             .map_err(|e| anyhow!("{op}: failed to move tensor to host memory: {e}"))?
     };
-    let offset = usize::try_from(row_major.offset())
-        .map_err(|_| anyhow!("{op}: negative offset {}", row_major.offset()))?;
-    let len = row_major.len();
-    let slice = row_major
+    let offset = usize::try_from(linearized.offset())
+        .map_err(|_| anyhow!("{op}: negative offset {}", linearized.offset()))?;
+    let len = linearized.len();
+    let slice = linearized
         .buffer()
         .as_slice()
         .and_then(|values: &[T]| values.get(offset..offset + len))
@@ -63,7 +64,7 @@ macro_rules! impl_tensor_element {
                 data: &[Self],
                 dims: &[usize],
             ) -> Result<NativeTensor> {
-                let typed = TypedTensor::<Self>::from_slice(data, dims, MemoryOrder::RowMajor)
+                let typed = TypedTensor::<Self>::from_slice(data, dims, MemoryOrder::ColumnMajor)
                     .map_err(|e| anyhow!("failed to build native dense tensor: {e}"))?;
                 Ok(NativeTensor::from_tensor(typed))
             }
@@ -79,7 +80,7 @@ macro_rules! impl_tensor_element {
                 }
 
                 let payload =
-                    TypedTensor::<Self>::from_slice(data, &[data.len()], MemoryOrder::RowMajor)
+                    TypedTensor::<Self>::from_slice(data, &[data.len()], MemoryOrder::ColumnMajor)
                         .map_err(|e| anyhow!("failed to build native diagonal payload: {e}"))?;
                 NativeTensor::from_tensor(payload)
                     .diag_embed(logical_rank)

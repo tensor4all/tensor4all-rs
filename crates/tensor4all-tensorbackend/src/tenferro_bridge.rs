@@ -428,12 +428,14 @@ pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage>
     }
 }
 
-/// Materialize the dense primal payload of a native tensor as row-major `f64`.
+/// Materialize the dense primal payload of a native tensor using tensor4all's
+/// current boundary linearization convention as `f64`.
 pub fn native_tensor_primal_to_dense_f64(tensor: &NativeTensor) -> Result<Vec<f64>> {
     <f64 as TensorElement>::dense_values_from_native(tensor)
 }
 
-/// Materialize the dense primal payload of a native tensor as row-major `Complex64`.
+/// Materialize the dense primal payload of a native tensor using tensor4all's
+/// current boundary linearization convention as `Complex64`.
 pub fn native_tensor_primal_to_dense_c64(tensor: &NativeTensor) -> Result<Vec<Complex64>> {
     <Complex64 as TensorElement>::dense_values_from_native(tensor)
 }

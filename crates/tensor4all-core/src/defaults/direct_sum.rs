@@ -363,18 +363,19 @@ mod tests {
         // Check data
         let data = result.to_vec_f64().unwrap();
 
-        // i=0: [1, 2, 3, 10, 20, 30, 40]
-        // i=1: [4, 5, 6, 50, 60, 70, 80]
+        // Column-major flattening of:
+        // i=0: [1, 3, 5, 10, 30, 50, 70]
+        // i=1: [2, 4, 6, 20, 40, 60, 80]
         assert_eq!(data[0], 1.0);
         assert_eq!(data[1], 2.0);
         assert_eq!(data[2], 3.0);
-        assert_eq!(data[3], 10.0);
-        assert_eq!(data[4], 20.0);
-        assert_eq!(data[5], 30.0);
-        assert_eq!(data[6], 40.0);
-        assert_eq!(data[7], 4.0);
-        assert_eq!(data[8], 5.0);
-        assert_eq!(data[9], 6.0);
+        assert_eq!(data[3], 4.0);
+        assert_eq!(data[4], 5.0);
+        assert_eq!(data[5], 6.0);
+        assert_eq!(data[6], 10.0);
+        assert_eq!(data[7], 20.0);
+        assert_eq!(data[8], 30.0);
+        assert_eq!(data[9], 40.0);
         assert_eq!(data[10], 50.0);
         assert_eq!(data[11], 60.0);
         assert_eq!(data[12], 70.0);
