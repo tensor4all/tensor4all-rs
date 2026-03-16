@@ -2433,6 +2433,33 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_strides_freezes_current_row_major_semantics() {
+        assert_eq!(compute_strides(&[]), Vec::<usize>::new());
+        assert_eq!(compute_strides(&[4]), vec![1]);
+        assert_eq!(compute_strides(&[2, 3]), vec![3, 1]);
+        assert_eq!(compute_strides(&[2, 3, 4]), vec![12, 4, 1]);
+        assert_eq!(compute_strides(&[2, 1, 3]), vec![3, 3, 1]);
+    }
+
+    #[test]
+    fn test_compute_strides_matches_current_row_major_linearization() {
+        let dims = [2, 3, 4];
+        let strides = compute_strides(&dims);
+        let offset = |idx: [usize; 3]| -> usize {
+            idx.into_iter()
+                .zip(strides.iter().copied())
+                .map(|(i, stride)| i * stride)
+                .sum()
+        };
+
+        assert_eq!(offset([0, 0, 0]), 0);
+        assert_eq!(offset([0, 0, 1]), 1);
+        assert_eq!(offset([0, 1, 0]), 4);
+        assert_eq!(offset([1, 0, 0]), 12);
+        assert_eq!(offset([1, 2, 3]), 23);
+    }
+
+    #[test]
     fn test_diag_contract_diag_diag_scalar_result() {
         // All indices contracted: inner product
         let d1 = DiagStorage::from_vec(vec![1.0, 2.0, 3.0]);
