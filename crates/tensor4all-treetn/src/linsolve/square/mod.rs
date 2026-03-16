@@ -167,8 +167,8 @@ mod tests {
         let s1 = DynIndex::new_dyn(2);
         let b01 = DynIndex::new_dyn(2);
 
-        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], vec![1.0; 4]);
-        let t1 = TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone()], vec![1.0; 4]);
+        let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
+        let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone()], vec![1.0; 4]).unwrap();
 
         let n0 = mps.add_tensor("site0".to_string(), t0).unwrap();
         let n1 = mps.add_tensor("site1".to_string(), t1).unwrap();
@@ -186,14 +186,14 @@ mod tests {
         let b_mpo = DynIndex::new_dyn(1);
 
         let id_data = vec![1.0, 0.0, 0.0, 1.0]; // Identity matrix
-        let t0_mpo = TensorDynLen::from_dense_f64(
+        let t0_mpo = TensorDynLen::from_dense(
             vec![s0_out.clone(), s0_in.clone(), b_mpo.clone()],
             id_data.clone(),
-        );
-        let t1_mpo = TensorDynLen::from_dense_f64(
-            vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()],
-            id_data,
-        );
+        )
+        .unwrap();
+        let t1_mpo =
+            TensorDynLen::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data)
+                .unwrap();
 
         let n0_mpo = mpo.add_tensor("site0".to_string(), t0_mpo).unwrap();
         let n1_mpo = mpo.add_tensor("site1".to_string(), t1_mpo).unwrap();
@@ -224,8 +224,8 @@ mod tests {
         let s1 = DynIndex::new_dyn(3);
         let b01 = DynIndex::new_dyn(2);
 
-        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], vec![1.0; 6]);
-        let t1 = TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone()], vec![1.0; 6]);
+        let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 6]).unwrap();
+        let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone()], vec![1.0; 6]).unwrap();
 
         let n0 = init.add_tensor("site0".to_string(), t0).unwrap();
         let n1 = init.add_tensor("site1".to_string(), t1).unwrap();

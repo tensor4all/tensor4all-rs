@@ -18,11 +18,12 @@
 //!
 //! // Create a tensor
 //! let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-//! let t = TensorDynLen::from_dense_f64(vec![i.clone(), j.clone()], data);
+//! let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 //! ```
 
 #![warn(missing_docs)]
 // Common (tags, utilities, scalar)
+pub mod forward_ad;
 pub mod global_default;
 pub mod index_like;
 pub mod scalar;
@@ -78,9 +79,9 @@ pub use defaults::tensordynlen::{
     unfold_split, TensorAccess, TensorDynLen,
 };
 pub use storage::{
-    make_mut_storage, mindim, storage_to_dtensor, DenseStorageFactory, Storage, StorageScalar,
-    SumFromStorage,
+    make_mut_storage, mindim, DenseStorageFactory, Storage, StorageScalar, SumFromStorage,
 };
+pub use tensor4all_tensorbackend::TensorElement;
 pub use tensor_like::{
     AllowedPairs, Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions,
     FactorizeResult, TensorLike,
@@ -89,9 +90,6 @@ pub use tensor_like::{
 // Contraction - backwards compatibility
 pub use defaults::contract;
 pub use defaults::contract::{contract_connected, contract_multi};
-
-// Linear algebra backend - re-exported from tensor4all-tensorbackend
-pub use tensor4all_tensorbackend::backend;
 
 // Re-export linear algebra modules from defaults for backwards compatibility
 // This allows `tensor4all_core::svd::...`, `tensor4all_core::qr::...`, etc.

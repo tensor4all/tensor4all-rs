@@ -1,17 +1,21 @@
 use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::index_ops::{common_ind_positions, prepare_contraction, prepare_contraction_pairs};
-use crate::storage::{storage_to_dtensor, AnyScalar, Storage, StorageScalar};
+use crate::storage::{AnyScalar, Storage};
 use anyhow::Result;
 use num_complex::Complex64;
+use num_traits::Zero;
 use std::collections::HashSet;
 use std::ops::{Mul, Neg, Sub};
 use std::sync::Arc;
-use tensor4all_tensorbackend::mdarray::DTensor;
+use tenferro::{AdMode, ScalarType as NativeScalarType, Tensor as NativeTensor};
 use tensor4all_tensorbackend::{
-    conj_dyn_ad_tensor_native, contract_dyn_ad_tensor_native, dyn_ad_tensor_primal_to_storage,
-    outer_product_dyn_ad_tensor_native, permute_dyn_ad_tensor_native, storage_to_dyn_ad_tensor,
-    sum_dyn_ad_tensor_native, DynAdTensor,
+    axpby_native_tensor, conj_native_tensor, contract_native_tensor,
+    dense_native_tensor_from_row_major, diag_native_tensor_from_row_major,
+    native_tensor_primal_to_dense_c64, native_tensor_primal_to_dense_f64,
+    native_tensor_primal_to_storage, outer_product_native_tensor, permute_native_tensor,
+    reshape_row_major_native_tensor, scale_native_tensor, storage_to_native_tensor,
+    sum_native_tensor, TensorElement,
 };
 
 /// Compute the permutation array from original indices to new indices.
@@ -86,13 +90,13 @@ pub trait TensorAccess {
 ///
 /// This is a concrete type using `DynIndex` (= `Index<DynId, TagSet>`).
 ///
-/// The canonical numeric payload is always [`DynAdTensor`].
+/// The canonical numeric payload is always [`tenferro::Tensor`].
 #[derive(Clone)]
 pub struct TensorDynLen {
     /// Full index information (includes tags and other metadata).
     pub indices: Vec<DynIndex>,
     /// Canonical native payload preserving AD metadata.
-    native: DynAdTensor,
+    native: NativeTensor,
 }
 
 impl TensorAccess for TensorDynLen {
@@ -125,8 +129,8 @@ impl TensorDynLen {
         Ok(())
     }
 
-    fn seed_native_payload(storage: &Storage, dims: &[usize]) -> Result<DynAdTensor> {
-        storage_to_dyn_ad_tensor(storage, dims)
+    fn seed_native_payload(storage: &Storage, dims: &[usize]) -> Result<NativeTensor> {
+        storage_to_native_tensor(storage, dims)
     }
 
     /// Compute dims from `indices` order.
@@ -177,7 +181,7 @@ impl TensorDynLen {
     }
 
     /// Create a tensor from a native tenferro payload.
-    pub fn from_native(indices: Vec<DynIndex>, native: DynAdTensor) -> Result<Self> {
+    pub(crate) fn from_native(indices: Vec<DynIndex>, native: NativeTensor) -> Result<Self> {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices);
         if dims != native.dims() {
@@ -199,13 +203,41 @@ impl TensorDynLen {
     }
 
     /// Borrow the native payload.
-    pub fn as_native(&self) -> &DynAdTensor {
+    pub(crate) fn as_native(&self) -> &NativeTensor {
         &self.native
     }
 
-    /// Consume the tensor and return its canonical native payload.
-    pub fn into_native(self) -> DynAdTensor {
+    /// Returns the upstream AD mode.
+    pub fn mode(&self) -> AdMode {
+        self.native.mode()
+    }
+
+    /// Returns whether the tensor participates in reverse-mode AD.
+    pub fn requires_grad(&self) -> bool {
+        self.native.requires_grad()
+    }
+
+    /// Enables or disables reverse-mode gradient tracking.
+    pub fn set_requires_grad(&mut self, enabled: bool) -> Result<()> {
         self.native
+            .set_requires_grad(enabled)
+            .map_err(|e| anyhow::anyhow!("TensorDynLen::set_requires_grad failed: {e}"))
+    }
+
+    /// Returns the accumulated reverse gradient when available.
+    pub fn grad(&self) -> Option<Self> {
+        self.native.grad().map(|native| {
+            Self::from_native(self.indices.clone(), native).unwrap_or_else(|e| {
+                panic!("TensorDynLen::grad returned a tensor incompatible with indices: {e}")
+            })
+        })
+    }
+
+    /// Clears accumulated reverse gradients on reverse leaves.
+    pub fn zero_grad(&self) -> Result<()> {
+        self.native
+            .zero_grad()
+            .map_err(|e| anyhow::anyhow!("TensorDynLen::zero_grad failed: {e}"))
     }
 
     /// Check if this tensor is already in canonical form.
@@ -215,7 +247,7 @@ impl TensorDynLen {
 
     /// Materialize the primal snapshot as storage.
     pub fn to_storage(&self) -> Result<Arc<Storage>> {
-        Ok(Arc::new(dyn_ad_tensor_primal_to_storage(&self.native)?))
+        Ok(Arc::new(native_tensor_primal_to_storage(&self.native)?))
     }
 
     /// Materialize the primal snapshot as storage.
@@ -226,7 +258,7 @@ impl TensorDynLen {
 
     /// Sum all elements, returning `AnyScalar`.
     pub fn sum(&self) -> AnyScalar {
-        sum_dyn_ad_tensor_native(&self.native).expect("native sum failed")
+        sum_native_tensor(&self.native).expect("native sum failed")
     }
 
     /// Sum all elements as f64.
@@ -307,8 +339,8 @@ impl TensorDynLen {
         // Compute permutation by matching IDs
         let perm = compute_permutation_from_indices(&self.indices, new_indices);
 
-        let permuted_native = permute_dyn_ad_tensor_native(&self.native, &perm)
-            .expect("native permute_indices failed");
+        let permuted_native =
+            permute_native_tensor(&self.native, &perm).expect("native permute_indices failed");
         Self::from_native(new_indices.to_vec(), permuted_native)
             .expect("native permute_indices snapshot failed")
     }
@@ -355,7 +387,7 @@ impl TensorDynLen {
         // Permute indices
         let new_indices: Vec<DynIndex> = perm.iter().map(|&i| self.indices[i].clone()).collect();
         let permuted_native =
-            permute_dyn_ad_tensor_native(&self.native, perm).expect("native permute failed");
+            permute_native_tensor(&self.native, perm).expect("native permute failed");
         Self::from_native(new_indices, permuted_native).expect("native permute snapshot failed")
     }
 
@@ -408,7 +440,7 @@ impl TensorDynLen {
             .expect("contraction preparation failed");
 
         let result_native =
-            contract_dyn_ad_tensor_native(&self.native, &spec.axes_a, &other.native, &spec.axes_b)
+            contract_native_tensor(&self.native, &spec.axes_a, &other.native, &spec.axes_b)
                 .expect("native contract failed");
         Self::from_native(spec.result_indices, result_native)
             .expect("native contract snapshot failed")
@@ -504,7 +536,7 @@ impl TensorDynLen {
         })?;
 
         let result_native =
-            contract_dyn_ad_tensor_native(&self.native, &spec.axes_a, &other.native, &spec.axes_b)?;
+            contract_native_tensor(&self.native, &spec.axes_a, &other.native, &spec.axes_b)?;
         Self::from_native(spec.result_indices, result_native)
     }
 
@@ -567,7 +599,7 @@ impl TensorDynLen {
         // Build result indices and dimensions
         let mut result_indices = self.indices.clone();
         result_indices.extend(other.indices.iter().cloned());
-        let result_native = outer_product_dyn_ad_tensor_native(&self.native, &other.native)
+        let result_native = outer_product_native_tensor(&self.native, &other.native)
             .expect("native outer product failed");
         Self::from_native(result_indices, result_native)
     }
@@ -758,7 +790,7 @@ impl Neg for TensorDynLen {
 
 /// Check if a tensor is a DiagTensor (has Diag storage).
 pub fn is_diag_tensor(tensor: &TensorDynLen) -> bool {
-    tensor.native.is_diag()
+    tensor.is_diag()
 }
 
 impl TensorDynLen {
@@ -890,19 +922,13 @@ impl TensorDynLen {
         }
 
         // Reuse storage-level fused axpby to avoid materializing two scaled temporaries.
-        let combined = self
-            .native
-            .axpby(&a, &other_aligned.native, &b)
-            .map_err(|e| anyhow::anyhow!("native axpby failed: {e}"))?;
+        let combined = axpby_native_tensor(&self.native, &a, &other_aligned.native, &b)?;
         Self::from_native(self.indices.clone(), combined)
     }
 
     /// Scalar multiplication.
     pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
-        let scaled = self
-            .native
-            .scale(&scalar)
-            .map_err(|e| anyhow::anyhow!("native scale failed: {e}"))?;
+        let scaled = scale_native_tensor(&self.native, &scalar)?;
         Self::from_native(self.indices.clone(), scaled)
     }
 
@@ -915,11 +941,11 @@ impl TensorDynLen {
             let other_set: HashSet<_> = other.indices.iter().collect();
             if self_set == other_set {
                 let other_aligned = other.permute_indices(&self.indices);
-                let conj_self = conj_dyn_ad_tensor_native(&self.native)?;
+                let conj_self = conj_native_tensor(&self.native)?;
                 let axes: Vec<usize> = (0..self.indices.len()).collect();
                 let result_native =
-                    contract_dyn_ad_tensor_native(&conj_self, &axes, &other_aligned.native, &axes)?;
-                return sum_dyn_ad_tensor_native(&result_native);
+                    contract_native_tensor(&conj_self, &axes, &other_aligned.native, &axes)?;
+                return sum_native_tensor(&result_native);
             }
         }
 
@@ -1110,8 +1136,7 @@ impl TensorDynLen {
         // For default undirected indices, conj() is a no-op, so this is future-proof
         // for QSpace-compatible directed indices where conj() flips Ket <-> Bra
         let new_indices: Vec<DynIndex> = self.indices.iter().map(|idx| idx.conj()).collect();
-        let conj_native =
-            conj_dyn_ad_tensor_native(&self.native).expect("native conjugation failed");
+        let conj_native = conj_native_tensor(&self.native).expect("native conjugation failed");
         Self::from_native(new_indices, conj_native).expect("native conjugation snapshot failed")
     }
 }
@@ -1155,7 +1180,9 @@ impl TensorDynLen {
         // ||T||² = Σ T_ijk... * conj(T_ijk...) = Σ |T_ijk...|²
         let conj = self.conj();
         let scalar = self.contract(&conj);
-        scalar.sum().real() // Result is always real for ||T||²
+        // The mathematical result is nonnegative and real. Clamp tiny negative
+        // roundoff so downstream `sqrt` stays well-defined for complex tensors.
+        scalar.sum().real().max(0.0)
     }
 
     /// Compute the Frobenius norm of the tensor: ||T|| = sqrt(Σ|T_ijk...|²)
@@ -1261,60 +1288,20 @@ impl std::fmt::Debug for TensorDynLen {
 /// # Panics
 /// Panics if indices have different dimensions, or if diag_data length doesn't match.
 pub fn diag_tensor_dyn_len(indices: Vec<DynIndex>, diag_data: Vec<f64>) -> TensorDynLen {
-    let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
-    let first_dim = dims[0];
-
-    // Validate all indices have same dimension
-    for (i, &dim) in dims.iter().enumerate() {
-        assert_eq!(
-            dim, first_dim,
-            "DiagTensor requires all indices to have the same dimension, but dims[{}] = {} != dims[0] = {}",
-            i, dim, first_dim
-        );
-    }
-
-    assert_eq!(
-        diag_data.len(),
-        first_dim,
-        "diag_data length ({}) must equal index dimension ({})",
-        diag_data.len(),
-        first_dim
-    );
-
-    let storage = Arc::new(Storage::new_diag_f64(diag_data));
-    TensorDynLen::new(indices, storage)
+    TensorDynLen::from_diag(indices, diag_data)
+        .unwrap_or_else(|err| panic!("diag_tensor_dyn_len failed: {err}"))
 }
 
 /// Create a DiagTensor with dynamic rank from complex diagonal data.
 pub fn diag_tensor_dyn_len_c64(indices: Vec<DynIndex>, diag_data: Vec<Complex64>) -> TensorDynLen {
-    let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
-    let first_dim = dims[0];
-
-    // Validate all indices have same dimension
-    for (i, &dim) in dims.iter().enumerate() {
-        assert_eq!(
-            dim, first_dim,
-            "DiagTensor requires all indices to have the same dimension, but dims[{}] = {} != dims[0] = {}",
-            i, dim, first_dim
-        );
-    }
-
-    assert_eq!(
-        diag_data.len(),
-        first_dim,
-        "diag_data length ({}) must equal index dimension ({})",
-        diag_data.len(),
-        first_dim
-    );
-
-    let storage = Arc::new(Storage::new_diag_c64(diag_data));
-    TensorDynLen::new(indices, storage)
+    TensorDynLen::from_diag(indices, diag_data)
+        .unwrap_or_else(|err| panic!("diag_tensor_dyn_len_c64 failed: {err}"))
 }
 
 /// Unfold a tensor into a matrix by splitting indices into left and right groups.
 ///
-/// This function validates the split, permutes the tensor so that left indices come first,
-/// and returns a 2D matrix tensor (`DTensor<T, 2>`) along with metadata.
+/// This function validates the split, permutes the tensor so that left indices
+/// come first, and returns a rank-2 native tenferro tensor along with metadata.
 ///
 /// # Arguments
 /// * `t` - Input tensor
@@ -1322,7 +1309,7 @@ pub fn diag_tensor_dyn_len_c64(indices: Vec<DynIndex>, diag_data: Vec<Complex64>
 ///
 /// # Returns
 /// A tuple `(matrix_tensor, left_len, m, n, left_indices, right_indices)` where:
-/// - `matrix_tensor` is a `DTensor<T, 2>` with shape `[m, n]` containing the unfolded data
+/// - `matrix_tensor` is a rank-2 `tenferro::Tensor` with shape `[m, n]`
 /// - `left_len` is the number of left indices
 /// - `m` is the product of left index dimensions
 /// - `n` is the product of right index dimensions
@@ -1334,13 +1321,13 @@ pub fn diag_tensor_dyn_len_c64(indices: Vec<DynIndex>, diag_data: Vec<Complex64>
 /// - The tensor rank is < 2
 /// - `left_inds` is empty or contains all indices
 /// - `left_inds` contains indices not in the tensor or duplicates
-/// - Storage type is not supported (must be DenseF64 or DenseC64)
+/// - Native reshape fails
 #[allow(clippy::type_complexity)]
-pub fn unfold_split<T: StorageScalar>(
+pub fn unfold_split(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
 ) -> Result<(
-    DTensor<T, 2>,
+    NativeTensor,
     usize,
     usize,
     usize,
@@ -1395,9 +1382,7 @@ pub fn unfold_split<T: StorageScalar>(
     let m: usize = unfolded_dims[..left_len].iter().product();
     let n: usize = unfolded_dims[left_len..].iter().product();
 
-    let unfolded_storage = unfolded.storage();
-    let matrix_tensor = storage_to_dtensor::<T>(unfolded_storage.as_ref(), [m, n])
-        .map_err(|e| anyhow::anyhow!("Failed to create DTensor: {}", e))?;
+    let matrix_tensor = reshape_row_major_native_tensor(unfolded.as_native(), &[m, n])?;
 
     Ok((
         matrix_tensor,
@@ -1515,8 +1500,6 @@ impl TensorLike for TensorDynLen {
     }
 
     fn diagonal(input_index: &DynIndex, output_index: &DynIndex) -> Result<Self> {
-        use crate::storage::DenseStorageF64;
-
         let dim = input_index.dim();
         if dim != output_index.dim() {
             return Err(anyhow::anyhow!(
@@ -1532,37 +1515,20 @@ impl TensorLike for TensorDynLen {
             data[i * dim + i] = 1.0;
         }
 
-        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data,
-            &[dim, dim],
-        )));
-        Ok(TensorDynLen::new(
-            vec![input_index.clone(), output_index.clone()],
-            storage,
-        ))
+        TensorDynLen::from_dense(vec![input_index.clone(), output_index.clone()], data)
     }
 
     fn scalar_one() -> Result<Self> {
-        use crate::storage::DenseStorageF64;
-        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0],
-            &[],
-        )));
-        Ok(TensorDynLen::new(vec![], storage))
+        TensorDynLen::from_dense(vec![], vec![1.0_f64])
     }
 
     fn ones(indices: &[DynIndex]) -> Result<Self> {
-        use crate::storage::DenseStorageF64;
         if indices.is_empty() {
             return Self::scalar_one();
         }
         let dims: Vec<usize> = indices.iter().map(|idx| idx.size()).collect();
         let total_size = checked_total_size(&dims)?;
-        let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0; total_size],
-            &dims,
-        )));
-        Ok(TensorDynLen::new(indices.to_vec(), storage))
+        TensorDynLen::from_dense(indices.to_vec(), vec![1.0_f64; total_size])
     }
 
     fn onehot(index_vals: &[(DynIndex, usize)]) -> Result<Self> {
@@ -1590,7 +1556,7 @@ impl TensorLike for TensorDynLen {
         let offset = row_major_offset(&dims, &vals)?;
         data[offset] = 1.0;
 
-        Ok(Self::from_dense_f64(indices, data))
+        Self::from_dense(indices, data)
     }
 
     // delta() uses the default implementation via diagonal() and outer_product()
@@ -1648,6 +1614,33 @@ fn row_major_offset(dims: &[usize], vals: &[usize]) -> Result<usize> {
 // ============================================================================
 
 impl TensorDynLen {
+    fn validate_dense_payload_len(data_len: usize, dims: &[usize]) -> Result<()> {
+        let expected_len = checked_total_size(dims)?;
+        anyhow::ensure!(
+            data_len == expected_len,
+            "dense payload length {} does not match dims {:?} (expected {})",
+            data_len,
+            dims,
+            expected_len
+        );
+        Ok(())
+    }
+
+    fn validate_diag_payload_len(data_len: usize, dims: &[usize]) -> Result<()> {
+        anyhow::ensure!(
+            !dims.is_empty(),
+            "diagonal tensor construction requires at least one index"
+        );
+        Self::validate_diag_dims(dims)?;
+        anyhow::ensure!(
+            data_len == dims[0],
+            "diagonal payload length {} does not match diagonal dimension {}",
+            data_len,
+            dims[0]
+        );
+        Ok(())
+    }
+
     /// Create a tensor from dense data with explicit indices.
     ///
     /// This is the recommended high-level API for creating tensors from raw data.
@@ -1671,83 +1664,41 @@ impl TensorDynLen {
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
     /// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    /// let tensor: TensorDynLen = TensorDynLen::from_dense_data(vec![i, j], data);
+    /// let tensor: TensorDynLen = TensorDynLen::from_dense(vec![i, j], data).unwrap();
     /// assert_eq!(tensor.dims(), vec![2, 3]);
     /// ```
-    pub fn from_dense_data<T: StorageScalar>(indices: Vec<DynIndex>, data: Vec<T>) -> Self {
-        let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
-        let storage = T::dense_storage_with_shape(data, &dims);
-        Self::new(indices, storage)
+    pub fn from_dense<T: TensorElement>(indices: Vec<DynIndex>, data: Vec<T>) -> Result<Self> {
+        let dims = Self::expected_dims_from_indices(&indices);
+        Self::validate_indices(&indices);
+        Self::validate_dense_payload_len(data.len(), &dims)?;
+        let native = dense_native_tensor_from_row_major(&data, &dims)?;
+        Self::from_native(indices, native)
     }
 
-    /// Create a tensor from f64 data with explicit indices.
-    ///
-    /// This is equivalent to `from_dense_data::<f64>(indices, data)`.
-    ///
-    /// # Example
-    /// ```
-    /// use tensor4all_core::TensorDynLen;
-    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    ///
-    /// let i = Index::new_dyn(2);
-    /// let j = Index::new_dyn(3);
-    /// let tensor = TensorDynLen::from_dense_f64(vec![i, j], vec![1.0; 6]);
-    /// assert_eq!(tensor.dims(), vec![2, 3]);
-    /// ```
-    pub fn from_dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> Self {
-        Self::from_dense_data(indices, data)
+    /// Create a diagonal tensor from diagonal payload data with explicit indices.
+    pub fn from_diag<T: TensorElement>(indices: Vec<DynIndex>, data: Vec<T>) -> Result<Self> {
+        let dims = Self::expected_dims_from_indices(&indices);
+        Self::validate_indices(&indices);
+        Self::validate_diag_payload_len(data.len(), &dims)?;
+        let native = diag_native_tensor_from_row_major(&data, dims.len())?;
+        Self::from_native(indices, native)
     }
 
-    /// Create a tensor from Complex64 data with explicit indices.
-    ///
-    /// This is equivalent to `from_dense_data::<Complex64>(indices, data)`.
-    ///
-    /// # Example
-    /// ```
-    /// use tensor4all_core::TensorDynLen;
-    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use num_complex::Complex64;
-    ///
-    /// let i = Index::new_dyn(2);
-    /// let j = Index::new_dyn(3);
-    /// let data: Vec<Complex64> = vec![Complex64::new(1.0, 0.0); 6];
-    /// let tensor = TensorDynLen::from_dense_c64(vec![i, j], data);
-    /// assert_eq!(tensor.dims(), vec![2, 3]);
-    /// ```
-    pub fn from_dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> Self {
-        Self::from_dense_data(indices, data)
-    }
-
-    /// Create a scalar (0-dimensional) tensor from an f64 value.
+    /// Create a scalar (0-dimensional) tensor from a supported element value.
     ///
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
     ///
-    /// let scalar = TensorDynLen::scalar_f64(42.0);
+    /// let scalar = TensorDynLen::scalar(42.0).unwrap();
     /// assert_eq!(scalar.dims(), Vec::<usize>::new());
     /// assert_eq!(scalar.only().real(), 42.0);
     /// ```
-    pub fn scalar_f64(value: f64) -> Self {
-        Self::from_dense_data(vec![], vec![value])
+    pub fn scalar<T: TensorElement>(value: T) -> Result<Self> {
+        Self::from_dense(vec![], vec![value])
     }
 
-    /// Create a scalar (0-dimensional) tensor from a Complex64 value.
-    ///
-    /// # Example
-    /// ```
-    /// use tensor4all_core::TensorDynLen;
-    /// use num_complex::Complex64;
-    ///
-    /// let z = Complex64::new(1.0, 2.0);
-    /// let scalar = TensorDynLen::scalar_c64(z);
-    /// assert_eq!(scalar.dims(), Vec::<usize>::new());
-    /// ```
-    pub fn scalar_c64(value: Complex64) -> Self {
-        Self::from_dense_data(vec![], vec![value])
-    }
-
-    /// Create a tensor filled with zeros.
+    /// Create a tensor filled with zeros of a supported element type.
     ///
     /// # Example
     /// ```
@@ -1756,20 +1707,13 @@ impl TensorDynLen {
     ///
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
-    /// let tensor = TensorDynLen::zeros_f64(vec![i, j]);
+    /// let tensor = TensorDynLen::zeros::<f64>(vec![i, j]).unwrap();
     /// assert_eq!(tensor.dims(), vec![2, 3]);
     /// ```
-    pub fn zeros_f64(indices: Vec<DynIndex>) -> Self {
+    pub fn zeros<T: TensorElement + Zero + Clone>(indices: Vec<DynIndex>) -> Result<Self> {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
         let size: usize = dims.iter().product();
-        Self::from_dense_data(indices, vec![0.0_f64; size])
-    }
-
-    /// Create a complex tensor filled with zeros.
-    pub fn zeros_c64(indices: Vec<DynIndex>) -> Self {
-        let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
-        let size: usize = dims.iter().product();
-        Self::from_dense_data(indices, vec![Complex64::new(0.0, 0.0); size])
+        Self::from_dense(indices, vec![T::zero(); size])
     }
 }
 
@@ -1792,7 +1736,7 @@ impl TensorDynLen {
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense_f64(vec![i], vec![1.0, 2.0]);
+    /// let tensor = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
     /// let data = tensor.as_slice_f64().unwrap();
     /// assert_eq!(data, &[1.0, 2.0]);
     /// ```
@@ -1819,8 +1763,7 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error if the storage is not DenseF64.
     pub fn to_vec_f64(&self) -> Result<Vec<f64>> {
-        let storage = self.to_storage()?;
-        f64::extract_dense(storage.as_ref()).map_err(|e| anyhow::anyhow!("{}", e))
+        native_tensor_primal_to_dense_f64(&self.native)
     }
 
     /// Convert tensor data to `Vec<Complex64>`.
@@ -1831,8 +1774,7 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error if the storage is not DenseC64.
     pub fn to_vec_c64(&self) -> Result<Vec<Complex64>> {
-        let storage = self.to_storage()?;
-        Complex64::extract_dense(storage.as_ref()).map_err(|e| anyhow::anyhow!("{}", e))
+        native_tensor_primal_to_dense_c64(&self.native)
     }
 
     /// Check if the tensor has f64 storage.
@@ -1843,16 +1785,21 @@ impl TensorDynLen {
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     ///
     /// let i = Index::new_dyn(2);
-    /// let tensor = TensorDynLen::from_dense_f64(vec![i], vec![1.0, 2.0]);
+    /// let tensor = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
     /// assert!(tensor.is_f64());
     /// assert!(!tensor.is_complex());
     /// ```
     pub fn is_f64(&self) -> bool {
-        matches!(self.native, DynAdTensor::F64(_))
+        self.native.scalar_type() == NativeScalarType::F64
+    }
+
+    /// Check if the tensor uses diagonal structured storage.
+    pub fn is_diag(&self) -> bool {
+        self.native.is_diag()
     }
 
     /// Check if the tensor has complex storage (C64).
     pub fn is_complex(&self) -> bool {
-        matches!(self.native, DynAdTensor::C64(_))
+        self.native.scalar_type() == NativeScalarType::C64
     }
 }

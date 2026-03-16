@@ -181,7 +181,7 @@ pub fn tensortrain_to_linear_operator(
             }
         }
 
-        let tensor_dyn = TensorDynLen::from_dense_c64(indices, data);
+        let tensor_dyn = TensorDynLen::from_dense(indices, data).unwrap();
         tensors.push(tensor_dyn);
         node_names.push(i);
     }
@@ -360,7 +360,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
             }
         }
 
-        let tensor_dyn = TensorDynLen::from_dense_c64(indices, data);
+        let tensor_dyn = TensorDynLen::from_dense(indices, data).unwrap();
         tensors.push(tensor_dyn);
         node_names.push(i);
     }

@@ -144,19 +144,20 @@ fn test_contract_no_common_indices_preserves_left_then_right_index_order_and_val
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
 
-    let tensor_a = TensorDynLen::from_dense_f64(vec![i.clone()], vec![2.0, -1.0]);
-    let tensor_b = TensorDynLen::from_dense_f64(vec![j.clone()], vec![3.0, 4.0, -2.0]);
+    let tensor_a = TensorDynLen::from_dense(vec![i.clone()], vec![2.0, -1.0]).unwrap();
+    let tensor_b = TensorDynLen::from_dense(vec![j.clone()], vec![3.0, 4.0, -2.0]).unwrap();
 
     let result = tensor_a.contract(&tensor_b);
 
     assert_eq!(result.indices, vec![i, j]);
-    let expected = TensorDynLen::from_dense_f64(
+    let expected = TensorDynLen::from_dense(
         result.indices.clone(),
         vec![
             6.0, 8.0, -4.0, //
             -3.0, -4.0, 2.0,
         ],
-    );
+    )
+    .unwrap();
     assert!(result.isapprox(&expected, 1e-12, 0.0));
 }
 
@@ -532,7 +533,7 @@ fn test_scalar_times_tensor() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = TensorDynLen::from_dense_f64(vec![i.clone(), j.clone()], data.clone());
+    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data.clone()).unwrap();
 
     let result = scalar.contract(&tensor);
     assert_eq!(result.dims(), vec![2, 3]);
@@ -545,7 +546,7 @@ fn test_tensor_times_scalar() {
     let scalar = TensorDynLen::scalar_one().unwrap();
     let i = Index::new_dyn(2);
     let data = vec![10.0, 20.0];
-    let tensor = TensorDynLen::from_dense_f64(vec![i.clone()], data.clone());
+    let tensor = TensorDynLen::from_dense(vec![i.clone()], data.clone()).unwrap();
 
     let result = tensor.contract(&scalar);
     assert_eq!(result.dims(), vec![2]);
@@ -554,8 +555,8 @@ fn test_tensor_times_scalar() {
 
 #[test]
 fn test_scalar_times_scalar() {
-    let s1 = TensorDynLen::scalar_f64(3.0);
-    let s2 = TensorDynLen::scalar_f64(5.0);
+    let s1 = TensorDynLen::scalar(3.0).unwrap();
+    let s2 = TensorDynLen::scalar(5.0).unwrap();
 
     let result = s1.contract(&s2);
     assert_eq!(result.dims().len(), 0);
@@ -570,7 +571,7 @@ fn test_mul_operator_scalar_times_tensor() {
     let scalar = TensorDynLen::scalar_one().unwrap();
     let i = Index::new_dyn(3);
     let data = vec![1.0, 2.0, 3.0];
-    let tensor = TensorDynLen::from_dense_f64(vec![i.clone()], data.clone());
+    let tensor = TensorDynLen::from_dense(vec![i.clone()], data.clone()).unwrap();
 
     let result = &scalar * &tensor;
     assert_eq!(result.dims(), vec![3]);
@@ -582,8 +583,8 @@ fn test_foldl_sequential_contraction() {
     // Simulate foldl-style: acc = scalar_one; acc = acc * a; acc = acc * b;
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let a = TensorDynLen::from_dense_f64(vec![i.clone(), j.clone()], vec![1.0; 6]);
-    let b = TensorDynLen::from_dense_f64(vec![j.clone(), i.clone()], vec![2.0; 6]);
+    let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0; 6]).unwrap();
+    let b = TensorDynLen::from_dense(vec![j.clone(), i.clone()], vec![2.0; 6]).unwrap();
 
     let mut acc = TensorDynLen::scalar_one().unwrap();
     acc = &acc * &a; // acc = a (outer product with scalar)

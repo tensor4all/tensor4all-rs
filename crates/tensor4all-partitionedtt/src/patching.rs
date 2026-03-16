@@ -104,7 +104,7 @@ mod tests {
     use super::*;
     use crate::projector::Projector;
     use tensor4all_core::index::Index;
-    use tensor4all_core::{StorageScalar, TensorDynLen};
+    use tensor4all_core::TensorDynLen;
     use tensor4all_itensorlike::TensorTrain;
 
     fn make_index(size: usize) -> DynIndex {
@@ -115,8 +115,7 @@ mod tests {
         let dims: Vec<usize> = indices.iter().map(|i| i.dim).collect();
         let size: usize = dims.iter().product();
         let data: Vec<f64> = (0..size).map(|i| (i + 1) as f64).collect();
-        let storage = f64::dense_storage_with_shape(data, &dims);
-        TensorDynLen::new(indices, storage)
+        TensorDynLen::from_dense(indices, data).unwrap()
     }
 
     /// Create shared indices for testing

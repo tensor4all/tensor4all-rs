@@ -126,14 +126,15 @@ fn create_identity_mpo_with_mappings(
                 base_data[idx] = 1.0;
             }
         }
-        let base = TensorDynLen::from_dense_f64(
+        let base = TensorDynLen::from_dense(
             vec![
                 true_site_indices[i].clone(), // external index (appears in site_space)
                 s_out_tmp[i].clone(),
                 s_in_tmp[i].clone(),
             ],
             base_data,
-        );
+        )
+        .unwrap();
 
         let t = if indices.len() == 2 {
             // n == 1 case: [external, s_out, s_in]
@@ -141,7 +142,7 @@ fn create_identity_mpo_with_mappings(
         } else {
             // Add bond indices via outer product
             let bond_indices = bond_indices(&indices);
-            let ones = TensorDynLen::from_dense_f64(bond_indices, vec![1.0_f64; 1]);
+            let ones = TensorDynLen::from_dense(bond_indices, vec![1.0_f64; 1]).unwrap();
             TensorDynLen::outer_product(&base, &ones)?
         };
 
@@ -248,16 +249,15 @@ fn create_identity_mpo_operator_only(
         for k in 0..phys_dim {
             base_data[k * phys_dim + k] = 1.0;
         }
-        let base = TensorDynLen::from_dense_f64(
-            vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()],
-            base_data,
-        );
+        let base =
+            TensorDynLen::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], base_data)
+                .unwrap();
 
         let t = if indices.len() == 2 {
             base
         } else {
             let bond_indices = bond_indices(&indices);
-            let ones = TensorDynLen::from_dense_f64(bond_indices, vec![1.0_f64; 1]);
+            let ones = TensorDynLen::from_dense(bond_indices, vec![1.0_f64; 1]).unwrap();
             TensorDynLen::outer_product(&base, &ones)?
         };
 

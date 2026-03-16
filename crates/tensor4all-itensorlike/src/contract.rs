@@ -127,15 +127,14 @@ impl TensorTrain {
 mod tests {
     use super::*;
     use crate::TensorTrainError;
-    use tensor4all_core::{DynId, DynIndex, Index, StorageScalar, TensorDynLen, TensorLike};
+    use tensor4all_core::{DynId, DynIndex, Index, TensorDynLen, TensorLike};
 
     /// Helper to create a simple tensor for testing
     fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
         let dims: Vec<usize> = indices.iter().map(|i| i.size()).collect();
         let size: usize = dims.iter().product();
         let data: Vec<f64> = (0..size).map(|i| (i + 1) as f64).collect();
-        let storage = f64::dense_storage_with_shape(data, &dims);
-        TensorDynLen::new(indices, storage)
+        TensorDynLen::from_dense(indices, data).unwrap()
     }
 
     /// Helper to create a DynIndex
@@ -293,20 +292,22 @@ mod tests {
         let l12 = idx(1038, 3);
 
         let tt1 = TensorTrain::new(vec![
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![s0.clone(), l01.clone()],
                 vec![0.0, 0.0, 0.0, 4.0, 5.0, 6.0],
-            ),
+            )
+            .unwrap(),
             make_tensor(vec![l01.clone(), s1.clone()]),
         ])
         .unwrap();
 
         let tt2 = TensorTrain::new(vec![
             make_tensor(vec![s1.clone(), l12.clone()]),
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![l12.clone(), s2.clone()],
                 vec![1.0, 0.0, 3.0, 0.0, 5.0, 0.0],
-            ),
+            )
+            .unwrap(),
         ])
         .unwrap();
 
@@ -324,20 +325,22 @@ mod tests {
         let l12 = idx(1043, 3);
 
         let tt1 = TensorTrain::new(vec![
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![s0.clone(), l01.clone()],
                 vec![0.0, 0.0, 0.0, 4.0, 5.0, 6.0],
-            ),
+            )
+            .unwrap(),
             make_tensor(vec![l01.clone(), s1.clone()]),
         ])
         .unwrap();
 
         let tt2 = TensorTrain::new(vec![
             make_tensor(vec![s1.clone(), l12.clone()]),
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![l12.clone(), s2.clone()],
                 vec![1.0, 0.0, 3.0, 0.0, 5.0, 0.0],
-            ),
+            )
+            .unwrap(),
         ])
         .unwrap();
 

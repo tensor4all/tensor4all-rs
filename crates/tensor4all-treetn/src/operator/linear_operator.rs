@@ -350,14 +350,14 @@ mod tests {
         // s_in_tmp x s_out_tmp with identity values
         let mpo_data = vec![1.0, 0.0, 0.0, 1.0]; // identity matrix
         let mpo_tensor =
-            TensorDynLen::from_dense_f64(vec![s_in_tmp.clone(), s_out_tmp.clone()], mpo_data);
+            TensorDynLen::from_dense(vec![s_in_tmp.clone(), s_out_tmp.clone()], mpo_data).unwrap();
         let mpo =
             TreeTN::<TensorDynLen, String>::from_tensors(vec![mpo_tensor], vec!["A".to_string()])
                 .unwrap();
 
         // State tensor
         let state_data = vec![1.0, 0.0]; // |0> state
-        let state_tensor = TensorDynLen::from_dense_f64(vec![s.clone()], state_data);
+        let state_tensor = TensorDynLen::from_dense(vec![s.clone()], state_data).unwrap();
         let state =
             TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
                 .unwrap();
@@ -460,7 +460,7 @@ mod tests {
         let (op, s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
 
         // Create a local tensor to apply operator to: |0> = [1, 0]
-        let local_tensor = TensorDynLen::from_dense_f64(vec![s.clone()], vec![1.0, 0.0]);
+        let local_tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
 
         let result = op.apply_local(&local_tensor, &["A".to_string()]).unwrap();
 

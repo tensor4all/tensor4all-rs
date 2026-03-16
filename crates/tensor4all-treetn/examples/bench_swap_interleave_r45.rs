@@ -35,7 +35,7 @@ fn build_tn(
         let data: Vec<f64> = (0..size)
             .map(|_| (rng.next_u64() as f64) / (u64::MAX as f64))
             .collect();
-        let t = TensorDynLen::from_dense_data(indices, data);
+        let t = TensorDynLen::from_dense(indices, data).unwrap();
         tn.add_tensor(i.to_string(), t).unwrap();
     }
     for (i, bond) in bonds.iter().enumerate() {

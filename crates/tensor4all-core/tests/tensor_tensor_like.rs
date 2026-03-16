@@ -317,10 +317,11 @@ fn test_onehot_contraction() {
     // Create a tensor A(i,j) and a onehot V(i)
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(4);
-    let a = TensorDynLen::from_dense_f64(
+    let a = TensorDynLen::from_dense(
         vec![i.clone(), j.clone()],
         (0..12).map(|x| x as f64).collect(),
-    );
+    )
+    .unwrap();
 
     // onehot selecting i=1
     let v = TensorDynLen::onehot(&[(i.clone(), 1)]).unwrap();

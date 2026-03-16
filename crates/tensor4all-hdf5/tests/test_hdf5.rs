@@ -17,7 +17,7 @@ fn make_test_tensor_f64() -> TensorDynLen {
     let i1 = Index::new_dyn_with_tags(2, TagSet::from_str("Site,n=1").unwrap());
     let i2 = Index::new_dyn_with_tags(3, TagSet::from_str("Link,l=1").unwrap());
     let data: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    TensorDynLen::from_dense_f64(vec![i1, i2], data)
+    TensorDynLen::from_dense(vec![i1, i2], data).unwrap()
 }
 
 /// Create a simple 2x3 complex tensor with known data.
@@ -32,7 +32,7 @@ fn make_test_tensor_c64() -> TensorDynLen {
         Complex64::new(5.0, 0.5),
         Complex64::new(6.0, 0.6),
     ];
-    TensorDynLen::from_dense_c64(vec![i1, i2], data)
+    TensorDynLen::from_dense(vec![i1, i2], data).unwrap()
 }
 
 #[test]
@@ -96,7 +96,7 @@ fn test_itensor_3d_roundtrip() {
     let i3 = Index::new_dyn_with_tags(4, TagSet::from_str("Link,l=1").unwrap());
     let n = 2 * 3 * 4;
     let data: Vec<f64> = (0..n).map(|i| i as f64).collect();
-    let tensor = TensorDynLen::from_dense_f64(vec![i1, i2, i3], data.clone());
+    let tensor = TensorDynLen::from_dense(vec![i1, i2, i3], data.clone()).unwrap();
 
     save_itensor(&path, "tensor3d", &tensor).unwrap();
     let loaded = load_itensor(&path, "tensor3d").unwrap();
@@ -144,15 +144,15 @@ fn make_test_mps() -> TensorTrain {
 
     // Tensor 0: shape (1, 2, 3) = 6 elements
     let data0: Vec<f64> = (0..6).map(|i| i as f64 * 0.1).collect();
-    let t0 = TensorDynLen::from_dense_f64(vec![left_dummy, site0, link01_left], data0);
+    let t0 = TensorDynLen::from_dense(vec![left_dummy, site0, link01_left], data0).unwrap();
 
     // Tensor 1: shape (3, 2, 4) = 24 elements
     let data1: Vec<f64> = (0..24).map(|i| i as f64 * 0.01).collect();
-    let t1 = TensorDynLen::from_dense_f64(vec![link01_right, site1, link12_left], data1);
+    let t1 = TensorDynLen::from_dense(vec![link01_right, site1, link12_left], data1).unwrap();
 
     // Tensor 2: shape (4, 2, 1) = 8 elements
     let data2: Vec<f64> = (0..8).map(|i| i as f64 * 0.05).collect();
-    let t2 = TensorDynLen::from_dense_f64(vec![link12_right, site2, right_dummy], data2);
+    let t2 = TensorDynLen::from_dense(vec![link12_right, site2, right_dummy], data2).unwrap();
 
     TensorTrain::new(vec![t0, t1, t2]).unwrap()
 }

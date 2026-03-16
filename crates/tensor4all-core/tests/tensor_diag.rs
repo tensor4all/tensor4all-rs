@@ -131,7 +131,7 @@ fn test_diag_tensor_contract_diag_dense() {
     let result = tensor_a.contract(&tensor_b);
 
     assert_eq!(result.dims(), vec![2, 2]);
-    let expected = TensorDynLen::from_dense_f64(vec![i, k], vec![1.0, 1.0, 2.0, 2.0]);
+    let expected = TensorDynLen::from_dense(vec![i, k], vec![1.0, 1.0, 2.0, 2.0]).unwrap();
     assert!(result.isapprox(&expected, 1e-12, 0.0));
 }
 
@@ -145,14 +145,15 @@ fn test_diag_tensor_convert_to_dense() {
     let dims = tensor.dims();
     let dense_storage = tensor.storage().to_dense_storage(&dims);
     let dense_tensor = TensorDynLen::new(vec![i.clone(), j.clone()], Arc::new(dense_storage));
-    let expected = TensorDynLen::from_dense_f64(
+    let expected = TensorDynLen::from_dense(
         vec![i, j],
         vec![
             1.0, 0.0, 0.0, //
             0.0, 2.0, 0.0, //
             0.0, 0.0, 3.0,
         ],
-    );
+    )
+    .unwrap();
     assert!(dense_tensor.isapprox(&expected, 1e-12, 0.0));
 }
 

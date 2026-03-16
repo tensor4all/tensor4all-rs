@@ -129,7 +129,7 @@ fn tensortrain_to_treetn(
             }
         }
 
-        let tensor_dyn = TensorDynLen::from_dense_c64(indices, data);
+        let tensor_dyn = TensorDynLen::from_dense(indices, data).unwrap();
         tensors.push(tensor_dyn);
     }
 

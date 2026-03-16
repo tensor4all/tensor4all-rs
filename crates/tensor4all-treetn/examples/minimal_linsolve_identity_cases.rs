@@ -64,7 +64,7 @@ fn create_mps_chain_with_sites_all_ones(
         };
 
         let nelem: usize = indices.iter().map(|idx| idx.dim()).product();
-        let t = TensorDynLen::from_dense_f64(indices, vec![1.0_f64; nelem]);
+        let t = TensorDynLen::from_dense(indices, vec![1.0_f64; nelem]).unwrap();
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }
@@ -180,8 +180,8 @@ fn create_identity_mpo_chain_with_internal_indices(
         for k in 0..phys_dim {
             data[k * phys_dim + k] = 1.0;
         }
-        let base =
-            TensorDynLen::from_dense_f64(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data);
+        let base = TensorDynLen::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data)
+            .unwrap();
         let t = if indices.len() == 2 {
             base
         } else {
@@ -190,7 +190,7 @@ fn create_identity_mpo_chain_with_internal_indices(
                 .filter(|idx| idx.dim() == 1)
                 .cloned()
                 .collect();
-            let ones = TensorDynLen::from_dense_f64(bond_indices, vec![1.0_f64; 1]);
+            let ones = TensorDynLen::from_dense(bond_indices, vec![1.0_f64; 1]).unwrap();
             TensorDynLen::outer_product(&base, &ones)?
         };
 

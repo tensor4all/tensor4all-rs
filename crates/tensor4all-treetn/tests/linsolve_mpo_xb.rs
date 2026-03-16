@@ -39,7 +39,7 @@ fn one_node_mpo_like_state(
 ) -> TreeTN<TensorDynLen, String> {
     let mut tn = TreeTN::<TensorDynLen, String>::new();
     let nelem = external.dim() * contracted.dim();
-    let t = TensorDynLen::from_dense_f64(vec![external, contracted], vec![1.0; nelem]);
+    let t = TensorDynLen::from_dense(vec![external, contracted], vec![1.0; nelem]).unwrap();
     tn.add_tensor("site0".to_string(), t).unwrap();
     tn
 }
@@ -64,7 +64,7 @@ fn one_node_identity_operator_with_mappings(
     for k in 0..phys_dim {
         data[k * phys_dim + k] = 1.0;
     }
-    let t = TensorDynLen::from_dense_f64(vec![s_out_tmp.clone(), s_in_tmp.clone()], data);
+    let t = TensorDynLen::from_dense(vec![s_out_tmp.clone(), s_in_tmp.clone()], data).unwrap();
 
     let mut mpo = TreeTN::<TensorDynLen, String>::new();
     mpo.add_tensor("site0".to_string(), t).unwrap();

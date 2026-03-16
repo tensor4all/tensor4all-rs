@@ -22,16 +22,18 @@ fn test_inner_single_site() {
     let link_right = Index::new_dyn(1);
 
     // Create [1, 0] as tensor with shape [1, 2, 1]
-    let t1 = TensorDynLen::from_dense_f64(
+    let t1 = TensorDynLen::from_dense(
         vec![link_left.clone(), site.clone(), link_right.clone()],
         vec![1.0, 0.0],
-    );
+    )
+    .unwrap();
 
     // Create [0, 1] as tensor with shape [1, 2, 1]
-    let t2 = TensorDynLen::from_dense_f64(
+    let t2 = TensorDynLen::from_dense(
         vec![link_left.clone(), site.clone(), link_right.clone()],
         vec![0.0, 1.0],
-    );
+    )
+    .unwrap();
 
     let tt1 = TensorTrain::new(vec![t1.clone()]).unwrap();
     let tt2 = TensorTrain::new(vec![t2.clone()]).unwrap();

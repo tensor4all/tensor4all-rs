@@ -1253,14 +1253,16 @@ mod tests {
         let bond = DynIndex::new_dyn(3);
         let s1 = DynIndex::new_dyn(2);
 
-        let t0 = TensorDynLen::from_dense_f64(
+        let t0 = TensorDynLen::from_dense(
             vec![s0.clone(), bond.clone()],
             vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-        );
-        let t1 = TensorDynLen::from_dense_f64(
+        )
+        .unwrap();
+        let t1 = TensorDynLen::from_dense(
             vec![bond.clone(), s1.clone()],
             vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-        );
+        )
+        .unwrap();
 
         let tn = TreeTN::<TensorDynLen, String>::from_tensors(
             vec![t0, t1],
@@ -1333,10 +1335,11 @@ mod tests {
     fn test_contract_to_tensor_single_node() {
         let s0 = DynIndex::new_dyn(2);
         let s1 = DynIndex::new_dyn(3);
-        let t = TensorDynLen::from_dense_f64(
+        let t = TensorDynLen::from_dense(
             vec![s0.clone(), s1.clone()],
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        );
+        )
+        .unwrap();
         let tn =
             TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap();
 
@@ -1450,7 +1453,7 @@ mod tests {
 
         // Create a single-node TN (different topology)
         let s = DynIndex::new_dyn(2);
-        let t = TensorDynLen::from_dense_f64(vec![s.clone()], vec![1.0, 0.0]);
+        let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
         let tn2 =
             TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["X".to_string()]).unwrap();
 
@@ -1463,7 +1466,7 @@ mod tests {
         let (tn1, _s0, _bond, _s1) = make_two_node_treetn();
 
         let s = DynIndex::new_dyn(2);
-        let t = TensorDynLen::from_dense_f64(vec![s.clone()], vec![1.0, 0.0]);
+        let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 0.0]).unwrap();
         let tn2 =
             TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["X".to_string()]).unwrap();
 
@@ -1477,8 +1480,8 @@ mod tests {
         let bond = DynIndex::new_dyn(3);
         let s1 = DynIndex::new_dyn(4);
 
-        let t_a = TensorDynLen::from_dense_f64(vec![s0.clone(), bond.clone()], vec![1.0; 6]);
-        let t_b = TensorDynLen::from_dense_f64(vec![bond.clone(), s1.clone()], vec![1.0; 12]);
+        let t_a = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0; 6]).unwrap();
+        let t_b = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![1.0; 12]).unwrap();
 
         let common = find_common_indices(&t_a, &t_b);
         assert_eq!(common.len(), 1);
@@ -1490,8 +1493,8 @@ mod tests {
         let s0 = DynIndex::new_dyn(2);
         let s1 = DynIndex::new_dyn(3);
 
-        let t_a = TensorDynLen::from_dense_f64(vec![s0.clone()], vec![1.0, 2.0]);
-        let t_b = TensorDynLen::from_dense_f64(vec![s1.clone()], vec![1.0, 2.0, 3.0]);
+        let t_a = TensorDynLen::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
+        let t_b = TensorDynLen::from_dense(vec![s1.clone()], vec![1.0, 2.0, 3.0]).unwrap();
 
         let common = find_common_indices(&t_a, &t_b);
         assert_eq!(common.len(), 0);

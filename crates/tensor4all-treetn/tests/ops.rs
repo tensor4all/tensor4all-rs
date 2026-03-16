@@ -16,7 +16,7 @@ fn idx(size: usize) -> DynIndex {
 
 /// Create a TensorDynLen from indices and f64 data.
 fn make_tensor(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
-    TensorDynLen::from_dense_f64(indices, data)
+    TensorDynLen::from_dense(indices, data).unwrap()
 }
 
 /// Create a simple 2-node linear TreeTN with named nodes (usize).

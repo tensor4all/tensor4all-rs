@@ -380,7 +380,6 @@ impl<'a> IntoIterator for &'a PartitionedTT {
 mod tests {
     use super::*;
     use tensor4all_core::index::Index;
-    use tensor4all_core::StorageScalar;
     use tensor4all_core::TensorDynLen;
 
     fn make_index(size: usize) -> DynIndex {
@@ -391,8 +390,7 @@ mod tests {
         let dims: Vec<usize> = indices.iter().map(|i| i.dim).collect();
         let size: usize = dims.iter().product();
         let data: Vec<f64> = (0..size).map(|i| (i + 1) as f64).collect();
-        let storage = f64::dense_storage_with_shape(data, &dims);
-        TensorDynLen::new(indices, storage)
+        TensorDynLen::from_dense(indices, data).unwrap()
     }
 
     /// Create shared indices for testing
@@ -604,7 +602,8 @@ mod tests {
             for s1_idx in 0..s1.dim {
                 t1_proj_data[s0_val * s1.dim + s1_idx] = t1_data[s0_val * s1.dim + s1_idx];
             }
-            let t1_proj = TensorDynLen::from_dense_f64(vec![s0.clone(), s1.clone()], t1_proj_data);
+            let t1_proj =
+                TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], t1_proj_data).unwrap();
 
             // Project t2 to s2=s2_val
             let t2_data = t2_full.as_slice_f64().unwrap();
@@ -613,7 +612,8 @@ mod tests {
             for s1_idx in 0..s1.dim {
                 t2_proj_data[s1_idx * s2.dim + s2_val] = t2_data[s1_idx * s2.dim + s2_val];
             }
-            let t2_proj = TensorDynLen::from_dense_f64(vec![s1.clone(), s2.clone()], t2_proj_data);
+            let t2_proj =
+                TensorDynLen::from_dense(vec![s1.clone(), s2.clone()], t2_proj_data).unwrap();
 
             let expected = t1_proj.contract(&t2_proj);
             let expected_data = expected.as_slice_f64().unwrap();

@@ -49,7 +49,7 @@ fn create_n_site_ones_mps(
         };
 
         let nelem: usize = indices.iter().map(|idx| idx.dim).product();
-        let tensor = TensorDynLen::from_dense_f64(indices, vec![1.0_f64; nelem]);
+        let tensor = TensorDynLen::from_dense(indices, vec![1.0_f64; nelem]).unwrap();
         mps.add_tensor(name, tensor)?;
     }
 
@@ -85,7 +85,7 @@ fn create_identity_chain_mpo_with_internal_indices(
         }
 
         let tensor = if i == 0 {
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     s_out_tmp[i].clone(),
                     s_in_tmp[i].clone(),
@@ -93,8 +93,9 @@ fn create_identity_chain_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         } else if i == n_sites - 1 {
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -102,8 +103,9 @@ fn create_identity_chain_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         } else {
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -112,6 +114,7 @@ fn create_identity_chain_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         };
         mpo.add_tensor(name, tensor)?;
     }

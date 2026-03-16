@@ -13,7 +13,7 @@ use tensor4all_treetn::{SwapOptions, TreeTN};
 
 /// Build a 2-site MPS from dense data via QR factorization.
 fn make_2site_mps(s1: &DynIndex, s2: &DynIndex, data: &[f64]) -> Vec<TensorDynLen> {
-    let dense = TensorDynLen::from_dense_f64(vec![s1.clone(), s2.clone()], data.to_vec());
+    let dense = TensorDynLen::from_dense(vec![s1.clone(), s2.clone()], data.to_vec()).unwrap();
     let fr = dense
         .factorize(std::slice::from_ref(s1), &FactorizeOptions::qr())
         .unwrap();
@@ -279,7 +279,7 @@ fn test_qr_roundtrip_tall_matrix() {
     let i3 = DynIndex::new_dyn_with_tag(2, "site_b").unwrap();
 
     let data = vec![1.0, 2.0, 3.0, 4.0];
-    let t = TensorDynLen::from_dense_f64(vec![i1.clone(), i2.clone(), i3.clone()], data);
+    let t = TensorDynLen::from_dense(vec![i1.clone(), i2.clone(), i3.clone()], data).unwrap();
 
     let fr = t
         .factorize(&[i2.clone(), i3.clone()], &FactorizeOptions::qr())
@@ -303,7 +303,7 @@ fn test_swap_preserves_values_plain_mps() {
 
     let data: Vec<f64> = (1..=16).map(|i| i as f64).collect();
     let indices = vec![s0.clone(), s1.clone(), s2.clone(), s3.clone()];
-    let dense = TensorDynLen::from_dense_f64(indices.clone(), data);
+    let dense = TensorDynLen::from_dense(indices.clone(), data).unwrap();
 
     let mut tensors: Vec<TensorDynLen> = Vec::new();
     let mut remaining = dense;

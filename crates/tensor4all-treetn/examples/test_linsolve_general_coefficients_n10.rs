@@ -80,20 +80,19 @@ fn create_n_site_mps(
             for j in 0..phys_dim.min(bond_dim) {
                 data[j * bond_dim + j] = 1.0;
             }
-            TensorDynLen::from_dense_f64(
-                vec![site_indices[i].clone(), bond_indices[i].clone()],
-                data,
-            )
+            TensorDynLen::from_dense(vec![site_indices[i].clone(), bond_indices[i].clone()], data)
+                .unwrap()
         } else if i == n_sites - 1 {
             // Last site: [b_{n-2,n-1}, s_{n-1}] - identity-like
             let mut data = vec![0.0; bond_dim * phys_dim];
             for j in 0..phys_dim.min(bond_dim) {
                 data[j * phys_dim + j] = 1.0;
             }
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
                 data,
             )
+            .unwrap()
         } else {
             // Middle sites: [b_{i-1,i}, s_i, b_{i,i+1}] - identity-like
             let mut data = vec![0.0; bond_dim * phys_dim * bond_dim];
@@ -101,7 +100,7 @@ fn create_n_site_mps(
                 let idx = j * phys_dim * bond_dim + j * bond_dim + j;
                 data[idx] = 1.0;
             }
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     site_indices[i].clone(),
@@ -109,6 +108,7 @@ fn create_n_site_mps(
                 ],
                 data,
             )
+            .unwrap()
         };
         mps.add_tensor(name, tensor).unwrap();
     }
@@ -248,7 +248,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
         }
 
         let tensor = if i == 0 {
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     s_out_tmp[i].clone(),
                     s_in_tmp[i].clone(),
@@ -256,8 +256,9 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         } else if i == n_sites - 1 {
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -265,8 +266,9 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         } else {
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -275,6 +277,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         };
         mpo.add_tensor(name, tensor).unwrap();
     }

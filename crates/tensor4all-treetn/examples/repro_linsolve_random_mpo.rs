@@ -111,16 +111,15 @@ fn create_identity_operator(
         for k in 0..phys_dim {
             base_data[k * phys_dim + k] = 1.0;
         }
-        let base = TensorDynLen::from_dense_f64(
-            vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()],
-            base_data,
-        );
+        let base =
+            TensorDynLen::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], base_data)
+                .unwrap();
 
         let t = if indices.len() == 2 {
             base
         } else {
             let bond_inds = bond_indices(&indices);
-            let ones = TensorDynLen::from_dense_f64(bond_inds, vec![1.0_f64; 1]);
+            let ones = TensorDynLen::from_dense(bond_inds, vec![1.0_f64; 1]).unwrap();
             TensorDynLen::outer_product(&base, &ones)?
         };
 
@@ -267,14 +266,15 @@ fn create_identity_mpo_state(
                 base_data[idx] = 1.0;
             }
         }
-        let base = TensorDynLen::from_dense_f64(
+        let base = TensorDynLen::from_dense(
             vec![
                 true_site_indices[i].clone(), // external (contracted with operator)
                 s_out_tmp[i].clone(),
                 s_in_tmp[i].clone(),
             ],
             base_data,
-        );
+        )
+        .unwrap();
 
         // Add bond indices via outer product if needed
         let t = if n == 1 {
@@ -291,7 +291,7 @@ fn create_identity_mpo_state(
                 base
             } else {
                 let bond_size: usize = bond_inds.iter().map(|b| b.dim()).product();
-                let ones = TensorDynLen::from_dense_f64(bond_inds, vec![1.0_f64; bond_size]);
+                let ones = TensorDynLen::from_dense(bond_inds, vec![1.0_f64; bond_size]).unwrap();
                 TensorDynLen::outer_product(&base, &ones)?
             }
         };

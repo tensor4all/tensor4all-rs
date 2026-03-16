@@ -1,27 +1,46 @@
 use std::sync::Arc;
 
+use tenferro::AdMode;
 use tensor4all_core::{
-    factorize, qr, svd, AnyScalar, Canonical, FactorizeOptions, Index, Storage, TensorDynLen,
+    factorize, forward_ad, is_diag_tensor, qr, svd, AnyScalar, Canonical, FactorizeOptions, Index,
+    Storage, TensorDynLen,
 };
-use tensor4all_tensorbackend::tenferro_dyadtensor::{AdMode, AdTensor, DynAdTensor};
-use tensor4all_tensorbackend::tenferro_tensor::{MemoryOrder, Tensor};
 
-fn native_f64_tensor(primal: &[f64], tangent: &[f64], dims: &[usize]) -> DynAdTensor {
-    let primal = Tensor::<f64>::from_slice(primal, dims, MemoryOrder::RowMajor)
-        .expect("valid primal tensor");
-    let tangent = Tensor::<f64>::from_slice(tangent, dims, MemoryOrder::RowMajor)
-        .expect("valid tangent tensor");
-    AdTensor::new_forward(primal, tangent).unwrap().into()
+fn forward_tensor(primal: TensorDynLen, tangent: TensorDynLen) -> TensorDynLen {
+    forward_ad::dual_level(|fw| fw.make_dual(&primal, &tangent)).unwrap()
+}
+
+fn assert_storage_eq(lhs: &Storage, rhs: &Storage) {
+    match (lhs, rhs) {
+        (Storage::DenseF64(a), Storage::DenseF64(b)) => {
+            assert_eq!(a.dims(), b.dims());
+            assert_eq!(a.as_slice(), b.as_slice());
+        }
+        (Storage::DenseC64(a), Storage::DenseC64(b)) => {
+            assert_eq!(a.dims(), b.dims());
+            assert_eq!(a.as_slice(), b.as_slice());
+        }
+        (Storage::DiagF64(a), Storage::DiagF64(b)) => {
+            assert_eq!(a.as_slice(), b.as_slice());
+        }
+        (Storage::DiagC64(a), Storage::DiagC64(b)) => {
+            assert_eq!(a.as_slice(), b.as_slice());
+        }
+        _ => panic!(
+            "storage mismatch: lhs variant {:?}, rhs variant {:?}",
+            std::mem::discriminant(lhs),
+            std::mem::discriminant(rhs)
+        ),
+    }
 }
 
 #[test]
-fn sum_preserves_forward_native_payload() {
+fn sum_preserves_forward_payload_via_dual_level() {
     let i = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_native(
-        vec![i],
-        native_f64_tensor(&[1.0, 2.0], &[0.25, -0.75], &[2]),
-    )
-    .unwrap();
+    let tensor = forward_tensor(
+        TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap(),
+        TensorDynLen::from_dense(vec![i], vec![0.25, -0.75]).unwrap(),
+    );
 
     let sum = tensor.sum();
 
@@ -31,9 +50,11 @@ fn sum_preserves_forward_native_payload() {
 }
 
 #[test]
-fn only_preserves_forward_native_payload() {
-    let tensor =
-        TensorDynLen::from_native(vec![], native_f64_tensor(&[2.5], &[0.75], &[])).unwrap();
+fn only_preserves_forward_payload_via_dual_level() {
+    let tensor = forward_tensor(
+        TensorDynLen::from_dense(vec![], vec![2.5]).unwrap(),
+        TensorDynLen::from_dense(vec![], vec![0.75]).unwrap(),
+    );
 
     let only = tensor.only();
 
@@ -43,16 +64,16 @@ fn only_preserves_forward_native_payload() {
 }
 
 #[test]
-fn inner_product_preserves_forward_native_payload() {
+fn inner_product_preserves_forward_payload_via_dual_level() {
     let i = Index::new_dyn(2);
-    let lhs = TensorDynLen::from_native(
-        vec![i.clone()],
-        native_f64_tensor(&[1.0, 2.0], &[0.1, 0.2], &[2]),
-    )
-    .unwrap();
-    let rhs =
-        TensorDynLen::from_native(vec![i], native_f64_tensor(&[3.0, 4.0], &[1.0, -1.0], &[2]))
-            .unwrap();
+    let lhs = forward_tensor(
+        TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap(),
+        TensorDynLen::from_dense(vec![i.clone()], vec![0.1, 0.2]).unwrap(),
+    );
+    let rhs = forward_tensor(
+        TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 4.0]).unwrap(),
+        TensorDynLen::from_dense(vec![i], vec![1.0, -1.0]).unwrap(),
+    );
 
     let inner = lhs.inner_product(&rhs).unwrap();
 
@@ -66,19 +87,18 @@ fn inner_product_preserves_forward_native_payload() {
 }
 
 #[test]
-fn qr_preserves_forward_native_payload() {
+fn qr_preserves_forward_payload_via_dual_level() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_native(
-        vec![i.clone(), j.clone()],
-        native_f64_tensor(&[3.0, 0.0, 0.0, 2.0], &[0.5, 0.0, 0.0, -0.25], &[2, 2]),
-    )
-    .unwrap();
+    let tensor = forward_tensor(
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![3.0, 0.0, 0.0, 2.0]).unwrap(),
+        TensorDynLen::from_dense(vec![i.clone(), j], vec![0.5, 0.0, 0.0, -0.25]).unwrap(),
+    );
 
     let (q, r) = qr::<f64>(&tensor, std::slice::from_ref(&i)).unwrap();
 
-    assert_eq!(q.as_native().mode(), AdMode::Forward);
-    assert_eq!(r.as_native().mode(), AdMode::Forward);
+    assert_eq!(q.mode(), AdMode::Forward);
+    assert_eq!(r.mode(), AdMode::Forward);
     assert!(
         (q.sum()
             .tangent()
@@ -95,20 +115,19 @@ fn qr_preserves_forward_native_payload() {
 }
 
 #[test]
-fn svd_preserves_forward_native_payload() {
+fn svd_preserves_forward_payload_via_dual_level() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_native(
-        vec![i.clone(), j.clone()],
-        native_f64_tensor(&[3.0, 0.0, 0.0, 2.0], &[0.5, 0.0, 0.0, -0.25], &[2, 2]),
-    )
-    .unwrap();
+    let tensor = forward_tensor(
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![3.0, 0.0, 0.0, 2.0]).unwrap(),
+        TensorDynLen::from_dense(vec![i.clone(), j], vec![0.5, 0.0, 0.0, -0.25]).unwrap(),
+    );
 
     let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).unwrap();
 
-    assert_eq!(u.as_native().mode(), AdMode::Forward);
-    assert_eq!(s.as_native().mode(), AdMode::Forward);
-    assert_eq!(v.as_native().mode(), AdMode::Forward);
+    assert_eq!(u.mode(), AdMode::Forward);
+    assert_eq!(s.sum().mode(), AdMode::Forward);
+    assert_eq!(v.mode(), AdMode::Forward);
     let s_tangent = s.sum().tangent().and_then(|x| x.as_f64()).unwrap();
     assert!(
         (s_tangent - 0.25).abs() < 1e-12,
@@ -117,14 +136,13 @@ fn svd_preserves_forward_native_payload() {
 }
 
 #[test]
-fn factorize_svd_preserves_forward_native_payload() {
+fn factorize_svd_preserves_forward_payload_via_dual_level() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_native(
-        vec![i.clone(), j.clone()],
-        native_f64_tensor(&[3.0, 0.0, 0.0, 2.0], &[0.5, 0.0, 0.0, -0.25], &[2, 2]),
-    )
-    .unwrap();
+    let tensor = forward_tensor(
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![3.0, 0.0, 0.0, 2.0]).unwrap(),
+        TensorDynLen::from_dense(vec![i.clone(), j], vec![0.5, 0.0, 0.0, -0.25]).unwrap(),
+    );
 
     let result = factorize(
         &tensor,
@@ -133,8 +151,8 @@ fn factorize_svd_preserves_forward_native_payload() {
     )
     .unwrap();
 
-    assert_eq!(result.left.as_native().mode(), AdMode::Forward);
-    assert_eq!(result.right.as_native().mode(), AdMode::Forward);
+    assert_eq!(result.left.mode(), AdMode::Forward);
+    assert_eq!(result.right.mode(), AdMode::Forward);
     let right_tangent = result
         .right
         .sum()
@@ -148,13 +166,34 @@ fn factorize_svd_preserves_forward_native_payload() {
 }
 
 #[test]
+fn forward_ad_unpack_dual_restores_primal_and_tangent() {
+    let i = Index::new_dyn(2);
+    let primal = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    let tangent = TensorDynLen::from_dense(vec![i], vec![0.5, -0.25]).unwrap();
+
+    let (unpacked_primal, unpacked_tangent) = forward_ad::dual_level(|fw| {
+        let dual = fw.make_dual(&primal, &tangent)?;
+        fw.unpack_dual(&dual)
+    })
+    .unwrap();
+
+    assert_storage_eq(
+        unpacked_primal.storage().as_ref(),
+        primal.storage().as_ref(),
+    );
+    assert_storage_eq(
+        unpacked_tangent.unwrap().storage().as_ref(),
+        tangent.storage().as_ref(),
+    );
+}
+
+#[test]
 fn rank1_native_snapshots_stay_dense() {
     let i = Index::new_dyn(3);
-    let tensor = TensorDynLen::from_native(
-        vec![i],
-        native_f64_tensor(&[1.0, 2.0, 3.0], &[0.0, 0.0, 0.0], &[3]),
-    )
-    .unwrap();
+    let tensor = forward_tensor(
+        TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0, 3.0]).unwrap(),
+        TensorDynLen::from_dense(vec![i], vec![0.0, 0.0, 0.0]).unwrap(),
+    );
 
     let scaled = tensor.scale(AnyScalar::new_real(2.0)).unwrap();
 
@@ -172,7 +211,7 @@ fn plain_dense_storage_auto_seeds_native_payload() {
     )
     .unwrap();
 
-    assert_eq!(tensor.as_native().mode(), AdMode::Primal);
+    assert_eq!(tensor.mode(), AdMode::Primal);
 }
 
 #[test]
@@ -185,22 +224,6 @@ fn plain_diag_storage_auto_seeds_native_diag_payload() {
     )
     .unwrap();
 
-    let native = tensor.as_native();
-    assert_eq!(native.mode(), AdMode::Primal);
-    assert!(native.is_diag());
-}
-
-#[test]
-fn from_native_into_native_round_trips_mode_and_dims() {
-    let i = Index::new_dyn(2);
-    let j = Index::new_dyn(2);
-    let tensor = TensorDynLen::from_native(
-        vec![i, j],
-        native_f64_tensor(&[1.0, 2.0, 3.0, 4.0], &[0.5, 0.0, 0.0, -0.25], &[2, 2]),
-    )
-    .unwrap();
-
-    let native = tensor.into_native();
-    assert_eq!(native.mode(), AdMode::Forward);
-    assert_eq!(native.dims(), vec![2, 2]);
+    assert_eq!(tensor.mode(), AdMode::Primal);
+    assert!(is_diag_tensor(&tensor));
 }

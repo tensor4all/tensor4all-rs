@@ -368,7 +368,8 @@ mod tests {
         let i0 = DynIndex::new_dyn(2);
         let i1 = DynIndex::new_dyn(2);
         let tensor =
-            TensorDynLen::from_dense_f64(vec![i0.clone(), i1.clone()], vec![1.0, 0.0, 0.0, 1.0]);
+            TensorDynLen::from_dense(vec![i0.clone(), i1.clone()], vec![1.0, 0.0, 0.0, 1.0])
+                .unwrap();
 
         let mut nodes: HashMap<String, Vec<<DynIndex as IndexLike>::Id>> = HashMap::new();
         nodes.insert("node0".to_string(), vec![*i0.id()]);

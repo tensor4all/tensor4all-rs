@@ -79,14 +79,14 @@ fn create_simple_mps_chain() -> (
 
     // Create tensors with random data
     // Site 0: [s0, b01] shape (2, 4)
-    let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], vec![1.0; 8]);
+    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 8]).unwrap();
 
     // Site 1: [b01, s1, b12] shape (4, 2, 4)
-    let t1 =
-        TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 32]);
+    let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 32])
+        .unwrap();
 
     // Site 2: [b12, s2] shape (4, 2)
-    let t2 = TensorDynLen::from_dense_f64(vec![b12.clone(), s2.clone()], vec![1.0; 8]);
+    let t2 = TensorDynLen::from_dense(vec![b12.clone(), s2.clone()], vec![1.0; 8]).unwrap();
 
     // Add nodes with string names (add_tensor returns Result)
     let n0 = mps.add_tensor("site0", t0).unwrap();
@@ -122,7 +122,7 @@ fn test_environment_cache_insert_get() {
 
     // Create a simple tensor to cache
     let idx = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::from_dense_f64(vec![idx], vec![1.0, 2.0]);
+    let tensor = TensorDynLen::from_dense(vec![idx], vec![1.0, 2.0]).unwrap();
 
     cache.insert("a", "b", tensor.clone());
 
@@ -140,7 +140,7 @@ fn test_environment_cache_clear() {
     let mut cache: EnvironmentCache<TensorDynLen, &str> = EnvironmentCache::new();
 
     let idx = DynIndex::new_dyn(2);
-    let tensor = TensorDynLen::from_dense_f64(vec![idx], vec![1.0, 2.0]);
+    let tensor = TensorDynLen::from_dense(vec![idx], vec![1.0, 2.0]).unwrap();
 
     cache.insert("a", "b", tensor);
     assert_eq!(cache.len(), 1);
@@ -282,22 +282,24 @@ fn create_two_site_mps() -> (
 
     // Create tensors with normalized data
     // Site 0: [s0, b01] shape (2, 2)
-    let t0 = TensorDynLen::from_dense_f64(
+    let t0 = TensorDynLen::from_dense(
         vec![s0.clone(), b01.clone()],
         vec![
             1.0, 0.0, // s0=0: b01=0, b01=1
             0.0, 1.0, // s0=1: b01=0, b01=1
         ],
-    );
+    )
+    .unwrap();
 
     // Site 1: [b01, s1] shape (2, 2)
-    let t1 = TensorDynLen::from_dense_f64(
+    let t1 = TensorDynLen::from_dense(
         vec![b01.clone(), s1.clone()],
         vec![
             1.0, 0.0, // b01=0: s1=0, s1=1
             0.0, 1.0, // b01=1: s1=0, s1=1
         ],
-    );
+    )
+    .unwrap();
 
     // Add nodes with string names
     let n0 = mps.add_tensor("site0", t0).unwrap();
@@ -363,14 +365,16 @@ fn create_diagonal_mpo(
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = diag_values[0];
     }
-    let t0 = TensorDynLen::from_dense_f64(vec![s0_out.clone(), s0_in.clone(), b01.clone()], data0);
+    let t0 =
+        TensorDynLen::from_dense(vec![s0_out.clone(), s0_in.clone(), b01.clone()], data0).unwrap();
 
     // Diagonal tensor at site 1: [b01, s1_out, s1_in] shape (1, 2, 2)
     let mut data1 = vec![0.0; phys_dim * phys_dim];
     for i in 0..phys_dim {
         data1[i * phys_dim + i] = diag_values[1];
     }
-    let t1 = TensorDynLen::from_dense_f64(vec![b01.clone(), s1_out.clone(), s1_in.clone()], data1);
+    let t1 =
+        TensorDynLen::from_dense(vec![b01.clone(), s1_out.clone(), s1_in.clone()], data1).unwrap();
 
     // Add nodes
     let n0 = mpo.add_tensor("site0", t0).unwrap();
@@ -436,10 +440,10 @@ fn create_mps_from_values(
     for i in 0..phys_dim.min(bond_dim) {
         data0[i * bond_dim + i] = 1.0;
     }
-    let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], data0);
+    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], data0).unwrap();
 
     // Site 1 tensor: [b01, s1] - contains the values
-    let t1 = TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone()], values.to_vec());
+    let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone()], values.to_vec()).unwrap();
 
     let n0 = mps.add_tensor("site0", t0).unwrap();
     let n1 = mps.add_tensor("site1", t1).unwrap();
@@ -623,7 +627,7 @@ fn create_three_site_mps(
     for i in 0..phys_dim.min(bond_dim) {
         data0[i * bond_dim + i] = 1.0;
     }
-    let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], data0);
+    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], data0).unwrap();
 
     // Site 1: [b01, s1, b12] shape (2, 2, 2) - identity-like
     // B[b, s, b'] = delta(b, s) * delta(s, b')
@@ -633,7 +637,7 @@ fn create_three_site_mps(
         let idx = i * phys_dim * bond_dim + i * bond_dim + i;
         data1[idx] = 1.0;
     }
-    let t1 = TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone(), b12.clone()], data1);
+    let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], data1).unwrap();
 
     // Site 2: [b12, s2] shape (2, 2) - contains values or identity
     let data2 = if let Some(vals) = values {
@@ -652,7 +656,7 @@ fn create_three_site_mps(
         }
         d
     };
-    let t2 = TensorDynLen::from_dense_f64(vec![b12.clone(), s2.clone()], data2);
+    let t2 = TensorDynLen::from_dense(vec![b12.clone(), s2.clone()], data2).unwrap();
 
     let n0 = mps.add_tensor("site0", t0).unwrap();
     let n1 = mps.add_tensor("site1", t1).unwrap();
@@ -704,24 +708,27 @@ fn create_three_site_identity_mpo(
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = 1.0;
     }
-    let t0 = TensorDynLen::from_dense_f64(vec![s0_out.clone(), s0_in.clone(), b01.clone()], data0);
+    let t0 =
+        TensorDynLen::from_dense(vec![s0_out.clone(), s0_in.clone(), b01.clone()], data0).unwrap();
 
     // Site 1: [b01, s1_out, s1_in, b12] - identity on physical indices
     let mut data1 = vec![0.0; phys_dim * phys_dim];
     for i in 0..phys_dim {
         data1[i * phys_dim + i] = 1.0;
     }
-    let t1 = TensorDynLen::from_dense_f64(
+    let t1 = TensorDynLen::from_dense(
         vec![b01.clone(), s1_out.clone(), s1_in.clone(), b12.clone()],
         data1,
-    );
+    )
+    .unwrap();
 
     // Site 2: [b12, s2_out, s2_in] - identity on physical indices
     let mut data2 = vec![0.0; phys_dim * phys_dim];
     for i in 0..phys_dim {
         data2[i * phys_dim + i] = 1.0;
     }
-    let t2 = TensorDynLen::from_dense_f64(vec![b12.clone(), s2_out.clone(), s2_in.clone()], data2);
+    let t2 =
+        TensorDynLen::from_dense(vec![b12.clone(), s2_out.clone(), s2_in.clone()], data2).unwrap();
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
     let n1 = mpo.add_tensor("site1", t1).unwrap();
@@ -871,20 +878,22 @@ fn create_mpo_with_internal_indices(
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = diag_values[0];
     }
-    let t0 = TensorDynLen::from_dense_f64(
+    let t0 = TensorDynLen::from_dense(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), b01.clone()],
         data0,
-    );
+    )
+    .unwrap();
 
     // Site 1: [b01, s1_out_tmp, s1_in_tmp] - diagonal
     let mut data1 = vec![0.0; phys_dim * phys_dim];
     for i in 0..phys_dim {
         data1[i * phys_dim + i] = diag_values[1];
     }
-    let t1 = TensorDynLen::from_dense_f64(
+    let t1 = TensorDynLen::from_dense(
         vec![b01.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
         data1,
-    );
+    )
+    .unwrap();
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
     let n1 = mpo.add_tensor("site1", t1).unwrap();
@@ -996,7 +1005,7 @@ fn test_linear_operator_apply_local() {
 
     // Create a local tensor for site0 only
     // v = [1.0, 0.0] representing |0⟩ at site0
-    let local_v = TensorDynLen::from_dense_f64(vec![site_indices[0].clone()], vec![1.0, 0.0]);
+    let local_v = TensorDynLen::from_dense(vec![site_indices[0].clone()], vec![1.0, 0.0]).unwrap();
 
     // Apply operator locally at site0
     let result = linear_op.apply_local(&local_v, &["site0"]);
@@ -1083,13 +1092,14 @@ fn test_linear_operator_apply_local_two_sites() {
 
     // Create a local tensor for both sites (merged region)
     // v = |00⟩ = [1, 0, 0, 0] in (s0, s1) basis
-    let local_v = TensorDynLen::from_dense_f64(
+    let local_v = TensorDynLen::from_dense(
         vec![site_indices[0].clone(), site_indices[1].clone()],
         vec![
             1.0, 0.0, // s0=0: s1=0, s1=1
             0.0, 0.0, // s0=1: s1=0, s1=1
         ],
-    );
+    )
+    .unwrap();
 
     // Apply operator locally at both sites
     let result = linear_op.apply_local(&local_v, &["site0", "site1"]);
@@ -1335,17 +1345,18 @@ fn create_three_site_mpo_with_internal_indices(
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = diag_values[0];
     }
-    let t0 = TensorDynLen::from_dense_f64(
+    let t0 = TensorDynLen::from_dense(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), b01.clone()],
         data0,
-    );
+    )
+    .unwrap();
 
     // Site 1: [b01, s1_out_tmp, s1_in_tmp, b12] - diagonal
     let mut data1 = vec![0.0; phys_dim * phys_dim];
     for i in 0..phys_dim {
         data1[i * phys_dim + i] = diag_values[1];
     }
-    let t1 = TensorDynLen::from_dense_f64(
+    let t1 = TensorDynLen::from_dense(
         vec![
             b01.clone(),
             s1_out_tmp.clone(),
@@ -1353,17 +1364,19 @@ fn create_three_site_mpo_with_internal_indices(
             b12.clone(),
         ],
         data1,
-    );
+    )
+    .unwrap();
 
     // Site 2: [b12, s2_out_tmp, s2_in_tmp] - diagonal
     let mut data2 = vec![0.0; phys_dim * phys_dim];
     for i in 0..phys_dim {
         data2[i * phys_dim + i] = diag_values[2];
     }
-    let t2 = TensorDynLen::from_dense_f64(
+    let t2 = TensorDynLen::from_dense(
         vec![b12.clone(), s2_out_tmp.clone(), s2_in_tmp.clone()],
         data2,
-    );
+    )
+    .unwrap();
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
     let n1 = mpo.add_tensor("site1", t1).unwrap();
@@ -1535,10 +1548,11 @@ fn create_pauli_x_mpo(
             data0[out_idx * phys_dim + in_idx] = pauli_x[out_idx * phys_dim + in_idx];
         }
     }
-    let t0 = TensorDynLen::from_dense_f64(
+    let t0 = TensorDynLen::from_dense(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
         data0,
-    );
+    )
+    .unwrap();
 
     // Site 1 tensor: [bond, s1_out, s1_in] with X matrix
     #[allow(clippy::needless_range_loop, clippy::identity_op)]
@@ -1549,10 +1563,11 @@ fn create_pauli_x_mpo(
             data1[out_idx * phys_dim + in_idx] = pauli_x[out_idx * phys_dim + in_idx];
         }
     }
-    let t1 = TensorDynLen::from_dense_f64(
+    let t1 = TensorDynLen::from_dense(
         vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
         data1,
-    );
+    )
+    .unwrap();
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
     let n1 = mpo.add_tensor("site1", t1).unwrap();
@@ -1688,10 +1703,11 @@ fn create_general_2x2_mpo(
             data0[out_idx * phys_dim + in_idx] = mat[out_idx * phys_dim + in_idx];
         }
     }
-    let t0 = TensorDynLen::from_dense_f64(
+    let t0 = TensorDynLen::from_dense(
         vec![s0_out_tmp.clone(), s0_in_tmp.clone(), bond.clone()],
         data0,
-    );
+    )
+    .unwrap();
 
     // Site 1 tensor: [bond, s1_out, s1_in]
     #[allow(clippy::needless_range_loop, clippy::identity_op)]
@@ -1701,10 +1717,11 @@ fn create_general_2x2_mpo(
             data1[out_idx * phys_dim + in_idx] = mat[out_idx * phys_dim + in_idx];
         }
     }
-    let t1 = TensorDynLen::from_dense_f64(
+    let t1 = TensorDynLen::from_dense(
         vec![bond.clone(), s1_out_tmp.clone(), s1_in_tmp.clone()],
         data1,
-    );
+    )
+    .unwrap();
 
     let n0 = mpo.add_tensor("site0", t0).unwrap();
     let n1 = mpo.add_tensor("site1", t1).unwrap();
@@ -1859,20 +1876,19 @@ fn create_n_site_mps(
             for j in 0..phys_dim.min(bond_dim) {
                 data[j * bond_dim + j] = 1.0;
             }
-            TensorDynLen::from_dense_f64(
-                vec![site_indices[i].clone(), bond_indices[i].clone()],
-                data,
-            )
+            TensorDynLen::from_dense(vec![site_indices[i].clone(), bond_indices[i].clone()], data)
+                .unwrap()
         } else if i == n_sites - 1 {
             // Last site: [b_{n-2,n-1}, s_{n-1}] - identity-like
             let mut data = vec![0.0; bond_dim * phys_dim];
             for j in 0..phys_dim.min(bond_dim) {
                 data[j * phys_dim + j] = 1.0;
             }
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
                 data,
             )
+            .unwrap()
         } else {
             // Middle sites: [b_{i-1,i}, s_i, b_{i,i+1}] - identity-like
             let mut data = vec![0.0; bond_dim * phys_dim * bond_dim];
@@ -1880,7 +1896,7 @@ fn create_n_site_mps(
                 let idx = j * phys_dim * bond_dim + j * bond_dim + j;
                 data[idx] = 1.0;
             }
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     site_indices[i].clone(),
@@ -1888,6 +1904,7 @@ fn create_n_site_mps(
                 ],
                 data,
             )
+            .unwrap()
         };
         mps.add_tensor(name, tensor).unwrap();
     }
@@ -1932,7 +1949,7 @@ fn create_n_site_mpo_with_internal_indices(
 
         let tensor = if i == 0 {
             // First site: [s_out, s_in, b01]
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     s_out_tmp[i].clone(),
                     s_in_tmp[i].clone(),
@@ -1940,9 +1957,10 @@ fn create_n_site_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         } else if i == n_sites - 1 {
             // Last site: [b_{n-2,n-1}, s_out, s_in]
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -1950,9 +1968,10 @@ fn create_n_site_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         } else {
             // Middle sites: [b_{i-1,i}, s_out, s_in, b_{i,i+1}]
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -1961,6 +1980,7 @@ fn create_n_site_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         };
         mpo.add_tensor(name, tensor).unwrap();
     }

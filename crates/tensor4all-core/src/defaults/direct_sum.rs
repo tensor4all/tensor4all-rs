@@ -8,11 +8,9 @@
 
 use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
-use crate::storage::{DenseStorageC64, DenseStorageF64, Storage};
 use crate::tensor::TensorDynLen;
 use anyhow::Result;
 use num_complex::Complex64;
-use std::sync::Arc;
 
 /// Compute the direct sum of two tensors along specified index pairs.
 ///
@@ -47,13 +45,14 @@ pub fn direct_sum(
     b: &TensorDynLen,
     pairs: &[(DynIndex, DynIndex)],
 ) -> Result<(TensorDynLen, Vec<DynIndex>)> {
-    // Dispatch based on storage type
-    match (a.storage().as_ref(), b.storage().as_ref()) {
-        (Storage::DenseF64(_), Storage::DenseF64(_)) => direct_sum_f64(a, b, pairs),
-        (Storage::DenseC64(_), Storage::DenseC64(_)) => direct_sum_c64(a, b, pairs),
-        _ => Err(anyhow::anyhow!(
-            "direct_sum requires both tensors to have the same dense storage type (DenseF64 or DenseC64)"
-        )),
+    if a.is_f64() && b.is_f64() {
+        direct_sum_f64(a, b, pairs)
+    } else if a.is_complex() && b.is_complex() {
+        direct_sum_c64(a, b, pairs)
+    } else {
+        Err(anyhow::anyhow!(
+            "direct_sum requires both tensors to have the same dense scalar type (f64 or Complex64)"
+        ))
     }
 }
 
@@ -250,17 +249,8 @@ fn direct_sum_f64(
     pairs: &[(DynIndex, DynIndex)],
 ) -> Result<(TensorDynLen, Vec<DynIndex>)> {
     let setup = setup_direct_sum(a, b, pairs)?;
-
-    let a_storage = a.storage();
-    let a_data = match a_storage.as_ref() {
-        Storage::DenseF64(s) => s.as_slice(),
-        _ => return Err(anyhow::anyhow!("Expected DenseF64 storage")),
-    };
-    let b_storage = b.storage();
-    let b_data = match b_storage.as_ref() {
-        Storage::DenseF64(s) => s.as_slice(),
-        _ => return Err(anyhow::anyhow!("Expected DenseF64 storage")),
-    };
+    let a_data = a.to_vec_f64()?;
+    let b_data = b.to_vec_f64()?;
 
     let mut result_data: Vec<f64> = vec![0.0; setup.result_total];
 
@@ -305,11 +295,7 @@ fn direct_sum_f64(
         // else: mixed case stays 0.0
     }
 
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-        result_data,
-        &setup.result_dims,
-    )));
-    let result = TensorDynLen::new(setup.result_indices, storage);
+    let result = TensorDynLen::from_dense(setup.result_indices, result_data)?;
     Ok((result, setup.new_indices))
 }
 
@@ -319,17 +305,8 @@ fn direct_sum_c64(
     pairs: &[(DynIndex, DynIndex)],
 ) -> Result<(TensorDynLen, Vec<DynIndex>)> {
     let setup = setup_direct_sum(a, b, pairs)?;
-
-    let a_storage = a.storage();
-    let a_data = match a_storage.as_ref() {
-        Storage::DenseC64(s) => s.as_slice(),
-        _ => return Err(anyhow::anyhow!("Expected DenseC64 storage")),
-    };
-    let b_storage = b.storage();
-    let b_data = match b_storage.as_ref() {
-        Storage::DenseC64(s) => s.as_slice(),
-        _ => return Err(anyhow::anyhow!("Expected DenseC64 storage")),
-    };
+    let a_data = a.to_vec_c64()?;
+    let b_data = b.to_vec_c64()?;
 
     let mut result_data: Vec<Complex64> = vec![Complex64::new(0.0, 0.0); setup.result_total];
 
@@ -374,11 +351,7 @@ fn direct_sum_c64(
         // else: mixed case stays 0.0
     }
 
-    let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-        result_data,
-        &setup.result_dims,
-    )));
-    let result = TensorDynLen::new(setup.result_indices, storage);
+    let result = TensorDynLen::from_dense(setup.result_indices, result_data)?;
     Ok((result, setup.new_indices))
 }
 
@@ -394,28 +367,24 @@ mod tests {
         let k = DynIndex::new_dyn(4);
 
         // A[i, j] - 2x3 tensor
-        let a = TensorDynLen::new(
+        let a = TensorDynLen::from_dense(
             vec![i.clone(), j.clone()],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![
-                    1.0, 2.0, 3.0, // i=0
-                    4.0, 5.0, 6.0, // i=1
-                ],
-                &[2, 3],
-            ))),
-        );
+            vec![
+                1.0, 2.0, 3.0, // i=0
+                4.0, 5.0, 6.0, // i=1
+            ],
+        )
+        .unwrap();
 
         // B[i, k] - 2x4 tensor
-        let b = TensorDynLen::new(
+        let b = TensorDynLen::from_dense(
             vec![i.clone(), k.clone()],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![
-                    10.0, 20.0, 30.0, 40.0, // i=0
-                    50.0, 60.0, 70.0, 80.0, // i=1
-                ],
-                &[2, 4],
-            ))),
-        );
+            vec![
+                10.0, 20.0, 30.0, 40.0, // i=0
+                50.0, 60.0, 70.0, 80.0, // i=1
+            ],
+        )
+        .unwrap();
 
         // Direct sum along (j, k)
         let (result, new_indices) = direct_sum(&a, &b, &[(j.clone(), k.clone())]).unwrap();
@@ -429,11 +398,7 @@ mod tests {
         assert_eq!(new_indices[0].dim(), 7);
 
         // Check data
-        let result_storage = result.storage();
-        let data = match result_storage.as_ref() {
-            Storage::DenseF64(s) => s.as_slice(),
-            _ => panic!("Expected DenseF64"),
-        };
+        let data = result.to_vec_f64().unwrap();
 
         // i=0: [1, 2, 3, 10, 20, 30, 40]
         // i=1: [4, 5, 6, 50, 60, 70, 80]
@@ -462,22 +427,15 @@ mod tests {
         let l = DynIndex::new_dyn(3);
 
         // A[i, j] - 2x2 tensor
-        let a = TensorDynLen::new(
-            vec![i.clone(), j.clone()],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![1.0, 2.0, 3.0, 4.0],
-                &[2, 2],
-            ))),
-        );
+        let a =
+            TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
         // B[k, l] - 3x3 tensor (no common indices)
-        let b = TensorDynLen::new(
+        let b = TensorDynLen::from_dense(
             vec![k.clone(), l.clone()],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0],
-                &[3, 3],
-            ))),
-        );
+            vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0],
+        )
+        .unwrap();
 
         // Direct sum along (i, k) and (j, l)
         let (result, new_indices) =

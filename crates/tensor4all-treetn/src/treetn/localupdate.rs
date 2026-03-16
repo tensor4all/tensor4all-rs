@@ -890,24 +890,25 @@ mod tests {
 
         // Tensor A: [site_a, bond_ab]
         let tensor_a =
-            TensorDynLen::from_dense_f64(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]);
+            TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 6]).unwrap();
         tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
         // Tensor B: [bond_ab, bond_bc, bond_bd]
-        let tensor_b = TensorDynLen::from_dense_f64(
+        let tensor_b = TensorDynLen::from_dense(
             vec![bond_ab.clone(), bond_bc.clone(), bond_bd.clone()],
             vec![1.0; 27],
-        );
+        )
+        .unwrap();
         tn.add_tensor("B".to_string(), tensor_b).unwrap();
 
         // Tensor C: [bond_bc, site_c]
         let tensor_c =
-            TensorDynLen::from_dense_f64(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]);
+            TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 6]).unwrap();
         tn.add_tensor("C".to_string(), tensor_c).unwrap();
 
         // Tensor D: [bond_bd, site_d]
         let tensor_d =
-            TensorDynLen::from_dense_f64(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]);
+            TensorDynLen::from_dense(vec![bond_bd.clone(), site_d.clone()], vec![1.0; 6]).unwrap();
         tn.add_tensor("D".to_string(), tensor_d).unwrap();
 
         // Connect
@@ -1212,19 +1213,20 @@ mod tests {
 
         // Tensor A: [site_a, bond_ab] dim 2x4
         let tensor_a =
-            TensorDynLen::from_dense_f64(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 8]);
+            TensorDynLen::from_dense(vec![site_a.clone(), bond_ab.clone()], vec![1.0; 8]).unwrap();
         tn.add_tensor("A".to_string(), tensor_a).unwrap();
 
         // Tensor B: [bond_ab, site_b, bond_bc] dim 4x2x4
-        let tensor_b = TensorDynLen::from_dense_f64(
+        let tensor_b = TensorDynLen::from_dense(
             vec![bond_ab.clone(), site_b.clone(), bond_bc.clone()],
             vec![1.0; 32],
-        );
+        )
+        .unwrap();
         tn.add_tensor("B".to_string(), tensor_b).unwrap();
 
         // Tensor C: [bond_bc, site_c] dim 4x2
         let tensor_c =
-            TensorDynLen::from_dense_f64(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 8]);
+            TensorDynLen::from_dense(vec![bond_bc.clone(), site_c.clone()], vec![1.0; 8]).unwrap();
         tn.add_tensor("C".to_string(), tensor_c).unwrap();
 
         // Connect

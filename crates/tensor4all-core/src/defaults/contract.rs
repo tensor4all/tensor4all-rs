@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
-use tensor4all_tensorbackend::einsum_dyn_ad_tensors_native;
+use tensor4all_tensorbackend::einsum_native_tensors;
 
 use crate::defaults::{DynId, DynIndex, TensorDynLen};
 
@@ -280,7 +280,7 @@ pub fn build_diag_union(tensors: &[&TensorDynLen]) -> AxisUnionFind {
             uf.make_set(*idx.id());
         }
 
-        if tensor.as_native().is_diag() && tensor.indices().len() >= 2 {
+        if tensor.is_diag() && tensor.indices().len() >= 2 {
             let first_id = *tensor.indices()[0].id();
             for idx in tensor.indices().iter().skip(1) {
                 uf.union(first_id, *idx.id());
@@ -377,13 +377,13 @@ fn contract_multi_impl(
         }
     }
 
-    let native_operands: Vec<(&tensor4all_tensorbackend::DynAdTensor, &[usize])> = tensors
+    let native_operands: Vec<_> = tensors
         .iter()
         .enumerate()
         .map(|(tensor_idx, tensor)| (tensor.as_native(), ixs[tensor_idx].as_slice()))
         .collect();
 
-    let result_native = einsum_dyn_ad_tensors_native(&native_operands, &output)?;
+    let result_native = einsum_native_tensors(&native_operands, &output)?;
     let final_indices = if output.is_empty() {
         vec![]
     } else {

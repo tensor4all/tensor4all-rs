@@ -5,9 +5,11 @@
 
 use super::error::{MPOError, Result};
 use super::Matrix2;
-use mdarray::DSlice;
-use num_complex::ComplexFloat;
-use tensor4all_tensorbackend::svd_backend;
+use num_complex::{Complex64, ComplexFloat};
+use tenferro_algebra::Scalar as TfScalar;
+use tenferro_linalg::LinalgScalar;
+use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
+use tensor4all_tensorbackend::backend::svd_backend;
 
 /// Factorization method to use
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -71,24 +73,35 @@ pub trait SVDScalar:
     crate::traits::TTScalar
     + ComplexFloat
     + Default
-    + From<<Self as ComplexFloat>::Real>
+    + Copy
     + tensor4all_tensorbackend::backend::BackendLinalgScalar
+    + TfScalar
     + 'static
-where
-    <Self as ComplexFloat>::Real: Into<f64>,
 {
+    /// Convert a backend singular value into `f64` for truncation logic.
+    fn linalg_real_to_f64(real: <Self as LinalgScalar>::Real) -> f64;
+    /// Promote a backend singular value into the matrix scalar type.
+    fn from_linalg_real(real: <Self as LinalgScalar>::Real) -> Self;
 }
 
-impl<T> SVDScalar for T
-where
-    T: crate::traits::TTScalar
-        + ComplexFloat
-        + Default
-        + From<<T as ComplexFloat>::Real>
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar
-        + 'static,
-    <T as ComplexFloat>::Real: Into<f64>,
-{
+impl SVDScalar for f64 {
+    fn linalg_real_to_f64(real: <Self as LinalgScalar>::Real) -> f64 {
+        real
+    }
+
+    fn from_linalg_real(real: <Self as LinalgScalar>::Real) -> Self {
+        real
+    }
+}
+
+impl SVDScalar for Complex64 {
+    fn linalg_real_to_f64(real: <Self as LinalgScalar>::Real) -> f64 {
+        real
+    }
+
+    fn from_linalg_real(real: <Self as LinalgScalar>::Real) -> Self {
+        Complex64::new(real, 0.0)
+    }
 }
 
 /// Factorize a matrix into left and right factors
@@ -106,10 +119,7 @@ where
 pub fn factorize<T: SVDScalar>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<T>>
-where
-    <T as ComplexFloat>::Real: Into<f64>,
-{
+) -> Result<FactorizeResult<T>> {
     match options.method {
         FactorizeMethod::SVD => factorize_svd(matrix, options),
         FactorizeMethod::RSVD => factorize_rsvd(matrix, options),
@@ -124,14 +134,71 @@ where
 // Use the shared matrix2_zeros from the parent module
 use super::matrix2_zeros;
 
+fn matrix2_to_typed_tensor<T>(matrix: &Matrix2<T>) -> Result<TypedTensor<T>>
+where
+    T: TfScalar + Copy,
+{
+    let dims = [matrix.dim(0), matrix.dim(1)];
+    let data: Vec<T> = matrix.iter().copied().collect();
+    TypedTensor::from_slice(&data, &dims, MemoryOrder::RowMajor).map_err(|e| {
+        MPOError::FactorizationError {
+            message: format!("failed to convert Matrix2 to tenferro tensor: {e}"),
+        }
+    })
+}
+
+fn typed_tensor_to_matrix2<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Matrix2<T>>
+where
+    T: TfScalar + Copy + Default,
+{
+    if tensor.ndim() != 2 {
+        return Err(MPOError::FactorizationError {
+            message: format!(
+                "{op} returned rank-{} tensor, expected matrix",
+                tensor.ndim()
+            ),
+        });
+    }
+
+    let dims = tensor.dims();
+    let rows = dims[0];
+    let cols = dims[1];
+    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
+    let data = row_major
+        .buffer()
+        .as_slice()
+        .ok_or_else(|| MPOError::FactorizationError {
+            message: format!("{op} returned non-CPU tensor unexpectedly"),
+        })?;
+
+    let mut matrix = matrix2_zeros(rows, cols);
+    for i in 0..rows {
+        for j in 0..cols {
+            matrix[[i, j]] = data[i * cols + j];
+        }
+    }
+    Ok(matrix)
+}
+
+fn typed_row_major_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
+where
+    T: TfScalar + Copy,
+{
+    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
+    let data = row_major
+        .buffer()
+        .as_slice()
+        .ok_or_else(|| MPOError::FactorizationError {
+            message: format!("{op} returned non-CPU tensor unexpectedly"),
+        })?;
+    Ok(data.to_vec())
+}
+
 /// Factorize using SVD
 fn factorize_svd<T: SVDScalar>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<T>>
-where
-    <T as ComplexFloat>::Real: Into<f64>,
-{
+) -> Result<FactorizeResult<T>> {
     let m = matrix.dim(0);
     let n = matrix.dim(1);
 
@@ -141,18 +208,15 @@ where
         });
     }
 
-    // Clone matrix for SVD (it may be modified)
-    let mut a = matrix.clone();
-
     // Compute SVD using tensorbackend (tenferro-backed implementation)
-    let a_slice: &mut DSlice<T, 2> = a.as_mut();
-    let svd_result = svd_backend(a_slice).map_err(|e| MPOError::FactorizationError {
+    let a_tensor = matrix2_to_typed_tensor(matrix)?;
+    let svd_result = svd_backend(&a_tensor).map_err(|e| MPOError::FactorizationError {
         message: format!("SVD computation failed: {:?}", e),
     })?;
 
-    let u = svd_result.u;
-    let s = svd_result.s;
-    let vt = svd_result.vt;
+    let u = typed_tensor_to_matrix2(&svd_result.u, "svd.u")?;
+    let vt = typed_tensor_to_matrix2(&svd_result.vt, "svd.vt")?;
+    let singular_values = typed_row_major_values(&svd_result.s, "svd.s")?;
 
     // Determine rank based on tolerance and max_rank
     let min_dim = m.min(n);
@@ -161,18 +225,18 @@ where
 
     // Sum all squared singular values for total weight
     // Singular values are stored in first row: s[[0, i]] (LAPACK-style convention)
-    for i in 0..min_dim {
-        let sv: f64 = ComplexFloat::abs(s[[0, i]]).into();
+    for &singular_value in singular_values.iter().take(min_dim) {
+        let sv = T::linalg_real_to_f64(singular_value);
         total_weight += sv * sv;
     }
 
     // Find rank by keeping singular values above tolerance
     let mut kept_weight: f64 = 0.0;
-    for i in 0..min_dim {
+    for &singular_value in singular_values.iter().take(min_dim) {
         if rank >= options.max_rank {
             break;
         }
-        let sv: f64 = ComplexFloat::abs(s[[0, i]]).into();
+        let sv = T::linalg_real_to_f64(singular_value);
         if sv < options.tolerance {
             break;
         }
@@ -206,7 +270,7 @@ where
         }
         for i in 0..rank {
             // Singular values are stored in first row: s[[0, i]] (LAPACK-style convention)
-            let sv = s[[0, i]];
+            let sv = T::from_linalg_real(singular_values[i]);
             for j in 0..n {
                 right[[i, j]] = sv * vt[[i, j]];
             }
@@ -216,7 +280,7 @@ where
         for i in 0..m {
             for j in 0..rank {
                 // Singular values are stored in first row: s[[0, j]] (LAPACK-style convention)
-                let sv = s[[0, j]];
+                let sv = T::from_linalg_real(singular_values[j]);
                 left[[i, j]] = u[[i, j]] * sv;
             }
         }
@@ -239,10 +303,7 @@ where
 fn factorize_rsvd<T: SVDScalar>(
     _matrix: &Matrix2<T>,
     _options: &FactorizeOptions,
-) -> Result<FactorizeResult<T>>
-where
-    <T as ComplexFloat>::Real: Into<f64>,
-{
+) -> Result<FactorizeResult<T>> {
     // TODO: Implement RSVD-based factorization
     Err(MPOError::FactorizationError {
         message: "RSVD factorization not yet implemented".to_string(),
@@ -259,7 +320,6 @@ pub fn factorize_lu<T>(
 ) -> Result<FactorizeResult<T>>
 where
     T: SVDScalar + matrixci::Scalar,
-    <T as ComplexFloat>::Real: Into<f64>,
 {
     use matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
 

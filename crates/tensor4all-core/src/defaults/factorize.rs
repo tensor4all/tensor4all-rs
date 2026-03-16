@@ -18,9 +18,10 @@
 //! ```
 
 use crate::defaults::DynIndex;
-use crate::{unfold_split, Storage, StorageScalar, TensorDynLen};
+use crate::{unfold_split, TensorDynLen};
 use matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use num_complex::{Complex64, ComplexFloat};
+use tensor4all_tensorbackend::{native_tensor_primal_to_diag_f64, TensorElement};
 
 use crate::qr::{qr_with, QrOptions};
 use crate::svd::{svd_with, SvdOptions};
@@ -61,56 +62,55 @@ pub fn factorize(
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
-    // Dispatch based on storage type
-    match t.storage().as_ref() {
-        Storage::DenseF64(_) => factorize_impl::<f64>(t, left_inds, options),
-        Storage::DenseC64(_) => factorize_impl::<Complex64>(t, left_inds, options),
-        Storage::DiagF64(_) | Storage::DiagC64(_) => Err(FactorizeError::UnsupportedStorage(
+    if t.is_diag() {
+        return Err(FactorizeError::UnsupportedStorage(
             "Diagonal storage not supported for factorize",
-        )),
+        ));
+    }
+
+    if t.is_f64() {
+        factorize_impl_f64(t, left_inds, options)
+    } else if t.is_complex() {
+        factorize_impl_c64(t, left_inds, options)
+    } else {
+        Err(FactorizeError::UnsupportedStorage(
+            "factorize currently supports only f64 and Complex64 tensors",
+        ))
     }
 }
 
-/// Internal implementation with scalar type.
-fn factorize_impl<T>(
+fn factorize_impl_f64(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
-where
-    T: StorageScalar
-        + ComplexFloat
-        + Default
-        + From<<T as ComplexFloat>::Real>
-        + MatrixScalar
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar
-        + 'static,
-    <T as ComplexFloat>::Real: Into<f64> + 'static,
-{
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
     match options.alg {
-        FactorizeAlg::SVD => factorize_svd::<T>(t, left_inds, options),
-        FactorizeAlg::QR => factorize_qr::<T>(t, left_inds, options),
-        FactorizeAlg::LU => factorize_lu::<T>(t, left_inds, options),
-        FactorizeAlg::CI => factorize_ci::<T>(t, left_inds, options),
+        FactorizeAlg::SVD => factorize_svd(t, left_inds, options),
+        FactorizeAlg::QR => factorize_qr(t, left_inds, options),
+        FactorizeAlg::LU => factorize_lu::<f64>(t, left_inds, options),
+        FactorizeAlg::CI => factorize_ci::<f64>(t, left_inds, options),
+    }
+}
+
+fn factorize_impl_c64(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+    match options.alg {
+        FactorizeAlg::SVD => factorize_svd(t, left_inds, options),
+        FactorizeAlg::QR => factorize_qr(t, left_inds, options),
+        FactorizeAlg::LU => factorize_lu::<Complex64>(t, left_inds, options),
+        FactorizeAlg::CI => factorize_ci::<Complex64>(t, left_inds, options),
     }
 }
 
 /// SVD factorization implementation.
-fn factorize_svd<T>(
+fn factorize_svd(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
-where
-    T: StorageScalar
-        + ComplexFloat
-        + Default
-        + From<<T as ComplexFloat>::Real>
-        + MatrixScalar
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar
-        + 'static,
-    <T as ComplexFloat>::Real: Into<f64> + 'static,
-{
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
     let mut svd_options = SvdOptions::default();
     if let Some(rtol) = options.rtol {
         svd_options.truncation.rtol = Some(rtol);
@@ -119,18 +119,11 @@ where
         svd_options.truncation.max_rank = Some(max_rank);
     }
 
-    let (u, s, v) = svd_with::<T>(t, left_inds, &svd_options)?;
+    let (u, s, v) = svd_with::<f64>(t, left_inds, &svd_options)?;
     let bond_index = u.indices.last().unwrap().clone();
     let sim_bond_index = s.indices[1].clone();
-    let singular_values = match s.storage().as_ref() {
-        Storage::DiagF64(data) => data.as_slice().to_vec(),
-        other => {
-            return Err(FactorizeError::ComputationError(anyhow::anyhow!(
-                "factorize_svd expected diagonal singular-value tensor, got {:?}",
-                std::mem::discriminant(other)
-            )));
-        }
-    };
+    let singular_values = native_tensor_primal_to_diag_f64(s.as_native())
+        .map_err(FactorizeError::ComputationError)?;
     let rank = singular_values.len();
     let perm_vh: Vec<usize> = std::iter::once(v.indices.len() - 1)
         .chain(0..v.indices.len() - 1)
@@ -166,21 +159,11 @@ where
 }
 
 /// QR factorization implementation.
-fn factorize_qr<T>(
+fn factorize_qr(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
-where
-    T: StorageScalar
-        + ComplexFloat
-        + Default
-        + From<<T as ComplexFloat>::Real>
-        + MatrixScalar
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar
-        + 'static,
-    <T as ComplexFloat>::Real: Into<f64> + 'static,
-{
+) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
     if options.canonical == Canonical::Right {
         return Err(FactorizeError::UnsupportedCanonical(
             "QR only supports Canonical::Left (would need LQ for right)",
@@ -192,7 +175,7 @@ where
         qr_options.truncation.rtol = Some(rtol);
     }
 
-    let (q, r) = qr_with::<T>(t, left_inds, &qr_options)?;
+    let (q, r) = qr_with::<f64>(t, left_inds, &qr_options)?;
 
     // Get bond index from Q tensor (last index)
     let bond_index = q.indices.last().unwrap().clone();
@@ -216,21 +199,20 @@ fn factorize_lu<T>(
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
-    T: StorageScalar
+    T: TensorElement
         + ComplexFloat
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     // Unfold tensor into matrix
-    let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<T>(t, left_inds)
+    let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
 
     // Convert to Matrix type for rrlu
-    let a_matrix = dtensor_to_matrix(&a_tensor, m, n);
+    let a_matrix = native_tensor_to_matrix::<T>(&a_tensor, m, n)?;
 
     // Set up LU options
     let left_orthogonal = options.canonical == Canonical::Left;
@@ -257,17 +239,15 @@ where
     let l_vec = matrix_to_vec(&l_matrix);
     let mut l_indices = left_indices.clone();
     l_indices.push(bond_index.clone());
-    let l_dims: Vec<usize> = l_indices.iter().map(|idx| idx.dim).collect();
-    let l_storage = T::dense_storage_with_shape(l_vec, &l_dims);
-    let left = TensorDynLen::from_indices(l_indices, l_storage);
+    let left =
+        TensorDynLen::from_dense(l_indices, l_vec).map_err(FactorizeError::ComputationError)?;
 
     // Convert U matrix back to tensor
     let u_vec = matrix_to_vec(&u_matrix);
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
-    let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
-    let r_storage = T::dense_storage_with_shape(u_vec, &r_dims);
-    let right = TensorDynLen::from_indices(r_indices, r_storage);
+    let right =
+        TensorDynLen::from_dense(r_indices, u_vec).map_err(FactorizeError::ComputationError)?;
 
     Ok(FactorizeResult {
         left,
@@ -285,21 +265,20 @@ fn factorize_ci<T>(
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<TensorDynLen>, FactorizeError>
 where
-    T: StorageScalar
+    T: TensorElement
         + ComplexFloat
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + tensor4all_tensorbackend::backend::BackendLinalgScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     // Unfold tensor into matrix
-    let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split::<T>(t, left_inds)
+    let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))?;
 
     // Convert to Matrix type for MatrixLUCI
-    let a_matrix = dtensor_to_matrix(&a_tensor, m, n);
+    let a_matrix = native_tensor_to_matrix::<T>(&a_tensor, m, n)?;
 
     // Set up LU options for CI
     let left_orthogonal = options.canonical == Canonical::Left;
@@ -326,17 +305,15 @@ where
     let l_vec = matrix_to_vec(&l_matrix);
     let mut l_indices = left_indices.clone();
     l_indices.push(bond_index.clone());
-    let l_dims: Vec<usize> = l_indices.iter().map(|idx| idx.dim).collect();
-    let l_storage = T::dense_storage_with_shape(l_vec, &l_dims);
-    let left = TensorDynLen::from_indices(l_indices, l_storage);
+    let left =
+        TensorDynLen::from_dense(l_indices, l_vec).map_err(FactorizeError::ComputationError)?;
 
     // Convert R matrix back to tensor
     let r_vec = matrix_to_vec(&r_matrix);
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
-    let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
-    let r_storage = T::dense_storage_with_shape(r_vec, &r_dims);
-    let right = TensorDynLen::from_indices(r_indices, r_storage);
+    let right =
+        TensorDynLen::from_dense(r_indices, r_vec).map_err(FactorizeError::ComputationError)?;
 
     Ok(FactorizeResult {
         left,
@@ -347,22 +324,34 @@ where
     })
 }
 
-/// Convert DTensor to Matrix (tensor4all-matrixci format).
-fn dtensor_to_matrix<T>(
-    tensor: &tensor4all_tensorbackend::mdarray::DTensor<T, 2>,
+/// Convert a native rank-2 tensor into a `matrixci::Matrix`.
+fn native_tensor_to_matrix<T>(
+    tensor: &tenferro::Tensor,
     m: usize,
     n: usize,
-) -> matrixci::Matrix<T>
+) -> Result<matrixci::Matrix<T>, FactorizeError>
 where
-    T: MatrixScalar + Clone,
+    T: TensorElement + MatrixScalar + Copy,
 {
+    let data = T::dense_values_from_native(tensor).map_err(|e| {
+        FactorizeError::ComputationError(anyhow::anyhow!(
+            "failed to extract dense matrix entries from native tensor: {e}"
+        ))
+    })?;
+    if data.len() != m * n {
+        return Err(FactorizeError::ComputationError(anyhow::anyhow!(
+            "native matrix materialization produced {} entries for shape ({m}, {n})",
+            data.len()
+        )));
+    }
+
     let mut matrix = matrixci::util::zeros(m, n);
     for i in 0..m {
         for j in 0..n {
-            matrix[[i, j]] = tensor[[i, j]];
+            matrix[[i, j]] = data[i * n + j];
         }
     }
-    matrix
+    Ok(matrix)
 }
 
 /// Convert Matrix to Vec for storage.

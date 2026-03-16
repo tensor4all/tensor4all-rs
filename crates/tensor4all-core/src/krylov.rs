@@ -1081,7 +1081,7 @@ mod tests {
 
         assert!(c.is_complex());
         assert!(s.is_complex());
-        assert_eq!(c.scalar_type(), s.scalar_type());
+        assert_eq!(c.is_real(), s.is_real());
 
         // c*a + s*b should recover sqrt(|a|^2 + |b|^2) on the real axis.
         let rotated = c.clone() * a + s.clone() * b;
@@ -1299,7 +1299,7 @@ mod tests {
         data: Vec<num_complex::Complex64>,
         idx: &DynIndex,
     ) -> TensorDynLen {
-        TensorDynLen::from_dense_c64(vec![idx.clone()], data)
+        TensorDynLen::from_dense(vec![idx.clone()], data).unwrap()
     }
 
     #[test]
@@ -1380,7 +1380,7 @@ mod tests {
                 .zip(diag.iter())
                 .map(|(&xi, &di)| di * xi)
                 .collect();
-            Ok(TensorDynLen::from_dense_c64(x.indices.clone(), result_data))
+            Ok(TensorDynLen::from_dense(x.indices.clone(), result_data).unwrap())
         };
 
         let options = GmresOptions {

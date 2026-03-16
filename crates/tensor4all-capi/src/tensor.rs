@@ -340,8 +340,9 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
         // Copy data
         let data_vec: Vec<f64> = unsafe { std::slice::from_raw_parts(data, data_len).to_vec() };
 
-        // Create tensor using high-level API
-        let tensor = InternalTensor::from_dense_f64(indices, data_vec);
+        let Ok(tensor) = InternalTensor::from_dense(indices, data_vec) else {
+            return ptr::null_mut();
+        };
 
         Box::into_raw(Box::new(t4a_tensor::new(tensor)))
     });
@@ -403,8 +404,9 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
             .map(|i| unsafe { Complex64::new(*data_re.add(i), *data_im.add(i)) })
             .collect();
 
-        // Create tensor using high-level API
-        let tensor = InternalTensor::from_dense_c64(indices, data_vec);
+        let Ok(tensor) = InternalTensor::from_dense(indices, data_vec) else {
+            return ptr::null_mut();
+        };
 
         Box::into_raw(Box::new(t4a_tensor::new(tensor)))
     });

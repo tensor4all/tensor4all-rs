@@ -111,9 +111,9 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
         }
 
         let tensor = if n_sites == 1 {
-            TensorDynLen::from_dense_f64(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data)
+            TensorDynLen::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data).unwrap()
         } else if i == 0 {
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     s_out_tmp[i].clone(),
                     s_in_tmp[i].clone(),
@@ -121,8 +121,9 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         } else if i == n_sites - 1 {
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -130,8 +131,9 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         } else {
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     bond_indices[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -140,6 +142,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         };
         let node = mpo.add_tensor(name, tensor).unwrap();
         nodes.push(node);
@@ -248,7 +251,7 @@ fn create_random_mpo_state_c64(
         } else {
             // Add bond indices via outer product
             let bond_indices = bond_indices(&indices);
-            let ones = TensorDynLen::from_dense_f64(bond_indices, vec![1.0_f64; 1]);
+            let ones = TensorDynLen::from_dense(bond_indices, vec![1.0_f64; 1]).unwrap();
             TensorDynLen::outer_product(&random_tensor, &ones)?
         };
 
@@ -329,14 +332,15 @@ fn create_identity_mpo_state_c64(
                 base_data[idx] = Complex64::new(1.0, 0.0);
             }
         }
-        let base = TensorDynLen::from_dense_c64(
+        let base = TensorDynLen::from_dense(
             vec![
                 true_site_indices[i].clone(), // external index
                 s_out_tmp[i].clone(),
                 s_in_tmp[i].clone(),
             ],
             base_data,
-        );
+        )
+        .unwrap();
 
         let t = if indices.len() == 2 {
             // n == 1 case: [external, s_out, s_in]
@@ -345,7 +349,7 @@ fn create_identity_mpo_state_c64(
             // Add bond indices via outer product
             let bond_indices = bond_indices(&indices);
             let ones =
-                TensorDynLen::from_dense_c64(bond_indices, vec![Complex64::new(1.0, 0.0); 1]);
+                TensorDynLen::from_dense(bond_indices, vec![Complex64::new(1.0, 0.0); 1]).unwrap();
             TensorDynLen::outer_product(&base, &ones)?
         };
 
@@ -420,21 +424,22 @@ fn create_all_ones_mpo_state_c64(
 
         // All-ones on (external, s_out, s_in)
         let base_data = vec![Complex64::new(1.0, 0.0); phys_dim * phys_dim * phys_dim];
-        let base = TensorDynLen::from_dense_c64(
+        let base = TensorDynLen::from_dense(
             vec![
                 true_site_indices[i].clone(),
                 s_out_tmp[i].clone(),
                 s_in_tmp[i].clone(),
             ],
             base_data,
-        );
+        )
+        .unwrap();
 
         let t = if indices.len() == 2 {
             base
         } else {
             let bond_indices = bond_indices(&indices);
             let ones =
-                TensorDynLen::from_dense_c64(bond_indices, vec![Complex64::new(1.0, 0.0); 1]);
+                TensorDynLen::from_dense(bond_indices, vec![Complex64::new(1.0, 0.0); 1]).unwrap();
             TensorDynLen::outer_product(&base, &ones)?
         };
 

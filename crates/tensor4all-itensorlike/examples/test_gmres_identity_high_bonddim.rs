@@ -39,7 +39,7 @@ fn create_product_mps(
             indices.push(bond_indices[i].clone());
         }
         let data = site_values[i].to_vec();
-        tensors.push(TensorDynLen::from_dense_f64(indices, data));
+        tensors.push(TensorDynLen::from_dense(indices, data).unwrap());
     }
     TensorTrain::new(tensors).map_err(|e| anyhow::anyhow!("{e}"))
 }

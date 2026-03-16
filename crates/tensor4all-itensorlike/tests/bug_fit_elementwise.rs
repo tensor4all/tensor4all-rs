@@ -55,7 +55,7 @@ fn create_function_2d_tt(
         all_sites.push(col_sites[i].clone());
     }
 
-    let big = TensorDynLen::from_dense_f64(all_sites.clone(), quantics_data);
+    let big = TensorDynLen::from_dense(all_sites.clone(), quantics_data).unwrap();
     let opts = FactorizeOptions::qr().with_rtol(0.0);
     let n_sites = all_sites.len();
     let mut remaining = big;
@@ -121,7 +121,7 @@ fn as_diagonal(
         }
         new_data[nf] = val;
     }
-    TensorDynLen::from_dense_f64(new_indices, new_data)
+    TensorDynLen::from_dense(new_indices, new_data).unwrap()
 }
 
 /// Extract diagonal: keep only s==s_result, remove s_result index.
@@ -166,7 +166,7 @@ fn extract_diagonal(tensor: &TensorDynLen, s: &DynIndex, s_result: &DynIndex) ->
         }
         new_data[nf] = val;
     }
-    TensorDynLen::from_dense_f64(new_indices, new_data)
+    TensorDynLen::from_dense(new_indices, new_data).unwrap()
 }
 
 /// Element-wise product via diagonal embedding + TT contraction.
