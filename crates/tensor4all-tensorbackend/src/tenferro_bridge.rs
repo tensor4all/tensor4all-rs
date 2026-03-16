@@ -56,14 +56,45 @@ fn cpu_threads() -> usize {
 }
 
 /// Run a typed tenferro op against the currently selected runtime.
+fn with_tenferro_ctx_kind<R>(
+    op: &'static str,
+    kind: RuntimeKind,
+    f: impl FnOnce(&mut CpuContext) -> Result<R>,
+) -> Result<R> {
+    match kind {
+        RuntimeKind::Cpu => {
+            let mut ctx = CpuContext::new(cpu_threads());
+            f(&mut ctx)
+        }
+        RuntimeKind::Cuda => Err(anyhow!(
+            "{op}: CUDA runtime is not yet wired in tensor4all tenferro backend"
+        )),
+        RuntimeKind::Rocm => Err(anyhow!(
+            "{op}: ROCm runtime is not yet wired in tensor4all tenferro backend"
+        )),
+    }
+}
+
+/// Run a typed tenferro op against the currently selected runtime.
 pub fn with_tenferro_ctx<R>(
     op: &'static str,
     f: impl FnOnce(&mut CpuContext) -> Result<R>,
 ) -> Result<R> {
-    match parse_runtime_kind() {
+    let _guard = runtime_lock()
+        .lock()
+        .map_err(|_| anyhow!("{op}: native runtime lock poisoned"))?;
+    with_tenferro_ctx_kind(op, parse_runtime_kind(), f)
+}
+
+fn with_default_runtime_kind<R>(
+    op: &'static str,
+    kind: RuntimeKind,
+    f: impl FnOnce() -> Result<R>,
+) -> Result<R> {
+    match kind {
         RuntimeKind::Cpu => {
-            let mut ctx = CpuContext::new(cpu_threads());
-            f(&mut ctx)
+            let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(cpu_threads())));
+            f()
         }
         RuntimeKind::Cuda => Err(anyhow!(
             "{op}: CUDA runtime is not yet wired in tensor4all tenferro backend"
@@ -81,18 +112,7 @@ pub(crate) fn with_default_runtime<R>(
     let _guard = runtime_lock()
         .lock()
         .map_err(|_| anyhow!("{op}: native runtime lock poisoned"))?;
-    match parse_runtime_kind() {
-        RuntimeKind::Cpu => {
-            let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(cpu_threads())));
-            f()
-        }
-        RuntimeKind::Cuda => Err(anyhow!(
-            "{op}: CUDA runtime is not yet wired in tensor4all tenferro backend"
-        )),
-        RuntimeKind::Rocm => Err(anyhow!(
-            "{op}: ROCm runtime is not yet wired in tensor4all tenferro backend"
-        )),
-    }
+    with_default_runtime_kind(op, parse_runtime_kind(), f)
 }
 
 fn typed_f64_from_storage(storage: &Storage, logical_dims: &[usize]) -> Result<TypedTensor<f64>> {
@@ -855,13 +875,20 @@ mod tests {
 
     #[test]
     fn runtime_env_parsing_and_thread_count_handle_non_cpu_values() {
+        let _guard = runtime_lock().lock().unwrap();
+        let prev_runtime = env::var("T4A_TENFERRO_RUNTIME").ok();
+        let prev_threads = env::var("T4A_TENFERRO_CPU_THREADS").ok();
+
         unsafe {
             env::set_var("T4A_TENFERRO_RUNTIME", "cuda");
             env::set_var("T4A_TENFERRO_CPU_THREADS", "0");
         }
         assert_eq!(parse_runtime_kind(), RuntimeKind::Cuda);
         assert_eq!(cpu_threads(), 1);
-        let cuda_err = with_tenferro_ctx("unit_test", |_| Ok::<_, anyhow::Error>(())).unwrap_err();
+        let cuda_err = with_tenferro_ctx_kind("unit_test", parse_runtime_kind(), |_| {
+            Ok::<_, anyhow::Error>(())
+        })
+        .unwrap_err();
         assert!(cuda_err.to_string().contains("CUDA runtime"));
 
         unsafe {
@@ -870,13 +897,19 @@ mod tests {
         }
         assert_eq!(parse_runtime_kind(), RuntimeKind::Rocm);
         assert_eq!(cpu_threads(), 1);
-        let rocm_err =
-            with_default_runtime("unit_test", || Ok::<_, anyhow::Error>(())).unwrap_err();
+        let rocm_err = with_default_runtime_kind("unit_test", parse_runtime_kind(), || {
+            Ok::<_, anyhow::Error>(())
+        })
+        .unwrap_err();
         assert!(rocm_err.to_string().contains("ROCm runtime"));
 
-        unsafe {
-            env::remove_var("T4A_TENFERRO_RUNTIME");
-            env::remove_var("T4A_TENFERRO_CPU_THREADS");
+        match prev_runtime {
+            Some(value) => unsafe { env::set_var("T4A_TENFERRO_RUNTIME", value) },
+            None => unsafe { env::remove_var("T4A_TENFERRO_RUNTIME") },
+        }
+        match prev_threads {
+            Some(value) => unsafe { env::set_var("T4A_TENFERRO_CPU_THREADS", value) },
+            None => unsafe { env::remove_var("T4A_TENFERRO_CPU_THREADS") },
         }
     }
 
