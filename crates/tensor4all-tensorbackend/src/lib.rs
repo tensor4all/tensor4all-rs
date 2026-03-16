@@ -22,6 +22,7 @@ pub(crate) mod tenferro_bridge;
 pub mod tensor_element;
 
 pub use any_scalar::AnyScalar;
+pub use layout::dense_linear_multi_index;
 pub use layout::dense_linear_offset;
 pub use storage::{
     contract_storage, make_mut_storage, mindim, DenseScalar, DenseStorage, DenseStorageC64,

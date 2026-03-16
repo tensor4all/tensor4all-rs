@@ -1833,7 +1833,7 @@ impl Mul<AnyScalar> for &Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dense_linear_offset;
+    use crate::{dense_linear_multi_index, dense_linear_offset};
 
     /// Helper to extract f64 data from storage
     fn extract_f64(storage: &Storage) -> Vec<f64> {
@@ -2444,6 +2444,16 @@ mod tests {
         assert_eq!(dense_linear_offset(&dims, &[0, 1, 0]).unwrap(), 4);
         assert_eq!(dense_linear_offset(&dims, &[1, 0, 0]).unwrap(), 12);
         assert_eq!(dense_linear_offset(&dims, &[1, 2, 3]).unwrap(), 23);
+    }
+
+    #[test]
+    fn test_dense_linear_multi_index_matches_current_row_major_linearization() {
+        let dims = [2, 3, 4];
+        assert_eq!(dense_linear_multi_index(&dims, 0).unwrap(), vec![0, 0, 0]);
+        assert_eq!(dense_linear_multi_index(&dims, 1).unwrap(), vec![0, 0, 1]);
+        assert_eq!(dense_linear_multi_index(&dims, 4).unwrap(), vec![0, 1, 0]);
+        assert_eq!(dense_linear_multi_index(&dims, 12).unwrap(), vec![1, 0, 0]);
+        assert_eq!(dense_linear_multi_index(&dims, 23).unwrap(), vec![1, 2, 3]);
     }
 
     #[test]

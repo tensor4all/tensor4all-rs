@@ -51,3 +51,34 @@ pub fn dense_linear_offset(dims: &[usize], idx: &[usize]) -> Result<usize> {
     }
     Ok(offset)
 }
+
+/// Recover a logical multi-index from the current dense linearized offset.
+pub fn dense_linear_multi_index(dims: &[usize], linear: usize) -> Result<Vec<usize>> {
+    let total_size = dims.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| anyhow!("dense_linear_multi_index: overflow"))
+    })?;
+
+    if linear >= total_size && !(dims.is_empty() && linear == 0) {
+        return Err(anyhow!(
+            "dense_linear_multi_index: linear index {} is out of bounds for dims {:?}",
+            linear,
+            dims
+        ));
+    }
+
+    let strides = dense_strides(dims);
+    let mut remaining = linear;
+    let mut multi = vec![0; dims.len()];
+    for (axis, (&dim, &stride)) in dims.iter().zip(strides.iter()).enumerate() {
+        if dim == 0 {
+            return Err(anyhow!(
+                "dense_linear_multi_index: zero dimension at axis {}",
+                axis
+            ));
+        }
+        multi[axis] = remaining / stride;
+        remaining %= stride;
+    }
+    Ok(multi)
+}
