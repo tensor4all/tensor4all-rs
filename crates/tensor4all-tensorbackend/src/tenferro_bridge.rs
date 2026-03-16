@@ -648,6 +648,7 @@ pub fn axpby_storage_native(
 mod tests {
     use super::*;
     use crate::storage::{DenseStorageC64, DenseStorageF64, DiagStorageF64, Storage};
+    use num_complex::Complex32;
 
     fn assert_storage_eq(lhs: &Storage, rhs: &Storage) {
         match (lhs, rhs) {
@@ -850,5 +851,127 @@ mod tests {
             &[2, 2, 1],
         ));
         assert_storage_eq(&snapshot, &expected);
+    }
+
+    #[test]
+    fn runtime_env_parsing_and_thread_count_handle_non_cpu_values() {
+        unsafe {
+            env::set_var("T4A_TENFERRO_RUNTIME", "cuda");
+            env::set_var("T4A_TENFERRO_CPU_THREADS", "0");
+        }
+        assert_eq!(parse_runtime_kind(), RuntimeKind::Cuda);
+        assert_eq!(cpu_threads(), 1);
+        let cuda_err = with_tenferro_ctx("unit_test", |_| Ok::<_, anyhow::Error>(())).unwrap_err();
+        assert!(cuda_err.to_string().contains("CUDA runtime"));
+
+        unsafe {
+            env::set_var("T4A_TENFERRO_RUNTIME", "rocm");
+            env::set_var("T4A_TENFERRO_CPU_THREADS", "not-a-number");
+        }
+        assert_eq!(parse_runtime_kind(), RuntimeKind::Rocm);
+        assert_eq!(cpu_threads(), 1);
+        let rocm_err =
+            with_default_runtime("unit_test", || Ok::<_, anyhow::Error>(())).unwrap_err();
+        assert!(rocm_err.to_string().contains("ROCm runtime"));
+
+        unsafe {
+            env::remove_var("T4A_TENFERRO_RUNTIME");
+            env::remove_var("T4A_TENFERRO_CPU_THREADS");
+        }
+    }
+
+    #[test]
+    fn dense_and_diag_native_constructors_cover_f32_and_c32() {
+        let dense_f32 =
+            dense_native_tensor_from_row_major(&[1.0_f32, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert_eq!(dense_f32.scalar_type(), tenferro::ScalarType::F32);
+        assert!(native_tensor_primal_to_storage(&dense_f32).is_err());
+
+        let diag_c32 = diag_native_tensor_from_row_major(
+            &[Complex32::new(1.0, 0.5), Complex32::new(-2.0, 0.25)],
+            2,
+        )
+        .unwrap();
+        assert_eq!(diag_c32.scalar_type(), tenferro::ScalarType::C32);
+        assert!(diag_c32.is_diag());
+        assert!(native_tensor_primal_to_storage(&diag_c32).is_err());
+    }
+
+    #[test]
+    fn binary_einsum_ids_reject_invalid_axes() {
+        let mismatch = build_binary_einsum_ids(2, &[0], 2, &[0, 1]).unwrap_err();
+        assert!(mismatch.to_string().contains("length mismatch"));
+
+        let out_of_range = build_binary_einsum_ids(2, &[2], 2, &[0]).unwrap_err();
+        assert!(out_of_range.to_string().contains("out of range"));
+
+        let duplicate = build_binary_einsum_ids(2, &[0, 0], 2, &[0, 1]).unwrap_err();
+        assert!(duplicate.to_string().contains("duplicate contraction axis"));
+    }
+
+    #[test]
+    fn storage_boundary_wrappers_match_native_execution() {
+        let lhs = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![1.0, 2.0, 3.0, 4.0],
+            &[2, 2],
+        ));
+        let rhs = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![5.0, 6.0, 7.0, 8.0],
+            &[2, 2],
+        ));
+
+        let contracted =
+            contract_storage_native(&lhs, &[2, 2], &[1], &rhs, &[2, 2], &[0], &[2, 2]).unwrap();
+        let expected_contract = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![19.0, 22.0, 43.0, 50.0],
+            &[2, 2],
+        ));
+        assert_storage_eq(&contracted, &expected_contract);
+
+        let outer = outer_product_storage_native(
+            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0, 2.0], &[2])),
+            &[2],
+            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![3.0, 4.0], &[2])),
+            &[2],
+            &[2, 2],
+        )
+        .unwrap();
+        let expected_outer = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![3.0, 4.0, 6.0, 8.0],
+            &[2, 2],
+        ));
+        assert_storage_eq(&outer, &expected_outer);
+
+        let scaled = scale_storage_native(
+            &lhs,
+            &[2, 2],
+            &AnyScalar::from_value(Complex64::new(0.0, 1.0)),
+        )
+        .unwrap();
+        let expected_scaled = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+            vec![
+                Complex64::new(0.0, 1.0),
+                Complex64::new(0.0, 2.0),
+                Complex64::new(0.0, 3.0),
+                Complex64::new(0.0, 4.0),
+            ],
+            &[2, 2],
+        ));
+        assert_storage_eq(&scaled, &expected_scaled);
+
+        let axpby = axpby_storage_native(
+            &lhs,
+            &[2, 2],
+            &AnyScalar::from_value(2.0_f64),
+            &rhs,
+            &[2, 2],
+            &AnyScalar::from_value(-1.0_f64),
+        )
+        .unwrap();
+        let expected_axpby = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+            vec![-3.0, -2.0, -1.0, 0.0],
+            &[2, 2],
+        ));
+        assert_storage_eq(&axpby, &expected_axpby);
     }
 }
