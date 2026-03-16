@@ -256,14 +256,16 @@ mod tests {
         let bond_a = DynIndex::new_dyn(3);
         let s1 = DynIndex::new_dyn(2);
 
-        let t0_a = TensorDynLen::from_dense_f64(
+        let t0_a = TensorDynLen::from_dense(
             vec![s0.clone(), bond_a.clone()],
             vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-        );
-        let t1_a = TensorDynLen::from_dense_f64(
+        )
+        .unwrap();
+        let t1_a = TensorDynLen::from_dense(
             vec![bond_a.clone(), s1.clone()],
             vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-        );
+        )
+        .unwrap();
 
         let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
             vec![t0_a, t1_a],
@@ -273,14 +275,12 @@ mod tests {
 
         let bond_b = DynIndex::new_dyn(2);
 
-        let t0_b = TensorDynLen::from_dense_f64(
-            vec![s0.clone(), bond_b.clone()],
-            vec![0.0, 1.0, 1.0, 0.0],
-        );
-        let t1_b = TensorDynLen::from_dense_f64(
-            vec![bond_b.clone(), s1.clone()],
-            vec![1.0, 0.0, 0.0, 1.0],
-        );
+        let t0_b =
+            TensorDynLen::from_dense(vec![s0.clone(), bond_b.clone()], vec![0.0, 1.0, 1.0, 0.0])
+                .unwrap();
+        let t1_b =
+            TensorDynLen::from_dense(vec![bond_b.clone(), s1.clone()], vec![1.0, 0.0, 0.0, 1.0])
+                .unwrap();
 
         let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
             vec![t0_b, t1_b],
@@ -359,8 +359,8 @@ mod tests {
         let bond = DynIndex::new_dyn(3);
         let s1 = DynIndex::new_dyn(2);
 
-        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), bond.clone()], vec![1.0; 6]);
-        let t1 = TensorDynLen::from_dense_f64(vec![bond.clone(), s1.clone()], vec![1.0; 6]);
+        let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0; 6]).unwrap();
+        let t1 = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![1.0; 6]).unwrap();
         let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
             vec![t0, t1],
             vec!["A".to_string(), "B".to_string()],
@@ -368,7 +368,7 @@ mod tests {
         .unwrap();
 
         // Single-node TN (different topology)
-        let t_single = TensorDynLen::from_dense_f64(vec![s0.clone()], vec![1.0, 2.0]);
+        let t_single = TensorDynLen::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
         let tn_b =
             TreeTN::<TensorDynLen, String>::from_tensors(vec![t_single], vec!["X".to_string()])
                 .unwrap();

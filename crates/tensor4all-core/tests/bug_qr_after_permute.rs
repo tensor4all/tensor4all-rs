@@ -9,7 +9,7 @@
 use num_complex::Complex64;
 use std::sync::Arc;
 use tensor4all_core::storage::DenseStorageC64;
-use tensor4all_core::{factorize, DynIndex, FactorizeOptions, Storage, TensorDynLen};
+use tensor4all_core::{factorize, svd_c64, DynIndex, FactorizeOptions, Storage, TensorDynLen};
 
 /// Create a [5,2,2,5] tensor with data that triggers the QR bug.
 fn make_buggy_tensor() -> TensorDynLen {
@@ -140,6 +140,32 @@ fn reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex], opts: &Factori
     diff.norm()
 }
 
+fn svd_reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
+    let (u, s, v) = svd_c64(t, left_inds).unwrap();
+    let mut perm = vec![v.indices.len() - 1];
+    perm.extend(0..v.indices.len() - 1);
+    let vh = v.conj().permute(&perm);
+    let svh = s
+        .contract(&vh)
+        .replaceind(&s.indices[1], &u.indices[u.indices.len() - 1]);
+    let recon = u.contract(&svh);
+    let neg = recon
+        .scale(tensor4all_core::AnyScalar::new_real(-1.0))
+        .unwrap();
+    let diff = t.add(&neg).unwrap();
+    diff.norm()
+}
+
+fn as_dense_c64(storage: &Storage) -> Vec<Complex64> {
+    match storage {
+        Storage::DenseC64(data) => data.as_slice().to_vec(),
+        other => panic!(
+            "expected dense complex storage, got {:?}",
+            std::mem::discriminant(other)
+        ),
+    }
+}
+
 /// Regression: QR and SVD should both reconstruct this tensor to machine precision.
 #[test]
 fn test_qr_reconstruction_regression() {
@@ -148,15 +174,33 @@ fn test_qr_reconstruction_regression() {
     let b = t.indices[1].clone();
     let left_inds = [a, b];
 
+    let matrix_i = DynIndex::new_dyn_with_tag(10, "row").unwrap();
+    let matrix_j = DynIndex::new_dyn_with_tag(10, "col").unwrap();
+    let matrix_storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+        as_dense_c64(t.to_storage().unwrap().as_ref()),
+        &[10, 10],
+    )));
+    let matrix = TensorDynLen::new(vec![matrix_i.clone(), matrix_j], matrix_storage);
+
+    let matrix_svd_err = svd_reconstruction_error(&matrix, &[matrix_i]);
+    let direct_svd_err = svd_reconstruction_error(&t, &left_inds);
     let qr_err = reconstruction_error(&t, &left_inds, &FactorizeOptions::qr());
     let svd_err = reconstruction_error(&t, &left_inds, &FactorizeOptions::svd());
 
     assert!(
+        matrix_svd_err < 1e-10,
+        "matrix-level direct SVD should be exact, got err={matrix_svd_err:.3e}"
+    );
+    assert!(
+        direct_svd_err < 1e-10,
+        "direct SVD should be exact, got err={direct_svd_err:.3e}"
+    );
+    assert!(
         svd_err < 1e-10,
-        "SVD should be exact, got err={svd_err:.3e}"
+        "factorize(SVD) should be exact, got err={svd_err:.3e}"
     );
     assert!(
         qr_err < 1e-10,
-        "QR should be exact (like SVD), got err={qr_err:.3e} (SVD={svd_err:.3e})"
+        "QR should be exact (like SVD), got err={qr_err:.3e} (factorize(SVD)={svd_err:.3e})"
     );
 }

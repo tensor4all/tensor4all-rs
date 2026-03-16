@@ -20,20 +20,22 @@ fn two_node_chain<T: StorageScalar + From<f64>>() -> (
     let s0 = tensor4all_core::DynIndex::new_dyn(2);
     let s1 = tensor4all_core::DynIndex::new_dyn(2);
     let bond = tensor4all_core::DynIndex::new_dyn(3);
-    let t0 = TensorDynLen::from_dense_data(
+    let t0 = TensorDynLen::from_dense(
         vec![s0.clone(), bond.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
             .into_iter()
             .map(T::from)
             .collect(),
-    );
-    let t1 = TensorDynLen::from_dense_data(
+    )
+    .unwrap();
+    let t1 = TensorDynLen::from_dense(
         vec![bond.clone(), s1.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
             .into_iter()
             .map(T::from)
             .collect(),
-    );
+    )
+    .unwrap();
     tn.add_tensor("A".to_string(), t0).unwrap();
     tn.add_tensor("B".to_string(), t1).unwrap();
     let na = tn.node_index(&"A".to_string()).unwrap();
@@ -55,14 +57,15 @@ fn three_node_chain<T: StorageScalar + From<f64>>() -> (
     let s2 = tensor4all_core::DynIndex::new_dyn(2);
     let b01 = tensor4all_core::DynIndex::new_dyn(3);
     let b12 = tensor4all_core::DynIndex::new_dyn(3);
-    let t0 = TensorDynLen::from_dense_data(
+    let t0 = TensorDynLen::from_dense(
         vec![s0.clone(), b01.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
             .into_iter()
             .map(T::from)
             .collect(),
-    );
-    let t1 = TensorDynLen::from_dense_data(
+    )
+    .unwrap();
+    let t1 = TensorDynLen::from_dense(
         vec![b01.clone(), s1.clone(), b12.clone()],
         vec![
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
@@ -71,14 +74,16 @@ fn three_node_chain<T: StorageScalar + From<f64>>() -> (
         .into_iter()
         .map(T::from)
         .collect(),
-    );
-    let t2 = TensorDynLen::from_dense_data(
+    )
+    .unwrap();
+    let t2 = TensorDynLen::from_dense(
         vec![b12.clone(), s2.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
             .into_iter()
             .map(T::from)
             .collect(),
-    );
+    )
+    .unwrap();
     tn.add_tensor("0".to_string(), t0).unwrap();
     tn.add_tensor("1".to_string(), t1).unwrap();
     tn.add_tensor("2".to_string(), t2).unwrap();
@@ -106,28 +111,32 @@ fn four_node_chain<T: StorageScalar + From<f64>>() -> (
     let b01 = tensor4all_core::DynIndex::new_dyn(2);
     let b12 = tensor4all_core::DynIndex::new_dyn(2);
     let b23 = tensor4all_core::DynIndex::new_dyn(2);
-    let t0 = TensorDynLen::from_dense_data(
+    let t0 = TensorDynLen::from_dense(
         vec![s0.clone(), b01.clone()],
         vec![1.0, 2.0, 3.0, 4.0].into_iter().map(T::from).collect(),
-    );
-    let t1 = TensorDynLen::from_dense_data(
+    )
+    .unwrap();
+    let t1 = TensorDynLen::from_dense(
         vec![b01.clone(), s1.clone(), b12.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
             .into_iter()
             .map(T::from)
             .collect(),
-    );
-    let t2 = TensorDynLen::from_dense_data(
+    )
+    .unwrap();
+    let t2 = TensorDynLen::from_dense(
         vec![b12.clone(), s2.clone(), b23.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
             .into_iter()
             .map(T::from)
             .collect(),
-    );
-    let t3 = TensorDynLen::from_dense_data(
+    )
+    .unwrap();
+    let t3 = TensorDynLen::from_dense(
         vec![b23.clone(), s3.clone()],
         vec![1.0, 2.0, 3.0, 4.0].into_iter().map(T::from).collect(),
-    );
+    )
+    .unwrap();
     tn.add_tensor("0".to_string(), t0).unwrap();
     tn.add_tensor("1".to_string(), t1).unwrap();
     tn.add_tensor("2".to_string(), t2).unwrap();
@@ -158,28 +167,32 @@ fn chain_2r_interleave<T: StorageScalar + From<f64>>() -> (
     let b01 = tensor4all_core::DynIndex::new_dyn(2);
     let b12 = tensor4all_core::DynIndex::new_dyn(2);
     let b23 = tensor4all_core::DynIndex::new_dyn(2);
-    let t0 = TensorDynLen::from_dense_data(
+    let t0 = TensorDynLen::from_dense(
         vec![x0.clone(), b01.clone()],
         vec![1.0, 0.0, 0.0, 1.0].into_iter().map(T::from).collect(),
-    );
-    let t1 = TensorDynLen::from_dense_data(
+    )
+    .unwrap();
+    let t1 = TensorDynLen::from_dense(
         vec![b01.clone(), x1.clone(), b12.clone()],
         vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
             .into_iter()
             .map(T::from)
             .collect(),
-    );
-    let t2 = TensorDynLen::from_dense_data(
+    )
+    .unwrap();
+    let t2 = TensorDynLen::from_dense(
         vec![b12.clone(), y0.clone(), b23.clone()],
         vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
             .into_iter()
             .map(T::from)
             .collect(),
-    );
-    let t3 = TensorDynLen::from_dense_data(
+    )
+    .unwrap();
+    let t3 = TensorDynLen::from_dense(
         vec![b23.clone(), y1.clone()],
         vec![1.0, 0.0, 0.0, 1.0].into_iter().map(T::from).collect(),
-    );
+    )
+    .unwrap();
     tn.add_tensor("0".to_string(), t0).unwrap();
     tn.add_tensor("1".to_string(), t1).unwrap();
     tn.add_tensor("2".to_string(), t2).unwrap();
@@ -208,25 +221,29 @@ fn y_shape_tree<T: StorageScalar + From<f64>>() -> (
     let bc0 = tensor4all_core::DynIndex::new_dyn(2);
     let bc1 = tensor4all_core::DynIndex::new_dyn(2);
     let bc2 = tensor4all_core::DynIndex::new_dyn(2);
-    let t_center = TensorDynLen::from_dense_data(
+    let t_center = TensorDynLen::from_dense(
         vec![bc0.clone(), bc1.clone(), bc2.clone()],
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
             .into_iter()
             .map(T::from)
             .collect(),
-    );
-    let t0 = TensorDynLen::from_dense_data(
+    )
+    .unwrap();
+    let t0 = TensorDynLen::from_dense(
         vec![bc0.clone(), s0.clone()],
         vec![1.0, 0.0, 0.0, 1.0].into_iter().map(T::from).collect(),
-    );
-    let t1 = TensorDynLen::from_dense_data(
+    )
+    .unwrap();
+    let t1 = TensorDynLen::from_dense(
         vec![bc1.clone(), s1.clone()],
         vec![1.0, 0.0, 0.0, 1.0].into_iter().map(T::from).collect(),
-    );
-    let t2 = TensorDynLen::from_dense_data(
+    )
+    .unwrap();
+    let t2 = TensorDynLen::from_dense(
         vec![bc2.clone(), s2.clone()],
         vec![1.0, 0.0, 0.0, 1.0].into_iter().map(T::from).collect(),
-    );
+    )
+    .unwrap();
     tn.add_tensor("C".to_string(), t_center).unwrap();
     tn.add_tensor("L0".to_string(), t0).unwrap();
     tn.add_tensor("L1".to_string(), t1).unwrap();

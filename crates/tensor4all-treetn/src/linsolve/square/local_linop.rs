@@ -187,7 +187,7 @@ mod tests {
 
         let mut state = TreeTN::<TensorDynLen, String>::new();
         let s0 = DynIndex::new_dyn(2);
-        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone()], vec![1.0, 2.0]);
+        let t0 = TensorDynLen::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
         state.add_tensor("site0".to_string(), t0).unwrap();
 
         let reference_state = state.clone();
@@ -214,7 +214,7 @@ mod tests {
 
         let mut state = TreeTN::<TensorDynLen, String>::new();
         let s0 = DynIndex::new_dyn(2);
-        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone()], vec![1.0, 2.0]);
+        let t0 = TensorDynLen::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
         state.add_tensor("site0".to_string(), t0).unwrap();
 
         let reference_state = state.clone();
@@ -245,7 +245,7 @@ mod tests {
 
         let mut state = TreeTN::<TensorDynLen, String>::new();
         let s0 = DynIndex::new_dyn(2);
-        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone()], vec![1.0, 2.0]);
+        let t0 = TensorDynLen::from_dense(vec![s0.clone()], vec![1.0, 2.0]).unwrap();
         state.add_tensor("site0".to_string(), t0).unwrap();
 
         let reference_state = state.clone();
@@ -261,7 +261,7 @@ mod tests {
         );
 
         let other = DynIndex::new_dyn(2);
-        let x = TensorDynLen::from_dense_f64(vec![other], vec![1.0, 0.0]);
+        let x = TensorDynLen::from_dense(vec![other], vec![1.0, 0.0]).unwrap();
         let err = linop.apply(&x).unwrap_err();
         assert!(err.to_string().contains("index structure mismatch"));
     }
@@ -279,10 +279,9 @@ mod tests {
 
         let mut state = TreeTN::<TensorDynLen, String>::new();
         let nelem = ext_dim * phys_dim;
-        let t = TensorDynLen::from_dense_f64(
-            vec![external.clone(), contracted.clone()],
-            vec![1.0; nelem],
-        );
+        let t =
+            TensorDynLen::from_dense(vec![external.clone(), contracted.clone()], vec![1.0; nelem])
+                .unwrap();
         state.add_tensor("site0".to_string(), t).unwrap();
 
         let s_in = unique_dyn_index(&mut used, phys_dim);
@@ -291,7 +290,7 @@ mod tests {
         for k in 0..phys_dim {
             id_data[k * phys_dim + k] = 1.0;
         }
-        let op_t = TensorDynLen::from_dense_f64(vec![s_out.clone(), s_in.clone()], id_data);
+        let op_t = TensorDynLen::from_dense(vec![s_out.clone(), s_in.clone()], id_data).unwrap();
         let mut op_tn = TreeTN::<TensorDynLen, String>::new();
         op_tn.add_tensor("site0".to_string(), op_t).unwrap();
 

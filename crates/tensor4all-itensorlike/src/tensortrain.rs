@@ -592,29 +592,9 @@ impl TensorTrain {
             return AnyScalar::new_real(0.0);
         }
 
-        // Replace link indices in other with unique IDs
-        let other_sim = other.sim_linkinds();
-
-        // Start with leftmost tensors - contract over site indices only
-        let mut env = {
-            let a0_conj = self.tensor(0).conj();
-            let b0 = other_sim.tensor(0);
-            a0_conj.contract(b0)
-        };
-
-        // Sweep through remaining sites
-        for i in 1..self.len() {
-            let ai_conj = self.tensor(i).conj();
-            let bi = other_sim.tensor(i);
-
-            // Contract: env * conj(A_i) (over self's link index)
-            env = env.contract(&ai_conj);
-            // Contract: result * B_i (over other's link index and site indices)
-            env = env.contract(bi);
-        }
-
-        // Result should be a scalar (0-dimensional tensor)
-        env.only()
+        self.treetn.inner(&other.treetn).unwrap_or_else(|e| {
+            panic!("TensorTrain::inner failed while delegating to TreeTN::inner: {e}")
+        })
     }
 
     /// Compute the squared norm of the tensor train.
@@ -933,7 +913,6 @@ impl TensorLike for TensorTrain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tensor4all_core::StorageScalar;
     use tensor4all_core::{DynId, Index};
 
     /// Helper to create a simple tensor for testing
@@ -941,8 +920,7 @@ mod tests {
         let dims: Vec<usize> = indices.iter().map(|i| i.size()).collect();
         let size: usize = dims.iter().product();
         let data: Vec<f64> = (0..size).map(|i| i as f64).collect();
-        let storage = f64::dense_storage_with_shape(data, &dims);
-        TensorDynLen::new(indices, storage)
+        TensorDynLen::from_dense(indices, data).unwrap()
     }
 
     /// Helper to create a DynIndex

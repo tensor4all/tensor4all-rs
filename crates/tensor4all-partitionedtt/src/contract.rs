@@ -104,8 +104,7 @@ mod tests {
         let dims: Vec<usize> = indices.iter().map(|i| i.dim).collect();
         let size: usize = dims.iter().product();
         let data: Vec<T> = (0..size).map(|i| T::from((i + 1) as f64)).collect();
-        let storage = T::dense_storage_with_shape(data, &dims);
-        TensorDynLen::new(indices, storage)
+        TensorDynLen::from_dense(indices, data).unwrap()
     }
 
     /// Create indices for testing TT contraction
@@ -382,7 +381,7 @@ mod tests {
         t1_proj_data[1] = t1_data[1]; // [0, 1]
                                       // t1_proj_data[2], [3] remain 0 (s0=1 row)
 
-        let t1_proj = TensorDynLen::from_dense_data(vec![s0.clone(), s1.clone()], t1_proj_data);
+        let t1_proj = TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], t1_proj_data).unwrap();
 
         // Project t2_full: zero out s2=0 slice
         // t2_full has indices [s1, s2], shape [2, 2]
@@ -392,7 +391,7 @@ mod tests {
         t2_proj_data[1] = t2_data[1]; // [0, 1]
         t2_proj_data[3] = t2_data[3]; // [1, 1]
 
-        let t2_proj = TensorDynLen::from_dense_data(vec![s1.clone(), s2.clone()], t2_proj_data);
+        let t2_proj = TensorDynLen::from_dense(vec![s1.clone(), s2.clone()], t2_proj_data).unwrap();
 
         // Contract projected tensors
         let expected = t1_proj.contract(&t2_proj);
@@ -456,7 +455,7 @@ mod tests {
                     t1_proj_data[s0_val * s1.dim + s1_idx] = t1_data[s0_val * s1.dim + s1_idx];
                 }
                 let t1_proj =
-                    TensorDynLen::from_dense_data(vec![s0.clone(), s1.clone()], t1_proj_data);
+                    TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], t1_proj_data).unwrap();
 
                 let t2_data = T::extract_slice(&t2_full);
                 let mut t2_proj_data = vec![T::zero_val(); t2_data.len()];
@@ -464,7 +463,7 @@ mod tests {
                     t2_proj_data[s1_idx * s2.dim + s2_val] = t2_data[s1_idx * s2.dim + s2_val];
                 }
                 let t2_proj =
-                    TensorDynLen::from_dense_data(vec![s1.clone(), s2.clone()], t2_proj_data);
+                    TensorDynLen::from_dense(vec![s1.clone(), s2.clone()], t2_proj_data).unwrap();
 
                 let expected = t1_proj.contract(&t2_proj);
 
@@ -535,7 +534,7 @@ mod tests {
         t1_proj_data[0] = t1_data[0]; // [s0=0, s1=0]
         t1_proj_data[2] = t1_data[2]; // [s0=1, s1=0]
 
-        let t1_proj = TensorDynLen::from_dense_data(vec![s0.clone(), s1.clone()], t1_proj_data);
+        let t1_proj = TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], t1_proj_data).unwrap();
 
         let t2_data = T::extract_slice(&t2_full);
         let mut t2_proj_data = vec![T::zero_val(); t2_data.len()];
@@ -543,7 +542,7 @@ mod tests {
         t2_proj_data[0] = t2_data[0]; // [s1=0, s2=0]
         t2_proj_data[1] = t2_data[1]; // [s1=0, s2=1]
 
-        let t2_proj = TensorDynLen::from_dense_data(vec![s1.clone(), s2.clone()], t2_proj_data);
+        let t2_proj = TensorDynLen::from_dense(vec![s1.clone(), s2.clone()], t2_proj_data).unwrap();
 
         let expected = t1_proj.contract(&t2_proj);
 
@@ -605,7 +604,7 @@ mod tests {
         t1_proj_data[2] = t1_data[2]; // [s0=1, s1=0]
         t1_proj_data[3] = t1_data[3]; // [s0=1, s1=1]
 
-        let t1_proj = TensorDynLen::from_dense_data(vec![s0.clone(), s1.clone()], t1_proj_data);
+        let t1_proj = TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], t1_proj_data).unwrap();
 
         let expected = t1_proj.contract(&t2_full);
 
@@ -666,14 +665,14 @@ mod tests {
         t1_proj_data[0] = t1_data[0]; // [s0=0, s1=0]
         t1_proj_data[1] = t1_data[1]; // [s0=0, s1=1]
 
-        let t1_proj = TensorDynLen::from_dense_data(vec![s0.clone(), s1.clone()], t1_proj_data);
+        let t1_proj = TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], t1_proj_data).unwrap();
 
         let t2_data = T::extract_slice(&t2_full);
         let mut t2_proj_data = vec![T::zero_val(); t2_data.len()];
         t2_proj_data[1] = t2_data[1]; // [s1=0, s2=1]
         t2_proj_data[3] = t2_data[3]; // [s1=1, s2=1]
 
-        let t2_proj = TensorDynLen::from_dense_data(vec![s1.clone(), s2.clone()], t2_proj_data);
+        let t2_proj = TensorDynLen::from_dense(vec![s1.clone(), s2.clone()], t2_proj_data).unwrap();
 
         let expected = t1_proj.contract(&t2_proj);
 

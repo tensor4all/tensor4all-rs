@@ -199,14 +199,16 @@ mod tests {
         let bond = DynIndex::new_dyn(3);
         let s1 = DynIndex::new_dyn(2);
 
-        let t0 = TensorDynLen::from_dense_f64(
+        let t0 = TensorDynLen::from_dense(
             vec![s0.clone(), bond.clone()],
             vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-        );
-        let t1 = TensorDynLen::from_dense_f64(
+        )
+        .unwrap();
+        let t1 = TensorDynLen::from_dense(
             vec![bond.clone(), s1.clone()],
             vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-        );
+        )
+        .unwrap();
 
         let tn = TreeTN::<TensorDynLen, String>::from_tensors(
             vec![t0, t1],
@@ -241,7 +243,8 @@ mod tests {
         let i = DynIndex::new_dyn(2);
         let j = DynIndex::new_dyn(3);
         let k = DynIndex::new_dyn(4);
-        let t = TensorDynLen::from_dense_f64(vec![i.clone(), j.clone(), k.clone()], vec![0.0; 24]);
+        let t =
+            TensorDynLen::from_dense(vec![i.clone(), j.clone(), k.clone()], vec![0.0; 24]).unwrap();
         let tn =
             TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap();
         assert_eq!(tn.num_external_indices(), 3);

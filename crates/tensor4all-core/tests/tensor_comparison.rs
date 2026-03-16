@@ -6,10 +6,11 @@ use tensor4all_core::{diag_tensor_dyn_len, diag_tensor_dyn_len_c64, TensorDynLen
 fn test_sub_identical_tensors_is_zero() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let a = TensorDynLen::from_dense_f64(
+    let a = TensorDynLen::from_dense(
         vec![i.clone(), j.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-    );
+    )
+    .unwrap();
 
     let diff = &a - &a;
     assert!(diff.norm() < 1e-14);
@@ -19,8 +20,8 @@ fn test_sub_identical_tensors_is_zero() {
 #[test]
 fn test_sub_different_tensors() {
     let i = Index::new_dyn(2);
-    let a = TensorDynLen::from_dense_f64(vec![i.clone()], vec![3.0, 5.0]);
-    let b = TensorDynLen::from_dense_f64(vec![i.clone()], vec![1.0, 2.0]);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 5.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
 
     let diff = &a - &b;
     let data = diff.to_vec_f64().unwrap();
@@ -33,14 +34,16 @@ fn test_sub_permuted_indices() {
     // a[i,j] - b[j,i] should auto-permute
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let a = TensorDynLen::from_dense_f64(
+    let a = TensorDynLen::from_dense(
         vec![i.clone(), j.clone()],
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-    );
-    let b = TensorDynLen::from_dense_f64(
+    )
+    .unwrap();
+    let b = TensorDynLen::from_dense(
         vec![j.clone(), i.clone()],
         vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0], // transposed
-    );
+    )
+    .unwrap();
 
     let diff = &a - &b;
     assert!(diff.maxabs() < 1e-14);
@@ -49,7 +52,7 @@ fn test_sub_permuted_indices() {
 #[test]
 fn test_neg() {
     let i = Index::new_dyn(3);
-    let a = TensorDynLen::from_dense_f64(vec![i.clone()], vec![1.0, -2.0, 3.0]);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, -2.0, 3.0]).unwrap();
 
     let neg_a = -&a;
     let data = neg_a.to_vec_f64().unwrap();
@@ -61,13 +64,13 @@ fn test_neg() {
 #[test]
 fn test_maxabs() {
     let i = Index::new_dyn(4);
-    let a = TensorDynLen::from_dense_f64(vec![i.clone()], vec![1.0, -5.0, 3.0, -2.0]);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, -5.0, 3.0, -2.0]).unwrap();
     assert!((a.maxabs() - 5.0).abs() < 1e-14);
 }
 
 #[test]
 fn test_maxabs_scalar() {
-    let s = TensorDynLen::scalar_f64(-7.0);
+    let s = TensorDynLen::scalar(-7.0).unwrap();
     assert!((s.maxabs() - 7.0).abs() < 1e-14);
 }
 
@@ -97,15 +100,15 @@ fn test_maxabs_diag_c64() {
 #[test]
 fn test_isapprox_identical() {
     let i = Index::new_dyn(3);
-    let a = TensorDynLen::from_dense_f64(vec![i.clone()], vec![1.0, 2.0, 3.0]);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0, 3.0]).unwrap();
     assert!(a.isapprox(&a, 0.0, 0.0));
 }
 
 #[test]
 fn test_isapprox_atol() {
     let i = Index::new_dyn(2);
-    let a = TensorDynLen::from_dense_f64(vec![i.clone()], vec![1.0, 2.0]);
-    let b = TensorDynLen::from_dense_f64(vec![i.clone()], vec![1.0, 2.01]);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.01]).unwrap();
 
     // ||a - b|| = 0.01
     assert!(a.isapprox(&b, 0.1, 0.0)); // atol=0.1 > 0.01
@@ -115,8 +118,8 @@ fn test_isapprox_atol() {
 #[test]
 fn test_isapprox_rtol() {
     let i = Index::new_dyn(2);
-    let a = TensorDynLen::from_dense_f64(vec![i.clone()], vec![100.0, 200.0]);
-    let b = TensorDynLen::from_dense_f64(vec![i.clone()], vec![100.0, 201.0]);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![100.0, 200.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![i.clone()], vec![100.0, 201.0]).unwrap();
 
     // ||a - b|| = 1.0, max(||a||, ||b||) ≈ 224
     // rtol * max_norm ≈ 0.01 * 224 ≈ 2.24 > 1.0
@@ -129,8 +132,8 @@ fn test_isapprox_rtol() {
 fn test_isapprox_index_mismatch_returns_false() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let a = TensorDynLen::from_dense_f64(vec![i.clone()], vec![1.0, 2.0]);
-    let b = TensorDynLen::from_dense_f64(vec![j.clone()], vec![1.0, 2.0, 3.0]);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![j.clone()], vec![1.0, 2.0, 3.0]).unwrap();
 
     // Different indices → sub fails → isapprox returns false
     assert!(!a.isapprox(&b, 1e10, 1e10));
@@ -139,8 +142,8 @@ fn test_isapprox_index_mismatch_returns_false() {
 #[test]
 fn test_sub_operator_owned() {
     let i = Index::new_dyn(2);
-    let a = TensorDynLen::from_dense_f64(vec![i.clone()], vec![5.0, 10.0]);
-    let b = TensorDynLen::from_dense_f64(vec![i.clone()], vec![1.0, 3.0]);
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![5.0, 10.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 3.0]).unwrap();
 
     // owned - owned
     let diff = a.clone() - b.clone();

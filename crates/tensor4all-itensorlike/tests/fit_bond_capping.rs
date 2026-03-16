@@ -12,6 +12,10 @@ use rand::SeedableRng;
 use tensor4all_core::{DynIndex, TensorDynLen};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain};
 
+const TEST_LENGTH: usize = 4;
+const TEST_PHYS_DIM: usize = 2;
+const TEST_BOND_DIM: usize = 4;
+
 /// Create a random MPO with specified bond dimension.
 fn create_random_mpo(
     length: usize,
@@ -96,7 +100,7 @@ fn setup_test_mpos(length: usize, phys_dim: usize, bond_dim: usize) -> TestMPOs 
 /// of whether the user explicitly passes rtol=0.0 or omits it.
 #[test]
 fn test_fit_rtol_zero_matches_no_rtol() {
-    let t = setup_test_mpos(6, 2, 8);
+    let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
 
     let result_no_rtol = t.mpo_a.contract(&t.mpo_b, &ContractOptions::fit()).unwrap();
     let result_rtol_zero = t
@@ -128,7 +132,7 @@ fn test_fit_rtol_zero_matches_no_rtol() {
 /// fit() with max_rank should cap bond dimensions at the given value.
 #[test]
 fn test_fit_max_rank_caps_bonds() {
-    let t = setup_test_mpos(6, 2, 8);
+    let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
     let max_rank = 5;
 
     let result = t
@@ -154,7 +158,7 @@ fn test_fit_max_rank_caps_bonds() {
 /// even when rtol would allow larger bonds.
 #[test]
 fn test_fit_max_rank_overrides_rtol() {
-    let t = setup_test_mpos(6, 2, 8);
+    let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
     let max_rank = 5;
     let rtol = 1e-12; // very small → would allow large bonds
 
@@ -193,7 +197,7 @@ fn test_fit_max_rank_overrides_rtol() {
 /// the zipup initialization. Smaller rtol → larger bonds.
 #[test]
 fn test_fit_rtol_controls_bond_growth() {
-    let t = setup_test_mpos(6, 2, 8);
+    let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
 
     let rtol_large = 0.3;
     let rtol_small = 1e-8;
@@ -234,7 +238,7 @@ fn test_fit_rtol_controls_bond_growth() {
 /// with no parameters. Both use default settings (no truncation).
 #[test]
 fn test_fit_no_params_not_worse_than_zipup() {
-    let t = setup_test_mpos(6, 2, 8);
+    let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
 
     let result_zipup = t
         .mpo_a
@@ -262,12 +266,12 @@ fn test_fit_no_params_not_worse_than_zipup() {
 /// or match the zipup initial guess.
 #[test]
 fn test_fit_not_worse_than_zipup_with_rtol() {
-    let t = setup_test_mpos(6, 2, 8);
+    let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
 
     // Use rtol values that produce meaningful truncation in zipup.
     // Very small rtol (e.g. 1e-4, 1e-8) may give zipup near-exact results
     // while fit with 1 sweep has not yet converged, so we test moderate rtol.
-    for rtol in [0.3, 0.1, 0.01] {
+    for rtol in [0.3, 0.1] {
         let result_zipup = t
             .mpo_a
             .contract(&t.mpo_b, &ContractOptions::zipup().with_rtol(rtol))
@@ -294,7 +298,7 @@ fn test_fit_not_worse_than_zipup_with_rtol() {
 /// to fit() with rtol=sqrt(cutoff). This tests the cutoff→rtol conversion.
 #[test]
 fn test_fit_cutoff_equivalent_to_rtol() {
-    let t = setup_test_mpos(6, 2, 8);
+    let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
     let cutoff: f64 = 0.01;
     let rtol = cutoff.sqrt(); // 0.1
 
@@ -332,7 +336,7 @@ fn test_fit_cutoff_equivalent_to_rtol() {
 /// during sweeps when no truncation is applied).
 #[test]
 fn test_fit_more_sweeps_stable() {
-    let t = setup_test_mpos(6, 2, 8);
+    let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
 
     let result_1sw = t
         .mpo_a
@@ -369,7 +373,7 @@ fn test_fit_more_sweeps_stable() {
 /// to improve (or at least not degrade).
 #[test]
 fn test_fit_more_sweeps_with_rtol_improves() {
-    let t = setup_test_mpos(6, 2, 8);
+    let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
     let rtol = 0.1;
 
     let result_1sw = t

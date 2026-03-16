@@ -71,14 +71,15 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
         let data = pauli_x.to_vec();
 
         let tensor = if n_sites == 1 {
-            TensorDynLen::from_dense_f64(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data)
+            TensorDynLen::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data).unwrap()
         } else if i == 0 {
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![s_out_tmp[i].clone(), s_in_tmp[i].clone(), bonds[i].clone()],
                 data,
             )
+            .unwrap()
         } else if i + 1 == n_sites {
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     bonds[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -86,8 +87,9 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         } else {
-            TensorDynLen::from_dense_f64(
+            TensorDynLen::from_dense(
                 vec![
                     bonds[i - 1].clone(),
                     s_out_tmp[i].clone(),
@@ -96,6 +98,7 @@ fn create_n_site_pauli_x_mpo_with_internal_indices(
                 ],
                 data,
             )
+            .unwrap()
         };
 
         let node = mpo.add_tensor(name, tensor).unwrap();
@@ -246,7 +249,7 @@ fn create_mps_chain_with_sites_all_ones_c64(
 
         let nelem: usize = indices.iter().map(|idx| idx.dim()).product();
         let data = vec![Complex64::new(1.0, 0.0); nelem];
-        let t = TensorDynLen::from_dense_c64(indices, data);
+        let t = TensorDynLen::from_dense(indices, data).unwrap();
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }

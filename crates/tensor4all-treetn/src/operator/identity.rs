@@ -69,7 +69,7 @@ pub fn build_identity_operator_tensor_c64(
     }
 
     if site_indices.is_empty() {
-        return Ok(TensorDynLen::scalar_c64(Complex64::new(1.0, 0.0)));
+        return Ok(TensorDynLen::scalar(Complex64::new(1.0, 0.0)).unwrap());
     }
 
     // Build combined index list
@@ -119,7 +119,7 @@ pub fn build_identity_operator_tensor_c64(
         data[linear_idx] = Complex64::new(1.0, 0.0);
     }
 
-    Ok(TensorDynLen::from_dense_c64(all_indices, data))
+    Ok(TensorDynLen::from_dense(all_indices, data).unwrap())
 }
 
 #[cfg(test)]

@@ -23,6 +23,8 @@ rand.workspace = true
 rand_distr.workspace = true
 omeco.workspace = true
 petgraph.workspace = true
+tenferro.workspace = true
+tenferro-tensor.workspace = true
 
 [dev-dependencies]
 rand_chacha.workspace = true

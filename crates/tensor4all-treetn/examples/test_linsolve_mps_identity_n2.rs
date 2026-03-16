@@ -100,7 +100,7 @@ fn create_random_mps_chain_with_sites_real_c64(
             let r: f64 = rng.random();
             data.push(num_complex::Complex64::new(r, 0.0));
         }
-        let t = TensorDynLen::from_dense_c64(indices, data);
+        let t = TensorDynLen::from_dense(indices, data).unwrap();
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }
@@ -144,7 +144,7 @@ fn create_random_mps_chain_with_sites_imag_c64(
             let im: f64 = rng.random();
             data.push(num_complex::Complex64::new(0.0, im));
         }
-        let t = TensorDynLen::from_dense_c64(indices, data);
+        let t = TensorDynLen::from_dense(indices, data).unwrap();
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }
@@ -181,21 +181,23 @@ fn create_identity_mpo_with_internal_indices(
         for k in 0..phys_dim {
             data[k * phys_dim + k] = 1.0;
         }
-        let base =
-            TensorDynLen::from_dense_f64(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data);
+        let base = TensorDynLen::from_dense(vec![s_out_tmp[i].clone(), s_in_tmp[i].clone()], data)
+            .unwrap();
 
         let tensor = if n == 1 {
             base
         } else if i == 0 {
-            let ones = TensorDynLen::from_dense_f64(vec![bonds[i].clone()], vec![1.0_f64; 1]);
+            let ones = TensorDynLen::from_dense(vec![bonds[i].clone()], vec![1.0_f64; 1]).unwrap();
             TensorDynLen::outer_product(&base, &ones)?
         } else if i + 1 == n {
-            let ones = TensorDynLen::from_dense_f64(vec![bonds[i - 1].clone()], vec![1.0_f64; 1]);
+            let ones =
+                TensorDynLen::from_dense(vec![bonds[i - 1].clone()], vec![1.0_f64; 1]).unwrap();
             TensorDynLen::outer_product(&ones, &base)?
         } else {
             let ones_left =
-                TensorDynLen::from_dense_f64(vec![bonds[i - 1].clone()], vec![1.0_f64; 1]);
-            let ones_right = TensorDynLen::from_dense_f64(vec![bonds[i].clone()], vec![1.0_f64; 1]);
+                TensorDynLen::from_dense(vec![bonds[i - 1].clone()], vec![1.0_f64; 1]).unwrap();
+            let ones_right =
+                TensorDynLen::from_dense(vec![bonds[i].clone()], vec![1.0_f64; 1]).unwrap();
             let t = TensorDynLen::outer_product(&ones_left, &base)?;
             TensorDynLen::outer_product(&t, &ones_right)?
         };

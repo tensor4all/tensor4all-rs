@@ -644,8 +644,8 @@ mod tests {
         let s1 = make_index(2);
         let b01 = make_index(2);
 
-        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], vec![1.0; 4]);
-        let t1 = TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone()], vec![1.0; 4]);
+        let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
+        let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone()], vec![1.0; 4]).unwrap();
 
         let n0 = state.add_tensor("site0".to_string(), t0).unwrap();
         let n1 = state.add_tensor("site1".to_string(), t1).unwrap();
@@ -660,14 +660,14 @@ mod tests {
         let b_mpo = make_index(1);
 
         let id_data = vec![1.0, 0.0, 0.0, 1.0]; // Identity matrix
-        let t0_mpo = TensorDynLen::from_dense_f64(
+        let t0_mpo = TensorDynLen::from_dense(
             vec![s0_out.clone(), s0_in.clone(), b_mpo.clone()],
             id_data.clone(),
-        );
-        let t1_mpo = TensorDynLen::from_dense_f64(
-            vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()],
-            id_data,
-        );
+        )
+        .unwrap();
+        let t1_mpo =
+            TensorDynLen::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data)
+                .unwrap();
 
         let n0_mpo = mpo.add_tensor("site0".to_string(), t0_mpo).unwrap();
         let n1_mpo = mpo.add_tensor("site1".to_string(), t1_mpo).unwrap();
@@ -732,10 +732,10 @@ mod tests {
         let b01 = make_index(2);
         let b12 = make_index(2);
 
-        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], vec![1.0; 4]);
-        let t1 =
-            TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 8]);
-        let t2 = TensorDynLen::from_dense_f64(vec![b12.clone(), s2.clone()], vec![1.0; 4]);
+        let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
+        let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 8])
+            .unwrap();
+        let t2 = TensorDynLen::from_dense(vec![b12.clone(), s2.clone()], vec![1.0; 4]).unwrap();
 
         let n0 = state.add_tensor("site0".to_string(), t0).unwrap();
         let n1 = state.add_tensor("site1".to_string(), t1).unwrap();
@@ -752,14 +752,14 @@ mod tests {
         let b_mpo = make_index(1);
 
         let id_data = vec![1.0, 0.0, 0.0, 1.0];
-        let t0_mpo = TensorDynLen::from_dense_f64(
+        let t0_mpo = TensorDynLen::from_dense(
             vec![s0_out.clone(), s0_in.clone(), b_mpo.clone()],
             id_data.clone(),
-        );
-        let t1_mpo = TensorDynLen::from_dense_f64(
-            vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()],
-            id_data,
-        );
+        )
+        .unwrap();
+        let t1_mpo =
+            TensorDynLen::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data)
+                .unwrap();
 
         let n0_mpo = mpo.add_tensor("site0".to_string(), t0_mpo).unwrap();
         let n1_mpo = mpo.add_tensor("site1".to_string(), t1_mpo).unwrap();
@@ -815,8 +815,8 @@ mod tests {
         let s1 = make_index(2);
         let b01 = make_index(2);
 
-        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), b01.clone()], vec![1.0; 4]);
-        let t1 = TensorDynLen::from_dense_f64(vec![b01.clone(), s1.clone()], vec![1.0; 4]);
+        let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
+        let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone()], vec![1.0; 4]).unwrap();
 
         let n0 = state.add_tensor("site0".to_string(), t0).unwrap();
         let n1 = state.add_tensor("site1".to_string(), t1).unwrap();
@@ -831,14 +831,14 @@ mod tests {
         let b_mpo = make_index(1);
 
         let id_data = vec![1.0, 0.0, 0.0, 1.0];
-        let t0_mpo = TensorDynLen::from_dense_f64(
+        let t0_mpo = TensorDynLen::from_dense(
             vec![s0_out.clone(), s0_in.clone(), b_mpo.clone()],
             id_data.clone(),
-        );
-        let t2_mpo = TensorDynLen::from_dense_f64(
-            vec![b_mpo.clone(), s2_out.clone(), s2_in.clone()],
-            id_data,
-        );
+        )
+        .unwrap();
+        let t2_mpo =
+            TensorDynLen::from_dense(vec![b_mpo.clone(), s2_out.clone(), s2_in.clone()], id_data)
+                .unwrap();
 
         let n0_mpo = mpo.add_tensor("site0".to_string(), t0_mpo).unwrap();
         let n2_mpo = mpo.add_tensor("site2".to_string(), t2_mpo).unwrap();

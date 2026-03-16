@@ -180,9 +180,10 @@ impl SubDomainTT {
             if projected_value >= dim {
                 // Invalid projection - zero out entire tensor
                 if tensor.is_f64() {
-                    return TensorDynLen::zeros_f64(indices.to_vec());
+                    return TensorDynLen::zeros::<f64>(indices.to_vec()).unwrap();
                 } else {
-                    return TensorDynLen::zeros_c64(indices.to_vec());
+                    return TensorDynLen::zeros::<num_complex::Complex64>(indices.to_vec())
+                        .unwrap();
                 }
             }
 
@@ -210,7 +211,7 @@ impl SubDomainTT {
                     }
                 }
 
-                TensorDynLen::from_dense_f64(indices.to_vec(), result_data)
+                TensorDynLen::from_dense(indices.to_vec(), result_data).unwrap()
             } else {
                 let src_data = tensor.as_slice_c64().unwrap_or_default();
                 let mut result_data = vec![Complex64::new(0.0, 0.0); total_size];
@@ -222,7 +223,7 @@ impl SubDomainTT {
                     }
                 }
 
-                TensorDynLen::from_dense_c64(indices.to_vec(), result_data)
+                TensorDynLen::from_dense(indices.to_vec(), result_data).unwrap()
             }
         } else {
             // Index not found - return tensor unchanged
@@ -344,8 +345,6 @@ impl From<SubDomainTT> for TensorTrain {
 mod tests {
     use super::*;
     use tensor4all_core::index::Index;
-    use tensor4all_core::StorageScalar;
-
     fn make_index(size: usize) -> DynIndex {
         Index::new_dyn(size)
     }
@@ -354,8 +353,7 @@ mod tests {
         let dims: Vec<usize> = indices.iter().map(|i| i.dim).collect();
         let size: usize = dims.iter().product();
         let data: Vec<f64> = (0..size).map(|i| (i + 1) as f64).collect();
-        let storage = f64::dense_storage_with_shape(data, &dims);
-        TensorDynLen::new(indices, storage)
+        TensorDynLen::from_dense(indices, data).unwrap()
     }
 
     fn make_simple_tt() -> (TensorTrain, Vec<DynIndex>, Vec<DynIndex>) {

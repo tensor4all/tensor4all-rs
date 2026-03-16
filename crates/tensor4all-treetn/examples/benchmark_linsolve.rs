@@ -58,7 +58,7 @@ fn create_n_site_ones_mps(
         };
 
         let nelem: usize = indices.iter().map(|idx| idx.dim).product();
-        let tensor = TensorDynLen::from_dense_f64(indices, vec![1.0_f64; nelem]);
+        let tensor = TensorDynLen::from_dense(indices, vec![1.0_f64; nelem]).unwrap();
         mps.add_tensor(name, tensor).unwrap();
     }
 

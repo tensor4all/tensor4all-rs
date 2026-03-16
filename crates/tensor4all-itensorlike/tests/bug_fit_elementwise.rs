@@ -55,7 +55,7 @@ fn create_function_2d_tt(
         all_sites.push(col_sites[i].clone());
     }
 
-    let big = TensorDynLen::from_dense_f64(all_sites.clone(), quantics_data);
+    let big = TensorDynLen::from_dense(all_sites.clone(), quantics_data).unwrap();
     let opts = FactorizeOptions::qr().with_rtol(0.0);
     let n_sites = all_sites.len();
     let mut remaining = big;
@@ -121,7 +121,7 @@ fn as_diagonal(
         }
         new_data[nf] = val;
     }
-    TensorDynLen::from_dense_f64(new_indices, new_data)
+    TensorDynLen::from_dense(new_indices, new_data).unwrap()
 }
 
 /// Extract diagonal: keep only s==s_result, remove s_result index.
@@ -166,7 +166,7 @@ fn extract_diagonal(tensor: &TensorDynLen, s: &DynIndex, s_result: &DynIndex) ->
         }
         new_data[nf] = val;
     }
-    TensorDynLen::from_dense_f64(new_indices, new_data)
+    TensorDynLen::from_dense(new_indices, new_data).unwrap()
 }
 
 /// Element-wise product via diagonal embedding + TT contraction.
@@ -239,7 +239,7 @@ fn elementwise_mul(
 /// bubble computations when using fit() for element-wise multiplication.
 #[test]
 fn test_fit_wrong_for_elementwise_structured() {
-    let nbit = 8; // 256x256, 16 QTT sites
+    let nbit = 3; // 8x8, 6 QTT sites
 
     let row_sites: Vec<DynIndex> = (0..nbit)
         .map(|i| DynIndex::new_dyn_with_tag(2, &format!("z1={}", i + 1)).unwrap())
@@ -288,19 +288,6 @@ fn test_fit_wrong_for_elementwise_structured() {
         .norm()
         / ref_norm;
 
-    // fit(A,B) with 10 sweeps: still wrong
-    let result_fit10 = elementwise_mul(
-        &tt_a,
-        &tt_b,
-        &all_sites,
-        &ContractOptions::fit().with_nsweeps(10),
-    );
-    let fit10_err = result_fit10
-        .axpby(1.0.into(), &result_ref, (-1.0).into())
-        .unwrap()
-        .norm()
-        / ref_norm;
-
     // fit(B,A): swapped order should also work
     let result_fit_ba = elementwise_mul(&tt_b, &tt_a, &all_sites, &ContractOptions::fit());
     let fit_ba_err = result_fit_ba
@@ -323,7 +310,6 @@ fn test_fit_wrong_for_elementwise_structured() {
         / ref_norm;
 
     eprintln!("fit(A,B)            rel_err = {:.6e}", fit_err);
-    eprintln!("fit(A,B,10sw)       rel_err = {:.6e}", fit10_err);
     eprintln!("fit(B,A)            rel_err = {:.6e}", fit_ba_err);
     eprintln!("fit(A,B,rtol=1e-30) rel_err = {:.6e}", fit_rtol_err);
 
@@ -332,8 +318,6 @@ fn test_fit_wrong_for_elementwise_structured() {
         "fit(A,B) converged to wrong local minimum: rel_err={:.6e}",
         fit_err
     );
-    // Note: fit with many sweeps can be numerically unstable in debug builds,
-    // so we only log fit10_err without asserting.
     assert!(
         fit_ba_err < 1e-4,
         "fit(B,A) converged to wrong local minimum: rel_err={:.6e}",

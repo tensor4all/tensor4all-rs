@@ -747,14 +747,16 @@ mod tests {
         let bond = DynIndex::new_dyn(3);
         let s1 = DynIndex::new_dyn(2);
 
-        let t0 = TensorDynLen::from_dense_f64(
+        let t0 = TensorDynLen::from_dense(
             vec![s0.clone(), bond.clone()],
             vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-        );
-        let t1 = TensorDynLen::from_dense_f64(
+        )
+        .unwrap();
+        let t1 = TensorDynLen::from_dense(
             vec![bond.clone(), s1.clone()],
             vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-        );
+        )
+        .unwrap();
 
         TreeTN::<TensorDynLen, String>::from_tensors(
             vec![t0, t1],
@@ -786,7 +788,7 @@ mod tests {
         let mut env = FitEnvironment::<TensorDynLen, String>::new();
 
         let s = DynIndex::new_dyn(2);
-        let t = TensorDynLen::from_dense_f64(vec![s.clone()], vec![1.0, 2.0]);
+        let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0]).unwrap();
 
         env.insert("A".to_string(), "B".to_string(), t.clone());
 
@@ -810,7 +812,7 @@ mod tests {
         let mut env = FitEnvironment::<TensorDynLen, String>::new();
 
         let s = DynIndex::new_dyn(2);
-        let t = TensorDynLen::from_dense_f64(vec![s.clone()], vec![1.0, 2.0]);
+        let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0]).unwrap();
 
         env.insert("A".to_string(), "B".to_string(), t.clone());
         env.insert("B".to_string(), "A".to_string(), t.clone());
@@ -828,7 +830,7 @@ mod tests {
         let tn = make_two_node_treetn();
 
         let s = DynIndex::new_dyn(2);
-        let t = TensorDynLen::from_dense_f64(vec![s.clone()], vec![1.0, 2.0]);
+        let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0]).unwrap();
 
         // Insert environments for both directions
         env.insert("A".to_string(), "B".to_string(), t.clone());
@@ -863,7 +865,7 @@ mod tests {
         let tn = make_two_node_treetn();
 
         let s = DynIndex::new_dyn(2);
-        let t = TensorDynLen::from_dense_f64(vec![s.clone()], vec![1.0, 2.0]);
+        let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0]).unwrap();
 
         // A is a leaf with only neighbor B. env[(A, B)] is valid alone.
         env.insert("A".to_string(), "B".to_string(), t.clone());

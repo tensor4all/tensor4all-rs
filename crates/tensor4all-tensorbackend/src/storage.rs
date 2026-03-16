@@ -1,4 +1,4 @@
-use mdarray::{DTensor, DynRank, Rank, Shape, Tensor};
+use mdarray::{DynRank, Shape, Tensor};
 use num_complex::{Complex64, ComplexFloat};
 use num_traits::{One, Zero};
 use rand::Rng;
@@ -7,6 +7,8 @@ use std::borrow::Cow;
 use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Deref, DerefMut, Mul};
 use std::sync::Arc;
+
+use crate::tensor_element::TensorElement;
 
 /// Trait for scalar types that can be used in dense storage.
 ///
@@ -1620,7 +1622,7 @@ fn promote_dense_to_c64(dense: &DenseStorage<f64>) -> DenseStorage<Complex64> {
 /// # Owned operations
 /// - `extract_dense`: Returns owned `Vec` (always copies)
 /// - `dense_storage`: Creates `Storage` from owned `Vec`
-pub trait StorageScalar: Copy + 'static {
+pub trait StorageScalar: TensorElement + Copy + 'static {
     /// Extract a borrowed view of dense storage data (no copy).
     ///
     /// Returns an error if the storage is not the matching dense type.
@@ -1649,44 +1651,6 @@ pub trait StorageScalar: Copy + 'static {
         let len = data.len();
         Self::dense_storage_with_shape(data, &[len])
     }
-}
-
-/// Convert dense storage to a DTensor with rank 2.
-///
-/// This function extracts data from dense storage and reshapes it into a `DTensor<T, 2>`
-/// with the specified shape `[m, n]`. The data length must match `m * n`.
-///
-/// # Arguments
-/// * `storage` - Dense storage (DenseF64 or DenseC64)
-/// * `shape` - Shape array `[m, n]`
-///
-/// # Returns
-/// A `DTensor<T, 2>` with the specified shape
-///
-/// # Errors
-/// Returns an error if:
-/// - Storage type doesn't match T
-/// - Data length doesn't match `m * n`
-pub fn storage_to_dtensor<T: StorageScalar>(
-    storage: &Storage,
-    shape: [usize; 2],
-) -> Result<DTensor<T, 2>, String> {
-    // Extract data
-    let data = T::extract_dense(storage)?;
-
-    // Validate length
-    let expected_len: usize = shape[0] * shape[1];
-    if data.len() != expected_len {
-        return Err(format!(
-            "Data length {} doesn't match shape product {}",
-            data.len(),
-            expected_len
-        ));
-    }
-
-    // Create 1D tensor, then reshape to 2D
-    let tensor_1d = mdarray::Tensor::<T, Rank<1>>::from(data);
-    Ok(tensor_1d.into_shape(shape))
 }
 
 impl StorageScalar for f64 {

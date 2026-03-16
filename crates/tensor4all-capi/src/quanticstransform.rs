@@ -451,7 +451,7 @@ mod tests {
                 }
             }
 
-            tensors.push(TensorDynLen::from_dense_c64(indices, data));
+            tensors.push(TensorDynLen::from_dense(indices, data).unwrap());
         }
 
         let treetn = TreeTN::from_tensors(tensors, node_names).expect("Failed to create TreeTN");

@@ -265,6 +265,35 @@ fn test_svd_complex_reconstruction() {
 }
 
 #[test]
+fn test_svd_complex_rectangular_reconstruction() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+
+    let data = vec![
+        Complex64::new(1.0, 2.0),
+        Complex64::new(3.0, -1.0),
+        Complex64::new(0.0, 1.0),
+        Complex64::new(4.0, 0.0),
+        Complex64::new(-1.0, 3.0),
+        Complex64::new(2.0, 2.0),
+    ];
+    let storage = Arc::new(Storage::DenseC64(
+        tensor4all_core::storage::DenseStorageC64::from_vec_with_shape(data, &[2, 3]),
+    ));
+    let tensor = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
+
+    let (u, s, v) =
+        svd_c64(&tensor, std::slice::from_ref(&i)).expect("Complex rectangular SVD should succeed");
+    let reconstructed = reconstruct_from_svd(&u, &s, &v);
+
+    assert!(
+        tensor.isapprox(&reconstructed, 1e-8, 0.0),
+        "Complex rectangular SVD reconstruction failed: maxabs diff = {}",
+        (&tensor - &reconstructed).maxabs()
+    );
+}
+
+#[test]
 fn test_svd_truncation() {
     // Test that truncation works correctly with a matrix that has a tiny singular value
     // Create a 2×2 diagonal matrix with singular values [1.0, 1e-14]
@@ -449,8 +478,8 @@ fn svd_reconstruction_error_f64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64
 
 /// Regression: SVD roundtrip with dim-1 axes.
 ///
-/// Tensors with unit dimensions cause tenferro's `reshape()` to assign
-/// column-major strides, corrupting element ordering.
+/// tensor4all keeps row-major boundary semantics even though tenferro uses
+/// column-major internal view semantics.
 #[test]
 fn test_svd_reconstruction_with_unit_dim_axis() {
     // [d=1, d=2, d=2] factorized with left_inds=[d=2, d=2]
@@ -476,6 +505,35 @@ fn test_svd_reconstruction_with_unit_dim_axis() {
     assert!(
         err < 1e-10,
         "SVD roundtrip with left=[d=1], right=[d=2,d=2] error: {err:.3e}"
+    );
+}
+
+#[test]
+fn test_svd_tall_matrix_preserves_left_axis_order() {
+    let i1 = Index::new_dyn(1);
+    let i2 = Index::new_dyn(2);
+    let i3 = Index::new_dyn(2);
+    let data = vec![1.0, 2.0, 3.0, 4.0];
+    let storage = Arc::new(Storage::DenseF64(
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[1, 2, 2]),
+    ));
+    let tensor = TensorDynLen::new(vec![i1, i2.clone(), i3.clone()], storage);
+
+    let (u, _s, _v) = svd::<f64>(&tensor, &[i2.clone(), i3.clone()]).expect("SVD should succeed");
+
+    let norm = 30.0_f64.sqrt();
+    let expected_storage = Arc::new(Storage::DenseF64(
+        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(
+            vec![1.0 / norm, 2.0 / norm, 3.0 / norm, 4.0 / norm],
+            &[2, 2, 1],
+        ),
+    ));
+    let expected = TensorDynLen::new(vec![i2, i3, u.indices[2].clone()], expected_storage);
+
+    assert!(
+        u.isapprox(&expected, 1e-10, 0.0),
+        "left-axis order changed in tall-matrix SVD: maxabs diff = {}",
+        (&u - &expected).maxabs()
     );
 }
 

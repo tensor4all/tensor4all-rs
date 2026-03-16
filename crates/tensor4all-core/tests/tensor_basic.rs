@@ -1,8 +1,8 @@
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64, DiagStorageC64};
-use tensor4all_core::{AnyScalar, DenseStorageFactory, Storage, TensorDynLen};
+use tensor4all_core::{AnyScalar, DenseStorageFactory, Storage, TensorDynLen, TensorElement};
 
 /// Helper to create DenseF64 storage with shape information
 fn make_dense_f64(data: Vec<f64>, dims: &[usize]) -> Storage {
@@ -627,7 +627,7 @@ fn test_from_dense_f64() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = TensorDynLen::from_dense_f64(vec![i, j], data.clone());
+    let tensor = TensorDynLen::from_dense(vec![i, j], data.clone()).unwrap();
 
     assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(tensor.is_f64());
@@ -643,7 +643,7 @@ fn test_from_dense_c64() {
     let data: Vec<Complex64> = (1..=6)
         .map(|x| Complex64::new(x as f64, x as f64))
         .collect();
-    let tensor = TensorDynLen::from_dense_c64(vec![i, j], data.clone());
+    let tensor = TensorDynLen::from_dense(vec![i, j], data.clone()).unwrap();
 
     assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(!tensor.is_f64());
@@ -652,9 +652,119 @@ fn test_from_dense_c64() {
     assert_eq!(tensor.to_vec_c64().unwrap(), data);
 }
 
+fn assert_dense_constructor_dims<T>(data: Vec<T>)
+where
+    T: TensorElement,
+    TensorDynLen: std::fmt::Debug,
+{
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let tensor = TensorDynLen::from_dense(vec![i, j], data).unwrap();
+    assert_eq!(tensor.dims(), vec![2, 2]);
+}
+
+#[test]
+fn test_from_dense_generic_supports_all_supported_element_types() {
+    assert_dense_constructor_dims::<f32>(vec![1.0, 2.0, 3.0, 4.0]);
+    assert_dense_constructor_dims::<f64>(vec![1.0, 2.0, 3.0, 4.0]);
+    assert_dense_constructor_dims::<Complex32>(vec![
+        Complex32::new(1.0, 0.5),
+        Complex32::new(2.0, -0.5),
+        Complex32::new(3.0, 1.5),
+        Complex32::new(4.0, -1.5),
+    ]);
+    assert_dense_constructor_dims::<Complex64>(vec![
+        Complex64::new(1.0, 0.5),
+        Complex64::new(2.0, -0.5),
+        Complex64::new(3.0, 1.5),
+        Complex64::new(4.0, -1.5),
+    ]);
+}
+
+#[test]
+fn test_from_dense_generic_preserves_row_major_input_order() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let tensor =
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+
+    let permuted = tensor.permute_indices(&[j, i]);
+    assert_eq!(permuted.to_vec_f64().unwrap(), vec![1.0, 3.0, 2.0, 4.0]);
+}
+
+#[test]
+fn test_from_dense_generic_rejects_length_mismatch() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let err = TensorDynLen::from_dense(vec![i, j], vec![1.0_f64, 2.0, 3.0]).unwrap_err();
+    assert!(
+        err.to_string().contains("length"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_from_diag_generic_supports_all_supported_element_types() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+
+    assert!(
+        TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f32, 2.0, 3.0])
+            .unwrap()
+            .is_diag()
+    );
+    assert!(
+        TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0])
+            .unwrap()
+            .is_diag()
+    );
+    assert!(TensorDynLen::from_diag(
+        vec![i.clone(), j.clone()],
+        vec![
+            Complex32::new(1.0, 0.0),
+            Complex32::new(2.0, 0.5),
+            Complex32::new(3.0, -0.5),
+        ],
+    )
+    .unwrap()
+    .is_diag());
+    assert!(TensorDynLen::from_diag(
+        vec![i, j],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.5),
+            Complex64::new(3.0, -0.5),
+        ],
+    )
+    .unwrap()
+    .is_diag());
+}
+
+#[test]
+fn test_from_diag_generic_rejects_mismatched_index_dims() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let err = TensorDynLen::from_diag(vec![i, j], vec![1.0_f64, 2.0]).unwrap_err();
+    assert!(
+        err.to_string().contains("same dimension"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_from_diag_generic_rejects_payload_length_mismatch() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+    let err = TensorDynLen::from_diag(vec![i, j], vec![1.0_f64, 2.0]).unwrap_err();
+    assert!(
+        err.to_string().contains("length"),
+        "unexpected error: {err}"
+    );
+}
+
 #[test]
 fn test_scalar_f64() {
-    let scalar = TensorDynLen::scalar_f64(42.0);
+    let scalar = TensorDynLen::scalar(42.0).unwrap();
     assert_eq!(scalar.dims(), Vec::<usize>::new());
     assert!(scalar.is_f64());
     assert_eq!(scalar.as_slice_f64().unwrap(), &[42.0]);
@@ -663,7 +773,7 @@ fn test_scalar_f64() {
 #[test]
 fn test_scalar_c64() {
     let z = Complex64::new(1.0, 2.0);
-    let scalar = TensorDynLen::scalar_c64(z);
+    let scalar = TensorDynLen::scalar(z).unwrap();
     assert_eq!(scalar.dims(), Vec::<usize>::new());
     assert!(scalar.is_complex());
     assert_eq!(scalar.as_slice_c64().unwrap(), &[z]);
@@ -673,7 +783,7 @@ fn test_scalar_c64() {
 fn test_zeros_f64() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let tensor = TensorDynLen::zeros_f64(vec![i, j]);
+    let tensor = TensorDynLen::zeros::<f64>(vec![i, j]).unwrap();
 
     assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(tensor.is_f64());
@@ -685,7 +795,7 @@ fn test_zeros_f64() {
 fn test_zeros_c64() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
-    let tensor = TensorDynLen::zeros_c64(vec![i, j]);
+    let tensor = TensorDynLen::zeros::<num_complex::Complex64>(vec![i, j]).unwrap();
 
     assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(tensor.is_complex());
@@ -697,15 +807,16 @@ fn test_zeros_c64() {
 fn test_as_slice_error_on_wrong_type() {
     let i = Index::new_dyn(2);
     // Create f64 tensor but try to get c64 slice
-    let tensor_f64 = TensorDynLen::from_dense_f64(vec![i.clone()], vec![1.0, 2.0]);
+    let tensor_f64 = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
     assert!(tensor_f64.as_slice_c64().is_err());
     assert!(tensor_f64.to_vec_c64().is_err());
 
     // Create c64 tensor but try to get f64 slice
-    let tensor_c64 = TensorDynLen::from_dense_c64(
+    let tensor_c64 = TensorDynLen::from_dense(
         vec![i],
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
-    );
+    )
+    .unwrap();
     assert!(tensor_c64.as_slice_f64().is_err());
     assert!(tensor_c64.to_vec_f64().is_err());
 }

@@ -489,8 +489,10 @@ mod tests {
         let bond = DynIndex::new_dyn(4);
 
         // Make a simple chain A --bond-- B
-        let t0 = TensorDynLen::from_dense_f64(vec![s0.clone(), bond.clone()], vec![1.0; 2 * 4]);
-        let t1 = TensorDynLen::from_dense_f64(vec![bond.clone(), s1.clone()], vec![1.0; 4 * 3]);
+        let t0 =
+            TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0; 2 * 4]).unwrap();
+        let t1 =
+            TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![1.0; 4 * 3]).unwrap();
 
         tn.add_tensor("A".to_string(), t0).unwrap();
         tn.add_tensor("B".to_string(), t1).unwrap();

@@ -131,21 +131,22 @@ fn create_ones_mpo_for_block(
         let data = vec![1.0_f64; in_dim * out_dim];
 
         if i == 0 && n == 1 {
-            let tensor = TensorDynLen::from_dense_f64(vec![in_idx, out_idx], data);
+            let tensor = TensorDynLen::from_dense(vec![in_idx, out_idx], data).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             let right_bond = indices.bonds[block_idx][i].clone();
-            let tensor = TensorDynLen::from_dense_f64(vec![in_idx, out_idx, right_bond], data);
+            let tensor = TensorDynLen::from_dense(vec![in_idx, out_idx, right_bond], data).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             let left_bond = indices.bonds[block_idx][i - 1].clone();
-            let tensor = TensorDynLen::from_dense_f64(vec![left_bond, in_idx, out_idx], data);
+            let tensor = TensorDynLen::from_dense(vec![left_bond, in_idx, out_idx], data).unwrap();
             tensors.push(tensor);
         } else {
             let left_bond = indices.bonds[block_idx][i - 1].clone();
             let right_bond = indices.bonds[block_idx][i].clone();
             let tensor =
-                TensorDynLen::from_dense_f64(vec![left_bond, in_idx, out_idx, right_bond], data);
+                TensorDynLen::from_dense(vec![left_bond, in_idx, out_idx, right_bond], data)
+                    .unwrap();
             tensors.push(tensor);
         }
     }
@@ -184,21 +185,22 @@ fn create_const_mpo_for_block(
         let data = vec![fill_value; in_dim * out_dim];
 
         if i == 0 && n == 1 {
-            let tensor = TensorDynLen::from_dense_f64(vec![in_idx, out_idx], data);
+            let tensor = TensorDynLen::from_dense(vec![in_idx, out_idx], data).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             let right_bond = indices.bonds[block_idx][i].clone();
-            let tensor = TensorDynLen::from_dense_f64(vec![in_idx, out_idx, right_bond], data);
+            let tensor = TensorDynLen::from_dense(vec![in_idx, out_idx, right_bond], data).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             let left_bond = indices.bonds[block_idx][i - 1].clone();
-            let tensor = TensorDynLen::from_dense_f64(vec![left_bond, in_idx, out_idx], data);
+            let tensor = TensorDynLen::from_dense(vec![left_bond, in_idx, out_idx], data).unwrap();
             tensors.push(tensor);
         } else {
             let left_bond = indices.bonds[block_idx][i - 1].clone();
             let right_bond = indices.bonds[block_idx][i].clone();
             let tensor =
-                TensorDynLen::from_dense_f64(vec![left_bond, in_idx, out_idx, right_bond], data);
+                TensorDynLen::from_dense(vec![left_bond, in_idx, out_idx, right_bond], data)
+                    .unwrap();
             tensors.push(tensor);
         }
     }
@@ -235,21 +237,24 @@ fn create_identity_operator_for_block(
         }
 
         if i == 0 && n == 1 {
-            let tensor = TensorDynLen::from_dense_f64(vec![in_idx, op_out_idx], data);
+            let tensor = TensorDynLen::from_dense(vec![in_idx, op_out_idx], data).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             let right_bond = op_bonds[i].clone();
-            let tensor = TensorDynLen::from_dense_f64(vec![in_idx, op_out_idx, right_bond], data);
+            let tensor =
+                TensorDynLen::from_dense(vec![in_idx, op_out_idx, right_bond], data).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             let left_bond = op_bonds[i - 1].clone();
-            let tensor = TensorDynLen::from_dense_f64(vec![left_bond, in_idx, op_out_idx], data);
+            let tensor =
+                TensorDynLen::from_dense(vec![left_bond, in_idx, op_out_idx], data).unwrap();
             tensors.push(tensor);
         } else {
             let left_bond = op_bonds[i - 1].clone();
             let right_bond = op_bonds[i].clone();
             let tensor =
-                TensorDynLen::from_dense_f64(vec![left_bond, in_idx, op_out_idx, right_bond], data);
+                TensorDynLen::from_dense(vec![left_bond, in_idx, op_out_idx, right_bond], data)
+                    .unwrap();
             tensors.push(tensor);
         }
     }
@@ -277,29 +282,29 @@ fn create_diagonal_operator_for_block(
         let op_out_idx = indices.operator_outputs[block_idx][i].clone();
 
         if i == 0 && n == 1 {
-            let tensor = TensorDynLen::from_dense_f64(vec![in_idx, op_out_idx], diag_data.to_vec());
+            let tensor =
+                TensorDynLen::from_dense(vec![in_idx, op_out_idx], diag_data.to_vec()).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             let right_bond = op_bonds[i].clone();
-            let tensor = TensorDynLen::from_dense_f64(
-                vec![in_idx, op_out_idx, right_bond],
-                diag_data.to_vec(),
-            );
+            let tensor =
+                TensorDynLen::from_dense(vec![in_idx, op_out_idx, right_bond], diag_data.to_vec())
+                    .unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             let left_bond = op_bonds[i - 1].clone();
-            let tensor = TensorDynLen::from_dense_f64(
-                vec![left_bond, in_idx, op_out_idx],
-                diag_data.to_vec(),
-            );
+            let tensor =
+                TensorDynLen::from_dense(vec![left_bond, in_idx, op_out_idx], diag_data.to_vec())
+                    .unwrap();
             tensors.push(tensor);
         } else {
             let left_bond = op_bonds[i - 1].clone();
             let right_bond = op_bonds[i].clone();
-            let tensor = TensorDynLen::from_dense_f64(
+            let tensor = TensorDynLen::from_dense(
                 vec![left_bond, in_idx, op_out_idx, right_bond],
                 diag_data.to_vec(),
-            );
+            )
+            .unwrap();
             tensors.push(tensor);
         }
     }
@@ -333,21 +338,24 @@ fn create_cross_block_identity_operator(
         }
 
         if i == 0 && n == 1 {
-            let tensor = TensorDynLen::from_dense_f64(vec![in_idx, op_out_idx], data);
+            let tensor = TensorDynLen::from_dense(vec![in_idx, op_out_idx], data).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             let right_bond = op_bonds[i].clone();
-            let tensor = TensorDynLen::from_dense_f64(vec![in_idx, op_out_idx, right_bond], data);
+            let tensor =
+                TensorDynLen::from_dense(vec![in_idx, op_out_idx, right_bond], data).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             let left_bond = op_bonds[i - 1].clone();
-            let tensor = TensorDynLen::from_dense_f64(vec![left_bond, in_idx, op_out_idx], data);
+            let tensor =
+                TensorDynLen::from_dense(vec![left_bond, in_idx, op_out_idx], data).unwrap();
             tensors.push(tensor);
         } else {
             let left_bond = op_bonds[i - 1].clone();
             let right_bond = op_bonds[i].clone();
             let tensor =
-                TensorDynLen::from_dense_f64(vec![left_bond, in_idx, op_out_idx, right_bond], data);
+                TensorDynLen::from_dense(vec![left_bond, in_idx, op_out_idx, right_bond], data)
+                    .unwrap();
             tensors.push(tensor);
         }
     }
@@ -383,21 +391,24 @@ fn create_i_pauli_x_cross_block_operator(
         let data = vec![zero, factor, factor, zero];
 
         if i == 0 && n == 1 {
-            let tensor = TensorDynLen::from_dense_c64(vec![in_idx, op_out_idx], data);
+            let tensor = TensorDynLen::from_dense(vec![in_idx, op_out_idx], data).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             let right_bond = op_bonds[i].clone();
-            let tensor = TensorDynLen::from_dense_c64(vec![in_idx, op_out_idx, right_bond], data);
+            let tensor =
+                TensorDynLen::from_dense(vec![in_idx, op_out_idx, right_bond], data).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             let left_bond = op_bonds[i - 1].clone();
-            let tensor = TensorDynLen::from_dense_c64(vec![left_bond, in_idx, op_out_idx], data);
+            let tensor =
+                TensorDynLen::from_dense(vec![left_bond, in_idx, op_out_idx], data).unwrap();
             tensors.push(tensor);
         } else {
             let left_bond = op_bonds[i - 1].clone();
             let right_bond = op_bonds[i].clone();
             let tensor =
-                TensorDynLen::from_dense_c64(vec![left_bond, in_idx, op_out_idx, right_bond], data);
+                TensorDynLen::from_dense(vec![left_bond, in_idx, op_out_idx, right_bond], data)
+                    .unwrap();
             tensors.push(tensor);
         }
     }
@@ -426,21 +437,22 @@ fn create_complex_const_mpo_for_block(
         let data = vec![fill; in_dim * out_dim];
 
         if i == 0 && n == 1 {
-            let tensor = TensorDynLen::from_dense_c64(vec![in_idx, out_idx], data);
+            let tensor = TensorDynLen::from_dense(vec![in_idx, out_idx], data).unwrap();
             tensors.push(tensor);
         } else if i == 0 {
             let right_bond = indices.bonds[block_idx][i].clone();
-            let tensor = TensorDynLen::from_dense_c64(vec![in_idx, out_idx, right_bond], data);
+            let tensor = TensorDynLen::from_dense(vec![in_idx, out_idx, right_bond], data).unwrap();
             tensors.push(tensor);
         } else if i == n - 1 {
             let left_bond = indices.bonds[block_idx][i - 1].clone();
-            let tensor = TensorDynLen::from_dense_c64(vec![left_bond, in_idx, out_idx], data);
+            let tensor = TensorDynLen::from_dense(vec![left_bond, in_idx, out_idx], data).unwrap();
             tensors.push(tensor);
         } else {
             let left_bond = indices.bonds[block_idx][i - 1].clone();
             let right_bond = indices.bonds[block_idx][i].clone();
             let tensor =
-                TensorDynLen::from_dense_c64(vec![left_bond, in_idx, out_idx, right_bond], data);
+                TensorDynLen::from_dense(vec![left_bond, in_idx, out_idx, right_bond], data)
+                    .unwrap();
             tensors.push(tensor);
         }
     }

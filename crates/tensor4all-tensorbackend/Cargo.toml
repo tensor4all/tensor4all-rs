@@ -21,13 +21,12 @@ thiserror.workspace = true
 anyhow.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
+tenferro.workspace = true
 tenferro-algebra.workspace = true
 tenferro-device.workspace = true
 tenferro-prims.workspace = true
 tenferro-tensor.workspace = true
-tenferro-einsum.workspace = true
 tenferro-linalg.workspace = true
-tenferro-dyadtensor.workspace = true
 
 [dev-dependencies]
 approx.workspace = true

@@ -45,8 +45,7 @@ pub fn make_tensor_generic<T: TestScalar>(indices: Vec<DynIndex>) -> TensorDynLe
     let dims: Vec<usize> = indices.iter().map(|i| i.dim).collect();
     let size: usize = dims.iter().product();
     let data = T::make_test_data(size);
-    let storage = T::dense_storage_with_shape(data, &dims);
-    TensorDynLen::new(indices, storage)
+    TensorDynLen::from_dense(indices, data).unwrap()
 }
 
 /// Create shared indices for a 2-site tensor train.
