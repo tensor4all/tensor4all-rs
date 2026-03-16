@@ -902,6 +902,7 @@ fn affine_transform_core(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tensor4all_core::{IndexLike, TensorDynLen};
 
     #[test]
     fn test_affine_params_new() {
@@ -1267,87 +1268,80 @@ mod tests {
 
     // ========== MPO vs Matrix comparison tests (from Quantics.jl) ==========
 
-    use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops};
+    fn flat_index_to_site_value(flat: usize, var_count: usize, r: usize, site: usize) -> usize {
+        let bit_pos = r - 1 - site;
+        (0..var_count)
+            .map(|var| {
+                let var_value = (flat >> (var * r)) & ((1 << r) - 1);
+                ((var_value >> bit_pos) & 1) << var
+            })
+            .sum()
+    }
 
-    /// Convert MPO (TensorTrain) to dense matrix for comparison.
-    ///
-    /// The MPO has R sites. Each site has physical dimension 2^(M+N).
-    /// The site index encodes: site_idx = y_bits | (x_bits << M)
-    /// where y_bits and x_bits are the bits of y and x variables at that site.
-    ///
-    /// Flat index convention (matching affine_transform_matrix):
-    /// - x_flat = x[0] + x[1]*2^R + x[2]*2^(2R) + ...
-    /// - y_flat = y[0] + y[1]*2^R + y[2]*2^(2R) + ...
-    ///
-    /// Big-endian convention: site 0 = MSB, site R-1 = LSB.
-    #[allow(clippy::needless_range_loop)]
-    fn mpo_to_dense_matrix(
-        mpo: &TensorTrain<Complex64>,
+    fn row_major_offset(dims: &[usize], coords: &[usize]) -> usize {
+        assert_eq!(dims.len(), coords.len());
+        dims.iter().zip(coords).fold(0usize, |acc, (&dim, &coord)| {
+            assert!(coord < dim);
+            acc * dim + coord
+        })
+    }
+
+    fn affine_matrix_to_dense_tensor(
+        matrix: &CsMat<f64>,
+        op: &QuanticsOperator,
+        r: usize,
         m: usize,
         n: usize,
-        r: usize,
-    ) -> Vec<Vec<Complex64>> {
-        let output_size = 1 << (m * r);
-        let input_size = 1 << (n * r);
-        let mut matrix = vec![vec![Complex64::new(0.0, 0.0); input_size]; output_size];
+        template: &TensorDynLen,
+    ) -> TensorDynLen {
+        let indices = template.indices().to_vec();
+        let dims = template.dims();
+        let mut id_to_pos = std::collections::HashMap::new();
+        for (pos, index) in indices.iter().enumerate() {
+            id_to_pos.insert(*index.id(), pos);
+        }
 
-        let tensors = mpo.site_tensors();
+        let output_positions: Vec<usize> = (0..r)
+            .map(|site| {
+                let internal_id = *op
+                    .get_output_mapping(&site)
+                    .expect("missing output mapping")
+                    .internal_index
+                    .id();
+                *id_to_pos
+                    .get(&internal_id)
+                    .expect("output index not found in contracted tensor")
+            })
+            .collect();
+        let input_positions: Vec<usize> = (0..r)
+            .map(|site| {
+                let internal_id = *op
+                    .get_input_mapping(&site)
+                    .expect("missing input mapping")
+                    .internal_index
+                    .id();
+                *id_to_pos
+                    .get(&internal_id)
+                    .expect("input index not found in contracted tensor")
+            })
+            .collect();
 
-        // For each input/output combination, compute the matrix element
-        for y_flat in 0..output_size {
-            for x_flat in 0..input_size {
-                // Contract the MPO for this (y_flat, x_flat) pair
-                // Start with a row vector of size 1 (left boundary)
-                let mut left_vec = vec![Complex64::one()];
+        let mut data = vec![Complex64::new(0.0, 0.0); dims.iter().product()];
+        let mut coords = vec![0usize; dims.len()];
 
+        for (y_flat, row) in matrix.outer_iterator().enumerate() {
+            for (x_flat, value) in row.iter() {
+                coords.fill(0);
                 for site in 0..r {
-                    // Big-endian: site 0 = MSB, so bit_pos = R-1-site
-                    let bit_pos = r - 1 - site;
-
-                    // Extract bits for this site from each variable
-                    // y_flat = y[0] + y[1]*2^R + ... where each y[i] is R bits
-                    // For variable i, extract bit at position bit_pos
-                    let mut y_bits = 0usize;
-                    for var in 0..m {
-                        // y[var] occupies bits [var*R, (var+1)*R) in y_flat
-                        let y_var = (y_flat >> (var * r)) & ((1 << r) - 1);
-                        let bit = (y_var >> bit_pos) & 1;
-                        y_bits |= bit << var;
-                    }
-
-                    let mut x_bits = 0usize;
-                    for var in 0..n {
-                        let x_var = (x_flat >> (var * r)) & ((1 << r) - 1);
-                        let bit = (x_var >> bit_pos) & 1;
-                        x_bits |= bit << var;
-                    }
-
-                    // Site index: y_bits in lower M bits, x_bits in upper N bits
-                    let site_idx = y_bits | (x_bits << m);
-
-                    let tensor = &tensors[site];
-                    let left_dim = tensor.left_dim();
-                    let right_dim = tensor.right_dim();
-
-                    // Contract: new_vec[r] = sum_l left_vec[l] * tensor[l, site_idx, r]
-                    let mut new_vec = vec![Complex64::new(0.0, 0.0); right_dim];
-                    for l in 0..left_dim.min(left_vec.len()) {
-                        for rr in 0..right_dim {
-                            new_vec[rr] += left_vec[l] * tensor.get3(l, site_idx, rr);
-                        }
-                    }
-                    left_vec = new_vec;
+                    coords[output_positions[site]] = flat_index_to_site_value(y_flat, m, r, site);
+                    coords[input_positions[site]] = flat_index_to_site_value(x_flat, n, r, site);
                 }
-
-                // After all sites, left_vec should have size 1 (right boundary)
-                matrix[y_flat][x_flat] = if left_vec.is_empty() {
-                    Complex64::new(0.0, 0.0)
-                } else {
-                    left_vec[0]
-                };
+                let offset = row_major_offset(&dims, &coords);
+                data[offset] = Complex64::new(*value, 0.0);
             }
         }
-        matrix
+
+        TensorDynLen::from_dense(indices, data).expect("failed to build affine reference tensor")
     }
 
     /// Assert that the MPO representation matches the direct sparse matrix computation
@@ -1359,31 +1353,21 @@ mod tests {
         let n = params.n;
 
         let matrix = affine_transform_matrix(r, params, bc).unwrap();
-        let mpo = affine_transform_mpo(r, params, bc).unwrap();
-        let mpo_matrix = mpo_to_dense_matrix(&mpo, m, n, r);
+        let op = affine_operator(r, params, bc).unwrap();
+        let actual = op.mpo.contract_to_tensor().unwrap();
+        let expected = affine_matrix_to_dense_tensor(&matrix, &op, r, m, n, &actual);
+        let diff = &actual - &expected;
+        let maxabs = diff.maxabs();
 
-        let output_size = 1 << (m * r);
-        let input_size = 1 << (n * r);
-
-        for y in 0..output_size {
-            for x in 0..input_size {
-                let sparse_val = *matrix.get(y, x).unwrap_or(&0.0);
-                let mpo_val = mpo_matrix[y][x].re;
-                assert!(
-                    (sparse_val - mpo_val).abs() < 1e-10,
-                    "MPO vs matrix mismatch at ({}, {}): sparse={}, mpo={} \
-                     [r={}, m={}, n={}, bc={:?}]",
-                    y,
-                    x,
-                    sparse_val,
-                    mpo_val,
-                    r,
-                    m,
-                    n,
-                    bc
-                );
-            }
-        }
+        assert!(
+            maxabs < 1e-10,
+            "MPO vs matrix mismatch: maxabs={} [r={}, m={}, n={}, bc={:?}]",
+            maxabs,
+            r,
+            m,
+            n,
+            bc
+        );
     }
 
     /// Assert that affine_transform_matrix produces correct results by independently
