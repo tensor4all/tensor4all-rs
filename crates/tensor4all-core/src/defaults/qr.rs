@@ -95,7 +95,7 @@ where
         .map(|i| {
             let mut norm_sq: f64 = 0.0;
             for j in i..n {
-                let val: f64 = r_full[i * n + j].abs().into();
+                let val: f64 = r_full[i + k * j].abs().into();
                 norm_sq += val * val;
             }
             norm_sq.sqrt()
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn compute_retained_rank_qr_from_dense_truncates_and_keeps_one() {
         let retained =
-            compute_retained_rank_qr_from_dense(&[3.0, 1.0, 0.0, 1.0e-14], 2, 2, 1.0e-10).unwrap();
+            compute_retained_rank_qr_from_dense(&[3.0, 0.0, 1.0, 1.0e-14], 2, 2, 1.0e-10).unwrap();
         assert_eq!(retained, 1);
 
         let retained_zero =
@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(r.dims(), vec![1, 2]);
     }
 
-    /// Helper: build an upper-triangular matrix as a row-major dense buffer.
+    /// Helper: build an upper-triangular matrix as a column-major dense buffer.
     fn make_upper_triangular(
         nrows: usize,
         ncols: usize,
@@ -403,7 +403,7 @@ mod tests {
     ) -> Vec<f64> {
         let mut data = vec![0.0; nrows * ncols];
         for &(i, j, value) in entries {
-            data[i * ncols + j] = value;
+            data[i + nrows * j] = value;
         }
         data
     }

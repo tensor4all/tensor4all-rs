@@ -1752,31 +1752,3 @@ pub(crate) fn common_inds<I: IndexLike>(inds_a: &[I], inds_b: &[I]) -> Vec<I> {
         .cloned()
         .collect()
 }
-
-/// Compute strides for row-major (C-order) indexing.
-pub(crate) fn compute_strides(dims: &[usize]) -> Vec<usize> {
-    let mut strides = vec![1; dims.len()];
-    for i in (0..dims.len().saturating_sub(1)).rev() {
-        strides[i] = strides[i + 1] * dims[i + 1];
-    }
-    strides
-}
-
-/// Convert linear index to multi-index.
-pub(crate) fn linear_to_multi_index(
-    mut linear: usize,
-    strides: &[usize],
-    rank: usize,
-) -> Vec<usize> {
-    let mut multi = vec![0; rank];
-    for i in 0..rank {
-        multi[i] = linear / strides[i];
-        linear %= strides[i];
-    }
-    multi
-}
-
-/// Convert multi-index to linear index.
-pub(crate) fn multi_to_linear_index(multi: &[usize], strides: &[usize]) -> usize {
-    multi.iter().zip(strides.iter()).map(|(&m, &s)| m * s).sum()
-}

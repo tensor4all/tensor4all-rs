@@ -166,7 +166,7 @@ pub fn tensor4_zeros<T: Clone + Default>(
     Tensor4::from_elem([left_dim, site_dim_1, site_dim_2, right_dim], T::default())
 }
 
-/// Create a Tensor4 from flat data (row-major order)
+/// Create a Tensor4 from flat data (column-major order)
 pub fn tensor4_from_data<T: Clone>(
     data: Vec<T>,
     left_dim: usize,
@@ -180,7 +180,7 @@ pub fn tensor4_from_data<T: Clone>(
         let s1 = idx[1];
         let s2 = idx[2];
         let r = idx[3];
-        data[((l * site_dim_1 + s1) * site_dim_2 + s2) * right_dim + r].clone()
+        data[l + left_dim * (s1 + site_dim_1 * (s2 + site_dim_2 * r))].clone()
     })
 }
 
@@ -228,8 +228,10 @@ mod tests {
 
         // Check some values
         assert_eq!(*t.get4(0, 0, 0, 0), 0.0);
-        assert_eq!(*t.get4(0, 0, 0, 1), 1.0);
-        assert_eq!(*t.get4(0, 0, 1, 0), 2.0);
+        assert_eq!(*t.get4(1, 0, 0, 0), 1.0);
+        assert_eq!(*t.get4(0, 1, 0, 0), 2.0);
+        assert_eq!(*t.get4(0, 0, 1, 0), 6.0);
+        assert_eq!(*t.get4(0, 0, 0, 1), 12.0);
         assert_eq!(*t.get4(1, 2, 1, 1), 23.0);
     }
 

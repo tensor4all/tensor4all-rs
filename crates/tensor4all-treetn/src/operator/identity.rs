@@ -86,15 +86,6 @@ pub fn build_identity_operator_tensor_c64(
 
     let total_size: usize = dims.iter().product();
 
-    fn compute_strides(dims: &[usize]) -> Vec<usize> {
-        let mut strides = vec![1; dims.len()];
-        for i in (0..dims.len().saturating_sub(1)).rev() {
-            strides[i] = strides[i + 1] * dims[i + 1];
-        }
-        strides
-    }
-
-    let strides = compute_strides(&dims);
     let n_pairs = site_indices.len();
     let input_dims: Vec<usize> = site_indices.iter().map(|i| i.dim()).collect();
     let input_total: usize = input_dims.iter().product();
@@ -104,7 +95,7 @@ pub fn build_identity_operator_tensor_c64(
     for input_linear in 0..input_total {
         let mut input_multi = vec![0usize; n_pairs];
         let mut remaining = input_linear;
-        for i in (0..n_pairs).rev() {
+        for i in 0..n_pairs {
             input_multi[i] = remaining % input_dims[i];
             remaining /= input_dims[i];
         }
@@ -115,7 +106,10 @@ pub fn build_identity_operator_tensor_c64(
             full_multi[2 * i + 1] = input_multi[i];
         }
 
-        let linear_idx: usize = full_multi.iter().zip(&strides).map(|(&m, &s)| m * s).sum();
+        let mut linear_idx = 0usize;
+        for i in (0..full_multi.len()).rev() {
+            linear_idx = linear_idx * dims[i] + full_multi[i];
+        }
         data[linear_idx] = Complex64::new(1.0, 0.0);
     }
 
@@ -155,11 +149,11 @@ mod tests {
 
         // Check diagonal elements are 1
         let data = get_f64_data(&tensor);
-        // Layout: [s_in, s_out] in row-major
-        // (0,0) -> idx 0, (0,1) -> idx 1, (1,0) -> idx 2, (1,1) -> idx 3
+        // Layout: [s_in, s_out] in column-major
+        // (0,0) -> idx 0, (1,0) -> idx 1, (0,1) -> idx 2, (1,1) -> idx 3
         assert_eq!(data[0], 1.0); // (0,0)
-        assert_eq!(data[1], 0.0); // (0,1)
-        assert_eq!(data[2], 0.0); // (1,0)
+        assert_eq!(data[1], 0.0); // (1,0)
+        assert_eq!(data[2], 0.0); // (0,1)
         assert_eq!(data[3], 1.0); // (1,1)
     }
 

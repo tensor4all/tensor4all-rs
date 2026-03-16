@@ -123,7 +123,7 @@ pub fn tensor3_zeros<T: Clone + Default>(
     Tensor3::from_elem([left_dim, site_dim, right_dim], T::default())
 }
 
-/// Create a Tensor3 from flat data (row-major order)
+/// Create a Tensor3 from flat data (column-major order)
 pub fn tensor3_from_data<T: Clone>(
     data: Vec<T>,
     left_dim: usize,
@@ -135,7 +135,7 @@ pub fn tensor3_from_data<T: Clone>(
         let l = idx[0];
         let s = idx[1];
         let r = idx[2];
-        data[(l * site_dim + s) * right_dim + r].clone()
+        data[l + left_dim * (s + site_dim * r)].clone()
     })
 }
 
@@ -169,10 +169,10 @@ mod tests {
         assert_eq!(t.right_dim(), 4);
 
         assert_eq!(*t.get3(0, 0, 0), 0.0);
-        assert_eq!(*t.get3(0, 0, 1), 1.0);
-        assert_eq!(*t.get3(0, 0, 3), 3.0);
-        assert_eq!(*t.get3(0, 1, 0), 4.0);
-        assert_eq!(*t.get3(1, 0, 0), 12.0);
+        assert_eq!(*t.get3(1, 0, 0), 1.0);
+        assert_eq!(*t.get3(0, 1, 0), 2.0);
+        assert_eq!(*t.get3(0, 0, 1), 6.0);
+        assert_eq!(*t.get3(0, 0, 3), 18.0);
         assert_eq!(*t.get3(1, 2, 3), 23.0);
     }
 
@@ -221,13 +221,14 @@ mod tests {
         assert_eq!(mat.len(), 24);
 
         // The data should be laid out as (l, s, r) -> row = l*site_dim + s, col = r
-        // First row (l=0, s=0): elements 0,1,2,3
+        // with the tensor populated from a column-major flat buffer.
+        // First row (l=0, s=0): elements 0,6,12,18
         assert_eq!(mat[0], 0.0);
-        assert_eq!(mat[1], 1.0);
-        assert_eq!(mat[2], 2.0);
-        assert_eq!(mat[3], 3.0);
-        // Second row (l=0, s=1): elements 4,5,6,7
-        assert_eq!(mat[4], 4.0);
+        assert_eq!(mat[1], 6.0);
+        assert_eq!(mat[2], 12.0);
+        assert_eq!(mat[3], 18.0);
+        // Second row (l=0, s=1): elements 2,8,14,20
+        assert_eq!(mat[4], 2.0);
     }
 
     #[test]
@@ -240,11 +241,11 @@ mod tests {
         assert_eq!(cols, 12); // 3 * 4
         assert_eq!(mat.len(), 24);
 
-        // First row (l=0): elements 0..12
+        // First row (l=0): values from the column-major tensor loading
         assert_eq!(mat[0], 0.0);
-        assert_eq!(mat[11], 11.0);
-        // Second row (l=1): elements 12..24
-        assert_eq!(mat[12], 12.0);
+        assert_eq!(mat[11], 22.0);
+        // Second row (l=1): remaining values
+        assert_eq!(mat[12], 1.0);
         assert_eq!(mat[23], 23.0);
     }
 }

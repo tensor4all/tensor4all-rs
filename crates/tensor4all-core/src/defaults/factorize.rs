@@ -348,7 +348,7 @@ where
     let mut matrix = matrixci::util::zeros(m, n);
     for i in 0..m {
         for j in 0..n {
-            matrix[[i, j]] = data[i * n + j];
+            matrix[[i, j]] = data[i + m * j];
         }
     }
     Ok(matrix)
@@ -362,8 +362,8 @@ where
     let m = matrixci::util::nrows(matrix);
     let n = matrixci::util::ncols(matrix);
     let mut vec = Vec::with_capacity(m * n);
-    for i in 0..m {
-        for j in 0..n {
+    for j in 0..n {
+        for i in 0..m {
             vec.push(matrix[[i, j]].clone());
         }
     }

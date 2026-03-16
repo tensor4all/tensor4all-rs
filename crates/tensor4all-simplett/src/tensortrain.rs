@@ -159,7 +159,7 @@ impl<T: TTScalar> TensorTrain<T> {
 impl<T: TTScalar> TensorTrain<T> {
     /// Convert the tensor train to a full tensor
     ///
-    /// Returns a flat vector containing all tensor elements in row-major order,
+    /// Returns a flat vector containing all tensor elements in column-major order,
     /// along with the shape (site dimensions).
     ///
     /// Warning: This can be very large for high-dimensional tensors!
@@ -187,9 +187,9 @@ impl<T: TTScalar> TensorTrain<T> {
                 result.push(T::zero());
             }
 
-            // Increment indices (row-major order, last index fastest)
+            // Increment indices in column-major order, leftmost index fastest.
             let mut carry = true;
-            for i in (0..site_dims.len()).rev() {
+            for i in 0..site_dims.len() {
                 if carry {
                     indices[i] += 1;
                     if indices[i] >= site_dims[i] {
@@ -332,7 +332,7 @@ mod tests {
         // Check each element matches evaluate
         for i in 0..2 {
             for j in 0..3 {
-                let idx = i * 3 + j;
+                let idx = i + 2 * j;
                 let expected = tt.evaluate(&[i, j]).unwrap();
                 let diff = data[idx] - expected;
                 assert!(diff.abs_sq().sqrt() < 1e-10, "Mismatch at [{}, {}]", i, j);

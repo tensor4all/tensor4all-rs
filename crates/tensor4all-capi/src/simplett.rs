@@ -449,7 +449,7 @@ mod tests {
         );
         assert_eq!(status, T4A_SUCCESS);
         assert_eq!((out_left, out_site, out_right), (1, 2, 2));
-        assert_eq!(out_data, [0.0, 2.0, 1.0, 3.0]);
+        assert_eq!(out_data, [0.0, 1.0, 2.0, 3.0]);
 
         t4a_simplett_f64_release(handle);
     }
