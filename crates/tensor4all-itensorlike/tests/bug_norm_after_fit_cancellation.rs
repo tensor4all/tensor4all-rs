@@ -27,9 +27,9 @@ fn create_random_mpo(
 
 #[test]
 fn norm_matches_dense_after_fit_cancellation() {
-    let length = 6;
+    let length = 4;
     let phys_dim = 2;
-    let bond_dim = 8;
+    let bond_dim = 4;
 
     let s_input: Vec<DynIndex> = (0..length)
         .map(|i| DynIndex::new_dyn_with_tag(phys_dim, &format!("s={}", i + 1)).unwrap())

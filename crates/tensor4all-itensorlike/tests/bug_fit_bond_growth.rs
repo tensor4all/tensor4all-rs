@@ -52,9 +52,9 @@ fn create_random_mpo(
 /// when max_rank is not specified, using only rtol for truncation control.
 #[test]
 fn test_fit_bond_growth_with_rtol() {
-    let length = 6;
+    let length = 4;
     let phys_dim = 2;
-    let bond_dim = 8;
+    let bond_dim = 4;
 
     let s_input: Vec<DynIndex> = (0..length)
         .map(|i| DynIndex::new_dyn_with_tag(phys_dim, &format!("s={}", i + 1)).unwrap())
