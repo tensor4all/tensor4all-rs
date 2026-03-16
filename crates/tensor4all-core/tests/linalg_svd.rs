@@ -478,8 +478,8 @@ fn svd_reconstruction_error_f64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64
 
 /// Regression: SVD roundtrip with dim-1 axes.
 ///
-/// tensor4all keeps row-major boundary semantics even though tenferro uses
-/// column-major internal view semantics.
+/// tensor4all keeps its current boundary linearization semantics even though
+/// tenferro uses column-major internal view semantics.
 #[test]
 fn test_svd_reconstruction_with_unit_dim_axis() {
     // [d=1, d=2, d=2] factorized with left_inds=[d=2, d=2]

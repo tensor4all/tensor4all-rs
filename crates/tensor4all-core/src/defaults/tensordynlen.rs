@@ -10,11 +10,11 @@ use std::ops::{Mul, Neg, Sub};
 use std::sync::Arc;
 use tenferro::{AdMode, ScalarType as NativeScalarType, Tensor as NativeTensor};
 use tensor4all_tensorbackend::{
-    axpby_native_tensor, conj_native_tensor, contract_native_tensor,
-    dense_native_tensor_from_row_major, diag_native_tensor_from_row_major,
+    axpby_native_tensor, conj_native_tensor, contract_native_tensor, dense_linear_offset,
+    dense_native_tensor_from_linearized, diag_native_tensor_from_linearized,
     native_tensor_primal_to_dense_c64, native_tensor_primal_to_dense_f64,
     native_tensor_primal_to_storage, outer_product_native_tensor, permute_native_tensor,
-    reshape_row_major_native_tensor, scale_native_tensor, storage_to_native_tensor,
+    reshape_linearized_native_tensor, scale_native_tensor, storage_to_native_tensor,
     sum_native_tensor, TensorElement,
 };
 
@@ -1382,7 +1382,7 @@ pub fn unfold_split(
     let m: usize = unfolded_dims[..left_len].iter().product();
     let n: usize = unfolded_dims[left_len..].iter().product();
 
-    let matrix_tensor = reshape_row_major_native_tensor(unfolded.as_native(), &[m, n])?;
+    let matrix_tensor = reshape_linearized_native_tensor(unfolded.as_native(), &[m, n])?;
 
     Ok((
         matrix_tensor,
@@ -1553,7 +1553,7 @@ impl TensorLike for TensorDynLen {
         let total_size = checked_total_size(&dims)?;
         let mut data = vec![0.0_f64; total_size];
 
-        let offset = row_major_offset(&dims, &vals)?;
+        let offset = dense_linear_offset(&dims, &vals)?;
         data[offset] = 1.0;
 
         Self::from_dense(indices, data)
@@ -1570,43 +1570,6 @@ fn checked_total_size(dims: &[usize]) -> Result<usize> {
         acc.checked_mul(d)
             .ok_or_else(|| anyhow::anyhow!("tensor size overflow"))
     })
-}
-
-fn row_major_offset(dims: &[usize], vals: &[usize]) -> Result<usize> {
-    if dims.len() != vals.len() {
-        return Err(anyhow::anyhow!(
-            "row_major_offset: dims.len() != vals.len()"
-        ));
-    }
-    let total_size = checked_total_size(dims)?;
-
-    // Row-major linear index: offset = Σ v_k * Π_{l>k} d_l
-    let mut offset = 0usize;
-    let mut stride = total_size;
-    for (k, (&v, &d)) in vals.iter().zip(dims.iter()).enumerate() {
-        if d == 0 {
-            return Err(anyhow::anyhow!("invalid dimension 0 at position {}", k));
-        }
-        if v >= d {
-            return Err(anyhow::anyhow!(
-                "row_major_offset: value {} at position {} is >= dimension {}",
-                v,
-                k,
-                d
-            ));
-        }
-        if stride % d != 0 {
-            return Err(anyhow::anyhow!("row_major_offset: non-divisible stride"));
-        }
-        stride /= d;
-        let term = v
-            .checked_mul(stride)
-            .ok_or_else(|| anyhow::anyhow!("row_major_offset: overflow"))?;
-        offset = offset
-            .checked_add(term)
-            .ok_or_else(|| anyhow::anyhow!("row_major_offset: overflow"))?;
-    }
-    Ok(offset)
 }
 
 // ============================================================================
@@ -1651,7 +1614,8 @@ impl TensorDynLen {
     ///
     /// # Arguments
     /// * `indices` - Vector of indices for the tensor
-    /// * `data` - Tensor data in row-major order
+    /// * `data` - Tensor data in tensor4all's current dense linearization
+    ///   convention
     ///
     /// # Panics
     /// Panics if data length doesn't match the product of index dimensions.
@@ -1671,7 +1635,7 @@ impl TensorDynLen {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices);
         Self::validate_dense_payload_len(data.len(), &dims)?;
-        let native = dense_native_tensor_from_row_major(&data, &dims)?;
+        let native = dense_native_tensor_from_linearized(&data, &dims)?;
         Self::from_native(indices, native)
     }
 
@@ -1680,7 +1644,7 @@ impl TensorDynLen {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices);
         Self::validate_diag_payload_len(data.len(), &dims)?;
-        let native = diag_native_tensor_from_row_major(&data, dims.len())?;
+        let native = diag_native_tensor_from_linearized(&data, dims.len())?;
         Self::from_native(indices, native)
     }
 

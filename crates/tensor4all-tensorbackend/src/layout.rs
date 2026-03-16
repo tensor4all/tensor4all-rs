@@ -16,10 +16,10 @@ pub(crate) fn dense_strides(dims: &[usize]) -> Vec<usize> {
 }
 
 /// Compute the current dense linearized offset for a logical multi-index.
-pub(crate) fn dense_offset(dims: &[usize], idx: &[usize]) -> Result<usize> {
+pub fn dense_linear_offset(dims: &[usize], idx: &[usize]) -> Result<usize> {
     if dims.len() != idx.len() {
         return Err(anyhow!(
-            "dense_offset: dims.len() {} != idx.len() {}",
+            "dense_linear_offset: dims.len() {} != idx.len() {}",
             dims.len(),
             idx.len()
         ));
@@ -35,7 +35,7 @@ pub(crate) fn dense_offset(dims: &[usize], idx: &[usize]) -> Result<usize> {
     {
         if value >= dim {
             return Err(anyhow!(
-                "dense_offset: index {} at axis {} is >= dim {}",
+                "dense_linear_offset: index {} at axis {} is >= dim {}",
                 value,
                 axis,
                 dim
@@ -45,9 +45,9 @@ pub(crate) fn dense_offset(dims: &[usize], idx: &[usize]) -> Result<usize> {
             .checked_add(
                 value
                     .checked_mul(stride)
-                    .ok_or_else(|| anyhow!("dense_offset: overflow"))?,
+                    .ok_or_else(|| anyhow!("dense_linear_offset: overflow"))?,
             )
-            .ok_or_else(|| anyhow!("dense_offset: overflow"))?;
+            .ok_or_else(|| anyhow!("dense_linear_offset: overflow"))?;
     }
     Ok(offset)
 }

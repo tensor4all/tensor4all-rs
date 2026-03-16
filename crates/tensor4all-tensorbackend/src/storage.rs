@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Deref, DerefMut, Mul};
 use std::sync::Arc;
 
-use crate::layout::{dense_offset, dense_strides};
+use crate::layout::dense_strides;
 use crate::tensor_element::TensorElement;
 
 /// Trait for scalar types that can be used in dense storage.
@@ -1833,6 +1833,7 @@ impl Mul<AnyScalar> for &Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dense_linear_offset;
 
     /// Helper to extract f64 data from storage
     fn extract_f64(storage: &Storage) -> Vec<f64> {
@@ -2438,11 +2439,11 @@ mod tests {
     #[test]
     fn test_compute_strides_matches_current_row_major_linearization() {
         let dims = [2, 3, 4];
-        assert_eq!(dense_offset(&dims, &[0, 0, 0]).unwrap(), 0);
-        assert_eq!(dense_offset(&dims, &[0, 0, 1]).unwrap(), 1);
-        assert_eq!(dense_offset(&dims, &[0, 1, 0]).unwrap(), 4);
-        assert_eq!(dense_offset(&dims, &[1, 0, 0]).unwrap(), 12);
-        assert_eq!(dense_offset(&dims, &[1, 2, 3]).unwrap(), 23);
+        assert_eq!(dense_linear_offset(&dims, &[0, 0, 0]).unwrap(), 0);
+        assert_eq!(dense_linear_offset(&dims, &[0, 0, 1]).unwrap(), 1);
+        assert_eq!(dense_linear_offset(&dims, &[0, 1, 0]).unwrap(), 4);
+        assert_eq!(dense_linear_offset(&dims, &[1, 0, 0]).unwrap(), 12);
+        assert_eq!(dense_linear_offset(&dims, &[1, 2, 3]).unwrap(), 23);
     }
 
     #[test]

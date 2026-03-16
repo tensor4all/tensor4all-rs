@@ -10,7 +10,7 @@ use crate::{unfold_split, TensorDynLen};
 use num_complex::Complex64;
 use tensor4all_tensorbackend::{
     native_tensor_primal_to_dense_c64, native_tensor_primal_to_dense_f64,
-    reshape_row_major_native_tensor, svd_native_tensor,
+    reshape_linearized_native_tensor, svd_native_tensor,
 };
 use thiserror::Error;
 
@@ -190,7 +190,7 @@ pub fn svd_with<T>(
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
-    let u_reshaped = reshape_row_major_native_tensor(&u_native, &u_dims).map_err(|e| {
+    let u_reshaped = reshape_linearized_native_tensor(&u_native, &u_dims).map_err(|e| {
         SvdError::ComputationError(anyhow::anyhow!("native SVD U reshape failed: {e}"))
     })?;
     let u = TensorDynLen::from_native(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
@@ -204,7 +204,7 @@ pub fn svd_with<T>(
     let mut vh_indices = vec![bond_index.clone()];
     vh_indices.extend(right_indices);
     let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
-    let vt_reshaped = reshape_row_major_native_tensor(&vt_native, &vh_dims).map_err(|e| {
+    let vt_reshaped = reshape_linearized_native_tensor(&vt_native, &vh_dims).map_err(|e| {
         SvdError::ComputationError(anyhow::anyhow!("native SVD V^T reshape failed: {e}"))
     })?;
     let vh =

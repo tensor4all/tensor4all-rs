@@ -194,20 +194,22 @@ fn typed_c64_from_storage(
     }
 }
 
-/// Build a native dense tensor from row-major boundary data.
-pub fn dense_native_tensor_from_row_major<T: TensorElement>(
+/// Build a native dense tensor from data using tensor4all's current boundary
+/// linearization convention.
+pub fn dense_native_tensor_from_linearized<T: TensorElement>(
     data: &[T],
     logical_dims: &[usize],
 ) -> Result<NativeTensor> {
-    T::dense_native_tensor_from_row_major(data, logical_dims)
+    T::dense_native_tensor_from_linearized(data, logical_dims)
 }
 
-/// Build a native diagonal tensor from row-major diagonal payload data.
-pub fn diag_native_tensor_from_row_major<T: TensorElement>(
+/// Build a native diagonal tensor from payload data using tensor4all's current
+/// boundary linearization convention.
+pub fn diag_native_tensor_from_linearized<T: TensorElement>(
     data: &[T],
     logical_rank: usize,
 ) -> Result<NativeTensor> {
-    T::diag_native_tensor_from_row_major(data, logical_rank)
+    T::diag_native_tensor_from_linearized(data, logical_rank)
 }
 
 fn row_major_f64_storage(tensor: &TypedTensor<f64>, logical_dims: &[usize]) -> Result<Storage> {
@@ -456,13 +458,13 @@ pub fn tangent_native_tensor(tensor: &NativeTensor) -> Option<NativeTensor> {
     }
 }
 
-/// Reshape a native tensor using tensor4all's row-major boundary semantics.
+/// Reshape a native tensor using tensor4all's current boundary linearization semantics.
 ///
 /// tenferro normalizes view operations to column-major semantics internally, so
-/// a row-major reinterpretation needs an explicit bridge. We achieve this
-/// without dropping AD metadata by reversing axes, applying the native
-/// column-major reshape, then reversing axes back.
-pub fn reshape_row_major_native_tensor(
+/// tensor4all's current boundary reinterpretation needs an explicit bridge. We
+/// achieve this without dropping AD metadata by reversing axes, applying the
+/// native column-major reshape, then reversing axes back.
+pub fn reshape_linearized_native_tensor(
     tensor: &NativeTensor,
     new_dims: &[usize],
 ) -> Result<NativeTensor> {
@@ -835,7 +837,7 @@ mod tests {
     }
 
     #[test]
-    fn reshape_row_major_native_tensor_preserves_boundary_linearization_with_unit_dims() {
+    fn reshape_linearized_native_tensor_preserves_boundary_linearization_with_unit_dims() {
         let native = storage_to_native_tensor(
             &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                 vec![1.0, 2.0, 3.0, 4.0],
@@ -845,7 +847,7 @@ mod tests {
         )
         .unwrap();
 
-        let reshaped = reshape_row_major_native_tensor(&native, &[4, 1]).unwrap();
+        let reshaped = reshape_linearized_native_tensor(&native, &[4, 1]).unwrap();
         let snapshot = native_tensor_primal_to_storage(&reshaped).unwrap();
 
         let expected = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
@@ -863,7 +865,7 @@ mod tests {
         )
         .unwrap();
 
-        let reshaped = reshape_row_major_native_tensor(&native, &[2, 2, 1]).unwrap();
+        let reshaped = reshape_linearized_native_tensor(&native, &[2, 2, 1]).unwrap();
         let snapshot = native_tensor_primal_to_storage(&reshaped).unwrap();
 
         let expected = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
@@ -916,11 +918,11 @@ mod tests {
     #[test]
     fn dense_and_diag_native_constructors_cover_f32_and_c32() {
         let dense_f32 =
-            dense_native_tensor_from_row_major(&[1.0_f32, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+            dense_native_tensor_from_linearized(&[1.0_f32, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
         assert_eq!(dense_f32.scalar_type(), tenferro::ScalarType::F32);
         assert!(native_tensor_primal_to_storage(&dense_f32).is_err());
 
-        let diag_c32 = diag_native_tensor_from_row_major(
+        let diag_c32 = diag_native_tensor_from_linearized(
             &[Complex32::new(1.0, 0.5), Complex32::new(-2.0, 0.25)],
             2,
         )

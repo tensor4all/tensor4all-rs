@@ -9,7 +9,7 @@ use crate::{unfold_split, TensorDynLen};
 use num_complex::{Complex64, ComplexFloat};
 use tensor4all_tensorbackend::{
     native_tensor_primal_to_dense_c64, native_tensor_primal_to_dense_f64, qr_native_tensor,
-    reshape_row_major_native_tensor,
+    reshape_linearized_native_tensor,
 };
 use thiserror::Error;
 
@@ -242,7 +242,7 @@ pub fn qr_with<T>(
     let mut q_indices = left_indices.clone();
     q_indices.push(bond_index.clone());
     let q_dims: Vec<usize> = q_indices.iter().map(|idx| idx.dim).collect();
-    let q_reshaped = reshape_row_major_native_tensor(&q_native, &q_dims).map_err(|e| {
+    let q_reshaped = reshape_linearized_native_tensor(&q_native, &q_dims).map_err(|e| {
         QrError::ComputationError(anyhow::anyhow!("native QR Q reshape failed: {e}"))
     })?;
     let q = TensorDynLen::from_native(q_indices, q_reshaped).map_err(QrError::ComputationError)?;
@@ -250,7 +250,7 @@ pub fn qr_with<T>(
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
     let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
-    let r_reshaped = reshape_row_major_native_tensor(&r_native, &r_dims).map_err(|e| {
+    let r_reshaped = reshape_linearized_native_tensor(&r_native, &r_dims).map_err(|e| {
         QrError::ComputationError(anyhow::anyhow!("native QR R reshape failed: {e}"))
     })?;
     let r = TensorDynLen::from_native(r_indices, r_reshaped).map_err(QrError::ComputationError)?;

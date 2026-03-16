@@ -7,11 +7,13 @@ use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
 
 /// Public scalar element types supported by tensor4all dense/diag constructors.
 pub trait TensorElement: Copy + Send + Sync + 'static {
-    /// Build a native tensor from row-major dense data.
-    fn dense_native_tensor_from_row_major(data: &[Self], dims: &[usize]) -> Result<NativeTensor>;
+    /// Build a native tensor from data using tensor4all's current boundary
+    /// linearization convention.
+    fn dense_native_tensor_from_linearized(data: &[Self], dims: &[usize]) -> Result<NativeTensor>;
 
-    /// Build a native diagonal tensor from row-major diagonal payload data.
-    fn diag_native_tensor_from_row_major(
+    /// Build a native diagonal tensor from payload data using tensor4all's
+    /// current boundary linearization convention.
+    fn diag_native_tensor_from_linearized(
         data: &[Self],
         logical_rank: usize,
     ) -> Result<NativeTensor>;
@@ -57,7 +59,7 @@ where
 macro_rules! impl_tensor_element {
     ($ty:ty, $variant:ident, $payload:ident) => {
         impl TensorElement for $ty {
-            fn dense_native_tensor_from_row_major(
+            fn dense_native_tensor_from_linearized(
                 data: &[Self],
                 dims: &[usize],
             ) -> Result<NativeTensor> {
@@ -66,7 +68,7 @@ macro_rules! impl_tensor_element {
                 Ok(NativeTensor::from_tensor(typed))
             }
 
-            fn diag_native_tensor_from_row_major(
+            fn diag_native_tensor_from_linearized(
                 data: &[Self],
                 logical_rank: usize,
             ) -> Result<NativeTensor> {
