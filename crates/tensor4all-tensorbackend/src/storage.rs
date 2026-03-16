@@ -8,7 +8,6 @@ use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Deref, DerefMut, Mul};
 use std::sync::Arc;
 
-use crate::layout::storage_strides;
 use crate::tensor_element::TensorElement;
 
 /// Trait for scalar types that can be used in dense storage.
@@ -555,7 +554,7 @@ fn contract_diag_dense_impl<T: DenseScalar>(
     let result_size = if result_size == 0 { 1 } else { result_size };
 
     // Compute strides for dense tensor (row-major)
-    let dense_axis_strides = storage_strides(dense_dims);
+    let dense_strides = compute_strides(dense_dims);
 
     // Compute the size of the non-contracted part of dense
     let dense_non_contracted_dims: Vec<usize> = dense_non_contracted
@@ -570,7 +569,7 @@ fn contract_diag_dense_impl<T: DenseScalar>(
     };
 
     // Compute strides for the non-contracted dense dimensions
-    let dense_non_contracted_strides = storage_strides(&dense_non_contracted_dims);
+    let dense_non_contracted_strides = compute_strides(&dense_non_contracted_dims);
 
     // If all diag axes are contracted, result has shape = dense_non_contracted_dims
     // If some diag axes remain, result has shape = [d, d, ...] (diag non-contracted) + dense_non_contracted_dims
@@ -583,10 +582,7 @@ fn contract_diag_dense_impl<T: DenseScalar>(
 
         for (t, &diag_val) in diag.iter().enumerate().take(d.min(diag.len())) {
             // Compute base offset in dense for this t (all contracted axes = t)
-            let base_offset: usize = axes_dense
-                .iter()
-                .map(|&axis| t * dense_axis_strides[axis])
-                .sum();
+            let base_offset: usize = axes_dense.iter().map(|&axis| t * dense_strides[axis]).sum();
 
             // Iterate over all non-contracted positions in dense
             for (flat_idx, result_item) in result.iter_mut().enumerate().take(dense_slice_size) {
@@ -596,7 +592,7 @@ fn contract_diag_dense_impl<T: DenseScalar>(
                 for (local_axis, &global_axis) in dense_non_contracted.iter().enumerate() {
                     let idx = remaining / dense_non_contracted_strides[local_axis];
                     remaining %= dense_non_contracted_strides[local_axis];
-                    offset += idx * dense_axis_strides[global_axis];
+                    offset += idx * dense_strides[global_axis];
                 }
 
                 *result_item += diag_val * dense[offset];
@@ -611,16 +607,14 @@ fn contract_diag_dense_impl<T: DenseScalar>(
         // Result is effectively: for each t, result[t,t,...,dense_indices] = diag[t] * dense_slice
 
         // Compute result strides
-        let result_strides = storage_strides(result_dims);
+        let result_strides = compute_strides(result_dims);
 
         let mut result = vec![T::zero(); result_size];
 
         for (t, &diag_val) in diag.iter().enumerate().take(d.min(diag.len())) {
             // Compute base offset in dense for this t
-            let base_offset_dense: usize = axes_dense
-                .iter()
-                .map(|&axis| t * dense_axis_strides[axis])
-                .sum();
+            let base_offset_dense: usize =
+                axes_dense.iter().map(|&axis| t * dense_strides[axis]).sum();
 
             // Compute base offset in result for diagonal position (t, t, ...)
             let base_offset_result: usize = (0..diag_non_contracted_count)
@@ -638,7 +632,7 @@ fn contract_diag_dense_impl<T: DenseScalar>(
                 for (local_axis, &global_axis) in dense_non_contracted.iter().enumerate() {
                     let idx = remaining / dense_non_contracted_strides[local_axis];
                     remaining %= dense_non_contracted_strides[local_axis];
-                    offset_dense += idx * dense_axis_strides[global_axis];
+                    offset_dense += idx * dense_strides[global_axis];
                     // In result, these come after the diagonal indices
                     offset_result += idx * result_strides[diag_non_contracted_count + local_axis];
                 }
@@ -649,6 +643,18 @@ fn contract_diag_dense_impl<T: DenseScalar>(
 
         make_storage(result)
     }
+}
+
+/// Compute row-major strides for given dimensions.
+fn compute_strides(dims: &[usize]) -> Vec<usize> {
+    if dims.is_empty() {
+        return vec![];
+    }
+    let mut strides = vec![1; dims.len()];
+    for i in (0..dims.len() - 1).rev() {
+        strides[i] = strides[i + 1] * dims[i + 1];
+    }
+    strides
 }
 
 /// Helper for Dense × Diag contraction: compute as Diag × Dense and permute result.
@@ -1833,8 +1839,6 @@ impl Mul<AnyScalar> for &Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::storage_strides;
-    use crate::{dense_linear_multi_index, dense_linear_offset};
 
     /// Helper to extract f64 data from storage
     fn extract_f64(storage: &Storage) -> Vec<f64> {
@@ -2426,35 +2430,6 @@ mod tests {
         assert_eq!(dense[1], Complex64::zero());
         assert_eq!(dense[2], Complex64::zero());
         assert_eq!(dense[3], Complex64::new(3.0, 4.0));
-    }
-
-    #[test]
-    fn test_storage_strides_freeze_current_mdarray_backing_order() {
-        assert_eq!(storage_strides(&[]), Vec::<usize>::new());
-        assert_eq!(storage_strides(&[4]), vec![1]);
-        assert_eq!(storage_strides(&[2, 3]), vec![3, 1]);
-        assert_eq!(storage_strides(&[2, 3, 4]), vec![12, 4, 1]);
-        assert_eq!(storage_strides(&[2, 1, 3]), vec![3, 3, 1]);
-    }
-
-    #[test]
-    fn test_compute_strides_matches_current_column_major_linearization() {
-        let dims = [2, 3, 4];
-        assert_eq!(dense_linear_offset(&dims, &[0, 0, 0]).unwrap(), 0);
-        assert_eq!(dense_linear_offset(&dims, &[1, 0, 0]).unwrap(), 1);
-        assert_eq!(dense_linear_offset(&dims, &[0, 1, 0]).unwrap(), 2);
-        assert_eq!(dense_linear_offset(&dims, &[0, 0, 1]).unwrap(), 6);
-        assert_eq!(dense_linear_offset(&dims, &[1, 2, 3]).unwrap(), 23);
-    }
-
-    #[test]
-    fn test_dense_linear_multi_index_matches_current_column_major_linearization() {
-        let dims = [2, 3, 4];
-        assert_eq!(dense_linear_multi_index(&dims, 0).unwrap(), vec![0, 0, 0]);
-        assert_eq!(dense_linear_multi_index(&dims, 1).unwrap(), vec![1, 0, 0]);
-        assert_eq!(dense_linear_multi_index(&dims, 2).unwrap(), vec![0, 1, 0]);
-        assert_eq!(dense_linear_multi_index(&dims, 6).unwrap(), vec![0, 0, 1]);
-        assert_eq!(dense_linear_multi_index(&dims, 23).unwrap(), vec![1, 2, 3]);
     }
 
     #[test]

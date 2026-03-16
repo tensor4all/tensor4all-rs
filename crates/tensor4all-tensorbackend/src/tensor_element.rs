@@ -7,13 +7,11 @@ use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
 
 /// Public scalar element types supported by tensor4all dense/diag constructors.
 pub trait TensorElement: Copy + Send + Sync + 'static {
-    /// Build a native tensor from data using tensor4all's current boundary
-    /// linearization convention.
-    fn dense_native_tensor_from_linearized(data: &[Self], dims: &[usize]) -> Result<NativeTensor>;
+    /// Build a native tensor from row-major dense data.
+    fn dense_native_tensor_from_row_major(data: &[Self], dims: &[usize]) -> Result<NativeTensor>;
 
-    /// Build a native diagonal tensor from payload data using tensor4all's
-    /// current boundary linearization convention.
-    fn diag_native_tensor_from_linearized(
+    /// Build a native diagonal tensor from row-major diagonal payload data.
+    fn diag_native_tensor_from_row_major(
         data: &[Self],
         logical_rank: usize,
     ) -> Result<NativeTensor>;
@@ -21,8 +19,7 @@ pub trait TensorElement: Copy + Send + Sync + 'static {
     /// Build a rank-0 native tensor.
     fn scalar_native_tensor(value: Self) -> Result<NativeTensor>;
 
-    /// Materialize dense primal values from a native tensor using tensor4all's
-    /// current boundary linearization convention.
+    /// Materialize dense row-major primal values from a native tensor.
     fn dense_values_from_native(tensor: &NativeTensor) -> Result<Vec<Self>>;
 
     /// Materialize diagonal payload values from a native diagonal tensor.
@@ -33,19 +30,19 @@ fn materialize_typed_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Res
 where
     T: tenferro_algebra::Scalar + Copy + Conjugate,
 {
-    let linearized = tensor.contiguous(MemoryOrder::ColumnMajor);
-    let is_conjugated = linearized.is_conjugated();
-    let linearized = if linearized.logical_memory_space() == LogicalMemorySpace::MainMemory {
-        linearized
+    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
+    let is_conjugated = row_major.is_conjugated();
+    let row_major = if row_major.logical_memory_space() == LogicalMemorySpace::MainMemory {
+        row_major
     } else {
-        linearized
+        row_major
             .to_memory_space_async(LogicalMemorySpace::MainMemory)
             .map_err(|e| anyhow!("{op}: failed to move tensor to host memory: {e}"))?
     };
-    let offset = usize::try_from(linearized.offset())
-        .map_err(|_| anyhow!("{op}: negative offset {}", linearized.offset()))?;
-    let len = linearized.len();
-    let slice = linearized
+    let offset = usize::try_from(row_major.offset())
+        .map_err(|_| anyhow!("{op}: negative offset {}", row_major.offset()))?;
+    let len = row_major.len();
+    let slice = row_major
         .buffer()
         .as_slice()
         .and_then(|values: &[T]| values.get(offset..offset + len))
@@ -60,16 +57,16 @@ where
 macro_rules! impl_tensor_element {
     ($ty:ty, $variant:ident, $payload:ident) => {
         impl TensorElement for $ty {
-            fn dense_native_tensor_from_linearized(
+            fn dense_native_tensor_from_row_major(
                 data: &[Self],
                 dims: &[usize],
             ) -> Result<NativeTensor> {
-                let typed = TypedTensor::<Self>::from_slice(data, dims, MemoryOrder::ColumnMajor)
+                let typed = TypedTensor::<Self>::from_slice(data, dims, MemoryOrder::RowMajor)
                     .map_err(|e| anyhow!("failed to build native dense tensor: {e}"))?;
                 Ok(NativeTensor::from_tensor(typed))
             }
 
-            fn diag_native_tensor_from_linearized(
+            fn diag_native_tensor_from_row_major(
                 data: &[Self],
                 logical_rank: usize,
             ) -> Result<NativeTensor> {
@@ -80,7 +77,7 @@ macro_rules! impl_tensor_element {
                 }
 
                 let payload =
-                    TypedTensor::<Self>::from_slice(data, &[data.len()], MemoryOrder::ColumnMajor)
+                    TypedTensor::<Self>::from_slice(data, &[data.len()], MemoryOrder::RowMajor)
                         .map_err(|e| anyhow!("failed to build native diagonal payload: {e}"))?;
                 NativeTensor::from_tensor(payload)
                     .diag_embed(logical_rank)

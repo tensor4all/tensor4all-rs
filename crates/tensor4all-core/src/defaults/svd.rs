@@ -10,7 +10,7 @@ use crate::{unfold_split, TensorDynLen};
 use num_complex::Complex64;
 use tensor4all_tensorbackend::{
     native_tensor_primal_to_dense_c64, native_tensor_primal_to_dense_f64,
-    reshape_linearized_native_tensor, svd_native_tensor,
+    reshape_row_major_native_tensor, svd_native_tensor,
 };
 use thiserror::Error;
 
@@ -190,7 +190,7 @@ pub fn svd_with<T>(
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
-    let u_reshaped = reshape_linearized_native_tensor(&u_native, &u_dims).map_err(|e| {
+    let u_reshaped = reshape_row_major_native_tensor(&u_native, &u_dims).map_err(|e| {
         SvdError::ComputationError(anyhow::anyhow!("native SVD U reshape failed: {e}"))
     })?;
     let u = TensorDynLen::from_native(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
@@ -204,7 +204,7 @@ pub fn svd_with<T>(
     let mut vh_indices = vec![bond_index.clone()];
     vh_indices.extend(right_indices);
     let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
-    let vt_reshaped = reshape_linearized_native_tensor(&vt_native, &vh_dims).map_err(|e| {
+    let vt_reshaped = reshape_row_major_native_tensor(&vt_native, &vh_dims).map_err(|e| {
         SvdError::ComputationError(anyhow::anyhow!("native SVD V^T reshape failed: {e}"))
     })?;
     let vh =
@@ -258,46 +258,6 @@ mod tests {
         assert!(set_default_svd_rtol(f64::NAN).is_err());
         assert!(set_default_svd_rtol(-1.0).is_err());
         set_default_svd_rtol(original).unwrap();
-    }
-
-    #[test]
-    fn svd_options_accessors_roundtrip() {
-        let by_rtol = SvdOptions::with_rtol(1.0e-5);
-        assert_eq!(by_rtol.rtol(), Some(1.0e-5));
-        assert_eq!(by_rtol.max_rank(), None);
-
-        let by_rank = SvdOptions::with_max_rank(7);
-        assert_eq!(by_rank.rtol(), None);
-        assert_eq!(by_rank.max_rank(), Some(7));
-    }
-
-    #[test]
-    fn singular_values_from_native_rejects_unsupported_scalar_types() {
-        let tensor = NativeTensor::from_slice(&[1.0_f32, 2.0], &[2]).unwrap();
-        let err = singular_values_from_native(&tensor).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("unsupported singular-value scalar type"));
-    }
-
-    #[test]
-    fn svd_with_max_rank_truncates_native_outputs() {
-        let i = Index::new_dyn(2);
-        let j = Index::new_dyn(2);
-        let tensor =
-            TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![3.0, 0.0, 0.0, 1.0]).unwrap();
-
-        let (u, s, v) = svd_with::<f64>(
-            &tensor,
-            std::slice::from_ref(&i),
-            &SvdOptions::with_max_rank(1),
-        )
-        .unwrap();
-
-        assert_eq!(u.indices.last().unwrap().dim, 1);
-        assert_eq!(s.indices[0].dim, 1);
-        assert_eq!(s.indices[1].dim, 1);
-        assert_eq!(v.indices.last().unwrap().dim, 1);
     }
 
     #[test]

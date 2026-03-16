@@ -9,7 +9,7 @@ use crate::{unfold_split, TensorDynLen};
 use num_complex::{Complex64, ComplexFloat};
 use tensor4all_tensorbackend::{
     native_tensor_primal_to_dense_c64, native_tensor_primal_to_dense_f64, qr_native_tensor,
-    reshape_linearized_native_tensor,
+    reshape_row_major_native_tensor,
 };
 use thiserror::Error;
 
@@ -95,7 +95,7 @@ where
         .map(|i| {
             let mut norm_sq: f64 = 0.0;
             for j in i..n {
-                let val: f64 = r_full[i + k * j].abs().into();
+                let val: f64 = r_full[i * n + j].abs().into();
                 norm_sq += val * val;
             }
             norm_sq.sqrt()
@@ -242,7 +242,7 @@ pub fn qr_with<T>(
     let mut q_indices = left_indices.clone();
     q_indices.push(bond_index.clone());
     let q_dims: Vec<usize> = q_indices.iter().map(|idx| idx.dim).collect();
-    let q_reshaped = reshape_linearized_native_tensor(&q_native, &q_dims).map_err(|e| {
+    let q_reshaped = reshape_row_major_native_tensor(&q_native, &q_dims).map_err(|e| {
         QrError::ComputationError(anyhow::anyhow!("native QR Q reshape failed: {e}"))
     })?;
     let q = TensorDynLen::from_native(q_indices, q_reshaped).map_err(QrError::ComputationError)?;
@@ -250,7 +250,7 @@ pub fn qr_with<T>(
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
     let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
-    let r_reshaped = reshape_linearized_native_tensor(&r_native, &r_dims).map_err(|e| {
+    let r_reshaped = reshape_row_major_native_tensor(&r_native, &r_dims).map_err(|e| {
         QrError::ComputationError(anyhow::anyhow!("native QR R reshape failed: {e}"))
     })?;
     let r = TensorDynLen::from_native(r_indices, r_reshaped).map_err(QrError::ComputationError)?;
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn compute_retained_rank_qr_from_dense_truncates_and_keeps_one() {
         let retained =
-            compute_retained_rank_qr_from_dense(&[3.0, 0.0, 1.0, 1.0e-14], 2, 2, 1.0e-10).unwrap();
+            compute_retained_rank_qr_from_dense(&[3.0, 1.0, 0.0, 1.0e-14], 2, 2, 1.0e-10).unwrap();
         assert_eq!(retained, 1);
 
         let retained_zero =
@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(r.dims(), vec![1, 2]);
     }
 
-    /// Helper: build an upper-triangular matrix as a column-major dense buffer.
+    /// Helper: build an upper-triangular matrix as a row-major dense buffer.
     fn make_upper_triangular(
         nrows: usize,
         ncols: usize,
@@ -403,7 +403,7 @@ mod tests {
     ) -> Vec<f64> {
         let mut data = vec![0.0; nrows * ncols];
         for &(i, j, value) in entries {
-            data[i + nrows * j] = value;
+            data[i * ncols + j] = value;
         }
         data
     }

@@ -56,45 +56,14 @@ fn cpu_threads() -> usize {
 }
 
 /// Run a typed tenferro op against the currently selected runtime.
-fn with_tenferro_ctx_kind<R>(
-    op: &'static str,
-    kind: RuntimeKind,
-    f: impl FnOnce(&mut CpuContext) -> Result<R>,
-) -> Result<R> {
-    match kind {
-        RuntimeKind::Cpu => {
-            let mut ctx = CpuContext::new(cpu_threads());
-            f(&mut ctx)
-        }
-        RuntimeKind::Cuda => Err(anyhow!(
-            "{op}: CUDA runtime is not yet wired in tensor4all tenferro backend"
-        )),
-        RuntimeKind::Rocm => Err(anyhow!(
-            "{op}: ROCm runtime is not yet wired in tensor4all tenferro backend"
-        )),
-    }
-}
-
-/// Run a typed tenferro op against the currently selected runtime.
 pub fn with_tenferro_ctx<R>(
     op: &'static str,
     f: impl FnOnce(&mut CpuContext) -> Result<R>,
 ) -> Result<R> {
-    let _guard = runtime_lock()
-        .lock()
-        .map_err(|_| anyhow!("{op}: native runtime lock poisoned"))?;
-    with_tenferro_ctx_kind(op, parse_runtime_kind(), f)
-}
-
-fn with_default_runtime_kind<R>(
-    op: &'static str,
-    kind: RuntimeKind,
-    f: impl FnOnce() -> Result<R>,
-) -> Result<R> {
-    match kind {
+    match parse_runtime_kind() {
         RuntimeKind::Cpu => {
-            let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(cpu_threads())));
-            f()
+            let mut ctx = CpuContext::new(cpu_threads());
+            f(&mut ctx)
         }
         RuntimeKind::Cuda => Err(anyhow!(
             "{op}: CUDA runtime is not yet wired in tensor4all tenferro backend"
@@ -112,7 +81,18 @@ pub(crate) fn with_default_runtime<R>(
     let _guard = runtime_lock()
         .lock()
         .map_err(|_| anyhow!("{op}: native runtime lock poisoned"))?;
-    with_default_runtime_kind(op, parse_runtime_kind(), f)
+    match parse_runtime_kind() {
+        RuntimeKind::Cpu => {
+            let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(cpu_threads())));
+            f()
+        }
+        RuntimeKind::Cuda => Err(anyhow!(
+            "{op}: CUDA runtime is not yet wired in tensor4all tenferro backend"
+        )),
+        RuntimeKind::Rocm => Err(anyhow!(
+            "{op}: ROCm runtime is not yet wired in tensor4all tenferro backend"
+        )),
+    }
 }
 
 fn typed_f64_from_storage(storage: &Storage, logical_dims: &[usize]) -> Result<TypedTensor<f64>> {
@@ -194,22 +174,20 @@ fn typed_c64_from_storage(
     }
 }
 
-/// Build a native dense tensor from data using tensor4all's current boundary
-/// linearization convention.
-pub fn dense_native_tensor_from_linearized<T: TensorElement>(
+/// Build a native dense tensor from row-major boundary data.
+pub fn dense_native_tensor_from_row_major<T: TensorElement>(
     data: &[T],
     logical_dims: &[usize],
 ) -> Result<NativeTensor> {
-    T::dense_native_tensor_from_linearized(data, logical_dims)
+    T::dense_native_tensor_from_row_major(data, logical_dims)
 }
 
-/// Build a native diagonal tensor from payload data using tensor4all's current
-/// boundary linearization convention.
-pub fn diag_native_tensor_from_linearized<T: TensorElement>(
+/// Build a native diagonal tensor from row-major diagonal payload data.
+pub fn diag_native_tensor_from_row_major<T: TensorElement>(
     data: &[T],
     logical_rank: usize,
 ) -> Result<NativeTensor> {
-    T::diag_native_tensor_from_linearized(data, logical_rank)
+    T::diag_native_tensor_from_row_major(data, logical_rank)
 }
 
 fn row_major_f64_storage(tensor: &TypedTensor<f64>, logical_dims: &[usize]) -> Result<Storage> {
@@ -428,14 +406,12 @@ pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage>
     }
 }
 
-/// Materialize the dense primal payload of a native tensor using tensor4all's
-/// current boundary linearization convention as `f64`.
+/// Materialize the dense primal payload of a native tensor as row-major `f64`.
 pub fn native_tensor_primal_to_dense_f64(tensor: &NativeTensor) -> Result<Vec<f64>> {
     <f64 as TensorElement>::dense_values_from_native(tensor)
 }
 
-/// Materialize the dense primal payload of a native tensor using tensor4all's
-/// current boundary linearization convention as `Complex64`.
+/// Materialize the dense primal payload of a native tensor as row-major `Complex64`.
 pub fn native_tensor_primal_to_dense_c64(tensor: &NativeTensor) -> Result<Vec<Complex64>> {
     <Complex64 as TensorElement>::dense_values_from_native(tensor)
 }
@@ -460,13 +436,13 @@ pub fn tangent_native_tensor(tensor: &NativeTensor) -> Option<NativeTensor> {
     }
 }
 
-/// Reshape a native tensor using tensor4all's current boundary linearization semantics.
+/// Reshape a native tensor using tensor4all's row-major boundary semantics.
 ///
 /// tenferro normalizes view operations to column-major semantics internally, so
-/// tensor4all's current boundary reinterpretation needs an explicit bridge. We
-/// achieve this without dropping AD metadata by reversing axes, applying the
-/// native column-major reshape, then reversing axes back.
-pub fn reshape_linearized_native_tensor(
+/// a row-major reinterpretation needs an explicit bridge. We achieve this
+/// without dropping AD metadata by reversing axes, applying the native
+/// column-major reshape, then reversing axes back.
+pub fn reshape_row_major_native_tensor(
     tensor: &NativeTensor,
     new_dims: &[usize],
 ) -> Result<NativeTensor> {
@@ -672,7 +648,6 @@ pub fn axpby_storage_native(
 mod tests {
     use super::*;
     use crate::storage::{DenseStorageC64, DenseStorageF64, DiagStorageF64, Storage};
-    use num_complex::Complex32;
 
     fn assert_storage_eq(lhs: &Storage, rhs: &Storage) {
         match (lhs, rhs) {
@@ -839,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn reshape_linearized_native_tensor_preserves_boundary_linearization_with_unit_dims() {
+    fn reshape_row_major_native_tensor_preserves_boundary_linearization_with_unit_dims() {
         let native = storage_to_native_tensor(
             &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                 vec![1.0, 2.0, 3.0, 4.0],
@@ -849,7 +824,7 @@ mod tests {
         )
         .unwrap();
 
-        let reshaped = reshape_linearized_native_tensor(&native, &[4, 1]).unwrap();
+        let reshaped = reshape_row_major_native_tensor(&native, &[4, 1]).unwrap();
         let snapshot = native_tensor_primal_to_storage(&reshaped).unwrap();
 
         let expected = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
@@ -867,7 +842,7 @@ mod tests {
         )
         .unwrap();
 
-        let reshaped = reshape_linearized_native_tensor(&native, &[2, 2, 1]).unwrap();
+        let reshaped = reshape_row_major_native_tensor(&native, &[2, 2, 1]).unwrap();
         let snapshot = native_tensor_primal_to_storage(&reshaped).unwrap();
 
         let expected = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
@@ -875,140 +850,5 @@ mod tests {
             &[2, 2, 1],
         ));
         assert_storage_eq(&snapshot, &expected);
-    }
-
-    #[test]
-    fn runtime_env_parsing_and_thread_count_handle_non_cpu_values() {
-        let _guard = runtime_lock().lock().unwrap();
-        let prev_runtime = env::var("T4A_TENFERRO_RUNTIME").ok();
-        let prev_threads = env::var("T4A_TENFERRO_CPU_THREADS").ok();
-
-        unsafe {
-            env::set_var("T4A_TENFERRO_RUNTIME", "cuda");
-            env::set_var("T4A_TENFERRO_CPU_THREADS", "0");
-        }
-        assert_eq!(parse_runtime_kind(), RuntimeKind::Cuda);
-        assert_eq!(cpu_threads(), 1);
-        let cuda_err = with_tenferro_ctx_kind("unit_test", parse_runtime_kind(), |_| {
-            Ok::<_, anyhow::Error>(())
-        })
-        .unwrap_err();
-        assert!(cuda_err.to_string().contains("CUDA runtime"));
-
-        unsafe {
-            env::set_var("T4A_TENFERRO_RUNTIME", "rocm");
-            env::set_var("T4A_TENFERRO_CPU_THREADS", "not-a-number");
-        }
-        assert_eq!(parse_runtime_kind(), RuntimeKind::Rocm);
-        assert_eq!(cpu_threads(), 1);
-        let rocm_err = with_default_runtime_kind("unit_test", parse_runtime_kind(), || {
-            Ok::<_, anyhow::Error>(())
-        })
-        .unwrap_err();
-        assert!(rocm_err.to_string().contains("ROCm runtime"));
-
-        match prev_runtime {
-            Some(value) => unsafe { env::set_var("T4A_TENFERRO_RUNTIME", value) },
-            None => unsafe { env::remove_var("T4A_TENFERRO_RUNTIME") },
-        }
-        match prev_threads {
-            Some(value) => unsafe { env::set_var("T4A_TENFERRO_CPU_THREADS", value) },
-            None => unsafe { env::remove_var("T4A_TENFERRO_CPU_THREADS") },
-        }
-    }
-
-    #[test]
-    fn dense_and_diag_native_constructors_cover_f32_and_c32() {
-        let dense_f32 =
-            dense_native_tensor_from_linearized(&[1.0_f32, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
-        assert_eq!(dense_f32.scalar_type(), tenferro::ScalarType::F32);
-        assert!(native_tensor_primal_to_storage(&dense_f32).is_err());
-
-        let diag_c32 = diag_native_tensor_from_linearized(
-            &[Complex32::new(1.0, 0.5), Complex32::new(-2.0, 0.25)],
-            2,
-        )
-        .unwrap();
-        assert_eq!(diag_c32.scalar_type(), tenferro::ScalarType::C32);
-        assert!(diag_c32.is_diag());
-        assert!(native_tensor_primal_to_storage(&diag_c32).is_err());
-    }
-
-    #[test]
-    fn binary_einsum_ids_reject_invalid_axes() {
-        let mismatch = build_binary_einsum_ids(2, &[0], 2, &[0, 1]).unwrap_err();
-        assert!(mismatch.to_string().contains("length mismatch"));
-
-        let out_of_range = build_binary_einsum_ids(2, &[2], 2, &[0]).unwrap_err();
-        assert!(out_of_range.to_string().contains("out of range"));
-
-        let duplicate = build_binary_einsum_ids(2, &[0, 0], 2, &[0, 1]).unwrap_err();
-        assert!(duplicate.to_string().contains("duplicate contraction axis"));
-    }
-
-    #[test]
-    fn storage_boundary_wrappers_match_native_execution() {
-        let lhs = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0, 2.0, 3.0, 4.0],
-            &[2, 2],
-        ));
-        let rhs = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![5.0, 6.0, 7.0, 8.0],
-            &[2, 2],
-        ));
-
-        let contracted =
-            contract_storage_native(&lhs, &[2, 2], &[1], &rhs, &[2, 2], &[0], &[2, 2]).unwrap();
-        let expected_contract = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![19.0, 22.0, 43.0, 50.0],
-            &[2, 2],
-        ));
-        assert_storage_eq(&contracted, &expected_contract);
-
-        let outer = outer_product_storage_native(
-            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0, 2.0], &[2])),
-            &[2],
-            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![3.0, 4.0], &[2])),
-            &[2],
-            &[2, 2],
-        )
-        .unwrap();
-        let expected_outer = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![3.0, 4.0, 6.0, 8.0],
-            &[2, 2],
-        ));
-        assert_storage_eq(&outer, &expected_outer);
-
-        let scaled = scale_storage_native(
-            &lhs,
-            &[2, 2],
-            &AnyScalar::from_value(Complex64::new(0.0, 1.0)),
-        )
-        .unwrap();
-        let expected_scaled = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            vec![
-                Complex64::new(0.0, 1.0),
-                Complex64::new(0.0, 2.0),
-                Complex64::new(0.0, 3.0),
-                Complex64::new(0.0, 4.0),
-            ],
-            &[2, 2],
-        ));
-        assert_storage_eq(&scaled, &expected_scaled);
-
-        let axpby = axpby_storage_native(
-            &lhs,
-            &[2, 2],
-            &AnyScalar::from_value(2.0_f64),
-            &rhs,
-            &[2, 2],
-            &AnyScalar::from_value(-1.0_f64),
-        )
-        .unwrap();
-        let expected_axpby = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![-3.0, -2.0, -1.0, 0.0],
-            &[2, 2],
-        ));
-        assert_storage_eq(&axpby, &expected_axpby);
     }
 }

@@ -11,7 +11,6 @@ use crate::index_like::IndexLike;
 use crate::tensor::TensorDynLen;
 use anyhow::Result;
 use num_complex::Complex64;
-use tensor4all_tensorbackend::{dense_linear_multi_index, dense_linear_offset};
 
 /// Compute the direct sum of two tensors along specified index pairs.
 ///
@@ -68,7 +67,10 @@ struct DirectSumSetup {
     paired_dims_b: Vec<usize>,
     result_indices: Vec<DynIndex>,
     result_dims: Vec<usize>,
+    result_strides: Vec<usize>,
     result_total: usize,
+    a_strides: Vec<usize>,
+    b_strides: Vec<usize>,
     new_indices: Vec<DynIndex>,
     n_common: usize,
 }
@@ -188,7 +190,25 @@ fn setup_direct_sum(
         result_dims.push(new_idx.dim());
     }
 
+    // Compute strides
     let result_total: usize = result_dims.iter().product();
+    let mut result_strides: Vec<usize> = vec![1; result_dims.len()];
+    for i in (0..result_dims.len().saturating_sub(1)).rev() {
+        result_strides[i] = result_strides[i + 1] * result_dims[i + 1];
+    }
+
+    let a_dims = a.dims();
+    let b_dims = b.dims();
+    let mut a_strides: Vec<usize> = vec![1; a_dims.len()];
+    for i in (0..a_dims.len().saturating_sub(1)).rev() {
+        a_strides[i] = a_strides[i + 1] * a_dims[i + 1];
+    }
+
+    let mut b_strides: Vec<usize> = vec![1; b_dims.len()];
+    for i in (0..b_dims.len().saturating_sub(1)).rev() {
+        b_strides[i] = b_strides[i + 1] * b_dims[i + 1];
+    }
+
     let n_common = common_a_positions.len();
 
     Ok(DirectSumSetup {
@@ -200,10 +220,27 @@ fn setup_direct_sum(
         paired_dims_b,
         result_indices,
         result_dims,
+        result_strides,
         result_total,
+        a_strides,
+        b_strides,
         new_indices,
         n_common,
     })
+}
+
+fn linear_to_multi(linear: usize, dims: &[usize]) -> Vec<usize> {
+    let mut multi = vec![0; dims.len()];
+    let mut remaining = linear;
+    for i in (0..dims.len()).rev() {
+        multi[i] = remaining % dims[i];
+        remaining /= dims[i];
+    }
+    multi
+}
+
+fn multi_to_linear(multi: &[usize], strides: &[usize]) -> usize {
+    multi.iter().zip(strides).map(|(&m, &s)| m * s).sum()
 }
 
 fn direct_sum_f64(
@@ -219,7 +256,7 @@ fn direct_sum_f64(
 
     #[allow(clippy::needless_range_loop)]
     for result_linear in 0..setup.result_total {
-        let result_multi = dense_linear_multi_index(&setup.result_dims, result_linear)?;
+        let result_multi = linear_to_multi(result_linear, &setup.result_dims);
         let common_multi: Vec<usize> = result_multi[..setup.n_common].to_vec();
         let paired_multi: Vec<usize> = result_multi[setup.n_common..].to_vec();
 
@@ -241,7 +278,7 @@ fn direct_sum_f64(
             for (i, &pp) in setup.paired_a_positions.iter().enumerate() {
                 a_multi[pp] = paired_multi[i];
             }
-            let a_linear = dense_linear_offset(&a_dims, &a_multi)?;
+            let a_linear = multi_to_linear(&a_multi, &setup.a_strides);
             result_data[result_linear] = a_data[a_linear];
         } else if all_from_b {
             let b_dims = b.dims();
@@ -252,7 +289,7 @@ fn direct_sum_f64(
             for (i, &pp) in setup.paired_b_positions.iter().enumerate() {
                 b_multi[pp] = paired_multi[i] - setup.paired_dims_a[i];
             }
-            let b_linear = dense_linear_offset(&b_dims, &b_multi)?;
+            let b_linear = multi_to_linear(&b_multi, &setup.b_strides);
             result_data[result_linear] = b_data[b_linear];
         }
         // else: mixed case stays 0.0
@@ -275,7 +312,7 @@ fn direct_sum_c64(
 
     #[allow(clippy::needless_range_loop)]
     for result_linear in 0..setup.result_total {
-        let result_multi = dense_linear_multi_index(&setup.result_dims, result_linear)?;
+        let result_multi = linear_to_multi(result_linear, &setup.result_dims);
         let common_multi: Vec<usize> = result_multi[..setup.n_common].to_vec();
         let paired_multi: Vec<usize> = result_multi[setup.n_common..].to_vec();
 
@@ -297,7 +334,7 @@ fn direct_sum_c64(
             for (i, &pp) in setup.paired_a_positions.iter().enumerate() {
                 a_multi[pp] = paired_multi[i];
             }
-            let a_linear = dense_linear_offset(&a_dims, &a_multi)?;
+            let a_linear = multi_to_linear(&a_multi, &setup.a_strides);
             result_data[result_linear] = a_data[a_linear];
         } else if all_from_b {
             let b_dims = b.dims();
@@ -308,7 +345,7 @@ fn direct_sum_c64(
             for (i, &pp) in setup.paired_b_positions.iter().enumerate() {
                 b_multi[pp] = paired_multi[i] - setup.paired_dims_a[i];
             }
-            let b_linear = dense_linear_offset(&b_dims, &b_multi)?;
+            let b_linear = multi_to_linear(&b_multi, &setup.b_strides);
             result_data[result_linear] = b_data[b_linear];
         }
         // else: mixed case stays 0.0
@@ -363,19 +400,18 @@ mod tests {
         // Check data
         let data = result.to_vec_f64().unwrap();
 
-        // Column-major flattening of:
-        // i=0: [1, 3, 5, 10, 30, 50, 70]
-        // i=1: [2, 4, 6, 20, 40, 60, 80]
+        // i=0: [1, 2, 3, 10, 20, 30, 40]
+        // i=1: [4, 5, 6, 50, 60, 70, 80]
         assert_eq!(data[0], 1.0);
         assert_eq!(data[1], 2.0);
         assert_eq!(data[2], 3.0);
-        assert_eq!(data[3], 4.0);
-        assert_eq!(data[4], 5.0);
-        assert_eq!(data[5], 6.0);
-        assert_eq!(data[6], 10.0);
-        assert_eq!(data[7], 20.0);
-        assert_eq!(data[8], 30.0);
-        assert_eq!(data[9], 40.0);
+        assert_eq!(data[3], 10.0);
+        assert_eq!(data[4], 20.0);
+        assert_eq!(data[5], 30.0);
+        assert_eq!(data[6], 40.0);
+        assert_eq!(data[7], 4.0);
+        assert_eq!(data[8], 5.0);
+        assert_eq!(data[9], 6.0);
         assert_eq!(data[10], 50.0);
         assert_eq!(data[11], 60.0);
         assert_eq!(data[12], 70.0);

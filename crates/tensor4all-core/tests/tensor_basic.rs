@@ -338,7 +338,7 @@ fn test_replaceinds_does_not_reorder_data() {
     // This is the key difference from permuteinds.
     //
     // Create a 2×3 tensor with data [1, 2, 3, 4, 5, 6]
-    // representing [[1, 2, 3], [4, 5, 6]] with shape [2, 3].
+    // In row-major order: [[1, 2, 3], [4, 5, 6]]
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone()];
@@ -435,7 +435,7 @@ fn test_permuteinds_reorders_data() {
     // The data should be reordered to match the new index order
     // Original: [[1, 2, 3], [4, 5, 6]] (shape [2, 3])
     // Permuted: [[1, 4], [2, 5], [3, 6]] (shape [3, 2])
-    // Flattened backing buffer: [1, 4, 2, 5, 3, 6]
+    // In row-major: [1, 4, 2, 5, 3, 6]
     match permuted.storage().as_ref() {
         Storage::DenseF64(v) => {
             assert_eq!(
@@ -682,20 +682,14 @@ fn test_from_dense_generic_supports_all_supported_element_types() {
 }
 
 #[test]
-fn test_from_dense_generic_uses_column_major_input_order() {
+fn test_from_dense_generic_preserves_row_major_input_order() {
     let i = Index::new_dyn(2);
-    let j = Index::new_dyn(3);
-    let tensor = TensorDynLen::from_dense(
-        vec![i.clone(), j.clone()],
-        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-    )
-    .unwrap();
+    let j = Index::new_dyn(2);
+    let tensor =
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
 
     let permuted = tensor.permute_indices(&[j, i]);
-    assert_eq!(
-        permuted.to_vec_f64().unwrap(),
-        vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
-    );
+    assert_eq!(permuted.to_vec_f64().unwrap(), vec![1.0, 3.0, 2.0, 4.0]);
 }
 
 #[test]
