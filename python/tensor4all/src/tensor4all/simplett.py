@@ -303,12 +303,10 @@ class SimpleTensorTrain:
         )
         check_status(status, "site_tensor")
 
-        # Convert to numpy array (Rust uses row-major, need to reshape and transpose)
+        # Rust returns a column-major flat buffer for shape
+        # (left_dim, site_dim, right_dim).
         data = np.array([out_data[i] for i in range(total_size)])
-        # Rust stores as (right, site, left) in row-major, so reshape and permute
-        tensor = data.reshape(out_right[0], out_site[0], out_left[0])
-        tensor = tensor.transpose(2, 1, 0)  # (left, site, right)
-        return tensor
+        return data.reshape((out_left[0], out_site[0], out_right[0]), order="F")
 
     def __repr__(self) -> str:
         return f"SimpleTensorTrain(n_sites={self.n_sites}, rank={self.rank})"

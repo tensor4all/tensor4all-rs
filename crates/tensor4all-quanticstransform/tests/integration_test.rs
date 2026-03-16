@@ -105,7 +105,7 @@ fn tensortrain_to_treetn(
             // First tensor: (site, right_bond)
             for s in 0..site_dim {
                 for r in 0..right_dim {
-                    let idx = s * right_dim + r;
+                    let idx = s + site_dim * r;
                     data[idx] = *tensor.get3(0, s, r);
                 }
             }
@@ -113,7 +113,7 @@ fn tensortrain_to_treetn(
             // Last tensor: (left_bond, site)
             for l in 0..left_dim {
                 for s in 0..site_dim {
-                    let idx = l * site_dim + s;
+                    let idx = l + left_dim * s;
                     data[idx] = *tensor.get3(l, s, 0);
                 }
             }
@@ -122,7 +122,7 @@ fn tensortrain_to_treetn(
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
-                        let idx = (l * site_dim + s) * right_dim + r;
+                        let idx = l + left_dim * (s + site_dim * r);
                         data[idx] = *tensor.get3(l, s, r);
                     }
                 }
@@ -212,10 +212,10 @@ fn contract_treetn_to_vector(
             multi_idx[site_to_tensor[i]] = bit;
         }
 
-        // Convert multi-index to flat index (row-major order)
+        // Convert multi-index to flat index (column-major order)
         let mut flat_idx = 0;
         let mut stride = 1;
-        for i in (0..r).rev() {
+        for i in 0..r {
             flat_idx += multi_idx[i] * stride;
             stride *= dims[i];
         }
@@ -229,15 +229,15 @@ fn contract_treetn_to_vector(
 /// Evaluate a TensorTrain at all indices (brute force).
 ///
 /// Returns a vector of length 2^R representing f[x] for x = 0, 1, ..., 2^R - 1.
-/// Uses little-endian convention to match the quantics operators.
+/// Uses big-endian convention: site i has bit 2^(R-1-i).
 fn evaluate_mps_all(mps: &TensorTrain<Complex64>) -> Vec<Complex64> {
     let r = mps.len();
     let n = 1 << r;
 
     let mut result = Vec::with_capacity(n);
     for x in 0..n {
-        // Convert x to multi-index (little-endian: site i has bit 2^i)
-        let indices: Vec<usize> = (0..r).map(|i| (x >> i) & 1).collect();
+        // Convert x to multi-index (big-endian: site i has bit 2^(R-1-i))
+        let indices: Vec<usize> = (0..r).map(|i| (x >> (r - 1 - i)) & 1).collect();
         let val = mps.evaluate(&indices).expect("Failed to evaluate MPS");
         result.push(val);
     }
@@ -343,10 +343,10 @@ fn contract_operator_to_dense_matrix(
                 in_remainder %= stride;
             }
 
-            // Convert multi-index to flat storage index (row-major)
+            // Convert multi-index to flat storage index (column-major)
             let mut flat_idx = 0;
             let mut stride = 1;
-            for i in (0..ndims).rev() {
+            for i in 0..ndims {
                 flat_idx += multi_idx[i] * stride;
                 stride *= tensor_dims[i];
             }
@@ -382,6 +382,99 @@ fn test_dense_matrix_helper_with_flip() {
     }
 }
 
+#[test]
+fn test_evaluate_mps_all_preserves_basis_state_labels() {
+    let r = 3;
+    let n = 1 << r;
+
+    for x in 0..n {
+        let mps = create_product_state_mps(x, r);
+        let values = evaluate_mps_all(&mps);
+        assert_eq!(values.len(), n);
+
+        for (i, value) in values.iter().enumerate() {
+            let expected = if i == x { 1.0 } else { 0.0 };
+            assert!(
+                (value.re - expected).abs() <= 1e-10 && value.im.abs() <= 1e-10,
+                "evaluate_mps_all mismatch for x={x}, i={i}: value={value:?}, expected={expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_tensortrain_to_treetn_preserves_basis_state_labels() {
+    let r = 3;
+    let n = 1 << r;
+
+    for x in 0..n {
+        let mps = create_product_state_mps(x, r);
+        let (treetn, site_indices) = tensortrain_to_treetn(&mps);
+        let values = contract_treetn_to_vector(&treetn, &site_indices);
+        assert_eq!(values.len(), n);
+
+        for (i, value) in values.iter().enumerate() {
+            let expected = if i == x { 1.0 } else { 0.0 };
+            assert!(
+                (value.re - expected).abs() <= 1e-10 && value.im.abs() <= 1e-10,
+                "tensortrain_to_treetn mismatch for x={x}, i={i}: value={value:?}, expected={expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_dense_matrix_helper_matches_basis_application_for_flip() {
+    let r = 3;
+    let n = 1 << r;
+    let op = flip_operator(r, BoundaryCondition::Periodic).expect("Failed to create flip");
+    let matrix = apply_operator_to_dense_matrix(&op, r, r);
+
+    for x in 0..n {
+        let mps = create_product_state_mps(x, r);
+        let (treetn, site_indices) = tensortrain_to_treetn(&mps);
+
+        let mut treetn_remapped = treetn;
+        for i in 0..r {
+            let op_input = op
+                .get_input_mapping(&i)
+                .expect("Missing input mapping")
+                .true_index
+                .clone();
+            treetn_remapped = treetn_remapped
+                .replaceind(&site_indices[i], &op_input)
+                .expect("Failed to replace index");
+        }
+
+        let result_treetn = apply_linear_operator(&op, &treetn_remapped, ApplyOptions::naive())
+            .expect("Failed to apply operator");
+        let output_indices: Vec<DynIndex> = (0..r)
+            .map(|i| {
+                op.get_output_mapping(&i)
+                    .expect("Missing output mapping")
+                    .true_index
+                    .clone()
+            })
+            .collect();
+        let result_vec = contract_treetn_to_vector(&result_treetn, &output_indices);
+
+        for y in 0..n {
+            assert!(
+                (matrix[y][x].re - result_vec[y].re).abs() <= 1e-10,
+                "real mismatch at x={x}, y={y}: matrix={:?}, basis={:?}",
+                matrix[y][x],
+                result_vec[y]
+            );
+            assert!(
+                (matrix[y][x].im - result_vec[y].im).abs() <= 1e-10,
+                "imag mismatch at x={x}, y={y}: matrix={:?}, basis={:?}",
+                matrix[y][x],
+                result_vec[y]
+            );
+        }
+    }
+}
+
 // ============================================================================
 // Flip operator tests
 // ============================================================================
@@ -399,7 +492,7 @@ fn test_flip_mpo_direct() {
     for x_in in 0..n {
         let expected_x_out = if x_in == 0 { 0 } else { n - x_in };
         eprintln!(
-            "flip({}) should be {} (little-endian convention)",
+            "flip({}) should be {} (big-endian convention)",
             x_in, expected_x_out
         );
     }

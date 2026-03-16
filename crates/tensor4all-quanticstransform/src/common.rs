@@ -139,7 +139,7 @@ pub fn tensortrain_to_linear_operator(
             for s_out in 0..site_dims[i] {
                 for s_in in 0..site_dims[i] {
                     let s = s_out * site_dims[i] + s_in;
-                    let idx = s_out * site_dims[i] + s_in;
+                    let idx = s_out + site_dims[i] * s_in;
                     data[idx] = *tensor.get3(0, s, 0);
                 }
             }
@@ -149,7 +149,7 @@ pub fn tensortrain_to_linear_operator(
                 for s_in in 0..site_dims[i] {
                     for r in 0..right_dim {
                         let s = s_out * site_dims[i] + s_in;
-                        let idx = (s_out * site_dims[i] + s_in) * right_dim + r;
+                        let idx = s_out + site_dims[i] * (s_in + site_dims[i] * r);
                         data[idx] = *tensor.get3(0, s, r);
                     }
                 }
@@ -160,7 +160,7 @@ pub fn tensortrain_to_linear_operator(
                 for s_out in 0..site_dims[i] {
                     for s_in in 0..site_dims[i] {
                         let s = s_out * site_dims[i] + s_in;
-                        let idx = (l * site_dims[i] + s_out) * site_dims[i] + s_in;
+                        let idx = l + left_dim * (s_out + site_dims[i] * s_in);
                         data[idx] = *tensor.get3(l, s, 0);
                     }
                 }
@@ -173,7 +173,7 @@ pub fn tensortrain_to_linear_operator(
                         for r in 0..right_dim {
                             let s = s_out * site_dims[i] + s_in;
                             let idx =
-                                ((l * site_dims[i] + s_out) * site_dims[i] + s_in) * right_dim + r;
+                                l + left_dim * (s_out + site_dims[i] * (s_in + site_dims[i] * r));
                             data[idx] = *tensor.get3(l, s, r);
                         }
                     }
@@ -319,7 +319,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
             for s_out in 0..out_dim {
                 for s_in in 0..in_dim {
                     let s = s_out * in_dim + s_in;
-                    let idx = s_out * in_dim + s_in;
+                    let idx = s_out + out_dim * s_in;
                     data[idx] = *tensor.get3(0, s, 0);
                 }
             }
@@ -329,7 +329,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
                 for s_in in 0..in_dim {
                     for r in 0..right_dim {
                         let s = s_out * in_dim + s_in;
-                        let idx = (s_out * in_dim + s_in) * right_dim + r;
+                        let idx = s_out + out_dim * (s_in + in_dim * r);
                         data[idx] = *tensor.get3(0, s, r);
                     }
                 }
@@ -340,7 +340,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
                 for s_out in 0..out_dim {
                     for s_in in 0..in_dim {
                         let s = s_out * in_dim + s_in;
-                        let idx = (l * out_dim + s_out) * in_dim + s_in;
+                        let idx = l + left_dim * (s_out + out_dim * s_in);
                         data[idx] = *tensor.get3(l, s, 0);
                     }
                 }
@@ -352,7 +352,7 @@ pub fn tensortrain_to_linear_operator_asymmetric(
                     for s_in in 0..in_dim {
                         for r in 0..right_dim {
                             let s = s_out * in_dim + s_in;
-                            let idx = ((l * out_dim + s_out) * in_dim + s_in) * right_dim + r;
+                            let idx = l + left_dim * (s_out + out_dim * (s_in + in_dim * r));
                             data[idx] = *tensor.get3(l, s, r);
                         }
                     }

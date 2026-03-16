@@ -15,9 +15,9 @@ This document describes the common design patterns and guidelines for C APIs in 
 7. [Error Handling](#error-handling)
 8. [Panic Safety](#panic-safety)
 9. [Buffer Management](#buffer-management)
-10. [Data Layout (Row-Major)](#data-layout-row-major)
+10. [Data Layout (Column-Major)](#data-layout-column-major)
 11. [Memory Contiguity Requirements](#memory-contiguity-requirements)
-12. [Column-Major to Row-Major Conversion (Julia)](#column-major-to-row-major-conversion-julia)
+12. [Language Binding Normalization](#language-binding-normalization)
 13. [Thread Safety](#thread-safety)
 14. [Function Export](#function-export)
 15. [Code Organization](#code-organization)
@@ -31,9 +31,9 @@ C APIs in tensor4all-rs follow patterns inspired by `sparse-ir-capi` and common 
 - **Status codes** for error handling
 - **Panic protection** to prevent Rust panics from crossing FFI boundaries
 - **Consistent naming** with crate-specific prefixes
-- **Row-major data layout** for multi-dimensional data (C-style, compatible with NumPy)
+- **Column-major data layout** for multi-dimensional data (Fortran/Julia style)
 - **Contiguous memory requirements** - all data buffers must be contiguous
-- **Layout conversion** handled by language bindings (Julia: column-major ↔ row-major)
+- **Boundary normalization** handled by language bindings when interoperating with row-major ecosystems such as NumPy
 
 **Note**: While this document uses examples from `tensor4all-capi` (with `t4a_` prefix), the patterns apply to all C-API crates in the tensor4all-rs project. Each crate should choose its own prefix to avoid naming conflicts.
 
@@ -596,51 +596,41 @@ Callers should:
 2. Allocate a buffer of size `out_len`
 3. Call again with the allocated buffer
 
-## Data Layout (Row-Major)
+## Data Layout (Column-Major)
 
-**All tensor data in the C API uses row-major (C-style) memory layout.**
+**All tensor data in the C API uses column-major memory layout.**
 
-### Row-Major Order
+### Column-Major Order
 
-Row-major order means that the rightmost index varies fastest in memory. For a tensor with dimensions `[d0, d1, d2, ...]`, element at position `[i0, i1, i2, ...]` is stored at:
+Column-major order means that the leftmost index varies fastest in memory. For a tensor with
+dimensions `[d0, d1, d2, ...]`, element at position `[i0, i1, i2, ...]` is stored at:
 
 ```
-offset = i0 * (d1 * d2 * ...) + i1 * (d2 * ...) + i2 * (...) + ...
+offset = i0 + d0 * (i1 + d1 * (i2 + ...))
 ```
 
 **Example for a 2×3 tensor:**
 ```
 Tensor dimensions: [2, 3]
-Data layout: [a[0,0], a[0,1], a[0,2], a[1,0], a[1,1], a[1,2]]
+Data layout: [a[0,0], a[1,0], a[0,1], a[1,1], a[0,2], a[1,2]]
 ```
 
-### Why Row-Major?
+### Why Column-Major?
 
-- **C compatibility**: C arrays are row-major by default
-- **NumPy compatibility**: NumPy arrays default to row-major (C-order)
-- **Language bindings**: Most language bindings (Python, Julia, C++) expect row-major data
-- **Performance**: Direct memory copy without layout conversion
+- **Internal consistency**: tensor4all-rs uses column-major dense linearization internally
+- **Julia / ITensors.jl alignment**: no conversion is needed at those boundaries
+- **HDF5 interoperability**: ITensors.jl-compatible storage uses the same ordering
+- **Clear semantics**: flat buffers, `reshape`, and `flatten` all share one rule
 
 ### Function Documentation
 
-Always document row-major layout in functions that handle tensor data:
+Always document column-major layout in functions that handle tensor data:
 
 ```rust
-/// Get the dense f64 data from a tensor in row-major order.
+/// Get the dense f64 data from a tensor in column-major order.
 ///
-/// The data is returned in row-major (C-style) layout, where the rightmost
-/// index varies fastest in memory.
-///
-/// # Arguments
-/// - `ptr`: Tensor handle
-/// - `buf`: Buffer to write data (if NULL, only out_len is written)
-/// - `buf_len`: Length of the buffer
-/// - `out_len`: Output: required buffer length
-///
-/// # Returns
-/// - T4A_SUCCESS on success
-/// - T4A_BUFFER_TOO_SMALL if buffer is too small (out_len is still written)
-/// - T4A_INVALID_ARGUMENT if storage is not DenseF64
+/// The data is returned in column-major layout, where the leftmost index
+/// varies fastest in memory.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_get_data_f64(
     ptr: *const t4a_tensor,
@@ -652,271 +642,76 @@ pub extern "C" fn t4a_tensor_get_data_f64(
 }
 ```
 
-### Constructor Functions
-
-When creating tensors from C data, the input data must be in row-major order:
-
-```rust
-/// Create a new dense f64 tensor from indices and data.
-///
-/// # Arguments
-/// - `rank`: Number of indices
-/// - `index_ptrs`: Array of t4a_index pointers (length = rank)
-/// - `dims`: Array of dimensions (length = rank)
-/// - `data`: Dense data in row-major order (length = product of dims)
-/// - `data_len`: Length of data array
-///
-/// The data must be provided in row-major (C-style) layout.
-#[unsafe(no_mangle)]
-pub extern "C" fn t4a_tensor_new_dense_f64(
-    rank: libc::size_t,
-    index_ptrs: *const *const t4a_index,
-    dims: *const libc::size_t,
-    data: *const libc::c_double,
-    data_len: libc::size_t,
-) -> *mut t4a_tensor {
-    // ...
-}
-```
+Constructor functions follow the same contract: flat dense inputs are interpreted as
+column-major buffers for the provided dimensions.
 
 ### Implementation Notes
 
-- **No layout conversion**: The C API does not perform layout conversion. Data is copied as-is, assuming row-major layout.
-- **Storage compatibility**: The internal Rust storage may use a different layout, but the C API always presents data in row-major order.
-- **Performance**: For languages that use column-major (Fortran-style) layout, callers must perform layout conversion if needed.
-
-### Example: Converting from NumPy
-
-```python
-import numpy as np
-from tensor4all import Tensor
-
-# NumPy array (row-major by default)
-arr = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float64, order='C')
-
-# Create tensor - data is already row-major, direct copy
-tensor = Tensor([i, j], arr)
-
-# Get data back - also row-major
-data = tensor.to_numpy()  # Returns row-major array
-```
-
-### Example: Converting from Julia
-
-```julia
-using Tensor4all
-
-# Julia arrays are column-major by default
-arr = [1 2 3; 4 5 6]  # 2×3 matrix
-
-# Convert to row-major for C API
-arr_rowmajor = permutedims(arr, (2, 1))  # Or use reshape with row-major layout
-
-# Create tensor
-tensor = Tensor([i, j], arr_rowmajor)
-```
+- **No layout conversion inside the C API**: dense buffers are copied as-is
+- **Storage compatibility**: internal Rust dense semantics and the C API now match
+- **Boundary normalization**: callers from row-major ecosystems should normalize at the binding layer
 
 ## Memory Contiguity Requirements
 
-**All data passed to C API functions must be in contiguous memory.**
+**All data passed to C API functions must be contiguous in memory.**
 
 ### Why Contiguity Matters
 
-- **Direct memory access**: The C API uses `ptr::copy_nonoverlapping()` which requires contiguous memory
-- **Performance**: Non-contiguous data requires element-by-element copying
-- **Safety**: Non-contiguous buffers can cause undefined behavior or data corruption
+- **Direct memory access**: the C API copies flat buffers directly
+- **Performance**: non-contiguous views require materialization anyway
+- **Safety**: contiguous buffers make FFI boundaries explicit and predictable
 
 ### C API Assumptions
 
 The C API assumes that:
-1. **Input buffers** (`data` in constructors) are contiguous and in row-major order
+1. **Input buffers** (`data` in constructors) are contiguous flat buffers in column-major order
 2. **Output buffers** (`buf` in accessors) are contiguous and writable
-3. **No layout conversion** is performed by the C API itself
+3. **Shape interpretation** is performed by the caller using column-major semantics
 
 ### Language Binding Responsibilities
 
-Each language binding must ensure contiguity before calling C API functions:
+Bindings should normalize dense arrays at the boundary:
 
-#### Python (NumPy)
+- **Python / NumPy**: flatten with `order="F"` before calling constructors, and reshape with
+  `order="F"` when reconstructing arrays from flat buffers
+- **Julia**: native arrays are already column-major; ensure contiguity, then pass the flat data through
 
-Python bindings use `np.ascontiguousarray()` to ensure C-order (row-major) contiguous arrays:
+### Python Example
 
 ```python
-# Ensure contiguous C-order array
-data = np.ascontiguousarray(data, dtype=np.float64)
-
-# Now safe to pass to C API
+flat = np.asarray(data, dtype=np.float64).ravel(order="F").copy()
 ptr = lib.t4a_tensor_new_dense_f64(
     rank,
     index_ptrs,
     dims,
-    ffi.cast("const double*", ffi.from_buffer(data)),
-    data.size,
+    ffi.cast("const double*", ffi.from_buffer(flat)),
+    flat.size,
 )
+
+buf = np.empty(out_len[0], dtype=np.float64)
+lib.t4a_tensor_get_data_f64(...)
+arr = buf.reshape(dims, order="F")
 ```
 
-**Key points:**
-- `np.ascontiguousarray()` creates a copy if the array is not contiguous
-- NumPy arrays default to row-major (C-order), so layout conversion is usually not needed
-- Non-contiguous arrays (e.g., transposed views) are automatically converted
-
-#### Julia
-
-Julia bindings use `_ensure_contiguous()` to ensure column-major contiguous arrays, then convert to row-major:
+### Julia Example
 
 ```julia
-function _ensure_contiguous(A::AbstractArray{T,N}) where {T,N}
-    if _is_column_major_contiguous(A)
-        return A isa Array ? A : Array{T,N}(A)
-    end
-    # Materialize to contiguous Array
-    return Array{T,N}(A)
-end
-
-function _column_to_row_major(arr::AbstractArray)
-    arr = _ensure_contiguous(arr)  # Ensure contiguous first
-    # Reverse dimensions to get row-major layout
-    perm = reverse(1:ndims(arr))
-    permuted = permutedims(arr, perm)
-    permuted = _ensure_contiguous(permuted)  # Ensure contiguous after permutation
-    return vec(permuted)
-end
+arr = Array(input)                  # materialize if needed
+flat = vec(arr)                     # Julia already uses column-major linearization
+# Pass `flat` and `size(arr)` directly to the C API entry point.
 ```
 
-**Key points:**
-- Julia arrays are column-major by default
-- `_ensure_contiguous()` checks if the array is column-major contiguous
-- If not contiguous, it materializes to a contiguous `Array`
-- After layout conversion, contiguity is checked again
+## Language Binding Normalization
 
-### Checking Contiguity
+Row-major ecosystems such as NumPy still need explicit normalization at the boundary. The rule is:
 
-#### Python
+1. materialize or copy to a contiguous array if needed
+2. flatten with column-major semantics
+3. pass the flat buffer to the C API
+4. reshape returned flat buffers with column-major semantics
 
-```python
-import numpy as np
-
-arr = np.array([[1, 2, 3], [4, 5, 6]])
-
-# Check if C-contiguous (row-major)
-assert arr.flags["C_CONTIGUOUS"]
-
-# Check if F-contiguous (column-major)
-assert arr.flags["F_CONTIGUOUS"]
-
-# Ensure C-contiguous
-arr = np.ascontiguousarray(arr, dtype=np.float64)
-```
-
-#### Julia
-
-```julia
-function _is_column_major_contiguous(A::AbstractArray)
-    expected_strides = cumprod((1, size(A)...)[1:end-1])
-    return strides(A) == expected_strides
-end
-
-# Check contiguity
-if _is_column_major_contiguous(arr)
-    # Safe to use
-else
-    # Need to materialize
-    arr = Array(arr)
-end
-```
-
-### Best Practices for Language Bindings
-
-1. **Always check contiguity** before passing data to C API
-2. **Document contiguity requirements** in binding documentation
-3. **Provide helper functions** for users to ensure contiguity
-4. **Handle non-contiguous arrays gracefully** by converting them automatically
-
-## Column-Major to Row-Major Conversion (Julia)
-
-Julia uses column-major (Fortran-style) memory layout by default, while the C API expects row-major (C-style) layout. Language bindings must handle this conversion.
-
-### Conversion Strategy
-
-The Julia binding uses a two-step process:
-
-1. **Ensure contiguous column-major array**
-2. **Convert to row-major** using dimension permutation
-
-### Implementation Details
-
-#### Column-Major to Row-Major
-
-```julia
-function _column_to_row_major(arr::AbstractArray)
-    arr = _ensure_contiguous(arr)
-    # Reverse dimensions to get row-major layout
-    perm = reverse(1:ndims(arr))
-    permuted = permutedims(arr, perm)
-    permuted = _ensure_contiguous(permuted)
-    return vec(permuted)
-end
-```
-
-**How it works:**
-- For a 2×3 array `[a[1,1] a[1,2] a[1,3]; a[2,1] a[2,2] a[2,3]]`:
-  - Column-major: `[a[1,1], a[2,1], a[1,2], a[2,2], a[1,3], a[2,3]]`
-  - After `permutedims(..., (2, 1))`: `[a[1,1], a[1,2], a[1,3], a[2,1], a[2,2], a[2,3]]` (row-major)
-
-#### Row-Major to Column-Major
-
-```julia
-function _row_to_column_major(data::Vector{T}, dims::Tuple) where T
-    # Data is row-major, so reverse dims for reshape
-    arr = reshape(data, reverse(dims)...)
-    # Reverse back to get column-major
-    perm = reverse(1:length(dims))
-    return permutedims(arr, perm)
-end
-```
-
-**How it works:**
-- Row-major data: `[a[1,1], a[1,2], a[1,3], a[2,1], a[2,2], a[2,3]]`
-- Reshape with reversed dims: `[a[1,1] a[2,1]; a[1,2] a[2,2]; a[1,3] a[2,3]]`
-- Permute back: `[a[1,1] a[1,2] a[1,3]; a[2,1] a[2,2] a[2,3]]` (column-major)
-
-### Performance Considerations
-
-- **Conversion overhead**: Layout conversion requires a full array copy
-- **Memory usage**: Temporary arrays are created during conversion
-- **Optimization**: For large arrays, consider in-place conversion if possible
-
-### Example: Full Conversion Flow
-
-```julia
-using Tensor4all
-
-# Create column-major Julia array
-arr = [1 2 3; 4 5 6]  # 2×3 matrix, column-major
-
-# Convert to row-major for C API
-row_major_data = _column_to_row_major(arr)
-# Result: [1, 2, 3, 4, 5, 6] (row-major flat vector)
-
-# Create tensor
-tensor = Tensor([i, j], arr)  # Conversion happens internally
-
-# Get data back (converted to column-major)
-result = data(tensor)  # Returns column-major Julia array
-```
-
-### Why Not Use Reshape Alone?
-
-Simple `reshape()` is not sufficient because:
-- `reshape()` does not change memory layout, only the view
-- Column-major data reshaped to row-major dimensions still has column-major memory layout
-- `permutedims()` is required to physically reorder elements
-
-### Alternative Approaches (Not Used)
-
-1. **Direct memory copy with stride calculation**: More complex, similar performance
-2. **In-place conversion**: Possible but requires careful memory management
-3. **Lazy conversion**: Would require tracking layout in the C API (not implemented)
+This keeps the C API itself simple and makes layout handling explicit in the binding code instead
+of distributing ad hoc conversions throughout the Rust implementation.
 
 ## Thread Safety
 
@@ -1165,9 +960,9 @@ When adding a new opaque type to a C API crate:
 - [ ] Define status codes with your crate's prefix
 - [ ] Add `#[unsafe(no_mangle)]` and `extern "C"` to all exported functions
 - [ ] Document all functions with safety requirements
-- [ ] Document row-major layout for data access/creation functions (if applicable)
+- [ ] Document column-major layout for data access/creation functions (if applicable)
 - [ ] Ensure memory contiguity requirements are met (language bindings)
-- [ ] Handle column-major to row-major conversion if needed (Julia bindings)
+- [ ] Normalize row-major caller data at the binding boundary if needed
 - [ ] Add tests for all functions
 - [ ] Follow naming conventions (use your crate's prefix consistently)
 
@@ -1240,4 +1035,3 @@ When creating new C-API crates:
 - `sparse-ir-capi`: Inspiration for design patterns
 - Rust FFI best practices: https://doc.rust-lang.org/nomicon/ffi.html
 - Opaque types pattern: https://rust-lang.github.io/rust-clippy/master/index.html#not_unsafe_ptr_arg_deref
-

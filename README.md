@@ -1,13 +1,12 @@
 # tensor4all-rs
 
 [![CI](https://github.com/tensor4all/tensor4all-rs/actions/workflows/CI_rs.yml/badge.svg)](https://github.com/tensor4all/tensor4all-rs/actions/workflows/CI_rs.yml)
-[![codecov](https://codecov.io/gh/tensor4all/tensor4all-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/tensor4all/tensor4all-rs)
 
-A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assisted development with fast trial-and-error cycles.
+A Rust implementation of tensor networks for **AI-agentic development** — rapid, AI-assisted development with fast trial-and-error cycles.
 
 ## Design Philosophy
 
-**Vibe Coding Optimized**: tensor4all-rs is designed for rapid prototyping with AI code generation:
+**AI-Agentic Development Optimized**: tensor4all-rs is designed for rapid prototyping with AI agents and code generation:
 
 - **Modular architecture**: Independent crates with unified core (`tensor4all-core`) enable fast compilation and isolated testing
 - **ITensors.jl-like dynamic structure**: Flexible `Index` system and dynamic-rank tensors preserve the intuitive API
@@ -15,6 +14,15 @@ A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assis
 - **Multi-language support via C-API**: Full functionality exposed through C-API; initial targets are Julia and Python
 
 **Scope**: Initial focus on QTT (Quantics Tensor Train) and TCI (Tensor Cross Interpolation). The design is extensible to support Abelian and non-Abelian symmetries in the future.
+
+## Dense Layout Semantics
+
+tensor4all-rs uses **column-major** dense linearization internally. Flat dense buffers,
+`reshape`/`flatten` semantics, the C API, the Python bindings, and the ITensors.jl-compatible
+HDF5 layer are all defined in terms of column-major ordering.
+
+This matches Julia, ITensors.jl, and tenferro-rs. When exchanging dense data with NumPy,
+use `order="F"` semantics when you need explicit control over flattening or reshaping.
 
 ## Type Correspondence
 

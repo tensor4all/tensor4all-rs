@@ -1278,12 +1278,16 @@ mod tests {
             .sum()
     }
 
-    fn row_major_offset(dims: &[usize], coords: &[usize]) -> usize {
+    fn column_major_offset(dims: &[usize], coords: &[usize]) -> usize {
         assert_eq!(dims.len(), coords.len());
-        dims.iter().zip(coords).fold(0usize, |acc, (&dim, &coord)| {
+        let mut offset = 0usize;
+        let mut stride = 1usize;
+        for (&dim, &coord) in dims.iter().zip(coords) {
             assert!(coord < dim);
-            acc * dim + coord
-        })
+            offset += coord * stride;
+            stride *= dim;
+        }
+        offset
     }
 
     fn affine_matrix_to_dense_tensor(
@@ -1336,7 +1340,7 @@ mod tests {
                     coords[output_positions[site]] = flat_index_to_site_value(y_flat, m, r, site);
                     coords[input_positions[site]] = flat_index_to_site_value(x_flat, n, r, site);
                 }
-                let offset = row_major_offset(&dims, &coords);
+                let offset = column_major_offset(&dims, &coords);
                 data[offset] = Complex64::new(*value, 0.0);
             }
         }
