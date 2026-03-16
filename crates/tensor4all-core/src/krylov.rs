@@ -1217,7 +1217,7 @@ mod tests {
         let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
         let expected_x = make_vector_with_index(vec![1.0, 2.0], &idx);
 
-        // Matrix A (stored as row-major)
+        // Matrix A = [[2, 1], [0, 3]]
         let a_data = [2.0, 1.0, 0.0, 3.0];
 
         let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {

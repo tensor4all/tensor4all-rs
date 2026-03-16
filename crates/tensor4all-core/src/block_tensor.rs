@@ -34,14 +34,15 @@ use anyhow::Result;
 /// A collection of tensors organized in a block structure.
 ///
 /// Each block is a tensor of type `T` implementing [`TensorLike`].
-/// The blocks are stored in row-major order (for 2D block matrices).
+/// The flattened block list is ordered row-by-row:
+/// `(0, 0), (0, 1), ..., (1, 0), (1, 1), ...`.
 ///
 /// # Type Parameters
 ///
 /// * `T` - The tensor type for each block, must implement `TensorLike`
 #[derive(Debug, Clone)]
 pub struct BlockTensor<T: TensorLike> {
-    /// Blocks stored in row-major order
+    /// Blocks flattened row-by-row in block-matrix order
     blocks: Vec<T>,
     /// Block structure (rows, cols)
     shape: (usize, usize),
@@ -52,7 +53,7 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// # Arguments
     ///
-    /// * `blocks` - Vector of blocks in row-major order
+    /// * `blocks` - Vector of blocks flattened row-by-row
     /// * `shape` - Block structure as (rows, cols)
     ///
     /// # Errors
@@ -75,7 +76,7 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// # Arguments
     ///
-    /// * `blocks` - Vector of blocks in row-major order
+    /// * `blocks` - Vector of blocks flattened row-by-row
     /// * `shape` - Block structure as (rows, cols)
     ///
     /// # Panics

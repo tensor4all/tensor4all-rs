@@ -1679,7 +1679,7 @@ fn test_linsolve_pauli_x() {
 /// mat = [[a, b], [c, d]] on each site
 /// Combined operator: mat_0 ⊗ mat_1
 fn create_general_2x2_mpo(
-    mat: &[f64; 4], // [a, b, c, d] row-major: mat[i,j] = mat[i*2+j]
+    mat: &[f64; 4], // [a, b, c, d] encoding [[a, b], [c, d]]
     phys_dim: usize,
 ) -> (
     TreeTN<TensorDynLen, &'static str>,
@@ -1700,7 +1700,7 @@ fn create_general_2x2_mpo(
     let mut data0 = vec![0.0; phys_dim * phys_dim * 1];
     for out_idx in 0..phys_dim {
         for in_idx in 0..phys_dim {
-            data0[out_idx * phys_dim + in_idx] = mat[out_idx * phys_dim + in_idx];
+            data0[out_idx + phys_dim * in_idx] = mat[out_idx * phys_dim + in_idx];
         }
     }
     let t0 = TensorDynLen::from_dense(
@@ -1714,7 +1714,7 @@ fn create_general_2x2_mpo(
     let mut data1 = vec![0.0; 1 * phys_dim * phys_dim];
     for out_idx in 0..phys_dim {
         for in_idx in 0..phys_dim {
-            data1[out_idx * phys_dim + in_idx] = mat[out_idx * phys_dim + in_idx];
+            data1[out_idx + phys_dim * in_idx] = mat[out_idx * phys_dim + in_idx];
         }
     }
     let t1 = TensorDynLen::from_dense(
@@ -1836,6 +1836,83 @@ fn test_linsolve_general_matrix() {
         assert!(
             diff < tol,
             "General matrix solution mismatch at sorted index {}: computed={}, expected={}, diff={}",
+            i,
+            computed,
+            expected,
+            diff
+        );
+    }
+}
+
+/// Test solving A * x = b where A is a non-symmetric 2x2 matrix.
+/// This catches flat dense linearization bugs in the general matrix MPO helper.
+#[test]
+fn test_linsolve_general_matrix_nonsymmetric() {
+    use tensor4all_treetn::{
+        apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan,
+    };
+
+    let phys_dim = 2;
+
+    // Matrix A = [[2, 1], [0, 3]]
+    let mat = [2.0, 1.0, 0.0, 3.0];
+
+    // Use a solution vector with distinct values so layout bugs cannot hide behind sorting.
+    // For A_total = A ⊗ A and x = [1, 2, 3, 4], the RHS is:
+    // [18, 24, 30, 36].
+    let b_values = [18.0, 24.0, 30.0, 36.0];
+    let exact_solution = [1.0, 2.0, 3.0, 4.0];
+
+    let (rhs, site_indices, _bonds) = create_mps_from_values(&b_values, phys_dim);
+    let (mpo, s_in_tmp, s_out_tmp) = create_general_2x2_mpo(&mat, phys_dim);
+
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+
+    let init = rhs.clone();
+    let mut x = init
+        .canonicalize(["site0"], CanonicalizationOptions::default())
+        .unwrap();
+
+    let options = LinsolveOptions::default()
+        .with_nfullsweeps(30)
+        .with_krylov_tol(1e-12)
+        .with_max_rank(8);
+
+    let mut updater = SquareLinsolveUpdater::with_index_mappings(
+        mpo,
+        input_mapping,
+        output_mapping,
+        rhs.clone(),
+        options,
+    );
+
+    let plan = LocalUpdateSweepPlan::from_treetn(&x, &"site0", 2).unwrap();
+
+    for _ in 0..30 {
+        apply_local_update_sweep(&mut x, &plan, &mut updater).unwrap();
+    }
+
+    let contracted = x.contract_to_tensor().unwrap();
+    let solution_values: Vec<f64> = contracted.to_vec_f64().unwrap();
+
+    assert_eq!(solution_values.len(), exact_solution.len());
+
+    let tol = 1e-3;
+    let mut sorted_computed: Vec<f64> = solution_values.clone();
+    let mut sorted_expected: Vec<f64> = exact_solution.to_vec();
+    sorted_computed.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted_expected.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    for (i, (&computed, &expected)) in sorted_computed
+        .iter()
+        .zip(sorted_expected.iter())
+        .enumerate()
+    {
+        let diff = (computed - expected).abs();
+        assert!(
+            diff < tol,
+            "Non-symmetric general matrix solution mismatch at sorted index {}: computed={}, expected={}, diff={}",
             i,
             computed,
             expected,

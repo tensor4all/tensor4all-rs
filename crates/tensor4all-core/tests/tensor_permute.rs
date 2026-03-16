@@ -64,7 +64,7 @@ fn test_compute_permutation_from_indices_duplicate() {
 #[test]
 fn test_permute_dyn_f64_2d() {
     // Create a 2×3 tensor with data [1, 2, 3, 4, 5, 6]
-    // In row-major order: [[1, 2, 3], [4, 5, 6]]
+    // representing [[1, 2, 3], [4, 5, 6]] with shape [2, 3].
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone()];
@@ -79,7 +79,7 @@ fn test_permute_dyn_f64_2d() {
 
     // Permute to 3×2: swap dimensions
     // Expected: [[1, 4], [2, 5], [3, 6]]
-    // In row-major: [1, 4, 2, 5, 3, 6]
+    // Flattened backing buffer: [1, 4, 2, 5, 3, 6]
     let permuted = tensor.permute(&[1, 0]);
 
     assert_eq!(permuted.dims(), vec![3, 2]);
