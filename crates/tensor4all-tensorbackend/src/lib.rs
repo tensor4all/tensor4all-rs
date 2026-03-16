@@ -14,6 +14,7 @@
 pub mod any_scalar;
 /// Backend dispatch for SVD and QR operations.
 pub mod backend;
+pub(crate) mod layout;
 /// Tensor storage types (Dense and Diagonal).
 pub mod storage;
 pub(crate) mod tenferro_bridge;
