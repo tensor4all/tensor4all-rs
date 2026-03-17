@@ -124,7 +124,7 @@ pub fn linsolve(
         message: format!("Linsolve failed: {}", e),
     })?;
 
-    Ok(TensorTrain::from_inner(result.solution, Some(form)))
+    TensorTrain::from_inner(result.solution, Some(form))
 }
 
 impl TensorTrain {

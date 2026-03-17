@@ -26,43 +26,6 @@ pub(crate) fn storage_strides(dims: &[usize]) -> Vec<usize> {
     strides
 }
 
-/// Compute the current dense linearized offset for a logical multi-index.
-pub fn dense_linear_offset(dims: &[usize], idx: &[usize]) -> Result<usize> {
-    if dims.len() != idx.len() {
-        return Err(anyhow!(
-            "dense_linear_offset: dims.len() {} != idx.len() {}",
-            dims.len(),
-            idx.len()
-        ));
-    }
-
-    let strides = dense_linear_strides(dims);
-    let mut offset = 0usize;
-    for (axis, ((&dim, &value), stride)) in dims
-        .iter()
-        .zip(idx.iter())
-        .zip(strides.iter().copied())
-        .enumerate()
-    {
-        if value >= dim {
-            return Err(anyhow!(
-                "dense_linear_offset: index {} at axis {} is >= dim {}",
-                value,
-                axis,
-                dim
-            ));
-        }
-        offset = offset
-            .checked_add(
-                value
-                    .checked_mul(stride)
-                    .ok_or_else(|| anyhow!("dense_linear_offset: overflow"))?,
-            )
-            .ok_or_else(|| anyhow!("dense_linear_offset: overflow"))?;
-    }
-    Ok(offset)
-}
-
 /// Recover a logical multi-index from the current dense linearized offset.
 pub fn dense_linear_multi_index(dims: &[usize], linear: usize) -> Result<Vec<usize>> {
     let total_size = dims.iter().try_fold(1usize, |acc, &dim| {

@@ -1,16 +1,12 @@
-//! Bug: TensorTrain::inner(self, self) returns wrong (complex) values
-//! when tensor index ordering is non-standard.
+//! Regression tests for TensorTrain::inner(self, self) with non-standard
+//! site tensor index ordering.
 //!
 //! <x|x> = Σ |x_i|² should always be non-negative real, but inner() returns
-//! complex values when site tensors have indices in [SITE, BOND_left, BOND_right]
-//! order instead of the standard [BOND_left, SITE, BOND_right].
+//! the correct value even when site tensors are not already arranged as
+//! [BOND_left, SITE..., BOND_right].
 //!
-//! This happens in practice when loading MPS from HDF5 files written by
-//! ITensors.jl, which doesn't enforce a particular index ordering.
-//!
-//! Root cause: inner() uses conj(A_i).contract(B_i), but contraction
-//! depends on index ordering for the data layout, and the conjugation
-//! + contraction doesn't account for non-standard orderings correctly.
+//! This happens in practice when loading MPS/MPO data from HDF5 files written by
+//! ITensors.jl, which doesn't enforce a particular in-memory index ordering.
 
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, TensorDynLen};
@@ -21,7 +17,7 @@ fn c(re: f64, im: f64) -> Complex64 {
 }
 
 /// Minimal reproduction: 2-site complex TT.
-/// Same data, same indices, different index ordering → different inner() results.
+/// Same data, same indices, different index ordering → same inner() result.
 #[test]
 fn test_inner_wrong_with_nonstandard_index_order() {
     let s0 = DynIndex::new_dyn_with_tag(2, "s=1").unwrap();
@@ -38,7 +34,7 @@ fn test_inner_wrong_with_nonstandard_index_order() {
     ])
     .unwrap();
 
-    // Non-standard ordering: site 1 = [s1, b] (site index first) → FAILS
+    // Non-standard ordering: site 1 = [s1, b] (site index first)
     let tt_ns = TensorTrain::new(vec![
         TensorDynLen::from_dense(vec![s0.clone(), b.clone()], data0).unwrap(),
         TensorDynLen::from_dense(vec![s1.clone(), b.clone()], data1).unwrap(),
@@ -72,7 +68,6 @@ fn test_inner_wrong_with_nonstandard_index_order() {
         "std: inner mismatch"
     );
 
-    // Non-standard ordering is BUGGY — these assertions currently fail
     assert!(
         inner_ns.imag().abs() < 1e-10,
         "ns: inner(x,x) should be real, got imag={:.6e}",
@@ -140,6 +135,59 @@ fn test_inner_wrong_3site_nonstandard() {
     assert!(
         (inner.real() - dense_norm_sq).abs() / dense_norm_sq < 1e-6,
         "inner mismatch: TT={:.6e}, dense={:.6e}",
+        inner.real(),
+        dense_norm_sq
+    );
+}
+
+/// Same issue for MPO-like site tensors with two site indices per site.
+#[test]
+fn test_inner_wrong_with_two_site_indices_per_site_nonstandard_order() {
+    let s0_in = DynIndex::new_dyn_with_tag(2, "s=1").unwrap();
+    let s0_out = DynIndex::new_dyn_with_tag(2, "so=1").unwrap();
+    let s1_in = DynIndex::new_dyn_with_tag(2, "s=2").unwrap();
+    let s1_out = DynIndex::new_dyn_with_tag(2, "so=2").unwrap();
+    let b = DynIndex::new_dyn(2);
+
+    let data0 = vec![
+        c(1.0, 0.1),
+        c(-0.2, 0.3),
+        c(0.4, -0.5),
+        c(0.7, 0.2),
+        c(-0.6, 0.8),
+        c(0.9, -0.4),
+        c(0.3, 0.6),
+        c(-0.1, -0.7),
+    ];
+    let data1 = vec![
+        c(-0.5, 0.2),
+        c(0.8, -0.1),
+        c(0.6, 0.7),
+        c(-0.4, 0.9),
+        c(0.2, -0.3),
+        c(1.1, 0.5),
+        c(-0.7, 0.4),
+        c(0.3, -0.8),
+    ];
+
+    let tt = TensorTrain::new(vec![
+        TensorDynLen::from_dense(vec![s0_in, s0_out, b.clone()], data0).unwrap(),
+        TensorDynLen::from_dense(vec![s1_in, s1_out, b], data1).unwrap(),
+    ])
+    .unwrap();
+
+    let inner = tt.inner(&tt);
+    let dense = tt.to_dense().unwrap();
+    let dense_norm_sq = dense.norm() * dense.norm();
+
+    assert!(
+        inner.imag().abs() < 1e-10,
+        "inner(x,x) should be real, got imag={:.6e}",
+        inner.imag()
+    );
+    assert!(
+        (inner.real() - dense_norm_sq).abs() / dense_norm_sq < 1e-10,
+        "inner mismatch: TT={:.12e}, dense={:.12e}",
         inner.real(),
         dense_norm_sq
     );

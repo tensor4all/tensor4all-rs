@@ -357,6 +357,26 @@ fn row_major_to_col_major_values<T: Clone>(data: &[T], dims: &[usize]) -> Vec<T>
         .collect()
 }
 
+fn col_major_to_row_major_values<T: Clone>(data: &[T], dims: &[usize]) -> Vec<T> {
+    let total_len: usize = dims.iter().product();
+    if total_len == 0 {
+        return Vec::new();
+    }
+
+    let row_major_strides = compute_strides(dims);
+    let mut out = vec![data[0].clone(); total_len];
+    for (linear, value) in data.iter().enumerate().take(total_len) {
+        let index = col_major_multi_index(linear, dims);
+        let offset: usize = index
+            .iter()
+            .zip(row_major_strides.iter())
+            .map(|(&coord, &stride)| coord * stride)
+            .sum();
+        out[offset] = value.clone();
+    }
+    out
+}
+
 fn offset_from_strides(index: &[usize], strides: &[isize]) -> usize {
     index
         .iter()
@@ -1342,12 +1362,8 @@ impl Storage {
                     let native =
                         crate::tenferro_bridge::storage_to_native_tensor(self, logical_dims)
                             .map_err(|err| err.to_string())?;
-                    let row_major =
-                        crate::tenferro_bridge::native_tensor_primal_to_dense_f64_row_major_temp(
-                            &native,
-                        )
-                        .map_err(|err| err.to_string())?;
-                    Ok(row_major_to_col_major_values(&row_major, logical_dims))
+                    crate::tenferro_bridge::native_tensor_primal_to_dense_f64_col_major(&native)
+                        .map_err(|err| err.to_string())
                 }
             }
             Storage::DenseC64(_) | Storage::DiagC64(_) | Storage::StructuredC64(_) => {
@@ -1393,12 +1409,8 @@ impl Storage {
                     let native =
                         crate::tenferro_bridge::storage_to_native_tensor(self, logical_dims)
                             .map_err(|err| err.to_string())?;
-                    let row_major =
-                        crate::tenferro_bridge::native_tensor_primal_to_dense_c64_row_major_temp(
-                            &native,
-                        )
-                        .map_err(|err| err.to_string())?;
-                    Ok(row_major_to_col_major_values(&row_major, logical_dims))
+                    crate::tenferro_bridge::native_tensor_primal_to_dense_c64_col_major(&native)
+                        .map_err(|err| err.to_string())
                 }
             }
             Storage::DenseF64(_) | Storage::DiagF64(_) | Storage::StructuredF64(_) => {
@@ -1432,22 +1444,24 @@ impl Storage {
             Storage::StructuredF64(_) => {
                 let native = crate::tenferro_bridge::storage_to_native_tensor(self, dims)
                     .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
-                let row_major =
-                    crate::tenferro_bridge::native_tensor_primal_to_dense_f64_row_major_temp(
-                        &native,
-                    )
-                    .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
-                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(row_major, dims))
+                let col_major =
+                    crate::tenferro_bridge::native_tensor_primal_to_dense_f64_col_major(&native)
+                        .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
+                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                    col_major_to_row_major_values(&col_major, dims),
+                    dims,
+                ))
             }
             Storage::StructuredC64(_) => {
                 let native = crate::tenferro_bridge::storage_to_native_tensor(self, dims)
                     .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
-                let row_major =
-                    crate::tenferro_bridge::native_tensor_primal_to_dense_c64_row_major_temp(
-                        &native,
-                    )
-                    .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
-                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(row_major, dims))
+                let col_major =
+                    crate::tenferro_bridge::native_tensor_primal_to_dense_c64_col_major(&native)
+                        .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
+                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+                    col_major_to_row_major_values(&col_major, dims),
+                    dims,
+                ))
             }
         }
     }

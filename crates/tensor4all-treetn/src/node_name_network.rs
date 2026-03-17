@@ -176,6 +176,11 @@ where
         self.graph.node_name(node)
     }
 
+    /// Rename an existing node.
+    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<(), String> {
+        self.graph.rename_node(old_name, new_name)
+    }
+
     /// Get all node names.
     pub fn node_names(&self) -> Vec<&NodeName> {
         self.graph.node_names()

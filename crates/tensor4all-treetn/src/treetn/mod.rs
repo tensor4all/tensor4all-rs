@@ -988,6 +988,35 @@ where
         self.graph.node_index(node_name)
     }
 
+    /// Rename an existing node while preserving topology, site space, and
+    /// orthogonality metadata.
+    pub fn rename_node(&mut self, old_name: &V, new_name: V) -> Result<()> {
+        if old_name == &new_name {
+            return Ok(());
+        }
+
+        self.graph
+            .rename_node(old_name, new_name.clone())
+            .map_err(|e| anyhow::anyhow!(e))
+            .context("rename_node: failed to rename graph node")?;
+        self.site_index_network
+            .rename_node(old_name, new_name.clone())
+            .map_err(|e| anyhow::anyhow!(e))
+            .context("rename_node: failed to rename site-index node")?;
+
+        if self.canonical_region.remove(old_name) {
+            self.canonical_region.insert(new_name.clone());
+        }
+
+        for target in self.ortho_towards.values_mut() {
+            if target == old_name {
+                *target = new_name.clone();
+            }
+        }
+
+        Ok(())
+    }
+
     /// Get the EdgeIndex for the edge between two nodes by name.
     ///
     /// Returns `None` if either node doesn't exist or there's no edge between them.

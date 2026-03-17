@@ -5,17 +5,18 @@ use crate::storage::{AnyScalar, Storage};
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::Zero;
+use rand_distr::{Distribution, StandardNormal};
 use std::collections::HashSet;
 use std::ops::{Mul, Neg, Sub};
 use std::sync::Arc;
 use tenferro::{AdMode, ScalarType as NativeScalarType, Tensor as NativeTensor};
 use tensor4all_tensorbackend::{
     axpby_native_tensor, conj_native_tensor, contract_native_tensor,
-    dense_native_tensor_from_row_major_temp, diag_native_tensor_from_row_major_temp,
-    native_tensor_primal_to_dense_c64_row_major_temp,
-    native_tensor_primal_to_dense_f64_row_major_temp, native_tensor_primal_to_storage,
-    outer_product_native_tensor, permute_native_tensor, reshape_row_major_native_tensor_temp,
-    scale_native_tensor, storage_to_native_tensor, sum_native_tensor, TensorElement,
+    dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
+    native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
+    native_tensor_primal_to_storage, outer_product_native_tensor, permute_native_tensor,
+    reshape_col_major_native_tensor, scale_native_tensor, storage_to_native_tensor,
+    sum_native_tensor, TensorElement,
 };
 
 /// Compute the permutation array from original indices to new indices.
@@ -277,15 +278,12 @@ impl TensorDynLen {
     /// # Example
     ///
     /// ```
-    /// use tensor4all_core::{TensorDynLen, Storage, AnyScalar};
-    /// use tensor4all_core::storage::DenseStorageF64;
+    /// use tensor4all_core::{TensorDynLen, AnyScalar};
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use std::sync::Arc;
     ///
     /// // Create a scalar tensor (0 dimensions, 1 element)
     /// let indices: Vec<Index<DynId>> = vec![];
-    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![42.0], &[])));
-    /// let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+    /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![42.0]).unwrap();
     ///
     /// assert_eq!(tensor.only().real(), 42.0);
     /// ```
@@ -320,16 +318,12 @@ impl TensorDynLen {
     /// ```
     /// use tensor4all_core::TensorDynLen;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageF64;
-    /// use std::sync::Arc;
     ///
     /// // Create a 2×3 tensor
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
     /// let indices = vec![i.clone(), j.clone()];
-    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; 6], &[2, 3])));
-    /// let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+    /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![0.0; 6]).unwrap();
     ///
     /// // Permute to 3×2: swap the two dimensions by providing new indices order
     /// let permuted = tensor.permute_indices(&[j, i]);
@@ -361,17 +355,13 @@ impl TensorDynLen {
     /// ```
     /// use tensor4all_core::TensorDynLen;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageF64;
-    /// use std::sync::Arc;
     ///
     /// // Create a 2×3 tensor
     /// let indices = vec![
     ///     Index::new_dyn(2),
     ///     Index::new_dyn(3),
     /// ];
-    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; 6], &[2, 3])));
-    /// let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+    /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![0.0; 6]).unwrap();
     ///
     /// // Permute to 3×2: swap the two dimensions
     /// let permuted = tensor.permute(&[1, 0]);
@@ -412,9 +402,6 @@ impl TensorDynLen {
     /// ```
     /// use tensor4all_core::TensorDynLen;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageF64;
-    /// use std::sync::Arc;
     ///
     /// // Create two tensors: A[i, j] and B[j, k]
     /// let i = Index::new_dyn(2);
@@ -422,12 +409,10 @@ impl TensorDynLen {
     /// let k = Index::new_dyn(4);
     ///
     /// let indices_a = vec![i.clone(), j.clone()];
-    /// let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; 6], &[2, 3])));
-    /// let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    /// let tensor_a: TensorDynLen = TensorDynLen::from_dense(indices_a, vec![0.0; 6]).unwrap();
     ///
     /// let indices_b = vec![j.clone(), k.clone()];
-    /// let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; 12], &[3, 4])));
-    /// let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    /// let tensor_b: TensorDynLen = TensorDynLen::from_dense(indices_b, vec![0.0; 12]).unwrap();
     ///
     /// // Contract along j: result is C[i, k]
     /// let result = tensor_a.contract(&tensor_b);
@@ -473,9 +458,6 @@ impl TensorDynLen {
     /// ```
     /// use tensor4all_core::TensorDynLen;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageF64;
-    /// use std::sync::Arc;
     ///
     /// // Create two tensors: A[i, j] and B[k, l] where j and k have same dimension but different IDs
     /// let i = Index::new_dyn(2);
@@ -484,12 +466,10 @@ impl TensorDynLen {
     /// let l = Index::new_dyn(4);
     ///
     /// let indices_a = vec![i.clone(), j.clone()];
-    /// let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; 6], &[2, 3])));
-    /// let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    /// let tensor_a: TensorDynLen = TensorDynLen::from_dense(indices_a, vec![0.0; 6]).unwrap();
     ///
     /// let indices_b = vec![k.clone(), l.clone()];
-    /// let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; 12], &[3, 4])));
-    /// let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    /// let tensor_b: TensorDynLen = TensorDynLen::from_dense(indices_b, vec![0.0; 12]).unwrap();
     ///
     /// // Contract j (from A) with k (from B): result is C[i, l]
     /// let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), k.clone())]).unwrap();
@@ -558,20 +538,12 @@ impl TensorDynLen {
     /// ```
     /// use tensor4all_core::TensorDynLen;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use tensor4all_core::storage::DenseStorageF64;
-    /// use tensor4all_core::Storage;
-    /// use std::sync::Arc;
     ///
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
-    /// let tensor_a: TensorDynLen = TensorDynLen::new(
-    ///     vec![i.clone()],
-    ///     Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0, 2.0], &[2]))),
-    /// );
-    /// let tensor_b: TensorDynLen = TensorDynLen::new(
-    ///     vec![j.clone()],
-    ///     Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0, 2.0, 3.0], &[3]))),
-    /// );
+    /// let tensor_a: TensorDynLen = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// let tensor_b: TensorDynLen =
+    ///     TensorDynLen::from_dense(vec![j.clone()], vec![1.0, 2.0, 3.0]).unwrap();
     ///
     /// // Outer product: C[i, j] = A[i] * B[j]
     /// let result = tensor_a.outer_product(&tensor_b).unwrap();
@@ -631,10 +603,9 @@ impl TensorDynLen {
     /// ```
     pub fn random_f64<R: rand::Rng>(rng: &mut R, indices: Vec<DynIndex>) -> Self {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
-        let storage = Arc::new(Storage::DenseF64(crate::storage::DenseStorageF64::random(
-            rng, &dims,
-        )));
-        Self::new(indices, storage)
+        let size: usize = dims.iter().product();
+        let data: Vec<f64> = (0..size).map(|_| StandardNormal.sample(rng)).collect();
+        Self::from_dense(indices, data).expect("TensorDynLen::random_f64 failed")
     }
 
     /// Create a random Complex64 tensor with values from standard normal distribution.
@@ -660,10 +631,11 @@ impl TensorDynLen {
     /// ```
     pub fn random_c64<R: rand::Rng>(rng: &mut R, indices: Vec<DynIndex>) -> Self {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
-        let storage = Arc::new(Storage::DenseC64(crate::storage::DenseStorageC64::random(
-            rng, &dims,
-        )));
-        Self::new(indices, storage)
+        let size: usize = dims.iter().product();
+        let data: Vec<Complex64> = (0..size)
+            .map(|_| Complex64::new(StandardNormal.sample(rng), StandardNormal.sample(rng)))
+            .collect();
+        Self::from_dense(indices, data).expect("TensorDynLen::random_c64 failed")
     }
 }
 
@@ -676,9 +648,6 @@ impl TensorDynLen {
 /// ```
 /// use tensor4all_core::TensorDynLen;
 /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-/// use tensor4all_core::Storage;
-/// use tensor4all_core::storage::DenseStorageF64;
-/// use std::sync::Arc;
 ///
 /// // Create two tensors: A[i, j] and B[j, k]
 /// let i = Index::new_dyn(2);
@@ -686,12 +655,10 @@ impl TensorDynLen {
 /// let k = Index::new_dyn(4);
 ///
 /// let indices_a = vec![i.clone(), j.clone()];
-/// let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; 6], &[2, 3])));
-/// let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+/// let tensor_a: TensorDynLen = TensorDynLen::from_dense(indices_a, vec![0.0; 6]).unwrap();
 ///
 /// let indices_b = vec![j.clone(), k.clone()];
-/// let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; 12], &[3, 4])));
-/// let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+/// let tensor_b: TensorDynLen = TensorDynLen::from_dense(indices_b, vec![0.0; 12]).unwrap();
 ///
 /// // Contract along j using * operator: result is C[i, k]
 /// let result = &tensor_a * &tensor_b;
@@ -812,22 +779,17 @@ impl TensorDynLen {
     /// ```
     /// use tensor4all_core::TensorDynLen;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageF64;
-    /// use std::sync::Arc;
     ///
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
     ///
     /// let indices_a = vec![i.clone(), j.clone()];
     /// let data_a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    /// let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_a, &[2, 3])));
-    /// let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    /// let tensor_a: TensorDynLen = TensorDynLen::from_dense(indices_a, data_a).unwrap();
     ///
     /// let indices_b = vec![i.clone(), j.clone()];
     /// let data_b = vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
-    /// let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_b, &[2, 3])));
-    /// let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    /// let tensor_b: TensorDynLen = TensorDynLen::from_dense(indices_b, data_b).unwrap();
     ///
     /// let sum = tensor_a.add(&tensor_b).unwrap();
     /// // sum = [[2, 3, 4], [5, 6, 7]]
@@ -980,17 +942,13 @@ impl TensorDynLen {
     /// ```
     /// use tensor4all_core::TensorDynLen;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageF64;
-    /// use std::sync::Arc;
     ///
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
     /// let new_i = Index::new_dyn(2);  // Same dimension, different ID
     ///
     /// let indices = vec![i.clone(), j.clone()];
-    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; 6], &[2, 3])));
-    /// let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+    /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![0.0; 6]).unwrap();
     ///
     /// // Replace index i with new_i
     /// let replaced = tensor.replaceind(&i, &new_i);
@@ -1043,9 +1001,6 @@ impl TensorDynLen {
     /// ```
     /// use tensor4all_core::TensorDynLen;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageF64;
-    /// use std::sync::Arc;
     ///
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
@@ -1053,8 +1008,7 @@ impl TensorDynLen {
     /// let new_j = Index::new_dyn(3);
     ///
     /// let indices = vec![i.clone(), j.clone()];
-    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; 6], &[2, 3])));
-    /// let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
+    /// let tensor: TensorDynLen = TensorDynLen::from_dense(indices, vec![0.0; 6]).unwrap();
     ///
     /// // Replace both indices
     /// let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()]);
@@ -1117,16 +1071,12 @@ impl TensorDynLen {
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageC64;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
     /// use num_complex::Complex64;
-    /// use std::sync::Arc;
     ///
     /// let i = Index::new_dyn(2);
     /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
-    /// let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(data, &[2])));
-    /// let tensor: TensorDynLen = TensorDynLen::new(vec![i], storage);
+    /// let tensor: TensorDynLen = TensorDynLen::from_dense(vec![i], data).unwrap();
     ///
     /// let conj_tensor = tensor.conj();
     /// // Elements are now conjugated: 1-2i, 3+4i
@@ -1154,16 +1104,12 @@ impl TensorDynLen {
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageF64;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use std::sync::Arc;
     ///
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
     /// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];  // 1² + 2² + ... + 6² = 91
-    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data, &[2, 3])));
-    /// let tensor: TensorDynLen = TensorDynLen::new(vec![i, j], storage);
+    /// let tensor: TensorDynLen = TensorDynLen::from_dense(vec![i, j], data).unwrap();
     ///
     /// assert!((tensor.norm_squared() - 91.0).abs() < 1e-10);
     /// ```
@@ -1190,15 +1136,11 @@ impl TensorDynLen {
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageF64;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use std::sync::Arc;
     ///
     /// let i = Index::new_dyn(2);
     /// let data = vec![3.0, 4.0];  // sqrt(9 + 16) = 5
-    /// let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data, &[2])));
-    /// let tensor: TensorDynLen = TensorDynLen::new(vec![i], storage);
+    /// let tensor: TensorDynLen = TensorDynLen::from_dense(vec![i], data).unwrap();
     ///
     /// assert!((tensor.norm() - 5.0).abs() < 1e-10);
     /// ```
@@ -1233,18 +1175,13 @@ impl TensorDynLen {
     /// # Example
     /// ```
     /// use tensor4all_core::TensorDynLen;
-    /// use tensor4all_core::Storage;
-    /// use tensor4all_core::storage::DenseStorageF64;
     /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use std::sync::Arc;
     ///
     /// let i = Index::new_dyn(2);
     /// let data_a = vec![1.0, 0.0];
     /// let data_b = vec![1.0, 0.0];  // Same tensor
-    /// let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_a, &[2])));
-    /// let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data_b, &[2])));
-    /// let tensor_a: TensorDynLen = TensorDynLen::new(vec![i.clone()], storage_a);
-    /// let tensor_b: TensorDynLen = TensorDynLen::new(vec![i.clone()], storage_b);
+    /// let tensor_a: TensorDynLen = TensorDynLen::from_dense(vec![i.clone()], data_a).unwrap();
+    /// let tensor_b: TensorDynLen = TensorDynLen::from_dense(vec![i.clone()], data_b).unwrap();
     ///
     /// assert!(tensor_a.distance(&tensor_b) < 1e-10);  // Zero distance
     /// ```
@@ -1382,7 +1319,7 @@ pub fn unfold_split(
     let m: usize = unfolded_dims[..left_len].iter().product();
     let n: usize = unfolded_dims[left_len..].iter().product();
 
-    let matrix_tensor = reshape_row_major_native_tensor_temp(unfolded.as_native(), &[m, n])?;
+    let matrix_tensor = reshape_col_major_native_tensor(unfolded.as_native(), &[m, n])?;
 
     Ok((
         matrix_tensor,
@@ -1572,43 +1509,6 @@ fn checked_total_size(dims: &[usize]) -> Result<usize> {
     })
 }
 
-fn row_major_offset(dims: &[usize], vals: &[usize]) -> Result<usize> {
-    if dims.len() != vals.len() {
-        return Err(anyhow::anyhow!(
-            "row_major_offset: dims.len() != vals.len()"
-        ));
-    }
-    let total_size = checked_total_size(dims)?;
-
-    // Row-major linear index: offset = Σ v_k * Π_{l>k} d_l
-    let mut offset = 0usize;
-    let mut stride = total_size;
-    for (k, (&v, &d)) in vals.iter().zip(dims.iter()).enumerate() {
-        if d == 0 {
-            return Err(anyhow::anyhow!("invalid dimension 0 at position {}", k));
-        }
-        if v >= d {
-            return Err(anyhow::anyhow!(
-                "row_major_offset: value {} at position {} is >= dimension {}",
-                v,
-                k,
-                d
-            ));
-        }
-        if stride % d != 0 {
-            return Err(anyhow::anyhow!("row_major_offset: non-divisible stride"));
-        }
-        stride /= d;
-        let term = v
-            .checked_mul(stride)
-            .ok_or_else(|| anyhow::anyhow!("row_major_offset: overflow"))?;
-        offset = offset
-            .checked_add(term)
-            .ok_or_else(|| anyhow::anyhow!("row_major_offset: overflow"))?;
-    }
-    Ok(offset)
-}
-
 fn column_major_offset(dims: &[usize], vals: &[usize]) -> Result<usize> {
     if dims.len() != vals.len() {
         return Err(anyhow::anyhow!(
@@ -1642,65 +1542,6 @@ fn column_major_offset(dims: &[usize], vals: &[usize]) -> Result<usize> {
             .ok_or_else(|| anyhow::anyhow!("column_major_offset: overflow"))?;
     }
     Ok(offset)
-}
-
-fn coords_from_column_major_offset(dims: &[usize], mut offset: usize) -> Result<Vec<usize>> {
-    let total_size = checked_total_size(dims)?;
-    anyhow::ensure!(
-        offset < total_size,
-        "column-major offset {offset} is out of bounds for dims {dims:?}"
-    );
-
-    let mut coords = Vec::with_capacity(dims.len());
-    for &d in dims {
-        coords.push(offset % d);
-        offset /= d;
-    }
-    Ok(coords)
-}
-
-fn linearized_column_major_to_row_major<T: Copy>(data: &[T], dims: &[usize]) -> Result<Vec<T>> {
-    let total_size = checked_total_size(dims)?;
-    anyhow::ensure!(
-        data.len() == total_size,
-        "column-major payload length {} does not match dims {:?} (expected {})",
-        data.len(),
-        dims,
-        total_size
-    );
-    if data.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut out = vec![data[0]; total_size];
-    for (src_offset, &value) in data.iter().enumerate() {
-        let coords = coords_from_column_major_offset(dims, src_offset)?;
-        let dst_offset = row_major_offset(dims, &coords)?;
-        out[dst_offset] = value;
-    }
-    Ok(out)
-}
-
-fn linearized_row_major_to_column_major<T: Copy>(data: &[T], dims: &[usize]) -> Result<Vec<T>> {
-    let total_size = checked_total_size(dims)?;
-    anyhow::ensure!(
-        data.len() == total_size,
-        "row-major payload length {} does not match dims {:?} (expected {})",
-        data.len(),
-        dims,
-        total_size
-    );
-    if data.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut out = vec![data[0]; total_size];
-    for (dst_offset, slot) in out.iter_mut().enumerate().take(total_size) {
-        let coords = coords_from_column_major_offset(dims, dst_offset)?;
-        let src_offset = row_major_offset(dims, &coords)?;
-        *slot = data[src_offset];
-    }
-    Ok(out)
 }
 
 // ============================================================================
@@ -1765,8 +1606,7 @@ impl TensorDynLen {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices);
         Self::validate_dense_payload_len(data.len(), &dims)?;
-        let row_major = linearized_column_major_to_row_major(&data, &dims)?;
-        let native = dense_native_tensor_from_row_major_temp(&row_major, &dims)?;
+        let native = dense_native_tensor_from_col_major(&data, &dims)?;
         Self::from_native(indices, native)
     }
 
@@ -1775,7 +1615,7 @@ impl TensorDynLen {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices);
         Self::validate_diag_payload_len(data.len(), &dims)?;
-        let native = diag_native_tensor_from_row_major_temp(&data, dims.len())?;
+        let native = diag_native_tensor_from_col_major(&data, dims.len())?;
         Self::from_native(indices, native)
     }
 
@@ -1858,8 +1698,7 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error if the storage is not DenseF64.
     pub fn to_vec_f64(&self) -> Result<Vec<f64>> {
-        let row_major = native_tensor_primal_to_dense_f64_row_major_temp(&self.native)?;
-        linearized_row_major_to_column_major(&row_major, &self.dims())
+        native_tensor_primal_to_dense_f64_col_major(&self.native)
     }
 
     /// Convert tensor data to a column-major `Vec<Complex64>`.
@@ -1870,8 +1709,7 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error if the storage is not DenseC64.
     pub fn to_vec_c64(&self) -> Result<Vec<Complex64>> {
-        let row_major = native_tensor_primal_to_dense_c64_row_major_temp(&self.native)?;
-        linearized_row_major_to_column_major(&row_major, &self.dims())
+        native_tensor_primal_to_dense_c64_col_major(&self.native)
     }
 
     /// Check if the tensor has f64 storage.

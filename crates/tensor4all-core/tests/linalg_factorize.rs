@@ -40,6 +40,26 @@ fn create_rank3_tensor() -> TensorDynLen {
     TensorDynLen::new(vec![i, j, k], storage)
 }
 
+fn create_unit_dim_rank3_tensor() -> TensorDynLen {
+    let i: DynIndex = Index::new_dyn(1);
+    let j: DynIndex = Index::new_dyn(2);
+    let k: DynIndex = Index::new_dyn(2);
+
+    let data = vec![1.0, 2.0, 3.0, 4.0];
+    TensorDynLen::from_dense(vec![i, j, k], data).unwrap()
+}
+
+fn create_non_symmetric_col_major_matrix() -> TensorDynLen {
+    let i: DynIndex = Index::new_dyn(2);
+    let j: DynIndex = Index::new_dyn(3);
+
+    // Logical matrix:
+    // [[1, 2, 4],
+    //  [3, 5, 6]]
+    let data = vec![1.0, 3.0, 2.0, 5.0, 4.0, 6.0];
+    TensorDynLen::from_dense(vec![i, j], data).unwrap()
+}
+
 // ============================================================================
 // Shared Test Helpers
 // ============================================================================
@@ -203,6 +223,42 @@ fn test_factorize_lu_ci_no_singular_values() {
 
             assert!(result.singular_values.is_none());
         }
+    }
+}
+
+#[test]
+fn test_factorize_lu_ci_reconstruction_with_unit_dim_axis() {
+    let tensor = create_unit_dim_rank3_tensor();
+    let left_inds = vec![tensor.indices[1].clone(), tensor.indices[2].clone()];
+
+    for alg in [FactorizeAlg::LU, FactorizeAlg::CI] {
+        let options = FactorizeOptions {
+            alg,
+            canonical: Canonical::Left,
+            rtol: None,
+            max_rank: None,
+        };
+        let result = factorize(&tensor, &left_inds, &options).unwrap();
+        let reconstructed = result.left.contract(&result.right);
+        assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
+    }
+}
+
+#[test]
+fn test_factorize_lu_ci_reconstruction_with_col_major_matrix_input() {
+    let tensor = create_non_symmetric_col_major_matrix();
+    let left_inds = vec![tensor.indices[0].clone()];
+
+    for alg in [FactorizeAlg::LU, FactorizeAlg::CI] {
+        let options = FactorizeOptions {
+            alg,
+            canonical: Canonical::Left,
+            rtol: None,
+            max_rank: None,
+        };
+        let result = factorize(&tensor, &left_inds, &options).unwrap();
+        let reconstructed = result.left.contract(&result.right);
+        assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
     }
 }
 

@@ -7,21 +7,11 @@ use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
 
 /// Public scalar element types supported by tensor4all dense/diag constructors.
 pub trait TensorElement: Copy + Send + Sync + 'static {
-    /// Build a native tensor from row-major dense data.
-    ///
-    /// This is a temporary low-level bridge helper. High-level tensor4all APIs
-    /// use column-major semantics and must convert explicitly at the boundary.
-    fn dense_native_tensor_from_row_major_temp(
-        data: &[Self],
-        dims: &[usize],
-    ) -> Result<NativeTensor>;
+    /// Build a native tensor from column-major dense data.
+    fn dense_native_tensor_from_col_major(data: &[Self], dims: &[usize]) -> Result<NativeTensor>;
 
-    /// Build a native diagonal tensor from row-major diagonal payload data.
-    ///
-    /// This is a temporary low-level bridge helper. Diagonal payloads are 1D,
-    /// but the name remains explicit because callers typically pair it with
-    /// row-major dense bridge logic.
-    fn diag_native_tensor_from_row_major_temp(
+    /// Build a native diagonal tensor from column-major diagonal payload data.
+    fn diag_native_tensor_from_col_major(
         data: &[Self],
         logical_rank: usize,
     ) -> Result<NativeTensor>;
@@ -29,33 +19,34 @@ pub trait TensorElement: Copy + Send + Sync + 'static {
     /// Build a rank-0 native tensor.
     fn scalar_native_tensor(value: Self) -> Result<NativeTensor>;
 
-    /// Materialize dense row-major primal values from a native tensor.
-    ///
-    /// This is a temporary low-level bridge helper. High-level tensor4all APIs
-    /// convert these values to column-major before exposing them publicly.
-    fn dense_values_from_native_row_major_temp(tensor: &NativeTensor) -> Result<Vec<Self>>;
+    /// Materialize dense column-major primal values from a native tensor.
+    fn dense_values_from_native_col_major(tensor: &NativeTensor) -> Result<Vec<Self>>;
 
     /// Materialize diagonal payload values from a native diagonal tensor.
     fn diag_values_from_native_temp(tensor: &NativeTensor) -> Result<Vec<Self>>;
 }
 
-fn materialize_typed_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
+fn materialize_typed_values<T>(
+    tensor: &TypedTensor<T>,
+    order: MemoryOrder,
+    op: &'static str,
+) -> Result<Vec<T>>
 where
     T: tenferro_algebra::Scalar + Copy + Conjugate,
 {
-    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
-    let is_conjugated = row_major.is_conjugated();
-    let row_major = if row_major.logical_memory_space() == LogicalMemorySpace::MainMemory {
-        row_major
+    let contiguous = tensor.contiguous(order);
+    let is_conjugated = contiguous.is_conjugated();
+    let contiguous = if contiguous.logical_memory_space() == LogicalMemorySpace::MainMemory {
+        contiguous
     } else {
-        row_major
+        contiguous
             .to_memory_space_async(LogicalMemorySpace::MainMemory)
             .map_err(|e| anyhow!("{op}: failed to move tensor to host memory: {e}"))?
     };
-    let offset = usize::try_from(row_major.offset())
-        .map_err(|_| anyhow!("{op}: negative offset {}", row_major.offset()))?;
-    let len = row_major.len();
-    let slice = row_major
+    let offset = usize::try_from(contiguous.offset())
+        .map_err(|_| anyhow!("{op}: negative offset {}", contiguous.offset()))?;
+    let len = contiguous.len();
+    let slice = contiguous
         .buffer()
         .as_slice()
         .and_then(|values: &[T]| values.get(offset..offset + len))
@@ -70,16 +61,16 @@ where
 macro_rules! impl_tensor_element {
     ($ty:ty, $variant:ident, $payload:ident) => {
         impl TensorElement for $ty {
-            fn dense_native_tensor_from_row_major_temp(
+            fn dense_native_tensor_from_col_major(
                 data: &[Self],
                 dims: &[usize],
             ) -> Result<NativeTensor> {
-                let typed = TypedTensor::<Self>::from_slice(data, dims, MemoryOrder::RowMajor)
+                let typed = TypedTensor::<Self>::from_slice(data, dims, MemoryOrder::ColumnMajor)
                     .map_err(|e| anyhow!("failed to build native dense tensor: {e}"))?;
                 Ok(NativeTensor::from_tensor(typed))
             }
 
-            fn diag_native_tensor_from_row_major_temp(
+            fn diag_native_tensor_from_col_major(
                 data: &[Self],
                 logical_rank: usize,
             ) -> Result<NativeTensor> {
@@ -90,7 +81,7 @@ macro_rules! impl_tensor_element {
                 }
 
                 let payload =
-                    TypedTensor::<Self>::from_slice(data, &[data.len()], MemoryOrder::RowMajor)
+                    TypedTensor::<Self>::from_slice(data, &[data.len()], MemoryOrder::ColumnMajor)
                         .map_err(|e| anyhow!("failed to build native diagonal payload: {e}"))?;
                 NativeTensor::from_tensor(payload)
                     .diag_embed(logical_rank)
@@ -104,7 +95,7 @@ macro_rules! impl_tensor_element {
                 Ok(NativeTensor::from_tensor(typed))
             }
 
-            fn dense_values_from_native_row_major_temp(tensor: &NativeTensor) -> Result<Vec<Self>> {
+            fn dense_values_from_native_col_major(tensor: &NativeTensor) -> Result<Vec<Self>> {
                 let snap = tensor.primal_snapshot();
                 let dense = if snap.is_dense() {
                     snap
@@ -113,9 +104,11 @@ macro_rules! impl_tensor_element {
                         .map_err(|e| anyhow!("failed to densify native tensor snapshot: {e}"))?
                 };
                 match dense {
-                    snapshot::DynTensor::$variant(value) => {
-                        materialize_typed_values(value.$payload(), "dense native tensor extraction")
-                    }
+                    snapshot::DynTensor::$variant(value) => materialize_typed_values(
+                        value.$payload(),
+                        MemoryOrder::ColumnMajor,
+                        "dense native tensor extraction",
+                    ),
                     other => Err(anyhow!(
                         "expected {:?} tensor snapshot, got {:?}",
                         stringify!($variant),
@@ -130,6 +123,7 @@ macro_rules! impl_tensor_element {
                 match snap {
                     snapshot::DynTensor::$variant(value) => materialize_typed_values(
                         value.$payload(),
+                        MemoryOrder::ColumnMajor,
                         "diagonal native tensor extraction",
                     ),
                     other => Err(anyhow!(
