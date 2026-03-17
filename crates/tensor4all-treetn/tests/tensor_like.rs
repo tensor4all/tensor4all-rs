@@ -11,7 +11,7 @@
 //! - TensorDynLen<DynId, NoSymmSpace> -> TensorDynLen
 //! - idx.id -> idx.id() (IndexLike trait method)
 
-use tensor4all_core::{DynIndex, IndexLike, StorageScalar, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_treetn::TreeTN;
 
 /// Helper to create a simple tensor with given indices
@@ -19,8 +19,7 @@ fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
     let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
     let total_size: usize = dims.iter().product();
     let data: Vec<f64> = (0..total_size).map(|i| i as f64).collect();
-    let storage = f64::dense_storage_with_shape(data, &dims);
-    TensorDynLen::from_indices(indices, storage)
+    TensorDynLen::from_dense(indices, data).unwrap()
 }
 
 /// Helper to collect all site (physical) indices from a TreeTN.
@@ -115,16 +114,15 @@ fn test_treetn_contract_to_tensor() {
     let bond = DynIndex::new_dyn(2);
 
     // Tensor A: 2x2 with values
-    let tensor_a = TensorDynLen::from_indices(
-        vec![i.clone(), bond.clone()],
-        f64::dense_storage_with_shape(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]), // identity-like
-    );
+    let tensor_a =
+        TensorDynLen::from_dense(vec![i.clone(), bond.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap(); // identity-like
 
     // Tensor B: 2x3 with values
-    let tensor_b = TensorDynLen::from_indices(
+    let tensor_b = TensorDynLen::from_dense(
         vec![bond.clone(), j.clone()],
-        f64::dense_storage_with_shape(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]),
-    );
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    )
+    .unwrap();
 
     let tn = TreeTN::<TensorDynLen, String>::from_tensors(
         vec![tensor_a, tensor_b],

@@ -9,8 +9,6 @@ use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Deref, DerefMut, Mul};
 use std::sync::Arc;
 
-use crate::tensor_element::TensorElement;
-
 /// Trait for scalar types that can be used in dense storage.
 ///
 /// This trait defines the requirements for types that can be stored in `DenseStorage<T>`.
@@ -2142,119 +2140,6 @@ fn promote_dense_to_c64(dense: &DenseStorage<f64>) -> DenseStorage<Complex64> {
             .collect(),
         &dims,
     )
-}
-
-/// Scalar types that can be extracted from and stored in `Storage`.
-///
-/// This trait provides conversion methods between scalar types and `Storage`,
-/// supporting both view-based (borrowed) and owned operations.
-///
-/// # View-based operations
-/// - `extract_dense_view`: Returns a borrowed slice (no copy)
-/// - `extract_dense_cow`: Returns `Cow` (borrowed if possible, owned if needed)
-///
-/// # Owned operations
-/// - `extract_dense`: Returns owned `Vec` (always copies)
-/// - `dense_storage`: Creates `Storage` from owned `Vec`
-pub trait StorageScalar: TensorElement + Copy + 'static {
-    /// Extract a borrowed view of dense storage data (no copy).
-    ///
-    /// Returns an error if the storage is not the matching dense type.
-    fn extract_dense_view(storage: &Storage) -> Result<&[Self], String>;
-
-    /// Extract dense storage data as `Cow` (borrowed if possible, owned if needed).
-    ///
-    /// For dense storage, returns `Cow::Borrowed` (no copy).
-    /// For other storage types, may need to convert to dense first (copy).
-    fn extract_dense_cow<'a>(storage: &'a Storage) -> Result<Cow<'a, [Self]>, String> {
-        Self::extract_dense_view(storage).map(Cow::Borrowed)
-    }
-
-    /// Extract dense storage data as owned `Vec` (always copies).
-    ///
-    /// This is a convenience method that calls `extract_dense_cow` and converts to owned.
-    fn extract_dense(storage: &Storage) -> Result<Vec<Self>, String> {
-        Ok(Self::extract_dense_cow(storage)?.into_owned())
-    }
-
-    /// Create `Storage` from owned dense data with explicit shape.
-    fn dense_storage_with_shape(data: Vec<Self>, dims: &[usize]) -> Arc<Storage>;
-
-    /// Create `Storage` from owned dense data (1D shape, for backward compatibility).
-    fn dense_storage(data: Vec<Self>) -> Arc<Storage> {
-        let len = data.len();
-        Self::dense_storage_with_shape(data, &[len])
-    }
-}
-
-impl StorageScalar for f64 {
-    fn extract_dense_view(storage: &Storage) -> Result<&[Self], String> {
-        match storage {
-            Storage::DenseF64(ds) => Ok(ds.as_slice()),
-            Storage::StructuredF64(ds) => ds
-                .dense_col_major_view_if_contiguous()
-                .ok_or_else(|| format!("Expected contiguous dense f64 storage, got {storage:?}")),
-            _ => Err(format!("Expected DenseF64 storage, got {:?}", storage)),
-        }
-    }
-
-    fn extract_dense_cow<'a>(storage: &'a Storage) -> Result<Cow<'a, [Self]>, String> {
-        match storage {
-            Storage::DenseF64(ds) => Ok(Cow::Borrowed(ds.as_slice())),
-            Storage::StructuredF64(ds) => {
-                if let Some(view) = ds.dense_col_major_view_if_contiguous() {
-                    Ok(Cow::Borrowed(view))
-                } else if ds.is_dense() {
-                    Ok(Cow::Owned(ds.payload_col_major_vec()))
-                } else {
-                    Err(format!("Expected dense f64 storage, got {storage:?}"))
-                }
-            }
-            _ => Err(format!("Expected dense f64 storage, got {storage:?}")),
-        }
-    }
-
-    fn dense_storage_with_shape(data: Vec<Self>, dims: &[usize]) -> Arc<Storage> {
-        Arc::new(
-            Storage::from_dense_f64_col_major(data, dims)
-                .unwrap_or_else(|err| panic!("f64::dense_storage_with_shape failed: {err}")),
-        )
-    }
-}
-
-impl StorageScalar for Complex64 {
-    fn extract_dense_view(storage: &Storage) -> Result<&[Self], String> {
-        match storage {
-            Storage::DenseC64(ds) => Ok(ds.as_slice()),
-            Storage::StructuredC64(ds) => ds
-                .dense_col_major_view_if_contiguous()
-                .ok_or_else(|| format!("Expected contiguous dense c64 storage, got {storage:?}")),
-            _ => Err(format!("Expected DenseC64 storage, got {:?}", storage)),
-        }
-    }
-
-    fn extract_dense_cow<'a>(storage: &'a Storage) -> Result<Cow<'a, [Self]>, String> {
-        match storage {
-            Storage::DenseC64(ds) => Ok(Cow::Borrowed(ds.as_slice())),
-            Storage::StructuredC64(ds) => {
-                if let Some(view) = ds.dense_col_major_view_if_contiguous() {
-                    Ok(Cow::Borrowed(view))
-                } else if ds.is_dense() {
-                    Ok(Cow::Owned(ds.payload_col_major_vec()))
-                } else {
-                    Err(format!("Expected dense c64 storage, got {storage:?}"))
-                }
-            }
-            _ => Err(format!("Expected dense c64 storage, got {storage:?}")),
-        }
-    }
-
-    fn dense_storage_with_shape(data: Vec<Self>, dims: &[usize]) -> Arc<Storage> {
-        Arc::new(
-            Storage::from_dense_c64_col_major(data, dims)
-                .unwrap_or_else(|err| panic!("Complex64::dense_storage_with_shape failed: {err}")),
-        )
-    }
 }
 
 /// Add two storages element-wise.

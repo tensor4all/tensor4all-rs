@@ -49,13 +49,13 @@ mod tests {
     use super::*;
     use num_complex::Complex64;
     use tensor4all_core::index::Index;
-    use tensor4all_core::{DynIndex, StorageScalar, TensorDynLen};
+    use tensor4all_core::{DynIndex, TensorDynLen, TensorElement};
     use tensor4all_itensorlike::TensorTrain;
 
     /// Trait for scalar types used in tests.
     /// Provides generic creation and comparison capabilities.
     trait TestScalar:
-        StorageScalar + From<f64> + std::ops::Sub<Output = Self> + std::fmt::Debug
+        TensorElement + From<f64> + std::ops::Sub<Output = Self> + std::fmt::Debug
     {
         /// Get the absolute value/norm for comparison
         fn abs_diff(a: Self, b: Self) -> f64;

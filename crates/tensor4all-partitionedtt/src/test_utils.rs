@@ -7,11 +7,11 @@
 
 use num_complex::Complex64;
 use tensor4all_core::index::Index;
-use tensor4all_core::{DynIndex, StorageScalar, TensorDynLen};
+use tensor4all_core::{DynIndex, TensorDynLen, TensorElement};
 use tensor4all_itensorlike::TensorTrain;
 
 /// Trait for types that can be used as test scalars (f64 or Complex64).
-pub trait TestScalar: StorageScalar + From<f64> + Clone {
+pub trait TestScalar: TensorElement + From<f64> + Clone {
     /// Create test data for a tensor with the given size.
     fn make_test_data(size: usize) -> Vec<Self>;
 }

@@ -78,9 +78,7 @@ pub use defaults::tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor,
     unfold_split, TensorAccess, TensorDynLen,
 };
-pub use storage::{
-    make_mut_storage, mindim, Storage, StorageScalar, StructuredStorage, SumFromStorage,
-};
+pub use storage::{make_mut_storage, mindim, Storage, StructuredStorage, SumFromStorage};
 pub use tensor4all_tensorbackend::TensorElement;
 pub use tensor_like::{
     AllowedPairs, Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions,
