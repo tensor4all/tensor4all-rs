@@ -1,13 +1,12 @@
 # tensor4all-rs
 
 [![CI](https://github.com/tensor4all/tensor4all-rs/actions/workflows/CI_rs.yml/badge.svg)](https://github.com/tensor4all/tensor4all-rs/actions/workflows/CI_rs.yml)
-[![codecov](https://codecov.io/gh/tensor4all/tensor4all-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/tensor4all/tensor4all-rs)
 
-A Rust implementation of tensor networks for **vibe coding** — rapid, AI-assisted development with fast trial-and-error cycles.
+A Rust implementation of tensor networks for **AI-agentic development** — rapid, AI-assisted development with fast trial-and-error cycles.
 
 ## Design Philosophy
 
-**Vibe Coding Optimized**: tensor4all-rs is designed for rapid prototyping with AI code generation:
+**AI-Agentic Development Optimized**: tensor4all-rs is designed for rapid prototyping with AI agents and code generation:
 
 - **Modular architecture**: Independent crates with unified core (`tensor4all-core`) enable fast compilation and isolated testing
 - **ITensors.jl-like dynamic structure**: Flexible `Index` system and dynamic-rank tensors preserve the intuitive API
@@ -277,7 +276,7 @@ These checks are also enforced in CI, so ensuring they pass locally will prevent
 ## Documentation
 
 - [Index System Design](docs/INDEX_SYSTEM.md) — Overview of the index system, QSpace compatibility, and IndexLike/TensorLike design
-- [Vibe Coding Workflow](docs/vibe_coding_workflow.md) — Development workflow guidelines for rapid, AI-assisted development
+- [AI-Agentic Development Workflow](docs/vibe_coding_workflow.md) — Development workflow guidelines for rapid, AI-assisted development
 - mdBook user guide: `mdbook build docs/book` (output: `docs/book/book/`)
 
 ## References
