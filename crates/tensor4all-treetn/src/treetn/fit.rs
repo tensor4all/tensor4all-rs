@@ -739,6 +739,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::treetn::localupdate::{LocalUpdateStep, LocalUpdater};
     use tensor4all_core::{DynIndex, TensorDynLen};
 
     /// Create a simple 2-node TreeTN: A -- bond -- B
@@ -759,6 +760,31 @@ mod tests {
         TreeTN::<TensorDynLen, String>::from_tensors(
             vec![t0, t1],
             vec!["A".to_string(), "B".to_string()],
+        )
+        .unwrap()
+    }
+
+    fn make_single_node_treetn() -> TreeTN<TensorDynLen, String> {
+        let s0 = DynIndex::new_dyn(2);
+        let s1 = DynIndex::new_dyn(3);
+        let t = TensorDynLen::from_dense_f64(vec![s0, s1], vec![1.0; 6]);
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap()
+    }
+
+    fn make_three_node_treetn() -> TreeTN<TensorDynLen, String> {
+        let s0 = DynIndex::new_dyn(2);
+        let bond01 = DynIndex::new_dyn(3);
+        let s1 = DynIndex::new_dyn(2);
+        let bond12 = DynIndex::new_dyn(3);
+        let s2 = DynIndex::new_dyn(2);
+
+        let t0 = TensorDynLen::from_dense_f64(vec![s0, bond01.clone()], vec![1.0; 6]);
+        let t1 = TensorDynLen::from_dense_f64(vec![bond01, s1, bond12.clone()], vec![1.0; 18]);
+        let t2 = TensorDynLen::from_dense_f64(vec![bond12, s2], vec![1.0; 6]);
+
+        TreeTN::<TensorDynLen, String>::from_tensors(
+            vec![t0, t1, t2],
+            vec!["A".to_string(), "B".to_string(), "C".to_string()],
         )
         .unwrap()
     }
@@ -870,6 +896,42 @@ mod tests {
         assert!(env.verify_structural_consistency(&tn).is_ok());
     }
 
+    #[test]
+    fn test_fit_environment_get_or_compute_caches_leaf_environment() {
+        let tn_a = make_two_node_treetn();
+        let tn_b = make_two_node_treetn();
+        let tn_c = make_two_node_treetn();
+        let mut env = FitEnvironment::<TensorDynLen, String>::new();
+
+        let from = "A".to_string();
+        let to = "B".to_string();
+        let computed = env.get_or_compute(&from, &to, &tn_a, &tn_b, &tn_c).unwrap();
+        assert!(env.contains(&from, &to));
+        assert_eq!(env.len(), 1);
+
+        let cached = env.get_or_compute(&from, &to, &tn_a, &tn_b, &tn_c).unwrap();
+        assert_eq!(env.len(), 1);
+        assert!((&computed - &cached).maxabs() < 1e-12);
+    }
+
+    #[test]
+    fn test_fit_environment_verify_structural_consistency_detects_missing_child_env() {
+        let mut env = FitEnvironment::<TensorDynLen, String>::new();
+        let tn = make_three_node_treetn();
+
+        let s = DynIndex::new_dyn(2);
+        let t = TensorDynLen::from_dense_f64(vec![s], vec![1.0, 2.0]);
+
+        // B is non-leaf toward A, so env[(C, B)] must also exist.
+        env.insert("B".to_string(), "A".to_string(), t);
+        let err = env
+            .verify_structural_consistency(&tn)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Structural inconsistency"));
+        assert!(err.contains("C"));
+    }
+
     // ========================================================================
     // FitContractionOptions tests
     // ========================================================================
@@ -928,5 +990,78 @@ mod tests {
 
         let updater = FitUpdater::new(tn_a, tn_b, None, None).with_factorize_alg(FactorizeAlg::LU);
         assert_eq!(updater.factorize_alg, FactorizeAlg::LU);
+    }
+
+    #[test]
+    fn test_fit_updater_update_requires_two_nodes() {
+        let tn_a = make_two_node_treetn();
+        let tn_b = make_two_node_treetn();
+        let full_treetn = make_two_node_treetn();
+        let mut updater = FitUpdater::new(tn_a, tn_b, None, None);
+
+        let step = LocalUpdateStep {
+            nodes: vec!["A".to_string()],
+            new_center: "A".to_string(),
+        };
+        let err = updater
+            .update(full_treetn.clone(), &step, &full_treetn)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("requires exactly 2 nodes"));
+    }
+
+    #[test]
+    fn test_fit_updater_after_step_invalidates_cached_region() {
+        let tn_a = make_two_node_treetn();
+        let tn_b = make_two_node_treetn();
+        let full_treetn = make_two_node_treetn();
+        let mut updater = FitUpdater::new(tn_a, tn_b, None, None);
+
+        let s = DynIndex::new_dyn(2);
+        let t = TensorDynLen::from_dense_f64(vec![s], vec![1.0, 2.0]);
+        updater
+            .envs
+            .insert("A".to_string(), "B".to_string(), t.clone());
+        updater.envs.insert("B".to_string(), "A".to_string(), t);
+
+        let step = LocalUpdateStep {
+            nodes: vec!["A".to_string(), "B".to_string()],
+            new_center: "B".to_string(),
+        };
+        updater.after_step(&step, &full_treetn).unwrap();
+        assert!(updater.envs.is_empty());
+    }
+
+    #[test]
+    fn test_contract_fit_rejects_topology_mismatch() {
+        let tn_a = make_two_node_treetn();
+        let tn_b = make_single_node_treetn();
+        let err = contract_fit(
+            &tn_a,
+            &tn_b,
+            &"A".to_string(),
+            FitContractionOptions::default(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("same topology"));
+    }
+
+    #[test]
+    fn test_contract_fit_matches_naive_contraction_on_two_node_tree() {
+        let tn_a = make_two_node_treetn();
+        let tn_b = make_two_node_treetn();
+
+        let fitted = contract_fit(
+            &tn_a,
+            &tn_b,
+            &"A".to_string(),
+            FitContractionOptions::new(1).with_convergence_tol(1e-12),
+        )
+        .unwrap();
+
+        let fitted_dense = fitted.to_dense().unwrap();
+        let expected_dense = tn_a.contract_naive(&tn_b).unwrap();
+        assert!((&fitted_dense - &expected_dense).maxabs() < 1e-10);
     }
 }

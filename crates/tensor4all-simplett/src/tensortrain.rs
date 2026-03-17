@@ -79,13 +79,15 @@ impl<T: TTScalar> TensorTrain<T> {
         }
         tensors.push(first);
 
-        // Middle tensors: all ones
-        for &d in &site_dims[1..n - 1] {
-            let mut tensor = tensor3_zeros(1, d, 1);
-            for s in 0..d {
-                tensor.set3(0, s, 0, T::one());
+        // Middle tensors: all ones (only if n > 2)
+        if n > 2 {
+            for &d in &site_dims[1..n - 1] {
+                let mut tensor = tensor3_zeros(1, d, 1);
+                for s in 0..d {
+                    tensor.set3(0, s, 0, T::one());
+                }
+                tensors.push(tensor);
             }
-            tensors.push(tensor);
         }
 
         // Last tensor: multiply by value
@@ -246,6 +248,22 @@ mod tests {
         assert!(sum.abs_sq().sqrt() - 20.0 < 1e-10);
     }
 
+    fn test_tensortrain_constant_single_site_generic<T: TTScalar>() {
+        let tt = TensorTrain::<T>::constant(&[3], T::from_f64(5.0));
+        assert_eq!(tt.len(), 1);
+        assert_eq!(tt.site_dims(), vec![3]);
+
+        let sum = tt.sum();
+        assert!((sum.abs_sq().sqrt() - 15.0).abs() < 1e-10);
+
+        let (data, shape) = tt.fulltensor();
+        assert_eq!(shape, vec![3]);
+        assert_eq!(data.len(), 3);
+        for value in data {
+            assert!((value - T::from_f64(5.0)).abs_sq().sqrt() < 1e-10);
+        }
+    }
+
     fn test_tensortrain_evaluate_generic<T: TTScalar>() {
         // Create a simple tensor train that returns the product of indices + 1
         let _site_dims = [2, 3];
@@ -400,6 +418,11 @@ mod tests {
     }
 
     #[test]
+    fn test_tensortrain_constant_single_site_f64() {
+        test_tensortrain_constant_single_site_generic::<f64>();
+    }
+
+    #[test]
     fn test_tensortrain_evaluate_f64() {
         test_tensortrain_evaluate_generic::<f64>();
     }
@@ -448,6 +471,11 @@ mod tests {
     #[test]
     fn test_tensortrain_constant_c64() {
         test_tensortrain_constant_generic::<Complex64>();
+    }
+
+    #[test]
+    fn test_tensortrain_constant_single_site_c64() {
+        test_tensortrain_constant_single_site_generic::<Complex64>();
     }
 
     #[test]
