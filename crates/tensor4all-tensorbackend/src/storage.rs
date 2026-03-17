@@ -32,16 +32,15 @@ pub(crate) trait DenseScalar:
 impl DenseScalar for f64 {}
 impl DenseScalar for Complex64 {}
 
-/// Dense storage for tensor elements, wrapping mdarray's Tensor with dynamic rank.
+/// Legacy dense kernel storage backed by mdarray's Tensor with dynamic rank.
 ///
-/// This type provides shape-aware storage using `Tensor<T, DynRank>` internally.
-/// Shape information is stored within the tensor, eliminating the need to pass
-/// dimensions separately to operations like `permute` and `contract`.
+/// This internal type keeps row-major physical kernels alive while higher-level
+/// callers move to `StructuredStorage`.
 #[derive(Debug, Clone)]
 pub(crate) struct DenseStorage<T>(Tensor<T, DynRank>);
 
 impl<T> DenseStorage<T> {
-    /// Create a new DenseStorage from a Vec with explicit shape.
+    /// Create a new legacy dense kernel storage from a Vec with explicit shape.
     ///
     /// # Panics
     /// Panics if the product of dims doesn't match vec.len().
@@ -1593,8 +1592,8 @@ impl Storage {
 
     /// Permute the storage data according to the given permutation.
     ///
-    /// For DenseStorage, uses internal shape information.
-    /// The `dims` parameter is ignored for Dense (kept for DiagStorage compatibility).
+    /// Legacy dense kernels use their internal physical shape directly. The
+    /// `dims` parameter remains for diagonal payload compatibility.
     pub fn permute_storage(&self, _dims: &[usize], perm: &[usize]) -> Storage {
         match &self.0 {
             StorageRepr::DenseF64(v) => Storage::dense_f64_legacy(v.permute(perm)),
@@ -2137,7 +2136,7 @@ pub fn contract_storage(
     }
 
     match (&storage_a.0, &storage_b.0) {
-        // Same type cases: DenseStorage has internal shape, use dense contraction.
+        // Same-type legacy dense kernels carry their physical shape internally.
         (StorageRepr::DenseF64(a), StorageRepr::DenseF64(b)) => {
             Storage::dense_f64_legacy(a.contract(axes_a, b, axes_b))
         }
@@ -2494,7 +2493,7 @@ mod tests {
         }
     }
 
-    // ===== DiagStorage<T> generic tests =====
+    // ===== Legacy diagonal kernel generic tests =====
 
     #[test]
     fn test_diag_storage_generic_f64() {
@@ -2856,7 +2855,7 @@ mod tests {
         assert!(diag_c64.is_complex());
     }
 
-    // ===== DenseStorage basic operations tests =====
+    // ===== Legacy dense kernel tests =====
 
     #[test]
     fn test_dense_from_scalar() {
@@ -3018,7 +3017,7 @@ mod tests {
         assert_eq!(ds.len(), 4);
     }
 
-    // ===== DiagStorage additional tests =====
+    // ===== Legacy diagonal kernel tests =====
 
     #[test]
     fn test_diag_as_slice_as_mut_slice() {
