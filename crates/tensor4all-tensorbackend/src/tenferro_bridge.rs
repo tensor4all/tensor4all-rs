@@ -15,8 +15,9 @@ use tenferro_device::LogicalMemorySpace;
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
 
-use crate::layout::{dense_linear_multi_index, storage_strides};
-use crate::storage::{col_major_strides, Storage, StorageRepr, StructuredStorage};
+#[cfg(test)]
+use crate::storage::StorageRepr;
+use crate::storage::{col_major_strides, NativePayload, Storage, StructuredStorage};
 use crate::tensor_element::TensorElement;
 use crate::AnyScalar;
 
@@ -75,33 +76,6 @@ fn retry_with_default_runtime_if_needed<R>(
     }
 }
 
-fn legacy_row_major_to_col_major<T: Clone>(data: &[T], dims: &[usize]) -> Result<Vec<T>> {
-    let total_len: usize = dims.iter().product();
-    anyhow::ensure!(
-        data.len() == total_len,
-        "legacy row-major payload length {} does not match dims {:?} (expected {})",
-        data.len(),
-        dims,
-        total_len
-    );
-    if total_len == 0 {
-        return Ok(Vec::new());
-    }
-
-    let row_major_strides = storage_strides(dims);
-    let mut out = Vec::with_capacity(total_len);
-    for linear in 0..total_len {
-        let index = dense_linear_multi_index(dims, linear)?;
-        let offset: usize = index
-            .iter()
-            .zip(row_major_strides.iter())
-            .map(|(&coord, &stride)| coord * stride)
-            .sum();
-        out.push(data[offset].clone());
-    }
-    Ok(out)
-}
-
 /// Run a typed tenferro op against the currently selected runtime.
 pub fn with_tenferro_ctx<R>(
     op: &'static str,
@@ -142,129 +116,33 @@ pub(crate) fn with_default_runtime<R>(
     }
 }
 
-fn typed_f64_from_storage(storage: &Storage, logical_dims: &[usize]) -> Result<TypedTensor<f64>> {
-    match storage.repr() {
-        StorageRepr::DenseF64(ds) => {
-            let logical_len: usize = logical_dims.iter().product();
-            if logical_len != ds.len() {
-                return Err(anyhow!(
-                    "logical dims {:?} (len={}) do not match dense f64 storage len {}",
-                    logical_dims,
-                    logical_len,
-                    ds.len()
-                ));
-            }
-            let col_major = legacy_row_major_to_col_major(ds.as_slice(), logical_dims)?;
-            TypedTensor::from_slice(&col_major, logical_dims, MemoryOrder::ColumnMajor)
-                .map_err(|e| anyhow!("failed to build f64 tensor from storage: {e}"))
-        }
-        StorageRepr::DiagF64(ds) => {
-            TypedTensor::from_slice(ds.as_slice(), &[ds.len()], MemoryOrder::ColumnMajor)
-                .map_err(|e| anyhow!("failed to build f64 diagonal payload from storage: {e}"))
-        }
-        StorageRepr::StructuredF64(ds) => {
-            anyhow::ensure!(
-                ds.logical_dims() == logical_dims,
-                "logical dims {:?} do not match structured f64 storage logical dims {:?}",
-                logical_dims,
-                ds.logical_dims()
-            );
-            TypedTensor::from_slice(
-                &ds.payload_col_major_vec(),
-                ds.payload_dims(),
-                MemoryOrder::ColumnMajor,
-            )
-            .map_err(|e| anyhow!("failed to build structured f64 tensor from storage: {e}"))
-        }
-        StorageRepr::DenseC64(_) | StorageRepr::DiagC64(_) => Err(anyhow!(
-            "complex storage cannot be converted to f64 tenferro tensor"
-        )),
-        StorageRepr::StructuredC64(_) => Err(anyhow!(
-            "complex structured storage cannot be converted to f64 tenferro tensor"
-        )),
+fn native_tensor_from_f64_payload(payload: NativePayload<f64>) -> Result<NativeTensor> {
+    let typed = TypedTensor::from_slice(
+        &payload.data,
+        &payload.payload_dims,
+        MemoryOrder::ColumnMajor,
+    )
+    .map_err(|e| anyhow!("failed to build f64 tensor from storage payload: {e}"))?;
+    let native = NativeTensor::from_tensor(typed);
+    match payload.axis_classes {
+        Some(axis_classes) => NativeTensor::with_axis_classes(native, &axis_classes)
+            .map_err(|e| anyhow!("failed to build structured f64 tensor from storage: {e}")),
+        None => Ok(native),
     }
 }
 
-fn typed_c64_from_storage(
-    storage: &Storage,
-    logical_dims: &[usize],
-) -> Result<TypedTensor<Complex64>> {
-    match storage.repr() {
-        StorageRepr::DenseC64(ds) => {
-            let logical_len: usize = logical_dims.iter().product();
-            if logical_len != ds.len() {
-                return Err(anyhow!(
-                    "logical dims {:?} (len={}) do not match dense c64 storage len {}",
-                    logical_dims,
-                    logical_len,
-                    ds.len()
-                ));
-            }
-            let col_major = legacy_row_major_to_col_major(ds.as_slice(), logical_dims)?;
-            TypedTensor::from_slice(&col_major, logical_dims, MemoryOrder::ColumnMajor)
-                .map_err(|e| anyhow!("failed to build c64 tensor from storage: {e}"))
-        }
-        StorageRepr::DiagC64(ds) => {
-            TypedTensor::from_slice(ds.as_slice(), &[ds.len()], MemoryOrder::ColumnMajor)
-                .map_err(|e| anyhow!("failed to build c64 diagonal payload from storage: {e}"))
-        }
-        StorageRepr::DenseF64(ds) => {
-            let logical_len: usize = logical_dims.iter().product();
-            if logical_len != ds.len() {
-                return Err(anyhow!(
-                    "logical dims {:?} (len={}) do not match dense f64 storage len {} for promotion",
-                    logical_dims,
-                    logical_len,
-                    ds.len()
-                ));
-            }
-            let promoted: Vec<Complex64> =
-                legacy_row_major_to_col_major(ds.as_slice(), logical_dims)?
-                    .into_iter()
-                    .map(|value| Complex64::new(value, 0.0))
-                    .collect();
-            TypedTensor::from_slice(&promoted, logical_dims, MemoryOrder::ColumnMajor)
-                .map_err(|e| anyhow!("failed to promote dense f64 tensor to c64: {e}"))
-        }
-        StorageRepr::DiagF64(ds) => {
-            let promoted: Vec<Complex64> = ds
-                .as_slice()
-                .iter()
-                .copied()
-                .map(|value| Complex64::new(value, 0.0))
-                .collect();
-            TypedTensor::from_slice(&promoted, &[ds.len()], MemoryOrder::ColumnMajor)
-                .map_err(|e| anyhow!("failed to promote diag f64 tensor to c64: {e}"))
-        }
-        StorageRepr::StructuredC64(ds) => {
-            anyhow::ensure!(
-                ds.logical_dims() == logical_dims,
-                "logical dims {:?} do not match structured c64 storage logical dims {:?}",
-                logical_dims,
-                ds.logical_dims()
-            );
-            TypedTensor::from_slice(
-                &ds.payload_col_major_vec(),
-                ds.payload_dims(),
-                MemoryOrder::ColumnMajor,
-            )
-            .map_err(|e| anyhow!("failed to build structured c64 tensor from storage: {e}"))
-        }
-        StorageRepr::StructuredF64(ds) => {
-            anyhow::ensure!(
-                ds.logical_dims() == logical_dims,
-                "logical dims {:?} do not match structured f64 storage logical dims {:?} for promotion",
-                logical_dims,
-                ds.logical_dims()
-            );
-            let promoted: Vec<Complex64> = ds
-                .payload_col_major_vec()
-                .into_iter()
-                .map(|value| Complex64::new(value, 0.0))
-                .collect();
-            TypedTensor::from_slice(&promoted, ds.payload_dims(), MemoryOrder::ColumnMajor)
-                .map_err(|e| anyhow!("failed to promote structured f64 tensor to c64: {e}"))
-        }
+fn native_tensor_from_c64_payload(payload: NativePayload<Complex64>) -> Result<NativeTensor> {
+    let typed = TypedTensor::from_slice(
+        &payload.data,
+        &payload.payload_dims,
+        MemoryOrder::ColumnMajor,
+    )
+    .map_err(|e| anyhow!("failed to build c64 tensor from storage payload: {e}"))?;
+    let native = NativeTensor::from_tensor(typed);
+    match payload.axis_classes {
+        Some(axis_classes) => NativeTensor::with_axis_classes(native, &axis_classes)
+            .map_err(|e| anyhow!("failed to build structured c64 tensor from storage: {e}")),
+        None => Ok(native),
     }
 }
 
@@ -476,45 +354,10 @@ fn build_binary_einsum_ids(
 
 /// Convert legacy [`Storage`] into a primal-mode [`tenferro::Tensor`].
 pub fn storage_to_native_tensor(storage: &Storage, logical_dims: &[usize]) -> Result<NativeTensor> {
-    match storage.repr() {
-        StorageRepr::DenseF64(_) => Ok(NativeTensor::from_tensor(typed_f64_from_storage(
-            storage,
-            logical_dims,
-        )?)),
-        StorageRepr::DiagF64(_) => {
-            let payload = NativeTensor::from_tensor(typed_f64_from_storage(storage, logical_dims)?);
-            payload
-                .diag_embed(logical_dims.len())
-                .map_err(|e| anyhow!("failed to build f64 diag tensor from storage: {e}"))
-        }
-        StorageRepr::DenseC64(_) | StorageRepr::DiagC64(_) => {
-            let payload = NativeTensor::from_tensor(typed_c64_from_storage(storage, logical_dims)?);
-            if storage.is_diag() {
-                payload
-                    .diag_embed(logical_dims.len())
-                    .map_err(|e| anyhow!("failed to build c64 diag tensor from storage: {e}"))
-            } else {
-                Ok(payload)
-            }
-        }
-        StorageRepr::StructuredF64(value) => {
-            let payload = NativeTensor::from_tensor(typed_f64_from_storage(storage, logical_dims)?);
-            if value.is_dense() {
-                Ok(payload)
-            } else {
-                NativeTensor::with_axis_classes(payload, value.axis_classes())
-                    .map_err(|e| anyhow!("failed to build structured f64 tensor from storage: {e}"))
-            }
-        }
-        StorageRepr::StructuredC64(value) => {
-            let payload = NativeTensor::from_tensor(typed_c64_from_storage(storage, logical_dims)?);
-            if value.is_dense() {
-                Ok(payload)
-            } else {
-                NativeTensor::with_axis_classes(payload, value.axis_classes())
-                    .map_err(|e| anyhow!("failed to build structured c64 tensor from storage: {e}"))
-            }
-        }
+    if storage.is_c64() {
+        native_tensor_from_c64_payload(storage.native_payload_c64(logical_dims)?)
+    } else {
+        native_tensor_from_f64_payload(storage.native_payload_f64(logical_dims)?)
     }
 }
 

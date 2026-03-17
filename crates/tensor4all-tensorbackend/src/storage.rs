@@ -1053,6 +1053,13 @@ fn contract_dense_diag_impl<T: DenseScalar>(
 pub struct Storage(pub(crate) StorageRepr);
 
 #[derive(Debug, Clone)]
+pub(crate) struct NativePayload<T> {
+    pub(crate) data: Vec<T>,
+    pub(crate) payload_dims: Vec<usize>,
+    pub(crate) axis_classes: Option<Vec<usize>>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum StorageRepr {
     /// Dense storage with f64 elements.
     #[doc(hidden)]
@@ -1114,6 +1121,7 @@ impl Storage {
         Self(repr)
     }
 
+    #[cfg(test)]
     pub(crate) fn repr(&self) -> &StorageRepr {
         &self.0
     }
@@ -1152,6 +1160,147 @@ impl Storage {
             expected_len
         );
         Ok(())
+    }
+
+    fn validate_diag_dims(payload_len: usize, logical_dims: &[usize], label: &str) -> Result<()> {
+        ensure!(
+            logical_dims.iter().all(|&dim| dim == payload_len),
+            "{label} payload len {payload_len} does not match logical dims {:?}",
+            logical_dims
+        );
+        Ok(())
+    }
+
+    pub(crate) fn native_payload_f64(&self, logical_dims: &[usize]) -> Result<NativePayload<f64>> {
+        match &self.0 {
+            StorageRepr::DenseF64(value) => {
+                Self::validate_dense_len(value.as_slice(), logical_dims, "dense f64 payload")?;
+                Ok(NativePayload {
+                    data: row_major_to_col_major_values(value.as_slice(), logical_dims),
+                    payload_dims: logical_dims.to_vec(),
+                    axis_classes: None,
+                })
+            }
+            StorageRepr::DiagF64(value) => {
+                Self::validate_diag_dims(value.len(), logical_dims, "diag f64")?;
+                Ok(NativePayload {
+                    data: value.as_slice().to_vec(),
+                    payload_dims: vec![value.len()],
+                    axis_classes: Some(vec![0; logical_dims.len()]),
+                })
+            }
+            StorageRepr::StructuredF64(value) => {
+                ensure!(
+                    value.logical_dims() == logical_dims,
+                    "logical dims {:?} do not match structured f64 logical dims {:?}",
+                    logical_dims,
+                    value.logical_dims()
+                );
+                let axis_classes = if value.is_dense() {
+                    None
+                } else {
+                    Some(value.axis_classes().to_vec())
+                };
+                Ok(NativePayload {
+                    data: value.payload_col_major_vec(),
+                    payload_dims: value.payload_dims().to_vec(),
+                    axis_classes,
+                })
+            }
+            StorageRepr::DenseC64(_) | StorageRepr::DiagC64(_) | StorageRepr::StructuredC64(_) => {
+                Err(anyhow!(
+                    "complex storage cannot be converted to f64 native payload"
+                ))
+            }
+        }
+    }
+
+    pub(crate) fn native_payload_c64(
+        &self,
+        logical_dims: &[usize],
+    ) -> Result<NativePayload<Complex64>> {
+        match &self.0 {
+            StorageRepr::DenseC64(value) => {
+                Self::validate_dense_len(value.as_slice(), logical_dims, "dense c64 payload")?;
+                Ok(NativePayload {
+                    data: row_major_to_col_major_values(value.as_slice(), logical_dims),
+                    payload_dims: logical_dims.to_vec(),
+                    axis_classes: None,
+                })
+            }
+            StorageRepr::DiagC64(value) => {
+                Self::validate_diag_dims(value.len(), logical_dims, "diag c64")?;
+                Ok(NativePayload {
+                    data: value.as_slice().to_vec(),
+                    payload_dims: vec![value.len()],
+                    axis_classes: Some(vec![0; logical_dims.len()]),
+                })
+            }
+            StorageRepr::DenseF64(value) => {
+                Self::validate_dense_len(value.as_slice(), logical_dims, "dense f64 payload")?;
+                Ok(NativePayload {
+                    data: row_major_to_col_major_values(value.as_slice(), logical_dims)
+                        .into_iter()
+                        .map(|entry| Complex64::new(entry, 0.0))
+                        .collect(),
+                    payload_dims: logical_dims.to_vec(),
+                    axis_classes: None,
+                })
+            }
+            StorageRepr::DiagF64(value) => {
+                Self::validate_diag_dims(value.len(), logical_dims, "diag f64")?;
+                Ok(NativePayload {
+                    data: value
+                        .as_slice()
+                        .iter()
+                        .copied()
+                        .map(|entry| Complex64::new(entry, 0.0))
+                        .collect(),
+                    payload_dims: vec![value.len()],
+                    axis_classes: Some(vec![0; logical_dims.len()]),
+                })
+            }
+            StorageRepr::StructuredC64(value) => {
+                ensure!(
+                    value.logical_dims() == logical_dims,
+                    "logical dims {:?} do not match structured c64 logical dims {:?}",
+                    logical_dims,
+                    value.logical_dims()
+                );
+                let axis_classes = if value.is_dense() {
+                    None
+                } else {
+                    Some(value.axis_classes().to_vec())
+                };
+                Ok(NativePayload {
+                    data: value.payload_col_major_vec(),
+                    payload_dims: value.payload_dims().to_vec(),
+                    axis_classes,
+                })
+            }
+            StorageRepr::StructuredF64(value) => {
+                ensure!(
+                    value.logical_dims() == logical_dims,
+                    "logical dims {:?} do not match structured f64 logical dims {:?} for promotion",
+                    logical_dims,
+                    value.logical_dims()
+                );
+                let axis_classes = if value.is_dense() {
+                    None
+                } else {
+                    Some(value.axis_classes().to_vec())
+                };
+                Ok(NativePayload {
+                    data: value
+                        .payload_col_major_vec()
+                        .into_iter()
+                        .map(|entry| Complex64::new(entry, 0.0))
+                        .collect(),
+                    payload_dims: value.payload_dims().to_vec(),
+                    axis_classes,
+                })
+            }
+        }
     }
 
     /// Create a new 1D zero-initialized DenseF64 storage with the given size.

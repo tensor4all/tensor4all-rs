@@ -15,7 +15,6 @@
 mod any_scalar;
 /// Backend dispatch for SVD and QR operations.
 mod backend;
-pub(crate) mod layout;
 /// Tensor snapshot storage types and low-level dense/diagonal kernels.
 mod storage;
 pub(crate) mod tenferro_bridge;
