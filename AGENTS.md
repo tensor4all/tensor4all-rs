@@ -64,6 +64,7 @@ cargo nextest run --release -p crate_name        # Single crate
 - Integration tests: `tests/` directory
 - Dense whole-result comparisons: avoid per-element re-contraction loops in tests. Materialize once to a dense tensor/matrix, then compare via tensor subtraction and `maxabs()`. `TensorDynLen` subtraction aligns indices by index semantics, so explicit axis reordering is usually unnecessary.
 - **Test tolerance changes**: When relaxing test tolerances (unit tests, codecov targets, etc.), always seek explicit user approval before making changes.
+- **Dense whole-result comparisons**: When comparing full tensors/operators in tests, do not recompute contractions element-by-element. Materialize once to a dense tensor/matrix, then compare via tensor subtraction and `maxabs()`. `TensorDynLen` subtraction aligns indices by index semantics, so explicit axis reordering is usually unnecessary.
 
 ## API Design
 
