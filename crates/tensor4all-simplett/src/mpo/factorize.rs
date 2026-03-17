@@ -9,7 +9,7 @@ use num_complex::{Complex64, ComplexFloat};
 use tenferro_algebra::Scalar as TfScalar;
 use tenferro_linalg::LinalgScalar;
 use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
-use tensor4all_tensorbackend::backend::svd_backend;
+use tensor4all_tensorbackend::{svd_backend, BackendLinalgScalar};
 
 /// Factorization method to use
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -70,13 +70,7 @@ pub struct FactorizeResult<T> {
 
 /// Trait bounds for SVD-compatible scalars
 pub trait SVDScalar:
-    crate::traits::TTScalar
-    + ComplexFloat
-    + Default
-    + Copy
-    + tensor4all_tensorbackend::backend::BackendLinalgScalar
-    + TfScalar
-    + 'static
+    crate::traits::TTScalar + ComplexFloat + Default + Copy + BackendLinalgScalar + TfScalar + 'static
 {
     /// Convert a backend singular value into `f64` for truncation logic.
     fn linalg_real_to_f64(real: <Self as LinalgScalar>::Real) -> f64;

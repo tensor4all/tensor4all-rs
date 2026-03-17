@@ -12,17 +12,18 @@
 //! - `backend-tenferro` (default): Use tenferro backend for linalg/einsum
 
 /// Dynamic scalar types supporting f64 and Complex64.
-pub mod any_scalar;
+mod any_scalar;
 /// Backend dispatch for SVD and QR operations.
-pub mod backend;
+mod backend;
 pub(crate) mod layout;
 /// Tensor snapshot storage types and low-level dense/diagonal kernels.
-pub mod storage;
+mod storage;
 pub(crate) mod tenferro_bridge;
 /// Supported public tensor element types and native constructor hooks.
-pub mod tensor_element;
+mod tensor_element;
 
 pub use any_scalar::AnyScalar;
+pub use backend::{qr_backend, svd_backend, BackendLinalgScalar, SvdResult};
 pub use storage::{
     contract_storage, make_mut_storage, mindim, DenseScalar, Storage, StructuredStorage,
     SumFromStorage,

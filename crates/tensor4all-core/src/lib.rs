@@ -57,8 +57,16 @@ pub use smallstring::{SmallChar, SmallString, SmallStringError};
 pub use tagset::{Tag, TagSetError, TagSetLike};
 
 // Tensor (storage, tensor types) - re-exported from tensor4all-tensorbackend
-pub use tensor4all_tensorbackend::any_scalar;
-pub use tensor4all_tensorbackend::storage;
+pub mod any_scalar {
+    //! Re-export of dynamic scalar utilities.
+    pub use tensor4all_tensorbackend::AnyScalar;
+}
+pub mod storage {
+    //! Re-export of snapshot storage utilities.
+    pub use tensor4all_tensorbackend::{
+        make_mut_storage, mindim, AnyScalar, Storage, StructuredStorage, SumFromStorage,
+    };
+}
 pub mod tensor_index;
 pub mod tensor_like;
 

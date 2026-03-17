@@ -351,16 +351,9 @@ fn create_diagonal_mpo(
     // Bond index for MPO (dimension 1 for diagonal/identity-like operators)
     let b01 = DynIndex::new_dyn(1);
 
-    // Diagonal tensor at site 0: [s0_out, s0_in, b01] shape (2, 2, 1)
-    // Uses DiagStorage: the diagonal is over (s0_out, s0_in) with value diag_values[0]
-    // For DiagStorage, we need all indices to have the same dimension
-    // But here we have shape (2, 2, 1) which won't work directly with DiagStorage.
-    //
-    // Alternative: We can represent this as a dense tensor since the bond dim is 1.
-    // The tensor is: T[s_out, s_in, b] = diag_value * delta(s_out, s_in) for b=0
-    //
-    // For a proper DiagStorage approach, we'd need a different tensor structure.
-    // For now, let's use the efficient representation with explicit diagonal values.
+    // Site 0 acts diagonally on the physical legs, but the bond dimension-1 axis keeps the
+    // logical shape at `(phys_dim, phys_dim, 1)`, so a structured diagonal snapshot would not
+    // match the intended tensor directly. Materialize the dense tensor explicitly instead.
     let mut data0 = vec![0.0; phys_dim * phys_dim];
     for i in 0..phys_dim {
         data0[i * phys_dim + i] = diag_values[0];
