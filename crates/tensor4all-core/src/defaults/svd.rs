@@ -9,8 +9,9 @@ use crate::truncation::{HasTruncationParams, TruncationParams};
 use crate::{unfold_split, TensorDynLen};
 use num_complex::Complex64;
 use tensor4all_tensorbackend::{
-    native_tensor_primal_to_dense_c64, native_tensor_primal_to_dense_f64,
-    reshape_row_major_native_tensor, svd_native_tensor,
+    native_tensor_primal_to_dense_c64_row_major_temp,
+    native_tensor_primal_to_dense_f64_row_major_temp, reshape_row_major_native_tensor_temp,
+    svd_native_tensor,
 };
 use thiserror::Error;
 
@@ -123,10 +124,9 @@ fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
 
 fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, SvdError> {
     match tensor.scalar_type() {
-        tenferro::ScalarType::F64 => {
-            native_tensor_primal_to_dense_f64(tensor).map_err(SvdError::ComputationError)
-        }
-        tenferro::ScalarType::C64 => native_tensor_primal_to_dense_c64(tensor)
+        tenferro::ScalarType::F64 => native_tensor_primal_to_dense_f64_row_major_temp(tensor)
+            .map_err(SvdError::ComputationError),
+        tenferro::ScalarType::C64 => native_tensor_primal_to_dense_c64_row_major_temp(tensor)
             .map(|values| values.into_iter().map(|value| value.re).collect())
             .map_err(SvdError::ComputationError),
         other => Err(SvdError::ComputationError(anyhow::anyhow!(
@@ -190,7 +190,7 @@ pub fn svd_with<T>(
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
     let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
-    let u_reshaped = reshape_row_major_native_tensor(&u_native, &u_dims).map_err(|e| {
+    let u_reshaped = reshape_row_major_native_tensor_temp(&u_native, &u_dims).map_err(|e| {
         SvdError::ComputationError(anyhow::anyhow!("native SVD U reshape failed: {e}"))
     })?;
     let u = TensorDynLen::from_native(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
@@ -204,7 +204,7 @@ pub fn svd_with<T>(
     let mut vh_indices = vec![bond_index.clone()];
     vh_indices.extend(right_indices);
     let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
-    let vt_reshaped = reshape_row_major_native_tensor(&vt_native, &vh_dims).map_err(|e| {
+    let vt_reshaped = reshape_row_major_native_tensor_temp(&vt_native, &vh_dims).map_err(|e| {
         SvdError::ComputationError(anyhow::anyhow!("native SVD V^T reshape failed: {e}"))
     })?;
     let vh =

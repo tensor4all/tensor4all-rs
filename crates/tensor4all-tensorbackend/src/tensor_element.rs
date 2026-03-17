@@ -8,10 +8,20 @@ use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
 /// Public scalar element types supported by tensor4all dense/diag constructors.
 pub trait TensorElement: Copy + Send + Sync + 'static {
     /// Build a native tensor from row-major dense data.
-    fn dense_native_tensor_from_row_major(data: &[Self], dims: &[usize]) -> Result<NativeTensor>;
+    ///
+    /// This is a temporary low-level bridge helper. High-level tensor4all APIs
+    /// use column-major semantics and must convert explicitly at the boundary.
+    fn dense_native_tensor_from_row_major_temp(
+        data: &[Self],
+        dims: &[usize],
+    ) -> Result<NativeTensor>;
 
     /// Build a native diagonal tensor from row-major diagonal payload data.
-    fn diag_native_tensor_from_row_major(
+    ///
+    /// This is a temporary low-level bridge helper. Diagonal payloads are 1D,
+    /// but the name remains explicit because callers typically pair it with
+    /// row-major dense bridge logic.
+    fn diag_native_tensor_from_row_major_temp(
         data: &[Self],
         logical_rank: usize,
     ) -> Result<NativeTensor>;
@@ -20,10 +30,13 @@ pub trait TensorElement: Copy + Send + Sync + 'static {
     fn scalar_native_tensor(value: Self) -> Result<NativeTensor>;
 
     /// Materialize dense row-major primal values from a native tensor.
-    fn dense_values_from_native(tensor: &NativeTensor) -> Result<Vec<Self>>;
+    ///
+    /// This is a temporary low-level bridge helper. High-level tensor4all APIs
+    /// convert these values to column-major before exposing them publicly.
+    fn dense_values_from_native_row_major_temp(tensor: &NativeTensor) -> Result<Vec<Self>>;
 
     /// Materialize diagonal payload values from a native diagonal tensor.
-    fn diag_values_from_native(tensor: &NativeTensor) -> Result<Vec<Self>>;
+    fn diag_values_from_native_temp(tensor: &NativeTensor) -> Result<Vec<Self>>;
 }
 
 fn materialize_typed_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
@@ -57,7 +70,7 @@ where
 macro_rules! impl_tensor_element {
     ($ty:ty, $variant:ident, $payload:ident) => {
         impl TensorElement for $ty {
-            fn dense_native_tensor_from_row_major(
+            fn dense_native_tensor_from_row_major_temp(
                 data: &[Self],
                 dims: &[usize],
             ) -> Result<NativeTensor> {
@@ -66,7 +79,7 @@ macro_rules! impl_tensor_element {
                 Ok(NativeTensor::from_tensor(typed))
             }
 
-            fn diag_native_tensor_from_row_major(
+            fn diag_native_tensor_from_row_major_temp(
                 data: &[Self],
                 logical_rank: usize,
             ) -> Result<NativeTensor> {
@@ -91,7 +104,7 @@ macro_rules! impl_tensor_element {
                 Ok(NativeTensor::from_tensor(typed))
             }
 
-            fn dense_values_from_native(tensor: &NativeTensor) -> Result<Vec<Self>> {
+            fn dense_values_from_native_row_major_temp(tensor: &NativeTensor) -> Result<Vec<Self>> {
                 let snap = tensor.primal_snapshot();
                 let dense = if snap.is_dense() {
                     snap
@@ -111,7 +124,7 @@ macro_rules! impl_tensor_element {
                 }
             }
 
-            fn diag_values_from_native(tensor: &NativeTensor) -> Result<Vec<Self>> {
+            fn diag_values_from_native_temp(tensor: &NativeTensor) -> Result<Vec<Self>> {
                 let snap = tensor.primal_snapshot();
                 anyhow::ensure!(snap.is_diag(), "expected diagonal native tensor snapshot");
                 match snap {

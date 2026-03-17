@@ -11,11 +11,11 @@ use std::sync::Arc;
 use tenferro::{AdMode, ScalarType as NativeScalarType, Tensor as NativeTensor};
 use tensor4all_tensorbackend::{
     axpby_native_tensor, conj_native_tensor, contract_native_tensor,
-    dense_native_tensor_from_row_major, diag_native_tensor_from_row_major,
-    native_tensor_primal_to_dense_c64, native_tensor_primal_to_dense_f64,
-    native_tensor_primal_to_storage, outer_product_native_tensor, permute_native_tensor,
-    reshape_row_major_native_tensor, scale_native_tensor, storage_to_native_tensor,
-    sum_native_tensor, TensorElement,
+    dense_native_tensor_from_row_major_temp, diag_native_tensor_from_row_major_temp,
+    native_tensor_primal_to_dense_c64_row_major_temp,
+    native_tensor_primal_to_dense_f64_row_major_temp, native_tensor_primal_to_storage,
+    outer_product_native_tensor, permute_native_tensor, reshape_row_major_native_tensor_temp,
+    scale_native_tensor, storage_to_native_tensor, sum_native_tensor, TensorElement,
 };
 
 /// Compute the permutation array from original indices to new indices.
@@ -1382,7 +1382,7 @@ pub fn unfold_split(
     let m: usize = unfolded_dims[..left_len].iter().product();
     let n: usize = unfolded_dims[left_len..].iter().product();
 
-    let matrix_tensor = reshape_row_major_native_tensor(unfolded.as_native(), &[m, n])?;
+    let matrix_tensor = reshape_row_major_native_tensor_temp(unfolded.as_native(), &[m, n])?;
 
     Ok((
         matrix_tensor,
@@ -1553,7 +1553,7 @@ impl TensorLike for TensorDynLen {
         let total_size = checked_total_size(&dims)?;
         let mut data = vec![0.0_f64; total_size];
 
-        let offset = row_major_offset(&dims, &vals)?;
+        let offset = column_major_offset(&dims, &vals)?;
         data[offset] = 1.0;
 
         Self::from_dense(indices, data)
@@ -1609,6 +1609,100 @@ fn row_major_offset(dims: &[usize], vals: &[usize]) -> Result<usize> {
     Ok(offset)
 }
 
+fn column_major_offset(dims: &[usize], vals: &[usize]) -> Result<usize> {
+    if dims.len() != vals.len() {
+        return Err(anyhow::anyhow!(
+            "column_major_offset: dims.len() != vals.len()"
+        ));
+    }
+    checked_total_size(dims)?;
+
+    let mut offset = 0usize;
+    let mut stride = 1usize;
+    for (k, (&v, &d)) in vals.iter().zip(dims.iter()).enumerate() {
+        if d == 0 {
+            return Err(anyhow::anyhow!("invalid dimension 0 at position {}", k));
+        }
+        if v >= d {
+            return Err(anyhow::anyhow!(
+                "column_major_offset: value {} at position {} is >= dimension {}",
+                v,
+                k,
+                d
+            ));
+        }
+        let term = v
+            .checked_mul(stride)
+            .ok_or_else(|| anyhow::anyhow!("column_major_offset: overflow"))?;
+        offset = offset
+            .checked_add(term)
+            .ok_or_else(|| anyhow::anyhow!("column_major_offset: overflow"))?;
+        stride = stride
+            .checked_mul(d)
+            .ok_or_else(|| anyhow::anyhow!("column_major_offset: overflow"))?;
+    }
+    Ok(offset)
+}
+
+fn coords_from_column_major_offset(dims: &[usize], mut offset: usize) -> Result<Vec<usize>> {
+    let total_size = checked_total_size(dims)?;
+    anyhow::ensure!(
+        offset < total_size,
+        "column-major offset {offset} is out of bounds for dims {dims:?}"
+    );
+
+    let mut coords = Vec::with_capacity(dims.len());
+    for &d in dims {
+        coords.push(offset % d);
+        offset /= d;
+    }
+    Ok(coords)
+}
+
+fn linearized_column_major_to_row_major<T: Copy>(data: &[T], dims: &[usize]) -> Result<Vec<T>> {
+    let total_size = checked_total_size(dims)?;
+    anyhow::ensure!(
+        data.len() == total_size,
+        "column-major payload length {} does not match dims {:?} (expected {})",
+        data.len(),
+        dims,
+        total_size
+    );
+    if data.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut out = vec![data[0]; total_size];
+    for (src_offset, &value) in data.iter().enumerate() {
+        let coords = coords_from_column_major_offset(dims, src_offset)?;
+        let dst_offset = row_major_offset(dims, &coords)?;
+        out[dst_offset] = value;
+    }
+    Ok(out)
+}
+
+fn linearized_row_major_to_column_major<T: Copy>(data: &[T], dims: &[usize]) -> Result<Vec<T>> {
+    let total_size = checked_total_size(dims)?;
+    anyhow::ensure!(
+        data.len() == total_size,
+        "row-major payload length {} does not match dims {:?} (expected {})",
+        data.len(),
+        dims,
+        total_size
+    );
+    if data.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut out = vec![data[0]; total_size];
+    for (dst_offset, slot) in out.iter_mut().enumerate().take(total_size) {
+        let coords = coords_from_column_major_offset(dims, dst_offset)?;
+        let src_offset = row_major_offset(dims, &coords)?;
+        *slot = data[src_offset];
+    }
+    Ok(out)
+}
+
 // ============================================================================
 // High-level API for tensor construction (avoids direct Storage access)
 // ============================================================================
@@ -1651,7 +1745,7 @@ impl TensorDynLen {
     ///
     /// # Arguments
     /// * `indices` - Vector of indices for the tensor
-    /// * `data` - Tensor data in row-major order
+    /// * `data` - Tensor data in column-major order
     ///
     /// # Panics
     /// Panics if data length doesn't match the product of index dimensions.
@@ -1671,7 +1765,8 @@ impl TensorDynLen {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices);
         Self::validate_dense_payload_len(data.len(), &dims)?;
-        let native = dense_native_tensor_from_row_major(&data, &dims)?;
+        let row_major = linearized_column_major_to_row_major(&data, &dims)?;
+        let native = dense_native_tensor_from_row_major_temp(&row_major, &dims)?;
         Self::from_native(indices, native)
     }
 
@@ -1680,7 +1775,7 @@ impl TensorDynLen {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices);
         Self::validate_diag_payload_len(data.len(), &dims)?;
-        let native = diag_native_tensor_from_row_major(&data, dims.len())?;
+        let native = diag_native_tensor_from_row_major_temp(&data, dims.len())?;
         Self::from_native(indices, native)
     }
 
@@ -1722,10 +1817,10 @@ impl TensorDynLen {
 // ============================================================================
 
 impl TensorDynLen {
-    /// Extract tensor data as f64 slice.
+    /// Extract tensor data as a column-major `Vec<f64>`.
     ///
     /// # Returns
-    /// A slice of the tensor data if the storage is DenseF64.
+    /// A vector of the tensor data in column-major order.
     ///
     /// # Errors
     /// Returns an error if the storage is not DenseF64.
@@ -1744,10 +1839,10 @@ impl TensorDynLen {
         self.to_vec_f64()
     }
 
-    /// Extract tensor data as Complex64 slice.
+    /// Extract tensor data as a column-major `Vec<Complex64>`.
     ///
     /// # Returns
-    /// A slice of the tensor data if the storage is DenseC64.
+    /// A vector of the tensor data in column-major order.
     ///
     /// # Errors
     /// Returns an error if the storage is not DenseC64.
@@ -1755,7 +1850,7 @@ impl TensorDynLen {
         self.to_vec_c64()
     }
 
-    /// Convert tensor data to `Vec<f64>`.
+    /// Convert tensor data to a column-major `Vec<f64>`.
     ///
     /// # Returns
     /// A vector containing a copy of the tensor data.
@@ -1763,10 +1858,11 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error if the storage is not DenseF64.
     pub fn to_vec_f64(&self) -> Result<Vec<f64>> {
-        native_tensor_primal_to_dense_f64(&self.native)
+        let row_major = native_tensor_primal_to_dense_f64_row_major_temp(&self.native)?;
+        linearized_row_major_to_column_major(&row_major, &self.dims())
     }
 
-    /// Convert tensor data to `Vec<Complex64>`.
+    /// Convert tensor data to a column-major `Vec<Complex64>`.
     ///
     /// # Returns
     /// A vector containing a copy of the tensor data.
@@ -1774,7 +1870,8 @@ impl TensorDynLen {
     /// # Errors
     /// Returns an error if the storage is not DenseC64.
     pub fn to_vec_c64(&self) -> Result<Vec<Complex64>> {
-        native_tensor_primal_to_dense_c64(&self.native)
+        let row_major = native_tensor_primal_to_dense_c64_row_major_temp(&self.native)?;
+        linearized_row_major_to_column_major(&row_major, &self.dims())
     }
 
     /// Check if the tensor has f64 storage.

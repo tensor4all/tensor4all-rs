@@ -125,13 +125,9 @@ fn test_contract_no_common_indices_gives_outer_product() {
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
 
-    let indices_a = vec![i.clone(), j.clone()];
-    let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let indices_b = vec![k.clone()];
-    let storage_b = Arc::new(Storage::new_dense_f64(4));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone()]).unwrap();
 
     // No common indices → outer product
     let result = tensor_a.contract(&tensor_b);
@@ -153,8 +149,8 @@ fn test_contract_no_common_indices_preserves_left_then_right_index_order_and_val
     let expected = TensorDynLen::from_dense(
         result.indices.clone(),
         vec![
-            6.0, 8.0, -4.0, //
-            -3.0, -4.0, 2.0,
+            6.0, -3.0, 8.0, //
+            -4.0, -4.0, 2.0,
         ],
     )
     .unwrap();
@@ -351,13 +347,9 @@ fn test_tensordot_dimension_mismatch() {
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(5); // Different dimension from j
 
-    let indices_a = vec![i.clone(), j.clone()];
-    let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let indices_b = vec![k.clone()];
-    let storage_b = Arc::new(Storage::new_dense_f64(5));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone()]).unwrap();
 
     let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), k.clone())]);
     assert!(result.is_err());
@@ -379,13 +371,9 @@ fn test_tensordot_index_not_found() {
     let k = Index::new_dyn(3);
     let nonexistent = Index::new_dyn(3);
 
-    let indices_a = vec![i.clone(), j.clone()];
-    let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let indices_b = vec![k.clone()];
-    let storage_b = Arc::new(Storage::new_dense_f64(3));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone()]).unwrap();
 
     // Try to contract with a non-existent index from tensor_a
     let result = tensor_a.tensordot(&tensor_b, &[(nonexistent.clone(), k.clone())]);
@@ -408,13 +396,9 @@ fn test_tensordot_duplicate_axis() {
     let k = Index::new_dyn(3);
     let l = Index::new_dyn(4);
 
-    let indices_a = vec![i.clone(), j.clone()];
-    let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let indices_b = vec![k.clone(), l.clone()];
-    let storage_b = Arc::new(Storage::new_dense_f64(12));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone(), l.clone()]).unwrap();
 
     // Try to contract j twice (duplicate axis in self)
     let result = tensor_a.tensordot(
@@ -434,13 +418,9 @@ fn test_tensordot_empty_pairs() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
 
-    let indices_a = vec![i.clone(), j.clone()];
-    let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let indices_b = vec![j.clone()];
-    let storage_b = Arc::new(Storage::new_dense_f64(3));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = TensorDynLen::zeros::<f64>(vec![j.clone()]).unwrap();
 
     let result = tensor_a.tensordot(&tensor_b, &[]);
     assert!(result.is_err());
@@ -467,14 +447,10 @@ fn test_tensordot_common_index_not_in_pairs() {
     let l = Index::new_dyn(5);
 
     // Create tensor A[i, j, k]
-    let indices_a = vec![i.clone(), j.clone(), k.clone()];
-    let storage_a = Arc::new(Storage::new_dense_f64(24));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone(), k.clone()]).unwrap();
 
     // Create tensor B[j, l] where j is a common index with A
-    let indices_b = vec![j.clone(), l.clone()];
-    let storage_b = Arc::new(Storage::new_dense_f64(15));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = TensorDynLen::zeros::<f64>(vec![j.clone(), l.clone()]).unwrap();
 
     // Try to contract only k with l, leaving j as a "batch" dimension
     // This should fail because batch contraction is not yet implemented

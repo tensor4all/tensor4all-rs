@@ -205,8 +205,8 @@ fn test_contract_specified_empty_outer_product_preserves_input_component_order()
         result.indices.clone(),
         f64::dense_storage_with_shape(
             vec![
-                6.0, 8.0, -4.0, //
-                -3.0, -4.0, 2.0,
+                6.0, -3.0, 8.0, //
+                -4.0, -4.0, 2.0,
             ],
             &[2, 3],
         ),
@@ -275,9 +275,9 @@ fn test_onehot_2d() {
     let t = TensorDynLen::onehot(&[(i.clone(), 1), (j.clone(), 2)]).unwrap();
     assert_eq!(t.dims(), vec![3, 4]);
     let data = t.to_vec_f64().unwrap();
-    // Row-major: position (1,2) in 3×4 = 1*4 + 2 = 6
+    // Column-major: position (1,2) in 3×4 = 1 + 3*2 = 7
     let mut expected = vec![0.0; 12];
-    expected[6] = 1.0;
+    expected[7] = 1.0;
     assert_eq!(data, expected);
 }
 
@@ -285,12 +285,12 @@ fn test_onehot_2d() {
 fn test_onehot_boundary() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(4);
-    // Last position in each dimension
-    let t = TensorDynLen::onehot(&[(i.clone(), 2), (j.clone(), 3)]).unwrap();
+    // Last position in the first dimension, nontrivial column in the second.
+    let t = TensorDynLen::onehot(&[(i.clone(), 2), (j.clone(), 1)]).unwrap();
     let data = t.to_vec_f64().unwrap();
-    // Position (2,3) in 3×4 = 2*4 + 3 = 11
+    // Column-major: position (2,1) in 3×4 = 2 + 3*1 = 5
     let mut expected = vec![0.0; 12];
-    expected[11] = 1.0;
+    expected[5] = 1.0;
     assert_eq!(data, expected);
 }
 
@@ -330,8 +330,8 @@ fn test_onehot_contraction() {
     let result = <TensorDynLen as TensorLike>::contract(&[&v, &a], AllowedPairs::All).unwrap();
     assert_eq!(result.dims(), vec![4]);
     let data = result.to_vec_f64().unwrap();
-    // Row [1] of 3×4 matrix: [4, 5, 6, 7]
-    assert_eq!(data, vec![4.0, 5.0, 6.0, 7.0]);
+    // Row i=1 of the column-major 3×4 matrix: [1, 4, 7, 10]
+    assert_eq!(data, vec![1.0, 4.0, 7.0, 10.0]);
 }
 
 // Note: trait object tests removed - TensorLike is now fully generic and does not support dyn

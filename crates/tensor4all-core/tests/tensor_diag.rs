@@ -131,7 +131,7 @@ fn test_diag_tensor_contract_diag_dense() {
     let result = tensor_a.contract(&tensor_b);
 
     assert_eq!(result.dims(), vec![2, 2]);
-    let expected = TensorDynLen::from_dense(vec![i, k], vec![1.0, 1.0, 2.0, 2.0]).unwrap();
+    let expected = TensorDynLen::from_dense(vec![i, k], vec![1.0, 2.0, 1.0, 2.0]).unwrap();
     assert!(result.isapprox(&expected, 1e-12, 0.0));
 }
 

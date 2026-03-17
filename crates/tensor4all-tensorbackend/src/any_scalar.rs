@@ -75,13 +75,10 @@ fn rank0_real_tensor(value: f64) -> NativeTensor {
 }
 
 fn scalar_value_from_storage(storage: &Storage) -> ScalarValue {
-    match storage {
-        Storage::DenseF64(_) | Storage::DiagF64(_) => {
-            ScalarValue::F64(f64::sum_from_storage(storage))
-        }
-        Storage::DenseC64(_) | Storage::DiagC64(_) => {
-            ScalarValue::C64(Complex64::sum_from_storage(storage))
-        }
+    if storage.is_f64() {
+        ScalarValue::F64(f64::sum_from_storage(storage))
+    } else {
+        ScalarValue::C64(Complex64::sum_from_storage(storage))
     }
 }
 

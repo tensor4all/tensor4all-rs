@@ -101,8 +101,7 @@ fn test_qr_invalid_rank() {
     // Test that QR fails for rank-1 tensors
     let i = Index::new_dyn(2);
 
-    let storage = Arc::new(Storage::new_dense_f64(2));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone()], storage);
+    let tensor = TensorDynLen::zeros::<f64>(vec![i.clone()]).unwrap();
 
     let result = qr::<f64>(&tensor, std::slice::from_ref(&i));
     assert!(result.is_err());
@@ -118,8 +117,7 @@ fn test_qr_invalid_split() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
 
-    let storage = Arc::new(Storage::new_dense_f64(6));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
+    let tensor = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
     // Empty left_inds should fail
     let result = qr::<f64>(&tensor, &[]);
@@ -328,8 +326,7 @@ fn test_qr_complex_rank3_reconstruction() {
 
 /// Regression: QR roundtrip with dim-1 axes.
 ///
-/// tensor4all keeps row-major boundary semantics even though tenferro uses
-/// column-major internal view semantics.
+/// tensor4all and tenferro both use column-major linearization semantics.
 #[test]
 fn test_qr_reconstruction_with_unit_dim_axis() {
     // [d=1, d=2, d=2] factorized with left_inds=[d=2, d=2]

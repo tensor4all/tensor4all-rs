@@ -1372,24 +1372,18 @@ mod tests {
         assert!(ext_ids.contains(s0.id()));
         assert!(ext_ids.contains(s1.id()));
 
-        // Verify values by naive contraction.
-        // t0[s0, bond] shape (2,3): [1,0,0, 0,1,0]
-        // t1[bond, s1] shape (3,2): [1,0, 0,1, 0,0]
-        // result[s0, s1] = sum_bond t0[s0,bond]*t1[bond,s1]
-        let t0_data = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]; // (2,3)
-        let t1_data = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]; // (3,2)
-        let (dim_s0, dim_bond, dim_s1) = (2usize, 3usize, 2usize);
-
-        let mut expected = vec![0.0f64; dim_s0 * dim_s1];
-        for i_s0 in 0..dim_s0 {
-            for i_s1 in 0..dim_s1 {
-                let mut sum = 0.0;
-                for i_bond in 0..dim_bond {
-                    sum += t0_data[i_s0 * dim_bond + i_bond] * t1_data[i_bond * dim_s1 + i_s1];
-                }
-                expected[i_s0 * dim_s1 + i_s1] = sum;
-            }
-        }
+        // Verify values against the equivalent high-level tensor contraction.
+        let t0 = TensorDynLen::from_dense(
+            vec![s0.clone(), _bond.clone()],
+            vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        )
+        .unwrap();
+        let t1 = TensorDynLen::from_dense(
+            vec![_bond.clone(), s1.clone()],
+            vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        )
+        .unwrap();
+        let expected = t0.contract(&t1).to_vec_f64().unwrap();
 
         let result_data = result.to_vec_f64().unwrap();
         assert_eq!(result_data.len(), expected.len());

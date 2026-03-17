@@ -57,4 +57,3 @@ tenferro-device = { git = "https://github.com/tensor4all/tenferro-rs", rev = "cf
 tenferro-prims = { git = "https://github.com/tensor4all/tenferro-rs", rev = "cfc26f3103604c581c2da2bd8defb6abed2218f5" }
 tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs", rev = "cfc26f3103604c581c2da2bd8defb6abed2218f5" }
 tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs", rev = "cfc26f3103604c581c2da2bd8defb6abed2218f5" }
-tenferro-dyadtensor = { git = "https://github.com/tensor4all/tenferro-rs", rev = "cfc26f3103604c581c2da2bd8defb6abed2218f5" }

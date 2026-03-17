@@ -8,8 +8,9 @@ use crate::truncation::TruncationParams;
 use crate::{unfold_split, TensorDynLen};
 use num_complex::{Complex64, ComplexFloat};
 use tensor4all_tensorbackend::{
-    native_tensor_primal_to_dense_c64, native_tensor_primal_to_dense_f64, qr_native_tensor,
-    reshape_row_major_native_tensor,
+    native_tensor_primal_to_dense_c64_row_major_temp,
+    native_tensor_primal_to_dense_f64_row_major_temp, qr_native_tensor,
+    reshape_row_major_native_tensor_temp,
 };
 use thiserror::Error;
 
@@ -211,13 +212,13 @@ pub fn qr_with<T>(
         qr_native_tensor(&matrix_native).map_err(QrError::ComputationError)?;
     let r = match r_native.scalar_type() {
         tenferro::ScalarType::F64 => {
-            let values =
-                native_tensor_primal_to_dense_f64(&r_native).map_err(QrError::ComputationError)?;
+            let values = native_tensor_primal_to_dense_f64_row_major_temp(&r_native)
+                .map_err(QrError::ComputationError)?;
             compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
         }
         tenferro::ScalarType::C64 => {
-            let values =
-                native_tensor_primal_to_dense_c64(&r_native).map_err(QrError::ComputationError)?;
+            let values = native_tensor_primal_to_dense_c64_row_major_temp(&r_native)
+                .map_err(QrError::ComputationError)?;
             compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
         }
         other => {
@@ -242,7 +243,7 @@ pub fn qr_with<T>(
     let mut q_indices = left_indices.clone();
     q_indices.push(bond_index.clone());
     let q_dims: Vec<usize> = q_indices.iter().map(|idx| idx.dim).collect();
-    let q_reshaped = reshape_row_major_native_tensor(&q_native, &q_dims).map_err(|e| {
+    let q_reshaped = reshape_row_major_native_tensor_temp(&q_native, &q_dims).map_err(|e| {
         QrError::ComputationError(anyhow::anyhow!("native QR Q reshape failed: {e}"))
     })?;
     let q = TensorDynLen::from_native(q_indices, q_reshaped).map_err(QrError::ComputationError)?;
@@ -250,7 +251,7 @@ pub fn qr_with<T>(
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(&right_indices);
     let r_dims: Vec<usize> = r_indices.iter().map(|idx| idx.dim).collect();
-    let r_reshaped = reshape_row_major_native_tensor(&r_native, &r_dims).map_err(|e| {
+    let r_reshaped = reshape_row_major_native_tensor_temp(&r_native, &r_dims).map_err(|e| {
         QrError::ComputationError(anyhow::anyhow!("native QR R reshape failed: {e}"))
     })?;
     let r = TensorDynLen::from_native(r_indices, r_reshaped).map_err(QrError::ComputationError)?;
@@ -395,7 +396,7 @@ mod tests {
         assert_eq!(r.dims(), vec![1, 2]);
     }
 
-    /// Helper: build an upper-triangular matrix as a row-major dense buffer.
+    /// Helper: build an upper-triangular dense buffer for low-level QR tests.
     fn make_upper_triangular(
         nrows: usize,
         ncols: usize,

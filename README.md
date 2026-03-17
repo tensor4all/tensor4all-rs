@@ -31,9 +31,12 @@ use `order="F"` semantics when you need explicit control over flattening or resh
 | `Index{Int}` | — | `Index<Id, NoSymmSpace>` |
 | `Index{QNBlocks}` | `QIDX` | `Index<Id, QNSpace>` (future) |
 | `ITensor` | `QSpace` | `TensorDynLen` |
-| `Dense` | `DATA` | `Storage::DenseF64/C64` |
-| `Diag` | — | `Storage::DiagF64/C64` |
+| `Dense` | `DATA` | `Storage::StructuredF64/C64` |
+| `Diag` | — | `Storage::StructuredF64/C64` with diagonal `axis_classes` |
 | `A * B` | — | `a.contract(&b)` |
+
+`Storage::Dense*` and `Storage::Diag*` remain as temporary low-level kernel variants inside
+the backend, but the structured snapshot path is the intended public direction.
 
 ### Truncation Tolerance
 

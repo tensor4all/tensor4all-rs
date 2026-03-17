@@ -1,3 +1,4 @@
+use anyhow::{anyhow, ensure, Result};
 use mdarray::{DynRank, Shape, Tensor};
 use num_complex::{Complex64, ComplexFloat};
 use num_traits::{One, Zero};
@@ -260,6 +261,309 @@ pub type DenseStorageF64 = DenseStorage<f64>;
 
 /// Type alias for Complex64 dense storage (for backward compatibility).
 pub type DenseStorageC64 = DenseStorage<Complex64>;
+
+pub(crate) fn col_major_strides(dims: &[usize]) -> Vec<isize> {
+    let mut strides = Vec::with_capacity(dims.len());
+    let mut stride = 1isize;
+    for &dim in dims {
+        strides.push(stride);
+        stride = stride
+            .checked_mul(dim as isize)
+            .unwrap_or_else(|| panic!("column-major stride overflow for dims {dims:?}"));
+    }
+    strides
+}
+
+fn validate_canonical_axis_classes(axis_classes: &[usize]) -> Result<()> {
+    let mut next_class = 0usize;
+    for &class_id in axis_classes {
+        ensure!(
+            class_id <= next_class,
+            "axis_classes must be canonical first-appearance labels, got {axis_classes:?}"
+        );
+        if class_id == next_class {
+            next_class += 1;
+        }
+    }
+    Ok(())
+}
+
+fn required_storage_len(dims: &[usize], strides: &[isize]) -> Result<usize> {
+    if dims.is_empty() {
+        return Ok(1);
+    }
+    if dims.contains(&0) {
+        return Ok(0);
+    }
+    ensure!(
+        dims.len() == strides.len(),
+        "payload dims {:?} and strides {:?} must have the same rank",
+        dims,
+        strides
+    );
+
+    let mut max_offset = 0usize;
+    for (&dim, &stride) in dims.iter().zip(strides.iter()) {
+        ensure!(
+            stride >= 0,
+            "negative strides are not supported in StructuredStorage: {strides:?}"
+        );
+        if dim > 1 {
+            max_offset = max_offset
+                .checked_add((dim - 1) * usize::try_from(stride).unwrap_or(usize::MAX))
+                .ok_or_else(|| anyhow!("payload stride overflow for dims {dims:?}"))?;
+        }
+    }
+    Ok(max_offset + 1)
+}
+
+fn logical_dims_from_axis_classes(payload_dims: &[usize], axis_classes: &[usize]) -> Vec<usize> {
+    axis_classes
+        .iter()
+        .map(|&class_id| payload_dims[class_id])
+        .collect()
+}
+
+fn col_major_multi_index(mut linear: usize, dims: &[usize]) -> Vec<usize> {
+    let mut index = Vec::with_capacity(dims.len());
+    for &dim in dims {
+        if dim == 0 {
+            index.push(0);
+        } else {
+            index.push(linear % dim);
+            linear /= dim;
+        }
+    }
+    index
+}
+
+fn row_major_to_col_major_values<T: Clone>(data: &[T], dims: &[usize]) -> Vec<T> {
+    let total_len: usize = dims.iter().product();
+    if total_len == 0 {
+        return Vec::new();
+    }
+
+    let row_major_strides = compute_strides(dims);
+    (0..total_len)
+        .map(|linear| {
+            let index = col_major_multi_index(linear, dims);
+            let offset: usize = index
+                .iter()
+                .zip(row_major_strides.iter())
+                .map(|(&value, &stride)| value * stride)
+                .sum();
+            data[offset].clone()
+        })
+        .collect()
+}
+
+fn offset_from_strides(index: &[usize], strides: &[isize]) -> usize {
+    index
+        .iter()
+        .zip(strides.iter())
+        .map(|(&value, &stride)| value * usize::try_from(stride).unwrap_or(usize::MAX))
+        .sum()
+}
+
+/// Structured tensor snapshot storage.
+///
+/// `data` and `strides` describe the payload tensor, while `axis_classes`
+/// describes how logical axes map onto payload axes. Logical flat-buffer
+/// semantics are column-major.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructuredStorage<T> {
+    data: Vec<T>,
+    payload_dims: Vec<usize>,
+    strides: Vec<isize>,
+    axis_classes: Vec<usize>,
+}
+
+impl<T> StructuredStorage<T> {
+    /// Creates a structured payload snapshot from explicit payload metadata.
+    ///
+    /// `payload_dims` and `strides` describe the compressed payload tensor,
+    /// while `axis_classes` maps logical axes onto payload axes in canonical
+    /// first-appearance order.
+    pub fn new(
+        data: Vec<T>,
+        payload_dims: Vec<usize>,
+        strides: Vec<isize>,
+        axis_classes: Vec<usize>,
+    ) -> Result<Self> {
+        validate_canonical_axis_classes(&axis_classes)?;
+        ensure!(
+            payload_dims.len()
+                == axis_classes
+                    .iter()
+                    .copied()
+                    .max()
+                    .map(|value| value + 1)
+                    .unwrap_or(0),
+            "payload rank {} does not match axis_classes {:?}",
+            payload_dims.len(),
+            axis_classes
+        );
+        ensure!(
+            strides.len() == payload_dims.len(),
+            "payload dims {:?} and strides {:?} must have the same rank",
+            payload_dims,
+            strides
+        );
+        let required_len = required_storage_len(&payload_dims, &strides)?;
+        ensure!(
+            data.len() == required_len,
+            "payload storage len {} does not match required len {} for dims {:?} and strides {:?}",
+            data.len(),
+            required_len,
+            payload_dims,
+            strides
+        );
+        Ok(Self {
+            data,
+            payload_dims,
+            strides,
+            axis_classes,
+        })
+    }
+
+    /// Creates a dense structured snapshot from column-major logical data.
+    pub fn from_dense_col_major(data: Vec<T>, logical_dims: &[usize]) -> Self {
+        let payload_dims = logical_dims.to_vec();
+        let strides = col_major_strides(&payload_dims);
+        let axis_classes = (0..logical_dims.len()).collect();
+        Self::new(data, payload_dims, strides, axis_classes)
+            .unwrap_or_else(|err| panic!("StructuredStorage::from_dense_col_major failed: {err}"))
+    }
+
+    /// Creates a diagonal structured snapshot from column-major diagonal data.
+    pub fn from_diag_col_major(diag_data: Vec<T>, logical_rank: usize) -> Self {
+        let payload_dims = if logical_rank == 0 {
+            vec![]
+        } else {
+            vec![diag_data.len()]
+        };
+        let strides = col_major_strides(&payload_dims);
+        let axis_classes = vec![0; logical_rank];
+        Self::new(diag_data, payload_dims, strides, axis_classes)
+            .unwrap_or_else(|err| panic!("StructuredStorage::from_diag_col_major failed: {err}"))
+    }
+
+    /// Returns the owned payload buffer.
+    pub fn data(&self) -> &[T] {
+        &self.data
+    }
+
+    /// Returns the payload tensor dimensions.
+    pub fn payload_dims(&self) -> &[usize] {
+        &self.payload_dims
+    }
+
+    /// Returns the payload tensor strides.
+    pub fn strides(&self) -> &[isize] {
+        &self.strides
+    }
+
+    /// Returns the canonical logical-to-payload axis classes.
+    pub fn axis_classes(&self) -> &[usize] {
+        &self.axis_classes
+    }
+
+    /// Returns the logical dimensions derived from `payload_dims` and `axis_classes`.
+    pub fn logical_dims(&self) -> Vec<usize> {
+        logical_dims_from_axis_classes(&self.payload_dims, &self.axis_classes)
+    }
+
+    /// Returns the logical rank.
+    pub fn logical_rank(&self) -> usize {
+        self.axis_classes.len()
+    }
+
+    /// Returns `true` when the logical tensor is dense.
+    pub fn is_dense(&self) -> bool {
+        self.axis_classes
+            .iter()
+            .copied()
+            .eq(0..self.axis_classes.len())
+    }
+
+    /// Returns `true` when the logical tensor is diagonal.
+    pub fn is_diag(&self) -> bool {
+        self.logical_rank() >= 2 && self.axis_classes.iter().all(|&class_id| class_id == 0)
+    }
+
+    /// Returns the payload buffer length.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Returns `true` when the payload buffer is empty.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Returns a borrowed view when the logical tensor is dense and the
+    /// payload is already stored contiguously in column-major order.
+    pub fn dense_col_major_view_if_contiguous(&self) -> Option<&[T]> {
+        if self.is_dense() && self.strides == col_major_strides(&self.payload_dims) {
+            Some(&self.data)
+        } else {
+            None
+        }
+    }
+}
+
+impl<T: Clone> StructuredStorage<T> {
+    /// Materializes the payload tensor as a contiguous column-major buffer.
+    pub fn payload_col_major_vec(&self) -> Vec<T> {
+        let payload_len: usize = self.payload_dims.iter().product();
+        if payload_len == 0 {
+            return Vec::new();
+        }
+        if self.strides == col_major_strides(&self.payload_dims) {
+            return self.data.clone();
+        }
+
+        (0..payload_len)
+            .map(|linear| {
+                let index = col_major_multi_index(linear, &self.payload_dims);
+                let offset = offset_from_strides(&index, &self.strides);
+                self.data[offset].clone()
+            })
+            .collect()
+    }
+
+    /// Returns a copy of the storage with logical axes permuted.
+    pub fn permute_logical_axes(&self, perm: &[usize]) -> Self {
+        assert_eq!(
+            perm.len(),
+            self.axis_classes.len(),
+            "logical permutation length {} must match logical rank {}",
+            perm.len(),
+            self.axis_classes.len()
+        );
+        let axis_classes = perm.iter().map(|&index| self.axis_classes[index]).collect();
+        Self::new(
+            self.data.clone(),
+            self.payload_dims.clone(),
+            self.strides.clone(),
+            axis_classes,
+        )
+        .unwrap_or_else(|err| panic!("StructuredStorage::permute_logical_axes failed: {err}"))
+    }
+}
+
+impl<T: Copy> StructuredStorage<T> {
+    /// Maps payload elements while preserving payload metadata and axis classes.
+    pub fn map_copy<U>(&self, mut f: impl FnMut(T) -> U) -> StructuredStorage<U> {
+        StructuredStorage::new(
+            self.data.iter().copied().map(&mut f).collect(),
+            self.payload_dims.clone(),
+            self.strides.clone(),
+            self.axis_classes.clone(),
+        )
+        .unwrap_or_else(|err| panic!("StructuredStorage::map_copy failed: {err}"))
+    }
+}
 
 /// Compute the result dimensions after contraction.
 fn compute_result_dims(
@@ -730,6 +1034,10 @@ pub enum Storage {
     DiagF64(DiagStorageF64),
     /// Diagonal storage with Complex64 elements.
     DiagC64(DiagStorageC64),
+    /// General structured storage with f64 elements.
+    StructuredF64(StructuredStorage<f64>),
+    /// General structured storage with Complex64 elements.
+    StructuredC64(StructuredStorage<Complex64>),
 }
 
 /// Type-driven constructor for `Storage`.
@@ -746,32 +1054,30 @@ pub trait DenseStorageFactory {
 
 impl DenseStorageFactory for f64 {
     fn new_dense(size: usize) -> Storage {
-        Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![0.0; size],
-            &[size],
-        ))
+        Storage::from_dense_f64_col_major(vec![0.0; size], &[size])
+            .unwrap_or_else(|err| panic!("DenseStorageFactory<f64>::new_dense failed: {err}"))
     }
 
     fn new_dense_with_shape(dims: &[usize]) -> Storage {
         let size: usize = dims.iter().product();
-        Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![0.0; size], dims))
+        Storage::from_dense_f64_col_major(vec![0.0; size], dims).unwrap_or_else(|err| {
+            panic!("DenseStorageFactory<f64>::new_dense_with_shape failed: {err}")
+        })
     }
 }
 
 impl DenseStorageFactory for Complex64 {
     fn new_dense(size: usize) -> Storage {
-        Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            vec![Complex64::new(0.0, 0.0); size],
-            &[size],
-        ))
+        Storage::from_dense_c64_col_major(vec![Complex64::new(0.0, 0.0); size], &[size])
+            .unwrap_or_else(|err| panic!("DenseStorageFactory<Complex64>::new_dense failed: {err}"))
     }
 
     fn new_dense_with_shape(dims: &[usize]) -> Storage {
         let size: usize = dims.iter().product();
-        Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            vec![Complex64::new(0.0, 0.0); size],
-            dims,
-        ))
+        Storage::from_dense_c64_col_major(vec![Complex64::new(0.0, 0.0); size], dims)
+            .unwrap_or_else(|err| {
+                panic!("DenseStorageFactory<Complex64>::new_dense_with_shape failed: {err}")
+            })
     }
 }
 
@@ -790,6 +1096,8 @@ impl SumFromStorage for f64 {
             Storage::DenseC64(v) => v.as_slice().iter().map(|z| z.re).sum(),
             Storage::DiagF64(v) => v.as_slice().iter().copied().sum(),
             Storage::DiagC64(v) => v.as_slice().iter().map(|z| z.re).sum(),
+            Storage::StructuredF64(v) => v.data().iter().copied().sum(),
+            Storage::StructuredC64(v) => v.data().iter().map(|z| z.re).sum(),
         }
     }
 }
@@ -801,6 +1109,8 @@ impl SumFromStorage for Complex64 {
             Storage::DenseC64(v) => v.as_slice().iter().copied().sum(),
             Storage::DiagF64(v) => Complex64::new(v.as_slice().iter().copied().sum(), 0.0),
             Storage::DiagC64(v) => v.as_slice().iter().copied().sum(),
+            Storage::StructuredF64(v) => Complex64::new(v.data().iter().copied().sum(), 0.0),
+            Storage::StructuredC64(v) => v.data().iter().copied().sum(),
         }
     }
 }
@@ -809,20 +1119,28 @@ impl SumFromStorage for Complex64 {
 pub use crate::any_scalar::AnyScalar;
 
 impl Storage {
+    fn validate_dense_len<T>(data: &[T], logical_dims: &[usize], label: &str) -> Result<()> {
+        let expected_len: usize = logical_dims.iter().product();
+        ensure!(
+            data.len() == expected_len,
+            "{label} len {} does not match logical dims {:?} (expected {})",
+            data.len(),
+            logical_dims,
+            expected_len
+        );
+        Ok(())
+    }
+
     /// Create a new 1D zero-initialized DenseF64 storage with the given size.
     pub fn new_dense_f64(size: usize) -> Self {
-        Self::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![0.0; size],
-            &[size],
-        ))
+        Self::from_dense_f64_col_major(vec![0.0; size], &[size])
+            .unwrap_or_else(|err| panic!("Storage::new_dense_f64 failed: {err}"))
     }
 
     /// Create a new 1D zero-initialized DenseC64 storage with the given size.
     pub fn new_dense_c64(size: usize) -> Self {
-        Self::DenseC64(DenseStorageC64::from_vec_with_shape(
-            vec![Complex64::new(0.0, 0.0); size],
-            &[size],
-        ))
+        Self::from_dense_c64_col_major(vec![Complex64::new(0.0, 0.0); size], &[size])
+            .unwrap_or_else(|err| panic!("Storage::new_dense_c64 failed: {err}"))
     }
 
     /// Create a new DiagF64 storage with the given diagonal data.
@@ -835,19 +1153,102 @@ impl Storage {
         Self::DiagC64(DiagStorageC64::from_vec(diag_data))
     }
 
+    /// Create dense f64 storage from column-major logical values.
+    pub fn from_dense_f64_col_major(data: Vec<f64>, logical_dims: &[usize]) -> Result<Self> {
+        Self::validate_dense_len(&data, logical_dims, "dense f64 payload")?;
+        Ok(Self::StructuredF64(
+            StructuredStorage::from_dense_col_major(data, logical_dims),
+        ))
+    }
+
+    /// Create dense Complex64 storage from column-major logical values.
+    pub fn from_dense_c64_col_major(data: Vec<Complex64>, logical_dims: &[usize]) -> Result<Self> {
+        Self::validate_dense_len(&data, logical_dims, "dense c64 payload")?;
+        Ok(Self::StructuredC64(
+            StructuredStorage::from_dense_col_major(data, logical_dims),
+        ))
+    }
+
+    /// Create diagonal f64 storage from column-major diagonal payload values.
+    pub fn from_diag_f64_col_major(diag_data: Vec<f64>, logical_rank: usize) -> Result<Self> {
+        Ok(Self::StructuredF64(StructuredStorage::from_diag_col_major(
+            diag_data,
+            logical_rank,
+        )))
+    }
+
+    /// Create diagonal Complex64 storage from column-major diagonal payload values.
+    pub fn from_diag_c64_col_major(diag_data: Vec<Complex64>, logical_rank: usize) -> Result<Self> {
+        Ok(Self::StructuredC64(StructuredStorage::from_diag_col_major(
+            diag_data,
+            logical_rank,
+        )))
+    }
+
+    /// Create a new structured f64 storage.
+    pub fn new_structured_f64(
+        data: Vec<f64>,
+        payload_dims: Vec<usize>,
+        strides: Vec<isize>,
+        axis_classes: Vec<usize>,
+    ) -> Result<Self> {
+        Ok(Self::StructuredF64(StructuredStorage::new(
+            data,
+            payload_dims,
+            strides,
+            axis_classes,
+        )?))
+    }
+
+    /// Create a new structured Complex64 storage.
+    pub fn new_structured_c64(
+        data: Vec<Complex64>,
+        payload_dims: Vec<usize>,
+        strides: Vec<isize>,
+        axis_classes: Vec<usize>,
+    ) -> Result<Self> {
+        Ok(Self::StructuredC64(StructuredStorage::new(
+            data,
+            payload_dims,
+            strides,
+            axis_classes,
+        )?))
+    }
+
+    /// Check if this storage is logically dense.
+    pub fn is_dense(&self) -> bool {
+        match self {
+            Self::DenseF64(_) | Self::DenseC64(_) => true,
+            Self::DiagF64(_) | Self::DiagC64(_) => false,
+            Self::StructuredF64(value) => value.is_dense(),
+            Self::StructuredC64(value) => value.is_dense(),
+        }
+    }
+
     /// Check if this storage is a Diag storage type.
     pub fn is_diag(&self) -> bool {
-        matches!(self, Self::DiagF64(_) | Self::DiagC64(_))
+        match self {
+            Self::DiagF64(_) | Self::DiagC64(_) => true,
+            Self::DenseF64(_) | Self::DenseC64(_) => false,
+            Self::StructuredF64(value) => value.is_diag(),
+            Self::StructuredC64(value) => value.is_diag(),
+        }
     }
 
     /// Check if this storage uses f64 scalar type.
     pub fn is_f64(&self) -> bool {
-        matches!(self, Self::DenseF64(_) | Self::DiagF64(_))
+        matches!(
+            self,
+            Self::DenseF64(_) | Self::DiagF64(_) | Self::StructuredF64(_)
+        )
     }
 
     /// Check if this storage uses Complex64 scalar type.
     pub fn is_c64(&self) -> bool {
-        matches!(self, Self::DenseC64(_) | Self::DiagC64(_))
+        matches!(
+            self,
+            Self::DenseC64(_) | Self::DiagC64(_) | Self::StructuredC64(_)
+        )
     }
 
     /// Check if this storage uses complex scalar type.
@@ -864,6 +1265,8 @@ impl Storage {
             Self::DenseC64(v) => v.len(),
             Self::DiagF64(v) => v.len(),
             Self::DiagC64(v) => v.len(),
+            Self::StructuredF64(v) => v.len(),
+            Self::StructuredC64(v) => v.len(),
         }
     }
 
@@ -900,6 +1303,107 @@ impl Storage {
                 .iter()
                 .map(|z| z.norm())
                 .fold(0.0_f64, f64::max),
+            Storage::StructuredF64(v) => v.data().iter().map(|x| x.abs()).fold(0.0_f64, f64::max),
+            Storage::StructuredC64(v) => v.data().iter().map(|z| z.norm()).fold(0.0_f64, f64::max),
+        }
+    }
+
+    /// Materialize dense logical values as a column-major `f64` buffer.
+    pub fn to_dense_f64_col_major_vec(&self, logical_dims: &[usize]) -> Result<Vec<f64>, String> {
+        match self {
+            Storage::DenseF64(v) => {
+                let expected_len: usize = logical_dims.iter().product();
+                if expected_len != v.len() {
+                    return Err(format!(
+                        "logical dims {:?} (len={expected_len}) do not match DenseF64 len {}",
+                        logical_dims,
+                        v.len()
+                    ));
+                }
+                Ok(row_major_to_col_major_values(v.as_slice(), logical_dims))
+            }
+            Storage::DiagF64(v) => Ok(row_major_to_col_major_values(
+                &v.to_dense_vec(logical_dims),
+                logical_dims,
+            )),
+            Storage::StructuredF64(v) => {
+                let structured_dims = v.logical_dims();
+                if structured_dims != logical_dims {
+                    return Err(format!(
+                        "logical dims {:?} do not match StructuredF64 logical dims {:?}",
+                        logical_dims, structured_dims
+                    ));
+                }
+                if let Some(view) = v.dense_col_major_view_if_contiguous() {
+                    Ok(view.to_vec())
+                } else if v.is_dense() {
+                    Ok(v.payload_col_major_vec())
+                } else {
+                    let native =
+                        crate::tenferro_bridge::storage_to_native_tensor(self, logical_dims)
+                            .map_err(|err| err.to_string())?;
+                    let row_major =
+                        crate::tenferro_bridge::native_tensor_primal_to_dense_f64_row_major_temp(
+                            &native,
+                        )
+                        .map_err(|err| err.to_string())?;
+                    Ok(row_major_to_col_major_values(&row_major, logical_dims))
+                }
+            }
+            Storage::DenseC64(_) | Storage::DiagC64(_) | Storage::StructuredC64(_) => {
+                Err("expected f64 storage when materializing dense f64 values".to_string())
+            }
+        }
+    }
+
+    /// Materialize dense logical values as a column-major `Complex64` buffer.
+    pub fn to_dense_c64_col_major_vec(
+        &self,
+        logical_dims: &[usize],
+    ) -> Result<Vec<Complex64>, String> {
+        match self {
+            Storage::DenseC64(v) => {
+                let expected_len: usize = logical_dims.iter().product();
+                if expected_len != v.len() {
+                    return Err(format!(
+                        "logical dims {:?} (len={expected_len}) do not match DenseC64 len {}",
+                        logical_dims,
+                        v.len()
+                    ));
+                }
+                Ok(row_major_to_col_major_values(v.as_slice(), logical_dims))
+            }
+            Storage::DiagC64(v) => Ok(row_major_to_col_major_values(
+                &v.to_dense_vec(logical_dims),
+                logical_dims,
+            )),
+            Storage::StructuredC64(v) => {
+                let structured_dims = v.logical_dims();
+                if structured_dims != logical_dims {
+                    return Err(format!(
+                        "logical dims {:?} do not match StructuredC64 logical dims {:?}",
+                        logical_dims, structured_dims
+                    ));
+                }
+                if let Some(view) = v.dense_col_major_view_if_contiguous() {
+                    Ok(view.to_vec())
+                } else if v.is_dense() {
+                    Ok(v.payload_col_major_vec())
+                } else {
+                    let native =
+                        crate::tenferro_bridge::storage_to_native_tensor(self, logical_dims)
+                            .map_err(|err| err.to_string())?;
+                    let row_major =
+                        crate::tenferro_bridge::native_tensor_primal_to_dense_c64_row_major_temp(
+                            &native,
+                        )
+                        .map_err(|err| err.to_string())?;
+                    Ok(row_major_to_col_major_values(&row_major, logical_dims))
+                }
+            }
+            Storage::DenseF64(_) | Storage::DiagF64(_) | Storage::StructuredF64(_) => {
+                Err("expected Complex64 storage when materializing dense c64 values".to_string())
+            }
         }
     }
 
@@ -925,6 +1429,26 @@ impl Storage {
                 d.to_dense_vec(dims),
                 dims,
             )),
+            Storage::StructuredF64(_) => {
+                let native = crate::tenferro_bridge::storage_to_native_tensor(self, dims)
+                    .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
+                let row_major =
+                    crate::tenferro_bridge::native_tensor_primal_to_dense_f64_row_major_temp(
+                        &native,
+                    )
+                    .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
+                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(row_major, dims))
+            }
+            Storage::StructuredC64(_) => {
+                let native = crate::tenferro_bridge::storage_to_native_tensor(self, dims)
+                    .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
+                let row_major =
+                    crate::tenferro_bridge::native_tensor_primal_to_dense_c64_row_major_temp(
+                        &native,
+                    )
+                    .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
+                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(row_major, dims))
+            }
         }
     }
 
@@ -939,6 +1463,8 @@ impl Storage {
             // For Diag storage, permute is trivial: data doesn't change, only index order changes
             Storage::DiagF64(v) => Storage::DiagF64(v.clone()),
             Storage::DiagC64(v) => Storage::DiagC64(v.clone()),
+            Storage::StructuredF64(v) => Storage::StructuredF64(v.permute_logical_axes(perm)),
+            Storage::StructuredC64(v) => Storage::StructuredC64(v.permute_logical_axes(perm)),
         }
     }
 
@@ -962,6 +1488,8 @@ impl Storage {
                 let real_vec: Vec<f64> = d.as_slice().iter().map(|z| z.re).collect();
                 Storage::DiagF64(DiagStorageF64::from_vec(real_vec))
             }
+            Storage::StructuredF64(v) => Storage::StructuredF64(v.clone()),
+            Storage::StructuredC64(v) => Storage::StructuredF64(v.map_copy(|z| z.re)),
         }
     }
 
@@ -992,6 +1520,8 @@ impl Storage {
                 let imag_vec: Vec<f64> = d.as_slice().iter().map(|z| z.im).collect();
                 Storage::DiagF64(DiagStorageF64::from_vec(imag_vec))
             }
+            Storage::StructuredF64(v) => Storage::StructuredF64(v.map_copy(|_| 0.0)),
+            Storage::StructuredC64(v) => Storage::StructuredF64(v.map_copy(|z| z.im)),
         }
     }
 
@@ -1023,6 +1553,10 @@ impl Storage {
             Storage::DiagC64(d) => {
                 Storage::DiagC64(DiagStorageC64::from_vec(d.as_slice().to_vec()))
             }
+            Storage::StructuredF64(v) => {
+                Storage::StructuredC64(v.map_copy(|x| Complex64::new(x, 0.0)))
+            }
+            Storage::StructuredC64(v) => Storage::StructuredC64(v.clone()),
         }
     }
 
@@ -1063,6 +1597,8 @@ impl Storage {
                 let conj_vec: Vec<Complex64> = d.as_slice().iter().map(|z| z.conj()).collect();
                 Storage::DiagC64(DiagStorageC64::from_vec(conj_vec))
             }
+            Storage::StructuredF64(v) => Storage::StructuredF64(v.clone()),
+            Storage::StructuredC64(v) => Storage::StructuredC64(v.map_copy(|z| z.conj())),
         }
     }
 
@@ -1442,6 +1978,25 @@ pub fn contract_storage(
         );
     }
 
+    if matches!(
+        storage_a,
+        Storage::StructuredF64(_) | Storage::StructuredC64(_)
+    ) || matches!(
+        storage_b,
+        Storage::StructuredF64(_) | Storage::StructuredC64(_)
+    ) {
+        return crate::tenferro_bridge::contract_storage_native(
+            storage_a,
+            dims_a,
+            axes_a,
+            storage_b,
+            dims_b,
+            axes_b,
+            result_dims,
+        )
+        .unwrap_or_else(|err| panic!("contract_storage structured fallback failed: {err}"));
+    }
+
     match (storage_a, storage_b) {
         // Same type cases: DenseStorage has internal shape, use dense contraction.
         (Storage::DenseF64(a), Storage::DenseF64(b)) => {
@@ -1584,6 +2139,12 @@ pub fn contract_storage(
                 |s, perm| s.permute_storage(&[], perm),
             )
         }
+        (Storage::StructuredF64(_), _)
+        | (Storage::StructuredC64(_), _)
+        | (_, Storage::StructuredF64(_))
+        | (_, Storage::StructuredC64(_)) => {
+            unreachable!("structured storage cases are handled by the native fallback above")
+        }
     }
 }
 
@@ -1657,14 +2218,34 @@ impl StorageScalar for f64 {
     fn extract_dense_view(storage: &Storage) -> Result<&[Self], String> {
         match storage {
             Storage::DenseF64(ds) => Ok(ds.as_slice()),
+            Storage::StructuredF64(ds) => ds
+                .dense_col_major_view_if_contiguous()
+                .ok_or_else(|| format!("Expected contiguous dense f64 storage, got {storage:?}")),
             _ => Err(format!("Expected DenseF64 storage, got {:?}", storage)),
         }
     }
 
+    fn extract_dense_cow<'a>(storage: &'a Storage) -> Result<Cow<'a, [Self]>, String> {
+        match storage {
+            Storage::DenseF64(ds) => Ok(Cow::Borrowed(ds.as_slice())),
+            Storage::StructuredF64(ds) => {
+                if let Some(view) = ds.dense_col_major_view_if_contiguous() {
+                    Ok(Cow::Borrowed(view))
+                } else if ds.is_dense() {
+                    Ok(Cow::Owned(ds.payload_col_major_vec()))
+                } else {
+                    Err(format!("Expected dense f64 storage, got {storage:?}"))
+                }
+            }
+            _ => Err(format!("Expected dense f64 storage, got {storage:?}")),
+        }
+    }
+
     fn dense_storage_with_shape(data: Vec<Self>, dims: &[usize]) -> Arc<Storage> {
-        Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            data, dims,
-        )))
+        Arc::new(
+            Storage::from_dense_f64_col_major(data, dims)
+                .unwrap_or_else(|err| panic!("f64::dense_storage_with_shape failed: {err}")),
+        )
     }
 }
 
@@ -1672,14 +2253,34 @@ impl StorageScalar for Complex64 {
     fn extract_dense_view(storage: &Storage) -> Result<&[Self], String> {
         match storage {
             Storage::DenseC64(ds) => Ok(ds.as_slice()),
+            Storage::StructuredC64(ds) => ds
+                .dense_col_major_view_if_contiguous()
+                .ok_or_else(|| format!("Expected contiguous dense c64 storage, got {storage:?}")),
             _ => Err(format!("Expected DenseC64 storage, got {:?}", storage)),
         }
     }
 
+    fn extract_dense_cow<'a>(storage: &'a Storage) -> Result<Cow<'a, [Self]>, String> {
+        match storage {
+            Storage::DenseC64(ds) => Ok(Cow::Borrowed(ds.as_slice())),
+            Storage::StructuredC64(ds) => {
+                if let Some(view) = ds.dense_col_major_view_if_contiguous() {
+                    Ok(Cow::Borrowed(view))
+                } else if ds.is_dense() {
+                    Ok(Cow::Owned(ds.payload_col_major_vec()))
+                } else {
+                    Err(format!("Expected dense c64 storage, got {storage:?}"))
+                }
+            }
+            _ => Err(format!("Expected dense c64 storage, got {storage:?}")),
+        }
+    }
+
     fn dense_storage_with_shape(data: Vec<Self>, dims: &[usize]) -> Arc<Storage> {
-        Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            data, dims,
-        )))
+        Arc::new(
+            Storage::from_dense_c64_col_major(data, dims)
+                .unwrap_or_else(|err| panic!("Complex64::dense_storage_with_shape failed: {err}")),
+        )
     }
 }
 
@@ -1779,6 +2380,10 @@ impl Mul<f64> for &Storage {
                     .collect();
                 Storage::DiagC64(DiagStorageC64::from_vec(scaled_vec))
             }
+            Storage::StructuredF64(v) => Storage::StructuredF64(v.map_copy(|x| x * scalar)),
+            Storage::StructuredC64(v) => {
+                Storage::StructuredC64(v.map_copy(|z| z * Complex64::new(scalar, 0.0)))
+            }
         }
     }
 }
@@ -1817,6 +2422,10 @@ impl Mul<Complex64> for &Storage {
                 let scaled_vec: Vec<Complex64> = d.as_slice().iter().map(|&z| z * scalar).collect();
                 Storage::DiagC64(DiagStorageC64::from_vec(scaled_vec))
             }
+            Storage::StructuredF64(v) => {
+                Storage::StructuredC64(v.map_copy(|x| Complex64::new(x, 0.0) * scalar))
+            }
+            Storage::StructuredC64(v) => Storage::StructuredC64(v.map_copy(|z| z * scalar)),
         }
     }
 }
@@ -1844,7 +2453,8 @@ mod tests {
     fn extract_f64(storage: &Storage) -> Vec<f64> {
         match storage {
             Storage::DenseF64(ds) => ds.as_slice().to_vec(),
-            _ => panic!("Expected DenseF64"),
+            Storage::StructuredF64(ds) => ds.data().to_vec(),
+            _ => panic!("Expected f64 dense-compatible storage"),
         }
     }
 
@@ -1852,7 +2462,8 @@ mod tests {
     fn extract_c64(storage: &Storage) -> Vec<Complex64> {
         match storage {
             Storage::DenseC64(ds) => ds.as_slice().to_vec(),
-            _ => panic!("Expected DenseC64"),
+            Storage::StructuredC64(ds) => ds.data().to_vec(),
+            _ => panic!("Expected c64 dense-compatible storage"),
         }
     }
 
@@ -2552,6 +3163,19 @@ mod tests {
         let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0]));
         assert!(!dense.is_diag());
         assert!(diag.is_diag());
+    }
+
+    #[test]
+    fn structured_storage_rejects_noncanonical_axis_classes() {
+        let err = StructuredStorage::<f64>::new(
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![2, 2],
+            vec![1, 2],
+            vec![1, 0, 0],
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("canonical"));
     }
 
     // ===== Storage len / is_empty =====

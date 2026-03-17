@@ -15,7 +15,10 @@ use tenferro_device::LogicalMemorySpace;
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
 
-use crate::storage::{DenseStorageC64, DenseStorageF64, DiagStorageC64, DiagStorageF64, Storage};
+use crate::storage::{
+    col_major_strides, DenseStorageC64, DenseStorageF64, DiagStorageC64, DiagStorageF64, Storage,
+    StructuredStorage,
+};
 use crate::tensor_element::TensorElement;
 use crate::AnyScalar;
 
@@ -114,8 +117,25 @@ fn typed_f64_from_storage(storage: &Storage, logical_dims: &[usize]) -> Result<T
             TypedTensor::from_slice(ds.as_slice(), &[ds.len()], MemoryOrder::RowMajor)
                 .map_err(|e| anyhow!("failed to build f64 diagonal payload from storage: {e}"))
         }
+        Storage::StructuredF64(ds) => {
+            anyhow::ensure!(
+                ds.logical_dims() == logical_dims,
+                "logical dims {:?} do not match structured f64 storage logical dims {:?}",
+                logical_dims,
+                ds.logical_dims()
+            );
+            TypedTensor::from_slice(
+                &ds.payload_col_major_vec(),
+                ds.payload_dims(),
+                MemoryOrder::ColumnMajor,
+            )
+            .map_err(|e| anyhow!("failed to build structured f64 tensor from storage: {e}"))
+        }
         Storage::DenseC64(_) | Storage::DiagC64(_) => Err(anyhow!(
             "complex storage cannot be converted to f64 tenferro tensor"
+        )),
+        Storage::StructuredC64(_) => Err(anyhow!(
+            "complex structured storage cannot be converted to f64 tenferro tensor"
         )),
     }
 }
@@ -171,23 +191,58 @@ fn typed_c64_from_storage(
             TypedTensor::from_slice(&promoted, &[ds.len()], MemoryOrder::RowMajor)
                 .map_err(|e| anyhow!("failed to promote diag f64 tensor to c64: {e}"))
         }
+        Storage::StructuredC64(ds) => {
+            anyhow::ensure!(
+                ds.logical_dims() == logical_dims,
+                "logical dims {:?} do not match structured c64 storage logical dims {:?}",
+                logical_dims,
+                ds.logical_dims()
+            );
+            TypedTensor::from_slice(
+                &ds.payload_col_major_vec(),
+                ds.payload_dims(),
+                MemoryOrder::ColumnMajor,
+            )
+            .map_err(|e| anyhow!("failed to build structured c64 tensor from storage: {e}"))
+        }
+        Storage::StructuredF64(ds) => {
+            anyhow::ensure!(
+                ds.logical_dims() == logical_dims,
+                "logical dims {:?} do not match structured f64 storage logical dims {:?} for promotion",
+                logical_dims,
+                ds.logical_dims()
+            );
+            let promoted: Vec<Complex64> = ds
+                .payload_col_major_vec()
+                .into_iter()
+                .map(|value| Complex64::new(value, 0.0))
+                .collect();
+            TypedTensor::from_slice(&promoted, ds.payload_dims(), MemoryOrder::ColumnMajor)
+                .map_err(|e| anyhow!("failed to promote structured f64 tensor to c64: {e}"))
+        }
     }
 }
 
 /// Build a native dense tensor from row-major boundary data.
-pub fn dense_native_tensor_from_row_major<T: TensorElement>(
+///
+/// Temporary bridge helper used while column-major public semantics are being
+/// propagated through all internal callers.
+pub fn dense_native_tensor_from_row_major_temp<T: TensorElement>(
     data: &[T],
     logical_dims: &[usize],
 ) -> Result<NativeTensor> {
-    T::dense_native_tensor_from_row_major(data, logical_dims)
+    T::dense_native_tensor_from_row_major_temp(data, logical_dims)
 }
 
 /// Build a native diagonal tensor from row-major diagonal payload data.
-pub fn diag_native_tensor_from_row_major<T: TensorElement>(
+///
+/// Temporary bridge helper used while column-major public semantics are being
+/// propagated through all internal callers.
+pub fn diag_native_tensor_from_row_major_temp<T: TensorElement>(
     data: &[T],
     logical_rank: usize,
 ) -> Result<NativeTensor> {
-    T::diag_native_tensor_from_row_major(data, logical_rank)
+    T::diag_native_tensor_from_row_major_temp(data, logical_rank)
 }
 
 fn row_major_f64_storage(tensor: &TypedTensor<f64>, logical_dims: &[usize]) -> Result<Storage> {
@@ -237,6 +292,34 @@ where
     }
 }
 
+fn materialize_col_major_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
+where
+    T: TfScalar + Conjugate + Copy,
+{
+    let col_major = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let is_conjugated = col_major.is_conjugated();
+    let col_major = if col_major.logical_memory_space() == LogicalMemorySpace::MainMemory {
+        col_major
+    } else {
+        col_major
+            .to_memory_space_async(LogicalMemorySpace::MainMemory)
+            .map_err(|e| anyhow!("{op}: failed to move tensor to host memory: {e}"))?
+    };
+    let offset = usize::try_from(col_major.offset())
+        .map_err(|_| anyhow!("{op}: negative offset {}", col_major.offset()))?;
+    let len = col_major.len();
+    let slice = col_major
+        .buffer()
+        .as_slice()
+        .and_then(|values| values.get(offset..offset + len))
+        .ok_or_else(|| anyhow!("{op}: expected host-accessible contiguous tensor buffer"))?;
+    if is_conjugated {
+        Ok(slice.iter().copied().map(Conjugate::conj).collect())
+    } else {
+        Ok(slice.to_vec())
+    }
+}
+
 fn snapshot_f64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
     if snap.is_diag() && snap.dims().len() >= 2 {
         let payload = snap
@@ -246,16 +329,24 @@ fn snapshot_f64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
         return Ok(Storage::DiagF64(DiagStorageF64::from_vec(data)));
     }
 
-    let dense = if snap.is_dense() {
-        snap.clone()
+    if snap.is_dense() {
+        let payload = snap
+            .payload_f64()
+            .ok_or_else(|| anyhow!("expected f64 dense payload"))?;
+        row_major_f64_storage(payload, snap.dims())
     } else {
-        snap.to_dense()
-            .map_err(|e| anyhow!("failed to densify f64 snapshot: {e}"))?
-    };
-    let payload = dense
-        .payload_f64()
-        .ok_or_else(|| anyhow!("expected f64 dense payload"))?;
-    row_major_f64_storage(payload, dense.dims())
+        let payload = snap
+            .payload_f64()
+            .ok_or_else(|| anyhow!("expected f64 structured payload"))?;
+        let data =
+            materialize_col_major_values(payload, "f64 structured snapshot materialization")?;
+        Ok(Storage::StructuredF64(StructuredStorage::new(
+            data,
+            payload.dims().to_vec(),
+            col_major_strides(payload.dims()),
+            snap.axis_classes().to_vec(),
+        )?))
+    }
 }
 
 fn snapshot_c64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
@@ -267,16 +358,24 @@ fn snapshot_c64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
         return Ok(Storage::DiagC64(DiagStorageC64::from_vec(data)));
     }
 
-    let dense = if snap.is_dense() {
-        snap.clone()
+    if snap.is_dense() {
+        let payload = snap
+            .payload_c64()
+            .ok_or_else(|| anyhow!("expected c64 dense payload"))?;
+        row_major_c64_storage(payload, snap.dims())
     } else {
-        snap.to_dense()
-            .map_err(|e| anyhow!("failed to densify c64 snapshot: {e}"))?
-    };
-    let payload = dense
-        .payload_c64()
-        .ok_or_else(|| anyhow!("expected c64 dense payload"))?;
-    row_major_c64_storage(payload, dense.dims())
+        let payload = snap
+            .payload_c64()
+            .ok_or_else(|| anyhow!("expected c64 structured payload"))?;
+        let data =
+            materialize_col_major_values(payload, "c64 structured snapshot materialization")?;
+        Ok(Storage::StructuredC64(StructuredStorage::new(
+            data,
+            payload.dims().to_vec(),
+            col_major_strides(payload.dims()),
+            snap.axis_classes().to_vec(),
+        )?))
+    }
 }
 
 fn labels_to_notation(inputs: &[Vec<usize>], output: &[usize]) -> Result<String> {
@@ -390,6 +489,24 @@ pub fn storage_to_native_tensor(storage: &Storage, logical_dims: &[usize]) -> Re
                 Ok(payload)
             }
         }
+        Storage::StructuredF64(value) => {
+            let payload = NativeTensor::from_tensor(typed_f64_from_storage(storage, logical_dims)?);
+            if value.is_dense() {
+                Ok(payload)
+            } else {
+                NativeTensor::with_axis_classes(payload, value.axis_classes())
+                    .map_err(|e| anyhow!("failed to build structured f64 tensor from storage: {e}"))
+            }
+        }
+        Storage::StructuredC64(value) => {
+            let payload = NativeTensor::from_tensor(typed_c64_from_storage(storage, logical_dims)?);
+            if value.is_dense() {
+                Ok(payload)
+            } else {
+                NativeTensor::with_axis_classes(payload, value.axis_classes())
+                    .map_err(|e| anyhow!("failed to build structured c64 tensor from storage: {e}"))
+            }
+        }
     }
 }
 
@@ -407,23 +524,31 @@ pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage>
 }
 
 /// Materialize the dense primal payload of a native tensor as row-major `f64`.
-pub fn native_tensor_primal_to_dense_f64(tensor: &NativeTensor) -> Result<Vec<f64>> {
-    <f64 as TensorElement>::dense_values_from_native(tensor)
+///
+/// Temporary bridge helper used while column-major public semantics are being
+/// propagated through all internal callers.
+pub fn native_tensor_primal_to_dense_f64_row_major_temp(tensor: &NativeTensor) -> Result<Vec<f64>> {
+    <f64 as TensorElement>::dense_values_from_native_row_major_temp(tensor)
 }
 
 /// Materialize the dense primal payload of a native tensor as row-major `Complex64`.
-pub fn native_tensor_primal_to_dense_c64(tensor: &NativeTensor) -> Result<Vec<Complex64>> {
-    <Complex64 as TensorElement>::dense_values_from_native(tensor)
+///
+/// Temporary bridge helper used while column-major public semantics are being
+/// propagated through all internal callers.
+pub fn native_tensor_primal_to_dense_c64_row_major_temp(
+    tensor: &NativeTensor,
+) -> Result<Vec<Complex64>> {
+    <Complex64 as TensorElement>::dense_values_from_native_row_major_temp(tensor)
 }
 
 /// Materialize the diagonal payload of a native diagonal tensor as `f64`.
 pub fn native_tensor_primal_to_diag_f64(tensor: &NativeTensor) -> Result<Vec<f64>> {
-    <f64 as TensorElement>::diag_values_from_native(tensor)
+    <f64 as TensorElement>::diag_values_from_native_temp(tensor)
 }
 
 /// Materialize the diagonal payload of a native diagonal tensor as `Complex64`.
 pub fn native_tensor_primal_to_diag_c64(tensor: &NativeTensor) -> Result<Vec<Complex64>> {
-    <Complex64 as TensorElement>::diag_values_from_native(tensor)
+    <Complex64 as TensorElement>::diag_values_from_native_temp(tensor)
 }
 
 /// Extract the forward tangent of a native tensor as a primal tensor.
@@ -442,7 +567,7 @@ pub fn tangent_native_tensor(tensor: &NativeTensor) -> Option<NativeTensor> {
 /// a row-major reinterpretation needs an explicit bridge. We achieve this
 /// without dropping AD metadata by reversing axes, applying the native
 /// column-major reshape, then reversing axes back.
-pub fn reshape_row_major_native_tensor(
+pub fn reshape_row_major_native_tensor_temp(
     tensor: &NativeTensor,
     new_dims: &[usize],
 ) -> Result<NativeTensor> {
@@ -665,6 +790,18 @@ mod tests {
             (Storage::DiagC64(a), Storage::DiagC64(b)) => {
                 assert_eq!(a.as_slice(), b.as_slice());
             }
+            (Storage::StructuredF64(a), Storage::StructuredF64(b)) => {
+                assert_eq!(a.payload_dims(), b.payload_dims());
+                assert_eq!(a.strides(), b.strides());
+                assert_eq!(a.axis_classes(), b.axis_classes());
+                assert_eq!(a.data(), b.data());
+            }
+            (Storage::StructuredC64(a), Storage::StructuredC64(b)) => {
+                assert_eq!(a.payload_dims(), b.payload_dims());
+                assert_eq!(a.strides(), b.strides());
+                assert_eq!(a.axis_classes(), b.axis_classes());
+                assert_eq!(a.data(), b.data());
+            }
             _ => panic!(
                 "storage mismatch: lhs variant {:?}, rhs variant {:?}",
                 std::mem::discriminant(lhs),
@@ -695,6 +832,27 @@ mod tests {
 
         assert!(native.is_diag());
         assert_storage_eq(&roundtrip, &storage);
+    }
+
+    #[test]
+    fn storage_native_roundtrip_structured_preserves_axis_classes() {
+        let payload = NativeTensor::from_slice(&[1.0_f64, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let native = NativeTensor::with_axis_classes(payload, &[0, 1, 1]).unwrap();
+
+        let storage = native_tensor_primal_to_storage(&native).unwrap();
+        let roundtrip = storage_to_native_tensor(&storage, &[2, 2, 2]).unwrap();
+
+        match &storage {
+            Storage::StructuredF64(value) => {
+                assert_eq!(value.axis_classes(), &[0, 1, 1]);
+                assert_eq!(value.payload_dims(), &[2, 2]);
+            }
+            other => panic!("expected StructuredF64 storage, got {other:?}"),
+        }
+        assert_eq!(roundtrip.dims(), &[2, 2, 2]);
+        assert_eq!(roundtrip.axis_classes(), &[0, 1, 1]);
+        assert!(!roundtrip.is_dense());
+        assert!(!roundtrip.is_diag());
     }
 
     #[test]
@@ -814,7 +972,7 @@ mod tests {
     }
 
     #[test]
-    fn reshape_row_major_native_tensor_preserves_boundary_linearization_with_unit_dims() {
+    fn reshape_row_major_native_tensor_temp_preserves_boundary_linearization_with_unit_dims() {
         let native = storage_to_native_tensor(
             &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
                 vec![1.0, 2.0, 3.0, 4.0],
@@ -824,7 +982,7 @@ mod tests {
         )
         .unwrap();
 
-        let reshaped = reshape_row_major_native_tensor(&native, &[4, 1]).unwrap();
+        let reshaped = reshape_row_major_native_tensor_temp(&native, &[4, 1]).unwrap();
         let snapshot = native_tensor_primal_to_storage(&reshaped).unwrap();
 
         let expected = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
@@ -842,7 +1000,7 @@ mod tests {
         )
         .unwrap();
 
-        let reshaped = reshape_row_major_native_tensor(&native, &[2, 2, 1]).unwrap();
+        let reshaped = reshape_row_major_native_tensor_temp(&native, &[2, 2, 1]).unwrap();
         let snapshot = native_tensor_primal_to_storage(&reshaped).unwrap();
 
         let expected = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(

@@ -131,6 +131,32 @@ mod tests {
         TensorTrain::new(vec![t0, t1]).unwrap()
     }
 
+    fn project_dense_tensor_at_index<T: TestScalar>(
+        tensor: &TensorDynLen,
+        index: &DynIndex,
+        projected_value: usize,
+    ) -> TensorDynLen {
+        let indices = tensor.indices().to_vec();
+        let axis = indices
+            .iter()
+            .position(|candidate| candidate == index)
+            .unwrap();
+        let dims: Vec<usize> = indices.iter().map(|idx| idx.dim).collect();
+        let axis_stride = dims[..axis].iter().copied().product::<usize>().max(1);
+        let axis_dim = dims[axis];
+        let src_data = T::extract_slice(tensor);
+        let mut projected_data = vec![T::zero_val(); src_data.len()];
+
+        for (flat_idx, value) in src_data.iter().copied().enumerate() {
+            let axis_value = (flat_idx / axis_stride) % axis_dim;
+            if axis_value == projected_value {
+                projected_data[flat_idx] = value;
+            }
+        }
+
+        TensorDynLen::from_dense(indices, projected_data).unwrap()
+    }
+
     #[test]
     fn test_projector_compatibility_check() {
         let (s0, l01, s1, l12, s2) = make_contraction_indices();
@@ -374,24 +400,11 @@ mod tests {
 
         // Project t1_full: zero out s0=1 slice
         // t1_full has indices [s0, s1], shape [2, 2]
-        let t1_data = T::extract_slice(&t1_full);
-        let mut t1_proj_data = vec![T::zero_val(); t1_data.len()];
-        // Keep only s0=0 row: indices 0, 1 (s0*s1.dim + s1 = 0*2 + 0, 0*2 + 1)
-        t1_proj_data[0] = t1_data[0]; // [0, 0]
-        t1_proj_data[1] = t1_data[1]; // [0, 1]
-                                      // t1_proj_data[2], [3] remain 0 (s0=1 row)
-
-        let t1_proj = TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], t1_proj_data).unwrap();
+        let t1_proj = project_dense_tensor_at_index::<T>(&t1_full, &s0, 0);
 
         // Project t2_full: zero out s2=0 slice
         // t2_full has indices [s1, s2], shape [2, 2]
-        let t2_data = T::extract_slice(&t2_full);
-        let mut t2_proj_data = vec![T::zero_val(); t2_data.len()];
-        // Keep only s2=1 column: indices 1, 3 (s1*s2.dim + s2 = 0*2 + 1, 1*2 + 1)
-        t2_proj_data[1] = t2_data[1]; // [0, 1]
-        t2_proj_data[3] = t2_data[3]; // [1, 1]
-
-        let t2_proj = TensorDynLen::from_dense(vec![s1.clone(), s2.clone()], t2_proj_data).unwrap();
+        let t2_proj = project_dense_tensor_at_index::<T>(&t2_full, &s2, 1);
 
         // Contract projected tensors
         let expected = t1_proj.contract(&t2_proj);
@@ -449,21 +462,8 @@ mod tests {
                     .unwrap();
                 let contracted_full = result.data().to_dense().unwrap();
 
-                let t1_data = T::extract_slice(&t1_full);
-                let mut t1_proj_data = vec![T::zero_val(); t1_data.len()];
-                for s1_idx in 0..s1.dim {
-                    t1_proj_data[s0_val * s1.dim + s1_idx] = t1_data[s0_val * s1.dim + s1_idx];
-                }
-                let t1_proj =
-                    TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], t1_proj_data).unwrap();
-
-                let t2_data = T::extract_slice(&t2_full);
-                let mut t2_proj_data = vec![T::zero_val(); t2_data.len()];
-                for s1_idx in 0..s1.dim {
-                    t2_proj_data[s1_idx * s2.dim + s2_val] = t2_data[s1_idx * s2.dim + s2_val];
-                }
-                let t2_proj =
-                    TensorDynLen::from_dense(vec![s1.clone(), s2.clone()], t2_proj_data).unwrap();
+                let t1_proj = project_dense_tensor_at_index::<T>(&t1_full, &s0, s0_val);
+                let t2_proj = project_dense_tensor_at_index::<T>(&t2_full, &s2, s2_val);
 
                 let expected = t1_proj.contract(&t2_proj);
 
@@ -528,21 +528,8 @@ mod tests {
         let contracted_full = contracted_tt.to_dense().unwrap();
 
         // Compute expected: project both to s1=0, then contract
-        let t1_data = T::extract_slice(&t1_full);
-        let mut t1_proj_data = vec![T::zero_val(); t1_data.len()];
-        // Keep only s1=0 column: indices 0, 2
-        t1_proj_data[0] = t1_data[0]; // [s0=0, s1=0]
-        t1_proj_data[2] = t1_data[2]; // [s0=1, s1=0]
-
-        let t1_proj = TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], t1_proj_data).unwrap();
-
-        let t2_data = T::extract_slice(&t2_full);
-        let mut t2_proj_data = vec![T::zero_val(); t2_data.len()];
-        // Keep only s1=0 row: indices 0, 1
-        t2_proj_data[0] = t2_data[0]; // [s1=0, s2=0]
-        t2_proj_data[1] = t2_data[1]; // [s1=0, s2=1]
-
-        let t2_proj = TensorDynLen::from_dense(vec![s1.clone(), s2.clone()], t2_proj_data).unwrap();
+        let t1_proj = project_dense_tensor_at_index::<T>(&t1_full, &s1, 0);
+        let t2_proj = project_dense_tensor_at_index::<T>(&t2_full, &s1, 0);
 
         let expected = t1_proj.contract(&t2_proj);
 
@@ -598,13 +585,7 @@ mod tests {
         let contracted_full = result.data().to_dense().unwrap();
 
         // Compute expected: project t1 to s0=1, t2 unchanged
-        let t1_data = T::extract_slice(&t1_full);
-        let mut t1_proj_data = vec![T::zero_val(); t1_data.len()];
-        // Keep only s0=1 row: indices 2, 3
-        t1_proj_data[2] = t1_data[2]; // [s0=1, s1=0]
-        t1_proj_data[3] = t1_data[3]; // [s0=1, s1=1]
-
-        let t1_proj = TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], t1_proj_data).unwrap();
+        let t1_proj = project_dense_tensor_at_index::<T>(&t1_full, &s0, 1);
 
         let expected = t1_proj.contract(&t2_full);
 
@@ -660,19 +641,8 @@ mod tests {
         let contracted_full = result.data().to_dense().unwrap();
 
         // Compute expected: project both inputs to the given projector, then contract
-        let t1_data = T::extract_slice(&t1_full);
-        let mut t1_proj_data = vec![T::zero_val(); t1_data.len()];
-        t1_proj_data[0] = t1_data[0]; // [s0=0, s1=0]
-        t1_proj_data[1] = t1_data[1]; // [s0=0, s1=1]
-
-        let t1_proj = TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], t1_proj_data).unwrap();
-
-        let t2_data = T::extract_slice(&t2_full);
-        let mut t2_proj_data = vec![T::zero_val(); t2_data.len()];
-        t2_proj_data[1] = t2_data[1]; // [s1=0, s2=1]
-        t2_proj_data[3] = t2_data[3]; // [s1=1, s2=1]
-
-        let t2_proj = TensorDynLen::from_dense(vec![s1.clone(), s2.clone()], t2_proj_data).unwrap();
+        let t1_proj = project_dense_tensor_at_index::<T>(&t1_full, &s0, 0);
+        let t2_proj = project_dense_tensor_at_index::<T>(&t2_full, &s2, 1);
 
         let expected = t1_proj.contract(&t2_proj);
 

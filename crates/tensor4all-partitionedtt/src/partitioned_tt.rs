@@ -553,6 +553,32 @@ mod tests {
         TensorTrain::new(vec![t0, t1]).unwrap()
     }
 
+    fn project_dense_tensor_at_index(
+        tensor: &TensorDynLen,
+        index: &DynIndex,
+        projected_value: usize,
+    ) -> TensorDynLen {
+        let indices = tensor.indices().to_vec();
+        let axis = indices
+            .iter()
+            .position(|candidate| candidate == index)
+            .unwrap();
+        let dims: Vec<usize> = indices.iter().map(|idx| idx.dim).collect();
+        let axis_stride = dims[..axis].iter().copied().product::<usize>().max(1);
+        let axis_dim = dims[axis];
+        let src_data = tensor.as_slice_f64().unwrap();
+        let mut projected_data = vec![0.0_f64; src_data.len()];
+
+        for (flat_idx, value) in src_data.iter().copied().enumerate() {
+            let axis_value = (flat_idx / axis_stride) % axis_dim;
+            if axis_value == projected_value {
+                projected_data[flat_idx] = value;
+            }
+        }
+
+        TensorDynLen::from_dense(indices, projected_data).unwrap()
+    }
+
     #[test]
     fn test_partitioned_tt_contract_numerical() {
         let (s0, l01, s1, l12, s2) = make_contraction_indices();
@@ -596,24 +622,10 @@ mod tests {
             let t2_full = tt2.to_dense().unwrap();
 
             // Project t1 to s0=s0_val
-            let t1_data = t1_full.as_slice_f64().unwrap();
-            let mut t1_proj_data = vec![0.0f64; t1_data.len()];
-            // s0 is first index, so s0_val*s1.dim to s0_val*s1.dim + s1.dim - 1
-            for s1_idx in 0..s1.dim {
-                t1_proj_data[s0_val * s1.dim + s1_idx] = t1_data[s0_val * s1.dim + s1_idx];
-            }
-            let t1_proj =
-                TensorDynLen::from_dense(vec![s0.clone(), s1.clone()], t1_proj_data).unwrap();
+            let t1_proj = project_dense_tensor_at_index(&t1_full, &s0, s0_val);
 
             // Project t2 to s2=s2_val
-            let t2_data = t2_full.as_slice_f64().unwrap();
-            let mut t2_proj_data = vec![0.0f64; t2_data.len()];
-            // s2 is second index
-            for s1_idx in 0..s1.dim {
-                t2_proj_data[s1_idx * s2.dim + s2_val] = t2_data[s1_idx * s2.dim + s2_val];
-            }
-            let t2_proj =
-                TensorDynLen::from_dense(vec![s1.clone(), s2.clone()], t2_proj_data).unwrap();
+            let t2_proj = project_dense_tensor_at_index(&t2_full, &s2, s2_val);
 
             let expected = t1_proj.contract(&t2_proj);
             let expected_data = expected.as_slice_f64().unwrap();
