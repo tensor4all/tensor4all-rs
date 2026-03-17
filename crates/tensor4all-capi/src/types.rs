@@ -656,22 +656,22 @@ impl From<tensor4all_quanticstransform::BoundaryCondition> for t4a_boundary_cond
 mod tests {
     use super::*;
     use num_complex::Complex64;
-    use tensor4all_core::storage::{DiagStorageC64, DiagStorageF64};
 
     #[test]
     fn test_storage_kind_from_storage_diag() {
         // Test DiagF64
-        let diag_f64 = Storage::DiagF64(DiagStorageF64::from_vec(vec![1.0, 2.0]));
+        let diag_f64 = Storage::from_diag_f64_col_major(vec![1.0, 2.0], 2).unwrap();
         assert_eq!(
             t4a_storage_kind::from_storage(&diag_f64),
             t4a_storage_kind::DiagF64
         );
 
         // Test DiagC64
-        let diag_c64 = Storage::DiagC64(DiagStorageC64::from_vec(vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(2.0, 0.0),
-        ]));
+        let diag_c64 = Storage::from_diag_c64_col_major(
+            vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+            2,
+        )
+        .unwrap();
         assert_eq!(
             t4a_storage_kind::from_storage(&diag_c64),
             t4a_storage_kind::DiagC64

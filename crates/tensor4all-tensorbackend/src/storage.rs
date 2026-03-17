@@ -1060,47 +1060,6 @@ pub enum Storage {
     StructuredC64(StructuredStorage<Complex64>),
 }
 
-/// Type-driven constructor for `Storage`.
-///
-/// This enables `<T as DenseStorageFactory>::new_dense(size)` which creates
-/// a 1D zero-initialized DenseStorage with the given size.
-pub trait DenseStorageFactory {
-    /// Create a 1D zero-initialized storage with the given size.
-    fn new_dense(size: usize) -> Storage;
-
-    /// Create storage with the given shape, zero-initialized.
-    fn new_dense_with_shape(dims: &[usize]) -> Storage;
-}
-
-impl DenseStorageFactory for f64 {
-    fn new_dense(size: usize) -> Storage {
-        Storage::from_dense_f64_col_major(vec![0.0; size], &[size])
-            .unwrap_or_else(|err| panic!("DenseStorageFactory<f64>::new_dense failed: {err}"))
-    }
-
-    fn new_dense_with_shape(dims: &[usize]) -> Storage {
-        let size: usize = dims.iter().product();
-        Storage::from_dense_f64_col_major(vec![0.0; size], dims).unwrap_or_else(|err| {
-            panic!("DenseStorageFactory<f64>::new_dense_with_shape failed: {err}")
-        })
-    }
-}
-
-impl DenseStorageFactory for Complex64 {
-    fn new_dense(size: usize) -> Storage {
-        Storage::from_dense_c64_col_major(vec![Complex64::new(0.0, 0.0); size], &[size])
-            .unwrap_or_else(|err| panic!("DenseStorageFactory<Complex64>::new_dense failed: {err}"))
-    }
-
-    fn new_dense_with_shape(dims: &[usize]) -> Storage {
-        let size: usize = dims.iter().product();
-        Storage::from_dense_c64_col_major(vec![Complex64::new(0.0, 0.0); size], dims)
-            .unwrap_or_else(|err| {
-                panic!("DenseStorageFactory<Complex64>::new_dense_with_shape failed: {err}")
-            })
-    }
-}
-
 /// Types that can be computed as the result of a reduction over `Storage`.
 ///
 /// This lets callers write `let s: T = tensor.sum();` without matching on storage.
@@ -1583,11 +1542,11 @@ impl Storage {
     ///
     /// # Example
     /// ```
-    /// use tensor4all_tensorbackend::{Storage, DenseStorageC64};
+    /// use tensor4all_tensorbackend::Storage;
     /// use num_complex::Complex64;
     ///
     /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
-    /// let storage = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(data, &[2]));
+    /// let storage = Storage::from_dense_c64_col_major(data, &[2]).unwrap();
     /// let conj_storage = storage.conj();
     ///
     /// // conj(1+2i) = 1-2i, conj(3-4i) = 3+4i
@@ -3205,11 +3164,11 @@ mod tests {
         assert!(diag.is_empty());
     }
 
-    // ===== DenseStorageFactory tests =====
+    // ===== Storage zero-constructor tests =====
 
     #[test]
-    fn test_dense_storage_factory_f64() {
-        let s = <f64 as DenseStorageFactory>::new_dense(3);
+    fn test_storage_new_dense_f64() {
+        let s = Storage::new_dense_f64(3);
         assert_eq!(s.len(), 3);
         assert!(s.is_f64());
         let data = extract_f64(&s);
@@ -3217,21 +3176,22 @@ mod tests {
     }
 
     #[test]
-    fn test_dense_storage_factory_c64() {
-        let s = <Complex64 as DenseStorageFactory>::new_dense(2);
+    fn test_storage_new_dense_c64() {
+        let s = Storage::new_dense_c64(2);
         assert_eq!(s.len(), 2);
         assert!(s.is_c64());
     }
 
     #[test]
-    fn test_dense_storage_factory_with_shape_f64() {
-        let s = <f64 as DenseStorageFactory>::new_dense_with_shape(&[2, 3]);
+    fn test_storage_from_dense_f64_col_major_zeros_with_shape() {
+        let s = Storage::from_dense_f64_col_major(vec![0.0; 6], &[2, 3]).unwrap();
         assert_eq!(s.len(), 6);
     }
 
     #[test]
-    fn test_dense_storage_factory_with_shape_c64() {
-        let s = <Complex64 as DenseStorageFactory>::new_dense_with_shape(&[3, 2]);
+    fn test_storage_from_dense_c64_col_major_zeros_with_shape() {
+        let s =
+            Storage::from_dense_c64_col_major(vec![Complex64::new(0.0, 0.0); 6], &[3, 2]).unwrap();
         assert_eq!(s.len(), 6);
     }
 

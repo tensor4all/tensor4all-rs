@@ -25,8 +25,8 @@ pub mod tensor_element;
 pub use any_scalar::AnyScalar;
 pub use storage::{
     contract_storage, make_mut_storage, mindim, DenseScalar, DenseStorage, DenseStorageC64,
-    DenseStorageF64, DenseStorageFactory, DiagStorage, DiagStorageC64, DiagStorageF64, Storage,
-    StorageScalar, StructuredStorage, SumFromStorage,
+    DenseStorageF64, DiagStorage, DiagStorageC64, DiagStorageF64, Storage, StorageScalar,
+    StructuredStorage, SumFromStorage,
 };
 pub use tenferro_bridge::{
     axpby_native_tensor, axpby_storage_native, conj_native_tensor, contract_native_tensor,
