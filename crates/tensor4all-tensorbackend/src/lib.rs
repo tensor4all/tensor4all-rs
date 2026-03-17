@@ -25,8 +25,7 @@ mod tensor_element;
 pub use any_scalar::AnyScalar;
 pub use backend::{qr_backend, svd_backend, BackendLinalgScalar, SvdResult};
 pub use storage::{
-    contract_storage, make_mut_storage, mindim, DenseScalar, Storage, StructuredStorage,
-    SumFromStorage,
+    contract_storage, make_mut_storage, mindim, Storage, StructuredStorage, SumFromStorage,
 };
 pub use tenferro_bridge::{
     axpby_native_tensor, axpby_storage_native, conj_native_tensor, contract_native_tensor,

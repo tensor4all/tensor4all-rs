@@ -2,17 +2,17 @@ use anyhow::{anyhow, ensure, Result};
 use mdarray::{DynRank, Shape, Tensor};
 use num_complex::{Complex64, ComplexFloat};
 use num_traits::{One, Zero};
+#[cfg(test)]
 use rand::Rng;
+#[cfg(test)]
 use rand_distr::{Distribution, StandardNormal};
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Deref, DerefMut, Mul};
 use std::sync::Arc;
 
-/// Trait for scalar types that can be used in dense storage.
-///
-/// This trait defines the requirements for types that can be stored in `DenseStorage<T>`.
-pub trait DenseScalar:
+/// Trait for scalar types supported by legacy dense/diagonal kernels.
+pub(crate) trait DenseScalar:
     Clone
     + Copy
     + Debug
@@ -38,14 +38,14 @@ impl DenseScalar for Complex64 {}
 /// Shape information is stored within the tensor, eliminating the need to pass
 /// dimensions separately to operations like `permute` and `contract`.
 #[derive(Debug, Clone)]
-pub struct DenseStorage<T>(Tensor<T, DynRank>);
+pub(crate) struct DenseStorage<T>(Tensor<T, DynRank>);
 
 impl<T> DenseStorage<T> {
     /// Create a new DenseStorage from a Vec with explicit shape.
     ///
     /// # Panics
     /// Panics if the product of dims doesn't match vec.len().
-    pub fn from_vec_with_shape(vec: Vec<T>, dims: &[usize]) -> Self {
+    pub(crate) fn from_vec_with_shape(vec: Vec<T>, dims: &[usize]) -> Self {
         let expected_len: usize = dims.iter().product();
         assert_eq!(
             vec.len(),
@@ -60,82 +60,93 @@ impl<T> DenseStorage<T> {
     }
 
     /// Create a scalar (0-dimensional) storage from a single value.
-    pub fn from_scalar(val: T) -> Self {
+    #[cfg(test)]
+    pub(crate) fn from_scalar(val: T) -> Self {
         let tensor = Tensor::from(vec![val]).into_shape(DynRank::from_dims(&[]));
         Self(tensor)
     }
 
     /// Get the shape (dimensions) of the storage.
-    pub fn dims(&self) -> Vec<usize> {
+    pub(crate) fn dims(&self) -> Vec<usize> {
         self.0.shape().with_dims(|d| d.to_vec())
     }
 
     /// Get the rank (number of dimensions).
-    pub fn rank(&self) -> usize {
+    pub(crate) fn rank(&self) -> usize {
         self.0.rank()
     }
 
     /// Get underlying data as a slice.
-    pub fn as_slice(&self) -> &[T] {
+    pub(crate) fn as_slice(&self) -> &[T] {
         &self.0[..]
     }
 
     /// Get underlying data as a mutable slice.
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
+    #[cfg(test)]
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [T] {
         &mut self.0[..]
     }
 
     /// Convert to Vec, consuming the storage.
-    pub fn into_vec(self) -> Vec<T> {
+    #[cfg(test)]
+    pub(crate) fn into_vec(self) -> Vec<T> {
         self.0.into_vec()
     }
 
     /// Get the total number of elements.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Check if the storage is empty.
-    pub fn is_empty(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     /// Get a reference to the underlying tensor.
-    pub fn tensor(&self) -> &Tensor<T, DynRank> {
+    #[cfg(test)]
+    pub(crate) fn tensor(&self) -> &Tensor<T, DynRank> {
         &self.0
     }
 
     /// Get a mutable reference to the underlying tensor.
-    pub fn tensor_mut(&mut self) -> &mut Tensor<T, DynRank> {
+    #[cfg(test)]
+    pub(crate) fn tensor_mut(&mut self) -> &mut Tensor<T, DynRank> {
         &mut self.0
     }
 
     /// Consume and return the underlying tensor.
-    pub fn into_tensor(self) -> Tensor<T, DynRank> {
+    #[cfg(test)]
+    pub(crate) fn into_tensor(self) -> Tensor<T, DynRank> {
         self.0
     }
 
     /// Create from an existing tensor.
-    pub fn from_tensor(tensor: Tensor<T, DynRank>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn from_tensor(tensor: Tensor<T, DynRank>) -> Self {
         Self(tensor)
     }
 
     /// Iterate over elements.
-    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+    #[cfg(test)]
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, T> {
         self.as_slice().iter()
     }
 }
 
 impl<T: Clone> DenseStorage<T> {
     /// Get element at linear index.
-    pub fn get(&self, i: usize) -> T {
+    #[cfg(test)]
+    pub(crate) fn get(&self, i: usize) -> T {
         self.0[i].clone()
     }
 }
 
 impl<T: Copy> DenseStorage<T> {
     /// Set element at linear index.
-    pub fn set(&mut self, i: usize, val: T) {
+    #[cfg(test)]
+    pub(crate) fn set(&mut self, i: usize, val: T) {
         self.0[i] = val;
     }
 }
@@ -158,7 +169,7 @@ impl<T: DenseScalar> DenseStorage<T> {
     /// Permute the dense storage data according to the given permutation.
     ///
     /// Uses the internal shape information - no external dims parameter needed.
-    pub fn permute(&self, perm: &[usize]) -> Self {
+    pub(crate) fn permute(&self, perm: &[usize]) -> Self {
         assert_eq!(
             perm.len(),
             self.rank(),
@@ -178,7 +189,7 @@ impl<T: DenseScalar> DenseStorage<T> {
     /// to make the contracted axes contiguous before GEMM-style contraction.
     ///
     /// Uses internal shape information - no external dims parameters needed.
-    pub fn contract(&self, axes: &[usize], other: &Self, other_axes: &[usize]) -> Self {
+    pub(crate) fn contract(&self, axes: &[usize], other: &Self, other_axes: &[usize]) -> Self {
         let dims = self.dims();
         let other_dims = other.dims();
 
@@ -219,13 +230,15 @@ impl DenseStorage<f64> {
     /// Create storage with random values from standard normal distribution.
     ///
     /// Creates a 1D storage with the given size.
-    pub fn random_1d<R: Rng>(rng: &mut R, size: usize) -> Self {
+    #[cfg(test)]
+    pub(crate) fn random_1d<R: Rng>(rng: &mut R, size: usize) -> Self {
         let data: Vec<f64> = (0..size).map(|_| StandardNormal.sample(rng)).collect();
         Self::from_vec_with_shape(data, &[size])
     }
 
     /// Create storage with random values with explicit shape.
-    pub fn random<R: Rng>(rng: &mut R, dims: &[usize]) -> Self {
+    #[cfg(test)]
+    pub(crate) fn random<R: Rng>(rng: &mut R, dims: &[usize]) -> Self {
         let size: usize = dims.iter().product();
         let data: Vec<f64> = (0..size).map(|_| StandardNormal.sample(rng)).collect();
         Self::from_vec_with_shape(data, dims)
@@ -237,7 +250,8 @@ impl DenseStorage<Complex64> {
     /// Create storage with random complex values (re, im both from standard normal).
     ///
     /// Creates a 1D storage with the given size.
-    pub fn random_1d<R: Rng>(rng: &mut R, size: usize) -> Self {
+    #[cfg(test)]
+    pub(crate) fn random_1d<R: Rng>(rng: &mut R, size: usize) -> Self {
         let data: Vec<Complex64> = (0..size)
             .map(|_| Complex64::new(StandardNormal.sample(rng), StandardNormal.sample(rng)))
             .collect();
@@ -245,7 +259,8 @@ impl DenseStorage<Complex64> {
     }
 
     /// Create storage with random complex values with explicit shape.
-    pub fn random<R: Rng>(rng: &mut R, dims: &[usize]) -> Self {
+    #[cfg(test)]
+    pub(crate) fn random<R: Rng>(rng: &mut R, dims: &[usize]) -> Self {
         let size: usize = dims.iter().product();
         let data: Vec<Complex64> = (0..size)
             .map(|_| Complex64::new(StandardNormal.sample(rng), StandardNormal.sample(rng)))
@@ -255,10 +270,12 @@ impl DenseStorage<Complex64> {
 }
 
 /// Type alias for f64 dense storage (for backward compatibility).
-pub type DenseStorageF64 = DenseStorage<f64>;
+#[doc(hidden)]
+pub(crate) type DenseStorageF64 = DenseStorage<f64>;
 
 /// Type alias for Complex64 dense storage (for backward compatibility).
-pub type DenseStorageC64 = DenseStorage<Complex64>;
+#[doc(hidden)]
+pub(crate) type DenseStorageC64 = DenseStorage<Complex64>;
 
 pub(crate) fn col_major_strides(dims: &[usize]) -> Vec<isize> {
     let mut strides = Vec::with_capacity(dims.len());
@@ -353,26 +370,6 @@ fn row_major_to_col_major_values<T: Clone>(data: &[T], dims: &[usize]) -> Vec<T>
             data[offset].clone()
         })
         .collect()
-}
-
-fn col_major_to_row_major_values<T: Clone>(data: &[T], dims: &[usize]) -> Vec<T> {
-    let total_len: usize = dims.iter().product();
-    if total_len == 0 {
-        return Vec::new();
-    }
-
-    let row_major_strides = compute_strides(dims);
-    let mut out = vec![data[0].clone(); total_len];
-    for (linear, value) in data.iter().enumerate().take(total_len) {
-        let index = col_major_multi_index(linear, dims);
-        let offset: usize = index
-            .iter()
-            .zip(row_major_strides.iter())
-            .map(|(&coord, &stride)| coord * stride)
-            .sum();
-        out[offset] = value.clone();
-    }
-    out
 }
 
 fn offset_from_strides(index: &[usize], strides: &[isize]) -> usize {
@@ -676,50 +673,55 @@ fn compute_contraction_permutation(
 
 /// Diagonal storage for tensor elements, generic over scalar type.
 #[derive(Debug, Clone)]
-pub struct DiagStorage<T>(Vec<T>);
+pub(crate) struct DiagStorage<T>(Vec<T>);
 
 impl<T> DiagStorage<T> {
     /// Create a new diagonal storage from a vector of diagonal elements.
-    pub fn from_vec(vec: Vec<T>) -> Self {
+    pub(crate) fn from_vec(vec: Vec<T>) -> Self {
         Self(vec)
     }
 
     /// Get a slice of the diagonal elements.
-    pub fn as_slice(&self) -> &[T] {
+    pub(crate) fn as_slice(&self) -> &[T] {
         &self.0
     }
 
     /// Get a mutable slice of the diagonal elements.
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
+    #[cfg(test)]
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [T] {
         &mut self.0
     }
 
     /// Consume the storage and return the underlying vector.
-    pub fn into_vec(self) -> Vec<T> {
+    #[cfg(test)]
+    pub(crate) fn into_vec(self) -> Vec<T> {
         self.0
     }
 
     /// Return the number of diagonal elements.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
 
     /// Return true if the storage has no elements.
-    pub fn is_empty(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 }
 
 impl<T: Clone> DiagStorage<T> {
     /// Get a clone of the diagonal element at index `i`.
-    pub fn get(&self, i: usize) -> T {
+    #[cfg(test)]
+    pub(crate) fn get(&self, i: usize) -> T {
         self.0[i].clone()
     }
 }
 
 impl<T: Copy> DiagStorage<T> {
     /// Set the diagonal element at index `i` to `val`.
-    pub fn set(&mut self, i: usize, val: T) {
+    #[cfg(test)]
+    pub(crate) fn set(&mut self, i: usize, val: T) {
         self.0[i] = val;
     }
 }
@@ -727,7 +729,7 @@ impl<T: Copy> DiagStorage<T> {
 impl<T: DenseScalar> DiagStorage<T> {
     /// Convert diagonal storage to a dense vector representation.
     /// Creates a dense vector with diagonal elements set and off-diagonal elements as zero.
-    pub fn to_dense_vec(&self, dims: &[usize]) -> Vec<T> {
+    pub(crate) fn to_dense_vec(&self, dims: &[usize]) -> Vec<T> {
         let total_size: usize = dims.iter().product();
         let mut dense_vec = vec![T::zero(); total_size];
         let mindim_val = mindim(dims);
@@ -765,7 +767,7 @@ impl<T: DenseScalar> DiagStorage<T> {
 
     /// Contract this diagonal storage with another diagonal storage of the same type.
     /// Returns either a scalar (Dense with one element) or a diagonal storage.
-    pub fn contract_diag_diag(
+    pub(crate) fn contract_diag_diag(
         &self,
         dims: &[usize],
         other: &Self,
@@ -802,7 +804,7 @@ impl<T: DenseScalar> DiagStorage<T> {
     /// # Returns
     /// The contracted storage (always Dense, since Diag structure is generally lost)
     #[allow(clippy::too_many_arguments)]
-    pub fn contract_diag_dense(
+    pub(crate) fn contract_diag_dense(
         &self,
         diag_dims: &[usize],
         axes_diag: &[usize],
@@ -826,10 +828,12 @@ impl<T: DenseScalar> DiagStorage<T> {
 }
 
 /// Type alias for f64 diagonal storage (for backward compatibility).
-pub type DiagStorageF64 = DiagStorage<f64>;
+#[doc(hidden)]
+pub(crate) type DiagStorageF64 = DiagStorage<f64>;
 
 /// Type alias for Complex64 diagonal storage (for backward compatibility).
-pub type DiagStorageC64 = DiagStorage<Complex64>;
+#[doc(hidden)]
+pub(crate) type DiagStorageC64 = DiagStorage<Complex64>;
 
 /// Generic implementation of Diag × Dense contraction.
 ///
@@ -1041,16 +1045,26 @@ fn contract_dense_diag_impl<T: DenseScalar>(
 }
 
 /// Storage backend for tensor data.
-/// Supports Dense and Diag storage for f64 and Complex64 element types.
+///
+/// Public callers interact with this opaque wrapper through constructors and
+/// high-level query/materialization methods. Temporary dense/diagonal kernel
+/// variants stay crate-private during the structured-storage migration.
 #[derive(Debug, Clone)]
-pub enum Storage {
+pub struct Storage(pub(crate) StorageRepr);
+
+#[derive(Debug, Clone)]
+pub(crate) enum StorageRepr {
     /// Dense storage with f64 elements.
+    #[doc(hidden)]
     DenseF64(DenseStorageF64),
     /// Dense storage with Complex64 elements.
+    #[doc(hidden)]
     DenseC64(DenseStorageC64),
     /// Diagonal storage with f64 elements.
+    #[doc(hidden)]
     DiagF64(DiagStorageF64),
     /// Diagonal storage with Complex64 elements.
+    #[doc(hidden)]
     DiagC64(DiagStorageC64),
     /// General structured storage with f64 elements.
     StructuredF64(StructuredStorage<f64>),
@@ -1068,26 +1082,26 @@ pub trait SumFromStorage: Sized {
 
 impl SumFromStorage for f64 {
     fn sum_from_storage(storage: &Storage) -> Self {
-        match storage {
-            Storage::DenseF64(v) => v.as_slice().iter().copied().sum(),
-            Storage::DenseC64(v) => v.as_slice().iter().map(|z| z.re).sum(),
-            Storage::DiagF64(v) => v.as_slice().iter().copied().sum(),
-            Storage::DiagC64(v) => v.as_slice().iter().map(|z| z.re).sum(),
-            Storage::StructuredF64(v) => v.data().iter().copied().sum(),
-            Storage::StructuredC64(v) => v.data().iter().map(|z| z.re).sum(),
+        match &storage.0 {
+            StorageRepr::DenseF64(v) => v.as_slice().iter().copied().sum(),
+            StorageRepr::DenseC64(v) => v.as_slice().iter().map(|z| z.re).sum(),
+            StorageRepr::DiagF64(v) => v.as_slice().iter().copied().sum(),
+            StorageRepr::DiagC64(v) => v.as_slice().iter().map(|z| z.re).sum(),
+            StorageRepr::StructuredF64(v) => v.data().iter().copied().sum(),
+            StorageRepr::StructuredC64(v) => v.data().iter().map(|z| z.re).sum(),
         }
     }
 }
 
 impl SumFromStorage for Complex64 {
     fn sum_from_storage(storage: &Storage) -> Self {
-        match storage {
-            Storage::DenseF64(v) => Complex64::new(v.as_slice().iter().copied().sum(), 0.0),
-            Storage::DenseC64(v) => v.as_slice().iter().copied().sum(),
-            Storage::DiagF64(v) => Complex64::new(v.as_slice().iter().copied().sum(), 0.0),
-            Storage::DiagC64(v) => v.as_slice().iter().copied().sum(),
-            Storage::StructuredF64(v) => Complex64::new(v.data().iter().copied().sum(), 0.0),
-            Storage::StructuredC64(v) => v.data().iter().copied().sum(),
+        match &storage.0 {
+            StorageRepr::DenseF64(v) => Complex64::new(v.as_slice().iter().copied().sum(), 0.0),
+            StorageRepr::DenseC64(v) => v.as_slice().iter().copied().sum(),
+            StorageRepr::DiagF64(v) => Complex64::new(v.as_slice().iter().copied().sum(), 0.0),
+            StorageRepr::DiagC64(v) => v.as_slice().iter().copied().sum(),
+            StorageRepr::StructuredF64(v) => Complex64::new(v.data().iter().copied().sum(), 0.0),
+            StorageRepr::StructuredC64(v) => v.data().iter().copied().sum(),
         }
     }
 }
@@ -1096,6 +1110,38 @@ impl SumFromStorage for Complex64 {
 pub use crate::any_scalar::AnyScalar;
 
 impl Storage {
+    pub(crate) fn from_repr(repr: StorageRepr) -> Self {
+        Self(repr)
+    }
+
+    pub(crate) fn repr(&self) -> &StorageRepr {
+        &self.0
+    }
+
+    pub(crate) fn dense_f64_legacy(value: DenseStorageF64) -> Self {
+        Self(StorageRepr::DenseF64(value))
+    }
+
+    pub(crate) fn dense_c64_legacy(value: DenseStorageC64) -> Self {
+        Self(StorageRepr::DenseC64(value))
+    }
+
+    pub(crate) fn diag_f64_legacy(value: DiagStorageF64) -> Self {
+        Self(StorageRepr::DiagF64(value))
+    }
+
+    pub(crate) fn diag_c64_legacy(value: DiagStorageC64) -> Self {
+        Self(StorageRepr::DiagC64(value))
+    }
+
+    pub(crate) fn structured_f64(value: StructuredStorage<f64>) -> Self {
+        Self(StorageRepr::StructuredF64(value))
+    }
+
+    pub(crate) fn structured_c64(value: StructuredStorage<Complex64>) -> Self {
+        Self(StorageRepr::StructuredC64(value))
+    }
+
     fn validate_dense_len<T>(data: &[T], logical_dims: &[usize], label: &str) -> Result<()> {
         let expected_len: usize = logical_dims.iter().product();
         ensure!(
@@ -1122,43 +1168,43 @@ impl Storage {
 
     /// Create a new DiagF64 storage with the given diagonal data.
     pub fn new_diag_f64(diag_data: Vec<f64>) -> Self {
-        Self::DiagF64(DiagStorageF64::from_vec(diag_data))
+        Self::from_diag_f64_col_major(diag_data, 2)
+            .unwrap_or_else(|err| panic!("Storage::new_diag_f64 failed: {err}"))
     }
 
     /// Create a new DiagC64 storage with the given diagonal data.
     pub fn new_diag_c64(diag_data: Vec<Complex64>) -> Self {
-        Self::DiagC64(DiagStorageC64::from_vec(diag_data))
+        Self::from_diag_c64_col_major(diag_data, 2)
+            .unwrap_or_else(|err| panic!("Storage::new_diag_c64 failed: {err}"))
     }
 
     /// Create dense f64 storage from column-major logical values.
     pub fn from_dense_f64_col_major(data: Vec<f64>, logical_dims: &[usize]) -> Result<Self> {
         Self::validate_dense_len(&data, logical_dims, "dense f64 payload")?;
-        Ok(Self::StructuredF64(
+        Ok(Self::from_repr(StorageRepr::StructuredF64(
             StructuredStorage::from_dense_col_major(data, logical_dims),
-        ))
+        )))
     }
 
     /// Create dense Complex64 storage from column-major logical values.
     pub fn from_dense_c64_col_major(data: Vec<Complex64>, logical_dims: &[usize]) -> Result<Self> {
         Self::validate_dense_len(&data, logical_dims, "dense c64 payload")?;
-        Ok(Self::StructuredC64(
+        Ok(Self::from_repr(StorageRepr::StructuredC64(
             StructuredStorage::from_dense_col_major(data, logical_dims),
-        ))
+        )))
     }
 
     /// Create diagonal f64 storage from column-major diagonal payload values.
     pub fn from_diag_f64_col_major(diag_data: Vec<f64>, logical_rank: usize) -> Result<Self> {
-        Ok(Self::StructuredF64(StructuredStorage::from_diag_col_major(
-            diag_data,
-            logical_rank,
+        Ok(Self::from_repr(StorageRepr::StructuredF64(
+            StructuredStorage::from_diag_col_major(diag_data, logical_rank),
         )))
     }
 
     /// Create diagonal Complex64 storage from column-major diagonal payload values.
     pub fn from_diag_c64_col_major(diag_data: Vec<Complex64>, logical_rank: usize) -> Result<Self> {
-        Ok(Self::StructuredC64(StructuredStorage::from_diag_col_major(
-            diag_data,
-            logical_rank,
+        Ok(Self::from_repr(StorageRepr::StructuredC64(
+            StructuredStorage::from_diag_col_major(diag_data, logical_rank),
         )))
     }
 
@@ -1169,12 +1215,9 @@ impl Storage {
         strides: Vec<isize>,
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
-        Ok(Self::StructuredF64(StructuredStorage::new(
-            data,
-            payload_dims,
-            strides,
-            axis_classes,
-        )?))
+        Ok(Self::from_repr(StorageRepr::StructuredF64(
+            StructuredStorage::new(data, payload_dims, strides, axis_classes)?,
+        )))
     }
 
     /// Create a new structured Complex64 storage.
@@ -1184,47 +1227,44 @@ impl Storage {
         strides: Vec<isize>,
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
-        Ok(Self::StructuredC64(StructuredStorage::new(
-            data,
-            payload_dims,
-            strides,
-            axis_classes,
-        )?))
+        Ok(Self::from_repr(StorageRepr::StructuredC64(
+            StructuredStorage::new(data, payload_dims, strides, axis_classes)?,
+        )))
     }
 
     /// Check if this storage is logically dense.
     pub fn is_dense(&self) -> bool {
-        match self {
-            Self::DenseF64(_) | Self::DenseC64(_) => true,
-            Self::DiagF64(_) | Self::DiagC64(_) => false,
-            Self::StructuredF64(value) => value.is_dense(),
-            Self::StructuredC64(value) => value.is_dense(),
+        match &self.0 {
+            StorageRepr::DenseF64(_) | StorageRepr::DenseC64(_) => true,
+            StorageRepr::DiagF64(_) | StorageRepr::DiagC64(_) => false,
+            StorageRepr::StructuredF64(value) => value.is_dense(),
+            StorageRepr::StructuredC64(value) => value.is_dense(),
         }
     }
 
     /// Check if this storage is a Diag storage type.
     pub fn is_diag(&self) -> bool {
-        match self {
-            Self::DiagF64(_) | Self::DiagC64(_) => true,
-            Self::DenseF64(_) | Self::DenseC64(_) => false,
-            Self::StructuredF64(value) => value.is_diag(),
-            Self::StructuredC64(value) => value.is_diag(),
+        match &self.0 {
+            StorageRepr::DiagF64(_) | StorageRepr::DiagC64(_) => true,
+            StorageRepr::DenseF64(_) | StorageRepr::DenseC64(_) => false,
+            StorageRepr::StructuredF64(value) => value.is_diag(),
+            StorageRepr::StructuredC64(value) => value.is_diag(),
         }
     }
 
     /// Check if this storage uses f64 scalar type.
     pub fn is_f64(&self) -> bool {
         matches!(
-            self,
-            Self::DenseF64(_) | Self::DiagF64(_) | Self::StructuredF64(_)
+            &self.0,
+            StorageRepr::DenseF64(_) | StorageRepr::DiagF64(_) | StorageRepr::StructuredF64(_)
         )
     }
 
     /// Check if this storage uses Complex64 scalar type.
     pub fn is_c64(&self) -> bool {
         matches!(
-            self,
-            Self::DenseC64(_) | Self::DiagC64(_) | Self::StructuredC64(_)
+            &self.0,
+            StorageRepr::DenseC64(_) | StorageRepr::DiagC64(_) | StorageRepr::StructuredC64(_)
         )
     }
 
@@ -1237,13 +1277,13 @@ impl Storage {
 
     /// Get the length of the storage (number of elements).
     pub fn len(&self) -> usize {
-        match self {
-            Self::DenseF64(v) => v.len(),
-            Self::DenseC64(v) => v.len(),
-            Self::DiagF64(v) => v.len(),
-            Self::DiagC64(v) => v.len(),
-            Self::StructuredF64(v) => v.len(),
-            Self::StructuredC64(v) => v.len(),
+        match &self.0 {
+            StorageRepr::DenseF64(v) => v.len(),
+            StorageRepr::DenseC64(v) => v.len(),
+            StorageRepr::DiagF64(v) => v.len(),
+            StorageRepr::DiagC64(v) => v.len(),
+            StorageRepr::StructuredF64(v) => v.len(),
+            StorageRepr::StructuredC64(v) => v.len(),
         }
     }
 
@@ -1267,28 +1307,34 @@ impl Storage {
     /// For real storage this is `max(|x|)`, and for complex storage this is
     /// `max(norm(z))`.
     pub fn max_abs(&self) -> f64 {
-        match self {
-            Storage::DenseF64(v) => v.as_slice().iter().map(|x| x.abs()).fold(0.0_f64, f64::max),
-            Storage::DiagF64(v) => v.as_slice().iter().map(|x| x.abs()).fold(0.0_f64, f64::max),
-            Storage::DenseC64(v) => v
+        match &self.0 {
+            StorageRepr::DenseF64(v) => {
+                v.as_slice().iter().map(|x| x.abs()).fold(0.0_f64, f64::max)
+            }
+            StorageRepr::DiagF64(v) => v.as_slice().iter().map(|x| x.abs()).fold(0.0_f64, f64::max),
+            StorageRepr::DenseC64(v) => v
                 .as_slice()
                 .iter()
                 .map(|z| z.norm())
                 .fold(0.0_f64, f64::max),
-            Storage::DiagC64(v) => v
+            StorageRepr::DiagC64(v) => v
                 .as_slice()
                 .iter()
                 .map(|z| z.norm())
                 .fold(0.0_f64, f64::max),
-            Storage::StructuredF64(v) => v.data().iter().map(|x| x.abs()).fold(0.0_f64, f64::max),
-            Storage::StructuredC64(v) => v.data().iter().map(|z| z.norm()).fold(0.0_f64, f64::max),
+            StorageRepr::StructuredF64(v) => {
+                v.data().iter().map(|x| x.abs()).fold(0.0_f64, f64::max)
+            }
+            StorageRepr::StructuredC64(v) => {
+                v.data().iter().map(|z| z.norm()).fold(0.0_f64, f64::max)
+            }
         }
     }
 
     /// Materialize dense logical values as a column-major `f64` buffer.
     pub fn to_dense_f64_col_major_vec(&self, logical_dims: &[usize]) -> Result<Vec<f64>, String> {
-        match self {
-            Storage::DenseF64(v) => {
+        match &self.0 {
+            StorageRepr::DenseF64(v) => {
                 let expected_len: usize = logical_dims.iter().product();
                 if expected_len != v.len() {
                     return Err(format!(
@@ -1299,11 +1345,11 @@ impl Storage {
                 }
                 Ok(row_major_to_col_major_values(v.as_slice(), logical_dims))
             }
-            Storage::DiagF64(v) => Ok(row_major_to_col_major_values(
+            StorageRepr::DiagF64(v) => Ok(row_major_to_col_major_values(
                 &v.to_dense_vec(logical_dims),
                 logical_dims,
             )),
-            Storage::StructuredF64(v) => {
+            StorageRepr::StructuredF64(v) => {
                 let structured_dims = v.logical_dims();
                 if structured_dims != logical_dims {
                     return Err(format!(
@@ -1323,7 +1369,7 @@ impl Storage {
                         .map_err(|err| err.to_string())
                 }
             }
-            Storage::DenseC64(_) | Storage::DiagC64(_) | Storage::StructuredC64(_) => {
+            StorageRepr::DenseC64(_) | StorageRepr::DiagC64(_) | StorageRepr::StructuredC64(_) => {
                 Err("expected f64 storage when materializing dense f64 values".to_string())
             }
         }
@@ -1334,8 +1380,8 @@ impl Storage {
         &self,
         logical_dims: &[usize],
     ) -> Result<Vec<Complex64>, String> {
-        match self {
-            Storage::DenseC64(v) => {
+        match &self.0 {
+            StorageRepr::DenseC64(v) => {
                 let expected_len: usize = logical_dims.iter().product();
                 if expected_len != v.len() {
                     return Err(format!(
@@ -1346,11 +1392,11 @@ impl Storage {
                 }
                 Ok(row_major_to_col_major_values(v.as_slice(), logical_dims))
             }
-            Storage::DiagC64(v) => Ok(row_major_to_col_major_values(
+            StorageRepr::DiagC64(v) => Ok(row_major_to_col_major_values(
                 &v.to_dense_vec(logical_dims),
                 logical_dims,
             )),
-            Storage::StructuredC64(v) => {
+            StorageRepr::StructuredC64(v) => {
                 let structured_dims = v.logical_dims();
                 if structured_dims != logical_dims {
                     return Err(format!(
@@ -1370,7 +1416,7 @@ impl Storage {
                         .map_err(|err| err.to_string())
                 }
             }
-            Storage::DenseF64(_) | Storage::DiagF64(_) | Storage::StructuredF64(_) => {
+            StorageRepr::DenseF64(_) | StorageRepr::DiagF64(_) | StorageRepr::StructuredF64(_) => {
                 Err("expected Complex64 storage when materializing dense c64 values".to_string())
             }
         }
@@ -1381,45 +1427,18 @@ impl Storage {
     /// and off-diagonal elements as zero.
     /// For Dense storage, returns a copy (clone).
     pub fn to_dense_storage(&self, dims: &[usize]) -> Storage {
-        match self {
-            Storage::DenseF64(v) => {
-                // Clone preserves shape
-                Storage::DenseF64(v.clone())
-            }
-            Storage::DenseC64(v) => {
-                // Clone preserves shape
-                Storage::DenseC64(v.clone())
-            }
-            Storage::DiagF64(d) => Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                d.to_dense_vec(dims),
-                dims,
-            )),
-            Storage::DiagC64(d) => Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-                d.to_dense_vec(dims),
-                dims,
-            )),
-            Storage::StructuredF64(_) => {
-                let native = crate::tenferro_bridge::storage_to_native_tensor(self, dims)
-                    .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
-                let col_major =
-                    crate::tenferro_bridge::native_tensor_primal_to_dense_f64_col_major(&native)
-                        .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
-                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                    col_major_to_row_major_values(&col_major, dims),
-                    dims,
-                ))
-            }
-            Storage::StructuredC64(_) => {
-                let native = crate::tenferro_bridge::storage_to_native_tensor(self, dims)
-                    .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
-                let col_major =
-                    crate::tenferro_bridge::native_tensor_primal_to_dense_c64_col_major(&native)
-                        .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
-                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-                    col_major_to_row_major_values(&col_major, dims),
-                    dims,
-                ))
-            }
+        if self.is_f64() {
+            let values = self
+                .to_dense_f64_col_major_vec(dims)
+                .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
+            Storage::from_dense_f64_col_major(values, dims)
+                .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"))
+        } else {
+            let values = self
+                .to_dense_c64_col_major_vec(dims)
+                .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
+            Storage::from_dense_c64_col_major(values, dims)
+                .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"))
         }
     }
 
@@ -1428,106 +1447,106 @@ impl Storage {
     /// For DenseStorage, uses internal shape information.
     /// The `dims` parameter is ignored for Dense (kept for DiagStorage compatibility).
     pub fn permute_storage(&self, _dims: &[usize], perm: &[usize]) -> Storage {
-        match self {
-            Storage::DenseF64(v) => Storage::DenseF64(v.permute(perm)),
-            Storage::DenseC64(v) => Storage::DenseC64(v.permute(perm)),
+        match &self.0 {
+            StorageRepr::DenseF64(v) => Storage::dense_f64_legacy(v.permute(perm)),
+            StorageRepr::DenseC64(v) => Storage::dense_c64_legacy(v.permute(perm)),
             // For Diag storage, permute is trivial: data doesn't change, only index order changes
-            Storage::DiagF64(v) => Storage::DiagF64(v.clone()),
-            Storage::DiagC64(v) => Storage::DiagC64(v.clone()),
-            Storage::StructuredF64(v) => Storage::StructuredF64(v.permute_logical_axes(perm)),
-            Storage::StructuredC64(v) => Storage::StructuredC64(v.permute_logical_axes(perm)),
+            StorageRepr::DiagF64(v) => Storage::diag_f64_legacy(v.clone()),
+            StorageRepr::DiagC64(v) => Storage::diag_c64_legacy(v.clone()),
+            StorageRepr::StructuredF64(v) => Storage::structured_f64(v.permute_logical_axes(perm)),
+            StorageRepr::StructuredC64(v) => Storage::structured_c64(v.permute_logical_axes(perm)),
         }
     }
 
     /// Extract real part from Complex64 storage as f64 storage.
     /// For f64 storage, returns a copy (clone).
     pub fn extract_real_part(&self) -> Storage {
-        match self {
-            Storage::DenseF64(v) => {
+        match &self.0 {
+            StorageRepr::DenseF64(v) => {
                 // Clone preserves shape
-                Storage::DenseF64(v.clone())
+                Storage::dense_f64_legacy(v.clone())
             }
-            Storage::DiagF64(d) => {
-                Storage::DiagF64(DiagStorageF64::from_vec(d.as_slice().to_vec()))
+            StorageRepr::DiagF64(d) => {
+                Storage::diag_f64_legacy(DiagStorageF64::from_vec(d.as_slice().to_vec()))
             }
-            Storage::DenseC64(v) => {
+            StorageRepr::DenseC64(v) => {
                 let dims = v.dims();
                 let real_vec: Vec<f64> = v.as_slice().iter().map(|z| z.re).collect();
-                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(real_vec, &dims))
+                Storage::dense_f64_legacy(DenseStorageF64::from_vec_with_shape(real_vec, &dims))
             }
-            Storage::DiagC64(d) => {
+            StorageRepr::DiagC64(d) => {
                 let real_vec: Vec<f64> = d.as_slice().iter().map(|z| z.re).collect();
-                Storage::DiagF64(DiagStorageF64::from_vec(real_vec))
+                Storage::diag_f64_legacy(DiagStorageF64::from_vec(real_vec))
             }
-            Storage::StructuredF64(v) => Storage::StructuredF64(v.clone()),
-            Storage::StructuredC64(v) => Storage::StructuredF64(v.map_copy(|z| z.re)),
+            StorageRepr::StructuredF64(v) => Storage::structured_f64(v.clone()),
+            StorageRepr::StructuredC64(v) => Storage::structured_f64(v.map_copy(|z| z.re)),
         }
     }
 
     /// Extract imaginary part from Complex64 storage as f64 storage.
     /// For f64 storage, returns zero storage (will be resized appropriately).
     pub fn extract_imag_part(&self, dims: &[usize]) -> Storage {
-        match self {
-            Storage::DenseF64(v) => {
+        match &self.0 {
+            StorageRepr::DenseF64(v) => {
                 // For real storage, imaginary part is zero, preserve shape
                 let d = v.dims();
                 let total_size: usize = d.iter().product();
-                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
+                Storage::dense_f64_legacy(DenseStorageF64::from_vec_with_shape(
                     vec![0.0; total_size],
                     &d,
                 ))
             }
-            Storage::DiagF64(_) => {
+            StorageRepr::DiagF64(_) => {
                 // For real diagonal storage, imaginary part is zero
                 let mindim_val = mindim(dims);
-                Storage::DiagF64(DiagStorageF64::from_vec(vec![0.0; mindim_val]))
+                Storage::diag_f64_legacy(DiagStorageF64::from_vec(vec![0.0; mindim_val]))
             }
-            Storage::DenseC64(v) => {
+            StorageRepr::DenseC64(v) => {
                 let d = v.dims();
                 let imag_vec: Vec<f64> = v.as_slice().iter().map(|z| z.im).collect();
-                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(imag_vec, &d))
+                Storage::dense_f64_legacy(DenseStorageF64::from_vec_with_shape(imag_vec, &d))
             }
-            Storage::DiagC64(d) => {
+            StorageRepr::DiagC64(d) => {
                 let imag_vec: Vec<f64> = d.as_slice().iter().map(|z| z.im).collect();
-                Storage::DiagF64(DiagStorageF64::from_vec(imag_vec))
+                Storage::diag_f64_legacy(DiagStorageF64::from_vec(imag_vec))
             }
-            Storage::StructuredF64(v) => Storage::StructuredF64(v.map_copy(|_| 0.0)),
-            Storage::StructuredC64(v) => Storage::StructuredF64(v.map_copy(|z| z.im)),
+            StorageRepr::StructuredF64(v) => Storage::structured_f64(v.map_copy(|_| 0.0)),
+            StorageRepr::StructuredC64(v) => Storage::structured_f64(v.map_copy(|z| z.im)),
         }
     }
 
     /// Convert f64 storage to Complex64 storage (real part only, imaginary part is zero).
     /// For Complex64 storage, returns a clone.
     pub fn to_complex_storage(&self) -> Storage {
-        match self {
-            Storage::DenseF64(v) => {
+        match &self.0 {
+            StorageRepr::DenseF64(v) => {
                 let dims = v.dims();
                 let c64_vec: Vec<Complex64> = v
                     .as_slice()
                     .iter()
                     .map(|&x| Complex64::new(x, 0.0))
                     .collect();
-                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(c64_vec, &dims))
+                Storage::dense_c64_legacy(DenseStorageC64::from_vec_with_shape(c64_vec, &dims))
             }
-            Storage::DiagF64(d) => {
+            StorageRepr::DiagF64(d) => {
                 let c64_vec: Vec<Complex64> = d
                     .as_slice()
                     .iter()
                     .map(|&x| Complex64::new(x, 0.0))
                     .collect();
-                Storage::DiagC64(DiagStorageC64::from_vec(c64_vec))
+                Storage::diag_c64_legacy(DiagStorageC64::from_vec(c64_vec))
             }
-            Storage::DenseC64(v) => {
+            StorageRepr::DenseC64(v) => {
                 // Clone preserves shape
-                Storage::DenseC64(v.clone())
+                Storage::dense_c64_legacy(v.clone())
             }
-            Storage::DiagC64(d) => {
-                Storage::DiagC64(DiagStorageC64::from_vec(d.as_slice().to_vec()))
+            StorageRepr::DiagC64(d) => {
+                Storage::diag_c64_legacy(DiagStorageC64::from_vec(d.as_slice().to_vec()))
             }
-            Storage::StructuredF64(v) => {
-                Storage::StructuredC64(v.map_copy(|x| Complex64::new(x, 0.0)))
+            StorageRepr::StructuredF64(v) => {
+                Storage::structured_c64(v.map_copy(|x| Complex64::new(x, 0.0)))
             }
-            Storage::StructuredC64(v) => Storage::StructuredC64(v.clone()),
+            StorageRepr::StructuredC64(v) => Storage::structured_c64(v.clone()),
         }
     }
 
@@ -1550,26 +1569,26 @@ impl Storage {
     /// // conj(1+2i) = 1-2i, conj(3-4i) = 3+4i
     /// ```
     pub fn conj(&self) -> Self {
-        match self {
-            Storage::DenseF64(v) => {
+        match &self.0 {
+            StorageRepr::DenseF64(v) => {
                 // Real numbers: conj(x) = x, clone preserves shape
-                Storage::DenseF64(v.clone())
+                Storage::dense_f64_legacy(v.clone())
             }
-            Storage::DenseC64(v) => {
+            StorageRepr::DenseC64(v) => {
                 let dims = v.dims();
                 let conj_vec: Vec<Complex64> = v.as_slice().iter().map(|z| z.conj()).collect();
-                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(conj_vec, &dims))
+                Storage::dense_c64_legacy(DenseStorageC64::from_vec_with_shape(conj_vec, &dims))
             }
-            Storage::DiagF64(d) => {
+            StorageRepr::DiagF64(d) => {
                 // Real numbers: conj(x) = x
-                Storage::DiagF64(DiagStorageF64::from_vec(d.as_slice().to_vec()))
+                Storage::diag_f64_legacy(DiagStorageF64::from_vec(d.as_slice().to_vec()))
             }
-            Storage::DiagC64(d) => {
+            StorageRepr::DiagC64(d) => {
                 let conj_vec: Vec<Complex64> = d.as_slice().iter().map(|z| z.conj()).collect();
-                Storage::DiagC64(DiagStorageC64::from_vec(conj_vec))
+                Storage::diag_c64_legacy(DiagStorageC64::from_vec(conj_vec))
             }
-            Storage::StructuredF64(v) => Storage::StructuredF64(v.clone()),
-            Storage::StructuredC64(v) => Storage::StructuredC64(v.map_copy(|z| z.conj())),
+            StorageRepr::StructuredF64(v) => Storage::structured_f64(v.clone()),
+            StorageRepr::StructuredC64(v) => Storage::structured_c64(v.map_copy(|z| z.conj())),
         }
     }
 
@@ -1577,8 +1596,8 @@ impl Storage {
     /// real_storage becomes the real part, imag_storage becomes the imaginary part.
     /// Formula: real + i * imag
     pub fn combine_to_complex(real_storage: &Storage, imag_storage: &Storage) -> Storage {
-        match (real_storage, imag_storage) {
-            (Storage::DenseF64(real), Storage::DenseF64(imag)) => {
+        match (&real_storage.0, &imag_storage.0) {
+            (StorageRepr::DenseF64(real), StorageRepr::DenseF64(imag)) => {
                 assert_eq!(real.len(), imag.len(), "Storage lengths must match");
                 let dims = real.dims();
                 let complex_vec: Vec<Complex64> = real
@@ -1587,9 +1606,9 @@ impl Storage {
                     .zip(imag.as_slice().iter())
                     .map(|(&r, &i)| Complex64::new(r, i))
                     .collect();
-                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(complex_vec, &dims))
+                Storage::dense_c64_legacy(DenseStorageC64::from_vec_with_shape(complex_vec, &dims))
             }
-            (Storage::DiagF64(real), Storage::DiagF64(imag)) => {
+            (StorageRepr::DiagF64(real), StorageRepr::DiagF64(imag)) => {
                 assert_eq!(real.len(), imag.len(), "Storage lengths must match");
                 let complex_vec: Vec<Complex64> = real
                     .as_slice()
@@ -1597,7 +1616,7 @@ impl Storage {
                     .zip(imag.as_slice().iter())
                     .map(|(&r, &i)| Complex64::new(r, i))
                     .collect();
-                Storage::DiagC64(DiagStorageC64::from_vec(complex_vec))
+                Storage::diag_c64_legacy(DiagStorageC64::from_vec(complex_vec))
             }
             _ => panic!("Both storages must be the same type (DenseF64 or DiagF64)"),
         }
@@ -1612,8 +1631,8 @@ impl Storage {
     /// - Storage types don't match
     /// - Storage lengths don't match
     pub fn try_add(&self, other: &Storage) -> Result<Storage, String> {
-        match (self, other) {
-            (Storage::DenseF64(a), Storage::DenseF64(b)) => {
+        match (&self.0, &other.0) {
+            (StorageRepr::DenseF64(a), StorageRepr::DenseF64(b)) => {
                 if a.len() != b.len() {
                     return Err(format!(
                         "Storage lengths must match for addition: {} != {}",
@@ -1628,11 +1647,11 @@ impl Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x + y)
                     .collect();
-                Ok(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                    sum_vec, &dims,
-                )))
+                Ok(Storage::dense_f64_legacy(
+                    DenseStorageF64::from_vec_with_shape(sum_vec, &dims),
+                ))
             }
-            (Storage::DenseC64(a), Storage::DenseC64(b)) => {
+            (StorageRepr::DenseC64(a), StorageRepr::DenseC64(b)) => {
                 if a.len() != b.len() {
                     return Err(format!(
                         "Storage lengths must match for addition: {} != {}",
@@ -1647,11 +1666,11 @@ impl Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x + y)
                     .collect();
-                Ok(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-                    sum_vec, &dims,
-                )))
+                Ok(Storage::dense_c64_legacy(
+                    DenseStorageC64::from_vec_with_shape(sum_vec, &dims),
+                ))
             }
-            (Storage::DiagF64(a), Storage::DiagF64(b)) => {
+            (StorageRepr::DiagF64(a), StorageRepr::DiagF64(b)) => {
                 if a.len() != b.len() {
                     return Err(format!(
                         "Storage lengths must match for addition: {} != {}",
@@ -1665,9 +1684,9 @@ impl Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x + y)
                     .collect();
-                Ok(Storage::DiagF64(DiagStorageF64::from_vec(sum_vec)))
+                Ok(Storage::diag_f64_legacy(DiagStorageF64::from_vec(sum_vec)))
             }
-            (Storage::DiagC64(a), Storage::DiagC64(b)) => {
+            (StorageRepr::DiagC64(a), StorageRepr::DiagC64(b)) => {
                 if a.len() != b.len() {
                     return Err(format!(
                         "Storage lengths must match for addition: {} != {}",
@@ -1681,12 +1700,12 @@ impl Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x + y)
                     .collect();
-                Ok(Storage::DiagC64(DiagStorageC64::from_vec(sum_vec)))
+                Ok(Storage::diag_c64_legacy(DiagStorageC64::from_vec(sum_vec)))
             }
             _ => Err(format!(
                 "Storage types must match for addition: {:?} vs {:?}",
-                std::mem::discriminant(self),
-                std::mem::discriminant(other)
+                std::mem::discriminant(&self.0),
+                std::mem::discriminant(&other.0)
             )),
         }
     }
@@ -1695,8 +1714,8 @@ impl Storage {
     ///
     /// Returns an error if the storages have different types or lengths.
     pub fn try_sub(&self, other: &Storage) -> Result<Storage, String> {
-        match (self, other) {
-            (Storage::DenseF64(a), Storage::DenseF64(b)) => {
+        match (&self.0, &other.0) {
+            (StorageRepr::DenseF64(a), StorageRepr::DenseF64(b)) => {
                 if a.len() != b.len() {
                     return Err(format!(
                         "Storage lengths must match for subtraction: {} != {}",
@@ -1711,11 +1730,11 @@ impl Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x - y)
                     .collect();
-                Ok(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                    diff_vec, &dims,
-                )))
+                Ok(Storage::dense_f64_legacy(
+                    DenseStorageF64::from_vec_with_shape(diff_vec, &dims),
+                ))
             }
-            (Storage::DenseC64(a), Storage::DenseC64(b)) => {
+            (StorageRepr::DenseC64(a), StorageRepr::DenseC64(b)) => {
                 if a.len() != b.len() {
                     return Err(format!(
                         "Storage lengths must match for subtraction: {} != {}",
@@ -1730,11 +1749,11 @@ impl Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x - y)
                     .collect();
-                Ok(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-                    diff_vec, &dims,
-                )))
+                Ok(Storage::dense_c64_legacy(
+                    DenseStorageC64::from_vec_with_shape(diff_vec, &dims),
+                ))
             }
-            (Storage::DiagF64(a), Storage::DiagF64(b)) => {
+            (StorageRepr::DiagF64(a), StorageRepr::DiagF64(b)) => {
                 if a.len() != b.len() {
                     return Err(format!(
                         "Storage lengths must match for subtraction: {} != {}",
@@ -1748,9 +1767,9 @@ impl Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x - y)
                     .collect();
-                Ok(Storage::DiagF64(DiagStorageF64::from_vec(diff_vec)))
+                Ok(Storage::diag_f64_legacy(DiagStorageF64::from_vec(diff_vec)))
             }
-            (Storage::DiagC64(a), Storage::DiagC64(b)) => {
+            (StorageRepr::DiagC64(a), StorageRepr::DiagC64(b)) => {
                 if a.len() != b.len() {
                     return Err(format!(
                         "Storage lengths must match for subtraction: {} != {}",
@@ -1764,12 +1783,12 @@ impl Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x - y)
                     .collect();
-                Ok(Storage::DiagC64(DiagStorageC64::from_vec(diff_vec)))
+                Ok(Storage::diag_c64_legacy(DiagStorageC64::from_vec(diff_vec)))
             }
             _ => Err(format!(
                 "Storage types must match for subtraction: {:?} vs {:?}",
-                std::mem::discriminant(self),
-                std::mem::discriminant(other)
+                std::mem::discriminant(&self.0),
+                std::mem::discriminant(&other.0)
             )),
         }
     }
@@ -1803,16 +1822,16 @@ impl Storage {
         // Determine if we need complex output
         let needs_complex = a.is_complex()
             || b.is_complex()
-            || matches!(self, Storage::DenseC64(_) | Storage::DiagC64(_))
-            || matches!(other, Storage::DenseC64(_) | Storage::DiagC64(_));
+            || matches!(&self.0, StorageRepr::DenseC64(_) | StorageRepr::DiagC64(_))
+            || matches!(&other.0, StorageRepr::DenseC64(_) | StorageRepr::DiagC64(_));
 
         if needs_complex {
             // Promote everything to complex
             let a_c: Complex64 = a.clone().into();
             let b_c: Complex64 = b.clone().into();
 
-            let (result, dims): (Vec<Complex64>, Vec<usize>) = match (self, other) {
-                (Storage::DenseF64(x), Storage::DenseF64(y)) => (
+            let (result, dims): (Vec<Complex64>, Vec<usize>) = match (&self.0, &other.0) {
+                (StorageRepr::DenseF64(x), StorageRepr::DenseF64(y)) => (
                     x.as_slice()
                         .iter()
                         .zip(y.as_slice().iter())
@@ -1822,7 +1841,7 @@ impl Storage {
                         .collect(),
                     x.dims(),
                 ),
-                (Storage::DenseF64(x), Storage::DenseC64(y)) => (
+                (StorageRepr::DenseF64(x), StorageRepr::DenseC64(y)) => (
                     x.as_slice()
                         .iter()
                         .zip(y.as_slice().iter())
@@ -1830,7 +1849,7 @@ impl Storage {
                         .collect(),
                     x.dims(),
                 ),
-                (Storage::DenseC64(x), Storage::DenseF64(y)) => (
+                (StorageRepr::DenseC64(x), StorageRepr::DenseF64(y)) => (
                     x.as_slice()
                         .iter()
                         .zip(y.as_slice().iter())
@@ -1838,7 +1857,7 @@ impl Storage {
                         .collect(),
                     x.dims(),
                 ),
-                (Storage::DenseC64(x), Storage::DenseC64(y)) => (
+                (StorageRepr::DenseC64(x), StorageRepr::DenseC64(y)) => (
                     x.as_slice()
                         .iter()
                         .zip(y.as_slice().iter())
@@ -1849,14 +1868,14 @@ impl Storage {
                 _ => {
                     return Err(format!(
                         "axpby not supported for storage types: {:?} vs {:?}",
-                        std::mem::discriminant(self),
-                        std::mem::discriminant(other)
+                        std::mem::discriminant(&self.0),
+                        std::mem::discriminant(&other.0)
                     ))
                 }
             };
-            Ok(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-                result, &dims,
-            )))
+            Ok(Storage::dense_c64_legacy(
+                DenseStorageC64::from_vec_with_shape(result, &dims),
+            ))
         } else {
             // All real
             if !a.is_real() || !b.is_real() {
@@ -1867,8 +1886,8 @@ impl Storage {
             let a_f = a.real();
             let b_f = b.real();
 
-            match (self, other) {
-                (Storage::DenseF64(x), Storage::DenseF64(y)) => {
+            match (&self.0, &other.0) {
+                (StorageRepr::DenseF64(x), StorageRepr::DenseF64(y)) => {
                     let dims = x.dims();
                     let result: Vec<f64> = x
                         .as_slice()
@@ -1876,23 +1895,23 @@ impl Storage {
                         .zip(y.as_slice().iter())
                         .map(|(&xi, &yi)| a_f * xi + b_f * yi)
                         .collect();
-                    Ok(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                        result, &dims,
-                    )))
+                    Ok(Storage::dense_f64_legacy(
+                        DenseStorageF64::from_vec_with_shape(result, &dims),
+                    ))
                 }
-                (Storage::DiagF64(x), Storage::DiagF64(y)) => {
+                (StorageRepr::DiagF64(x), StorageRepr::DiagF64(y)) => {
                     let result: Vec<f64> = x
                         .as_slice()
                         .iter()
                         .zip(y.as_slice().iter())
                         .map(|(&xi, &yi)| a_f * xi + b_f * yi)
                         .collect();
-                    Ok(Storage::DiagF64(DiagStorageF64::from_vec(result)))
+                    Ok(Storage::diag_f64_legacy(DiagStorageF64::from_vec(result)))
                 }
                 _ => Err(format!(
                     "axpby not supported for storage types: {:?} vs {:?}",
-                    std::mem::discriminant(self),
-                    std::mem::discriminant(other)
+                    std::mem::discriminant(&self.0),
+                    std::mem::discriminant(&other.0)
                 )),
             }
         }
@@ -1950,11 +1969,11 @@ pub fn contract_storage(
     }
 
     if matches!(
-        storage_a,
-        Storage::StructuredF64(_) | Storage::StructuredC64(_)
+        &storage_a.0,
+        StorageRepr::StructuredF64(_) | StorageRepr::StructuredC64(_)
     ) || matches!(
-        storage_b,
-        Storage::StructuredF64(_) | Storage::StructuredC64(_)
+        &storage_b.0,
+        StorageRepr::StructuredF64(_) | StorageRepr::StructuredC64(_)
     ) {
         return crate::tenferro_bridge::contract_storage_native(
             storage_a,
@@ -1968,42 +1987,43 @@ pub fn contract_storage(
         .unwrap_or_else(|err| panic!("contract_storage structured fallback failed: {err}"));
     }
 
-    match (storage_a, storage_b) {
+    match (&storage_a.0, &storage_b.0) {
         // Same type cases: DenseStorage has internal shape, use dense contraction.
-        (Storage::DenseF64(a), Storage::DenseF64(b)) => {
-            Storage::DenseF64(a.contract(axes_a, b, axes_b))
+        (StorageRepr::DenseF64(a), StorageRepr::DenseF64(b)) => {
+            Storage::dense_f64_legacy(a.contract(axes_a, b, axes_b))
         }
-        (Storage::DenseC64(a), Storage::DenseC64(b)) => {
-            Storage::DenseC64(a.contract(axes_a, b, axes_b))
+        (StorageRepr::DenseC64(a), StorageRepr::DenseC64(b)) => {
+            Storage::dense_c64_legacy(a.contract(axes_a, b, axes_b))
         }
-        (Storage::DenseF64(a), Storage::DenseC64(b)) => {
+        (StorageRepr::DenseF64(a), StorageRepr::DenseC64(b)) => {
             let promoted_a = promote_dense_to_c64(a);
-            Storage::DenseC64(promoted_a.contract(axes_a, b, axes_b))
+            Storage::dense_c64_legacy(promoted_a.contract(axes_a, b, axes_b))
         }
-        (Storage::DenseC64(a), Storage::DenseF64(b)) => {
+        (StorageRepr::DenseC64(a), StorageRepr::DenseF64(b)) => {
             let promoted_b = promote_dense_to_c64(b);
-            Storage::DenseC64(a.contract(axes_a, &promoted_b, axes_b))
+            Storage::dense_c64_legacy(a.contract(axes_a, &promoted_b, axes_b))
         }
         // DiagTensor × DiagTensor contraction
-        (Storage::DiagF64(a), Storage::DiagF64(b)) => a.contract_diag_diag(
+        (StorageRepr::DiagF64(a), StorageRepr::DiagF64(b)) => a.contract_diag_diag(
             dims_a,
             b,
             dims_b,
             result_dims,
-            |v| Storage::DenseF64(DenseStorage::from_vec_with_shape(v, result_dims)),
-            |v| Storage::DiagF64(DiagStorage::from_vec(v)),
+            |v| Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(v, result_dims)),
+            |v| Storage::diag_f64_legacy(DiagStorage::from_vec(v)),
         ),
-        (Storage::DiagC64(a), Storage::DiagC64(b)) => a.contract_diag_diag(
+        (StorageRepr::DiagC64(a), StorageRepr::DiagC64(b)) => a.contract_diag_diag(
             dims_a,
             b,
             dims_b,
             result_dims,
-            |v| Storage::DenseC64(DenseStorage::from_vec_with_shape(v, result_dims)),
-            |v| Storage::DiagC64(DiagStorage::from_vec(v)),
+            |v| Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(v, result_dims)),
+            |v| Storage::diag_c64_legacy(DiagStorage::from_vec(v)),
         ),
 
         // Mixed Diag types: promote both to complex and recurse once.
-        (Storage::DiagF64(_), Storage::DiagC64(_)) | (Storage::DiagC64(_), Storage::DiagF64(_)) => {
+        (StorageRepr::DiagF64(_), StorageRepr::DiagC64(_))
+        | (StorageRepr::DiagC64(_), StorageRepr::DiagF64(_)) => {
             let promoted_a = storage_a.to_complex_storage();
             let promoted_b = storage_b.to_complex_storage();
             contract_storage(
@@ -2018,19 +2038,19 @@ pub fn contract_storage(
         }
 
         // DiagTensor × DenseTensor: use optimized contract_diag_dense
-        (Storage::DiagF64(diag), Storage::DenseF64(dense)) => {
+        (StorageRepr::DiagF64(diag), StorageRepr::DenseF64(dense)) => {
             diag.contract_diag_dense(dims_a, axes_a, dense, dims_b, axes_b, result_dims, |v| {
-                Storage::DenseF64(DenseStorage::from_vec_with_shape(v, result_dims))
+                Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(v, result_dims))
             })
         }
-        (Storage::DiagC64(diag), Storage::DenseC64(dense)) => {
+        (StorageRepr::DiagC64(diag), StorageRepr::DenseC64(dense)) => {
             diag.contract_diag_dense(dims_a, axes_a, dense, dims_b, axes_b, result_dims, |v| {
-                Storage::DenseC64(DenseStorage::from_vec_with_shape(v, result_dims))
+                Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(v, result_dims))
             })
         }
 
         // DenseTensor × DiagTensor: use generic helper
-        (Storage::DenseF64(dense), Storage::DiagF64(diag)) => contract_dense_diag_impl(
+        (StorageRepr::DenseF64(dense), StorageRepr::DiagF64(diag)) => contract_dense_diag_impl(
             dense,
             dims_a,
             axes_a,
@@ -2038,10 +2058,10 @@ pub fn contract_storage(
             dims_b,
             axes_b,
             result_dims,
-            |v, dims| Storage::DenseF64(DenseStorage::from_vec_with_shape(v, dims)),
+            |v, dims| Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(v, dims)),
             |s, perm| s.permute_storage(&[], perm),
         ),
-        (Storage::DenseC64(dense), Storage::DiagC64(diag)) => contract_dense_diag_impl(
+        (StorageRepr::DenseC64(dense), StorageRepr::DiagC64(diag)) => contract_dense_diag_impl(
             dense,
             dims_a,
             axes_a,
@@ -2049,12 +2069,12 @@ pub fn contract_storage(
             dims_b,
             axes_b,
             result_dims,
-            |v, dims| Storage::DenseC64(DenseStorage::from_vec_with_shape(v, dims)),
+            |v, dims| Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(v, dims)),
             |s, perm| s.permute_storage(&[], perm),
         ),
 
         // Mixed Diag/Dense with type promotion: promote f64 to Complex64
-        (Storage::DiagF64(diag_f64), Storage::DenseC64(dense_c64)) => {
+        (StorageRepr::DiagF64(diag_f64), StorageRepr::DenseC64(dense_c64)) => {
             // Diag<f64> × Dense<C64>: promote Diag to C64
             let diag_c64 = promote_diag_to_c64(diag_f64);
             diag_c64.contract_diag_dense(
@@ -2064,10 +2084,10 @@ pub fn contract_storage(
                 dims_b,
                 axes_b,
                 result_dims,
-                |v| Storage::DenseC64(DenseStorage::from_vec_with_shape(v, result_dims)),
+                |v| Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(v, result_dims)),
             )
         }
-        (Storage::DenseC64(dense_c64), Storage::DiagF64(diag_f64)) => {
+        (StorageRepr::DenseC64(dense_c64), StorageRepr::DiagF64(diag_f64)) => {
             // Dense<C64> × Diag<f64>: promote Diag to C64, use helper
             let diag_c64 = promote_diag_to_c64(diag_f64);
             contract_dense_diag_impl(
@@ -2078,11 +2098,11 @@ pub fn contract_storage(
                 dims_b,
                 axes_b,
                 result_dims,
-                |v, dims| Storage::DenseC64(DenseStorage::from_vec_with_shape(v, dims)),
+                |v, dims| Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(v, dims)),
                 |s, perm| s.permute_storage(&[], perm),
             )
         }
-        (Storage::DiagC64(diag_c64), Storage::DenseF64(dense_f64)) => {
+        (StorageRepr::DiagC64(diag_c64), StorageRepr::DenseF64(dense_f64)) => {
             // Diag<C64> × Dense<f64>: promote Dense to C64
             let dense_c64 = promote_dense_to_c64(dense_f64);
             diag_c64.contract_diag_dense(
@@ -2092,10 +2112,10 @@ pub fn contract_storage(
                 dims_b,
                 axes_b,
                 result_dims,
-                |v| Storage::DenseC64(DenseStorage::from_vec_with_shape(v, result_dims)),
+                |v| Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(v, result_dims)),
             )
         }
-        (Storage::DenseF64(dense_f64), Storage::DiagC64(diag_c64)) => {
+        (StorageRepr::DenseF64(dense_f64), StorageRepr::DiagC64(diag_c64)) => {
             // Dense<f64> × Diag<C64>: promote Dense to C64, use helper
             let dense_c64 = promote_dense_to_c64(dense_f64);
             contract_dense_diag_impl(
@@ -2106,14 +2126,14 @@ pub fn contract_storage(
                 dims_b,
                 axes_b,
                 result_dims,
-                |v, dims| Storage::DenseC64(DenseStorage::from_vec_with_shape(v, dims)),
+                |v, dims| Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(v, dims)),
                 |s, perm| s.permute_storage(&[], perm),
             )
         }
-        (Storage::StructuredF64(_), _)
-        | (Storage::StructuredC64(_), _)
-        | (_, Storage::StructuredF64(_))
-        | (_, Storage::StructuredC64(_)) => {
+        (StorageRepr::StructuredF64(_), _)
+        | (StorageRepr::StructuredC64(_), _)
+        | (_, StorageRepr::StructuredF64(_))
+        | (_, StorageRepr::StructuredC64(_)) => {
             unreachable!("structured storage cases are handled by the native fallback above")
         }
     }
@@ -2157,8 +2177,8 @@ impl Add<&Storage> for &Storage {
     type Output = Storage;
 
     fn add(self, rhs: &Storage) -> Self::Output {
-        match (self, rhs) {
-            (Storage::DenseF64(a), Storage::DenseF64(b)) => {
+        match (&self.0, &rhs.0) {
+            (StorageRepr::DenseF64(a), StorageRepr::DenseF64(b)) => {
                 assert_eq!(a.len(), b.len(), "Storage lengths must match for addition");
                 let dims = a.dims();
                 let sum_vec: Vec<f64> = a
@@ -2167,9 +2187,9 @@ impl Add<&Storage> for &Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x + y)
                     .collect();
-                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(sum_vec, &dims))
+                Storage::dense_f64_legacy(DenseStorageF64::from_vec_with_shape(sum_vec, &dims))
             }
-            (Storage::DenseC64(a), Storage::DenseC64(b)) => {
+            (StorageRepr::DenseC64(a), StorageRepr::DenseC64(b)) => {
                 assert_eq!(a.len(), b.len(), "Storage lengths must match for addition");
                 let dims = a.dims();
                 let sum_vec: Vec<Complex64> = a
@@ -2178,9 +2198,9 @@ impl Add<&Storage> for &Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x + y)
                     .collect();
-                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(sum_vec, &dims))
+                Storage::dense_c64_legacy(DenseStorageC64::from_vec_with_shape(sum_vec, &dims))
             }
-            (Storage::DiagF64(a), Storage::DiagF64(b)) => {
+            (StorageRepr::DiagF64(a), StorageRepr::DiagF64(b)) => {
                 assert_eq!(a.len(), b.len(), "Storage lengths must match for addition");
                 let sum_vec: Vec<f64> = a
                     .as_slice()
@@ -2188,9 +2208,9 @@ impl Add<&Storage> for &Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x + y)
                     .collect();
-                Storage::DiagF64(DiagStorageF64::from_vec(sum_vec))
+                Storage::diag_f64_legacy(DiagStorageF64::from_vec(sum_vec))
             }
-            (Storage::DiagC64(a), Storage::DiagC64(b)) => {
+            (StorageRepr::DiagC64(a), StorageRepr::DiagC64(b)) => {
                 assert_eq!(a.len(), b.len(), "Storage lengths must match for addition");
                 let sum_vec: Vec<Complex64> = a
                     .as_slice()
@@ -2198,7 +2218,7 @@ impl Add<&Storage> for &Storage {
                     .zip(b.as_slice().iter())
                     .map(|(&x, &y)| x + y)
                     .collect();
-                Storage::DiagC64(DiagStorageC64::from_vec(sum_vec))
+                Storage::diag_c64_legacy(DiagStorageC64::from_vec(sum_vec))
             }
             _ => panic!("Storage types must match for addition"),
         }
@@ -2211,36 +2231,36 @@ impl Mul<f64> for &Storage {
     type Output = Storage;
 
     fn mul(self, scalar: f64) -> Self::Output {
-        match self {
-            Storage::DenseF64(v) => {
+        match &self.0 {
+            StorageRepr::DenseF64(v) => {
                 let dims = v.dims();
                 let scaled_vec: Vec<f64> = v.as_slice().iter().map(|&x| x * scalar).collect();
-                Storage::DenseF64(DenseStorageF64::from_vec_with_shape(scaled_vec, &dims))
+                Storage::dense_f64_legacy(DenseStorageF64::from_vec_with_shape(scaled_vec, &dims))
             }
-            Storage::DenseC64(v) => {
+            StorageRepr::DenseC64(v) => {
                 let dims = v.dims();
                 let scaled_vec: Vec<Complex64> = v
                     .as_slice()
                     .iter()
                     .map(|&z| z * Complex64::new(scalar, 0.0))
                     .collect();
-                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(scaled_vec, &dims))
+                Storage::dense_c64_legacy(DenseStorageC64::from_vec_with_shape(scaled_vec, &dims))
             }
-            Storage::DiagF64(d) => {
+            StorageRepr::DiagF64(d) => {
                 let scaled_vec: Vec<f64> = d.as_slice().iter().map(|&x| x * scalar).collect();
-                Storage::DiagF64(DiagStorageF64::from_vec(scaled_vec))
+                Storage::diag_f64_legacy(DiagStorageF64::from_vec(scaled_vec))
             }
-            Storage::DiagC64(d) => {
+            StorageRepr::DiagC64(d) => {
                 let scaled_vec: Vec<Complex64> = d
                     .as_slice()
                     .iter()
                     .map(|&z| z * Complex64::new(scalar, 0.0))
                     .collect();
-                Storage::DiagC64(DiagStorageC64::from_vec(scaled_vec))
+                Storage::diag_c64_legacy(DiagStorageC64::from_vec(scaled_vec))
             }
-            Storage::StructuredF64(v) => Storage::StructuredF64(v.map_copy(|x| x * scalar)),
-            Storage::StructuredC64(v) => {
-                Storage::StructuredC64(v.map_copy(|z| z * Complex64::new(scalar, 0.0)))
+            StorageRepr::StructuredF64(v) => Storage::structured_f64(v.map_copy(|x| x * scalar)),
+            StorageRepr::StructuredC64(v) => {
+                Storage::structured_c64(v.map_copy(|z| z * Complex64::new(scalar, 0.0)))
             }
         }
     }
@@ -2251,8 +2271,8 @@ impl Mul<Complex64> for &Storage {
     type Output = Storage;
 
     fn mul(self, scalar: Complex64) -> Self::Output {
-        match self {
-            Storage::DenseF64(v) => {
+        match &self.0 {
+            StorageRepr::DenseF64(v) => {
                 // Promote f64 to Complex64
                 let dims = v.dims();
                 let scaled_vec: Vec<Complex64> = v
@@ -2260,30 +2280,30 @@ impl Mul<Complex64> for &Storage {
                     .iter()
                     .map(|&x| Complex64::new(x, 0.0) * scalar)
                     .collect();
-                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(scaled_vec, &dims))
+                Storage::dense_c64_legacy(DenseStorageC64::from_vec_with_shape(scaled_vec, &dims))
             }
-            Storage::DenseC64(v) => {
+            StorageRepr::DenseC64(v) => {
                 let dims = v.dims();
                 let scaled_vec: Vec<Complex64> = v.as_slice().iter().map(|&z| z * scalar).collect();
-                Storage::DenseC64(DenseStorageC64::from_vec_with_shape(scaled_vec, &dims))
+                Storage::dense_c64_legacy(DenseStorageC64::from_vec_with_shape(scaled_vec, &dims))
             }
-            Storage::DiagF64(d) => {
+            StorageRepr::DiagF64(d) => {
                 // Promote f64 to Complex64
                 let scaled_vec: Vec<Complex64> = d
                     .as_slice()
                     .iter()
                     .map(|&x| Complex64::new(x, 0.0) * scalar)
                     .collect();
-                Storage::DiagC64(DiagStorageC64::from_vec(scaled_vec))
+                Storage::diag_c64_legacy(DiagStorageC64::from_vec(scaled_vec))
             }
-            Storage::DiagC64(d) => {
+            StorageRepr::DiagC64(d) => {
                 let scaled_vec: Vec<Complex64> = d.as_slice().iter().map(|&z| z * scalar).collect();
-                Storage::DiagC64(DiagStorageC64::from_vec(scaled_vec))
+                Storage::diag_c64_legacy(DiagStorageC64::from_vec(scaled_vec))
             }
-            Storage::StructuredF64(v) => {
-                Storage::StructuredC64(v.map_copy(|x| Complex64::new(x, 0.0) * scalar))
+            StorageRepr::StructuredF64(v) => {
+                Storage::structured_c64(v.map_copy(|x| Complex64::new(x, 0.0) * scalar))
             }
-            Storage::StructuredC64(v) => Storage::StructuredC64(v.map_copy(|z| z * scalar)),
+            StorageRepr::StructuredC64(v) => Storage::structured_c64(v.map_copy(|z| z * scalar)),
         }
     }
 }
@@ -2309,18 +2329,18 @@ mod tests {
 
     /// Helper to extract f64 data from storage
     fn extract_f64(storage: &Storage) -> Vec<f64> {
-        match storage {
-            Storage::DenseF64(ds) => ds.as_slice().to_vec(),
-            Storage::StructuredF64(ds) => ds.data().to_vec(),
+        match storage.repr() {
+            StorageRepr::DenseF64(ds) => ds.as_slice().to_vec(),
+            StorageRepr::StructuredF64(ds) => ds.data().to_vec(),
             _ => panic!("Expected f64 dense-compatible storage"),
         }
     }
 
     /// Helper to extract Complex64 data from storage
     fn extract_c64(storage: &Storage) -> Vec<Complex64> {
-        match storage {
-            Storage::DenseC64(ds) => ds.as_slice().to_vec(),
-            Storage::StructuredC64(ds) => ds.data().to_vec(),
+        match storage.repr() {
+            StorageRepr::DenseC64(ds) => ds.as_slice().to_vec(),
+            StorageRepr::StructuredC64(ds) => ds.data().to_vec(),
             _ => panic!("Expected c64 dense-compatible storage"),
         }
     }
@@ -2372,8 +2392,9 @@ mod tests {
         // Diag tensor [3, 3] with diag = [1, 2, 3]
         // Dense tensor [3, 3] with all 1s
         // Contract all axes: result = sum_t diag[t] * dense[t, t] = 1*1 + 2*1 + 3*1 = 6
-        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
-        let dense = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0; 9], &[3, 3]));
+        let diag = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
+        let dense =
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![1.0; 9], &[3, 3]));
 
         let result = contract_storage(&diag, &[3, 3], &[0, 1], &dense, &[3, 3], &[0, 1], &[]);
 
@@ -2389,9 +2410,9 @@ mod tests {
         // Contract axis 1 of diag with axis 0 of dense
         // Result[i, j] = diag[i, i] * dense[i, j] (since diag is only non-zero when i=k)
         //              = diag[i] * dense[i, j]
-        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
+        let diag = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
         // Dense = [[1,2], [3,4], [5,6]] in row-major
-        let dense = Storage::DenseF64(DenseStorage::from_vec_with_shape(
+        let dense = Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
             &[3, 2],
         ));
@@ -2419,11 +2440,11 @@ mod tests {
         // Dense tensor [2, 3]
         // Diag tensor [3, 3] with diag = [1, 2, 3]
         // Contract axis 1 of dense with axis 0 of diag
-        let dense = Storage::DenseF64(DenseStorage::from_vec_with_shape(
+        let dense = Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
             &[2, 3],
         ));
-        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
+        let diag = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
 
         let result = contract_storage(&dense, &[2, 3], &[1], &diag, &[3, 3], &[0], &[2, 3]);
 
@@ -2449,8 +2470,8 @@ mod tests {
         // Dense tensor [2, 3]
         // Contract axis 2 of diag with axis 0 of dense
         // Result has shape [2, 2, 3] but only diagonal in first two indices is non-zero
-        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0]));
-        let dense = Storage::DenseF64(DenseStorage::from_vec_with_shape(
+        let diag = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0, 2.0]));
+        let dense = Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
             &[2, 3],
         ));
@@ -2485,8 +2506,8 @@ mod tests {
     #[test]
     fn test_contract_diag_f64_dense_c64() {
         // Diag<f64> × Dense<Complex64> should produce Dense<Complex64>
-        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0]));
-        let dense = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+        let diag = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0, 2.0]));
+        let dense = Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(
             vec![
                 Complex64::new(1.0, 1.0),
                 Complex64::new(2.0, 2.0),
@@ -2514,11 +2535,11 @@ mod tests {
     #[test]
     fn test_contract_diag_c64_dense_f64() {
         // Diag<Complex64> × Dense<f64> should produce Dense<Complex64>
-        let diag = Storage::DiagC64(DiagStorage::from_vec(vec![
+        let diag = Storage::diag_c64_legacy(DiagStorage::from_vec(vec![
             Complex64::new(1.0, 1.0),
             Complex64::new(2.0, 2.0),
         ]));
-        let dense = Storage::DenseF64(DenseStorage::from_vec_with_shape(
+        let dense = Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(
             vec![1.0, 2.0, 3.0, 4.0],
             &[2, 2],
         ));
@@ -2541,11 +2562,11 @@ mod tests {
     #[test]
     fn test_contract_dense_f64_diag_c64() {
         // Dense<f64> × Diag<Complex64> should produce Dense<Complex64>
-        let dense = Storage::DenseF64(DenseStorage::from_vec_with_shape(
+        let dense = Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(
             vec![1.0, 2.0, 3.0, 4.0],
             &[2, 2],
         ));
-        let diag = Storage::DiagC64(DiagStorage::from_vec(vec![
+        let diag = Storage::diag_c64_legacy(DiagStorage::from_vec(vec![
             Complex64::new(1.0, 1.0),
             Complex64::new(2.0, 2.0),
         ]));
@@ -2568,7 +2589,7 @@ mod tests {
     #[test]
     fn test_contract_dense_c64_diag_f64() {
         // Dense<Complex64> × Diag<f64> should produce Dense<Complex64>
-        let dense = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+        let dense = Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(
             vec![
                 Complex64::new(1.0, 1.0),
                 Complex64::new(2.0, 2.0),
@@ -2577,7 +2598,7 @@ mod tests {
             ],
             &[2, 2],
         ));
-        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0]));
+        let diag = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0, 2.0]));
 
         let result = contract_storage(&dense, &[2, 2], &[1], &diag, &[2, 2], &[0], &[2, 2]);
 
@@ -2600,8 +2621,8 @@ mod tests {
     fn test_contract_diag_diag_all_contracted() {
         // Diag [3, 3] × Diag [3, 3] with all indices contracted
         // Result = sum_t diag1[t] * diag2[t] (inner product)
-        let diag1 = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
-        let diag2 = Storage::DiagF64(DiagStorage::from_vec(vec![4.0, 5.0, 6.0]));
+        let diag1 = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
+        let diag2 = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![4.0, 5.0, 6.0]));
 
         let result = contract_storage(&diag1, &[3, 3], &[0, 1], &diag2, &[3, 3], &[0, 1], &[]);
 
@@ -2615,14 +2636,14 @@ mod tests {
     fn test_contract_diag_diag_partial() {
         // Diag [3, 3] × Diag [3, 3] with one axis contracted
         // Result is a diagonal tensor
-        let diag1 = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
-        let diag2 = Storage::DiagF64(DiagStorage::from_vec(vec![4.0, 5.0, 6.0]));
+        let diag1 = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0, 2.0, 3.0]));
+        let diag2 = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![4.0, 5.0, 6.0]));
 
         let result = contract_storage(&diag1, &[3, 3], &[1], &diag2, &[3, 3], &[0], &[3, 3]);
 
         // Result is element-wise product: [1*4, 2*5, 3*6] = [4, 10, 18]
-        match &result {
-            Storage::DiagF64(d) => {
+        match result.repr() {
+            StorageRepr::DiagF64(d) => {
                 assert_eq!(d.as_slice(), &[4.0, 10.0, 18.0]);
             }
             _ => panic!("Expected DiagF64"),
@@ -2633,13 +2654,15 @@ mod tests {
 
     #[test]
     fn test_is_f64() {
-        let dense_f64 = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
-        let dense_c64 = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+        let dense_f64 =
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
+        let dense_c64 = Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(
             vec![Complex64::new(1.0, 0.0)],
             &[1],
         ));
-        let diag_f64 = Storage::DiagF64(DiagStorage::from_vec(vec![1.0]));
-        let diag_c64 = Storage::DiagC64(DiagStorage::from_vec(vec![Complex64::new(1.0, 0.0)]));
+        let diag_f64 = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0]));
+        let diag_c64 =
+            Storage::diag_c64_legacy(DiagStorage::from_vec(vec![Complex64::new(1.0, 0.0)]));
 
         assert!(dense_f64.is_f64());
         assert!(!dense_c64.is_f64());
@@ -2649,13 +2672,15 @@ mod tests {
 
     #[test]
     fn test_is_c64() {
-        let dense_f64 = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
-        let dense_c64 = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+        let dense_f64 =
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
+        let dense_c64 = Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(
             vec![Complex64::new(1.0, 0.0)],
             &[1],
         ));
-        let diag_f64 = Storage::DiagF64(DiagStorage::from_vec(vec![1.0]));
-        let diag_c64 = Storage::DiagC64(DiagStorage::from_vec(vec![Complex64::new(1.0, 0.0)]));
+        let diag_f64 = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0]));
+        let diag_c64 =
+            Storage::diag_c64_legacy(DiagStorage::from_vec(vec![Complex64::new(1.0, 0.0)]));
 
         assert!(!dense_f64.is_c64());
         assert!(dense_c64.is_c64());
@@ -2665,13 +2690,15 @@ mod tests {
 
     #[test]
     fn test_is_complex() {
-        let dense_f64 = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
-        let dense_c64 = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+        let dense_f64 =
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
+        let dense_c64 = Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(
             vec![Complex64::new(1.0, 0.0)],
             &[1],
         ));
-        let diag_f64 = Storage::DiagF64(DiagStorage::from_vec(vec![1.0]));
-        let diag_c64 = Storage::DiagC64(DiagStorage::from_vec(vec![Complex64::new(1.0, 0.0)]));
+        let diag_f64 = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0]));
+        let diag_c64 =
+            Storage::diag_c64_legacy(DiagStorage::from_vec(vec![Complex64::new(1.0, 0.0)]));
 
         // is_complex is an alias for is_c64
         assert!(!dense_f64.is_complex());
@@ -2911,8 +2938,8 @@ mod tests {
             &d2,
             &[3, 3],
             &[],
-            |v| Storage::DenseF64(DenseStorage::from_vec_with_shape(v, &[])),
-            |v| Storage::DiagF64(DiagStorage::from_vec(v)),
+            |v| Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(v, &[])),
+            |v| Storage::diag_f64_legacy(DiagStorage::from_vec(v)),
         );
         let data = extract_f64(&result);
         assert_eq!(data.len(), 1);
@@ -2930,11 +2957,11 @@ mod tests {
             &d2,
             &[2, 2],
             &[2, 2],
-            |v| Storage::DenseF64(DenseStorage::from_vec_with_shape(v, &[2, 2])),
-            |v| Storage::DiagF64(DiagStorage::from_vec(v)),
+            |v| Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(v, &[2, 2])),
+            |v| Storage::diag_f64_legacy(DiagStorage::from_vec(v)),
         );
-        match &result {
-            Storage::DiagF64(d) => {
+        match result.repr() {
+            StorageRepr::DiagF64(d) => {
                 assert_eq!(d.as_slice(), &[10.0, 21.0]);
             }
             _ => panic!("Expected DiagF64"),
@@ -2949,7 +2976,7 @@ mod tests {
         let diag = DiagStorage::from_vec(vec![1.0, 2.0]);
         let dense = DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
         let result = diag.contract_diag_dense(&[2, 2], &[1], &dense, &[2, 3], &[0], &[2, 3], |v| {
-            Storage::DenseF64(DenseStorage::from_vec_with_shape(v, &[2, 3]))
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(v, &[2, 3]))
         });
         let data = extract_f64(&result);
         assert_eq!(data.len(), 6);
@@ -3017,8 +3044,8 @@ mod tests {
 
     #[test]
     fn test_storage_is_diag() {
-        let dense = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
-        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![1.0]));
+        let dense = Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
+        let diag = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0]));
         assert!(!dense.is_diag());
         assert!(diag.is_diag());
     }
@@ -3040,11 +3067,12 @@ mod tests {
 
     #[test]
     fn test_storage_len_is_empty() {
-        let dense = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0, 2.0], &[2]));
+        let dense =
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![1.0, 2.0], &[2]));
         assert_eq!(dense.len(), 2);
         assert!(!dense.is_empty());
 
-        let diag = Storage::DiagF64(DiagStorage::from_vec(vec![]));
+        let diag = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![]));
         assert_eq!(diag.len(), 0);
         assert!(diag.is_empty());
     }
@@ -3084,27 +3112,29 @@ mod tests {
 
     #[test]
     fn test_sum_from_storage_f64() {
-        let s = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0], &[3]));
+        let s =
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0], &[3]));
         let sum: f64 = f64::sum_from_storage(&s);
         assert!((sum - 6.0).abs() < 1e-10);
     }
 
     #[test]
     fn test_sum_from_storage_diag_f64() {
-        let s = Storage::DiagF64(DiagStorage::from_vec(vec![10.0, 20.0]));
+        let s = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![10.0, 20.0]));
         let sum: f64 = f64::sum_from_storage(&s);
         assert!((sum - 30.0).abs() < 1e-10);
     }
 
     #[test]
     fn test_storage_sum_f64_method() {
-        let s = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0], &[3]));
+        let s =
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![1.0, 2.0, 3.0], &[3]));
         assert!((s.sum_f64() - 6.0).abs() < 1e-10);
     }
 
     #[test]
     fn test_storage_sum_c64_method() {
-        let s = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+        let s = Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(
             vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
             &[2],
         ));
@@ -3114,26 +3144,41 @@ mod tests {
 
     #[test]
     fn test_storage_max_abs_and_to_dense_storage_cover_complex_and_diag() {
-        let dense_c64 = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+        let dense_c64 = Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(
             vec![Complex64::new(3.0, 4.0), Complex64::new(1.0, -1.0)],
             &[2],
         ));
         assert!((dense_c64.max_abs() - 5.0).abs() < 1e-10);
-        match dense_c64.to_dense_storage(&[2]) {
-            Storage::DenseC64(ds) => assert_eq!(
+        match dense_c64.to_dense_storage(&[2]).repr() {
+            StorageRepr::StructuredC64(ds) => assert_eq!(
+                ds.payload_col_major_vec().as_slice(),
+                &[Complex64::new(3.0, 4.0), Complex64::new(1.0, -1.0)]
+            ),
+            StorageRepr::DenseC64(ds) => assert_eq!(
                 ds.as_slice(),
                 &[Complex64::new(3.0, 4.0), Complex64::new(1.0, -1.0)]
             ),
             other => panic!("expected DenseC64, got {other:?}"),
         }
 
-        let diag_c64 = Storage::DiagC64(DiagStorage::from_vec(vec![
+        let diag_c64 = Storage::diag_c64_legacy(DiagStorage::from_vec(vec![
             Complex64::new(0.0, 2.0),
             Complex64::new(3.0, 4.0),
         ]));
         assert!((diag_c64.max_abs() - 5.0).abs() < 1e-10);
-        match diag_c64.to_dense_storage(&[2, 2]) {
-            Storage::DenseC64(ds) => {
+        match diag_c64.to_dense_storage(&[2, 2]).repr() {
+            StorageRepr::StructuredC64(ds) => {
+                assert_eq!(
+                    ds.payload_col_major_vec().as_slice(),
+                    &[
+                        Complex64::new(0.0, 2.0),
+                        Complex64::new(0.0, 0.0),
+                        Complex64::new(0.0, 0.0),
+                        Complex64::new(3.0, 4.0),
+                    ]
+                );
+            }
+            StorageRepr::DenseC64(ds) => {
                 assert_eq!(
                     ds.as_slice(),
                     &[
@@ -3150,48 +3195,77 @@ mod tests {
 
     #[test]
     fn test_storage_projection_promotion_and_conjugation_helpers() {
-        let dense_c64 = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+        let dense_c64 = Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(
             vec![Complex64::new(1.0, -2.0), Complex64::new(3.0, 4.0)],
             &[2],
         ));
-        match dense_c64.extract_real_part() {
-            Storage::DenseF64(ds) => assert_eq!(ds.as_slice(), &[1.0, 3.0]),
+        match dense_c64.extract_real_part().repr() {
+            StorageRepr::DenseF64(ds) => assert_eq!(ds.as_slice(), &[1.0, 3.0]),
+            StorageRepr::StructuredF64(ds) => {
+                assert_eq!(ds.payload_col_major_vec().as_slice(), &[1.0, 3.0])
+            }
             other => panic!("expected DenseF64, got {other:?}"),
         }
-        match dense_c64.extract_imag_part(&[2]) {
-            Storage::DenseF64(ds) => assert_eq!(ds.as_slice(), &[-2.0, 4.0]),
+        match dense_c64.extract_imag_part(&[2]).repr() {
+            StorageRepr::DenseF64(ds) => assert_eq!(ds.as_slice(), &[-2.0, 4.0]),
+            StorageRepr::StructuredF64(ds) => {
+                assert_eq!(ds.payload_col_major_vec().as_slice(), &[-2.0, 4.0])
+            }
             other => panic!("expected DenseF64, got {other:?}"),
         }
-        match dense_c64.conj() {
-            Storage::DenseC64(ds) => {
+        match dense_c64.conj().repr() {
+            StorageRepr::DenseC64(ds) => {
                 assert_eq!(
                     ds.as_slice(),
+                    &[Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)]
+                )
+            }
+            StorageRepr::StructuredC64(ds) => {
+                assert_eq!(
+                    ds.payload_col_major_vec().as_slice(),
                     &[Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)]
                 )
             }
             other => panic!("expected DenseC64, got {other:?}"),
         }
 
-        let diag_f64 = Storage::DiagF64(DiagStorage::from_vec(vec![2.0, -1.0]));
-        match diag_f64.extract_imag_part(&[2, 2]) {
-            Storage::DiagF64(ds) => assert_eq!(ds.as_slice(), &[0.0, 0.0]),
+        let diag_f64 = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![2.0, -1.0]));
+        match diag_f64.extract_imag_part(&[2, 2]).repr() {
+            StorageRepr::DiagF64(ds) => assert_eq!(ds.as_slice(), &[0.0, 0.0]),
+            StorageRepr::StructuredF64(ds) => {
+                assert_eq!(ds.payload_col_major_vec().as_slice(), &[0.0, 0.0])
+            }
             other => panic!("expected DiagF64, got {other:?}"),
         }
-        match diag_f64.to_complex_storage() {
-            Storage::DiagC64(ds) => {
+        match diag_f64.to_complex_storage().repr() {
+            StorageRepr::DiagC64(ds) => {
                 assert_eq!(
                     ds.as_slice(),
                     &[Complex64::new(2.0, 0.0), Complex64::new(-1.0, 0.0)]
                 )
             }
+            StorageRepr::StructuredC64(ds) => {
+                assert_eq!(
+                    ds.payload_col_major_vec().as_slice(),
+                    &[Complex64::new(2.0, 0.0), Complex64::new(-1.0, 0.0)]
+                )
+            }
             other => panic!("expected DiagC64, got {other:?}"),
         }
-        let real = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0, 2.0], &[2]));
-        let imag = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![0.5, -1.5], &[2]));
-        match Storage::combine_to_complex(&real, &imag) {
-            Storage::DenseC64(ds) => {
+        let real =
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![1.0, 2.0], &[2]));
+        let imag =
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![0.5, -1.5], &[2]));
+        match Storage::combine_to_complex(&real, &imag).repr() {
+            StorageRepr::DenseC64(ds) => {
                 assert_eq!(
                     ds.as_slice(),
+                    &[Complex64::new(1.0, 0.5), Complex64::new(2.0, -1.5)]
+                )
+            }
+            StorageRepr::StructuredC64(ds) => {
+                assert_eq!(
+                    ds.payload_col_major_vec().as_slice(),
                     &[Complex64::new(1.0, 0.5), Complex64::new(2.0, -1.5)]
                 )
             }
@@ -3202,70 +3276,71 @@ mod tests {
     #[test]
     fn test_storage_try_add_and_try_sub_cover_all_variants_and_errors() {
         let dense_f64_a =
-            Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0, 2.0], &[2]));
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![1.0, 2.0], &[2]));
         let dense_f64_b =
-            Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![3.0, -1.0], &[2]));
-        match dense_f64_a.try_add(&dense_f64_b).unwrap() {
-            Storage::DenseF64(ds) => assert_eq!(ds.as_slice(), &[4.0, 1.0]),
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![3.0, -1.0], &[2]));
+        match dense_f64_a.try_add(&dense_f64_b).unwrap().repr() {
+            StorageRepr::DenseF64(ds) => assert_eq!(ds.as_slice(), &[4.0, 1.0]),
             other => panic!("expected DenseF64, got {other:?}"),
         }
-        match dense_f64_a.try_sub(&dense_f64_b).unwrap() {
-            Storage::DenseF64(ds) => assert_eq!(ds.as_slice(), &[-2.0, 3.0]),
+        match dense_f64_a.try_sub(&dense_f64_b).unwrap().repr() {
+            StorageRepr::DenseF64(ds) => assert_eq!(ds.as_slice(), &[-2.0, 3.0]),
             other => panic!("expected DenseF64, got {other:?}"),
         }
 
-        let dense_c64_a = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+        let dense_c64_a = Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(
             vec![Complex64::new(1.0, 1.0), Complex64::new(0.0, -2.0)],
             &[2],
         ));
-        let dense_c64_b = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+        let dense_c64_b = Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(
             vec![Complex64::new(-1.0, 0.5), Complex64::new(3.0, 1.0)],
             &[2],
         ));
         assert!(matches!(
-            dense_c64_a.try_add(&dense_c64_b).unwrap(),
-            Storage::DenseC64(_)
+            dense_c64_a.try_add(&dense_c64_b).unwrap().repr(),
+            StorageRepr::DenseC64(_)
         ));
         assert!(matches!(
-            dense_c64_a.try_sub(&dense_c64_b).unwrap(),
-            Storage::DenseC64(_)
+            dense_c64_a.try_sub(&dense_c64_b).unwrap().repr(),
+            StorageRepr::DenseC64(_)
         ));
 
-        let diag_f64_a = Storage::DiagF64(DiagStorage::from_vec(vec![1.0, 2.0]));
-        let diag_f64_b = Storage::DiagF64(DiagStorage::from_vec(vec![0.5, -3.0]));
+        let diag_f64_a = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![1.0, 2.0]));
+        let diag_f64_b = Storage::diag_f64_legacy(DiagStorage::from_vec(vec![0.5, -3.0]));
         assert!(matches!(
-            diag_f64_a.try_add(&diag_f64_b).unwrap(),
-            Storage::DiagF64(_)
+            diag_f64_a.try_add(&diag_f64_b).unwrap().repr(),
+            StorageRepr::DiagF64(_)
         ));
         assert!(matches!(
-            diag_f64_a.try_sub(&diag_f64_b).unwrap(),
-            Storage::DiagF64(_)
+            diag_f64_a.try_sub(&diag_f64_b).unwrap().repr(),
+            StorageRepr::DiagF64(_)
         ));
 
-        let diag_c64_a = Storage::DiagC64(DiagStorage::from_vec(vec![
+        let diag_c64_a = Storage::diag_c64_legacy(DiagStorage::from_vec(vec![
             Complex64::new(1.0, -1.0),
             Complex64::new(0.0, 2.0),
         ]));
-        let diag_c64_b = Storage::DiagC64(DiagStorage::from_vec(vec![
+        let diag_c64_b = Storage::diag_c64_legacy(DiagStorage::from_vec(vec![
             Complex64::new(0.5, 0.5),
             Complex64::new(-3.0, 1.0),
         ]));
         assert!(matches!(
-            diag_c64_a.try_add(&diag_c64_b).unwrap(),
-            Storage::DiagC64(_)
+            diag_c64_a.try_add(&diag_c64_b).unwrap().repr(),
+            StorageRepr::DiagC64(_)
         ));
         assert!(matches!(
-            diag_c64_a.try_sub(&diag_c64_b).unwrap(),
-            Storage::DiagC64(_)
+            diag_c64_a.try_sub(&diag_c64_b).unwrap().repr(),
+            StorageRepr::DiagC64(_)
         ));
 
-        let mismatched_len = Storage::DenseF64(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
+        let mismatched_len =
+            Storage::dense_f64_legacy(DenseStorage::from_vec_with_shape(vec![1.0], &[1]));
         let err = dense_f64_a.try_add(&mismatched_len).unwrap_err();
         assert!(err.contains("Storage lengths must match for addition"));
         let err = dense_f64_a.try_sub(&mismatched_len).unwrap_err();
         assert!(err.contains("Storage lengths must match for subtraction"));
 
-        let mismatched_type = Storage::DenseC64(DenseStorage::from_vec_with_shape(
+        let mismatched_type = Storage::dense_c64_legacy(DenseStorage::from_vec_with_shape(
             vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
             &[2],
         ));

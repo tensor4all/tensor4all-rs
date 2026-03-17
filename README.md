@@ -35,8 +35,8 @@ use `order="F"` semantics when you need explicit control over flattening or resh
 | `Diag` | — | `Storage::StructuredF64/C64` with diagonal `axis_classes` |
 | `A * B` | — | `a.contract(&b)` |
 
-`Storage::Dense*` and `Storage::Diag*` remain as temporary low-level kernel variants inside
-the backend, but the structured snapshot path is the intended public direction.
+Legacy dense/diagonal kernel variants still exist inside the backend during the transition,
+but `StructuredStorage` is the intended public snapshot direction.
 
 ### Truncation Tolerance
 
