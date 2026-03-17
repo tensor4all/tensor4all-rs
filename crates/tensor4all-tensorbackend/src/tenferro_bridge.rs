@@ -16,10 +16,7 @@ use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
 
 use crate::layout::{dense_linear_multi_index, storage_strides};
-use crate::storage::{
-    col_major_strides, DenseStorageC64, DenseStorageF64, DiagStorageC64, DiagStorageF64, Storage,
-    StructuredStorage,
-};
+use crate::storage::{col_major_strides, Storage, StructuredStorage};
 use crate::tensor_element::TensorElement;
 use crate::AnyScalar;
 
@@ -57,6 +54,25 @@ fn cpu_threads() -> usize {
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(1);
     parsed.max(1)
+}
+
+fn is_missing_default_runtime(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .to_string()
+            .contains("default runtime is not configured")
+    })
+}
+
+fn retry_with_default_runtime_if_needed<R>(
+    op: &'static str,
+    mut f: impl FnMut() -> Result<R>,
+) -> Result<R> {
+    match f() {
+        Ok(value) => Ok(value),
+        Err(err) if is_missing_default_runtime(&err) => with_default_runtime(op, f),
+        Err(err) => Err(err),
+    }
 }
 
 fn legacy_row_major_to_col_major<T: Clone>(data: &[T], dims: &[usize]) -> Result<Vec<T>> {
@@ -268,51 +284,20 @@ pub fn diag_native_tensor_from_col_major<T: TensorElement>(
     T::diag_native_tensor_from_col_major(data, logical_rank)
 }
 
-fn row_major_f64_storage(tensor: &TypedTensor<f64>, logical_dims: &[usize]) -> Result<Storage> {
-    let data = materialize_row_major_values(tensor, "f64 row-major storage materialization")?;
-    Ok(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-        data,
-        logical_dims,
-    )))
+fn dense_f64_storage_from_col_major(
+    tensor: &TypedTensor<f64>,
+    logical_dims: &[usize],
+) -> Result<Storage> {
+    let data = materialize_col_major_values(tensor, "f64 dense snapshot materialization")?;
+    Storage::from_dense_f64_col_major(data, logical_dims)
 }
 
-fn row_major_c64_storage(
+fn dense_c64_storage_from_col_major(
     tensor: &TypedTensor<Complex64>,
     logical_dims: &[usize],
 ) -> Result<Storage> {
-    let data = materialize_row_major_values(tensor, "c64 row-major storage materialization")?;
-    Ok(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-        data,
-        logical_dims,
-    )))
-}
-
-fn materialize_row_major_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
-where
-    T: TfScalar + Conjugate + Copy,
-{
-    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
-    let is_conjugated = row_major.is_conjugated();
-    let row_major = if row_major.logical_memory_space() == LogicalMemorySpace::MainMemory {
-        row_major
-    } else {
-        row_major
-            .to_memory_space_async(LogicalMemorySpace::MainMemory)
-            .map_err(|e| anyhow!("{op}: failed to move tensor to host memory: {e}"))?
-    };
-    let offset = usize::try_from(row_major.offset())
-        .map_err(|_| anyhow!("{op}: negative offset {}", row_major.offset()))?;
-    let len = row_major.len();
-    let slice = row_major
-        .buffer()
-        .as_slice()
-        .and_then(|values| values.get(offset..offset + len))
-        .ok_or_else(|| anyhow!("{op}: expected host-accessible contiguous tensor buffer"))?;
-    if is_conjugated {
-        Ok(slice.iter().copied().map(Conjugate::conj).collect())
-    } else {
-        Ok(slice.to_vec())
-    }
+    let data = materialize_col_major_values(tensor, "c64 dense snapshot materialization")?;
+    Storage::from_dense_c64_col_major(data, logical_dims)
 }
 
 fn materialize_col_major_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
@@ -348,15 +333,15 @@ fn snapshot_f64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
         let payload = snap
             .payload_f64()
             .ok_or_else(|| anyhow!("expected f64 diagonal payload"))?;
-        let data = materialize_row_major_values(payload, "f64 diagonal snapshot materialization")?;
-        return Ok(Storage::DiagF64(DiagStorageF64::from_vec(data)));
+        let data = materialize_col_major_values(payload, "f64 diagonal snapshot materialization")?;
+        return Storage::from_diag_f64_col_major(data, snap.dims().len());
     }
 
     if snap.is_dense() {
         let payload = snap
             .payload_f64()
             .ok_or_else(|| anyhow!("expected f64 dense payload"))?;
-        row_major_f64_storage(payload, snap.dims())
+        dense_f64_storage_from_col_major(payload, snap.dims())
     } else {
         let payload = snap
             .payload_f64()
@@ -377,15 +362,15 @@ fn snapshot_c64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
         let payload = snap
             .payload_c64()
             .ok_or_else(|| anyhow!("expected c64 diagonal payload"))?;
-        let data = materialize_row_major_values(payload, "c64 diagonal snapshot materialization")?;
-        return Ok(Storage::DiagC64(DiagStorageC64::from_vec(data)));
+        let data = materialize_col_major_values(payload, "c64 diagonal snapshot materialization")?;
+        return Storage::from_diag_c64_col_major(data, snap.dims().len());
     }
 
     if snap.is_dense() {
         let payload = snap
             .payload_c64()
             .ok_or_else(|| anyhow!("expected c64 dense payload"))?;
-        row_major_c64_storage(payload, snap.dims())
+        dense_c64_storage_from_col_major(payload, snap.dims())
     } else {
         let payload = snap
             .payload_c64()
@@ -548,24 +533,32 @@ pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage>
 
 /// Materialize the dense primal payload of a native tensor as column-major `f64`.
 pub fn native_tensor_primal_to_dense_f64_col_major(tensor: &NativeTensor) -> Result<Vec<f64>> {
-    <f64 as TensorElement>::dense_values_from_native_col_major(tensor)
+    retry_with_default_runtime_if_needed("native_tensor_primal_to_dense_f64_col_major", || {
+        <f64 as TensorElement>::dense_values_from_native_col_major(tensor)
+    })
 }
 
 /// Materialize the dense primal payload of a native tensor as column-major `Complex64`.
 pub fn native_tensor_primal_to_dense_c64_col_major(
     tensor: &NativeTensor,
 ) -> Result<Vec<Complex64>> {
-    <Complex64 as TensorElement>::dense_values_from_native_col_major(tensor)
+    retry_with_default_runtime_if_needed("native_tensor_primal_to_dense_c64_col_major", || {
+        <Complex64 as TensorElement>::dense_values_from_native_col_major(tensor)
+    })
 }
 
 /// Materialize the diagonal payload of a native diagonal tensor as `f64`.
 pub fn native_tensor_primal_to_diag_f64(tensor: &NativeTensor) -> Result<Vec<f64>> {
-    <f64 as TensorElement>::diag_values_from_native_temp(tensor)
+    retry_with_default_runtime_if_needed("native_tensor_primal_to_diag_f64", || {
+        <f64 as TensorElement>::diag_values_from_native_temp(tensor)
+    })
 }
 
 /// Materialize the diagonal payload of a native diagonal tensor as `Complex64`.
 pub fn native_tensor_primal_to_diag_c64(tensor: &NativeTensor) -> Result<Vec<Complex64>> {
-    <Complex64 as TensorElement>::diag_values_from_native_temp(tensor)
+    retry_with_default_runtime_if_needed("native_tensor_primal_to_diag_c64", || {
+        <Complex64 as TensorElement>::diag_values_from_native_temp(tensor)
+    })
 }
 
 /// Extract the forward tangent of a native tensor as a primal tensor.
@@ -762,7 +755,7 @@ pub fn axpby_storage_native(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{DenseStorageC64, DenseStorageF64, DiagStorageF64, Storage};
+    use crate::storage::Storage;
 
     fn assert_storage_eq(lhs: &Storage, rhs: &Storage) {
         match (lhs, rhs) {
@@ -802,26 +795,46 @@ mod tests {
 
     #[test]
     fn storage_native_roundtrip_dense_f64() {
-        let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0, 2.0, 3.0, 4.0],
-            &[2, 2],
-        ));
+        let storage = Storage::from_dense_f64_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
 
         let native = storage_to_native_tensor(&storage, &[2, 2]).unwrap();
         let roundtrip = native_tensor_primal_to_storage(&native).unwrap();
 
-        assert_storage_eq(&roundtrip, &storage);
+        let expected =
+            Storage::from_dense_f64_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+        assert_storage_eq(&roundtrip, &expected);
     }
 
     #[test]
     fn storage_native_roundtrip_diag_preserves_diag_layout() {
-        let storage = Storage::DiagF64(DiagStorageF64::from_vec(vec![2.0, -1.0, 4.0]));
+        let storage = Storage::from_diag_f64_col_major(vec![2.0, -1.0, 4.0], 2).unwrap();
 
         let native = storage_to_native_tensor(&storage, &[3, 3]).unwrap();
         let roundtrip = native_tensor_primal_to_storage(&native).unwrap();
 
         assert!(native.is_diag());
-        assert_storage_eq(&roundtrip, &storage);
+        let expected = Storage::from_diag_f64_col_major(vec![2.0, -1.0, 4.0], 2).unwrap();
+        assert_storage_eq(&roundtrip, &expected);
+    }
+
+    #[test]
+    fn native_dense_materialization_sets_default_runtime_if_needed() {
+        let native = storage_to_native_tensor(
+            &Storage::from_diag_f64_col_major(vec![2.0, -1.0, 4.0], 2).unwrap(),
+            &[3, 3],
+        )
+        .unwrap();
+
+        let dense = native_tensor_primal_to_dense_f64_col_major(&native).unwrap();
+
+        assert_eq!(
+            dense,
+            vec![
+                2.0, 0.0, 0.0, //
+                0.0, -1.0, 0.0, //
+                0.0, 0.0, 4.0,
+            ]
+        );
     }
 
     #[test]
@@ -847,10 +860,11 @@ mod tests {
 
     #[test]
     fn sum_native_tensor_returns_rank0_scalar() {
-        let storage = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+        let storage = Storage::from_dense_c64_col_major(
             vec![Complex64::new(1.0, -1.0), Complex64::new(-0.5, 2.0)],
             &[2],
-        ));
+        )
+        .unwrap();
         let native = storage_to_native_tensor(&storage, &[2]).unwrap();
 
         let sum = sum_native_tensor(&native).unwrap();
@@ -861,47 +875,44 @@ mod tests {
 
     #[test]
     fn native_snapshot_materializes_lazy_conjugation() {
-        let storage = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+        let storage = Storage::from_dense_c64_col_major(
             vec![
                 Complex64::new(1.0, 2.0),
-                Complex64::new(-3.0, 4.5),
                 Complex64::new(0.0, -1.0),
+                Complex64::new(-3.0, 4.5),
                 Complex64::new(2.5, 0.25),
             ],
             &[2, 2],
-        ));
+        )
+        .unwrap();
         let native = storage_to_native_tensor(&storage, &[2, 2]).unwrap();
 
         let conjugated = conj_native_tensor(&native).unwrap();
         let snapshot = native_tensor_primal_to_storage(&conjugated).unwrap();
 
-        let expected = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+        let expected = Storage::from_dense_c64_col_major(
             vec![
                 Complex64::new(1.0, -2.0),
-                Complex64::new(-3.0, -4.5),
                 Complex64::new(0.0, 1.0),
+                Complex64::new(-3.0, -4.5),
                 Complex64::new(2.5, -0.25),
             ],
             &[2, 2],
-        ));
+        )
+        .unwrap();
         assert_storage_eq(&snapshot, &expected);
     }
 
     #[test]
     fn native_einsum_accepts_unsorted_nonfirst_operand_labels() {
         let lhs = storage_to_native_tensor(
-            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![1.0, 2.0, 3.0, 4.0],
-                &[2, 2],
-            )),
+            &Storage::from_dense_f64_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap(),
             &[2, 2],
         )
         .unwrap();
         let rhs = storage_to_native_tensor(
-            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0],
-                &[3, 2],
-            )),
+            &Storage::from_dense_f64_col_major(vec![10.0, 30.0, 50.0, 20.0, 40.0, 60.0], &[3, 2])
+                .unwrap(),
             &[3, 2],
         )
         .unwrap();
@@ -909,28 +920,23 @@ mod tests {
         let out = einsum_native_tensors(&[(&lhs, &[0, 1]), (&rhs, &[2, 1])], &[0, 2]).unwrap();
         let snapshot = native_tensor_primal_to_storage(&out).unwrap();
 
-        let expected = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![50.0, 110.0, 170.0, 110.0, 250.0, 390.0],
+        let expected = Storage::from_dense_f64_col_major(
+            vec![50.0, 110.0, 110.0, 250.0, 170.0, 390.0],
             &[2, 3],
-        ));
+        )
+        .unwrap();
         assert_storage_eq(&snapshot, &expected);
     }
 
     #[test]
     fn contract_native_tensor_restores_rhs_free_axis_order() {
         let lhs = storage_to_native_tensor(
-            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![1.0, 2.0, 3.0, 4.0],
-                &[2, 2],
-            )),
+            &Storage::from_dense_f64_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap(),
             &[2, 2],
         )
         .unwrap();
         let rhs = storage_to_native_tensor(
-            &Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![10.0, 20.0, 30.0, 40.0],
-                &[2, 2],
-            )),
+            &Storage::from_dense_f64_col_major(vec![10.0, 30.0, 20.0, 40.0], &[2, 2]).unwrap(),
             &[2, 2],
         )
         .unwrap();
@@ -938,10 +944,8 @@ mod tests {
         let out = contract_native_tensor(&lhs, &[1], &rhs, &[1]).unwrap();
         let snapshot = native_tensor_primal_to_storage(&out).unwrap();
 
-        let expected = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![50.0, 110.0, 110.0, 250.0],
-            &[2, 2],
-        ));
+        let expected =
+            Storage::from_dense_f64_col_major(vec![50.0, 110.0, 110.0, 250.0], &[2, 2]).unwrap();
         assert_storage_eq(&snapshot, &expected);
     }
 
@@ -958,17 +962,13 @@ mod tests {
 
     #[test]
     fn permute_storage_native_dense_matches_expected_data() {
-        let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            &[2, 3],
-        ));
+        let storage =
+            Storage::from_dense_f64_col_major(vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[2, 3]).unwrap();
 
         let native = permute_storage_native(&storage, &[2, 3], &[1, 0]).unwrap();
 
-        let expected = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-            vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0],
-            &[3, 2],
-        ));
+        let expected =
+            Storage::from_dense_f64_col_major(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]).unwrap();
         assert_storage_eq(&native, &expected);
     }
 

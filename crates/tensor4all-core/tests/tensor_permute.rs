@@ -1,8 +1,48 @@
 use num_complex::Complex64;
-use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64};
-use tensor4all_core::{compute_permutation_from_indices, Storage, TensorDynLen};
+use tensor4all_core::{compute_permutation_from_indices, DynIndex, TensorDynLen};
+
+fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
+    TensorDynLen::from_dense(indices, data).unwrap()
+}
+
+fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen {
+    TensorDynLen::from_dense(indices, data).unwrap()
+}
+
+fn col_major_multi_index(mut flat: usize, dims: &[usize]) -> Vec<usize> {
+    dims.iter()
+        .map(|&dim| {
+            let idx = flat % dim;
+            flat /= dim;
+            idx
+        })
+        .collect()
+}
+
+fn col_major_offset(dims: &[usize], indices: &[usize]) -> usize {
+    let mut stride = 1;
+    let mut offset = 0;
+    for (&idx, &dim) in indices.iter().zip(dims.iter()) {
+        offset += idx * stride;
+        stride *= dim;
+    }
+    offset
+}
+
+fn permute_col_major<T: Clone>(data: &[T], dims: &[usize], perm: &[usize]) -> Vec<T> {
+    let permuted_dims: Vec<usize> = perm.iter().map(|&axis| dims[axis]).collect();
+    (0..data.len())
+        .map(|flat| {
+            let permuted_index = col_major_multi_index(flat, &permuted_dims);
+            let mut source_index = vec![0; dims.len()];
+            for (new_axis, &old_axis) in perm.iter().enumerate() {
+                source_index[old_axis] = permuted_index[new_axis];
+            }
+            data[col_major_offset(dims, &source_index)].clone()
+        })
+        .collect()
+}
 
 #[test]
 fn test_compute_permutation_from_indices() {
@@ -63,214 +103,133 @@ fn test_compute_permutation_from_indices_duplicate() {
 
 #[test]
 fn test_permute_dyn_f64_2d() {
-    // Create a 2×3 tensor with data [1, 2, 3, 4, 5, 6]
-    // representing [[1, 2, 3], [4, 5, 6]] with shape [2, 3].
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone()];
     let dims = vec![2, 3];
+    let data = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
+    let tensor = dense_f64(indices, data.clone());
 
-    let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        &dims,
-    ));
-
-    let tensor: TensorDynLen = TensorDynLen::new(indices, Arc::new(storage));
-
-    // Permute to 3×2: swap dimensions
-    // Expected: [[1, 4], [2, 5], [3, 6]]
-    // Flattened backing buffer: [1, 4, 2, 5, 3, 6]
     let permuted = tensor.permute(&[1, 0]);
 
     assert_eq!(permuted.dims(), vec![3, 2]);
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
-
-    match permuted.storage().as_ref() {
-        Storage::DenseF64(v) => {
-            assert_eq!(v.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
-        }
-        _ => panic!("expected DenseF64"),
-    }
+    assert_eq!(
+        permuted.to_vec_f64().unwrap(),
+        permute_col_major(&data, &dims, &[1, 0])
+    );
 }
 
 #[test]
 fn test_permute_dyn_c64_2d() {
-    // Create a 2×3 tensor with complex data
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone()];
     let dims = vec![2, 3];
+    let data = vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(4.0, 0.0),
+        Complex64::new(2.0, 0.0),
+        Complex64::new(5.0, 0.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(6.0, 0.0),
+    ];
+    let tensor = dense_c64(indices, data.clone());
 
-    let storage = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-        vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(2.0, 0.0),
-            Complex64::new(3.0, 0.0),
-            Complex64::new(4.0, 0.0),
-            Complex64::new(5.0, 0.0),
-            Complex64::new(6.0, 0.0),
-        ],
-        &dims,
-    ));
-
-    let tensor: TensorDynLen = TensorDynLen::new(indices, Arc::new(storage));
-
-    // Permute to 3×2
     let permuted = tensor.permute(&[1, 0]);
 
     assert_eq!(permuted.dims(), vec![3, 2]);
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
-
-    match permuted.storage().as_ref() {
-        Storage::DenseC64(v) => {
-            assert_eq!(v.get(0), Complex64::new(1.0, 0.0));
-            assert_eq!(v.get(1), Complex64::new(4.0, 0.0));
-            assert_eq!(v.get(2), Complex64::new(2.0, 0.0));
-            assert_eq!(v.get(3), Complex64::new(5.0, 0.0));
-            assert_eq!(v.get(4), Complex64::new(3.0, 0.0));
-            assert_eq!(v.get(5), Complex64::new(6.0, 0.0));
-        }
-        _ => panic!("expected DenseC64"),
-    }
+    assert_eq!(
+        permuted.to_vec_c64().unwrap(),
+        permute_col_major(&data, &dims, &[1, 0])
+    );
 }
 
 #[test]
 fn test_permute_dyn_f64_3d() {
-    // Create a 2×3×4 tensor
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
     let indices = vec![i.clone(), j.clone(), k.clone()];
     let dims = vec![2, 3, 4];
 
-    // Fill with sequential values
     let data: Vec<f64> = (1..=24).map(|i| i as f64).collect();
-    let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(data, &dims));
+    let tensor = dense_f64(indices, data.clone());
 
-    let tensor: TensorDynLen = TensorDynLen::new(indices, Arc::new(storage));
-
-    // Permute to 4×2×3: [2, 0, 1]
     let permuted = tensor.permute(&[2, 0, 1]);
 
     assert_eq!(permuted.dims(), vec![4, 2, 3]);
     assert_eq!(permuted.indices[0].id, k.id);
     assert_eq!(permuted.indices[1].id, i.id);
     assert_eq!(permuted.indices[2].id, j.id);
-
-    // Verify data was permuted correctly
-    // Original: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
-    // After permute [2, 0, 1]: should reorganize the data
-    match permuted.storage().as_ref() {
-        Storage::DenseF64(v) => {
-            assert_eq!(v.len(), 24);
-            // Check first few values to verify permutation
-            // This is a complex permutation, so we just verify the structure
-            assert_eq!(v.get(0), 1.0); // First element should be the same
-        }
-        _ => panic!("expected DenseF64"),
-    }
+    assert_eq!(
+        permuted.to_vec_f64().unwrap(),
+        permute_col_major(&data, &dims, &[2, 0, 1])
+    );
 }
 
 #[test]
 fn test_permute_identity() {
-    // Test identity permutation [0, 1] on 2×3 tensor
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone()];
-    let dims = vec![2, 3];
+    let data = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
+    let tensor = dense_f64(indices, data.clone());
 
-    let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        &dims,
-    ));
-
-    let tensor: TensorDynLen = TensorDynLen::new(indices, Arc::new(storage));
-
-    // Identity permutation should not change anything
     let permuted = tensor.permute(&[0, 1]);
 
     assert_eq!(permuted.dims(), vec![2, 3]);
     assert_eq!(permuted.indices[0].id, i.id);
     assert_eq!(permuted.indices[1].id, j.id);
-
-    match permuted.storage().as_ref() {
-        Storage::DenseF64(v) => {
-            assert_eq!(v.as_slice(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-        }
-        _ => panic!("expected DenseF64"),
-    }
+    assert_eq!(permuted.to_vec_f64().unwrap(), data);
 }
 
 #[test]
 fn test_permute_indices_dyn_f64_2d() {
-    // Test permute_indices: main permutation method using new indices order
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone()];
     let dims = vec![2, 3];
+    let data = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
+    let tensor = dense_f64(indices, data.clone());
 
-    let storage = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        &dims,
-    ));
-
-    let tensor: TensorDynLen = TensorDynLen::new(indices, Arc::new(storage));
-
-    // Permute to 3×2: swap the two dimensions by providing new indices order
     let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);
 
     assert_eq!(permuted.dims(), vec![3, 2]);
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
-
-    match permuted.storage().as_ref() {
-        Storage::DenseF64(v) => {
-            assert_eq!(v.as_slice(), &[1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
-        }
-        _ => panic!("expected DenseF64"),
-    }
+    assert_eq!(
+        permuted.to_vec_f64().unwrap(),
+        permute_col_major(&data, &dims, &[1, 0])
+    );
 }
 
 #[test]
 fn test_permute_indices_c64() {
-    // Test permute_indices with complex numbers
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone()];
     let dims = vec![2, 3];
+    let data = vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(4.0, 0.0),
+        Complex64::new(2.0, 0.0),
+        Complex64::new(5.0, 0.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(6.0, 0.0),
+    ];
+    let tensor = dense_c64(indices, data.clone());
 
-    let storage = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-        vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(2.0, 0.0),
-            Complex64::new(3.0, 0.0),
-            Complex64::new(4.0, 0.0),
-            Complex64::new(5.0, 0.0),
-            Complex64::new(6.0, 0.0),
-        ],
-        &dims,
-    ));
-
-    let tensor: TensorDynLen = TensorDynLen::new(indices, Arc::new(storage));
-
-    // Permute to 3×2
     let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);
 
     assert_eq!(permuted.dims(), vec![3, 2]);
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
-
-    match permuted.storage().as_ref() {
-        Storage::DenseC64(v) => {
-            assert_eq!(v.get(0), Complex64::new(1.0, 0.0));
-            assert_eq!(v.get(1), Complex64::new(4.0, 0.0));
-            assert_eq!(v.get(2), Complex64::new(2.0, 0.0));
-            assert_eq!(v.get(3), Complex64::new(5.0, 0.0));
-            assert_eq!(v.get(4), Complex64::new(3.0, 0.0));
-            assert_eq!(v.get(5), Complex64::new(6.0, 0.0));
-        }
-        _ => panic!("expected DenseC64"),
-    }
+    assert_eq!(
+        permuted.to_vec_c64().unwrap(),
+        permute_col_major(&data, &dims, &[1, 0])
+    );
 }

@@ -1,9 +1,8 @@
 use num_complex::Complex64;
-use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::TensorLike;
 use tensor4all_core::{
-    diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor, AnyScalar, Storage, TensorDynLen,
+    diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor, AnyScalar, TensorDynLen,
 };
 
 #[test]
@@ -121,11 +120,7 @@ fn test_diag_tensor_contract_diag_dense() {
     let tensor_a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_a);
 
     // Create DenseTensor B[j, k] with all ones
-    let indices_b = vec![j.clone(), k.clone()];
-    let dims_b = vec![2, 2];
-    use tensor4all_core::storage::DenseStorageF64;
-    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 4], &dims_b));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, Arc::new(storage_b));
+    let tensor_b = TensorDynLen::from_dense(vec![j.clone(), k.clone()], vec![1.0; 4]).unwrap();
 
     // Contract along j: result should be DenseTensor[i, k]
     let result = tensor_a.contract(&tensor_b);
@@ -142,9 +137,8 @@ fn test_diag_tensor_convert_to_dense() {
     let diag_data = vec![1.0, 2.0, 3.0];
 
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data);
-    let dims = tensor.dims();
-    let dense_storage = tensor.storage().to_dense_storage(&dims);
-    let dense_tensor = TensorDynLen::new(vec![i.clone(), j.clone()], Arc::new(dense_storage));
+    let dense_tensor =
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], tensor.to_vec_f64().unwrap()).unwrap();
     let expected = TensorDynLen::from_dense(
         vec![i, j],
         vec![

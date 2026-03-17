@@ -7,9 +7,7 @@
 //! SVD gives ~1e-14 on the same data.
 
 use num_complex::Complex64;
-use std::sync::Arc;
-use tensor4all_core::storage::DenseStorageC64;
-use tensor4all_core::{factorize, svd_c64, DynIndex, FactorizeOptions, Storage, TensorDynLen};
+use tensor4all_core::{factorize, svd_c64, DynIndex, FactorizeOptions, TensorDynLen};
 
 /// Create a [5,2,2,5] tensor with data that triggers the QR bug.
 fn make_buggy_tensor() -> TensorDynLen {
@@ -123,11 +121,7 @@ fn make_buggy_tensor() -> TensorDynLen {
         Complex64::new(-1.01688110680129151e0, 8.34913283284349772e-2),
     ];
 
-    let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-        data,
-        &[5, 2, 2, 5],
-    )));
-    TensorDynLen::new(vec![idx_a, idx_b, idx_c, idx_d], storage)
+    TensorDynLen::from_dense(vec![idx_a, idx_b, idx_c, idx_d], data).unwrap()
 }
 
 fn reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex], opts: &FactorizeOptions) -> f64 {
@@ -156,16 +150,6 @@ fn svd_reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
     diff.norm()
 }
 
-fn as_dense_c64(storage: &Storage) -> Vec<Complex64> {
-    match storage {
-        Storage::DenseC64(data) => data.as_slice().to_vec(),
-        other => panic!(
-            "expected dense complex storage, got {:?}",
-            std::mem::discriminant(other)
-        ),
-    }
-}
-
 /// Regression: QR and SVD should both reconstruct this tensor to machine precision.
 #[test]
 fn test_qr_reconstruction_regression() {
@@ -176,11 +160,9 @@ fn test_qr_reconstruction_regression() {
 
     let matrix_i = DynIndex::new_dyn_with_tag(10, "row").unwrap();
     let matrix_j = DynIndex::new_dyn_with_tag(10, "col").unwrap();
-    let matrix_storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-        as_dense_c64(t.to_storage().unwrap().as_ref()),
-        &[10, 10],
-    )));
-    let matrix = TensorDynLen::new(vec![matrix_i.clone(), matrix_j], matrix_storage);
+    let matrix =
+        TensorDynLen::from_dense(vec![matrix_i.clone(), matrix_j], t.to_vec_c64().unwrap())
+            .unwrap();
 
     let matrix_svd_err = svd_reconstruction_error(&matrix, &[matrix_i]);
     let direct_svd_err = svd_reconstruction_error(&t, &left_inds);

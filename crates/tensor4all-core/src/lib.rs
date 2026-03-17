@@ -79,8 +79,7 @@ pub use defaults::tensordynlen::{
     unfold_split, TensorAccess, TensorDynLen,
 };
 pub use storage::{
-    make_mut_storage, mindim, DenseStorageFactory, Storage, StorageScalar, StructuredStorage,
-    SumFromStorage,
+    make_mut_storage, mindim, Storage, StorageScalar, StructuredStorage, SumFromStorage,
 };
 pub use tensor4all_tensorbackend::TensorElement;
 pub use tensor_like::{

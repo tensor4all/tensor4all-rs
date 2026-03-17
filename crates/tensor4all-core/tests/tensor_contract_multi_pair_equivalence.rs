@@ -1,17 +1,46 @@
-use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::storage::DenseStorageF64;
 use tensor4all_core::{
-    factorize, svd, AllowedPairs, Canonical, DynIndex, FactorizeOptions, Storage, TensorDynLen,
-    TensorLike,
+    factorize, svd, AllowedPairs, Canonical, DynIndex, FactorizeOptions, TensorDynLen, TensorLike,
 };
-use tensor4all_tensorbackend::permute_storage_native;
 
 fn make_tensor(indices: Vec<DynIndex>, data: Vec<f64>, dims: &[usize]) -> TensorDynLen {
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-        data, dims,
-    )));
-    TensorDynLen::new(indices, storage)
+    let expected_len: usize = dims.iter().product();
+    assert_eq!(data.len(), expected_len);
+    TensorDynLen::from_dense(indices, data).unwrap()
+}
+
+fn col_major_multi_index(mut offset: usize, dims: &[usize]) -> Vec<usize> {
+    dims.iter()
+        .map(|&dim| {
+            let index = offset % dim;
+            offset /= dim;
+            index
+        })
+        .collect()
+}
+
+fn col_major_offset(indices: &[usize], dims: &[usize]) -> usize {
+    let mut stride = 1;
+    let mut offset = 0;
+    for (&index, &dim) in indices.iter().zip(dims.iter()) {
+        offset += index * stride;
+        stride *= dim;
+    }
+    offset
+}
+
+fn permute_col_major(data: &[f64], dims: &[usize], perm: &[usize]) -> Vec<f64> {
+    let permuted_dims: Vec<usize> = perm.iter().map(|&axis| dims[axis]).collect();
+    let mut permuted = vec![0.0; data.len()];
+
+    for (src_offset, value) in data.iter().enumerate() {
+        let src_index = col_major_multi_index(src_offset, dims);
+        let dst_index: Vec<usize> = perm.iter().map(|&axis| src_index[axis]).collect();
+        let dst_offset = col_major_offset(&dst_index, &permuted_dims);
+        permuted[dst_offset] = *value;
+    }
+
+    permuted
 }
 
 #[test]
@@ -136,16 +165,14 @@ fn test_zipup_zero_masked_root_multi_matches_sequential_binary_contract() {
     let leaf = <TensorDynLen as TensorLike>::contract(&[&a0, &b0], AllowedPairs::All)
         .expect("leaf contract");
     let permuted_leaf = leaf.permute_indices(&[s0.clone(), s1.clone(), l01.clone(), l12.clone()]);
-    let expected_permuted_storage =
-        permute_storage_native(leaf.storage().as_ref(), &leaf.dims(), &[0, 2, 1, 3])
-            .expect("expected permute storage");
-    let expected_permuted = TensorDynLen::new(
+    let expected_permuted = TensorDynLen::from_dense(
         vec![s0.clone(), s1.clone(), l01.clone(), l12.clone()],
-        Arc::new(expected_permuted_storage),
-    );
+        permute_col_major(&leaf.to_vec_f64().unwrap(), &leaf.dims(), &[0, 2, 1, 3]),
+    )
+    .unwrap();
     assert!(
         permuted_leaf.isapprox(&expected_permuted, 1e-12, 0.0),
-        "native permute for leaf does not match storage baseline: maxabs diff = {}",
+        "native permute for leaf does not match tensor-level column-major expectation: maxabs diff = {}",
         (&permuted_leaf - &expected_permuted).maxabs()
     );
 

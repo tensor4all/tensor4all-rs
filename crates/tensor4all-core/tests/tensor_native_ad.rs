@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use tenferro::AdMode;
 use tensor4all_core::{
     factorize, forward_ad, is_diag_tensor, qr, svd, AnyScalar, Canonical, FactorizeOptions, Index,
@@ -10,27 +8,15 @@ fn forward_tensor(primal: TensorDynLen, tangent: TensorDynLen) -> TensorDynLen {
     forward_ad::dual_level(|fw| fw.make_dual(&primal, &tangent)).unwrap()
 }
 
-fn assert_storage_eq(lhs: &Storage, rhs: &Storage) {
-    match (lhs, rhs) {
-        (Storage::DenseF64(a), Storage::DenseF64(b)) => {
-            assert_eq!(a.dims(), b.dims());
-            assert_eq!(a.as_slice(), b.as_slice());
-        }
-        (Storage::DenseC64(a), Storage::DenseC64(b)) => {
-            assert_eq!(a.dims(), b.dims());
-            assert_eq!(a.as_slice(), b.as_slice());
-        }
-        (Storage::DiagF64(a), Storage::DiagF64(b)) => {
-            assert_eq!(a.as_slice(), b.as_slice());
-        }
-        (Storage::DiagC64(a), Storage::DiagC64(b)) => {
-            assert_eq!(a.as_slice(), b.as_slice());
-        }
-        _ => panic!(
-            "storage mismatch: lhs variant {:?}, rhs variant {:?}",
-            std::mem::discriminant(lhs),
-            std::mem::discriminant(rhs)
-        ),
+fn assert_same_tensor_data(lhs: &TensorDynLen, rhs: &TensorDynLen) {
+    assert_eq!(lhs.dims(), rhs.dims());
+    assert_eq!(lhs.is_diag(), rhs.is_diag());
+    assert_eq!(lhs.is_f64(), rhs.is_f64());
+    assert_eq!(lhs.is_complex(), rhs.is_complex());
+    if lhs.is_f64() {
+        assert_eq!(lhs.to_vec_f64().unwrap(), rhs.to_vec_f64().unwrap());
+    } else {
+        assert_eq!(lhs.to_vec_c64().unwrap(), rhs.to_vec_c64().unwrap());
     }
 }
 
@@ -177,14 +163,8 @@ fn forward_ad_unpack_dual_restores_primal_and_tangent() {
     })
     .unwrap();
 
-    assert_storage_eq(
-        unpacked_primal.storage().as_ref(),
-        primal.storage().as_ref(),
-    );
-    assert_storage_eq(
-        unpacked_tangent.unwrap().storage().as_ref(),
-        tangent.storage().as_ref(),
-    );
+    assert_same_tensor_data(&unpacked_primal, &primal);
+    assert_same_tensor_data(&unpacked_tangent.unwrap(), &tangent);
 }
 
 #[test]
@@ -196,8 +176,11 @@ fn rank1_native_snapshots_stay_dense() {
     );
 
     let scaled = tensor.scale(AnyScalar::new_real(2.0)).unwrap();
+    let snapshot = scaled.storage();
 
-    assert!(matches!(scaled.storage().as_ref(), Storage::DenseF64(_)));
+    assert!(snapshot.is_dense());
+    assert!(!snapshot.is_diag());
+    assert_eq!(scaled.to_vec_f64().unwrap(), vec![2.0, 4.0, 6.0]);
 }
 
 #[test]
@@ -205,13 +188,14 @@ fn plain_dense_storage_auto_seeds_native_payload() {
     let i = Index::new_dyn(2);
     let tensor = TensorDynLen::from_storage(
         vec![i],
-        Arc::new(Storage::DenseF64(
-            tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(vec![1.0, 2.0], &[2]),
-        )),
+        Storage::from_dense_f64_col_major(vec![1.0, 2.0], &[2])
+            .map(std::sync::Arc::new)
+            .unwrap(),
     )
     .unwrap();
 
     assert_eq!(tensor.mode(), AdMode::Primal);
+    assert_eq!(tensor.to_vec_f64().unwrap(), vec![1.0, 2.0]);
 }
 
 #[test]
@@ -220,7 +204,9 @@ fn plain_diag_storage_auto_seeds_native_diag_payload() {
     let j = Index::new_dyn(3);
     let tensor = TensorDynLen::from_storage(
         vec![i, j],
-        Arc::new(Storage::new_diag_f64(vec![1.0, 2.0, 3.0])),
+        Storage::from_diag_f64_col_major(vec![1.0, 2.0, 3.0], 2)
+            .map(std::sync::Arc::new)
+            .unwrap(),
     )
     .unwrap();
 
