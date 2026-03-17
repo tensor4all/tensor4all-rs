@@ -3211,6 +3211,81 @@ mod tests {
         assert!(err.to_string().contains("canonical"));
     }
 
+    #[test]
+    fn structured_storage_column_major_helpers_cover_contiguous_padded_and_empty_payloads() {
+        let dense =
+            StructuredStorage::from_dense_col_major(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        assert_eq!(dense.logical_dims(), vec![2, 3]);
+        assert!(dense.is_dense());
+        assert!(!dense.is_diag());
+        assert_eq!(
+            dense.dense_col_major_view_if_contiguous().unwrap(),
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+        assert_eq!(
+            dense.payload_col_major_vec(),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+
+        let padded = StructuredStorage::new(
+            vec![10.0, 20.0, -1.0, 30.0, 40.0, -1.0, 50.0, 60.0],
+            vec![2, 3],
+            vec![1, 3],
+            vec![0, 1],
+        )
+        .unwrap();
+        assert!(padded.dense_col_major_view_if_contiguous().is_none());
+        assert_eq!(
+            padded.payload_col_major_vec(),
+            vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
+        );
+
+        let empty = StructuredStorage::from_dense_col_major(Vec::<f64>::new(), &[0, 3]);
+        assert!(empty.is_empty());
+        assert_eq!(empty.payload_col_major_vec(), Vec::<f64>::new());
+    }
+
+    #[test]
+    fn structured_storage_permute_and_map_copy_preserve_metadata() {
+        let storage = StructuredStorage::new(
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            vec![2, 3],
+            vec![1, 2],
+            vec![0, 1, 0],
+        )
+        .unwrap();
+        assert_eq!(storage.logical_dims(), vec![2, 3, 2]);
+
+        let permuted = storage.permute_logical_axes(&[0, 2, 1]);
+        assert_eq!(permuted.axis_classes(), &[0, 0, 1]);
+        assert_eq!(permuted.logical_dims(), vec![2, 2, 3]);
+
+        let mapped = permuted.map_copy(|x| x * 10.0);
+        assert_eq!(mapped.data(), &[10.0, 20.0, 30.0, 40.0, 50.0, 60.0]);
+        assert_eq!(mapped.payload_dims(), &[2, 3]);
+        assert_eq!(mapped.strides(), &[1, 2]);
+        assert_eq!(mapped.axis_classes(), &[0, 0, 1]);
+    }
+
+    #[test]
+    fn structured_storage_validates_payload_rank_and_required_len() {
+        let rank_err = StructuredStorage::<f64>::new(vec![1.0, 2.0], vec![2], vec![1], vec![0, 1])
+            .unwrap_err();
+        assert!(rank_err.to_string().contains("payload rank"));
+
+        let len_err =
+            StructuredStorage::<f64>::new(vec![1.0, 2.0], vec![2, 2], vec![1, 3], vec![0, 1])
+                .unwrap_err();
+        assert!(len_err.to_string().contains("required len"));
+
+        let scalar_diag = StructuredStorage::from_diag_col_major(vec![42.0], 0);
+        assert_eq!(scalar_diag.payload_dims(), &[] as &[usize]);
+        assert_eq!(scalar_diag.logical_rank(), 0);
+        assert!(scalar_diag.is_dense());
+        assert!(!scalar_diag.is_diag());
+        assert_eq!(scalar_diag.payload_col_major_vec(), vec![42.0]);
+    }
+
     // ===== Storage len / is_empty =====
 
     #[test]

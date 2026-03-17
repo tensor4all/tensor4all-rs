@@ -261,6 +261,46 @@ mod tests {
     }
 
     #[test]
+    fn svd_options_accessors_roundtrip() {
+        let by_rtol = SvdOptions::with_rtol(1.0e-5);
+        assert_eq!(by_rtol.rtol(), Some(1.0e-5));
+        assert_eq!(by_rtol.max_rank(), None);
+
+        let by_rank = SvdOptions::with_max_rank(7);
+        assert_eq!(by_rank.rtol(), None);
+        assert_eq!(by_rank.max_rank(), Some(7));
+    }
+
+    #[test]
+    fn singular_values_from_native_rejects_unsupported_scalar_types() {
+        let tensor = NativeTensor::from_slice(&[1.0_f32, 2.0], &[2]).unwrap();
+        let err = singular_values_from_native(&tensor).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("unsupported singular-value scalar type"));
+    }
+
+    #[test]
+    fn svd_with_max_rank_truncates_native_outputs() {
+        let i = Index::new_dyn(2);
+        let j = Index::new_dyn(2);
+        let tensor =
+            TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![3.0, 0.0, 0.0, 1.0]).unwrap();
+
+        let (u, s, v) = svd_with::<f64>(
+            &tensor,
+            std::slice::from_ref(&i),
+            &SvdOptions::with_max_rank(1),
+        )
+        .unwrap();
+
+        assert_eq!(u.indices.last().unwrap().dim, 1);
+        assert_eq!(s.indices[0].dim, 1);
+        assert_eq!(s.indices[1].dim, 1);
+        assert_eq!(v.indices.last().unwrap().dim, 1);
+    }
+
+    #[test]
     fn svd_with_invalid_rtol_is_rejected_before_linalg() {
         let i = Index::new_dyn(2);
         let j = Index::new_dyn(2);
