@@ -111,10 +111,12 @@ impl TensorTrain {
                 }
             })?;
 
-        Ok(Self {
+        let mut tt = Self {
             treetn,
             canonical_form: None,
-        })
+        };
+        tt.normalize_site_tensor_orders()?;
+        Ok(tt)
     }
 
     /// Create a new tensor train with specified orthogonality center.
@@ -156,11 +158,26 @@ impl TensorTrain {
     pub(crate) fn from_inner(
         treetn: TreeTN<TensorDynLen, usize>,
         canonical_form: Option<CanonicalForm>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let mut node_names = treetn.node_names();
+        node_names.sort_unstable();
+        let mut tt = Self {
             treetn,
             canonical_form,
+        };
+        for (site, old_name) in node_names.into_iter().enumerate() {
+            if old_name != site {
+                tt.treetn.rename_node(&old_name, site).map_err(|e| {
+                    TensorTrainError::InvalidStructure {
+                        message: format!("Failed to renumber TensorTrain sites: {}", e),
+                    }
+                })?;
+            }
         }
+        if tt.has_simple_linear_links() {
+            tt.normalize_site_tensor_orders()?;
+        }
+        Ok(tt)
     }
 
     /// Get a reference to the underlying TreeTN.
@@ -406,6 +423,87 @@ impl TensorTrain {
         Self::new(new_tensors).expect("sim_linkinds: failed to create new tensor train")
     }
 
+    fn normalize_site_tensor_orders(&mut self) -> Result<()> {
+        for site in 0..self.len() {
+            self.normalize_site_tensor_order(site)?;
+        }
+        Ok(())
+    }
+
+    fn has_simple_linear_links(&self) -> bool {
+        if self.len() <= 1 {
+            return true;
+        }
+
+        (0..self.len() - 1).all(|site| {
+            let left = self.tensor(site);
+            let right = self.tensor(site + 1);
+            common_inds(left.indices(), right.indices()).len() <= 1
+        })
+    }
+
+    fn can_normalize_site_tensor_order(&self, site: usize) -> bool {
+        let left_ok = if site > 0 {
+            common_inds(self.tensor(site - 1).indices(), self.tensor(site).indices()).len() <= 1
+        } else {
+            true
+        };
+        let right_ok = if site + 1 < self.len() {
+            common_inds(self.tensor(site).indices(), self.tensor(site + 1).indices()).len() <= 1
+        } else {
+            true
+        };
+        left_ok && right_ok
+    }
+
+    fn normalize_site_tensor_order(&mut self, site: usize) -> Result<()> {
+        if !self.can_normalize_site_tensor_order(site) {
+            return Ok(());
+        }
+
+        let tensor = self.tensor_checked(site)?.clone();
+        let current = tensor.indices().to_vec();
+        let left = if site > 0 {
+            self.linkind(site - 1)
+        } else {
+            None
+        };
+        let right = if site + 1 < self.len() {
+            self.linkind(site)
+        } else {
+            None
+        };
+
+        let mut desired = Vec::with_capacity(current.len());
+        if let Some(ref left_link) = left {
+            desired.push(left_link.clone());
+        }
+        desired.extend(
+            current
+                .iter()
+                .filter(|idx| Some(*idx) != left.as_ref() && Some(*idx) != right.as_ref())
+                .cloned(),
+        );
+        if let Some(ref right_link) = right {
+            desired.push(right_link.clone());
+        }
+
+        if desired == current {
+            return Ok(());
+        }
+
+        let normalized =
+            tensor
+                .permuteinds(&desired)
+                .map_err(|e| TensorTrainError::InvalidStructure {
+                    message: format!(
+                        "Failed to normalize site tensor index order at site {}: {}",
+                        site, e
+                    ),
+                })?;
+        self.set_tensor_raw(site, normalized)
+    }
+
     /// Get the site indices (non-link indices) for all sites.
     ///
     /// For each site, returns a vector of indices that are not shared with
@@ -483,9 +581,23 @@ impl TensorTrain {
     /// Replace the tensor at the given site.
     ///
     /// This invalidates orthogonality tracking.
-    pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen) {
+    fn set_tensor_raw(&mut self, site: usize, tensor: TensorDynLen) -> Result<()> {
         let node_idx = self.treetn.node_index(&site).expect("Site out of bounds");
-        let _ = self.treetn.replace_tensor(node_idx, tensor);
+        self.treetn.replace_tensor(node_idx, tensor).map_err(|e| {
+            TensorTrainError::InvalidStructure {
+                message: format!("Failed to replace tensor at site {}: {}", site, e),
+            }
+        })?;
+        Ok(())
+    }
+
+    /// Replace the tensor at the given site.
+    ///
+    /// This invalidates orthogonality tracking.
+    pub fn set_tensor(&mut self, site: usize, tensor: TensorDynLen) {
+        self.set_tensor_raw(site, tensor)
+            .and_then(|()| self.normalize_site_tensor_order(site))
+            .unwrap_or_else(|e| panic!("TensorTrain::set_tensor failed: {}", e));
         // Invalidate orthogonality
         let _ = self.treetn.set_canonical_region(Vec::<usize>::new());
     }
@@ -692,10 +804,7 @@ impl TensorTrain {
                     message: format!("TT addition failed: {}", e),
                 })?;
 
-        Ok(Self {
-            treetn: result_inner,
-            canonical_form: None, // Addition destroys canonical form
-        })
+        Self::from_inner(result_inner, None)
     }
 
     /// Scale the tensor train by a scalar.
@@ -801,12 +910,12 @@ impl TensorIndex for TensorTrain {
         // Delegate to the internal TreeTN's replaceind
         // After replacement, canonical form may be invalid, so set to None
         let treetn = self.treetn.replaceind(old, new)?;
-        Ok(Self::from_inner(treetn, None))
+        Self::from_inner(treetn, None).map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     fn replaceinds(&self, old: &[Self::Index], new: &[Self::Index]) -> anyhow::Result<Self> {
         let treetn = self.treetn.replaceinds(old, new)?;
-        Ok(Self::from_inner(treetn, None))
+        Self::from_inner(treetn, None).map_err(|e| anyhow::anyhow!("{}", e))
     }
 }
 

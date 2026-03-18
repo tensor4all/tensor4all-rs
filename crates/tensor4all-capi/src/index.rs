@@ -589,7 +589,7 @@ mod tests {
         );
         assert_eq!(t4a_index_has_tag(std::ptr::null(), std::ptr::null()), -1);
 
-        let invalid_utf8 = b"\xff\0".as_ptr() as *const c_char;
+        let invalid_utf8 = c"\xff".as_ptr();
         assert_eq!(t4a_index_add_tag(idx, invalid_utf8), T4A_INVALID_ARGUMENT);
         assert_eq!(
             t4a_index_set_tags_csv(idx, invalid_utf8),

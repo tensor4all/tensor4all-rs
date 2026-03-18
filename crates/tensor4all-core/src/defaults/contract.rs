@@ -635,9 +635,7 @@ impl RemappedAllowedPairs {
 mod tests {
     use super::*;
     use crate::defaults::Index;
-    use crate::storage::{DenseStorageC64, Storage};
     use num_complex::Complex64;
-    use std::sync::Arc;
 
     fn make_test_tensor(shape: &[usize], ids: &[u64]) -> TensorDynLen {
         let indices: Vec<DynIndex> = ids
@@ -645,15 +643,11 @@ mod tests {
             .zip(shape.iter())
             .map(|(&id, &dim)| Index::new(DynId(id), dim))
             .collect();
-        let dims = shape.to_vec();
         let total_size: usize = shape.iter().product();
         let data: Vec<Complex64> = (0..total_size)
             .map(|i| Complex64::new(i as f64, 0.0))
             .collect();
-        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            data, &dims,
-        )));
-        TensorDynLen::new(indices, storage)
+        TensorDynLen::from_dense(indices, data).unwrap()
     }
 
     // ========================================================================
@@ -1115,15 +1109,11 @@ mod tests {
             .zip(shape.iter())
             .map(|(&id, &dim)| Index::new(DynId(id), dim))
             .collect();
-        let dims = shape.to_vec();
         let total_size: usize = shape.iter().product();
         let data: Vec<Complex64> = (0..total_size)
             .map(|i| Complex64::new((i + 1) as f64, 0.0))
             .collect();
-        let storage = Arc::new(Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
-            data, &dims,
-        )));
-        TensorDynLen::new(indices, storage)
+        TensorDynLen::from_dense(indices, data).unwrap()
     }
 
     #[test]

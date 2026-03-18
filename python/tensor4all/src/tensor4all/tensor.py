@@ -27,7 +27,8 @@ class Tensor:
     """A dense tensor with labeled indices.
 
     A Tensor stores multidimensional data with associated Index objects
-    that label each dimension. The data is stored in row-major (C) order.
+    that label each dimension. tensor4all-rs uses column-major dense
+    linearization semantics, matching Julia and ITensors.jl.
 
     Examples
     --------
@@ -86,11 +87,11 @@ class Tensor:
         for i, idx in enumerate(indices):
             dims[i] = idx.dim
 
-        # Ensure contiguous C-order array
+        # Normalize at the boundary: flatten using column-major semantics.
         if np.iscomplexobj(data):
-            data = np.ascontiguousarray(data, dtype=np.complex128)
-            data_re = np.ascontiguousarray(data.real)
-            data_im = np.ascontiguousarray(data.imag)
+            flat = np.asarray(data, dtype=np.complex128).ravel(order="F").copy()
+            data_re = np.ascontiguousarray(flat.real)
+            data_im = np.ascontiguousarray(flat.imag)
 
             ptr = lib.t4a_tensor_new_dense_c64(
                 rank,
@@ -98,17 +99,17 @@ class Tensor:
                 dims,
                 ffi.cast("const double*", ffi.from_buffer(data_re)),
                 ffi.cast("const double*", ffi.from_buffer(data_im)),
-                data.size,
+                flat.size,
             )
         else:
-            data = np.ascontiguousarray(data, dtype=np.float64)
+            flat = np.asarray(data, dtype=np.float64).ravel(order="F").copy()
 
             ptr = lib.t4a_tensor_new_dense_f64(
                 rank,
                 ffi.cast("const t4a_index**", index_ptrs),
                 dims,
-                ffi.cast("const double*", ffi.from_buffer(data)),
-                data.size,
+                ffi.cast("const double*", ffi.from_buffer(flat)),
+                flat.size,
             )
 
         if ptr == ffi.NULL:
@@ -261,7 +262,7 @@ class Tensor:
         Returns
         -------
         np.ndarray
-            NumPy array with the tensor data in C order.
+            NumPy array with the tensor data in Fortran (column-major) order.
         """
         lib = get_lib()
         kind = self.storage_kind
@@ -282,7 +283,7 @@ class Tensor:
                 out_len,
             )
             check_status(status, "Failed to get f64 data")
-            return buf.reshape(dims)
+            return buf.reshape(dims, order="F")
 
         elif kind == StorageKind.DenseC64:
             status = lib.t4a_tensor_get_data_c64(
@@ -300,7 +301,7 @@ class Tensor:
                 out_len,
             )
             check_status(status, "Failed to get c64 data")
-            return (buf_re + 1j * buf_im).reshape(dims)
+            return (buf_re + 1j * buf_im).reshape(dims, order="F")
 
         else:
             raise NotImplementedError(f"Diagonal tensors not yet supported: {kind}")

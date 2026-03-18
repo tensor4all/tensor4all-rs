@@ -94,10 +94,7 @@ pub fn contract(
             message: format!("TreeTN contraction failed: {}", e),
         })?;
 
-    Ok(TensorTrain::from_inner(
-        result_inner,
-        Some(CanonicalForm::Unitary),
-    ))
+    TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary))
 }
 
 impl TensorTrain {
@@ -352,7 +349,7 @@ mod tests {
             TreeTNContractionOptions::zipup(),
         )
         .unwrap();
-        let result = TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary));
+        let result = TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary)).unwrap();
         assert_eq!(result.len(), 2);
         assert_matches_naive(&tt1, &tt2, &result);
     }

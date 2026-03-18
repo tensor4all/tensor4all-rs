@@ -175,7 +175,7 @@ pub extern "C" fn t4a_tensor_get_storage_kind(
     crate::unwrap_catch(result)
 }
 
-/// Get the dense f64 data from a tensor in row-major order.
+/// Get the dense f64 data from a tensor in column-major order.
 ///
 /// # Arguments
 /// - `ptr`: Tensor handle
@@ -230,7 +230,7 @@ pub extern "C" fn t4a_tensor_get_data_f64(
     crate::unwrap_catch(result)
 }
 
-/// Get the dense complex64 data from a tensor in row-major order.
+/// Get the dense complex64 data from a tensor in column-major order.
 ///
 /// # Arguments
 /// - `ptr`: Tensor handle
@@ -296,7 +296,7 @@ pub extern "C" fn t4a_tensor_get_data_c64(
 /// - `rank`: Number of indices
 /// - `index_ptrs`: Array of t4a_index pointers (length = rank)
 /// - `dims`: Array of dimensions (length = rank)
-/// - `data`: Dense data in row-major order (length = product of dims)
+/// - `data`: Dense data in column-major order (length = product of dims)
 /// - `data_len`: Length of data array
 ///
 /// # Returns
@@ -356,8 +356,8 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
 /// - `rank`: Number of indices
 /// - `index_ptrs`: Array of t4a_index pointers (length = rank)
 /// - `dims`: Array of dimensions (length = rank)
-/// - `data_re`: Real parts of dense data in row-major order (length = product of dims)
-/// - `data_im`: Imaginary parts of dense data in row-major order (length = product of dims)
+/// - `data_re`: Real parts of dense data in column-major order (length = product of dims)
+/// - `data_im`: Imaginary parts of dense data in column-major order (length = product of dims)
 /// - `data_len`: Length of data arrays
 ///
 /// # Returns
@@ -663,7 +663,7 @@ mod tests {
         );
         assert_eq!(dims, [3, 4]);
 
-        // Verify data: position (1,2) in 3×4 = offset 6
+        // Verify data: position (1,2) in 3x4 = offset 7 in column-major order
         let mut out_len = 0_usize;
         let mut data = [0.0_f64; 12];
         assert_eq!(
@@ -672,7 +672,7 @@ mod tests {
         );
         assert_eq!(out_len, 12);
         let mut expected = [0.0_f64; 12];
-        expected[6] = 1.0;
+        expected[7] = 1.0;
         assert_eq!(data, expected);
 
         // Clean up

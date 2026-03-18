@@ -81,16 +81,15 @@ class TestTensorData:
         result = t.to_numpy()
         np.testing.assert_array_almost_equal(result, data)
 
-    def test_data_order_c(self):
-        """Test that data is in C (row-major) order."""
+    def test_data_order_f(self):
+        """Test that tensor export uses Fortran (column-major) order."""
         i = Index(2)
         j = Index(3)
-        # Row-major: [1,2,3] then [4,5,6]
         data = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float64, order="C")
         t = Tensor([i, j], data)
 
         result = t.to_numpy()
-        assert result.flags["C_CONTIGUOUS"]
+        assert result.flags["F_CONTIGUOUS"]
         np.testing.assert_array_equal(result, data)
 
     def test_non_contiguous_input(self):
@@ -106,6 +105,7 @@ class TestTensorData:
 
         # Should still get correct values
         np.testing.assert_array_equal(result, [[1, 2, 3], [4, 5, 6]])
+        assert result.flags["F_CONTIGUOUS"]
 
 
 class TestTensorIndices:

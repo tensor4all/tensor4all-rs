@@ -10,8 +10,9 @@
 //!
 //! # Data layout
 //!
-//! tensor4all-rs uses row-major (C order) while ITensors.jl uses column-major
-//! (Fortran order). This crate handles the conversion transparently.
+//! tensor4all-rs and ITensors.jl both use column-major dense linearization.
+//! This crate therefore preserves dense flat buffers as-is when serializing and
+//! deserializing ITensors.jl-compatible payloads.
 //!
 //! # Backend selection
 //!
@@ -22,7 +23,6 @@ pub(crate) mod backend;
 mod compat;
 mod index;
 mod itensor;
-mod layout;
 mod mps;
 mod schema;
 

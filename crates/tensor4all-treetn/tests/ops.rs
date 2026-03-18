@@ -316,7 +316,7 @@ fn test_evaluate_two_nodes() {
 
             // Get the expected value from dense tensor
             // The dense tensor indices are ordered by node name (0, then 1)
-            let flat_idx = i * dim1 + j;
+            let flat_idx = i + dim0 * j;
             let expected = dense_data[flat_idx];
 
             assert!(
@@ -339,9 +339,9 @@ fn test_evaluate_three_nodes() {
     let dense = tn.to_dense().unwrap();
     let dense_data = dense.as_slice_f64().unwrap();
 
-    let _dim0 = tn.site_space(&0).unwrap().iter().next().unwrap().dim();
+    let dim0 = tn.site_space(&0).unwrap().iter().next().unwrap().dim();
     let dim1 = tn.site_space(&1).unwrap().iter().next().unwrap().dim();
-    let dim2 = tn.site_space(&2).unwrap().iter().next().unwrap().dim();
+    let _dim2 = tn.site_space(&2).unwrap().iter().next().unwrap().dim();
 
     // Spot-check a few values
     for (i, j, k) in [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1)] {
@@ -351,7 +351,7 @@ fn test_evaluate_three_nodes() {
         index_values.insert(2usize, vec![k]);
         let val = tn.evaluate(&index_values).unwrap();
 
-        let flat_idx = i * dim1 * dim2 + j * dim2 + k;
+        let flat_idx = i + dim0 * (j + dim1 * k);
         let expected = dense_data[flat_idx];
 
         assert!(

@@ -2,15 +2,14 @@
 
 use tensor4all_core::index::{DynId, Index};
 use tensor4all_core::DynIndex;
-use tensor4all_core::{AllowedPairs, StorageScalar, TensorDynLen, TensorIndex, TensorLike};
+use tensor4all_core::{AllowedPairs, TensorDynLen, TensorIndex, TensorLike};
 
 /// Helper to create a simple tensor with given dimensions
 fn make_tensor(dims: &[usize]) -> TensorDynLen {
     let indices: Vec<DynIndex> = dims.iter().map(|&d| Index::new_dyn(d)).collect();
     let total_size: usize = dims.iter().product();
     let data: Vec<f64> = (0..total_size).map(|i| i as f64).collect();
-    let storage = f64::dense_storage_with_shape(data, dims);
-    TensorDynLen::from_indices(indices, storage)
+    TensorDynLen::from_dense(indices, data).unwrap()
 }
 
 #[test]
@@ -45,18 +44,12 @@ fn test_tensor_like_contract_basic() {
 
     // Tensor A: 2x3 matrix
     let a_data: Vec<f64> = (0..6).map(|x| x as f64).collect();
-    let a = TensorDynLen::from_indices(
-        vec![i.clone(), j.clone()],
-        f64::dense_storage_with_shape(a_data, &[2, 3]),
-    );
+    let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], a_data).unwrap();
 
     // Tensor B: 3x4 matrix (use a copy of j with same id)
     let j_copy = Index::new(j.id, j.dim);
     let b_data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-    let b = TensorDynLen::from_indices(
-        vec![j_copy.clone(), k.clone()],
-        f64::dense_storage_with_shape(b_data, &[3, 4]),
-    );
+    let b = TensorDynLen::from_dense(vec![j_copy.clone(), k.clone()], b_data).unwrap();
 
     // Use TensorLike::contract - auto-detects contractable pairs via is_contractable
     let c = <TensorDynLen as TensorLike>::contract(&[&a, &b], AllowedPairs::All)
@@ -79,26 +72,17 @@ fn test_contract_allowed_pairs_specified() {
 
     // Tensor A: 2x3 matrix (i, j)
     let a_data: Vec<f64> = (0..6).map(|x| x as f64).collect();
-    let a = TensorDynLen::from_indices(
-        vec![i.clone(), j.clone()],
-        f64::dense_storage_with_shape(a_data, &[2, 3]),
-    );
+    let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], a_data).unwrap();
 
     // Tensor B: 3x4 matrix (j, k) - j has same id as A's j
     let j_copy = Index::new(j.id, j.dim);
     let b_data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-    let b = TensorDynLen::from_indices(
-        vec![j_copy.clone(), k.clone()],
-        f64::dense_storage_with_shape(b_data, &[3, 4]),
-    );
+    let b = TensorDynLen::from_dense(vec![j_copy.clone(), k.clone()], b_data).unwrap();
 
     // Tensor C: 4x5 matrix (k, l) - k has same id as B's k
     let k_copy = Index::new(k.id, k.dim);
     let c_data: Vec<f64> = (0..20).map(|x| x as f64).collect();
-    let c = TensorDynLen::from_indices(
-        vec![k_copy.clone(), l.clone()],
-        f64::dense_storage_with_shape(c_data, &[4, 5]),
-    );
+    let c = TensorDynLen::from_dense(vec![k_copy.clone(), l.clone()], c_data).unwrap();
 
     // Contract with specified pairs
     // j is contracted between A and B (in pair (0,1))
@@ -126,19 +110,13 @@ fn test_contract_specified_empty_with_common_indices_errors() {
 
     // Tensor A: 2x3 matrix
     let a_data: Vec<f64> = (0..6).map(|x| x as f64).collect();
-    let a = TensorDynLen::from_indices(
-        vec![i.clone(), j.clone()],
-        f64::dense_storage_with_shape(a_data, &[2, 3]),
-    );
+    let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], a_data).unwrap();
 
     // Tensor B: 2x3 matrix (use copies of i and j with same ids)
     let i_copy = Index::new(i.id, i.dim);
     let j_copy = Index::new(j.id, j.dim);
     let b_data: Vec<f64> = (0..6).map(|x| x as f64).collect();
-    let b = TensorDynLen::from_indices(
-        vec![i_copy.clone(), j_copy.clone()],
-        f64::dense_storage_with_shape(b_data, &[2, 3]),
-    );
+    let b = TensorDynLen::from_dense(vec![i_copy.clone(), j_copy.clone()], b_data).unwrap();
 
     // With empty allowed pairs and tensors that share index IDs,
     // outer_product will fail because tensors have common indices
@@ -160,17 +138,11 @@ fn test_contract_specified_empty_outer_product() {
 
     // Tensor A: 2x3 matrix with indices (i, j)
     let a_data: Vec<f64> = (0..6).map(|x| x as f64).collect();
-    let a = TensorDynLen::from_indices(
-        vec![i.clone(), j.clone()],
-        f64::dense_storage_with_shape(a_data, &[2, 3]),
-    );
+    let a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], a_data).unwrap();
 
     // Tensor B: 4x5 matrix with indices (k, l) - different from a
     let b_data: Vec<f64> = (0..20).map(|x| x as f64).collect();
-    let b = TensorDynLen::from_indices(
-        vec![k.clone(), l.clone()],
-        f64::dense_storage_with_shape(b_data, &[4, 5]),
-    );
+    let b = TensorDynLen::from_dense(vec![k.clone(), l.clone()], b_data).unwrap();
 
     // With empty allowed pairs and different index IDs, outer product succeeds
     let result =
@@ -188,29 +160,21 @@ fn test_contract_specified_empty_outer_product_preserves_input_component_order()
     let i = Index::<DynId>::new_dyn(2);
     let j = Index::<DynId>::new_dyn(3);
 
-    let a = TensorDynLen::from_indices(
-        vec![i.clone()],
-        f64::dense_storage_with_shape(vec![2.0, -1.0], &[2]),
-    );
-    let b = TensorDynLen::from_indices(
-        vec![j.clone()],
-        f64::dense_storage_with_shape(vec![3.0, 4.0, -2.0], &[3]),
-    );
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![2.0, -1.0]).unwrap();
+    let b = TensorDynLen::from_dense(vec![j.clone()], vec![3.0, 4.0, -2.0]).unwrap();
 
     let result =
         <TensorDynLen as TensorLike>::contract(&[&a, &b], AllowedPairs::Specified(&[])).unwrap();
 
     assert_eq!(result.indices, vec![i, j]);
-    let expected = TensorDynLen::from_indices(
+    let expected = TensorDynLen::from_dense(
         result.indices.clone(),
-        f64::dense_storage_with_shape(
-            vec![
-                6.0, 8.0, -4.0, //
-                -3.0, -4.0, 2.0,
-            ],
-            &[2, 3],
-        ),
-    );
+        vec![
+            6.0, -3.0, 8.0, //
+            -4.0, -4.0, 2.0,
+        ],
+    )
+    .unwrap();
     assert!(result.isapprox(&expected, 1e-12, 0.0));
 }
 
@@ -222,24 +186,12 @@ fn test_contract_specified_disconnected_outer_product() {
     let i = Index::<DynId>::new_dyn(2);
     let j = Index::<DynId>::new_dyn(3);
 
-    let a = TensorDynLen::from_indices(
-        vec![i.clone()],
-        f64::dense_storage_with_shape(vec![1.0, 2.0], &[2]),
-    );
+    let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
     let i_copy = Index::new(i.id, i.dim);
-    let b = TensorDynLen::from_indices(
-        vec![i_copy.clone()],
-        f64::dense_storage_with_shape(vec![3.0, 4.0], &[2]),
-    );
-    let c = TensorDynLen::from_indices(
-        vec![j.clone()],
-        f64::dense_storage_with_shape(vec![5.0, 6.0, 7.0], &[3]),
-    );
+    let b = TensorDynLen::from_dense(vec![i_copy.clone()], vec![3.0, 4.0]).unwrap();
+    let c = TensorDynLen::from_dense(vec![j.clone()], vec![5.0, 6.0, 7.0]).unwrap();
     let j_copy = Index::new(j.id, j.dim);
-    let d = TensorDynLen::from_indices(
-        vec![j_copy.clone()],
-        f64::dense_storage_with_shape(vec![8.0, 9.0, 10.0], &[3]),
-    );
+    let d = TensorDynLen::from_dense(vec![j_copy.clone()], vec![8.0, 9.0, 10.0]).unwrap();
 
     // Disconnected pairs: (0,1) and (2,3)
     // A and B contract i, C and D contract j, then outer product combines results
@@ -275,9 +227,9 @@ fn test_onehot_2d() {
     let t = TensorDynLen::onehot(&[(i.clone(), 1), (j.clone(), 2)]).unwrap();
     assert_eq!(t.dims(), vec![3, 4]);
     let data = t.to_vec_f64().unwrap();
-    // Row-major: position (1,2) in 3×4 = 1*4 + 2 = 6
+    // Column-major: position (1,2) in 3×4 = 1 + 3*2 = 7
     let mut expected = vec![0.0; 12];
-    expected[6] = 1.0;
+    expected[7] = 1.0;
     assert_eq!(data, expected);
 }
 
@@ -285,12 +237,12 @@ fn test_onehot_2d() {
 fn test_onehot_boundary() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(4);
-    // Last position in each dimension
-    let t = TensorDynLen::onehot(&[(i.clone(), 2), (j.clone(), 3)]).unwrap();
+    // Last position in the first dimension, nontrivial column in the second.
+    let t = TensorDynLen::onehot(&[(i.clone(), 2), (j.clone(), 1)]).unwrap();
     let data = t.to_vec_f64().unwrap();
-    // Position (2,3) in 3×4 = 2*4 + 3 = 11
+    // Column-major: position (2,1) in 3×4 = 2 + 3*1 = 5
     let mut expected = vec![0.0; 12];
-    expected[11] = 1.0;
+    expected[5] = 1.0;
     assert_eq!(data, expected);
 }
 
@@ -330,8 +282,8 @@ fn test_onehot_contraction() {
     let result = <TensorDynLen as TensorLike>::contract(&[&v, &a], AllowedPairs::All).unwrap();
     assert_eq!(result.dims(), vec![4]);
     let data = result.to_vec_f64().unwrap();
-    // Row [1] of 3×4 matrix: [4, 5, 6, 7]
-    assert_eq!(data, vec![4.0, 5.0, 6.0, 7.0]);
+    // Row i=1 of the column-major 3×4 matrix: [1, 4, 7, 10]
+    assert_eq!(data, vec![1.0, 4.0, 7.0, 10.0]);
 }
 
 // Note: trait object tests removed - TensorLike is now fully generic and does not support dyn

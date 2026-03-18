@@ -333,7 +333,7 @@ fn native_tensor_to_matrix<T>(
 where
     T: TensorElement + MatrixScalar + Copy,
 {
-    let data = T::dense_values_from_native(tensor).map_err(|e| {
+    let data = T::dense_values_from_native_col_major(tensor).map_err(|e| {
         FactorizeError::ComputationError(anyhow::anyhow!(
             "failed to extract dense matrix entries from native tensor: {e}"
         ))
@@ -348,7 +348,7 @@ where
     let mut matrix = matrixci::util::zeros(m, n);
     for i in 0..m {
         for j in 0..n {
-            matrix[[i, j]] = data[i * n + j];
+            matrix[[i, j]] = data[j * m + i];
         }
     }
     Ok(matrix)
@@ -362,8 +362,8 @@ where
     let m = matrixci::util::nrows(matrix);
     let n = matrixci::util::ncols(matrix);
     let mut vec = Vec::with_capacity(m * n);
-    for i in 0..m {
-        for j in 0..n {
+    for j in 0..n {
+        for i in 0..m {
             vec.push(matrix[[i, j]].clone());
         }
     }

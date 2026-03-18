@@ -318,7 +318,7 @@ pub extern "C" fn t4a_simplett_f64_norm(
 
 /// Get site tensor data at a specific site.
 ///
-/// The tensor has shape (left_dim, site_dim, right_dim) in row-major order.
+/// The tensor has shape (left_dim, site_dim, right_dim) in column-major order.
 ///
 /// # Arguments
 /// * `ptr` - Tensor train handle
@@ -360,11 +360,11 @@ pub extern "C" fn t4a_simplett_f64_site_tensor(
             return T4A_INVALID_ARGUMENT;
         }
 
-        // Copy data in row-major order
+        // Copy data in column-major order: left axis varies fastest.
         let mut idx = 0;
-        for l in 0..left_dim {
+        for r in 0..right_dim {
             for s in 0..site_dim {
-                for r in 0..right_dim {
+                for l in 0..left_dim {
                     unsafe { *out_data.add(idx) = *tensor.get3(l, s, r) };
                     idx += 1;
                 }
@@ -390,6 +390,7 @@ pub extern "C" fn t4a_simplett_f64_site_tensor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tensor4all_simplett::{tensor3_from_data, TensorTrain};
 
     #[test]
     fn test_simplett_private_wrapper_roundtrip() {
@@ -514,6 +515,34 @@ mod tests {
         assert!((value - 2.0).abs() < 1e-10);
 
         t4a_simplett_f64_release(tt);
+    }
+
+    #[test]
+    fn test_simplett_site_tensor_uses_column_major_linearization() {
+        let t0 = tensor3_from_data(vec![0.0, 1.0, 2.0, 3.0], 1, 2, 2);
+        let t1 = tensor3_from_data(vec![10.0, 11.0, 12.0, 13.0], 2, 2, 1);
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+        let handle = Box::into_raw(Box::new(t4a_simplett_f64::new(tt)));
+
+        let mut out_data = [0.0_f64; 4];
+        let mut out_left = 0_usize;
+        let mut out_site = 0_usize;
+        let mut out_right = 0_usize;
+
+        let status = t4a_simplett_f64_site_tensor(
+            handle,
+            0,
+            out_data.as_mut_ptr(),
+            out_data.len(),
+            &mut out_left,
+            &mut out_site,
+            &mut out_right,
+        );
+        assert_eq!(status, T4A_SUCCESS);
+        assert_eq!((out_left, out_site, out_right), (1, 2, 2));
+        assert_eq!(out_data, [0.0, 1.0, 2.0, 3.0]);
+
+        t4a_simplett_f64_release(handle);
     }
 
     #[test]

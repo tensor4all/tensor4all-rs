@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use num_complex::Complex64;
-use tensor4all_core::{IndexLike, StorageScalar, TensorDynLen, TensorLike};
+use tensor4all_core::{IndexLike, TensorDynLen, TensorElement, TensorLike};
 use tensor4all_treetn::{SwapOptions, TreeTN};
 
 // ============================================================================
@@ -11,7 +11,7 @@ use tensor4all_treetn::{SwapOptions, TreeTN};
 // ============================================================================
 
 /// 2-node chain: A -- B with one site index each. Returns (tn, site_at_A, site_at_B).
-fn two_node_chain<T: StorageScalar + From<f64>>() -> (
+fn two_node_chain<T: TensorElement + From<f64>>() -> (
     TreeTN<TensorDynLen, String>,
     tensor4all_core::DynIndex,
     tensor4all_core::DynIndex,
@@ -45,7 +45,7 @@ fn two_node_chain<T: StorageScalar + From<f64>>() -> (
 }
 
 /// 3-node chain: "0" -- "1" -- "2" with one site index each.
-fn three_node_chain<T: StorageScalar + From<f64>>() -> (
+fn three_node_chain<T: TensorElement + From<f64>>() -> (
     TreeTN<TensorDynLen, String>,
     tensor4all_core::DynIndex,
     tensor4all_core::DynIndex,
@@ -96,7 +96,7 @@ fn three_node_chain<T: StorageScalar + From<f64>>() -> (
 }
 
 /// 4-node chain: "0" -- "1" -- "2" -- "3" with one site index each.
-fn four_node_chain<T: StorageScalar + From<f64>>() -> (
+fn four_node_chain<T: TensorElement + From<f64>>() -> (
     TreeTN<TensorDynLen, String>,
     tensor4all_core::DynIndex,
     tensor4all_core::DynIndex,
@@ -152,7 +152,7 @@ fn four_node_chain<T: StorageScalar + From<f64>>() -> (
 }
 
 /// 4-node chain with sites x0,x1 at nodes "0","1" and y0,y1 at nodes "2","3". R=2.
-fn chain_2r_interleave<T: StorageScalar + From<f64>>() -> (
+fn chain_2r_interleave<T: TensorElement + From<f64>>() -> (
     TreeTN<TensorDynLen, String>,
     tensor4all_core::DynIndex, // x0
     tensor4all_core::DynIndex, // x1
@@ -208,7 +208,7 @@ fn chain_2r_interleave<T: StorageScalar + From<f64>>() -> (
 }
 
 /// Y-shape: center "C", leaves "L0", "L1", "L2". Each leaf has one site index.
-fn y_shape_tree<T: StorageScalar + From<f64>>() -> (
+fn y_shape_tree<T: TensorElement + From<f64>>() -> (
     TreeTN<TensorDynLen, String>,
     tensor4all_core::DynIndex,
     tensor4all_core::DynIndex,
@@ -262,7 +262,7 @@ fn y_shape_tree<T: StorageScalar + From<f64>>() -> (
 // Generic test functions
 // ============================================================================
 
-fn test_swap_two_node_chain_generic<T: StorageScalar + From<f64>>() {
+fn test_swap_two_node_chain_generic<T: TensorElement + From<f64>>() {
     let (mut tn, s0, s1) = two_node_chain::<T>();
     let net = tn.site_index_network();
     assert_eq!(
@@ -292,7 +292,7 @@ fn test_swap_two_node_chain_generic<T: StorageScalar + From<f64>>() {
     );
 }
 
-fn test_swap_three_node_chain_generic<T: StorageScalar + From<f64>>() {
+fn test_swap_three_node_chain_generic<T: TensorElement + From<f64>>() {
     let (mut tn, s0, s1, s2) = three_node_chain::<T>();
     let net = tn.site_index_network();
     assert_eq!(
@@ -332,7 +332,7 @@ fn test_swap_three_node_chain_generic<T: StorageScalar + From<f64>>() {
     );
 }
 
-fn test_swap_four_node_chain_generic<T: StorageScalar + From<f64>>() {
+fn test_swap_four_node_chain_generic<T: TensorElement + From<f64>>() {
     let (mut tn, s0, s1, s2, s3) = four_node_chain::<T>();
     // Swap adjacent pairs: (0,1) and (2,3) so s0<->s1, s2<->s3
     let mut target = HashMap::new();
@@ -363,7 +363,7 @@ fn test_swap_four_node_chain_generic<T: StorageScalar + From<f64>>() {
     );
 }
 
-fn test_swap_2r_interleave_generic<T: StorageScalar + From<f64>>() {
+fn test_swap_2r_interleave_generic<T: TensorElement + From<f64>>() {
     let (mut tn, x0, x1, y0, y1) = chain_2r_interleave::<T>();
     let before = tn.contract_to_tensor().unwrap();
 
@@ -402,7 +402,7 @@ fn test_swap_2r_interleave_generic<T: StorageScalar + From<f64>>() {
     );
 }
 
-fn test_swap_y_shape_generic<T: StorageScalar + From<f64>>() {
+fn test_swap_y_shape_generic<T: TensorElement + From<f64>>() {
     let (mut tn, s0, s1, s2) = y_shape_tree::<T>();
     // Swap s0 and s1 between L0 and L1 (path crosses center)
     let mut target = HashMap::new();
@@ -427,7 +427,7 @@ fn test_swap_y_shape_generic<T: StorageScalar + From<f64>>() {
     );
 }
 
-fn test_swap_correctness_contract_generic<T: StorageScalar + From<f64>>() {
+fn test_swap_correctness_contract_generic<T: TensorElement + From<f64>>() {
     let (mut tn, s0, s1) = two_node_chain::<T>();
     let before = tn.contract_to_tensor().unwrap();
 

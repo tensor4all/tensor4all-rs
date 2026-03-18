@@ -34,14 +34,15 @@ use anyhow::Result;
 /// A collection of tensors organized in a block structure.
 ///
 /// Each block is a tensor of type `T` implementing [`TensorLike`].
-/// The blocks are stored in row-major order (for 2D block matrices).
+/// The flattened block list is ordered row-by-row:
+/// `(0, 0), (0, 1), ..., (1, 0), (1, 1), ...`.
 ///
 /// # Type Parameters
 ///
 /// * `T` - The tensor type for each block, must implement `TensorLike`
 #[derive(Debug, Clone)]
 pub struct BlockTensor<T: TensorLike> {
-    /// Blocks stored in row-major order
+    /// Blocks flattened row-by-row in block-matrix order
     blocks: Vec<T>,
     /// Block structure (rows, cols)
     shape: (usize, usize),
@@ -52,7 +53,7 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// # Arguments
     ///
-    /// * `blocks` - Vector of blocks in row-major order
+    /// * `blocks` - Vector of blocks flattened row-by-row
     /// * `shape` - Block structure as (rows, cols)
     ///
     /// # Errors
@@ -75,7 +76,7 @@ impl<T: TensorLike> BlockTensor<T> {
     ///
     /// # Arguments
     ///
-    /// * `blocks` - Vector of blocks in row-major order
+    /// * `blocks` - Vector of blocks flattened row-by-row
     /// * `shape` - Block structure as (rows, cols)
     ///
     /// # Panics
@@ -415,19 +416,10 @@ mod tests {
     use crate::defaults::tensordynlen::TensorDynLen;
     use crate::defaults::DynIndex;
     use crate::krylov::{gmres, GmresOptions};
-    use crate::storage::{DenseStorageF64, Storage};
-    use std::sync::Arc;
 
     /// Helper to create a 1D tensor (vector) with given data and shared index.
     fn make_vector_with_index(data: Vec<f64>, idx: &DynIndex) -> TensorDynLen {
-        let n = data.len();
-        TensorDynLen::new(
-            vec![idx.clone()],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                data,
-                &[n],
-            ))),
-        )
+        TensorDynLen::from_dense(vec![idx.clone()], data).unwrap()
     }
 
     // ========================================================================
@@ -568,40 +560,22 @@ mod tests {
             let x2 = x.get(1, 0);
 
             // Apply D1 to x1
-            let x1_data = match x1.storage().as_ref() {
-                Storage::DenseF64(d) => d.as_slice().to_vec(),
-                _ => anyhow::bail!("Expected DenseF64"),
-            };
+            let x1_data = x1.to_vec_f64()?;
             let y1_data: Vec<f64> = x1_data
                 .iter()
                 .zip(diag1.iter())
                 .map(|(&xi, &di)| xi * di)
                 .collect();
-            let y1 = TensorDynLen::new(
-                x1.indices.clone(),
-                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                    y1_data,
-                    &x1.dims(),
-                ))),
-            );
+            let y1 = TensorDynLen::from_dense(x1.indices.clone(), y1_data).unwrap();
 
             // Apply D2 to x2
-            let x2_data = match x2.storage().as_ref() {
-                Storage::DenseF64(d) => d.as_slice().to_vec(),
-                _ => anyhow::bail!("Expected DenseF64"),
-            };
+            let x2_data = x2.to_vec_f64()?;
             let y2_data: Vec<f64> = x2_data
                 .iter()
                 .zip(diag2.iter())
                 .map(|(&xi, &di)| xi * di)
                 .collect();
-            let y2 = TensorDynLen::new(
-                x2.indices.clone(),
-                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                    y2_data,
-                    &x2.dims(),
-                ))),
-            );
+            let y2 = TensorDynLen::from_dense(x2.indices.clone(), y2_data).unwrap();
 
             Ok(BlockTensor::new(vec![y1, y2], (2, 1)))
         };
@@ -805,37 +779,17 @@ mod tests {
         let col1_idx = DynIndex::new_dyn(3);
 
         // Block (0,0): [col0_idx, row0_idx]
-        let b00 = TensorDynLen::new(
-            vec![col0_idx.clone(), row0_idx.clone()],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![0.0; 6],
-                &[3, 2],
-            ))),
-        );
+        let b00 = TensorDynLen::from_dense(vec![col0_idx.clone(), row0_idx.clone()], vec![0.0; 6])
+            .unwrap();
         // Block (0,1): [col1_idx, row0_idx] — same row → shares row0_idx
-        let b01 = TensorDynLen::new(
-            vec![col1_idx.clone(), row0_idx.clone()],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![0.0; 6],
-                &[3, 2],
-            ))),
-        );
+        let b01 = TensorDynLen::from_dense(vec![col1_idx.clone(), row0_idx.clone()], vec![0.0; 6])
+            .unwrap();
         // Block (1,0): [col0_idx, row1_idx] — same column → shares col0_idx
-        let b10 = TensorDynLen::new(
-            vec![col0_idx.clone(), row1_idx.clone()],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![0.0; 6],
-                &[3, 2],
-            ))),
-        );
+        let b10 = TensorDynLen::from_dense(vec![col0_idx.clone(), row1_idx.clone()], vec![0.0; 6])
+            .unwrap();
         // Block (1,1): [col1_idx, row1_idx]
-        let b11 = TensorDynLen::new(
-            vec![col1_idx.clone(), row1_idx.clone()],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![0.0; 6],
-                &[3, 2],
-            ))),
-        );
+        let b11 = TensorDynLen::from_dense(vec![col1_idx.clone(), row1_idx.clone()], vec![0.0; 6])
+            .unwrap();
 
         let block = BlockTensor::new(vec![b00, b01, b10, b11], (2, 2));
         assert!(block.validate_indices().is_ok());
@@ -844,34 +798,10 @@ mod tests {
     #[test]
     fn test_validate_indices_matrix_no_row_sharing() {
         // 2x2 matrix: all indices independent → should fail (no common IDs in same row)
-        let b00 = TensorDynLen::new(
-            vec![DynIndex::new_dyn(2)],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![0.0; 2],
-                &[2],
-            ))),
-        );
-        let b01 = TensorDynLen::new(
-            vec![DynIndex::new_dyn(2)],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![0.0; 2],
-                &[2],
-            ))),
-        );
-        let b10 = TensorDynLen::new(
-            vec![DynIndex::new_dyn(2)],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![0.0; 2],
-                &[2],
-            ))),
-        );
-        let b11 = TensorDynLen::new(
-            vec![DynIndex::new_dyn(2)],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                vec![0.0; 2],
-                &[2],
-            ))),
-        );
+        let b00 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
+        let b01 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
+        let b10 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
+        let b11 = TensorDynLen::from_dense(vec![DynIndex::new_dyn(2)], vec![0.0; 2]).unwrap();
 
         let block = BlockTensor::new(vec![b00, b01, b10, b11], (2, 2));
         assert!(block.validate_indices().is_err());

@@ -1028,19 +1028,28 @@ mod tests {
     use super::*;
     use crate::defaults::tensordynlen::TensorDynLen;
     use crate::defaults::DynIndex;
-    use crate::storage::{DenseStorageF64, Storage};
-    use std::sync::Arc;
-
     /// Helper to create a 1D tensor (vector) with given data and shared index.
     fn make_vector_with_index(data: Vec<f64>, idx: &DynIndex) -> TensorDynLen {
-        let n = data.len();
-        TensorDynLen::new(
-            vec![idx.clone()],
-            Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                data,
-                &[n],
-            ))),
-        )
+        TensorDynLen::from_dense(vec![idx.clone()], data).unwrap()
+    }
+
+    fn scale_vector_f64(x: &TensorDynLen, diag: &[f64]) -> Result<TensorDynLen> {
+        let x_data = x.to_vec_f64()?;
+        let result_data: Vec<f64> = x_data
+            .iter()
+            .zip(diag.iter())
+            .map(|(&xi, &di)| xi * di)
+            .collect();
+        Ok(TensorDynLen::from_dense(x.indices.clone(), result_data).unwrap())
+    }
+
+    fn apply_matrix2_f64(x: &TensorDynLen, a_data: &[f64; 4]) -> Result<TensorDynLen> {
+        let x_data = x.to_vec_f64()?;
+        let result_data = vec![
+            a_data[0] * x_data[0] + a_data[1] * x_data[1],
+            a_data[2] * x_data[0] + a_data[3] * x_data[1],
+        ];
+        Ok(TensorDynLen::from_dense(x.indices.clone(), result_data).unwrap())
     }
 
     #[test]
@@ -1152,26 +1161,7 @@ mod tests {
 
         // Diagonal scaling operator
         let diag = [2.0, 3.0, 4.0];
-        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
-            // Element-wise multiply by diagonal
-            let x_data = match x.storage().as_ref() {
-                Storage::DenseF64(d) => d.as_slice().to_vec(),
-                _ => panic!("Expected DenseF64"),
-            };
-            let result_data: Vec<f64> = x_data
-                .iter()
-                .zip(diag.iter())
-                .map(|(&xi, &di)| xi * di)
-                .collect();
-            let dims = x.dims();
-            Ok(TensorDynLen::new(
-                x.indices.clone(),
-                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                    result_data,
-                    &dims,
-                ))),
-            ))
-        };
+        let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
 
         let options = GmresOptions {
             max_iter: 10,
@@ -1217,28 +1207,10 @@ mod tests {
         let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
         let expected_x = make_vector_with_index(vec![1.0, 2.0], &idx);
 
-        // Matrix A (stored as row-major)
+        // Matrix A = [[2, 1], [0, 3]]
         let a_data = [2.0, 1.0, 0.0, 3.0];
 
-        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
-            let x_data = match x.storage().as_ref() {
-                Storage::DenseF64(d) => d.as_slice().to_vec(),
-                _ => panic!("Expected DenseF64"),
-            };
-            // Matrix-vector multiply (2x2)
-            let result_data = vec![
-                a_data[0] * x_data[0] + a_data[1] * x_data[1],
-                a_data[2] * x_data[0] + a_data[3] * x_data[1],
-            ];
-            let dims = x.dims();
-            Ok(TensorDynLen::new(
-                x.indices.clone(),
-                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                    result_data,
-                    &dims,
-                ))),
-            ))
-        };
+        let apply_a = move |x: &TensorDynLen| apply_matrix2_f64(x, &a_data);
 
         let options = GmresOptions {
             max_iter: 10,
@@ -1470,25 +1442,7 @@ mod tests {
         let expected_x = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
 
         let diag = [2.0, 3.0, 4.0];
-        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
-            let x_data = match x.storage().as_ref() {
-                Storage::DenseF64(d) => d.as_slice().to_vec(),
-                _ => panic!("Expected DenseF64"),
-            };
-            let result_data: Vec<f64> = x_data
-                .iter()
-                .zip(diag.iter())
-                .map(|(&xi, &di)| xi * di)
-                .collect();
-            let dims = x.dims();
-            Ok(TensorDynLen::new(
-                x.indices.clone(),
-                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                    result_data,
-                    &dims,
-                ))),
-            ))
-        };
+        let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
 
         // No-op truncation
         let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
@@ -1537,25 +1491,7 @@ mod tests {
         let expected_x = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
 
         let diag = [2.0, 3.0, 4.0];
-        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
-            let x_data = match x.storage().as_ref() {
-                Storage::DenseF64(d) => d.as_slice().to_vec(),
-                _ => panic!("Expected DenseF64"),
-            };
-            let result_data: Vec<f64> = x_data
-                .iter()
-                .zip(diag.iter())
-                .map(|(&xi, &di)| xi * di)
-                .collect();
-            let dims = x.dims();
-            Ok(TensorDynLen::new(
-                x.indices.clone(),
-                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                    result_data,
-                    &dims,
-                ))),
-            ))
-        };
+        let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
 
         let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
 
@@ -1588,25 +1524,7 @@ mod tests {
         let b = make_vector_with_index(vec![2.0, 6.0, 12.0], &idx);
 
         let diag = [2.0, 3.0, 4.0];
-        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
-            let x_data = match x.storage().as_ref() {
-                Storage::DenseF64(d) => d.as_slice().to_vec(),
-                _ => panic!("Expected DenseF64"),
-            };
-            let result_data: Vec<f64> = x_data
-                .iter()
-                .zip(diag.iter())
-                .map(|(&xi, &di)| xi * di)
-                .collect();
-            let dims = x.dims();
-            Ok(TensorDynLen::new(
-                x.indices.clone(),
-                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                    result_data,
-                    &dims,
-                ))),
-            ))
-        };
+        let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
 
         let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
 
@@ -1684,25 +1602,7 @@ mod tests {
         let x0 = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
 
         let diag = [2.0, 3.0, 4.0];
-        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
-            let x_data = match x.storage().as_ref() {
-                Storage::DenseF64(d) => d.as_slice().to_vec(),
-                _ => anyhow::bail!("Expected DenseF64"),
-            };
-            let result_data: Vec<f64> = x_data
-                .iter()
-                .zip(diag.iter())
-                .map(|(&xi, &di)| xi * di)
-                .collect();
-            let dims = x.dims();
-            Ok(TensorDynLen::new(
-                x.indices.clone(),
-                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                    result_data,
-                    &dims,
-                ))),
-            ))
-        };
+        let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
 
         // No-op truncation: convergence should work normally with check enabled
         let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
@@ -1746,25 +1646,7 @@ mod tests {
 
         // A = diag(1, 2, 3, 4)
         let diag = [1.0, 2.0, 3.0, 4.0];
-        let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
-            let x_data = match x.storage().as_ref() {
-                Storage::DenseF64(d) => d.as_slice().to_vec(),
-                _ => anyhow::bail!("Expected DenseF64"),
-            };
-            let result_data: Vec<f64> = x_data
-                .iter()
-                .zip(diag.iter())
-                .map(|(&xi, &di)| xi * di)
-                .collect();
-            let dims = x.dims();
-            Ok(TensorDynLen::new(
-                x.indices.clone(),
-                Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-                    result_data,
-                    &dims,
-                ))),
-            ))
-        };
+        let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
 
         // No-op truncation: the solver should converge normally
         let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };

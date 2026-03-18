@@ -1,4 +1,5 @@
 use approx::assert_abs_diff_eq;
+use hdf5_metno::File;
 use num_complex::Complex64;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
 use tensor4all_core::TensorDynLen;
@@ -67,6 +68,28 @@ fn test_itensor_f64_roundtrip() {
 }
 
 #[test]
+fn test_itensor_f64_storage_dataset_uses_column_major_linearization() {
+    let path = temp_path("itensor_f64_storage_column_major");
+    let tensor = make_test_tensor_f64();
+
+    save_itensor(&path, "tensor", &tensor).unwrap();
+
+    let file = File::open(&path).unwrap();
+    let storage_group = file.group("tensor").unwrap().group("storage").unwrap();
+    let stored: Vec<f64> = storage_group
+        .dataset("data")
+        .unwrap()
+        .as_reader()
+        .read_1d()
+        .unwrap()
+        .to_vec();
+
+    assert_eq!(stored, tensor.to_vec_f64().unwrap());
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn test_itensor_c64_roundtrip() {
     let path = temp_path("itensor_c64");
     let tensor = make_test_tensor_c64();
@@ -84,6 +107,28 @@ fn test_itensor_c64_roundtrip() {
         assert_abs_diff_eq!(a.re, b.re, epsilon = 1e-15);
         assert_abs_diff_eq!(a.im, b.im, epsilon = 1e-15);
     }
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_itensor_c64_storage_dataset_uses_column_major_linearization() {
+    let path = temp_path("itensor_c64_storage_column_major");
+    let tensor = make_test_tensor_c64();
+
+    save_itensor(&path, "tensor", &tensor).unwrap();
+
+    let file = File::open(&path).unwrap();
+    let storage_group = file.group("tensor").unwrap().group("storage").unwrap();
+    let stored: Vec<Complex64> = storage_group
+        .dataset("data")
+        .unwrap()
+        .as_reader()
+        .read_1d()
+        .unwrap()
+        .to_vec();
+
+    assert_eq!(stored, tensor.to_vec_c64().unwrap());
 
     std::fs::remove_file(&path).ok();
 }

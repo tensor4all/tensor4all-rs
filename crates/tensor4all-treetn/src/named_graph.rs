@@ -87,6 +87,27 @@ where
         self.index_to_node_name.get(&node)
     }
 
+    /// Rename an existing node without changing its data or incident edges.
+    ///
+    /// Returns an error if the old node doesn't exist or the new name is already in use.
+    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<(), String> {
+        if old_name == &new_name {
+            return Ok(());
+        }
+        if self.node_name_to_index.contains_key(&new_name) {
+            return Err(format!("Node already exists: {:?}", new_name));
+        }
+
+        let node_idx = self
+            .node_name_to_index
+            .remove(old_name)
+            .ok_or_else(|| format!("Node not found: {:?}", old_name))?;
+
+        self.node_name_to_index.insert(new_name.clone(), node_idx);
+        self.index_to_node_name.insert(node_idx, new_name);
+        Ok(())
+    }
+
     /// Get a reference to the data of a node (by node name).
     pub fn node_data(&self, node_name: &NodeName) -> Option<&NodeData> {
         self.node_name_to_index
@@ -438,6 +459,24 @@ mod tests {
         assert_eq!(data, Some(1));
         assert_eq!(g.node_count(), 1);
         assert!(!g.has_node(&"A".to_string()));
+    }
+
+    #[test]
+    fn test_named_graph_rename_node() {
+        let mut g: NamedGraph<String, i32, ()> = NamedGraph::new();
+
+        g.add_node("A".to_string(), 1).unwrap();
+        g.add_node("B".to_string(), 2).unwrap();
+        g.add_edge(&"A".to_string(), &"B".to_string(), ()).unwrap();
+
+        g.rename_node(&"B".to_string(), "C".to_string()).unwrap();
+
+        assert!(g.has_node(&"A".to_string()));
+        assert!(g.has_node(&"C".to_string()));
+        assert!(!g.has_node(&"B".to_string()));
+        assert_eq!(g.node_data(&"C".to_string()), Some(&2));
+        let neighbors = g.neighbors(&"A".to_string());
+        assert_eq!(neighbors, vec![&"C".to_string()]);
     }
 
     #[test]

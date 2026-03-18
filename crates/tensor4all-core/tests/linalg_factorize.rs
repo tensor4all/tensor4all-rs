@@ -1,11 +1,10 @@
 //! Tests for the unified factorize function.
 
-use std::sync::Arc;
 use tensor4all_core::index::Index;
 use tensor4all_core::{
     factorize, Canonical, DynIndex, FactorizeAlg, FactorizeError, FactorizeOptions,
 };
-use tensor4all_core::{storage::DenseStorageF64, Storage, TensorDynLen, TensorLike};
+use tensor4all_core::{TensorDynLen, TensorLike};
 
 // ============================================================================
 // Test Data Helpers
@@ -17,12 +16,7 @@ fn create_test_matrix() -> TensorDynLen {
     let j: DynIndex = Index::new_dyn(3);
 
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-        data,
-        &[2, 3],
-    )));
-
-    TensorDynLen::new(vec![i, j], storage)
+    TensorDynLen::from_dense(vec![i, j], data).unwrap()
 }
 
 /// Helper to create a rank-3 tensor for testing.
@@ -32,12 +26,27 @@ fn create_rank3_tensor() -> TensorDynLen {
     let k: DynIndex = Index::new_dyn(2);
 
     let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-        data,
-        &[2, 3, 2],
-    )));
+    TensorDynLen::from_dense(vec![i, j, k], data).unwrap()
+}
 
-    TensorDynLen::new(vec![i, j, k], storage)
+fn create_unit_dim_rank3_tensor() -> TensorDynLen {
+    let i: DynIndex = Index::new_dyn(1);
+    let j: DynIndex = Index::new_dyn(2);
+    let k: DynIndex = Index::new_dyn(2);
+
+    let data = vec![1.0, 2.0, 3.0, 4.0];
+    TensorDynLen::from_dense(vec![i, j, k], data).unwrap()
+}
+
+fn create_non_symmetric_col_major_matrix() -> TensorDynLen {
+    let i: DynIndex = Index::new_dyn(2);
+    let j: DynIndex = Index::new_dyn(3);
+
+    // Logical matrix:
+    // [[1, 2, 4],
+    //  [3, 5, 6]]
+    let data = vec![1.0, 3.0, 2.0, 5.0, 4.0, 6.0];
+    TensorDynLen::from_dense(vec![i, j], data).unwrap()
 }
 
 // ============================================================================
@@ -206,6 +215,42 @@ fn test_factorize_lu_ci_no_singular_values() {
     }
 }
 
+#[test]
+fn test_factorize_lu_ci_reconstruction_with_unit_dim_axis() {
+    let tensor = create_unit_dim_rank3_tensor();
+    let left_inds = vec![tensor.indices[1].clone(), tensor.indices[2].clone()];
+
+    for alg in [FactorizeAlg::LU, FactorizeAlg::CI] {
+        let options = FactorizeOptions {
+            alg,
+            canonical: Canonical::Left,
+            rtol: None,
+            max_rank: None,
+        };
+        let result = factorize(&tensor, &left_inds, &options).unwrap();
+        let reconstructed = result.left.contract(&result.right);
+        assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
+    }
+}
+
+#[test]
+fn test_factorize_lu_ci_reconstruction_with_col_major_matrix_input() {
+    let tensor = create_non_symmetric_col_major_matrix();
+    let left_inds = vec![tensor.indices[0].clone()];
+
+    for alg in [FactorizeAlg::LU, FactorizeAlg::CI] {
+        let options = FactorizeOptions {
+            alg,
+            canonical: Canonical::Left,
+            rtol: None,
+            max_rank: None,
+        };
+        let result = factorize(&tensor, &left_inds, &options).unwrap();
+        let reconstructed = result.left.contract(&result.right);
+        assert_tensors_approx_equal(&tensor, &reconstructed, 1e-10);
+    }
+}
+
 // ============================================================================
 // Truncation Tests
 // ============================================================================
@@ -238,17 +283,12 @@ fn test_diag_dense_contraction_svd_internals() {
     let j: DynIndex = Index::new_dyn(3);
 
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let storage = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-        data,
-        &[2, 3],
-    )));
-
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
+    let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 
     let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
     // Verify S is diagonal storage
-    assert!(matches!(s.storage().as_ref(), Storage::DiagF64(_)));
+    assert!(s.is_diag());
 
     // Verify S and V share a common index
     let common_found = s

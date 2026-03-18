@@ -190,23 +190,23 @@ fn setup_direct_sum(
         result_dims.push(new_idx.dim());
     }
 
-    // Compute strides
+    // Compute column-major strides (leftmost index fastest).
     let result_total: usize = result_dims.iter().product();
     let mut result_strides: Vec<usize> = vec![1; result_dims.len()];
-    for i in (0..result_dims.len().saturating_sub(1)).rev() {
-        result_strides[i] = result_strides[i + 1] * result_dims[i + 1];
+    for i in 1..result_dims.len() {
+        result_strides[i] = result_strides[i - 1] * result_dims[i - 1];
     }
 
     let a_dims = a.dims();
     let b_dims = b.dims();
     let mut a_strides: Vec<usize> = vec![1; a_dims.len()];
-    for i in (0..a_dims.len().saturating_sub(1)).rev() {
-        a_strides[i] = a_strides[i + 1] * a_dims[i + 1];
+    for i in 1..a_dims.len() {
+        a_strides[i] = a_strides[i - 1] * a_dims[i - 1];
     }
 
     let mut b_strides: Vec<usize> = vec![1; b_dims.len()];
-    for i in (0..b_dims.len().saturating_sub(1)).rev() {
-        b_strides[i] = b_strides[i + 1] * b_dims[i + 1];
+    for i in 1..b_dims.len() {
+        b_strides[i] = b_strides[i - 1] * b_dims[i - 1];
     }
 
     let n_common = common_a_positions.len();
@@ -232,7 +232,7 @@ fn setup_direct_sum(
 fn linear_to_multi(linear: usize, dims: &[usize]) -> Vec<usize> {
     let mut multi = vec![0; dims.len()];
     let mut remaining = linear;
-    for i in (0..dims.len()).rev() {
+    for i in 0..dims.len() {
         multi[i] = remaining % dims[i];
         remaining /= dims[i];
     }
@@ -397,25 +397,12 @@ mod tests {
         assert_eq!(new_indices.len(), 1);
         assert_eq!(new_indices[0].dim(), 7);
 
-        // Check data
+        // Check column-major logical values.
         let data = result.to_vec_f64().unwrap();
-
-        // i=0: [1, 2, 3, 10, 20, 30, 40]
-        // i=1: [4, 5, 6, 50, 60, 70, 80]
-        assert_eq!(data[0], 1.0);
-        assert_eq!(data[1], 2.0);
-        assert_eq!(data[2], 3.0);
-        assert_eq!(data[3], 10.0);
-        assert_eq!(data[4], 20.0);
-        assert_eq!(data[5], 30.0);
-        assert_eq!(data[6], 40.0);
-        assert_eq!(data[7], 4.0);
-        assert_eq!(data[8], 5.0);
-        assert_eq!(data[9], 6.0);
-        assert_eq!(data[10], 50.0);
-        assert_eq!(data[11], 60.0);
-        assert_eq!(data[12], 70.0);
-        assert_eq!(data[13], 80.0);
+        assert_eq!(
+            data,
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0,]
+        );
     }
 
     #[test]

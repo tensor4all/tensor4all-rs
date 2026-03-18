@@ -97,6 +97,25 @@ where
         self.topology.has_node(node_name)
     }
 
+    /// Rename an existing node and preserve its site-space metadata.
+    pub fn rename_node(&mut self, old_name: &NodeName, new_name: NodeName) -> Result<(), String> {
+        if old_name == &new_name {
+            return Ok(());
+        }
+
+        let site_space = self
+            .site_spaces
+            .remove(old_name)
+            .ok_or_else(|| format!("Node {:?} not found", old_name))?;
+        self.topology.rename_node(old_name, new_name.clone())?;
+        for index in &site_space {
+            self.index_to_node
+                .insert(index.id().clone(), new_name.clone());
+        }
+        self.site_spaces.insert(new_name, site_space);
+        Ok(())
+    }
+
     /// Get the site space (physical indices) for a node.
     pub fn site_space(&self, node_name: &NodeName) -> Option<&HashSet<I>> {
         self.site_spaces.get(node_name)

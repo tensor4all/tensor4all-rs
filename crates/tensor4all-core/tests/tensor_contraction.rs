@@ -1,9 +1,23 @@
 use num_complex::Complex64;
-use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::common_inds;
-use tensor4all_core::storage::{DenseStorageC64, DenseStorageF64};
-use tensor4all_core::{Storage, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+
+fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
+    TensorDynLen::from_dense(indices, data).unwrap()
+}
+
+fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen {
+    TensorDynLen::from_dense(indices, data).unwrap()
+}
+
+fn assert_all_f64(tensor: &TensorDynLen, expected_len: usize, expected_value: f64) {
+    let data = tensor.to_vec_f64().unwrap();
+    assert_eq!(data.len(), expected_len);
+    for value in data {
+        assert_eq!(value, expected_value);
+    }
+}
 
 #[test]
 fn test_common_inds() {
@@ -28,16 +42,10 @@ fn test_contract_dyn_len_matrix_multiplication() {
     let k = Index::new_dyn(4);
 
     // Create tensor A[i, j] with all ones
-    let indices_a = vec![i.clone(), j.clone()];
-    let dims_a = vec![2, 3];
-    let storage_a = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &dims_a));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, Arc::new(storage_a));
+    let tensor_a = dense_f64(vec![i.clone(), j.clone()], vec![1.0; 6]);
 
     // Create tensor B[j, k] with all ones
-    let indices_b = vec![j.clone(), k.clone()];
-    let dims_b = vec![3, 4];
-    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &dims_b));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, Arc::new(storage_b));
+    let tensor_b = dense_f64(vec![j.clone(), k.clone()], vec![1.0; 12]);
 
     // Contract along j: result should be C[i, k] with all 3.0 (since each element is sum of 3 ones)
     let result = tensor_a.contract(&tensor_b);
@@ -46,15 +54,7 @@ fn test_contract_dyn_len_matrix_multiplication() {
     assert_eq!(result.indices[0].id, i.id);
     assert_eq!(result.indices[1].id, k.id);
 
-    // Check that all elements are 3.0
-    if let Storage::DenseF64(ref vec) = *result.storage() {
-        assert_eq!(vec.len(), 8); // 2 * 4 = 8
-        for &val in vec.iter() {
-            assert_eq!(val, 3.0);
-        }
-    } else {
-        panic!("Expected DenseF64 storage");
-    }
+    assert_all_f64(&result, 8, 3.0);
 }
 
 #[test]
@@ -67,16 +67,10 @@ fn test_mul_operator_contraction() {
     let k = Index::new_dyn(4);
 
     // Create tensor A[i, j] with all ones
-    let indices_a = vec![i.clone(), j.clone()];
-    let dims_a = vec![2, 3];
-    let storage_a = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &dims_a));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, Arc::new(storage_a));
+    let tensor_a = dense_f64(vec![i.clone(), j.clone()], vec![1.0; 6]);
 
     // Create tensor B[j, k] with all ones
-    let indices_b = vec![j.clone(), k.clone()];
-    let dims_b = vec![3, 4];
-    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &dims_b));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, Arc::new(storage_b));
+    let tensor_b = dense_f64(vec![j.clone(), k.clone()], vec![1.0; 12]);
 
     // Contract along j using * operator: result should be C[i, k] with all 3.0
     let result = &tensor_a * &tensor_b;
@@ -85,15 +79,7 @@ fn test_mul_operator_contraction() {
     assert_eq!(result.indices[0].id, i.id);
     assert_eq!(result.indices[1].id, k.id);
 
-    // Check that all elements are 3.0
-    if let Storage::DenseF64(ref vec) = *result.storage() {
-        assert_eq!(vec.len(), 8); // 2 * 4 = 8
-        for &val in vec.iter() {
-            assert_eq!(val, 3.0);
-        }
-    } else {
-        panic!("Expected DenseF64 storage");
-    }
+    assert_all_f64(&result, 8, 3.0);
 }
 
 #[test]
@@ -103,15 +89,9 @@ fn test_mul_operator_owned() {
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
 
-    let indices_a = vec![i.clone(), j.clone()];
-    let dims_a = vec![2, 3];
-    let storage_a = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &dims_a));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, Arc::new(storage_a));
+    let tensor_a = dense_f64(vec![i.clone(), j.clone()], vec![1.0; 6]);
 
-    let indices_b = vec![j.clone(), k.clone()];
-    let dims_b = vec![3, 4];
-    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &dims_b));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, Arc::new(storage_b));
+    let tensor_b = dense_f64(vec![j.clone(), k.clone()], vec![1.0; 12]);
 
     // Use * operator with owned tensors
     let result = tensor_a * tensor_b;
@@ -125,13 +105,9 @@ fn test_contract_no_common_indices_gives_outer_product() {
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(4);
 
-    let indices_a = vec![i.clone(), j.clone()];
-    let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let indices_b = vec![k.clone()];
-    let storage_b = Arc::new(Storage::new_dense_f64(4));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone()]).unwrap();
 
     // No common indices → outer product
     let result = tensor_a.contract(&tensor_b);
@@ -153,8 +129,8 @@ fn test_contract_no_common_indices_preserves_left_then_right_index_order_and_val
     let expected = TensorDynLen::from_dense(
         result.indices.clone(),
         vec![
-            6.0, 8.0, -4.0, //
-            -3.0, -4.0, 2.0,
+            6.0, -3.0, 8.0, //
+            -4.0, -4.0, 2.0,
         ],
     )
     .unwrap();
@@ -171,16 +147,10 @@ fn test_contract_three_indices() {
     let l = Index::new_dyn(5);
 
     // Create tensor A[i, j, k] with all ones
-    let indices_a = vec![i.clone(), j.clone(), k.clone()];
-    let dims_a = vec![2, 3, 4];
-    let storage_a = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 24], &dims_a));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, Arc::new(storage_a));
+    let tensor_a = dense_f64(vec![i.clone(), j.clone(), k.clone()], vec![1.0; 24]);
 
     // Create tensor B[j, k, l] with all ones
-    let indices_b = vec![j.clone(), k.clone(), l.clone()];
-    let dims_b = vec![3, 4, 5];
-    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 60], &dims_b));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, Arc::new(storage_b));
+    let tensor_b = dense_f64(vec![j.clone(), k.clone(), l.clone()], vec![1.0; 60]);
 
     // Contract along j and k: result should be C[i, l] with all 12.0 (3 * 4 = 12)
     let result = tensor_a.contract(&tensor_b);
@@ -189,15 +159,7 @@ fn test_contract_three_indices() {
     assert_eq!(result.indices[0].id, i.id);
     assert_eq!(result.indices[1].id, l.id);
 
-    // Check that all elements are 12.0
-    if let Storage::DenseF64(ref vec) = *result.storage() {
-        assert_eq!(vec.len(), 10); // 2 * 5 = 10
-        for &val in vec.as_slice().iter() {
-            assert_eq!(val, 12.0);
-        }
-    } else {
-        panic!("Expected DenseF64 storage");
-    }
+    assert_all_f64(&result, 10, 12.0);
 }
 
 #[test]
@@ -209,24 +171,18 @@ fn test_contract_mixed_f64_c64() {
     let k = Index::new_dyn(2);
 
     // Create tensor A[i, j] with all 1.0 (f64)
-    let indices_a = vec![i.clone(), j.clone()];
-    let dims_a = vec![2, 2];
-    let storage_a = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 4], &dims_a));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, Arc::new(storage_a));
+    let tensor_a = dense_f64(vec![i.clone(), j.clone()], vec![1.0; 4]);
 
     // Create tensor B[j, k] with complex values: [[1+2i, 3+4i], [5+6i, 7+8i]]
-    let indices_b = vec![j.clone(), k.clone()];
-    let dims_b = vec![2, 2];
-    let storage_b = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+    let tensor_b = dense_c64(
+        vec![j.clone(), k.clone()],
         vec![
             Complex64::new(1.0, 2.0),
-            Complex64::new(3.0, 4.0),
             Complex64::new(5.0, 6.0),
+            Complex64::new(3.0, 4.0),
             Complex64::new(7.0, 8.0),
         ],
-        &dims_b,
-    ));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, Arc::new(storage_b));
+    );
 
     // Contract along j: result should be C[i, k] (Complex64)
     // Expected result: [[1+2i + 5+6i, 3+4i + 7+8i], [1+2i + 5+6i, 3+4i + 7+8i]]
@@ -237,19 +193,15 @@ fn test_contract_mixed_f64_c64() {
     assert_eq!(result.indices[0].id, i.id);
     assert_eq!(result.indices[1].id, k.id);
 
-    // Check result storage type and values
-    if let Storage::DenseC64(ref vec) = *result.storage() {
-        assert_eq!(vec.len(), 4);
-        // All elements should be the same: sum of first column and sum of second column
-        // First row: [6+8i, 10+12i]
-        assert!((vec.get(0) - Complex64::new(6.0, 8.0)).norm() < 1e-10);
-        assert!((vec.get(1) - Complex64::new(10.0, 12.0)).norm() < 1e-10);
-        // Second row: [6+8i, 10+12i]
-        assert!((vec.get(2) - Complex64::new(6.0, 8.0)).norm() < 1e-10);
-        assert!((vec.get(3) - Complex64::new(10.0, 12.0)).norm() < 1e-10);
-    } else {
-        panic!("Expected DenseC64 storage for mixed-type contraction");
-    }
+    assert_eq!(
+        result.to_vec_c64().unwrap(),
+        vec![
+            Complex64::new(6.0, 8.0),
+            Complex64::new(6.0, 8.0),
+            Complex64::new(10.0, 12.0),
+            Complex64::new(10.0, 12.0),
+        ]
+    );
 }
 
 #[test]
@@ -261,24 +213,18 @@ fn test_contract_mixed_c64_f64() {
     let k = Index::new_dyn(2);
 
     // Create tensor A[i, j] with complex values
-    let indices_a = vec![i.clone(), j.clone()];
-    let dims_a = vec![2, 2];
-    let storage_a = Storage::DenseC64(DenseStorageC64::from_vec_with_shape(
+    let tensor_a = dense_c64(
+        vec![i.clone(), j.clone()],
         vec![
             Complex64::new(1.0, 2.0),
-            Complex64::new(3.0, 4.0),
             Complex64::new(5.0, 6.0),
+            Complex64::new(3.0, 4.0),
             Complex64::new(7.0, 8.0),
         ],
-        &dims_a,
-    ));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, Arc::new(storage_a));
+    );
 
     // Create tensor B[j, k] with all 1.0 (f64)
-    let indices_b = vec![j.clone(), k.clone()];
-    let dims_b = vec![2, 2];
-    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 4], &dims_b));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, Arc::new(storage_b));
+    let tensor_b = dense_f64(vec![j.clone(), k.clone()], vec![1.0; 4]);
 
     // Contract along j: result should be C[i, k] (Complex64)
     // For A[i,j] * B[j,k] where A is complex and B is real:
@@ -291,17 +237,15 @@ fn test_contract_mixed_c64_f64() {
     let result = tensor_a.contract(&tensor_b);
     assert_eq!(result.dims(), vec![2, 2]);
 
-    // Check result storage type
-    if let Storage::DenseC64(ref vec) = *result.storage() {
-        assert_eq!(vec.len(), 4);
-        // Check actual computed values
-        assert!((vec.get(0) - Complex64::new(4.0, 6.0)).norm() < 1e-10);
-        assert!((vec.get(1) - Complex64::new(4.0, 6.0)).norm() < 1e-10);
-        assert!((vec.get(2) - Complex64::new(12.0, 14.0)).norm() < 1e-10);
-        assert!((vec.get(3) - Complex64::new(12.0, 14.0)).norm() < 1e-10);
-    } else {
-        panic!("Expected DenseC64 storage for mixed-type contraction");
-    }
+    assert_eq!(
+        result.to_vec_c64().unwrap(),
+        vec![
+            Complex64::new(4.0, 6.0),
+            Complex64::new(12.0, 14.0),
+            Complex64::new(4.0, 6.0),
+            Complex64::new(12.0, 14.0),
+        ]
+    );
 }
 
 #[test]
@@ -313,16 +257,10 @@ fn test_tensordot_different_ids() {
     let l = Index::new_dyn(4);
 
     // Create tensor A[i, j]
-    let indices_a = vec![i.clone(), j.clone()];
-    let dims_a = vec![2, 3];
-    let storage_a = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 6], &dims_a));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, Arc::new(storage_a));
+    let tensor_a = dense_f64(vec![i.clone(), j.clone()], vec![1.0; 6]);
 
     // Create tensor B[k, l] where k has same dimension as j but different ID
-    let indices_b = vec![k.clone(), l.clone()];
-    let dims_b = vec![3, 4];
-    let storage_b = Storage::DenseF64(DenseStorageF64::from_vec_with_shape(vec![1.0; 12], &dims_b));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, Arc::new(storage_b));
+    let tensor_b = dense_f64(vec![k.clone(), l.clone()], vec![1.0; 12]);
 
     // Contract j (from A) with k (from B): result should be C[i, l] with all 3.0
     let result = tensor_a
@@ -333,15 +271,7 @@ fn test_tensordot_different_ids() {
     assert_eq!(result.indices[0].id, i.id);
     assert_eq!(result.indices[1].id, l.id);
 
-    // Check that all elements are 3.0
-    if let Storage::DenseF64(ref vec) = *result.storage() {
-        assert_eq!(vec.len(), 8);
-        for &val in vec.iter() {
-            assert_eq!(val, 3.0);
-        }
-    } else {
-        panic!("Expected DenseF64 storage");
-    }
+    assert_all_f64(&result, 8, 3.0);
 }
 
 #[test]
@@ -351,13 +281,9 @@ fn test_tensordot_dimension_mismatch() {
     let j = Index::new_dyn(3);
     let k = Index::new_dyn(5); // Different dimension from j
 
-    let indices_a = vec![i.clone(), j.clone()];
-    let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let indices_b = vec![k.clone()];
-    let storage_b = Arc::new(Storage::new_dense_f64(5));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone()]).unwrap();
 
     let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), k.clone())]);
     assert!(result.is_err());
@@ -379,13 +305,9 @@ fn test_tensordot_index_not_found() {
     let k = Index::new_dyn(3);
     let nonexistent = Index::new_dyn(3);
 
-    let indices_a = vec![i.clone(), j.clone()];
-    let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let indices_b = vec![k.clone()];
-    let storage_b = Arc::new(Storage::new_dense_f64(3));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone()]).unwrap();
 
     // Try to contract with a non-existent index from tensor_a
     let result = tensor_a.tensordot(&tensor_b, &[(nonexistent.clone(), k.clone())]);
@@ -408,13 +330,9 @@ fn test_tensordot_duplicate_axis() {
     let k = Index::new_dyn(3);
     let l = Index::new_dyn(4);
 
-    let indices_a = vec![i.clone(), j.clone()];
-    let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let indices_b = vec![k.clone(), l.clone()];
-    let storage_b = Arc::new(Storage::new_dense_f64(12));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = TensorDynLen::zeros::<f64>(vec![k.clone(), l.clone()]).unwrap();
 
     // Try to contract j twice (duplicate axis in self)
     let result = tensor_a.tensordot(
@@ -434,13 +352,9 @@ fn test_tensordot_empty_pairs() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
 
-    let indices_a = vec![i.clone(), j.clone()];
-    let storage_a = Arc::new(Storage::new_dense_f64(6));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
-    let indices_b = vec![j.clone()];
-    let storage_b = Arc::new(Storage::new_dense_f64(3));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = TensorDynLen::zeros::<f64>(vec![j.clone()]).unwrap();
 
     let result = tensor_a.tensordot(&tensor_b, &[]);
     assert!(result.is_err());
@@ -467,14 +381,10 @@ fn test_tensordot_common_index_not_in_pairs() {
     let l = Index::new_dyn(5);
 
     // Create tensor A[i, j, k]
-    let indices_a = vec![i.clone(), j.clone(), k.clone()];
-    let storage_a = Arc::new(Storage::new_dense_f64(24));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone(), k.clone()]).unwrap();
 
     // Create tensor B[j, l] where j is a common index with A
-    let indices_b = vec![j.clone(), l.clone()];
-    let storage_b = Arc::new(Storage::new_dense_f64(15));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = TensorDynLen::zeros::<f64>(vec![j.clone(), l.clone()]).unwrap();
 
     // Try to contract only k with l, leaving j as a "batch" dimension
     // This should fail because batch contraction is not yet implemented
@@ -500,22 +410,10 @@ fn test_tensordot_common_index_in_pairs_ok() {
     let k = Index::new_dyn(4);
 
     // Create tensor A[i, j]
-    let indices_a = vec![i.clone(), j.clone()];
-    let dims_a = vec![2, 3];
-    let storage_a = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-        vec![1.0; 6],
-        &dims_a,
-    )));
-    let tensor_a: TensorDynLen = TensorDynLen::new(indices_a, storage_a);
+    let tensor_a = dense_f64(vec![i.clone(), j.clone()], vec![1.0; 6]);
 
     // Create tensor B[j, k] where j is a common index with A
-    let indices_b = vec![j.clone(), k.clone()];
-    let dims_b = vec![3, 4];
-    let storage_b = Arc::new(Storage::DenseF64(DenseStorageF64::from_vec_with_shape(
-        vec![1.0; 12],
-        &dims_b,
-    )));
-    let tensor_b: TensorDynLen = TensorDynLen::new(indices_b, storage_b);
+    let tensor_b = dense_f64(vec![j.clone(), k.clone()], vec![1.0; 12]);
 
     // Contract j with j - this should work because the common index is in pairs
     let result = tensor_a.tensordot(&tensor_b, &[(j.clone(), j.clone())]);

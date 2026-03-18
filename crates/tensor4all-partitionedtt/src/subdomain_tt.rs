@@ -176,6 +176,7 @@ impl SubDomainTT {
             let dim = indices[axis].dim;
             let shape: Vec<usize> = indices.iter().map(|i| i.dim).collect();
             let total_size: usize = shape.iter().product();
+            let axis_stride = shape[..axis].iter().copied().product::<usize>().max(1);
 
             if projected_value >= dim {
                 // Invalid projection - zero out entire tensor
@@ -187,26 +188,14 @@ impl SubDomainTT {
                 }
             }
 
-            // Helper to convert flat index to multi-index
-            let flat_to_multi = |flat_idx: usize| -> Vec<usize> {
-                let mut multi_idx = Vec::with_capacity(shape.len());
-                let mut remaining = flat_idx;
-                for &d in shape.iter().rev() {
-                    multi_idx.push(remaining % d);
-                    remaining /= d;
-                }
-                multi_idx.reverse();
-                multi_idx
-            };
-
             // Create result tensor based on scalar type
             if tensor.is_f64() {
                 let src_data = tensor.as_slice_f64().unwrap_or_default();
                 let mut result_data = vec![0.0_f64; total_size];
 
                 for flat_idx in 0..total_size {
-                    let multi_idx = flat_to_multi(flat_idx);
-                    if multi_idx[axis] == projected_value && flat_idx < src_data.len() {
+                    let axis_value = (flat_idx / axis_stride) % dim;
+                    if axis_value == projected_value && flat_idx < src_data.len() {
                         result_data[flat_idx] = src_data[flat_idx];
                     }
                 }
@@ -217,8 +206,8 @@ impl SubDomainTT {
                 let mut result_data = vec![Complex64::new(0.0, 0.0); total_size];
 
                 for flat_idx in 0..total_size {
-                    let multi_idx = flat_to_multi(flat_idx);
-                    if multi_idx[axis] == projected_value && flat_idx < src_data.len() {
+                    let axis_value = (flat_idx / axis_stride) % dim;
+                    if axis_value == projected_value && flat_idx < src_data.len() {
                         result_data[flat_idx] = src_data[flat_idx];
                     }
                 }
@@ -419,8 +408,8 @@ mod tests {
 
         assert_eq!(projected_data.len(), full_data.len());
         assert_eq!(projected_data[0], 0.0);
-        assert_eq!(projected_data[1], 0.0);
-        assert_eq!(projected_data[2], full_data[2]);
+        assert_eq!(projected_data[1], full_data[1]);
+        assert_eq!(projected_data[2], 0.0);
         assert_eq!(projected_data[3], full_data[3]);
     }
 

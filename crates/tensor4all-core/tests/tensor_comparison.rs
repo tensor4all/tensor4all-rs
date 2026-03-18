@@ -41,7 +41,7 @@ fn test_sub_permuted_indices() {
     .unwrap();
     let b = TensorDynLen::from_dense(
         vec![j.clone(), i.clone()],
-        vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0], // transposed
+        vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0], // transposed in column-major order
     )
     .unwrap();
 

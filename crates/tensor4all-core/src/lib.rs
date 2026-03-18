@@ -57,8 +57,16 @@ pub use smallstring::{SmallChar, SmallString, SmallStringError};
 pub use tagset::{Tag, TagSetError, TagSetLike};
 
 // Tensor (storage, tensor types) - re-exported from tensor4all-tensorbackend
-pub use tensor4all_tensorbackend::any_scalar;
-pub use tensor4all_tensorbackend::storage;
+pub mod any_scalar {
+    //! Re-export of dynamic scalar utilities.
+    pub use tensor4all_tensorbackend::AnyScalar;
+}
+pub mod storage {
+    //! Re-export of snapshot storage utilities.
+    pub use tensor4all_tensorbackend::{
+        make_mut_storage, mindim, AnyScalar, Storage, StructuredStorage, SumFromStorage,
+    };
+}
 pub mod tensor_index;
 pub mod tensor_like;
 
@@ -78,9 +86,7 @@ pub use defaults::tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor,
     unfold_split, TensorAccess, TensorDynLen,
 };
-pub use storage::{
-    make_mut_storage, mindim, DenseStorageFactory, Storage, StorageScalar, SumFromStorage,
-};
+pub use storage::{make_mut_storage, mindim, Storage, StructuredStorage, SumFromStorage};
 pub use tensor4all_tensorbackend::TensorElement;
 pub use tensor_like::{
     AllowedPairs, Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions,

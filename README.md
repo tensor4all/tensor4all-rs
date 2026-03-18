@@ -15,6 +15,15 @@ A Rust implementation of tensor networks for **AI-agentic development** — rapi
 
 **Scope**: Initial focus on QTT (Quantics Tensor Train) and TCI (Tensor Cross Interpolation). The design is extensible to support Abelian and non-Abelian symmetries in the future.
 
+## Dense Layout Semantics
+
+tensor4all-rs uses **column-major** dense linearization internally. Flat dense buffers,
+`reshape`/`flatten` semantics, the C API, the Python bindings, and the ITensors.jl-compatible
+HDF5 layer are all defined in terms of column-major ordering.
+
+This matches Julia, ITensors.jl, and tenferro-rs. When exchanging dense data with NumPy,
+use `order="F"` semantics when you need explicit control over flattening or reshaping.
+
 ## Type Correspondence
 
 | ITensors.jl | QSpace v4 | tensor4all-rs |
@@ -22,9 +31,12 @@ A Rust implementation of tensor networks for **AI-agentic development** — rapi
 | `Index{Int}` | — | `Index<Id, NoSymmSpace>` |
 | `Index{QNBlocks}` | `QIDX` | `Index<Id, QNSpace>` (future) |
 | `ITensor` | `QSpace` | `TensorDynLen` |
-| `Dense` | `DATA` | `Storage::DenseF64/C64` |
-| `Diag` | — | `Storage::DiagF64/C64` |
+| `Dense` | `DATA` | `Storage::StructuredF64/C64` |
+| `Diag` | — | `Storage::StructuredF64/C64` with diagonal `axis_classes` |
 | `A * B` | — | `a.contract(&b)` |
+
+Legacy dense/diagonal kernel variants still exist inside the backend during the transition,
+but `StructuredStorage` is the intended public snapshot direction.
 
 ### Truncation Tolerance
 

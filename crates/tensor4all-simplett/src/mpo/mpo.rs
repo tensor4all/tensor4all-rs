@@ -377,7 +377,7 @@ impl<T: TTScalar> MPO<T> {
 
     /// Convert the MPO to a full tensor
     ///
-    /// Returns a flat vector containing all tensor elements in row-major order,
+    /// Returns a flat vector containing all tensor elements in column-major order,
     /// along with the shape (alternating site_dim_1, site_dim_2 dimensions).
     ///
     /// Warning: This can be very large for high-dimensional operators!
@@ -406,9 +406,9 @@ impl<T: TTScalar> MPO<T> {
                 result.push(T::zero());
             }
 
-            // Increment indices (row-major order, last index fastest)
+            // Increment indices in column-major order, leftmost index fastest.
             let mut carry = true;
-            for i in (0..shape.len()).rev() {
+            for i in 0..shape.len() {
                 if carry {
                     indices[i] += 1;
                     if indices[i] >= shape[i] {
@@ -524,6 +524,32 @@ mod tests {
         // All elements should be 5.0
         for val in &data {
             assert!((val - 5.0).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_mpo_fulltensor_matches_evaluate() {
+        let mut tensor: Tensor4<f64> = tensor4_zeros(1, 2, 3, 1);
+        tensor.set4(0, 0, 0, 0, 1.0);
+        tensor.set4(0, 1, 0, 0, 2.0);
+        tensor.set4(0, 0, 1, 0, 3.0);
+        tensor.set4(0, 1, 1, 0, 4.0);
+        tensor.set4(0, 0, 2, 0, 5.0);
+        tensor.set4(0, 1, 2, 0, 6.0);
+
+        let mpo = MPO::new(vec![tensor]).unwrap();
+        let (data, shape) = mpo.fulltensor();
+
+        assert_eq!(shape, vec![2, 3]);
+        for i in 0..2 {
+            for j in 0..3 {
+                let idx = i + 2 * j;
+                let expected = mpo.evaluate(&[i, j]).unwrap();
+                assert!(
+                    (data[idx] - expected).abs() < 1e-10,
+                    "Mismatch at [{i}, {j}]"
+                );
+            }
         }
     }
 }

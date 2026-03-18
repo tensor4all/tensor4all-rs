@@ -1,8 +1,15 @@
 use num_complex::Complex64;
-use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::{default_svd_rtol, set_default_svd_rtol, svd, svd_c64, svd_with, SvdOptions};
-use tensor4all_core::{DynIndex, Storage, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+
+fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
+    TensorDynLen::from_dense(indices, data).unwrap()
+}
+
+fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen {
+    TensorDynLen::from_dense(indices, data).unwrap()
+}
 
 fn vh_from_v(v: &TensorDynLen) -> TensorDynLen {
     assert!(
@@ -36,10 +43,7 @@ fn test_svd_identity() {
     data[0] = 1.0; // [0, 0]
     data[3] = 1.0; // [1, 1]
 
-    let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
-    ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
+    let tensor = dense_f64(vec![i.clone(), j.clone()], data);
 
     let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
@@ -66,10 +70,7 @@ fn test_svd_simple_matrix() {
     let j = Index::new_dyn(3);
 
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 3]),
-    ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
+    let tensor = dense_f64(vec![i.clone(), j.clone()], data);
 
     let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
@@ -106,10 +107,7 @@ fn test_svd_reconstruction() {
     let data = vec![
         1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
     ];
-    let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data.clone(), &[3, 4]),
-    ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
+    let tensor = dense_f64(vec![i.clone(), j.clone()], data.clone());
 
     let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
@@ -129,8 +127,7 @@ fn test_svd_invalid_rank() {
     // Test that SVD fails for rank-1 tensors
     let i = Index::new_dyn(2);
 
-    let storage = Arc::new(Storage::new_dense_f64(2));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone()], storage);
+    let tensor = TensorDynLen::zeros::<f64>(vec![i.clone()]).unwrap();
 
     let result = svd::<f64>(&tensor, std::slice::from_ref(&i));
     assert!(result.is_err());
@@ -146,8 +143,7 @@ fn test_svd_invalid_split() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
 
-    let storage = Arc::new(Storage::new_dense_f64(6));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
+    let tensor = TensorDynLen::zeros::<f64>(vec![i.clone(), j.clone()]).unwrap();
 
     // Empty left_inds should fail
     let result = svd::<f64>(&tensor, &[]);
@@ -170,10 +166,7 @@ fn test_svd_rank3() {
 
     // Create a 2×3×4 tensor with some data
     let data = (0..24).map(|x| x as f64).collect::<Vec<_>>();
-    let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 3, 4]),
-    ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone(), k.clone()], storage);
+    let tensor = dense_f64(vec![i.clone(), j.clone(), k.clone()], data);
 
     // Split: left = [i], right = [j, k]
     // This unfolds to a 2×12 matrix
@@ -220,10 +213,7 @@ fn test_svd_nontrivial_split_reconstruction() {
     let l = Index::new_dyn(2);
 
     let data = (1..=24).map(|x| x as f64).collect::<Vec<_>>();
-    let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 3, 2, 2]),
-    ));
-    let tensor = TensorDynLen::new(vec![i.clone(), j.clone(), k.clone(), l.clone()], storage);
+    let tensor = dense_f64(vec![i.clone(), j.clone(), k.clone(), l.clone()], data);
 
     let (u, s, v) = svd::<f64>(&tensor, &[i.clone(), k.clone()]).expect("SVD should succeed");
     let reconstructed = reconstruct_from_svd(&u, &s, &v);
@@ -248,10 +238,7 @@ fn test_svd_complex_reconstruction() {
         Complex64::new(0.0, 0.0),
         Complex64::new(2.0, 0.0),
     ];
-    let storage = Arc::new(Storage::DenseC64(
-        tensor4all_core::storage::DenseStorageC64::from_vec_with_shape(data.clone(), &[2, 2]),
-    ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i_idx.clone(), j_idx.clone()], storage);
+    let tensor = dense_c64(vec![i_idx.clone(), j_idx.clone()], data.clone());
 
     let (u, s, v) =
         svd_c64(&tensor, std::slice::from_ref(&i_idx)).expect("Complex SVD should succeed");
@@ -277,10 +264,7 @@ fn test_svd_complex_rectangular_reconstruction() {
         Complex64::new(-1.0, 3.0),
         Complex64::new(2.0, 2.0),
     ];
-    let storage = Arc::new(Storage::DenseC64(
-        tensor4all_core::storage::DenseStorageC64::from_vec_with_shape(data, &[2, 3]),
-    ));
-    let tensor = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
+    let tensor = dense_c64(vec![i.clone(), j.clone()], data);
 
     let (u, s, v) =
         svd_c64(&tensor, std::slice::from_ref(&i)).expect("Complex rectangular SVD should succeed");
@@ -307,10 +291,7 @@ fn test_svd_truncation() {
     data[0] = 1.0; // [0, 0] = 1.0
     data[3] = 1e-14; // [1, 1] = 1e-14
 
-    let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
-    ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
+    let tensor = dense_f64(vec![i.clone(), j.clone()], data);
 
     // Use a more lenient rtol to ensure truncation happens
     let options = SvdOptions::with_rtol(1e-10);
@@ -348,10 +329,7 @@ fn test_svd_with_override() {
     data[0] = 1.0; // [0, 0] = 1.0
     data[3] = 1e-6; // [1, 1] = 1e-6
 
-    let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
-    ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
+    let tensor = dense_f64(vec![i.clone(), j.clone()], data);
 
     // Save original default
     let original_rtol = default_svd_rtol();
@@ -441,10 +419,7 @@ fn test_svd_uses_global_default() {
 
     // Create a simple matrix
     let data = vec![1.0, 0.0, 0.0, 1.0];
-    let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[2, 2]),
-    ));
-    let tensor: TensorDynLen = TensorDynLen::new(vec![i.clone(), j.clone()], storage);
+    let tensor = dense_f64(vec![i.clone(), j.clone()], data);
 
     // Save original default
     let original_rtol = default_svd_rtol();
@@ -478,8 +453,7 @@ fn svd_reconstruction_error_f64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64
 
 /// Regression: SVD roundtrip with dim-1 axes.
 ///
-/// tensor4all keeps row-major boundary semantics even though tenferro uses
-/// column-major internal view semantics.
+/// tensor4all and tenferro both use column-major linearization semantics.
 #[test]
 fn test_svd_reconstruction_with_unit_dim_axis() {
     // [d=1, d=2, d=2] factorized with left_inds=[d=2, d=2]
@@ -488,10 +462,7 @@ fn test_svd_reconstruction_with_unit_dim_axis() {
     let i2 = Index::new_dyn(2);
     let i3 = Index::new_dyn(2);
     let data = vec![1.0, 2.0, 3.0, 4.0];
-    let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[1, 2, 2]),
-    ));
-    let tensor = TensorDynLen::new(vec![i1.clone(), i2.clone(), i3.clone()], storage);
+    let tensor = dense_f64(vec![i1.clone(), i2.clone(), i3.clone()], data);
 
     // left=[i2, i3], right=[i1]: 4×1 tall matrix
     let err = svd_reconstruction_error_f64(&tensor, &[i2.clone(), i3.clone()]);
@@ -514,21 +485,15 @@ fn test_svd_tall_matrix_preserves_left_axis_order() {
     let i2 = Index::new_dyn(2);
     let i3 = Index::new_dyn(2);
     let data = vec![1.0, 2.0, 3.0, 4.0];
-    let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[1, 2, 2]),
-    ));
-    let tensor = TensorDynLen::new(vec![i1, i2.clone(), i3.clone()], storage);
+    let tensor = dense_f64(vec![i1, i2.clone(), i3.clone()], data);
 
     let (u, _s, _v) = svd::<f64>(&tensor, &[i2.clone(), i3.clone()]).expect("SVD should succeed");
 
     let norm = 30.0_f64.sqrt();
-    let expected_storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(
-            vec![1.0 / norm, 2.0 / norm, 3.0 / norm, 4.0 / norm],
-            &[2, 2, 1],
-        ),
-    ));
-    let expected = TensorDynLen::new(vec![i2, i3, u.indices[2].clone()], expected_storage);
+    let expected = dense_f64(
+        vec![i2, i3, u.indices[2].clone()],
+        vec![1.0 / norm, 2.0 / norm, 3.0 / norm, 4.0 / norm],
+    );
 
     assert!(
         u.isapprox(&expected, 1e-10, 0.0),
@@ -545,13 +510,7 @@ fn test_svd_reconstruction_with_multiple_unit_dims() {
     let i3 = Index::new_dyn(1);
     let i4 = Index::new_dyn(2);
     let data: Vec<f64> = (1..=6).map(|x| x as f64).collect();
-    let storage = Arc::new(Storage::DenseF64(
-        tensor4all_core::storage::DenseStorageF64::from_vec_with_shape(data, &[1, 3, 1, 2]),
-    ));
-    let tensor = TensorDynLen::new(
-        vec![i1.clone(), i2.clone(), i3.clone(), i4.clone()],
-        storage,
-    );
+    let tensor = dense_f64(vec![i1.clone(), i2.clone(), i3.clone(), i4.clone()], data);
 
     let err = svd_reconstruction_error_f64(&tensor, &[i1.clone(), i2.clone()]);
     assert!(

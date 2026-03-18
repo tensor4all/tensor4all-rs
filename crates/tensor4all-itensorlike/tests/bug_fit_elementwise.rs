@@ -9,7 +9,7 @@
 use tensor4all_core::{factorize, DynIndex, FactorizeOptions, IndexLike, TensorDynLen};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 
-/// Convert matrix (row-major) to quantics interleaved bit ordering.
+/// Convert a column-major matrix buffer to quantics interleaved bit ordering.
 fn matrix_to_quantics(nbit: usize, data: &[f64]) -> Vec<f64> {
     let n = 1 << nbit;
     assert_eq!(data.len(), n * n);
@@ -23,7 +23,7 @@ fn matrix_to_quantics(nbit: usize, data: &[f64]) -> Vec<f64> {
                 q_idx = q_idx * 2 + r_bit;
                 q_idx = q_idx * 2 + c_bit;
             }
-            quantics[q_idx] = data[row * n + col];
+            quantics[q_idx] = data[row + n * col];
         }
     }
     quantics
@@ -43,7 +43,7 @@ fn create_function_2d_tt(
     let mut data = vec![0.0; n * n];
     for i in 0..n {
         for j in 0..n {
-            data[i * n + j] = f(i as f64 / n as f64, j as f64 / n as f64);
+            data[i + n * j] = f(i as f64 / n as f64, j as f64 / n as f64);
         }
     }
 
@@ -108,7 +108,7 @@ fn as_diagonal(
     for (flat, &val) in data.iter().enumerate() {
         let mut rem = flat;
         let mut old_idx = vec![0usize; dims.len()];
-        for i in (0..dims.len()).rev() {
+        for i in 0..dims.len() {
             old_idx[i] = rem % dims[i];
             rem /= dims[i];
         }
@@ -116,8 +116,8 @@ fn as_diagonal(
         let mut new_idx = old_idx;
         new_idx.splice(s_pos..s_pos + 1, vec![s_val, s_val]);
         let mut nf = 0;
-        for (i, &d) in new_dims.iter().enumerate() {
-            nf = nf * d + new_idx[i];
+        for i in (0..new_dims.len()).rev() {
+            nf = nf * new_dims[i] + new_idx[i];
         }
         new_data[nf] = val;
     }
@@ -147,7 +147,7 @@ fn extract_diagonal(tensor: &TensorDynLen, s: &DynIndex, s_result: &DynIndex) ->
     for (flat, &val) in data.iter().enumerate() {
         let mut rem = flat;
         let mut idx = vec![0usize; dims.len()];
-        for i in (0..dims.len()).rev() {
+        for i in 0..dims.len() {
             idx[i] = rem % dims[i];
             rem /= dims[i];
         }
@@ -161,8 +161,8 @@ fn extract_diagonal(tensor: &TensorDynLen, s: &DynIndex, s_result: &DynIndex) ->
             .map(|(_, &v)| v)
             .collect();
         let mut nf = 0;
-        for (i, &d) in new_dims.iter().enumerate() {
-            nf = nf * d + new_idx[i];
+        for i in (0..new_dims.len()).rev() {
+            nf = nf * new_dims[i] + new_idx[i];
         }
         new_data[nf] = val;
     }
