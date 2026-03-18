@@ -769,7 +769,7 @@ mod tests {
     fn make_single_node_treetn() -> TreeTN<TensorDynLen, String> {
         let s0 = DynIndex::new_dyn(2);
         let s1 = DynIndex::new_dyn(3);
-        let t = TensorDynLen::from_dense_f64(vec![s0, s1], vec![1.0; 6]);
+        let t = TensorDynLen::from_dense(vec![s0, s1], vec![1.0; 6]).unwrap();
         TreeTN::<TensorDynLen, String>::from_tensors(vec![t], vec!["A".to_string()]).unwrap()
     }
 
@@ -780,9 +780,9 @@ mod tests {
         let bond12 = DynIndex::new_dyn(3);
         let s2 = DynIndex::new_dyn(2);
 
-        let t0 = TensorDynLen::from_dense_f64(vec![s0, bond01.clone()], vec![1.0; 6]);
-        let t1 = TensorDynLen::from_dense_f64(vec![bond01, s1, bond12.clone()], vec![1.0; 18]);
-        let t2 = TensorDynLen::from_dense_f64(vec![bond12, s2], vec![1.0; 6]);
+        let t0 = TensorDynLen::from_dense(vec![s0, bond01.clone()], vec![1.0; 6]).unwrap();
+        let t1 = TensorDynLen::from_dense(vec![bond01, s1, bond12.clone()], vec![1.0; 18]).unwrap();
+        let t2 = TensorDynLen::from_dense(vec![bond12, s2], vec![1.0; 6]).unwrap();
 
         TreeTN::<TensorDynLen, String>::from_tensors(
             vec![t0, t1, t2],
@@ -922,7 +922,7 @@ mod tests {
         let tn = make_three_node_treetn();
 
         let s = DynIndex::new_dyn(2);
-        let t = TensorDynLen::from_dense_f64(vec![s], vec![1.0, 2.0]);
+        let t = TensorDynLen::from_dense(vec![s], vec![1.0, 2.0]).unwrap();
 
         // B is non-leaf toward A, so env[(C, B)] must also exist.
         env.insert("B".to_string(), "A".to_string(), t);
@@ -1020,7 +1020,7 @@ mod tests {
         let mut updater = FitUpdater::new(tn_a, tn_b, None, None);
 
         let s = DynIndex::new_dyn(2);
-        let t = TensorDynLen::from_dense_f64(vec![s], vec![1.0, 2.0]);
+        let t = TensorDynLen::from_dense(vec![s], vec![1.0, 2.0]).unwrap();
         updater
             .envs
             .insert("A".to_string(), "B".to_string(), t.clone());
