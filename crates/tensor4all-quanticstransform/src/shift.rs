@@ -25,8 +25,8 @@ use crate::common::{
 /// LinearOperator representing the shift transformation
 ///
 /// # Example
-/// ```ignore
-/// use tensor4all_quantics_transform::{shift_operator, BoundaryCondition};
+/// ```no_run
+/// use tensor4all_quanticstransform::{shift_operator, BoundaryCondition};
 ///
 /// // Shift by 10 positions with periodic boundary
 /// let op = shift_operator(8, 10, BoundaryCondition::Periodic).unwrap();

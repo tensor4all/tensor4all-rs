@@ -33,8 +33,8 @@ pub enum TriangleType {
 /// LinearOperator representing the cumulative sum
 ///
 /// # Example
-/// ```ignore
-/// use tensor4all_quantics_transform::cumsum_operator;
+/// ```no_run
+/// use tensor4all_quanticstransform::cumsum_operator;
 ///
 /// let op = cumsum_operator(8).unwrap();
 /// ```

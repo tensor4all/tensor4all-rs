@@ -21,7 +21,7 @@ All transformations return `LinearOperator` from `tensor4all-treetn` for consist
 ## Usage
 
 ```rust
-use tensor4all_quantics_transform::{
+use tensor4all_quanticstransform::{
     flip_operator, shift_operator, phase_rotation_operator,
     cumsum_operator, quantics_fourier_operator,
     BoundaryCondition, FourierOptions,
@@ -47,7 +47,7 @@ let options = FourierOptions::forward();
 let ft_op = quantics_fourier_operator(r, options)?;
 
 // Affine transform: y = A*x + b with A = [[1, 1], [1, -1]], b = [0, 0]
-use tensor4all_quantics_transform::{affine_operator, AffineParams};
+use tensor4all_quanticstransform::{affine_operator, AffineParams};
 use num_rational::Rational64;
 
 let a = vec![

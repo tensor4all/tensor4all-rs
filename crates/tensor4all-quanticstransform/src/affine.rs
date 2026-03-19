@@ -171,8 +171,8 @@ fn remap_affine_site_indices(
 /// LinearOperator representing the affine transformation
 ///
 /// # Example
-/// ```ignore
-/// use tensor4all_quantics_transform::{affine_operator, AffineParams, BoundaryCondition};
+/// ```no_run
+/// use tensor4all_quanticstransform::{affine_operator, AffineParams, BoundaryCondition};
 /// use num_rational::Rational64;
 ///
 /// // Transform g(x, y) -> g(x + y, x - y) (rotation by 45°, scaled)
@@ -367,8 +367,10 @@ fn affine_transform_mpo(
 /// Vector of R tensors with unfused physical indices.
 ///
 /// # Example
-/// ```ignore
-/// use tensor4all_quantics_transform::{affine_transform_tensors_unfused, AffineParams, BoundaryCondition};
+/// ```no_run
+/// use tensor4all_quanticstransform::{
+///     affine_transform_tensors_unfused, AffineParams, BoundaryCondition,
+/// };
 ///
 /// let params = AffineParams::from_integers(vec![1, 1, 0, 1], vec![0, 0], 2, 2).unwrap();
 /// let bc = vec![BoundaryCondition::Periodic; 2];
