@@ -5,10 +5,46 @@
 
 use crate::backend::Group;
 use anyhow::{Context, Result};
-use tensor4all_itensorlike::TensorTrain;
+use tensor4all_itensorlike::{CanonicalForm, TensorTrain};
 
 use crate::itensor;
 use crate::schema;
+
+const CANONICAL_FORM_ATTR: &str = "canonical_form";
+
+fn write_canonical_form(group: &Group, tt: &TensorTrain) -> Result<()> {
+    if let Some(form) = tt.canonical_form() {
+        let canonical_form_attr = group
+            .new_attr::<i32>()
+            .shape(())
+            .create(CANONICAL_FORM_ATTR)?;
+        canonical_form_attr
+            .as_writer()
+            .write_scalar(&form.to_i32())?;
+    }
+
+    Ok(())
+}
+
+fn read_canonical_form(group: &Group) -> Result<Option<CanonicalForm>> {
+    if !group
+        .attr_names()?
+        .iter()
+        .any(|name| name == CANONICAL_FORM_ATTR)
+    {
+        return Ok(None);
+    }
+
+    let value: i32 = group
+        .attr(CANONICAL_FORM_ATTR)?
+        .as_reader()
+        .read_scalar()
+        .context("Failed to read MPS canonical_form")?;
+
+    CanonicalForm::from_i32(value)
+        .ok_or_else(|| anyhow::anyhow!("Invalid MPS canonical_form value: {}", value))
+        .map(Some)
+}
 
 /// Write a [`TensorTrain`] as an ITensorMPS.jl `MPS` to an HDF5 group.
 ///
@@ -20,6 +56,7 @@ use crate::schema;
 ///   length: Int64
 ///   llim: Int64
 ///   rlim: Int64
+///   @canonical_form: Int32?  (tensor4all-rs extension; absent for non-canonical MPS)
 ///   MPS[1]/ ...   (ITensor, 1-indexed)
 ///   MPS[2]/ ...
 /// ```
@@ -36,6 +73,8 @@ pub(crate) fn write_mps(group: &Group, tt: &TensorTrain) -> Result<()> {
 
     let rlim_ds = group.new_dataset::<i64>().shape(()).create("rlim")?;
     rlim_ds.as_writer().write_scalar(&(tt.rlim() as i64))?;
+
+    write_canonical_form(group, tt)?;
 
     // Write each tensor (1-indexed, Julia convention)
     let tensors = tt.tensors();
@@ -69,6 +108,7 @@ pub(crate) fn read_mps(group: &Group) -> Result<TensorTrain> {
         .as_reader()
         .read_scalar()
         .context("Failed to read MPS rlim")?;
+    let canonical_form = read_canonical_form(group)?;
 
     let mut tensors = Vec::with_capacity(length as usize);
     for i in 1..=length {
@@ -81,6 +121,6 @@ pub(crate) fn read_mps(group: &Group) -> Result<TensorTrain> {
         tensors,
         llim as i32,
         rlim as i32,
-        None,
+        canonical_form,
     )?)
 }
