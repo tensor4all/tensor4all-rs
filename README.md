@@ -45,6 +45,12 @@ but `StructuredStorage` is the intended public snapshot direction.
 | tensor4all-rs | `rtol` | — |
 | ITensors.jl | `cutoff` | `rtol = √cutoff` |
 
+## Solve-Bug Entrypoints
+
+Use `bash ai/run-codex-solve-bug.sh` or `bash ai/run-claude-solve-bug.sh` when you want a headless agent to pick one actionable bug or bug-like issue, fix it, and drive the repository-local PR workflow.
+
+If there are effectively no open bug or bug-like issues, the workflow should terminate cleanly with no code changes and no PR creation.
+
 ## Project Structure
 
 ```
