@@ -17,18 +17,23 @@ use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use tensor4all_partitionedtt::{SubDomainTT, Projector};
-/// use tensor4all_itensorlike::TensorTrain;
+/// ```
+/// use tensor4all_partitionedtt::{DynIndex, Projector, SubDomainTT, TensorDynLen, TensorTrain};
 ///
-/// // Create a tensor train
-/// let tt = TensorTrain::new(tensors).unwrap();
+/// let site0 = DynIndex::new_dyn(2);
+/// let bond = DynIndex::new_dyn(1);
+/// let site1 = DynIndex::new_dyn(2);
 ///
-/// // Create a projector that fixes some index to value 1
-/// let projector = Projector::from_pairs([(some_index, 1)]);
+/// let t0 = TensorDynLen::from_dense(vec![site0.clone(), bond.clone()], vec![1.0, 2.0]).unwrap();
+/// let t1 = TensorDynLen::from_dense(vec![bond.clone(), site1.clone()], vec![3.0, 4.0]).unwrap();
+/// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 ///
-/// // Create a SubDomainTT
+/// let projector = Projector::from_pairs([(site0.clone(), 1)]);
 /// let subdomain_tt = SubDomainTT::new(tt, projector);
+///
+/// assert_eq!(subdomain_tt.len(), 2);
+/// assert_eq!(subdomain_tt.projector().get(&site0), Some(1));
+/// assert_eq!(subdomain_tt.projector().get(&site1), None);
 /// ```
 #[derive(Debug, Clone)]
 pub struct SubDomainTT {
