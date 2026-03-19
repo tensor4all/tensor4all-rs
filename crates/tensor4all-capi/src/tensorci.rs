@@ -4,7 +4,10 @@
 //! The evaluation function is passed as a callback.
 
 use crate::simplett::t4a_simplett_f64;
-use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
+use crate::{
+    StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NOT_IMPLEMENTED, T4A_NULL_POINTER,
+    T4A_SUCCESS,
+};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_tensorci::{TCI2Options, TensorCI2};
@@ -272,8 +275,8 @@ pub extern "C" fn t4a_tci2_f64_add_global_pivots(
 
 /// Perform a 2-site sweep.
 ///
-/// This is the main optimization step. The callback function is called
-/// to evaluate the target function at various indices.
+/// This entry point is reserved for future incremental sweep support.
+/// It currently returns `T4A_NOT_IMPLEMENTED` instead of reporting a false success.
 ///
 /// # Arguments
 /// * `ptr` - TCI handle
@@ -294,41 +297,19 @@ pub extern "C" fn t4a_tci2_f64_sweep(
     abstol: libc::c_double,
     max_bonddim: libc::size_t,
     n_iters: libc::size_t,
-    out_error: *mut libc::c_double,
+    _out_error: *mut libc::c_double,
 ) -> StatusCode {
     if ptr.is_null() {
         return T4A_NULL_POINTER;
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let tci = unsafe { &mut *ptr };
-        let n_sites = tci.inner().len();
-
-        // TODO: Implement actual sweep using internal functions
-        // For now, this is a placeholder. The actual implementation requires
-        // exposing internal sweep functions from tensorci2.rs.
-        //
-        // The intended design is:
-        // 1. Julia controls the main iteration loop
-        // 2. Julia calls this sweep function for each iteration
-        // 3. Julia handles global pivot finding separately
-        // 4. Julia injects found pivots via add_global_pivots
-
-        // Silence unused parameter warnings for now
         let _ = (eval_fn, user_data, abstol, max_bonddim, n_iters);
-
-        // Get initial pivot if needed
-        if tci.inner().rank() == 0 {
-            let initial_pivot: Vec<usize> = vec![0; n_sites];
-            let _ = tci.inner_mut().add_global_pivots(&[initial_pivot]);
-        }
-
-        // Report current error
-        if !out_error.is_null() {
-            unsafe { *out_error = tci.inner().max_bond_error() };
-        }
-
-        T4A_SUCCESS
+        let _ = unsafe { &mut *ptr };
+        crate::err_status(
+            "t4a_tci2_f64_sweep is not implemented; use t4a_crossinterpolate2_f64 instead",
+            T4A_NOT_IMPLEMENTED,
+        )
     }));
 
     crate::unwrap_catch(result)
@@ -515,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tci2_accessors_and_sweep_initialize_rank() {
+    fn test_tci2_accessors() {
         let dims: [libc::size_t; 2] = [2, 3];
         let tci = t4a_tci2_f64_new(dims.as_ptr(), 2);
         assert!(!tci.is_null());
@@ -545,23 +526,44 @@ mod tests {
         );
         assert_eq!(max_bond_error, 0.0);
 
-        let mut sweep_error = -1.0;
-        assert_eq!(
-            t4a_tci2_f64_sweep(
-                tci,
-                sum_callback,
-                std::ptr::null_mut(),
-                1e-8,
-                8,
-                1,
-                &mut sweep_error,
-            ),
-            T4A_SUCCESS
-        );
-        assert_eq!(sweep_error, 0.0);
+        t4a_tci2_f64_release(tci);
+    }
 
-        assert_eq!(t4a_tci2_f64_rank(tci, &mut rank), T4A_SUCCESS);
-        assert_eq!(rank, 1);
+    #[test]
+    fn test_tci2_sweep_requires_real_work_before_reporting_success() {
+        extern "C" fn counting_callback(
+            _indices: *const i64,
+            _n_indices: libc::size_t,
+            result: *mut f64,
+            user_data: *mut c_void,
+        ) -> i32 {
+            unsafe {
+                *(user_data as *mut usize) += 1;
+                *result = 1.0;
+            }
+            0
+        }
+
+        let dims: [libc::size_t; 2] = [2, 3];
+        let tci = t4a_tci2_f64_new(dims.as_ptr(), 2);
+        assert!(!tci.is_null());
+
+        let mut call_count = 0usize;
+        let mut sweep_error = -1.0;
+        let status = t4a_tci2_f64_sweep(
+            tci,
+            counting_callback,
+            &mut call_count as *mut usize as *mut c_void,
+            1e-8,
+            8,
+            1,
+            &mut sweep_error,
+        );
+
+        assert!(
+            status != T4A_SUCCESS || call_count > 0,
+            "sweep returned success without invoking the evaluation callback"
+        );
 
         t4a_tci2_f64_release(tci);
     }

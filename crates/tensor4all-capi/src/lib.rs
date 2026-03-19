@@ -72,6 +72,8 @@ pub const T4A_TAG_TOO_LONG: StatusCode = -4;
 pub const T4A_BUFFER_TOO_SMALL: StatusCode = -5;
 /// An internal error occurred (e.g., a panic was caught).
 pub const T4A_INTERNAL_ERROR: StatusCode = -6;
+/// The requested API exists but is not implemented yet.
+pub const T4A_NOT_IMPLEMENTED: StatusCode = -7;
 
 // ============================================================================
 // Thread-local error message storage
