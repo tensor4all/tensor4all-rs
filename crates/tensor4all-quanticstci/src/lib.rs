@@ -17,16 +17,18 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```rust
 //! use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
 //!
 //! // Interpolate f(i, j) = i + j on a 16x16 grid
-//! let f = |idx: &[usize]| (idx[0] + idx[1]) as f64;
+//! // Discrete indices are 1-indexed and passed as `&[i64]`.
+//! let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
 //! let sizes = vec![16, 16];
 //!
-//! let (qtci, ranks, errors) = quanticscrossinterpolate_discrete(
+//! let (qtci, _ranks, _errors) = quanticscrossinterpolate_discrete(
 //!     &sizes,
 //!     f,
+//!     None,
 //!     QtciOptions::default(),
 //! ).unwrap();
 //!

@@ -354,7 +354,7 @@ where
 ///
 /// # Arguments
 /// * `size` - Grid size in each dimension (must be powers of 2)
-/// * `f` - Function to interpolate, takes grid indices (1-indexed)
+/// * `f` - Function to interpolate, taking 1-indexed grid indices as `&[i64]`
 /// * `initial_pivots` - Initial pivot grid indices (optional)
 /// * `options` - TCI options
 ///
