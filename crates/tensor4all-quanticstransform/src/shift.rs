@@ -197,8 +197,10 @@ fn shift_mpo(r: usize, offset: i64, bc: BoundaryCondition) -> Result<TensorTrain
         let bc_factor = match bc {
             BoundaryCondition::Periodic => Complex64::one(),
             BoundaryCondition::Open => {
-                if nbc > 0 {
-                    Complex64::zero() // Shifted out of bounds
+                // `nbc` is an Euclidean quotient, so negative offsets in (-n_max, 0)
+                // still produce `nbc = -1`. Only true full-cycle offsets should zero.
+                if offset >= n_max || offset <= -n_max {
+                    Complex64::zero()
                 } else {
                     Complex64::one()
                 }

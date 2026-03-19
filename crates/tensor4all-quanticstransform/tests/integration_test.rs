@@ -1288,17 +1288,16 @@ fn test_shift_open_boundary() {
     //
     // Implementation detail:
     // - offset is normalized to offset_mod = offset.rem_euclid(N) in [0, N)
-    // - nbc = (offset - offset_mod) / N tracks full cycles
-    // - If nbc > 0 (positive overflow beyond N), entire MPO is zeroed
-    // - If nbc < 0 (negative offset), no global zeroing, but local carry may still zero
-    // - Local carry overflow at MSB zeros the result via bc_val = 0
+    // - nbc = (offset - offset_mod) / N is the Euclidean quotient
+    // - For Open BC, the operator is identically zero only when |offset| >= N
+    // - Otherwise, local carry overflow at the MSB zeros out-of-range results
     //
-    // So for Open BC:
+    // So for Open BC with the cases below:
     // - shift(x, offset) with offset >= 0: result is zero if x + offset >= N
     // - shift(x, offset) with offset < 0:
     //   - offset_mod = N + offset (e.g., -1 mod 8 = 7)
-    //   - nbc = -1 (no global zeroing)
-    //   - But x + offset_mod may cause local carry overflow
+    //   - nbc = -1 even though |offset| < N, so the operator is not globally zeroed
+    //   - x + offset_mod may still cause local carry overflow
     //   - e.g., shift(7, -3): offset_mod = 5, 7 + 5 = 12 >= 8, overflow -> zero
     //   - e.g., shift(0, -1): offset_mod = 7, 0 + 7 = 7 < 8, no overflow -> result = 7
     //
@@ -1392,6 +1391,28 @@ fn test_shift_open_boundary() {
     }
 
     eprintln!("All shift Open BC tests passed!");
+}
+
+#[test]
+fn test_shift_open_boundary_negative_full_cycles_zero_operator() {
+    let r = 3;
+
+    for offset in [-8_i64, -9, -16] {
+        let op = shift_operator(r, offset, BoundaryCondition::Open)
+            .expect("Failed to create shift operator");
+        let matrix = apply_operator_to_dense_matrix(&op, r, r);
+
+        for (out_idx, row) in matrix.iter().enumerate() {
+            for (input_idx, value) in row.iter().enumerate() {
+                if value.norm() > 1e-10 {
+                    panic!(
+                        "offset {} produced nonzero entry at [{},{}] = ({:.6},{:.6})",
+                        offset, out_idx, input_idx, value.re, value.im
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Test flip operator with Open boundary condition.
