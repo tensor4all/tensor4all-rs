@@ -29,8 +29,12 @@ pub struct DiscretizedGrid {
     discrete_grid: InherentDiscreteGrid,
     /// Lower bounds for each dimension
     lower_bound: Vec<f64>,
-    /// Upper bounds for each dimension (adjusted for endpoint inclusion)
+    /// Public upper bounds for each dimension
     upper_bound: Vec<f64>,
+    /// Internal upper bounds used for grid spacing calculations
+    effective_upper_bound: Vec<f64>,
+    /// Whether each dimension includes the upper endpoint
+    include_endpoint: Vec<bool>,
 }
 
 impl DiscretizedGrid {
@@ -118,7 +122,7 @@ impl DiscretizedGrid {
         let base = self.discrete_grid.base() as f64;
         self.lower_bound
             .iter()
-            .zip(self.upper_bound.iter())
+            .zip(self.effective_upper_bound.iter())
             .zip(rs.iter())
             .map(|((&lo, &hi), &r)| (hi - lo) / base.powi(r as i32))
             .collect()
@@ -129,10 +133,10 @@ impl DiscretizedGrid {
         &self.lower_bound
     }
 
-    /// Maximum grid coordinates (upper_bound - grid_step)
+    /// Maximum representable grid coordinates in each dimension
     pub fn grid_max(&self) -> Vec<f64> {
         let step = self.grid_step();
-        self.upper_bound
+        self.effective_upper_bound
             .iter()
             .zip(step.iter())
             .map(|(&hi, &s)| hi - s)
@@ -243,13 +247,20 @@ impl DiscretizedGrid {
     }
 
     fn validate_origcoord(&self, coord: &[f64]) -> Result<()> {
-        for (dim, ((&c, &lo), &hi)) in coord
+        for (dim, (((&c, &lo), &hi), &include_endpoint)) in coord
             .iter()
             .zip(self.lower_bound.iter())
             .zip(self.upper_bound.iter())
+            .zip(self.include_endpoint.iter())
             .enumerate()
         {
-            if c < lo || c > hi {
+            let out_of_bounds = if include_endpoint {
+                c < lo || c > hi
+            } else {
+                c < lo || c >= hi
+            };
+
+            if out_of_bounds {
                 return Err(QuanticsGridError::CoordinateOutOfBounds {
                     dim,
                     value: c,
@@ -343,10 +354,11 @@ impl std::fmt::Display for DiscretizedGrid {
         // Domain
         let step = self.grid_step();
         if ndims == 1 {
+            let right_bracket = if self.include_endpoint[0] { ']' } else { ')' };
             write!(
                 f,
-                "\n  Domain: [{}, {})",
-                self.lower_bound[0], self.upper_bound[0]
+                "\n  Domain: [{}, {}{}",
+                self.lower_bound[0], self.upper_bound[0], right_bracket
             )?;
             write!(f, "\n  Grid spacing: {}", step[0])?;
         } else {
@@ -354,7 +366,11 @@ impl std::fmt::Display for DiscretizedGrid {
                 .lower_bound
                 .iter()
                 .zip(self.upper_bound.iter())
-                .map(|(&lo, &hi)| format!("[{}, {})", lo, hi))
+                .zip(self.include_endpoint.iter())
+                .map(|((&lo, &hi), &include_endpoint)| {
+                    let right_bracket = if include_endpoint { ']' } else { ')' };
+                    format!("[{}, {}{}", lo, hi, right_bracket)
+                })
                 .collect();
             write!(f, "\n  Domain: {}", bounds_str.join(" x "))?;
 
@@ -531,6 +547,8 @@ impl DiscretizedGridBuilder {
             _ => vec![false; ndims],
         };
 
+        let mut effective_upper_bound = upper_bound.clone();
+
         // Adjust upper bounds for endpoint inclusion
         for d in 0..ndims {
             if include_endpoint[d] {
@@ -538,7 +556,8 @@ impl DiscretizedGridBuilder {
                     return Err(QuanticsGridError::EndpointWithZeroResolution { dim: d });
                 }
                 let n_points = (base as f64).powi(rs[d] as i32);
-                upper_bound[d] += (upper_bound[d] - lower_bound[d]) / (n_points - 1.0);
+                effective_upper_bound[d] +=
+                    (effective_upper_bound[d] - lower_bound[d]) / (n_points - 1.0);
             }
         }
 
@@ -546,6 +565,8 @@ impl DiscretizedGridBuilder {
             discrete_grid,
             lower_bound,
             upper_bound,
+            effective_upper_bound,
+            include_endpoint,
         })
     }
 }
@@ -700,6 +721,32 @@ mod tests {
     fn test_error_coordinate_out_of_bounds() {
         let grid = DiscretizedGrid::builder(&[2]).build().unwrap();
         let result = grid.origcoord_to_grididx(&[1.5]);
+        assert!(matches!(
+            result,
+            Err(QuanticsGridError::CoordinateOutOfBounds { .. })
+        ));
+    }
+
+    #[test]
+    fn test_error_coordinate_equal_to_exclusive_upper_bound() {
+        let grid = DiscretizedGrid::builder(&[3]).build().unwrap();
+        let result = grid.origcoord_to_grididx(&[1.0]);
+        assert!(matches!(
+            result,
+            Err(QuanticsGridError::CoordinateOutOfBounds { .. })
+        ));
+    }
+
+    #[test]
+    fn test_include_endpoint_accepts_exact_upper_bound_only() {
+        let grid = DiscretizedGrid::builder(&[2])
+            .include_endpoint(true)
+            .build()
+            .unwrap();
+
+        assert_eq!(grid.origcoord_to_grididx(&[1.0]).unwrap(), vec![4]);
+
+        let result = grid.origcoord_to_grididx(&[1.1]);
         assert!(matches!(
             result,
             Err(QuanticsGridError::CoordinateOutOfBounds { .. })
