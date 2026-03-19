@@ -58,15 +58,15 @@ let b = TensorDynLen::random_f64(&mut rng, vec![j.clone(), k.clone()]);
 let c = TensorDynLen::random_f64(&mut rng, vec![k.clone(), l.clone()]);
 
 // Contract all tensor pairs (default behavior)
-let result = contract_multi(&[a.clone(), b.clone(), c.clone()], AllowedPairs::All)?;
+let result = contract_multi(&[&a, &b, &c], AllowedPairs::All)?;
 
 // Contract only specified pairs (useful for tree tensor networks)
 // Only A-B and B-C are connected, so j and k are contracted
 let pairs = [(0, 1), (1, 2)];  // tensor indices
-let result = contract_multi(&[a.clone(), b.clone(), c.clone()], AllowedPairs::Specified(&pairs))?;
+let result = contract_multi(&[&a, &b, &c], AllowedPairs::Specified(&pairs))?;
 
 // contract_connected requires the tensor graph to be connected (errors on disconnected)
-let result = contract_connected(&[a, b, c], AllowedPairs::All)?;
+let result = contract_connected(&[&a, &b, &c], AllowedPairs::All)?;
 
 # Ok::<(), anyhow::Error>(())
 ```
