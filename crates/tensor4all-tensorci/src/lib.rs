@@ -23,6 +23,10 @@
 //! println!("TCI rank: {}", tci.rank());
 //! ```
 
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
 pub mod cached_function;
 pub mod error;
 pub mod indexset;

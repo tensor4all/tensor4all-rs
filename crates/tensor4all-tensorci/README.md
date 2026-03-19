@@ -15,8 +15,9 @@ Tensor Cross Interpolation (TCI) algorithms for efficiently approximating high-d
 ```rust
 use tensor4all_tensorci::{crossinterpolate1, TCI1Options};
 
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 // Define a function to interpolate
-let f = |idx: &[usize]| (idx[0] + idx[1] + 1) as f64;
+let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
 
 // Local dimensions for each index
 let local_dims = vec![4, 4];
@@ -26,11 +27,16 @@ let (tci, ranks, errors) = crossinterpolate1(
     f,
     local_dims,
     vec![1, 1],  // initial pivot
-    TCI1Options::default().with_tolerance(1e-10)
+    TCI1Options {
+        tolerance: 1e-10,
+        ..Default::default()
+    }
 )?;
 
 // Evaluate the approximation
 let value = tci.evaluate(&[2, 3])?;
+# Ok(())
+# }
 ```
 
 ## License
