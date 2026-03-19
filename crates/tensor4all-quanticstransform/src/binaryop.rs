@@ -76,8 +76,8 @@ impl BinaryCoeffs {
 /// LinearOperator representing the binary transformation
 ///
 /// # Example
-/// ```ignore
-/// use tensor4all_quantics_transform::{binaryop_operator, BinaryCoeffs, BoundaryCondition};
+/// ```no_run
+/// use tensor4all_quanticstransform::{binaryop_operator, BinaryCoeffs, BoundaryCondition};
 ///
 /// // Transform g(x, y) -> g(x+y, x-y)
 /// let coeffs1 = BinaryCoeffs::sum();       // x + y

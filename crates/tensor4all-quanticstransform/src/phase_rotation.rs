@@ -31,8 +31,8 @@ use crate::common::{
 /// LinearOperator representing the phase rotation
 ///
 /// # Example
-/// ```ignore
-/// use tensor4all_quantics_transform::phase_rotation_operator;
+/// ```no_run
+/// use tensor4all_quanticstransform::phase_rotation_operator;
 /// use std::f64::consts::PI;
 ///
 /// // Apply phase rotation by π/4

@@ -24,8 +24,8 @@ use crate::common::{
 /// LinearOperator representing the flip transformation
 ///
 /// # Example
-/// ```ignore
-/// use tensor4all_quantics_transform::{flip_operator, BoundaryCondition};
+/// ```no_run
+/// use tensor4all_quanticstransform::{flip_operator, BoundaryCondition};
 ///
 /// let op = flip_operator(8, BoundaryCondition::Periodic).unwrap();
 /// ```

@@ -22,8 +22,8 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use tensor4all_quantics_transform::{flip_operator, BoundaryCondition};
+//! ```no_run
+//! use tensor4all_quanticstransform::{flip_operator, BoundaryCondition};
 //!
 //! // Create a flip operator for 8-bit quantics representation
 //! let op = flip_operator(8, BoundaryCondition::Periodic).unwrap();
