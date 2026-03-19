@@ -4,7 +4,7 @@ use num_complex::Complex64;
 use tensor4all_core::index::{DynId, DynIndex, Index, TagSet};
 use tensor4all_core::TensorDynLen;
 use tensor4all_hdf5::{load_itensor, load_mps, save_itensor, save_mps};
-use tensor4all_itensorlike::TensorTrain;
+use tensor4all_itensorlike::{CanonicalForm, TensorTrain};
 
 fn temp_path(name: &str) -> String {
     let dir = std::env::temp_dir();
@@ -252,6 +252,22 @@ fn test_mps_ortho_roundtrip() {
 
     assert_eq!(loaded.llim(), llim);
     assert_eq!(loaded.rlim(), rlim);
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_mps_canonical_form_roundtrip() {
+    let path = temp_path("mps_canonical_form");
+    let mut mps = make_test_mps();
+    mps.orthogonalize_with(0, CanonicalForm::LU).unwrap();
+
+    save_mps(&path, "mps", &mps).unwrap();
+    let loaded = load_mps(&path, "mps").unwrap();
+
+    assert_eq!(loaded.canonical_form(), Some(CanonicalForm::LU));
+    assert_eq!(loaded.llim(), mps.llim());
+    assert_eq!(loaded.rlim(), mps.rlim());
 
     std::fs::remove_file(&path).ok();
 }
