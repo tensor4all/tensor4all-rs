@@ -10,9 +10,15 @@ use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
-use matrixci::util::{mat_mul, ncols, nrows, transpose, zeros, Matrix};
+use matrixci::util::{mat_mul, ncols, nrows, zeros, Matrix};
 use matrixci::Scalar;
 use matrixci::{rrlu, RrLUOptions};
+use num_complex::ComplexFloat;
+use num_traits::ToPrimitive;
+use tenferro_algebra::Scalar as TfScalar;
+use tenferro_linalg::LinalgScalar;
+use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
+use tensor4all_tensorbackend::{svd_backend, BackendLinalgScalar};
 
 /// Compute QR decomposition
 fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> (Matrix<T>, Matrix<T>) {
@@ -26,11 +32,106 @@ fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> (Matrix<T>, Matrix<T>)
     (lu.left(true), lu.right(true))
 }
 
-/// Compute LQ decomposition
-fn lq_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> (Matrix<T>, Matrix<T>) {
-    let at = transpose(matrix);
-    let (qt, lt) = qr_decomp(&at);
-    (transpose(&lt), transpose(&qt))
+fn typed_tensor_to_matrix<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Matrix<T>>
+where
+    T: TfScalar + Copy + Default,
+{
+    if tensor.ndim() != 2 {
+        return Err(TensorTrainError::InvalidOperation {
+            message: format!(
+                "{op} returned rank-{} tensor, expected matrix",
+                tensor.ndim()
+            ),
+        });
+    }
+
+    let dims = tensor.dims();
+    let rows = dims[0];
+    let cols = dims[1];
+    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
+    let data = row_major
+        .buffer()
+        .as_slice()
+        .ok_or_else(|| TensorTrainError::InvalidOperation {
+            message: format!("{op} returned non-CPU tensor unexpectedly"),
+        })?;
+
+    let mut matrix = zeros(rows, cols);
+    for i in 0..rows {
+        for j in 0..cols {
+            matrix[[i, j]] = data[i * cols + j];
+        }
+    }
+    Ok(matrix)
+}
+
+fn typed_real_values_to_f64<R>(tensor: &TypedTensor<R>, op: &'static str) -> Result<Vec<f64>>
+where
+    R: TfScalar + Copy + ToPrimitive,
+{
+    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
+    let data = row_major
+        .buffer()
+        .as_slice()
+        .ok_or_else(|| TensorTrainError::InvalidOperation {
+            message: format!("{op} returned non-CPU tensor unexpectedly"),
+        })?;
+    data.iter()
+        .map(|value| {
+            value
+                .to_f64()
+                .ok_or_else(|| TensorTrainError::InvalidOperation {
+                    message: format!(
+                        "{op} returned a singular value that cannot be represented as f64"
+                    ),
+                })
+        })
+        .collect()
+}
+
+fn svd_factorize_right_matrix<T>(matrix: &Matrix<T>) -> Result<(Matrix<T>, DiagMatrix, Matrix<T>)>
+where
+    T: TTScalar + Scalar + Default + ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
+    <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive,
+{
+    let rows = nrows(matrix);
+    let cols = ncols(matrix);
+    if rows == 0 || cols == 0 {
+        return Err(TensorTrainError::InvalidOperation {
+            message: "Cannot compute Vidal singular values for an empty bond matrix".to_string(),
+        });
+    }
+
+    let mut data = Vec::with_capacity(rows * cols);
+    for i in 0..rows {
+        for j in 0..cols {
+            data.push(matrix[[i, j]]);
+        }
+    }
+
+    let typed =
+        TypedTensor::from_slice(&data, &[rows, cols], MemoryOrder::RowMajor).map_err(|e| {
+            TensorTrainError::InvalidOperation {
+                message: format!("Failed to convert bond matrix to tenferro tensor: {e}"),
+            }
+        })?;
+    let decomp = svd_backend(&typed).map_err(|e| TensorTrainError::InvalidOperation {
+        message: format!("Failed to compute Vidal bond SVD: {e}"),
+    })?;
+
+    let u = typed_tensor_to_matrix(&decomp.u, "svd.u")?;
+    let vt = typed_tensor_to_matrix(&decomp.vt, "svd.vt")?;
+    let singular_values = typed_real_values_to_f64(&decomp.s, "svd.s")?;
+    let rank = singular_values.len();
+
+    let mut left_scaled = zeros(rows, rank);
+    for i in 0..rows {
+        for j in 0..rank {
+            left_scaled[[i, j]] = u[[i, j]] * T::from_f64(singular_values[j]);
+        }
+    }
+
+    Ok((left_scaled, singular_values, vt))
 }
 
 /// Convert Tensor3 to Matrix with left dimensions flattened
@@ -94,7 +195,11 @@ pub struct VidalTensorTrain<T: TTScalar> {
 
 impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// Create a VidalTensorTrain from a regular TensorTrain
-    pub fn from_tensor_train(tt: &TensorTrain<T>) -> Result<Self> {
+    pub fn from_tensor_train(tt: &TensorTrain<T>) -> Result<Self>
+    where
+        T: ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
+        <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive,
+    {
         Self::from_tensor_train_with_partition(tt, 0..tt.len())
     }
 
@@ -102,7 +207,11 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     pub fn from_tensor_train_with_partition(
         tt: &TensorTrain<T>,
         partition: Range<usize>,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        T: ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
+        <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive,
+    {
         let n = tt.len();
         if n == 0 {
             return Ok(Self {
@@ -171,53 +280,37 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             tensors[i + 1] = new_next_tensor;
         }
 
-        // Right sweep: LQ decomposition and extract singular values from L diagonal
+        // Right sweep: true bond SVD to recover Schmidt coefficients
         for i in (partition.start + 1..partition.end).rev() {
             let site_dim = tensors[i].site_dim();
             let right_dim = tensors[i].right_dim();
 
             let mat = tensor3_to_right_matrix(&tensors[i]);
-            let (l_mat, q) = lq_decomp(&mat);
+            let (us, sv, vt) = svd_factorize_right_matrix(&mat)?;
 
-            let new_bond_dim = nrows(&q);
+            let new_bond_dim = nrows(&vt);
 
-            // Extract singular values from diagonal of L
-            let mut sv = Vec::with_capacity(new_bond_dim);
-            for k in 0..new_bond_dim.min(nrows(&l_mat)).min(ncols(&l_mat)) {
-                let val = l_mat[[k, k]];
-                let abs_val = TTScalar::abs_sq(val).sqrt();
-                sv.push(if abs_val > 1e-15 { abs_val } else { 1e-15 });
-            }
-            singular_values[i - 1] = sv.clone();
+            singular_values[i - 1] = sv;
 
-            // Update current tensor with Q (right-orthogonal)
+            // Update current tensor with V^H (right-orthogonal)
             let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim);
             for l in 0..new_bond_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
-                        if l < nrows(&q) {
-                            new_tensor.set3(l, s, r, q[[l, s * right_dim + r]]);
+                        if l < nrows(&vt) {
+                            new_tensor.set3(l, s, r, vt[[l, s * right_dim + r]]);
                         }
                     }
                 }
             }
             tensors[i] = new_tensor;
 
-            // Contract previous tensor with L (normalized by singular values)
+            // Contract the previous tensor with U * S to preserve the TT values.
             if i > partition.start {
                 let prev_left_dim = tensors[i - 1].left_dim();
                 let prev_site_dim = tensors[i - 1].site_dim();
                 let prev_mat = tensor3_to_left_matrix(&tensors[i - 1]);
-
-                // Normalize L by dividing columns by singular values, then multiply
-                let mut l_normalized = zeros(nrows(&l_mat), ncols(&l_mat));
-                for row in 0..nrows(&l_mat) {
-                    for col in 0..ncols(&l_mat) {
-                        l_normalized[[row, col]] = l_mat[[row, col]];
-                    }
-                }
-
-                let contracted = mat_mul(&prev_mat, &l_normalized);
+                let contracted = mat_mul(&prev_mat, &us);
 
                 let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);
                 for l in 0..prev_left_dim {
@@ -512,7 +605,11 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     }
 
     /// Create an InverseTensorTrain from a regular TensorTrain
-    pub fn from_tensor_train(tt: &TensorTrain<T>) -> Result<Self> {
+    pub fn from_tensor_train(tt: &TensorTrain<T>) -> Result<Self>
+    where
+        T: ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
+        <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive,
+    {
         let vidal = VidalTensorTrain::from_tensor_train(tt)?;
         Self::from_vidal(&vidal)
     }
@@ -682,6 +779,46 @@ mod tests {
                 assert!(v > 0.0, "Singular value should be positive");
             }
         }
+    }
+
+    fn two_site_matrix_tt() -> TensorTrain<f64> {
+        let mut left = tensor3_zeros(1, 2, 2);
+        left.set3(0, 0, 0, 1.0);
+        left.set3(0, 1, 1, 1.0);
+
+        let mut right = tensor3_zeros(2, 2, 1);
+        right.set3(0, 0, 0, 2.0);
+        right.set3(1, 0, 0, 1.0);
+        right.set3(0, 1, 0, 1.0);
+        right.set3(1, 1, 0, 2.0);
+
+        TensorTrain::new(vec![left, right]).unwrap()
+    }
+
+    fn assert_diag_close(actual: &[f64], expected: &[f64]) {
+        assert_eq!(actual.len(), expected.len());
+        for (&a, &e) in actual.iter().zip(expected.iter()) {
+            assert!(
+                (a - e).abs() < 1e-10,
+                "expected diagonal {expected:?}, got {actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_vidal_reports_true_two_site_singular_values() {
+        let tt = two_site_matrix_tt();
+        let vidal = VidalTensorTrain::from_tensor_train(&tt).unwrap();
+
+        assert_diag_close(vidal.singular_values(0), &[3.0, 1.0]);
+    }
+
+    #[test]
+    fn test_inverse_reports_true_two_site_inverse_singular_values() {
+        let tt = two_site_matrix_tt();
+        let inverse = InverseTensorTrain::from_tensor_train(&tt).unwrap();
+
+        assert_diag_close(inverse.inverse_singular_values(0), &[1.0 / 3.0, 1.0]);
     }
 
     #[test]
