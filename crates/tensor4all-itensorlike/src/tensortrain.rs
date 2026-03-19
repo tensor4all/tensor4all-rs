@@ -359,10 +359,20 @@ impl TensorTrain {
     /// Get a mutable reference to all tensors.
     #[inline]
     pub fn tensors_mut(&mut self) -> Vec<&mut TensorDynLen> {
-        // This is tricky - we need to collect mutable references
-        // For now, return an empty vec - this method is rarely used
-        // and would require unsafe code or different design
-        Vec::new()
+        let node_indices: Vec<_> = (0..self.len())
+            .map(|site| self.treetn.node_index(&site).expect("Site out of bounds"))
+            .collect();
+        let mut tensor_ptrs = Vec::with_capacity(node_indices.len());
+        for node_idx in node_indices {
+            let tensor = self.treetn.tensor_mut(node_idx).expect("Tensor not found");
+            tensor_ptrs.push(tensor as *mut TensorDynLen);
+        }
+
+        // SAFETY: TensorTrain site names are unique, so each site resolves to a
+        // distinct TreeTN node. We collect at most one pointer per node and do
+        // not mutate the network structure before converting those pointers back
+        // into mutable references.
+        unsafe { tensor_ptrs.into_iter().map(|tensor| &mut *tensor).collect() }
     }
 
     /// Get the link index between sites `i` and `i+1`.
@@ -1669,6 +1679,28 @@ mod tests {
         let new_tensor = make_tensor(vec![s0, l01]);
         tt.set_tensor(0, new_tensor);
         assert!(!tt.isortho());
+    }
+
+    #[test]
+    fn test_tensors_mut_returns_all_sites_in_order() {
+        let s0 = idx(0, 2);
+        let l01 = idx(1, 3);
+        let s1 = idx(2, 2);
+
+        let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+        let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+        let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        let replacement =
+            TensorDynLen::from_dense(vec![s0, l01], vec![42.0; 6]).expect("valid replacement");
+
+        {
+            let mut tensors = tt.tensors_mut();
+            assert_eq!(tensors.len(), 2);
+            *tensors[0] = replacement.clone();
+        }
+
+        assert_eq!(tt.tensor(0).as_slice_f64().unwrap(), vec![42.0; 6]);
     }
 
     #[test]
