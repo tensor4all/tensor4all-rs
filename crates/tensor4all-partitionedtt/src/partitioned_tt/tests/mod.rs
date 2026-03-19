@@ -1,0 +1,399 @@
+
+use super::*;
+use tensor4all_core::index::Index;
+use tensor4all_core::TensorDynLen;
+
+fn make_index(size: usize) -> DynIndex {
+    Index::new_dyn(size)
+}
+
+fn make_tensor(indices: Vec<DynIndex>) -> TensorDynLen {
+    let dims: Vec<usize> = indices.iter().map(|i| i.dim).collect();
+    let size: usize = dims.iter().product();
+    let data: Vec<f64> = (0..size).map(|i| (i + 1) as f64).collect();
+    TensorDynLen::from_dense(indices, data).unwrap()
+}
+
+/// Create shared indices for testing
+fn make_shared_indices() -> (Vec<DynIndex>, DynIndex) {
+    let s0 = make_index(2); // site 0
+    let l01 = make_index(3); // link 0-1
+    let s1 = make_index(2); // site 1
+    (vec![s0, s1], l01)
+}
+
+/// Create a TT using the provided indices
+fn make_tt_with_indices(site_inds: &[DynIndex], link_ind: &DynIndex) -> TensorTrain {
+    let t0 = make_tensor(vec![site_inds[0].clone(), link_ind.clone()]);
+    let t1 = make_tensor(vec![link_ind.clone(), site_inds[1].clone()]);
+    TensorTrain::new(vec![t0, t1]).unwrap()
+}
+
+fn make_simple_tt() -> (TensorTrain, Vec<DynIndex>) {
+    let (site_inds, link_ind) = make_shared_indices();
+    let tt = make_tt_with_indices(&site_inds, &link_ind);
+    (tt, site_inds)
+}
+
+#[test]
+fn test_partitioned_tt_creation() {
+    // Create shared indices so both TTs have the same site indices
+    let (site_inds, link_ind) = make_shared_indices();
+
+    let tt1 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain1 = SubDomainTT::new(tt1, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+
+    let tt2 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[0].clone(), 1)]));
+
+    let partitioned = PartitionedTT::from_subdomains(vec![subdomain1, subdomain2]).unwrap();
+
+    assert_eq!(partitioned.len(), 2);
+    assert!(!partitioned.is_empty());
+}
+
+#[test]
+fn test_partitioned_tt_empty() {
+    let partitioned = PartitionedTT::new();
+
+    assert_eq!(partitioned.len(), 0);
+    assert!(partitioned.is_empty());
+}
+
+#[test]
+fn test_partitioned_tt_overlapping_projectors() {
+    let (site_inds, link_ind) = make_shared_indices();
+
+    let tt1 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain1 = SubDomainTT::new(tt1, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+
+    let tt2 = make_tt_with_indices(&site_inds, &link_ind);
+    // Same projector as subdomain1 - this should fail
+    let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+
+    let result = PartitionedTT::from_subdomains(vec![subdomain1, subdomain2]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_partitioned_tt_norm() {
+    let (tt, _) = make_simple_tt();
+    let subdomain = SubDomainTT::from_tt(tt);
+    let partitioned = PartitionedTT::from_subdomain(subdomain);
+
+    let norm = partitioned.norm();
+    assert!(norm > 0.0);
+}
+
+#[test]
+fn test_partitioned_tt_append() {
+    let (site_inds, link_ind) = make_shared_indices();
+
+    let tt1 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain1 = SubDomainTT::new(tt1, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+    let mut partitioned1 = PartitionedTT::from_subdomain(subdomain1);
+
+    let tt2 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[0].clone(), 1)]));
+    let partitioned2 = PartitionedTT::from_subdomain(subdomain2);
+
+    partitioned1.append(partitioned2).unwrap();
+
+    assert_eq!(partitioned1.len(), 2);
+}
+
+#[test]
+fn test_partitioned_tt_append_overlapping() {
+    let (site_inds, link_ind) = make_shared_indices();
+
+    let tt1 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain1 = SubDomainTT::new(tt1, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+    let mut partitioned1 = PartitionedTT::from_subdomain(subdomain1);
+
+    let tt2 = make_tt_with_indices(&site_inds, &link_ind);
+    // Same projector - should fail
+    let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+    let partitioned2 = PartitionedTT::from_subdomain(subdomain2);
+
+    let result = partitioned1.append(partitioned2);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_partitioned_tt_iteration() {
+    let (site_inds, link_ind) = make_shared_indices();
+
+    let tt1 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain1 = SubDomainTT::new(tt1, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+
+    let tt2 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[0].clone(), 1)]));
+
+    let partitioned = PartitionedTT::from_subdomains(vec![subdomain1, subdomain2]).unwrap();
+
+    let count = partitioned.iter().count();
+    assert_eq!(count, 2);
+
+    let projector_count = partitioned.projectors().count();
+    assert_eq!(projector_count, 2);
+}
+
+#[test]
+fn test_partitioned_tt_index() {
+    let (tt, site_inds) = make_simple_tt();
+    let projector = Projector::from_pairs([(site_inds[0].clone(), 0)]);
+    let subdomain = SubDomainTT::new(tt, projector.clone());
+    let partitioned = PartitionedTT::from_subdomain(subdomain);
+
+    // Access by projector
+    let retrieved = &partitioned[&projector];
+    assert_eq!(retrieved.projector(), &projector);
+}
+
+/// Create contraction test indices:
+/// TT1: s0 -- l01 -- s1
+/// TT2: s1 -- l12 -- s2
+fn make_contraction_indices() -> (DynIndex, DynIndex, DynIndex, DynIndex, DynIndex) {
+    let s0 = make_index(2);
+    let l01 = make_index(3);
+    let s1 = make_index(2);
+    let l12 = make_index(3);
+    let s2 = make_index(2);
+    (s0, l01, s1, l12, s2)
+}
+
+fn make_tt1(s0: &DynIndex, l01: &DynIndex, s1: &DynIndex) -> TensorTrain {
+    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+    TensorTrain::new(vec![t0, t1]).unwrap()
+}
+
+fn make_tt2(s1: &DynIndex, l12: &DynIndex, s2: &DynIndex) -> TensorTrain {
+    let t0 = make_tensor(vec![s1.clone(), l12.clone()]);
+    let t1 = make_tensor(vec![l12.clone(), s2.clone()]);
+    TensorTrain::new(vec![t0, t1]).unwrap()
+}
+
+fn project_dense_tensor_at_index(
+    tensor: &TensorDynLen,
+    index: &DynIndex,
+    projected_value: usize,
+) -> TensorDynLen {
+    let indices = tensor.indices().to_vec();
+    let axis = indices
+        .iter()
+        .position(|candidate| candidate == index)
+        .unwrap();
+    let dims: Vec<usize> = indices.iter().map(|idx| idx.dim).collect();
+    let axis_stride = dims[..axis].iter().copied().product::<usize>().max(1);
+    let axis_dim = dims[axis];
+    let src_data = tensor.as_slice_f64().unwrap();
+    let mut projected_data = vec![0.0_f64; src_data.len()];
+
+    for (flat_idx, value) in src_data.iter().copied().enumerate() {
+        let axis_value = (flat_idx / axis_stride) % axis_dim;
+        if axis_value == projected_value {
+            projected_data[flat_idx] = value;
+        }
+    }
+
+    TensorDynLen::from_dense(indices, projected_data).unwrap()
+}
+
+#[test]
+fn test_partitioned_tt_contract_numerical() {
+    let (s0, l01, s1, l12, s2) = make_contraction_indices();
+
+    // Create PartitionedTT1 with 2 subdomains: s0=0 and s0=1
+    let tt1_a = make_tt1(&s0, &l01, &s1);
+    let tt1_b = make_tt1(&s0, &l01, &s1);
+    let subdomain1_a = SubDomainTT::new(tt1_a, Projector::from_pairs([(s0.clone(), 0)]));
+    let subdomain1_b = SubDomainTT::new(tt1_b, Projector::from_pairs([(s0.clone(), 1)]));
+    let partitioned1 = PartitionedTT::from_subdomains(vec![subdomain1_a, subdomain1_b]).unwrap();
+
+    // Create PartitionedTT2 with 2 subdomains: s2=0 and s2=1
+    let tt2_a = make_tt2(&s1, &l12, &s2);
+    let tt2_b = make_tt2(&s1, &l12, &s2);
+    let subdomain2_a = SubDomainTT::new(tt2_a, Projector::from_pairs([(s2.clone(), 0)]));
+    let subdomain2_b = SubDomainTT::new(tt2_b, Projector::from_pairs([(s2.clone(), 1)]));
+    let partitioned2 = PartitionedTT::from_subdomains(vec![subdomain2_a, subdomain2_b]).unwrap();
+
+    // Contract
+    let options = ContractOptions::default();
+    let result = partitioned1.contract(&partitioned2, &options).unwrap();
+
+    // Result should have 4 subdomains: (s0=0,s2=0), (s0=0,s2=1), (s0=1,s2=0), (s0=1,s2=1)
+    assert_eq!(result.len(), 4);
+
+    // Verify each subdomain numerically
+    for (proj, subdomain) in result.iter() {
+        let contracted_full = subdomain.data().to_dense().unwrap();
+        let contracted_data = contracted_full.as_slice_f64().unwrap();
+
+        // Get the projected values
+        let s0_val = proj.get(&s0).unwrap();
+        let s2_val = proj.get(&s2).unwrap();
+
+        // Compute expected by projecting full TTs
+        let tt1 = make_tt1(&s0, &l01, &s1);
+        let tt2 = make_tt2(&s1, &l12, &s2);
+        let t1_full = tt1.to_dense().unwrap();
+        let t2_full = tt2.to_dense().unwrap();
+
+        // Project t1 to s0=s0_val
+        let t1_proj = project_dense_tensor_at_index(&t1_full, &s0, s0_val);
+
+        // Project t2 to s2=s2_val
+        let t2_proj = project_dense_tensor_at_index(&t2_full, &s2, s2_val);
+
+        let expected = t1_proj.contract(&t2_proj);
+        let expected_data = expected.as_slice_f64().unwrap();
+
+        assert_eq!(
+            contracted_data.len(),
+            expected_data.len(),
+            "Size mismatch for projector {:?}",
+            proj
+        );
+        for (i, (&actual, &exp)) in contracted_data.iter().zip(expected_data.iter()).enumerate() {
+            assert!(
+                (actual - exp).abs() < 1e-10,
+                "Mismatch at index {} for projector {:?}: actual={}, expected={}",
+                i,
+                proj,
+                actual,
+                exp
+            );
+        }
+    }
+}
+
+#[test]
+fn test_subdomain_tt_norm_with_projector() {
+    let (site_inds, link_ind) = make_shared_indices();
+
+    // Create TT and get its full tensor
+    let tt = make_tt_with_indices(&site_inds, &link_ind);
+    let full_tensor = tt.to_dense().unwrap();
+    let full_data = full_tensor.as_slice_f64().unwrap();
+
+    // Create SubDomainTT with projector s0=0
+    let projector = Projector::from_pairs([(site_inds[0].clone(), 0)]);
+    let subdomain = SubDomainTT::new(tt.clone(), projector);
+
+    // Current norm() returns the norm of the underlying TT data without projection
+    // This test documents current behavior
+    let norm_raw = subdomain.norm();
+    let tt_norm = tt.norm();
+    assert!((norm_raw - tt_norm).abs() < 1e-10);
+
+    // Compute expected norm if projection were applied:
+    // For s0=0, we keep only indices 0, 1 (first row of 2x2 matrix)
+    let mut projected_sum_sq = 0.0;
+    for &x in full_data.iter().take(site_inds[1].dim) {
+        projected_sum_sq += x.powi(2);
+    }
+    let _expected_projected_norm = projected_sum_sq.sqrt();
+
+    // Note: Current implementation returns raw TT norm, not projected norm
+    // If we want projected norm, we'd need to modify the implementation
+    // For now, this test just verifies current behavior is consistent
+}
+
+#[test]
+fn test_partitioned_tt_add_same_structure() {
+    let (site_inds, link_ind) = make_shared_indices();
+
+    // Create two PartitionedTTs with the same patch structure
+    let tt1 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain1 = SubDomainTT::new(tt1, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+    let partitioned1 = PartitionedTT::from_subdomain(subdomain1);
+
+    let tt2 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+    let partitioned2 = PartitionedTT::from_subdomain(subdomain2);
+
+    // Add them
+    let options = TruncateOptions::svd();
+    let result = partitioned1.add(&partitioned2, &options).unwrap();
+
+    // Result should have 1 subdomain (same projector)
+    assert_eq!(result.len(), 1);
+
+    // The sum should be 2x the original (same TT added to itself)
+    let proj = Projector::from_pairs([(site_inds[0].clone(), 0)]);
+    let summed = result.get(&proj).unwrap();
+    let summed_dense = summed.data().to_dense().unwrap();
+    let summed_data = summed_dense.as_slice_f64().unwrap();
+
+    let original = make_tt_with_indices(&site_inds, &link_ind);
+    let original_dense = original.to_dense().unwrap();
+    let original_data = original_dense.as_slice_f64().unwrap();
+
+    for (i, (&s, &o)) in summed_data.iter().zip(original_data.iter()).enumerate() {
+        assert!(
+            (s - 2.0 * o).abs() < 1e-10,
+            "Mismatch at index {}: summed={}, expected={}",
+            i,
+            s,
+            2.0 * o
+        );
+    }
+}
+
+#[test]
+fn test_partitioned_tt_add_missing_patch() {
+    let (site_inds, link_ind) = make_shared_indices();
+
+    // partitioned1 has patches for s0=0 and s0=1
+    let tt1_a = make_tt_with_indices(&site_inds, &link_ind);
+    let tt1_b = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain1_a = SubDomainTT::new(tt1_a, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+    let subdomain1_b = SubDomainTT::new(tt1_b, Projector::from_pairs([(site_inds[0].clone(), 1)]));
+    let partitioned1 = PartitionedTT::from_subdomains(vec![subdomain1_a, subdomain1_b]).unwrap();
+
+    // partitioned2 has only patch for s0=0
+    let tt2 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+    let partitioned2 = PartitionedTT::from_subdomain(subdomain2);
+
+    // Add them
+    let options = TruncateOptions::svd();
+    let result = partitioned1.add(&partitioned2, &options).unwrap();
+
+    // Result should have 2 subdomains
+    assert_eq!(result.len(), 2);
+
+    // s0=0 patch should be summed (2x)
+    let proj0 = Projector::from_pairs([(site_inds[0].clone(), 0)]);
+    let summed0 = result.get(&proj0).unwrap();
+    let original = make_tt_with_indices(&site_inds, &link_ind);
+    let original_norm = original.norm();
+    // Norm of 2*TT is 2*norm(TT)
+    assert!((summed0.norm() - 2.0 * original_norm).abs() < 1e-10);
+
+    // s0=1 patch should be unchanged (only in partitioned1)
+    let proj1 = Projector::from_pairs([(site_inds[0].clone(), 1)]);
+    let unchanged = result.get(&proj1).unwrap();
+    assert!((unchanged.norm() - original_norm).abs() < 1e-10);
+}
+
+#[test]
+fn test_partitioned_tt_add_overlapping_fails() {
+    let (site_inds, link_ind) = make_shared_indices();
+
+    // partitioned1 has patch for s0=0
+    let tt1 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain1 = SubDomainTT::new(tt1, Projector::from_pairs([(site_inds[0].clone(), 0)]));
+    let partitioned1 = PartitionedTT::from_subdomain(subdomain1);
+
+    // partitioned2 has patch for s1=0 (overlaps with s0=0 since they're compatible)
+    let tt2 = make_tt_with_indices(&site_inds, &link_ind);
+    let subdomain2 = SubDomainTT::new(tt2, Projector::from_pairs([(site_inds[1].clone(), 0)]));
+    let partitioned2 = PartitionedTT::from_subdomain(subdomain2);
+
+    // Add should fail because projectors are compatible (not disjoint)
+    let options = TruncateOptions::svd();
+    let result = partitioned1.add(&partitioned2, &options);
+    assert!(result.is_err());
+}

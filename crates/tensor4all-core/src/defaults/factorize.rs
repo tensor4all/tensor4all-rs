@@ -371,6 +371,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    // Tests are in the tests/factorize.rs file
-}
+mod tests;

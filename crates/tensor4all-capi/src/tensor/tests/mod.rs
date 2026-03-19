@@ -1,0 +1,267 @@
+
+use super::*;
+use crate::index::*;
+
+#[test]
+fn test_tensor_lifecycle() {
+    // Create indices
+    let i = t4a_index_new(2);
+    let j = t4a_index_new(3);
+    assert!(!i.is_null());
+    assert!(!j.is_null());
+
+    // Create tensor
+    let index_ptrs = [i as *const _, j as *const _];
+    let dims = [2_usize, 3_usize];
+    let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+
+    let tensor = t4a_tensor_new_dense_f64(2, index_ptrs.as_ptr(), dims.as_ptr(), data.as_ptr(), 6);
+    assert!(!tensor.is_null());
+
+    // Test is_assigned
+    assert_eq!(t4a_tensor_is_assigned(tensor as *const _), 1);
+
+    // Test clone
+    let cloned = t4a_tensor_clone(tensor as *const _);
+    assert!(!cloned.is_null());
+
+    // Clean up
+    t4a_tensor_release(cloned);
+    t4a_tensor_release(tensor);
+    t4a_index_release(i);
+    t4a_index_release(j);
+}
+
+#[test]
+fn test_tensor_accessors() {
+    // Create indices
+    let i = t4a_index_new(2);
+    let j = t4a_index_new(3);
+
+    // Create tensor
+    let index_ptrs = [i as *const _, j as *const _];
+    let dims = [2_usize, 3_usize];
+    let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+
+    let tensor = t4a_tensor_new_dense_f64(2, index_ptrs.as_ptr(), dims.as_ptr(), data.as_ptr(), 6);
+
+    // Get rank
+    let mut rank: usize = 0;
+    assert_eq!(
+        t4a_tensor_get_rank(tensor as *const _, &mut rank),
+        T4A_SUCCESS
+    );
+    assert_eq!(rank, 2);
+
+    // Get dims
+    let mut out_dims = [0_usize; 2];
+    assert_eq!(
+        t4a_tensor_get_dims(tensor as *const _, out_dims.as_mut_ptr(), 2),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_dims, [2, 3]);
+
+    // Get storage kind
+    let mut kind = t4a_storage_kind::DenseC64;
+    assert_eq!(
+        t4a_tensor_get_storage_kind(tensor as *const _, &mut kind),
+        T4A_SUCCESS
+    );
+    assert_eq!(kind, t4a_storage_kind::DenseF64);
+
+    // Get data
+    let mut out_len: usize = 0;
+    assert_eq!(
+        t4a_tensor_get_data_f64(tensor as *const _, ptr::null_mut(), 0, &mut out_len),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_len, 6);
+
+    let mut out_data = [0.0; 6];
+    assert_eq!(
+        t4a_tensor_get_data_f64(tensor as *const _, out_data.as_mut_ptr(), 6, &mut out_len),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_data, data);
+
+    // Get indices
+    let mut out_indices: [*mut t4a_index; 2] = [ptr::null_mut(); 2];
+    assert_eq!(
+        t4a_tensor_get_indices(tensor as *const _, out_indices.as_mut_ptr(), 2),
+        T4A_SUCCESS
+    );
+
+    // Verify indices have correct dimensions
+    let mut dim0: usize = 0;
+    let mut dim1: usize = 0;
+    crate::index::t4a_index_dim(out_indices[0] as *const _, &mut dim0);
+    crate::index::t4a_index_dim(out_indices[1] as *const _, &mut dim1);
+    assert_eq!(dim0, 2);
+    assert_eq!(dim1, 3);
+
+    // Clean up indices
+    for idx in &out_indices {
+        t4a_index_release(*idx);
+    }
+
+    // Clean up
+    t4a_tensor_release(tensor);
+    t4a_index_release(i);
+    t4a_index_release(j);
+}
+
+#[test]
+fn test_tensor_c64() {
+    // Create indices
+    let i = t4a_index_new(2);
+    let j = t4a_index_new(2);
+
+    // Create tensor
+    let index_ptrs = [i as *const _, j as *const _];
+    let dims = [2_usize, 2_usize];
+    let data_re = [1.0, 2.0, 3.0, 4.0];
+    let data_im = [0.5, 1.5, 2.5, 3.5];
+
+    let tensor = t4a_tensor_new_dense_c64(
+        2,
+        index_ptrs.as_ptr(),
+        dims.as_ptr(),
+        data_re.as_ptr(),
+        data_im.as_ptr(),
+        4,
+    );
+    assert!(!tensor.is_null());
+
+    // Get storage kind
+    let mut kind = t4a_storage_kind::DenseF64;
+    assert_eq!(
+        t4a_tensor_get_storage_kind(tensor as *const _, &mut kind),
+        T4A_SUCCESS
+    );
+    assert_eq!(kind, t4a_storage_kind::DenseC64);
+
+    // Get data
+    let mut out_len: usize = 0;
+    let mut out_re = [0.0; 4];
+    let mut out_im = [0.0; 4];
+    assert_eq!(
+        t4a_tensor_get_data_c64(
+            tensor as *const _,
+            out_re.as_mut_ptr(),
+            out_im.as_mut_ptr(),
+            4,
+            &mut out_len
+        ),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_len, 4);
+    assert_eq!(out_re, data_re);
+    assert_eq!(out_im, data_im);
+
+    // Clean up
+    t4a_tensor_release(tensor);
+    t4a_index_release(i);
+    t4a_index_release(j);
+}
+
+#[test]
+fn test_tensor_onehot() {
+    let i = t4a_index_new(3);
+    let j = t4a_index_new(4);
+    assert!(!i.is_null());
+    assert!(!j.is_null());
+
+    let index_ptrs = [i as *const _, j as *const _];
+    let vals = [1_usize, 2_usize];
+
+    let tensor = t4a_tensor_onehot(2, index_ptrs.as_ptr(), vals.as_ptr(), 2);
+    assert!(!tensor.is_null());
+
+    // Verify rank
+    let mut rank = 0_usize;
+    assert_eq!(
+        t4a_tensor_get_rank(tensor as *const _, &mut rank),
+        T4A_SUCCESS
+    );
+    assert_eq!(rank, 2);
+
+    // Verify dims
+    let mut dims = [0_usize; 2];
+    assert_eq!(
+        t4a_tensor_get_dims(tensor as *const _, dims.as_mut_ptr(), 2),
+        T4A_SUCCESS
+    );
+    assert_eq!(dims, [3, 4]);
+
+    // Verify data: position (1,2) in 3x4 = offset 7 in column-major order
+    let mut out_len = 0_usize;
+    let mut data = [0.0_f64; 12];
+    assert_eq!(
+        t4a_tensor_get_data_f64(tensor as *const _, data.as_mut_ptr(), 12, &mut out_len),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_len, 12);
+    let mut expected = [0.0_f64; 12];
+    expected[7] = 1.0;
+    assert_eq!(data, expected);
+
+    // Clean up
+    t4a_tensor_release(tensor);
+    t4a_index_release(i);
+    t4a_index_release(j);
+}
+
+#[test]
+fn test_tensor_onehot_null_guards() {
+    // Null index_ptrs
+    let vals = [0_usize];
+    let result = t4a_tensor_onehot(1, ptr::null(), vals.as_ptr(), 1);
+    assert!(result.is_null());
+
+    // Null vals
+    let i = t4a_index_new(3);
+    let index_ptrs = [i as *const _];
+    let result = t4a_tensor_onehot(1, index_ptrs.as_ptr(), ptr::null(), 1);
+    assert!(result.is_null());
+
+    // Mismatched rank and vals_len
+    let result = t4a_tensor_onehot(1, index_ptrs.as_ptr(), vals.as_ptr(), 2);
+    assert!(result.is_null());
+
+    t4a_index_release(i);
+}
+
+#[test]
+fn test_tensor_onehot_empty() {
+    // rank=0 should return a scalar tensor
+    let tensor = t4a_tensor_onehot(0, ptr::null(), ptr::null(), 0);
+    assert!(!tensor.is_null());
+
+    let mut rank = 99_usize;
+    assert_eq!(
+        t4a_tensor_get_rank(tensor as *const _, &mut rank),
+        T4A_SUCCESS
+    );
+    assert_eq!(rank, 0);
+
+    t4a_tensor_release(tensor);
+}
+
+#[test]
+fn test_tensor_new_dense_f64_dims_mismatch_rejected() {
+    let i = t4a_index_new(2);
+    let j = t4a_index_new(3);
+    assert!(!i.is_null());
+    assert!(!j.is_null());
+
+    let index_ptrs = [i as *const _, j as *const _];
+    // Mismatch: actual dims should be [2,3]
+    let dims = [2_usize, 4_usize];
+    let data = [0.0_f64; 8];
+
+    let tensor = t4a_tensor_new_dense_f64(2, index_ptrs.as_ptr(), dims.as_ptr(), data.as_ptr(), 8);
+    assert!(tensor.is_null());
+
+    t4a_index_release(i);
+    t4a_index_release(j);
+}
