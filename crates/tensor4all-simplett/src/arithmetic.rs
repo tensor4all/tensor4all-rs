@@ -47,7 +47,14 @@ impl<T: TTScalar> TensorTrain<T> {
 
             let site_dim = a.site_dim();
 
-            if i == 0 {
+            if i == 0 && i == n - 1 {
+                // Single-site TTs must keep both bond dimensions at 1.
+                let mut new_tensor = tensor3_zeros(1, site_dim, 1);
+                for s in 0..site_dim {
+                    new_tensor.set3(0, s, 0, *a.get3(0, s, 0) + *b.get3(0, s, 0));
+                }
+                tensors.push(new_tensor);
+            } else if i == 0 {
                 // First tensor: [A | B] horizontally
                 let new_right_dim = a.right_dim() + b.right_dim();
                 let mut new_tensor = tensor3_zeros(1, site_dim, new_right_dim);
@@ -212,6 +219,32 @@ mod tests {
 
         // Sum should be (5.0 - 2.0) * 2 * 3 = 18.0
         assert!((result.sum() - 18.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_add_single_site_constant_tensors() {
+        let tt1 = TensorTrain::<f64>::constant(&[3], 1.0);
+        let tt2 = TensorTrain::<f64>::constant(&[3], 2.0);
+
+        let result = tt1.add(&tt2).unwrap();
+
+        for i in 0..3 {
+            assert!((result.evaluate(&[i]).unwrap() - 3.0).abs() < 1e-10);
+        }
+        assert!((result.sum() - 9.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sub_single_site_constant_tensors() {
+        let tt1 = TensorTrain::<f64>::constant(&[3], 5.0);
+        let tt2 = TensorTrain::<f64>::constant(&[3], 2.0);
+
+        let result = tt1.sub(&tt2).unwrap();
+
+        for i in 0..3 {
+            assert!((result.evaluate(&[i]).unwrap() - 3.0).abs() < 1e-10);
+        }
+        assert!((result.sum() - 9.0).abs() < 1e-10);
     }
 
     #[test]
