@@ -1,0 +1,55 @@
+
+use super::*;
+
+#[test]
+fn test_contraction_algorithm_roundtrip() {
+    for alg in [
+        ContractionAlgorithm::Naive,
+        ContractionAlgorithm::ZipUp,
+        ContractionAlgorithm::Fit,
+    ] {
+        let i = alg.to_i32();
+        let recovered = ContractionAlgorithm::from_i32(i).unwrap();
+        assert_eq!(alg, recovered);
+    }
+}
+
+#[test]
+fn test_compression_algorithm_roundtrip() {
+    for alg in [
+        CompressionAlgorithm::SVD,
+        CompressionAlgorithm::LU,
+        CompressionAlgorithm::CI,
+        CompressionAlgorithm::Variational,
+    ] {
+        let i = alg.to_i32();
+        let recovered = CompressionAlgorithm::from_i32(i).unwrap();
+        assert_eq!(alg, recovered);
+    }
+}
+
+#[test]
+fn test_canonical_form_roundtrip() {
+    for form in [CanonicalForm::Unitary, CanonicalForm::LU, CanonicalForm::CI] {
+        let i = form.to_i32();
+        let recovered = CanonicalForm::from_i32(i).unwrap();
+        assert_eq!(form, recovered);
+    }
+}
+
+#[test]
+fn test_invalid_values() {
+    assert!(ContractionAlgorithm::from_i32(-1).is_none());
+    assert!(ContractionAlgorithm::from_i32(100).is_none());
+    assert!(CompressionAlgorithm::from_i32(-1).is_none());
+    assert!(CompressionAlgorithm::from_i32(100).is_none());
+    assert!(CanonicalForm::from_i32(-1).is_none());
+    assert!(CanonicalForm::from_i32(100).is_none());
+}
+
+#[test]
+fn test_default() {
+    assert_eq!(ContractionAlgorithm::default(), ContractionAlgorithm::Naive);
+    assert_eq!(CompressionAlgorithm::default(), CompressionAlgorithm::SVD);
+    assert_eq!(CanonicalForm::default(), CanonicalForm::Unitary);
+}

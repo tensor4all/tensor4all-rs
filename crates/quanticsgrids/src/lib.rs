@@ -164,11 +164,4 @@ pub type IndexTable = Vec<Vec<QuanticsIndex>>;
 pub type LookupEntry = (usize, usize);
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_unfolding_scheme_default() {
-        assert_eq!(UnfoldingScheme::default(), UnfoldingScheme::Fused);
-    }
-}
+mod tests;
