@@ -1,4 +1,3 @@
-
 use super::*;
 
 // Simple test callback that returns sum of indices

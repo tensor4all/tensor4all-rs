@@ -1,4 +1,3 @@
-
 use super::super::types::tensor4_from_data;
 use super::*;
 

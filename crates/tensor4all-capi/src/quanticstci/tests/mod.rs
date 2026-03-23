@@ -1,4 +1,3 @@
-
 use super::*;
 
 // Discrete callback: f(i, j) = i + j (1-indexed)

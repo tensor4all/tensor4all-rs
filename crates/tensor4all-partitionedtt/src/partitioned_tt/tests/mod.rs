@@ -1,4 +1,3 @@
-
 use super::*;
 use tensor4all_core::index::Index;
 use tensor4all_core::TensorDynLen;

@@ -1,4 +1,3 @@
-
 use super::*;
 use num_complex::Complex64;
 use tensor4all_core::index::Index;

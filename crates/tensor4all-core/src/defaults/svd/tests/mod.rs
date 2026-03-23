@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::index::DefaultIndex as Index;
 use tenferro::Tensor as NativeTensor;

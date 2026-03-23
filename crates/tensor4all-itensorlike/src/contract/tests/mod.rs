@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::TensorTrainError;
 use tensor4all_core::{DynId, DynIndex, Index, TensorDynLen, TensorLike};

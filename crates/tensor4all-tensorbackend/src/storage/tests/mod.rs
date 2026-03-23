@@ -1,4 +1,3 @@
-
 use super::*;
 
 /// Helper to extract f64 data from storage

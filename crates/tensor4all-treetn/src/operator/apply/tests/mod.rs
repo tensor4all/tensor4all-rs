@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::random::{random_treetn_f64, LinkSpace};
 use crate::SiteIndexNetwork;

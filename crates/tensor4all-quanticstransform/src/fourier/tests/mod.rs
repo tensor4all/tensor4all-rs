@@ -1,4 +1,3 @@
-
 use super::*;
 use approx::assert_relative_eq;
 use tensor4all_simplett::AbstractTensorTrain;

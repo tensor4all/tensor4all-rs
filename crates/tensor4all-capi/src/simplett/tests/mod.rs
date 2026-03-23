@@ -1,4 +1,3 @@
-
 use super::*;
 use tensor4all_simplett::{tensor3_from_data, TensorTrain};
 

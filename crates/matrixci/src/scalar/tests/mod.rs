@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn test_scalar_generic<T: Scalar>() {

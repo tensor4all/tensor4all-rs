@@ -1,4 +1,3 @@
-
 use super::*;
 
 // Helper to create a 1D DiscretizedGrid via C API

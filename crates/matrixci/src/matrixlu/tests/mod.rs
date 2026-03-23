@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::util::{eye, from_vec2d, mat_mul, ncols, nrows, transpose};
 

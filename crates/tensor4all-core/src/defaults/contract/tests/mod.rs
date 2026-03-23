@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::defaults::Index;
 use num_complex::Complex64;

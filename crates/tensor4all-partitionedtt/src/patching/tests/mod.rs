@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::projector::Projector;
 use tensor4all_core::index::Index;

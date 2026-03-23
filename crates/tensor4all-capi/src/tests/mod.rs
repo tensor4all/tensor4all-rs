@@ -1,4 +1,3 @@
-
 use super::*;
 
 /// Helper: read the last error message as a Rust String.

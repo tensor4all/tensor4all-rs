@@ -1,4 +1,3 @@
-
 use super::*;
 
 // Compile-time check that TensorLike requires Sized (no dyn TensorLike)
