@@ -17,6 +17,7 @@
     "crates/tensor4all-simplett/src/mpo/contract_fit.rs": 25,
     "crates/mdarray-einsum/src/typed_tensor.rs": 45,
     "crates/tensor4all-tensorbackend/src/storage.rs": 72,
-    "crates/tensor4all-treetn/src/treetn/fit.rs": 66
+    "crates/tensor4all-treetn/src/treetn/fit.rs": 66,
+    "crates/tensor4all-hdf5/src/compat.rs": 62
   }
 }

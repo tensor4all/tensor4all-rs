@@ -155,9 +155,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn test_environment_cache_creation() {
-        // Compile-time test
-    }
-}
+mod tests;

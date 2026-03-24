@@ -414,12 +414,13 @@ where
             .map_err(|e| anyhow::anyhow!("Failed to add edge to site_index_network: {}", e))?;
 
         // Update physical indices: remove bond index from physical indices
-        if let Some(site_space_a) = self.site_index_network.site_space_mut(&node_name_a) {
-            site_space_a.remove(&bond_index);
-        }
-        if let Some(site_space_b) = self.site_index_network.site_space_mut(&node_name_b) {
-            site_space_b.remove(&bond_index);
-        }
+        // Use remove_site_index to also update the index_to_node reverse lookup
+        let _ = self
+            .site_index_network
+            .remove_site_index(&node_name_a, &bond_index);
+        let _ = self
+            .site_index_network
+            .remove_site_index(&node_name_b, &bond_index);
 
         // Register bond index in link_index_network for reverse lookup
         self.link_index_network.insert(edge_idx, &bond_index);
