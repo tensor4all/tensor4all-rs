@@ -175,28 +175,30 @@ The C API follows an **explicit ownership model** where objects created via `new
 
 **Rule 1: Creation implies ownership**
 ```c
-// Caller owns the returned object
-t4a_tensortrain* tt = t4a_tt_new_zeros(site_dims, num_sites);
-// Must release when done
-t4a_tt_release(tt);
+/* Caller owns the returned object */
+size_t site_dims[] = {2, 2, 2, 2};
+t4a_simplett_f64* tt = t4a_simplett_f64_zeros(site_dims, 4);
+/* Must release when done */
+t4a_simplett_f64_release(tt);
 ```
 
 **Rule 2: No ownership transfer**
 ```c
-// Functions take const pointers - they don't take ownership
-t4a_tensortrain* result = t4a_tt_scaled(tt, 2.0);
-// tt is still valid and owned by caller
-// result is a new object owned by caller
-t4a_tt_release(tt);
-t4a_tt_release(result);
+/* Functions take const pointers - they don't take ownership */
+t4a_simplett_f64* copy = t4a_simplett_f64_clone(tt);
+/* tt is still valid and owned by caller */
+/* copy is a new object owned by caller */
+t4a_simplett_f64_release(tt);
+t4a_simplett_f64_release(copy);
 ```
 
 **Rule 3: In-place operations modify the object**
 ```c
-// In-place operation modifies the object in place
-t4a_tt_scale_inplace(tt, 2.0);
-// tt is modified, still owned by caller
-t4a_tt_release(tt);
+/* In-place operations modify the object directly (no new allocation) */
+/* Example: hypothetical in-place scale — use _inplace suffix by convention */
+/* t4a_simplett_f64_scale_inplace(tt, 2.0); */
+/* tt is modified, still owned by caller */
+t4a_simplett_f64_release(tt);
 ```
 
 ### Mutability Strategy
@@ -208,14 +210,13 @@ The C API provides both **immutable** and **in-place** operations:
 These operations create new objects and leave the original unchanged:
 
 ```rust
-/// Scale a tensor train by a factor, returning a new object
+/// Clone a tensor train, returning a new independent object.
 ///
 /// The original tensor train is unchanged.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_tt_scaled(
-    ptr: *const t4a_tensortrain,
-    factor: libc::c_double,
-) -> *mut t4a_tensortrain {
+pub extern "C" fn t4a_simplett_f64_clone(
+    ptr: *const t4a_simplett_f64,
+) -> *mut t4a_simplett_f64 {
     // Returns new object, original unchanged
 }
 ```
@@ -230,13 +231,13 @@ pub extern "C" fn t4a_tt_scaled(
 These operations modify the object in place:
 
 ```rust
-/// Scale a tensor train by a factor in place
+/// Example pattern for an in-place operation.
 ///
-/// Modifies the tensor train in place. More memory-efficient than scaled()
-/// when you don't need the original.
+/// Modifies the tensor train in place. More memory-efficient than
+/// creating a new object when you don't need the original.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_tt_scale_inplace(
-    ptr: *mut t4a_tensortrain,
+pub extern "C" fn t4a_simplett_f64_scale_inplace(
+    ptr: *mut t4a_simplett_f64,
     factor: libc::c_double,
 ) -> StatusCode {
     // Modifies object in place
@@ -251,36 +252,33 @@ pub extern "C" fn t4a_tt_scale_inplace(
 ### Naming Conventions
 
 - **Immutable operations**: Use past participle or descriptive names
-  - `t4a_tt_scaled()` - returns new scaled object
-  - `t4a_tt_added()` - returns new sum object
-  - `t4a_tt_compressed()` - returns new compressed object
+  - `t4a_simplett_f64_clone()` - returns a new copy
+  - `t4a_simplett_f64_scaled()` - returns new scaled object (pattern)
+  - `t4a_simplett_f64_compressed()` - returns new compressed object (pattern)
 
 - **In-place operations**: Use `_inplace` suffix
-  - `t4a_tt_scale_inplace()` - modifies object in place
-  - `t4a_tt_add_inplace()` - modifies object in place
-  - `t4a_tt_compress_inplace()` - modifies object in place
+  - `t4a_simplett_f64_scale_inplace()` - modifies object in place (pattern)
+  - `t4a_simplett_f64_compress_inplace()` - modifies object in place (pattern)
 
 ### Example: Complete Ownership Lifecycle
 
 ```c
-// 1. Create object (caller owns it)
-t4a_tensortrain* tt1 = t4a_tt_new_constant(site_dims, num_sites, 1.0);
+/* 1. Create objects (caller owns them) */
+size_t site_dims[] = {2, 2, 2, 2};
+t4a_simplett_f64* tt1 = t4a_simplett_f64_constant(site_dims, 4, 1.0);
+t4a_simplett_f64* tt2 = t4a_simplett_f64_constant(site_dims, 4, 2.0);
 
-// 2. Create another object
-t4a_tensortrain* tt2 = t4a_tt_new_constant(site_dims, num_sites, 2.0);
+/* 2. Clone tt2 (immutable operation — original unchanged, caller owns copy) */
+t4a_simplett_f64* tt3 = t4a_simplett_f64_clone(tt2);
 
-// 3. Immutable operation (returns new object, caller owns it)
-t4a_tensortrain* tt3 = t4a_tt_added(tt1, tt2);
-// tt1 and tt2 are unchanged, still owned by caller
+/* 3. Query properties */
+double norm;
+t4a_simplett_f64_norm(tt3, &norm);
 
-// 4. In-place operation (modifies tt3 in place)
-t4a_tt_scale_inplace(tt3, 0.5);
-// tt3 is modified, still owned by caller
-
-// 5. Release all objects
-t4a_tt_release(tt1);
-t4a_tt_release(tt2);
-t4a_tt_release(tt3);
+/* 4. Release all objects */
+t4a_simplett_f64_release(tt1);
+t4a_simplett_f64_release(tt2);
+t4a_simplett_f64_release(tt3);
 ```
 
 ### Benefits of This Model
