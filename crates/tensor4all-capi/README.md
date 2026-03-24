@@ -19,27 +19,27 @@ C-compatible FFI interface to the tensor4all Rust library, enabling language bin
 
 ## Example (C)
 
-```c
-#include "tensor4all.h"
+> **Note**: A C header is not yet generated automatically. Declare the required
+> function prototypes manually, or generate one with `cbindgen` from the crate source.
 
-// Create an index
-T4AIndex* idx = t4a_index_new(10);
+```c
+/* Create an index with dimension 2 and a "Site" tag */
+t4a_index* idx = t4a_index_new(2);
 t4a_index_add_tag(idx, "Site");
 
-// Create a tensor
-size_t dims[] = {10, 10};
-T4ATensor* tensor = t4a_tensor_new_dense_f64(2, &idx, dims, data, 100);
+/* Create a tensor train of zeros: 4 sites each of dimension 2 */
+size_t site_dims[] = {2, 2, 2, 2};
+t4a_simplett_f64* tt = t4a_simplett_f64_zeros(site_dims, 4);
 
-// Create tensor train
-T4ATensorTrain* tt = t4a_tt_new(&tensors, 3);
+/* Query properties */
+size_t n_sites = t4a_simplett_f64_len(tt);
 
-// Orthogonalize and truncate
-t4a_tt_orthogonalize(tt, 1);
-t4a_tt_truncate(tt, 1e-10, 0.0, 20);  // rtol=1e-10, cutoff=0, maxdim=20
+/* Compute norm; returns T4A_SUCCESS (0) on success */
+double norm;
+t4a_simplett_f64_norm(tt, &norm);
 
-// Clean up
-t4a_tt_release(tt);
-t4a_tensor_release(tensor);
+/* Release objects */
+t4a_simplett_f64_release(tt);
 t4a_index_release(idx);
 ```
 
