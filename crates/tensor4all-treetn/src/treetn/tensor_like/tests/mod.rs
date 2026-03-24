@@ -149,10 +149,30 @@ fn test_replaceinds_length_mismatch() {
     assert!(result.unwrap_err().to_string().contains("Length mismatch"));
 }
 
-// TODO: replaceind for link (bond) indices via direct call fails with
-// "replace_tensor: new tensor must contain all indices used in connections".
-// This is a bug in the replaceind implementation — see tensor_like.rs lines 115-154.
-// The sim_linkinds() method works around this by using a different code path.
+#[test]
+fn test_replaceind_link_index_direct() {
+    let (tn, s0, _bond, s1) = make_two_node_treetn();
+
+    let edge = tn.graph.graph().edge_indices().next().unwrap();
+    let actual_bond = tn.bond_index(edge).unwrap().clone();
+
+    let new_bond = actual_bond.sim();
+    let tn2 = tn.replaceind(&actual_bond, &new_bond).unwrap();
+
+    let ext_ids: Vec<_> = tn2.external_indices().iter().map(|i| *i.id()).collect();
+    assert!(ext_ids.contains(s0.id()));
+    assert!(ext_ids.contains(s1.id()));
+
+    let edge2 = tn2.graph.graph().edge_indices().next().unwrap();
+    let updated_bond = tn2.bond_index(edge2).unwrap();
+    assert_eq!(*updated_bond.id(), *new_bond.id());
+    assert_ne!(*updated_bond.id(), *actual_bond.id());
+
+    // The contracted result should be the same
+    let orig_dense = tn.contract_to_tensor().unwrap();
+    let new_dense = tn2.contract_to_tensor().unwrap();
+    assert!(orig_dense.distance(&new_dense) < 1e-12);
+}
 
 #[test]
 fn test_replaceind_site_index_with_ortho_towards() {

@@ -18,7 +18,6 @@
     "crates/mdarray-einsum/src/typed_tensor.rs": 45,
     "crates/tensor4all-tensorbackend/src/storage.rs": 72,
     "crates/tensor4all-treetn/src/treetn/fit.rs": 66,
-    "crates/tensor4all-treetn/src/treetn/tensor_like.rs": 63,
     "crates/tensor4all-hdf5/src/compat.rs": 62
   }
 }
