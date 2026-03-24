@@ -52,3 +52,25 @@ fn test_default() {
     assert_eq!(CompressionAlgorithm::default(), CompressionAlgorithm::SVD);
     assert_eq!(CanonicalForm::default(), CanonicalForm::Unitary);
 }
+
+#[test]
+fn test_contraction_algorithm_name() {
+    assert_eq!(ContractionAlgorithm::Naive.name(), "naive");
+    assert_eq!(ContractionAlgorithm::ZipUp.name(), "zipup");
+    assert_eq!(ContractionAlgorithm::Fit.name(), "fit");
+}
+
+#[test]
+fn test_canonical_form_name() {
+    assert_eq!(CanonicalForm::Unitary.name(), "unitary");
+    assert_eq!(CanonicalForm::LU.name(), "lu");
+    assert_eq!(CanonicalForm::CI.name(), "ci");
+}
+
+#[test]
+fn test_compression_algorithm_name() {
+    assert_eq!(CompressionAlgorithm::SVD.name(), "svd");
+    assert_eq!(CompressionAlgorithm::LU.name(), "lu");
+    assert_eq!(CompressionAlgorithm::CI.name(), "ci");
+    assert_eq!(CompressionAlgorithm::Variational.name(), "variational");
+}

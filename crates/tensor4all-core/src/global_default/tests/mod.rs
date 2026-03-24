@@ -34,3 +34,38 @@ fn test_error_display() {
     assert!(msg.contains("-1"));
     assert!(msg.contains("rtol"));
 }
+
+#[test]
+fn test_runtime_construction() {
+    // Create GlobalDefault at runtime (not as static) to exercise
+    // the constructor through runtime code paths.
+    let default = GlobalDefault::new(3.14);
+    assert!((default.get() - 3.14).abs() < 1e-15);
+
+    default.set(2.71).unwrap();
+    assert!((default.get() - 2.71).abs() < 1e-15);
+}
+
+#[test]
+fn test_new_with_zero() {
+    let default = GlobalDefault::new(0.0);
+    assert_eq!(default.get(), 0.0);
+
+    // Setting to zero should be valid
+    default.set(0.0).unwrap();
+    assert_eq!(default.get(), 0.0);
+}
+
+#[test]
+fn test_negative_infinity_error() {
+    let default = GlobalDefault::new(1.0);
+    assert!(default.set(f64::NEG_INFINITY).is_err());
+}
+
+#[test]
+fn test_error_debug_and_clone() {
+    let err = InvalidRtolError(f64::NAN);
+    let err2 = err;
+    let debug_str = format!("{:?}", err2);
+    assert!(debug_str.contains("InvalidRtolError"));
+}

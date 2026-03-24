@@ -44,3 +44,43 @@ fn test_scalar_c64() {
 fn test_scalar_c32() {
     test_scalar_generic::<Complex32>();
 }
+
+#[test]
+fn test_abs_and_abs_val_f64() {
+    let x: f64 = -3.5;
+    // abs returns the absolute value
+    assert!((Scalar::abs(x) - 3.5).abs() < 1e-10);
+    // abs_val returns the same as abs for real types
+    assert!((x.abs_val() - 3.5).abs() < 1e-10);
+}
+
+#[test]
+fn test_abs_and_abs_val_f32() {
+    let x: f32 = -2.5;
+    // abs returns the absolute value
+    assert!((Scalar::abs(x) - 2.5).abs() < 1e-6);
+    // abs_val returns f64
+    assert!((x.abs_val() - 2.5).abs() < 1e-6);
+}
+
+#[test]
+fn test_abs_and_abs_val_c64() {
+    let z = Complex64::new(3.0, 4.0);
+    // abs returns Complex64 with re=|z|, im=0
+    let z_abs = Scalar::abs(z);
+    assert!((z_abs.re - 5.0).abs() < 1e-10);
+    assert!(z_abs.im.abs() < 1e-10);
+    // abs_val returns f64
+    assert!((z.abs_val() - 5.0).abs() < 1e-10);
+}
+
+#[test]
+fn test_abs_and_abs_val_c32() {
+    let z = Complex32::new(3.0, 4.0);
+    // abs returns Complex32 with re=|z|, im=0
+    let z_abs = Scalar::abs(z);
+    assert!((z_abs.re - 5.0).abs() < 1e-5);
+    assert!(z_abs.im.abs() < 1e-5);
+    // abs_val returns f64
+    assert!((z.abs_val() - 5.0).abs() < 1e-5);
+}

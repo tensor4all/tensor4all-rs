@@ -148,3 +148,48 @@ fn test_replaceinds_length_mismatch() {
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Length mismatch"));
 }
+
+// TODO: replaceind for link (bond) indices via direct call fails with
+// "replace_tensor: new tensor must contain all indices used in connections".
+// This is a bug in the replaceind implementation — see tensor_like.rs lines 115-154.
+// The sim_linkinds() method works around this by using a different code path.
+
+#[test]
+fn test_replaceind_site_index_with_ortho_towards() {
+    let (mut tn, s0, _bond, s1) = make_two_node_treetn();
+
+    // Set ortho_towards for s0 to point towards "B"
+    tn.set_ortho_towards(&s0, Some("B".to_string()));
+    assert_eq!(tn.ortho_towards_for_index(&s0), Some(&"B".to_string()));
+
+    // Replace s0 with a new index
+    let s0_new = DynIndex::new_dyn(2);
+    let tn2 = tn.replaceind(&s0, &s0_new).unwrap();
+
+    // ortho_towards should now use the new index
+    assert!(tn2.ortho_towards_for_index(&s0).is_none());
+    assert_eq!(tn2.ortho_towards_for_index(&s0_new), Some(&"B".to_string()));
+
+    // Site indices should be updated
+    let ext_ids: Vec<_> = tn2.external_indices().iter().map(|i| *i.id()).collect();
+    assert!(!ext_ids.contains(s0.id()));
+    assert!(ext_ids.contains(s0_new.id()));
+    assert!(ext_ids.contains(s1.id()));
+}
+
+#[test]
+fn test_replaceind_link_index_dimension_mismatch() {
+    let (tn, _s0, _bond, _s1) = make_two_node_treetn();
+
+    // Get the actual bond index from the TreeTN
+    let edge = tn.graph.graph().edge_indices().next().unwrap();
+    let actual_bond = tn.bond_index(edge).unwrap().clone();
+
+    let wrong_dim = DynIndex::new_dyn(7); // bond has dim 3
+    let result = tn.replaceind(&actual_bond, &wrong_dim);
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Index space mismatch"));
+}

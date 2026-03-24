@@ -16,23 +16,9 @@
     "crates/tensor4all-simplett/src/mpo/vidal_mpo.rs": 17,
     "crates/tensor4all-simplett/src/mpo/contract_fit.rs": 25,
     "crates/mdarray-einsum/src/typed_tensor.rs": 45,
-    "crates/tensor4all-tensorbackend/src/storage.rs": 63,
+    "crates/tensor4all-tensorbackend/src/storage.rs": 72,
     "crates/tensor4all-treetn/src/treetn/fit.rs": 66,
-    "crates/matrixci/src/scalar.rs": 72,
-    "crates/tensor4all-core/src/block_tensor.rs": 58,
-    "crates/tensor4all-core/src/defaults/direct_sum.rs": 71,
-    "crates/tensor4all-core/src/global_default.rs": 71,
-    "crates/tensor4all-core/src/krylov.rs": 69,
-    "crates/tensor4all-core/src/truncation.rs": 67,
-    "crates/tensor4all-itensorlike/src/tensortrain.rs": 62,
-    "crates/tensor4all-partitionedtt/src/partitioned_tt.rs": 59,
-    "crates/tensor4all-tensorbackend/src/tenferro_bridge.rs": 70,
-    "crates/tensor4all-tensorci/src/cached_function.rs": 73,
-    "crates/tensor4all-tensorci/src/indexset.rs": 68,
-    "crates/tensor4all-treetn/src/algorithm.rs": 61,
-    "crates/tensor4all-treetn/src/operator/linear_operator.rs": 59,
-    "crates/tensor4all-treetn/src/site_index_network.rs": 64,
-    "crates/tensor4all-treetn/src/treetn/tensor_like.rs": 62,
-    "crates/tensor4all-treetn/src/treetn/transform.rs": 69
+    "crates/tensor4all-treetn/src/treetn/tensor_like.rs": 63,
+    "crates/tensor4all-hdf5/src/compat.rs": 62
   }
 }

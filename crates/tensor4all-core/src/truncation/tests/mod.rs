@@ -1,5 +1,24 @@
 use super::*;
 
+/// A wrapper struct to test HasTruncationParams trait default methods.
+/// TruncationParams itself has inherent methods that shadow the trait defaults,
+/// so we need a separate type to exercise the trait default implementations.
+#[derive(Debug, Default)]
+struct TestOptions {
+    truncation: TruncationParams,
+    _extra: i32,
+}
+
+impl HasTruncationParams for TestOptions {
+    fn truncation_params(&self) -> &TruncationParams {
+        &self.truncation
+    }
+
+    fn truncation_params_mut(&mut self) -> &mut TruncationParams {
+        &mut self.truncation
+    }
+}
+
 #[test]
 fn test_truncation_params_builder() {
     let params = TruncationParams::new().with_rtol(1e-10).with_max_rank(50);
@@ -104,4 +123,39 @@ fn test_has_truncation_params_cutoff() {
 
     params.set_maxdim(100);
     assert_eq!(params.max_rank, Some(100));
+}
+
+#[test]
+fn test_trait_default_with_rtol() {
+    // Exercise HasTruncationParams::with_rtol default implementation (lines 171-179)
+    let opts = TestOptions::default().with_rtol(1e-6);
+    assert_eq!(opts.truncation.rtol, Some(1e-6));
+    assert_eq!(opts.truncation.cutoff, None);
+
+    // Verify cutoff is cleared when rtol is set after cutoff
+    let opts = TestOptions::default().with_cutoff(1e-10).with_rtol(1e-3);
+    assert_eq!(opts.truncation.rtol, Some(1e-3));
+    assert_eq!(opts.truncation.cutoff, None);
+}
+
+#[test]
+fn test_trait_default_with_max_rank() {
+    // Exercise HasTruncationParams::with_max_rank default implementation (lines 182-188)
+    let opts = TestOptions::default().with_max_rank(42);
+    assert_eq!(opts.truncation.max_rank, Some(42));
+}
+
+#[test]
+fn test_trait_default_with_cutoff() {
+    // Exercise HasTruncationParams::with_cutoff default implementation (lines 193-201)
+    let opts = TestOptions::default().with_cutoff(1e-10);
+    assert_eq!(opts.truncation.cutoff, Some(1e-10));
+    assert!((opts.truncation.rtol.unwrap() - 1e-5).abs() < 1e-15);
+}
+
+#[test]
+fn test_trait_default_with_maxdim() {
+    // Exercise HasTruncationParams::with_maxdim default implementation (lines 204-210)
+    let opts = TestOptions::default().with_maxdim(200);
+    assert_eq!(opts.truncation.max_rank, Some(200));
 }

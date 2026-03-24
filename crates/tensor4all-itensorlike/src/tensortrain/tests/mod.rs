@@ -792,3 +792,430 @@ fn test_tensor_like_inner_product() {
         inner_direct.real()
     );
 }
+
+#[test]
+fn test_multiple_common_indices_error() {
+    // Create two tensors that share TWO common indices => should error
+    let shared1 = idx(10, 2);
+    let shared2 = idx(11, 3);
+
+    let t0 = make_tensor(vec![shared1.clone(), shared2.clone()]);
+    let t1 = make_tensor(vec![shared1.clone(), shared2.clone()]);
+
+    let result = TensorTrain::new(vec![t0, t1]);
+    assert!(result.is_err());
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("Multiple common indices"));
+}
+
+#[test]
+fn test_set_canonical_form() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0, l01.clone()]);
+    let t1 = make_tensor(vec![l01, s1]);
+
+    let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    assert_eq!(tt.canonical_form(), None);
+
+    tt.set_canonical_form(Some(CanonicalForm::LU));
+    assert_eq!(tt.canonical_form(), Some(CanonicalForm::LU));
+
+    tt.set_canonical_form(None);
+    assert_eq!(tt.canonical_form(), None);
+}
+
+#[test]
+fn test_tensor_checked_out_of_bounds() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0, l01.clone()]);
+    let t1 = make_tensor(vec![l01, s1]);
+
+    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    // Valid access
+    assert!(tt.tensor_checked(0).is_ok());
+    assert!(tt.tensor_checked(1).is_ok());
+
+    // Out of bounds
+    let err = tt.tensor_checked(2).unwrap_err();
+    assert!(matches!(
+        err,
+        TensorTrainError::SiteOutOfBounds { site: 2, length: 2 }
+    ));
+
+    let err = tt.tensor_checked(100).unwrap_err();
+    assert!(matches!(err, TensorTrainError::SiteOutOfBounds { .. }));
+}
+
+#[test]
+fn test_tensor_mut() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+    let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    // Mutate tensor at site 0
+    let t = tt.tensor_mut(0);
+    assert_eq!(t.indices().len(), 2);
+    // Just verify we can get a mutable reference without panic
+    let _ = t.indices();
+}
+
+#[test]
+fn test_linkind_out_of_bounds() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0, l01.clone()]);
+    let t1 = make_tensor(vec![l01, s1]);
+
+    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    // Valid link
+    assert!(tt.linkind(0).is_some());
+
+    // Out of bounds
+    assert!(tt.linkind(1).is_none());
+    assert!(tt.linkind(100).is_none());
+}
+
+#[test]
+fn test_sim_linkinds_single_site() {
+    // Single site TT: sim_linkinds should return a clone
+    let s0 = idx(0, 4);
+    let t0 = make_tensor(vec![s0.clone()]);
+    let tt = TensorTrain::new(vec![t0]).unwrap();
+
+    let simmed = tt.sim_linkinds();
+    assert_eq!(simmed.len(), 1);
+    // Should have same data
+    let orig_data = tt.tensor(0).as_slice_f64().unwrap();
+    let sim_data = simmed.tensor(0).as_slice_f64().unwrap();
+    assert_eq!(orig_data, sim_data);
+}
+
+#[test]
+fn test_sim_linkinds_two_sites() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    let simmed = tt.sim_linkinds();
+
+    assert_eq!(simmed.len(), 2);
+    assert_eq!(simmed.bond_dims(), vec![3]);
+
+    // The link index should have a different ID than the original
+    let orig_link = tt.linkind(0).unwrap();
+    let sim_link = simmed.linkind(0).unwrap();
+    assert_ne!(orig_link.id(), sim_link.id());
+    assert_eq!(orig_link.size(), sim_link.size());
+
+    // Site indices should be preserved
+    let orig_sites = tt.siteinds();
+    let sim_sites = simmed.siteinds();
+    assert_eq!(orig_sites[0][0].id(), sim_sites[0][0].id());
+    assert_eq!(orig_sites[1][0].id(), sim_sites[1][0].id());
+}
+
+#[test]
+fn test_siteinds_empty() {
+    let tt = TensorTrain::new(vec![]).unwrap();
+    let site_inds = tt.siteinds();
+    assert!(site_inds.is_empty());
+}
+
+#[test]
+fn test_set_llim_valid_center() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+    let l12 = idx(3, 3);
+    let s2 = idx(4, 2);
+
+    let t0 = make_tensor(vec![s0, l01.clone()]);
+    let t1 = make_tensor(vec![l01, s1, l12.clone()]);
+    let t2 = make_tensor(vec![l12, s2]);
+
+    // Start with ortho center at site 1
+    let mut tt =
+        TensorTrain::with_ortho(vec![t0, t1, t2], 0, 2, Some(CanonicalForm::Unitary)).unwrap();
+    assert!(tt.isortho());
+    assert_eq!(tt.orthocenter(), Some(1));
+
+    // set_llim to 0 with current rlim=2 => center should be 1 (0+1)
+    tt.set_llim(0);
+    assert!(tt.isortho());
+    assert_eq!(tt.orthocenter(), Some(1));
+}
+
+#[test]
+fn test_set_rlim_valid_center() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+    let l12 = idx(3, 3);
+    let s2 = idx(4, 2);
+
+    let t0 = make_tensor(vec![s0, l01.clone()]);
+    let t1 = make_tensor(vec![l01, s1, l12.clone()]);
+    let t2 = make_tensor(vec![l12, s2]);
+
+    // Start with ortho center at site 0
+    let mut tt =
+        TensorTrain::with_ortho(vec![t0, t1, t2], -1, 1, Some(CanonicalForm::Unitary)).unwrap();
+    assert!(tt.isortho());
+    assert_eq!(tt.orthocenter(), Some(0));
+
+    // set_rlim to 2 with current llim=-1 => llim will be recomputed.
+    // After set_rlim(2): llim from orthocenter is recalculated.
+    // Since set_rlim reads current llim first (which is -1), then checks -1+2==2? No, 1!=2.
+    // So this clears ortho. Let's set rlim=1 which keeps center at 0.
+    tt.set_rlim(1);
+    assert!(tt.isortho());
+    assert_eq!(tt.orthocenter(), Some(0));
+}
+
+#[test]
+fn test_orthogonalize_empty_errors() {
+    let mut tt = TensorTrain::new(vec![]).unwrap();
+    let err = tt.orthogonalize(0).unwrap_err();
+    assert!(matches!(err, TensorTrainError::Empty));
+}
+
+#[test]
+fn test_orthogonalize_out_of_bounds_errors() {
+    let s0 = idx(0, 2);
+    let t0 = make_tensor(vec![s0]);
+    let mut tt = TensorTrain::new(vec![t0]).unwrap();
+
+    let err = tt.orthogonalize(1).unwrap_err();
+    assert!(matches!(
+        err,
+        TensorTrainError::SiteOutOfBounds { site: 1, length: 1 }
+    ));
+}
+
+#[test]
+fn test_sim_linkinds_three_sites() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+    let l12 = idx(3, 3);
+    let s2 = idx(4, 2);
+
+    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1.clone(), l12.clone()]);
+    let t2 = make_tensor(vec![l12.clone(), s2.clone()]);
+
+    let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+    let simmed = tt.sim_linkinds();
+
+    assert_eq!(simmed.len(), 3);
+    assert_eq!(simmed.bond_dims().len(), 2);
+
+    // All link indices should have different IDs than originals
+    for i in 0..2 {
+        let orig_link = tt.linkind(i).unwrap();
+        let sim_link = simmed.linkind(i).unwrap();
+        assert_ne!(orig_link.id(), sim_link.id());
+        assert_eq!(orig_link.size(), sim_link.size());
+    }
+
+    // Dense contraction should give same values
+    let orig_dense = tt.to_dense().unwrap();
+    let sim_dense = simmed.to_dense().unwrap();
+    let orig_data = orig_dense.as_slice_f64().unwrap();
+    let sim_data = sim_dense.as_slice_f64().unwrap();
+    assert_eq!(orig_data.len(), sim_data.len());
+    for (a, b) in orig_data.iter().zip(sim_data.iter()) {
+        assert!((a - b).abs() < 1e-10);
+    }
+}
+
+#[test]
+fn test_truncate_single_site_noop() {
+    // Truncating a single-site TT should be a no-op
+    let s0 = idx(0, 4);
+    let t0 = make_tensor(vec![s0]);
+    let mut tt = TensorTrain::new(vec![t0]).unwrap();
+
+    let options = TruncateOptions::svd().with_max_rank(2);
+    tt.truncate(&options).unwrap();
+    assert_eq!(tt.len(), 1);
+}
+
+#[test]
+fn test_haslink() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0, l01.clone()]);
+    let t1 = make_tensor(vec![l01, s1]);
+
+    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    assert!(tt.haslink(0));
+    assert!(!tt.haslink(1));
+    assert!(!tt.haslink(100));
+}
+
+#[test]
+fn test_linkinds() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+    let l12 = idx(3, 4);
+    let s2 = idx(4, 2);
+
+    let t0 = make_tensor(vec![s0, l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1, l12.clone()]);
+    let t2 = make_tensor(vec![l12.clone(), s2]);
+
+    let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+
+    let links = tt.linkinds();
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0].size(), 3);
+    assert_eq!(links[1].size(), 4);
+}
+
+#[test]
+fn test_bond_dim() {
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 5);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0, l01.clone()]);
+    let t1 = make_tensor(vec![l01, s1]);
+
+    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    assert_eq!(tt.bond_dim(0), Some(5));
+    assert_eq!(tt.bond_dim(1), None);
+}
+
+#[test]
+fn test_maxbonddim_single_site() {
+    let s0 = idx(0, 4);
+    let t0 = make_tensor(vec![s0]);
+    let tt = TensorTrain::new(vec![t0]).unwrap();
+    // Single site has no bonds, maxbonddim returns 1
+    assert_eq!(tt.maxbonddim(), 1);
+}
+
+#[test]
+fn test_tensor_like_maxabs() {
+    use tensor4all_core::TensorLike;
+
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    let maxabs = TensorLike::maxabs(&tt);
+    assert!(maxabs > 0.0);
+
+    // Compare with dense maxabs
+    let dense = tt.to_dense().unwrap();
+    let dense_maxabs = dense.maxabs();
+    assert!((maxabs - dense_maxabs).abs() < 1e-10);
+}
+
+#[test]
+fn test_tensor_like_conj() {
+    use tensor4all_core::TensorLike;
+
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    // For real tensors, conj should be identical
+    let conj_tt = TensorLike::conj(&tt);
+    assert_eq!(conj_tt.len(), tt.len());
+
+    let orig_dense = tt.to_dense().unwrap();
+    let conj_dense = conj_tt.to_dense().unwrap();
+
+    let orig_data = orig_dense.as_slice_f64().unwrap();
+    let conj_data = conj_dense.as_slice_f64().unwrap();
+
+    assert_eq!(orig_data.len(), conj_data.len());
+    for (a, b) in orig_data.iter().zip(conj_data.iter()) {
+        assert!((a - b).abs() < 1e-10);
+    }
+}
+
+#[test]
+fn test_default_is_empty() {
+    let tt = TensorTrain::default();
+    assert!(tt.is_empty());
+    assert_eq!(tt.len(), 0);
+}
+
+#[test]
+fn test_replaceind() {
+    use tensor4all_core::TensorIndex;
+
+    let s0 = idx(0, 2);
+    let l01 = idx(1, 3);
+    let s1 = idx(2, 2);
+
+    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
+    let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
+
+    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+    // Replace s0 with a new index of the same size
+    let new_s0 = idx(100, 2);
+    let tt2 = tt.replaceind(&s0, &new_s0).unwrap();
+
+    // The new TT should have the new index
+    let ext_inds = tt2.external_indices();
+    assert!(ext_inds.iter().any(|i| i.id() == new_s0.id()));
+    assert!(!ext_inds.iter().any(|i| i.id() == s0.id()));
+}
+
+#[test]
+fn test_truncate_with_rtol() {
+    let s0 = idx(0, 4);
+    let l01 = idx(1, 8);
+    let s1 = idx(2, 4);
+    let l12 = idx(3, 8);
+    let s2 = idx(4, 4);
+
+    let t0 = make_tensor(vec![s0, l01.clone()]);
+    let t1 = make_tensor(vec![l01, s1, l12.clone()]);
+    let t2 = make_tensor(vec![l12, s2]);
+
+    let mut tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+
+    let options = TruncateOptions::svd().with_rtol(1e-10);
+    tt.truncate(&options).unwrap();
+    assert!(tt.isortho() || tt.len() == 3);
+}

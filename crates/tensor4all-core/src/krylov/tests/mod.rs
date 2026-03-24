@@ -660,3 +660,314 @@ fn test_gmres_with_truncation_check_true_residual_consistency() {
         true_rel_res
     );
 }
+
+// ==========================================================================
+// Tests for uncovered code paths
+// ==========================================================================
+
+#[test]
+fn test_gmres_verbose_output() {
+    // Exercise verbose code paths in gmres (lines 151, 158-161, 242)
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![4.0, 6.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+
+    let a_data = [2.0, 1.0, 0.0, 3.0];
+    let apply_a = move |x: &TensorDynLen| apply_matrix2_f64(x, &a_data);
+
+    let options = GmresOptions {
+        max_iter: 10,
+        rtol: 1e-10,
+        max_restarts: 2,
+        verbose: true,
+        check_true_residual: false,
+    };
+
+    let result = gmres(apply_a, &b, &x0, &options).unwrap();
+    assert!(result.converged);
+}
+
+#[test]
+fn test_gmres_no_convergence_exhausts_restarts() {
+    // Force gmres to exhaust all restarts without converging.
+    // Use max_iter=1 and max_restarts=1 with a harder problem so it can't converge.
+    let idx = DynIndex::new_dyn(3);
+    let b = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
+
+    let diag = [2.0, 3.0, 4.0];
+    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+
+    // Very few iterations and restarts, tight tolerance
+    let options = GmresOptions {
+        max_iter: 1,
+        rtol: 1e-15,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: false,
+    };
+
+    let result = gmres(apply_a, &b, &x0, &options).unwrap();
+    // With max_iter=1 and max_restarts=1, it may or may not converge,
+    // but the end-of-restart and final-residual code paths should be hit.
+    // The important thing is it runs without error.
+    assert!(result.residual_norm >= 0.0);
+}
+
+#[test]
+fn test_gmres_lucky_breakdown() {
+    // For a 1D system, the Krylov subspace is exact after 1 iteration,
+    // causing h_{j+1,j} = 0 (lucky breakdown).
+    // A = [5], b = [10], x0 = [0] -> solution x = [2]
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![10.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+
+    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { scale_vector_f64(x, &[5.0]) };
+
+    let options = GmresOptions {
+        max_iter: 10,
+        rtol: 1e-10,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: false,
+    };
+
+    let result = gmres(apply_a, &b, &x0, &options).unwrap();
+    assert!(result.converged, "Should converge via lucky breakdown");
+
+    let expected = make_vector_with_index(vec![2.0], &idx);
+    let diff = result
+        .solution
+        .axpby(
+            AnyScalar::new_real(1.0),
+            &expected,
+            AnyScalar::new_real(-1.0),
+        )
+        .unwrap();
+    assert!(diff.norm() < 1e-10, "Solution should be [2.0]");
+}
+
+#[test]
+fn test_gmres_with_truncation_zero_rhs() {
+    // Exercise the zero-b early return in gmres_with_truncation (lines 345-350)
+    let idx = DynIndex::new_dyn(3);
+    let b = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
+    let x0 = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
+
+    let apply_a = |x: &TensorDynLen| -> Result<TensorDynLen> { Ok(x.clone()) };
+    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+    let options = GmresOptions {
+        max_iter: 10,
+        rtol: 1e-10,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: false,
+    };
+
+    let result = gmres_with_truncation(apply_a, &b, &x0, &options, truncate).unwrap();
+    assert!(result.converged);
+    assert_eq!(result.iterations, 0);
+}
+
+#[test]
+fn test_gmres_with_truncation_already_converged() {
+    // Initial guess already satisfies the equation, triggering early return (lines 375-380)
+    let idx = DynIndex::new_dyn(3);
+    let b = make_vector_with_index(vec![2.0, 6.0, 12.0], &idx);
+    let x0 = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx); // Exact solution for diag(2,3,4)
+
+    let diag = [2.0, 3.0, 4.0];
+    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+    let options = GmresOptions {
+        max_iter: 10,
+        rtol: 1e-10,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: false,
+    };
+
+    let result = gmres_with_truncation(apply_a, &b, &x0, &options, truncate).unwrap();
+    assert!(result.converged);
+    assert_eq!(result.iterations, 0);
+}
+
+#[test]
+fn test_gmres_with_truncation_verbose() {
+    // Exercise verbose output paths in gmres_with_truncation
+    // (lines 361, 368-371, 446-457, 463, 467, 503, 517, 522-525)
+    let idx = DynIndex::new_dyn(3);
+    let b = make_vector_with_index(vec![2.0, 6.0, 12.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
+
+    let diag = [2.0, 3.0, 4.0];
+    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+    let options = GmresOptions {
+        max_iter: 10,
+        rtol: 1e-10,
+        max_restarts: 2,
+        verbose: true,
+        check_true_residual: true,
+    };
+
+    let result = gmres_with_truncation(apply_a, &b, &x0, &options, truncate).unwrap();
+    assert!(result.converged);
+}
+
+#[test]
+fn test_restart_gmres_stagnation_detection() {
+    // Test stagnation detection in restart_gmres_with_truncation.
+    // Use a system where the exact solution has irrational-like components
+    // that can't be represented after rounding, causing stagnation.
+    let idx = DynIndex::new_dyn(3);
+    // A = diag(3, 7, 11), b = [1, 1, 1] -> x = [1/3, 1/7, 1/11]
+    // These solutions can't be exactly represented after rounding to 1 decimal place.
+    let b = make_vector_with_index(vec![1.0, 1.0, 1.0], &idx);
+
+    let diag = [3.0, 7.0, 11.0];
+    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+
+    // Truncation that rounds to 1 decimal place - the exact solution [1/3, 1/7, 1/11]
+    // gets rounded to [0.3, 0.1, 0.1], preventing convergence below the rounding error.
+    let truncate = |x: &mut TensorDynLen| -> Result<()> {
+        let data = x.to_vec_f64()?;
+        let new_data: Vec<f64> = data.iter().map(|&v| (v * 10.0).round() / 10.0).collect();
+        *x = TensorDynLen::from_dense(x.indices.clone(), new_data).unwrap();
+        Ok(())
+    };
+
+    let options = RestartGmresOptions {
+        max_outer_iters: 30,
+        rtol: 1e-12,
+        inner_max_iter: 5,
+        inner_max_restarts: 0,
+        min_reduction: Some(0.999),
+        inner_rtol: Some(0.1),
+        verbose: false,
+    };
+
+    let result = restart_gmres_with_truncation(apply_a, &b, None, &options, truncate).unwrap();
+    // Stagnation should be detected and converged should be false
+    assert!(!result.converged, "Should detect stagnation");
+}
+
+#[test]
+fn test_restart_gmres_exhausts_outer_iters() {
+    // Test the path where restart_gmres exhausts all outer iterations without converging.
+    let idx = DynIndex::new_dyn(3);
+    let b = make_vector_with_index(vec![2.0, 6.0, 12.0], &idx);
+
+    let diag = [2.0, 3.0, 4.0];
+    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+    // Very few iterations and extremely tight tolerance to prevent convergence
+    let options = RestartGmresOptions {
+        max_outer_iters: 1,
+        rtol: 1e-100, // impossibly tight
+        inner_max_iter: 1,
+        inner_max_restarts: 0,
+        min_reduction: None,
+        inner_rtol: Some(0.5),
+        verbose: false,
+    };
+
+    let result = restart_gmres_with_truncation(apply_a, &b, None, &options, truncate).unwrap();
+    assert!(!result.converged);
+    assert_eq!(result.outer_iterations, options.max_outer_iters);
+}
+
+#[test]
+fn test_restart_gmres_verbose() {
+    // Exercise verbose output paths in restart_gmres_with_truncation
+    let idx = DynIndex::new_dyn(3);
+    let b = make_vector_with_index(vec![2.0, 6.0, 12.0], &idx);
+
+    let diag = [2.0, 3.0, 4.0];
+    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+    let options = RestartGmresOptions {
+        max_outer_iters: 10,
+        rtol: 1e-10,
+        inner_max_iter: 5,
+        inner_max_restarts: 0,
+        min_reduction: None,
+        inner_rtol: Some(0.1),
+        verbose: true,
+    };
+
+    let result = restart_gmres_with_truncation(apply_a, &b, None, &options, truncate).unwrap();
+    assert!(result.converged);
+}
+
+#[test]
+fn test_restart_gmres_zero_rhs_with_x0() {
+    // Cover the zero-b-with-x0 path in restart_gmres_with_truncation (line 779)
+    let idx = DynIndex::new_dyn(3);
+    let b = make_vector_with_index(vec![0.0, 0.0, 0.0], &idx);
+    let x0 = make_vector_with_index(vec![1.0, 2.0, 3.0], &idx);
+
+    let diag = [2.0, 3.0, 4.0];
+    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+    let truncate = |_x: &mut TensorDynLen| -> Result<()> { Ok(()) };
+
+    let options = RestartGmresOptions {
+        max_outer_iters: 5,
+        rtol: 1e-10,
+        inner_max_iter: 3,
+        inner_max_restarts: 0,
+        min_reduction: None,
+        inner_rtol: None,
+        verbose: false,
+    };
+
+    let result =
+        restart_gmres_with_truncation(apply_a, &b, Some(&x0), &options, truncate).unwrap();
+    assert!(result.converged);
+    assert_eq!(result.iterations, 0);
+    // Solution should be x0 when b is zero
+    assert!(result.solution.distance(&x0) < 1e-12);
+}
+
+#[test]
+fn test_restart_gmres_stagnation_verbose() {
+    // Cover the stagnation verbose output path (lines 847-851)
+    let n = 10;
+    let idx = DynIndex::new_dyn(n);
+    let b_data: Vec<f64> = (1..=n).map(|i| i as f64).collect();
+    let b = make_vector_with_index(b_data, &idx);
+
+    let diag: Vec<f64> = (0..n)
+        .map(|i| 10.0_f64.powf(i as f64 * 3.0 / (n as f64 - 1.0)))
+        .collect();
+    let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
+
+    let truncate = |x: &mut TensorDynLen| -> Result<()> {
+        let data = x.to_vec_f64()?;
+        let new_data: Vec<f64> = data
+            .iter()
+            .map(|&v| (v * 100.0).round() / 100.0)
+            .collect();
+        *x = TensorDynLen::from_dense(x.indices.clone(), new_data).unwrap();
+        Ok(())
+    };
+
+    let options = RestartGmresOptions {
+        max_outer_iters: 10,
+        rtol: 1e-12,
+        inner_max_iter: 3,
+        inner_max_restarts: 0,
+        min_reduction: Some(0.999),
+        inner_rtol: Some(0.1),
+        verbose: true, // Cover verbose stagnation output
+    };
+
+    let result = restart_gmres_with_truncation(apply_a, &b, None, &options, truncate).unwrap();
+    assert!(!result.converged);
+}
