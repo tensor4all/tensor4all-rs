@@ -927,8 +927,7 @@ fn test_restart_gmres_zero_rhs_with_x0() {
         verbose: false,
     };
 
-    let result =
-        restart_gmres_with_truncation(apply_a, &b, Some(&x0), &options, truncate).unwrap();
+    let result = restart_gmres_with_truncation(apply_a, &b, Some(&x0), &options, truncate).unwrap();
     assert!(result.converged);
     assert_eq!(result.iterations, 0);
     // Solution should be x0 when b is zero
@@ -950,10 +949,7 @@ fn test_restart_gmres_stagnation_verbose() {
 
     let truncate = |x: &mut TensorDynLen| -> Result<()> {
         let data = x.to_vec_f64()?;
-        let new_data: Vec<f64> = data
-            .iter()
-            .map(|&v| (v * 100.0).round() / 100.0)
-            .collect();
+        let new_data: Vec<f64> = data.iter().map(|&v| (v * 100.0).round() / 100.0).collect();
         *x = TensorDynLen::from_dense(x.indices.clone(), new_data).unwrap();
         Ok(())
     };
