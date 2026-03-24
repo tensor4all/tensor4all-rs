@@ -39,8 +39,8 @@ fn test_error_display() {
 fn test_runtime_construction() {
     // Create GlobalDefault at runtime (not as static) to exercise
     // the constructor through runtime code paths.
-    let default = GlobalDefault::new(3.14);
-    assert!((default.get() - 3.14).abs() < 1e-15);
+    let default = GlobalDefault::new(std::f64::consts::PI);
+    assert!((default.get() - std::f64::consts::PI).abs() < 1e-15);
 
     default.set(2.71).unwrap();
     assert!((default.get() - 2.71).abs() < 1e-15);

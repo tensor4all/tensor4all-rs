@@ -512,9 +512,9 @@ fn test_replaceinds() {
     // Check that indices were replaced in both blocks
     for blk in replaced.blocks() {
         let ext = blk.external_indices();
-        let ids: Vec<_> = ext.iter().map(|i| i.id().clone()).collect();
-        assert!(ids.contains(&new_idx1.id().clone()));
-        assert!(ids.contains(&new_idx2.id().clone()));
+        let ids: Vec<_> = ext.iter().map(|i| *i.id()).collect();
+        assert!(ids.contains(new_idx1.id()));
+        assert!(ids.contains(new_idx2.id()));
     }
     assert_eq!(replaced.shape(), (2, 1));
 }
