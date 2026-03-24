@@ -17,7 +17,7 @@ use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
 
 #[cfg(test)]
 use crate::storage::StorageRepr;
-use crate::storage::{col_major_strides, NativePayload, Storage, StructuredStorage};
+use crate::storage::{col_major_strides, NativePayload, Storage};
 use crate::tensor_element::TensorElement;
 use crate::AnyScalar;
 
@@ -226,12 +226,12 @@ fn snapshot_f64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
             .ok_or_else(|| anyhow!("expected f64 structured payload"))?;
         let data =
             materialize_col_major_values(payload, "f64 structured snapshot materialization")?;
-        Ok(Storage::structured_f64(StructuredStorage::new(
+        Storage::new_structured_f64(
             data,
             payload.dims().to_vec(),
             col_major_strides(payload.dims()),
             snap.axis_classes().to_vec(),
-        )?))
+        )
     }
 }
 
@@ -255,12 +255,12 @@ fn snapshot_c64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
             .ok_or_else(|| anyhow!("expected c64 structured payload"))?;
         let data =
             materialize_col_major_values(payload, "c64 structured snapshot materialization")?;
-        Ok(Storage::structured_c64(StructuredStorage::new(
+        Storage::new_structured_c64(
             data,
             payload.dims().to_vec(),
             col_major_strides(payload.dims()),
             snap.axis_classes().to_vec(),
-        )?))
+        )
     }
 }
 

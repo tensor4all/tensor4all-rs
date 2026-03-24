@@ -34,6 +34,7 @@ pub mod compression;
 pub mod contraction;
 pub mod error;
 pub mod mpo;
+pub mod tensor;
 pub mod tensortrain;
 pub mod traits;
 pub mod types;

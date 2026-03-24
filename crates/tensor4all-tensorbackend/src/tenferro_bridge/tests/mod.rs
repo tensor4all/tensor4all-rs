@@ -3,27 +3,13 @@ use crate::storage::Storage;
 
 fn assert_storage_eq(lhs: &Storage, rhs: &Storage) {
     match (lhs.repr(), rhs.repr()) {
-        (StorageRepr::DenseF64(a), StorageRepr::DenseF64(b)) => {
-            assert_eq!(a.dims(), b.dims());
-            assert_eq!(a.as_slice(), b.as_slice());
-        }
-        (StorageRepr::DenseC64(a), StorageRepr::DenseC64(b)) => {
-            assert_eq!(a.dims(), b.dims());
-            assert_eq!(a.as_slice(), b.as_slice());
-        }
-        (StorageRepr::DiagF64(a), StorageRepr::DiagF64(b)) => {
-            assert_eq!(a.as_slice(), b.as_slice());
-        }
-        (StorageRepr::DiagC64(a), StorageRepr::DiagC64(b)) => {
-            assert_eq!(a.as_slice(), b.as_slice());
-        }
-        (StorageRepr::StructuredF64(a), StorageRepr::StructuredF64(b)) => {
+        (StorageRepr::F64(a), StorageRepr::F64(b)) => {
             assert_eq!(a.payload_dims(), b.payload_dims());
             assert_eq!(a.strides(), b.strides());
             assert_eq!(a.axis_classes(), b.axis_classes());
             assert_eq!(a.data(), b.data());
         }
-        (StorageRepr::StructuredC64(a), StorageRepr::StructuredC64(b)) => {
+        (StorageRepr::C64(a), StorageRepr::C64(b)) => {
             assert_eq!(a.payload_dims(), b.payload_dims());
             assert_eq!(a.strides(), b.strides());
             assert_eq!(a.axis_classes(), b.axis_classes());
@@ -89,11 +75,11 @@ fn storage_native_roundtrip_structured_preserves_axis_classes() {
     let roundtrip = storage_to_native_tensor(&storage, &[2, 2, 2]).unwrap();
 
     match storage.repr() {
-        StorageRepr::StructuredF64(value) => {
+        StorageRepr::F64(value) => {
             assert_eq!(value.axis_classes(), &[0, 1, 1]);
             assert_eq!(value.payload_dims(), &[2, 2]);
         }
-        other => panic!("expected StructuredF64 storage, got {other:?}"),
+        other => panic!("expected F64 storage, got {other:?}"),
     }
     assert_eq!(roundtrip.dims(), &[2, 2, 2]);
     assert_eq!(roundtrip.axis_classes(), &[0, 1, 1]);
@@ -355,10 +341,10 @@ fn storage_native_roundtrip_structured_c64_preserves_axis_classes() {
     let roundtrip = storage_to_native_tensor(&storage, &[2, 2]).unwrap();
 
     match storage.repr() {
-        StorageRepr::StructuredC64(value) => {
+        StorageRepr::C64(value) => {
             assert_eq!(value.axis_classes(), &[0, 0]);
         }
-        other => panic!("expected StructuredC64 storage, got {other:?}"),
+        other => panic!("expected C64 storage, got {other:?}"),
     }
     assert_eq!(roundtrip.dims(), &[2, 2]);
     assert_eq!(roundtrip.axis_classes(), &[0, 0]);

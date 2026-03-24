@@ -6,17 +6,14 @@
 //! - `site_dim_2`: Physical index (e.g., column index, often contracted)
 //! - `right_bond`: Bond dimension connecting to the right neighbor
 
-use mdarray::DTensor;
+use crate::tensor::Tensor;
+pub use crate::tensor::Tensor4;
 
 /// Local index type (index within a single tensor site)
 pub type LocalIndex = usize;
 
 /// Multi-index type (indices across all sites)
 pub type MultiIndex = Vec<LocalIndex>;
-
-/// A 4D tensor represented using mdarray
-/// Shape is (left_dim, site_dim_1, site_dim_2, right_dim)
-pub type Tensor4<T> = DTensor<T, 4>;
 
 /// Helper functions for Tensor4 operations
 pub trait Tensor4Ops<T: Clone + Default> {
@@ -163,7 +160,7 @@ pub fn tensor4_zeros<T: Clone + Default>(
     site_dim_2: usize,
     right_dim: usize,
 ) -> Tensor4<T> {
-    Tensor4::from_elem([left_dim, site_dim_1, site_dim_2, right_dim], T::default())
+    Tensor::from_elem([left_dim, site_dim_1, site_dim_2, right_dim], T::default())
 }
 
 /// Create a Tensor4 from flat data (column-major order)
@@ -175,7 +172,7 @@ pub fn tensor4_from_data<T: Clone>(
     right_dim: usize,
 ) -> Tensor4<T> {
     assert_eq!(data.len(), left_dim * site_dim_1 * site_dim_2 * right_dim);
-    Tensor4::from_fn([left_dim, site_dim_1, site_dim_2, right_dim], |idx| {
+    Tensor::from_fn([left_dim, site_dim_1, site_dim_2, right_dim], |idx| {
         let l = idx[0];
         let s1 = idx[1];
         let s2 = idx[2];
