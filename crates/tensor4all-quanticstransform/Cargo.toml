@@ -24,7 +24,6 @@ num-traits.workspace = true
 num-rational = "0.4"
 num-integer = "0.1"
 anyhow.workspace = true
-mdarray.workspace = true
 sprs = "0.11"
 
 [dev-dependencies]

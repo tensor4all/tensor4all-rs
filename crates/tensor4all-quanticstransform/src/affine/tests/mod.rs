@@ -779,8 +779,8 @@ fn test_affine_unfused_basic() {
     // For M=1, N=1, site_dim = 2^2 = 4
     let site_dim = 4;
     // For identity transform y=x, carry is always 0, so bond dimension is 1
-    assert_eq!(*unfused[0].shape(), (1, site_dim, 1)); // First tensor: (1, 4, 1)
-    assert_eq!(*unfused[r - 1].shape(), (1, site_dim, 1)); // Last tensor: (1, 4, 1)
+    assert_eq!(unfused[0].dims(), &[1, site_dim, 1]); // First tensor: [1, 4, 1]
+    assert_eq!(unfused[r - 1].dims(), &[1, site_dim, 1]); // Last tensor: [1, 4, 1]
 }
 
 #[test]
@@ -797,7 +797,7 @@ fn test_affine_unfused_2d() {
     // For M=2, N=2, site_dim = 2^4 = 16
     let site_dim = 16;
     for tensor in &unfused {
-        assert_eq!(tensor.shape().1, site_dim);
+        assert_eq!(tensor.dims()[1], site_dim);
     }
 }
 
@@ -870,7 +870,8 @@ fn test_unfused_vs_fused_equivalence() {
 
                 let site_idx = y_bits | (x_bits << m);
                 let tensor = &unfused[site];
-                let (left_dim, _, right_dim) = *tensor.shape();
+                let left_dim = tensor.dims()[0];
+                let right_dim = tensor.dims()[2];
 
                 let mut new_vec = vec![Complex64::new(0.0, 0.0); right_dim];
                 for l in 0..left_dim.min(left_vec.len()) {

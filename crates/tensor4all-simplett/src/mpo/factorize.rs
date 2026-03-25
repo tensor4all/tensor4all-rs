@@ -8,7 +8,7 @@ use super::Matrix2;
 use num_complex::{Complex64, ComplexFloat};
 use tenferro_algebra::Scalar as TfScalar;
 use tenferro_linalg::LinalgScalar;
-use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
+use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor as TypedTensor};
 use tensor4all_tensorbackend::{svd_backend, BackendLinalgScalar};
 
 /// Factorization method to use
@@ -113,7 +113,10 @@ impl SVDScalar for Complex64 {
 pub fn factorize<T: SVDScalar>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<T>> {
+) -> Result<FactorizeResult<T>>
+where
+    <T as LinalgScalar>::Real: KeepCountScalar,
+{
     match options.method {
         FactorizeMethod::SVD => factorize_svd(matrix, options),
         FactorizeMethod::RSVD => factorize_rsvd(matrix, options),
@@ -192,7 +195,10 @@ where
 fn factorize_svd<T: SVDScalar>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<T>> {
+) -> Result<FactorizeResult<T>>
+where
+    <T as LinalgScalar>::Real: KeepCountScalar,
+{
     let m = matrix.dim(0);
     let n = matrix.dim(1);
 

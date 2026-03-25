@@ -5,7 +5,6 @@
 //! Discrete Fourier Transform as a Matrix Product Operator", arXiv:2404.03182.
 
 use anyhow::Result;
-use mdarray::DTensor;
 use num_complex::Complex64;
 use num_traits::Zero;
 use std::f64::consts::PI;
@@ -16,6 +15,7 @@ use tensor4all_simplett::{
 };
 
 use crate::common::{tensortrain_to_linear_operator, QuanticsOperator};
+use crate::dense_array::DenseArray;
 
 /// Options for Fourier transform construction.
 #[derive(Clone, Debug)]
@@ -289,11 +289,11 @@ fn lagrange_polynomial(grid: &[f64], bary_weights: &[f64], alpha: usize, x: f64)
 /// where x = (sigma + grid[beta]) / 2
 ///
 /// Returns tensor of shape (k+1, 2, 2, k+1)
-fn build_dft_core_tensor(grid: &[f64], bary_weights: &[f64], sign: f64) -> DTensor<Complex64, 4> {
+fn build_dft_core_tensor(grid: &[f64], bary_weights: &[f64], sign: f64) -> DenseArray<Complex64> {
     let k = grid.len() - 1;
 
     // tensor[alpha, tau, sigma, beta] - shape: (k+1, 2, 2, k+1)
-    let mut tensor = DTensor::<Complex64, 4>::from_elem([k + 1, 2, 2, k + 1], Complex64::zero());
+    let mut tensor = DenseArray::from_elem(&[k + 1, 2, 2, k + 1], Complex64::zero());
 
     for alpha in 0..=k {
         for tau in 0..2 {

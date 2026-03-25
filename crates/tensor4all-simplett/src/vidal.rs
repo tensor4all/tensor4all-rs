@@ -17,7 +17,7 @@ use num_complex::ComplexFloat;
 use num_traits::ToPrimitive;
 use tenferro_algebra::Scalar as TfScalar;
 use tenferro_linalg::LinalgScalar;
-use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
+use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor as TypedTensor};
 use tensor4all_tensorbackend::{svd_backend, BackendLinalgScalar};
 
 /// Compute QR decomposition
@@ -92,7 +92,7 @@ where
 fn svd_factorize_right_matrix<T>(matrix: &Matrix<T>) -> Result<(Matrix<T>, DiagMatrix, Matrix<T>)>
 where
     T: TTScalar + Scalar + Default + ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
-    <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive,
+    <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive + KeepCountScalar,
 {
     let rows = nrows(matrix);
     let cols = ncols(matrix);
@@ -198,7 +198,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     pub fn from_tensor_train(tt: &TensorTrain<T>) -> Result<Self>
     where
         T: ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
-        <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive,
+        <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive + KeepCountScalar,
     {
         Self::from_tensor_train_with_partition(tt, 0..tt.len())
     }
@@ -210,7 +210,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     ) -> Result<Self>
     where
         T: ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
-        <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive,
+        <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive + KeepCountScalar,
     {
         let n = tt.len();
         if n == 0 {
@@ -608,7 +608,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     pub fn from_tensor_train(tt: &TensorTrain<T>) -> Result<Self>
     where
         T: ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
-        <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive,
+        <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive + KeepCountScalar,
     {
         let vidal = VidalTensorTrain::from_tensor_train(tt)?;
         Self::from_vidal(&vidal)

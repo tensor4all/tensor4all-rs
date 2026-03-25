@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use mdarray::DTensor;
 use num_complex::Complex64;
 use num_integer::Integer;
 use num_rational::Rational64;
@@ -20,6 +19,7 @@ use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops,
 use crate::common::{
     tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
 };
+use crate::dense_array::DenseArray;
 
 /// Affine transformation parameters.
 ///
@@ -381,7 +381,7 @@ pub fn affine_transform_tensors_unfused(
     r: usize,
     params: &AffineParams,
     bc: &[BoundaryCondition],
-) -> Result<Vec<DTensor<Complex64, 3>>> {
+) -> Result<Vec<DenseArray<Complex64>>> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of bits must be positive"));
     }
@@ -465,16 +465,19 @@ pub fn affine_transform_tensors_unfused(
             }
         }
 
-        // Create DTensor with shape [left_dim, site_dim, right_dim]
+        // Create DenseArray with shape [left_dim, site_dim, right_dim]
         // The caller can reshape this to [left_dim, 2, 2, ..., 2, right_dim]
         // with the understanding that the indices are ordered as (y0, y1, ..., x0, x1, ...)
-        let unfused_tensor =
-            DTensor::<Complex64, 3>::from_fn([left_dim, site_dim, right_dim], |idx| {
-                let l = idx[0];
-                let s = idx[1];
-                let r = idx[2];
-                unfused_data[l * site_dim * right_dim + s * right_dim + r]
-            });
+        let mut unfused_tensor =
+            DenseArray::from_elem(&[left_dim, site_dim, right_dim], Complex64::new(0.0, 0.0));
+        for l in 0..left_dim {
+            for s in 0..site_dim {
+                for r in 0..right_dim {
+                    unfused_tensor[[l, s, r]] =
+                        unfused_data[l * site_dim * right_dim + s * right_dim + r];
+                }
+            }
+        }
 
         unfused_tensors.push(unfused_tensor);
     }
@@ -645,7 +648,7 @@ fn affine_transform_tensors(
         // We process from outermost to innermost
         let mut current_weights = bc_weights;
         for ext_data in ext_data_list.iter().rev() {
-            let (_, num_cin, _) = *ext_data.tensor.shape();
+            let num_cin = ext_data.tensor.dims()[1];
             let mut new_weights = vec![0.0; num_cin];
             for (cin_idx, nw) in new_weights.iter_mut().enumerate() {
                 for (cout_idx, &w) in current_weights.iter().enumerate() {
@@ -688,7 +691,7 @@ fn affine_transform_tensors(
         // idx=0 corresponds to site R-1 (LSB), idx=R-1 corresponds to site 0 (MSB)
         let actual_site = r - 1 - idx;
         let num_carry_out = core_data.carries_out.len();
-        let (_, num_carry_in, _) = *core_data.tensor.shape();
+        let num_carry_in = core_data.tensor.dims()[1];
 
         // Tensor shape follows shift.rs pattern:
         // t[left, site, right] where left=carry_out (going left), right=carry_in (from right)
@@ -774,7 +777,7 @@ struct AffineCoreData {
     /// Possible outgoing carry vectors
     carries_out: Vec<Vec<i64>>,
     /// Tensor data: tensor[carry_out_idx, carry_in_idx, site_idx]
-    tensor: DTensor<bool, 3>,
+    tensor: DenseArray<bool>,
 }
 
 /// Compute a single core tensor for the affine transformation.
@@ -793,7 +796,7 @@ fn affine_transform_core(
     carries_in: &[Vec<i64>],
     activebit: bool,
 ) -> Result<AffineCoreData> {
-    let mut carry_out_map: HashMap<Vec<i64>, DTensor<bool, 2>> = HashMap::new();
+    let mut carry_out_map: HashMap<Vec<i64>, DenseArray<bool>> = HashMap::new();
     let x_range = if activebit { 1 << n } else { 1 };
     let y_range = if activebit { 1 << m } else { 1 };
     let site_dim = x_range * y_range;
@@ -839,9 +842,9 @@ fn affine_transform_core(
                 // Site index: y bits in lower positions, x bits in upper positions
                 let site_idx = y_bits | (x_bits << m);
 
-                let entry = carry_out_map.entry(carry_out).or_insert_with(|| {
-                    DTensor::<bool, 2>::from_elem([num_carry_in, site_dim], false)
-                });
+                let entry = carry_out_map
+                    .entry(carry_out)
+                    .or_insert_with(|| DenseArray::from_elem(&[num_carry_in, site_dim], false));
                 entry[[c_idx, site_idx]] = true;
             } else {
                 // Scale is even: z must be even for valid y
@@ -862,9 +865,9 @@ fn affine_transform_core(
 
                     let site_idx = y_bits | (x_bits << m);
 
-                    let entry = carry_out_map.entry(carry_out).or_insert_with(|| {
-                        DTensor::<bool, 2>::from_elem([num_carry_in, site_dim], false)
-                    });
+                    let entry = carry_out_map
+                        .entry(carry_out)
+                        .or_insert_with(|| DenseArray::from_elem(&[num_carry_in, site_dim], false));
                     entry[[c_idx, site_idx]] = true;
                 }
             }
@@ -878,7 +881,7 @@ fn affine_transform_core(
     let num_carry_out = carries_out.len();
 
     // Build 3D tensor: (num_carry_out, num_carry_in, site_dim)
-    let mut tensor = DTensor::<bool, 3>::from_elem([num_carry_out, num_carry_in, site_dim], false);
+    let mut tensor = DenseArray::from_elem(&[num_carry_out, num_carry_in, site_dim], false);
     for (cout_idx, carry) in carries_out.iter().enumerate() {
         let data_2d = &carry_out_map[carry];
         for cin_idx in 0..num_carry_in {
