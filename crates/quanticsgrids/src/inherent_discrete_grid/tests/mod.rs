@@ -1584,7 +1584,7 @@ fn test_roundtrip_grididx_to_quantics_identity() {
     let samples_1: Vec<i64> = (1..=maxes[1])
         .step_by((maxes[1] as usize).max(1) / 10 + 1)
         .collect();
-    let samples_2 = vec![1i64, maxes[2] / 4, maxes[2] / 2, 3 * maxes[2] / 4, maxes[2]];
+    let samples_2 = vec![1i64, maxes[2] / 4, maxes[2] / 2, maxes[2] / 4 * 3, maxes[2]];
 
     for &g0 in &samples_0 {
         for &g1 in &samples_1 {
