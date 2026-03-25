@@ -7,7 +7,6 @@ use crate::global_default::GlobalDefault;
 use crate::index_like::IndexLike;
 use crate::truncation::{HasTruncationParams, TruncationParams};
 use crate::{unfold_split, TensorDynLen};
-use num_complex::Complex64;
 use tensor4all_tensorbackend::{
     native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
     reshape_col_major_native_tensor, svd_native_tensor,
@@ -213,15 +212,6 @@ pub fn svd_with<T>(
     let v = vh.conj().permute(&perm);
 
     Ok((u, s, v))
-}
-
-/// Compute SVD decomposition of a complex tensor with arbitrary rank, returning (U, S, V).
-#[inline]
-pub fn svd_c64(
-    t: &TensorDynLen,
-    left_inds: &[DynIndex],
-) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
-    svd::<Complex64>(t, left_inds)
 }
 
 #[cfg(test)]

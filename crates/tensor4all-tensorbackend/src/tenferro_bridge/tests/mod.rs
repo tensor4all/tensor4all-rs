@@ -25,31 +25,31 @@ fn assert_storage_eq(lhs: &Storage, rhs: &Storage) {
 
 #[test]
 fn storage_native_roundtrip_dense_f64() {
-    let storage = Storage::from_dense_f64_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+    let storage = Storage::from_dense_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
 
     let native = storage_to_native_tensor(&storage, &[2, 2]).unwrap();
     let roundtrip = native_tensor_primal_to_storage(&native).unwrap();
 
-    let expected = Storage::from_dense_f64_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+    let expected = Storage::from_dense_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
     assert_storage_eq(&roundtrip, &expected);
 }
 
 #[test]
 fn storage_native_roundtrip_diag_preserves_diag_layout() {
-    let storage = Storage::from_diag_f64_col_major(vec![2.0, -1.0, 4.0], 2).unwrap();
+    let storage = Storage::from_diag_col_major(vec![2.0, -1.0, 4.0], 2).unwrap();
 
     let native = storage_to_native_tensor(&storage, &[3, 3]).unwrap();
     let roundtrip = native_tensor_primal_to_storage(&native).unwrap();
 
     assert!(native.is_diag());
-    let expected = Storage::from_diag_f64_col_major(vec![2.0, -1.0, 4.0], 2).unwrap();
+    let expected = Storage::from_diag_col_major(vec![2.0, -1.0, 4.0], 2).unwrap();
     assert_storage_eq(&roundtrip, &expected);
 }
 
 #[test]
 fn native_dense_materialization_sets_default_runtime_if_needed() {
     let native = storage_to_native_tensor(
-        &Storage::from_diag_f64_col_major(vec![2.0, -1.0, 4.0], 2).unwrap(),
+        &Storage::from_diag_col_major(vec![2.0, -1.0, 4.0], 2).unwrap(),
         &[3, 3],
     )
     .unwrap();
@@ -89,7 +89,7 @@ fn storage_native_roundtrip_structured_preserves_axis_classes() {
 
 #[test]
 fn sum_native_tensor_returns_rank0_scalar() {
-    let storage = Storage::from_dense_c64_col_major(
+    let storage = Storage::from_dense_col_major(
         vec![Complex64::new(1.0, -1.0), Complex64::new(-0.5, 2.0)],
         &[2],
     )
@@ -104,7 +104,7 @@ fn sum_native_tensor_returns_rank0_scalar() {
 
 #[test]
 fn native_snapshot_materializes_lazy_conjugation() {
-    let storage = Storage::from_dense_c64_col_major(
+    let storage = Storage::from_dense_col_major(
         vec![
             Complex64::new(1.0, 2.0),
             Complex64::new(0.0, -1.0),
@@ -119,7 +119,7 @@ fn native_snapshot_materializes_lazy_conjugation() {
     let conjugated = conj_native_tensor(&native).unwrap();
     let snapshot = native_tensor_primal_to_storage(&conjugated).unwrap();
 
-    let expected = Storage::from_dense_c64_col_major(
+    let expected = Storage::from_dense_col_major(
         vec![
             Complex64::new(1.0, -2.0),
             Complex64::new(0.0, 1.0),
@@ -135,13 +135,12 @@ fn native_snapshot_materializes_lazy_conjugation() {
 #[test]
 fn native_einsum_accepts_unsorted_nonfirst_operand_labels() {
     let lhs = storage_to_native_tensor(
-        &Storage::from_dense_f64_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap(),
+        &Storage::from_dense_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap(),
         &[2, 2],
     )
     .unwrap();
     let rhs = storage_to_native_tensor(
-        &Storage::from_dense_f64_col_major(vec![10.0, 30.0, 50.0, 20.0, 40.0, 60.0], &[3, 2])
-            .unwrap(),
+        &Storage::from_dense_col_major(vec![10.0, 30.0, 50.0, 20.0, 40.0, 60.0], &[3, 2]).unwrap(),
         &[3, 2],
     )
     .unwrap();
@@ -150,7 +149,7 @@ fn native_einsum_accepts_unsorted_nonfirst_operand_labels() {
     let snapshot = native_tensor_primal_to_storage(&out).unwrap();
 
     let expected =
-        Storage::from_dense_f64_col_major(vec![50.0, 110.0, 110.0, 250.0, 170.0, 390.0], &[2, 3])
+        Storage::from_dense_col_major(vec![50.0, 110.0, 110.0, 250.0, 170.0, 390.0], &[2, 3])
             .unwrap();
     assert_storage_eq(&snapshot, &expected);
 }
@@ -158,12 +157,12 @@ fn native_einsum_accepts_unsorted_nonfirst_operand_labels() {
 #[test]
 fn contract_native_tensor_restores_rhs_free_axis_order() {
     let lhs = storage_to_native_tensor(
-        &Storage::from_dense_f64_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap(),
+        &Storage::from_dense_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap(),
         &[2, 2],
     )
     .unwrap();
     let rhs = storage_to_native_tensor(
-        &Storage::from_dense_f64_col_major(vec![10.0, 30.0, 20.0, 40.0], &[2, 2]).unwrap(),
+        &Storage::from_dense_col_major(vec![10.0, 30.0, 20.0, 40.0], &[2, 2]).unwrap(),
         &[2, 2],
     )
     .unwrap();
@@ -171,8 +170,7 @@ fn contract_native_tensor_restores_rhs_free_axis_order() {
     let out = contract_native_tensor(&lhs, &[1], &rhs, &[1]).unwrap();
     let snapshot = native_tensor_primal_to_storage(&out).unwrap();
 
-    let expected =
-        Storage::from_dense_f64_col_major(vec![50.0, 110.0, 110.0, 250.0], &[2, 2]).unwrap();
+    let expected = Storage::from_dense_col_major(vec![50.0, 110.0, 110.0, 250.0], &[2, 2]).unwrap();
     assert_storage_eq(&snapshot, &expected);
 }
 
@@ -189,12 +187,12 @@ fn dense_native_tensor_column_major_roundtrip_preserves_linearization() {
 #[test]
 fn permute_storage_native_dense_matches_expected_data() {
     let storage =
-        Storage::from_dense_f64_col_major(vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[2, 3]).unwrap();
+        Storage::from_dense_col_major(vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[2, 3]).unwrap();
 
     let native = permute_storage_native(&storage, &[2, 3], &[1, 0]).unwrap();
 
     let expected =
-        Storage::from_dense_f64_col_major(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]).unwrap();
+        Storage::from_dense_col_major(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]).unwrap();
     assert_storage_eq(&native, &expected);
 }
 
@@ -218,15 +216,14 @@ fn reshape_col_major_native_tensor_handles_noncontiguous_permuted_input() {
 
 #[test]
 fn contract_storage_native_dense_f64() {
-    let a = Storage::from_dense_f64_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
-    let b = Storage::from_dense_f64_col_major(vec![5.0, 7.0, 6.0, 8.0], &[2, 2]).unwrap();
+    let a = Storage::from_dense_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+    let b = Storage::from_dense_col_major(vec![5.0, 7.0, 6.0, 8.0], &[2, 2]).unwrap();
 
     let result = contract_storage_native(&a, &[2, 2], &[1], &b, &[2, 2], &[0], &[2, 2]).unwrap();
 
     // A = [[1,2],[3,4]], B = [[5,6],[7,8]], C = A@B = [[19,22],[43,50]]
     // col-major: [19, 43, 22, 50]
-    let expected =
-        Storage::from_dense_f64_col_major(vec![19.0, 43.0, 22.0, 50.0], &[2, 2]).unwrap();
+    let expected = Storage::from_dense_col_major(vec![19.0, 43.0, 22.0, 50.0], &[2, 2]).unwrap();
     assert_storage_eq(&result, &expected);
 }
 
@@ -234,15 +231,15 @@ fn contract_storage_native_dense_f64() {
 
 #[test]
 fn outer_product_storage_native_produces_correct_shape() {
-    let a = Storage::from_dense_f64_col_major(vec![1.0, 2.0], &[2]).unwrap();
-    let b = Storage::from_dense_f64_col_major(vec![3.0, 4.0, 5.0], &[3]).unwrap();
+    let a = Storage::from_dense_col_major(vec![1.0, 2.0], &[2]).unwrap();
+    let b = Storage::from_dense_col_major(vec![3.0, 4.0, 5.0], &[3]).unwrap();
 
     let result = outer_product_storage_native(&a, &[2], &b, &[3], &[2, 3]).unwrap();
 
     // a[i] * b[j]: col-major [2,3]
     // [1*3, 2*3, 1*4, 2*4, 1*5, 2*5] = [3, 6, 4, 8, 5, 10]
     let expected =
-        Storage::from_dense_f64_col_major(vec![3.0, 6.0, 4.0, 8.0, 5.0, 10.0], &[2, 3]).unwrap();
+        Storage::from_dense_col_major(vec![3.0, 6.0, 4.0, 8.0, 5.0, 10.0], &[2, 3]).unwrap();
     assert_storage_eq(&result, &expected);
 }
 
@@ -250,12 +247,12 @@ fn outer_product_storage_native_produces_correct_shape() {
 
 #[test]
 fn scale_storage_native_scales_elements() {
-    let s = Storage::from_dense_f64_col_major(vec![1.0, 2.0, 3.0], &[3]).unwrap();
+    let s = Storage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]).unwrap();
     let scalar = crate::AnyScalar::new_real(2.0);
 
     let result = scale_storage_native(&s, &[3], &scalar).unwrap();
 
-    let expected = Storage::from_dense_f64_col_major(vec![2.0, 4.0, 6.0], &[3]).unwrap();
+    let expected = Storage::from_dense_col_major(vec![2.0, 4.0, 6.0], &[3]).unwrap();
     assert_storage_eq(&result, &expected);
 }
 
@@ -263,15 +260,15 @@ fn scale_storage_native_scales_elements() {
 
 #[test]
 fn axpby_storage_native_linear_combination() {
-    let lhs = Storage::from_dense_f64_col_major(vec![1.0, 2.0], &[2]).unwrap();
-    let rhs = Storage::from_dense_f64_col_major(vec![3.0, 4.0], &[2]).unwrap();
+    let lhs = Storage::from_dense_col_major(vec![1.0, 2.0], &[2]).unwrap();
+    let rhs = Storage::from_dense_col_major(vec![3.0, 4.0], &[2]).unwrap();
     let a = crate::AnyScalar::new_real(2.0);
     let b = crate::AnyScalar::new_real(3.0);
 
     let result = axpby_storage_native(&lhs, &[2], &a, &rhs, &[2], &b).unwrap();
 
     // 2*1 + 3*3 = 11, 2*2 + 3*4 = 16
-    let expected = Storage::from_dense_f64_col_major(vec![11.0, 16.0], &[2]).unwrap();
+    let expected = Storage::from_dense_col_major(vec![11.0, 16.0], &[2]).unwrap();
     assert_storage_eq(&result, &expected);
 }
 
@@ -279,7 +276,7 @@ fn axpby_storage_native_linear_combination() {
 
 #[test]
 fn native_tensor_primal_to_diag_f64_extracts_diagonal() {
-    let storage = Storage::from_diag_f64_col_major(vec![2.0, -1.0, 4.0], 2).unwrap();
+    let storage = Storage::from_diag_col_major(vec![2.0, -1.0, 4.0], 2).unwrap();
     let native = storage_to_native_tensor(&storage, &[3, 3]).unwrap();
 
     let diag_values = native_tensor_primal_to_diag_f64(&native).unwrap();
@@ -289,11 +286,9 @@ fn native_tensor_primal_to_diag_f64_extracts_diagonal() {
 
 #[test]
 fn native_tensor_primal_to_diag_c64_extracts_diagonal() {
-    let storage = Storage::from_diag_c64_col_major(
-        vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
-        2,
-    )
-    .unwrap();
+    let storage =
+        Storage::from_diag_col_major(vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)], 2)
+            .unwrap();
     let native = storage_to_native_tensor(&storage, &[2, 2]).unwrap();
 
     let diag_values = native_tensor_primal_to_diag_c64(&native).unwrap();
@@ -354,7 +349,7 @@ fn storage_native_roundtrip_structured_c64_preserves_axis_classes() {
 
 #[test]
 fn sum_native_tensor_returns_f64_scalar() {
-    let storage = Storage::from_dense_f64_col_major(vec![1.0, 2.0, 3.0], &[3]).unwrap();
+    let storage = Storage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]).unwrap();
     let native = storage_to_native_tensor(&storage, &[3]).unwrap();
 
     let sum = sum_native_tensor(&native).unwrap();

@@ -209,7 +209,7 @@ fn create_random_mps_chain_with_sites_c64(
             vec![bonds[i - 1].clone(), sites[i].clone(), bonds[i].clone()]
         };
 
-        let t = TensorDynLen::random_c64(rng, indices);
+        let t = TensorDynLen::random::<Complex64, _>(rng, indices);
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }
@@ -298,8 +298,8 @@ fn compute_residual(
     let ax_order = order_for(&ax_full)?;
     let ax_aligned = ax_full.permuteinds(&ax_order)?;
 
-    let ax_vec = ax_aligned.to_vec_c64()?;
-    let b_vec = b_full.to_vec_c64()?;
+    let ax_vec = ax_aligned.to_vec::<Complex64>()?;
+    let b_vec = b_full.to_vec::<Complex64>()?;
     anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
 
     let mut diff2 = 0.0_f64;
@@ -345,8 +345,8 @@ fn compute_state_error(
     let x_order = order_for(&x_full)?;
     let x_aligned = x_full.permuteinds(&x_order)?;
 
-    let x_vec = x_aligned.to_vec_c64()?;
-    let x_true_vec = x_true_full.to_vec_c64()?;
+    let x_vec = x_aligned.to_vec::<Complex64>()?;
+    let x_true_vec = x_true_full.to_vec::<Complex64>()?;
     anyhow::ensure!(x_vec.len() == x_true_vec.len(), "vector length mismatch");
 
     let mut diff2 = 0.0_f64;

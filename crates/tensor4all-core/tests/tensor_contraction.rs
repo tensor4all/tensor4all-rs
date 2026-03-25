@@ -12,7 +12,7 @@ fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen {
 }
 
 fn assert_all_f64(tensor: &TensorDynLen, expected_len: usize, expected_value: f64) {
-    let data = tensor.to_vec_f64().unwrap();
+    let data = tensor.to_vec::<f64>().unwrap();
     assert_eq!(data.len(), expected_len);
     for value in data {
         assert_eq!(value, expected_value);
@@ -194,7 +194,7 @@ fn test_contract_mixed_f64_c64() {
     assert_eq!(result.indices[1].id, k.id);
 
     assert_eq!(
-        result.to_vec_c64().unwrap(),
+        result.to_vec::<Complex64>().unwrap(),
         vec![
             Complex64::new(6.0, 8.0),
             Complex64::new(6.0, 8.0),
@@ -238,7 +238,7 @@ fn test_contract_mixed_c64_f64() {
     assert_eq!(result.dims(), vec![2, 2]);
 
     assert_eq!(
-        result.to_vec_c64().unwrap(),
+        result.to_vec::<Complex64>().unwrap(),
         vec![
             Complex64::new(4.0, 6.0),
             Complex64::new(12.0, 14.0),
@@ -435,7 +435,7 @@ fn test_scalar_times_tensor() {
 
     let result = scalar.contract(&tensor);
     assert_eq!(result.dims(), vec![2, 3]);
-    assert_eq!(result.to_vec_f64().unwrap(), data);
+    assert_eq!(result.to_vec::<f64>().unwrap(), data);
 }
 
 #[test]
@@ -448,7 +448,7 @@ fn test_tensor_times_scalar() {
 
     let result = tensor.contract(&scalar);
     assert_eq!(result.dims(), vec![2]);
-    assert_eq!(result.to_vec_f64().unwrap(), data);
+    assert_eq!(result.to_vec::<f64>().unwrap(), data);
 }
 
 #[test]
@@ -458,7 +458,7 @@ fn test_scalar_times_scalar() {
 
     let result = s1.contract(&s2);
     assert_eq!(result.dims().len(), 0);
-    let val = result.to_vec_f64().unwrap();
+    let val = result.to_vec::<f64>().unwrap();
     assert_eq!(val.len(), 1);
     assert!((val[0] - 15.0).abs() < 1e-10);
 }
@@ -473,7 +473,7 @@ fn test_mul_operator_scalar_times_tensor() {
 
     let result = &scalar * &tensor;
     assert_eq!(result.dims(), vec![3]);
-    assert_eq!(result.to_vec_f64().unwrap(), data);
+    assert_eq!(result.to_vec::<f64>().unwrap(), data);
 }
 
 #[test]
@@ -490,7 +490,7 @@ fn test_foldl_sequential_contraction() {
 
     // a[i,j] * b[j,i] = sum_j(a[i,j]*b[j,i]) summed over both → scalar
     assert_eq!(acc.dims().len(), 0);
-    let val = acc.to_vec_f64().unwrap();
+    let val = acc.to_vec::<f64>().unwrap();
     // All elements are 1.0*2.0 = 2.0, summed over 2*3 = 6 elements → 12.0
     assert!((val[0] - 12.0).abs() < 1e-10);
 }

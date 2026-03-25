@@ -1079,8 +1079,8 @@ fn test_contract_zipup_basic_api() {
 
     let mut rng1 = ChaCha8Rng::seed_from_u64(42);
     let mut rng2 = ChaCha8Rng::seed_from_u64(123);
-    let tn1 = random_treetn_f64(&mut rng1, &site_network1, LinkSpace::uniform(4));
-    let tn2 = random_treetn_f64(&mut rng2, &site_network2, LinkSpace::uniform(4));
+    let tn1 = random_treetn::<f64, _, _>(&mut rng1, &site_network1, LinkSpace::uniform(4));
+    let tn2 = random_treetn::<f64, _, _>(&mut rng2, &site_network2, LinkSpace::uniform(4));
 
     // Verify same_topology works
     assert!(tn1.same_topology(&tn2));
@@ -1282,8 +1282,8 @@ fn compare_contract_vs_naive(
     // Create two random TreeTNs
     let mut rng1 = ChaCha8Rng::seed_from_u64(seed1);
     let mut rng2 = ChaCha8Rng::seed_from_u64(seed2);
-    let tn1 = random_treetn_f64(&mut rng1, site_network, link_space.clone());
-    let tn2 = random_treetn_f64(&mut rng2, site_network, link_space);
+    let tn1 = random_treetn::<f64, _, _>(&mut rng1, site_network, link_space.clone());
+    let tn2 = random_treetn::<f64, _, _>(&mut rng2, site_network, link_space);
 
     // Contract using naive method (reference)
     let naive_result = tn1

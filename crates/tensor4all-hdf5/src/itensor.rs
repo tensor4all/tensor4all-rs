@@ -28,7 +28,9 @@ pub(crate) fn write_itensor(group: &Group, tensor: &TensorDynLen) -> Result<()> 
     // Write storage
     let storage_group = group.create_group("storage")?;
     if tensor.is_f64() {
-        let data = tensor.to_vec_f64().context("Failed to extract f64 data")?;
+        let data = tensor
+            .to_vec::<f64>()
+            .context("Failed to extract f64 data")?;
 
         schema::write_type_version(&storage_group, "Dense{Float64}", 1)?;
 
@@ -38,7 +40,9 @@ pub(crate) fn write_itensor(group: &Group, tensor: &TensorDynLen) -> Result<()> 
             .create("data")?;
         data_ds.as_writer().write(&data)?;
     } else if tensor.is_complex() {
-        let data = tensor.to_vec_c64().context("Failed to extract c64 data")?;
+        let data = tensor
+            .to_vec::<Complex64>()
+            .context("Failed to extract c64 data")?;
 
         schema::write_type_version(&storage_group, "Dense{ComplexF64}", 1)?;
 

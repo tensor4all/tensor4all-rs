@@ -36,8 +36,8 @@ pub use contract::{
 };
 pub use index::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
 pub use tensordynlen::{
-    compute_permutation_from_indices, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor,
-    unfold_split, TensorAccess, TensorDynLen,
+    compute_permutation_from_indices, diag_tensor_dyn_len, is_diag_tensor, unfold_split,
+    RandomScalar, TensorAccess, TensorDynLen,
 };
 
 // Re-export linear algebra functions and types
@@ -45,7 +45,5 @@ pub use direct_sum::direct_sum;
 pub use factorize::{
     factorize, Canonical, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult,
 };
-pub use qr::{default_qr_rtol, qr, qr_c64, qr_with, set_default_qr_rtol, QrError, QrOptions};
-pub use svd::{
-    default_svd_rtol, set_default_svd_rtol, svd, svd_c64, svd_with, SvdError, SvdOptions,
-};
+pub use qr::{default_qr_rtol, qr, qr_with, set_default_qr_rtol, QrError, QrOptions};
+pub use svd::{default_svd_rtol, set_default_svd_rtol, svd, svd_with, SvdError, SvdOptions};

@@ -1,5 +1,5 @@
 use super::*;
-use crate::random::{random_treetn_f64, LinkSpace};
+use crate::random::{random_treetn, LinkSpace};
 use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::TensorDynLen;
 
@@ -79,8 +79,8 @@ fn test_are_exclusive_disjoint() {
     // Create TreeTNs with these networks
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let op1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
-    let op2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
+    let op1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone());
+    let op2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone());
 
     // Test exclusivity
     let result = are_exclusive_operators::<TensorDynLen, _, _>(&target, &[&op1, &op2]);
@@ -109,8 +109,8 @@ fn test_are_exclusive_overlapping() {
 
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let op1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
-    let op2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
+    let op1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone());
+    let op2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone());
 
     let result = are_exclusive_operators::<TensorDynLen, _, _>(&target, &[&op1, &op2]);
     assert!(!result, "Overlapping operators should not be exclusive");
@@ -130,8 +130,8 @@ fn test_are_exclusive_single_node_operators() {
 
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let op1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
-    let op2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
+    let op1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone());
+    let op2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone());
 
     let result = are_exclusive_operators::<TensorDynLen, _, _>(&target, &[&op1, &op2]);
     assert!(result, "Single-node disjoint operators should be exclusive");
@@ -203,8 +203,8 @@ fn test_compose_exclusive_linear_operators_basic() {
     // Create TreeTNs for the operators
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let mpo1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
-    let mpo2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
+    let mpo1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone());
+    let mpo2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone());
 
     // True site indices (what the composed operator maps from/to)
     let true_s0 = make_index(2);
@@ -310,8 +310,8 @@ fn test_compose_exclusive_linear_operators_single_operators() {
     // Create TreeTNs
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let mpo1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
-    let mpo2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
+    let mpo1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone());
+    let mpo2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone());
 
     // True site indices
     let true_s0 = make_index(2);
@@ -384,8 +384,8 @@ fn test_compose_exclusive_linear_operators_no_gap() {
     // Create TreeTNs
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let mpo1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
-    let mpo2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
+    let mpo1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone());
+    let mpo2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone());
 
     // True site indices
     let true_s0 = make_index(2);
@@ -466,8 +466,8 @@ fn test_compose_exclusive_linear_operators_overlap_error() {
 
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let mpo1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
-    let mpo2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
+    let mpo1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone());
+    let mpo2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone());
 
     let lin_op1 = LinearOperator::new(mpo1, HashMap::new(), HashMap::new());
     let lin_op2 = LinearOperator::new(mpo2, HashMap::new(), HashMap::new());
@@ -518,8 +518,8 @@ fn test_compose_gap_identity_tensor_is_diagonal() {
 
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let mpo1 = random_treetn_f64(&mut rng, &op1_net, link_space.clone());
-    let mpo2 = random_treetn_f64(&mut rng, &op2_net, link_space.clone());
+    let mpo1 = random_treetn::<f64, _, _>(&mut rng, &op1_net, link_space.clone());
+    let mpo2 = random_treetn::<f64, _, _>(&mut rng, &op2_net, link_space.clone());
 
     let true_s0 = make_index(2);
     let true_s2 = make_index(2);
@@ -571,7 +571,7 @@ fn test_compose_gap_identity_tensor_is_diagonal() {
     );
 
     // Check it's effectively an identity (only diagonal elements are non-zero)
-    let data = n1_tensor.as_slice_f64().expect("Expected DenseF64");
+    let data = n1_tensor.to_vec::<f64>().expect("Expected DenseF64");
 
     // For identity with dim-1 dummy links, data is still [1,0,0, 0,1,0, 0,0,1]
     let expected = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];

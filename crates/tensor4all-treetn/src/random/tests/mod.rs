@@ -1,4 +1,5 @@
 use super::*;
+use num_complex::Complex64;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use std::collections::HashSet;
@@ -20,7 +21,7 @@ fn test_random_treetn_f64_two_nodes() {
         .unwrap();
 
     let mut rng = ChaCha8Rng::seed_from_u64(42);
-    let treetn = random_treetn_f64(&mut rng, &site_network, LinkSpace::uniform(4));
+    let treetn = random_treetn::<f64, _, _>(&mut rng, &site_network, LinkSpace::uniform(4));
 
     assert_eq!(treetn.node_count(), 2);
     assert_eq!(treetn.edge_count(), 1);
@@ -38,7 +39,7 @@ fn test_random_treetn_c64_chain() {
     site_network.add_edge(&1, &2).unwrap();
 
     let mut rng = ChaCha8Rng::seed_from_u64(123);
-    let treetn = random_treetn_c64(&mut rng, &site_network, LinkSpace::uniform(3));
+    let treetn = random_treetn::<Complex64, _, _>(&mut rng, &site_network, LinkSpace::uniform(3));
 
     assert_eq!(treetn.node_count(), 3);
     assert_eq!(treetn.edge_count(), 2);
@@ -68,7 +69,7 @@ fn test_link_space_per_edge() {
     dims.insert(("B".to_string(), "C".to_string()), 10);
 
     let mut rng = ChaCha8Rng::seed_from_u64(42);
-    let treetn = random_treetn_f64(&mut rng, &site_network, LinkSpace::per_edge(dims));
+    let treetn = random_treetn::<f64, _, _>(&mut rng, &site_network, LinkSpace::per_edge(dims));
 
     assert_eq!(treetn.node_count(), 3);
     assert_eq!(treetn.edge_count(), 2);

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::{RandomScalar, TensorDynLen};
 
 /// Specification for link (bond) dimensions.
 ///
@@ -59,24 +59,25 @@ impl<V: Clone + Ord + Hash> LinkSpace<V> {
 /// Type alias for the default index type used in random generation.
 pub type DefaultIndex = Index<DynId, TagSet>;
 
-/// Create a random f64 TreeTN from a site index network.
+/// Create a random TreeTN from a site index network (generic over scalar type).
 ///
 /// Generates random tensors at each node with:
 /// - Site indices from the `site_network`
 /// - Link indices created according to `link_space`
+///
+/// # Type Parameters
+/// * `T` - Scalar type (e.g. `f64` or `Complex64`)
+/// * `R` - RNG type
+/// * `V` - Node name type
 ///
 /// # Arguments
 /// * `rng` - Random number generator for tensor data
 /// * `site_network` - Network topology and site (physical) indices
 /// * `link_space` - Specification for bond dimensions
 ///
-/// # Type Parameters
-/// * `R` - RNG type
-/// * `V` - Node name type
-///
 /// # Example
 /// ```
-/// use tensor4all_treetn::{SiteIndexNetwork, random_treetn_f64, LinkSpace};
+/// use tensor4all_treetn::{SiteIndexNetwork, random_treetn, LinkSpace};
 /// use tensor4all_core::index::{Index, DynId, TagSet};
 /// use rand::SeedableRng;
 /// use rand_chacha::ChaCha8Rng;
@@ -91,51 +92,17 @@ pub type DefaultIndex = Index<DynId, TagSet>;
 /// site_network.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
 ///
 /// let mut rng = ChaCha8Rng::seed_from_u64(42);
-/// let treetn = random_treetn_f64(&mut rng, &site_network, LinkSpace::uniform(4));
+/// let treetn = random_treetn::<f64, _, _>(&mut rng, &site_network, LinkSpace::uniform(4));
 ///
 /// assert_eq!(treetn.node_count(), 2);
 /// ```
-pub fn random_treetn_f64<R, V>(
+pub fn random_treetn<T, R, V>(
     rng: &mut R,
     site_network: &SiteIndexNetwork<V, DefaultIndex>,
     link_space: LinkSpace<V>,
 ) -> TreeTN<TensorDynLen, V>
 where
-    R: Rng,
-    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
-{
-    random_treetn_impl(rng, site_network, link_space, false)
-}
-
-/// Create a random Complex64 TreeTN from a site index network.
-///
-/// Similar to [`random_treetn_f64`], but generates complex-valued tensors
-/// where both real and imaginary parts are drawn from standard normal distribution.
-///
-/// # Arguments
-/// * `rng` - Random number generator for tensor data
-/// * `site_network` - Network topology and site (physical) indices
-/// * `link_space` - Specification for bond dimensions
-pub fn random_treetn_c64<R, V>(
-    rng: &mut R,
-    site_network: &SiteIndexNetwork<V, DefaultIndex>,
-    link_space: LinkSpace<V>,
-) -> TreeTN<TensorDynLen, V>
-where
-    R: Rng,
-    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
-{
-    random_treetn_impl(rng, site_network, link_space, true)
-}
-
-/// Internal implementation for creating random TreeTN.
-fn random_treetn_impl<R, V>(
-    rng: &mut R,
-    site_network: &SiteIndexNetwork<V, DefaultIndex>,
-    link_space: LinkSpace<V>,
-    is_complex: bool,
-) -> TreeTN<TensorDynLen, V>
-where
+    T: RandomScalar,
     R: Rng,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
@@ -189,11 +156,7 @@ where
         }
 
         // Create random tensor
-        let tensor = if is_complex {
-            TensorDynLen::random_c64(rng, all_indices)
-        } else {
-            TensorDynLen::random_f64(rng, all_indices)
-        };
+        let tensor = TensorDynLen::random::<T, R>(rng, all_indices);
 
         tensors.push(tensor);
         node_names.push(node_name);

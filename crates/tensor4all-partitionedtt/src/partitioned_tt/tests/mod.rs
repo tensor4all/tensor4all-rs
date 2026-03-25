@@ -186,7 +186,7 @@ fn project_dense_tensor_at_index(
     let dims: Vec<usize> = indices.iter().map(|idx| idx.dim).collect();
     let axis_stride = dims[..axis].iter().copied().product::<usize>().max(1);
     let axis_dim = dims[axis];
-    let src_data = tensor.as_slice_f64().unwrap();
+    let src_data = tensor.to_vec::<f64>().unwrap();
     let mut projected_data = vec![0.0_f64; src_data.len()];
 
     for (flat_idx, value) in src_data.iter().copied().enumerate() {
@@ -227,7 +227,7 @@ fn test_partitioned_tt_contract_numerical() {
     // Verify each subdomain numerically
     for (proj, subdomain) in result.iter() {
         let contracted_full = subdomain.data().to_dense().unwrap();
-        let contracted_data = contracted_full.as_slice_f64().unwrap();
+        let contracted_data = contracted_full.to_vec::<f64>().unwrap();
 
         // Get the projected values
         let s0_val = proj.get(&s0).unwrap();
@@ -246,7 +246,7 @@ fn test_partitioned_tt_contract_numerical() {
         let t2_proj = project_dense_tensor_at_index(&t2_full, &s2, s2_val);
 
         let expected = t1_proj.contract(&t2_proj);
-        let expected_data = expected.as_slice_f64().unwrap();
+        let expected_data = expected.to_vec::<f64>().unwrap();
 
         assert_eq!(
             contracted_data.len(),
@@ -274,7 +274,7 @@ fn test_subdomain_tt_norm_with_projector() {
     // Create TT and get its full tensor
     let tt = make_tt_with_indices(&site_inds, &link_ind);
     let full_tensor = tt.to_dense().unwrap();
-    let full_data = full_tensor.as_slice_f64().unwrap();
+    let full_data = full_tensor.to_vec::<f64>().unwrap();
 
     // Create SubDomainTT with projector s0=0
     let projector = Projector::from_pairs([(site_inds[0].clone(), 0)]);
@@ -323,11 +323,11 @@ fn test_partitioned_tt_add_same_structure() {
     let proj = Projector::from_pairs([(site_inds[0].clone(), 0)]);
     let summed = result.get(&proj).unwrap();
     let summed_dense = summed.data().to_dense().unwrap();
-    let summed_data = summed_dense.as_slice_f64().unwrap();
+    let summed_data = summed_dense.to_vec::<f64>().unwrap();
 
     let original = make_tt_with_indices(&site_inds, &link_ind);
     let original_dense = original.to_dense().unwrap();
-    let original_data = original_dense.as_slice_f64().unwrap();
+    let original_data = original_dense.to_vec::<f64>().unwrap();
 
     for (i, (&s, &o)) in summed_data.iter().zip(original_data.iter()).enumerate() {
         assert!(

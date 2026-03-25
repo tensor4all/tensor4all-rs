@@ -146,7 +146,7 @@ fn test_gmres_diagonal_block() {
         let x2 = x.get(1, 0);
 
         // Apply D1 to x1
-        let x1_data = x1.to_vec_f64()?;
+        let x1_data = x1.to_vec::<f64>()?;
         let y1_data: Vec<f64> = x1_data
             .iter()
             .zip(diag1.iter())
@@ -155,7 +155,7 @@ fn test_gmres_diagonal_block() {
         let y1 = TensorDynLen::from_dense(x1.indices.clone(), y1_data).unwrap();
 
         // Apply D2 to x2
-        let x2_data = x2.to_vec_f64()?;
+        let x2_data = x2.to_vec::<f64>()?;
         let y2_data: Vec<f64> = x2_data
             .iter()
             .zip(diag2.iter())
@@ -432,7 +432,7 @@ fn test_get_mut() {
     let blk = block.get_mut(1, 0);
     *blk = make_vector_with_index(vec![10.0, 20.0], &idx);
 
-    let data = block.get(1, 0).to_vec_f64().unwrap();
+    let data = block.get(1, 0).to_vec::<f64>().unwrap();
     assert!((data[0] - 10.0).abs() < 1e-10);
     assert!((data[1] - 20.0).abs() < 1e-10);
 }
@@ -449,7 +449,7 @@ fn test_blocks_and_blocks_mut() {
 
     // blocks_mut() returns mutable slice
     block.blocks_mut()[0] = make_vector_with_index(vec![10.0, 20.0], &idx);
-    let data = block.get(0, 0).to_vec_f64().unwrap();
+    let data = block.get(0, 0).to_vec::<f64>().unwrap();
     assert!((data[0] - 10.0).abs() < 1e-10);
 }
 
@@ -462,7 +462,7 @@ fn test_into_blocks() {
 
     let blocks = block.into_blocks();
     assert_eq!(blocks.len(), 2);
-    let data = blocks[1].to_vec_f64().unwrap();
+    let data = blocks[1].to_vec::<f64>().unwrap();
     assert!((data[0] - 3.0).abs() < 1e-10);
 }
 
@@ -486,7 +486,7 @@ fn test_replaceind() {
         assert!(ext[0].same_id(&new_idx));
     }
     // Data should be preserved
-    let data = replaced.get(0, 0).to_vec_f64().unwrap();
+    let data = replaced.get(0, 0).to_vec::<f64>().unwrap();
     assert!((data[0] - 1.0).abs() < 1e-10);
     assert!((data[1] - 2.0).abs() < 1e-10);
 }

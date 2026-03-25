@@ -314,8 +314,8 @@ fn test_contract_method_uses_tt_contract() {
     assert_matches_naive(&tt1, &tt2, &result_method);
 
     // Both should produce identical dense results
-    let free_data = result_free.to_dense().unwrap().to_vec_f64().unwrap();
-    let method_data = result_method.to_dense().unwrap().to_vec_f64().unwrap();
+    let free_data = result_free.to_dense().unwrap().to_vec::<f64>().unwrap();
+    let method_data = result_method.to_dense().unwrap().to_vec::<f64>().unwrap();
     assert_eq!(free_data.len(), method_data.len());
     for (i, (&a, &b)) in free_data.iter().zip(method_data.iter()).enumerate() {
         assert!(
@@ -368,8 +368,8 @@ fn test_contract_zipup_with_truncation() {
 
     // Compare with naive (exact) result — should be approximate, not exact
     let naive_result = tt1.to_dense().unwrap().contract(&tt2.to_dense().unwrap());
-    let naive_data = naive_result.to_vec_f64().unwrap();
-    let result_data = result.to_dense().unwrap().to_vec_f64().unwrap();
+    let naive_data = naive_result.to_vec::<f64>().unwrap();
+    let result_data = result.to_dense().unwrap().to_vec::<f64>().unwrap();
 
     assert_eq!(result_data.len(), naive_data.len());
     let naive_norm: f64 = naive_data.iter().map(|x| x * x).sum::<f64>().sqrt();

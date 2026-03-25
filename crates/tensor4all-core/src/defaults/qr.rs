@@ -6,7 +6,7 @@ use crate::defaults::DynIndex;
 use crate::global_default::GlobalDefault;
 use crate::truncation::TruncationParams;
 use crate::{unfold_split, TensorDynLen};
-use num_complex::{Complex64, ComplexFloat};
+use num_complex::ComplexFloat;
 use tensor4all_tensorbackend::{
     native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
     qr_native_tensor, reshape_col_major_native_tensor,
@@ -256,24 +256,6 @@ pub fn qr_with<T>(
     let r = TensorDynLen::from_native(r_indices, r_reshaped).map_err(QrError::ComputationError)?;
 
     Ok((q, r))
-}
-
-/// Compute QR decomposition of a complex tensor with arbitrary rank, returning (Q, R).
-///
-/// This is a convenience wrapper around the generic `qr` function for `Complex64` tensors.
-///
-/// For the mathematical convention:
-/// \[ A = Q * R \]
-/// where Q is unitary and R is upper triangular.
-///
-/// The input tensor can have any rank >= 2, and indices are split into left and right groups.
-/// The tensor is unfolded into a matrix by grouping left indices as rows and right indices as columns.
-#[inline]
-pub fn qr_c64(
-    t: &TensorDynLen,
-    left_inds: &[DynIndex],
-) -> Result<(TensorDynLen, TensorDynLen), QrError> {
-    qr::<Complex64>(t, left_inds)
 }
 
 #[cfg(test)]

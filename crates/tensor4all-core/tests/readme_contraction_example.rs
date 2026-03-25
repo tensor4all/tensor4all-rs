@@ -58,9 +58,9 @@ fn core_readme_contraction_flow_runs_against_public_api() {
     let l = Index::<DynId>::new_dyn_with_tag(5, "l").unwrap();
 
     let mut rng = rng();
-    let a = TensorDynLen::random_f64(&mut rng, vec![i.clone(), j.clone()]);
-    let b = TensorDynLen::random_f64(&mut rng, vec![j.clone(), k.clone()]);
-    let c = TensorDynLen::random_f64(&mut rng, vec![k.clone(), l.clone()]);
+    let a = TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]);
+    let b = TensorDynLen::random::<f64, _>(&mut rng, vec![j.clone(), k.clone()]);
+    let c = TensorDynLen::random::<f64, _>(&mut rng, vec![k.clone(), l.clone()]);
 
     let result_all = contract_multi(&[&a, &b, &c], AllowedPairs::All).unwrap();
     let pairs = [(0, 1), (1, 2)];

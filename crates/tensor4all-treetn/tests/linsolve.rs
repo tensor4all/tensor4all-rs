@@ -519,7 +519,7 @@ fn test_diagonal_linsolve_with_mappings(diag_values: &[f64], b_values: &[f64], t
     let contracted = x.contract_to_tensor().unwrap();
 
     // Extract solution values
-    let solution_values: Vec<f64> = contracted.to_vec_f64().unwrap();
+    let solution_values: Vec<f64> = contracted.to_vec::<f64>().unwrap();
 
     // Compare with exact solution.
     // `TreeTN::contract_to_tensor` permutes indices into canonical site order, so
@@ -1025,7 +1025,7 @@ fn test_linear_operator_apply_local() {
 
     // Check values - the diagonal operator at site0 has value 2.0
     // D|0⟩ = 2.0 * |0⟩ = [2.0, 0.0]
-    let values: Vec<f64> = result_tensor.to_vec_f64().unwrap();
+    let values: Vec<f64> = result_tensor.to_vec::<f64>().unwrap();
 
     // Output shape is (phys_dim, bond_dim) = (2, 1) so values has 2 elements
     assert!(
@@ -1117,7 +1117,7 @@ fn test_linear_operator_apply_local_two_sites() {
     assert!(has_site1, "Result should have site1's true index");
 
     // Check values
-    let values: Vec<f64> = result_tensor.to_vec_f64().unwrap();
+    let values: Vec<f64> = result_tensor.to_vec::<f64>().unwrap();
 
     // D|00⟩ = 6.0 * |00⟩
     assert!(
@@ -1287,7 +1287,7 @@ fn test_linsolve_with_index_mappings_diagonal() {
     // Expected solution: D*x = b => x = b/6 = [1, 0, 0, 0]
     // Contract solution to get full tensor using contract_to_tensor
     let contracted = x.contract_to_tensor().unwrap();
-    let values: Vec<f64> = contracted.to_vec_f64().unwrap();
+    let values: Vec<f64> = contracted.to_vec::<f64>().unwrap();
 
     // Solution should be approximately [1, 0, 0, 0]
     assert!(
@@ -1635,7 +1635,7 @@ fn test_linsolve_pauli_x() {
     let contracted = x.contract_to_tensor().unwrap();
 
     // Extract solution values
-    let solution_values: Vec<f64> = contracted.to_vec_f64().unwrap();
+    let solution_values: Vec<f64> = contracted.to_vec::<f64>().unwrap();
 
     // Compare with exact solution
     assert_eq!(
@@ -1804,7 +1804,7 @@ fn test_linsolve_general_matrix() {
     let contracted = x.contract_to_tensor().unwrap();
 
     // Extract solution values
-    let solution_values: Vec<f64> = contracted.to_vec_f64().unwrap();
+    let solution_values: Vec<f64> = contracted.to_vec::<f64>().unwrap();
 
     // Compare with exact solution
     assert_eq!(
@@ -1887,7 +1887,7 @@ fn test_linsolve_general_matrix_nonsymmetric() {
     }
 
     let contracted = x.contract_to_tensor().unwrap();
-    let solution_values: Vec<f64> = contracted.to_vec_f64().unwrap();
+    let solution_values: Vec<f64> = contracted.to_vec::<f64>().unwrap();
 
     assert_eq!(solution_values.len(), exact_solution.len());
 

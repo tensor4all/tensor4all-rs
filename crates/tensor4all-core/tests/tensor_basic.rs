@@ -6,12 +6,12 @@ use tensor4all_core::{AnyScalar, Storage, TensorDynLen, TensorElement};
 
 /// Helper to create DenseF64 storage with shape information
 fn make_dense_f64(data: Vec<f64>, dims: &[usize]) -> Storage {
-    Storage::from_dense_f64_col_major(data, dims).unwrap()
+    Storage::from_dense_col_major(data, dims).unwrap()
 }
 
 /// Helper to create DenseC64 storage with shape information
 fn make_dense_c64(data: Vec<Complex64>, dims: &[usize]) -> Storage {
-    Storage::from_dense_c64_col_major(data, dims).unwrap()
+    Storage::from_dense_col_major(data, dims).unwrap()
 }
 
 fn make_tensor_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
@@ -25,11 +25,11 @@ fn make_tensor_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen
 #[test]
 fn test_storage_dense_f64() {
     // Create a zero-initialized tensor with 10 elements
-    let storage = Storage::new_dense_f64(10);
+    let storage = Storage::new_dense::<f64>(10);
     assert_eq!(storage.len(), 10);
     assert!(storage.is_dense());
     assert!(storage.is_f64());
-    assert_eq!(storage.sum_f64(), 0.0);
+    assert_eq!(storage.sum::<f64>(), 0.0);
     assert_eq!(
         storage.to_dense_f64_col_major_vec(&[10]).unwrap(),
         vec![0.0; 10]
@@ -39,11 +39,11 @@ fn test_storage_dense_f64() {
 #[test]
 fn test_storage_dense_c64() {
     // Create a zero-initialized tensor with 10 elements
-    let storage = Storage::new_dense_c64(10);
+    let storage = Storage::new_dense::<Complex64>(10);
     assert_eq!(storage.len(), 10);
     assert!(storage.is_dense());
     assert!(storage.is_c64());
-    assert_eq!(storage.sum_c64(), Complex64::new(0.0, 0.0));
+    assert_eq!(storage.sum::<Complex64>(), Complex64::new(0.0, 0.0));
     assert_eq!(
         storage.to_dense_c64_col_major_vec(&[10]).unwrap(),
         vec![Complex64::new(0.0, 0.0); 10]
@@ -52,7 +52,7 @@ fn test_storage_dense_c64() {
 
 #[test]
 fn test_storage_factory_f64() {
-    let storage = Storage::new_dense_f64(7);
+    let storage = Storage::new_dense::<f64>(7);
     assert!(storage.is_dense());
     assert!(storage.is_f64());
     assert_eq!(storage.len(), 7);
@@ -64,7 +64,7 @@ fn test_storage_factory_f64() {
 
 #[test]
 fn test_storage_factory_c64() {
-    let storage = Storage::new_dense_c64(9);
+    let storage = Storage::new_dense::<Complex64>(9);
     assert!(storage.is_dense());
     assert!(storage.is_c64());
     assert_eq!(storage.len(), 9);
@@ -94,7 +94,7 @@ fn test_cow_storage() {
 #[test]
 fn test_tensor_dyn_len_creation() {
     let indices = vec![Index::new_dyn(2), Index::new_dyn(3)];
-    let storage = Arc::new(Storage::from_dense_f64_col_major(vec![0.0; 6], &[2, 3]).unwrap());
+    let storage = Arc::new(Storage::from_dense_col_major(vec![0.0; 6], &[2, 3]).unwrap());
 
     let tensor: TensorDynLen = TensorDynLen::new(indices, storage);
     assert_eq!(tensor.indices.len(), 2);
@@ -111,10 +111,16 @@ fn test_tensor_shared_storage() {
     let tensor2 = make_tensor_f64(indices, vec![1.0, 2.0]);
 
     // Canonical payload is native; storage snapshots need not share allocation.
-    assert_eq!(tensor1.to_vec_f64().unwrap(), tensor2.to_vec_f64().unwrap());
+    assert_eq!(
+        tensor1.to_vec::<f64>().unwrap(),
+        tensor2.to_vec::<f64>().unwrap()
+    );
 
     let cloned = tensor1.clone();
-    assert_eq!(tensor1.to_vec_f64().unwrap(), cloned.to_vec_f64().unwrap());
+    assert_eq!(
+        tensor1.to_vec::<f64>().unwrap(),
+        cloned.to_vec::<f64>().unwrap()
+    );
 
     // Check that both tensors have the expected storage
     assert!(tensor1.storage().is_dense());
@@ -125,7 +131,7 @@ fn test_tensor_shared_storage() {
 fn test_tensor_sum_f64_no_match() {
     let indices = vec![Index::new_dyn(3)];
     let t = make_tensor_f64(indices, vec![1.0, 2.0, 3.0]);
-    let sum_f64 = t.sum_f64();
+    let sum_f64 = t.sum().real();
     assert_eq!(sum_f64, 6.0);
 
     let sum_any: AnyScalar = t.sum();
@@ -154,7 +160,7 @@ fn test_tensor_duplicate_indices_new() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone(), i.clone()]; // duplicate i
-    let storage = Arc::new(Storage::from_dense_f64_col_major(vec![0.0; 12], &[2, 3, 2]).unwrap());
+    let storage = Arc::new(Storage::from_dense_col_major(vec![0.0; 12], &[2, 3, 2]).unwrap());
 
     let _tensor: TensorDynLen = TensorDynLen::new(indices, storage);
 }
@@ -165,7 +171,7 @@ fn test_tensor_duplicate_indices_from_indices() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(3);
     let indices = vec![i.clone(), j.clone(), i.clone()]; // duplicate i
-    let storage = Arc::new(Storage::from_dense_f64_col_major(vec![0.0; 12], &[2, 3, 2]).unwrap());
+    let storage = Arc::new(Storage::from_dense_col_major(vec![0.0; 12], &[2, 3, 2]).unwrap());
 
     let _tensor: TensorDynLen = TensorDynLen::from_indices(indices, storage);
 }
@@ -193,7 +199,10 @@ fn test_replaceind_basic() {
     assert_eq!(replaced.indices[1].id, j.id);
     // Check that dimensions are unchanged
     assert_eq!(replaced.dims(), vec![2, 3]);
-    assert_eq!(tensor.to_vec_f64().unwrap(), replaced.to_vec_f64().unwrap());
+    assert_eq!(
+        tensor.to_vec::<f64>().unwrap(),
+        replaced.to_vec::<f64>().unwrap()
+    );
 }
 
 #[test]
@@ -338,7 +347,7 @@ fn test_replaceinds_does_not_reorder_data() {
     // CRITICAL: replaceinds does NOT reorder data
     // The storage data should remain unchanged
     assert_eq!(
-        replaced.to_vec_f64().unwrap(),
+        replaced.to_vec::<f64>().unwrap(),
         data,
         "replaceinds should not reorder data"
     );
@@ -376,7 +385,7 @@ fn test_replaceinds_with_different_order_does_not_reorder_data() {
     // CRITICAL: replaceinds does NOT reorder data
     // The storage data remains unchanged
     assert_eq!(
-        replaced.to_vec_f64().unwrap(),
+        replaced.to_vec::<f64>().unwrap(),
         data,
         "replaceinds should not reorder data"
     );
@@ -410,7 +419,7 @@ fn test_permuteinds_reorders_data() {
     // Permuted logical values: [[1, 2], [3, 4], [5, 6]] with shape [3, 2]
     // Column-major linearized data: [1, 3, 5, 2, 4, 6]
     assert_eq!(
-        permuted.to_vec_f64().unwrap(),
+        permuted.to_vec::<f64>().unwrap(),
         vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0],
         "permuteinds should reorder data to match new index order"
     );
@@ -439,13 +448,13 @@ fn test_replaceinds_vs_permuteinds_comparison() {
     // In practice, you should use permuteinds when you need to change index order
     let replaced = tensor.replaceinds(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()]);
     assert_eq!(replaced.dims(), vec![2, 3]);
-    let replaced_data = replaced.to_vec_f64().unwrap();
+    let replaced_data = replaced.to_vec::<f64>().unwrap();
 
     // Method 2: permuteinds (CORRECT when order changes)
     // This changes both index order AND data order
     let permuted = tensor.permute_indices(&[j.clone(), i.clone()]);
     assert_eq!(permuted.dims(), vec![3, 2]);
-    let permuted_data = permuted.to_vec_f64().unwrap();
+    let permuted_data = permuted.to_vec::<f64>().unwrap();
 
     // The data should be DIFFERENT because permuteinds reorders data
     // replaced: [1, 2, 3, 4, 5, 6] (unchanged, same shape [2, 3])
@@ -499,7 +508,7 @@ fn test_storage_conj_c64() {
 #[test]
 fn test_storage_conj_diag_c64() {
     let data = vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, -2.0)];
-    let storage = Storage::from_diag_c64_col_major(data, 2).unwrap();
+    let storage = Storage::from_diag_col_major(data, 2).unwrap();
     let conj_storage = storage.conj();
 
     assert!(conj_storage.is_diag());
@@ -527,7 +536,7 @@ fn test_tensor_conj_f64() {
     // Dims should be the same
     assert_eq!(conj_tensor.dims(), vec![2]);
     // Data should be the same (real conj is identity)
-    assert_eq!(conj_tensor.to_vec_f64().unwrap(), data);
+    assert_eq!(conj_tensor.to_vec::<f64>().unwrap(), data);
 }
 
 #[test]
@@ -560,7 +569,7 @@ fn test_tensor_conj_c64() {
         Complex64::new(-1.0, -1.0),
         Complex64::new(5.0, -5.0),
     ];
-    assert_eq!(conj_tensor.to_vec_c64().unwrap(), expected);
+    assert_eq!(conj_tensor.to_vec::<Complex64>().unwrap(), expected);
 }
 
 // ============================================================================
@@ -577,8 +586,8 @@ fn test_from_dense_f64() {
     assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(tensor.is_f64());
     assert!(!tensor.is_complex());
-    assert_eq!(tensor.as_slice_f64().unwrap(), &data[..]);
-    assert_eq!(tensor.to_vec_f64().unwrap(), data);
+    assert_eq!(tensor.to_vec::<f64>().unwrap(), &data[..]);
+    assert_eq!(tensor.to_vec::<f64>().unwrap(), data);
 }
 
 #[test]
@@ -593,8 +602,8 @@ fn test_from_dense_c64() {
     assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(!tensor.is_f64());
     assert!(tensor.is_complex());
-    assert_eq!(tensor.as_slice_c64().unwrap(), &data[..]);
-    assert_eq!(tensor.to_vec_c64().unwrap(), data);
+    assert_eq!(tensor.to_vec::<Complex64>().unwrap(), &data[..]);
+    assert_eq!(tensor.to_vec::<Complex64>().unwrap(), data);
 }
 
 fn assert_dense_constructor_dims<T>(data: Vec<T>)
@@ -638,7 +647,7 @@ fn test_from_dense_generic_preserves_column_major_input_order() {
 
     let permuted = tensor.permute_indices(&[j, i]);
     assert_eq!(
-        permuted.to_vec_f64().unwrap(),
+        permuted.to_vec::<f64>().unwrap(),
         vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
     );
 }
@@ -718,7 +727,7 @@ fn test_scalar_f64() {
     let scalar = TensorDynLen::scalar(42.0).unwrap();
     assert_eq!(scalar.dims(), Vec::<usize>::new());
     assert!(scalar.is_f64());
-    assert_eq!(scalar.as_slice_f64().unwrap(), &[42.0]);
+    assert_eq!(scalar.to_vec::<f64>().unwrap(), &[42.0]);
 }
 
 #[test]
@@ -727,7 +736,7 @@ fn test_scalar_c64() {
     let scalar = TensorDynLen::scalar(z).unwrap();
     assert_eq!(scalar.dims(), Vec::<usize>::new());
     assert!(scalar.is_complex());
-    assert_eq!(scalar.as_slice_c64().unwrap(), &[z]);
+    assert_eq!(scalar.to_vec::<Complex64>().unwrap(), &[z]);
 }
 
 #[test]
@@ -738,7 +747,7 @@ fn test_zeros_f64() {
 
     assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(tensor.is_f64());
-    let data = tensor.as_slice_f64().unwrap();
+    let data = tensor.to_vec::<f64>().unwrap();
     assert!(data.iter().all(|&x| x == 0.0));
 }
 
@@ -750,7 +759,7 @@ fn test_zeros_c64() {
 
     assert_eq!(tensor.dims(), vec![2, 3]);
     assert!(tensor.is_complex());
-    let data = tensor.as_slice_c64().unwrap();
+    let data = tensor.to_vec::<Complex64>().unwrap();
     assert!(data.iter().all(|&x| x == Complex64::new(0.0, 0.0)));
 }
 
@@ -759,8 +768,8 @@ fn test_as_slice_error_on_wrong_type() {
     let i = Index::new_dyn(2);
     // Create f64 tensor but try to get c64 slice
     let tensor_f64 = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
-    assert!(tensor_f64.as_slice_c64().is_err());
-    assert!(tensor_f64.to_vec_c64().is_err());
+    assert!(tensor_f64.to_vec::<Complex64>().is_err());
+    assert!(tensor_f64.to_vec::<Complex64>().is_err());
 
     // Create c64 tensor but try to get f64 slice
     let tensor_c64 = TensorDynLen::from_dense(
@@ -768,6 +777,6 @@ fn test_as_slice_error_on_wrong_type() {
         vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
     )
     .unwrap();
-    assert!(tensor_c64.as_slice_f64().is_err());
-    assert!(tensor_c64.to_vec_f64().is_err());
+    assert!(tensor_c64.to_vec::<f64>().is_err());
+    assert!(tensor_c64.to_vec::<f64>().is_err());
 }

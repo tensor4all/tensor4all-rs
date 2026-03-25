@@ -16,8 +16,8 @@ fn scalar_from_value_supports_all_supported_element_types() {
 
 #[test]
 fn any_scalar_sum_from_real_storage_stays_real() {
-    let dense = Storage::from_dense_f64_col_major(vec![1.0, -2.5], &[2]).unwrap();
-    let diag = Storage::from_diag_f64_col_major(vec![3.0, 4.5], 2).unwrap();
+    let dense = Storage::from_dense_col_major(vec![1.0, -2.5], &[2]).unwrap();
+    let diag = Storage::from_diag_col_major(vec![3.0, 4.5], 2).unwrap();
 
     let dense_sum = AnyScalar::sum_from_storage(&dense);
     let diag_sum = AnyScalar::sum_from_storage(&diag);
@@ -30,7 +30,7 @@ fn any_scalar_sum_from_real_storage_stays_real() {
 
 #[test]
 fn any_scalar_sum_from_complex_storage_stays_complex() {
-    let dense = Storage::from_dense_c64_col_major(
+    let dense = Storage::from_dense_col_major(
         vec![Complex64::new(1.0, -1.0), Complex64::new(-0.5, 2.0)],
         &[2],
     )

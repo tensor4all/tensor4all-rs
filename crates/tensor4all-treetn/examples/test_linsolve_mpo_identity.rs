@@ -185,7 +185,7 @@ fn create_random_mpo_matching_structure(
         let node_idx = mpo.node_index(&node_name).unwrap();
         let t = mpo.tensor(node_idx).unwrap();
         let indices = t.external_indices();
-        let new_t = TensorDynLen::random_f64(&mut rng, indices);
+        let new_t = TensorDynLen::random::<f64, _>(&mut rng, indices);
         mpo.replace_tensor(node_idx, new_t)?;
     }
     Ok(mpo)
@@ -203,7 +203,7 @@ fn create_random_mpo_matching_structure_c64(
         let node_idx = mpo.node_index(&node_name).unwrap();
         let t = mpo.tensor(node_idx).unwrap();
         let indices = t.external_indices();
-        let new_t = TensorDynLen::random_c64(&mut rng, indices);
+        let new_t = TensorDynLen::random::<Complex64, _>(&mut rng, indices);
         mpo.replace_tensor(node_idx, new_t)?;
     }
     Ok(mpo)
@@ -371,9 +371,9 @@ fn compute_residual(
     let x_aligned = x_full.permuteinds(&order_x)?;
     let ax_aligned = ax_full.permuteinds(&order_ax)?;
     if b_full.is_complex() {
-        let b_vec = b_full.to_vec_c64()?;
-        let x_vec = x_aligned.to_vec_c64()?;
-        let ax_vec = ax_aligned.to_vec_c64()?;
+        let b_vec = b_full.to_vec::<Complex64>()?;
+        let x_vec = x_aligned.to_vec::<Complex64>()?;
+        let ax_vec = ax_aligned.to_vec::<Complex64>()?;
         anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
         anyhow::ensure!(x_vec.len() == b_vec.len(), "vector length mismatch");
 
@@ -389,9 +389,9 @@ fn compute_residual(
         let rel_res = if b2 > 0.0 { (r2 / b2).sqrt() } else { abs_res };
         Ok((abs_res, rel_res))
     } else {
-        let b_vec = b_full.to_vec_f64()?;
-        let x_vec = x_aligned.to_vec_f64()?;
-        let ax_vec = ax_aligned.to_vec_f64()?;
+        let b_vec = b_full.to_vec::<f64>()?;
+        let x_vec = x_aligned.to_vec::<f64>()?;
+        let ax_vec = ax_aligned.to_vec::<f64>()?;
         anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
         anyhow::ensure!(x_vec.len() == b_vec.len(), "vector length mismatch");
 

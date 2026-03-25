@@ -119,17 +119,17 @@ fn create_random_mps_with_same_sites(
     for i in 0..n_sites {
         let name = format!("site{i}");
         let tensor = if i == 0 {
-            TensorDynLen::random_f64(
+            TensorDynLen::random::<f64, _>(
                 &mut rng,
                 vec![site_indices[i].clone(), bond_indices[i].clone()],
             )
         } else if i == n_sites - 1 {
-            TensorDynLen::random_f64(
+            TensorDynLen::random::<f64, _>(
                 &mut rng,
                 vec![bond_indices[i - 1].clone(), site_indices[i].clone()],
             )
         } else {
-            TensorDynLen::random_f64(
+            TensorDynLen::random::<f64, _>(
                 &mut rng,
                 vec![
                     bond_indices[i - 1].clone(),
@@ -309,9 +309,9 @@ fn run_test_case(init_mode: &str, bond_dim: usize) -> anyhow::Result<()> {
         let ax_full = ax.contract_to_tensor()?;
         let x_full = x.contract_to_tensor()?;
         let b_full = rhs.contract_to_tensor()?;
-        let ax_vec = ax_full.to_vec_f64()?;
-        let x_vec = x_full.to_vec_f64()?;
-        let b_vec = b_full.to_vec_f64()?;
+        let ax_vec = ax_full.to_vec::<f64>()?;
+        let x_vec = x_full.to_vec::<f64>()?;
+        let b_vec = b_full.to_vec::<f64>()?;
         anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
         anyhow::ensure!(x_vec.len() == b_vec.len(), "vector length mismatch");
 

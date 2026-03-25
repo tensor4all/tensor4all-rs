@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use num_complex::Complex64;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{
@@ -313,7 +314,7 @@ fn create_random_mpo_state(
         // where external = true_site_indices[i] is the index that remains open.
         //
         // Create random tensor with shape [external, s_out, s_in]
-        let random_tensor = TensorDynLen::random_f64(
+        let random_tensor = TensorDynLen::random::<f64, _>(
             &mut rng,
             vec![
                 true_site_indices[i].clone(), // external index
@@ -443,9 +444,9 @@ fn compute_residual(
     let x_aligned = x_full.permuteinds(&order_x)?;
     let ax_aligned = ax_full.permuteinds(&order_ax)?;
     if b_full.is_complex() {
-        let b_vec = b_full.to_vec_c64()?;
-        let x_vec = x_aligned.to_vec_c64()?;
-        let ax_vec = ax_aligned.to_vec_c64()?;
+        let b_vec = b_full.to_vec::<Complex64>()?;
+        let x_vec = x_aligned.to_vec::<Complex64>()?;
+        let ax_vec = ax_aligned.to_vec::<Complex64>()?;
         anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
         anyhow::ensure!(x_vec.len() == b_vec.len(), "vector length mismatch");
 
@@ -461,9 +462,9 @@ fn compute_residual(
         let rel_res = if b2 > 0.0 { (r2 / b2).sqrt() } else { abs_res };
         Ok((abs_res, rel_res))
     } else {
-        let b_vec = b_full.to_vec_f64()?;
-        let x_vec = x_aligned.to_vec_f64()?;
-        let ax_vec = ax_aligned.to_vec_f64()?;
+        let b_vec = b_full.to_vec::<f64>()?;
+        let x_vec = x_aligned.to_vec::<f64>()?;
+        let ax_vec = ax_aligned.to_vec::<f64>()?;
         anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
         anyhow::ensure!(x_vec.len() == b_vec.len(), "vector length mismatch");
 
@@ -510,8 +511,8 @@ fn compute_state_error(
     let x_aligned = x_full.permuteinds(&order_x)?;
 
     if x_true_full.is_complex() {
-        let x_true_vec = x_true_full.to_vec_c64()?;
-        let x_vec = x_aligned.to_vec_c64()?;
+        let x_true_vec = x_true_full.to_vec::<Complex64>()?;
+        let x_vec = x_aligned.to_vec::<Complex64>()?;
         anyhow::ensure!(x_vec.len() == x_true_vec.len(), "vector length mismatch");
 
         let mut diff2 = 0.0_f64;
@@ -529,8 +530,8 @@ fn compute_state_error(
         };
         Ok((abs_err, rel_err))
     } else {
-        let x_true_vec = x_true_full.to_vec_f64()?;
-        let x_vec = x_aligned.to_vec_f64()?;
+        let x_true_vec = x_true_full.to_vec::<f64>()?;
+        let x_vec = x_aligned.to_vec::<f64>()?;
         anyhow::ensure!(x_vec.len() == x_true_vec.len(), "vector length mismatch");
 
         let mut diff2 = 0.0_f64;

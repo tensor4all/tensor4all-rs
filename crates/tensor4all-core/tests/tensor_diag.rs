@@ -1,9 +1,7 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::TensorLike;
-use tensor4all_core::{
-    diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor, AnyScalar, TensorDynLen,
-};
+use tensor4all_core::{diag_tensor_dyn_len, is_diag_tensor, AnyScalar, TensorDynLen};
 
 #[test]
 fn test_diag_tensor_creation() {
@@ -138,7 +136,8 @@ fn test_diag_tensor_convert_to_dense() {
 
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data);
     let dense_tensor =
-        TensorDynLen::from_dense(vec![i.clone(), j.clone()], tensor.to_vec_f64().unwrap()).unwrap();
+        TensorDynLen::from_dense(vec![i.clone(), j.clone()], tensor.to_vec::<f64>().unwrap())
+            .unwrap();
     let expected = TensorDynLen::from_dense(
         vec![i, j],
         vec![
@@ -175,7 +174,7 @@ fn test_diag_tensor_complex() {
     let j = Index::new_dyn(2);
     let diag_data = vec![Complex64::new(1.0, 0.5), Complex64::new(2.0, 1.0)];
 
-    let tensor = diag_tensor_dyn_len_c64(vec![i.clone(), j.clone()], diag_data.clone());
+    let tensor = TensorDynLen::from_diag(vec![i.clone(), j.clone()], diag_data.clone()).unwrap();
     assert_eq!(tensor.dims(), vec![2, 2]);
     assert!(is_diag_tensor(&tensor));
 
@@ -194,8 +193,8 @@ fn test_diag_tensor_complex_axpby_preserves_diag_structure() {
     let diag_a = vec![Complex64::new(1.0, 0.5), Complex64::new(-2.0, 1.0)];
     let diag_b = vec![Complex64::new(0.5, -1.0), Complex64::new(3.0, 0.25)];
 
-    let tensor_a = diag_tensor_dyn_len_c64(vec![i.clone(), j.clone()], diag_a.clone());
-    let tensor_b = diag_tensor_dyn_len_c64(vec![i.clone(), j.clone()], diag_b.clone());
+    let tensor_a = TensorDynLen::from_diag(vec![i.clone(), j.clone()], diag_a.clone()).unwrap();
+    let tensor_b = TensorDynLen::from_diag(vec![i.clone(), j.clone()], diag_b.clone()).unwrap();
 
     let a = AnyScalar::new_real(2.0);
     let b = AnyScalar::new_complex(-0.5, 1.0);
@@ -208,7 +207,7 @@ fn test_diag_tensor_complex_axpby_preserves_diag_structure() {
         .zip(diag_b.iter())
         .map(|(&x, &y)| Complex64::new(2.0, 0.0) * x + b_c * y)
         .collect();
-    let expected = diag_tensor_dyn_len_c64(vec![i, j], expected_diag);
+    let expected = TensorDynLen::from_diag(vec![i, j], expected_diag).unwrap();
     assert!(result.isapprox(&expected, 1e-12, 0.0));
 }
 

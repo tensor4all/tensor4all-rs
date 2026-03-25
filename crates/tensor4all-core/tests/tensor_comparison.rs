@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::{diag_tensor_dyn_len, diag_tensor_dyn_len_c64, TensorDynLen, TensorLike};
+use tensor4all_core::{diag_tensor_dyn_len, TensorDynLen, TensorLike};
 
 #[test]
 fn test_sub_identical_tensors_is_zero() {
@@ -24,7 +24,7 @@ fn test_sub_different_tensors() {
     let b = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
 
     let diff = &a - &b;
-    let data = diff.to_vec_f64().unwrap();
+    let data = diff.to_vec::<f64>().unwrap();
     assert!((data[0] - 2.0).abs() < 1e-14);
     assert!((data[1] - 3.0).abs() < 1e-14);
 }
@@ -55,7 +55,7 @@ fn test_neg() {
     let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, -2.0, 3.0]).unwrap();
 
     let neg_a = -&a;
-    let data = neg_a.to_vec_f64().unwrap();
+    let data = neg_a.to_vec::<f64>().unwrap();
     assert!((data[0] - (-1.0)).abs() < 1e-14);
     assert!((data[1] - 2.0).abs() < 1e-14);
     assert!((data[2] - (-3.0)).abs() < 1e-14);
@@ -86,14 +86,15 @@ fn test_maxabs_diag_f64() {
 fn test_maxabs_diag_c64() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(3);
-    let d = diag_tensor_dyn_len_c64(
+    let d = TensorDynLen::from_diag(
         vec![i, j],
         vec![
             Complex64::new(3.0, 4.0),  // |z| = 5
             Complex64::new(-1.0, 1.0), // |z| = sqrt(2)
             Complex64::new(0.0, -2.0), // |z| = 2
         ],
-    );
+    )
+    .unwrap();
     assert!((d.maxabs() - 5.0).abs() < 1e-14);
 }
 
@@ -147,7 +148,7 @@ fn test_sub_operator_owned() {
 
     // owned - owned
     let diff = a.clone() - b.clone();
-    let data = diff.to_vec_f64().unwrap();
+    let data = diff.to_vec::<f64>().unwrap();
     assert!((data[0] - 4.0).abs() < 1e-14);
     assert!((data[1] - 7.0).abs() < 1e-14);
 

@@ -1,4 +1,5 @@
 use super::*;
+use num_complex::Complex64;
 
 #[test]
 fn test_direct_sum_simple() {
@@ -39,7 +40,7 @@ fn test_direct_sum_simple() {
     assert_eq!(new_indices[0].dim(), 7);
 
     // Check column-major logical values.
-    let data = result.to_vec_f64().unwrap();
+    let data = result.to_vec::<f64>().unwrap();
     assert_eq!(
         data,
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0,]
@@ -120,7 +121,7 @@ fn test_direct_sum_c64() {
     assert_eq!(new_indices[0].dim(), 5);
 
     // Verify the data is complex
-    let data = result.to_vec_c64().unwrap();
+    let data = result.to_vec::<Complex64>().unwrap();
     assert_eq!(data.len(), 10);
     // First block comes from A (j indices 0..2)
     assert_eq!(data[0], Complex64::new(1.0, 0.5));
