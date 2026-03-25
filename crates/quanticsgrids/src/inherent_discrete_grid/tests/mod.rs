@@ -1,4 +1,6 @@
 use super::*;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 // ============================================================================
 // Existing tests (kept as-is)
@@ -458,25 +460,22 @@ fn test_quantics_origcoord_roundtrip() {
         .build()
         .unwrap();
 
-    // Deterministic pattern instead of random
+    // Julia: rand(1:2^2, R) where R=4, fused 2D so each site is base^2=4
     let dims = grid.local_dimensions();
-    let max_dim = dims[0] as i64; // All sites have same dim for fused uniform
+    let mut rng = StdRng::seed_from_u64(42);
 
-    for q0 in 1..=max_dim {
-        for q1 in [1, max_dim / 2, max_dim] {
-            for q2 in [1, max_dim] {
-                for q3 in [1, max_dim / 2 + 1, max_dim] {
-                    let quantics = vec![q0, q1, q2, q3];
-                    let origcoord = grid.quantics_to_origcoord(&quantics).unwrap();
-                    assert_eq!(grid.origcoord_to_quantics(&origcoord).unwrap(), quantics);
+    for _ in 0..20 {
+        let quantics: Vec<i64> = (0..r)
+            .map(|i| rng.random_range(1..=dims[i] as i64))
+            .collect();
 
-                    // Verify the conversion chain: quantics -> grididx -> origcoord
-                    let grididx = grid.quantics_to_grididx(&quantics).unwrap();
-                    let expected_origcoord = grid.grididx_to_origcoord(&grididx).unwrap();
-                    assert_eq!(origcoord, expected_origcoord);
-                }
-            }
-        }
+        let origcoord = grid.quantics_to_origcoord(&quantics).unwrap();
+        assert_eq!(grid.origcoord_to_quantics(&origcoord).unwrap(), quantics);
+
+        // Verify the conversion chain: quantics -> grididx -> origcoord
+        let grididx = grid.quantics_to_grididx(&quantics).unwrap();
+        let expected_origcoord = grid.grididx_to_origcoord(&grididx).unwrap();
+        assert_eq!(origcoord, expected_origcoord);
     }
 }
 
@@ -782,26 +781,23 @@ fn test_stress_conversions() {
 
     let max = (base as i64).pow(r as u32);
 
-    // Deterministic iteration over a range of grid indices
-    for x in (1..=max).step_by(3) {
-        for y in [1, max / 4, max / 2, 3 * max / 4, max] {
-            for z in [1, max / 2, max] {
-                let grididx = vec![x, y, z];
+    // Julia: 100 random grididx from rand(1:base^R) per dimension
+    let mut rng = StdRng::seed_from_u64(42);
+    for _ in 0..100 {
+        let grididx: Vec<i64> = (0..3).map(|_| rng.random_range(1..=max)).collect();
 
-                let origcoord = grid.grididx_to_origcoord(&grididx).unwrap();
-                assert_eq!(grid.origcoord_to_grididx(&origcoord).unwrap(), grididx);
+        let origcoord = grid.grididx_to_origcoord(&grididx).unwrap();
+        assert_eq!(grid.origcoord_to_grididx(&origcoord).unwrap(), grididx);
 
-                let quantics = grid.grididx_to_quantics(&grididx).unwrap();
-                assert_eq!(grid.quantics_to_grididx(&quantics).unwrap(), grididx);
+        let quantics = grid.grididx_to_quantics(&grididx).unwrap();
+        assert_eq!(grid.quantics_to_grididx(&quantics).unwrap(), grididx);
 
-                // Cross conversions
-                let origcoord_from_quantics = grid.quantics_to_origcoord(&quantics).unwrap();
-                assert_eq!(origcoord_from_quantics, origcoord);
+        // Cross conversions
+        let origcoord_from_quantics = grid.quantics_to_origcoord(&quantics).unwrap();
+        assert_eq!(origcoord_from_quantics, origcoord);
 
-                let quantics_from_origcoord = grid.origcoord_to_quantics(&origcoord).unwrap();
-                assert_eq!(quantics_from_origcoord, quantics);
-            }
-        }
+        let quantics_from_origcoord = grid.origcoord_to_quantics(&origcoord).unwrap();
+        assert_eq!(quantics_from_origcoord, quantics);
     }
 }
 
@@ -1547,25 +1543,26 @@ fn test_mixed_bases_fused_roundtrip() {
 
     assert_eq!(grid.local_dimensions(), vec![30, 6, 2]);
 
-    // Exhaustively test all valid quantics vectors
+    // Julia: 50 random quantics from rand(1:d) per localdimension
     let dims = grid.local_dimensions();
-    for d0 in 1..=dims[0] as i64 {
-        for d1 in 1..=dims[1] as i64 {
-            for d2 in 1..=dims[2] as i64 {
-                let quantics = vec![d0, d1, d2];
-                let grididx = grid.quantics_to_grididx(&quantics).unwrap();
-                assert_eq!(
-                    grid.grididx_to_quantics(&grididx).unwrap(),
-                    quantics,
-                    "Failed for quantics {:?}",
-                    quantics
-                );
-            }
-        }
+    let mut rng = StdRng::seed_from_u64(42);
+    for _ in 0..50 {
+        let quantics: Vec<i64> = dims
+            .iter()
+            .map(|&d| rng.random_range(1..=d as i64))
+            .collect();
+        let grididx = grid.quantics_to_grididx(&quantics).unwrap();
+        assert_eq!(
+            grid.grididx_to_quantics(&grididx).unwrap(),
+            quantics,
+            "Failed for quantics {:?}",
+            quantics
+        );
     }
 }
 
 // --- "quantics_to_grididx compose grididx_to_quantics == identity" ---
+// Julia: DiscretizedGrid((5, 3, 17); base=13), 100 random grididx from rand(1:grid_Rs(grid)[d])
 #[test]
 fn test_roundtrip_grididx_to_quantics_identity() {
     let grid = InherentDiscreteGrid::builder(&[5, 3, 17])
@@ -1573,80 +1570,45 @@ fn test_roundtrip_grididx_to_quantics_identity() {
         .build()
         .unwrap();
 
-    // Deterministic sampling of grid indices
     let rs = grid.rs();
-    let maxes: Vec<i64> = rs.iter().map(|&r| 13i64.pow(r as u32)).collect();
 
-    // Sample along each dimension
-    let samples_0: Vec<i64> = (1..=maxes[0])
-        .step_by((maxes[0] as usize).max(1) / 20 + 1)
-        .collect();
-    let samples_1: Vec<i64> = (1..=maxes[1])
-        .step_by((maxes[1] as usize).max(1) / 10 + 1)
-        .collect();
-    let samples_2 = vec![1i64, maxes[2] / 4, maxes[2] / 2, maxes[2] / 4 * 3, maxes[2]];
-
-    for &g0 in &samples_0 {
-        for &g1 in &samples_1 {
-            for &g2 in &samples_2 {
-                let grididx = vec![g0, g1, g2];
-                let quantics = grid.grididx_to_quantics(&grididx).unwrap();
-                assert_eq!(
-                    grid.quantics_to_grididx(&quantics).unwrap(),
-                    grididx,
-                    "Failed for grididx {:?}",
-                    grididx
-                );
-            }
-        }
+    let mut rng = StdRng::seed_from_u64(42);
+    for _ in 0..100 {
+        let grididx: Vec<i64> = rs.iter().map(|&r| rng.random_range(1..=r as i64)).collect();
+        let quantics = grid.grididx_to_quantics(&grididx).unwrap();
+        assert_eq!(
+            grid.quantics_to_grididx(&quantics).unwrap(),
+            grididx,
+            "Failed for grididx {:?}",
+            grididx
+        );
     }
 }
 
 // --- "grididx_to_quantics compose quantics_to_grididx == identity" ---
+// Julia: DiscretizedGrid((48, 31, 62)), 100 random quantics from rand(1:2, length(grid))
 #[test]
 fn test_roundtrip_quantics_to_grididx_identity() {
     let grid = InherentDiscreteGrid::builder(&[48, 31, 62])
         .build()
         .unwrap();
 
-    let dims = grid.local_dimensions();
     let total_len = grid.len();
 
-    // Generate deterministic quantics patterns within the local dimensions
-    let patterns: Vec<Vec<i64>> = vec![
-        // All 1s
-        vec![1; total_len],
-        // All max
-        dims.iter().map(|&d| d as i64).collect(),
-        // Alternating 1 and max
-        (0..total_len)
-            .map(|i| if i % 2 == 0 { 1 } else { dims[i] as i64 })
-            .collect(),
-        // Pattern based on index modulo dim
-        (0..total_len)
-            .map(|i| (i as i64 % dims[i] as i64) + 1)
-            .collect(),
-        // Pattern with multiplier
-        (0..total_len)
-            .map(|i| ((i as i64 * 3 + 1) % dims[i] as i64) + 1)
-            .collect(),
-        // Another pattern
-        (0..total_len)
-            .map(|i| ((i as i64 * 7 + 2) % dims[i] as i64) + 1)
-            .collect(),
-    ];
-
-    for quantics in &patterns {
-        let grididx = grid.quantics_to_grididx(quantics).unwrap();
+    let mut rng = StdRng::seed_from_u64(42);
+    for _ in 0..100 {
+        let quantics: Vec<i64> = (0..total_len).map(|_| rng.random_range(1..=2)).collect();
+        let grididx = grid.quantics_to_grididx(&quantics).unwrap();
         assert_eq!(
             grid.grididx_to_quantics(&grididx).unwrap(),
-            *quantics,
+            quantics,
             "Failed for quantics pattern"
         );
     }
 }
 
 // --- "grididx_to_quantics compose quantics_to_grididx == identity, base != 2" ---
+// Julia: DiscretizedGrid((22, 9, 14); base=7), 100 random quantics from rand(1:7, length(grid))
 #[test]
 fn test_roundtrip_quantics_to_grididx_base7() {
     let base: usize = 7;
@@ -1658,22 +1620,13 @@ fn test_roundtrip_quantics_to_grididx_base7() {
     let total_len = grid.len();
     let b = base as i64;
 
-    // Generate deterministic quantics patterns
-    let patterns: Vec<Vec<i64>> = vec![
-        vec![1; total_len],
-        vec![b; total_len],
-        (0..total_len).map(|i| (i as i64 % b) + 1).collect(),
-        (0..total_len).map(|i| ((i as i64 * 3) % b) + 1).collect(),
-        (0..total_len)
-            .map(|i| ((i as i64 * 5 + 2) % b) + 1)
-            .collect(),
-    ];
-
-    for quantics in &patterns {
-        let grididx = grid.quantics_to_grididx(quantics).unwrap();
+    let mut rng = StdRng::seed_from_u64(42);
+    for _ in 0..100 {
+        let quantics: Vec<i64> = (0..total_len).map(|_| rng.random_range(1..=b)).collect();
+        let grididx = grid.quantics_to_grididx(&quantics).unwrap();
         assert_eq!(
             grid.grididx_to_quantics(&grididx).unwrap(),
-            *quantics,
+            quantics,
             "Failed for quantics pattern"
         );
     }
@@ -1744,6 +1697,7 @@ fn test_extreme_edge_cases() {
 }
 
 // --- "challenging tests - mixed bases" ---
+// Julia: 50 random quantics from rand(1:3, length(grid))
 #[test]
 fn test_challenging_mixed_bases_base3() {
     let grid = InherentDiscreteGrid::builder(&[4, 6, 3])
@@ -1751,26 +1705,22 @@ fn test_challenging_mixed_bases_base3() {
         .build()
         .unwrap();
 
-    // Deterministic exhaustive testing of quantics roundtrips
     let dims = grid.local_dimensions();
-    let max_vals: Vec<i64> = grid.rs().iter().map(|&r| 3i64.pow(r as u32)).collect();
+    let total_len = grid.len();
 
-    // Sample grid indices deterministically
-    for g0 in (1..=max_vals[0]).step_by((max_vals[0] as usize) / 10 + 1) {
-        for g1 in (1..=max_vals[1]).step_by((max_vals[1] as usize) / 10 + 1) {
-            for g2 in (1..=max_vals[2]).step_by((max_vals[2] as usize) / 5 + 1) {
-                let grididx = vec![g0, g1, g2];
-                let quantics = grid.grididx_to_quantics(&grididx).unwrap();
-                assert_eq!(grid.quantics_to_grididx(&quantics).unwrap(), grididx);
-                // Verify bounds
-                for (i, &q) in quantics.iter().enumerate() {
-                    assert!(q >= 1 && q <= dims[i] as i64);
-                }
-            }
+    let mut rng = StdRng::seed_from_u64(42);
+    for _ in 0..50 {
+        let quantics: Vec<i64> = (0..total_len).map(|_| rng.random_range(1..=3)).collect();
+        let grididx = grid.quantics_to_grididx(&quantics).unwrap();
+        assert_eq!(grid.grididx_to_quantics(&grididx).unwrap(), quantics);
+        // Verify bounds
+        for (i, &q) in quantics.iter().enumerate() {
+            assert!(q >= 1 && q <= dims[i] as i64);
         }
     }
 }
 
+// Julia: 50 random grididx from rand(1:5^3) and rand(1:5^4)
 #[test]
 fn test_challenging_mixed_bases_base5_interleaved() {
     let grid = InherentDiscreteGrid::builder(&[3, 4])
@@ -1782,14 +1732,12 @@ fn test_challenging_mixed_bases_base5_interleaved() {
     let max0 = 5i64.pow(3);
     let max1 = 5i64.pow(4);
 
-    // Deterministic grid index testing
-    for g0 in (1..=max0).step_by(10) {
-        for g1 in (1..=max1).step_by(50) {
-            let grididx = vec![g0, g1];
-            let quantics = grid.grididx_to_quantics(&grididx).unwrap();
-            assert_eq!(grid.quantics_to_grididx(&quantics).unwrap(), grididx);
-            assert!(quantics.iter().all(|&q| (1..=5).contains(&q)));
-        }
+    let mut rng = StdRng::seed_from_u64(42);
+    for _ in 0..50 {
+        let grididx = vec![rng.random_range(1..=max0), rng.random_range(1..=max1)];
+        let quantics = grid.grididx_to_quantics(&grididx).unwrap();
+        assert_eq!(grid.quantics_to_grididx(&quantics).unwrap(), grididx);
+        assert!(quantics.iter().all(|&q| (1..=5).contains(&q)));
     }
 }
 
@@ -1877,6 +1825,7 @@ fn test_single_dimension_edge_cases() {
 }
 
 // --- "challenging tests - high dimensional grids" ---
+// Julia: 30 random iterations with rand(1:3, length(grid))
 #[test]
 fn test_high_dimensional_grids_base3() {
     // 8D grid with moderate R values
@@ -1887,23 +1836,15 @@ fn test_high_dimensional_grids_base3() {
         .unwrap();
 
     let dims = grid.local_dimensions();
-
-    // Generate deterministic quantics patterns
     let total_len = grid.len();
-    let patterns: Vec<Vec<i64>> = vec![
-        vec![1; total_len],
-        dims.iter().map(|&d| d as i64).collect(), // all max
-        (0..total_len)
-            .map(|i| (i as i64 % dims[i] as i64) + 1)
-            .collect(),
-        (0..total_len)
-            .map(|i| ((i as i64 * 2) % dims[i] as i64) + 1)
-            .collect(),
-    ];
 
-    for quantics in &patterns {
-        let grididx = grid.quantics_to_grididx(quantics).unwrap();
-        assert_eq!(grid.grididx_to_quantics(&grididx).unwrap(), *quantics);
+    let mut rng = StdRng::seed_from_u64(42);
+    for _ in 0..30 {
+        let quantics: Vec<i64> = (0..total_len)
+            .map(|i| rng.random_range(1..=dims[i] as i64))
+            .collect();
+        let grididx = grid.quantics_to_grididx(&quantics).unwrap();
+        assert_eq!(grid.grididx_to_quantics(&grididx).unwrap(), quantics);
 
         // Verify all grid indices are within bounds
         for (d, (&g, &r)) in grididx.iter().zip(rs.iter()).enumerate() {
@@ -1964,29 +1905,17 @@ fn test_stress_complex_patterns() {
         ]
     );
 
-    // Deterministic stress test over a systematic set of quantics values
-    let patterns: Vec<Vec<i64>> = vec![
-        vec![1; 10],                              // all 1s
-        dims.iter().map(|&d| d as i64).collect(), // all max
-        vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-        vec![3, 9, 3, 27, 9, 3, 9, 81, 3, 3],
-        vec![2, 5, 2, 14, 5, 2, 5, 41, 2, 2], // ~middle
-        vec![1, 3, 1, 10, 3, 1, 3, 20, 1, 1],
-        vec![3, 7, 3, 20, 7, 3, 7, 60, 3, 3],
-        // Patterns based on index
-        (0..10).map(|i| (i as i64 % dims[i] as i64) + 1).collect(),
-        (0..10)
-            .map(|i| ((i as i64 * 3 + 1) % dims[i] as i64) + 1)
-            .collect(),
-        (0..10)
-            .map(|i| ((i as i64 * 7 + 2) % dims[i] as i64) + 1)
-            .collect(),
-    ];
+    // Julia: 200 random quantics with site dimensions [3, 9, 3, 27, 9, 3, 9, 81, 3, 3]
+    let mut rng = StdRng::seed_from_u64(42);
+    for _ in 0..200 {
+        let quantics: Vec<i64> = dims
+            .iter()
+            .map(|&d| rng.random_range(1..=d as i64))
+            .collect();
 
-    for quantics in &patterns {
-        let grididx = grid.quantics_to_grididx(quantics).unwrap();
+        let grididx = grid.quantics_to_grididx(&quantics).unwrap();
         let recovered = grid.grididx_to_quantics(&grididx).unwrap();
-        assert_eq!(recovered, *quantics, "Failed for quantics {:?}", quantics);
+        assert_eq!(recovered, quantics, "Failed for quantics {:?}", quantics);
 
         // Verify grid indices are within bounds
         for (i, (&g, &m)) in grididx.iter().zip(max_grididx.iter()).enumerate() {
