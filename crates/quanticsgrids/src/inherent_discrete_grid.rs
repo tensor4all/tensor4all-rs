@@ -701,7 +701,7 @@ fn build_site_placevalues(site_radices: &[Vec<usize>]) -> Vec<Vec<i64>> {
 fn build_site_dims(site_radices: &[Vec<usize>]) -> Vec<usize> {
     site_radices
         .iter()
-        .map(|radices| radices.iter().product::<usize>().max(1))
+        .map(|radices| radices.iter().product::<usize>())
         .collect()
 }
 
