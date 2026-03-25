@@ -19,7 +19,7 @@ use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops,
 use crate::common::{
     tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
 };
-use crate::dense_array::DenseArray;
+use tensor4all_simplett::tensor::{Tensor, Tensor3 as GenericTensor3};
 
 /// Affine transformation parameters.
 ///
@@ -381,7 +381,7 @@ pub fn affine_transform_tensors_unfused(
     r: usize,
     params: &AffineParams,
     bc: &[BoundaryCondition],
-) -> Result<Vec<DenseArray<Complex64>>> {
+) -> Result<Vec<GenericTensor3<Complex64>>> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of bits must be positive"));
     }
@@ -465,11 +465,11 @@ pub fn affine_transform_tensors_unfused(
             }
         }
 
-        // Create DenseArray with shape [left_dim, site_dim, right_dim]
+        // Create Tensor3 with shape [left_dim, site_dim, right_dim]
         // The caller can reshape this to [left_dim, 2, 2, ..., 2, right_dim]
         // with the understanding that the indices are ordered as (y0, y1, ..., x0, x1, ...)
         let mut unfused_tensor =
-            DenseArray::from_elem(&[left_dim, site_dim, right_dim], Complex64::new(0.0, 0.0));
+            GenericTensor3::from_elem([left_dim, site_dim, right_dim], Complex64::new(0.0, 0.0));
         for l in 0..left_dim {
             for s in 0..site_dim {
                 for r in 0..right_dim {
@@ -777,7 +777,7 @@ struct AffineCoreData {
     /// Possible outgoing carry vectors
     carries_out: Vec<Vec<i64>>,
     /// Tensor data: tensor[carry_out_idx, carry_in_idx, site_idx]
-    tensor: DenseArray<bool>,
+    tensor: GenericTensor3<bool>,
 }
 
 /// Compute a single core tensor for the affine transformation.
@@ -796,7 +796,7 @@ fn affine_transform_core(
     carries_in: &[Vec<i64>],
     activebit: bool,
 ) -> Result<AffineCoreData> {
-    let mut carry_out_map: HashMap<Vec<i64>, DenseArray<bool>> = HashMap::new();
+    let mut carry_out_map: HashMap<Vec<i64>, Tensor<bool, 2>> = HashMap::new();
     let x_range = if activebit { 1 << n } else { 1 };
     let y_range = if activebit { 1 << m } else { 1 };
     let site_dim = x_range * y_range;
@@ -844,7 +844,7 @@ fn affine_transform_core(
 
                 let entry = carry_out_map
                     .entry(carry_out)
-                    .or_insert_with(|| DenseArray::from_elem(&[num_carry_in, site_dim], false));
+                    .or_insert_with(|| Tensor::from_elem([num_carry_in, site_dim], false));
                 entry[[c_idx, site_idx]] = true;
             } else {
                 // Scale is even: z must be even for valid y
@@ -867,7 +867,7 @@ fn affine_transform_core(
 
                     let entry = carry_out_map
                         .entry(carry_out)
-                        .or_insert_with(|| DenseArray::from_elem(&[num_carry_in, site_dim], false));
+                        .or_insert_with(|| Tensor::from_elem([num_carry_in, site_dim], false));
                     entry[[c_idx, site_idx]] = true;
                 }
             }
@@ -881,7 +881,7 @@ fn affine_transform_core(
     let num_carry_out = carries_out.len();
 
     // Build 3D tensor: (num_carry_out, num_carry_in, site_dim)
-    let mut tensor = DenseArray::from_elem(&[num_carry_out, num_carry_in, site_dim], false);
+    let mut tensor = GenericTensor3::from_elem([num_carry_out, num_carry_in, site_dim], false);
     for (cout_idx, carry) in carries_out.iter().enumerate() {
         let data_2d = &carry_out_map[carry];
         for cin_idx in 0..num_carry_in {
