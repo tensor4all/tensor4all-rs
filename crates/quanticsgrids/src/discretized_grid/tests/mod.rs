@@ -1092,7 +1092,7 @@ fn test_2d_large_r() {
         .unwrap();
     let max_idx = 1i64 << r;
     let quantics = grid.grididx_to_quantics(&[max_idx, max_idx]).unwrap();
-    assert_eq!(quantics, vec![(1i64 << d) as i64; r]);
+    assert_eq!(quantics, vec![1i64 << d; r]);
 }
 
 // =============================================================================
@@ -1940,9 +1940,9 @@ fn test_grouped_unfolding_scheme() {
     // Check structure: 3 sites for dim1, 4 for dim2, 5 for dim3
     // Variable names are "1", "2", "3" by default
     let mut idx = 0;
-    for d in 0..3 {
+    for (d, &r_d) in rs.iter().enumerate() {
         let var_name = (d + 1).to_string();
-        for bit in 1..=rs[d] {
+        for bit in 1..=r_d {
             assert_eq!(table[idx].len(), 1);
             assert_eq!(table[idx][0].0, var_name);
             assert_eq!(table[idx][0].1, bit);
@@ -2087,14 +2087,20 @@ fn test_comprehensive_functionality() {
 
         assert_eq!(back_grididx, grididx);
         assert_eq!(back_quantics, quantics);
-        for d in 0..4 {
-            assert!((back_origcoord[d] - origcoord[d]).abs() < 1e-10);
+        for (d, (&back, &orig)) in back_origcoord.iter().zip(origcoord.iter()).enumerate() {
+            assert!(
+                (back - orig).abs() < 1e-10,
+                "origcoord mismatch at dim {}: {} vs {}",
+                d,
+                back,
+                orig
+            );
         }
 
         // Grid indices within valid range
-        for d in 0..4 {
-            assert!(grididx[d] >= 1);
-            assert!(grididx[d] <= (base as i64).pow(grid.rs()[d] as u32));
+        for (d, &idx) in grididx.iter().enumerate() {
+            assert!(idx >= 1);
+            assert!(idx <= (base as i64).pow(grid.rs()[d] as u32));
         }
 
         // Quantics vector has correct length
@@ -2412,7 +2418,7 @@ fn test_mixed_bases_discretized_grid() {
     let origcoord = vec![2.0, 0.0, 12.0];
     let grididx = grid.origcoord_to_grididx(&origcoord).unwrap();
     assert_eq!(grididx, vec![3, 2, 3]);
-    let back_coord = grid.grididx_to_origcoord(&vec![3, 2, 3]).unwrap();
+    let back_coord = grid.grididx_to_origcoord(&[3, 2, 3]).unwrap();
     for d in 0..3 {
         assert!((back_coord[d] - origcoord[d]).abs() < 1e-14);
     }
@@ -2547,9 +2553,9 @@ fn test_extreme_base_values() {
         assert_eq!(recovered, quantics);
 
         // Verify all grid indices are in valid range
-        for d in 0..2 {
-            assert!(grididx[d] >= 1);
-            assert!(grididx[d] <= (max_base as i64).pow(grid.rs()[d] as u32));
+        for (d, &idx) in grididx.iter().enumerate() {
+            assert!(idx >= 1);
+            assert!(idx <= (max_base as i64).pow(grid.rs()[d] as u32));
         }
     }
 

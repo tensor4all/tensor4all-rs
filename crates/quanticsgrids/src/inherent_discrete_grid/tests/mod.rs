@@ -241,7 +241,7 @@ fn test_3d_grid_interleaved_and_fused() {
                     } else {
                         assert_eq!(q.len(), 3 * 5);
                     }
-                    assert!(q.iter().all(|&v| v >= 1 && v <= 8));
+                    assert!(q.iter().all(|&v| (1..=8).contains(&v)));
                     assert_eq!(grid.quantics_to_origcoord(&q).unwrap(), c);
                 }
             }
@@ -752,7 +752,7 @@ fn test_high_dimensional_grids() {
     let expected_origcoord: Vec<i64> = origin
         .iter()
         .zip(step.iter())
-        .map(|(&o, &s)| o + s * 1) // grididx=2 means offset=1
+        .map(|(&o, &s)| o + s) // grididx=2 means offset=1
         .collect();
     assert_eq!(
         grid.grididx_to_origcoord(&grididx).unwrap(),
@@ -965,7 +965,7 @@ fn test_asymmetric_indextable() {
     let grididx = [max_x, max_y, max_z];
     let origcoord = grid.grididx_to_origcoord(&grididx).unwrap();
     let expected_origcoord = vec![
-        0 + 10 * (max_x - 1),
+        10 * (max_x - 1),
         100 + 5 * (max_y - 1),
         -50 + 2 * (max_z - 1),
     ];
@@ -1052,7 +1052,7 @@ fn test_maximum_fragmentation() {
 
             let quantics = grid.grididx_to_quantics(grididx).unwrap();
             assert_eq!(quantics.len(), 5);
-            assert!(quantics.iter().all(|&v| v >= 1 && v <= 3));
+            assert!(quantics.iter().all(|&v| (1..=3).contains(&v)));
             assert_eq!(
                 grid.quantics_to_grididx(&quantics).unwrap(),
                 grididx.to_vec()
@@ -1099,7 +1099,7 @@ fn test_complex_indextable_base5() {
     // Test maximum
     let max_grididx = [125i64, 25, 125]; // 5^3, 5^2, 5^3
     let max_origcoord = grid.grididx_to_origcoord(&max_grididx).unwrap();
-    let expected_max = vec![-5 + 3 * (125 - 1), 0 + 7 * (25 - 1), 10 + 2 * (125 - 1)];
+    let expected_max = vec![-5 + 3 * (125 - 1), 7 * (25 - 1), 10 + 2 * (125 - 1)];
     assert_eq!(max_origcoord, expected_max);
     assert_eq!(
         grid.origcoord_to_grididx(&max_origcoord).unwrap(),
@@ -1788,7 +1788,7 @@ fn test_challenging_mixed_bases_base5_interleaved() {
             let grididx = vec![g0, g1];
             let quantics = grid.grididx_to_quantics(&grididx).unwrap();
             assert_eq!(grid.quantics_to_grididx(&quantics).unwrap(), grididx);
-            assert!(quantics.iter().all(|&q| q >= 1 && q <= 5));
+            assert!(quantics.iter().all(|&q| (1..=5).contains(&q)));
         }
     }
 }
