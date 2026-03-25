@@ -15,7 +15,7 @@ use tensor4all_simplett::{
 };
 
 use crate::common::{tensortrain_to_linear_operator, QuanticsOperator};
-use crate::dense_array::DenseArray;
+use tensor4all_simplett::tensor::Tensor4;
 
 /// Options for Fourier transform construction.
 #[derive(Clone, Debug)]
@@ -289,11 +289,11 @@ fn lagrange_polynomial(grid: &[f64], bary_weights: &[f64], alpha: usize, x: f64)
 /// where x = (sigma + grid[beta]) / 2
 ///
 /// Returns tensor of shape (k+1, 2, 2, k+1)
-fn build_dft_core_tensor(grid: &[f64], bary_weights: &[f64], sign: f64) -> DenseArray<Complex64> {
+fn build_dft_core_tensor(grid: &[f64], bary_weights: &[f64], sign: f64) -> Tensor4<Complex64> {
     let k = grid.len() - 1;
 
     // tensor[alpha, tau, sigma, beta] - shape: (k+1, 2, 2, k+1)
-    let mut tensor = DenseArray::from_elem(&[k + 1, 2, 2, k + 1], Complex64::zero());
+    let mut tensor = Tensor4::from_elem([k + 1, 2, 2, k + 1], Complex64::zero());
 
     for alpha in 0..=k {
         for tau in 0..2 {
