@@ -30,7 +30,6 @@ pub struct ReadmeDoctests;
 pub mod cached_function;
 pub mod error;
 pub mod indexset;
-pub mod optfirstpivot;
 pub mod tensorci1;
 pub mod tensorci2;
 
@@ -40,9 +39,6 @@ pub use error::{Result, TCIError};
 pub use indexset::{IndexSet, LocalIndex, MultiIndex};
 pub use tensorci1::{crossinterpolate1, SweepStrategy, TCI1Options, TensorCI1};
 pub use tensorci2::{crossinterpolate2, PivotSearchStrategy, TCI2Options, TensorCI2};
-
-// Re-export utilities
-pub use optfirstpivot::opt_first_pivot;
 
 // Re-export Scalar trait from matrixci for downstream crates
 pub use matrixci::Scalar;
