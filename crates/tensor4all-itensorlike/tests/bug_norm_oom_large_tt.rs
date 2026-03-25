@@ -21,8 +21,8 @@
 //! Root cause: `TreeTN::inner()` calls `contract_naive` instead of
 //! efficient sequential bra-ket contraction along the chain.
 
-use tensor4all_core::DynIndex;
 use tensor4all_core::defaults::tensordynlen::TensorDynLen;
+use tensor4all_core::DynIndex;
 use tensor4all_itensorlike::TensorTrain;
 
 /// Create a TT with `n_sites` sites, each of physical dimension 2,
@@ -33,13 +33,13 @@ fn make_tt(n_sites: usize) -> TensorTrain {
         let site_idx = DynIndex::new_dyn_with_tag(2, &format!("s={}", k + 1)).unwrap();
         if k == 0 {
             let bond_r = DynIndex::new_dyn(2);
-            let t = TensorDynLen::from_dense(vec![site_idx, bond_r], vec![1.0, 0.5, 0.3, 1.0])
-                .unwrap();
+            let t =
+                TensorDynLen::from_dense(vec![site_idx, bond_r], vec![1.0, 0.5, 0.3, 1.0]).unwrap();
             tensors.push(t);
         } else if k == n_sites - 1 {
             let bond_l = tensors[k - 1].indices().last().unwrap().clone();
-            let t = TensorDynLen::from_dense(vec![bond_l, site_idx], vec![1.0, 0.2, 0.7, 1.0])
-                .unwrap();
+            let t =
+                TensorDynLen::from_dense(vec![bond_l, site_idx], vec![1.0, 0.2, 0.7, 1.0]).unwrap();
             tensors.push(t);
         } else {
             let bond_l = tensors[k - 1].indices().last().unwrap().clone();
@@ -64,14 +64,9 @@ fn test_norm_small_tt_works() {
     assert!(n.is_finite(), "norm should be finite, got {n}");
 }
 
-/// BUG: norm() on a 25-site TT takes ~0.18s instead of ~0.006s.
-///
-/// This test asserts that norm() completes in under 0.1s, which is
-/// easily achievable with the efficient O(N*D^2*d) algorithm.
-///
-/// Marked `#[ignore]` until the bug is fixed.
+/// Regression test: norm() on a 25-site TT must complete in under 0.1s.
+/// The efficient O(N*D^2*d) algorithm achieves this easily.
 #[test]
-#[ignore]
 fn test_norm_25_site_tt_should_be_fast() {
     let tt = make_tt(25);
     let start = std::time::Instant::now();
@@ -87,14 +82,9 @@ fn test_norm_25_site_tt_should_be_fast() {
     );
 }
 
-/// BUG: norm() on a 90-site TT causes OOM / SIGKILL.
-///
-/// 2^90 ≈ 10^27 elements — impossible to fit in memory.
+/// Regression test: norm() on a 90-site TT must not OOM.
 /// The efficient algorithm needs O(90 * 4 * 2) = 720 operations.
-///
-/// Marked `#[ignore]` because it will OOM and crash the test runner.
 #[test]
-#[ignore]
 fn test_norm_large_tt_no_oom() {
     let tt = make_tt(90);
     assert_eq!(tt.len(), 90);
