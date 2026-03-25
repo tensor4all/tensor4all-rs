@@ -167,7 +167,7 @@ fn test_zipup_zero_masked_root_multi_matches_sequential_binary_contract() {
     let permuted_leaf = leaf.permute_indices(&[s0.clone(), s1.clone(), l01.clone(), l12.clone()]);
     let expected_permuted = TensorDynLen::from_dense(
         vec![s0.clone(), s1.clone(), l01.clone(), l12.clone()],
-        permute_col_major(&leaf.to_vec_f64().unwrap(), &leaf.dims(), &[0, 2, 1, 3]),
+        permute_col_major(&leaf.to_vec::<f64>().unwrap(), &leaf.dims(), &[0, 2, 1, 3]),
     )
     .unwrap();
     assert!(

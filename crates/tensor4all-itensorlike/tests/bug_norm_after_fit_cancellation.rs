@@ -20,7 +20,7 @@ fn create_random_mpo(
         if i < length - 1 {
             indices.push(link_indices[i].clone());
         }
-        tensors.push(TensorDynLen::random_f64(rng, indices));
+        tensors.push(TensorDynLen::random::<f64, _>(rng, indices));
     }
     TensorTrain::new(tensors).unwrap()
 }

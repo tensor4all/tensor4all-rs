@@ -64,7 +64,8 @@ pub mod any_scalar {
 pub mod storage {
     //! Re-export of snapshot storage utilities.
     pub use tensor4all_tensorbackend::{
-        make_mut_storage, mindim, AnyScalar, Storage, StructuredStorage, SumFromStorage,
+        make_mut_storage, mindim, AnyScalar, Storage, StorageScalar, StructuredStorage,
+        SumFromStorage,
     };
 }
 pub mod tensor_index;
@@ -83,8 +84,8 @@ pub use defaults::tensordynlen as tensor;
 
 pub use any_scalar::AnyScalar;
 pub use defaults::tensordynlen::{
-    compute_permutation_from_indices, diag_tensor_dyn_len, diag_tensor_dyn_len_c64, is_diag_tensor,
-    unfold_split, TensorAccess, TensorDynLen,
+    compute_permutation_from_indices, diag_tensor_dyn_len, is_diag_tensor, unfold_split,
+    RandomScalar, TensorAccess, TensorDynLen,
 };
 pub use storage::{make_mut_storage, mindim, Storage, StructuredStorage, SumFromStorage};
 pub use tensor4all_tensorbackend::TensorElement;
@@ -119,11 +120,9 @@ pub mod svd {
 // Re-export linear algebra items for top-level access
 pub use defaults::direct_sum::direct_sum;
 pub use defaults::factorize::factorize;
-pub use defaults::qr::{
-    default_qr_rtol, qr, qr_c64, qr_with, set_default_qr_rtol, QrError, QrOptions,
-};
+pub use defaults::qr::{default_qr_rtol, qr, qr_with, set_default_qr_rtol, QrError, QrOptions};
 pub use defaults::svd::{
-    default_svd_rtol, set_default_svd_rtol, svd, svd_c64, svd_with, SvdError, SvdOptions,
+    default_svd_rtol, set_default_svd_rtol, svd, svd_with, SvdError, SvdOptions,
 };
 
 // Global default and truncation utilities

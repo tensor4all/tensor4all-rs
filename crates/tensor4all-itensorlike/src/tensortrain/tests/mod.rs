@@ -406,8 +406,8 @@ fn test_to_dense() {
     let expected = t0.contract(&t1);
 
     // Compare results
-    let dense_data = dense.as_slice_f64().unwrap();
-    let expected_data = expected.as_slice_f64().unwrap();
+    let dense_data = dense.to_vec::<f64>().unwrap();
+    let expected_data = expected.to_vec::<f64>().unwrap();
 
     assert_eq!(dense_data.len(), expected_data.len());
     for (i, (&d, &e)) in dense_data.iter().zip(expected_data.iter()).enumerate() {
@@ -430,8 +430,8 @@ fn test_to_dense_single_site() {
     let tt = TensorTrain::new(vec![t0.clone()]).unwrap();
     let dense = tt.to_dense().unwrap();
 
-    let dense_data = dense.as_slice_f64().unwrap();
-    let expected_data = t0.as_slice_f64().unwrap();
+    let dense_data = dense.to_vec::<f64>().unwrap();
+    let expected_data = t0.to_vec::<f64>().unwrap();
 
     assert_eq!(dense_data.len(), expected_data.len());
     for (i, (&d, &e)) in dense_data.iter().zip(expected_data.iter()).enumerate() {
@@ -464,8 +464,8 @@ fn test_to_dense_three_sites() {
     // Expected: contract t0, t1, t2 sequentially
     let expected = t0.contract(&t1).contract(&t2);
 
-    let dense_data = dense.as_slice_f64().unwrap();
-    let expected_data = expected.as_slice_f64().unwrap();
+    let dense_data = dense.to_vec::<f64>().unwrap();
+    let expected_data = expected.to_vec::<f64>().unwrap();
 
     assert_eq!(dense_data.len(), expected_data.len());
     for (i, (&d, &e)) in dense_data.iter().zip(expected_data.iter()).enumerate() {
@@ -514,9 +514,9 @@ fn test_add_simple() {
     let tt1_dense = tt1.to_dense().unwrap();
     let tt2_dense = tt2.to_dense().unwrap();
 
-    let sum_data = sum_dense.as_slice_f64().unwrap();
-    let tt1_data = tt1_dense.as_slice_f64().unwrap();
-    let tt2_data = tt2_dense.as_slice_f64().unwrap();
+    let sum_data = sum_dense.to_vec::<f64>().unwrap();
+    let tt1_data = tt1_dense.to_vec::<f64>().unwrap();
+    let tt2_data = tt2_dense.to_vec::<f64>().unwrap();
 
     assert_eq!(sum_data.len(), tt1_data.len());
     for i in 0..sum_data.len() {
@@ -667,7 +667,7 @@ fn test_tensors_mut_returns_all_sites_in_order() {
         *tensors[0] = replacement.clone();
     }
 
-    assert_eq!(tt.tensor(0).as_slice_f64().unwrap(), vec![42.0; 6]);
+    assert_eq!(tt.tensor(0).to_vec::<f64>().unwrap(), vec![42.0; 6]);
 }
 
 #[test]
@@ -723,8 +723,8 @@ fn test_axpby() {
     let result_dense = result.to_dense().unwrap();
     let tt1_dense = tt1.to_dense().unwrap();
 
-    let result_data = result_dense.as_slice_f64().unwrap();
-    let tt1_data = tt1_dense.as_slice_f64().unwrap();
+    let result_data = result_dense.to_vec::<f64>().unwrap();
+    let tt1_data = tt1_dense.to_vec::<f64>().unwrap();
 
     assert_eq!(result_data.len(), tt1_data.len());
     for i in 0..result_data.len() {
@@ -900,8 +900,8 @@ fn test_sim_linkinds_single_site() {
     let simmed = tt.sim_linkinds();
     assert_eq!(simmed.len(), 1);
     // Should have same data
-    let orig_data = tt.tensor(0).as_slice_f64().unwrap();
-    let sim_data = simmed.tensor(0).as_slice_f64().unwrap();
+    let orig_data = tt.tensor(0).to_vec::<f64>().unwrap();
+    let sim_data = simmed.tensor(0).to_vec::<f64>().unwrap();
     assert_eq!(orig_data, sim_data);
 }
 
@@ -1040,8 +1040,8 @@ fn test_sim_linkinds_three_sites() {
     // Dense contraction should give same values
     let orig_dense = tt.to_dense().unwrap();
     let sim_dense = simmed.to_dense().unwrap();
-    let orig_data = orig_dense.as_slice_f64().unwrap();
-    let sim_data = sim_dense.as_slice_f64().unwrap();
+    let orig_data = orig_dense.to_vec::<f64>().unwrap();
+    let sim_data = sim_dense.to_vec::<f64>().unwrap();
     assert_eq!(orig_data.len(), sim_data.len());
     for (a, b) in orig_data.iter().zip(sim_data.iter()) {
         assert!((a - b).abs() < 1e-10);
@@ -1162,8 +1162,8 @@ fn test_tensor_like_conj() {
     let orig_dense = tt.to_dense().unwrap();
     let conj_dense = conj_tt.to_dense().unwrap();
 
-    let orig_data = orig_dense.as_slice_f64().unwrap();
-    let conj_data = conj_dense.as_slice_f64().unwrap();
+    let orig_data = orig_dense.to_vec::<f64>().unwrap();
+    let conj_data = conj_dense.to_vec::<f64>().unwrap();
 
     assert_eq!(orig_data.len(), conj_data.len());
     for (a, b) in orig_data.iter().zip(conj_data.iter()) {

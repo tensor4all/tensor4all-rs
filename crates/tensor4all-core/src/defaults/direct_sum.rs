@@ -10,7 +10,8 @@ use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::tensor::TensorDynLen;
 use anyhow::Result;
-use num_complex::Complex64;
+use num_traits::Zero;
+use tensor4all_tensorbackend::TensorElement;
 
 /// Compute the direct sum of two tensors along specified index pairs.
 ///
@@ -46,9 +47,9 @@ pub fn direct_sum(
     pairs: &[(DynIndex, DynIndex)],
 ) -> Result<(TensorDynLen, Vec<DynIndex>)> {
     if a.is_f64() && b.is_f64() {
-        direct_sum_f64(a, b, pairs)
+        direct_sum_typed::<f64>(a, b, pairs)
     } else if a.is_complex() && b.is_complex() {
-        direct_sum_c64(a, b, pairs)
+        direct_sum_typed::<num_complex::Complex64>(a, b, pairs)
     } else {
         Err(anyhow::anyhow!(
             "direct_sum requires both tensors to have the same dense scalar type (f64 or Complex64)"
@@ -243,16 +244,16 @@ fn multi_to_linear(multi: &[usize], strides: &[usize]) -> usize {
     multi.iter().zip(strides).map(|(&m, &s)| m * s).sum()
 }
 
-fn direct_sum_f64(
+fn direct_sum_typed<T: TensorElement + Zero>(
     a: &TensorDynLen,
     b: &TensorDynLen,
     pairs: &[(DynIndex, DynIndex)],
 ) -> Result<(TensorDynLen, Vec<DynIndex>)> {
     let setup = setup_direct_sum(a, b, pairs)?;
-    let a_data = a.to_vec_f64()?;
-    let b_data = b.to_vec_f64()?;
+    let a_data = a.to_vec::<T>()?;
+    let b_data = b.to_vec::<T>()?;
 
-    let mut result_data: Vec<f64> = vec![0.0; setup.result_total];
+    let mut result_data: Vec<T> = vec![T::zero(); setup.result_total];
 
     #[allow(clippy::needless_range_loop)]
     for result_linear in 0..setup.result_total {
@@ -292,63 +293,7 @@ fn direct_sum_f64(
             let b_linear = multi_to_linear(&b_multi, &setup.b_strides);
             result_data[result_linear] = b_data[b_linear];
         }
-        // else: mixed case stays 0.0
-    }
-
-    let result = TensorDynLen::from_dense(setup.result_indices, result_data)?;
-    Ok((result, setup.new_indices))
-}
-
-fn direct_sum_c64(
-    a: &TensorDynLen,
-    b: &TensorDynLen,
-    pairs: &[(DynIndex, DynIndex)],
-) -> Result<(TensorDynLen, Vec<DynIndex>)> {
-    let setup = setup_direct_sum(a, b, pairs)?;
-    let a_data = a.to_vec_c64()?;
-    let b_data = b.to_vec_c64()?;
-
-    let mut result_data: Vec<Complex64> = vec![Complex64::new(0.0, 0.0); setup.result_total];
-
-    #[allow(clippy::needless_range_loop)]
-    for result_linear in 0..setup.result_total {
-        let result_multi = linear_to_multi(result_linear, &setup.result_dims);
-        let common_multi: Vec<usize> = result_multi[..setup.n_common].to_vec();
-        let paired_multi: Vec<usize> = result_multi[setup.n_common..].to_vec();
-
-        let all_from_a = paired_multi
-            .iter()
-            .enumerate()
-            .all(|(i, &pm)| pm < setup.paired_dims_a[i]);
-        let all_from_b = paired_multi
-            .iter()
-            .enumerate()
-            .all(|(i, &pm)| pm >= setup.paired_dims_a[i]);
-
-        if all_from_a {
-            let a_dims = a.dims();
-            let mut a_multi = vec![0usize; a_dims.len()];
-            for (i, &cp) in setup.common_a_positions.iter().enumerate() {
-                a_multi[cp] = common_multi[i];
-            }
-            for (i, &pp) in setup.paired_a_positions.iter().enumerate() {
-                a_multi[pp] = paired_multi[i];
-            }
-            let a_linear = multi_to_linear(&a_multi, &setup.a_strides);
-            result_data[result_linear] = a_data[a_linear];
-        } else if all_from_b {
-            let b_dims = b.dims();
-            let mut b_multi = vec![0usize; b_dims.len()];
-            for (i, &cp) in setup.common_b_positions.iter().enumerate() {
-                b_multi[cp] = common_multi[i];
-            }
-            for (i, &pp) in setup.paired_b_positions.iter().enumerate() {
-                b_multi[pp] = paired_multi[i] - setup.paired_dims_a[i];
-            }
-            let b_linear = multi_to_linear(&b_multi, &setup.b_strides);
-            result_data[result_linear] = b_data[b_linear];
-        }
-        // else: mixed case stays 0.0
+        // else: mixed case stays T::zero()
     }
 
     let result = TensorDynLen::from_dense(setup.result_indices, result_data)?;

@@ -288,7 +288,7 @@ fn test_evaluate_two_nodes() {
 
     // Get the dense representation for reference
     let dense = tn.to_dense().unwrap();
-    let dense_data = dense.as_slice_f64().unwrap();
+    let dense_data = dense.to_vec::<f64>().unwrap();
 
     // Get ordered site indices to know mapping
     let site_inds_0 = tn
@@ -337,7 +337,7 @@ fn test_evaluate_three_nodes() {
 
     // Get dense for reference
     let dense = tn.to_dense().unwrap();
-    let dense_data = dense.as_slice_f64().unwrap();
+    let dense_data = dense.to_vec::<f64>().unwrap();
 
     let dim0 = tn.site_space(&0).unwrap().iter().next().unwrap().dim();
     let dim1 = tn.site_space(&1).unwrap().iter().next().unwrap().dim();

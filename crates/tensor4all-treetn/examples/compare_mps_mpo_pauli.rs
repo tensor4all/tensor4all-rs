@@ -327,9 +327,9 @@ fn compute_residual(
     let x_aligned = x_full.permuteinds(&order_x)?;
     let ax_aligned = ax_full.permuteinds(&order_ax)?;
 
-    let b_vec = b_full.to_vec_f64()?;
-    let x_vec = x_aligned.to_vec_f64()?;
-    let ax_vec = ax_aligned.to_vec_f64()?;
+    let b_vec = b_full.to_vec::<f64>()?;
+    let x_vec = x_aligned.to_vec::<f64>()?;
+    let ax_vec = ax_aligned.to_vec::<f64>()?;
     anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
     anyhow::ensure!(x_vec.len() == b_vec.len(), "vector length mismatch");
 

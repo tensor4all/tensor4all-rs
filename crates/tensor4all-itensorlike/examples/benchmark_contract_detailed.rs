@@ -29,7 +29,7 @@ fn create_random_mpo(
             indices.push(link_indices[i].clone());
         }
 
-        let tensor = TensorDynLen::random_f64(&mut rng, indices);
+        let tensor = TensorDynLen::random::<f64, _>(&mut rng, indices);
         tensors.push(tensor);
     }
 

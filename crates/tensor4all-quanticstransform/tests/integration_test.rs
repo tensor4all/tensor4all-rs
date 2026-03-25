@@ -198,7 +198,7 @@ fn contract_treetn_to_vector(
 
     // Get data from storage
     let data = full_tensor
-        .as_slice_c64()
+        .to_vec::<Complex64>()
         .expect("Expected DenseC64 storage");
     let dims = full_tensor.dims();
 
@@ -286,7 +286,7 @@ fn contract_operator_to_dense_matrix(
 
     let ext_indices = &dense_tensor.indices;
     let data = dense_tensor
-        .as_slice_c64()
+        .to_vec::<Complex64>()
         .expect("Expected DenseC64 storage");
     let tensor_dims = dense_tensor.dims();
     let ndims = tensor_dims.len();

@@ -3,6 +3,72 @@ use num_complex::{Complex64, ComplexFloat};
 use std::ops::{Add, Mul};
 use std::sync::Arc;
 
+/// Trait for scalar types that can be stored in [`Storage`].
+///
+/// This enables generic constructors such as [`Storage::from_dense_col_major`]
+/// and [`Storage::from_diag_col_major`].
+pub trait StorageScalar: Clone + Send + Sync + 'static {
+    /// Build a dense [`Storage`] from column-major data.
+    fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage>;
+    /// Build a diagonal [`Storage`] from diagonal payload data.
+    fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage>;
+    /// Build a structured [`Storage`] from explicit payload metadata.
+    fn build_structured_storage(
+        data: Vec<Self>,
+        payload_dims: Vec<usize>,
+        strides: Vec<isize>,
+        axis_classes: Vec<usize>,
+    ) -> Result<Storage>;
+}
+
+impl StorageScalar for f64 {
+    fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage> {
+        Storage::validate_dense_len(&data, logical_dims, "dense f64 payload")?;
+        Ok(Storage::from_repr(StorageRepr::F64(
+            StructuredStorage::from_dense_col_major(data, logical_dims),
+        )))
+    }
+    fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage> {
+        Ok(Storage::from_repr(StorageRepr::F64(
+            StructuredStorage::from_diag_col_major(diag_data, logical_rank),
+        )))
+    }
+    fn build_structured_storage(
+        data: Vec<Self>,
+        payload_dims: Vec<usize>,
+        strides: Vec<isize>,
+        axis_classes: Vec<usize>,
+    ) -> Result<Storage> {
+        Ok(Storage::from_repr(StorageRepr::F64(
+            StructuredStorage::new(data, payload_dims, strides, axis_classes)?,
+        )))
+    }
+}
+
+impl StorageScalar for Complex64 {
+    fn build_dense_storage(data: Vec<Self>, logical_dims: &[usize]) -> Result<Storage> {
+        Storage::validate_dense_len(&data, logical_dims, "dense c64 payload")?;
+        Ok(Storage::from_repr(StorageRepr::C64(
+            StructuredStorage::from_dense_col_major(data, logical_dims),
+        )))
+    }
+    fn build_diag_storage(diag_data: Vec<Self>, logical_rank: usize) -> Result<Storage> {
+        Ok(Storage::from_repr(StorageRepr::C64(
+            StructuredStorage::from_diag_col_major(diag_data, logical_rank),
+        )))
+    }
+    fn build_structured_storage(
+        data: Vec<Self>,
+        payload_dims: Vec<usize>,
+        strides: Vec<isize>,
+        axis_classes: Vec<usize>,
+    ) -> Result<Storage> {
+        Ok(Storage::from_repr(StorageRepr::C64(
+            StructuredStorage::new(data, payload_dims, strides, axis_classes)?,
+        )))
+    }
+}
+
 pub(crate) fn col_major_strides(dims: &[usize]) -> Vec<isize> {
     let mut strides = Vec::with_capacity(dims.len());
     let mut stride = 1isize;
@@ -359,6 +425,46 @@ impl Storage {
         Ok(())
     }
 
+    /// Create dense storage from column-major logical values (generic over scalar type).
+    ///
+    /// The scalar type is inferred from the `data` argument.
+    pub fn from_dense_col_major<T: StorageScalar>(
+        data: Vec<T>,
+        logical_dims: &[usize],
+    ) -> Result<Self> {
+        T::build_dense_storage(data, logical_dims)
+    }
+
+    /// Create diagonal storage from column-major diagonal payload values (generic over scalar type).
+    pub fn from_diag_col_major<T: StorageScalar>(
+        diag_data: Vec<T>,
+        logical_rank: usize,
+    ) -> Result<Self> {
+        T::build_diag_storage(diag_data, logical_rank)
+    }
+
+    /// Create a new 1D zero-initialized dense storage (generic over scalar type).
+    pub fn new_dense<T: StorageScalar + Default>(size: usize) -> Self {
+        Self::from_dense_col_major(vec![T::default(); size], &[size])
+            .unwrap_or_else(|err| panic!("Storage::new_dense failed: {err}"))
+    }
+
+    /// Create a new diagonal storage with the given diagonal data (generic over scalar type).
+    pub fn new_diag<T: StorageScalar>(diag_data: Vec<T>) -> Self {
+        Self::from_diag_col_major(diag_data, 2)
+            .unwrap_or_else(|err| panic!("Storage::new_diag failed: {err}"))
+    }
+
+    /// Create a new structured storage (generic over scalar type).
+    pub fn new_structured<T: StorageScalar>(
+        data: Vec<T>,
+        payload_dims: Vec<usize>,
+        strides: Vec<isize>,
+        axis_classes: Vec<usize>,
+    ) -> Result<Self> {
+        T::build_structured_storage(data, payload_dims, strides, axis_classes)
+    }
+
     pub(crate) fn native_payload_f64(&self, logical_dims: &[usize]) -> Result<NativePayload<f64>> {
         match &self.0 {
             StorageRepr::F64(value) => {
@@ -433,30 +539,6 @@ impl Storage {
         }
     }
 
-    /// Create a new 1D zero-initialized DenseF64 storage with the given size.
-    pub fn new_dense_f64(size: usize) -> Self {
-        Self::from_dense_f64_col_major(vec![0.0; size], &[size])
-            .unwrap_or_else(|err| panic!("Storage::new_dense_f64 failed: {err}"))
-    }
-
-    /// Create a new 1D zero-initialized DenseC64 storage with the given size.
-    pub fn new_dense_c64(size: usize) -> Self {
-        Self::from_dense_c64_col_major(vec![Complex64::new(0.0, 0.0); size], &[size])
-            .unwrap_or_else(|err| panic!("Storage::new_dense_c64 failed: {err}"))
-    }
-
-    /// Create a new DiagF64 storage with the given diagonal data.
-    pub fn new_diag_f64(diag_data: Vec<f64>) -> Self {
-        Self::from_diag_f64_col_major(diag_data, 2)
-            .unwrap_or_else(|err| panic!("Storage::new_diag_f64 failed: {err}"))
-    }
-
-    /// Create a new DiagC64 storage with the given diagonal data.
-    pub fn new_diag_c64(diag_data: Vec<Complex64>) -> Self {
-        Self::from_diag_c64_col_major(diag_data, 2)
-            .unwrap_or_else(|err| panic!("Storage::new_diag_c64 failed: {err}"))
-    }
-
     /// Create dense f64 storage from column-major logical values.
     pub fn from_dense_f64_col_major(data: Vec<f64>, logical_dims: &[usize]) -> Result<Self> {
         Self::validate_dense_len(&data, logical_dims, "dense f64 payload")?;
@@ -485,36 +567,6 @@ impl Storage {
         Ok(Self::from_repr(StorageRepr::C64(
             StructuredStorage::from_diag_col_major(diag_data, logical_rank),
         )))
-    }
-
-    /// Create a new structured f64 storage.
-    pub fn new_structured_f64(
-        data: Vec<f64>,
-        payload_dims: Vec<usize>,
-        strides: Vec<isize>,
-        axis_classes: Vec<usize>,
-    ) -> Result<Self> {
-        Ok(Self::from_repr(StorageRepr::F64(StructuredStorage::new(
-            data,
-            payload_dims,
-            strides,
-            axis_classes,
-        )?)))
-    }
-
-    /// Create a new structured Complex64 storage.
-    pub fn new_structured_c64(
-        data: Vec<Complex64>,
-        payload_dims: Vec<usize>,
-        strides: Vec<isize>,
-        axis_classes: Vec<usize>,
-    ) -> Result<Self> {
-        Ok(Self::from_repr(StorageRepr::C64(StructuredStorage::new(
-            data,
-            payload_dims,
-            strides,
-            axis_classes,
-        )?)))
     }
 
     /// Check if this storage is logically dense.
@@ -563,14 +615,16 @@ impl Storage {
         self.len() == 0
     }
 
-    /// Sum all elements as f64.
-    pub fn sum_f64(&self) -> f64 {
-        f64::sum_from_storage(self)
-    }
-
-    /// Sum all elements as Complex64.
-    pub fn sum_c64(&self) -> Complex64 {
-        Complex64::sum_from_storage(self)
+    /// Sum all elements, converting to type `T`.
+    ///
+    /// # Example
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    /// let s = Storage::from_dense_col_major(vec![1.0, 2.0, 3.0], &[3]).unwrap();
+    /// assert_eq!(s.sum::<f64>(), 6.0);
+    /// ```
+    pub fn sum<T: SumFromStorage>(&self) -> T {
+        T::sum_from_storage(self)
     }
 
     /// Maximum absolute value over all stored elements.
@@ -654,13 +708,13 @@ impl Storage {
             let values = self
                 .to_dense_f64_col_major_vec(dims)
                 .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
-            Storage::from_dense_f64_col_major(values, dims)
+            Storage::from_dense_col_major(values, dims)
                 .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"))
         } else {
             let values = self
                 .to_dense_c64_col_major_vec(dims)
                 .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"));
-            Storage::from_dense_c64_col_major(values, dims)
+            Storage::from_dense_col_major(values, dims)
                 .unwrap_or_else(|err| panic!("Storage::to_dense_storage failed: {err}"))
         }
     }
@@ -719,7 +773,7 @@ impl Storage {
     /// use num_complex::Complex64;
     ///
     /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
-    /// let storage = Storage::from_dense_c64_col_major(data, &[2]).unwrap();
+    /// let storage = Storage::from_dense_col_major(data, &[2]).unwrap();
     /// let conj_storage = storage.conj();
     ///
     /// // conj(1+2i) = 1-2i, conj(3-4i) = 3+4i

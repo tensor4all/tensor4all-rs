@@ -810,8 +810,8 @@ fn debug_solution_update() -> anyhow::Result<()> {
 
     // Check actual values
     println!("\nSite 0 data comparison:");
-    println!("x_new_zipup: {:?}", x_new_zipup.tensor(0).to_vec_f64()?);
-    println!("x_new_fit:   {:?}", x_new_fit.tensor(0).to_vec_f64()?);
+    println!("x_new_zipup: {:?}", x_new_zipup.tensor(0).to_vec::<f64>()?);
+    println!("x_new_fit:   {:?}", x_new_fit.tensor(0).to_vec::<f64>()?);
 
     Ok(())
 }
@@ -974,8 +974,8 @@ fn detailed_debug_n3() -> anyhow::Result<()> {
         );
 
         // Compare dense data
-        let data_zipup = t_zipup.to_vec_f64()?;
-        let data_fit = t_fit.to_vec_f64()?;
+        let data_zipup = t_zipup.to_vec::<f64>()?;
+        let data_fit = t_fit.to_vec::<f64>()?;
 
         println!("zipup data: {:?}", data_zipup);
         println!("fit data:   {:?}", data_fit);

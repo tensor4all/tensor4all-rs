@@ -195,7 +195,7 @@ impl SubDomainTT {
 
             // Create result tensor based on scalar type
             if tensor.is_f64() {
-                let src_data = tensor.as_slice_f64().unwrap_or_default();
+                let src_data = tensor.to_vec::<f64>().unwrap_or_default();
                 let mut result_data = vec![0.0_f64; total_size];
 
                 for flat_idx in 0..total_size {
@@ -207,7 +207,7 @@ impl SubDomainTT {
 
                 TensorDynLen::from_dense(indices.to_vec(), result_data).unwrap()
             } else {
-                let src_data = tensor.as_slice_c64().unwrap_or_default();
+                let src_data = tensor.to_vec::<Complex64>().unwrap_or_default();
                 let mut result_data = vec![Complex64::new(0.0, 0.0); total_size];
 
                 for flat_idx in 0..total_size {

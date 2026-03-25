@@ -40,11 +40,11 @@ pub use named_graph::NamedGraph;
 pub use node_name_network::{CanonicalizeEdges, NodeNameNetwork};
 pub use operator::{
     apply_linear_operator, are_exclusive_operators, build_identity_operator_tensor,
-    build_identity_operator_tensor_c64, compose_exclusive_linear_operators, ApplyOptions,
-    ArcLinearOperator, IndexMapping, LinearOperator, Operator,
+    compose_exclusive_linear_operators, ApplyOptions, ArcLinearOperator, IndexMapping,
+    LinearOperator, Operator,
 };
 pub use options::{CanonicalizationOptions, SplitOptions, TruncationOptions};
-pub use random::{random_treetn_c64, random_treetn_f64, LinkSpace};
+pub use random::{random_treetn, LinkSpace};
 pub use site_index_network::SiteIndexNetwork;
 pub use treetn::{
     // Local update

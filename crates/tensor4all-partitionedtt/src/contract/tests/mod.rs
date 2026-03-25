@@ -27,7 +27,7 @@ impl TestScalar for f64 {
     }
 
     fn extract_slice(tensor: &TensorDynLen) -> Vec<Self> {
-        tensor.as_slice_f64().unwrap()
+        tensor.to_vec::<f64>().unwrap()
     }
 }
 
@@ -41,7 +41,7 @@ impl TestScalar for Complex64 {
     }
 
     fn extract_slice(tensor: &TensorDynLen) -> Vec<Self> {
-        tensor.as_slice_c64().unwrap()
+        tensor.to_vec::<Complex64>().unwrap()
     }
 }
 

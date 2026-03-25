@@ -7,7 +7,7 @@ fn make_vector_with_index(data: Vec<f64>, idx: &DynIndex) -> TensorDynLen {
 }
 
 fn scale_vector_f64(x: &TensorDynLen, diag: &[f64]) -> Result<TensorDynLen> {
-    let x_data = x.to_vec_f64()?;
+    let x_data = x.to_vec::<f64>()?;
     let result_data: Vec<f64> = x_data
         .iter()
         .zip(diag.iter())
@@ -17,7 +17,7 @@ fn scale_vector_f64(x: &TensorDynLen, diag: &[f64]) -> Result<TensorDynLen> {
 }
 
 fn apply_matrix2_f64(x: &TensorDynLen, a_data: &[f64; 4]) -> Result<TensorDynLen> {
-    let x_data = x.to_vec_f64()?;
+    let x_data = x.to_vec::<f64>()?;
     let result_data = vec![
         a_data[0] * x_data[0] + a_data[1] * x_data[1],
         a_data[2] * x_data[0] + a_data[3] * x_data[1],
@@ -316,7 +316,7 @@ fn test_gmres_diagonal_c64() {
     let expected = make_vector_c64_with_index(x_true.to_vec(), &idx);
 
     let apply_a = move |x: &TensorDynLen| -> Result<TensorDynLen> {
-        let x_data = x.to_vec_c64()?;
+        let x_data = x.to_vec::<Complex64>()?;
         let result_data: Vec<Complex64> = x_data
             .iter()
             .zip(diag.iter())
@@ -835,7 +835,7 @@ fn test_restart_gmres_stagnation_detection() {
     // Truncation that rounds to 1 decimal place - the exact solution [1/3, 1/7, 1/11]
     // gets rounded to [0.3, 0.1, 0.1], preventing convergence below the rounding error.
     let truncate = |x: &mut TensorDynLen| -> Result<()> {
-        let data = x.to_vec_f64()?;
+        let data = x.to_vec::<f64>()?;
         let new_data: Vec<f64> = data.iter().map(|&v| (v * 10.0).round() / 10.0).collect();
         *x = TensorDynLen::from_dense(x.indices.clone(), new_data).unwrap();
         Ok(())
@@ -948,7 +948,7 @@ fn test_restart_gmres_stagnation_verbose() {
     let apply_a = move |x: &TensorDynLen| scale_vector_f64(x, &diag);
 
     let truncate = |x: &mut TensorDynLen| -> Result<()> {
-        let data = x.to_vec_f64()?;
+        let data = x.to_vec::<f64>()?;
         let new_data: Vec<f64> = data.iter().map(|&v| (v * 100.0).round() / 100.0).collect();
         *x = TensorDynLen::from_dense(x.indices.clone(), new_data).unwrap();
         Ok(())

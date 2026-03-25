@@ -58,8 +58,8 @@ fn test_itensor_f64_roundtrip() {
     }
 
     // Check data
-    let orig_data = tensor.to_vec_f64().unwrap();
-    let loaded_data = loaded.to_vec_f64().unwrap();
+    let orig_data = tensor.to_vec::<f64>().unwrap();
+    let loaded_data = loaded.to_vec::<f64>().unwrap();
     for (a, b) in orig_data.iter().zip(loaded_data.iter()) {
         assert_abs_diff_eq!(a, b, epsilon = 1e-15);
     }
@@ -84,7 +84,7 @@ fn test_itensor_f64_storage_dataset_uses_column_major_linearization() {
         .unwrap()
         .to_vec();
 
-    assert_eq!(stored, tensor.to_vec_f64().unwrap());
+    assert_eq!(stored, tensor.to_vec::<f64>().unwrap());
 
     std::fs::remove_file(&path).ok();
 }
@@ -101,8 +101,8 @@ fn test_itensor_c64_roundtrip() {
     assert_eq!(tensor.dims(), loaded.dims());
 
     // Check data
-    let orig_data = tensor.to_vec_c64().unwrap();
-    let loaded_data = loaded.to_vec_c64().unwrap();
+    let orig_data = tensor.to_vec::<Complex64>().unwrap();
+    let loaded_data = loaded.to_vec::<Complex64>().unwrap();
     for (a, b) in orig_data.iter().zip(loaded_data.iter()) {
         assert_abs_diff_eq!(a.re, b.re, epsilon = 1e-15);
         assert_abs_diff_eq!(a.im, b.im, epsilon = 1e-15);
@@ -128,7 +128,7 @@ fn test_itensor_c64_storage_dataset_uses_column_major_linearization() {
         .unwrap()
         .to_vec();
 
-    assert_eq!(stored, tensor.to_vec_c64().unwrap());
+    assert_eq!(stored, tensor.to_vec::<Complex64>().unwrap());
 
     std::fs::remove_file(&path).ok();
 }
@@ -147,7 +147,7 @@ fn test_itensor_3d_roundtrip() {
     let loaded = load_itensor(&path, "tensor3d").unwrap();
 
     assert_eq!(tensor.dims(), loaded.dims());
-    let loaded_data = loaded.to_vec_f64().unwrap();
+    let loaded_data = loaded.to_vec::<f64>().unwrap();
     for (a, b) in data.iter().zip(loaded_data.iter()) {
         assert_abs_diff_eq!(a, b, epsilon = 1e-15);
     }
@@ -228,8 +228,8 @@ fn test_mps_roundtrip() {
         }
 
         // Check data
-        let orig_data = orig.to_vec_f64().unwrap();
-        let loaded_data = loaded_t.to_vec_f64().unwrap();
+        let orig_data = orig.to_vec::<f64>().unwrap();
+        let loaded_data = loaded_t.to_vec::<f64>().unwrap();
         for (a, b) in orig_data.iter().zip(loaded_data.iter()) {
             assert_abs_diff_eq!(a, b, epsilon = 1e-15);
         }

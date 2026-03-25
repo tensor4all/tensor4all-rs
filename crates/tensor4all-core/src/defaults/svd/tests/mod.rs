@@ -1,5 +1,6 @@
 use super::*;
 use crate::index::DefaultIndex as Index;
+use num_complex::Complex64;
 use tenferro::Tensor as NativeTensor;
 
 #[test]

@@ -236,7 +236,7 @@ fn create_random_mpo_state_c64(
         let indices = mpo_node_indices(n, i, &bonds, &s_out_tmp, &s_in_tmp);
 
         // Create random complex tensor with shape [external, s_out, s_in]
-        let random_tensor = TensorDynLen::random_c64(
+        let random_tensor = TensorDynLen::random::<Complex64, _>(
             &mut rng,
             vec![
                 true_site_indices[i].clone(), // external index
@@ -548,7 +548,7 @@ fn print_operator_dense_matrix(
 
     println!("{label} (dense matrix {dim_out}x{dim_in}):");
     if t.is_complex() {
-        let data = t.to_vec_c64()?;
+        let data = t.to_vec::<Complex64>()?;
         anyhow::ensure!(
             data.len() == expected_len,
             "matrix print: length mismatch (got {}, expected {})",
@@ -568,7 +568,7 @@ fn print_operator_dense_matrix(
             println!("]");
         }
     } else {
-        let data = t.to_vec_f64()?;
+        let data = t.to_vec::<f64>()?;
         anyhow::ensure!(
             data.len() == expected_len,
             "matrix print: length mismatch (got {}, expected {})",
@@ -628,9 +628,9 @@ fn compute_residual(
     let x_aligned = x_full.permuteinds(&order_x)?;
     let ax_aligned = ax_full.permuteinds(&order_ax)?;
     if b_full.is_complex() {
-        let b_vec = b_full.to_vec_c64()?;
-        let x_vec = x_aligned.to_vec_c64()?;
-        let ax_vec = ax_aligned.to_vec_c64()?;
+        let b_vec = b_full.to_vec::<Complex64>()?;
+        let x_vec = x_aligned.to_vec::<Complex64>()?;
+        let ax_vec = ax_aligned.to_vec::<Complex64>()?;
         anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
         anyhow::ensure!(x_vec.len() == b_vec.len(), "vector length mismatch");
 
@@ -646,9 +646,9 @@ fn compute_residual(
         let rel_res = if b2 > 0.0 { (r2 / b2).sqrt() } else { abs_res };
         Ok((abs_res, rel_res))
     } else {
-        let b_vec = b_full.to_vec_f64()?;
-        let x_vec = x_aligned.to_vec_f64()?;
-        let ax_vec = ax_aligned.to_vec_f64()?;
+        let b_vec = b_full.to_vec::<f64>()?;
+        let x_vec = x_aligned.to_vec::<f64>()?;
+        let ax_vec = ax_aligned.to_vec::<f64>()?;
         anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
         anyhow::ensure!(x_vec.len() == b_vec.len(), "vector length mismatch");
 
@@ -695,8 +695,8 @@ fn compute_state_error(
     let x_aligned = x_full.permuteinds(&order_x)?;
 
     if x_true_full.is_complex() {
-        let x_true_vec = x_true_full.to_vec_c64()?;
-        let x_vec = x_aligned.to_vec_c64()?;
+        let x_true_vec = x_true_full.to_vec::<Complex64>()?;
+        let x_vec = x_aligned.to_vec::<Complex64>()?;
         anyhow::ensure!(x_vec.len() == x_true_vec.len(), "vector length mismatch");
 
         let mut diff2 = 0.0_f64;
@@ -714,8 +714,8 @@ fn compute_state_error(
         };
         Ok((abs_err, rel_err))
     } else {
-        let x_true_vec = x_true_full.to_vec_f64()?;
-        let x_vec = x_aligned.to_vec_f64()?;
+        let x_true_vec = x_true_full.to_vec::<f64>()?;
+        let x_vec = x_aligned.to_vec::<f64>()?;
         anyhow::ensure!(x_vec.len() == x_true_vec.len(), "vector length mismatch");
 
         let mut diff2 = 0.0_f64;
@@ -791,7 +791,7 @@ fn main() -> anyhow::Result<()> {
 
     // Display the vector representation of x_true
     let x_true_tensor = x_true_c64.contract_to_tensor()?;
-    let x_true_vec = x_true_tensor.to_vec_c64()?;
+    let x_true_vec = x_true_tensor.to_vec::<Complex64>()?;
 
     // Display x_true as matrix (n=2 sites with phys_dim=2 each gives 4x4 matrix)
     println!(

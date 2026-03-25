@@ -5,6 +5,7 @@ use crate::storage::{AnyScalar, Storage};
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::Zero;
+use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
 use std::collections::HashSet;
 use std::ops::{Mul, Neg, Sub};
@@ -13,11 +14,31 @@ use tenferro::{AdMode, ScalarType as NativeScalarType, Tensor as NativeTensor};
 use tensor4all_tensorbackend::{
     axpby_native_tensor, conj_native_tensor, contract_native_tensor,
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
-    native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
-    native_tensor_primal_to_storage, outer_product_native_tensor, permute_native_tensor,
-    reshape_col_major_native_tensor, scale_native_tensor, storage_to_native_tensor,
-    sum_native_tensor, TensorElement,
+    native_tensor_primal_to_dense_col_major, native_tensor_primal_to_storage,
+    outer_product_native_tensor, permute_native_tensor, reshape_col_major_native_tensor,
+    scale_native_tensor, storage_to_native_tensor, sum_native_tensor, TensorElement,
 };
+
+/// Trait for scalar types that can generate random values from a standard
+/// normal distribution.
+///
+/// This enables the generic [`TensorDynLen::random`] constructor.
+pub trait RandomScalar: TensorElement {
+    /// Generate a random value from the standard normal distribution.
+    fn random_value<R: Rng>(rng: &mut R) -> Self;
+}
+
+impl RandomScalar for f64 {
+    fn random_value<R: Rng>(rng: &mut R) -> Self {
+        StandardNormal.sample(rng)
+    }
+}
+
+impl RandomScalar for Complex64 {
+    fn random_value<R: Rng>(rng: &mut R) -> Self {
+        Complex64::new(StandardNormal.sample(rng), StandardNormal.sample(rng))
+    }
+}
 
 /// Compute the permutation array from original indices to new indices.
 ///
@@ -260,11 +281,6 @@ impl TensorDynLen {
     /// Sum all elements, returning `AnyScalar`.
     pub fn sum(&self) -> AnyScalar {
         sum_native_tensor(&self.native).expect("native sum failed")
-    }
-
-    /// Sum all elements as f64.
-    pub fn sum_f64(&self) -> f64 {
-        self.sum().real()
     }
 
     /// Extract the scalar value from a 0-dimensional tensor (or 1-element tensor).
@@ -582,7 +598,14 @@ impl TensorDynLen {
 // ============================================================================
 
 impl TensorDynLen {
-    /// Create a random f64 tensor with values from standard normal distribution.
+    /// Create a random tensor with values from standard normal distribution (generic over scalar type).
+    ///
+    /// For `f64`, each element is drawn from the standard normal distribution.
+    /// For `Complex64`, both real and imaginary parts are drawn independently.
+    ///
+    /// # Type Parameters
+    /// * `T` - The scalar element type (must implement [`RandomScalar`])
+    /// * `R` - The random number generator type
     ///
     /// # Arguments
     /// * `rng` - Random number generator
@@ -598,44 +621,14 @@ impl TensorDynLen {
     /// let mut rng = ChaCha8Rng::seed_from_u64(42);
     /// let i = Index::new_dyn(2);
     /// let j = Index::new_dyn(3);
-    /// let tensor: TensorDynLen = TensorDynLen::random_f64(&mut rng, vec![i, j]);
+    /// let tensor: TensorDynLen = TensorDynLen::random::<f64, _>(&mut rng, vec![i, j]);
     /// assert_eq!(tensor.dims(), vec![2, 3]);
     /// ```
-    pub fn random_f64<R: rand::Rng>(rng: &mut R, indices: Vec<DynIndex>) -> Self {
+    pub fn random<T: RandomScalar, R: Rng>(rng: &mut R, indices: Vec<DynIndex>) -> Self {
         let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
         let size: usize = dims.iter().product();
-        let data: Vec<f64> = (0..size).map(|_| StandardNormal.sample(rng)).collect();
-        Self::from_dense(indices, data).expect("TensorDynLen::random_f64 failed")
-    }
-
-    /// Create a random Complex64 tensor with values from standard normal distribution.
-    ///
-    /// Both real and imaginary parts are drawn from standard normal distribution.
-    ///
-    /// # Arguments
-    /// * `rng` - Random number generator
-    /// * `indices` - The indices for the tensor
-    ///
-    /// # Example
-    /// ```
-    /// use tensor4all_core::TensorDynLen;
-    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
-    /// use rand::SeedableRng;
-    /// use rand_chacha::ChaCha8Rng;
-    ///
-    /// let mut rng = ChaCha8Rng::seed_from_u64(42);
-    /// let i = Index::new_dyn(2);
-    /// let j = Index::new_dyn(3);
-    /// let tensor: TensorDynLen = TensorDynLen::random_c64(&mut rng, vec![i, j]);
-    /// assert_eq!(tensor.dims(), vec![2, 3]);
-    /// ```
-    pub fn random_c64<R: rand::Rng>(rng: &mut R, indices: Vec<DynIndex>) -> Self {
-        let dims: Vec<usize> = indices.iter().map(|idx| idx.dim()).collect();
-        let size: usize = dims.iter().product();
-        let data: Vec<Complex64> = (0..size)
-            .map(|_| Complex64::new(StandardNormal.sample(rng), StandardNormal.sample(rng)))
-            .collect();
-        Self::from_dense(indices, data).expect("TensorDynLen::random_c64 failed")
+        let data: Vec<T> = (0..size).map(|_| T::random_value(rng)).collect();
+        Self::from_dense(indices, data).expect("TensorDynLen::random failed")
     }
 }
 
@@ -1229,12 +1222,6 @@ pub fn diag_tensor_dyn_len(indices: Vec<DynIndex>, diag_data: Vec<f64>) -> Tenso
         .unwrap_or_else(|err| panic!("diag_tensor_dyn_len failed: {err}"))
 }
 
-/// Create a DiagTensor with dynamic rank from complex diagonal data.
-pub fn diag_tensor_dyn_len_c64(indices: Vec<DynIndex>, diag_data: Vec<Complex64>) -> TensorDynLen {
-    TensorDynLen::from_diag(indices, diag_data)
-        .unwrap_or_else(|err| panic!("diag_tensor_dyn_len_c64 failed: {err}"))
-}
-
 /// Unfold a tensor into a matrix by splitting indices into left and right groups.
 ///
 /// This function validates the split, permutes the tensor so that left indices
@@ -1657,13 +1644,16 @@ impl TensorDynLen {
 // ============================================================================
 
 impl TensorDynLen {
-    /// Extract tensor data as a column-major `Vec<f64>`.
+    /// Extract tensor data as a column-major `Vec<T>`.
+    ///
+    /// # Type Parameters
+    /// * `T` - The scalar element type (`f64` or `Complex64`).
     ///
     /// # Returns
     /// A vector of the tensor data in column-major order.
     ///
     /// # Errors
-    /// Returns an error if the storage is not DenseF64.
+    /// Returns an error if the tensor's scalar type does not match `T`.
     ///
     /// # Example
     /// ```
@@ -1672,44 +1662,27 @@ impl TensorDynLen {
     ///
     /// let i = Index::new_dyn(2);
     /// let tensor = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
-    /// let data = tensor.as_slice_f64().unwrap();
+    /// let data = tensor.to_vec::<f64>().unwrap();
     /// assert_eq!(data, &[1.0, 2.0]);
     /// ```
+    pub fn to_vec<T: TensorElement>(&self) -> Result<Vec<T>> {
+        native_tensor_primal_to_dense_col_major(&self.native)
+    }
+
+    /// Extract tensor data as a column-major `Vec<f64>`.
+    ///
+    /// Prefer the generic [`to_vec::<f64>()`](Self::to_vec) method.
+    /// This wrapper is kept for C API compatibility.
     pub fn as_slice_f64(&self) -> Result<Vec<f64>> {
-        self.to_vec_f64()
+        self.to_vec::<f64>()
     }
 
     /// Extract tensor data as a column-major `Vec<Complex64>`.
     ///
-    /// # Returns
-    /// A vector of the tensor data in column-major order.
-    ///
-    /// # Errors
-    /// Returns an error if the storage is not DenseC64.
+    /// Prefer the generic [`to_vec::<Complex64>()`](Self::to_vec) method.
+    /// This wrapper is kept for C API compatibility.
     pub fn as_slice_c64(&self) -> Result<Vec<Complex64>> {
-        self.to_vec_c64()
-    }
-
-    /// Convert tensor data to a column-major `Vec<f64>`.
-    ///
-    /// # Returns
-    /// A vector containing a copy of the tensor data.
-    ///
-    /// # Errors
-    /// Returns an error if the storage is not DenseF64.
-    pub fn to_vec_f64(&self) -> Result<Vec<f64>> {
-        native_tensor_primal_to_dense_f64_col_major(&self.native)
-    }
-
-    /// Convert tensor data to a column-major `Vec<Complex64>`.
-    ///
-    /// # Returns
-    /// A vector containing a copy of the tensor data.
-    ///
-    /// # Errors
-    /// Returns an error if the storage is not DenseC64.
-    pub fn to_vec_c64(&self) -> Result<Vec<Complex64>> {
-        native_tensor_primal_to_dense_c64_col_major(&self.native)
+        self.to_vec::<Complex64>()
     }
 
     /// Check if the tensor has f64 storage.

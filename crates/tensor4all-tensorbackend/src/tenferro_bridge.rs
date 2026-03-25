@@ -167,7 +167,7 @@ fn dense_f64_storage_from_col_major(
     logical_dims: &[usize],
 ) -> Result<Storage> {
     let data = materialize_col_major_values(tensor, "f64 dense snapshot materialization")?;
-    Storage::from_dense_f64_col_major(data, logical_dims)
+    Storage::from_dense_col_major(data, logical_dims)
 }
 
 fn dense_c64_storage_from_col_major(
@@ -175,7 +175,7 @@ fn dense_c64_storage_from_col_major(
     logical_dims: &[usize],
 ) -> Result<Storage> {
     let data = materialize_col_major_values(tensor, "c64 dense snapshot materialization")?;
-    Storage::from_dense_c64_col_major(data, logical_dims)
+    Storage::from_dense_col_major(data, logical_dims)
 }
 
 fn materialize_col_major_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
@@ -212,7 +212,7 @@ fn snapshot_f64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
             .payload_f64()
             .ok_or_else(|| anyhow!("expected f64 diagonal payload"))?;
         let data = materialize_col_major_values(payload, "f64 diagonal snapshot materialization")?;
-        return Storage::from_diag_f64_col_major(data, snap.dims().len());
+        return Storage::from_diag_col_major(data, snap.dims().len());
     }
 
     if snap.is_dense() {
@@ -226,7 +226,7 @@ fn snapshot_f64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
             .ok_or_else(|| anyhow!("expected f64 structured payload"))?;
         let data =
             materialize_col_major_values(payload, "f64 structured snapshot materialization")?;
-        Storage::new_structured_f64(
+        Storage::new_structured::<f64>(
             data,
             payload.dims().to_vec(),
             col_major_strides(payload.dims()),
@@ -241,7 +241,7 @@ fn snapshot_c64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
             .payload_c64()
             .ok_or_else(|| anyhow!("expected c64 diagonal payload"))?;
         let data = materialize_col_major_values(payload, "c64 diagonal snapshot materialization")?;
-        return Storage::from_diag_c64_col_major(data, snap.dims().len());
+        return Storage::from_diag_col_major(data, snap.dims().len());
     }
 
     if snap.is_dense() {
@@ -255,7 +255,7 @@ fn snapshot_c64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
             .ok_or_else(|| anyhow!("expected c64 structured payload"))?;
         let data =
             materialize_col_major_values(payload, "c64 structured snapshot materialization")?;
-        Storage::new_structured_c64(
+        Storage::new_structured::<Complex64>(
             data,
             payload.dims().to_vec(),
             col_major_strides(payload.dims()),
@@ -387,6 +387,18 @@ pub fn native_tensor_primal_to_dense_c64_col_major(
 ) -> Result<Vec<Complex64>> {
     retry_with_default_runtime_if_needed("native_tensor_primal_to_dense_c64_col_major", || {
         <Complex64 as TensorElement>::dense_values_from_native_col_major(tensor)
+    })
+}
+
+/// Materialize the dense primal payload of a native tensor (generic over element type).
+///
+/// This is the generic equivalent of [`native_tensor_primal_to_dense_f64_col_major`]
+/// and [`native_tensor_primal_to_dense_c64_col_major`].
+pub fn native_tensor_primal_to_dense_col_major<T: TensorElement>(
+    tensor: &NativeTensor,
+) -> Result<Vec<T>> {
+    retry_with_default_runtime_if_needed("native_tensor_primal_to_dense_col_major", || {
+        T::dense_values_from_native_col_major(tensor)
     })
 }
 

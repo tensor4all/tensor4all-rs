@@ -7,7 +7,7 @@
 //! SVD gives ~1e-14 on the same data.
 
 use num_complex::Complex64;
-use tensor4all_core::{factorize, svd_c64, DynIndex, FactorizeOptions, TensorDynLen};
+use tensor4all_core::{factorize, svd, DynIndex, FactorizeOptions, TensorDynLen};
 
 /// Create a [5,2,2,5] tensor with data that triggers the QR bug.
 fn make_buggy_tensor() -> TensorDynLen {
@@ -135,7 +135,7 @@ fn reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex], opts: &Factori
 }
 
 fn svd_reconstruction_error(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
-    let (u, s, v) = svd_c64(t, left_inds).unwrap();
+    let (u, s, v) = svd::<Complex64>(t, left_inds).unwrap();
     let mut perm = vec![v.indices.len() - 1];
     perm.extend(0..v.indices.len() - 1);
     let vh = v.conj().permute(&perm);
@@ -160,9 +160,11 @@ fn test_qr_reconstruction_regression() {
 
     let matrix_i = DynIndex::new_dyn_with_tag(10, "row").unwrap();
     let matrix_j = DynIndex::new_dyn_with_tag(10, "col").unwrap();
-    let matrix =
-        TensorDynLen::from_dense(vec![matrix_i.clone(), matrix_j], t.to_vec_c64().unwrap())
-            .unwrap();
+    let matrix = TensorDynLen::from_dense(
+        vec![matrix_i.clone(), matrix_j],
+        t.to_vec::<Complex64>().unwrap(),
+    )
+    .unwrap();
 
     let matrix_svd_err = svd_reconstruction_error(&matrix, &[matrix_i]);
     let direct_svd_err = svd_reconstruction_error(&t, &left_inds);

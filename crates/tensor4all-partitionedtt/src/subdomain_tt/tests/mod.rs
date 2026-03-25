@@ -64,13 +64,13 @@ fn test_subdomain_tt_project() {
 fn test_subdomain_tt_project_value_one_numeric() {
     let (tt, site_inds, _) = make_simple_tt();
     let full = tt.to_dense().unwrap();
-    let full_data = full.as_slice_f64().unwrap();
+    let full_data = full.to_vec::<f64>().unwrap();
 
     let subdomain = SubDomainTT::from_tt(tt);
     let projector = Projector::from_pairs([(site_inds[0].clone(), 1)]);
     let projected = subdomain.project(&projector).unwrap();
     let projected_full = projected.data().to_dense().unwrap();
-    let projected_data = projected_full.as_slice_f64().unwrap();
+    let projected_data = projected_full.to_vec::<f64>().unwrap();
 
     assert_eq!(projected_data.len(), full_data.len());
     assert_eq!(projected_data[0], 0.0);

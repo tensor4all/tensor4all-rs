@@ -30,10 +30,9 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use tensor4all_core::{DynIndex, TensorDynLen};
 use tensor4all_treetn::{
-    apply_linear_operator, apply_local_update_sweep, random_treetn_f64, ApplyOptions,
-    CanonicalForm, CanonicalizationOptions, IndexMapping, LinearOperator, LinkSpace,
-    LinsolveOptions, LocalUpdateSweepPlan, SiteIndexNetwork, SquareLinsolveUpdater, TreeTN,
-    TruncationOptions,
+    apply_linear_operator, apply_local_update_sweep, random_treetn, ApplyOptions, CanonicalForm,
+    CanonicalizationOptions, IndexMapping, LinearOperator, LinkSpace, LinsolveOptions,
+    LocalUpdateSweepPlan, SiteIndexNetwork, SquareLinsolveUpdater, TreeTN, TruncationOptions,
 };
 
 fn create_n_site_ones_mps(
@@ -178,7 +177,7 @@ fn create_random_chain_mpo_with_internal_indices(
     }
 
     let mut rng = StdRng::seed_from_u64(seed);
-    let mpo = random_treetn_f64(&mut rng, &net, LinkSpace::uniform(mpo_bond_dim));
+    let mpo = random_treetn::<f64, _, _>(&mut rng, &net, LinkSpace::uniform(mpo_bond_dim));
     (mpo, s_in_tmp, s_out_tmp)
 }
 
@@ -231,9 +230,9 @@ fn compute_rel_residual(
     let x_full = x.contract_to_tensor()?;
     let b_full = rhs.contract_to_tensor()?;
 
-    let ax_vec = ax_full.to_vec_f64()?;
-    let x_vec = x_full.to_vec_f64()?;
-    let b_vec = b_full.to_vec_f64()?;
+    let ax_vec = ax_full.to_vec::<f64>()?;
+    let x_vec = x_full.to_vec::<f64>()?;
+    let b_vec = b_full.to_vec::<f64>()?;
 
     anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
     anyhow::ensure!(x_vec.len() == b_vec.len(), "vector length mismatch");

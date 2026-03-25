@@ -1,5 +1,6 @@
 use super::*;
 use crate::index::DefaultIndex as Index;
+use num_complex::Complex64;
 use tensor4all_tensorbackend::native_tensor_primal_to_dense_f64_col_major;
 
 #[test]

@@ -229,15 +229,15 @@ fn issue192_regression_no_svd_nan_n5_identity_ones() -> anyhow::Result<()> {
     }
 
     // Ensure the final state is finite.
-    // If NaN/Inf sneaks in, contract_to_tensor().to_vec_f64() should reveal it.
+    // If NaN/Inf sneaks in, contract_to_tensor().to_vec::<f64>() should reveal it.
     let x_full = x.contract_to_tensor().context("failed to contract x")?;
-    let x_vec = x_full.to_vec_f64().context("failed to materialize x")?;
+    let x_vec = x_full.to_vec::<f64>().context("failed to materialize x")?;
     anyhow::ensure!(x_vec.iter().all(|v| v.is_finite()), "x contains NaN/Inf");
 
     // Also ensure applying the linear operator does not introduce NaN/Inf.
     let ax = tensor4all_treetn::apply_linear_operator(&linop, &x, ApplyOptions::default())?;
     let ax_full = ax.contract_to_tensor()?;
-    let ax_vec = ax_full.to_vec_f64()?;
+    let ax_vec = ax_full.to_vec::<f64>()?;
     anyhow::ensure!(ax_vec.iter().all(|v| v.is_finite()), "Ax contains NaN/Inf");
 
     Ok(())

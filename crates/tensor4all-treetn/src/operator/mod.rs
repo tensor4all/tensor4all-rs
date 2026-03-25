@@ -35,7 +35,7 @@ mod linear_operator;
 
 pub use apply::{apply_linear_operator, ApplyOptions, ArcLinearOperator};
 pub use compose::{are_exclusive_operators, compose_exclusive_linear_operators};
-pub use identity::{build_identity_operator_tensor, build_identity_operator_tensor_c64};
+pub use identity::build_identity_operator_tensor;
 pub use index_mapping::IndexMapping;
 pub use linear_operator::LinearOperator;
 

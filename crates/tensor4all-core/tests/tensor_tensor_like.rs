@@ -216,7 +216,7 @@ fn test_onehot_1d() {
     let i = Index::new_dyn(3);
     let t = TensorDynLen::onehot(&[(i.clone(), 0)]).unwrap();
     assert_eq!(t.dims(), vec![3]);
-    let data = t.to_vec_f64().unwrap();
+    let data = t.to_vec::<f64>().unwrap();
     assert_eq!(data, vec![1.0, 0.0, 0.0]);
 }
 
@@ -226,7 +226,7 @@ fn test_onehot_2d() {
     let j = Index::new_dyn(4);
     let t = TensorDynLen::onehot(&[(i.clone(), 1), (j.clone(), 2)]).unwrap();
     assert_eq!(t.dims(), vec![3, 4]);
-    let data = t.to_vec_f64().unwrap();
+    let data = t.to_vec::<f64>().unwrap();
     // Column-major: position (1,2) in 3×4 = 1 + 3*2 = 7
     let mut expected = vec![0.0; 12];
     expected[7] = 1.0;
@@ -239,7 +239,7 @@ fn test_onehot_boundary() {
     let j = Index::new_dyn(4);
     // Last position in the first dimension, nontrivial column in the second.
     let t = TensorDynLen::onehot(&[(i.clone(), 2), (j.clone(), 1)]).unwrap();
-    let data = t.to_vec_f64().unwrap();
+    let data = t.to_vec::<f64>().unwrap();
     // Column-major: position (2,1) in 3×4 = 2 + 3*1 = 5
     let mut expected = vec![0.0; 12];
     expected[5] = 1.0;
@@ -281,7 +281,7 @@ fn test_onehot_contraction() {
     // Contract: V(i) * A(i,j) = A[1,:]
     let result = <TensorDynLen as TensorLike>::contract(&[&v, &a], AllowedPairs::All).unwrap();
     assert_eq!(result.dims(), vec![4]);
-    let data = result.to_vec_f64().unwrap();
+    let data = result.to_vec::<f64>().unwrap();
     // Row i=1 of the column-major 3×4 matrix: [1, 4, 7, 10]
     assert_eq!(data, vec![1.0, 4.0, 7.0, 10.0]);
 }

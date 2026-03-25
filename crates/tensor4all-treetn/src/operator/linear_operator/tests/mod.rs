@@ -138,7 +138,7 @@ fn test_linear_operator_apply_local_identity() {
     let result = op.apply_local(&local_tensor, &["A".to_string()]).unwrap();
 
     // Identity operator should preserve the state
-    let result_data = result.to_vec_f64().unwrap();
+    let result_data = result.to_vec::<f64>().unwrap();
     assert_eq!(result_data.len(), 2);
     // Values should be approximately [1, 0]
     assert!((result_data[0] - 1.0).abs() < 1e-10);
@@ -357,7 +357,7 @@ fn test_apply_local_multi_node_region() {
         .unwrap();
 
     // Identity operator should preserve the state
-    let result_data = result.to_vec_f64().unwrap();
+    let result_data = result.to_vec::<f64>().unwrap();
     assert_eq!(result_data.len(), 4);
     assert!((result_data[0] - 1.0).abs() < 1e-10);
     for &v in &result_data[1..] {

@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use num_complex::Complex64;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -56,7 +57,7 @@ fn create_random_mps_chain_with_sites_c64(
             vec![bonds[i - 1].clone(), sites[i].clone(), bonds[i].clone()]
         };
 
-        let t = TensorDynLen::random_c64(rng, indices);
+        let t = TensorDynLen::random::<Complex64, _>(rng, indices);
         let node = mps.add_tensor(make_node_name(i), t).unwrap();
         nodes.push(node);
     }
@@ -225,8 +226,8 @@ fn compute_residual(
     let ax = apply_linear_operator(&linop, x, ApplyOptions::default())?;
     let ax_full = ax.contract_to_tensor()?;
     let b_full = rhs.contract_to_tensor()?;
-    let ax_vec = ax_full.to_vec_c64()?;
-    let b_vec = b_full.to_vec_c64()?;
+    let ax_vec = ax_full.to_vec::<Complex64>()?;
+    let b_vec = b_full.to_vec::<Complex64>()?;
     anyhow::ensure!(ax_vec.len() == b_vec.len(), "len mismatch");
     let mut diff2 = 0.0_f64;
     let mut b2 = 0.0_f64;

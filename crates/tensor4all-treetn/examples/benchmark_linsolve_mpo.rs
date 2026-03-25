@@ -198,7 +198,7 @@ fn create_random_mpo_operator(
         let node_name = make_node_name(i);
 
         let indices = mpo_node_indices(n, i, &bonds, &s_out_tmp, &s_in_tmp);
-        let t = TensorDynLen::random_f64(rng, indices);
+        let t = TensorDynLen::random::<f64, _>(rng, indices);
 
         let node = mpo.add_tensor(node_name.clone(), t).unwrap();
         nodes.push(node);
@@ -385,9 +385,9 @@ fn main() -> anyhow::Result<()> {
         let x_aligned = x_full.permuteinds(&order_x)?;
         let ax_aligned = ax_full.permuteinds(&order_ax)?;
 
-        let ax_vec = ax_aligned.to_vec_f64()?;
-        let x_vec = x_aligned.to_vec_f64()?;
-        let b_vec = b_full.to_vec_f64()?;
+        let ax_vec = ax_aligned.to_vec::<f64>()?;
+        let x_vec = x_aligned.to_vec::<f64>()?;
+        let b_vec = b_full.to_vec::<f64>()?;
 
         anyhow::ensure!(ax_vec.len() == b_vec.len(), "vector length mismatch");
         anyhow::ensure!(x_vec.len() == b_vec.len(), "vector length mismatch");

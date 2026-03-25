@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::{default_svd_rtol, set_default_svd_rtol, svd, svd_c64, svd_with, SvdOptions};
+use tensor4all_core::{default_svd_rtol, set_default_svd_rtol, svd, svd_with, SvdOptions};
 use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
 
 fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
@@ -240,8 +240,8 @@ fn test_svd_complex_reconstruction() {
     ];
     let tensor = dense_c64(vec![i_idx.clone(), j_idx.clone()], data.clone());
 
-    let (u, s, v) =
-        svd_c64(&tensor, std::slice::from_ref(&i_idx)).expect("Complex SVD should succeed");
+    let (u, s, v) = svd::<Complex64>(&tensor, std::slice::from_ref(&i_idx))
+        .expect("Complex SVD should succeed");
 
     let reconstructed = reconstruct_from_svd(&u, &s, &v);
     assert!(
@@ -266,8 +266,8 @@ fn test_svd_complex_rectangular_reconstruction() {
     ];
     let tensor = dense_c64(vec![i.clone(), j.clone()], data);
 
-    let (u, s, v) =
-        svd_c64(&tensor, std::slice::from_ref(&i)).expect("Complex rectangular SVD should succeed");
+    let (u, s, v) = svd::<Complex64>(&tensor, std::slice::from_ref(&i))
+        .expect("Complex rectangular SVD should succeed");
     let reconstructed = reconstruct_from_svd(&u, &s, &v);
 
     assert!(

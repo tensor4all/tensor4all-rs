@@ -116,7 +116,7 @@ fn test_permute_dyn_f64_2d() {
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
     assert_eq!(
-        permuted.to_vec_f64().unwrap(),
+        permuted.to_vec::<f64>().unwrap(),
         permute_col_major(&data, &dims, &[1, 0])
     );
 }
@@ -143,7 +143,7 @@ fn test_permute_dyn_c64_2d() {
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
     assert_eq!(
-        permuted.to_vec_c64().unwrap(),
+        permuted.to_vec::<Complex64>().unwrap(),
         permute_col_major(&data, &dims, &[1, 0])
     );
 }
@@ -166,7 +166,7 @@ fn test_permute_dyn_f64_3d() {
     assert_eq!(permuted.indices[1].id, i.id);
     assert_eq!(permuted.indices[2].id, j.id);
     assert_eq!(
-        permuted.to_vec_f64().unwrap(),
+        permuted.to_vec::<f64>().unwrap(),
         permute_col_major(&data, &dims, &[2, 0, 1])
     );
 }
@@ -184,7 +184,7 @@ fn test_permute_identity() {
     assert_eq!(permuted.dims(), vec![2, 3]);
     assert_eq!(permuted.indices[0].id, i.id);
     assert_eq!(permuted.indices[1].id, j.id);
-    assert_eq!(permuted.to_vec_f64().unwrap(), data);
+    assert_eq!(permuted.to_vec::<f64>().unwrap(), data);
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn test_permute_indices_dyn_f64_2d() {
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
     assert_eq!(
-        permuted.to_vec_f64().unwrap(),
+        permuted.to_vec::<f64>().unwrap(),
         permute_col_major(&data, &dims, &[1, 0])
     );
 }
@@ -229,7 +229,7 @@ fn test_permute_indices_c64() {
     assert_eq!(permuted.indices[0].id, j.id);
     assert_eq!(permuted.indices[1].id, i.id);
     assert_eq!(
-        permuted.to_vec_c64().unwrap(),
+        permuted.to_vec::<Complex64>().unwrap(),
         permute_col_major(&data, &dims, &[1, 0])
     );
 }

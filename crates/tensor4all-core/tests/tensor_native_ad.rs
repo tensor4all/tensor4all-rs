@@ -1,3 +1,4 @@
+use num_complex::Complex64;
 use tenferro::AdMode;
 use tensor4all_core::{
     factorize, forward_ad, is_diag_tensor, qr, svd, AnyScalar, Canonical, FactorizeOptions, Index,
@@ -14,9 +15,12 @@ fn assert_same_tensor_data(lhs: &TensorDynLen, rhs: &TensorDynLen) {
     assert_eq!(lhs.is_f64(), rhs.is_f64());
     assert_eq!(lhs.is_complex(), rhs.is_complex());
     if lhs.is_f64() {
-        assert_eq!(lhs.to_vec_f64().unwrap(), rhs.to_vec_f64().unwrap());
+        assert_eq!(lhs.to_vec::<f64>().unwrap(), rhs.to_vec::<f64>().unwrap());
     } else {
-        assert_eq!(lhs.to_vec_c64().unwrap(), rhs.to_vec_c64().unwrap());
+        assert_eq!(
+            lhs.to_vec::<Complex64>().unwrap(),
+            rhs.to_vec::<Complex64>().unwrap()
+        );
     }
 }
 
@@ -180,7 +184,7 @@ fn rank1_native_snapshots_stay_dense() {
 
     assert!(snapshot.is_dense());
     assert!(!snapshot.is_diag());
-    assert_eq!(scaled.to_vec_f64().unwrap(), vec![2.0, 4.0, 6.0]);
+    assert_eq!(scaled.to_vec::<f64>().unwrap(), vec![2.0, 4.0, 6.0]);
 }
 
 #[test]
@@ -188,14 +192,14 @@ fn plain_dense_storage_auto_seeds_native_payload() {
     let i = Index::new_dyn(2);
     let tensor = TensorDynLen::from_storage(
         vec![i],
-        Storage::from_dense_f64_col_major(vec![1.0, 2.0], &[2])
+        Storage::from_dense_col_major(vec![1.0, 2.0], &[2])
             .map(std::sync::Arc::new)
             .unwrap(),
     )
     .unwrap();
 
     assert_eq!(tensor.mode(), AdMode::Primal);
-    assert_eq!(tensor.to_vec_f64().unwrap(), vec![1.0, 2.0]);
+    assert_eq!(tensor.to_vec::<f64>().unwrap(), vec![1.0, 2.0]);
 }
 
 #[test]
@@ -204,7 +208,7 @@ fn plain_diag_storage_auto_seeds_native_diag_payload() {
     let j = Index::new_dyn(3);
     let tensor = TensorDynLen::from_storage(
         vec![i, j],
-        Storage::from_diag_f64_col_major(vec![1.0, 2.0, 3.0], 2)
+        Storage::from_diag_col_major(vec![1.0, 2.0, 3.0], 2)
             .map(std::sync::Arc::new)
             .unwrap(),
     )

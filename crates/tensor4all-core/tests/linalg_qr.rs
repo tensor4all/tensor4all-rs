@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::{qr, qr_c64, DynIndex};
+use tensor4all_core::{qr, DynIndex};
 use tensor4all_core::{TensorDynLen, TensorLike};
 
 fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
@@ -204,7 +204,8 @@ fn test_qr_complex_reconstruction() {
     ];
     let tensor = dense_c64(vec![i_idx.clone(), j_idx.clone()], data.clone());
 
-    let (q, r) = qr_c64(&tensor, std::slice::from_ref(&i_idx)).expect("Complex QR should succeed");
+    let (q, r) =
+        qr::<Complex64>(&tensor, std::slice::from_ref(&i_idx)).expect("Complex QR should succeed");
 
     let reconstructed = q.contract(&r);
     assert!(
@@ -226,7 +227,7 @@ fn qr_reconstruction_error_f64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 
 }
 
 fn qr_reconstruction_error_c64(t: &TensorDynLen, left_inds: &[DynIndex]) -> f64 {
-    let (q, r) = qr_c64(t, left_inds).expect("QR should succeed");
+    let (q, r) = qr::<Complex64>(t, left_inds).expect("QR should succeed");
     let recon = q.contract(&r);
     let neg = recon
         .scale(tensor4all_core::AnyScalar::new_real(-1.0))

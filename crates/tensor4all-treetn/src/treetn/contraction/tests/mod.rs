@@ -100,7 +100,7 @@ fn test_contract_to_tensor_single_node() {
     assert_eq!(result.external_indices().len(), 2);
 
     // Verify the contracted single-node TN returns the tensor data itself
-    let result_data = result.to_vec_f64().unwrap();
+    let result_data = result.to_vec::<f64>().unwrap();
     let expected = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     assert_eq!(result_data.len(), expected.len());
     for (i, (&got, &exp)) in result_data.iter().zip(expected.iter()).enumerate() {
@@ -136,9 +136,9 @@ fn test_contract_to_tensor_two_nodes() {
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     )
     .unwrap();
-    let expected = t0.contract(&t1).to_vec_f64().unwrap();
+    let expected = t0.contract(&t1).to_vec::<f64>().unwrap();
 
-    let result_data = result.to_vec_f64().unwrap();
+    let result_data = result.to_vec::<f64>().unwrap();
     assert_eq!(result_data.len(), expected.len());
     for (i, (&got, &exp)) in result_data.iter().zip(expected.iter()).enumerate() {
         assert!(

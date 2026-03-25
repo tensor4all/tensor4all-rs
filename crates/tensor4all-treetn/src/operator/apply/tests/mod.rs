@@ -1,5 +1,5 @@
 use super::*;
-use crate::random::{random_treetn_f64, LinkSpace};
+use crate::random::{random_treetn, LinkSpace};
 use crate::SiteIndexNetwork;
 use std::collections::HashSet;
 use tensor4all_core::index::{DynId, Index, TagSet};
@@ -35,7 +35,7 @@ fn test_linear_operator_tensor_index() {
 
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let mpo = random_treetn_f64(&mut rng, &net, link_space);
+    let mpo = random_treetn::<f64, _, _>(&mut rng, &net, link_space);
 
     let true_s0 = make_index(2);
     let mut input_mapping = HashMap::new();
@@ -80,7 +80,7 @@ fn test_arc_linear_operator_cow() {
 
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let mpo = random_treetn_f64(&mut rng, &net, link_space);
+    let mpo = random_treetn::<f64, _, _>(&mut rng, &net, link_space);
 
     let arc_op = ArcLinearOperator::new(mpo, HashMap::new(), HashMap::new());
 
@@ -361,7 +361,7 @@ fn test_linear_operator_replaceinds() {
 
     let link_space = LinkSpace::uniform(2);
     let mut rng = rand::rng();
-    let mpo = random_treetn_f64(&mut rng, &net, link_space);
+    let mpo = random_treetn::<f64, _, _>(&mut rng, &net, link_space);
 
     let true_s0 = make_index(2);
     let mut input_mapping = HashMap::new();
