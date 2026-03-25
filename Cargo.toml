@@ -5,7 +5,6 @@ members = [
     "crates/tensor4all-treetn",
     "crates/tensor4all-itensorlike",
     "crates/tensor4all-quanticstransform",
-    "crates/quanticsgrids",
     "crates/matrixci",
     "crates/tensor4all-simplett",
     "crates/tensor4all-partitionedtt",
@@ -49,10 +48,12 @@ kryst = { version = "2.4", default-features = false, features = ["rayon", "loggi
 omeco = "0.2.1"
 hdf5-metno = { version = "0.12", default-features = false }
 ndarray = "0.17"
+quanticsgrids = { git = "https://github.com/tensor4all/quanticsgrids-rs", rev = "a76b8fb" }
 hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", default-features = false }
-tenferro = { git = "https://github.com/tensor4all/tenferro-rs", rev = "8e8cc83" }
-tenferro-algebra = { git = "https://github.com/tensor4all/tenferro-rs", rev = "8e8cc83" }
-tenferro-device = { git = "https://github.com/tensor4all/tenferro-rs", rev = "8e8cc83" }
-tenferro-prims = { git = "https://github.com/tensor4all/tenferro-rs", rev = "8e8cc83" }
-tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs", rev = "8e8cc83" }
-tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs", rev = "8e8cc83" }
+tenferro = { git = "https://github.com/tensor4all/tenferro-rs", rev = "eeb39a6" }
+tenferro-algebra = { git = "https://github.com/tensor4all/tenferro-rs", rev = "eeb39a6" }
+tenferro-device = { git = "https://github.com/tensor4all/tenferro-rs", rev = "eeb39a6" }
+tenferro-prims = { git = "https://github.com/tensor4all/tenferro-rs", rev = "eeb39a6" }
+tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs", rev = "eeb39a6" }
+tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs", rev = "eeb39a6" }
+tenferro-tensor-compute = { git = "https://github.com/tensor4all/tenferro-rs", rev = "eeb39a6", default-features = false }
