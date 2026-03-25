@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use num_complex::ComplexFloat;
 use tenferro_algebra::Scalar as TfScalar;
 use tenferro_linalg::{qr as tenferro_qr, svd as tenferro_svd, KernelLinalgScalar, LinalgScalar};
-use tenferro_tensor::Tensor as TypedTensor;
+use tenferro_tensor::{KeepCountScalar, Tensor as TypedTensor};
 
 use crate::tenferro_bridge::with_tenferro_ctx;
 
@@ -35,7 +35,7 @@ impl<T> BackendLinalgScalar for T where T: LinalgScalar + KernelLinalgScalar {}
 pub fn svd_backend<T>(a: &TypedTensor<T>) -> Result<SvdResult<T>>
 where
     T: ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
-    <T as LinalgScalar>::Real: TfScalar + Copy,
+    <T as LinalgScalar>::Real: TfScalar + Copy + KeepCountScalar,
 {
     let decomp = with_tenferro_ctx("svd", |ctx| {
         tenferro_svd(ctx, a, None)

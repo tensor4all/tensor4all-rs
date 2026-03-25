@@ -5,12 +5,12 @@
 //! a, b ∈ {-1, 0, 1}.
 
 use anyhow::Result;
-use mdarray::DTensor;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
 use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 
 use crate::common::{tensortrain_to_linear_operator, BoundaryCondition, QuanticsOperator};
+use crate::dense_array::DenseArray;
 
 /// Coefficients for binary operation.
 /// Each coefficient must be -1, 0, or 1.
@@ -237,14 +237,13 @@ fn binaryop_tensor_single(
     cin_on: bool,
     cout_on: bool,
     bc: i8,
-) -> DTensor<Complex64, 5> {
+) -> DenseArray<Complex64> {
     let cin_states: Vec<i8> = if cin_on { vec![-1, 0, 1] } else { vec![0] };
     let cin_size = cin_states.len();
     let cout_size = if cout_on { 3 } else { 1 };
 
     // tensor[cin, cout, x, y, out] - shape: (cin_size, cout_size, 2, 2, 2)
-    let mut tensor =
-        DTensor::<Complex64, 5>::from_elem([cin_size, cout_size, 2, 2, 2], Complex64::zero());
+    let mut tensor = DenseArray::from_elem(&[cin_size, cout_size, 2, 2, 2], Complex64::zero());
 
     for (idx_cin, &cin) in cin_states.iter().enumerate() {
         for x in 0..2i8 {

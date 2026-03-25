@@ -22,6 +22,8 @@ use super::contraction::ContractionOptions;
 use super::error::Result;
 use super::factorize::SVDScalar;
 use super::mpo::MPO;
+use tenferro_linalg::LinalgScalar;
+use tenferro_tensor::KeepCountScalar;
 
 /// Unified contraction function with algorithm dispatch
 ///
@@ -62,6 +64,7 @@ pub fn contract<T: SVDScalar>(
 ) -> Result<MPO<T>>
 where
     <T as num_complex::ComplexFloat>::Real: Into<f64>,
+    <T as LinalgScalar>::Real: KeepCountScalar,
 {
     match algorithm {
         ContractionAlgorithm::Naive => contract_naive(mpo_a, mpo_b, Some(options.clone())),

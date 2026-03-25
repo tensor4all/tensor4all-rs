@@ -33,10 +33,14 @@ mod affine;
 mod binaryop;
 mod common;
 mod cumsum;
+/// Simple dense multi-dimensional array helper.
+pub mod dense_array;
 mod flip;
 mod fourier;
 mod phase_rotation;
 mod shift;
+
+pub use dense_array::DenseArray;
 
 pub use affine::{
     affine_operator, affine_transform_matrix, affine_transform_tensors_unfused, AffineParams,

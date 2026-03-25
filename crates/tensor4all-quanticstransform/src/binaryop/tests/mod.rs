@@ -22,7 +22,7 @@ fn test_binary_coeffs_invalid() {
 fn test_binaryop_tensor_single() {
     // Test (1, 1) coefficients (sum)
     let tensor = binaryop_tensor_single(1, 1, false, false, 1);
-    assert_eq!(*tensor.shape(), (1, 1, 2, 2, 2)); // (cin_size, cout_size, x, y, out)
+    assert_eq!(tensor.dims(), &[1, 1, 2, 2, 2]); // (cin_size, cout_size, x, y, out)
 
     // x=0, y=0: result=0, out=0
     assert_eq!(tensor[[0, 0, 0, 0, 0]], Complex64::one());
