@@ -21,7 +21,6 @@ num-traits.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
-mdarray.workspace = true
 bnum.workspace = true
 matrixci = { path = "../matrixci" }
 tensor4all-core = { path = "../tensor4all-core" }

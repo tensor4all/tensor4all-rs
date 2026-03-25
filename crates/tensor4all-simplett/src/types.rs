@@ -1,16 +1,13 @@
 //! Core types for tensor train operations
 
-use mdarray::DTensor;
+use crate::tensor::Tensor;
+pub use crate::tensor::Tensor3;
 
 /// Local index type (index within a single tensor site)
 pub type LocalIndex = usize;
 
 /// Multi-index type (indices across all sites)
 pub type MultiIndex = Vec<LocalIndex>;
-
-/// A 3D tensor represented using mdarray
-/// Shape is (left_dim, site_dim, right_dim)
-pub type Tensor3<T> = DTensor<T, 3>;
 
 /// Helper functions for Tensor3 operations
 pub trait Tensor3Ops<T: Clone + Default> {
@@ -120,7 +117,7 @@ pub fn tensor3_zeros<T: Clone + Default>(
     site_dim: usize,
     right_dim: usize,
 ) -> Tensor3<T> {
-    Tensor3::from_elem([left_dim, site_dim, right_dim], T::default())
+    Tensor::from_elem([left_dim, site_dim, right_dim], T::default())
 }
 
 /// Create a Tensor3 from flat data (column-major order)
@@ -131,7 +128,7 @@ pub fn tensor3_from_data<T: Clone>(
     right_dim: usize,
 ) -> Tensor3<T> {
     assert_eq!(data.len(), left_dim * site_dim * right_dim);
-    Tensor3::from_fn([left_dim, site_dim, right_dim], |idx| {
+    Tensor::from_fn([left_dim, site_dim, right_dim], |idx| {
         let l = idx[0];
         let s = idx[1];
         let r = idx[2];

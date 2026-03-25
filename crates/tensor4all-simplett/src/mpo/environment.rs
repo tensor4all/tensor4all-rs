@@ -7,15 +7,7 @@ use super::error::{MPOError, Result};
 use super::factorize::SVDScalar;
 use super::mpo::MPO;
 use super::types::{Tensor4, Tensor4Ops};
-use mdarray::DTensor;
-
-/// Type alias for 2D matrix using mdarray
-pub type Matrix2<T> = DTensor<T, 2>;
-
-/// Helper function to create a zero-filled 2D tensor
-fn matrix2_zeros<T: Clone + Default>(rows: usize, cols: usize) -> Matrix2<T> {
-    DTensor::<T, 2>::from_elem([rows, cols], T::default())
-}
+use super::{matrix2_zeros, Matrix2};
 
 /// Contract two general tensors over specified indices
 ///

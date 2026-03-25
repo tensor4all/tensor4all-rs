@@ -320,7 +320,7 @@ where
     let m = matrix.dim(0);
     let n = matrix.dim(1);
 
-    // Convert DTensor to matrixci::Matrix (temporary until matrixci migration)
+    // Convert Matrix2 to matrixci::Matrix (temporary until matrixci migration)
     let mut mat_ci: matrixci::Matrix<T> = matrixci::util::zeros(m, n);
     for i in 0..m {
         for j in 0..n {
@@ -340,7 +340,7 @@ where
     let right_ci = luci.right();
     let rank = luci.rank().max(1);
 
-    // Convert back to DTensor
+    // Convert back to Matrix2
     let left_m = matrixci::util::nrows(&left_ci);
     let left_n = matrixci::util::ncols(&left_ci);
     let mut left: Matrix2<T> = matrix2_zeros(left_m, left_n);
