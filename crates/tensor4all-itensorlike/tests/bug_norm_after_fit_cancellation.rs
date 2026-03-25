@@ -26,7 +26,7 @@ fn create_random_mpo(
 }
 
 #[test]
-#[ignore] // Sequential bra-ket contraction loses precision with massive cancellation (separate issue)
+#[ignore] // Sequential contraction loses precision with massive cancellation; see #329
 fn norm_matches_dense_after_fit_cancellation() {
     let length = 6;
     let phys_dim = 2;
