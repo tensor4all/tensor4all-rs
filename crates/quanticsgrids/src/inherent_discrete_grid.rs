@@ -1,5 +1,7 @@
 //! Inherent discrete grid implementation
 
+use std::collections::HashMap;
+
 use crate::error::{QuanticsGridError, Result};
 use crate::{IndexTable, LookupEntry, UnfoldingScheme};
 
@@ -38,14 +40,20 @@ pub struct InherentDiscreteGrid {
     step: Vec<i64>,
     /// Variable names for each dimension
     variable_names: Vec<String>,
-    /// Numeric base (default 2)
-    base: usize,
+    /// Numeric base per dimension
+    bases: Vec<usize>,
     /// Index table defining tensor structure
     index_table: IndexTable,
     /// Lookup table: lookup_table[dim][bit] -> (site_index, position_in_site)
     lookup_table: Vec<Vec<LookupEntry>>,
-    /// Maximum grid index per dimension (base^R)
+    /// Maximum grid index per dimension (base[d]^R[d])
     max_grididx: Vec<i64>,
+    /// Radix (base) for each position within each site
+    site_radices: Vec<Vec<usize>>,
+    /// Place value for each position within each site
+    site_placevalues: Vec<Vec<i64>>,
+    /// Precomputed product of radices for each site (local Hilbert space dimension)
+    sitedims: Vec<usize>,
 }
 
 impl InherentDiscreteGrid {
@@ -107,9 +115,19 @@ impl InherentDiscreteGrid {
         &self.variable_names
     }
 
-    /// Numeric base
+    /// Numeric base per dimension
+    pub fn bases(&self) -> &[usize] {
+        &self.bases
+    }
+
+    /// Uniform numeric base (panics if bases differ between dimensions)
     pub fn base(&self) -> usize {
-        self.base
+        assert!(
+            self.bases.iter().all(|&b| b == self.bases[0]),
+            "base() called on grid with non-uniform bases {:?}; use bases() instead",
+            self.bases
+        );
+        self.bases[0]
     }
 
     /// Index table
@@ -124,21 +142,18 @@ impl InherentDiscreteGrid {
 
     /// Local dimension of a tensor site
     pub fn site_dim(&self, site: usize) -> Result<usize> {
-        if site >= self.index_table.len() {
+        if site >= self.sitedims.len() {
             return Err(QuanticsGridError::SiteIndexOutOfBounds {
                 site,
-                max: self.index_table.len(),
+                max: self.sitedims.len(),
             });
         }
-        Ok(self.base.pow(self.index_table[site].len() as u32))
+        Ok(self.sitedims[site])
     }
 
     /// Local dimensions of all tensor sites
     pub fn local_dimensions(&self) -> Vec<usize> {
-        self.index_table
-            .iter()
-            .map(|site| self.base.pow(site.len() as u32))
-            .collect()
+        self.sitedims.clone()
     }
 
     /// Minimum grid coordinate (origin)
@@ -170,7 +185,7 @@ impl InherentDiscreteGrid {
     pub fn quantics_to_grididx(&self, quantics: &[i64]) -> Result<Vec<i64>> {
         self.validate_quantics(quantics)?;
 
-        if self.base == 2 {
+        if self.all_base_two() {
             Ok(self.quantics_to_grididx_base2(quantics))
         } else {
             Ok(self.quantics_to_grididx_general(quantics))
@@ -189,7 +204,7 @@ impl InherentDiscreteGrid {
         self.validate_grididx(&grididx)?;
 
         let mut result = vec![1i64; self.index_table.len()];
-        if self.base == 2 {
+        if self.all_base_two() {
             self.grididx_to_quantics_base2(&mut result, &grididx);
         } else {
             self.grididx_to_quantics_general(&mut result, &grididx);
@@ -256,6 +271,10 @@ impl InherentDiscreteGrid {
     // Private helper methods
     // ========================================================================
 
+    fn all_base_two(&self) -> bool {
+        self.bases.iter().all(|&b| b == 2)
+    }
+
     fn validate_quantics(&self, quantics: &[i64]) -> Result<()> {
         if quantics.len() != self.index_table.len() {
             return Err(QuanticsGridError::WrongQuanticsLength {
@@ -265,7 +284,7 @@ impl InherentDiscreteGrid {
         }
 
         for (site, &val) in quantics.iter().enumerate() {
-            let max = self.site_dim(site)? as i64;
+            let max = self.sitedims[site] as i64;
             if val < 1 || val > max {
                 return Err(QuanticsGridError::QuanticsOutOfRange {
                     site,
@@ -352,24 +371,19 @@ impl InherentDiscreteGrid {
     }
 
     fn quantics_to_grididx_general(&self, quantics: &[i64]) -> Vec<i64> {
-        let base = self.base as i64;
-
         (0..self.ndims)
             .map(|d| {
                 let r_d = self.rs[d];
+                let base_d = self.bases[d] as i64;
                 let mut grididx = 1i64;
 
                 for bitnumber in 0..r_d {
                     let (site_idx, pos_in_site) = self.lookup_table[d][bitnumber];
-                    let site_len = self.index_table[site_idx].len();
+                    let placevalue = self.site_placevalues[site_idx][pos_in_site];
+                    let radix = self.site_radices[site_idx][pos_in_site] as i64;
+                    let digit = ((quantics[site_idx] - 1) / placevalue) % radix;
 
-                    let mut temp = quantics[site_idx] - 1;
-                    for _ in 0..(site_len - 1 - pos_in_site) {
-                        temp /= base;
-                    }
-                    let digit = temp % base;
-
-                    grididx += digit * base.pow((r_d - 1 - bitnumber) as u32);
+                    grididx += digit * base_d.pow((r_d - 1 - bitnumber) as u32);
                 }
                 grididx
             })
@@ -397,23 +411,21 @@ impl InherentDiscreteGrid {
     }
 
     fn grididx_to_quantics_general(&self, result: &mut [i64], grididx: &[i64]) {
-        let base = self.base as i64;
-
-        for (&grid_val, (&r_d, lookup)) in grididx
+        for (d, (&grid_val, (&r_d, lookup))) in grididx
             .iter()
             .zip(self.rs.iter().zip(self.lookup_table.iter()))
+            .enumerate()
             .take(self.ndims)
         {
             let zero_based_idx = grid_val - 1;
+            let base_d = self.bases[d] as i64;
 
             for (bitnumber, &(site_idx, pos_in_site)) in lookup.iter().enumerate().take(r_d) {
-                let site_length = self.index_table[site_idx].len();
-
                 let bit_position = r_d - 1 - bitnumber;
-                let digit = (zero_based_idx / base.pow(bit_position as u32)) % base;
+                let digit = (zero_based_idx / base_d.pow(bit_position as u32)) % base_d;
 
-                let power = site_length - 1 - pos_in_site;
-                result[site_idx] += digit * base.pow(power as u32);
+                let placevalue = self.site_placevalues[site_idx][pos_in_site];
+                result[site_idx] += digit * placevalue;
             }
         }
     }
@@ -426,7 +438,8 @@ pub struct InherentDiscreteGridBuilder {
     origin: Option<Vec<i64>>,
     step: Option<Vec<i64>>,
     variable_names: Option<Vec<String>>,
-    base: usize,
+    bases: Option<Vec<usize>>,
+    uniform_base: usize,
     unfolding_scheme: UnfoldingScheme,
     index_table: Option<IndexTable>,
 }
@@ -439,7 +452,8 @@ impl InherentDiscreteGridBuilder {
             origin: None,
             step: None,
             variable_names: None,
-            base: 2,
+            bases: None,
+            uniform_base: 2,
             unfolding_scheme: UnfoldingScheme::Fused,
             index_table: None,
         }
@@ -464,7 +478,8 @@ impl InherentDiscreteGridBuilder {
             origin: None,
             step: None,
             variable_names: Some(variable_names.iter().map(|s| s.to_string()).collect()),
-            base: 2,
+            bases: None,
+            uniform_base: 2,
             unfolding_scheme: UnfoldingScheme::Fused,
             index_table: Some(index_table),
         }
@@ -488,9 +503,16 @@ impl InherentDiscreteGridBuilder {
         self
     }
 
-    /// Set the numeric base (default 2)
+    /// Set a uniform numeric base for all dimensions (default 2)
     pub fn with_base(mut self, base: usize) -> Self {
-        self.base = base;
+        self.uniform_base = base;
+        self.bases = None;
+        self
+    }
+
+    /// Set per-dimension bases
+    pub fn with_bases(mut self, bases: &[usize]) -> Self {
+        self.bases = Some(bases.to_vec());
         self
     }
 
@@ -507,14 +529,34 @@ impl InherentDiscreteGridBuilder {
             return Err(QuanticsGridError::NoResolutions);
         }
 
-        if self.base < 2 {
-            return Err(QuanticsGridError::InvalidBase(self.base));
+        // Resolve bases: per-dimension or uniform
+        let bases = match self.bases {
+            Some(ref b) => {
+                if b.len() == 1 && ndims > 1 {
+                    vec![b[0]; ndims]
+                } else if b.len() == ndims {
+                    b.clone()
+                } else {
+                    return Err(QuanticsGridError::DimensionMismatch {
+                        expected: ndims,
+                        actual: b.len(),
+                    });
+                }
+            }
+            None => vec![self.uniform_base; ndims],
+        };
+
+        // Validate bases
+        for &b in &bases {
+            if b < 2 {
+                return Err(QuanticsGridError::InvalidBase(b));
+            }
         }
 
         // Validate resolutions
         for (d, &r) in self.rs.iter().enumerate() {
-            if !rangecheck_r(r, self.base) {
-                return Err(QuanticsGridError::ResolutionTooLarge { r, base: self.base });
+            if !rangecheck_r(r, bases[d]) {
+                return Err(QuanticsGridError::ResolutionTooLarge { r, base: bases[d] });
             }
             if let Some(ref step) = self.step {
                 if step.len() > d && step[d] < 1 {
@@ -571,11 +613,17 @@ impl InherentDiscreteGridBuilder {
         // Build lookup table
         let lookup_table = build_lookup_table(&self.rs, &index_table, &variable_names)?;
 
+        // Build mixed-radix fields
+        let site_radices = build_site_radices(&index_table, &variable_names, &bases);
+        let site_placevalues = build_site_placevalues(&site_radices);
+        let sitedims = build_site_dims(&site_radices);
+
         // Compute max grid indices
         let max_grididx: Vec<i64> = self
             .rs
             .iter()
-            .map(|&r| (self.base as i64).pow(r as u32))
+            .zip(bases.iter())
+            .map(|(&r, &b)| (b as i64).pow(r as u32))
             .collect();
 
         Ok(InherentDiscreteGrid {
@@ -584,10 +632,13 @@ impl InherentDiscreteGridBuilder {
             origin,
             step,
             variable_names,
-            base: self.base,
+            bases,
             index_table,
             lookup_table,
             max_grididx,
+            site_radices,
+            site_placevalues,
+            sitedims,
         })
     }
 }
@@ -608,22 +659,76 @@ fn rangecheck_r(r: usize, base: usize) -> bool {
     true
 }
 
+/// Build site_radices: for each site, the base of each position's variable
+fn build_site_radices(
+    index_table: &IndexTable,
+    variable_names: &[String],
+    bases: &[usize],
+) -> Vec<Vec<usize>> {
+    let var_index: HashMap<&str, usize> = variable_names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), i))
+        .collect();
+    index_table
+        .iter()
+        .map(|site| {
+            site.iter()
+                .map(|(var_name, _)| bases[var_index[var_name.as_str()]])
+                .collect()
+        })
+        .collect()
+}
+
+/// Build site_placevalues: mixed-radix place values for each position within each site
+fn build_site_placevalues(site_radices: &[Vec<usize>]) -> Vec<Vec<i64>> {
+    site_radices
+        .iter()
+        .map(|radices| {
+            let len = radices.len();
+            let mut placevalues = vec![0i64; len];
+            let mut mult = 1i64;
+            for pos in (0..len).rev() {
+                placevalues[pos] = mult;
+                mult *= radices[pos] as i64;
+            }
+            placevalues
+        })
+        .collect()
+}
+
+/// Build site_dims: product of radices for each site
+fn build_site_dims(site_radices: &[Vec<usize>]) -> Vec<usize> {
+    site_radices
+        .iter()
+        .map(|radices| radices.iter().product::<usize>().max(1))
+        .collect()
+}
+
 /// Build an index table from variable names and resolutions
 fn build_index_table(
     variable_names: &[String],
     rs: &[usize],
     scheme: UnfoldingScheme,
 ) -> IndexTable {
-    let max_r = *rs.iter().max().unwrap_or(&0);
     let mut index_table = IndexTable::new();
 
-    for bitnumber in 0..max_r {
-        match scheme {
-            UnfoldingScheme::Interleaved => {
-                add_interleaved_indices(&mut index_table, variable_names, rs, bitnumber);
-            }
-            UnfoldingScheme::Fused => {
-                add_fused_indices(&mut index_table, variable_names, rs, bitnumber);
+    match scheme {
+        UnfoldingScheme::Grouped => {
+            add_grouped_indices(&mut index_table, variable_names, rs);
+        }
+        _ => {
+            let max_r = *rs.iter().max().unwrap_or(&0);
+            for bitnumber in 0..max_r {
+                match scheme {
+                    UnfoldingScheme::Interleaved => {
+                        add_interleaved_indices(&mut index_table, variable_names, rs, bitnumber);
+                    }
+                    UnfoldingScheme::Fused => {
+                        add_fused_indices(&mut index_table, variable_names, rs, bitnumber);
+                    }
+                    UnfoldingScheme::Grouped => unreachable!(),
+                }
             }
         }
     }
@@ -661,6 +766,15 @@ fn add_fused_indices(
     }
     if !indices_bitnumber.is_empty() {
         index_table.push(indices_bitnumber);
+    }
+}
+
+fn add_grouped_indices(index_table: &mut IndexTable, variable_names: &[String], rs: &[usize]) {
+    for (d, name) in variable_names.iter().enumerate() {
+        for bitnumber in 0..rs[d] {
+            let qindex = (name.clone(), bitnumber + 1); // 1-indexed
+            index_table.push(vec![qindex]);
+        }
     }
 }
 
