@@ -714,9 +714,40 @@ impl TensorTrain {
             return AnyScalar::new_real(0.0);
         }
 
-        self.treetn.inner(&other.treetn).unwrap_or_else(|e| {
-            panic!("TensorTrain::inner failed while delegating to TreeTN::inner: {e}")
-        })
+        // Sequential bra-ket contraction along the chain: O(N·D²·d).
+        // TreeTN::inner() uses contract_naive which is O(d^N) and OOMs for large N.
+        let other_sim = other.treetn.sim_internal_inds();
+
+        let n = self.len();
+        let node_idx = |ttn: &TreeTN<TensorDynLen, usize>, site: usize| {
+            ttn.node_index(&site).expect("node not found")
+        };
+
+        // Start with leftmost tensors - contract over site indices only
+        let mut env = {
+            let a0_conj = self.tensor(0).conj();
+            let b0 = other_sim
+                .tensor(node_idx(&other_sim, 0))
+                .expect("tensor not found")
+                .clone();
+            a0_conj.contract(&b0)
+        };
+
+        // Sweep through remaining sites
+        for i in 1..n {
+            let ai_conj = self.tensor(i).conj();
+            let bi = other_sim
+                .tensor(node_idx(&other_sim, i))
+                .expect("tensor not found");
+
+            // Contract: env * conj(A_i) (over self's link index)
+            env = env.contract(&ai_conj);
+            // Contract: result * B_i (over other's link index and site indices)
+            env = env.contract(bi);
+        }
+
+        // Result should be a scalar (0-dimensional tensor)
+        env.only()
     }
 
     /// Compute the squared norm of the tensor train.
