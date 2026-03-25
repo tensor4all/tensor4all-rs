@@ -19,7 +19,7 @@
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, TensorDynLen};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain};
 
 fn create_random_mpo(
