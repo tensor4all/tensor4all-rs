@@ -21,10 +21,11 @@
 //!
 //! ## Unfolding Schemes
 //!
-//! Two tensor train layouts are supported via [`UnfoldingScheme`]:
+//! Three tensor train layouts are supported via [`UnfoldingScheme`]:
 //!
 //! - **Fused** (default): Indices at the same bit level are grouped together
 //! - **Interleaved**: Indices alternate between dimensions
+//! - **Grouped**: All bits of each variable are grouped together
 //!
 //! # Quick Start
 //!
@@ -149,6 +150,9 @@ pub enum UnfoldingScheme {
     /// For variables (a, b) with Rs=(2, 2), produces: `[b1, a1]`, `[b2, a2]`
     #[default]
     Fused,
+    /// All bits of each variable are grouped together.
+    /// For variables (a, b) with Rs=(2, 2), produces: `[a1]`, `[a2]`, `[b1]`, `[b2]`
+    Grouped,
 }
 
 /// A quantics index entry: (variable_name, bit_number)

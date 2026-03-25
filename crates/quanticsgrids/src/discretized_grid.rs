@@ -86,7 +86,12 @@ impl DiscretizedGrid {
         self.discrete_grid.variable_names()
     }
 
-    /// Numeric base
+    /// Per-dimension bases
+    pub fn bases(&self) -> &[usize] {
+        self.discrete_grid.bases()
+    }
+
+    /// Uniform numeric base (panics if bases differ between dimensions)
     pub fn base(&self) -> usize {
         self.discrete_grid.base()
     }
@@ -119,12 +124,12 @@ impl DiscretizedGrid {
     /// Grid step size in each dimension
     pub fn grid_step(&self) -> Vec<f64> {
         let rs = self.discrete_grid.rs();
-        let base = self.discrete_grid.base() as f64;
+        let bases = self.discrete_grid.bases();
         self.lower_bound
             .iter()
             .zip(self.effective_upper_bound.iter())
-            .zip(rs.iter())
-            .map(|((&lo, &hi), &r)| (hi - lo) / base.powi(r as i32))
+            .zip(rs.iter().zip(bases.iter()))
+            .map(|((&lo, &hi), (&r, &b))| (hi - lo) / (b as f64).powi(r as i32))
             .collect()
     }
 
@@ -143,7 +148,7 @@ impl DiscretizedGrid {
             .collect()
     }
 
-    /// Get original coordinates for a dimension
+    /// Get original coordinates for a dimension by index
     pub fn grid_origcoords(&self, dim: usize) -> Result<Vec<f64>> {
         if dim >= self.ndims() {
             return Err(QuanticsGridError::GridIndexOutOfBounds {
@@ -154,12 +159,26 @@ impl DiscretizedGrid {
         }
 
         let rs = self.discrete_grid.rs();
-        let base = self.discrete_grid.base();
-        let n = base.pow(rs[dim] as u32);
+        let bases = self.discrete_grid.bases();
+        let n = bases[dim].pow(rs[dim] as u32);
         let step = self.grid_step()[dim];
         let start = self.lower_bound[dim];
 
         Ok((0..n).map(|i| start + (i as f64) * step).collect())
+    }
+
+    /// Get original coordinates for a dimension by variable name
+    pub fn grid_origcoords_by_name(&self, name: &str) -> Result<Vec<f64>> {
+        let dim = self
+            .discrete_grid
+            .variable_names()
+            .iter()
+            .position(|n| n == name)
+            .ok_or_else(|| QuanticsGridError::UnknownVariable {
+                variable: name.to_string(),
+                valid: self.discrete_grid.variable_names().to_vec(),
+            })?;
+        self.grid_origcoords(dim)
     }
 
     // ========================================================================
@@ -198,18 +217,18 @@ impl DiscretizedGrid {
 
         let step = self.grid_step();
         let rs = self.discrete_grid.rs();
-        let base = self.discrete_grid.base() as i64;
+        let bases = self.discrete_grid.bases();
 
         let indices: Vec<i64> = self
             .lower_bound
             .iter()
             .zip(coord.iter())
             .zip(step.iter())
-            .zip(rs.iter())
-            .map(|(((&lo, &c), &s), &r)| {
+            .zip(rs.iter().zip(bases.iter()))
+            .map(|(((&lo, &c), &s), (&r, &b))| {
                 let continuous_idx = (c - lo) / s + 1.0;
                 let discrete_idx = continuous_idx.round() as i64;
-                discrete_idx.clamp(1, base.pow(r as u32))
+                discrete_idx.clamp(1, (b as i64).pow(r as u32))
             })
             .collect();
 
@@ -305,10 +324,14 @@ impl std::fmt::Display for DiscretizedGrid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ndims = self.ndims();
         let rs = self.discrete_grid.rs();
-        let base = self.discrete_grid.base();
+        let bases = self.discrete_grid.bases();
 
         // Calculate total points
-        let total_points: u64 = rs.iter().map(|&r| (base as u64).pow(r as u32)).product();
+        let total_points: u64 = rs
+            .iter()
+            .zip(bases.iter())
+            .map(|(&r, &b)| (b as u64).pow(r as u32))
+            .product();
 
         if ndims <= 1 {
             write!(
@@ -319,7 +342,8 @@ impl std::fmt::Display for DiscretizedGrid {
         } else {
             let sizes: Vec<String> = rs
                 .iter()
-                .map(|&r| format!("{}", (base as u64).pow(r as u32)))
+                .zip(bases.iter())
+                .map(|(&r, &b)| format!("{}", (b as u64).pow(r as u32)))
                 .collect();
             write!(
                 f,
@@ -382,9 +406,13 @@ impl std::fmt::Display for DiscretizedGrid {
             write!(f, "\n  Grid spacing: ({})", step_str.join(", "))?;
         }
 
-        // Base (if not binary)
-        if base != 2 {
-            write!(f, "\n  Base: {}", base)?;
+        // Base (if not all binary)
+        let all_same_base = bases.iter().all(|&b| b == bases[0]);
+        if all_same_base && bases[0] != 2 {
+            write!(f, "\n  Base: {}", bases[0])?;
+        } else if !all_same_base {
+            let base_str: Vec<String> = bases.iter().map(|b| b.to_string()).collect();
+            write!(f, "\n  Bases: ({})", base_str.join(", "))?;
         }
 
         // Tensor structure
@@ -472,9 +500,15 @@ impl DiscretizedGridBuilder {
         self
     }
 
-    /// Set the numeric base (default 2)
+    /// Set a uniform numeric base (default 2)
     pub fn with_base(mut self, base: usize) -> Self {
         self.inner = self.inner.with_base(base);
+        self
+    }
+
+    /// Set per-dimension bases
+    pub fn with_bases(mut self, bases: &[usize]) -> Self {
+        self.inner = self.inner.with_bases(bases);
         self
     }
 
@@ -489,11 +523,11 @@ impl DiscretizedGridBuilder {
         let discrete_grid = self.inner.build()?;
         let ndims = discrete_grid.ndims();
         let rs = discrete_grid.rs();
-        let base = discrete_grid.base();
+        let bases = discrete_grid.bases();
 
         // Default bounds: [0, 1) for each dimension
         let lower_bound = self.lower_bound.unwrap_or_else(|| vec![0.0; ndims]);
-        let mut upper_bound = self.upper_bound.unwrap_or_else(|| vec![1.0; ndims]);
+        let upper_bound = self.upper_bound.unwrap_or_else(|| vec![1.0; ndims]);
 
         // Expand bounds if needed
         let lower_bound = if lower_bound.len() == 1 && ndims > 1 {
@@ -502,12 +536,11 @@ impl DiscretizedGridBuilder {
             lower_bound
         };
 
-        let upper_bound_raw = if upper_bound.len() == 1 && ndims > 1 {
+        let upper_bound = if upper_bound.len() == 1 && ndims > 1 {
             vec![upper_bound[0]; ndims]
         } else {
-            upper_bound.clone()
+            upper_bound
         };
-        upper_bound = upper_bound_raw;
 
         // Validate dimensions
         if lower_bound.len() != ndims {
@@ -555,7 +588,7 @@ impl DiscretizedGridBuilder {
                 if rs[d] == 0 {
                     return Err(QuanticsGridError::EndpointWithZeroResolution { dim: d });
                 }
-                let n_points = (base as f64).powi(rs[d] as i32);
+                let n_points = (bases[d] as f64).powi(rs[d] as i32);
                 effective_upper_bound[d] +=
                     (effective_upper_bound[d] - lower_bound[d]) / (n_points - 1.0);
             }

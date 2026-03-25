@@ -488,6 +488,8 @@ pub enum t4a_unfolding_scheme {
     Fused = 0,
     /// Interleaved scheme: indices alternate between dimensions
     Interleaved = 1,
+    /// Grouped scheme: all bits of each variable grouped together
+    Grouped = 2,
 }
 
 impl From<t4a_unfolding_scheme> for quanticsgrids::UnfoldingScheme {
@@ -495,6 +497,7 @@ impl From<t4a_unfolding_scheme> for quanticsgrids::UnfoldingScheme {
         match scheme {
             t4a_unfolding_scheme::Fused => Self::Fused,
             t4a_unfolding_scheme::Interleaved => Self::Interleaved,
+            t4a_unfolding_scheme::Grouped => Self::Grouped,
         }
     }
 }
@@ -504,6 +507,7 @@ impl From<quanticsgrids::UnfoldingScheme> for t4a_unfolding_scheme {
         match scheme {
             quanticsgrids::UnfoldingScheme::Fused => Self::Fused,
             quanticsgrids::UnfoldingScheme::Interleaved => Self::Interleaved,
+            quanticsgrids::UnfoldingScheme::Grouped => Self::Grouped,
         }
     }
 }
