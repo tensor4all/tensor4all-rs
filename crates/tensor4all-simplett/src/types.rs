@@ -2,6 +2,8 @@
 
 use crate::tensor::Tensor;
 pub use crate::tensor::Tensor3;
+use tenferro_algebra::Scalar as TfScalar;
+use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
 
 /// Local index type (index within a single tensor site)
 pub type LocalIndex = usize;
@@ -39,7 +41,7 @@ pub trait Tensor3Ops<T: Clone + Default> {
     fn as_right_matrix(&self) -> (Vec<T>, usize, usize);
 }
 
-impl<T: Clone + Default> Tensor3Ops<T> for Tensor3<T> {
+impl<T: Clone + Default + TfScalar> Tensor3Ops<T> for Tensor3<T> {
     fn left_dim(&self) -> usize {
         self.dim(0)
     }
@@ -112,7 +114,7 @@ impl<T: Clone + Default> Tensor3Ops<T> for Tensor3<T> {
 }
 
 /// Create a zero-filled Tensor3
-pub fn tensor3_zeros<T: Clone + Default>(
+pub fn tensor3_zeros<T: Clone + Default + TfScalar>(
     left_dim: usize,
     site_dim: usize,
     right_dim: usize,
@@ -121,19 +123,17 @@ pub fn tensor3_zeros<T: Clone + Default>(
 }
 
 /// Create a Tensor3 from flat data (column-major order)
-pub fn tensor3_from_data<T: Clone>(
+pub fn tensor3_from_data<T: Clone + TfScalar>(
     data: Vec<T>,
     left_dim: usize,
     site_dim: usize,
     right_dim: usize,
 ) -> Tensor3<T> {
     assert_eq!(data.len(), left_dim * site_dim * right_dim);
-    Tensor::from_fn([left_dim, site_dim, right_dim], |idx| {
-        let l = idx[0];
-        let s = idx[1];
-        let r = idx[2];
-        data[l + left_dim * (s + site_dim * r)].clone()
-    })
+    let dims = [left_dim, site_dim, right_dim];
+    let inner = TfTensor::from_slice(&data, &dims, MemoryOrder::ColumnMajor)
+        .expect("tensor3_from_data received invalid column-major data");
+    Tensor::from_tenferro(inner)
 }
 
 #[cfg(test)]

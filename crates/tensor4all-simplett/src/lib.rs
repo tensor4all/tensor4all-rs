@@ -32,6 +32,7 @@ pub mod cache;
 pub mod canonical;
 pub mod compression;
 pub mod contraction;
+pub(crate) mod einsum_helper;
 pub mod error;
 pub mod mpo;
 pub mod tensor;

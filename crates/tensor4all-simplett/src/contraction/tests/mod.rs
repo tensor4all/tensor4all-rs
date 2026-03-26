@@ -1,5 +1,7 @@
 use super::*;
+use crate::einsum_helper::einsum_tensors;
 use crate::types::{tensor3_zeros, Tensor3};
+use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
 
 #[test]
 fn test_dot_constant() {
@@ -144,4 +146,17 @@ fn test_dot_three_sites() {
     let result = tt1.dot(&tt2).unwrap();
     // Each element: 1*2 = 2, total elements = 2*3*2 = 12, sum = 24
     assert!((result - 24.0).abs() < 1e-10);
+}
+
+#[test]
+fn test_einsum_tensors_matmul() {
+    let a = TfTensor::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::RowMajor).unwrap();
+    let b = TfTensor::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], MemoryOrder::RowMajor).unwrap();
+
+    let c = einsum_tensors("ij,jk->ik", &[&a, &b]);
+    let c_row_major = c.contiguous(MemoryOrder::RowMajor);
+    assert_eq!(
+        c_row_major.buffer().as_slice().unwrap(),
+        &[19.0, 22.0, 43.0, 50.0]
+    );
 }

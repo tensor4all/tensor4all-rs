@@ -5,6 +5,7 @@
 
 use super::error::{MPOError, Result};
 use super::types::{tensor4_zeros, LocalIndex, Tensor4, Tensor4Ops};
+use crate::einsum_helper::{einsum_tensors, row_vector_times_matrix, tensor_to_row_major_vec};
 use crate::traits::TTScalar;
 
 /// Matrix Product Operator representation
@@ -270,19 +271,8 @@ impl<T: TTScalar> MPO<T> {
             }
 
             let slice = tensor.slice_site(i_k, j_k);
-            let left_dim = tensor.left_dim();
-            let right_dim = tensor.right_dim();
-
-            // Contract: current (of size left_dim) with slice (left_dim x right_dim)
-            let mut next = vec![T::zero(); right_dim];
-            for r in 0..right_dim {
-                let mut sum = T::zero();
-                for l in 0..left_dim {
-                    sum = sum + current[l] * slice[l * right_dim + r];
-                }
-                next[r] = sum;
-            }
-            current = next;
+            current =
+                row_vector_times_matrix(&current, &slice, tensor.left_dim(), tensor.right_dim());
         }
 
         // Should have a single element
@@ -307,44 +297,15 @@ impl<T: TTScalar> MPO<T> {
 
         // Start with sum over first tensor
         let first = &self.tensors[0];
-        let mut current = vec![T::zero(); first.right_dim()];
-        for s1 in 0..first.site_dim_1() {
-            for s2 in 0..first.site_dim_2() {
-                for r in 0..first.right_dim() {
-                    current[r] = current[r] + *first.get4(0, s1, s2, r);
-                }
-            }
-        }
+        let mut current = tensor_to_row_major_vec(&einsum_tensors("lstr->r", &[first.as_inner()]));
 
         // Contract with sums of remaining tensors
         for site in 1..self.len() {
             let tensor = &self.tensors[site];
-            let left_dim = tensor.left_dim();
-            let right_dim = tensor.right_dim();
-
-            // Sum over site indices
-            let mut site_sum = vec![T::zero(); left_dim * right_dim];
-            for l in 0..left_dim {
-                for s1 in 0..tensor.site_dim_1() {
-                    for s2 in 0..tensor.site_dim_2() {
-                        for r in 0..right_dim {
-                            site_sum[l * right_dim + r] =
-                                site_sum[l * right_dim + r] + *tensor.get4(l, s1, s2, r);
-                        }
-                    }
-                }
-            }
-
-            // Contract with current
-            let mut next = vec![T::zero(); right_dim];
-            for r in 0..right_dim {
-                let mut sum = T::zero();
-                for l in 0..left_dim {
-                    sum = sum + current[l] * site_sum[l * right_dim + r];
-                }
-                next[r] = sum;
-            }
-            current = next;
+            let site_sum =
+                tensor_to_row_major_vec(&einsum_tensors("lstr->lr", &[tensor.as_inner()]));
+            current =
+                row_vector_times_matrix(&current, &site_sum, tensor.left_dim(), tensor.right_dim());
         }
 
         current[0]

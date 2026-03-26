@@ -4,8 +4,8 @@ use crate::error::{MatrixCIError, Result};
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
 use crate::util::{
-    append_col, append_row, from_vec2d, get_col, get_row, ncols, nrows, submatrix_argmax, zeros,
-    Matrix,
+    append_col, append_row, from_vec2d, get_col, get_row, mat_mul, ncols, nrows, submatrix,
+    submatrix_argmax, zeros, Matrix,
 };
 
 /// Adaptive Cross Approximation representation
@@ -351,19 +351,15 @@ impl<T: Scalar> AbstractMatrixCI<T> for MatrixACA<T> {
         }
 
         let r = self.rank();
-        let mut result = zeros(rows.len(), cols.len());
-
-        for (ri, &row) in rows.iter().enumerate() {
-            for (ci, &col) in cols.iter().enumerate() {
-                let mut sum = T::zero();
-                for k in 0..r {
-                    sum = sum + self.u[[row, k]] * self.alpha[k] * self.v[[k, col]];
-                }
-                result[[ri, ci]] = sum;
+        let pivot_indices: Vec<usize> = (0..r).collect();
+        let mut left = submatrix(&self.u, rows, &pivot_indices);
+        for i in 0..rows.len() {
+            for k in 0..r {
+                left[[i, k]] = left[[i, k]] * self.alpha[k];
             }
         }
-
-        result
+        let right = submatrix(&self.v, &pivot_indices, cols);
+        mat_mul(&left, &right)
     }
 }
 

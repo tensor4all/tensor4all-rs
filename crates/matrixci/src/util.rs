@@ -15,14 +15,16 @@ pub struct Matrix<T> {
     ncols: usize,
 }
 
-impl<T: Clone> Matrix<T> {
-    /// Create a new matrix from dimensions and initial value
-    pub fn from_elem(nrows: usize, ncols: usize, elem: T) -> Self {
-        Self {
-            data: vec![elem; nrows * ncols],
-            nrows,
-            ncols,
-        }
+impl<T> Matrix<T> {
+    /// Create a matrix from raw row-major data
+    pub fn from_raw_vec(nrows: usize, ncols: usize, data: Vec<T>) -> Self {
+        assert_eq!(data.len(), nrows * ncols);
+        Self { data, nrows, ncols }
+    }
+
+    /// View the underlying row-major data as a slice
+    pub fn as_slice(&self) -> &[T] {
+        &self.data
     }
 
     /// Number of rows
@@ -33,6 +35,17 @@ impl<T: Clone> Matrix<T> {
     /// Number of columns
     pub fn ncols(&self) -> usize {
         self.ncols
+    }
+}
+
+impl<T: Clone> Matrix<T> {
+    /// Create a new matrix from dimensions and initial value
+    pub fn from_elem(nrows: usize, ncols: usize, elem: T) -> Self {
+        Self {
+            data: vec![elem; nrows * ncols],
+            nrows,
+            ncols,
+        }
     }
 }
 
@@ -340,24 +353,64 @@ pub fn dot<T: Scalar>(a: &[T], b: &[T]) -> T {
         .fold(T::zero(), |acc, (&x, &y)| acc + x * y)
 }
 
-/// Matrix multiplication: A * B
-pub fn mat_mul<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
-    let m = nrows(a);
-    let k = ncols(a);
-    let n = ncols(b);
-    assert_eq!(nrows(b), k);
+/// BLAS-backed matrix multiplication dispatch.
+///
+/// Implemented for all scalar types supported by tenferro einsum
+/// (f64, f32, Complex64, Complex32). This trait is sealed — external
+/// types cannot implement it.
+pub trait BlasMul: Sized {
+    #[doc(hidden)]
+    fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Matrix<Self>;
+}
 
-    let mut result = zeros(m, n);
-    for i in 0..m {
-        for j in 0..n {
-            let mut sum = T::zero();
-            for l in 0..k {
-                sum = sum + a[[i, l]] * b[[l, j]];
+macro_rules! impl_blas_mul {
+    ($($t:ty),*) => {
+        $(
+        impl BlasMul for $t {
+            fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Matrix<Self> {
+                use tenferro_tensor_compute::{
+                    einsum, CpuBackend, CpuContext, MemoryOrder, Standard, Tensor,
+                };
+
+                let m = a.nrows();
+                let k = a.ncols();
+                let n = b.ncols();
+                assert_eq!(b.nrows(), k);
+
+                let mut ctx = CpuContext::new(1);
+                let a_tensor =
+                    Tensor::<$t>::from_slice(a.as_slice(), &[m, k], MemoryOrder::RowMajor)
+                        .expect("invalid matrix dimensions");
+                let b_tensor =
+                    Tensor::<$t>::from_slice(b.as_slice(), &[k, n], MemoryOrder::RowMajor)
+                        .expect("invalid matrix dimensions");
+                let c = einsum::<Standard<$t>, CpuBackend>(
+                    &mut ctx,
+                    "ij,jk->ik",
+                    &[&a_tensor, &b_tensor],
+                    None,
+                )
+                .expect("einsum failed");
+                let c_rm = c.contiguous(MemoryOrder::RowMajor);
+                let c_data = c_rm
+                    .buffer()
+                    .as_slice()
+                    .expect("CPU-only operation")
+                    .to_vec();
+                Matrix::from_raw_vec(m, n, c_data)
             }
-            result[[i, j]] = sum;
         }
-    }
-    result
+        )*
+    };
+}
+
+impl_blas_mul!(f64, f32, num_complex::Complex64, num_complex::Complex32);
+
+/// Matrix multiplication: A * B
+///
+/// Uses BLAS-backed einsum via tenferro.
+pub fn mat_mul<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
+    T::blas_mat_mul(a, b)
 }
 
 #[cfg(test)]
