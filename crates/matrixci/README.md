@@ -1,14 +1,21 @@
 # matrixci
 
-Matrix Cross Interpolation (MCI) algorithms for low-rank matrix approximations. Provides multiple algorithms including standard cross interpolation, Adaptive Cross Approximation (ACA), and LU-based methods.
+Matrix Cross Interpolation (MCI) algorithms for low-rank matrix approximations.
+
+`matrixci` now sits above [`matrixluci`](../matrixluci/), which owns the reusable LUCI / rrLU substrate. New LU-based work should prefer `matrixluci` directly when possible.
 
 ## Features
 
 - **MatrixCI**: Standard matrix cross interpolation
-- **MatrixACA**: Adaptive Cross Approximation variant
+- **MatrixACA**: Legacy Adaptive Cross Approximation support kept for existing `tensorci1` code paths
 - **RrLU**: Rank-Revealing LU decomposition
 - **MatrixLUCI**: LU-based Cross Interpolation
 - Supports `f32`, `f64`, `Complex32`, and `Complex64`
+
+## Status
+
+- `MatrixLUCI` is backed by `matrixluci`.
+- `MatrixACA` is legacy support. It is kept for compatibility with older one-site TCI flows and is not the target for new development.
 
 ## Usage
 

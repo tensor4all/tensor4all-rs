@@ -3,8 +3,12 @@ use num_complex::Complex64;
 
 // Generic test functions for f64 and Complex64
 
-fn test_compress_constant_generic<T: TTScalar + Scalar + Default>() {
-    let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
+fn test_compress_constant_generic<T>()
+where
+    T: TTScalar + Scalar + Default + matrixluci::Scalar,
+    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+{
+    let tt = TensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
     let original_sum = tt.sum();
 
     let mut tt_compressed = tt.clone();
@@ -13,31 +17,40 @@ fn test_compress_constant_generic<T: TTScalar + Scalar + Default>() {
         .unwrap();
 
     let compressed_sum = tt_compressed.sum();
-    assert!((original_sum - compressed_sum).abs_sq().sqrt() < 1e-10);
+    assert!(<T as Scalar>::abs_sq(original_sum - compressed_sum).sqrt() < 1e-10);
 }
 
-fn test_compress_preserves_values_generic<T: TTScalar + Scalar + Default>() {
+fn test_compress_preserves_values_generic<T>()
+where
+    T: TTScalar + Scalar + Default + matrixluci::Scalar,
+    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+{
     // Create a simple tensor train
     let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2);
-    t0.set3(0, 0, 0, T::from_f64(1.0));
-    t0.set3(0, 0, 1, T::from_f64(0.5));
-    t0.set3(0, 1, 0, T::from_f64(0.0));
-    t0.set3(0, 1, 1, T::from_f64(1.0));
+    t0.set3(0, 0, 0, <T as Scalar>::from_f64(1.0));
+    t0.set3(0, 0, 1, <T as Scalar>::from_f64(0.5));
+    t0.set3(0, 1, 0, <T as Scalar>::from_f64(0.0));
+    t0.set3(0, 1, 1, <T as Scalar>::from_f64(1.0));
 
     let mut t1: Tensor3<T> = tensor3_zeros(2, 3, 2);
     for l in 0..2 {
         for s in 0..3 {
             for r in 0..2 {
-                t1.set3(l, s, r, T::from_f64(((l + s + r) as f64) * 0.1 + 0.1));
+                t1.set3(
+                    l,
+                    s,
+                    r,
+                    <T as Scalar>::from_f64(((l + s + r) as f64) * 0.1 + 0.1),
+                );
             }
         }
     }
 
     let mut t2: Tensor3<T> = tensor3_zeros(2, 2, 1);
-    t2.set3(0, 0, 0, T::from_f64(1.0));
-    t2.set3(0, 1, 0, T::from_f64(0.5));
-    t2.set3(1, 0, 0, T::from_f64(0.5));
-    t2.set3(1, 1, 0, T::from_f64(1.0));
+    t2.set3(0, 0, 0, <T as Scalar>::from_f64(1.0));
+    t2.set3(0, 1, 0, <T as Scalar>::from_f64(0.5));
+    t2.set3(1, 0, 0, <T as Scalar>::from_f64(0.5));
+    t2.set3(1, 1, 0, <T as Scalar>::from_f64(1.0));
 
     let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
     let original_sum = tt.sum();
@@ -48,22 +61,26 @@ fn test_compress_preserves_values_generic<T: TTScalar + Scalar + Default>() {
         .unwrap();
 
     let compressed_sum = tt_compressed.sum();
-    assert!((original_sum - compressed_sum).abs_sq().sqrt() < 1e-8);
+    assert!(<T as Scalar>::abs_sq(original_sum - compressed_sum).sqrt() < 1e-8);
 }
 
-fn test_compress_with_max_bond_dim_generic<T: TTScalar + Scalar + Default>() {
+fn test_compress_with_max_bond_dim_generic<T>()
+where
+    T: TTScalar + Scalar + Default + matrixluci::Scalar,
+    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+{
     // Create a tensor train with higher bond dimension
     let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3);
     for s in 0..2 {
         for r in 0..3 {
-            t0.set3(0, s, r, T::from_f64((s + r + 1) as f64));
+            t0.set3(0, s, r, <T as Scalar>::from_f64((s + r + 1) as f64));
         }
     }
 
     let mut t1: Tensor3<T> = tensor3_zeros(3, 2, 1);
     for l in 0..3 {
         for s in 0..2 {
-            t1.set3(l, s, 0, T::from_f64((l + s + 1) as f64));
+            t1.set3(l, s, 0, <T as Scalar>::from_f64((l + s + 1) as f64));
         }
     }
 

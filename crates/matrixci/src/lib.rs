@@ -3,9 +3,13 @@
 //!
 //! This crate provides matrix cross interpolation algorithms, including:
 //! - `MatrixCI`: Standard matrix cross interpolation
-//! - `MatrixACA`: Adaptive Cross Approximation
+//! - `MatrixACA`: Legacy Adaptive Cross Approximation support
 //! - `RrLU`: Rank-Revealing LU decomposition
 //! - `MatrixLUCI`: LU-based Cross Interpolation
+//!
+//! `matrixci` is now a higher-level layer over `matrixluci`.
+//! New LU-based development should prefer `matrixluci` directly when possible.
+//! `MatrixACA` remains only as legacy support for existing one-site TCI code paths.
 //!
 //! # Example
 //!
@@ -38,7 +42,7 @@ pub mod util;
 // Re-export main types
 pub use error::{MatrixCIError, Result};
 pub use matrixaca::MatrixACA;
-pub use matrixci::{crossinterpolate, CrossInterpolateOptions, MatrixCI};
+pub use matrixci::{crossinterpolate, try_crossinterpolate, CrossInterpolateOptions, MatrixCI};
 pub use matrixlu::{rrlu, rrlu_inplace, RrLU, RrLUOptions};
 pub use matrixluci::MatrixLUCI;
 pub use scalar::Scalar;

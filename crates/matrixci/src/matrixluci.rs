@@ -1,238 +1,177 @@
-//! Matrix LU-based Cross Interpolation (MatrixLUCI) implementation
+//! Matrix LU-based Cross Interpolation (MatrixLUCI) implementation.
 
-use crate::matrixlu::{rrlu, RrLU, RrLUOptions};
+use crate::error::{MatrixCIError, Result};
+use crate::matrixlu::RrLUOptions;
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
-use crate::util::{mat_mul, ncols, nrows, submatrix, zeros, Matrix};
+use crate::util::{submatrix, zeros, Matrix};
+use ::matrixluci::{
+    CrossFactors, DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions,
+    PivotSelectionCore,
+};
 
-/// Matrix LU-based Cross Interpolation
+/// Matrix LU-based Cross Interpolation.
 ///
-/// A wrapper around RrLU that implements the AbstractMatrixCI trait.
+/// This is a higher-level row-major wrapper around the lower-level `matrixluci`
+/// substrate.
 #[derive(Debug, Clone)]
-pub struct MatrixLUCI<T: Scalar> {
-    /// Underlying rrLU decomposition
-    lu: RrLU<T>,
+pub struct MatrixLUCI<T: Scalar + ::matrixluci::Scalar> {
+    nrows: usize,
+    ncols: usize,
+    row_indices: Vec<usize>,
+    col_indices: Vec<usize>,
+    left: Matrix<T>,
+    right: Matrix<T>,
+    pivot_errors: Vec<f64>,
 }
 
-impl<T: Scalar> MatrixLUCI<T> {
-    /// Create a MatrixLUCI from a matrix
-    pub fn from_matrix(a: &Matrix<T>, options: Option<RrLUOptions>) -> crate::error::Result<Self> {
+pub(crate) fn map_backend_error(err: ::matrixluci::MatrixLuciError) -> MatrixCIError {
+    match err {
+        ::matrixluci::MatrixLuciError::InvalidArgument { message } => {
+            MatrixCIError::InvalidArgument { message }
+        }
+        ::matrixluci::MatrixLuciError::SingularPivotBlock => MatrixCIError::SingularMatrix,
+    }
+}
+
+pub(crate) fn to_column_major<T: Scalar>(matrix: &Matrix<T>) -> Vec<T> {
+    let mut out = Vec::with_capacity(matrix.nrows() * matrix.ncols());
+    for col in 0..matrix.ncols() {
+        for row in 0..matrix.nrows() {
+            out.push(matrix[[row, col]]);
+        }
+    }
+    out
+}
+
+pub(crate) fn to_row_major<T: Scalar + ::matrixluci::Scalar>(
+    matrix: &::matrixluci::DenseOwnedMatrix<T>,
+) -> Matrix<T> {
+    let mut out = zeros(matrix.nrows(), matrix.ncols());
+    for col in 0..matrix.ncols() {
+        for row in 0..matrix.nrows() {
+            out[[row, col]] = matrix[[row, col]];
+        }
+    }
+    out
+}
+
+pub(crate) fn dense_selection_from_matrix<T>(
+    a: &Matrix<T>,
+    options: RrLUOptions,
+) -> Result<(PivotSelectionCore, CrossFactors<T>)>
+where
+    T: Scalar + ::matrixluci::Scalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+{
+    let data = to_column_major(a);
+    let source = DenseMatrixSource::from_column_major(&data, a.nrows(), a.ncols());
+    let kernel_options = PivotKernelOptions {
+        max_rank: options.max_rank,
+        rel_tol: options.rel_tol,
+        abs_tol: options.abs_tol,
+        left_orthogonal: options.left_orthogonal,
+    };
+
+    let selection = DenseFaerLuKernel
+        .factorize(&source, &kernel_options)
+        .map_err(map_backend_error)?;
+    let factors = CrossFactors::from_source(&source, &selection).map_err(map_backend_error)?;
+    Ok((selection, factors))
+}
+
+impl<T> MatrixLUCI<T>
+where
+    T: Scalar + ::matrixluci::Scalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+{
+    /// Create a MatrixLUCI from a dense row-major matrix.
+    pub fn from_matrix(a: &Matrix<T>, options: Option<RrLUOptions>) -> Result<Self> {
+        let options = options.unwrap_or_default();
+        let left_orthogonal = options.left_orthogonal;
+        let (selection, factors) = dense_selection_from_matrix(a, options)?;
+
+        let left = if left_orthogonal {
+            to_row_major(&factors.cols_times_pivot_inv().map_err(map_backend_error)?)
+        } else {
+            to_row_major(&factors.pivot_cols)
+        };
+        let right = if left_orthogonal {
+            to_row_major(&factors.pivot_rows)
+        } else {
+            to_row_major(&factors.pivot_inv_times_rows().map_err(map_backend_error)?)
+        };
+
         Ok(Self {
-            lu: rrlu(a, options)?,
+            nrows: a.nrows(),
+            ncols: a.ncols(),
+            row_indices: selection.row_indices,
+            col_indices: selection.col_indices,
+            left,
+            right,
+            pivot_errors: selection.pivot_errors,
         })
     }
 
-    /// Create from an existing rrLU decomposition
-    pub fn from_rrlu(lu: RrLU<T>) -> Self {
-        Self { lu }
-    }
-
-    /// Get reference to underlying rrLU
-    pub fn lu(&self) -> &RrLU<T> {
-        &self.lu
-    }
-
-    /// Get column matrix: L * U[:, :npivots]
-    pub fn col_matrix(&self) -> Matrix<T> {
-        let l = self.lu.left(true);
-        let u_sub = {
-            let u = self.lu.right(false);
-            let n = self.lu.npivots();
-            let rows: Vec<usize> = (0..n).collect();
-            let cols: Vec<usize> = (0..n).collect();
-            submatrix(&u, &rows, &cols)
-        };
-        mat_mul(&l, &u_sub)
-    }
-
-    /// Get row matrix: L[:npivots, :] * U
-    pub fn row_matrix(&self) -> Matrix<T> {
-        let l_sub = {
-            let l = self.lu.left(false);
-            let n = self.lu.npivots();
-            let rows: Vec<usize> = (0..n).collect();
-            let cols: Vec<usize> = (0..n).collect();
-            submatrix(&l, &rows, &cols)
-        };
-        let u = self.lu.right(true);
-        mat_mul(&l_sub, &u)
-    }
-
-    /// Get cols times pivot inverse
-    pub fn cols_times_pivot_inv(&self) -> Matrix<T> {
-        let n = self.lu.npivots();
-        let nr = self.nrows();
-
-        let mut actual_result = zeros(nr, n);
-
-        // Copy identity part
-        for i in 0..nr.min(n) {
-            actual_result[[i, i]] = T::one();
-        }
-
-        if n < nr {
-            let l = self.lu.left(false);
-            let l_sub = {
-                let rows: Vec<usize> = (n..nrows(&l)).collect();
-                let cols: Vec<usize> = (0..n).collect();
-                submatrix(&l, &rows, &cols)
-            };
-            let l_pivot = {
-                let rows: Vec<usize> = (0..n).collect();
-                let cols: Vec<usize> = (0..n).collect();
-                submatrix(&l, &rows, &cols)
-            };
-
-            // Solve: result[n:, :] = L[n:, :] * L[0:n, 0:n]^{-1}
-            // L_pivot is lower triangular, so we use backward substitution
-            // (processing columns from right to left)
-            for i in 0..(nr - n) {
-                for j in (0..n).rev() {
-                    let mut val = l_sub[[i, j]];
-                    for k in (j + 1)..n {
-                        val = val - actual_result[[n + i, k]] * l_pivot[[k, j]];
-                    }
-                    let diag = l_pivot[[j, j]];
-                    actual_result[[n + i, j]] = val / diag;
-                }
-            }
-        }
-
-        // Apply row permutation
-        let perm = self.lu.row_permutation();
-        let mut permuted = zeros(nr, n);
-        for (new_i, &old_i) in perm.iter().enumerate() {
-            for j in 0..n {
-                permuted[[old_i, j]] = actual_result[[new_i, j]];
-            }
-        }
-
-        permuted
-    }
-
-    /// Get pivot inverse times rows
-    pub fn pivot_inv_times_rows(&self) -> Matrix<T> {
-        let n = self.lu.npivots();
-        let nc = self.ncols();
-
-        let mut actual_result = zeros(n, nc);
-
-        // Copy identity part
-        for i in 0..n.min(nc) {
-            actual_result[[i, i]] = T::one();
-        }
-
-        if n < nc {
-            let u = self.lu.right(false);
-            let u_sub = {
-                let rows: Vec<usize> = (0..n).collect();
-                let cols: Vec<usize> = (n..ncols(&u)).collect();
-                submatrix(&u, &rows, &cols)
-            };
-            let u_pivot = {
-                let rows: Vec<usize> = (0..n).collect();
-                let cols: Vec<usize> = (0..n).collect();
-                submatrix(&u, &rows, &cols)
-            };
-
-            // Solve: result[:, n:] = U[0:n, 0:n]^{-1} * U[:, n:]
-            // This is back substitution
-            for j in 0..(nc - n) {
-                for i in (0..n).rev() {
-                    let mut val = u_sub[[i, j]];
-                    for k in (i + 1)..n {
-                        val = val - u_pivot[[i, k]] * actual_result[[k, n + j]];
-                    }
-                    let diag = u_pivot[[i, i]];
-                    actual_result[[i, n + j]] = val / diag;
-                }
-            }
-        }
-
-        // Apply column permutation
-        let perm = self.lu.col_permutation();
-        let mut permuted = zeros(n, nc);
-        for i in 0..n {
-            for (new_j, &old_j) in perm.iter().enumerate() {
-                permuted[[i, old_j]] = actual_result[[i, new_j]];
-            }
-        }
-
-        permuted
-    }
-
-    /// Get left matrix for CI representation
+    /// Left CI factor.
     pub fn left(&self) -> Matrix<T> {
-        if self.lu.is_left_orthogonal() {
-            self.cols_times_pivot_inv()
-        } else {
-            self.col_matrix()
-        }
+        self.left.clone()
     }
 
-    /// Get right matrix for CI representation
+    /// Right CI factor.
     pub fn right(&self) -> Matrix<T> {
-        if self.lu.is_left_orthogonal() {
-            self.row_matrix()
-        } else {
-            self.pivot_inv_times_rows()
-        }
+        self.right.clone()
     }
 
-    /// Get pivot errors
+    /// Pivot error history.
     pub fn pivot_errors(&self) -> Vec<f64> {
-        self.lu.pivot_errors()
+        self.pivot_errors.clone()
     }
 
-    /// Get last pivot error
+    /// Last pivot error.
     pub fn last_pivot_error(&self) -> f64 {
-        self.lu.last_pivot_error()
+        self.pivot_errors.last().copied().unwrap_or(0.0)
     }
 }
 
-impl<T: Scalar> AbstractMatrixCI<T> for MatrixLUCI<T> {
+impl<T> AbstractMatrixCI<T> for MatrixLUCI<T>
+where
+    T: Scalar + ::matrixluci::Scalar,
+{
     fn nrows(&self) -> usize {
-        self.lu.nrows()
+        self.nrows
     }
 
     fn ncols(&self) -> usize {
-        self.lu.ncols()
+        self.ncols
     }
 
     fn rank(&self) -> usize {
-        self.lu.npivots()
+        self.row_indices.len()
     }
 
     fn row_indices(&self) -> &[usize] {
-        // Return slice of row permutation
-        &self.lu.row_permutation()[0..self.rank()]
+        &self.row_indices
     }
 
     fn col_indices(&self) -> &[usize] {
-        // Return slice of column permutation
-        &self.lu.col_permutation()[0..self.rank()]
+        &self.col_indices
     }
 
     fn evaluate(&self, i: usize, j: usize) -> T {
-        let left = self.left();
-        let right = self.right();
-
         let mut sum = T::zero();
         for k in 0..self.rank() {
-            sum = sum + left[[i, k]] * right[[k, j]];
+            sum = sum + self.left[[i, k]] * self.right[[k, j]];
         }
         sum
     }
 
     fn submatrix(&self, rows: &[usize], cols: &[usize]) -> Matrix<T> {
-        let left = self.left();
-        let right = self.right();
-
         let r = self.rank();
-        let left_sub = submatrix(&left, rows, &(0..r).collect::<Vec<_>>());
-        let right_sub = submatrix(&right, &(0..r).collect::<Vec<_>>(), cols);
+        let left_sub = submatrix(&self.left, rows, &(0..r).collect::<Vec<_>>());
+        let right_sub = submatrix(&self.right, &(0..r).collect::<Vec<_>>(), cols);
 
-        mat_mul(&left_sub, &right_sub)
+        crate::util::mat_mul(&left_sub, &right_sub)
     }
 }
 

@@ -61,14 +61,15 @@ tensor4all-rs/
 │   ├── tensor4all-treetn/            # Tree Tensor Networks with arbitrary topology
 │   ├── tensor4all-itensorlike/       # ITensorMPS.jl-like TensorTrain API
 │   ├── tensor4all-simplett/          # Simple TT/MPS implementation
-│   ├── tensor4all-tensorci/          # Tensor Cross Interpolation
+│   ├── tensor4all-tensorci/          # Tensor Cross Interpolation (TCI2 primary, TCI1 legacy)
 │   ├── tensor4all-quanticstci/       # High-level Quantics TCI (QuanticsTCI.jl port)
 │   ├── tensor4all-quanticstransform/ # Quantics transformation operators
 │   ├── tensor4all-partitionedtt/     # Partitioned Tensor Train
 │   ├── tensor4all-hdf5/              # ITensors.jl-compatible HDF5 serialization
 │   ├── tensor4all-hdf5-ffi/          # HDF5 FFI with runtime loading support
 │   ├── tensor4all-capi/              # C API for language bindings
-│   ├── matrixci/                     # Matrix Cross Interpolation (internal)
+│   ├── matrixluci/                   # LUCI / rrLU substrate (faer-derived dense path)
+│   ├── matrixci/                     # Higher-level matrix CI with legacy ACA support
 │   └── quanticsgrids/                # Quantics grid structures (internal)
 ├── python/tensor4all/                # Python bindings
 ├── tools/api-dump/                   # API documentation generator
@@ -85,14 +86,15 @@ tensor4all-rs/
 | [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology |
 | [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensorMPS.jl-like TensorTrain API |
 | [tensor4all-simplett](crates/tensor4all-simplett/) | Simple TT/MPS with multiple canonical forms |
-| [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI) algorithms |
+| [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI2 primary, TCI1 legacy) |
 | [tensor4all-quanticstci](crates/tensor4all-quanticstci/) | High-level Quantics TCI interface |
 | [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
 | [tensor4all-partitionedtt](crates/tensor4all-partitionedtt/) | Partitioned Tensor Train |
 | [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
 | [tensor4all-hdf5-ffi](crates/tensor4all-hdf5-ffi/) | HDF5 FFI with build-time linking and runtime loading |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
-| [matrixci](crates/matrixci/) | Matrix Cross Interpolation |
+| [matrixluci](crates/matrixluci/) | LUCI / rrLU substrate with a dense path ported from `faer` |
+| [matrixci](crates/matrixci/) | Higher-level matrix CI with legacy ACA support |
 | [quanticsgrids](crates/quanticsgrids/) | Quantics grid structures |
 
 ## Usage Example (Rust)

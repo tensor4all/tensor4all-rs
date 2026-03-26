@@ -13,6 +13,7 @@ num-traits.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
+matrixluci = { path = "../matrixluci" }
 matrixci = { path = "../matrixci" }
 tensor4all-simplett = { path = "../tensor4all-simplett" }
 

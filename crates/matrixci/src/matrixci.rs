@@ -1,12 +1,15 @@
 //! Matrix Cross Interpolation (MatrixCI) implementation
 
 use crate::error::{MatrixCIError, Result};
+use crate::matrixlu::RrLUOptions;
+use crate::matrixluci::{dense_selection_from_matrix, to_row_major};
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
 use crate::util::{
     a_inv_times_b, a_times_b_inv, append_col, append_row, dot, from_vec2d, get_col, get_row,
-    mat_mul, ncols, nrows, submatrix, submatrix_argmax, zeros, Matrix,
+    mat_mul, ncols, nrows, submatrix, zeros, Matrix,
 };
+use ::matrixluci::{DenseFaerLuKernel, PivotKernel};
 
 /// Matrix Cross Interpolation representation
 ///
@@ -231,6 +234,28 @@ impl<T: Scalar> MatrixCI<T> {
     }
 }
 
+impl<T> MatrixCI<T>
+where
+    T: Scalar + ::matrixluci::Scalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+{
+    /// Create a MatrixCI from a dense row-major matrix using the matrixluci backend.
+    pub fn from_matrix(a: &Matrix<T>, options: Option<CrossInterpolateOptions>) -> Result<Self> {
+        let opts = options.unwrap_or_default();
+        if a.nrows() == 0 || a.ncols() == 0 || opts.max_iter == 0 {
+            return Ok(Self::new(a.nrows(), a.ncols()));
+        }
+
+        let (selection, factors) = dense_selection_from_matrix(a, opts.to_rrlu_options(a))?;
+        Ok(Self::from_parts(
+            selection.row_indices,
+            selection.col_indices,
+            to_row_major(&factors.pivot_cols),
+            to_row_major(&factors.pivot_rows),
+        ))
+    }
+}
+
 impl<T: Scalar> AbstractMatrixCI<T> for MatrixCI<T> {
     fn nrows(&self) -> usize {
         nrows(&self.pivot_cols)
@@ -299,33 +324,39 @@ impl Default for CrossInterpolateOptions {
     }
 }
 
-/// Perform cross interpolation of a matrix
-pub fn crossinterpolate<T: Scalar>(
-    a: &Matrix<T>,
-    options: Option<CrossInterpolateOptions>,
-) -> MatrixCI<T> {
-    let opts = options.unwrap_or_default();
-
-    // Find initial pivot (maximum absolute value)
-    let (first_i, first_j, _) = submatrix_argmax(a, 0..nrows(a), 0..ncols(a));
-
-    let mut ci = MatrixCI::from_matrix_with_pivot(a, (first_i, first_j));
-
-    for _ in 1..opts.max_iter {
-        match ci.find_new_pivot(a) {
-            Ok(((i, j), error)) => {
-                let error_val: f64 = error.abs_sq();
-                let tol_sq = opts.tolerance * opts.tolerance;
-                if error_val < tol_sq {
-                    break;
-                }
-                let _ = ci.add_pivot(a, (i, j));
-            }
-            Err(_) => break,
+impl CrossInterpolateOptions {
+    fn to_rrlu_options<T: Scalar>(&self, a: &Matrix<T>) -> RrLUOptions {
+        RrLUOptions {
+            rel_tol: 0.0,
+            abs_tol: self.tolerance,
+            max_rank: self.max_iter.min(a.nrows().min(a.ncols())),
+            left_orthogonal: true,
         }
     }
+}
 
-    ci
+/// Perform cross interpolation of a matrix
+pub fn crossinterpolate<T>(a: &Matrix<T>, options: Option<CrossInterpolateOptions>) -> MatrixCI<T>
+where
+    T: Scalar + ::matrixluci::Scalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+{
+    match MatrixCI::from_matrix(a, options) {
+        Ok(ci) => ci,
+        Err(err) => panic!("matrixluci-backed crossinterpolate failed: {err}"),
+    }
+}
+
+/// Perform cross interpolation of a matrix and surface backend errors.
+pub fn try_crossinterpolate<T>(
+    a: &Matrix<T>,
+    options: Option<CrossInterpolateOptions>,
+) -> Result<MatrixCI<T>>
+where
+    T: Scalar + ::matrixluci::Scalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+{
+    MatrixCI::from_matrix(a, options)
 }
 
 #[cfg(test)]

@@ -1,4 +1,7 @@
 use super::*;
+use crate::error::TCIError;
+use std::cell::Cell;
+use std::rc::Rc;
 use tensor4all_simplett::AbstractTensorTrain;
 
 #[test]
@@ -86,6 +89,112 @@ fn test_crossinterpolate2_rank2_function() {
         "Expected small error, got {}",
         final_error
     );
+}
+
+#[test]
+fn test_crossinterpolate2_rank2_function_rook_search() {
+    let f = |idx: &MultiIndex| (idx[0] + idx[1]) as f64;
+    let local_dims = vec![4, 4];
+    let first_pivot = vec![vec![1, 1]];
+    let options = TCI2Options {
+        tolerance: 1e-12,
+        max_iter: 10,
+        pivot_search: PivotSearchStrategy::Rook,
+        ..Default::default()
+    };
+
+    let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        f,
+        None,
+        local_dims,
+        first_pivot,
+        options,
+    )
+    .unwrap();
+
+    assert!(tci.rank() <= 3, "Expected rank <= 3, got {}", tci.rank());
+    let final_error = errors.last().copied().unwrap_or(f64::INFINITY);
+    assert!(
+        final_error < 0.1,
+        "Expected small error, got {}",
+        final_error
+    );
+}
+
+#[test]
+fn test_crossinterpolate2_rook_search_uses_partial_batch_requests() {
+    let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
+    let max_batch = Rc::new(Cell::new(0usize));
+    let total_requested = Rc::new(Cell::new(0usize));
+    let batched_f = {
+        let max_batch = Rc::clone(&max_batch);
+        let total_requested = Rc::clone(&total_requested);
+        move |indices: &[MultiIndex]| -> Vec<f64> {
+            max_batch.set(max_batch.get().max(indices.len()));
+            total_requested.set(total_requested.get() + indices.len());
+            indices
+                .iter()
+                .map(|idx| ((idx[0] + 1) * (idx[1] + 1)) as f64)
+                .collect()
+        }
+    };
+
+    let local_dims = vec![8, 8];
+    let first_pivot = vec![vec![0, 0]];
+    let options = TCI2Options {
+        max_iter: 1,
+        max_bond_dim: 2,
+        pivot_search: PivotSearchStrategy::Rook,
+        ..Default::default()
+    };
+
+    let (_tci, _ranks, _errors) =
+        crossinterpolate2(f, Some(batched_f), local_dims, first_pivot, options).unwrap();
+
+    assert!(
+        max_batch.get() < 64,
+        "rook search should request partial batches, got full batch of {} entries",
+        max_batch.get()
+    );
+    assert!(
+        total_requested.get() < 64,
+        "rook search should avoid evaluating the full Pi matrix, requested {} entries",
+        total_requested.get()
+    );
+}
+
+#[test]
+fn test_crossinterpolate2_rook_search_rejects_bad_batch_length() {
+    let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
+    let bad_batched_f = |_indices: &[MultiIndex]| -> Vec<f64> { vec![1.0] };
+    let local_dims = vec![4, 4];
+    let first_pivot = vec![vec![0, 0]];
+    let options = TCI2Options {
+        max_iter: 1,
+        max_bond_dim: 2,
+        pivot_search: PivotSearchStrategy::Rook,
+        ..Default::default()
+    };
+
+    let result = crossinterpolate2(f, Some(bad_batched_f), local_dims, first_pivot, options);
+    assert!(matches!(result, Err(TCIError::InvalidOperation { .. })));
+}
+
+#[test]
+fn test_crossinterpolate2_full_search_rejects_bad_batch_length() {
+    let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
+    let bad_batched_f = |_indices: &[MultiIndex]| -> Vec<f64> { vec![1.0] };
+    let local_dims = vec![4, 4];
+    let first_pivot = vec![vec![0, 0]];
+    let options = TCI2Options {
+        max_iter: 1,
+        max_bond_dim: 2,
+        pivot_search: PivotSearchStrategy::Full,
+        ..Default::default()
+    };
+
+    let result = crossinterpolate2(f, Some(bad_batched_f), local_dims, first_pivot, options);
+    assert!(matches!(result, Err(TCIError::InvalidOperation { .. })));
 }
 
 #[test]

@@ -22,6 +22,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
 bnum.workspace = true
+matrixluci = { path = "../matrixluci" }
 matrixci = { path = "../matrixci" }
 tensor4all-core = { path = "../tensor4all-core" }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend" }

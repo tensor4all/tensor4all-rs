@@ -26,6 +26,31 @@ fn test_matrixci_from_matrix() {
 }
 
 #[test]
+fn test_matrixci_from_dense_backend() {
+    let m = from_vec2d(vec![
+        vec![1.0, 2.0, 3.0],
+        vec![2.0, 4.0, 6.0],
+        vec![3.0, 6.0, 9.0],
+    ]);
+
+    let ci = MatrixCI::from_matrix(&m, None).unwrap();
+    assert_eq!(ci.rank(), 1);
+
+    let approx = ci.to_matrix();
+    for i in 0..3 {
+        for j in 0..3 {
+            let diff = (m[[i, j]] - approx[[i, j]]).abs();
+            assert!(
+                diff < 1e-10,
+                "Approximation error too large at ({}, {})",
+                i,
+                j
+            );
+        }
+    }
+}
+
+#[test]
 fn test_matrixci_add_pivot() {
     let m = from_vec2d(vec![
         vec![1.0, 2.0, 3.0],

@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::from_vec2d;
+use crate::util::{from_vec2d, mat_mul};
 
 #[test]
 fn test_matrixluci_from_matrix() {

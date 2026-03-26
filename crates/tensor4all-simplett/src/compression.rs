@@ -83,13 +83,17 @@ fn tensor3_to_right_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) 
 }
 
 /// Factorize a matrix into left and right factors
-fn factorize<T: TTScalar + Scalar>(
+fn factorize<T>(
     matrix: &Matrix<T>,
     method: CompressionMethod,
     tolerance: f64,
     max_bond_dim: usize,
     left_orthogonal: bool,
-) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)> {
+) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)>
+where
+    T: TTScalar + Scalar + matrixluci::Scalar,
+    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+{
     let reltol = if tolerance > 0.0 { tolerance } else { 1e-14 };
     let abstol = 0.0;
 
@@ -127,7 +131,11 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
     /// This performs a two-sweep compression:
     /// 1. Left-to-right sweep with left-orthogonal factorization (no truncation)
     /// 2. Right-to-left sweep with truncation
-    pub fn compress(&mut self, options: &CompressionOptions) -> Result<()> {
+    pub fn compress(&mut self, options: &CompressionOptions) -> Result<()>
+    where
+        T: matrixluci::Scalar,
+        matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+    {
         let n = self.len();
         if n <= 1 {
             return Ok(());
@@ -242,7 +250,11 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
     }
 
     /// Create a compressed copy of the tensor train
-    pub fn compressed(&self, options: &CompressionOptions) -> Result<Self> {
+    pub fn compressed(&self, options: &CompressionOptions) -> Result<Self>
+    where
+        T: matrixluci::Scalar,
+        matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+    {
         let mut result = self.clone();
         result.compress(options)?;
         Ok(result)
