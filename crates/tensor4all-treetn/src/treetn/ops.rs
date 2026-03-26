@@ -360,10 +360,11 @@ where
             .contract_to_tensor()
             .context("evaluate: failed to contract to scalar")?;
 
-        // The result should be a scalar (rank 0). Extract its value.
+        // The result should be a scalar (rank 0). Extract its value without
+        // conjugating it: `inner_product` conjugates the left operand.
         let scalar_one = T::scalar_one().context("evaluate: failed to create scalar_one")?;
-        result_tensor
-            .inner_product(&scalar_one)
+        scalar_one
+            .inner_product(&result_tensor)
             .context("evaluate: failed to extract scalar value")
     }
 }

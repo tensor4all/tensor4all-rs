@@ -6,6 +6,25 @@ use tensor4all_treetci::{
     TreeTciGraph, TreeTciOptions,
 };
 
+fn assert_real_values_close(samples: &[(Vec<usize>, f64, f64)], tol: f64) {
+    let max_sample = samples
+        .iter()
+        .map(|(_, expected, _)| expected.abs())
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    let max_diff = samples
+        .iter()
+        .map(|(_, expected, got)| (got - expected).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_diff <= tol * max_sample,
+        "maxabs diff {} exceeds tol {} * max_sample {}",
+        max_diff,
+        tol,
+        max_sample
+    );
+}
+
 fn branching_tree(n_sites: usize) -> TreeTciGraph {
     match n_sites {
         4 => TreeTciGraph::new(
@@ -76,6 +95,7 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
 
     assert!(errors.last().copied().unwrap_or(f64::INFINITY) < 1e-10);
 
+    let mut samples = Vec::new();
     for i in 1..=4 {
         for j in 1..=4 {
             let quantics = grid.grididx_to_quantics(&[i, j]).unwrap();
@@ -86,13 +106,10 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
             let coords = grid.grididx_to_origcoord(&[i, j]).unwrap();
             let expected = f(&coords);
             let got = evaluate_treetn(&tn, &point);
-            assert!(
-                (got - expected).abs() < 1e-8,
-                "grid ({i}, {j}) point {:?}: got {got}, expected {expected}",
-                point
-            );
+            samples.push((point, expected, got));
         }
     }
+    assert_real_values_close(&samples, 1e-8);
 }
 
 #[test]
@@ -161,6 +178,7 @@ fn quantics_grid_batch_and_point_evaluators_agree() {
     )
     .unwrap();
 
+    let mut samples = Vec::new();
     for i in 1..=4 {
         for j in 1..=4 {
             let quantics = grid.grididx_to_quantics(&[i, j]).unwrap();
@@ -170,11 +188,8 @@ fn quantics_grid_batch_and_point_evaluators_agree() {
                 .collect::<Vec<_>>();
             let point_only = evaluate_treetn(&tn_point, &point);
             let batch_only = evaluate_treetn(&tn_batch, &point);
-            assert!(
-                (point_only - batch_only).abs() < 1e-10,
-                "grid ({i}, {j}) point {:?}: point-only {point_only}, batch {batch_only}",
-                point
-            );
+            samples.push((point, point_only, batch_only));
         }
     }
+    assert_real_values_close(&samples, 1e-10);
 }

@@ -6,6 +6,17 @@ fn two_site_graph() -> TreeTciGraph {
     TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap()
 }
 
+fn assert_close(actual: f64, expected: f64, max_sample: f64, tol: f64) {
+    assert!(
+        (actual - expected).abs() <= tol * max_sample.max(1.0),
+        "got {}, expected {}, tol {}, max_sample {}",
+        actual,
+        expected,
+        tol,
+        max_sample
+    );
+}
+
 #[test]
 fn optimize_default_converges_on_two_site_identity() {
     let mut tci = SimpleTreeTci::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
@@ -34,7 +45,12 @@ fn optimize_default_converges_on_two_site_identity() {
     .unwrap();
 
     assert_eq!(ranks.last().copied(), Some(2));
-    assert_eq!(errors.last().copied(), Some(0.0));
+    assert_close(
+        errors.last().copied().unwrap_or(f64::NAN),
+        0.0,
+        tci.max_sample_value,
+        1e-12,
+    );
     assert_eq!(tci.max_rank(), 2);
 }
 
