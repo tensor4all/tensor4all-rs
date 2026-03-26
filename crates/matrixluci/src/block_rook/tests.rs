@@ -2,6 +2,8 @@ use crate::{
     DenseFaerLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource, PivotKernel,
     PivotKernelOptions,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 type LazyDenseSource = LazyMatrixSource<f64, Box<dyn Fn(&[usize], &[usize], &mut [f64])>>;
 
@@ -64,4 +66,28 @@ fn lazy_block_rook_kernel_matches_dense_kernel_for_abs_tol_stop() {
     assert_eq!(lazy_out.col_indices, dense_out.col_indices);
     assert_eq!(lazy_out.rank, dense_out.rank);
     assert_eq!(lazy_out.pivot_errors, dense_out.pivot_errors);
+}
+
+#[test]
+fn lazy_block_rook_kernel_avoids_full_matrix_request() {
+    let data = unique_pivot_test_matrix();
+    let max_requested = Arc::new(AtomicUsize::new(0));
+    let lazy = LazyMatrixSource::new(4, 4, {
+        let max_requested = max_requested.clone();
+        move |rows, cols, out: &mut [f64]| {
+            max_requested.fetch_max(rows.len() * cols.len(), Ordering::SeqCst);
+            for (j, &col) in cols.iter().enumerate() {
+                for (i, &row) in rows.iter().enumerate() {
+                    out[i + rows.len() * j] = data[row + 4 * col];
+                }
+            }
+        }
+    });
+
+    let out = LazyBlockRookKernel
+        .factorize(&lazy, &PivotKernelOptions::no_truncation())
+        .unwrap();
+
+    assert_eq!(out.rank, 4);
+    assert!(max_requested.load(Ordering::SeqCst) < 16);
 }

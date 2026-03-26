@@ -11,6 +11,9 @@ pub enum MatrixLuciError {
         /// Description of the invalid argument.
         message: String,
     },
+    /// Singular pivot block encountered during lazy residual evaluation.
+    #[error("Singular pivot block encountered")]
+    SingularPivotBlock,
 }
 
 /// Result type for matrixluci operations.
