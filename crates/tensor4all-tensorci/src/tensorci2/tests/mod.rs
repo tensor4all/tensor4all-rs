@@ -1,4 +1,6 @@
 use super::*;
+use std::cell::Cell;
+use std::rc::Rc;
 use tensor4all_simplett::AbstractTensorTrain;
 
 #[test]
@@ -115,6 +117,48 @@ fn test_crossinterpolate2_rank2_function_rook_search() {
         final_error < 0.1,
         "Expected small error, got {}",
         final_error
+    );
+}
+
+#[test]
+fn test_crossinterpolate2_rook_search_uses_partial_batch_requests() {
+    let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
+    let max_batch = Rc::new(Cell::new(0usize));
+    let total_requested = Rc::new(Cell::new(0usize));
+    let batched_f = {
+        let max_batch = Rc::clone(&max_batch);
+        let total_requested = Rc::clone(&total_requested);
+        move |indices: &[MultiIndex]| -> Vec<f64> {
+            max_batch.set(max_batch.get().max(indices.len()));
+            total_requested.set(total_requested.get() + indices.len());
+            indices
+                .iter()
+                .map(|idx| ((idx[0] + 1) * (idx[1] + 1)) as f64)
+                .collect()
+        }
+    };
+
+    let local_dims = vec![8, 8];
+    let first_pivot = vec![vec![0, 0]];
+    let options = TCI2Options {
+        max_iter: 1,
+        max_bond_dim: 2,
+        pivot_search: PivotSearchStrategy::Rook,
+        ..Default::default()
+    };
+
+    let (_tci, _ranks, _errors) =
+        crossinterpolate2(f, Some(batched_f), local_dims, first_pivot, options).unwrap();
+
+    assert!(
+        max_batch.get() < 64,
+        "rook search should request partial batches, got full batch of {} entries",
+        max_batch.get()
+    );
+    assert!(
+        total_requested.get() < 64,
+        "rook search should avoid evaluating the full Pi matrix, requested {} entries",
+        total_requested.get()
     );
 }
 
