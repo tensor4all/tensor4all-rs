@@ -148,3 +148,6 @@ impl Scalar for Complex32 {
         self.re.is_nan() || self.im.is_nan()
     }
 }
+
+#[cfg(test)]
+mod tests;
