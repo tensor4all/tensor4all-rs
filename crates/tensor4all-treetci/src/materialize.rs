@@ -1,0 +1,346 @@
+use crate::{
+    assemble::{assemble_points_column_major, MultiIndex},
+    assemble_global_point, GlobalIndexBatch, SimpleTreeTci, SubtreeKey, TreeTciEdge,
+};
+use anyhow::{ensure, Result};
+use faer::prelude::Solve;
+use faer::MatRef;
+use matrixluci::Scalar;
+use num_complex::{Complex32, Complex64};
+use std::collections::HashMap;
+use tensor4all_core::{DynIndex, TensorDynLen, TensorElement};
+use tensor4all_treetn::TreeTN;
+
+#[doc(hidden)]
+pub trait FullPivLuScalar: Scalar + TensorElement {
+    fn solve_right_full_piv_lu(
+        lhs_values: &[Self],
+        lhs_rows: usize,
+        lhs_cols: usize,
+        pivot_values: &[Self],
+        pivot_rows: usize,
+        pivot_cols: usize,
+    ) -> Result<Vec<Self>>;
+}
+
+macro_rules! impl_full_piv_lu_scalar {
+    ($t:ty) => {
+        impl FullPivLuScalar for $t {
+            fn solve_right_full_piv_lu(
+                lhs_values: &[Self],
+                lhs_rows: usize,
+                lhs_cols: usize,
+                pivot_values: &[Self],
+                pivot_rows: usize,
+                pivot_cols: usize,
+            ) -> Result<Vec<Self>> {
+                ensure!(
+                    pivot_rows == pivot_cols,
+                    "full-pivot solve requires a square pivot matrix, got {}x{}",
+                    pivot_rows,
+                    pivot_cols
+                );
+                ensure!(
+                    lhs_cols == pivot_rows,
+                    "cannot solve T * P = Pi1 with Pi1 shape {}x{} and P shape {}x{}",
+                    lhs_rows,
+                    lhs_cols,
+                    pivot_rows,
+                    pivot_cols
+                );
+
+                let lhs_t = transpose_column_major(lhs_values, lhs_rows, lhs_cols);
+                let pivot_t = transpose_column_major(pivot_values, pivot_rows, pivot_cols);
+                let lu =
+                    MatRef::from_column_major_slice(&pivot_t, pivot_cols, pivot_rows).full_piv_lu();
+                let solved_t =
+                    lu.solve(MatRef::from_column_major_slice(&lhs_t, lhs_cols, lhs_rows));
+
+                let mut solved_t_values = vec![<$t as Scalar>::from_f64(0.0); lhs_rows * lhs_cols];
+                for col in 0..lhs_rows {
+                    for row in 0..lhs_cols {
+                        solved_t_values[row + lhs_cols * col] = solved_t[(row, col)];
+                    }
+                }
+                Ok(transpose_column_major(&solved_t_values, lhs_cols, lhs_rows))
+            }
+        }
+    };
+}
+
+impl_full_piv_lu_scalar!(f32);
+impl_full_piv_lu_scalar!(f64);
+impl_full_piv_lu_scalar!(Complex32);
+impl_full_piv_lu_scalar!(Complex64);
+
+/// Materialize a converged TreeTCI state as a `TreeTN`.
+pub fn to_treetn<T, F>(
+    state: &SimpleTreeTci<T>,
+    batch_eval: F,
+    center_site: Option<usize>,
+) -> Result<TreeTN<TensorDynLen, usize>>
+where
+    T: FullPivLuScalar,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+{
+    let root = center_site.unwrap_or(0);
+    let (parents, distances) = state.graph.bfs_tree(root)?;
+
+    let mut bond_indices = HashMap::new();
+    for edge in state.graph.edges() {
+        let (left_key, right_key) = state.graph.subregion_vertices(edge)?;
+        let left_rank = state.ijset.get(&left_key).map_or(0, Vec::len);
+        let right_rank = state.ijset.get(&right_key).map_or(0, Vec::len);
+        ensure!(
+            left_rank == right_rank,
+            "bond ranks disagree across edge {:?}: left {}, right {}",
+            edge,
+            left_rank,
+            right_rank
+        );
+        bond_indices.insert(edge, DynIndex::new_dyn(left_rank.max(1)));
+    }
+
+    let mut sites = (0..state.graph.n_sites()).collect::<Vec<_>>();
+    sites.sort_by_key(|&site| (distances[site], site));
+
+    let mut tensors = Vec::with_capacity(sites.len());
+    let mut node_names = Vec::with_capacity(sites.len());
+    for site in sites {
+        let parent_edge = parents[site]
+            .map(|parent| state.graph.edge_between(site, parent))
+            .transpose()?;
+        let incoming_edges = match parent_edge {
+            Some(edge) => state.graph.adjacent_edges(site, &[edge]),
+            None => state.graph.adjacent_edges(site, &[]),
+        };
+        let in_keys = state.graph.edge_in_ij_keys(site, &incoming_edges)?;
+        let out_edges = parent_edge.into_iter().collect::<Vec<_>>();
+        let out_keys = state.graph.edge_in_ij_keys(site, &out_edges)?;
+
+        let data = if out_edges.is_empty() {
+            fill_tensor_values(state, &in_keys, &out_keys, &[site], &batch_eval)?
+        } else {
+            site_tensor_with_parent(state, site, out_edges[0], &in_keys, &out_keys, &batch_eval)?
+        };
+
+        let mut indices = Vec::with_capacity(1 + incoming_edges.len() + out_edges.len());
+        indices.push(DynIndex::new_dyn(state.local_dims[site]));
+        for edge in &incoming_edges {
+            indices.push(
+                bond_indices
+                    .get(edge)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("missing bond index for edge {:?}", edge))?,
+            );
+        }
+        for edge in &out_edges {
+            indices.push(
+                bond_indices
+                    .get(edge)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("missing bond index for edge {:?}", edge))?,
+            );
+        }
+
+        tensors.push(TensorDynLen::from_dense(indices, data)?);
+        node_names.push(site);
+    }
+
+    TreeTN::from_tensors(tensors, node_names)
+}
+
+fn site_tensor_with_parent<T, F>(
+    state: &SimpleTreeTci<T>,
+    site: usize,
+    parent_edge: TreeTciEdge,
+    in_keys: &[SubtreeKey],
+    out_keys: &[SubtreeKey],
+    batch_eval: &F,
+) -> Result<Vec<T>>
+where
+    T: FullPivLuScalar,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+{
+    ensure!(
+        out_keys.len() == 1,
+        "MVP TreeTCI materialization expects exactly one outgoing key per non-root site"
+    );
+
+    let pi1_values = fill_tensor_values(state, in_keys, out_keys, &[site], batch_eval)?;
+    let rows = state.local_dims[site] * product_pivot_dims(state, in_keys)?;
+    let cols = product_pivot_dims(state, out_keys)?;
+
+    let site_side_key = site_side_key(state, site, parent_edge)?;
+    let p_values = fill_tensor_values(
+        state,
+        std::slice::from_ref(&site_side_key),
+        out_keys,
+        &[],
+        batch_eval,
+    )?;
+    let p_rows = state
+        .ijset
+        .get(&site_side_key)
+        .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", site_side_key))?
+        .len();
+    ensure!(
+        p_rows == cols,
+        "pivot matrix for site {} is not square: {} x {}",
+        site,
+        p_rows,
+        cols
+    );
+
+    T::solve_right_full_piv_lu(&pi1_values, rows, cols, &p_values, p_rows, cols)
+}
+
+fn site_side_key<T>(
+    state: &SimpleTreeTci<T>,
+    site: usize,
+    edge: TreeTciEdge,
+) -> Result<SubtreeKey> {
+    let (left_key, right_key) = state.graph.subregion_vertices(edge)?;
+    if left_key.as_slice().contains(&site) {
+        Ok(left_key)
+    } else if right_key.as_slice().contains(&site) {
+        Ok(right_key)
+    } else {
+        Err(anyhow::anyhow!(
+            "site {} does not appear in either side of edge {:?}",
+            site,
+            edge
+        ))
+    }
+}
+
+fn product_pivot_dims<T>(state: &SimpleTreeTci<T>, keys: &[SubtreeKey]) -> Result<usize> {
+    let mut product = 1usize;
+    for key in keys {
+        let dim = state
+            .ijset
+            .get(key)
+            .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", key))?
+            .len();
+        product = product.saturating_mul(dim.max(1));
+    }
+    Ok(product)
+}
+
+fn fill_tensor_values<T, F>(
+    state: &SimpleTreeTci<T>,
+    in_keys: &[SubtreeKey],
+    out_keys: &[SubtreeKey],
+    central_sites: &[usize],
+    batch_eval: &F,
+) -> Result<Vec<T>>
+where
+    T: Scalar,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+{
+    let in_combos = cartesian_entries(&state.ijset, in_keys)?;
+    let out_combos = cartesian_entries(&state.ijset, out_keys)?;
+    let central_combos = central_assignments(&state.local_dims, central_sites);
+    let mut points =
+        Vec::with_capacity(in_combos.len() * out_combos.len() * central_combos.len().max(1));
+
+    for out_combo in &out_combos {
+        for in_combo in &in_combos {
+            for central in &central_combos {
+                let mut assignments = Vec::with_capacity(in_keys.len() + out_keys.len());
+                assignments.extend(in_keys.iter().zip(in_combo.iter()));
+                assignments.extend(out_keys.iter().zip(out_combo.iter()));
+                points.push(assemble_global_point(
+                    state.local_dims.len(),
+                    &assignments,
+                    central,
+                )?);
+            }
+        }
+    }
+
+    let batch = assemble_points_column_major(&points)?;
+    let values = batch_eval(batch.as_view())?;
+    ensure!(
+        values.len() == points.len(),
+        "batch evaluator returned {} values for {} fill-tensor points",
+        values.len(),
+        points.len()
+    );
+    Ok(values)
+}
+
+fn cartesian_entries(
+    ijset: &HashMap<SubtreeKey, Vec<MultiIndex>>,
+    keys: &[SubtreeKey],
+) -> Result<Vec<Vec<MultiIndex>>> {
+    if keys.is_empty() {
+        return Ok(vec![Vec::new()]);
+    }
+
+    let entry_sets = keys
+        .iter()
+        .map(|key| {
+            ijset
+                .get(key)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", key))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut current = vec![Vec::new(); keys.len()];
+    let mut combos = Vec::new();
+    cartesian_entries_recursive(&entry_sets, keys.len(), &mut current, &mut combos);
+    Ok(combos)
+}
+
+fn cartesian_entries_recursive(
+    entry_sets: &[Vec<MultiIndex>],
+    remaining: usize,
+    current: &mut [MultiIndex],
+    out: &mut Vec<Vec<MultiIndex>>,
+) {
+    if remaining == 0 {
+        out.push(current.to_vec());
+        return;
+    }
+
+    let level = remaining - 1;
+    for entry in &entry_sets[level] {
+        current[level] = entry.clone();
+        cartesian_entries_recursive(entry_sets, level, current, out);
+    }
+}
+
+fn central_assignments(local_dims: &[usize], central_sites: &[usize]) -> Vec<Vec<(usize, usize)>> {
+    let mut combos = vec![Vec::new()];
+    for &site in central_sites {
+        let mut next = Vec::new();
+        for combo in &combos {
+            for value in 0..local_dims[site] {
+                let mut extended = combo.clone();
+                extended.push((site, value));
+                next.push(extended);
+            }
+        }
+        combos = next;
+    }
+    if central_sites.is_empty() {
+        vec![Vec::new()]
+    } else {
+        combos
+    }
+}
+
+fn transpose_column_major<T: Scalar>(values: &[T], nrows: usize, ncols: usize) -> Vec<T> {
+    let mut out = vec![T::zero(); nrows * ncols];
+    for col in 0..ncols {
+        for row in 0..nrows {
+            out[col + ncols * row] = values[row + nrows * col];
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests;
