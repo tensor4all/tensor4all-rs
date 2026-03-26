@@ -16,5 +16,5 @@ pub use dense::DenseFaerLuKernel;
 pub use error::{MatrixLuciError, Result};
 pub use kernel::PivotKernel;
 pub use scalar::Scalar;
-pub use source::{CandidateMatrixSource, DenseMatrixSource};
+pub use source::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};
 pub use types::{DenseOwnedMatrix, PivotKernelOptions, PivotSelectionCore};

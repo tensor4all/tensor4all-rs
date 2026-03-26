@@ -2,6 +2,7 @@
 
 use crate::scalar::Scalar;
 use crate::types::DenseOwnedMatrix;
+use std::marker::PhantomData;
 
 /// Candidate matrix access abstraction.
 pub trait CandidateMatrixSource<T: Scalar> {
@@ -34,11 +35,34 @@ pub struct DenseMatrixSource<'a, T: Scalar> {
     ncols: usize,
 }
 
+/// Callback-backed lazy matrix source.
+pub struct LazyMatrixSource<T: Scalar, F> {
+    nrows: usize,
+    ncols: usize,
+    fill_block: F,
+    _marker: PhantomData<T>,
+}
+
 impl<'a, T: Scalar> DenseMatrixSource<'a, T> {
     /// Create a dense source from a column-major slice.
     pub fn from_column_major(data: &'a [T], nrows: usize, ncols: usize) -> Self {
         assert_eq!(data.len(), nrows * ncols);
         Self { data, nrows, ncols }
+    }
+}
+
+impl<T: Scalar, F> LazyMatrixSource<T, F>
+where
+    F: Fn(&[usize], &[usize], &mut [T]),
+{
+    /// Create a lazy source from a block-fill callback.
+    pub fn new(nrows: usize, ncols: usize, fill_block: F) -> Self {
+        Self {
+            nrows,
+            ncols,
+            fill_block,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -62,6 +86,24 @@ impl<T: Scalar> CandidateMatrixSource<T> for DenseMatrixSource<'_, T> {
 
     fn dense_column_major_slice(&self) -> Option<&[T]> {
         Some(self.data)
+    }
+}
+
+impl<T: Scalar, F> CandidateMatrixSource<T> for LazyMatrixSource<T, F>
+where
+    F: Fn(&[usize], &[usize], &mut [T]),
+{
+    fn nrows(&self) -> usize {
+        self.nrows
+    }
+
+    fn ncols(&self) -> usize {
+        self.ncols
+    }
+
+    fn get_block(&self, rows: &[usize], cols: &[usize], out: &mut [T]) {
+        assert_eq!(out.len(), rows.len() * cols.len());
+        (self.fill_block)(rows, cols, out);
     }
 }
 
