@@ -8,7 +8,10 @@ use crate::error::{Result, TCIError};
 use crate::indexset::MultiIndex;
 use matrixci::util::zeros;
 use matrixci::Scalar;
-use matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
+use matrixluci::{
+    CrossFactors, DenseFaerLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource,
+    PivotKernel, PivotKernelOptions,
+};
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
 
 /// Options for TCI2 algorithm
@@ -79,7 +82,10 @@ pub struct TensorCI2<T: Scalar + TTScalar> {
     max_sample_value: f64,
 }
 
-impl<T: Scalar + TTScalar + Default> TensorCI2<T> {
+impl<T> TensorCI2<T>
+where
+    T: Scalar + TTScalar + Default + matrixluci::Scalar,
+{
     /// Create a new empty TensorCI2
     pub fn new(local_dims: Vec<usize>) -> Result<Self> {
         if local_dims.len() < 2 {
@@ -260,7 +266,9 @@ pub fn crossinterpolate2<T, F, B>(
     options: TCI2Options,
 ) -> Result<(TensorCI2<T>, Vec<usize>, Vec<f64>)>
 where
-    T: Scalar + TTScalar + Default,
+    T: Scalar + TTScalar + Default + matrixluci::Scalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+    LazyBlockRookKernel: PivotKernel<T>,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
@@ -358,7 +366,9 @@ fn update_pivots<T, F, B>(
     options: &TCI2Options,
 ) -> Result<()>
 where
-    T: Scalar + TTScalar + Default,
+    T: Scalar + TTScalar + Default + matrixluci::Scalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+    LazyBlockRookKernel: PivotKernel<T>,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
@@ -423,30 +433,60 @@ where
     }
 
     // Apply LU-based cross interpolation
-    let lu_options = RrLUOptions {
+    let lu_options = PivotKernelOptions {
         max_rank: options.max_bond_dim,
         rel_tol: options.tolerance,
         abs_tol: 0.0,
         left_orthogonal,
     };
 
-    let luci = MatrixLUCI::from_matrix(&pi, Some(lu_options))?;
+    let selection;
+    let factors;
+    if options.pivot_search == PivotSearchStrategy::Full {
+        let mut data = Vec::with_capacity(pi.nrows() * pi.ncols());
+        for col in 0..pi.ncols() {
+            for row in 0..pi.nrows() {
+                data.push(pi[[row, col]]);
+            }
+        }
+        let source = DenseMatrixSource::from_column_major(&data, pi.nrows(), pi.ncols());
+        selection = DenseFaerLuKernel.factorize(&source, &lu_options)?;
+        factors = CrossFactors::from_source(&source, &selection)?;
+    } else {
+        let source = LazyMatrixSource::new(pi.nrows(), pi.ncols(), |rows, cols, out: &mut [T]| {
+            for (j, &col) in cols.iter().enumerate() {
+                for (i, &row) in rows.iter().enumerate() {
+                    out[i + rows.len() * j] = pi[[row, col]];
+                }
+            }
+        });
+        selection = LazyBlockRookKernel.factorize(&source, &lu_options)?;
+        factors = CrossFactors::from_source(&source, &selection)?;
+    }
 
     // Update I and J sets
-    let row_indices = luci.row_indices();
-    let col_indices = luci.col_indices();
+    let row_indices = &selection.row_indices;
+    let col_indices = &selection.col_indices;
 
     tci.i_set[b + 1] = row_indices.iter().map(|&i| i_combined[i].clone()).collect();
     tci.j_set[b] = col_indices.iter().map(|&j| j_combined[j].clone()).collect();
 
     // Update site tensors
-    let left = luci.left();
-    let right = luci.right();
+    let left = if left_orthogonal {
+        factors.cols_times_pivot_inv()?
+    } else {
+        factors.pivot_cols.clone()
+    };
+    let right = if left_orthogonal {
+        factors.pivot_rows.clone()
+    } else {
+        factors.pivot_inv_times_rows()?
+    };
 
     // Convert left matrix to tensor at site b
     let left_dim = if b == 0 { 1 } else { tci.i_set[b].len() };
     let site_dim_b = tci.local_dims[b];
-    let new_bond_dim = luci.rank().max(1);
+    let new_bond_dim = selection.rank.max(1);
 
     let mut tensor_b = tensor3_zeros(left_dim, site_dim_b, new_bond_dim);
     for l in 0..left_dim {
@@ -483,9 +523,8 @@ where
     tci.site_tensors[b + 1] = tensor_bp1;
 
     // Update bond error
-    let errors = luci.pivot_errors();
-    if !errors.is_empty() {
-        tci.bond_errors[b] = *errors.last().unwrap_or(&0.0);
+    if !selection.pivot_errors.is_empty() {
+        tci.bond_errors[b] = *selection.pivot_errors.last().unwrap_or(&0.0);
     }
 
     Ok(())

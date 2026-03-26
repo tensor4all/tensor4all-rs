@@ -14,6 +14,7 @@ backend-tenferro = ["tensor4all-tensorbackend/backend-tenferro"]
 [dependencies]
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend" }
 matrixci = { path = "../matrixci" }
+matrixluci = { path = "../matrixluci" }
 num-complex.workspace = true
 num-traits.workspace = true
 thiserror.workspace = true

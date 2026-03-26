@@ -89,6 +89,36 @@ fn test_crossinterpolate2_rank2_function() {
 }
 
 #[test]
+fn test_crossinterpolate2_rank2_function_rook_search() {
+    let f = |idx: &MultiIndex| (idx[0] + idx[1]) as f64;
+    let local_dims = vec![4, 4];
+    let first_pivot = vec![vec![1, 1]];
+    let options = TCI2Options {
+        tolerance: 1e-12,
+        max_iter: 10,
+        pivot_search: PivotSearchStrategy::Rook,
+        ..Default::default()
+    };
+
+    let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+        f,
+        None,
+        local_dims,
+        first_pivot,
+        options,
+    )
+    .unwrap();
+
+    assert!(tci.rank() <= 3, "Expected rank <= 3, got {}", tci.rank());
+    let final_error = errors.last().copied().unwrap_or(f64::INFINITY);
+    assert!(
+        final_error < 0.1,
+        "Expected small error, got {}",
+        final_error
+    );
+}
+
+#[test]
 fn test_crossinterpolate2_3sites_constant() {
     // 3-site constant function: f(i, j, k) = 1.0
     let f = |_: &MultiIndex| 1.0f64;
