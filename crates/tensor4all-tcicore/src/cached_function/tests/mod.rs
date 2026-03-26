@@ -37,12 +37,13 @@ fn test_cache_key_u256_basics() {
 }
 
 #[test]
-fn test_index_int_u8() {
+fn test_index_int_all_types() {
     use super::index_int::IndexInt;
 
-    let val: u8 = 42;
-    let as_usize = val.to_usize();
-    assert_eq!(as_usize, 42);
+    assert_eq!(42u8.to_usize(), 42);
+    assert_eq!(1000u16.to_usize(), 1000);
+    assert_eq!(100_000u32.to_usize(), 100_000);
+    assert_eq!(999usize.to_usize(), 999);
 }
 
 #[test]
