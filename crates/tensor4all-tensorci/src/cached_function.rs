@@ -1,14 +1,20 @@
-//! Cached function wrapper for expensive function evaluations
+//! Cached function wrapper for expensive function evaluations.
 //!
-//! Automatically selects the optimal internal key type based on the index space size.
+//! Automatically selects the optimal internal key type based on the index
+//! space size.
 
 pub mod cache_key;
 pub mod error;
 pub mod index_int;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+use bnum::types::{U1024, U256, U512};
 
 use cache_key::CacheKey;
+use index_int::IndexInt;
 
 /// Compute total bits needed to represent the index space.
 pub(crate) fn total_bits(local_dims: &[usize]) -> u32 {
@@ -52,122 +58,153 @@ pub(crate) fn compute_coeffs<K: CacheKey>(
                 key_type: std::any::type_name::<K>(),
             })?;
     }
+
     Ok(coeffs)
 }
 
-/// Internal cache with automatically selected key type
+fn read_lock<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn write_lock<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Compute flat index from multi-index and coefficients.
+fn flat_index<K: CacheKey, I: IndexInt>(idx: &[I], coeffs: &[K]) -> K {
+    idx.iter().zip(coeffs).fold(K::ZERO, |acc, (&i, c)| {
+        acc.wrapping_add(
+            c.clone()
+                .checked_mul(K::from_usize(i.to_usize()))
+                .unwrap_or(K::ZERO),
+        )
+    })
+}
+
+/// Internal cache with automatically selected key type.
 enum InnerCache<V> {
     U64 {
-        cache: HashMap<u64, V>,
+        cache: RwLock<HashMap<u64, V>>,
         coeffs: Vec<u64>,
     },
     U128 {
-        cache: HashMap<u128, V>,
+        cache: RwLock<HashMap<u128, V>>,
         coeffs: Vec<u128>,
+    },
+    U256 {
+        cache: RwLock<HashMap<U256, V>>,
+        coeffs: Vec<U256>,
+    },
+    U512 {
+        cache: RwLock<HashMap<U512, V>>,
+        coeffs: Vec<U512>,
+    },
+    U1024 {
+        cache: RwLock<HashMap<U1024, V>>,
+        coeffs: Vec<U1024>,
     },
 }
 
-impl<V: Clone> InnerCache<V> {
-    /// Create a new cache, automatically selecting the key type
-    fn new(local_dims: &[usize]) -> Self {
-        let total_bits: u32 = local_dims
-            .iter()
-            .map(|&d| if d <= 1 { 0 } else { (d as u64).ilog2() + 1 })
-            .sum();
-
-        if total_bits <= 64 {
-            let coeffs = Self::compute_coeffs_u64(local_dims);
-            Self::U64 {
-                cache: HashMap::new(),
-                coeffs,
-            }
+impl<V: Clone + Send + Sync> InnerCache<V> {
+    /// Create a new cache, automatically selecting the key type.
+    fn new(local_dims: &[usize]) -> Result<Self, error::CacheKeyError> {
+        let bits = total_bits(local_dims);
+        if bits <= 64 {
+            Ok(Self::U64 {
+                cache: RwLock::new(HashMap::new()),
+                coeffs: compute_coeffs::<u64>(local_dims)?,
+            })
+        } else if bits <= 128 {
+            Ok(Self::U128 {
+                cache: RwLock::new(HashMap::new()),
+                coeffs: compute_coeffs::<u128>(local_dims)?,
+            })
+        } else if bits <= 256 {
+            Ok(Self::U256 {
+                cache: RwLock::new(HashMap::new()),
+                coeffs: compute_coeffs::<U256>(local_dims)?,
+            })
+        } else if bits <= 512 {
+            Ok(Self::U512 {
+                cache: RwLock::new(HashMap::new()),
+                coeffs: compute_coeffs::<U512>(local_dims)?,
+            })
+        } else if bits <= 1024 {
+            Ok(Self::U1024 {
+                cache: RwLock::new(HashMap::new()),
+                coeffs: compute_coeffs::<U1024>(local_dims)?,
+            })
         } else {
-            let coeffs = Self::compute_coeffs_u128(local_dims);
-            Self::U128 {
-                cache: HashMap::new(),
-                coeffs,
+            Err(error::CacheKeyError::Overflow {
+                total_bits: bits,
+                max_bits: 1024,
+                key_type: "auto",
+            })
+        }
+    }
+
+    fn get<I: IndexInt>(&self, idx: &[I]) -> Option<V> {
+        match self {
+            Self::U64 { cache, coeffs } => read_lock(cache).get(&flat_index(idx, coeffs)).cloned(),
+            Self::U128 { cache, coeffs } => read_lock(cache).get(&flat_index(idx, coeffs)).cloned(),
+            Self::U256 { cache, coeffs } => read_lock(cache).get(&flat_index(idx, coeffs)).cloned(),
+            Self::U512 { cache, coeffs } => read_lock(cache).get(&flat_index(idx, coeffs)).cloned(),
+            Self::U1024 { cache, coeffs } => {
+                read_lock(cache).get(&flat_index(idx, coeffs)).cloned()
             }
         }
     }
 
-    fn compute_coeffs_u64(local_dims: &[usize]) -> Vec<u64> {
-        let mut coeffs = Vec::with_capacity(local_dims.len());
-        let mut prod: u64 = 1;
-        for &d in local_dims {
-            coeffs.push(prod);
-            prod = prod.saturating_mul(d as u64);
-        }
-        coeffs
-    }
-
-    fn compute_coeffs_u128(local_dims: &[usize]) -> Vec<u128> {
-        let mut coeffs = Vec::with_capacity(local_dims.len());
-        let mut prod: u128 = 1;
-        for &d in local_dims {
-            coeffs.push(prod);
-            prod = prod.saturating_mul(d as u128);
-        }
-        coeffs
-    }
-
-    fn flat_index_u64(idx: &[usize], coeffs: &[u64]) -> u64 {
-        idx.iter().zip(coeffs).map(|(&i, &c)| c * i as u64).sum()
-    }
-
-    fn flat_index_u128(idx: &[usize], coeffs: &[u128]) -> u128 {
-        idx.iter().zip(coeffs).map(|(&i, &c)| c * i as u128).sum()
-    }
-
-    fn get(&self, idx: &[usize]) -> Option<&V> {
+    fn insert<I: IndexInt>(&self, idx: &[I], value: V) {
         match self {
             Self::U64 { cache, coeffs } => {
-                let key = Self::flat_index_u64(idx, coeffs);
-                cache.get(&key)
+                write_lock(cache).insert(flat_index(idx, coeffs), value);
             }
             Self::U128 { cache, coeffs } => {
-                let key = Self::flat_index_u128(idx, coeffs);
-                cache.get(&key)
+                write_lock(cache).insert(flat_index(idx, coeffs), value);
+            }
+            Self::U256 { cache, coeffs } => {
+                write_lock(cache).insert(flat_index(idx, coeffs), value);
+            }
+            Self::U512 { cache, coeffs } => {
+                write_lock(cache).insert(flat_index(idx, coeffs), value);
+            }
+            Self::U1024 { cache, coeffs } => {
+                write_lock(cache).insert(flat_index(idx, coeffs), value);
             }
         }
     }
 
-    fn insert(&mut self, idx: &[usize], value: V) {
+    fn contains<I: IndexInt>(&self, idx: &[I]) -> bool {
         match self {
-            Self::U64 { cache, coeffs } => {
-                let key = Self::flat_index_u64(idx, coeffs);
-                cache.insert(key, value);
-            }
-            Self::U128 { cache, coeffs } => {
-                let key = Self::flat_index_u128(idx, coeffs);
-                cache.insert(key, value);
-            }
-        }
-    }
-
-    fn contains(&self, idx: &[usize]) -> bool {
-        match self {
-            Self::U64 { cache, coeffs } => {
-                let key = Self::flat_index_u64(idx, coeffs);
-                cache.contains_key(&key)
-            }
-            Self::U128 { cache, coeffs } => {
-                let key = Self::flat_index_u128(idx, coeffs);
-                cache.contains_key(&key)
+            Self::U64 { cache, coeffs } => read_lock(cache).contains_key(&flat_index(idx, coeffs)),
+            Self::U128 { cache, coeffs } => read_lock(cache).contains_key(&flat_index(idx, coeffs)),
+            Self::U256 { cache, coeffs } => read_lock(cache).contains_key(&flat_index(idx, coeffs)),
+            Self::U512 { cache, coeffs } => read_lock(cache).contains_key(&flat_index(idx, coeffs)),
+            Self::U1024 { cache, coeffs } => {
+                read_lock(cache).contains_key(&flat_index(idx, coeffs))
             }
         }
     }
 
     fn len(&self) -> usize {
         match self {
-            Self::U64 { cache, .. } => cache.len(),
-            Self::U128 { cache, .. } => cache.len(),
+            Self::U64 { cache, .. } => read_lock(cache).len(),
+            Self::U128 { cache, .. } => read_lock(cache).len(),
+            Self::U256 { cache, .. } => read_lock(cache).len(),
+            Self::U512 { cache, .. } => read_lock(cache).len(),
+            Self::U1024 { cache, .. } => read_lock(cache).len(),
         }
     }
 
-    fn clear(&mut self) {
+    fn clear(&self) {
         match self {
-            Self::U64 { cache, .. } => cache.clear(),
-            Self::U128 { cache, .. } => cache.clear(),
+            Self::U64 { cache, .. } => write_lock(cache).clear(),
+            Self::U128 { cache, .. } => write_lock(cache).clear(),
+            Self::U256 { cache, .. } => write_lock(cache).clear(),
+            Self::U512 { cache, .. } => write_lock(cache).clear(),
+            Self::U1024 { cache, .. } => write_lock(cache).clear(),
         }
     }
 
@@ -175,60 +212,70 @@ impl<V: Clone> InnerCache<V> {
         match self {
             Self::U64 { .. } => "u64",
             Self::U128 { .. } => "u128",
+            Self::U256 { .. } => "U256",
+            Self::U512 { .. } => "U512",
+            Self::U1024 { .. } => "U1024",
         }
     }
 }
 
 /// A wrapper that caches function evaluations for multi-index inputs.
 ///
-/// Automatically selects the optimal internal key type based on `local_dims`.
-pub struct CachedFunction<V, F>
+/// Thread-safe: all methods take `&self`. Multiple threads can call `eval`
+/// concurrently.
+///
+/// # Type parameters
+///
+/// - `V` - cached value type
+/// - `F` - single-evaluation function `Fn(&[I]) -> V`
+/// - `I` - index element type (default `usize`); use `u8` for quantics
+pub struct CachedFunction<V, F, I = usize>
 where
-    V: Clone,
-    F: Fn(&[usize]) -> V,
+    I: IndexInt,
+    V: Clone + Send + Sync,
+    F: Fn(&[I]) -> V + Send + Sync,
 {
     func: F,
     cache: InnerCache<V>,
     local_dims: Vec<usize>,
-    num_evals: usize,
-    num_cache_hits: usize,
+    num_evals: AtomicUsize,
+    num_cache_hits: AtomicUsize,
+    _phantom: std::marker::PhantomData<I>,
 }
 
-impl<V, F> CachedFunction<V, F>
+impl<V, F, I> CachedFunction<V, F, I>
 where
-    V: Clone,
-    F: Fn(&[usize]) -> V,
+    I: IndexInt,
+    V: Clone + Send + Sync,
+    F: Fn(&[I]) -> V + Send + Sync,
 {
-    /// Create a new cached function wrapper.
-    ///
-    /// The key type is automatically selected based on `local_dims`:
-    /// - `u64` if total index space fits in 64 bits
-    /// - `u128` otherwise
-    pub fn new(func: F, local_dims: &[usize]) -> Self {
-        Self {
+    /// Create a new cached function with automatic key selection (up to 1024 bits).
+    pub fn new(func: F, local_dims: &[usize]) -> Result<Self, error::CacheKeyError> {
+        Ok(Self {
             func,
-            cache: InnerCache::new(local_dims),
+            cache: InnerCache::new(local_dims)?,
             local_dims: local_dims.to_vec(),
-            num_evals: 0,
-            num_cache_hits: 0,
-        }
+            num_evals: AtomicUsize::new(0),
+            num_cache_hits: AtomicUsize::new(0),
+            _phantom: std::marker::PhantomData,
+        })
     }
 
-    /// Evaluate the function at a given index, using cache if available.
-    pub fn eval(&mut self, idx: &[usize]) -> V {
+    /// Evaluate at a given index, using cache if available.
+    pub fn eval(&self, idx: &[I]) -> V {
         if let Some(value) = self.cache.get(idx) {
-            self.num_cache_hits += 1;
-            return value.clone();
+            self.num_cache_hits.fetch_add(1, Ordering::Relaxed);
+            return value;
         }
 
-        self.num_evals += 1;
+        self.num_evals.fetch_add(1, Ordering::Relaxed);
         let value = (self.func)(idx);
         self.cache.insert(idx, value.clone());
         value
     }
 
-    /// Evaluate the function at a given index, bypassing the cache.
-    pub fn eval_no_cache(&self, idx: &[usize]) -> V {
+    /// Evaluate bypassing the cache.
+    pub fn eval_no_cache(&self, idx: &[I]) -> V {
         (self.func)(idx)
     }
 
@@ -237,52 +284,52 @@ where
         &self.local_dims
     }
 
-    /// Get the number of sites (length of index).
+    /// Get the number of sites.
     pub fn num_sites(&self) -> usize {
         self.local_dims.len()
     }
 
-    /// Get the number of actual function evaluations.
+    /// Get the number of function evaluations.
     pub fn num_evals(&self) -> usize {
-        self.num_evals
+        self.num_evals.load(Ordering::Relaxed)
     }
 
     /// Get the number of cache hits.
     pub fn num_cache_hits(&self) -> usize {
-        self.num_cache_hits
+        self.num_cache_hits.load(Ordering::Relaxed)
     }
 
-    /// Get the total number of calls (evals + cache hits).
+    /// Get total calls.
     pub fn total_calls(&self) -> usize {
-        self.num_evals + self.num_cache_hits
+        self.num_evals() + self.num_cache_hits()
     }
 
-    /// Get the cache hit ratio.
+    /// Get cache hit ratio.
     pub fn cache_hit_ratio(&self) -> f64 {
         let total = self.total_calls();
         if total == 0 {
             0.0
         } else {
-            self.num_cache_hits as f64 / total as f64
+            self.num_cache_hits() as f64 / total as f64
         }
     }
 
     /// Clear the cache.
-    pub fn clear_cache(&mut self) {
+    pub fn clear_cache(&self) {
         self.cache.clear();
     }
 
-    /// Get the number of cached entries.
+    /// Number of cached entries.
     pub fn cache_size(&self) -> usize {
         self.cache.len()
     }
 
     /// Check if an index is cached.
-    pub fn is_cached(&self, idx: &[usize]) -> bool {
+    pub fn is_cached(&self, idx: &[I]) -> bool {
         self.cache.contains(idx)
     }
 
-    /// Get the internal key type name (for debugging).
+    /// Internal key type name (for debugging).
     pub fn key_type(&self) -> &'static str {
         self.cache.key_type_name()
     }
