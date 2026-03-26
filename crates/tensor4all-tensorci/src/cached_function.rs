@@ -344,6 +344,7 @@ where
     F: Fn(&[I]) -> V + Send + Sync,
 {
     func: F,
+    batch_func: Option<Box<dyn Fn(&[Vec<I>]) -> Vec<V> + Send + Sync>>,
     cache: CacheBackend<V>,
     local_dims: Vec<usize>,
     num_evals: AtomicUsize,
@@ -361,6 +362,27 @@ where
     pub fn new(func: F, local_dims: &[usize]) -> Result<Self, error::CacheKeyError> {
         Ok(Self {
             func,
+            batch_func: None,
+            cache: CacheBackend::Auto(InnerCache::new(local_dims)?),
+            local_dims: local_dims.to_vec(),
+            num_evals: AtomicUsize::new(0),
+            num_cache_hits: AtomicUsize::new(0),
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    /// Create with a batch function for efficient multi-point evaluation.
+    pub fn with_batch<B>(
+        func: F,
+        batch_func: B,
+        local_dims: &[usize],
+    ) -> Result<Self, error::CacheKeyError>
+    where
+        B: Fn(&[Vec<I>]) -> Vec<V> + Send + Sync + 'static,
+    {
+        Ok(Self {
+            func,
+            batch_func: Some(Box::new(batch_func)),
             cache: CacheBackend::Auto(InnerCache::new(local_dims)?),
             local_dims: local_dims.to_vec(),
             num_evals: AtomicUsize::new(0),
@@ -384,6 +406,27 @@ where
     ) -> Result<Self, error::CacheKeyError> {
         Ok(Self {
             func,
+            batch_func: None,
+            cache: CacheBackend::Custom(Box::new(GenericCache::<K, V>::new(local_dims)?)),
+            local_dims: local_dims.to_vec(),
+            num_evals: AtomicUsize::new(0),
+            num_cache_hits: AtomicUsize::new(0),
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    /// Create with explicit key type and batch function.
+    pub fn with_key_type_and_batch<K: CacheKey, B>(
+        func: F,
+        batch_func: B,
+        local_dims: &[usize],
+    ) -> Result<Self, error::CacheKeyError>
+    where
+        B: Fn(&[Vec<I>]) -> Vec<V> + Send + Sync + 'static,
+    {
+        Ok(Self {
+            func,
+            batch_func: Some(Box::new(batch_func)),
             cache: CacheBackend::Custom(Box::new(GenericCache::<K, V>::new(local_dims)?)),
             local_dims: local_dims.to_vec(),
             num_evals: AtomicUsize::new(0),
@@ -408,6 +451,49 @@ where
     /// Evaluate bypassing the cache.
     pub fn eval_no_cache(&self, idx: &[I]) -> V {
         (self.func)(idx)
+    }
+
+    /// Evaluate at multiple indices. Uses batch function for cache misses if available.
+    ///
+    /// Returns results in the same order as the input indices.
+    pub fn eval_batch(&self, indices: &[Vec<I>]) -> Vec<V> {
+        if indices.is_empty() {
+            return Vec::new();
+        }
+
+        let mut results: Vec<Option<V>> = Vec::with_capacity(indices.len());
+        let mut miss_positions: Vec<usize> = Vec::new();
+        let mut miss_indices: Vec<Vec<I>> = Vec::new();
+
+        for (pos, idx) in indices.iter().enumerate() {
+            if let Some(value) = self.cache.get(idx) {
+                self.num_cache_hits.fetch_add(1, Ordering::Relaxed);
+                results.push(Some(value));
+            } else {
+                results.push(None);
+                miss_positions.push(pos);
+                miss_indices.push(idx.clone());
+            }
+        }
+
+        if miss_indices.is_empty() {
+            return results.into_iter().flatten().collect();
+        }
+
+        self.num_evals
+            .fetch_add(miss_indices.len(), Ordering::Relaxed);
+        let miss_values = if let Some(batch_func) = self.batch_func.as_ref() {
+            batch_func(&miss_indices)
+        } else {
+            miss_indices.iter().map(|idx| (self.func)(idx)).collect()
+        };
+
+        for (i, pos) in miss_positions.iter().enumerate() {
+            self.cache.insert(&miss_indices[i], miss_values[i].clone());
+            results[*pos] = Some(miss_values[i].clone());
+        }
+
+        results.into_iter().flatten().collect()
     }
 
     /// Get the local dimensions.

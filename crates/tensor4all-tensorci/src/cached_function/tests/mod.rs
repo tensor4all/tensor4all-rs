@@ -168,6 +168,47 @@ fn test_custom_key_type_u2048() {
 }
 
 #[test]
+fn test_eval_batch_no_batch_func() {
+    let local_dims = vec![2, 3];
+    let cf = CachedFunction::new(|idx: &[usize]| idx[0] * 10 + idx[1], &local_dims).unwrap();
+
+    cf.eval(&[0, 1]);
+    assert_eq!(cf.num_evals(), 1);
+
+    let indices = vec![vec![0, 1], vec![1, 2], vec![0, 0]];
+    let results = cf.eval_batch(&indices);
+    assert_eq!(results, vec![1, 12, 0]);
+    assert_eq!(cf.num_evals(), 3);
+    assert_eq!(cf.num_cache_hits(), 1);
+}
+
+#[test]
+fn test_eval_batch_with_batch_func() {
+    let local_dims = vec![2, 3];
+    let single_f = |idx: &[usize]| idx[0] * 10 + idx[1];
+    let batch_f = |indices: &[Vec<usize>]| -> Vec<usize> {
+        indices.iter().map(|idx| idx[0] * 10 + idx[1]).collect()
+    };
+    let cf = CachedFunction::with_batch(single_f, batch_f, &local_dims).unwrap();
+
+    cf.eval(&[1, 0]);
+
+    let indices = vec![vec![1, 0], vec![0, 2], vec![1, 1]];
+    let results = cf.eval_batch(&indices);
+    assert_eq!(results, vec![10, 2, 11]);
+    assert_eq!(cf.num_cache_hits(), 1);
+    assert_eq!(cf.num_evals(), 3);
+}
+
+#[test]
+fn test_eval_batch_empty() {
+    let local_dims = vec![2, 3];
+    let cf = CachedFunction::new(|idx: &[usize]| idx[0], &local_dims).unwrap();
+    let results = cf.eval_batch(&[]);
+    assert!(results.is_empty());
+}
+
+#[test]
 fn test_cached_function_clear() {
     let local_dims = vec![10, 10];
     let cf = CachedFunction::new(|idx: &[usize]| idx[0] + idx[1], &local_dims).unwrap();
