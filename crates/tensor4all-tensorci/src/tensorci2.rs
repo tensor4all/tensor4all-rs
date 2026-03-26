@@ -19,7 +19,13 @@ use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTr
 /// Options for TCI2 algorithm
 #[derive(Debug, Clone)]
 pub struct TCI2Options {
-    /// Tolerance for convergence (relative)
+    /// Tolerance for convergence.
+    ///
+    /// When `normalize_error` is enabled, this is applied to the normalized
+    /// bond error. `Full` search normalizes by the maximum value seen while
+    /// materializing the full candidate matrix. `Rook` search normalizes by the
+    /// maximum value observed through the lazily requested matrix entries so the
+    /// block-rook path stays lazy.
     pub tolerance: f64,
     /// Maximum number of iterations (half-sweeps)
     pub max_iter: usize,
@@ -27,7 +33,11 @@ pub struct TCI2Options {
     pub max_bond_dim: usize,
     /// Pivot search strategy
     pub pivot_search: PivotSearchStrategy,
-    /// Whether to normalize error by max sample value
+    /// Whether to normalize error by the maximum observed sample value.
+    ///
+    /// `Full` and `Rook` search share the same formula but not the same
+    /// observation set: `Rook` only sees entries requested by lazy block-rook
+    /// search and factor reconstruction.
     pub normalize_error: bool,
     /// Verbosity level
     pub verbosity: usize,
@@ -58,7 +68,11 @@ pub enum PivotSearchStrategy {
     /// Full search: evaluate entire Pi matrix
     #[default]
     Full,
-    /// Rook search: use lazy block-rook pivoting over partial matrix blocks
+    /// Rook search: use lazy block-rook pivoting over partial matrix blocks.
+    ///
+    /// This avoids materializing the full candidate matrix, so error
+    /// normalization uses the maximum sample value observed through the lazy
+    /// requests instead of a full-grid scan.
     Rook,
 }
 

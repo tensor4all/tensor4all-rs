@@ -14,6 +14,8 @@ Tensor Cross Interpolation (TCI) algorithms for efficiently approximating high-d
 
 - `TensorCI2` is the actively maintained path and uses `matrixluci` directly.
 - `TensorCI1` remains available as legacy support and continues to rely on the older ACA-based matrix code.
+- `PivotSearchStrategy::Rook` now uses lazy block-rook evaluation through batch callbacks.
+- With `normalize_error = true`, `Rook` normalizes by the maximum observed sample value from the lazily requested entries rather than by a full-grid scan.
 
 ## Usage
 
