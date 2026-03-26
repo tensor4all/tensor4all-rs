@@ -6,20 +6,33 @@
 //!
 //! # Main algorithms
 //!
-//! - `TensorCI1`: One-site TCI algorithm
-//! - `crossinterpolate1`: Function to perform TCI1 interpolation
+//! - `TensorCI2`: Primary two-site TCI algorithm
+//! - `crossinterpolate2`: Function to perform TCI2 interpolation
+//! - `TensorCI1`: Legacy one-site TCI algorithm kept for compatibility
+//! - `crossinterpolate1`: Legacy entry point for TCI1
+//!
+//! `TensorCI2` is the actively maintained path and uses `matrixluci` directly.
+//! `TensorCI1` remains available as legacy support and still relies on the older ACA-based matrix code.
 //!
 //! # Example
 //!
 //! ```
-//! use tensor4all_tensorci::{crossinterpolate1, TCI1Options};
+//! use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
 //!
 //! // Function to interpolate: f(i, j) = i + j + 1
 //! let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
 //! let local_dims = vec![4, 4];
-//! let first_pivot = vec![1, 1];
+//! let first_pivot = vec![vec![1, 1]];
 //!
-//! let (tci, ranks, errors) = crossinterpolate1(f, local_dims, first_pivot, TCI1Options::default()).unwrap();
+//! let (tci, ranks, errors) =
+//!     crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+//!         f,
+//!         None,
+//!         local_dims,
+//!         first_pivot,
+//!         TCI2Options::default(),
+//!     )
+//!     .unwrap();
 //! println!("TCI rank: {}", tci.rank());
 //! ```
 
