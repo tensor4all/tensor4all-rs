@@ -1,4 +1,5 @@
 use super::{cartesian_entries, to_treetn, FullPivLuScalar};
+use crate::test_support::{assert_complex_slice_close, assert_scalar_close};
 use crate::{
     optimize_default, GlobalIndexBatch, SimpleTreeTci, SubtreeKey, TreeTciEdge, TreeTciGraph,
     TreeTciOptions,
@@ -10,37 +11,6 @@ use std::collections::HashMap;
 
 fn two_site_graph() -> TreeTciGraph {
     TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap()
-}
-
-fn assert_real_close(actual: f64, expected: f64, max_sample: f64, tol: f64) {
-    assert!(
-        (actual - expected).abs() <= tol * max_sample.max(1.0),
-        "got {}, expected {}, tol {}, max_sample {}",
-        actual,
-        expected,
-        tol,
-        max_sample
-    );
-}
-
-fn assert_complex_vec_close(
-    actual: &[Complex64],
-    expected: &[Complex64],
-    max_sample: f64,
-    tol: f64,
-) {
-    let max_diff = actual
-        .iter()
-        .zip(expected.iter())
-        .map(|(actual, expected)| (*actual - *expected).norm())
-        .fold(0.0_f64, f64::max);
-    assert!(
-        max_diff <= tol * max_sample.max(1.0),
-        "maxabs diff {} exceeds tol {} * max_sample {}",
-        max_diff,
-        tol,
-        max_sample
-    );
 }
 
 #[test]
@@ -78,10 +48,10 @@ fn to_treetn_preserves_two_site_identity_evaluations() {
             .real()
     };
 
-    assert_real_close(eval(0, 0), 1.0, 1.0, 1e-12);
-    assert_real_close(eval(0, 1), 0.0, 1.0, 1e-12);
-    assert_real_close(eval(1, 0), 0.0, 1.0, 1e-12);
-    assert_real_close(eval(1, 1), 1.0, 1.0, 1e-12);
+    assert_scalar_close(eval(0, 0), 1.0, 1.0, 1e-12);
+    assert_scalar_close(eval(0, 1), 0.0, 1.0, 1e-12);
+    assert_scalar_close(eval(1, 0), 0.0, 1.0, 1e-12);
+    assert_scalar_close(eval(1, 1), 1.0, 1.0, 1e-12);
 }
 
 #[test]
@@ -126,7 +96,7 @@ fn solve_right_full_piv_lu_preserves_complex_entries_for_identity_pivot() {
     let solved = Complex64::solve_right_full_piv_lu(&lhs, 2, 2, &pivot, 2, 2).unwrap();
 
     let max_sample = lhs.iter().map(|value| value.norm()).fold(0.0_f64, f64::max);
-    assert_complex_vec_close(&solved, &lhs, max_sample, 1e-12);
+    assert_complex_slice_close(&solved, &lhs, max_sample, 1e-12);
 }
 
 #[test]
@@ -156,5 +126,5 @@ fn solve_right_full_piv_lu_recovers_complex_rhs_for_nontrivial_pivot() {
         .iter()
         .map(|value| value.norm())
         .fold(0.0_f64, f64::max);
-    assert_complex_vec_close(&solved, &target, max_sample, 1e-12);
+    assert_complex_slice_close(&solved, &target, max_sample, 1e-12);
 }

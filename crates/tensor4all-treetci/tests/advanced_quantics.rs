@@ -1,29 +1,13 @@
+mod common;
+
 use anyhow::Result;
+use common::assert_real_samples_close;
 use quanticsgrids::{DiscretizedGrid, UnfoldingScheme};
 use std::collections::HashMap;
 use tensor4all_treetci::{
     crossinterpolate_tree_with_proposer, GlobalIndexBatch, SimpleProposer, TreeTciEdge,
     TreeTciGraph, TreeTciOptions,
 };
-
-fn assert_real_values_close(samples: &[(Vec<usize>, f64, f64)], tol: f64) {
-    let max_sample = samples
-        .iter()
-        .map(|(_, expected, _)| expected.abs())
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
-    let max_diff = samples
-        .iter()
-        .map(|(_, expected, got)| (got - expected).abs())
-        .fold(0.0_f64, f64::max);
-    assert!(
-        max_diff <= tol * max_sample,
-        "maxabs diff {} exceeds tol {} * max_sample {}",
-        max_diff,
-        tol,
-        max_sample
-    );
-}
 
 fn branching_tree(n_sites: usize) -> TreeTciGraph {
     match n_sites {
@@ -103,13 +87,22 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
                 .iter()
                 .map(|&value| (value - 1) as usize)
                 .collect::<Vec<_>>();
-            let coords = grid.grididx_to_origcoord(&[i, j]).unwrap();
-            let expected = f(&coords);
             let got = evaluate_treetn(&tn, &point);
-            samples.push((point, expected, got));
+            samples.push((point, got));
         }
     }
-    assert_real_values_close(&samples, 1e-8);
+    assert_real_samples_close(
+        &samples,
+        &|point| {
+            let quantics = point
+                .iter()
+                .map(|&value| value as i64 + 1)
+                .collect::<Vec<_>>();
+            let coords = grid.quantics_to_origcoord(&quantics).unwrap();
+            f(&coords)
+        },
+        1e-8,
+    );
 }
 
 #[test]
@@ -186,10 +179,9 @@ fn quantics_grid_batch_and_point_evaluators_agree() {
                 .iter()
                 .map(|&value| (value - 1) as usize)
                 .collect::<Vec<_>>();
-            let point_only = evaluate_treetn(&tn_point, &point);
             let batch_only = evaluate_treetn(&tn_batch, &point);
-            samples.push((point, point_only, batch_only));
+            samples.push((point, batch_only));
         }
     }
-    assert_real_values_close(&samples, 1e-10);
+    assert_real_samples_close(&samples, &|point| evaluate_treetn(&tn_point, point), 1e-10);
 }

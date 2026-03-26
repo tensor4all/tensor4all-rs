@@ -1,20 +1,10 @@
 use super::{optimize_default, TreeTciOptions};
+use crate::test_support::assert_scalar_close;
 use crate::{GlobalIndexBatch, SimpleTreeTci, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
 
 fn two_site_graph() -> TreeTciGraph {
     TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap()
-}
-
-fn assert_close(actual: f64, expected: f64, max_sample: f64, tol: f64) {
-    assert!(
-        (actual - expected).abs() <= tol * max_sample.max(1.0),
-        "got {}, expected {}, tol {}, max_sample {}",
-        actual,
-        expected,
-        tol,
-        max_sample
-    );
 }
 
 #[test]
@@ -45,7 +35,7 @@ fn optimize_default_converges_on_two_site_identity() {
     .unwrap();
 
     assert_eq!(ranks.last().copied(), Some(2));
-    assert_close(
+    assert_scalar_close(
         errors.last().copied().unwrap_or(f64::NAN),
         0.0,
         tci.max_sample_value,

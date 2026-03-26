@@ -1,77 +1,11 @@
+mod common;
+
+use common::{assert_complex_samples_close, assert_real_samples_close};
 use num_complex::Complex64;
 use tensor4all_treetci::{
     crossinterpolate_tree, crossinterpolate_tree_with_proposer, SimpleProposer, TreeTciEdge,
     TreeTciGraph, TreeTciOptions,
 };
-
-fn assert_real_points_close(
-    got: &[([usize; 7], f64)],
-    expected: &dyn Fn(&[usize]) -> f64,
-    tol: f64,
-) {
-    let max_sample = got
-        .iter()
-        .map(|(point, _)| expected(point).abs())
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
-    let max_diff = got
-        .iter()
-        .map(|(point, value)| (value - expected(point)).abs())
-        .fold(0.0_f64, f64::max);
-    assert!(
-        max_diff <= tol * max_sample,
-        "maxabs diff {} exceeds tol {} * max_sample {}",
-        max_diff,
-        tol,
-        max_sample
-    );
-}
-
-fn assert_complex_points_close(
-    got: &[([usize; 7], Complex64)],
-    expected: &dyn Fn(&[usize]) -> Complex64,
-    tol: f64,
-) {
-    let max_sample = got
-        .iter()
-        .map(|(point, _)| expected(point).norm())
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
-    let max_diff = got
-        .iter()
-        .map(|(point, value)| (*value - expected(point)).norm())
-        .fold(0.0_f64, f64::max);
-    assert!(
-        max_diff <= tol * max_sample,
-        "maxabs diff {} exceeds tol {} * max_sample {}",
-        max_diff,
-        tol,
-        max_sample
-    );
-}
-
-fn assert_complex_points_close_2(
-    got: &[([usize; 2], Complex64)],
-    expected: &dyn Fn(&[usize]) -> Complex64,
-    tol: f64,
-) {
-    let max_sample = got
-        .iter()
-        .map(|(point, _)| expected(point).norm())
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
-    let max_diff = got
-        .iter()
-        .map(|(point, value)| (*value - expected(point)).norm())
-        .fold(0.0_f64, f64::max);
-    assert!(
-        max_diff <= tol * max_sample,
-        "maxabs diff {} exceeds tol {} * max_sample {}",
-        max_diff,
-        tol,
-        max_sample
-    );
-}
 
 fn sample_graph() -> TreeTciGraph {
     TreeTciGraph::new(
@@ -137,7 +71,7 @@ fn simple_tree_parity_matches_reference_points() {
     .into_iter()
     .map(|point| (point, eval(point)))
     .collect::<Vec<_>>();
-    assert_real_points_close(&got, &f, 1e-8);
+    assert_real_samples_close(&got, &f, 1e-8);
 }
 
 #[test]
@@ -185,7 +119,7 @@ fn simple_tree_product_function_is_exact_on_branching_tree() {
     .into_iter()
     .map(|point| (point, eval(point)))
     .collect::<Vec<_>>();
-    assert_real_points_close(&got, &f, 1e-12);
+    assert_real_samples_close(&got, &f, 1e-12);
 }
 
 #[test]
@@ -241,7 +175,7 @@ fn simple_tree_complex_product_function_is_exact_on_branching_tree() {
         )
     })
     .collect::<Vec<_>>();
-    assert_complex_points_close(&got, &f, 1e-12);
+    assert_complex_samples_close(&got, &f, 1e-12);
 }
 
 #[test]
@@ -281,5 +215,5 @@ fn simple_tree_complex_product_function_is_exact_on_two_site_tree() {
             (point, Complex64::new(value.real(), value.imag()))
         })
         .collect::<Vec<_>>();
-    assert_complex_points_close_2(&got, &f, 1e-12);
+    assert_complex_samples_close(&got, &f, 1e-12);
 }

@@ -34,6 +34,9 @@ pub mod update;
 /// Edge visitation strategies.
 pub mod visitor;
 
+#[cfg(test)]
+mod test_support;
+
 pub use api::{crossinterpolate_tree, crossinterpolate_tree_with_proposer};
 pub use assemble::{assemble_global_point, assemble_points_column_major, MultiIndex};
 pub use batch::{GlobalIndexBatch, OwnedGlobalIndexBatch};
