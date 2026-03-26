@@ -1,10 +1,10 @@
 //! TensorCI1 - One-site Tensor Cross Interpolation algorithm
 
 use crate::error::{Result, TCIError};
-use crate::indexset::{IndexSet, MultiIndex};
-use matrixci::util::{a_times_b_inv, mat_mul, zeros, Matrix};
-use matrixci::Scalar;
-use matrixci::{AbstractMatrixCI, MatrixACA};
+use tensor4all_tcicore::{IndexSet, MultiIndex};
+use tensor4all_tcicore::matrix::{a_times_b_inv, mat_mul, zeros, Matrix};
+use tensor4all_tcicore::Scalar;
+use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
 
 /// Sweep strategy for TCI optimization

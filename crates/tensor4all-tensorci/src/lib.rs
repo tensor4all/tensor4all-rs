@@ -43,21 +43,15 @@
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
-pub mod cached_function;
 pub mod error;
-pub mod indexset;
 pub mod tensorci1;
 pub mod tensorci2;
 
 // Re-export main types
-pub use cached_function::cache_key::CacheKey;
-pub use cached_function::error::CacheKeyError;
-pub use cached_function::index_int::IndexInt;
-pub use cached_function::CachedFunction;
 pub use error::{Result, TCIError};
-pub use indexset::{IndexSet, LocalIndex, MultiIndex};
 pub use tensorci1::{crossinterpolate1, SweepStrategy, TCI1Options, TensorCI1};
 pub use tensorci2::{crossinterpolate2, PivotSearchStrategy, TCI2Options, TensorCI2};
 
-// Re-export Scalar trait from matrixci for downstream crates
-pub use matrixci::Scalar;
+pub use tensor4all_tcicore::{
+    CacheKey, CacheKeyError, CachedFunction, IndexInt, IndexSet, LocalIndex, MultiIndex, Scalar,
+};

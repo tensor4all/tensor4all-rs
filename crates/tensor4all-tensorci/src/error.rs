@@ -55,7 +55,7 @@ pub enum TCIError {
 
     /// Matrix CI error
     #[error("Matrix CI error: {0}")]
-    MatrixCIError(#[from] matrixci::MatrixCIError),
+    MatrixCIError(#[from] tensor4all_tcicore::MatrixCIError),
 
     /// Matrix LUCI substrate error
     #[error("Matrix LUCI error: {0}")]
