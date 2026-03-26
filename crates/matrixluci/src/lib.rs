@@ -8,6 +8,7 @@
 pub mod block_rook;
 pub mod dense;
 pub mod error;
+pub mod factors;
 pub mod kernel;
 pub mod scalar;
 pub mod source;
@@ -16,6 +17,7 @@ pub mod types;
 pub use block_rook::LazyBlockRookKernel;
 pub use dense::DenseFaerLuKernel;
 pub use error::{MatrixLuciError, Result};
+pub use factors::CrossFactors;
 pub use kernel::PivotKernel;
 pub use scalar::Scalar;
 pub use source::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};

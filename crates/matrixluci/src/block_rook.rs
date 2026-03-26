@@ -1,6 +1,6 @@
 //! Lazy pivot-kernel implementations.
 
-use crate::error::MatrixLuciError;
+use crate::factors::{invert_square, load_block, matmul, subtract_inplace};
 use crate::kernel::PivotKernel;
 use crate::scalar::Scalar;
 use crate::source::CandidateMatrixSource;
@@ -11,112 +11,6 @@ use num_complex::{Complex32, Complex64};
 /// Lazy pivot kernel based on residual row/column rook search.
 #[derive(Default)]
 pub struct LazyBlockRookKernel;
-
-fn load_block<T: Scalar, S: CandidateMatrixSource<T>>(
-    source: &S,
-    rows: &[usize],
-    cols: &[usize],
-) -> DenseOwnedMatrix<T> {
-    let mut data = vec![T::zero(); rows.len() * cols.len()];
-    source.get_block(rows, cols, &mut data);
-    DenseOwnedMatrix::from_column_major(data, rows.len(), cols.len())
-}
-
-fn matmul<T: Scalar>(lhs: &DenseOwnedMatrix<T>, rhs: &DenseOwnedMatrix<T>) -> DenseOwnedMatrix<T> {
-    assert_eq!(lhs.ncols(), rhs.nrows());
-    let mut out = DenseOwnedMatrix::zeros(lhs.nrows(), rhs.ncols());
-    for j in 0..rhs.ncols() {
-        for k in 0..lhs.ncols() {
-            let rhs_kj = rhs[[k, j]];
-            for i in 0..lhs.nrows() {
-                out[[i, j]] = out[[i, j]] + lhs[[i, k]] * rhs_kj;
-            }
-        }
-    }
-    out
-}
-
-fn subtract_inplace<T: Scalar>(lhs: &mut DenseOwnedMatrix<T>, rhs: &DenseOwnedMatrix<T>) {
-    assert_eq!(lhs.nrows(), rhs.nrows());
-    assert_eq!(lhs.ncols(), rhs.ncols());
-    for j in 0..lhs.ncols() {
-        for i in 0..lhs.nrows() {
-            lhs[[i, j]] = lhs[[i, j]] - rhs[[i, j]];
-        }
-    }
-}
-
-fn swap_rows<T: Scalar>(matrix: &mut DenseOwnedMatrix<T>, a: usize, b: usize) {
-    if a == b {
-        return;
-    }
-    for col in 0..matrix.ncols() {
-        let tmp = matrix[[a, col]];
-        matrix[[a, col]] = matrix[[b, col]];
-        matrix[[b, col]] = tmp;
-    }
-}
-
-fn invert_square<T: Scalar>(matrix: &DenseOwnedMatrix<T>) -> Result<DenseOwnedMatrix<T>> {
-    if matrix.nrows() != matrix.ncols() {
-        return Err(MatrixLuciError::InvalidArgument {
-            message: "pivot block must be square".to_string(),
-        });
-    }
-
-    let n = matrix.nrows();
-    let mut aug = DenseOwnedMatrix::zeros(n, 2 * n);
-    for j in 0..n {
-        for i in 0..n {
-            aug[[i, j]] = matrix[[i, j]];
-        }
-        aug[[j, n + j]] = T::one();
-    }
-
-    for k in 0..n {
-        let mut pivot_row = k;
-        let mut pivot_abs = 0.0f64;
-        for row in k..n {
-            let candidate = aug[[row, k]].abs_val();
-            if candidate > pivot_abs {
-                pivot_abs = candidate;
-                pivot_row = row;
-            }
-        }
-
-        if pivot_abs < T::epsilon() {
-            return Err(MatrixLuciError::SingularPivotBlock);
-        }
-
-        swap_rows(&mut aug, k, pivot_row);
-
-        let pivot = aug[[k, k]];
-        for col in 0..(2 * n) {
-            aug[[k, col]] = aug[[k, col]] / pivot;
-        }
-
-        for row in 0..n {
-            if row == k {
-                continue;
-            }
-            let factor = aug[[row, k]];
-            if factor.abs_val() < T::epsilon() {
-                continue;
-            }
-            for col in 0..(2 * n) {
-                aug[[row, col]] = aug[[row, col]] - factor * aug[[k, col]];
-            }
-        }
-    }
-
-    let mut inv = DenseOwnedMatrix::zeros(n, n);
-    for j in 0..n {
-        for i in 0..n {
-            inv[[i, j]] = aug[[i, n + j]];
-        }
-    }
-    Ok(inv)
-}
 
 fn residual_block<T: Scalar, S: CandidateMatrixSource<T>>(
     source: &S,
