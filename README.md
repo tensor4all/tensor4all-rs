@@ -10,10 +10,11 @@ A Rust implementation of tensor networks for **AI-agentic development** — rapi
 
 - **Modular architecture**: Independent crates with unified core (`tensor4all-core`) enable fast compilation and isolated testing
 - **ITensors.jl-like dynamic structure**: Flexible `Index` system and dynamic-rank tensors preserve the intuitive API
+- **tenferro-rs-backed execution**: Dense tensor algebra, einsum, and linear algebra now center on a shared tenferro-rs runtime
 - **Static error detection**: Rust's type system catches errors at compile time while maintaining runtime flexibility
 - **Multi-language support via C-API**: Full functionality exposed through C-API; initial targets are Julia and Python
 
-**Scope**: Initial focus on QTT (Quantics Tensor Train) and TCI (Tensor Cross Interpolation). The design is extensible to support Abelian and non-Abelian symmetries in the future.
+**Scope**: Initial focus is QTT (Quantics Tensor Train), TCI (Tensor Cross Interpolation), and related tree / train tensor network algorithms.
 
 ## Dense Layout Semantics
 
@@ -24,12 +25,21 @@ HDF5 layer are all defined in terms of column-major ordering.
 This matches Julia, ITensors.jl, and tenferro-rs. When exchanging dense data with NumPy,
 use `order="F"` semantics when you need explicit control over flattening or reshaping.
 
+## Backend Status
+
+tensor4all-rs now centers on a tenferro-rs execution stack. The dense tensor backend,
+einsum-based contractions, and much of the linear algebra path already route through tenferro-rs.
+
+Reverse-mode automatic differentiation is also close at the backend layer, but it is not yet
+documented as a validated end-to-end public feature. README claims should therefore stay slightly
+behind the implementation until broader tests land.
+
 ## Type Correspondence
 
 | ITensors.jl | QSpace v4 | tensor4all-rs |
 |-------------|-----------|---------------|
 | `Index{Int}` | — | `Index<Id, NoSymmSpace>` |
-| `Index{QNBlocks}` | `QIDX` | `Index<Id, QNSpace>` (future) |
+| `Index{QNBlocks}` | `QIDX` | Not part of the current roadmap |
 | `ITensor` | `QSpace` | `TensorDynLen` |
 | `Dense` | `DATA` | `Storage::StructuredF64/C64` |
 | `Diag` | — | `Storage::StructuredF64/C64` with diagonal `axis_classes` |
@@ -66,11 +76,10 @@ tensor4all-rs/
 │   ├── tensor4all-quanticstransform/ # Quantics transformation operators
 │   ├── tensor4all-partitionedtt/     # Partitioned Tensor Train
 │   ├── tensor4all-hdf5/              # ITensors.jl-compatible HDF5 serialization
-│   ├── tensor4all-hdf5-ffi/          # HDF5 FFI with runtime loading support
 │   ├── tensor4all-capi/              # C API for language bindings
 │   ├── matrixluci/                   # LUCI / rrLU substrate (faer-derived dense path)
 │   ├── matrixci/                     # Higher-level matrix CI with legacy ACA support
-│   └── quanticsgrids/                # Quantics grid structures (internal)
+│   └── tensor4all-treetci/           # TreeTCI port and tree-structured cross interpolation
 ├── python/tensor4all/                # Python bindings
 ├── tools/api-dump/                   # API documentation generator
 ├── xtask/                            # Development task runner
@@ -91,11 +100,10 @@ tensor4all-rs/
 | [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
 | [tensor4all-partitionedtt](crates/tensor4all-partitionedtt/) | Partitioned Tensor Train |
 | [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
-| [tensor4all-hdf5-ffi](crates/tensor4all-hdf5-ffi/) | HDF5 FFI with build-time linking and runtime loading |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
 | [matrixluci](crates/matrixluci/) | LUCI / rrLU substrate with a dense path ported from `faer` |
 | [matrixci](crates/matrixci/) | Higher-level matrix CI with legacy ACA support |
-| [quanticsgrids](crates/quanticsgrids/) | Quantics grid structures |
+| [tensor4all-treetci](crates/tensor4all-treetci/) | TreeTCI port and tree-structured cross interpolation |
 
 ## Usage Example (Rust)
 
@@ -220,14 +228,11 @@ done
 
 CI runs these examples as part of `./scripts/run_python_tests.sh`.
 
-## Future Extensions
+## Near-Term Work
 
-- GPU acceleration via PyTorch backend (tch-rs)
+- End-to-end validation and public API coverage for reverse-mode automatic differentiation on the tenferro-rs backend
 - In-place operations for memory efficiency
 - Optimization for block-sparse tensors
-- Automatic differentiation
-- Quantum number symmetries (Abelian: U(1), Z_n)
-- Non-Abelian symmetries (SU(2), SU(N))
 
 ## Acknowledgments
 
