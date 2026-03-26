@@ -88,7 +88,7 @@ impl<T: Clone + Default + TfScalar> Tensor4Ops<T> for Tensor4<T> {
         let mut result = Vec::with_capacity(left_dim * right_dim);
         for l in 0..left_dim {
             for r in 0..right_dim {
-                result.push(self[[l, s1, s2, r]].clone());
+                result.push(self[[l, s1, s2, r]]);
             }
         }
         result
@@ -106,7 +106,7 @@ impl<T: Clone + Default + TfScalar> Tensor4Ops<T> for Tensor4<T> {
             for s1 in 0..site_dim_1 {
                 for s2 in 0..site_dim_2 {
                     for r in 0..right_dim {
-                        result.push(self[[l, s1, s2, r]].clone());
+                        result.push(self[[l, s1, s2, r]]);
                     }
                 }
             }
@@ -126,7 +126,7 @@ impl<T: Clone + Default + TfScalar> Tensor4Ops<T> for Tensor4<T> {
             for s1 in 0..site_dim_1 {
                 for s2 in 0..site_dim_2 {
                     for r in 0..right_dim {
-                        result.push(self[[l, s1, s2, r]].clone());
+                        result.push(self[[l, s1, s2, r]]);
                     }
                 }
             }
@@ -146,7 +146,7 @@ impl<T: Clone + Default + TfScalar> Tensor4Ops<T> for Tensor4<T> {
             for s1 in 0..site_dim_1 {
                 for s2 in 0..site_dim_2 {
                     for r in 0..right_dim {
-                        result.push(self[[l, s1, s2, r]].clone());
+                        result.push(self[[l, s1, s2, r]]);
                     }
                 }
             }

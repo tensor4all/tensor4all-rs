@@ -11,37 +11,6 @@ use super::mpo::MPO;
 use super::types::{Tensor4, Tensor4Ops};
 use super::{matrix2_zeros, Matrix2};
 
-/// Contract two general tensors over specified indices
-///
-/// This is the Rust equivalent of `_contract` from Julia.
-///
-/// # Arguments
-/// * `a` - First tensor (flattened with shape info)
-/// * `a_shape` - Shape of first tensor
-/// * `b` - Second tensor (flattened with shape info)
-/// * `b_shape` - Shape of second tensor
-/// * `idx_a` - Indices of `a` to contract over
-/// * `idx_b` - Indices of `b` to contract over
-///
-/// # Returns
-/// Contracted tensor as flat vector with shape
-pub fn contract_tensors<T: SVDScalar>(
-    _a: &[T],
-    _a_shape: &[usize],
-    _b: &[T],
-    _b_shape: &[usize],
-    _idx_a: &[usize],
-    _idx_b: &[usize],
-) -> Result<(Vec<T>, Vec<usize>)>
-where
-    <T as num_complex::ComplexFloat>::Real: Into<f64>,
-{
-    // TODO: Implement general tensor contraction
-    Err(MPOError::InvalidOperation {
-        message: "contract_tensors not yet implemented".to_string(),
-    })
-}
-
 /// Contract two 4D site tensors over their shared physical index
 ///
 /// Given two 4D tensors:

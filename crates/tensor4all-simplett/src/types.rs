@@ -72,7 +72,7 @@ impl<T: Clone + Default + TfScalar> Tensor3Ops<T> for Tensor3<T> {
         let mut result = Vec::with_capacity(left_dim * right_dim);
         for l in 0..left_dim {
             for r in 0..right_dim {
-                result.push(self[[l, s, r]].clone());
+                result.push(self[[l, s, r]]);
             }
         }
         result
@@ -88,7 +88,7 @@ impl<T: Clone + Default + TfScalar> Tensor3Ops<T> for Tensor3<T> {
         for l in 0..left_dim {
             for s in 0..site_dim {
                 for r in 0..right_dim {
-                    result.push(self[[l, s, r]].clone());
+                    result.push(self[[l, s, r]]);
                 }
             }
         }
@@ -105,7 +105,7 @@ impl<T: Clone + Default + TfScalar> Tensor3Ops<T> for Tensor3<T> {
         for l in 0..left_dim {
             for s in 0..site_dim {
                 for r in 0..right_dim {
-                    result.push(self[[l, s, r]].clone());
+                    result.push(self[[l, s, r]]);
                 }
             }
         }
