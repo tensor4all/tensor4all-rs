@@ -12,6 +12,31 @@ use num_complex::{Complex32, Complex64};
 pub struct DenseFaerLuKernel;
 
 impl DenseFaerLuKernel {
+    fn is_no_truncation(options: &PivotKernelOptions, full_rank: usize) -> bool {
+        options.max_rank >= full_rank && options.rel_tol == 0.0 && options.abs_tol == 0.0
+    }
+
+    fn compute_no_truncation_pivot_errors<T: Scalar>(
+        u: &faer::MatRef<'_, T>,
+        full_rank: usize,
+    ) -> Vec<f64> {
+        let mut pivot_errors = Vec::with_capacity(full_rank + 1);
+        for i in 0..full_rank {
+            let pivot_abs = u[(i, i)].abs_val();
+            if pivot_abs < f64::EPSILON {
+                if pivot_errors.is_empty() {
+                    pivot_errors.push(pivot_abs);
+                } else {
+                    pivot_errors.push(0.0);
+                }
+                return pivot_errors;
+            }
+            pivot_errors.push(pivot_abs);
+        }
+        pivot_errors.push(0.0);
+        pivot_errors
+    }
+
     fn compute_pivot_errors(
         diag_abs: &[f64],
         nrows: usize,
@@ -21,6 +46,23 @@ impl DenseFaerLuKernel {
         let full_rank = nrows.min(ncols);
         if full_rank == 0 {
             return vec![0.0];
+        }
+
+        if Self::is_no_truncation(options, full_rank) {
+            let mut pivot_errors = Vec::with_capacity(full_rank + 1);
+            for &pivot_abs in diag_abs.iter().take(full_rank) {
+                if pivot_abs < f64::EPSILON {
+                    if pivot_errors.is_empty() {
+                        pivot_errors.push(pivot_abs);
+                    } else {
+                        pivot_errors.push(0.0);
+                    }
+                    return pivot_errors;
+                }
+                pivot_errors.push(pivot_abs);
+            }
+            pivot_errors.push(0.0);
+            return pivot_errors;
         }
 
         let max_rank = options.max_rank.min(full_rank);
@@ -78,21 +120,23 @@ macro_rules! impl_dense_kernel {
 
                     let rank_cap = nrows.min(ncols);
                     let u = lu.U();
-                    let mut diag_abs = Vec::with_capacity(rank_cap);
-                    for i in 0..rank_cap {
-                        diag_abs.push(u[(i, i)].abs_sq().sqrt());
-                    }
-
-                    let pivot_errors =
-                        DenseFaerLuKernel::compute_pivot_errors(&diag_abs, nrows, ncols, options);
+                    let pivot_errors = if DenseFaerLuKernel::is_no_truncation(options, rank_cap) {
+                        DenseFaerLuKernel::compute_no_truncation_pivot_errors(&u, rank_cap)
+                    } else {
+                        let mut diag_abs = Vec::with_capacity(rank_cap);
+                        for i in 0..rank_cap {
+                            diag_abs.push(u[(i, i)].abs_val());
+                        }
+                        DenseFaerLuKernel::compute_pivot_errors(&diag_abs, nrows, ncols, options)
+                    };
                     let rank = pivot_errors.len().saturating_sub(1);
 
                     let (row_fwd, _) = lu.P().arrays();
                     let (col_fwd, _) = lu.Q().arrays();
 
                     Ok(PivotSelectionCore {
-                        row_indices: row_fwd.iter().take(rank).copied().collect(),
-                        col_indices: col_fwd.iter().take(rank).copied().collect(),
+                        row_indices: row_fwd[..rank].to_vec(),
+                        col_indices: col_fwd[..rank].to_vec(),
                         pivot_errors,
                         rank,
                     })
