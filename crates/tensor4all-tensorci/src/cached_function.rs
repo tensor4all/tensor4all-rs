@@ -327,6 +327,8 @@ impl<V: Clone + Send + Sync + 'static> CacheBackend<V> {
     }
 }
 
+type BatchFunc<I, V> = dyn Fn(&[Vec<I>]) -> Vec<V> + Send + Sync;
+
 /// A wrapper that caches function evaluations for multi-index inputs.
 ///
 /// Thread-safe: all methods take `&self`. Multiple threads can call `eval`
@@ -344,7 +346,7 @@ where
     F: Fn(&[I]) -> V + Send + Sync,
 {
     func: F,
-    batch_func: Option<Box<dyn Fn(&[Vec<I>]) -> Vec<V> + Send + Sync>>,
+    batch_func: Option<Box<BatchFunc<I, V>>>,
     cache: CacheBackend<V>,
     local_dims: Vec<usize>,
     num_evals: AtomicUsize,

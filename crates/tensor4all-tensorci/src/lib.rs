@@ -50,6 +50,9 @@ pub mod tensorci1;
 pub mod tensorci2;
 
 // Re-export main types
+pub use cached_function::cache_key::CacheKey;
+pub use cached_function::error::CacheKeyError;
+pub use cached_function::index_int::IndexInt;
 pub use cached_function::CachedFunction;
 pub use error::{Result, TCIError};
 pub use indexset::{IndexSet, LocalIndex, MultiIndex};
