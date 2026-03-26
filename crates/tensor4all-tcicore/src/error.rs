@@ -1,4 +1,4 @@
-//! Error types for tensor4all-matrixci
+//! Error types for tensor4all-tcicore
 
 use thiserror::Error;
 

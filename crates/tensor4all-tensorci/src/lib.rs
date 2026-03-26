@@ -11,8 +11,8 @@
 //! - `TensorCI1`: Legacy one-site TCI algorithm kept for compatibility
 //! - `crossinterpolate1`: Legacy entry point for TCI1
 //!
-//! `TensorCI2` is the actively maintained path and uses `matrixluci` directly.
-//! `TensorCI1` remains available as legacy support and still relies on the older ACA-based matrix code.
+//! `TensorCI2` is the actively maintained path and uses `MatrixLUCI` from `tensor4all-tcicore`.
+//! `TensorCI1` uses `MatrixACA` from `tensor4all-tcicore`.
 //! `PivotSearchStrategy::Rook` uses lazy block-rook evaluation; when
 //! `normalize_error` is enabled it normalizes by the maximum observed sample
 //! value from the lazily requested entries rather than by a full-grid scan.
