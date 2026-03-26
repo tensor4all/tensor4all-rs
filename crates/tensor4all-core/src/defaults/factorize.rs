@@ -19,8 +19,8 @@
 
 use crate::defaults::DynIndex;
 use crate::{unfold_split, TensorDynLen};
-use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use num_complex::{Complex64, ComplexFloat};
+use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use tensor4all_tensorbackend::{native_tensor_primal_to_diag_f64, TensorElement};
 
 use crate::qr::{qr_with, QrOptions};

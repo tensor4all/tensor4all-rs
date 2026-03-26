@@ -1,10 +1,10 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use faer::prelude::*;
-use tensor4all_tcicore::matrix::{from_vec2d, Matrix};
-use tensor4all_tcicore::{rrlu_inplace, RrLUOptions};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use tensor4all_tcicore::matrix::{from_vec2d, Matrix};
+use tensor4all_tcicore::{rrlu_inplace, RrLUOptions};
 
 /// Generate a random f64 matrix as matrixci::Matrix
 fn random_matrix(n: usize, m: usize, seed: u64) -> Matrix<f64> {

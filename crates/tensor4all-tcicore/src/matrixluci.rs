@@ -1,10 +1,10 @@
 //! Matrix LU-based Cross Interpolation (MatrixLUCI) implementation.
 
 use crate::error::{MatrixCIError, Result};
+use crate::matrix::{submatrix, zeros, Matrix};
 use crate::matrixlu::RrLUOptions;
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
-use crate::matrix::{submatrix, zeros, Matrix};
 use ::matrixluci::{
     CrossFactors, DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions,
     PivotSelectionCore,

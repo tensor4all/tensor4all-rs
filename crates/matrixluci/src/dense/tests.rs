@@ -1,6 +1,6 @@
 use crate::{DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions};
 use approx::assert_abs_diff_eq;
-use matrixci::{from_vec2d, rrlu, RrLUOptions};
+use tensor4all_tcicore::{from_vec2d, rrlu, RrLUOptions};
 
 #[test]
 fn dense_kernel_recovers_identity_pivots() {
