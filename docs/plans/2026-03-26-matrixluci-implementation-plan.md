@@ -34,6 +34,14 @@ fn dense_source_get_block_is_column_major() {
 }
 
 #[test]
+fn dense_source_get_block_uses_cross_product_for_noncontiguous_indices() {
+    let src = DenseMatrixSource::from_column_major(&[1.0, 4.0, 2.0, 5.0, 3.0, 6.0], 2, 3);
+    let mut out = [0.0; 4];
+    src.get_block(&[1, 0], &[2, 0], &mut out);
+    assert_eq!(out, [6.0, 3.0, 4.0, 1.0]);
+}
+
+#[test]
 fn scalar_get_delegates_to_get_block() {
     let src = DenseMatrixSource::from_column_major(&[1.0, 3.0, 2.0, 4.0], 2, 2);
     assert_eq!(src.get(1, 0), 3.0);
@@ -51,6 +59,8 @@ Expected: FAIL because package `matrixluci` does not exist yet
 pub trait CandidateMatrixSource<T: Scalar> {
     fn nrows(&self) -> usize;
     fn ncols(&self) -> usize;
+    /// Fill `out` with the cross-product A[rows, cols] in column-major order.
+    /// `out.len()` must equal `rows.len() * cols.len()`.
     fn get_block(&self, rows: &[usize], cols: &[usize], out: &mut [T]);
 
     fn get(&self, row: usize, col: usize) -> T {
@@ -101,6 +111,15 @@ fn pivot_selection_core_stores_rank_and_indices() {
     assert_eq!(selection.rank, 2);
     assert_eq!(selection.row_indices, vec![0, 2]);
 }
+
+#[test]
+fn pivot_kernel_options_no_truncation_uses_canonical_values() {
+    let opts = PivotKernelOptions::no_truncation();
+    assert_eq!(opts.rel_tol, 0.0);
+    assert_eq!(opts.abs_tol, 0.0);
+    assert_eq!(opts.max_rank, usize::MAX);
+    assert!(opts.left_orthogonal);
+}
 ```
 
 **Step 2: Run test to verify it fails**
@@ -123,6 +142,17 @@ pub struct PivotSelectionCore {
     pub col_indices: Vec<usize>,
     pub pivot_errors: Vec<f64>,
     pub rank: usize,
+}
+
+impl PivotKernelOptions {
+    pub fn no_truncation() -> Self {
+        Self {
+            rel_tol: 0.0,
+            abs_tol: 0.0,
+            max_rank: usize::MAX,
+            left_orthogonal: true,
+        }
+    }
 }
 
 pub trait PivotKernel<T: Scalar> {
@@ -236,11 +266,32 @@ fn dense_kernel_honors_max_rank() {
 }
 
 #[test]
-fn dense_kernel_returns_monotone_pivot_errors() {
-    let src = low_rank_test_source();
+fn dense_kernel_matches_legacy_last_pivot_error_semantics() {
+    let src = legacy_rrlu_regression_source();
     let kernel = DenseFaerLuKernel::default();
-    let out = kernel.factorize(&src, &PivotKernelOptions::default()).unwrap();
-    assert!(!out.pivot_errors.is_empty());
+    let full = kernel.factorize(&src, &PivotKernelOptions::no_truncation()).unwrap();
+    let max_rank = kernel.factorize(
+        &src,
+        &PivotKernelOptions { max_rank: 2, ..PivotKernelOptions::default() },
+    ).unwrap();
+    let abs_tol = kernel.factorize(
+        &src,
+        &PivotKernelOptions { abs_tol: 0.5, ..PivotKernelOptions::default() },
+    ).unwrap();
+    assert!(full.pivot_errors.last().unwrap().abs() < 1e-14);
+    assert!(*max_rank.pivot_errors.last().unwrap() > 0.0);
+    assert!(*abs_tol.pivot_errors.last().unwrap() < 0.5);
+}
+
+#[test]
+fn dense_kernel_matches_legacy_pivot_error_vector_layout() {
+    let src = eye_test_source(2);
+    let kernel = DenseFaerLuKernel::default();
+    let out = kernel.factorize(&src, &PivotKernelOptions::no_truncation()).unwrap();
+    assert_eq!(out.pivot_errors.len(), out.rank + 1);
+    assert!((out.pivot_errors[0] - 1.0).abs() < 1e-14);
+    assert!((out.pivot_errors[1] - 1.0).abs() < 1e-14);
+    assert!(out.pivot_errors[2].abs() < 1e-14);
 }
 ```
 
@@ -252,22 +303,18 @@ Expected: FAIL because truncation / pivot-error semantics are incomplete
 **Step 3: Write minimal implementation**
 
 ```rust
-impl PivotKernelOptions {
-    pub fn no_truncation() -> Self {
-        Self {
-            rel_tol: 0.0,
-            abs_tol: 0.0,
-            max_rank: usize::MAX,
-            left_orthogonal: true,
-        }
-    }
-}
+// Keep `no_truncation()` canonical:
+// rel_tol = 0.0, abs_tol = 0.0, max_rank = usize::MAX, left_orthogonal = true
 ```
 
 Implement:
 - rank stopping via `max_rank`
 - tolerance stopping via `rel_tol` / `abs_tol`
-- pivot error accumulation compatible with current TCI callers
+- explicit zero-matrix handling so the first near-zero pivot returns rank 0
+- exact parity with current `matrixci::RrLU::{pivot_errors,last_pivot_error}` behavior,
+  including the current full-rank reset to zero and the current truncated-case semantics
+- port the current regression intent from `crates/matrixci/src/matrixlu/tests/mod.rs`
+  before removing legacy LUCI code
 
 **Step 4: Run tests to verify they pass**
 
@@ -313,11 +360,18 @@ fn lazy_source_get_block_batches_requests() {
 }
 
 #[test]
-fn block_rook_kernel_returns_nonempty_pivots_for_identity() {
-    let src = identity_lazy_source(8);
-    let kernel = LazyBlockRookKernel::default();
-    let out = kernel.factorize(&src, &PivotKernelOptions::no_truncation()).unwrap();
-    assert!(out.rank > 0);
+fn block_rook_kernel_matches_dense_kernel_on_unique_pivot_matrix() {
+    let dense = DenseMatrixSource::from_column_major(unique_pivot_test_matrix(), 4, 4);
+    let lazy = lazy_from_dense(unique_pivot_test_matrix(), 4, 4);
+    let dense_out = DenseFaerLuKernel::default()
+        .factorize(&dense, &PivotKernelOptions::no_truncation())
+        .unwrap();
+    let lazy_out = LazyBlockRookKernel::default()
+        .factorize(&lazy, &PivotKernelOptions::no_truncation())
+        .unwrap();
+    assert_eq!(lazy_out.row_indices, dense_out.row_indices);
+    assert_eq!(lazy_out.col_indices, dense_out.col_indices);
+    assert_eq!(lazy_out.rank, dense_out.rank);
 }
 ```
 
@@ -342,6 +396,7 @@ pub struct LazyBlockRookKernel;
 Implement:
 - lazy block fill callback
 - block-rook search loop over requested row/col subsets
+- correctness test against dense kernel on a deterministic unique-pivot matrix
 - pivot-only output
 
 **Step 4: Run tests to verify they pass**
@@ -373,9 +428,18 @@ fn reconstruct_cross_factors_matches_selected_submatrices() {
         .factorize(&src, &PivotKernelOptions::default())
         .unwrap();
     let factors = CrossFactors::from_source(&src, &selection).unwrap();
-    assert_eq!(factors.pivot.nrows(), selection.rank);
-    assert_eq!(factors.pivot_cols.ncols(), selection.rank);
-    assert_eq!(factors.pivot_rows.nrows(), selection.rank);
+    assert!(approx_eq_dense(
+        &factors.pivot,
+        &dense_gather(&src, &selection.row_indices, &selection.col_indices),
+    ));
+    assert!(approx_eq_dense(
+        &factors.pivot_cols,
+        &dense_gather(&src, &(0..src.nrows()).collect::<Vec<_>>(), &selection.col_indices),
+    ));
+    assert!(approx_eq_dense(
+        &factors.pivot_rows,
+        &dense_gather(&src, &selection.row_indices, &(0..src.ncols()).collect::<Vec<_>>()),
+    ));
 }
 ```
 
@@ -411,10 +475,12 @@ git commit -m "feat: add optional matrixluci factor reconstruction"
 **Files:**
 - Modify: `crates/matrixci/Cargo.toml`
 - Modify: `crates/matrixci/src/lib.rs`
+- Modify or delete: `crates/matrixci/src/matrixaca.rs`
 - Modify: `crates/matrixci/src/matrixci.rs`
 - Modify: `crates/matrixci/src/matrixluci.rs`
 - Modify: `crates/matrixci/src/matrixlu.rs`
 - Modify or delete: `crates/matrixci/src/util.rs`
+- Modify or delete: `crates/matrixci/src/matrixaca/tests/mod.rs`
 - Test: `crates/matrixci/src/matrixci/tests/mod.rs`
 - Test: `crates/matrixci/src/matrixluci/tests/mod.rs`
 - Test: `crates/matrixci/src/matrixlu/tests/mod.rs`
@@ -441,7 +507,7 @@ Expected: FAIL once `matrixci` is switched to the new dependency but not yet ada
 Implement:
 - `matrixci` dependency on `matrixluci`
 - `MatrixCI` as a higher-level result layer around pivot-only substrate output
-- preserve ACA independently where possible
+- dropping `MatrixACA` is acceptable in this breaking refactor
 - remove old row-major assumptions from public LUCI path
 
 **Step 4: Run tests to verify they pass**
@@ -530,6 +596,10 @@ Dense benchmark must compare:
 - direct `faer` full-pivoting LU
 - `matrixluci` dense no-truncation kernel
 
+Also add:
+- lazy/block-rook benchmark cases with cheap and expensive callbacks
+- end-to-end chain TCI regression benchmark
+
 **Step 2: Run benchmarks and capture the baseline**
 
 Run: `cargo bench -p matrixluci --bench dense_vs_faer`
@@ -544,6 +614,9 @@ median(matrixluci_dense_no_truncation) <= 1.05 * median(faer_direct_full_piv_lu)
 ```
 
 for the benchmark sizes above.
+
+Record the observed medians in the design doc or issue comment as the manual acceptance gate for this task.
+CI performance gating is explicitly out of scope for this refactor.
 
 **Step 4: Run verification suite**
 
@@ -561,4 +634,3 @@ Expected: all pass, benchmarks recorded, formatting clean
 git add crates/matrixluci docs/plans/2026-03-26-matrixluci-design.md
 git commit -m "bench: validate matrixluci against faer baseline"
 ```
-

@@ -144,6 +144,12 @@ Design choice:
 
 - The primary kernel output is pivot-only.
 - This avoids forcing factor reconstruction on lazy callers that only need pivot sets.
+- `pivot_errors` and `last_pivot_error` are compatibility-sensitive outputs.
+- Their semantics must match the current `matrixci::RrLU` behavior exactly, even where that behavior is slightly awkward.
+- In particular, preserve the current distinctions between:
+  - full-rank completion, where `last_pivot_error == 0`
+  - tolerance-based stopping
+  - `max_rank` stopping
 
 ### 5.3 Optional factor reconstruction
 
@@ -243,7 +249,7 @@ Recommended changes:
 - treat pivot sets as the primary result
 - make factor/materialization helpers secondary
 
-`MatrixACA` may remain in `matrixci` if it stays independent of the LUCI substrate.
+`MatrixACA` is not a preservation target for this refactor. Since this work is explicitly breaking, removing ACA from `matrixci` is acceptable if keeping it would slow or complicate the LUCI substrate migration.
 
 ## 9. Migration Plan
 
@@ -295,4 +301,3 @@ This design is complete when the repository has:
 - direct consumers in `matrixci` and `tensor4all-tensorci`
 - lazy + block-rook support
 - benchmark evidence that dense no-truncation performance is not meaningfully worse than direct `faer`
-
