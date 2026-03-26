@@ -1,0 +1,417 @@
+//! Utility functions for matrix cross interpolation
+
+use crate::scalar::Scalar;
+use num_traits::{One, Zero};
+use rand::seq::SliceRandom;
+use rand::Rng;
+use std::collections::HashSet;
+use std::ops::{Index, IndexMut};
+
+/// Simple 2D matrix backed by Vec
+#[derive(Debug, Clone)]
+pub struct Matrix<T> {
+    data: Vec<T>,
+    nrows: usize,
+    ncols: usize,
+}
+
+impl<T> Matrix<T> {
+    /// Create a matrix from raw row-major data
+    pub fn from_raw_vec(nrows: usize, ncols: usize, data: Vec<T>) -> Self {
+        assert_eq!(data.len(), nrows * ncols);
+        Self { data, nrows, ncols }
+    }
+
+    /// View the underlying row-major data as a slice
+    pub fn as_slice(&self) -> &[T] {
+        &self.data
+    }
+
+    /// Number of rows
+    pub fn nrows(&self) -> usize {
+        self.nrows
+    }
+
+    /// Number of columns
+    pub fn ncols(&self) -> usize {
+        self.ncols
+    }
+}
+
+impl<T: Clone> Matrix<T> {
+    /// Create a new matrix from dimensions and initial value
+    pub fn from_elem(nrows: usize, ncols: usize, elem: T) -> Self {
+        Self {
+            data: vec![elem; nrows * ncols],
+            nrows,
+            ncols,
+        }
+    }
+}
+
+impl<T: Clone + Zero> Matrix<T> {
+    /// Create a zeros matrix
+    pub fn zeros(nrows: usize, ncols: usize) -> Self {
+        Self {
+            data: vec![T::zero(); nrows * ncols],
+            nrows,
+            ncols,
+        }
+    }
+}
+
+impl<T> Index<[usize; 2]> for Matrix<T> {
+    type Output = T;
+
+    fn index(&self, idx: [usize; 2]) -> &Self::Output {
+        &self.data[idx[0] * self.ncols + idx[1]]
+    }
+}
+
+impl<T> IndexMut<[usize; 2]> for Matrix<T> {
+    fn index_mut(&mut self, idx: [usize; 2]) -> &mut Self::Output {
+        &mut self.data[idx[0] * self.ncols + idx[1]]
+    }
+}
+
+/// Create a zeros matrix with given dimensions
+pub fn zeros<T: Clone + Zero>(nrows: usize, ncols: usize) -> Matrix<T> {
+    Matrix::zeros(nrows, ncols)
+}
+
+/// Create an identity matrix
+pub fn eye<T: Clone + Zero + One>(n: usize) -> Matrix<T> {
+    let mut m = zeros(n, n);
+    for i in 0..n {
+        m[[i, i]] = T::one();
+    }
+    m
+}
+
+/// Create a matrix from a 2D vector (row-major)
+pub fn from_vec2d<T: Clone + Zero>(data: Vec<Vec<T>>) -> Matrix<T> {
+    let nrows = data.len();
+    let ncols = if nrows > 0 { data[0].len() } else { 0 };
+    let mut m = zeros(nrows, ncols);
+    for i in 0..nrows {
+        for j in 0..ncols {
+            m[[i, j]] = data[i][j].clone();
+        }
+    }
+    m
+}
+
+/// Get number of rows
+pub fn nrows<T>(m: &Matrix<T>) -> usize {
+    m.nrows
+}
+
+/// Get number of columns
+pub fn ncols<T>(m: &Matrix<T>) -> usize {
+    m.ncols
+}
+
+/// Get a row as a vector
+pub fn get_row<T: Clone>(m: &Matrix<T>, i: usize) -> Vec<T> {
+    (0..m.ncols).map(|j| m[[i, j]].clone()).collect()
+}
+
+/// Get a column as a vector
+pub fn get_col<T: Clone>(m: &Matrix<T>, j: usize) -> Vec<T> {
+    (0..m.nrows).map(|i| m[[i, j]].clone()).collect()
+}
+
+/// Get a submatrix by selecting specific rows and columns
+pub fn submatrix<T: Clone + Zero>(m: &Matrix<T>, rows: &[usize], cols: &[usize]) -> Matrix<T> {
+    let mut result = zeros(rows.len(), cols.len());
+    for (ri, &r) in rows.iter().enumerate() {
+        for (ci, &c) in cols.iter().enumerate() {
+            result[[ri, ci]] = m[[r, c]].clone();
+        }
+    }
+    result
+}
+
+/// Append a column to the right of a matrix
+pub fn append_col<T: Clone + Zero>(m: &Matrix<T>, col: &[T]) -> Matrix<T> {
+    let nr = m.nrows;
+    let nc = m.ncols;
+    assert_eq!(col.len(), nr);
+
+    let mut result = zeros(nr, nc + 1);
+    for i in 0..nr {
+        for j in 0..nc {
+            result[[i, j]] = m[[i, j]].clone();
+        }
+        result[[i, nc]] = col[i].clone();
+    }
+    result
+}
+
+/// Append a row to the bottom of a matrix
+pub fn append_row<T: Clone + Zero>(m: &Matrix<T>, row: &[T]) -> Matrix<T> {
+    let nr = m.nrows;
+    let nc = m.ncols;
+    assert_eq!(row.len(), nc);
+
+    let mut result = zeros(nr + 1, nc);
+    for i in 0..nr {
+        for j in 0..nc {
+            result[[i, j]] = m[[i, j]].clone();
+        }
+    }
+    for j in 0..nc {
+        result[[nr, j]] = row[j].clone();
+    }
+    result
+}
+
+/// Swap two rows in a matrix in-place
+pub fn swap_rows<T>(m: &mut Matrix<T>, a: usize, b: usize) {
+    if a == b {
+        return;
+    }
+    for j in 0..m.ncols {
+        let idx_a = a * m.ncols + j;
+        let idx_b = b * m.ncols + j;
+        m.data.swap(idx_a, idx_b);
+    }
+}
+
+/// Swap two columns in a matrix in-place
+pub fn swap_cols<T>(m: &mut Matrix<T>, a: usize, b: usize) {
+    if a == b {
+        return;
+    }
+    for i in 0..m.nrows {
+        let idx_a = i * m.ncols + a;
+        let idx_b = i * m.ncols + b;
+        m.data.swap(idx_a, idx_b);
+    }
+}
+
+/// Transpose the matrix
+pub fn transpose<T: Clone + Zero>(m: &Matrix<T>) -> Matrix<T> {
+    let mut result = zeros(m.ncols, m.nrows);
+    for i in 0..m.nrows {
+        for j in 0..m.ncols {
+            result[[j, i]] = m[[i, j]].clone();
+        }
+    }
+    result
+}
+
+// Scalar trait is now defined in crate::scalar module
+
+/// Calculates A * B^{-1} using Gaussian elimination for numerical stability.
+pub fn a_times_b_inv<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
+    let n = ncols(a);
+    assert_eq!(nrows(b), n);
+    assert_eq!(ncols(b), n);
+
+    // Solve XB = A by solving B'X' = A'
+    let bt = transpose(b);
+    let at = transpose(a);
+    let xt = solve_linear_system(&bt, &at);
+    transpose(&xt)
+}
+
+/// Calculates A^{-1} * B using Gaussian elimination for numerical stability.
+pub fn a_inv_times_b<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
+    let bt = transpose(b);
+    let at = transpose(a);
+    let result = a_times_b_inv(&bt, &at);
+    transpose(&result)
+}
+
+/// Solve linear system AX = B using Gaussian elimination with partial pivoting
+#[allow(clippy::needless_range_loop)]
+fn solve_linear_system<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
+    let n = nrows(a);
+    assert_eq!(ncols(a), n);
+    assert_eq!(nrows(b), n);
+    let m = ncols(b);
+
+    // Create augmented matrix [A | B]
+    let mut aug: Vec<Vec<T>> = (0..n)
+        .map(|i| {
+            let mut row = Vec::with_capacity(n + m);
+            for j in 0..n {
+                row.push(a[[i, j]]);
+            }
+            for j in 0..m {
+                row.push(b[[i, j]]);
+            }
+            row
+        })
+        .collect();
+
+    // Forward elimination with partial pivoting
+    for k in 0..n {
+        // Find pivot
+        let mut max_idx = k;
+        let mut max_val: f64 = aug[k][k].abs_sq();
+        for i in (k + 1)..n {
+            let val: f64 = aug[i][k].abs_sq();
+            if val > max_val {
+                max_val = val;
+                max_idx = i;
+            }
+        }
+
+        // Swap rows
+        if max_idx != k {
+            aug.swap(k, max_idx);
+        }
+
+        let pivot = aug[k][k];
+        if pivot.abs_sq() < T::epsilon() {
+            continue;
+        }
+
+        // Eliminate below
+        for i in (k + 1)..n {
+            let factor = aug[i][k] / pivot;
+            for j in k..(n + m) {
+                aug[i][j] = aug[i][j] - factor * aug[k][j];
+            }
+        }
+    }
+
+    // Back substitution
+    let mut x: Vec<Vec<T>> = vec![vec![T::zero(); m]; n];
+    for i in (0..n).rev() {
+        for j in 0..m {
+            let mut sum = aug[i][n + j];
+            for k in (i + 1)..n {
+                sum = sum - aug[i][k] * x[k][j];
+            }
+            let diag = aug[i][i];
+            if diag.abs_sq() > T::epsilon() {
+                x[i][j] = sum / diag;
+            }
+        }
+    }
+
+    from_vec2d(x)
+}
+
+/// Find the position of maximum absolute value in a submatrix defined by row/column ranges
+pub fn submatrix_argmax<T: Scalar>(
+    a: &Matrix<T>,
+    rows: std::ops::Range<usize>,
+    cols: std::ops::Range<usize>,
+) -> (usize, usize, T) {
+    assert!(!rows.is_empty(), "rows must not be empty");
+    assert!(!cols.is_empty(), "cols must not be empty");
+
+    let mut max_val: f64 = a[[rows.start, cols.start]].abs_sq();
+    let mut max_row = rows.start;
+    let mut max_col = cols.start;
+
+    for r in rows {
+        for c in cols.clone() {
+            let val: f64 = a[[r, c]].abs_sq();
+            if val > max_val {
+                max_val = val;
+                max_row = r;
+                max_col = c;
+            }
+        }
+    }
+
+    (max_row, max_col, a[[max_row, max_col]])
+}
+
+/// Select a random subset of elements from a set
+pub fn random_subset<T: Clone, R: Rng>(set: &[T], n: usize, rng: &mut R) -> Vec<T> {
+    let n = n.min(set.len());
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let mut indices: Vec<usize> = (0..set.len()).collect();
+    indices.shuffle(rng);
+    indices.truncate(n);
+    indices.into_iter().map(|i| set[i].clone()).collect()
+}
+
+/// Set difference: elements in `set` that are not in `exclude`
+pub fn set_diff(set: &[usize], exclude: &[usize]) -> Vec<usize> {
+    let exclude_set: HashSet<usize> = exclude.iter().copied().collect();
+    set.iter()
+        .copied()
+        .filter(|x| !exclude_set.contains(x))
+        .collect()
+}
+
+/// Dot product of two vectors
+pub fn dot<T: Scalar>(a: &[T], b: &[T]) -> T {
+    assert_eq!(a.len(), b.len());
+    a.iter()
+        .zip(b.iter())
+        .fold(T::zero(), |acc, (&x, &y)| acc + x * y)
+}
+
+/// BLAS-backed matrix multiplication dispatch.
+///
+/// Implemented for all scalar types supported by tenferro einsum
+/// (f64, f32, Complex64, Complex32). This trait is sealed — external
+/// types cannot implement it.
+pub trait BlasMul: Sized {
+    #[doc(hidden)]
+    fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Matrix<Self>;
+}
+
+macro_rules! impl_blas_mul {
+    ($($t:ty),*) => {
+        $(
+        impl BlasMul for $t {
+            fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Matrix<Self> {
+                use tenferro_tensor_compute::{
+                    einsum, CpuBackend, CpuContext, MemoryOrder, Standard, Tensor,
+                };
+
+                let m = a.nrows();
+                let k = a.ncols();
+                let n = b.ncols();
+                assert_eq!(b.nrows(), k);
+
+                let mut ctx = CpuContext::new(1);
+                let a_tensor =
+                    Tensor::<$t>::from_slice(a.as_slice(), &[m, k], MemoryOrder::RowMajor)
+                        .expect("invalid matrix dimensions");
+                let b_tensor =
+                    Tensor::<$t>::from_slice(b.as_slice(), &[k, n], MemoryOrder::RowMajor)
+                        .expect("invalid matrix dimensions");
+                let c = einsum::<Standard<$t>, CpuBackend>(
+                    &mut ctx,
+                    "ij,jk->ik",
+                    &[&a_tensor, &b_tensor],
+                    None,
+                )
+                .expect("einsum failed");
+                let c_rm = c.contiguous(MemoryOrder::RowMajor);
+                let c_data = c_rm
+                    .buffer()
+                    .as_slice()
+                    .expect("CPU-only operation")
+                    .to_vec();
+                Matrix::from_raw_vec(m, n, c_data)
+            }
+        }
+        )*
+    };
+}
+
+impl_blas_mul!(f64, f32, num_complex::Complex64, num_complex::Complex32);
+
+/// Matrix multiplication: A * B
+///
+/// Uses BLAS-backed einsum via tenferro.
+pub fn mat_mul<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
+    T::blas_mat_mul(a, b)
+}
+
+#[cfg(test)]
+mod tests;

@@ -15,6 +15,7 @@ thiserror.workspace = true
 rand.workspace = true
 paste.workspace = true
 bnum.workspace = true
+matrixluci = { path = "../matrixluci" }
 tenferro-tensor-compute.workspace = true
 
 [dev-dependencies]
