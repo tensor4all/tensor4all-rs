@@ -80,7 +80,7 @@ pub struct TensorCI2<T: Scalar + TTScalar> {
     pivot_errors: Vec<f64>,
     /// Bond errors from 2-site sweep
     bond_errors: Vec<f64>,
-    /// Maximum sample value found
+    /// Maximum observed sample value found during function evaluation
     max_sample_value: f64,
 }
 
@@ -148,7 +148,7 @@ where
         self.i_set.iter().skip(1).map(|s| s.len()).collect()
     }
 
-    /// Get maximum sample value
+    /// Get the maximum observed sample value seen so far
     pub fn max_sample_value(&self) -> f64 {
         self.max_sample_value
     }
@@ -411,6 +411,9 @@ where
             }
 
             let values = batch_fn(&all_indices);
+            if values.len() != all_indices.len() {
+                return Err(callback_length_mismatch(values.len(), all_indices.len()));
+            }
             let mut idx = 0;
             for i in 0..i_combined.len() {
                 for j in 0..j_combined.len() {
@@ -450,8 +453,17 @@ where
                 evaluator.fill_block(rows, cols, out);
             },
         );
-        selection = LazyBlockRookKernel.factorize(&source, &lu_options)?;
-        factors = CrossFactors::from_source(&source, &selection)?;
+        let selection_result = LazyBlockRookKernel.factorize(&source, &lu_options);
+        if let Some(err) = evaluator.take_error() {
+            return Err(err);
+        }
+        selection = selection_result?;
+
+        let factors_result = CrossFactors::from_source(&source, &selection);
+        if let Some(err) = evaluator.take_error() {
+            return Err(err);
+        }
+        factors = factors_result?;
         tci.max_sample_value = evaluator.sampled_max();
     }
 
@@ -539,6 +551,14 @@ fn build_full_index(
     full_idx
 }
 
+fn callback_length_mismatch(actual: usize, expected: usize) -> TCIError {
+    TCIError::InvalidOperation {
+        message: format!(
+            "batch callback returned {actual} values for {expected} requested entries"
+        ),
+    }
+}
+
 struct LazyPiEvaluator<'a, T, F, B>
 where
     T: Scalar + TTScalar + Default + matrixluci::Scalar,
@@ -550,6 +570,7 @@ where
     f: &'a F,
     batched_f: &'a Option<B>,
     cache: RefCell<HashMap<(usize, usize), T>>,
+    pending_error: RefCell<Option<TCIError>>,
     sampled_max: Cell<f64>,
 }
 
@@ -572,11 +593,17 @@ where
             f,
             batched_f,
             cache: RefCell::new(HashMap::new()),
+            pending_error: RefCell::new(None),
             sampled_max: Cell::new(initial_max),
         }
     }
 
     fn fill_block(&self, rows: &[usize], cols: &[usize], out: &mut [T]) {
+        if self.pending_error.borrow().is_some() {
+            out.fill(T::zero());
+            return;
+        }
+
         let mut missing_entries = Vec::new();
         let mut missing_indices = Vec::new();
 
@@ -609,13 +636,16 @@ where
         } else {
             missing_indices.iter().map(self.f).collect()
         };
-        assert_eq!(
-            values.len(),
-            missing_entries.len(),
-            "batch callback returned {} values for {} requested entries",
-            values.len(),
-            missing_entries.len()
-        );
+        if values.len() != missing_entries.len() {
+            *self.pending_error.borrow_mut() = Some(callback_length_mismatch(
+                values.len(),
+                missing_entries.len(),
+            ));
+            for (out_idx, _, _) in missing_entries {
+                out[out_idx] = T::zero();
+            }
+            return;
+        }
 
         let mut cache_ref = self.cache.borrow_mut();
         for ((out_idx, row, col), value) in missing_entries.into_iter().zip(values.into_iter()) {
@@ -631,6 +661,10 @@ where
 
     fn sampled_max(&self) -> f64 {
         self.sampled_max.get()
+    }
+
+    fn take_error(&self) -> Option<TCIError> {
+        self.pending_error.borrow_mut().take()
     }
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::error::TCIError;
 use std::cell::Cell;
 use std::rc::Rc;
 use tensor4all_simplett::AbstractTensorTrain;
@@ -160,6 +161,40 @@ fn test_crossinterpolate2_rook_search_uses_partial_batch_requests() {
         "rook search should avoid evaluating the full Pi matrix, requested {} entries",
         total_requested.get()
     );
+}
+
+#[test]
+fn test_crossinterpolate2_rook_search_rejects_bad_batch_length() {
+    let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
+    let bad_batched_f = |_indices: &[MultiIndex]| -> Vec<f64> { vec![1.0] };
+    let local_dims = vec![4, 4];
+    let first_pivot = vec![vec![0, 0]];
+    let options = TCI2Options {
+        max_iter: 1,
+        max_bond_dim: 2,
+        pivot_search: PivotSearchStrategy::Rook,
+        ..Default::default()
+    };
+
+    let result = crossinterpolate2(f, Some(bad_batched_f), local_dims, first_pivot, options);
+    assert!(matches!(result, Err(TCIError::InvalidOperation { .. })));
+}
+
+#[test]
+fn test_crossinterpolate2_full_search_rejects_bad_batch_length() {
+    let f = |idx: &MultiIndex| ((idx[0] + 1) * (idx[1] + 1)) as f64;
+    let bad_batched_f = |_indices: &[MultiIndex]| -> Vec<f64> { vec![1.0] };
+    let local_dims = vec![4, 4];
+    let first_pivot = vec![vec![0, 0]];
+    let options = TCI2Options {
+        max_iter: 1,
+        max_bond_dim: 2,
+        pivot_search: PivotSearchStrategy::Full,
+        ..Default::default()
+    };
+
+    let result = crossinterpolate2(f, Some(bad_batched_f), local_dims, first_pivot, options);
+    assert!(matches!(result, Err(TCIError::InvalidOperation { .. })));
 }
 
 #[test]
