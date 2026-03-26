@@ -3,9 +3,57 @@
 //! Automatically selects the optimal internal key type based on the index space size.
 
 pub mod cache_key;
+pub mod error;
 pub mod index_int;
 
 use std::collections::HashMap;
+
+use cache_key::CacheKey;
+
+/// Compute total bits needed to represent the index space.
+pub(crate) fn total_bits(local_dims: &[usize]) -> u32 {
+    local_dims
+        .iter()
+        .map(|&d| {
+            if d <= 1 {
+                0
+            } else {
+                ((d - 1) as u64).ilog2() + 1
+            }
+        })
+        .sum()
+}
+
+/// Compute mixed-radix coefficients for flat index computation.
+///
+/// Returns `Err(CacheKeyError::Overflow)` if the index space overflows key type `K`.
+pub(crate) fn compute_coeffs<K: CacheKey>(
+    local_dims: &[usize],
+) -> Result<Vec<K>, error::CacheKeyError> {
+    let bits = total_bits(local_dims);
+    if bits > K::BITS_COUNT {
+        return Err(error::CacheKeyError::Overflow {
+            total_bits: bits,
+            max_bits: K::BITS_COUNT,
+            key_type: std::any::type_name::<K>(),
+        });
+    }
+
+    let mut coeffs = Vec::with_capacity(local_dims.len());
+    let mut prod = K::ONE;
+    for &d in local_dims {
+        coeffs.push(prod.clone());
+        let dim = K::from_usize(d);
+        prod = prod
+            .checked_mul(dim)
+            .ok_or_else(|| error::CacheKeyError::Overflow {
+                total_bits: bits,
+                max_bits: K::BITS_COUNT,
+                key_type: std::any::type_name::<K>(),
+            })?;
+    }
+    Ok(coeffs)
+}
 
 /// Internal cache with automatically selected key type
 enum InnerCache<V> {

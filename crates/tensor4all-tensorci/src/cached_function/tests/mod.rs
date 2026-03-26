@@ -1,3 +1,4 @@
+use super::error::CacheKeyError;
 use super::*;
 use bnum::types::U256;
 
@@ -40,6 +41,30 @@ fn test_index_int_u8() {
     let val: u8 = 42;
     let as_usize = val.to_usize();
     assert_eq!(as_usize, 42);
+}
+
+#[test]
+fn test_compute_coeffs_u64() {
+    let coeffs = super::compute_coeffs::<u64>(&[2, 3, 4]).unwrap();
+    assert_eq!(coeffs, vec![1u64, 2, 6]);
+}
+
+#[test]
+fn test_compute_coeffs_overflow() {
+    let result = super::compute_coeffs::<u64>(&[2; 100]);
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        CacheKeyError::Overflow { .. } => {}
+        other => panic!("expected overflow error, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_total_bits_calculation() {
+    assert_eq!(super::total_bits(&[2, 2, 2]), 3);
+    assert_eq!(super::total_bits(&[4, 4]), 4);
+    assert_eq!(super::total_bits(&[1, 2, 1]), 1);
+    assert_eq!(super::total_bits(&[256]), 8);
 }
 
 #[test]
