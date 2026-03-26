@@ -1,4 +1,4 @@
-use super::{DefaultProposer, PivotCandidateProposer, SimpleProposer};
+use super::{DefaultProposer, PivotCandidateProposer, SimpleProposer, TruncatedDefaultProposer};
 use crate::{AllEdges, EdgeVisitor, SimpleTreeTci, SubtreeKey, TreeTciEdge, TreeTciGraph};
 use std::collections::HashMap;
 
@@ -99,4 +99,42 @@ fn simple_proposer_is_deterministic_for_a_fixed_seed() {
     assert!(!first.1.is_empty());
     assert!(first.0.iter().all(|candidate| candidate.len() == 3));
     assert!(first.1.iter().all(|candidate| candidate.len() == 4));
+}
+
+#[test]
+fn truncated_default_proposer_truncates_default_candidates_in_order() {
+    let mut tci = SimpleTreeTci::<f64>::new(vec![2; 7], sample_graph()).unwrap();
+    tci.add_global_pivots(&[vec![0, 0, 0, 0, 0, 0, 0], vec![1, 0, 1, 0, 1, 0, 1]])
+        .unwrap();
+
+    let default_candidates = DefaultProposer
+        .candidates(&tci, TreeTciEdge::new(1, 3))
+        .unwrap();
+    let proposer = TruncatedDefaultProposer::seeded(7);
+    let first = proposer.candidates(&tci, TreeTciEdge::new(1, 3)).unwrap();
+    let second = proposer.candidates(&tci, TreeTciEdge::new(1, 3)).unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(first.0.len(), 4);
+    assert_eq!(first.1.len(), 4);
+    assert_eq!(first.1, default_candidates.1);
+    assert!(first
+        .0
+        .iter()
+        .all(|candidate| default_candidates.0.contains(candidate)));
+
+    let default_positions = first
+        .0
+        .iter()
+        .map(|candidate| {
+            default_candidates
+                .0
+                .iter()
+                .position(|value| value == candidate)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert!(default_positions
+        .windows(2)
+        .all(|window| window[0] < window[1]));
 }

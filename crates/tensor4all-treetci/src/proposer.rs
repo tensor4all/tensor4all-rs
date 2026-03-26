@@ -1,6 +1,7 @@
 use crate::{assemble::MultiIndex, SimpleTreeTci, SubtreeKey, TreeTciEdge};
 use anyhow::{ensure, Result};
 use rand::rngs::SmallRng;
+use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -60,28 +61,6 @@ impl SimpleProposer {
     pub const fn seeded(seed: u64) -> Self {
         Self { seed }
     }
-
-    fn rng_for_edge<T>(&self, state: &SimpleTreeTci<T>, edge: TreeTciEdge) -> SmallRng {
-        let (ikey, jkey) = state
-            .graph
-            .subregion_vertices(edge)
-            .expect("edge must belong to the tree graph");
-        let mut hasher = DefaultHasher::new();
-        self.seed.hash(&mut hasher);
-        edge.hash(&mut hasher);
-        state.ijset_history.len().hash(&mut hasher);
-        state
-            .ijset
-            .get(&ikey)
-            .map_or(0usize, Vec::len)
-            .hash(&mut hasher);
-        state
-            .ijset
-            .get(&jkey)
-            .map_or(0usize, Vec::len)
-            .hash(&mut hasher);
-        SmallRng::seed_from_u64(hasher.finish())
-    }
 }
 
 impl Default for SimpleProposer {
@@ -98,7 +77,7 @@ impl PivotCandidateProposer for SimpleProposer {
     ) -> Result<(Vec<MultiIndex>, Vec<MultiIndex>)> {
         let (vp, vq) = state.graph.separate_vertices(edge)?;
         let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
-        let mut rng = self.rng_for_edge(state, edge);
+        let mut rng = rng_for_edge(state, edge, self.seed, "simple");
 
         let ichi = state.local_dims[vp]
             * state
@@ -120,6 +99,58 @@ impl PivotCandidateProposer for SimpleProposer {
         let icombined = union_with_history(iset, history, &ikey);
         let jcombined = union_with_history(jset, history, &jkey);
         Ok((icombined, jcombined))
+    }
+}
+
+/// Truncated default proposer that samples an ordered subset from the default
+/// candidate set, mirroring `TreeTCI.jl`'s
+/// `TruncatedDefaultPivotCandidateProposer`.
+#[derive(Clone, Copy, Debug)]
+pub struct TruncatedDefaultProposer {
+    seed: u64,
+}
+
+impl TruncatedDefaultProposer {
+    /// Construct a proposer with a deterministic base seed.
+    pub const fn seeded(seed: u64) -> Self {
+        Self { seed }
+    }
+}
+
+impl Default for TruncatedDefaultProposer {
+    fn default() -> Self {
+        Self::seeded(0)
+    }
+}
+
+impl PivotCandidateProposer for TruncatedDefaultProposer {
+    fn candidates<T>(
+        &self,
+        state: &SimpleTreeTci<T>,
+        edge: TreeTciEdge,
+    ) -> Result<(Vec<MultiIndex>, Vec<MultiIndex>)> {
+        let (vp, vq) = state.graph.separate_vertices(edge)?;
+        let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
+        let (default_i, default_j) = DefaultProposer.candidates(state, edge)?;
+        let mut rng = rng_for_edge(state, edge, self.seed, "truncated_default");
+
+        let ichi = state.local_dims[vp]
+            * state
+                .ijset
+                .get(&ikey)
+                .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", ikey))?
+                .len();
+        let jchi = state.local_dims[vq]
+            * state
+                .ijset
+                .get(&jkey)
+                .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", jkey))?
+                .len();
+
+        Ok((
+            sample_ordered_candidates(&default_i, ichi, &mut rng),
+            sample_ordered_candidates(&default_j, jchi, &mut rng),
+        ))
     }
 }
 
@@ -211,6 +242,48 @@ fn random_candidates(
                 .map(|&site| rng.random_range(0..local_dims[site]))
                 .collect()
         })
+        .collect()
+}
+
+fn rng_for_edge<T>(state: &SimpleTreeTci<T>, edge: TreeTciEdge, seed: u64, tag: &str) -> SmallRng {
+    let (ikey, jkey) = state
+        .graph
+        .subregion_vertices(edge)
+        .expect("edge must belong to the tree graph");
+    let mut hasher = DefaultHasher::new();
+    seed.hash(&mut hasher);
+    tag.hash(&mut hasher);
+    edge.hash(&mut hasher);
+    state.ijset_history.len().hash(&mut hasher);
+    state
+        .ijset
+        .get(&ikey)
+        .map_or(0usize, Vec::len)
+        .hash(&mut hasher);
+    state
+        .ijset
+        .get(&jkey)
+        .map_or(0usize, Vec::len)
+        .hash(&mut hasher);
+    SmallRng::seed_from_u64(hasher.finish())
+}
+
+fn sample_ordered_candidates(
+    candidates: &[MultiIndex],
+    max_size: usize,
+    rng: &mut SmallRng,
+) -> Vec<MultiIndex> {
+    if candidates.len() <= max_size {
+        return candidates.to_vec();
+    }
+
+    let mut selected_indices = (0..candidates.len()).collect::<Vec<_>>();
+    selected_indices.shuffle(rng);
+    selected_indices.truncate(max_size);
+    selected_indices.sort_unstable();
+    selected_indices
+        .into_iter()
+        .map(|index| candidates[index].clone())
         .collect()
 }
 
