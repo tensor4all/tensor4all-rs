@@ -361,9 +361,13 @@ fn test_fit_more_sweeps_stable() {
         "More sweeps should not shrink bonds: 1sw bd={bd_1sw}, 4sw bd={bd_4sw}"
     );
 
-    // Accuracy should not degrade significantly with more sweeps
+    // Accuracy should not degrade significantly with more sweeps.
+    // Note: relative_error uses (result - exact).norm() via sequential contraction,
+    // which loses precision when result ≈ exact (massive cancellation). When err_1sw
+    // is near zero, err_4sw may be dominated by this floating-point noise rather than
+    // actual approximation error. We use an absolute floor of 1e-6 to account for this.
     assert!(
-        err_4sw < err_1sw * 10.0,
+        err_4sw < err_1sw.max(1e-6) * 10.0,
         "More sweeps should not degrade accuracy significantly: \
          1sw err={err_1sw:.6e}, 4sw err={err_4sw:.6e}"
     );
