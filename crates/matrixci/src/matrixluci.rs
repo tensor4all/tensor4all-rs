@@ -7,6 +7,7 @@ use crate::traits::AbstractMatrixCI;
 use crate::util::{submatrix, zeros, Matrix};
 use ::matrixluci::{
     CrossFactors, DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions,
+    PivotSelectionCore,
 };
 
 /// Matrix LU-based Cross Interpolation.
@@ -24,7 +25,7 @@ pub struct MatrixLUCI<T: Scalar + ::matrixluci::Scalar> {
     pivot_errors: Vec<f64>,
 }
 
-fn map_backend_error(err: ::matrixluci::MatrixLuciError) -> MatrixCIError {
+pub(crate) fn map_backend_error(err: ::matrixluci::MatrixLuciError) -> MatrixCIError {
     match err {
         ::matrixluci::MatrixLuciError::InvalidArgument { message } => {
             MatrixCIError::InvalidArgument { message }
@@ -33,7 +34,7 @@ fn map_backend_error(err: ::matrixluci::MatrixLuciError) -> MatrixCIError {
     }
 }
 
-fn to_column_major<T: Scalar>(matrix: &Matrix<T>) -> Vec<T> {
+pub(crate) fn to_column_major<T: Scalar>(matrix: &Matrix<T>) -> Vec<T> {
     let mut out = Vec::with_capacity(matrix.nrows() * matrix.ncols());
     for col in 0..matrix.ncols() {
         for row in 0..matrix.nrows() {
@@ -43,7 +44,7 @@ fn to_column_major<T: Scalar>(matrix: &Matrix<T>) -> Vec<T> {
     out
 }
 
-fn to_row_major<T: Scalar + ::matrixluci::Scalar>(
+pub(crate) fn to_row_major<T: Scalar + ::matrixluci::Scalar>(
     matrix: &::matrixluci::DenseOwnedMatrix<T>,
 ) -> Matrix<T> {
     let mut out = zeros(matrix.nrows(), matrix.ncols());
@@ -55,6 +56,30 @@ fn to_row_major<T: Scalar + ::matrixluci::Scalar>(
     out
 }
 
+pub(crate) fn dense_selection_from_matrix<T>(
+    a: &Matrix<T>,
+    options: RrLUOptions,
+) -> Result<(PivotSelectionCore, CrossFactors<T>)>
+where
+    T: Scalar + ::matrixluci::Scalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+{
+    let data = to_column_major(a);
+    let source = DenseMatrixSource::from_column_major(&data, a.nrows(), a.ncols());
+    let kernel_options = PivotKernelOptions {
+        max_rank: options.max_rank,
+        rel_tol: options.rel_tol,
+        abs_tol: options.abs_tol,
+        left_orthogonal: options.left_orthogonal,
+    };
+
+    let selection = DenseFaerLuKernel
+        .factorize(&source, &kernel_options)
+        .map_err(map_backend_error)?;
+    let factors = CrossFactors::from_source(&source, &selection).map_err(map_backend_error)?;
+    Ok((selection, factors))
+}
+
 impl<T> MatrixLUCI<T>
 where
     T: Scalar + ::matrixluci::Scalar,
@@ -63,26 +88,15 @@ where
     /// Create a MatrixLUCI from a dense row-major matrix.
     pub fn from_matrix(a: &Matrix<T>, options: Option<RrLUOptions>) -> Result<Self> {
         let options = options.unwrap_or_default();
-        let data = to_column_major(a);
-        let source = DenseMatrixSource::from_column_major(&data, a.nrows(), a.ncols());
-        let kernel_options = PivotKernelOptions {
-            max_rank: options.max_rank,
-            rel_tol: options.rel_tol,
-            abs_tol: options.abs_tol,
-            left_orthogonal: options.left_orthogonal,
-        };
+        let left_orthogonal = options.left_orthogonal;
+        let (selection, factors) = dense_selection_from_matrix(a, options)?;
 
-        let selection = DenseFaerLuKernel
-            .factorize(&source, &kernel_options)
-            .map_err(map_backend_error)?;
-        let factors = CrossFactors::from_source(&source, &selection).map_err(map_backend_error)?;
-
-        let left = if options.left_orthogonal {
+        let left = if left_orthogonal {
             to_row_major(&factors.cols_times_pivot_inv().map_err(map_backend_error)?)
         } else {
             to_row_major(&factors.pivot_cols)
         };
-        let right = if options.left_orthogonal {
+        let right = if left_orthogonal {
             to_row_major(&factors.pivot_rows)
         } else {
             to_row_major(&factors.pivot_inv_times_rows().map_err(map_backend_error)?)

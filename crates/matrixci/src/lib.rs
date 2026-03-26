@@ -42,7 +42,7 @@ pub mod util;
 // Re-export main types
 pub use error::{MatrixCIError, Result};
 pub use matrixaca::MatrixACA;
-pub use matrixci::{crossinterpolate, CrossInterpolateOptions, MatrixCI};
+pub use matrixci::{crossinterpolate, try_crossinterpolate, CrossInterpolateOptions, MatrixCI};
 pub use matrixlu::{rrlu, rrlu_inplace, RrLU, RrLUOptions};
 pub use matrixluci::MatrixLUCI;
 pub use scalar::Scalar;
