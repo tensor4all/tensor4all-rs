@@ -23,6 +23,7 @@
 
 pub mod cached_function;
 pub mod error;
+pub mod indexset;
 pub mod matrix;
 pub mod matrixaca;
 pub mod matrixlu;
@@ -30,11 +31,12 @@ pub mod matrixluci;
 pub mod scalar;
 pub mod traits;
 
-pub use cached_function::CachedFunction;
 pub use cached_function::cache_key::CacheKey;
 pub use cached_function::error::CacheKeyError;
 pub use cached_function::index_int::IndexInt;
+pub use cached_function::CachedFunction;
 pub use error::{MatrixCIError, Result};
+pub use indexset::{IndexSet, LocalIndex, MultiIndex};
 pub use matrix::{from_vec2d, Matrix};
 pub use matrixaca::MatrixACA;
 pub use matrixlu::{rrlu, rrlu_inplace, RrLU, RrLUOptions};
