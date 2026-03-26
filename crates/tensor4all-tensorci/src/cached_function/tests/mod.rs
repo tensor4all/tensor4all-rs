@@ -1,6 +1,8 @@
 use super::error::CacheKeyError;
 use super::*;
 use bnum::types::{U2048, U256};
+use std::sync::Arc;
+use std::thread;
 
 #[test]
 fn test_cache_key_u64_basics() {
@@ -206,6 +208,72 @@ fn test_eval_batch_empty() {
     let cf = CachedFunction::new(|idx: &[usize]| idx[0], &local_dims).unwrap();
     let results = cf.eval_batch(&[]);
     assert!(results.is_empty());
+}
+
+#[test]
+fn test_thread_safety() {
+    let local_dims = vec![10, 10];
+    let cf =
+        Arc::new(CachedFunction::new(|idx: &[usize]| idx[0] * 100 + idx[1], &local_dims).unwrap());
+
+    let handles: Vec<_> = (0..4)
+        .map(|t| {
+            let cf = Arc::clone(&cf);
+            thread::spawn(move || {
+                for i in 0..10 {
+                    let idx = vec![(t * 2 + i) % 10, (t + i) % 10];
+                    let val = cf.eval(&idx);
+                    assert_eq!(val, idx[0] * 100 + idx[1]);
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    assert!(cf.cache_size() > 0);
+    assert_eq!(cf.num_evals() + cf.num_cache_hits(), 40);
+}
+
+#[test]
+fn test_thread_safety_batch() {
+    let local_dims = vec![5, 5];
+    let cf = Arc::new(CachedFunction::new(|idx: &[usize]| idx[0] + idx[1], &local_dims).unwrap());
+
+    let handles: Vec<_> = (0..4)
+        .map(|t| {
+            let cf = Arc::clone(&cf);
+            thread::spawn(move || {
+                let indices: Vec<Vec<usize>> = (0..5).map(|i| vec![(t + i) % 5, i % 5]).collect();
+                let results = cf.eval_batch(&indices);
+                for (i, idx) in indices.iter().enumerate() {
+                    assert_eq!(results[i], idx[0] + idx[1]);
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
+#[test]
+fn test_index_int_u8_cached_function() {
+    let local_dims = vec![2; 8];
+    let cf = CachedFunction::new(
+        |idx: &[u8]| idx.iter().map(|&i| i as usize).sum::<usize>(),
+        &local_dims,
+    )
+    .unwrap();
+    assert_eq!(cf.key_type(), "u64");
+
+    assert_eq!(cf.eval(&[0u8, 1, 0, 1, 0, 1, 0, 1]), 4);
+    assert_eq!(cf.eval(&[0u8, 1, 0, 1, 0, 1, 0, 1]), 4);
+    assert_eq!(cf.num_evals(), 1);
+    assert_eq!(cf.num_cache_hits(), 1);
 }
 
 #[test]
