@@ -2,6 +2,9 @@
 //!
 //! Automatically selects the optimal internal key type based on the index space size.
 
+pub mod cache_key;
+pub mod index_int;
+
 use std::collections::HashMap;
 
 /// Internal cache with automatically selected key type

@@ -1,4 +1,46 @@
 use super::*;
+use bnum::types::U256;
+
+#[test]
+fn test_cache_key_u64_basics() {
+    use super::cache_key::CacheKey;
+
+    assert_eq!(u64::BITS_COUNT, 64);
+    assert_eq!(u64::ZERO, 0u64);
+    assert_eq!(u64::ONE, 1u64);
+    assert_eq!(u64::from_usize(42), 42u64);
+    assert_eq!(u64::ONE.checked_mul(u64::from_usize(10)), Some(10u64));
+    assert_eq!(u64::MAX.checked_mul(u64::from_usize(2)), None);
+}
+
+#[test]
+fn test_cache_key_u128_basics() {
+    use super::cache_key::CacheKey;
+
+    assert_eq!(u128::BITS_COUNT, 128);
+    assert_eq!(
+        u128::from_usize(100).checked_mul(u128::from_usize(3)),
+        Some(300u128)
+    );
+}
+
+#[test]
+fn test_cache_key_u256_basics() {
+    use super::cache_key::CacheKey;
+
+    assert_eq!(U256::BITS_COUNT, 256);
+    let big = U256::from_usize(usize::MAX);
+    assert!(big.checked_mul(U256::from_usize(2)).is_some());
+}
+
+#[test]
+fn test_index_int_u8() {
+    use super::index_int::IndexInt;
+
+    let val: u8 = 42;
+    let as_usize = val.to_usize();
+    assert_eq!(as_usize, 42);
+}
 
 #[test]
 fn test_cached_function_basic() {
