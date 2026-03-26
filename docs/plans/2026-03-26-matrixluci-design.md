@@ -273,12 +273,17 @@ Recommended order:
 Benchmark categories:
 
 - dense / no truncation:
-  - `matrixluci` vs direct `faer`
+  - target: `dense_vs_faer`
+  - compare `matrixluci` vs direct `faer`
 - dense / truncation enabled
 - lazy source with cheap callback
+  - target: `lazy_block_rook`
 - lazy source with expensive callback
+  - target: `lazy_block_rook`
 - block-rook effectiveness
+  - target: `lazy_block_rook`
 - end-to-end chain TCI regression benchmark
+  - target: `end_to_end_chain_tci`
 
 Acceptance rule for dense / no truncation:
 

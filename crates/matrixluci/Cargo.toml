@@ -21,7 +21,16 @@ criterion.workspace = true
 matrixci = { path = "../matrixci" }
 rand.workspace = true
 rand_chacha.workspace = true
+tensor4all-tensorci = { path = "../tensor4all-tensorci" }
 
 [[bench]]
 name = "dense_vs_faer"
+harness = false
+
+[[bench]]
+name = "lazy_block_rook"
+harness = false
+
+[[bench]]
+name = "end_to_end_chain_tci"
 harness = false
