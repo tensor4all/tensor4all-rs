@@ -1,6 +1,6 @@
 use super::error::CacheKeyError;
 use super::*;
-use bnum::types::U256;
+use bnum::types::{U2048, U256};
 
 #[test]
 fn test_cache_key_u64_basics() {
@@ -129,6 +129,42 @@ fn test_overflow_error() {
     let local_dims = vec![2; 1025];
     let result = CachedFunction::new(|_: &[usize]| 0.0, &local_dims);
     assert!(result.is_err());
+}
+
+impl cache_key::CacheKey for U2048 {
+    const BITS_COUNT: u32 = 2048;
+    const ZERO: Self = U2048::ZERO;
+    const ONE: Self = U2048::ONE;
+
+    fn from_usize(v: usize) -> Self {
+        U2048::from(v as u64)
+    }
+
+    fn checked_mul(self, rhs: Self) -> Option<Self> {
+        self.checked_mul(rhs)
+    }
+
+    fn wrapping_add(self, rhs: Self) -> Self {
+        self.wrapping_add(rhs)
+    }
+}
+
+#[test]
+fn test_custom_key_type_u2048() {
+    let local_dims = vec![2; 1025];
+    assert!(CachedFunction::new(|_: &[usize]| 0.0, &local_dims).is_err());
+
+    let cf = CachedFunction::with_key_type::<U2048>(|_: &[usize]| 0.0, &local_dims).unwrap();
+    assert_eq!(cf.key_type(), "custom");
+
+    let idx_zeros = vec![0usize; 1025];
+    let idx_ones = vec![1usize; 1025];
+    assert_eq!(cf.eval(&idx_zeros), 0.0);
+    assert_eq!(cf.eval(&idx_ones), 0.0);
+    assert_eq!(cf.num_evals(), 2);
+
+    assert_eq!(cf.eval(&idx_zeros), 0.0);
+    assert_eq!(cf.num_cache_hits(), 1);
 }
 
 #[test]

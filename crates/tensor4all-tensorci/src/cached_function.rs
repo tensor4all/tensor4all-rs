@@ -219,6 +219,114 @@ impl<V: Clone + Send + Sync> InnerCache<V> {
     }
 }
 
+/// Type-erased cache interface for custom key types.
+trait DynCache<V>: Send + Sync {
+    fn get(&self, idx: &[usize]) -> Option<V>;
+    fn insert(&self, idx: &[usize], value: V);
+    fn contains(&self, idx: &[usize]) -> bool;
+    fn len(&self) -> usize;
+    fn clear(&self);
+}
+
+/// Generic cache for user-specified key types.
+struct GenericCache<K: CacheKey, V> {
+    cache: RwLock<HashMap<K, V>>,
+    coeffs: Vec<K>,
+}
+
+impl<K: CacheKey, V: Clone + Send + Sync> GenericCache<K, V> {
+    fn new(local_dims: &[usize]) -> Result<Self, error::CacheKeyError> {
+        Ok(Self {
+            cache: RwLock::new(HashMap::new()),
+            coeffs: compute_coeffs::<K>(local_dims)?,
+        })
+    }
+}
+
+impl<K: CacheKey, V: Clone + Send + Sync> DynCache<V> for GenericCache<K, V> {
+    fn get(&self, idx: &[usize]) -> Option<V> {
+        let key = flat_index::<K, usize>(idx, &self.coeffs);
+        read_lock(&self.cache).get(&key).cloned()
+    }
+
+    fn insert(&self, idx: &[usize], value: V) {
+        let key = flat_index::<K, usize>(idx, &self.coeffs);
+        write_lock(&self.cache).insert(key, value);
+    }
+
+    fn contains(&self, idx: &[usize]) -> bool {
+        let key = flat_index::<K, usize>(idx, &self.coeffs);
+        read_lock(&self.cache).contains_key(&key)
+    }
+
+    fn len(&self) -> usize {
+        read_lock(&self.cache).len()
+    }
+
+    fn clear(&self) {
+        write_lock(&self.cache).clear();
+    }
+}
+
+/// Internal backend: auto-selected enum or custom type-erased cache.
+enum CacheBackend<V: Clone + Send + Sync + 'static> {
+    Auto(InnerCache<V>),
+    Custom(Box<dyn DynCache<V>>),
+}
+
+impl<V: Clone + Send + Sync + 'static> CacheBackend<V> {
+    fn get<I: IndexInt>(&self, idx: &[I]) -> Option<V> {
+        match self {
+            Self::Auto(inner) => inner.get(idx),
+            Self::Custom(cache) => {
+                let usize_idx: Vec<usize> = idx.iter().map(|&i| i.to_usize()).collect();
+                cache.get(&usize_idx)
+            }
+        }
+    }
+
+    fn insert<I: IndexInt>(&self, idx: &[I], value: V) {
+        match self {
+            Self::Auto(inner) => inner.insert(idx, value),
+            Self::Custom(cache) => {
+                let usize_idx: Vec<usize> = idx.iter().map(|&i| i.to_usize()).collect();
+                cache.insert(&usize_idx, value);
+            }
+        }
+    }
+
+    fn contains<I: IndexInt>(&self, idx: &[I]) -> bool {
+        match self {
+            Self::Auto(inner) => inner.contains(idx),
+            Self::Custom(cache) => {
+                let usize_idx: Vec<usize> = idx.iter().map(|&i| i.to_usize()).collect();
+                cache.contains(&usize_idx)
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Auto(inner) => inner.len(),
+            Self::Custom(cache) => cache.len(),
+        }
+    }
+
+    fn clear(&self) {
+        match self {
+            Self::Auto(inner) => inner.clear(),
+            Self::Custom(cache) => cache.clear(),
+        }
+    }
+
+    fn key_type_name(&self) -> &'static str {
+        match self {
+            Self::Auto(inner) => inner.key_type_name(),
+            Self::Custom(_) => "custom",
+        }
+    }
+}
+
 /// A wrapper that caches function evaluations for multi-index inputs.
 ///
 /// Thread-safe: all methods take `&self`. Multiple threads can call `eval`
@@ -232,11 +340,11 @@ impl<V: Clone + Send + Sync> InnerCache<V> {
 pub struct CachedFunction<V, F, I = usize>
 where
     I: IndexInt,
-    V: Clone + Send + Sync,
+    V: Clone + Send + Sync + 'static,
     F: Fn(&[I]) -> V + Send + Sync,
 {
     func: F,
-    cache: InnerCache<V>,
+    cache: CacheBackend<V>,
     local_dims: Vec<usize>,
     num_evals: AtomicUsize,
     num_cache_hits: AtomicUsize,
@@ -246,14 +354,37 @@ where
 impl<V, F, I> CachedFunction<V, F, I>
 where
     I: IndexInt,
-    V: Clone + Send + Sync,
+    V: Clone + Send + Sync + 'static,
     F: Fn(&[I]) -> V + Send + Sync,
 {
     /// Create a new cached function with automatic key selection (up to 1024 bits).
     pub fn new(func: F, local_dims: &[usize]) -> Result<Self, error::CacheKeyError> {
         Ok(Self {
             func,
-            cache: InnerCache::new(local_dims)?,
+            cache: CacheBackend::Auto(InnerCache::new(local_dims)?),
+            local_dims: local_dims.to_vec(),
+            num_evals: AtomicUsize::new(0),
+            num_cache_hits: AtomicUsize::new(0),
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    /// Create with an explicit key type for index spaces larger than 1024 bits.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use bnum::types::U2048;
+    /// // impl CacheKey for U2048 { ... } // see CacheKey docs
+    /// let cf = CachedFunction::with_key_type::<U2048>(f, &local_dims)?;
+    /// ```
+    pub fn with_key_type<K: CacheKey>(
+        func: F,
+        local_dims: &[usize],
+    ) -> Result<Self, error::CacheKeyError> {
+        Ok(Self {
+            func,
+            cache: CacheBackend::Custom(Box::new(GenericCache::<K, V>::new(local_dims)?)),
             local_dims: local_dims.to_vec(),
             num_evals: AtomicUsize::new(0),
             num_cache_hits: AtomicUsize::new(0),
