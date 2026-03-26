@@ -2,7 +2,7 @@
 
 use crate::error::{Result, TCIError};
 use crate::indexset::{IndexSet, MultiIndex};
-use matrixci::util::{a_times_b_inv, zeros, Matrix};
+use matrixci::util::{a_times_b_inv, mat_mul, zeros, Matrix};
 use matrixci::Scalar;
 use matrixci::{AbstractMatrixCI, MatrixACA};
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
@@ -255,11 +255,7 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
                     ),
                 });
             }
-            // Get slice at index
-            let mut slice = vec![T::zero(); t.right_dim()];
-            for r in 0..t.right_dim() {
-                slice[r] = *t.get3(0, idx, r);
-            }
+            let slice = t.slice_site(idx);
 
             // Apply P^{-1} if needed
             let p = &self.p_matrices[0];
@@ -287,18 +283,9 @@ impl<T: Scalar + TTScalar + Default> TensorCI1<T> {
                 });
             }
 
-            let left_dim = t.left_dim();
             let right_dim = t.right_dim();
 
-            // Contract: result (size left_dim) with T[:, idx, :] (left_dim x right_dim)
-            let mut next = vec![T::zero(); right_dim];
-            for r in 0..right_dim {
-                let mut sum = T::zero();
-                for l in 0..left_dim {
-                    sum = sum + result[l] * *t.get3(l, idx, r);
-                }
-                next[r] = sum;
-            }
+            let next = row_vec_times_matrix(&result, &t.slice_site(idx), right_dim);
 
             // Apply P^{-1}
             let p_mat = &self.p_matrices[p];
@@ -738,6 +725,14 @@ fn vec_to_row_matrix<T: Scalar>(v: &[T]) -> Matrix<T> {
     mat
 }
 
+fn row_vec_times_matrix<T: Scalar>(row: &[T], matrix: &[T], ncols: usize) -> Vec<T> {
+    let nrows = row.len();
+    let row_mat = vec_to_row_matrix(row);
+    let matrix_mat = Matrix::from_raw_vec(nrows, ncols, matrix.to_vec());
+    let result_mat = mat_mul(&row_mat, &matrix_mat);
+    row_matrix_to_vec(&result_mat)
+}
+
 /// Convert a vector to a column matrix
 fn vec_to_col_matrix<T: Scalar>(v: &[T]) -> Matrix<T> {
     let mut mat = zeros(v.len(), 1);
@@ -753,7 +748,7 @@ fn row_matrix_to_vec<T: Scalar>(mat: &Matrix<T>) -> Vec<T> {
 }
 
 /// Convert Tensor3 to Matrix (reshape for columns: (left*site, right))
-fn tensor3_to_matrix<T: Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T> {
+fn tensor3_to_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T> {
     let left_dim = tensor.left_dim();
     let site_dim = tensor.site_dim();
     let right_dim = tensor.right_dim();
@@ -772,7 +767,7 @@ fn tensor3_to_matrix<T: Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T> {
 }
 
 /// Convert Tensor3 to Matrix for columns (left*site, right)
-fn tensor3_to_matrix_cols<T: Scalar + Default>(
+fn tensor3_to_matrix_cols<T: TTScalar + Scalar + Default>(
     tensor: &Tensor3<T>,
     rows: usize,
     cols: usize,
@@ -795,7 +790,7 @@ fn tensor3_to_matrix_cols<T: Scalar + Default>(
 }
 
 /// Convert Tensor3 to Matrix for rows (left, site*right)
-fn tensor3_to_matrix_rows<T: Scalar + Default>(
+fn tensor3_to_matrix_rows<T: TTScalar + Scalar + Default>(
     tensor: &Tensor3<T>,
     rows: usize,
     cols: usize,
@@ -818,7 +813,7 @@ fn tensor3_to_matrix_rows<T: Scalar + Default>(
 }
 
 /// Convert Matrix to Tensor3
-fn matrix_to_tensor3<T: Scalar + Default>(
+fn matrix_to_tensor3<T: TTScalar + Scalar + Default>(
     mat: &Matrix<T>,
     left_dim: usize,
     site_dim: usize,

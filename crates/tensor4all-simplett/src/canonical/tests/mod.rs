@@ -19,7 +19,7 @@ fn test_site_tensor_train_preserves_values_generic<T: TTScalar + Scalar + Defaul
     let original_sum = tt.sum();
     let stt_sum = stt.sum();
     assert!(
-        TTScalar::abs_sq(original_sum - stt_sum).sqrt() < 1e-10,
+        (original_sum - stt_sum).abs_sq().sqrt() < 1e-10,
         "Sum mismatch"
     );
 }
@@ -54,7 +54,7 @@ fn test_set_center_generic<T: TTScalar + Scalar + Default>() {
     let original_sum = tt.sum();
     let stt_sum = stt.sum();
     assert!(
-        TTScalar::abs_sq(original_sum - stt_sum).sqrt() < 1e-10,
+        (original_sum - stt_sum).abs_sq().sqrt() < 1e-10,
         "Sum mismatch after moving center"
     );
 }
@@ -67,7 +67,7 @@ fn test_to_tensor_train_generic<T: TTScalar + Scalar + Default>() {
     let original_sum = tt.sum();
     let converted_sum = tt_back.sum();
     assert!(
-        TTScalar::abs_sq(original_sum - converted_sum).sqrt() < 1e-10,
+        (original_sum - converted_sum).abs_sq().sqrt() < 1e-10,
         "Sum mismatch after round-trip"
     );
 }
@@ -84,7 +84,7 @@ fn test_center_canonicalize_function_generic<T: TTScalar + Scalar + Default>() {
     let tt_new = TensorTrain::from_tensors_unchecked(tensors);
     let new_sum = tt_new.sum();
     assert!(
-        TTScalar::abs_sq(original_sum - new_sum).sqrt() < 1e-10,
+        (original_sum - new_sum).abs_sq().sqrt() < 1e-10,
         "Sum mismatch"
     );
 }
@@ -112,7 +112,7 @@ fn test_evaluate_matches_original_generic<T: TTScalar + Scalar + Default>() {
             let original = tt.evaluate(&[i, j]).unwrap();
             let canonical = stt.evaluate(&[i, j]).unwrap();
             assert!(
-                TTScalar::abs_sq(original - canonical).sqrt() < 1e-10,
+                (original - canonical).abs_sq().sqrt() < 1e-10,
                 "Evaluation mismatch at [{}, {}]",
                 i,
                 j

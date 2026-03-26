@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use bnum::types::{U1024, U256, U512};
 
+use crate::einsum_helper::{matrix_times_col_vector, row_vector_times_matrix};
 use crate::error::{Result, TensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
@@ -350,28 +351,14 @@ impl<T: TTScalar> TTCache<T> {
             // First site: just extract the slice
             let flat_idx = self.multi_to_flat(0, &indices[0..1]);
             let tensor = &self.tensors[0];
-            let mut v = Vec::with_capacity(tensor.right_dim());
-            for r in 0..tensor.right_dim() {
-                v.push(*tensor.get3(0, flat_idx, r));
-            }
-            v
+            tensor.slice_site(flat_idx)
         } else {
             // Recursive case: left[0..ell-1] * tensor[ell-1][:, idx, :]
             let left = self.evaluate_left(&indices[0..ell - 1]);
             let flat_idx = self.multi_to_flat(ell - 1, &indices[ell - 1..ell]);
             let tensor = &self.tensors[ell - 1];
-
-            let mut result = vec![T::zero(); tensor.right_dim()];
-            #[allow(clippy::needless_range_loop)]
-            for r in 0..tensor.right_dim() {
-                let mut sum = T::zero();
-                #[allow(clippy::needless_range_loop)]
-                for l in 0..tensor.left_dim() {
-                    sum = sum + left[l] * *tensor.get3(l, flat_idx, r);
-                }
-                result[r] = sum;
-            }
-            result
+            let slice = tensor.slice_site(flat_idx);
+            row_vector_times_matrix(&left, &slice, tensor.left_dim(), tensor.right_dim())
         };
 
         // Cache and return
@@ -403,28 +390,14 @@ impl<T: TTScalar> TTCache<T> {
             // Last site: just extract the slice
             let flat_idx = self.multi_to_flat(n - 1, &indices[0..1]);
             let tensor = &self.tensors[n - 1];
-            let mut v = Vec::with_capacity(tensor.left_dim());
-            for l in 0..tensor.left_dim() {
-                v.push(*tensor.get3(l, flat_idx, 0));
-            }
-            v
+            tensor.slice_site(flat_idx)
         } else {
             // Recursive case: tensor[start][:, idx, :] * right[1..]
             let right = self.evaluate_right(&indices[1..]);
             let flat_idx = self.multi_to_flat(start, &indices[0..1]);
             let tensor = &self.tensors[start];
-
-            let mut result = vec![T::zero(); tensor.left_dim()];
-            #[allow(clippy::needless_range_loop)]
-            for l in 0..tensor.left_dim() {
-                let mut sum = T::zero();
-                #[allow(clippy::needless_range_loop)]
-                for r in 0..tensor.right_dim() {
-                    sum = sum + *tensor.get3(l, flat_idx, r) * right[r];
-                }
-                result[l] = sum;
-            }
-            result
+            let slice = tensor.slice_site(flat_idx);
+            matrix_times_col_vector(&slice, tensor.left_dim(), tensor.right_dim(), &right)
         };
 
         // Cache and return

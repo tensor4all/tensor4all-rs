@@ -3,6 +3,7 @@
 //! This module provides a unified scalar trait that can be used across
 //! tensor4all crates, reducing code duplication.
 
+use crate::util::BlasMul;
 use num_complex::{Complex32, Complex64};
 use num_traits::{Float, One, Zero};
 
@@ -23,6 +24,7 @@ pub trait Scalar:
     + Default
     + Send
     + Sync
+    + BlasMul
     + 'static
 {
     /// Complex conjugate of the value.

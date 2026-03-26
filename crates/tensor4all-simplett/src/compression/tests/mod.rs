@@ -17,7 +17,7 @@ where
         .unwrap();
 
     let compressed_sum = tt_compressed.sum();
-    assert!(TTScalar::abs_sq(original_sum - compressed_sum).sqrt() < 1e-10);
+    assert!((original_sum - compressed_sum).abs_sq().sqrt() < 1e-10);
 }
 
 fn test_compress_preserves_values_generic<T>()
@@ -61,7 +61,7 @@ where
         .unwrap();
 
     let compressed_sum = tt_compressed.sum();
-    assert!(TTScalar::abs_sq(original_sum - compressed_sum).sqrt() < 1e-8);
+    assert!((original_sum - compressed_sum).abs_sq().sqrt() < 1e-8);
 }
 
 fn test_compress_with_max_bond_dim_generic<T>()

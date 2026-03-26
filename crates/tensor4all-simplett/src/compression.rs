@@ -45,7 +45,7 @@ impl Default for CompressionOptions {
 }
 
 /// Convert Tensor3 to Matrix for factorization (left matrix view)
-fn tensor3_to_left_matrix<T: Scalar + Default + Clone>(tensor: &Tensor3<T>) -> Matrix<T> {
+fn tensor3_to_left_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T> {
     let left_dim = tensor.left_dim();
     let site_dim = tensor.site_dim();
     let right_dim = tensor.right_dim();
@@ -64,7 +64,7 @@ fn tensor3_to_left_matrix<T: Scalar + Default + Clone>(tensor: &Tensor3<T>) -> M
 }
 
 /// Convert Tensor3 to Matrix for factorization (right matrix view)
-fn tensor3_to_right_matrix<T: Scalar + Default + Clone>(tensor: &Tensor3<T>) -> Matrix<T> {
+fn tensor3_to_right_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T> {
     let left_dim = tensor.left_dim();
     let site_dim = tensor.site_dim();
     let right_dim = tensor.right_dim();

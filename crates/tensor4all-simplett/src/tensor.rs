@@ -1,17 +1,33 @@
-//! Fixed-rank tensor type backed by a flat `Vec<T>` with row-major layout.
+//! Fixed-rank tensor type backed by `tenferro_tensor::Tensor<T>`.
 //!
-//! This module provides a simple tensor type that replaces the `mdarray::DTensor`
-//! dependency for the simplett crate.
+//! This wrapper preserves compile-time rank while delegating storage and
+//! indexing to tenferro's dense tensor implementation.
 
+use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 
-/// Rank-N tensor backed by a flat `Vec<T>` with row-major layout.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Tensor<T, const N: usize> {
-    data: Vec<T>,
+use tenferro_algebra::Scalar as TfScalar;
+use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
+
+/// Rank-N tensor backed by `tenferro_tensor::Tensor<T>`.
+#[derive(Debug)]
+pub struct Tensor<T: TfScalar, const N: usize>(TfTensor<T>);
+
+/// Iterator over tensor elements in row-major order.
+pub struct TensorIter<'a, T: TfScalar, const N: usize> {
+    tensor: &'a TfTensor<T>,
     dims: [usize; N],
-    /// Precomputed strides for row-major layout.
-    strides: [usize; N],
+    next: usize,
+    len: usize,
+}
+
+/// Mutable iterator over tensor elements in row-major order.
+pub struct TensorIterMut<'a, T: TfScalar, const N: usize> {
+    tensor: *mut TfTensor<T>,
+    dims: [usize; N],
+    next: usize,
+    len: usize,
+    _marker: PhantomData<&'a mut TfTensor<T>>,
 }
 
 /// 2D tensor (matrix).
@@ -23,133 +39,230 @@ pub type Tensor3<T> = Tensor<T, 3>;
 /// 4D tensor.
 pub type Tensor4<T> = Tensor<T, 4>;
 
-/// Compute row-major strides from dimensions.
-fn compute_strides<const N: usize>(dims: &[usize; N]) -> [usize; N] {
-    let mut strides = [0usize; N];
-    if N == 0 {
-        return strides;
+fn row_major_index_from_linear<const N: usize>(mut linear: usize, dims: &[usize; N]) -> [usize; N] {
+    let mut idx = [0usize; N];
+    for axis in (0..N).rev() {
+        let dim = dims[axis];
+        if dim == 0 {
+            return idx;
+        }
+        idx[axis] = linear % dim;
+        linear /= dim;
     }
-    strides[N - 1] = 1;
-    for i in (0..N - 1).rev() {
-        strides[i] = strides[i + 1] * dims[i + 1];
-    }
-    strides
+    idx
 }
 
-impl<T, const N: usize> Tensor<T, N> {
+fn row_major_data_to_tensor<T: TfScalar, const N: usize>(
+    dims: [usize; N],
+    data: Vec<T>,
+) -> Tensor<T, N> {
+    let inner = TfTensor::from_row_major_slice(&data, &dims)
+        .expect("row-major tensor construction should match dims");
+    Tensor::from_tenferro(inner)
+}
+
+impl<T: TfScalar, const N: usize> Clone for Tensor<T, N> {
+    fn clone(&self) -> Self {
+        Self(self.0.deep_clone())
+    }
+}
+
+impl<T: TfScalar + PartialEq, const N: usize> PartialEq for Tensor<T, N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.dims() == other.dims() && self.iter().eq(other.iter())
+    }
+}
+
+impl<T: TfScalar + Eq, const N: usize> Eq for Tensor<T, N> {}
+
+impl<'a, T: TfScalar, const N: usize> Iterator for TensorIter<'a, T, N> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next == self.len {
+            return None;
+        }
+
+        let idx = row_major_index_from_linear(self.next, &self.dims);
+        self.next += 1;
+        Some(
+            self.tensor
+                .get(&idx[..])
+                .expect("row-major iterator generated an invalid tensor index"),
+        )
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.len - self.next;
+        (remaining, Some(remaining))
+    }
+}
+
+impl<'a, T: TfScalar, const N: usize> ExactSizeIterator for TensorIter<'a, T, N> {}
+
+impl<'a, T: TfScalar, const N: usize> Iterator for TensorIterMut<'a, T, N> {
+    type Item = &'a mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next == self.len {
+            return None;
+        }
+
+        let idx = row_major_index_from_linear(self.next, &self.dims);
+        self.next += 1;
+
+        // Safety: each logical index is visited at most once, so returned
+        // mutable references never alias each other.
+        let tensor = unsafe { &mut *self.tensor };
+        let elem = tensor
+            .get_mut(&idx[..])
+            .expect("row-major iterator requires an exclusively owned CPU tensor");
+        let ptr = elem as *mut T;
+        Some(unsafe { &mut *ptr })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.len - self.next;
+        (remaining, Some(remaining))
+    }
+}
+
+impl<'a, T: TfScalar, const N: usize> ExactSizeIterator for TensorIterMut<'a, T, N> {}
+
+impl<T: TfScalar, const N: usize> Tensor<T, N> {
     /// Total number of elements.
     pub fn len(&self) -> usize {
-        self.data.len()
+        self.0.len()
     }
 
     /// Whether the tensor is empty (zero elements).
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.0.is_empty()
     }
 
     /// Dimension along `axis`.
     pub fn dim(&self, axis: usize) -> usize {
-        self.dims[axis]
+        self.dims()[axis]
     }
 
     /// All dimensions.
     pub fn dims(&self) -> &[usize; N] {
-        &self.dims
+        self.0.dims().try_into().unwrap_or_else(|_| {
+            panic!(
+                "tensor rank mismatch: expected rank {N}, got {}",
+                self.0.ndim()
+            )
+        })
     }
 
-    /// View the underlying data as a slice.
-    pub fn as_slice(&self) -> &[T] {
-        &self.data
-    }
-
-    /// View the underlying data as a mutable slice.
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
-        &mut self.data
-    }
-
-    /// Convert a multi-index to a flat offset (row-major).
-    #[inline]
-    fn offset(&self, idx: &[usize; N]) -> usize {
-        let mut offset = 0;
-        for ((&i, &d), &s) in idx.iter().zip(self.dims.iter()).zip(self.strides.iter()) {
-            debug_assert!(i < d, "index out of bounds");
-            offset += i * s;
-        }
-        offset
+    /// Export the tensor as a row-major flat vector.
+    pub fn to_row_major_vec(&self) -> Vec<T> {
+        let row_major = self.0.contiguous(MemoryOrder::RowMajor);
+        row_major
+            .buffer()
+            .as_slice()
+            .expect("simplett tensors must remain CPU-accessible")
+            .to_vec()
     }
 
     /// Iterate over all elements in row-major order.
-    pub fn iter(&self) -> std::slice::Iter<'_, T> {
-        self.data.iter()
+    pub fn iter(&self) -> TensorIter<'_, T, N> {
+        TensorIter {
+            tensor: &self.0,
+            dims: *self.dims(),
+            next: 0,
+            len: self.len(),
+        }
     }
 
     /// Iterate mutably over all elements in row-major order.
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, T> {
-        self.data.iter_mut()
-    }
-}
-
-impl<T: Clone, const N: usize> Tensor<T, N> {
-    /// Create a tensor filled with `value`.
-    pub fn from_elem(dims: [usize; N], value: T) -> Self {
-        let total: usize = dims.iter().product();
-        let strides = compute_strides(&dims);
-        Self {
-            data: vec![value; total],
+    pub fn iter_mut(&mut self) -> TensorIterMut<'_, T, N> {
+        let dims = *self.dims();
+        let len = self.len();
+        TensorIterMut {
+            tensor: &mut self.0,
             dims,
-            strides,
+            next: 0,
+            len,
+            _marker: PhantomData,
         }
     }
-}
 
-impl<T, const N: usize> Tensor<T, N> {
+    /// Borrow the wrapped tenferro tensor.
+    pub fn as_inner(&self) -> &TfTensor<T> {
+        &self.0
+    }
+
+    /// Mutably borrow the wrapped tenferro tensor.
+    pub fn as_inner_mut(&mut self) -> &mut TfTensor<T> {
+        &mut self.0
+    }
+
+    /// Consume this wrapper and return the inner tenferro tensor.
+    pub fn into_inner(self) -> TfTensor<T> {
+        self.0
+    }
+
+    /// Wrap an existing tenferro tensor, panicking on rank mismatch.
+    pub fn from_tenferro(tensor: TfTensor<T>) -> Self {
+        if tensor.ndim() != N {
+            panic!(
+                "tensor rank mismatch: expected rank {N}, got {}",
+                tensor.ndim()
+            );
+        }
+
+        let tensor = if tensor.buffer().is_unique() {
+            tensor
+        } else {
+            tensor.deep_clone()
+        };
+        Self(tensor)
+    }
+
     /// Create a tensor by applying `f` to each multi-index (row-major order).
     pub fn from_fn(dims: [usize; N], mut f: impl FnMut([usize; N]) -> T) -> Self {
         let total: usize = dims.iter().product();
-        let strides = compute_strides(&dims);
         let mut data = Vec::with_capacity(total);
 
-        // Iterate over all multi-indices in row-major order.
-        let mut idx = [0usize; N];
-        for _ in 0..total {
-            data.push(f(idx));
-            // Increment the multi-index (rightmost index increments first).
-            for k in (0..N).rev() {
-                idx[k] += 1;
-                if idx[k] < dims[k] {
-                    break;
-                }
-                idx[k] = 0;
-            }
+        for linear in 0..total {
+            data.push(f(row_major_index_from_linear(linear, &dims)));
         }
 
-        Self {
-            data,
-            dims,
-            strides,
-        }
+        row_major_data_to_tensor(dims, data)
     }
 }
 
-impl<T, const N: usize> Index<[usize; N]> for Tensor<T, N> {
+impl<T: TfScalar + Clone, const N: usize> Tensor<T, N> {
+    /// Create a tensor filled with `value`.
+    pub fn from_elem(dims: [usize; N], value: T) -> Self {
+        let total: usize = dims.iter().product();
+        row_major_data_to_tensor(dims, vec![value; total])
+    }
+}
+
+impl<T: TfScalar, const N: usize> Index<[usize; N]> for Tensor<T, N> {
     type Output = T;
 
     fn index(&self, idx: [usize; N]) -> &T {
-        let offset = self.offset(&idx);
-        &self.data[offset]
+        self.0
+            .get(&idx[..])
+            .expect("tensor index should be within bounds")
     }
 }
 
-impl<T, const N: usize> IndexMut<[usize; N]> for Tensor<T, N> {
+impl<T: TfScalar, const N: usize> IndexMut<[usize; N]> for Tensor<T, N> {
     fn index_mut(&mut self, idx: [usize; N]) -> &mut T {
-        let offset = self.offset(&idx);
-        &mut self.data[offset]
+        self.0
+            .get_mut(&idx[..])
+            .expect("tensor mutation requires an in-bounds, exclusively owned CPU tensor")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
 
     #[test]
     fn test_tensor2_from_elem() {
@@ -171,16 +284,16 @@ mod tests {
         t[[1, 2]] = 6.0;
         assert_eq!(t[[0, 0]], 1.0);
         assert_eq!(t[[1, 2]], 6.0);
-        // Row-major: data layout is [1, 2, 3, 4, 5, 6]
-        assert_eq!(t.as_slice(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(t.to_row_major_vec(), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     }
 
     #[test]
     fn test_tensor3_from_fn() {
-        let t: Tensor3<usize> = Tensor3::from_fn([2, 3, 4], |[i, j, k]| i * 100 + j * 10 + k);
-        assert_eq!(t[[0, 0, 0]], 0);
-        assert_eq!(t[[1, 2, 3]], 123);
-        assert_eq!(t[[0, 1, 2]], 12);
+        let t: Tensor3<f64> =
+            Tensor3::from_fn([2, 3, 4], |[i, j, k]| (i * 100 + j * 10 + k) as f64);
+        assert_eq!(t[[0, 0, 0]], 0.0);
+        assert_eq!(t[[1, 2, 3]], 123.0);
+        assert_eq!(t[[0, 1, 2]], 12.0);
         assert_eq!(t.dim(0), 2);
         assert_eq!(t.dim(1), 3);
         assert_eq!(t.dim(2), 4);
@@ -189,9 +302,10 @@ mod tests {
 
     #[test]
     fn test_tensor4_from_fn() {
-        let t: Tensor4<usize> =
-            Tensor4::from_fn([2, 3, 4, 5], |[i, j, k, l]| i * 1000 + j * 100 + k * 10 + l);
-        assert_eq!(t[[1, 2, 3, 4]], 1234);
+        let t: Tensor4<f64> = Tensor4::from_fn([2, 3, 4, 5], |[i, j, k, l]| {
+            (i * 1000 + j * 100 + k * 10 + l) as f64
+        });
+        assert_eq!(t[[1, 2, 3, 4]], 1234.0);
         assert_eq!(t.dim(0), 2);
         assert_eq!(t.dim(1), 3);
         assert_eq!(t.dim(2), 4);
@@ -201,14 +315,51 @@ mod tests {
 
     #[test]
     fn test_iter() {
-        let t: Tensor2<i32> = Tensor2::from_fn([2, 3], |[i, j]| (i * 3 + j) as i32);
-        let collected: Vec<i32> = t.iter().copied().collect();
-        assert_eq!(collected, vec![0, 1, 2, 3, 4, 5]);
+        let t: Tensor2<f64> = Tensor2::from_fn([2, 3], |[i, j]| (i * 3 + j) as f64);
+        let collected: Vec<f64> = t.iter().copied().collect();
+        assert_eq!(collected, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
     }
 
     #[test]
     fn test_dims() {
         let t: Tensor3<f64> = Tensor3::from_elem([2, 3, 4], 1.0);
         assert_eq!(t.dims(), &[2, 3, 4]);
+    }
+
+    #[test]
+    fn test_from_tenferro_roundtrip() {
+        let inner =
+            TfTensor::from_row_major_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        let tensor = Tensor2::from_tenferro(inner);
+
+        assert_eq!(tensor.dims(), &[2, 3]);
+        assert_eq!(
+            tensor.to_row_major_vec(),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+
+        let inner_again = tensor.clone().into_inner();
+        let row_major = inner_again.contiguous(MemoryOrder::RowMajor);
+        assert_eq!(
+            row_major.buffer().as_slice().unwrap(),
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "rank")]
+    fn test_from_tenferro_rank_mismatch_panics() {
+        let inner = TfTensor::from_row_major_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        let _ = Tensor3::from_tenferro(inner);
+    }
+
+    #[test]
+    fn test_clone_allows_index_mut() {
+        let original: Tensor2<f64> = Tensor2::from_fn([2, 2], |[i, j]| (i * 2 + j) as f64);
+        let mut cloned = original.clone();
+        cloned[[1, 0]] = 99.0;
+
+        assert_eq!(original[[1, 0]], 2.0);
+        assert_eq!(cloned[[1, 0]], 99.0);
     }
 }
