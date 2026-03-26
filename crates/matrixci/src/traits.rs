@@ -7,7 +7,7 @@ use crate::util::{submatrix, zeros, Matrix};
 /// Abstract trait for matrix cross interpolation objects
 ///
 /// This trait provides a common interface for different matrix CI implementations
-/// including MatrixCI, MatrixACA, and MatrixLUCI.
+/// including MatrixACA and MatrixLUCI.
 pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// Number of rows in the approximated matrix
     fn nrows(&self) -> usize;
