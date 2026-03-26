@@ -4,9 +4,9 @@ use crate::error::Result;
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
-use matrixci::util::{mat_mul, ncols, nrows, zeros, Matrix};
-use matrixci::Scalar;
-use matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions};
+use tensor4all_tcicore::matrix::{mat_mul, ncols, nrows, zeros, Matrix};
+use tensor4all_tcicore::Scalar;
+use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions};
 
 /// Compression method for tensor trains
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

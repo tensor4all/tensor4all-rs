@@ -5,9 +5,6 @@
 //! of function values through an explicit batch function parameter.
 
 use crate::error::{Result, TCIError};
-use crate::indexset::MultiIndex;
-use matrixci::util::zeros;
-use matrixci::Scalar;
 use matrixluci::{
     CrossFactors, DenseFaerLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource,
     PivotKernel, PivotKernelOptions,
@@ -15,6 +12,9 @@ use matrixluci::{
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
+use tensor4all_tcicore::matrix::zeros;
+use tensor4all_tcicore::MultiIndex;
+use tensor4all_tcicore::Scalar;
 
 /// Options for TCI2 algorithm
 #[derive(Debug, Clone)]

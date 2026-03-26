@@ -1,12 +1,12 @@
 //! Adaptive Cross Approximation (MatrixACA) implementation
 
 use crate::error::{MatrixCIError, Result};
-use crate::scalar::Scalar;
-use crate::traits::AbstractMatrixCI;
-use crate::util::{
+use crate::matrix::{
     append_col, append_row, from_vec2d, get_col, get_row, mat_mul, ncols, nrows, submatrix,
     submatrix_argmax, zeros, Matrix,
 };
+use crate::scalar::Scalar;
+use crate::traits::AbstractMatrixCI;
 
 /// Adaptive Cross Approximation representation
 ///

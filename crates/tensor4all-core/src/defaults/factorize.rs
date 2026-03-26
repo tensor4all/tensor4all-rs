@@ -19,8 +19,8 @@
 
 use crate::defaults::DynIndex;
 use crate::{unfold_split, TensorDynLen};
-use matrixci::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use num_complex::{Complex64, ComplexFloat};
+use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use tensor4all_tensorbackend::{native_tensor_primal_to_diag_f64, TensorElement};
 
 use crate::qr::{qr_with, QrOptions};
@@ -328,12 +328,12 @@ where
     })
 }
 
-/// Convert a native rank-2 tensor into a `matrixci::Matrix`.
+/// Convert a native rank-2 tensor into a `tensor4all_tcicore::Matrix`.
 fn native_tensor_to_matrix<T>(
     tensor: &tenferro::Tensor,
     m: usize,
     n: usize,
-) -> Result<matrixci::Matrix<T>, FactorizeError>
+) -> Result<tensor4all_tcicore::Matrix<T>, FactorizeError>
 where
     T: TensorElement + MatrixScalar + Copy,
 {
@@ -349,7 +349,7 @@ where
         )));
     }
 
-    let mut matrix = matrixci::util::zeros(m, n);
+    let mut matrix = tensor4all_tcicore::matrix::zeros(m, n);
     for i in 0..m {
         for j in 0..n {
             matrix[[i, j]] = data[j * m + i];
@@ -359,12 +359,12 @@ where
 }
 
 /// Convert Matrix to Vec for storage.
-fn matrix_to_vec<T>(matrix: &matrixci::Matrix<T>) -> Vec<T>
+fn matrix_to_vec<T>(matrix: &tensor4all_tcicore::Matrix<T>) -> Vec<T>
 where
     T: Clone,
 {
-    let m = matrixci::util::nrows(matrix);
-    let n = matrixci::util::ncols(matrix);
+    let m = tensor4all_tcicore::matrix::nrows(matrix);
+    let n = tensor4all_tcicore::matrix::ncols(matrix);
     let mut vec = Vec::with_capacity(m * n);
     for j in 0..n {
         for i in 0..m {

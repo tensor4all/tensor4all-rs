@@ -11,8 +11,8 @@
 //! - `TensorCI1`: Legacy one-site TCI algorithm kept for compatibility
 //! - `crossinterpolate1`: Legacy entry point for TCI1
 //!
-//! `TensorCI2` is the actively maintained path and uses `matrixluci` directly.
-//! `TensorCI1` remains available as legacy support and still relies on the older ACA-based matrix code.
+//! `TensorCI2` is the actively maintained path and uses `MatrixLUCI` from `tensor4all-tcicore`.
+//! `TensorCI1` uses `MatrixACA` from `tensor4all-tcicore`.
 //! `PivotSearchStrategy::Rook` uses lazy block-rook evaluation; when
 //! `normalize_error` is enabled it normalizes by the maximum observed sample
 //! value from the lazily requested entries rather than by a full-grid scan.
@@ -43,18 +43,15 @@
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
-pub mod cached_function;
 pub mod error;
-pub mod indexset;
 pub mod tensorci1;
 pub mod tensorci2;
 
 // Re-export main types
-pub use cached_function::CachedFunction;
 pub use error::{Result, TCIError};
-pub use indexset::{IndexSet, LocalIndex, MultiIndex};
 pub use tensorci1::{crossinterpolate1, SweepStrategy, TCI1Options, TensorCI1};
 pub use tensorci2::{crossinterpolate2, PivotSearchStrategy, TCI2Options, TensorCI2};
 
-// Re-export Scalar trait from matrixci for downstream crates
-pub use matrixci::Scalar;
+pub use tensor4all_tcicore::{
+    CacheKey, CacheKeyError, CachedFunction, IndexInt, IndexSet, LocalIndex, MultiIndex, Scalar,
+};

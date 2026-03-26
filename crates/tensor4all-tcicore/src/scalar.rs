@@ -3,7 +3,7 @@
 //! This module provides a unified scalar trait that can be used across
 //! tensor4all crates, reducing code duplication.
 
-use crate::util::BlasMul;
+use crate::matrix::BlasMul;
 use num_complex::{Complex32, Complex64};
 use num_traits::{Float, One, Zero};
 
@@ -196,7 +196,7 @@ impl Scalar for Complex32 {
 ///     // test implementation
 /// }
 ///
-/// matrixci::scalar_tests!(test_operation, test_operation_generic);
+/// tensor4all_tcicore::scalar_tests!(test_operation, test_operation_generic);
 /// // Generates:
 /// // #[test] fn test_operation_f64() { test_operation_generic::<f64>(); }
 /// // #[test] fn test_operation_c64() { test_operation_generic::<Complex64>(); }

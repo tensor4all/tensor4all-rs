@@ -23,7 +23,7 @@ thiserror.workspace = true
 rand.workspace = true
 bnum.workspace = true
 matrixluci = { path = "../matrixluci" }
-matrixci = { path = "../matrixci" }
+tensor4all-tcicore = { path = "../tensor4all-tcicore" }
 tensor4all-core = { path = "../tensor4all-core" }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend" }
 tenferro-algebra.workspace = true

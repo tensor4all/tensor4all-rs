@@ -14,15 +14,10 @@ anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
 matrixluci = { path = "../matrixluci" }
-matrixci = { path = "../matrixci" }
+tensor4all-tcicore = { path = "../tensor4all-tcicore" }
 tensor4all-simplett = { path = "../tensor4all-simplett" }
 
 [dev-dependencies]
 approx.workspace = true
 criterion.workspace = true
-bnum.workspace = true
 uint.workspace = true
-
-[[bench]]
-name = "cached_function"
-harness = false

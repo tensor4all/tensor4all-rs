@@ -1,6 +1,6 @@
 [package]
-name = "matrixci"
-description = "Matrix Cross Interpolation algorithms"
+name = "tensor4all-tcicore"
+description = "TCI core infrastructure: matrix CI, cached function, index sets"
 version.workspace = true
 edition.workspace = true
 authors = ["tensor4all contributors"]
@@ -14,6 +14,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 rand.workspace = true
 paste.workspace = true
+bnum.workspace = true
 matrixluci = { path = "../matrixluci" }
 tenferro-tensor-compute.workspace = true
 
@@ -22,7 +23,12 @@ approx.workspace = true
 criterion.workspace = true
 faer.workspace = true
 rand_chacha.workspace = true
+uint.workspace = true
 
 [[bench]]
 name = "rrlu_bench"
+harness = false
+
+[[bench]]
+name = "cached_function"
 harness = false

@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::{eye, from_vec2d, mat_mul, ncols, nrows, transpose};
+use crate::matrix::{eye, from_vec2d, mat_mul, ncols, nrows, transpose};
 
 #[test]
 fn test_rrlu_identity() {

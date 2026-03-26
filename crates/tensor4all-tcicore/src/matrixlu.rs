@@ -1,8 +1,10 @@
 //! Rank-Revealing LU decomposition (rrLU) implementation
 
 use crate::error::{MatrixCIError, Result};
+use crate::matrix::{
+    ncols, nrows, submatrix_argmax, swap_cols, swap_rows, transpose, zeros, Matrix,
+};
 use crate::scalar::Scalar;
-use crate::util::{ncols, nrows, submatrix_argmax, swap_cols, swap_rows, transpose, zeros, Matrix};
 
 /// Rank-Revealing LU decomposition
 ///

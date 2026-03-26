@@ -18,7 +18,7 @@ faer.workspace = true
 [dev-dependencies]
 approx.workspace = true
 criterion.workspace = true
-matrixci = { path = "../matrixci" }
+tensor4all-tcicore = { path = "../tensor4all-tcicore" }
 rand.workspace = true
 rand_chacha.workspace = true
 tensor4all-tensorci = { path = "../tensor4all-tensorci" }

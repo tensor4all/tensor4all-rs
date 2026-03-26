@@ -95,7 +95,7 @@ impl DenseFaerLuKernel {
         if rank >= full_rank {
             last_error = 0.0;
         } else if rank == max_rank && rank > 0 {
-            // Preserve current matrixci semantics for max_rank stopping.
+            // Preserve the legacy tcicore-compatible semantics for max_rank stopping.
             last_error = accepted[rank - 1];
         }
 
