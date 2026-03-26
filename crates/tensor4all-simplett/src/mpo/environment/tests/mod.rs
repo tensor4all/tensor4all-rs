@@ -29,6 +29,50 @@ fn test_contract_site_tensors() {
 }
 
 #[test]
+fn test_contract_site_tensors_preserves_combined_bond_order() {
+    let mut a: Tensor4<f64> = tensor4_zeros(2, 1, 2, 2);
+    let mut b: Tensor4<f64> = tensor4_zeros(2, 2, 1, 2);
+
+    for la in 0..2 {
+        for k in 0..2 {
+            for ra in 0..2 {
+                a.set4(la, 0, k, ra, (100 * la + 10 * k + ra + 1) as f64);
+            }
+        }
+    }
+    for lb in 0..2 {
+        for k in 0..2 {
+            for rb in 0..2 {
+                b.set4(lb, k, 0, rb, (1000 * lb + 100 * k + 10 * rb + 1) as f64);
+            }
+        }
+    }
+
+    let result = contract_site_tensors(&a, &b).unwrap();
+
+    assert_eq!(result.left_dim(), 4);
+    assert_eq!(result.right_dim(), 4);
+
+    for la in 0..2 {
+        for lb in 0..2 {
+            for ra in 0..2 {
+                for rb in 0..2 {
+                    let mut expected = 0.0;
+                    for k in 0..2 {
+                        expected += *a.get4(la, 0, k, ra) * *b.get4(lb, k, 0, rb);
+                    }
+                    let actual = *result.get4(la * 2 + lb, 0, 0, ra * 2 + rb);
+                    assert!(
+                        (actual - expected).abs() < 1e-10,
+                        "Mismatch at (la={la}, lb={lb}, ra={ra}, rb={rb}): got {actual}, expected {expected}",
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn test_left_environment() {
     let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
     let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);

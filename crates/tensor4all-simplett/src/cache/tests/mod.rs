@@ -167,7 +167,54 @@ fn test_ttcache_evaluate_many_empty() {
 }
 
 #[test]
-fn test_find_split_heuristic() {
+fn test_ttcache_evaluate_wrong_length() {
+    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let mut cache = TTCache::new(&tt);
+    // Too few indices
+    assert!(cache.evaluate(&[0]).is_err());
+    // Too many indices
+    assert!(cache.evaluate(&[0, 0, 0]).is_err());
+}
+
+#[test]
+fn test_ttcache_evaluate_many_invalid_split() {
+    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let mut cache = TTCache::new(&tt);
+    let indices = vec![vec![0, 0]];
+    // split=0 is invalid
+    assert!(cache.evaluate_many(&indices, Some(0)).is_err());
+    // split > n is invalid
+    assert!(cache.evaluate_many(&indices, Some(10)).is_err());
+}
+
+#[test]
+fn test_ttcache_evaluate_many_with_explicit_split() {
+    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 2.0);
+    let mut cache = TTCache::new(&tt);
+    let indices = vec![vec![0, 0, 0], vec![1, 2, 1]];
+    let results = cache.evaluate_many(&indices, Some(1)).unwrap();
+    assert_eq!(results.len(), 2);
+    for r in &results {
+        assert!((*r - 2.0).abs() < 1e-10);
+    }
+}
+
+#[test]
+fn test_with_site_dims_mismatch_length() {
+    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    // Wrong number of site_dims entries
+    assert!(TTCache::with_site_dims(&tt, vec![vec![2]]).is_err());
+}
+
+#[test]
+fn test_with_site_dims_mismatch_product() {
+    let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    // Product doesn't match site dim
+    assert!(TTCache::with_site_dims(&tt, vec![vec![3], vec![3]]).is_err());
+}
+
+#[test]
+fn find_split_heuristic() {
     let tt = TensorTrain::<f64>::constant(&[2, 2, 2, 2], 1.0);
     let cache = TTCache::new(&tt);
 

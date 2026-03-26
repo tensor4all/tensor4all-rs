@@ -57,7 +57,7 @@ impl Default for FactorizeOptions {
 
 /// Result of factorization
 #[derive(Debug, Clone)]
-pub struct FactorizeResult<T> {
+pub struct FactorizeResult<T: TfScalar> {
     /// Left factor matrix (m x rank)
     pub left: Matrix2<T>,
     /// Right factor matrix (rank x n)

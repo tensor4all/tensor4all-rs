@@ -3,42 +3,13 @@
 //! This module provides functions for computing left and right environments
 //! used in variational algorithms and efficient MPO evaluation.
 
+use crate::einsum_helper::einsum_tensors;
+
 use super::error::{MPOError, Result};
 use super::factorize::SVDScalar;
 use super::mpo::MPO;
 use super::types::{Tensor4, Tensor4Ops};
 use super::{matrix2_zeros, Matrix2};
-
-/// Contract two general tensors over specified indices
-///
-/// This is the Rust equivalent of `_contract` from Julia.
-///
-/// # Arguments
-/// * `a` - First tensor (flattened with shape info)
-/// * `a_shape` - Shape of first tensor
-/// * `b` - Second tensor (flattened with shape info)
-/// * `b_shape` - Shape of second tensor
-/// * `idx_a` - Indices of `a` to contract over
-/// * `idx_b` - Indices of `b` to contract over
-///
-/// # Returns
-/// Contracted tensor as flat vector with shape
-pub fn contract_tensors<T: SVDScalar>(
-    _a: &[T],
-    _a_shape: &[usize],
-    _b: &[T],
-    _b_shape: &[usize],
-    _idx_a: &[usize],
-    _idx_b: &[usize],
-) -> Result<(Vec<T>, Vec<usize>)>
-where
-    <T as num_complex::ComplexFloat>::Real: Into<f64>,
-{
-    // TODO: Implement general tensor contraction
-    Err(MPOError::InvalidOperation {
-        message: "contract_tensors not yet implemented".to_string(),
-    })
-}
 
 /// Contract two 4D site tensors over their shared physical index
 ///
@@ -65,7 +36,6 @@ where
 
     let left_a = a.left_dim();
     let s1_a = a.site_dim_1();
-    let s2_a = a.site_dim_2(); // shared dimension
     let right_a = a.right_dim();
 
     let left_b = b.left_dim();
@@ -78,31 +48,17 @@ where
     let new_s2 = s2_b;
     let new_right = right_a * right_b;
 
-    let mut result = super::types::tensor4_zeros(new_left, new_s1, new_s2, new_right);
+    // Arrange the open bond indices as (left_b, left_a, ..., right_b, right_a)
+    // so the column-major reshape preserves the existing la * left_b + lb and
+    // ra * right_b + rb indexing.
+    let contracted = einsum_tensors("askr,bktq->bastqr", &[a.as_inner(), b.as_inner()]);
+    let reshaped = contracted
+        .reshape(&[new_left, new_s1, new_s2, new_right])
+        .map_err(|e| MPOError::InvalidOperation {
+            message: format!("Failed to reshape contracted site tensors: {e}"),
+        })?;
 
-    // Contract over shared index
-    for la in 0..left_a {
-        for lb in 0..left_b {
-            for s1 in 0..s1_a {
-                for s2 in 0..s2_b {
-                    for ra in 0..right_a {
-                        for rb in 0..right_b {
-                            let mut sum = T::zero();
-                            for k in 0..s2_a {
-                                sum = sum + *a.get4(la, s1, k, ra) * *b.get4(lb, k, s2, rb);
-                            }
-                            let new_l = la * left_b + lb;
-                            let new_r = ra * right_b + rb;
-                            let old = *result.get4(new_l, s1, s2, new_r);
-                            result.set4(new_l, s1, s2, new_r, old + sum);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(result)
+    Ok(Tensor4::from_tenferro(reshaped))
 }
 
 /// Compute the left environment at site i for MPO contraction
@@ -162,25 +118,10 @@ where
         });
     }
 
-    let right_a = a.right_dim();
-    let right_b = b.right_dim();
-    let mut new_env: Matrix2<T> = matrix2_zeros(right_a, right_b);
-
-    for la in 0..a.left_dim() {
-        for lb in 0..b.left_dim() {
-            let l_val = prev_env[[la, lb]];
-            for s1 in 0..a.site_dim_1() {
-                for s2 in 0..a.site_dim_2() {
-                    for ra in 0..right_a {
-                        for rb in 0..right_b {
-                            new_env[[ra, rb]] = new_env[[ra, rb]]
-                                + l_val * *a.get4(la, s1, s2, ra) * *b.get4(lb, s1, s2, rb);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let new_env = Matrix2::from_tenferro(einsum_tensors(
+        "ab,asdr,bsdt->rt",
+        &[prev_env.as_inner(), a.as_inner(), b.as_inner()],
+    ));
 
     // Update cache
     while cache.len() < site {
@@ -251,25 +192,10 @@ where
         });
     }
 
-    let left_a = a.left_dim();
-    let left_b = b.left_dim();
-    let mut new_env: Matrix2<T> = matrix2_zeros(left_a, left_b);
-
-    for ra in 0..a.right_dim() {
-        for rb in 0..b.right_dim() {
-            let r_val = prev_env[[ra, rb]];
-            for s1 in 0..a.site_dim_1() {
-                for s2 in 0..a.site_dim_2() {
-                    for la in 0..left_a {
-                        for lb in 0..left_b {
-                            new_env[[la, lb]] = new_env[[la, lb]]
-                                + r_val * *a.get4(la, s1, s2, ra) * *b.get4(lb, s1, s2, rb);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let new_env = Matrix2::from_tenferro(einsum_tensors(
+        "rt,asdr,bsdt->ab",
+        &[prev_env.as_inner(), a.as_inner(), b.as_inner()],
+    ));
 
     // Update cache
     while cache.len() <= cache_idx {

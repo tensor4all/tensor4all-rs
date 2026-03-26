@@ -4,12 +4,14 @@
 //! - `dot`: Inner product (returns scalar)
 
 use crate::compression::CompressionMethod;
+use crate::einsum_helper::{einsum_tensors, tensor_to_row_major_vec};
 use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::Tensor3Ops;
-use matrixci::util::{zeros, Matrix};
+use matrixci::util::Matrix;
 use matrixci::Scalar;
+use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
 
 /// Options for contraction with compression
 #[derive(Debug, Clone)]
@@ -68,14 +70,14 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
             });
         }
 
-        let mut result: Matrix<T> = zeros(a0.right_dim(), b0.right_dim());
-        for s in 0..a0.site_dim() {
-            for ra in 0..a0.right_dim() {
-                for rb in 0..b0.right_dim() {
-                    result[[ra, rb]] = result[[ra, rb]] + *a0.get3(0, s, ra) * *b0.get3(0, s, rb);
-                }
-            }
-        }
+        let mut result = Matrix::from_raw_vec(
+            a0.right_dim(),
+            b0.right_dim(),
+            tensor_to_row_major_vec(&einsum_tensors(
+                "asr,ast->rt",
+                &[a0.as_inner(), b0.as_inner()],
+            )),
+        );
 
         // Contract through remaining sites
         for i in 1..n {
@@ -93,24 +95,21 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
                 });
             }
 
-            // new_result[ra', rb'] = sum_{la, lb, s} result[la, lb] * a[la, s, ra'] * b[lb, s, rb']
-            let mut new_result: Matrix<T> = zeros(a.right_dim(), b.right_dim());
+            let result_tf = TfTensor::from_slice(
+                result.as_slice(),
+                &[result.nrows(), result.ncols()],
+                MemoryOrder::RowMajor,
+            )
+            .expect("dot intermediate matrix dimensions should match tenferro");
 
-            for la in 0..a.left_dim() {
-                for lb in 0..b.left_dim() {
-                    let r_val = result[[la, lb]];
-                    for s in 0..a.site_dim() {
-                        for ra in 0..a.right_dim() {
-                            for rb in 0..b.right_dim() {
-                                new_result[[ra, rb]] = new_result[[ra, rb]]
-                                    + r_val * *a.get3(la, s, ra) * *b.get3(lb, s, rb);
-                            }
-                        }
-                    }
-                }
-            }
-
-            result = new_result;
+            result = Matrix::from_raw_vec(
+                a.right_dim(),
+                b.right_dim(),
+                tensor_to_row_major_vec(&einsum_tensors(
+                    "ij,isk,jsl->kl",
+                    &[&result_tf, a.as_inner(), b.as_inner()],
+                )),
+            );
         }
 
         // Final result should be 1x1

@@ -19,7 +19,49 @@ use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops,
 use crate::common::{
     tensortrain_to_linear_operator_asymmetric, BoundaryCondition, QuanticsOperator,
 };
-use tensor4all_simplett::tensor::{Tensor, Tensor3 as GenericTensor3};
+use tensor4all_simplett::tensor::Tensor3 as GenericTensor3;
+
+#[derive(Clone, Debug)]
+struct BoolTensor<const N: usize> {
+    data: Vec<u8>,
+    dims: [usize; N],
+}
+
+type BoolTensor2 = BoolTensor<2>;
+type BoolTensor3 = BoolTensor<3>;
+
+impl<const N: usize> BoolTensor<N> {
+    fn from_elem(dims: [usize; N], value: bool) -> Self {
+        let total: usize = dims.iter().product();
+        Self {
+            data: vec![u8::from(value); total],
+            dims,
+        }
+    }
+
+    fn dims(&self) -> &[usize; N] {
+        &self.dims
+    }
+
+    fn get(&self, idx: [usize; N]) -> bool {
+        self.data[self.offset(&idx)] != 0
+    }
+
+    fn set(&mut self, idx: [usize; N], value: bool) {
+        let offset = self.offset(&idx);
+        self.data[offset] = u8::from(value);
+    }
+
+    fn offset(&self, idx: &[usize; N]) -> usize {
+        let mut stride = 1usize;
+        let mut offset = 0usize;
+        for axis in (0..N).rev() {
+            offset += idx[axis] * stride;
+            stride *= self.dims[axis];
+        }
+        offset
+    }
+}
 
 /// Affine transformation parameters.
 ///
@@ -652,7 +694,7 @@ fn affine_transform_tensors(
             let mut new_weights = vec![0.0; num_cin];
             for (cin_idx, nw) in new_weights.iter_mut().enumerate() {
                 for (cout_idx, &w) in current_weights.iter().enumerate() {
-                    if w != 0.0 && ext_data.tensor[[cout_idx, cin_idx, 0]] {
+                    if w != 0.0 && ext_data.tensor.get([cout_idx, cin_idx, 0]) {
                         *nw += w;
                     }
                 }
@@ -714,7 +756,7 @@ fn affine_transform_tensors(
                 let bc_weight = compute_bc_weight(cout_idx, core_data);
 
                 for site_idx in 0..site_dim {
-                    if core_data.tensor[[cout_idx, 0, site_idx]] {
+                    if core_data.tensor.get([cout_idx, 0, site_idx]) {
                         let old = t.get3(0, site_idx, 0);
                         t.set3(0, site_idx, 0, *old + bc_weight);
                     }
@@ -727,7 +769,7 @@ fn affine_transform_tensors(
             // Only carry_in_idx=0 matters (initial carry is the first entry: zero vector)
             for cout_idx in 0..num_carry_out {
                 for site_idx in 0..site_dim {
-                    if core_data.tensor[[cout_idx, 0, site_idx]] {
+                    if core_data.tensor.get([cout_idx, 0, site_idx]) {
                         t.set3(cout_idx, site_idx, 0, Complex64::one());
                     }
                 }
@@ -739,7 +781,7 @@ fn affine_transform_tensors(
 
                 for cin_idx in 0..num_carry_in {
                     for site_idx in 0..site_dim {
-                        if core_data.tensor[[cout_idx, cin_idx, site_idx]] {
+                        if core_data.tensor.get([cout_idx, cin_idx, site_idx]) {
                             let old = t.get3(0, site_idx, cin_idx);
                             t.set3(0, site_idx, cin_idx, *old + bc_weight);
                         }
@@ -752,7 +794,7 @@ fn affine_transform_tensors(
             for cout_idx in 0..num_carry_out {
                 for cin_idx in 0..num_carry_in {
                     for site_idx in 0..site_dim {
-                        if core_data.tensor[[cout_idx, cin_idx, site_idx]] {
+                        if core_data.tensor.get([cout_idx, cin_idx, site_idx]) {
                             t.set3(cout_idx, site_idx, cin_idx, Complex64::one());
                         }
                     }
@@ -777,7 +819,7 @@ struct AffineCoreData {
     /// Possible outgoing carry vectors
     carries_out: Vec<Vec<i64>>,
     /// Tensor data: tensor[carry_out_idx, carry_in_idx, site_idx]
-    tensor: GenericTensor3<bool>,
+    tensor: BoolTensor3,
 }
 
 /// Compute a single core tensor for the affine transformation.
@@ -796,7 +838,7 @@ fn affine_transform_core(
     carries_in: &[Vec<i64>],
     activebit: bool,
 ) -> Result<AffineCoreData> {
-    let mut carry_out_map: HashMap<Vec<i64>, Tensor<bool, 2>> = HashMap::new();
+    let mut carry_out_map: HashMap<Vec<i64>, BoolTensor2> = HashMap::new();
     let x_range = if activebit { 1 << n } else { 1 };
     let y_range = if activebit { 1 << m } else { 1 };
     let site_dim = x_range * y_range;
@@ -844,8 +886,8 @@ fn affine_transform_core(
 
                 let entry = carry_out_map
                     .entry(carry_out)
-                    .or_insert_with(|| Tensor::from_elem([num_carry_in, site_dim], false));
-                entry[[c_idx, site_idx]] = true;
+                    .or_insert_with(|| BoolTensor2::from_elem([num_carry_in, site_dim], false));
+                entry.set([c_idx, site_idx], true);
             } else {
                 // Scale is even: z must be even for valid y
                 if z.iter().any(|&zi| zi % 2 != 0) {
@@ -867,8 +909,8 @@ fn affine_transform_core(
 
                     let entry = carry_out_map
                         .entry(carry_out)
-                        .or_insert_with(|| Tensor::from_elem([num_carry_in, site_dim], false));
-                    entry[[c_idx, site_idx]] = true;
+                        .or_insert_with(|| BoolTensor2::from_elem([num_carry_in, site_dim], false));
+                    entry.set([c_idx, site_idx], true);
                 }
             }
         }
@@ -881,12 +923,15 @@ fn affine_transform_core(
     let num_carry_out = carries_out.len();
 
     // Build 3D tensor: (num_carry_out, num_carry_in, site_dim)
-    let mut tensor = GenericTensor3::from_elem([num_carry_out, num_carry_in, site_dim], false);
+    let mut tensor = BoolTensor3::from_elem([num_carry_out, num_carry_in, site_dim], false);
     for (cout_idx, carry) in carries_out.iter().enumerate() {
         let data_2d = &carry_out_map[carry];
         for cin_idx in 0..num_carry_in {
             for site_idx in 0..site_dim {
-                tensor[[cout_idx, cin_idx, site_idx]] = data_2d[[cin_idx, site_idx]];
+                tensor.set(
+                    [cout_idx, cin_idx, site_idx],
+                    data_2d.get([cin_idx, site_idx]),
+                );
             }
         }
     }
