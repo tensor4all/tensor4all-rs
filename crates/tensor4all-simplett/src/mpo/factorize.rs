@@ -122,7 +122,7 @@ where
         FactorizeMethod::RSVD => factorize_rsvd(matrix, options),
         FactorizeMethod::LU | FactorizeMethod::CI => {
             // For LU/CI, fall back to SVD for now
-            // Full LU/CI support requires matrixci::Scalar trait
+            // Full LU/CI support requires tensor4all_tcicore::Scalar trait
             factorize_svd(matrix, options)
         }
     }
@@ -312,23 +312,23 @@ fn factorize_rsvd<T: SVDScalar>(
 
 /// Factorize using LU decomposition
 ///
-/// This function requires the matrixci::Scalar trait.
+/// This function requires the tensor4all_tcicore::Scalar trait.
 /// Use this directly when you need LU-based factorization.
 pub fn factorize_lu<T>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<T>>
 where
-    T: SVDScalar + matrixci::Scalar + matrixluci::Scalar,
+    T: SVDScalar + tensor4all_tcicore::Scalar + matrixluci::Scalar,
     matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
 {
-    use matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
+    use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
 
     let m = matrix.dim(0);
     let n = matrix.dim(1);
 
-    // Convert Matrix2 to matrixci::Matrix (temporary until matrixci migration)
-    let mut mat_ci: matrixci::Matrix<T> = matrixci::util::zeros(m, n);
+    // Convert Matrix2 to tensor4all_tcicore::Matrix for LU/CI factorization.
+    let mut mat_ci: tensor4all_tcicore::Matrix<T> = tensor4all_tcicore::matrix::zeros(m, n);
     for i in 0..m {
         for j in 0..n {
             mat_ci[[i, j]] = matrix[[i, j]];
@@ -348,8 +348,8 @@ where
     let rank = luci.rank().max(1);
 
     // Convert back to Matrix2
-    let left_m = matrixci::util::nrows(&left_ci);
-    let left_n = matrixci::util::ncols(&left_ci);
+    let left_m = tensor4all_tcicore::matrix::nrows(&left_ci);
+    let left_n = tensor4all_tcicore::matrix::ncols(&left_ci);
     let mut left: Matrix2<T> = matrix2_zeros(left_m, left_n);
     for i in 0..left_m {
         for j in 0..left_n {
@@ -357,8 +357,8 @@ where
         }
     }
 
-    let right_m = matrixci::util::nrows(&right_ci);
-    let right_n = matrixci::util::ncols(&right_ci);
+    let right_m = tensor4all_tcicore::matrix::nrows(&right_ci);
+    let right_n = tensor4all_tcicore::matrix::ncols(&right_ci);
     let mut right: Matrix2<T> = matrix2_zeros(right_m, right_n);
     for i in 0..right_m {
         for j in 0..right_n {
@@ -376,14 +376,14 @@ where
 
 /// Factorize using Cross Interpolation
 ///
-/// This function requires the matrixci::Scalar trait.
+/// This function requires the tensor4all_tcicore::Scalar trait.
 /// Use this directly when you need CI-based factorization.
 pub fn factorize_ci<T>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<T>>
 where
-    T: SVDScalar + matrixci::Scalar + matrixluci::Scalar,
+    T: SVDScalar + tensor4all_tcicore::Scalar + matrixluci::Scalar,
     <T as ComplexFloat>::Real: Into<f64>,
     matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
 {

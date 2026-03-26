@@ -90,7 +90,7 @@ pub enum MPOError {
 
     /// Matrix CI error
     #[error("Matrix CI error: {0}")]
-    MatrixCI(#[from] matrixci::MatrixCIError),
+    MatrixCI(#[from] tensor4all_tcicore::MatrixCIError),
 
     /// Convergence failure
     #[error("Failed to converge after {sweeps} sweeps (final error: {error})")]

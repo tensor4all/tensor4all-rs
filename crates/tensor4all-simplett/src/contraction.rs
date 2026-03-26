@@ -9,8 +9,8 @@ use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::Tensor3Ops;
-use matrixci::util::Matrix;
-use matrixci::Scalar;
+use tensor4all_tcicore::matrix::Matrix;
+use tensor4all_tcicore::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
 
 /// Options for contraction with compression
