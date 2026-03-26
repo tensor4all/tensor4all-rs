@@ -11,6 +11,7 @@ members = [
     "crates/tensor4all-partitionedtt",
     "crates/tensor4all-tensorci",
     "crates/tensor4all-quanticstci",
+    "crates/tensor4all-treetci",
     "crates/tensor4all-capi",
     "crates/tensor4all-hdf5",
     "tools/api-dump",

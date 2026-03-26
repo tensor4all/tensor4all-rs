@@ -1,0 +1,306 @@
+use crate::SubtreeKey;
+use anyhow::{anyhow, ensure, Result};
+use petgraph::algo::connected_components;
+use petgraph::graph::{NodeIndex, UnGraph};
+use petgraph::visit::EdgeRef;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+/// Canonical undirected edge used by TreeTCI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TreeTciEdge {
+    u: usize,
+    v: usize,
+}
+
+impl TreeTciEdge {
+    /// Construct an undirected edge with canonical endpoint ordering.
+    pub fn new(a: usize, b: usize) -> Self {
+        if a <= b {
+            Self { u: a, v: b }
+        } else {
+            Self { u: b, v: a }
+        }
+    }
+
+    /// Return the lower endpoint.
+    pub fn u(self) -> usize {
+        self.u
+    }
+
+    /// Return the higher endpoint.
+    pub fn v(self) -> usize {
+        self.v
+    }
+}
+
+/// Tree graph metadata for TreeTCI.
+#[derive(Clone, Debug)]
+pub struct TreeTciGraph {
+    n_sites: usize,
+    graph: UnGraph<(), ()>,
+}
+
+impl TreeTciGraph {
+    /// Construct a tree graph from the site count and edge list.
+    pub fn new(n_sites: usize, edges: &[TreeTciEdge]) -> Result<Self> {
+        ensure!(n_sites > 0, "TreeTCI graph must contain at least one site");
+
+        let mut graph = UnGraph::<(), ()>::default();
+        for _ in 0..n_sites {
+            graph.add_node(());
+        }
+
+        let mut seen = BTreeSet::new();
+        for &edge in edges {
+            ensure!(
+                edge.u != edge.v,
+                "self-loops are not allowed in TreeTCI graphs"
+            );
+            ensure!(
+                edge.v < n_sites,
+                "edge endpoint {} is out of bounds for {} sites",
+                edge.v,
+                n_sites
+            );
+            ensure!(seen.insert(edge), "duplicate edge ({}, {})", edge.u, edge.v);
+            graph.add_edge(NodeIndex::new(edge.u), NodeIndex::new(edge.v), ());
+        }
+
+        ensure!(
+            graph.edge_count() + 1 == n_sites,
+            "TreeTCI graph must be a tree: expected {} edges for {} sites, got {}",
+            n_sites.saturating_sub(1),
+            n_sites,
+            graph.edge_count()
+        );
+        ensure!(
+            connected_components(&graph) == 1,
+            "TreeTCI graph must be connected"
+        );
+
+        Ok(Self { n_sites, graph })
+    }
+
+    /// Return the canonicalized edge if present in the graph.
+    pub fn separate_vertices(&self, edge: TreeTciEdge) -> Result<(usize, usize)> {
+        if self.has_edge(edge) {
+            Ok((edge.u, edge.v))
+        } else {
+            Err(anyhow!("edge ({}, {}) is not in the graph", edge.u, edge.v))
+        }
+    }
+
+    /// Return the sorted subtree sites when traversing away from `parent`.
+    pub fn subtree_vertices(&self, parent: usize, children: &[usize]) -> Result<SubtreeKey> {
+        ensure!(
+            parent < self.n_sites,
+            "parent site {} is out of bounds",
+            parent
+        );
+
+        let mut sites = Vec::new();
+        let mut seen = vec![false; self.n_sites];
+        for &child in children {
+            ensure!(
+                child < self.n_sites,
+                "child site {} is out of bounds",
+                child
+            );
+            ensure!(
+                self.has_edge(TreeTciEdge::new(parent, child)),
+                "sites {} and {} are not adjacent",
+                parent,
+                child
+            );
+            self.collect_subtree_sites(parent, child, &mut seen, &mut sites);
+        }
+        sites.sort_unstable();
+        Ok(SubtreeKey::new(sites))
+    }
+
+    /// Return the two sides of the edge bipartition.
+    pub fn subregion_vertices(&self, edge: TreeTciEdge) -> Result<(SubtreeKey, SubtreeKey)> {
+        let (u, v) = self.separate_vertices(edge)?;
+        Ok((
+            self.subtree_vertices(v, &[u])?,
+            self.subtree_vertices(u, &[v])?,
+        ))
+    }
+
+    /// Return edges adjacent to a site, excluding any explicitly combined edges.
+    pub fn adjacent_edges(&self, site: usize, combined_edges: &[TreeTciEdge]) -> Vec<TreeTciEdge> {
+        if site >= self.n_sites {
+            return Vec::new();
+        }
+
+        let excluded = combined_edges.iter().copied().collect::<BTreeSet<_>>();
+        let mut edges = self
+            .graph
+            .edges(NodeIndex::new(site))
+            .map(|edge_ref| TreeTciEdge::new(edge_ref.source().index(), edge_ref.target().index()))
+            .filter(|edge| !excluded.contains(edge))
+            .collect::<Vec<_>>();
+        edges.sort_unstable();
+        edges
+    }
+
+    /// Return the candidate edges adjacent to either endpoint of `edge`, excluding `edge`.
+    pub fn candidate_edges(&self, edge: TreeTciEdge) -> Result<Vec<TreeTciEdge>> {
+        let (u, v) = self.separate_vertices(edge)?;
+        let candidates = self
+            .adjacent_edges(u, &[edge])
+            .into_iter()
+            .chain(self.adjacent_edges(v, &[edge]))
+            .collect::<BTreeSet<_>>();
+        Ok(candidates.into_iter().collect())
+    }
+
+    /// Return graph distances from `edge` to every edge in the tree.
+    pub fn distance_edges(&self, edge: TreeTciEdge) -> Result<BTreeMap<TreeTciEdge, usize>> {
+        let (u, v) = self.separate_vertices(edge)?;
+        let mut distances = BTreeMap::new();
+        self.collect_edge_distances_from_root(u, v, &mut distances);
+        self.collect_edge_distances_from_root(v, u, &mut distances);
+        distances.insert(edge, 0);
+        Ok(distances)
+    }
+
+    /// Return all canonical edges in the tree in sorted order.
+    pub fn edges(&self) -> Vec<TreeTciEdge> {
+        let mut edges = self
+            .graph
+            .edge_references()
+            .map(|edge_ref| TreeTciEdge::new(edge_ref.source().index(), edge_ref.target().index()))
+            .collect::<Vec<_>>();
+        edges.sort_unstable();
+        edges
+    }
+
+    /// Number of sites in the tree.
+    pub fn n_sites(&self) -> usize {
+        self.n_sites
+    }
+
+    /// Return the neighbors of a site in ascending order.
+    pub fn neighbors(&self, site: usize) -> Result<Vec<usize>> {
+        ensure!(site < self.n_sites, "site {} is out of bounds", site);
+        let mut neighbors = self
+            .graph
+            .neighbors(NodeIndex::new(site))
+            .map(|neighbor| neighbor.index())
+            .collect::<Vec<_>>();
+        neighbors.sort_unstable();
+        Ok(neighbors)
+    }
+
+    /// Return the canonical edge between two adjacent sites.
+    pub fn edge_between(&self, a: usize, b: usize) -> Result<TreeTciEdge> {
+        let edge = TreeTciEdge::new(a, b);
+        self.separate_vertices(edge)?;
+        Ok(edge)
+    }
+
+    /// Return `(parents, distances)` from a BFS rooted at `root`.
+    pub fn bfs_tree(&self, root: usize) -> Result<(Vec<Option<usize>>, Vec<usize>)> {
+        ensure!(root < self.n_sites, "root site {} is out of bounds", root);
+        let mut parents = vec![None; self.n_sites];
+        let mut distances = vec![usize::MAX; self.n_sites];
+        let mut queue = VecDeque::from([root]);
+        distances[root] = 0;
+
+        while let Some(current) = queue.pop_front() {
+            for neighbor in self.neighbors(current)? {
+                if distances[neighbor] == usize::MAX {
+                    parents[neighbor] = Some(current);
+                    distances[neighbor] = distances[current] + 1;
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+
+        Ok((parents, distances))
+    }
+
+    /// Return subtree keys for the incoming direction at `site` from the given edges.
+    pub fn edge_in_ij_keys(&self, site: usize, edges: &[TreeTciEdge]) -> Result<Vec<SubtreeKey>> {
+        ensure!(site < self.n_sites, "site {} is out of bounds", site);
+
+        edges
+            .iter()
+            .map(|&edge| {
+                let (u, v) = self.separate_vertices(edge)?;
+                if u == site {
+                    self.subtree_vertices(u, &[v])
+                } else if v == site {
+                    self.subtree_vertices(v, &[u])
+                } else {
+                    Err(anyhow!(
+                        "edge ({}, {}) is not adjacent to site {}",
+                        u,
+                        v,
+                        site
+                    ))
+                }
+            })
+            .collect()
+    }
+
+    fn has_edge(&self, edge: TreeTciEdge) -> bool {
+        self.graph
+            .find_edge(NodeIndex::new(edge.u), NodeIndex::new(edge.v))
+            .is_some()
+    }
+
+    fn collect_subtree_sites(
+        &self,
+        parent: usize,
+        child: usize,
+        seen: &mut [bool],
+        out: &mut Vec<usize>,
+    ) {
+        let mut stack = vec![(parent, child)];
+        while let Some((previous, current)) = stack.pop() {
+            if seen[current] {
+                continue;
+            }
+            seen[current] = true;
+            out.push(current);
+            for neighbor in self.graph.neighbors(NodeIndex::new(current)) {
+                let neighbor = neighbor.index();
+                if neighbor != previous {
+                    stack.push((current, neighbor));
+                }
+            }
+        }
+    }
+
+    fn collect_edge_distances_from_root(
+        &self,
+        root: usize,
+        blocked: usize,
+        distances: &mut BTreeMap<TreeTciEdge, usize>,
+    ) {
+        let mut queue = VecDeque::from([(root, root, 0usize)]);
+        let mut seen = vec![false; self.n_sites];
+        seen[blocked] = true;
+
+        while let Some((parent, current, dist)) = queue.pop_front() {
+            if seen[current] {
+                continue;
+            }
+            seen[current] = true;
+            if current != root {
+                distances.insert(TreeTciEdge::new(parent, current), dist);
+            }
+            for neighbor in self.graph.neighbors(NodeIndex::new(current)) {
+                let neighbor = neighbor.index();
+                if !seen[neighbor] {
+                    queue.push_back((current, neighbor, dist + 1));
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;
