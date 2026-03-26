@@ -8,6 +8,10 @@
 
 **Tech Stack:** Rust workspace crate, `faer`, `criterion`, `cargo nextest`, existing `matrixci`/`tensor4all-tensorci` tests.
 
+**Follow-up attribution note:** When the blocked TreeTCI port starts, preserve the
+original `TreeTCI.jl` authorship metadata, including Ryo Watanabe from
+`TreeTCI.jl/Project.toml`.
+
 ---
 
 ### Task 1: Scaffold `matrixluci` crate and core types

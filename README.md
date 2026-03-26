@@ -68,6 +68,7 @@ tensor4all-rs/
 │   ├── tensor4all-hdf5/              # ITensors.jl-compatible HDF5 serialization
 │   ├── tensor4all-hdf5-ffi/          # HDF5 FFI with runtime loading support
 │   ├── tensor4all-capi/              # C API for language bindings
+│   ├── matrixluci/                   # LUCI / rrLU substrate (faer-derived dense path)
 │   ├── matrixci/                     # Matrix Cross Interpolation (internal)
 │   └── quanticsgrids/                # Quantics grid structures (internal)
 ├── python/tensor4all/                # Python bindings
@@ -92,6 +93,7 @@ tensor4all-rs/
 | [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
 | [tensor4all-hdf5-ffi](crates/tensor4all-hdf5-ffi/) | HDF5 FFI with build-time linking and runtime loading |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
+| [matrixluci](crates/matrixluci/) | LUCI / rrLU substrate with a dense path ported from `faer` |
 | [matrixci](crates/matrixci/) | Matrix Cross Interpolation |
 | [quanticsgrids](crates/quanticsgrids/) | Quantics grid structures |
 

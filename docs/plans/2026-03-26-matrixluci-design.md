@@ -21,6 +21,10 @@ For TreeTCI, the blocker is not the full `matrixci` surface but the LU-based sub
 
 At the same time, it is acceptable for this refactor to be breaking. Backward compatibility is not required.
 
+Future TreeTCI follow-up work must preserve upstream authorship metadata from
+`TreeTCI.jl`, including the original `Project.toml` author entry for
+Ryo Watanabe.
+
 ## 2. Goals
 
 ### 2.1 Functional goals
