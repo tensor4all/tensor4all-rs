@@ -18,6 +18,17 @@ This crate provides `LinearOperator` constructors for various transformations in
 
 All transformations return `LinearOperator` from `tensor4all-treetn` for consistent operator application to tensor train states.
 
+**Terminology**: The parameter `r` refers to the number of quantics bits (sites) per variable. A single variable is discretized on 2^r grid points.
+
+## Error Conditions
+
+All operator constructors return `Err` for invalid inputs:
+- `r == 0`: No sites to operate on
+- `r == 1` for `cumsum_operator`, `triangle_operator`, `quantics_fourier_operator`: Requires at least 2 sites
+- `r >= 64` for `shift_operator`: Would overflow 64-bit integer
+- NaN or Inf `theta` for `phase_rotation_operator`: Invalid rotation angle
+- `BinaryCoeffs(-1, -1)` for `binaryop_single_operator`: This combination is not supported
+
 ## Usage
 
 ```rust
@@ -173,6 +184,20 @@ let options = ApplyOptions::fit()
     .with_max_bond_dim(32)
     .with_max_iterations(100);
 ```
+
+## Fourier Transform Convention
+
+The quantics Fourier transform (`quantics_fourier_operator`) produces output in **bit-reversed order**. This is inherent to the QFT algorithm: the output site ordering corresponds to the bit-reversal of the frequency index.
+
+## Multi-Variable Encoding
+
+The `_multivar` variants (`flip_operator_multivar`, `shift_operator_multivar`, `phase_rotation_operator_multivar`) use **interleaved bit encoding** for multiple variables:
+
+```text
+site index s_n encodes: bit_var0 + 2 * bit_var1 + 4 * bit_var2 + ...
+```
+
+Each site holds one bit from each variable, packed into a single local dimension of size `2^num_vars`.
 
 ## Big-Endian Convention
 

@@ -83,4 +83,5 @@ pub use quantics_tci::{
 
 // Re-export commonly used types from dependencies
 pub use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid, UnfoldingScheme};
+pub use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
 pub use tensor4all_tensorci::{PivotSearchStrategy, Scalar, TCI2Options, TensorCI2};
