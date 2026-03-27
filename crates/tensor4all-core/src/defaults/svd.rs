@@ -134,23 +134,21 @@ fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, Sv
     }
 }
 
-/// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
-pub fn svd<T>(
-    t: &TensorDynLen,
-    left_inds: &[DynIndex],
-) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
-    svd_with::<T>(t, left_inds, &SvdOptions::default())
-}
+type SvdTruncatedNativeResult = (
+    tenferro::Tensor,
+    tenferro::Tensor,
+    tenferro::Tensor,
+    Vec<f64>,
+    DynIndex,
+    Vec<DynIndex>,
+    Vec<DynIndex>,
+);
 
-/// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
-///
-/// This function allows per-call control of the truncation tolerance via `SvdOptions`.
-/// If `options.rtol` is `None`, uses the global default rtol.
-pub fn svd_with<T>(
+fn svd_truncated_native(
     t: &TensorDynLen,
     left_inds: &[DynIndex],
     options: &SvdOptions,
-) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
+) -> Result<SvdTruncatedNativeResult, SvdError> {
     let rtol = options.truncation.effective_rtol(default_svd_rtol());
     if !rtol.is_finite() || rtol < 0.0 {
         return Err(SvdError::InvalidRtol(rtol));
@@ -185,6 +183,38 @@ pub fn svd_with<T>(
     let bond_index = DynIndex::new_bond(r)
         .map_err(|e| anyhow::anyhow!("Failed to create Link index: {:?}", e))
         .map_err(SvdError::ComputationError)?;
+    let singular_values = s_full[..r].to_vec();
+
+    Ok((
+        u_native,
+        s_native,
+        vt_native,
+        singular_values,
+        bond_index,
+        left_indices,
+        right_indices,
+    ))
+}
+
+/// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
+pub fn svd<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
+    svd_with::<T>(t, left_inds, &SvdOptions::default())
+}
+
+/// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
+///
+/// This function allows per-call control of the truncation tolerance via `SvdOptions`.
+/// If `options.rtol` is `None`, uses the global default rtol.
+pub fn svd_with<T>(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    options: &SvdOptions,
+) -> Result<(TensorDynLen, TensorDynLen, TensorDynLen), SvdError> {
+    let (u_native, s_native, vt_native, _singular_values, bond_index, left_indices, right_indices) =
+        svd_truncated_native(t, left_inds, options)?;
 
     let mut u_indices = left_indices;
     u_indices.push(bond_index.clone());
@@ -212,6 +242,59 @@ pub fn svd_with<T>(
     let v = vh.conj().permute(&perm);
 
     Ok((u, s, v))
+}
+
+/// SVD result for factorization, returning `V^H` directly.
+pub(crate) struct SvdFactorizeResult {
+    pub u: TensorDynLen,
+    pub s: TensorDynLen,
+    pub vh: TensorDynLen,
+    pub bond_index: DynIndex,
+    pub singular_values: Vec<f64>,
+    pub rank: usize,
+}
+
+/// Compute truncated SVD for factorization, returning `V^H` instead of `V`.
+pub(crate) fn svd_for_factorize(
+    t: &TensorDynLen,
+    left_inds: &[DynIndex],
+    options: &SvdOptions,
+) -> Result<SvdFactorizeResult, SvdError> {
+    let (u_native, s_native, vt_native, singular_values, bond_index, left_indices, right_indices) =
+        svd_truncated_native(t, left_inds, options)?;
+    let rank = singular_values.len();
+
+    let mut u_indices = left_indices;
+    u_indices.push(bond_index.clone());
+    let u_dims: Vec<usize> = u_indices.iter().map(|idx| idx.dim).collect();
+    let u_reshaped = reshape_col_major_native_tensor(&u_native, &u_dims).map_err(|e| {
+        SvdError::ComputationError(anyhow::anyhow!("native SVD U reshape failed: {e}"))
+    })?;
+    let u = TensorDynLen::from_native(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
+
+    let s_indices = vec![bond_index.clone(), bond_index.sim()];
+    let s_diag = s_native.diag_embed(2).map_err(|e| {
+        SvdError::ComputationError(anyhow::anyhow!("native SVD diagonal embedding failed: {e}"))
+    })?;
+    let s = TensorDynLen::from_native(s_indices, s_diag).map_err(SvdError::ComputationError)?;
+
+    let mut vh_indices = vec![bond_index.clone()];
+    vh_indices.extend(right_indices);
+    let vh_dims: Vec<usize> = vh_indices.iter().map(|idx| idx.dim).collect();
+    let vt_reshaped = reshape_col_major_native_tensor(&vt_native, &vh_dims).map_err(|e| {
+        SvdError::ComputationError(anyhow::anyhow!("native SVD V^T reshape failed: {e}"))
+    })?;
+    let vh =
+        TensorDynLen::from_native(vh_indices, vt_reshaped).map_err(SvdError::ComputationError)?;
+
+    Ok(SvdFactorizeResult {
+        u,
+        s,
+        vh,
+        bond_index,
+        singular_values,
+        rank,
+    })
 }
 
 #[cfg(test)]

@@ -22,7 +22,10 @@
 //! - After union-find: i, j, k all map to the same representative ID
 //! - This creates a hyperedge that the einsum optimizer handles correctly
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::env;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use petgraph::algo::connected_components;
@@ -33,6 +36,94 @@ use crate::defaults::{DynId, DynIndex, TensorDynLen};
 
 use crate::index_like::IndexLike;
 use crate::tensor_like::AllowedPairs;
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct ContractOperandSignature {
+    dims: Vec<usize>,
+    ids: Vec<usize>,
+    is_diag: bool,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct ContractSignature {
+    operands: Vec<ContractOperandSignature>,
+    output_ids: Vec<usize>,
+    output_dims: Vec<usize>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ContractProfileEntry {
+    calls: usize,
+    total_time: Duration,
+}
+
+thread_local! {
+    static CONTRACT_PROFILE_STATE: RefCell<HashMap<ContractSignature, ContractProfileEntry>> =
+        RefCell::new(HashMap::new());
+}
+
+fn contract_profile_enabled() -> bool {
+    env::var("T4A_PROFILE_CONTRACT").is_ok()
+}
+
+fn record_contract_profile(signature: ContractSignature, elapsed: Duration) {
+    if !contract_profile_enabled() {
+        return;
+    }
+    CONTRACT_PROFILE_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let entry = state.entry(signature).or_default();
+        entry.calls += 1;
+        entry.total_time += elapsed;
+    });
+}
+
+/// Reset the aggregated multi-tensor contraction profile.
+pub fn reset_contract_profile() {
+    CONTRACT_PROFILE_STATE.with(|state| state.borrow_mut().clear());
+}
+
+/// Print and clear the aggregated multi-tensor contraction profile.
+pub fn print_and_reset_contract_profile() {
+    if !contract_profile_enabled() {
+        return;
+    }
+    CONTRACT_PROFILE_STATE.with(|state| {
+        let mut entries: Vec<_> = state
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        state.borrow_mut().clear();
+        entries.sort_by(|(_, lhs), (_, rhs)| rhs.total_time.cmp(&lhs.total_time));
+
+        eprintln!("=== contract_multi Profile ===");
+        for (idx, (signature, entry)) in entries.into_iter().take(20).enumerate() {
+            let operands = signature
+                .operands
+                .iter()
+                .map(|operand| {
+                    format!(
+                        "dims={:?} ids={:?}{}",
+                        operand.dims,
+                        operand.ids,
+                        if operand.is_diag { " diag" } else { "" }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ; ");
+            eprintln!(
+                "#{idx:02} calls={} total={:.3}s per_call={:.3}us output_dims={:?} output_ids={:?}",
+                entry.calls,
+                entry.total_time.as_secs_f64(),
+                entry.total_time.as_secs_f64() * 1e6 / entry.calls as f64,
+                signature.output_dims,
+                signature.output_ids,
+            );
+            eprintln!("     {operands}");
+        }
+    });
+}
 
 // ============================================================================
 // Public API
@@ -377,6 +468,21 @@ fn contract_multi_impl(
         }
     }
 
+    let profile_signature = contract_profile_enabled().then(|| ContractSignature {
+        operands: tensors
+            .iter()
+            .enumerate()
+            .map(|(tensor_idx, tensor)| ContractOperandSignature {
+                dims: tensor.dims().to_vec(),
+                ids: ixs[tensor_idx].clone(),
+                is_diag: tensor.is_diag(),
+            })
+            .collect(),
+        output_ids: output.clone(),
+        output_dims: output.iter().map(|id| sizes[id]).collect(),
+    });
+    let profile_started = contract_profile_enabled().then(Instant::now);
+
     let native_operands: Vec<_> = tensors
         .iter()
         .enumerate()
@@ -384,6 +490,9 @@ fn contract_multi_impl(
         .collect();
 
     let result_native = einsum_native_tensors(&native_operands, &output)?;
+    if let (Some(signature), Some(started)) = (profile_signature, profile_started) {
+        record_contract_profile(signature, started.elapsed());
+    }
     let final_indices = if output.is_empty() {
         vec![]
     } else {

@@ -5,6 +5,8 @@
 //! of function values through an explicit batch function parameter.
 
 use crate::error::{Result, TCIError};
+use crate::globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput};
+use rand::SeedableRng;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
@@ -12,8 +14,9 @@ use tensor4all_tcicore::matrix::zeros;
 use tensor4all_tcicore::MultiIndex;
 use tensor4all_tcicore::Scalar;
 use tensor4all_tcicore::{
-    CrossFactors, DenseFaerLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource,
-    PivotKernel, PivotKernelOptions,
+    rrlu, AbstractMatrixCI, CrossFactors, DenseFaerLuKernel, DenseMatrixSource,
+    LazyBlockRookKernel, LazyMatrixSource, MatrixLUCI, PivotKernel, PivotKernelOptions,
+    RrLUOptions,
 };
 
 /// Options for TCI2 algorithm
@@ -41,10 +44,20 @@ pub struct TCI2Options {
     pub normalize_error: bool,
     /// Verbosity level
     pub verbosity: usize,
-    /// Number of global pivots to search per iteration
+    /// Maximum number of global pivots to add per iteration
     pub max_nglobal_pivot: usize,
     /// Number of random searches for global pivots
     pub nsearch: usize,
+    /// Sweep strategy for 2-site sweeps
+    pub sweep_strategy: Sweep2Strategy,
+    /// Number of iterations to check for convergence history
+    pub ncheck_history: usize,
+    /// Whether to use strictly nested index sets
+    pub strictly_nested: bool,
+    /// Tolerance margin for global pivot search
+    pub tol_margin_global_search: f64,
+    /// Random seed (None = use thread_rng)
+    pub seed: Option<u64>,
 }
 
 impl Default for TCI2Options {
@@ -52,14 +65,35 @@ impl Default for TCI2Options {
         Self {
             tolerance: 1e-8,
             max_iter: 20,
-            max_bond_dim: 50,
+            max_bond_dim: usize::MAX,
             pivot_search: PivotSearchStrategy::Full,
             normalize_error: true,
             verbosity: 0,
             max_nglobal_pivot: 5,
-            nsearch: 100,
+            nsearch: 5,
+            sweep_strategy: Sweep2Strategy::BackAndForth,
+            ncheck_history: 3,
+            strictly_nested: false,
+            tol_margin_global_search: 10.0,
+            seed: None,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct Sweep1SiteBondConfig {
+    rel_tol: f64,
+    abs_tol: f64,
+    max_bond_dim: usize,
+    update_tensors: bool,
+}
+
+struct PivotUpdateContext<'a, B> {
+    batched_f: &'a Option<B>,
+    left_orthogonal: bool,
+    options: &'a TCI2Options,
+    extra_i_set: &'a [MultiIndex],
+    extra_j_set: &'a [MultiIndex],
 }
 
 /// Pivot search strategy for TCI2
@@ -74,6 +108,18 @@ pub enum PivotSearchStrategy {
     /// normalization uses the maximum sample value observed through the lazy
     /// requests instead of a full-grid scan.
     Rook,
+}
+
+/// Sweep strategy for 2-site sweeps
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sweep2Strategy {
+    /// Forward sweep only
+    Forward,
+    /// Backward sweep only
+    Backward,
+    /// Alternate between forward and backward sweeps
+    #[default]
+    BackAndForth,
 }
 
 /// TensorCI2 - Two-site Tensor Cross Interpolation
@@ -96,11 +142,17 @@ pub struct TensorCI2<T: Scalar + TTScalar> {
     bond_errors: Vec<f64>,
     /// Maximum observed sample value found during function evaluation
     max_sample_value: f64,
+    /// History of I-sets for non-strictly-nested mode
+    i_set_history: Vec<Vec<Vec<MultiIndex>>>,
+    /// History of J-sets for non-strictly-nested mode
+    j_set_history: Vec<Vec<Vec<MultiIndex>>>,
 }
 
 impl<T> TensorCI2<T>
 where
     T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+    LazyBlockRookKernel: PivotKernel<T>,
 {
     /// Create a new empty TensorCI2
     pub fn new(local_dims: Vec<usize>) -> Result<Self> {
@@ -119,6 +171,8 @@ where
             pivot_errors: Vec::new(),
             bond_errors: vec![0.0; n.saturating_sub(1)],
             max_sample_value: 0.0,
+            i_set_history: Vec::new(),
+            j_set_history: Vec::new(),
         })
     }
 
@@ -228,11 +282,431 @@ where
         Ok(())
     }
 
+    /// Get I-set at site p
+    pub fn i_set(&self, p: usize) -> &[MultiIndex] {
+        &self.i_set[p]
+    }
+
+    /// Get J-set at site p
+    pub fn j_set(&self, p: usize) -> &[MultiIndex] {
+        &self.j_set[p]
+    }
+
     /// Invalidate all site tensors
-    fn invalidate_site_tensors(&mut self) {
+    pub fn invalidate_site_tensors(&mut self) {
         for p in 0..self.len() {
             self.site_tensors[p] = tensor3_zeros(0, self.local_dims[p], 0);
         }
+    }
+
+    /// Flush pivot errors (reset to empty)
+    pub fn flush_pivot_errors(&mut self) {
+        self.pivot_errors.clear();
+    }
+
+    /// Perform one 2-site sweep.
+    ///
+    /// This is a public wrapper around the internal `update_pivots` logic,
+    /// suitable for calling from C-API.
+    pub fn sweep2site<F, B>(
+        &mut self,
+        f: &F,
+        batched_f: &Option<B>,
+        forward: bool,
+        options: &TCI2Options,
+    ) -> Result<()>
+    where
+        F: Fn(&MultiIndex) -> T,
+        B: Fn(&[MultiIndex]) -> Vec<T>,
+    {
+        let n = self.len();
+        self.invalidate_site_tensors();
+        self.flush_pivot_errors();
+
+        let empty: Vec<MultiIndex> = Vec::new();
+        if forward {
+            for b in 0..n - 1 {
+                update_pivots(
+                    self,
+                    b,
+                    f,
+                    PivotUpdateContext {
+                        batched_f,
+                        left_orthogonal: true,
+                        options,
+                        extra_i_set: &empty,
+                        extra_j_set: &empty,
+                    },
+                )?;
+            }
+        } else {
+            for b in (0..n - 1).rev() {
+                update_pivots(
+                    self,
+                    b,
+                    f,
+                    PivotUpdateContext {
+                        batched_f,
+                        left_orthogonal: false,
+                        options,
+                        extra_i_set: &empty,
+                        extra_j_set: &empty,
+                    },
+                )?;
+            }
+        }
+
+        // Fill site tensors after sweep
+        self.fill_site_tensors(f)?;
+        Ok(())
+    }
+
+    /// Update pivot errors with element-wise max
+    fn update_pivot_errors(&mut self, errors: &[f64]) {
+        if self.pivot_errors.len() < errors.len() {
+            self.pivot_errors.resize(errors.len(), 0.0);
+        }
+        for (i, &e) in errors.iter().enumerate() {
+            self.pivot_errors[i] = self.pivot_errors[i].max(e);
+        }
+    }
+
+    /// Evaluate function at all combinations of left indices × local index × right indices.
+    ///
+    /// Returns a 3D array of shape (len(i_indices), local_dim, len(j_indices)).
+    fn fill_tensor<F>(
+        &self,
+        f: &F,
+        i_indices: &[MultiIndex],
+        j_indices: &[MultiIndex],
+        local_dim: usize,
+        site: usize,
+    ) -> Tensor3<T>
+    where
+        F: Fn(&MultiIndex) -> T,
+    {
+        let ni = i_indices.len();
+        let nj = j_indices.len();
+        let mut tensor = tensor3_zeros(ni, local_dim, nj);
+        for (ii, i_multi) in i_indices.iter().enumerate() {
+            for s in 0..local_dim {
+                for (jj, j_multi) in j_indices.iter().enumerate() {
+                    let mut full_idx = i_multi.clone();
+                    full_idx.push(s);
+                    full_idx.extend(j_multi.iter().cloned());
+                    debug_assert_eq!(
+                        full_idx.len(),
+                        self.local_dims.len(),
+                        "fill_tensor: full_idx length {} != n_sites {} at site {}",
+                        full_idx.len(),
+                        self.local_dims.len(),
+                        site
+                    );
+                    let val = f(&full_idx);
+                    tensor.set3(ii, s, jj, val);
+                }
+            }
+        }
+        tensor
+    }
+
+    /// Perform a 1-site sweep, updating I/J sets and optionally site tensors.
+    ///
+    /// This is used for cleanup after adding global pivots, and for computing
+    /// canonical site tensors.
+    ///
+    /// Port of Julia's `sweep1site!` from `tensorci2.jl`.
+    pub fn sweep1site<F>(
+        &mut self,
+        f: &F,
+        forward: bool,
+        rel_tol: f64,
+        abs_tol: f64,
+        max_bond_dim: usize,
+        update_tensors: bool,
+    ) -> Result<()>
+    where
+        F: Fn(&MultiIndex) -> T,
+    {
+        self.flush_pivot_errors();
+        self.invalidate_site_tensors();
+
+        let n = self.len();
+        let bond_config = Sweep1SiteBondConfig {
+            rel_tol,
+            abs_tol,
+            max_bond_dim,
+            update_tensors,
+        };
+
+        if forward {
+            for b in 0..n - 1 {
+                self.sweep1site_at_bond(f, b, true, bond_config)?;
+            }
+        } else {
+            for b in (1..n).rev() {
+                self.sweep1site_at_bond(f, b, false, bond_config)?;
+            }
+        }
+
+        // Update last tensor according to last index set
+        if update_tensors {
+            let last_idx = if forward { n - 1 } else { 0 };
+            let tensor = self.fill_tensor(
+                f,
+                &self.i_set[last_idx].clone(),
+                &self.j_set[last_idx].clone(),
+                self.local_dims[last_idx],
+                last_idx,
+            );
+            self.site_tensors[last_idx] = tensor;
+        }
+
+        Ok(())
+    }
+
+    /// Process one bond during 1-site sweep.
+    fn sweep1site_at_bond<F>(
+        &mut self,
+        f: &F,
+        b: usize,
+        forward: bool,
+        config: Sweep1SiteBondConfig,
+    ) -> Result<()>
+    where
+        F: Fn(&MultiIndex) -> T,
+    {
+        // Build combined indices: for forward, Kronecker(I_b, local_b) × J_b
+        //                         for backward, I_b × Kronecker(local_b, J_b)
+        let (is, js) = if forward {
+            (self.kronecker_i(b), self.j_set[b].clone())
+        } else {
+            (self.i_set[b].clone(), self.kronecker_j(b))
+        };
+
+        if is.is_empty() || js.is_empty() {
+            return Ok(());
+        }
+
+        // Build Pi matrix by evaluating function at all (I, J) combinations
+        let ni = is.len();
+        let nj = js.len();
+        let mut pi = zeros(ni, nj);
+        for (i, i_multi) in is.iter().enumerate() {
+            for (j, j_multi) in js.iter().enumerate() {
+                let mut full_idx = i_multi.clone();
+                full_idx.extend(j_multi.iter().cloned());
+                let val = f(&full_idx);
+                pi[[i, j]] = val;
+                let abs_val = f64::sqrt(Scalar::abs_sq(val));
+                if abs_val > self.max_sample_value {
+                    self.max_sample_value = abs_val;
+                }
+            }
+        }
+
+        // LU-based cross interpolation
+        let lu_options = RrLUOptions {
+            max_rank: config.max_bond_dim,
+            rel_tol: config.rel_tol,
+            abs_tol: config.abs_tol,
+            left_orthogonal: forward,
+        };
+        let luci = MatrixLUCI::from_matrix(&pi, Some(lu_options))?;
+
+        let row_indices = luci.row_indices();
+        let col_indices = luci.col_indices();
+
+        // Update I/J sets
+        if forward {
+            self.i_set[b + 1] = row_indices.iter().map(|&i| is[i].clone()).collect();
+            self.j_set[b] = col_indices.iter().map(|&j| js[j].clone()).collect();
+        } else {
+            self.i_set[b] = row_indices.iter().map(|&i| is[i].clone()).collect();
+            self.j_set[b - 1] = col_indices.iter().map(|&j| js[j].clone()).collect();
+        }
+
+        // Update site tensor
+        if config.update_tensors {
+            let mat = if forward { luci.left() } else { luci.right() };
+            let local_dim = self.local_dims[b];
+            if forward {
+                let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
+                let right_dim = luci.rank().max(1);
+                let mut tensor = tensor3_zeros(left_dim, local_dim, right_dim);
+                for l in 0..left_dim {
+                    for s in 0..local_dim {
+                        for r in 0..right_dim {
+                            let row = l * local_dim + s;
+                            if row < mat.nrows() && r < mat.ncols() {
+                                tensor.set3(l, s, r, mat[[row, r]]);
+                            }
+                        }
+                    }
+                }
+                self.site_tensors[b] = tensor;
+            } else {
+                let left_dim = luci.rank().max(1);
+                let right_dim = if b == self.len() - 1 {
+                    1
+                } else {
+                    self.j_set[b].len()
+                };
+                let mut tensor = tensor3_zeros(left_dim, local_dim, right_dim);
+                for l in 0..left_dim {
+                    for s in 0..local_dim {
+                        for r in 0..right_dim {
+                            let col = s * right_dim + r;
+                            if l < mat.nrows() && col < mat.ncols() {
+                                tensor.set3(l, s, r, mat[[l, col]]);
+                            }
+                        }
+                    }
+                }
+                self.site_tensors[b] = tensor;
+            }
+        }
+
+        // Update errors
+        let errors = luci.pivot_errors();
+        if !errors.is_empty() {
+            let bond_idx = if forward { b } else { b - 1 };
+            self.bond_errors[bond_idx] = *errors.last().unwrap_or(&0.0);
+        }
+        self.update_pivot_errors(&errors);
+
+        Ok(())
+    }
+
+    /// Fill all site tensors using 1-site LU decomposition at each bond.
+    ///
+    /// For each site b (except the last), computes the Pi matrix
+    /// (Kronecker(I_b, d_b) × J_b) and the pivot matrix P (I_{b+1} × J_b),
+    /// then solves P^T \ Pi^T to get the site tensor T_b = Pi * P^{-1}.
+    /// The last site tensor is set by direct evaluation.
+    ///
+    /// Port of Julia's `fillsitetensors!` / `setsitetensor!`.
+    pub fn fill_site_tensors<F>(&mut self, f: &F) -> Result<()>
+    where
+        F: Fn(&MultiIndex) -> T,
+    {
+        let n = self.len();
+        for b in 0..n {
+            let i_kron = self.kronecker_i(b);
+            let j_set_b = self.j_set[b].clone();
+
+            if i_kron.is_empty() || j_set_b.is_empty() {
+                continue;
+            }
+
+            // Pi1: evaluate f at (Kronecker(I_b, d_b), J_b)
+            let ni = i_kron.len();
+            let nj = j_set_b.len();
+            let mut pi1 = zeros(ni, nj);
+            for (i, i_multi) in i_kron.iter().enumerate() {
+                for (j, j_multi) in j_set_b.iter().enumerate() {
+                    let mut full_idx = i_multi.clone();
+                    full_idx.extend(j_multi.iter().cloned());
+                    pi1[[i, j]] = f(&full_idx);
+                }
+            }
+
+            if b == n - 1 {
+                // Last site: store Pi1 directly
+                let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
+                let site_dim = self.local_dims[b];
+                let right_dim = 1; // last site
+                let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+                for l in 0..left_dim {
+                    for s in 0..site_dim {
+                        let row = l * site_dim + s;
+                        if row < ni {
+                            tensor.set3(l, s, 0, pi1[[row, 0]]);
+                        }
+                    }
+                }
+                self.site_tensors[b] = tensor;
+            } else {
+                // Non-last site: solve P^T \ Pi1^T to get Tmat = Pi1 * P^{-1}
+                // P = pivot matrix (I_{b+1} × J_b)
+                let i_set_bp1 = self.i_set[b + 1].clone();
+                let np = i_set_bp1.len();
+
+                let mut p_mat = zeros(np, nj);
+                for (i, i_multi) in i_set_bp1.iter().enumerate() {
+                    for (j, j_multi) in j_set_b.iter().enumerate() {
+                        let mut full_idx = i_multi.clone();
+                        full_idx.extend(j_multi.iter().cloned());
+                        p_mat[[i, j]] = f(&full_idx);
+                    }
+                }
+
+                // Solve P * X^T = Pi1^T via LU factorization
+                // First transpose P and Pi1
+                let mut p_t = zeros(nj, np);
+                for i in 0..np {
+                    for j in 0..nj {
+                        p_t[[j, i]] = p_mat[[i, j]];
+                    }
+                }
+                let mut pi1_t = zeros(nj, ni);
+                for i in 0..ni {
+                    for j in 0..nj {
+                        pi1_t[[j, i]] = pi1[[i, j]];
+                    }
+                }
+
+                // LU factorize P^T with full pivoting
+                let lu = rrlu(&p_t, None)?;
+                let l_mat = lu.left(true);
+                let u_mat = lu.right(true);
+
+                // Solve L*U * X_t = Pi1^T
+                let x_t = tensor4all_tcicore::matrixlu::solve_lu(&l_mat, &u_mat, &pi1_t)?;
+
+                // X = X_t^T → shape (ni, np) = (|I_b|*d_b, |I_{b+1}|)
+                let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
+                let site_dim = self.local_dims[b];
+                let right_dim = np; // = |I_{b+1}|
+                let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+                for l in 0..left_dim {
+                    for s in 0..site_dim {
+                        for r in 0..right_dim {
+                            let row = l * site_dim + s;
+                            tensor.set3(l, s, r, x_t[[r, row]]);
+                        }
+                    }
+                }
+                self.site_tensors[b] = tensor;
+            }
+        }
+        Ok(())
+    }
+
+    /// Make the TCI canonical by performing 3 one-site sweeps.
+    ///
+    /// 1. Forward sweep (exact, no truncation)
+    /// 2. Backward sweep (with truncation)
+    /// 3. Forward sweep (with truncation + update tensors)
+    ///
+    /// Port of Julia's `makecanonical!`.
+    pub fn make_canonical<F>(
+        &mut self,
+        f: &F,
+        rel_tol: f64,
+        abs_tol: f64,
+        max_bond_dim: usize,
+    ) -> Result<()>
+    where
+        F: Fn(&MultiIndex) -> T,
+    {
+        // First half-sweep: exact, no truncation
+        self.sweep1site(f, true, 0.0, 0.0, usize::MAX, false)?;
+        // Second half-sweep: backward with truncation
+        self.sweep1site(f, false, rel_tol, abs_tol, max_bond_dim, false)?;
+        // Third half-sweep: forward with truncation and tensor updates
+        self.sweep1site(f, true, rel_tol, abs_tol, max_bond_dim, true)?;
+        Ok(())
     }
 
     /// Expand indices by Kronecker product with local dimension
@@ -261,7 +735,41 @@ where
     }
 }
 
+/// Check convergence based on history of ranks, errors, and global pivots.
+///
+/// Port of Julia's `convergencecriterion`.
+fn convergence_criterion(
+    ranks: &[usize],
+    errors: &[f64],
+    nglobal_pivots: &[usize],
+    tolerance: f64,
+    max_bond_dim: usize,
+    ncheck_history: usize,
+) -> bool {
+    if errors.len() < ncheck_history {
+        return false;
+    }
+
+    let n = errors.len();
+    let last_errors = &errors[n - ncheck_history..];
+    let last_ranks = &ranks[n - ncheck_history..];
+    let last_ngp = &nglobal_pivots[n - ncheck_history..];
+
+    let errors_converged = last_errors.iter().all(|&e| e < tolerance);
+    let no_global_pivots = last_ngp.iter().all(|&n| n == 0);
+    let rank_stable =
+        last_ranks.iter().min().copied().unwrap_or(0) == last_ranks.last().copied().unwrap_or(0);
+    let at_max_bond = last_ranks.iter().all(|&r| r >= max_bond_dim);
+
+    (errors_converged && no_global_pivots && rank_stable) || at_max_bond
+}
+
 /// Cross interpolate a function using TCI2 algorithm
+///
+/// This matches Julia's `crossinterpolate2` / `optimize!` behavior:
+/// - 2-site sweeps with global pivot search
+/// - History-based convergence criterion
+/// - Final 1-site sweep for cleanup
 ///
 /// # Arguments
 /// * `f` - Function to interpolate, takes a multi-index and returns a value
@@ -321,55 +829,155 @@ where
     let n = tci.len();
     let mut errors = Vec::new();
     let mut ranks = Vec::new();
+    let mut nglobal_pivots_history: Vec<usize> = Vec::new();
+
+    // Create RNG
+    let mut rng = if let Some(seed) = options.seed {
+        rand::rngs::StdRng::seed_from_u64(seed)
+    } else {
+        rand::rngs::StdRng::from_os_rng()
+    };
+
+    // Create global pivot finder
+    let finder = DefaultGlobalPivotFinder::new(
+        options.nsearch,
+        options.max_nglobal_pivot,
+        options.tol_margin_global_search,
+    );
 
     // Main optimization loop
     for iter in 0..options.max_iter {
-        let is_forward = iter % 2 == 0;
+        let error_normalization = if options.normalize_error && tci.max_sample_value > 0.0 {
+            tci.max_sample_value
+        } else {
+            1.0
+        };
+        let abs_tol = options.tolerance * error_normalization;
 
-        // Sweep through bonds
+        // Determine sweep direction
+        let is_forward = match options.sweep_strategy {
+            Sweep2Strategy::Forward => true,
+            Sweep2Strategy::Backward => false,
+            Sweep2Strategy::BackAndForth => iter % 2 == 0,
+        };
+
+        // Get extra index sets from history for non-strictly-nested mode
+        let (extra_i_set, extra_j_set) =
+            if !options.strictly_nested && !tci.i_set_history.is_empty() {
+                let last = tci.i_set_history.len() - 1;
+                (
+                    tci.i_set_history[last].clone(),
+                    tci.j_set_history[last].clone(),
+                )
+            } else {
+                let empty: Vec<Vec<MultiIndex>> = (0..n).map(|_| Vec::new()).collect();
+                (empty.clone(), empty)
+            };
+
+        // Save current sets to history
+        tci.i_set_history.push(tci.i_set.clone());
+        tci.j_set_history.push(tci.j_set.clone());
+
+        // 2-site sweep
+        tci.invalidate_site_tensors();
+        tci.flush_pivot_errors();
+
         if is_forward {
             for b in 0..n - 1 {
                 update_pivots(
-                    &mut tci, b, &f, &batched_f, true, // left orthogonal in forward sweep
-                    &options,
+                    &mut tci,
+                    b,
+                    &f,
+                    PivotUpdateContext {
+                        batched_f: &batched_f,
+                        left_orthogonal: true,
+                        options: &options,
+                        extra_i_set: &extra_i_set[b + 1],
+                        extra_j_set: &extra_j_set[b],
+                    },
                 )?;
             }
         } else {
             for b in (0..n - 1).rev() {
                 update_pivots(
-                    &mut tci, b, &f, &batched_f, false, // right orthogonal in backward sweep
-                    &options,
+                    &mut tci,
+                    b,
+                    &f,
+                    PivotUpdateContext {
+                        batched_f: &batched_f,
+                        left_orthogonal: false,
+                        options: &options,
+                        extra_i_set: &extra_i_set[b + 1],
+                        extra_j_set: &extra_j_set[b],
+                    },
                 )?;
             }
         }
 
-        // Record error and rank
+        // Fill site tensors after sweep
+        tci.fill_site_tensors(&f)?;
+
+        // Record error
         let error = tci.max_bond_error();
-        let error_normalized = if options.normalize_error && tci.max_sample_value > 0.0 {
-            error / tci.max_sample_value
-        } else {
-            error
+        let error_normalized = error / error_normalization;
+        errors.push(error_normalized);
+
+        // Global pivot search
+        let tt = tci.to_tensor_train()?;
+        let input = GlobalPivotSearchInput {
+            local_dims: tci.local_dims.clone(),
+            current_tt: tt,
+            max_sample_value: tci.max_sample_value,
+            i_set: tci.i_set.clone(),
+            j_set: tci.j_set.clone(),
         };
 
-        errors.push(error_normalized);
+        let global_pivots = finder.find_global_pivots(&input, &f, abs_tol, &mut rng);
+        let n_global = global_pivots.len();
+        tci.add_global_pivots(&global_pivots)?;
+        nglobal_pivots_history.push(n_global);
+
         ranks.push(tci.rank());
 
         if options.verbosity > 0 {
             println!(
-                "iteration = {}, rank = {}, error = {:.2e}",
+                "iteration = {}, rank = {}, error = {:.2e}, maxsamplevalue = {:.2e}, nglobalpivot = {}",
                 iter + 1,
                 tci.rank(),
-                error_normalized
+                error_normalized,
+                tci.max_sample_value,
+                n_global
             );
         }
 
         // Check convergence
-        if error_normalized < options.tolerance {
+        if convergence_criterion(
+            &ranks,
+            &errors,
+            &nglobal_pivots_history,
+            abs_tol,
+            options.max_bond_dim,
+            options.ncheck_history,
+        ) {
             break;
         }
     }
 
-    Ok((tci, ranks, errors))
+    // Final 1-site sweep to:
+    // 1. Remove unnecessary pivots added by global pivots
+    // 2. Compute site tensors
+    let error_normalization = if options.normalize_error && tci.max_sample_value > 0.0 {
+        tci.max_sample_value
+    } else {
+        1.0
+    };
+    let abs_tol = options.tolerance * error_normalization;
+    tci.sweep1site(&f, true, 1e-14, abs_tol, options.max_bond_dim, true)?;
+
+    // Normalize errors for return
+    let normalized_errors = errors.to_vec();
+
+    Ok((tci, ranks, normalized_errors))
 }
 
 /// Update pivots at bond b using LU-based cross interpolation
@@ -377,9 +985,7 @@ fn update_pivots<T, F, B>(
     tci: &mut TensorCI2<T>,
     b: usize,
     f: &F,
-    batched_f: &Option<B>,
-    left_orthogonal: bool,
-    options: &TCI2Options,
+    context: PivotUpdateContext<'_, B>,
 ) -> Result<()>
 where
     T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
@@ -388,13 +994,21 @@ where
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
-    // Note: Do NOT call invalidate_site_tensors() here.
-    // That would wipe out previously computed site tensors in multi-site cases.
-    // Tensors are updated in-place for each bond.
+    // Build combined index sets, including extra sets from history
+    let mut i_combined = tci.kronecker_i(b);
+    let mut j_combined = tci.kronecker_j(b + 1);
 
-    // Build combined index sets
-    let i_combined = tci.kronecker_i(b);
-    let j_combined = tci.kronecker_j(b + 1);
+    // Union with extra sets (for non-strictly-nested mode)
+    for extra in context.extra_i_set {
+        if !i_combined.contains(extra) {
+            i_combined.push(extra.clone());
+        }
+    }
+    for extra in context.extra_j_set {
+        if !j_combined.contains(extra) {
+            j_combined.push(extra.clone());
+        }
+    }
 
     if i_combined.is_empty() || j_combined.is_empty() {
         return Ok(());
@@ -402,18 +1016,18 @@ where
 
     // Apply LU-based cross interpolation
     let lu_options = PivotKernelOptions {
-        max_rank: options.max_bond_dim,
-        rel_tol: options.tolerance,
+        max_rank: context.options.max_bond_dim,
+        rel_tol: context.options.tolerance,
         abs_tol: 0.0,
-        left_orthogonal,
+        left_orthogonal: context.left_orthogonal,
     };
 
     let selection;
     let factors;
-    if options.pivot_search == PivotSearchStrategy::Full {
+    if context.options.pivot_search == PivotSearchStrategy::Full {
         let mut pi = zeros(i_combined.len(), j_combined.len());
 
-        if let Some(ref batch_fn) = batched_f {
+        if let Some(ref batch_fn) = context.batched_f {
             let mut all_indices: Vec<MultiIndex> =
                 Vec::with_capacity(i_combined.len() * j_combined.len());
             for i_multi in &i_combined {
@@ -458,8 +1072,13 @@ where
         selection = DenseFaerLuKernel.factorize(&source, &lu_options)?;
         factors = CrossFactors::from_source(&source, &selection)?;
     } else {
-        let evaluator =
-            LazyPiEvaluator::new(&i_combined, &j_combined, f, batched_f, tci.max_sample_value);
+        let evaluator = LazyPiEvaluator::new(
+            &i_combined,
+            &j_combined,
+            f,
+            context.batched_f,
+            tci.max_sample_value,
+        );
         let source = LazyMatrixSource::new(
             i_combined.len(),
             j_combined.len(),
@@ -488,13 +1107,24 @@ where
     tci.i_set[b + 1] = row_indices.iter().map(|&i| i_combined[i].clone()).collect();
     tci.j_set[b] = col_indices.iter().map(|&j| j_combined[j].clone()).collect();
 
+    // Skip site tensor update if extra sets were used (tensors will be
+    // filled separately by fill_site_tensors after the sweep).
+    if !context.extra_i_set.is_empty() || !context.extra_j_set.is_empty() {
+        // Update bond error only
+        let errors = &selection.pivot_errors;
+        if !errors.is_empty() {
+            tci.bond_errors[b] = *errors.last().unwrap_or(&0.0);
+        }
+        return Ok(());
+    }
+
     // Update site tensors
-    let left = if left_orthogonal {
+    let left = if context.left_orthogonal {
         factors.cols_times_pivot_inv()?
     } else {
         factors.pivot_cols.clone()
     };
-    let right = if left_orthogonal {
+    let right = if context.left_orthogonal {
         factors.pivot_rows.clone()
     } else {
         factors.pivot_inv_times_rows()?

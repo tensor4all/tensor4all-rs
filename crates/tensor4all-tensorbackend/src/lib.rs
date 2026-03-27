@@ -34,8 +34,10 @@ pub use tenferro_bridge::{
     native_tensor_primal_to_dense_col_major, native_tensor_primal_to_dense_f64_col_major,
     native_tensor_primal_to_diag_c64, native_tensor_primal_to_diag_f64,
     native_tensor_primal_to_storage, outer_product_native_tensor, outer_product_storage_native,
-    permute_native_tensor, permute_storage_native, qr_native_tensor,
-    reshape_col_major_native_tensor, scale_native_tensor, scale_storage_native,
-    storage_to_native_tensor, sum_native_tensor, svd_native_tensor, tangent_native_tensor,
+    permute_native_tensor, permute_storage_native, print_and_reset_native_einsum_profile,
+    qr_native_tensor, reset_native_einsum_profile, reshape_col_major_native_tensor,
+    scale_native_tensor, scale_storage_native, storage_to_native_tensor, sum_native_tensor,
+    svd_native_tensor, tangent_native_tensor,
 };
+pub use tenferro_prims::print_and_reset_contract_profile;
 pub use tensor_element::TensorElement;

@@ -10,6 +10,7 @@ use super::factorize::{factorize, FactorizeOptions, SVDScalar};
 use super::mpo::MPO;
 use super::types::{tensor4_zeros, Tensor4, Tensor4Ops};
 use super::{matrix2_zeros, Matrix2};
+use crate::einsum_helper::EinsumScalar;
 use tenferro_linalg::LinalgScalar;
 use tenferro_tensor::KeepCountScalar;
 
@@ -32,7 +33,7 @@ use tenferro_tensor::KeepCountScalar;
 /// - s1: from A
 /// - s2: from B
 /// - bond dimensions: product of input bond dimensions (before compression)
-pub fn contract_naive<T: SVDScalar>(
+pub fn contract_naive<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,
     options: Option<ContractionOptions>,

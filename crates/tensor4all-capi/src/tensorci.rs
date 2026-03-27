@@ -4,12 +4,10 @@
 //! The evaluation function is passed as a callback.
 
 use crate::simplett::t4a_simplett_f64;
-use crate::{
-    StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NOT_IMPLEMENTED, T4A_NULL_POINTER,
-    T4A_SUCCESS,
-};
+use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use tensor4all_simplett::AbstractTensorTrain;
 use tensor4all_tensorci::{TCI2Options, TensorCI2};
 
 // ============================================================================
@@ -270,46 +268,344 @@ pub extern "C" fn t4a_tci2_f64_add_global_pivots(
 }
 
 // ============================================================================
-// Sweep operation
+// Low-level sweep operations
 // ============================================================================
 
-/// Perform a 2-site sweep.
+/// Helper: create a Rust closure from an EvalCallback.
+fn make_eval_closure(eval_fn: EvalCallback, user_data: *mut c_void) -> impl Fn(&Vec<usize>) -> f64 {
+    move |indices: &Vec<usize>| -> f64 {
+        let indices_i64: Vec<i64> = indices.iter().map(|&i| i as i64).collect();
+        let mut result: f64 = 0.0;
+        let status = eval_fn(
+            indices_i64.as_ptr(),
+            indices_i64.len(),
+            &mut result,
+            user_data,
+        );
+        if status != 0 {
+            f64::NAN
+        } else {
+            result
+        }
+    }
+}
+
+/// Perform one 2-site sweep (forward or backward).
 ///
-/// This entry point is reserved for future incremental sweep support.
-/// It currently returns `T4A_NOT_IMPLEMENTED` instead of reporting a false success.
+/// Rust manages Iset_history internally for non-strictly-nested mode.
 ///
 /// # Arguments
-/// * `ptr` - TCI handle
-/// * `eval_fn` - Callback function for evaluating the target function
-/// * `user_data` - User data passed to the callback
-/// * `abstol` - Absolute tolerance
+/// * `ptr` - TCI handle (mutable)
+/// * `eval_fn` - Callback for function evaluation
+/// * `user_data` - User data for callback
+/// * `forward` - 1 for forward sweep, 0 for backward
+/// * `tolerance` - Tolerance for LU truncation
 /// * `max_bonddim` - Maximum bond dimension (0 for unlimited)
-/// * `n_iters` - Number of sweep iterations
-/// * `out_error` - Output: maximum error after sweep
-///
-/// # Returns
-/// Status code
+/// * `pivot_search` - 0=Full, 1=Rook
+/// * `strictly_nested` - 1=strictly nested, 0=use history
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_tci2_f64_sweep(
+pub extern "C" fn t4a_tci2_f64_sweep2site(
     ptr: *mut t4a_tci2_f64,
     eval_fn: EvalCallback,
     user_data: *mut c_void,
-    abstol: libc::c_double,
+    forward: libc::c_int,
+    tolerance: libc::c_double,
     max_bonddim: libc::size_t,
-    n_iters: libc::size_t,
-    _out_error: *mut libc::c_double,
+    _pivot_search: libc::c_int,
+    _strictly_nested: libc::c_int,
 ) -> StatusCode {
     if ptr.is_null() {
         return T4A_NULL_POINTER;
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        let _ = (eval_fn, user_data, abstol, max_bonddim, n_iters);
-        let _ = unsafe { &mut *ptr };
-        crate::err_status(
-            "t4a_tci2_f64_sweep is not implemented; use t4a_crossinterpolate2_f64 instead",
-            T4A_NOT_IMPLEMENTED,
-        )
+        let tci = unsafe { &mut *ptr };
+        let f = make_eval_closure(eval_fn, user_data);
+        let max_bd = if max_bonddim == 0 {
+            usize::MAX
+        } else {
+            max_bonddim
+        };
+
+        let options = TCI2Options {
+            tolerance,
+            max_bond_dim: max_bd,
+            ..Default::default()
+        };
+
+        match tci
+            .inner_mut()
+            .sweep2site::<_, fn(&[Vec<usize>]) -> Vec<f64>>(&f, &None, forward != 0, &options)
+        {
+            Ok(()) => T4A_SUCCESS,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Perform one 1-site sweep for cleanup / canonicalization.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tci2_f64_sweep1site(
+    ptr: *mut t4a_tci2_f64,
+    eval_fn: EvalCallback,
+    user_data: *mut c_void,
+    forward: libc::c_int,
+    rel_tol: libc::c_double,
+    abs_tol: libc::c_double,
+    max_bonddim: libc::size_t,
+    update_tensors: libc::c_int,
+) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tci = unsafe { &mut *ptr };
+        let f = make_eval_closure(eval_fn, user_data);
+        let max_bd = if max_bonddim == 0 {
+            usize::MAX
+        } else {
+            max_bonddim
+        };
+
+        match tci.inner_mut().sweep1site(
+            &f,
+            forward != 0,
+            rel_tol,
+            abs_tol,
+            max_bd,
+            update_tensors != 0,
+        ) {
+            Ok(()) => T4A_SUCCESS,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Fill all site tensors from function evaluations.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tci2_f64_fill_site_tensors(
+    ptr: *mut t4a_tci2_f64,
+    eval_fn: EvalCallback,
+    user_data: *mut c_void,
+) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tci = unsafe { &mut *ptr };
+        let f = make_eval_closure(eval_fn, user_data);
+        match tci.inner_mut().fill_site_tensors(&f) {
+            Ok(()) => T4A_SUCCESS,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Make TCI canonical (3 one-site sweeps).
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tci2_f64_make_canonical(
+    ptr: *mut t4a_tci2_f64,
+    eval_fn: EvalCallback,
+    user_data: *mut c_void,
+    rel_tol: libc::c_double,
+    abs_tol: libc::c_double,
+    max_bonddim: libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tci = unsafe { &mut *ptr };
+        let f = make_eval_closure(eval_fn, user_data);
+        let max_bd = if max_bonddim == 0 {
+            usize::MAX
+        } else {
+            max_bonddim
+        };
+        match tci.inner_mut().make_canonical(&f, rel_tol, abs_tol, max_bd) {
+            Ok(()) => T4A_SUCCESS,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Get pivot error (max bond error from last sweep).
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tci2_f64_pivot_error(
+    ptr: *const t4a_tci2_f64,
+    out_error: *mut libc::c_double,
+) -> StatusCode {
+    if ptr.is_null() || out_error.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tci = unsafe { &*ptr };
+        unsafe { *out_error = tci.inner().max_bond_error() };
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// I-set / J-set access
+// ============================================================================
+
+/// Query I-set size at site p.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tci2_f64_i_set_size(
+    ptr: *const t4a_tci2_f64,
+    site: libc::size_t,
+    out_n_indices: *mut libc::size_t,
+    out_index_len: *mut libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out_n_indices.is_null() || out_index_len.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tci = unsafe { &*ptr };
+        let i_set = tci.inner().i_set(site);
+        let n = i_set.len();
+        let idx_len = if n > 0 { i_set[0].len() } else { 0 };
+        unsafe {
+            *out_n_indices = n;
+            *out_index_len = idx_len;
+        }
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Copy I-set at site p to caller-provided flat buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tci2_f64_get_i_set(
+    ptr: *const t4a_tci2_f64,
+    site: libc::size_t,
+    out_buf: *mut libc::size_t,
+    buf_capacity: libc::size_t,
+    out_n_indices: *mut libc::size_t,
+    out_index_len: *mut libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out_buf.is_null() || out_n_indices.is_null() || out_index_len.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tci = unsafe { &*ptr };
+        let i_set = tci.inner().i_set(site);
+        let n = i_set.len();
+        let idx_len = if n > 0 { i_set[0].len() } else { 0 };
+        let total = n * idx_len;
+
+        if total > buf_capacity {
+            return crate::err_status(
+                format!("Buffer too small: need {total}, got {buf_capacity}"),
+                T4A_INVALID_ARGUMENT,
+            );
+        }
+
+        unsafe {
+            *out_n_indices = n;
+            *out_index_len = idx_len;
+        }
+
+        let mut offset = 0;
+        for multi_idx in i_set {
+            for &idx in multi_idx {
+                unsafe { *out_buf.add(offset) = idx };
+                offset += 1;
+            }
+        }
+
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Query J-set size at site p.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tci2_f64_j_set_size(
+    ptr: *const t4a_tci2_f64,
+    site: libc::size_t,
+    out_n_indices: *mut libc::size_t,
+    out_index_len: *mut libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out_n_indices.is_null() || out_index_len.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tci = unsafe { &*ptr };
+        let j_set = tci.inner().j_set(site);
+        let n = j_set.len();
+        let idx_len = if n > 0 { j_set[0].len() } else { 0 };
+        unsafe {
+            *out_n_indices = n;
+            *out_index_len = idx_len;
+        }
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Copy J-set at site p to caller-provided flat buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tci2_f64_get_j_set(
+    ptr: *const t4a_tci2_f64,
+    site: libc::size_t,
+    out_buf: *mut libc::size_t,
+    buf_capacity: libc::size_t,
+    out_n_indices: *mut libc::size_t,
+    out_index_len: *mut libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out_buf.is_null() || out_n_indices.is_null() || out_index_len.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tci = unsafe { &*ptr };
+        let j_set = tci.inner().j_set(site);
+        let n = j_set.len();
+        let idx_len = if n > 0 { j_set[0].len() } else { 0 };
+        let total = n * idx_len;
+
+        if total > buf_capacity {
+            return crate::err_status(
+                format!("Buffer too small: need {total}, got {buf_capacity}"),
+                T4A_INVALID_ARGUMENT,
+            );
+        }
+
+        unsafe {
+            *out_n_indices = n;
+            *out_index_len = idx_len;
+        }
+
+        let mut offset = 0;
+        for multi_idx in j_set {
+            for &idx in multi_idx {
+                unsafe { *out_buf.add(offset) = idx };
+                offset += 1;
+            }
+        }
+
+        T4A_SUCCESS
     }));
 
     crate::unwrap_catch(result)
@@ -457,6 +753,106 @@ pub extern "C" fn t4a_crossinterpolate2_f64(
             }
             Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// opt_first_pivot
+// ============================================================================
+
+/// Find optimal initial pivot by greedy local search.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_opt_first_pivot_f64(
+    eval_fn: EvalCallback,
+    user_data: *mut c_void,
+    local_dims: *const libc::size_t,
+    n_sites: libc::size_t,
+    first_pivot: *const libc::size_t,
+    max_sweep: libc::size_t,
+    out_pivot: *mut libc::size_t,
+) -> StatusCode {
+    if local_dims.is_null() || first_pivot.is_null() || out_pivot.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let dims: Vec<usize> = (0..n_sites)
+            .map(|i| unsafe { *local_dims.add(i) })
+            .collect();
+        let pivot: Vec<usize> = (0..n_sites)
+            .map(|i| unsafe { *first_pivot.add(i) })
+            .collect();
+        let f = make_eval_closure(eval_fn, user_data);
+
+        let optimized =
+            tensor4all_tensorci::opt_first_pivot::<f64, _>(&f, &dims, &pivot, max_sweep);
+
+        for (i, &idx) in optimized.iter().enumerate() {
+            unsafe { *out_pivot.add(i) = idx };
+        }
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// estimate_true_error
+// ============================================================================
+
+/// Estimate true interpolation error.
+///
+/// Returns pivots and errors sorted by descending error.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_estimate_true_error_f64(
+    tt_ptr: *const t4a_simplett_f64,
+    eval_fn: EvalCallback,
+    user_data: *mut c_void,
+    nsearch: libc::size_t,
+    out_pivots: *mut libc::size_t,
+    out_errors: *mut libc::c_double,
+    out_n_results: *mut libc::size_t,
+    pivot_buf_capacity: libc::size_t,
+) -> StatusCode {
+    if tt_ptr.is_null() || out_pivots.is_null() || out_errors.is_null() || out_n_results.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*tt_ptr };
+        let f = make_eval_closure(eval_fn, user_data);
+        let mut rng = rand::rng();
+
+        let results =
+            tensor4all_tensorci::estimate_true_error(tt.inner(), &f, nsearch, None, &mut rng);
+
+        let n_sites = tt.inner().len();
+        let n_results = results.len();
+
+        // Check buffer capacity
+        if n_results * n_sites > pivot_buf_capacity {
+            return crate::err_status(
+                format!(
+                    "Pivot buffer too small: need {}, got {}",
+                    n_results * n_sites,
+                    pivot_buf_capacity
+                ),
+                T4A_INVALID_ARGUMENT,
+            );
+        }
+
+        unsafe { *out_n_results = n_results };
+
+        for (i, (pivot, error)) in results.iter().enumerate() {
+            for (j, &idx) in pivot.iter().enumerate() {
+                unsafe { *out_pivots.add(i * n_sites + j) = idx };
+            }
+            unsafe { *out_errors.add(i) = *error };
+        }
+
+        T4A_SUCCESS
     }));
 
     crate::unwrap_catch(result)

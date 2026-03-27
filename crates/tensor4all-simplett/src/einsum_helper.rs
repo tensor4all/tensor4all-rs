@@ -50,7 +50,10 @@ pub(crate) fn matrix_times_col_vector<T: EinsumScalar>(
     tensor_to_row_major_vec(&einsum_tensors("lr,r->l", &[&matrix_tf, &vector_tf]))
 }
 
-pub(crate) trait EinsumScalar: tenferro_algebra::Scalar + Sized {
+/// Scalar types supported by the tenferro-backed einsum helpers used in
+/// `tensor4all-simplett`.
+pub trait EinsumScalar: tenferro_algebra::Scalar + Sized {
+    /// Execute an einsum on typed tenferro tensors.
     fn einsum_dispatch(subscripts: &str, operands: &[&TfTensor<Self>]) -> TfTensor<Self>;
 }
 

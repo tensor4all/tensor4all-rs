@@ -23,6 +23,17 @@ fn assert_storage_eq(lhs: &Storage, rhs: &Storage) {
     }
 }
 
+fn recorded_native_einsum_call_count(path: NativeEinsumPath) -> usize {
+    NATIVE_EINSUM_PROFILE_STATE.with(|state| {
+        state
+            .borrow()
+            .iter()
+            .filter(|(signature, _)| signature.path == path)
+            .map(|(_, entry)| entry.calls)
+            .sum()
+    })
+}
+
 #[test]
 fn storage_native_roundtrip_dense_f64() {
     let storage = Storage::from_dense_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
@@ -48,6 +59,7 @@ fn storage_native_roundtrip_diag_preserves_diag_layout() {
 
 #[test]
 fn native_dense_materialization_sets_default_runtime_if_needed() {
+    reset_runtime_caches_for_tests();
     let native = storage_to_native_tensor(
         &Storage::from_diag_col_major(vec![2.0, -1.0, 4.0], 2).unwrap(),
         &[3, 3],
@@ -64,6 +76,45 @@ fn native_dense_materialization_sets_default_runtime_if_needed() {
             0.0, 0.0, 4.0,
         ]
     );
+    assert_eq!(default_runtime_install_count_for_tests(), 1);
+}
+
+#[test]
+fn native_dense_materialization_reinstalls_scoped_default_runtime_per_call() {
+    reset_runtime_caches_for_tests();
+    let native = storage_to_native_tensor(
+        &Storage::from_diag_col_major(vec![2.0, -1.0, 4.0], 2).unwrap(),
+        &[3, 3],
+    )
+    .unwrap();
+
+    let first = native_tensor_primal_to_dense_f64_col_major(&native).unwrap();
+    let installs_after_first = default_runtime_install_count_for_tests();
+    let second = native_tensor_primal_to_dense_f64_col_major(&native).unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(installs_after_first, 1);
+    assert_eq!(default_runtime_install_count_for_tests(), 2);
+}
+
+#[test]
+fn native_dense_materialization_survives_external_runtime_scope_changes() {
+    reset_runtime_caches_for_tests();
+    let native = storage_to_native_tensor(
+        &Storage::from_diag_col_major(vec![2.0, -1.0, 4.0], 2).unwrap(),
+        &[3, 3],
+    )
+    .unwrap();
+
+    let outer_guard = tenferro::set_default_runtime(tenferro::RuntimeContext::Cpu(
+        tenferro_prims::CpuContext::new(2),
+    ));
+    let first = native_tensor_primal_to_dense_f64_col_major(&native).unwrap();
+    drop(outer_guard);
+
+    let second = native_tensor_primal_to_dense_f64_col_major(&native).unwrap();
+
+    assert_eq!(first, second);
 }
 
 #[test]
@@ -155,7 +206,52 @@ fn native_einsum_accepts_unsorted_nonfirst_operand_labels() {
 }
 
 #[test]
+fn einsum_native_tensors_dense_primal_binary_routes_through_typed_binary_einsum() {
+    struct ProfileGuard;
+
+    impl Drop for ProfileGuard {
+        fn drop(&mut self) {
+            set_native_einsum_profile_enabled_for_tests(false);
+            reset_native_einsum_profile();
+        }
+    }
+
+    reset_runtime_caches_for_tests();
+    reset_native_einsum_profile();
+    set_native_einsum_profile_enabled_for_tests(true);
+    let _guard = ProfileGuard;
+    let lhs = dense_native_tensor_from_col_major(&[1.0_f64, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+    let rhs =
+        dense_native_tensor_from_col_major(&[10.0_f64, 30.0, 50.0, 20.0, 40.0, 60.0], &[3, 2])
+            .unwrap();
+
+    let out = einsum_native_tensors(&[(&lhs, &[0, 1]), (&rhs, &[2, 1])], &[0, 2]).unwrap();
+    let snapshot = native_tensor_primal_to_storage(&out).unwrap();
+    let expected =
+        Storage::from_dense_col_major(vec![50.0, 110.0, 110.0, 250.0, 170.0, 390.0], &[2, 3])
+            .unwrap();
+
+    assert_eq!(out.dims(), &[2, 3]);
+    assert_storage_eq(&snapshot, &expected);
+    assert_eq!(cpu_context_install_count_for_tests(), 1);
+    assert_eq!(default_runtime_install_count_for_tests(), 0);
+    assert_eq!(
+        recorded_native_einsum_call_count(NativeEinsumPath::TypedBinaryEinsum),
+        1
+    );
+    assert_eq!(
+        recorded_native_einsum_call_count(NativeEinsumPath::TypedNaryEinsum),
+        0
+    );
+    assert_eq!(
+        recorded_native_einsum_call_count(NativeEinsumPath::FrontendFallback),
+        0
+    );
+}
+
+#[test]
 fn contract_native_tensor_restores_rhs_free_axis_order() {
+    reset_runtime_caches_for_tests();
     let lhs = storage_to_native_tensor(
         &Storage::from_dense_col_major(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap(),
         &[2, 2],
@@ -172,6 +268,61 @@ fn contract_native_tensor_restores_rhs_free_axis_order() {
 
     let expected = Storage::from_dense_col_major(vec![50.0, 110.0, 110.0, 250.0], &[2, 2]).unwrap();
     assert_storage_eq(&snapshot, &expected);
+}
+
+#[test]
+fn with_tenferro_ctx_reuses_cached_cpu_context() {
+    reset_runtime_caches_for_tests();
+
+    let a = tenferro_tensor::Tensor::<f64>::from_slice(
+        &[1.0, 3.0, 2.0, 4.0],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let first = with_tenferro_ctx("test_qr", |ctx| {
+        tenferro_linalg::qr(ctx, &a).map_err(|e| anyhow::anyhow!("qr failed: {e}"))
+    })
+    .unwrap();
+    let installs_after_first = cpu_context_install_count_for_tests();
+    let second = with_tenferro_ctx("test_qr", |ctx| {
+        tenferro_linalg::qr(ctx, &a).map_err(|e| anyhow::anyhow!("qr failed: {e}"))
+    })
+    .unwrap();
+
+    assert_eq!(first.q.dims(), second.q.dims());
+    assert_eq!(first.r.dims(), second.r.dims());
+    assert_eq!(cpu_context_install_count_for_tests(), installs_after_first);
+    assert_eq!(installs_after_first, 1);
+}
+
+#[test]
+fn with_tenferro_ctx_allows_same_thread_nested_calls() {
+    reset_runtime_caches_for_tests();
+
+    let nested = std::panic::catch_unwind(|| {
+        with_tenferro_ctx("outer", |_outer| {
+            with_tenferro_ctx("inner", |_inner| Ok::<_, anyhow::Error>(()))
+        })
+    });
+
+    assert!(nested.is_ok(), "nested with_tenferro_ctx panicked");
+    assert!(nested.unwrap().is_ok());
+}
+
+#[test]
+fn cpu_threads_uses_tenferro_default_when_env_is_unset() {
+    assert_eq!(
+        cpu_threads_from_env_value(None).unwrap(),
+        CpuContext::default_num_threads()
+    );
+}
+
+#[test]
+fn cpu_threads_rejects_zero_override() {
+    let err = cpu_threads_from_env_value(Some("0")).expect_err("zero override must be rejected");
+    assert!(err.to_string().contains("T4A_TENFERRO_CPU_THREADS"));
 }
 
 #[test]
@@ -379,6 +530,33 @@ fn einsum_native_tensors_rejects_empty_operands() {
         .unwrap_err()
         .to_string()
         .contains("at least one operand"));
+}
+
+#[test]
+fn qr_native_tensor_dense_primal_uses_cached_cpu_context_fast_path() {
+    reset_runtime_caches_for_tests();
+    let native = dense_native_tensor_from_col_major(&[1.0_f64, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+
+    let (q, r) = qr_native_tensor(&native).unwrap();
+
+    assert_eq!(q.dims(), &[2, 2]);
+    assert_eq!(r.dims(), &[2, 2]);
+    assert_eq!(cpu_context_install_count_for_tests(), 1);
+    assert_eq!(default_runtime_install_count_for_tests(), 0);
+}
+
+#[test]
+fn svd_native_tensor_dense_primal_uses_cached_cpu_context_fast_path() {
+    reset_runtime_caches_for_tests();
+    let native = dense_native_tensor_from_col_major(&[1.0_f64, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+
+    let (u, s, vt) = svd_native_tensor(&native).unwrap();
+
+    assert_eq!(u.dims(), &[2, 2]);
+    assert_eq!(s.dims(), &[2]);
+    assert_eq!(vt.dims(), &[2, 2]);
+    assert_eq!(cpu_context_install_count_for_tests(), 1);
+    assert_eq!(default_runtime_install_count_for_tests(), 0);
 }
 
 // ===== build_binary_einsum_ids error paths =====

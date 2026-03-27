@@ -1,6 +1,36 @@
 use super::*;
 use crate::defaults::Index;
 use num_complex::Complex64;
+use std::ffi::OsString;
+use std::time::Duration;
+
+struct ScopedEnvVar {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+impl ScopedEnvVar {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+}
+
+impl Drop for ScopedEnvVar {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => unsafe {
+                std::env::set_var(self.key, value);
+            },
+            None => unsafe {
+                std::env::remove_var(self.key);
+            },
+        }
+    }
+}
 
 fn make_test_tensor(shape: &[usize], ids: &[u64]) -> TensorDynLen {
     let indices: Vec<DynIndex> = ids
@@ -116,6 +146,90 @@ fn test_contract_connected_specified_no_contractable_error() {
         "Expected error about disconnected or no contractable indices, got: {}",
         err_msg
     );
+}
+
+#[test]
+fn test_find_tensor_connected_components_trivial_cases() {
+    let empty: Vec<&TensorDynLen> = Vec::new();
+    assert!(find_tensor_connected_components(&empty, AllowedPairs::All).is_empty());
+
+    let a = make_test_tensor(&[2, 3], &[1, 2]);
+    assert_eq!(
+        find_tensor_connected_components(&[&a], AllowedPairs::All),
+        vec![vec![0]]
+    );
+}
+
+#[test]
+fn test_find_tensor_connected_components_multiple_components() {
+    let a = make_test_tensor(&[2, 3], &[1, 2]);
+    let b = make_test_tensor(&[3, 4], &[2, 3]);
+    let c = make_test_tensor(&[5, 6], &[4, 5]);
+
+    assert_eq!(
+        find_tensor_connected_components(&[&a, &b, &c], AllowedPairs::All),
+        vec![vec![0, 1], vec![2]]
+    );
+}
+
+#[test]
+fn test_remap_allowed_pairs_filters_pairs_outside_component() {
+    let remapped = remap_allowed_pairs(AllowedPairs::Specified(&[(0, 1), (1, 3), (2, 3)]), &[1, 3]);
+    match remapped {
+        RemappedAllowedPairs::All => panic!("expected specified remapped pairs"),
+        RemappedAllowedPairs::Specified(pairs) => assert_eq!(pairs, vec![(0, 1)]),
+    }
+}
+
+#[test]
+fn test_union_find_remap_and_tensor_id_helpers() {
+    let i = DynId(1);
+    let j = DynId(2);
+    let k = DynId(3);
+
+    let mut uf = AxisUnionFind::default();
+    uf.union(i, j);
+
+    assert_eq!(uf.remap(i), uf.remap(j));
+    assert_ne!(uf.remap(i), uf.remap(k));
+    assert_eq!(
+        uf.remap_ids(&[i, j, k]),
+        vec![uf.remap(i), uf.remap(j), uf.remap(k)]
+    );
+
+    let a = make_test_tensor(&[2, 3], &[1, 2]);
+    let b = make_test_tensor(&[3, 4], &[2, 3]);
+    let remapped = remap_tensor_ids(&[&a, &b], &mut uf);
+    assert_eq!(remapped[0].len(), 2);
+    assert_eq!(remapped[1].len(), 2);
+
+    let output = vec![Index::new(DynId(1), 2), Index::new(DynId(3), 4)];
+    let remapped_output = remap_output_ids(&output, &mut uf);
+    assert_eq!(remapped_output.len(), 2);
+
+    let sizes = collect_sizes(&[&a, &b], &mut uf);
+    assert_eq!(sizes[&uf.remap(DynId(1))], 2);
+    assert_eq!(sizes[&uf.remap(DynId(2))], 2);
+    assert_eq!(sizes[&uf.remap(DynId(3))], 4);
+}
+
+#[test]
+fn test_contract_profile_helpers() {
+    let _profile_env = ScopedEnvVar::set("T4A_PROFILE_CONTRACT", "1");
+    reset_contract_profile();
+
+    let signature = ContractSignature {
+        operands: vec![ContractOperandSignature {
+            dims: vec![2, 3],
+            ids: vec![1, 2],
+            is_diag: false,
+        }],
+        output_ids: vec![1],
+        output_dims: vec![2],
+    };
+    record_contract_profile(signature, Duration::from_micros(10));
+    print_and_reset_contract_profile();
+    reset_contract_profile();
 }
 
 // ========================================================================

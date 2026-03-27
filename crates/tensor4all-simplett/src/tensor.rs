@@ -1,6 +1,6 @@
 //! Fixed-rank tensor type backed by `tenferro_tensor::Tensor<T>`.
 //!
-//! This wrapper preserves compile-time rank while delegating storage and
+//! This wrapper preserves a compile-time rank while delegating storage and
 //! indexing to tenferro's dense tensor implementation.
 
 use std::marker::PhantomData;
@@ -177,13 +177,11 @@ impl<T: TfScalar, const N: usize> Tensor<T, N> {
 
     /// Iterate mutably over all elements in row-major order.
     pub fn iter_mut(&mut self) -> TensorIterMut<'_, T, N> {
-        let dims = *self.dims();
-        let len = self.len();
         TensorIterMut {
             tensor: &mut self.0,
-            dims,
+            dims: *self.dims(),
             next: 0,
-            len,
+            len: self.len(),
             _marker: PhantomData,
         }
     }
@@ -289,11 +287,10 @@ mod tests {
 
     #[test]
     fn test_tensor3_from_fn() {
-        let t: Tensor3<f64> =
-            Tensor3::from_fn([2, 3, 4], |[i, j, k]| (i * 100 + j * 10 + k) as f64);
-        assert_eq!(t[[0, 0, 0]], 0.0);
-        assert_eq!(t[[1, 2, 3]], 123.0);
-        assert_eq!(t[[0, 1, 2]], 12.0);
+        let t: Tensor3<usize> = Tensor3::from_fn([2, 3, 4], |[i, j, k]| i * 100 + j * 10 + k);
+        assert_eq!(t[[0, 0, 0]], 0);
+        assert_eq!(t[[1, 2, 3]], 123);
+        assert_eq!(t[[0, 1, 2]], 12);
         assert_eq!(t.dim(0), 2);
         assert_eq!(t.dim(1), 3);
         assert_eq!(t.dim(2), 4);
@@ -302,10 +299,9 @@ mod tests {
 
     #[test]
     fn test_tensor4_from_fn() {
-        let t: Tensor4<f64> = Tensor4::from_fn([2, 3, 4, 5], |[i, j, k, l]| {
-            (i * 1000 + j * 100 + k * 10 + l) as f64
-        });
-        assert_eq!(t[[1, 2, 3, 4]], 1234.0);
+        let t: Tensor4<usize> =
+            Tensor4::from_fn([2, 3, 4, 5], |[i, j, k, l]| i * 1000 + j * 100 + k * 10 + l);
+        assert_eq!(t[[1, 2, 3, 4]], 1234);
         assert_eq!(t.dim(0), 2);
         assert_eq!(t.dim(1), 3);
         assert_eq!(t.dim(2), 4);

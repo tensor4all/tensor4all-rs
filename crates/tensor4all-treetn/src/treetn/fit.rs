@@ -28,15 +28,69 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
 use tensor4all_core::{
-    AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
+    print_and_reset_contract_profile, print_and_reset_native_einsum_profile,
+    reset_contract_profile, reset_native_einsum_profile, AllowedPairs, Canonical, FactorizeAlg,
+    FactorizeOptions, IndexLike, TensorLike,
 };
 
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
 use super::TreeTN;
+
+#[derive(Debug, Default, Clone)]
+struct FitProfile {
+    zipup_init_time: Duration,
+    canonicalize_time: Duration,
+    sweep_time: Duration,
+    env_get_time: Duration,
+    env_leaf_time: Duration,
+    env_internal_time: Duration,
+    left_inds_time: Duration,
+    two_site_contract_time: Duration,
+    factorize_time: Duration,
+    replace_time: Duration,
+    invalidate_time: Duration,
+    env_requests: usize,
+    env_hits: usize,
+    env_misses: usize,
+    step_count: usize,
+    sweep_count: usize,
+}
+
+thread_local! {
+    static FIT_PROFILE_STATE: std::cell::RefCell<Option<FitProfile>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn fit_profile_enabled() -> bool {
+    std::env::var("T4A_PROFILE_FIT").is_ok()
+}
+
+fn fit_profile_reset() {
+    if fit_profile_enabled() {
+        FIT_PROFILE_STATE.with(|state| {
+            *state.borrow_mut() = Some(FitProfile::default());
+        });
+    }
+}
+
+fn with_fit_profile(f: impl FnOnce(&mut FitProfile)) {
+    if fit_profile_enabled() {
+        FIT_PROFILE_STATE.with(|state| {
+            if let Some(profile) = state.borrow_mut().as_mut() {
+                f(profile);
+            }
+        });
+    }
+}
+
+fn take_fit_profile() -> Option<FitProfile> {
+    FIT_PROFILE_STATE.with(|state| state.borrow_mut().take())
+}
 
 // ============================================================================
 // FitEnvironment: Environment tensor cache
@@ -138,17 +192,37 @@ where
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
         V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
+        let started = fit_profile_enabled().then(Instant::now);
+        with_fit_profile(|profile| {
+            profile.env_requests += 1;
+        });
+
         // If already cached, return a clone
         if let Some(env) = self.envs.get(&(from.clone(), to.clone())) {
+            if let Some(started) = started {
+                with_fit_profile(|profile| {
+                    profile.env_hits += 1;
+                    profile.env_get_time += started.elapsed();
+                });
+            }
             return Ok(env.clone());
         }
 
+        with_fit_profile(|profile| {
+            profile.env_misses += 1;
+        });
+
         // Get neighbors of `from` excluding `to`
-        let child_neighbors: Vec<V> = tn_c
+        let mut child_neighbors: Vec<V> = tn_c
             .site_index_network()
             .neighbors(from)
             .filter(|n| n != to)
             .collect();
+        child_neighbors.sort_by_key(|node| {
+            tn_c.node_index(node)
+                .expect("neighbor must exist in site index network")
+                .index()
+        });
 
         // Recursively get or compute child environments
         let child_envs: Vec<T> = child_neighbors
@@ -161,6 +235,11 @@ where
 
         // Cache and return
         self.envs.insert((from.clone(), to.clone()), env.clone());
+        if let Some(started) = started {
+            with_fit_profile(|profile| {
+                profile.env_get_time += started.elapsed();
+            });
+        }
         Ok(env)
     }
 
@@ -179,7 +258,12 @@ where
     {
         for t in region {
             // Get all neighbors of t
-            let neighbors: Vec<V> = tn_c.site_index_network().neighbors(t).collect();
+            let mut neighbors: Vec<V> = tn_c.site_index_network().neighbors(t).collect();
+            neighbors.sort_by_key(|node| {
+                tn_c.node_index(node)
+                    .expect("neighbor must exist in site index network")
+                    .index()
+            });
 
             // Remove all env[(t, *)] and propagate recursively
             for neighbor in neighbors {
@@ -195,11 +279,16 @@ where
         // Remove env[(from, to)] if it exists
         if self.envs.remove(&(from.clone(), to.clone())).is_some() {
             // Propagate to next generation: env[(to, x)] for all neighbors x of to, x ≠ from
-            let neighbors: Vec<V> = tn_c
+            let mut neighbors: Vec<V> = tn_c
                 .site_index_network()
                 .neighbors(to)
                 .filter(|n| n != from)
                 .collect();
+            neighbors.sort_by_key(|node| {
+                tn_c.node_index(node)
+                    .expect("neighbor must exist in site index network")
+                    .index()
+            });
 
             for neighbor in neighbors {
                 self.invalidate_recursive(to, &neighbor, tn_c);
@@ -223,11 +312,16 @@ where
     {
         for (from, to) in self.envs.keys() {
             // Get neighbors of `from` excluding `to`
-            let child_neighbors: Vec<V> = tn_c
+            let mut child_neighbors: Vec<V> = tn_c
                 .site_index_network()
                 .neighbors(from)
                 .filter(|n| n != to)
                 .collect();
+            child_neighbors.sort_by_key(|node| {
+                tn_c.node_index(node)
+                    .expect("neighbor must exist in site index network")
+                    .index()
+            });
 
             // If `from` is not a leaf, all child environments must exist
             for child in &child_neighbors {
@@ -271,6 +365,8 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    let started = fit_profile_enabled().then(Instant::now);
+
     // Get tensors
     let node_idx_a = tn_a
         .node_index(node)
@@ -292,10 +388,16 @@ where
         .tensor(node_idx_c)
         .ok_or_else(|| anyhow::anyhow!("Tensor not found in tn_c"))?;
 
-    // Contract A × B × conj(C) - collect all tensors and let contract() find the optimal contraction order
+    // Contract A × B × conj(C) with a single multi-tensor call.
     let c_conj = tensor_c.conj();
     let env = T::contract(&[tensor_a, tensor_b, &c_conj], AllowedPairs::All)
         .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
+
+    if let Some(started) = started {
+        with_fit_profile(|profile| {
+            profile.env_leaf_time += started.elapsed();
+        });
+    }
 
     Ok(env)
 }
@@ -317,6 +419,8 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    let started = fit_profile_enabled().then(Instant::now);
+
     // Get local tensors
     let node_idx_a = tn_a
         .node_index(node)
@@ -343,13 +447,18 @@ where
         return compute_leaf_environment(node, towards, tn_a, tn_b, tn_c);
     }
 
-    // Non-leaf: contract A × B × conj(C) × child_envs
-    // Collect all tensors and let contract() find the optimal contraction order
+    // Non-leaf: contract A × B × conj(C) × child_envs in one multi-tensor call.
     let c_conj = tensor_c.conj();
     let mut tensor_refs: Vec<&T> = vec![tensor_a, tensor_b, &c_conj];
     tensor_refs.extend(child_envs.iter());
     let result = T::contract(&tensor_refs, AllowedPairs::All)
         .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
+
+    if let Some(started) = started {
+        with_fit_profile(|profile| {
+            profile.env_internal_time += started.elapsed();
+        });
+    }
 
     Ok(result)
 }
@@ -444,6 +553,9 @@ where
 
         let node_u = &step.nodes[0];
         let node_v = &step.nodes[1];
+        with_fit_profile(|profile| {
+            profile.step_count += 1;
+        });
 
         // Get node indices in various TreeTNs
         let idx_u_a = self.tn_a.node_index(node_u).unwrap();
@@ -462,7 +574,14 @@ where
         let mut env_tensors: Vec<T> = Vec::new();
 
         // Environments from u's neighbors (except v)
-        for neighbor in full_treetn.site_index_network().neighbors(node_u) {
+        let mut u_neighbors: Vec<V> = full_treetn.site_index_network().neighbors(node_u).collect();
+        u_neighbors.sort_by_key(|node| {
+            full_treetn
+                .node_index(node)
+                .expect("neighbor must exist in site index network")
+                .index()
+        });
+        for neighbor in u_neighbors {
             if neighbor == *node_v {
                 continue;
             }
@@ -473,7 +592,14 @@ where
         }
 
         // Environments from v's neighbors (except u)
-        for neighbor in full_treetn.site_index_network().neighbors(node_v) {
+        let mut v_neighbors: Vec<V> = full_treetn.site_index_network().neighbors(node_v).collect();
+        v_neighbors.sort_by_key(|node| {
+            full_treetn
+                .node_index(node)
+                .expect("neighbor must exist in site index network")
+                .index()
+        });
+        for neighbor in v_neighbors {
             if neighbor == *node_u {
                 continue;
             }
@@ -485,17 +611,24 @@ where
 
         // Compute optimal 2-site tensor: env × A[u] × B[u] × A[v] × B[v] × env
         // Collect all tensors and let contract() find the optimal contraction order
+        let contract_started = fit_profile_enabled().then(Instant::now);
         let mut tensor_refs: Vec<&T> = vec![a_u, b_u, a_v, b_v];
         tensor_refs.extend(env_tensors.iter());
         let ab_uv = T::contract(&tensor_refs, AllowedPairs::All)
             .map_err(|e| anyhow::anyhow!("contract failed: {}", e))?;
+        if let Some(contract_started) = contract_started {
+            with_fit_profile(|profile| {
+                profile.two_site_contract_time += contract_started.elapsed();
+            });
+        }
 
         // The result ab_uv is the optimal 2-site tensor
         // Factorize to get new C[u] and C[v]
 
         // Determine left indices (indices that will remain on u after factorization)
+        let left_inds_started = fit_profile_enabled().then(Instant::now);
         let site_c_u = full_treetn.site_space(node_u).cloned().unwrap_or_default();
-        let left_inds: Vec<_> = ab_uv
+        let mut left_inds: Vec<_> = ab_uv
             .external_indices()
             .iter()
             .filter(|idx| {
@@ -515,6 +648,12 @@ where
             })
             .cloned()
             .collect();
+        left_inds.sort_by(|a, b| a.id().cmp(b.id()));
+        if let Some(left_inds_started) = left_inds_started {
+            with_fit_profile(|profile| {
+                profile.left_inds_time += left_inds_started.elapsed();
+            });
+        }
 
         // Set up factorization options
         let mut options = match self.factorize_alg {
@@ -553,9 +692,15 @@ where
         }
 
         // Factorize using TensorLike::factorize
+        let factorize_started = fit_profile_enabled().then(Instant::now);
         let factorize_result = ab_uv
             .factorize(&left_inds, &options)
             .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))?;
+        if let Some(factorize_started) = factorize_started {
+            with_fit_profile(|profile| {
+                profile.factorize_time += factorize_started.elapsed();
+            });
+        }
 
         let new_tensor_u = factorize_result.left;
         let new_tensor_v = factorize_result.right;
@@ -568,6 +713,7 @@ where
         let idx_u_sub = subtree.node_index(node_u).unwrap();
         let idx_v_sub = subtree.node_index(node_v).unwrap();
 
+        let replace_started = fit_profile_enabled().then(Instant::now);
         subtree.replace_edge_bond(edge_uv, new_bond.clone())?;
         subtree.replace_tensor(idx_u_sub, new_tensor_u)?;
         subtree.replace_tensor(idx_v_sub, new_tensor_v)?;
@@ -575,6 +721,11 @@ where
         // Set ortho_towards
         subtree.set_ortho_towards(&new_bond, Some(step.new_center.clone()));
         subtree.set_canonical_region([step.new_center.clone()])?;
+        if let Some(replace_started) = replace_started {
+            with_fit_profile(|profile| {
+                profile.replace_time += replace_started.elapsed();
+            });
+        }
 
         Ok(subtree)
     }
@@ -585,7 +736,13 @@ where
         full_treetn_after: &TreeTN<T, V>,
     ) -> Result<()> {
         // Invalidate all caches affected by the updated region
+        let started = fit_profile_enabled().then(Instant::now);
         self.envs.invalidate(&step.nodes, full_treetn_after);
+        if let Some(started) = started {
+            with_fit_profile(|profile| {
+                profile.invalidate_time += started.elapsed();
+            });
+        }
         Ok(())
     }
 }
@@ -684,7 +841,13 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     use super::localupdate::apply_local_update_sweep;
-    use crate::CanonicalizationOptions;
+    use crate::CanonicalForm;
+    let profile_enabled = fit_profile_enabled();
+    if profile_enabled {
+        fit_profile_reset();
+    }
+    reset_contract_profile();
+    reset_native_einsum_profile();
 
     // Validate topologies match
     if !tn_a.same_topology(tn_b) {
@@ -698,10 +861,29 @@ where
     // fallback (1e-12) from being applied. This is consistent with how
     // rtol is handled during sweeps.
     let zipup_rtol = Some(options.rtol.unwrap_or(0.0));
-    let mut tn_c = tn_a.contract_zipup(tn_b, center, zipup_rtol, options.max_rank)?;
+    let zipup_started = profile_enabled.then(Instant::now);
+    let mut tn_c = tn_a.contract_zipup_tree_accumulated(
+        tn_b,
+        center,
+        CanonicalForm::Unitary,
+        zipup_rtol,
+        options.max_rank,
+    )?;
+    if let Some(zipup_started) = zipup_started {
+        with_fit_profile(|profile| {
+            profile.zipup_init_time += zipup_started.elapsed();
+        });
+    }
 
-    // Canonicalize towards center
-    tn_c = tn_c.canonicalize([center.clone()], CanonicalizationOptions::default())?;
+    // The zip-up initializer already returns a network centered at `center`.
+
+    // With neither max_rank nor a positive rtol, fit sweeps cannot change the
+    // bond cap and only introduce numerical drift relative to the zip-up
+    // initializer. Treat rtol=None and rtol=0.0 identically by returning the
+    // zip-up result directly in this regime.
+    if options.max_rank.is_none() && options.rtol.unwrap_or(0.0) <= 0.0 {
+        return Ok(tn_c);
+    }
 
     // Create FitUpdater (environments are computed lazily)
     let mut updater = FitUpdater::new(tn_a.clone(), tn_b.clone(), options.max_rank, options.rtol)
@@ -713,13 +895,22 @@ where
 
     // Perform sweeps
     for _sweep in 0..options.nfullsweeps {
+        with_fit_profile(|profile| {
+            profile.sweep_count += 1;
+        });
         let log_norm_before = if options.convergence_tol.is_some() {
             Some(tn_c.log_norm()?)
         } else {
             None
         };
 
+        let sweep_started = profile_enabled.then(Instant::now);
         apply_local_update_sweep(&mut tn_c, &plan, &mut updater)?;
+        if let Some(sweep_started) = sweep_started {
+            with_fit_profile(|profile| {
+                profile.sweep_time += sweep_started.elapsed();
+            });
+        }
 
         // Check convergence using log_norm
         if let (Some(tol), Some(log_norm_before)) = (options.convergence_tol, log_norm_before) {
@@ -732,6 +923,28 @@ where
             }
         }
     }
+
+    if let Some(profile) = take_fit_profile() {
+        eprintln!("=== contract_fit Profiling ===");
+        eprintln!("zipup init:        {:?}", profile.zipup_init_time);
+        eprintln!("canonicalize:      {:?}", profile.canonicalize_time);
+        eprintln!("sweeps total:      {:?}", profile.sweep_time);
+        eprintln!("steps:             {}", profile.step_count);
+        eprintln!("sweeps:            {}", profile.sweep_count);
+        eprintln!(
+            "env get:           {:?} (requests={}, hits={}, misses={})",
+            profile.env_get_time, profile.env_requests, profile.env_hits, profile.env_misses
+        );
+        eprintln!("env leaf compute:  {:?}", profile.env_leaf_time);
+        eprintln!("env node compute:  {:?}", profile.env_internal_time);
+        eprintln!("2-site contract:   {:?}", profile.two_site_contract_time);
+        eprintln!("left_inds:         {:?}", profile.left_inds_time);
+        eprintln!("factorize:         {:?}", profile.factorize_time);
+        eprintln!("replace/update:    {:?}", profile.replace_time);
+        eprintln!("invalidate:        {:?}", profile.invalidate_time);
+    }
+    print_and_reset_contract_profile();
+    print_and_reset_native_einsum_profile();
 
     Ok(tn_c)
 }

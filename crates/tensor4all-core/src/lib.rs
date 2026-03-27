@@ -89,6 +89,9 @@ pub use defaults::tensordynlen::{
 };
 pub use storage::{make_mut_storage, mindim, Storage, StructuredStorage, SumFromStorage};
 pub use tensor4all_tensorbackend::TensorElement;
+pub use tensor4all_tensorbackend::{
+    print_and_reset_native_einsum_profile, reset_native_einsum_profile,
+};
 pub use tensor_like::{
     AllowedPairs, Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions,
     FactorizeResult, TensorLike,
@@ -96,7 +99,9 @@ pub use tensor_like::{
 
 // Contraction - backwards compatibility
 pub use defaults::contract;
-pub use defaults::contract::{contract_connected, contract_multi};
+pub use defaults::contract::{
+    contract_connected, contract_multi, print_and_reset_contract_profile, reset_contract_profile,
+};
 
 // Re-export linear algebra modules from defaults for backwards compatibility
 // This allows `tensor4all_core::svd::...`, `tensor4all_core::qr::...`, etc.

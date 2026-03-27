@@ -3,7 +3,7 @@
 //! This provides a simpler TensorTrain interface designed for TCI operations.
 //! The tensors are stored as flat arrays with explicit dimensions.
 
-use crate::{StatusCode, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
+use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
@@ -382,6 +382,102 @@ pub extern "C" fn t4a_simplett_f64_site_tensor(
         }
 
         T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// Compression
+// ============================================================================
+
+/// Compress a tensor train in-place.
+///
+/// # Arguments
+/// * `ptr` - SimpleTT handle (mutable)
+/// * `method` - 0=LU, 1=CI, 2=SVD
+/// * `tolerance` - Relative tolerance for truncation
+/// * `max_bonddim` - Maximum bond dimension (0 for unlimited)
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_f64_compress(
+    ptr: *mut t4a_simplett_f64,
+    method: libc::c_int,
+    tolerance: libc::c_double,
+    max_bonddim: libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &mut *ptr };
+        use tensor4all_simplett::compression::{CompressionMethod, CompressionOptions};
+
+        let comp_method = match method {
+            0 => CompressionMethod::LU,
+            1 => CompressionMethod::CI,
+            2 => CompressionMethod::SVD,
+            _ => {
+                return crate::err_status(
+                    format!("Invalid compression method: {method}. Use 0=LU, 1=CI, 2=SVD"),
+                    T4A_INVALID_ARGUMENT,
+                );
+            }
+        };
+
+        let options = CompressionOptions {
+            method: comp_method,
+            tolerance,
+            max_bond_dim: if max_bonddim == 0 {
+                usize::MAX
+            } else {
+                max_bonddim
+            },
+            ..Default::default()
+        };
+
+        match tt.inner_mut().compress(&options) {
+            Ok(()) => T4A_SUCCESS,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// Partial sum
+// ============================================================================
+
+/// Sum over selected dimensions, returning a new TensorTrain.
+///
+/// # Arguments
+/// * `ptr` - SimpleTT handle (const)
+/// * `dims` - Array of 0-indexed dimensions to sum over
+/// * `n_dims` - Number of dimensions to sum
+/// * `out` - Output: new SimpleTT handle
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_f64_partial_sum(
+    ptr: *const t4a_simplett_f64,
+    dims: *const libc::size_t,
+    n_dims: libc::size_t,
+    out: *mut *mut t4a_simplett_f64,
+) -> StatusCode {
+    if ptr.is_null() || out.is_null() || (dims.is_null() && n_dims > 0) {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let dim_vec: Vec<usize> = (0..n_dims).map(|i| unsafe { *dims.add(i) }).collect();
+
+        match tt.inner().partial_sum(&dim_vec) {
+            Ok(result_tt) => {
+                unsafe { *out = Box::into_raw(Box::new(t4a_simplett_f64::new(result_tt))) };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
     }));
 
     crate::unwrap_catch(result)

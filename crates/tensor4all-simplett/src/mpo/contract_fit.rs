@@ -9,6 +9,7 @@ use super::factorize::{FactorizeMethod, SVDScalar};
 use super::mpo::MPO;
 use super::site_mpo::SiteMPO;
 use super::types::{Tensor4, Tensor4Ops};
+use crate::einsum_helper::EinsumScalar;
 use tenferro_linalg::LinalgScalar;
 use tenferro_tensor::KeepCountScalar;
 
@@ -53,7 +54,7 @@ impl Default for FitOptions {
 ///
 /// # Returns
 /// The contracted MPO C with bond dimension controlled by options
-pub fn contract_fit<T: SVDScalar>(
+pub fn contract_fit<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,
     options: &FitOptions,

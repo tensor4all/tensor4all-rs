@@ -44,13 +44,22 @@
 pub struct ReadmeDoctests;
 
 pub mod error;
+pub mod globalpivot;
+pub mod globalsearch;
+pub mod integration;
+pub mod optfirstpivot;
 pub mod tensorci1;
 pub mod tensorci2;
 
 // Re-export main types
 pub use error::{Result, TCIError};
+pub use globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput};
+pub use globalsearch::{estimate_true_error, floating_zone};
+pub use optfirstpivot::opt_first_pivot;
 pub use tensorci1::{crossinterpolate1, SweepStrategy, TCI1Options, TensorCI1};
-pub use tensorci2::{crossinterpolate2, PivotSearchStrategy, TCI2Options, TensorCI2};
+pub use tensorci2::{
+    crossinterpolate2, PivotSearchStrategy, Sweep2Strategy, TCI2Options, TensorCI2,
+};
 
 pub use tensor4all_tcicore::{
     CacheKey, CacheKeyError, CachedFunction, IndexInt, IndexSet, LocalIndex, MultiIndex, Scalar,
