@@ -5,8 +5,8 @@ use num_complex::Complex64;
 
 fn test_compress_constant_generic<T>()
 where
-    T: TTScalar + Scalar + Default + matrixluci::Scalar,
-    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+    T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     let tt = TensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
     let original_sum = tt.sum();
@@ -22,8 +22,8 @@ where
 
 fn test_compress_preserves_values_generic<T>()
 where
-    T: TTScalar + Scalar + Default + matrixluci::Scalar,
-    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+    T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     // Create a simple tensor train
     let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2);
@@ -66,8 +66,8 @@ where
 
 fn test_compress_with_max_bond_dim_generic<T>()
 where
-    T: TTScalar + Scalar + Default + matrixluci::Scalar,
-    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+    T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     // Create a tensor train with higher bond dimension
     let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3);

@@ -1,10 +1,10 @@
 //! Optional factor reconstruction helpers.
 
-use crate::error::MatrixLuciError;
-use crate::scalar::Scalar;
-use crate::source::CandidateMatrixSource;
-use crate::types::{DenseOwnedMatrix, PivotSelectionCore};
-use crate::Result;
+use crate::matrixluci::error::MatrixLuciError;
+use crate::matrixluci::scalar::Scalar;
+use crate::matrixluci::source::CandidateMatrixSource;
+use crate::matrixluci::types::{DenseOwnedMatrix, PivotSelectionCore};
+use crate::matrixluci::Result;
 
 /// Gather a dense column-major block from a source.
 pub(crate) fn load_block<T: Scalar, S: CandidateMatrixSource<T>>(

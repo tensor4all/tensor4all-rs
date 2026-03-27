@@ -3,19 +3,19 @@
 use crate::error::{MatrixCIError, Result};
 use crate::matrix::{submatrix, zeros, Matrix};
 use crate::matrixlu::RrLUOptions;
-use crate::scalar::Scalar;
-use crate::traits::AbstractMatrixCI;
-use ::matrixluci::{
+use crate::matrixluci::{
     CrossFactors, DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions,
     PivotSelectionCore,
 };
+use crate::scalar::Scalar;
+use crate::traits::AbstractMatrixCI;
 
 /// Matrix LU-based Cross Interpolation.
 ///
 /// This is a higher-level row-major wrapper around the lower-level `matrixluci`
 /// substrate.
 #[derive(Debug, Clone)]
-pub struct MatrixLUCI<T: Scalar + ::matrixluci::Scalar> {
+pub struct MatrixLUCI<T: Scalar + crate::matrixluci::Scalar> {
     nrows: usize,
     ncols: usize,
     row_indices: Vec<usize>,
@@ -25,12 +25,12 @@ pub struct MatrixLUCI<T: Scalar + ::matrixluci::Scalar> {
     pivot_errors: Vec<f64>,
 }
 
-pub(crate) fn map_backend_error(err: ::matrixluci::MatrixLuciError) -> MatrixCIError {
+pub(crate) fn map_backend_error(err: crate::matrixluci::MatrixLuciError) -> MatrixCIError {
     match err {
-        ::matrixluci::MatrixLuciError::InvalidArgument { message } => {
+        crate::matrixluci::MatrixLuciError::InvalidArgument { message } => {
             MatrixCIError::InvalidArgument { message }
         }
-        ::matrixluci::MatrixLuciError::SingularPivotBlock => MatrixCIError::SingularMatrix,
+        crate::matrixluci::MatrixLuciError::SingularPivotBlock => MatrixCIError::SingularMatrix,
     }
 }
 
@@ -44,8 +44,8 @@ pub(crate) fn to_column_major<T: Scalar>(matrix: &Matrix<T>) -> Vec<T> {
     out
 }
 
-pub(crate) fn to_row_major<T: Scalar + ::matrixluci::Scalar>(
-    matrix: &::matrixluci::DenseOwnedMatrix<T>,
+pub(crate) fn to_row_major<T: Scalar + crate::matrixluci::Scalar>(
+    matrix: &crate::matrixluci::DenseOwnedMatrix<T>,
 ) -> Matrix<T> {
     let mut out = zeros(matrix.nrows(), matrix.ncols());
     for col in 0..matrix.ncols() {
@@ -61,7 +61,7 @@ pub(crate) fn dense_selection_from_matrix<T>(
     options: RrLUOptions,
 ) -> Result<(PivotSelectionCore, CrossFactors<T>)>
 where
-    T: Scalar + ::matrixluci::Scalar,
+    T: Scalar + crate::matrixluci::Scalar,
     DenseFaerLuKernel: PivotKernel<T>,
 {
     let data = to_column_major(a);
@@ -82,7 +82,7 @@ where
 
 impl<T> MatrixLUCI<T>
 where
-    T: Scalar + ::matrixluci::Scalar,
+    T: Scalar + crate::matrixluci::Scalar,
     DenseFaerLuKernel: PivotKernel<T>,
 {
     /// Create a MatrixLUCI from a dense row-major matrix.
@@ -136,7 +136,7 @@ where
 
 impl<T> AbstractMatrixCI<T> for MatrixLUCI<T>
 where
-    T: Scalar + ::matrixluci::Scalar,
+    T: Scalar + crate::matrixluci::Scalar,
 {
     fn nrows(&self) -> usize {
         self.nrows

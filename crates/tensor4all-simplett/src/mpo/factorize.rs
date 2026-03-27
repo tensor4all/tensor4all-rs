@@ -319,8 +319,8 @@ pub fn factorize_lu<T>(
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<T>>
 where
-    T: SVDScalar + tensor4all_tcicore::Scalar + matrixluci::Scalar,
-    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+    T: SVDScalar + tensor4all_tcicore::Scalar + tensor4all_tcicore::MatrixLuciScalar,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
 
@@ -383,9 +383,9 @@ pub fn factorize_ci<T>(
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<T>>
 where
-    T: SVDScalar + tensor4all_tcicore::Scalar + matrixluci::Scalar,
+    T: SVDScalar + tensor4all_tcicore::Scalar + tensor4all_tcicore::MatrixLuciScalar,
     <T as ComplexFloat>::Real: Into<f64>,
-    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     // CI uses the same LUCI implementation as LU
     factorize_lu(matrix, options)

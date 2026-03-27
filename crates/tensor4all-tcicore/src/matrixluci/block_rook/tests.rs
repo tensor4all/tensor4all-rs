@@ -1,4 +1,4 @@
-use crate::{
+use crate::matrixluci::{
     DenseFaerLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource, PivotKernel,
     PivotKernelOptions,
 };

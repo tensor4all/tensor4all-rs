@@ -1,6 +1,6 @@
-use crate::{DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions};
+use crate::matrixluci::{DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions};
+use crate::{from_vec2d, rrlu, RrLUOptions};
 use approx::assert_abs_diff_eq;
-use tensor4all_tcicore::{from_vec2d, rrlu, RrLUOptions};
 
 #[test]
 fn dense_kernel_recovers_identity_pivots() {
@@ -37,7 +37,10 @@ fn col_major_from_rows(rows: &[Vec<f64>]) -> Vec<f64> {
     out
 }
 
-fn dense_factorize(rows: &[Vec<f64>], options: PivotKernelOptions) -> crate::PivotSelectionCore {
+fn dense_factorize(
+    rows: &[Vec<f64>],
+    options: PivotKernelOptions,
+) -> crate::matrixluci::PivotSelectionCore {
     let nrows = rows.len();
     let ncols = rows.first().map_or(0, Vec::len);
     let data = col_major_from_rows(rows);

@@ -3,7 +3,9 @@ use crate::{
     SimpleTreeTci,
 };
 use anyhow::{ensure, Result};
-use matrixluci::{DenseFaerLuKernel, PivotKernel, PivotKernelOptions, Scalar};
+use tensor4all_tcicore::{
+    DenseFaerLuKernel, MatrixLuciScalar as Scalar, PivotKernel, PivotKernelOptions,
+};
 
 /// MVP optimization options for TreeTCI.
 #[derive(Clone, Debug)]
@@ -12,7 +14,7 @@ pub struct TreeTciOptions {
     pub tolerance: f64,
     /// Maximum number of edge-order iterations.
     pub max_iter: usize,
-    /// Maximum bond dimension retained by `matrixluci`.
+    /// Maximum bond dimension retained by the tcicore LUCI pivot substrate.
     pub max_bond_dim: usize,
     /// Whether to normalize by the maximum observed sample magnitude.
     pub normalize_error: bool,

@@ -5,10 +5,10 @@ use crate::{
 use anyhow::{ensure, Result};
 use faer::prelude::Solve;
 use faer::MatRef;
-use matrixluci::Scalar;
 use num_complex::{Complex32, Complex64};
 use std::collections::HashMap;
 use tensor4all_core::{DynIndex, TensorDynLen, TensorElement};
+use tensor4all_tcicore::MatrixLuciScalar as Scalar;
 use tensor4all_treetn::TreeTN;
 
 #[doc(hidden)]

@@ -26,7 +26,7 @@ pub fn crossinterpolate_tree<T, F, B>(
 ) -> Result<TreeTciRunResult>
 where
     T: FullPivLuScalar,
-    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
     F: Fn(&[usize]) -> T,
     B: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
@@ -57,7 +57,7 @@ pub fn crossinterpolate_tree_with_proposer<T, F, B, P>(
 ) -> Result<TreeTciRunResult>
 where
     T: FullPivLuScalar,
-    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
     F: Fn(&[usize]) -> T,
     B: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,

@@ -1,4 +1,4 @@
-use crate::{
+use crate::matrixluci::{
     CandidateMatrixSource, CrossFactors, DenseFaerLuKernel, DenseMatrixSource, PivotKernel,
     PivotKernelOptions,
 };
@@ -13,7 +13,10 @@ fn test_matrix_data() -> Vec<f64> {
     ]
 }
 
-fn assert_dense_eq(lhs: &crate::DenseOwnedMatrix<f64>, rhs: &crate::DenseOwnedMatrix<f64>) {
+fn assert_dense_eq(
+    lhs: &crate::matrixluci::DenseOwnedMatrix<f64>,
+    rhs: &crate::matrixluci::DenseOwnedMatrix<f64>,
+) {
     assert_eq!(lhs.nrows(), rhs.nrows());
     assert_eq!(lhs.ncols(), rhs.ncols());
     for j in 0..lhs.ncols() {

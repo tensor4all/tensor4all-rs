@@ -1,9 +1,11 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use faer::MatRef;
-use matrixluci::{DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use tensor4all_tcicore::matrixluci::{
+    DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions,
+};
 
 fn random_column_major(nrows: usize, ncols: usize, seed: u64) -> Vec<f64> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);

@@ -59,7 +59,7 @@ pub enum TCIError {
 
     /// Matrix LUCI substrate error
     #[error("Matrix LUCI error: {0}")]
-    MatrixLuciError(#[from] matrixluci::MatrixLuciError),
+    MatrixLuciError(#[from] tensor4all_tcicore::MatrixLuciError),
 
     /// Tensor train error
     #[error("Tensor train error: {0}")]

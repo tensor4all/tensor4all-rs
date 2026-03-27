@@ -1,11 +1,11 @@
 //! Lazy pivot-kernel implementations.
 
-use crate::factors::{invert_square, load_block, matmul, subtract_inplace};
-use crate::kernel::PivotKernel;
-use crate::scalar::Scalar;
-use crate::source::CandidateMatrixSource;
-use crate::types::{DenseOwnedMatrix, PivotKernelOptions, PivotSelectionCore};
-use crate::Result;
+use crate::matrixluci::factors::{invert_square, load_block, matmul, subtract_inplace};
+use crate::matrixluci::kernel::PivotKernel;
+use crate::matrixluci::scalar::Scalar;
+use crate::matrixluci::source::CandidateMatrixSource;
+use crate::matrixluci::types::{DenseOwnedMatrix, PivotKernelOptions, PivotSelectionCore};
+use crate::matrixluci::Result;
 use num_complex::{Complex32, Complex64};
 
 /// Lazy pivot kernel based on residual row/column rook search.

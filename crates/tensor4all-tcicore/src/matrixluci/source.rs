@@ -1,7 +1,7 @@
 //! Candidate matrix sources.
 
-use crate::scalar::Scalar;
-use crate::types::DenseOwnedMatrix;
+use crate::matrixluci::scalar::Scalar;
+use crate::matrixluci::types::DenseOwnedMatrix;
 use std::marker::PhantomData;
 
 /// Candidate matrix access abstraction.

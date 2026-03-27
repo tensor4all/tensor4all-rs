@@ -1,9 +1,9 @@
 //! Dense pivot-kernel implementations.
 
-use crate::kernel::PivotKernel;
-use crate::scalar::Scalar;
-use crate::source::{materialize_source, CandidateMatrixSource};
-use crate::{PivotKernelOptions, PivotSelectionCore, Result};
+use crate::matrixluci::kernel::PivotKernel;
+use crate::matrixluci::scalar::Scalar;
+use crate::matrixluci::source::{materialize_source, CandidateMatrixSource};
+use crate::matrixluci::{PivotKernelOptions, PivotSelectionCore, Result};
 use faer::MatRef;
 use num_complex::{Complex32, Complex64};
 

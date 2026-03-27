@@ -1,4 +1,4 @@
-use crate::{PivotKernelOptions, PivotSelectionCore};
+use crate::matrixluci::{PivotKernelOptions, PivotSelectionCore};
 
 #[test]
 fn pivot_selection_core_stores_rank_and_indices() {

@@ -1,6 +1,6 @@
 //! Core data types for matrixluci.
 
-use crate::scalar::Scalar;
+use crate::matrixluci::scalar::Scalar;
 use std::ops::{Index, IndexMut};
 
 /// Simple owned dense matrix in column-major layout.

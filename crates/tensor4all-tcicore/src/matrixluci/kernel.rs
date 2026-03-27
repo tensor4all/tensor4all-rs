@@ -1,8 +1,8 @@
 //! Pivot-kernel traits.
 
-use crate::scalar::Scalar;
-use crate::source::CandidateMatrixSource;
-use crate::types::{PivotKernelOptions, PivotSelectionCore};
+use crate::matrixluci::scalar::Scalar;
+use crate::matrixluci::source::CandidateMatrixSource;
+use crate::matrixluci::types::{PivotKernelOptions, PivotSelectionCore};
 
 /// Kernel that selects pivot rows and columns.
 pub trait PivotKernel<T: Scalar> {
@@ -11,7 +11,7 @@ pub trait PivotKernel<T: Scalar> {
         &self,
         source: &S,
         options: &PivotKernelOptions,
-    ) -> crate::Result<PivotSelectionCore>;
+    ) -> crate::matrixluci::Result<PivotSelectionCore>;
 }
 
 #[cfg(test)]
