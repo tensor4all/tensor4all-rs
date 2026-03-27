@@ -70,6 +70,9 @@ pub struct FTCore {
 impl FTCore {
     /// Create a new FTCore for r bits.
     pub fn new(r: usize, options: FourierOptions) -> Result<Self> {
+        if r < 2 {
+            anyhow::bail!("Number of sites must be at least 2, got {r}");
+        }
         let forward_options = FourierOptions {
             sign: -1.0,
             ..options.clone()
@@ -126,8 +129,8 @@ impl FTCore {
 /// # Returns
 /// LinearOperator representing the QFT
 pub fn quantics_fourier_operator(r: usize, options: FourierOptions) -> Result<QuanticsOperator> {
-    if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+    if r < 2 {
+        anyhow::bail!("Number of sites must be at least 2, got {r}");
     }
 
     let mpo = quantics_fourier_mpo(r, &options)?;
@@ -137,8 +140,8 @@ pub fn quantics_fourier_operator(r: usize, options: FourierOptions) -> Result<Qu
 
 /// Create the QFT MPO as a TensorTrain using Chen & Lindsey construction.
 fn quantics_fourier_mpo(r: usize, options: &FourierOptions) -> Result<TensorTrain<Complex64>> {
-    if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+    if r < 2 {
+        anyhow::bail!("Number of sites must be at least 2, got {r}");
     }
 
     let k = options.k;

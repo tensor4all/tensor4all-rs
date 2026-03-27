@@ -39,8 +39,8 @@ pub enum TriangleType {
 /// let op = cumsum_operator(8).unwrap();
 /// ```
 pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
-    if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+    if r < 2 {
+        anyhow::bail!("Number of sites must be at least 2, got {r}");
     }
 
     let mpo = cumsum_mpo(r)?;
@@ -57,8 +57,8 @@ pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
 /// * `r` - Number of bits (sites)
 /// * `triangle` - Which triangle to use
 pub fn triangle_operator(r: usize, triangle: TriangleType) -> Result<QuanticsOperator> {
-    if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+    if r < 2 {
+        anyhow::bail!("Number of sites must be at least 2, got {r}");
     }
 
     let mpo = triangle_mpo(r, triangle)?;
@@ -79,8 +79,8 @@ pub fn triangle_operator(r: usize, triangle: TriangleType) -> Result<QuanticsOpe
 /// - t[1, 1, *, *] = 1 (comparison already made)
 #[allow(clippy::needless_range_loop)]
 fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
-    if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+    if r < 2 {
+        anyhow::bail!("Number of sites must be at least 2, got {r}");
     }
 
     let single_tensor = upper_triangle_tensor();
@@ -150,8 +150,8 @@ fn cumsum_mpo(r: usize) -> Result<TensorTrain<Complex64>> {
 /// This is a generalization of `cumsum_mpo` that supports both upper and lower triangles.
 #[allow(clippy::needless_range_loop)]
 fn triangle_mpo(r: usize, triangle: TriangleType) -> Result<TensorTrain<Complex64>> {
-    if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
+    if r < 2 {
+        anyhow::bail!("Number of sites must be at least 2, got {r}");
     }
 
     // upper_triangle_tensor() has y>x transition → M[i,j]=1 when i>j = Lower triangle

@@ -55,3 +55,19 @@ fn test_cumsum_error_zero_sites() {
     let result = cumsum_operator(0);
     assert!(result.is_err());
 }
+
+#[test]
+fn test_cumsum_error_one_site() {
+    let result = cumsum_operator(1);
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("at least 2"), "unexpected error: {msg}");
+}
+
+#[test]
+fn test_triangle_error_one_site() {
+    let result = triangle_operator(1, TriangleType::Lower);
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("at least 2"), "unexpected error: {msg}");
+}
