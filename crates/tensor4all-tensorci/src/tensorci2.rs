@@ -5,10 +5,10 @@
 //! of function values through an explicit batch function parameter.
 
 use crate::error::{Result, TCIError};
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use crate::globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput};
 use rand::SeedableRng;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
 use tensor4all_tcicore::matrix::zeros;
 use tensor4all_tcicore::MultiIndex;
