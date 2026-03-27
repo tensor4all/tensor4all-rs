@@ -92,3 +92,21 @@ fn test_fourier_error_zero_sites() {
     let result = quantics_fourier_operator(0, options);
     assert!(result.is_err());
 }
+
+#[test]
+fn test_fourier_error_one_site() {
+    let options = FourierOptions::default();
+    let result = quantics_fourier_operator(1, options);
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("at least 2"), "unexpected error: {msg}");
+}
+
+#[test]
+fn test_ftcore_error_one_site() {
+    let options = FourierOptions::default();
+    let result = FTCore::new(1, options);
+    assert!(result.is_err());
+    let msg = result.err().unwrap().to_string();
+    assert!(msg.contains("at least 2"), "unexpected error: {msg}");
+}

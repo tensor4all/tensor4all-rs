@@ -85,6 +85,9 @@ fn shift_mpo(r: usize, offset: i64, bc: BoundaryCondition) -> Result<TensorTrain
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive"));
     }
+    if r > 63 {
+        anyhow::bail!("Number of sites must be at most 63 to avoid integer overflow");
+    }
 
     let n_max = 1i64 << r;
 
