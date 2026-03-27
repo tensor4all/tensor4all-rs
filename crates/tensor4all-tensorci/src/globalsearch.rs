@@ -1,0 +1,203 @@
+//! Global error estimation for tensor train approximations.
+//!
+//! Port of Julia's `estimatetrueerror` and `_floatingzone`
+//! from TensorCrossInterpolation.jl.
+
+use rand::Rng;
+use tensor4all_simplett::{AbstractTensorTrain, TTScalar, Tensor3Ops, TensorTrain};
+use tensor4all_tcicore::{MultiIndex, Scalar};
+
+/// Estimate the true interpolation error using floating zone optimization.
+///
+/// Runs floating zone search from multiple random initial points to find
+/// indices with high interpolation error.
+///
+/// # Arguments
+/// * `tt` - The tensor train approximation
+/// * `f` - The function being approximated
+/// * `nsearch` - Number of random initial points (ignored if initial_points is Some)
+/// * `initial_points` - Optional explicit initial points
+/// * `rng` - Random number generator
+///
+/// # Returns
+/// Vector of (pivot, error) pairs sorted by descending error.
+pub fn estimate_true_error<T, F>(
+    tt: &TensorTrain<T>,
+    f: &F,
+    nsearch: usize,
+    initial_points: Option<Vec<MultiIndex>>,
+    rng: &mut impl Rng,
+) -> Vec<(MultiIndex, f64)>
+where
+    T: Scalar + TTScalar,
+    F: Fn(&MultiIndex) -> T,
+{
+    let site_dims: Vec<usize> = (0..tt.len())
+        .map(|i| tt.site_tensor(i).site_dim())
+        .collect();
+
+    let points = if let Some(pts) = initial_points {
+        pts
+    } else {
+        (0..nsearch)
+            .map(|_| {
+                site_dims
+                    .iter()
+                    .map(|&d| rng.random_range(0..d))
+                    .collect::<MultiIndex>()
+            })
+            .collect()
+    };
+
+    let mut pivot_errors: Vec<(MultiIndex, f64)> = points
+        .into_iter()
+        .map(|init_p| floating_zone(tt, f, &site_dims, Some(&init_p), f64::MAX))
+        .collect();
+
+    // Sort by descending error
+    pivot_errors.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Remove duplicates (same pivot)
+    pivot_errors.dedup_by(|a, b| a.0 == b.0);
+
+    pivot_errors
+}
+
+/// Floating zone optimization: find a local maximum of the interpolation error.
+///
+/// Starting from an initial point, sweeps through each site position,
+/// evaluating all local indices while fixing others, and picks the
+/// index with the maximum error. Repeats until convergence.
+///
+/// Port of Julia's `_floatingzone`.
+///
+/// # Arguments
+/// * `tt` - The tensor train approximation
+/// * `f` - The function being approximated
+/// * `local_dims` - Local dimensions
+/// * `init_p` - Optional initial point (random if None)
+/// * `early_stop_tol` - Stop early if error exceeds this value
+///
+/// # Returns
+/// (pivot, max_error) tuple
+pub fn floating_zone<T, F>(
+    tt: &TensorTrain<T>,
+    f: &F,
+    local_dims: &[usize],
+    init_p: Option<&MultiIndex>,
+    early_stop_tol: f64,
+) -> (MultiIndex, f64)
+where
+    T: Scalar + TTScalar,
+    F: Fn(&MultiIndex) -> T,
+{
+    let n = local_dims.len();
+
+    let mut pivot = if let Some(p) = init_p {
+        p.clone()
+    } else {
+        vec![0; n]
+    };
+
+    let f_val = f(&pivot);
+    let tt_val = tt.evaluate(&pivot).unwrap_or(T::zero());
+    let diff = f_val - tt_val;
+    let mut max_error = f64::sqrt(Scalar::abs_sq(diff));
+
+    let max_sweeps = n * 10; // Reasonable upper bound
+    for _ in 0..max_sweeps {
+        let prev_max_error = max_error;
+
+        for ipos in 0..n {
+            // Evaluate all local indices at this position
+            let mut best_local_error = 0.0f64;
+            let mut best_local_idx = pivot[ipos];
+
+            for v in 0..local_dims[ipos] {
+                pivot[ipos] = v;
+                let f_val = f(&pivot);
+                let tt_val = tt.evaluate(&pivot).unwrap_or(T::zero());
+                let diff = f_val - tt_val;
+                let error = f64::sqrt(Scalar::abs_sq(diff));
+                if error > best_local_error {
+                    best_local_error = error;
+                    best_local_idx = v;
+                }
+            }
+
+            pivot[ipos] = best_local_idx;
+            // Keep max_error monotonically non-decreasing
+            max_error = max_error.max(best_local_error);
+        }
+
+        if max_error == prev_max_error || max_error > early_stop_tol {
+            break;
+        }
+    }
+
+    (pivot, max_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_floating_zone_finds_error() {
+        use tensor4all_simplett::Tensor3Ops;
+
+        // Build a rank-1 TT approximation of constant 1.0
+        let mut t0 = tensor4all_simplett::tensor3_zeros(1, 4, 1);
+        let mut t1 = tensor4all_simplett::tensor3_zeros(1, 4, 1);
+        for s in 0..4 {
+            t0.set3(0, s, 0, 1.0);
+            t1.set3(0, s, 0, 1.0);
+        }
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        // Verify TT evaluates to 1.0 everywhere
+        assert!((tt.evaluate(&[0, 0]).unwrap() - 1.0).abs() < 1e-14);
+        assert!((tt.evaluate(&[3, 3]).unwrap() - 1.0).abs() < 1e-14);
+
+        // Exact function has non-constant behavior
+        let f = |idx: &MultiIndex| (idx[0] * idx[1]) as f64;
+        let local_dims = vec![4, 4];
+
+        // Start from (1, 1) so initial error is not zero: |1*1 - 1| = 0
+        // Actually start from (2, 2) so initial error is |4 - 1| = 3
+        let (pivot, error) = floating_zone(&tt, &f, &local_dims, Some(&vec![2, 2]), f64::MAX);
+
+        // Error should be > 0 since tt=1 but f(i,j)=i*j varies
+        // The maximum error should be at (3,3): |9-1|=8
+        assert!(error > 0.0, "Error should be positive, got {}", error);
+        assert_eq!(pivot, vec![3, 3], "Should find max error at (3,3)");
+        assert!(
+            (error - 8.0).abs() < 1e-10,
+            "Error should be 8.0, got {}",
+            error
+        );
+    }
+
+    #[test]
+    fn test_estimate_true_error_sorted() {
+        // Build a constant TT (all 0)
+        let t0 = tensor4all_simplett::tensor3_zeros(1, 4, 1);
+        let t1 = tensor4all_simplett::tensor3_zeros(1, 4, 1);
+        let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+
+        let f = |idx: &MultiIndex| (idx[0] + idx[1]) as f64;
+        let mut rng = rand::rng();
+
+        let errors = estimate_true_error(&tt, &f, 10, None, &mut rng);
+
+        // Verify sorted in descending order
+        for i in 0..errors.len().saturating_sub(1) {
+            assert!(
+                errors[i].1 >= errors[i + 1].1,
+                "Errors should be sorted descending: {} < {}",
+                errors[i].1,
+                errors[i + 1].1
+            );
+        }
+    }
+}

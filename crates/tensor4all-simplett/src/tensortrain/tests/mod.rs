@@ -288,3 +288,297 @@ fn test_log_norm_with_varied_values_c64() {
 fn test_log_norm_zero_tensor_c64() {
     test_log_norm_zero_tensor_generic::<Complex64>();
 }
+
+// ============================================================================
+// partial_sum tests
+// ============================================================================
+
+fn test_partial_sum_all_dims_generic<T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug>() {
+    // f(i,j,k) = 1.0 for all indices → sum = 2*3*2 = 12
+    let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
+    let full_sum = tt.sum();
+
+    let result = tt.partial_sum(&[0, 1, 2]).unwrap();
+    // Should be 1-site TT with a single scalar
+    assert_eq!(result.len(), 1);
+    let partial_val = result.sum();
+    assert!(
+        (full_sum - partial_val).abs_sq().sqrt() < 1e-12,
+        "partial_sum all dims: expected {full_sum:?}, got {partial_val:?}"
+    );
+}
+
+fn test_partial_sum_no_dims_generic<T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug>() {
+    let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
+    let result = tt.partial_sum(&[]).unwrap();
+    assert_eq!(result.len(), 3);
+    // Should evaluate identically to original
+    for i in 0..2 {
+        for j in 0..3 {
+            for k in 0..2 {
+                let expected = tt.evaluate(&[i, j, k]).unwrap();
+                let actual = result.evaluate(&[i, j, k]).unwrap();
+                assert!(
+                    (expected - actual).abs_sq().sqrt() < 1e-12,
+                    "partial_sum no dims: mismatch at ({i},{j},{k})"
+                );
+            }
+        }
+    }
+}
+
+fn test_partial_sum_single_dim_generic<
+    T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug,
+>() {
+    // f(i,j,k) = (1+i) * (1+j) * (1+k), site_dims = [3, 4, 2]
+    // Build TT via rank-1 product structure
+    let mut t0 = tensor3_zeros::<T>(1, 3, 1);
+    for s in 0..3 {
+        t0.set3(0, s, 0, T::from_f64((1 + s) as f64));
+    }
+    let mut t1 = tensor3_zeros::<T>(1, 4, 1);
+    for s in 0..4 {
+        t1.set3(0, s, 0, T::from_f64((1 + s) as f64));
+    }
+    let mut t2 = tensor3_zeros::<T>(1, 2, 1);
+    for s in 0..2 {
+        t2.set3(0, s, 0, T::from_f64((1 + s) as f64));
+    }
+    let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+
+    // Sum over dim 1 (j): sum_{j=0}^{3} (1+j) = 1+2+3+4 = 10
+    // Result should be TT for g(i,k) = (1+i) * 10 * (1+k)
+    let result = tt.partial_sum(&[1]).unwrap();
+    assert_eq!(result.len(), 2); // dims 0 and 2 remain
+
+    for i in 0..3 {
+        for k in 0..2 {
+            let expected = T::from_f64((1 + i) as f64 * 10.0 * (1 + k) as f64);
+            let actual = result.evaluate(&[i, k]).unwrap();
+            assert!(
+                (expected - actual).abs_sq().sqrt() < 1e-10,
+                "partial_sum dim=1: mismatch at ({i},{k}): expected {expected:?}, got {actual:?}"
+            );
+        }
+    }
+}
+
+fn test_partial_sum_multiple_dims_generic<
+    T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug,
+>() {
+    // Same rank-1 TT: f(i,j,k) = (1+i)*(1+j)*(1+k)
+    let mut t0 = tensor3_zeros::<T>(1, 3, 1);
+    for s in 0..3 {
+        t0.set3(0, s, 0, T::from_f64((1 + s) as f64));
+    }
+    let mut t1 = tensor3_zeros::<T>(1, 4, 1);
+    for s in 0..4 {
+        t1.set3(0, s, 0, T::from_f64((1 + s) as f64));
+    }
+    let mut t2 = tensor3_zeros::<T>(1, 2, 1);
+    for s in 0..2 {
+        t2.set3(0, s, 0, T::from_f64((1 + s) as f64));
+    }
+    let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+
+    // Sum over dims 0 and 2: sum_i (1+i) = 6, sum_k (1+k) = 3
+    // Result: g(j) = 6 * (1+j) * 3 = 18 * (1+j)
+    let result = tt.partial_sum(&[0, 2]).unwrap();
+    assert_eq!(result.len(), 1); // only dim 1 remains
+
+    for j in 0..4 {
+        let expected = T::from_f64(18.0 * (1 + j) as f64);
+        let actual = result.evaluate(&[j]).unwrap();
+        assert!(
+            (expected - actual).abs_sq().sqrt() < 1e-10,
+            "partial_sum dims=[0,2]: mismatch at j={j}: expected {expected:?}, got {actual:?}"
+        );
+    }
+}
+
+#[test]
+fn test_partial_sum_all_dims_f64() {
+    test_partial_sum_all_dims_generic::<f64>();
+}
+#[test]
+fn test_partial_sum_all_dims_c64() {
+    test_partial_sum_all_dims_generic::<Complex64>();
+}
+#[test]
+fn test_partial_sum_no_dims_f64() {
+    test_partial_sum_no_dims_generic::<f64>();
+}
+#[test]
+fn test_partial_sum_no_dims_c64() {
+    test_partial_sum_no_dims_generic::<Complex64>();
+}
+#[test]
+fn test_partial_sum_single_dim_f64() {
+    test_partial_sum_single_dim_generic::<f64>();
+}
+#[test]
+fn test_partial_sum_single_dim_c64() {
+    test_partial_sum_single_dim_generic::<Complex64>();
+}
+#[test]
+fn test_partial_sum_multiple_dims_f64() {
+    test_partial_sum_multiple_dims_generic::<f64>();
+}
+#[test]
+fn test_partial_sum_multiple_dims_c64() {
+    test_partial_sum_multiple_dims_generic::<Complex64>();
+}
+
+// ============================================================================
+// TT arithmetic tests (port of test_tensortrain.jl)
+// ============================================================================
+
+fn test_tt_addition_generic<T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug>() {
+    // Build two rank-1 TTs: f(i,j,k) = (1+i), g(i,j,k) = (1+j)
+    let mut t0_a = tensor3_zeros::<T>(1, 3, 1);
+    let mut t1_a = tensor3_zeros::<T>(1, 3, 1);
+    let mut t2_a = tensor3_zeros::<T>(1, 2, 1);
+    for s in 0..3 {
+        t0_a.set3(0, s, 0, T::from_f64((1 + s) as f64));
+    }
+    for s in 0..3 {
+        t1_a.set3(0, s, 0, T::from_f64(1.0));
+    }
+    for s in 0..2 {
+        t2_a.set3(0, s, 0, T::from_f64(1.0));
+    }
+    let tt_a = TensorTrain::new(vec![t0_a, t1_a, t2_a]).unwrap();
+
+    let mut t0_b = tensor3_zeros::<T>(1, 3, 1);
+    let mut t1_b = tensor3_zeros::<T>(1, 3, 1);
+    let mut t2_b = tensor3_zeros::<T>(1, 2, 1);
+    for s in 0..3 {
+        t0_b.set3(0, s, 0, T::from_f64(1.0));
+    }
+    for s in 0..3 {
+        t1_b.set3(0, s, 0, T::from_f64((1 + s) as f64));
+    }
+    for s in 0..2 {
+        t2_b.set3(0, s, 0, T::from_f64(1.0));
+    }
+    let tt_b = TensorTrain::new(vec![t0_b, t1_b, t2_b]).unwrap();
+
+    // tt_a + tt_b
+    let tt_add = tt_a.add(&tt_b).unwrap();
+    for i in 0..3 {
+        for j in 0..3 {
+            for k in 0..2 {
+                let expected = T::from_f64((1 + i + 1 + j) as f64);
+                let actual = tt_add.evaluate(&[i, j, k]).unwrap();
+                assert!(
+                    (expected - actual).abs_sq().sqrt() < 1e-12,
+                    "add: mismatch at ({i},{j},{k})"
+                );
+            }
+        }
+    }
+
+    // tt_a - tt_b
+    let tt_sub = tt_a.sub(&tt_b).unwrap();
+    for i in 0..3 {
+        for j in 0..3 {
+            for k in 0..2 {
+                let expected = T::from_f64((i as i64 - j as i64) as f64);
+                let actual = tt_sub.evaluate(&[i, j, k]).unwrap();
+                assert!(
+                    (expected - actual).abs_sq().sqrt() < 1e-12,
+                    "sub: mismatch at ({i},{j},{k})"
+                );
+            }
+        }
+    }
+
+    // scalar multiplication
+    let tt_scaled = tt_a.scaled(T::from_f64(2.5));
+    for i in 0..3 {
+        let expected = T::from_f64(2.5 * (1 + i) as f64);
+        let actual = tt_scaled.evaluate(&[i, 0, 0]).unwrap();
+        assert!(
+            (expected - actual).abs_sq().sqrt() < 1e-12,
+            "scale: mismatch at ({i},0,0)"
+        );
+    }
+}
+
+#[test]
+fn test_tt_addition_f64() {
+    test_tt_addition_generic::<f64>();
+}
+#[test]
+fn test_tt_addition_c64() {
+    test_tt_addition_generic::<Complex64>();
+}
+
+// ============================================================================
+// SVD compression with tolerance (port of test_tensortrain.jl "compress! (SVD)")
+// ============================================================================
+
+fn test_svd_compression_tolerance_generic<
+    T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug,
+>() {
+    use crate::compression::{CompressionMethod, CompressionOptions};
+
+    // Build a random-ish TT with known structure: sum of two rank-1 terms
+    // f(i,j,k) = (1+i)*(1+j)*(1+k) + (2+i)*(3+j)*(4+k)
+    let build_tt = || -> TensorTrain<T> {
+        let mut t0 = tensor3_zeros::<T>(1, 4, 2);
+        let mut t1 = tensor3_zeros::<T>(2, 4, 2);
+        let mut t2 = tensor3_zeros::<T>(2, 4, 1);
+        for s in 0..4 {
+            t0.set3(0, s, 0, T::from_f64((1 + s) as f64));
+            t0.set3(0, s, 1, T::from_f64((2 + s) as f64));
+            t1.set3(0, s, 0, T::from_f64((1 + s) as f64));
+            t1.set3(1, s, 1, T::from_f64((3 + s) as f64));
+            t2.set3(0, s, 0, T::from_f64((1 + s) as f64));
+            t2.set3(1, s, 0, T::from_f64((4 + s) as f64));
+        }
+        TensorTrain::new(vec![t0, t1, t2]).unwrap()
+    };
+
+    let tt_orig = build_tt();
+    let orig_sum = tt_orig.sum();
+
+    let mut tt_svd = build_tt();
+    tt_svd
+        .compress(&CompressionOptions {
+            method: CompressionMethod::SVD,
+            tolerance: 1e-10,
+            max_bond_dim: usize::MAX,
+            normalize_error: true,
+        })
+        .unwrap();
+
+    let svd_sum = tt_svd.sum();
+    assert!(
+        (orig_sum - svd_sum).abs_sq().sqrt() < 1e-8,
+        "SVD compression changed sum: orig={orig_sum:?}, svd={svd_sum:?}"
+    );
+
+    // Verify element-wise
+    for i in 0..4 {
+        for j in 0..4 {
+            for k in 0..4 {
+                let expected = tt_orig.evaluate(&[i, j, k]).unwrap();
+                let actual = tt_svd.evaluate(&[i, j, k]).unwrap();
+                assert!(
+                    (expected - actual).abs_sq().sqrt() < 1e-8,
+                    "SVD compression error at ({i},{j},{k})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_svd_compression_tolerance_f64() {
+    test_svd_compression_tolerance_generic::<f64>();
+}
+#[test]
+fn test_svd_compression_tolerance_c64() {
+    test_svd_compression_tolerance_generic::<Complex64>();
+}

@@ -1,5 +1,5 @@
 use super::*;
-use crate::einsum_helper::einsum_tensors;
+use crate::einsum_helper::{einsum_tensors, EinsumScalar};
 use crate::types::{tensor3_zeros, Tensor3};
 use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
 
@@ -108,7 +108,7 @@ fn test_dot_empty() {
     assert!((result - 0.0).abs() < 1e-15);
 }
 
-fn test_dot_generic<T: TTScalar + tensor4all_tcicore::Scalar + Default>() {
+fn test_dot_generic<T: TTScalar + tensor4all_tcicore::Scalar + Default + EinsumScalar>() {
     let tt1 = TensorTrain::<T>::constant(&[2, 3], T::from_f64(2.0));
     let tt2 = TensorTrain::<T>::constant(&[2, 3], T::from_f64(3.0));
 

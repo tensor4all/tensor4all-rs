@@ -21,10 +21,10 @@ use crate::defaults::DynIndex;
 use crate::{unfold_split, TensorDynLen};
 use num_complex::{Complex64, ComplexFloat};
 use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
-use tensor4all_tensorbackend::{native_tensor_primal_to_diag_f64, TensorElement};
+use tensor4all_tensorbackend::TensorElement;
 
 use crate::qr::{qr_with, QrOptions};
-use crate::svd::{svd_with, SvdOptions};
+use crate::svd::{svd_for_factorize, SvdOptions};
 
 // Re-export types from tensor_like for backwards compatibility
 pub use crate::tensor_like::{
@@ -119,16 +119,14 @@ fn factorize_svd(
         svd_options.truncation.max_rank = Some(max_rank);
     }
 
-    let (u, s, v) = svd_with::<f64>(t, left_inds, &svd_options)?;
-    let bond_index = u.indices.last().unwrap().clone();
+    let result = svd_for_factorize(t, left_inds, &svd_options)?;
+    let u = result.u;
+    let s = result.s;
+    let vh = result.vh;
+    let bond_index = result.bond_index;
+    let singular_values = result.singular_values;
+    let rank = result.rank;
     let sim_bond_index = s.indices[1].clone();
-    let singular_values = native_tensor_primal_to_diag_f64(s.as_native())
-        .map_err(FactorizeError::ComputationError)?;
-    let rank = singular_values.len();
-    let perm_vh: Vec<usize> = std::iter::once(v.indices.len() - 1)
-        .chain(0..v.indices.len() - 1)
-        .collect();
-    let vh = v.conj().permute(&perm_vh);
 
     match options.canonical {
         Canonical::Left => {

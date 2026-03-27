@@ -7,6 +7,10 @@ use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use tensor4all_tcicore::matrix::{mat_mul, ncols, nrows, zeros, Matrix};
 use tensor4all_tcicore::Scalar;
 use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions};
+use tenferro_algebra::Scalar as TfScalar;
+use tenferro_linalg::LinalgScalar;
+use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor as TypedTensor};
+use tensor4all_tensorbackend::BackendLinalgScalar;
 
 /// Compression method for tensor trains
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -119,10 +123,201 @@ where
             let npivots = luci.rank();
             Ok((left, right, npivots))
         }
-        CompressionMethod::SVD => Err(crate::error::TensorTrainError::InvalidOperation {
-            message: "SVD compression is not yet implemented".to_string(),
-        }),
+        CompressionMethod::SVD => {
+            // SVD compression requires additional trait bounds. We use type-erased dispatch
+            // for the supported scalar types (f64, Complex64).
+            svd_dispatch(matrix, tolerance, max_bond_dim, left_orthogonal)
+        }
     }
+}
+
+/// Trait bounds for SVD-compatible scalars in TT compression
+trait SVDCompressScalar:
+    TTScalar
+    + Scalar
+    + Default
+    + Copy
+    + BackendLinalgScalar
+    + TfScalar
+    + num_complex::ComplexFloat
+    + 'static
+{
+    fn sv_to_f64(real: <Self as LinalgScalar>::Real) -> f64;
+    fn from_sv(real: <Self as LinalgScalar>::Real) -> Self;
+}
+
+impl SVDCompressScalar for f64 {
+    fn sv_to_f64(real: <Self as LinalgScalar>::Real) -> f64 {
+        real
+    }
+    fn from_sv(real: <Self as LinalgScalar>::Real) -> Self {
+        real
+    }
+}
+
+impl SVDCompressScalar for num_complex::Complex64 {
+    fn sv_to_f64(real: <Self as LinalgScalar>::Real) -> f64 {
+        real
+    }
+    fn from_sv(real: <Self as LinalgScalar>::Real) -> Self {
+        num_complex::Complex64::new(real, 0.0)
+    }
+}
+
+/// SVD dispatch: convert generic Matrix<T> to concrete type and call factorize_svd.
+///
+/// This is necessary because SVD requires additional trait bounds (LinalgScalar, etc.)
+/// that aren't available on the generic `T: TTScalar + Scalar`.
+fn svd_dispatch<T: TTScalar + Scalar>(
+    matrix: &Matrix<T>,
+    tolerance: f64,
+    max_bond_dim: usize,
+    left_orthogonal: bool,
+) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)> {
+    use std::any::Any;
+
+    let m = nrows(matrix);
+    let n = ncols(matrix);
+
+    // Try f64
+    if let Some(mat_f64) = (matrix as &dyn Any).downcast_ref::<Matrix<f64>>() {
+        let (l, r, rank) = factorize_svd(mat_f64, tolerance, max_bond_dim, left_orthogonal)?;
+        // Safety: T is f64 in this branch
+        let left = unsafe { std::mem::transmute::<Matrix<f64>, Matrix<T>>(l) };
+        let right = unsafe { std::mem::transmute::<Matrix<f64>, Matrix<T>>(r) };
+        return Ok((left, right, rank));
+    }
+
+    // Try Complex64
+    if let Some(mat_c64) = (matrix as &dyn Any).downcast_ref::<Matrix<num_complex::Complex64>>() {
+        let (l, r, rank) = factorize_svd(mat_c64, tolerance, max_bond_dim, left_orthogonal)?;
+        let left = unsafe { std::mem::transmute::<Matrix<num_complex::Complex64>, Matrix<T>>(l) };
+        let right = unsafe { std::mem::transmute::<Matrix<num_complex::Complex64>, Matrix<T>>(r) };
+        return Ok((left, right, rank));
+    }
+
+    Err(crate::error::TensorTrainError::InvalidOperation {
+        message: format!(
+            "SVD compression not supported for this scalar type (matrix {}x{})",
+            m, n
+        ),
+    })
+}
+
+/// Helper: extract row-major data from a TypedTensor
+fn typed_tensor_row_major<T: TfScalar + Copy>(
+    tensor: &TypedTensor<T>,
+    name: &str,
+) -> crate::error::Result<Vec<T>> {
+    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
+    let data = row_major.buffer().as_slice().ok_or_else(|| {
+        crate::error::TensorTrainError::InvalidOperation {
+            message: format!("SVD {name}: non-CPU tensor"),
+        }
+    })?;
+    Ok(data.to_vec())
+}
+
+/// SVD-based factorization for TT compression
+fn factorize_svd<T: SVDCompressScalar>(
+    matrix: &Matrix<T>,
+    tolerance: f64,
+    max_bond_dim: usize,
+    left_orthogonal: bool,
+) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)>
+where
+    <T as LinalgScalar>::Real: KeepCountScalar,
+{
+    let m = nrows(matrix);
+    let n = ncols(matrix);
+
+    if m == 0 || n == 0 {
+        return Err(crate::error::TensorTrainError::InvalidOperation {
+            message: "Cannot factorize empty matrix".to_string(),
+        });
+    }
+
+    // Convert matrixci::Matrix to TypedTensor (row-major) for SVD
+    let mut data = vec![T::zero(); m * n];
+    for i in 0..m {
+        for j in 0..n {
+            data[i * n + j] = matrix[[i, j]];
+        }
+    }
+    let a_tensor =
+        TypedTensor::<T>::from_slice(&data, &[m, n], MemoryOrder::RowMajor).map_err(|e| {
+            crate::error::TensorTrainError::InvalidOperation {
+                message: format!("SVD tensor creation failed: {e}"),
+            }
+        })?;
+
+    let svd_result = tensor4all_tensorbackend::svd_backend(&a_tensor).map_err(|e| {
+        crate::error::TensorTrainError::InvalidOperation {
+            message: format!("SVD computation failed: {e:?}"),
+        }
+    })?;
+
+    // Extract U, S, Vt as row-major vectors
+    let u_data = typed_tensor_row_major(&svd_result.u, "U")?;
+    let u_cols = svd_result.u.dims()[1];
+    let s_data: Vec<<T as LinalgScalar>::Real> = typed_tensor_row_major(&svd_result.s, "S")?;
+    let vt_data = typed_tensor_row_major(&svd_result.vt, "Vt")?;
+    let vt_cols = svd_result.vt.dims()[1];
+
+    // Determine rank based on tolerance and max_bond_dim
+    let min_dim = m.min(n);
+    let s_max = if !s_data.is_empty() {
+        T::sv_to_f64(s_data[0])
+    } else {
+        0.0
+    };
+
+    let mut rank = 0;
+    for i in 0..min_dim {
+        if rank >= max_bond_dim {
+            break;
+        }
+        let sv = T::sv_to_f64(s_data[i]);
+        if sv < tolerance * s_max {
+            break;
+        }
+        rank += 1;
+    }
+    rank = rank.max(1);
+
+    // Build result matrices
+    let mut left = zeros(m, rank);
+    let mut right = zeros(rank, n);
+
+    if left_orthogonal {
+        // Left = U[:, :rank], Right = diag(S[:rank]) * Vt[:rank, :]
+        for i in 0..m {
+            for j in 0..rank {
+                left[[i, j]] = u_data[i * u_cols + j];
+            }
+        }
+        for i in 0..rank {
+            let sv = T::from_sv(s_data[i]);
+            for j in 0..n {
+                right[[i, j]] = sv * vt_data[i * vt_cols + j];
+            }
+        }
+    } else {
+        // Left = U[:, :rank] * diag(S[:rank]), Right = Vt[:rank, :]
+        for i in 0..m {
+            for j in 0..rank {
+                let sv = T::from_sv(s_data[j]);
+                left[[i, j]] = u_data[i * u_cols + j] * sv;
+            }
+        }
+        for i in 0..rank {
+            for j in 0..n {
+                right[[i, j]] = vt_data[i * vt_cols + j];
+            }
+        }
+    }
+
+    Ok((left, right, rank))
 }
 
 impl<T: TTScalar + Scalar + Default> TensorTrain<T> {

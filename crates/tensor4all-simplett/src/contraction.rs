@@ -4,7 +4,7 @@
 //! - `dot`: Inner product (returns scalar)
 
 use crate::compression::CompressionMethod;
-use crate::einsum_helper::{einsum_tensors, tensor_to_row_major_vec};
+use crate::einsum_helper::{einsum_tensors, tensor_to_row_major_vec, EinsumScalar};
 use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
@@ -34,7 +34,7 @@ impl Default for ContractionOptions {
     }
 }
 
-impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
+impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
     /// Compute the inner product (dot product) of two tensor trains
     ///
     /// Returns: sum over all indices i of self\[i\] * other\[i\]
@@ -118,7 +118,10 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
 }
 
 /// Convenience function to compute dot product
-pub fn dot<T: TTScalar + Scalar + Default>(a: &TensorTrain<T>, b: &TensorTrain<T>) -> Result<T> {
+pub fn dot<T: TTScalar + Scalar + Default + EinsumScalar>(
+    a: &TensorTrain<T>,
+    b: &TensorTrain<T>,
+) -> Result<T> {
     a.dot(b)
 }
 

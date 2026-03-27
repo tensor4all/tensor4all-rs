@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use bnum::types::{U1024, U256, U512};
 
+use crate::einsum_helper::EinsumScalar;
 use crate::einsum_helper::{matrix_times_col_vector, row_vector_times_matrix};
 use crate::error::{Result, TensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
@@ -221,7 +222,7 @@ pub struct TTCache<T: TTScalar> {
     site_dims: Vec<Vec<usize>>,
 }
 
-impl<T: TTScalar> TTCache<T> {
+impl<T: TTScalar + EinsumScalar> TTCache<T> {
     /// Create a new TTCache from a tensor train
     pub fn new<TT: AbstractTensorTrain<T>>(tt: &TT) -> Self {
         let n = tt.len();

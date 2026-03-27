@@ -113,6 +113,7 @@ impl QtciOptions {
             max_nglobal_pivot: self.nsearchglobalpivot,
             nsearch: self.nsearch,
             pivot_search: self.pivot_search,
+            ..TCI2Options::default()
         }
     }
 }

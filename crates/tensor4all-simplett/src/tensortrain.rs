@@ -211,6 +211,137 @@ impl<T: TTScalar> TensorTrain<T> {
     }
 }
 
+impl<T: TTScalar> TensorTrain<T> {
+    /// Sum over selected dimensions, returning a new TensorTrain with remaining dimensions.
+    ///
+    /// `dims` is a slice of 0-indexed site positions to sum over.
+    /// If all dimensions are summed, returns a 1-site TensorTrain wrapping the scalar result.
+    ///
+    /// Port of Julia's `_sum(tt; dims)` from `abstracttensortrain.jl`.
+    pub fn partial_sum(&self, dims: &[usize]) -> Result<TensorTrain<T>> {
+        use tensor4all_tcicore::matrix::{mat_mul, ncols, nrows, zeros as mat_zeros};
+
+        let n = self.len();
+        if n == 0 {
+            return Ok(Self {
+                tensors: Vec::new(),
+            });
+        }
+
+        // Validate dims
+        for &d in dims {
+            if d >= n {
+                return Err(TensorTrainError::InvalidOperation {
+                    message: format!("Dimension {} out of range (0..{})", d, n),
+                });
+            }
+        }
+
+        let mut result_tensors: Vec<Tensor3<T>> = Vec::new();
+
+        // Tprod: accumulator matrix, starts as 1x1 identity
+        let mut tprod = mat_zeros(1, 1);
+        tprod[[0, 0]] = T::one();
+
+        for site in 0..n {
+            let t = self.site_tensor(site);
+            let left_dim = t.left_dim();
+            let site_dim = t.site_dim();
+            let right_dim = t.right_dim();
+
+            if dims.contains(&site) {
+                // Sum over site index: result is (left_dim, right_dim) matrix
+                // sum(T, dims=2)[:, 1, :] in Julia
+                let mut site_sum = mat_zeros(left_dim, right_dim);
+                for l in 0..left_dim {
+                    for r in 0..right_dim {
+                        let mut acc = T::zero();
+                        for s in 0..site_dim {
+                            acc = acc + *t.get3(l, s, r);
+                        }
+                        site_sum[[l, r]] = acc;
+                    }
+                }
+                // Tprod = Tprod * site_sum
+                tprod = mat_mul(&tprod, &site_sum);
+            } else {
+                // Keep this dimension: multiply Tprod into the site tensor
+                // Tprod (tprod_rows, left_dim) * T reshaped to (left_dim, site_dim * right_dim)
+                let tprod_rows = nrows(&tprod);
+                let mut t_reshaped = mat_zeros(left_dim, site_dim * right_dim);
+                for l in 0..left_dim {
+                    for s in 0..site_dim {
+                        for r in 0..right_dim {
+                            t_reshaped[[l, s * right_dim + r]] = *t.get3(l, s, r);
+                        }
+                    }
+                }
+                let product = mat_mul(&tprod, &t_reshaped);
+
+                // Reshape product (tprod_rows, site_dim * right_dim)
+                // into tensor (tprod_rows, site_dim, right_dim)
+                let mut new_tensor = tensor3_zeros(tprod_rows, site_dim, right_dim);
+                for l in 0..tprod_rows {
+                    for s in 0..site_dim {
+                        for r in 0..right_dim {
+                            new_tensor.set3(l, s, r, product[[l, s * right_dim + r]]);
+                        }
+                    }
+                }
+                result_tensors.push(new_tensor);
+
+                // Reset Tprod to identity of size right_dim
+                tprod = mat_zeros(right_dim, right_dim);
+                for i in 0..right_dim {
+                    tprod[[i, i]] = T::one();
+                }
+            }
+        }
+
+        if result_tensors.is_empty() {
+            // All dims summed → return 1-site TT wrapping scalar
+            // tprod should be 1×1
+            let scalar = tprod[[0, 0]];
+            let mut t = tensor3_zeros(1, 1, 1);
+            t.set3(0, 0, 0, scalar);
+            return TensorTrain::new(vec![t]);
+        }
+
+        // Contract final Tprod into last result tensor
+        let last = result_tensors.last().unwrap();
+        let last_left = last.left_dim();
+        let last_site = last.site_dim();
+        let last_right = last.right_dim();
+        let tprod_cols = ncols(&tprod);
+
+        // Reshape last tensor to (last_left * last_site, last_right)
+        let mut last_mat = mat_zeros(last_left * last_site, last_right);
+        for l in 0..last_left {
+            for s in 0..last_site {
+                for r in 0..last_right {
+                    last_mat[[l * last_site + s, r]] = *last.get3(l, s, r);
+                }
+            }
+        }
+
+        // Multiply: last_mat * Tprod → (last_left * last_site, tprod_cols)
+        let contracted = mat_mul(&last_mat, &tprod);
+
+        // Reshape back to tensor (last_left, last_site, tprod_cols)
+        let mut new_last = tensor3_zeros(last_left, last_site, tprod_cols);
+        for l in 0..last_left {
+            for s in 0..last_site {
+                for r in 0..tprod_cols {
+                    new_last.set3(l, s, r, contracted[[l * last_site + s, r]]);
+                }
+            }
+        }
+        *result_tensors.last_mut().unwrap() = new_last;
+
+        TensorTrain::new(result_tensors)
+    }
+}
+
 impl<T: TTScalar> AbstractTensorTrain<T> for TensorTrain<T> {
     fn len(&self) -> usize {
         self.tensors.len()

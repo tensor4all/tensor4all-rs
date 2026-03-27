@@ -80,7 +80,13 @@ pub fn contract(
         treetn_options
     };
 
-    let treetn_options = if let Some(rtol) = options.rtol() {
+    let fit_normalized_rtol = if matches!(options.method(), ContractMethod::Fit) {
+        Some(options.rtol().unwrap_or(0.0))
+    } else {
+        options.rtol()
+    };
+
+    let treetn_options = if let Some(rtol) = fit_normalized_rtol {
         treetn_options.with_rtol(rtol)
     } else {
         treetn_options
@@ -89,10 +95,25 @@ pub fn contract(
     // Use the last site as the canonical center (consistent with existing behavior)
     let center = a.len() - 1;
 
-    let result_inner = treetn_contract(a.as_treetn(), b.as_treetn(), &center, treetn_options)
-        .map_err(|e| TensorTrainError::InvalidStructure {
-            message: format!("TreeTN contraction failed: {}", e),
-        })?;
+    let result_inner = if matches!(options.method(), ContractMethod::Zipup) {
+        a.as_treetn()
+            .contract_zipup_tree_accumulated(
+                b.as_treetn(),
+                &center,
+                CanonicalForm::Unitary,
+                options.rtol(),
+                options.max_rank(),
+            )
+            .map_err(|e| TensorTrainError::InvalidStructure {
+                message: format!("Zip-up contraction failed: {}", e),
+            })?
+    } else {
+        treetn_contract(a.as_treetn(), b.as_treetn(), &center, treetn_options).map_err(|e| {
+            TensorTrainError::InvalidStructure {
+                message: format!("TreeTN contraction failed: {}", e),
+            }
+        })?
+    };
 
     TensorTrain::from_inner(result_inner, Some(CanonicalForm::Unitary))
 }

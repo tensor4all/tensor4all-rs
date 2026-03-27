@@ -3,13 +3,14 @@
 //! This module provides functions for computing left and right environments
 //! used in variational algorithms and efficient MPO evaluation.
 
-use crate::einsum_helper::einsum_tensors;
+use crate::einsum_helper::{einsum_tensors, EinsumScalar};
 
 use super::error::{MPOError, Result};
 use super::factorize::SVDScalar;
 use super::mpo::MPO;
 use super::types::{Tensor4, Tensor4Ops};
 use super::{matrix2_zeros, Matrix2};
+use tenferro_tensor::MemoryOrder;
 
 /// Contract two 4D site tensors over their shared physical index
 ///
@@ -21,7 +22,10 @@ use super::{matrix2_zeros, Matrix2};
 /// - C: (left_a * left_b, s1_a, s2_b, right_a * right_b)
 ///
 /// This is the Rust equivalent of `_contractsitetensors` from Julia.
-pub fn contract_site_tensors<T: SVDScalar>(a: &Tensor4<T>, b: &Tensor4<T>) -> Result<Tensor4<T>>
+pub fn contract_site_tensors<T: SVDScalar + EinsumScalar>(
+    a: &Tensor4<T>,
+    b: &Tensor4<T>,
+) -> Result<Tensor4<T>>
 where
     <T as num_complex::ComplexFloat>::Real: Into<f64>,
 {
@@ -51,7 +55,12 @@ where
     // Arrange the open bond indices as (left_b, left_a, ..., right_b, right_a)
     // so the column-major reshape preserves the existing la * left_b + lb and
     // ra * right_b + rb indexing.
-    let contracted = einsum_tensors("askr,bktq->bastqr", &[a.as_inner(), b.as_inner()]);
+    //
+    // TODO: Remove this materialization once tenferro supports reshaping
+    // layout-compatible strided views directly.
+    // Tracking issue: https://github.com/tensor4all/tenferro-rs/issues/575
+    let contracted = einsum_tensors("askr,bktq->bastqr", &[a.as_inner(), b.as_inner()])
+        .contiguous(MemoryOrder::ColumnMajor);
     let reshaped = contracted
         .reshape(&[new_left, new_s1, new_s2, new_right])
         .map_err(|e| MPOError::InvalidOperation {
@@ -68,7 +77,7 @@ where
 ///
 /// L\[i\] has shape (left_a_i, left_b_i) representing the accumulated
 /// contraction from the left.
-pub fn left_environment<T: SVDScalar>(
+pub fn left_environment<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,
     site: usize,
@@ -139,7 +148,7 @@ where
 ///
 /// R\[i\] has shape (right_a_i, right_b_i) representing the accumulated
 /// contraction from the right.
-pub fn right_environment<T: SVDScalar>(
+pub fn right_environment<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,
     site: usize,
