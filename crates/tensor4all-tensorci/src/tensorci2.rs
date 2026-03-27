@@ -438,6 +438,7 @@ where
     }
 
     /// Process one bond during 1-site sweep.
+    #[allow(clippy::too_many_arguments)]
     fn sweep1site_at_bond<F>(
         &mut self,
         f: &F,
@@ -946,12 +947,13 @@ where
     tci.sweep1site(&f, true, 1e-14, abs_tol, options.max_bond_dim, true)?;
 
     // Normalize errors for return
-    let normalized_errors: Vec<f64> = errors.iter().copied().collect();
+    let normalized_errors: Vec<f64> = errors.to_vec();
 
     Ok((tci, ranks, normalized_errors))
 }
 
 /// Update pivots at bond b using LU-based cross interpolation
+#[allow(clippy::too_many_arguments)]
 fn update_pivots<T, F, B>(
     tci: &mut TensorCI2<T>,
     b: usize,
