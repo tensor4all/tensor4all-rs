@@ -5,9 +5,9 @@ use crate::{
     DefaultProposer, PivotCandidateProposer, SimpleTreeTci, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
-use matrixluci::{
-    DenseFaerLuKernel, DenseMatrixSource, PivotKernel, PivotKernelOptions, PivotSelectionCore,
-    Scalar,
+use tensor4all_tcicore::{
+    DenseFaerLuKernel, DenseMatrixSource, MatrixLuciScalar as Scalar, PivotKernel,
+    PivotKernelOptions, PivotSelectionCore,
 };
 
 /// Update one edge bipartition using a batch evaluator and a pivot-candidate proposer.

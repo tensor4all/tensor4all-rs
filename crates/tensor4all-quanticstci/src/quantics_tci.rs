@@ -5,10 +5,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use anyhow::{anyhow, Result};
-use matrixluci::{DenseFaerLuKernel, LazyBlockRookKernel, PivotKernel};
 use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid};
 use rand::Rng;
 use tensor4all_simplett::{AbstractTensorTrain, TTScalar, TensorTrain};
+use tensor4all_tcicore::{DenseFaerLuKernel, LazyBlockRookKernel, PivotKernel};
 use tensor4all_tensorci::Scalar;
 use tensor4all_tensorci::{crossinterpolate2, TensorCI2};
 
@@ -31,7 +31,7 @@ pub struct QuanticsTensorCI2<V: Scalar + TTScalar> {
 
 impl<V> QuanticsTensorCI2<V>
 where
-    V: Scalar + TTScalar + Default + Clone + matrixluci::Scalar,
+    V: Scalar + TTScalar + Default + Clone + tensor4all_tcicore::MatrixLuciScalar,
     DenseFaerLuKernel: PivotKernel<V>,
     LazyBlockRookKernel: PivotKernel<V>,
 {
@@ -198,7 +198,7 @@ pub fn quanticscrossinterpolate<V, F>(
     options: QtciOptions,
 ) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
-    V: Scalar + TTScalar + Default + Clone + 'static + matrixluci::Scalar,
+    V: Scalar + TTScalar + Default + Clone + 'static + tensor4all_tcicore::MatrixLuciScalar,
     DenseFaerLuKernel: PivotKernel<V>,
     LazyBlockRookKernel: PivotKernel<V>,
     F: Fn(&[f64]) -> V + 'static,
@@ -301,7 +301,7 @@ pub fn quanticscrossinterpolate_from_arrays<V, F>(
     options: QtciOptions,
 ) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
-    V: Scalar + TTScalar + Default + Clone + 'static + matrixluci::Scalar,
+    V: Scalar + TTScalar + Default + Clone + 'static + tensor4all_tcicore::MatrixLuciScalar,
     DenseFaerLuKernel: PivotKernel<V>,
     LazyBlockRookKernel: PivotKernel<V>,
     F: Fn(&[f64]) -> V + 'static,
@@ -377,7 +377,7 @@ pub fn quanticscrossinterpolate_discrete<V, F>(
     options: QtciOptions,
 ) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
-    V: Scalar + TTScalar + Default + Clone + 'static + matrixluci::Scalar,
+    V: Scalar + TTScalar + Default + Clone + 'static + tensor4all_tcicore::MatrixLuciScalar,
     DenseFaerLuKernel: PivotKernel<V>,
     LazyBlockRookKernel: PivotKernel<V>,
     F: Fn(&[i64]) -> V + 'static,

@@ -5,16 +5,16 @@
 //! of function values through an explicit batch function parameter.
 
 use crate::error::{Result, TCIError};
-use matrixluci::{
-    CrossFactors, DenseFaerLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource,
-    PivotKernel, PivotKernelOptions,
-};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
 use tensor4all_tcicore::matrix::zeros;
 use tensor4all_tcicore::MultiIndex;
 use tensor4all_tcicore::Scalar;
+use tensor4all_tcicore::{
+    CrossFactors, DenseFaerLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource,
+    PivotKernel, PivotKernelOptions,
+};
 
 /// Options for TCI2 algorithm
 #[derive(Debug, Clone)]
@@ -100,7 +100,7 @@ pub struct TensorCI2<T: Scalar + TTScalar> {
 
 impl<T> TensorCI2<T>
 where
-    T: Scalar + TTScalar + Default + matrixluci::Scalar,
+    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
 {
     /// Create a new empty TensorCI2
     pub fn new(local_dims: Vec<usize>) -> Result<Self> {
@@ -282,7 +282,7 @@ pub fn crossinterpolate2<T, F, B>(
     options: TCI2Options,
 ) -> Result<(TensorCI2<T>, Vec<usize>, Vec<f64>)>
 where
-    T: Scalar + TTScalar + Default + matrixluci::Scalar,
+    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
     DenseFaerLuKernel: PivotKernel<T>,
     LazyBlockRookKernel: PivotKernel<T>,
     F: Fn(&MultiIndex) -> T,
@@ -382,7 +382,7 @@ fn update_pivots<T, F, B>(
     options: &TCI2Options,
 ) -> Result<()>
 where
-    T: Scalar + TTScalar + Default + matrixluci::Scalar,
+    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
     DenseFaerLuKernel: PivotKernel<T>,
     LazyBlockRookKernel: PivotKernel<T>,
     F: Fn(&MultiIndex) -> T,
@@ -575,7 +575,7 @@ fn callback_length_mismatch(actual: usize, expected: usize) -> TCIError {
 
 struct LazyPiEvaluator<'a, T, F, B>
 where
-    T: Scalar + TTScalar + Default + matrixluci::Scalar,
+    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
@@ -590,7 +590,7 @@ where
 
 impl<'a, T, F, B> LazyPiEvaluator<'a, T, F, B>
 where
-    T: Scalar + TTScalar + Default + matrixluci::Scalar,
+    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {

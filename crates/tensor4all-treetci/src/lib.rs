@@ -6,8 +6,7 @@
 //!
 //! - Ryo Watanabe <https://github.com/Ryo-wtnb11>
 //!
-//! Tree-specific pivot updates use [`matrixluci`] as the low-level pivot
-//! substrate.
+//! Tree-specific pivot updates use the tcicore LUCI pivot substrate.
 
 #![warn(missing_docs)]
 
@@ -29,7 +28,7 @@ pub mod optimize;
 pub mod proposer;
 /// TreeTCI state and initial pivot seeding.
 pub mod state;
-/// Per-edge pivot update logic built on top of `matrixluci`.
+/// Per-edge pivot update logic built on top of the tcicore LUCI substrate.
 pub mod update;
 /// Edge visitation strategies.
 pub mod visitor;

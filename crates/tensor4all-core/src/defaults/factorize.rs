@@ -204,10 +204,10 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + matrixluci::Scalar
+        + tensor4all_tcicore::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
-    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     // Unfold tensor into matrix
     let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
@@ -272,10 +272,10 @@ where
         + Default
         + From<<T as ComplexFloat>::Real>
         + MatrixScalar
-        + matrixluci::Scalar
+        + tensor4all_tcicore::MatrixLuciScalar
         + 'static,
     <T as ComplexFloat>::Real: Into<f64> + 'static,
-    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     // Unfold tensor into matrix
     let (a_tensor, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)

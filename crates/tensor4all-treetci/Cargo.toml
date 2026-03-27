@@ -17,8 +17,8 @@ petgraph.workspace = true
 faer.workspace = true
 num-complex.workspace = true
 rand.workspace = true
-matrixluci = { path = "../matrixluci" }
 tensor4all-core = { path = "../tensor4all-core" }
+tensor4all-tcicore = { path = "../tensor4all-tcicore" }
 tensor4all-treetn = { path = "../tensor4all-treetn" }
 
 [dev-dependencies]

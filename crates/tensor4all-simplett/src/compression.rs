@@ -91,8 +91,8 @@ fn factorize<T>(
     left_orthogonal: bool,
 ) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)>
 where
-    T: TTScalar + Scalar + matrixluci::Scalar,
-    matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+    T: TTScalar + Scalar + tensor4all_tcicore::MatrixLuciScalar,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     let reltol = if tolerance > 0.0 { tolerance } else { 1e-14 };
     let abstol = 0.0;
@@ -133,8 +133,8 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
     /// 2. Right-to-left sweep with truncation
     pub fn compress(&mut self, options: &CompressionOptions) -> Result<()>
     where
-        T: matrixluci::Scalar,
-        matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+        T: tensor4all_tcicore::MatrixLuciScalar,
+        tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
     {
         let n = self.len();
         if n <= 1 {
@@ -252,8 +252,8 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
     /// Create a compressed copy of the tensor train
     pub fn compressed(&self, options: &CompressionOptions) -> Result<Self>
     where
-        T: matrixluci::Scalar,
-        matrixluci::DenseFaerLuKernel: matrixluci::PivotKernel<T>,
+        T: tensor4all_tcicore::MatrixLuciScalar,
+        tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
     {
         let mut result = self.clone();
         result.compress(options)?;

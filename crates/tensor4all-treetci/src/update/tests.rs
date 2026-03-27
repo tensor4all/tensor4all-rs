@@ -2,7 +2,7 @@ use super::update_edge_default;
 use crate::test_support::assert_scalar_close;
 use crate::{GlobalIndexBatch, SimpleTreeTci, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
-use matrixluci::PivotKernelOptions;
+use tensor4all_tcicore::PivotKernelOptions;
 
 fn two_site_graph() -> TreeTciGraph {
     TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap()

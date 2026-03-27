@@ -32,6 +32,12 @@ pub mod matrixluci;
 pub mod scalar;
 pub mod traits;
 
+pub use self::matrixluci::{
+    CandidateMatrixSource, CrossFactors, DenseFaerLuKernel, DenseMatrixSource, DenseOwnedMatrix,
+    LazyBlockRookKernel, LazyMatrixSource, MatrixLuciError, PivotKernel, PivotKernelOptions,
+    PivotSelectionCore,
+};
+pub use self::matrixluci::{Result as MatrixLuciResult, Scalar as MatrixLuciScalar};
 pub use cached_function::cache_key::CacheKey;
 pub use cached_function::error::CacheKeyError;
 pub use cached_function::index_int::IndexInt;
