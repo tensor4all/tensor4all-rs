@@ -125,10 +125,13 @@ where
         Ok(tt.sum())
     }
 
-    /// Integral over continuous domain.
+    /// Integral over continuous domain (left Riemann sum).
     ///
-    /// Returns the sum multiplied by the grid step sizes.
-    /// Only available for discretized grids.
+    /// Computes `sum(f(x_i)) * product(step_sizes)`, which is a left Riemann sum
+    /// with O(h) convergence where h is the grid spacing. The result depends on the
+    /// `include_endpoint` setting of the `DiscretizedGrid`.
+    ///
+    /// For inherent discrete grids (no continuous domain), returns the plain sum.
     pub fn integral(&self) -> Result<V>
     where
         V: std::ops::Mul<f64, Output = V>,
@@ -287,13 +290,17 @@ where
 /// Interpolate from grid point arrays.
 ///
 /// # Arguments
-/// * `xvals` - Arrays of grid points for each dimension
-/// * `f` - Function to interpolate
-/// * `initial_pivots` - Initial pivot grid indices (optional)
+/// * `xvals` - Arrays of grid points for each dimension. All dimensions must have the
+///   **same** number of points and each must be a power of 2.
+/// * `f` - Function to interpolate, takes original coordinates as `&[f64]`
+/// * `initial_pivots` - Initial pivot grid indices (1-indexed, optional)
 /// * `options` - TCI options
 ///
 /// # Returns
 /// Tuple of (QuanticsTensorCI2, ranks, errors)
+///
+/// # Errors
+/// Returns an error if dimensions are not equal or not powers of 2.
 pub fn quanticscrossinterpolate_from_arrays<V, F>(
     xvals: &[Vec<f64>],
     f: F,
@@ -363,13 +370,17 @@ where
 /// Interpolate with discrete integer grid.
 ///
 /// # Arguments
-/// * `size` - Grid size in each dimension (must be powers of 2)
-/// * `f` - Function to interpolate, taking 1-indexed grid indices as `&[i64]`
-/// * `initial_pivots` - Initial pivot grid indices (optional)
+/// * `size` - Grid size in each dimension. All dimensions must have the **same** number of
+///   points and each must be a power of 2 (e.g., `vec![16, 16]`).
+/// * `f` - Function to interpolate, taking **1-indexed** grid indices as `&[i64]`
+/// * `initial_pivots` - Initial pivot grid indices (1-indexed, optional)
 /// * `options` - TCI options
 ///
 /// # Returns
 /// Tuple of (QuanticsTensorCI2, ranks, errors)
+///
+/// # Errors
+/// Returns an error if dimensions are not equal or not powers of 2.
 pub fn quanticscrossinterpolate_discrete<V, F>(
     size: &[usize],
     f: F,

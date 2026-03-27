@@ -8,14 +8,24 @@
 //!
 //! This is a Rust port of [QuanticsTCI.jl](https://github.com/tensor4all/QuanticsTCI.jl).
 //!
+//! # Important Conventions
+//!
+//! - **1-indexed grid indices**: All grid indices are **1-indexed** (following the Julia
+//!   QuanticsTCI.jl convention). The first grid point is `[1, 1]`, not `[0, 0]`.
+//! - **Equal dimensions**: [`quanticscrossinterpolate_discrete`] and
+//!   [`quanticscrossinterpolate_from_arrays`] require all dimensions to have the **same**
+//!   number of points (same power of 2). Use [`quanticscrossinterpolate`] with an explicit
+//!   [`DiscretizedGrid`] for non-uniform grids.
+//! - **Power-of-2 grid sizes**: All grid dimensions must be powers of 2.
+//!
 //! # Overview
 //!
 //! The main workflow is:
 //! 1. Create a grid describing your function's domain
-//! 2. Call `quanticscrossinterpolate` with your function
-//! 3. Use the resulting `QuanticsTensorCI2` for evaluation, integration, etc.
+//! 2. Call [`quanticscrossinterpolate`] (or the `_discrete` / `_from_arrays` variants)
+//! 3. Use the resulting [`QuanticsTensorCI2`] for evaluation, integration, etc.
 //!
-//! # Example
+//! # Example: Discrete Grid
 //!
 //! ```rust
 //! use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
@@ -32,8 +42,34 @@
 //!     QtciOptions::default(),
 //! ).unwrap();
 //!
-//! let value = qtci.evaluate(&[5, 10]).unwrap();
+//! let value = qtci.evaluate(&[5, 10]).unwrap();  // 1-indexed
 //! assert!((value - 15.0).abs() < 1e-10);
+//! ```
+//!
+//! # Example: Continuous Grid with `DiscretizedGrid`
+//!
+//! ```rust
+//! use tensor4all_quanticstci::{
+//!     quanticscrossinterpolate, DiscretizedGrid, QtciOptions,
+//! };
+//!
+//! let grid = DiscretizedGrid::builder(&[4])  // 2^4 = 16 points
+//!     .with_lower_bound(&[0.0])
+//!     .with_upper_bound(&[1.0])
+//!     .build()
+//!     .unwrap();
+//!
+//! let f = |x: &[f64]| x[0] * x[0];  // f(x) = x^2
+//!
+//! let (qtci, _ranks, _errors) = quanticscrossinterpolate(
+//!     &grid,
+//!     f,
+//!     None,
+//!     QtciOptions::default(),
+//! ).unwrap();
+//!
+//! // integral() = sum * step_size (left Riemann sum)
+//! let integral = qtci.integral().unwrap();
 //! ```
 
 mod options;
