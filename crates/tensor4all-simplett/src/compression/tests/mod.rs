@@ -138,7 +138,7 @@ where
     T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
     tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
-    let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
+    let tt = TensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
     let original_sum = tt.sum();
 
     let mut tt_compressed = tt.clone();
@@ -149,7 +149,7 @@ where
     tt_compressed.compress(&options).unwrap();
 
     let compressed_sum = tt_compressed.sum();
-    assert!((original_sum - compressed_sum).abs_sq().sqrt() < 1e-10);
+    assert!(Scalar::abs_sq(&(original_sum - compressed_sum)).sqrt() < 1e-10);
 }
 
 fn test_compress_svd_with_truncation_generic<T>()
@@ -161,13 +161,13 @@ where
     let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3);
     for s in 0..2 {
         for r in 0..3 {
-            t0.set3(0, s, r, T::from_f64((s + r + 1) as f64));
+            t0.set3(0, s, r, <T as Scalar>::from_f64((s + r + 1) as f64));
         }
     }
     let mut t1: Tensor3<T> = tensor3_zeros(3, 2, 1);
     for l in 0..3 {
         for s in 0..2 {
-            t1.set3(l, s, 0, T::from_f64((l + s + 1) as f64));
+            t1.set3(l, s, 0, <T as Scalar>::from_f64((l + s + 1) as f64));
         }
     }
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
