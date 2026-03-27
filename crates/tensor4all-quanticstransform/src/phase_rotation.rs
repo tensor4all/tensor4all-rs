@@ -42,6 +42,9 @@ pub fn phase_rotation_operator(r: usize, theta: f64) -> Result<QuanticsOperator>
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive"));
     }
+    if !theta.is_finite() {
+        anyhow::bail!("theta must be finite, got {theta}");
+    }
 
     let mpo = phase_rotation_mpo(r, theta)?;
     let site_dims = vec![2; r];
@@ -66,6 +69,9 @@ pub fn phase_rotation_operator_multivar(
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive"));
     }
+    if !theta.is_finite() {
+        anyhow::bail!("theta must be finite, got {theta}");
+    }
 
     let mpo = phase_rotation_mpo(r, theta)?;
     let embedded = embed_single_var_mpo(&mpo, nvariables, target_var)?;
@@ -85,6 +91,9 @@ pub fn phase_rotation_operator_multivar(
 fn phase_rotation_mpo(r: usize, theta: f64) -> Result<TensorTrain<Complex64>> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive"));
+    }
+    if !theta.is_finite() {
+        anyhow::bail!("theta must be finite, got {theta}");
     }
 
     // Normalize theta to [0, 2π)

@@ -78,3 +78,31 @@ fn test_phase_rotation_periodicity() {
         assert_relative_eq!(t1.get3(0, 3, 0).im, t2.get3(0, 3, 0).im, epsilon = 1e-10);
     }
 }
+
+#[test]
+fn test_phase_rotation_error_nan() {
+    let result = phase_rotation_operator(4, f64::NAN);
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("finite"), "unexpected error: {msg}");
+}
+
+#[test]
+fn test_phase_rotation_error_inf() {
+    let result = phase_rotation_operator(4, f64::INFINITY);
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("finite"), "unexpected error: {msg}");
+}
+
+#[test]
+fn test_phase_rotation_error_neg_inf() {
+    let result = phase_rotation_operator(4, f64::NEG_INFINITY);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_phase_rotation_multivar_error_nan() {
+    let result = phase_rotation_operator_multivar(4, f64::NAN, 2, 0);
+    assert!(result.is_err());
+}

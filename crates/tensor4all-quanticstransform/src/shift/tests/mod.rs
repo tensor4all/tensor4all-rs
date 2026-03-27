@@ -70,3 +70,19 @@ fn test_shift_error_zero_sites() {
     let result = shift_operator(0, 0, BoundaryCondition::Periodic);
     assert!(result.is_err());
 }
+
+#[test]
+fn test_shift_error_r_ge_64() {
+    // r >= 64 would overflow 1i64 << r
+    let result = shift_operator(64, 1, BoundaryCondition::Periodic);
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("at most 63"), "unexpected error: {msg}");
+}
+
+#[test]
+fn test_shift_r_63_ok() {
+    // r = 63 should be the max valid value
+    let result = shift_operator(63, 1, BoundaryCondition::Periodic);
+    assert!(result.is_ok());
+}
