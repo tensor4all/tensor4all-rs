@@ -524,13 +524,14 @@ fn test_tt_addition_c64() {
 // SVD compression with tolerance (port of test_tensortrain.jl "compress! (SVD)")
 // ============================================================================
 
-fn test_svd_compression_tolerance_generic<T>()
-where
+fn test_svd_compression_tolerance_generic<
     T: TTScalar
         + tensor4all_tcicore::Scalar
+        + tensor4all_tcicore::MatrixLuciScalar
         + Default
-        + std::fmt::Debug
-        + tensor4all_tcicore::MatrixLuciScalar,
+        + std::fmt::Debug,
+>()
+where
     tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
 {
     use crate::compression::{CompressionMethod, CompressionOptions};

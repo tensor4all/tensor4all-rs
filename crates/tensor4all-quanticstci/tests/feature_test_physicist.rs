@@ -397,7 +397,7 @@ fn from_arrays_1d_cubic() {
         .with_nrandominitpivot(5);
 
     let (qtci, _ranks, errors) =
-        quanticscrossinterpolate_from_arrays(&[xvals.clone()], f, None, opts)
+        quanticscrossinterpolate_from_arrays(std::slice::from_ref(&xvals), f, None, opts)
             .expect("from_arrays 1D cubic should work");
 
     assert!(

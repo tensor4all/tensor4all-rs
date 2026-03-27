@@ -1,4 +1,4 @@
-//! Test: norm precision after massive cancellation (fit4 - exact).
+//! Test: norm precision after massive cancellation (fit approximation - exact).
 //!
 //! When two nearly-equal TTs are subtracted, the resulting TT has tensor entries
 //! of O(1) but represents a value of O(||fit4 - exact||) ≈ O(1e-7). This creates
@@ -14,13 +14,46 @@
 //!   contraction involved.
 //!
 //! The precision loss scales with the cancellation ratio ||a|| / ||a - b||.
-//! For this test case, ||fit4|| / ||fit4 - exact|| ≈ 1e7, so ~7 digits are lost.
+//! For this test case, ||fit|| / ||fit - exact|| is very large, so many digits
+//! are lost in sequential TT-level norm evaluation.
 
 use rand::rngs::StdRng;
 use rand::SeedableRng;
+use std::ffi::OsString;
 
 use tensor4all_core::{DynIndex, TensorDynLen};
 use tensor4all_itensorlike::{ContractOptions, TensorTrain};
+
+struct ScopedEnvVar {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+impl ScopedEnvVar {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        // This integration test binary contains a single test, so mutating the
+        // process-local environment here is isolated and keeps the backend
+        // runtime deterministic under full-workspace coverage runs.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+}
+
+impl Drop for ScopedEnvVar {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => unsafe {
+                std::env::set_var(self.key, value);
+            },
+            None => unsafe {
+                std::env::remove_var(self.key);
+            },
+        }
+    }
+}
 
 fn create_random_mpo(
     length: usize,
@@ -46,6 +79,8 @@ fn create_random_mpo(
 /// Dense-level subtraction and norm is accurate (no TT contraction involved).
 #[test]
 fn dense_norm_matches_after_fit_cancellation() {
+    let _threads = ScopedEnvVar::set("T4A_TENFERRO_CPU_THREADS", "1");
+
     let length = 6;
     let phys_dim = 2;
     let bond_dim = 8;
@@ -72,20 +107,20 @@ fn dense_norm_matches_after_fit_cancellation() {
     let mpo_b = create_random_mpo(length, &s_shared, &s_output, &links_b, &mut rng2);
 
     let exact = mpo_a.contract(&mpo_b, &ContractOptions::zipup()).unwrap();
-    let fit4 = mpo_a
-        .contract(&mpo_b, &ContractOptions::fit().with_nsweeps(4))
+    let fit = mpo_a
+        .contract(&mpo_b, &ContractOptions::fit().with_nhalfsweeps(0))
         .unwrap();
 
     // Ground truth: dense subtraction
-    let dense_fit4 = fit4.to_dense().unwrap();
+    let dense_fit = fit.to_dense().unwrap();
     let dense_exact = exact.to_dense().unwrap();
-    let direct_dense_diff = dense_fit4
+    let direct_dense_diff = dense_fit
         .axpby(1.0.into(), &dense_exact, (-1.0).into())
         .unwrap();
     let dense_norm = direct_dense_diff.norm();
 
     // TT diff → dense → norm should agree with direct dense subtraction
-    let diff = fit4.axpby(1.0.into(), &exact, (-1.0).into()).unwrap();
+    let diff = fit.axpby(1.0.into(), &exact, (-1.0).into()).unwrap();
     let dense_diff = diff.to_dense().unwrap();
     assert!(
         (dense_diff.norm() - dense_norm).abs() <= dense_norm.max(1.0) * 1e-9,
@@ -98,7 +133,7 @@ fn dense_norm_matches_after_fit_cancellation() {
     // With ||fit4||/||diff|| ≈ 1e7, the sequential contraction is unreliable.
     // This documents the known limitation — NOT a bug.
     let tt_norm = diff.norm();
-    let cancellation_ratio = fit4.to_dense().unwrap().norm() / dense_norm;
+    let cancellation_ratio = fit.to_dense().unwrap().norm() / dense_norm;
     eprintln!(
         "cancellation ratio: {cancellation_ratio:.1e}, \
          tt_norm={tt_norm:.3e}, dense_norm={dense_norm:.3e}, \

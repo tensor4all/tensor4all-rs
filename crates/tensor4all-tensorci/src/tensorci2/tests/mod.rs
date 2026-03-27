@@ -53,7 +53,7 @@ fn test_sweep1site_preserves_accuracy() {
 
 #[test]
 fn test_make_canonical() {
-    let f = |idx: &MultiIndex| (idx[0] as f64 + idx[1] as f64 * 0.5 + idx[2] as f64 * 0.25);
+    let f = |idx: &MultiIndex| idx[0] as f64 + idx[1] as f64 * 0.5 + idx[2] as f64 * 0.25;
     let local_dims = vec![4, 4, 4];
     let first_pivot = vec![vec![1, 1, 1]];
     let options = TCI2Options {
@@ -895,7 +895,6 @@ fn test_global_search_oscillatory() {
 fn test_custom_global_pivot_finder() {
     use crate::globalpivot::{GlobalPivotFinder, GlobalPivotSearchInput};
     use rand::Rng;
-    use tensor4all_simplett::TensorTrain;
 
     // Custom finder: returns random pivots (same as Julia's CustomGlobalPivotFinder)
     struct RandomPivotFinder {

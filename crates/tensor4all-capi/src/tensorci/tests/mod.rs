@@ -389,3 +389,142 @@ fn test_fill_site_tensors_preserves_values() {
     crate::simplett::t4a_simplett_f64_release(tt_after);
     t4a_tci2_f64_release(tci);
 }
+
+#[test]
+fn test_tci2_low_level_sweeps_and_index_set_accessors() {
+    extern "C" fn product_fn(
+        indices: *const i64,
+        n_indices: libc::size_t,
+        result: *mut f64,
+        _user_data: *mut c_void,
+    ) -> i32 {
+        unsafe {
+            let product = (0..n_indices)
+                .map(|i| *indices.add(i) as f64 + 1.0)
+                .product::<f64>();
+            *result = product;
+        }
+        0
+    }
+
+    let dims: [libc::size_t; 2] = [2, 3];
+    let mut tci: *mut t4a_tci2_f64 = std::ptr::null_mut();
+    let mut final_error: f64 = 0.0;
+
+    assert_eq!(
+        t4a_crossinterpolate2_f64(
+            dims.as_ptr(),
+            2,
+            std::ptr::null(),
+            0,
+            product_fn,
+            std::ptr::null_mut(),
+            1e-10,
+            0,
+            10,
+            &mut tci,
+            &mut final_error,
+        ),
+        T4A_SUCCESS
+    );
+    assert!(!tci.is_null());
+
+    let mut pivot_error = -1.0f64;
+    assert_eq!(t4a_tci2_f64_pivot_error(tci, &mut pivot_error), T4A_SUCCESS);
+    assert!(pivot_error >= 0.0);
+
+    assert_eq!(
+        t4a_tci2_f64_sweep2site(tci, product_fn, std::ptr::null_mut(), 1, 1e-10, 0, 0, 0,),
+        T4A_SUCCESS
+    );
+    assert_eq!(
+        t4a_tci2_f64_sweep1site(tci, product_fn, std::ptr::null_mut(), 1, 1e-14, 0.0, 0, 1),
+        T4A_SUCCESS
+    );
+    assert_eq!(
+        t4a_tci2_f64_make_canonical(tci, product_fn, std::ptr::null_mut(), 1e-14, 0.0, 0),
+        T4A_SUCCESS
+    );
+
+    let mut i_n = 0usize;
+    let mut i_len = 0usize;
+    assert_eq!(
+        t4a_tci2_f64_i_set_size(tci, 1, &mut i_n, &mut i_len),
+        T4A_SUCCESS
+    );
+    assert!(i_n > 0);
+    assert_eq!(i_len, 1);
+
+    let mut i_buf = vec![usize::MAX; i_n * i_len];
+    let mut out_i_n = 0usize;
+    let mut out_i_len = 0usize;
+    assert_eq!(
+        t4a_tci2_f64_get_i_set(
+            tci,
+            1,
+            i_buf.as_mut_ptr(),
+            i_buf.len(),
+            &mut out_i_n,
+            &mut out_i_len,
+        ),
+        T4A_SUCCESS
+    );
+    assert_eq!((out_i_n, out_i_len), (i_n, i_len));
+    assert!(i_buf.iter().all(|&idx| idx < dims[0]));
+
+    let mut i_small_n = 0usize;
+    let mut i_small_len = 0usize;
+    assert_eq!(
+        t4a_tci2_f64_get_i_set(
+            tci,
+            1,
+            i_buf.as_mut_ptr(),
+            i_buf.len().saturating_sub(1),
+            &mut i_small_n,
+            &mut i_small_len,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+
+    let mut j_n = 0usize;
+    let mut j_len = 0usize;
+    assert_eq!(
+        t4a_tci2_f64_j_set_size(tci, 0, &mut j_n, &mut j_len),
+        T4A_SUCCESS
+    );
+    assert!(j_n > 0);
+    assert_eq!(j_len, 1);
+
+    let mut j_buf = vec![usize::MAX; j_n * j_len];
+    let mut out_j_n = 0usize;
+    let mut out_j_len = 0usize;
+    assert_eq!(
+        t4a_tci2_f64_get_j_set(
+            tci,
+            0,
+            j_buf.as_mut_ptr(),
+            j_buf.len(),
+            &mut out_j_n,
+            &mut out_j_len,
+        ),
+        T4A_SUCCESS
+    );
+    assert_eq!((out_j_n, out_j_len), (j_n, j_len));
+    assert!(j_buf.iter().all(|&idx| idx < dims[1]));
+
+    let mut j_small_n = 0usize;
+    let mut j_small_len = 0usize;
+    assert_eq!(
+        t4a_tci2_f64_get_j_set(
+            tci,
+            0,
+            j_buf.as_mut_ptr(),
+            j_buf.len().saturating_sub(1),
+            &mut j_small_n,
+            &mut j_small_len,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+
+    t4a_tci2_f64_release(tci);
+}

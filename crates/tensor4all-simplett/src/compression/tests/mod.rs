@@ -149,8 +149,7 @@ where
     tt_compressed.compress(&options).unwrap();
 
     let compressed_sum = tt_compressed.sum();
-    let diff = original_sum - compressed_sum;
-    assert!(<T as Scalar>::abs_sq(diff).sqrt() < 1e-10);
+    assert!(<T as Scalar>::abs_sq(original_sum - compressed_sum).sqrt() < 1e-10);
 }
 
 fn test_compress_svd_with_truncation_generic<T>()
