@@ -1,0 +1,46 @@
+[package]
+name = "tensor4all-tcicore"
+description = "TCI core infrastructure: matrix CI, cached function, index sets"
+version.workspace = true
+edition.workspace = true
+authors = ["tensor4all contributors"]
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+num-complex.workspace = true
+num-traits.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+paste.workspace = true
+bnum.workspace = true
+faer.workspace = true
+tenferro-tensor-compute.workspace = true
+
+[dev-dependencies]
+approx.workspace = true
+criterion.workspace = true
+rand_chacha.workspace = true
+tensor4all-tensorci = { path = "../tensor4all-tensorci" }
+uint.workspace = true
+
+[[bench]]
+name = "rrlu_bench"
+harness = false
+
+[[bench]]
+name = "cached_function"
+harness = false
+
+[[bench]]
+name = "dense_vs_faer"
+harness = false
+
+[[bench]]
+name = "end_to_end_chain_tci"
+harness = false
+
+[[bench]]
+name = "lazy_block_rook"
+harness = false

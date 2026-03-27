@@ -5,16 +5,27 @@
 //! of function values through an explicit batch function parameter.
 
 use crate::error::{Result, TCIError};
-use crate::indexset::MultiIndex;
-use matrixci::util::zeros;
-use matrixci::Scalar;
-use matrixci::{AbstractMatrixCI, MatrixLUCI, RrLUOptions};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
+use tensor4all_tcicore::matrix::zeros;
+use tensor4all_tcicore::MultiIndex;
+use tensor4all_tcicore::Scalar;
+use tensor4all_tcicore::{
+    CrossFactors, DenseFaerLuKernel, DenseMatrixSource, LazyBlockRookKernel, LazyMatrixSource,
+    PivotKernel, PivotKernelOptions,
+};
 
 /// Options for TCI2 algorithm
 #[derive(Debug, Clone)]
 pub struct TCI2Options {
-    /// Tolerance for convergence (relative)
+    /// Tolerance for convergence.
+    ///
+    /// When `normalize_error` is enabled, this is applied to the normalized
+    /// bond error. `Full` search normalizes by the maximum value seen while
+    /// materializing the full candidate matrix. `Rook` search normalizes by the
+    /// maximum value observed through the lazily requested matrix entries so the
+    /// block-rook path stays lazy.
     pub tolerance: f64,
     /// Maximum number of iterations (half-sweeps)
     pub max_iter: usize,
@@ -22,7 +33,11 @@ pub struct TCI2Options {
     pub max_bond_dim: usize,
     /// Pivot search strategy
     pub pivot_search: PivotSearchStrategy,
-    /// Whether to normalize error by max sample value
+    /// Whether to normalize error by the maximum observed sample value.
+    ///
+    /// `Full` and `Rook` search share the same formula but not the same
+    /// observation set: `Rook` only sees entries requested by lazy block-rook
+    /// search and factor reconstruction.
     pub normalize_error: bool,
     /// Verbosity level
     pub verbosity: usize,
@@ -53,7 +68,11 @@ pub enum PivotSearchStrategy {
     /// Full search: evaluate entire Pi matrix
     #[default]
     Full,
-    /// Rook search: use partial pivoting (more efficient for large matrices)
+    /// Rook search: use lazy block-rook pivoting over partial matrix blocks.
+    ///
+    /// This avoids materializing the full candidate matrix, so error
+    /// normalization uses the maximum sample value observed through the lazy
+    /// requests instead of a full-grid scan.
     Rook,
 }
 
@@ -75,11 +94,14 @@ pub struct TensorCI2<T: Scalar + TTScalar> {
     pivot_errors: Vec<f64>,
     /// Bond errors from 2-site sweep
     bond_errors: Vec<f64>,
-    /// Maximum sample value found
+    /// Maximum observed sample value found during function evaluation
     max_sample_value: f64,
 }
 
-impl<T: Scalar + TTScalar + Default> TensorCI2<T> {
+impl<T> TensorCI2<T>
+where
+    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+{
     /// Create a new empty TensorCI2
     pub fn new(local_dims: Vec<usize>) -> Result<Self> {
         if local_dims.len() < 2 {
@@ -140,7 +162,7 @@ impl<T: Scalar + TTScalar + Default> TensorCI2<T> {
         self.i_set.iter().skip(1).map(|s| s.len()).collect()
     }
 
-    /// Get maximum sample value
+    /// Get the maximum observed sample value seen so far
     pub fn max_sample_value(&self) -> f64 {
         self.max_sample_value
     }
@@ -260,7 +282,9 @@ pub fn crossinterpolate2<T, F, B>(
     options: TCI2Options,
 ) -> Result<(TensorCI2<T>, Vec<usize>, Vec<f64>)>
 where
-    T: Scalar + TTScalar + Default,
+    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+    LazyBlockRookKernel: PivotKernel<T>,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
@@ -358,7 +382,9 @@ fn update_pivots<T, F, B>(
     options: &TCI2Options,
 ) -> Result<()>
 where
-    T: Scalar + TTScalar + Default,
+    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+    LazyBlockRookKernel: PivotKernel<T>,
     F: Fn(&MultiIndex) -> T,
     B: Fn(&[MultiIndex]) -> Vec<T>,
 {
@@ -374,79 +400,110 @@ where
         return Ok(());
     }
 
-    // Build Pi matrix
-    let mut pi = zeros(i_combined.len(), j_combined.len());
-
-    // Use batch evaluation if available, otherwise use single evaluation
-    if let Some(ref batch_fn) = batched_f {
-        // Build all index pairs
-        let mut all_indices: Vec<MultiIndex> =
-            Vec::with_capacity(i_combined.len() * j_combined.len());
-        for i_multi in &i_combined {
-            for j_multi in &j_combined {
-                let mut full_idx = i_multi.clone();
-                full_idx.extend(j_multi.iter().cloned());
-                all_indices.push(full_idx);
-            }
-        }
-
-        // Batch evaluate
-        let values = batch_fn(&all_indices);
-
-        // Fill Pi matrix
-        let mut idx = 0;
-        for i in 0..i_combined.len() {
-            for j in 0..j_combined.len() {
-                pi[[i, j]] = values[idx];
-                let abs_val = f64::sqrt(Scalar::abs_sq(values[idx]));
-                if abs_val > tci.max_sample_value {
-                    tci.max_sample_value = abs_val;
-                }
-                idx += 1;
-            }
-        }
-    } else {
-        // Single evaluation
-        for (i, i_multi) in i_combined.iter().enumerate() {
-            for (j, j_multi) in j_combined.iter().enumerate() {
-                let mut full_idx = i_multi.clone();
-                full_idx.extend(j_multi.iter().cloned());
-                let value = f(&full_idx);
-                pi[[i, j]] = value;
-
-                let abs_val = f64::sqrt(Scalar::abs_sq(value));
-                if abs_val > tci.max_sample_value {
-                    tci.max_sample_value = abs_val;
-                }
-            }
-        }
-    }
-
     // Apply LU-based cross interpolation
-    let lu_options = RrLUOptions {
+    let lu_options = PivotKernelOptions {
         max_rank: options.max_bond_dim,
         rel_tol: options.tolerance,
         abs_tol: 0.0,
         left_orthogonal,
     };
 
-    let luci = MatrixLUCI::from_matrix(&pi, Some(lu_options))?;
+    let selection;
+    let factors;
+    if options.pivot_search == PivotSearchStrategy::Full {
+        let mut pi = zeros(i_combined.len(), j_combined.len());
+
+        if let Some(ref batch_fn) = batched_f {
+            let mut all_indices: Vec<MultiIndex> =
+                Vec::with_capacity(i_combined.len() * j_combined.len());
+            for i_multi in &i_combined {
+                for j_multi in &j_combined {
+                    let mut full_idx = i_multi.clone();
+                    full_idx.extend(j_multi.iter().cloned());
+                    all_indices.push(full_idx);
+                }
+            }
+
+            let values = batch_fn(&all_indices);
+            if values.len() != all_indices.len() {
+                return Err(callback_length_mismatch(values.len(), all_indices.len()));
+            }
+            let mut idx = 0;
+            for i in 0..i_combined.len() {
+                for j in 0..j_combined.len() {
+                    pi[[i, j]] = values[idx];
+                    update_max_sample_value(tci, values[idx]);
+                    idx += 1;
+                }
+            }
+        } else {
+            for (i, i_multi) in i_combined.iter().enumerate() {
+                for (j, j_multi) in j_combined.iter().enumerate() {
+                    let mut full_idx = i_multi.clone();
+                    full_idx.extend(j_multi.iter().cloned());
+                    let value = f(&full_idx);
+                    pi[[i, j]] = value;
+                    update_max_sample_value(tci, value);
+                }
+            }
+        }
+
+        let mut data = Vec::with_capacity(pi.nrows() * pi.ncols());
+        for col in 0..pi.ncols() {
+            for row in 0..pi.nrows() {
+                data.push(pi[[row, col]]);
+            }
+        }
+        let source = DenseMatrixSource::from_column_major(&data, pi.nrows(), pi.ncols());
+        selection = DenseFaerLuKernel.factorize(&source, &lu_options)?;
+        factors = CrossFactors::from_source(&source, &selection)?;
+    } else {
+        let evaluator =
+            LazyPiEvaluator::new(&i_combined, &j_combined, f, batched_f, tci.max_sample_value);
+        let source = LazyMatrixSource::new(
+            i_combined.len(),
+            j_combined.len(),
+            |rows, cols, out: &mut [T]| {
+                evaluator.fill_block(rows, cols, out);
+            },
+        );
+        let selection_result = LazyBlockRookKernel.factorize(&source, &lu_options);
+        if let Some(err) = evaluator.take_error() {
+            return Err(err);
+        }
+        selection = selection_result?;
+
+        let factors_result = CrossFactors::from_source(&source, &selection);
+        if let Some(err) = evaluator.take_error() {
+            return Err(err);
+        }
+        factors = factors_result?;
+        tci.max_sample_value = evaluator.sampled_max();
+    }
 
     // Update I and J sets
-    let row_indices = luci.row_indices();
-    let col_indices = luci.col_indices();
+    let row_indices = &selection.row_indices;
+    let col_indices = &selection.col_indices;
 
     tci.i_set[b + 1] = row_indices.iter().map(|&i| i_combined[i].clone()).collect();
     tci.j_set[b] = col_indices.iter().map(|&j| j_combined[j].clone()).collect();
 
     // Update site tensors
-    let left = luci.left();
-    let right = luci.right();
+    let left = if left_orthogonal {
+        factors.cols_times_pivot_inv()?
+    } else {
+        factors.pivot_cols.clone()
+    };
+    let right = if left_orthogonal {
+        factors.pivot_rows.clone()
+    } else {
+        factors.pivot_inv_times_rows()?
+    };
 
     // Convert left matrix to tensor at site b
     let left_dim = if b == 0 { 1 } else { tci.i_set[b].len() };
     let site_dim_b = tci.local_dims[b];
-    let new_bond_dim = luci.rank().max(1);
+    let new_bond_dim = selection.rank.max(1);
 
     let mut tensor_b = tensor3_zeros(left_dim, site_dim_b, new_bond_dim);
     for l in 0..left_dim {
@@ -483,12 +540,146 @@ where
     tci.site_tensors[b + 1] = tensor_bp1;
 
     // Update bond error
-    let errors = luci.pivot_errors();
-    if !errors.is_empty() {
-        tci.bond_errors[b] = *errors.last().unwrap_or(&0.0);
+    if !selection.pivot_errors.is_empty() {
+        tci.bond_errors[b] = *selection.pivot_errors.last().unwrap_or(&0.0);
     }
 
     Ok(())
+}
+
+fn update_max_sample_value<T: Scalar + TTScalar>(tci: &mut TensorCI2<T>, value: T) {
+    let abs_val = f64::sqrt(Scalar::abs_sq(value));
+    if abs_val > tci.max_sample_value {
+        tci.max_sample_value = abs_val;
+    }
+}
+
+fn build_full_index(
+    i_combined: &[MultiIndex],
+    j_combined: &[MultiIndex],
+    row: usize,
+    col: usize,
+) -> MultiIndex {
+    let mut full_idx = i_combined[row].clone();
+    full_idx.extend(j_combined[col].iter().cloned());
+    full_idx
+}
+
+fn callback_length_mismatch(actual: usize, expected: usize) -> TCIError {
+    TCIError::InvalidOperation {
+        message: format!(
+            "batch callback returned {actual} values for {expected} requested entries"
+        ),
+    }
+}
+
+struct LazyPiEvaluator<'a, T, F, B>
+where
+    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+{
+    i_combined: &'a [MultiIndex],
+    j_combined: &'a [MultiIndex],
+    f: &'a F,
+    batched_f: &'a Option<B>,
+    cache: RefCell<HashMap<(usize, usize), T>>,
+    pending_error: RefCell<Option<TCIError>>,
+    sampled_max: Cell<f64>,
+}
+
+impl<'a, T, F, B> LazyPiEvaluator<'a, T, F, B>
+where
+    T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+{
+    fn new(
+        i_combined: &'a [MultiIndex],
+        j_combined: &'a [MultiIndex],
+        f: &'a F,
+        batched_f: &'a Option<B>,
+        initial_max: f64,
+    ) -> Self {
+        Self {
+            i_combined,
+            j_combined,
+            f,
+            batched_f,
+            cache: RefCell::new(HashMap::new()),
+            pending_error: RefCell::new(None),
+            sampled_max: Cell::new(initial_max),
+        }
+    }
+
+    fn fill_block(&self, rows: &[usize], cols: &[usize], out: &mut [T]) {
+        if self.pending_error.borrow().is_some() {
+            out.fill(T::zero());
+            return;
+        }
+
+        let mut missing_entries = Vec::new();
+        let mut missing_indices = Vec::new();
+
+        {
+            let cache_ref = self.cache.borrow();
+            for (j_pos, &col) in cols.iter().enumerate() {
+                for (i_pos, &row) in rows.iter().enumerate() {
+                    let out_idx = i_pos + rows.len() * j_pos;
+                    if let Some(&value) = cache_ref.get(&(row, col)) {
+                        out[out_idx] = value;
+                    } else {
+                        missing_entries.push((out_idx, row, col));
+                        missing_indices.push(build_full_index(
+                            self.i_combined,
+                            self.j_combined,
+                            row,
+                            col,
+                        ));
+                    }
+                }
+            }
+        }
+
+        if missing_entries.is_empty() {
+            return;
+        }
+
+        let values = if let Some(batch_fn) = self.batched_f {
+            batch_fn(&missing_indices)
+        } else {
+            missing_indices.iter().map(self.f).collect()
+        };
+        if values.len() != missing_entries.len() {
+            *self.pending_error.borrow_mut() = Some(callback_length_mismatch(
+                values.len(),
+                missing_entries.len(),
+            ));
+            for (out_idx, _, _) in missing_entries {
+                out[out_idx] = T::zero();
+            }
+            return;
+        }
+
+        let mut cache_ref = self.cache.borrow_mut();
+        for ((out_idx, row, col), value) in missing_entries.into_iter().zip(values.into_iter()) {
+            out[out_idx] = value;
+            cache_ref.insert((row, col), value);
+
+            let abs_val = f64::sqrt(Scalar::abs_sq(value));
+            if abs_val > self.sampled_max.get() {
+                self.sampled_max.set(abs_val);
+            }
+        }
+    }
+
+    fn sampled_max(&self) -> f64 {
+        self.sampled_max.get()
+    }
+
+    fn take_error(&self) -> Option<TCIError> {
+        self.pending_error.borrow_mut().take()
+    }
 }
 
 #[cfg(test)]

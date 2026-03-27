@@ -12,6 +12,7 @@ repository.workspace = true
 description = "High-level Quantics TCI interface for function interpolation"
 
 [dependencies]
+tensor4all-tcicore = { path = "../tensor4all-tcicore" }
 tensor4all-tensorci = { path = "../tensor4all-tensorci" }
 tensor4all-simplett = { path = "../tensor4all-simplett" }
 quanticsgrids.workspace = true

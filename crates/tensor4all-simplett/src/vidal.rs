@@ -10,14 +10,14 @@ use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
-use matrixci::util::{mat_mul, ncols, nrows, zeros, Matrix};
-use matrixci::Scalar;
-use matrixci::{rrlu, RrLUOptions};
 use num_complex::ComplexFloat;
 use num_traits::ToPrimitive;
 use tenferro_algebra::Scalar as TfScalar;
 use tenferro_linalg::LinalgScalar;
 use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor as TypedTensor};
+use tensor4all_tcicore::matrix::{mat_mul, ncols, nrows, zeros, Matrix};
+use tensor4all_tcicore::Scalar;
+use tensor4all_tcicore::{rrlu, RrLUOptions};
 use tensor4all_tensorbackend::{svd_backend, BackendLinalgScalar};
 
 /// Compute QR decomposition

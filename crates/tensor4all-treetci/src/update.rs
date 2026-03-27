@@ -1,0 +1,121 @@
+use crate::{
+    assemble::{assemble_points_column_major, MultiIndex},
+    assemble_global_point,
+    batch::GlobalIndexBatch,
+    DefaultProposer, PivotCandidateProposer, SimpleTreeTci, TreeTciEdge,
+};
+use anyhow::{ensure, Result};
+use tensor4all_tcicore::{
+    DenseFaerLuKernel, DenseMatrixSource, MatrixLuciScalar as Scalar, PivotKernel,
+    PivotKernelOptions, PivotSelectionCore,
+};
+
+/// Update one edge bipartition using a batch evaluator and a pivot-candidate proposer.
+pub fn update_edge<T, F, P>(
+    state: &mut SimpleTreeTci<T>,
+    edge: TreeTciEdge,
+    batch_eval: F,
+    options: &PivotKernelOptions,
+    proposer: &P,
+) -> Result<PivotSelectionCore>
+where
+    T: Scalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    P: PivotCandidateProposer,
+{
+    let (left_key, right_key) = state.graph.subregion_vertices(edge)?;
+    let (left_candidates, right_candidates) = proposer.candidates(state, edge)?;
+    let values = evaluate_candidate_matrix(
+        state.local_dims.len(),
+        &left_key,
+        &left_candidates,
+        &right_key,
+        &right_candidates,
+        batch_eval,
+    )?;
+
+    for value in &values {
+        state.max_sample_value = state.max_sample_value.max(value.abs_val());
+    }
+
+    let source = DenseMatrixSource::from_column_major(
+        &values,
+        left_candidates.len(),
+        right_candidates.len(),
+    );
+    let selection = DenseFaerLuKernel.factorize(&source, options)?;
+
+    state.ijset.insert(
+        left_key.clone(),
+        selection
+            .row_indices
+            .iter()
+            .map(|&row| left_candidates[row].clone())
+            .collect(),
+    );
+    state.ijset.insert(
+        right_key.clone(),
+        selection
+            .col_indices
+            .iter()
+            .map(|&col| right_candidates[col].clone())
+            .collect(),
+    );
+    let last_error = selection.pivot_errors.last().copied().unwrap_or(0.0);
+    state.update_bond_error(edge, last_error);
+    state.update_pivot_errors(&selection.pivot_errors);
+
+    Ok(selection)
+}
+
+/// Update one edge using the default proposer.
+pub fn update_edge_default<T, F>(
+    state: &mut SimpleTreeTci<T>,
+    edge: TreeTciEdge,
+    batch_eval: F,
+    options: &PivotKernelOptions,
+) -> Result<PivotSelectionCore>
+where
+    T: Scalar,
+    DenseFaerLuKernel: PivotKernel<T>,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+{
+    update_edge(state, edge, batch_eval, options, &DefaultProposer)
+}
+
+fn evaluate_candidate_matrix<T, F>(
+    n_sites: usize,
+    left_key: &crate::SubtreeKey,
+    left_candidates: &[MultiIndex],
+    right_key: &crate::SubtreeKey,
+    right_candidates: &[MultiIndex],
+    batch_eval: F,
+) -> Result<Vec<T>>
+where
+    T: Scalar,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+{
+    let mut points = Vec::with_capacity(left_candidates.len() * right_candidates.len());
+    for right in right_candidates {
+        for left in left_candidates {
+            points.push(assemble_global_point(
+                n_sites,
+                &[(left_key, left), (right_key, right)],
+                &[],
+            )?);
+        }
+    }
+    let batch = assemble_points_column_major(&points)?;
+    let values = batch_eval(batch.as_view())?;
+    ensure!(
+        values.len() == left_candidates.len() * right_candidates.len(),
+        "batch evaluator returned {} values for {} candidate-matrix entries",
+        values.len(),
+        left_candidates.len() * right_candidates.len()
+    );
+    Ok(values)
+}
+
+#[cfg(test)]
+mod tests;

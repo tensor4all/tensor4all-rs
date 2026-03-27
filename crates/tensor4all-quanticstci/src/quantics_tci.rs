@@ -8,6 +8,7 @@ use anyhow::{anyhow, Result};
 use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid};
 use rand::Rng;
 use tensor4all_simplett::{AbstractTensorTrain, TTScalar, TensorTrain};
+use tensor4all_tcicore::{DenseFaerLuKernel, LazyBlockRookKernel, PivotKernel};
 use tensor4all_tensorci::Scalar;
 use tensor4all_tensorci::{crossinterpolate2, TensorCI2};
 
@@ -28,7 +29,12 @@ pub struct QuanticsTensorCI2<V: Scalar + TTScalar> {
     cache: HashMap<Vec<i64>, V>,
 }
 
-impl<V: Scalar + TTScalar + Default + Clone> QuanticsTensorCI2<V> {
+impl<V> QuanticsTensorCI2<V>
+where
+    V: Scalar + TTScalar + Default + Clone + tensor4all_tcicore::MatrixLuciScalar,
+    DenseFaerLuKernel: PivotKernel<V>,
+    LazyBlockRookKernel: PivotKernel<V>,
+{
     /// Create a new QuanticsTensorCI2 from TCI result and discretized grid.
     pub fn from_discretized(
         tci: TensorCI2<V>,
@@ -192,7 +198,9 @@ pub fn quanticscrossinterpolate<V, F>(
     options: QtciOptions,
 ) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
-    V: Scalar + TTScalar + Default + Clone + 'static,
+    V: Scalar + TTScalar + Default + Clone + 'static + tensor4all_tcicore::MatrixLuciScalar,
+    DenseFaerLuKernel: PivotKernel<V>,
+    LazyBlockRookKernel: PivotKernel<V>,
     F: Fn(&[f64]) -> V + 'static,
 {
     let local_dims = grid.local_dimensions();
@@ -293,7 +301,9 @@ pub fn quanticscrossinterpolate_from_arrays<V, F>(
     options: QtciOptions,
 ) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
-    V: Scalar + TTScalar + Default + Clone + 'static,
+    V: Scalar + TTScalar + Default + Clone + 'static + tensor4all_tcicore::MatrixLuciScalar,
+    DenseFaerLuKernel: PivotKernel<V>,
+    LazyBlockRookKernel: PivotKernel<V>,
     F: Fn(&[f64]) -> V + 'static,
 {
     if xvals.is_empty() {
@@ -367,7 +377,9 @@ pub fn quanticscrossinterpolate_discrete<V, F>(
     options: QtciOptions,
 ) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
-    V: Scalar + TTScalar + Default + Clone + 'static,
+    V: Scalar + TTScalar + Default + Clone + 'static + tensor4all_tcicore::MatrixLuciScalar,
+    DenseFaerLuKernel: PivotKernel<V>,
+    LazyBlockRookKernel: PivotKernel<V>,
     F: Fn(&[i64]) -> V + 'static,
 {
     // Validate sizes are powers of 2

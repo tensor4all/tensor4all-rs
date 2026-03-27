@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use num_complex::Complex64;
 use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
 use tensor4all_treetn::TreeTN;
 
@@ -16,6 +17,10 @@ fn idx(size: usize) -> DynIndex {
 
 /// Create a TensorDynLen from indices and f64 data.
 fn make_tensor(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
+    TensorDynLen::from_dense(indices, data).unwrap()
+}
+
+fn make_complex_tensor(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen {
     TensorDynLen::from_dense(indices, data).unwrap()
 }
 
@@ -329,6 +334,43 @@ fn test_evaluate_two_nodes() {
             );
         }
     }
+}
+
+#[test]
+fn test_evaluate_two_nodes_complex() {
+    let s0 = idx(2);
+    let bond = idx(1);
+    let s1 = idx(2);
+    let a = [Complex64::new(1.0, 1.0), Complex64::new(2.0, -1.0)];
+    let b = [Complex64::new(3.0, -2.0), Complex64::new(-1.0, 4.0)];
+
+    let t0 = make_complex_tensor(vec![s0.clone(), bond.clone()], vec![a[0], a[1]]);
+    let t1 = make_complex_tensor(vec![bond.clone(), s1.clone()], vec![b[0], b[1]]);
+    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
+
+    let max_sample = a
+        .iter()
+        .flat_map(|a_i| b.iter().map(move |b_j| (*a_i * *b_j).norm()))
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    let mut max_diff = 0.0_f64;
+    for (i, a_i) in a.iter().enumerate() {
+        for (j, b_j) in b.iter().enumerate() {
+            let val = tn
+                .evaluate(&HashMap::from([(0usize, vec![i]), (1usize, vec![j])]))
+                .unwrap();
+            let expected = *a_i * *b_j;
+            let got = Complex64::new(val.real(), val.imag());
+            max_diff = max_diff.max((got - expected).norm());
+        }
+    }
+    assert!(
+        max_diff <= 1e-12 * max_sample,
+        "maxabs diff {} exceeds tol {} * max_sample {}",
+        max_diff,
+        1e-12,
+        max_sample
+    );
 }
 
 #[test]
