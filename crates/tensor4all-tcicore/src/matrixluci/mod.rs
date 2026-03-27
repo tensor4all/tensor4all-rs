@@ -1,22 +1,24 @@
-//! Temporary shim re-exporting the standalone `matrixluci` crate.
+#![warn(missing_docs)]
+//! Low-level LUCI / rrLU substrate.
 //!
-//! This keeps `tensor4all_tcicore::matrixluci` stable while the low-level
-//! implementation is absorbed into this crate.
+//! The dense LU path in this crate is a tensor4all-owned port derived from
+//! `faer` full-pivoting LU ideas and primitives. Keep that attribution explicit
+//! in user-facing documentation.
 
-pub use ::matrixluci::block_rook;
-pub use ::matrixluci::dense;
-pub use ::matrixluci::error;
-pub use ::matrixluci::factors;
-pub use ::matrixluci::kernel;
-pub use ::matrixluci::scalar;
-pub use ::matrixluci::source;
-pub use ::matrixluci::types;
+pub mod block_rook;
+pub mod dense;
+pub mod error;
+pub mod factors;
+pub mod kernel;
+pub mod scalar;
+pub mod source;
+pub mod types;
 
-pub use ::matrixluci::error::{MatrixLuciError, Result};
-pub use ::matrixluci::factors::CrossFactors;
-pub use ::matrixluci::kernel::PivotKernel;
-pub use ::matrixluci::scalar::Scalar;
-pub use ::matrixluci::source::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};
-pub use ::matrixluci::types::{DenseOwnedMatrix, PivotKernelOptions, PivotSelectionCore};
-pub use ::matrixluci::DenseFaerLuKernel;
-pub use ::matrixluci::LazyBlockRookKernel;
+pub use block_rook::LazyBlockRookKernel;
+pub use dense::DenseFaerLuKernel;
+pub use error::{MatrixLuciError, Result};
+pub use factors::CrossFactors;
+pub use kernel::PivotKernel;
+pub use scalar::Scalar;
+pub use source::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};
+pub use types::{DenseOwnedMatrix, PivotKernelOptions, PivotSelectionCore};
