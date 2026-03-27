@@ -133,7 +133,11 @@ fn test_compress_with_max_bond_dim_c64() {
     test_compress_with_max_bond_dim_generic::<Complex64>();
 }
 
-fn test_compress_svd_constant_generic<T: TTScalar + Scalar + Default>() {
+fn test_compress_svd_constant_generic<T>()
+where
+    T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+{
     let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
     let original_sum = tt.sum();
 
@@ -148,7 +152,11 @@ fn test_compress_svd_constant_generic<T: TTScalar + Scalar + Default>() {
     assert!((original_sum - compressed_sum).abs_sq().sqrt() < 1e-10);
 }
 
-fn test_compress_svd_with_truncation_generic<T: TTScalar + Scalar + Default>() {
+fn test_compress_svd_with_truncation_generic<T>()
+where
+    T: TTScalar + Scalar + Default + tensor4all_tcicore::MatrixLuciScalar,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+{
     // Create a rank-3 TT and compress with SVD to max_bond_dim=2
     let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3);
     for s in 0..2 {
