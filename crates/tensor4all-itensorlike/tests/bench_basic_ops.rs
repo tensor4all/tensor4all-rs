@@ -43,7 +43,7 @@ fn make_random_mpo_pair(n_sites: usize, d: usize, bond_dim: usize) -> (TensorTra
         |rng: &mut rand::rngs::StdRng, tag: &str, shared: &[DynIndex], shared_first: bool| {
             let mut tensors = Vec::with_capacity(n_sites);
             let mut prev_bond: Option<DynIndex> = None;
-            for i in 0..n_sites {
+            for (i, shared_idx) in shared.iter().enumerate().take(n_sites) {
                 let phys = DynIndex::new_dyn_with_tag(d, &format!("{}={}", tag, i + 1)).unwrap();
                 let br = if i < n_sites - 1 { bond_dim } else { 1 };
                 let mut indices = Vec::new();
@@ -51,11 +51,11 @@ fn make_random_mpo_pair(n_sites: usize, d: usize, bond_dim: usize) -> (TensorTra
                     indices.push(b.clone());
                 }
                 if shared_first {
-                    indices.push(shared[i].clone());
+                    indices.push(shared_idx.clone());
                     indices.push(phys);
                 } else {
                     indices.push(phys);
-                    indices.push(shared[i].clone());
+                    indices.push(shared_idx.clone());
                 }
                 let next_bond = if i < n_sites - 1 {
                     let b = DynIndex::new_dyn(br);

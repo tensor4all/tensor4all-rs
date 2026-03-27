@@ -293,7 +293,9 @@ fn test_log_norm_zero_tensor_c64() {
 // partial_sum tests
 // ============================================================================
 
-fn test_partial_sum_all_dims_generic<T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug>() {
+fn test_partial_sum_all_dims_generic<
+    T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug,
+>() {
     // f(i,j,k) = 1.0 for all indices → sum = 2*3*2 = 12
     let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
     let full_sum = tt.sum();
@@ -308,7 +310,9 @@ fn test_partial_sum_all_dims_generic<T: TTScalar + tensor4all_tcicore::Scalar + 
     );
 }
 
-fn test_partial_sum_no_dims_generic<T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug>() {
+fn test_partial_sum_no_dims_generic<
+    T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug,
+>() {
     let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
     let result = tt.partial_sum(&[]).unwrap();
     assert_eq!(result.len(), 3);
@@ -433,7 +437,9 @@ fn test_partial_sum_multiple_dims_c64() {
 // TT arithmetic tests (port of test_tensortrain.jl)
 // ============================================================================
 
-fn test_tt_addition_generic<T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug>() {
+fn test_tt_addition_generic<
+    T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug,
+>() {
     // Build two rank-1 TTs: f(i,j,k) = (1+i), g(i,j,k) = (1+j)
     let mut t0_a = tensor3_zeros::<T>(1, 3, 1);
     let mut t1_a = tensor3_zeros::<T>(1, 3, 1);
@@ -519,8 +525,15 @@ fn test_tt_addition_c64() {
 // ============================================================================
 
 fn test_svd_compression_tolerance_generic<
-    T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug,
->() {
+    T: TTScalar
+        + tensor4all_tcicore::Scalar
+        + tensor4all_tcicore::MatrixLuciScalar
+        + Default
+        + std::fmt::Debug,
+>()
+where
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+{
     use crate::compression::{CompressionMethod, CompressionOptions};
 
     // Build a random-ish TT with known structure: sum of two rank-1 terms
@@ -530,12 +543,42 @@ fn test_svd_compression_tolerance_generic<
         let mut t1 = tensor3_zeros::<T>(2, 4, 2);
         let mut t2 = tensor3_zeros::<T>(2, 4, 1);
         for s in 0..4 {
-            t0.set3(0, s, 0, T::from_f64((1 + s) as f64));
-            t0.set3(0, s, 1, T::from_f64((2 + s) as f64));
-            t1.set3(0, s, 0, T::from_f64((1 + s) as f64));
-            t1.set3(1, s, 1, T::from_f64((3 + s) as f64));
-            t2.set3(0, s, 0, T::from_f64((1 + s) as f64));
-            t2.set3(1, s, 0, T::from_f64((4 + s) as f64));
+            t0.set3(
+                0,
+                s,
+                0,
+                <T as tensor4all_tcicore::Scalar>::from_f64((1 + s) as f64),
+            );
+            t0.set3(
+                0,
+                s,
+                1,
+                <T as tensor4all_tcicore::Scalar>::from_f64((2 + s) as f64),
+            );
+            t1.set3(
+                0,
+                s,
+                0,
+                <T as tensor4all_tcicore::Scalar>::from_f64((1 + s) as f64),
+            );
+            t1.set3(
+                1,
+                s,
+                1,
+                <T as tensor4all_tcicore::Scalar>::from_f64((3 + s) as f64),
+            );
+            t2.set3(
+                0,
+                s,
+                0,
+                <T as tensor4all_tcicore::Scalar>::from_f64((1 + s) as f64),
+            );
+            t2.set3(
+                1,
+                s,
+                0,
+                <T as tensor4all_tcicore::Scalar>::from_f64((4 + s) as f64),
+            );
         }
         TensorTrain::new(vec![t0, t1, t2]).unwrap()
     };
@@ -555,7 +598,7 @@ fn test_svd_compression_tolerance_generic<
 
     let svd_sum = tt_svd.sum();
     assert!(
-        (orig_sum - svd_sum).abs_sq().sqrt() < 1e-8,
+        <T as tensor4all_tcicore::Scalar>::abs_sq(orig_sum - svd_sum).sqrt() < 1e-8,
         "SVD compression changed sum: orig={orig_sum:?}, svd={svd_sum:?}"
     );
 
@@ -566,7 +609,7 @@ fn test_svd_compression_tolerance_generic<
                 let expected = tt_orig.evaluate(&[i, j, k]).unwrap();
                 let actual = tt_svd.evaluate(&[i, j, k]).unwrap();
                 assert!(
-                    (expected - actual).abs_sq().sqrt() < 1e-8,
+                    <T as tensor4all_tcicore::Scalar>::abs_sq(expected - actual).sqrt() < 1e-8,
                     "SVD compression error at ({i},{j},{k})"
                 );
             }

@@ -4,12 +4,12 @@ use crate::error::Result;
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
-use tensor4all_tcicore::matrix::{mat_mul, ncols, nrows, zeros, Matrix};
-use tensor4all_tcicore::Scalar;
-use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions};
 use tenferro_algebra::Scalar as TfScalar;
 use tenferro_linalg::LinalgScalar;
 use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor as TypedTensor};
+use tensor4all_tcicore::matrix::{mat_mul, ncols, nrows, zeros, Matrix};
+use tensor4all_tcicore::Scalar;
+use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions};
 use tensor4all_tensorbackend::BackendLinalgScalar;
 
 /// Compression method for tensor trains
@@ -273,11 +273,11 @@ where
     };
 
     let mut rank = 0;
-    for i in 0..min_dim {
+    for &singular_value in s_data.iter().take(min_dim) {
         if rank >= max_bond_dim {
             break;
         }
-        let sv = T::sv_to_f64(s_data[i]);
+        let sv = T::sv_to_f64(singular_value);
         if sv < tolerance * s_max {
             break;
         }

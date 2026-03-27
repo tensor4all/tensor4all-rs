@@ -5,10 +5,10 @@
 //! of function values through an explicit batch function parameter.
 
 use crate::error::{Result, TCIError};
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use crate::globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput};
 use rand::SeedableRng;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
 use tensor4all_tcicore::matrix::zeros;
 use tensor4all_tcicore::MultiIndex;
@@ -78,6 +78,22 @@ impl Default for TCI2Options {
             seed: None,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct Sweep1SiteBondConfig {
+    rel_tol: f64,
+    abs_tol: f64,
+    max_bond_dim: usize,
+    update_tensors: bool,
+}
+
+struct PivotUpdateContext<'a, B> {
+    batched_f: &'a Option<B>,
+    left_orthogonal: bool,
+    options: &'a TCI2Options,
+    extra_i_set: &'a [MultiIndex],
+    extra_j_set: &'a [MultiIndex],
 }
 
 /// Pivot search strategy for TCI2
@@ -310,11 +326,33 @@ where
         let empty: Vec<MultiIndex> = Vec::new();
         if forward {
             for b in 0..n - 1 {
-                update_pivots(self, b, f, batched_f, true, options, &empty, &empty)?;
+                update_pivots(
+                    self,
+                    b,
+                    f,
+                    PivotUpdateContext {
+                        batched_f,
+                        left_orthogonal: true,
+                        options,
+                        extra_i_set: &empty,
+                        extra_j_set: &empty,
+                    },
+                )?;
             }
         } else {
             for b in (0..n - 1).rev() {
-                update_pivots(self, b, f, batched_f, false, options, &empty, &empty)?;
+                update_pivots(
+                    self,
+                    b,
+                    f,
+                    PivotUpdateContext {
+                        batched_f,
+                        left_orthogonal: false,
+                        options,
+                        extra_i_set: &empty,
+                        extra_j_set: &empty,
+                    },
+                )?;
             }
         }
 
@@ -394,30 +432,20 @@ where
         self.invalidate_site_tensors();
 
         let n = self.len();
+        let bond_config = Sweep1SiteBondConfig {
+            rel_tol,
+            abs_tol,
+            max_bond_dim,
+            update_tensors,
+        };
 
         if forward {
             for b in 0..n - 1 {
-                self.sweep1site_at_bond(
-                    f,
-                    b,
-                    true,
-                    rel_tol,
-                    abs_tol,
-                    max_bond_dim,
-                    update_tensors,
-                )?;
+                self.sweep1site_at_bond(f, b, true, bond_config)?;
             }
         } else {
             for b in (1..n).rev() {
-                self.sweep1site_at_bond(
-                    f,
-                    b,
-                    false,
-                    rel_tol,
-                    abs_tol,
-                    max_bond_dim,
-                    update_tensors,
-                )?;
+                self.sweep1site_at_bond(f, b, false, bond_config)?;
             }
         }
 
@@ -443,10 +471,7 @@ where
         f: &F,
         b: usize,
         forward: bool,
-        rel_tol: f64,
-        abs_tol: f64,
-        max_bond_dim: usize,
-        update_tensors: bool,
+        config: Sweep1SiteBondConfig,
     ) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
@@ -482,9 +507,9 @@ where
 
         // LU-based cross interpolation
         let lu_options = RrLUOptions {
-            max_rank: max_bond_dim,
-            rel_tol,
-            abs_tol,
+            max_rank: config.max_bond_dim,
+            rel_tol: config.rel_tol,
+            abs_tol: config.abs_tol,
             left_orthogonal: forward,
         };
         let luci = MatrixLUCI::from_matrix(&pi, Some(lu_options))?;
@@ -502,7 +527,7 @@ where
         }
 
         // Update site tensor
-        if update_tensors {
+        if config.update_tensors {
             let mat = if forward { luci.left() } else { luci.right() };
             let local_dim = self.local_dims[b];
             if forward {
@@ -863,11 +888,13 @@ where
                     &mut tci,
                     b,
                     &f,
-                    &batched_f,
-                    true,
-                    &options,
-                    &extra_i_set[b + 1],
-                    &extra_j_set[b],
+                    PivotUpdateContext {
+                        batched_f: &batched_f,
+                        left_orthogonal: true,
+                        options: &options,
+                        extra_i_set: &extra_i_set[b + 1],
+                        extra_j_set: &extra_j_set[b],
+                    },
                 )?;
             }
         } else {
@@ -876,11 +903,13 @@ where
                     &mut tci,
                     b,
                     &f,
-                    &batched_f,
-                    false,
-                    &options,
-                    &extra_i_set[b + 1],
-                    &extra_j_set[b],
+                    PivotUpdateContext {
+                        batched_f: &batched_f,
+                        left_orthogonal: false,
+                        options: &options,
+                        extra_i_set: &extra_i_set[b + 1],
+                        extra_j_set: &extra_j_set[b],
+                    },
                 )?;
             }
         }
@@ -946,7 +975,7 @@ where
     tci.sweep1site(&f, true, 1e-14, abs_tol, options.max_bond_dim, true)?;
 
     // Normalize errors for return
-    let normalized_errors: Vec<f64> = errors.iter().copied().collect();
+    let normalized_errors = errors.to_vec();
 
     Ok((tci, ranks, normalized_errors))
 }
@@ -956,11 +985,7 @@ fn update_pivots<T, F, B>(
     tci: &mut TensorCI2<T>,
     b: usize,
     f: &F,
-    batched_f: &Option<B>,
-    left_orthogonal: bool,
-    options: &TCI2Options,
-    extra_i_set: &[MultiIndex],
-    extra_j_set: &[MultiIndex],
+    context: PivotUpdateContext<'_, B>,
 ) -> Result<()>
 where
     T: Scalar + TTScalar + Default + tensor4all_tcicore::MatrixLuciScalar,
@@ -974,12 +999,12 @@ where
     let mut j_combined = tci.kronecker_j(b + 1);
 
     // Union with extra sets (for non-strictly-nested mode)
-    for extra in extra_i_set {
+    for extra in context.extra_i_set {
         if !i_combined.contains(extra) {
             i_combined.push(extra.clone());
         }
     }
-    for extra in extra_j_set {
+    for extra in context.extra_j_set {
         if !j_combined.contains(extra) {
             j_combined.push(extra.clone());
         }
@@ -991,18 +1016,18 @@ where
 
     // Apply LU-based cross interpolation
     let lu_options = PivotKernelOptions {
-        max_rank: options.max_bond_dim,
-        rel_tol: options.tolerance,
+        max_rank: context.options.max_bond_dim,
+        rel_tol: context.options.tolerance,
         abs_tol: 0.0,
-        left_orthogonal,
+        left_orthogonal: context.left_orthogonal,
     };
 
     let selection;
     let factors;
-    if options.pivot_search == PivotSearchStrategy::Full {
+    if context.options.pivot_search == PivotSearchStrategy::Full {
         let mut pi = zeros(i_combined.len(), j_combined.len());
 
-        if let Some(ref batch_fn) = batched_f {
+        if let Some(ref batch_fn) = context.batched_f {
             let mut all_indices: Vec<MultiIndex> =
                 Vec::with_capacity(i_combined.len() * j_combined.len());
             for i_multi in &i_combined {
@@ -1047,8 +1072,13 @@ where
         selection = DenseFaerLuKernel.factorize(&source, &lu_options)?;
         factors = CrossFactors::from_source(&source, &selection)?;
     } else {
-        let evaluator =
-            LazyPiEvaluator::new(&i_combined, &j_combined, f, batched_f, tci.max_sample_value);
+        let evaluator = LazyPiEvaluator::new(
+            &i_combined,
+            &j_combined,
+            f,
+            context.batched_f,
+            tci.max_sample_value,
+        );
         let source = LazyMatrixSource::new(
             i_combined.len(),
             j_combined.len(),
@@ -1079,7 +1109,7 @@ where
 
     // Skip site tensor update if extra sets were used (tensors will be
     // filled separately by fill_site_tensors after the sweep).
-    if !extra_i_set.is_empty() || !extra_j_set.is_empty() {
+    if !context.extra_i_set.is_empty() || !context.extra_j_set.is_empty() {
         // Update bond error only
         let errors = &selection.pivot_errors;
         if !errors.is_empty() {
@@ -1089,12 +1119,12 @@ where
     }
 
     // Update site tensors
-    let left = if left_orthogonal {
+    let left = if context.left_orthogonal {
         factors.cols_times_pivot_inv()?
     } else {
         factors.pivot_cols.clone()
     };
-    let right = if left_orthogonal {
+    let right = if context.left_orthogonal {
         factors.pivot_rows.clone()
     } else {
         factors.pivot_inv_times_rows()?
