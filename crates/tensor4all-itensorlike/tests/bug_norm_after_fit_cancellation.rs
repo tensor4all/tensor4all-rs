@@ -108,7 +108,7 @@ fn dense_norm_matches_after_fit_cancellation() {
 
     let exact = mpo_a.contract(&mpo_b, &ContractOptions::zipup()).unwrap();
     let fit = mpo_a
-        .contract(&mpo_b, &ContractOptions::fit().with_nsweeps(1))
+        .contract(&mpo_b, &ContractOptions::fit().with_nhalfsweeps(0))
         .unwrap();
 
     // Ground truth: dense subtraction
