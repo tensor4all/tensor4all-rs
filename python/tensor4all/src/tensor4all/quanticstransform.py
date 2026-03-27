@@ -38,14 +38,26 @@ class LinearOperator:
         Parameters
         ----------
         state : TreeTensorNetwork
-            Input MPS/TreeTN.
+            Input MPS/TreeTN. Note: SimpleTensorTrain is not directly
+            supported; convert to TreeTensorNetwork first.
         method : str
             "naive", "zipup", or "fit".
         rtol : float
             Relative tolerance (0.0 = default).
         maxdim : int
             Maximum bond dimension (0 = unlimited).
+
+        Raises
+        ------
+        TypeError
+            If state is not a TreeTensorNetwork (e.g. SimpleTensorTrain).
         """
+        if not isinstance(state, TreeTensorNetwork):
+            raise TypeError(
+                f"LinearOperator.apply() requires a TreeTensorNetwork, "
+                f"got {type(state).__name__}. "
+                f"Convert SimpleTensorTrain to TreeTensorNetwork first."
+            )
         lib = get_lib()
         method_int = {"naive": 0, "zipup": 1, "fit": 2}.get(method)
         if method_int is None:

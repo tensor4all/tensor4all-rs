@@ -10,7 +10,7 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::{IndexLike, TensorLike};
+use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
 
 use super::TreeTN;
 
@@ -201,6 +201,16 @@ where
 
                 bond_pairs.push((self_bond.clone(), other_bond.clone()));
                 neighbors_for_edges.push(neighbor);
+            }
+
+            // For nodes with no bonds (single-node network), use element-wise addition
+            // instead of direct_sum (which requires at least one index pair).
+            if bond_pairs.is_empty() {
+                let sum_tensor =
+                    tensor_a.axpby(AnyScalar::new_real(1.0), tensor_b, AnyScalar::new_real(1.0))?;
+                result_tensors.push(sum_tensor);
+                result_node_names.push(node_name);
+                continue;
             }
 
             // Compute direct sum
