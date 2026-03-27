@@ -217,3 +217,84 @@ fn plain_diag_storage_auto_seeds_native_diag_payload() {
     assert_eq!(tensor.mode(), AdMode::Primal);
     assert!(is_diag_tensor(&tensor));
 }
+
+// ---------------------------------------------------------------------------
+// Backward (reverse-mode) AD tests
+// ---------------------------------------------------------------------------
+
+use tensor4all_core::{contract_multi, AllowedPairs};
+
+fn with_runtime<R>(f: impl FnOnce() -> R) -> R {
+    let _guard = tenferro::set_default_runtime(tenferro::RuntimeContext::Cpu(
+        tenferro_prims::CpuContext::new(1),
+    ));
+    f()
+}
+
+#[test]
+fn backward_ad_contraction_accumulates_gradient() {
+    with_runtime(|| {
+        let i = Index::new_dyn(3);
+
+        let mut a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+        a.set_requires_grad(true).unwrap();
+
+        let ones = TensorDynLen::from_dense(vec![i], vec![1.0, 1.0, 1.0]).unwrap();
+
+        // f = contract(a, ones) = dot product = 1+2+3 = 6; df/da = [1,1,1]
+        let result = contract_multi(&[&a, &ones], AllowedPairs::All).unwrap();
+        assert!(
+            result.indices().is_empty(),
+            "contraction result should be rank-0"
+        );
+
+        result.backward(None, &[&a]).unwrap();
+
+        let grad = a.grad().expect("gradient missing after backward");
+        let grad_vec = grad.to_vec::<f64>().unwrap();
+        for (j, &g) in grad_vec.iter().enumerate() {
+            assert!((g - 1.0).abs() < 1e-10, "grad[{j}] = {g}, expected 1.0");
+        }
+    });
+}
+
+#[test]
+fn backward_ad_gradient_matches_finite_diff() {
+    with_runtime(|| {
+        let i = Index::new_dyn(2);
+        let j = Index::new_dyn(2);
+        let eps = 1e-6;
+
+        // f(A) = contract(A, A) over all indices = sum(|a_ij|^2)
+        // df/da_ij = 2 * conj(a_ij) = 2 * a_ij (real case)
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+
+        let mut a = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data.clone()).unwrap();
+        a.set_requires_grad(true).unwrap();
+
+        let result = contract_multi(&[&a, &a], AllowedPairs::All).unwrap();
+        result.backward(None, &[&a]).unwrap();
+
+        let grad = a.grad().expect("gradient missing");
+        let grad_vec = grad.to_vec::<f64>().unwrap();
+
+        for idx in 0..data.len() {
+            let f_eval = |delta: f64| -> f64 {
+                let mut d = data.clone();
+                d[idx] += delta;
+                let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], d).unwrap();
+                contract_multi(&[&t, &t], AllowedPairs::All)
+                    .unwrap()
+                    .to_vec::<f64>()
+                    .unwrap()[0]
+            };
+            let fd = (f_eval(eps) - f_eval(-eps)) / (2.0 * eps);
+            let ad = grad_vec[idx];
+            let err = (ad - fd).abs();
+            assert!(
+                err < 1e-4,
+                "backward grad[{idx}] = {ad}, finite diff = {fd}, err = {err}"
+            );
+        }
+    });
+}
