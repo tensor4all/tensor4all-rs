@@ -237,7 +237,7 @@ fn test_crossinterpolate2_rank2_function_rook_search() {
         ..Default::default()
     };
 
-    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims,
@@ -676,7 +676,7 @@ fn test_crossinterpolate2_lorentz_f64() {
         ..Default::default()
     };
 
-    let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
+    let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[MultiIndex]) -> Vec<f64>>(
         f,
         None,
         local_dims.clone(),
