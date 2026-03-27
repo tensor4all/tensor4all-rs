@@ -77,8 +77,7 @@ tensor4all-rs/
 │   ├── tensor4all-partitionedtt/     # Partitioned Tensor Train
 │   ├── tensor4all-hdf5/              # ITensors.jl-compatible HDF5 serialization
 │   ├── tensor4all-capi/              # C API for language bindings
-│   ├── matrixluci/                   # LUCI / rrLU substrate (faer-derived dense path)
-│   ├── tensor4all-tcicore/           # TCI core: matrix CI, cached function, index sets
+│   ├── tensor4all-tcicore/           # TCI core: matrix CI, LUCI / rrLU substrate, cached function, index sets
 │   └── tensor4all-treetci/           # TreeTCI port and tree-structured cross interpolation
 ├── python/tensor4all/                # Python bindings
 ├── tools/api-dump/                   # API documentation generator
@@ -101,8 +100,7 @@ tensor4all-rs/
 | [tensor4all-partitionedtt](crates/tensor4all-partitionedtt/) | Partitioned Tensor Train |
 | [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
-| [matrixluci](crates/matrixluci/) | LUCI / rrLU substrate with a dense path ported from `faer` |
-| [tensor4all-tcicore](crates/tensor4all-tcicore/) | TCI core: matrix CI, cached function, index sets |
+| [tensor4all-tcicore](crates/tensor4all-tcicore/) | TCI core: matrix CI, LUCI / rrLU substrate, cached function, index sets |
 | [tensor4all-treetci](crates/tensor4all-treetci/) | TreeTCI port and tree-structured cross interpolation |
 
 ## Usage Example (Rust)
