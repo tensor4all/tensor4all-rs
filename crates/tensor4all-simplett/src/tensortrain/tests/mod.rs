@@ -524,9 +524,15 @@ fn test_tt_addition_c64() {
 // SVD compression with tolerance (port of test_tensortrain.jl "compress! (SVD)")
 // ============================================================================
 
-fn test_svd_compression_tolerance_generic<
-    T: TTScalar + tensor4all_tcicore::Scalar + Default + std::fmt::Debug,
->() {
+fn test_svd_compression_tolerance_generic<T>()
+where
+    T: TTScalar
+        + tensor4all_tcicore::Scalar
+        + Default
+        + std::fmt::Debug
+        + tensor4all_tcicore::MatrixLuciScalar,
+    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
+{
     use crate::compression::{CompressionMethod, CompressionOptions};
 
     // Build a random-ish TT with known structure: sum of two rank-1 terms
@@ -536,12 +542,12 @@ fn test_svd_compression_tolerance_generic<
         let mut t1 = tensor3_zeros::<T>(2, 4, 2);
         let mut t2 = tensor3_zeros::<T>(2, 4, 1);
         for s in 0..4 {
-            t0.set3(0, s, 0, T::from_f64((1 + s) as f64));
-            t0.set3(0, s, 1, T::from_f64((2 + s) as f64));
-            t1.set3(0, s, 0, T::from_f64((1 + s) as f64));
-            t1.set3(1, s, 1, T::from_f64((3 + s) as f64));
-            t2.set3(0, s, 0, T::from_f64((1 + s) as f64));
-            t2.set3(1, s, 0, T::from_f64((4 + s) as f64));
+            t0.set3(0, s, 0, <T as Scalar>::from_f64((1 + s) as f64));
+            t0.set3(0, s, 1, <T as Scalar>::from_f64((2 + s) as f64));
+            t1.set3(0, s, 0, <T as Scalar>::from_f64((1 + s) as f64));
+            t1.set3(1, s, 1, <T as Scalar>::from_f64((3 + s) as f64));
+            t2.set3(0, s, 0, <T as Scalar>::from_f64((1 + s) as f64));
+            t2.set3(1, s, 0, <T as Scalar>::from_f64((4 + s) as f64));
         }
         TensorTrain::new(vec![t0, t1, t2]).unwrap()
     };
@@ -561,7 +567,7 @@ fn test_svd_compression_tolerance_generic<
 
     let svd_sum = tt_svd.sum();
     assert!(
-        (orig_sum - svd_sum).abs_sq().sqrt() < 1e-8,
+        <T as Scalar>::abs_sq(orig_sum - svd_sum).sqrt() < 1e-8,
         "SVD compression changed sum: orig={orig_sum:?}, svd={svd_sum:?}"
     );
 
@@ -572,7 +578,7 @@ fn test_svd_compression_tolerance_generic<
                 let expected = tt_orig.evaluate(&[i, j, k]).unwrap();
                 let actual = tt_svd.evaluate(&[i, j, k]).unwrap();
                 assert!(
-                    (expected - actual).abs_sq().sqrt() < 1e-8,
+                    <T as Scalar>::abs_sq(expected - actual).sqrt() < 1e-8,
                     "SVD compression error at ({i},{j},{k})"
                 );
             }
