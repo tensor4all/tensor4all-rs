@@ -273,11 +273,11 @@ where
     };
 
     let mut rank = 0;
-    for i in 0..min_dim {
+    for sv_raw in &s_data[..min_dim] {
         if rank >= max_bond_dim {
             break;
         }
-        let sv = T::sv_to_f64(s_data[i]);
+        let sv = T::sv_to_f64(*sv_raw);
         if sv < tolerance * s_max {
             break;
         }
