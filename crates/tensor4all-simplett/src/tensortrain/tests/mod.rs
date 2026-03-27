@@ -542,12 +542,42 @@ where
         let mut t1 = tensor3_zeros::<T>(2, 4, 2);
         let mut t2 = tensor3_zeros::<T>(2, 4, 1);
         for s in 0..4 {
-            t0.set3(0, s, 0, <T as Scalar>::from_f64((1 + s) as f64));
-            t0.set3(0, s, 1, <T as Scalar>::from_f64((2 + s) as f64));
-            t1.set3(0, s, 0, <T as Scalar>::from_f64((1 + s) as f64));
-            t1.set3(1, s, 1, <T as Scalar>::from_f64((3 + s) as f64));
-            t2.set3(0, s, 0, <T as Scalar>::from_f64((1 + s) as f64));
-            t2.set3(1, s, 0, <T as Scalar>::from_f64((4 + s) as f64));
+            t0.set3(
+                0,
+                s,
+                0,
+                <T as tensor4all_tcicore::Scalar>::from_f64((1 + s) as f64),
+            );
+            t0.set3(
+                0,
+                s,
+                1,
+                <T as tensor4all_tcicore::Scalar>::from_f64((2 + s) as f64),
+            );
+            t1.set3(
+                0,
+                s,
+                0,
+                <T as tensor4all_tcicore::Scalar>::from_f64((1 + s) as f64),
+            );
+            t1.set3(
+                1,
+                s,
+                1,
+                <T as tensor4all_tcicore::Scalar>::from_f64((3 + s) as f64),
+            );
+            t2.set3(
+                0,
+                s,
+                0,
+                <T as tensor4all_tcicore::Scalar>::from_f64((1 + s) as f64),
+            );
+            t2.set3(
+                1,
+                s,
+                0,
+                <T as tensor4all_tcicore::Scalar>::from_f64((4 + s) as f64),
+            );
         }
         TensorTrain::new(vec![t0, t1, t2]).unwrap()
     };
@@ -567,7 +597,7 @@ where
 
     let svd_sum = tt_svd.sum();
     assert!(
-        <T as Scalar>::abs_sq(orig_sum - svd_sum).sqrt() < 1e-8,
+        <T as tensor4all_tcicore::Scalar>::abs_sq(orig_sum - svd_sum).sqrt() < 1e-8,
         "SVD compression changed sum: orig={orig_sum:?}, svd={svd_sum:?}"
     );
 
@@ -578,7 +608,7 @@ where
                 let expected = tt_orig.evaluate(&[i, j, k]).unwrap();
                 let actual = tt_svd.evaluate(&[i, j, k]).unwrap();
                 assert!(
-                    <T as Scalar>::abs_sq(expected - actual).sqrt() < 1e-8,
+                    <T as tensor4all_tcicore::Scalar>::abs_sq(expected - actual).sqrt() < 1e-8,
                     "SVD compression error at ({i},{j},{k})"
                 );
             }
