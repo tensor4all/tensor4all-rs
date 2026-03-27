@@ -911,6 +911,14 @@ where
     // 1. Contract to full tensor using existing contract_naive
     let contracted_tensor = tn_a.contract_naive(tn_b)?;
 
+    // Handle rank-0 (scalar) result: wrap directly in a single-node TreeTN
+    if contracted_tensor.external_indices().is_empty() {
+        let mut tn = TreeTN::<T, V>::new();
+        tn.add_tensor(center.clone(), contracted_tensor)?;
+        tn.set_canonical_region([center.clone()])?;
+        return Ok(tn);
+    }
+
     // 2. Build topology from tn_a's structure and decompose
     use super::decompose::factorize_tensor_to_treetn_with;
 

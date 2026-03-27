@@ -244,3 +244,30 @@ fn test_find_common_indices_no_common() {
     let common = find_common_indices(&t_a, &t_b);
     assert_eq!(common.len(), 0);
 }
+
+/// Regression test for #352: naive contraction fails when result is rank 0 (scalar).
+#[test]
+fn test_naive_contraction_scalar_result() {
+    // Two single-site TreeTNs that share an index → contraction produces a scalar
+    let s = DynIndex::new_dyn(3);
+
+    let t_a = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let t_b = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 1.0, 1.0]).unwrap();
+
+    let tn_a =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+
+    // Naive contraction: inner product = 1+2+3 = 6
+    let result = contract_naive_to_treetn(&tn_a, &tn_b, &"A".to_string(), None, None).unwrap();
+
+    assert_eq!(result.node_count(), 1);
+    let dense = result.contract_to_tensor().unwrap();
+    let val = dense.sum().real();
+    assert!(
+        (val - 6.0).abs() < 1e-10,
+        "scalar contraction expected 6.0, got {}",
+        val
+    );
+}

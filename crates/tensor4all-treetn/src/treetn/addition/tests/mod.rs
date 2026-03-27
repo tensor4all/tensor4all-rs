@@ -131,3 +131,28 @@ fn test_add_topology_mismatch() {
     let result = tn_a.add(&tn_b);
     assert!(result.is_err());
 }
+
+/// Regression test for #353: add() failed for single-site TTs (no bond indices).
+#[test]
+fn test_add_single_site() {
+    let s = DynIndex::new_dyn(3);
+
+    let t_a = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    let t_b = TensorDynLen::from_dense(vec![s.clone()], vec![10.0, 20.0, 30.0]).unwrap();
+
+    let tn_a =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let tn_b =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
+
+    let result = tn_a.add(&tn_b).unwrap();
+    assert_eq!(result.node_count(), 1);
+
+    let dense = result.contract_to_tensor().unwrap();
+    let expected = TensorDynLen::from_dense(vec![s.clone()], vec![11.0, 22.0, 33.0]).unwrap();
+    assert!(
+        dense.isapprox(&expected, 1e-10, 0.0),
+        "single-site add failed: maxabs diff = {}",
+        (&dense - &expected).maxabs()
+    );
+}
