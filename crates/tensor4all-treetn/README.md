@@ -27,8 +27,8 @@ let a_site = Index::<DynId>::new_dyn(2);
 let b_site = Index::<DynId>::new_dyn(2);
 
 let mut rng = rng();
-let a = TensorDynLen::random_f64(&mut rng, vec![a_site.clone(), bond.clone()]);
-let b = TensorDynLen::random_f64(&mut rng, vec![bond.clone(), b_site.clone()]);
+let a = TensorDynLen::random::<f64, _>(&mut rng, vec![a_site.clone(), bond.clone()]);
+let b = TensorDynLen::random::<f64, _>(&mut rng, vec![bond.clone(), b_site.clone()]);
 
 let mut ttn = TreeTN::<TensorDynLen, String>::new();
 let node_a = ttn.add_tensor("A".to_string(), a)?;
