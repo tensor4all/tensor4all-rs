@@ -3,16 +3,22 @@
 //! This module keeps tensor4all's storage/materialization boundary separate
 //! from the canonical compute object: [`tenferro::Tensor`].
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
-use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use num_complex::Complex64;
 use tenferro::{set_default_runtime, snapshot, RuntimeContext, Tensor as NativeTensor};
-use tenferro_algebra::{Conjugate, Scalar as TfScalar};
+use tenferro_algebra::{Conjugate, Scalar as TfScalar, Standard};
 use tenferro_device::LogicalMemorySpace;
-use tenferro_prims::CpuContext;
+use tenferro_einsum::{
+    einsum_binary_with_subscripts as tenferro_einsum_binary_with_subscripts,
+    einsum_with_subscripts as tenferro_einsum_with_subscripts, Subscripts,
+};
+use tenferro_linalg::{qr as tenferro_qr, svd as tenferro_svd};
+use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
 
 #[cfg(test)]
@@ -20,6 +26,8 @@ use crate::storage::StorageRepr;
 use crate::storage::{col_major_strides, NativePayload, Storage};
 use crate::tensor_element::TensorElement;
 use crate::AnyScalar;
+#[cfg(test)]
+use std::cell::Cell;
 
 /// Runtime kind for tenferro execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,9 +40,92 @@ pub enum RuntimeKind {
     Rocm,
 }
 
-fn runtime_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+struct CachedCpuContext {
+    cpu_threads: usize,
+    ctx: CpuContext,
+}
+
+struct CachedCpuContextLease {
+    cached: Option<CachedCpuContext>,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+enum NativeEinsumPath {
+    TypedBinaryEinsum,
+    TypedNaryEinsum,
+    FrontendFallback,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct NativeOperandSignature {
+    dims: Vec<usize>,
+    ids: Vec<u32>,
+    is_dense: bool,
+    is_diag: bool,
+    is_primal: bool,
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct NativeEinsumSignature {
+    path: NativeEinsumPath,
+    operands: Vec<NativeOperandSignature>,
+    output_ids: Vec<u32>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct NativeEinsumProfileEntry {
+    calls: usize,
+    total_time: Duration,
+}
+
+thread_local! {
+    static CACHED_CPU_CONTEXT: RefCell<Option<CachedCpuContext>> = const { RefCell::new(None) };
+    static NATIVE_EINSUM_PROFILE_STATE: RefCell<HashMap<NativeEinsumSignature, NativeEinsumProfileEntry>> =
+        RefCell::new(HashMap::new());
+}
+
+#[cfg(test)]
+thread_local! {
+    static DEFAULT_RUNTIME_INSTALLS: Cell<usize> = const { Cell::new(0) };
+    static CPU_CONTEXT_INSTALLS: Cell<usize> = const { Cell::new(0) };
+    static FORCE_NATIVE_EINSUM_PROFILE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+fn note_default_runtime_install() {
+    DEFAULT_RUNTIME_INSTALLS.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(not(test))]
+fn note_default_runtime_install() {}
+
+#[cfg(test)]
+fn note_cpu_context_install() {
+    CPU_CONTEXT_INSTALLS.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(not(test))]
+fn note_cpu_context_install() {}
+
+#[cfg(test)]
+pub(crate) fn reset_runtime_caches_for_tests() {
+    CACHED_CPU_CONTEXT.with(|slot| {
+        slot.borrow_mut().take();
+    });
+    NATIVE_EINSUM_PROFILE_STATE.with(|state| state.borrow_mut().clear());
+    DEFAULT_RUNTIME_INSTALLS.with(|count| count.set(0));
+    CPU_CONTEXT_INSTALLS.with(|count| count.set(0));
+    FORCE_NATIVE_EINSUM_PROFILE.with(|slot| slot.set(false));
+}
+
+#[cfg(test)]
+pub(crate) fn default_runtime_install_count_for_tests() -> usize {
+    DEFAULT_RUNTIME_INSTALLS.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(crate) fn cpu_context_install_count_for_tests() -> usize {
+    CPU_CONTEXT_INSTALLS.with(Cell::get)
 }
 
 fn parse_runtime_kind() -> RuntimeKind {
@@ -49,31 +140,127 @@ fn parse_runtime_kind() -> RuntimeKind {
     }
 }
 
-fn cpu_threads() -> usize {
-    let parsed = env::var("T4A_TENFERRO_CPU_THREADS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(1);
-    parsed.max(1)
+fn cpu_threads_from_env_value(value: Option<&str>) -> Result<usize> {
+    match value {
+        Some(raw) => {
+            let parsed = raw
+                .parse::<usize>()
+                .map_err(|e| anyhow!("T4A_TENFERRO_CPU_THREADS must be a positive integer: {e}"))?;
+            if parsed == 0 {
+                return Err(anyhow!(
+                    "T4A_TENFERRO_CPU_THREADS must be >= 1 when explicitly set"
+                ));
+            }
+            Ok(parsed)
+        }
+        None => Ok(CpuContext::default_num_threads()),
+    }
 }
 
-fn is_missing_default_runtime(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        cause
-            .to_string()
-            .contains("default runtime is not configured")
-    })
+fn cpu_threads() -> Result<usize> {
+    let raw = env::var("T4A_TENFERRO_CPU_THREADS").ok();
+    cpu_threads_from_env_value(raw.as_deref())
+}
+
+fn native_einsum_profile_enabled() -> bool {
+    #[cfg(test)]
+    if FORCE_NATIVE_EINSUM_PROFILE.with(Cell::get) {
+        return true;
+    }
+    env::var("T4A_PROFILE_NATIVE_EINSUM").is_ok()
+}
+
+#[cfg(test)]
+pub(crate) fn set_native_einsum_profile_enabled_for_tests(enabled: bool) {
+    FORCE_NATIVE_EINSUM_PROFILE.with(|slot| slot.set(enabled));
+}
+
+fn native_operand_signature(tensor: &NativeTensor, ids: &[u32]) -> NativeOperandSignature {
+    let is_primal = match tensor {
+        NativeTensor::F64(value) => value.mode() == tenferro::AdMode::Primal,
+        NativeTensor::C64(value) => value.mode() == tenferro::AdMode::Primal,
+        _ => false,
+    };
+    NativeOperandSignature {
+        dims: tensor.dims().to_vec(),
+        ids: ids.to_vec(),
+        is_dense: tensor.is_dense(),
+        is_diag: tensor.is_diag(),
+        is_primal,
+    }
+}
+
+fn record_native_einsum_profile(
+    path: NativeEinsumPath,
+    operands: &[(&NativeTensor, &[usize])],
+    input_ids_u32: &[Vec<u32>],
+    output_ids_u32: &[u32],
+    elapsed: Duration,
+) {
+    if !native_einsum_profile_enabled() {
+        return;
+    }
+    let signature = NativeEinsumSignature {
+        path,
+        operands: operands
+            .iter()
+            .zip(input_ids_u32.iter())
+            .map(|((tensor, _), ids)| native_operand_signature(tensor, ids))
+            .collect(),
+        output_ids: output_ids_u32.to_vec(),
+    };
+    NATIVE_EINSUM_PROFILE_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let entry = state.entry(signature).or_default();
+        entry.calls += 1;
+        entry.total_time += elapsed;
+    });
+}
+
+/// Reset the aggregated native einsum profile.
+pub fn reset_native_einsum_profile() {
+    NATIVE_EINSUM_PROFILE_STATE.with(|state| state.borrow_mut().clear());
+}
+
+/// Print and clear the aggregated native einsum profile.
+pub fn print_and_reset_native_einsum_profile() {
+    if !native_einsum_profile_enabled() {
+        return;
+    }
+    NATIVE_EINSUM_PROFILE_STATE.with(|state| {
+        let mut entries: Vec<_> = state
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        state.borrow_mut().clear();
+        entries.sort_by(|(_, lhs), (_, rhs)| rhs.total_time.cmp(&lhs.total_time));
+
+        eprintln!("=== native_einsum Profile ===");
+        for (idx, (signature, entry)) in entries.into_iter().take(20).enumerate() {
+            eprintln!(
+                "#{idx:02} path={:?} calls={} total={:.3}s per_call={:.3}us output_ids={:?}",
+                signature.path,
+                entry.calls,
+                entry.total_time.as_secs_f64(),
+                entry.total_time.as_secs_f64() * 1e6 / entry.calls as f64,
+                signature.output_ids,
+            );
+            for operand in signature.operands {
+                eprintln!(
+                    "     dims={:?} ids={:?} dense={} diag={} primal={}",
+                    operand.dims, operand.ids, operand.is_dense, operand.is_diag, operand.is_primal,
+                );
+            }
+        }
+    });
 }
 
 fn retry_with_default_runtime_if_needed<R>(
     op: &'static str,
-    mut f: impl FnMut() -> Result<R>,
+    f: impl FnOnce() -> Result<R>,
 ) -> Result<R> {
-    match f() {
-        Ok(value) => Ok(value),
-        Err(err) if is_missing_default_runtime(&err) => with_default_runtime(op, f),
-        Err(err) => Err(err),
-    }
+    with_default_runtime(op, f)
 }
 
 /// Run a typed tenferro op against the currently selected runtime.
@@ -82,10 +269,30 @@ pub fn with_tenferro_ctx<R>(
     f: impl FnOnce(&mut CpuContext) -> Result<R>,
 ) -> Result<R> {
     match parse_runtime_kind() {
-        RuntimeKind::Cpu => {
-            let mut ctx = CpuContext::new(cpu_threads());
-            f(&mut ctx)
-        }
+        RuntimeKind::Cpu => CACHED_CPU_CONTEXT.with(|slot| {
+            let cpu_threads = cpu_threads()?;
+            let mut slot = slot.borrow_mut();
+            let recreate = slot
+                .as_ref()
+                .is_none_or(|cached| cached.cpu_threads != cpu_threads);
+            let cached = if recreate {
+                slot.take();
+                note_cpu_context_install();
+                CachedCpuContext {
+                    cpu_threads,
+                    ctx: CpuContext::new(cpu_threads),
+                }
+            } else {
+                slot.take()
+                    .ok_or_else(|| anyhow!("{op}: missing cached CPU context"))?
+            };
+            drop(slot);
+
+            let mut lease = CachedCpuContextLease {
+                cached: Some(cached),
+            };
+            f(lease.ctx_mut())
+        }),
         RuntimeKind::Cuda => Err(anyhow!(
             "{op}: CUDA runtime is not yet wired in tensor4all tenferro backend"
         )),
@@ -99,12 +306,11 @@ pub(crate) fn with_default_runtime<R>(
     op: &'static str,
     f: impl FnOnce() -> Result<R>,
 ) -> Result<R> {
-    let _guard = runtime_lock()
-        .lock()
-        .map_err(|_| anyhow!("{op}: native runtime lock poisoned"))?;
     match parse_runtime_kind() {
         RuntimeKind::Cpu => {
-            let _runtime = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(cpu_threads())));
+            let cpu_threads = cpu_threads()?;
+            note_default_runtime_install();
+            let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(cpu_threads)));
             f()
         }
         RuntimeKind::Cuda => Err(anyhow!(
@@ -113,6 +319,26 @@ pub(crate) fn with_default_runtime<R>(
         RuntimeKind::Rocm => Err(anyhow!(
             "{op}: ROCm runtime is not yet wired in tensor4all tenferro backend"
         )),
+    }
+}
+
+impl CachedCpuContextLease {
+    fn ctx_mut(&mut self) -> &mut CpuContext {
+        &mut self
+            .cached
+            .as_mut()
+            .expect("cached CPU context lease must contain a context")
+            .ctx
+    }
+}
+
+impl Drop for CachedCpuContextLease {
+    fn drop(&mut self) {
+        if let Some(cached) = self.cached.take() {
+            CACHED_CPU_CONTEXT.with(|slot| {
+                *slot.borrow_mut() = Some(cached);
+            });
+        }
     }
 }
 
@@ -293,6 +519,15 @@ fn labels_to_notation(inputs: &[Vec<usize>], output: &[usize]) -> Result<String>
     Ok(format!("{}->{}", input_terms?.join(","), output_term?))
 }
 
+fn labels_to_u32(labels: &[usize], op: &'static str) -> Result<Vec<u32>> {
+    labels
+        .iter()
+        .map(|&label| {
+            u32::try_from(label).map_err(|_| anyhow!("{op}: label {label} exceeds u32 range"))
+        })
+        .collect()
+}
+
 fn build_binary_einsum_ids(
     rank_a: usize,
     axes_a: &[usize],
@@ -440,6 +675,34 @@ pub fn reshape_col_major_native_tensor(
 
 /// Compute native QR while preserving AD metadata when supported by upstream.
 pub fn qr_native_tensor(tensor: &NativeTensor) -> Result<(NativeTensor, NativeTensor)> {
+    match tensor {
+        NativeTensor::F64(value)
+            if value.mode() == tenferro::AdMode::Primal && value.is_dense() =>
+        {
+            return with_tenferro_ctx("native_qr", |ctx| {
+                let out = tenferro_qr(ctx, value.primal())
+                    .map_err(|e| anyhow!("native qr failed: {e}"))?;
+                Ok((
+                    NativeTensor::from_tensor(out.q),
+                    NativeTensor::from_tensor(out.r),
+                ))
+            });
+        }
+        NativeTensor::C64(value)
+            if value.mode() == tenferro::AdMode::Primal && value.is_dense() =>
+        {
+            return with_tenferro_ctx("native_qr", |ctx| {
+                let out = tenferro_qr(ctx, value.primal())
+                    .map_err(|e| anyhow!("native qr failed: {e}"))?;
+                Ok((
+                    NativeTensor::from_tensor(out.q),
+                    NativeTensor::from_tensor(out.r),
+                ))
+            });
+        }
+        _ => {}
+    }
+
     with_default_runtime("native_qr", || {
         let out = tensor.qr().map_err(|e| anyhow!("native qr failed: {e}"))?;
         Ok((out.q, out.r))
@@ -450,6 +713,36 @@ pub fn qr_native_tensor(tensor: &NativeTensor) -> Result<(NativeTensor, NativeTe
 pub fn svd_native_tensor(
     tensor: &NativeTensor,
 ) -> Result<(NativeTensor, NativeTensor, NativeTensor)> {
+    match tensor {
+        NativeTensor::F64(value)
+            if value.mode() == tenferro::AdMode::Primal && value.is_dense() =>
+        {
+            return with_tenferro_ctx("native_svd", |ctx| {
+                let out = tenferro_svd(ctx, value.primal(), None)
+                    .map_err(|e| anyhow!("native svd failed: {e}"))?;
+                Ok((
+                    NativeTensor::from_tensor(out.u),
+                    NativeTensor::from_tensor(out.s),
+                    NativeTensor::from_tensor(out.vt),
+                ))
+            });
+        }
+        NativeTensor::C64(value)
+            if value.mode() == tenferro::AdMode::Primal && value.is_dense() =>
+        {
+            return with_tenferro_ctx("native_svd", |ctx| {
+                let out = tenferro_svd(ctx, value.primal(), None)
+                    .map_err(|e| anyhow!("native svd failed: {e}"))?;
+                Ok((
+                    NativeTensor::from_tensor(out.u),
+                    NativeTensor::from_tensor(out.s),
+                    NativeTensor::from_tensor(out.vt),
+                ))
+            });
+        }
+        _ => {}
+    }
+
     with_default_runtime("native_svd", || {
         let out = tensor
             .svd()
@@ -499,13 +792,142 @@ pub fn einsum_native_tensors(
         return Err(anyhow!("native einsum requires at least one operand"));
     }
 
+    let input_ids_u32: Vec<Vec<u32>> = operands
+        .iter()
+        .map(|(_, ids)| labels_to_u32(ids, "native_einsum"))
+        .collect::<Result<_>>()?;
+    let output_ids_u32 = labels_to_u32(output_ids, "native_einsum")?;
+    let input_refs_u32: Vec<&[u32]> = input_ids_u32.iter().map(Vec::as_slice).collect();
+    let subscripts = Subscripts::new(&input_refs_u32, &output_ids_u32);
+    let profile_started = native_einsum_profile_enabled().then(Instant::now);
+
+    match operands[0].0 {
+        NativeTensor::F64(first)
+            if first.mode() == tenferro::AdMode::Primal && first.is_dense() =>
+        {
+            let mut typed_operands = Vec::with_capacity(operands.len());
+            for (tensor, _) in operands {
+                match tensor {
+                    NativeTensor::F64(value)
+                        if value.mode() == tenferro::AdMode::Primal && value.is_dense() =>
+                    {
+                        typed_operands.push(value.primal());
+                    }
+                    _ => {
+                        typed_operands.clear();
+                        break;
+                    }
+                }
+            }
+            if !typed_operands.is_empty() {
+                return with_tenferro_ctx("native_einsum", |ctx| {
+                    let out = if typed_operands.len() == 2 {
+                        tenferro_einsum_binary_with_subscripts::<Standard<f64>, CpuBackend>(
+                            ctx,
+                            &subscripts,
+                            typed_operands[0],
+                            typed_operands[1],
+                            None,
+                        )
+                    } else {
+                        tenferro_einsum_with_subscripts::<Standard<f64>, CpuBackend>(
+                            ctx,
+                            &subscripts,
+                            &typed_operands,
+                            None,
+                        )
+                    }
+                    .map_err(|e| anyhow!("native einsum failed: {e}"))?;
+                    if let Some(started) = profile_started.as_ref() {
+                        record_native_einsum_profile(
+                            if typed_operands.len() == 2 {
+                                NativeEinsumPath::TypedBinaryEinsum
+                            } else {
+                                NativeEinsumPath::TypedNaryEinsum
+                            },
+                            operands,
+                            &input_ids_u32,
+                            &output_ids_u32,
+                            started.elapsed(),
+                        );
+                    }
+                    Ok(NativeTensor::from_tensor(out))
+                });
+            }
+        }
+        NativeTensor::C64(first)
+            if first.mode() == tenferro::AdMode::Primal && first.is_dense() =>
+        {
+            let mut typed_operands = Vec::with_capacity(operands.len());
+            for (tensor, _) in operands {
+                match tensor {
+                    NativeTensor::C64(value)
+                        if value.mode() == tenferro::AdMode::Primal && value.is_dense() =>
+                    {
+                        typed_operands.push(value.primal());
+                    }
+                    _ => {
+                        typed_operands.clear();
+                        break;
+                    }
+                }
+            }
+            if !typed_operands.is_empty() {
+                return with_tenferro_ctx("native_einsum", |ctx| {
+                    let out = if typed_operands.len() == 2 {
+                        tenferro_einsum_binary_with_subscripts::<Standard<Complex64>, CpuBackend>(
+                            ctx,
+                            &subscripts,
+                            typed_operands[0],
+                            typed_operands[1],
+                            None,
+                        )
+                    } else {
+                        tenferro_einsum_with_subscripts::<Standard<Complex64>, CpuBackend>(
+                            ctx,
+                            &subscripts,
+                            &typed_operands,
+                            None,
+                        )
+                    }
+                    .map_err(|e| anyhow!("native einsum failed: {e}"))?;
+                    if let Some(started) = profile_started.as_ref() {
+                        record_native_einsum_profile(
+                            if typed_operands.len() == 2 {
+                                NativeEinsumPath::TypedBinaryEinsum
+                            } else {
+                                NativeEinsumPath::TypedNaryEinsum
+                            },
+                            operands,
+                            &input_ids_u32,
+                            &output_ids_u32,
+                            started.elapsed(),
+                        );
+                    }
+                    Ok(NativeTensor::from_tensor(out))
+                });
+            }
+        }
+        _ => {}
+    }
+
     let input_ids: Vec<Vec<usize>> = operands.iter().map(|(_, ids)| ids.to_vec()).collect();
     let final_operands: Vec<&NativeTensor> = operands.iter().map(|(tensor, _)| *tensor).collect();
     let notation = labels_to_notation(&input_ids, output_ids)?;
 
     with_default_runtime("native_einsum", || {
-        NativeTensor::einsum(&notation, &final_operands)
-            .map_err(|e| anyhow!("native einsum failed: {e}"))
+        let out = NativeTensor::einsum(&notation, &final_operands)
+            .map_err(|e| anyhow!("native einsum failed: {e}"))?;
+        if let Some(started) = profile_started.as_ref() {
+            record_native_einsum_profile(
+                NativeEinsumPath::FrontendFallback,
+                operands,
+                &input_ids_u32,
+                &output_ids_u32,
+                started.elapsed(),
+            );
+        }
+        Ok(out)
     })
 }
 

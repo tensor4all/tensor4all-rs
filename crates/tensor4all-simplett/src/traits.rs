@@ -1,17 +1,13 @@
 //! Abstract traits for tensor train objects
 
-use crate::einsum_helper::{
-    einsum_tensors, row_vector_times_matrix, tensor_to_row_major_vec, EinsumScalar,
-};
 use crate::error::Result;
 use crate::types::{LocalIndex, Tensor3, Tensor3Ops};
 use tenferro_algebra::Scalar as TfScalar;
 
 /// Common scalar bound for simplett tensors.
-#[allow(private_bounds)]
-pub trait TTScalar: tensor4all_core::CommonScalar + TfScalar + EinsumScalar {}
+pub trait TTScalar: tensor4all_core::CommonScalar + TfScalar {}
 
-impl<T> TTScalar for T where T: tensor4all_core::CommonScalar + TfScalar + EinsumScalar {}
+impl<T> TTScalar for T where T: tensor4all_core::CommonScalar + TfScalar {}
 
 /// Abstract trait for tensor train objects
 ///
@@ -111,8 +107,19 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
             }
 
             let slice = tensor.slice_site(idx);
-            current =
-                row_vector_times_matrix(&current, &slice, tensor.left_dim(), tensor.right_dim());
+            let left_dim = tensor.left_dim();
+            let right_dim = tensor.right_dim();
+
+            // Contract: current (of size left_dim) with slice (left_dim x right_dim)
+            let mut next = vec![T::zero(); right_dim];
+            for r in 0..right_dim {
+                let mut sum = T::zero();
+                for l in 0..left_dim {
+                    sum = sum + current[l] * slice[l * right_dim + r];
+                }
+                next[r] = sum;
+            }
+            current = next;
         }
 
         // Should have a single element
@@ -137,15 +144,40 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
 
         // Start with sum over first tensor
         let first = self.site_tensor(0);
-        let mut current = tensor_to_row_major_vec(&einsum_tensors("lsr->r", &[first.as_inner()]));
+        let mut current = vec![T::zero(); first.right_dim()];
+        for s in 0..first.site_dim() {
+            for r in 0..first.right_dim() {
+                current[r] = current[r] + *first.get3(0, s, r);
+            }
+        }
 
         // Contract with sums of remaining tensors
         for site in 1..self.len() {
             let tensor = self.site_tensor(site);
-            let site_sum =
-                tensor_to_row_major_vec(&einsum_tensors("lsr->lr", &[tensor.as_inner()]));
-            current =
-                row_vector_times_matrix(&current, &site_sum, tensor.left_dim(), tensor.right_dim());
+            let left_dim = tensor.left_dim();
+            let right_dim = tensor.right_dim();
+
+            // Sum over site index
+            let mut site_sum = vec![T::zero(); left_dim * right_dim];
+            for l in 0..left_dim {
+                for s in 0..tensor.site_dim() {
+                    for r in 0..right_dim {
+                        site_sum[l * right_dim + r] =
+                            site_sum[l * right_dim + r] + *tensor.get3(l, s, r);
+                    }
+                }
+            }
+
+            // Contract with current
+            let mut next = vec![T::zero(); right_dim];
+            for r in 0..right_dim {
+                let mut sum = T::zero();
+                for l in 0..left_dim {
+                    sum = sum + current[l] * site_sum[l * right_dim + r];
+                }
+                next[r] = sum;
+            }
+            current = next;
         }
 
         current[0]

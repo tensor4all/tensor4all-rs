@@ -133,20 +133,67 @@ fn test_compress_with_max_bond_dim_c64() {
     test_compress_with_max_bond_dim_generic::<Complex64>();
 }
 
-#[test]
-fn test_compress_svd_returns_error() {
-    let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+fn test_compress_svd_constant_generic<T: TTScalar + Scalar + Default>() {
+    let tt = TensorTrain::<T>::constant(&[2, 3, 2], T::from_f64(1.0));
+    let original_sum = tt.sum();
+
     let mut tt_compressed = tt.clone();
     let options = CompressionOptions {
         method: CompressionMethod::SVD,
         ..Default::default()
     };
-    let result = tt_compressed.compress(&options);
-    assert!(result.is_err());
-    let err_msg = format!("{}", result.unwrap_err());
-    assert!(
-        err_msg.contains("SVD compression is not yet implemented"),
-        "Expected error about SVD not implemented, got: {}",
-        err_msg
-    );
+    tt_compressed.compress(&options).unwrap();
+
+    let compressed_sum = tt_compressed.sum();
+    assert!((original_sum - compressed_sum).abs_sq().sqrt() < 1e-10);
+}
+
+fn test_compress_svd_with_truncation_generic<T: TTScalar + Scalar + Default>() {
+    // Create a rank-3 TT and compress with SVD to max_bond_dim=2
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3);
+    for s in 0..2 {
+        for r in 0..3 {
+            t0.set3(0, s, r, T::from_f64((s + r + 1) as f64));
+        }
+    }
+    let mut t1: Tensor3<T> = tensor3_zeros(3, 2, 1);
+    for l in 0..3 {
+        for s in 0..2 {
+            t1.set3(l, s, 0, T::from_f64((l + s + 1) as f64));
+        }
+    }
+    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    let original_norm = tt.norm();
+
+    let options = CompressionOptions {
+        method: CompressionMethod::SVD,
+        max_bond_dim: 2,
+        tolerance: 1e-12,
+        ..Default::default()
+    };
+    let mut tt_compressed = tt.clone();
+    tt_compressed.compress(&options).unwrap();
+
+    let compressed_norm = tt_compressed.norm();
+    assert!((original_norm - compressed_norm).abs() < original_norm * 0.1);
+}
+
+#[test]
+fn test_compress_svd_constant_f64() {
+    test_compress_svd_constant_generic::<f64>();
+}
+
+#[test]
+fn test_compress_svd_constant_c64() {
+    test_compress_svd_constant_generic::<Complex64>();
+}
+
+#[test]
+fn test_compress_svd_with_truncation_f64() {
+    test_compress_svd_with_truncation_generic::<f64>();
+}
+
+#[test]
+fn test_compress_svd_with_truncation_c64() {
+    test_compress_svd_with_truncation_generic::<Complex64>();
 }

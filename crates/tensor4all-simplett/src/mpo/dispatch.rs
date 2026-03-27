@@ -22,6 +22,7 @@ use super::contraction::ContractionOptions;
 use super::error::Result;
 use super::factorize::SVDScalar;
 use super::mpo::MPO;
+use crate::einsum_helper::EinsumScalar;
 use tenferro_linalg::LinalgScalar;
 use tenferro_tensor::KeepCountScalar;
 
@@ -56,7 +57,7 @@ use tenferro_tensor::KeepCountScalar;
 /// // Use variational fitting for controlled bond dimension
 /// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::Fit, &options)?;
 /// ```
-pub fn contract<T: SVDScalar>(
+pub fn contract<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,
     algorithm: ContractionAlgorithm,

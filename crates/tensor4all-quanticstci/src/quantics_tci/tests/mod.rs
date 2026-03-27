@@ -415,3 +415,38 @@ fn test_discrete_unequal_dimensions_error() {
     let result = quanticscrossinterpolate_discrete(&sizes, f, None, QtciOptions::default());
     assert!(result.is_err());
 }
+
+/// Port of Julia test_tciinterface.jl: "quanticscrossinterpolate, 1d overload"
+///
+/// Tests that 1D functions can be interpolated via quanticscrossinterpolate_from_arrays.
+#[test]
+fn test_from_arrays_1d() {
+    // f(x) = 0.1*x^2 - pi*x + 2
+    let f_scalar = |x: f64| 0.1 * x * x - std::f64::consts::PI * x + 2.0;
+    let f = move |coords: &[f64]| f_scalar(coords[0]);
+
+    // 128 points from -3 to 2
+    let n = 128;
+    let xvals: Vec<f64> = (0..n)
+        .map(|i| -3.0 + 5.0 * i as f64 / (n - 1) as f64)
+        .collect();
+
+    let options = QtciOptions::default().with_tolerance(1e-8);
+
+    let xvals_ref = xvals.clone();
+    let (qtci, _ranks, errors) =
+        quanticscrossinterpolate_from_arrays(&[xvals_ref], f, None, options).unwrap();
+
+    assert!(*errors.last().unwrap() < 1e-8);
+
+    // Verify at grid points
+    for (i, &x) in xvals.iter().enumerate() {
+        let grid_idx = (i as i64) + 1; // 1-indexed
+        let expected = f_scalar(x);
+        let actual = qtci.evaluate(&[grid_idx]).unwrap();
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "1D QTCI error at x={x}: expected={expected}, got={actual}"
+        );
+    }
+}

@@ -5,7 +5,9 @@
 
 use super::error::{MPOError, Result};
 use super::types::{tensor4_zeros, LocalIndex, Tensor4, Tensor4Ops};
-use crate::einsum_helper::{einsum_tensors, row_vector_times_matrix, tensor_to_row_major_vec};
+use crate::einsum_helper::{
+    einsum_tensors, row_vector_times_matrix, tensor_to_row_major_vec, EinsumScalar,
+};
 use crate::traits::TTScalar;
 
 /// Matrix Product Operator representation
@@ -226,7 +228,10 @@ impl<T: TTScalar> MPO<T> {
     /// indices should have length 2*L where L is the number of sites
     /// alternating between site_dim_1 and site_dim_2 indices:
     /// [i1, j1, i2, j2, ..., iL, jL]
-    pub fn evaluate(&self, indices: &[LocalIndex]) -> Result<T> {
+    pub fn evaluate(&self, indices: &[LocalIndex]) -> Result<T>
+    where
+        T: EinsumScalar,
+    {
         if indices.len() != 2 * self.len() {
             return Err(MPOError::InvalidOperation {
                 message: format!(
@@ -290,7 +295,10 @@ impl<T: TTScalar> MPO<T> {
 
     /// Sum over all indices of the MPO
     #[allow(clippy::needless_range_loop)]
-    pub fn sum(&self) -> T {
+    pub fn sum(&self) -> T
+    where
+        T: EinsumScalar,
+    {
         if self.is_empty() {
             return T::zero();
         }
@@ -342,7 +350,10 @@ impl<T: TTScalar> MPO<T> {
     /// along with the shape (alternating site_dim_1, site_dim_2 dimensions).
     ///
     /// Warning: This can be very large for high-dimensional operators!
-    pub fn fulltensor(&self) -> (Vec<T>, Vec<usize>) {
+    pub fn fulltensor(&self) -> (Vec<T>, Vec<usize>)
+    where
+        T: EinsumScalar,
+    {
         if self.is_empty() {
             return (Vec::new(), Vec::new());
         }
