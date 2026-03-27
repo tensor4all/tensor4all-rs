@@ -321,9 +321,7 @@ fn cpu_threads_uses_tenferro_default_when_env_is_unset() {
 
 #[test]
 fn cpu_threads_rejects_zero_override() {
-    let err = cpu_threads_from_env_value(Some("0"))
-        .err()
-        .expect("zero override must be rejected");
+    let err = cpu_threads_from_env_value(Some("0")).expect_err("zero override must be rejected");
     assert!(err.to_string().contains("T4A_TENFERRO_CPU_THREADS"));
 }
 
