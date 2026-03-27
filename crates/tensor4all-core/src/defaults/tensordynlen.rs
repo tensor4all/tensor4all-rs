@@ -262,6 +262,26 @@ impl TensorDynLen {
             .map_err(|e| anyhow::anyhow!("TensorDynLen::zero_grad failed: {e}"))
     }
 
+    /// Runs reverse-mode AD backward pass from this tensor.
+    ///
+    /// Accumulates gradients on all input tensors that have `requires_grad == true`.
+    ///
+    /// # Arguments
+    /// * `grad_output` - Optional gradient seed. Pass `None` for default (ones).
+    /// * `inputs` - Leaf tensors to accumulate gradients on. After this call,
+    ///   each input's `.grad()` will contain the accumulated gradient.
+    pub fn backward(&self, grad_output: Option<&Self>, inputs: &[&Self]) -> Result<()> {
+        let grad_native = grad_output.map(|g| &g.native);
+        let input_natives: Vec<&NativeTensor> = inputs.iter().map(|t| &t.native).collect();
+        self.native
+            .backward(
+                grad_native,
+                &input_natives,
+                tenferro::BackwardOptions::default(),
+            )
+            .map_err(|e| anyhow::anyhow!("TensorDynLen::backward failed: {e}"))
+    }
+
     /// Check if this tensor is already in canonical form.
     pub fn is_simple(&self) -> bool {
         true
