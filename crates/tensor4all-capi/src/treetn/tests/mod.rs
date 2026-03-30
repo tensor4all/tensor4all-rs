@@ -730,9 +730,9 @@ fn test_treetn_all_site_index_ids_and_evaluate() {
     let points = [[0usize, 0, 0], [1, 1, 0], [0, 2, 1]];
     let mut flat_values = vec![0usize; n_indices * 3];
     for (p, point) in points.iter().enumerate() {
-        for v in 0..3usize {
+        for (v, &val) in point.iter().enumerate() {
             let pos = vertex_names.iter().position(|&name| name == v).unwrap();
-            flat_values[pos + n_indices * p] = point[v];
+            flat_values[pos + n_indices * p] = val;
         }
     }
 

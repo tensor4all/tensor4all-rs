@@ -47,8 +47,8 @@ fn batch_eval_from_point<T: Clone>(
         let mut values = Vec::with_capacity(batch.n_points());
         let mut point = vec![0usize; batch.n_sites()];
         for p in 0..batch.n_points() {
-            for s in 0..batch.n_sites() {
-                point[s] = batch.get(s, p).unwrap();
+            for (s, slot) in point.iter_mut().enumerate() {
+                *slot = batch.get(s, p).unwrap();
             }
             values.push(point_eval(&point));
         }
