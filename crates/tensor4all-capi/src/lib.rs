@@ -39,6 +39,7 @@ mod quanticstransform;
 mod simplett;
 mod tensor;
 mod tensorci;
+mod treetci;
 mod treetn;
 mod types;
 
@@ -52,6 +53,7 @@ pub use quanticstransform::*;
 pub use simplett::*;
 pub use tensor::*;
 pub use tensorci::*;
+pub use treetci::*;
 pub use treetn::*;
 pub use types::*;
 

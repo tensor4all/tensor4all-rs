@@ -656,5 +656,96 @@ impl From<tensor4all_quanticstransform::BoundaryCondition> for t4a_boundary_cond
     }
 }
 
+// ============================================================================
+// TreeTCI types
+// ============================================================================
+
+use tensor4all_treetci::{SimpleTreeTci, TreeTciGraph};
+
+/// Opaque tree graph type for TreeTCI
+#[repr(C)]
+pub struct t4a_treetci_graph {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_treetci_graph {
+    pub(crate) fn new(inner: TreeTciGraph) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(inner)) as *const c_void,
+        }
+    }
+
+    pub(crate) fn inner(&self) -> &TreeTciGraph {
+        unsafe { &*(self._private as *const TreeTciGraph) }
+    }
+}
+
+impl Clone for t4a_treetci_graph {
+    fn clone(&self) -> Self {
+        Self::new(self.inner().clone())
+    }
+}
+
+impl Drop for t4a_treetci_graph {
+    fn drop(&mut self) {
+        if !self._private.is_null() {
+            unsafe {
+                let _ = Box::from_raw(self._private as *mut TreeTciGraph);
+            }
+        }
+    }
+}
+
+unsafe impl Send for t4a_treetci_graph {}
+unsafe impl Sync for t4a_treetci_graph {}
+
+/// Opaque TreeTCI state (f64)
+#[repr(C)]
+pub struct t4a_treetci_f64 {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_treetci_f64 {
+    pub(crate) fn new(inner: SimpleTreeTci<f64>) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(inner)) as *const c_void,
+        }
+    }
+
+    pub(crate) fn inner(&self) -> &SimpleTreeTci<f64> {
+        unsafe { &*(self._private as *const SimpleTreeTci<f64>) }
+    }
+
+    pub(crate) fn inner_mut(&mut self) -> &mut SimpleTreeTci<f64> {
+        unsafe { &mut *(self._private as *mut SimpleTreeTci<f64>) }
+    }
+}
+
+impl Drop for t4a_treetci_f64 {
+    fn drop(&mut self) {
+        if !self._private.is_null() {
+            unsafe {
+                let _ = Box::from_raw(self._private as *mut SimpleTreeTci<f64>);
+            }
+        }
+    }
+}
+
+// No Clone — same as t4a_tci2_f64
+unsafe impl Send for t4a_treetci_f64 {}
+unsafe impl Sync for t4a_treetci_f64 {}
+
+/// Proposer kind selection for TreeTCI
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum t4a_treetci_proposer_kind {
+    /// DefaultProposer: neighbor-product (matches TreeTCI.jl)
+    Default = 0,
+    /// SimpleProposer: random with seed
+    Simple = 1,
+    /// TruncatedDefaultProposer: truncated random subset of default candidates
+    TruncatedDefault = 2,
+}
+
 #[cfg(test)]
 mod tests;
