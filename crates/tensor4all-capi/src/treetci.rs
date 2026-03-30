@@ -72,10 +72,7 @@ fn make_evaluate_closure(
             user_data,
         );
         if status != 0 {
-            anyhow::bail!(
-                "TreeTCI eval callback returned error status {}",
-                status
-            );
+            anyhow::bail!("TreeTCI eval callback returned error status {}", status);
         }
         Ok(results)
     }
@@ -96,10 +93,7 @@ fn make_evaluate_closure_c64(
             user_data,
         );
         if status != 0 {
-            anyhow::bail!(
-                "TreeTCI eval callback returned error status {}",
-                status
-            );
+            anyhow::bail!("TreeTCI eval callback returned error status {}", status);
         }
         Ok((0..batch.n_points())
             .map(|idx| Complex64::new(interleaved[2 * idx], interleaved[2 * idx + 1]))

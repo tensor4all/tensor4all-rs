@@ -56,8 +56,7 @@ where
         .iter()
         .flat_map(|&row| left_candidates[row].iter().copied())
         .collect();
-    let left_arr =
-        ColMajorArray::new(left_data, vec![n_left_sites, selection.row_indices.len()])?;
+    let left_arr = ColMajorArray::new(left_data, vec![n_left_sites, selection.row_indices.len()])?;
     state.ijset.insert(left_key.clone(), left_arr);
 
     let right_data: Vec<usize> = selection

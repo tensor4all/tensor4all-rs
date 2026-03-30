@@ -32,16 +32,12 @@ fn add_global_pivots_projects_to_each_edge_bipartition() {
     // [n_subtree_sites, n_pivots] = [3, 2]
     // Column 0 = [0,0,0], Column 1 = [1,0,1]
     assert_eq!(
-        *tci.ijset
-            .get(&SubtreeKey::new(vec![0, 1, 2]))
-            .unwrap(),
+        *tci.ijset.get(&SubtreeKey::new(vec![0, 1, 2])).unwrap(),
         ColMajorArray::new(vec![0, 0, 0, 1, 0, 1], vec![3, 2]).unwrap()
     );
     // [4, 2]: Column 0 = [0,0,0,0], Column 1 = [0,1,0,1]
     assert_eq!(
-        *tci.ijset
-            .get(&SubtreeKey::new(vec![3, 4, 5, 6]))
-            .unwrap(),
+        *tci.ijset.get(&SubtreeKey::new(vec![3, 4, 5, 6])).unwrap(),
         ColMajorArray::new(vec![0, 0, 0, 0, 0, 1, 0, 1], vec![4, 2]).unwrap()
     );
     // Full key: [7, 0] - empty (no columns)

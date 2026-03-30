@@ -805,10 +805,7 @@ pub extern "C" fn t4a_treetn_all_site_index_ids(
 
         if buf_len < n_indices {
             return crate::err_status(
-                format!(
-                    "Buffer too small: need {}, got {}",
-                    n_indices, buf_len
-                ),
+                format!("Buffer too small: need {}, got {}", n_indices, buf_len),
                 crate::T4A_BUFFER_TOO_SMALL,
             );
         }
