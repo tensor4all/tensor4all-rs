@@ -295,6 +295,79 @@ pub extern "C" fn t4a_treetci_f64_add_global_pivots(
     crate::unwrap_catch(result)
 }
 
+// ============================================================================
+// Sweep execution
+// ============================================================================
+
+/// Run one optimization iteration (visit all edges once).
+///
+/// Internally calls `optimize_with_proposer` with `max_iter=1`.
+///
+/// # Arguments
+/// - `ptr`: State handle (mutable)
+/// - `eval_cb`: Batch evaluation callback
+/// - `user_data`: User data passed to callback
+/// - `proposer_kind`: Proposer selection
+/// - `tolerance`: Relative tolerance for this iteration
+/// - `max_bond_dim`: Maximum bond dimension (0 = unlimited)
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetci_f64_sweep(
+    ptr: *mut t4a_treetci_f64,
+    eval_cb: TreeTciBatchEvalCallback,
+    user_data: *mut c_void,
+    proposer_kind: t4a_treetci_proposer_kind,
+    tolerance: libc::c_double,
+    max_bond_dim: libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let state = unsafe { &mut *ptr };
+        let state_inner = state.inner_mut();
+        let batch_eval = make_batch_eval_closure(eval_cb, user_data);
+        let options = make_options(tolerance, max_bond_dim, 1, true);
+
+        let res = match proposer_kind {
+            t4a_treetci_proposer_kind::Default => {
+                let proposer = DefaultProposer;
+                tensor4all_treetci::optimize_with_proposer(
+                    state_inner,
+                    batch_eval,
+                    &options,
+                    &proposer,
+                )
+            }
+            t4a_treetci_proposer_kind::Simple => {
+                let proposer = SimpleProposer::default();
+                tensor4all_treetci::optimize_with_proposer(
+                    state_inner,
+                    batch_eval,
+                    &options,
+                    &proposer,
+                )
+            }
+            t4a_treetci_proposer_kind::TruncatedDefault => {
+                let proposer = TruncatedDefaultProposer::default();
+                tensor4all_treetci::optimize_with_proposer(
+                    state_inner,
+                    batch_eval,
+                    &options,
+                    &proposer,
+                )
+            }
+        };
+
+        match res {
+            Ok(_) => T4A_SUCCESS,
+            Err(e) => err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,6 +414,26 @@ mod tests {
         assert!(graph.is_null()); // should fail validation
     }
 
+    /// Product function: f(idx) = prod(idx[s] + 1.0)
+    /// This has an exact TT representation with bond dim 1.
+    extern "C" fn product_batch_eval(
+        batch_data: *const libc::size_t,
+        n_sites: libc::size_t,
+        n_points: libc::size_t,
+        results: *mut libc::c_double,
+        _user_data: *mut c_void,
+    ) -> i32 {
+        for p in 0..n_points {
+            let mut val = 1.0f64;
+            for s in 0..n_sites {
+                let idx = unsafe { *batch_data.add(s + n_sites * p) };
+                val *= (idx as f64) + 1.0;
+            }
+            unsafe { *results.add(p) = val };
+        }
+        0
+    }
+
     #[test]
     fn test_state_new_and_add_pivots() {
         let edges = sample_edges();
@@ -363,6 +456,32 @@ mod tests {
             1, 0, 1, 0, 1, 0, 1, // column 1 (sites 0-6 for point 1)
         ];
         let status = t4a_treetci_f64_add_global_pivots(state, pivots.as_ptr(), 7, 2);
+        assert_eq!(status, T4A_SUCCESS);
+
+        t4a_treetci_f64_release(state);
+        t4a_treetci_graph_release(graph);
+    }
+
+    #[test]
+    fn test_sweep() {
+        let edges = sample_edges();
+        let graph = t4a_treetci_graph_new(7, edges.as_ptr(), 6);
+        let local_dims: Vec<libc::size_t> = vec![2; 7];
+        let state = t4a_treetci_f64_new(local_dims.as_ptr(), 7, graph);
+
+        // Add initial pivot
+        let pivot: Vec<libc::size_t> = vec![0; 7];
+        t4a_treetci_f64_add_global_pivots(state, pivot.as_ptr(), 7, 1);
+
+        // Run one sweep
+        let status = t4a_treetci_f64_sweep(
+            state,
+            product_batch_eval,
+            std::ptr::null_mut(), // no user_data needed
+            t4a_treetci_proposer_kind::Default,
+            1e-12,
+            0, // unlimited bond dim
+        );
         assert_eq!(status, T4A_SUCCESS);
 
         t4a_treetci_f64_release(state);
