@@ -6,6 +6,7 @@
 
 use crate::types::{t4a_canonical_form, t4a_index, t4a_tensor, t4a_treetn, InternalTreeTN};
 use crate::{StatusCode, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
+use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tensor4all_treetn::treetn::contraction::{ContractionMethod, ContractionOptions};
@@ -755,6 +756,125 @@ pub extern "C" fn t4a_treetn_truncate(
             Ok(()) => T4A_SUCCESS,
             Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Evaluate a TreeTN at one or more multi-indices.
+///
+/// `indices_flat` is interpreted as a column-major `(n_sites, n_points)` array:
+/// element `(site, point)` is stored at `indices_flat[site + n_sites * point]`.
+///
+/// This C API currently supports TreeTNs with exactly one site index per vertex,
+/// which matches the MPS/TreeTCI materialization paths used by the bindings.
+///
+/// # Arguments
+/// * `ptr` - TreeTN handle
+/// * `indices_flat` - Column-major `(n_sites, n_points)` index array
+/// * `n_sites` - Number of TreeTN vertices
+/// * `n_points` - Number of evaluation points
+/// * `out_re` - Output buffer for real parts (`n_points` entries)
+/// * `out_im` - Output buffer for imaginary parts (`n_points` entries), or NULL for real-only
+///
+/// # Returns
+/// Status code
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_evaluate_batch(
+    ptr: *const t4a_treetn,
+    indices_flat: *const libc::size_t,
+    n_sites: libc::size_t,
+    n_points: libc::size_t,
+    out_re: *mut libc::c_double,
+    out_im: *mut libc::c_double,
+) -> StatusCode {
+    if ptr.is_null() || indices_flat.is_null() || out_re.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tn = unsafe { &*ptr };
+        let inner = tn.inner();
+
+        if n_sites == 0 {
+            return crate::err_status(
+                "t4a_treetn_evaluate_batch requires n_sites > 0",
+                T4A_INVALID_ARGUMENT,
+            );
+        }
+        if n_points == 0 {
+            return crate::err_status(
+                "t4a_treetn_evaluate_batch requires n_points > 0",
+                T4A_INVALID_ARGUMENT,
+            );
+        }
+        if inner.node_count() != n_sites {
+            return crate::err_status(
+                format!(
+                    "t4a_treetn_evaluate_batch expected n_sites == {}, got {}",
+                    inner.node_count(),
+                    n_sites
+                ),
+                T4A_INVALID_ARGUMENT,
+            );
+        }
+
+        let Some(_n_entries) = n_sites.checked_mul(n_points) else {
+            return crate::err_status(
+                "t4a_treetn_evaluate_batch index array size overflowed size_t",
+                T4A_INVALID_ARGUMENT,
+            );
+        };
+
+        for site in 0..n_sites {
+            let Some(site_space) = inner.site_space(&site) else {
+                return crate::err_status(
+                    format!("TreeTN vertex {} does not exist", site),
+                    T4A_INVALID_ARGUMENT,
+                );
+            };
+            if site_space.len() != 1 {
+                return crate::err_status(
+                    format!(
+                        "t4a_treetn_evaluate_batch requires exactly one site index per vertex; vertex {} has {}",
+                        site,
+                        site_space.len()
+                    ),
+                    T4A_INVALID_ARGUMENT,
+                );
+            }
+        }
+
+        for point in 0..n_points {
+            let mut index_values = HashMap::with_capacity(n_sites);
+            for site in 0..n_sites {
+                let flat_idx = site + n_sites * point;
+                let value = unsafe { *indices_flat.add(flat_idx) };
+                index_values.insert(site, vec![value]);
+            }
+
+            let scalar = match inner.evaluate(&index_values) {
+                Ok(value) => value,
+                Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+            };
+
+            unsafe {
+                *out_re.add(point) = scalar.real();
+            }
+            if scalar.is_complex() && out_im.is_null() {
+                return crate::err_status(
+                    "t4a_treetn_evaluate_batch requires out_im for complex-valued TreeTN results",
+                    T4A_NULL_POINTER,
+                );
+            }
+            if !out_im.is_null() {
+                unsafe {
+                    *out_im.add(point) = scalar.imag();
+                }
+            }
+        }
+
+        T4A_SUCCESS
     }));
 
     crate::unwrap_catch(result)
