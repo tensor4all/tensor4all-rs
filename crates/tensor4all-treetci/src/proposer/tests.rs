@@ -1,6 +1,7 @@
 use super::{DefaultProposer, PivotCandidateProposer, SimpleProposer, TruncatedDefaultProposer};
 use crate::{AllEdges, EdgeVisitor, SimpleTreeTci, SubtreeKey, TreeTciEdge, TreeTciGraph};
 use std::collections::HashMap;
+use tensor4all_core::ColMajorArray;
 
 fn sample_graph() -> TreeTciGraph {
     TreeTciGraph::new(
@@ -72,9 +73,10 @@ fn default_proposer_unions_history_candidates() {
     let mut tci = SimpleTreeTci::<f64>::new(vec![2; 7], sample_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0, 0, 0, 0, 0, 0], vec![1, 0, 1, 0, 1, 0, 1]])
         .unwrap();
+    // History entry: ColMajorArray shape [4, 1], single column [1, 1, 1, 1]
     tci.ijset_history.push(HashMap::from([(
         SubtreeKey::new(vec![0, 1, 2, 3]),
-        vec![vec![1, 1, 1, 1]],
+        ColMajorArray::new(vec![1, 1, 1, 1], vec![4, 1]).unwrap(),
     )]));
 
     let (iset, _jset) = DefaultProposer

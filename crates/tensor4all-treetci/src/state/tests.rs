@@ -1,5 +1,6 @@
 use super::SimpleTreeTci;
 use crate::{SubtreeKey, TreeTciEdge, TreeTciGraph};
+use tensor4all_core::ColMajorArray;
 
 fn sample_graph() -> TreeTciGraph {
     TreeTciGraph::new(
@@ -28,25 +29,26 @@ fn add_global_pivots_projects_to_each_edge_bipartition() {
     tci.add_global_pivots(&[vec![0, 0, 0, 0, 0, 0, 0], vec![1, 0, 1, 0, 1, 0, 1]])
         .unwrap();
 
+    // [n_subtree_sites, n_pivots] = [3, 2]
+    // Column 0 = [0,0,0], Column 1 = [1,0,1]
     assert_eq!(
-        tci.ijset
+        *tci.ijset
             .get(&SubtreeKey::new(vec![0, 1, 2]))
-            .cloned()
             .unwrap(),
-        vec![vec![0, 0, 0], vec![1, 0, 1]]
+        ColMajorArray::new(vec![0, 0, 0, 1, 0, 1], vec![3, 2]).unwrap()
     );
+    // [4, 2]: Column 0 = [0,0,0,0], Column 1 = [0,1,0,1]
     assert_eq!(
-        tci.ijset
+        *tci.ijset
             .get(&SubtreeKey::new(vec![3, 4, 5, 6]))
-            .cloned()
             .unwrap(),
-        vec![vec![0, 0, 0, 0], vec![0, 1, 0, 1]]
+        ColMajorArray::new(vec![0, 0, 0, 0, 0, 1, 0, 1], vec![4, 2]).unwrap()
     );
+    // Full key: [7, 0] - empty (no columns)
     assert_eq!(
-        tci.ijset
+        *tci.ijset
             .get(&SubtreeKey::new(vec![0, 1, 2, 3, 4, 5, 6]))
-            .cloned()
             .unwrap(),
-        Vec::<Vec<usize>>::new()
+        ColMajorArray::new(vec![], vec![7, 0]).unwrap()
     );
 }

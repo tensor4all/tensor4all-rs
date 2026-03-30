@@ -7,7 +7,7 @@ use crate::{
 use anyhow::Result;
 use num_complex::Complex64;
 use std::collections::HashMap as StdHashMap;
-use tensor4all_core::{ColMajorArrayRef, IndexLike};
+use tensor4all_core::{ColMajorArray, ColMajorArrayRef, IndexLike};
 
 fn two_site_graph() -> TreeTciGraph {
     TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap()
@@ -71,9 +71,17 @@ fn to_treetn_preserves_two_site_identity_evaluations() {
 fn cartesian_entries_matches_julia_product_order() {
     let key_a = SubtreeKey::new(vec![0]);
     let key_b = SubtreeKey::new(vec![1]);
+    // key_a: shape [1, 2], columns [0] and [1]
+    // key_b: shape [1, 3], columns [10], [11], [12]
     let ijset = StdHashMap::from([
-        (key_a.clone(), vec![vec![0], vec![1]]),
-        (key_b.clone(), vec![vec![10], vec![11], vec![12]]),
+        (
+            key_a.clone(),
+            ColMajorArray::new(vec![0, 1], vec![1, 2]).unwrap(),
+        ),
+        (
+            key_b.clone(),
+            ColMajorArray::new(vec![10, 11, 12], vec![1, 3]).unwrap(),
+        ),
     ]);
 
     let combos = cartesian_entries(&ijset, &[key_a, key_b]).unwrap();

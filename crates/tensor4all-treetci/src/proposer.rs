@@ -6,6 +6,7 @@ use rand::{Rng, SeedableRng};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use tensor4all_core::ColMajorArray;
 
 /// Generates candidate pivot sets for one edge bipartition.
 pub trait PivotCandidateProposer {
@@ -84,13 +85,13 @@ impl PivotCandidateProposer for SimpleProposer {
                 .ijset
                 .get(&ikey)
                 .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", ikey))?
-                .len();
+                .ncols();
         let jchi = state.local_dims[vq]
             * state
                 .ijset
                 .get(&jkey)
                 .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", jkey))?
-                .len();
+                .ncols();
 
         let iset = random_candidates(&mut rng, state.local_dims.as_slice(), &ikey, ichi);
         let jset = random_candidates(&mut rng, state.local_dims.as_slice(), &jkey, jchi);
@@ -139,13 +140,13 @@ impl PivotCandidateProposer for TruncatedDefaultProposer {
                 .ijset
                 .get(&ikey)
                 .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", ikey))?
-                .len();
+                .ncols();
         let jchi = state.local_dims[vq]
             * state
                 .ijset
                 .get(&jkey)
                 .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", jkey))?
-                .len();
+                .ncols();
 
         Ok((
             sample_ordered_candidates(&default_i, ichi, &mut rng),
@@ -163,7 +164,7 @@ fn subtree_position(key: &SubtreeKey, site: usize) -> Result<usize> {
 
 fn union_with_history(
     values: Vec<MultiIndex>,
-    history: Option<&HashMap<SubtreeKey, Vec<MultiIndex>>>,
+    history: Option<&HashMap<SubtreeKey, ColMajorArray<usize>>>,
     key: &SubtreeKey,
 ) -> Vec<MultiIndex> {
     let mut unique = Vec::with_capacity(values.len());
@@ -172,10 +173,11 @@ fn union_with_history(
             unique.push(candidate);
         }
     }
-    if let Some(extra) = history.and_then(|history| history.get(key)) {
-        for candidate in extra {
-            if !unique.contains(candidate) {
-                unique.push(candidate.clone());
+    if let Some(arr) = history.and_then(|history| history.get(key)) {
+        for j in 0..arr.ncols() {
+            let col = arr.column(j).expect("column index in range").to_vec();
+            if !unique.contains(&col) {
+                unique.push(col);
             }
         }
     }
@@ -183,7 +185,7 @@ fn union_with_history(
 }
 
 fn pivot_set(
-    ijset: &HashMap<SubtreeKey, Vec<MultiIndex>>,
+    ijset: &HashMap<SubtreeKey, ColMajorArray<usize>>,
     in_keys: &[SubtreeKey],
     out_key: &SubtreeKey,
 ) -> Result<Vec<MultiIndex>> {
@@ -196,7 +198,8 @@ fn pivot_set(
             .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", in_key))?;
         let mut next = Vec::new();
         for base in &pivots {
-            for index in incoming {
+            for j in 0..incoming.ncols() {
+                let index = incoming.column(j).expect("column index in range");
                 ensure!(
                     index.len() == in_key.as_slice().len(),
                     "pivot length {} does not match subtree key length {}",
@@ -258,12 +261,12 @@ fn rng_for_edge<T>(state: &SimpleTreeTci<T>, edge: TreeTciEdge, seed: u64, tag: 
     state
         .ijset
         .get(&ikey)
-        .map_or(0usize, Vec::len)
+        .map_or(0usize, |arr| arr.ncols())
         .hash(&mut hasher);
     state
         .ijset
         .get(&jkey)
-        .map_or(0usize, Vec::len)
+        .map_or(0usize, |arr| arr.ncols())
         .hash(&mut hasher);
     SmallRng::seed_from_u64(hasher.finish())
 }

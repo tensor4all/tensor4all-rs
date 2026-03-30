@@ -5,6 +5,7 @@ use crate::{
     DefaultProposer, PivotCandidateProposer, SimpleTreeTci, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
+use tensor4all_core::ColMajorArray;
 use tensor4all_tcicore::{
     DenseFaerLuKernel, DenseMatrixSource, MatrixLuciScalar as Scalar, PivotKernel,
     PivotKernelOptions, PivotSelectionCore,
@@ -46,22 +47,28 @@ where
     );
     let selection = DenseFaerLuKernel.factorize(&source, options)?;
 
-    state.ijset.insert(
-        left_key.clone(),
-        selection
-            .row_indices
-            .iter()
-            .map(|&row| left_candidates[row].clone())
-            .collect(),
-    );
-    state.ijset.insert(
-        right_key.clone(),
-        selection
-            .col_indices
-            .iter()
-            .map(|&col| right_candidates[col].clone())
-            .collect(),
-    );
+    // Build ColMajorArray from selected pivot indices
+    let n_left_sites = left_key.as_slice().len();
+    let n_right_sites = right_key.as_slice().len();
+
+    let left_data: Vec<usize> = selection
+        .row_indices
+        .iter()
+        .flat_map(|&row| left_candidates[row].iter().copied())
+        .collect();
+    let left_arr =
+        ColMajorArray::new(left_data, vec![n_left_sites, selection.row_indices.len()])?;
+    state.ijset.insert(left_key.clone(), left_arr);
+
+    let right_data: Vec<usize> = selection
+        .col_indices
+        .iter()
+        .flat_map(|&col| right_candidates[col].iter().copied())
+        .collect();
+    let right_arr =
+        ColMajorArray::new(right_data, vec![n_right_sites, selection.col_indices.len()])?;
+    state.ijset.insert(right_key.clone(), right_arr);
+
     let last_error = selection.pivot_errors.last().copied().unwrap_or(0.0);
     state.update_bond_error(edge, last_error);
     state.update_pivot_errors(&selection.pivot_errors);
