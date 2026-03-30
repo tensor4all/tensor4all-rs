@@ -302,48 +302,6 @@ ffi.cdef("""
                                              size_t* out_left_dim, size_t* out_site_dim, size_t* out_right_dim);
 
     // ========================================================================
-    // TensorCI2 F64 functions (tensor4all-tensorci)
-    // ========================================================================
-
-    // Opaque type
-    typedef struct { void* _private; } t4a_tci2_f64;
-
-    // Callback type for evaluation function
-    typedef int (*t4a_eval_callback)(const int64_t* indices, size_t n_indices, double* result, void* user_data);
-
-    // Lifecycle
-    void t4a_tci2_f64_release(t4a_tci2_f64* ptr);
-    t4a_tci2_f64* t4a_tci2_f64_new(const size_t* local_dims, size_t n_sites);
-
-    // Accessors
-    StatusCode t4a_tci2_f64_len(const t4a_tci2_f64* ptr, size_t* out_len);
-    StatusCode t4a_tci2_f64_rank(const t4a_tci2_f64* ptr, size_t* out_rank);
-    StatusCode t4a_tci2_f64_link_dims(const t4a_tci2_f64* ptr, size_t* out_dims, size_t buf_len);
-    StatusCode t4a_tci2_f64_max_sample_value(const t4a_tci2_f64* ptr, double* out_value);
-    StatusCode t4a_tci2_f64_max_bond_error(const t4a_tci2_f64* ptr, double* out_value);
-
-    // Pivot operations
-    StatusCode t4a_tci2_f64_add_global_pivots(t4a_tci2_f64* ptr, const size_t* pivots, size_t n_pivots, size_t n_sites);
-
-    // Conversion
-    t4a_simplett_f64* t4a_tci2_f64_to_tensor_train(const t4a_tci2_f64* ptr);
-
-    // High-level crossinterpolate2
-    StatusCode t4a_crossinterpolate2_f64(
-        const size_t* local_dims,
-        size_t n_sites,
-        const size_t* initial_pivots,
-        size_t n_initial_pivots,
-        t4a_eval_callback eval_fn,
-        void* user_data,
-        double tolerance,
-        size_t max_bonddim,
-        size_t max_iter,
-        t4a_tci2_f64** out_tci,
-        double* out_final_error
-    );
-
-    // ========================================================================
     // TreeTN functions (tree tensor network)
     // ========================================================================
 

@@ -2,12 +2,14 @@ use crate::{assemble::MultiIndex, SubtreeKey, TreeTciEdge, TreeTciGraph};
 use anyhow::{ensure, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
+use tensor4all_core::ColMajorArray;
 
 /// TreeTCI state mirroring the upstream `SimpleTCI` layout.
 #[derive(Clone, Debug)]
 pub struct SimpleTreeTci<T> {
     /// Pivot sets keyed by canonical subtree keys.
-    pub ijset: HashMap<SubtreeKey, Vec<MultiIndex>>,
+    /// Shape of each entry: [n_subtree_sites, n_pivots].
+    pub ijset: HashMap<SubtreeKey, ColMajorArray<usize>>,
     /// Local dimensions for each site.
     pub local_dims: Vec<usize>,
     /// Tree graph metadata.
@@ -19,7 +21,7 @@ pub struct SimpleTreeTci<T> {
     /// Maximum observed sample magnitude for normalization.
     pub max_sample_value: f64,
     /// Previous pivot sets for candidate-generation history.
-    pub ijset_history: Vec<HashMap<SubtreeKey, Vec<MultiIndex>>>,
+    pub ijset_history: Vec<HashMap<SubtreeKey, ColMajorArray<usize>>>,
     marker: PhantomData<T>,
 }
 
@@ -68,14 +70,27 @@ impl<T> SimpleTreeTci<T> {
                 let (left_key, right_key) = self.graph.subregion_vertices(edge)?;
                 let left_projection = project_pivot(pivot, &left_key);
                 let right_projection = project_pivot(pivot, &right_key);
-                push_unique(self.ijset.entry(left_key).or_default(), left_projection);
-                push_unique(self.ijset.entry(right_key).or_default(), right_projection);
+                let n_left = left_key.as_slice().len();
+                let n_right = right_key.as_slice().len();
+                push_unique_column(
+                    self.ijset
+                        .entry(left_key)
+                        .or_insert_with(|| empty_2d(n_left)),
+                    &left_projection,
+                );
+                push_unique_column(
+                    self.ijset
+                        .entry(right_key)
+                        .or_insert_with(|| empty_2d(n_right)),
+                    &right_projection,
+                );
             }
         }
 
+        let full_key = SubtreeKey::new((0..n_sites).collect());
         self.ijset
-            .entry(SubtreeKey::new((0..n_sites).collect()))
-            .or_default();
+            .entry(full_key)
+            .or_insert_with(|| empty_2d(n_sites));
         Ok(())
     }
 
@@ -105,7 +120,11 @@ impl<T> SimpleTreeTci<T> {
 
     /// Maximum current bond dimension across stored subtree pivot sets.
     pub fn max_rank(&self) -> usize {
-        self.ijset.values().map(Vec::len).max().unwrap_or(0)
+        self.ijset
+            .values()
+            .map(|arr| arr.ncols())
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -113,10 +132,21 @@ fn project_pivot(pivot: &MultiIndex, key: &SubtreeKey) -> MultiIndex {
     key.as_slice().iter().map(|&site| pivot[site]).collect()
 }
 
-fn push_unique(collection: &mut Vec<MultiIndex>, item: MultiIndex) {
-    if !collection.contains(&item) {
-        collection.push(item);
+/// Create an empty 2D ColMajorArray with shape [nrows, 0].
+fn empty_2d(nrows: usize) -> ColMajorArray<usize> {
+    ColMajorArray::new(vec![], vec![nrows, 0]).expect("empty 2D array creation should not fail")
+}
+
+/// Push a column to a ColMajorArray if it is not already present.
+pub(crate) fn push_unique_column(array: &mut ColMajorArray<usize>, column: &[usize]) {
+    for j in 0..array.ncols() {
+        if array.column(j) == Some(column) {
+            return; // duplicate
+        }
     }
+    array
+        .push_column(column)
+        .expect("push_column should not fail for matching nrows");
 }
 
 #[cfg(test)]

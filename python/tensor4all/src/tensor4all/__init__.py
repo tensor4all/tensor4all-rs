@@ -38,9 +38,6 @@ from .algorithm import (
 # SimpleTT types (tensor4all-simplett)
 from .simplett import SimpleTensorTrain
 
-# TensorCI types (tensor4all-tensorci)
-from .tensorci import TensorCI2, crossinterpolate2, crossinterpolate2_tci
-
 # TreeTN types (tree tensor network: MPS, MPO, TTN)
 from .treetn import TreeTensorNetwork, MPS, MPO
 from .treetn import inner as ttn_inner
@@ -98,10 +95,6 @@ __all__ = [
     "resolve_truncation_tolerance",
     # SimpleTT types
     "SimpleTensorTrain",
-    # TensorCI types
-    "TensorCI2",
-    "crossinterpolate2",
-    "crossinterpolate2_tci",
     # TreeTN types
     "TreeTensorNetwork",
     "MPS",

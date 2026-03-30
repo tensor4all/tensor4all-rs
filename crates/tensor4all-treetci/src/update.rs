@@ -5,6 +5,7 @@ use crate::{
     DefaultProposer, PivotCandidateProposer, SimpleTreeTci, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
+use tensor4all_core::ColMajorArray;
 use tensor4all_tcicore::{
     DenseFaerLuKernel, DenseMatrixSource, MatrixLuciScalar as Scalar, PivotKernel,
     PivotKernelOptions, PivotSelectionCore,
@@ -14,7 +15,7 @@ use tensor4all_tcicore::{
 pub fn update_edge<T, F, P>(
     state: &mut SimpleTreeTci<T>,
     edge: TreeTciEdge,
-    batch_eval: F,
+    evaluate: F,
     options: &PivotKernelOptions,
     proposer: &P,
 ) -> Result<PivotSelectionCore>
@@ -32,7 +33,7 @@ where
         &left_candidates,
         &right_key,
         &right_candidates,
-        batch_eval,
+        evaluate,
     )?;
 
     for value in &values {
@@ -46,22 +47,27 @@ where
     );
     let selection = DenseFaerLuKernel.factorize(&source, options)?;
 
-    state.ijset.insert(
-        left_key.clone(),
-        selection
-            .row_indices
-            .iter()
-            .map(|&row| left_candidates[row].clone())
-            .collect(),
-    );
-    state.ijset.insert(
-        right_key.clone(),
-        selection
-            .col_indices
-            .iter()
-            .map(|&col| right_candidates[col].clone())
-            .collect(),
-    );
+    // Build ColMajorArray from selected pivot indices
+    let n_left_sites = left_key.as_slice().len();
+    let n_right_sites = right_key.as_slice().len();
+
+    let left_data: Vec<usize> = selection
+        .row_indices
+        .iter()
+        .flat_map(|&row| left_candidates[row].iter().copied())
+        .collect();
+    let left_arr = ColMajorArray::new(left_data, vec![n_left_sites, selection.row_indices.len()])?;
+    state.ijset.insert(left_key.clone(), left_arr);
+
+    let right_data: Vec<usize> = selection
+        .col_indices
+        .iter()
+        .flat_map(|&col| right_candidates[col].iter().copied())
+        .collect();
+    let right_arr =
+        ColMajorArray::new(right_data, vec![n_right_sites, selection.col_indices.len()])?;
+    state.ijset.insert(right_key.clone(), right_arr);
+
     let last_error = selection.pivot_errors.last().copied().unwrap_or(0.0);
     state.update_bond_error(edge, last_error);
     state.update_pivot_errors(&selection.pivot_errors);
@@ -73,7 +79,7 @@ where
 pub fn update_edge_default<T, F>(
     state: &mut SimpleTreeTci<T>,
     edge: TreeTciEdge,
-    batch_eval: F,
+    evaluate: F,
     options: &PivotKernelOptions,
 ) -> Result<PivotSelectionCore>
 where
@@ -81,7 +87,7 @@ where
     DenseFaerLuKernel: PivotKernel<T>,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
-    update_edge(state, edge, batch_eval, options, &DefaultProposer)
+    update_edge(state, edge, evaluate, options, &DefaultProposer)
 }
 
 fn evaluate_candidate_matrix<T, F>(
@@ -90,7 +96,7 @@ fn evaluate_candidate_matrix<T, F>(
     left_candidates: &[MultiIndex],
     right_key: &crate::SubtreeKey,
     right_candidates: &[MultiIndex],
-    batch_eval: F,
+    evaluate: F,
 ) -> Result<Vec<T>>
 where
     T: Scalar,
@@ -107,7 +113,7 @@ where
         }
     }
     let batch = assemble_points_column_major(&points)?;
-    let values = batch_eval(batch.as_view())?;
+    let values = evaluate(batch.as_view())?;
     ensure!(
         values.len() == left_candidates.len() * right_candidates.len(),
         "batch evaluator returned {} values for {} candidate-matrix entries",

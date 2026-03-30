@@ -1,9 +1,11 @@
 mod common;
 
+use anyhow::Result;
 use common::{assert_complex_samples_close, assert_real_samples_close};
 use num_complex::Complex64;
+use tensor4all_core::{ColMajorArrayRef, IndexLike};
 use tensor4all_treetci::{
-    crossinterpolate_tree, crossinterpolate_tree_with_proposer, SimpleProposer, TreeTciEdge,
+    crossinterpolate2, DefaultProposer, GlobalIndexBatch, SimpleProposer, TreeTciEdge,
     TreeTciGraph, TreeTciOptions,
 };
 
@@ -22,6 +24,22 @@ fn sample_graph() -> TreeTciGraph {
     .unwrap()
 }
 
+fn batch_eval_from_point<T: Clone>(
+    point_eval: impl Fn(&[usize]) -> T,
+) -> impl Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>> {
+    move |batch: GlobalIndexBatch<'_>| {
+        let mut values = Vec::with_capacity(batch.n_points());
+        let mut point = vec![0usize; batch.n_sites()];
+        for p in 0..batch.n_points() {
+            for (s, slot) in point.iter_mut().enumerate() {
+                *slot = batch.get(s, p).unwrap();
+            }
+            values.push(point_eval(&point));
+        }
+        Ok(values)
+    }
+}
+
 #[test]
 fn simple_tree_parity_matches_reference_points() {
     let f = |idx: &[usize]| {
@@ -29,9 +47,8 @@ fn simple_tree_parity_matches_reference_points() {
         1.0 / (1.0 + norm_sq)
     };
 
-    let (tn, _ranks, _errors) = crossinterpolate_tree_with_proposer(
-        f,
-        None::<fn(tensor4all_treetci::GlobalIndexBatch<'_>) -> anyhow::Result<Vec<f64>>>,
+    let (tn, _ranks, _errors) = crossinterpolate2(
+        batch_eval_from_point(f),
         vec![2; 7],
         sample_graph(),
         vec![vec![0; 7]],
@@ -46,18 +63,23 @@ fn simple_tree_parity_matches_reference_points() {
     )
     .unwrap();
 
+    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    // Build position map: vertex -> position in index_ids
+    let pos: Vec<usize> = (0..7)
+        .map(|v| {
+            let site_id = *tn.site_space(&v).unwrap().iter().next().unwrap().id();
+            index_ids.iter().position(|id| *id == site_id).unwrap()
+        })
+        .collect();
+
     let eval = |point: [usize; 7]| -> f64 {
-        tn.evaluate(&std::collections::HashMap::from([
-            (0usize, vec![point[0]]),
-            (1usize, vec![point[1]]),
-            (2usize, vec![point[2]]),
-            (3usize, vec![point[3]]),
-            (4usize, vec![point[4]]),
-            (5usize, vec![point[5]]),
-            (6usize, vec![point[6]]),
-        ]))
-        .unwrap()
-        .real()
+        let mut data = vec![0usize; index_ids.len()];
+        for (v, &val) in point.iter().enumerate() {
+            data[pos[v]] = val;
+        }
+        let shape = [index_ids.len(), 1];
+        let values = ColMajorArrayRef::new(&data, &shape);
+        tn.evaluate(&index_ids, values).unwrap()[0].real()
     };
 
     let got = [
@@ -78,9 +100,8 @@ fn simple_tree_parity_matches_reference_points() {
 fn simple_tree_product_function_is_exact_on_branching_tree() {
     let f = |idx: &[usize]| idx.iter().fold(1.0, |acc, &x| acc * (x as f64 + 1.0));
 
-    let (tn, _ranks, _errors) = crossinterpolate_tree(
-        f,
-        None::<fn(tensor4all_treetci::GlobalIndexBatch<'_>) -> anyhow::Result<Vec<f64>>>,
+    let (tn, _ranks, _errors) = crossinterpolate2(
+        batch_eval_from_point(f),
         vec![2; 7],
         sample_graph(),
         vec![vec![0; 7]],
@@ -91,21 +112,26 @@ fn simple_tree_product_function_is_exact_on_branching_tree() {
             normalize_error: true,
         },
         Some(0),
+        &DefaultProposer,
     )
     .unwrap();
 
+    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    let pos: Vec<usize> = (0..7)
+        .map(|v| {
+            let site_id = *tn.site_space(&v).unwrap().iter().next().unwrap().id();
+            index_ids.iter().position(|id| *id == site_id).unwrap()
+        })
+        .collect();
+
     let eval = |point: [usize; 7]| -> f64 {
-        tn.evaluate(&std::collections::HashMap::from([
-            (0usize, vec![point[0]]),
-            (1usize, vec![point[1]]),
-            (2usize, vec![point[2]]),
-            (3usize, vec![point[3]]),
-            (4usize, vec![point[4]]),
-            (5usize, vec![point[5]]),
-            (6usize, vec![point[6]]),
-        ]))
-        .unwrap()
-        .real()
+        let mut data = vec![0usize; index_ids.len()];
+        for (v, &val) in point.iter().enumerate() {
+            data[pos[v]] = val;
+        }
+        let shape = [index_ids.len(), 1];
+        let values = ColMajorArrayRef::new(&data, &shape);
+        tn.evaluate(&index_ids, values).unwrap()[0].real()
     };
 
     let got = [
@@ -130,9 +156,8 @@ fn simple_tree_complex_product_function_is_exact_on_branching_tree() {
         })
     };
 
-    let (tn, _ranks, _errors) = crossinterpolate_tree(
-        f,
-        None::<fn(tensor4all_treetci::GlobalIndexBatch<'_>) -> anyhow::Result<Vec<Complex64>>>,
+    let (tn, _ranks, _errors) = crossinterpolate2(
+        batch_eval_from_point(f),
         vec![2; 7],
         sample_graph(),
         vec![vec![0; 7]],
@@ -143,20 +168,30 @@ fn simple_tree_complex_product_function_is_exact_on_branching_tree() {
             normalize_error: true,
         },
         Some(0),
+        &DefaultProposer,
     )
     .unwrap();
 
+    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    let pos: Vec<usize> = (0..7)
+        .map(|v| {
+            let site_id = *tn.site_space(&v).unwrap().iter().next().unwrap().id();
+            index_ids.iter().position(|id| *id == site_id).unwrap()
+        })
+        .collect();
+
     let eval = |point: [usize; 7]| {
-        tn.evaluate(&std::collections::HashMap::from([
-            (0usize, vec![point[0]]),
-            (1usize, vec![point[1]]),
-            (2usize, vec![point[2]]),
-            (3usize, vec![point[3]]),
-            (4usize, vec![point[4]]),
-            (5usize, vec![point[5]]),
-            (6usize, vec![point[6]]),
-        ]))
-        .unwrap()
+        let mut data = vec![0usize; index_ids.len()];
+        for (v, &val) in point.iter().enumerate() {
+            data[pos[v]] = val;
+        }
+        let shape = [index_ids.len(), 1];
+        let values = ColMajorArrayRef::new(&data, &shape);
+        tn.evaluate(&index_ids, values)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
     };
 
     let got = [
@@ -169,10 +204,8 @@ fn simple_tree_complex_product_function_is_exact_on_branching_tree() {
     ]
     .into_iter()
     .map(|point| {
-        (
-            point,
-            Complex64::new(eval(point).real(), eval(point).imag()),
-        )
+        let val = eval(point);
+        (point, Complex64::new(val.real(), val.imag()))
     })
     .collect::<Vec<_>>();
     assert_complex_samples_close(&got, &f, 1e-12);
@@ -187,9 +220,8 @@ fn simple_tree_complex_product_function_is_exact_on_two_site_tree() {
         })
     };
 
-    let (tn, _ranks, _errors) = crossinterpolate_tree(
-        f,
-        None::<fn(tensor4all_treetci::GlobalIndexBatch<'_>) -> anyhow::Result<Vec<Complex64>>>,
+    let (tn, _ranks, _errors) = crossinterpolate2(
+        batch_eval_from_point(f),
         vec![2; 2],
         graph,
         vec![vec![0; 2]],
@@ -200,17 +232,32 @@ fn simple_tree_complex_product_function_is_exact_on_two_site_tree() {
             normalize_error: true,
         },
         Some(0),
+        &DefaultProposer,
     )
     .unwrap();
+
+    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    let pos: Vec<usize> = (0..2)
+        .map(|v| {
+            let site_id = *tn.site_space(&v).unwrap().iter().next().unwrap().id();
+            index_ids.iter().position(|id| *id == site_id).unwrap()
+        })
+        .collect();
 
     let got = [[0, 0], [0, 1], [1, 0], [1, 1]]
         .into_iter()
         .map(|point| {
+            let mut data = vec![0usize; index_ids.len()];
+            for (v, &val) in point.iter().enumerate() {
+                data[pos[v]] = val;
+            }
+            let shape = [index_ids.len(), 1];
+            let values = ColMajorArrayRef::new(&data, &shape);
             let value = tn
-                .evaluate(&std::collections::HashMap::from([
-                    (0usize, vec![point[0]]),
-                    (1usize, vec![point[1]]),
-                ]))
+                .evaluate(&index_ids, values)
+                .unwrap()
+                .into_iter()
+                .next()
                 .unwrap();
             (point, Complex64::new(value.real(), value.imag()))
         })

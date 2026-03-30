@@ -22,6 +22,10 @@
 //! ```
 
 #![warn(missing_docs)]
+
+pub mod col_major_array;
+pub use col_major_array::{ColMajorArray, ColMajorArrayMut, ColMajorArrayRef};
+
 // Common (tags, utilities, scalar)
 pub mod forward_ad;
 pub mod global_default;

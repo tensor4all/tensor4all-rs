@@ -383,7 +383,6 @@ impl_opaque_type_common!(index);
 | `t4a_qgrid_int` | Yes | Yes | Yes | `impl_opaque_type_common!` |
 | `t4a_linop` | Yes | Yes | Yes | `impl_opaque_type_common!` |
 | `t4a_simplett_f64` | Yes | Yes | No | Manual impl |
-| `t4a_tci2_f64` | Yes | No | No | No `Clone` impl |
 | `t4a_qtci_f64` | No | No | No | No `Clone` impl |
 
 ### Manual Implementation
@@ -801,7 +800,6 @@ src/
 ├── tensor.rs            # Tensor C API
 ├── treetn.rs            # Tree tensor network (MPS/MPO) C API
 ├── simplett.rs          # Simple tensor train C API
-├── tensorci.rs          # Tensor cross interpolation C API
 ├── quanticsgrids.rs     # Quantics grids C API
 ├── quanticstci.rs       # Quantics TCI C API
 ├── quanticstransform.rs # Quantics transformation operators C API
@@ -971,7 +969,7 @@ When adding a new opaque type to a C API crate:
 The `tensor4all-capi` crate provides C bindings for all tensor4all functionality:
 - Uses `t4a_` prefix for all functions and types
 - Uses `T4A_` prefix for status codes
-- Provides: Index, Tensor, TreeTN (MPS/MPO), SimpleTT, TensorCI, QuanticsGrids, QuanticsTCI, QuanticsTransform, and HDF5
+- Provides: Index, Tensor, TreeTN (MPS/MPO), SimpleTT, QuanticsGrids, QuanticsTCI, QuanticsTransform, and HDF5
 - See `crates/tensor4all-capi/` for implementation details
 
 ### Future C-API Crates
@@ -992,7 +990,6 @@ When creating new C-API crates:
 | `t4a_tensor` | `TensorDynLen` | `tensor.rs` | Dynamic-rank tensor (dense or diagonal) |
 | `t4a_treetn` | `DefaultTreeTN<usize>` | `treetn.rs` | Tree tensor network (MPS, MPO, general TTN) |
 | `t4a_simplett_f64` | `TensorTrain<f64>` | `simplett.rs` | Simple tensor train (f64) |
-| `t4a_tci2_f64` | `TensorCI2<f64>` | `tensorci.rs` | Tensor cross interpolation (f64) |
 | `t4a_qtci_f64` | `QuanticsTensorCI2<f64>` | `quanticstci.rs` | Quantics TCI result (f64) |
 | `t4a_qgrid_disc` | `DiscretizedGrid` | `quanticsgrids.rs` | Discretized continuous grid |
 | `t4a_qgrid_int` | `InherentDiscreteGrid` | `quanticsgrids.rs` | Integer discrete grid |
@@ -1010,7 +1007,6 @@ When creating new C-API crates:
 
 | Type | Signature | Module | Description |
 |------|-----------|--------|-------------|
-| `EvalCallback` | `fn(indices: *const i64, n: size_t, result: *mut f64, user_data: *mut void) -> i32` | `tensorci.rs` | TCI evaluation callback |
 | `QtciEvalCallbackF64` | `fn(coords: *const f64, n: size_t, result: *mut f64, user_data: *mut void) -> i32` | `quanticstci.rs` | QTCI continuous domain callback |
 | `QtciEvalCallbackI64` | `fn(indices: *const i64, n: size_t, result: *mut f64, user_data: *mut void) -> i32` | `quanticstci.rs` | QTCI discrete domain callback |
 
@@ -1022,7 +1018,6 @@ When creating new C-API crates:
 | `tensor.rs` | `t4a_tensor_*` | Tensor creation, data access, contraction |
 | `treetn.rs` | `t4a_treetn_*` | Tree tensor networks: construction, orthogonalization, truncation, inner, norm, contract, linsolve |
 | `simplett.rs` | `t4a_simplett_f64_*` | Simple TT operations |
-| `tensorci.rs` | `t4a_tci2_f64_*`, `t4a_crossinterpolate2_f64` | Tensor cross interpolation |
 | `quanticsgrids.rs` | `t4a_qgrid_disc_*`, `t4a_qgrid_int_*` | Quantics grid coordinate conversions |
 | `quanticstci.rs` | `t4a_qtci_f64_*`, `t4a_quanticscrossinterpolate_*` | Quantics TCI interpolation |
 | `quanticstransform.rs` | `t4a_qtransform_*`, `t4a_linop_*` | Quantics transformation operators |

@@ -7,7 +7,7 @@ use faer::prelude::Solve;
 use faer::MatRef;
 use num_complex::{Complex32, Complex64};
 use std::collections::HashMap;
-use tensor4all_core::{DynIndex, TensorDynLen, TensorElement};
+use tensor4all_core::{ColMajorArray, DynIndex, TensorDynLen, TensorElement};
 use tensor4all_tcicore::MatrixLuciScalar as Scalar;
 use tensor4all_treetn::TreeTN;
 
@@ -76,7 +76,7 @@ impl_full_piv_lu_scalar!(Complex64);
 /// Materialize a converged TreeTCI state as a `TreeTN`.
 pub fn to_treetn<T, F>(
     state: &SimpleTreeTci<T>,
-    batch_eval: F,
+    evaluate: F,
     center_site: Option<usize>,
 ) -> Result<TreeTN<TensorDynLen, usize>>
 where
@@ -89,8 +89,8 @@ where
     let mut bond_indices = HashMap::new();
     for edge in state.graph.edges() {
         let (left_key, right_key) = state.graph.subregion_vertices(edge)?;
-        let left_rank = state.ijset.get(&left_key).map_or(0, Vec::len);
-        let right_rank = state.ijset.get(&right_key).map_or(0, Vec::len);
+        let left_rank = state.ijset.get(&left_key).map_or(0, |arr| arr.ncols());
+        let right_rank = state.ijset.get(&right_key).map_or(0, |arr| arr.ncols());
         ensure!(
             left_rank == right_rank,
             "bond ranks disagree across edge {:?}: left {}, right {}",
@@ -119,9 +119,9 @@ where
         let out_keys = state.graph.edge_in_ij_keys(site, &out_edges)?;
 
         let data = if out_edges.is_empty() {
-            fill_tensor_values(state, &in_keys, &out_keys, &[site], &batch_eval)?
+            fill_tensor_values(state, &in_keys, &out_keys, &[site], &evaluate)?
         } else {
-            site_tensor_with_parent(state, site, out_edges[0], &in_keys, &out_keys, &batch_eval)?
+            site_tensor_with_parent(state, site, out_edges[0], &in_keys, &out_keys, &evaluate)?
         };
 
         let mut indices = Vec::with_capacity(1 + incoming_edges.len() + out_edges.len());
@@ -156,7 +156,7 @@ fn site_tensor_with_parent<T, F>(
     parent_edge: TreeTciEdge,
     in_keys: &[SubtreeKey],
     out_keys: &[SubtreeKey],
-    batch_eval: &F,
+    evaluate: &F,
 ) -> Result<Vec<T>>
 where
     T: FullPivLuScalar,
@@ -167,7 +167,7 @@ where
         "MVP TreeTCI materialization expects exactly one outgoing key per non-root site"
     );
 
-    let pi1_values = fill_tensor_values(state, in_keys, out_keys, &[site], batch_eval)?;
+    let pi1_values = fill_tensor_values(state, in_keys, out_keys, &[site], evaluate)?;
     let rows = state.local_dims[site] * product_pivot_dims(state, in_keys)?;
     let cols = product_pivot_dims(state, out_keys)?;
 
@@ -177,13 +177,13 @@ where
         std::slice::from_ref(&site_side_key),
         out_keys,
         &[],
-        batch_eval,
+        evaluate,
     )?;
     let p_rows = state
         .ijset
         .get(&site_side_key)
         .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", site_side_key))?
-        .len();
+        .ncols();
     ensure!(
         p_rows == cols,
         "pivot matrix for site {} is not square: {} x {}",
@@ -221,7 +221,7 @@ fn product_pivot_dims<T>(state: &SimpleTreeTci<T>, keys: &[SubtreeKey]) -> Resul
             .ijset
             .get(key)
             .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", key))?
-            .len();
+            .ncols();
         product = product.saturating_mul(dim.max(1));
     }
     Ok(product)
@@ -232,7 +232,7 @@ fn fill_tensor_values<T, F>(
     in_keys: &[SubtreeKey],
     out_keys: &[SubtreeKey],
     central_sites: &[usize],
-    batch_eval: &F,
+    evaluate: &F,
 ) -> Result<Vec<T>>
 where
     T: Scalar,
@@ -260,7 +260,7 @@ where
     }
 
     let batch = assemble_points_column_major(&points)?;
-    let values = batch_eval(batch.as_view())?;
+    let values = evaluate(batch.as_view())?;
     ensure!(
         values.len() == points.len(),
         "batch evaluator returned {} values for {} fill-tensor points",
@@ -270,21 +270,28 @@ where
     Ok(values)
 }
 
+/// Extract columns from ColMajorArray ijset entries and produce cartesian products.
+///
+/// Returns Vec<Vec<MultiIndex>> where each inner Vec has one MultiIndex per key.
 fn cartesian_entries(
-    ijset: &HashMap<SubtreeKey, Vec<MultiIndex>>,
+    ijset: &HashMap<SubtreeKey, ColMajorArray<usize>>,
     keys: &[SubtreeKey],
 ) -> Result<Vec<Vec<MultiIndex>>> {
     if keys.is_empty() {
         return Ok(vec![Vec::new()]);
     }
 
+    // Convert each ColMajorArray to Vec<MultiIndex> (columns as Vecs)
     let entry_sets = keys
         .iter()
         .map(|key| {
-            ijset
+            let arr = ijset
                 .get(key)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", key))
+                .ok_or_else(|| anyhow::anyhow!("missing pivot set for subtree key {:?}", key))?;
+            let columns: Vec<MultiIndex> = (0..arr.ncols())
+                .map(|j| arr.column(j).expect("column index in range").to_vec())
+                .collect();
+            Ok(columns)
         })
         .collect::<Result<Vec<_>>>()?;
 

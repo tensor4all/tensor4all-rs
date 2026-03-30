@@ -2,6 +2,7 @@ use super::update_edge_default;
 use crate::test_support::assert_scalar_close;
 use crate::{GlobalIndexBatch, SimpleTreeTci, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
+use tensor4all_core::ColMajorArray;
 use tensor4all_tcicore::PivotKernelOptions;
 
 fn two_site_graph() -> TreeTciGraph {
@@ -33,13 +34,14 @@ fn update_edge_selects_identity_pivots_on_two_site_tree() {
     .unwrap();
 
     assert_eq!(selection.rank, 2);
+    // [1, 2]: Column 0 = [0], Column 1 = [1]
     assert_eq!(
         tci.ijset[&crate::SubtreeKey::new(vec![0])],
-        vec![vec![0], vec![1]]
+        ColMajorArray::new(vec![0, 1], vec![1, 2]).unwrap()
     );
     assert_eq!(
         tci.ijset[&crate::SubtreeKey::new(vec![1])],
-        vec![vec![0], vec![1]]
+        ColMajorArray::new(vec![0, 1], vec![1, 2]).unwrap()
     );
     assert_scalar_close(tci.max_sample_value, 1.0, 1.0, 1e-12);
     assert_scalar_close(tci.max_bond_error(), 0.0, tci.max_sample_value, 1e-12);

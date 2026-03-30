@@ -35,7 +35,7 @@ impl Default for TreeTciOptions {
 /// `AllEdges` visitation and `DefaultProposer`.
 pub fn optimize_default<T, F>(
     state: &mut SimpleTreeTci<T>,
-    batch_eval: F,
+    evaluate: F,
     options: &TreeTciOptions,
 ) -> Result<(Vec<usize>, Vec<f64>)>
 where
@@ -43,14 +43,14 @@ where
     DenseFaerLuKernel: PivotKernel<T>,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
-    optimize_with_proposer(state, batch_eval, options, &crate::DefaultProposer)
+    optimize_with_proposer(state, evaluate, options, &crate::DefaultProposer)
 }
 
 /// Optimize a TreeTCI state with `AllEdges` visitation and a caller-supplied
 /// pivot candidate proposer.
 pub fn optimize_with_proposer<T, F, P>(
     state: &mut SimpleTreeTci<T>,
-    batch_eval: F,
+    evaluate: F,
     options: &TreeTciOptions,
     proposer: &P,
 ) -> Result<(Vec<usize>, Vec<f64>)>
@@ -92,7 +92,7 @@ where
             state.flush_pivot_errors();
 
             for edge in visitor.visit_order(state) {
-                update_edge(state, edge, &batch_eval, &kernel_options, proposer)?;
+                update_edge(state, edge, &evaluate, &kernel_options, proposer)?;
             }
         }
 

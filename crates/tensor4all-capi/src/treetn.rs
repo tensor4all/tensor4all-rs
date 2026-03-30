@@ -6,8 +6,8 @@
 
 use crate::types::{t4a_canonical_form, t4a_index, t4a_tensor, t4a_treetn, InternalTreeTN};
 use crate::{StatusCode, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
-use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use tensor4all_core::ColMajorArrayRef;
 
 use tensor4all_treetn::treetn::contraction::{ContractionMethod, ContractionOptions};
 use tensor4all_treetn::{CanonicalizationOptions, TruncationOptions};
@@ -761,7 +761,169 @@ pub extern "C" fn t4a_treetn_truncate(
     crate::unwrap_catch(result)
 }
 
-/// Evaluate a TreeTN at one or more multi-indices.
+/// Get all site index IDs and their owning vertex names.
+///
+/// Uses query-then-fill: pass NULL buffers to get `out_n_indices` only.
+///
+/// # Arguments
+/// * `ptr` - TreeTN handle
+/// * `out_index_ids` - Output buffer for index IDs (as u64), or NULL to query size
+/// * `out_vertex_names` - Output buffer for vertex names (as usize), or NULL to query size
+/// * `buf_len` - Size of the output buffers
+/// * `out_n_indices` - Output: number of site indices
+///
+/// # Returns
+/// Status code
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_all_site_index_ids(
+    ptr: *const t4a_treetn,
+    out_index_ids: *mut u64,
+    out_vertex_names: *mut libc::size_t,
+    buf_len: libc::size_t,
+    out_n_indices: *mut libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out_n_indices.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tn = unsafe { &*ptr };
+        let inner = tn.inner();
+
+        let (index_ids, vertex_names) = match inner.all_site_index_ids() {
+            Ok(v) => v,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+        };
+
+        let n_indices = index_ids.len();
+        unsafe { *out_n_indices = n_indices };
+
+        // If buffers are NULL, just return the count
+        if out_index_ids.is_null() && out_vertex_names.is_null() {
+            return T4A_SUCCESS;
+        }
+
+        if buf_len < n_indices {
+            return crate::err_status(
+                format!("Buffer too small: need {}, got {}", n_indices, buf_len),
+                crate::T4A_BUFFER_TOO_SMALL,
+            );
+        }
+
+        if !out_index_ids.is_null() {
+            for (i, id) in index_ids.iter().enumerate() {
+                unsafe { *out_index_ids.add(i) = id.0 };
+            }
+        }
+
+        if !out_vertex_names.is_null() {
+            for (i, name) in vertex_names.iter().enumerate() {
+                unsafe { *out_vertex_names.add(i) = *name };
+            }
+        }
+
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Evaluate a TreeTN at one or more multi-indices using IndexId-based API.
+///
+/// `index_ids`: `n_indices` index IDs (from `t4a_treetn_all_site_index_ids`).
+/// `values`: column-major `[n_indices, n_points]` array.
+///   `values[i + n_indices * p]` = value of `index_ids[i]` at point `p`.
+///
+/// # Arguments
+/// * `ptr` - TreeTN handle
+/// * `index_ids` - Array of index IDs (n_indices entries)
+/// * `n_indices` - Number of index IDs
+/// * `values` - Column-major `(n_indices, n_points)` index value array
+/// * `n_points` - Number of evaluation points
+/// * `out_re` - Output buffer for real parts (`n_points` entries)
+/// * `out_im` - Output buffer for imaginary parts (`n_points` entries), or NULL for real-only
+///
+/// # Returns
+/// Status code
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_evaluate(
+    ptr: *const t4a_treetn,
+    index_ids: *const u64,
+    n_indices: libc::size_t,
+    values: *const libc::size_t,
+    n_points: libc::size_t,
+    out_re: *mut libc::c_double,
+    out_im: *mut libc::c_double,
+) -> StatusCode {
+    if ptr.is_null() || index_ids.is_null() || values.is_null() || out_re.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        use tensor4all_core::DynId;
+
+        let tn = unsafe { &*ptr };
+        let inner = tn.inner();
+
+        if n_indices == 0 {
+            return crate::err_status(
+                "t4a_treetn_evaluate requires n_indices > 0",
+                T4A_INVALID_ARGUMENT,
+            );
+        }
+        if n_points == 0 {
+            return crate::err_status(
+                "t4a_treetn_evaluate requires n_points > 0",
+                T4A_INVALID_ARGUMENT,
+            );
+        }
+
+        let Some(n_entries) = n_indices.checked_mul(n_points) else {
+            return crate::err_status(
+                "t4a_treetn_evaluate index array size overflowed size_t",
+                T4A_INVALID_ARGUMENT,
+            );
+        };
+
+        // Build DynId vector from raw u64 values
+        let ids: Vec<DynId> = (0..n_indices)
+            .map(|i| DynId(unsafe { *index_ids.add(i) }))
+            .collect();
+
+        // Build ColMajorArrayRef from the flat values
+        let values_slice = unsafe { std::slice::from_raw_parts(values, n_entries) };
+        let shape = [n_indices, n_points];
+        let values_arr = ColMajorArrayRef::new(values_slice, &shape);
+
+        let scalars = match inner.evaluate(&ids, values_arr) {
+            Ok(v) => v,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+        };
+
+        for (point, scalar) in scalars.iter().enumerate() {
+            unsafe {
+                *out_re.add(point) = scalar.real();
+            }
+            if scalar.is_complex() && out_im.is_null() {
+                return crate::err_status(
+                    "t4a_treetn_evaluate requires out_im for complex-valued TreeTN results",
+                    T4A_NULL_POINTER,
+                );
+            }
+            if !out_im.is_null() {
+                unsafe {
+                    *out_im.add(point) = scalar.imag();
+                }
+            }
+        }
+
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Evaluate a TreeTN at one or more multi-indices (legacy vertex-name-based API).
 ///
 /// `indices_flat` is interpreted as a column-major `(n_sites, n_points)` array:
 /// element `(site, point)` is stored at `indices_flat[site + n_sites * point]`.
@@ -819,45 +981,60 @@ pub extern "C" fn t4a_treetn_evaluate_batch(
             );
         }
 
-        let Some(_n_entries) = n_sites.checked_mul(n_points) else {
+        let Some(n_entries) = n_sites.checked_mul(n_points) else {
             return crate::err_status(
                 "t4a_treetn_evaluate_batch index array size overflowed size_t",
                 T4A_INVALID_ARGUMENT,
             );
         };
 
+        // Use the new IndexId-based evaluate API internally.
+        // Build index_ids ordered by vertex name (0, 1, 2, ...) so that
+        // the flat indices_flat layout matches.
+        let (all_index_ids, all_vertices) = match inner.all_site_index_ids() {
+            Ok(v) => v,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+        };
+
+        // For each vertex 0..n_sites, verify exactly one site index and
+        // build an ordered index_ids vector matching the C API layout.
+        let mut ordered_index_ids = Vec::with_capacity(n_sites);
         for site in 0..n_sites {
-            let Some(site_space) = inner.site_space(&site) else {
+            // Find the index_id for this vertex
+            let pos = all_vertices.iter().position(|v| *v == site);
+            let Some(pos) = pos else {
                 return crate::err_status(
-                    format!("TreeTN vertex {} does not exist", site),
+                    format!(
+                        "TreeTN vertex {} does not exist in site index network",
+                        site
+                    ),
                     T4A_INVALID_ARGUMENT,
                 );
             };
-            if site_space.len() != 1 {
+            // Verify only one site index per vertex
+            if all_vertices.iter().filter(|v| **v == site).count() != 1 {
                 return crate::err_status(
                     format!(
-                        "t4a_treetn_evaluate_batch requires exactly one site index per vertex; vertex {} has {}",
-                        site,
-                        site_space.len()
+                        "t4a_treetn_evaluate_batch requires exactly one site index per vertex; vertex {} has more",
+                        site
                     ),
                     T4A_INVALID_ARGUMENT,
                 );
             }
+            ordered_index_ids.push(all_index_ids[pos]);
         }
 
-        for point in 0..n_points {
-            let mut index_values = HashMap::with_capacity(n_sites);
-            for site in 0..n_sites {
-                let flat_idx = site + n_sites * point;
-                let value = unsafe { *indices_flat.add(flat_idx) };
-                index_values.insert(site, vec![value]);
-            }
+        // Build ColMajorArrayRef from the flat indices
+        let indices_slice = unsafe { std::slice::from_raw_parts(indices_flat, n_entries) };
+        let shape = [n_sites, n_points];
+        let values = ColMajorArrayRef::new(indices_slice, &shape);
 
-            let scalar = match inner.evaluate(&index_values) {
-                Ok(value) => value,
-                Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
-            };
+        let scalars = match inner.evaluate(&ordered_index_ids, values) {
+            Ok(v) => v,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+        };
 
+        for (point, scalar) in scalars.iter().enumerate() {
             unsafe {
                 *out_re.add(point) = scalar.real();
             }
