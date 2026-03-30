@@ -19,7 +19,7 @@ use tensor4all_treetci::{
 // Callback type
 // ============================================================================
 
-/// Batch evaluation callback for TreeTCI.
+/// Evaluation callback for TreeTCI.
 ///
 /// Evaluates the target function at multiple points simultaneously.
 /// When `n_points == 1`, this acts as a single-point evaluation.
@@ -34,7 +34,7 @@ use tensor4all_treetci::{
 ///
 /// # Returns
 /// 0 on success, non-zero on error
-pub type TreeTciBatchEvalCallback = extern "C" fn(
+pub type TreeTciEvalCallback = extern "C" fn(
     batch_data: *const libc::size_t,
     n_sites: libc::size_t,
     n_points: libc::size_t,
@@ -42,8 +42,8 @@ pub type TreeTciBatchEvalCallback = extern "C" fn(
     user_data: *mut c_void,
 ) -> i32;
 
-/// Complex batch evaluation callback for TreeTCI.
-pub type TreeTciBatchEvalCallbackC64 = extern "C" fn(
+/// Complex evaluation callback for TreeTCI.
+pub type TreeTciEvalCallbackC64 = extern "C" fn(
     batch_data: *const libc::size_t,
     n_sites: libc::size_t,
     n_points: libc::size_t,
@@ -55,11 +55,11 @@ pub type TreeTciBatchEvalCallbackC64 = extern "C" fn(
 // Internal helpers
 // ============================================================================
 
-/// Create a batch eval closure from the C callback.
+/// Create an evaluate closure from the C callback.
 ///
 /// Returns a closure compatible with `Fn(GlobalIndexBatch<'_>) -> Result<Vec<f64>>`.
-fn make_batch_eval_closure(
-    eval_fn: TreeTciBatchEvalCallback,
+fn make_evaluate_closure(
+    eval_fn: TreeTciEvalCallback,
     user_data: *mut c_void,
 ) -> impl Fn(GlobalIndexBatch<'_>) -> anyhow::Result<Vec<f64>> {
     move |batch: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<f64>> {
@@ -73,7 +73,7 @@ fn make_batch_eval_closure(
         );
         if status != 0 {
             anyhow::bail!(
-                "TreeTCI batch eval callback returned error status {}",
+                "TreeTCI eval callback returned error status {}",
                 status
             );
         }
@@ -81,9 +81,9 @@ fn make_batch_eval_closure(
     }
 }
 
-/// Create a complex batch eval closure from the C callback.
-fn make_batch_eval_closure_c64(
-    eval_fn: TreeTciBatchEvalCallbackC64,
+/// Create a complex evaluate closure from the C callback.
+fn make_evaluate_closure_c64(
+    eval_fn: TreeTciEvalCallbackC64,
     user_data: *mut c_void,
 ) -> impl Fn(GlobalIndexBatch<'_>) -> anyhow::Result<Vec<Complex64>> {
     move |batch: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<Complex64>> {
@@ -97,51 +97,13 @@ fn make_batch_eval_closure_c64(
         );
         if status != 0 {
             anyhow::bail!(
-                "TreeTCI batch eval callback returned error status {}",
+                "TreeTCI eval callback returned error status {}",
                 status
             );
         }
         Ok((0..batch.n_points())
             .map(|idx| Complex64::new(interleaved[2 * idx], interleaved[2 * idx + 1]))
             .collect())
-    }
-}
-
-/// Create a point eval closure from the C batch callback (n_points=1).
-fn make_point_eval_closure(
-    eval_fn: TreeTciBatchEvalCallback,
-    user_data: *mut c_void,
-) -> impl Fn(&[usize]) -> f64 {
-    move |indices: &[usize]| -> f64 {
-        let mut result: f64 = 0.0;
-        let status = eval_fn(indices.as_ptr(), indices.len(), 1, &mut result, user_data);
-        if status != 0 {
-            f64::NAN
-        } else {
-            result
-        }
-    }
-}
-
-/// Create a point eval closure from the complex C batch callback (n_points=1).
-fn make_point_eval_closure_c64(
-    eval_fn: TreeTciBatchEvalCallbackC64,
-    user_data: *mut c_void,
-) -> impl Fn(&[usize]) -> Complex64 {
-    move |indices: &[usize]| -> Complex64 {
-        let mut result = [0.0f64; 2];
-        let status = eval_fn(
-            indices.as_ptr(),
-            indices.len(),
-            1,
-            result.as_mut_ptr(),
-            user_data,
-        );
-        if status != 0 {
-            Complex64::new(f64::NAN, f64::NAN)
-        } else {
-            Complex64::new(result[0], result[1])
-        }
     }
 }
 
@@ -406,7 +368,7 @@ pub extern "C" fn t4a_treetci_f64_add_global_pivots(
 ///
 /// # Arguments
 /// - `ptr`: State handle (mutable)
-/// - `eval_cb`: Batch evaluation callback
+/// - `eval_cb`: Evaluation callback
 /// - `user_data`: User data passed to callback
 /// - `proposer_kind`: Proposer selection
 /// - `tolerance`: Relative tolerance for this iteration
@@ -414,7 +376,7 @@ pub extern "C" fn t4a_treetci_f64_add_global_pivots(
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetci_f64_sweep(
     ptr: *mut t4a_treetci_f64,
-    eval_cb: TreeTciBatchEvalCallback,
+    eval_cb: TreeTciEvalCallback,
     user_data: *mut c_void,
     proposer_kind: t4a_treetci_proposer_kind,
     tolerance: libc::c_double,
@@ -427,7 +389,7 @@ pub extern "C" fn t4a_treetci_f64_sweep(
     let result = catch_unwind(AssertUnwindSafe(|| {
         let state = unsafe { &mut *ptr };
         let state_inner = state.inner_mut();
-        let batch_eval = make_batch_eval_closure(eval_cb, user_data);
+        let evaluate = make_evaluate_closure(eval_cb, user_data);
         let options = make_options(tolerance, max_bond_dim, 1, true);
 
         let res = match proposer_kind {
@@ -435,7 +397,7 @@ pub extern "C" fn t4a_treetci_f64_sweep(
                 let proposer = DefaultProposer;
                 tensor4all_treetci::optimize_with_proposer(
                     state_inner,
-                    batch_eval,
+                    evaluate,
                     &options,
                     &proposer,
                 )
@@ -444,7 +406,7 @@ pub extern "C" fn t4a_treetci_f64_sweep(
                 let proposer = SimpleProposer::default();
                 tensor4all_treetci::optimize_with_proposer(
                     state_inner,
-                    batch_eval,
+                    evaluate,
                     &options,
                     &proposer,
                 )
@@ -453,7 +415,7 @@ pub extern "C" fn t4a_treetci_f64_sweep(
                 let proposer = TruncatedDefaultProposer::default();
                 tensor4all_treetci::optimize_with_proposer(
                     state_inner,
-                    batch_eval,
+                    evaluate,
                     &options,
                     &proposer,
                 )
@@ -569,9 +531,9 @@ pub extern "C" fn t4a_treetci_f64_bond_dims(
         }
 
         for (i, edge) in edges.iter().enumerate() {
-            // Bond dim = number of pivot rows for either side of this edge
+            // Bond dim = number of pivot columns for either side of this edge
             let (key_u, _key_v) = inner.graph.subregion_vertices(*edge).unwrap();
-            let rank = inner.ijset.get(&key_u).map_or(0, |v| v.len());
+            let rank = inner.ijset.get(&key_u).map_or(0, |arr| arr.ncols());
             unsafe { *out_ranks.add(i) = rank };
         }
 
@@ -587,12 +549,12 @@ pub extern "C" fn t4a_treetci_f64_bond_dims(
 
 /// Materialize the converged TreeTCI state into a TreeTN.
 ///
-/// Internally re-evaluates tensor values using the batch callback and
+/// Internally re-evaluates tensor values using the evaluation callback and
 /// performs LU factorization to construct per-vertex tensors.
 ///
 /// # Arguments
 /// - `ptr`: State handle (const -- state is not modified)
-/// - `eval_cb`: Batch evaluation callback
+/// - `eval_cb`: Evaluation callback
 /// - `user_data`: User data passed to callback
 /// - `center_site`: BFS root site for materialization
 /// - `out_treetn`: Output TreeTN handle pointer
@@ -602,7 +564,7 @@ pub extern "C" fn t4a_treetci_f64_bond_dims(
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetci_f64_to_treetn(
     ptr: *const t4a_treetci_f64,
-    eval_cb: TreeTciBatchEvalCallback,
+    eval_cb: TreeTciEvalCallback,
     user_data: *mut c_void,
     center_site: libc::size_t,
     out_treetn: *mut *mut t4a_treetn,
@@ -613,9 +575,9 @@ pub extern "C" fn t4a_treetci_f64_to_treetn(
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         let state = unsafe { &*ptr };
-        let batch_eval = make_batch_eval_closure(eval_cb, user_data);
+        let evaluate = make_evaluate_closure(eval_cb, user_data);
 
-        match tensor4all_treetci::to_treetn(state.inner(), batch_eval, Some(center_site)) {
+        match tensor4all_treetci::to_treetn(state.inner(), evaluate, Some(center_site)) {
             Ok(treetn) => {
                 unsafe { *out_treetn = Box::into_raw(Box::new(t4a_treetn::new(treetn))) };
                 T4A_SUCCESS
@@ -636,7 +598,7 @@ pub extern "C" fn t4a_treetci_f64_to_treetn(
 /// Equivalent to: new -> add_pivots -> sweep loop -> materialize.
 ///
 /// # Arguments
-/// - `eval_cb`: Batch evaluation callback
+/// - `eval_cb`: Evaluation callback
 /// - `user_data`: User data passed to callback
 /// - `local_dims`: Local dimension at each site (length = n_sites)
 /// - `n_sites`: Number of sites
@@ -655,8 +617,8 @@ pub extern "C" fn t4a_treetci_f64_to_treetn(
 /// - `out_n_iters`: Output: actual number of iterations performed
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-pub extern "C" fn t4a_crossinterpolate_tree_f64(
-    eval_cb: TreeTciBatchEvalCallback,
+pub extern "C" fn t4a_treetci_crossinterpolate2_f64(
+    eval_cb: TreeTciEvalCallback,
     user_data: *mut c_void,
     local_dims: *const libc::size_t,
     n_sites: libc::size_t,
@@ -688,13 +650,7 @@ pub extern "C" fn t4a_crossinterpolate_tree_f64(
         let g = unsafe { &*graph };
         let graph_clone = g.inner().clone();
 
-        // Create state
-        let mut state = match SimpleTreeTci::new(dims, graph_clone) {
-            Ok(s) => s,
-            Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
-        };
-
-        // Add initial pivots (default to zero pivot if none provided)
+        // Parse initial pivots (default to zero pivot if none provided)
         let pivots: Vec<Vec<usize>> = if !initial_pivots_flat.is_null() && n_pivots > 0 {
             (0..n_pivots)
                 .map(|p| {
@@ -706,58 +662,53 @@ pub extern "C" fn t4a_crossinterpolate_tree_f64(
         } else {
             vec![vec![0; n_sites]]
         };
-        if let Err(e) = state.add_global_pivots(&pivots) {
-            return err_status(e, T4A_INTERNAL_ERROR);
-        }
 
-        // Evaluate max_sample_value at initial pivots using the point eval closure
-        let point_eval = make_point_eval_closure(eval_cb, user_data);
-        for pivot in &pivots {
-            let val = point_eval(pivot);
-            state.max_sample_value = state.max_sample_value.max(val.abs());
-        }
-
-        // Run optimization
-        let batch_eval = make_batch_eval_closure(eval_cb, user_data);
+        let evaluate = make_evaluate_closure(eval_cb, user_data);
         let options = make_options(tolerance, max_bond_dim, max_iter, normalize_error != 0);
 
-        let (ranks, errors) = match proposer_kind {
+        // Use crossinterpolate2 with the appropriate proposer
+        let run_result = match proposer_kind {
             t4a_treetci_proposer_kind::Default => {
                 let proposer = DefaultProposer;
-                match tensor4all_treetci::optimize_with_proposer(
-                    &mut state,
-                    &batch_eval,
-                    &options,
+                tensor4all_treetci::crossinterpolate2::<f64, _, _>(
+                    evaluate,
+                    dims,
+                    graph_clone,
+                    pivots,
+                    options,
+                    Some(center_site),
                     &proposer,
-                ) {
-                    Ok(r) => r,
-                    Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
-                }
+                )
             }
             t4a_treetci_proposer_kind::Simple => {
                 let proposer = SimpleProposer::default();
-                match tensor4all_treetci::optimize_with_proposer(
-                    &mut state,
-                    &batch_eval,
-                    &options,
+                tensor4all_treetci::crossinterpolate2::<f64, _, _>(
+                    evaluate,
+                    dims,
+                    graph_clone,
+                    pivots,
+                    options,
+                    Some(center_site),
                     &proposer,
-                ) {
-                    Ok(r) => r,
-                    Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
-                }
+                )
             }
             t4a_treetci_proposer_kind::TruncatedDefault => {
                 let proposer = TruncatedDefaultProposer::default();
-                match tensor4all_treetci::optimize_with_proposer(
-                    &mut state,
-                    &batch_eval,
-                    &options,
+                tensor4all_treetci::crossinterpolate2::<f64, _, _>(
+                    evaluate,
+                    dims,
+                    graph_clone,
+                    pivots,
+                    options,
+                    Some(center_site),
                     &proposer,
-                ) {
-                    Ok(r) => r,
-                    Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
-                }
+                )
             }
+        };
+
+        let (treetn, ranks, errors) = match run_result {
+            Ok(r) => r,
+            Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
         };
 
         let n_iters = ranks.len();
@@ -775,14 +726,8 @@ pub extern "C" fn t4a_crossinterpolate_tree_f64(
             }
         }
 
-        // Materialize
-        match tensor4all_treetci::to_treetn(&state, &batch_eval, Some(center_site)) {
-            Ok(treetn) => {
-                unsafe { *out_treetn = Box::into_raw(Box::new(t4a_treetn::new(treetn))) };
-                T4A_SUCCESS
-            }
-            Err(e) => err_status(e, T4A_INTERNAL_ERROR),
-        }
+        unsafe { *out_treetn = Box::into_raw(Box::new(t4a_treetn::new(treetn))) };
+        T4A_SUCCESS
     }));
 
     crate::unwrap_catch(result)
@@ -832,7 +777,7 @@ pub extern "C" fn t4a_treetci_c64_add_global_pivots(
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetci_c64_sweep(
     ptr: *mut t4a_treetci_c64,
-    eval_cb: TreeTciBatchEvalCallbackC64,
+    eval_cb: TreeTciEvalCallbackC64,
     user_data: *mut c_void,
     proposer_kind: t4a_treetci_proposer_kind,
     tolerance: libc::c_double,
@@ -845,7 +790,7 @@ pub extern "C" fn t4a_treetci_c64_sweep(
     let result = catch_unwind(AssertUnwindSafe(|| {
         let state = unsafe { &mut *ptr };
         let state_inner = state.inner_mut();
-        let batch_eval = make_batch_eval_closure_c64(eval_cb, user_data);
+        let evaluate = make_evaluate_closure_c64(eval_cb, user_data);
         let options = make_options(tolerance, max_bond_dim, 1, true);
 
         let res = match proposer_kind {
@@ -853,7 +798,7 @@ pub extern "C" fn t4a_treetci_c64_sweep(
                 let proposer = DefaultProposer;
                 tensor4all_treetci::optimize_with_proposer(
                     state_inner,
-                    batch_eval,
+                    evaluate,
                     &options,
                     &proposer,
                 )
@@ -862,7 +807,7 @@ pub extern "C" fn t4a_treetci_c64_sweep(
                 let proposer = SimpleProposer::default();
                 tensor4all_treetci::optimize_with_proposer(
                     state_inner,
-                    batch_eval,
+                    evaluate,
                     &options,
                     &proposer,
                 )
@@ -871,7 +816,7 @@ pub extern "C" fn t4a_treetci_c64_sweep(
                 let proposer = TruncatedDefaultProposer::default();
                 tensor4all_treetci::optimize_with_proposer(
                     state_inner,
-                    batch_eval,
+                    evaluate,
                     &options,
                     &proposer,
                 )
@@ -977,7 +922,7 @@ pub extern "C" fn t4a_treetci_c64_bond_dims(
 
         for (i, edge) in edges.iter().enumerate() {
             let (key_u, _key_v) = inner.graph.subregion_vertices(*edge).unwrap();
-            let rank = inner.ijset.get(&key_u).map_or(0, |v| v.len());
+            let rank = inner.ijset.get(&key_u).map_or(0, |arr| arr.ncols());
             unsafe { *out_ranks.add(i) = rank };
         }
 
@@ -991,7 +936,7 @@ pub extern "C" fn t4a_treetci_c64_bond_dims(
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetci_c64_to_treetn(
     ptr: *const t4a_treetci_c64,
-    eval_cb: TreeTciBatchEvalCallbackC64,
+    eval_cb: TreeTciEvalCallbackC64,
     user_data: *mut c_void,
     center_site: libc::size_t,
     out_treetn: *mut *mut t4a_treetn,
@@ -1002,9 +947,9 @@ pub extern "C" fn t4a_treetci_c64_to_treetn(
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         let state = unsafe { &*ptr };
-        let batch_eval = make_batch_eval_closure_c64(eval_cb, user_data);
+        let evaluate = make_evaluate_closure_c64(eval_cb, user_data);
 
-        match tensor4all_treetci::to_treetn(state.inner(), batch_eval, Some(center_site)) {
+        match tensor4all_treetci::to_treetn(state.inner(), evaluate, Some(center_site)) {
             Ok(treetn) => {
                 unsafe { *out_treetn = Box::into_raw(Box::new(t4a_treetn::new(treetn))) };
                 T4A_SUCCESS
@@ -1019,8 +964,8 @@ pub extern "C" fn t4a_treetci_c64_to_treetn(
 /// Run complex TreeTCI to convergence and return a TreeTN.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-pub extern "C" fn t4a_crossinterpolate_tree_c64(
-    eval_cb: TreeTciBatchEvalCallbackC64,
+pub extern "C" fn t4a_treetci_crossinterpolate2_c64(
+    eval_cb: TreeTciEvalCallbackC64,
     user_data: *mut c_void,
     local_dims: *const libc::size_t,
     n_sites: libc::size_t,
@@ -1050,11 +995,6 @@ pub extern "C" fn t4a_crossinterpolate_tree_c64(
         let g = unsafe { &*graph };
         let graph_clone = g.inner().clone();
 
-        let mut state = match SimpleTreeTci::new(dims, graph_clone) {
-            Ok(s) => s,
-            Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
-        };
-
         let pivots: Vec<Vec<usize>> = if !initial_pivots_flat.is_null() && n_pivots > 0 {
             (0..n_pivots)
                 .map(|p| {
@@ -1066,56 +1006,52 @@ pub extern "C" fn t4a_crossinterpolate_tree_c64(
         } else {
             vec![vec![0; n_sites]]
         };
-        if let Err(e) = state.add_global_pivots(&pivots) {
-            return err_status(e, T4A_INTERNAL_ERROR);
-        }
 
-        let point_eval = make_point_eval_closure_c64(eval_cb, user_data);
-        for pivot in &pivots {
-            let val = point_eval(pivot);
-            state.max_sample_value = state.max_sample_value.max(val.norm());
-        }
-
-        let batch_eval = make_batch_eval_closure_c64(eval_cb, user_data);
+        let evaluate = make_evaluate_closure_c64(eval_cb, user_data);
         let options = make_options(tolerance, max_bond_dim, max_iter, normalize_error != 0);
 
-        let (ranks, errors) = match proposer_kind {
+        let run_result = match proposer_kind {
             t4a_treetci_proposer_kind::Default => {
                 let proposer = DefaultProposer;
-                match tensor4all_treetci::optimize_with_proposer(
-                    &mut state,
-                    &batch_eval,
-                    &options,
+                tensor4all_treetci::crossinterpolate2::<Complex64, _, _>(
+                    evaluate,
+                    dims,
+                    graph_clone,
+                    pivots,
+                    options,
+                    Some(center_site),
                     &proposer,
-                ) {
-                    Ok(r) => r,
-                    Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
-                }
+                )
             }
             t4a_treetci_proposer_kind::Simple => {
                 let proposer = SimpleProposer::default();
-                match tensor4all_treetci::optimize_with_proposer(
-                    &mut state,
-                    &batch_eval,
-                    &options,
+                tensor4all_treetci::crossinterpolate2::<Complex64, _, _>(
+                    evaluate,
+                    dims,
+                    graph_clone,
+                    pivots,
+                    options,
+                    Some(center_site),
                     &proposer,
-                ) {
-                    Ok(r) => r,
-                    Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
-                }
+                )
             }
             t4a_treetci_proposer_kind::TruncatedDefault => {
                 let proposer = TruncatedDefaultProposer::default();
-                match tensor4all_treetci::optimize_with_proposer(
-                    &mut state,
-                    &batch_eval,
-                    &options,
+                tensor4all_treetci::crossinterpolate2::<Complex64, _, _>(
+                    evaluate,
+                    dims,
+                    graph_clone,
+                    pivots,
+                    options,
+                    Some(center_site),
                     &proposer,
-                ) {
-                    Ok(r) => r,
-                    Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
-                }
+                )
             }
+        };
+
+        let (treetn, ranks, errors) = match run_result {
+            Ok(r) => r,
+            Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
         };
 
         let n_iters = ranks.len();
@@ -1132,13 +1068,8 @@ pub extern "C" fn t4a_crossinterpolate_tree_c64(
             }
         }
 
-        match tensor4all_treetci::to_treetn(&state, &batch_eval, Some(center_site)) {
-            Ok(treetn) => {
-                unsafe { *out_treetn = Box::into_raw(Box::new(t4a_treetn::new(treetn))) };
-                T4A_SUCCESS
-            }
-            Err(e) => err_status(e, T4A_INTERNAL_ERROR),
-        }
+        unsafe { *out_treetn = Box::into_raw(Box::new(t4a_treetn::new(treetn))) };
+        T4A_SUCCESS
     }));
 
     crate::unwrap_catch(result)
@@ -1193,7 +1124,7 @@ mod tests {
 
     /// Product function: f(idx) = prod(idx[s] + 1.0)
     /// This has an exact TT representation with bond dim 1.
-    extern "C" fn product_batch_eval(
+    extern "C" fn product_eval(
         batch_data: *const libc::size_t,
         n_sites: libc::size_t,
         n_points: libc::size_t,
@@ -1217,7 +1148,7 @@ mod tests {
         })
     }
 
-    extern "C" fn complex_product_batch_eval(
+    extern "C" fn complex_product_eval(
         batch_data: *const libc::size_t,
         n_sites: libc::size_t,
         n_points: libc::size_t,
@@ -1301,7 +1232,7 @@ mod tests {
         // Run one sweep
         let status = t4a_treetci_f64_sweep(
             state,
-            product_batch_eval,
+            product_eval,
             std::ptr::null_mut(), // no user_data needed
             t4a_treetci_proposer_kind::Default,
             1e-12,
@@ -1327,7 +1258,7 @@ mod tests {
         for _ in 0..4 {
             t4a_treetci_f64_sweep(
                 state,
-                product_batch_eval,
+                product_eval,
                 std::ptr::null_mut(),
                 t4a_treetci_proposer_kind::Default,
                 1e-12,
@@ -1384,7 +1315,7 @@ mod tests {
         for _ in 0..4 {
             t4a_treetci_f64_sweep(
                 state,
-                product_batch_eval,
+                product_eval,
                 std::ptr::null_mut(),
                 t4a_treetci_proposer_kind::Default,
                 1e-12,
@@ -1396,7 +1327,7 @@ mod tests {
         let mut treetn_ptr: *mut t4a_treetn = std::ptr::null_mut();
         let status = t4a_treetci_f64_to_treetn(
             state,
-            product_batch_eval,
+            product_eval,
             std::ptr::null_mut(),
             0, // center_site
             &mut treetn_ptr,
@@ -1416,7 +1347,7 @@ mod tests {
     }
 
     #[test]
-    fn test_crossinterpolate_tree_f64() {
+    fn test_treetci_crossinterpolate2_f64() {
         let edges = sample_edges();
         let graph = t4a_treetci_graph_new(7, edges.as_ptr(), 6);
         let local_dims: Vec<libc::size_t> = vec![2; 7];
@@ -1428,8 +1359,8 @@ mod tests {
         let mut out_errors = vec![0.0f64; max_iter];
         let mut out_n_iters: libc::size_t = 0;
 
-        let status = t4a_crossinterpolate_tree_f64(
-            product_batch_eval,
+        let status = t4a_treetci_crossinterpolate2_f64(
+            product_eval,
             std::ptr::null_mut(),
             local_dims.as_ptr(),
             7,
@@ -1485,7 +1416,7 @@ mod tests {
             assert_eq!(
                 t4a_treetci_c64_sweep(
                     state,
-                    complex_product_batch_eval,
+                    complex_product_eval,
                     std::ptr::null_mut(),
                     t4a_treetci_proposer_kind::Default,
                     1e-12,
@@ -1531,7 +1462,7 @@ mod tests {
         assert_eq!(
             t4a_treetci_c64_to_treetn(
                 state,
-                complex_product_batch_eval,
+                complex_product_eval,
                 std::ptr::null_mut(),
                 0,
                 &mut treetn_ptr,
@@ -1581,7 +1512,7 @@ mod tests {
     }
 
     #[test]
-    fn test_crossinterpolate_tree_c64() {
+    fn test_treetci_crossinterpolate2_c64() {
         let edges = sample_edges();
         let graph = t4a_treetci_graph_new(7, edges.as_ptr(), 6);
         let local_dims: Vec<libc::size_t> = vec![2; 7];
@@ -1594,8 +1525,8 @@ mod tests {
         let mut out_n_iters: libc::size_t = 0;
 
         assert_eq!(
-            t4a_crossinterpolate_tree_c64(
-                complex_product_batch_eval,
+            t4a_treetci_crossinterpolate2_c64(
+                complex_product_eval,
                 std::ptr::null_mut(),
                 local_dims.as_ptr(),
                 7,

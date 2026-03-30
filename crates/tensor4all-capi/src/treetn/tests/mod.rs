@@ -12,6 +12,24 @@ unsafe extern "C" {
         out_re: *mut libc::c_double,
         out_im: *mut libc::c_double,
     ) -> StatusCode;
+
+    fn t4a_treetn_all_site_index_ids(
+        ptr: *const t4a_treetn,
+        out_index_ids: *mut u64,
+        out_vertex_names: *mut libc::size_t,
+        buf_len: libc::size_t,
+        out_n_indices: *mut libc::size_t,
+    ) -> StatusCode;
+
+    fn t4a_treetn_evaluate(
+        ptr: *const t4a_treetn,
+        index_ids: *const u64,
+        n_indices: libc::size_t,
+        values: *const libc::size_t,
+        n_points: libc::size_t,
+        out_re: *mut libc::c_double,
+        out_im: *mut libc::c_double,
+    ) -> StatusCode;
 }
 
 // ========================================================================
@@ -640,6 +658,100 @@ fn test_treetn_linsolve() {
     crate::t4a_index_release(s0p);
     crate::t4a_index_release(s0p_clone);
     crate::t4a_index_release(s0_clone);
+}
+
+// ========================================================================
+// IndexId-based evaluate tests
+// ========================================================================
+
+#[test]
+fn test_treetn_all_site_index_ids_and_evaluate() {
+    let tt = make_product_treetn_from_simplett();
+
+    // Query size
+    let mut n_indices: libc::size_t = 0;
+    let status = unsafe {
+        t4a_treetn_all_site_index_ids(
+            tt,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+            &mut n_indices,
+        )
+    };
+    assert_eq!(status, T4A_SUCCESS);
+    assert_eq!(n_indices, 3); // 3 sites
+
+    // Fill buffers
+    let mut index_ids = vec![0u64; n_indices];
+    let mut vertex_names = vec![0usize; n_indices];
+    let status = unsafe {
+        t4a_treetn_all_site_index_ids(
+            tt,
+            index_ids.as_mut_ptr(),
+            vertex_names.as_mut_ptr(),
+            n_indices,
+            &mut n_indices,
+        )
+    };
+    assert_eq!(status, T4A_SUCCESS);
+    assert_eq!(n_indices, 3);
+
+    // Build position map: vertex -> position in index_ids
+    // Product TT: site 0 has dim 2, site 1 has dim 3, site 2 has dim 2
+    // f(i, j, k) = (i+1) * (10*j + 10) * (100*k + 100)
+    // Let's evaluate a single point using the new API
+    // We need to arrange values in index_ids order
+
+    // Single point: indices [1, 2, 1] in vertex order
+    let mut values = vec![0usize; n_indices];
+    for v in 0..3usize {
+        let pos = vertex_names.iter().position(|&name| name == v).unwrap();
+        values[pos] = [1, 2, 1][v];
+    }
+
+    let mut result_re = 0.0;
+    let status = unsafe {
+        t4a_treetn_evaluate(
+            tt,
+            index_ids.as_ptr(),
+            n_indices,
+            values.as_ptr(),
+            1,
+            &mut result_re,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(status, T4A_SUCCESS);
+    assert!((result_re - 12_000.0).abs() < 1e-10);
+
+    // Multi-point evaluation: 3 points
+    // point 0: [0, 0, 0], point 1: [1, 1, 0], point 2: [0, 2, 1]
+    let points = [[0usize, 0, 0], [1, 1, 0], [0, 2, 1]];
+    let mut flat_values = vec![0usize; n_indices * 3];
+    for (p, point) in points.iter().enumerate() {
+        for v in 0..3usize {
+            let pos = vertex_names.iter().position(|&name| name == v).unwrap();
+            flat_values[pos + n_indices * p] = point[v];
+        }
+    }
+
+    let mut results_re = [0.0; 3];
+    let status = unsafe {
+        t4a_treetn_evaluate(
+            tt,
+            index_ids.as_ptr(),
+            n_indices,
+            flat_values.as_ptr(),
+            3,
+            results_re.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(status, T4A_SUCCESS);
+    assert_eq!(results_re, [1_000.0, 4_000.0, 6_000.0]);
+
+    t4a_treetn_release(tt);
 }
 
 // ========================================================================
