@@ -593,30 +593,27 @@ pub extern "C" fn t4a_crossinterpolate_tree_f64(
             Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
         };
 
-        // Add initial pivots
-        if !initial_pivots_flat.is_null() && n_pivots > 0 {
-            let pivots: Vec<Vec<usize>> = (0..n_pivots)
+        // Add initial pivots (default to zero pivot if none provided)
+        let pivots: Vec<Vec<usize>> = if !initial_pivots_flat.is_null() && n_pivots > 0 {
+            (0..n_pivots)
                 .map(|p| {
                     (0..n_sites)
                         .map(|s| unsafe { *initial_pivots_flat.add(s + n_sites * p) })
                         .collect()
                 })
-                .collect();
-            if let Err(e) = state.add_global_pivots(&pivots) {
-                return err_status(e, T4A_INTERNAL_ERROR);
-            }
+                .collect()
+        } else {
+            vec![vec![0; n_sites]]
+        };
+        if let Err(e) = state.add_global_pivots(&pivots) {
+            return err_status(e, T4A_INTERNAL_ERROR);
         }
 
         // Evaluate max_sample_value at initial pivots using the point eval closure
         let point_eval = make_point_eval_closure(eval_cb, user_data);
-        if !initial_pivots_flat.is_null() && n_pivots > 0 {
-            for p in 0..n_pivots {
-                let pivot: Vec<usize> = (0..n_sites)
-                    .map(|s| unsafe { *initial_pivots_flat.add(s + n_sites * p) })
-                    .collect();
-                let val = point_eval(&pivot);
-                state.max_sample_value = state.max_sample_value.max(val.abs());
-            }
+        for pivot in &pivots {
+            let val = point_eval(pivot);
+            state.max_sample_value = state.max_sample_value.max(val.abs());
         }
 
         // Run optimization
