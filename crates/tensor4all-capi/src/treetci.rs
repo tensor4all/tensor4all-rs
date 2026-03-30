@@ -192,6 +192,109 @@ pub extern "C" fn t4a_treetci_graph_n_edges(
     crate::unwrap_catch(result)
 }
 
+// ============================================================================
+// State lifecycle
+// ============================================================================
+
+/// Create a new TreeTCI state.
+///
+/// # Arguments
+/// - `local_dims`: Local dimension at each site (length = n_sites)
+/// - `n_sites`: Number of sites (must match graph)
+/// - `graph`: Tree graph handle (not consumed; cloned internally)
+///
+/// # Returns
+/// New state handle, or NULL on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetci_f64_new(
+    local_dims: *const libc::size_t,
+    n_sites: libc::size_t,
+    graph: *const t4a_treetci_graph,
+) -> *mut t4a_treetci_f64 {
+    if local_dims.is_null() || graph.is_null() {
+        set_last_error("local_dims or graph is null");
+        return std::ptr::null_mut();
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let dims: Vec<usize> = (0..n_sites)
+            .map(|i| unsafe { *local_dims.add(i) })
+            .collect();
+        let g = unsafe { &*graph };
+        let graph_clone = g.inner().clone();
+
+        match SimpleTreeTci::new(dims, graph_clone) {
+            Ok(state) => Box::into_raw(Box::new(t4a_treetci_f64::new(state))),
+            Err(e) => {
+                set_last_error(&e.to_string());
+                std::ptr::null_mut()
+            }
+        }
+    }));
+
+    crate::unwrap_catch_ptr(result)
+}
+
+/// Release a TreeTCI state.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetci_f64_release(ptr: *mut t4a_treetci_f64) {
+    if !ptr.is_null() {
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        }
+    }
+}
+
+// ============================================================================
+// Pivot management
+// ============================================================================
+
+/// Add global pivots to the TreeTCI state.
+///
+/// Each pivot is a multi-index over all sites. The pivots are projected
+/// to per-edge pivot sets internally.
+///
+/// # Arguments
+/// - `ptr`: State handle
+/// - `pivots_flat`: Column-major (n_sites, n_pivots) index array
+/// - `n_sites`: Number of sites (must match state)
+/// - `n_pivots`: Number of pivots
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetci_f64_add_global_pivots(
+    ptr: *mut t4a_treetci_f64,
+    pivots_flat: *const libc::size_t,
+    n_sites: libc::size_t,
+    n_pivots: libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+    if pivots_flat.is_null() && n_pivots > 0 {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let state = unsafe { &mut *ptr };
+        let state_inner = state.inner_mut();
+
+        // Unpack column-major (n_sites, n_pivots) to Vec<Vec<usize>>
+        let pivots: Vec<Vec<usize>> = (0..n_pivots)
+            .map(|p| {
+                (0..n_sites)
+                    .map(|s| unsafe { *pivots_flat.add(s + n_sites * p) })
+                    .collect()
+            })
+            .collect();
+
+        match state_inner.add_global_pivots(&pivots) {
+            Ok(()) => T4A_SUCCESS,
+            Err(e) => err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,5 +339,33 @@ mod tests {
         let edges: Vec<libc::size_t> = vec![0, 1, 2, 3];
         let graph = t4a_treetci_graph_new(4, edges.as_ptr(), 2);
         assert!(graph.is_null()); // should fail validation
+    }
+
+    #[test]
+    fn test_state_new_and_add_pivots() {
+        let edges = sample_edges();
+        let graph = t4a_treetci_graph_new(7, edges.as_ptr(), 6);
+        assert!(!graph.is_null());
+
+        let local_dims: Vec<libc::size_t> = vec![2; 7];
+        let state = t4a_treetci_f64_new(local_dims.as_ptr(), 7, graph);
+        assert!(!state.is_null());
+
+        // Add one pivot: all zeros (column-major, n_sites=7, n_pivots=1)
+        let pivot: Vec<libc::size_t> = vec![0; 7];
+        let status = t4a_treetci_f64_add_global_pivots(state, pivot.as_ptr(), 7, 1);
+        assert_eq!(status, T4A_SUCCESS);
+
+        // Add two pivots at once (column-major)
+        // pivot0 = [0,0,0,0,0,0,0], pivot1 = [1,0,1,0,1,0,1]
+        let pivots: Vec<libc::size_t> = vec![
+            0, 0, 0, 0, 0, 0, 0, // column 0 (sites 0-6 for point 0)
+            1, 0, 1, 0, 1, 0, 1, // column 1 (sites 0-6 for point 1)
+        ];
+        let status = t4a_treetci_f64_add_global_pivots(state, pivots.as_ptr(), 7, 2);
+        assert_eq!(status, T4A_SUCCESS);
+
+        t4a_treetci_f64_release(state);
+        t4a_treetci_graph_release(graph);
     }
 }
