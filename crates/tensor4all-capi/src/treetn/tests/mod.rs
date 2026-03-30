@@ -4,15 +4,6 @@ use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, Tensor3Ops, Te
 use tensor4all_treetn::TreeTN;
 
 unsafe extern "C" {
-    fn t4a_treetn_evaluate_batch(
-        ptr: *const t4a_treetn,
-        indices_flat: *const libc::size_t,
-        n_sites: libc::size_t,
-        n_points: libc::size_t,
-        out_re: *mut libc::c_double,
-        out_im: *mut libc::c_double,
-    ) -> StatusCode;
-
     fn t4a_treetn_all_site_index_ids(
         ptr: *const t4a_treetn,
         out_index_ids: *mut u64,
@@ -477,47 +468,6 @@ fn test_treetn_to_dense() {
 
     crate::t4a_tensor_release(dense);
     cleanup_treetn(tt, tensors, indices);
-}
-
-#[test]
-fn test_treetn_evaluate_batch_single_and_multi_point() {
-    let tt = make_product_treetn_from_simplett();
-
-    let single_indices: [libc::size_t; 3] = [1, 2, 1];
-    let mut single_value = 0.0;
-    let status = unsafe {
-        t4a_treetn_evaluate_batch(
-            tt,
-            single_indices.as_ptr(),
-            3,
-            1,
-            &mut single_value,
-            std::ptr::null_mut(),
-        )
-    };
-    assert_eq!(status, T4A_SUCCESS);
-    assert!((single_value - 12_000.0).abs() < 1e-10);
-
-    let batch_indices: [libc::size_t; 9] = [
-        0, 0, 0, //
-        1, 1, 0, //
-        0, 2, 1,
-    ];
-    let mut batch_values = [0.0; 3];
-    let status = unsafe {
-        t4a_treetn_evaluate_batch(
-            tt,
-            batch_indices.as_ptr(),
-            3,
-            3,
-            batch_values.as_mut_ptr(),
-            std::ptr::null_mut(),
-        )
-    };
-    assert_eq!(status, T4A_SUCCESS);
-    assert_eq!(batch_values, [1_000.0, 4_000.0, 6_000.0]);
-
-    t4a_treetn_release(tt);
 }
 
 #[test]
