@@ -480,6 +480,52 @@ pub extern "C" fn t4a_treetci_f64_bond_dims(
     crate::unwrap_catch(result)
 }
 
+// ============================================================================
+// Materialization
+// ============================================================================
+
+/// Materialize the converged TreeTCI state into a TreeTN.
+///
+/// Internally re-evaluates tensor values using the batch callback and
+/// performs LU factorization to construct per-vertex tensors.
+///
+/// # Arguments
+/// - `ptr`: State handle (const -- state is not modified)
+/// - `eval_cb`: Batch evaluation callback
+/// - `user_data`: User data passed to callback
+/// - `center_site`: BFS root site for materialization
+/// - `out_treetn`: Output TreeTN handle pointer
+///
+/// # Returns
+/// The result is a `t4a_treetn` handle. Release with `t4a_treetn_release`.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetci_f64_to_treetn(
+    ptr: *const t4a_treetci_f64,
+    eval_cb: TreeTciBatchEvalCallback,
+    user_data: *mut c_void,
+    center_site: libc::size_t,
+    out_treetn: *mut *mut t4a_treetn,
+) -> StatusCode {
+    if ptr.is_null() || out_treetn.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let state = unsafe { &*ptr };
+        let batch_eval = make_batch_eval_closure(eval_cb, user_data);
+
+        match tensor4all_treetci::to_treetn(state.inner(), batch_eval, Some(center_site)) {
+            Ok(treetn) => {
+                unsafe { *out_treetn = Box::into_raw(Box::new(t4a_treetn::new(treetn))) };
+                T4A_SUCCESS
+            }
+            Err(e) => err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,6 +701,50 @@ mod tests {
             assert!(d >= 1);
         }
 
+        t4a_treetci_f64_release(state);
+        t4a_treetci_graph_release(graph);
+    }
+
+    #[test]
+    fn test_to_treetn() {
+        let edges = sample_edges();
+        let graph = t4a_treetci_graph_new(7, edges.as_ptr(), 6);
+        let local_dims: Vec<libc::size_t> = vec![2; 7];
+        let state = t4a_treetci_f64_new(local_dims.as_ptr(), 7, graph);
+
+        let pivot: Vec<libc::size_t> = vec![0; 7];
+        t4a_treetci_f64_add_global_pivots(state, pivot.as_ptr(), 7, 1);
+
+        for _ in 0..4 {
+            t4a_treetci_f64_sweep(
+                state,
+                product_batch_eval,
+                std::ptr::null_mut(),
+                t4a_treetci_proposer_kind::Default,
+                1e-12,
+                0,
+            );
+        }
+
+        // Materialize to TreeTN
+        let mut treetn_ptr: *mut t4a_treetn = std::ptr::null_mut();
+        let status = t4a_treetci_f64_to_treetn(
+            state,
+            product_batch_eval,
+            std::ptr::null_mut(),
+            0, // center_site
+            &mut treetn_ptr,
+        );
+        assert_eq!(status, T4A_SUCCESS);
+        assert!(!treetn_ptr.is_null());
+
+        // Verify TreeTN is valid by checking vertex count
+        let mut n_vertices: libc::size_t = 0;
+        let status = crate::t4a_treetn_num_vertices(treetn_ptr, &mut n_vertices);
+        assert_eq!(status, T4A_SUCCESS);
+        assert_eq!(n_vertices, 7);
+
+        crate::t4a_treetn_release(treetn_ptr);
         t4a_treetci_f64_release(state);
         t4a_treetci_graph_release(graph);
     }
