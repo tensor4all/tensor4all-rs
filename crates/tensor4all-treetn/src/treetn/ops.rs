@@ -10,7 +10,7 @@
 //! - `to_dense` for contracting to a single tensor
 //! - `evaluate` for evaluating at specific index values
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::hash::Hash;
 
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, TensorLike};
@@ -333,7 +333,8 @@ where
         );
         let n_points = values.shape()[1];
 
-        // Collect all known site index IDs across every node.
+        // Build index_id -> position lookup (Vec-based linear scan is fine for
+        // the small number of site indices typical in practice).
         let mut known_ids: HashSet<<T::Index as IndexLike>::Id> = HashSet::new();
         let mut total_site_indices: usize = 0;
         for node_name in self.node_names() {
@@ -372,61 +373,67 @@ where
             );
         }
 
-        // Build mapping: index_id -> (node_name, index)
-        // For each index_id, find which node it belongs to and the actual Index object.
-        let mut id_to_pos: HashMap<<T::Index as IndexLike>::Id, usize> = HashMap::new();
-        for (pos, id) in index_ids.iter().enumerate() {
-            id_to_pos.insert(id.clone(), pos);
+        // Pre-compute per-node data: (node_name, node_index, tensor_ref,
+        //   site_entries: Vec<(Index, position_in_index_ids)>)
+        // This avoids HashMap lookups and repeated node_index/tensor lookups
+        // inside the per-point loop.
+        struct NodeEntry<'a, T: TensorLike, V> {
+            name: V,
+            tensor: &'a T,
+            /// (site_index, position in `index_ids`)
+            site_entries: Vec<(T::Index, usize)>,
         }
 
-        // Group index positions by node name
-        let mut node_index_positions: HashMap<V, Vec<(T::Index, usize)>> = HashMap::new();
-        for node_name in self.node_names() {
-            let site_space = self
-                .site_space(&node_name)
-                .ok_or_else(|| anyhow::anyhow!("Site space not found for node {:?}", node_name))
-                .context("evaluate: site space must exist")?;
-            for index in site_space {
-                let id = index.id();
-                let pos = id_to_pos
-                    .get(id)
-                    .ok_or_else(|| anyhow::anyhow!("Index ID {:?} not found in index_ids", id))
-                    .context("evaluate: all site indices must be covered by index_ids")?;
-                node_index_positions
-                    .entry(node_name.clone())
-                    .or_default()
-                    .push((index.clone(), *pos));
+        let node_names = self.node_names();
+        let mut node_entries: Vec<NodeEntry<'_, T, V>> = Vec::with_capacity(node_names.len());
+
+        for node_name in &node_names {
+            let node_idx = self
+                .node_index(node_name)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", node_name))
+                .context("evaluate: node must exist")?;
+
+            let tensor = self
+                .tensor(node_idx)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_name))
+                .context("evaluate: tensor must exist")?;
+
+            let site_space = self.site_space(node_name);
+            let mut site_entries = Vec::new();
+            if let Some(space) = site_space {
+                for index in space {
+                    let id = index.id();
+                    let pos = index_ids
+                        .iter()
+                        .position(|x| x == id)
+                        .ok_or_else(|| anyhow::anyhow!("Index ID {:?} not found in index_ids", id))
+                        .context("evaluate: all site indices must be covered by index_ids")?;
+                    site_entries.push((index.clone(), pos));
+                }
             }
+
+            node_entries.push(NodeEntry {
+                name: node_name.clone(),
+                tensor,
+                site_entries,
+            });
         }
 
         let mut results = Vec::with_capacity(n_points);
         for point in 0..n_points {
-            // For each node, build onehot from the values at this point
-            let mut contracted_tensors: Vec<T> = Vec::new();
-            let mut contracted_names: Vec<V> = Vec::new();
+            let mut contracted_tensors: Vec<T> = Vec::with_capacity(node_entries.len());
+            let mut contracted_names: Vec<V> = Vec::with_capacity(node_entries.len());
 
-            for node_name in self.node_names() {
-                let node_idx = self
-                    .node_index(&node_name)
-                    .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", node_name))
-                    .context("evaluate: node must exist")?;
-
-                let tensor = self
-                    .tensor(node_idx)
-                    .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_name))
-                    .context("evaluate: tensor must exist")?;
-
-                let positions = node_index_positions.get(&node_name);
-
-                if positions.is_none_or(|p| p.is_empty()) {
+            for entry in &node_entries {
+                if entry.site_entries.is_empty() {
                     // No site indices - just use the tensor as is
-                    contracted_tensors.push(tensor.clone());
-                    contracted_names.push(node_name);
+                    contracted_tensors.push(entry.tensor.clone());
+                    contracted_names.push(entry.name.clone());
                     continue;
                 }
 
-                let positions = positions.unwrap();
-                let index_vals: Vec<(T::Index, usize)> = positions
+                let index_vals: Vec<(T::Index, usize)> = entry
+                    .site_entries
                     .iter()
                     .map(|(idx, pos)| {
                         let val = *values.get(&[*pos, point]).unwrap();
@@ -437,11 +444,12 @@ where
                 let onehot =
                     T::onehot(&index_vals).context("evaluate: failed to create one-hot tensor")?;
 
-                let result = T::contract(&[tensor, &onehot], tensor4all_core::AllowedPairs::All)
-                    .context("evaluate: failed to contract tensor with one-hot")?;
+                let result =
+                    T::contract(&[entry.tensor, &onehot], tensor4all_core::AllowedPairs::All)
+                        .context("evaluate: failed to contract tensor with one-hot")?;
 
                 contracted_tensors.push(result);
-                contracted_names.push(node_name);
+                contracted_names.push(entry.name.clone());
             }
 
             // Build a temporary TreeTN from the contracted tensors and contract to scalar
