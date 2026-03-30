@@ -8,7 +8,6 @@ use std::ffi::c_void;
 use tensor4all_core::{DynIndex, Storage, TensorDynLen};
 use tensor4all_quanticstci::QuanticsTensorCI2;
 use tensor4all_simplett::TensorTrain;
-use tensor4all_tensorci::TensorCI2;
 use tensor4all_treetn::{DefaultTreeTN, LinearOperator};
 
 /// The internal index type we're wrapping (DynIndex = Index<DynId, TagSet>)
@@ -256,48 +255,6 @@ impl Drop for t4a_simplett_c64 {
 
 unsafe impl Send for t4a_simplett_c64 {}
 unsafe impl Sync for t4a_simplett_c64 {}
-
-// ============================================================================
-// TensorCI2 types
-// ============================================================================
-
-/// Opaque handle for `TensorCI2<Complex64>`.
-#[repr(C)]
-pub struct t4a_tci2_c64 {
-    pub(crate) _private: *const c_void,
-}
-
-impl t4a_tci2_c64 {
-    /// Create a new `t4a_tci2_c64` from a `TensorCI2<Complex64>`.
-    pub(crate) fn new(tci: TensorCI2<Complex64>) -> Self {
-        Self {
-            _private: Box::into_raw(Box::new(tci)) as *const c_void,
-        }
-    }
-
-    /// Get a reference to the inner `TensorCI2<Complex64>`.
-    pub(crate) fn inner(&self) -> &TensorCI2<Complex64> {
-        unsafe { &*(self._private as *const TensorCI2<Complex64>) }
-    }
-
-    /// Get a mutable reference to the inner `TensorCI2<Complex64>`.
-    pub(crate) fn inner_mut(&mut self) -> &mut TensorCI2<Complex64> {
-        unsafe { &mut *(self._private as *mut TensorCI2<Complex64>) }
-    }
-}
-
-impl Drop for t4a_tci2_c64 {
-    fn drop(&mut self) {
-        if !self._private.is_null() {
-            unsafe {
-                let _ = Box::from_raw(self._private as *mut TensorCI2<Complex64>);
-            }
-        }
-    }
-}
-
-unsafe impl Send for t4a_tci2_c64 {}
-unsafe impl Sync for t4a_tci2_c64 {}
 
 /// Canonical form enum for C API
 ///
@@ -824,7 +781,7 @@ impl Drop for t4a_treetci_f64 {
     }
 }
 
-// No Clone — same as t4a_tci2_f64
+// No Clone — SimpleTreeTci does not implement Clone
 unsafe impl Send for t4a_treetci_f64 {}
 unsafe impl Sync for t4a_treetci_f64 {}
 
