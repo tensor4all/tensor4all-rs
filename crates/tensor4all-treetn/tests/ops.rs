@@ -474,6 +474,65 @@ fn test_evaluate_empty() {
 }
 
 // ============================================================================
+// Tests for evaluate validation
+// ============================================================================
+
+#[test]
+fn test_evaluate_rejects_duplicate_index_ids() {
+    let (tn, s0, _, _s1) = create_two_node_named();
+
+    // Use the same index ID twice instead of both distinct site IDs
+    let dup_ids = vec![*s0.id(), *s0.id()];
+    let data = [0usize, 0];
+    let shape = [2, 1];
+    let values = ColMajorArrayRef::new(&data, &shape);
+    let result = tn.evaluate(&dup_ids, values);
+    assert!(result.is_err(), "should reject duplicate index IDs");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("duplicate"),
+        "error should mention 'duplicate', got: {msg}"
+    );
+}
+
+#[test]
+fn test_evaluate_rejects_unknown_index_ids() {
+    let (tn, s0, _, _s1) = create_two_node_named();
+
+    // Use one real ID and one fabricated ID that does not exist in the network
+    let unknown = idx(2);
+    let fake_ids = vec![*s0.id(), *unknown.id()];
+    let data = [0usize, 0];
+    let shape = [2, 1];
+    let values = ColMajorArrayRef::new(&data, &shape);
+    let result = tn.evaluate(&fake_ids, values);
+    assert!(result.is_err(), "should reject unknown index IDs");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("unknown"),
+        "error should mention 'unknown', got: {msg}"
+    );
+}
+
+#[test]
+fn test_evaluate_rejects_missing_index_ids() {
+    let (tn, s0, _, _s1) = create_two_node_named();
+
+    // Provide only one of the two required site index IDs
+    let partial_ids = vec![*s0.id()];
+    let data = [0usize];
+    let shape = [1, 1];
+    let values = ColMajorArrayRef::new(&data, &shape);
+    let result = tn.evaluate(&partial_ids, values);
+    assert!(result.is_err(), "should reject missing index IDs");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("total site indices"),
+        "error should mention count mismatch, got: {msg}"
+    );
+}
+
+// ============================================================================
 // Tests for add (which already exists but we test the public API)
 // ============================================================================
 

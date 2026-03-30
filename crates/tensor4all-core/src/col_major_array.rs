@@ -37,14 +37,32 @@ pub enum ColMajorArrayError {
         /// The actual number of dimensions.
         ndim: usize,
     },
+
+    /// The product of shape dimensions overflows `usize`.
+    #[error("Shape product overflow: shape {shape:?} overflows usize")]
+    ShapeOverflow {
+        /// The shape that caused the overflow.
+        shape: Vec<usize>,
+    },
+
+    /// Incrementing the column count would overflow `usize`.
+    #[error("Column count overflow")]
+    ColumnCountOverflow,
 }
 
 // ---------------------------------------------------------------------------
 // Helper: compute the total number of elements from a shape
 // ---------------------------------------------------------------------------
 
+fn checked_shape_numel(shape: &[usize]) -> Option<usize> {
+    shape
+        .iter()
+        .copied()
+        .try_fold(1usize, |acc, d| acc.checked_mul(d))
+}
+
 fn shape_numel(shape: &[usize]) -> usize {
-    shape.iter().copied().product()
+    checked_shape_numel(shape).expect("shape product overflows usize")
 }
 
 /// Compute the flat offset for a column-major multi-index, using checked
@@ -221,7 +239,10 @@ impl<T> ColMajorArray<T> {
     /// Returns an error if `data.len()` does not equal the product of the
     /// shape dimensions.
     pub fn new(data: Vec<T>, shape: Vec<usize>) -> Result<Self, ColMajorArrayError> {
-        let expected = shape_numel(&shape);
+        let expected =
+            checked_shape_numel(&shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {
+                shape: shape.clone(),
+            })?;
         if data.len() != expected {
             return Err(ColMajorArrayError::ShapeMismatch {
                 shape,
@@ -346,7 +367,9 @@ impl<T> ColMajorArray<T> {
             });
         }
         self.data.extend_from_slice(col);
-        self.shape[1] += 1;
+        self.shape[1] = self.shape[1]
+            .checked_add(1)
+            .ok_or(ColMajorArrayError::ColumnCountOverflow)?;
         Ok(())
     }
 }
@@ -355,24 +378,32 @@ impl<T> ColMajorArray<T> {
 
 impl<T: Clone> ColMajorArray<T> {
     /// Create an array filled with a given value.
-    pub fn filled(shape: Vec<usize>, value: T) -> Self {
-        let n = shape_numel(&shape);
-        Self {
+    ///
+    /// Returns an error if the product of shape dimensions overflows `usize`.
+    pub fn filled(shape: Vec<usize>, value: T) -> Result<Self, ColMajorArrayError> {
+        let n = checked_shape_numel(&shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {
+            shape: shape.clone(),
+        })?;
+        Ok(Self {
             data: vec![value; n],
             shape,
-        }
+        })
     }
 }
 
 impl<T: Default + Clone> ColMajorArray<T> {
     /// Create an array filled with [`Default::default()`] (e.g., zeros for
     /// numeric types).
-    pub fn zeros(shape: Vec<usize>) -> Self {
-        let n = shape_numel(&shape);
-        Self {
+    ///
+    /// Returns an error if the product of shape dimensions overflows `usize`.
+    pub fn zeros(shape: Vec<usize>) -> Result<Self, ColMajorArrayError> {
+        let n = checked_shape_numel(&shape).ok_or_else(|| ColMajorArrayError::ShapeOverflow {
+            shape: shape.clone(),
+        })?;
+        Ok(Self {
             data: vec![T::default(); n],
             shape,
-        }
+        })
     }
 }
 
@@ -527,14 +558,14 @@ mod tests {
 
     #[test]
     fn test_zeros() {
-        let arr: ColMajorArray<f64> = ColMajorArray::zeros(vec![3, 2]);
+        let arr: ColMajorArray<f64> = ColMajorArray::zeros(vec![3, 2]).unwrap();
         assert_eq!(arr.len(), 6);
         assert!(arr.data().iter().all(|&v| v == 0.0));
     }
 
     #[test]
     fn test_filled() {
-        let arr = ColMajorArray::filled(vec![2, 3], 7i32);
+        let arr = ColMajorArray::filled(vec![2, 3], 7i32).unwrap();
         assert_eq!(arr.len(), 6);
         assert!(arr.data().iter().all(|&v| v == 7));
     }
@@ -642,5 +673,37 @@ mod tests {
         assert_eq!(view.len(), 6);
         *view.get_mut(&[0, 0]).unwrap() = 100;
         assert_eq!(view.get(&[0, 0]), Some(&100));
+    }
+
+    // -- Overflow detection ---------------------------------------------------
+
+    #[test]
+    fn test_new_rejects_overflow_shape() {
+        let result = ColMajorArray::<u8>::new(vec![], vec![usize::MAX, 2]);
+        assert!(
+            matches!(result, Err(ColMajorArrayError::ShapeOverflow { .. })),
+            "expected ShapeOverflow, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_filled_rejects_overflow_shape() {
+        let result = ColMajorArray::filled(vec![usize::MAX, 2], 0u8);
+        assert!(
+            matches!(result, Err(ColMajorArrayError::ShapeOverflow { .. })),
+            "expected ShapeOverflow, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_zeros_rejects_overflow_shape() {
+        let result = ColMajorArray::<u8>::zeros(vec![usize::MAX, 2]);
+        assert!(
+            matches!(result, Err(ColMajorArrayError::ShapeOverflow { .. })),
+            "expected ShapeOverflow, got {:?}",
+            result
+        );
     }
 }

@@ -10,7 +10,7 @@
 //! - `to_dense` for contracting to a single tensor
 //! - `evaluate` for evaluating at specific index values
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, TensorLike};
@@ -332,6 +332,45 @@ where
             n_indices
         );
         let n_points = values.shape()[1];
+
+        // Collect all known site index IDs across every node.
+        let mut known_ids: HashSet<<T::Index as IndexLike>::Id> = HashSet::new();
+        let mut total_site_indices: usize = 0;
+        for node_name in self.node_names() {
+            let site_space = self
+                .site_space(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("Site space not found for node {:?}", node_name))
+                .context("evaluate: site space must exist")?;
+            for index in site_space {
+                known_ids.insert(index.id().clone());
+                total_site_indices += 1;
+            }
+        }
+
+        // Validate: index_ids.len() must equal total number of site indices.
+        anyhow::ensure!(
+            n_indices == total_site_indices,
+            "evaluate: index_ids.len() ({}) != total site indices ({})",
+            n_indices,
+            total_site_indices
+        );
+
+        // Validate: no duplicate index IDs.
+        {
+            let mut seen = HashSet::with_capacity(n_indices);
+            for id in index_ids {
+                anyhow::ensure!(seen.insert(id), "evaluate: duplicate index ID {:?}", id);
+            }
+        }
+
+        // Validate: all provided IDs must be known (exist in the network).
+        for id in index_ids {
+            anyhow::ensure!(
+                known_ids.contains(id),
+                "evaluate: unknown index ID {:?}",
+                id
+            );
+        }
 
         // Build mapping: index_id -> (node_name, index)
         // For each index_id, find which node it belongs to and the actual Index object.
