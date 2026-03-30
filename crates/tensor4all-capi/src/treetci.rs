@@ -1247,12 +1247,12 @@ mod tests {
             data.push(value.re);
             data.push(value.im);
 
-            for idx in 0..n_sites {
-                point[idx] += 1;
-                if point[idx] < 2 {
+            for p in point.iter_mut().take(n_sites) {
+                *p += 1;
+                if *p < 2 {
                     break;
                 }
-                point[idx] = 0;
+                *p = 0;
             }
         }
 
