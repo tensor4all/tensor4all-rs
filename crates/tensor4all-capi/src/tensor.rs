@@ -2,7 +2,7 @@
 //!
 //! Provides functions for creating, manipulating, and accessing tensors.
 
-use std::panic::catch_unwind;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 
 use num_complex::Complex64;
@@ -52,7 +52,7 @@ fn indices_dims(indices: &[InternalIndex]) -> Vec<usize> {
 /// # Safety
 /// - `ptr` must be a valid pointer to a t4a_tensor
 /// - `out_rank` must be a valid pointer to write the rank
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_get_rank(
     ptr: *const t4a_tensor,
     out_rank: *mut libc::size_t,
@@ -61,12 +61,12 @@ pub extern "C" fn t4a_tensor_get_rank(
         return T4A_NULL_POINTER;
     }
 
-    let result = catch_unwind(|| {
+    let result = catch_unwind(AssertUnwindSafe(|| {
         let tensor = unsafe { &*ptr };
         let rank = tensor.inner().indices.len();
         unsafe { *out_rank = rank };
         T4A_SUCCESS
-    });
+    }));
 
     crate::unwrap_catch(result)
 }
@@ -81,7 +81,7 @@ pub extern "C" fn t4a_tensor_get_rank(
 /// # Safety
 /// - `ptr` must be a valid pointer to a t4a_tensor
 /// - `out_dims` must be a valid pointer to a buffer of at least `rank` elements
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_get_dims(
     ptr: *const t4a_tensor,
     out_dims: *mut libc::size_t,
@@ -91,7 +91,7 @@ pub extern "C" fn t4a_tensor_get_dims(
         return T4A_NULL_POINTER;
     }
 
-    let result = catch_unwind(|| {
+    let result = catch_unwind(AssertUnwindSafe(|| {
         let tensor = unsafe { &*ptr };
         let dims = tensor.inner().dims();
 
@@ -105,7 +105,7 @@ pub extern "C" fn t4a_tensor_get_dims(
             }
         }
         T4A_SUCCESS
-    });
+    }));
 
     crate::unwrap_catch(result)
 }
@@ -121,7 +121,7 @@ pub extern "C" fn t4a_tensor_get_dims(
 /// - `ptr` must be a valid pointer to a t4a_tensor
 /// - `out_indices` must be a valid pointer to a buffer of at least `rank` elements
 /// - Caller is responsible for releasing the returned index handles
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_get_indices(
     ptr: *const t4a_tensor,
     out_indices: *mut *mut t4a_index,
@@ -131,7 +131,7 @@ pub extern "C" fn t4a_tensor_get_indices(
         return T4A_NULL_POINTER;
     }
 
-    let result = catch_unwind(|| {
+    let result = catch_unwind(AssertUnwindSafe(|| {
         let tensor = unsafe { &*ptr };
         let indices = &tensor.inner().indices;
 
@@ -146,7 +146,7 @@ pub extern "C" fn t4a_tensor_get_indices(
             }
         }
         T4A_SUCCESS
-    });
+    }));
 
     crate::unwrap_catch(result)
 }
@@ -156,7 +156,7 @@ pub extern "C" fn t4a_tensor_get_indices(
 /// # Safety
 /// - `ptr` must be a valid pointer to a t4a_tensor
 /// - `out_kind` must be a valid pointer to write the storage kind
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_get_storage_kind(
     ptr: *const t4a_tensor,
     out_kind: *mut t4a_storage_kind,
@@ -165,12 +165,12 @@ pub extern "C" fn t4a_tensor_get_storage_kind(
         return T4A_NULL_POINTER;
     }
 
-    let result = catch_unwind(|| {
+    let result = catch_unwind(AssertUnwindSafe(|| {
         let tensor = unsafe { &*ptr };
         let kind = t4a_storage_kind::from_storage(tensor.inner().storage().as_ref());
         unsafe { *out_kind = kind };
         T4A_SUCCESS
-    });
+    }));
 
     crate::unwrap_catch(result)
 }
@@ -192,7 +192,7 @@ pub extern "C" fn t4a_tensor_get_storage_kind(
 /// - `ptr` must be a valid pointer to a t4a_tensor
 /// - `buf` can be NULL (to query required length)
 /// - `out_len` must be a valid pointer
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_get_data_f64(
     ptr: *const t4a_tensor,
     buf: *mut libc::c_double,
@@ -203,7 +203,7 @@ pub extern "C" fn t4a_tensor_get_data_f64(
         return T4A_NULL_POINTER;
     }
 
-    let result = catch_unwind(|| {
+    let result = catch_unwind(AssertUnwindSafe(|| {
         let tensor = unsafe { &*ptr };
 
         let data = match tensor.inner().as_slice_f64() {
@@ -225,7 +225,7 @@ pub extern "C" fn t4a_tensor_get_data_f64(
             ptr::copy_nonoverlapping(data.as_ptr(), buf, data.len());
         }
         T4A_SUCCESS
-    });
+    }));
 
     crate::unwrap_catch(result)
 }
@@ -234,10 +234,9 @@ pub extern "C" fn t4a_tensor_get_data_f64(
 ///
 /// # Arguments
 /// - `ptr`: Tensor handle
-/// - `buf_re`: Buffer to write real parts (if NULL, only out_len is written)
-/// - `buf_im`: Buffer to write imaginary parts (if NULL, only out_len is written)
-/// - `buf_len`: Length of the buffers
-/// - `out_len`: Output: required buffer length
+/// - `buf`: Interleaved buffer `[re0, im0, re1, im1, ...]`
+/// - `buf_len`: Buffer length in complex elements
+/// - `out_len`: Output: required buffer length in complex elements
 ///
 /// # Returns
 /// - T4A_SUCCESS on success
@@ -246,13 +245,12 @@ pub extern "C" fn t4a_tensor_get_data_f64(
 ///
 /// # Safety
 /// - `ptr` must be a valid pointer to a t4a_tensor
-/// - `buf_re` and `buf_im` can be NULL (to query required length)
+/// - `buf` can be NULL (to query required length)
 /// - `out_len` must be a valid pointer
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_get_data_c64(
     ptr: *const t4a_tensor,
-    buf_re: *mut libc::c_double,
-    buf_im: *mut libc::c_double,
+    buf: *mut libc::c_double,
     buf_len: libc::size_t,
     out_len: *mut libc::size_t,
 ) -> StatusCode {
@@ -260,7 +258,7 @@ pub extern "C" fn t4a_tensor_get_data_c64(
         return T4A_NULL_POINTER;
     }
 
-    let result = catch_unwind(|| {
+    let result = catch_unwind(AssertUnwindSafe(|| {
         let tensor = unsafe { &*ptr };
 
         let data = match tensor.inner().as_slice_c64() {
@@ -270,7 +268,7 @@ pub extern "C" fn t4a_tensor_get_data_c64(
 
         unsafe { *out_len = data.len() };
 
-        if buf_re.is_null() || buf_im.is_null() {
+        if buf.is_null() {
             return T4A_SUCCESS;
         }
 
@@ -280,12 +278,12 @@ pub extern "C" fn t4a_tensor_get_data_c64(
 
         unsafe {
             for (i, z) in data.iter().enumerate() {
-                *buf_re.add(i) = z.re;
-                *buf_im.add(i) = z.im;
+                *buf.add(2 * i) = z.re;
+                *buf.add(2 * i + 1) = z.im;
             }
         }
         T4A_SUCCESS
-    });
+    }));
 
     crate::unwrap_catch(result)
 }
@@ -306,7 +304,7 @@ pub extern "C" fn t4a_tensor_get_data_c64(
 /// # Safety
 /// - All pointers must be valid
 /// - Caller owns the returned tensor and must call t4a_tensor_release
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_new_dense_f64(
     rank: libc::size_t,
     index_ptrs: *const *const t4a_index,
@@ -318,7 +316,7 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
         return ptr::null_mut();
     }
 
-    let result = catch_unwind(|| {
+    let result = catch_unwind(AssertUnwindSafe(|| {
         let Some(indices) = read_indices_from_ptrs(rank, index_ptrs) else {
             return ptr::null_mut();
         };
@@ -345,7 +343,7 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
         };
 
         Box::into_raw(Box::new(t4a_tensor::new(tensor)))
-    });
+    }));
 
     crate::unwrap_catch_ptr(result)
 }
@@ -356,9 +354,9 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
 /// - `rank`: Number of indices
 /// - `index_ptrs`: Array of t4a_index pointers (length = rank)
 /// - `dims`: Array of dimensions (length = rank)
-/// - `data_re`: Real parts of dense data in column-major order (length = product of dims)
-/// - `data_im`: Imaginary parts of dense data in column-major order (length = product of dims)
-/// - `data_len`: Length of data arrays
+/// - `data`: Interleaved dense data in column-major order
+///   `[re0, im0, re1, im1, ...]` with length `2 * product(dims)`
+/// - `data_len`: Number of complex elements in `data`
 ///
 /// # Returns
 /// - Pointer to new t4a_tensor on success
@@ -367,20 +365,19 @@ pub extern "C" fn t4a_tensor_new_dense_f64(
 /// # Safety
 /// - All pointers must be valid
 /// - Caller owns the returned tensor and must call t4a_tensor_release
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_new_dense_c64(
     rank: libc::size_t,
     index_ptrs: *const *const t4a_index,
     dims: *const libc::size_t,
-    data_re: *const libc::c_double,
-    data_im: *const libc::c_double,
+    data: *const libc::c_double,
     data_len: libc::size_t,
 ) -> *mut t4a_tensor {
-    if index_ptrs.is_null() || dims.is_null() || data_re.is_null() || data_im.is_null() {
+    if index_ptrs.is_null() || dims.is_null() || data.is_null() {
         return ptr::null_mut();
     }
 
-    let result = catch_unwind(|| {
+    let result = catch_unwind(AssertUnwindSafe(|| {
         let Some(indices) = read_indices_from_ptrs(rank, index_ptrs) else {
             return ptr::null_mut();
         };
@@ -399,9 +396,8 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
             return ptr::null_mut();
         }
 
-        // Copy data
         let data_vec: Vec<Complex64> = (0..data_len)
-            .map(|i| unsafe { Complex64::new(*data_re.add(i), *data_im.add(i)) })
+            .map(|i| unsafe { Complex64::new(*data.add(2 * i), *data.add(2 * i + 1)) })
             .collect();
 
         let Ok(tensor) = InternalTensor::from_dense(indices, data_vec) else {
@@ -409,7 +405,7 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
         };
 
         Box::into_raw(Box::new(t4a_tensor::new(tensor)))
-    });
+    }));
 
     crate::unwrap_catch_ptr(result)
 }
@@ -429,7 +425,7 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
 /// # Safety
 /// - All pointers must be valid
 /// - Caller owns the returned tensor and must call t4a_tensor_release
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_onehot(
     rank: libc::size_t,
     index_ptrs: *const *const t4a_index,
@@ -443,7 +439,7 @@ pub extern "C" fn t4a_tensor_onehot(
         return ptr::null_mut();
     }
 
-    let result = catch_unwind(|| {
+    let result = catch_unwind(AssertUnwindSafe(|| {
         // Extract indices
         let mut index_vals: Vec<(InternalIndex, usize)> = Vec::with_capacity(rank);
         for i in 0..rank {
@@ -460,7 +456,7 @@ pub extern "C" fn t4a_tensor_onehot(
             Ok(tensor) => Box::into_raw(Box::new(t4a_tensor::new(tensor))),
             Err(e) => crate::err_null(e),
         }
-    });
+    }));
 
     crate::unwrap_catch_ptr(result)
 }

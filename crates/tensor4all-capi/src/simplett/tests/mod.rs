@@ -1,4 +1,5 @@
 use super::*;
+use num_complex::Complex64;
 use tensor4all_simplett::{tensor3_from_data, TensorTrain};
 
 #[test]
@@ -307,4 +308,129 @@ fn test_simplett_accessors_validate_pointers_and_buffer_sizes() {
     );
 
     t4a_simplett_f64_release(tt);
+}
+
+#[test]
+fn test_simplett_c64_constant_accessors_and_site_tensor() {
+    let dims: [libc::size_t; 2] = [2, 3];
+    let value = Complex64::new(2.0, 3.0);
+    let tt = t4a_simplett_c64_constant(dims.as_ptr(), 2, value.re, value.im);
+    assert!(!tt.is_null());
+
+    let mut len = 0usize;
+    assert_eq!(t4a_simplett_c64_len(tt, &mut len), T4A_SUCCESS);
+    assert_eq!(len, 2);
+
+    let mut site_dims = [0usize; 2];
+    assert_eq!(
+        t4a_simplett_c64_site_dims(tt, site_dims.as_mut_ptr(), site_dims.len()),
+        T4A_SUCCESS
+    );
+    assert_eq!(site_dims, dims);
+
+    let mut link_dims = [usize::MAX; 1];
+    assert_eq!(
+        t4a_simplett_c64_link_dims(tt, link_dims.as_mut_ptr(), link_dims.len()),
+        T4A_SUCCESS
+    );
+    assert_eq!(link_dims, [1]);
+
+    let mut rank = 0usize;
+    assert_eq!(t4a_simplett_c64_rank(tt, &mut rank), T4A_SUCCESS);
+    assert_eq!(rank, 1);
+
+    let indices: [libc::size_t; 2] = [1, 2];
+    let (mut eval_re, mut eval_im) = (0.0, 0.0);
+    assert_eq!(
+        t4a_simplett_c64_evaluate(
+            tt,
+            indices.as_ptr(),
+            indices.len(),
+            &mut eval_re,
+            &mut eval_im
+        ),
+        T4A_SUCCESS
+    );
+    assert_eq!(Complex64::new(eval_re, eval_im), value);
+
+    let (mut sum_re, mut sum_im) = (0.0, 0.0);
+    assert_eq!(
+        t4a_simplett_c64_sum(tt, &mut sum_re, &mut sum_im),
+        T4A_SUCCESS
+    );
+    assert_eq!(
+        Complex64::new(sum_re, sum_im),
+        value * Complex64::new(6.0, 0.0)
+    );
+
+    let mut norm = 0.0;
+    assert_eq!(t4a_simplett_c64_norm(tt, &mut norm), T4A_SUCCESS);
+    assert!((norm - f64::sqrt(78.0)).abs() < 1e-12);
+
+    let mut tensor_data = [0.0; 6];
+    let (mut left_dim, mut site_dim, mut right_dim) = (0usize, 0usize, 0usize);
+    assert_eq!(
+        t4a_simplett_c64_site_tensor(
+            tt,
+            1,
+            tensor_data.as_mut_ptr(),
+            3,
+            &mut left_dim,
+            &mut site_dim,
+            &mut right_dim,
+        ),
+        T4A_SUCCESS
+    );
+    assert_eq!((left_dim, site_dim, right_dim), (1, 3, 1));
+    assert_eq!(tensor_data, [2.0, 3.0, 2.0, 3.0, 2.0, 3.0]);
+
+    t4a_simplett_c64_release(tt);
+}
+
+#[test]
+fn test_simplett_c64_compress_and_partial_sum() {
+    let dims: [libc::size_t; 2] = [2, 3];
+    let value = Complex64::new(2.0, 3.0);
+    let tt = t4a_simplett_c64_constant(dims.as_ptr(), 2, value.re, value.im);
+    assert!(!tt.is_null());
+
+    assert_eq!(t4a_simplett_c64_compress(tt, 2, 1e-12, 0), T4A_SUCCESS);
+
+    let dims_to_sum: [libc::size_t; 1] = [1];
+    let mut partial: *mut t4a_simplett_c64 = std::ptr::null_mut();
+    assert_eq!(
+        t4a_simplett_c64_partial_sum(tt, dims_to_sum.as_ptr(), dims_to_sum.len(), &mut partial),
+        T4A_SUCCESS
+    );
+    assert!(!partial.is_null());
+
+    let idx0: [libc::size_t; 1] = [0];
+    let (mut part_re, mut part_im) = (0.0, 0.0);
+    assert_eq!(
+        t4a_simplett_c64_evaluate(
+            partial,
+            idx0.as_ptr(),
+            idx0.len(),
+            &mut part_re,
+            &mut part_im
+        ),
+        T4A_SUCCESS
+    );
+    assert!((Complex64::new(part_re, part_im) - value * Complex64::new(3.0, 0.0)).norm() < 1e-12);
+
+    let idx1: [libc::size_t; 1] = [1];
+    assert_eq!(
+        t4a_simplett_c64_evaluate(
+            partial,
+            idx1.as_ptr(),
+            idx1.len(),
+            &mut part_re,
+            &mut part_im
+        ),
+        T4A_SUCCESS
+    );
+    assert!((Complex64::new(part_re, part_im) - value * Complex64::new(3.0, 0.0)).norm() < 1e-12);
+
+    t4a_simplett_c64_release(partial);
+    t4a_simplett_c64_release(tt);
 }
