@@ -3,7 +3,9 @@
 //! This provides a simpler TensorTrain interface designed for TCI operations.
 //! The tensors are stored as flat arrays with explicit dimensions.
 
+use crate::types::t4a_simplett_c64;
 use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
+use num_complex::Complex64;
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
@@ -474,6 +476,395 @@ pub extern "C" fn t4a_simplett_f64_partial_sum(
         match tt.inner().partial_sum(&dim_vec) {
             Ok(result_tt) => {
                 unsafe { *out = Box::into_raw(Box::new(t4a_simplett_f64::new(result_tt))) };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// Complex64 lifecycle functions
+// ============================================================================
+
+/// Release a SimpleTT tensor train handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_release(ptr: *mut t4a_simplett_c64) {
+    if !ptr.is_null() {
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        }
+    }
+}
+
+/// Clone a SimpleTT tensor train.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_clone(ptr: *const t4a_simplett_c64) -> *mut t4a_simplett_c64 {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        Box::into_raw(Box::new(tt.clone()))
+    }));
+
+    crate::unwrap_catch_ptr(result)
+}
+
+// ============================================================================
+// Complex64 constructors
+// ============================================================================
+
+/// Create a complex constant tensor train.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_constant(
+    site_dims: *const libc::size_t,
+    n_sites: libc::size_t,
+    value_re: libc::c_double,
+    value_im: libc::c_double,
+) -> *mut t4a_simplett_c64 {
+    if site_dims.is_null() && n_sites > 0 {
+        return std::ptr::null_mut();
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let dims: Vec<usize> = (0..n_sites).map(|i| unsafe { *site_dims.add(i) }).collect();
+        let tt = TensorTrain::<Complex64>::constant(&dims, Complex64::new(value_re, value_im));
+        Box::into_raw(Box::new(t4a_simplett_c64::new(tt)))
+    }));
+
+    crate::unwrap_catch_ptr(result)
+}
+
+/// Create a zero complex tensor train.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_zeros(
+    site_dims: *const libc::size_t,
+    n_sites: libc::size_t,
+) -> *mut t4a_simplett_c64 {
+    if site_dims.is_null() && n_sites > 0 {
+        return std::ptr::null_mut();
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let dims: Vec<usize> = (0..n_sites).map(|i| unsafe { *site_dims.add(i) }).collect();
+        let tt = TensorTrain::<Complex64>::zeros(&dims);
+        Box::into_raw(Box::new(t4a_simplett_c64::new(tt)))
+    }));
+
+    crate::unwrap_catch_ptr(result)
+}
+
+// ============================================================================
+// Complex64 accessors
+// ============================================================================
+
+/// Get the number of sites.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_len(
+    ptr: *const t4a_simplett_c64,
+    out_len: *mut libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out_len.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        unsafe { *out_len = tt.inner().len() };
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Get the site dimensions.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_site_dims(
+    ptr: *const t4a_simplett_c64,
+    out_dims: *mut libc::size_t,
+    buf_len: libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out_dims.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let dims = tt.inner().site_dims();
+        if buf_len < dims.len() {
+            return T4A_INVALID_ARGUMENT;
+        }
+        for (i, d) in dims.iter().enumerate() {
+            unsafe { *out_dims.add(i) = *d };
+        }
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Get the link (bond) dimensions.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_link_dims(
+    ptr: *const t4a_simplett_c64,
+    out_dims: *mut libc::size_t,
+    buf_len: libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out_dims.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let dims = tt.inner().link_dims();
+        if buf_len < dims.len() {
+            return T4A_INVALID_ARGUMENT;
+        }
+        for (i, d) in dims.iter().enumerate() {
+            unsafe { *out_dims.add(i) = *d };
+        }
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Get the maximum bond dimension (rank).
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_rank(
+    ptr: *const t4a_simplett_c64,
+    out_rank: *mut libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out_rank.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        unsafe { *out_rank = tt.inner().rank() };
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Evaluate the tensor train at a given multi-index.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_evaluate(
+    ptr: *const t4a_simplett_c64,
+    indices: *const libc::size_t,
+    n_indices: libc::size_t,
+    out_value_re: *mut libc::c_double,
+    out_value_im: *mut libc::c_double,
+) -> StatusCode {
+    if ptr.is_null() || indices.is_null() || out_value_re.is_null() || out_value_im.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let idx: Vec<usize> = (0..n_indices).map(|i| unsafe { *indices.add(i) }).collect();
+
+        match tt.inner().evaluate(&idx) {
+            Ok(val) => {
+                unsafe {
+                    *out_value_re = val.re;
+                    *out_value_im = val.im;
+                }
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Compute the sum over all indices.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_sum(
+    ptr: *const t4a_simplett_c64,
+    out_value_re: *mut libc::c_double,
+    out_value_im: *mut libc::c_double,
+) -> StatusCode {
+    if ptr.is_null() || out_value_re.is_null() || out_value_im.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let value = tt.inner().sum();
+        unsafe {
+            *out_value_re = value.re;
+            *out_value_im = value.im;
+        }
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Compute the Frobenius norm.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_norm(
+    ptr: *const t4a_simplett_c64,
+    out_value: *mut libc::c_double,
+) -> StatusCode {
+    if ptr.is_null() || out_value.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        unsafe { *out_value = tt.inner().norm() };
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Get site tensor data at a specific site as interleaved complex values.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_site_tensor(
+    ptr: *const t4a_simplett_c64,
+    site: libc::size_t,
+    out_data: *mut libc::c_double,
+    buf_len: libc::size_t,
+    out_left_dim: *mut libc::size_t,
+    out_site_dim: *mut libc::size_t,
+    out_right_dim: *mut libc::size_t,
+) -> StatusCode {
+    use tensor4all_simplett::Tensor3Ops;
+
+    if ptr.is_null() || out_data.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        if site >= tt.inner().len() {
+            return T4A_INVALID_ARGUMENT;
+        }
+
+        let tensor = tt.inner().site_tensor(site);
+        let left_dim = tensor.left_dim();
+        let site_dim = tensor.site_dim();
+        let right_dim = tensor.right_dim();
+        let total_size = left_dim * site_dim * right_dim;
+
+        if buf_len < total_size {
+            return T4A_INVALID_ARGUMENT;
+        }
+
+        let mut idx = 0;
+        for r in 0..right_dim {
+            for s in 0..site_dim {
+                for l in 0..left_dim {
+                    let value = *tensor.get3(l, s, r);
+                    unsafe {
+                        *out_data.add(2 * idx) = value.re;
+                        *out_data.add(2 * idx + 1) = value.im;
+                    }
+                    idx += 1;
+                }
+            }
+        }
+
+        if !out_left_dim.is_null() {
+            unsafe { *out_left_dim = left_dim };
+        }
+        if !out_site_dim.is_null() {
+            unsafe { *out_site_dim = site_dim };
+        }
+        if !out_right_dim.is_null() {
+            unsafe { *out_right_dim = right_dim };
+        }
+
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// Complex64 compression
+// ============================================================================
+
+/// Compress a complex tensor train in-place.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_compress(
+    ptr: *mut t4a_simplett_c64,
+    method: libc::c_int,
+    tolerance: libc::c_double,
+    max_bonddim: libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &mut *ptr };
+        use tensor4all_simplett::compression::{CompressionMethod, CompressionOptions};
+
+        let comp_method = match method {
+            0 => CompressionMethod::LU,
+            1 => CompressionMethod::CI,
+            2 => CompressionMethod::SVD,
+            _ => {
+                return crate::err_status(
+                    format!("Invalid compression method: {method}. Use 0=LU, 1=CI, 2=SVD"),
+                    T4A_INVALID_ARGUMENT,
+                );
+            }
+        };
+
+        let options = CompressionOptions {
+            method: comp_method,
+            tolerance,
+            max_bond_dim: if max_bonddim == 0 {
+                usize::MAX
+            } else {
+                max_bonddim
+            },
+            ..Default::default()
+        };
+
+        match tt.inner_mut().compress(&options) {
+            Ok(()) => T4A_SUCCESS,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// Complex64 partial sum
+// ============================================================================
+
+/// Sum over selected dimensions, returning a new complex TensorTrain.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_partial_sum(
+    ptr: *const t4a_simplett_c64,
+    dims: *const libc::size_t,
+    n_dims: libc::size_t,
+    out: *mut *mut t4a_simplett_c64,
+) -> StatusCode {
+    if ptr.is_null() || out.is_null() || (dims.is_null() && n_dims > 0) {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let dim_vec: Vec<usize> = (0..n_dims).map(|i| unsafe { *dims.add(i) }).collect();
+
+        match tt.inner().partial_sum(&dim_vec) {
+            Ok(result_tt) => {
+                unsafe { *out = Box::into_raw(Box::new(t4a_simplett_c64::new(result_tt))) };
                 T4A_SUCCESS
             }
             Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),

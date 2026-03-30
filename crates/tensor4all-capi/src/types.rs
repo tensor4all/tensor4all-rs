@@ -3,9 +3,11 @@
 //! All Rust objects are wrapped in opaque pointers to hide implementation
 //! details from C code.
 
+use num_complex::Complex64;
 use std::ffi::c_void;
 use tensor4all_core::{DynIndex, Storage, TensorDynLen};
 use tensor4all_quanticstci::QuanticsTensorCI2;
+use tensor4all_simplett::TensorTrain;
 use tensor4all_treetn::{DefaultTreeTN, LinearOperator};
 
 /// The internal index type we're wrapping (DynIndex = Index<DynId, TagSet>)
@@ -205,6 +207,54 @@ impl Drop for t4a_treetn {
 // Safety: t4a_treetn is Send + Sync because InternalTreeTN is Send + Sync
 unsafe impl Send for t4a_treetn {}
 unsafe impl Sync for t4a_treetn {}
+
+// ============================================================================
+// SimpleTT types
+// ============================================================================
+
+/// Opaque handle for a SimpleTT `TensorTrain<Complex64>`.
+#[repr(C)]
+pub struct t4a_simplett_c64 {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_simplett_c64 {
+    /// Create a new `t4a_simplett_c64` from a `TensorTrain<Complex64>`.
+    pub(crate) fn new(tt: TensorTrain<Complex64>) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(tt)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner `TensorTrain<Complex64>`.
+    pub(crate) fn inner(&self) -> &TensorTrain<Complex64> {
+        unsafe { &*(self._private as *const TensorTrain<Complex64>) }
+    }
+
+    /// Get a mutable reference to the inner `TensorTrain<Complex64>`.
+    pub(crate) fn inner_mut(&mut self) -> &mut TensorTrain<Complex64> {
+        unsafe { &mut *(self._private as *mut TensorTrain<Complex64>) }
+    }
+}
+
+impl Clone for t4a_simplett_c64 {
+    fn clone(&self) -> Self {
+        Self::new(self.inner().clone())
+    }
+}
+
+impl Drop for t4a_simplett_c64 {
+    fn drop(&mut self) {
+        if !self._private.is_null() {
+            unsafe {
+                let _ = Box::from_raw(self._private as *mut TensorTrain<Complex64>);
+            }
+        }
+    }
+}
+
+unsafe impl Send for t4a_simplett_c64 {}
+unsafe impl Sync for t4a_simplett_c64 {}
 
 /// Canonical form enum for C API
 ///
