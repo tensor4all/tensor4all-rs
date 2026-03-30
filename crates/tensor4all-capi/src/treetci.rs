@@ -368,6 +368,118 @@ pub extern "C" fn t4a_treetci_f64_sweep(
     crate::unwrap_catch(result)
 }
 
+// ============================================================================
+// State inspection
+// ============================================================================
+
+/// Get the maximum bond error across all edges.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetci_f64_max_bond_error(
+    ptr: *const t4a_treetci_f64,
+    out: *mut libc::c_double,
+) -> StatusCode {
+    if ptr.is_null() || out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let state = unsafe { &*ptr };
+        unsafe { *out = state.inner().max_bond_error() };
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Get the maximum rank (bond dimension) across all edges.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetci_f64_max_rank(
+    ptr: *const t4a_treetci_f64,
+    out: *mut libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let state = unsafe { &*ptr };
+        unsafe { *out = state.inner().max_rank() };
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Get the maximum observed sample value (used for normalization).
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetci_f64_max_sample_value(
+    ptr: *const t4a_treetci_f64,
+    out: *mut libc::c_double,
+) -> StatusCode {
+    if ptr.is_null() || out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let state = unsafe { &*ptr };
+        unsafe { *out = state.inner().max_sample_value };
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Get the bond dimensions (ranks) at each edge.
+///
+/// Uses query-then-fill: pass `out_ranks = NULL` to query `out_n_edges` only.
+///
+/// # Arguments
+/// - `out_ranks`: Output buffer (length >= n_edges), or NULL to query size
+/// - `buf_len`: Buffer capacity
+/// - `out_n_edges`: Outputs the number of edges
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetci_f64_bond_dims(
+    ptr: *const t4a_treetci_f64,
+    out_ranks: *mut libc::size_t,
+    buf_len: libc::size_t,
+    out_n_edges: *mut libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out_n_edges.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let state = unsafe { &*ptr };
+        let inner = state.inner();
+        let edges = inner.graph.edges();
+        let n_edges = edges.len();
+
+        unsafe { *out_n_edges = n_edges };
+
+        if out_ranks.is_null() {
+            return T4A_SUCCESS;
+        }
+
+        if buf_len < n_edges {
+            return err_status(
+                format!("Buffer too small: need {}, got {}", n_edges, buf_len),
+                crate::T4A_BUFFER_TOO_SMALL,
+            );
+        }
+
+        for (i, edge) in edges.iter().enumerate() {
+            // Bond dim = number of pivot rows for either side of this edge
+            let (key_u, _key_v) = inner.graph.subregion_vertices(*edge).unwrap();
+            let rank = inner.ijset.get(&key_u).map_or(0, |v| v.len());
+            unsafe { *out_ranks.add(i) = rank };
+        }
+
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,6 +595,65 @@ mod tests {
             0, // unlimited bond dim
         );
         assert_eq!(status, T4A_SUCCESS);
+
+        t4a_treetci_f64_release(state);
+        t4a_treetci_graph_release(graph);
+    }
+
+    #[test]
+    fn test_state_inspection() {
+        let edges = sample_edges();
+        let graph = t4a_treetci_graph_new(7, edges.as_ptr(), 6);
+        let local_dims: Vec<libc::size_t> = vec![2; 7];
+        let state = t4a_treetci_f64_new(local_dims.as_ptr(), 7, graph);
+
+        let pivot: Vec<libc::size_t> = vec![0; 7];
+        t4a_treetci_f64_add_global_pivots(state, pivot.as_ptr(), 7, 1);
+
+        // Run a few sweeps
+        for _ in 0..4 {
+            t4a_treetci_f64_sweep(
+                state,
+                product_batch_eval,
+                std::ptr::null_mut(),
+                t4a_treetci_proposer_kind::Default,
+                1e-12,
+                0,
+            );
+        }
+
+        // max_bond_error
+        let mut error: libc::c_double = 0.0;
+        let status = t4a_treetci_f64_max_bond_error(state, &mut error);
+        assert_eq!(status, T4A_SUCCESS);
+        assert!(error < 1e-10, "error = {}", error);
+
+        // max_rank
+        let mut rank: libc::size_t = 0;
+        let status = t4a_treetci_f64_max_rank(state, &mut rank);
+        assert_eq!(status, T4A_SUCCESS);
+        assert!(rank >= 1);
+
+        // max_sample_value
+        let mut max_val: libc::c_double = 0.0;
+        let status = t4a_treetci_f64_max_sample_value(state, &mut max_val);
+        assert_eq!(status, T4A_SUCCESS);
+        assert!(max_val > 0.0);
+
+        // bond_dims: query size first
+        let mut n_edges: libc::size_t = 0;
+        let status = t4a_treetci_f64_bond_dims(state, std::ptr::null_mut(), 0, &mut n_edges);
+        assert_eq!(status, T4A_SUCCESS);
+        assert_eq!(n_edges, 6);
+
+        // bond_dims: fill buffer
+        let mut dims = vec![0usize; n_edges];
+        let status =
+            t4a_treetci_f64_bond_dims(state, dims.as_mut_ptr(), n_edges, &mut n_edges);
+        assert_eq!(status, T4A_SUCCESS);
+        for &d in &dims {
+            assert!(d >= 1);
+        }
 
         t4a_treetci_f64_release(state);
         t4a_treetci_graph_release(graph);
