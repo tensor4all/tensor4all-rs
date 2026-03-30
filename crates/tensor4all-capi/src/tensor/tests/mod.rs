@@ -118,15 +118,13 @@ fn test_tensor_c64() {
     // Create tensor
     let index_ptrs = [i as *const _, j as *const _];
     let dims = [2_usize, 2_usize];
-    let data_re = [1.0, 2.0, 3.0, 4.0];
-    let data_im = [0.5, 1.5, 2.5, 3.5];
+    let data_interleaved = [1.0, 0.5, 2.0, 1.5, 3.0, 2.5, 4.0, 3.5];
 
     let tensor = t4a_tensor_new_dense_c64(
         2,
         index_ptrs.as_ptr(),
         dims.as_ptr(),
-        data_re.as_ptr(),
-        data_im.as_ptr(),
+        data_interleaved.as_ptr(),
         4,
     );
     assert!(!tensor.is_null());
@@ -141,21 +139,19 @@ fn test_tensor_c64() {
 
     // Get data
     let mut out_len: usize = 0;
-    let mut out_re = [0.0; 4];
-    let mut out_im = [0.0; 4];
     assert_eq!(
-        t4a_tensor_get_data_c64(
-            tensor as *const _,
-            out_re.as_mut_ptr(),
-            out_im.as_mut_ptr(),
-            4,
-            &mut out_len
-        ),
+        t4a_tensor_get_data_c64(tensor as *const _, ptr::null_mut(), 0, &mut out_len),
         T4A_SUCCESS
     );
     assert_eq!(out_len, 4);
-    assert_eq!(out_re, data_re);
-    assert_eq!(out_im, data_im);
+
+    let mut out_data = [0.0; 8];
+    assert_eq!(
+        t4a_tensor_get_data_c64(tensor as *const _, out_data.as_mut_ptr(), 4, &mut out_len),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_len, 4);
+    assert_eq!(out_data, data_interleaved);
 
     // Clean up
     t4a_tensor_release(tensor);
