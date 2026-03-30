@@ -828,6 +828,41 @@ impl Drop for t4a_treetci_f64 {
 unsafe impl Send for t4a_treetci_f64 {}
 unsafe impl Sync for t4a_treetci_f64 {}
 
+/// Opaque TreeTCI state (Complex64)
+#[repr(C)]
+pub struct t4a_treetci_c64 {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_treetci_c64 {
+    pub(crate) fn new(inner: SimpleTreeTci<Complex64>) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(inner)) as *const c_void,
+        }
+    }
+
+    pub(crate) fn inner(&self) -> &SimpleTreeTci<Complex64> {
+        unsafe { &*(self._private as *const SimpleTreeTci<Complex64>) }
+    }
+
+    pub(crate) fn inner_mut(&mut self) -> &mut SimpleTreeTci<Complex64> {
+        unsafe { &mut *(self._private as *mut SimpleTreeTci<Complex64>) }
+    }
+}
+
+impl Drop for t4a_treetci_c64 {
+    fn drop(&mut self) {
+        if !self._private.is_null() {
+            unsafe {
+                let _ = Box::from_raw(self._private as *mut SimpleTreeTci<Complex64>);
+            }
+        }
+    }
+}
+
+unsafe impl Send for t4a_treetci_c64 {}
+unsafe impl Sync for t4a_treetci_c64 {}
+
 /// Proposer kind selection for TreeTCI
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
