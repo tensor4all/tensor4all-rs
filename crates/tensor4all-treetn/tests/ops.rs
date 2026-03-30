@@ -258,6 +258,51 @@ fn test_to_dense_empty() {
 }
 
 // ============================================================================
+// Tests for all_site_index_ids
+// ============================================================================
+
+#[test]
+fn test_all_site_index_ids_single_node() {
+    let s0 = idx(3);
+    let t0 = make_tensor(vec![s0.clone()], vec![1.0, 2.0, 3.0]);
+    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
+
+    let (ids, vertices) = tn.all_site_index_ids().unwrap();
+    assert_eq!(ids.len(), 1);
+    assert_eq!(vertices.len(), 1);
+    assert_eq!(ids[0], *s0.id());
+    assert_eq!(vertices[0], 0);
+}
+
+#[test]
+fn test_all_site_index_ids_two_nodes() {
+    let (tn, s0, _bond, s1) = create_two_node_named();
+
+    let (ids, vertices) = tn.all_site_index_ids().unwrap();
+    assert_eq!(ids.len(), 2);
+    assert_eq!(vertices.len(), 2);
+
+    // Check that both site index IDs are present with correct vertex associations
+    let id_vertex_set: std::collections::HashSet<_> = ids.iter().zip(vertices.iter()).collect();
+    assert!(id_vertex_set.contains(&(s0.id(), &0)));
+    assert!(id_vertex_set.contains(&(s1.id(), &1)));
+}
+
+#[test]
+fn test_all_site_index_ids_three_nodes() {
+    let (tn, s0, s1, s2) = create_three_node_named();
+
+    let (ids, vertices) = tn.all_site_index_ids().unwrap();
+    assert_eq!(ids.len(), 3);
+    assert_eq!(vertices.len(), 3);
+
+    let id_vertex_set: std::collections::HashSet<_> = ids.iter().zip(vertices.iter()).collect();
+    assert!(id_vertex_set.contains(&(s0.id(), &0)));
+    assert!(id_vertex_set.contains(&(s1.id(), &1)));
+    assert!(id_vertex_set.contains(&(s2.id(), &2)));
+}
+
+// ============================================================================
 // Tests for evaluate
 // ============================================================================
 
