@@ -6,8 +6,8 @@
 
 use crate::types::{t4a_canonical_form, t4a_index, t4a_tensor, t4a_treetn, InternalTreeTN};
 use crate::{StatusCode, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
-use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use tensor4all_core::ColMajorArrayRef;
 
 use tensor4all_treetn::treetn::contraction::{ContractionMethod, ContractionOptions};
 use tensor4all_treetn::{CanonicalizationOptions, TruncationOptions};
@@ -819,45 +819,60 @@ pub extern "C" fn t4a_treetn_evaluate_batch(
             );
         }
 
-        let Some(_n_entries) = n_sites.checked_mul(n_points) else {
+        let Some(n_entries) = n_sites.checked_mul(n_points) else {
             return crate::err_status(
                 "t4a_treetn_evaluate_batch index array size overflowed size_t",
                 T4A_INVALID_ARGUMENT,
             );
         };
 
+        // Use the new IndexId-based evaluate API internally.
+        // Build index_ids ordered by vertex name (0, 1, 2, ...) so that
+        // the flat indices_flat layout matches.
+        let (all_index_ids, all_vertices) = match inner.all_site_index_ids() {
+            Ok(v) => v,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+        };
+
+        // For each vertex 0..n_sites, verify exactly one site index and
+        // build an ordered index_ids vector matching the C API layout.
+        let mut ordered_index_ids = Vec::with_capacity(n_sites);
         for site in 0..n_sites {
-            let Some(site_space) = inner.site_space(&site) else {
+            // Find the index_id for this vertex
+            let pos = all_vertices.iter().position(|v| *v == site);
+            let Some(pos) = pos else {
                 return crate::err_status(
-                    format!("TreeTN vertex {} does not exist", site),
+                    format!(
+                        "TreeTN vertex {} does not exist in site index network",
+                        site
+                    ),
                     T4A_INVALID_ARGUMENT,
                 );
             };
-            if site_space.len() != 1 {
+            // Verify only one site index per vertex
+            if all_vertices.iter().filter(|v| **v == site).count() != 1 {
                 return crate::err_status(
                     format!(
-                        "t4a_treetn_evaluate_batch requires exactly one site index per vertex; vertex {} has {}",
-                        site,
-                        site_space.len()
+                        "t4a_treetn_evaluate_batch requires exactly one site index per vertex; vertex {} has more",
+                        site
                     ),
                     T4A_INVALID_ARGUMENT,
                 );
             }
+            ordered_index_ids.push(all_index_ids[pos]);
         }
 
-        for point in 0..n_points {
-            let mut index_values = HashMap::with_capacity(n_sites);
-            for site in 0..n_sites {
-                let flat_idx = site + n_sites * point;
-                let value = unsafe { *indices_flat.add(flat_idx) };
-                index_values.insert(site, vec![value]);
-            }
+        // Build ColMajorArrayRef from the flat indices
+        let indices_slice = unsafe { std::slice::from_raw_parts(indices_flat, n_entries) };
+        let shape = [n_sites, n_points];
+        let values = ColMajorArrayRef::new(indices_slice, &shape);
 
-            let scalar = match inner.evaluate(&index_values) {
-                Ok(value) => value,
-                Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
-            };
+        let scalars = match inner.evaluate(&ordered_index_ids, values) {
+            Ok(v) => v,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+        };
 
+        for (point, scalar) in scalars.iter().enumerate() {
             unsafe {
                 *out_re.add(point) = scalar.real();
             }

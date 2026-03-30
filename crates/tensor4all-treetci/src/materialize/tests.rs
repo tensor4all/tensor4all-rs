@@ -7,7 +7,7 @@ use crate::{
 use anyhow::Result;
 use num_complex::Complex64;
 use std::collections::HashMap as StdHashMap;
-use std::collections::HashMap;
+use tensor4all_core::{ColMajorArrayRef, IndexLike};
 
 fn two_site_graph() -> TreeTciGraph {
     TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap()
@@ -42,10 +42,23 @@ fn to_treetn_preserves_two_site_identity_evaluations() {
 
     let tn = to_treetn(&tci, batch_eval, Some(0)).unwrap();
 
+    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    let pos0 = {
+        let site_id = *tn.site_space(&0usize).unwrap().iter().next().unwrap().id();
+        index_ids.iter().position(|id| *id == site_id).unwrap()
+    };
+    let pos1 = {
+        let site_id = *tn.site_space(&1usize).unwrap().iter().next().unwrap().id();
+        index_ids.iter().position(|id| *id == site_id).unwrap()
+    };
+
     let eval = |i: usize, j: usize| -> f64 {
-        tn.evaluate(&HashMap::from([(0usize, vec![i]), (1usize, vec![j])]))
-            .unwrap()
-            .real()
+        let mut data = vec![0usize; index_ids.len()];
+        data[pos0] = i;
+        data[pos1] = j;
+        let shape = [index_ids.len(), 1];
+        let values = ColMajorArrayRef::new(&data, &shape);
+        tn.evaluate(&index_ids, values).unwrap()[0].real()
     };
 
     assert_scalar_close(eval(0, 0), 1.0, 1.0, 1e-12);

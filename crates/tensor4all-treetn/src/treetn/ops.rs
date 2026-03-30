@@ -266,6 +266,7 @@ where
     ///
     /// For [`evaluate()`](Self::evaluate), pass `index_ids` and arrange
     /// values in the same order.
+    #[allow(clippy::type_complexity)]
     pub fn all_site_index_ids(&self) -> Result<(Vec<<T::Index as IndexLike>::Id>, Vec<V>)>
     where
         V: Clone,
@@ -378,7 +379,7 @@ where
 
                 let positions = node_index_positions.get(&node_name);
 
-                if positions.map_or(true, |p| p.is_empty()) {
+                if positions.is_none_or(|p| p.is_empty()) {
                     // No site indices - just use the tensor as is
                     contracted_tensors.push(tensor.clone());
                     contracted_names.push(node_name);

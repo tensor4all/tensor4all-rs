@@ -1,9 +1,9 @@
 //! Tests for TreeTN operations: norm, norm_squared, inner, to_dense, evaluate.
 
-use std::collections::HashMap;
-
 use num_complex::Complex64;
-use tensor4all_core::{AnyScalar, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike};
+use tensor4all_core::{
+    AnyScalar, ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen, TensorIndex, TensorLike,
+};
 use tensor4all_treetn::TreeTN;
 
 // ============================================================================
@@ -312,69 +312,66 @@ fn test_evaluate_single_node() {
     let t0 = make_tensor(vec![s0.clone()], vec![10.0, 20.0, 30.0]);
     let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
 
+    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+
     // Evaluate at index 0
-    let mut index_values = HashMap::new();
-    index_values.insert(0usize, vec![0]);
-    let val = tn.evaluate(&index_values).unwrap();
+    let data = [0usize];
+    let shape = [index_ids.len(), 1];
+    let values = ColMajorArrayRef::new(&data, &shape);
+    let vals = tn.evaluate(&index_ids, values).unwrap();
     assert!(
-        (val.real() - 10.0).abs() < 1e-10,
+        (vals[0].real() - 10.0).abs() < 1e-10,
         "evaluate at [0] = {}, expected 10.0",
-        val.real()
+        vals[0].real()
     );
 
     // Evaluate at index 2
-    index_values.insert(0usize, vec![2]);
-    let val = tn.evaluate(&index_values).unwrap();
+    let data = [2usize];
+    let values = ColMajorArrayRef::new(&data, &shape);
+    let vals = tn.evaluate(&index_ids, values).unwrap();
     assert!(
-        (val.real() - 30.0).abs() < 1e-10,
+        (vals[0].real() - 30.0).abs() < 1e-10,
         "evaluate at [2] = {}, expected 30.0",
-        val.real()
+        vals[0].real()
     );
 }
 
 #[test]
 fn test_evaluate_two_nodes() {
-    let (tn, _, _, _) = create_two_node_named();
+    let (tn, s0, _, s1) = create_two_node_named();
 
     // Get the dense representation for reference
     let dense = tn.to_dense().unwrap();
     let dense_data = dense.to_vec::<f64>().unwrap();
 
-    // Get ordered site indices to know mapping
-    let site_inds_0 = tn
-        .site_space(&0)
-        .unwrap()
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    let site_inds_1 = tn
-        .site_space(&1)
-        .unwrap()
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    let dim0 = site_inds_0[0].dim();
-    let dim1 = site_inds_1[0].dim();
+    let dim0 = s0.dim();
+    let dim1 = s1.dim();
+
+    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    // Find positions of s0 and s1 in index_ids
+    let pos0 = index_ids.iter().position(|id| id == s0.id()).unwrap();
+    let pos1 = index_ids.iter().position(|id| id == s1.id()).unwrap();
 
     // Evaluate at each combination and verify against dense
     for i in 0..dim0 {
         for j in 0..dim1 {
-            let mut index_values = HashMap::new();
-            index_values.insert(0usize, vec![i]);
-            index_values.insert(1usize, vec![j]);
-            let val = tn.evaluate(&index_values).unwrap();
+            let mut data = vec![0usize; index_ids.len()];
+            data[pos0] = i;
+            data[pos1] = j;
+            let shape = [index_ids.len(), 1];
+            let values = ColMajorArrayRef::new(&data, &shape);
+            let vals = tn.evaluate(&index_ids, values).unwrap();
 
             // Get the expected value from dense tensor
-            // The dense tensor indices are ordered by node name (0, then 1)
             let flat_idx = i + dim0 * j;
             let expected = dense_data[flat_idx];
 
             assert!(
-                (val.real() - expected).abs() < 1e-10,
+                (vals[0].real() - expected).abs() < 1e-10,
                 "evaluate at [{}, {}] = {}, expected {}",
                 i,
                 j,
-                val.real(),
+                vals[0].real(),
                 expected
             );
         }
@@ -393,6 +390,10 @@ fn test_evaluate_two_nodes_complex() {
     let t1 = make_complex_tensor(vec![bond.clone(), s1.clone()], vec![b[0], b[1]]);
     let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
 
+    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    let pos0 = index_ids.iter().position(|id| id == s0.id()).unwrap();
+    let pos1 = index_ids.iter().position(|id| id == s1.id()).unwrap();
+
     let max_sample = a
         .iter()
         .flat_map(|a_i| b.iter().map(move |b_j| (*a_i * *b_j).norm()))
@@ -401,11 +402,14 @@ fn test_evaluate_two_nodes_complex() {
     let mut max_diff = 0.0_f64;
     for (i, a_i) in a.iter().enumerate() {
         for (j, b_j) in b.iter().enumerate() {
-            let val = tn
-                .evaluate(&HashMap::from([(0usize, vec![i]), (1usize, vec![j])]))
-                .unwrap();
+            let mut data = vec![0usize; index_ids.len()];
+            data[pos0] = i;
+            data[pos1] = j;
+            let shape = [index_ids.len(), 1];
+            let values = ColMajorArrayRef::new(&data, &shape);
+            let vals = tn.evaluate(&index_ids, values).unwrap();
             let expected = *a_i * *b_j;
-            let got = Complex64::new(val.real(), val.imag());
+            let got = Complex64::new(vals[0].real(), vals[0].imag());
             max_diff = max_diff.max((got - expected).norm());
         }
     }
@@ -420,34 +424,40 @@ fn test_evaluate_two_nodes_complex() {
 
 #[test]
 fn test_evaluate_three_nodes() {
-    let (tn, _, _, _) = create_three_node_named();
+    let (tn, s0, s1, s2) = create_three_node_named();
 
     // Get dense for reference
     let dense = tn.to_dense().unwrap();
     let dense_data = dense.to_vec::<f64>().unwrap();
 
-    let dim0 = tn.site_space(&0).unwrap().iter().next().unwrap().dim();
-    let dim1 = tn.site_space(&1).unwrap().iter().next().unwrap().dim();
-    let _dim2 = tn.site_space(&2).unwrap().iter().next().unwrap().dim();
+    let dim0 = s0.dim();
+    let dim1 = s1.dim();
+
+    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    let pos0 = index_ids.iter().position(|id| id == s0.id()).unwrap();
+    let pos1 = index_ids.iter().position(|id| id == s1.id()).unwrap();
+    let pos2 = index_ids.iter().position(|id| id == s2.id()).unwrap();
 
     // Spot-check a few values
     for (i, j, k) in [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1)] {
-        let mut index_values = HashMap::new();
-        index_values.insert(0usize, vec![i]);
-        index_values.insert(1usize, vec![j]);
-        index_values.insert(2usize, vec![k]);
-        let val = tn.evaluate(&index_values).unwrap();
+        let mut data = vec![0usize; index_ids.len()];
+        data[pos0] = i;
+        data[pos1] = j;
+        data[pos2] = k;
+        let shape = [index_ids.len(), 1];
+        let values = ColMajorArrayRef::new(&data, &shape);
+        let vals = tn.evaluate(&index_ids, values).unwrap();
 
         let flat_idx = i + dim0 * (j + dim1 * k);
         let expected = dense_data[flat_idx];
 
         assert!(
-            (val.real() - expected).abs() < 1e-8,
+            (vals[0].real() - expected).abs() < 1e-8,
             "evaluate at [{}, {}, {}] = {}, expected {}",
             i,
             j,
             k,
-            val.real(),
+            vals[0].real(),
             expected
         );
     }
@@ -456,8 +466,10 @@ fn test_evaluate_three_nodes() {
 #[test]
 fn test_evaluate_empty() {
     let tn = TreeTN::<TensorDynLen, usize>::new();
-    let index_values = HashMap::new();
-    let result = tn.evaluate(&index_values);
+    let data: [usize; 0] = [];
+    let shape = [0, 1];
+    let values = ColMajorArrayRef::new(&data, &shape);
+    let result = tn.evaluate(&[], values);
     assert!(result.is_err());
 }
 
