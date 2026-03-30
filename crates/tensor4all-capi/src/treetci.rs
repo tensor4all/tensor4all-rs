@@ -13,6 +13,98 @@ use tensor4all_treetci::{
 };
 
 // ============================================================================
+// Callback type
+// ============================================================================
+
+/// Batch evaluation callback for TreeTCI.
+///
+/// Evaluates the target function at multiple points simultaneously.
+/// When `n_points == 1`, this acts as a single-point evaluation.
+///
+/// # Arguments
+/// * `batch_data` - Column-major (n_sites, n_points) index array.
+///   Element at (site, point) is at `batch_data[site + n_sites * point]`.
+/// * `n_sites` - Number of sites
+/// * `n_points` - Number of evaluation points
+/// * `results` - Output buffer for `n_points` f64 values
+/// * `user_data` - User data pointer passed through from the calling function
+///
+/// # Returns
+/// 0 on success, non-zero on error
+pub type TreeTciBatchEvalCallback = extern "C" fn(
+    batch_data: *const libc::size_t,
+    n_sites: libc::size_t,
+    n_points: libc::size_t,
+    results: *mut libc::c_double,
+    user_data: *mut c_void,
+) -> i32;
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+/// Create a batch eval closure from the C callback.
+///
+/// Returns a closure compatible with `Fn(GlobalIndexBatch<'_>) -> Result<Vec<f64>>`.
+fn make_batch_eval_closure(
+    eval_fn: TreeTciBatchEvalCallback,
+    user_data: *mut c_void,
+) -> impl Fn(GlobalIndexBatch<'_>) -> anyhow::Result<Vec<f64>> {
+    move |batch: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<f64>> {
+        let mut results = vec![0.0f64; batch.n_points()];
+        let status = eval_fn(
+            batch.data().as_ptr(),
+            batch.n_sites(),
+            batch.n_points(),
+            results.as_mut_ptr(),
+            user_data,
+        );
+        if status != 0 {
+            anyhow::bail!(
+                "TreeTCI batch eval callback returned error status {}",
+                status
+            );
+        }
+        Ok(results)
+    }
+}
+
+/// Create a point eval closure from the C batch callback (n_points=1).
+fn make_point_eval_closure(
+    eval_fn: TreeTciBatchEvalCallback,
+    user_data: *mut c_void,
+) -> impl Fn(&[usize]) -> f64 {
+    move |indices: &[usize]| -> f64 {
+        let mut result: f64 = 0.0;
+        let status = eval_fn(indices.as_ptr(), indices.len(), 1, &mut result, user_data);
+        if status != 0 {
+            f64::NAN
+        } else {
+            result
+        }
+    }
+}
+
+/// Convert C API parameters to TreeTciOptions.
+fn make_options(
+    tolerance: f64,
+    max_bond_dim: libc::size_t,
+    max_iter: libc::size_t,
+    normalize_error: bool,
+) -> TreeTciOptions {
+    TreeTciOptions {
+        tolerance,
+        max_bond_dim: if max_bond_dim == 0 {
+            usize::MAX
+        } else {
+            max_bond_dim
+        },
+        max_iter,
+        normalize_error,
+    }
+}
+
+// ============================================================================
 // Graph lifecycle
 // ============================================================================
 
