@@ -1,4 +1,18 @@
 use super::*;
+use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, Tensor3Ops, TensorTrain};
+use tensor4all_treetn::TreeTN;
+
+unsafe extern "C" {
+    fn t4a_treetn_evaluate_batch(
+        ptr: *const t4a_treetn,
+        indices_flat: *const libc::size_t,
+        n_sites: libc::size_t,
+        n_points: libc::size_t,
+        out_re: *mut libc::c_double,
+        out_im: *mut libc::c_double,
+    ) -> StatusCode;
+}
 
 // ========================================================================
 // Helpers
@@ -45,6 +59,92 @@ fn cleanup_treetn(
     for i in indices {
         crate::t4a_index_release(i);
     }
+}
+
+fn simplett_to_treetn(tt: &TensorTrain<f64>) -> *mut t4a_treetn {
+    let n_sites = tt.len();
+    assert!(n_sites > 0, "TensorTrain must have at least one site");
+
+    let site_indices: Vec<DynIndex> = (0..n_sites)
+        .map(|site| DynIndex::new_dyn(tt.site_tensor(site).site_dim()))
+        .collect();
+    let bond_indices: Vec<DynIndex> = (0..=n_sites)
+        .map(|site| {
+            let dim = if site == 0 {
+                1
+            } else {
+                tt.site_tensor(site - 1).right_dim()
+            };
+            DynIndex::new_dyn(dim)
+        })
+        .collect();
+
+    let mut tensors = Vec::with_capacity(n_sites);
+    let node_names: Vec<usize> = (0..n_sites).collect();
+
+    for site in 0..n_sites {
+        let tensor = tt.site_tensor(site);
+        let left_dim = tensor.left_dim();
+        let site_dim = tensor.site_dim();
+        let right_dim = tensor.right_dim();
+
+        let mut indices = Vec::with_capacity(3);
+        if site > 0 {
+            indices.push(bond_indices[site].clone());
+        }
+        indices.push(site_indices[site].clone());
+        if site + 1 < n_sites {
+            indices.push(bond_indices[site + 1].clone());
+        }
+
+        let total_size = indices.iter().map(|idx| idx.dim()).product();
+        let mut data = vec![0.0; total_size];
+
+        if site == 0 && n_sites == 1 {
+            for (s, slot) in data.iter_mut().enumerate() {
+                *slot = *tensor.get3(0, s, 0);
+            }
+        } else if site == 0 {
+            for s in 0..site_dim {
+                for r in 0..right_dim {
+                    let idx = s + site_dim * r;
+                    data[idx] = *tensor.get3(0, s, r);
+                }
+            }
+        } else if site + 1 == n_sites {
+            for l in 0..left_dim {
+                for s in 0..site_dim {
+                    let idx = l + left_dim * s;
+                    data[idx] = *tensor.get3(l, s, 0);
+                }
+            }
+        } else {
+            for l in 0..left_dim {
+                for s in 0..site_dim {
+                    for r in 0..right_dim {
+                        let idx = l + left_dim * (s + site_dim * r);
+                        data[idx] = *tensor.get3(l, s, r);
+                    }
+                }
+            }
+        }
+
+        tensors.push(TensorDynLen::from_dense(indices, data).unwrap());
+    }
+
+    let treetn = TreeTN::from_tensors(tensors, node_names).unwrap();
+    Box::into_raw(Box::new(t4a_treetn::new(treetn)))
+}
+
+fn make_product_treetn_from_simplett() -> *mut t4a_treetn {
+    let tt = TensorTrain::new(vec![
+        tensor3_from_data(vec![1.0, 2.0], 1, 2, 1),
+        tensor3_from_data(vec![10.0, 20.0, 30.0], 1, 3, 1),
+        tensor3_from_data(vec![100.0, 200.0], 1, 2, 1),
+    ])
+    .unwrap();
+
+    simplett_to_treetn(&tt)
 }
 
 // ========================================================================
@@ -359,6 +459,47 @@ fn test_treetn_to_dense() {
 
     crate::t4a_tensor_release(dense);
     cleanup_treetn(tt, tensors, indices);
+}
+
+#[test]
+fn test_treetn_evaluate_batch_single_and_multi_point() {
+    let tt = make_product_treetn_from_simplett();
+
+    let single_indices: [libc::size_t; 3] = [1, 2, 1];
+    let mut single_value = 0.0;
+    let status = unsafe {
+        t4a_treetn_evaluate_batch(
+            tt,
+            single_indices.as_ptr(),
+            3,
+            1,
+            &mut single_value,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(status, T4A_SUCCESS);
+    assert!((single_value - 12_000.0).abs() < 1e-10);
+
+    let batch_indices: [libc::size_t; 9] = [
+        0, 0, 0, //
+        1, 1, 0, //
+        0, 2, 1,
+    ];
+    let mut batch_values = [0.0; 3];
+    let status = unsafe {
+        t4a_treetn_evaluate_batch(
+            tt,
+            batch_indices.as_ptr(),
+            3,
+            3,
+            batch_values.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(status, T4A_SUCCESS);
+    assert_eq!(batch_values, [1_000.0, 4_000.0, 6_000.0]);
+
+    t4a_treetn_release(tt);
 }
 
 #[test]
