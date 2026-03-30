@@ -76,7 +76,7 @@ impl_full_piv_lu_scalar!(Complex64);
 /// Materialize a converged TreeTCI state as a `TreeTN`.
 pub fn to_treetn<T, F>(
     state: &SimpleTreeTci<T>,
-    batch_eval: F,
+    evaluate: F,
     center_site: Option<usize>,
 ) -> Result<TreeTN<TensorDynLen, usize>>
 where
@@ -119,9 +119,9 @@ where
         let out_keys = state.graph.edge_in_ij_keys(site, &out_edges)?;
 
         let data = if out_edges.is_empty() {
-            fill_tensor_values(state, &in_keys, &out_keys, &[site], &batch_eval)?
+            fill_tensor_values(state, &in_keys, &out_keys, &[site], &evaluate)?
         } else {
-            site_tensor_with_parent(state, site, out_edges[0], &in_keys, &out_keys, &batch_eval)?
+            site_tensor_with_parent(state, site, out_edges[0], &in_keys, &out_keys, &evaluate)?
         };
 
         let mut indices = Vec::with_capacity(1 + incoming_edges.len() + out_edges.len());
@@ -156,7 +156,7 @@ fn site_tensor_with_parent<T, F>(
     parent_edge: TreeTciEdge,
     in_keys: &[SubtreeKey],
     out_keys: &[SubtreeKey],
-    batch_eval: &F,
+    evaluate: &F,
 ) -> Result<Vec<T>>
 where
     T: FullPivLuScalar,
@@ -167,7 +167,7 @@ where
         "MVP TreeTCI materialization expects exactly one outgoing key per non-root site"
     );
 
-    let pi1_values = fill_tensor_values(state, in_keys, out_keys, &[site], batch_eval)?;
+    let pi1_values = fill_tensor_values(state, in_keys, out_keys, &[site], evaluate)?;
     let rows = state.local_dims[site] * product_pivot_dims(state, in_keys)?;
     let cols = product_pivot_dims(state, out_keys)?;
 
@@ -177,7 +177,7 @@ where
         std::slice::from_ref(&site_side_key),
         out_keys,
         &[],
-        batch_eval,
+        evaluate,
     )?;
     let p_rows = state
         .ijset
@@ -232,7 +232,7 @@ fn fill_tensor_values<T, F>(
     in_keys: &[SubtreeKey],
     out_keys: &[SubtreeKey],
     central_sites: &[usize],
-    batch_eval: &F,
+    evaluate: &F,
 ) -> Result<Vec<T>>
 where
     T: Scalar,
@@ -260,7 +260,7 @@ where
     }
 
     let batch = assemble_points_column_major(&points)?;
-    let values = batch_eval(batch.as_view())?;
+    let values = evaluate(batch.as_view())?;
     ensure!(
         values.len() == points.len(),
         "batch evaluator returned {} values for {} fill-tensor points",

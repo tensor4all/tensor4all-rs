@@ -15,39 +15,15 @@ pub type TreeTciRunResult = (
 );
 
 /// Cross interpolate a function on a tree graph and return a `TreeTN`.
-pub fn crossinterpolate_tree<T, F, B>(
-    point_eval: F,
-    batch_eval: Option<B>,
-    local_dims: Vec<usize>,
-    graph: TreeTciGraph,
-    initial_pivots: Vec<MultiIndex>,
-    options: TreeTciOptions,
-    center_site: Option<usize>,
-) -> Result<TreeTciRunResult>
-where
-    T: FullPivLuScalar,
-    tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
-    F: Fn(&[usize]) -> T,
-    B: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
-{
-    crossinterpolate_tree_with_proposer(
-        point_eval,
-        batch_eval,
-        local_dims,
-        graph,
-        initial_pivots,
-        options,
-        center_site,
-        &crate::DefaultProposer,
-    )
-}
-
-/// Cross interpolate a function on a tree graph with a caller-supplied pivot
-/// candidate proposer and return a `TreeTN`.
+///
+/// This is the unified entry point for tree tensor cross interpolation.
+/// The `evaluate` closure receives batches of multi-indices and must return
+/// one scalar per point.
+///
+/// The `proposer` controls how pivot candidates are generated.
 #[allow(clippy::too_many_arguments)]
-pub fn crossinterpolate_tree_with_proposer<T, F, B, P>(
-    point_eval: F,
-    batch_eval: Option<B>,
+pub fn crossinterpolate2<T, F, P>(
+    evaluate: F,
     local_dims: Vec<usize>,
     graph: TreeTciGraph,
     initial_pivots: Vec<MultiIndex>,
@@ -58,8 +34,7 @@ pub fn crossinterpolate_tree_with_proposer<T, F, B, P>(
 where
     T: FullPivLuScalar,
     tensor4all_tcicore::DenseFaerLuKernel: tensor4all_tcicore::PivotKernel<T>,
-    F: Fn(&[usize]) -> T,
-    B: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
 {
     ensure!(
@@ -78,49 +53,22 @@ where
     let mut tci = SimpleTreeTci::<T>::new(local_dims, graph)?;
     tci.add_global_pivots(&pivots)?;
 
-    for pivot in &pivots {
-        tci.max_sample_value = tci.max_sample_value.max(point_eval(pivot).abs_val());
-    }
+    // Initialize max_sample_value via batch evaluate
+    let n_sites = tci.local_dims.len();
+    let flat: Vec<usize> = pivots.iter().flat_map(|p| p.iter().copied()).collect();
+    let batch = GlobalIndexBatch::new(&flat, n_sites, pivots.len())?;
+    let init_vals = evaluate(batch)?;
+    tci.max_sample_value = init_vals
+        .iter()
+        .map(|v| T::abs_val(*v))
+        .fold(0.0f64, f64::max);
     ensure!(
         tci.max_sample_value > 0.0,
         "initial pivots must not all evaluate to zero"
     );
 
-    let (ranks, errors) = match &batch_eval {
-        Some(batch_eval) => optimize_with_proposer(&mut tci, batch_eval, &options, proposer)?,
-        None => optimize_with_proposer(
-            &mut tci,
-            |batch| fallback_batch_eval(batch, &point_eval),
-            &options,
-            proposer,
-        )?,
-    };
-
-    let treetn = match &batch_eval {
-        Some(batch_eval) => to_treetn(&tci, batch_eval, center_site)?,
-        None => to_treetn(
-            &tci,
-            |batch| fallback_batch_eval(batch, &point_eval),
-            center_site,
-        )?,
-    };
+    let (ranks, errors) = optimize_with_proposer(&mut tci, &evaluate, &options, proposer)?;
+    let treetn = to_treetn(&tci, &evaluate, center_site)?;
 
     Ok((treetn, ranks, errors))
-}
-
-fn fallback_batch_eval<T, F>(batch: GlobalIndexBatch<'_>, point_eval: &F) -> Result<Vec<T>>
-where
-    F: Fn(&[usize]) -> T,
-{
-    let mut values = Vec::with_capacity(batch.n_points());
-    let mut point = vec![0usize; batch.n_sites()];
-    for point_idx in 0..batch.n_points() {
-        for (site, value) in point.iter_mut().enumerate().take(batch.n_sites()) {
-            *value = batch.get(site, point_idx).ok_or_else(|| {
-                anyhow::anyhow!("missing batch entry at site {} point {}", site, point_idx)
-            })?;
-        }
-        values.push(point_eval(&point));
-    }
-    Ok(values)
 }

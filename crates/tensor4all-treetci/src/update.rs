@@ -14,7 +14,7 @@ use tensor4all_tcicore::{
 pub fn update_edge<T, F, P>(
     state: &mut SimpleTreeTci<T>,
     edge: TreeTciEdge,
-    batch_eval: F,
+    evaluate: F,
     options: &PivotKernelOptions,
     proposer: &P,
 ) -> Result<PivotSelectionCore>
@@ -32,7 +32,7 @@ where
         &left_candidates,
         &right_key,
         &right_candidates,
-        batch_eval,
+        evaluate,
     )?;
 
     for value in &values {
@@ -73,7 +73,7 @@ where
 pub fn update_edge_default<T, F>(
     state: &mut SimpleTreeTci<T>,
     edge: TreeTciEdge,
-    batch_eval: F,
+    evaluate: F,
     options: &PivotKernelOptions,
 ) -> Result<PivotSelectionCore>
 where
@@ -81,7 +81,7 @@ where
     DenseFaerLuKernel: PivotKernel<T>,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
-    update_edge(state, edge, batch_eval, options, &DefaultProposer)
+    update_edge(state, edge, evaluate, options, &DefaultProposer)
 }
 
 fn evaluate_candidate_matrix<T, F>(
@@ -90,7 +90,7 @@ fn evaluate_candidate_matrix<T, F>(
     left_candidates: &[MultiIndex],
     right_key: &crate::SubtreeKey,
     right_candidates: &[MultiIndex],
-    batch_eval: F,
+    evaluate: F,
 ) -> Result<Vec<T>>
 where
     T: Scalar,
@@ -107,7 +107,7 @@ where
         }
     }
     let batch = assemble_points_column_major(&points)?;
-    let values = batch_eval(batch.as_view())?;
+    let values = evaluate(batch.as_view())?;
     ensure!(
         values.len() == left_candidates.len() * right_candidates.len(),
         "batch evaluator returned {} values for {} candidate-matrix entries",

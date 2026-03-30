@@ -5,8 +5,7 @@ use common::assert_real_samples_close;
 use quanticsgrids::{DiscretizedGrid, UnfoldingScheme};
 use tensor4all_core::{ColMajorArrayRef, IndexLike};
 use tensor4all_treetci::{
-    crossinterpolate_tree_with_proposer, GlobalIndexBatch, SimpleProposer, TreeTciEdge,
-    TreeTciGraph, TreeTciOptions,
+    crossinterpolate2, GlobalIndexBatch, SimpleProposer, TreeTciEdge, TreeTciGraph, TreeTciOptions,
 };
 
 fn branching_tree(n_sites: usize) -> TreeTciGraph {
@@ -41,6 +40,22 @@ fn evaluate_treetn(
     tn.evaluate(&index_ids, values).unwrap()[0].real()
 }
 
+fn batch_eval_from_point<T: Clone>(
+    point_eval: impl Fn(&[usize]) -> T,
+) -> impl Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>> {
+    move |batch: GlobalIndexBatch<'_>| {
+        let mut values = Vec::with_capacity(batch.n_points());
+        let mut point = vec![0usize; batch.n_sites()];
+        for p in 0..batch.n_points() {
+            for s in 0..batch.n_sites() {
+                point[s] = batch.get(s, p).unwrap();
+            }
+            values.push(point_eval(&point));
+        }
+        Ok(values)
+    }
+}
+
 #[test]
 fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
     let grid = DiscretizedGrid::builder(&[2, 2])
@@ -65,9 +80,8 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
         f(&coords)
     };
 
-    let (tn, _ranks, errors) = crossinterpolate_tree_with_proposer(
-        qf,
-        None::<fn(GlobalIndexBatch<'_>) -> Result<Vec<f64>>>,
+    let (tn, _ranks, errors) = crossinterpolate2(
+        batch_eval_from_point(qf),
         grid.local_dimensions(),
         branching_tree(grid.len()),
         vec![vec![0; grid.len()]],
@@ -111,7 +125,7 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
 }
 
 #[test]
-fn quantics_grid_batch_and_point_evaluators_agree() {
+fn quantics_grid_batch_evaluator_matches_point_evaluator() {
     let grid = DiscretizedGrid::builder(&[2, 2])
         .with_lower_bound(&[-3.0, -17.0])
         .with_upper_bound(&[2.0, 12.0])
@@ -133,17 +147,6 @@ fn quantics_grid_batch_and_point_evaluators_agree() {
         let coords = grid.quantics_to_origcoord(&quantics).unwrap();
         f(&coords)
     };
-    let batch_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
-        let mut values = Vec::with_capacity(batch.n_points());
-        for point_idx in 0..batch.n_points() {
-            let quantics = (0..batch.n_sites())
-                .map(|site| batch.get(site, point_idx).unwrap() as i64 + 1)
-                .collect::<Vec<_>>();
-            let coords = grid.quantics_to_origcoord(&quantics).unwrap();
-            values.push(f(&coords));
-        }
-        Ok(values)
-    };
 
     let options = TreeTciOptions {
         tolerance: 1e-10,
@@ -152,9 +155,9 @@ fn quantics_grid_batch_and_point_evaluators_agree() {
         normalize_error: true,
     };
 
-    let (tn_point, _, _) = crossinterpolate_tree_with_proposer(
-        qf,
-        None::<fn(GlobalIndexBatch<'_>) -> Result<Vec<f64>>>,
+    // Run with point-eval-based batch closure
+    let (tn_point, _, _) = crossinterpolate2(
+        batch_eval_from_point(qf),
         grid.local_dimensions(),
         branching_tree(grid.len()),
         vec![vec![0; grid.len()]],
@@ -164,9 +167,22 @@ fn quantics_grid_batch_and_point_evaluators_agree() {
     )
     .unwrap();
 
-    let (tn_batch, _, _) = crossinterpolate_tree_with_proposer(
-        qf,
-        Some(batch_eval),
+    // Run with explicit batch evaluator
+    let grid_clone = grid.clone();
+    let batch_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        let mut values = Vec::with_capacity(batch.n_points());
+        for point_idx in 0..batch.n_points() {
+            let quantics = (0..batch.n_sites())
+                .map(|site| batch.get(site, point_idx).unwrap() as i64 + 1)
+                .collect::<Vec<_>>();
+            let coords = grid_clone.quantics_to_origcoord(&quantics).unwrap();
+            values.push(f(&coords));
+        }
+        Ok(values)
+    };
+
+    let (tn_batch, _, _) = crossinterpolate2(
+        batch_eval,
         grid.local_dimensions(),
         branching_tree(grid.len()),
         vec![vec![0; grid.len()]],

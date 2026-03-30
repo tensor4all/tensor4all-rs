@@ -36,7 +36,7 @@ pub mod visitor;
 #[cfg(test)]
 mod test_support;
 
-pub use api::{crossinterpolate_tree, crossinterpolate_tree_with_proposer};
+pub use api::crossinterpolate2;
 pub use assemble::{assemble_global_point, assemble_points_column_major, MultiIndex};
 pub use batch::{GlobalIndexBatch, OwnedGlobalIndexBatch};
 pub use graph::{TreeTciEdge, TreeTciGraph};
