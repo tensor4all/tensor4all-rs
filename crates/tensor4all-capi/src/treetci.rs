@@ -526,6 +526,170 @@ pub extern "C" fn t4a_treetci_f64_to_treetn(
     crate::unwrap_catch(result)
 }
 
+// ============================================================================
+// High-level convenience function
+// ============================================================================
+
+/// Run TreeTCI to convergence and return a TreeTN.
+///
+/// Equivalent to: new -> add_pivots -> sweep loop -> materialize.
+///
+/// # Arguments
+/// - `eval_cb`: Batch evaluation callback
+/// - `user_data`: User data passed to callback
+/// - `local_dims`: Local dimension at each site (length = n_sites)
+/// - `n_sites`: Number of sites
+/// - `graph`: Tree graph handle
+/// - `initial_pivots_flat`: Column-major (n_sites, n_pivots), or NULL for empty
+/// - `n_pivots`: Number of initial pivots
+/// - `proposer_kind`: Proposer selection
+/// - `tolerance`: Relative tolerance
+/// - `max_bond_dim`: Maximum bond dimension (0 = unlimited)
+/// - `max_iter`: Maximum number of iterations
+/// - `normalize_error`: Whether to normalize errors (0=false, 1=true)
+/// - `center_site`: Materialization center site
+/// - `out_treetn`: Output TreeTN handle
+/// - `out_ranks`: Buffer for max rank per iteration (length >= max_iter), or NULL
+/// - `out_errors`: Buffer for normalized error per iteration (length >= max_iter), or NULL
+/// - `out_n_iters`: Output: actual number of iterations performed
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn t4a_crossinterpolate_tree_f64(
+    eval_cb: TreeTciBatchEvalCallback,
+    user_data: *mut c_void,
+    local_dims: *const libc::size_t,
+    n_sites: libc::size_t,
+    graph: *const t4a_treetci_graph,
+    initial_pivots_flat: *const libc::size_t,
+    n_pivots: libc::size_t,
+    proposer_kind: t4a_treetci_proposer_kind,
+    tolerance: libc::c_double,
+    max_bond_dim: libc::size_t,
+    max_iter: libc::size_t,
+    normalize_error: libc::c_int,
+    center_site: libc::size_t,
+    out_treetn: *mut *mut t4a_treetn,
+    out_ranks: *mut libc::size_t,
+    out_errors: *mut libc::c_double,
+    out_n_iters: *mut libc::size_t,
+) -> StatusCode {
+    if local_dims.is_null() || graph.is_null() || out_treetn.is_null() || out_n_iters.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // Parse local_dims
+        let dims: Vec<usize> = (0..n_sites)
+            .map(|i| unsafe { *local_dims.add(i) })
+            .collect();
+
+        // Clone graph
+        let g = unsafe { &*graph };
+        let graph_clone = g.inner().clone();
+
+        // Create state
+        let mut state = match SimpleTreeTci::new(dims, graph_clone) {
+            Ok(s) => s,
+            Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
+        };
+
+        // Add initial pivots
+        if !initial_pivots_flat.is_null() && n_pivots > 0 {
+            let pivots: Vec<Vec<usize>> = (0..n_pivots)
+                .map(|p| {
+                    (0..n_sites)
+                        .map(|s| unsafe { *initial_pivots_flat.add(s + n_sites * p) })
+                        .collect()
+                })
+                .collect();
+            if let Err(e) = state.add_global_pivots(&pivots) {
+                return err_status(e, T4A_INTERNAL_ERROR);
+            }
+        }
+
+        // Evaluate max_sample_value at initial pivots using the point eval closure
+        let point_eval = make_point_eval_closure(eval_cb, user_data);
+        if !initial_pivots_flat.is_null() && n_pivots > 0 {
+            for p in 0..n_pivots {
+                let pivot: Vec<usize> = (0..n_sites)
+                    .map(|s| unsafe { *initial_pivots_flat.add(s + n_sites * p) })
+                    .collect();
+                let val = point_eval(&pivot);
+                state.max_sample_value = state.max_sample_value.max(val.abs());
+            }
+        }
+
+        // Run optimization
+        let batch_eval = make_batch_eval_closure(eval_cb, user_data);
+        let options = make_options(tolerance, max_bond_dim, max_iter, normalize_error != 0);
+
+        let (ranks, errors) = match proposer_kind {
+            t4a_treetci_proposer_kind::Default => {
+                let proposer = DefaultProposer;
+                match tensor4all_treetci::optimize_with_proposer(
+                    &mut state,
+                    &batch_eval,
+                    &options,
+                    &proposer,
+                ) {
+                    Ok(r) => r,
+                    Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
+                }
+            }
+            t4a_treetci_proposer_kind::Simple => {
+                let proposer = SimpleProposer::default();
+                match tensor4all_treetci::optimize_with_proposer(
+                    &mut state,
+                    &batch_eval,
+                    &options,
+                    &proposer,
+                ) {
+                    Ok(r) => r,
+                    Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
+                }
+            }
+            t4a_treetci_proposer_kind::TruncatedDefault => {
+                let proposer = TruncatedDefaultProposer::default();
+                match tensor4all_treetci::optimize_with_proposer(
+                    &mut state,
+                    &batch_eval,
+                    &options,
+                    &proposer,
+                ) {
+                    Ok(r) => r,
+                    Err(e) => return err_status(e, T4A_INTERNAL_ERROR),
+                }
+            }
+        };
+
+        let n_iters = ranks.len();
+        unsafe { *out_n_iters = n_iters };
+
+        // Copy ranks and errors to output buffers
+        if !out_ranks.is_null() {
+            for (i, &r) in ranks.iter().enumerate() {
+                unsafe { *out_ranks.add(i) = r };
+            }
+        }
+        if !out_errors.is_null() {
+            for (i, &e) in errors.iter().enumerate() {
+                unsafe { *out_errors.add(i) = e };
+            }
+        }
+
+        // Materialize
+        match tensor4all_treetci::to_treetn(&state, &batch_eval, Some(center_site)) {
+            Ok(treetn) => {
+                unsafe { *out_treetn = Box::into_raw(Box::new(t4a_treetn::new(treetn))) };
+                T4A_SUCCESS
+            }
+            Err(e) => err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,8 +858,7 @@ mod tests {
 
         // bond_dims: fill buffer
         let mut dims = vec![0usize; n_edges];
-        let status =
-            t4a_treetci_f64_bond_dims(state, dims.as_mut_ptr(), n_edges, &mut n_edges);
+        let status = t4a_treetci_f64_bond_dims(state, dims.as_mut_ptr(), n_edges, &mut n_edges);
         assert_eq!(status, T4A_SUCCESS);
         for &d in &dims {
             assert!(d >= 1);
@@ -746,6 +909,58 @@ mod tests {
 
         crate::t4a_treetn_release(treetn_ptr);
         t4a_treetci_f64_release(state);
+        t4a_treetci_graph_release(graph);
+    }
+
+    #[test]
+    fn test_crossinterpolate_tree_f64() {
+        let edges = sample_edges();
+        let graph = t4a_treetci_graph_new(7, edges.as_ptr(), 6);
+        let local_dims: Vec<libc::size_t> = vec![2; 7];
+        let initial_pivot: Vec<libc::size_t> = vec![0; 7];
+
+        let max_iter: libc::size_t = 10;
+        let mut out_treetn: *mut t4a_treetn = std::ptr::null_mut();
+        let mut out_ranks = vec![0usize; max_iter];
+        let mut out_errors = vec![0.0f64; max_iter];
+        let mut out_n_iters: libc::size_t = 0;
+
+        let status = t4a_crossinterpolate_tree_f64(
+            product_batch_eval,
+            std::ptr::null_mut(),
+            local_dims.as_ptr(),
+            7,
+            graph,
+            initial_pivot.as_ptr(),
+            1, // n_pivots
+            t4a_treetci_proposer_kind::Default,
+            1e-12, // tolerance
+            0,     // max_bond_dim (unlimited)
+            max_iter,
+            1, // normalize_error = true
+            0, // center_site
+            &mut out_treetn,
+            out_ranks.as_mut_ptr(),
+            out_errors.as_mut_ptr(),
+            &mut out_n_iters,
+        );
+
+        assert_eq!(status, T4A_SUCCESS);
+        assert!(!out_treetn.is_null());
+        assert!(out_n_iters > 0);
+        assert!(out_n_iters <= max_iter);
+
+        // Verify convergence
+        let actual_iters = out_n_iters;
+        let last_error = out_errors[actual_iters - 1];
+        assert!(last_error < 1e-10, "last_error = {}", last_error);
+
+        // Verify TreeTN
+        let mut n_vertices: libc::size_t = 0;
+        crate::t4a_treetn_num_vertices(out_treetn, &mut n_vertices);
+        assert_eq!(n_vertices, 7);
+
+        crate::t4a_treetn_release(out_treetn);
         t4a_treetci_graph_release(graph);
     }
 }
