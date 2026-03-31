@@ -21,6 +21,7 @@ use crate::options::QtciOptions;
 ///
 /// This struct combines a TensorTrain result with grid information for
 /// seamless conversion between grid indices and quantics indices.
+#[derive(Clone)]
 pub struct QuanticsTensorCI2<V: TTScalar> {
     /// Underlying tensor train
     tt: TensorTrain<V>,

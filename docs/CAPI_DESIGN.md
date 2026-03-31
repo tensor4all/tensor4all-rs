@@ -58,10 +58,10 @@ Every opaque type must be classified as either **Immutable** or **Mutable**:
 | `t4a_qgrid_disc` | Immutable | `DiscretizedGrid` | Yes (cheap) | No | |
 | `t4a_qgrid_int` | Immutable | `InherentDiscreteGrid` | Yes (cheap) | No | |
 | `t4a_linop` | Immutable | `LinearOperator<TensorDynLen, usize>` | Yes (cheap) | No | |
-| `t4a_qtci_f64` | Immutable | `QuanticsTensorCI2<f64>` | No | No | No `Clone` -- contains `TreeTCI2` |
+| `t4a_qtci_f64` | Immutable | `QuanticsTensorCI2<f64>` | Yes (deep) | No | Clone possible (`QuanticsTensorCI2` derives `Clone`) |
 | `t4a_treetn` | Mutable | `DefaultTreeTN<usize>` | Yes (deep) | Yes | Orthogonalization, truncation |
-| `t4a_treetci_f64` | Mutable | `TreeTCI2<f64>` | No | Yes | No `Clone` -- `TreeTCI2` does not implement Clone |
-| `t4a_treetci_c64` | Mutable | `TreeTCI2<Complex64>` | No | Yes | No `Clone` -- `TreeTCI2` does not implement Clone |
+| `t4a_treetci_f64` | Mutable | `TreeTCI2<f64>` | Yes (deep) | Yes | Clone possible (`TreeTCI2` derives `Clone`) |
+| `t4a_treetci_c64` | Mutable | `TreeTCI2<Complex64>` | Yes (deep) | Yes | Clone possible (`TreeTCI2` derives `Clone`) |
 | `t4a_treetci_graph` | Immutable | `TreeTciGraph` | Yes (cheap) | No | |
 | `t4a_simplett_f64` | Mutable | `TensorTrain<f64>` | Yes (deep) | Yes | Compression |
 | `t4a_simplett_c64` | Mutable | `TensorTrain<Complex64>` | Yes (deep) | Yes | Compression |
@@ -89,9 +89,9 @@ Prefer `impl_opaque_type_common!` macro which generates all three. When `Clone` 
 | `t4a_treetci_graph` | Yes | Yes | Yes | `impl_opaque_type_common!` |
 | `t4a_simplett_f64` | Yes | Yes | Yes | Manual impl |
 | `t4a_simplett_c64` | Yes | Yes | Yes | Manual impl |
-| `t4a_qtci_f64` | Yes | -- | Yes | No `Clone`: contains `TreeTCI2` |
-| `t4a_treetci_f64` | Yes | -- | Yes | No `Clone`: `TreeTCI2` does not implement Clone |
-| `t4a_treetci_c64` | Yes | -- | Yes | No `Clone`: `TreeTCI2` does not implement Clone |
+| `t4a_qtci_f64` | Yes | -- | Yes | Clone possible: `QuanticsTensorCI2` derives `Clone` (impl pending) |
+| `t4a_treetci_f64` | Yes | -- | Yes | Clone possible: `TreeTCI2` derives `Clone` (impl pending) |
+| `t4a_treetci_c64` | Yes | -- | Yes | Clone possible: `TreeTCI2` derives `Clone` (impl pending) |
 
 ### Rule 3: Thread Safety
 
@@ -278,9 +278,9 @@ t4a_simplett_f64_release(copy);
 
 **Rule 3: In-place operations modify the object**
 ```c
-/* In-place operations modify the object directly (no new allocation) */
-/* Example: hypothetical in-place scale — use _inplace suffix by convention */
-/* t4a_simplett_f64_scale_inplace(tt, 2.0); */
+/* In-place operations take *mut pointer — no special suffix needed (Rule 4) */
+/* Example: hypothetical in-place scale */
+/* t4a_simplett_f64_scale(tt, 2.0); */
 /* tt is modified, still owned by caller */
 t4a_simplett_f64_release(tt);
 ```
@@ -317,10 +317,10 @@ These operations modify the object in place:
 ```rust
 /// Example pattern for an in-place operation.
 ///
-/// Modifies the tensor train in place. More memory-efficient than
-/// creating a new object when you don't need the original.
+/// Modifies the tensor train in place. The `*mut` pointer already
+/// signals mutation, so no `_inplace` suffix is needed (Rule 4).
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_simplett_f64_scale_inplace(
+pub extern "C" fn t4a_simplett_f64_scale(
     ptr: *mut t4a_simplett_f64,
     factor: libc::c_double,
 ) -> StatusCode {
@@ -340,9 +340,9 @@ pub extern "C" fn t4a_simplett_f64_scale_inplace(
   - `t4a_simplett_f64_scaled()` - returns new scaled object (pattern)
   - `t4a_simplett_f64_compressed()` - returns new compressed object (pattern)
 
-- **In-place operations**: Use `_inplace` suffix
-  - `t4a_simplett_f64_scale_inplace()` - modifies object in place (pattern)
-  - `t4a_simplett_f64_compress_inplace()` - modifies object in place (pattern)
+- **In-place operations**: No special suffix — the `*mut` pointer already signals mutation (Rule 4)
+  - `t4a_simplett_f64_scale()` - modifies object in place (pattern)
+  - `t4a_simplett_f64_compress()` - modifies object in place
 
 ### Example: Complete Ownership Lifecycle
 
