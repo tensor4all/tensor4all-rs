@@ -2,7 +2,7 @@ use crate::{
     assemble::{assemble_points_column_major, MultiIndex},
     assemble_global_point,
     batch::GlobalIndexBatch,
-    DefaultProposer, PivotCandidateProposer, SimpleTreeTci, TreeTciEdge,
+    DefaultProposer, PivotCandidateProposer, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
 use tensor4all_core::ColMajorArray;
@@ -13,7 +13,7 @@ use tensor4all_tcicore::{
 
 /// Update one edge bipartition using a batch evaluator and a pivot-candidate proposer.
 pub fn update_edge<T, F, P>(
-    state: &mut SimpleTreeTci<T>,
+    state: &mut TreeTCI2<T>,
     edge: TreeTciEdge,
     evaluate: F,
     options: &PivotKernelOptions,
@@ -77,7 +77,7 @@ where
 
 /// Update one edge using the default proposer.
 pub fn update_edge_default<T, F>(
-    state: &mut SimpleTreeTci<T>,
+    state: &mut TreeTCI2<T>,
     edge: TreeTciEdge,
     evaluate: F,
     options: &PivotKernelOptions,

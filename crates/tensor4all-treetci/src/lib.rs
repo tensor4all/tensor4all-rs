@@ -46,6 +46,8 @@ pub use optimize::{optimize_default, optimize_with_proposer, TreeTciOptions};
 pub use proposer::{
     DefaultProposer, PivotCandidateProposer, SimpleProposer, TruncatedDefaultProposer,
 };
+pub use state::TreeTCI2;
+#[allow(deprecated)]
 pub use state::SimpleTreeTci;
 pub use update::update_edge;
 pub use visitor::{AllEdges, EdgeVisitor};

@@ -1,6 +1,6 @@
 use super::update_edge_default;
 use crate::test_support::assert_scalar_close;
-use crate::{GlobalIndexBatch, SimpleTreeTci, TreeTciEdge, TreeTciGraph};
+use crate::{GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
 use tensor4all_core::ColMajorArray;
 use tensor4all_tcicore::PivotKernelOptions;
@@ -11,7 +11,7 @@ fn two_site_graph() -> TreeTciGraph {
 
 #[test]
 fn update_edge_selects_identity_pivots_on_two_site_tree() {
-    let mut tci = SimpleTreeTci::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0]]).unwrap();
     tci.flush_pivot_errors();
 
@@ -55,7 +55,7 @@ fn update_edge_selects_identity_pivots_on_two_site_tree() {
 
 #[test]
 fn update_edge_rejects_bad_batch_length() {
-    let mut tci = SimpleTreeTci::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0]]).unwrap();
 
     let bad_eval = |_batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![1.0]) };

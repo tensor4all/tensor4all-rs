@@ -11,7 +11,7 @@ use num_complex::Complex64;
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_treetci::{
-    DefaultProposer, GlobalIndexBatch, SimpleProposer, SimpleTreeTci, TreeTciEdge, TreeTciGraph,
+    DefaultProposer, GlobalIndexBatch, SimpleProposer, TreeTCI2, TreeTciEdge, TreeTciGraph,
     TreeTciOptions, TruncatedDefaultProposer,
 };
 
@@ -239,7 +239,7 @@ pub extern "C" fn t4a_treetci_f64_new(
         let g = unsafe { &*graph };
         let graph_clone = g.inner().clone();
 
-        match SimpleTreeTci::new(dims, graph_clone) {
+        match TreeTCI2::new(dims, graph_clone) {
             Ok(state) => Box::into_raw(Box::new(t4a_treetci_f64::new(state))),
             Err(e) => {
                 set_last_error(&e.to_string());
@@ -280,7 +280,7 @@ pub extern "C" fn t4a_treetci_c64_new(
         let g = unsafe { &*graph };
         let graph_clone = g.inner().clone();
 
-        match SimpleTreeTci::new(dims, graph_clone) {
+        match TreeTCI2::new(dims, graph_clone) {
             Ok(state) => Box::into_raw(Box::new(t4a_treetci_c64::new(state))),
             Err(e) => {
                 set_last_error(&e.to_string());

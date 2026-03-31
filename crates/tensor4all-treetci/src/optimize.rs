@@ -1,6 +1,6 @@
 use crate::{
     update::update_edge, AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer,
-    SimpleTreeTci,
+    TreeTCI2,
 };
 use anyhow::{ensure, Result};
 use tensor4all_tcicore::{
@@ -34,7 +34,7 @@ impl Default for TreeTciOptions {
 /// Optimize a TreeTCI state with the MVP strategy choices:
 /// `AllEdges` visitation and `DefaultProposer`.
 pub fn optimize_default<T, F>(
-    state: &mut SimpleTreeTci<T>,
+    state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
 ) -> Result<(Vec<usize>, Vec<f64>)>
@@ -49,7 +49,7 @@ where
 /// Optimize a TreeTCI state with `AllEdges` visitation and a caller-supplied
 /// pivot candidate proposer.
 pub fn optimize_with_proposer<T, F, P>(
-    state: &mut SimpleTreeTci<T>,
+    state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
     proposer: &P,

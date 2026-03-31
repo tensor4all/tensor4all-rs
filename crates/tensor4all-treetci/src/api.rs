@@ -1,6 +1,6 @@
 use crate::{
     materialize::{to_treetn, FullPivLuScalar},
-    optimize_with_proposer, GlobalIndexBatch, MultiIndex, PivotCandidateProposer, SimpleTreeTci,
+    optimize_with_proposer, GlobalIndexBatch, MultiIndex, PivotCandidateProposer, TreeTCI2,
     TreeTciGraph, TreeTciOptions,
 };
 use anyhow::{ensure, Result};
@@ -50,7 +50,7 @@ where
         initial_pivots
     };
 
-    let mut tci = SimpleTreeTci::<T>::new(local_dims, graph)?;
+    let mut tci = TreeTCI2::<T>::new(local_dims, graph)?;
     tci.add_global_pivots(&pivots)?;
 
     // Initialize max_sample_value via batch evaluate
