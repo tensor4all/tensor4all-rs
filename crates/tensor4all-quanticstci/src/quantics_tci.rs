@@ -215,7 +215,7 @@ where
 {
     let mut tensors = Vec::with_capacity(n_sites);
 
-    for site in 0..n_sites {
+    for (site, &site_dim) in local_dims.iter().enumerate().take(n_sites) {
         let node_idx = treetn
             .node_index(&site)
             .ok_or_else(|| anyhow!("node {} not found in TreeTN", site))?;
@@ -227,7 +227,6 @@ where
         let data: Vec<V> = tensor
             .to_vec::<V>()
             .map_err(|e| anyhow!("failed to extract tensor data at node {}: {}", site, e))?;
-        let site_dim = local_dims[site];
 
         if n_sites == 1 {
             // Single site: tensor has only site index, shape (site_dim,)
