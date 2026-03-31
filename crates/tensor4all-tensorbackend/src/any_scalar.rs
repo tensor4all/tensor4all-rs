@@ -5,11 +5,11 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
-use tenferro::{AdMode, ScalarType, ScalarValue as TfScalarValue, Tensor as NativeTensor};
+use tenferro::{ScalarType, Tensor as NativeTensor};
 
 use crate::storage::{Storage, SumFromStorage};
+use crate::tenferro_bridge::with_default_runtime;
 use crate::tensor_element::TensorElement;
-use crate::{tangent_native_tensor, tenferro_bridge::with_default_runtime};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ScalarValue {
@@ -83,14 +83,27 @@ fn scalar_value_from_storage(storage: &Storage) -> ScalarValue {
 }
 
 fn scalar_value_from_native(native: &NativeTensor) -> ScalarValue {
-    match native
-        .try_scalar_value()
-        .unwrap_or_else(|e| panic!("failed to read scalar tensor value: {e}"))
-    {
-        TfScalarValue::F32(value) => ScalarValue::F32(value),
-        TfScalarValue::F64(value) => ScalarValue::F64(value),
-        TfScalarValue::C32(value) => ScalarValue::C32(value),
-        TfScalarValue::C64(value) => ScalarValue::C64(value),
+    match native.scalar_type() {
+        ScalarType::F32 => ScalarValue::F32(
+            native
+                .try_get::<f32>(&[])
+                .unwrap_or_else(|e| panic!("failed to read f32 scalar tensor value: {e}")),
+        ),
+        ScalarType::F64 => ScalarValue::F64(
+            native
+                .try_get::<f64>(&[])
+                .unwrap_or_else(|e| panic!("failed to read f64 scalar tensor value: {e}")),
+        ),
+        ScalarType::C32 => ScalarValue::C32(
+            native
+                .try_get::<Complex32>(&[])
+                .unwrap_or_else(|e| panic!("failed to read c32 scalar tensor value: {e}")),
+        ),
+        ScalarType::C64 => ScalarValue::C64(
+            native
+                .try_get::<Complex64>(&[])
+                .unwrap_or_else(|e| panic!("failed to read c64 scalar tensor value: {e}")),
+        ),
     }
 }
 
@@ -110,17 +123,54 @@ fn scalar_native_op(
 }
 
 fn neg_native(native: &NativeTensor) -> Result<NativeTensor> {
-    scalar_native_op("neg", || native.scale(&rank0_real_tensor(-1.0)))
+    Ok(match scalar_value_from_native(native) {
+        ScalarValue::F32(value) => Scalar::from_value(-value).native,
+        ScalarValue::F64(value) => Scalar::from_value(-value).native,
+        ScalarValue::C32(value) => Scalar::from_value(-value).native,
+        ScalarValue::C64(value) => Scalar::from_value(-value).native,
+    })
 }
 
-fn promote_scalar_native(native: &NativeTensor, target: ScalarType) -> Result<NativeTensor> {
-    scalar_native_op("to_scalar_type", || native.to_scalar_type(target))
+pub(crate) fn promote_scalar_native(
+    native: &NativeTensor,
+    target: ScalarType,
+) -> Result<NativeTensor> {
+    let promoted = match (scalar_value_from_native(native), target) {
+        (ScalarValue::F32(value), ScalarType::F32) => Scalar::from_value(value),
+        (ScalarValue::F32(value), ScalarType::F64) => Scalar::from_value(value as f64),
+        (ScalarValue::F32(value), ScalarType::C32) => {
+            Scalar::from_value(Complex32::new(value, 0.0))
+        }
+        (ScalarValue::F32(value), ScalarType::C64) => {
+            Scalar::from_value(Complex64::new(value as f64, 0.0))
+        }
+        (ScalarValue::F64(value), ScalarType::F32) => Scalar::from_value(value as f32),
+        (ScalarValue::F64(value), ScalarType::F64) => Scalar::from_value(value),
+        (ScalarValue::F64(value), ScalarType::C32) => {
+            Scalar::from_value(Complex32::new(value as f32, 0.0))
+        }
+        (ScalarValue::F64(value), ScalarType::C64) => {
+            Scalar::from_value(Complex64::new(value, 0.0))
+        }
+        (ScalarValue::C32(value), ScalarType::F32) => Scalar::from_value(value.re),
+        (ScalarValue::C32(value), ScalarType::F64) => Scalar::from_value(value.re as f64),
+        (ScalarValue::C32(value), ScalarType::C32) => Scalar::from_value(value),
+        (ScalarValue::C32(value), ScalarType::C64) => {
+            Scalar::from_value(Complex64::new(value.re as f64, value.im as f64))
+        }
+        (ScalarValue::C64(value), ScalarType::F32) => Scalar::from_value(value.re as f32),
+        (ScalarValue::C64(value), ScalarType::F64) => Scalar::from_value(value.re),
+        (ScalarValue::C64(value), ScalarType::C32) => {
+            Scalar::from_value(Complex32::new(value.re as f32, value.im as f32))
+        }
+        (ScalarValue::C64(value), ScalarType::C64) => Scalar::from_value(value),
+    };
+    Ok(promoted.native)
 }
 
 /// Dynamic scalar used across tensor4all backends.
 ///
 /// This is a tensor4all-owned rank-0 wrapper over tenferro's dynamic tensor.
-#[derive(Clone)]
 pub struct Scalar {
     native: NativeTensor,
 }
@@ -179,20 +229,10 @@ impl Scalar {
         Self::from_complex(re, im)
     }
 
-    /// Returns the upstream AD mode.
-    pub fn mode(&self) -> AdMode {
-        self.native.mode()
-    }
-
     /// Returns the detached primal value as a scalar.
     pub fn primal(&self) -> Self {
         Self::wrap_native(self.native.detach())
             .unwrap_or_else(|e| panic!("Scalar::primal returned a non-scalar tensor: {e}"))
-    }
-
-    /// Returns the detached forward tangent when present.
-    pub fn tangent(&self) -> Option<Self> {
-        tangent_native_tensor(&self.native).and_then(|native| Self::from_native(native).ok())
     }
 
     /// Returns whether the scalar participates in reverse-mode AD.
@@ -202,14 +242,15 @@ impl Scalar {
 
     /// Enables or disables reverse-mode gradient tracking.
     pub fn set_requires_grad(&mut self, enabled: bool) -> Result<()> {
-        self.native
-            .set_requires_grad(enabled)
-            .map_err(|e| anyhow!("Scalar::set_requires_grad failed: {e}"))
+        let placeholder = rank0_real_tensor(0.0);
+        let native = std::mem::replace(&mut self.native, placeholder);
+        self.native = native.requires_grad_(enabled);
+        Ok(())
     }
 
     /// Returns accumulated reverse-mode gradient when available.
     pub fn grad(&self) -> Option<Self> {
-        self.native.grad().map(|native| {
+        self.native.grad().ok().flatten().map(|native| {
             Self::wrap_native(native)
                 .unwrap_or_else(|e| panic!("Scalar::grad returned a non-scalar tensor: {e}"))
         })
@@ -224,17 +265,16 @@ impl Scalar {
 
     /// Accumulates reverse-mode gradients into `inputs`.
     pub fn backward(&self, grad_output: Option<&Self>, inputs: &[&Self]) -> Result<()> {
-        let grad_output_native = grad_output.map(|value| value.as_native());
-        let input_native: Vec<&NativeTensor> =
-            inputs.iter().map(|value| value.as_native()).collect();
-        with_default_runtime("backward", || {
-            self.native
-                .backward(
-                    grad_output_native,
-                    &input_native,
-                    tenferro::BackwardOptions::default(),
-                )
-                .map_err(|e| anyhow!("Scalar::backward failed: {e}"))
+        let _ = inputs;
+        with_default_runtime("backward", || match grad_output {
+            Some(seed) => self
+                .native
+                .backward_with_seed(seed.as_native())
+                .map_err(|e| anyhow!("Scalar::backward failed: {e}")),
+            None => self
+                .native
+                .backward()
+                .map_err(|e| anyhow!("Scalar::backward failed: {e}")),
         })
     }
 
@@ -288,59 +328,64 @@ impl Scalar {
 
     /// Returns the complex conjugate.
     pub fn conj(&self) -> Self {
-        Self::wrap_native(self.native.conj())
-            .unwrap_or_else(|e| panic!("Scalar::conj returned a non-scalar tensor: {e}"))
+        match self.value() {
+            ScalarValue::F32(value) => Self::from_value(value),
+            ScalarValue::F64(value) => Self::from_value(value),
+            ScalarValue::C32(value) => Self::from_value(value.conj()),
+            ScalarValue::C64(value) => Self::from_value(value.conj()),
+        }
     }
 
     /// Returns the real part as a scalar, preserving scalar semantics.
     pub fn real_part(&self) -> Self {
-        scalar_tensor_result(
-            "real_part",
-            scalar_native_op("real_part", || self.native.real_part()),
-        )
+        Self::from_real(self.real())
     }
 
     /// Returns the imaginary part as a scalar, preserving scalar semantics.
     pub fn imag_part(&self) -> Self {
-        scalar_tensor_result(
-            "imag_part",
-            scalar_native_op("imag_part", || self.native.imag_part()),
-        )
+        Self::from_real(self.imag())
     }
 
     /// Compose a complex scalar from real-valued parts.
     pub fn compose_complex(real: Self, imag: Self) -> Result<Self> {
-        let native = scalar_native_op("compose_complex", || {
-            NativeTensor::compose_complex(real.native, imag.native)
-        })
-        .map_err(|e| anyhow!("Scalar::compose_complex failed: {e}"))?;
-        Self::wrap_native(native)
+        if !real.is_real() || !imag.is_real() {
+            return Err(anyhow!(
+                "compose_complex requires real-valued inputs, got real={:?}, imag={:?}",
+                real.native.scalar_type(),
+                imag.native.scalar_type()
+            ));
+        }
+        Ok(Self::from_complex(real.real(), imag.real()))
     }
 
     /// Square root, preserving AD metadata.
     pub fn sqrt(&self) -> Self {
-        let native = if self.is_complex() || self.real() < 0.0 {
-            let promoted = promote_scalar_native(&self.native, ScalarType::C64);
-            promoted.and_then(|value| scalar_native_op("sqrt", || value.sqrt()))
+        if self.is_complex() || self.real() < 0.0 {
+            let value = self.value().into_complex().sqrt();
+            if value.im == 0.0 {
+                Self::from_real(value.re)
+            } else {
+                Self::from_value(value)
+            }
         } else {
-            scalar_native_op("sqrt", || self.native.sqrt())
-        };
-        scalar_tensor_result("sqrt", native)
+            Self::from_real(self.real().sqrt())
+        }
     }
 
     /// Real exponent power, preserving AD metadata.
     pub fn powf(&self, exponent: f64) -> Self {
         let needs_complex_promotion =
             self.is_complex() || (self.real() < 0.0 && exponent.fract() != 0.0);
-        let native = if needs_complex_promotion {
-            let promoted = promote_scalar_native(&self.native, ScalarType::C64);
-            promoted.and_then(|value| {
-                scalar_native_op("powf", || value.pow(&rank0_real_tensor(exponent)))
-            })
+        if needs_complex_promotion {
+            let value = self.value().into_complex().powf(exponent);
+            if value.im == 0.0 {
+                Self::from_real(value.re)
+            } else {
+                Self::from_value(value)
+            }
         } else {
-            scalar_native_op("powf", || self.native.pow(&rank0_real_tensor(exponent)))
-        };
-        scalar_tensor_result("powf", native)
+            Self::from_real(self.real().powf(exponent))
+        }
     }
 
     /// Integer exponent power, preserving AD metadata.
@@ -408,10 +453,13 @@ impl Add for Scalar {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        scalar_tensor_result(
-            "add",
-            scalar_native_op("add", || self.native.add(&rhs.native)),
-        )
+        match (self.value(), rhs.value()) {
+            (ScalarValue::F32(lhs), ScalarValue::F32(rhs)) => Self::from_value(lhs + rhs),
+            (lhs, rhs) if lhs.is_complex() || rhs.is_complex() => {
+                Self::from_value(lhs.into_complex() + rhs.into_complex())
+            }
+            (lhs, rhs) => Self::from_real(lhs.real() + rhs.real()),
+        }
     }
 }
 
@@ -419,9 +467,7 @@ impl Sub for Scalar {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        let neg_rhs = neg_native(&rhs.native)
-            .unwrap_or_else(|err| panic!("Scalar::sub failed while negating rhs: {err}"));
-        scalar_tensor_result("sub", scalar_native_op("sub", || self.native.add(&neg_rhs)))
+        self + (-rhs)
     }
 }
 
@@ -429,10 +475,13 @@ impl Mul for Scalar {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        scalar_tensor_result(
-            "mul",
-            scalar_native_op("mul", || self.native.scale(&rhs.native)),
-        )
+        match (self.value(), rhs.value()) {
+            (ScalarValue::F32(lhs), ScalarValue::F32(rhs)) => Self::from_value(lhs * rhs),
+            (lhs, rhs) if lhs.is_complex() || rhs.is_complex() => {
+                Self::from_value(lhs.into_complex() * rhs.into_complex())
+            }
+            (lhs, rhs) => Self::from_real(lhs.real() * rhs.real()),
+        }
     }
 }
 
@@ -440,10 +489,13 @@ impl Div for Scalar {
     type Output = Self;
 
     fn div(self, rhs: Self) -> Self::Output {
-        scalar_tensor_result(
-            "div",
-            scalar_native_op("div", || self.native.div_scalar(&rhs.native)),
-        )
+        match (self.value(), rhs.value()) {
+            (ScalarValue::F32(lhs), ScalarValue::F32(rhs)) => Self::from_value(lhs / rhs),
+            (lhs, rhs) if lhs.is_complex() || rhs.is_complex() => {
+                Self::from_value(lhs.into_complex() / rhs.into_complex())
+            }
+            (lhs, rhs) => Self::from_real(lhs.real() / rhs.real()),
+        }
     }
 }
 
@@ -503,9 +555,7 @@ impl One for Scalar {
 
 impl PartialEq for Scalar {
     fn eq(&self, other: &Self) -> bool {
-        self.mode() == other.mode()
-            && self.native.scalar_type() == other.native.scalar_type()
-            && self.value() == other.value()
+        self.native.scalar_type() == other.native.scalar_type() && self.value() == other.value()
     }
 }
 
@@ -535,10 +585,15 @@ impl fmt::Display for Scalar {
 impl fmt::Debug for Scalar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Scalar")
-            .field("mode", &self.mode())
             .field("scalar_type", &self.native.scalar_type())
             .field("value", &self.value())
             .finish()
+    }
+}
+
+impl Clone for Scalar {
+    fn clone(&self) -> Self {
+        self.primal()
     }
 }
 

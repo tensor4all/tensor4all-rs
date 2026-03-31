@@ -22,6 +22,17 @@ fn make_tensor_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> TensorDynLen
     TensorDynLen::from_dense(indices, data).unwrap()
 }
 
+fn assert_from_diag_dense_constructor_contract<T>(data: Vec<T>)
+where
+    T: TensorElement,
+{
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+    let tensor = TensorDynLen::from_diag(vec![i, j], data).unwrap();
+    assert_eq!(tensor.dims(), vec![3, 3]);
+    assert!(!tensor.is_diag());
+}
+
 #[test]
 fn test_storage_dense_f64() {
     // Create a zero-initialized tensor with 10 elements
@@ -665,39 +676,18 @@ fn test_from_dense_generic_rejects_length_mismatch() {
 
 #[test]
 fn test_from_diag_generic_supports_all_supported_element_types() {
-    let i = Index::new_dyn(3);
-    let j = Index::new_dyn(3);
-
-    assert!(
-        TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f32, 2.0, 3.0])
-            .unwrap()
-            .is_diag()
-    );
-    assert!(
-        TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0])
-            .unwrap()
-            .is_diag()
-    );
-    assert!(TensorDynLen::from_diag(
-        vec![i.clone(), j.clone()],
-        vec![
-            Complex32::new(1.0, 0.0),
-            Complex32::new(2.0, 0.5),
-            Complex32::new(3.0, -0.5),
-        ],
-    )
-    .unwrap()
-    .is_diag());
-    assert!(TensorDynLen::from_diag(
-        vec![i, j],
-        vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(2.0, 0.5),
-            Complex64::new(3.0, -0.5),
-        ],
-    )
-    .unwrap()
-    .is_diag());
+    assert_from_diag_dense_constructor_contract::<f32>(vec![1.0, 2.0, 3.0]);
+    assert_from_diag_dense_constructor_contract::<f64>(vec![1.0, 2.0, 3.0]);
+    assert_from_diag_dense_constructor_contract::<Complex32>(vec![
+        Complex32::new(1.0, 0.0),
+        Complex32::new(2.0, 0.5),
+        Complex32::new(3.0, -0.5),
+    ]);
+    assert_from_diag_dense_constructor_contract::<Complex64>(vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(2.0, 0.5),
+        Complex64::new(3.0, -0.5),
+    ]);
 }
 
 #[test]

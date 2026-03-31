@@ -27,7 +27,6 @@ pub mod col_major_array;
 pub use col_major_array::{ColMajorArray, ColMajorArrayMut, ColMajorArrayRef};
 
 // Common (tags, utilities, scalar)
-pub mod forward_ad;
 pub mod global_default;
 pub mod index_like;
 pub mod scalar;
@@ -88,8 +87,8 @@ pub use defaults::tensordynlen as tensor;
 
 pub use any_scalar::AnyScalar;
 pub use defaults::tensordynlen::{
-    compute_permutation_from_indices, diag_tensor_dyn_len, is_diag_tensor, unfold_split,
-    RandomScalar, TensorAccess, TensorDynLen,
+    compute_permutation_from_indices, diag_tensor_dyn_len, unfold_split, RandomScalar,
+    TensorAccess, TensorDynLen,
 };
 pub use storage::{make_mut_storage, mindim, Storage, StructuredStorage, SumFromStorage};
 pub use tensor4all_tensorbackend::TensorElement;

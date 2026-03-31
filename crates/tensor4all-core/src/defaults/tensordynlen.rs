@@ -10,7 +10,7 @@ use rand_distr::{Distribution, StandardNormal};
 use std::collections::HashSet;
 use std::ops::{Mul, Neg, Sub};
 use std::sync::Arc;
-use tenferro::{AdMode, ScalarType as NativeScalarType, Tensor as NativeTensor};
+use tenferro::{ScalarType as NativeScalarType, Tensor as NativeTensor};
 use tensor4all_tensorbackend::{
     axpby_native_tensor, conj_native_tensor, contract_native_tensor,
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
@@ -118,7 +118,7 @@ pub struct TensorDynLen {
     /// Full index information (includes tags and other metadata).
     pub indices: Vec<DynIndex>,
     /// Canonical native payload preserving AD metadata.
-    native: NativeTensor,
+    native: Arc<NativeTensor>,
 }
 
 impl TensorAccess for TensorDynLen {
@@ -216,7 +216,10 @@ impl TensorDynLen {
         if native.is_diag() {
             Self::validate_diag_dims(&dims)?;
         }
-        Ok(Self { indices, native })
+        Ok(Self {
+            indices,
+            native: Arc::new(native),
+        })
     }
 
     /// Borrow the indices.
@@ -226,12 +229,7 @@ impl TensorDynLen {
 
     /// Borrow the native payload.
     pub(crate) fn as_native(&self) -> &NativeTensor {
-        &self.native
-    }
-
-    /// Returns the upstream AD mode.
-    pub fn mode(&self) -> AdMode {
-        self.native.mode()
+        self.native.as_ref()
     }
 
     /// Returns whether the tensor participates in reverse-mode AD.
@@ -241,18 +239,23 @@ impl TensorDynLen {
 
     /// Enables or disables reverse-mode gradient tracking.
     pub fn set_requires_grad(&mut self, enabled: bool) -> Result<()> {
-        self.native
-            .set_requires_grad(enabled)
-            .map_err(|e| anyhow::anyhow!("TensorDynLen::set_requires_grad failed: {e}"))
+        self.native = Arc::new(self.native.as_ref().detach().requires_grad_(enabled));
+        Ok(())
     }
 
     /// Returns the accumulated reverse gradient when available.
-    pub fn grad(&self) -> Option<Self> {
-        self.native.grad().map(|native| {
-            Self::from_native(self.indices.clone(), native).unwrap_or_else(|e| {
-                panic!("TensorDynLen::grad returned a tensor incompatible with indices: {e}")
+    pub fn grad(&self) -> Result<Option<Self>> {
+        self.native
+            .grad()
+            .map_err(|e| anyhow::anyhow!("TensorDynLen::grad failed: {e}"))?
+            .map(|native| {
+                Self::from_native(self.indices.clone(), native).map_err(|e| {
+                    anyhow::anyhow!(
+                        "TensorDynLen::grad returned a tensor incompatible with indices: {e}"
+                    )
+                })
             })
-        })
+            .transpose()
     }
 
     /// Clears accumulated reverse gradients on reverse leaves.
@@ -268,18 +271,17 @@ impl TensorDynLen {
     ///
     /// # Arguments
     /// * `grad_output` - Optional gradient seed. Pass `None` for default (ones).
-    /// * `inputs` - Leaf tensors to accumulate gradients on. After this call,
-    ///   each input's `.grad()` will contain the accumulated gradient.
-    pub fn backward(&self, grad_output: Option<&Self>, inputs: &[&Self]) -> Result<()> {
-        let grad_native = grad_output.map(|g| &g.native);
-        let input_natives: Vec<&NativeTensor> = inputs.iter().map(|t| &t.native).collect();
-        self.native
-            .backward(
-                grad_native,
-                &input_natives,
-                tenferro::BackwardOptions::default(),
-            )
-            .map_err(|e| anyhow::anyhow!("TensorDynLen::backward failed: {e}"))
+    pub fn backward(&self, grad_output: Option<&Self>) -> Result<()> {
+        match grad_output {
+            Some(grad_output) => self
+                .native
+                .backward_with_seed(&grad_output.native)
+                .map_err(|e| anyhow::anyhow!("TensorDynLen::backward_with_seed failed: {e}")),
+            None => self
+                .native
+                .backward()
+                .map_err(|e| anyhow::anyhow!("TensorDynLen::backward failed: {e}")),
+        }
     }
 
     /// Check if this tensor is already in canonical form.
@@ -289,7 +291,9 @@ impl TensorDynLen {
 
     /// Materialize the primal snapshot as storage.
     pub fn to_storage(&self) -> Result<Arc<Storage>> {
-        Ok(Arc::new(native_tensor_primal_to_storage(&self.native)?))
+        Ok(Arc::new(native_tensor_primal_to_storage(
+            self.native.as_ref(),
+        )?))
     }
 
     /// Materialize the primal snapshot as storage.
@@ -768,11 +772,6 @@ impl Neg for TensorDynLen {
     }
 }
 
-/// Check if a tensor is a DiagTensor (has Diag storage).
-pub fn is_diag_tensor(tensor: &TensorDynLen) -> bool {
-    tensor.is_diag()
-}
-
 impl TensorDynLen {
     /// Add two tensors element-wise.
     ///
@@ -990,8 +989,10 @@ impl TensorDynLen {
             })
             .collect();
 
-        Self::from_native(new_indices, self.native.clone())
-            .expect("replaceind should preserve native payload dims")
+        Self {
+            indices: new_indices,
+            native: self.native.clone(),
+        }
     }
 
     /// Replace multiple indices in the tensor.
@@ -1062,8 +1063,10 @@ impl TensorDynLen {
             })
             .collect();
 
-        Self::from_native(new_indices_vec, self.native.clone())
-            .expect("replaceinds should preserve native payload dims")
+        Self {
+            indices: new_indices_vec,
+            native: self.native.clone(),
+        }
     }
 }
 
@@ -1224,16 +1227,19 @@ impl std::fmt::Debug for TensorDynLen {
             .field("indices", &self.indices)
             .field("dims", &self.dims())
             .field("is_diag", &self.native.is_diag())
-            .field("mode", &self.native.mode())
             .finish()
     }
 }
 
-/// Create a DiagTensor with dynamic rank from diagonal data.
+/// Create a diagonal tensor with dynamic rank from diagonal data.
 ///
 /// # Arguments
 /// * `indices` - The indices for the tensor (all must have the same dimension)
 /// * `diag_data` - The diagonal elements (length must equal the dimension of indices)
+///
+/// The public native bridge currently materializes diagonal payloads densely, so
+/// the returned tensor is mathematically diagonal but may not report
+/// [`TensorDynLen::is_diag`] at the native-storage level.
 ///
 /// # Panics
 /// Panics if indices have different dimensions, or if diag_data length doesn't match.
@@ -1618,6 +1624,10 @@ impl TensorDynLen {
     }
 
     /// Create a diagonal tensor from diagonal payload data with explicit indices.
+    ///
+    /// The public native bridge currently materializes diagonal payloads densely, so
+    /// the returned tensor is mathematically diagonal but may not report
+    /// [`TensorDynLen::is_diag`] at the native-storage level.
     pub fn from_diag<T: TensorElement>(indices: Vec<DynIndex>, data: Vec<T>) -> Result<Self> {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices);
@@ -1721,7 +1731,9 @@ impl TensorDynLen {
         self.native.scalar_type() == NativeScalarType::F64
     }
 
-    /// Check if the tensor uses diagonal structured storage.
+    /// Check whether the tensor currently uses native diagonal structured storage.
+    ///
+    /// This is a storage-level predicate, not a semantic diagonality check.
     pub fn is_diag(&self) -> bool {
         self.native.is_diag()
     }

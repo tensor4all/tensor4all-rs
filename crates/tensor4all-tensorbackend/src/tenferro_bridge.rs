@@ -10,20 +10,14 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use num_complex::Complex64;
-use tenferro::{set_default_runtime, snapshot, RuntimeContext, Tensor as NativeTensor};
-use tenferro_algebra::{Conjugate, Scalar as TfScalar, Standard};
-use tenferro_device::LogicalMemorySpace;
-use tenferro_einsum::{
-    einsum_binary_with_subscripts as tenferro_einsum_binary_with_subscripts,
-    einsum_with_subscripts as tenferro_einsum_with_subscripts, Subscripts,
-};
-use tenferro_linalg::{qr as tenferro_qr, svd as tenferro_svd};
-use tenferro_prims::{CpuBackend, CpuContext};
+use tenferro::{set_default_runtime, RuntimeContext, ScalarType, Tensor as NativeTensor};
+use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
 
+use crate::any_scalar::promote_scalar_native;
 #[cfg(test)]
 use crate::storage::StorageRepr;
-use crate::storage::{col_major_strides, NativePayload, Storage};
+use crate::storage::{NativePayload, Storage};
 use crate::tensor_element::TensorElement;
 use crate::AnyScalar;
 #[cfg(test)]
@@ -51,8 +45,6 @@ struct CachedCpuContextLease {
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum NativeEinsumPath {
-    TypedBinaryEinsum,
-    TypedNaryEinsum,
     FrontendFallback,
 }
 
@@ -62,7 +54,6 @@ struct NativeOperandSignature {
     ids: Vec<u32>,
     is_dense: bool,
     is_diag: bool,
-    is_primal: bool,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -176,17 +167,11 @@ pub(crate) fn set_native_einsum_profile_enabled_for_tests(enabled: bool) {
 }
 
 fn native_operand_signature(tensor: &NativeTensor, ids: &[u32]) -> NativeOperandSignature {
-    let is_primal = match tensor {
-        NativeTensor::F64(value) => value.mode() == tenferro::AdMode::Primal,
-        NativeTensor::C64(value) => value.mode() == tenferro::AdMode::Primal,
-        _ => false,
-    };
     NativeOperandSignature {
         dims: tensor.dims().to_vec(),
         ids: ids.to_vec(),
         is_dense: tensor.is_dense(),
         is_diag: tensor.is_diag(),
-        is_primal,
     }
 }
 
@@ -248,8 +233,8 @@ pub fn print_and_reset_native_einsum_profile() {
             );
             for operand in signature.operands {
                 eprintln!(
-                    "     dims={:?} ids={:?} dense={} diag={} primal={}",
-                    operand.dims, operand.ids, operand.is_dense, operand.is_diag, operand.is_primal,
+                    "     dims={:?} ids={:?} dense={} diag={}",
+                    operand.dims, operand.ids, operand.is_dense, operand.is_diag,
                 );
             }
         }
@@ -349,12 +334,8 @@ fn native_tensor_from_f64_payload(payload: NativePayload<f64>) -> Result<NativeT
         MemoryOrder::ColumnMajor,
     )
     .map_err(|e| anyhow!("failed to build f64 tensor from storage payload: {e}"))?;
-    let native = NativeTensor::from_tensor(typed);
-    match payload.axis_classes {
-        Some(axis_classes) => NativeTensor::with_axis_classes(native, &axis_classes)
-            .map_err(|e| anyhow!("failed to build structured f64 tensor from storage: {e}")),
-        None => Ok(native),
-    }
+    let _ = payload.axis_classes;
+    Ok(NativeTensor::from(typed))
 }
 
 fn native_tensor_from_c64_payload(payload: NativePayload<Complex64>) -> Result<NativeTensor> {
@@ -364,12 +345,8 @@ fn native_tensor_from_c64_payload(payload: NativePayload<Complex64>) -> Result<N
         MemoryOrder::ColumnMajor,
     )
     .map_err(|e| anyhow!("failed to build c64 tensor from storage payload: {e}"))?;
-    let native = NativeTensor::from_tensor(typed);
-    match payload.axis_classes {
-        Some(axis_classes) => NativeTensor::with_axis_classes(native, &axis_classes)
-            .map_err(|e| anyhow!("failed to build structured c64 tensor from storage: {e}")),
-        None => Ok(native),
-    }
+    let _ = payload.axis_classes;
+    Ok(NativeTensor::from(typed))
 }
 
 /// Build a native dense tensor from column-major boundary data.
@@ -386,108 +363,6 @@ pub fn diag_native_tensor_from_col_major<T: TensorElement>(
     logical_rank: usize,
 ) -> Result<NativeTensor> {
     T::diag_native_tensor_from_col_major(data, logical_rank)
-}
-
-fn dense_f64_storage_from_col_major(
-    tensor: &TypedTensor<f64>,
-    logical_dims: &[usize],
-) -> Result<Storage> {
-    let data = materialize_col_major_values(tensor, "f64 dense snapshot materialization")?;
-    Storage::from_dense_col_major(data, logical_dims)
-}
-
-fn dense_c64_storage_from_col_major(
-    tensor: &TypedTensor<Complex64>,
-    logical_dims: &[usize],
-) -> Result<Storage> {
-    let data = materialize_col_major_values(tensor, "c64 dense snapshot materialization")?;
-    Storage::from_dense_col_major(data, logical_dims)
-}
-
-fn materialize_col_major_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
-where
-    T: TfScalar + Conjugate + Copy,
-{
-    let col_major = tensor.contiguous(MemoryOrder::ColumnMajor);
-    let is_conjugated = col_major.is_conjugated();
-    let col_major = if col_major.logical_memory_space() == LogicalMemorySpace::MainMemory {
-        col_major
-    } else {
-        col_major
-            .to_memory_space_async(LogicalMemorySpace::MainMemory)
-            .map_err(|e| anyhow!("{op}: failed to move tensor to host memory: {e}"))?
-    };
-    let offset = usize::try_from(col_major.offset())
-        .map_err(|_| anyhow!("{op}: negative offset {}", col_major.offset()))?;
-    let len = col_major.len();
-    let slice = col_major
-        .buffer()
-        .as_slice()
-        .and_then(|values| values.get(offset..offset + len))
-        .ok_or_else(|| anyhow!("{op}: expected host-accessible contiguous tensor buffer"))?;
-    if is_conjugated {
-        Ok(slice.iter().copied().map(Conjugate::conj).collect())
-    } else {
-        Ok(slice.to_vec())
-    }
-}
-
-fn snapshot_f64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
-    if snap.is_diag() && snap.dims().len() >= 2 {
-        let payload = snap
-            .payload_f64()
-            .ok_or_else(|| anyhow!("expected f64 diagonal payload"))?;
-        let data = materialize_col_major_values(payload, "f64 diagonal snapshot materialization")?;
-        return Storage::from_diag_col_major(data, snap.dims().len());
-    }
-
-    if snap.is_dense() {
-        let payload = snap
-            .payload_f64()
-            .ok_or_else(|| anyhow!("expected f64 dense payload"))?;
-        dense_f64_storage_from_col_major(payload, snap.dims())
-    } else {
-        let payload = snap
-            .payload_f64()
-            .ok_or_else(|| anyhow!("expected f64 structured payload"))?;
-        let data =
-            materialize_col_major_values(payload, "f64 structured snapshot materialization")?;
-        Storage::new_structured::<f64>(
-            data,
-            payload.dims().to_vec(),
-            col_major_strides(payload.dims()),
-            snap.axis_classes().to_vec(),
-        )
-    }
-}
-
-fn snapshot_c64_to_storage(snap: &snapshot::DynTensor) -> Result<Storage> {
-    if snap.is_diag() && snap.dims().len() >= 2 {
-        let payload = snap
-            .payload_c64()
-            .ok_or_else(|| anyhow!("expected c64 diagonal payload"))?;
-        let data = materialize_col_major_values(payload, "c64 diagonal snapshot materialization")?;
-        return Storage::from_diag_col_major(data, snap.dims().len());
-    }
-
-    if snap.is_dense() {
-        let payload = snap
-            .payload_c64()
-            .ok_or_else(|| anyhow!("expected c64 dense payload"))?;
-        dense_c64_storage_from_col_major(payload, snap.dims())
-    } else {
-        let payload = snap
-            .payload_c64()
-            .ok_or_else(|| anyhow!("expected c64 structured payload"))?;
-        let data =
-            materialize_col_major_values(payload, "c64 structured snapshot materialization")?;
-        Storage::new_structured::<Complex64>(
-            data,
-            payload.dims().to_vec(),
-            col_major_strides(payload.dims()),
-            snap.axis_classes().to_vec(),
-        )
-    }
 }
 
 fn labels_to_notation(inputs: &[Vec<usize>], output: &[usize]) -> Result<String> {
@@ -589,6 +464,10 @@ fn build_binary_einsum_ids(
 
 /// Convert legacy [`Storage`] into a primal-mode [`tenferro::Tensor`].
 pub fn storage_to_native_tensor(storage: &Storage, logical_dims: &[usize]) -> Result<NativeTensor> {
+    if !storage.is_dense() {
+        let dense = storage.to_dense_storage(logical_dims);
+        return storage_to_native_tensor(&dense, logical_dims);
+    }
     if storage.is_c64() {
         native_tensor_from_c64_payload(storage.native_payload_c64(logical_dims)?)
     } else {
@@ -600,12 +479,36 @@ pub fn storage_to_native_tensor(storage: &Storage, logical_dims: &[usize]) -> Re
 ///
 /// AD metadata is intentionally dropped at this bridge boundary.
 pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage> {
-    match tensor.primal_snapshot() {
-        snapshot::DynTensor::F32(_) | snapshot::DynTensor::C32(_) => Err(anyhow!(
+    match tensor.scalar_type() {
+        ScalarType::F32 | ScalarType::C32 => Err(anyhow!(
             "tensor4all native bridge currently supports only f64/Complex64 tensors"
         )),
-        snap @ snapshot::DynTensor::F64(_) => snapshot_f64_to_storage(&snap),
-        snap @ snapshot::DynTensor::C64(_) => snapshot_c64_to_storage(&snap),
+        ScalarType::F64 => {
+            if tensor.is_diag() && tensor.ndim() >= 2 {
+                Storage::from_diag_col_major(
+                    <f64 as TensorElement>::diag_values_from_native_temp(tensor)?,
+                    tensor.ndim(),
+                )
+            } else {
+                Storage::from_dense_col_major(
+                    <f64 as TensorElement>::dense_values_from_native_col_major(tensor)?,
+                    tensor.dims(),
+                )
+            }
+        }
+        ScalarType::C64 => {
+            if tensor.is_diag() && tensor.ndim() >= 2 {
+                Storage::from_diag_col_major(
+                    <Complex64 as TensorElement>::diag_values_from_native_temp(tensor)?,
+                    tensor.ndim(),
+                )
+            } else {
+                Storage::from_dense_col_major(
+                    <Complex64 as TensorElement>::dense_values_from_native_col_major(tensor)?,
+                    tensor.dims(),
+                )
+            }
+        }
     }
 }
 
@@ -653,12 +556,8 @@ pub fn native_tensor_primal_to_diag_c64(tensor: &NativeTensor) -> Result<Vec<Com
 
 /// Extract the forward tangent of a native tensor as a primal tensor.
 pub fn tangent_native_tensor(tensor: &NativeTensor) -> Option<NativeTensor> {
-    match tensor {
-        NativeTensor::F32(value) => value.tangent().cloned().map(NativeTensor::from_tensor),
-        NativeTensor::F64(value) => value.tangent().cloned().map(NativeTensor::from_tensor),
-        NativeTensor::C32(value) => value.tangent().cloned().map(NativeTensor::from_tensor),
-        NativeTensor::C64(value) => value.tangent().cloned().map(NativeTensor::from_tensor),
-    }
+    let _ = tensor;
+    None
 }
 
 /// Reshape a native tensor using tensor4all's column-major semantics.
@@ -666,43 +565,23 @@ pub fn reshape_col_major_native_tensor(
     tensor: &NativeTensor,
     new_dims: &[usize],
 ) -> Result<NativeTensor> {
-    tensor
-        .contiguous(MemoryOrder::ColumnMajor)
-        .map_err(|e| anyhow!("native column-major contiguous conversion failed: {e}"))?
-        .reshape(new_dims)
-        .map_err(|e| anyhow!("native reshape failed: {e}"))
+    match tensor.scalar_type() {
+        ScalarType::F32 | ScalarType::C32 => Err(anyhow!(
+            "tensor4all native bridge currently supports only f64/Complex64 tensors"
+        )),
+        ScalarType::F64 => dense_native_tensor_from_col_major(
+            &native_tensor_primal_to_dense_col_major::<f64>(tensor)?,
+            new_dims,
+        ),
+        ScalarType::C64 => dense_native_tensor_from_col_major(
+            &native_tensor_primal_to_dense_col_major::<Complex64>(tensor)?,
+            new_dims,
+        ),
+    }
 }
 
 /// Compute native QR while preserving AD metadata when supported by upstream.
 pub fn qr_native_tensor(tensor: &NativeTensor) -> Result<(NativeTensor, NativeTensor)> {
-    match tensor {
-        NativeTensor::F64(value)
-            if value.mode() == tenferro::AdMode::Primal && value.is_dense() =>
-        {
-            return with_tenferro_ctx("native_qr", |ctx| {
-                let out = tenferro_qr(ctx, value.primal())
-                    .map_err(|e| anyhow!("native qr failed: {e}"))?;
-                Ok((
-                    NativeTensor::from_tensor(out.q),
-                    NativeTensor::from_tensor(out.r),
-                ))
-            });
-        }
-        NativeTensor::C64(value)
-            if value.mode() == tenferro::AdMode::Primal && value.is_dense() =>
-        {
-            return with_tenferro_ctx("native_qr", |ctx| {
-                let out = tenferro_qr(ctx, value.primal())
-                    .map_err(|e| anyhow!("native qr failed: {e}"))?;
-                Ok((
-                    NativeTensor::from_tensor(out.q),
-                    NativeTensor::from_tensor(out.r),
-                ))
-            });
-        }
-        _ => {}
-    }
-
     with_default_runtime("native_qr", || {
         let out = tensor.qr().map_err(|e| anyhow!("native qr failed: {e}"))?;
         Ok((out.q, out.r))
@@ -713,39 +592,9 @@ pub fn qr_native_tensor(tensor: &NativeTensor) -> Result<(NativeTensor, NativeTe
 pub fn svd_native_tensor(
     tensor: &NativeTensor,
 ) -> Result<(NativeTensor, NativeTensor, NativeTensor)> {
-    match tensor {
-        NativeTensor::F64(value)
-            if value.mode() == tenferro::AdMode::Primal && value.is_dense() =>
-        {
-            return with_tenferro_ctx("native_svd", |ctx| {
-                let out = tenferro_svd(ctx, value.primal(), None)
-                    .map_err(|e| anyhow!("native svd failed: {e}"))?;
-                Ok((
-                    NativeTensor::from_tensor(out.u),
-                    NativeTensor::from_tensor(out.s),
-                    NativeTensor::from_tensor(out.vt),
-                ))
-            });
-        }
-        NativeTensor::C64(value)
-            if value.mode() == tenferro::AdMode::Primal && value.is_dense() =>
-        {
-            return with_tenferro_ctx("native_svd", |ctx| {
-                let out = tenferro_svd(ctx, value.primal(), None)
-                    .map_err(|e| anyhow!("native svd failed: {e}"))?;
-                Ok((
-                    NativeTensor::from_tensor(out.u),
-                    NativeTensor::from_tensor(out.s),
-                    NativeTensor::from_tensor(out.vt),
-                ))
-            });
-        }
-        _ => {}
-    }
-
     with_default_runtime("native_svd", || {
         let out = tensor
-            .svd()
+            .svd(None)
             .map_err(|e| anyhow!("native svd failed: {e}"))?;
         Ok((out.u, out.s, out.vt))
     })
@@ -761,13 +610,91 @@ pub fn sum_native_tensor(tensor: &NativeTensor) -> Result<AnyScalar> {
     })
 }
 
+fn supported_bridge_scalar_type(tensor: &NativeTensor, op: &'static str) -> Result<ScalarType> {
+    match tensor.scalar_type() {
+        ScalarType::F64 | ScalarType::C64 => Ok(tensor.scalar_type()),
+        ScalarType::F32 | ScalarType::C32 => Err(anyhow!(
+            "{op}: tensor4all native bridge currently supports only f64/Complex64 tensors"
+        )),
+    }
+}
+
+fn shared_tensor_scalar_type(
+    lhs: &NativeTensor,
+    rhs: &NativeTensor,
+    op: &'static str,
+) -> Result<ScalarType> {
+    let lhs_ty = supported_bridge_scalar_type(lhs, op)?;
+    let rhs_ty = supported_bridge_scalar_type(rhs, op)?;
+    if lhs_ty != rhs_ty {
+        return Err(anyhow!(
+            "{op}: native tensors must share a dtype, got lhs={lhs_ty:?}, rhs={rhs_ty:?}"
+        ));
+    }
+    Ok(lhs_ty)
+}
+
+fn common_operand_scalar_type(
+    operands: &[(&NativeTensor, &[usize])],
+    op: &'static str,
+) -> Result<ScalarType> {
+    let mut target = ScalarType::F64;
+    for (tensor, _) in operands {
+        match supported_bridge_scalar_type(tensor, op)? {
+            ScalarType::C64 => target = ScalarType::C64,
+            ScalarType::F64 => {}
+            ScalarType::F32 | ScalarType::C32 => unreachable!("unsupported dtype filtered above"),
+        }
+    }
+    Ok(target)
+}
+
+fn promote_detached_tensor_to_dtype(
+    tensor: &NativeTensor,
+    target: ScalarType,
+    op: &'static str,
+) -> Result<NativeTensor> {
+    let source = supported_bridge_scalar_type(tensor, op)?;
+    if source == target {
+        return Err(anyhow!(
+            "{op}: internal promotion bug, source and target dtypes already match"
+        ));
+    }
+    if tensor.requires_grad() {
+        return Err(anyhow!(
+            "{op}: cannot promote a reverse-tracked tensor from {source:?} to {target:?} without losing autodiff metadata"
+        ));
+    }
+    match (source, target) {
+        (ScalarType::F64, ScalarType::C64) => {
+            if tensor.is_diag() && tensor.ndim() >= 2 {
+                let diag = native_tensor_primal_to_diag_f64(tensor)?
+                    .into_iter()
+                    .map(|value| Complex64::new(value, 0.0))
+                    .collect::<Vec<_>>();
+                diag_native_tensor_from_col_major(&diag, tensor.ndim())
+            } else {
+                let dense = native_tensor_primal_to_dense_f64_col_major(tensor)?
+                    .into_iter()
+                    .map(|value| Complex64::new(value, 0.0))
+                    .collect::<Vec<_>>();
+                dense_native_tensor_from_col_major(&dense, tensor.dims())
+            }
+        }
+        (lhs, rhs) => Err(anyhow!(
+            "{op}: unsupported dtype promotion from {lhs:?} to {rhs:?}"
+        )),
+    }
+}
+
 /// Scale a native tensor with a tensor4all scalar while preserving AD metadata.
 pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<NativeTensor> {
-    with_default_runtime("native_scale", || {
-        tensor
-            .scale(scalar.as_native())
-            .map_err(|e| anyhow!("native scale failed: {e}"))
-    })
+    let scalar_native = promote_scalar_native(
+        scalar.as_native(),
+        supported_bridge_scalar_type(tensor, "native_scale")?,
+    )?;
+    let output_ids = (0..tensor.ndim()).collect::<Vec<_>>();
+    einsum_native_tensors(&[(&scalar_native, &[]), (tensor, &output_ids)], &output_ids)
 }
 
 /// Compute `a * lhs + b * rhs` on native tensors while preserving AD metadata.
@@ -777,8 +704,20 @@ pub fn axpby_native_tensor(
     rhs: &NativeTensor,
     b: &AnyScalar,
 ) -> Result<NativeTensor> {
+    let target = shared_tensor_scalar_type(lhs, rhs, "native_axpby")?;
+    let a_native = promote_scalar_native(a.as_native(), target)?;
+    let b_native = promote_scalar_native(b.as_native(), target)?;
+    let lhs_scaled = {
+        let output_ids = (0..lhs.ndim()).collect::<Vec<_>>();
+        einsum_native_tensors(&[(&a_native, &[]), (lhs, &output_ids)], &output_ids)?
+    };
+    let rhs_scaled = {
+        let output_ids = (0..rhs.ndim()).collect::<Vec<_>>();
+        einsum_native_tensors(&[(&b_native, &[]), (rhs, &output_ids)], &output_ids)?
+    };
     with_default_runtime("native_axpby", || {
-        lhs.axpby(a.as_native(), rhs, b.as_native())
+        lhs_scaled
+            .add(&rhs_scaled)
             .map_err(|e| anyhow!("native axpby failed: {e}"))
     })
 }
@@ -792,127 +731,32 @@ pub fn einsum_native_tensors(
         return Err(anyhow!("native einsum requires at least one operand"));
     }
 
+    let target = common_operand_scalar_type(operands, "native_einsum")?;
+    let promoted = operands
+        .iter()
+        .map(|(tensor, _)| {
+            let source = supported_bridge_scalar_type(tensor, "native_einsum")?;
+            if source == target {
+                Ok(None)
+            } else {
+                promote_detached_tensor_to_dtype(tensor, target, "native_einsum").map(Some)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     let input_ids_u32: Vec<Vec<u32>> = operands
         .iter()
         .map(|(_, ids)| labels_to_u32(ids, "native_einsum"))
         .collect::<Result<_>>()?;
     let output_ids_u32 = labels_to_u32(output_ids, "native_einsum")?;
-    let input_refs_u32: Vec<&[u32]> = input_ids_u32.iter().map(Vec::as_slice).collect();
-    let subscripts = Subscripts::new(&input_refs_u32, &output_ids_u32);
     let profile_started = native_einsum_profile_enabled().then(Instant::now);
 
-    match operands[0].0 {
-        NativeTensor::F64(first)
-            if first.mode() == tenferro::AdMode::Primal && first.is_dense() =>
-        {
-            let mut typed_operands = Vec::with_capacity(operands.len());
-            for (tensor, _) in operands {
-                match tensor {
-                    NativeTensor::F64(value)
-                        if value.mode() == tenferro::AdMode::Primal && value.is_dense() =>
-                    {
-                        typed_operands.push(value.primal());
-                    }
-                    _ => {
-                        typed_operands.clear();
-                        break;
-                    }
-                }
-            }
-            if !typed_operands.is_empty() {
-                return with_tenferro_ctx("native_einsum", |ctx| {
-                    let out = if typed_operands.len() == 2 {
-                        tenferro_einsum_binary_with_subscripts::<Standard<f64>, CpuBackend>(
-                            ctx,
-                            &subscripts,
-                            typed_operands[0],
-                            typed_operands[1],
-                            None,
-                        )
-                    } else {
-                        tenferro_einsum_with_subscripts::<Standard<f64>, CpuBackend>(
-                            ctx,
-                            &subscripts,
-                            &typed_operands,
-                            None,
-                        )
-                    }
-                    .map_err(|e| anyhow!("native einsum failed: {e}"))?;
-                    if let Some(started) = profile_started.as_ref() {
-                        record_native_einsum_profile(
-                            if typed_operands.len() == 2 {
-                                NativeEinsumPath::TypedBinaryEinsum
-                            } else {
-                                NativeEinsumPath::TypedNaryEinsum
-                            },
-                            operands,
-                            &input_ids_u32,
-                            &output_ids_u32,
-                            started.elapsed(),
-                        );
-                    }
-                    Ok(NativeTensor::from_tensor(out))
-                });
-            }
-        }
-        NativeTensor::C64(first)
-            if first.mode() == tenferro::AdMode::Primal && first.is_dense() =>
-        {
-            let mut typed_operands = Vec::with_capacity(operands.len());
-            for (tensor, _) in operands {
-                match tensor {
-                    NativeTensor::C64(value)
-                        if value.mode() == tenferro::AdMode::Primal && value.is_dense() =>
-                    {
-                        typed_operands.push(value.primal());
-                    }
-                    _ => {
-                        typed_operands.clear();
-                        break;
-                    }
-                }
-            }
-            if !typed_operands.is_empty() {
-                return with_tenferro_ctx("native_einsum", |ctx| {
-                    let out = if typed_operands.len() == 2 {
-                        tenferro_einsum_binary_with_subscripts::<Standard<Complex64>, CpuBackend>(
-                            ctx,
-                            &subscripts,
-                            typed_operands[0],
-                            typed_operands[1],
-                            None,
-                        )
-                    } else {
-                        tenferro_einsum_with_subscripts::<Standard<Complex64>, CpuBackend>(
-                            ctx,
-                            &subscripts,
-                            &typed_operands,
-                            None,
-                        )
-                    }
-                    .map_err(|e| anyhow!("native einsum failed: {e}"))?;
-                    if let Some(started) = profile_started.as_ref() {
-                        record_native_einsum_profile(
-                            if typed_operands.len() == 2 {
-                                NativeEinsumPath::TypedBinaryEinsum
-                            } else {
-                                NativeEinsumPath::TypedNaryEinsum
-                            },
-                            operands,
-                            &input_ids_u32,
-                            &output_ids_u32,
-                            started.elapsed(),
-                        );
-                    }
-                    Ok(NativeTensor::from_tensor(out))
-                });
-            }
-        }
-        _ => {}
-    }
-
     let input_ids: Vec<Vec<usize>> = operands.iter().map(|(_, ids)| ids.to_vec()).collect();
-    let final_operands: Vec<&NativeTensor> = operands.iter().map(|(tensor, _)| *tensor).collect();
+    let final_operands: Vec<&NativeTensor> = operands
+        .iter()
+        .zip(promoted.iter())
+        .map(|((tensor, _), promoted)| promoted.as_ref().unwrap_or(tensor))
+        .collect();
     let notation = labels_to_notation(&input_ids, output_ids)?;
 
     with_default_runtime("native_einsum", || {
@@ -933,9 +777,17 @@ pub fn einsum_native_tensors(
 
 /// Permute a native tensor through tenferro frontend operations.
 pub fn permute_native_tensor(tensor: &NativeTensor, perm: &[usize]) -> Result<NativeTensor> {
-    tensor
-        .permute(perm)
-        .map_err(|e| anyhow!("native permute failed: {e}"))
+    let input_ids = (0..tensor.ndim()).collect::<Vec<_>>();
+    let output_ids = perm
+        .iter()
+        .map(|&axis| {
+            input_ids
+                .get(axis)
+                .copied()
+                .ok_or_else(|| anyhow!("native permute axis {axis} out of bounds"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    einsum_native_tensors(&[(tensor, &input_ids)], &output_ids)
 }
 
 /// Contract two native tensors with AD-preserving einsum execution.
@@ -957,7 +809,42 @@ pub fn outer_product_native_tensor(lhs: &NativeTensor, rhs: &NativeTensor) -> Re
 
 /// Conjugate a native tensor while preserving AD metadata.
 pub fn conj_native_tensor(tensor: &NativeTensor) -> Result<NativeTensor> {
-    Ok(tensor.conj())
+    match tensor.scalar_type() {
+        ScalarType::F32 | ScalarType::C32 => Err(anyhow!(
+            "tensor4all native bridge currently supports only f64/Complex64 tensors"
+        )),
+        ScalarType::F64 => {
+            if tensor.is_diag() && tensor.ndim() >= 2 {
+                diag_native_tensor_from_col_major(
+                    &native_tensor_primal_to_diag_f64(tensor)?,
+                    tensor.ndim(),
+                )
+            } else {
+                dense_native_tensor_from_col_major(
+                    &native_tensor_primal_to_dense_f64_col_major(tensor)?,
+                    tensor.dims(),
+                )
+            }
+        }
+        ScalarType::C64 => {
+            let data = if tensor.is_diag() && tensor.ndim() >= 2 {
+                native_tensor_primal_to_diag_c64(tensor)?
+                    .into_iter()
+                    .map(|value| value.conj())
+                    .collect::<Vec<_>>()
+            } else {
+                native_tensor_primal_to_dense_c64_col_major(tensor)?
+                    .into_iter()
+                    .map(|value| value.conj())
+                    .collect::<Vec<_>>()
+            };
+            if tensor.is_diag() && tensor.ndim() >= 2 {
+                diag_native_tensor_from_col_major(&data, tensor.ndim())
+            } else {
+                dense_native_tensor_from_col_major(&data, tensor.dims())
+            }
+        }
+    }
 }
 
 /// Permute storage through native tenferro execution.
