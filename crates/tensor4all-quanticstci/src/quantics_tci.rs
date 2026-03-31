@@ -11,10 +11,10 @@ use tensor4all_core::TensorDynLen;
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TTScalar, TensorTrain};
 use tensor4all_tcicore::{DenseFaerLuKernel, PivotKernel};
 use tensor4all_treetci::{
-    crossinterpolate2 as treetci_crossinterpolate2, DefaultProposer, GlobalIndexBatch,
-    TreeTciGraph,
+    DefaultProposer, GlobalIndexBatch, TreeTCI2, TreeTciGraph,
+    optimize_with_proposer,
 };
-use tensor4all_treetci::materialize::FullPivLuScalar;
+use tensor4all_treetci::materialize::{to_treetn, FullPivLuScalar};
 
 use crate::options::QtciOptions;
 
@@ -25,6 +25,8 @@ use crate::options::QtciOptions;
 pub struct QuanticsTensorCI2<V: TTScalar> {
     /// Underlying tensor train
     tt: TensorTrain<V>,
+    /// TreeTCI2 state (pivot sets, graph, etc.)
+    tci_state: TreeTCI2<V>,
     /// Grid for coordinate conversion (DiscretizedGrid)
     discretized_grid: Option<DiscretizedGrid>,
     /// Grid for coordinate conversion (InherentDiscreteGrid)
@@ -37,28 +39,32 @@ impl<V> QuanticsTensorCI2<V>
 where
     V: TTScalar + Default + Clone,
 {
-    /// Create a new QuanticsTensorCI2 from a TensorTrain and discretized grid.
+    /// Create a new QuanticsTensorCI2 from a TensorTrain, TreeTCI2 state, and discretized grid.
     pub fn from_discretized(
         tt: TensorTrain<V>,
+        tci_state: TreeTCI2<V>,
         grid: DiscretizedGrid,
         cache: HashMap<Vec<i64>, V>,
     ) -> Self {
         Self {
             tt,
+            tci_state,
             discretized_grid: Some(grid),
             inherent_grid: None,
             cache,
         }
     }
 
-    /// Create a new QuanticsTensorCI2 from a TensorTrain and inherent discrete grid.
+    /// Create a new QuanticsTensorCI2 from a TensorTrain, TreeTCI2 state, and inherent discrete grid.
     pub fn from_inherent(
         tt: TensorTrain<V>,
+        tci_state: TreeTCI2<V>,
         grid: InherentDiscreteGrid,
         cache: HashMap<Vec<i64>, V>,
     ) -> Self {
         Self {
             tt,
+            tci_state,
             discretized_grid: None,
             inherent_grid: Some(grid),
             cache,
@@ -145,6 +151,11 @@ where
     /// Get the underlying TensorTrain.
     pub fn tensor_train(&self) -> TensorTrain<V> {
         self.tt.clone()
+    }
+
+    /// Access the TreeTCI2 state.
+    pub fn tci(&self) -> &TreeTCI2<V> {
+        &self.tci_state
     }
 
     /// Access cached evaluation points.
@@ -380,30 +391,49 @@ where
         qinitialpivots.push(pivot);
     }
 
-    // Run TreeTCI with linear chain
+    // Run TreeTCI with linear chain (lower-level API)
     let graph = TreeTciGraph::linear_chain(n_sites)?;
     let tree_opts = options.to_treetci_options();
     let proposer = DefaultProposer;
-    let (treetn, ranks, errors) = treetci_crossinterpolate2::<V, _, _>(
-        batch_eval,
-        local_dims.clone(),
-        graph,
-        qinitialpivots,
-        tree_opts,
-        Some(0), // center_site = 0 (root at left end)
-        &proposer,
-    )?;
+
+    let pivots = if qinitialpivots.is_empty() {
+        vec![vec![0; local_dims.len()]]
+    } else {
+        qinitialpivots
+    };
+
+    let mut tci = TreeTCI2::<V>::new(local_dims.clone(), graph)?;
+    tci.add_global_pivots(&pivots)?;
+
+    // Initialize max_sample_value via batch evaluate
+    let flat: Vec<usize> = pivots.iter().flat_map(|p| p.iter().copied()).collect();
+    let init_batch = GlobalIndexBatch::new(&flat, n_sites, pivots.len())?;
+    let init_vals = batch_eval(init_batch)?;
+    tci.max_sample_value = init_vals
+        .iter()
+        .map(|v| <V as tensor4all_tcicore::MatrixLuciScalar>::abs_val(*v))
+        .fold(0.0f64, f64::max);
+    anyhow::ensure!(
+        tci.max_sample_value > 0.0,
+        "initial pivots must not all evaluate to zero"
+    );
+
+    let (ranks, errors) =
+        optimize_with_proposer(&mut tci, &batch_eval, &tree_opts, &proposer)?;
+    let treetn = to_treetn(&tci, &batch_eval, Some(0))?;
 
     // Convert TreeTN → TensorTrain<V>
     let tt = treetn_to_tensor_train::<V>(&treetn, n_sites, &local_dims)?;
 
-    // Extract cache
+    // Drop batch_eval (and its captured Rc clone) before extracting the cache
+    drop(batch_eval);
+
     let final_cache = Rc::try_unwrap(cache)
         .map_err(|_| anyhow!("Failed to extract cache"))?
         .into_inner();
 
     Ok((
-        QuanticsTensorCI2::from_discretized(tt, grid.clone(), final_cache),
+        QuanticsTensorCI2::from_discretized(tt, tci, grid.clone(), final_cache),
         ranks,
         errors,
     ))
@@ -602,30 +632,49 @@ where
         qinitialpivots.push(pivot);
     }
 
-    // Run TreeTCI with linear chain
+    // Run TreeTCI with linear chain (lower-level API)
     let graph = TreeTciGraph::linear_chain(n_sites)?;
     let tree_opts = options.to_treetci_options();
     let proposer = DefaultProposer;
-    let (treetn, ranks, errors) = treetci_crossinterpolate2::<V, _, _>(
-        batch_eval,
-        local_dims.clone(),
-        graph,
-        qinitialpivots,
-        tree_opts,
-        Some(0), // center_site = 0 (root at left end)
-        &proposer,
-    )?;
+
+    let pivots = if qinitialpivots.is_empty() {
+        vec![vec![0; local_dims.len()]]
+    } else {
+        qinitialpivots
+    };
+
+    let mut tci = TreeTCI2::<V>::new(local_dims.clone(), graph)?;
+    tci.add_global_pivots(&pivots)?;
+
+    // Initialize max_sample_value via batch evaluate
+    let flat: Vec<usize> = pivots.iter().flat_map(|p| p.iter().copied()).collect();
+    let init_batch = GlobalIndexBatch::new(&flat, n_sites, pivots.len())?;
+    let init_vals = batch_eval(init_batch)?;
+    tci.max_sample_value = init_vals
+        .iter()
+        .map(|v| <V as tensor4all_tcicore::MatrixLuciScalar>::abs_val(*v))
+        .fold(0.0f64, f64::max);
+    anyhow::ensure!(
+        tci.max_sample_value > 0.0,
+        "initial pivots must not all evaluate to zero"
+    );
+
+    let (ranks, errors) =
+        optimize_with_proposer(&mut tci, &batch_eval, &tree_opts, &proposer)?;
+    let treetn = to_treetn(&tci, &batch_eval, Some(0))?;
 
     // Convert TreeTN → TensorTrain<V>
     let tt = treetn_to_tensor_train::<V>(&treetn, n_sites, &local_dims)?;
 
-    // Extract cache
+    // Drop batch_eval (and its captured Rc clone) before extracting the cache
+    drop(batch_eval);
+
     let final_cache = Rc::try_unwrap(cache)
         .map_err(|_| anyhow!("Failed to extract cache"))?
         .into_inner();
 
     Ok((
-        QuanticsTensorCI2::from_inherent(tt, grid, final_cache),
+        QuanticsTensorCI2::from_inherent(tt, tci, grid, final_cache),
         ranks,
         errors,
     ))
