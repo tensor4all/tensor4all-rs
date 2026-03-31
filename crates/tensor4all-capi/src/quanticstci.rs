@@ -66,6 +66,34 @@ pub extern "C" fn t4a_qtci_f64_release(ptr: *mut t4a_qtci_f64) {
     }
 }
 
+/// Check if the QuanticsTCI handle is assigned (non-null and dereferenceable).
+///
+/// # Returns
+/// 1 if valid, 0 otherwise
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_qtci_f64_is_assigned(ptr: *const t4a_qtci_f64) -> i32 {
+    if ptr.is_null() {
+        return 0;
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let _ = &*ptr;
+        1
+    }));
+
+    match result {
+        Ok(v) => v,
+        Err(panic) => {
+            let msg = crate::panic_message(&*panic);
+            crate::set_last_error(&msg);
+            0
+        }
+    }
+}
+
+// Note: t4a_qtci_f64_clone is NOT provided because QuanticsTensorCI2 internally
+// contains a TreeTCI2 which does not implement Clone.
+
 // ============================================================================
 // High-level interpolation functions
 // ============================================================================
@@ -367,7 +395,7 @@ pub extern "C" fn t4a_qtci_f64_integral(
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_qtci_f64_to_tensor_train(
     ptr: *const t4a_qtci_f64,
-) -> *mut crate::simplett::t4a_simplett_f64 {
+) -> *mut crate::types::t4a_simplett_f64 {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -375,7 +403,7 @@ pub extern "C" fn t4a_qtci_f64_to_tensor_train(
     let result = catch_unwind(AssertUnwindSafe(|| {
         let qtci = unsafe { &*ptr };
         let tt = qtci.inner().tensor_train();
-        Box::into_raw(Box::new(crate::simplett::t4a_simplett_f64::new(tt)))
+        Box::into_raw(Box::new(crate::types::t4a_simplett_f64::new(tt)))
     }));
 
     crate::unwrap_catch_ptr(result)

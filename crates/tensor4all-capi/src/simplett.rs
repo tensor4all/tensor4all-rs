@@ -3,57 +3,11 @@
 //! This provides a simpler TensorTrain interface designed for TCI operations.
 //! The tensors are stored as flat arrays with explicit dimensions.
 
-use crate::types::t4a_simplett_c64;
+use crate::types::{t4a_simplett_c64, t4a_simplett_f64};
 use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
 use num_complex::Complex64;
-use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
-
-// ============================================================================
-// Opaque handle type
-// ============================================================================
-
-/// Opaque handle for a SimpleTT `TensorTrain<f64>`
-#[repr(C)]
-pub struct t4a_simplett_f64 {
-    _private: *const c_void,
-}
-
-#[allow(dead_code)]
-impl t4a_simplett_f64 {
-    pub(crate) fn new(tt: TensorTrain<f64>) -> Self {
-        Self {
-            _private: Box::into_raw(Box::new(tt)) as *const c_void,
-        }
-    }
-
-    pub(crate) fn inner(&self) -> &TensorTrain<f64> {
-        unsafe { &*(self._private as *const TensorTrain<f64>) }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn inner_mut(&mut self) -> &mut TensorTrain<f64> {
-        unsafe { &mut *(self._private as *mut TensorTrain<f64>) }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn into_inner(self) -> TensorTrain<f64> {
-        let ptr = self._private as *mut TensorTrain<f64>;
-        std::mem::forget(self);
-        unsafe { *Box::from_raw(ptr) }
-    }
-}
-
-impl Drop for t4a_simplett_f64 {
-    fn drop(&mut self) {
-        if !self._private.is_null() {
-            unsafe {
-                let _ = Box::from_raw(self._private as *mut TensorTrain<f64>);
-            }
-        }
-    }
-}
 
 // ============================================================================
 // Lifecycle functions
@@ -82,6 +36,31 @@ pub extern "C" fn t4a_simplett_f64_clone(ptr: *const t4a_simplett_f64) -> *mut t
     }));
 
     crate::unwrap_catch_ptr(result)
+}
+
+/// Check if the SimpleTT f64 handle is assigned (non-null and dereferenceable).
+///
+/// # Returns
+/// 1 if valid, 0 otherwise
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_f64_is_assigned(ptr: *const t4a_simplett_f64) -> i32 {
+    if ptr.is_null() {
+        return 0;
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let _ = &*ptr;
+        1
+    }));
+
+    match result {
+        Ok(v) => v,
+        Err(panic) => {
+            let msg = crate::panic_message(&*panic);
+            crate::set_last_error(&msg);
+            0
+        }
+    }
 }
 
 // ============================================================================
@@ -512,6 +491,31 @@ pub extern "C" fn t4a_simplett_c64_clone(ptr: *const t4a_simplett_c64) -> *mut t
     }));
 
     crate::unwrap_catch_ptr(result)
+}
+
+/// Check if the SimpleTT c64 handle is assigned (non-null and dereferenceable).
+///
+/// # Returns
+/// 1 if valid, 0 otherwise
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_is_assigned(ptr: *const t4a_simplett_c64) -> i32 {
+    if ptr.is_null() {
+        return 0;
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let _ = &*ptr;
+        1
+    }));
+
+    match result {
+        Ok(v) => v,
+        Err(panic) => {
+            let msg = crate::panic_message(&*panic);
+            crate::set_last_error(&msg);
+            0
+        }
+    }
 }
 
 // ============================================================================

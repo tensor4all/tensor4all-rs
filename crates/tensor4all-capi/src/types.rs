@@ -212,6 +212,58 @@ unsafe impl Sync for t4a_treetn {}
 // SimpleTT types
 // ============================================================================
 
+/// Opaque handle for a SimpleTT `TensorTrain<f64>`.
+#[repr(C)]
+pub struct t4a_simplett_f64 {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_simplett_f64 {
+    /// Create a new `t4a_simplett_f64` from a `TensorTrain<f64>`.
+    pub(crate) fn new(tt: TensorTrain<f64>) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(tt)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner `TensorTrain<f64>`.
+    pub(crate) fn inner(&self) -> &TensorTrain<f64> {
+        unsafe { &*(self._private as *const TensorTrain<f64>) }
+    }
+
+    /// Get a mutable reference to the inner `TensorTrain<f64>`.
+    pub(crate) fn inner_mut(&mut self) -> &mut TensorTrain<f64> {
+        unsafe { &mut *(self._private as *mut TensorTrain<f64>) }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn into_inner(self) -> TensorTrain<f64> {
+        let ptr = self._private as *mut TensorTrain<f64>;
+        std::mem::forget(self);
+        unsafe { *Box::from_raw(ptr) }
+    }
+}
+
+impl Clone for t4a_simplett_f64 {
+    fn clone(&self) -> Self {
+        Self::new(self.inner().clone())
+    }
+}
+
+impl Drop for t4a_simplett_f64 {
+    fn drop(&mut self) {
+        if !self._private.is_null() {
+            unsafe {
+                let _ = Box::from_raw(self._private as *mut TensorTrain<f64>);
+            }
+        }
+    }
+}
+
+// Safety: t4a_simplett_f64 is Send + Sync because TensorTrain<f64> is Send + Sync
+unsafe impl Send for t4a_simplett_f64 {}
+unsafe impl Sync for t4a_simplett_f64 {}
+
 /// Opaque handle for a SimpleTT `TensorTrain<Complex64>`.
 #[repr(C)]
 pub struct t4a_simplett_c64 {

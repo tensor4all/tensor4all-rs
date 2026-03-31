@@ -7,20 +7,21 @@ This document describes the common design patterns and guidelines for C APIs in 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Naming Conventions](#naming-conventions)
-3. [Opaque Types](#opaque-types)
-4. [Ownership Model](#ownership-model)
-5. [Immutable vs Mutable Types](#immutable-vs-mutable-types)
-6. [Lifecycle Management](#lifecycle-management)
-7. [Error Handling](#error-handling)
-8. [Panic Safety](#panic-safety)
-9. [Buffer Management](#buffer-management)
-10. [Data Layout (Column-Major)](#data-layout-column-major)
-11. [Memory Contiguity Requirements](#memory-contiguity-requirements)
-12. [Language Binding Normalization](#language-binding-normalization)
-13. [Thread Safety](#thread-safety)
-14. [Function Export](#function-export)
-15. [Code Organization](#code-organization)
+2. [Mandatory Rules](#mandatory-rules)
+3. [Naming Conventions](#naming-conventions)
+4. [Opaque Types](#opaque-types)
+5. [Ownership Model](#ownership-model)
+6. [Immutable vs Mutable Types](#immutable-vs-mutable-types)
+7. [Lifecycle Management](#lifecycle-management)
+8. [Error Handling](#error-handling)
+9. [Panic Safety](#panic-safety)
+10. [Buffer Management](#buffer-management)
+11. [Data Layout (Column-Major)](#data-layout-column-major)
+12. [Memory Contiguity Requirements](#memory-contiguity-requirements)
+13. [Language Binding Normalization](#language-binding-normalization)
+14. [Thread Safety](#thread-safety)
+15. [Function Export](#function-export)
+16. [Code Organization](#code-organization)
 
 ## Overview
 
@@ -36,6 +37,89 @@ C APIs in tensor4all-rs follow patterns inspired by `sparse-ir-capi` and common 
 - **Boundary normalization** handled by language bindings when interoperating with row-major ecosystems such as NumPy
 
 **Note**: While this document uses examples from `tensor4all-capi` (with `t4a_` prefix), the patterns apply to all C-API crates in the tensor4all-rs project. Each crate should choose its own prefix to avoid naming conflicts.
+
+## Mandatory Rules
+
+This section consolidates the rules that MUST be followed for all C API types and functions. These rules take precedence over any guidance in later sections.
+
+### Rule 1: Type Mutability Classification
+
+Every opaque type must be classified as either **Immutable** or **Mutable**:
+
+- **Immutable types** (`Box<Arc<T>>`): Objects that are never modified after construction. `clone()` is cheap (Arc reference count increment). Only `inner()` is provided -- `inner_mut()` MUST NOT be defined.
+- **Mutable types** (`Box<T>`): Objects that support in-place modification. `clone()` is a deep copy. Both `inner()` and `inner_mut()` are available.
+
+#### Classification Table
+
+| Type | Mutability | Wraps | `clone()` | `inner_mut()` | Notes |
+|------|-----------|-------|-----------|---------------|-------|
+| `t4a_index` | Immutable | `DynIndex` | Yes (cheap) | No | |
+| `t4a_tensor` | Immutable | `TensorDynLen` | Yes (cheap) | No | |
+| `t4a_qgrid_disc` | Immutable | `DiscretizedGrid` | Yes (cheap) | No | |
+| `t4a_qgrid_int` | Immutable | `InherentDiscreteGrid` | Yes (cheap) | No | |
+| `t4a_linop` | Immutable | `LinearOperator<TensorDynLen, usize>` | Yes (cheap) | No | |
+| `t4a_qtci_f64` | Immutable | `QuanticsTensorCI2<f64>` | No | No | No `Clone` -- contains `TreeTCI2` |
+| `t4a_treetn` | Mutable | `DefaultTreeTN<usize>` | Yes (deep) | Yes | Orthogonalization, truncation |
+| `t4a_treetci_f64` | Mutable | `TreeTCI2<f64>` | No | Yes | No `Clone` -- `TreeTCI2` does not implement Clone |
+| `t4a_treetci_c64` | Mutable | `TreeTCI2<Complex64>` | No | Yes | No `Clone` -- `TreeTCI2` does not implement Clone |
+| `t4a_treetci_graph` | Immutable | `TreeTciGraph` | Yes (cheap) | No | |
+| `t4a_simplett_f64` | Mutable | `TensorTrain<f64>` | Yes (deep) | Yes | Compression |
+| `t4a_simplett_c64` | Mutable | `TensorTrain<Complex64>` | Yes (deep) | Yes | Compression |
+
+### Rule 2: Lifecycle Functions
+
+Every opaque type MUST provide:
+
+- `t4a_<TYPE>_release` -- mandatory for all types
+- `t4a_<TYPE>_clone` -- mandatory if `Clone` is possible; if `Clone` is impossible, document why and do NOT provide the function
+- `t4a_<TYPE>_is_assigned` -- mandatory for all types
+
+Prefer `impl_opaque_type_common!` macro which generates all three. When `Clone` is not available (e.g., `TreeTCI2`), implement `release` and `is_assigned` manually and add a comment explaining why `clone` is absent.
+
+#### Current Status
+
+| Type | `_release` | `_clone` | `_is_assigned` | Notes |
+|------|:---:|:---:|:---:|-------|
+| `t4a_index` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_tensor` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_treetn` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_qgrid_disc` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_qgrid_int` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_linop` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_treetci_graph` | Yes | Yes | Yes | `impl_opaque_type_common!` |
+| `t4a_simplett_f64` | Yes | Yes | Yes | Manual impl |
+| `t4a_simplett_c64` | Yes | Yes | Yes | Manual impl |
+| `t4a_qtci_f64` | Yes | -- | Yes | No `Clone`: contains `TreeTCI2` |
+| `t4a_treetci_f64` | Yes | -- | Yes | No `Clone`: `TreeTCI2` does not implement Clone |
+| `t4a_treetci_c64` | Yes | -- | Yes | No `Clone`: `TreeTCI2` does not implement Clone |
+
+### Rule 3: Thread Safety
+
+- All opaque types MUST implement `unsafe impl Send` and `unsafe impl Sync`
+- Concurrent reads on the same pointer are safe
+- Concurrent writes to the same pointer are undefined behavior (caller's responsibility)
+- Callbacks execute on the calling thread
+
+### Rule 4: Naming Conventions
+
+In addition to the conventions in the [Naming Conventions](#naming-conventions) section below:
+
+- **In-place operations on Mutable types**: no special suffix needed, as `*mut` pointer already signals mutation
+- **Scalar type suffix**: `_f64`, `_c64` for type-specialized functions (e.g., `t4a_simplett_f64_*`, `t4a_treetci_c64_*`)
+
+### Rule 5: Complex Number FFI Convention
+
+Complex64 values are passed as interleaved f64 pairs: `[re, im, re, im, ...]`.
+
+- For callback results returning `n_points` complex values, write `2 * n_points` doubles to the result buffer
+- Element at index `i` has real part at `results[2*i]` and imaginary part at `results[2*i + 1]`
+- This convention MUST be documented in all c64 callback type definitions
+
+### Rule 6: Type Definition Location
+
+- All opaque type struct definitions MUST be in `types.rs`
+- Type-specific logic (functions, tests) go in their own module files (e.g., `simplett.rs`, `treetci.rs`)
+- Enum definitions for C API parameters belong in `types.rs`
 
 ## Naming Conventions
 
@@ -374,16 +458,7 @@ impl_opaque_type_common!(index);
 
 ### Current Implementation Status (tensor4all-capi)
 
-| Type | `_release` | `_clone` | `_is_assigned` | Notes |
-|------|:---:|:---:|:---:|-------|
-| `t4a_index` | Yes | Yes | Yes | `impl_opaque_type_common!` |
-| `t4a_tensor` | Yes | Yes | Yes | `impl_opaque_type_common!` |
-| `t4a_treetn` | Yes | Yes | Yes | `impl_opaque_type_common!` |
-| `t4a_qgrid_disc` | Yes | Yes | Yes | `impl_opaque_type_common!` |
-| `t4a_qgrid_int` | Yes | Yes | Yes | `impl_opaque_type_common!` |
-| `t4a_linop` | Yes | Yes | Yes | `impl_opaque_type_common!` |
-| `t4a_simplett_f64` | Yes | Yes | No | Manual impl |
-| `t4a_qtci_f64` | No | No | No | No `Clone` impl |
+See the authoritative table in [Mandatory Rules -- Rule 2](#rule-2-lifecycle-functions).
 
 ### Manual Implementation
 
@@ -990,10 +1065,14 @@ When creating new C-API crates:
 | `t4a_tensor` | `TensorDynLen` | `tensor.rs` | Dynamic-rank tensor (dense or diagonal) |
 | `t4a_treetn` | `DefaultTreeTN<usize>` | `treetn.rs` | Tree tensor network (MPS, MPO, general TTN) |
 | `t4a_simplett_f64` | `TensorTrain<f64>` | `simplett.rs` | Simple tensor train (f64) |
+| `t4a_simplett_c64` | `TensorTrain<Complex64>` | `simplett.rs` | Simple tensor train (c64) |
 | `t4a_qtci_f64` | `QuanticsTensorCI2<f64>` | `quanticstci.rs` | Quantics TCI result (f64) |
 | `t4a_qgrid_disc` | `DiscretizedGrid` | `quanticsgrids.rs` | Discretized continuous grid |
 | `t4a_qgrid_int` | `InherentDiscreteGrid` | `quanticsgrids.rs` | Integer discrete grid |
 | `t4a_linop` | `LinearOperator<TensorDynLen, usize>` | `quanticstransform.rs` | Quantics linear operator (shift, flip, Fourier, etc.) |
+| `t4a_treetci_graph` | `TreeTciGraph` | `treetci.rs` | Tree graph for TreeTCI |
+| `t4a_treetci_f64` | `TreeTCI2<f64>` | `treetci.rs` | TreeTCI state (f64) |
+| `t4a_treetci_c64` | `TreeTCI2<Complex64>` | `treetci.rs` | TreeTCI state (c64) |
 
 ### Enums
 
@@ -1009,6 +1088,8 @@ When creating new C-API crates:
 |------|-----------|--------|-------------|
 | `QtciEvalCallbackF64` | `fn(coords: *const f64, n: size_t, result: *mut f64, user_data: *mut void) -> i32` | `quanticstci.rs` | QTCI continuous domain callback |
 | `QtciEvalCallbackI64` | `fn(indices: *const i64, n: size_t, result: *mut f64, user_data: *mut void) -> i32` | `quanticstci.rs` | QTCI discrete domain callback |
+| `TreeTciEvalCallback` | `fn(batch: *const size_t, n_sites: size_t, n_points: size_t, results: *mut f64, user_data: *mut void) -> i32` | `treetci.rs` | TreeTCI batch eval (f64) |
+| `TreeTciEvalCallbackC64` | `fn(batch: *const size_t, n_sites: size_t, n_points: size_t, results: *mut f64, user_data: *mut void) -> i32` | `treetci.rs` | TreeTCI batch eval (c64, interleaved re/im) |
 
 ### Module Overview
 
@@ -1021,6 +1102,7 @@ When creating new C-API crates:
 | `quanticsgrids.rs` | `t4a_qgrid_disc_*`, `t4a_qgrid_int_*` | Quantics grid coordinate conversions |
 | `quanticstci.rs` | `t4a_qtci_f64_*`, `t4a_quanticscrossinterpolate_*` | Quantics TCI interpolation |
 | `quanticstransform.rs` | `t4a_qtransform_*`, `t4a_linop_*` | Quantics transformation operators |
+| `treetci.rs` | `t4a_treetci_f64_*`, `t4a_treetci_c64_*`, `t4a_treetci_graph_*` | Tree-structured TCI |
 | `hdf5.rs` | `t4a_hdf5_*` | HDF5 serialization (ITensors.jl compatible) |
 
 ## References
