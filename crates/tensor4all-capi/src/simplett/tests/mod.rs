@@ -1,6 +1,6 @@
 use super::*;
 use num_complex::Complex64;
-use tensor4all_simplett::{tensor3_from_data, TensorTrain};
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TensorTrain};
 
 #[test]
 fn test_simplett_private_wrapper_roundtrip() {
@@ -433,4 +433,415 @@ fn test_simplett_c64_compress_and_partial_sum() {
 
     t4a_simplett_c64_release(partial);
     t4a_simplett_c64_release(tt);
+}
+
+// ============================================================================
+// Category 1: from_site_tensors tests
+// ============================================================================
+
+#[test]
+fn test_simplett_f64_from_site_tensors() {
+    // Build a 2-site TT with known data
+    // Site 0: shape (1, 2, 2), data = [0, 1, 2, 3] column-major
+    // Site 1: shape (2, 2, 1), data = [10, 11, 12, 13] column-major
+    let left_dims: [libc::size_t; 2] = [1, 2];
+    let site_dims: [libc::size_t; 2] = [2, 2];
+    let right_dims: [libc::size_t; 2] = [2, 1];
+    let data: [f64; 8] = [0.0, 1.0, 2.0, 3.0, 10.0, 11.0, 12.0, 13.0];
+
+    let mut tt: *mut t4a_simplett_f64 = std::ptr::null_mut();
+    let status = t4a_simplett_f64_from_site_tensors(
+        2,
+        left_dims.as_ptr(),
+        site_dims.as_ptr(),
+        right_dims.as_ptr(),
+        data.as_ptr(),
+        data.len(),
+        &mut tt,
+    );
+    assert_eq!(status, T4A_SUCCESS);
+    assert!(!tt.is_null());
+
+    // Check accessors
+    let mut len = 0usize;
+    assert_eq!(t4a_simplett_f64_len(tt, &mut len), T4A_SUCCESS);
+    assert_eq!(len, 2);
+
+    let mut out_site_dims = [0usize; 2];
+    assert_eq!(
+        t4a_simplett_f64_site_dims(tt, out_site_dims.as_mut_ptr(), 2),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_site_dims, [2, 2]);
+
+    let mut out_link_dims = [0usize; 1];
+    assert_eq!(
+        t4a_simplett_f64_link_dims(tt, out_link_dims.as_mut_ptr(), 1),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_link_dims, [2]);
+
+    // Verify site tensor data roundtrip
+    let mut out_data = [0.0f64; 4];
+    let (mut ld, mut sd, mut rd) = (0usize, 0usize, 0usize);
+    assert_eq!(
+        t4a_simplett_f64_site_tensor(tt, 0, out_data.as_mut_ptr(), 4, &mut ld, &mut sd, &mut rd),
+        T4A_SUCCESS
+    );
+    assert_eq!((ld, sd, rd), (1, 2, 2));
+    assert_eq!(out_data, [0.0, 1.0, 2.0, 3.0]);
+
+    t4a_simplett_f64_release(tt);
+}
+
+#[test]
+fn test_simplett_f64_from_site_tensors_data_length_mismatch() {
+    let left_dims: [libc::size_t; 1] = [1];
+    let site_dims: [libc::size_t; 1] = [2];
+    let right_dims: [libc::size_t; 1] = [1];
+    let data: [f64; 3] = [1.0, 2.0, 3.0]; // too many for 1*2*1=2
+
+    let mut tt: *mut t4a_simplett_f64 = std::ptr::null_mut();
+    let status = t4a_simplett_f64_from_site_tensors(
+        1,
+        left_dims.as_ptr(),
+        site_dims.as_ptr(),
+        right_dims.as_ptr(),
+        data.as_ptr(),
+        data.len(),
+        &mut tt,
+    );
+    assert_ne!(status, T4A_SUCCESS);
+}
+
+#[test]
+fn test_simplett_c64_from_site_tensors() {
+    // 1-site TT: shape (1, 2, 1), complex data [1+2i, 3+4i]
+    let left_dims: [libc::size_t; 1] = [1];
+    let site_dims: [libc::size_t; 1] = [2];
+    let right_dims: [libc::size_t; 1] = [1];
+    // interleaved: [re, im, re, im]
+    let data: [f64; 4] = [1.0, 2.0, 3.0, 4.0];
+
+    let mut tt: *mut t4a_simplett_c64 = std::ptr::null_mut();
+    let status = t4a_simplett_c64_from_site_tensors(
+        1,
+        left_dims.as_ptr(),
+        site_dims.as_ptr(),
+        right_dims.as_ptr(),
+        data.as_ptr(),
+        data.len(),
+        &mut tt,
+    );
+    assert_eq!(status, T4A_SUCCESS);
+    assert!(!tt.is_null());
+
+    // Evaluate at index 0 -> 1+2i
+    let indices: [libc::size_t; 1] = [0];
+    let (mut re, mut im) = (0.0, 0.0);
+    assert_eq!(
+        t4a_simplett_c64_evaluate(tt, indices.as_ptr(), 1, &mut re, &mut im),
+        T4A_SUCCESS
+    );
+    assert!((re - 1.0).abs() < 1e-12);
+    assert!((im - 2.0).abs() < 1e-12);
+
+    // Evaluate at index 1 -> 3+4i
+    let indices: [libc::size_t; 1] = [1];
+    assert_eq!(
+        t4a_simplett_c64_evaluate(tt, indices.as_ptr(), 1, &mut re, &mut im),
+        T4A_SUCCESS
+    );
+    assert!((re - 3.0).abs() < 1e-12);
+    assert!((im - 4.0).abs() < 1e-12);
+
+    t4a_simplett_c64_release(tt);
+}
+
+// ============================================================================
+// Category 1: add tests
+// ============================================================================
+
+#[test]
+fn test_simplett_f64_add() {
+    let dims: [libc::size_t; 2] = [2, 3];
+    let a = t4a_simplett_f64_constant(dims.as_ptr(), 2, 1.0);
+    let b = t4a_simplett_f64_constant(dims.as_ptr(), 2, 2.0);
+
+    let mut result: *mut t4a_simplett_f64 = std::ptr::null_mut();
+    assert_eq!(t4a_simplett_f64_add(a, b, &mut result), T4A_SUCCESS);
+    assert!(!result.is_null());
+
+    let mut sum = 0.0;
+    assert_eq!(t4a_simplett_f64_sum(result, &mut sum), T4A_SUCCESS);
+    // (1 + 2) * 2 * 3 = 18
+    assert!((sum - 18.0).abs() < 1e-10);
+
+    t4a_simplett_f64_release(a);
+    t4a_simplett_f64_release(b);
+    t4a_simplett_f64_release(result);
+}
+
+#[test]
+fn test_simplett_c64_add() {
+    let dims: [libc::size_t; 2] = [2, 3];
+    let a = t4a_simplett_c64_constant(dims.as_ptr(), 2, 1.0, 1.0);
+    let b = t4a_simplett_c64_constant(dims.as_ptr(), 2, 2.0, -1.0);
+
+    let mut result: *mut t4a_simplett_c64 = std::ptr::null_mut();
+    assert_eq!(t4a_simplett_c64_add(a, b, &mut result), T4A_SUCCESS);
+    assert!(!result.is_null());
+
+    let (mut sum_re, mut sum_im) = (0.0, 0.0);
+    assert_eq!(
+        t4a_simplett_c64_sum(result, &mut sum_re, &mut sum_im),
+        T4A_SUCCESS
+    );
+    // (1+i + 2-i) * 6 = 3*6 + 0i = 18
+    assert!((sum_re - 18.0).abs() < 1e-10);
+    assert!(sum_im.abs() < 1e-10);
+
+    t4a_simplett_c64_release(a);
+    t4a_simplett_c64_release(b);
+    t4a_simplett_c64_release(result);
+}
+
+// ============================================================================
+// Category 1: scale tests
+// ============================================================================
+
+#[test]
+fn test_simplett_f64_scale() {
+    let dims: [libc::size_t; 2] = [2, 3];
+    let tt = t4a_simplett_f64_constant(dims.as_ptr(), 2, 2.0);
+
+    assert_eq!(t4a_simplett_f64_scale(tt, 3.0), T4A_SUCCESS);
+
+    let mut sum = 0.0;
+    assert_eq!(t4a_simplett_f64_sum(tt, &mut sum), T4A_SUCCESS);
+    // 2 * 3 * 6 = 36
+    assert!((sum - 36.0).abs() < 1e-10);
+
+    t4a_simplett_f64_release(tt);
+}
+
+#[test]
+fn test_simplett_c64_scale() {
+    let dims: [libc::size_t; 1] = [2];
+    let tt = t4a_simplett_c64_constant(dims.as_ptr(), 1, 1.0, 0.0);
+
+    // Scale by i: (0 + 1i)
+    assert_eq!(t4a_simplett_c64_scale(tt, 0.0, 1.0), T4A_SUCCESS);
+
+    let (mut sum_re, mut sum_im) = (0.0, 0.0);
+    assert_eq!(
+        t4a_simplett_c64_sum(tt, &mut sum_re, &mut sum_im),
+        T4A_SUCCESS
+    );
+    // Each element was 1+0i, now 0+1i, sum over 2 = 0+2i
+    assert!(sum_re.abs() < 1e-12);
+    assert!((sum_im - 2.0).abs() < 1e-12);
+
+    t4a_simplett_c64_release(tt);
+}
+
+// ============================================================================
+// Category 1: dot tests
+// ============================================================================
+
+#[test]
+fn test_simplett_f64_dot() {
+    let dims: [libc::size_t; 2] = [2, 3];
+    let a = t4a_simplett_f64_constant(dims.as_ptr(), 2, 2.0);
+    let b = t4a_simplett_f64_constant(dims.as_ptr(), 2, 3.0);
+
+    let mut value = 0.0;
+    assert_eq!(t4a_simplett_f64_dot(a, b, &mut value), T4A_SUCCESS);
+    // dot = sum(a[i]*b[i]) = 2*3*6 = 36
+    assert!((value - 36.0).abs() < 1e-10);
+
+    t4a_simplett_f64_release(a);
+    t4a_simplett_f64_release(b);
+}
+
+#[test]
+fn test_simplett_c64_dot() {
+    let dims: [libc::size_t; 1] = [2];
+    let a = t4a_simplett_c64_constant(dims.as_ptr(), 1, 1.0, 1.0); // 1+i
+    let b = t4a_simplett_c64_constant(dims.as_ptr(), 1, 1.0, -1.0); // 1-i
+
+    let (mut re, mut im) = (0.0, 0.0);
+    assert_eq!(t4a_simplett_c64_dot(a, b, &mut re, &mut im), T4A_SUCCESS);
+    // dot = sum((1+i)*(1-i)) = sum(1-i+i-i^2) = sum(2) = 2*2 = 4
+    assert!((re - 4.0).abs() < 1e-10);
+    assert!(im.abs() < 1e-10);
+
+    t4a_simplett_c64_release(a);
+    t4a_simplett_c64_release(b);
+}
+
+// ============================================================================
+// Category 1: reverse tests
+// ============================================================================
+
+#[test]
+fn test_simplett_f64_reverse() {
+    // Build a non-symmetric TT to verify reversal
+    let t0 = tensor3_from_data(vec![1.0, 2.0], 1, 2, 1);
+    let t1 = tensor3_from_data(vec![10.0, 20.0, 30.0], 1, 3, 1);
+    let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    let handle = Box::into_raw(Box::new(t4a_simplett_f64::new(tt)));
+
+    let mut reversed: *mut t4a_simplett_f64 = std::ptr::null_mut();
+    assert_eq!(t4a_simplett_f64_reverse(handle, &mut reversed), T4A_SUCCESS);
+    assert!(!reversed.is_null());
+
+    // Original: site_dims = [2, 3]
+    // Reversed: site_dims = [3, 2]
+    let mut out_dims = [0usize; 2];
+    assert_eq!(
+        t4a_simplett_f64_site_dims(reversed, out_dims.as_mut_ptr(), 2),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_dims, [3, 2]);
+
+    // Verify: reversed[s1, s0] == original[s0, s1]
+    let original_indices: [libc::size_t; 2] = [1, 2];
+    let reversed_indices: [libc::size_t; 2] = [2, 1];
+    let mut orig_val = 0.0;
+    let mut rev_val = 0.0;
+    assert_eq!(
+        t4a_simplett_f64_evaluate(handle, original_indices.as_ptr(), 2, &mut orig_val),
+        T4A_SUCCESS
+    );
+    assert_eq!(
+        t4a_simplett_f64_evaluate(reversed, reversed_indices.as_ptr(), 2, &mut rev_val),
+        T4A_SUCCESS
+    );
+    assert!((orig_val - rev_val).abs() < 1e-12);
+
+    t4a_simplett_f64_release(handle);
+    t4a_simplett_f64_release(reversed);
+}
+
+#[test]
+fn test_simplett_c64_reverse() {
+    let dims: [libc::size_t; 2] = [2, 3];
+    let handle = t4a_simplett_c64_constant(dims.as_ptr(), 2, 2.0, 3.0);
+
+    let mut reversed: *mut t4a_simplett_c64 = std::ptr::null_mut();
+    assert_eq!(t4a_simplett_c64_reverse(handle, &mut reversed), T4A_SUCCESS);
+
+    let mut out_dims = [0usize; 2];
+    assert_eq!(
+        t4a_simplett_c64_site_dims(reversed, out_dims.as_mut_ptr(), 2),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_dims, [3, 2]);
+
+    t4a_simplett_c64_release(handle);
+    t4a_simplett_c64_release(reversed);
+}
+
+// ============================================================================
+// Category 1: fulltensor tests
+// ============================================================================
+
+#[test]
+fn test_simplett_f64_fulltensor() {
+    let dims: [libc::size_t; 2] = [2, 3];
+    let tt = t4a_simplett_f64_constant(dims.as_ptr(), 2, 5.0);
+
+    // Query length
+    let mut data_len = 0usize;
+    assert_eq!(
+        t4a_simplett_f64_fulltensor(tt, std::ptr::null_mut(), 0, &mut data_len),
+        T4A_SUCCESS
+    );
+    assert_eq!(data_len, 6); // 2*3 = 6
+
+    // Fill
+    let mut data = vec![0.0; data_len];
+    assert_eq!(
+        t4a_simplett_f64_fulltensor(tt, data.as_mut_ptr(), data_len, &mut data_len),
+        T4A_SUCCESS
+    );
+    for &v in &data {
+        assert!((v - 5.0).abs() < 1e-12);
+    }
+
+    t4a_simplett_f64_release(tt);
+}
+
+#[test]
+fn test_simplett_c64_fulltensor() {
+    let dims: [libc::size_t; 1] = [3];
+    let tt = t4a_simplett_c64_constant(dims.as_ptr(), 1, 1.0, 2.0);
+
+    // Query length
+    let mut data_len = 0usize;
+    assert_eq!(
+        t4a_simplett_c64_fulltensor(tt, std::ptr::null_mut(), 0, &mut data_len),
+        T4A_SUCCESS
+    );
+    assert_eq!(data_len, 6); // 3 elements * 2 doubles each
+
+    // Fill
+    let mut data = vec![0.0; data_len];
+    assert_eq!(
+        t4a_simplett_c64_fulltensor(tt, data.as_mut_ptr(), data_len, &mut data_len),
+        T4A_SUCCESS
+    );
+    // Should be [1, 2, 1, 2, 1, 2]
+    for chunk in data.chunks_exact(2) {
+        assert!((chunk[0] - 1.0).abs() < 1e-12);
+        assert!((chunk[1] - 2.0).abs() < 1e-12);
+    }
+
+    t4a_simplett_c64_release(tt);
+}
+
+#[test]
+fn test_simplett_f64_fulltensor_buffer_too_small() {
+    let dims: [libc::size_t; 2] = [2, 3];
+    let tt = t4a_simplett_f64_constant(dims.as_ptr(), 2, 1.0);
+
+    let mut data_len = 0usize;
+    let mut data = [0.0; 3]; // too small for 6 elements
+    assert_eq!(
+        t4a_simplett_f64_fulltensor(tt, data.as_mut_ptr(), data.len(), &mut data_len),
+        T4A_BUFFER_TOO_SMALL
+    );
+
+    t4a_simplett_f64_release(tt);
+}
+
+// ============================================================================
+// Category 1: null pointer guard tests
+// ============================================================================
+
+#[test]
+fn test_simplett_new_functions_null_guards() {
+    assert_eq!(
+        t4a_simplett_f64_add(std::ptr::null(), std::ptr::null(), std::ptr::null_mut()),
+        T4A_NULL_POINTER
+    );
+    assert_eq!(
+        t4a_simplett_f64_scale(std::ptr::null_mut(), 1.0),
+        T4A_NULL_POINTER
+    );
+    let mut val = 0.0;
+    assert_eq!(
+        t4a_simplett_f64_dot(std::ptr::null(), std::ptr::null(), &mut val),
+        T4A_NULL_POINTER
+    );
+    assert_eq!(
+        t4a_simplett_f64_reverse(std::ptr::null(), std::ptr::null_mut()),
+        T4A_NULL_POINTER
+    );
+    let mut data_len = 0usize;
+    assert_eq!(
+        t4a_simplett_f64_fulltensor(std::ptr::null(), std::ptr::null_mut(), 0, &mut data_len),
+        T4A_NULL_POINTER
+    );
 }
