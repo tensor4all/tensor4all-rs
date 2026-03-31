@@ -810,7 +810,7 @@ fn test_simplett_f64_fulltensor_buffer_too_small() {
     let mut data = [0.0; 3]; // too small for 6 elements
     assert_eq!(
         t4a_simplett_f64_fulltensor(tt, data.as_mut_ptr(), data.len(), &mut data_len),
-        T4A_INVALID_ARGUMENT
+        T4A_BUFFER_TOO_SMALL
     );
 
     t4a_simplett_f64_release(tt);

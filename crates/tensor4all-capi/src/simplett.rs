@@ -4,7 +4,10 @@
 //! The tensors are stored as flat arrays with explicit dimensions.
 
 use crate::types::{t4a_simplett_c64, t4a_simplett_f64};
-use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
+use crate::{
+    StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER,
+    T4A_SUCCESS,
+};
 use num_complex::Complex64;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
@@ -1309,7 +1312,7 @@ pub extern "C" fn t4a_simplett_f64_fulltensor(
         }
 
         if buf_len < data.len() {
-            return T4A_INVALID_ARGUMENT;
+            return T4A_BUFFER_TOO_SMALL;
         }
 
         unsafe {
@@ -1358,7 +1361,7 @@ pub extern "C" fn t4a_simplett_c64_fulltensor(
         }
 
         if buf_len < n_doubles {
-            return T4A_INVALID_ARGUMENT;
+            return T4A_BUFFER_TOO_SMALL;
         }
 
         for (i, val) in data.iter().enumerate() {

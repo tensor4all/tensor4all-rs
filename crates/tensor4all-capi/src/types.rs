@@ -644,12 +644,6 @@ impl t4a_qtci_f64 {
     pub(crate) fn inner(&self) -> &InternalQuanticsTCI {
         unsafe { &*(self._private as *const InternalQuanticsTCI) }
     }
-
-    /// Get a mutable reference to the inner InternalQuanticsTCI
-    #[allow(dead_code)]
-    pub(crate) fn inner_mut(&mut self) -> &mut InternalQuanticsTCI {
-        unsafe { &mut *(self._private as *mut InternalQuanticsTCI) }
-    }
 }
 
 impl Drop for t4a_qtci_f64 {

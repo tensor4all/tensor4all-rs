@@ -404,20 +404,44 @@ pub extern "C" fn t4a_qtci_c64_is_assigned(ptr: *const t4a_qtci_c64) -> i32 {
 // ============================================================================
 
 /// Build a QtciOptions from the C API parameters.
-/// If `options` is null, returns defaults with overrides from the legacy params.
+/// If `options` is None, returns defaults with overrides from the legacy params.
 fn build_options(
-    options: *const t4a_qtci_options,
+    options: Option<&t4a_qtci_options>,
     tolerance: libc::c_double,
     max_bonddim: libc::size_t,
     max_iter: libc::size_t,
 ) -> QtciOptions {
-    if !options.is_null() {
-        let opts = unsafe { &*options };
+    if let Some(opts) = options {
         opts.inner().clone()
     } else {
         let mut opts = QtciOptions::default()
             .with_tolerance(tolerance)
             .with_maxiter(max_iter);
+        if max_bonddim > 0 {
+            opts = opts.with_maxbonddim(max_bonddim);
+        }
+        opts
+    }
+}
+
+/// Build a QtciOptions from the C API parameters, with an additional unfolding scheme.
+/// If `options` is Some, returns a clone of the contained options (ignoring legacy params).
+/// Otherwise, returns defaults with overrides from the legacy params and the given scheme.
+fn build_options_with_scheme(
+    options: Option<&t4a_qtci_options>,
+    tolerance: libc::c_double,
+    max_bonddim: libc::size_t,
+    max_iter: libc::size_t,
+    unfoldingscheme: t4a_unfolding_scheme,
+) -> QtciOptions {
+    if let Some(opts) = options {
+        opts.inner().clone()
+    } else {
+        let scheme: quanticsgrids::UnfoldingScheme = unfoldingscheme.into();
+        let mut opts = QtciOptions::default()
+            .with_tolerance(tolerance)
+            .with_maxiter(max_iter)
+            .with_unfoldingscheme(scheme);
         if max_bonddim > 0 {
             opts = opts.with_maxbonddim(max_bonddim);
         }
@@ -523,7 +547,12 @@ pub extern "C" fn t4a_quanticscrossinterpolate_f64(
             }
         };
 
-        let opts = build_options(options, tolerance, max_bonddim, max_iter);
+        let opts_ref = if options.is_null() {
+            None
+        } else {
+            Some(unsafe { &*options })
+        };
+        let opts = build_options(opts_ref, tolerance, max_bonddim, max_iter);
         let ndims = inner_grid.ndims();
         let pivots = parse_initial_pivots(initial_pivots, n_pivots, ndims);
 
@@ -599,20 +628,13 @@ pub extern "C" fn t4a_quanticscrossinterpolate_discrete_f64(
             }
         };
 
-        let opts = if !options.is_null() {
-            let o = unsafe { &*options };
-            o.inner().clone()
+        let opts_ref = if options.is_null() {
+            None
         } else {
-            let scheme: quanticsgrids::UnfoldingScheme = unfoldingscheme.into();
-            let mut o = QtciOptions::default()
-                .with_tolerance(tolerance)
-                .with_maxiter(max_iter)
-                .with_unfoldingscheme(scheme);
-            if max_bonddim > 0 {
-                o = o.with_maxbonddim(max_bonddim);
-            }
-            o
+            Some(unsafe { &*options })
         };
+        let opts =
+            build_options_with_scheme(opts_ref, tolerance, max_bonddim, max_iter, unfoldingscheme);
 
         let pivots = parse_initial_pivots(initial_pivots, n_pivots, ndims);
 
@@ -675,7 +697,12 @@ pub extern "C" fn t4a_quanticscrossinterpolate_c64(
             }
         };
 
-        let opts = build_options(options, tolerance, max_bonddim, max_iter);
+        let opts_ref = if options.is_null() {
+            None
+        } else {
+            Some(unsafe { &*options })
+        };
+        let opts = build_options(opts_ref, tolerance, max_bonddim, max_iter);
         let ndims = inner_grid.ndims();
         let pivots = parse_initial_pivots(initial_pivots, n_pivots, ndims);
 
@@ -738,20 +765,13 @@ pub extern "C" fn t4a_quanticscrossinterpolate_discrete_c64(
             }
         };
 
-        let opts = if !options.is_null() {
-            let o = unsafe { &*options };
-            o.inner().clone()
+        let opts_ref = if options.is_null() {
+            None
         } else {
-            let scheme: quanticsgrids::UnfoldingScheme = unfoldingscheme.into();
-            let mut o = QtciOptions::default()
-                .with_tolerance(tolerance)
-                .with_maxiter(max_iter)
-                .with_unfoldingscheme(scheme);
-            if max_bonddim > 0 {
-                o = o.with_maxbonddim(max_bonddim);
-            }
-            o
+            Some(unsafe { &*options })
         };
+        let opts =
+            build_options_with_scheme(opts_ref, tolerance, max_bonddim, max_iter, unfoldingscheme);
 
         let pivots = parse_initial_pivots(initial_pivots, n_pivots, ndims);
 
