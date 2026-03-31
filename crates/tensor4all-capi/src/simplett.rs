@@ -760,7 +760,7 @@ pub extern "C" fn t4a_simplett_c64_site_tensor(
         let right_dim = tensor.right_dim();
         let total_size = left_dim * site_dim * right_dim;
 
-        if buf_len < total_size {
+        if buf_len < 2 * total_size {
             return T4A_INVALID_ARGUMENT;
         }
 
