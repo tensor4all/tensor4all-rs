@@ -878,5 +878,500 @@ pub extern "C" fn t4a_simplett_c64_partial_sum(
     crate::unwrap_catch(result)
 }
 
+// ============================================================================
+// from_site_tensors — f64
+// ============================================================================
+
+/// Construct a SimpleTT from concatenated site tensor data (column-major).
+///
+/// Each tensor has shape (left_dim[i], site_dim[i], right_dim[i]).
+/// `data` contains all tensors concatenated in order.
+///
+/// # Arguments
+/// * `n_sites` - Number of sites (tensors)
+/// * `left_dims` - Array of left bond dimensions [n_sites]
+/// * `site_dims` - Array of site dimensions [n_sites]
+/// * `right_dims` - Array of right bond dimensions [n_sites]
+/// * `data` - Concatenated column-major tensor data
+/// * `data_len` - Total length of data
+/// * `out_ptr` - Output: new SimpleTT handle
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_f64_from_site_tensors(
+    n_sites: libc::size_t,
+    left_dims: *const libc::size_t,
+    site_dims: *const libc::size_t,
+    right_dims: *const libc::size_t,
+    data: *const libc::c_double,
+    data_len: libc::size_t,
+    out_ptr: *mut *mut t4a_simplett_f64,
+) -> StatusCode {
+    if out_ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+    if n_sites > 0
+        && (left_dims.is_null() || site_dims.is_null() || right_dims.is_null() || data.is_null())
+    {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        use tensor4all_simplett::tensor3_from_data;
+
+        let mut tensors = Vec::with_capacity(n_sites);
+        let mut offset = 0usize;
+
+        for i in 0..n_sites {
+            let ld = unsafe { *left_dims.add(i) };
+            let sd = unsafe { *site_dims.add(i) };
+            let rd = unsafe { *right_dims.add(i) };
+            let size = ld * sd * rd;
+
+            if offset + size > data_len {
+                return crate::err_status(
+                    format!(
+                        "Data buffer too small: need {} elements for site {i}, but only {} remain",
+                        size,
+                        data_len - offset
+                    ),
+                    T4A_INVALID_ARGUMENT,
+                );
+            }
+
+            let slice = unsafe { std::slice::from_raw_parts(data.add(offset), size) };
+            let tensor = tensor3_from_data(slice.to_vec(), ld, sd, rd);
+            tensors.push(tensor);
+            offset += size;
+        }
+
+        if offset != data_len {
+            return crate::err_status(
+                format!("Data length mismatch: used {offset} elements but data_len is {data_len}"),
+                T4A_INVALID_ARGUMENT,
+            );
+        }
+
+        match TensorTrain::new(tensors) {
+            Ok(tt) => {
+                unsafe { *out_ptr = Box::into_raw(Box::new(t4a_simplett_f64::new(tt))) };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// from_site_tensors — c64
+// ============================================================================
+
+/// Construct a complex SimpleTT from concatenated site tensor data.
+///
+/// Data is interleaved [re, im, re, im, ...] in column-major order per tensor.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_from_site_tensors(
+    n_sites: libc::size_t,
+    left_dims: *const libc::size_t,
+    site_dims: *const libc::size_t,
+    right_dims: *const libc::size_t,
+    data: *const libc::c_double,
+    data_len: libc::size_t,
+    out_ptr: *mut *mut t4a_simplett_c64,
+) -> StatusCode {
+    if out_ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+    if n_sites > 0
+        && (left_dims.is_null() || site_dims.is_null() || right_dims.is_null() || data.is_null())
+    {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        use tensor4all_simplett::tensor3_from_data;
+
+        let mut tensors = Vec::with_capacity(n_sites);
+        let mut offset = 0usize;
+
+        for i in 0..n_sites {
+            let ld = unsafe { *left_dims.add(i) };
+            let sd = unsafe { *site_dims.add(i) };
+            let rd = unsafe { *right_dims.add(i) };
+            let n_elements = ld * sd * rd;
+            let n_doubles = 2 * n_elements;
+
+            if offset + n_doubles > data_len {
+                return crate::err_status(
+                    format!(
+                        "Data buffer too small: need {} doubles for site {i}, but only {} remain",
+                        n_doubles,
+                        data_len - offset
+                    ),
+                    T4A_INVALID_ARGUMENT,
+                );
+            }
+
+            let slice = unsafe { std::slice::from_raw_parts(data.add(offset), n_doubles) };
+            let complex_data: Vec<Complex64> = slice
+                .chunks_exact(2)
+                .map(|c| Complex64::new(c[0], c[1]))
+                .collect();
+            let tensor = tensor3_from_data(complex_data, ld, sd, rd);
+            tensors.push(tensor);
+            offset += n_doubles;
+        }
+
+        if offset != data_len {
+            return crate::err_status(
+                format!("Data length mismatch: used {offset} doubles but data_len is {data_len}"),
+                T4A_INVALID_ARGUMENT,
+            );
+        }
+
+        match TensorTrain::new(tensors) {
+            Ok(tt) => {
+                unsafe { *out_ptr = Box::into_raw(Box::new(t4a_simplett_c64::new(tt))) };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// add — f64
+// ============================================================================
+
+/// Add two tensor trains, returning a new tensor train.
+///
+/// The two tensor trains must have the same site dimensions.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_f64_add(
+    a: *const t4a_simplett_f64,
+    b: *const t4a_simplett_f64,
+    out: *mut *mut t4a_simplett_f64,
+) -> StatusCode {
+    if a.is_null() || b.is_null() || out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+
+        match tt_a.inner().add(tt_b.inner()) {
+            Ok(result_tt) => {
+                unsafe { *out = Box::into_raw(Box::new(t4a_simplett_f64::new(result_tt))) };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// add — c64
+// ============================================================================
+
+/// Add two complex tensor trains, returning a new tensor train.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_add(
+    a: *const t4a_simplett_c64,
+    b: *const t4a_simplett_c64,
+    out: *mut *mut t4a_simplett_c64,
+) -> StatusCode {
+    if a.is_null() || b.is_null() || out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+
+        match tt_a.inner().add(tt_b.inner()) {
+            Ok(result_tt) => {
+                unsafe { *out = Box::into_raw(Box::new(t4a_simplett_c64::new(result_tt))) };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// scale — f64
+// ============================================================================
+
+/// Scale a tensor train in-place by a scalar factor.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_f64_scale(
+    ptr: *mut t4a_simplett_f64,
+    factor: libc::c_double,
+) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &mut *ptr };
+        tt.inner_mut().scale(factor);
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// scale — c64
+// ============================================================================
+
+/// Scale a complex tensor train in-place by a complex scalar factor.
+///
+/// The factor is given as (re, im) pair.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_scale(
+    ptr: *mut t4a_simplett_c64,
+    factor_re: libc::c_double,
+    factor_im: libc::c_double,
+) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &mut *ptr };
+        tt.inner_mut().scale(Complex64::new(factor_re, factor_im));
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// dot — f64
+// ============================================================================
+
+/// Compute the inner product (dot product) of two tensor trains.
+///
+/// Returns sum over all indices i of a[i] * b[i].
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_f64_dot(
+    a: *const t4a_simplett_f64,
+    b: *const t4a_simplett_f64,
+    out_value: *mut libc::c_double,
+) -> StatusCode {
+    if a.is_null() || b.is_null() || out_value.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+
+        match tt_a.inner().dot(tt_b.inner()) {
+            Ok(val) => {
+                unsafe { *out_value = val };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// dot — c64
+// ============================================================================
+
+/// Compute the inner product (dot product) of two complex tensor trains.
+///
+/// Returns (re, im) via out params.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_dot(
+    a: *const t4a_simplett_c64,
+    b: *const t4a_simplett_c64,
+    out_re: *mut libc::c_double,
+    out_im: *mut libc::c_double,
+) -> StatusCode {
+    if a.is_null() || b.is_null() || out_re.is_null() || out_im.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt_a = unsafe { &*a };
+        let tt_b = unsafe { &*b };
+
+        match tt_a.inner().dot(tt_b.inner()) {
+            Ok(val) => {
+                unsafe {
+                    *out_re = val.re;
+                    *out_im = val.im;
+                }
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// reverse — f64
+// ============================================================================
+
+/// Reverse the tensor train (swap left and right), returning a new handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_f64_reverse(
+    ptr: *const t4a_simplett_f64,
+    out: *mut *mut t4a_simplett_f64,
+) -> StatusCode {
+    if ptr.is_null() || out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let reversed = tt.inner().reverse();
+        unsafe { *out = Box::into_raw(Box::new(t4a_simplett_f64::new(reversed))) };
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// reverse — c64
+// ============================================================================
+
+/// Reverse the complex tensor train (swap left and right), returning a new handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_reverse(
+    ptr: *const t4a_simplett_c64,
+    out: *mut *mut t4a_simplett_c64,
+) -> StatusCode {
+    if ptr.is_null() || out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let reversed = tt.inner().reverse();
+        unsafe { *out = Box::into_raw(Box::new(t4a_simplett_c64::new(reversed))) };
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// fulltensor — f64
+// ============================================================================
+
+/// Expand the tensor train to a dense tensor.
+///
+/// Returns data in column-major order.
+/// Caller knows dimensions via site_dims(); only the data buffer is needed.
+///
+/// # Arguments
+/// * `ptr` - Tensor train handle
+/// * `out_data` - Output buffer for data (NULL to query length)
+/// * `buf_len` - Buffer length
+/// * `out_data_len` - Actual data length
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_f64_fulltensor(
+    ptr: *const t4a_simplett_f64,
+    out_data: *mut libc::c_double,
+    buf_len: libc::size_t,
+    out_data_len: *mut libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out_data_len.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let (data, _shape) = tt.inner().fulltensor();
+
+        unsafe { *out_data_len = data.len() };
+
+        if out_data.is_null() {
+            // Query mode
+            return T4A_SUCCESS;
+        }
+
+        if buf_len < data.len() {
+            return T4A_INVALID_ARGUMENT;
+        }
+
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), out_data, data.len());
+        }
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
+// fulltensor — c64
+// ============================================================================
+
+/// Expand the complex tensor train to a dense tensor.
+///
+/// Returns interleaved [re, im, ...] data in column-major order.
+///
+/// # Arguments
+/// * `ptr` - Tensor train handle
+/// * `out_data` - Output buffer for interleaved complex data (NULL to query length)
+/// * `buf_len` - Buffer length (in doubles, i.e. 2 * n_elements)
+/// * `out_data_len` - Actual data length in doubles (2 * n_elements)
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_simplett_c64_fulltensor(
+    ptr: *const t4a_simplett_c64,
+    out_data: *mut libc::c_double,
+    buf_len: libc::size_t,
+    out_data_len: *mut libc::size_t,
+) -> StatusCode {
+    if ptr.is_null() || out_data_len.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tt = unsafe { &*ptr };
+        let (data, _shape) = tt.inner().fulltensor();
+        let n_doubles = 2 * data.len();
+
+        unsafe { *out_data_len = n_doubles };
+
+        if out_data.is_null() {
+            // Query mode
+            return T4A_SUCCESS;
+        }
+
+        if buf_len < n_doubles {
+            return T4A_INVALID_ARGUMENT;
+        }
+
+        for (i, val) in data.iter().enumerate() {
+            unsafe {
+                *out_data.add(2 * i) = val.re;
+                *out_data.add(2 * i + 1) = val.im;
+            }
+        }
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
 #[cfg(test)]
 mod tests;
