@@ -43,6 +43,21 @@ pub type TreeTciEvalCallback = extern "C" fn(
 ) -> i32;
 
 /// Complex evaluation callback for TreeTCI.
+///
+/// Complex64 values are returned as interleaved f64 pairs: `[re0, im0, re1, im1, ...]`.
+/// The `results` buffer must hold `2 * n_points` doubles. For each evaluation point `i`,
+/// write the real part to `results[2*i]` and the imaginary part to `results[2*i + 1]`.
+///
+/// # Arguments
+/// * `batch_data` - Column-major (n_sites, n_points) index array.
+///   Element at (site, point) is at `batch_data[site + n_sites * point]`.
+/// * `n_sites` - Number of sites
+/// * `n_points` - Number of evaluation points
+/// * `results` - Output buffer for `2 * n_points` f64 values (interleaved re/im pairs)
+/// * `user_data` - User data pointer passed through from the calling function
+///
+/// # Returns
+/// 0 on success, non-zero on error
 pub type TreeTciEvalCallbackC64 = extern "C" fn(
     batch_data: *const libc::size_t,
     n_sites: libc::size_t,
@@ -261,6 +276,33 @@ pub extern "C" fn t4a_treetci_f64_release(ptr: *mut t4a_treetci_f64) {
     }
 }
 
+/// Check if the TreeTCI f64 handle is assigned (non-null and dereferenceable).
+///
+/// # Returns
+/// 1 if valid, 0 otherwise
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetci_f64_is_assigned(ptr: *const t4a_treetci_f64) -> i32 {
+    if ptr.is_null() {
+        return 0;
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let _ = &*ptr;
+        1
+    }));
+
+    match result {
+        Ok(v) => v,
+        Err(panic) => {
+            let msg = crate::panic_message(&*panic);
+            crate::set_last_error(&msg);
+            0
+        }
+    }
+}
+
+// Note: t4a_treetci_f64_clone is NOT provided because TreeTCI2 does not implement Clone.
+
 /// Create a new complex TreeTCI state.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetci_c64_new(
@@ -301,6 +343,33 @@ pub extern "C" fn t4a_treetci_c64_release(ptr: *mut t4a_treetci_c64) {
         }
     }
 }
+
+/// Check if the TreeTCI c64 handle is assigned (non-null and dereferenceable).
+///
+/// # Returns
+/// 1 if valid, 0 otherwise
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetci_c64_is_assigned(ptr: *const t4a_treetci_c64) -> i32 {
+    if ptr.is_null() {
+        return 0;
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let _ = &*ptr;
+        1
+    }));
+
+    match result {
+        Ok(v) => v,
+        Err(panic) => {
+            let msg = crate::panic_message(&*panic);
+            crate::set_last_error(&msg);
+            0
+        }
+    }
+}
+
+// Note: t4a_treetci_c64_clone is NOT provided because TreeTCI2 does not implement Clone.
 
 // ============================================================================
 // Pivot management
