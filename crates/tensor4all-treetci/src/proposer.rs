@@ -1,4 +1,4 @@
-use crate::{assemble::MultiIndex, TreeTCI2, SubtreeKey, TreeTciEdge};
+use crate::{assemble::MultiIndex, SubtreeKey, TreeTCI2, TreeTciEdge};
 use anyhow::{ensure, Result};
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;

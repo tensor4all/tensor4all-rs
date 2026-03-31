@@ -1,6 +1,6 @@
 use crate::{
     assemble::{assemble_points_column_major, MultiIndex},
-    assemble_global_point, GlobalIndexBatch, TreeTCI2, SubtreeKey, TreeTciEdge,
+    assemble_global_point, GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
 use faer::prelude::Solve;
@@ -195,11 +195,7 @@ where
     T::solve_right_full_piv_lu(&pi1_values, rows, cols, &p_values, p_rows, cols)
 }
 
-fn site_side_key<T>(
-    state: &TreeTCI2<T>,
-    site: usize,
-    edge: TreeTciEdge,
-) -> Result<SubtreeKey> {
+fn site_side_key<T>(state: &TreeTCI2<T>, site: usize, edge: TreeTciEdge) -> Result<SubtreeKey> {
     let (left_key, right_key) = state.graph.subregion_vertices(edge)?;
     if left_key.as_slice().contains(&site) {
         Ok(left_key)

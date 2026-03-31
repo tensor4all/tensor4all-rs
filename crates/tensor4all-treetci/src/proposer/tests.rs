@@ -1,5 +1,5 @@
 use super::{DefaultProposer, PivotCandidateProposer, SimpleProposer, TruncatedDefaultProposer};
-use crate::{AllEdges, EdgeVisitor, TreeTCI2, SubtreeKey, TreeTciEdge, TreeTciGraph};
+use crate::{AllEdges, EdgeVisitor, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use std::collections::HashMap;
 use tensor4all_core::ColMajorArray;
 

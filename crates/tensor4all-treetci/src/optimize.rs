@@ -1,6 +1,5 @@
 use crate::{
-    update::update_edge, AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer,
-    TreeTCI2,
+    update::update_edge, AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
 };
 use anyhow::{ensure, Result};
 use tensor4all_tcicore::{

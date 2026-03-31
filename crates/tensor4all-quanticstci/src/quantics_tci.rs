@@ -10,11 +10,10 @@ use rand::Rng;
 use tensor4all_core::TensorDynLen;
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TTScalar, TensorTrain};
 use tensor4all_tcicore::{DenseFaerLuKernel, PivotKernel};
-use tensor4all_treetci::{
-    DefaultProposer, GlobalIndexBatch, TreeTCI2, TreeTciGraph,
-    optimize_with_proposer,
-};
 use tensor4all_treetci::materialize::{to_treetn, FullPivLuScalar};
+use tensor4all_treetci::{
+    optimize_with_proposer, DefaultProposer, GlobalIndexBatch, TreeTCI2, TreeTciGraph,
+};
 
 use crate::options::QtciOptions;
 
@@ -418,8 +417,7 @@ where
         "initial pivots must not all evaluate to zero"
     );
 
-    let (ranks, errors) =
-        optimize_with_proposer(&mut tci, &batch_eval, &tree_opts, &proposer)?;
+    let (ranks, errors) = optimize_with_proposer(&mut tci, &batch_eval, &tree_opts, &proposer)?;
     let treetn = to_treetn(&tci, &batch_eval, Some(0))?;
 
     // Convert TreeTN → TensorTrain<V>
@@ -659,8 +657,7 @@ where
         "initial pivots must not all evaluate to zero"
     );
 
-    let (ranks, errors) =
-        optimize_with_proposer(&mut tci, &batch_eval, &tree_opts, &proposer)?;
+    let (ranks, errors) = optimize_with_proposer(&mut tci, &batch_eval, &tree_opts, &proposer)?;
     let treetn = to_treetn(&tci, &batch_eval, Some(0))?;
 
     // Convert TreeTN → TensorTrain<V>

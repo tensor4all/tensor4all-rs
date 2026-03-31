@@ -1,7 +1,7 @@
 use super::{cartesian_entries, to_treetn, FullPivLuScalar};
 use crate::test_support::{assert_complex_slice_close, assert_scalar_close};
 use crate::{
-    optimize_default, GlobalIndexBatch, TreeTCI2, SubtreeKey, TreeTciEdge, TreeTciGraph,
+    optimize_default, GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph,
     TreeTciOptions,
 };
 use anyhow::Result;
