@@ -374,7 +374,7 @@ fn test_simplett_c64_constant_accessors_and_site_tensor() {
             tt,
             1,
             tensor_data.as_mut_ptr(),
-            3,
+            6,
             &mut left_dim,
             &mut site_dim,
             &mut right_dim,
