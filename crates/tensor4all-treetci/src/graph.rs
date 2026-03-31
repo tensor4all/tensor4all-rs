@@ -274,6 +274,17 @@ impl TreeTciGraph {
         }
     }
 
+    /// Create a linear chain graph: 0—1—2—…—(n-1).
+    pub fn linear_chain(n_sites: usize) -> Result<Self> {
+        if n_sites == 0 {
+            return Err(anyhow!("linear_chain requires at least 1 site"));
+        }
+        let edges: Vec<TreeTciEdge> = (0..n_sites.saturating_sub(1))
+            .map(|i| TreeTciEdge::new(i, i + 1))
+            .collect();
+        Self::new(n_sites, &edges)
+    }
+
     fn collect_edge_distances_from_root(
         &self,
         root: usize,
