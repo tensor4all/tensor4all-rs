@@ -759,6 +759,111 @@ impl From<tensor4all_quanticstransform::BoundaryCondition> for t4a_boundary_cond
 }
 
 // ============================================================================
+// QtciOptions type
+// ============================================================================
+
+/// Opaque QtciOptions type for C API
+///
+/// Wraps `QtciOptions` which controls the behavior of quantics TCI
+/// cross-interpolation (tolerance, max bond dimension, etc.).
+///
+/// **Mutable type**: setters modify in-place.
+#[repr(C)]
+pub struct t4a_qtci_options {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_qtci_options {
+    /// Create a new t4a_qtci_options from a QtciOptions
+    pub(crate) fn new(opts: tensor4all_quanticstci::QtciOptions) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(opts)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner QtciOptions
+    pub(crate) fn inner(&self) -> &tensor4all_quanticstci::QtciOptions {
+        unsafe { &*(self._private as *const tensor4all_quanticstci::QtciOptions) }
+    }
+
+    /// Get a mutable reference to the inner QtciOptions
+    pub(crate) fn inner_mut(&mut self) -> &mut tensor4all_quanticstci::QtciOptions {
+        unsafe { &mut *(self._private as *mut tensor4all_quanticstci::QtciOptions) }
+    }
+}
+
+impl Clone for t4a_qtci_options {
+    fn clone(&self) -> Self {
+        Self::new(self.inner().clone())
+    }
+}
+
+impl Drop for t4a_qtci_options {
+    fn drop(&mut self) {
+        if !self._private.is_null() {
+            unsafe {
+                let _ = Box::from_raw(self._private as *mut tensor4all_quanticstci::QtciOptions);
+            }
+        }
+    }
+}
+
+// Safety: QtciOptions is Send + Sync (all fields are plain data)
+unsafe impl Send for t4a_qtci_options {}
+unsafe impl Sync for t4a_qtci_options {}
+
+// ============================================================================
+// QuanticsTCI c64 type
+// ============================================================================
+
+/// The internal QuanticsTensorCI2<Complex64> type we're wrapping.
+pub(crate) type InternalQuanticsTCIC64 = QuanticsTensorCI2<Complex64>;
+
+/// Opaque quantics TCI type for C API (complex64)
+///
+/// Wraps `QuanticsTensorCI2<Complex64>`.
+///
+/// The internal structure is hidden using a void pointer.
+#[repr(C)]
+pub struct t4a_qtci_c64 {
+    pub(crate) _private: *const c_void,
+}
+
+impl t4a_qtci_c64 {
+    /// Create a new t4a_qtci_c64 from an InternalQuanticsTCIC64
+    pub(crate) fn new(qtci: InternalQuanticsTCIC64) -> Self {
+        Self {
+            _private: Box::into_raw(Box::new(qtci)) as *const c_void,
+        }
+    }
+
+    /// Get a reference to the inner InternalQuanticsTCIC64
+    pub(crate) fn inner(&self) -> &InternalQuanticsTCIC64 {
+        unsafe { &*(self._private as *const InternalQuanticsTCIC64) }
+    }
+}
+
+impl Clone for t4a_qtci_c64 {
+    fn clone(&self) -> Self {
+        Self::new(self.inner().clone())
+    }
+}
+
+impl Drop for t4a_qtci_c64 {
+    fn drop(&mut self) {
+        if !self._private.is_null() {
+            unsafe {
+                let _ = Box::from_raw(self._private as *mut InternalQuanticsTCIC64);
+            }
+        }
+    }
+}
+
+// Safety: t4a_qtci_c64 is Send + Sync because InternalQuanticsTCIC64 is Send + Sync
+unsafe impl Send for t4a_qtci_c64 {}
+unsafe impl Sync for t4a_qtci_c64 {}
+
+// ============================================================================
 // TreeTCI types
 // ============================================================================
 

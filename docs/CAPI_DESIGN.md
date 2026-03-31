@@ -59,6 +59,8 @@ Every opaque type must be classified as either **Immutable** or **Mutable**:
 | `t4a_qgrid_int` | Immutable | `InherentDiscreteGrid` | Yes (cheap) | No | |
 | `t4a_linop` | Immutable | `LinearOperator<TensorDynLen, usize>` | Yes (cheap) | No | |
 | `t4a_qtci_f64` | Immutable | `QuanticsTensorCI2<f64>` | Yes (deep) | No | Clone possible (`QuanticsTensorCI2` derives `Clone`) |
+| `t4a_qtci_c64` | Immutable | `QuanticsTensorCI2<Complex64>` | Yes (deep) | No | Clone possible (`QuanticsTensorCI2` derives `Clone`) |
+| `t4a_qtci_options` | Mutable | `QtciOptions` | Yes (deep) | Yes | Setters modify in-place |
 | `t4a_treetn` | Mutable | `DefaultTreeTN<usize>` | Yes (deep) | Yes | Orthogonalization, truncation |
 | `t4a_treetci_f64` | Mutable | `TreeTCI2<f64>` | Yes (deep) | Yes | Clone possible (`TreeTCI2` derives `Clone`) |
 | `t4a_treetci_c64` | Mutable | `TreeTCI2<Complex64>` | Yes (deep) | Yes | Clone possible (`TreeTCI2` derives `Clone`) |
@@ -89,7 +91,9 @@ Prefer `impl_opaque_type_common!` macro which generates all three. When `Clone` 
 | `t4a_treetci_graph` | Yes | Yes | Yes | `impl_opaque_type_common!` |
 | `t4a_simplett_f64` | Yes | Yes | Yes | Manual impl |
 | `t4a_simplett_c64` | Yes | Yes | Yes | Manual impl |
-| `t4a_qtci_f64` | Yes | -- | Yes | Clone possible: `QuanticsTensorCI2` derives `Clone` (impl pending) |
+| `t4a_qtci_f64` | Yes | Yes | Yes | Manual impl |
+| `t4a_qtci_c64` | Yes | Yes | Yes | Manual impl |
+| `t4a_qtci_options` | Yes | Yes | Yes | Manual impl |
 | `t4a_treetci_f64` | Yes | -- | Yes | Clone possible: `TreeTCI2` derives `Clone` (impl pending) |
 | `t4a_treetci_c64` | Yes | -- | Yes | Clone possible: `TreeTCI2` derives `Clone` (impl pending) |
 
