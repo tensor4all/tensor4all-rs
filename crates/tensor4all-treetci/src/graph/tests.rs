@@ -70,3 +70,29 @@ fn tree_graph_utils_match_julia_reference_tree() {
         ])
     );
 }
+
+#[test]
+fn test_linear_chain() {
+    let graph = TreeTciGraph::linear_chain(5).unwrap();
+    assert_eq!(graph.n_sites(), 5);
+    let edges = graph.edges();
+    assert_eq!(edges.len(), 4);
+    assert_eq!(edges[0], TreeTciEdge::new(0, 1));
+    assert_eq!(edges[1], TreeTciEdge::new(1, 2));
+    assert_eq!(edges[2], TreeTciEdge::new(2, 3));
+    assert_eq!(edges[3], TreeTciEdge::new(3, 4));
+}
+
+#[test]
+fn test_linear_chain_single_site() {
+    let graph = TreeTciGraph::linear_chain(1).unwrap();
+    assert_eq!(graph.n_sites(), 1);
+    assert_eq!(graph.edges().len(), 0);
+}
+
+#[test]
+fn test_linear_chain_two_sites() {
+    let graph = TreeTciGraph::linear_chain(2).unwrap();
+    assert_eq!(graph.n_sites(), 2);
+    assert_eq!(graph.edges().len(), 1);
+}

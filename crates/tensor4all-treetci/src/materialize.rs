@@ -1,6 +1,6 @@
 use crate::{
     assemble::{assemble_points_column_major, MultiIndex},
-    assemble_global_point, GlobalIndexBatch, SimpleTreeTci, SubtreeKey, TreeTciEdge,
+    assemble_global_point, GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
 use faer::prelude::Solve;
@@ -75,7 +75,7 @@ impl_full_piv_lu_scalar!(Complex64);
 
 /// Materialize a converged TreeTCI state as a `TreeTN`.
 pub fn to_treetn<T, F>(
-    state: &SimpleTreeTci<T>,
+    state: &TreeTCI2<T>,
     evaluate: F,
     center_site: Option<usize>,
 ) -> Result<TreeTN<TensorDynLen, usize>>
@@ -151,7 +151,7 @@ where
 }
 
 fn site_tensor_with_parent<T, F>(
-    state: &SimpleTreeTci<T>,
+    state: &TreeTCI2<T>,
     site: usize,
     parent_edge: TreeTciEdge,
     in_keys: &[SubtreeKey],
@@ -195,11 +195,7 @@ where
     T::solve_right_full_piv_lu(&pi1_values, rows, cols, &p_values, p_rows, cols)
 }
 
-fn site_side_key<T>(
-    state: &SimpleTreeTci<T>,
-    site: usize,
-    edge: TreeTciEdge,
-) -> Result<SubtreeKey> {
+fn site_side_key<T>(state: &TreeTCI2<T>, site: usize, edge: TreeTciEdge) -> Result<SubtreeKey> {
     let (left_key, right_key) = state.graph.subregion_vertices(edge)?;
     if left_key.as_slice().contains(&site) {
         Ok(left_key)
@@ -214,7 +210,7 @@ fn site_side_key<T>(
     }
 }
 
-fn product_pivot_dims<T>(state: &SimpleTreeTci<T>, keys: &[SubtreeKey]) -> Result<usize> {
+fn product_pivot_dims<T>(state: &TreeTCI2<T>, keys: &[SubtreeKey]) -> Result<usize> {
     let mut product = 1usize;
     for key in keys {
         let dim = state
@@ -228,7 +224,7 @@ fn product_pivot_dims<T>(state: &SimpleTreeTci<T>, keys: &[SubtreeKey]) -> Resul
 }
 
 fn fill_tensor_values<T, F>(
-    state: &SimpleTreeTci<T>,
+    state: &TreeTCI2<T>,
     in_keys: &[SubtreeKey],
     out_keys: &[SubtreeKey],
     central_sites: &[usize],

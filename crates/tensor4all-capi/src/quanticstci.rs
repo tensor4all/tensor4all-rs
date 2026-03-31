@@ -374,10 +374,8 @@ pub extern "C" fn t4a_qtci_f64_to_tensor_train(
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         let qtci = unsafe { &*ptr };
-        match qtci.inner().tensor_train() {
-            Ok(tt) => Box::into_raw(Box::new(crate::simplett::t4a_simplett_f64::new(tt))),
-            Err(e) => crate::err_null(e),
-        }
+        let tt = qtci.inner().tensor_train();
+        Box::into_raw(Box::new(crate::simplett::t4a_simplett_f64::new(tt)))
     }));
 
     crate::unwrap_catch_ptr(result)

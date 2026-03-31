@@ -710,7 +710,7 @@ impl From<tensor4all_quanticstransform::BoundaryCondition> for t4a_boundary_cond
 // TreeTCI types
 // ============================================================================
 
-use tensor4all_treetci::{SimpleTreeTci, TreeTciGraph};
+use tensor4all_treetci::{TreeTCI2, TreeTciGraph};
 
 /// Opaque tree graph type for TreeTCI
 #[repr(C)]
@@ -756,18 +756,18 @@ pub struct t4a_treetci_f64 {
 }
 
 impl t4a_treetci_f64 {
-    pub(crate) fn new(inner: SimpleTreeTci<f64>) -> Self {
+    pub(crate) fn new(inner: TreeTCI2<f64>) -> Self {
         Self {
             _private: Box::into_raw(Box::new(inner)) as *const c_void,
         }
     }
 
-    pub(crate) fn inner(&self) -> &SimpleTreeTci<f64> {
-        unsafe { &*(self._private as *const SimpleTreeTci<f64>) }
+    pub(crate) fn inner(&self) -> &TreeTCI2<f64> {
+        unsafe { &*(self._private as *const TreeTCI2<f64>) }
     }
 
-    pub(crate) fn inner_mut(&mut self) -> &mut SimpleTreeTci<f64> {
-        unsafe { &mut *(self._private as *mut SimpleTreeTci<f64>) }
+    pub(crate) fn inner_mut(&mut self) -> &mut TreeTCI2<f64> {
+        unsafe { &mut *(self._private as *mut TreeTCI2<f64>) }
     }
 }
 
@@ -775,13 +775,13 @@ impl Drop for t4a_treetci_f64 {
     fn drop(&mut self) {
         if !self._private.is_null() {
             unsafe {
-                let _ = Box::from_raw(self._private as *mut SimpleTreeTci<f64>);
+                let _ = Box::from_raw(self._private as *mut TreeTCI2<f64>);
             }
         }
     }
 }
 
-// No Clone — SimpleTreeTci does not implement Clone
+// No Clone — TreeTCI2 does not implement Clone
 unsafe impl Send for t4a_treetci_f64 {}
 unsafe impl Sync for t4a_treetci_f64 {}
 
@@ -792,18 +792,18 @@ pub struct t4a_treetci_c64 {
 }
 
 impl t4a_treetci_c64 {
-    pub(crate) fn new(inner: SimpleTreeTci<Complex64>) -> Self {
+    pub(crate) fn new(inner: TreeTCI2<Complex64>) -> Self {
         Self {
             _private: Box::into_raw(Box::new(inner)) as *const c_void,
         }
     }
 
-    pub(crate) fn inner(&self) -> &SimpleTreeTci<Complex64> {
-        unsafe { &*(self._private as *const SimpleTreeTci<Complex64>) }
+    pub(crate) fn inner(&self) -> &TreeTCI2<Complex64> {
+        unsafe { &*(self._private as *const TreeTCI2<Complex64>) }
     }
 
-    pub(crate) fn inner_mut(&mut self) -> &mut SimpleTreeTci<Complex64> {
-        unsafe { &mut *(self._private as *mut SimpleTreeTci<Complex64>) }
+    pub(crate) fn inner_mut(&mut self) -> &mut TreeTCI2<Complex64> {
+        unsafe { &mut *(self._private as *mut TreeTCI2<Complex64>) }
     }
 }
 
@@ -811,7 +811,7 @@ impl Drop for t4a_treetci_c64 {
     fn drop(&mut self) {
         if !self._private.is_null() {
             unsafe {
-                let _ = Box::from_raw(self._private as *mut SimpleTreeTci<Complex64>);
+                let _ = Box::from_raw(self._private as *mut TreeTCI2<Complex64>);
             }
         }
     }

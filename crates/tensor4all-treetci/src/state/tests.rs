@@ -1,4 +1,4 @@
-use super::SimpleTreeTci;
+use super::TreeTCI2;
 use crate::{SubtreeKey, TreeTciEdge, TreeTciGraph};
 use tensor4all_core::ColMajorArray;
 
@@ -19,13 +19,13 @@ fn sample_graph() -> TreeTciGraph {
 
 #[test]
 fn simple_tree_tci_requires_local_dims_to_match_graph_size() {
-    let result = SimpleTreeTci::<f64>::new(vec![2; 6], sample_graph());
+    let result = TreeTCI2::<f64>::new(vec![2; 6], sample_graph());
     assert!(result.is_err());
 }
 
 #[test]
 fn add_global_pivots_projects_to_each_edge_bipartition() {
-    let mut tci = SimpleTreeTci::<f64>::new(vec![2; 7], sample_graph()).unwrap();
+    let mut tci = TreeTCI2::<f64>::new(vec![2; 7], sample_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0, 0, 0, 0, 0, 0], vec![1, 0, 1, 0, 1, 0, 1]])
         .unwrap();
 

@@ -1,7 +1,7 @@
 use super::{cartesian_entries, to_treetn, FullPivLuScalar};
 use crate::test_support::{assert_complex_slice_close, assert_scalar_close};
 use crate::{
-    optimize_default, GlobalIndexBatch, SimpleTreeTci, SubtreeKey, TreeTciEdge, TreeTciGraph,
+    optimize_default, GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph,
     TreeTciOptions,
 };
 use anyhow::Result;
@@ -15,7 +15,7 @@ fn two_site_graph() -> TreeTciGraph {
 
 #[test]
 fn to_treetn_preserves_two_site_identity_evaluations() {
-    let mut tci = SimpleTreeTci::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0]]).unwrap();
 
     let batch_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {

@@ -1,6 +1,6 @@
 use super::{optimize_default, TreeTciOptions};
 use crate::test_support::assert_scalar_close;
-use crate::{GlobalIndexBatch, SimpleTreeTci, TreeTciEdge, TreeTciGraph};
+use crate::{GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
 
 fn two_site_graph() -> TreeTciGraph {
@@ -9,7 +9,7 @@ fn two_site_graph() -> TreeTciGraph {
 
 #[test]
 fn optimize_default_converges_on_two_site_identity() {
-    let mut tci = SimpleTreeTci::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0]]).unwrap();
 
     let batch_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
@@ -46,7 +46,7 @@ fn optimize_default_converges_on_two_site_identity() {
 
 #[test]
 fn optimize_default_runs_all_iterations_like_upstream_tree_tci() {
-    let mut tci = SimpleTreeTci::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0]]).unwrap();
 
     let batch_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {

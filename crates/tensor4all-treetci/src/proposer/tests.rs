@@ -1,5 +1,5 @@
 use super::{DefaultProposer, PivotCandidateProposer, SimpleProposer, TruncatedDefaultProposer};
-use crate::{AllEdges, EdgeVisitor, SimpleTreeTci, SubtreeKey, TreeTciEdge, TreeTciGraph};
+use crate::{AllEdges, EdgeVisitor, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use std::collections::HashMap;
 use tensor4all_core::ColMajorArray;
 
@@ -20,7 +20,7 @@ fn sample_graph() -> TreeTciGraph {
 
 #[test]
 fn all_edges_visits_all_edges_in_sorted_order() {
-    let tci = SimpleTreeTci::<f64>::new(vec![2; 7], sample_graph()).unwrap();
+    let tci = TreeTCI2::<f64>::new(vec![2; 7], sample_graph()).unwrap();
     assert_eq!(
         AllEdges.visit_order(&tci),
         vec![
@@ -36,7 +36,7 @@ fn all_edges_visits_all_edges_in_sorted_order() {
 
 #[test]
 fn default_proposer_matches_neighbor_product_assembly() {
-    let mut tci = SimpleTreeTci::<f64>::new(vec![2; 7], sample_graph()).unwrap();
+    let mut tci = TreeTCI2::<f64>::new(vec![2; 7], sample_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0, 0, 0, 0, 0, 0], vec![1, 0, 1, 0, 1, 0, 1]])
         .unwrap();
 
@@ -70,7 +70,7 @@ fn default_proposer_matches_neighbor_product_assembly() {
 
 #[test]
 fn default_proposer_unions_history_candidates() {
-    let mut tci = SimpleTreeTci::<f64>::new(vec![2; 7], sample_graph()).unwrap();
+    let mut tci = TreeTCI2::<f64>::new(vec![2; 7], sample_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0, 0, 0, 0, 0, 0], vec![1, 0, 1, 0, 1, 0, 1]])
         .unwrap();
     // History entry: ColMajorArray shape [4, 1], single column [1, 1, 1, 1]
@@ -88,7 +88,7 @@ fn default_proposer_unions_history_candidates() {
 
 #[test]
 fn simple_proposer_is_deterministic_for_a_fixed_seed() {
-    let mut tci = SimpleTreeTci::<f64>::new(vec![2; 7], sample_graph()).unwrap();
+    let mut tci = TreeTCI2::<f64>::new(vec![2; 7], sample_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0, 0, 0, 0, 0, 0], vec![1, 0, 1, 0, 1, 0, 1]])
         .unwrap();
 
@@ -105,7 +105,7 @@ fn simple_proposer_is_deterministic_for_a_fixed_seed() {
 
 #[test]
 fn truncated_default_proposer_truncates_default_candidates_in_order() {
-    let mut tci = SimpleTreeTci::<f64>::new(vec![2; 7], sample_graph()).unwrap();
+    let mut tci = TreeTCI2::<f64>::new(vec![2; 7], sample_graph()).unwrap();
     tci.add_global_pivots(&[vec![0, 0, 0, 0, 0, 0, 0], vec![1, 0, 1, 0, 1, 0, 1]])
         .unwrap();
 

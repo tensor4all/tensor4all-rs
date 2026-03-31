@@ -6,7 +6,7 @@ use tensor4all_core::ColMajorArray;
 
 /// TreeTCI state mirroring the upstream `SimpleTCI` layout.
 #[derive(Clone, Debug)]
-pub struct SimpleTreeTci<T> {
+pub struct TreeTCI2<T> {
     /// Pivot sets keyed by canonical subtree keys.
     /// Shape of each entry: [n_subtree_sites, n_pivots].
     pub ijset: HashMap<SubtreeKey, ColMajorArray<usize>>,
@@ -25,7 +25,11 @@ pub struct SimpleTreeTci<T> {
     marker: PhantomData<T>,
 }
 
-impl<T> SimpleTreeTci<T> {
+/// Deprecated alias for `TreeTCI2`.
+#[deprecated(note = "use TreeTCI2")]
+pub type SimpleTreeTci<T> = TreeTCI2<T>;
+
+impl<T> TreeTCI2<T> {
     /// Create a new TreeTCI state from local dimensions and a tree graph.
     pub fn new(local_dims: Vec<usize>, graph: TreeTciGraph) -> Result<Self> {
         ensure!(
