@@ -7,20 +7,24 @@ use std::rc::Rc;
 use anyhow::{anyhow, Result};
 use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid};
 use rand::Rng;
-use tensor4all_simplett::{AbstractTensorTrain, TTScalar, TensorTrain};
-use tensor4all_tcicore::{DenseFaerLuKernel, LazyBlockRookKernel, PivotKernel};
-use tensor4all_tensorci::Scalar;
-use tensor4all_tensorci::{crossinterpolate2, TensorCI2};
+use tensor4all_core::TensorDynLen;
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, TTScalar, TensorTrain};
+use tensor4all_tcicore::{DenseFaerLuKernel, PivotKernel};
+use tensor4all_treetci::{
+    crossinterpolate2 as treetci_crossinterpolate2, DefaultProposer, GlobalIndexBatch,
+    TreeTciGraph,
+};
+use tensor4all_treetci::materialize::FullPivLuScalar;
 
 use crate::options::QtciOptions;
 
 /// TCI result wrapped with grid information.
 ///
-/// This struct combines a TensorCI2 result with grid information for
+/// This struct combines a TensorTrain result with grid information for
 /// seamless conversion between grid indices and quantics indices.
-pub struct QuanticsTensorCI2<V: Scalar + TTScalar> {
-    /// Underlying TCI result
-    tci: TensorCI2<V>,
+pub struct QuanticsTensorCI2<V: TTScalar> {
+    /// Underlying tensor train
+    tt: TensorTrain<V>,
     /// Grid for coordinate conversion (DiscretizedGrid)
     discretized_grid: Option<DiscretizedGrid>,
     /// Grid for coordinate conversion (InherentDiscreteGrid)
@@ -31,41 +35,34 @@ pub struct QuanticsTensorCI2<V: Scalar + TTScalar> {
 
 impl<V> QuanticsTensorCI2<V>
 where
-    V: Scalar + TTScalar + Default + Clone + tensor4all_tcicore::MatrixLuciScalar,
-    DenseFaerLuKernel: PivotKernel<V>,
-    LazyBlockRookKernel: PivotKernel<V>,
+    V: TTScalar + Default + Clone,
 {
-    /// Create a new QuanticsTensorCI2 from TCI result and discretized grid.
+    /// Create a new QuanticsTensorCI2 from a TensorTrain and discretized grid.
     pub fn from_discretized(
-        tci: TensorCI2<V>,
+        tt: TensorTrain<V>,
         grid: DiscretizedGrid,
         cache: HashMap<Vec<i64>, V>,
     ) -> Self {
         Self {
-            tci,
+            tt,
             discretized_grid: Some(grid),
             inherent_grid: None,
             cache,
         }
     }
 
-    /// Create a new QuanticsTensorCI2 from TCI result and inherent discrete grid.
+    /// Create a new QuanticsTensorCI2 from a TensorTrain and inherent discrete grid.
     pub fn from_inherent(
-        tci: TensorCI2<V>,
+        tt: TensorTrain<V>,
         grid: InherentDiscreteGrid,
         cache: HashMap<Vec<i64>, V>,
     ) -> Self {
         Self {
-            tci,
+            tt,
             discretized_grid: None,
             inherent_grid: Some(grid),
             cache,
         }
-    }
-
-    /// Get the underlying TensorCI2.
-    pub fn tci(&self) -> &TensorCI2<V> {
-        &self.tci
     }
 
     /// Get the discretized grid (if available).
@@ -80,12 +77,12 @@ where
 
     /// Get the bond dimension (maximum rank).
     pub fn rank(&self) -> usize {
-        self.tci.rank()
+        self.tt.rank()
     }
 
     /// Get link dimensions.
     pub fn link_dims(&self) -> Vec<usize> {
-        self.tci.link_dims()
+        self.tt.link_dims()
     }
 
     /// Convert grid indices to quantics indices.
@@ -110,10 +107,10 @@ where
     /// Value at the specified grid point
     pub fn evaluate(&self, indices: &[i64]) -> Result<V> {
         let quantics = self.grididx_to_quantics(indices)?;
-        let tt = self.tci.to_tensor_train()?;
         // Convert 1-indexed i64 quantics to 0-indexed usize for tensor train evaluation
         let quantics_usize: Vec<usize> = quantics.iter().map(|&x| (x - 1) as usize).collect();
-        tt.evaluate(&quantics_usize)
+        self.tt
+            .evaluate(&quantics_usize)
             .map_err(|e| anyhow!("Evaluation error: {}", e))
     }
 
@@ -121,8 +118,7 @@ where
     ///
     /// This computes the sum efficiently using the tensor train structure.
     pub fn sum(&self) -> Result<V> {
-        let tt = self.tci.to_tensor_train()?;
-        Ok(tt.sum())
+        Ok(self.tt.sum())
     }
 
     /// Integral over continuous domain (left Riemann sum).
@@ -147,8 +143,8 @@ where
     }
 
     /// Get the underlying TensorTrain.
-    pub fn tensor_train(&self) -> Result<TensorTrain<V>> {
-        Ok(self.tci.to_tensor_train()?)
+    pub fn tensor_train(&self) -> TensorTrain<V> {
+        self.tt.clone()
     }
 
     /// Access cached evaluation points.
@@ -184,6 +180,111 @@ where
     }
 }
 
+/// Convert a linear-chain TreeTN to a SimpleTT TensorTrain.
+///
+/// The TreeTN must have been produced by treetci::crossinterpolate2 with a
+/// linear chain graph and center_site=0. Nodes are numbered 0..n-1.
+///
+/// TreeTN tensors from `to_treetn` have index order:
+///   [site_dim, incoming_bond_dims..., outgoing_bond_dims...]
+/// where incoming = children, outgoing = parent in BFS from root=0.
+///
+/// For a linear chain rooted at 0:
+///   - Node 0 (root): [site, bond_01]
+///   - Node k (middle): [site, bond_{k,k+1}, bond_{k-1,k}]
+///   - Node n-1 (leaf): [site, bond_{n-2,n-1}]
+///
+/// For SimpleTT we need (left_bond, site_dim, right_bond).
+fn treetn_to_tensor_train<V>(
+    treetn: &tensor4all_treetn::TreeTN<TensorDynLen, usize>,
+    n_sites: usize,
+    local_dims: &[usize],
+) -> Result<TensorTrain<V>>
+where
+    V: TTScalar + Default + Clone + tensor4all_core::TensorElement,
+{
+    let mut tensors = Vec::with_capacity(n_sites);
+
+    for site in 0..n_sites {
+        let node_idx = treetn
+            .node_index(&site)
+            .ok_or_else(|| anyhow!("node {} not found in TreeTN", site))?;
+        let tensor = treetn
+            .tensor(node_idx)
+            .ok_or_else(|| anyhow!("tensor not found at node {}", site))?;
+
+        let dims = tensor.dims();
+        let data: Vec<V> = tensor
+            .to_vec::<V>()
+            .map_err(|e| anyhow!("failed to extract tensor data at node {}: {}", site, e))?;
+        let site_dim = local_dims[site];
+
+        if n_sites == 1 {
+            // Single site: tensor has only site index, shape (site_dim,)
+            // Need: (1, site_dim, 1)
+            tensors.push(tensor3_from_data(data, 1, site_dim, 1));
+        } else if site == 0 {
+            // Root (leftmost): indices = [site, bond_01]
+            // Data is column-major with shape (site_dim, bond_dim)
+            // Need: (1, site_dim, bond_dim)
+            assert_eq!(dims.len(), 2, "root node should have 2 indices");
+            let bond_dim = dims[1];
+            // Column-major (site, bond): data[s + site_dim * b]
+            // Target (1, site, bond): data[0 + 1*(s + site_dim * b)] — same layout
+            tensors.push(tensor3_from_data(data, 1, site_dim, bond_dim));
+        } else if site == n_sites - 1 {
+            // Leaf (rightmost): indices = [site, bond_{n-2,n-1}]
+            // Data is column-major with shape (site_dim, left_bond)
+            // Need: (left_bond, site_dim, 1)
+            assert_eq!(dims.len(), 2, "leaf node should have 2 indices");
+            let left_bond = dims[1];
+            // Permute: (site, left) → (left, site)
+            let mut permuted = vec![V::default(); data.len()];
+            for l in 0..left_bond {
+                for s in 0..site_dim {
+                    permuted[l + left_bond * s] = data[s + site_dim * l];
+                }
+            }
+            tensors.push(tensor3_from_data(permuted, left_bond, site_dim, 1));
+        } else {
+            // Middle node: indices = [site, bond_{k,k+1}, bond_{k-1,k}]
+            // Data is column-major with shape (site_dim, right_bond, left_bond)
+            // Need: (left_bond, site_dim, right_bond)
+            assert_eq!(dims.len(), 3, "middle node should have 3 indices");
+            let right_bond = dims[1];
+            let left_bond = dims[2];
+            let total = data.len();
+            assert_eq!(
+                total,
+                site_dim * right_bond * left_bond,
+                "data size mismatch for middle node {}: expected {}*{}*{}={}, got {}",
+                site,
+                site_dim,
+                right_bond,
+                left_bond,
+                site_dim * right_bond * left_bond,
+                total
+            );
+            // Permute: (site, right, left) → (left, site, right)
+            // Source col-major: data[s + site_dim * (r + right_bond * l)]
+            // Target col-major: permuted[l + left_bond * (s + site_dim * r)]
+            let mut permuted = vec![V::default(); total];
+            for l in 0..left_bond {
+                for s in 0..site_dim {
+                    for r in 0..right_bond {
+                        let src = s + site_dim * (r + right_bond * l);
+                        let dst = l + left_bond * (s + site_dim * r);
+                        permuted[dst] = data[src];
+                    }
+                }
+            }
+            tensors.push(tensor3_from_data(permuted, left_bond, site_dim, right_bond));
+        }
+    }
+
+    TensorTrain::new(tensors).map_err(|e| anyhow!("Failed to build TensorTrain: {}", e))
+}
+
 /// Interpolate a function with an explicit Grid.
 ///
 /// # Arguments
@@ -201,12 +302,12 @@ pub fn quanticscrossinterpolate<V, F>(
     options: QtciOptions,
 ) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
-    V: Scalar + TTScalar + Default + Clone + 'static + tensor4all_tcicore::MatrixLuciScalar,
+    V: TTScalar + Default + Clone + 'static + tensor4all_core::TensorElement + FullPivLuScalar,
     DenseFaerLuKernel: PivotKernel<V>,
-    LazyBlockRookKernel: PivotKernel<V>,
     F: Fn(&[f64]) -> V + 'static,
 {
     let local_dims = grid.local_dimensions();
+    let n_sites = local_dims.len();
 
     // Use RefCell to allow mutation from within the closure
     let cache: Rc<RefCell<HashMap<Vec<i64>, V>>> = Rc::new(RefCell::new(HashMap::new()));
@@ -242,6 +343,20 @@ where
         value
     };
 
+    // Batch adapter: treetci expects Fn(GlobalIndexBatch) -> Result<Vec<V>>
+    let batch_eval = move |batch: GlobalIndexBatch<'_>| -> Result<Vec<V>> {
+        let n_points = batch.n_points();
+        let n = batch.n_sites();
+        let mut results = Vec::with_capacity(n_points);
+        for p in 0..n_points {
+            let point: Vec<usize> = (0..n)
+                .map(|s| batch.get(s, p).expect("valid batch index"))
+                .collect();
+            results.push(qf(&point));
+        }
+        Ok(results)
+    };
+
     // Prepare initial pivots
     let mut qinitialpivots: Vec<Vec<usize>> = if let Some(pivots) = initial_pivots {
         pivots
@@ -255,7 +370,7 @@ where
             .collect()
     } else {
         // Default to first grid point (0-indexed for TCI)
-        vec![vec![0; local_dims.len()]]
+        vec![vec![0; n_sites]]
     };
 
     // Add random initial pivots (0-indexed for TCI)
@@ -265,15 +380,22 @@ where
         qinitialpivots.push(pivot);
     }
 
-    // Run TCI
-    let tci_opts = options.to_tci2_options();
-    let (tci, ranks, errors) = crossinterpolate2(
-        qf,
-        None::<fn(&[Vec<usize>]) -> Vec<V>>,
-        local_dims,
+    // Run TreeTCI with linear chain
+    let graph = TreeTciGraph::linear_chain(n_sites)?;
+    let tree_opts = options.to_treetci_options();
+    let proposer = DefaultProposer;
+    let (treetn, ranks, errors) = treetci_crossinterpolate2::<V, _, _>(
+        batch_eval,
+        local_dims.clone(),
+        graph,
         qinitialpivots,
-        tci_opts,
+        tree_opts,
+        Some(0), // center_site = 0 (root at left end)
+        &proposer,
     )?;
+
+    // Convert TreeTN → TensorTrain<V>
+    let tt = treetn_to_tensor_train::<V>(&treetn, n_sites, &local_dims)?;
 
     // Extract cache
     let final_cache = Rc::try_unwrap(cache)
@@ -281,7 +403,7 @@ where
         .into_inner();
 
     Ok((
-        QuanticsTensorCI2::from_discretized(tci, grid.clone(), final_cache),
+        QuanticsTensorCI2::from_discretized(tt, grid.clone(), final_cache),
         ranks,
         errors,
     ))
@@ -308,9 +430,8 @@ pub fn quanticscrossinterpolate_from_arrays<V, F>(
     options: QtciOptions,
 ) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
-    V: Scalar + TTScalar + Default + Clone + 'static + tensor4all_tcicore::MatrixLuciScalar,
+    V: TTScalar + Default + Clone + 'static + tensor4all_core::TensorElement + FullPivLuScalar,
     DenseFaerLuKernel: PivotKernel<V>,
-    LazyBlockRookKernel: PivotKernel<V>,
     F: Fn(&[f64]) -> V + 'static,
 {
     if xvals.is_empty() {
@@ -388,9 +509,8 @@ pub fn quanticscrossinterpolate_discrete<V, F>(
     options: QtciOptions,
 ) -> Result<(QuanticsTensorCI2<V>, Vec<usize>, Vec<f64>)>
 where
-    V: Scalar + TTScalar + Default + Clone + 'static + tensor4all_tcicore::MatrixLuciScalar,
+    V: TTScalar + Default + Clone + 'static + tensor4all_core::TensorElement + FullPivLuScalar,
     DenseFaerLuKernel: PivotKernel<V>,
-    LazyBlockRookKernel: PivotKernel<V>,
     F: Fn(&[i64]) -> V + 'static,
 {
     // Validate sizes are powers of 2
@@ -419,6 +539,7 @@ where
         .map_err(|e| anyhow!("Failed to build grid: {}", e))?;
 
     let local_dims = grid.local_dimensions();
+    let n_sites = local_dims.len();
 
     // Use RefCell to allow mutation from within the closure
     let cache: Rc<RefCell<HashMap<Vec<i64>, V>>> = Rc::new(RefCell::new(HashMap::new()));
@@ -444,6 +565,20 @@ where
         value
     };
 
+    // Batch adapter: treetci expects Fn(GlobalIndexBatch) -> Result<Vec<V>>
+    let batch_eval = move |batch: GlobalIndexBatch<'_>| -> Result<Vec<V>> {
+        let n_points = batch.n_points();
+        let n = batch.n_sites();
+        let mut results = Vec::with_capacity(n_points);
+        for p in 0..n_points {
+            let point: Vec<usize> = (0..n)
+                .map(|s| batch.get(s, p).expect("valid batch index"))
+                .collect();
+            results.push(qf(&point));
+        }
+        Ok(results)
+    };
+
     // Prepare initial pivots
     let mut qinitialpivots: Vec<Vec<usize>> = if let Some(pivots) = initial_pivots {
         pivots
@@ -467,15 +602,22 @@ where
         qinitialpivots.push(pivot);
     }
 
-    // Run TCI
-    let tci_opts = options.to_tci2_options();
-    let (tci, ranks, errors) = crossinterpolate2(
-        qf,
-        None::<fn(&[Vec<usize>]) -> Vec<V>>,
-        local_dims,
+    // Run TreeTCI with linear chain
+    let graph = TreeTciGraph::linear_chain(n_sites)?;
+    let tree_opts = options.to_treetci_options();
+    let proposer = DefaultProposer;
+    let (treetn, ranks, errors) = treetci_crossinterpolate2::<V, _, _>(
+        batch_eval,
+        local_dims.clone(),
+        graph,
         qinitialpivots,
-        tci_opts,
+        tree_opts,
+        Some(0), // center_site = 0 (root at left end)
+        &proposer,
     )?;
+
+    // Convert TreeTN → TensorTrain<V>
+    let tt = treetn_to_tensor_train::<V>(&treetn, n_sites, &local_dims)?;
 
     // Extract cache
     let final_cache = Rc::try_unwrap(cache)
@@ -483,7 +625,7 @@ where
         .into_inner();
 
     Ok((
-        QuanticsTensorCI2::from_inherent(tci, grid, final_cache),
+        QuanticsTensorCI2::from_inherent(tt, grid, final_cache),
         ranks,
         errors,
     ))

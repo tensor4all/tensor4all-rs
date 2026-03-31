@@ -522,8 +522,7 @@ fn options_builder_all_fields() {
         .with_unfoldingscheme(UnfoldingScheme::Fused)
         .with_verbosity(2)
         .with_nsearchglobalpivot(3)
-        .with_nsearch(200)
-        .with_pivot_search(tensor4all_quanticstci::PivotSearchStrategy::Full);
+        .with_nsearch(200);
 
     assert!((opts.tolerance - 1e-6).abs() < 1e-15);
     assert_eq!(opts.maxbonddim, Some(50));
@@ -534,12 +533,11 @@ fn options_builder_all_fields() {
     assert_eq!(opts.nsearchglobalpivot, 3);
     assert_eq!(opts.nsearch, 200);
 
-    // Verify conversion to TCI2Options preserves key fields
-    let tci_opts = opts.to_tci2_options();
-    assert!((tci_opts.tolerance - 1e-6).abs() < 1e-15);
-    assert_eq!(tci_opts.max_bond_dim, 50);
-    assert_eq!(tci_opts.max_iter, 100);
-    assert_eq!(tci_opts.verbosity, 2);
+    // Verify conversion to TreeTciOptions preserves key fields
+    let tree_opts = opts.to_treetci_options();
+    assert!((tree_opts.tolerance - 1e-6).abs() < 1e-15);
+    assert_eq!(tree_opts.max_bond_dim, 50);
+    assert_eq!(tree_opts.max_iter, 100);
 }
 
 /// Verify that maxbonddim actually limits the rank.
@@ -585,7 +583,7 @@ fn tensor_train_consistency() {
     let (qtci, _ranks, _errors) =
         quanticscrossinterpolate_discrete(&sizes, f, None, opts).expect("should work");
 
-    let _tt = qtci.tensor_train().expect("tensor_train() should work");
+    let _tt = qtci.tensor_train();
 
     // link_dims from QTCI should be non-empty
     let qtci_dims = qtci.link_dims();
@@ -603,9 +601,11 @@ fn tensor_train_consistency() {
     );
 }
 
-/// Verify that the underlying tci() accessor works.
+/// Verify that tensor_train() returns a valid TT and rank matches.
 #[test]
-fn tci_accessor() {
+fn tensor_train_accessor() {
+    use tensor4all_quanticstci::AbstractTensorTrain;
+
     let f = |idx: &[i64]| idx[0] as f64;
     let sizes = vec![8]; // 2^3
 
@@ -616,9 +616,9 @@ fn tci_accessor() {
     let (qtci, _ranks, _errors) =
         quanticscrossinterpolate_discrete(&sizes, f, None, opts).expect("should work");
 
-    let tci = qtci.tci();
-    assert!(tci.rank() > 0);
-    assert_eq!(tci.rank(), qtci.rank());
+    let tt = qtci.tensor_train();
+    assert!(tt.rank() > 0);
+    assert_eq!(tt.rank(), qtci.rank());
 }
 
 // ===========================================================================

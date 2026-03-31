@@ -1,7 +1,7 @@
 //! Options for Quantics TCI interpolation.
 
 use quanticsgrids::UnfoldingScheme;
-use tensor4all_tensorci::{PivotSearchStrategy, TCI2Options};
+use tensor4all_treetci::TreeTciOptions;
 
 /// Options for Quantics TCI interpolation.
 ///
@@ -26,8 +26,6 @@ pub struct QtciOptions {
     pub nsearchglobalpivot: usize,
     /// Number of random searches for global pivots
     pub nsearch: usize,
-    /// Pivot search strategy
-    pub pivot_search: PivotSearchStrategy,
 }
 
 impl Default for QtciOptions {
@@ -42,7 +40,6 @@ impl Default for QtciOptions {
             verbosity: 0,
             nsearchglobalpivot: 5,
             nsearch: 100,
-            pivot_search: PivotSearchStrategy::Full,
         }
     }
 }
@@ -96,24 +93,13 @@ impl QtciOptions {
         self
     }
 
-    /// Set pivot search strategy.
-    pub fn with_pivot_search(mut self, strategy: PivotSearchStrategy) -> Self {
-        self.pivot_search = strategy;
-        self
-    }
-
-    /// Convert to TCI2Options for the underlying algorithm.
-    pub fn to_tci2_options(&self) -> TCI2Options {
-        TCI2Options {
+    /// Convert to TreeTciOptions for the underlying algorithm.
+    pub fn to_treetci_options(&self) -> TreeTciOptions {
+        TreeTciOptions {
             tolerance: self.tolerance,
             max_iter: self.maxiter,
             max_bond_dim: self.maxbonddim.unwrap_or(usize::MAX),
             normalize_error: self.normalize_error,
-            verbosity: self.verbosity,
-            max_nglobal_pivot: self.nsearchglobalpivot,
-            nsearch: self.nsearch,
-            pivot_search: self.pivot_search,
-            ..TCI2Options::default()
         }
     }
 }

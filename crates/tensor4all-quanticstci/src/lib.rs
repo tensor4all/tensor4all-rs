@@ -2,7 +2,7 @@
 //! High-level Quantics TCI interface for function interpolation.
 //!
 //! This crate provides a user-friendly interface for interpolating functions
-//! in Quantics Tensor Train (QTT) format. It wraps tensor4all-tensorci and
+//! in Quantics Tensor Train (QTT) format. It wraps tensor4all-treetci and
 //! quanticsgrids to provide seamless conversion between function domains
 //! and quantics representations.
 //!
@@ -84,4 +84,4 @@ pub use quantics_tci::{
 // Re-export commonly used types from dependencies
 pub use quanticsgrids::{DiscretizedGrid, InherentDiscreteGrid, UnfoldingScheme};
 pub use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
-pub use tensor4all_tensorci::{PivotSearchStrategy, Scalar, TCI2Options, TensorCI2};
+pub use tensor4all_treetci::{DefaultProposer, TreeTciGraph, TreeTciOptions};
