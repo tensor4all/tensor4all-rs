@@ -244,7 +244,7 @@ impl Scalar {
     pub fn set_requires_grad(&mut self, enabled: bool) -> Result<()> {
         let placeholder = rank0_real_tensor(0.0);
         let native = std::mem::replace(&mut self.native, placeholder);
-        self.native = native.requires_grad_(enabled);
+        self.native = native.with_requires_grad(enabled);
         Ok(())
     }
 

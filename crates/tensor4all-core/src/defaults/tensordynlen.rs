@@ -239,7 +239,7 @@ impl TensorDynLen {
 
     /// Enables or disables reverse-mode gradient tracking.
     pub fn set_requires_grad(&mut self, enabled: bool) -> Result<()> {
-        self.native = Arc::new(self.native.as_ref().detach().requires_grad_(enabled));
+        self.native = Arc::new(self.native.as_ref().detach().with_requires_grad(enabled));
         Ok(())
     }
 
