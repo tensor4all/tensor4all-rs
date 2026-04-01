@@ -1,8 +1,6 @@
 use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
-use tenferro::{snapshot, Tensor as NativeTensor};
-use tenferro_algebra::Conjugate;
-use tenferro_device::LogicalMemorySpace;
+use tenferro::Tensor as NativeTensor;
 use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
 
 /// Public scalar element types supported by tensor4all dense/diag constructors.
@@ -26,36 +24,31 @@ pub trait TensorElement: Copy + Send + Sync + 'static {
     fn diag_values_from_native_temp(tensor: &NativeTensor) -> Result<Vec<Self>>;
 }
 
-fn materialize_typed_values<T>(
-    tensor: &TypedTensor<T>,
-    order: MemoryOrder,
-    op: &'static str,
-) -> Result<Vec<T>>
-where
-    T: tenferro_algebra::Scalar + Copy + Conjugate,
-{
-    let contiguous = tensor.contiguous(order);
-    let is_conjugated = contiguous.is_conjugated();
-    let contiguous = if contiguous.logical_memory_space() == LogicalMemorySpace::MainMemory {
-        contiguous
-    } else {
-        contiguous
-            .to_memory_space_async(LogicalMemorySpace::MainMemory)
-            .map_err(|e| anyhow!("{op}: failed to move tensor to host memory: {e}"))?
-    };
-    let offset = usize::try_from(contiguous.offset())
-        .map_err(|_| anyhow!("{op}: negative offset {}", contiguous.offset()))?;
-    let len = contiguous.len();
-    let slice = contiguous
-        .buffer()
-        .as_slice()
-        .and_then(|values: &[T]| values.get(offset..offset + len))
-        .ok_or_else(|| anyhow!("{op}: expected host-accessible contiguous tensor buffer"))?;
-    if is_conjugated {
-        Ok(slice.iter().copied().map(Conjugate::conj).collect())
-    } else {
-        Ok(slice.to_vec())
+fn diagonal_multi_index(rank: usize, value: usize) -> Vec<usize> {
+    vec![value; rank]
+}
+
+fn dense_diagonal_values<T: Copy + Default>(diag: &[T], logical_rank: usize) -> Result<Vec<T>> {
+    anyhow::ensure!(
+        logical_rank >= 1,
+        "diagonal tensor construction requires at least one logical axis"
+    );
+    let diag_len = diag.len();
+    let dims = vec![diag_len; logical_rank];
+    let total_len = dims.iter().product::<usize>();
+    let mut dense = vec![T::default(); total_len];
+    let stride_prefix = (0..logical_rank)
+        .scan(1usize, |state, _| {
+            let current = *state;
+            *state = state.saturating_mul(diag_len);
+            Some(current)
+        })
+        .collect::<Vec<_>>();
+    let diagonal_stride = stride_prefix.iter().sum::<usize>();
+    for (i, value) in diag.iter().copied().enumerate() {
+        dense[i * diagonal_stride] = value;
     }
+    Ok(dense)
 }
 
 macro_rules! impl_tensor_element {
@@ -67,71 +60,54 @@ macro_rules! impl_tensor_element {
             ) -> Result<NativeTensor> {
                 let typed = TypedTensor::<Self>::from_slice(data, dims, MemoryOrder::ColumnMajor)
                     .map_err(|e| anyhow!("failed to build native dense tensor: {e}"))?;
-                Ok(NativeTensor::from_tensor(typed))
+                Ok(NativeTensor::from(typed))
             }
 
             fn diag_native_tensor_from_col_major(
                 data: &[Self],
                 logical_rank: usize,
             ) -> Result<NativeTensor> {
-                if logical_rank == 0 {
-                    return Err(anyhow!(
-                        "diagonal tensor construction requires at least one logical axis"
-                    ));
-                }
-
-                let payload =
-                    TypedTensor::<Self>::from_slice(data, &[data.len()], MemoryOrder::ColumnMajor)
-                        .map_err(|e| anyhow!("failed to build native diagonal payload: {e}"))?;
-                NativeTensor::from_tensor(payload)
-                    .diag_embed(logical_rank)
-                    .map_err(|e| anyhow!("failed to build native diagonal tensor: {e}"))
+                let dims = vec![data.len(); logical_rank];
+                let dense = dense_diagonal_values(data, logical_rank)?;
+                Self::dense_native_tensor_from_col_major(&dense, &dims)
             }
 
             fn scalar_native_tensor(value: Self) -> Result<NativeTensor> {
                 let typed =
                     TypedTensor::<Self>::from_slice(&[value], &[], MemoryOrder::ColumnMajor)
                         .map_err(|e| anyhow!("failed to build native rank-0 tensor: {e}"))?;
-                Ok(NativeTensor::from_tensor(typed))
+                Ok(NativeTensor::from(typed))
             }
 
             fn dense_values_from_native_col_major(tensor: &NativeTensor) -> Result<Vec<Self>> {
-                let snap = tensor.primal_snapshot();
-                let dense = if snap.is_dense() {
-                    snap
+                let dense = if tensor.is_dense() {
+                    tensor.try_to_vec::<Self>()
                 } else {
-                    snap.to_dense()
-                        .map_err(|e| anyhow!("failed to densify native tensor snapshot: {e}"))?
-                };
-                match dense {
-                    snapshot::DynTensor::$variant(value) => materialize_typed_values(
-                        value.$payload(),
-                        MemoryOrder::ColumnMajor,
-                        "dense native tensor extraction",
-                    ),
-                    other => Err(anyhow!(
-                        "expected {:?} tensor snapshot, got {:?}",
-                        stringify!($variant),
-                        other.scalar_type()
-                    )),
+                    tensor.to_dense()?.try_to_vec::<Self>()
                 }
+                .map_err(|e| anyhow!("dense native tensor extraction failed: {e}"))?;
+                Ok(dense)
             }
 
             fn diag_values_from_native_temp(tensor: &NativeTensor) -> Result<Vec<Self>> {
-                let snap = tensor.primal_snapshot();
-                anyhow::ensure!(snap.is_diag(), "expected diagonal native tensor snapshot");
-                match snap {
-                    snapshot::DynTensor::$variant(value) => materialize_typed_values(
-                        value.$payload(),
-                        MemoryOrder::ColumnMajor,
-                        "diagonal native tensor extraction",
-                    ),
-                    other => Err(anyhow!(
-                        "expected {:?} diagonal tensor snapshot, got {:?}",
-                        stringify!($variant),
-                        other.scalar_type()
-                    )),
+                let rank = tensor.ndim();
+                anyhow::ensure!(rank >= 1, "diagonal native tensor rank must be at least 1");
+                let diag_len = tensor.dims()[0];
+                anyhow::ensure!(
+                    tensor.dims().iter().all(|&dim| dim == diag_len),
+                    "expected square/equal logical dims for diagonal extraction, got {:?}",
+                    tensor.dims()
+                );
+                let mut values = Vec::with_capacity(diag_len);
+                for i in 0..diag_len {
+                    let index = diagonal_multi_index(rank, i);
+                    values.push(
+                        tensor.try_get::<Self>(&index).map_err(|e| {
+                            anyhow!("diagonal native tensor extraction failed: {e}")
+                        })?,
+                    );
                 }
+                Ok(values)
             }
         }
     };

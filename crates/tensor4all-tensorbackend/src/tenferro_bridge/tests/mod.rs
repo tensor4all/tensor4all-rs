@@ -46,14 +46,22 @@ fn storage_native_roundtrip_dense_f64() {
 }
 
 #[test]
-fn storage_native_roundtrip_diag_preserves_diag_layout() {
+fn storage_native_roundtrip_diag_densifies_at_public_bridge() {
     let storage = Storage::from_diag_col_major(vec![2.0, -1.0, 4.0], 2).unwrap();
 
     let native = storage_to_native_tensor(&storage, &[3, 3]).unwrap();
     let roundtrip = native_tensor_primal_to_storage(&native).unwrap();
 
-    assert!(native.is_diag());
-    let expected = Storage::from_diag_col_major(vec![2.0, -1.0, 4.0], 2).unwrap();
+    assert!(!native.is_diag());
+    let expected = Storage::from_dense_col_major(
+        vec![
+            2.0, 0.0, 0.0, //
+            0.0, -1.0, 0.0, //
+            0.0, 0.0, 4.0,
+        ],
+        &[3, 3],
+    )
+    .unwrap();
     assert_storage_eq(&roundtrip, &expected);
 }
 
@@ -118,24 +126,22 @@ fn native_dense_materialization_survives_external_runtime_scope_changes() {
 }
 
 #[test]
-fn storage_native_roundtrip_structured_preserves_axis_classes() {
-    let payload = NativeTensor::from_slice(&[1.0_f64, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
-    let native = NativeTensor::with_axis_classes(payload, &[0, 1, 1]).unwrap();
+fn storage_native_roundtrip_structured_densifies_at_public_bridge() {
+    let storage = Storage::new_structured(
+        vec![1.0_f64, 2.0, 3.0, 4.0],
+        vec![2, 2],
+        vec![1, 2],
+        vec![0, 1, 1],
+    )
+    .unwrap();
 
-    let storage = native_tensor_primal_to_storage(&native).unwrap();
-    let roundtrip = storage_to_native_tensor(&storage, &[2, 2, 2]).unwrap();
+    let native = storage_to_native_tensor(&storage, &[2, 2, 2]).unwrap();
+    let roundtrip = native_tensor_primal_to_storage(&native).unwrap();
+    let expected = storage.to_dense_storage(&[2, 2, 2]);
 
-    match storage.repr() {
-        StorageRepr::F64(value) => {
-            assert_eq!(value.axis_classes(), &[0, 1, 1]);
-            assert_eq!(value.payload_dims(), &[2, 2]);
-        }
-        other => panic!("expected F64 storage, got {other:?}"),
-    }
-    assert_eq!(roundtrip.dims(), &[2, 2, 2]);
-    assert_eq!(roundtrip.axis_classes(), &[0, 1, 1]);
-    assert!(!roundtrip.is_dense());
-    assert!(!roundtrip.is_diag());
+    assert_eq!(native.dims(), &[2, 2, 2]);
+    assert!(native.is_dense());
+    assert_storage_eq(&roundtrip, &expected);
 }
 
 #[test]
@@ -206,7 +212,30 @@ fn native_einsum_accepts_unsorted_nonfirst_operand_labels() {
 }
 
 #[test]
-fn einsum_native_tensors_dense_primal_binary_routes_through_typed_binary_einsum() {
+fn native_einsum_promotes_detached_real_operands_for_complex_result() {
+    let lhs = dense_native_tensor_from_col_major(
+        &[
+            Complex64::new(1.0, 2.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(3.0, -1.0),
+        ],
+        &[2, 2],
+    )
+    .unwrap();
+    let rhs = dense_native_tensor_from_col_major(&[2.0_f64, -1.0], &[2]).unwrap();
+
+    let out = einsum_native_tensors(&[(&lhs, &[0, 1]), (&rhs, &[1])], &[0]).unwrap();
+    let values = native_tensor_primal_to_dense_c64_col_major(&out).unwrap();
+
+    assert_eq!(
+        values,
+        vec![Complex64::new(2.0, 4.0), Complex64::new(-3.0, 1.0)]
+    );
+}
+
+#[test]
+fn einsum_native_tensors_dense_primal_binary_routes_through_frontend_fallback() {
     struct ProfileGuard;
 
     impl Drop for ProfileGuard {
@@ -233,19 +262,11 @@ fn einsum_native_tensors_dense_primal_binary_routes_through_typed_binary_einsum(
 
     assert_eq!(out.dims(), &[2, 3]);
     assert_storage_eq(&snapshot, &expected);
-    assert_eq!(cpu_context_install_count_for_tests(), 1);
-    assert_eq!(default_runtime_install_count_for_tests(), 0);
-    assert_eq!(
-        recorded_native_einsum_call_count(NativeEinsumPath::TypedBinaryEinsum),
-        1
-    );
-    assert_eq!(
-        recorded_native_einsum_call_count(NativeEinsumPath::TypedNaryEinsum),
-        0
-    );
+    assert_eq!(cpu_context_install_count_for_tests(), 0);
+    assert_eq!(default_runtime_install_count_for_tests(), 1);
     assert_eq!(
         recorded_native_einsum_call_count(NativeEinsumPath::FrontendFallback),
-        0
+        1
     );
 }
 
@@ -407,6 +428,24 @@ fn scale_storage_native_scales_elements() {
     assert_storage_eq(&result, &expected);
 }
 
+#[test]
+fn scale_native_tensor_promotes_real_scalar_for_complex_tensor() {
+    let native = dense_native_tensor_from_col_major(
+        &[Complex64::new(1.0, 2.0), Complex64::new(-0.5, 1.0)],
+        &[2],
+    )
+    .unwrap();
+    let scalar = crate::AnyScalar::new_real(2.0);
+
+    let scaled = scale_native_tensor(&native, &scalar).unwrap();
+    let values = native_tensor_primal_to_dense_c64_col_major(&scaled).unwrap();
+
+    assert_eq!(
+        values,
+        vec![Complex64::new(2.0, 4.0), Complex64::new(-1.0, 2.0)]
+    );
+}
+
 // ===== axpby_storage_native =====
 
 #[test]
@@ -421,6 +460,30 @@ fn axpby_storage_native_linear_combination() {
     // 2*1 + 3*3 = 11, 2*2 + 3*4 = 16
     let expected = Storage::from_dense_col_major(vec![11.0, 16.0], &[2]).unwrap();
     assert_storage_eq(&result, &expected);
+}
+
+#[test]
+fn axpby_native_tensor_promotes_real_scalars_for_complex_tensors() {
+    let lhs = dense_native_tensor_from_col_major(
+        &[Complex64::new(1.0, 2.0), Complex64::new(-1.0, 0.5)],
+        &[2],
+    )
+    .unwrap();
+    let rhs = dense_native_tensor_from_col_major(
+        &[Complex64::new(0.5, -1.0), Complex64::new(2.0, 1.0)],
+        &[2],
+    )
+    .unwrap();
+    let a = crate::AnyScalar::new_real(2.0);
+    let b = crate::AnyScalar::new_real(-1.0);
+
+    let combined = axpby_native_tensor(&lhs, &a, &rhs, &b).unwrap();
+    let values = native_tensor_primal_to_dense_c64_col_major(&combined).unwrap();
+
+    assert_eq!(
+        values,
+        vec![Complex64::new(1.5, 5.0), Complex64::new(-4.0, 0.0)]
+    );
 }
 
 // ===== native_tensor_primal_to_diag =====
@@ -469,31 +532,39 @@ fn diag_native_tensor_from_col_major_f64_roundtrip() {
     let data = vec![1.0_f64, 2.0, 3.0];
     let native = diag_native_tensor_from_col_major(&data, 2).unwrap();
 
-    assert!(native.is_diag());
+    assert!(!native.is_diag());
     let diag_values = native_tensor_primal_to_diag_f64(&native).unwrap();
     assert_eq!(diag_values, data);
+    let dense = native_tensor_primal_to_dense_f64_col_major(&native).unwrap();
+    assert_eq!(
+        dense,
+        vec![
+            1.0, 0.0, 0.0, //
+            0.0, 2.0, 0.0, //
+            0.0, 0.0, 3.0,
+        ]
+    );
 }
 
 // ===== structured storage roundtrip for c64 =====
 
 #[test]
-fn storage_native_roundtrip_structured_c64_preserves_axis_classes() {
-    let payload =
-        NativeTensor::from_slice(&[Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)], &[2])
-            .unwrap();
-    let native = NativeTensor::with_axis_classes(payload, &[0, 0]).unwrap();
+fn storage_native_roundtrip_structured_c64_densifies_at_public_bridge() {
+    let storage = Storage::new_structured(
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+        vec![2],
+        vec![1],
+        vec![0, 0],
+    )
+    .unwrap();
 
-    let storage = native_tensor_primal_to_storage(&native).unwrap();
-    let roundtrip = storage_to_native_tensor(&storage, &[2, 2]).unwrap();
+    let native = storage_to_native_tensor(&storage, &[2, 2]).unwrap();
+    let roundtrip = native_tensor_primal_to_storage(&native).unwrap();
+    let expected = storage.to_dense_storage(&[2, 2]);
 
-    match storage.repr() {
-        StorageRepr::C64(value) => {
-            assert_eq!(value.axis_classes(), &[0, 0]);
-        }
-        other => panic!("expected C64 storage, got {other:?}"),
-    }
-    assert_eq!(roundtrip.dims(), &[2, 2]);
-    assert_eq!(roundtrip.axis_classes(), &[0, 0]);
+    assert_eq!(native.dims(), &[2, 2]);
+    assert!(native.is_dense());
+    assert_storage_eq(&roundtrip, &expected);
 }
 
 // ===== sum_native_tensor for f64 =====
@@ -533,7 +604,7 @@ fn einsum_native_tensors_rejects_empty_operands() {
 }
 
 #[test]
-fn qr_native_tensor_dense_primal_uses_cached_cpu_context_fast_path() {
+fn qr_native_tensor_dense_primal_uses_default_runtime_path() {
     reset_runtime_caches_for_tests();
     let native = dense_native_tensor_from_col_major(&[1.0_f64, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
 
@@ -541,12 +612,12 @@ fn qr_native_tensor_dense_primal_uses_cached_cpu_context_fast_path() {
 
     assert_eq!(q.dims(), &[2, 2]);
     assert_eq!(r.dims(), &[2, 2]);
-    assert_eq!(cpu_context_install_count_for_tests(), 1);
-    assert_eq!(default_runtime_install_count_for_tests(), 0);
+    assert_eq!(cpu_context_install_count_for_tests(), 0);
+    assert_eq!(default_runtime_install_count_for_tests(), 1);
 }
 
 #[test]
-fn svd_native_tensor_dense_primal_uses_cached_cpu_context_fast_path() {
+fn svd_native_tensor_dense_primal_uses_default_runtime_path() {
     reset_runtime_caches_for_tests();
     let native = dense_native_tensor_from_col_major(&[1.0_f64, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
 
@@ -555,8 +626,8 @@ fn svd_native_tensor_dense_primal_uses_cached_cpu_context_fast_path() {
     assert_eq!(u.dims(), &[2, 2]);
     assert_eq!(s.dims(), &[2]);
     assert_eq!(vt.dims(), &[2, 2]);
-    assert_eq!(cpu_context_install_count_for_tests(), 1);
-    assert_eq!(default_runtime_install_count_for_tests(), 0);
+    assert_eq!(cpu_context_install_count_for_tests(), 0);
+    assert_eq!(default_runtime_install_count_for_tests(), 1);
 }
 
 // ===== build_binary_einsum_ids error paths =====

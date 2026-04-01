@@ -8,8 +8,9 @@ use crate::truncation::TruncationParams;
 use crate::{unfold_split, TensorDynLen};
 use num_complex::ComplexFloat;
 use tensor4all_tensorbackend::{
-    native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
-    qr_native_tensor, reshape_col_major_native_tensor,
+    dense_native_tensor_from_col_major, native_tensor_primal_to_dense_c64_col_major,
+    native_tensor_primal_to_dense_f64_col_major, qr_native_tensor, reshape_col_major_native_tensor,
+    TensorElement,
 };
 use thiserror::Error;
 
@@ -110,6 +111,28 @@ where
     let threshold = rtol * max_row_norm;
     let r = row_norms.iter().filter(|&&norm| norm >= threshold).count();
     Ok(r.max(1))
+}
+
+fn truncate_matrix_cols<T: TensorElement>(
+    data: &[T],
+    rows: usize,
+    keep_cols: usize,
+) -> anyhow::Result<tenferro::Tensor> {
+    dense_native_tensor_from_col_major(&data[..rows * keep_cols], &[rows, keep_cols])
+}
+
+fn truncate_matrix_rows<T: TensorElement>(
+    data: &[T],
+    rows: usize,
+    cols: usize,
+    keep_rows: usize,
+) -> anyhow::Result<tenferro::Tensor> {
+    let mut truncated = Vec::with_capacity(keep_rows * cols);
+    for col in 0..cols {
+        let start = col * rows;
+        truncated.extend_from_slice(&data[start..start + keep_rows]);
+    }
+    dense_native_tensor_from_col_major(&truncated, &[keep_rows, cols])
 }
 
 /// Compute QR decomposition of a tensor with arbitrary rank, returning (Q, R).
@@ -227,12 +250,33 @@ pub fn qr_with<T>(
         }
     };
     if r < k {
-        q_native = q_native.take_prefix(1, r).map_err(|e| {
-            QrError::ComputationError(anyhow::anyhow!("native QR truncation on Q failed: {e}"))
-        })?;
-        r_native = r_native.take_prefix(0, r).map_err(|e| {
-            QrError::ComputationError(anyhow::anyhow!("native QR truncation on R failed: {e}"))
-        })?;
+        match q_native.scalar_type() {
+            tenferro::ScalarType::F64 => {
+                let q_values = native_tensor_primal_to_dense_f64_col_major(&q_native)
+                    .map_err(QrError::ComputationError)?;
+                let r_values = native_tensor_primal_to_dense_f64_col_major(&r_native)
+                    .map_err(QrError::ComputationError)?;
+                q_native =
+                    truncate_matrix_cols(&q_values, m, r).map_err(QrError::ComputationError)?;
+                r_native =
+                    truncate_matrix_rows(&r_values, k, n, r).map_err(QrError::ComputationError)?;
+            }
+            tenferro::ScalarType::C64 => {
+                let q_values = native_tensor_primal_to_dense_c64_col_major(&q_native)
+                    .map_err(QrError::ComputationError)?;
+                let r_values = native_tensor_primal_to_dense_c64_col_major(&r_native)
+                    .map_err(QrError::ComputationError)?;
+                q_native =
+                    truncate_matrix_cols(&q_values, m, r).map_err(QrError::ComputationError)?;
+                r_native =
+                    truncate_matrix_rows(&r_values, k, n, r).map_err(QrError::ComputationError)?;
+            }
+            other => {
+                return Err(QrError::ComputationError(anyhow::anyhow!(
+                    "native QR returned unsupported scalar type {other:?}"
+                )));
+            }
+        }
     }
 
     let bond_index = DynIndex::new_bond(r)

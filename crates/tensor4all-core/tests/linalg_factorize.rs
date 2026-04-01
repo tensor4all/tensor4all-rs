@@ -287,8 +287,10 @@ fn test_diag_dense_contraction_svd_internals() {
 
     let (u, s, v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
-    // Verify S is diagonal storage
-    assert!(s.is_diag());
+    // The public bridge materializes diagonal payloads densely at the native layer.
+    assert!(!s.is_diag());
+    assert_eq!(s.dims().len(), 2);
+    assert_eq!(s.dims()[0], s.dims()[1]);
 
     // Verify S and V share a common index
     let common_found = s

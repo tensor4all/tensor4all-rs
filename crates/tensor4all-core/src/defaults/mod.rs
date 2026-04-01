@@ -37,8 +37,8 @@ pub use contract::{
 };
 pub use index::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
 pub use tensordynlen::{
-    compute_permutation_from_indices, diag_tensor_dyn_len, is_diag_tensor, unfold_split,
-    RandomScalar, TensorAccess, TensorDynLen,
+    compute_permutation_from_indices, diag_tensor_dyn_len, unfold_split, RandomScalar,
+    TensorAccess, TensorDynLen,
 };
 
 // Re-export linear algebra functions and types
