@@ -27,6 +27,7 @@ thiserror.workspace = true
 paste.workspace = true
 num-complex.workspace = true
 rand.workspace = true
+num-rational = "0.4"
 
 [features]
 default = ["hdf5"]
