@@ -26,9 +26,9 @@ libc.workspace = true
 thiserror.workspace = true
 paste.workspace = true
 num-complex.workspace = true
+num-rational = "0.4"
 rand.workspace = true
 
 [features]
 default = ["hdf5"]
 hdf5 = ["dep:tensor4all-hdf5"]
-
