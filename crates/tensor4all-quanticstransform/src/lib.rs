@@ -39,8 +39,8 @@ mod phase_rotation;
 mod shift;
 
 pub use affine::{
-    affine_operator, affine_transform_matrix, affine_transform_tensors_unfused, AffineParams,
-    UnfusedTensorInfo,
+    affine_operator, affine_pullback_operator, affine_transform_matrix,
+    affine_transform_tensors_unfused, AffineParams, UnfusedTensorInfo,
 };
 pub use binaryop::{binaryop_operator, binaryop_single_operator, BinaryCoeffs};
 pub use common::{BoundaryCondition, CarryDirection};

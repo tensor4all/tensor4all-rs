@@ -1869,7 +1869,9 @@ fn test_cumsum_all_values() {
 // Affine operator tests
 // ============================================================================
 
-use tensor4all_quanticstransform::{affine_operator, affine_transform_matrix, AffineParams};
+use tensor4all_quanticstransform::{
+    affine_operator, affine_pullback_operator, affine_transform_matrix, AffineParams,
+};
 
 /// Test affine identity transformation: y = x.
 #[test]
@@ -2111,6 +2113,89 @@ fn test_affine_mpo_matches_matrix() {
                 "PASS: affine a={:?} b={:?} r={} bc={:?}",
                 a_flat, b_vec, r, bc
             );
+        }
+    }
+}
+
+#[test]
+fn test_affine_pullback_mpo_matches_transposed_matrix() {
+    let test_cases_1d: Vec<(Vec<i64>, Vec<i64>, Vec<BoundaryCondition>)> = vec![
+        (vec![1], vec![0], vec![BoundaryCondition::Periodic]),
+        (vec![1], vec![3], vec![BoundaryCondition::Periodic]),
+        (vec![-1], vec![0], vec![BoundaryCondition::Periodic]),
+        (vec![1], vec![1], vec![BoundaryCondition::Open]),
+    ];
+
+    for (a_flat, b_vec, bc) in &test_cases_1d {
+        let source_ndims = 1usize;
+        let output_ndims = 1usize;
+
+        for r in [2, 3] {
+            let params = AffineParams::from_integers(
+                a_flat.clone(),
+                b_vec.clone(),
+                source_ndims,
+                output_ndims,
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed params a={:?} b={:?} m={} n={}: {}",
+                    a_flat, b_vec, source_ndims, output_ndims, e
+                )
+            });
+
+            let ref_matrix = affine_transform_matrix(r, &params, bc).unwrap_or_else(|e| {
+                panic!(
+                    "Failed ref matrix a={:?} b={:?} r={} bc={:?}: {}",
+                    a_flat, b_vec, r, bc, e
+                )
+            });
+
+            let op = affine_pullback_operator(r, &params, bc).unwrap_or_else(|e| {
+                panic!(
+                    "Failed pullback operator a={:?} b={:?} r={} bc={:?}: {}",
+                    a_flat, b_vec, r, bc, e
+                )
+            });
+
+            let dim = 1usize << r;
+            let mpo_dense = apply_operator_to_dense_matrix(&op, r, r);
+
+            assert_eq!(ref_matrix.rows(), dim, "Source dimension mismatch");
+            assert_eq!(ref_matrix.cols(), dim, "Output dimension mismatch");
+
+            for y in 0..dim {
+                for x in 0..dim {
+                    let sparse_val = *ref_matrix.get(x, y).unwrap_or(&0.0);
+                    let mpo_val = mpo_dense[y][x];
+
+                    assert!(
+                        (mpo_val.re - sparse_val).abs() < 1e-10,
+                        "Pullback real part mismatch at ({}, {}): mpo={}, ref={} \
+                         [a={:?} b={:?} r={} bc={:?}]",
+                        y,
+                        x,
+                        mpo_val.re,
+                        sparse_val,
+                        a_flat,
+                        b_vec,
+                        r,
+                        bc
+                    );
+                    assert!(
+                        mpo_val.im.abs() < 1e-10,
+                        "Pullback imaginary part non-zero at ({}, {}): im={} \
+                         [a={:?} b={:?} r={} bc={:?}]",
+                        y,
+                        x,
+                        mpo_val.im,
+                        a_flat,
+                        b_vec,
+                        r,
+                        bc
+                    );
+                }
+            }
         }
     }
 }

@@ -9,10 +9,10 @@ use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINT
 use num_rational::Rational64;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_quanticstransform::{
-    affine_operator, binaryop_operator, cumsum_operator, flip_operator, flip_operator_multivar,
-    phase_rotation_operator, phase_rotation_operator_multivar, quantics_fourier_operator,
-    shift_operator, shift_operator_multivar, AffineParams, BinaryCoeffs, BoundaryCondition,
-    FourierOptions,
+    affine_operator, affine_pullback_operator, binaryop_operator, cumsum_operator, flip_operator,
+    flip_operator_multivar, phase_rotation_operator, phase_rotation_operator_multivar,
+    quantics_fourier_operator, shift_operator, shift_operator_multivar, AffineParams, BinaryCoeffs,
+    BoundaryCondition, FourierOptions,
 };
 use tensor4all_treetn::treetn::contraction::ContractionMethod;
 use tensor4all_treetn::{apply_linear_operator, ApplyOptions};
@@ -359,6 +359,60 @@ pub extern "C" fn t4a_qtransform_affine(
     crate::unwrap_catch(result)
 }
 
+/// Create an affine pullback operator: f(y) = g(A*y + b).
+///
+/// `a_num` and `a_den` encode an MxN matrix in column-major order.
+/// `b_num` and `b_den` encode an M-vector.
+/// `bc` must have length M and applies to the transformed source coordinates.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_qtransform_affine_pullback(
+    r: libc::size_t,
+    m: libc::size_t,
+    n: libc::size_t,
+    a_num: *const i64,
+    a_den: *const i64,
+    b_num: *const i64,
+    b_den: *const i64,
+    bc: *const t4a_boundary_condition,
+    out: *mut *mut t4a_linop,
+) -> StatusCode {
+    if out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+    if r == 0 || m == 0 || n == 0 {
+        return T4A_INVALID_ARGUMENT;
+    }
+
+    let a = match rationals_from_raw(a_num, a_den, m * n) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let b = match rationals_from_raw(b_num, b_den, m) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let bc = match boundary_conditions_from_raw(bc, m) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let params = match AffineParams::new(a, b, m, n) {
+            Ok(params) => params,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+        };
+        match affine_pullback_operator(r, &params, &bc) {
+            Ok(op) => {
+                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
 /// Create a two-output binary operation operator.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_qtransform_binaryop(
@@ -494,6 +548,30 @@ pub extern "C" fn t4a_linop_apply(
     let result = catch_unwind(AssertUnwindSafe(|| {
         let op_ref = unsafe { &*op };
         let state_ref = unsafe { &*state };
+        let mut aligned_op = op_ref.inner().clone();
+
+        for (node, mapping) in aligned_op.input_mapping.iter_mut() {
+            let state_site = match state_ref.inner().site_space(node) {
+                Some(indices) => indices,
+                None => {
+                    return crate::err_status(
+                        anyhow::anyhow!("State node {:?} has no site index", node),
+                        T4A_INTERNAL_ERROR,
+                    )
+                }
+            };
+            if state_site.len() != 1 {
+                return crate::err_status(
+                    anyhow::anyhow!(
+                        "Expected exactly one site index at node {:?}, got {}",
+                        node,
+                        state_site.len()
+                    ),
+                    T4A_INTERNAL_ERROR,
+                );
+            }
+            mapping.true_index = state_site.iter().next().unwrap().clone();
+        }
 
         let mut options = ApplyOptions {
             method: contraction_method,
@@ -507,7 +585,7 @@ pub extern "C" fn t4a_linop_apply(
             options.max_rank = Some(maxdim);
         }
 
-        match apply_linear_operator(op_ref.inner(), state_ref.inner(), options) {
+        match apply_linear_operator(&aligned_op, state_ref.inner(), options) {
             Ok(result_treetn) => {
                 unsafe { *out = Box::into_raw(Box::new(t4a_treetn::new(result_treetn))) };
                 T4A_SUCCESS

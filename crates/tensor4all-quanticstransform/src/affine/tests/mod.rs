@@ -78,6 +78,18 @@ fn test_affine_operator_creation() {
 }
 
 #[test]
+fn test_affine_pullback_operator_creation() {
+    // source x = x1, output y = (y1, y2), x1 = y1
+    let a = vec![1i64, 0];
+    let b = vec![0i64];
+    let params = AffineParams::from_integers(a, b, 1, 2).unwrap();
+    let bc = vec![BoundaryCondition::Open];
+
+    let result = affine_pullback_operator(4, &params, &bc);
+    assert!(result.is_ok());
+}
+
+#[test]
 fn test_affine_error_zero_bits() {
     let a = vec![1i64];
     let b = vec![0i64];
@@ -96,6 +108,17 @@ fn test_affine_error_bc_mismatch() {
     let bc = vec![BoundaryCondition::Periodic]; // Only 1 BC but M=2
 
     let result = affine_operator(4, &params, &bc);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_affine_pullback_bc_mismatch() {
+    let a = vec![1i64, 0];
+    let b = vec![0i64];
+    let params = AffineParams::from_integers(a, b, 1, 2).unwrap();
+    let bc = vec![BoundaryCondition::Periodic; 2];
+
+    let result = affine_pullback_operator(4, &params, &bc);
     assert!(result.is_err());
 }
 
