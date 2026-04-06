@@ -135,6 +135,33 @@ fn test_affine_operator_construction() {
 }
 
 #[test]
+fn test_affine_pullback_operator_construction() {
+    let mut op: *mut t4a_linop = std::ptr::null_mut();
+
+    // source x = x1, output y = (y1, y2), x1 = y1
+    let a_num = [1_i64, 0];
+    let a_den = [1_i64; 2];
+    let b_num = [0_i64];
+    let b_den = [1_i64];
+    let bc = [t4a_boundary_condition::Open];
+
+    let status = t4a_qtransform_affine_pullback(
+        4,
+        1,
+        2,
+        a_num.as_ptr(),
+        a_den.as_ptr(),
+        b_num.as_ptr(),
+        b_den.as_ptr(),
+        bc.as_ptr(),
+        &mut op,
+    );
+    assert_eq!(status, T4A_SUCCESS);
+    assert!(!op.is_null());
+    t4a_linop_release(op);
+}
+
+#[test]
 fn test_binaryop_operator_construction() {
     let mut op: *mut t4a_linop = std::ptr::null_mut();
 
