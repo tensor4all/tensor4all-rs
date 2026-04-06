@@ -115,13 +115,6 @@ fn scalar_tensor_result(op: &'static str, native: Result<NativeTensor>) -> Scala
     }
 }
 
-fn scalar_native_op(
-    op: &'static str,
-    f: impl FnOnce() -> tenferro::Result<NativeTensor>,
-) -> Result<NativeTensor> {
-    with_default_runtime(op, || f().map_err(|e| anyhow!("{e}")))
-}
-
 fn neg_native(native: &NativeTensor) -> Result<NativeTensor> {
     Ok(match scalar_value_from_native(native) {
         ScalarValue::F32(value) => Scalar::from_value(-value).native,
