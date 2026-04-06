@@ -9,8 +9,10 @@ use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINT
 use num_rational::Rational64;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_quanticstransform::{
-    affine_pullback_operator, cumsum_operator, flip_operator, phase_rotation_operator,
-    quantics_fourier_operator, shift_operator, AffineParams, BoundaryCondition, FourierOptions,
+    affine_operator, affine_pullback_operator, binaryop_operator, cumsum_operator, flip_operator,
+    flip_operator_multivar, phase_rotation_operator, phase_rotation_operator_multivar,
+    quantics_fourier_operator, shift_operator, shift_operator_multivar, AffineParams, BinaryCoeffs,
+    BoundaryCondition, FourierOptions,
 };
 use tensor4all_treetn::treetn::contraction::ContractionMethod;
 use tensor4all_treetn::{apply_linear_operator, ApplyOptions};
@@ -20,6 +22,43 @@ use tensor4all_treetn::{apply_linear_operator, ApplyOptions};
 // ============================================================================
 
 impl_opaque_type_common!(linop);
+
+fn boundary_conditions_from_raw(
+    ptr: *const t4a_boundary_condition,
+    len: usize,
+) -> Result<Vec<BoundaryCondition>, StatusCode> {
+    if ptr.is_null() {
+        return Err(T4A_NULL_POINTER);
+    }
+
+    let bc = unsafe { std::slice::from_raw_parts(ptr, len) };
+    Ok(bc.iter().copied().map(Into::into).collect())
+}
+
+fn rationals_from_raw(
+    num_ptr: *const i64,
+    den_ptr: *const i64,
+    len: usize,
+) -> Result<Vec<Rational64>, StatusCode> {
+    if num_ptr.is_null() || den_ptr.is_null() {
+        return Err(T4A_NULL_POINTER);
+    }
+
+    let nums = unsafe { std::slice::from_raw_parts(num_ptr, len) };
+    let dens = unsafe { std::slice::from_raw_parts(den_ptr, len) };
+
+    let mut out = Vec::with_capacity(len);
+    for (i, (&num, &den)) in nums.iter().zip(dens.iter()).enumerate() {
+        if den == 0 {
+            crate::set_last_error(&format!(
+                "Rational denominator at index {i} must be nonzero"
+            ));
+            return Err(T4A_INVALID_ARGUMENT);
+        }
+        out.push(Rational64::new(num, den));
+    }
+    Ok(out)
+}
 
 // ============================================================================
 // Operator construction
@@ -52,6 +91,43 @@ pub extern "C" fn t4a_qtransform_shift(
     let result = catch_unwind(AssertUnwindSafe(|| {
         let bc_rust: BoundaryCondition = bc.into();
         match shift_operator(r, offset, bc_rust) {
+            Ok(op) => {
+                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Create a shift operator for one variable in a multi-variable system.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_qtransform_shift_multivar(
+    r: libc::size_t,
+    offset: i64,
+    bc: t4a_boundary_condition,
+    nvariables: libc::size_t,
+    target_var: libc::size_t,
+    out: *mut *mut t4a_linop,
+) -> StatusCode {
+    if out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+    if r == 0 || nvariables == 0 {
+        return T4A_INVALID_ARGUMENT;
+    }
+    if target_var >= nvariables {
+        return crate::err_status(
+            "target_var must be smaller than nvariables",
+            T4A_INVALID_ARGUMENT,
+        );
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let bc_rust: BoundaryCondition = bc.into();
+        match shift_operator_multivar(r, offset, bc_rust, nvariables, target_var) {
             Ok(op) => {
                 unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
                 T4A_SUCCESS
@@ -99,6 +175,42 @@ pub extern "C" fn t4a_qtransform_flip(
     crate::unwrap_catch(result)
 }
 
+/// Create a flip operator for one variable in a multi-variable system.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_qtransform_flip_multivar(
+    r: libc::size_t,
+    bc: t4a_boundary_condition,
+    nvariables: libc::size_t,
+    target_var: libc::size_t,
+    out: *mut *mut t4a_linop,
+) -> StatusCode {
+    if out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+    if r == 0 || nvariables == 0 {
+        return T4A_INVALID_ARGUMENT;
+    }
+    if target_var >= nvariables {
+        return crate::err_status(
+            "target_var must be smaller than nvariables",
+            T4A_INVALID_ARGUMENT,
+        );
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let bc_rust: BoundaryCondition = bc.into();
+        match flip_operator_multivar(r, bc_rust, nvariables, target_var) {
+            Ok(op) => {
+                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
 /// Create a phase rotation operator: f(x) = exp(i*theta*x) * g(x)
 ///
 /// # Arguments
@@ -134,6 +246,41 @@ pub extern "C" fn t4a_qtransform_phase_rotation(
     crate::unwrap_catch(result)
 }
 
+/// Create a phase rotation operator for one variable in a multi-variable system.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_qtransform_phase_rotation_multivar(
+    r: libc::size_t,
+    theta: f64,
+    nvariables: libc::size_t,
+    target_var: libc::size_t,
+    out: *mut *mut t4a_linop,
+) -> StatusCode {
+    if out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+    if r == 0 || nvariables == 0 {
+        return T4A_INVALID_ARGUMENT;
+    }
+    if target_var >= nvariables {
+        return crate::err_status(
+            "target_var must be smaller than nvariables",
+            T4A_INVALID_ARGUMENT,
+        );
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| match phase_rotation_operator_multivar(
+        r, theta, nvariables, target_var,
+    ) {
+        Ok(op) => {
+            unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
+            T4A_SUCCESS
+        }
+        Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+    }));
+
+    crate::unwrap_catch(result)
+}
+
 /// Create a cumulative sum operator: y_i = sum_{j<i} x_j
 ///
 /// # Arguments
@@ -157,6 +304,152 @@ pub extern "C" fn t4a_qtransform_cumsum(r: libc::size_t, out: *mut *mut t4a_lino
             T4A_SUCCESS
         }
         Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Create a general affine transformation operator.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_qtransform_affine(
+    r: libc::size_t,
+    a_num: *const i64,
+    a_den: *const i64,
+    b_num: *const i64,
+    b_den: *const i64,
+    m: libc::size_t,
+    n: libc::size_t,
+    bc: *const t4a_boundary_condition,
+    out: *mut *mut t4a_linop,
+) -> StatusCode {
+    if out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+    if r == 0 || m == 0 || n == 0 {
+        return T4A_INVALID_ARGUMENT;
+    }
+
+    let a = match rationals_from_raw(a_num, a_den, m * n) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let b = match rationals_from_raw(b_num, b_den, m) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let bc = match boundary_conditions_from_raw(bc, m) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let params = match AffineParams::new(a, b, m, n) {
+            Ok(params) => params,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+        };
+        match affine_operator(r, &params, &bc) {
+            Ok(op) => {
+                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Create an affine pullback operator: f(y) = g(A*y + b).
+///
+/// `a_num` and `a_den` encode an MxN matrix in column-major order.
+/// `b_num` and `b_den` encode an M-vector.
+/// `bc` must have length M and applies to the transformed source coordinates.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_qtransform_affine_pullback(
+    r: libc::size_t,
+    m: libc::size_t,
+    n: libc::size_t,
+    a_num: *const i64,
+    a_den: *const i64,
+    b_num: *const i64,
+    b_den: *const i64,
+    bc: *const t4a_boundary_condition,
+    out: *mut *mut t4a_linop,
+) -> StatusCode {
+    if out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+    if r == 0 || m == 0 || n == 0 {
+        return T4A_INVALID_ARGUMENT;
+    }
+
+    let a = match rationals_from_raw(a_num, a_den, m * n) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let b = match rationals_from_raw(b_num, b_den, m) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let bc = match boundary_conditions_from_raw(bc, m) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let params = match AffineParams::new(a, b, m, n) {
+            Ok(params) => params,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+        };
+        match affine_pullback_operator(r, &params, &bc) {
+            Ok(op) => {
+                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Create a two-output binary operation operator.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_qtransform_binaryop(
+    r: libc::size_t,
+    a1: i8,
+    b1: i8,
+    a2: i8,
+    b2: i8,
+    bc1: t4a_boundary_condition,
+    bc2: t4a_boundary_condition,
+    out: *mut *mut t4a_linop,
+) -> StatusCode {
+    if out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+    if r == 0 {
+        return T4A_INVALID_ARGUMENT;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let coeffs1 = match BinaryCoeffs::new(a1, b1) {
+            Ok(coeffs) => coeffs,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+        };
+        let coeffs2 = match BinaryCoeffs::new(a2, b2) {
+            Ok(coeffs) => coeffs,
+            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
+        };
+        let bc = [bc1.into(), bc2.into()];
+
+        match binaryop_operator(r, coeffs1, coeffs2, bc) {
+            Ok(op) => {
+                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
+                T4A_SUCCESS
+            }
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
     }));
 
     crate::unwrap_catch(result)
@@ -208,86 +501,6 @@ pub extern "C" fn t4a_qtransform_fourier(
                 T4A_SUCCESS
             }
             Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
-        }
-    }));
-
-    crate::unwrap_catch(result)
-}
-
-/// Create an affine pullback operator: f(y) = g(A*y + b).
-///
-/// `a_num` and `a_den` encode an MxN matrix in column-major order.
-/// `b_num` and `b_den` encode an M-vector.
-/// `bc` must have length M and applies to the transformed source coordinates.
-#[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_affine_pullback(
-    r: libc::size_t,
-    m: libc::size_t,
-    n: libc::size_t,
-    a_num: *const i64,
-    a_den: *const i64,
-    b_num: *const i64,
-    b_den: *const i64,
-    bc: *const t4a_boundary_condition,
-    out: *mut *mut t4a_linop,
-) -> StatusCode {
-    if out.is_null()
-        || a_num.is_null()
-        || a_den.is_null()
-        || b_num.is_null()
-        || b_den.is_null()
-        || bc.is_null()
-    {
-        return T4A_NULL_POINTER;
-    }
-    if r == 0 || m == 0 || n == 0 {
-        return T4A_INVALID_ARGUMENT;
-    }
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let a_len = m * n;
-        let a_num_slice = unsafe { std::slice::from_raw_parts(a_num, a_len) };
-        let a_den_slice = unsafe { std::slice::from_raw_parts(a_den, a_len) };
-        let b_num_slice = unsafe { std::slice::from_raw_parts(b_num, m) };
-        let b_den_slice = unsafe { std::slice::from_raw_parts(b_den, m) };
-        let bc_slice = unsafe { std::slice::from_raw_parts(bc, m) };
-
-        let a = a_num_slice
-            .iter()
-            .zip(a_den_slice.iter())
-            .map(|(&num, &den)| {
-                if den == 0 {
-                    Err(anyhow::anyhow!("Affine matrix denominator must be non-zero"))
-                } else {
-                    Ok(Rational64::new(num, den))
-                }
-            })
-            .collect::<Result<Vec<_>, _>>();
-        let b = b_num_slice
-            .iter()
-            .zip(b_den_slice.iter())
-            .map(|(&num, &den)| {
-                if den == 0 {
-                    Err(anyhow::anyhow!("Affine shift denominator must be non-zero"))
-                } else {
-                    Ok(Rational64::new(num, den))
-                }
-            })
-            .collect::<Result<Vec<_>, _>>();
-
-        let bc_rust: Vec<BoundaryCondition> = bc_slice.iter().copied().map(Into::into).collect();
-
-        match (a, b) {
-            (Ok(a_vals), Ok(b_vals)) => match AffineParams::new(a_vals, b_vals, m, n)
-                .and_then(|params| affine_pullback_operator(r, &params, &bc_rust))
-            {
-                Ok(op) => {
-                    unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
-                    T4A_SUCCESS
-                }
-                Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
-            },
-            (Err(e), _) | (_, Err(e)) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
     }));
 
@@ -377,6 +590,56 @@ pub extern "C" fn t4a_linop_apply(
                 unsafe { *out = Box::into_raw(Box::new(t4a_treetn::new(result_treetn))) };
                 T4A_SUCCESS
             }
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Reset the operator's true input site indices to match a TreeTN state.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_linop_set_input_space(
+    op: *mut t4a_linop,
+    state: *const t4a_treetn,
+) -> StatusCode {
+    if op.is_null() || state.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let op_ref = unsafe { &mut *op };
+        let state_ref = unsafe { &*state };
+        match op_ref
+            .inner_mut()
+            .set_input_space_from_state(state_ref.inner())
+        {
+            Ok(()) => T4A_SUCCESS,
+            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Reset the operator's true output site indices to match a TreeTN state.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_linop_set_output_space(
+    op: *mut t4a_linop,
+    state: *const t4a_treetn,
+) -> StatusCode {
+    if op.is_null() || state.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let op_ref = unsafe { &mut *op };
+        let state_ref = unsafe { &*state };
+        match op_ref
+            .inner_mut()
+            .set_output_space_from_state(state_ref.inner())
+        {
+            Ok(()) => T4A_SUCCESS,
             Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
         }
     }));
