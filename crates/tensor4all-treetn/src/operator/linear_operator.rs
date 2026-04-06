@@ -246,6 +246,74 @@ where
     pub fn get_output_mapping(&self, node: &V) -> Option<&IndexMapping<T::Index>> {
         self.output_mapping.get(node)
     }
+
+    fn single_site_index_from_state(state: &TreeTN<T, V>, node: &V) -> Result<T::Index> {
+        let site_space = state
+            .site_space(node)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in state site space", node))?;
+
+        if site_space.len() != 1 {
+            return Err(anyhow::anyhow!(
+                "Node {:?}: expected exactly 1 site index in state, found {}",
+                node,
+                site_space.len()
+            ));
+        }
+
+        site_space
+            .iter()
+            .next()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Node {:?}: missing site index", node))
+    }
+
+    /// Reset true input indices to match the given state's site space.
+    ///
+    /// This only rewrites the external mapping. The internal MPO indices are unchanged.
+    pub fn set_input_space_from_state(&mut self, state: &TreeTN<T, V>) -> Result<()> {
+        let nodes: Vec<V> = self.input_mapping.keys().cloned().collect();
+        for node in nodes {
+            let new_true_index = Self::single_site_index_from_state(state, &node)?;
+            let mapping = self
+                .input_mapping
+                .get_mut(&node)
+                .ok_or_else(|| anyhow::anyhow!("Input mapping missing for node {:?}", node))?;
+            if mapping.internal_index.dim() != new_true_index.dim() {
+                return Err(anyhow::anyhow!(
+                    "Node {:?}: input mapping dimension {} does not match state site dimension {}",
+                    node,
+                    mapping.internal_index.dim(),
+                    new_true_index.dim()
+                ));
+            }
+            mapping.true_index = new_true_index;
+        }
+        Ok(())
+    }
+
+    /// Reset true output indices to match the given state's site space.
+    ///
+    /// This only rewrites the external mapping. The internal MPO indices are unchanged.
+    pub fn set_output_space_from_state(&mut self, state: &TreeTN<T, V>) -> Result<()> {
+        let nodes: Vec<V> = self.output_mapping.keys().cloned().collect();
+        for node in nodes {
+            let new_true_index = Self::single_site_index_from_state(state, &node)?;
+            let mapping = self
+                .output_mapping
+                .get_mut(&node)
+                .ok_or_else(|| anyhow::anyhow!("Output mapping missing for node {:?}", node))?;
+            if mapping.internal_index.dim() != new_true_index.dim() {
+                return Err(anyhow::anyhow!(
+                    "Node {:?}: output mapping dimension {} does not match state site dimension {}",
+                    node,
+                    mapping.internal_index.dim(),
+                    new_true_index.dim()
+                ));
+            }
+            mapping.true_index = new_true_index;
+        }
+        Ok(())
+    }
 }
 
 // ============================================================================
