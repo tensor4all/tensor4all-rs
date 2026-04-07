@@ -12,14 +12,14 @@ A Rust implementation of tensor networks for **AI-agentic development** — rapi
 - **ITensors.jl-like dynamic structure**: Flexible `Index` system and dynamic-rank tensors preserve the intuitive API
 - **tenferro-rs-backed execution**: Dense tensor algebra, einsum, and linear algebra now center on a shared tenferro-rs runtime
 - **Static error detection**: Rust's type system catches errors at compile time while maintaining runtime flexibility
-- **Multi-language support via C-API**: Full functionality exposed through C-API; initial targets are Julia and Python
+- **Multi-language support via C-API**: Full functionality exposed through C-API with language bindings
 
 **Scope**: Initial focus is QTT (Quantics Tensor Train), TCI (Tensor Cross Interpolation), and related tree / train tensor network algorithms.
 
 ## Dense Layout Semantics
 
 tensor4all-rs uses **column-major** dense linearization internally. Flat dense buffers,
-`reshape`/`flatten` semantics, the C API, the Python bindings, and the ITensors.jl-compatible
+`reshape`/`flatten` semantics, the C API, and the ITensors.jl-compatible
 HDF5 layer are all defined in terms of column-major ordering.
 
 This matches Julia, ITensors.jl, and tenferro-rs. When exchanging dense data with NumPy,
@@ -79,7 +79,6 @@ tensor4all-rs/
 │   ├── tensor4all-capi/              # C API for language bindings
 │   ├── tensor4all-tcicore/           # TCI core: matrix CI, LUCI / rrLU substrate, cached function, index sets
 │   └── tensor4all-treetci/           # TreeTCI port and tree-structured cross interpolation
-├── python/tensor4all/                # Python bindings
 ├── tools/api-dump/                   # API documentation generator
 ├── xtask/                            # Development task runner
 └── docs/                             # Design documents
@@ -166,65 +165,6 @@ Pkg.add(url="https://github.com/tensor4all/Tensor4all.jl")
 ```
 
 See the [Tensor4all.jl README](https://github.com/tensor4all/Tensor4all.jl) for detailed installation and usage instructions.
-
-### Python
-
-**Note:** Python bindings require a Rust toolchain. Install from <https://rustup.rs/>.
-
-#### Install from GitHub
-
-```bash
-uv pip install "tensor4all @ git+https://github.com/tensor4all/tensor4all-rs#subdirectory=python/tensor4all"
-```
-
-#### Development install
-
-```bash
-cd python/tensor4all
-python scripts/build_capi.py   # Build the Rust C library
-uv pip install -e .
-```
-
-After Rust code changes, re-run `python scripts/build_capi.py`.
-
-#### Quick example
-
-```python
-from tensor4all import crossinterpolate2
-
-def f(i, j, k):
-    return float((1 + i) * (1 + j) * (1 + k))
-
-tt, err = crossinterpolate2(f, [4, 4, 4], tolerance=1e-10)
-print(tt(0, 0, 0))  # 1.0
-```
-
-#### Available modules
-
-| Module | Description |
-|--------|-------------|
-| `tensor4all.treetn` | Tree tensor networks (MPS, MPO, TTN) |
-| `tensor4all.tensorci` | Tensor cross interpolation |
-| `tensor4all.quanticsgrids` | Quantics grid representations |
-| `tensor4all.quanticstci` | Quantics TCI for function interpolation |
-| `tensor4all.quanticstransform` | Quantics operators (shift, flip, Fourier) |
-| `tensor4all.simplett` | Simple tensor trains |
-
-#### Executable documentation examples
-
-All Python documentation examples live in `docs/examples/python/` and are executed from the repo root:
-
-```bash
-cd python/tensor4all
-python scripts/build_capi.py
-uv pip install -e .
-cd ../..
-for f in docs/examples/python/*.py; do
-  python "$f"
-done
-```
-
-CI runs these examples as part of `./scripts/run_python_tests.sh`.
 
 ## Near-Term Work
 
