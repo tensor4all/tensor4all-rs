@@ -1,0 +1,1394 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>tensor4all-rs</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-d8a6c911.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-048d59bc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">tensor4all-rs</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/tensor4all/tensor4all-rs" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="tensor4all-rs"><a class="header" href="#tensor4all-rs">tensor4all-rs</a></h1>
+<p>tensor4all-rs is a Rust implementation of tensor network algorithms, focused on:</p>
+<ul>
+<li><strong>Tensor Cross Interpolation (TCI / TCI2)</strong> — adaptive low-rank tensor approximation</li>
+<li><strong>Quantics Tensor Train (QTT)</strong> — representation of functions in exponentially fine grids</li>
+<li><strong>Tree Tensor Networks (TreeTN)</strong> — tensor networks with arbitrary tree topology</li>
+</ul>
+<p>The library is structured as a workspace of independent crates under <code>crates/</code>, designed for modular use and AI-agentic development workflows. Language bindings for Julia are provided through the C API layer.</p>
+<p>Source code and issue tracker: <a href="https://github.com/tensor4all/tensor4all-rs">github.com/tensor4all/tensor4all-rs</a></p>
+<hr>
+<h2 id="where-to-start"><a class="header" href="#where-to-start">Where to start</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>I want to…</th><th>Go to</th></tr>
+</thead>
+<tbody>
+<tr><td>Understand tensor networks from scratch</td><td><a href="#concepts">Concepts</a></td></tr>
+<tr><td>Install and run my first example</td><td><a href="#getting-started">Getting Started</a></td></tr>
+<tr><td>Understand the crate structure</td><td><a href="#architecture--crate-guide">Architecture &amp; Crate Guide</a></td></tr>
+<tr><td>Come from ITensors.jl and map types</td><td><a href="#conventions">Conventions</a></td></tr>
+<tr><td>Browse the full API reference</td><td><a href="../rustdoc/tensor4all_core">rustdoc API reference</a></td></tr>
+<tr><td>Use tensor4all-rs from Julia</td><td><a href="#julia-bindings">Julia Bindings</a></td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="feature-highlights"><a class="header" href="#feature-highlights">Feature highlights</a></h2>
+<ul>
+<li><strong>Dynamic Index/Tensor system</strong> inspired by ITensors.jl: indices carry semantic identity, tensor contraction aligns axes by index rather than position</li>
+<li><strong>Tensor Cross Interpolation (TCI2)</strong>: approximates high-dimensional tensors from a small number of evaluations using cross-approximation</li>
+<li><strong>Quantics Tensor Train (QTT)</strong>: represents smooth functions on exponentially fine grids; includes transformation operators (affine, shift, sum)</li>
+<li><strong>Tree Tensor Networks</strong>: arbitrary-topology TTN, not limited to chains (MPS/MPO); supports standard MPS/MPO as special cases with runtime topology checks</li>
+<li><strong>C API</strong> (<code>tensor4all-capi</code>): stable FFI surface for language bindings, currently used by <a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl</a></li>
+</ul>
+<hr>
+<h2 id="not-sure-where-you-fit"><a class="header" href="#not-sure-where-you-fit">Not sure where you fit?</a></h2>
+<p>If you are new to the library, read <a href="#getting-started">Getting Started</a> for a short working example, then consult <a href="#concepts">Concepts</a> for background on the data structures used throughout.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h1>
+<h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
+<p>You need the Rust toolchain. If you do not have it installed, follow the instructions at <a href="https://rustup.rs/">https://rustup.rs/</a>.</p>
+<h2 id="adding-tensor4all-rs-to-your-project"><a class="header" href="#adding-tensor4all-rs-to-your-project">Adding tensor4all-rs to Your Project</a></h2>
+<p>tensor4all-rs is a collection of crates. Add the ones you need to your <code>Cargo.toml</code>:</p>
+<pre><code class="language-toml">[dependencies]
+# Basic tensor train construction and manipulation
+tensor4all-simplett = "0.1"
+
+# Tensor Cross Interpolation (TCI)
+tensor4all-tensorci = "0.1"
+
+# Quantics TCI (combines quantics encoding with TCI)
+tensor4all-quanticstci = "0.1"
+
+# Tree tensor networks
+tensor4all-treetn = "0.1"
+</code></pre>
+<p>You do not need to add all of them — only include the crates relevant to your use case.</p>
+<h2 id="first-example-tensor-trains"><a class="header" href="#first-example-tensor-trains">First Example: Tensor Trains</a></h2>
+<p>The following example uses <code>tensor4all-simplett</code> to create a constant tensor train, evaluate it at a specific index, and compress it.</p>
+<pre class="playground"><code class="language-rust">use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
+
+fn main() {
+    // Create a constant tensor train with local dimensions [2, 3, 4].
+    // Every entry of the represented tensor equals 1.0.
+    let tt = TensorTrain::&lt;f64&gt;::constant(&amp;[2, 3, 4], 1.0);
+
+    // Evaluate at a specific multi-index.
+    let value = tt.evaluate(&amp;[0, 1, 2]).unwrap();
+    assert!((value - 1.0).abs() &lt; 1e-12);
+
+    // Sum over all indices (2 * 3 * 4 = 24 elements, all 1.0).
+    let total = tt.sum();
+    assert!((total - 24.0).abs() &lt; 1e-12);
+
+    // Compress with a truncation tolerance.
+    let options = CompressionOptions {
+        tolerance: 1e-10,
+        max_bond_dim: 20,
+        ..Default::default()
+    };
+    let compressed = tt.compressed(&amp;options).unwrap();
+    assert!((compressed.sum() - 24.0).abs() &lt; 1e-10);
+
+    println!("sum = {}", compressed.sum());
+}</code></pre>
+<p>Run it with:</p>
+<pre><code class="language-bash">cargo run
+</code></pre>
+<h2 id="next-steps"><a class="header" href="#next-steps">Next Steps</a></h2>
+<ul>
+<li><a href="#concepts">Concepts</a> — learn about tensor trains, bond dimensions, and TCI before diving deeper.</li>
+<li><a href="#tensor-basics">Guides</a> — step-by-step walkthroughs for tensor basics, TCI, quantics transforms, and tree tensor networks.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="concepts"><a class="header" href="#concepts">Concepts</a></h1>
+<p>This page introduces the core ideas behind tensor4all-rs in plain language.
+No deep mathematical background is assumed.</p>
+<hr>
+<h2 id="tensor-train-tt--mps"><a class="header" href="#tensor-train-tt--mps">Tensor Train (TT / MPS)</a></h2>
+<p>A <em>tensor train</em> (TT) represents a high-dimensional tensor as a chain of
+smaller, 3-index tensors.  Instead of storing all entries of a size-<code>d^N</code>
+tensor (which grows exponentially with <code>N</code>), a TT stores <code>N</code> tensors each of
+modest size, multiplied together to reproduce any entry on demand.  The size of
+the shared “bond” indices between adjacent tensors is called the <em>bond
+dimension</em> <code>m</code>; larger <code>m</code> means a more accurate approximation at the cost of
+more memory and compute.  In quantum physics the same structure is called a
+<em>Matrix Product State</em> (MPS).</p>
+<pre><code>A[0] ---- A[1] ---- A[2] ---- ... ---- A[N-1]
+  |          |          |                  |
+ i_0        i_1        i_2             i_{N-1}
+</code></pre>
+<p>Vertical lines are <em>site indices</em> (also called physical indices) — one per
+tensor, labeling the dimension of the original tensor at that position.
+Horizontal lines are <em>link indices</em> (bond indices) — internal indices that
+connect neighboring tensors and whose size is the bond dimension.</p>
+<hr>
+<h2 id="tensor-cross-interpolation-tci"><a class="header" href="#tensor-cross-interpolation-tci">Tensor Cross Interpolation (TCI)</a></h2>
+<p><em>Tensor Cross Interpolation</em> approximates a high-dimensional function
+<code>f(i_0, i_1, ..., i_{N-1})</code> by evaluating it at an adaptively chosen subset of
+points and fitting a tensor train.  The idea generalises the CUR matrix
+decomposition — which approximates a matrix using selected rows and columns —
+to arbitrary numbers of dimensions.  The algorithm automatically identifies the
+most informative “pivots” (evaluation points), so it never needs to query the
+function at every grid point.  For smooth or structured functions, the number
+of required evaluations can be orders of magnitude smaller than the full grid.
+The output is a tensor train whose accuracy is controlled by a relative
+tolerance threshold (<code>rtol</code>).</p>
+<hr>
+<h2 id="quantics-tensor-train-qtt"><a class="header" href="#quantics-tensor-train-qtt">Quantics Tensor Train (QTT)</a></h2>
+<p><em>Quantics</em> (also called <em>quantized tensor train</em>) is a technique for
+representing functions of continuous variables with a tensor train.  A function
+<code>f(x)</code> sampled on a uniform grid of <code>2^R</code> points in <code>[0, 1)</code> is reshaped into
+an <code>R</code>-site tensor train where every site index has dimension 2.  Each site
+corresponds to one bit of the binary representation of the grid index.  Smooth
+functions have low bond dimension in this representation, giving exponential
+compression relative to storing all <code>2^R</code> values.  Combining QTT with TCI
+(“Quantics TCI”) allows efficient approximation of high-dimensional continuous
+integrands without ever forming the full grid.</p>
+<pre><code>bit R-1        bit R-2                bit 0
+  |              |          ...          |
+ B[0] --------- B[1] ----- ... ------- B[R-1]
+</code></pre>
+<p>Each tensor <code>B[k]</code> has two physical legs of dimension 2 (one per variable
+dimension in the multivariate case) and one or two bond legs.</p>
+<hr>
+<h2 id="tree-tensor-network-treetn"><a class="header" href="#tree-tensor-network-treetn">Tree Tensor Network (TreeTN)</a></h2>
+<p>A <em>Tree Tensor Network</em> generalises the tensor train to tree-shaped graphs.
+Each node of the tree holds a tensor, and each edge corresponds to a shared
+(bond) index between the two tensors at its endpoints.  Contracting along any
+edge multiplies those two tensors and merges their free indices.  The tensor
+train is the special case where the tree is a simple path graph.  Tree
+structures can capture correlations that are not naturally captured by a chain,
+making them useful for problems with hierarchical or multi-scale structure.  In
+tensor4all-rs, <code>TreeTensorNetwork&lt;V&gt;</code> (where <code>V</code> is a vertex label type) is the
+primary data structure representing both TT/MPS and more general tree networks.</p>
+<pre><code>         T[root]
+        /        \
+    T[a]          T[b]
+    /   \            \
+T[c]   T[d]         T[e]
+  |      |             |
+ i_c    i_d           i_e
+</code></pre>
+<p>Vertical lines are site indices; lines along the tree edges are bond indices.</p>
+<hr>
+<h2 id="key-terminology"><a class="header" href="#key-terminology">Key Terminology</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Term</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Bond dimension</strong></td><td>The size of a link (bond) index shared between two adjacent tensors.  Controls the accuracy vs. cost trade-off.</td></tr>
+<tr><td><strong>Site index</strong></td><td>A physical or external index at a single tensor site, corresponding to one degree of freedom of the original tensor.</td></tr>
+<tr><td><strong>Link index</strong></td><td>An internal index connecting two neighbouring tensors; its size is the bond dimension.</td></tr>
+<tr><td><strong>Truncation tolerance (<code>rtol</code>)</strong></td><td>Relative error threshold used during SVD-based compression.  Singular values smaller than <code>rtol * sigma_max</code> are discarded.</td></tr>
+<tr><td><strong>MPS / MPO</strong></td><td>Matrix Product State / Matrix Product Operator — physics names for TT with one or two site indices per tensor, respectively.</td></tr>
+<tr><td><strong>Pivot</strong></td><td>In TCI, a selected multi-index at which the function is evaluated to refine the tensor train approximation.</td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="architecture--crate-guide"><a class="header" href="#architecture--crate-guide">Architecture &amp; Crate Guide</a></h1>
+<p>This page describes how tensor4all-rs is organised, what each crate does, and how
+to choose the right crate for your use case.</p>
+<h2 id="crate-dependency-diagram"><a class="header" href="#crate-dependency-diagram">Crate Dependency Diagram</a></h2>
+<pre><code>tensor4all-tensorbackend    (scalar types, storage)
+        |
+tensor4all-core             (Index, Tensor, contraction, SVD/QR)
+        |
+   +---------+-----------+-----------+
+   |         |           |           |
+ treetn  itensorlike  simplett    tcicore
+   |                     |           |
+   |              partitionedtt   tensorci
+   |                                 |
+ treetci                       quanticstci
+                                     |
+                              quanticstransform
+</code></pre>
+<p><code>tensor4all-hdf5</code> depends on <code>tensor4all-core</code> and <code>tensor4all-itensorlike</code> (for
+MPS serialization).  <code>tensor4all-capi</code> depends on most crates and forms the C FFI
+layer used by language bindings.</p>
+<h2 id="layer-descriptions"><a class="header" href="#layer-descriptions">Layer Descriptions</a></h2>
+<h3 id="foundation-internal"><a class="header" href="#foundation-internal">Foundation (internal)</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Crate</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>tensorbackend</strong></td><td><em>Internal.</em> Scalar types (<code>f64</code>, <code>Complex64</code>), storage backends, and the tenferro-rs bridge. Users do not need to depend on this crate directly.</td></tr>
+<tr><td><strong>core</strong></td><td>Foundation for everything else. Provides the <code>Index</code> system, dynamic-rank <code>Tensor</code>, contraction, and SVD/QR/LU factorizations.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="tensor-train--tree-tensor-networks"><a class="header" href="#tensor-train--tree-tensor-networks">Tensor Train &amp; Tree Tensor Networks</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Crate</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>treetn</strong></td><td>Tree tensor networks with arbitrary graph topology. Supports canonicalization, truncation, and contraction.</td></tr>
+<tr><td><strong>itensorlike</strong></td><td>ITensors.jl-inspired <code>TensorTrain</code> with orthogonality tracking and multiple canonical forms. Useful when compatibility with the ITensors.jl mental model is important.</td></tr>
+<tr><td><strong>simplett</strong></td><td>Lightweight tensor train for numerical computation. The go-to crate for creating, evaluating, and compressing tensor trains without extra overhead.</td></tr>
+<tr><td><strong>partitionedtt</strong></td><td>Partitioned tensor trains for subdomain decomposition. Builds on <code>simplett</code>.</td></tr>
+<tr><td><strong>treetci</strong></td><td>Tree TCI: cross interpolation on tree-structured tensor networks.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="tensor-cross-interpolation"><a class="header" href="#tensor-cross-interpolation">Tensor Cross Interpolation</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Crate</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>tcicore</strong></td><td><em>Internal.</em> Matrix CI, LUCI/rrLU algorithms, and cached function evaluation. Users do not need to depend on this crate directly.</td></tr>
+<tr><td><strong>tensorci</strong></td><td>Tensor Cross Interpolation. Contains TCI2 (primary algorithm) and TCI1 (legacy). Use this for low-level TCI control.</td></tr>
+<tr><td><strong>quanticstci</strong></td><td>High-level Quantics TCI. Interpolates functions on discrete or continuous grids in the quantics format.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="quantics--transforms"><a class="header" href="#quantics--transforms">Quantics &amp; Transforms</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Crate</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>quanticstransform</strong></td><td>Quantics transformation operators: shift, flip, Fourier, affine, and more.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="io--bindings"><a class="header" href="#io--bindings">I/O &amp; Bindings</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Crate</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>hdf5</strong></td><td>HDF5 serialization compatible with ITensors.jl/ITensorMPS.jl file formats.</td></tr>
+<tr><td><strong>capi</strong></td><td>C FFI for language bindings (Julia, Python, etc.). Out of scope for this guide; see <a href="#julia-bindings">Julia Bindings</a>.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="which-crate-should-i-use"><a class="header" href="#which-crate-should-i-use">Which Crate Should I Use?</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Goal</th><th>Recommended crate</th></tr>
+</thead>
+<tbody>
+<tr><td>TCI on a black-box function (high level)</td><td><code>tensor4all-quanticstci</code></td></tr>
+<tr><td>TCI with fine-grained control</td><td><code>tensor4all-tensorci</code></td></tr>
+<tr><td>Tree TCI</td><td><code>tensor4all-treetci</code></td></tr>
+<tr><td>Simple tensor train (create, evaluate, compress)</td><td><code>tensor4all-simplett</code></td></tr>
+<tr><td>Tensor train with ITensors.jl-style interface</td><td><code>tensor4all-itensorlike</code></td></tr>
+<tr><td>Tree tensor networks</td><td><code>tensor4all-treetn</code></td></tr>
+<tr><td>Subdomain decomposition via partitioned TT</td><td><code>tensor4all-partitionedtt</code></td></tr>
+<tr><td>Quantics transform operators</td><td><code>tensor4all-quanticstransform</code></td></tr>
+<tr><td>HDF5 I/O compatible with Julia</td><td><code>tensor4all-hdf5</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="internal-crates"><a class="header" href="#internal-crates">Internal Crates</a></h2>
+<p><code>tensor4all-tensorbackend</code> and <code>tensor4all-tcicore</code> are implementation details.
+They are not part of the public API surface and you should not depend on them
+directly in application code.  Their interfaces may change without notice.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="tensor-basics"><a class="header" href="#tensor-basics">Tensor Basics</a></h1>
+<p>This guide covers the <code>tensor4all-core</code> crate, which provides the foundation for
+all tensor operations: indices, tensors, contraction, and factorization.</p>
+<p>Add it to your <code>Cargo.toml</code>:</p>
+<pre><code class="language-toml">[dependencies]
+tensor4all-core = "0.1"
+</code></pre>
+<h2 id="index"><a class="header" href="#index">Index</a></h2>
+<p>Every tensor axis is identified by an <code>Index</code>. Indices carry a unique identity
+(so two indices with the same dimension are still distinct), an optional tag, and
+an optional prime level.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use tensor4all_core::index::{Index, DynId};
+use tensor4all_core::IndexLike; // needed for .dim() and .plev()
+
+// Simplest form: just give a dimension.
+let i = Index::new_dyn(3);   // dimension 3, auto-generated ID, no tags
+let j = Index::new_dyn(4);
+
+// A tag names the index (useful for debugging and tag-based operations).
+let site = Index::new_dyn_with_tag(2, "Site").unwrap();
+assert_eq!(site.dim(), 2);
+
+// Two indices created independently are always distinct, even with the same dim.
+let a = Index::new_dyn(3);
+let b = Index::new_dyn(3);
+assert_ne!(a, b);
+
+// Prime levels distinguish related indices (e.g. ket vs bra in quantum physics).
+let bra = site.prime();       // plev 0 -&gt; 1
+let ket = site.noprime();     // always plev 0
+assert_ne!(bra, ket);
+
+// Inspect properties.
+assert_eq!(site.dim(), 2);
+assert_eq!(site.plev(), 0);
+assert_eq!(bra.plev(), 1);
+<span class="boring">}</span></code></pre>
+<h2 id="tensor-tensordynlen"><a class="header" href="#tensor-tensordynlen">Tensor (TensorDynLen)</a></h2>
+<p><code>TensorDynLen</code> is a dynamic-rank dense tensor parameterized by a list of <code>Index</code>
+values. Each index uniquely identifies an axis; there is no fixed axis ordering in
+the abstract sense — operations match axes by index identity.</p>
+<h3 id="creating-tensors"><a class="header" href="#creating-tensors">Creating tensors</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use tensor4all_core::{TensorDynLen, Index};
+use tensor4all_core::index::DynId;
+
+let i = Index::new_dyn(2);
+let j = Index::new_dyn(3);
+
+// From explicit column-major data (2×3 tensor, 6 elements).
+let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+assert_eq!(t.dims(), vec![2, 3]);
+
+// All-zeros tensor.
+let zeros = TensorDynLen::zeros::&lt;f64&gt;(vec![i.clone(), j.clone()]).unwrap();
+
+// Random tensor (standard normal).
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+let mut rng = ChaCha8Rng::seed_from_u64(42);
+let rand_t: TensorDynLen = TensorDynLen::random::&lt;f64, _&gt;(&amp;mut rng, vec![i.clone(), j.clone()]);
+assert_eq!(rand_t.dims(), vec![2, 3]);
+<span class="boring">}</span></code></pre>
+<h3 id="extracting-data"><a class="header" href="#extracting-data">Extracting data</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use tensor4all_core::{TensorDynLen, Index};
+use tensor4all_core::index::DynId;
+
+let i = Index::new_dyn(2);
+let data = vec![10.0_f64, 20.0];
+let t = TensorDynLen::from_dense(vec![i], data).unwrap();
+
+// Extract all elements in column-major order.
+let out: Vec&lt;f64&gt; = t.to_vec().unwrap();
+assert_eq!(out, vec![10.0, 20.0]);
+
+// Sum all elements.
+let s = t.sum();
+assert_eq!(s.real(), 30.0);
+<span class="boring">}</span></code></pre>
+<h2 id="contraction"><a class="header" href="#contraction">Contraction</a></h2>
+<p>Contraction sums over all shared (common) indices between two or more tensors.
+Think of it as a generalization of matrix multiplication.</p>
+<h3 id="pairwise-contraction"><a class="header" href="#pairwise-contraction">Pairwise contraction</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use tensor4all_core::{TensorDynLen, Index};
+use tensor4all_core::index::DynId;
+
+// A[i,j] and B[j,k] — contracting over j gives C[i,k].
+let i = Index::new_dyn(2);
+let j = Index::new_dyn(3);
+let k = Index::new_dyn(4);
+
+let a = TensorDynLen::zeros::&lt;f64&gt;(vec![i.clone(), j.clone()]).unwrap();
+let b = TensorDynLen::zeros::&lt;f64&gt;(vec![j.clone(), k.clone()]).unwrap();
+
+let c = a.contract(&amp;b);      // or equivalently: &amp;a * &amp;b
+assert_eq!(c.dims(), vec![2, 4]);  // j is summed away
+<span class="boring">}</span></code></pre>
+<h3 id="multi-tensor-contraction"><a class="header" href="#multi-tensor-contraction">Multi-tensor contraction</a></h3>
+<p><code>contract_multi</code> contracts a list of tensors, handling disconnected components
+via outer products. <code>contract_connected</code> is the same but returns an error if the
+contraction graph is disconnected.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use tensor4all_core::{TensorDynLen, Index, contract_multi, contract_connected, AllowedPairs};
+use tensor4all_core::index::DynId;
+
+let i = Index::new_dyn(2);
+let j = Index::new_dyn(3);
+let k = Index::new_dyn(4);
+let l = Index::new_dyn(5);
+
+let mut rng = {
+    use rand::SeedableRng;
+    rand_chacha::ChaCha8Rng::seed_from_u64(0)
+};
+let a: TensorDynLen = TensorDynLen::random::&lt;f64, _&gt;(&amp;mut rng, vec![i.clone(), j.clone()]);
+let b: TensorDynLen = TensorDynLen::random::&lt;f64, _&gt;(&amp;mut rng, vec![j.clone(), k.clone()]);
+let c: TensorDynLen = TensorDynLen::random::&lt;f64, _&gt;(&amp;mut rng, vec![k.clone(), l.clone()]);
+
+// Contract A(i,j) * B(j,k) * C(k,l) -&gt; result(i,l)
+let result = contract_multi(&amp;[&amp;a, &amp;b, &amp;c], AllowedPairs::All).unwrap();
+assert_eq!(result.dims().iter().product::&lt;usize&gt;(), 2 * 5); // i * l
+
+// Restrict which tensor pairs may contract (useful for tree tensor networks).
+// Here only (A,B) and (B,C) are connected, so j and k are contracted.
+let pairs = [(0usize, 1usize), (1, 2)];
+let result2 = contract_multi(&amp;[&amp;a, &amp;b, &amp;c], AllowedPairs::Specified(&amp;pairs)).unwrap();
+assert_eq!(result2.dims().iter().product::&lt;usize&gt;(), 2 * 5);
+<span class="boring">}</span></code></pre>
+<p><code>AllowedPairs::All</code> contracts all tensor pairs with matching indices.
+<code>AllowedPairs::Specified</code> takes a slice of <code>(usize, usize)</code> tensor-index pairs
+and only contracts between those pairs — useful when the connectivity is known
+(e.g. tree tensor networks).</p>
+<h2 id="factorization"><a class="header" href="#factorization">Factorization</a></h2>
+<p>The unified <code>factorize()</code> function dispatches to SVD, QR, LU, or CI based on
+<code>FactorizeOptions</code>. The result splits the input tensor into a <code>left</code> and <code>right</code>
+factor connected by a new bond index.</p>
+<h3 id="svd-with-truncation"><a class="header" href="#svd-with-truncation">SVD with truncation</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use tensor4all_core::{TensorDynLen, Index, factorize, FactorizeOptions};
+use tensor4all_core::index::DynId;
+
+let i = Index::new_dyn(4);
+let j = Index::new_dyn(6);
+
+let mut rng = {
+    use rand::SeedableRng;
+    rand_chacha::ChaCha8Rng::seed_from_u64(1)
+};
+let t: TensorDynLen = TensorDynLen::random::&lt;f64, _&gt;(&amp;mut rng, vec![i.clone(), j.clone()]);
+
+// SVD: split along i | j, discarding singular values below 1e-10.
+let opts = FactorizeOptions::svd().with_rtol(1e-10);
+let result = factorize(&amp;t, &amp;[i.clone()], &amp;opts).unwrap();
+
+// result.left  has indices [i, bond]
+// result.right has indices [bond, j]
+// result.left * result.right ≈ t  (within tolerance)
+let bond_dim = result.rank;
+println!("bond dimension after SVD: {bond_dim}");
+
+// Limit bond dimension explicitly.
+let opts_capped = FactorizeOptions::svd().with_rtol(0.0).with_max_rank(2);
+let result_capped = factorize(&amp;t, &amp;[i], &amp;opts_capped).unwrap();
+assert!(result_capped.rank &lt;= 2);
+<span class="boring">}</span></code></pre>
+<h3 id="qr-decomposition"><a class="header" href="#qr-decomposition">QR decomposition</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use tensor4all_core::{TensorDynLen, Index, factorize, FactorizeOptions};
+use tensor4all_core::index::DynId;
+
+let i = Index::new_dyn(4);
+let j = Index::new_dyn(6);
+
+let mut rng = {
+    use rand::SeedableRng;
+    rand_chacha::ChaCha8Rng::seed_from_u64(2)
+};
+let t: TensorDynLen = TensorDynLen::random::&lt;f64, _&gt;(&amp;mut rng, vec![i.clone(), j.clone()]);
+
+// QR: left factor is orthogonal (Q), right factor is upper-triangular (R).
+let opts = FactorizeOptions::qr();
+let result = factorize(&amp;t, &amp;[i], &amp;opts).unwrap();
+// result.left  = Q  (orthogonal columns)
+// result.right = R  (upper triangular)
+<span class="boring">}</span></code></pre>
+<p>Both <code>FactorizeOptions::svd()</code> and <code>FactorizeOptions::qr()</code> return builder
+structs. Chain <code>.with_rtol(tol)</code> and <code>.with_max_rank(n)</code> to configure truncation.
+For SVD, <code>result.singular_values</code> holds the retained singular values.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="tensor-train"><a class="header" href="#tensor-train">Tensor Train</a></h1>
+<p>A <strong>Tensor Train</strong> (TT), also known as a Matrix Product State (MPS), represents a
+high-dimensional tensor as a chain of low-rank cores.  tensor4all-rs provides two
+complementary implementations:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Crate</th><th>Best for</th></tr>
+</thead>
+<tbody>
+<tr><td><code>tensor4all-simplett</code></td><td>Lightweight numerical work with raw arrays</td></tr>
+<tr><td><code>tensor4all-itensorlike</code></td><td>ITensors.jl-like Index semantics, orthogonality tracking, canonical forms</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="simplett"><a class="header" href="#simplett">SimpleTT</a></h2>
+<p>The <code>tensor4all-simplett</code> crate offers a minimal, efficient TT implementation.
+It works with plain <code>f64</code> and <code>Complex64</code> scalars and does not require you to
+manage named indices.</p>
+<h3 id="creating-a-tensor-train"><a class="header" href="#creating-a-tensor-train">Creating a tensor train</a></h3>
+<pre><code class="language-rust ignore">use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
+
+// Constant TT: all entries equal to 1.0, physical dimensions [2, 3, 4]
+let tt = TensorTrain::&lt;f64&gt;::constant(&amp;[2, 3, 4], 1.0);
+
+// Random TT with bond dimension 4
+let tt_rand = TensorTrain::&lt;f64&gt;::random(&amp;[2, 3, 4], 4);</code></pre>
+<h3 id="evaluating-and-summing"><a class="header" href="#evaluating-and-summing">Evaluating and summing</a></h3>
+<pre><code class="language-rust ignore">// Evaluate the tensor at a specific multi-index
+let value = tt.evaluate(&amp;[0, 1, 2])?;
+
+// Sum over all multi-indices (equivalent to contracting with all-ones vectors)
+let total = tt.sum();</code></pre>
+<p>For the constant TT above <code>tt.sum()</code> returns <code>2 × 3 × 4 = 24</code>.</p>
+<h3 id="compressing"><a class="header" href="#compressing">Compressing</a></h3>
+<p><code>CompressionOptions</code> controls the accuracy–cost trade-off:</p>
+<pre><code class="language-rust ignore">let options = CompressionOptions {
+    tolerance: 1e-10,
+    max_bond_dim: 20,
+    ..Default::default()
+};
+let compressed = tt.compressed(&amp;options)?;</code></pre>
+<p>The compression reduces bond dimensions while keeping the approximation error
+below <code>tolerance</code> (relative <code>L∞</code> norm), up to <code>max_bond_dim</code>.</p>
+<hr>
+<h2 id="itensorlike-tensortrain"><a class="header" href="#itensorlike-tensortrain">ITensorLike TensorTrain</a></h2>
+<p>The <code>tensor4all-itensorlike</code> crate provides a higher-level API modelled after
+<a href="https://github.com/ITensor/ITensorMPS.jl">ITensorMPS.jl</a>.  Each tensor carries
+named <code>DynIndex</code> objects so that contractions are unambiguous regardless of axis
+ordering.</p>
+<blockquote>
+<p><strong>Key conventions</strong></p>
+<ul>
+<li>Sites are <strong>0-indexed</strong> (Julia uses 1-indexed).</li>
+<li><code>TensorDynLen::from_dense</code> expects data in <strong>column-major</strong> (Fortran) order.</li>
+<li><code>inner()</code> computes <code>&lt;self|other&gt;</code> with complex conjugation on <code>self</code>.</li>
+</ul>
+</blockquote>
+<h3 id="creating-and-orthogonalizing"><a class="header" href="#creating-and-orthogonalizing">Creating and orthogonalizing</a></h3>
+<pre><code class="language-rust ignore">use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_itensorlike::{CanonicalForm, TensorTrain, TruncateOptions};
+
+// Site and bond indices
+let s0 = DynIndex::new_dyn(2);
+let s1 = DynIndex::new_dyn(2);
+let s2 = DynIndex::new_dyn(2);
+let b01 = DynIndex::new_bond(2)?;
+let b12 = DynIndex::new_bond(2)?;
+
+// Build site tensors (column-major data)
+let t0 = TensorDynLen::from_dense(
+    vec![s0.clone(), b01.clone()],
+    vec![1.0_f64, 0.0, 0.0, 1.0],
+)?;
+let t1 = TensorDynLen::from_dense(
+    vec![b01.clone(), s1.clone(), b12.clone()],
+    vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+)?;
+let t2 = TensorDynLen::from_dense(
+    vec![b12.clone(), s2.clone()],
+    vec![1.0, 0.0, 0.0, 1.0],
+)?;
+
+// Assemble and orthogonalize with center at site 1
+let mut tt = TensorTrain::new(vec![t0, t1, t2])?;
+tt.orthogonalize(1)?;
+
+assert!(tt.isortho());</code></pre>
+<h3 id="truncating"><a class="header" href="#truncating">Truncating</a></h3>
+<p>After orthogonalization you can truncate bond dimensions by SVD:</p>
+<pre><code class="language-rust ignore">tt.truncate(&amp;TruncateOptions::svd().with_rtol(1e-10).with_max_rank(2))?;</code></pre>
+<p><code>rtol</code> is the relative truncation tolerance (equivalent to <code>√cutoff</code> in
+ITensorMPS.jl notation).</p>
+<h3 id="norm-and-inner-product"><a class="header" href="#norm-and-inner-product">Norm and inner product</a></h3>
+<pre><code class="language-rust ignore">let norm = tt.norm();
+assert!(norm.is_finite());
+
+// &lt;tt|tt&gt; = ‖tt‖²
+let inner = tt.inner(&amp;tt);
+assert!((inner.real() - norm * norm).abs() &lt; 1e-10);</code></pre>
+<h3 id="complex-scalars"><a class="header" href="#complex-scalars">Complex scalars</a></h3>
+<p>The same API works with <code>Complex64</code>:</p>
+<pre><code class="language-rust ignore">use num_complex::Complex64;
+use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_itensorlike::TensorTrain;
+
+let s0 = DynIndex::new_dyn(2);
+let s1 = DynIndex::new_dyn(2);
+let b  = DynIndex::new_bond(2)?;
+
+let t0 = TensorDynLen::from_dense(
+    vec![s0, b.clone()],
+    vec![
+        Complex64::new(1.0,  0.0), Complex64::new(0.0,  1.0),
+        Complex64::new(0.0, -1.0), Complex64::new(1.0,  0.0),
+    ],
+)?;
+let t1 = TensorDynLen::from_dense(
+    vec![b, s1],
+    vec![
+        Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0),
+    ],
+)?;
+
+let tt = TensorTrain::new(vec![t0, t1])?;
+assert!(tt.norm() &gt; 0.0);</code></pre>
+<hr>
+<h2 id="differences-from-itensormpsjl"><a class="header" href="#differences-from-itensormpsjl">Differences from ITensorMPS.jl</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>tensor4all-itensorlike</th><th>ITensorMPS.jl</th></tr>
+</thead>
+<tbody>
+<tr><td>Site indexing</td><td>0-indexed</td><td>1-indexed</td></tr>
+<tr><td>Canonical forms</td><td>Unitary (QR), LU, CI</td><td>Unitary (SVD)</td></tr>
+<tr><td>Conjugation</td><td><code>conj</code></td><td><code>dag</code> (with QN direction flip)</td></tr>
+<tr><td>Sweep counting</td><td><code>nhalfsweeps</code></td><td><code>nsweeps</code></td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="tensor-cross-interpolation-1"><a class="header" href="#tensor-cross-interpolation-1">Tensor Cross Interpolation</a></h1>
+<p>Tensor Cross Interpolation (TCI) approximates a high-dimensional function as a
+tensor train by sampling only a small fraction of its entries. This crate
+provides two levels of API:</p>
+<ul>
+<li><strong><code>tensor4all-tensorci</code></strong> — low-level TCI algorithm working directly on
+integer indices.</li>
+<li><strong><code>tensor4all-quanticstci</code></strong> — high-level wrapper that maps continuous or
+discrete grids to quantics representations before running TCI.</li>
+</ul>
+<h2 id="low-level-tci-tensor4all-tensorci"><a class="header" href="#low-level-tci-tensor4all-tensorci">Low-Level TCI (<code>tensor4all-tensorci</code>)</a></h2>
+<p>Use <code>crossinterpolate2</code> when you already know the local dimensions and want
+direct control over the algorithm.</p>
+<h3 id="defining-the-function"><a class="header" href="#defining-the-function">Defining the function</a></h3>
+<p>The function must accept a slice of multi-indices and return the corresponding
+values. Here is a simple 2D example — the sum of the (0-indexed) indices:</p>
+<pre><code class="language-rust ignore">use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+
+// Define a function to interpolate.
+let f = |idx: &amp;Vec&lt;usize&gt;| (idx[0] + idx[1] + 1) as f64;
+
+// Local dimension for each mode.
+let local_dims = vec![4, 4];
+
+// Initial pivot (required — at least one pivot must be provided).
+let initial_pivots = vec![vec![1, 1]];
+
+// Run TCI2 with a tight tolerance.
+let (tci, ranks, errors) = crossinterpolate2::&lt;f64, _, fn(&amp;[Vec&lt;usize&gt;]) -&gt; Vec&lt;f64&gt;&gt;(
+    f,
+    None,             // optional batch callback; None uses the scalar callback
+    local_dims,
+    initial_pivots,
+    TCI2Options {
+        tolerance: 1e-10,
+        ..Default::default()
+    },
+)?;
+
+assert!(tci.rank() &gt; 0);
+assert!(errors.last().is_some());</code></pre>
+<h3 id="interpreting-the-results"><a class="header" href="#interpreting-the-results">Interpreting the results</a></h3>
+<p><code>crossinterpolate2</code> returns a triple:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Value</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>tci</code></td><td><code>TensorCI2&lt;T&gt;</code></td><td>Completed TCI object; call <code>.to_tensor_train()</code> to get a <code>TensorTrain</code>.</td></tr>
+<tr><td><code>ranks</code></td><td><code>Vec&lt;usize&gt;</code></td><td>Bond dimensions after each sweep.</td></tr>
+<tr><td><code>errors</code></td><td><code>Vec&lt;f64&gt;</code></td><td>Error estimate after each sweep; convergence when last value is below tolerance.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Convert to a tensor train for further manipulation:</p>
+<pre><code class="language-rust ignore">let tt = tci.to_tensor_train();</code></pre>
+<h2 id="high-level-quantics-tci-tensor4all-quanticstci"><a class="header" href="#high-level-quantics-tci-tensor4all-quanticstci">High-Level Quantics TCI (<code>tensor4all-quanticstci</code>)</a></h2>
+<p>The quantics representation encodes each grid index in binary and arranges the
+bits across the tensor-train sites. This often yields much lower bond dimensions
+than a naive encoding.</p>
+<h3 id="important-conventions"><a class="header" href="#important-conventions">Important conventions</a></h3>
+<ul>
+<li><strong>1-indexed grid indices</strong>: grid points are numbered starting at 1, matching
+the Julia <code>QuanticsTCI.jl</code> convention. For example, the first grid point of a
+2D grid is <code>[1, 1]</code>.</li>
+<li><strong>Equal dimensions</strong>: <code>quanticscrossinterpolate_discrete</code> requires all
+dimensions to have the same number of points.</li>
+<li><strong>Power-of-2 grid sizes</strong>: all grid dimensions must be powers of 2 (4, 8,
+16, 32, …).</li>
+</ul>
+<h3 id="discrete-grid-interpolation"><a class="header" href="#discrete-grid-interpolation">Discrete grid interpolation</a></h3>
+<p>Use <code>quanticscrossinterpolate_discrete</code> when your function is naturally defined
+on an integer grid. Indices are passed as <code>&amp;[i64]</code> and are 1-indexed.</p>
+<pre><code class="language-rust ignore">use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+
+// f(i, j) = i + j on a 16 × 16 grid (1-indexed).
+let f = |idx: &amp;[i64]| (idx[0] + idx[1]) as f64;
+
+let sizes = vec![16, 16];   // must be equal powers of 2
+
+let (qtci, ranks, errors) = quanticscrossinterpolate_discrete(
+    &amp;sizes,
+    f,
+    None,   // auto-select initial pivot
+    QtciOptions::default().with_tolerance(1e-10),
+)?;
+
+// Evaluate at a specific grid point (1-indexed).
+let value = qtci.evaluate(&amp;[5, 10])?;   // ≈ 15.0
+assert!((value - 15.0).abs() &lt; 1e-8);
+
+// Sum over all grid points.
+let total = qtci.sum()?;</code></pre>
+<h3 id="continuous-grid-interpolation-with-discretizedgrid"><a class="header" href="#continuous-grid-interpolation-with-discretizedgrid">Continuous grid interpolation with <code>DiscretizedGrid</code></a></h3>
+<p>For functions on continuous domains, build a <code>DiscretizedGrid</code> that maps grid
+indices to physical coordinates. The number of quantics bits per dimension is
+set via the builder.</p>
+<pre><code class="language-rust ignore">use tensor4all_quanticstci::{
+    quanticscrossinterpolate, DiscretizedGrid, QtciOptions,
+};
+
+// 1D grid: 2^4 = 16 points on [0.0, 1.0).
+let grid = DiscretizedGrid::builder(&amp;[4])   // &amp;[bits_per_dim]
+    .with_lower_bound(&amp;[0.0])
+    .with_upper_bound(&amp;[1.0])
+    .build()
+    .unwrap();
+
+// Interpolate f(x) = x^2.
+let f = |x: &amp;[f64]| x[0] * x[0];
+
+let (qtci, _ranks, _errors) = quanticscrossinterpolate(
+    &amp;grid,
+    f,
+    None,
+    QtciOptions::default(),
+)?;</code></pre>
+<h3 id="integration"><a class="header" href="#integration">Integration</a></h3>
+<p><code>integral()</code> computes a <strong>left Riemann sum</strong>:</p>
+<pre><code>integral ≈ Σ f(xᵢ) × Δx
+</code></pre>
+<p>This has O(h) convergence where h is the grid spacing. The result depends on
+whether <code>include_endpoint</code> is set on the <code>DiscretizedGrid</code>.</p>
+<pre><code class="language-rust ignore">let integral = qtci.integral()?;
+// For f(x) = x^2 on [0, 1) with 2^4 points, integral ≈ 1/3.</code></pre>
+<p>For discrete grids created without a continuous domain, <code>integral()</code> returns
+the plain sum identical to <code>sum()</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="quantics-transform"><a class="header" href="#quantics-transform">Quantics Transform</a></h1>
+<p>The <code>tensor4all-quanticstransform</code> crate provides <code>LinearOperator</code> constructors for
+applying transformations to functions represented as quantics tensor trains.
+It is a Rust port of the transformation functionality from
+<a href="https://github.com/tensor4all/Quantics.jl">Quantics.jl</a>.</p>
+<p>Add it to your <code>Cargo.toml</code>:</p>
+<pre><code class="language-toml">[dependencies]
+tensor4all-quanticstransform = "0.1"
+tensor4all-treetn = "0.1"
+</code></pre>
+<hr>
+<h2 id="operator-overview"><a class="header" href="#operator-overview">Operator Overview</a></h2>
+<p>Every constructor returns a <code>LinearOperator</code> from <code>tensor4all-treetn</code>, so all
+operators are applied in the same way regardless of their mathematical meaning.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Operator</th><th>Mathematical effect</th><th>Constructor</th></tr>
+</thead>
+<tbody>
+<tr><td>Flip</td><td>f(x) = g(2^R − x)</td><td><code>flip_operator</code></td></tr>
+<tr><td>Shift</td><td>f(x) = g(x + offset) mod 2^R</td><td><code>shift_operator</code></td></tr>
+<tr><td>Phase Rotation</td><td>f(x) = exp(i·θ·x) · g(x)</td><td><code>phase_rotation_operator</code></td></tr>
+<tr><td>Cumulative Sum</td><td>y_i = Σ_{j &lt; i} x_j</td><td><code>cumsum_operator</code></td></tr>
+<tr><td>Fourier Transform</td><td>Quantics Fourier Transform (QFT)</td><td><code>quantics_fourier_operator</code></td></tr>
+<tr><td>Binary Operation</td><td>f(x, y), first variable → a·x + b·y</td><td><code>binaryop_single_operator</code></td></tr>
+<tr><td>Affine Transform</td><td>y = A·x + b (rational coefficients)</td><td><code>affine_operator</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The parameter <code>r</code> that appears in every constructor is the number of quantics
+bits (sites) per variable.  A single variable is discretized on <code>2^r</code> grid
+points.</p>
+<h3 id="error-conditions"><a class="header" href="#error-conditions">Error Conditions</a></h3>
+<p>Constructors return <code>Err</code> for invalid inputs:</p>
+<ul>
+<li><code>r == 0</code> — no sites to operate on</li>
+<li><code>r == 1</code> for <code>cumsum_operator</code>, <code>triangle_operator</code>, <code>quantics_fourier_operator</code> — requires at least 2 sites</li>
+<li><code>r &gt;= 64</code> for <code>shift_operator</code> — would overflow a 64-bit integer</li>
+<li>NaN or Inf <code>theta</code> for <code>phase_rotation_operator</code> — invalid rotation angle</li>
+<li><code>BinaryCoeffs(-1, -1)</code> for <code>binaryop_single_operator</code> — this combination is not supported</li>
+</ul>
+<hr>
+<h2 id="creating-operators"><a class="header" href="#creating-operators">Creating Operators</a></h2>
+<pre><code class="language-rust ignore">use tensor4all_quanticstransform::{
+    flip_operator, shift_operator, phase_rotation_operator,
+    cumsum_operator, quantics_fourier_operator,
+    BoundaryCondition, FourierOptions,
+};
+
+// 8-bit quantics representation (2^8 = 256 grid points)
+let r = 8;
+
+// Flip: f(x) = g(2^R - x)
+let flip_op = flip_operator(r, BoundaryCondition::Periodic)?;
+
+// Shift by 10: f(x) = g(x + 10) mod 2^R
+let shift_op = shift_operator(r, 10, BoundaryCondition::Periodic)?;
+
+// Phase rotation: f(x) = exp(i*pi/4*x) * g(x)
+let phase_op = phase_rotation_operator(r, std::f64::consts::PI / 4.0)?;
+
+// Cumulative sum
+let cumsum_op = cumsum_operator(r)?;
+
+// Fourier transform (forward)
+let ft_op = quantics_fourier_operator(r, FourierOptions::forward())?;</code></pre>
+<h3 id="affine-transform"><a class="header" href="#affine-transform">Affine Transform</a></h3>
+<p>For transformations of the form <strong>y = A·x + b</strong> with rational coefficients:</p>
+<pre><code class="language-rust ignore">use tensor4all_quanticstransform::{affine_operator, AffineParams, BoundaryCondition};
+use num_rational::Rational64;
+
+// A = [[1, 1], [1, -1]], b = [0, 0]  (2 outputs, 2 inputs)
+let a = vec![
+    Rational64::from_integer(1), Rational64::from_integer(1),
+    Rational64::from_integer(1), Rational64::from_integer(-1),
+];
+let b = vec![Rational64::from_integer(0), Rational64::from_integer(0)];
+let params = AffineParams::new(a, b, 2, 2)?;
+let bc = vec![BoundaryCondition::Periodic; 2];
+let affine_op = affine_operator(r, &amp;params, &amp;bc)?;</code></pre>
+<hr>
+<h2 id="applying-operators-to-a-tensor-train"><a class="header" href="#applying-operators-to-a-tensor-train">Applying Operators to a Tensor Train</a></h2>
+<h3 id="index-mapping-flow"><a class="header" href="#index-mapping-flow">Index Mapping Flow</a></h3>
+<p>Operators define abstract <em>input</em> and <em>output</em> indices labeled <code>0, 1, …, r-1</code>.
+To apply an operator, replace the tensor network’s site indices with the
+operator’s input indices using <code>replaceind</code>, then call <code>apply_linear_operator</code>.</p>
+<pre><code>Original TreeTN          Operator            Result TreeTN
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│  site_idx_0  │───▶│  input_0     │    │  output_0    │
+│  site_idx_1  │───▶│  input_1     │───▶│  output_1    │
+│  site_idx_2  │───▶│  input_2     │    │  output_2    │
+│  other_idx   │    │              │    │  other_idx   │  (passes through)
+└──────────────┘    └──────────────┘    └──────────────┘
+</code></pre>
+<p><code>apply_linear_operator</code>:</p>
+<ol>
+<li>Contracts the operator’s tensors with the TreeTN.</li>
+<li>Replaces input indices with output indices.</li>
+<li>Leaves all unrelated indices unchanged.</li>
+</ol>
+<h3 id="basic-application"><a class="header" href="#basic-application">Basic Application</a></h3>
+<pre><code class="language-rust ignore">use tensor4all_treetn::{apply_linear_operator, ApplyOptions};
+
+let r = 4;
+let shift_op = shift_operator(r, 3, BoundaryCondition::Periodic)?;
+
+// Obtain the TreeTN's site indices (one per bit site)
+let site_indices: Vec&lt;DynIndex&gt; = treetn.external_indices();
+
+// Remap the TreeTN's site indices to the operator's input indices
+let mut treetn_remapped = treetn;
+for i in 0..r {
+    let op_input = shift_op
+        .get_input_mapping(&amp;i)
+        .expect("missing input mapping")
+        .true_index
+        .clone();
+    treetn_remapped = treetn_remapped.replaceind(&amp;site_indices[i], &amp;op_input)?;
+}
+
+// Apply the operator
+let result = apply_linear_operator(&amp;shift_op, &amp;treetn_remapped, ApplyOptions::default())?;</code></pre>
+<h3 id="partial-application-multi-variable-tensor-trains"><a class="header" href="#partial-application-multi-variable-tensor-trains">Partial Application (Multi-Variable Tensor Trains)</a></h3>
+<p>A key feature is applying an operator to <strong>only some indices</strong> of a tensor
+network.  For example, to Fourier-transform only the x-variable of a 2D
+function f(x, y):</p>
+<pre><code class="language-rust ignore">let r = 4;
+// treetn_2d has interleaved or separate indices for x and y
+let x_indices: Vec&lt;DynIndex&gt; = /* 4 bit indices for x */;
+let y_indices: Vec&lt;DynIndex&gt; = /* 4 bit indices for y */;
+
+let fourier_x = quantics_fourier_operator(r, FourierOptions::forward())?;
+
+// Remap ONLY the x indices
+let mut treetn_remapped = treetn_2d;
+for i in 0..r {
+    let op_input = fourier_x
+        .get_input_mapping(&amp;i)
+        .expect("missing input mapping")
+        .true_index
+        .clone();
+    treetn_remapped = treetn_remapped.replaceind(&amp;x_indices[i], &amp;op_input)?;
+}
+// y_indices are NOT remapped — they pass through unchanged
+
+let result = apply_linear_operator(&amp;fourier_x, &amp;treetn_remapped, ApplyOptions::default())?;
+// result represents F_x[f](k_x, y)</code></pre>
+<h3 id="truncation-options"><a class="header" href="#truncation-options">Truncation Options</a></h3>
+<p>Control the accuracy/efficiency tradeoff:</p>
+<pre><code class="language-rust ignore">// No truncation — exact but potentially expensive
+let options = ApplyOptions::naive();
+
+// ZipUp algorithm with bond dimension and tolerance limits
+let options = ApplyOptions::zipup()
+    .with_max_bond_dim(64)
+    .with_tolerance(1e-10);
+
+// Fit algorithm for more control over iterations
+let options = ApplyOptions::fit()
+    .with_max_bond_dim(32)
+    .with_max_iterations(100);
+
+let result = apply_linear_operator(&amp;op, &amp;treetn_remapped, options)?;</code></pre>
+<hr>
+<h2 id="bit-ordering-and-encoding"><a class="header" href="#bit-ordering-and-encoding">Bit Ordering and Encoding</a></h2>
+<h3 id="big-endian-convention"><a class="header" href="#big-endian-convention">Big-Endian Convention</a></h3>
+<p>All operators use <strong>big-endian</strong> bit ordering, matching Julia’s Quantics.jl:</p>
+<ul>
+<li>Site 0 = Most Significant Bit (MSB)</li>
+<li>Site R−1 = Least Significant Bit (LSB)</li>
+<li>Integer value: x = Σ_n x_n · 2^(R−1−n)</li>
+</ul>
+<p>For example, with R = 3 sites the value 5 = 101₂ is stored as:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Site</th><th>Bit</th><th>Contribution</th></tr>
+</thead>
+<tbody>
+<tr><td>0</td><td>1</td><td>2² = 4</td></tr>
+<tr><td>1</td><td>0</td><td>0</td></tr>
+<tr><td>2</td><td>1</td><td>2⁰ = 1</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="multi-variable-encoding"><a class="header" href="#multi-variable-encoding">Multi-Variable Encoding</a></h3>
+<p>The <code>_multivar</code> variants (<code>flip_operator_multivar</code>, <code>shift_operator_multivar</code>,
+<code>phase_rotation_operator_multivar</code>) use <strong>interleaved bit encoding</strong> for
+multiple variables.  Each site simultaneously encodes one bit from each
+variable:</p>
+<pre><code>site index s_n encodes: bit_var0 + 2 * bit_var1 + 4 * bit_var2 + ...
+</code></pre>
+<p>Each site’s local dimension is <code>2^num_vars</code>.  This interleaved layout is the
+standard quantics multi-variable representation and is equivalent to
+interleaving the bit planes of all variables.</p>
+<hr>
+<h2 id="boundary-conditions"><a class="header" href="#boundary-conditions">Boundary Conditions</a></h2>
+<p>Two boundary conditions are supported for operators that wrap indices (flip,
+shift):</p>
+<ul>
+<li><strong>Periodic</strong> — results wrap modulo 2^R.</li>
+<li><strong>Open</strong> — indices that fall outside [0, 2^R) produce a zero vector.</li>
+</ul>
+<pre><code class="language-rust ignore">// Periodic: shift(7, 2) = 9 mod 8 = 1
+let shift_periodic = shift_operator(3, 2, BoundaryCondition::Periodic)?;
+
+// Open: shift(7, 2) = 9 &gt;= 8, so the result is the zero vector
+let shift_open = shift_operator(3, 2, BoundaryCondition::Open)?;</code></pre>
+<hr>
+<h2 id="fourier-transform-convention"><a class="header" href="#fourier-transform-convention">Fourier Transform Convention</a></h2>
+<p><code>quantics_fourier_operator</code> produces output in <strong>bit-reversed order</strong>.  This is
+inherent to the QFT algorithm: the output site ordering corresponds to the
+bit-reversal of the frequency index.  If you need natural frequency ordering,
+apply a bit-reversal permutation after the transform.</p>
+<pre><code class="language-rust ignore">// Forward QFT (bit-reversed output)
+let fwd = quantics_fourier_operator(r, FourierOptions::forward())?;
+
+// Inverse QFT
+let inv = quantics_fourier_operator(r, FourierOptions::inverse())?;</code></pre>
+<hr>
+<h2 id="reference"><a class="header" href="#reference">Reference</a></h2>
+<ul>
+<li><a href="https://github.com/tensor4all/Quantics.jl">Quantics.jl</a> — Julia implementation that this crate ports.</li>
+<li>J. Chen and M. Lindsey, “Direct Interpolative Construction of the Discrete Fourier Transform as a Matrix Product Operator”, arXiv:2404.03182 (2024) — QFT algorithm.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="tree-tensor-networks"><a class="header" href="#tree-tensor-networks">Tree Tensor Networks</a></h1>
+<p>The <code>tensor4all-treetn</code> crate provides a generic tree tensor network (<code>TreeTN</code>) that supports
+arbitrary tree topologies — not just linear chains. This guide covers construction, canonicalization,
+common operations, and the sweep-counting convention used by iterative algorithms.</p>
+<h2 id="creating-a-treetn"><a class="header" href="#creating-a-treetn">Creating a TreeTN</a></h2>
+<p>Use <code>TreeTN::from_tensors</code> to build a network from individual tensors. The topology is inferred
+automatically: two tensors are connected by an edge when they share a <strong>bond index</strong> (a <code>DynIndex</code>
+that appears in both tensors). Physical (site) indices appear in exactly one tensor.</p>
+<p>The example below builds a 3-site MPS chain <code>t0 -- t1 -- t2</code>:</p>
+<pre><code class="language-rust ignore">use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_treetn::TreeTN;
+
+// Site indices (appear in one tensor each)
+let s0 = DynIndex::new_dyn(2);
+let s1 = DynIndex::new_dyn(2);
+let s2 = DynIndex::new_dyn(2);
+
+// Bond indices (shared between adjacent tensors)
+let b01 = DynIndex::new_dyn(3);
+let b12 = DynIndex::new_dyn(3);
+
+let t0 = TensorDynLen::from_dense(vec![s0, b01.clone()], vec![1.0; 6])?;
+let t1 = TensorDynLen::from_dense(vec![b01, s1, b12.clone()], vec![1.0; 12])?;
+let t2 = TensorDynLen::from_dense(vec![b12, s2], vec![1.0; 6])?;
+
+let ttn = TreeTN::&lt;TensorDynLen, usize&gt;::from_tensors(
+    vec![t0, t1, t2],
+    vec![0, 1, 2],   // vertex labels
+)?;
+assert_eq!(ttn.node_count(), 3);
+assert_eq!(ttn.edge_count(), 2);</code></pre>
+<p>Each vertex is labelled by the user-supplied key (here <code>usize</code>). Any type that is <code>Eq + Hash</code> works.
+The tensor at vertex <code>v</code> is retrieved with <code>ttn[v]</code>.</p>
+<h2 id="canonicalization"><a class="header" href="#canonicalization">Canonicalization</a></h2>
+<p>Canonicalization orthogonalizes the network toward a chosen <strong>root vertex</strong>, turning all tensors
+except the root into isometries. This puts the full norm information into the root tensor and is a
+prerequisite for efficient norm computation and truncation.</p>
+<pre><code class="language-rust ignore">use tensor4all_treetn::{CanonicalizationOptions, TruncationOptions};
+
+// Canonicalize toward vertex 0
+let ttn = ttn.canonicalize([0], CanonicalizationOptions::default())?;
+
+// Truncate bond dimensions after canonicalization
+let ttn = ttn.truncate([0], TruncationOptions::default().with_max_rank(2))?;</code></pre>
+<p><code>TruncationOptions</code> supports both a maximum rank (<code>with_max_rank</code>) and a relative tolerance
+(<code>with_rtol</code>). Truncation discards small singular values on each bond, reducing memory and
+contraction cost at the expense of a controlled approximation error.</p>
+<h2 id="operations"><a class="header" href="#operations">Operations</a></h2>
+<h3 id="norm-computation"><a class="header" href="#norm-computation">Norm Computation</a></h3>
+<p><code>norm()</code> returns the Frobenius norm of the tensor represented by the network. It canonicalizes
+internally so the result is always exact (up to floating-point precision).</p>
+<pre><code class="language-rust ignore">let norm = ttn.norm()?;
+assert!(norm &gt; 0.0);</code></pre>
+<h3 id="dense-conversion"><a class="header" href="#dense-conversion">Dense Conversion</a></h3>
+<p><code>to_dense()</code> contracts all bond indices and returns a single <code>TensorDynLen</code> whose indices are the
+physical (site) indices of the network. For large networks this can be expensive — use it mainly
+for testing or small examples.</p>
+<pre><code class="language-rust ignore">let dense = ttn.to_dense()?;</code></pre>
+<h3 id="addition"><a class="header" href="#addition">Addition</a></h3>
+<p>Two <code>TreeTN</code>s with the <strong>same topology and matching site indices</strong> can be added with <code>add</code>. The
+result has the same tree structure, but each bond dimension is the sum of the two input bond
+dimensions (direct-sum construction).</p>
+<pre><code class="language-rust ignore">// sum represents tn_a + tn_b; bond dims are additive
+let sum = tn_a.add(&amp;tn_b)?;</code></pre>
+<p>After addition the bond dimensions grow, so it is common to follow up with <code>truncate</code> to keep them
+manageable.</p>
+<h3 id="contraction-1"><a class="header" href="#contraction-1">Contraction</a></h3>
+<p>A <code>TreeTN</code> can be fully contracted to a scalar or dense tensor via <code>to_dense()</code>. For
+network-to-network contractions (e.g., computing inner products or applying operators), use the
+higher-level contraction APIs provided by <code>tensor4all-treetn</code>. Refer to the crate documentation for
+variational (fit) contraction, which avoids the exponential cost of naive full contraction.</p>
+<h2 id="sweep-counting"><a class="header" href="#sweep-counting">Sweep Counting</a></h2>
+<p>Iterative algorithms (DMRG-like local updates, fitting) sweep through the network edges multiple
+times. <code>tensor4all-treetn</code> uses the <strong><code>nfullsweeps</code></strong> convention:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Term</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Half sweep</strong></td><td>Visit each edge once in a single direction (used in <code>tensor4all-itensorlike</code>)</td></tr>
+<tr><td><strong>Full sweep</strong></td><td>Visit each edge twice — forward <strong>and</strong> backward (Euler tour)</td></tr>
+</tbody>
+</table>
+</div>
+<p>The relationship is <code>nfullsweeps = nhalfsweeps / 2</code>.</p>
+<p>Concretely:</p>
+<ul>
+<li><code>nfullsweeps = 1</code> — each edge is updated twice (once per direction).</li>
+<li><code>nfullsweeps = 2</code> — each edge is updated four times total.</li>
+</ul>
+<p>When interoperating with code that uses <code>nhalfsweeps</code>, divide by two before passing the value to
+<code>tensor4all-treetn</code> APIs.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="conventions"><a class="header" href="#conventions">Conventions</a></h1>
+<p>This page collects important conventions that apply across the entire tensor4all-rs codebase.</p>
+<h2 id="dense-layout-column-major"><a class="header" href="#dense-layout-column-major">Dense Layout (Column-Major)</a></h2>
+<p>tensor4all-rs uses <strong>column-major</strong> (Fortran order) dense linearization internally. Flat dense
+buffers, <code>reshape</code>/<code>flatten</code> semantics, the C API, and the HDF5 layer are all defined in terms
+of column-major ordering.</p>
+<p>This matches Julia, ITensors.jl, and tenferro-rs. When exchanging dense data with NumPy, use
+<code>order="F"</code> when you need explicit control over flattening or reshaping.</p>
+<h2 id="indexing"><a class="header" href="#indexing">Indexing</a></h2>
+<ul>
+<li>Sites are <strong>0-indexed</strong> in Rust (unlike ITensors.jl, which is 1-indexed).</li>
+<li><strong>Exception</strong>: <code>tensor4all-quanticstci</code> grid indices are <strong>1-indexed</strong>, following the Julia
+convention for compatibility with QuanticsTCI.jl.</li>
+</ul>
+<h2 id="truncation-tolerance"><a class="header" href="#truncation-tolerance">Truncation Tolerance</a></h2>
+<p>tensor4all-rs uses <code>rtol</code> (relative tolerance). ITensors.jl uses <code>cutoff</code>. The conversion is:</p>
+<pre><code>rtol = sqrt(cutoff)
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Library</th><th>Parameter</th><th>Conversion</th></tr>
+</thead>
+<tbody>
+<tr><td>tensor4all-rs</td><td><code>rtol</code></td><td>—</td></tr>
+<tr><td>ITensors.jl</td><td><code>cutoff</code></td><td><code>rtol = √cutoff</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Example</strong>: ITensors.jl <code>cutoff=1e-10</code> corresponds to <code>rtol=1e-5</code> in tensor4all-rs.</p>
+<h2 id="itensorsjl-type-correspondence"><a class="header" href="#itensorsjl-type-correspondence">ITensors.jl Type Correspondence</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>ITensors.jl</th><th>tensor4all-rs</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Index{Int}</code></td><td><code>Index&lt;Id, NoSymmSpace&gt;</code></td></tr>
+<tr><td><code>ITensor</code></td><td><code>TensorDynLen</code></td></tr>
+<tr><td><code>Dense</code></td><td><code>Storage::StructuredF64/C64</code></td></tr>
+<tr><td><code>Diag</code></td><td><code>Storage::StructuredF64/C64</code> (diagonal <code>axis_classes</code>)</td></tr>
+<tr><td><code>A * B</code></td><td><code>a.contract(&amp;b)</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="scalar-types"><a class="header" href="#scalar-types">Scalar Types</a></h2>
+<p>tensor4all-rs supports two scalar types:</p>
+<ul>
+<li><code>f64</code> — double-precision real</li>
+<li><code>Complex64</code> — double-precision complex (from the <code>num-complex</code> crate)</li>
+</ul>
+<p>Generic APIs handle both types. Prefer writing generic code over scalar-specific variants (<code>*_f64</code>
+/ <code>*_c64</code>) in library and test code. The C API uses scalar-specific names at the FFI boundary
+where generic dispatch is not available.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="julia-bindings"><a class="header" href="#julia-bindings">Julia Bindings</a></h1>
+<p>The Julia bindings for tensor4all-rs are maintained in a separate repository: <strong><a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl</a></strong>.</p>
+<h2 id="installation"><a class="header" href="#installation">Installation</a></h2>
+<p>To install Tensor4all.jl, use Julia’s package manager:</p>
+<pre><code class="language-julia">using Pkg
+Pkg.add(url="https://github.com/tensor4all/Tensor4all.jl")
+</code></pre>
+<p>This will automatically download and build the Rust library via the C API (<code>tensor4all-capi</code>).</p>
+<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
+<p>Tensor4all.jl provides a high-level Julia interface to tensor4all-rs, including:</p>
+<ul>
+<li><strong>Tensor operations</strong> — creation, manipulation, and contraction</li>
+<li><strong>Tensor Trains</strong> — construction and compression</li>
+<li><strong>Tree Tensor Networks</strong> — general tensor network representations</li>
+<li><strong>Tensor Cross Interpolation (TCI)</strong> — efficient sampling and interpolation</li>
+<li><strong>Quantics Transforms</strong> — quantization and structured encodings</li>
+</ul>
+<p>The Julia package bridges to the Rust core through the C API, so you benefit from the performance and correctness of the underlying Rust implementations.</p>
+<h2 id="documentation"><a class="header" href="#documentation">Documentation</a></h2>
+<p>For detailed documentation, examples, and API reference, visit the <strong><a href="https://github.com/tensor4all/Tensor4all.jl">Tensor4all.jl README</a></strong> on GitHub.</p>
+<h2 id="linking-rust-and-julia-code"><a class="header" href="#linking-rust-and-julia-code">Linking Rust and Julia Code</a></h2>
+<p>If you want to use tensor4all-rs directly in a Rust project and interoperate with Julia, see the <a href="../api/capi/index.html">C API reference</a> for FFI details.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+
+    </div>
+    </body>
+</html>
