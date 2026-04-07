@@ -34,6 +34,13 @@ Read `docs/api/*.md` before source files. Only read source when API doc is insuf
 
 **Always run `cargo fmt --all` before committing changes.**
 
+## Documentation Requirements
+
+Every public type, trait, and function **must** include usage examples in its
+doc comments (`/// # Examples`). Examples must include assertions to verify
+correctness (e.g., `assert!`, `assert_eq!`, `approx::assert_abs_diff_eq!`).
+Use `ignore` attribute on examples that cannot run in doctests.
+
 ## Error Handling
 
 - `anyhow` for internal error handling and context
@@ -121,6 +128,7 @@ Before creating a PR, always run lint checks locally:
 cargo fmt --all                        # Format all code
 cargo clippy --workspace               # Check for common issues
 cargo nextest run --release --workspace # Run all tests
+cargo doc --workspace --no-deps        # Build rustdoc
 ```
 
 | Change Type | Workflow |

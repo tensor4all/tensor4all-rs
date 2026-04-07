@@ -63,6 +63,39 @@ pub use swap::{SwapOptions, SwapPlan, SwapStep};
 ///
 /// - `TreeTN::new()`: Create an empty network, then use `add_tensor()` and `connect()` to build.
 /// - `TreeTN::from_tensors(tensors, node_names)`: Create from tensors with auto-connection by matching index IDs.
+///
+/// # Examples
+///
+/// Build a 2-node chain manually and verify node count:
+///
+/// ```
+/// use tensor4all_treetn::TreeTN;
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+///
+/// // Create site and bond indices
+/// let s0 = DynIndex::new_dyn(2);
+/// let bond = DynIndex::new_dyn(3);
+/// let s1 = DynIndex::new_dyn(2);
+///
+/// // Build tensors
+/// let t0 = TensorDynLen::from_dense(
+///     vec![s0.clone(), bond.clone()],
+///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+/// ).unwrap();
+/// let t1 = TensorDynLen::from_dense(
+///     vec![bond.clone(), s1.clone()],
+///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+/// ).unwrap();
+///
+/// // Use from_tensors (auto-connects nodes sharing the same index ID)
+/// let tn = TreeTN::<_, String>::from_tensors(
+///     vec![t0, t1],
+///     vec!["A".to_string(), "B".to_string()],
+/// ).unwrap();
+///
+/// assert_eq!(tn.node_count(), 2);
+/// assert_eq!(tn.edge_count(), 1);
+/// ```
 pub struct TreeTN<T = tensor4all_core::TensorDynLen, V = NodeIndex>
 where
     T: TensorLike,
@@ -148,6 +181,34 @@ where
     ///
     /// # Errors
     /// Returns an error if validation fails or connection fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::TreeTN;
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// let s0 = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(3);
+    /// let s1 = DynIndex::new_dyn(2);
+    ///
+    /// let t0 = TensorDynLen::from_dense(
+    ///     vec![s0.clone(), bond.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0],
+    /// ).unwrap();
+    /// let t1 = TensorDynLen::from_dense(
+    ///     vec![bond.clone(), s1.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0],
+    /// ).unwrap();
+    ///
+    /// let tn = TreeTN::<_, String>::from_tensors(
+    ///     vec![t0, t1],
+    ///     vec!["A".to_string(), "B".to_string()],
+    /// ).unwrap();
+    ///
+    /// assert_eq!(tn.node_count(), 2);
+    /// assert_eq!(tn.edge_count(), 1);
+    /// ```
     pub fn from_tensors(tensors: Vec<T>, node_names: Vec<V>) -> Result<Self>
     where
         <T::Index as IndexLike>::Id:

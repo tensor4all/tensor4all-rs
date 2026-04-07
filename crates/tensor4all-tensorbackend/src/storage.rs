@@ -398,6 +398,22 @@ impl<T: Copy + Default> StructuredStorage<T> {
 ///
 /// Public callers interact with this opaque wrapper through constructors and
 /// high-level query/materialization methods.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::Storage;
+///
+/// // Dense 2x3 matrix stored column-major: [[1,2,3],[4,5,6]]
+/// let data = vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0];
+/// let s = Storage::from_dense_col_major(data, &[2, 3]).unwrap();
+/// assert!(s.is_f64());
+/// assert!(!s.is_complex());
+///
+/// // Diagonal storage: 2x2 identity-like diagonal
+/// let diag = Storage::new_diag(vec![1.0_f64, 2.0]);
+/// assert!(diag.is_f64());
+/// ```
 #[derive(Debug, Clone)]
 pub struct Storage(pub(crate) StorageRepr);
 
@@ -470,6 +486,18 @@ impl Storage {
     /// Create dense storage from column-major logical values (generic over scalar type).
     ///
     /// The scalar type is inferred from the `data` argument.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// // 2x2 matrix, column-major: [[1,3],[2,4]]
+    /// let s = Storage::from_dense_col_major(vec![1.0_f64, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+    /// assert!(s.is_f64());
+    /// assert!(s.is_dense());
+    /// assert_eq!(s.len(), 4);
+    /// ```
     pub fn from_dense_col_major<T: StorageScalar>(
         data: Vec<T>,
         logical_dims: &[usize],
@@ -492,6 +520,16 @@ impl Storage {
     }
 
     /// Create a new diagonal storage with the given diagonal data (generic over scalar type).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let s = Storage::new_diag(vec![1.0_f64, 2.0, 3.0]);
+    /// assert!(s.is_diag());
+    /// assert!(s.is_f64());
+    /// ```
     pub fn new_diag<T: StorageScalar>(diag_data: Vec<T>) -> Self {
         Self::from_diag_col_major(diag_data, 2)
             .unwrap_or_else(|err| panic!("Storage::new_diag failed: {err}"))

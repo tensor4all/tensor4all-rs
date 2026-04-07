@@ -37,6 +37,35 @@ use tensor4all_core::truncation::HasTruncationParams;
 ///
 /// Internally wraps `TreeTN<TensorDynLen, usize>` where node names are site indices.
 /// This allows reuse of TreeTN's canonicalization and contraction algorithms.
+///
+/// # Examples
+///
+/// Build a 2-site tensor train and query its properties:
+///
+/// ```
+/// use tensor4all_itensorlike::TensorTrain;
+/// use tensor4all_core::{DynIndex, TensorDynLen, Index};
+/// use tensor4all_core::DynId;
+///
+/// // Site indices and link index
+/// let s0 = Index::new_with_size(DynId(0), 2);
+/// let link = Index::new_with_size(DynId(1), 3);
+/// let s1 = Index::new_with_size(DynId(2), 2);
+///
+/// let t0 = TensorDynLen::from_dense(
+///     vec![s0.clone(), link.clone()],
+///     (0..6).map(|i| i as f64).collect(),
+/// ).unwrap();
+/// let t1 = TensorDynLen::from_dense(
+///     vec![link.clone(), s1.clone()],
+///     (0..6).map(|i| i as f64).collect(),
+/// ).unwrap();
+///
+/// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+/// assert_eq!(tt.len(), 2);
+/// assert_eq!(tt.maxbonddim(), 3);
+/// assert!(!tt.is_empty());
+/// ```
 #[derive(Debug, Clone)]
 pub struct TensorTrain {
     /// The underlying TreeTN with linear chain topology.
@@ -624,6 +653,34 @@ impl TensorTrain {
     /// # Errors
     ///
     /// Returns an error if the factorization fails or if the site is out of bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_itensorlike::TensorTrain;
+    /// use tensor4all_core::{DynIndex, TensorDynLen, Index, DynId};
+    ///
+    /// let s0 = Index::new_with_size(DynId(0), 2);
+    /// let link = Index::new_with_size(DynId(1), 3);
+    /// let s1 = Index::new_with_size(DynId(2), 2);
+    ///
+    /// let t0 = TensorDynLen::from_dense(
+    ///     vec![s0.clone(), link.clone()],
+    ///     (0..6).map(|i| i as f64).collect(),
+    /// ).unwrap();
+    /// let t1 = TensorDynLen::from_dense(
+    ///     vec![link.clone(), s1.clone()],
+    ///     (0..6).map(|i| i as f64).collect(),
+    /// ).unwrap();
+    ///
+    /// let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    /// assert!(!tt.isortho());
+    ///
+    /// // Orthogonalize to site 0
+    /// tt.orthogonalize(0).unwrap();
+    /// assert!(tt.isortho());
+    /// assert_eq!(tt.orthocenter(), Some(0));
+    /// ```
     pub fn orthogonalize(&mut self, site: usize) -> Result<()> {
         self.orthogonalize_with(site, CanonicalForm::Unitary)
     }
@@ -668,6 +725,41 @@ impl TensorTrain {
     ///
     /// Note: The `site_range` option in `TruncateOptions` is currently ignored
     /// as the underlying TreeTN truncation operates on the full network.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_itensorlike::{TensorTrain, TruncateOptions};
+    /// use tensor4all_core::{DynIndex, TensorDynLen, Index, DynId};
+    ///
+    /// // Build a 3-site tensor train with bond dimension 4
+    /// let s0 = Index::new_with_size(DynId(0), 2);
+    /// let l01 = Index::new_with_size(DynId(1), 4);
+    /// let s1 = Index::new_with_size(DynId(2), 2);
+    /// let l12 = Index::new_with_size(DynId(3), 4);
+    /// let s2 = Index::new_with_size(DynId(4), 2);
+    ///
+    /// let t0 = TensorDynLen::from_dense(
+    ///     vec![s0.clone(), l01.clone()],
+    ///     (0..8).map(|i| i as f64).collect(),
+    /// ).unwrap();
+    /// let t1 = TensorDynLen::from_dense(
+    ///     vec![l01.clone(), s1.clone(), l12.clone()],
+    ///     (0..32).map(|i| i as f64).collect(),
+    /// ).unwrap();
+    /// let t2 = TensorDynLen::from_dense(
+    ///     vec![l12.clone(), s2.clone()],
+    ///     (0..8).map(|i| i as f64).collect(),
+    /// ).unwrap();
+    ///
+    /// let mut tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
+    /// assert_eq!(tt.maxbonddim(), 4);
+    ///
+    /// // Truncate bond dimension to at most 2
+    /// let opts = TruncateOptions::svd().with_max_rank(2);
+    /// tt.truncate(&opts).unwrap();
+    /// assert!(tt.maxbonddim() <= 2);
+    /// ```
     pub fn truncate(&mut self, options: &TruncateOptions) -> Result<()> {
         if self.len() <= 1 {
             return Ok(());
@@ -703,6 +795,26 @@ impl TensorTrain {
     ///
     /// Both tensor trains must have the same site indices (same IDs).
     /// Link indices may differ between the two tensor trains.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_itensorlike::TensorTrain;
+    /// use tensor4all_core::{DynIndex, TensorDynLen, Index, DynId, AnyScalar};
+    ///
+    /// // Single-site tensor train with values [1.0, 0.0]
+    /// let s0 = Index::new_with_size(DynId(0), 2);
+    /// let t = TensorDynLen::from_dense(
+    ///     vec![s0.clone()],
+    ///     vec![1.0_f64, 0.0],
+    /// ).unwrap();
+    ///
+    /// let tt = TensorTrain::new(vec![t]).unwrap();
+    ///
+    /// // <tt | tt> = 1.0^2 + 0.0^2 = 1.0
+    /// let result = tt.inner(&tt);
+    /// assert!((result.real() - 1.0).abs() < 1e-10);
+    /// ```
     pub fn inner(&self, other: &Self) -> AnyScalar {
         assert_eq!(
             self.len(),

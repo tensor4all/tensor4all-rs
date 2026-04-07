@@ -339,6 +339,32 @@ type BatchFunc<I, V> = dyn Fn(&[Vec<I>]) -> Vec<V> + Send + Sync;
 /// - `V` - cached value type
 /// - `F` - single-evaluation function `Fn(&[I]) -> V`
 /// - `I` - index element type (default `usize`); use `u8` for quantics
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::CachedFunction;
+///
+/// // Cache a 2-site function with local dimensions [3, 4]
+/// let cf = CachedFunction::new(
+///     |idx: &[usize]| (idx[0] * 4 + idx[1]) as f64,
+///     &[3, 4],
+/// ).unwrap();
+///
+/// // First call evaluates and caches
+/// let v00 = cf.eval(&[0, 0]);
+/// assert_eq!(v00, 0.0);
+/// assert_eq!(cf.num_evals(), 1);
+/// assert_eq!(cf.num_cache_hits(), 0);
+///
+/// // Second call uses cache
+/// let v00_again = cf.eval(&[0, 0]);
+/// assert_eq!(v00_again, 0.0);
+/// assert_eq!(cf.num_cache_hits(), 1);
+///
+/// let v12 = cf.eval(&[1, 2]);
+/// assert_eq!(v12, 6.0); // 1*4 + 2
+/// ```
 pub struct CachedFunction<V, F, I = usize>
 where
     I: IndexInt,
@@ -361,6 +387,17 @@ where
     F: Fn(&[I]) -> V + Send + Sync,
 {
     /// Create a new cached function with automatic key selection (up to 1024 bits).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| idx[0] + idx[1], &[2, 3]).unwrap();
+    /// assert_eq!(cf.eval(&[1, 2]), 3);
+    /// assert_eq!(cf.num_sites(), 2);
+    /// assert_eq!(cf.local_dims(), &[2, 3]);
+    /// ```
     pub fn new(func: F, local_dims: &[usize]) -> Result<Self, error::CacheKeyError> {
         Ok(Self {
             func,
@@ -458,6 +495,16 @@ where
     /// Evaluate at multiple indices. Uses batch function for cache misses if available.
     ///
     /// Returns results in the same order as the input indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| idx[0] * 2 + idx[1], &[2, 2]).unwrap();
+    /// let results = cf.eval_batch(&[vec![0, 0], vec![0, 1], vec![1, 0]]);
+    /// assert_eq!(results, vec![0, 1, 2]);
+    /// ```
     pub fn eval_batch(&self, indices: &[Vec<I>]) -> Vec<V> {
         if indices.is_empty() {
             return Vec::new();
@@ -534,6 +581,18 @@ where
     }
 
     /// Clear the cache.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
+    /// cf.eval(&[2]);
+    /// assert_eq!(cf.cache_size(), 1);
+    /// cf.clear_cache();
+    /// assert_eq!(cf.cache_size(), 0);
+    /// ```
     pub fn clear_cache(&self) {
         self.cache.clear();
     }
@@ -544,6 +603,17 @@ where
     }
 
     /// Check if an index is cached.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
+    /// assert!(!cf.is_cached(&[1]));
+    /// cf.eval(&[1]);
+    /// assert!(cf.is_cached(&[1]));
+    /// ```
     pub fn is_cached(&self, idx: &[I]) -> bool {
         self.cache.contains(idx)
     }

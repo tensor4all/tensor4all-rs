@@ -164,6 +164,30 @@ pub(crate) fn promote_scalar_native(
 /// Dynamic scalar used across tensor4all backends.
 ///
 /// This is a tensor4all-owned rank-0 wrapper over tenferro's dynamic tensor.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::AnyScalar;
+///
+/// // Real scalar
+/// let a = AnyScalar::new_real(3.14);
+/// assert!((a.real() - 3.14).abs() < 1e-10);
+/// assert_eq!(a.imag(), 0.0);
+/// assert!(a.is_real());
+/// assert!(!a.is_complex());
+///
+/// // Complex scalar
+/// let b = AnyScalar::new_complex(1.0, 2.0);
+/// assert!((b.real() - 1.0).abs() < 1e-10);
+/// assert!((b.imag() - 2.0).abs() < 1e-10);
+/// assert!(b.is_complex());
+///
+/// // Arithmetic
+/// let c = AnyScalar::new_real(2.0);
+/// let d = a + c;
+/// assert!((d.real() - 5.14).abs() < 1e-10);
+/// ```
 pub struct Scalar {
     native: NativeTensor,
 }
@@ -203,21 +227,60 @@ impl Scalar {
     }
 
     /// Creates a real scalar from an `f64` value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::AnyScalar;
+    ///
+    /// let s = AnyScalar::from_real(2.5);
+    /// assert!((s.real() - 2.5).abs() < 1e-10);
+    /// assert!(s.is_real());
+    /// ```
     pub fn from_real(x: f64) -> Self {
         Self::from_value(x)
     }
 
     /// Creates a complex scalar from real and imaginary parts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::AnyScalar;
+    ///
+    /// let s = AnyScalar::from_complex(1.0, -1.0);
+    /// assert!((s.real() - 1.0).abs() < 1e-10);
+    /// assert!((s.imag() - (-1.0)).abs() < 1e-10);
+    /// assert!(s.is_complex());
+    /// ```
     pub fn from_complex(re: f64, im: f64) -> Self {
         Self::from_value(Complex64::new(re, im))
     }
 
     /// Backward-compatible constructor for a real scalar.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::AnyScalar;
+    ///
+    /// let s = AnyScalar::new_real(42.0);
+    /// assert!((s.real() - 42.0).abs() < 1e-10);
+    /// ```
     pub fn new_real(x: f64) -> Self {
         Self::from_real(x)
     }
 
     /// Backward-compatible constructor for a complex scalar.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::AnyScalar;
+    ///
+    /// let s = AnyScalar::new_complex(3.0, 4.0);
+    /// assert!((s.abs() - 5.0).abs() < 1e-10); // |3 + 4i| = 5
+    /// ```
     pub fn new_complex(re: f64, im: f64) -> Self {
         Self::from_complex(re, im)
     }

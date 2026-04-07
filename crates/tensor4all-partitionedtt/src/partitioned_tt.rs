@@ -16,6 +16,33 @@ use tensor4all_itensorlike::{ContractOptions, TensorTrain, TruncateOptions};
 ///
 /// Each SubDomainTT covers a disjoint region of the index space defined by
 /// its projector. The projectors must be mutually disjoint (non-overlapping).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtt::{PartitionedTT, Projector, SubDomainTT, TensorTrain};
+/// use tensor4all_partitionedtt::{DynIndex, TensorDynLen};
+/// use tensor4all_core::index::Index;
+///
+/// fn make_tt(s0: &DynIndex, bond: &DynIndex, s1: &DynIndex) -> TensorTrain {
+///     let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0, 2.0]).unwrap();
+///     let t1 = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![3.0, 4.0]).unwrap();
+///     TensorTrain::new(vec![t0, t1]).unwrap()
+/// }
+///
+/// let s0 = Index::new_dyn(2);
+/// let bond = Index::new_dyn(1);
+/// let s1 = Index::new_dyn(2);
+/// let tt = make_tt(&s0, &bond, &s1);
+///
+/// // Create a PartitionedTT with one patch projected to s0=0
+/// let proj = Projector::from_pairs([(s0.clone(), 0)]);
+/// let subdomain = SubDomainTT::new(tt, proj);
+/// let ptt = PartitionedTT::from_subdomain(subdomain);
+///
+/// assert_eq!(ptt.len(), 1);
+/// assert!(!ptt.is_empty());
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct PartitionedTT {
     /// Map from projector to subdomain
@@ -24,6 +51,16 @@ pub struct PartitionedTT {
 
 impl PartitionedTT {
     /// Create an empty partitioned tensor train.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtt::PartitionedTT;
+    ///
+    /// let ptt = PartitionedTT::new();
+    /// assert!(ptt.is_empty());
+    /// assert_eq!(ptt.len(), 0);
+    /// ```
     pub fn new() -> Self {
         Self {
             data: HashMap::new(),
@@ -33,6 +70,30 @@ impl PartitionedTT {
     /// Create a PartitionedTT from a vector of SubDomainTTs.
     ///
     /// Returns an error if the projectors are not mutually disjoint.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtt::{PartitionedTT, Projector, SubDomainTT, TensorTrain};
+    /// use tensor4all_partitionedtt::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::index::Index;
+    ///
+    /// let s0 = Index::new_dyn(2);
+    /// let bond = Index::new_dyn(1);
+    /// let s1 = Index::new_dyn(2);
+    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0, 2.0]).unwrap();
+    /// let t1 = TensorDynLen::from_dense(vec![bond.clone(), s1.clone()], vec![3.0, 4.0]).unwrap();
+    /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// // Two disjoint patches: s0=0 and s0=1
+    /// let proj0 = Projector::from_pairs([(s0.clone(), 0)]);
+    /// let proj1 = Projector::from_pairs([(s0.clone(), 1)]);
+    /// let sd0 = SubDomainTT::new(tt.clone(), proj0);
+    /// let sd1 = SubDomainTT::new(tt, proj1);
+    ///
+    /// let ptt = PartitionedTT::from_subdomains(vec![sd0, sd1]).unwrap();
+    /// assert_eq!(ptt.len(), 2);
+    /// ```
     pub fn from_subdomains(subdomains: Vec<SubDomainTT>) -> Result<Self> {
         // Check that projectors are disjoint
         let projectors: Vec<_> = subdomains.iter().map(|s| s.projector().clone()).collect();
@@ -81,6 +142,29 @@ impl PartitionedTT {
     }
 
     /// Check if a projector exists.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtt::{PartitionedTT, Projector, SubDomainTT, TensorTrain};
+    /// use tensor4all_partitionedtt::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::index::Index;
+    ///
+    /// let s0 = Index::new_dyn(2);
+    /// let bond = Index::new_dyn(1);
+    /// let s1 = Index::new_dyn(2);
+    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0, 2.0]).unwrap();
+    /// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![3.0, 4.0]).unwrap();
+    /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// let proj = Projector::from_pairs([(s0.clone(), 0)]);
+    /// let subdomain = SubDomainTT::new(tt, proj.clone());
+    /// let ptt = PartitionedTT::from_subdomain(subdomain);
+    ///
+    /// assert!(ptt.contains(&proj));
+    /// let absent = Projector::from_pairs([(s0, 1)]);
+    /// assert!(!ptt.contains(&absent));
+    /// ```
     pub fn contains(&self, projector: &Projector) -> bool {
         self.data.contains_key(projector)
     }
@@ -131,6 +215,28 @@ impl PartitionedTT {
     }
 
     /// Compute the total Frobenius norm (sqrt of sum of squared norms).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtt::{PartitionedTT, Projector, SubDomainTT, TensorTrain};
+    /// use tensor4all_partitionedtt::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::index::Index;
+    ///
+    /// let s0 = Index::new_dyn(2);
+    /// let bond = Index::new_dyn(1);
+    /// let s1 = Index::new_dyn(2);
+    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), bond.clone()], vec![1.0, 0.0]).unwrap();
+    /// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0, 0.0]).unwrap();
+    /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// let proj = Projector::from_pairs([(s0, 0)]);
+    /// let subdomain = SubDomainTT::new(tt, proj);
+    /// let ptt = PartitionedTT::from_subdomain(subdomain);
+    ///
+    /// let n = ptt.norm();
+    /// assert!(n >= 0.0);
+    /// ```
     pub fn norm(&self) -> f64 {
         let sum_sq: f64 = self.data.values().map(|s| s.norm_squared()).sum();
         sum_sq.sqrt()

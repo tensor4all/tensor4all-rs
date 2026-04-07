@@ -152,15 +152,27 @@ pub fn print_and_reset_contract_profile() {
 /// # Errors
 /// - `AllowedPairs::Specified` contains a pair with no contractable indices
 ///
-/// # Example
-/// ```ignore
-/// use tensor4all_core::{contract_multi, AllowedPairs};
+/// # Examples
 ///
-/// // Connected tensors: contracts via omeco
-/// let result = contract_multi(&[&a, &b, &c], AllowedPairs::All)?;
+/// ```
+/// use tensor4all_core::{TensorDynLen, DynIndex, contract_multi, AllowedPairs};
 ///
-/// // Disconnected tensors: contracts each component, outer product to combine
-/// let result = contract_multi(&[&a, &b], AllowedPairs::All)?;  // a, b have no common indices
+/// // A[i, j] and B[j, k] share index j — contract to get C[i, k]
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(3);
+/// let k = DynIndex::new_dyn(4);
+///
+/// let a = TensorDynLen::from_dense(
+///     vec![i.clone(), j.clone()],
+///     vec![1.0_f64; 6],
+/// ).unwrap();
+/// let b = TensorDynLen::from_dense(
+///     vec![j.clone(), k.clone()],
+///     vec![1.0_f64; 12],
+/// ).unwrap();
+///
+/// let c = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
+/// assert_eq!(c.dims(), vec![2, 4]);
 /// ```
 pub fn contract_multi(
     tensors: &[&TensorDynLen],
@@ -239,13 +251,27 @@ pub fn contract_multi(
 /// - N=1: Clone of input
 /// - N>=2: Optimal order via hyperedge-aware greedy optimizer
 ///
-/// # Example
-/// ```ignore
-/// use tensor4all_core::{contract_connected, AllowedPairs};
+/// # Examples
 ///
-/// let tensors = vec![tensor_a, tensor_b, tensor_c];  // Must be connected
-/// let tensor_refs: Vec<&_> = tensors.iter().collect();
-/// let result = contract_connected(&tensor_refs, AllowedPairs::All)?;
+/// ```
+/// use tensor4all_core::{TensorDynLen, DynIndex, contract_connected, AllowedPairs};
+///
+/// // A[i, j] contracted with B[j, k]
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(3);
+/// let k = DynIndex::new_dyn(4);
+///
+/// let a = TensorDynLen::from_dense(
+///     vec![i.clone(), j.clone()],
+///     vec![1.0_f64; 6],
+/// ).unwrap();
+/// let b = TensorDynLen::from_dense(
+///     vec![j.clone(), k.clone()],
+///     vec![1.0_f64; 12],
+/// ).unwrap();
+///
+/// let c = contract_connected(&[&a, &b], AllowedPairs::All).unwrap();
+/// assert_eq!(c.dims(), vec![2, 4]);
 /// ```
 pub fn contract_connected(
     tensors: &[&TensorDynLen],

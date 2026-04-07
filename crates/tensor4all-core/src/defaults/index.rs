@@ -372,6 +372,29 @@ pub type DefaultTagSet = TagSet;
 /// This is the recommended index type for most tensor network applications.
 /// It does not include symmetry (quantum numbers); for QSpace-compatible indices,
 /// use a separate concrete type that implements `IndexLike` directly.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::DynIndex;
+/// use tensor4all_core::index_like::IndexLike;
+///
+/// // Create a dynamic index with dimension 4
+/// let idx = DynIndex::new_dyn(4);
+/// assert_eq!(idx.dim(), 4);
+/// assert_eq!(idx.plev(), 0);
+///
+/// // Prime level manipulation
+/// let primed = idx.prime();
+/// assert_eq!(primed.plev(), 1);
+///
+/// let noprime = primed.noprime();
+/// assert_eq!(noprime.plev(), 0);
+///
+/// // Bond index creation (for SVD/QR)
+/// let bond = DynIndex::new_bond(8).unwrap();
+/// assert_eq!(bond.dim(), 8);
+/// ```
 pub type DynIndex = Index<DynId, TagSet>;
 
 impl IndexLike for DynIndex {

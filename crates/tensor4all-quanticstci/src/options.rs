@@ -6,6 +6,27 @@ use tensor4all_treetci::TreeTciOptions;
 /// Options for Quantics TCI interpolation.
 ///
 /// This combines TCI algorithm options with quantics-specific settings.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstci::QtciOptions;
+///
+/// // Default options
+/// let opts = QtciOptions::default();
+/// assert!((opts.tolerance - 1e-8).abs() < 1e-15);
+/// assert_eq!(opts.verbosity, 0);
+///
+/// // Builder-style customization
+/// let custom = QtciOptions::default()
+///     .with_tolerance(1e-10)
+///     .with_maxbonddim(50)
+///     .with_verbosity(1);
+///
+/// assert!((custom.tolerance - 1e-10).abs() < 1e-18);
+/// assert_eq!(custom.maxbonddim, Some(50));
+/// assert_eq!(custom.verbosity, 1);
+/// ```
 #[derive(Debug, Clone)]
 pub struct QtciOptions {
     /// Tolerance for convergence (relative)

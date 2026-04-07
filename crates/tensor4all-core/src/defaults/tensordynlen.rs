@@ -113,6 +113,24 @@ pub trait TensorAccess {
 /// This is a concrete type using `DynIndex` (= `Index<DynId, TagSet>`).
 ///
 /// The canonical numeric payload is always [`tenferro::Tensor`].
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{TensorDynLen, DynIndex};
+///
+/// // Create a 2×3 real tensor
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(3);
+/// let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+/// let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+///
+/// assert_eq!(t.dims(), vec![2, 3]);
+///
+/// // Sum all elements: 1+2+3+4+5+6 = 21
+/// let s = t.sum();
+/// assert!((s.real() - 21.0).abs() < 1e-12);
+/// ```
 #[derive(Clone)]
 pub struct TensorDynLen {
     /// Full index information (includes tags and other metadata).

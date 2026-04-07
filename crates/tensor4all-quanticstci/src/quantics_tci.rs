@@ -21,6 +21,31 @@ use crate::options::QtciOptions;
 ///
 /// This struct combines a TensorTrain result with grid information for
 /// seamless conversion between grid indices and quantics indices.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstci::{quanticscrossinterpolate, QtciOptions};
+/// use quanticsgrids::DiscretizedGrid;
+///
+/// // Interpolate constant f(x) = 2.0 on [0, 1) with 2^3 = 8 grid points
+/// let grid = DiscretizedGrid::builder(&[3])
+///     .with_lower_bound(&[0.0])
+///     .with_upper_bound(&[1.0])
+///     .build()
+///     .unwrap();
+///
+/// let f = |_coords: &[f64]| 2.0_f64;
+/// let (qtci, _ranks, _errors) =
+///     quanticscrossinterpolate::<f64, _>(&grid, f, None, QtciOptions::default()).unwrap();
+///
+/// // rank() gives the maximum bond dimension
+/// assert!(qtci.rank() >= 1);
+///
+/// // Sum over all 8 grid points: 2.0 * 8 = 16.0
+/// let sum = qtci.sum().unwrap();
+/// assert!((sum - 16.0).abs() < 1e-8);
+/// ```
 #[derive(Clone)]
 pub struct QuanticsTensorCI2<V: TTScalar> {
     /// Underlying tensor train
@@ -305,6 +330,32 @@ where
 ///
 /// # Returns
 /// Tuple of (QuanticsTensorCI2, ranks, errors)
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstci::{quanticscrossinterpolate, QtciOptions};
+/// use quanticsgrids::DiscretizedGrid;
+///
+/// // Interpolate f(x) = sin(x) on [0, pi) with 2^4 = 16 points
+/// let grid = DiscretizedGrid::builder(&[4])
+///     .with_lower_bound(&[0.0])
+///     .with_upper_bound(&[std::f64::consts::PI])
+///     .build()
+///     .unwrap();
+///
+/// let f = |coords: &[f64]| coords[0].sin();
+/// let opts = QtciOptions::default().with_tolerance(1e-8);
+/// let (qtci, _ranks, errors) =
+///     quanticscrossinterpolate::<f64, _>(&grid, f, None, opts).unwrap();
+///
+/// // Last error should be within tolerance
+/// assert!(*errors.last().unwrap() < 1e-6);
+///
+/// // Sum (integral * step) approximates the Riemann sum of sin(x)
+/// let sum = qtci.sum().unwrap();
+/// assert!(sum > 0.0); // sin(x) > 0 on (0, pi)
+/// ```
 pub fn quanticscrossinterpolate<V, F>(
     grid: &DiscretizedGrid,
     f: F,

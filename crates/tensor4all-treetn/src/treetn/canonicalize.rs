@@ -31,18 +31,33 @@ where
     /// - If `options.force` is true:
     ///   - Always performs full canonicalization
     ///
-    /// # Example
-    /// ```ignore
-    /// use tensor4all_treetn::CanonicalizationOptions;
+    /// # Examples
     ///
-    /// // Default canonicalization (Unitary form, smart behavior)
-    /// let ttn = ttn.canonicalize(["A"], CanonicalizationOptions::default())?;
+    /// ```
+    /// use tensor4all_treetn::{TreeTN, CanonicalizationOptions};
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
     ///
-    /// // Force re-canonicalization with LU form
-    /// let ttn = ttn.canonicalize(
-    ///     ["B"],
-    ///     CanonicalizationOptions::forced().with_form(CanonicalForm::LU)
-    /// )?;
+    /// let s0 = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(3);
+    /// let s1 = DynIndex::new_dyn(2);
+    ///
+    /// let t0 = TensorDynLen::from_dense(
+    ///     vec![s0.clone(), bond.clone()],
+    ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    /// ).unwrap();
+    /// let t1 = TensorDynLen::from_dense(
+    ///     vec![bond.clone(), s1.clone()],
+    ///     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+    /// ).unwrap();
+    ///
+    /// let tn = TreeTN::<_, String>::from_tensors(
+    ///     vec![t0, t1],
+    ///     vec!["A".to_string(), "B".to_string()],
+    /// ).unwrap();
+    ///
+    /// // Canonicalize towards node "A"
+    /// let tn = tn.canonicalize(["A".to_string()], CanonicalizationOptions::default()).unwrap();
+    /// assert!(tn.is_canonicalized());
     /// ```
     pub fn canonicalize(
         mut self,

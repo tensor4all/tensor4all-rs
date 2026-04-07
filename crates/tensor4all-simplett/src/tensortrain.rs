@@ -12,6 +12,26 @@ use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 /// T\[i1, i2, ..., iL\] = A1\[i1\] * A2\[i2\] * ... * AL\[iL\]
 ///
 /// where each Ak\[ik\] is a matrix of shape (rk-1, rk).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+///
+/// // Create a constant tensor train: T[i,j,k] = 3.0 for all i,j,k
+/// let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 3.0);
+///
+/// assert_eq!(tt.len(), 3);
+/// assert_eq!(tt.site_dims(), vec![2, 3, 4]);
+///
+/// // Evaluate at a specific index
+/// let val = tt.evaluate(&[0, 1, 2]).unwrap();
+/// assert!((val - 3.0).abs() < 1e-12);
+///
+/// // Sum over all indices: 3.0 * 2 * 3 * 4 = 72.0
+/// let s = tt.sum();
+/// assert!((s - 72.0).abs() < 1e-10);
+/// ```
 #[derive(Debug, Clone)]
 pub struct TensorTrain<T: TTScalar> {
     /// The tensors that make up the tensor train

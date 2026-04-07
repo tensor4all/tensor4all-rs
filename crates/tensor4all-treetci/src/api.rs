@@ -21,6 +21,53 @@ pub type TreeTciRunResult = (
 /// one scalar per point.
 ///
 /// The `proposer` controls how pivot candidates are generated.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::{
+///     crossinterpolate2, DefaultProposer, GlobalIndexBatch, TreeTciEdge, TreeTciGraph,
+///     TreeTciOptions,
+/// };
+/// use anyhow::Result;
+///
+/// // Approximate the 2-site identity function f(i, j) = 1 if i==j else 0
+/// let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
+/// let local_dims = vec![2, 2];
+///
+/// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+///     let mut values = Vec::with_capacity(batch.n_points());
+///     for p in 0..batch.n_points() {
+///         let i = batch.get(0, p).unwrap();
+///         let j = batch.get(1, p).unwrap();
+///         values.push(if i == j { 1.0 } else { 0.0 });
+///     }
+///     Ok(values)
+/// };
+///
+/// let options = TreeTciOptions {
+///     tolerance: 1e-10,
+///     max_iter: 10,
+///     max_bond_dim: 10,
+///     normalize_error: true,
+/// };
+///
+/// let proposer = DefaultProposer;
+/// let (treetn, ranks, errors) = crossinterpolate2::<f64, _, _>(
+///     evaluate,
+///     local_dims,
+///     graph,
+///     vec![],
+///     options,
+///     None,
+///     &proposer,
+/// ).unwrap();
+///
+/// // The identity on a 2x2 space has rank 2
+/// assert!(ranks.last().copied().unwrap_or(0) <= 2);
+/// // Error should converge to near zero
+/// assert!(errors.last().copied().unwrap_or(1.0) < 1e-8);
+/// ```
 #[allow(clippy::too_many_arguments)]
 pub fn crossinterpolate2<T, F, P>(
     evaluate: F,

@@ -1,15 +1,17 @@
 # tensor4all-treetci
 
-Tree Tensor Cross Interpolation for `tensor4all-rs`.
+Tree Tensor Cross Interpolation — a Rust port of
+[TreeTCI.jl](https://github.com/tensor4all/TreeTCI.jl) by Ryo Watanabe.
 
-This crate is intended as a Rust port of
-[TreeTCI.jl](https://github.com/tensor4all/TreeTCI.jl). The upstream Julia
-package currently lists:
+Computes tensor cross interpolation on tree-structured graphs, producing TreeTN output.
 
-- Ryo Watanabe <https://github.com/Ryo-wtnb11>
+## Key Types
 
-The Rust port should preserve that attribution explicitly.
+- `crossinterpolate2()` — high-level entry point for tree TCI
+- `TreeTCI2` — algorithm state
+- `TreeTciGraph` — graph structure definition
 
-Tree-specific pivot updates in this crate use `matrixluci` as the low-level
-pivot-selection substrate. `matrixluci` is tensor4all-owned code, with a dense
-path informed by a port of `faer` full-pivoting LU ideas and primitives.
+## Documentation
+
+- [User Guide: Tree Tensor Networks](https://tensor4all.github.io/tensor4all-rs/guides/tree-tn.html)
+- [API Reference](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_treetci/)

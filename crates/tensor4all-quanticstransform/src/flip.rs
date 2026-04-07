@@ -23,11 +23,16 @@ use crate::common::{
 /// # Returns
 /// LinearOperator representing the flip transformation
 ///
-/// # Example
-/// ```no_run
+/// # Examples
+///
+/// ```
 /// use tensor4all_quanticstransform::{flip_operator, BoundaryCondition};
 ///
-/// let op = flip_operator(8, BoundaryCondition::Periodic).unwrap();
+/// // Create a flip operator for 4-bit (2^4 = 16 points) quantics representation
+/// let op = flip_operator(4, BoundaryCondition::Periodic).unwrap();
+///
+/// // The operator has one MPO tensor per bit
+/// assert_eq!(op.mpo.node_count(), 4);
 /// ```
 pub fn flip_operator(r: usize, bc: BoundaryCondition) -> Result<QuanticsOperator> {
     if r == 0 {

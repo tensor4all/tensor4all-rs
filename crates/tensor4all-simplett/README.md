@@ -1,28 +1,29 @@
 # tensor4all-simplett
 
-Simple, efficient Tensor Train (MPS) implementation focused on practical computational methods. Provides multiple canonical forms and compression algorithms.
+Simple, efficient Tensor Train (MPS) implementation for numerical computation.
 
-## Features
+## Key Types
 
-- **TensorTrain**: Basic MPS with `f64` and `Complex64` support
-- **SiteTensorTrain**: Center-canonical MPS with specified orthogonality center
-- **VidalTensorTrain**: Vidal canonical form with explicit singular values
-- **TTCache**: Caching mechanism for fast repeated evaluation
-- **Compression**: LU and CI compression methods, plus an explicit error for unimplemented SVD compression
+- `TensorTrain` — basic MPS with `f64` and `Complex64` support
+- `SiteTensorTrain` — center-canonical MPS with specified orthogonality center
+- `VidalTensorTrain` — Vidal canonical form with explicit singular values
+- `CompressionOptions` — controls tolerance and maximum bond dimension for compression
 
-## Usage
+## Example
 
-```rust
+```rust,ignore
 use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
 
-// Create a constant tensor train
+// Create a constant tensor train (all entries = 1.0) over a 2x3x4 grid
 let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 
 // Evaluate at a specific multi-index
 let value = tt.evaluate(&[0, 1, 2])?;
+assert!((value - 1.0).abs() < 1e-15);
 
-// Compute sum over all indices
+// Sum over all indices: 2 * 3 * 4 = 24
 let total = tt.sum();
+assert!((total - 24.0).abs() < 1e-10);
 
 // Compress with tolerance
 let options = CompressionOptions {
@@ -31,8 +32,10 @@ let options = CompressionOptions {
     ..Default::default()
 };
 let compressed = tt.compressed(&options)?;
+assert!(compressed.rank() <= tt.rank());
 ```
 
-## License
+## Documentation
 
-MIT License
+- [User Guide: Tensor Train](https://tensor4all.github.io/tensor4all-rs/guides/tensor-train.html)
+- [API Reference](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_simplett/)

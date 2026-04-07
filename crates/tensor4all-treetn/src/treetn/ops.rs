@@ -167,6 +167,30 @@ where
     ///
     /// # Errors
     /// Returns an error if the network is empty or canonicalization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::TreeTN;
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// // Single-node TreeTN with tensor [1, 0, 0, 1] (identity 2x2)
+    /// let s0 = DynIndex::new_dyn(2);
+    /// let s1 = DynIndex::new_dyn(2);
+    /// let t = TensorDynLen::from_dense(
+    ///     vec![s0.clone(), s1.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0],
+    /// ).unwrap();
+    ///
+    /// let mut tn = TreeTN::<_, String>::from_tensors(
+    ///     vec![t],
+    ///     vec!["A".to_string()],
+    /// ).unwrap();
+    ///
+    /// // Frobenius norm of [[1,0],[0,1]] = sqrt(2)
+    /// let n = tn.norm().unwrap();
+    /// assert!((n - 2.0_f64.sqrt()).abs() < 1e-10);
+    /// ```
     pub fn norm(&mut self) -> Result<f64> {
         let log_n = self
             .log_norm()
@@ -253,6 +277,38 @@ where
     ///
     /// # Errors
     /// Returns an error if the network is empty or contraction fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::TreeTN;
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex, TensorLike};
+    ///
+    /// // Build a 2-node chain
+    /// let s0 = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(2);
+    /// let s1 = DynIndex::new_dyn(2);
+    ///
+    /// // Identity matrices
+    /// let t0 = TensorDynLen::from_dense(
+    ///     vec![s0.clone(), bond.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0],
+    /// ).unwrap();
+    /// let t1 = TensorDynLen::from_dense(
+    ///     vec![bond.clone(), s1.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0],
+    /// ).unwrap();
+    ///
+    /// let tn = TreeTN::<_, String>::from_tensors(
+    ///     vec![t0, t1],
+    ///     vec!["A".to_string(), "B".to_string()],
+    /// ).unwrap();
+    ///
+    /// // Contract to a single dense tensor over site indices s0 and s1
+    /// let dense = tn.to_dense().unwrap();
+    /// // Result is rank-2 (two site indices s0 and s1)
+    /// assert_eq!(dense.num_external_indices(), 2);
+    /// ```
     pub fn to_dense(&self) -> Result<T> {
         self.contract_to_tensor()
             .context("to_dense: failed to contract network to tensor")

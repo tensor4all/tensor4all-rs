@@ -24,12 +24,16 @@ use crate::common::{
 /// # Returns
 /// LinearOperator representing the shift transformation
 ///
-/// # Example
-/// ```no_run
+/// # Examples
+///
+/// ```
 /// use tensor4all_quanticstransform::{shift_operator, BoundaryCondition};
 ///
-/// // Shift by 10 positions with periodic boundary
-/// let op = shift_operator(8, 10, BoundaryCondition::Periodic).unwrap();
+/// // Create a shift operator for 4-bit (2^4 = 16 points) quantics representation
+/// let op = shift_operator(4, 3, BoundaryCondition::Periodic).unwrap();
+///
+/// // The operator has one MPO tensor per bit
+/// assert_eq!(op.mpo.node_count(), 4);
 /// ```
 pub fn shift_operator(r: usize, offset: i64, bc: BoundaryCondition) -> Result<QuanticsOperator> {
     if r == 0 {
