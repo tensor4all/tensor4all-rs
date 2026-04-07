@@ -171,6 +171,29 @@ pub extern "C" fn t4a_index_id(ptr: *const t4a_index, out_id: *mut u64) -> Statu
     crate::unwrap_catch(result)
 }
 
+/// Get the prime level of an index.
+///
+/// # Arguments
+/// * `ptr` - Pointer to the index
+/// * `out_plev` - Output pointer for the prime level
+///
+/// # Returns
+/// Status code (T4A_SUCCESS or error code)
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_index_get_plev(ptr: *const t4a_index, out_plev: *mut i64) -> StatusCode {
+    if ptr.is_null() || out_plev.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let index = &*ptr;
+        *out_plev = index.inner().plev;
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
 /// Get the tags of an index as a comma-separated UTF-8 string
 ///
 /// If `buf` is null, only writes the required buffer length to `out_len`.
@@ -305,6 +328,51 @@ pub extern "C" fn t4a_index_set_tags_csv(
             Err(TagSetError::InvalidTag(SmallStringError::TooLong { .. })) => T4A_TAG_TOO_LONG,
             Err(e) => crate::err_status(e, T4A_INVALID_ARGUMENT),
         }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Set the prime level of an index.
+///
+/// # Arguments
+/// * `ptr` - Pointer to the index
+/// * `plev` - New prime level
+///
+/// # Returns
+/// Status code (T4A_SUCCESS or error code)
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_index_set_plev(ptr: *mut t4a_index, plev: i64) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let index = &mut *ptr;
+        index.inner_mut().plev = plev;
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+/// Increment the prime level of an index by one.
+///
+/// # Arguments
+/// * `ptr` - Pointer to the index
+///
+/// # Returns
+/// Status code (T4A_SUCCESS or error code)
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_index_prime(ptr: *mut t4a_index) -> StatusCode {
+    if ptr.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let index = &mut *ptr;
+        index.inner_mut().plev += 1;
+        T4A_SUCCESS
     }));
 
     crate::unwrap_catch(result)

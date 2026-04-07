@@ -167,12 +167,11 @@ impl TagSetLike for TagSet {
 ///
 /// # Memory Layout
 /// With default types (`DynId`, `TagSet`):
-/// - Size: 24 bytes (8 + 8 + 8)
+/// - Size: 32 bytes (8 + 8 + 8 + 8)
 /// - Tags are shared via `Arc`, so cloning is cheap (reference count increment only)
 ///
 /// **Equality**: Two `Index` values are considered equal if and only if their `id` and `tags`
-/// fields match (matching ITensors.jl semantics where equality = id + plev + tags, with plev
-/// fixed at 0).
+/// fields and `plev` match (matching ITensors.jl semantics where equality = id + plev + tags).
 ///
 /// # Example
 /// ```
@@ -192,6 +191,8 @@ pub struct Index<Id, Tags = TagSet> {
     pub id: Id,
     /// The dimension (size) of this index.
     pub dim: usize,
+    /// The prime level of this index.
+    pub plev: i64,
     /// The tag set associated with this index.
     pub tags: Tags,
 }
@@ -205,13 +206,19 @@ where
         Self {
             id,
             dim,
+            plev: 0,
             tags: Tags::default(),
         }
     }
 
     /// Create a new index with the given identity, dimension, and tags.
     pub fn new_with_tags(id: Id, dim: usize, tags: Tags) -> Self {
-        Self { id, dim, tags }
+        Self {
+            id,
+            dim,
+            plev: 0,
+            tags,
+        }
     }
 
     /// Get the dimension (size) of the index.
@@ -234,6 +241,7 @@ where
         Self {
             id,
             dim: size,
+            plev: 0,
             tags: Tags::default(),
         }
     }
@@ -243,6 +251,7 @@ where
         Self {
             id,
             dim: size,
+            plev: 0,
             tags,
         }
     }
@@ -255,6 +264,7 @@ impl Index<DynId, TagSet> {
         Self {
             id: DynId(generate_id()),
             dim: size,
+            plev: 0,
             tags: TagSet::new(),
         }
     }
@@ -276,6 +286,7 @@ impl Index<DynId, TagSet> {
         Self {
             id: DynId(generate_id()),
             dim: size,
+            plev: 0,
             tags,
         }
     }
@@ -289,6 +300,7 @@ impl Index<DynId, TagSet> {
         Ok(Self {
             id: DynId(generate_id()),
             dim: size,
+            plev: 0,
             tags: TagSet::from_str(tag)?,
         })
     }
@@ -302,11 +314,11 @@ impl Index<DynId, TagSet> {
     }
 }
 
-// Equality and Hash implementations: compare by `id` and `tags`
-// (matching ITensors.jl semantics where equality = id + plev + tags, with plev fixed at 0)
+// Equality and Hash implementations: compare by `id`, `tags`, and `plev`
+// (matching ITensors.jl semantics where equality = id + plev + tags)
 impl<Id: PartialEq, Tags: PartialEq> PartialEq for Index<Id, Tags> {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.tags == other.tags
+        self.id == other.id && self.tags == other.tags && self.plev == other.plev
     }
 }
 
@@ -316,6 +328,7 @@ impl<Id: std::hash::Hash, Tags: std::hash::Hash> std::hash::Hash for Index<Id, T
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
         self.tags.hash(state);
+        self.plev.hash(state);
     }
 }
 
@@ -372,6 +385,10 @@ impl IndexLike for DynIndex {
         self.dim
     }
 
+    fn plev(&self) -> i64 {
+        self.plev
+    }
+
     fn conj_state(&self) -> crate::ConjState {
         // Default indices are undirected (ITensors.jl-like behavior)
         crate::ConjState::Undirected
@@ -386,6 +403,7 @@ impl IndexLike for DynIndex {
         Index {
             id: DynId(generate_id()),
             dim: self.dim,
+            plev: self.plev,
             tags: self.tags.clone(),
         }
     }
@@ -395,11 +413,13 @@ impl IndexLike for DynIndex {
         let idx1 = Index {
             id,
             dim: 1,
+            plev: 0,
             tags: TagSet::default(),
         };
         let idx2 = Index {
             id,
             dim: 1,
+            plev: 0,
             tags: TagSet::default(),
         };
         (idx1, idx2)
@@ -419,6 +439,27 @@ impl DynIndex {
     /// A new index with a unique identity and the specified dimension.
     pub fn new_bond(dim: usize) -> Result<Self> {
         Index::new_link(dim).map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))
+    }
+
+    /// Return a copy of this index with its prime level incremented by one.
+    pub fn prime(&self) -> Self {
+        let mut idx = self.clone();
+        idx.plev += 1;
+        idx
+    }
+
+    /// Return a copy of this index with its prime level reset to zero.
+    pub fn noprime(&self) -> Self {
+        let mut idx = self.clone();
+        idx.plev = 0;
+        idx
+    }
+
+    /// Return a copy of this index with its prime level set explicitly.
+    pub fn set_plev(&self, plev: i64) -> Self {
+        let mut idx = self.clone();
+        idx.plev = plev;
+        idx
     }
 }
 

@@ -113,6 +113,12 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     /// Get the total dimension (state-space dimension) of the index.
     fn dim(&self) -> usize;
 
+    /// Get the prime level of this index.
+    /// Default: 0 (unprimed).
+    fn plev(&self) -> i64 {
+        0
+    }
+
     /// Get the conjugate state (direction) of this index.
     ///
     /// Returns `ConjState::Undirected` for directionless indices (ITensors.jl-like default),
@@ -142,9 +148,10 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     /// The default implementation checks:
     /// 1. Same ID: `self.id() == other.id()`
     /// 2. Same dimension: `self.dim() == other.dim()`
-    /// 3. Compatible conjugate states (see rules above)
+    /// 3. Same prime level: `self.plev() == other.plev()`
+    /// 4. Compatible conjugate states (see rules above)
     fn is_contractable(&self, other: &Self) -> bool {
-        if self.id() != other.id() || self.dim() != other.dim() {
+        if self.id() != other.id() || self.dim() != other.dim() || self.plev() != other.plev() {
             return false;
         }
         match (self.conj_state(), other.conj_state()) {
@@ -192,4 +199,78 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     fn create_dummy_link_pair() -> (Self, Self)
     where
         Self: Sized;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal IndexLike implementation that uses the default plev() method.
+    /// Used to test coverage of the default trait implementations.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct TestIndex {
+        id: u64,
+        dim: usize,
+    }
+
+    impl IndexLike for TestIndex {
+        type Id = u64;
+
+        fn id(&self) -> &u64 {
+            &self.id
+        }
+
+        fn dim(&self) -> usize {
+            self.dim
+        }
+
+        fn conj_state(&self) -> ConjState {
+            ConjState::Undirected
+        }
+
+        fn conj(&self) -> Self {
+            self.clone()
+        }
+
+        fn sim(&self) -> Self {
+            TestIndex {
+                id: self.id + 1000,
+                dim: self.dim,
+            }
+        }
+
+        fn create_dummy_link_pair() -> (Self, Self) {
+            (TestIndex { id: 0, dim: 1 }, TestIndex { id: 0, dim: 1 })
+        }
+    }
+
+    #[test]
+    fn test_default_plev_is_zero() {
+        let idx = TestIndex { id: 1, dim: 3 };
+        assert_eq!(idx.plev(), 0);
+    }
+
+    #[test]
+    fn test_default_is_contractable_with_plev() {
+        let a = TestIndex { id: 1, dim: 3 };
+        let b = TestIndex { id: 1, dim: 3 };
+        // Same id, dim, and default plev=0: contractable
+        assert!(a.is_contractable(&b));
+    }
+
+    #[test]
+    fn test_default_same_id() {
+        let a = TestIndex { id: 1, dim: 3 };
+        let b = TestIndex { id: 1, dim: 5 };
+        let c = TestIndex { id: 2, dim: 3 };
+        assert!(a.same_id(&b));
+        assert!(!a.same_id(&c));
+    }
+
+    #[test]
+    fn test_default_has_id() {
+        let a = TestIndex { id: 42, dim: 3 };
+        assert!(a.has_id(&42));
+        assert!(!a.has_id(&99));
+    }
 }

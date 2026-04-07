@@ -427,12 +427,19 @@ fn from_arrays_2d_linear() {
 
     let opts = QtciOptions::default()
         .with_tolerance(1e-12)
-        .with_nrandominitpivot(3)
         .with_unfoldingscheme(UnfoldingScheme::Fused);
 
-    let (qtci, _ranks, _errors) =
-        quanticscrossinterpolate_from_arrays(&[xvals.clone(), xvals.clone()], f, None, opts)
-            .expect("from_arrays 2D linear should work");
+    // Use explicit initial pivot at (2,2) where f(1,1)=2 ≠ 0, avoiding the
+    // flaky failure when random pivots all land on (1,1) where f(0,0)=0.
+    let initial_pivots = vec![vec![2_i64, 2]];
+
+    let (qtci, _ranks, _errors) = quanticscrossinterpolate_from_arrays(
+        &[xvals.clone(), xvals.clone()],
+        f,
+        Some(initial_pivots),
+        opts,
+    )
+    .expect("from_arrays 2D linear should work");
 
     // Evaluate at all 4x4 = 16 points
     for i in 1..=4_i64 {

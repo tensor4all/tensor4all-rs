@@ -19,6 +19,12 @@ fn get_tags_csv(idx: *const t4a_index) -> String {
         .to_string()
 }
 
+fn get_plev(idx: *const t4a_index) -> i64 {
+    let mut plev = i64::MIN;
+    assert_eq!(t4a_index_get_plev(idx, &mut plev), T4A_SUCCESS);
+    plev
+}
+
 #[test]
 fn test_index_new() {
     let idx = t4a_index_new(5);
@@ -122,6 +128,77 @@ fn test_index_clone() {
 }
 
 #[test]
+fn test_index_plev_default() {
+    let idx = t4a_index_new(5);
+    assert!(!idx.is_null());
+
+    assert_eq!(get_plev(idx), 0);
+
+    t4a_index_release(idx);
+}
+
+#[test]
+fn test_index_set_plev() {
+    let idx = t4a_index_new(5);
+    assert!(!idx.is_null());
+
+    assert_eq!(t4a_index_set_plev(idx, 4), T4A_SUCCESS);
+    assert_eq!(get_plev(idx), 4);
+
+    t4a_index_release(idx);
+}
+
+#[test]
+fn test_index_prime() {
+    let idx = t4a_index_new(5);
+    assert!(!idx.is_null());
+
+    assert_eq!(t4a_index_prime(idx), T4A_SUCCESS);
+    assert_eq!(t4a_index_prime(idx), T4A_SUCCESS);
+    assert_eq!(get_plev(idx), 2);
+
+    t4a_index_release(idx);
+}
+
+#[test]
+fn test_index_plev_null_checks() {
+    let idx = t4a_index_new(5);
+    assert!(!idx.is_null());
+
+    let mut plev = 0i64;
+    assert_eq!(
+        t4a_index_get_plev(std::ptr::null(), &mut plev),
+        T4A_NULL_POINTER
+    );
+    assert_eq!(
+        t4a_index_get_plev(idx, std::ptr::null_mut()),
+        T4A_NULL_POINTER
+    );
+    assert_eq!(
+        t4a_index_set_plev(std::ptr::null_mut(), 1),
+        T4A_NULL_POINTER
+    );
+    assert_eq!(t4a_index_prime(std::ptr::null_mut()), T4A_NULL_POINTER);
+
+    t4a_index_release(idx);
+}
+
+#[test]
+fn test_index_clone_preserves_plev() {
+    let idx = t4a_index_new(5);
+    assert!(!idx.is_null());
+    assert_eq!(t4a_index_set_plev(idx, 9), T4A_SUCCESS);
+
+    let cloned = t4a_index_clone(idx);
+    assert!(!cloned.is_null());
+    assert_eq!(get_plev(idx), 9);
+    assert_eq!(get_plev(cloned), 9);
+
+    t4a_index_release(idx);
+    t4a_index_release(cloned);
+}
+
+#[test]
 fn test_index_new_with_id() {
     let id: u64 = 0x12345678_9ABCDEF0;
     let tags = CString::new("Custom").unwrap();
@@ -215,11 +292,25 @@ fn test_index_validates_null_pointers_utf8_and_tag_limits() {
 
     let mut dim = 0usize;
     let mut id = 0u64;
+    let mut plev = 0i64;
     let mut out_len = 0usize;
     assert_eq!(t4a_index_dim(std::ptr::null(), &mut dim), T4A_NULL_POINTER);
     assert_eq!(t4a_index_dim(idx, std::ptr::null_mut()), T4A_NULL_POINTER);
     assert_eq!(t4a_index_id(std::ptr::null(), &mut id), T4A_NULL_POINTER);
     assert_eq!(t4a_index_id(idx, std::ptr::null_mut()), T4A_NULL_POINTER);
+    assert_eq!(
+        t4a_index_get_plev(std::ptr::null(), &mut plev),
+        T4A_NULL_POINTER
+    );
+    assert_eq!(
+        t4a_index_get_plev(idx, std::ptr::null_mut()),
+        T4A_NULL_POINTER
+    );
+    assert_eq!(
+        t4a_index_set_plev(std::ptr::null_mut(), 1),
+        T4A_NULL_POINTER
+    );
+    assert_eq!(t4a_index_prime(std::ptr::null_mut()), T4A_NULL_POINTER);
     assert_eq!(
         t4a_index_get_tags(std::ptr::null(), std::ptr::null_mut(), 0, &mut out_len),
         T4A_NULL_POINTER

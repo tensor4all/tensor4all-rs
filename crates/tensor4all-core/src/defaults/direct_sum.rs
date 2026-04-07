@@ -185,7 +185,7 @@ fn setup_direct_sum(
         result_dims.push(a_dims[a_pos]);
     }
 
-    // New indices from pairs (preserve tags for id+tags equality)
+    // New indices from pairs preserve the full index identity semantics (id + plev + tags).
     for new_idx in &new_indices {
         result_indices.push(new_idx.clone());
         result_dims.push(new_idx.dim());

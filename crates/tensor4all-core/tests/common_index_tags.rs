@@ -23,14 +23,16 @@ fn test_index_equality_by_id_and_tags() {
     let idx3 = Index {
         id,
         dim: idx1.dim,
+        plev: idx1.plev,
         tags: TagSet::from_str("bond").unwrap(),
     };
     assert_ne!(idx1, idx3);
 
-    // Same ID and same tags: equal
+    // Same ID, same tags, and same prime level: equal
     let idx4 = Index {
         id,
         dim: idx1.dim,
+        plev: idx1.plev,
         tags: TagSet::from_str("site").unwrap(),
     };
     assert_eq!(idx1, idx4);
@@ -64,14 +66,15 @@ fn test_index_hash_by_id_and_tags() {
     let idx3 = Index {
         id: idx1.id,
         dim: idx1.dim,
+        plev: idx1.plev,
         tags: TagSet::from_str("bond").unwrap(),
     };
 
-    // Should add because tags differ from idx1 (id + tags equality)
+    // Should add because tags differ from idx1 (id + plev + tags equality)
     set.insert(idx3);
     assert_eq!(set.len(), 3);
 
-    // Clone of idx1 (same ID and tags) should not add
+    // Clone of idx1 (same ID, prime level, and tags) should not add
     set.insert(idx1.clone());
     assert_eq!(set.len(), 3);
 }
@@ -91,6 +94,7 @@ fn test_index_tags_immutability() {
     let idx2 = Index {
         id: idx.id,
         dim: idx.dim,
+        plev: idx.plev,
         tags: new_tags,
     };
 
@@ -101,6 +105,6 @@ fn test_index_tags_immutability() {
     // Original index still has original tags
     assert!(idx.tags().has_tag("site"));
 
-    // With id+tags equality, these are NOT equal (different tags)
+    // With id+plev+tags equality, these are NOT equal (different tags)
     assert_ne!(idx, idx2);
 }
