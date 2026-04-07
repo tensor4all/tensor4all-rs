@@ -288,6 +288,39 @@ pub extern "C" fn t4a_tensor_get_data_c64(
     crate::unwrap_catch(result)
 }
 
+/// Contract two tensors by matching common indices.
+///
+/// Finds indices with the same ID and contracts along them.
+/// The result tensor has the non-contracted indices from both input tensors.
+///
+/// # Arguments
+/// * `a` - First tensor pointer
+/// * `b` - Second tensor pointer
+/// * `out` - Output pointer for the result tensor
+///
+/// # Returns
+/// Status code (`T4A_SUCCESS` or error code)
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_contract(
+    a: *const t4a_tensor,
+    b: *const t4a_tensor,
+    out: *mut *mut t4a_tensor,
+) -> StatusCode {
+    if a.is_null() || b.is_null() || out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let tensor_a = unsafe { &*a };
+        let tensor_b = unsafe { &*b };
+        let contracted = tensor_a.inner().contract(tensor_b.inner());
+        unsafe { *out = Box::into_raw(Box::new(t4a_tensor::new(contracted))) };
+        T4A_SUCCESS
+    }));
+
+    crate::unwrap_catch(result)
+}
+
 /// Create a new dense f64 tensor from indices and data.
 ///
 /// # Arguments

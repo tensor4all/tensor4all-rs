@@ -260,3 +260,173 @@ fn test_tensor_new_dense_f64_dims_mismatch_rejected() {
     t4a_index_release(i);
     t4a_index_release(j);
 }
+
+#[test]
+fn test_tensor_contract_basic() {
+    use std::ffi::CString;
+
+    let tags_i = CString::new("i").unwrap();
+    let tags_j = CString::new("j").unwrap();
+    let tags_k = CString::new("k").unwrap();
+
+    let idx_i = t4a_index_new_with_tags(2, tags_i.as_ptr());
+    let idx_j = t4a_index_new_with_tags(3, tags_j.as_ptr());
+    let idx_k = t4a_index_new_with_tags(4, tags_k.as_ptr());
+    assert!(!idx_i.is_null());
+    assert!(!idx_j.is_null());
+    assert!(!idx_k.is_null());
+
+    let idx_j2 = t4a_index_clone(idx_j);
+    assert!(!idx_j2.is_null());
+
+    let data_a = [1.0_f64; 6];
+    let inds_a = [idx_i as *const _, idx_j as *const _];
+    let dims_a = [2_usize, 3_usize];
+    let tensor_a = t4a_tensor_new_dense_f64(
+        2,
+        inds_a.as_ptr(),
+        dims_a.as_ptr(),
+        data_a.as_ptr(),
+        data_a.len(),
+    );
+    assert!(!tensor_a.is_null());
+
+    let data_b = [1.0_f64; 12];
+    let inds_b = [idx_j2 as *const _, idx_k as *const _];
+    let dims_b = [3_usize, 4_usize];
+    let tensor_b = t4a_tensor_new_dense_f64(
+        2,
+        inds_b.as_ptr(),
+        dims_b.as_ptr(),
+        data_b.as_ptr(),
+        data_b.len(),
+    );
+    assert!(!tensor_b.is_null());
+
+    let mut tensor_c: *mut crate::types::t4a_tensor = ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_contract(tensor_a, tensor_b, &mut tensor_c),
+        T4A_SUCCESS
+    );
+    assert!(!tensor_c.is_null());
+
+    let mut rank: usize = 0;
+    assert_eq!(t4a_tensor_get_rank(tensor_c, &mut rank), T4A_SUCCESS);
+    assert_eq!(rank, 2);
+
+    let mut dims = [0_usize; 2];
+    assert_eq!(
+        t4a_tensor_get_dims(tensor_c, dims.as_mut_ptr(), 2),
+        T4A_SUCCESS
+    );
+    assert_eq!(dims, [2, 4]);
+
+    let mut out_len = 0_usize;
+    assert_eq!(
+        t4a_tensor_get_data_f64(tensor_c, ptr::null_mut(), 0, &mut out_len),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_len, 8);
+
+    let mut data_c = [0.0_f64; 8];
+    assert_eq!(
+        t4a_tensor_get_data_f64(tensor_c, data_c.as_mut_ptr(), data_c.len(), &mut out_len),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_len, 8);
+    for value in data_c {
+        assert!((value - 3.0).abs() < 1e-12);
+    }
+
+    t4a_tensor_release(tensor_a);
+    t4a_tensor_release(tensor_b);
+    t4a_tensor_release(tensor_c);
+    t4a_index_release(idx_i);
+    t4a_index_release(idx_j);
+    t4a_index_release(idx_j2);
+    t4a_index_release(idx_k);
+}
+
+#[test]
+fn test_tensor_contract_null_checks() {
+    let mut out: *mut crate::types::t4a_tensor = ptr::null_mut();
+
+    assert_eq!(
+        t4a_tensor_contract(ptr::null(), ptr::null(), &mut out),
+        T4A_NULL_POINTER
+    );
+    assert_eq!(
+        t4a_tensor_contract(ptr::null(), ptr::null(), ptr::null_mut()),
+        T4A_NULL_POINTER
+    );
+}
+
+#[test]
+fn test_tensor_contract_no_common_indices() {
+    let idx_i = t4a_index_new(2);
+    let idx_j = t4a_index_new(3);
+    assert!(!idx_i.is_null());
+    assert!(!idx_j.is_null());
+
+    let data_a = [1.0_f64, 2.0_f64];
+    let inds_a = [idx_i as *const _];
+    let dims_a = [2_usize];
+    let tensor_a = t4a_tensor_new_dense_f64(
+        1,
+        inds_a.as_ptr(),
+        dims_a.as_ptr(),
+        data_a.as_ptr(),
+        data_a.len(),
+    );
+    assert!(!tensor_a.is_null());
+
+    let data_b = [1.0_f64, 1.0_f64, 1.0_f64];
+    let inds_b = [idx_j as *const _];
+    let dims_b = [3_usize];
+    let tensor_b = t4a_tensor_new_dense_f64(
+        1,
+        inds_b.as_ptr(),
+        dims_b.as_ptr(),
+        data_b.as_ptr(),
+        data_b.len(),
+    );
+    assert!(!tensor_b.is_null());
+
+    let mut tensor_c: *mut crate::types::t4a_tensor = ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_contract(tensor_a, tensor_b, &mut tensor_c),
+        T4A_SUCCESS
+    );
+    assert!(!tensor_c.is_null());
+
+    let mut rank: usize = 0;
+    assert_eq!(t4a_tensor_get_rank(tensor_c, &mut rank), T4A_SUCCESS);
+    assert_eq!(rank, 2);
+
+    let mut dims = [0_usize; 2];
+    assert_eq!(
+        t4a_tensor_get_dims(tensor_c, dims.as_mut_ptr(), 2),
+        T4A_SUCCESS
+    );
+    assert_eq!(dims, [2, 3]);
+
+    let mut out_len = 0_usize;
+    assert_eq!(
+        t4a_tensor_get_data_f64(tensor_c, ptr::null_mut(), 0, &mut out_len),
+        T4A_SUCCESS
+    );
+    assert_eq!(out_len, 6);
+
+    let mut data_c = [0.0_f64; 6];
+    assert_eq!(
+        t4a_tensor_get_data_f64(tensor_c, data_c.as_mut_ptr(), data_c.len(), &mut out_len),
+        T4A_SUCCESS
+    );
+    assert_eq!(data_c, [1.0, 2.0, 1.0, 2.0, 1.0, 2.0]);
+
+    t4a_tensor_release(tensor_a);
+    t4a_tensor_release(tensor_b);
+    t4a_tensor_release(tensor_c);
+    t4a_index_release(idx_i);
+    t4a_index_release(idx_j);
+}
