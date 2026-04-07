@@ -8,8 +8,9 @@ use crate::index_like::IndexLike;
 use crate::truncation::{HasTruncationParams, TruncationParams};
 use crate::{unfold_split, TensorDynLen};
 use tensor4all_tensorbackend::{
+    dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
     native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
-    reshape_col_major_native_tensor, svd_native_tensor,
+    reshape_col_major_native_tensor, svd_native_tensor, TensorElement,
 };
 use thiserror::Error;
 
@@ -134,6 +135,28 @@ fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, Sv
     }
 }
 
+fn truncate_matrix_cols<T: TensorElement>(
+    data: &[T],
+    rows: usize,
+    keep_cols: usize,
+) -> anyhow::Result<tenferro::Tensor> {
+    dense_native_tensor_from_col_major(&data[..rows * keep_cols], &[rows, keep_cols])
+}
+
+fn truncate_matrix_rows<T: TensorElement>(
+    data: &[T],
+    rows: usize,
+    cols: usize,
+    keep_rows: usize,
+) -> anyhow::Result<tenferro::Tensor> {
+    let mut truncated = Vec::with_capacity(keep_rows * cols);
+    for col in 0..cols {
+        let start = col * rows;
+        truncated.extend_from_slice(&data[start..start + keep_rows]);
+    }
+    dense_native_tensor_from_col_major(&truncated, &[keep_rows, cols])
+}
+
 type SvdTruncatedNativeResult = (
     tenferro::Tensor,
     tenferro::Tensor,
@@ -167,17 +190,35 @@ fn svd_truncated_native(
         r = r.min(max_rank);
     }
     if r < k {
-        u_native = u_native.take_prefix(1, r).map_err(|e| {
-            SvdError::ComputationError(anyhow::anyhow!("native SVD truncation on U failed: {e}"))
-        })?;
-        s_native = s_native.take_prefix(0, r).map_err(|e| {
-            SvdError::ComputationError(anyhow::anyhow!(
-                "native SVD truncation on singular values failed: {e}"
-            ))
-        })?;
-        vt_native = vt_native.take_prefix(0, r).map_err(|e| {
-            SvdError::ComputationError(anyhow::anyhow!("native SVD V^T truncation failed: {e}"))
-        })?;
+        match u_native.scalar_type() {
+            tenferro::ScalarType::F64 => {
+                let u_values = native_tensor_primal_to_dense_f64_col_major(&u_native)
+                    .map_err(SvdError::ComputationError)?;
+                let vt_values = native_tensor_primal_to_dense_f64_col_major(&vt_native)
+                    .map_err(SvdError::ComputationError)?;
+                u_native =
+                    truncate_matrix_cols(&u_values, m, r).map_err(SvdError::ComputationError)?;
+                vt_native = truncate_matrix_rows(&vt_values, k, n, r)
+                    .map_err(SvdError::ComputationError)?;
+            }
+            tenferro::ScalarType::C64 => {
+                let u_values = native_tensor_primal_to_dense_c64_col_major(&u_native)
+                    .map_err(SvdError::ComputationError)?;
+                let vt_values = native_tensor_primal_to_dense_c64_col_major(&vt_native)
+                    .map_err(SvdError::ComputationError)?;
+                u_native =
+                    truncate_matrix_cols(&u_values, m, r).map_err(SvdError::ComputationError)?;
+                vt_native = truncate_matrix_rows(&vt_values, k, n, r)
+                    .map_err(SvdError::ComputationError)?;
+            }
+            other => {
+                return Err(SvdError::ComputationError(anyhow::anyhow!(
+                    "native SVD returned unsupported singular-vector scalar type {other:?}"
+                )));
+            }
+        }
+        s_native = dense_native_tensor_from_col_major(&s_full[..r], &[r])
+            .map_err(SvdError::ComputationError)?;
     }
 
     let bond_index = DynIndex::new_bond(r)
@@ -225,9 +266,8 @@ pub fn svd_with<T>(
     let u = TensorDynLen::from_native(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
 
     let s_indices = vec![bond_index.clone(), bond_index.sim()];
-    let s_diag = s_native.diag_embed(2).map_err(|e| {
-        SvdError::ComputationError(anyhow::anyhow!("native SVD diagonal embedding failed: {e}"))
-    })?;
+    let s_diag = diag_native_tensor_from_col_major(&singular_values_from_native(&s_native)?, 2)
+        .map_err(SvdError::ComputationError)?;
     let s = TensorDynLen::from_native(s_indices, s_diag).map_err(SvdError::ComputationError)?;
 
     let mut vh_indices = vec![bond_index.clone()];
@@ -273,9 +313,8 @@ pub(crate) fn svd_for_factorize(
     let u = TensorDynLen::from_native(u_indices, u_reshaped).map_err(SvdError::ComputationError)?;
 
     let s_indices = vec![bond_index.clone(), bond_index.sim()];
-    let s_diag = s_native.diag_embed(2).map_err(|e| {
-        SvdError::ComputationError(anyhow::anyhow!("native SVD diagonal embedding failed: {e}"))
-    })?;
+    let s_diag = diag_native_tensor_from_col_major(&singular_values_from_native(&s_native)?, 2)
+        .map_err(SvdError::ComputationError)?;
     let s = TensorDynLen::from_native(s_indices, s_diag).map_err(SvdError::ComputationError)?;
 
     let mut vh_indices = vec![bond_index.clone()];

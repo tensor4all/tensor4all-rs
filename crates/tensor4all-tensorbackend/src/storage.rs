@@ -352,6 +352,48 @@ impl<T: Copy> StructuredStorage<T> {
     }
 }
 
+impl<T: Copy + Default> StructuredStorage<T> {
+    /// Materializes the logical tensor as a contiguous column-major dense buffer.
+    ///
+    /// Repeated entries in `axis_classes` encode equality constraints between
+    /// logical axes. Logical indices that violate those constraints are
+    /// structural zeros in the dense materialization.
+    pub fn logical_dense_col_major_vec(&self) -> Vec<T> {
+        let logical_dims = self.logical_dims();
+        let logical_len: usize = logical_dims.iter().product();
+        if logical_len == 0 {
+            return Vec::new();
+        }
+        if let Some(view) = self.dense_col_major_view_if_contiguous() {
+            return view.to_vec();
+        }
+        if self.is_dense() {
+            return self.payload_col_major_vec();
+        }
+
+        let payload_rank = self.payload_dims.len();
+        (0..logical_len)
+            .map(|linear| {
+                let logical_index = col_major_multi_index(linear, &logical_dims);
+                let mut payload_index = vec![0usize; payload_rank];
+                let mut seen = vec![false; payload_rank];
+                for (&value, &class_id) in logical_index.iter().zip(self.axis_classes.iter()) {
+                    if seen[class_id] {
+                        if payload_index[class_id] != value {
+                            return T::default();
+                        }
+                    } else {
+                        payload_index[class_id] = value;
+                        seen[class_id] = true;
+                    }
+                }
+                let offset = offset_from_strides(&payload_index, &self.strides);
+                self.data[offset]
+            })
+            .collect()
+    }
+}
+
 /// Storage backend for tensor data.
 ///
 /// Public callers interact with this opaque wrapper through constructors and
@@ -649,17 +691,7 @@ impl Storage {
                         logical_dims, structured_dims
                     ));
                 }
-                if let Some(view) = v.dense_col_major_view_if_contiguous() {
-                    Ok(view.to_vec())
-                } else if v.is_dense() {
-                    Ok(v.payload_col_major_vec())
-                } else {
-                    let native =
-                        crate::tenferro_bridge::storage_to_native_tensor(self, logical_dims)
-                            .map_err(|err| err.to_string())?;
-                    crate::tenferro_bridge::native_tensor_primal_to_dense_f64_col_major(&native)
-                        .map_err(|err| err.to_string())
-                }
+                Ok(v.logical_dense_col_major_vec())
             }
             StorageRepr::C64(_) => {
                 Err("expected f64 storage when materializing dense f64 values".to_string())
@@ -681,17 +713,7 @@ impl Storage {
                         logical_dims, structured_dims
                     ));
                 }
-                if let Some(view) = v.dense_col_major_view_if_contiguous() {
-                    Ok(view.to_vec())
-                } else if v.is_dense() {
-                    Ok(v.payload_col_major_vec())
-                } else {
-                    let native =
-                        crate::tenferro_bridge::storage_to_native_tensor(self, logical_dims)
-                            .map_err(|err| err.to_string())?;
-                    crate::tenferro_bridge::native_tensor_primal_to_dense_c64_col_major(&native)
-                        .map_err(|err| err.to_string())
-                }
+                Ok(v.logical_dense_col_major_vec())
             }
             StorageRepr::F64(_) => {
                 Err("expected Complex64 storage when materializing dense c64 values".to_string())

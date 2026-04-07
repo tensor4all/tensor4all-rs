@@ -1,7 +1,7 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::TensorLike;
-use tensor4all_core::{diag_tensor_dyn_len, is_diag_tensor, AnyScalar, TensorDynLen};
+use tensor4all_core::{diag_tensor_dyn_len, AnyScalar, TensorDynLen};
 
 #[test]
 fn test_diag_tensor_creation() {
@@ -11,7 +11,15 @@ fn test_diag_tensor_creation() {
 
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data.clone());
     assert_eq!(tensor.dims(), vec![3, 3]);
-    assert!(is_diag_tensor(&tensor));
+    assert!(!tensor.is_diag());
+    assert_eq!(
+        tensor.to_vec::<f64>().unwrap(),
+        vec![
+            1.0, 0.0, 0.0, //
+            0.0, 2.0, 0.0, //
+            0.0, 0.0, 3.0,
+        ]
+    );
 }
 
 #[test]
@@ -37,14 +45,14 @@ fn test_diag_tensor_sum() {
 }
 
 #[test]
-fn test_diag_tensor_scale_preserves_diag_structure() {
+fn test_diag_tensor_scale_preserves_diagonal_values() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(3);
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![1.0, -2.0, 4.0]);
 
     let scaled = tensor.scale(AnyScalar::new_real(-0.5)).unwrap();
 
-    assert!(is_diag_tensor(&scaled));
+    assert!(!scaled.is_diag());
     let expected = diag_tensor_dyn_len(vec![i, j], vec![-0.5, 1.0, -2.0]);
     assert!(scaled.isapprox(&expected, 1e-12, 0.0));
 }
@@ -100,7 +108,7 @@ fn test_diag_tensor_contract_diag_diag_partial() {
     let result = tensor_a.contract(&tensor_b);
 
     assert_eq!(result.dims(), vec![3, 3]);
-    assert!(is_diag_tensor(&result));
+    assert!(!result.is_diag());
 
     // Result diagonal should be element-wise product: [1*4, 2*5, 3*6] = [4, 10, 18]
     let expected = diag_tensor_dyn_len(vec![i, k], vec![4.0, 10.0, 18.0]);
@@ -160,7 +168,7 @@ fn test_diag_tensor_rank3() {
 
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone(), k.clone()], diag_data.clone());
     assert_eq!(tensor.dims(), vec![2, 2, 2]);
-    assert!(is_diag_tensor(&tensor));
+    assert!(!tensor.is_diag());
 
     // Sum should work
     let sum: AnyScalar = tensor.sum();
@@ -176,7 +184,16 @@ fn test_diag_tensor_complex() {
 
     let tensor = TensorDynLen::from_diag(vec![i.clone(), j.clone()], diag_data.clone()).unwrap();
     assert_eq!(tensor.dims(), vec![2, 2]);
-    assert!(is_diag_tensor(&tensor));
+    assert!(!tensor.is_diag());
+    assert_eq!(
+        tensor.to_vec::<Complex64>().unwrap(),
+        vec![
+            Complex64::new(1.0, 0.5),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, 1.0),
+        ]
+    );
 
     // Sum should work
     let sum: AnyScalar = tensor.sum();
@@ -187,7 +204,7 @@ fn test_diag_tensor_complex() {
 }
 
 #[test]
-fn test_diag_tensor_complex_axpby_preserves_diag_structure() {
+fn test_diag_tensor_complex_axpby_preserves_diagonal_values() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
     let diag_a = vec![Complex64::new(1.0, 0.5), Complex64::new(-2.0, 1.0)];
@@ -200,7 +217,7 @@ fn test_diag_tensor_complex_axpby_preserves_diag_structure() {
     let b = AnyScalar::new_complex(-0.5, 1.0);
     let result = tensor_a.axpby(a, &tensor_b, b).unwrap();
 
-    assert!(is_diag_tensor(&result));
+    assert!(!result.is_diag());
     let b_c = Complex64::new(-0.5, 1.0);
     let expected_diag: Vec<Complex64> = diag_a
         .iter()
@@ -228,7 +245,7 @@ fn test_diag_tensor_contract_rank3() {
     let result = tensor_a.contract(&tensor_b);
 
     assert_eq!(result.dims(), vec![2, 2, 2]);
-    assert!(is_diag_tensor(&result));
+    assert!(!result.is_diag());
 
     // Result diagonal should be element-wise product: [1*3, 2*4] = [3, 8]
     let expected = diag_tensor_dyn_len(vec![i, j, l], vec![3.0, 8.0]);
