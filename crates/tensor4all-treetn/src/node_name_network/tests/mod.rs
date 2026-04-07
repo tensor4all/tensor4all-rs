@@ -62,6 +62,57 @@ fn test_is_connected_subset() {
 }
 
 #[test]
+fn test_steiner_tree_nodes_chain() {
+    let mut net: NodeNameNetwork<String> = NodeNameNetwork::new();
+
+    let n0 = net.add_node("N0".to_string()).unwrap();
+    let n1 = net.add_node("N1".to_string()).unwrap();
+    let n2 = net.add_node("N2".to_string()).unwrap();
+    let n3 = net.add_node("N3".to_string()).unwrap();
+    let n4 = net.add_node("N4".to_string()).unwrap();
+    net.add_edge(&"N0".to_string(), &"N1".to_string()).unwrap();
+    net.add_edge(&"N1".to_string(), &"N2".to_string()).unwrap();
+    net.add_edge(&"N2".to_string(), &"N3".to_string()).unwrap();
+    net.add_edge(&"N3".to_string(), &"N4".to_string()).unwrap();
+
+    let steiner = net.steiner_tree_nodes(&[n0, n2, n4].into());
+    assert_eq!(steiner, [n0, n1, n2, n3, n4].into());
+
+    let steiner = net.steiner_tree_nodes(&[n1, n3].into());
+    assert_eq!(steiner, [n1, n2, n3].into());
+}
+
+#[test]
+fn test_steiner_tree_nodes_tree() {
+    let mut net: NodeNameNetwork<String> = NodeNameNetwork::new();
+
+    let a = net.add_node("A".to_string()).unwrap();
+    let b = net.add_node("B".to_string()).unwrap();
+    let _c = net.add_node("C".to_string()).unwrap();
+    let d = net.add_node("D".to_string()).unwrap();
+    let e = net.add_node("E".to_string()).unwrap();
+    net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+    net.add_edge(&"B".to_string(), &"D".to_string()).unwrap();
+    net.add_edge(&"D".to_string(), &"E".to_string()).unwrap();
+
+    let steiner = net.steiner_tree_nodes(&[a, e].into());
+    assert_eq!(steiner, [a, b, d, e].into());
+}
+
+#[test]
+fn test_steiner_tree_nodes_single_and_adjacent() {
+    let mut net: NodeNameNetwork<String> = NodeNameNetwork::new();
+
+    let a = net.add_node("A".to_string()).unwrap();
+    let b = net.add_node("B".to_string()).unwrap();
+    net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+
+    assert_eq!(net.steiner_tree_nodes(&[a].into()), [a].into());
+    assert_eq!(net.steiner_tree_nodes(&[a, b].into()), [a, b].into());
+}
+
+#[test]
 fn test_same_topology() {
     let mut net1: NodeNameNetwork<String> = NodeNameNetwork::new();
     net1.add_node("A".to_string()).unwrap();

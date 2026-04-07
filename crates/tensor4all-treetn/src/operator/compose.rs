@@ -176,8 +176,39 @@ where
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
+    compose_exclusive_linear_operators_inner(target, operators, gap_site_indices, true)
+}
+
+#[allow(clippy::type_complexity)]
+pub(crate) fn compose_exclusive_linear_operators_unchecked<T, V>(
+    target: &SiteIndexNetwork<V, T::Index>,
+    operators: &[&LinearOperator<T, V>],
+    gap_site_indices: &HashMap<V, Vec<(T::Index, T::Index)>>,
+) -> Result<LinearOperator<T, V>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    compose_exclusive_linear_operators_inner(target, operators, gap_site_indices, false)
+}
+
+#[allow(clippy::type_complexity)]
+fn compose_exclusive_linear_operators_inner<T, V>(
+    target: &SiteIndexNetwork<V, T::Index>,
+    operators: &[&LinearOperator<T, V>],
+    gap_site_indices: &HashMap<V, Vec<(T::Index, T::Index)>>,
+    validate_exclusivity: bool,
+) -> Result<LinearOperator<T, V>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
     // 1. Validate exclusivity
-    if !are_exclusive_operators::<T, V, _>(target, operators) {
+    if validate_exclusivity && !are_exclusive_operators::<T, V, _>(target, operators) {
         return Err(anyhow::anyhow!(
             "Operators are not exclusive: they may overlap or not form connected subtrees"
         ))

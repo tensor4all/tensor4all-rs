@@ -340,6 +340,52 @@ where
         seen.len() == nodes.len()
     }
 
+    /// Compute the Steiner tree nodes spanning a set of terminal nodes.
+    ///
+    /// For tree graphs, the Steiner tree is the union of the unique paths from
+    /// one terminal to every other terminal.
+    ///
+    /// # Arguments
+    /// * `terminals` - Terminal node indices to span
+    ///
+    /// # Returns
+    /// The set of nodes in the minimal connected subtree spanning `terminals`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashSet;
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// let mut net: NodeNameNetwork<String> = NodeNameNetwork::new();
+    /// let a = net.add_node("A".to_string()).unwrap();
+    /// let b = net.add_node("B".to_string()).unwrap();
+    /// let c = net.add_node("C".to_string()).unwrap();
+    /// net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    /// net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+    ///
+    /// let steiner = net.steiner_tree_nodes(&[a, c].into_iter().collect::<HashSet<_>>());
+    /// assert_eq!(steiner, [a, b, c].into_iter().collect());
+    /// ```
+    pub fn steiner_tree_nodes(&self, terminals: &HashSet<NodeIndex>) -> HashSet<NodeIndex> {
+        if terminals.len() <= 1 {
+            return terminals.clone();
+        }
+
+        let terminals_vec: Vec<NodeIndex> = terminals.iter().copied().collect();
+        let root = terminals_vec[0];
+        let mut result = HashSet::new();
+        result.insert(root);
+
+        for &terminal in &terminals_vec[1..] {
+            if let Some(path) = self.path_between(root, terminal) {
+                result.extend(path);
+            }
+        }
+
+        result
+    }
+
     /// Convert a node sequence to an edge sequence.
     fn nodes_to_edges(nodes: &[NodeIndex]) -> CanonicalizeEdges {
         if nodes.len() < 2 {

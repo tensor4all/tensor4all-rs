@@ -91,6 +91,20 @@ fn test_is_connected_subset() {
 }
 
 #[test]
+fn test_steiner_tree_nodes_forwarding() {
+    let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+
+    let empty: HashSet<DynIndex> = HashSet::new();
+    let a = net.add_node("A".to_string(), empty.clone()).unwrap();
+    let b = net.add_node("B".to_string(), empty.clone()).unwrap();
+    let c = net.add_node("C".to_string(), empty.clone()).unwrap();
+    net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+
+    assert_eq!(net.steiner_tree_nodes(&[a, c].into()), [a, b, c].into());
+}
+
+#[test]
 fn test_share_equivalent_site_index_network() {
     let mut net1: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
     let site1: HashSet<_> = [DynIndex::new_dyn(2)].into();
