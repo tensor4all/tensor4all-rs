@@ -28,8 +28,10 @@ let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
 // Local dimension for each mode.
 let local_dims = vec![4, 4];
 
-// Initial pivot (required — at least one pivot must be provided).
-let initial_pivots = vec![vec![1, 1]];
+// Initial pivot (0-indexed, required — at least one).
+// Choose a point where the function value is large to help convergence.
+// f(3, 3) = 7 is the maximum on this grid.
+let initial_pivots = vec![vec![3, 3]];
 
 // Run TCI2 with a tight tolerance.
 let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
@@ -76,9 +78,9 @@ than a naive encoding.
 
 ### Important conventions
 
-- **1-indexed grid indices**: grid points are numbered starting at 1, matching
-  the Julia `QuanticsTCI.jl` convention. For example, the first grid point of a
-  2D grid is `[1, 1]`.
+- **Indexing differs between the two APIs**:
+  - `crossinterpolate2` (low-level): indices and pivots are **0-indexed** (`0..local_dim`)
+  - `quanticscrossinterpolate_discrete` (high-level): grid indices are **1-indexed** (`1..=grid_size`), matching the Julia `QuanticsTCI.jl` convention
 - **Equal dimensions**: `quanticscrossinterpolate_discrete` requires all
   dimensions to have the same number of points.
 - **Power-of-2 grid sizes**: all grid dimensions must be powers of 2 (4, 8,

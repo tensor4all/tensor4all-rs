@@ -21,7 +21,7 @@ let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec
     f,
     None,
     vec![4, 4],         // local dimensions
-    vec![vec![1, 1]],   // initial pivot
+    vec![vec![3, 3]],   // initial pivot (0-indexed); pick where f is large
     TCI2Options {
         tolerance: 1e-10,
         ..Default::default()
