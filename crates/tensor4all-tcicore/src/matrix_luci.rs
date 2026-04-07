@@ -14,6 +14,30 @@ use crate::traits::AbstractMatrixCI;
 ///
 /// This is a higher-level row-major wrapper around the lower-level `matrixluci`
 /// substrate.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+///
+/// let m = from_vec2d(vec![
+///     vec![1.0_f64, 2.0, 3.0],
+///     vec![4.0, 5.0, 6.0],
+///     vec![7.0, 8.0, 9.0],
+/// ]);
+///
+/// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+/// // The approximation must have at most rank min(nrows, ncols)
+/// assert!(ci.rank() <= 3);
+/// // Reconstructed matrix should match original at pivot positions
+/// let row_indices = ci.row_indices().to_vec();
+/// let col_indices = ci.col_indices().to_vec();
+/// for (&i, &j) in row_indices.iter().zip(col_indices.iter()) {
+///     let approx = ci.evaluate(i, j);
+///     let exact = m[[i, j]];
+///     assert!((approx - exact).abs() < 1e-10);
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct MatrixLUCI<T: Scalar + crate::matrixluci::Scalar> {
     nrows: usize,
@@ -86,6 +110,19 @@ where
     DenseFaerLuKernel: PivotKernel<T>,
 {
     /// Create a MatrixLUCI from a dense row-major matrix.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![
+    ///     vec![2.0_f64, 0.0],
+    ///     vec![0.0, 3.0],
+    /// ]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// assert!(ci.rank() >= 1);
+    /// ```
     pub fn from_matrix(a: &Matrix<T>, options: Option<RrLUOptions>) -> Result<Self> {
         let options = options.unwrap_or_default();
         let left_orthogonal = options.left_orthogonal;

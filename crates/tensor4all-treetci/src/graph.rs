@@ -6,6 +6,21 @@ use petgraph::visit::EdgeRef;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Canonical undirected edge used by TreeTCI.
+///
+/// Endpoints are stored in canonical order (`u <= v`).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::TreeTciEdge;
+///
+/// let e = TreeTciEdge::new(3, 1);
+/// // canonical ordering: lower endpoint first
+/// assert_eq!(e.u(), 1);
+/// assert_eq!(e.v(), 3);
+/// // same edge regardless of argument order
+/// assert_eq!(TreeTciEdge::new(1, 3), TreeTciEdge::new(3, 1));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TreeTciEdge {
     u: usize,
@@ -34,6 +49,29 @@ impl TreeTciEdge {
 }
 
 /// Tree graph metadata for TreeTCI.
+///
+/// A tree graph is a connected, acyclic undirected graph. Each site corresponds
+/// to a node and each bond is an undirected edge.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::{TreeTciEdge, TreeTciGraph};
+///
+/// // Linear chain: 0 -- 1 -- 2
+/// let graph = TreeTciGraph::new(3, &[
+///     TreeTciEdge::new(0, 1),
+///     TreeTciEdge::new(1, 2),
+/// ]).unwrap();
+///
+/// assert_eq!(graph.n_sites(), 3);
+/// assert_eq!(graph.edges().len(), 2);
+///
+/// // Neighbors of site 1 are sites 0 and 2
+/// let mut neighbors = graph.neighbors(1).unwrap();
+/// neighbors.sort();
+/// assert_eq!(neighbors, vec![0, 2]);
+/// ```
 #[derive(Clone, Debug)]
 pub struct TreeTciGraph {
     n_sites: usize,

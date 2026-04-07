@@ -20,6 +20,28 @@ use tensor4all_tcicore::{
 };
 
 /// Options for TCI2 algorithm
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::TCI2Options;
+///
+/// // Default options with tolerance 1e-8
+/// let opts = TCI2Options::default();
+/// assert!((opts.tolerance - 1e-8).abs() < 1e-15);
+/// assert_eq!(opts.max_iter, 20);
+/// assert_eq!(opts.verbosity, 0);
+///
+/// // Custom options
+/// let custom = TCI2Options {
+///     tolerance: 1e-12,
+///     max_bond_dim: 100,
+///     verbosity: 1,
+///     ..TCI2Options::default()
+/// };
+/// assert!((custom.tolerance - 1e-12).abs() < 1e-20);
+/// assert_eq!(custom.max_bond_dim, 100);
+/// ```
 #[derive(Debug, Clone)]
 pub struct TCI2Options {
     /// Tolerance for convergence.
@@ -782,6 +804,36 @@ fn convergence_criterion(
 /// * `TensorCI2` - The constructed tensor cross interpolation
 /// * `Vec<usize>` - Ranks at each iteration
 /// * `Vec<f64>` - Errors at each iteration
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+/// use tensor4all_simplett::AbstractTensorTrain;
+///
+/// // Interpolate f(i, j) = (i + 1) as f64 (rank-1 function, value depends only on first index)
+/// let f = |idx: &Vec<usize>| (idx[0] + 1) as f64;
+/// let local_dims = vec![4, 4];
+/// let initial_pivots = vec![vec![0, 0]];
+///
+/// let (tci, _ranks, _errors) =
+///     crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+///         f,
+///         None,
+///         local_dims,
+///         initial_pivots,
+///         TCI2Options::default(),
+///     )
+///     .unwrap();
+///
+/// // The result should be a low-rank tensor train
+/// assert!(tci.rank() <= 4);
+///
+/// // Evaluate agrees with the original function: f(2, 3) = 3.0
+/// let tt = tci.to_tensor_train().unwrap();
+/// let val = tt.evaluate(&[2, 3]).unwrap();
+/// assert!((val - 3.0).abs() < 1e-6);
+/// ```
 pub fn crossinterpolate2<T, F, B>(
     f: F,
     batched_f: Option<B>,

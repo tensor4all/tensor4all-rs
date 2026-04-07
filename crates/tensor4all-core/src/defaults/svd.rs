@@ -238,6 +238,27 @@ fn svd_truncated_native(
 }
 
 /// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{TensorDynLen, DynIndex, svd};
+///
+/// // Create a 2x3 matrix (rank-1 outer product: all-ones)
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(3);
+/// let data = vec![1.0_f64; 6]; // all-ones 2x3 matrix
+/// let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+///
+/// let (u, s, v) = svd::<f64>(&t, &[i.clone()]).unwrap();
+///
+/// // U: shape (left_dim, bond) = (2, bond)
+/// assert_eq!(u.dims()[0], 2);
+/// // V: shape (right_dim, bond) = (3, bond)
+/// assert_eq!(v.dims()[0], 3);
+/// // S is a diagonal matrix (bond × bond)
+/// assert_eq!(s.dims().len(), 2);
+/// ```
 pub fn svd<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],

@@ -67,6 +67,21 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     }
 
     /// Evaluate the tensor train at a given index set
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// // Constant TT: all values are 5.0
+    /// let tt = TensorTrain::<f64>::constant(&[3, 4], 5.0);
+    ///
+    /// let val = tt.evaluate(&[1, 2]).unwrap();
+    /// assert!((val - 5.0).abs() < 1e-12);
+    ///
+    /// // Wrong number of indices returns an error
+    /// assert!(tt.evaluate(&[0]).is_err());
+    /// ```
     fn evaluate(&self, indices: &[LocalIndex]) -> Result<T> {
         use crate::error::TensorTrainError;
 
@@ -136,6 +151,21 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     }
 
     /// Sum over all indices of the tensor train
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// // Constant TT with value 2.0 over 3×4 grid: sum = 2.0 * 3 * 4 = 24.0
+    /// let tt = TensorTrain::<f64>::constant(&[3, 4], 2.0);
+    /// let s = tt.sum();
+    /// assert!((s - 24.0).abs() < 1e-10);
+    ///
+    /// // Zero TT sums to 0.0
+    /// let zero_tt = TensorTrain::<f64>::zeros(&[2, 3]);
+    /// assert!((zero_tt.sum() - 0.0).abs() < 1e-12);
+    /// ```
     #[allow(clippy::needless_range_loop)]
     fn sum(&self) -> T {
         if self.is_empty() {

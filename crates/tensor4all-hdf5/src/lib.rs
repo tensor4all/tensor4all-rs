@@ -38,6 +38,25 @@ pub use hdf5_rt::sys::{
 };
 
 /// Save a [`TensorDynLen`] as an ITensors.jl-compatible `ITensor` in an HDF5 file.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tensor4all_hdf5::{save_itensor, load_itensor};
+/// use tensor4all_core::index::Index;
+/// use tensor4all_core::TensorDynLen;
+///
+/// let i = Index::new_dyn(2);
+/// let j = Index::new_dyn(3);
+/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![
+///     1.0, 2.0, 3.0, 4.0, 5.0, 6.0
+/// ]).unwrap();
+///
+/// let path = "/tmp/test_itensor.h5";
+/// save_itensor(path, "my_tensor", &tensor).unwrap();
+/// let loaded = load_itensor(path, "my_tensor").unwrap();
+/// assert_eq!(loaded.ndim(), 2);
+/// ```
 pub fn save_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result<()> {
     let file = File::create(filepath)?;
     let group = file.create_group(name)?;
@@ -45,6 +64,19 @@ pub fn save_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result
 }
 
 /// Load a [`TensorDynLen`] from an ITensors.jl-compatible `ITensor` in an HDF5 file.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tensor4all_hdf5::{save_itensor, load_itensor};
+/// use tensor4all_core::index::Index;
+/// use tensor4all_core::TensorDynLen;
+///
+/// // (Requires a previously saved file — see `save_itensor` for a full round-trip example.)
+/// let path = "/tmp/test_itensor.h5";
+/// let loaded = load_itensor(path, "my_tensor").unwrap();
+/// assert_eq!(loaded.ndim(), 2);
+/// ```
 pub fn load_itensor(filepath: &str, name: &str) -> Result<TensorDynLen> {
     let file = File::open(filepath)?;
     let group = file.group(name)?;
@@ -52,6 +84,27 @@ pub fn load_itensor(filepath: &str, name: &str) -> Result<TensorDynLen> {
 }
 
 /// Save a [`TensorTrain`] as an ITensorMPS.jl-compatible `MPS` in an HDF5 file.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tensor4all_hdf5::{save_mps, load_mps};
+/// use tensor4all_core::index::Index;
+/// use tensor4all_core::TensorDynLen;
+/// use tensor4all_itensorlike::TensorTrain;
+///
+/// let s0 = Index::new_dyn(2);
+/// let bond = Index::new_dyn(1);
+/// let s1 = Index::new_dyn(2);
+/// let t0 = TensorDynLen::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0]).unwrap();
+/// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0, 0.0]).unwrap();
+/// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+///
+/// let path = "/tmp/test_mps.h5";
+/// save_mps(path, "my_mps", &tt).unwrap();
+/// let loaded = load_mps(path, "my_mps").unwrap();
+/// assert_eq!(loaded.len(), 2);
+/// ```
 pub fn save_mps(filepath: &str, name: &str, tt: &TensorTrain) -> Result<()> {
     let file = File::create(filepath)?;
     let group = file.create_group(name)?;
@@ -59,6 +112,17 @@ pub fn save_mps(filepath: &str, name: &str, tt: &TensorTrain) -> Result<()> {
 }
 
 /// Load a [`TensorTrain`] from an ITensorMPS.jl-compatible `MPS` in an HDF5 file.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tensor4all_hdf5::load_mps;
+///
+/// // (Requires a previously saved file — see `save_mps` for a full round-trip example.)
+/// let path = "/tmp/test_mps.h5";
+/// let tt = load_mps(path, "my_mps").unwrap();
+/// assert_eq!(tt.len(), 2);
+/// ```
 pub fn load_mps(filepath: &str, name: &str) -> Result<TensorTrain> {
     let file = File::open(filepath)?;
     let group = file.group(name)?;

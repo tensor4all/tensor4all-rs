@@ -6,6 +6,23 @@ use std::hash::Hash;
 /// A bidirectional index set for efficient lookup
 ///
 /// Provides O(1) lookup from integer index to value and from value to integer index.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::IndexSet;
+///
+/// let mut set: IndexSet<String> = IndexSet::new();
+/// set.push("alpha".to_string());
+/// set.push("beta".to_string());
+/// set.push("alpha".to_string()); // duplicate, ignored
+///
+/// assert_eq!(set.len(), 2);
+/// assert_eq!(set.get(0), Some(&"alpha".to_string()));
+/// assert_eq!(set.pos(&"beta".to_string()), Some(1));
+/// assert!(set.contains(&"alpha".to_string()));
+/// assert!(!set.contains(&"gamma".to_string()));
+/// ```
 #[derive(Debug, Clone)]
 pub struct IndexSet<T: Clone + Eq + Hash> {
     /// Map from value to integer index
@@ -32,6 +49,18 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
     /// Create an index set from a vector
     ///
     /// Duplicate values are removed, keeping the first occurrence.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::IndexSet;
+    ///
+    /// let set = IndexSet::from_vec(vec![10usize, 20, 10, 30]);
+    /// assert_eq!(set.len(), 3);
+    /// assert_eq!(set[0], 10);
+    /// assert_eq!(set[1], 20);
+    /// assert_eq!(set[2], 30);
+    /// ```
     pub fn from_vec(values: Vec<T>) -> Self {
         let mut to_int = HashMap::new();
         let mut from_int = Vec::new();

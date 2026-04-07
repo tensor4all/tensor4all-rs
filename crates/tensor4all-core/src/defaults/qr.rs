@@ -170,6 +170,25 @@ fn truncate_matrix_rows<T: TensorElement>(
 /// - `left_inds` is empty or contains all indices
 /// - `left_inds` contains indices not in the tensor or duplicates
 /// - The QR computation fails
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{TensorDynLen, DynIndex, qr};
+///
+/// // Create a 4x3 matrix
+/// let i = DynIndex::new_dyn(4);
+/// let j = DynIndex::new_dyn(3);
+/// // Identity-like data (4x3 column-major)
+/// let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
+/// let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+///
+/// let (q, r) = qr::<f64>(&t, &[i.clone()]).unwrap();
+///
+/// // Q has shape (4, bond) and R has shape (bond, 3)
+/// assert_eq!(q.dims()[0], 4);
+/// assert_eq!(r.dims()[r.dims().len() - 1], 3);
+/// ```
 pub fn qr<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],

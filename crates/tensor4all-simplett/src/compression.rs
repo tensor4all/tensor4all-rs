@@ -445,6 +445,26 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
     }
 
     /// Create a compressed copy of the tensor train
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, CompressionOptions};
+    ///
+    /// // A tensor train with redundant bond dimension can be compressed
+    /// let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+    ///
+    /// let opts = CompressionOptions::default();
+    /// let compressed = tt.compressed(&opts).unwrap();
+    ///
+    /// // The compressed TT has the same number of sites
+    /// assert_eq!(compressed.len(), tt.len());
+    ///
+    /// // Evaluations agree
+    /// let val_orig = tt.evaluate(&[0, 1, 0]).unwrap();
+    /// let val_comp = compressed.evaluate(&[0, 1, 0]).unwrap();
+    /// assert!((val_orig - val_comp).abs() < 1e-10);
+    /// ```
     pub fn compressed(&self, options: &CompressionOptions) -> Result<Self>
     where
         T: tensor4all_tcicore::MatrixLuciScalar,
