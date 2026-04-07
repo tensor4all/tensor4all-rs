@@ -200,3 +200,77 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     where
         Self: Sized;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal IndexLike implementation that uses the default plev() method.
+    /// Used to test coverage of the default trait implementations.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct TestIndex {
+        id: u64,
+        dim: usize,
+    }
+
+    impl IndexLike for TestIndex {
+        type Id = u64;
+
+        fn id(&self) -> &u64 {
+            &self.id
+        }
+
+        fn dim(&self) -> usize {
+            self.dim
+        }
+
+        fn conj_state(&self) -> ConjState {
+            ConjState::Undirected
+        }
+
+        fn conj(&self) -> Self {
+            self.clone()
+        }
+
+        fn sim(&self) -> Self {
+            TestIndex {
+                id: self.id + 1000,
+                dim: self.dim,
+            }
+        }
+
+        fn create_dummy_link_pair() -> (Self, Self) {
+            (TestIndex { id: 0, dim: 1 }, TestIndex { id: 0, dim: 1 })
+        }
+    }
+
+    #[test]
+    fn test_default_plev_is_zero() {
+        let idx = TestIndex { id: 1, dim: 3 };
+        assert_eq!(idx.plev(), 0);
+    }
+
+    #[test]
+    fn test_default_is_contractable_with_plev() {
+        let a = TestIndex { id: 1, dim: 3 };
+        let b = TestIndex { id: 1, dim: 3 };
+        // Same id, dim, and default plev=0: contractable
+        assert!(a.is_contractable(&b));
+    }
+
+    #[test]
+    fn test_default_same_id() {
+        let a = TestIndex { id: 1, dim: 3 };
+        let b = TestIndex { id: 1, dim: 5 };
+        let c = TestIndex { id: 2, dim: 3 };
+        assert!(a.same_id(&b));
+        assert!(!a.same_id(&c));
+    }
+
+    #[test]
+    fn test_default_has_id() {
+        let a = TestIndex { id: 42, dim: 3 };
+        assert!(a.has_id(&42));
+        assert!(!a.has_id(&99));
+    }
+}
