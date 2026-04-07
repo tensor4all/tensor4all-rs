@@ -30,7 +30,9 @@ use tensor4all_core::{IndexLike, TensorIndex, TensorLike};
 use super::index_mapping::IndexMapping;
 use super::linear_operator::LinearOperator;
 use super::Operator;
-use crate::operator::compose_exclusive_linear_operators;
+use crate::operator::compose::{
+    compose_exclusive_linear_operators, compose_exclusive_linear_operators_unchecked,
+};
 use crate::treetn::contraction::{contract, ContractionMethod, ContractionOptions};
 use crate::treetn::TreeTN;
 
@@ -201,7 +203,8 @@ where
 
 /// Extend a partial operator to cover the full state space.
 ///
-/// Uses `compose_exclusive_linear_operators` to fill gap nodes with identity operators.
+/// Uses the operator support's Steiner tree to detect disconnected regions and
+/// fills all missing nodes with identity operators.
 /// For gap nodes, creates proper index mappings where:
 /// - True indices = state's actual site indices
 /// - Internal indices = new simulated indices for the MPO tensor
@@ -218,6 +221,19 @@ where
     let state_network = state.site_index_network();
     let op_nodes: HashSet<V> = operator.node_names();
     let state_nodes: HashSet<V> = state.node_names().into_iter().collect();
+    let mut op_node_indices: HashSet<petgraph::stable_graph::NodeIndex> = HashSet::new();
+    for name in &op_nodes {
+        let node_index = state_network.node_index(name).ok_or_else(|| {
+            anyhow::anyhow!("Operator node {:?} is missing from the state network", name)
+        })?;
+        op_node_indices.insert(node_index);
+    }
+
+    let steiner_tree_nodes = state_network.steiner_tree_nodes(&op_node_indices);
+    let steiner_gap_nodes: HashSet<_> = steiner_tree_nodes
+        .difference(&op_node_indices)
+        .copied()
+        .collect();
     let gap_nodes: Vec<V> = state_nodes.difference(&op_nodes).cloned().collect();
 
     // Build gap site indices: for each gap node, create internal indices for the identity tensor.
@@ -268,10 +284,15 @@ where
         gap_site_indices.insert(gap_name.clone(), pairs);
     }
 
-    // Compose the operator with identity at gaps
-    let mut composed =
+    // If the operator support is already connected in the state topology, use the
+    // checked compose path. Otherwise, let the gap identities bridge the Steiner tree.
+    let compose_result = if steiner_gap_nodes.is_empty() {
         compose_exclusive_linear_operators(state_network, &[operator], &gap_site_indices)
-            .context("Failed to compose operator with identity gaps")?;
+    } else {
+        compose_exclusive_linear_operators_unchecked(state_network, &[operator], &gap_site_indices)
+    };
+
+    let mut composed = compose_result.context("Failed to compose operator with identity gaps")?;
 
     // Override the mappings for gap nodes to use the correct true indices
     // (compose_exclusive_linear_operators uses the internal indices as true indices for gaps)

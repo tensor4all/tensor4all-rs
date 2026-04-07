@@ -369,6 +369,31 @@ where
         self.topology.path_between(from, to)
     }
 
+    /// Compute the Steiner tree nodes spanning a set of terminal nodes.
+    ///
+    /// Delegates to [`NodeNameNetwork::steiner_tree_nodes`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashSet;
+    /// use tensor4all_core::DynIndex;
+    /// use tensor4all_treetn::SiteIndexNetwork;
+    ///
+    /// let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+    /// let a = net.add_node("A".to_string(), HashSet::<DynIndex>::new()).unwrap();
+    /// let b = net.add_node("B".to_string(), HashSet::<DynIndex>::new()).unwrap();
+    /// let c = net.add_node("C".to_string(), HashSet::<DynIndex>::new()).unwrap();
+    /// net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    /// net.add_edge(&"B".to_string(), &"C".to_string()).unwrap();
+    ///
+    /// let steiner = net.steiner_tree_nodes(&[a, c].into_iter().collect::<HashSet<_>>());
+    /// assert_eq!(steiner, [a, b, c].into_iter().collect());
+    /// ```
+    pub fn steiner_tree_nodes(&self, terminals: &HashSet<NodeIndex>) -> HashSet<NodeIndex> {
+        self.topology.steiner_tree_nodes(terminals)
+    }
+
     /// Check if a subset of nodes forms a connected subgraph.
     pub fn is_connected_subset(&self, nodes: &HashSet<NodeIndex>) -> bool {
         self.topology.is_connected_subset(nodes)
