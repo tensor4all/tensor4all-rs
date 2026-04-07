@@ -1234,6 +1234,66 @@ pub extern "C" fn t4a_treetn_linsolve(
 }
 
 // ============================================================================
+// Swap site indices
+// ============================================================================
+
+/// Swap site indices on a TreeTN to a target assignment.
+///
+/// Rearranges site indices so that each specified index ends up at its
+/// target vertex. Values are preserved via SVD factorization.
+///
+/// # Arguments
+/// * `ttn` - Tree tensor network (modified in place)
+/// * `index_ids` - Array of index IDs (u64) to move
+/// * `target_vertices` - Array of target vertex numbers (same length as index_ids)
+/// * `n_pairs` - Number of (index_id, target_vertex) pairs
+/// * `max_rank` - Maximum bond dimension after SVD (0 = no limit)
+/// * `rtol` - Relative SVD truncation tolerance (0.0 = no truncation)
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_swap_site_indices(
+    ttn: *mut t4a_treetn,
+    index_ids: *const u64,
+    target_vertices: *const libc::size_t,
+    n_pairs: libc::size_t,
+    max_rank: libc::size_t,
+    rtol: libc::c_double,
+) -> StatusCode {
+    if ttn.is_null() {
+        return T4A_NULL_POINTER;
+    }
+    if n_pairs > 0 && (index_ids.is_null() || target_vertices.is_null()) {
+        return T4A_NULL_POINTER;
+    }
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        use std::collections::HashMap;
+        use tensor4all_core::defaults::index::DynId;
+        use tensor4all_treetn::treetn::SwapOptions;
+
+        let inner = unsafe { &mut *ttn }.inner_mut();
+
+        let mut target_map: HashMap<DynId, usize> = HashMap::new();
+        for i in 0..n_pairs {
+            let id = DynId(unsafe { *index_ids.add(i) });
+            let vertex = unsafe { *target_vertices.add(i) };
+            target_map.insert(id, vertex);
+        }
+
+        let opts = SwapOptions {
+            max_rank: if max_rank == 0 { None } else { Some(max_rank) },
+            rtol: if rtol == 0.0 { None } else { Some(rtol) },
+        };
+
+        match inner.swap_site_indices(&target_map, &opts) {
+            Ok(()) => T4A_SUCCESS,
+            Err(e) => crate::err_status(e, crate::T4A_INTERNAL_ERROR),
+        }
+    }));
+
+    crate::unwrap_catch(result)
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
