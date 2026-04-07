@@ -47,6 +47,9 @@ lcov-patch.info
 # Generated API documentation
 docs/api/
 
+# mdBook build output
+docs/book/book/
+
 # Git worktrees
 .worktrees/
 experimental/
