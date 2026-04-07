@@ -13,4 +13,4 @@ backed by tenferro-rs.
 
 ## Documentation
 
-- [API Reference](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_tensorbackend/)
+- [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_tensorbackend/)

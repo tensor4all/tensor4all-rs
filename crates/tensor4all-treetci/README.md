@@ -13,5 +13,5 @@ Computes tensor cross interpolation on tree-structured graphs, producing TreeTN 
 
 ## Documentation
 
-- [User Guide: Tree Tensor Networks](https://tensor4all.github.io/tensor4all-rs/guides/tree-tn.html)
-- [API Reference](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_treetci/)
+- [User Guide: Tree Tensor Networks](https://tensor4all.org/tensor4all-rs/guides/tree-tn.html)
+- [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_treetci/)

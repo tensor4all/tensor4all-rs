@@ -13,4 +13,4 @@ cached function evaluation, and index set management.
 
 ## Documentation
 
-- [API Reference](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_tcicore/)
+- [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_tcicore/)

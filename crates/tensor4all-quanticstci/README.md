@@ -31,5 +31,5 @@ assert!((value - 15.0).abs() < 1e-10);
 
 ## Documentation
 
-- [User Guide: TCI](https://tensor4all.github.io/tensor4all-rs/guides/tci.html)
-- [API Reference](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_quanticstci/)
+- [User Guide: TCI](https://tensor4all.org/tensor4all-rs/guides/tci.html)
+- [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_quanticstci/)

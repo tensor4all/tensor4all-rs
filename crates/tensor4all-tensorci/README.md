@@ -28,11 +28,16 @@ let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec
     },
 )?;
 
-assert!(tci.rank() > 0);
+// Verify convergence
 assert!(*errors.last().unwrap() < 1e-10);
+
+// Verify interpolation accuracy
+let tt = tci.to_tensor_train()?;
+let val = tt.evaluate(&[2, 3])?;  // f(2, 3) = 2 + 3 + 1 = 6.0
+assert!((val - 6.0).abs() < 1e-10);
 ```
 
 ## Documentation
 
-- [User Guide: TCI](https://tensor4all.github.io/tensor4all-rs/guides/tci.html)
-- [API Reference](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_tensorci/)
+- [User Guide: TCI](https://tensor4all.org/tensor4all-rs/guides/tci.html)
+- [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_tensorci/)

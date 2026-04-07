@@ -58,8 +58,8 @@ assert!((compressed.sum() - 24.0).abs() < 1e-10);
 
 ## Documentation
 
-- **[User Guide](https://tensor4all.github.io/tensor4all-rs/)** — tutorials, architecture, conventions
-- **[API Reference (rustdoc)](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_core/)** — generated API documentation
+- **[User Guide](https://tensor4all.org/tensor4all-rs/)** — tutorials, architecture, conventions
+- **[API Reference (rustdoc)](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_core/)** — generated API documentation
 - **[Julia Bindings](https://github.com/tensor4all/Tensor4all.jl)** — Tensor4all.jl wrapper
 - **[Design Documents](docs/design/index.md)** — architecture and design decisions
 

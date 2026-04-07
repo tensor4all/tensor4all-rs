@@ -14,4 +14,4 @@ HDF5 serialization for tensor4all-rs, compatible with ITensors.jl / ITensorMPS.j
 
 ## Documentation
 
-- [API Reference](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_hdf5/)
+- [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_hdf5/)

@@ -32,7 +32,7 @@ let local_dims = vec![4, 4];
 let initial_pivots = vec![vec![1, 1]];
 
 // Run TCI2 with a tight tolerance.
-let (tci, ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
     f,
     None,             // optional batch callback; None uses the scalar callback
     local_dims,
@@ -43,8 +43,13 @@ let (tci, ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<
     },
 )?;
 
-assert!(tci.rank() > 0);
-assert!(errors.last().is_some());
+// Verify convergence
+assert!(*errors.last().unwrap() < 1e-10);
+
+// Verify interpolation accuracy by evaluating at a specific point
+let tt = tci.to_tensor_train()?;
+let val = tt.evaluate(&[2, 3])?;  // f(2, 3) = 2 + 3 + 1 = 6.0
+assert!((val - 6.0).abs() < 1e-10);
 ```
 
 ### Interpreting the results

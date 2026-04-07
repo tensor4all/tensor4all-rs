@@ -42,5 +42,5 @@ assert!((inner.real() - norm * norm).abs() < 1e-10);
 
 ## Documentation
 
-- [User Guide: Tensor Train](https://tensor4all.github.io/tensor4all-rs/guides/tensor-train.html)
-- [API Reference](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_itensorlike/)
+- [User Guide: Tensor Train](https://tensor4all.org/tensor4all-rs/guides/tensor-train.html)
+- [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_itensorlike/)

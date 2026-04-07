@@ -42,5 +42,5 @@ assert!(norm > 0.0);
 
 ## Documentation
 
-- [User Guide: Tree Tensor Networks](https://tensor4all.github.io/tensor4all-rs/guides/tree-tn.html)
-- [API Reference](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_treetn/)
+- [User Guide: Tree Tensor Networks](https://tensor4all.org/tensor4all-rs/guides/tree-tn.html)
+- [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_treetn/)

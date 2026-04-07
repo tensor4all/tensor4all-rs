@@ -36,5 +36,5 @@ let result = factorize(
 
 ## Documentation
 
-- [User Guide: Tensor Basics](https://tensor4all.github.io/tensor4all-rs/guides/tensor-basics.html)
-- [API Reference](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_core/)
+- [User Guide: Tensor Basics](https://tensor4all.org/tensor4all-rs/guides/tensor-basics.html)
+- [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_core/)
