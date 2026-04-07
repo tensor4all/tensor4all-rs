@@ -38,21 +38,39 @@ where
     /// 2. Generate a two-site sweep plan using Euler tour traversal
     /// 3. Apply SVD-based truncation at each step, visiting each edge twice
     ///
-    /// # Example
-    /// ```ignore
-    /// use tensor4all_treetn::TruncationOptions;
+    /// # Examples
     ///
-    /// // Truncate with max rank of 50
-    /// let ttn = ttn.truncate(
-    ///     ["center"],
-    ///     TruncationOptions::default().with_max_rank(50)
-    /// )?;
+    /// ```
+    /// use tensor4all_treetn::{TreeTN, TruncationOptions};
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
     ///
-    /// // Truncate with relative tolerance
-    /// let ttn = ttn.truncate(
-    ///     ["center"],
-    ///     TruncationOptions::default().with_rtol(1e-10)
-    /// )?;
+    /// // Build a 2-node chain
+    /// let s0 = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(3);
+    /// let s1 = DynIndex::new_dyn(2);
+    ///
+    /// let t0 = TensorDynLen::from_dense(
+    ///     vec![s0.clone(), bond.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0],
+    /// ).unwrap();
+    /// let t1 = TensorDynLen::from_dense(
+    ///     vec![bond.clone(), s1.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0],
+    /// ).unwrap();
+    ///
+    /// let tn = TreeTN::<_, String>::from_tensors(
+    ///     vec![t0, t1],
+    ///     vec!["A".to_string(), "B".to_string()],
+    /// ).unwrap();
+    ///
+    /// // Truncate with max rank 2 towards node "A"
+    /// let tn = tn.truncate(
+    ///     ["A".to_string()],
+    ///     TruncationOptions::default().with_max_rank(2),
+    /// ).unwrap();
+    ///
+    /// // Bond dimension is now at most 2
+    /// assert_eq!(tn.node_count(), 2);
     /// ```
     pub fn truncate(
         mut self,

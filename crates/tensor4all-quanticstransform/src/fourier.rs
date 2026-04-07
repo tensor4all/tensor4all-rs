@@ -128,6 +128,18 @@ impl FTCore {
 ///
 /// # Returns
 /// LinearOperator representing the QFT
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
+///
+/// // Create a forward QFT operator for 4-bit quantics representation
+/// let op = quantics_fourier_operator(4, FourierOptions::forward()).unwrap();
+///
+/// // The operator has one MPO tensor per bit
+/// assert_eq!(op.mpo.node_count(), 4);
+/// ```
 pub fn quantics_fourier_operator(r: usize, options: FourierOptions) -> Result<QuanticsOperator> {
     if r < 2 {
         anyhow::bail!("Number of sites must be at least 2, got {r}");

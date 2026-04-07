@@ -38,6 +38,29 @@ use crate::treetn::TreeTN;
 ///
 /// * `T` - Tensor type implementing `TensorLike`
 /// * `V` - Node name type
+///
+/// # Examples
+///
+/// A `LinearOperator` is typically obtained from a constructor function rather
+/// than built directly. The `mpo` field contains the underlying TreeTN:
+///
+/// ```
+/// use tensor4all_treetn::LinearOperator;
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+/// use tensor4all_treetn::TreeTN;
+/// use std::collections::HashMap;
+///
+/// // Build a trivial single-node LinearOperator wrapping a 2x2 identity
+/// let s_in = DynIndex::new_dyn(2);
+/// let s_out = DynIndex::new_dyn(2);
+/// let t = TensorDynLen::from_dense(
+///     vec![s_in.clone(), s_out.clone()],
+///     vec![1.0_f64, 0.0, 0.0, 1.0],
+/// ).unwrap();
+///
+/// let mpo = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
+/// assert_eq!(mpo.node_count(), 1);
+/// ```
 #[derive(Debug, Clone)]
 pub struct LinearOperator<T, V>
 where
