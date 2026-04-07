@@ -2,255 +2,76 @@
 
 [![CI](https://github.com/tensor4all/tensor4all-rs/actions/workflows/CI_rs.yml/badge.svg)](https://github.com/tensor4all/tensor4all-rs/actions/workflows/CI_rs.yml)
 
-A Rust implementation of tensor networks for **AI-agentic development** — rapid, AI-assisted development with fast trial-and-error cycles.
+A Rust implementation of tensor networks: TCI, Quantics Tensor Train, and Tree Tensor Networks.
 
-## Design Philosophy
+## Features
 
-**AI-Agentic Development Optimized**: tensor4all-rs is designed for rapid prototyping with AI agents and code generation:
+- **ITensors.jl-like dynamic tensors**: Flexible `Index` system with dynamic-rank `Tensor`
+- **Tensor Cross Interpolation**: TCI2 algorithm for efficient high-dimensional function approximation
+- **Quantics Tensor Train**: Binary encoding of continuous variables with transformation operators
+- **Tree Tensor Networks**: Arbitrary topology with canonicalization, truncation, and contraction
+- **C API**: Full functionality exposed for language bindings (Julia)
 
-- **Modular architecture**: Independent crates with unified core (`tensor4all-core`) enable fast compilation and isolated testing
-- **ITensors.jl-like dynamic structure**: Flexible `Index` system and dynamic-rank tensors preserve the intuitive API
-- **tenferro-rs-backed execution**: Dense tensor algebra, einsum, and linear algebra now center on a shared tenferro-rs runtime
-- **Static error detection**: Rust's type system catches errors at compile time while maintaining runtime flexibility
-- **Multi-language support via C-API**: Full functionality exposed through C-API with language bindings
+## Quick Start
 
-**Scope**: Initial focus is QTT (Quantics Tensor Train), TCI (Tensor Cross Interpolation), and related tree / train tensor network algorithms.
+Add to your `Cargo.toml`:
 
-## Dense Layout Semantics
-
-tensor4all-rs uses **column-major** dense linearization internally. Flat dense buffers,
-`reshape`/`flatten` semantics, the C API, and the ITensors.jl-compatible
-HDF5 layer are all defined in terms of column-major ordering.
-
-This matches Julia, ITensors.jl, and tenferro-rs. When exchanging dense data with NumPy,
-use `order="F"` semantics when you need explicit control over flattening or reshaping.
-
-## Backend Status
-
-tensor4all-rs now centers on a tenferro-rs execution stack. The dense tensor backend,
-einsum-based contractions, and much of the linear algebra path already route through tenferro-rs.
-
-Reverse-mode automatic differentiation is also close at the backend layer, but it is not yet
-documented as a validated end-to-end public feature. README claims should therefore stay slightly
-behind the implementation until broader tests land.
-
-## Type Correspondence
-
-| ITensors.jl | QSpace v4 | tensor4all-rs |
-|-------------|-----------|---------------|
-| `Index{Int}` | — | `Index<Id, NoSymmSpace>` |
-| `Index{QNBlocks}` | `QIDX` | Not part of the current roadmap |
-| `ITensor` | `QSpace` | `TensorDynLen` |
-| `Dense` | `DATA` | `Storage::StructuredF64/C64` |
-| `Diag` | — | `Storage::StructuredF64/C64` with diagonal `axis_classes` |
-| `A * B` | — | `a.contract(&b)` |
-
-Legacy dense/diagonal kernel variants still exist inside the backend during the transition,
-but `StructuredStorage` is the intended public snapshot direction.
-
-### Truncation Tolerance
-
-| Library | Parameter | Conversion |
-|---------|-----------|------------|
-| tensor4all-rs | `rtol` | — |
-| ITensors.jl | `cutoff` | `rtol = √cutoff` |
-
-## Solve-Bug Entrypoints
-
-Use `bash ai/run-codex-solve-bug.sh` or `bash ai/run-claude-solve-bug.sh` when you want a headless agent to pick one actionable bug or bug-like issue, fix it, and drive the repository-local PR workflow.
-
-If there are effectively no open bug or bug-like issues, the workflow should terminate cleanly with no code changes and no PR creation.
-
-## Project Structure
-
+```toml
+[dependencies]
+tensor4all-simplett = "0.1"
 ```
-tensor4all-rs/
-├── crates/
-│   ├── tensor4all-tensorbackend/     # Scalar types, storage backends
-│   ├── tensor4all-core/              # Core: Index, Tensor, TensorLike trait, SVD, QR
-│   ├── tensor4all-treetn/            # Tree Tensor Networks with arbitrary topology
-│   ├── tensor4all-itensorlike/       # ITensorMPS.jl-like TensorTrain API
-│   ├── tensor4all-simplett/          # Simple TT/MPS implementation
-│   ├── tensor4all-tensorci/          # Tensor Cross Interpolation (TCI2 primary, TCI1 legacy)
-│   ├── tensor4all-quanticstci/       # High-level Quantics TCI (QuanticsTCI.jl port)
-│   ├── tensor4all-quanticstransform/ # Quantics transformation operators
-│   ├── tensor4all-partitionedtt/     # Partitioned Tensor Train
-│   ├── tensor4all-hdf5/              # ITensors.jl-compatible HDF5 serialization
-│   ├── tensor4all-capi/              # C API for language bindings
-│   ├── tensor4all-tcicore/           # TCI core: matrix CI, LUCI / rrLU substrate, cached function, index sets
-│   └── tensor4all-treetci/           # TreeTCI port and tree-structured cross interpolation
-├── tools/api-dump/                   # API documentation generator
-├── xtask/                            # Development task runner
-└── docs/                             # Design documents
-```
-
-### Crate Documentation
-
-| Crate | Description |
-|-------|-------------|
-| [tensor4all-tensorbackend](crates/tensor4all-tensorbackend/) | Scalar types (f64, Complex64) and storage backends |
-| [tensor4all-core](crates/tensor4all-core/) | Core types: Index, Tensor, TensorLike trait, SVD, QR, LU |
-| [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology |
-| [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensorMPS.jl-like TensorTrain API |
-| [tensor4all-simplett](crates/tensor4all-simplett/) | Simple TT/MPS with multiple canonical forms |
-| [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI2 primary, TCI1 legacy) |
-| [tensor4all-quanticstci](crates/tensor4all-quanticstci/) | High-level Quantics TCI interface |
-| [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
-| [tensor4all-partitionedtt](crates/tensor4all-partitionedtt/) | Partitioned Tensor Train |
-| [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
-| [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
-| [tensor4all-tcicore](crates/tensor4all-tcicore/) | TCI core: matrix CI, LUCI / rrLU substrate, cached function, index sets |
-| [tensor4all-treetci](crates/tensor4all-treetci/) | TreeTCI port and tree-structured cross interpolation |
-
-## Usage Example (Rust)
-
-### Simple Tensor Train (MPS)
 
 ```rust
 use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
 
-// Create a constant tensor train with local dimensions [2, 3, 4]
 let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+let value = tt.evaluate(&[0, 1, 2]).unwrap();
+assert!((value - 1.0).abs() < 1e-12);
 
-// Evaluate at a specific multi-index
-let value = tt.evaluate(&[0, 1, 2])?;
-
-// Compute sum over all indices
 let total = tt.sum();
+assert!((total - 24.0).abs() < 1e-12);
 
-// Compress with tolerance (rtol=1e-10, max bond dim = 20)
 let options = CompressionOptions {
     tolerance: 1e-10,
     max_bond_dim: 20,
     ..Default::default()
 };
-let compressed = tt.compressed(&options)?;
+let compressed = tt.compressed(&options).unwrap();
+assert!((compressed.sum() - 24.0).abs() < 1e-10);
 ```
 
-### Tensor Cross Interpolation (TCI)
+## Crate Overview
 
-```rust
-use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
-
-// Define a function to interpolate
-let f = |idx: &Vec<usize>| -> f64 {
-    ((1 + idx[0]) * (1 + idx[1]) * (1 + idx[2])) as f64
-};
-
-// Perform cross interpolation
-let local_dims = vec![4, 4, 4];
-let initial_pivots = vec![vec![0, 0, 0]];
-let options = TCI2Options { tolerance: 1e-10, ..Default::default() };
-
-let (tci, ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
-    f, None, local_dims, initial_pivots, options
-)?;
-
-// Convert to tensor train
-let tt = tci.to_tensor_train()?;
-println!("Rank: {}, Final error: {:.2e}", tci.rank(), errors.last().unwrap());
-```
-
-## Language Bindings
-
-Binding documentation in this repo is built as an mdBook (`docs/book/`). Code blocks in the book are included from standalone scripts under `docs/examples/` and are executed in CI.
-
-### Julia
-
-Julia bindings are maintained in a separate repository: **[Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl)**
-
-```julia
-using Pkg
-Pkg.add(url="https://github.com/tensor4all/Tensor4all.jl")
-```
-
-See the [Tensor4all.jl README](https://github.com/tensor4all/Tensor4all.jl) for detailed installation and usage instructions.
-
-## Near-Term Work
-
-- End-to-end validation and public API coverage for reverse-mode automatic differentiation on the tenferro-rs backend
-- In-place operations for memory efficiency
-- Optimization for block-sparse tensors
-
-## Acknowledgments
-
-This implementation is inspired by **ITensors.jl** (https://github.com/ITensor/ITensors.jl). We have borrowed API design concepts for compatibility, but the implementation is independently written in Rust.
-
-We acknowledge many fruitful discussions with **M. Fishman** and **E. M. Stoudenmire** at the Center for Computational Quantum Physics (CCQ), Flatiron Institute. H. Shinaoka visited CCQ during his sabbatical (November–December 2025), which greatly contributed to this project.
-
-**Citation**: If you use this code in research, please cite:
-
-> We used tensor4all-rs (https://github.com/tensor4all/tensor4all-rs), inspired by ITensors.jl.
-
-For ITensors.jl:
-
-> M. Fishman, S. R. White, E. M. Stoudenmire, "The ITensor Software Library for Tensor Network Calculations", arXiv:2007.14822 (2020)
-
-## TODO / Known Issues
-
-### Naming Convention
-
-- **Tolerance parameters**: Standardize on `rtol` (relative tolerance) and `atol` (absolute tolerance)
-  - Current inconsistency: `cutoff`, `tolerance`, `rtol` used interchangeably
-  - `cutoff` (ITensors.jl style) should only appear in compatibility layers
-  - Conversion: `rtol = √cutoff`
-
-### Incomplete Implementations
-
-- **MPO canonical forms**: VidalMPO and InverseMPO conversions not yet implemented
-- **C API `t4a_treetn_evaluate`**: TreeTN evaluate function not yet exposed in C API
-
-## Development
-
-### Development Tasks (xtask)
-
-This project uses `cargo xtask` for common development tasks:
-
-```bash
-# Generate documentation with custom index page
-cargo xtask doc
-
-# Generate and open documentation in browser
-cargo xtask doc --open
-
-# Run all CI checks (fmt, clippy, test, doc)
-cargo xtask ci
-```
-
-### Pre-commit Checks
-
-Before committing changes, ensure that both formatting and linting pass:
-
-```bash
-# Check code formatting
-cargo fmt --all -- --check
-
-# Run clippy with all warnings as errors
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-If either command fails, fix the issues before committing:
-
-```bash
-# Auto-fix formatting
-cargo fmt --all
-
-# Fix clippy warnings (some may require manual fixes)
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-These checks are also enforced in CI, so ensuring they pass locally will prevent CI failures.
+| Crate | Description |
+|-------|-------------|
+| [tensor4all-core](crates/tensor4all-core/) | Core types: Index, Tensor, contraction, SVD, QR |
+| [tensor4all-simplett](crates/tensor4all-simplett/) | Simple TT/MPS with compression |
+| [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensors.jl-like TensorTrain API |
+| [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology |
+| [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI2) |
+| [tensor4all-quanticstci](crates/tensor4all-quanticstci/) | High-level Quantics TCI interface |
+| [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
+| [tensor4all-treetci](crates/tensor4all-treetci/) | Tree-structured cross interpolation |
+| [tensor4all-partitionedtt](crates/tensor4all-partitionedtt/) | Partitioned Tensor Train |
+| [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
+| [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
 
 ## Documentation
 
-- [Index System Design](docs/INDEX_SYSTEM.md) — Overview of the index system, QSpace compatibility, and IndexLike/TensorLike design
-- [AI-Agentic Development Workflow](docs/vibe_coding_workflow.md) — Development workflow guidelines for rapid, AI-assisted development
-- mdBook user guide: `mdbook build docs/book` (output: `docs/book/book/`)
+- **[User Guide](https://tensor4all.github.io/tensor4all-rs/)** — tutorials, architecture, conventions
+- **[API Reference (rustdoc)](https://tensor4all.github.io/tensor4all-rs/rustdoc/tensor4all_core/)** — generated API documentation
+- **[Julia Bindings](https://github.com/tensor4all/Tensor4all.jl)** — Tensor4all.jl wrapper
+- **[Design Documents](docs/design/index.md)** — architecture and design decisions
 
-## References
+## Acknowledgments
 
-- [ITensors.jl](https://github.com/ITensor/ITensors.jl) — M. Fishman, S. R. White, E. M. Stoudenmire, arXiv:2007.14822 (2020)
-- QSpace v4 — A. Weichselbaum, Annals of Physics **327**, 2972 (2012)
+Inspired by [ITensors.jl](https://github.com/ITensor/ITensors.jl). We acknowledge fruitful discussions with M. Fishman and E. M. Stoudenmire at CCQ, Flatiron Institute.
+
+**Citation:** If you use this code in research, please cite:
+
+> We used tensor4all-rs (https://github.com/tensor4all/tensor4all-rs), inspired by ITensors.jl.
+>
+> M. Fishman, S. R. White, E. M. Stoudenmire, "The ITensor Software Library for Tensor Network Calculations", arXiv:2007.14822 (2020)
 
 ## License
 
