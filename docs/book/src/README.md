@@ -1,7 +1,40 @@
 # tensor4all-rs
 
-A Rust implementation of tensor networks.
+tensor4all-rs is a Rust implementation of tensor network algorithms, focused on:
 
-For API documentation, see the [rustdoc](../rustdoc/index.html).
+- **Tensor Cross Interpolation (TCI / TCI2)** — adaptive low-rank tensor approximation
+- **Quantics Tensor Train (QTT)** — representation of functions in exponentially fine grids
+- **Tree Tensor Networks (TreeTN)** — tensor networks with arbitrary tree topology
 
-For source code and development information, see the [GitHub repository](https://github.com/tensor4all/tensor4all-rs).
+The library is structured as a workspace of independent crates under `crates/`, designed for modular use and AI-agentic development workflows. Language bindings for Julia are provided through the C API layer.
+
+Source code and issue tracker: [github.com/tensor4all/tensor4all-rs](https://github.com/tensor4all/tensor4all-rs)
+
+---
+
+## Where to start
+
+| I want to... | Go to |
+|---|---|
+| Understand tensor networks from scratch | [Concepts](concepts.md) |
+| Install and run my first example | [Getting Started](getting-started.md) |
+| Understand the crate structure | [Architecture & Crate Guide](architecture.md) |
+| Come from ITensors.jl and map types | [Conventions](conventions.md) |
+| Browse the full API reference | [rustdoc API reference](../rustdoc/tensor4all_core/) |
+| Use tensor4all-rs from Julia | [Julia Bindings](julia-bindings.md) |
+
+---
+
+## Feature highlights
+
+- **Dynamic Index/Tensor system** inspired by ITensors.jl: indices carry semantic identity, tensor contraction aligns axes by index rather than position
+- **Tensor Cross Interpolation (TCI2)**: approximates high-dimensional tensors from a small number of evaluations using cross-approximation
+- **Quantics Tensor Train (QTT)**: represents smooth functions on exponentially fine grids; includes transformation operators (affine, shift, sum)
+- **Tree Tensor Networks**: arbitrary-topology TTN, not limited to chains (MPS/MPO); supports standard MPS/MPO as special cases with runtime topology checks
+- **C API** (`tensor4all-capi`): stable FFI surface for language bindings, currently used by [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl)
+
+---
+
+## Not sure where you fit?
+
+If you are new to the library, read [Getting Started](getting-started.md) for a short working example, then consult [Concepts](concepts.md) for background on the data structures used throughout.
