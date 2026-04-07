@@ -63,7 +63,7 @@ pub(crate) fn read_tagset(group: &Group) -> Result<TagSet> {
 ///   id: UInt64
 ///   dim: Int64
 ///   dir: Int64       (always 0 — direction is unused in tensor4all-rs)
-///   plev: Int64      (always 0)
+///   plev: Int64
 ///   tags/            (TagSet group)
 /// ```
 pub(crate) fn write_index(group: &Group, index: &DynIndex) -> Result<()> {
@@ -89,7 +89,7 @@ pub(crate) fn write_index(group: &Group, index: &DynIndex) -> Result<()> {
     dir_ds.as_writer().write_scalar(&0i64)?;
 
     let plev_ds = group.new_dataset::<i64>().shape(()).create("plev")?;
-    plev_ds.as_writer().write_scalar(&0i64)?;
+    plev_ds.as_writer().write_scalar(&index.plev)?;
 
     // Tags subgroup
     let tags_group = group.create_group("tags")?;
@@ -121,8 +121,7 @@ pub(crate) fn read_index(group: &Group) -> Result<DynIndex> {
         .read_scalar()
         .context("Failed to read index dir")?;
 
-    // plev is read but ignored (always 0 in tensor4all-rs)
-    let _plev: i64 = group
+    let plev: i64 = group
         .dataset("plev")?
         .as_reader()
         .read_scalar()
@@ -131,7 +130,9 @@ pub(crate) fn read_index(group: &Group) -> Result<DynIndex> {
     let tags_group = group.group("tags")?;
     let tags = read_tagset(&tags_group)?;
 
-    Ok(Index::new_with_tags(DynId(id), dim as usize, tags))
+    let mut idx = Index::new_with_tags(DynId(id), dim as usize, tags);
+    idx.plev = plev;
+    Ok(idx)
 }
 
 /// Write an IndexSet to an HDF5 group (ITensors.jl compatible).

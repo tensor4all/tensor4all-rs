@@ -113,6 +113,12 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     /// Get the total dimension (state-space dimension) of the index.
     fn dim(&self) -> usize;
 
+    /// Get the prime level of this index.
+    /// Default: 0 (unprimed).
+    fn plev(&self) -> i64 {
+        0
+    }
+
     /// Get the conjugate state (direction) of this index.
     ///
     /// Returns `ConjState::Undirected` for directionless indices (ITensors.jl-like default),
@@ -142,9 +148,10 @@ pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     /// The default implementation checks:
     /// 1. Same ID: `self.id() == other.id()`
     /// 2. Same dimension: `self.dim() == other.dim()`
-    /// 3. Compatible conjugate states (see rules above)
+    /// 3. Same prime level: `self.plev() == other.plev()`
+    /// 4. Compatible conjugate states (see rules above)
     fn is_contractable(&self, other: &Self) -> bool {
-        if self.id() != other.id() || self.dim() != other.dim() {
+        if self.id() != other.id() || self.dim() != other.dim() || self.plev() != other.plev() {
             return false;
         }
         match (self.conj_state(), other.conj_state()) {

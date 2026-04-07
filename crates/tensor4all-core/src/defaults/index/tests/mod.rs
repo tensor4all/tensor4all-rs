@@ -1,5 +1,6 @@
 use super::*;
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::thread;
 
 #[test]
@@ -53,6 +54,7 @@ fn test_index_like_basic() {
 
     // Test IndexLike methods
     assert_eq!(i.dim(), 5);
+    assert_eq!(i.plev(), 0);
 
     // Test id() method
     let id = i.id();
@@ -132,6 +134,80 @@ fn test_sim() {
     assert_eq!(i1.tags, i2.tags);
     assert!(i2.tags.has_tag("Site"));
     assert!(i2.tags.has_tag("x=1"));
+}
+
+#[test]
+fn test_plev_default() {
+    let idx: DynIndex = Index::new_dyn(5);
+    assert_eq!(idx.plev(), 0);
+    assert_eq!(idx.plev, 0);
+}
+
+#[test]
+fn test_plev_equality() {
+    let idx = Index::<DynId>::new_dyn_with_tag(5, "Site").unwrap();
+    let primed = idx.set_plev(1);
+
+    assert_ne!(idx, primed);
+    assert_eq!(idx.id, primed.id);
+    assert_eq!(idx.tags, primed.tags);
+}
+
+#[test]
+fn test_plev_hash() {
+    let idx = Index::<DynId>::new_dyn_with_tag(5, "Site").unwrap();
+    let primed = idx.prime();
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    idx.hash(&mut hasher);
+    let idx_hash = hasher.finish();
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    primed.hash(&mut hasher);
+    let primed_hash = hasher.finish();
+
+    assert_ne!(idx_hash, primed_hash);
+}
+
+#[test]
+fn test_plev_contractable() {
+    let idx = Index::<DynId>::new_dyn_with_tag(5, "Site").unwrap();
+    let primed = idx.prime();
+
+    assert!(!idx.is_contractable(&primed));
+}
+
+#[test]
+fn test_prime_noprime() {
+    let idx = Index::<DynId>::new_dyn_with_tag(5, "Site").unwrap();
+    let id = idx.id;
+    let primed = idx.prime();
+    let reprime = primed.prime();
+    let reset = reprime.noprime();
+    let set = idx.set_plev(7);
+
+    assert_eq!(primed.plev(), 1);
+    assert_eq!(reprime.plev(), 2);
+    assert_eq!(reset.plev(), 0);
+    assert_eq!(set.plev(), 7);
+    assert_eq!(idx.id, id);
+    assert_eq!(primed.id, id);
+    assert_eq!(reprime.id, id);
+    assert_eq!(reset.id, id);
+    assert_eq!(set.id, id);
+}
+
+#[test]
+fn test_sim_preserves_plev() {
+    let idx = Index::<DynId>::new_dyn_with_tag(5, "Site")
+        .unwrap()
+        .set_plev(3);
+    let similar = idx.sim();
+
+    assert_eq!(similar.plev(), 3);
+    assert_eq!(similar.dim(), idx.dim());
+    assert_eq!(similar.tags, idx.tags);
+    assert_ne!(similar.id, idx.id);
 }
 
 fn _assert_index_like_bounds<I: IndexLike>() {}

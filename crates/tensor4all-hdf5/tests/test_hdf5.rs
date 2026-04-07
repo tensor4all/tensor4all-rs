@@ -15,16 +15,16 @@ fn temp_path(name: &str) -> String {
 
 /// Create a simple 2x3 f64 tensor with known data.
 fn make_test_tensor_f64() -> TensorDynLen {
-    let i1 = Index::new_dyn_with_tags(2, TagSet::from_str("Site,n=1").unwrap());
-    let i2 = Index::new_dyn_with_tags(3, TagSet::from_str("Link,l=1").unwrap());
+    let i1 = Index::new_dyn_with_tags(2, TagSet::from_str("Site,n=1").unwrap()).set_plev(1);
+    let i2 = Index::new_dyn_with_tags(3, TagSet::from_str("Link,l=1").unwrap()).set_plev(2);
     let data: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     TensorDynLen::from_dense(vec![i1, i2], data).unwrap()
 }
 
 /// Create a simple 2x3 complex tensor with known data.
 fn make_test_tensor_c64() -> TensorDynLen {
-    let i1 = Index::new_dyn_with_tags(2, TagSet::from_str("Site,n=1").unwrap());
-    let i2 = Index::new_dyn_with_tags(3, TagSet::from_str("Link,l=1").unwrap());
+    let i1 = Index::new_dyn_with_tags(2, TagSet::from_str("Site,n=1").unwrap()).set_plev(1);
+    let i2 = Index::new_dyn_with_tags(3, TagSet::from_str("Link,l=1").unwrap()).set_plev(2);
     let data: Vec<Complex64> = vec![
         Complex64::new(1.0, 0.1),
         Complex64::new(2.0, 0.2),
@@ -54,6 +54,7 @@ fn test_itensor_f64_roundtrip() {
     for (orig, loaded) in orig_indices.iter().zip(loaded_indices.iter()) {
         assert_eq!(orig.id.0, loaded.id.0);
         assert_eq!(orig.dim, loaded.dim);
+        assert_eq!(orig.plev, loaded.plev);
         assert_eq!(orig.tags, loaded.tags);
     }
 
@@ -225,6 +226,7 @@ fn test_mps_roundtrip() {
         for (oi, li) in orig_inds.iter().zip(loaded_inds.iter()) {
             assert_eq!(oi.id.0, li.id.0, "Index ID mismatch at site {}", i);
             assert_eq!(oi.dim, li.dim, "Index dim mismatch at site {}", i);
+            assert_eq!(oi.plev, li.plev, "Index plev mismatch at site {}", i);
         }
 
         // Check data
