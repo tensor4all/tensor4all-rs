@@ -46,7 +46,7 @@ jobs:
   ci-maintainer:
     name: CI (same-repo PR / self-hosted heavy)
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, x64, fast-ci]
+    runs-on: [self-hosted, linux, x64]
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/../target
       CARGO_PROFILE_RELEASE_DEBUG: 0
