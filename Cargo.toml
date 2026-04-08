@@ -49,7 +49,7 @@ kryst = { version = "2.4", default-features = false, features = ["rayon", "loggi
 omeco = "0.2.1"
 hdf5-metno = { version = "0.12", default-features = false }
 ndarray = "0.17"
-quanticsgrids = { git = "https://github.com/tensor4all/quanticsgrids-rs", rev = "a76b8fb" }
+quanticsgrids = { path = "../quanticsgrids-rs" }
 hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", default-features = false }
 tenferro = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "c4e18845ba1735df4d37e122b808d75056b84b60" }
 tenferro-algebra = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "c4e18845ba1735df4d37e122b808d75056b84b60" }
