@@ -45,6 +45,65 @@ fn build_identity_operator(sites: &[(String, DynIndex)]) -> LinearOperator<Tenso
     LinearOperator::new(mpo, input_mapping, output_mapping)
 }
 
+fn build_bonded_identity_operator(
+    sites: &[(String, DynIndex)],
+) -> LinearOperator<TensorDynLen, String> {
+    assert_eq!(sites.len(), 2);
+
+    let mut mpo = TreeTN::new();
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    let bond = make_index(1);
+
+    for (name, true_index) in sites {
+        let internal_input = make_index(true_index.dim());
+        let internal_output = make_index(true_index.dim());
+        let tensor = if name == &sites[0].0 {
+            TensorDynLen::from_dense(
+                vec![
+                    internal_output.clone(),
+                    internal_input.clone(),
+                    bond.clone(),
+                ],
+                vec![1.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap()
+        } else {
+            TensorDynLen::from_dense(
+                vec![
+                    bond.clone(),
+                    internal_output.clone(),
+                    internal_input.clone(),
+                ],
+                vec![1.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap()
+        };
+
+        mpo.add_tensor(name.clone(), tensor).unwrap();
+        input_mapping.insert(
+            name.clone(),
+            IndexMapping {
+                true_index: true_index.clone(),
+                internal_index: internal_input,
+            },
+        );
+        output_mapping.insert(
+            name.clone(),
+            IndexMapping {
+                true_index: true_index.clone(),
+                internal_index: internal_output,
+            },
+        );
+    }
+
+    let n0 = mpo.node_index(&sites[0].0).unwrap();
+    let n1 = mpo.node_index(&sites[1].0).unwrap();
+    mpo.connect(n0, &bond, n1, &bond).unwrap();
+
+    LinearOperator::new(mpo, input_mapping, output_mapping)
+}
+
 fn build_chain_state() -> (TreeTN<TensorDynLen, String>, Vec<(String, DynIndex)>) {
     let s0 = make_index(2);
     let s1 = make_index(2);
@@ -147,6 +206,13 @@ fn test_apply_options_builder() {
     assert_eq!(opts.method, ContractionMethod::Zipup);
     assert_eq!(opts.max_rank, Some(50));
     assert_eq!(opts.rtol, Some(1e-10));
+
+    let fit = ApplyOptions::fit().with_nfullsweeps(3);
+    assert_eq!(fit.method, ContractionMethod::Fit);
+    assert_eq!(fit.nfullsweeps, 3);
+
+    let naive = ApplyOptions::naive();
+    assert_eq!(naive.method, ContractionMethod::Naive);
 }
 
 #[test]
@@ -191,11 +257,23 @@ fn test_linear_operator_tensor_index() {
     // Test external_indices
     let ext_indices = lin_op.external_indices();
     assert_eq!(ext_indices.len(), 2);
+    assert_eq!(lin_op.num_external_indices(), 2);
 
     // Test replaceind
     let new_idx = make_index(2);
     let replaced = lin_op.replaceind(&true_s0, &new_idx).unwrap();
     assert!(replaced.get_input_mapping(&"N0".to_string()).is_some());
+}
+
+#[test]
+fn test_linear_operator_replaceind_errors() {
+    let operator = build_identity_operator(&[("site0".to_string(), make_index(2))]);
+
+    let mismatch = operator.replaceind(&make_index(2), &make_index(3));
+    assert!(mismatch.is_err());
+
+    let unknown = operator.replaceind(&make_index(2), &make_index(2));
+    assert!(unknown.is_err());
 }
 
 #[test]
@@ -224,6 +302,22 @@ fn test_arc_linear_operator_cow() {
     // After make_mut, the Arcs should be different if there were other refs
     // (In this case, arc_op still holds a reference)
     assert!(!Arc::ptr_eq(&arc_op.mpo, &arc_op3.mpo));
+}
+
+#[test]
+fn test_arc_linear_operator_accessors_and_conversion() {
+    let op = build_identity_operator(&[("site0".to_string(), make_index(2))]);
+    let arc_op = ArcLinearOperator::from_linear_operator(op.clone());
+
+    assert_eq!(arc_op.node_names(), op.node_names());
+    assert!(arc_op.get_input_mapping(&"site0".to_string()).is_some());
+    assert!(arc_op.get_output_mapping(&"site0".to_string()).is_some());
+    assert_eq!(arc_op.input_mappings().len(), 1);
+    assert_eq!(arc_op.output_mappings().len(), 1);
+
+    let arc_clone = arc_op.clone();
+    let op2 = arc_clone.into_linear_operator();
+    assert_eq!(op2.mpo.node_count(), op.mpo.node_count());
 }
 
 #[test]
@@ -414,6 +508,26 @@ fn test_apply_linear_operator_non_contiguous_tree() {
 }
 
 #[test]
+fn test_apply_linear_operator_non_contiguous_chain_with_bonded_operator() {
+    let (state, sites) = build_chain_state();
+    let operator = build_bonded_identity_operator(&[sites[0].clone(), sites[2].clone()]);
+
+    let result =
+        crate::operator::apply_linear_operator(&operator, &state, ApplyOptions::default()).unwrap();
+    assert_eq!(result.node_count(), state.node_count());
+}
+
+#[test]
+fn test_apply_linear_operator_non_contiguous_tree_with_bonded_operator() {
+    let (state, sites) = build_tree_state();
+    let operator = build_bonded_identity_operator(&[sites[0].clone(), sites[4].clone()]);
+
+    let result =
+        crate::operator::apply_linear_operator(&operator, &state, ApplyOptions::default()).unwrap();
+    assert_eq!(result.node_count(), state.node_count());
+}
+
+#[test]
 fn test_apply_linear_operator_error_cases() {
     use crate::operator::apply_linear_operator;
     use crate::operator::ApplyOptions;
@@ -490,6 +604,196 @@ fn test_apply_linear_operator_error_cases() {
     // Should error because operator has node "site2" not in state
     let result = apply_linear_operator(&operator, &state, ApplyOptions::default());
     assert!(result.is_err());
+}
+
+#[test]
+fn test_extend_operator_to_full_space_rejects_missing_state_node() {
+    let (state, sites) = build_chain_state();
+    let operator = build_identity_operator(&[("ghost".to_string(), sites[0].1.clone())]);
+
+    let err = extend_operator_to_full_space(&operator, &state).unwrap_err();
+    assert!(err.to_string().contains("missing from the state network"));
+}
+
+#[test]
+fn test_extend_operator_to_full_space_uses_unchecked_branch_for_single_node_operator() {
+    let (state, sites) = build_chain_state();
+    let operator = build_identity_operator(&[sites[0].clone()]);
+
+    let extended = extend_operator_to_full_space(&operator, &state).unwrap();
+    assert_eq!(extended.mpo.node_count(), state.node_count());
+    assert_eq!(extended.mpo.edge_count(), state.edge_count());
+}
+
+#[test]
+fn test_compose_operator_along_state_paths_scalar_identity_gap() {
+    let mut state_network: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+    let a = make_index(2);
+    state_network
+        .add_node(
+            "A".to_string(),
+            [a.clone()].into_iter().collect::<HashSet<_>>(),
+        )
+        .unwrap();
+    state_network
+        .add_node("B".to_string(), HashSet::new())
+        .unwrap();
+    state_network
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
+
+    let operator = build_identity_operator(&[("A".to_string(), a.clone())]);
+    let mut gap_site_indices: HashMap<String, Vec<(DynIndex, DynIndex)>> = HashMap::new();
+    gap_site_indices.insert("B".to_string(), Vec::new());
+
+    let composed = compose_operator_along_state_paths(
+        &operator,
+        &state_network,
+        &gap_site_indices,
+        operator.input_mapping.clone(),
+        operator.output_mapping.clone(),
+    )
+    .unwrap();
+
+    assert_eq!(composed.mpo.node_count(), 2);
+    assert_eq!(composed.mpo.edge_count(), 1);
+}
+
+#[test]
+fn test_compose_operator_along_state_paths_missing_gap_indices() {
+    let (state, sites) = build_chain_state();
+    let state_network = state.site_index_network().clone();
+    let operator = build_bonded_identity_operator(&[sites[0].clone(), sites[2].clone()]);
+
+    let mut gap_site_indices: HashMap<String, Vec<(DynIndex, DynIndex)>> = HashMap::new();
+    gap_site_indices.insert("site0".to_string(), Vec::new());
+    gap_site_indices.insert("site2".to_string(), Vec::new());
+
+    let err = compose_operator_along_state_paths(
+        &operator,
+        &state_network,
+        &gap_site_indices,
+        operator.input_mapping.clone(),
+        operator.output_mapping.clone(),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("missing gap indices"));
+}
+
+#[test]
+fn test_compose_operator_along_state_paths_missing_state_node() {
+    let mut state_network: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+    let a = make_index(2);
+    state_network
+        .add_node(
+            "A".to_string(),
+            [a.clone()].into_iter().collect::<HashSet<_>>(),
+        )
+        .unwrap();
+
+    let ghost = make_index(2);
+    let mut mpo = TreeTN::new();
+    let a_in = make_index(2);
+    let a_out = make_index(2);
+    let g_in = make_index(2);
+    let g_out = make_index(2);
+    let bond = make_index(1);
+
+    let t_a = TensorDynLen::from_dense(
+        vec![a_out.clone(), a_in.clone(), bond.clone()],
+        vec![1.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let t_g = TensorDynLen::from_dense(
+        vec![bond.clone(), g_out.clone(), g_in.clone()],
+        vec![1.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let n_a = mpo.add_tensor("A".to_string(), t_a).unwrap();
+    let n_g = mpo.add_tensor("Ghost".to_string(), t_g).unwrap();
+    mpo.connect(n_a, &bond, n_g, &bond).unwrap();
+
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    input_mapping.insert(
+        "A".to_string(),
+        IndexMapping {
+            true_index: a.clone(),
+            internal_index: a_in.clone(),
+        },
+    );
+    input_mapping.insert(
+        "Ghost".to_string(),
+        IndexMapping {
+            true_index: ghost.clone(),
+            internal_index: g_in.clone(),
+        },
+    );
+    output_mapping.insert(
+        "A".to_string(),
+        IndexMapping {
+            true_index: a.clone(),
+            internal_index: a_out.clone(),
+        },
+    );
+    output_mapping.insert(
+        "Ghost".to_string(),
+        IndexMapping {
+            true_index: ghost.clone(),
+            internal_index: g_out.clone(),
+        },
+    );
+
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+    let gap_site_indices: HashMap<String, Vec<(DynIndex, DynIndex)>> = HashMap::new();
+
+    let err = compose_operator_along_state_paths(
+        &operator,
+        &state_network,
+        &gap_site_indices,
+        operator.input_mapping.clone(),
+        operator.output_mapping.clone(),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("missing state node"));
+}
+
+#[test]
+fn test_compose_operator_along_state_paths_no_path_between_operator_nodes() {
+    let mut state_network: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+    let a = make_index(2);
+    let c = make_index(2);
+    state_network
+        .add_node(
+            "A".to_string(),
+            [a.clone()].into_iter().collect::<HashSet<_>>(),
+        )
+        .unwrap();
+    state_network
+        .add_node(
+            "C".to_string(),
+            [c.clone()].into_iter().collect::<HashSet<_>>(),
+        )
+        .unwrap();
+
+    let operator = build_bonded_identity_operator(&[
+        ("A".to_string(), a.clone()),
+        ("C".to_string(), c.clone()),
+    ]);
+    let gap_site_indices: HashMap<String, Vec<(DynIndex, DynIndex)>> = HashMap::new();
+
+    let err = compose_operator_along_state_paths(
+        &operator,
+        &state_network,
+        &gap_site_indices,
+        operator.input_mapping.clone(),
+        operator.output_mapping.clone(),
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("no path between"));
 }
 
 #[test]
