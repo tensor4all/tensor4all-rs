@@ -58,7 +58,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: taiki-e/install-action@nextest
-      - name: Show target dir
-        run: echo "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
+
       - name: Run tests (non-HDF5)
         run: cargo nextest run --release --workspace --exclude tensor4all-hdf5
