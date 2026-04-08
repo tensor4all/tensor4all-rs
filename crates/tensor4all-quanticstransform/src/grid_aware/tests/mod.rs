@@ -3,6 +3,7 @@
 use super::*;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
+use quanticsgrids::LayoutKind;
 use std::collections::HashMap;
 use tensor4all_core::index::DynId;
 use tensor4all_core::IndexLike;
@@ -18,6 +19,8 @@ fn test_detect_grouped() {
         .with_unfolding_scheme(UnfoldingScheme::Grouped)
         .build()
         .unwrap();
+    assert_eq!(grid.layout_kind(), LayoutKind::Grouped);
+    assert_eq!(grid.unfolding_scheme(), Some(UnfoldingScheme::Grouped));
     assert_eq!(detect_unfolding_scheme(&grid), UnfoldingScheme::Grouped);
 }
 
@@ -28,6 +31,8 @@ fn test_detect_fused() {
         .with_unfolding_scheme(UnfoldingScheme::Fused)
         .build()
         .unwrap();
+    assert_eq!(grid.layout_kind(), LayoutKind::Fused);
+    assert_eq!(grid.unfolding_scheme(), Some(UnfoldingScheme::Fused));
     assert_eq!(detect_unfolding_scheme(&grid), UnfoldingScheme::Fused);
 }
 
@@ -38,16 +43,20 @@ fn test_detect_interleaved() {
         .with_unfolding_scheme(UnfoldingScheme::Interleaved)
         .build()
         .unwrap();
+    assert_eq!(grid.layout_kind(), LayoutKind::Interleaved);
+    assert_eq!(grid.unfolding_scheme(), Some(UnfoldingScheme::Interleaved));
     assert_eq!(detect_unfolding_scheme(&grid), UnfoldingScheme::Interleaved);
 }
 
 #[test]
-fn test_detect_1d_returns_grouped() {
+fn test_detect_1d_uses_grid_scheme() {
     let grid = DiscretizedGrid::builder(&[4])
         .with_variable_names(&["x"])
         .build()
         .unwrap();
-    assert_eq!(detect_unfolding_scheme(&grid), UnfoldingScheme::Grouped);
+    assert_eq!(grid.layout_kind(), LayoutKind::Fused);
+    assert_eq!(grid.unfolding_scheme(), Some(UnfoldingScheme::Fused));
+    assert_eq!(detect_unfolding_scheme(&grid), UnfoldingScheme::Fused);
 }
 
 // ============================================================================
@@ -104,11 +113,11 @@ fn test_shift_on_grid_fused_2d() {
 }
 
 // ============================================================================
-// shift_operator_on_grid_by_tag tests
+// shift_operator_on_grid_by_variable_name tests
 // ============================================================================
 
 #[test]
-fn test_shift_on_grid_by_tag() {
+fn test_shift_on_grid_by_variable_name() {
     let grid = DiscretizedGrid::builder(&[3, 2])
         .with_variable_names(&["x", "y"])
         .with_lower_bound(&[0.0, 0.0])
@@ -117,7 +126,8 @@ fn test_shift_on_grid_by_tag() {
         .build()
         .unwrap();
     let op =
-        shift_operator_on_grid_by_tag(&grid, &[("x", 1, BoundaryCondition::Periodic)]).unwrap();
+        shift_operator_on_grid_by_variable_name(&grid, &[("x", 1, BoundaryCondition::Periodic)])
+            .unwrap();
     assert_eq!(op.mpo.node_count(), 5);
 }
 
@@ -149,14 +159,16 @@ fn test_shift_on_grid_wrong_bc_length() {
 }
 
 #[test]
-fn test_shift_on_grid_by_tag_unknown_var() {
+fn test_shift_on_grid_by_variable_name_unknown_var() {
     let grid = DiscretizedGrid::builder(&[4])
         .with_variable_names(&["x"])
         .build()
         .unwrap();
-    assert!(
-        shift_operator_on_grid_by_tag(&grid, &[("z", 1, BoundaryCondition::Periodic)]).is_err()
-    );
+    assert!(shift_operator_on_grid_by_variable_name(
+        &grid,
+        &[("z", 1, BoundaryCondition::Periodic)]
+    )
+    .is_err());
 }
 
 // ============================================================================
@@ -531,7 +543,7 @@ fn test_shift_on_grid_fused_2d_both_vars_correctness() {
 }
 
 #[test]
-fn test_shift_on_grid_by_tag_correctness() {
+fn test_shift_on_grid_by_variable_name_correctness() {
     let r_x = 3;
     let r_y = 2;
     let n_x: usize = 1 << r_x;
@@ -545,9 +557,10 @@ fn test_shift_on_grid_by_tag_correctness() {
         .build()
         .unwrap();
 
-    // Shift only y by +1 using tag
+    // Shift only y by +1 using the variable name selector
     let op =
-        shift_operator_on_grid_by_tag(&grid, &[("y", 1, BoundaryCondition::Periodic)]).unwrap();
+        shift_operator_on_grid_by_variable_name(&grid, &[("y", 1, BoundaryCondition::Periodic)])
+            .unwrap();
 
     let matrix = contract_operator_to_dense_matrix(&op, total_sites, 2);
 
@@ -566,7 +579,7 @@ fn test_shift_on_grid_by_tag_correctness() {
                 let actual = matrix[out_idx][input_idx];
                 assert!(
                     (actual - expected_val).norm() < 1e-10,
-                    "By-tag shift y+1: x={} y={} out_idx={} got ({:.6},{:.6}) expected ({:.6},{:.6})",
+                    "By-variable-name shift y+1: x={} y={} out_idx={} got ({:.6},{:.6}) expected ({:.6},{:.6})",
                     x, y, out_idx, actual.re, actual.im, expected_val.re, expected_val.im
                 );
             }

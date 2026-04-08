@@ -5,7 +5,7 @@
 //! unfolding schemes (Grouped, Fused, Interleaved).
 
 use anyhow::Result;
-use quanticsgrids::{DiscretizedGrid, UnfoldingScheme};
+use quanticsgrids::{DiscretizedGrid, LayoutKind, UnfoldingScheme};
 use tensor4all_core::TensorIndex;
 use tensor4all_simplett::AbstractTensorTrain;
 
@@ -15,7 +15,7 @@ use crate::common::{
 };
 use crate::shift::{shift_mpo, shift_operator_multivar};
 
-/// Detect the unfolding scheme of a grid by inspecting its index table.
+/// Detect the unfolding scheme of a grid using the public grid API.
 ///
 /// # Arguments
 ///
@@ -28,7 +28,7 @@ use crate::shift::{shift_mpo, shift_operator_multivar};
 /// # Examples
 ///
 /// ```ignore
-/// use quanticsgrids::{DiscretizedGrid, UnfoldingScheme};
+/// use quanticsgrids::{DiscretizedGrid, LayoutKind, UnfoldingScheme};
 /// use tensor4all_quanticstransform::detect_unfolding_scheme;
 ///
 /// let grid = DiscretizedGrid::builder(&[3, 2])
@@ -36,52 +36,11 @@ use crate::shift::{shift_mpo, shift_operator_multivar};
 ///     .with_unfolding_scheme(UnfoldingScheme::Grouped)
 ///     .build()
 ///     .unwrap();
+/// assert_eq!(grid.layout_kind(), LayoutKind::Grouped);
 /// assert_eq!(detect_unfolding_scheme(&grid), UnfoldingScheme::Grouped);
 /// ```
 pub fn detect_unfolding_scheme(grid: &DiscretizedGrid) -> UnfoldingScheme {
-    let index_table = grid.index_table();
-    let ndims = grid.ndims();
-
-    if ndims <= 1 {
-        // For 1D grids, all schemes are equivalent; return Grouped as default.
-        return UnfoldingScheme::Grouped;
-    }
-
-    // Check if Fused: at least one site has entries for multiple variables
-    if index_table.iter().any(|site| site.len() >= 2) {
-        return UnfoldingScheme::Fused;
-    }
-
-    // All sites have exactly 1 entry. Distinguish Grouped vs Interleaved.
-    // Grouped: all bits of variable 0 come first, then variable 1, etc.
-    // Interleaved: bits alternate between variables.
-    let var_names = grid.variable_names();
-    let rs = grid.rs();
-
-    // Build expected grouped pattern: [var0_bit1, var0_bit2, ..., var1_bit1, ...]
-    let mut expected_grouped = Vec::new();
-    for (d, name) in var_names.iter().enumerate() {
-        for bit in 1..=rs[d] {
-            expected_grouped.push((name.clone(), bit));
-        }
-    }
-
-    let actual: Vec<(String, usize)> = index_table
-        .iter()
-        .filter_map(|site| {
-            if site.len() == 1 {
-                Some(site[0].clone())
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    if actual == expected_grouped {
-        return UnfoldingScheme::Grouped;
-    }
-
-    UnfoldingScheme::Interleaved
+    grid.unfolding_scheme().unwrap_or(UnfoldingScheme::Grouped)
 }
 
 /// Create a shift operator on a grid with index-based variable selection.
@@ -143,25 +102,26 @@ pub fn shift_operator_on_grid(
         ));
     }
 
-    let scheme = detect_unfolding_scheme(grid);
-
-    match scheme {
-        UnfoldingScheme::Grouped => shift_on_grid_grouped(grid, offsets, bc),
-        UnfoldingScheme::Fused => shift_on_grid_fused(grid, offsets, bc),
-        UnfoldingScheme::Interleaved => {
+    match grid.layout_kind() {
+        LayoutKind::Grouped => shift_on_grid_grouped(grid, offsets, bc),
+        LayoutKind::Fused => shift_on_grid_fused(grid, offsets, bc),
+        LayoutKind::Interleaved => {
             if ndims > 1 {
                 Err(anyhow::anyhow!(
                     "Interleaved unfolding scheme with multiple variables is not yet implemented"
                 ))
             } else {
-                // 1D interleaved is same as grouped
+                // 1D interleaved is treated the same as grouped.
                 shift_on_grid_grouped(grid, offsets, bc)
             }
         }
+        LayoutKind::Custom => Err(anyhow::anyhow!(
+            "shift_operator_on_grid does not support custom grid layouts"
+        )),
     }
 }
 
-/// Create a shift operator on a grid using variable names (tag-based).
+/// Create a shift operator on a grid using variable names.
 ///
 /// Only specified variables are shifted; unspecified variables get identity (offset 0).
 ///
@@ -182,35 +142,36 @@ pub fn shift_operator_on_grid(
 ///
 /// ```ignore
 /// use quanticsgrids::{DiscretizedGrid, UnfoldingScheme};
-/// use tensor4all_quanticstransform::{shift_operator_on_grid_by_tag, BoundaryCondition};
+/// use tensor4all_quanticstransform::{
+///     shift_operator_on_grid_by_variable_name, BoundaryCondition,
+/// };
 ///
 /// let grid = DiscretizedGrid::builder(&[3, 2])
 ///     .with_variable_names(&["x", "y"])
 ///     .with_unfolding_scheme(UnfoldingScheme::Grouped)
 ///     .build()
 ///     .unwrap();
-/// let op = shift_operator_on_grid_by_tag(
+/// let op = shift_operator_on_grid_by_variable_name(
 ///     &grid,
 ///     &[("x", 1, BoundaryCondition::Periodic)],
 /// ).unwrap();
 /// assert_eq!(op.mpo.node_count(), 5);
 /// ```
-pub fn shift_operator_on_grid_by_tag(
+pub fn shift_operator_on_grid_by_variable_name(
     grid: &DiscretizedGrid,
     var_offsets: &[(&str, i64, BoundaryCondition)],
 ) -> Result<QuanticsOperator> {
     let ndims = grid.ndims();
-    let var_names = grid.variable_names();
 
     let mut offsets = vec![0i64; ndims];
     let mut bcs = vec![BoundaryCondition::Periodic; ndims];
 
     for &(name, offset, bc) in var_offsets {
-        let idx = var_names.iter().position(|n| n == name).ok_or_else(|| {
+        let idx = grid.variable_id(name).map_err(|_| {
             anyhow::anyhow!(
                 "Unknown variable name '{}'. Available: {:?}",
                 name,
-                var_names
+                grid.variable_names()
             )
         })?;
         offsets[idx] = offset;
@@ -422,8 +383,6 @@ pub fn affine_operator_on_grid(
         return crate::affine_operator(rs[0], params, bc);
     }
 
-    let scheme = detect_unfolding_scheme(grid);
-
     let r = rs[0];
     if rs.iter().any(|&ri| ri != r) {
         return Err(anyhow::anyhow!(
@@ -432,16 +391,19 @@ pub fn affine_operator_on_grid(
         ));
     }
 
-    match scheme {
-        UnfoldingScheme::Fused => crate::affine_operator(r, params, bc),
-        UnfoldingScheme::Grouped => {
+    match grid.layout_kind() {
+        LayoutKind::Fused => crate::affine_operator(r, params, bc),
+        LayoutKind::Grouped => {
             // TODO: A proper grouped-native implementation would permute
             // between fused and grouped site orderings. For now we build
             // the fused-form affine operator as-is.
             crate::affine_operator(r, params, bc)
         }
-        UnfoldingScheme::Interleaved => Err(anyhow::anyhow!(
+        LayoutKind::Interleaved => Err(anyhow::anyhow!(
             "affine_operator_on_grid: Interleaved layout is not yet implemented"
+        )),
+        LayoutKind::Custom => Err(anyhow::anyhow!(
+            "affine_operator_on_grid does not support custom grid layouts"
         )),
     }
 }
