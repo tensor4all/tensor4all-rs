@@ -48,7 +48,7 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64, fast-ci]
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/../../target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../target
       CARGO_PROFILE_RELEASE_DEBUG: 0
     steps:
       - name: Checkout
