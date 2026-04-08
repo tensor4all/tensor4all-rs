@@ -73,30 +73,109 @@ for k in [0usize, 1, 3] {
 
 ## 2D QFT via Partial Apply
 
-A dedicated multivar Fourier API is not yet available.
+> **Note:** A dedicated multivar Fourier API is not yet available. This example
+> uses partial apply to achieve 2D transforms manually.
 
-`apply_linear_operator` supports partial application when the operator nodes are a subset of the state nodes, but the operator nodes must form a connected subtree. That means:
+`apply_linear_operator` supports partial application when the operator nodes are
+a subset of the state nodes — even when the operator nodes are **non-contiguous**
+(e.g., interleaved quantics encoding). Identity tensors are automatically inserted
+at intermediate nodes via Steiner tree expansion.
 
-- If the x bits are stored contiguously, a 1D QFT can act on the x block and leave the y block untouched.
-- If the state is stored as interleaved sites `[x1, y1, x2, y2, ...]`, the x sites are not connected, so the current operator application path does not support that layout directly.
+### Approach
 
-The supported workaround is to regroup the state so the target variable occupies a contiguous block before applying the 1D Fourier operator.
+For a 2D function in interleaved quantics encoding with R bits per variable,
+the TreeTN has 2R sites: `[x₁, y₁, x₂, y₂, ..., xᵣ, yᵣ]` (node names
+`0, 1, 2, 3, ..., 2R-1`).
+
+To apply a 1D Fourier transform to the x-variable:
+
+1. Build the 1D Fourier operator (R sites, node names 0..R-1)
+2. Rename operator nodes to match x-variable sites: `0→0, 1→2, 2→4, ...`
+3. Set input/output mappings from the state
+4. Call `apply_linear_operator` — Steiner tree partial apply handles the gaps
 
 ```rust,ignore
-use num_complex::Complex64;
+use std::f64::consts::PI;
+use tensor4all_quanticstci::{
+    quanticscrossinterpolate_discrete, QtciOptions, UnfoldingScheme,
+};
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
-use tensor4all_treetn::{apply_linear_operator, ApplyOptions};
+use tensor4all_treetci::materialize::to_treetn;
+use tensor4all_treetn::operator::{apply_linear_operator, ApplyOptions};
+use tensor4all_treetn::Operator;
 
-let r = 4;
-let x_fourier = quantics_fourier_operator(r, FourierOptions::default())?;
+let r = 3;
+let n = 1usize << r; // 8
 
-// Supported layout: x bits are contiguous, so the operator nodes form a connected subtree.
-let result = apply_linear_operator(&x_fourier, &state_with_grouped_x_bits, ApplyOptions::default())?;
+// f(x, y) = cos(2π(x-1)/N), 1-indexed — depends only on x
+let f = move |idx: &[i64]| -> f64 {
+    let x = (idx[0] - 1) as f64;
+    (2.0 * PI * x / n as f64).cos()
+};
 
-let vals = result.evaluate(&output_index_ids, output_values)?;
-let got = Complex64::new(vals[0].real(), vals[0].imag());
-let exact = Complex64::new(0.0, 0.0);
-assert!((got - exact).norm() < 1e-8);
+// Build QTT with interleaved encoding
+let sizes = vec![n, n];
+let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete::<f64, _>(
+    &sizes, f, None,
+    QtciOptions::default()
+        .with_tolerance(1e-12)
+        .with_unfoldingscheme(UnfoldingScheme::Interleaved),
+)?;
+assert!(*errors.last().unwrap() < 1e-10);
+
+// Convert to TreeTN (6 sites: 0,1,2,3,4,5)
+let tci_state = qtci.tci();
+let batch_eval = move |batch: tensor4all_treetci::GlobalIndexBatch<'_>|
+    -> anyhow::Result<Vec<f64>>
+{
+    let mut values = Vec::with_capacity(batch.n_points());
+    for p in 0..batch.n_points() {
+        let mut x_val = 0usize;
+        for bit in 0..r {
+            x_val |= batch.get(2 * bit, p).unwrap() << bit;
+        }
+        values.push((2.0 * PI * x_val as f64 / n as f64).cos());
+    }
+    Ok(values)
+};
+let state = to_treetn(tci_state, batch_eval, Some(0))?;
+
+// Build 1D Fourier operator (nodes 0,1,2)
+let mut fourier_op = quantics_fourier_operator(
+    r, FourierOptions { normalize: true, ..Default::default() },
+)?;
+
+// Rename nodes to x-variable sites: 0→0, 1→2, 2→4
+// Use two-phase rename to avoid collisions
+let offset = 1_000_000;
+for i in 0..r {
+    fourier_op.mpo.rename_node(&i, i + offset)?;
+}
+for i in 0..r {
+    fourier_op.mpo.rename_node(&(i + offset), 2 * i)?;
+}
+// Update mappings
+let mut new_input = std::collections::HashMap::new();
+for (k, v) in fourier_op.input_mapping.drain() {
+    new_input.insert(2 * k, v);
+}
+fourier_op.input_mapping = new_input;
+let mut new_output = std::collections::HashMap::new();
+for (k, v) in fourier_op.output_mapping.drain() {
+    new_output.insert(2 * k, v);
+}
+fourier_op.output_mapping = new_output;
+
+// Match operator's true indices to state's site indices
+fourier_op.set_input_space_from_state(&state)?;
+fourier_op.set_output_space_from_state(&state)?;
+
+// Apply — Steiner tree inserts identity at y-sites {1, 3, 5}
+let result = apply_linear_operator(
+    &fourier_op, &state, ApplyOptions::default(),
+)?;
+assert_eq!(result.node_count(), 2 * r);
 ```
 
-For an interleaved layout, regroup the x and y bits first, or wait for a dedicated multivariate Fourier constructor.
+The same approach works for applying the Fourier transform to the y-variable
+(rename operator nodes to `1, 3, 5` instead).
