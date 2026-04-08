@@ -313,6 +313,7 @@ where
     Ok(composed)
 }
 
+#[allow(clippy::type_complexity)]
 fn compose_operator_along_state_paths<T, V>(
     operator: &LinearOperator<T, V>,
     state_network: &crate::site_index_network::SiteIndexNetwork<V, T::Index>,
