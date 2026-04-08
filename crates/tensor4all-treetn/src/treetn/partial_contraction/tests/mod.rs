@@ -248,3 +248,96 @@ fn test_partial_contract_empty_spec() {
     // Both s_a and s_b remain as external
     assert_eq!(result.external_indices().len(), 2);
 }
+
+#[test]
+fn test_partial_contract_rejects_same_node_in_second_network() {
+    // Same as test_partial_contract_rejects_same_node_contract_and_multiply
+    // but verifies the tn_b side check fires too.
+    // tn_b has contract and multiply indices on the same node "A".
+    let s_a1 = DynIndex::new_dyn(2);
+    let s_a2 = DynIndex::new_dyn(2);
+    let bond_a = DynIndex::new_dyn(2);
+
+    // tn_a: node "A" has s_a1 only, node "B" has s_a2 only
+    let t_a0 = TensorDynLen::from_dense(vec![s_a1.clone(), bond_a.clone()], vec![1.0; 4]).unwrap();
+    let t_a1 = TensorDynLen::from_dense(vec![bond_a.clone(), s_a2.clone()], vec![1.0; 4]).unwrap();
+    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![t_a0, t_a1],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+
+    // tn_b: node "A" has s_b_contract AND s_b_multiply on same node
+    let s_b_contract = DynIndex::new_dyn(2);
+    let s_b_multiply = DynIndex::new_dyn(2);
+    let bond_b = DynIndex::new_dyn(2);
+    let s_b_only = DynIndex::new_dyn(3);
+
+    let t_b0 = TensorDynLen::from_dense(
+        vec![s_b_contract.clone(), s_b_multiply.clone(), bond_b.clone()],
+        vec![2.0; 8],
+    )
+    .unwrap();
+    let t_b1 =
+        TensorDynLen::from_dense(vec![bond_b.clone(), s_b_only.clone()], vec![2.0; 6]).unwrap();
+    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![t_b0, t_b1],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+
+    // contract s_a1 ↔ s_b_contract (node "A" in both)
+    // multiply s_a2 ↔ s_b_multiply (node "B" in tn_a, node "A" in tn_b) → tn_b same node!
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![(s_a1, s_b_contract)],
+        multiply_pairs: vec![(s_a2, s_b_multiply)],
+    };
+
+    let result = partial_contract(
+        &tn_a,
+        &tn_b,
+        &spec,
+        &"A".to_string(),
+        ContractionOptions::default(),
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("second network"));
+}
+
+#[test]
+fn test_partial_contract_rejects_topology_mismatch() {
+    // tn_a has 1 node, tn_b has 2 nodes → topology mismatch
+    let s_a = DynIndex::new_dyn(2);
+    let s_b = DynIndex::new_dyn(2);
+    let bond_b = DynIndex::new_dyn(2);
+    let s_b2 = DynIndex::new_dyn(3);
+
+    let t_a = TensorDynLen::from_dense(vec![s_a.clone()], vec![1.0; 2]).unwrap();
+    let tn_a =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+
+    let t_b0 = TensorDynLen::from_dense(vec![s_b.clone(), bond_b.clone()], vec![2.0; 4]).unwrap();
+    let t_b1 = TensorDynLen::from_dense(vec![bond_b.clone(), s_b2.clone()], vec![2.0; 6]).unwrap();
+    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![t_b0, t_b1],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+
+    let spec: PartialContractionSpec<DynIndex> = PartialContractionSpec {
+        contract_pairs: vec![],
+        multiply_pairs: vec![],
+    };
+    let result = partial_contract(
+        &tn_a,
+        &tn_b,
+        &spec,
+        &"A".to_string(),
+        ContractionOptions::default(),
+    );
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("incompatible topologies"));
+}

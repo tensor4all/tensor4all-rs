@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+
 use super::*;
 use num_complex::Complex64;
 use num_traits::{One, Zero};

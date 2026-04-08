@@ -327,7 +327,7 @@ fn test_all_site_indices_matches_ids() {
     let (index_ids, id_vertices) = tn.all_site_index_ids().unwrap();
     let (indices, index_vertices) = tn.all_site_indices().unwrap();
 
-    let ids_from_indices: Vec<_> = indices.iter().map(|index| index.id().clone()).collect();
+    let ids_from_indices: Vec<_> = indices.iter().map(|index| *index.id()).collect();
 
     assert_eq!(ids_from_indices, index_ids);
     assert_eq!(index_vertices, id_vertices);
@@ -502,9 +502,9 @@ fn test_evaluate_at_matches_evaluate() {
     let (indices, _node_names) = tn.all_site_indices().unwrap();
 
     let point_values = std::collections::HashMap::from([
-        (s0.id().clone(), vec![0usize, 1, 1]),
-        (s1.id().clone(), vec![0usize, 1, 0]),
-        (s2.id().clone(), vec![1usize, 0, 1]),
+        (*s0.id(), vec![0usize, 1, 1]),
+        (*s1.id(), vec![0usize, 1, 0]),
+        (*s2.id(), vec![1usize, 0, 1]),
     ]);
 
     let shape = [index_ids.len(), 3];
@@ -513,7 +513,7 @@ fn test_evaluate_at_matches_evaluate() {
     let evaluate_values = ColMajorArrayRef::new(&evaluate_data, &shape);
     let evaluate_result = tn.evaluate(&index_ids, evaluate_values).unwrap();
 
-    let index_order_ids: Vec<_> = indices.iter().map(|index| index.id().clone()).collect();
+    let index_order_ids: Vec<_> = indices.iter().map(|index| *index.id()).collect();
     let evaluate_at_data = build_col_major_data(&index_order_ids, &point_values);
     let evaluate_at_values = ColMajorArrayRef::new(&evaluate_at_data, &shape);
     let evaluate_at_result = tn.evaluate_at(&indices, evaluate_at_values).unwrap();
@@ -643,7 +643,7 @@ fn test_all_site_indices_consistent_with_ids() {
     // Build sets of (id, vertex) for comparison
     let idx_set: std::collections::HashSet<_> = indices
         .iter()
-        .map(|i| i.id().clone())
+        .map(|i| *i.id())
         .zip(idx_vertices.iter().cloned())
         .collect();
     let id_set: std::collections::HashSet<_> = ids
@@ -739,7 +739,7 @@ fn test_evaluate_at_consistent_with_evaluate() {
 
     // Build matching ID order: for each index in `indices`, find the
     // corresponding ID to ensure positions align.
-    let ordered_ids: Vec<_> = indices.iter().map(|i| i.id().clone()).collect();
+    let ordered_ids: Vec<_> = indices.iter().map(|i| *i.id()).collect();
 
     let dim0 = s0.dim();
     let dim1 = s1.dim();
