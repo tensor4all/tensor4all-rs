@@ -25,3 +25,4 @@ rand.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
+tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform" }

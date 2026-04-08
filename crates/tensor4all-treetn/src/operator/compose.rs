@@ -180,6 +180,7 @@ where
 }
 
 #[allow(clippy::type_complexity)]
+#[allow(dead_code)]
 pub(crate) fn compose_exclusive_linear_operators_unchecked<T, V>(
     target: &SiteIndexNetwork<V, T::Index>,
     operators: &[&LinearOperator<T, V>],
