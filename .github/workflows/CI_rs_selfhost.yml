@@ -22,7 +22,7 @@ jobs:
       # target artifacts small enough to avoid runner disk exhaustion on cache misses.
       CARGO_PROFILE_RELEASE_DEBUG: 0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install HDF5
         run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
@@ -50,13 +50,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # 必要に応じてセットアップを追加
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: taiki-e/install-action@nextest
 
-      - uses: Swatinem/rust-cache@v2
       - name: Run tests (non-HDF5)
         run: cargo nextest run --release --workspace --exclude tensor4all-hdf5
