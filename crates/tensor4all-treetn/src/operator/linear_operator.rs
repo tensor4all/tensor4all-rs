@@ -337,6 +337,50 @@ where
         }
         Ok(())
     }
+
+    /// Align this operator's input and output site index mappings to match a target state.
+    ///
+    /// For each node in the operator's input and output mappings, the `true_index` is
+    /// updated to the corresponding site index from the target state. The internal MPO
+    /// indices remain unchanged.
+    ///
+    /// This is useful when an operator (e.g., from `shift_operator` or `affine_operator`)
+    /// was constructed with its own site indices, but needs to be applied to a state that
+    /// has different site index IDs. After calling `align_to_state`, the operator's
+    /// `true_index` fields will reference the state's site indices, enabling correct
+    /// index contraction during `apply_local`.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The target state whose site indices define the true index space.
+    ///   Each node in the operator's mappings must exist in the state with exactly one
+    ///   site index of matching dimension.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - A node in the operator's mapping is not found in the state
+    /// - A node in the state has more than one site index
+    /// - The dimension of the state's site index does not match the operator's internal index
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tensor4all_treetn::LinearOperator;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_treetn::TreeTN;
+    /// use std::collections::HashMap;
+    ///
+    /// // Given an operator `op` and a state `state`:
+    /// op.align_to_state(&state).unwrap();
+    /// // Now op.input_mapping and op.output_mapping true_index fields
+    /// // reference the state's site indices.
+    /// ```
+    pub fn align_to_state(&mut self, state: &TreeTN<T, V>) -> Result<()> {
+        self.set_input_space_from_state(state)?;
+        self.set_output_space_from_state(state)?;
+        Ok(())
+    }
 }
 
 // ============================================================================

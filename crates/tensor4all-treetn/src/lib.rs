@@ -33,6 +33,7 @@ pub mod site_index_network;
 pub mod treetn;
 
 pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm};
+pub use treetn::contraction;
 
 // dyn_treetn exports removed - use TreeTN<TensorDynLen, V> directly
 pub use link_index_network::LinkIndexNetwork;
@@ -53,10 +54,12 @@ pub use treetn::{
     factorize_tensor_to_treetn,
     factorize_tensor_to_treetn_with,
     get_boundary_edges,
+    partial_contract,
     BoundaryEdge,
     LocalUpdateStep,
     LocalUpdateSweepPlan,
     LocalUpdater,
+    PartialContractionSpec,
     // Swap
     SwapOptions,
     SwapPlan,

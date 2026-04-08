@@ -85,7 +85,11 @@ pub fn shift_operator_multivar(
 /// Carry propagates from LSB to MSB, so in big-endian:
 /// - Site 0 (MSB): applies BC on left, receives carry from right
 /// - Site R-1 (LSB): initial carry = 0, sends carry to left
-fn shift_mpo(r: usize, offset: i64, bc: BoundaryCondition) -> Result<TensorTrain<Complex64>> {
+pub(crate) fn shift_mpo(
+    r: usize,
+    offset: i64,
+    bc: BoundaryCondition,
+) -> Result<TensorTrain<Complex64>> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive"));
     }

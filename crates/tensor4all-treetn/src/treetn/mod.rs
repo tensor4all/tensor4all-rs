@@ -14,6 +14,7 @@ mod fit;
 mod localupdate;
 mod operator_impl;
 mod ops;
+pub mod partial_contraction;
 mod swap;
 mod tensor_like;
 mod transform;
@@ -41,6 +42,9 @@ pub use localupdate::{
     apply_local_update_sweep, get_boundary_edges, BoundaryEdge, LocalUpdateStep,
     LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
 };
+
+// Re-export partial contraction types
+pub use partial_contraction::{partial_contract, PartialContractionSpec};
 
 // Re-export swap types
 pub use swap::{SwapOptions, SwapPlan, SwapStep};
@@ -1530,6 +1534,37 @@ where
         Ok(())
     }
 
+    /// Perform an in-place adjacent swap on the edge (node_a, node_b).
+    ///
+    /// Index-based version of [`Self::swap_on_edge`]. Accepts `T::Index` keys
+    /// instead of `T::Index::Id`.
+    pub(crate) fn swap_on_edge_by_index(
+        &mut self,
+        node_a_idx: NodeIndex,
+        node_b_idx: NodeIndex,
+        target_assignment: &HashMap<T::Index, V>,
+        oracle: &swap::SubtreeOracle<V>,
+        factorize_options: &FactorizeOptions,
+    ) -> Result<()>
+    where
+        <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        T::Index: Hash + Eq,
+        V: Ord,
+    {
+        let id_assignment: HashMap<_, _> = target_assignment
+            .iter()
+            .map(|(idx, node)| (idx.id().clone(), node.clone()))
+            .collect();
+
+        self.swap_on_edge(
+            node_a_idx,
+            node_b_idx,
+            &id_assignment,
+            oracle,
+            factorize_options,
+        )
+    }
+
     /// Reorder site indices so that each index id ends up at the target node.
     ///
     /// Uses a 2-site sweep: at each edge, the two adjacent tensors are contracted and
@@ -1641,6 +1676,52 @@ where
             max_passes
         ))
         .context("swap_site_indices: incomplete assignment")
+    }
+
+    /// Reorder site indices so that each index ends up at the target node.
+    ///
+    /// Index-based version of [`swap_site_indices`](Self::swap_site_indices).
+    /// Accepts `T::Index` keys instead of `T::Index::Id`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use std::collections::HashMap;
+    ///
+    /// use tensor4all_core::IndexLike;
+    /// use tensor4all_treetn::SwapOptions;
+    ///
+    /// let mut target = HashMap::new();
+    /// target.insert(idx_a.clone(), node_name_b.clone());
+    ///
+    /// treetn.swap_site_indices_by_index(&target, &SwapOptions::default())?;
+    ///
+    /// assert_eq!(
+    ///     treetn
+    ///         .site_index_network()
+    ///         .find_node_by_index_id(idx_a.id())
+    ///         .map(|name| name.as_str()),
+    ///     Some(node_name_b.as_str())
+    /// );
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn swap_site_indices_by_index(
+        &mut self,
+        target_assignment: &HashMap<T::Index, V>,
+        options: &swap::SwapOptions,
+    ) -> Result<()>
+    where
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        T::Index: Hash + Eq,
+        V: Ord,
+    {
+        let id_assignment: HashMap<_, _> = target_assignment
+            .iter()
+            .map(|(idx, node)| (idx.id().clone(), node.clone()))
+            .collect();
+
+        self.swap_site_indices(&id_assignment, options)
     }
 
     /// Verify internal data consistency by checking structural invariants and reconstructing the TreeTN.

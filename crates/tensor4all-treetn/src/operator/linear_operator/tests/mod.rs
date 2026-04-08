@@ -364,3 +364,122 @@ fn test_apply_local_multi_node_region() {
         assert!(v.abs() < 1e-10);
     }
 }
+
+#[test]
+fn test_align_to_state_single_node() {
+    // Create an operator with one set of true indices
+    let (mut op, original_s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
+
+    // Create a new state with a *different* site index (same dimension)
+    let new_s = DynIndex::new_dyn(2);
+    assert_ne!(original_s.id(), new_s.id());
+
+    let state_tensor = TensorDynLen::from_dense(vec![new_s.clone()], vec![0.5, 0.5]).unwrap();
+    let state =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
+            .unwrap();
+
+    // Align operator to the new state
+    op.align_to_state(&state).unwrap();
+
+    // Verify: true indices should now match the state's site index
+    let input_mapping = op.get_input_mapping(&"A".to_string()).unwrap();
+    assert_eq!(input_mapping.true_index.id(), new_s.id());
+
+    let output_mapping = op.get_output_mapping(&"A".to_string()).unwrap();
+    assert_eq!(output_mapping.true_index.id(), new_s.id());
+
+    // Verify: operator should still work correctly after alignment
+    let local_tensor = TensorDynLen::from_dense(vec![new_s.clone()], vec![1.0, 0.0]).unwrap();
+    let result = op.apply_local(&local_tensor, &["A".to_string()]).unwrap();
+    let result_data = result.to_vec::<f64>().unwrap();
+    assert_eq!(result_data.len(), 2);
+    assert!((result_data[0] - 1.0).abs() < 1e-10);
+    assert!(result_data[1].abs() < 1e-10);
+}
+
+#[test]
+fn test_align_to_state_two_nodes() {
+    // Create a two-node operator
+    let (mut op, original_s0, original_s1) = make_two_node_mpo_and_operator();
+
+    // Create a new state with different site indices (same dimensions)
+    let new_s0 = DynIndex::new_dyn(2);
+    let new_s1 = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(1);
+    assert_ne!(original_s0.id(), new_s0.id());
+    assert_ne!(original_s1.id(), new_s1.id());
+
+    let t_a = TensorDynLen::from_dense(vec![new_s0.clone(), bond.clone()], vec![1.0; 2]).unwrap();
+    let t_b = TensorDynLen::from_dense(vec![bond.clone(), new_s1.clone()], vec![1.0; 2]).unwrap();
+    let mut state = TreeTN::<TensorDynLen, String>::new();
+    state.add_tensor("A".to_string(), t_a).unwrap();
+    state.add_tensor("B".to_string(), t_b).unwrap();
+    let a = state.node_index(&"A".to_string()).unwrap();
+    let b = state.node_index(&"B".to_string()).unwrap();
+    state.connect(a, &bond, b, &bond).unwrap();
+
+    // Align operator to the new state
+    op.align_to_state(&state).unwrap();
+
+    // Verify: true indices should match the state's site indices
+    let input_a = op.get_input_mapping(&"A".to_string()).unwrap();
+    assert_eq!(input_a.true_index.id(), new_s0.id());
+
+    let input_b = op.get_input_mapping(&"B".to_string()).unwrap();
+    assert_eq!(input_b.true_index.id(), new_s1.id());
+
+    let output_a = op.get_output_mapping(&"A".to_string()).unwrap();
+    assert_eq!(output_a.true_index.id(), new_s0.id());
+
+    let output_b = op.get_output_mapping(&"B".to_string()).unwrap();
+    assert_eq!(output_b.true_index.id(), new_s1.id());
+
+    // Verify: operator still works after alignment
+    let local_tensor = TensorDynLen::from_dense(
+        vec![new_s0.clone(), new_s1.clone()],
+        vec![1.0, 0.0, 0.0, 0.0],
+    )
+    .unwrap();
+    let result = op
+        .apply_local(&local_tensor, &["A".to_string(), "B".to_string()])
+        .unwrap();
+    let result_data = result.to_vec::<f64>().unwrap();
+    assert_eq!(result_data.len(), 4);
+    assert!((result_data[0] - 1.0).abs() < 1e-10);
+    for &v in &result_data[1..] {
+        assert!(v.abs() < 1e-10);
+    }
+}
+
+#[test]
+fn test_align_to_state_dimension_mismatch() {
+    let (mut op, _s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
+
+    // Create a state with a different dimension
+    let new_s = DynIndex::new_dyn(3); // dim 3 != dim 2
+    let state_tensor = TensorDynLen::from_dense(vec![new_s.clone()], vec![1.0, 0.0, 0.0]).unwrap();
+    let state =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["A".to_string()])
+            .unwrap();
+
+    // Should fail due to dimension mismatch
+    let result = op.align_to_state(&state);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_align_to_state_missing_node() {
+    let (mut op, _s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
+
+    // Create a state that doesn't have node "A"
+    let new_s = DynIndex::new_dyn(2);
+    let state_tensor = TensorDynLen::from_dense(vec![new_s.clone()], vec![1.0, 0.0]).unwrap();
+    let state =
+        TreeTN::<TensorDynLen, String>::from_tensors(vec![state_tensor], vec!["B".to_string()])
+            .unwrap();
+
+    // Should fail because node "A" is not in the state
+    let result = op.align_to_state(&state);
+    assert!(result.is_err());
+}
