@@ -14,6 +14,7 @@ mod fit;
 mod localupdate;
 mod operator_impl;
 mod ops;
+pub mod partial_contraction;
 mod swap;
 mod tensor_like;
 mod transform;
@@ -41,6 +42,9 @@ pub use localupdate::{
     apply_local_update_sweep, get_boundary_edges, BoundaryEdge, LocalUpdateStep,
     LocalUpdateSweepPlan, LocalUpdater, TruncateUpdater,
 };
+
+// Re-export partial contraction types
+pub use partial_contraction::{partial_contract, PartialContractionSpec};
 
 // Re-export swap types
 pub use swap::{SwapOptions, SwapPlan, SwapStep};
