@@ -74,9 +74,9 @@ fn test_partial_contraction_spec_creation() {
 }
 
 #[test]
-#[ignore = "multiply_pairs with shared node causes contract to fail; needs improved implementation"]
-fn test_partial_contract_keeps_unmentioned_external_indices() {
-    let (tn_a, tn_b, s_contract_a, s_contract_b, s_multiply_a, s_multiply_b, s_a_only, s_b_only) =
+fn test_partial_contract_rejects_same_node_contract_and_multiply() {
+    // contract_pairs and multiply_pairs target the same node "A" → must error
+    let (tn_a, tn_b, s_contract_a, s_contract_b, s_multiply_a, s_multiply_b, _s_a_only, _s_b_only) =
         make_partial_contraction_inputs();
 
     let spec = PartialContractionSpec {
@@ -90,17 +90,9 @@ fn test_partial_contract_keeps_unmentioned_external_indices() {
         &spec,
         &"B".to_string(),
         ContractionOptions::new(ContractionMethod::Naive),
-    )
-    .unwrap();
-
-    let external_ids: Vec<_> = result
-        .external_indices()
-        .iter()
-        .map(|idx| *idx.id())
-        .collect();
-    assert_eq!(external_ids.len(), 2);
-    assert!(external_ids.contains(s_a_only.id()));
-    assert!(external_ids.contains(s_b_only.id()));
+    );
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("same node"));
 }
 
 #[test]
