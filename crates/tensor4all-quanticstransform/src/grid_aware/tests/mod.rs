@@ -3,17 +3,17 @@
 use super::*;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
-use quanticsgrids::LayoutKind;
+use quanticsgrids::{LayoutKind, UnfoldingScheme};
 use std::collections::HashMap;
 use tensor4all_core::index::DynId;
 use tensor4all_core::IndexLike;
 
 // ============================================================================
-// detect_unfolding_scheme tests
+// grid layout query tests
 // ============================================================================
 
 #[test]
-fn test_detect_grouped() {
+fn test_layout_query_grouped() {
     let grid = DiscretizedGrid::builder(&[3, 2])
         .with_variable_names(&["x", "y"])
         .with_unfolding_scheme(UnfoldingScheme::Grouped)
@@ -21,11 +21,10 @@ fn test_detect_grouped() {
         .unwrap();
     assert_eq!(grid.layout_kind(), LayoutKind::Grouped);
     assert_eq!(grid.unfolding_scheme(), Some(UnfoldingScheme::Grouped));
-    assert_eq!(detect_unfolding_scheme(&grid), UnfoldingScheme::Grouped);
 }
 
 #[test]
-fn test_detect_fused() {
+fn test_layout_query_fused() {
     let grid = DiscretizedGrid::builder(&[3, 3])
         .with_variable_names(&["x", "y"])
         .with_unfolding_scheme(UnfoldingScheme::Fused)
@@ -33,11 +32,10 @@ fn test_detect_fused() {
         .unwrap();
     assert_eq!(grid.layout_kind(), LayoutKind::Fused);
     assert_eq!(grid.unfolding_scheme(), Some(UnfoldingScheme::Fused));
-    assert_eq!(detect_unfolding_scheme(&grid), UnfoldingScheme::Fused);
 }
 
 #[test]
-fn test_detect_interleaved() {
+fn test_layout_query_interleaved() {
     let grid = DiscretizedGrid::builder(&[3, 3])
         .with_variable_names(&["x", "y"])
         .with_unfolding_scheme(UnfoldingScheme::Interleaved)
@@ -45,18 +43,33 @@ fn test_detect_interleaved() {
         .unwrap();
     assert_eq!(grid.layout_kind(), LayoutKind::Interleaved);
     assert_eq!(grid.unfolding_scheme(), Some(UnfoldingScheme::Interleaved));
-    assert_eq!(detect_unfolding_scheme(&grid), UnfoldingScheme::Interleaved);
 }
 
 #[test]
-fn test_detect_1d_uses_grid_scheme() {
+fn test_layout_query_1d_uses_grid_scheme() {
     let grid = DiscretizedGrid::builder(&[4])
         .with_variable_names(&["x"])
         .build()
         .unwrap();
     assert_eq!(grid.layout_kind(), LayoutKind::Fused);
     assert_eq!(grid.unfolding_scheme(), Some(UnfoldingScheme::Fused));
-    assert_eq!(detect_unfolding_scheme(&grid), UnfoldingScheme::Fused);
+}
+
+#[test]
+fn test_layout_query_custom_layout_reports_none() {
+    let grid = DiscretizedGrid::from_index_table(
+        &["x", "y"],
+        vec![
+            vec![("x".to_string(), 1), ("y".to_string(), 2)],
+            vec![("x".to_string(), 2)],
+            vec![("y".to_string(), 1), ("x".to_string(), 3)],
+        ],
+    )
+    .build()
+    .unwrap();
+
+    assert_eq!(grid.layout_kind(), LayoutKind::Custom);
+    assert_eq!(grid.unfolding_scheme(), None);
 }
 
 // ============================================================================

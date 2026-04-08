@@ -5,7 +5,7 @@
 //! unfolding schemes (Grouped, Fused, Interleaved).
 
 use anyhow::Result;
-use quanticsgrids::{DiscretizedGrid, LayoutKind, UnfoldingScheme};
+use quanticsgrids::{DiscretizedGrid, LayoutKind};
 use tensor4all_core::TensorIndex;
 use tensor4all_simplett::AbstractTensorTrain;
 
@@ -14,34 +14,6 @@ use crate::common::{
     QuanticsOperator,
 };
 use crate::shift::{shift_mpo, shift_operator_multivar};
-
-/// Detect the unfolding scheme of a grid using the public grid API.
-///
-/// # Arguments
-///
-/// * `grid` - The discretized grid to inspect
-///
-/// # Returns
-///
-/// The detected [`UnfoldingScheme`].
-///
-/// # Examples
-///
-/// ```ignore
-/// use quanticsgrids::{DiscretizedGrid, LayoutKind, UnfoldingScheme};
-/// use tensor4all_quanticstransform::detect_unfolding_scheme;
-///
-/// let grid = DiscretizedGrid::builder(&[3, 2])
-///     .with_variable_names(&["x", "y"])
-///     .with_unfolding_scheme(UnfoldingScheme::Grouped)
-///     .build()
-///     .unwrap();
-/// assert_eq!(grid.layout_kind(), LayoutKind::Grouped);
-/// assert_eq!(detect_unfolding_scheme(&grid), UnfoldingScheme::Grouped);
-/// ```
-pub fn detect_unfolding_scheme(grid: &DiscretizedGrid) -> UnfoldingScheme {
-    grid.unfolding_scheme().unwrap_or(UnfoldingScheme::Grouped)
-}
 
 /// Create a shift operator on a grid with index-based variable selection.
 ///
