@@ -9,6 +9,8 @@
 //! - `inner` for computing inner products of two TreeTNs
 //! - `to_dense` for contracting to a single tensor
 //! - `evaluate` for evaluating at specific index values
+//! - `evaluate_at` for evaluating using `Index` objects instead of raw IDs
+//! - `all_site_indices` for retrieving all site indices and their owning vertices
 
 use std::collections::HashSet;
 use std::hash::Hash;
@@ -523,5 +525,115 @@ where
         }
 
         Ok(results)
+    }
+
+    /// Returns all site indices and their owning vertex names.
+    ///
+    /// Returns `(indices, vertex_names)` where `indices[i]` belongs to
+    /// vertex `vertex_names[i]`. Order is unspecified but consistent
+    /// between the two vectors.
+    ///
+    /// This is the `Index`-based counterpart of
+    /// [`all_site_index_ids()`](Self::all_site_index_ids), returning
+    /// full `Index` objects instead of raw IDs.
+    ///
+    /// # Errors
+    /// Returns an error if a node's site space cannot be found.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorLike};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let s0 = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(3);
+    /// let s1 = DynIndex::new_dyn(2);
+    /// let t0 = TensorDynLen::from_dense(
+    ///     vec![s0.clone(), bond.clone()], vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+    /// ).unwrap();
+    /// let t1 = TensorDynLen::from_dense(
+    ///     vec![bond.clone(), s1.clone()], vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+    /// ).unwrap();
+    /// let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
+    ///
+    /// let (indices, vertices) = tn.all_site_indices().unwrap();
+    /// assert_eq!(indices.len(), 2);
+    /// assert_eq!(vertices.len(), 2);
+    ///
+    /// // The returned indices contain both s0 and s1
+    /// let id_set: std::collections::HashSet<_> = indices.iter().map(|i| *i.id()).collect();
+    /// assert!(id_set.contains(s0.id()));
+    /// assert!(id_set.contains(s1.id()));
+    /// ```
+    #[allow(clippy::type_complexity)]
+    pub fn all_site_indices(&self) -> Result<(Vec<T::Index>, Vec<V>)>
+    where
+        V: Clone,
+        T::Index: Clone,
+    {
+        let mut indices = Vec::new();
+        let mut node_names = Vec::new();
+        for node_name in self.node_names() {
+            let site_space = self
+                .site_space(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("Site space not found for node {:?}", node_name))
+                .context("all_site_indices: site space must exist")?;
+            for index in site_space {
+                indices.push(index.clone());
+                node_names.push(node_name.clone());
+            }
+        }
+        Ok((indices, node_names))
+    }
+
+    /// Evaluate the TreeTN at multiple multi-indices (batch), using
+    /// `Index` objects instead of raw IDs.
+    ///
+    /// This is a convenience wrapper around [`evaluate()`](Self::evaluate)
+    /// that accepts `&[T::Index]` directly, extracting the IDs
+    /// internally.
+    ///
+    /// # Arguments
+    /// * `indices` - Identifies each site index by its `Index` object
+    ///   (e.g. from [`all_site_indices()`](Self::all_site_indices)).
+    ///   Must enumerate every site index exactly once.
+    /// * `values` - Column-major array of shape `[n_indices, n_points]`.
+    ///   `values.get(&[i, p])` is the value of `indices[i]` at point `p`.
+    ///
+    /// # Returns
+    /// A `Vec<AnyScalar>` of length `n_points`.
+    ///
+    /// # Errors
+    /// Returns an error if the underlying [`evaluate()`](Self::evaluate)
+    /// call fails (see its documentation for details).
+    ///
+    /// # Examples
+    /// ```ignore
+    /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen, TensorLike};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let s0 = DynIndex::new_dyn(3);
+    /// let t0 = TensorDynLen::from_dense(vec![s0.clone()], vec![10.0, 20.0, 30.0]).unwrap();
+    /// let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
+    ///
+    /// let (indices, _vertices) = tn.all_site_indices().unwrap();
+    ///
+    /// // Evaluate at index value 2
+    /// let data = [2usize];
+    /// let shape = [indices.len(), 1];
+    /// let values = ColMajorArrayRef::new(&data, &shape);
+    /// let result = tn.evaluate_at(&indices, values).unwrap();
+    /// assert!((result[0].real() - 30.0).abs() < 1e-10);
+    /// ```
+    pub fn evaluate_at(
+        &self,
+        indices: &[T::Index],
+        values: ColMajorArrayRef<'_, usize>,
+    ) -> Result<Vec<AnyScalar>>
+    where
+        <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        let index_ids: Vec<_> = indices.iter().map(|idx| idx.id().clone()).collect();
+        self.evaluate(&index_ids, values)
     }
 }

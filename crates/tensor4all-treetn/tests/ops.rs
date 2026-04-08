@@ -533,6 +533,219 @@ fn test_evaluate_rejects_missing_index_ids() {
 }
 
 // ============================================================================
+// Tests for all_site_indices
+// ============================================================================
+
+#[test]
+fn test_all_site_indices_single_node() {
+    let s0 = idx(3);
+    let t0 = make_tensor(vec![s0.clone()], vec![1.0, 2.0, 3.0]);
+    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
+
+    let (indices, vertices) = tn.all_site_indices().unwrap();
+    assert_eq!(indices.len(), 1);
+    assert_eq!(vertices.len(), 1);
+    assert_eq!(*indices[0].id(), *s0.id());
+    assert_eq!(vertices[0], 0);
+}
+
+#[test]
+fn test_all_site_indices_two_nodes() {
+    let (tn, s0, _bond, s1) = create_two_node_named();
+
+    let (indices, vertices) = tn.all_site_indices().unwrap();
+    assert_eq!(indices.len(), 2);
+    assert_eq!(vertices.len(), 2);
+
+    // Check that both site indices are present with correct vertex associations
+    let idx_vertex_set: std::collections::HashSet<_> = indices
+        .iter()
+        .map(|i| *i.id())
+        .zip(vertices.iter())
+        .collect();
+    assert!(idx_vertex_set.contains(&(*s0.id(), &0)));
+    assert!(idx_vertex_set.contains(&(*s1.id(), &1)));
+}
+
+#[test]
+fn test_all_site_indices_consistent_with_ids() {
+    let (tn, _, _, _) = create_three_node_named();
+
+    // all_site_indices and all_site_index_ids should return the same IDs
+    let (indices, idx_vertices) = tn.all_site_indices().unwrap();
+    let (ids, id_vertices) = tn.all_site_index_ids().unwrap();
+
+    assert_eq!(indices.len(), ids.len());
+
+    // Build sets of (id, vertex) for comparison
+    let idx_set: std::collections::HashSet<_> = indices
+        .iter()
+        .map(|i| i.id().clone())
+        .zip(idx_vertices.iter().cloned())
+        .collect();
+    let id_set: std::collections::HashSet<_> = ids
+        .iter()
+        .cloned()
+        .zip(id_vertices.iter().cloned())
+        .collect();
+
+    assert_eq!(idx_set, id_set);
+}
+
+// ============================================================================
+// Tests for evaluate_at
+// ============================================================================
+
+#[test]
+fn test_evaluate_at_single_node() {
+    let s0 = idx(3);
+    let t0 = make_tensor(vec![s0.clone()], vec![10.0, 20.0, 30.0]);
+    let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0], vec![0]).unwrap();
+
+    let (indices, _vertices) = tn.all_site_indices().unwrap();
+
+    // Evaluate at index 0
+    let data = [0usize];
+    let shape = [indices.len(), 1];
+    let values = ColMajorArrayRef::new(&data, &shape);
+    let vals = tn.evaluate_at(&indices, values).unwrap();
+    assert!(
+        (vals[0].real() - 10.0).abs() < 1e-10,
+        "evaluate_at at [0] = {}, expected 10.0",
+        vals[0].real()
+    );
+
+    // Evaluate at index 2
+    let data = [2usize];
+    let values = ColMajorArrayRef::new(&data, &shape);
+    let vals = tn.evaluate_at(&indices, values).unwrap();
+    assert!(
+        (vals[0].real() - 30.0).abs() < 1e-10,
+        "evaluate_at at [2] = {}, expected 30.0",
+        vals[0].real()
+    );
+}
+
+#[test]
+fn test_evaluate_at_two_nodes() {
+    let (tn, s0, _, s1) = create_two_node_named();
+
+    // Get the dense representation for reference
+    let dense = tn.to_dense().unwrap();
+    let dense_data = dense.to_vec::<f64>().unwrap();
+
+    let dim0 = s0.dim();
+    let dim1 = s1.dim();
+
+    let (indices, _vertices) = tn.all_site_indices().unwrap();
+    // Find positions of s0 and s1 in indices
+    let pos0 = indices.iter().position(|i| *i.id() == *s0.id()).unwrap();
+    let pos1 = indices.iter().position(|i| *i.id() == *s1.id()).unwrap();
+
+    // Evaluate at each combination and verify against dense
+    for i in 0..dim0 {
+        for j in 0..dim1 {
+            let mut data = vec![0usize; indices.len()];
+            data[pos0] = i;
+            data[pos1] = j;
+            let shape = [indices.len(), 1];
+            let values = ColMajorArrayRef::new(&data, &shape);
+            let vals = tn.evaluate_at(&indices, values).unwrap();
+
+            let flat_idx = i + dim0 * j;
+            let expected = dense_data[flat_idx];
+
+            assert!(
+                (vals[0].real() - expected).abs() < 1e-10,
+                "evaluate_at at [{}, {}] = {}, expected {}",
+                i,
+                j,
+                vals[0].real(),
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn test_evaluate_at_consistent_with_evaluate() {
+    let (tn, s0, _, s1) = create_two_node_named();
+
+    let (indices, _vertices) = tn.all_site_indices().unwrap();
+    let (_index_ids, _id_vertices) = tn.all_site_index_ids().unwrap();
+
+    // Build matching ID order: for each index in `indices`, find the
+    // corresponding ID to ensure positions align.
+    let ordered_ids: Vec<_> = indices.iter().map(|i| i.id().clone()).collect();
+
+    let dim0 = s0.dim();
+    let dim1 = s1.dim();
+    let pos0 = indices.iter().position(|i| *i.id() == *s0.id()).unwrap();
+    let pos1 = indices.iter().position(|i| *i.id() == *s1.id()).unwrap();
+
+    for i in 0..dim0 {
+        for j in 0..dim1 {
+            let mut data = vec![0usize; indices.len()];
+            data[pos0] = i;
+            data[pos1] = j;
+            let shape = [indices.len(), 1];
+            let values = ColMajorArrayRef::new(&data, &shape);
+
+            let vals_at = tn.evaluate_at(&indices, values).unwrap();
+            let vals_id = tn.evaluate(&ordered_ids, values).unwrap();
+
+            assert!(
+                (vals_at[0].real() - vals_id[0].real()).abs() < 1e-15,
+                "evaluate_at and evaluate differ at [{}, {}]: {} vs {}",
+                i,
+                j,
+                vals_at[0].real(),
+                vals_id[0].real()
+            );
+        }
+    }
+}
+
+#[test]
+fn test_evaluate_at_three_nodes() {
+    let (tn, s0, s1, s2) = create_three_node_named();
+
+    let dense = tn.to_dense().unwrap();
+    let dense_data = dense.to_vec::<f64>().unwrap();
+
+    let dim0 = s0.dim();
+    let dim1 = s1.dim();
+
+    let (indices, _vertices) = tn.all_site_indices().unwrap();
+    let pos0 = indices.iter().position(|i| *i.id() == *s0.id()).unwrap();
+    let pos1 = indices.iter().position(|i| *i.id() == *s1.id()).unwrap();
+    let pos2 = indices.iter().position(|i| *i.id() == *s2.id()).unwrap();
+
+    for (i, j, k) in [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1)] {
+        let mut data = vec![0usize; indices.len()];
+        data[pos0] = i;
+        data[pos1] = j;
+        data[pos2] = k;
+        let shape = [indices.len(), 1];
+        let values = ColMajorArrayRef::new(&data, &shape);
+        let vals = tn.evaluate_at(&indices, values).unwrap();
+
+        let flat_idx = i + dim0 * (j + dim1 * k);
+        let expected = dense_data[flat_idx];
+
+        assert!(
+            (vals[0].real() - expected).abs() < 1e-8,
+            "evaluate_at at [{}, {}, {}] = {}, expected {}",
+            i,
+            j,
+            k,
+            vals[0].real(),
+            expected
+        );
+    }
+}
+
+// ============================================================================
 // Tests for add (which already exists but we test the public API)
 // ============================================================================
 
