@@ -88,6 +88,24 @@ fn create_three_node_named() -> (
     (tn, s0, s1, s2)
 }
 
+fn build_col_major_data(
+    ordered_ids: &[<DynIndex as IndexLike>::Id],
+    point_values: &std::collections::HashMap<<DynIndex as IndexLike>::Id, Vec<usize>>,
+) -> Vec<usize> {
+    let n_points = point_values.values().next().map(Vec::len).unwrap_or(0);
+    let mut data = vec![0; ordered_ids.len() * n_points];
+
+    for (row, id) in ordered_ids.iter().enumerate() {
+        let per_index_values = point_values.get(id).unwrap();
+        assert_eq!(per_index_values.len(), n_points);
+        for (col, value) in per_index_values.iter().enumerate() {
+            data[row + ordered_ids.len() * col] = *value;
+        }
+    }
+
+    data
+}
+
 // ============================================================================
 // Tests for norm and norm_squared
 // ============================================================================
@@ -302,6 +320,19 @@ fn test_all_site_index_ids_three_nodes() {
     assert!(id_vertex_set.contains(&(s2.id(), &2)));
 }
 
+#[test]
+fn test_all_site_indices_matches_ids() {
+    let (tn, _, _, _) = create_three_node_named();
+
+    let (index_ids, id_vertices) = tn.all_site_index_ids().unwrap();
+    let (indices, index_vertices) = tn.all_site_indices().unwrap();
+
+    let ids_from_indices: Vec<_> = indices.iter().map(|index| index.id().clone()).collect();
+
+    assert_eq!(ids_from_indices, index_ids);
+    assert_eq!(index_vertices, id_vertices);
+}
+
 // ============================================================================
 // Tests for evaluate
 // ============================================================================
@@ -460,6 +491,38 @@ fn test_evaluate_three_nodes() {
             vals[0].real(),
             expected
         );
+    }
+}
+
+#[test]
+fn test_evaluate_at_matches_evaluate() {
+    let (tn, s0, s1, s2) = create_three_node_named();
+
+    let (index_ids, _vertices) = tn.all_site_index_ids().unwrap();
+    let (indices, _node_names) = tn.all_site_indices().unwrap();
+
+    let point_values = std::collections::HashMap::from([
+        (s0.id().clone(), vec![0usize, 1, 1]),
+        (s1.id().clone(), vec![0usize, 1, 0]),
+        (s2.id().clone(), vec![1usize, 0, 1]),
+    ]);
+
+    let shape = [index_ids.len(), 3];
+
+    let evaluate_data = build_col_major_data(&index_ids, &point_values);
+    let evaluate_values = ColMajorArrayRef::new(&evaluate_data, &shape);
+    let evaluate_result = tn.evaluate(&index_ids, evaluate_values).unwrap();
+
+    let index_order_ids: Vec<_> = indices.iter().map(|index| index.id().clone()).collect();
+    let evaluate_at_data = build_col_major_data(&index_order_ids, &point_values);
+    let evaluate_at_values = ColMajorArrayRef::new(&evaluate_at_data, &shape);
+    let evaluate_at_result = tn.evaluate_at(&indices, evaluate_at_values).unwrap();
+
+    assert_eq!(evaluate_at_result.len(), evaluate_result.len());
+    for (evaluate_at_value, evaluate_value) in evaluate_at_result.iter().zip(evaluate_result.iter())
+    {
+        assert!((evaluate_at_value.real() - evaluate_value.real()).abs() < 1e-12);
+        assert!((evaluate_at_value.imag() - evaluate_value.imag()).abs() < 1e-12);
     }
 }
 

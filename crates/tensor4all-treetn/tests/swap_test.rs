@@ -444,6 +444,35 @@ fn test_swap_correctness_contract_generic<T: TensorElement + From<f64>>() {
     );
 }
 
+fn test_swap_by_index_matches_id_based_generic<T: TensorElement + From<f64>>() {
+    let (tn, s0, s1, s2) = three_node_chain::<T>();
+    let mut tn_by_id = tn.clone();
+    let mut tn_by_index = tn;
+
+    let mut target_by_id = HashMap::new();
+    target_by_id.insert(s0.id().to_owned(), "2".to_string());
+    target_by_id.insert(s1.id().to_owned(), "0".to_string());
+    target_by_id.insert(s2.id().to_owned(), "1".to_string());
+
+    let mut target_by_index = HashMap::new();
+    target_by_index.insert(s0.clone(), "2".to_string());
+    target_by_index.insert(s1.clone(), "0".to_string());
+    target_by_index.insert(s2.clone(), "1".to_string());
+
+    let options = SwapOptions::default();
+    tn_by_id.swap_site_indices(&target_by_id, &options).unwrap();
+    tn_by_index
+        .swap_site_indices_by_index(&target_by_index, &options)
+        .unwrap();
+
+    assert!(tn_by_id.same_appearance(&tn_by_index));
+
+    let net = tn_by_index.site_index_network();
+    assert_eq!(net.find_node_by_index(&s0).map(|n| n.as_str()), Some("2"));
+    assert_eq!(net.find_node_by_index(&s1).map(|n| n.as_str()), Some("0"));
+    assert_eq!(net.find_node_by_index(&s2).map(|n| n.as_str()), Some("1"));
+}
+
 // ============================================================================
 // f64 tests
 // ============================================================================
@@ -504,6 +533,11 @@ fn test_swap_y_shape() {
 #[test]
 fn test_swap_correctness_contract() {
     test_swap_correctness_contract_generic::<f64>();
+}
+
+#[test]
+fn test_swap_by_index_matches_id_based() {
+    test_swap_by_index_matches_id_based_generic::<f64>();
 }
 
 // ============================================================================
