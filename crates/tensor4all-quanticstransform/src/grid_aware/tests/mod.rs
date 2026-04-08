@@ -571,3 +571,81 @@ fn test_shift_on_grid_by_tag_correctness() {
         }
     }
 }
+
+// ============================================================================
+// affine_operator_on_grid tests
+// ============================================================================
+
+#[test]
+fn test_affine_on_grid_1d() {
+    let grid = DiscretizedGrid::builder(&[4])
+        .with_variable_names(&["x"])
+        .with_lower_bound(&[0.0])
+        .with_upper_bound(&[1.0])
+        .with_unfolding_scheme(UnfoldingScheme::Grouped)
+        .build()
+        .unwrap();
+    let params = crate::AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+    let op = affine_operator_on_grid(&grid, &params, &[BoundaryCondition::Periodic]).unwrap();
+    assert_eq!(op.mpo.node_count(), 4);
+}
+
+#[test]
+fn test_affine_on_grid_fused_2d() {
+    let grid = DiscretizedGrid::builder(&[3, 3])
+        .with_variable_names(&["x", "y"])
+        .with_lower_bound(&[0.0, 0.0])
+        .with_upper_bound(&[1.0, 1.0])
+        .with_unfolding_scheme(UnfoldingScheme::Fused)
+        .build()
+        .unwrap();
+    let params = crate::AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
+    let op = affine_operator_on_grid(
+        &grid,
+        &params,
+        &[BoundaryCondition::Periodic, BoundaryCondition::Periodic],
+    )
+    .unwrap();
+    assert_eq!(op.mpo.node_count(), 3);
+}
+
+#[test]
+fn test_affine_on_grid_grouped_2d() {
+    let grid = DiscretizedGrid::builder(&[3, 3])
+        .with_variable_names(&["x", "y"])
+        .with_lower_bound(&[0.0, 0.0])
+        .with_upper_bound(&[1.0, 1.0])
+        .with_unfolding_scheme(UnfoldingScheme::Grouped)
+        .build()
+        .unwrap();
+    let params = crate::AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
+    let op = affine_operator_on_grid(
+        &grid,
+        &params,
+        &[BoundaryCondition::Periodic, BoundaryCondition::Periodic],
+    )
+    .unwrap();
+    // Grouped with equal Rs delegates to affine_operator(r=3, ...)
+    // which produces fused-form with 3 sites.
+    assert_eq!(op.mpo.node_count(), 3);
+}
+
+#[test]
+fn test_affine_on_grid_interleaved_returns_error() {
+    let grid = DiscretizedGrid::builder(&[3, 3])
+        .with_variable_names(&["x", "y"])
+        .with_unfolding_scheme(UnfoldingScheme::Interleaved)
+        .build()
+        .unwrap();
+    let params = crate::AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
+    let result = affine_operator_on_grid(
+        &grid,
+        &params,
+        &[BoundaryCondition::Periodic, BoundaryCondition::Periodic],
+    );
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("not yet implemented"));
+}

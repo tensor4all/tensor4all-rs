@@ -375,5 +375,76 @@ fn compose_operators(op_a: &QuanticsOperator, op_b: &QuanticsOperator) -> Result
     })
 }
 
+/// Build an affine operator that is aware of the grid's unfolding scheme and
+/// resolution.
+///
+/// This is a convenience wrapper around [`crate::affine_operator`] that
+/// extracts the number of quantics bits from the grid and validates layout
+/// compatibility.
+///
+/// # Supported layouts
+///
+/// | Layout | Behaviour |
+/// |---|---|
+/// | 1D (single variable) | Delegates directly to `affine_operator(r, params, bc)`. |
+/// | Fused | All Rs must be equal. Delegates to `affine_operator(r, params, bc)`. |
+/// | Grouped | All Rs must be equal. Builds the fused-form affine operator. |
+/// | Interleaved | Returns an error (not yet implemented). |
+///
+/// # Examples
+///
+/// ```ignore
+/// use quanticsgrids::{DiscretizedGrid, UnfoldingScheme};
+/// use tensor4all_quanticstransform::{
+///     affine_operator_on_grid, AffineParams, BoundaryCondition,
+/// };
+///
+/// let grid = DiscretizedGrid::builder(&[4])
+///     .with_variable_names(&["x"])
+///     .with_lower_bound(&[0.0])
+///     .with_upper_bound(&[1.0])
+///     .build()
+///     .unwrap();
+/// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+/// let bc = vec![BoundaryCondition::Periodic];
+/// let op = affine_operator_on_grid(&grid, &params, &bc).unwrap();
+/// assert_eq!(op.mpo.node_count(), 4);
+/// ```
+pub fn affine_operator_on_grid(
+    grid: &DiscretizedGrid,
+    params: &crate::affine::AffineParams,
+    bc: &[BoundaryCondition],
+) -> Result<QuanticsOperator> {
+    let rs = grid.rs();
+    let ndims = grid.ndims();
+
+    if ndims == 1 {
+        return crate::affine_operator(rs[0], params, bc);
+    }
+
+    let scheme = detect_unfolding_scheme(grid);
+
+    let r = rs[0];
+    if rs.iter().any(|&ri| ri != r) {
+        return Err(anyhow::anyhow!(
+            "affine_operator_on_grid requires all resolutions to be equal, got {:?}",
+            rs
+        ));
+    }
+
+    match scheme {
+        UnfoldingScheme::Fused => crate::affine_operator(r, params, bc),
+        UnfoldingScheme::Grouped => {
+            // TODO: A proper grouped-native implementation would permute
+            // between fused and grouped site orderings. For now we build
+            // the fused-form affine operator as-is.
+            crate::affine_operator(r, params, bc)
+        }
+        UnfoldingScheme::Interleaved => Err(anyhow::anyhow!(
+            "affine_operator_on_grid: Interleaved layout is not yet implemented"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests;
