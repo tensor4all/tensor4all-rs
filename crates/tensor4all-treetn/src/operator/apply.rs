@@ -284,15 +284,22 @@ where
         gap_site_indices.insert(gap_name.clone(), pairs);
     }
 
-    // If the operator support is already connected in the state topology, use the
-    // checked compose path. Otherwise, let the gap identities bridge the Steiner tree.
-    let compose_result = if steiner_gap_nodes.is_empty() {
-        compose_exclusive_linear_operators(state_network, &[operator], &gap_site_indices)
-    } else {
+    let mut composed = if operator.mpo.edge_count() == 0 {
         compose_exclusive_linear_operators_unchecked(state_network, &[operator], &gap_site_indices)
+            .context("Failed to compose operator with identity gaps")?
+    } else if steiner_gap_nodes.is_empty() {
+        compose_exclusive_linear_operators(state_network, &[operator], &gap_site_indices)
+            .context("Failed to compose operator with identity gaps")?
+    } else {
+        compose_operator_along_state_paths(
+            operator,
+            state_network,
+            &gap_site_indices,
+            gap_input_mappings.clone(),
+            gap_output_mappings.clone(),
+        )
+        .context("Failed to compose operator along state paths")?
     };
-
-    let mut composed = compose_result.context("Failed to compose operator with identity gaps")?;
 
     // Override the mappings for gap nodes to use the correct true indices
     // (compose_exclusive_linear_operators uses the internal indices as true indices for gaps)
@@ -304,6 +311,272 @@ where
     }
 
     Ok(composed)
+}
+
+fn compose_operator_along_state_paths<T, V>(
+    operator: &LinearOperator<T, V>,
+    state_network: &crate::site_index_network::SiteIndexNetwork<V, T::Index>,
+    gap_site_indices: &HashMap<V, Vec<(T::Index, T::Index)>>,
+    input_mappings: HashMap<V, IndexMapping<T::Index>>,
+    output_mappings: HashMap<V, IndexMapping<T::Index>>,
+) -> Result<LinearOperator<T, V>>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let op_nodes: HashSet<V> = operator.node_names();
+    let mut tensors_by_node: HashMap<V, T> = HashMap::new();
+
+    let mut state_node_names: Vec<V> = state_network.node_names().into_iter().cloned().collect();
+    state_node_names.sort();
+
+    for node in &state_node_names {
+        if op_nodes.contains(node) {
+            let node_idx = operator.mpo.node_index(node).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "compose_operator_along_state_paths: missing node {:?}",
+                    node
+                )
+            })?;
+            let tensor = operator.mpo.tensor(node_idx).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "compose_operator_along_state_paths: missing tensor for {:?}",
+                    node
+                )
+            })?;
+            tensors_by_node.insert(node.clone(), tensor.clone());
+        } else {
+            let index_pairs = gap_site_indices.get(node).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "compose_operator_along_state_paths: missing gap indices for {:?}",
+                    node
+                )
+            })?;
+            let input_indices: Vec<T::Index> = index_pairs.iter().map(|(i, _)| i.clone()).collect();
+            let output_indices: Vec<T::Index> =
+                index_pairs.iter().map(|(_, o)| o.clone()).collect();
+            let tensor = if input_indices.is_empty() {
+                T::delta(&[], &[]).context(
+                    "compose_operator_along_state_paths: failed to build scalar identity",
+                )?
+            } else {
+                T::delta(&input_indices, &output_indices).with_context(|| {
+                    format!(
+                        "compose_operator_along_state_paths: failed to build identity for gap {:?}",
+                        node
+                    )
+                })?
+            };
+            tensors_by_node.insert(node.clone(), tensor);
+        }
+    }
+
+    let mut op_edges: Vec<(V, V)> = operator.mpo.site_index_network().edges().collect();
+    op_edges.sort();
+    let mut used_state_edges: HashSet<(V, V)> = HashSet::new();
+
+    for (node_a, node_b) in op_edges {
+        let idx_a = state_network.node_index(&node_a).ok_or_else(|| {
+            anyhow::anyhow!(
+                "compose_operator_along_state_paths: missing state node {:?}",
+                node_a
+            )
+        })?;
+        let idx_b = state_network.node_index(&node_b).ok_or_else(|| {
+            anyhow::anyhow!(
+                "compose_operator_along_state_paths: missing state node {:?}",
+                node_b
+            )
+        })?;
+        let path = state_network.path_between(idx_a, idx_b).ok_or_else(|| {
+            anyhow::anyhow!(
+                "compose_operator_along_state_paths: no path between {:?} and {:?}",
+                node_a,
+                node_b
+            )
+        })?;
+        if path.len() < 2 {
+            continue;
+        }
+
+        let edge = operator.mpo.edge_between(&node_a, &node_b).ok_or_else(|| {
+            anyhow::anyhow!(
+                "compose_operator_along_state_paths: missing operator edge between {:?} and {:?}",
+                node_a,
+                node_b
+            )
+        })?;
+        let bond = operator
+            .mpo
+            .bond_index(edge)
+            .ok_or_else(|| {
+                anyhow::anyhow!("compose_operator_along_state_paths: missing bond index")
+            })?
+            .clone();
+
+        let mut chain_bonds = Vec::with_capacity(path.len() - 1);
+        chain_bonds.push(bond.sim());
+        for _ in 1..(path.len() - 1) {
+            let next = chain_bonds[chain_bonds.len() - 1].sim();
+            chain_bonds.push(next);
+        }
+
+        let start_name = state_network
+            .node_name(path[0])
+            .ok_or_else(|| anyhow::anyhow!("compose_operator_along_state_paths: missing start"))?
+            .clone();
+        let end_name = state_network
+            .node_name(path[path.len() - 1])
+            .ok_or_else(|| anyhow::anyhow!("compose_operator_along_state_paths: missing end"))?
+            .clone();
+
+        {
+            let tensor = tensors_by_node.get_mut(&start_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "compose_operator_along_state_paths: missing tensor for {:?}",
+                    start_name
+                )
+            })?;
+            *tensor = tensor.replaceind(&bond, &chain_bonds[0]).with_context(|| {
+                format!(
+                    "compose_operator_along_state_paths: failed to reroute bond at {:?}",
+                    start_name
+                )
+            })?;
+        }
+        {
+            let tensor = tensors_by_node.get_mut(&end_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "compose_operator_along_state_paths: missing tensor for {:?}",
+                    end_name
+                )
+            })?;
+            let last_bond = &chain_bonds[chain_bonds.len() - 1];
+            *tensor = tensor.replaceind(&bond, last_bond).with_context(|| {
+                format!(
+                    "compose_operator_along_state_paths: failed to reroute bond at {:?}",
+                    end_name
+                )
+            })?;
+        }
+
+        for i in 1..(path.len() - 1) {
+            let mid_name = state_network
+                .node_name(path[i])
+                .ok_or_else(|| anyhow::anyhow!("compose_operator_along_state_paths: missing mid"))?
+                .clone();
+            let delta = T::delta(
+                std::slice::from_ref(&chain_bonds[i - 1]),
+                std::slice::from_ref(&chain_bonds[i]),
+            )
+            .with_context(|| {
+                format!(
+                    "compose_operator_along_state_paths: failed to build bridge at {:?}",
+                    mid_name
+                )
+            })?;
+            let tensor = tensors_by_node.get_mut(&mid_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "compose_operator_along_state_paths: missing tensor for {:?}",
+                    mid_name
+                )
+            })?;
+            *tensor = tensor.outer_product(&delta).with_context(|| {
+                format!(
+                    "compose_operator_along_state_paths: failed to attach bridge at {:?}",
+                    mid_name
+                )
+            })?;
+        }
+
+        for window in path.windows(2) {
+            let a = state_network
+                .node_name(window[0])
+                .ok_or_else(|| {
+                    anyhow::anyhow!("compose_operator_along_state_paths: missing path node")
+                })?
+                .clone();
+            let b = state_network
+                .node_name(window[1])
+                .ok_or_else(|| {
+                    anyhow::anyhow!("compose_operator_along_state_paths: missing path node")
+                })?
+                .clone();
+            let edge_key = if a <= b { (a, b) } else { (b, a) };
+            used_state_edges.insert(edge_key);
+        }
+    }
+
+    let mut state_edges: Vec<(V, V)> = state_network.edges().collect();
+    state_edges.sort();
+    for (node_a, node_b) in state_edges {
+        let edge_key = if node_a <= node_b {
+            (node_a.clone(), node_b.clone())
+        } else {
+            (node_b.clone(), node_a.clone())
+        };
+        if used_state_edges.contains(&edge_key) {
+            continue;
+        }
+        let (link_a, link_b) = T::Index::create_dummy_link_pair();
+        let ones_a = T::ones(std::slice::from_ref(&link_a)).with_context(|| {
+            format!(
+                "compose_operator_along_state_paths: failed to create dummy link tensor for {:?}",
+                node_a
+            )
+        })?;
+        let ones_b = T::ones(std::slice::from_ref(&link_b)).with_context(|| {
+            format!(
+                "compose_operator_along_state_paths: failed to create dummy link tensor for {:?}",
+                node_b
+            )
+        })?;
+
+        let tensor_a = tensors_by_node.get_mut(&node_a).ok_or_else(|| {
+            anyhow::anyhow!(
+                "compose_operator_along_state_paths: missing tensor for {:?}",
+                node_a
+            )
+        })?;
+        *tensor_a = tensor_a.outer_product(&ones_a).with_context(|| {
+            format!(
+                "compose_operator_along_state_paths: failed to attach dummy link at {:?}",
+                node_a
+            )
+        })?;
+
+        let tensor_b = tensors_by_node.get_mut(&node_b).ok_or_else(|| {
+            anyhow::anyhow!(
+                "compose_operator_along_state_paths: missing tensor for {:?}",
+                node_b
+            )
+        })?;
+        *tensor_b = tensor_b.outer_product(&ones_b).with_context(|| {
+            format!(
+                "compose_operator_along_state_paths: failed to attach dummy link at {:?}",
+                node_b
+            )
+        })?;
+    }
+
+    let tensors: Vec<T> = state_node_names
+        .iter()
+        .map(|node| {
+            tensors_by_node.get(node).cloned().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "compose_operator_along_state_paths: missing tensor for {:?}",
+                    node
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mpo = TreeTN::from_tensors(tensors, state_node_names.clone())
+        .context("compose_operator_along_state_paths: failed to create TreeTN")?;
+
+    Ok(LinearOperator::new(mpo, input_mappings, output_mappings))
 }
 
 /// Transform state's site indices to operator's input indices.
