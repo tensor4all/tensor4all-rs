@@ -47,7 +47,9 @@ jobs:
     name: CI (same-repo PR / self-hosted heavy)
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64, fast-ci]
-
+    env:
+      CARGO_TARGET_DIR: /var/cache/tensor4all/tensor4all-rs/target
+      CARGO_PROFILE_RELEASE_DEBUG: 0
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -56,6 +58,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: taiki-e/install-action@nextest
-
+      - name: Show target dir
+        run: echo "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
       - name: Run tests (non-HDF5)
         run: cargo nextest run --release --workspace --exclude tensor4all-hdf5
