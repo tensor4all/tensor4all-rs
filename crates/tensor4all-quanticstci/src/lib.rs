@@ -72,9 +72,11 @@
 //! let integral = qtci.integral().unwrap();
 //! ```
 
+mod batched;
 mod options;
 mod quantics_tci;
 
+pub use batched::{quanticscrossinterpolate_batched, QuanticsTensorCI2Batched};
 pub use options::QtciOptions;
 pub use quantics_tci::{
     quanticscrossinterpolate, quanticscrossinterpolate_discrete,
