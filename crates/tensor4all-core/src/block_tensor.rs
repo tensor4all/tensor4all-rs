@@ -7,18 +7,26 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```
 //! use tensor4all_core::block_tensor::BlockTensor;
 //! use tensor4all_core::krylov::{gmres, GmresOptions};
+//! use tensor4all_core::{DynIndex, TensorDynLen};
 //!
-//! // Create 2x1 block vectors
-//! let b = BlockTensor::new(vec![b1, b2], (2, 1));
-//! let x0 = BlockTensor::new(vec![zero1, zero2], (2, 1));
+//! # fn main() -> anyhow::Result<()> {
+//! let i = DynIndex::new_dyn(2);
+//! let b_block = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0])?;
+//! let zero_block = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0])?;
 //!
-//! // Define block matrix operator
-//! let apply_a = |x: &BlockTensor<T>| { /* ... */ };
+//! let b = BlockTensor::new(vec![b_block], (1, 1));
+//! let x0 = BlockTensor::new(vec![zero_block], (1, 1));
 //!
+//! let apply_a = |x: &BlockTensor<TensorDynLen>| Ok(x.clone());
 //! let result = gmres(apply_a, &b, &x0, &GmresOptions::default())?;
+//!
+//! assert!(result.converged);
+//! assert_eq!(result.solution.shape(), (1, 1));
+//! # Ok(())
+//! # }
 //! ```
 
 use std::collections::HashSet;

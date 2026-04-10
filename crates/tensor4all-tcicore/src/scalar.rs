@@ -191,15 +191,14 @@ impl Scalar for Complex32 {
 ///
 /// # Example
 ///
-/// ```ignore
-/// fn test_operation_generic<T: Scalar>() {
-///     // test implementation
+/// ```
+/// fn test_operation_generic<T: tensor4all_tcicore::Scalar>() {
+///     let value = T::from_f64(2.0);
+///     assert_eq!(value.abs_sq(), 4.0);
 /// }
 ///
+/// # fn main() {}
 /// tensor4all_tcicore::scalar_tests!(test_operation, test_operation_generic);
-/// // Generates:
-/// // #[test] fn test_operation_f64() { test_operation_generic::<f64>(); }
-/// // #[test] fn test_operation_c64() { test_operation_generic::<Complex64>(); }
 /// ```
 #[macro_export]
 macro_rules! scalar_tests {

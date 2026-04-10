@@ -76,16 +76,18 @@ pub enum ConjState {
 ///
 /// # Example
 ///
-/// ```ignore
-/// fn contract_common<I: IndexLike>(a: &Tensor<I>, b: &Tensor<I>) -> Tensor<I> {
-///     // Algorithm doesn't need to know about Id, Symm, Tags
-///     // It only needs indices to be comparable and have dimensions
-///     let common: Vec<_> = a.indices().iter()
-///         .filter(|idx| b.indices().contains(idx))
-///         .cloned()
-///         .collect();
-///     // ...
-/// }
+/// ```
+/// use tensor4all_core::{DynIndex, IndexLike};
+///
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(3);
+/// let k = DynIndex::new_dyn(4);
+///
+/// let a = vec![i.clone(), j.clone()];
+/// let b = vec![j.clone(), k.clone()];
+/// let common: Vec<_> = a.iter().filter(|idx| b.contains(idx)).cloned().collect();
+///
+/// assert_eq!(common, vec![j]);
 /// ```
 pub trait IndexLike: Clone + Eq + Hash + Debug + Send + Sync + 'static {
     /// Lightweight identifier type (conjugate-independent).

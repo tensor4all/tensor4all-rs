@@ -12,10 +12,13 @@
 //!
 //! For most use cases, use the `square` solver:
 //!
-//! ```ignore
-//! use tensor4all_treetn::linsolve::square::{square_linsolve, LinsolveOptions};
+//! ```
+//! use tensor4all_treetn::{square_linsolve, LinsolveOptions};
 //!
-//! let result = square_linsolve(&operator, &rhs, init, &center, LinsolveOptions::default())?;
+//! let options = LinsolveOptions::default().with_nfullsweeps(2);
+//! let _solver = square_linsolve::<tensor4all_core::TensorDynLen, usize>;
+//!
+//! assert_eq!(options.nfullsweeps, 2);
 //! ```
 
 pub mod common;

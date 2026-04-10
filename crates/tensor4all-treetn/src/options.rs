@@ -12,10 +12,15 @@ use tensor4all_core::truncation::{HasTruncationParams, TruncationParams};
 ///
 /// # Builder Pattern
 ///
-/// ```ignore
+/// ```
+/// use tensor4all_treetn::{CanonicalForm, CanonicalizationOptions};
+///
 /// let options = CanonicalizationOptions::default()
 ///     .with_form(CanonicalForm::LU)
 ///     .force();
+///
+/// assert!(matches!(options.form, CanonicalForm::LU));
+/// assert!(options.force);
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct CanonicalizationOptions {
@@ -72,10 +77,16 @@ impl CanonicalizationOptions {
 ///
 /// # Builder Pattern
 ///
-/// ```ignore
+/// ```
+/// use tensor4all_treetn::{CanonicalForm, TruncationOptions};
+///
 /// let options = TruncationOptions::default()
 ///     .with_max_rank(50)
 ///     .with_rtol(1e-10);
+///
+/// assert!(matches!(options.form, CanonicalForm::Unitary));
+/// assert_eq!(options.max_rank(), Some(50));
+/// assert_eq!(options.rtol(), Some(1e-10));
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct TruncationOptions {
@@ -143,11 +154,18 @@ impl TruncationOptions {
 ///
 /// # Builder Pattern
 ///
-/// ```ignore
+/// ```
+/// use tensor4all_treetn::{CanonicalForm, SplitOptions};
+///
 /// let options = SplitOptions::default()
 ///     .with_max_rank(50)
 ///     .with_rtol(1e-10)
 ///     .with_final_sweep(true);
+///
+/// assert!(matches!(options.form, CanonicalForm::Unitary));
+/// assert_eq!(options.max_rank(), Some(50));
+/// assert_eq!(options.rtol(), Some(1e-10));
+/// assert!(options.final_sweep);
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct SplitOptions {

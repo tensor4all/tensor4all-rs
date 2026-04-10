@@ -37,7 +37,7 @@ type DiagonalPairApplication<V> = (
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tensor4all_core::DynIndex;
 /// use tensor4all_treetn::PartialContractionSpec;
 ///
@@ -550,16 +550,25 @@ where
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use tensor4all_core::DynIndex;
+/// ```no_run
+/// use tensor4all_core::{DynIndex, TensorDynLen};
 /// use tensor4all_treetn::{
 ///     contraction::ContractionOptions,
 ///     partial_contract,
 ///     PartialContractionSpec,
+///     TreeTN,
 /// };
 ///
 /// let idx_a = DynIndex::new_dyn(2);
 /// let idx_b = DynIndex::new_dyn(2);
+/// let a = TreeTN::<TensorDynLen, usize>::from_tensors(
+///     vec![TensorDynLen::from_dense(vec![idx_a.clone()], vec![1.0, 2.0]).unwrap()],
+///     vec![0],
+/// ).unwrap();
+/// let b = TreeTN::<TensorDynLen, usize>::from_tensors(
+///     vec![TensorDynLen::from_dense(vec![idx_b.clone()], vec![3.0, 4.0]).unwrap()],
+///     vec![0],
+/// ).unwrap();
 ///
 /// let spec = PartialContractionSpec {
 ///     contract_pairs: vec![(idx_a.clone(), idx_b.clone())],
@@ -567,8 +576,8 @@ where
 ///     output_order: None,
 /// };
 ///
-/// assert_eq!(spec.contract_pairs.len(), 1);
-/// let _ = (partial_contract, ContractionOptions::default());
+/// let result = partial_contract(&a, &b, &spec, &0usize, ContractionOptions::default()).unwrap();
+/// assert_eq!(result.node_count(), 1);
 /// ```
 pub fn partial_contract<V>(
     a: &TreeTN<TensorDynLen, V>,

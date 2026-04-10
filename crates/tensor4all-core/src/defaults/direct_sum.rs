@@ -34,12 +34,21 @@ use tensor4all_tensorbackend::TensorElement;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // A has indices [i, j] with dims [2, 3]
-/// // B has indices [i, k] with dims [2, 4]
-/// // If we pair (j, k), result has indices [i, m] with dims [2, 7]
-/// // where m is a new index with dim = 3 + 4 = 7
-/// let (result, new_indices) = direct_sum(&a, &b, &[(j, k)])?;
+/// ```
+/// use tensor4all_core::{direct_sum, DynIndex, TensorDynLen};
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let j = DynIndex::new_dyn(2);
+/// let k = DynIndex::new_dyn(3);
+///
+/// let a = TensorDynLen::from_dense(vec![j.clone()], vec![1.0, 2.0])?;
+/// let b = TensorDynLen::from_dense(vec![k.clone()], vec![3.0, 4.0, 5.0])?;
+/// let (result, new_indices) = direct_sum(&a, &b, &[(j.clone(), k.clone())])?;
+///
+/// assert_eq!(new_indices.len(), 1);
+/// assert_eq!(result.to_vec::<f64>()?, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+/// # Ok(())
+/// # }
 /// ```
 pub fn direct_sum(
     a: &TensorDynLen,

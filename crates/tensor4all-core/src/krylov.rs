@@ -14,16 +14,24 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use tensor4all_core::krylov::{gmres, GmresOptions};
-//!
-//! // Define a linear operator as a closure
-//! let apply_operator = |x: &T| -> Result<T> {
-//!     // Apply your linear operator to x
-//!     operator.apply(x)
+//! ```
+//! use tensor4all_core::{
+//!     krylov::{gmres, GmresOptions},
+//!     DynIndex, TensorDynLen, TensorLike,
 //! };
 //!
-//! let result = gmres(&apply_operator, &rhs, &initial_guess, &GmresOptions::default())?;
+//! # fn main() -> anyhow::Result<()> {
+//! let i = DynIndex::new_dyn(2);
+//! let rhs = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, -1.0])?;
+//! let initial_guess = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0])?;
+//!
+//! let apply_operator = |x: &TensorDynLen| Ok(x.clone());
+//! let result = gmres(apply_operator, &rhs, &initial_guess, &GmresOptions::default())?;
+//!
+//! assert!(result.converged);
+//! assert!(result.solution.sub(&rhs)?.maxabs() < 1e-12);
+//! # Ok(())
+//! # }
 //! ```
 
 use crate::any_scalar::AnyScalar;

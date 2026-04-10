@@ -18,12 +18,15 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```
 //! use tensor4all_simplett::mpo::{MPO, contract_naive, ContractionOptions};
 //!
-//! let mpo_a = MPO::constant(&[2, 2], 1.0);
-//! let mpo_b = MPO::constant(&[2, 2], 2.0);
-//! let result = contract_naive(&mpo_a, &mpo_b, None)?;
+//! let mpo_a = MPO::constant(&[(2, 2), (2, 2)], 1.0_f64);
+//! let mpo_b = MPO::constant(&[(2, 2), (2, 2)], 2.0_f64);
+//! let result = contract_naive(&mpo_a, &mpo_b, Some(ContractionOptions::default())).unwrap();
+//!
+//! assert_eq!(result.len(), 2);
+//! assert_eq!(result.site_dims(), vec![(2, 2), (2, 2)]);
 //! ```
 
 /// Type alias for 2D matrix.

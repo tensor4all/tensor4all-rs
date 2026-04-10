@@ -41,21 +41,24 @@ pub use hdf5_rt::sys::{
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use tensor4all_hdf5::{save_itensor, load_itensor};
-/// use tensor4all_core::index::Index;
-/// use tensor4all_core::TensorDynLen;
+/// use tensor4all_core::{Index, TensorDynLen};
 ///
+/// # fn main() -> anyhow::Result<()> {
 /// let i = Index::new_dyn(2);
 /// let j = Index::new_dyn(3);
 /// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![
 ///     1.0, 2.0, 3.0, 4.0, 5.0, 6.0
 /// ]).unwrap();
 ///
-/// let path = "/tmp/test_itensor.h5";
-/// save_itensor(path, "my_tensor", &tensor).unwrap();
-/// let loaded = load_itensor(path, "my_tensor").unwrap();
-/// assert_eq!(loaded.ndim(), 2);
+/// let path = std::env::temp_dir().join("tensor4all-doc-itensor.h5");
+/// let path = path.to_str().unwrap();
+/// save_itensor(path, "my_tensor", &tensor)?;
+/// let loaded = load_itensor(path, "my_tensor")?;
+/// assert_eq!(loaded.dims(), vec![2, 3]);
+/// # Ok(())
+/// # }
 /// ```
 pub fn save_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result<()> {
     let file = File::create(filepath)?;
@@ -67,15 +70,24 @@ pub fn save_itensor(filepath: &str, name: &str, tensor: &TensorDynLen) -> Result
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use tensor4all_hdf5::{save_itensor, load_itensor};
-/// use tensor4all_core::index::Index;
-/// use tensor4all_core::TensorDynLen;
+/// use tensor4all_core::{Index, TensorDynLen};
 ///
-/// // (Requires a previously saved file — see `save_itensor` for a full round-trip example.)
-/// let path = "/tmp/test_itensor.h5";
-/// let loaded = load_itensor(path, "my_tensor").unwrap();
-/// assert_eq!(loaded.ndim(), 2);
+/// # fn main() -> anyhow::Result<()> {
+/// let i = Index::new_dyn(2);
+/// let j = Index::new_dyn(3);
+/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], vec![
+///     1.0, 2.0, 3.0, 4.0, 5.0, 6.0
+/// ])?;
+///
+/// let path = std::env::temp_dir().join("tensor4all-doc-itensor-load.h5");
+/// let path = path.to_str().unwrap();
+/// save_itensor(path, "my_tensor", &tensor)?;
+/// let loaded = load_itensor(path, "my_tensor")?;
+/// assert_eq!(loaded.to_vec::<f64>()?, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+/// # Ok(())
+/// # }
 /// ```
 pub fn load_itensor(filepath: &str, name: &str) -> Result<TensorDynLen> {
     let file = File::open(filepath)?;
@@ -87,12 +99,12 @@ pub fn load_itensor(filepath: &str, name: &str) -> Result<TensorDynLen> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use tensor4all_hdf5::{save_mps, load_mps};
-/// use tensor4all_core::index::Index;
-/// use tensor4all_core::TensorDynLen;
+/// use tensor4all_core::{Index, TensorDynLen};
 /// use tensor4all_itensorlike::TensorTrain;
 ///
+/// # fn main() -> anyhow::Result<()> {
 /// let s0 = Index::new_dyn(2);
 /// let bond = Index::new_dyn(1);
 /// let s1 = Index::new_dyn(2);
@@ -100,10 +112,13 @@ pub fn load_itensor(filepath: &str, name: &str) -> Result<TensorDynLen> {
 /// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0, 0.0]).unwrap();
 /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 ///
-/// let path = "/tmp/test_mps.h5";
-/// save_mps(path, "my_mps", &tt).unwrap();
-/// let loaded = load_mps(path, "my_mps").unwrap();
+/// let path = std::env::temp_dir().join("tensor4all-doc-mps.h5");
+/// let path = path.to_str().unwrap();
+/// save_mps(path, "my_mps", &tt)?;
+/// let loaded = load_mps(path, "my_mps")?;
 /// assert_eq!(loaded.len(), 2);
+/// # Ok(())
+/// # }
 /// ```
 pub fn save_mps(filepath: &str, name: &str, tt: &TensorTrain) -> Result<()> {
     let file = File::create(filepath)?;
@@ -115,13 +130,27 @@ pub fn save_mps(filepath: &str, name: &str, tt: &TensorTrain) -> Result<()> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use tensor4all_hdf5::load_mps;
+/// use tensor4all_hdf5::save_mps;
+/// use tensor4all_core::{Index, TensorDynLen};
+/// use tensor4all_itensorlike::TensorTrain;
 ///
-/// // (Requires a previously saved file — see `save_mps` for a full round-trip example.)
-/// let path = "/tmp/test_mps.h5";
-/// let tt = load_mps(path, "my_mps").unwrap();
-/// assert_eq!(tt.len(), 2);
+/// # fn main() -> anyhow::Result<()> {
+/// let s0 = Index::new_dyn(2);
+/// let bond = Index::new_dyn(1);
+/// let s1 = Index::new_dyn(2);
+/// let t0 = TensorDynLen::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0])?;
+/// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0, 0.0])?;
+/// let tt = TensorTrain::new(vec![t0, t1])?;
+///
+/// let path = std::env::temp_dir().join("tensor4all-doc-mps-load.h5");
+/// let path = path.to_str().unwrap();
+/// save_mps(path, "my_mps", &tt)?;
+/// let loaded = load_mps(path, "my_mps")?;
+/// assert_eq!(loaded.len(), 2);
+/// # Ok(())
+/// # }
 /// ```
 pub fn load_mps(filepath: &str, name: &str) -> Result<TensorTrain> {
     let file = File::open(filepath)?;
