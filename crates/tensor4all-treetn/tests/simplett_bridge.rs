@@ -15,6 +15,28 @@ fn two_site_tensor_train_f64() -> TensorTrain<f64> {
     .expect("valid two-site tensor train")
 }
 
+fn single_site_tensor_train_f64() -> TensorTrain<f64> {
+    TensorTrain::new(vec![tensor3_from_data(vec![1.0, -2.0, 3.5], 1, 3, 1)])
+        .expect("valid single-site tensor train")
+}
+
+fn three_site_tensor_train_f64() -> TensorTrain<f64> {
+    TensorTrain::new(vec![
+        tensor3_from_data(vec![1.0, 2.0, 3.0, 4.0], 1, 2, 2),
+        tensor3_from_data(
+            vec![
+                1.0, 0.5, -1.0, 2.0, //
+                0.25, -0.75, 1.5, 0.0,
+            ],
+            2,
+            2,
+            2,
+        ),
+        tensor3_from_data(vec![0.5, 1.5, -2.0, 1.0], 2, 2, 1),
+    ])
+    .expect("valid three-site tensor train")
+}
+
 fn two_site_tensor_train_c64() -> TensorTrain<Complex64> {
     TensorTrain::new(vec![
         tensor3_from_data(
@@ -102,4 +124,96 @@ fn tensor_train_to_treetn_with_site_indices_preserves_supplied_ids() -> Result<(
     assert_eq!(dense_indices[0].id(), site_indices[0].id());
     assert_eq!(dense_indices[1].id(), site_indices[1].id());
     Ok(())
+}
+
+#[test]
+fn tensor_train_to_treetn_single_site_preserves_dense_values() -> Result<()> {
+    let tt = single_site_tensor_train_f64();
+
+    let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
+    let dense = treetn.contract_to_tensor()?;
+    let (values, _shape) = tt.fulltensor();
+    let expected = TensorDynLen::from_dense(site_indices.clone(), values)?;
+
+    assert_eq!(treetn.node_names(), vec![0]);
+    assert_eq!(site_indices.len(), 1);
+    assert!((&dense - &expected).maxabs() < 1.0e-12);
+    Ok(())
+}
+
+#[test]
+fn tensor_train_to_treetn_three_site_preserves_dense_values() -> Result<()> {
+    let tt = three_site_tensor_train_f64();
+
+    let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
+    let dense = treetn.contract_to_tensor()?;
+    let (values, _shape) = tt.fulltensor();
+    let expected = TensorDynLen::from_dense(site_indices, values)?;
+
+    assert_eq!(treetn.node_names(), vec![0, 1, 2]);
+    assert!((&dense - &expected).maxabs() < 1.0e-12);
+    Ok(())
+}
+
+#[test]
+fn tensor_train_to_treetn_with_names_rejects_length_mismatch() {
+    let tt = two_site_tensor_train_f64();
+
+    let err = tensor_train_to_treetn_with_names(&tt, vec!["site0".to_string()]).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("node_names length 1 must match tensor-train length 2"));
+}
+
+#[test]
+fn tensor_train_to_treetn_with_site_indices_rejects_length_mismatch() {
+    let tt = two_site_tensor_train_f64();
+
+    let err = tensor_train_to_treetn_with_names_and_site_indices(
+        &tt,
+        vec!["left".to_string(), "right".to_string()],
+        vec![DynIndex::new_dyn(2)],
+    )
+    .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("site_indices length 1 must match tensor-train length 2"));
+}
+
+#[test]
+fn tensor_train_to_treetn_with_site_indices_rejects_dimension_mismatch() {
+    let tt = two_site_tensor_train_f64();
+
+    let err = tensor_train_to_treetn_with_names_and_site_indices(
+        &tt,
+        vec!["left".to_string(), "right".to_string()],
+        vec![DynIndex::new_dyn(3), DynIndex::new_dyn(2)],
+    )
+    .unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("site index 0 has dim 3 but tensor-train site 0 has dim 2"));
+}
+
+#[test]
+fn tensor_train_to_treetn_empty_tensor_train_requires_empty_metadata() {
+    let empty_tt = TensorTrain::<f64>::new(vec![]).expect("empty tensor train should construct");
+
+    let (treetn, site_indices) =
+        tensor_train_to_treetn_with_names(&empty_tt, Vec::<String>::new()).unwrap();
+    assert!(treetn.node_names().is_empty());
+    assert!(site_indices.is_empty());
+
+    let err = tensor_train_to_treetn_with_names_and_site_indices(
+        &empty_tt,
+        Vec::<String>::new(),
+        vec![DynIndex::new_dyn(2)],
+    )
+    .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("empty tensor train requires zero site indices"));
 }
