@@ -26,12 +26,13 @@ use crate::quantics_tci::quanticscrossinterpolate;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tensor4all_quanticstci::{
 ///     quanticscrossinterpolate_batched, QtciOptions, DiscretizedGrid,
 /// };
+/// use tensor4all_simplett::AbstractTensorTrain;
 ///
-/// let grid = DiscretizedGrid::builder(&[4])
+/// let grid = DiscretizedGrid::builder(&[2])
 ///     .with_lower_bound(&[0.0])
 ///     .with_upper_bound(&[1.0])
 ///     .build()
@@ -39,14 +40,14 @@ use crate::quantics_tci::quanticscrossinterpolate;
 ///
 /// let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
 ///     &grid,
-///     |x: &[f64]| vec![x[0].sin(), x[0].cos()],
+///     |x: &[f64]| vec![x[0] + 1.0, 2.0 * x[0] + 1.0],
 ///     &[2],
 ///     None,
 ///     QtciOptions::default(),
 /// ).unwrap();
 ///
 /// assert_eq!(result.output_dims(), &[2]);
-/// assert_eq!(result.tensor_train().len(), 5); // 4 grid sites + 1 component site
+/// assert_eq!(result.tensor_train().len(), 3); // 2 grid sites + 1 component site
 /// ```
 #[derive(Clone)]
 pub struct QuanticsTensorCI2Batched<V: TTScalar> {
@@ -69,13 +70,13 @@ where
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tensor4all_quanticstci::{
     ///     quanticscrossinterpolate_batched, QtciOptions, DiscretizedGrid,
     /// };
     /// use tensor4all_simplett::AbstractTensorTrain;
     ///
-    /// let grid = DiscretizedGrid::builder(&[4])
+    /// let grid = DiscretizedGrid::builder(&[2])
     ///     .with_lower_bound(&[0.0])
     ///     .with_upper_bound(&[1.0])
     ///     .build()
@@ -83,14 +84,14 @@ where
     ///
     /// let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
     ///     &grid,
-    ///     |x: &[f64]| vec![x[0], x[0] * x[0]],
+    ///     |x: &[f64]| vec![x[0] + 1.0, x[0] * x[0] + 1.0],
     ///     &[2],
     ///     None,
     ///     QtciOptions::default(),
     /// ).unwrap();
     ///
     /// let tt = result.tensor_train();
-    /// assert_eq!(tt.len(), 5); // 4 grid sites + 1 component site
+    /// assert_eq!(tt.len(), 3); // 2 grid sites + 1 component site
     /// ```
     pub fn tensor_train(&self) -> &TensorTrain<V> {
         &self.tt
@@ -100,12 +101,12 @@ where
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tensor4all_quanticstci::{
     ///     quanticscrossinterpolate_batched, QtciOptions, DiscretizedGrid,
     /// };
     ///
-    /// let grid = DiscretizedGrid::builder(&[4])
+    /// let grid = DiscretizedGrid::builder(&[2])
     ///     .with_lower_bound(&[0.0])
     ///     .with_upper_bound(&[1.0])
     ///     .build()
@@ -113,7 +114,7 @@ where
     ///
     /// let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
     ///     &grid,
-    ///     |x: &[f64]| vec![x[0], x[0] * x[0]],
+    ///     |x: &[f64]| vec![x[0] + 1.0, x[0] * x[0] + 1.0],
     ///     &[2],
     ///     None,
     ///     QtciOptions::default(),
@@ -129,12 +130,12 @@ where
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tensor4all_quanticstci::{
     ///     quanticscrossinterpolate_batched, QtciOptions, DiscretizedGrid,
     /// };
     ///
-    /// let grid = DiscretizedGrid::builder(&[4])
+    /// let grid = DiscretizedGrid::builder(&[2])
     ///     .with_lower_bound(&[0.0])
     ///     .with_upper_bound(&[1.0])
     ///     .build()
@@ -142,7 +143,7 @@ where
     ///
     /// let (result, _, _) = quanticscrossinterpolate_batched::<f64, _>(
     ///     &grid,
-    ///     |x: &[f64]| vec![x[0]],
+    ///     |x: &[f64]| vec![x[0] + 1.0],
     ///     &[1],
     ///     None,
     ///     QtciOptions::default(),
@@ -178,14 +179,13 @@ where
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tensor4all_quanticstci::{
 ///     quanticscrossinterpolate_batched, QtciOptions, DiscretizedGrid,
 /// };
 /// use tensor4all_simplett::AbstractTensorTrain;
 ///
-/// let grid = DiscretizedGrid::builder(&[6])
-///     .with_variable_names(&["x"])
+/// let grid = DiscretizedGrid::builder(&[2])
 ///     .with_lower_bound(&[0.0])
 ///     .with_upper_bound(&[1.0])
 ///     .build()
@@ -194,16 +194,18 @@ where
 /// let (result, ranks, errors) = quanticscrossinterpolate_batched::<f64, _>(
 ///     &grid,
 ///     |x: &[f64]| vec![
-///         (2.0 * std::f64::consts::PI * x[0]).sin(),
-///         (2.0 * std::f64::consts::PI * x[0]).cos(),
+///         x[0] + 1.0,
+///         2.0 * x[0] + 1.0,
 ///     ],
 ///     &[2],
 ///     None,
 ///     QtciOptions::default().with_tolerance(1e-8),
 /// ).unwrap();
 ///
-/// assert_eq!(result.tensor_train().len(), 7); // 6 grid sites + 1 component site
+/// assert_eq!(result.tensor_train().len(), 3); // 2 grid sites + 1 component site
 /// assert_eq!(result.output_dims(), &[2]);
+/// assert!(!ranks.is_empty());
+/// assert!(!errors.is_empty());
 /// ```
 pub fn quanticscrossinterpolate_batched<V, F>(
     grid: &DiscretizedGrid,

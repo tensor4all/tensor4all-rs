@@ -365,16 +365,46 @@ where
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use tensor4all_treetn::LinearOperator;
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
-    /// use tensor4all_treetn::TreeTN;
+    /// ```
     /// use std::collections::HashMap;
     ///
-    /// // Given an operator `op` and a state `state`:
+    /// use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+    /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
+    ///
+    /// let state_index = DynIndex::new_dyn(2);
+    /// let state_tensor = TensorDynLen::from_dense(vec![state_index.clone()], vec![1.0, 2.0]).unwrap();
+    /// let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0]).unwrap();
+    ///
+    /// let input_internal = DynIndex::new_dyn(2);
+    /// let output_internal = DynIndex::new_dyn(2);
+    /// let mpo_tensor = TensorDynLen::from_dense(
+    ///     vec![input_internal.clone(), output_internal.clone()],
+    ///     vec![1.0, 0.0, 0.0, 1.0],
+    /// ).unwrap();
+    /// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
+    ///
+    /// let mut input_mapping = HashMap::new();
+    /// input_mapping.insert(
+    ///     0usize,
+    ///     IndexMapping {
+    ///         true_index: DynIndex::new_dyn(2),
+    ///         internal_index: input_internal,
+    ///     },
+    /// );
+    /// let mut output_mapping = HashMap::new();
+    /// output_mapping.insert(
+    ///     0usize,
+    ///     IndexMapping {
+    ///         true_index: DynIndex::new_dyn(2),
+    ///         internal_index: output_internal,
+    ///     },
+    /// );
+    ///
+    /// let mut op = LinearOperator::new(mpo, input_mapping, output_mapping);
     /// op.align_to_state(&state).unwrap();
-    /// // Now op.input_mapping and op.output_mapping true_index fields
-    /// // reference the state's site indices.
+    ///
+    /// assert!(op.input_mappings()[&0].true_index.same_id(&state_index));
+    /// assert!(op.output_mappings()[&0].true_index.same_id(&state_index));
     /// ```
     pub fn align_to_state(&mut self, state: &TreeTN<T, V>) -> Result<()> {
         self.set_input_space_from_state(state)?;

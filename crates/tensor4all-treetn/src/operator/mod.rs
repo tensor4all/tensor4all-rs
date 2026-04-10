@@ -12,19 +12,18 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! // Build local operators acting on different regions
-//! let op1 = build_local_operator(&[site_a, site_b]);  // acts on {a, b}
-//! let op2 = build_local_operator(&[site_c, site_d]);  // acts on {c, d}
+//! ```
+//! use tensor4all_core::{DynIndex, IndexLike};
+//! use tensor4all_treetn::{apply_linear_operator, compose_exclusive_linear_operators, IndexMapping};
 //!
-//! // State has sites {a, b, x, c, d}
-//! let target = state.site_index_network();
+//! let mapping = IndexMapping {
+//!     true_index: DynIndex::new_dyn(2),
+//!     internal_index: DynIndex::new_dyn(2),
+//! };
 //!
-//! // Compose into single operator on full space (identity at gap x)
-//! let composed = compose_exclusive_linear_operators(target, &[&op1, &op2], &gap_indices)?;
-//!
-//! // Apply composed operator
-//! let result = state.contract_zipup(&composed, center, rtol, max_rank)?;
+//! assert_eq!(mapping.true_index.dim(), mapping.internal_index.dim());
+//! let _apply = apply_linear_operator::<tensor4all_core::TensorDynLen, usize>;
+//! let _compose = compose_exclusive_linear_operators::<tensor4all_core::TensorDynLen, usize>;
 //! ```
 
 mod apply;

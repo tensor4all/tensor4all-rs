@@ -15,8 +15,47 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
+//! use std::collections::HashMap;
+//!
+//! use tensor4all_core::{DynIndex, TensorDynLen};
+//! use tensor4all_treetn::{apply_linear_operator, ApplyOptions, IndexMapping, LinearOperator, TreeTN};
+//!
+//! # fn main() -> anyhow::Result<()> {
+//! let site = DynIndex::new_dyn(2);
+//! let state_tensor = TensorDynLen::from_dense(vec![site.clone()], vec![1.0, 2.0])?;
+//! let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0])?;
+//!
+//! let input_internal = DynIndex::new_dyn(2);
+//! let output_internal = DynIndex::new_dyn(2);
+//! let mpo_tensor = TensorDynLen::from_dense(
+//!     vec![input_internal.clone(), output_internal.clone()],
+//!     vec![1.0, 0.0, 0.0, 1.0],
+//! )?;
+//! let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0])?;
+//!
+//! let mut input_mapping = HashMap::new();
+//! input_mapping.insert(
+//!     0usize,
+//!     IndexMapping {
+//!         true_index: site.clone(),
+//!         internal_index: input_internal,
+//!     },
+//! );
+//! let mut output_mapping = HashMap::new();
+//! output_mapping.insert(
+//!     0usize,
+//!     IndexMapping {
+//!         true_index: site.clone(),
+//!         internal_index: output_internal,
+//!     },
+//! );
+//!
+//! let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
 //! let result = apply_linear_operator(&operator, &state, ApplyOptions::default())?;
+//! assert_eq!(result.node_count(), 1);
+//! # Ok(())
+//! # }
 //! ```
 
 use std::collections::{HashMap, HashSet};
@@ -125,18 +164,55 @@ impl ApplyOptions {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use tensor4all_treetn::operator::{apply_linear_operator, ApplyOptions};
+/// ```no_run
+/// use std::collections::HashMap;
 ///
-/// // Apply with default options (ZipUp)
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_treetn::{apply_linear_operator, ApplyOptions, IndexMapping, LinearOperator, TreeTN};
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let site = DynIndex::new_dyn(2);
+/// let state_tensor = TensorDynLen::from_dense(vec![site.clone()], vec![1.0, 2.0])?;
+/// let state = TreeTN::<TensorDynLen, usize>::from_tensors(vec![state_tensor], vec![0])?;
+///
+/// let input_internal = DynIndex::new_dyn(2);
+/// let output_internal = DynIndex::new_dyn(2);
+/// let mpo_tensor = TensorDynLen::from_dense(
+///     vec![input_internal.clone(), output_internal.clone()],
+///     vec![1.0, 0.0, 0.0, 1.0],
+/// )?;
+/// let mpo = TreeTN::<TensorDynLen, usize>::from_tensors(vec![mpo_tensor], vec![0])?;
+///
+/// let mut input_mapping = HashMap::new();
+/// input_mapping.insert(
+///     0usize,
+///     IndexMapping {
+///         true_index: site.clone(),
+///         internal_index: input_internal,
+///     },
+/// );
+/// let mut output_mapping = HashMap::new();
+/// output_mapping.insert(
+///     0usize,
+///     IndexMapping {
+///         true_index: site.clone(),
+///         internal_index: output_internal,
+///     },
+/// );
+///
+/// let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+///
 /// let result = apply_linear_operator(&operator, &state, ApplyOptions::default())?;
+/// assert_eq!(result.node_count(), 1);
 ///
-/// // Apply with truncation
-/// let result = apply_linear_operator(
+/// let truncated = apply_linear_operator(
 ///     &operator,
 ///     &state,
-///     ApplyOptions::zipup().with_max_rank(50).with_rtol(1e-10),
+///     ApplyOptions::zipup().with_max_rank(4).with_rtol(1e-10),
 /// )?;
+/// assert_eq!(truncated.node_count(), 1);
+/// # Ok(())
+/// # }
 /// ```
 pub fn apply_linear_operator<T, V>(
     operator: &LinearOperator<T, V>,

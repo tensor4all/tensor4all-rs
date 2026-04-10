@@ -214,16 +214,35 @@ pub struct FactorizeResult<T: TensorLike> {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use tensor4all_core::{TensorLike, AllowedPairs};
+/// ```
+/// use tensor4all_core::{AllowedPairs, DynIndex, TensorDynLen, TensorLike};
 ///
-/// // Contract all contractable index pairs (default behavior)
-/// let tensor_refs: Vec<&T> = tensors.iter().collect();
-/// let result = T::contract(&tensor_refs, AllowedPairs::All)?;
+/// # fn main() -> anyhow::Result<()> {
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let k = DynIndex::new_dyn(2);
 ///
-/// // Only contract indices between specified tensor pairs
-/// let edges = vec![(0, 1), (1, 2)];  // tensor 0-1 and tensor 1-2
-/// let result = T::contract(&tensor_refs, AllowedPairs::Specified(&edges))?;
+/// let a = TensorDynLen::from_dense(
+///     vec![i.clone(), j.clone()],
+///     vec![1.0, 0.0, 0.0, 1.0],
+/// )?;
+/// let b = TensorDynLen::from_dense(
+///     vec![j.clone(), k.clone()],
+///     vec![1.0, 2.0, 3.0, 4.0],
+/// )?;
+/// let c = TensorDynLen::from_dense(vec![k.clone()], vec![1.0, 10.0])?;
+///
+/// let tensor_refs: Vec<&TensorDynLen> = vec![&a, &b, &c];
+/// let all = <TensorDynLen as TensorLike>::contract(&tensor_refs, AllowedPairs::All)?;
+///
+/// let edges = vec![(0, 1), (1, 2)];
+/// let specified =
+///     <TensorDynLen as TensorLike>::contract(&tensor_refs, AllowedPairs::Specified(&edges))?;
+///
+/// assert_eq!(all.dims(), vec![2]);
+/// assert!(all.sub(&specified)?.maxabs() < 1e-12);
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub enum AllowedPairs<'a> {
@@ -301,23 +320,46 @@ impl LinearizationOrder {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use tensor4all_core::{TensorLike, AllowedPairs};
+/// ```
+/// use tensor4all_core::{AllowedPairs, DynIndex, TensorDynLen, TensorLike};
 ///
-/// fn contract_pair<T: TensorLike>(a: &T, b: &T) -> Result<T> {
-///     T::contract(&[a, b], AllowedPairs::All)
+/// fn contract_pair(a: &TensorDynLen, b: &TensorDynLen) -> anyhow::Result<TensorDynLen> {
+///     Ok(<TensorDynLen as TensorLike>::contract(&[a, b], AllowedPairs::All)?)
 /// }
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let a = TensorDynLen::from_dense(
+///     vec![i.clone(), j.clone()],
+///     vec![1.0, 0.0, 0.0, 1.0],
+/// )?;
+/// let b = TensorDynLen::from_dense(vec![j.clone()], vec![2.0, 3.0])?;
+///
+/// let result = contract_pair(&a, &b)?;
+/// assert_eq!(result.to_vec::<f64>()?, vec![2.0, 3.0]);
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Heterogeneous Collections
 ///
 /// For mixing different tensor types, define an enum:
 ///
-/// ```ignore
+/// ```
+/// use tensor4all_core::{block_tensor::BlockTensor, DynIndex, TensorDynLen};
+///
+/// let i = DynIndex::new_dyn(2);
+/// let dense = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+/// let block = BlockTensor::new(vec![dense.clone()], (1, 1));
+///
 /// enum TensorNetwork {
 ///     Dense(TensorDynLen),
-///     MPS(MatrixProductState),
+///     Block(BlockTensor<TensorDynLen>),
 /// }
+///
+/// let network = TensorNetwork::Block(block);
+/// assert!(matches!(network, TensorNetwork::Block(_)));
 /// ```
 ///
 /// # Supertrait
@@ -393,12 +435,22 @@ pub trait TensorLike: TensorIndex {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// // A has indices [i, j] with dims [2, 3]
-    /// // B has indices [i, k] with dims [2, 4]
-    /// // If we pair (j, k), result has indices [i, m] with dims [2, 7]
-    /// // where m is a new index with dim = 3 + 4 = 7
-    /// let result = a.direct_sum(&b, &[(j, k)])?;
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let j = DynIndex::new_dyn(2);
+    /// let k = DynIndex::new_dyn(3);
+    ///
+    /// let a = TensorDynLen::from_dense(vec![j.clone()], vec![1.0, 2.0])?;
+    /// let b = TensorDynLen::from_dense(vec![k.clone()], vec![3.0, 4.0, 5.0])?;
+    /// let result = a.direct_sum(&b, &[(j.clone(), k.clone())])?;
+    ///
+    /// assert_eq!(result.new_indices.len(), 1);
+    /// assert_eq!(result.tensor.dims(), vec![5]);
+    /// assert_eq!(result.tensor.to_vec::<f64>()?, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+    /// # Ok(())
+    /// # }
     /// ```
     fn direct_sum(
         &self,
@@ -493,12 +545,34 @@ pub trait TensorLike: TensorIndex {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// // Contract all contractable pairs
-    /// let result = T::contract(&[&a, &b, &c], AllowedPairs::All)?;
+    /// ```
+    /// use tensor4all_core::{AllowedPairs, DynIndex, TensorDynLen, TensorLike};
     ///
-    /// // Only contract between tensor pairs (0,1) and (1,2)
-    /// let result = T::contract(&[&a, &b, &c], AllowedPairs::Specified(&[(0, 1), (1, 2)]))?;
+    /// # fn main() -> anyhow::Result<()> {
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let k = DynIndex::new_dyn(2);
+    ///
+    /// let a = TensorDynLen::from_dense(
+    ///     vec![i.clone(), j.clone()],
+    ///     vec![1.0, 0.0, 0.0, 1.0],
+    /// )?;
+    /// let b = TensorDynLen::from_dense(
+    ///     vec![j.clone(), k.clone()],
+    ///     vec![1.0, 2.0, 3.0, 4.0],
+    /// )?;
+    /// let c = TensorDynLen::from_dense(vec![k.clone()], vec![1.0, 10.0])?;
+    ///
+    /// let all = <TensorDynLen as TensorLike>::contract(&[&a, &b, &c], AllowedPairs::All)?;
+    /// let specified = <TensorDynLen as TensorLike>::contract(
+    ///     &[&a, &b, &c],
+    ///     AllowedPairs::Specified(&[(0, 1), (1, 2)]),
+    /// )?;
+    ///
+    /// assert_eq!(all.dims(), vec![2]);
+    /// assert!(all.sub(&specified)?.maxabs() < 1e-12);
+    /// # Ok(())
+    /// # }
     /// ```
     fn contract(tensors: &[&Self], allowed: AllowedPairs<'_>) -> Result<Self>;
 
@@ -525,9 +599,28 @@ pub trait TensorLike: TensorIndex {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// // All tensors must be connected through contractable indices
-    /// let result = T::contract_connected(&[&a, &b, &c], AllowedPairs::All)?;
+    /// ```
+    /// use tensor4all_core::{AllowedPairs, DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let k = DynIndex::new_dyn(2);
+    ///
+    /// let a = TensorDynLen::from_dense(
+    ///     vec![i.clone(), j.clone()],
+    ///     vec![1.0, 0.0, 0.0, 1.0],
+    /// )?;
+    /// let b = TensorDynLen::from_dense(
+    ///     vec![j.clone(), k.clone()],
+    ///     vec![1.0, 2.0, 3.0, 4.0],
+    /// )?;
+    /// let c = TensorDynLen::from_dense(vec![k.clone()], vec![1.0, 10.0])?;
+    ///
+    /// let result = TensorDynLen::contract_connected(&[&a, &b, &c], AllowedPairs::All)?;
+    /// assert_eq!(result.dims(), vec![2]);
+    /// # Ok(())
+    /// # }
     /// ```
     fn contract_connected(tensors: &[&Self], allowed: AllowedPairs<'_>) -> Result<Self>;
 
@@ -684,9 +777,21 @@ pub trait TensorLike: TensorIndex {
     ///
     /// # Example
     /// To add a dummy index `l` to tensor `T`:
-    /// ```ignore
-    /// let ones = T::ones(&[l])?;
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let i = DynIndex::new_dyn(2);
+    /// let l = DynIndex::new_dyn(3);
+    /// let t = TensorDynLen::from_dense(vec![i.clone()], vec![2.0, 4.0])?;
+    ///
+    /// let ones = TensorDynLen::ones(&[l.clone()])?;
     /// let t_with_l = t.outer_product(&ones)?;
+    ///
+    /// assert_eq!(t_with_l.dims(), vec![2, 3]);
+    /// assert_eq!(t_with_l.to_vec::<f64>()?, vec![2.0, 4.0, 2.0, 4.0, 2.0, 4.0]);
+    /// # Ok(())
+    /// # }
     /// ```
     fn ones(indices: &[<Self as TensorIndex>::Index]) -> Result<Self>;
 

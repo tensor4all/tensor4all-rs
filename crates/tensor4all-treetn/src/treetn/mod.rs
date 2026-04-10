@@ -1685,11 +1685,24 @@ where
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
     /// use std::collections::HashMap;
     ///
-    /// use tensor4all_core::IndexLike;
-    /// use tensor4all_treetn::SwapOptions;
+    /// use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+    /// use tensor4all_treetn::{SwapOptions, TreeTN};
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let node_name_a = "A".to_string();
+    /// let node_name_b = "B".to_string();
+    /// let idx_a = DynIndex::new_dyn(2);
+    /// let idx_b = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(1);
+    /// let t0 = TensorDynLen::from_dense(vec![idx_a.clone(), bond.clone()], vec![1.0, 0.0])?;
+    /// let t1 = TensorDynLen::from_dense(vec![bond, idx_b.clone()], vec![1.0, 0.0])?;
+    /// let mut treetn = TreeTN::<TensorDynLen, String>::from_tensors(
+    ///     vec![t0, t1],
+    ///     vec![node_name_a.clone(), node_name_b.clone()],
+    /// )?;
     ///
     /// let mut target = HashMap::new();
     /// target.insert(idx_a.clone(), node_name_b.clone());
@@ -1704,6 +1717,7 @@ where
     ///     Some(node_name_b.as_str())
     /// );
     /// # Ok::<(), anyhow::Error>(())
+    /// # }
     /// ```
     pub fn swap_site_indices_by_index(
         &mut self,

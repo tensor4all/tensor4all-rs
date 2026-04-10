@@ -88,8 +88,11 @@ use tensor4all_core::TensorDynLen;
 /// Default TreeTN type using TensorDynLen as the tensor type.
 ///
 /// This is the most common configuration for TreeTN, equivalent to:
-/// ```ignore
-/// TreeTN<TensorDynLen, NodeIndex>
+/// ```
+/// use tensor4all_treetn::DefaultTreeTN;
+///
+/// let tree: DefaultTreeTN = DefaultTreeTN::new();
+/// assert_eq!(tree.node_count(), 0);
 /// ```
 ///
 /// Use this when you don't need custom tensor types.

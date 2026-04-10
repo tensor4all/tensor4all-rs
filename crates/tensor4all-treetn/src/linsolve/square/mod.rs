@@ -109,8 +109,24 @@ where
 ///
 /// # Example
 ///
-/// ```ignore
-/// let solution = square_linsolve(&h_mpo, &b_mps, x0_mps, "center", LinsolveOptions::default())?;
+/// ```no_run
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_treetn::{square_linsolve, LinsolveOptions, TreeTN};
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let s = DynIndex::new_dyn(2);
+/// let operator_tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 1.0])?;
+/// let rhs_tensor = TensorDynLen::from_dense(vec![s.clone()], vec![1.0, 2.0])?;
+/// let init_tensor = TensorDynLen::from_dense(vec![s.clone()], vec![0.0, 0.0])?;
+///
+/// let operator = TreeTN::<TensorDynLen, usize>::from_tensors(vec![operator_tensor], vec![0])?;
+/// let rhs = TreeTN::<TensorDynLen, usize>::from_tensors(vec![rhs_tensor], vec![0])?;
+/// let init = TreeTN::<TensorDynLen, usize>::from_tensors(vec![init_tensor], vec![0])?;
+///
+/// let result = square_linsolve(&operator, &rhs, init, &0usize, LinsolveOptions::default())?;
+/// assert_eq!(result.solution.node_count(), 1);
+/// # Ok(())
+/// # }
 /// ```
 pub fn square_linsolve<T, V>(
     operator: &TreeTN<T, V>,

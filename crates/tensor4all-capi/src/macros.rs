@@ -18,6 +18,8 @@
 ///
 /// # Example
 /// ```ignore
+/// // This macro expands to items that reference crate-private helpers such as
+/// // `$crate::unwrap_catch_ptr`, so an external doctest cannot compile it.
 /// impl_opaque_type_common!(index);
 /// // Generates: t4a_index_release, t4a_index_clone, t4a_index_is_assigned
 /// ```

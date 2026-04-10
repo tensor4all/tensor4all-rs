@@ -435,9 +435,25 @@ use tensor4all_core::{Canonical, FactorizeOptions};
 /// 4. B is the orthogonality center (isometry pointing towards B)
 ///
 /// # Usage
-/// ```ignore
-/// let mut updater = TruncateUpdater::new(max_rank, rtol);
+/// ```no_run
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_treetn::{apply_local_update_sweep, LocalUpdateSweepPlan, TreeTN, TruncateUpdater};
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let s0 = DynIndex::new_dyn(2);
+/// let bond = DynIndex::new_dyn(1);
+/// let s1 = DynIndex::new_dyn(2);
+/// let t0 = TensorDynLen::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0])?;
+/// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0, 0.0])?;
+/// let mut treetn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1])?;
+///
+/// let plan = LocalUpdateSweepPlan::from_treetn(&treetn, &0usize, 2).unwrap();
+/// let mut updater = TruncateUpdater::new(Some(4), Some(1e-10));
 /// apply_local_update_sweep(&mut treetn, &plan, &mut updater)?;
+///
+/// assert_eq!(treetn.node_count(), 2);
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug, Clone)]
 pub struct TruncateUpdater {

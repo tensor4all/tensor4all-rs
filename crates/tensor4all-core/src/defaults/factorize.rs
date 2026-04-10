@@ -10,11 +10,26 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use tensor4all_core::{factorize, FactorizeOptions, FactorizeAlg, Canonical};
+//! ```
+//! use tensor4all_core::{factorize, Canonical, DynIndex, FactorizeOptions, TensorDynLen};
 //!
-//! let result = factorize(&tensor, &left_inds, &FactorizeOptions::default())?;
-//! // result.left * result.right ≈ tensor
+//! # fn main() -> anyhow::Result<()> {
+//! let i = DynIndex::new_dyn(2);
+//! let j = DynIndex::new_dyn(2);
+//! let tensor = TensorDynLen::from_dense(
+//!     vec![i.clone(), j.clone()],
+//!     vec![1.0, 0.0, 0.0, 1.0],
+//! )?;
+//! let result = factorize(
+//!     &tensor,
+//!     std::slice::from_ref(&i),
+//!     &FactorizeOptions::svd().with_canonical(Canonical::Left),
+//! )?;
+//!
+//! assert_eq!(result.rank, 2);
+//! assert_eq!(result.left.dims(), vec![2, 2]);
+//! # Ok(())
+//! # }
 //! ```
 
 use crate::defaults::DynIndex;

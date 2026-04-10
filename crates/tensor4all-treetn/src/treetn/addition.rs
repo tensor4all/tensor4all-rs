@@ -68,7 +68,19 @@ where
     /// incompatible site-space dimensions on any node.
     ///
     /// # Examples
-    /// ```ignore
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// # fn make_chain(site0: DynIndex, site1: DynIndex) -> TreeTN<TensorDynLen, usize> {
+    /// #     let bond = DynIndex::new_dyn(1);
+    /// #     let t0 = TensorDynLen::from_dense(vec![site0, bond.clone()], vec![1.0, 0.0]).unwrap();
+    /// #     let t1 = TensorDynLen::from_dense(vec![bond, site1], vec![1.0, 0.0]).unwrap();
+    /// #     TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap()
+    /// # }
+    /// let state_a = make_chain(DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    /// let state_b = make_chain(DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    ///
     /// let aligned = state_b.reindex_site_space_like(&state_a).unwrap();
     /// assert!(aligned.share_equivalent_site_index_network(&state_a));
     /// ```
@@ -135,8 +147,21 @@ where
     /// The direct-sum addition result with site IDs matching `self`.
     ///
     /// # Examples
-    /// ```ignore
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// # fn make_chain(site0: DynIndex, site1: DynIndex) -> TreeTN<TensorDynLen, usize> {
+    /// #     let bond = DynIndex::new_dyn(1);
+    /// #     let t0 = TensorDynLen::from_dense(vec![site0, bond.clone()], vec![1.0, 0.0]).unwrap();
+    /// #     let t1 = TensorDynLen::from_dense(vec![bond, site1], vec![1.0, 0.0]).unwrap();
+    /// #     TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap()
+    /// # }
+    /// let state_a = make_chain(DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    /// let state_b = make_chain(DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    ///
     /// let sum = state_a.add_aligned(&state_b).unwrap();
+    /// assert_eq!(sum.node_count(), 2);
     /// assert!(sum.share_equivalent_site_index_network(&state_a));
     /// ```
     pub fn add_aligned(&self, other: &Self) -> Result<Self>

@@ -894,10 +894,24 @@ impl TensorTrain {
     /// tensor train is empty.
     ///
     /// # Example
-    /// ```ignore
-    /// let tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
-    /// let dense = tt.to_dense().unwrap();
-    /// // dense now has all site indices from t0, t1, t2 (link indices contracted)
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let s0 = DynIndex::new_dyn(2);
+    /// let link = DynIndex::new_dyn(1);
+    /// let s1 = DynIndex::new_dyn(2);
+    /// let t0 = TensorDynLen::from_dense(vec![s0.clone(), link.clone()], vec![1.0, 2.0])?;
+    /// let t1 = TensorDynLen::from_dense(vec![link.clone(), s1.clone()], vec![3.0, 4.0])?;
+    ///
+    /// let tt = TensorTrain::new(vec![t0, t1])?;
+    /// let dense = tt.to_dense()?;
+    ///
+    /// assert_eq!(dense.dims(), vec![2, 2]);
+    /// assert_eq!(dense.to_vec::<f64>()?, vec![3.0, 6.0, 4.0, 8.0]);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn to_dense(&self) -> Result<TensorDynLen> {
         if self.is_empty() {
@@ -973,9 +987,21 @@ impl TensorTrain {
     /// A new tensor train scaled by the given scalar.
     ///
     /// # Example
-    /// ```ignore
+    /// ```
+    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+    /// use tensor4all_itensorlike::TensorTrain;
+    ///
+    /// # fn main() -> anyhow::Result<()> {
+    /// let s0 = DynIndex::new_dyn(2);
+    /// let tt = TensorTrain::new(vec![TensorDynLen::from_dense(
+    ///     vec![s0.clone()],
+    ///     vec![1.0, 2.0],
+    /// )?])?;
+    ///
     /// let scaled = tt.scale(AnyScalar::new_real(2.0))?;
-    /// // scaled represents 2 * tt
+    /// assert_eq!(scaled.to_dense()?.to_vec::<f64>()?, vec![2.0, 4.0]);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
         if self.is_empty() {

@@ -541,7 +541,7 @@ where
     /// Returns an error if a node's site space cannot be found.
     ///
     /// # Examples
-    /// ```ignore
+    /// ```
     /// use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorLike};
     /// use tensor4all_treetn::TreeTN;
     ///
@@ -608,7 +608,7 @@ where
     /// call fails (see its documentation for details).
     ///
     /// # Examples
-    /// ```ignore
+    /// ```
     /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IndexLike, TensorDynLen, TensorLike};
     /// use tensor4all_treetn::TreeTN;
     ///

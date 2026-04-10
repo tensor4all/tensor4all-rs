@@ -41,21 +41,24 @@ use tenferro_tensor::KeepCountScalar;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use tensor4all_simplett::mpo::{contract, MPO, ContractionOptions, ContractionAlgorithm};
 ///
-/// let mpo_a = MPO::identity(&[2, 2])?;
-/// let mpo_b = MPO::identity(&[2, 2])?;
+/// let mpo_a = MPO::<f64>::identity(&[2, 2]).unwrap();
+/// let mpo_b = MPO::<f64>::identity(&[2, 2]).unwrap();
 /// let options = ContractionOptions::default();
 ///
 /// // Use naive algorithm
-/// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::Naive, &options)?;
+/// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::Naive, &options).unwrap();
+/// assert_eq!(result.site_dims(), vec![(2, 2), (2, 2)]);
 ///
 /// // Use zip-up algorithm for memory efficiency
-/// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::ZipUp, &options)?;
+/// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::ZipUp, &options).unwrap();
+/// assert_eq!(result.len(), 2);
 ///
 /// // Use variational fitting for controlled bond dimension
-/// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::Fit, &options)?;
+/// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::Fit, &options).unwrap();
+/// assert_eq!(result.len(), 2);
 /// ```
 pub fn contract<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,

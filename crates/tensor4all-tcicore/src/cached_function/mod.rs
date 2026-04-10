@@ -434,10 +434,40 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
     /// use bnum::types::U2048;
-    /// // impl CacheKey for U2048 { ... } // see CacheKey docs
-    /// let cf = CachedFunction::with_key_type::<U2048>(f, &local_dims)?;
+    /// use tensor4all_tcicore::{CacheKey, CachedFunction};
+    ///
+    /// #[derive(Clone, Hash, PartialEq, Eq)]
+    /// struct U2048Key(U2048);
+    ///
+    /// impl CacheKey for U2048Key {
+    ///     const BITS_COUNT: u32 = 2048;
+    ///     const ZERO: Self = Self(U2048::ZERO);
+    ///     const ONE: Self = Self(U2048::ONE);
+    ///
+    ///     fn from_usize(v: usize) -> Self {
+    ///         Self(U2048::from(v as u64))
+    ///     }
+    ///
+    ///     fn checked_mul(self, rhs: Self) -> Option<Self> {
+    ///         self.0.checked_mul(rhs.0).map(Self)
+    ///     }
+    ///
+    ///     fn wrapping_add(self, rhs: Self) -> Self {
+    ///         Self(self.0.wrapping_add(rhs.0))
+    ///     }
+    /// }
+    ///
+    /// let local_dims = vec![2usize; 1025];
+    /// let cf = CachedFunction::with_key_type::<U2048Key>(
+    ///     |idx: &[usize]| idx.iter().sum::<usize>(),
+    ///     &local_dims,
+    /// ).unwrap();
+    /// let zeros = vec![0usize; 1025];
+    ///
+    /// assert_eq!(cf.eval(&zeros), 0);
+    /// assert_eq!(cf.key_type(), "custom");
     /// ```
     pub fn with_key_type<K: CacheKey>(
         func: F,
