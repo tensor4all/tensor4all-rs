@@ -47,6 +47,47 @@ fn make_two_matching_treetns() -> (
     (tn_a, tn_b, s0, s1)
 }
 
+fn make_two_matching_treetns_different_site_ids(
+) -> (TreeTN<TensorDynLen, String>, TreeTN<TensorDynLen, String>) {
+    let s0_a = DynIndex::new_dyn(2);
+    let bond_a = DynIndex::new_dyn(3);
+    let s1_a = DynIndex::new_dyn(2);
+
+    let t0_a = TensorDynLen::from_dense(
+        vec![s0_a.clone(), bond_a.clone()],
+        vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+    )
+    .unwrap();
+    let t1_a = TensorDynLen::from_dense(
+        vec![bond_a.clone(), s1_a.clone()],
+        vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+    )
+    .unwrap();
+    let tn_a = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![t0_a, t1_a],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+
+    let s0_b = DynIndex::new_dyn(2);
+    let bond_b = DynIndex::new_dyn(2);
+    let s1_b = DynIndex::new_dyn(2);
+
+    let t0_b =
+        TensorDynLen::from_dense(vec![s0_b.clone(), bond_b.clone()], vec![0.0, 1.0, 1.0, 0.0])
+            .unwrap();
+    let t1_b =
+        TensorDynLen::from_dense(vec![bond_b.clone(), s1_b.clone()], vec![1.0, 0.0, 0.0, 1.0])
+            .unwrap();
+    let tn_b = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![t0_b, t1_b],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+
+    (tn_a, tn_b)
+}
+
 #[test]
 fn test_compute_merged_bond_indices() {
     let (tn_a, tn_b, _s0, _s1) = make_two_matching_treetns();
@@ -154,5 +195,40 @@ fn test_add_single_site() {
         dense.isapprox(&expected, 1e-10, 0.0),
         "single-site add failed: maxabs diff = {}",
         (&dense - &expected).maxabs()
+    );
+}
+
+#[test]
+fn test_reindex_site_space_like_matches_template_ids() {
+    let (tn_a, tn_b) = make_two_matching_treetns_different_site_ids();
+
+    let reindexed = tn_b.reindex_site_space_like(&tn_a).unwrap();
+    assert!(reindexed.share_equivalent_site_index_network(&tn_a));
+}
+
+#[test]
+fn test_add_aligned_accepts_equivalent_site_space_with_different_ids() {
+    let (tn_a, tn_b) = make_two_matching_treetns_different_site_ids();
+    let tn_b_aligned = tn_b.reindex_site_space_like(&tn_a).unwrap();
+
+    assert!(!tn_a.share_equivalent_site_index_network(&tn_b));
+
+    let sum = tn_a.add_aligned(&tn_b).unwrap();
+    assert!(sum.share_equivalent_site_index_network(&tn_a));
+
+    let dense_sum = sum.contract_to_tensor().unwrap();
+    let dense_expected = tn_a
+        .contract_to_tensor()
+        .unwrap()
+        .axpby(
+            tensor4all_core::AnyScalar::new_real(1.0),
+            &tn_b_aligned.contract_to_tensor().unwrap(),
+            tensor4all_core::AnyScalar::new_real(1.0),
+        )
+        .unwrap();
+    assert!(
+        dense_sum.isapprox(&dense_expected, 1e-10, 0.0),
+        "add_aligned failed: maxabs diff = {}",
+        (&dense_sum - &dense_expected).maxabs()
     );
 }

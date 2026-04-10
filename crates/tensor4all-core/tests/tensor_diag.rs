@@ -177,6 +177,67 @@ fn test_diag_tensor_rank3() {
 }
 
 #[test]
+fn test_copy_tensor_rank3() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(3);
+
+    let tensor = TensorDynLen::copy_tensor(
+        vec![i.clone(), j.clone(), k.clone()],
+        AnyScalar::new_real(1.0),
+    )
+    .unwrap();
+
+    let expected = TensorDynLen::from_diag(vec![i, j, k], vec![1.0, 1.0, 1.0]).unwrap();
+    assert!(tensor.isapprox(&expected, 1e-12, 0.0));
+}
+
+#[test]
+fn test_copy_tensor_rejects_mismatched_dimensions() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+
+    let err = TensorDynLen::copy_tensor(vec![i, j], AnyScalar::new_real(1.0)).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("DiagTensor requires all indices to have the same dimension"));
+}
+
+#[test]
+fn test_from_diag_any_real() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+
+    let tensor = TensorDynLen::from_diag_any(
+        vec![i.clone(), j.clone()],
+        vec![AnyScalar::new_real(1.0), AnyScalar::new_real(2.0)],
+    )
+    .unwrap();
+
+    let expected = TensorDynLen::from_diag(vec![i, j], vec![1.0, 2.0]).unwrap();
+    assert!(tensor.isapprox(&expected, 1e-12, 0.0));
+}
+
+#[test]
+fn test_from_diag_any_complex_promotes_payload() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+
+    let tensor = TensorDynLen::from_diag_any(
+        vec![i.clone(), j.clone()],
+        vec![AnyScalar::new_real(1.0), AnyScalar::new_complex(2.0, -0.5)],
+    )
+    .unwrap();
+
+    let expected = TensorDynLen::from_diag(
+        vec![i, j],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, -0.5)],
+    )
+    .unwrap();
+    assert!(tensor.isapprox(&expected, 1e-12, 0.0));
+}
+
+#[test]
 fn test_diag_tensor_complex() {
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);

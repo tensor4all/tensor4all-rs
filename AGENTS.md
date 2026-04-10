@@ -84,10 +84,13 @@ Only make functions `pub` when truly public API.
 - **Never access low-level APIs or internal data structures from downstream crates.** Use high-level public methods instead of directly manipulating internal representations.
 - **Use high-level APIs.** If downstream code needs low-level access, create appropriate high-level APIs rather than exposing internal details.
 - **Prefer type-generic Rust APIs.** If a public Rust library API can be expressed generically, do not introduce scalar-specific entry points such as `*_f64` / `*_c64`. Add or use a generic API instead, and prefer the generic form in library code, tests, examples, and docs. This rule does not apply to the C API / FFI boundary, where scalar-specific names may be appropriate.
+- **For dynamic-scalar APIs, prefer `AnyScalar` at the public boundary.** When a public Rust API targets a concrete dynamic tensor type such as `TensorDynLen` and cannot be fully generic over `T`, add an `AnyScalar`-accepting interface instead of forcing downstream crates to branch on `f64` vs `Complex64`.
+- **Keep scalar-specific entry points contained to low-level or compatibility layers.** `*_f64` / `*_c64` APIs are acceptable in FFI shims, storage/native bridge code, and compatibility wrappers, but not as the primary public Rust interface of higher-level crates.
 - **Examples:**
   - Instead of `match scalar { AnyScalar::F64(x) => ... }`, use `scalar.real()`, `scalar.is_complex()`, `scalar.is_zero()`
   - Instead of `AnyScalar::F64(1.0)`, use `AnyScalar::new_real(1.0)`
   - Instead of `AnyScalar::C64(z)`, use `AnyScalar::new_complex(re, im)`
+  - Instead of making downstream callers choose between `TensorDynLen::from_dense::<f64>(...)` and `TensorDynLen::from_dense::<Complex64>(...)`, provide a higher-level `TensorDynLen::from_dense_any(...)`-style API when the scalar type is only known at runtime
 
 **This applies to both library code and test code.** Tests should also use public APIs to maintain consistency and reduce maintenance burden when internal representations change.
 

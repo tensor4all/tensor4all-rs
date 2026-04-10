@@ -9,6 +9,7 @@ description = "Tree tensor networks with arbitrary graph topology for tensor4all
 
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core" }
+tensor4all-simplett = { path = "../tensor4all-simplett" }
 petgraph.workspace = true
 anyhow.workspace = true
 num-complex.workspace = true
@@ -21,4 +22,3 @@ faer = { workspace = true }
 rand_chacha.workspace = true
 tenferro.workspace = true
 tenferro-prims.workspace = true
-

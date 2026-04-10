@@ -29,6 +29,7 @@ pub mod node_name_network;
 pub mod operator;
 pub mod options;
 pub mod random;
+mod simplett_bridge;
 pub mod site_index_network;
 pub mod treetn;
 
@@ -46,6 +47,10 @@ pub use operator::{
 };
 pub use options::{CanonicalizationOptions, SplitOptions, TruncationOptions};
 pub use random::{random_treetn, LinkSpace};
+pub use simplett_bridge::{
+    tensor_train_to_treetn, tensor_train_to_treetn_with_names,
+    tensor_train_to_treetn_with_names_and_site_indices,
+};
 pub use site_index_network::SiteIndexNetwork;
 pub use treetn::{
     // Local update

@@ -3,7 +3,7 @@
 use super::*;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
-use quanticsgrids::{LayoutKind, UnfoldingScheme};
+use quanticsgrids::UnfoldingScheme;
 use std::collections::HashMap;
 use tensor4all_core::index::DynId;
 use tensor4all_core::IndexLike;
@@ -19,8 +19,7 @@ fn test_layout_query_grouped() {
         .with_unfolding_scheme(UnfoldingScheme::Grouped)
         .build()
         .unwrap();
-    assert_eq!(grid.layout_kind(), LayoutKind::Grouped);
-    assert_eq!(grid.unfolding_scheme(), Some(UnfoldingScheme::Grouped));
+    assert_eq!(detect_layout_kind(&grid).unwrap(), GridLayoutKind::Grouped);
 }
 
 #[test]
@@ -30,8 +29,7 @@ fn test_layout_query_fused() {
         .with_unfolding_scheme(UnfoldingScheme::Fused)
         .build()
         .unwrap();
-    assert_eq!(grid.layout_kind(), LayoutKind::Fused);
-    assert_eq!(grid.unfolding_scheme(), Some(UnfoldingScheme::Fused));
+    assert_eq!(detect_layout_kind(&grid).unwrap(), GridLayoutKind::Fused);
 }
 
 #[test]
@@ -41,8 +39,10 @@ fn test_layout_query_interleaved() {
         .with_unfolding_scheme(UnfoldingScheme::Interleaved)
         .build()
         .unwrap();
-    assert_eq!(grid.layout_kind(), LayoutKind::Interleaved);
-    assert_eq!(grid.unfolding_scheme(), Some(UnfoldingScheme::Interleaved));
+    assert_eq!(
+        detect_layout_kind(&grid).unwrap(),
+        GridLayoutKind::Interleaved
+    );
 }
 
 #[test]
@@ -51,8 +51,7 @@ fn test_layout_query_1d_uses_grid_scheme() {
         .with_variable_names(&["x"])
         .build()
         .unwrap();
-    assert_eq!(grid.layout_kind(), LayoutKind::Fused);
-    assert_eq!(grid.unfolding_scheme(), Some(UnfoldingScheme::Fused));
+    assert_eq!(detect_layout_kind(&grid).unwrap(), GridLayoutKind::Fused);
 }
 
 #[test]
@@ -68,8 +67,7 @@ fn test_layout_query_custom_layout_reports_none() {
     .build()
     .unwrap();
 
-    assert_eq!(grid.layout_kind(), LayoutKind::Custom);
-    assert_eq!(grid.unfolding_scheme(), None);
+    assert_eq!(detect_layout_kind(&grid).unwrap(), GridLayoutKind::Custom);
 }
 
 // ============================================================================
@@ -123,6 +121,24 @@ fn test_shift_on_grid_fused_2d() {
     )
     .unwrap();
     assert_eq!(op.mpo.node_count(), 3); // fused: 3 sites
+}
+
+#[test]
+fn test_shift_on_grid_interleaved_2d_structure() {
+    let grid = DiscretizedGrid::builder(&[3, 3])
+        .with_variable_names(&["x", "y"])
+        .with_lower_bound(&[0.0, 0.0])
+        .with_upper_bound(&[1.0, 1.0])
+        .with_unfolding_scheme(UnfoldingScheme::Interleaved)
+        .build()
+        .unwrap();
+    let op = shift_operator_on_grid(
+        &grid,
+        &[1, 0],
+        &[BoundaryCondition::Periodic, BoundaryCondition::Periodic],
+    )
+    .unwrap();
+    assert_eq!(op.mpo.node_count(), 6); // interleaved: 2 * 3 sites
 }
 
 // ============================================================================
@@ -326,6 +342,42 @@ fn test_shift_on_grid_grouped_1d_correctness() {
 }
 
 #[test]
+fn test_shift_on_grid_grouped_1d_open_boundary_correctness() {
+    let r = 4;
+    let n: usize = 1 << r;
+
+    let grid = DiscretizedGrid::builder(&[r])
+        .with_variable_names(&["x"])
+        .with_unfolding_scheme(UnfoldingScheme::Grouped)
+        .build()
+        .unwrap();
+
+    for offset in [-3i64, -1, 0, 1, 3, 7] {
+        let op = shift_operator_on_grid(&grid, &[offset], &[BoundaryCondition::Open]).unwrap();
+        let matrix = contract_operator_to_dense_matrix(&op, r, 2);
+
+        for x in 0..n {
+            let input_idx = grouped_flat_index(&[x], &[r]);
+            let expected_y = x as i64 + offset;
+
+            for y_idx in 0..n {
+                let expected_val = if expected_y == y_idx as i64 {
+                    Complex64::one()
+                } else {
+                    Complex64::zero()
+                };
+                let actual = matrix[y_idx][input_idx];
+                assert!(
+                    (actual - expected_val).norm() < 1e-10,
+                    "1D grouped open shift offset={}: x={} y_idx={} got ({:.6},{:.6}) expected ({:.6},{:.6})",
+                    offset, x, y_idx, actual.re, actual.im, expected_val.re, expected_val.im
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn test_shift_on_grid_grouped_2d_correctness() {
     let r_x = 3;
     let r_y = 2;
@@ -460,6 +512,21 @@ fn fused_flat_index(values: &[usize], nvariables: usize, r: usize) -> usize {
     idx
 }
 
+/// Convert interleaved flat index (x_val, y_val, ...) to the dense matrix index.
+///
+/// For interleaved layout with equal resolution `r`, the binary sites are ordered as
+/// `[x_0, y_0, ..., x_1, y_1, ...]` where `_0` denotes the most significant bit.
+fn interleaved_flat_index(values: &[usize], r: usize) -> usize {
+    let mut idx = 0usize;
+    for level in 0..r {
+        for &value in values {
+            let bit = (value >> (r - 1 - level)) & 1;
+            idx = (idx << 1) | bit;
+        }
+    }
+    idx
+}
+
 #[test]
 fn test_shift_on_grid_fused_2d_correctness() {
     let r = 3;
@@ -548,6 +615,52 @@ fn test_shift_on_grid_fused_2d_both_vars_correctness() {
                 assert!(
                     (actual - expected_val).norm() < 1e-10,
                     "Fused 2D shift x+2,y-1: x={} y={} out_idx={} got ({:.6},{:.6}) expected ({:.6},{:.6})",
+                    x, y, out_idx, actual.re, actual.im, expected_val.re, expected_val.im
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_shift_on_grid_interleaved_2d_correctness() {
+    let r = 3;
+    let n: usize = 1 << r;
+    let total_sites = 2 * r;
+    let total_dim: usize = 1 << total_sites;
+
+    let grid = DiscretizedGrid::builder(&[r, r])
+        .with_variable_names(&["x", "y"])
+        .with_unfolding_scheme(UnfoldingScheme::Interleaved)
+        .build()
+        .unwrap();
+
+    let op = shift_operator_on_grid(
+        &grid,
+        &[2, -1],
+        &[BoundaryCondition::Periodic, BoundaryCondition::Periodic],
+    )
+    .unwrap();
+
+    let matrix = contract_operator_to_dense_matrix(&op, total_sites, 2);
+
+    for x in 0..n {
+        for y in 0..n {
+            let input_idx = interleaved_flat_index(&[x, y], r);
+            let expected_x = ((x as i64 + 2).rem_euclid(n as i64)) as usize;
+            let expected_y = ((y as i64 - 1).rem_euclid(n as i64)) as usize;
+            let expected_idx = interleaved_flat_index(&[expected_x, expected_y], r);
+
+            for out_idx in 0..total_dim {
+                let expected_val = if out_idx == expected_idx {
+                    Complex64::one()
+                } else {
+                    Complex64::zero()
+                };
+                let actual = matrix[out_idx][input_idx];
+                assert!(
+                    (actual - expected_val).norm() < 1e-10,
+                    "Interleaved 2D shift x+2,y-1: x={} y={} out_idx={} got ({:.6},{:.6}) expected ({:.6},{:.6})",
                     x, y, out_idx, actual.re, actual.im, expected_val.re, expected_val.im
                 );
             }
@@ -653,27 +766,91 @@ fn test_affine_on_grid_grouped_2d() {
         &[BoundaryCondition::Periodic, BoundaryCondition::Periodic],
     )
     .unwrap();
-    // Grouped with equal Rs delegates to affine_operator(r=3, ...)
-    // which produces fused-form with 3 sites.
-    assert_eq!(op.mpo.node_count(), 3);
+    assert_eq!(op.mpo.node_count(), 6);
 }
 
 #[test]
-fn test_affine_on_grid_interleaved_returns_error() {
+fn test_affine_on_grid_interleaved_2d() {
     let grid = DiscretizedGrid::builder(&[3, 3])
         .with_variable_names(&["x", "y"])
         .with_unfolding_scheme(UnfoldingScheme::Interleaved)
         .build()
         .unwrap();
     let params = crate::AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
-    let result = affine_operator_on_grid(
+    let op = affine_operator_on_grid(
         &grid,
         &params,
         &[BoundaryCondition::Periodic, BoundaryCondition::Periodic],
-    );
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("not yet implemented"));
+    )
+    .unwrap();
+    assert_eq!(op.mpo.node_count(), 6);
+}
+
+fn assert_affine_binary_layout_swap(
+    grid: &DiscretizedGrid,
+    flat_index: impl Fn(&[usize]) -> usize,
+) {
+    let r = grid.rs()[0];
+    let n: usize = 1 << r;
+    let total_sites = 2 * r;
+    let total_dim: usize = 1 << total_sites;
+
+    let params = crate::AffineParams::from_integers(vec![0, 1, 1, 0], vec![0, 0], 2, 2).unwrap();
+    let op = affine_operator_on_grid(
+        grid,
+        &params,
+        &[BoundaryCondition::Periodic, BoundaryCondition::Periodic],
+    )
+    .unwrap();
+    let matrix = contract_operator_to_dense_matrix(&op, total_sites, 2);
+
+    for x in 0..n {
+        for y in 0..n {
+            let input_idx = flat_index(&[x, y]);
+            let expected_idx = flat_index(&[y, x]);
+            for out_idx in 0..total_dim {
+                let expected_val = if out_idx == expected_idx {
+                    Complex64::one()
+                } else {
+                    Complex64::zero()
+                };
+                let actual = matrix[out_idx][input_idx];
+                assert!(
+                    (actual - expected_val).norm() < 1e-10,
+                    "Affine swap: x={} y={} out_idx={} got ({:.6},{:.6}) expected ({:.6},{:.6})",
+                    x,
+                    y,
+                    out_idx,
+                    actual.re,
+                    actual.im,
+                    expected_val.re,
+                    expected_val.im
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_affine_on_grid_grouped_2d_correctness() {
+    let r = 3;
+    let grid = DiscretizedGrid::builder(&[r, r])
+        .with_variable_names(&["x", "y"])
+        .with_unfolding_scheme(UnfoldingScheme::Grouped)
+        .build()
+        .unwrap();
+
+    assert_affine_binary_layout_swap(&grid, |values| grouped_flat_index(values, &[r, r]));
+}
+
+#[test]
+fn test_affine_on_grid_interleaved_2d_correctness() {
+    let r = 3;
+    let grid = DiscretizedGrid::builder(&[r, r])
+        .with_variable_names(&["x", "y"])
+        .with_unfolding_scheme(UnfoldingScheme::Interleaved)
+        .build()
+        .unwrap();
+
+    assert_affine_binary_layout_swap(&grid, |values| interleaved_flat_index(values, r));
 }

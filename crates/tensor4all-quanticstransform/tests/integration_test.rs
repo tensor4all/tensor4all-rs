@@ -13,17 +13,21 @@ use std::collections::HashMap;
 use approx::assert_relative_eq;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
+use quanticsgrids::{DiscretizedGrid, UnfoldingScheme};
 
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::{IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{ColMajorArrayRef, IndexLike, TensorDynLen, TensorIndex};
 use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
-use tensor4all_treetn::{apply_linear_operator, ApplyOptions, LinearOperator, TreeTN};
+use tensor4all_treetn::{
+    apply_linear_operator, factorize_tensor_to_treetn, tensor_train_to_treetn, ApplyOptions,
+    LinearOperator, TreeTN, TreeTopology,
+};
 
 use tensor4all_quanticstransform::{
-    binaryop_operator, binaryop_single_operator, flip_operator, flip_operator_multivar,
-    phase_rotation_operator_multivar, quantics_fourier_operator, shift_operator,
-    shift_operator_multivar, triangle_operator, BinaryCoeffs, BoundaryCondition, FTCore,
-    FourierOptions, TriangleType,
+    affine_pullback_operator_on_grid, binaryop_operator, binaryop_single_operator, flip_operator,
+    flip_operator_multivar, phase_rotation_operator_multivar, quantics_fourier_operator,
+    shift_operator, shift_operator_multivar, shift_operator_on_grid, triangle_operator,
+    BinaryCoeffs, BoundaryCondition, FTCore, FourierOptions, TriangleType,
 };
 
 /// Type alias for the default index type.
@@ -33,108 +37,10 @@ type DynIndex = Index<DynId, TagSet>;
 // Helper functions for TensorTrain <-> TreeTN conversion
 // ============================================================================
 
-/// Convert a TensorTrain (MPS state) to a TreeTN.
-///
-/// The MPS is converted to a chain-like TreeTN where each site tensor
-/// has indices (left_bond, site, right_bond) mapped to TensorDynLen format.
-///
-/// # Returns
-/// A tuple of (TreeTN, site_indices) where site_indices are the external indices
-/// that can be used for operator application.
 fn tensortrain_to_treetn(
     tt: &TensorTrain<Complex64>,
 ) -> (TreeTN<TensorDynLen, usize>, Vec<DynIndex>) {
-    let n = tt.len();
-    assert!(n > 0, "TensorTrain must have at least one site");
-
-    // Create site indices
-    let site_indices: Vec<DynIndex> = (0..n)
-        .map(|i| {
-            let dim = tt.site_tensor(i).site_dim();
-            Index::new_dyn(dim)
-        })
-        .collect();
-
-    // Create bond indices
-    let mut bond_indices: Vec<DynIndex> = Vec::with_capacity(n + 1);
-    for i in 0..=n {
-        let dim = if i == 0 {
-            1
-        } else {
-            tt.site_tensor(i - 1).right_dim()
-        };
-        bond_indices.push(Index::new_dyn(dim));
-    }
-
-    // Build tensors for TreeTN
-    let mut tensors: Vec<TensorDynLen> = Vec::with_capacity(n);
-    let node_names: Vec<usize> = (0..n).collect();
-
-    for i in 0..n {
-        let tensor = tt.site_tensor(i);
-        let left_dim = tensor.left_dim();
-        let site_dim = tensor.site_dim();
-        let right_dim = tensor.right_dim();
-
-        // Tensor indices: (left_bond, site, right_bond)
-        // For boundary tensors, we omit the dimension-1 bond
-        let mut indices: Vec<DynIndex> = Vec::with_capacity(3);
-        let mut dims_vec: Vec<usize> = Vec::with_capacity(3);
-
-        if i > 0 {
-            indices.push(bond_indices[i].clone());
-            dims_vec.push(left_dim);
-        }
-        indices.push(site_indices[i].clone());
-        dims_vec.push(site_dim);
-        if i < n - 1 {
-            indices.push(bond_indices[i + 1].clone());
-            dims_vec.push(right_dim);
-        }
-
-        // Copy data from Tensor3 to flat vector
-        let total_size: usize = dims_vec.iter().product();
-        let mut data: Vec<Complex64> = vec![Complex64::zero(); total_size];
-
-        if i == 0 && n == 1 {
-            // Single tensor case: just site index
-            for s in 0..site_dim {
-                data[s] = *tensor.get3(0, s, 0);
-            }
-        } else if i == 0 {
-            // First tensor: (site, right_bond)
-            for s in 0..site_dim {
-                for r in 0..right_dim {
-                    let idx = s + site_dim * r;
-                    data[idx] = *tensor.get3(0, s, r);
-                }
-            }
-        } else if i == n - 1 {
-            // Last tensor: (left_bond, site)
-            for l in 0..left_dim {
-                for s in 0..site_dim {
-                    let idx = l + left_dim * s;
-                    data[idx] = *tensor.get3(l, s, 0);
-                }
-            }
-        } else {
-            // Middle tensor: (left_bond, site, right_bond)
-            for l in 0..left_dim {
-                for s in 0..site_dim {
-                    for r in 0..right_dim {
-                        let idx = l + left_dim * (s + site_dim * r);
-                        data[idx] = *tensor.get3(l, s, r);
-                    }
-                }
-            }
-        }
-
-        let tensor_dyn = TensorDynLen::from_dense(indices, data).unwrap();
-        tensors.push(tensor_dyn);
-    }
-
-    let treetn = TreeTN::from_tensors(tensors, node_names).expect("Failed to create TreeTN");
-    (treetn, site_indices)
+    tensor_train_to_treetn(tt).expect("TensorTrain -> TreeTN conversion should succeed")
 }
 
 /// Create a product state MPS representing a specific integer value x.
@@ -1284,23 +1190,8 @@ fn test_shift_open_boundary() {
     );
 
     // Test cases: (x, offset, expected)
-    // With Open BC, the result depends on whether x + offset_mod causes carry overflow.
-    //
-    // Implementation detail:
-    // - offset is normalized to offset_mod = offset.rem_euclid(N) in [0, N)
-    // - nbc = (offset - offset_mod) / N is the Euclidean quotient
-    // - For Open BC, the operator is identically zero only when |offset| >= N
-    // - Otherwise, local carry overflow at the MSB zeros out-of-range results
-    //
-    // So for Open BC with the cases below:
-    // - shift(x, offset) with offset >= 0: result is zero if x + offset >= N
-    // - shift(x, offset) with offset < 0:
-    //   - offset_mod = N + offset (e.g., -1 mod 8 = 7)
-    //   - nbc = -1 even though |offset| < N, so the operator is not globally zeroed
-    //   - x + offset_mod may still cause local carry overflow
-    //   - e.g., shift(7, -3): offset_mod = 5, 7 + 5 = 12 >= 8, overflow -> zero
-    //   - e.g., shift(0, -1): offset_mod = 7, 0 + 7 = 7 < 8, no overflow -> result = 7
-    //
+    // With Open BC, shift(x, offset) = x + offset when that stays in [0, N),
+    // and zero otherwise.
     let test_cases: Vec<(usize, i64, Option<usize>)> = vec![
         // No overflow cases (positive offset)
         (0, 0, Some(0)), // 0 + 0 = 0, in range
@@ -1311,13 +1202,12 @@ fn test_shift_open_boundary() {
         (7, 1, None), // 7 + 1 = 8 >= 8, overflow
         (6, 3, None), // 6 + 3 = 9 >= 8, overflow
         (4, 5, None), // 4 + 5 = 9 >= 8, overflow
-        // Negative offset cases
-        // shift(x, -k) -> offset_mod = 8 - k, x + offset_mod >= 8 iff x >= k
-        (0, -1, Some(7)), // offset_mod = 7, 0 + 7 = 7 < 8, no overflow
-        (0, -7, Some(1)), // offset_mod = 1, 0 + 1 = 1 < 8, no overflow
-        (1, -1, None),    // offset_mod = 7, 1 + 7 = 8 >= 8, overflow
-        (2, -1, None),    // offset_mod = 7, 2 + 7 = 9 >= 8, overflow
-        (7, -7, None),    // offset_mod = 1, 7 + 1 = 8 >= 8, overflow
+        // Underflow cases (negative offset)
+        (0, -1, None),    // 0 - 1 < 0, underflow
+        (0, -7, None),    // 0 - 7 < 0, underflow
+        (1, -1, Some(0)), // 1 - 1 = 0, in range
+        (2, -1, Some(1)), // 2 - 1 = 1, in range
+        (7, -7, Some(0)), // 7 - 7 = 0, in range
     ];
 
     for (x, offset, expected) in test_cases {
@@ -3005,6 +2895,236 @@ fn test_upper_plus_lower_is_complement() {
                     );
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn test_apply_grid_shift_with_spectator_site_preserves_site_indices() {
+    let grid = DiscretizedGrid::builder(&[2])
+        .with_variable_names(&["x"])
+        .with_unfolding_scheme(UnfoldingScheme::Grouped)
+        .build()
+        .unwrap();
+
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let spectator = DynIndex::new_dyn(2);
+    let b01 = DynIndex::new_dyn(2);
+    let b12 = DynIndex::new_dyn(2);
+
+    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
+    let t1 =
+        TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 8]).unwrap();
+    let t2 = TensorDynLen::from_dense(vec![b12.clone(), spectator.clone()], vec![1.0; 4]).unwrap();
+
+    let state = TreeTN::from_tensors(vec![t0, t1, t2], vec![0usize, 1usize, 2usize]).unwrap();
+
+    let mut op = shift_operator_on_grid(&grid, &[1], &[BoundaryCondition::Periodic]).unwrap();
+    op.align_to_state(&state).unwrap();
+
+    let result = apply_linear_operator(&op, &state, ApplyOptions::default()).unwrap();
+    let (result_site_indices, _) = result.all_site_indices().unwrap();
+    let result_site_ids: std::collections::HashSet<_> =
+        result_site_indices.iter().map(|idx| *idx.id()).collect();
+    let expected_site_ids: std::collections::HashSet<_> =
+        [s0.clone(), s1.clone(), spectator.clone()]
+            .iter()
+            .map(|idx| *idx.id())
+            .collect();
+
+    assert_eq!(result_site_ids, expected_site_ids);
+    assert_eq!(result_site_indices.len(), expected_site_ids.len());
+}
+
+#[test]
+fn test_apply_grid_shift_with_spectator_site_preserves_site_indices_on_factorized_state() {
+    let grid = DiscretizedGrid::builder(&[2])
+        .with_variable_names(&["x"])
+        .with_unfolding_scheme(UnfoldingScheme::Grouped)
+        .build()
+        .unwrap();
+
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let spectator = DynIndex::new_dyn(2);
+    let dense = TensorDynLen::from_dense(
+        vec![s0.clone(), s1.clone(), spectator.clone()],
+        vec![10.0, 30.0, 20.0, 40.0, 11.0, 31.0, 21.0, 41.0],
+    )
+    .unwrap();
+
+    let mut nodes = HashMap::new();
+    nodes.insert(0usize, vec![*s0.id()]);
+    nodes.insert(1usize, vec![*s1.id()]);
+    nodes.insert(2usize, vec![*spectator.id()]);
+    let topology = TreeTopology::new(nodes, vec![(0usize, 1usize), (1usize, 2usize)]);
+    let state = factorize_tensor_to_treetn(&dense, &topology, &2usize).unwrap();
+
+    let mut op = shift_operator_on_grid(&grid, &[1], &[BoundaryCondition::Periodic]).unwrap();
+    op.align_to_state(&state).unwrap();
+    let expected_site_ids: std::collections::HashSet<_> =
+        [s0.clone(), s1.clone(), spectator.clone()]
+            .iter()
+            .map(|idx| *idx.id())
+            .collect();
+
+    let result_naive = apply_linear_operator(&op, &state, ApplyOptions::naive()).unwrap();
+    let (naive_site_indices, _) = result_naive.all_site_indices().unwrap();
+    let naive_site_ids: std::collections::HashSet<_> =
+        naive_site_indices.iter().map(|idx| *idx.id()).collect();
+    assert_eq!(naive_site_ids, expected_site_ids);
+    assert_eq!(naive_site_indices.len(), expected_site_ids.len());
+
+    let result_zipup = apply_linear_operator(&op, &state, ApplyOptions::default()).unwrap();
+    let (result_site_indices, _) = result_zipup.all_site_indices().unwrap();
+    let result_site_ids: std::collections::HashSet<_> =
+        result_site_indices.iter().map(|idx| *idx.id()).collect();
+    assert_eq!(result_site_ids, expected_site_ids);
+    assert_eq!(result_site_indices.len(), expected_site_ids.len());
+}
+
+#[test]
+fn test_apply_grid_affine_on_grouped_factorized_state_matches_chain_topology() {
+    let grid = DiscretizedGrid::builder(&[2, 2])
+        .with_variable_names(&["x", "y"])
+        .with_lower_bound(&[0.0, 0.0])
+        .with_upper_bound(&[1.0, 1.0])
+        .with_unfolding_scheme(UnfoldingScheme::Grouped)
+        .build()
+        .unwrap();
+
+    let site_indices = vec![
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    ];
+    let dense = TensorDynLen::from_dense(
+        site_indices.clone(),
+        vec![
+            0.0, 1.0, 10.0, 11.0, 0.5, 1.5, 10.5, 11.5, 1.0, 2.0, 11.0, 12.0, 1.5, 2.5, 11.5, 12.5,
+        ],
+    )
+    .unwrap();
+
+    let mut nodes = HashMap::new();
+    nodes.insert(0usize, vec![*site_indices[0].id()]);
+    nodes.insert(1usize, vec![*site_indices[1].id()]);
+    nodes.insert(2usize, vec![*site_indices[2].id()]);
+    nodes.insert(3usize, vec![*site_indices[3].id()]);
+    let topology = TreeTopology::new(
+        nodes,
+        vec![(0usize, 1usize), (1usize, 2usize), (2usize, 3usize)],
+    );
+    let state = factorize_tensor_to_treetn(&dense, &topology, &3usize).unwrap();
+
+    let params = tensor4all_quanticstransform::AffineParams::from_integers(
+        vec![1, 1, 0, 1],
+        vec![0, 0],
+        2,
+        2,
+    )
+    .unwrap();
+    let mut op = tensor4all_quanticstransform::affine_operator_on_grid(
+        &grid,
+        &params,
+        &[BoundaryCondition::Open, BoundaryCondition::Open],
+    )
+    .unwrap();
+    op.align_to_state(&state).unwrap();
+
+    let mut state_edges: Vec<_> = state.site_index_network().edges().collect();
+    let mut op_edges: Vec<_> = op.mpo().site_index_network().edges().collect();
+    state_edges.sort();
+    op_edges.sort();
+    assert_eq!(state_edges, op_edges);
+    assert!(state.same_topology(op.mpo()));
+
+    let _result = apply_linear_operator(&op, &state, ApplyOptions::naive()).unwrap();
+}
+
+#[test]
+fn test_affine_pullback_on_grouped_grid_matches_discrete_pullback_values() {
+    let grid = DiscretizedGrid::builder(&[2, 2])
+        .with_variable_names(&["x", "y"])
+        .with_lower_bound(&[0.0, 0.0])
+        .with_upper_bound(&[1.0, 1.0])
+        .with_unfolding_scheme(UnfoldingScheme::Grouped)
+        .build()
+        .unwrap();
+
+    let site_indices: Vec<DynIndex> = (0..grid.len()).map(|_| DynIndex::new_dyn(2)).collect();
+    let mut dense_data = vec![Complex64::zero(); 1usize << grid.len()];
+    for x_idx in 1..=4 {
+        for y_idx in 1..=4 {
+            let coords = grid.grididx_to_origcoord(&[x_idx, y_idx]).unwrap();
+            let value = Complex64::new(coords[0] + 10.0 * coords[1], 0.0);
+            let quantics = grid.grididx_to_quantics(&[x_idx, y_idx]).unwrap();
+            let bits: Vec<usize> = quantics
+                .iter()
+                .map(|&digit| usize::try_from(digit - 1).unwrap())
+                .collect();
+            let flat_idx: usize = bits
+                .iter()
+                .enumerate()
+                .map(|(axis, &digit)| digit << axis)
+                .sum();
+            dense_data[flat_idx] = value;
+        }
+    }
+
+    let dense_tensor = TensorDynLen::from_dense(site_indices.clone(), dense_data).unwrap();
+    let mut nodes = HashMap::new();
+    for (node, idx) in site_indices.iter().enumerate() {
+        nodes.insert(node, vec![*idx.id()]);
+    }
+    let topology = TreeTopology::new(
+        nodes,
+        vec![(0usize, 1usize), (1usize, 2usize), (2usize, 3usize)],
+    );
+    let state = factorize_tensor_to_treetn(&dense_tensor, &topology, &3usize).unwrap();
+
+    let params = tensor4all_quanticstransform::AffineParams::from_integers(
+        vec![1, 0, 1, 1],
+        vec![0, 0],
+        2,
+        2,
+    )
+    .unwrap();
+    let mut op = affine_pullback_operator_on_grid(
+        &grid,
+        &params,
+        &[BoundaryCondition::Open, BoundaryCondition::Open],
+    )
+    .unwrap();
+    op.align_to_state(&state).unwrap();
+
+    let result = apply_linear_operator(&op, &state, ApplyOptions::default()).unwrap();
+
+    for x_idx in 1..=4 {
+        for y_idx in 1..=4 {
+            let coords = grid.grididx_to_origcoord(&[x_idx, y_idx]).unwrap();
+            let x = coords[0];
+            let y = coords[1];
+            let mapped_x = x + y;
+            let expected = match grid.origcoord_to_grididx(&[mapped_x, y]) {
+                Ok(_) => mapped_x + 10.0 * y,
+                Err(_) => 0.0,
+            };
+
+            let quantics = grid.grididx_to_quantics(&[x_idx, y_idx]).unwrap();
+            let values_data: Vec<usize> = quantics
+                .iter()
+                .map(|&digit| usize::try_from(digit - 1).unwrap())
+                .collect();
+            let values_shape = [site_indices.len(), 1];
+            let values = ColMajorArrayRef::new(&values_data, &values_shape);
+            let actual = result.evaluate_at(&site_indices, values).unwrap()[0].real();
+            assert!(
+                (actual - expected).abs() < 1.0e-10,
+                "pullback mismatch at x_idx={x_idx}, y_idx={y_idx}: actual={actual}, expected={expected}"
+            );
         }
     }
 }

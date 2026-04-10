@@ -5,12 +5,12 @@
 //! - [`compute_merged_bond_indices`]: Compute merged bond index information from two networks
 
 use petgraph::visit::EdgeRef;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
-use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
+use tensor4all_core::{AnyScalar, IndexLike, TensorIndex, TensorLike};
 
 use super::TreeTN;
 
@@ -36,6 +36,120 @@ where
     T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
+    fn sorted_site_space(site_space: &HashSet<T::Index>) -> Vec<T::Index>
+    where
+        T::Index: Clone,
+        <T::Index as IndexLike>::Id: Ord,
+    {
+        let mut indices: Vec<_> = site_space.iter().cloned().collect();
+        indices.sort_by(|left, right| {
+            left.dim()
+                .cmp(&right.dim())
+                .then_with(|| left.id().cmp(right.id()))
+        });
+        indices
+    }
+
+    /// Reindex this TreeTN's site space to match a template network.
+    ///
+    /// The topology must match, and each corresponding node must carry the same
+    /// number of site indices with the same dimensions. Site indices are paired
+    /// node-by-node after sorting by `(dim, id)` for deterministic matching.
+    ///
+    /// # Arguments
+    /// * `template` - Reference TreeTN whose site index IDs should be adopted
+    ///
+    /// # Returns
+    /// A new TreeTN with the same tensor data as `self`, but site index IDs
+    /// rewritten to match `template`.
+    ///
+    /// # Errors
+    /// Returns an error if the two networks have different topologies or
+    /// incompatible site-space dimensions on any node.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let aligned = state_b.reindex_site_space_like(&state_a).unwrap();
+    /// assert!(aligned.share_equivalent_site_index_network(&state_a));
+    /// ```
+    pub fn reindex_site_space_like(&self, template: &Self) -> Result<Self>
+    where
+        V: Ord,
+        T::Index: Clone,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        if !self.same_topology(template) {
+            bail!("reindex_site_space_like: networks have incompatible topologies");
+        }
+
+        let mut old_indices = Vec::new();
+        let mut new_indices = Vec::new();
+
+        for node_name in self.node_names() {
+            let self_site_space = self
+                .site_space(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("site space not found for node {:?}", node_name))?;
+            let template_site_space = template.site_space(&node_name).ok_or_else(|| {
+                anyhow::anyhow!("template site space not found for node {:?}", node_name)
+            })?;
+
+            if self_site_space.len() != template_site_space.len() {
+                bail!(
+                    "reindex_site_space_like: node {:?} has {} site indices in self but {} in template",
+                    node_name,
+                    self_site_space.len(),
+                    template_site_space.len()
+                );
+            }
+
+            let self_sorted = Self::sorted_site_space(self_site_space);
+            let template_sorted = Self::sorted_site_space(template_site_space);
+
+            for (old_index, new_index) in self_sorted.iter().zip(template_sorted.iter()) {
+                if old_index.dim() != new_index.dim() {
+                    bail!(
+                        "reindex_site_space_like: node {:?} site dimension mismatch {} != {}",
+                        node_name,
+                        old_index.dim(),
+                        new_index.dim()
+                    );
+                }
+                old_indices.push(old_index.clone());
+                new_indices.push(new_index.clone());
+            }
+        }
+
+        self.replaceinds(&old_indices, &new_indices)
+    }
+
+    /// Add two TreeTNs after aligning the second operand's site index IDs to the first.
+    ///
+    /// This is useful when two states share the same topology and site dimensions
+    /// but were constructed with different site index IDs.
+    ///
+    /// # Arguments
+    /// * `other` - The other TreeTN to align and add
+    ///
+    /// # Returns
+    /// The direct-sum addition result with site IDs matching `self`.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let sum = state_a.add_aligned(&state_b).unwrap();
+    /// assert!(sum.share_equivalent_site_index_network(&state_a));
+    /// ```
+    pub fn add_aligned(&self, other: &Self) -> Result<Self>
+    where
+        V: Ord,
+        T::Index: Clone,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        let other_aligned = other.reindex_site_space_like(self)?;
+        self.add(&other_aligned)
+    }
+
     /// Compute merged bond indices for direct-sum addition.
     ///
     /// For each edge in the network, compute the merged bond information
