@@ -1284,23 +1284,8 @@ fn test_shift_open_boundary() {
     );
 
     // Test cases: (x, offset, expected)
-    // With Open BC, the result depends on whether x + offset_mod causes carry overflow.
-    //
-    // Implementation detail:
-    // - offset is normalized to offset_mod = offset.rem_euclid(N) in [0, N)
-    // - nbc = (offset - offset_mod) / N is the Euclidean quotient
-    // - For Open BC, the operator is identically zero only when |offset| >= N
-    // - Otherwise, local carry overflow at the MSB zeros out-of-range results
-    //
-    // So for Open BC with the cases below:
-    // - shift(x, offset) with offset >= 0: result is zero if x + offset >= N
-    // - shift(x, offset) with offset < 0:
-    //   - offset_mod = N + offset (e.g., -1 mod 8 = 7)
-    //   - nbc = -1 even though |offset| < N, so the operator is not globally zeroed
-    //   - x + offset_mod may still cause local carry overflow
-    //   - e.g., shift(7, -3): offset_mod = 5, 7 + 5 = 12 >= 8, overflow -> zero
-    //   - e.g., shift(0, -1): offset_mod = 7, 0 + 7 = 7 < 8, no overflow -> result = 7
-    //
+    // With Open BC, shift(x, offset) = x + offset when that stays in [0, N),
+    // and zero otherwise.
     let test_cases: Vec<(usize, i64, Option<usize>)> = vec![
         // No overflow cases (positive offset)
         (0, 0, Some(0)), // 0 + 0 = 0, in range
@@ -1311,13 +1296,12 @@ fn test_shift_open_boundary() {
         (7, 1, None), // 7 + 1 = 8 >= 8, overflow
         (6, 3, None), // 6 + 3 = 9 >= 8, overflow
         (4, 5, None), // 4 + 5 = 9 >= 8, overflow
-        // Negative offset cases
-        // shift(x, -k) -> offset_mod = 8 - k, x + offset_mod >= 8 iff x >= k
-        (0, -1, Some(7)), // offset_mod = 7, 0 + 7 = 7 < 8, no overflow
-        (0, -7, Some(1)), // offset_mod = 1, 0 + 1 = 1 < 8, no overflow
-        (1, -1, None),    // offset_mod = 7, 1 + 7 = 8 >= 8, overflow
-        (2, -1, None),    // offset_mod = 7, 2 + 7 = 9 >= 8, overflow
-        (7, -7, None),    // offset_mod = 1, 7 + 1 = 8 >= 8, overflow
+        // Underflow cases (negative offset)
+        (0, -1, None),    // 0 - 1 < 0, underflow
+        (0, -7, None),    // 0 - 7 < 0, underflow
+        (1, -1, Some(0)), // 1 - 1 = 0, in range
+        (2, -1, Some(1)), // 2 - 1 = 1, in range
+        (7, -7, Some(0)), // 7 - 7 = 0, in range
     ];
 
     for (x, offset, expected) in test_cases {

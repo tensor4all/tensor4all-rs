@@ -25,7 +25,9 @@
 use std::hash::Hash;
 
 use anyhow::Result;
-use tensor4all_core::{IndexLike, TensorIndex, TensorLike};
+use tensor4all_core::{
+    DynIndex, IndexLike, LinearizationOrder, TensorDynLen, TensorIndex, TensorLike,
+};
 
 use super::TreeTN;
 
@@ -178,6 +180,77 @@ where
         for (old, new) in old_indices.iter().zip(new_indices.iter()) {
             result = result.replaceind(old, new)?;
         }
+        Ok(result)
+    }
+}
+
+impl<V> TreeTN<TensorDynLen, V>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+{
+    /// Replace one site index with multiple site indices using an exact reshape.
+    ///
+    /// This is a TreeTN-level wrapper around [`TensorDynLen::unfuse_index`].
+    /// It updates the owning node tensor and the site-index metadata, without
+    /// introducing any approximation.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let fused = DynIndex::new_dyn(4);
+    /// let tensor = TensorDynLen::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    /// let tn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+    /// let left = DynIndex::new_dyn(2);
+    /// let right = DynIndex::new_dyn(2);
+    ///
+    /// let unfused = tn
+    ///     .replace_site_index_with_indices(
+    ///         &fused,
+    ///         &[left.clone(), right.clone()],
+    ///         LinearizationOrder::ColumnMajor,
+    ///     )
+    ///     .unwrap();
+    ///
+    /// let dense = unfused.contract_to_tensor().unwrap();
+    /// let expected = TensorDynLen::from_dense(vec![left, right], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    /// assert!((&dense - &expected).maxabs() < 1.0e-12);
+    /// ```
+    pub fn replace_site_index_with_indices(
+        &self,
+        old_index: &DynIndex,
+        new_indices: &[DynIndex],
+        order: LinearizationOrder,
+    ) -> Result<Self> {
+        let node_name = self
+            .site_index_network
+            .find_node_by_index(old_index)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "site index {:?} not found in TreeTN site index network",
+                    old_index.id()
+                )
+            })?;
+        let node_idx = self
+            .node_index(&node_name)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", node_name))?;
+        let tensor = self
+            .tensor(node_idx)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_name))?;
+        let new_tensor = tensor.unfuse_index(old_index, new_indices, order)?;
+
+        let mut result = self.clone();
+        result.replace_tensor(node_idx, new_tensor)?;
+
+        if let Some(dir) = result.ortho_towards.remove(old_index) {
+            for new_index in new_indices {
+                result.ortho_towards.insert(new_index.clone(), dir.clone());
+            }
+        }
+
         Ok(result)
     }
 }

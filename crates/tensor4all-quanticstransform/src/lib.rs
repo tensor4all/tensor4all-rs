@@ -35,7 +35,6 @@ mod common;
 mod cumsum;
 mod flip;
 mod fourier;
-mod grid_aware;
 mod phase_rotation;
 mod shift;
 
@@ -48,9 +47,5 @@ pub use common::{BoundaryCondition, CarryDirection};
 pub use cumsum::{cumsum_operator, triangle_operator, TriangleType};
 pub use flip::{flip_operator, flip_operator_multivar};
 pub use fourier::{quantics_fourier_operator, FTCore, FourierOptions};
-pub use grid_aware::{
-    affine_operator_on_grid, detect_unfolding_scheme, shift_operator_on_grid,
-    shift_operator_on_grid_by_tag,
-};
 pub use phase_rotation::{phase_rotation_operator, phase_rotation_operator_multivar};
 pub use shift::{shift_operator, shift_operator_multivar};

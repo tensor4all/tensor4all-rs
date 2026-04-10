@@ -242,6 +242,46 @@ pub enum AllowedPairs<'a> {
     Specified(&'a [(usize, usize)]),
 }
 
+/// Linearization order used when fusing or unfusing multiple logical indices
+/// into one physical index.
+///
+/// This matters for exact reshape-style operations such as replacing one fused
+/// index with several unfused indices.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::LinearizationOrder;
+///
+/// assert_eq!(LinearizationOrder::ColumnMajor.as_str(), "column-major");
+/// assert_eq!(LinearizationOrder::RowMajor.as_str(), "row-major");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinearizationOrder {
+    /// First index changes fastest.
+    ColumnMajor,
+    /// Last index changes fastest.
+    RowMajor,
+}
+
+impl LinearizationOrder {
+    /// Return a short human-readable description.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::LinearizationOrder;
+    ///
+    /// assert_eq!(LinearizationOrder::ColumnMajor.as_str(), "column-major");
+    /// ```
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ColumnMajor => "column-major",
+            Self::RowMajor => "row-major",
+        }
+    }
+}
+
 // ============================================================================
 // TensorLike trait (fully generic)
 // ============================================================================
@@ -543,7 +583,7 @@ pub trait TensorLike: TensorIndex {
     /// Validate structural consistency of this tensor.
     ///
     /// The default implementation does nothing (always succeeds).
-    /// Types with internal structure (e.g., [`BlockTensor`]) can override
+    /// Types with internal structure (for example, block-sparse tensors) can override
     /// this to check invariants such as index sharing between blocks.
     fn validate(&self) -> Result<()> {
         Ok(())

@@ -492,6 +492,248 @@ fn test_apply_linear_operator_partial() {
 }
 
 #[test]
+fn test_apply_linear_operator_partial_preserves_site_index_set() {
+    use crate::operator::apply_linear_operator;
+    use crate::operator::ApplyOptions;
+
+    let mut state = TreeTN::<TensorDynLen, String>::new();
+    let s0 = make_index(2);
+    let s1 = make_index(2);
+    let s2 = make_index(2);
+    let b01 = make_index(2);
+    let b12 = make_index(2);
+
+    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 4]).unwrap();
+    let t1 =
+        TensorDynLen::from_dense(vec![b01.clone(), s1.clone(), b12.clone()], vec![1.0; 8]).unwrap();
+    let t2 = TensorDynLen::from_dense(vec![b12.clone(), s2.clone()], vec![1.0; 4]).unwrap();
+
+    let n0 = state.add_tensor("site0".to_string(), t0).unwrap();
+    let n1 = state.add_tensor("site1".to_string(), t1).unwrap();
+    let n2 = state.add_tensor("site2".to_string(), t2).unwrap();
+    state.connect(n0, &b01, n1, &b01).unwrap();
+    state.connect(n1, &b12, n2, &b12).unwrap();
+
+    let mut mpo = TreeTN::<TensorDynLen, String>::new();
+    let s0_in = make_index(2);
+    let s0_out = make_index(2);
+    let s1_in = make_index(2);
+    let s1_out = make_index(2);
+    let b_mpo = make_index(1);
+
+    let id_data = vec![1.0, 0.0, 0.0, 1.0];
+    let t0_mpo = TensorDynLen::from_dense(
+        vec![s0_out.clone(), s0_in.clone(), b_mpo.clone()],
+        id_data.clone(),
+    )
+    .unwrap();
+    let t1_mpo =
+        TensorDynLen::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data)
+            .unwrap();
+
+    let n0_mpo = mpo.add_tensor("site0".to_string(), t0_mpo).unwrap();
+    let n1_mpo = mpo.add_tensor("site1".to_string(), t1_mpo).unwrap();
+    mpo.connect(n0_mpo, &b_mpo, n1_mpo, &b_mpo).unwrap();
+
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    input_mapping.insert(
+        "site0".to_string(),
+        IndexMapping {
+            true_index: s0.clone(),
+            internal_index: s0_in.clone(),
+        },
+    );
+    input_mapping.insert(
+        "site1".to_string(),
+        IndexMapping {
+            true_index: s1.clone(),
+            internal_index: s1_in.clone(),
+        },
+    );
+    output_mapping.insert(
+        "site0".to_string(),
+        IndexMapping {
+            true_index: s0.clone(),
+            internal_index: s0_out.clone(),
+        },
+    );
+    output_mapping.insert(
+        "site1".to_string(),
+        IndexMapping {
+            true_index: s1.clone(),
+            internal_index: s1_out.clone(),
+        },
+    );
+
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::default()).unwrap();
+    let (result_site_indices, _) = result.all_site_indices().unwrap();
+    let result_site_ids: HashSet<_> = result_site_indices.iter().map(|idx| *idx.id()).collect();
+    let expected_site_ids: HashSet<_> = [s0, s1, s2].iter().map(|idx| *idx.id()).collect();
+
+    assert_eq!(result_site_ids, expected_site_ids);
+    assert_eq!(result_site_indices.len(), expected_site_ids.len());
+}
+
+#[test]
+fn test_apply_linear_operator_partial_shift_factorized_rooted_state_intermediate_indices() {
+    let s0 = make_index(2);
+    let s1 = make_index(2);
+    let spectator = make_index(2);
+    let dense = TensorDynLen::from_dense(
+        vec![s0.clone(), s1.clone(), spectator.clone()],
+        vec![10.0, 30.0, 20.0, 40.0, 11.0, 31.0, 21.0, 41.0],
+    )
+    .unwrap();
+
+    let mut nodes = HashMap::new();
+    nodes.insert(0usize, vec![*s0.id()]);
+    nodes.insert(1usize, vec![*s1.id()]);
+    nodes.insert(2usize, vec![*spectator.id()]);
+    let topology = crate::TreeTopology::new(nodes, vec![(0usize, 1usize), (1usize, 2usize)]);
+    let state = crate::factorize_tensor_to_treetn(&dense, &topology, &2usize).unwrap();
+    let mut state_edges = state.site_index_network().edges().collect::<Vec<_>>();
+    state_edges.sort();
+    assert_eq!(state_edges, vec![(0usize, 1usize), (1usize, 2usize)]);
+
+    let mut mpo = TreeTN::<TensorDynLen, usize>::new();
+    let s0_in = make_index(2);
+    let s0_out = make_index(2);
+    let s1_in = make_index(2);
+    let s1_out = make_index(2);
+    let b_mpo = make_index(1);
+
+    let id_data = vec![1.0, 0.0, 0.0, 1.0];
+    let t0_mpo = TensorDynLen::from_dense(
+        vec![s0_out.clone(), s0_in.clone(), b_mpo.clone()],
+        id_data.clone(),
+    )
+    .unwrap();
+    let t1_mpo =
+        TensorDynLen::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1_in.clone()], id_data)
+            .unwrap();
+
+    let n0_mpo = mpo.add_tensor(0usize, t0_mpo).unwrap();
+    let n1_mpo = mpo.add_tensor(1usize, t1_mpo).unwrap();
+    mpo.connect(n0_mpo, &b_mpo, n1_mpo, &b_mpo).unwrap();
+
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    input_mapping.insert(
+        0usize,
+        IndexMapping {
+            true_index: s0.clone(),
+            internal_index: s0_in.clone(),
+        },
+    );
+    input_mapping.insert(
+        1usize,
+        IndexMapping {
+            true_index: s1.clone(),
+            internal_index: s1_in.clone(),
+        },
+    );
+    output_mapping.insert(
+        0usize,
+        IndexMapping {
+            true_index: s0.clone(),
+            internal_index: s0_out.clone(),
+        },
+    );
+    output_mapping.insert(
+        1usize,
+        IndexMapping {
+            true_index: s1.clone(),
+            internal_index: s1_out.clone(),
+        },
+    );
+
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+
+    let full_operator = extend_operator_to_full_space(&operator, &state).unwrap();
+    let mut output_keys: Vec<_> = full_operator.output_mappings().keys().cloned().collect();
+    output_keys.sort();
+    assert_eq!(output_keys, vec![0usize, 1usize, 2usize]);
+    let transformed_state = transform_state_to_input(&full_operator, &state).unwrap();
+    let contracted_tensor = transformed_state
+        .contract_naive(full_operator.mpo())
+        .unwrap();
+
+    let contracted_ids: HashSet<_> = contracted_tensor
+        .external_indices()
+        .iter()
+        .map(|idx| *idx.id())
+        .collect();
+    let expected_ids: HashSet<_> = [
+        *full_operator
+            .get_output_mapping(&0)
+            .unwrap()
+            .internal_index
+            .id(),
+        *full_operator
+            .get_output_mapping(&1)
+            .unwrap()
+            .internal_index
+            .id(),
+        *full_operator
+            .get_output_mapping(&2)
+            .unwrap()
+            .internal_index
+            .id(),
+    ]
+    .into_iter()
+    .collect();
+
+    assert_eq!(
+        contracted_ids,
+        expected_ids,
+        "input ids {:?}, output ids {:?}, contracted ids {:?}",
+        [
+            *full_operator
+                .get_input_mapping(&0)
+                .unwrap()
+                .internal_index
+                .id(),
+            *full_operator
+                .get_input_mapping(&1)
+                .unwrap()
+                .internal_index
+                .id(),
+        ],
+        [
+            *full_operator
+                .get_output_mapping(&0)
+                .unwrap()
+                .internal_index
+                .id(),
+            *full_operator
+                .get_output_mapping(&1)
+                .unwrap()
+                .internal_index
+                .id(),
+        ],
+        contracted_tensor
+            .external_indices()
+            .iter()
+            .map(|idx| *idx.id())
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        contracted_tensor.external_indices().len(),
+        expected_ids.len()
+    );
+
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+    let (result_site_indices, _) = result.all_site_indices().unwrap();
+    let result_site_ids: HashSet<_> = result_site_indices.iter().map(|idx| *idx.id()).collect();
+    let expected_true_ids: HashSet<_> = [s0, s1, spectator].iter().map(|idx| *idx.id()).collect();
+    assert_eq!(result_site_ids, expected_true_ids);
+    assert_eq!(result_site_indices.len(), expected_true_ids.len());
+}
+
+#[test]
 fn test_apply_linear_operator_non_contiguous_chain() {
     let (state, sites) = build_chain_state();
     let operator = build_identity_operator(&[sites[0].clone(), sites[2].clone()]);

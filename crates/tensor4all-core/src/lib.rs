@@ -97,7 +97,7 @@ pub use tensor4all_tensorbackend::{
 };
 pub use tensor_like::{
     AllowedPairs, Canonical, DirectSumResult, FactorizeAlg, FactorizeError, FactorizeOptions,
-    FactorizeResult, TensorLike,
+    FactorizeResult, LinearizationOrder, TensorLike,
 };
 
 // Contraction - backwards compatibility

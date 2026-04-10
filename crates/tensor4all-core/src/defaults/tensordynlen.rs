@@ -2,6 +2,7 @@ use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
 use crate::index_ops::{common_ind_positions, prepare_contraction, prepare_contraction_pairs};
 use crate::storage::{AnyScalar, Storage};
+use crate::tensor_like::LinearizationOrder;
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::Zero;
@@ -1580,6 +1581,20 @@ fn column_major_offset(dims: &[usize], vals: &[usize]) -> Result<usize> {
 // ============================================================================
 
 impl TensorDynLen {
+    fn any_scalar_payload_to_complex(data: Vec<AnyScalar>) -> Vec<Complex64> {
+        data.into_iter()
+            .map(|value| {
+                value
+                    .as_c64()
+                    .unwrap_or_else(|| Complex64::new(value.real(), 0.0))
+            })
+            .collect()
+    }
+
+    fn any_scalar_payload_to_real(data: Vec<AnyScalar>) -> Vec<f64> {
+        data.into_iter().map(|value| value.real()).collect()
+    }
+
     fn validate_dense_payload_len(data_len: usize, dims: &[usize]) -> Result<()> {
         let expected_len = checked_total_size(dims)?;
         anyhow::ensure!(
@@ -1641,6 +1656,39 @@ impl TensorDynLen {
         Self::from_native(indices, native)
     }
 
+    /// Create a tensor from dense payload data provided as [`AnyScalar`] values.
+    ///
+    /// This is the preferred public API when the caller only knows the scalar
+    /// type at runtime.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{AnyScalar, TensorDynLen};
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense_any(
+    ///     vec![i, j],
+    ///     vec![
+    ///         AnyScalar::new_real(1.0),
+    ///         AnyScalar::new_complex(0.0, 1.0),
+    ///         AnyScalar::new_real(2.0),
+    ///         AnyScalar::new_real(3.0),
+    ///     ],
+    /// ).unwrap();
+    ///
+    /// assert!(tensor.is_complex());
+    /// assert_eq!(tensor.dims(), vec![2, 2]);
+    /// ```
+    pub fn from_dense_any(indices: Vec<DynIndex>, data: Vec<AnyScalar>) -> Result<Self> {
+        if data.iter().any(AnyScalar::is_complex) {
+            Self::from_dense(indices, Self::any_scalar_payload_to_complex(data))
+        } else {
+            Self::from_dense(indices, Self::any_scalar_payload_to_real(data))
+        }
+    }
+
     /// Create a diagonal tensor from diagonal payload data with explicit indices.
     ///
     /// The public native bridge currently materializes diagonal payloads densely, so
@@ -1652,6 +1700,138 @@ impl TensorDynLen {
         Self::validate_diag_payload_len(data.len(), &dims)?;
         let native = diag_native_tensor_from_col_major(&data, dims.len())?;
         Self::from_native(indices, native)
+    }
+
+    /// Create a diagonal tensor from diagonal payload data provided as
+    /// [`AnyScalar`] values.
+    ///
+    /// This is the preferred public API when the caller only knows the scalar
+    /// type at runtime.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{AnyScalar, TensorDynLen};
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(2);
+    /// let tensor = TensorDynLen::from_diag_any(
+    ///     vec![i, j],
+    ///     vec![AnyScalar::new_real(1.0), AnyScalar::new_complex(2.0, -1.0)],
+    /// ).unwrap();
+    ///
+    /// assert!(tensor.is_complex());
+    /// assert_eq!(tensor.dims(), vec![2, 2]);
+    /// ```
+    pub fn from_diag_any(indices: Vec<DynIndex>, data: Vec<AnyScalar>) -> Result<Self> {
+        if data.iter().any(AnyScalar::is_complex) {
+            Self::from_diag(indices, Self::any_scalar_payload_to_complex(data))
+        } else {
+            Self::from_diag(indices, Self::any_scalar_payload_to_real(data))
+        }
+    }
+
+    /// Create a copy tensor whose nonzero entries are `value` on the diagonal.
+    ///
+    /// For indices `[i, j, k]`, the returned tensor satisfies
+    /// `T[i, j, k] = value` when `i = j = k`, and zero otherwise.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{AnyScalar, TensorDynLen};
+    /// use tensor4all_core::index::{DefaultIndex as Index, DynId};
+    ///
+    /// let i = Index::new_dyn(2);
+    /// let j = Index::new_dyn(2);
+    /// let k = Index::new_dyn(2);
+    /// let tensor = TensorDynLen::copy_tensor(
+    ///     vec![i, j, k],
+    ///     AnyScalar::new_real(1.0),
+    /// ).unwrap();
+    ///
+    /// assert_eq!(tensor.dims(), vec![2, 2, 2]);
+    /// ```
+    pub fn copy_tensor(indices: Vec<DynIndex>, value: AnyScalar) -> Result<Self> {
+        if indices.is_empty() {
+            return Self::from_dense_any(vec![], vec![value]);
+        }
+        let dim = indices[0].dim();
+        let data = vec![value; dim];
+        Self::from_diag_any(indices, data)
+    }
+
+    /// Replace one fused index with multiple indices using an exact reshape.
+    ///
+    /// The caller must specify how the old fused index should be decoded into
+    /// the new indices via `order`.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{DynIndex, LinearizationOrder, TensorDynLen, TensorLike};
+    ///
+    /// let fused = DynIndex::new_dyn(4);
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let tensor = TensorDynLen::from_dense(vec![fused.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    ///
+    /// let unfused = tensor
+    ///     .unfuse_index(&fused, &[i.clone(), j.clone()], LinearizationOrder::ColumnMajor)
+    ///     .unwrap();
+    ///
+    /// let expected = TensorDynLen::from_dense(vec![i, j], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    /// assert!(unfused.isapprox(&expected, 1e-12, 0.0));
+    /// ```
+    pub fn unfuse_index(
+        &self,
+        old_index: &DynIndex,
+        new_indices: &[DynIndex],
+        order: LinearizationOrder,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            !new_indices.is_empty(),
+            "unfuse_index requires at least one replacement index"
+        );
+
+        let axis = self
+            .indices
+            .iter()
+            .position(|idx| idx.id() == old_index.id())
+            .ok_or_else(|| anyhow::anyhow!("index {:?} not found in tensor", old_index.id()))?;
+
+        let replacement_dims: Vec<usize> = new_indices.iter().map(DynIndex::dim).collect();
+        let replacement_product = checked_product(&replacement_dims)?;
+        anyhow::ensure!(
+            replacement_product == old_index.dim(),
+            "product of new index dimensions must match the replaced index dimension"
+        );
+
+        let mut result_indices =
+            Vec::with_capacity(self.indices.len() - 1usize + new_indices.len());
+        result_indices.extend_from_slice(&self.indices[..axis]);
+        result_indices.extend(new_indices.iter().cloned());
+        result_indices.extend_from_slice(&self.indices[axis + 1..]);
+        Self::validate_indices(&result_indices);
+
+        let old_dims = self.dims();
+        let mut new_dims = Vec::with_capacity(old_dims.len() - 1usize + replacement_dims.len());
+        new_dims.extend_from_slice(&old_dims[..axis]);
+        new_dims.extend_from_slice(&replacement_dims);
+        new_dims.extend_from_slice(&old_dims[axis + 1..]);
+
+        let old_data = self.to_vec_any()?;
+        let mut new_data = vec![AnyScalar::new_real(0.0); old_data.len()];
+        for (old_linear, value) in old_data.into_iter().enumerate() {
+            let old_multi = decode_col_major_linear(old_linear, &old_dims)?;
+            let split_multi = decode_linear_with_order(old_multi[axis], &replacement_dims, order)?;
+            let mut new_multi = Vec::with_capacity(new_dims.len());
+            new_multi.extend_from_slice(&old_multi[..axis]);
+            new_multi.extend_from_slice(&split_multi);
+            new_multi.extend_from_slice(&old_multi[axis + 1..]);
+            let new_linear = encode_col_major_linear(&new_multi, &new_dims)?;
+            new_data[new_linear] = value;
+        }
+
+        Self::from_dense_any(result_indices, new_data)
     }
 
     /// Create a scalar (0-dimensional) tensor from a supported element value.
@@ -1717,6 +1897,19 @@ impl TensorDynLen {
         native_tensor_primal_to_dense_col_major(&self.native)
     }
 
+    fn to_vec_any(&self) -> Result<Vec<AnyScalar>> {
+        if self.is_complex() {
+            self.to_vec::<Complex64>().map(|data| {
+                data.into_iter()
+                    .map(|value| AnyScalar::new_complex(value.re, value.im))
+                    .collect()
+            })
+        } else {
+            self.to_vec::<f64>()
+                .map(|data| data.into_iter().map(AnyScalar::new_real).collect())
+        }
+    }
+
     /// Extract tensor data as a column-major `Vec<f64>`.
     ///
     /// Prefer the generic [`to_vec::<f64>()`](Self::to_vec) method.
@@ -1760,4 +1953,84 @@ impl TensorDynLen {
     pub fn is_complex(&self) -> bool {
         self.native.scalar_type() == NativeScalarType::C64
     }
+}
+
+fn checked_product(dims: &[usize]) -> Result<usize> {
+    dims.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| anyhow::anyhow!("dimension product overflow"))
+    })
+}
+
+fn decode_col_major_linear(linear: usize, dims: &[usize]) -> Result<Vec<usize>> {
+    let total = checked_product(dims)?;
+    anyhow::ensure!(
+        linear < total,
+        "linear offset {} out of bounds for dims {:?}",
+        linear,
+        dims
+    );
+    let mut remaining = linear;
+    let mut out = Vec::with_capacity(dims.len());
+    for &dim in dims {
+        out.push(remaining % dim);
+        remaining /= dim;
+    }
+    Ok(out)
+}
+
+fn encode_col_major_linear(indices: &[usize], dims: &[usize]) -> Result<usize> {
+    anyhow::ensure!(
+        indices.len() == dims.len(),
+        "index rank {} does not match dims {:?}",
+        indices.len(),
+        dims
+    );
+    let mut linear = 0usize;
+    let mut stride = 1usize;
+    for (&index, &dim) in indices.iter().zip(dims.iter()) {
+        anyhow::ensure!(
+            index < dim,
+            "index {} out of bounds for dimension {}",
+            index,
+            dim
+        );
+        linear += index * stride;
+        stride = stride
+            .checked_mul(dim)
+            .ok_or_else(|| anyhow::anyhow!("stride overflow"))?;
+    }
+    Ok(linear)
+}
+
+fn decode_linear_with_order(
+    linear: usize,
+    dims: &[usize],
+    order: LinearizationOrder,
+) -> Result<Vec<usize>> {
+    let total = checked_product(dims)?;
+    anyhow::ensure!(
+        linear < total,
+        "linear offset {} out of bounds for dims {:?}",
+        linear,
+        dims
+    );
+
+    let mut remaining = linear;
+    let mut out = vec![0usize; dims.len()];
+    match order {
+        LinearizationOrder::ColumnMajor => {
+            for (slot, &dim) in out.iter_mut().zip(dims.iter()) {
+                *slot = remaining % dim;
+                remaining /= dim;
+            }
+        }
+        LinearizationOrder::RowMajor => {
+            for (slot, &dim) in out.iter_mut().rev().zip(dims.iter().rev()) {
+                *slot = remaining % dim;
+                remaining /= dim;
+            }
+        }
+    }
+    Ok(out)
 }

@@ -5,7 +5,7 @@
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
-use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
+use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
 
 use crate::common::{
     embed_single_var_mpo, tensortrain_to_linear_operator,
@@ -95,6 +95,14 @@ pub(crate) fn shift_mpo(
     }
     if r > 63 {
         anyhow::bail!("Number of sites must be at most 63 to avoid integer overflow");
+    }
+
+    if bc == BoundaryCondition::Open && offset < 0 {
+        let positive = offset
+            .checked_neg()
+            .ok_or_else(|| anyhow::anyhow!("open-boundary shift offset overflow"))?;
+        let mpo = shift_mpo(r, positive, bc)?;
+        return transpose_binary_operator_mpo(&mpo);
     }
 
     let n_max = 1i64 << r;
@@ -221,6 +229,30 @@ pub(crate) fn shift_mpo(
     }
 
     Ok(mpo)
+}
+
+fn transpose_binary_operator_mpo(mpo: &TensorTrain<Complex64>) -> Result<TensorTrain<Complex64>> {
+    let mut transposed = Vec::with_capacity(mpo.len());
+    for site in 0..mpo.len() {
+        let tensor = mpo.site_tensor(site);
+        let mut new_tensor =
+            tensor3_zeros(tensor.left_dim(), tensor.site_dim(), tensor.right_dim());
+        for left in 0..tensor.left_dim() {
+            for right in 0..tensor.right_dim() {
+                for out_bit in 0..2 {
+                    for in_bit in 0..2 {
+                        let old_site = out_bit * 2 + in_bit;
+                        let new_site = in_bit * 2 + out_bit;
+                        new_tensor.set3(left, new_site, right, *tensor.get3(left, old_site, right));
+                    }
+                }
+            }
+        }
+        transposed.push(new_tensor);
+    }
+
+    TensorTrain::new(transposed)
+        .map_err(|e| anyhow::anyhow!("Failed to transpose binary shift MPO: {}", e))
 }
 
 #[cfg(test)]

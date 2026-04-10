@@ -241,6 +241,19 @@ where
         }
     }
 
+    let mut children_by_parent: HashMap<V, Vec<V>> = HashMap::new();
+    for (node, parent) in &traversal_order {
+        if let Some(parent) = parent {
+            children_by_parent
+                .entry(parent.clone())
+                .or_default()
+                .push(node.clone());
+        }
+    }
+    for children in children_by_parent.values_mut() {
+        children.sort();
+    }
+
     // Reverse traversal order to process leaves first (post-order)
     traversal_order.reverse();
 
@@ -249,6 +262,8 @@ where
 
     // Store the resulting node tensors
     let mut node_tensors: HashMap<V, T> = HashMap::new();
+    // Store the bond each processed child uses to connect to its parent.
+    let mut child_bonds: HashMap<V, T::Index> = HashMap::new();
 
     // Use provided factorization options with Left canonical direction
     let factorize_options = FactorizeOptions {
@@ -263,11 +278,28 @@ where
         // Get the index IDs for this node
         let node_ids = topology.nodes.get(node).unwrap();
 
-        // Find physical indices for this node in current_tensor by matching IDs
+        // Keep this node's physical indices and the bonds to already-factorized
+        // children on the left side. This preserves the requested tree topology
+        // instead of collapsing all processed children directly into the root.
         let current_indices = current_tensor.external_indices();
-        let left_inds: Vec<_> = node_ids
+        let mut desired_ids: HashSet<<T::Index as IndexLike>::Id> =
+            node_ids.iter().cloned().collect();
+        if let Some(children) = children_by_parent.get(node) {
+            for child in children {
+                let bond = child_bonds.get(child).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Missing child bond for node {:?} while processing parent {:?}",
+                        child,
+                        node
+                    )
+                })?;
+                desired_ids.insert(bond.id().clone());
+            }
+        }
+        let left_inds: Vec<_> = current_indices
             .iter()
-            .filter_map(|id| current_indices.iter().find(|idx| idx.id() == id).cloned())
+            .filter(|idx| desired_ids.contains(idx.id()))
+            .cloned()
             .collect();
 
         if left_inds.is_empty() && current_indices.len() > 1 {
@@ -291,6 +323,19 @@ where
         let factorize_result = current_tensor
             .factorize(&left_inds, &factorize_options)
             .map_err(|e| anyhow::anyhow!("Factorization failed: {:?}", e))?;
+
+        let left_indices = factorize_result.left.external_indices();
+        let right_indices = factorize_result.right.external_indices();
+        let shared_bonds =
+            tensor4all_core::index_ops::common_inds::<T::Index>(&left_indices, &right_indices);
+        if shared_bonds.len() != 1 {
+            return Err(anyhow::anyhow!(
+                "Expected exactly one parent bond for node {:?}, found {}",
+                node,
+                shared_bonds.len()
+            ));
+        }
+        child_bonds.insert(node.clone(), shared_bonds[0].clone());
 
         // Store left as the node's tensor (with physical indices + bond to parent)
         node_tensors.insert(node.clone(), factorize_result.left);
