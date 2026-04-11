@@ -157,6 +157,25 @@ impl TreeTciGraph {
     }
 
     /// Return the two sides of the edge bipartition.
+    ///
+    /// Removing an edge from a tree splits the sites into two disjoint sets.
+    /// Returns `(left_key, right_key)` where left contains the subtree on the
+    /// `u` side and right contains the subtree on the `v` side.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::{TreeTciEdge, TreeTciGraph};
+    ///
+    /// // Tree: 0 -- 1 -- 2
+    /// let graph = TreeTciGraph::linear_chain(3).unwrap();
+    /// let edge = TreeTciEdge::new(0, 1);
+    /// let (left, right) = graph.subregion_vertices(edge).unwrap();
+    ///
+    /// // Removing edge (0,1) splits into {0} and {1,2}
+    /// assert_eq!(left.as_slice(), &[0]);
+    /// assert_eq!(right.as_slice(), &[1, 2]);
+    /// ```
     pub fn subregion_vertices(&self, edge: TreeTciEdge) -> Result<(SubtreeKey, SubtreeKey)> {
         let (u, v) = self.separate_vertices(edge)?;
         Ok((
@@ -166,6 +185,28 @@ impl TreeTciGraph {
     }
 
     /// Return edges adjacent to a site, excluding any explicitly combined edges.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::{TreeTciEdge, TreeTciGraph};
+    ///
+    /// // Star: 0 -- 1, 0 -- 2, 0 -- 3
+    /// let graph = TreeTciGraph::new(4, &[
+    ///     TreeTciEdge::new(0, 1),
+    ///     TreeTciEdge::new(0, 2),
+    ///     TreeTciEdge::new(0, 3),
+    /// ]).unwrap();
+    ///
+    /// // All edges adjacent to site 0
+    /// let all = graph.adjacent_edges(0, &[]);
+    /// assert_eq!(all.len(), 3);
+    ///
+    /// // Exclude one edge
+    /// let filtered = graph.adjacent_edges(0, &[TreeTciEdge::new(0, 2)]);
+    /// assert_eq!(filtered.len(), 2);
+    /// assert!(!filtered.contains(&TreeTciEdge::new(0, 2)));
+    /// ```
     pub fn adjacent_edges(&self, site: usize, combined_edges: &[TreeTciEdge]) -> Vec<TreeTciEdge> {
         if site >= self.n_sites {
             return Vec::new();
@@ -232,6 +273,19 @@ impl TreeTciGraph {
     }
 
     /// Return the canonical edge between two adjacent sites.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::{TreeTciEdge, TreeTciGraph};
+    ///
+    /// let graph = TreeTciGraph::linear_chain(3).unwrap();
+    /// let edge = graph.edge_between(2, 1).unwrap();
+    /// assert_eq!(edge, TreeTciEdge::new(1, 2));
+    ///
+    /// // Non-adjacent sites produce an error
+    /// assert!(graph.edge_between(0, 2).is_err());
+    /// ```
     pub fn edge_between(&self, a: usize, b: usize) -> Result<TreeTciEdge> {
         let edge = TreeTciEdge::new(a, b);
         self.separate_vertices(edge)?;
@@ -239,6 +293,25 @@ impl TreeTciGraph {
     }
 
     /// Return `(parents, distances)` from a BFS rooted at `root`.
+    ///
+    /// `parents[i]` is `Some(parent)` for all nodes except the root.
+    /// `distances[i]` is the graph distance from `root` to node `i`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::TreeTciGraph;
+    ///
+    /// // Chain: 0 -- 1 -- 2 -- 3
+    /// let graph = TreeTciGraph::linear_chain(4).unwrap();
+    /// let (parents, distances) = graph.bfs_tree(0).unwrap();
+    ///
+    /// assert_eq!(parents[0], None);       // root has no parent
+    /// assert_eq!(parents[1], Some(0));
+    /// assert_eq!(parents[2], Some(1));
+    /// assert_eq!(parents[3], Some(2));
+    /// assert_eq!(distances, vec![0, 1, 2, 3]);
+    /// ```
     pub fn bfs_tree(&self, root: usize) -> Result<(Vec<Option<usize>>, Vec<usize>)> {
         ensure!(root < self.n_sites, "root site {} is out of bounds", root);
         let mut parents = vec![None; self.n_sites];
@@ -312,7 +385,28 @@ impl TreeTciGraph {
         }
     }
 
-    /// Create a linear chain graph: 0—1—2—…—(n-1).
+    /// Create a linear chain graph: 0--1--2--...--(*n*-1).
+    ///
+    /// This is a convenience constructor for the most common topology.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::TreeTciGraph;
+    ///
+    /// let chain = TreeTciGraph::linear_chain(4).unwrap();
+    /// assert_eq!(chain.n_sites(), 4);
+    /// assert_eq!(chain.edges().len(), 3);
+    /// assert_eq!(chain.neighbors(1).unwrap(), vec![0, 2]);
+    ///
+    /// // Single site has no edges
+    /// let single = TreeTciGraph::linear_chain(1).unwrap();
+    /// assert_eq!(single.n_sites(), 1);
+    /// assert_eq!(single.edges().len(), 0);
+    ///
+    /// // Zero sites is an error
+    /// assert!(TreeTciGraph::linear_chain(0).is_err());
+    /// ```
     pub fn linear_chain(n_sites: usize) -> Result<Self> {
         if n_sites == 0 {
             return Err(anyhow!("linear_chain requires at least 1 site"));

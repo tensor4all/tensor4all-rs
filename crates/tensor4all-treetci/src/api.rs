@@ -8,6 +8,10 @@ use tensor4all_treetn::TreeTN;
 
 /// High-level TreeTCI return type:
 /// `(treetn, ranks_per_iter, normalized_errors_per_iter)`.
+///
+/// - `treetn`: The materialized tree tensor network.
+/// - `ranks_per_iter`: Maximum bond dimension at each iteration.
+/// - `normalized_errors_per_iter`: Normalized bond error at each iteration.
 pub type TreeTciRunResult = (
     TreeTN<tensor4all_core::TensorDynLen, usize>,
     Vec<usize>,

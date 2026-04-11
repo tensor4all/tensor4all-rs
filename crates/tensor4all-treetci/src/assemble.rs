@@ -2,9 +2,42 @@ use crate::{OwnedGlobalIndexBatch, SubtreeKey};
 use anyhow::{ensure, Result};
 
 /// Multi-index type used by TreeTCI.
+///
+/// A `MultiIndex` is a vector of local indices, one per site in site order.
 pub type MultiIndex = Vec<usize>;
 
-/// Assemble one global site-order point from subtree-local assignments and central site values.
+/// Assemble one global site-order point from subtree-local assignments and
+/// central site values.
+///
+/// Each subtree assignment maps a [`SubtreeKey`] to its local multi-index.
+/// Each central assignment is a `(site, value)` pair.
+///
+/// Returns the assembled global multi-index with one entry per site.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::{assemble_global_point, SubtreeKey};
+///
+/// let left = SubtreeKey::new(vec![0, 1]);
+/// let right = SubtreeKey::new(vec![2]);
+///
+/// let point = assemble_global_point(
+///     3,
+///     &[(&left, &vec![10, 20]), (&right, &vec![30])],
+///     &[],
+/// ).unwrap();
+/// assert_eq!(point, vec![10, 20, 30]);
+///
+/// // With a central site assignment
+/// let key = SubtreeKey::new(vec![0]);
+/// let point = assemble_global_point(
+///     3,
+///     &[(&key, &vec![5])],
+///     &[(1, 7), (2, 9)],
+/// ).unwrap();
+/// assert_eq!(point, vec![5, 7, 9]);
+/// ```
 pub fn assemble_global_point(
     n_sites: usize,
     subtree_assignments: &[(&SubtreeKey, &MultiIndex)],
@@ -58,6 +91,24 @@ pub fn assemble_global_point(
 }
 
 /// Pack global points into column-major `(n_sites, n_points)` storage.
+///
+/// All points must have the same length (the number of sites).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::assemble_points_column_major;
+///
+/// let points = vec![vec![0, 1], vec![1, 0], vec![0, 0]];
+/// let batch = assemble_points_column_major(&points).unwrap();
+/// let view = batch.as_view();
+///
+/// assert_eq!(view.n_sites(), 2);
+/// assert_eq!(view.n_points(), 3);
+/// assert_eq!(view.get(0, 0), Some(0)); // point 0, site 0
+/// assert_eq!(view.get(1, 0), Some(1)); // point 0, site 1
+/// assert_eq!(view.get(0, 2), Some(0)); // point 2, site 0
+/// ```
 pub fn assemble_points_column_major(points: &[MultiIndex]) -> Result<OwnedGlobalIndexBatch> {
     let n_points = points.len();
     let n_sites = points.first().map_or(0, Vec::len);

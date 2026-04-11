@@ -7,6 +7,47 @@
 //! - Ryo Watanabe <https://github.com/Ryo-wtnb11>
 //!
 //! Tree-specific pivot updates use the tcicore LUCI pivot substrate.
+//!
+//! # Overview
+//!
+//! The main entry point is [`crossinterpolate2`], which approximates a
+//! multi-dimensional function as a tree tensor network using tensor cross
+//! interpolation.
+//!
+//! The workflow is:
+//! 1. Define a tree graph via [`TreeTciGraph`] (or use [`TreeTciGraph::linear_chain`]).
+//! 2. Configure options via [`TreeTciOptions`].
+//! 3. Call [`crossinterpolate2`] with a batch evaluator, returning a `TreeTN`.
+//!
+//! # Example
+//!
+//! ```
+//! use tensor4all_treetci::{
+//!     crossinterpolate2, DefaultProposer, GlobalIndexBatch,
+//!     TreeTciEdge, TreeTciGraph, TreeTciOptions,
+//! };
+//! use anyhow::Result;
+//!
+//! // Approximate f(i, j) = delta(i, j) on a 2-site tree
+//! let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
+//! let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+//!     let mut vals = Vec::with_capacity(batch.n_points());
+//!     for p in 0..batch.n_points() {
+//!         let i = batch.get(0, p).unwrap();
+//!         let j = batch.get(1, p).unwrap();
+//!         vals.push(if i == j { 1.0 } else { 0.0 });
+//!     }
+//!     Ok(vals)
+//! };
+//!
+//! let options = TreeTciOptions { tolerance: 1e-10, max_iter: 5, ..Default::default() };
+//! let (treetn, ranks, errors) = crossinterpolate2::<f64, _, _>(
+//!     evaluate, vec![2, 2], graph, vec![], options, None, &DefaultProposer,
+//! ).unwrap();
+//!
+//! assert!(errors.last().copied().unwrap_or(1.0) < 1e-8);
+//! assert!(ranks.last().copied().unwrap_or(0) <= 2);
+//! ```
 
 #![warn(missing_docs)]
 
