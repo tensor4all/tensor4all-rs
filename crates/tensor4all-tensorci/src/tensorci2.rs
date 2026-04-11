@@ -19,66 +19,121 @@ use tensor4all_tcicore::{
     RrLUOptions,
 };
 
-/// Options for TCI2 algorithm
+/// Configuration for the TCI2 algorithm ([`crossinterpolate2`]).
+///
+/// Controls convergence criteria, bond dimension limits, pivot search
+/// strategy, and global pivot search parameters.
+///
+/// # Recommended starting point
+///
+/// For most problems the defaults work well. The fields you will most
+/// commonly adjust are:
+///
+/// | Field | Typical range | Purpose |
+/// |---|---|---|
+/// | `tolerance` | `1e-6` -- `1e-12` | Relative convergence threshold |
+/// | `max_bond_dim` | `50` -- `500` | Hard cap on bond dimension |
+/// | `max_iter` | `20` -- `100` | Maximum number of half-sweeps |
+/// | `seed` | `Some(42)` | Fix seed for reproducibility |
+///
+/// # Convergence criterion
+///
+/// The algorithm stops when **all** of the following hold for
+/// `ncheck_history` consecutive iterations:
+///
+/// 1. The normalized bond error is below `tolerance`.
+/// 2. No global pivots were added.
+/// 3. The rank is stable.
+///
+/// Alternatively, it stops when the rank reaches `max_bond_dim`.
 ///
 /// # Examples
 ///
 /// ```
 /// use tensor4all_tensorci::TCI2Options;
 ///
-/// // Default options with tolerance 1e-8
+/// // Default options
 /// let opts = TCI2Options::default();
 /// assert!((opts.tolerance - 1e-8).abs() < 1e-15);
 /// assert_eq!(opts.max_iter, 20);
+/// assert_eq!(opts.max_bond_dim, usize::MAX);
 /// assert_eq!(opts.verbosity, 0);
 ///
-/// // Custom options
+/// // Custom options via struct update syntax
 /// let custom = TCI2Options {
 ///     tolerance: 1e-12,
 ///     max_bond_dim: 100,
-///     verbosity: 1,
+///     seed: Some(42),
 ///     ..TCI2Options::default()
 /// };
 /// assert!((custom.tolerance - 1e-12).abs() < 1e-20);
 /// assert_eq!(custom.max_bond_dim, 100);
+/// assert_eq!(custom.seed, Some(42));
 /// ```
 #[derive(Debug, Clone)]
 pub struct TCI2Options {
-    /// Tolerance for convergence.
+    /// Convergence tolerance (default: `1e-8`).
     ///
-    /// When `normalize_error` is enabled, this is applied to the normalized
-    /// bond error. `Full` search normalizes by the maximum value seen while
-    /// materializing the full candidate matrix. `Rook` search normalizes by the
-    /// maximum value observed through the lazily requested matrix entries so the
-    /// block-rook path stays lazy.
+    /// When `normalize_error` is enabled (the default), this is the
+    /// *relative* threshold: the bond error is divided by the maximum
+    /// absolute function value seen so far. Typical choices are `1e-8` for
+    /// moderate accuracy and `1e-12` for high accuracy.
     pub tolerance: f64,
-    /// Maximum number of iterations (half-sweeps)
-    pub max_iter: usize,
-    /// Maximum bond dimension
-    pub max_bond_dim: usize,
-    /// Pivot search strategy
-    pub pivot_search: PivotSearchStrategy,
-    /// Whether to normalize error by the maximum observed sample value.
+    /// Maximum number of half-sweep iterations (default: `20`).
     ///
-    /// `Full` and `Rook` search share the same formula but not the same
-    /// observation set: `Rook` only sees entries requested by lazy block-rook
-    /// search and factor reconstruction.
+    /// Each iteration performs one forward or backward two-site sweep
+    /// followed by a global pivot search. Increase if the function is
+    /// difficult to converge.
+    pub max_iter: usize,
+    /// Hard upper bound on bond dimension (default: `usize::MAX`, i.e. no limit).
+    ///
+    /// The algorithm stops early once the rank reaches this value. For
+    /// expensive functions, setting this to `50`--`500` avoids runaway
+    /// computation.
+    pub max_bond_dim: usize,
+    /// Pivot search strategy (default: [`PivotSearchStrategy::Full`]).
+    ///
+    /// `Full` materializes the entire candidate matrix and finds the best
+    /// pivot exactly. `Rook` uses lazy block-rook search and is faster for
+    /// very large local dimensions but may miss some pivots.
+    pub pivot_search: PivotSearchStrategy,
+    /// Whether to normalize the bond error by the maximum observed sample
+    /// value (default: `true`).
+    ///
+    /// When enabled, `tolerance` acts as a *relative* threshold. Disable
+    /// to use `tolerance` as an *absolute* threshold.
     pub normalize_error: bool,
-    /// Verbosity level
+    /// Verbosity level (default: `0` = silent).
+    ///
+    /// `1` prints per-iteration summaries, `2` adds per-bond details.
     pub verbosity: usize,
-    /// Maximum number of global pivots to add per iteration
+    /// Maximum number of global pivots to add per iteration (default: `5`).
     pub max_nglobal_pivot: usize,
-    /// Number of random searches for global pivots
+    /// Number of random starting points for global pivot search (default: `5`).
+    ///
+    /// Each starting point undergoes local optimization to find regions of
+    /// high interpolation error.
     pub nsearch: usize,
-    /// Sweep strategy for 2-site sweeps
+    /// Sweep strategy for 2-site sweeps (default: [`Sweep2Strategy::BackAndForth`]).
     pub sweep_strategy: Sweep2Strategy,
-    /// Number of iterations to check for convergence history
+    /// Number of recent iterations checked for convergence (default: `3`).
+    ///
+    /// The algorithm requires `ncheck_history` consecutive converged
+    /// iterations before declaring convergence.
     pub ncheck_history: usize,
-    /// Whether to use strictly nested index sets
+    /// Whether to use strictly nested index sets (default: `false`).
+    ///
+    /// When `false`, the algorithm keeps a history of previous index sets
+    /// and merges them during sweeps, which generally improves convergence.
     pub strictly_nested: bool,
-    /// Tolerance margin for global pivot search
+    /// Tolerance margin for global pivot search (default: `10.0`).
+    ///
+    /// Global pivots are accepted when their error exceeds
+    /// `abs_tolerance * tol_margin_global_search`.
     pub tol_margin_global_search: f64,
-    /// Random seed (None = use thread_rng)
+    /// Random seed for reproducibility (default: `None` = OS entropy).
+    ///
+    /// Set to `Some(seed)` for deterministic results.
     pub seed: Option<u64>,
 }
 
@@ -118,36 +173,63 @@ struct PivotUpdateContext<'a, B> {
     extra_j_set: &'a [MultiIndex],
 }
 
-/// Pivot search strategy for TCI2
+/// Strategy for finding new pivots during a two-site update.
+///
+/// Controls how much of the candidate matrix is evaluated when searching
+/// for the next pivot at each bond.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PivotSearchStrategy {
-    /// Full search: evaluate entire Pi matrix
+    /// Evaluate the entire candidate matrix and pick the best pivot.
+    ///
+    /// Exact but costs O(D_left * d * d * D_right) evaluations per bond,
+    /// where d is the local dimension. This is the default and recommended
+    /// for most problems.
     #[default]
     Full,
-    /// Rook search: use lazy block-rook pivoting over partial matrix blocks.
+    /// Use lazy block-rook pivoting over partial matrix blocks.
     ///
-    /// This avoids materializing the full candidate matrix, so error
-    /// normalization uses the maximum sample value observed through the lazy
-    /// requests instead of a full-grid scan.
+    /// Avoids materializing the full candidate matrix, making it faster
+    /// for very large local dimensions. Error normalization uses the
+    /// maximum sample value observed through the lazy requests rather
+    /// than a full-grid scan.
     Rook,
 }
 
-/// Sweep strategy for 2-site sweeps
+/// Direction of two-site sweeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sweep2Strategy {
-    /// Forward sweep only
+    /// Sweep left-to-right only.
     Forward,
-    /// Backward sweep only
+    /// Sweep right-to-left only.
     Backward,
-    /// Alternate between forward and backward sweeps
+    /// Alternate between forward and backward sweeps (default).
+    ///
+    /// This is the most robust choice: forward sweeps improve
+    /// right-canonical form while backward sweeps improve left-canonical
+    /// form, and alternating achieves better overall convergence.
     #[default]
     BackAndForth,
 }
 
-/// TensorCI2 - Two-site Tensor Cross Interpolation
+/// State object for the two-site Tensor Cross Interpolation algorithm.
 ///
-/// This structure represents a tensor train constructed using the TCI2 algorithm.
-/// TCI2 uses two-site updates which can be more efficient than TCI1 for some functions.
+/// Holds the current index sets (I, J), site tensors, and error statistics
+/// produced by [`crossinterpolate2`]. After interpolation, call
+/// [`to_tensor_train`](Self::to_tensor_train) to extract the resulting
+/// [`TensorTrain`].
+///
+/// # Key methods
+///
+/// | Method | Purpose |
+/// |---|---|
+/// | [`rank`](Self::rank) | Maximum bond dimension |
+/// | [`link_dims`](Self::link_dims) | Bond dimensions at each bond |
+/// | [`to_tensor_train`](Self::to_tensor_train) | Extract the tensor train |
+/// | [`max_bond_error`](Self::max_bond_error) | Largest bond error from last sweep |
+/// | [`pivot_errors`](Self::pivot_errors) | Per-bond pivot errors from back-truncation |
+///
+/// You normally do not construct `TensorCI2` directly; use
+/// [`crossinterpolate2`] instead.
 #[derive(Debug, Clone)]
 pub struct TensorCI2<T: Scalar + TTScalar> {
     /// Index sets I for each site
@@ -786,53 +868,80 @@ fn convergence_criterion(
     (errors_converged && no_global_pivots && rank_stable) || at_max_bond
 }
 
-/// Cross interpolate a function using TCI2 algorithm
+/// Approximate a function as a tensor train using the TCI2 algorithm.
 ///
-/// This matches Julia's `crossinterpolate2` / `optimize!` behavior:
-/// - 2-site sweeps with global pivot search
-/// - History-based convergence criterion
-/// - Final 1-site sweep for cleanup
+/// This is the main entry point for tensor cross interpolation. It
+/// performs alternating two-site sweeps with global pivot search until
+/// convergence, then cleans up with a final one-site sweep.
 ///
 /// # Arguments
-/// * `f` - Function to interpolate, takes a multi-index and returns a value
-/// * `batched_f` - Optional batch evaluation function for efficiency
-/// * `local_dims` - Local dimensions for each site
-/// * `initial_pivots` - Initial pivot points
-/// * `options` - Algorithm options
+///
+/// * `f` -- Function to interpolate. Takes a multi-index `&Vec<usize>` where
+///   each element is in `0..local_dims[i]` (0-indexed) and returns a scalar.
+/// * `batched_f` -- Optional batch evaluation function for efficiency.
+///   Takes `&[Vec<usize>]` and returns `Vec<T>`. Pass `None` to use
+///   element-wise evaluation only.
+/// * `local_dims` -- Number of values each index can take. Must have at
+///   least 2 elements (TCI requires at least 2 sites).
+/// * `initial_pivots` -- Starting multi-indices for the algorithm. At least
+///   one pivot must have a non-zero function value. Choose pivots where
+///   `|f|` is large for best convergence. If empty, defaults to the
+///   all-zeros index.
+/// * `options` -- Algorithm configuration; see [`TCI2Options`].
 ///
 /// # Returns
-/// * `TensorCI2` - The constructed tensor cross interpolation
-/// * `Vec<usize>` - Ranks at each iteration
-/// * `Vec<f64>` - Errors at each iteration
+///
+/// A tuple `(tci, ranks, errors)`:
+///
+/// * `tci: TensorCI2<T>` -- The interpolation state. Call
+///   [`to_tensor_train`](TensorCI2::to_tensor_train) to get a
+///   [`TensorTrain`].
+/// * `ranks: Vec<usize>` -- Bond dimension after each half-sweep.
+/// * `errors: Vec<f64>` -- Normalized error estimate after each half-sweep.
+///   The last value should be below `tolerance` if the algorithm converged.
+///
+/// # Errors
+///
+/// Returns [`TCIError::DimensionMismatch`] if `local_dims` has fewer than
+/// 2 elements, or [`TCIError::InvalidPivot`] if all initial pivots
+/// evaluate to zero.
 ///
 /// # Examples
+///
+/// Basic usage: interpolate `f(i, j) = i + j + 1` on a 4x4 grid.
 ///
 /// ```
 /// use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
 /// use tensor4all_simplett::AbstractTensorTrain;
 ///
-/// // Interpolate f(i, j) = (i + 1) as f64 (rank-1 function, value depends only on first index)
-/// let f = |idx: &Vec<usize>| (idx[0] + 1) as f64;
+/// let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
 /// let local_dims = vec![4, 4];
-/// let initial_pivots = vec![vec![0, 0]];
+/// let initial_pivots = vec![vec![3, 3]]; // pick where |f| is large
 ///
-/// let (tci, _ranks, _errors) =
+/// let (tci, _ranks, errors) =
 ///     crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
 ///         f,
 ///         None,
 ///         local_dims,
 ///         initial_pivots,
-///         TCI2Options::default(),
+///         TCI2Options {
+///             tolerance: 1e-10,
+///             seed: Some(42),
+///             ..TCI2Options::default()
+///         },
 ///     )
 ///     .unwrap();
 ///
-/// // The result should be a low-rank tensor train
-/// assert!(tci.rank() <= 4);
+/// // Verify convergence
+/// assert!(*errors.last().unwrap() < 1e-10);
 ///
-/// // Evaluate agrees with the original function: f(2, 3) = 3.0
+/// // Evaluate through the tensor train
 /// let tt = tci.to_tensor_train().unwrap();
 /// let val = tt.evaluate(&[2, 3]).unwrap();
-/// assert!((val - 3.0).abs() < 1e-6);
+/// assert!((val - 6.0).abs() < 1e-10); // f(2,3) = 2+3+1 = 6
+///
+/// // Bond dimensions are available
+/// assert!(!tci.link_dims().is_empty());
 /// ```
 pub fn crossinterpolate2<T, F, B>(
     f: F,

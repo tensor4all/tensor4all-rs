@@ -11,15 +11,15 @@ Use `crossinterpolate2` when you already know the local dimensions and want dire
 
 ### Defining the function
 
-The function must accept a slice of multi-indices and return the corresponding values. Here is a simple 2D example - the sum of the 0-indexed indices plus one.
+The function must accept a `&Vec<usize>` of 0-indexed multi-indices and return a scalar value. Here is a simple 2D example where `f(i, j) = i + j + 1`:
 
-```rust,ignore
+```rust
 use tensor4all_simplett::AbstractTensorTrain;
 use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
 
 let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
 let local_dims = vec![4, 4];
-let initial_pivots = vec![vec![3, 3]];
+let initial_pivots = vec![vec![3, 3]]; // pick where |f| is large
 
 let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
     f,
@@ -28,17 +28,30 @@ let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec
     initial_pivots,
     TCI2Options {
         tolerance: 1e-10,
+        seed: Some(42),
         ..Default::default()
     },
-)?;
+).unwrap();
 
 assert!(*errors.last().unwrap() < 1e-10);
 
-let tt = tci.to_tensor_train()?;
-let value = tt.evaluate(&[2, 3])?;
+let tt = tci.to_tensor_train().unwrap();
+let value = tt.evaluate(&[2, 3]).unwrap();
 assert!((value - 6.0).abs() < 1e-10);
 assert!(tt.rank() >= 1);
 ```
+
+### Choosing `TCI2Options`
+
+The most important parameters:
+
+| Parameter | Default | Guidance |
+|---|---|---|
+| `tolerance` | `1e-8` | Relative convergence threshold. Use `1e-6` for quick exploration, `1e-12` for high accuracy. |
+| `max_bond_dim` | `usize::MAX` | Set to `50`--`500` for expensive functions to prevent runaway computation. |
+| `max_iter` | `20` | Increase to `50`--`100` for difficult functions that need more sweeps. |
+| `seed` | `None` | Set to `Some(42)` for reproducible results. |
+| `normalize_error` | `true` | When `true`, `tolerance` is relative to max |f|. Set `false` for absolute tolerance. |
 
 ### Interpreting the results
 
@@ -50,14 +63,40 @@ assert!(tt.rank() >= 1);
 | `ranks` | `Vec<usize>` | Bond dimensions after each sweep. |
 | `errors` | `Vec<f64>` | Error estimate after each sweep; convergence when the last value is below tolerance. |
 
+### Convergence diagnostics
+
+The `errors` vector tracks the normalized bond error after each half-sweep. The algorithm converges when:
+
+1. The last `ncheck_history` (default: 3) entries are all below `tolerance`.
+2. No global pivots were added in those iterations.
+3. The rank has stabilized.
+
+If the errors plateau above your tolerance, try:
+- Increasing `max_bond_dim` (the function may need higher rank).
+- Increasing `max_iter` (more sweeps may be needed).
+- Choosing better initial pivots (where `|f|` is large).
+
 Convert to a tensor train for further manipulation:
 
-```rust,ignore
-use tensor4all_simplett::AbstractTensorTrain;
-
-let tt = tci.to_tensor_train()?;
+```rust
+# use tensor4all_simplett::AbstractTensorTrain;
+# use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+# let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
+# let (tci, _ranks, _errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
+#     f, None, vec![4, 4], vec![vec![3, 3]],
+#     TCI2Options { seed: Some(42), ..Default::default() },
+# ).unwrap();
+let tt = tci.to_tensor_train().unwrap();
 assert!(tt.rank() >= 1);
+
+// Evaluate the tensor train at specific indices
+let val = tt.evaluate(&[1, 2]).unwrap();
+assert!((val - 4.0).abs() < 1e-10); // f(1,2) = 1+2+1 = 4
 ```
+
+### Continuous vs discrete
+
+`crossinterpolate2` works on discrete integer indices. For functions on continuous domains, use the quantics representation provided by `tensor4all-quanticstci` (see below), which maps floating-point coordinates to binary tensor-train indices.
 
 ## High-Level Quantics TCI (`tensor4all-quanticstci`)
 

@@ -15,3 +15,9 @@ mod tensor_train {}
 
 #[doc = include_str!("../../book/src/guides/compress.md")]
 mod compress {}
+
+#[doc = include_str!("../../book/src/guides/tci.md")]
+mod tci {}
+
+#[doc = include_str!("../../book/src/guides/tci-advanced.md")]
+mod tci_advanced {}

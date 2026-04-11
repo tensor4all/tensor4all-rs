@@ -10,8 +10,9 @@ Tensor Cross Interpolation algorithms. TCI2 (primary, actively maintained) and T
 
 ## Example
 
-```rust,ignore
+```rust
 use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+use tensor4all_simplett::AbstractTensorTrain;
 
 // Function to interpolate: f(i, j) = (i + j + 1) as f64
 let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
@@ -26,14 +27,14 @@ let (tci, _ranks, errors) = crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec
         tolerance: 1e-10,
         ..Default::default()
     },
-)?;
+).unwrap();
 
 // Verify convergence
 assert!(*errors.last().unwrap() < 1e-10);
 
 // Verify interpolation accuracy
-let tt = tci.to_tensor_train()?;
-let val = tt.evaluate(&[2, 3])?;  // f(2, 3) = 2 + 3 + 1 = 6.0
+let tt = tci.to_tensor_train().unwrap();
+let val = tt.evaluate(&[2, 3]).unwrap();  // f(2, 3) = 2 + 3 + 1 = 6.0
 assert!((val - 6.0).abs() < 1e-10);
 ```
 

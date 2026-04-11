@@ -1,26 +1,36 @@
-//! Global error estimation for tensor train approximations.
+//! Post-hoc error estimation for tensor train approximations.
 //!
-//! Port of Julia's `estimatetrueerror` and `_floatingzone`
-//! from TensorCrossInterpolation.jl.
+//! After running [`crossinterpolate2`](crate::crossinterpolate2),
+//! [`estimate_true_error`] can verify the approximation quality by
+//! searching for multi-indices with large interpolation error via
+//! [`floating_zone`] optimization.
 
 use rand::Rng;
 use tensor4all_simplett::{AbstractTensorTrain, TTScalar, Tensor3Ops, TensorTrain};
 use tensor4all_tcicore::{MultiIndex, Scalar};
 
-/// Estimate the true interpolation error using floating zone optimization.
+/// Estimate the true interpolation error by searching for worst-case indices.
 ///
-/// Runs floating zone search from multiple random initial points to find
-/// indices with high interpolation error.
+/// Launches [`floating_zone`] from `nsearch` random starting points (or
+/// from explicit `initial_points`), returning all found (pivot, error)
+/// pairs sorted by descending error.
+///
+/// This is useful as a post-hoc check: if the largest returned error is
+/// below your tolerance, you can be more confident in the approximation.
 ///
 /// # Arguments
-/// * `tt` - The tensor train approximation
-/// * `f` - The function being approximated
-/// * `nsearch` - Number of random initial points (ignored if initial_points is Some)
-/// * `initial_points` - Optional explicit initial points
-/// * `rng` - Random number generator
+///
+/// * `tt` -- the tensor train approximation
+/// * `f` -- the exact function
+/// * `nsearch` -- number of random starting points (ignored when
+///   `initial_points` is `Some`)
+/// * `initial_points` -- explicit starting points for the search
+/// * `rng` -- random number generator
 ///
 /// # Returns
-/// Vector of (pivot, error) pairs sorted by descending error.
+///
+/// `Vec<(MultiIndex, f64)>` sorted by descending error, with duplicate
+/// pivots removed.
 pub fn estimate_true_error<T, F>(
     tt: &TensorTrain<T>,
     f: &F,
@@ -63,23 +73,25 @@ where
     pivot_errors
 }
 
-/// Floating zone optimization: find a local maximum of the interpolation error.
+/// Local search for the multi-index with the largest interpolation error.
 ///
-/// Starting from an initial point, sweeps through each site position,
-/// evaluating all local indices while fixing others, and picks the
-/// index with the maximum error. Repeats until convergence.
-///
-/// Port of Julia's `_floatingzone`.
+/// Starting from `init_p`, sweeps through each site position, evaluating
+/// all local indices while fixing the others, and picks the index with
+/// the maximum error `|f(idx) - tt(idx)|`. Repeats until the error
+/// stops increasing or `early_stop_tol` is exceeded.
 ///
 /// # Arguments
-/// * `tt` - The tensor train approximation
-/// * `f` - The function being approximated
-/// * `local_dims` - Local dimensions
-/// * `init_p` - Optional initial point (random if None)
-/// * `early_stop_tol` - Stop early if error exceeds this value
+///
+/// * `tt` -- the tensor train approximation
+/// * `f` -- the exact function
+/// * `local_dims` -- number of values each index can take
+/// * `init_p` -- starting point (`None` defaults to the all-zeros index)
+/// * `early_stop_tol` -- stop early once the error exceeds this value
+///   (use `f64::MAX` to search exhaustively)
 ///
 /// # Returns
-/// (pivot, max_error) tuple
+///
+/// `(pivot, max_error)` -- the best multi-index found and its error.
 pub fn floating_zone<T, F>(
     tt: &TensorTrain<T>,
     f: &F,

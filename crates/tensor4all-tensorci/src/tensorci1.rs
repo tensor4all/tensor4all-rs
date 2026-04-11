@@ -1,4 +1,8 @@
-//! TensorCI1 - One-site Tensor Cross Interpolation algorithm
+//! TensorCI1 -- One-site Tensor Cross Interpolation algorithm (legacy).
+//!
+//! This module is kept for backward compatibility. For new code, prefer
+//! [`crossinterpolate2`](crate::crossinterpolate2) which uses two-site
+//! updates and generally converges faster.
 
 use crate::error::{Result, TCIError};
 use tensor4all_simplett::{tensor3_zeros, TTScalar, Tensor3, Tensor3Ops, TensorTrain};
@@ -7,14 +11,14 @@ use tensor4all_tcicore::Scalar;
 use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
 use tensor4all_tcicore::{IndexSet, MultiIndex};
 
-/// Sweep strategy for TCI optimization
+/// Sweep direction for TCI1 optimization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SweepStrategy {
-    /// Sweep forward only
+    /// Sweep left-to-right only.
     Forward,
-    /// Sweep backward only
+    /// Sweep right-to-left only.
     Backward,
-    /// Sweep back and forth
+    /// Alternate between forward and backward sweeps (default).
     #[default]
     BackAndForth,
 }
@@ -28,20 +32,23 @@ fn forward_sweep(strategy: SweepStrategy, iter: usize) -> bool {
     }
 }
 
-/// Options for TCI1 algorithm
+/// Configuration for the TCI1 algorithm ([`crossinterpolate1`]).
+///
+/// See [`TCI2Options`](crate::TCI2Options) for the recommended TCI2
+/// counterpart.
 #[derive(Debug, Clone)]
 pub struct TCI1Options {
-    /// Tolerance for convergence
+    /// Convergence tolerance (default: `1e-8`).
     pub tolerance: f64,
-    /// Maximum number of iterations
+    /// Maximum number of iterations (default: `200`).
     pub max_iter: usize,
-    /// Sweep strategy
+    /// Sweep strategy (default: [`SweepStrategy::BackAndForth`]).
     pub sweep_strategy: SweepStrategy,
-    /// Pivot tolerance (minimum error to add new pivot)
+    /// Minimum pivot error to add a new pivot (default: `1e-12`).
     pub pivot_tolerance: f64,
-    /// Whether to normalize error by max sample value
+    /// Whether to normalize error by the maximum sample value (default: `true`).
     pub normalize_error: bool,
-    /// Verbosity level
+    /// Verbosity level (default: `0` = silent).
     pub verbosity: usize,
 }
 
@@ -58,9 +65,11 @@ impl Default for TCI1Options {
     }
 }
 
-/// TensorCI1 - One-site Tensor Cross Interpolation
+/// State object for the one-site TCI algorithm (legacy).
 ///
-/// Represents a tensor train constructed using the TCI1 algorithm.
+/// Prefer [`TensorCI2`](crate::TensorCI2) for new code.
+/// `TensorCI1` uses [`MatrixACA`] for pivot
+/// selection and performs one-site updates (one index at a time).
 #[derive(Debug, Clone)]
 pub struct TensorCI1<T: Scalar + TTScalar> {
     /// Index sets I for each site
@@ -855,18 +864,48 @@ fn matrix_to_tensor3<T: TTScalar + Scalar + Default>(
     tensor
 }
 
-/// Cross interpolate a function using TCI1 algorithm
+/// Approximate a function as a tensor train using the TCI1 algorithm (legacy).
+///
+/// Prefer [`crossinterpolate2`](crate::crossinterpolate2) for new code.
 ///
 /// # Arguments
-/// * `f` - Function to interpolate, takes a multi-index and returns a value
-/// * `local_dims` - Local dimensions for each site
-/// * `first_pivot` - Initial pivot point
-/// * `options` - Algorithm options
+///
+/// * `f` -- Function to interpolate. Takes `&MultiIndex` (0-indexed) and
+///   returns a scalar.
+/// * `local_dims` -- Number of values each index can take.
+/// * `first_pivot` -- Starting multi-index. Must have the same length as
+///   `local_dims` and the function value must be non-zero.
+/// * `options` -- Algorithm configuration; see [`TCI1Options`].
 ///
 /// # Returns
-/// * `TensorCI1` - The constructed tensor cross interpolation
-/// * `Vec<usize>` - Ranks at each iteration
-/// * `Vec<f64>` - Errors at each iteration
+///
+/// A tuple `(tci, ranks, errors)`:
+///
+/// * `tci: TensorCI1<T>` -- The interpolation state.
+/// * `ranks: Vec<usize>` -- Bond dimension after each sweep.
+/// * `errors: Vec<f64>` -- Error estimate after each sweep.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::{crossinterpolate1, TCI1Options};
+/// use tensor4all_simplett::AbstractTensorTrain;
+///
+/// let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
+/// let local_dims = vec![4, 4];
+/// let first_pivot = vec![3, 3];
+///
+/// let (tci, _ranks, _errors) = crossinterpolate1::<f64, _>(
+///     f,
+///     local_dims,
+///     first_pivot,
+///     TCI1Options { tolerance: 1e-10, ..TCI1Options::default() },
+/// ).unwrap();
+///
+/// let tt = tci.to_tensor_train().unwrap();
+/// let val = tt.evaluate(&[2, 3]).unwrap();
+/// assert!((val - 6.0).abs() < 1e-6); // f(2,3) = 2+3+1 = 6
+/// ```
 pub fn crossinterpolate1<T, F>(
     f: F,
     local_dims: Vec<usize>,
