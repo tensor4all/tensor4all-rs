@@ -2,7 +2,11 @@
 //!
 //! ITensors.jl writes fixed-length UTF-8 strings for attributes and datasets,
 //! while our Rust code uses variable-length Unicode strings. This module provides
-//! functions that can read both formats.
+//! functions that can read both formats transparently, enabling cross-language
+//! file exchange.
+//!
+//! The reading strategy tries formats in order: `VarLenUnicode` (our format),
+//! `FixedUnicode` (ITensors.jl format), then `VarLenAscii` (fallback).
 
 use crate::backend::types::{FixedUnicode, VarLenAscii, VarLenUnicode};
 use crate::backend::{Attribute, Dataset, Group};

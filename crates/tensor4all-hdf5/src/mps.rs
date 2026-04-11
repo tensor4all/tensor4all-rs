@@ -48,7 +48,16 @@ fn read_canonical_form(group: &Group) -> Result<Option<CanonicalForm>> {
 
 /// Write a [`TensorTrain`] as an ITensorMPS.jl `MPS` to an HDF5 group.
 ///
-/// Schema:
+/// Site tensors are stored as 1-indexed subgroups (`MPS[1]`, `MPS[2]`, ...),
+/// following the Julia convention. Each site tensor is written using
+/// [`crate::itensor::write_itensor`].
+///
+/// The `canonical_form` attribute is a tensor4all-rs extension not present in
+/// the ITensorMPS.jl schema. It is silently ignored when reading files that
+/// lack it.
+///
+/// # HDF5 Schema
+///
 /// ```text
 /// <group>/
 ///   @type = "MPS"
@@ -88,6 +97,10 @@ pub(crate) fn write_mps(group: &Group, tt: &TensorTrain) -> Result<()> {
 }
 
 /// Read a [`TensorTrain`] from an ITensorMPS.jl `MPS` in an HDF5 group.
+///
+/// Validates the `@type` and `@version` attributes, then reads site tensors
+/// from 1-indexed subgroups. The `canonical_form` attribute is read if present
+/// (tensor4all-rs extension), otherwise defaults to `None`.
 pub(crate) fn read_mps(group: &Group) -> Result<TensorTrain> {
     schema::require_type_version(group, "MPS", 1)?;
 
