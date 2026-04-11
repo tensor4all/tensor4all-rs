@@ -21,6 +21,16 @@ use std::hash::Hash;
 ///
 /// ITensors.jl uses directionless indices by default (convenient for general tensor operations).
 /// The `Undirected` variant provides this behavior.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, IndexLike, ConjState};
+///
+/// let i = DynIndex::new_dyn(4);
+/// // Default DynIndex is undirected
+/// assert_eq!(i.conj_state(), ConjState::Undirected);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConjState {
     /// Directionless index (ITensors.jl-like default).

@@ -39,6 +39,22 @@ use crate::TensorLike;
 use anyhow::Result;
 
 /// Options for GMRES solver.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::krylov::GmresOptions;
+///
+/// let opts = GmresOptions {
+///     max_iter: 50,
+///     rtol: 1e-8,
+///     max_restarts: 5,
+///     verbose: false,
+///     check_true_residual: true,
+/// };
+/// assert_eq!(opts.max_iter, 50);
+/// assert_eq!(opts.rtol, 1e-8);
+/// ```
 #[derive(Debug, Clone)]
 pub struct GmresOptions {
     /// Maximum number of iterations (restart cycle length).
@@ -80,6 +96,24 @@ impl Default for GmresOptions {
 }
 
 /// Result of GMRES solver.
+///
+/// Contains the solution, iteration count, final residual norm, and
+/// convergence status.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+/// use tensor4all_core::krylov::{gmres, GmresOptions};
+///
+/// let i = DynIndex::new_dyn(2);
+/// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 7.0]).unwrap();
+/// let x0 = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap();
+///
+/// let result = gmres(|x: &TensorDynLen| Ok(x.clone()), &b, &x0, &GmresOptions::default()).unwrap();
+/// assert!(result.converged);
+/// assert!(result.residual_norm < 1e-10);
+/// ```
 #[derive(Debug, Clone)]
 pub struct GmresResult<T> {
     /// The solution vector.

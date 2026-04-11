@@ -24,6 +24,25 @@ use std::fmt::Debug;
 use thiserror::Error;
 
 /// Error type for factorize operations.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{factorize, Canonical, DynIndex, FactorizeOptions, TensorDynLen};
+///
+/// let i = DynIndex::new_dyn(3);
+/// let j = DynIndex::new_dyn(3);
+/// let data: Vec<f64> = (0..9).map(|x| x as f64).collect();
+/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+///
+/// // QR with Canonical::Right is not supported
+/// let result = factorize(
+///     &tensor,
+///     &[i],
+///     &FactorizeOptions::qr().with_canonical(Canonical::Right),
+/// );
+/// assert!(result.is_err());
+/// ```
 #[derive(Debug, Error)]
 pub enum FactorizeError {
     /// Factorization computation failed.
@@ -75,6 +94,17 @@ pub enum FactorizeError {
 }
 
 /// Factorization algorithm.
+///
+/// Determines which matrix decomposition is used by [`TensorLike::factorize`].
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::FactorizeAlg;
+///
+/// // Default is SVD
+/// assert_eq!(FactorizeAlg::default(), FactorizeAlg::SVD);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FactorizeAlg {
     /// Singular Value Decomposition.
@@ -92,6 +122,36 @@ pub enum FactorizeAlg {
 ///
 /// This determines which factor is "canonical" (orthogonal for SVD/QR,
 /// or unit-diagonal for LU/CI).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{factorize, Canonical, DynIndex, FactorizeOptions, TensorDynLen};
+///
+/// let i = DynIndex::new_dyn(3);
+/// let j = DynIndex::new_dyn(3);
+/// let data: Vec<f64> = (0..9).map(|x| x as f64).collect();
+/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+///
+/// // Left canonical: left factor has orthonormal columns
+/// let left_result = factorize(
+///     &tensor,
+///     &[i.clone()],
+///     &FactorizeOptions::svd().with_canonical(Canonical::Left),
+/// ).unwrap();
+///
+/// // Right canonical: right factor has orthonormal rows
+/// let right_result = factorize(
+///     &tensor,
+///     &[i.clone()],
+///     &FactorizeOptions::svd().with_canonical(Canonical::Right),
+/// ).unwrap();
+///
+/// // Both recover the same tensor
+/// let recovered_left = left_result.left.contract(&left_result.right);
+/// let recovered_right = right_result.left.contract(&right_result.right);
+/// assert!(recovered_left.distance(&recovered_right) < 1e-12);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Canonical {
     /// Left factor is canonical.
@@ -108,6 +168,46 @@ pub enum Canonical {
 }
 
 /// Options for tensor factorization.
+///
+/// Controls the algorithm, canonical direction, and truncation parameters
+/// for [`TensorLike::factorize`].
+///
+/// # Defaults
+///
+/// - Algorithm: SVD
+/// - Canonical: Left (left factor is orthogonal)
+/// - rtol: `None` (uses the algorithm's global default)
+/// - max_rank: `None` (no rank limit)
+///
+/// # Field Interactions
+///
+/// - `rtol` and `max_rank` are independent: the retained rank is the
+///   **minimum** of the tolerance-based rank and `max_rank`.
+/// - When neither is set, the algorithm's global default tolerance is used.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{
+///     factorize, Canonical, DynIndex, FactorizeOptions, TensorDynLen,
+/// };
+///
+/// let i = DynIndex::new_dyn(4);
+/// let j = DynIndex::new_dyn(4);
+/// let mut data = vec![0.0_f64; 16];
+/// data[0] = 1.0;  // rank-1 matrix
+/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+///
+/// // SVD with tolerance truncation
+/// let opts = FactorizeOptions::svd().with_rtol(1e-10);
+/// let result = factorize(&tensor, &[i.clone()], &opts).unwrap();
+/// assert_eq!(result.rank, 1);
+///
+/// // QR with max-rank truncation
+/// let opts = FactorizeOptions::qr().with_max_rank(2);
+/// let result = factorize(&tensor, &[i.clone()], &opts).unwrap();
+/// assert!(result.rank <= 2);
+/// ```
 #[derive(Debug, Clone)]
 pub struct FactorizeOptions {
     /// Factorization algorithm to use.
@@ -135,6 +235,15 @@ impl Default for FactorizeOptions {
 
 impl FactorizeOptions {
     /// Create options for SVD factorization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{FactorizeAlg, FactorizeOptions};
+    ///
+    /// let opts = FactorizeOptions::svd();
+    /// assert_eq!(opts.alg, FactorizeAlg::SVD);
+    /// ```
     pub fn svd() -> Self {
         Self {
             alg: FactorizeAlg::SVD,
@@ -143,6 +252,15 @@ impl FactorizeOptions {
     }
 
     /// Create options for QR factorization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{FactorizeAlg, FactorizeOptions};
+    ///
+    /// let opts = FactorizeOptions::qr();
+    /// assert_eq!(opts.alg, FactorizeAlg::QR);
+    /// ```
     pub fn qr() -> Self {
         Self {
             alg: FactorizeAlg::QR,
@@ -151,6 +269,15 @@ impl FactorizeOptions {
     }
 
     /// Create options for LU factorization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{FactorizeAlg, FactorizeOptions};
+    ///
+    /// let opts = FactorizeOptions::lu();
+    /// assert_eq!(opts.alg, FactorizeAlg::LU);
+    /// ```
     pub fn lu() -> Self {
         Self {
             alg: FactorizeAlg::LU,
@@ -159,6 +286,15 @@ impl FactorizeOptions {
     }
 
     /// Create options for CI factorization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{FactorizeAlg, FactorizeOptions};
+    ///
+    /// let opts = FactorizeOptions::ci();
+    /// assert_eq!(opts.alg, FactorizeAlg::CI);
+    /// ```
     pub fn ci() -> Self {
         Self {
             alg: FactorizeAlg::CI,
@@ -167,18 +303,45 @@ impl FactorizeOptions {
     }
 
     /// Set canonical direction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{Canonical, FactorizeOptions};
+    ///
+    /// let opts = FactorizeOptions::svd().with_canonical(Canonical::Right);
+    /// assert_eq!(opts.canonical, Canonical::Right);
+    /// ```
     pub fn with_canonical(mut self, canonical: Canonical) -> Self {
         self.canonical = canonical;
         self
     }
 
     /// Set relative tolerance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::FactorizeOptions;
+    ///
+    /// let opts = FactorizeOptions::svd().with_rtol(1e-8);
+    /// assert_eq!(opts.rtol, Some(1e-8));
+    /// ```
     pub fn with_rtol(mut self, rtol: f64) -> Self {
         self.rtol = Some(rtol);
         self
     }
 
     /// Set maximum rank.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::FactorizeOptions;
+    ///
+    /// let opts = FactorizeOptions::svd().with_max_rank(10);
+    /// assert_eq!(opts.max_rank, Some(10));
+    /// ```
     pub fn with_max_rank(mut self, max_rank: usize) -> Self {
         self.max_rank = Some(max_rank);
         self
@@ -187,7 +350,30 @@ impl FactorizeOptions {
 
 /// Result of tensor factorization.
 ///
-/// Generic over the tensor type `T`.
+/// Contains the two factors, the bond index connecting them, and metadata
+/// about the decomposition. The original tensor can be recovered (up to
+/// truncation error) by contracting `left` and `right` along `bond_index`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{factorize, DynIndex, FactorizeOptions, TensorDynLen};
+///
+/// let i = DynIndex::new_dyn(3);
+/// let j = DynIndex::new_dyn(4);
+/// let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
+/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+///
+/// let result = factorize(&tensor, &[i.clone()], &FactorizeOptions::svd()).unwrap();
+///
+/// // Contracting left * right recovers the original tensor
+/// let recovered = result.left.contract(&result.right);
+/// assert!(tensor.distance(&recovered) < 1e-12);
+///
+/// // SVD provides singular values
+/// assert!(result.singular_values.is_some());
+/// assert_eq!(result.singular_values.as_ref().unwrap().len(), result.rank);
+/// ```
 #[derive(Debug, Clone)]
 pub struct FactorizeResult<T: TensorLike> {
     /// Left factor tensor.
@@ -652,6 +838,18 @@ pub trait TensorLike: TensorIndex {
     /// Element-wise subtraction: `self - other`.
     ///
     /// Indices are automatically permuted to match `self`'s order via `axpby`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let a = TensorDynLen::from_dense(vec![i.clone()], vec![5.0, 3.0]).unwrap();
+    /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 1.0]).unwrap();
+    /// let diff = a.sub(&b).unwrap();
+    /// assert_eq!(diff.to_vec::<f64>().unwrap(), vec![4.0, 2.0]);
+    /// ```
     fn sub(&self, other: &Self) -> Result<Self> {
         self.axpby(AnyScalar::new_real(1.0), other, AnyScalar::new_real(-1.0))
     }
@@ -664,6 +862,20 @@ pub trait TensorLike: TensorIndex {
     /// Approximate equality check (Julia `isapprox` semantics).
     ///
     /// Returns `true` if `||self - other|| <= max(atol, rtol * max(||self||, ||other||))`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// let i = DynIndex::new_dyn(3);
+    /// let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    /// assert!(a.isapprox(&b, 1e-12, 0.0));
+    ///
+    /// let c = TensorDynLen::from_dense(vec![i.clone()], vec![1.1, 2.0, 3.0]).unwrap();
+    /// assert!(!a.isapprox(&c, 1e-3, 0.0));
+    /// ```
     fn isapprox(&self, other: &Self, atol: f64, rtol: f64) -> bool {
         let diff = match self.sub(other) {
             Ok(d) => d,
@@ -699,11 +911,22 @@ pub trait TensorLike: TensorIndex {
     ///
     /// Returns an error if dimensions don't match.
     ///
-    /// # Example
+    /// # Examples
     ///
-    /// For dimension 2:
-    /// ```text
-    /// diagonal(i, o) = [[1, 0], [0, 1]]
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// let i = DynIndex::new_dyn(3);
+    /// let o = DynIndex::new_dyn(3);
+    /// let delta = TensorDynLen::diagonal(&i, &o).unwrap();
+    ///
+    /// assert_eq!(delta.dims(), vec![3, 3]);
+    /// let data = delta.to_vec::<f64>().unwrap();
+    /// // Identity matrix in column-major: [1,0,0, 0,1,0, 0,0,1]
+    /// assert!((data[0] - 1.0).abs() < 1e-12);
+    /// assert!((data[4] - 1.0).abs() < 1e-12);
+    /// assert!((data[8] - 1.0).abs() < 1e-12);
+    /// assert!((data[1]).abs() < 1e-12);
     /// ```
     fn diagonal(
         input_index: &<Self as TensorIndex>::Index,
@@ -732,11 +955,18 @@ pub trait TensorLike: TensorIndex {
     /// - Number of input and output indices don't match
     /// - Dimensions of paired indices don't match
     ///
-    /// # Example
+    /// # Examples
     ///
-    /// For a single index pair with dimension 2:
-    /// ```text
-    /// delta([i], [o]) = [[1, 0], [0, 1]]
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// let i1 = DynIndex::new_dyn(2);
+    /// let o1 = DynIndex::new_dyn(2);
+    /// let i2 = DynIndex::new_dyn(3);
+    /// let o2 = DynIndex::new_dyn(3);
+    ///
+    /// let d = TensorDynLen::delta(&[i1, i2], &[o1, o2]).unwrap();
+    /// assert_eq!(d.dims(), vec![2, 2, 3, 3]);
     /// ```
     fn delta(
         input_indices: &[<Self as TensorIndex>::Index],
@@ -768,6 +998,16 @@ pub trait TensorLike: TensorIndex {
     /// Create a scalar tensor with value 1.0.
     ///
     /// This is used as the identity element for outer products.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{TensorDynLen, TensorLike};
+    ///
+    /// let one = TensorDynLen::scalar_one().unwrap();
+    /// assert_eq!(one.dims(), Vec::<usize>::new());
+    /// assert!((one.only().real() - 1.0).abs() < 1e-12);
+    /// ```
     fn scalar_one() -> Result<Self>;
 
     /// Create a tensor filled with 1.0 for the given indices.
@@ -804,10 +1044,50 @@ pub trait TensorLike: TensorIndex {
     ///
     /// # Errors
     /// Returns error if any value >= corresponding index dimension.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// let i = DynIndex::new_dyn(3);
+    /// let j = DynIndex::new_dyn(2);
+    ///
+    /// // One-hot at i=1, j=0
+    /// let t = TensorDynLen::onehot(&[(i, 1), (j, 0)]).unwrap();
+    /// assert_eq!(t.dims(), vec![3, 2]);
+    ///
+    /// let data = t.to_vec::<f64>().unwrap();
+    /// // column-major 3x2: element at (1,0) = index 1
+    /// assert!((data[1] - 1.0).abs() < 1e-12);
+    /// assert!((t.sum().real() - 1.0).abs() < 1e-12);  // exactly one non-zero
+    /// ```
     fn onehot(index_vals: &[(<Self as TensorIndex>::Index, usize)]) -> Result<Self>;
 }
 
 /// Result of direct sum operation.
+///
+/// Contains the resulting tensor and the new indices created for the summed
+/// dimensions (one new index per pair in the input).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike, IndexLike};
+///
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(3);
+///
+/// let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+/// let b = TensorDynLen::from_dense(vec![j.clone()], vec![3.0, 4.0, 5.0]).unwrap();
+///
+/// let result = a.direct_sum(&b, &[(i.clone(), j.clone())]).unwrap();
+///
+/// // New index has dimension = 2 + 3 = 5
+/// assert_eq!(result.new_indices.len(), 1);
+/// assert_eq!(result.new_indices[0].dim(), 5);
+/// assert_eq!(result.tensor.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0, 5.0]);
+/// ```
 #[derive(Debug, Clone)]
 pub struct DirectSumResult<T: TensorLike> {
     /// The resulting tensor from direct sum.

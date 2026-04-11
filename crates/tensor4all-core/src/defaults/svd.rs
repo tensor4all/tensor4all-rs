@@ -1,5 +1,10 @@
 //! SVD decomposition for tensors.
 //!
+//! Provides [`svd`] and [`svd_with`] for computing truncated SVD of
+//! [`TensorDynLen`] values. The tensor is unfolded into a matrix by
+//! splitting its indices into left and right groups, then the standard
+//! matrix SVD is computed and truncated according to [`SvdOptions`].
+//!
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 
 use crate::defaults::DynIndex;
@@ -26,6 +31,25 @@ pub enum SvdError {
 }
 
 /// Options for SVD decomposition with truncation control.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::svd::{SvdOptions, svd_with};
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+///
+/// let i = DynIndex::new_dyn(3);
+/// let j = DynIndex::new_dyn(3);
+/// let data: Vec<f64> = (0..9).map(|x| x as f64).collect();
+/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+///
+/// let opts = SvdOptions::with_rtol(1e-10);
+/// let (u, s, v) = svd_with::<f64>(&tensor, &[i.clone()], &opts).unwrap();
+///
+/// // U has left index + bond, S is diagonal bond x bond, V has right index + bond
+/// assert_eq!(u.dims()[0], 3);
+/// assert_eq!(s.dims().len(), 2);
+/// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SvdOptions {
     /// Truncation parameters (rtol, max_rank).
@@ -270,6 +294,30 @@ pub fn svd<T>(
 ///
 /// This function allows per-call control of the truncation tolerance via `SvdOptions`.
 /// If `options.rtol` is `None`, uses the global default rtol.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::svd::{SvdOptions, svd_with};
+///
+/// let i = DynIndex::new_dyn(4);
+/// let j = DynIndex::new_dyn(4);
+/// // Rank-1 matrix
+/// let mut data = vec![0.0_f64; 16];
+/// data[0] = 1.0;
+/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+///
+/// // Truncate with tight tolerance => rank 1
+/// let opts = SvdOptions::with_rtol(1e-10);
+/// let (u, s, _v) = svd_with::<f64>(&tensor, &[i.clone()], &opts).unwrap();
+/// assert_eq!(s.dims()[0], 1);  // rank-1
+///
+/// // Truncate with max_rank => capped
+/// let opts = SvdOptions::with_max_rank(2);
+/// let (_u, s, _v) = svd_with::<f64>(&tensor, &[i.clone()], &opts).unwrap();
+/// assert!(s.dims()[0] <= 2);
+/// ```
 pub fn svd_with<T>(
     t: &TensorDynLen,
     left_inds: &[DynIndex],

@@ -109,28 +109,52 @@ pub trait TensorAccess {
     fn indices(&self) -> &[DynIndex];
 }
 
-/// Tensor with dynamic rank (number of indices) and dynamic scalar type.
+/// Dynamic-rank dense tensor -- the central data type of tensor4all.
 ///
-/// This is a concrete type using `DynIndex` (= `Index<DynId, TagSet>`).
+/// `TensorDynLen` stores a multi-dimensional array of `f64` or `Complex64`
+/// values together with a list of [`DynIndex`] labels. The indices carry
+/// unique identities (UUIDs) so that contraction, addition, and other
+/// binary operations can automatically match legs by identity rather than
+/// position.
 ///
-/// The canonical numeric payload is always [`tenferro::Tensor`].
+/// # Key Operations
+///
+/// | Operation | Method |
+/// |-----------|--------|
+/// | Create from data | [`from_dense`](Self::from_dense), [`from_diag`](Self::from_diag), [`zeros`](Self::zeros) |
+/// | Extract data | [`to_vec`](Self::to_vec), [`sum`](Self::sum), [`only`](Self::only) |
+/// | Contraction | [`contract`](Self::contract), `*` operator |
+/// | Arithmetic | [`add`](Self::add), [`scale`](Self::scale), [`axpby`](Self::axpby), `-` operator |
+/// | Factorization | via [`TensorLike::factorize`] |
+/// | Norms | [`norm`](Self::norm), [`norm_squared`](Self::norm_squared), [`maxabs`](Self::maxabs) |
+/// | Index ops | [`replaceind`](Self::replaceind), [`permute_indices`](Self::permute_indices) |
+///
+/// # Data Layout
+///
+/// Data is stored in **column-major** order (first index varies fastest),
+/// matching Fortran, Julia, and ITensors.jl conventions.
 ///
 /// # Examples
 ///
 /// ```
 /// use tensor4all_core::{TensorDynLen, DynIndex};
 ///
-/// // Create a 2×3 real tensor
+/// // Create a 2x3 real tensor
 /// let i = DynIndex::new_dyn(2);
 /// let j = DynIndex::new_dyn(3);
 /// let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
 /// let t = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
 /// assert_eq!(t.dims(), vec![2, 3]);
+/// assert!(t.is_f64());
 ///
 /// // Sum all elements: 1+2+3+4+5+6 = 21
 /// let s = t.sum();
 /// assert!((s.real() - 21.0).abs() < 1e-12);
+///
+/// // Extract data back out
+/// let data_out = t.to_vec::<f64>().unwrap();
+/// assert_eq!(data_out, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 /// ```
 #[derive(Clone)]
 pub struct TensorDynLen {
@@ -183,6 +207,21 @@ impl TensorDynLen {
     /// Get dims in the current `indices` order.
     ///
     /// This is computed on-demand from `indices` (single source of truth).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(3);
+    /// let k = DynIndex::new_dyn(4);
+    /// let t = TensorDynLen::from_dense(
+    ///     vec![i, j, k],
+    ///     vec![0.0; 24],
+    /// ).unwrap();
+    /// assert_eq!(t.dims(), vec![2, 3, 4]);
+    /// ```
     pub fn dims(&self) -> Vec<usize> {
         Self::expected_dims_from_indices(&self.indices)
     }
@@ -322,6 +361,17 @@ impl TensorDynLen {
     }
 
     /// Sum all elements, returning `AnyScalar`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(3);
+    /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
+    /// let s = t.sum();
+    /// assert!((s.real() - 6.0).abs() < 1e-12);
+    /// ```
     pub fn sum(&self) -> AnyScalar {
         sum_native_tensor(&self.native).expect("native sum failed")
     }
@@ -881,6 +931,26 @@ impl TensorDynLen {
     }
 
     /// Compute a linear combination: `a * self + b * other`.
+    ///
+    /// Both tensors must have the same set of indices (matched by ID).
+    /// If indices are in a different order, `other` is automatically permuted
+    /// to match `self`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 4.0]).unwrap();
+    ///
+    /// // 2*a + 3*b = [2+9, 4+12] = [11, 16]
+    /// let result = a.axpby(AnyScalar::new_real(2.0), &b, AnyScalar::new_real(3.0)).unwrap();
+    /// let data = result.to_vec::<f64>().unwrap();
+    /// assert!((data[0] - 11.0).abs() < 1e-12);
+    /// assert!((data[1] - 16.0).abs() < 1e-12);
+    /// ```
     pub fn axpby(&self, a: AnyScalar, other: &Self, b: AnyScalar) -> Result<Self> {
         // Validate that both tensors have the same number of indices.
         if self.indices.len() != other.indices.len() {
@@ -920,6 +990,19 @@ impl TensorDynLen {
     }
 
     /// Scalar multiplication.
+    ///
+    /// Multiplies every element by `scalar`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(3);
+    /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
+    /// let scaled = t.scale(AnyScalar::new_real(2.0)).unwrap();
+    /// assert_eq!(scaled.to_vec::<f64>().unwrap(), vec![2.0, 4.0, 6.0]);
+    /// ```
     pub fn scale(&self, scalar: AnyScalar) -> Result<Self> {
         let scaled = scale_native_tensor(&self.native, &scalar)?;
         Self::from_native(self.indices.clone(), scaled)
@@ -928,6 +1011,20 @@ impl TensorDynLen {
     /// Inner product (dot product) of two tensors.
     ///
     /// Computes `⟨self, other⟩ = Σ conj(self)_i * other_i`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(3);
+    /// let a = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0, 3.0]).unwrap();
+    /// let b = TensorDynLen::from_dense(vec![i.clone()], vec![4.0, 5.0, 6.0]).unwrap();
+    ///
+    /// // <a, b> = 1*4 + 2*5 + 3*6 = 32
+    /// let ip = a.inner_product(&b).unwrap();
+    /// assert!((ip.real() - 32.0).abs() < 1e-12);
+    /// ```
     pub fn inner_product(&self, other: &Self) -> Result<AnyScalar> {
         if self.indices.len() == other.indices.len() {
             let self_set: HashSet<_> = self.indices.iter().collect();
@@ -1184,6 +1281,16 @@ impl TensorDynLen {
     }
 
     /// Maximum absolute value of all elements (L-infinity norm).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(4);
+    /// let t = TensorDynLen::from_dense(vec![i], vec![-5.0, 1.0, 3.0, -2.0]).unwrap();
+    /// assert!((t.maxabs() - 5.0).abs() < 1e-12);
+    /// ```
     pub fn maxabs(&self) -> f64 {
         self.to_storage()
             .map(|storage| storage.max_abs())
@@ -1691,9 +1798,30 @@ impl TensorDynLen {
 
     /// Create a diagonal tensor from diagonal payload data with explicit indices.
     ///
+    /// All indices must have the same dimension, and `data.len()` must equal
+    /// that dimension. The resulting tensor has nonzero entries only on
+    /// the multi-index diagonal (`T[i,i,...,i] = data[i]`).
+    ///
     /// The public native bridge currently materializes diagonal payloads densely, so
     /// the returned tensor is mathematically diagonal but may not report
     /// [`TensorDynLen::is_diag`] at the native-storage level.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(3);
+    /// let j = DynIndex::new_dyn(3);
+    /// let diag = TensorDynLen::from_diag(vec![i, j], vec![1.0, 2.0, 3.0]).unwrap();
+    ///
+    /// let data = diag.to_vec::<f64>().unwrap();
+    /// // 3x3 identity-like: [1,0,0, 0,2,0, 0,0,3] in column-major
+    /// assert!((data[0] - 1.0).abs() < 1e-12);
+    /// assert!((data[4] - 2.0).abs() < 1e-12);
+    /// assert!((data[8] - 3.0).abs() < 1e-12);
+    /// assert!((data[1]).abs() < 1e-12);  // off-diagonal is zero
+    /// ```
     pub fn from_diag<T: TensorElement>(indices: Vec<DynIndex>, data: Vec<T>) -> Result<Self> {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices);
@@ -1950,6 +2078,23 @@ impl TensorDynLen {
     }
 
     /// Check if the tensor has complex storage (C64).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use num_complex::Complex64;
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let real_t = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// assert!(!real_t.is_complex());
+    ///
+    /// let complex_t = TensorDynLen::from_dense(
+    ///     vec![i],
+    ///     vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)],
+    /// ).unwrap();
+    /// assert!(complex_t.is_complex());
+    /// ```
     pub fn is_complex(&self) -> bool {
         self.native.scalar_type() == NativeScalarType::C64
     }

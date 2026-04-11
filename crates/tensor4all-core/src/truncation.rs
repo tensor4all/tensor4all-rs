@@ -5,7 +5,19 @@
 
 /// Decomposition/factorization algorithm.
 ///
-/// This enum unifies the algorithm choices across different crates.
+/// This enum unifies the algorithm choices across different crates
+/// (tensor4all-core, tensor4all-treetn, etc.).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::DecompositionAlg;
+///
+/// assert_eq!(DecompositionAlg::default(), DecompositionAlg::SVD);
+/// assert!(DecompositionAlg::SVD.is_svd_based());
+/// assert!(DecompositionAlg::SVD.is_orthogonal());
+/// assert!(!DecompositionAlg::LU.is_orthogonal());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DecompositionAlg {
     /// Singular Value Decomposition (optimal truncation).
@@ -52,6 +64,29 @@ impl DecompositionAlg {
 /// - ITensorMPS.jl's `cutoff` = tensor4all-rs's `rtol²`
 /// - To match ITensorMPS.jl behavior: use `rtol = sqrt(cutoff)`
 /// - Example: ITensorMPS.jl `cutoff=1e-10` ↔ tensor4all-rs `rtol=1e-5`
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::TruncationParams;
+///
+/// // Builder pattern
+/// let params = TruncationParams::new()
+///     .with_rtol(1e-8)
+///     .with_max_rank(50);
+/// assert_eq!(params.rtol, Some(1e-8));
+/// assert_eq!(params.max_rank, Some(50));
+///
+/// // ITensorMPS.jl compatibility
+/// let params = TruncationParams::new().with_cutoff(1e-10);
+/// let rtol = params.rtol.unwrap();
+/// assert!((rtol - 1e-5).abs() < 1e-10);  // sqrt(1e-10) = 1e-5
+///
+/// // Effective values with defaults
+/// let params = TruncationParams::new();
+/// assert_eq!(params.effective_rtol(1e-12), 1e-12);  // uses default
+/// assert_eq!(params.effective_max_rank(), usize::MAX);  // no limit
+/// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TruncationParams {
     /// Relative tolerance for truncation.
@@ -147,7 +182,19 @@ impl TruncationParams {
 /// Trait for types that contain truncation parameters.
 ///
 /// This trait provides a common interface for accessing and modifying
-/// truncation parameters in various options structs.
+/// truncation parameters in various options structs (e.g., [`SvdOptions`](crate::SvdOptions),
+/// [`QrOptions`](crate::QrOptions)).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::svd::SvdOptions;
+/// use tensor4all_core::HasTruncationParams;
+///
+/// let opts = SvdOptions::with_rtol(1e-6).with_max_rank(20);
+/// assert_eq!(opts.rtol(), Some(1e-6));
+/// assert_eq!(opts.max_rank(), Some(20));
+/// ```
 pub trait HasTruncationParams {
     /// Get a reference to the truncation parameters.
     fn truncation_params(&self) -> &TruncationParams;
