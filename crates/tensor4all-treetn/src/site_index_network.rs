@@ -32,6 +32,25 @@ pub use crate::node_name_network::CanonicalizeEdges as CanonicalizeEdgesType;
 /// # Type Parameters
 /// - `NodeName`: Node name type (must be Clone, Hash, Eq, Send, Sync, Debug)
 /// - `I`: Index type (must implement `IndexLike`)
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashSet;
+/// use tensor4all_core::index::{DynId, Index, TagSet};
+/// use tensor4all_treetn::SiteIndexNetwork;
+///
+/// let mut net = SiteIndexNetwork::<String, Index<DynId, TagSet>>::new();
+/// let idx_a = Index::new_dyn(2);
+/// let idx_b = Index::new_dyn(3);
+///
+/// net.add_node("A".to_string(), HashSet::from([idx_a])).unwrap();
+/// net.add_node("B".to_string(), HashSet::from([idx_b])).unwrap();
+/// net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+///
+/// assert_eq!(net.node_count(), 2);
+/// assert_eq!(net.edge_count(), 1);
+/// ```
 #[derive(Debug, Clone)]
 pub struct SiteIndexNetwork<NodeName, I>
 where

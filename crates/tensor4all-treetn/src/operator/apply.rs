@@ -15,10 +15,10 @@
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```
 //! use std::collections::HashMap;
 //!
-//! use tensor4all_core::{DynIndex, TensorDynLen};
+//! use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
 //! use tensor4all_treetn::{apply_linear_operator, ApplyOptions, IndexMapping, LinearOperator, TreeTN};
 //!
 //! # fn main() -> anyhow::Result<()> {
@@ -54,6 +54,11 @@
 //! let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
 //! let result = apply_linear_operator(&operator, &state, ApplyOptions::default())?;
 //! assert_eq!(result.node_count(), 1);
+//!
+//! // Applying identity preserves the state
+//! let result_dense = result.to_dense()?;
+//! let state_dense = state.to_dense()?;
+//! assert!((&result_dense - &state_dense).maxabs() < 1e-12);
 //! # Ok(())
 //! # }
 //! ```
@@ -75,7 +80,41 @@ use crate::operator::compose::{
 use crate::treetn::contraction::{contract, ContractionMethod, ContractionOptions};
 use crate::treetn::TreeTN;
 
-/// Options for apply_linear_operator.
+/// Options for [`apply_linear_operator`].
+///
+/// Controls the contraction algorithm, truncation parameters, and
+/// iterative sweep settings.
+///
+/// # Defaults
+///
+/// - `method`: [`ContractionMethod::Zipup`] (single-sweep, no iteration)
+/// - `max_rank`: `None` (no rank limit)
+/// - `rtol`: `None` (no tolerance-based truncation)
+/// - `nfullsweeps`: `1` (only used by Fit method)
+/// - `convergence_tol`: `None` (only used by Fit method)
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::ApplyOptions;
+///
+/// // Default: Zipup with no truncation
+/// let opts = ApplyOptions::default();
+/// assert_eq!(opts.max_rank, None);
+///
+/// // Zipup with rank and tolerance limits
+/// let opts = ApplyOptions::zipup().with_max_rank(50).with_rtol(1e-8);
+/// assert_eq!(opts.max_rank, Some(50));
+/// assert_eq!(opts.rtol, Some(1e-8));
+///
+/// // Fit method with sweep control
+/// let opts = ApplyOptions::fit().with_nfullsweeps(3).with_max_rank(20);
+/// assert_eq!(opts.nfullsweeps, 3);
+///
+/// // Naive contraction (exact, no truncation)
+/// let opts = ApplyOptions::naive();
+/// assert_eq!(opts.max_rank, None);
+/// ```
 #[derive(Debug, Clone)]
 pub struct ApplyOptions {
     /// Contraction method to use.
@@ -164,10 +203,10 @@ impl ApplyOptions {
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```
 /// use std::collections::HashMap;
 ///
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
 /// use tensor4all_treetn::{apply_linear_operator, ApplyOptions, IndexMapping, LinearOperator, TreeTN};
 ///
 /// # fn main() -> anyhow::Result<()> {
@@ -204,6 +243,11 @@ impl ApplyOptions {
 ///
 /// let result = apply_linear_operator(&operator, &state, ApplyOptions::default())?;
 /// assert_eq!(result.node_count(), 1);
+///
+/// // Applying identity preserves the state
+/// let result_dense = result.to_dense()?;
+/// let state_dense = state.to_dense()?;
+/// assert!((&result_dense - &state_dense).maxabs() < 1e-12);
 ///
 /// let truncated = apply_linear_operator(
 ///     &operator,

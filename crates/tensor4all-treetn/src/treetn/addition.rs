@@ -287,6 +287,8 @@ where
     ///
     /// This creates a new TreeTN where each tensor is the direct sum of the
     /// corresponding tensors from self and other, with bond dimensions merged.
+    /// The two networks must share the same topology **and** the same site
+    /// index IDs. Use [`add_aligned`](Self::add_aligned) if site index IDs differ.
     ///
     /// # Arguments
     /// * `other` - The other TreeTN to add
@@ -296,6 +298,23 @@ where
     ///
     /// # Errors
     /// Returns an error if the networks have incompatible structures.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let s = DynIndex::new_dyn(2);
+    /// let t = TensorDynLen::from_dense(vec![s.clone()], vec![1.0_f64, 2.0]).unwrap();
+    /// let tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
+    ///
+    /// // Adding a single-node network to itself doubles the values
+    /// let sum = tn.add(&tn).unwrap();
+    /// let dense = sum.to_dense().unwrap();
+    /// let expected = TensorDynLen::from_dense(vec![s], vec![2.0, 4.0]).unwrap();
+    /// assert!((&dense - &expected).maxabs() < 1e-12);
+    /// ```
     pub fn add(&self, other: &Self) -> Result<Self>
     where
         V: Ord,

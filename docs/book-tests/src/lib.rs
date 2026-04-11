@@ -21,3 +21,6 @@ mod tci {}
 
 #[doc = include_str!("../../book/src/guides/tci-advanced.md")]
 mod tci_advanced {}
+
+#[doc = include_str!("../../book/src/guides/tree-tn.md")]
+mod tree_tn {}
