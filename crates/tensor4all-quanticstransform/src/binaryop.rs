@@ -13,8 +13,39 @@ use crate::common::{tensortrain_to_linear_operator, BoundaryCondition, QuanticsO
 use tensor4all_simplett::tensor::Tensor;
 
 /// Coefficients for binary operation.
+///
 /// Each coefficient must be -1, 0, or 1.
 /// The pair (a, b) = (-1, -1) is not directly supported.
+///
+/// Convenience constructors are provided for common cases:
+/// - [`BinaryCoeffs::select_x()`]: (1, 0) -- identity on x
+/// - [`BinaryCoeffs::select_y()`]: (0, 1) -- identity on y
+/// - [`BinaryCoeffs::sum()`]: (1, 1) -- x + y
+/// - [`BinaryCoeffs::difference()`]: (1, -1) -- x - y
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::BinaryCoeffs;
+///
+/// let sum = BinaryCoeffs::sum();
+/// assert_eq!(sum.a, 1);
+/// assert_eq!(sum.b, 1);
+///
+/// let diff = BinaryCoeffs::difference();
+/// assert_eq!(diff.a, 1);
+/// assert_eq!(diff.b, -1);
+///
+/// // Custom coefficients
+/// let custom = BinaryCoeffs::new(0, 1).unwrap();
+/// assert_eq!(custom, BinaryCoeffs::select_y());
+///
+/// // Invalid: (-1, -1) is not supported
+/// assert!(BinaryCoeffs::new(-1, -1).is_err());
+///
+/// // Invalid: |a| > 1
+/// assert!(BinaryCoeffs::new(2, 0).is_err());
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BinaryCoeffs {
     /// Coefficient for the first variable x. Must be -1, 0, or 1.
@@ -75,15 +106,19 @@ impl BinaryCoeffs {
 /// # Returns
 /// LinearOperator representing the binary transformation
 ///
-/// # Example
-/// ```no_run
+/// # Examples
+///
+/// ```
 /// use tensor4all_quanticstransform::{binaryop_operator, BinaryCoeffs, BoundaryCondition};
 ///
 /// // Transform g(x, y) -> g(x+y, x-y)
-/// let coeffs1 = BinaryCoeffs::sum();       // x + y
+/// let coeffs1 = BinaryCoeffs::sum();        // x + y
 /// let coeffs2 = BinaryCoeffs::difference(); // x - y
 /// let bc = [BoundaryCondition::Periodic, BoundaryCondition::Periodic];
-/// let op = binaryop_operator(8, coeffs1, coeffs2, bc).unwrap();
+/// let op = binaryop_operator(4, coeffs1, coeffs2, bc).unwrap();
+///
+/// // Interleaved sites: 2 * r sites total
+/// assert_eq!(op.mpo.node_count(), 2 * 4);
 /// ```
 pub fn binaryop_operator(
     r: usize,
@@ -287,13 +322,27 @@ pub fn binaryop_single_mpo(
 
 /// Create a binary operation operator for a single transformation.
 ///
-/// This transforms f(x, y) where the first variable is transformed by a*x + b*y
-/// and the second variable y remains unchanged.
+/// This transforms f(x, y) where the first variable is replaced by a*x + b*y
+/// and the second variable y remains unchanged. Equivalent to calling
+/// [`binaryop_operator`] with `coeffs2 = BinaryCoeffs::select_y()`.
 ///
 /// # Arguments
 /// * `r` - Number of bits per variable
-/// * `a`, `b` - Coefficients (-1, 0, or 1) with (a, b) ≠ (-1, -1)
-/// * `bc` - Boundary condition
+/// * `a`, `b` - Coefficients (-1, 0, or 1) with (a, b) != (-1, -1)
+/// * `bc` - Boundary condition for the transformed variable
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::{binaryop_single_operator, BoundaryCondition};
+///
+/// // Transform first variable to x + y, keep y unchanged
+/// let op = binaryop_single_operator(4, 1, 1, BoundaryCondition::Periodic).unwrap();
+/// assert_eq!(op.mpo.node_count(), 2 * 4);
+///
+/// // Invalid: (-1, -1) not supported
+/// assert!(binaryop_single_operator(4, -1, -1, BoundaryCondition::Periodic).is_err());
+/// ```
 pub fn binaryop_single_operator(
     r: usize,
     a: i8,

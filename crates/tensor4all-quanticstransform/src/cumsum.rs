@@ -10,33 +10,60 @@ use tensor4all_simplett::{types::tensor3_zeros, Tensor3Ops, TensorTrain};
 use crate::common::{tensortrain_to_linear_operator, QuanticsOperator};
 
 /// Type of triangular matrix for cumsum-like operators.
+///
+/// # Variants
+///
+/// - **`Lower`**: Strict lower triangle, M\[i,j\] = 1 when i > j.
+///   Computes the prefix sum: y\_i = sum of x\_j for j < i.
+/// - **`Upper`**: Strict upper triangle, M\[i,j\] = 1 when i < j.
+///   Computes the suffix sum: y\_i = sum of x\_j for j > i.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::{triangle_operator, TriangleType};
+///
+/// // Prefix sum (lower triangle)
+/// let lower = triangle_operator(4, TriangleType::Lower).unwrap();
+/// assert_eq!(lower.mpo.node_count(), 4);
+///
+/// // Suffix sum (upper triangle)
+/// let upper = triangle_operator(4, TriangleType::Upper).unwrap();
+/// assert_eq!(upper.mpo.node_count(), 4);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TriangleType {
-    /// Strict lower triangle: M[i,j] = 1 when i > j.
-    /// Computes y_i = Σ_{j < i} x_j (prefix sum).
+    /// Strict lower triangle: M\[i,j\] = 1 when i > j.
+    /// Computes y\_i = sum of x\_j for j < i (prefix sum).
     Lower,
-    /// Strict upper triangle: M[i,j] = 1 when i < j.
-    /// Computes y_i = Σ_{j > i} x_j (suffix sum).
+    /// Strict upper triangle: M\[i,j\] = 1 when i < j.
+    /// Computes y\_i = sum of x\_j for j > i (suffix sum).
     Upper,
 }
 
 /// Create a cumulative sum operator: y_i = Σ_{j < i} x_j
 ///
-/// This MPO implements a strict upper triangular matrix filled with ones.
+/// This MPO implements a strict lower triangular matrix filled with ones.
 /// For a function g defined on {0, 1, ..., 2^R - 1}, it computes:
 /// f(i) = Σ_{j < i} g(j)
 ///
 /// # Arguments
-/// * `r` - Number of bits (sites)
+/// * `r` - Number of bits (sites). Must be at least 2.
 ///
 /// # Returns
 /// LinearOperator representing the cumulative sum
 ///
-/// # Example
-/// ```no_run
+/// # Examples
+///
+/// ```
 /// use tensor4all_quanticstransform::cumsum_operator;
 ///
-/// let op = cumsum_operator(8).unwrap();
+/// let op = cumsum_operator(4).unwrap();
+/// assert_eq!(op.mpo.node_count(), 4);
+///
+/// // Requires at least 2 sites
+/// assert!(cumsum_operator(1).is_err());
+/// assert!(cumsum_operator(0).is_err());
 /// ```
 pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
     if r < 2 {
@@ -50,12 +77,24 @@ pub fn cumsum_operator(r: usize) -> Result<QuanticsOperator> {
 
 /// Create a triangular matrix operator with the specified triangle type.
 ///
-/// - `Lower`: M[i,j] = 1 when i > j (prefix sum: y_i = Σ_{j < i} x_j)
-/// - `Upper`: M[i,j] = 1 when i < j (suffix sum: y_i = Σ_{j > i} x_j)
+/// - `Lower`: M\[i,j\] = 1 when i > j (prefix sum: y\_i = sum of x\_j for j < i)
+/// - `Upper`: M\[i,j\] = 1 when i < j (suffix sum: y\_i = sum of x\_j for j > i)
 ///
 /// # Arguments
-/// * `r` - Number of bits (sites)
+/// * `r` - Number of bits (sites). Must be at least 2.
 /// * `triangle` - Which triangle to use
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::{triangle_operator, TriangleType};
+///
+/// let op = triangle_operator(4, TriangleType::Lower).unwrap();
+/// assert_eq!(op.mpo.node_count(), 4);
+///
+/// // Requires at least 2 sites
+/// assert!(triangle_operator(1, TriangleType::Lower).is_err());
+/// ```
 pub fn triangle_operator(r: usize, triangle: TriangleType) -> Result<QuanticsOperator> {
     if r < 2 {
         anyhow::bail!("Number of sites must be at least 2, got {r}");

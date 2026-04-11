@@ -30,13 +30,23 @@ use crate::common::{
 /// # Returns
 /// LinearOperator representing the phase rotation
 ///
-/// # Example
-/// ```no_run
+/// # Examples
+///
+/// ```
 /// use tensor4all_quanticstransform::phase_rotation_operator;
 /// use std::f64::consts::PI;
 ///
-/// // Apply phase rotation by π/4
-/// let op = phase_rotation_operator(8, PI / 4.0).unwrap();
+/// // Create phase rotation by π/4 for 4-bit quantics
+/// let op = phase_rotation_operator(4, PI / 4.0).unwrap();
+///
+/// // The operator has one MPO tensor per bit
+/// assert_eq!(op.mpo.node_count(), 4);
+///
+/// // Phase rotation is a diagonal operator (bond dimension 1)
+/// // Error on invalid input
+/// assert!(phase_rotation_operator(0, 1.0).is_err());
+/// assert!(phase_rotation_operator(4, f64::NAN).is_err());
+/// assert!(phase_rotation_operator(4, f64::INFINITY).is_err());
 /// ```
 pub fn phase_rotation_operator(r: usize, theta: f64) -> Result<QuanticsOperator> {
     if r == 0 {
@@ -54,12 +64,25 @@ pub fn phase_rotation_operator(r: usize, theta: f64) -> Result<QuanticsOperator>
 /// Create a phase rotation operator for one variable in a multi-variable system.
 ///
 /// Acts as phase rotation on `target_var` and identity on all other variables.
+/// The resulting operator works on interleaved quantics encoding where each
+/// site has local dimension `2^nvariables`.
 ///
 /// # Arguments
 /// * `r` - Number of bits (sites)
 /// * `theta` - Phase angle in radians
 /// * `nvariables` - Total number of variables
 /// * `target_var` - Which variable to apply phase rotation to (0-indexed)
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::phase_rotation_operator_multivar;
+/// use std::f64::consts::PI;
+///
+/// // Phase rotate only the x-variable of a 2-variable function f(x, y)
+/// let op = phase_rotation_operator_multivar(4, PI / 4.0, 2, 0).unwrap();
+/// assert_eq!(op.mpo.node_count(), 4);
+/// ```
 pub fn phase_rotation_operator_multivar(
     r: usize,
     theta: f64,

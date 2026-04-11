@@ -22,11 +22,12 @@
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```
 //! use tensor4all_quanticstransform::{flip_operator, BoundaryCondition};
 //!
 //! // Create a flip operator for 8-bit quantics representation
 //! let op = flip_operator(8, BoundaryCondition::Periodic).unwrap();
+//! assert_eq!(op.mpo.node_count(), 8);
 //! ```
 
 mod affine;
