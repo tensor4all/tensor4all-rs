@@ -177,6 +177,19 @@ struct PivotUpdateContext<'a, B> {
 ///
 /// Controls how much of the candidate matrix is evaluated when searching
 /// for the next pivot at each bond.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::PivotSearchStrategy;
+///
+/// // Full is the default
+/// let strategy = PivotSearchStrategy::default();
+/// assert_eq!(strategy, PivotSearchStrategy::Full);
+///
+/// // Both variants can be compared
+/// assert_ne!(PivotSearchStrategy::Full, PivotSearchStrategy::Rook);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PivotSearchStrategy {
     /// Evaluate the entire candidate matrix and pick the best pivot.
@@ -196,6 +209,21 @@ pub enum PivotSearchStrategy {
 }
 
 /// Direction of two-site sweeps.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::Sweep2Strategy;
+///
+/// // BackAndForth is the default
+/// let strategy = Sweep2Strategy::default();
+/// assert_eq!(strategy, Sweep2Strategy::BackAndForth);
+///
+/// // All three variants
+/// let fwd = Sweep2Strategy::Forward;
+/// let bwd = Sweep2Strategy::Backward;
+/// assert_ne!(fwd, bwd);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sweep2Strategy {
     /// Sweep left-to-right only.

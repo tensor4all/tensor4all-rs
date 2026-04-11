@@ -32,6 +32,44 @@ pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
 ///
 /// The default implementation is [`DefaultGlobalPivotFinder`]. Implement
 /// this trait to supply domain-specific search strategies.
+///
+/// # Examples
+///
+/// Using the default implementation via [`DefaultGlobalPivotFinder`]:
+///
+/// ```
+/// use tensor4all_tensorci::{DefaultGlobalPivotFinder, GlobalPivotFinder,
+///     GlobalPivotSearchInput};
+/// use tensor4all_simplett::TensorTrain;
+///
+/// // Constant-zero TT on a 4×4 grid
+/// let tt = TensorTrain::<f64>::constant(&[4, 4], 0.0);
+///
+/// let input = GlobalPivotSearchInput {
+///     local_dims: vec![4, 4],
+///     current_tt: tt,
+///     max_sample_value: 9.0,
+///     i_set: vec![vec![vec![]], vec![vec![0]]],
+///     j_set: vec![vec![vec![0]], vec![vec![]]],
+/// };
+///
+/// let finder = DefaultGlobalPivotFinder::default();
+/// let mut rng = rand::rng();
+///
+/// // f(i,j) = i*j has nonzero values, so pivots should be found
+/// let pivots = finder.find_global_pivots(
+///     &input,
+///     &|idx: &Vec<usize>| (idx[0] * idx[1]) as f64,
+///     0.1,
+///     &mut rng,
+/// );
+///
+/// // All returned pivots must have valid indices
+/// for p in &pivots {
+///     assert_eq!(p.len(), 2);
+///     assert!(p[0] < 4 && p[1] < 4);
+/// }
+/// ```
 pub trait GlobalPivotFinder {
     /// Find multi-indices with high interpolation error.
     ///
@@ -68,6 +106,24 @@ pub trait GlobalPivotFinder {
 ///    largest interpolation error at each position.
 /// 3. Keep points where the error exceeds `abs_tol * tol_margin`.
 /// 4. Return at most `max_nglobal_pivot` results.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::DefaultGlobalPivotFinder;
+///
+/// // Default configuration
+/// let finder = DefaultGlobalPivotFinder::default();
+/// assert_eq!(finder.nsearch, 5);
+/// assert_eq!(finder.max_nglobal_pivot, 5);
+/// assert!((finder.tol_margin - 10.0).abs() < 1e-15);
+///
+/// // Custom configuration
+/// let custom = DefaultGlobalPivotFinder::new(20, 10, 5.0);
+/// assert_eq!(custom.nsearch, 20);
+/// assert_eq!(custom.max_nglobal_pivot, 10);
+/// assert!((custom.tol_margin - 5.0).abs() < 1e-15);
+/// ```
 #[derive(Debug, Clone)]
 pub struct DefaultGlobalPivotFinder {
     /// Number of random initial points to search from

@@ -12,6 +12,20 @@ use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
 use tensor4all_tcicore::{IndexSet, MultiIndex};
 
 /// Sweep direction for TCI1 optimization.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::SweepStrategy;
+///
+/// // BackAndForth is the default
+/// let strategy = SweepStrategy::default();
+/// assert_eq!(strategy, SweepStrategy::BackAndForth);
+///
+/// // All three variants are distinct
+/// assert_ne!(SweepStrategy::Forward, SweepStrategy::Backward);
+/// assert_ne!(SweepStrategy::Forward, SweepStrategy::BackAndForth);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SweepStrategy {
     /// Sweep left-to-right only.
@@ -36,6 +50,32 @@ fn forward_sweep(strategy: SweepStrategy, iter: usize) -> bool {
 ///
 /// See [`TCI2Options`](crate::TCI2Options) for the recommended TCI2
 /// counterpart.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::{TCI1Options, SweepStrategy};
+///
+/// // Default options
+/// let opts = TCI1Options::default();
+/// assert!((opts.tolerance - 1e-8).abs() < 1e-15);
+/// assert_eq!(opts.max_iter, 200);
+/// assert_eq!(opts.sweep_strategy, SweepStrategy::BackAndForth);
+/// assert!((opts.pivot_tolerance - 1e-12).abs() < 1e-20);
+/// assert!(opts.normalize_error);
+/// assert_eq!(opts.verbosity, 0);
+///
+/// // Custom options via struct update syntax
+/// let custom = TCI1Options {
+///     tolerance: 1e-10,
+///     max_iter: 50,
+///     sweep_strategy: SweepStrategy::Forward,
+///     ..TCI1Options::default()
+/// };
+/// assert!((custom.tolerance - 1e-10).abs() < 1e-20);
+/// assert_eq!(custom.max_iter, 50);
+/// assert_eq!(custom.sweep_strategy, SweepStrategy::Forward);
+/// ```
 #[derive(Debug, Clone)]
 pub struct TCI1Options {
     /// Convergence tolerance (default: `1e-8`).
