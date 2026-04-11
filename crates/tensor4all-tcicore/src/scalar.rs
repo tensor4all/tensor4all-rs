@@ -1,7 +1,11 @@
 //! Common scalar trait for matrix and tensor operations.
 //!
-//! This module provides a unified scalar trait that can be used across
-//! tensor4all crates, reducing code duplication.
+//! The [`Scalar`] trait provides a unified interface for numeric types used
+//! in matrix cross interpolation and tensor train operations. It is
+//! implemented for [`f64`], [`f32`], [`Complex64`], and [`Complex32`].
+//!
+//! The [`scalar_tests!`] macro generates dual `f64`/`Complex64` test
+//! variants from a single generic test function.
 
 use crate::matrix::BlasMul;
 use num_complex::{Complex32, Complex64};
@@ -9,8 +13,30 @@ use num_traits::{Float, One, Zero};
 
 /// Common scalar trait for matrix and tensor operations.
 ///
-/// This trait defines the minimal requirements for scalar types used in
-/// matrix cross interpolation and tensor train operations.
+/// Defines the minimal requirements for scalar types used in matrix cross
+/// interpolation and tensor train operations. Implemented for `f64`, `f32`,
+/// `Complex64`, and `Complex32`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::Scalar;
+///
+/// // f64
+/// let x = 3.0_f64;
+/// assert_eq!(x.abs_sq(), 9.0);
+/// assert_eq!(x.conj(), 3.0);
+///
+/// // Complex64
+/// use num_complex::Complex64;
+/// let z = Complex64::new(3.0, 4.0);
+/// assert!((z.abs_sq() - 25.0).abs() < 1e-10);
+/// assert_eq!(z.conj(), Complex64::new(3.0, -4.0));
+///
+/// // Construction from f64
+/// let val = f64::from_f64(2.5);
+/// assert_eq!(val, 2.5);
+/// ```
 pub trait Scalar:
     Clone
     + Copy

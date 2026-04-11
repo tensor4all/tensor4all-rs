@@ -1,10 +1,17 @@
-//! Candidate matrix sources.
+//! Candidate matrix sources for pivot-kernel factorization.
+//!
+//! Provides the [`CandidateMatrixSource`] trait and two built-in
+//! implementations: [`DenseMatrixSource`] (borrowed column-major data) and
+//! [`LazyMatrixSource`] (callback-backed block evaluation).
 
 use crate::matrixluci::scalar::Scalar;
 use crate::matrixluci::types::DenseOwnedMatrix;
 use std::marker::PhantomData;
 
-/// Candidate matrix access abstraction.
+/// Abstraction for accessing a matrix that will be cross-interpolated.
+///
+/// Implementors provide block-level access (filling column-major sub-blocks)
+/// so that kernels can select pivots without materializing the full matrix.
 pub trait CandidateMatrixSource<T: Scalar> {
     /// Number of rows.
     fn nrows(&self) -> usize;
@@ -29,6 +36,8 @@ pub trait CandidateMatrixSource<T: Scalar> {
 }
 
 /// Borrowed dense matrix source with column-major layout.
+///
+/// Wraps a column-major data slice for use with pivot kernels.
 pub struct DenseMatrixSource<'a, T: Scalar> {
     data: &'a [T],
     nrows: usize,
@@ -36,6 +45,10 @@ pub struct DenseMatrixSource<'a, T: Scalar> {
 }
 
 /// Callback-backed lazy matrix source.
+///
+/// Evaluates matrix blocks on demand via a user-supplied closure,
+/// avoiding full materialization. The closure fills a column-major
+/// output buffer for a given set of rows and columns.
 pub struct LazyMatrixSource<T: Scalar, F> {
     nrows: usize,
     ncols: usize,

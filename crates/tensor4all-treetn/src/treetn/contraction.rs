@@ -87,6 +87,9 @@ where
     /// each edge in sequence and using Connection information to identify
     /// which indices to contract.
     ///
+    /// The result has only site (physical) indices; all bond indices are summed out.
+    /// See also [`to_dense`](Self::to_dense), which is an alias for this method.
+    ///
     /// # Returns
     /// A single tensor representing the full contraction of the network.
     ///
@@ -95,6 +98,32 @@ where
     /// - The network is empty
     /// - The graph is not a valid tree
     /// - Tensor contraction fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::TreeTN;
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorIndex, TensorLike};
+    ///
+    /// let s0 = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(2);
+    /// let s1 = DynIndex::new_dyn(2);
+    ///
+    /// let t0 = TensorDynLen::from_dense(
+    ///     vec![s0.clone(), bond.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0],
+    /// ).unwrap();
+    /// let t1 = TensorDynLen::from_dense(
+    ///     vec![bond, s1.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0],
+    /// ).unwrap();
+    ///
+    /// let tn = TreeTN::<_, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
+    /// let dense = tn.contract_to_tensor().unwrap();
+    ///
+    /// // Result has only site indices
+    /// assert_eq!(dense.num_external_indices(), 2);
+    /// ```
     pub fn contract_to_tensor(&self) -> Result<T>
     where
         V: Ord,

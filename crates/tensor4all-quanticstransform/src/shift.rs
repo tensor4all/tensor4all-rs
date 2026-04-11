@@ -48,13 +48,25 @@ pub fn shift_operator(r: usize, offset: i64, bc: BoundaryCondition) -> Result<Qu
 /// Create a shift operator for one variable in a multi-variable system.
 ///
 /// Acts as shift on `target_var` and identity on all other variables.
+/// The resulting operator works on interleaved quantics encoding where each
+/// site has local dimension `2^nvariables`.
 ///
 /// # Arguments
 /// * `r` - Number of bits (sites)
 /// * `offset` - Shift amount (can be negative)
 /// * `bc` - Boundary condition
-/// * `nvariables` - Total number of variables
-/// * `target_var` - Which variable to shift (0-indexed)
+/// * `nvariables` - Total number of variables (must be at least 2)
+/// * `target_var` - Which variable to shift (0-indexed, must be < nvariables)
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::{shift_operator_multivar, BoundaryCondition};
+///
+/// // Shift only the x-variable of a 2-variable function f(x, y) by 3
+/// let op = shift_operator_multivar(4, 3, BoundaryCondition::Periodic, 2, 0).unwrap();
+/// assert_eq!(op.mpo.node_count(), 4);
+/// ```
 pub fn shift_operator_multivar(
     r: usize,
     offset: i64,

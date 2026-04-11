@@ -44,7 +44,12 @@ use bnum::types::{U1024, U256, U512};
 
 /// Trait for cache key types used in flat-index computation.
 ///
-/// See module documentation for how to implement this for custom types.
+/// Built-in implementations are provided for `u64`, `u128`, `U256`, `U512`,
+/// and `U1024`. For index spaces larger than 1024 bits, implement this trait
+/// for a wider integer type and use
+/// [`CachedFunction::with_key_type`](crate::CachedFunction::with_key_type).
+///
+/// See module documentation for a complete custom key example.
 pub trait CacheKey: Hash + Eq + Clone + Send + Sync + 'static {
     /// Number of bits this key type can represent.
     const BITS_COUNT: u32;

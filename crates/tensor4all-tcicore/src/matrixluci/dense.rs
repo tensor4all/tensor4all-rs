@@ -7,7 +7,11 @@ use crate::matrixluci::{PivotKernelOptions, PivotSelectionCore, Result};
 use faer::MatRef;
 use num_complex::{Complex32, Complex64};
 
-/// Dense LU kernel backed by faer.
+/// Dense full-pivoting LU kernel backed by faer.
+///
+/// Materializes the source matrix and performs full-pivoting LU
+/// decomposition via the faer library. Suitable for small to moderate
+/// matrices where full materialization is acceptable.
 #[derive(Default)]
 pub struct DenseFaerLuKernel;
 

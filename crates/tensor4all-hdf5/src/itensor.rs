@@ -10,13 +10,20 @@ use crate::schema;
 
 /// Write a [`TensorDynLen`] as an ITensors.jl `ITensor` to an HDF5 group.
 ///
-/// Schema:
+/// The tensor data is stored in column-major order (matching ITensors.jl convention).
+/// Both `f64` and `Complex64` storage types are supported.
+///
+/// # HDF5 Schema
+///
 /// ```text
 /// <group>/
 ///   @type = "ITensor"
 ///   @version = 1
-///   inds/          (IndexSet)
+///   inds/          (IndexSet — see write_index_set)
 ///   storage/       (Dense{Float64} or Dense{ComplexF64})
+///     @type = "Dense{Float64}" | "Dense{ComplexF64}"
+///     @version = 1
+///     data: [N]    (flat column-major array)
 /// ```
 pub(crate) fn write_itensor(group: &Group, tensor: &TensorDynLen) -> Result<()> {
     schema::write_type_version(group, "ITensor", 1)?;
@@ -60,6 +67,13 @@ pub(crate) fn write_itensor(group: &Group, tensor: &TensorDynLen) -> Result<()> 
 }
 
 /// Read a [`TensorDynLen`] from an ITensors.jl `ITensor` in an HDF5 group.
+///
+/// Validates the `@type` and `@version` attributes before reading. Supports
+/// both `Dense{Float64}` and `Dense{ComplexF64}` storage types.
+///
+/// String attributes are read using [`crate::compat`] helpers, which handle
+/// both variable-length Unicode (our format) and fixed-length Unicode
+/// (ITensors.jl format).
 pub(crate) fn read_itensor(group: &Group) -> Result<TensorDynLen> {
     schema::require_type_version(group, "ITensor", 1)?;
 

@@ -1,41 +1,182 @@
-//! Abstract traits for matrix cross interpolation
+//! Abstract traits for matrix cross interpolation.
+//!
+//! The [`AbstractMatrixCI`] trait provides a common interface for all matrix
+//! cross interpolation implementations ([`MatrixLUCI`](crate::MatrixLUCI),
+//! [`MatrixACA`](crate::MatrixACA)).
 
 use crate::error::Result;
 use crate::matrix::{submatrix, zeros, Matrix};
 use crate::scalar::Scalar;
 
-/// Abstract trait for matrix cross interpolation objects
+/// Common interface for matrix cross interpolation objects.
 ///
-/// This trait provides a common interface for different matrix CI implementations
-/// including MatrixACA and MatrixLUCI.
+/// Implementors provide low-rank approximations of matrices via
+/// selected pivot rows and columns. This trait unifies the API for
+/// [`MatrixLUCI`](crate::MatrixLUCI) and [`MatrixACA`](crate::MatrixACA).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+///
+/// let m = from_vec2d(vec![
+///     vec![1.0_f64, 2.0],
+///     vec![3.0, 4.0],
+/// ]);
+/// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+///
+/// // All AbstractMatrixCI methods are available:
+/// assert_eq!(ci.nrows(), 2);
+/// assert_eq!(ci.ncols(), 2);
+/// assert!(ci.rank() >= 1);
+/// assert!(!ci.is_empty());
+///
+/// // Full reconstruction
+/// let full = ci.to_matrix();
+/// for i in 0..2 {
+///     for j in 0..2 {
+///         assert!((full[[i, j]] - m[[i, j]]).abs() < 1e-10);
+///     }
+/// }
+/// ```
 pub trait AbstractMatrixCI<T: Scalar>: Sized {
     /// Number of rows in the approximated matrix
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// assert_eq!(ci.nrows(), 3);
+    /// ```
     fn nrows(&self) -> usize;
 
     /// Number of columns in the approximated matrix
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0, 3.0]]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// assert_eq!(ci.ncols(), 3);
+    /// ```
     fn ncols(&self) -> usize;
 
     /// Current rank of the approximation (number of pivots)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// assert!(ci.rank() >= 1);
+    /// assert!(ci.rank() <= 2);
+    /// ```
     fn rank(&self) -> usize;
 
     /// Row indices selected as pivots (I set)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// let rows = ci.row_indices();
+    /// assert_eq!(rows.len(), ci.rank());
+    /// for &r in rows {
+    ///     assert!(r < ci.nrows());
+    /// }
+    /// ```
     fn row_indices(&self) -> &[usize];
 
     /// Column indices selected as pivots (J set)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// let cols = ci.col_indices();
+    /// assert_eq!(cols.len(), ci.rank());
+    /// for &c in cols {
+    ///     assert!(c < ci.ncols());
+    /// }
+    /// ```
     fn col_indices(&self) -> &[usize];
 
     /// Check if the approximation is empty (no pivots)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA};
+    ///
+    /// let aca = MatrixACA::<f64>::new(2, 2);
+    /// assert!(aca.is_empty());
+    /// ```
     fn is_empty(&self) -> bool {
         self.rank() == 0
     }
 
     /// Evaluate the approximation at position (i, j)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// assert!((ci.evaluate(0, 0) - 1.0).abs() < 1e-10);
+    /// assert!((ci.evaluate(1, 1) - 4.0).abs() < 1e-10);
+    /// ```
     fn evaluate(&self, i: usize, j: usize) -> T;
 
     /// Get a submatrix of the approximation
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![
+    ///     vec![1.0_f64, 2.0, 3.0],
+    ///     vec![4.0, 5.0, 6.0],
+    ///     vec![7.0, 8.0, 9.0],
+    /// ]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// let sub = ci.submatrix(&[0, 2], &[1]);
+    /// assert_eq!(sub.nrows(), 2);
+    /// assert_eq!(sub.ncols(), 1);
+    /// assert!((sub[[0, 0]] - 2.0).abs() < 1e-10);
+    /// assert!((sub[[1, 0]] - 8.0).abs() < 1e-10);
+    /// ```
     fn submatrix(&self, rows: &[usize], cols: &[usize]) -> Matrix<T>;
 
     /// Get a row of the approximation
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// let row0 = ci.row(0);
+    /// assert_eq!(row0.len(), 2);
+    /// assert!((row0[0] - 1.0).abs() < 1e-10);
+    /// assert!((row0[1] - 2.0).abs() < 1e-10);
+    /// ```
     fn row(&self, i: usize) -> Vec<T> {
         let cols: Vec<usize> = (0..self.ncols()).collect();
         let sub = self.submatrix(&[i], &cols);
@@ -43,6 +184,19 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     }
 
     /// Get a column of the approximation
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// let col1 = ci.col(1);
+    /// assert_eq!(col1.len(), 2);
+    /// assert!((col1[0] - 2.0).abs() < 1e-10);
+    /// assert!((col1[1] - 4.0).abs() < 1e-10);
+    /// ```
     fn col(&self, j: usize) -> Vec<T> {
         let rows: Vec<usize> = (0..self.nrows()).collect();
         let sub = self.submatrix(&rows, &[j]);
@@ -50,6 +204,23 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     }
 
     /// Get the full approximated matrix
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// let full = ci.to_matrix();
+    /// assert_eq!(full.nrows(), 2);
+    /// assert_eq!(full.ncols(), 2);
+    /// for i in 0..2 {
+    ///     for j in 0..2 {
+    ///         assert!((full[[i, j]] - m[[i, j]]).abs() < 1e-10);
+    ///     }
+    /// }
+    /// ```
     fn to_matrix(&self) -> Matrix<T> {
         let rows: Vec<usize> = (0..self.nrows()).collect();
         let cols: Vec<usize> = (0..self.ncols()).collect();
@@ -57,6 +228,18 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     }
 
     /// Get available row indices (rows without pivots)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]]);
+    /// let aca = MatrixACA::from_matrix_with_pivot(&m, (1, 0)).unwrap();
+    /// let avail = aca.available_rows();
+    /// // Row 1 was used as pivot, so 0 and 2 remain
+    /// assert_eq!(avail, vec![0, 2]);
+    /// ```
     fn available_rows(&self) -> Vec<usize> {
         let pivot_rows: std::collections::HashSet<usize> =
             self.row_indices().iter().copied().collect();
@@ -66,6 +249,18 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     }
 
     /// Get available column indices (columns without pivots)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
+    /// let aca = MatrixACA::from_matrix_with_pivot(&m, (0, 1)).unwrap();
+    /// let avail = aca.available_cols();
+    /// // Column 1 was used as pivot, so 0 and 2 remain
+    /// assert_eq!(avail, vec![0, 2]);
+    /// ```
     fn available_cols(&self) -> Vec<usize> {
         let pivot_cols: std::collections::HashSet<usize> =
             self.col_indices().iter().copied().collect();
@@ -75,6 +270,23 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     }
 
     /// Compute local error |A - CI| for given indices
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![
+    ///     vec![1.0_f64, 2.0, 3.0],
+    ///     vec![4.0, 5.0, 6.0],
+    ///     vec![7.0, 8.0, 10.0],
+    /// ]);
+    /// let aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
+    /// let err = aca.local_error(&m, &[1, 2], &[1, 2]);
+    /// // Error at pivot position (0,0) would be zero; off-pivot may be non-zero
+    /// assert_eq!(err.nrows(), 2);
+    /// assert_eq!(err.ncols(), 2);
+    /// ```
     fn local_error(&self, a: &Matrix<T>, rows: &[usize], cols: &[usize]) -> Matrix<T>
     where
         T: std::ops::Sub<Output = T>,
@@ -93,6 +305,23 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     }
 
     /// Find a new pivot that maximizes the local error
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![
+    ///     vec![1.0_f64, 2.0, 3.0],
+    ///     vec![4.0, 5.0, 6.0],
+    ///     vec![7.0, 8.0, 10.0],
+    /// ]);
+    /// let aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
+    /// let ((r, c), err_val) = aca.find_new_pivot(&m).unwrap();
+    /// // New pivot must be in available rows/cols (not row 0 or col 0)
+    /// assert_ne!(r, 0);
+    /// assert_ne!(c, 0);
+    /// ```
     fn find_new_pivot(&self, a: &Matrix<T>) -> Result<((usize, usize), T)>
     where
         T: std::ops::Sub<Output = T>,
@@ -104,6 +333,23 @@ pub trait AbstractMatrixCI<T: Scalar>: Sized {
     }
 
     /// Find a new pivot in the given row/column subsets
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixACA, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![
+    ///     vec![1.0_f64, 2.0, 3.0],
+    ///     vec![4.0, 5.0, 6.0],
+    ///     vec![7.0, 8.0, 10.0],
+    /// ]);
+    /// let aca = MatrixACA::from_matrix_with_pivot(&m, (0, 0)).unwrap();
+    /// // Search only in rows [1,2] and cols [1,2]
+    /// let ((r, c), _) = aca.find_new_pivot_in(&m, &[1, 2], &[1, 2]).unwrap();
+    /// assert!(r == 1 || r == 2);
+    /// assert!(c == 1 || c == 2);
+    /// ```
     fn find_new_pivot_in(
         &self,
         a: &Matrix<T>,

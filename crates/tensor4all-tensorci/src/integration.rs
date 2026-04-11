@@ -1,6 +1,10 @@
 //! Numerical integration using TCI and Gauss-Kronrod quadrature.
 //!
-//! Port of Julia's `integrate` from TensorCrossInterpolation.jl.
+//! [`integrate`] approximates a multi-dimensional integral over a hypercube
+//! by building a tensor-train representation of the integrand on
+//! Gauss-Kronrod nodes and then summing the tensor train.
+//!
+//! Supported quadrature orders: 15 and 31 (standard Gauss-Kronrod rules).
 
 use crate::error::{Result, TCIError};
 use crate::tensorci2::{crossinterpolate2, TCI2Options};
@@ -134,31 +138,44 @@ fn gk_nodes_weights(gk_order: usize) -> Result<(&'static [f64], &'static [f64])>
     }
 }
 
-/// Integrate a function over a hypercube using TCI and Gauss-Kronrod quadrature.
+/// Integrate a function over a hypercube `[a, b]` using TCI and
+/// Gauss-Kronrod quadrature.
+///
+/// The integrand is sampled at Gauss-Kronrod nodes in each dimension,
+/// and a tensor-train approximation is built via [`crossinterpolate2`].
+/// The integral is then computed as a weighted sum of the tensor train.
 ///
 /// # Arguments
-/// * `f` - Function to integrate, takes a coordinate vector and returns a value
-/// * `a` - Lower bounds for each dimension
-/// * `b` - Upper bounds for each dimension
-/// * `gk_order` - Gauss-Kronrod order (default: 15, must be odd)
-/// * `tci_options` - Options for the TCI approximation
+///
+/// * `f` -- function to integrate, takes a coordinate slice `&[f64]`
+/// * `a` -- lower bounds for each dimension
+/// * `b` -- upper bounds for each dimension
+/// * `gk_order` -- Gauss-Kronrod quadrature order (15 or 31)
+/// * `tci_options` -- options for the TCI approximation
 ///
 /// # Returns
-/// The integral value.
 ///
-/// # Example
+/// The approximate integral value.
+///
+/// # Errors
+///
+/// Returns an error if `a` and `b` have different lengths, or if
+/// `gk_order` is not 15 or 31.
+///
+/// # Examples
+///
 /// ```
 /// use tensor4all_tensorci::integration::integrate;
 /// use tensor4all_tensorci::TCI2Options;
 ///
+/// // Integrate (x^2 + y^2) over [0,1]^2 = 2/3
 /// let f = |x: &[f64]| x.iter().map(|&xi| xi * xi).sum::<f64>();
 /// let a = vec![0.0, 0.0];
 /// let b = vec![1.0, 1.0];
 /// let options = TCI2Options { tolerance: 1e-10, ..TCI2Options::default() };
 ///
 /// let result: f64 = integrate(&f, &a, &b, 15, options).unwrap();
-/// // integral of (x^2 + y^2) over [0,1]^2 = 2/3
-/// assert!((result - 2.0/3.0).abs() < 1e-8);
+/// assert!((result - 2.0 / 3.0).abs() < 1e-8);
 /// ```
 pub fn integrate<T, F>(
     f: &F,

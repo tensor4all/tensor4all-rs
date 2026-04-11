@@ -77,6 +77,25 @@ fn tensor3_to_right_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) 
 /// - Tensors at indices < center are left-orthogonal
 /// - Tensors at indices > center are right-orthogonal
 /// - The tensor at the center index is the "center" tensor
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, SiteTensorTrain};
+///
+/// // Build a constant tensor train and convert to center-canonical form.
+/// let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+/// let stt = SiteTensorTrain::from_tensor_train(&tt, 1).unwrap();
+///
+/// // The center is at site 1.
+/// assert_eq!(stt.center(), 1);
+/// assert_eq!(stt.len(), 3);
+///
+/// // Converting back preserves tensor train values.
+/// let tt2 = stt.to_tensor_train();
+/// let val = tt2.evaluate(&[0, 1, 2]).unwrap();
+/// assert!((val - 1.0).abs() < 1e-12);
+/// ```
 #[derive(Debug, Clone)]
 pub struct SiteTensorTrain<T: TTScalar> {
     /// Site tensors
@@ -347,6 +366,29 @@ impl<T: TTScalar + Scalar + Default> AbstractTensorTrain<T> for SiteTensorTrain<
 }
 
 /// Center canonicalize a vector of tensors in place
+///
+/// After this call, tensors at indices `< center` are left-orthogonal and
+/// tensors at indices `> center` are right-orthogonal. The overall tensor
+/// train represented by the slice is unchanged.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, tensor3_zeros, Tensor3Ops};
+/// use tensor4all_simplett::canonical::center_canonicalize;
+///
+/// // Start with a simple 3-site constant TT.
+/// let tt = TensorTrain::<f64>::constant(&[2, 3, 2], 1.0);
+/// let mut tensors: Vec<_> = tt.site_tensors().to_vec();
+///
+/// // Canonicalize around site 1.
+/// center_canonicalize(&mut tensors, 1);
+///
+/// // Rebuild TT from the canonicalized tensors; values are preserved.
+/// let tt2 = TensorTrain::new(tensors).unwrap();
+/// let val = tt2.evaluate(&[0, 1, 0]).unwrap();
+/// assert!((val - 1.0).abs() < 1e-12);
+/// ```
 pub fn center_canonicalize<T: TTScalar + Scalar + Default>(
     tensors: &mut [Tensor3<T>],
     center: usize,

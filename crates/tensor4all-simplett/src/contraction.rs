@@ -13,14 +13,24 @@ use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
 use tensor4all_tcicore::matrix::Matrix;
 use tensor4all_tcicore::Scalar;
 
-/// Options for contraction with compression
+/// Options for MPO-MPO contraction with on-the-fly compression.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::ContractionOptions;
+///
+/// let opts = ContractionOptions::default();
+/// assert!((opts.tolerance - 1e-12).abs() < 1e-15);
+/// assert_eq!(opts.max_bond_dim, usize::MAX);
+/// ```
 #[derive(Debug, Clone)]
 pub struct ContractionOptions {
-    /// Tolerance for truncation
+    /// Relative truncation tolerance during contraction.
     pub tolerance: f64,
-    /// Maximum bond dimension
+    /// Hard upper bound on bond dimension.
     pub max_bond_dim: usize,
-    /// Compression method (LU or CI)
+    /// Decomposition method for intermediate compression.
     pub method: CompressionMethod,
 }
 
@@ -35,9 +45,28 @@ impl Default for ContractionOptions {
 }
 
 impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
-    /// Compute the inner product (dot product) of two tensor trains
+    /// Inner product (dot product) of two tensor trains.
     ///
-    /// Returns: sum over all indices i of self\[i\] * other\[i\]
+    /// Computes `sum_i self[i] * other[i]` by contracting the site tensors
+    /// from left to right. Both tensor trains must have the same length and
+    /// matching site dimensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if lengths or site dimensions do not match.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// let a = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    /// let b = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+    ///
+    /// // dot = sum_ij a[i,j]*b[i,j] = 1*2 * 2*3 = 12
+    /// let d = a.dot(&b).unwrap();
+    /// assert!((d - 12.0).abs() < 1e-10);
+    /// ```
     pub fn dot(&self, other: &Self) -> Result<T> {
         if self.len() != other.len() {
             return Err(TensorTrainError::InvalidOperation {
@@ -117,7 +146,19 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
     }
 }
 
-/// Convenience function to compute dot product
+/// Free-function wrapper for [`TensorTrain::dot`].
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, contraction::dot};
+///
+/// let a = TensorTrain::<f64>::constant(&[2, 3], 3.0);
+/// let b = TensorTrain::<f64>::constant(&[2, 3], 4.0);
+/// let d = dot(&a, &b).unwrap();
+/// // 3*4 * 2*3 = 72
+/// assert!((d - 72.0).abs() < 1e-10);
+/// ```
 pub fn dot<T: TTScalar + Scalar + Default + EinsumScalar>(
     a: &TensorTrain<T>,
     b: &TensorTrain<T>,

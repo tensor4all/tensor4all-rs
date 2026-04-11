@@ -89,6 +89,32 @@ where
     /// * `mpo` - The MPO with internal index IDs
     /// * `input_mapping` - Mapping from true input indices to internal indices
     /// * `output_mapping` - Mapping from true output indices to internal indices
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
+    ///
+    /// // Build a 2x2 identity operator (single node)
+    /// let site = DynIndex::new_dyn(2);
+    /// let s_in = DynIndex::new_dyn(2);
+    /// let s_out = DynIndex::new_dyn(2);
+    /// let mpo_tensor = TensorDynLen::from_dense(
+    ///     vec![s_in.clone(), s_out.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 1.0],
+    /// ).unwrap();
+    /// let mpo = TreeTN::<_, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
+    ///
+    /// let mut input_mapping = HashMap::new();
+    /// input_mapping.insert(0usize, IndexMapping { true_index: site.clone(), internal_index: s_in });
+    /// let mut output_mapping = HashMap::new();
+    /// output_mapping.insert(0usize, IndexMapping { true_index: site.clone(), internal_index: s_out });
+    ///
+    /// let op = LinearOperator::new(mpo, input_mapping, output_mapping);
+    /// assert_eq!(op.mpo().node_count(), 1);
+    /// ```
     pub fn new(
         mpo: TreeTN<T, V>,
         input_mapping: HashMap<V, IndexMapping<T::Index>>,

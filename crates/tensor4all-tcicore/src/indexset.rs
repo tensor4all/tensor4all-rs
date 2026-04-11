@@ -1,4 +1,11 @@
-//! Index set for managing multi-indices with bidirectional lookup
+//! Index set for managing ordered collections with bidirectional lookup.
+//!
+//! [`IndexSet`] maintains insertion order while providing O(1) lookup in both
+//! directions: from positional index to value and from value to positional
+//! index. Duplicate insertions are silently ignored.
+//!
+//! This is used throughout the TCI infrastructure for managing pivot indices
+//! in matrix cross interpolation algorithms.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -38,7 +45,17 @@ impl<T: Clone + Eq + Hash> Default for IndexSet<T> {
 }
 
 impl<T: Clone + Eq + Hash> IndexSet<T> {
-    /// Create an empty index set
+    /// Create an empty index set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::IndexSet;
+    ///
+    /// let set: IndexSet<usize> = IndexSet::new();
+    /// assert!(set.is_empty());
+    /// assert_eq!(set.len(), 0);
+    /// ```
     pub fn new() -> Self {
         Self {
             to_int: HashMap::new(),
@@ -74,24 +91,71 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
         Self { to_int, from_int }
     }
 
-    /// Get the value at integer index
+    /// Get the value at a positional index, or `None` if out of range.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::IndexSet;
+    ///
+    /// let set = IndexSet::from_vec(vec![10, 20, 30]);
+    /// assert_eq!(set.get(0), Some(&10));
+    /// assert_eq!(set.get(2), Some(&30));
+    /// assert_eq!(set.get(3), None);
+    /// ```
     pub fn get(&self, i: usize) -> Option<&T> {
         self.from_int.get(i)
     }
 
-    /// Get the integer position of a value
+    /// Get the positional index of a value, or `None` if not present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::IndexSet;
+    ///
+    /// let set = IndexSet::from_vec(vec![10, 20, 30]);
+    /// assert_eq!(set.pos(&20), Some(1));
+    /// assert_eq!(set.pos(&99), None);
+    /// ```
     pub fn pos(&self, value: &T) -> Option<usize> {
         self.to_int.get(value).copied()
     }
 
-    /// Get positions for a slice of values
+    /// Get positional indices for a slice of values.
+    ///
+    /// Returns `None` if any value is not present in the set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::IndexSet;
+    ///
+    /// let set = IndexSet::from_vec(vec![10, 20, 30]);
+    /// assert_eq!(set.positions(&[30, 10]), Some(vec![2, 0]));
+    /// assert_eq!(set.positions(&[10, 99]), None);
+    /// ```
     pub fn positions(&self, values: &[T]) -> Option<Vec<usize>> {
         values.iter().map(|v| self.pos(v)).collect()
     }
 
-    /// Push a new value to the set
+    /// Push a new value to the set.
     ///
     /// If the value already exists in the set, this is a no-op.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::IndexSet;
+    ///
+    /// let mut set = IndexSet::new();
+    /// set.push(10);
+    /// set.push(20);
+    /// set.push(10); // duplicate, ignored
+    /// assert_eq!(set.len(), 2);
+    /// assert_eq!(set[0], 10);
+    /// assert_eq!(set[1], 20);
+    /// ```
     pub fn push(&mut self, value: T) {
         if self.to_int.contains_key(&value) {
             return;
@@ -101,7 +165,17 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
         self.to_int.insert(value, idx);
     }
 
-    /// Check if the set contains a value
+    /// Check if the set contains a value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::IndexSet;
+    ///
+    /// let set = IndexSet::from_vec(vec![10, 20]);
+    /// assert!(set.contains(&10));
+    /// assert!(!set.contains(&30));
+    /// ```
     pub fn contains(&self, value: &T) -> bool {
         self.to_int.contains_key(value)
     }
@@ -116,12 +190,31 @@ impl<T: Clone + Eq + Hash> IndexSet<T> {
         self.from_int.is_empty()
     }
 
-    /// Iterate over values
+    /// Iterate over values in insertion order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::IndexSet;
+    ///
+    /// let set = IndexSet::from_vec(vec![10, 20, 30]);
+    /// let collected: Vec<_> = set.iter().copied().collect();
+    /// assert_eq!(collected, vec![10, 20, 30]);
+    /// ```
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.from_int.iter()
     }
 
-    /// Get all values as a slice
+    /// Get all values as a slice in insertion order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::IndexSet;
+    ///
+    /// let set = IndexSet::from_vec(vec![10, 20, 30]);
+    /// assert_eq!(set.values(), &[10, 20, 30]);
+    /// ```
     pub fn values(&self) -> &[T] {
         &self.from_int
     }
@@ -153,10 +246,10 @@ impl<'a, T: Clone + Eq + Hash> IntoIterator for &'a IndexSet<T> {
     }
 }
 
-/// MultiIndex type alias
+/// A multi-index: a vector of site-local indices.
 pub type MultiIndex = Vec<usize>;
 
-/// LocalIndex type alias
+/// A single site-local index.
 pub type LocalIndex = usize;
 
 #[cfg(test)]

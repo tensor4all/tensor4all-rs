@@ -15,14 +15,18 @@ fn tagset_to_string(tags: &TagSet) -> String {
     tag_strs.join(",")
 }
 
-/// Write a TagSet to an HDF5 group (ITensors.jl compatible).
+/// Write a [`TagSet`] to an HDF5 group (ITensors.jl compatible).
 ///
-/// Schema:
+/// Tags are stored as a single comma-separated string, matching the
+/// ITensors.jl convention.
+///
+/// # HDF5 Schema
+///
 /// ```text
 /// <group>/
 ///   @type = "TagSet"
 ///   @version = 1
-///   tags: String  (comma-separated)
+///   tags: String  (comma-separated, e.g. "Site,n=1")
 /// ```
 pub(crate) fn write_tagset(group: &Group, tags: &TagSet) -> Result<()> {
     schema::write_type_version(group, "TagSet", 1)?;
@@ -38,7 +42,10 @@ pub(crate) fn write_tagset(group: &Group, tags: &TagSet) -> Result<()> {
     Ok(())
 }
 
-/// Read a TagSet from an HDF5 group.
+/// Read a [`TagSet`] from an HDF5 group.
+///
+/// Handles both variable-length Unicode (our format) and fixed-length Unicode
+/// (ITensors.jl format) via [`crate::compat::read_string_dataset`].
 pub(crate) fn read_tagset(group: &Group) -> Result<TagSet> {
     schema::require_type_version(group, "TagSet", 1)?;
 
@@ -52,9 +59,14 @@ pub(crate) fn read_tagset(group: &Group) -> Result<TagSet> {
     }
 }
 
-/// Write a DynIndex to an HDF5 group (ITensors.jl compatible).
+/// Write a [`DynIndex`] to an HDF5 group (ITensors.jl compatible).
 ///
-/// Schema:
+/// All index metadata is preserved: unique id, dimension, prime level, and tags.
+/// The `dir` field is always written as 0 (direction is unused in tensor4all-rs
+/// but required by the ITensors.jl schema).
+///
+/// # HDF5 Schema
+///
 /// ```text
 /// <group>/
 ///   @type = "Index"
@@ -62,7 +74,7 @@ pub(crate) fn read_tagset(group: &Group) -> Result<TagSet> {
 ///   @space_type = "Int"
 ///   id: UInt64
 ///   dim: Int64
-///   dir: Int64       (always 0 — direction is unused in tensor4all-rs)
+///   dir: Int64       (always 0 -- direction is unused in tensor4all-rs)
 ///   plev: Int64
 ///   tags/            (TagSet group)
 /// ```
@@ -98,7 +110,11 @@ pub(crate) fn write_index(group: &Group, index: &DynIndex) -> Result<()> {
     Ok(())
 }
 
-/// Read a DynIndex from an HDF5 group.
+/// Read a [`DynIndex`] from an HDF5 group.
+///
+/// Restores all metadata: id, dimension, prime level, and tags. The `dir`
+/// field is read for schema compatibility but ignored (always unused in
+/// tensor4all-rs).
 pub(crate) fn read_index(group: &Group) -> Result<DynIndex> {
     schema::require_type_version(group, "Index", 1)?;
 
@@ -135,15 +151,19 @@ pub(crate) fn read_index(group: &Group) -> Result<DynIndex> {
     Ok(idx)
 }
 
-/// Write an IndexSet to an HDF5 group (ITensors.jl compatible).
+/// Write an IndexSet (slice of [`DynIndex`]) to an HDF5 group (ITensors.jl compatible).
 ///
-/// Schema:
+/// Indices are stored as 1-indexed subgroups (`index_1`, `index_2`, ...),
+/// following the Julia convention.
+///
+/// # HDF5 Schema
+///
 /// ```text
 /// <group>/
 ///   @type = "IndexSet"
 ///   @version = 1
 ///   length: Int64
-///   index_1/ ...
+///   index_1/ ...   (Index group)
 ///   index_2/ ...
 /// ```
 pub(crate) fn write_index_set(group: &Group, indices: &[DynIndex]) -> Result<()> {
@@ -164,6 +184,9 @@ pub(crate) fn write_index_set(group: &Group, indices: &[DynIndex]) -> Result<()>
 }
 
 /// Read an IndexSet from an HDF5 group.
+///
+/// Returns a `Vec<DynIndex>` with indices read from 1-indexed subgroups.
+/// The number of indices is determined by the `length` dataset.
 pub(crate) fn read_index_set(group: &Group) -> Result<Vec<DynIndex>> {
     schema::require_type_version(group, "IndexSet", 1)?;
 

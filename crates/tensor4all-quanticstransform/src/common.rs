@@ -14,22 +14,58 @@ use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
 pub type DynIndex = Index<DynId, TagSet>;
 
 /// Boundary condition for quantics transformations.
+///
+/// Controls how operators handle values that exceed the representable range
+/// `[0, 2^R)`.
+///
+/// # Variants
+///
+/// - **`Periodic`** (default): Results wrap around modulo 2^R.
+///   Use when functions are periodic or when wraparound is acceptable.
+/// - **`Open`**: Out-of-range results produce zeros.
+///   Use when the function has compact support or when boundary effects matter.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::BoundaryCondition;
+///
+/// // Default is Periodic
+/// let bc = BoundaryCondition::default();
+/// assert_eq!(bc, BoundaryCondition::Periodic);
+///
+/// // Periodic: shift(7, 2) in 3-bit (mod 8) wraps to 1
+/// // Open: shift(7, 2) in 3-bit goes to 9 >= 8, produces zero
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BoundaryCondition {
-    /// Periodic boundary: operations wrap around mod 2^R
+    /// Periodic boundary: operations wrap around mod 2^R.
+    ///
+    /// Use for periodic functions or when wraparound is desired.
     #[default]
     Periodic,
-    /// Open boundary: operations beyond boundaries return zero
+    /// Open boundary: operations beyond `[0, 2^R)` return zero.
+    ///
+    /// Use when the function has compact support or boundary effects matter.
     Open,
 }
 
 /// Direction for carry propagation in binary arithmetic operations.
+///
+/// This is an internal detail of how binary arithmetic (addition, subtraction)
+/// is implemented in the MPO construction. Most users do not need to set this
+/// directly.
+///
+/// # Variants
+///
+/// - **`LeftToRight`** (default): Carry propagates from MSB to LSB.
+/// - **`RightToLeft`**: Carry propagates from LSB to MSB.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CarryDirection {
-    /// Carry propagates from left (MSB) to right (LSB)
+    /// Carry propagates from left (MSB) to right (LSB).
     #[default]
     LeftToRight,
-    /// Carry propagates from right (LSB) to left (MSB)
+    /// Carry propagates from right (LSB) to left (MSB).
     RightToLeft,
 }
 

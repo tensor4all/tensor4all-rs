@@ -1,23 +1,42 @@
 //! Utility for optimizing the first pivot for tensor cross interpolation.
 //!
-//! Port of Julia's `optfirstpivot` from TensorCrossInterpolation.jl.
+//! A good initial pivot (where `|f|` is large) improves TCI convergence.
+//! [`opt_first_pivot`] performs a greedy local search starting from a
+//! user-supplied guess.
 
 use tensor4all_simplett::TTScalar;
 use tensor4all_tcicore::{MultiIndex, Scalar};
 
-/// Find a good initial pivot by greedy local search.
+/// Optimize the initial pivot by greedy coordinate-wise search.
 ///
-/// Sweeps through dimensions, selecting the index that maximizes `|f(pivot)|`.
-/// Repeats until no improvement is found or `max_sweep` is reached.
+/// Starting from `first_pivot`, sweeps through each dimension and replaces
+/// the current index with whichever value maximizes `|f(pivot)|`. Repeats
+/// until no improvement is found or `max_sweep` sweeps have been performed.
 ///
 /// # Arguments
-/// * `f` - Function to interpolate
-/// * `local_dims` - Local dimensions for each site
-/// * `first_pivot` - Starting point for the search
-/// * `max_sweep` - Maximum number of sweeps (default: 1000)
+///
+/// * `f` -- function to interpolate
+/// * `local_dims` -- number of values each index can take
+/// * `first_pivot` -- starting point for the search
+/// * `max_sweep` -- maximum number of full sweeps (1000 is a safe default)
 ///
 /// # Returns
-/// The optimized pivot (multi-index with the largest `|f|` found)
+///
+/// The optimized pivot (multi-index with the largest `|f|` found).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::opt_first_pivot;
+///
+/// let f = |idx: &Vec<usize>| (idx[0] as f64 + idx[1] as f64 + 1.0).powi(2);
+/// let local_dims = vec![4, 4];
+/// let start = vec![0, 0]; // f(0,0) = 1.0
+///
+/// let pivot = opt_first_pivot::<f64, _>(&f, &local_dims, &start, 1000);
+/// // Should find the maximum: f(3,3) = 49.0
+/// assert_eq!(pivot, vec![3, 3]);
+/// ```
 pub fn opt_first_pivot<T, F>(
     f: &F,
     local_dims: &[usize],

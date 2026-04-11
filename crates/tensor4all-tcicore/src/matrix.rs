@@ -1,4 +1,24 @@
-//! Utility functions for matrix cross interpolation
+//! Dense row-major matrix type and utility functions.
+//!
+//! [`Matrix<T>`] is a simple dense 2D matrix in row-major layout, indexed
+//! by `m[[row, col]]`. It is used throughout the TCI infrastructure for
+//! pivot block computations, cross interpolation factors, and dense
+//! submatrix extraction.
+//!
+//! # Examples
+//!
+//! ```
+//! use tensor4all_tcicore::{Matrix, from_vec2d, matrix};
+//!
+//! let m = from_vec2d(vec![
+//!     vec![1.0_f64, 2.0],
+//!     vec![3.0, 4.0],
+//! ]);
+//! assert_eq!(m.nrows(), 2);
+//! assert_eq!(m.ncols(), 2);
+//! assert_eq!(m[[0, 1]], 2.0);
+//! assert_eq!(m[[1, 0]], 3.0);
+//! ```
 
 use crate::scalar::Scalar;
 use num_traits::{One, Zero};
@@ -7,7 +27,23 @@ use rand::Rng;
 use std::collections::HashSet;
 use std::ops::{Index, IndexMut};
 
-/// Simple 2D matrix backed by Vec
+/// A dense 2D matrix in row-major layout.
+///
+/// Access elements with `m[[row, col]]` syntax. Data is stored contiguously
+/// in row-major order.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::Matrix;
+///
+/// let mut m = Matrix::zeros(2, 3);
+/// m[[0, 1]] = 5.0_f64;
+/// assert_eq!(m[[0, 1]], 5.0);
+/// assert_eq!(m[[0, 0]], 0.0);
+/// assert_eq!(m.nrows(), 2);
+/// assert_eq!(m.ncols(), 3);
+/// ```
 #[derive(Debug, Clone)]
 pub struct Matrix<T> {
     data: Vec<T>,
@@ -16,13 +52,38 @@ pub struct Matrix<T> {
 }
 
 impl<T> Matrix<T> {
-    /// Create a matrix from raw row-major data
+    /// Create a matrix from raw row-major data.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `data.len() != nrows * ncols`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::Matrix;
+    ///
+    /// let m = Matrix::from_raw_vec(2, 2, vec![1.0, 2.0, 3.0, 4.0]);
+    /// assert_eq!(m[[0, 0]], 1.0);
+    /// assert_eq!(m[[0, 1]], 2.0);
+    /// assert_eq!(m[[1, 0]], 3.0);
+    /// assert_eq!(m[[1, 1]], 4.0);
+    /// ```
     pub fn from_raw_vec(nrows: usize, ncols: usize, data: Vec<T>) -> Self {
         assert_eq!(data.len(), nrows * ncols);
         Self { data, nrows, ncols }
     }
 
-    /// View the underlying row-major data as a slice
+    /// View the underlying row-major data as a contiguous slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::Matrix;
+    ///
+    /// let m = Matrix::from_raw_vec(1, 3, vec![10, 20, 30]);
+    /// assert_eq!(m.as_slice(), &[10, 20, 30]);
+    /// ```
     pub fn as_slice(&self) -> &[T] {
         &self.data
     }
@@ -39,7 +100,17 @@ impl<T> Matrix<T> {
 }
 
 impl<T: Clone> Matrix<T> {
-    /// Create a new matrix from dimensions and initial value
+    /// Create a new matrix filled with a constant value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::Matrix;
+    ///
+    /// let m = Matrix::from_elem(2, 3, 7.0);
+    /// assert_eq!(m[[0, 0]], 7.0);
+    /// assert_eq!(m[[1, 2]], 7.0);
+    /// ```
     pub fn from_elem(nrows: usize, ncols: usize, elem: T) -> Self {
         Self {
             data: vec![elem; nrows * ncols],
@@ -51,6 +122,18 @@ impl<T: Clone> Matrix<T> {
 
 impl<T: Clone + Zero> Matrix<T> {
     /// Create a zeros matrix
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::Matrix;
+    ///
+    /// let m = Matrix::<f64>::zeros(2, 3);
+    /// assert_eq!(m.nrows(), 2);
+    /// assert_eq!(m.ncols(), 3);
+    /// assert_eq!(m[[0, 0]], 0.0);
+    /// assert_eq!(m[[1, 2]], 0.0);
+    /// ```
     pub fn zeros(nrows: usize, ncols: usize) -> Self {
         Self {
             data: vec![T::zero(); nrows * ncols],
@@ -74,12 +157,35 @@ impl<T> IndexMut<[usize; 2]> for Matrix<T> {
     }
 }
 
-/// Create a zeros matrix with given dimensions
+/// Create a zeros matrix with given dimensions.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::matrix::zeros;
+///
+/// let m: tensor4all_tcicore::Matrix<f64> = zeros(2, 3);
+/// assert_eq!(m[[0, 0]], 0.0);
+/// assert_eq!(m.nrows(), 2);
+/// assert_eq!(m.ncols(), 3);
+/// ```
 pub fn zeros<T: Clone + Zero>(nrows: usize, ncols: usize) -> Matrix<T> {
     Matrix::zeros(nrows, ncols)
 }
 
-/// Create an identity matrix
+/// Create an `n x n` identity matrix.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::matrix::eye;
+///
+/// let m: tensor4all_tcicore::Matrix<f64> = eye(3);
+/// assert_eq!(m[[0, 0]], 1.0);
+/// assert_eq!(m[[1, 1]], 1.0);
+/// assert_eq!(m[[0, 1]], 0.0);
+/// assert_eq!(m[[2, 0]], 0.0);
+/// ```
 pub fn eye<T: Clone + Zero + One>(n: usize) -> Matrix<T> {
     let mut m = zeros(n, n);
     for i in 0..n {
@@ -88,7 +194,24 @@ pub fn eye<T: Clone + Zero + One>(n: usize) -> Matrix<T> {
     m
 }
 
-/// Create a matrix from a 2D vector (row-major)
+/// Create a matrix from a 2D vector (row-major).
+///
+/// Each inner `Vec` is one row.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::from_vec2d;
+///
+/// let m = from_vec2d(vec![
+///     vec![1.0, 2.0],
+///     vec![3.0, 4.0],
+/// ]);
+/// assert_eq!(m.nrows(), 2);
+/// assert_eq!(m.ncols(), 2);
+/// assert_eq!(m[[0, 1]], 2.0);
+/// assert_eq!(m[[1, 0]], 3.0);
+/// ```
 pub fn from_vec2d<T: Clone + Zero>(data: Vec<Vec<T>>) -> Matrix<T> {
     let nrows = data.len();
     let ncols = if nrows > 0 { data[0].len() } else { 0 };
@@ -101,27 +224,82 @@ pub fn from_vec2d<T: Clone + Zero>(data: Vec<Vec<T>>) -> Matrix<T> {
     m
 }
 
-/// Get number of rows
+/// Get number of rows.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::nrows};
+///
+/// let m = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]]);
+/// assert_eq!(nrows(&m), 3);
+/// ```
 pub fn nrows<T>(m: &Matrix<T>) -> usize {
     m.nrows
 }
 
-/// Get number of columns
+/// Get number of columns.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::ncols};
+///
+/// let m = from_vec2d(vec![vec![1.0, 2.0, 3.0]]);
+/// assert_eq!(ncols(&m), 3);
+/// ```
 pub fn ncols<T>(m: &Matrix<T>) -> usize {
     m.ncols
 }
 
-/// Get a row as a vector
+/// Get a row as a vector.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::get_row};
+///
+/// let m = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
+/// assert_eq!(get_row(&m, 0), vec![1.0, 2.0]);
+/// assert_eq!(get_row(&m, 1), vec![3.0, 4.0]);
+/// ```
 pub fn get_row<T: Clone>(m: &Matrix<T>, i: usize) -> Vec<T> {
     (0..m.ncols).map(|j| m[[i, j]].clone()).collect()
 }
 
-/// Get a column as a vector
+/// Get a column as a vector.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::get_col};
+///
+/// let m = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
+/// assert_eq!(get_col(&m, 0), vec![1.0, 3.0]);
+/// assert_eq!(get_col(&m, 1), vec![2.0, 4.0]);
+/// ```
 pub fn get_col<T: Clone>(m: &Matrix<T>, j: usize) -> Vec<T> {
     (0..m.nrows).map(|i| m[[i, j]].clone()).collect()
 }
 
-/// Get a submatrix by selecting specific rows and columns
+/// Get a submatrix by selecting specific rows and columns.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::submatrix};
+///
+/// let m = from_vec2d(vec![
+///     vec![1.0, 2.0, 3.0],
+///     vec![4.0, 5.0, 6.0],
+///     vec![7.0, 8.0, 9.0],
+/// ]);
+/// let sub = submatrix(&m, &[0, 2], &[1, 2]);
+/// assert_eq!(sub.nrows(), 2);
+/// assert_eq!(sub.ncols(), 2);
+/// assert_eq!(sub[[0, 0]], 2.0); // m[0, 1]
+/// assert_eq!(sub[[1, 1]], 9.0); // m[2, 2]
+/// ```
 pub fn submatrix<T: Clone + Zero>(m: &Matrix<T>, rows: &[usize], cols: &[usize]) -> Matrix<T> {
     let mut result = zeros(rows.len(), cols.len());
     for (ri, &r) in rows.iter().enumerate() {
@@ -132,7 +310,23 @@ pub fn submatrix<T: Clone + Zero>(m: &Matrix<T>, rows: &[usize], cols: &[usize])
     result
 }
 
-/// Append a column to the right of a matrix
+/// Append a column to the right of a matrix.
+///
+/// # Panics
+///
+/// Panics if `col.len() != m.nrows()`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::append_col};
+///
+/// let m = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
+/// let m2 = append_col(&m, &[5.0, 6.0]);
+/// assert_eq!(m2.ncols(), 3);
+/// assert_eq!(m2[[0, 2]], 5.0);
+/// assert_eq!(m2[[1, 2]], 6.0);
+/// ```
 pub fn append_col<T: Clone + Zero>(m: &Matrix<T>, col: &[T]) -> Matrix<T> {
     let nr = m.nrows;
     let nc = m.ncols;
@@ -148,7 +342,23 @@ pub fn append_col<T: Clone + Zero>(m: &Matrix<T>, col: &[T]) -> Matrix<T> {
     result
 }
 
-/// Append a row to the bottom of a matrix
+/// Append a row to the bottom of a matrix.
+///
+/// # Panics
+///
+/// Panics if `row.len() != m.ncols()`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::append_row};
+///
+/// let m = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
+/// let m2 = append_row(&m, &[5.0, 6.0]);
+/// assert_eq!(m2.nrows(), 3);
+/// assert_eq!(m2[[2, 0]], 5.0);
+/// assert_eq!(m2[[2, 1]], 6.0);
+/// ```
 pub fn append_row<T: Clone + Zero>(m: &Matrix<T>, row: &[T]) -> Matrix<T> {
     let nr = m.nrows;
     let nc = m.ncols;
@@ -166,7 +376,20 @@ pub fn append_row<T: Clone + Zero>(m: &Matrix<T>, row: &[T]) -> Matrix<T> {
     result
 }
 
-/// Swap two rows in a matrix in-place
+/// Swap two rows in a matrix in-place.
+///
+/// No-op if `a == b`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::swap_rows};
+///
+/// let mut m = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
+/// swap_rows(&mut m, 0, 1);
+/// assert_eq!(m[[0, 0]], 3.0);
+/// assert_eq!(m[[1, 0]], 1.0);
+/// ```
 pub fn swap_rows<T>(m: &mut Matrix<T>, a: usize, b: usize) {
     if a == b {
         return;
@@ -178,7 +401,20 @@ pub fn swap_rows<T>(m: &mut Matrix<T>, a: usize, b: usize) {
     }
 }
 
-/// Swap two columns in a matrix in-place
+/// Swap two columns in a matrix in-place.
+///
+/// No-op if `a == b`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::swap_cols};
+///
+/// let mut m = from_vec2d(vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
+/// swap_cols(&mut m, 0, 1);
+/// assert_eq!(m[[0, 0]], 2.0);
+/// assert_eq!(m[[0, 1]], 1.0);
+/// ```
 pub fn swap_cols<T>(m: &mut Matrix<T>, a: usize, b: usize) {
     if a == b {
         return;
@@ -190,7 +426,20 @@ pub fn swap_cols<T>(m: &mut Matrix<T>, a: usize, b: usize) {
     }
 }
 
-/// Transpose the matrix
+/// Transpose the matrix.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::transpose};
+///
+/// let m = from_vec2d(vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
+/// let mt = transpose(&m);
+/// assert_eq!(mt.nrows(), 3);
+/// assert_eq!(mt.ncols(), 2);
+/// assert_eq!(mt[[0, 0]], 1.0);
+/// assert_eq!(mt[[2, 1]], 6.0);
+/// ```
 pub fn transpose<T: Clone + Zero>(m: &Matrix<T>) -> Matrix<T> {
     let mut result = zeros(m.ncols, m.nrows);
     for i in 0..m.nrows {
@@ -203,7 +452,24 @@ pub fn transpose<T: Clone + Zero>(m: &Matrix<T>) -> Matrix<T> {
 
 // Scalar trait is now defined in crate::scalar module
 
-/// Calculates A * B^{-1} using Gaussian elimination for numerical stability.
+/// Calculates A * B^{-1} using Gaussian elimination.
+///
+/// # Panics
+///
+/// Panics if the number of columns of `a` does not match the dimensions of `b`,
+/// or if `b` is not square.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::a_times_b_inv};
+///
+/// let a = from_vec2d(vec![vec![2.0_f64, 0.0], vec![0.0, 4.0]]);
+/// let b = from_vec2d(vec![vec![1.0, 0.0], vec![0.0, 2.0]]);
+/// let result = a_times_b_inv(&a, &b);
+/// assert!((result[[0, 0]] - 2.0).abs() < 1e-10);
+/// assert!((result[[1, 1]] - 2.0).abs() < 1e-10);
+/// ```
 pub fn a_times_b_inv<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
     let n = ncols(a);
     assert_eq!(nrows(b), n);
@@ -216,7 +482,19 @@ pub fn a_times_b_inv<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
     transpose(&xt)
 }
 
-/// Calculates A^{-1} * B using Gaussian elimination for numerical stability.
+/// Calculates A^{-1} * B using Gaussian elimination.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::a_inv_times_b};
+///
+/// let a = from_vec2d(vec![vec![2.0_f64, 0.0], vec![0.0, 4.0]]);
+/// let b = from_vec2d(vec![vec![6.0, 0.0], vec![0.0, 8.0]]);
+/// let result = a_inv_times_b(&a, &b);
+/// assert!((result[[0, 0]] - 3.0).abs() < 1e-10);
+/// assert!((result[[1, 1]] - 2.0).abs() < 1e-10);
+/// ```
 pub fn a_inv_times_b<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
     let bt = transpose(b);
     let at = transpose(a);
@@ -296,7 +574,30 @@ fn solve_linear_system<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
     from_vec2d(x)
 }
 
-/// Find the position of maximum absolute value in a submatrix defined by row/column ranges
+/// Find the position and value of the maximum absolute value in a submatrix.
+///
+/// Searches within the rectangular region defined by `rows x cols` ranges.
+/// Returns `(row, col, value)` of the element with the largest `|value|^2`.
+///
+/// # Panics
+///
+/// Panics if either range is empty.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::submatrix_argmax};
+///
+/// let m = from_vec2d(vec![
+///     vec![1.0_f64, 2.0, 3.0],
+///     vec![4.0, 9.0, 6.0],
+///     vec![7.0, 8.0, 5.0],
+/// ]);
+/// let (row, col, val) = submatrix_argmax(&m, 0..3, 0..3);
+/// assert_eq!(row, 1);
+/// assert_eq!(col, 1);
+/// assert_eq!(val, 9.0);
+/// ```
 pub fn submatrix_argmax<T: Scalar>(
     a: &Matrix<T>,
     rows: std::ops::Range<usize>,
@@ -323,7 +624,29 @@ pub fn submatrix_argmax<T: Scalar>(
     (max_row, max_col, a[[max_row, max_col]])
 }
 
-/// Select a random subset of elements from a set
+/// Select a random subset of up to `n` elements from a slice.
+///
+/// If `n >= set.len()`, returns at most `set.len()` elements (a shuffled
+/// subset). Returns an empty vector when the set is empty or `n` is zero.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::matrix::random_subset;
+/// use rand::SeedableRng;
+///
+/// let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+/// let items = vec![10, 20, 30, 40, 50];
+/// let sub = random_subset(&items, 3, &mut rng);
+/// assert_eq!(sub.len(), 3);
+/// // All selected elements come from the original set
+/// for &x in &sub {
+///     assert!(items.contains(&x));
+/// }
+/// // Requesting more than available returns at most set.len()
+/// let all = random_subset(&items, 100, &mut rng);
+/// assert_eq!(all.len(), 5);
+/// ```
 pub fn random_subset<T: Clone, R: Rng>(set: &[T], n: usize, rng: &mut R) -> Vec<T> {
     let n = n.min(set.len());
     if n == 0 {
@@ -336,7 +659,18 @@ pub fn random_subset<T: Clone, R: Rng>(set: &[T], n: usize, rng: &mut R) -> Vec<
     indices.into_iter().map(|i| set[i].clone()).collect()
 }
 
-/// Set difference: elements in `set` that are not in `exclude`
+/// Set difference: elements in `set` that are not in `exclude`.
+///
+/// Preserves the order of elements in `set`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::matrix::set_diff;
+///
+/// let result = set_diff(&[0, 1, 2, 3, 4], &[1, 3]);
+/// assert_eq!(result, vec![0, 2, 4]);
+/// ```
 pub fn set_diff(set: &[usize], exclude: &[usize]) -> Vec<usize> {
     let exclude_set: HashSet<usize> = exclude.iter().copied().collect();
     set.iter()
@@ -345,7 +679,21 @@ pub fn set_diff(set: &[usize], exclude: &[usize]) -> Vec<usize> {
         .collect()
 }
 
-/// Dot product of two vectors
+/// Dot product of two vectors.
+///
+/// # Panics
+///
+/// Panics if `a.len() != b.len()`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::matrix::dot;
+///
+/// let a = [1.0_f64, 2.0, 3.0];
+/// let b = [4.0, 5.0, 6.0];
+/// assert!((dot(&a, &b) - 32.0).abs() < 1e-10);
+/// ```
 pub fn dot<T: Scalar>(a: &[T], b: &[T]) -> T {
     assert_eq!(a.len(), b.len());
     a.iter()
@@ -406,9 +754,27 @@ macro_rules! impl_blas_mul {
 
 impl_blas_mul!(f64, f32, num_complex::Complex64, num_complex::Complex32);
 
-/// Matrix multiplication: A * B
+/// Matrix multiplication: A * B.
 ///
-/// Uses BLAS-backed einsum via tenferro.
+/// Uses BLAS-backed einsum via tenferro for high performance.
+///
+/// # Panics
+///
+/// Panics if `a.ncols() != b.nrows()`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tcicore::{from_vec2d, matrix::mat_mul};
+///
+/// let a = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+/// let b = from_vec2d(vec![vec![5.0, 6.0], vec![7.0, 8.0]]);
+/// let c = mat_mul(&a, &b);
+/// assert!((c[[0, 0]] - 19.0).abs() < 1e-10);
+/// assert!((c[[0, 1]] - 22.0).abs() < 1e-10);
+/// assert!((c[[1, 0]] - 43.0).abs() < 1e-10);
+/// assert!((c[[1, 1]] - 50.0).abs() < 1e-10);
+/// ```
 pub fn mat_mul<T: Scalar>(a: &Matrix<T>, b: &Matrix<T>) -> Matrix<T> {
     T::blas_mat_mul(a, b)
 }

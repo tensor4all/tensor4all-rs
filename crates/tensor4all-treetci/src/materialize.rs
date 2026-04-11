@@ -74,6 +74,15 @@ impl_full_piv_lu_scalar!(Complex32);
 impl_full_piv_lu_scalar!(Complex64);
 
 /// Materialize a converged TreeTCI state as a `TreeTN`.
+///
+/// Converts the pivot sets stored in a [`TreeTCI2`] into site tensors
+/// of a [`TreeTN`]. The `evaluate` closure is called to fill tensor
+/// entries at the selected pivot points.
+///
+/// `center_site` selects the BFS root for the tree decomposition
+/// (default: site 0).
+///
+/// This function is called internally by [`crossinterpolate2`](crate::crossinterpolate2).
 pub fn to_treetn<T, F>(
     state: &TreeTCI2<T>,
     evaluate: F,

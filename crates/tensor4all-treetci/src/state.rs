@@ -5,6 +5,34 @@ use std::marker::PhantomData;
 use tensor4all_core::ColMajorArray;
 
 /// TreeTCI state mirroring the upstream `SimpleTCI` layout.
+///
+/// Stores the current pivot sets, bond errors, and tree graph metadata
+/// for tree tensor cross interpolation. The type parameter `T` is the
+/// scalar type (e.g., `f64`, `Complex64`).
+///
+/// Use [`TreeTCI2::new`] to create a fresh state, then seed it with
+/// [`TreeTCI2::add_global_pivots`] before passing to
+/// [`optimize_default`](crate::optimize_default) or
+/// [`crossinterpolate2`](crate::crossinterpolate2).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::{TreeTCI2, TreeTciEdge, TreeTciGraph};
+///
+/// let graph = TreeTciGraph::new(3, &[
+///     TreeTciEdge::new(0, 1),
+///     TreeTciEdge::new(1, 2),
+/// ]).unwrap();
+///
+/// let mut state = TreeTCI2::<f64>::new(vec![2, 3, 2], graph).unwrap();
+/// assert_eq!(state.max_rank(), 0);
+/// assert!((state.max_bond_error() - 0.0).abs() < f64::EPSILON);
+///
+/// // Seed with a global pivot
+/// state.add_global_pivots(&[vec![0, 0, 0]]).unwrap();
+/// assert!(state.max_rank() >= 1);
+/// ```
 #[derive(Clone, Debug)]
 pub struct TreeTCI2<T> {
     /// Pivot sets keyed by canonical subtree keys.

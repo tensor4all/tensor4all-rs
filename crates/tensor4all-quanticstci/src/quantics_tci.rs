@@ -19,32 +19,40 @@ use crate::options::QtciOptions;
 
 /// TCI result wrapped with grid information.
 ///
-/// This struct combines a TensorTrain result with grid information for
-/// seamless conversion between grid indices and quantics indices.
+/// Combines a [`TensorTrain`] approximation with grid metadata so you
+/// can [`evaluate`](Self::evaluate) at grid indices, compute
+/// [`sum`](Self::sum) and [`integral`](Self::integral), and access the
+/// underlying [`tensor_train`](Self::tensor_train) for further
+/// manipulation.
+///
+/// Created by [`quanticscrossinterpolate`], [`quanticscrossinterpolate_discrete`],
+/// or [`quanticscrossinterpolate_from_arrays`].
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_quanticstci::{quanticscrossinterpolate, QtciOptions};
-/// use quanticsgrids::DiscretizedGrid;
+/// use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
 ///
-/// // Interpolate constant f(x) = 2.0 on [0, 1) with 2^3 = 8 grid points
-/// let grid = DiscretizedGrid::builder(&[3])
-///     .with_lower_bound(&[0.0])
-///     .with_upper_bound(&[1.0])
-///     .build()
-///     .unwrap();
-///
-/// let f = |_coords: &[f64]| 2.0_f64;
+/// // Interpolate f(i) = i on a grid of size 8 (1-indexed)
+/// let f = |idx: &[i64]| idx[0] as f64;
 /// let (qtci, _ranks, _errors) =
-///     quanticscrossinterpolate::<f64, _>(&grid, f, None, QtciOptions::default()).unwrap();
+///     quanticscrossinterpolate_discrete::<f64, _>(
+///         &[8], f, None, QtciOptions::default(),
+///     ).unwrap();
+///
+/// // Evaluate at grid point 5
+/// let val = qtci.evaluate(&[5]).unwrap();
+/// assert!((val - 5.0).abs() < 1e-8);
+///
+/// // Sum over all grid points: 1 + 2 + ... + 8 = 36
+/// let sum = qtci.sum().unwrap();
+/// assert!((sum - 36.0).abs() < 1e-6);
 ///
 /// // rank() gives the maximum bond dimension
 /// assert!(qtci.rank() >= 1);
 ///
-/// // Sum over all 8 grid points: 2.0 * 8 = 16.0
-/// let sum = qtci.sum().unwrap();
-/// assert!((sum - 16.0).abs() < 1e-8);
+/// // link_dims() gives bond dimensions between sites
+/// assert!(!qtci.link_dims().is_empty());
 /// ```
 #[derive(Clone)]
 pub struct QuanticsTensorCI2<V: TTScalar> {
@@ -132,10 +140,26 @@ where
     /// Evaluate at grid indices.
     ///
     /// # Arguments
-    /// * `indices` - Grid indices (1-indexed as in Julia)
+    /// * `indices` - Grid indices (1-indexed). For a grid of size N,
+    ///   valid indices are `1..=N`.
     ///
     /// # Returns
-    /// Value at the specified grid point
+    /// The interpolated value at the specified grid point.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+    ///
+    /// let f = |idx: &[i64]| (idx[0] + idx[1]) as f64;
+    /// let (qtci, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
+    ///     &[4, 4], f, None, QtciOptions::default(),
+    /// ).unwrap();
+    ///
+    /// // Indices are 1-indexed: f(2, 3) = 2 + 3 = 5
+    /// let val = qtci.evaluate(&[2, 3]).unwrap();
+    /// assert!((val - 5.0).abs() < 1e-8);
+    /// ```
     pub fn evaluate(&self, indices: &[i64]) -> Result<V> {
         let quantics = self.grididx_to_quantics(indices)?;
         // Convert 1-indexed i64 quantics to 0-indexed usize for tensor train evaluation
@@ -147,18 +171,58 @@ where
 
     /// Factorized sum over all grid points.
     ///
-    /// This computes the sum efficiently using the tensor train structure.
+    /// Computes the sum efficiently using the tensor train structure,
+    /// without visiting every grid point individually.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+    ///
+    /// // f(i) = 1 on a grid of size 8 => sum = 8
+    /// let f = |_idx: &[i64]| 1.0_f64;
+    /// let (qtci, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
+    ///     &[8], f, None, QtciOptions::default(),
+    /// ).unwrap();
+    ///
+    /// let sum = qtci.sum().unwrap();
+    /// assert!((sum - 8.0).abs() < 1e-8);
+    /// ```
     pub fn sum(&self) -> Result<V> {
         Ok(self.tt.sum())
     }
 
-    /// Integral over continuous domain (left Riemann sum).
+    /// Integral over the continuous domain (left Riemann sum).
     ///
-    /// Computes `sum(f(x_i)) * product(step_sizes)`, which is a left Riemann sum
-    /// with O(h) convergence where h is the grid spacing. The result depends on the
-    /// `include_endpoint` setting of the `DiscretizedGrid`.
+    /// Computes `sum(f(x_i)) * product(step_sizes)`, a left Riemann sum
+    /// with O(h) convergence where h is the grid spacing. The result
+    /// depends on the `include_endpoint` setting of the [`DiscretizedGrid`].
     ///
-    /// For inherent discrete grids (no continuous domain), returns the plain sum.
+    /// For inherent discrete grids (created via
+    /// [`quanticscrossinterpolate_discrete`]), there is no continuous
+    /// domain, so this returns the plain [`sum`](Self::sum).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstci::{
+    ///     quanticscrossinterpolate, DiscretizedGrid, QtciOptions,
+    /// };
+    ///
+    /// // Integrate f(x) = 1 over [0, 1) with 16 points => integral = 1.0
+    /// let grid = DiscretizedGrid::builder(&[4])
+    ///     .with_lower_bound(&[0.0])
+    ///     .with_upper_bound(&[1.0])
+    ///     .build()
+    ///     .unwrap();
+    /// let f = |_: &[f64]| 1.0_f64;
+    /// let (qtci, _, _) = quanticscrossinterpolate::<f64, _>(
+    ///     &grid, f, None, QtciOptions::default(),
+    /// ).unwrap();
+    ///
+    /// let integral = qtci.integral().unwrap();
+    /// assert!((integral - 1.0).abs() < 1e-8);
+    /// ```
     pub fn integral(&self) -> Result<V>
     where
         V: std::ops::Mul<f64, Output = V>,
@@ -173,7 +237,26 @@ where
         }
     }
 
-    /// Get the underlying TensorTrain.
+    /// Get the underlying [`TensorTrain`].
+    ///
+    /// Returns a clone of the tensor train. Use this to pass the result
+    /// to other tensor-train operations (contraction, SVD compression, etc.).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+    /// use tensor4all_simplett::AbstractTensorTrain;
+    ///
+    /// let f = |idx: &[i64]| idx[0] as f64;
+    /// let (qtci, _, _) = quanticscrossinterpolate_discrete::<f64, _>(
+    ///     &[4], f, None, QtciOptions::default(),
+    /// ).unwrap();
+    ///
+    /// let tt = qtci.tensor_train();
+    /// assert!(tt.rank() >= 1);
+    /// assert!(tt.len() > 0);
+    /// ```
     pub fn tensor_train(&self) -> TensorTrain<V> {
         self.tt.clone()
     }
@@ -488,7 +571,11 @@ where
     ))
 }
 
-/// Interpolate from grid point arrays.
+/// Interpolate from explicit grid point arrays.
+///
+/// Convenience wrapper around [`quanticscrossinterpolate`] that builds a
+/// [`DiscretizedGrid`] from arrays of grid coordinates. The grid bounds are
+/// inferred from the first and last elements of each array.
 ///
 /// # Arguments
 /// * `xvals` - Arrays of grid points for each dimension. All dimensions must have the
@@ -498,10 +585,27 @@ where
 /// * `options` - TCI options
 ///
 /// # Returns
-/// Tuple of (QuanticsTensorCI2, ranks, errors)
+/// Tuple of ([`QuanticsTensorCI2`], ranks per sweep, errors per sweep)
 ///
 /// # Errors
 /// Returns an error if dimensions are not equal or not powers of 2.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstci::{quanticscrossinterpolate_from_arrays, QtciOptions};
+///
+/// // 4 points in [0, 3]
+/// let xvals = vec![vec![0.0, 1.0, 2.0, 3.0]];
+/// let f = |coords: &[f64]| coords[0] * coords[0]; // f(x) = x^2
+/// let (qtci, _, _) = quanticscrossinterpolate_from_arrays::<f64, _>(
+///     &xvals, f, None, QtciOptions::default(),
+/// ).unwrap();
+///
+/// // Grid index 3 maps to x = 2.0, so f = 4.0
+/// let val = qtci.evaluate(&[3]).unwrap();
+/// assert!((val - 4.0).abs() < 1e-8);
+/// ```
 pub fn quanticscrossinterpolate_from_arrays<V, F>(
     xvals: &[Vec<f64>],
     f: F,
@@ -567,20 +671,50 @@ where
     quanticscrossinterpolate(&grid, f, initial_pivots, options)
 }
 
-/// Interpolate with discrete integer grid.
+/// Interpolate a function defined on a discrete integer grid.
+///
+/// Use this when your function is naturally indexed by integers (e.g.,
+/// lattice models, combinatorial functions). Grid indices are
+/// **1-indexed**: the first grid point is `[1, 1, ...]`, and the last
+/// is `[size[0], size[1], ...]`.
+///
+/// For functions on continuous domains, use [`quanticscrossinterpolate`]
+/// with a [`DiscretizedGrid`] instead.
 ///
 /// # Arguments
 /// * `size` - Grid size in each dimension. All dimensions must have the **same** number of
-///   points and each must be a power of 2 (e.g., `vec![16, 16]`).
+///   points and each must be a power of 2 (e.g., `&[16, 16]`).
 /// * `f` - Function to interpolate, taking **1-indexed** grid indices as `&[i64]`
 /// * `initial_pivots` - Initial pivot grid indices (1-indexed, optional)
 /// * `options` - TCI options
 ///
 /// # Returns
-/// Tuple of (QuanticsTensorCI2, ranks, errors)
+/// Tuple of ([`QuanticsTensorCI2`], ranks per sweep, errors per sweep)
 ///
 /// # Errors
 /// Returns an error if dimensions are not equal or not powers of 2.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstci::{quanticscrossinterpolate_discrete, QtciOptions};
+///
+/// // Interpolate f(i, j) = i * j on a 16x16 grid
+/// let f = |idx: &[i64]| (idx[0] * idx[1]) as f64;
+/// let (qtci, ranks, errors) = quanticscrossinterpolate_discrete::<f64, _>(
+///     &[16, 16],
+///     f,
+///     None,
+///     QtciOptions::default().with_tolerance(1e-10),
+/// ).unwrap();
+///
+/// // Check convergence
+/// assert!(*errors.last().unwrap() < 1e-8);
+///
+/// // Evaluate: f(3, 5) = 15
+/// let val = qtci.evaluate(&[3, 5]).unwrap();
+/// assert!((val - 15.0).abs() < 1e-8);
+/// ```
 pub fn quanticscrossinterpolate_discrete<V, F>(
     size: &[usize],
     f: F,

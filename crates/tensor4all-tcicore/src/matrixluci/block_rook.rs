@@ -9,6 +9,10 @@ use crate::matrixluci::Result;
 use num_complex::{Complex32, Complex64};
 
 /// Lazy pivot kernel based on residual row/column rook search.
+///
+/// Selects pivots by computing residual blocks on demand, avoiding full
+/// matrix materialization. Suitable for large matrices accessed via
+/// [`LazyMatrixSource`](super::LazyMatrixSource).
 #[derive(Default)]
 pub struct LazyBlockRookKernel;
 

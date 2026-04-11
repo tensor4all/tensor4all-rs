@@ -6,10 +6,31 @@ use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3Ops};
 
 impl<T: TTScalar> TensorTrain<T> {
-    /// Add two tensor trains element-wise
+    /// Add two tensor trains element-wise: `result[i] = self[i] + other[i]`.
     ///
-    /// The result has bond dimension equal to the sum of the input bond dimensions.
-    /// Use `compress` to reduce the bond dimension afterward.
+    /// The result has bond dimension equal to the **sum** of the input bond
+    /// dimensions. Call [`compress`](crate::TensorTrain::compress) afterward
+    /// to reduce the bond dimension.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tensor trains have different lengths or
+    /// mismatched site dimensions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// let a = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    /// let b = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+    /// let c = a.add(&b).unwrap();
+    ///
+    /// // Every entry = 1 + 2 = 3
+    /// assert!((c.evaluate(&[0, 0]).unwrap() - 3.0).abs() < 1e-12);
+    /// // Bond dim = 1 + 1 = 2
+    /// assert_eq!(c.rank(), 2);
+    /// ```
     pub fn add(&self, other: &Self) -> Result<Self> {
         use crate::error::TensorTrainError;
 
@@ -118,13 +139,36 @@ impl<T: TTScalar> TensorTrain<T> {
         Ok(TensorTrain::from_tensors_unchecked(tensors))
     }
 
-    /// Subtract another tensor train from this one
+    /// Subtract element-wise: `result[i] = self[i] - other[i]`.
+    ///
+    /// Equivalent to `self.add(&other.negate())`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// let a = TensorTrain::<f64>::constant(&[2, 3], 5.0);
+    /// let b = TensorTrain::<f64>::constant(&[2, 3], 2.0);
+    /// let c = a.sub(&b).unwrap();
+    /// assert!((c.evaluate(&[0, 0]).unwrap() - 3.0).abs() < 1e-12);
+    /// ```
     pub fn sub(&self, other: &Self) -> Result<Self> {
         let neg_other = other.scaled(-T::one());
         self.add(&neg_other)
     }
 
-    /// Negate the tensor train (multiply by -1)
+    /// Negate every entry: `result[i] = -self[i]`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// let tt = TensorTrain::<f64>::constant(&[2, 3], 7.0);
+    /// let neg = tt.negate();
+    /// assert!((neg.evaluate(&[0, 0]).unwrap() + 7.0).abs() < 1e-12);
+    /// ```
     pub fn negate(&self) -> Self {
         self.scaled(-T::one())
     }

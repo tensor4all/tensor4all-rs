@@ -22,13 +22,13 @@ operators are applied in the same way regardless of their mathematical meaning.
 
 | Operator | Mathematical effect | Constructor |
 |----------|---------------------|-------------|
-| Flip | f(x) = g(2^R − x) | `flip_operator` |
+| Flip | f(x) = g(2^R - x) | `flip_operator` |
 | Shift | f(x) = g(x + offset) mod 2^R | `shift_operator` |
-| Phase Rotation | f(x) = exp(i·θ·x) · g(x) | `phase_rotation_operator` |
-| Cumulative Sum | y_i = Σ_{j < i} x_j | `cumsum_operator` |
+| Phase Rotation | f(x) = exp(i*theta*x) * g(x) | `phase_rotation_operator` |
+| Cumulative Sum | y_i = sum of x_j for j < i | `cumsum_operator` |
 | Fourier Transform | Quantics Fourier Transform (QFT) | `quantics_fourier_operator` |
-| Binary Operation | f(x, y), first variable → a·x + b·y | `binaryop_single_operator` |
-| Affine Transform | y = A·x + b (rational coefficients) | `affine_operator` |
+| Binary Operation | f(x, y), first variable -> a*x + b*y | `binaryop_single_operator` |
+| Affine Transform | y = A*x + b (rational coefficients) | `affine_operator` |
 
 The parameter `r` that appears in every constructor is the number of quantics
 bits (sites) per variable.  A single variable is discretized on `2^r` grid
@@ -38,17 +38,17 @@ points.
 
 Constructors return `Err` for invalid inputs:
 
-- `r == 0` — no sites to operate on
-- `r == 1` for `cumsum_operator`, `triangle_operator`, `quantics_fourier_operator` — requires at least 2 sites
-- `r >= 64` for `shift_operator` — would overflow a 64-bit integer
-- NaN or Inf `theta` for `phase_rotation_operator` — invalid rotation angle
-- `BinaryCoeffs(-1, -1)` for `binaryop_single_operator` — this combination is not supported
+- `r == 0` -- no sites to operate on
+- `r == 1` for `cumsum_operator`, `triangle_operator`, `quantics_fourier_operator` -- requires at least 2 sites
+- `r >= 64` for `shift_operator` -- would overflow a 64-bit integer
+- NaN or Inf `theta` for `phase_rotation_operator` -- invalid rotation angle
+- `BinaryCoeffs(-1, -1)` for `binaryop_single_operator` -- this combination is not supported
 
 ---
 
 ## Creating Operators
 
-```rust,ignore
+```rust
 use tensor4all_quanticstransform::{
     flip_operator, shift_operator, phase_rotation_operator,
     cumsum_operator, quantics_fourier_operator,
@@ -59,28 +59,35 @@ use tensor4all_quanticstransform::{
 let r = 8;
 
 // Flip: f(x) = g(2^R - x)
-let flip_op = flip_operator(r, BoundaryCondition::Periodic)?;
+let flip_op = flip_operator(r, BoundaryCondition::Periodic).unwrap();
+assert_eq!(flip_op.mpo.node_count(), r);
 
 // Shift by 10: f(x) = g(x + 10) mod 2^R
-let shift_op = shift_operator(r, 10, BoundaryCondition::Periodic)?;
+let shift_op = shift_operator(r, 10, BoundaryCondition::Periodic).unwrap();
+assert_eq!(shift_op.mpo.node_count(), r);
 
 // Phase rotation: f(x) = exp(i*pi/4*x) * g(x)
-let phase_op = phase_rotation_operator(r, std::f64::consts::PI / 4.0)?;
+let phase_op = phase_rotation_operator(r, std::f64::consts::PI / 4.0).unwrap();
+assert_eq!(phase_op.mpo.node_count(), r);
 
 // Cumulative sum
-let cumsum_op = cumsum_operator(r)?;
+let cumsum_op = cumsum_operator(r).unwrap();
+assert_eq!(cumsum_op.mpo.node_count(), r);
 
 // Fourier transform (forward)
-let ft_op = quantics_fourier_operator(r, FourierOptions::forward())?;
+let ft_op = quantics_fourier_operator(r, FourierOptions::forward()).unwrap();
+assert_eq!(ft_op.mpo.node_count(), r);
 ```
 
 ### Affine Transform
 
-For transformations of the form **y = A·x + b** with rational coefficients:
+For transformations of the form **y = A*x + b** with rational coefficients:
 
-```rust,ignore
+```rust
 use tensor4all_quanticstransform::{affine_operator, AffineParams, BoundaryCondition};
 use num_rational::Rational64;
+
+let r = 4;
 
 // A = [[1, 1], [1, -1]], b = [0, 0]  (2 outputs, 2 inputs)
 let a = vec![
@@ -88,9 +95,10 @@ let a = vec![
     Rational64::from_integer(1), Rational64::from_integer(-1),
 ];
 let b = vec![Rational64::from_integer(0), Rational64::from_integer(0)];
-let params = AffineParams::new(a, b, 2, 2)?;
+let params = AffineParams::new(a, b, 2, 2).unwrap();
 let bc = vec![BoundaryCondition::Periodic; 2];
-let affine_op = affine_operator(r, &params, &bc)?;
+let affine_op = affine_operator(r, &params, &bc).unwrap();
+assert_eq!(affine_op.mpo.node_count(), r);
 ```
 
 ---
@@ -99,18 +107,18 @@ let affine_op = affine_operator(r, &params, &bc)?;
 
 ### Index Mapping Flow
 
-Operators define abstract *input* and *output* indices labeled `0, 1, …, r-1`.
+Operators define abstract *input* and *output* indices labeled `0, 1, ..., r-1`.
 To apply an operator, replace the tensor network's site indices with the
 operator's input indices using `replaceind`, then call `apply_linear_operator`.
 
-```
+```text
 Original TreeTN          Operator            Result TreeTN
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│  site_idx_0  │───▶│  input_0     │    │  output_0    │
-│  site_idx_1  │───▶│  input_1     │───▶│  output_1    │
-│  site_idx_2  │───▶│  input_2     │    │  output_2    │
-│  other_idx   │    │              │    │  other_idx   │  (passes through)
-└──────────────┘    └──────────────┘    └──────────────┘
++----------------+    +----------------+    +----------------+
+|  site_idx_0    |--->|  input_0       |    |  output_0      |
+|  site_idx_1    |--->|  input_1       |--->|  output_1      |
+|  site_idx_2    |--->|  input_2       |    |  output_2      |
+|  other_idx     |    |                |    |  other_idx     |  (passes through)
++----------------+    +----------------+    +----------------+
 ```
 
 `apply_linear_operator`:
@@ -118,82 +126,57 @@ Original TreeTN          Operator            Result TreeTN
 2. Replaces input indices with output indices.
 3. Leaves all unrelated indices unchanged.
 
-### Basic Application
+### Apply Method Selection
 
-```rust,ignore
-use tensor4all_treetn::{apply_linear_operator, ApplyOptions};
+`ApplyOptions` controls how the operator-state contraction is performed.
+Three methods are available, each with different tradeoffs:
 
-let r = 4;
-let shift_op = shift_operator(r, 3, BoundaryCondition::Periodic)?;
+| Method | Algorithm | When to use |
+|--------|-----------|-------------|
+| `ApplyOptions::naive()` | Contract to full tensor, re-decompose | Small systems, debugging, exactness required |
+| `ApplyOptions::zipup()` | Single-sweep contraction with SVD truncation | Default choice; fast, good accuracy |
+| `ApplyOptions::fit()` | Iterative variational optimization | Best compression; use when bond dim must be small |
 
-// Obtain the TreeTN's site indices (one per bit site)
-let site_indices: Vec<DynIndex> = treetn.external_indices();
+```rust
+use tensor4all_treetn::ApplyOptions;
 
-// Remap the TreeTN's site indices to the operator's input indices
-let mut treetn_remapped = treetn;
-for i in 0..r {
-    let op_input = shift_op
-        .get_input_mapping(&i)
-        .expect("missing input mapping")
-        .true_index
-        .clone();
-    treetn_remapped = treetn_remapped.replaceind(&site_indices[i], &op_input)?;
-}
+// Naive: exact but O(exp(n)) memory. Best for testing.
+let opts = ApplyOptions::naive();
+assert_eq!(opts.max_rank, None);
 
-// Apply the operator
-let result = apply_linear_operator(&shift_op, &treetn_remapped, ApplyOptions::default())?;
+// ZipUp (default): single-pass, controllable truncation.
+let opts = ApplyOptions::zipup()
+    .with_max_rank(64)
+    .with_rtol(1e-10);
+assert_eq!(opts.max_rank, Some(64));
+
+// Fit: iterative sweeps for best compression.
+let opts = ApplyOptions::fit()
+    .with_max_rank(32)
+    .with_nfullsweeps(3);
+assert_eq!(opts.nfullsweeps, 3);
 ```
 
-### Partial Application (Multi-Variable Tensor Trains)
+### Steiner Tree Partial Apply
 
-A key feature is applying an operator to **only some indices** of a tensor
-network.  For example, to Fourier-transform only the x-variable of a 2D
-function f(x, y):
+When applying an operator to **a subset of sites** in a tensor network
+(e.g., Fourier-transforming only the x-variable of a 2D function),
+`apply_linear_operator` automatically handles the non-contiguous case.
 
-```rust,ignore
-let r = 4;
-// treetn_2d has interleaved or separate indices for x and y
-let x_indices: Vec<DynIndex> = /* 4 bit indices for x */;
-let y_indices: Vec<DynIndex> = /* 4 bit indices for y */;
+If the operator's nodes are a subset of the state's nodes, the algorithm
+constructs a **Steiner tree** -- the minimal subtree connecting all operator
+nodes -- and inserts identity tensors at intermediate nodes that are not
+covered by the operator. This means:
 
-let fourier_x = quantics_fourier_operator(r, FourierOptions::forward())?;
+- You do not need to manually insert identity tensors.
+- The operator can act on non-contiguous nodes (e.g., every other site in
+  an interleaved encoding).
+- Indices on nodes outside the Steiner tree pass through unchanged.
 
-// Remap ONLY the x indices
-let mut treetn_remapped = treetn_2d;
-for i in 0..r {
-    let op_input = fourier_x
-        .get_input_mapping(&i)
-        .expect("missing input mapping")
-        .true_index
-        .clone();
-    treetn_remapped = treetn_remapped.replaceind(&x_indices[i], &op_input)?;
-}
-// y_indices are NOT remapped — they pass through unchanged
-
-let result = apply_linear_operator(&fourier_x, &treetn_remapped, ApplyOptions::default())?;
-// result represents F_x[f](k_x, y)
-```
-
-### Truncation Options
-
-Control the accuracy/efficiency tradeoff:
-
-```rust,ignore
-// No truncation — exact but potentially expensive
-let options = ApplyOptions::naive();
-
-// ZipUp algorithm with bond dimension and tolerance limits
-let options = ApplyOptions::zipup()
-    .with_max_bond_dim(64)
-    .with_tolerance(1e-10);
-
-// Fit algorithm for more control over iterations
-let options = ApplyOptions::fit()
-    .with_max_bond_dim(32)
-    .with_max_iterations(100);
-
-let result = apply_linear_operator(&op, &treetn_remapped, options)?;
-```
+This feature is essential for multi-variable quantics, where variables are
+interleaved: applying a 1D operator to variable x means acting on
+sites `{0, 2, 4, ...}` while leaving `{1, 3, 5, ...}` (the y-variable)
+untouched.
 
 ---
 
@@ -204,16 +187,16 @@ let result = apply_linear_operator(&op, &treetn_remapped, options)?;
 All operators use **big-endian** bit ordering, matching Julia's Quantics.jl:
 
 - Site 0 = Most Significant Bit (MSB)
-- Site R−1 = Least Significant Bit (LSB)
-- Integer value: x = Σ_n x_n · 2^(R−1−n)
+- Site R-1 = Least Significant Bit (LSB)
+- Integer value: x = sum over n of x_n * 2^(R-1-n)
 
-For example, with R = 3 sites the value 5 = 101₂ is stored as:
+For example, with R = 3 sites the value 5 = 101 in binary is stored as:
 
 | Site | Bit | Contribution |
 |------|-----|-------------|
-| 0 | 1 | 2² = 4 |
+| 0 | 1 | 2^2 = 4 |
 | 1 | 0 | 0 |
-| 2 | 1 | 2⁰ = 1 |
+| 2 | 1 | 2^0 = 1 |
 
 ### Multi-Variable Encoding
 
@@ -222,7 +205,7 @@ The `_multivar` variants (`flip_operator_multivar`, `shift_operator_multivar`,
 multiple variables.  Each site simultaneously encodes one bit from each
 variable:
 
-```
+```text
 site index s_n encodes: bit_var0 + 2 * bit_var1 + 4 * bit_var2 + ...
 ```
 
@@ -237,15 +220,19 @@ interleaving the bit planes of all variables.
 Two boundary conditions are supported for operators that wrap indices (flip,
 shift):
 
-- **Periodic** — results wrap modulo 2^R.
-- **Open** — indices that fall outside [0, 2^R) produce a zero vector.
+- **Periodic** -- results wrap modulo 2^R.
+- **Open** -- indices that fall outside [0, 2^R) produce a zero vector.
 
-```rust,ignore
-// Periodic: shift(7, 2) = 9 mod 8 = 1
-let shift_periodic = shift_operator(3, 2, BoundaryCondition::Periodic)?;
+```rust
+use tensor4all_quanticstransform::{shift_operator, BoundaryCondition};
 
-// Open: shift(7, 2) = 9 >= 8, so the result is the zero vector
-let shift_open = shift_operator(3, 2, BoundaryCondition::Open)?;
+// Periodic: shift(7, 2) in 3-bit (mod 8) wraps to 1
+let shift_periodic = shift_operator(3, 2, BoundaryCondition::Periodic).unwrap();
+assert_eq!(shift_periodic.mpo.node_count(), 3);
+
+// Open: shift(7, 2) in 3-bit goes to 9 >= 8, producing zero
+let shift_open = shift_operator(3, 2, BoundaryCondition::Open).unwrap();
+assert_eq!(shift_open.mpo.node_count(), 3);
 ```
 
 ---
@@ -257,17 +244,23 @@ inherent to the QFT algorithm: the output site ordering corresponds to the
 bit-reversal of the frequency index.  If you need natural frequency ordering,
 apply a bit-reversal permutation after the transform.
 
-```rust,ignore
+```rust
+use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
+
+let r = 4;
+
 // Forward QFT (bit-reversed output)
-let fwd = quantics_fourier_operator(r, FourierOptions::forward())?;
+let fwd = quantics_fourier_operator(r, FourierOptions::forward()).unwrap();
+assert_eq!(fwd.mpo.node_count(), r);
 
 // Inverse QFT
-let inv = quantics_fourier_operator(r, FourierOptions::inverse())?;
+let inv = quantics_fourier_operator(r, FourierOptions::inverse()).unwrap();
+assert_eq!(inv.mpo.node_count(), r);
 ```
 
 ---
 
 ## Reference
 
-- [Quantics.jl](https://github.com/tensor4all/Quantics.jl) — Julia implementation that this crate ports.
-- J. Chen and M. Lindsey, "Direct Interpolative Construction of the Discrete Fourier Transform as a Matrix Product Operator", arXiv:2404.03182 (2024) — QFT algorithm.
+- [Quantics.jl](https://github.com/tensor4all/Quantics.jl) -- Julia implementation that this crate ports.
+- J. Chen and M. Lindsey, "Direct Interpolative Construction of the Discrete Fourier Transform as a Matrix Product Operator", arXiv:2404.03182 (2024) -- QFT algorithm.

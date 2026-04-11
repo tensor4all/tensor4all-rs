@@ -1,4 +1,8 @@
-//! Optional factor reconstruction helpers.
+//! Cross-factor reconstruction helpers.
+//!
+//! [`CrossFactors`] gathers the pivot block, pivot columns, and pivot rows
+//! from a [`CandidateMatrixSource`](super::CandidateMatrixSource), and
+//! provides methods to compute the left and right CI factors.
 
 use crate::matrixluci::error::MatrixLuciError;
 use crate::matrixluci::scalar::Scalar;
@@ -124,7 +128,12 @@ pub(crate) fn invert_square<T: Scalar>(
     Ok(inv)
 }
 
-/// Optional dense factors derived from a pivot selection.
+/// Dense factors derived from a pivot selection.
+///
+/// Contains the pivot block `A[I, J]`, full pivot columns `A[:, J]`, and
+/// full pivot rows `A[I, :]`. These are used to reconstruct the left and
+/// right CI factors for the cross interpolation approximation
+/// `A ~ A[:, J] * A[I, J]^{-1} * A[I, :]`.
 #[derive(Debug, Clone)]
 pub struct CrossFactors<T: Scalar> {
     /// Pivot block `A[I, J]`.

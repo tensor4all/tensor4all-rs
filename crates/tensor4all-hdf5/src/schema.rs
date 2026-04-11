@@ -11,6 +11,10 @@ use anyhow::{bail, Result};
 use std::str::FromStr;
 
 /// Write `@type` and `@version` attributes to an HDF5 group.
+///
+/// Every serialized object in the ITensors.jl HDF5 schema carries these two
+/// attributes. The `type_name` identifies the schema (e.g., `"ITensor"`,
+/// `"MPS"`, `"Index"`) and `version` is the schema version number.
 pub(crate) fn write_type_version(group: &Group, type_name: &str, version: i64) -> Result<()> {
     let type_attr = group.new_attr::<VarLenUnicode>().shape(()).create("type")?;
     type_attr
@@ -24,6 +28,9 @@ pub(crate) fn write_type_version(group: &Group, type_name: &str, version: i64) -
 }
 
 /// Read `@type` and `@version` attributes from an HDF5 group.
+///
+/// Returns `(type_name, version)`. Uses [`crate::compat::read_string_attr_by_name`]
+/// to handle both variable-length and fixed-length string formats.
 pub(crate) fn read_type_version(group: &Group) -> Result<(String, i64)> {
     let type_str = crate::compat::read_string_attr_by_name(group, "type")?;
 

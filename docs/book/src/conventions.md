@@ -21,7 +21,7 @@ This matches Julia, ITensors.jl, and tenferro-rs. When exchanging dense data wit
 
 tensor4all-rs uses `rtol` (relative tolerance). ITensors.jl uses `cutoff`. The conversion is:
 
-```
+```text
 rtol = sqrt(cutoff)
 ```
 

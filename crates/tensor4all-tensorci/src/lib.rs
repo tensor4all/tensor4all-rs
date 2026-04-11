@@ -2,32 +2,35 @@
 //! Tensor Cross Interpolation (TCI) library
 //!
 //! This crate provides tensor cross interpolation algorithms for efficiently
-//! approximating high-dimensional tensors as tensor trains.
+//! approximating high-dimensional tensors as tensor trains. Given a function
+//! `f(i_1, ..., i_N)` defined on a discrete multi-index grid, TCI finds a
+//! low-rank [`TensorTrain`](tensor4all_simplett::TensorTrain) approximation by
+//! evaluating only a small subset of the total entries.
 //!
-//! # Main algorithms
+//! # Algorithms
 //!
-//! - `TensorCI2`: Primary two-site TCI algorithm
-//! - `crossinterpolate2`: Function to perform TCI2 interpolation
-//! - `TensorCI1`: Legacy one-site TCI algorithm kept for compatibility
-//! - `crossinterpolate1`: Legacy entry point for TCI1
+//! | Entry point | Algorithm | State type | Notes |
+//! |---|---|---|---|
+//! | [`crossinterpolate2`] | TCI2 (two-site) | [`TensorCI2`] | **Primary, actively maintained** |
+//! | [`crossinterpolate1`] | TCI1 (one-site) | [`TensorCI1`] | Legacy, kept for compatibility |
 //!
-//! `TensorCI2` is the actively maintained path and uses `MatrixLUCI` from `tensor4all-tcicore`.
-//! `TensorCI1` uses `MatrixACA` from `tensor4all-tcicore`.
-//! `PivotSearchStrategy::Rook` uses lazy block-rook evaluation; when
-//! `normalize_error` is enabled it normalizes by the maximum observed sample
-//! value from the lazily requested entries rather than by a full-grid scan.
+//! `TCI2` uses [`MatrixLUCI`](tensor4all_tcicore::MatrixLUCI) for pivot
+//! updates and supports batch evaluation, global pivot search, and two pivot
+//! search strategies ([`PivotSearchStrategy::Full`] and
+//! [`PivotSearchStrategy::Rook`]).
 //!
-//! # Example
+//! # Quick start
 //!
 //! ```
 //! use tensor4all_tensorci::{crossinterpolate2, TCI2Options};
+//! use tensor4all_simplett::AbstractTensorTrain;
 //!
 //! // Function to interpolate: f(i, j) = i + j + 1
 //! let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
 //! let local_dims = vec![4, 4];
 //! let first_pivot = vec![vec![1, 1]];
 //!
-//! let (tci, ranks, errors) =
+//! let (tci, _ranks, errors) =
 //!     crossinterpolate2::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>>(
 //!         f,
 //!         None,
@@ -36,8 +39,24 @@
 //!         TCI2Options::default(),
 //!     )
 //!     .unwrap();
-//! println!("TCI rank: {}", tci.rank());
+//!
+//! // Check convergence
+//! assert!(*errors.last().unwrap() < 1e-6);
+//!
+//! // Evaluate through the tensor train
+//! let tt = tci.to_tensor_train().unwrap();
+//! let val = tt.evaluate(&[2, 3]).unwrap();
+//! assert!((val - 6.0).abs() < 1e-10); // f(2,3) = 2+3+1 = 6
 //! ```
+//!
+//! # Related crates
+//!
+//! - [`tensor4all_tcicore`] -- low-level matrix CI primitives and
+//!   [`CachedFunction`]
+//! - [`tensor4all_simplett`] -- the [`TensorTrain`](tensor4all_simplett::TensorTrain)
+//!   data structure produced by TCI
+//! - `tensor4all-quanticstci` -- higher-level quantics TCI on discrete
+//!   or continuous grids (wraps this crate)
 
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]

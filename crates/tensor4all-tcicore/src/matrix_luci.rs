@@ -1,4 +1,8 @@
 //! Matrix LU-based Cross Interpolation (MatrixLUCI) implementation.
+//!
+//! [`MatrixLUCI`] provides a higher-level row-major API over the lower-level
+//! `matrixluci` substrate. It decomposes a matrix into left and right factors
+//! via LU cross interpolation and implements [`AbstractMatrixCI`].
 
 use crate::error::{MatrixCIError, Result};
 use crate::matrix::{submatrix, zeros, Matrix};
@@ -150,22 +154,89 @@ where
         })
     }
 
-    /// Left CI factor.
+    /// Left CI factor (shape: `nrows x rank`).
+    ///
+    /// The approximation is `left * right`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d, matrix::mat_mul};
+    ///
+    /// let m = from_vec2d(vec![
+    ///     vec![1.0_f64, 2.0],
+    ///     vec![3.0, 4.0],
+    /// ]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// let reconstructed = mat_mul(&ci.left(), &ci.right());
+    /// for i in 0..2 {
+    ///     for j in 0..2 {
+    ///         assert!((reconstructed[[i, j]] - m[[i, j]]).abs() < 1e-10);
+    ///     }
+    /// }
+    /// ```
     pub fn left(&self) -> Matrix<T> {
         self.left.clone()
     }
 
-    /// Right CI factor.
+    /// Right CI factor (shape: `rank x ncols`).
+    ///
+    /// The approximation is `left * right`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{AbstractMatrixCI, MatrixLUCI, from_vec2d, matrix::mat_mul};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// let r = ci.right();
+    /// assert_eq!(r.nrows(), ci.rank());
+    /// assert_eq!(r.ncols(), ci.ncols());
+    /// // left * right reconstructs the matrix
+    /// let recon = mat_mul(&ci.left(), &r);
+    /// for i in 0..2 {
+    ///     for j in 0..2 {
+    ///         assert!((recon[[i, j]] - m[[i, j]]).abs() < 1e-10);
+    ///     }
+    /// }
+    /// ```
     pub fn right(&self) -> Matrix<T> {
         self.right.clone()
     }
 
-    /// Pivot error history.
+    /// Pivot error history (one entry per pivot, plus a final residual estimate).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// let errs = ci.pivot_errors();
+    /// assert!(!errs.is_empty());
+    /// // All errors are non-negative
+    /// for &e in &errs {
+    ///     assert!(e >= 0.0);
+    /// }
+    /// ```
     pub fn pivot_errors(&self) -> Vec<f64> {
         self.pivot_errors.clone()
     }
 
-    /// Last pivot error.
+    /// Last pivot error (the residual estimate after all pivots).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::{MatrixLUCI, from_vec2d};
+    ///
+    /// let m = from_vec2d(vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]]);
+    /// let ci = MatrixLUCI::from_matrix(&m, None).unwrap();
+    /// let err = ci.last_pivot_error();
+    /// assert!(err >= 0.0);
+    /// ```
     pub fn last_pivot_error(&self) -> f64 {
         self.pivot_errors.last().copied().unwrap_or(0.0)
     }

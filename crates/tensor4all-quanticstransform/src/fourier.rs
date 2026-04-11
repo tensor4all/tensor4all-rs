@@ -18,6 +18,32 @@ use crate::common::{tensortrain_to_linear_operator, QuanticsOperator};
 use tensor4all_simplett::tensor::Tensor4;
 
 /// Options for Fourier transform construction.
+///
+/// Controls the sign convention, compression parameters, and normalization
+/// of the quantics Fourier transform MPO.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::FourierOptions;
+///
+/// // Forward transform (default): sign = -1
+/// let fwd = FourierOptions::forward();
+/// assert_eq!(fwd.sign, -1.0);
+/// assert!(fwd.normalize);
+///
+/// // Inverse transform: sign = +1
+/// let inv = FourierOptions::inverse();
+/// assert_eq!(inv.sign, 1.0);
+///
+/// // Custom options
+/// let opts = FourierOptions {
+///     maxbonddim: 20,
+///     tolerance: 1e-12,
+///     ..FourierOptions::forward()
+/// };
+/// assert_eq!(opts.maxbonddim, 20);
+/// ```
 #[derive(Clone, Debug)]
 pub struct FourierOptions {
     /// Sign in the exponent: -1.0 (forward) or 1.0 (inverse)
@@ -60,6 +86,24 @@ impl FourierOptions {
 }
 
 /// Convenience wrapper for forward/backward Fourier transform.
+///
+/// Caches the forward MPO so that repeated calls to [`FTCore::forward()`]
+/// and [`FTCore::backward()`] avoid redundant MPO construction.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::{FTCore, FourierOptions};
+///
+/// let ft = FTCore::new(4, FourierOptions::default()).unwrap();
+/// assert_eq!(ft.r(), 4);
+///
+/// let fwd_op = ft.forward().unwrap();
+/// assert_eq!(fwd_op.mpo.node_count(), 4);
+///
+/// let bwd_op = ft.backward().unwrap();
+/// assert_eq!(bwd_op.mpo.node_count(), 4);
+/// ```
 #[derive(Clone)]
 pub struct FTCore {
     forward_mpo: TensorTrain<Complex64>,

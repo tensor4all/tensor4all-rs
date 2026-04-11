@@ -68,9 +68,19 @@
 //!     QtciOptions::default(),
 //! ).unwrap();
 //!
-//! // integral() = sum * step_size (left Riemann sum)
+//! // integral() = sum * step_size (left Riemann sum of x^2 over [0, 1))
 //! let integral = qtci.integral().unwrap();
+//! assert!((integral - 1.0 / 3.0).abs() < 0.1); // rough Riemann sum with 16 points
 //! ```
+//!
+//! # Choosing the Right API
+//!
+//! | Scenario | Function to use |
+//! |---|---|
+//! | Function on integer grid (e.g., lattice) | [`quanticscrossinterpolate_discrete`] |
+//! | Function on a continuous interval `[a, b)` | [`quanticscrossinterpolate`] with [`DiscretizedGrid`] |
+//! | Grid points given as explicit arrays | [`quanticscrossinterpolate_from_arrays`] |
+//! | Vector/tensor-valued function | [`quanticscrossinterpolate_batched`] |
 
 mod batched;
 mod options;

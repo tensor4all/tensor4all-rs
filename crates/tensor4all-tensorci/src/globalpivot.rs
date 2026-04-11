@@ -1,43 +1,90 @@
-//! Global pivot finder for TCI2 algorithm.
+//! Global pivot finder for the TCI2 algorithm.
 //!
-//! Port of Julia's `AbstractGlobalPivotFinder` / `DefaultGlobalPivotFinder`
-//! from TensorCrossInterpolation.jl.
+//! After each two-site sweep, the TCI2 algorithm calls a
+//! [`GlobalPivotFinder`] to locate regions of high interpolation error
+//! that the local sweeps may have missed. The default implementation
+//! ([`DefaultGlobalPivotFinder`]) uses random starting points with local
+//! optimization.
 
 use rand::Rng;
 use tensor4all_simplett::{AbstractTensorTrain, TTScalar, TensorTrain};
 use tensor4all_tcicore::{MultiIndex, Scalar};
 
-/// Input data for global pivot search.
-///
-/// Contains the current TCI state needed by the global pivot finder.
+/// Snapshot of the current TCI state, passed to [`GlobalPivotFinder`].
 pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
-    /// Local dimensions of each tensor index
+    /// Local dimensions of each tensor index.
     pub local_dims: Vec<usize>,
-    /// Current tensor train approximation
+    /// Current tensor train approximation.
     pub current_tt: TensorTrain<T>,
-    /// Maximum absolute value of the function encountered so far
+    /// Maximum absolute function value encountered so far.
     pub max_sample_value: f64,
-    /// Index sets I for each site
+    /// Left index sets (I) for each site.
     pub i_set: Vec<Vec<MultiIndex>>,
-    /// Index sets J for each site
+    /// Right index sets (J) for each site.
     pub j_set: Vec<Vec<MultiIndex>>,
 }
 
 /// Trait for global pivot finders.
 ///
-/// Implementors search for indices where the interpolation error is large,
-/// which are then added as global pivots to improve the TCI approximation.
+/// Implementors search for multi-indices where the interpolation error
+/// `|f(idx) - tt(idx)|` is large. Found pivots are added to the TCI state
+/// to improve the approximation in the next sweep.
+///
+/// The default implementation is [`DefaultGlobalPivotFinder`]. Implement
+/// this trait to supply domain-specific search strategies.
+///
+/// # Examples
+///
+/// Using the default implementation via [`DefaultGlobalPivotFinder`]:
+///
+/// ```
+/// use tensor4all_tensorci::{DefaultGlobalPivotFinder, GlobalPivotFinder,
+///     GlobalPivotSearchInput};
+/// use tensor4all_simplett::TensorTrain;
+///
+/// // Constant-zero TT on a 4×4 grid
+/// let tt = TensorTrain::<f64>::constant(&[4, 4], 0.0);
+///
+/// let input = GlobalPivotSearchInput {
+///     local_dims: vec![4, 4],
+///     current_tt: tt,
+///     max_sample_value: 9.0,
+///     i_set: vec![vec![vec![]], vec![vec![0]]],
+///     j_set: vec![vec![vec![0]], vec![vec![]]],
+/// };
+///
+/// let finder = DefaultGlobalPivotFinder::default();
+/// let mut rng = rand::rng();
+///
+/// // f(i,j) = i*j has nonzero values, so pivots should be found
+/// let pivots = finder.find_global_pivots(
+///     &input,
+///     &|idx: &Vec<usize>| (idx[0] * idx[1]) as f64,
+///     0.1,
+///     &mut rng,
+/// );
+///
+/// // All returned pivots must have valid indices
+/// for p in &pivots {
+///     assert_eq!(p.len(), 2);
+///     assert!(p[0] < 4 && p[1] < 4);
+/// }
+/// ```
 pub trait GlobalPivotFinder {
-    /// Find global pivots with high interpolation error.
+    /// Find multi-indices with high interpolation error.
     ///
     /// # Arguments
-    /// * `input` - Current TCI state
-    /// * `f` - Function being interpolated
-    /// * `abs_tol` - Absolute tolerance (pivots with error > abs_tol are interesting)
-    /// * `rng` - Random number generator
+    ///
+    /// * `input` -- current TCI state (tensor train, index sets, etc.)
+    /// * `f` -- the function being interpolated
+    /// * `abs_tol` -- absolute tolerance; pivots with error above this
+    ///   threshold (times `tol_margin`) are interesting
+    /// * `rng` -- random number generator for stochastic search
     ///
     /// # Returns
-    /// Vector of multi-indices where the interpolation error is large.
+    ///
+    /// Multi-indices where the interpolation error is large, up to the
+    /// implementation's maximum count.
     fn find_global_pivots<T, F>(
         &self,
         input: &GlobalPivotSearchInput<T>,
@@ -53,10 +100,30 @@ pub trait GlobalPivotFinder {
 /// Default global pivot finder using random search with local optimization.
 ///
 /// Algorithm:
-/// 1. Generate `nsearch` random initial points
-/// 2. For each point, perform local search sweeping all dimensions
-/// 3. Keep points where error > abs_tol × tol_margin
-/// 4. Limit to `max_nglobal_pivot` results
+///
+/// 1. Generate `nsearch` random initial points.
+/// 2. For each point, sweep all dimensions and pick the index with the
+///    largest interpolation error at each position.
+/// 3. Keep points where the error exceeds `abs_tol * tol_margin`.
+/// 4. Return at most `max_nglobal_pivot` results.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::DefaultGlobalPivotFinder;
+///
+/// // Default configuration
+/// let finder = DefaultGlobalPivotFinder::default();
+/// assert_eq!(finder.nsearch, 5);
+/// assert_eq!(finder.max_nglobal_pivot, 5);
+/// assert!((finder.tol_margin - 10.0).abs() < 1e-15);
+///
+/// // Custom configuration
+/// let custom = DefaultGlobalPivotFinder::new(20, 10, 5.0);
+/// assert_eq!(custom.nsearch, 20);
+/// assert_eq!(custom.max_nglobal_pivot, 10);
+/// assert!((custom.tol_margin - 5.0).abs() < 1e-15);
+/// ```
 #[derive(Debug, Clone)]
 pub struct DefaultGlobalPivotFinder {
     /// Number of random initial points to search from

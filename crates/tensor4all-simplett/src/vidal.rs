@@ -172,7 +172,20 @@ fn tensor3_to_right_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) 
     mat
 }
 
-/// Diagonal matrix type (stored as vector of diagonal elements)
+/// Diagonal matrix type (stored as vector of diagonal elements).
+///
+/// Each entry represents one singular value on the diagonal. The length
+/// equals the bond dimension at that link.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::DiagMatrix;
+///
+/// let diag: DiagMatrix = vec![1.0, 0.5, 0.25];
+/// assert_eq!(diag.len(), 3);
+/// assert!((diag[0] - 1.0).abs() < 1e-15);
+/// ```
 pub type DiagMatrix = Vec<f64>;
 
 /// Vidal Tensor Train representation
@@ -183,6 +196,26 @@ pub type DiagMatrix = Vec<f64>;
 ///
 /// This form is useful for algorithms that need to apply local operations
 /// and maintain canonical form efficiently.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, VidalTensorTrain};
+///
+/// // Build a simple tensor train and convert to Vidal form.
+/// let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+/// let vidal = VidalTensorTrain::from_tensor_train(&tt).unwrap();
+///
+/// assert_eq!(vidal.len(), 2);
+///
+/// // Converting back preserves tensor train values.
+/// let tt2 = vidal.to_tensor_train();
+/// let val = tt2.evaluate(&[0, 1]).unwrap();
+/// assert!((val - 1.0).abs() < 1e-12);
+///
+/// // The sum is also preserved: 1.0 * 2 * 3 = 6.0
+/// assert!((tt2.sum() - 6.0).abs() < 1e-10);
+/// ```
 #[derive(Debug, Clone)]
 pub struct VidalTensorTrain<T: TTScalar> {
     /// Site tensors (unscaled)
@@ -478,6 +511,26 @@ impl<T: TTScalar + Scalar + Default> AbstractTensorTrain<T> for VidalTensorTrain
 /// Similar to VidalTensorTrain but stores inverse singular values instead.
 /// This is useful for algorithms that need to efficiently apply inverse
 /// operations during local updates.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, InverseTensorTrain};
+///
+/// // Build a simple tensor train and convert to inverse form.
+/// let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+/// let inv = InverseTensorTrain::from_tensor_train(&tt).unwrap();
+///
+/// assert_eq!(inv.len(), 2);
+///
+/// // Converting back preserves tensor train values.
+/// let tt2 = inv.to_tensor_train();
+/// let val = tt2.evaluate(&[0, 1]).unwrap();
+/// assert!((val - 1.0).abs() < 1e-12);
+///
+/// // The sum is also preserved: 1.0 * 2 * 3 = 6.0
+/// assert!((tt2.sum() - 6.0).abs() < 1e-10);
+/// ```
 #[derive(Debug, Clone)]
 pub struct InverseTensorTrain<T: TTScalar> {
     /// Site tensors (scaled by singular values)

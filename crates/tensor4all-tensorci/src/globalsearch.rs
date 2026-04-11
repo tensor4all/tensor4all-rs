@@ -1,26 +1,62 @@
-//! Global error estimation for tensor train approximations.
+//! Post-hoc error estimation for tensor train approximations.
 //!
-//! Port of Julia's `estimatetrueerror` and `_floatingzone`
-//! from TensorCrossInterpolation.jl.
+//! After running [`crossinterpolate2`](crate::crossinterpolate2),
+//! [`estimate_true_error`] can verify the approximation quality by
+//! searching for multi-indices with large interpolation error via
+//! [`floating_zone`] optimization.
 
 use rand::Rng;
 use tensor4all_simplett::{AbstractTensorTrain, TTScalar, Tensor3Ops, TensorTrain};
 use tensor4all_tcicore::{MultiIndex, Scalar};
 
-/// Estimate the true interpolation error using floating zone optimization.
+/// Estimate the true interpolation error by searching for worst-case indices.
 ///
-/// Runs floating zone search from multiple random initial points to find
-/// indices with high interpolation error.
+/// Launches [`floating_zone`] from `nsearch` random starting points (or
+/// from explicit `initial_points`), returning all found (pivot, error)
+/// pairs sorted by descending error.
+///
+/// This is useful as a post-hoc check: if the largest returned error is
+/// below your tolerance, you can be more confident in the approximation.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::estimate_true_error;
+/// use tensor4all_simplett::TensorTrain;
+///
+/// // Build a constant TT (value = 1.0) on a 4×4 grid
+/// let tt = TensorTrain::<f64>::constant(&[4, 4], 1.0);
+///
+/// // Exact function differs from the constant
+/// let f = |idx: &Vec<usize>| (idx[0] * idx[1]) as f64;
+/// let mut rng = rand::rng();
+///
+/// let errors = estimate_true_error(&tt, &f, 10, None, &mut rng);
+///
+/// // Results are sorted by descending error
+/// for w in errors.windows(2) {
+///     assert!(w[0].1 >= w[1].1, "must be sorted descending");
+/// }
+///
+/// // The worst-case error for |i*j - 1| on [0..4]x[0..4] is at (3,3): |9-1|=8
+/// let (best_pivot, max_err) = &errors[0];
+/// assert_eq!(*best_pivot, vec![3, 3]);
+/// assert!((max_err - 8.0).abs() < 1e-10);
+/// ```
 ///
 /// # Arguments
-/// * `tt` - The tensor train approximation
-/// * `f` - The function being approximated
-/// * `nsearch` - Number of random initial points (ignored if initial_points is Some)
-/// * `initial_points` - Optional explicit initial points
-/// * `rng` - Random number generator
+///
+/// * `tt` -- the tensor train approximation
+/// * `f` -- the exact function
+/// * `nsearch` -- number of random starting points (ignored when
+///   `initial_points` is `Some`)
+/// * `initial_points` -- explicit starting points for the search
+/// * `rng` -- random number generator
 ///
 /// # Returns
-/// Vector of (pivot, error) pairs sorted by descending error.
+///
+/// `Vec<(MultiIndex, f64)>` sorted by descending error, with duplicate
+/// pivots removed.
 pub fn estimate_true_error<T, F>(
     tt: &TensorTrain<T>,
     f: &F,
@@ -63,23 +99,46 @@ where
     pivot_errors
 }
 
-/// Floating zone optimization: find a local maximum of the interpolation error.
+/// Local search for the multi-index with the largest interpolation error.
 ///
-/// Starting from an initial point, sweeps through each site position,
-/// evaluating all local indices while fixing others, and picks the
-/// index with the maximum error. Repeats until convergence.
+/// Starting from `init_p`, sweeps through each site position, evaluating
+/// all local indices while fixing the others, and picks the index with
+/// the maximum error `|f(idx) - tt(idx)|`. Repeats until the error
+/// stops increasing or `early_stop_tol` is exceeded.
 ///
-/// Port of Julia's `_floatingzone`.
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::floating_zone;
+/// use tensor4all_simplett::TensorTrain;
+///
+/// // Constant TT (value = 0.0) on a 4×4 grid
+/// let tt = TensorTrain::<f64>::constant(&[4, 4], 0.0);
+///
+/// // f(i,j) = i * j, so TT error = |i*j|
+/// let f = |idx: &Vec<usize>| (idx[0] * idx[1]) as f64;
+/// let local_dims = vec![4, 4];
+///
+/// // Search from (2, 2) without early stopping
+/// let (pivot, error) = floating_zone(&tt, &f, &local_dims, Some(&vec![2, 2]), f64::MAX);
+///
+/// // Should find maximum error at (3, 3): |3*3 - 0| = 9
+/// assert_eq!(pivot, vec![3, 3]);
+/// assert!((error - 9.0).abs() < 1e-10);
+/// ```
 ///
 /// # Arguments
-/// * `tt` - The tensor train approximation
-/// * `f` - The function being approximated
-/// * `local_dims` - Local dimensions
-/// * `init_p` - Optional initial point (random if None)
-/// * `early_stop_tol` - Stop early if error exceeds this value
+///
+/// * `tt` -- the tensor train approximation
+/// * `f` -- the exact function
+/// * `local_dims` -- number of values each index can take
+/// * `init_p` -- starting point (`None` defaults to the all-zeros index)
+/// * `early_stop_tol` -- stop early once the error exceeds this value
+///   (use `f64::MAX` to search exhaustively)
 ///
 /// # Returns
-/// (pivot, max_error) tuple
+///
+/// `(pivot, max_error)` -- the best multi-index found and its error.
 pub fn floating_zone<T, F>(
     tt: &TensorTrain<T>,
     f: &F,

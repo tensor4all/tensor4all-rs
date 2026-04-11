@@ -9,8 +9,20 @@ use std::hash::{Hash, Hasher};
 use tensor4all_core::ColMajorArray;
 
 /// Generates candidate pivot sets for one edge bipartition.
+///
+/// Implementors produce candidate multi-indices for both sides of an edge
+/// bipartition. The optimizer evaluates the function at these candidates to
+/// select new pivots.
+///
+/// Built-in proposers:
+/// - [`DefaultProposer`] -- neighbor-product candidates (recommended default)
+/// - [`SimpleProposer`] -- random candidates with deterministic seed
+/// - [`TruncatedDefaultProposer`] -- truncated default candidates with random sampling
 pub trait PivotCandidateProposer {
     /// Return `(I_candidates, J_candidates)` for the requested edge.
+    ///
+    /// `I_candidates` are multi-indices for the left (u-side) subtree,
+    /// `J_candidates` for the right (v-side) subtree.
     fn candidates<T>(
         &self,
         state: &TreeTCI2<T>,
@@ -19,6 +31,19 @@ pub trait PivotCandidateProposer {
 }
 
 /// Default neighbor-product proposer that mirrors `TreeTCI.jl`.
+///
+/// Generates candidates by combining existing pivots from adjacent
+/// subtrees with a Kronecker expansion over the local dimension of
+/// the edge endpoints. This is the recommended proposer for most use cases.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::DefaultProposer;
+///
+/// let proposer = DefaultProposer;
+/// // Typically used with crossinterpolate2 or optimize_with_proposer
+/// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DefaultProposer;
 
@@ -52,6 +77,22 @@ impl PivotCandidateProposer for DefaultProposer {
 
 /// Simple random proposer that mirrors `TreeTCI.jl`'s
 /// `SimplePivotCandidateProposer`.
+///
+/// Generates random candidate multi-indices using a deterministic seed.
+/// Useful for reproducible benchmarking or when the default proposer
+/// produces too many candidates.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::SimpleProposer;
+///
+/// // Default seed (0)
+/// let p = SimpleProposer::default();
+///
+/// // Deterministic seed for reproducibility
+/// let p = SimpleProposer::seeded(42);
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct SimpleProposer {
     seed: u64,
@@ -59,6 +100,14 @@ pub struct SimpleProposer {
 
 impl SimpleProposer {
     /// Construct a proposer with a deterministic base seed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::SimpleProposer;
+    ///
+    /// let proposer = SimpleProposer::seeded(123);
+    /// ```
     pub const fn seeded(seed: u64) -> Self {
         Self { seed }
     }
@@ -106,6 +155,18 @@ impl PivotCandidateProposer for SimpleProposer {
 /// Truncated default proposer that samples an ordered subset from the default
 /// candidate set, mirroring `TreeTCI.jl`'s
 /// `TruncatedDefaultPivotCandidateProposer`.
+///
+/// Starts from the [`DefaultProposer`] candidates but truncates them to a
+/// bounded size using random sampling. Useful for large problems where the
+/// default candidate set would be prohibitively large.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::TruncatedDefaultProposer;
+///
+/// let proposer = TruncatedDefaultProposer::seeded(42);
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct TruncatedDefaultProposer {
     seed: u64,
@@ -113,6 +174,14 @@ pub struct TruncatedDefaultProposer {
 
 impl TruncatedDefaultProposer {
     /// Construct a proposer with a deterministic base seed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::TruncatedDefaultProposer;
+    ///
+    /// let proposer = TruncatedDefaultProposer::seeded(99);
+    /// ```
     pub const fn seeded(seed: u64) -> Self {
         Self { seed }
     }

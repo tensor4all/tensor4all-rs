@@ -12,6 +12,13 @@ use tensor4all_tcicore::{
 };
 
 /// Update one edge bipartition using a batch evaluator and a pivot-candidate proposer.
+///
+/// Evaluates the function at candidate pivot points for one edge bipartition,
+/// then selects pivots via LU decomposition. The selected pivots are stored
+/// back into `state.ijset`.
+///
+/// This is a low-level building block; prefer [`optimize_default`](crate::optimize_default)
+/// or [`crossinterpolate2`](crate::crossinterpolate2) for typical usage.
 pub fn update_edge<T, F, P>(
     state: &mut TreeTCI2<T>,
     edge: TreeTciEdge,
@@ -76,6 +83,8 @@ where
 }
 
 /// Update one edge using the default proposer.
+///
+/// Convenience wrapper around [`update_edge`] that uses [`DefaultProposer`].
 pub fn update_edge_default<T, F>(
     state: &mut TreeTCI2<T>,
     edge: TreeTciEdge,

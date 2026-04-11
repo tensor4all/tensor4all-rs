@@ -52,12 +52,24 @@ pub fn flip_operator(r: usize, bc: BoundaryCondition) -> Result<QuanticsOperator
 /// Create a flip operator for one variable in a multi-variable system.
 ///
 /// Acts as flip on `target_var` and identity on all other variables.
+/// The resulting operator works on interleaved quantics encoding where each
+/// site has local dimension `2^nvariables`.
 ///
 /// # Arguments
-/// * `r` - Number of bits (sites)
+/// * `r` - Number of bits (sites). Must be at least 2.
 /// * `bc` - Boundary condition
-/// * `nvariables` - Total number of variables
-/// * `target_var` - Which variable to flip (0-indexed)
+/// * `nvariables` - Total number of variables (must be at least 2)
+/// * `target_var` - Which variable to flip (0-indexed, must be < nvariables)
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::{flip_operator_multivar, BoundaryCondition};
+///
+/// // Flip only the x-variable of a 2-variable function f(x, y)
+/// let op = flip_operator_multivar(4, BoundaryCondition::Periodic, 2, 0).unwrap();
+/// assert_eq!(op.mpo.node_count(), 4);
+/// ```
 pub fn flip_operator_multivar(
     r: usize,
     bc: BoundaryCondition,

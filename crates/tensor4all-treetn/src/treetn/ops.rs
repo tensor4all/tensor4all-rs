@@ -104,6 +104,21 @@ where
     /// Returns an error if:
     /// - The network is empty
     /// - Canonicalization fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::TreeTN;
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// let s = DynIndex::new_dyn(2);
+    /// let t = TensorDynLen::from_dense(vec![s], vec![3.0_f64, 4.0]).unwrap();
+    /// let mut tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
+    ///
+    /// // log(||[3, 4]||) = log(5)
+    /// let ln = tn.log_norm().unwrap();
+    /// assert!((ln - 5.0_f64.ln()).abs() < 1e-10);
+    /// ```
     pub fn log_norm(&mut self) -> Result<f64> {
         let n = self.node_count();
         if n == 0 {
@@ -209,6 +224,21 @@ where
     ///
     /// # Errors
     /// Returns an error if the network is empty or canonicalization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::TreeTN;
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// let s = DynIndex::new_dyn(2);
+    /// let t = TensorDynLen::from_dense(vec![s], vec![3.0_f64, 4.0]).unwrap();
+    /// let mut tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
+    ///
+    /// // ||[3, 4]||^2 = 9 + 16 = 25
+    /// let nsq = tn.norm_squared().unwrap();
+    /// assert!((nsq - 25.0).abs() < 1e-10);
+    /// ```
     pub fn norm_squared(&mut self) -> Result<f64> {
         let n = self
             .norm()
@@ -233,6 +263,21 @@ where
     ///
     /// # Errors
     /// Returns an error if the networks have incompatible topologies.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetn::TreeTN;
+    /// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+    ///
+    /// let s = DynIndex::new_dyn(2);
+    /// let t = TensorDynLen::from_dense(vec![s], vec![3.0_f64, 4.0]).unwrap();
+    /// let tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
+    ///
+    /// // <v|v> = 3^2 + 4^2 = 25
+    /// let ip = tn.inner(&tn).unwrap();
+    /// assert!((ip.real() - 25.0).abs() < 1e-10);
+    /// ```
     pub fn inner(&self, other: &Self) -> Result<AnyScalar>
     where
         <T::Index as IndexLike>::Id:

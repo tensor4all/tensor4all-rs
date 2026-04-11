@@ -1,9 +1,16 @@
-//! Core data types for matrixluci.
+//! Core data types for the matrixluci substrate.
+//!
+//! These types are the building blocks for pivot-selection kernels and
+//! cross-factor reconstruction.
 
 use crate::matrixluci::scalar::Scalar;
 use std::ops::{Index, IndexMut};
 
 /// Simple owned dense matrix in column-major layout.
+///
+/// Unlike [`Matrix`](crate::Matrix) which is row-major, this type stores
+/// data in column-major order for compatibility with LAPACK/faer.
+/// Access elements with `m[[row, col]]`.
 #[derive(Debug, Clone)]
 pub struct DenseOwnedMatrix<T: Scalar> {
     pub(crate) data: Vec<T>,
@@ -11,7 +18,10 @@ pub struct DenseOwnedMatrix<T: Scalar> {
     pub(crate) ncols: usize,
 }
 
-/// Pivot-kernel options.
+/// Options for pivot-kernel factorization.
+///
+/// Controls rank truncation, tolerance thresholds, and the normalization
+/// convention (left-orthogonal vs. right-orthogonal).
 #[derive(Debug, Clone)]
 pub struct PivotKernelOptions {
     /// Relative tolerance.
@@ -24,7 +34,7 @@ pub struct PivotKernelOptions {
     pub left_orthogonal: bool,
 }
 
-/// Pivot-only output of a kernel invocation.
+/// Result of pivot selection: chosen row/column indices, rank, and error history.
 #[derive(Debug, Clone)]
 pub struct PivotSelectionCore {
     /// Selected row indices.

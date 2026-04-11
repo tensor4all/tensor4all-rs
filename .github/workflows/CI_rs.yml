@@ -33,6 +33,23 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  doctest:
+    name: Doctests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install HDF5
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run rustdoc tests
+        run: cargo test --doc --release --workspace -j 8
+
   # testジョブ全体を無効化
   # test:
   #   name: Test
@@ -89,6 +106,7 @@ jobs:
       - lint
       #- test
       - coverage
+      - doctest
     if: always()
     steps:
       - name: All Rust checks passed

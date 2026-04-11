@@ -26,6 +26,25 @@ pub enum QrError {
 }
 
 /// Options for QR decomposition with truncation control.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::qr::{QrOptions, qr_with};
+/// use tensor4all_core::{DynIndex, TensorDynLen};
+///
+/// let i = DynIndex::new_dyn(3);
+/// let j = DynIndex::new_dyn(3);
+/// let data: Vec<f64> = (0..9).map(|x| x as f64).collect();
+/// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
+///
+/// let opts = QrOptions::with_rtol(1e-10);
+/// let (q, r) = qr_with::<f64>(&tensor, &[i], &opts).unwrap();
+///
+/// // Q * R recovers the original tensor
+/// let recovered = q.contract(&r);
+/// assert!(tensor.distance(&recovered) < 1e-12);
+/// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QrOptions {
     /// Truncation parameters (rtol only for QR).

@@ -15,6 +15,7 @@ members = [
     "crates/tensor4all-hdf5",
     "tools/api-dump",
     "xtask",
+    "docs/book-tests",
 ]
 resolver = "2"
 

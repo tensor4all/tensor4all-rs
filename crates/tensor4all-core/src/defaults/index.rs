@@ -260,6 +260,24 @@ where
 // Constructors for Index with TagSet (default)
 impl Index<DynId, TagSet> {
     /// Create a new index with a generated dynamic ID and no tags.
+    ///
+    /// This is the most common way to create indices. Each call generates
+    /// a unique random ID, so two calls to `new_dyn` with the same dimension
+    /// produce non-equal indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IndexLike};
+    ///
+    /// let i = DynIndex::new_dyn(4);
+    /// let j = DynIndex::new_dyn(4);
+    ///
+    /// assert_eq!(i.dim(), 4);
+    /// assert_ne!(i, j);  // different IDs
+    /// assert!(i.is_contractable(&i));  // same index is contractable with itself
+    /// assert!(!i.is_contractable(&j)); // different IDs
+    /// ```
     pub fn new_dyn(size: usize) -> Self {
         Self {
             id: DynId(generate_id()),
@@ -296,6 +314,16 @@ impl Index<DynId, TagSet> {
     /// This creates a new `TagSet` with the given tag.
     /// For sharing the same tag across many indices, create the `TagSet`
     /// once and use `new_dyn_with_tags` instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::DynIndex;
+    /// use tensor4all_core::TagSetLike;
+    ///
+    /// let site = DynIndex::new_dyn_with_tag(2, "Site").unwrap();
+    /// assert!(site.tags().has_tag("Site"));
+    /// ```
     pub fn new_dyn_with_tag(size: usize, tag: &str) -> Result<Self, TagSetError> {
         Ok(Self {
             id: DynId(generate_id()),
@@ -309,6 +337,16 @@ impl Index<DynId, TagSet> {
     ///
     /// This is a convenience method for creating bond indices commonly used in tensor
     /// decompositions like SVD and QR factorization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::DynIndex;
+    /// use tensor4all_core::TagSetLike;
+    ///
+    /// let link = DynIndex::new_link(4).unwrap();
+    /// assert!(link.tags().has_tag("Link"));
+    /// ```
     pub fn new_link(size: usize) -> Result<Self, TagSetError> {
         Self::new_dyn_with_tag(size, "Link")
     }
@@ -460,11 +498,42 @@ impl DynIndex {
     ///
     /// # Returns
     /// A new index with a unique identity and the specified dimension.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IndexLike};
+    ///
+    /// let bond = DynIndex::new_bond(8).unwrap();
+    /// assert_eq!(bond.dim(), 8);
+    /// ```
     pub fn new_bond(dim: usize) -> Result<Self> {
         Index::new_link(dim).map_err(|e| anyhow::anyhow!("Failed to create bond index: {:?}", e))
     }
 
     /// Return a copy of this index with its prime level incremented by one.
+    ///
+    /// Primed indices are commonly used to distinguish bra and ket indices
+    /// in MPO operations (e.g., `i` for input, `i'` for output).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IndexLike};
+    ///
+    /// let i = DynIndex::new_dyn(4);
+    /// assert_eq!(i.plev(), 0);
+    ///
+    /// let i_prime = i.prime();
+    /// assert_eq!(i_prime.plev(), 1);
+    ///
+    /// // Primed and unprimed indices have the same ID but are not equal
+    /// assert!(i.same_id(&i_prime));
+    /// assert_ne!(i, i_prime);
+    ///
+    /// // Primed indices are not contractable with unprimed ones
+    /// assert!(!i.is_contractable(&i_prime));
+    /// ```
     pub fn prime(&self) -> Self {
         let mut idx = self.clone();
         idx.plev += 1;
@@ -472,6 +541,20 @@ impl DynIndex {
     }
 
     /// Return a copy of this index with its prime level reset to zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IndexLike};
+    ///
+    /// let i = DynIndex::new_dyn(4);
+    /// let i2 = i.prime().prime();
+    /// assert_eq!(i2.plev(), 2);
+    ///
+    /// let i0 = i2.noprime();
+    /// assert_eq!(i0.plev(), 0);
+    /// assert_eq!(i0, i);
+    /// ```
     pub fn noprime(&self) -> Self {
         let mut idx = self.clone();
         idx.plev = 0;
@@ -479,6 +562,16 @@ impl DynIndex {
     }
 
     /// Return a copy of this index with its prime level set explicitly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IndexLike};
+    ///
+    /// let i = DynIndex::new_dyn(4);
+    /// let i3 = i.set_plev(3);
+    /// assert_eq!(i3.plev(), 3);
+    /// ```
     pub fn set_plev(&self, plev: i64) -> Self {
         let mut idx = self.clone();
         idx.plev = plev;

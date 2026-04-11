@@ -66,10 +66,37 @@ impl<const N: usize> BoolTensor<N> {
 /// Affine transformation parameters.
 ///
 /// Represents the transformation y = A*x + b where:
-/// - A is an M×N matrix stored in column-major order
+/// - A is an M x N matrix stored in column-major order
 /// - b is an M-dimensional vector
 /// - x is an N-dimensional input
 /// - y is an M-dimensional output
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::AffineParams;
+/// use num_rational::Rational64;
+///
+/// // 1D shift: y = x + 3
+/// let params = AffineParams::from_integers(vec![1], vec![3], 1, 1).unwrap();
+/// assert_eq!(params.m, 1);
+/// assert_eq!(params.n, 1);
+///
+/// // 2D rotation: y = [[1,1],[1,-1]] * x
+/// // Column-major: [A[0,0], A[1,0], A[0,1], A[1,1]]
+/// let params = AffineParams::from_integers(
+///     vec![1, 1, 1, -1], vec![0, 0], 2, 2
+/// ).unwrap();
+/// assert_eq!(params.m, 2);
+/// assert_eq!(params.n, 2);
+///
+/// // With rational coefficients: y = (1/2)*x
+/// let params = AffineParams::new(
+///     vec![Rational64::new(1, 2)],
+///     vec![Rational64::from_integer(0)],
+///     1, 1,
+/// ).unwrap();
+/// ```
 #[derive(Clone, Debug)]
 pub struct AffineParams {
     /// Transformation matrix A (M×N), stored in column-major order
@@ -86,10 +113,31 @@ impl AffineParams {
     /// Create new affine parameters.
     ///
     /// # Arguments
-    /// * `a` - M×N matrix in column-major order
-    /// * `b` - M-dimensional translation vector
+    /// * `a` - M x N matrix in column-major order (length must be m*n)
+    /// * `b` - M-dimensional translation vector (length must be m)
     /// * `m` - Number of output dimensions
     /// * `n` - Number of input dimensions
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::AffineParams;
+    /// use num_rational::Rational64;
+    ///
+    /// // 1D identity: y = x
+    /// let params = AffineParams::new(
+    ///     vec![Rational64::from_integer(1)],
+    ///     vec![Rational64::from_integer(0)],
+    ///     1, 1,
+    /// ).unwrap();
+    ///
+    /// // Dimension mismatch errors
+    /// assert!(AffineParams::new(
+    ///     vec![Rational64::from_integer(1)],
+    ///     vec![Rational64::from_integer(0)],
+    ///     2, 1, // expects 2 elements in A, got 1
+    /// ).is_err());
+    /// ```
     pub fn new(a: Vec<Rational64>, b: Vec<Rational64>, m: usize, n: usize) -> Result<Self> {
         if a.len() != m * n {
             return Err(anyhow::anyhow!(
@@ -111,6 +159,21 @@ impl AffineParams {
     }
 
     /// Create affine parameters from integer matrix and vector.
+    ///
+    /// Convenience method that converts integer values to rationals.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstransform::AffineParams;
+    ///
+    /// // 2D: y = [[1, 0], [0, 1]] * x + [1, 2] (shift by (1,2))
+    /// let params = AffineParams::from_integers(
+    ///     vec![1, 0, 0, 1], vec![1, 2], 2, 2,
+    /// ).unwrap();
+    /// assert_eq!(params.m, 2);
+    /// assert_eq!(params.n, 2);
+    /// ```
     pub fn from_integers(a: Vec<i64>, b: Vec<i64>, m: usize, n: usize) -> Result<Self> {
         let a_rat: Vec<Rational64> = a.into_iter().map(Rational64::from_integer).collect();
         let b_rat: Vec<Rational64> = b.into_iter().map(Rational64::from_integer).collect();
@@ -260,12 +323,13 @@ fn remap_affine_site_indices_pullback(
 /// # Returns
 /// LinearOperator representing the affine transformation
 ///
-/// # Example
-/// ```no_run
+/// # Examples
+///
+/// ```
 /// use tensor4all_quanticstransform::{affine_operator, AffineParams, BoundaryCondition};
 /// use num_rational::Rational64;
 ///
-/// // Transform g(x, y) -> g(x + y, x - y) (rotation by 45°, scaled)
+/// // Transform g(x, y) -> g(x + y, x - y) (rotation by 45 degrees, scaled)
 /// let a = vec![
 ///     Rational64::from_integer(1), Rational64::from_integer(1),  // row 0: x + y
 ///     Rational64::from_integer(1), Rational64::from_integer(-1), // row 1: x - y
@@ -273,7 +337,20 @@ fn remap_affine_site_indices_pullback(
 /// let b = vec![Rational64::from_integer(0), Rational64::from_integer(0)];
 /// let params = AffineParams::new(a, b, 2, 2).unwrap();
 /// let bc = vec![BoundaryCondition::Periodic; 2];
-/// let op = affine_operator(8, &params, &bc).unwrap();
+/// let op = affine_operator(4, &params, &bc).unwrap();
+/// assert_eq!(op.mpo.node_count(), 4);
+/// ```
+///
+/// Using integer convenience constructor:
+///
+/// ```
+/// use tensor4all_quanticstransform::{affine_operator, AffineParams, BoundaryCondition};
+///
+/// // Identity transform: y = x (1D)
+/// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+/// let bc = vec![BoundaryCondition::Periodic];
+/// let op = affine_operator(4, &params, &bc).unwrap();
+/// assert_eq!(op.mpo.node_count(), 4);
 /// ```
 pub fn affine_operator(
     r: usize,
@@ -318,9 +395,21 @@ pub fn affine_operator(
 /// `g(x_1, ..., x_M)` to a result `f(y_1, ..., y_N)` where
 /// `f(y) = g(A * y + b)`.
 ///
-/// The affine parameters therefore describe the source coordinates as affine functions of the
+/// The affine parameters describe the source coordinates as affine functions of the
 /// output coordinates. The input state has `M = params.m` variables and the output state has
 /// `N = params.n` variables.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::{affine_pullback_operator, AffineParams, BoundaryCondition};
+///
+/// // Pullback of 1D identity: g(x) -> f(y) = g(y)
+/// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
+/// let bc = vec![BoundaryCondition::Periodic];
+/// let op = affine_pullback_operator(4, &params, &bc).unwrap();
+/// assert_eq!(op.mpo.node_count(), 4);
+/// ```
 pub fn affine_pullback_operator(
     r: usize,
     params: &AffineParams,
@@ -495,16 +584,23 @@ fn affine_transform_mpo(
 /// # Returns
 /// Vector of R tensors with unfused physical indices.
 ///
-/// # Example
-/// ```no_run
+/// # Examples
+///
+/// ```
 /// use tensor4all_quanticstransform::{
 ///     affine_transform_tensors_unfused, AffineParams, BoundaryCondition,
 /// };
+/// use tensor4all_simplett::Tensor3Ops;
 ///
 /// let params = AffineParams::from_integers(vec![1, 1, 0, 1], vec![0, 0], 2, 2).unwrap();
 /// let bc = vec![BoundaryCondition::Periodic; 2];
 /// let tensors = affine_transform_tensors_unfused(4, &params, &bc).unwrap();
-/// // Each tensor has shape [left, 2, 2, 2, 2, right] for M=2, N=2
+///
+/// // One tensor per site
+/// assert_eq!(tensors.len(), 4);
+///
+/// // Each tensor has fused site_dim = 2^(M+N) = 16 for M=2, N=2
+/// assert_eq!(tensors[0].site_dim(), 16);
 /// ```
 pub fn affine_transform_tensors_unfused(
     r: usize,
@@ -616,7 +712,31 @@ pub fn affine_transform_tensors_unfused(
 
 /// Information about the unfused tensor structure.
 ///
-/// This helper provides metadata for reshaping the unfused tensors.
+/// This helper provides metadata for reshaping the unfused tensors
+/// produced by [`affine_transform_tensors_unfused`].
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_quanticstransform::{AffineParams, UnfusedTensorInfo};
+///
+/// let params = AffineParams::from_integers(vec![1, 0, 0, 1], vec![0, 0], 2, 2).unwrap();
+/// let info = UnfusedTensorInfo::new(&params);
+///
+/// assert_eq!(info.m, 2);
+/// assert_eq!(info.n, 2);
+/// assert_eq!(info.num_physical_dims, 4);
+///
+/// // Get shape for a tensor with bond dims 3 and 5
+/// let shape = info.unfused_shape(3, 5);
+/// assert_eq!(shape, vec![3, 2, 2, 2, 2, 5]);
+///
+/// // Round-trip encode/decode
+/// let fused = info.encode_fused_index(&[1, 0], &[0, 1]);
+/// let (y_bits, x_bits) = info.decode_fused_index(fused);
+/// assert_eq!(y_bits, vec![1, 0]);
+/// assert_eq!(x_bits, vec![0, 1]);
+/// ```
 #[derive(Clone, Debug)]
 pub struct UnfusedTensorInfo {
     /// Number of output variables (M)
