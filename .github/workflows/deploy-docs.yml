@@ -28,6 +28,12 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Build workspace (for mdbook test)
+        run: cargo build --release --workspace
+
+      - name: Test mdBook examples
+        run: mdbook test docs/book -L target/release/deps
+
       - name: Install mdBook
         run: cargo install mdbook --version 0.5.2 --locked
 

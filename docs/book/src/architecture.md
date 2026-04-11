@@ -5,7 +5,7 @@ to choose the right crate for your use case.
 
 ## Crate Dependency Diagram
 
-```
+```text
 tensor4all-tensorbackend    (scalar types, storage)
         |
 tensor4all-core             (Index, Tensor, contraction, SVD/QR)

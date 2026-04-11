@@ -103,7 +103,7 @@ Operators define abstract *input* and *output* indices labeled `0, 1, …, r-1`.
 To apply an operator, replace the tensor network's site indices with the
 operator's input indices using `replaceind`, then call `apply_linear_operator`.
 
-```
+```text
 Original TreeTN          Operator            Result TreeTN
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
 │  site_idx_0  │───▶│  input_0     │    │  output_0    │
@@ -222,7 +222,7 @@ The `_multivar` variants (`flip_operator_multivar`, `shift_operator_multivar`,
 multiple variables.  Each site simultaneously encodes one bit from each
 variable:
 
-```
+```text
 site index s_n encodes: bit_var0 + 2 * bit_var1 + 4 * bit_var2 + ...
 ```
 

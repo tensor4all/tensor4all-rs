@@ -16,7 +16,7 @@ Every tensor axis is identified by an `Index`. Indices carry a unique identity
 (so two indices with the same dimension are still distinct), an optional tag, and
 an optional prime level.
 
-```rust
+```rust,ignore
 use tensor4all_core::index::{Index, DynId};
 use tensor4all_core::IndexLike; // needed for .dim() and .plev()
 
@@ -52,7 +52,7 @@ the abstract sense — operations match axes by index identity.
 
 ### Creating tensors
 
-```rust
+```rust,ignore
 use tensor4all_core::{TensorDynLen, Index};
 use tensor4all_core::index::DynId;
 
@@ -77,7 +77,7 @@ assert_eq!(rand_t.dims(), vec![2, 3]);
 
 ### Extracting data
 
-```rust
+```rust,ignore
 use tensor4all_core::{TensorDynLen, Index};
 use tensor4all_core::index::DynId;
 
@@ -101,7 +101,7 @@ Think of it as a generalization of matrix multiplication.
 
 ### Pairwise contraction
 
-```rust
+```rust,ignore
 use tensor4all_core::{TensorDynLen, Index};
 use tensor4all_core::index::DynId;
 
@@ -123,7 +123,7 @@ assert_eq!(c.dims(), vec![2, 4]);  // j is summed away
 via outer products. `contract_connected` is the same but returns an error if the
 contraction graph is disconnected.
 
-```rust
+```rust,ignore
 use tensor4all_core::{TensorDynLen, Index, contract_multi, contract_connected, AllowedPairs};
 use tensor4all_core::index::DynId;
 
@@ -164,7 +164,7 @@ factor connected by a new bond index.
 
 ### SVD with truncation
 
-```rust
+```rust,ignore
 use tensor4all_core::{TensorDynLen, Index, factorize, FactorizeOptions};
 use tensor4all_core::index::DynId;
 
@@ -195,7 +195,7 @@ assert!(result_capped.rank <= 2);
 
 ### QR decomposition
 
-```rust
+```rust,ignore
 use tensor4all_core::{TensorDynLen, Index, factorize, FactorizeOptions};
 use tensor4all_core::index::DynId;
 

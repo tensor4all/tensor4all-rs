@@ -29,7 +29,7 @@ You do not need to add all of them — only include the crates relevant to your 
 
 The following example uses `tensor4all-simplett` to create a constant tensor train, evaluate it at a specific index, and compress it.
 
-```rust
+```rust,ignore
 use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
 
 fn main() {

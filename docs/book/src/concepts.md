@@ -16,7 +16,7 @@ dimension* `m`; larger `m` means a more accurate approximation at the cost of
 more memory and compute.  In quantum physics the same structure is called a
 *Matrix Product State* (MPS).
 
-```
+```text
 A[0] ---- A[1] ---- A[2] ---- ... ---- A[N-1]
   |          |          |                  |
  i_0        i_1        i_2             i_{N-1}
@@ -56,7 +56,7 @@ compression relative to storing all `2^R` values.  Combining QTT with TCI
 ("Quantics TCI") allows efficient approximation of high-dimensional continuous
 integrands without ever forming the full grid.
 
-```
+```text
 bit R-1        bit R-2                bit 0
   |              |          ...          |
  B[0] --------- B[1] ----- ... ------- B[R-1]
@@ -79,7 +79,7 @@ making them useful for problems with hierarchical or multi-scale structure.  In
 tensor4all-rs, `TreeTensorNetwork<V>` (where `V` is a vertex label type) is the
 primary data structure representing both TT/MPS and more general tree networks.
 
-```
+```text
          T[root]
         /        \
     T[a]          T[b]
