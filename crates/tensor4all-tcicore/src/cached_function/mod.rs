@@ -1,7 +1,30 @@
 //! Cached function wrapper for expensive function evaluations.
 //!
-//! Automatically selects the optimal internal key type based on the index
-//! space size.
+//! [`CachedFunction`] wraps a user-supplied function `Fn(&[I]) -> V` with
+//! thread-safe memoization. On first call for a given multi-index, the
+//! function is evaluated and the result is cached; subsequent calls return
+//! the cached value.
+//!
+//! The internal cache key type is automatically selected based on the total
+//! index space size (up to 1024 bits by default). For larger index spaces,
+//! use [`CachedFunction::with_key_type`] with a custom [`CacheKey`]
+//! implementation.
+//!
+//! # Examples
+//!
+//! ```
+//! use tensor4all_tcicore::CachedFunction;
+//!
+//! let cf = CachedFunction::new(
+//!     |idx: &[usize]| idx[0] + idx[1],
+//!     &[3, 4],
+//! ).unwrap();
+//!
+//! assert_eq!(cf.eval(&[1, 2]), 3);
+//! assert_eq!(cf.num_evals(), 1);
+//! assert_eq!(cf.eval(&[1, 2]), 3);
+//! assert_eq!(cf.num_cache_hits(), 1);
+//! ```
 
 pub mod cache_key;
 pub mod error;
@@ -411,6 +434,26 @@ where
     }
 
     /// Create with a batch function for efficient multi-point evaluation.
+    ///
+    /// The batch function is used for cache misses during [`eval_batch`](Self::eval_batch)
+    /// calls, enabling amortized cost when evaluating many indices at once
+    /// (e.g., batch FFI calls or vectorized computations).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::with_batch(
+    ///     |idx: &[usize]| idx[0] * 10 + idx[1],
+    ///     |indices: &[Vec<usize>]| indices.iter().map(|idx| idx[0] * 10 + idx[1]).collect(),
+    ///     &[3, 4],
+    /// ).unwrap();
+    ///
+    /// let results = cf.eval_batch(&[vec![0, 1], vec![2, 3]]);
+    /// assert_eq!(results, vec![1, 23]);
+    /// assert_eq!(cf.num_evals(), 2);
+    /// ```
     pub fn with_batch<B>(
         func: F,
         batch_func: B,
@@ -485,6 +528,26 @@ where
     }
 
     /// Create with explicit key type and batch function.
+    ///
+    /// Combines [`with_key_type`](Self::with_key_type) and
+    /// [`with_batch`](Self::with_batch) for index spaces larger than 1024
+    /// bits that also benefit from batch evaluation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// // Use u128 key type with batch support
+    /// let cf = CachedFunction::with_key_type_and_batch::<u128, _>(
+    ///     |idx: &[usize]| idx.iter().sum::<usize>(),
+    ///     |indices: &[Vec<usize>]| indices.iter().map(|idx| idx.iter().sum()).collect(),
+    ///     &[2, 3, 4],
+    /// ).unwrap();
+    ///
+    /// let results = cf.eval_batch(&[vec![0, 0, 0], vec![1, 2, 3]]);
+    /// assert_eq!(results, vec![0, 6]);
+    /// ```
     pub fn with_key_type_and_batch<K: CacheKey, B>(
         func: F,
         batch_func: B,
@@ -505,6 +568,25 @@ where
     }
 
     /// Evaluate at a given index, using cache if available.
+    ///
+    /// On the first call for a given index, the wrapped function is invoked and
+    /// the result is cached. Subsequent calls with the same index return the
+    /// cached value. This method is thread-safe.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| idx[0] * idx[1], &[5, 5]).unwrap();
+    /// assert_eq!(cf.eval(&[3, 4]), 12);
+    /// assert_eq!(cf.num_evals(), 1);
+    ///
+    /// // Cache hit
+    /// assert_eq!(cf.eval(&[3, 4]), 12);
+    /// assert_eq!(cf.num_evals(), 1);
+    /// assert_eq!(cf.num_cache_hits(), 1);
+    /// ```
     pub fn eval(&self, idx: &[I]) -> V {
         if let Some(value) = self.cache.get(idx) {
             self.num_cache_hits.fetch_add(1, Ordering::Relaxed);
@@ -518,6 +600,21 @@ where
     }
 
     /// Evaluate bypassing the cache.
+    ///
+    /// The result is neither read from nor stored in the cache, and
+    /// evaluation counters are not updated. Useful for verification or
+    /// when the caller intentionally wants a fresh evaluation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| idx[0] + 1, &[4]).unwrap();
+    /// assert_eq!(cf.eval_no_cache(&[2]), 3);
+    /// assert_eq!(cf.cache_size(), 0);
+    /// assert_eq!(cf.num_evals(), 0);
+    /// ```
     pub fn eval_no_cache(&self, idx: &[I]) -> V {
         (self.func)(idx)
     }
@@ -576,31 +673,101 @@ where
     }
 
     /// Get the local dimensions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| 0, &[3, 4, 5]).unwrap();
+    /// assert_eq!(cf.local_dims(), &[3, 4, 5]);
+    /// ```
     pub fn local_dims(&self) -> &[usize] {
         &self.local_dims
     }
 
-    /// Get the number of sites.
+    /// Get the number of sites (length of the multi-index).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| 0, &[2, 3]).unwrap();
+    /// assert_eq!(cf.num_sites(), 2);
+    /// ```
     pub fn num_sites(&self) -> usize {
         self.local_dims.len()
     }
 
-    /// Get the number of function evaluations.
+    /// Get the number of function evaluations (cache misses).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
+    /// cf.eval(&[0]);
+    /// cf.eval(&[1]);
+    /// cf.eval(&[0]); // cache hit, not a new eval
+    /// assert_eq!(cf.num_evals(), 2);
+    /// ```
     pub fn num_evals(&self) -> usize {
         self.num_evals.load(Ordering::Relaxed)
     }
 
     /// Get the number of cache hits.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
+    /// cf.eval(&[0]);
+    /// assert_eq!(cf.num_cache_hits(), 0);
+    /// cf.eval(&[0]);
+    /// assert_eq!(cf.num_cache_hits(), 1);
+    /// ```
     pub fn num_cache_hits(&self) -> usize {
         self.num_cache_hits.load(Ordering::Relaxed)
     }
 
-    /// Get total calls.
+    /// Get total calls (evaluations + cache hits).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
+    /// cf.eval(&[0]);
+    /// cf.eval(&[1]);
+    /// cf.eval(&[0]); // cache hit
+    /// assert_eq!(cf.total_calls(), 3);
+    /// assert_eq!(cf.total_calls(), cf.num_evals() + cf.num_cache_hits());
+    /// ```
     pub fn total_calls(&self) -> usize {
         self.num_evals() + self.num_cache_hits()
     }
 
-    /// Get cache hit ratio.
+    /// Get cache hit ratio (0.0 when no calls have been made).
+    ///
+    /// Returns `num_cache_hits() / total_calls()` as a value in `[0.0, 1.0]`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
+    /// assert_eq!(cf.cache_hit_ratio(), 0.0); // no calls yet
+    ///
+    /// cf.eval(&[0]);
+    /// cf.eval(&[0]); // cache hit
+    /// assert!((cf.cache_hit_ratio() - 0.5).abs() < 1e-10);
+    /// ```
     pub fn cache_hit_ratio(&self) -> f64 {
         let total = self.total_calls();
         if total == 0 {
@@ -628,6 +795,20 @@ where
     }
 
     /// Number of cached entries.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// let cf = CachedFunction::new(|idx: &[usize]| idx[0], &[4]).unwrap();
+    /// assert_eq!(cf.cache_size(), 0);
+    /// cf.eval(&[0]);
+    /// cf.eval(&[1]);
+    /// assert_eq!(cf.cache_size(), 2);
+    /// cf.eval(&[0]); // cache hit, no new entry
+    /// assert_eq!(cf.cache_size(), 2);
+    /// ```
     pub fn cache_size(&self) -> usize {
         self.cache.len()
     }
@@ -649,6 +830,20 @@ where
     }
 
     /// Internal key type name (for debugging).
+    ///
+    /// Returns `"u64"`, `"u128"`, `"U256"`, `"U512"`, `"U1024"` for
+    /// automatically selected types, or `"custom"` when constructed with
+    /// [`with_key_type`](Self::with_key_type).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tcicore::CachedFunction;
+    ///
+    /// // Small index space uses u64
+    /// let cf = CachedFunction::new(|idx: &[usize]| 0, &[2, 3]).unwrap();
+    /// assert_eq!(cf.key_type(), "u64");
+    /// ```
     pub fn key_type(&self) -> &'static str {
         self.cache.key_type_name()
     }

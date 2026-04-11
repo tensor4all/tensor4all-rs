@@ -1,4 +1,7 @@
 //! Error types for cache key operations.
+//!
+//! [`CacheKeyError`] is returned when constructing a [`CachedFunction`](crate::CachedFunction)
+//! fails due to an index space that exceeds the key type's capacity.
 
 use thiserror::Error;
 
