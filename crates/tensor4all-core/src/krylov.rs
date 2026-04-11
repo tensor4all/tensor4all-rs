@@ -366,6 +366,30 @@ where
 /// Truncation is applied after each Gram-Schmidt orthogonalization step
 /// and after the final solution update. This helps control the bond dimension
 /// growth that would otherwise occur in MPS/MPO representations.
+///
+/// # Examples
+///
+/// Solve `2x = b` with a no-op truncation function:
+///
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike, AnyScalar};
+/// use tensor4all_core::krylov::{gmres_with_truncation, GmresOptions};
+///
+/// let i = DynIndex::new_dyn(2);
+/// let b = TensorDynLen::from_dense(vec![i.clone()], vec![4.0, 6.0]).unwrap();
+/// let x0 = TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap();
+///
+/// // Operator A = 2*I (scales input by 2)
+/// let apply_a = |x: &TensorDynLen| x.scale(AnyScalar::new_real(2.0));
+/// // No-op truncation
+/// let truncate = |_x: &mut TensorDynLen| Ok(());
+///
+/// let result = gmres_with_truncation(apply_a, &b, &x0, &GmresOptions::default(), truncate).unwrap();
+/// assert!(result.converged);
+/// // Solution should be [2.0, 3.0]
+/// let expected = TensorDynLen::from_dense(vec![i], vec![2.0, 3.0]).unwrap();
+/// assert!(result.solution.sub(&expected).unwrap().maxabs() < 1e-8);
+/// ```
 pub fn gmres_with_truncation<T, F, Tr>(
     apply_a: F,
     b: &T,
@@ -643,6 +667,28 @@ where
 ///
 /// This is used by [`restart_gmres_with_truncation`] which wraps the standard GMRES
 /// with an outer loop that recomputes the true residual at each restart.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::krylov::RestartGmresOptions;
+///
+/// let opts = RestartGmresOptions::new()
+///     .with_max_outer_iters(10)
+///     .with_rtol(1e-6)
+///     .with_inner_max_iter(20)
+///     .with_inner_max_restarts(2)
+///     .with_min_reduction(0.99)
+///     .with_inner_rtol(0.01)
+///     .with_verbose(false);
+///
+/// assert_eq!(opts.max_outer_iters, 10);
+/// assert_eq!(opts.rtol, 1e-6);
+/// assert_eq!(opts.inner_max_iter, 20);
+/// assert_eq!(opts.inner_max_restarts, 2);
+/// assert_eq!(opts.min_reduction, Some(0.99));
+/// assert_eq!(opts.inner_rtol, Some(0.01));
+/// ```
 #[derive(Debug, Clone)]
 pub struct RestartGmresOptions {
     /// Maximum number of outer restart iterations.
@@ -743,6 +789,27 @@ impl RestartGmresOptions {
 }
 
 /// Result of restarted GMRES solver.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen, AnyScalar};
+/// use tensor4all_core::krylov::{restart_gmres_with_truncation, RestartGmresOptions};
+///
+/// let i = DynIndex::new_dyn(2);
+/// let b = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 5.0]).unwrap();
+///
+/// let apply_a = |x: &TensorDynLen| x.scale(AnyScalar::new_real(3.0));
+/// let truncate = |_x: &mut TensorDynLen| Ok(());
+///
+/// let result = restart_gmres_with_truncation(
+///     apply_a, &b, None, &RestartGmresOptions::default(), truncate,
+/// ).unwrap();
+///
+/// assert!(result.converged);
+/// assert!(result.residual_norm < 1e-10);
+/// assert!(result.outer_iterations <= 20);
+/// ```
 #[derive(Debug, Clone)]
 pub struct RestartGmresResult<T> {
     /// The solution vector.
@@ -796,6 +863,29 @@ pub struct RestartGmresResult<T> {
 /// # Returns
 ///
 /// A `RestartGmresResult` containing the solution and convergence information.
+///
+/// # Examples
+///
+/// Solve `5x = b` with no truncation:
+///
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen, TensorLike, AnyScalar};
+/// use tensor4all_core::krylov::{restart_gmres_with_truncation, RestartGmresOptions};
+///
+/// let i = DynIndex::new_dyn(3);
+/// let b = TensorDynLen::from_dense(vec![i.clone()], vec![5.0, 10.0, 15.0]).unwrap();
+///
+/// let apply_a = |x: &TensorDynLen| x.scale(AnyScalar::new_real(5.0));
+/// let truncate = |_x: &mut TensorDynLen| Ok(());
+///
+/// let result = restart_gmres_with_truncation(
+///     apply_a, &b, None, &RestartGmresOptions::default(), truncate,
+/// ).unwrap();
+///
+/// assert!(result.converged);
+/// let expected = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0, 3.0]).unwrap();
+/// assert!(result.solution.sub(&expected).unwrap().maxabs() < 1e-8);
+/// ```
 pub fn restart_gmres_with_truncation<T, F, Tr>(
     apply_a: F,
     b: &T,

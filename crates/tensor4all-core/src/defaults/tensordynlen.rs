@@ -231,6 +231,18 @@ impl TensorDynLen {
     /// # Panics
     /// Panics if the storage is Diag and not all indices have the same dimension.
     /// Panics if there are duplicate indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, Storage};
+    /// use std::sync::Arc;
+    ///
+    /// let i = DynIndex::new_dyn(3);
+    /// let storage = Arc::new(Storage::new_dense::<f64>(3));
+    /// let t = TensorDynLen::new(vec![i], storage);
+    /// assert_eq!(t.dims(), vec![3]);
+    /// ```
     pub fn new(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Self {
         match Self::from_storage(indices, storage) {
             Ok(tensor) => tensor,
@@ -245,11 +257,36 @@ impl TensorDynLen {
     /// # Panics
     /// Panics if the storage is Diag and not all indices have the same dimension.
     /// Panics if there are duplicate indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, Storage};
+    /// use std::sync::Arc;
+    ///
+    /// let i = DynIndex::new_dyn(4);
+    /// let storage = Arc::new(Storage::new_dense::<f64>(4));
+    /// let t = TensorDynLen::from_indices(vec![i], storage);
+    /// assert_eq!(t.dims(), vec![4]);
+    /// ```
     pub fn from_indices(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Self {
         Self::new(indices, storage)
     }
 
     /// Create a tensor from explicit storage by seeding a canonical native payload.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen, Storage};
+    /// use std::sync::Arc;
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let storage = Arc::new(Storage::new_diag(vec![1.0_f64, 2.0]));
+    /// let t = TensorDynLen::from_storage(vec![i, j], storage).unwrap();
+    /// assert_eq!(t.dims(), vec![2, 2]);
+    /// ```
     pub fn from_storage(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
         let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices);
@@ -1369,6 +1406,17 @@ impl std::fmt::Debug for TensorDynLen {
 ///
 /// # Panics
 /// Panics if indices have different dimensions, or if diag_data length doesn't match.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, diag_tensor_dyn_len};
+///
+/// let i = DynIndex::new_dyn(3);
+/// let j = DynIndex::new_dyn(3);
+/// let t = diag_tensor_dyn_len(vec![i, j], vec![1.0, 2.0, 3.0]);
+/// assert_eq!(t.dims(), vec![3, 3]);
+/// ```
 pub fn diag_tensor_dyn_len(indices: Vec<DynIndex>, diag_data: Vec<f64>) -> TensorDynLen {
     TensorDynLen::from_diag(indices, diag_data)
         .unwrap_or_else(|err| panic!("diag_tensor_dyn_len failed: {err}"))
@@ -1398,6 +1446,28 @@ pub fn diag_tensor_dyn_len(indices: Vec<DynIndex>, diag_data: Vec<f64>) -> Tenso
 /// - `left_inds` is empty or contains all indices
 /// - `left_inds` contains indices not in the tensor or duplicates
 /// - Native reshape fails
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, TensorDynLen, unfold_split};
+///
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(3);
+/// // 2x3 dense tensor with data [1..6]
+/// let t = TensorDynLen::from_dense(
+///     vec![i.clone(), j.clone()],
+///     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+/// ).unwrap();
+///
+/// let (matrix, left_len, m, n, left_indices, right_indices) =
+///     unfold_split(&t, &[i]).unwrap();
+/// assert_eq!(left_len, 1);
+/// assert_eq!(m, 2);
+/// assert_eq!(n, 3);
+/// assert_eq!(left_indices.len(), 1);
+/// assert_eq!(right_indices.len(), 1);
+/// ```
 #[allow(clippy::type_complexity)]
 pub fn unfold_split(
     t: &TensorDynLen,
@@ -2073,6 +2143,25 @@ impl TensorDynLen {
     /// Check whether the tensor currently uses native diagonal structured storage.
     ///
     /// This is a storage-level predicate, not a semantic diagonality check.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// // Tensors from `from_dense` use dense storage
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let dense = TensorDynLen::from_dense(vec![i, j], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+    /// assert!(!dense.is_diag());
+    ///
+    /// // Note: `from_diag` also materializes densely at the native level,
+    /// // so is_diag() returns false for tensors created via the public API.
+    /// let k = DynIndex::new_dyn(2);
+    /// let l = DynIndex::new_dyn(2);
+    /// let diag = TensorDynLen::from_diag(vec![k, l], vec![1.0, 2.0]).unwrap();
+    /// assert!(!diag.is_diag());
+    /// ```
     pub fn is_diag(&self) -> bool {
         self.native.is_diag()
     }

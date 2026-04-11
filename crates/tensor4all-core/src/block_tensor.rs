@@ -67,6 +67,24 @@ impl<T: TensorLike> BlockTensor<T> {
     /// # Errors
     ///
     /// Returns an error if `rows * cols != blocks.len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::block_tensor::BlockTensor;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let t1 = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// let t2 = TensorDynLen::from_dense(vec![i.clone()], vec![3.0, 4.0]).unwrap();
+    ///
+    /// let bt = BlockTensor::try_new(vec![t1, t2], (2, 1)).unwrap();
+    /// assert_eq!(bt.shape(), (2, 1));
+    ///
+    /// // Wrong number of blocks returns an error
+    /// let t3 = TensorDynLen::from_dense(vec![i], vec![5.0, 6.0]).unwrap();
+    /// assert!(BlockTensor::try_new(vec![t3], (2, 1)).is_err());
+    /// ```
     pub fn try_new(blocks: Vec<T>, shape: (usize, usize)) -> Result<Self> {
         let (rows, cols) = shape;
         anyhow::ensure!(
@@ -90,11 +108,37 @@ impl<T: TensorLike> BlockTensor<T> {
     /// # Panics
     ///
     /// Panics if `rows * cols != blocks.len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::block_tensor::BlockTensor;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
+    /// let bt = BlockTensor::new(vec![t], (1, 1));
+    /// assert_eq!(bt.shape(), (1, 1));
+    /// ```
     pub fn new(blocks: Vec<T>, shape: (usize, usize)) -> Self {
         Self::try_new(blocks, shape).expect("Invalid block tensor shape")
     }
 
     /// Get the block structure (rows, cols).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::block_tensor::BlockTensor;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let blocks: Vec<TensorDynLen> = (0..6)
+    ///     .map(|_| TensorDynLen::from_dense(vec![i.clone()], vec![0.0, 0.0]).unwrap())
+    ///     .collect();
+    /// let bt = BlockTensor::new(blocks, (2, 3));
+    /// assert_eq!(bt.shape(), (2, 3));
+    /// ```
     pub fn shape(&self) -> (usize, usize) {
         self.shape
     }
@@ -109,6 +153,20 @@ impl<T: TensorLike> BlockTensor<T> {
     /// # Panics
     ///
     /// Panics if the indices are out of bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::block_tensor::BlockTensor;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let t1 = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// let t2 = TensorDynLen::from_dense(vec![i], vec![3.0, 4.0]).unwrap();
+    /// let bt = BlockTensor::new(vec![t1, t2], (2, 1));
+    /// assert_eq!(bt.get(0, 0).dims(), vec![2]);
+    /// assert_eq!(bt.get(1, 0).dims(), vec![2]);
+    /// ```
     pub fn get(&self, row: usize, col: usize) -> &T {
         let (rows, cols) = self.shape;
         assert!(row < rows && col < cols, "Block index out of bounds");
@@ -120,6 +178,19 @@ impl<T: TensorLike> BlockTensor<T> {
     /// # Panics
     ///
     /// Panics if the indices are out of bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::block_tensor::BlockTensor;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let t = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// let mut bt = BlockTensor::new(vec![t], (1, 1));
+    /// let block = bt.get_mut(0, 0);
+    /// assert_eq!(block.dims(), vec![2]);
+    /// ```
     pub fn get_mut(&mut self, row: usize, col: usize) -> &mut T {
         let (rows, cols) = self.shape;
         assert!(row < rows && col < cols, "Block index out of bounds");
@@ -127,16 +198,55 @@ impl<T: TensorLike> BlockTensor<T> {
     }
 
     /// Get all blocks as a slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::block_tensor::BlockTensor;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let t1 = TensorDynLen::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    /// let t2 = TensorDynLen::from_dense(vec![i], vec![3.0, 4.0]).unwrap();
+    /// let bt = BlockTensor::new(vec![t1, t2], (1, 2));
+    /// assert_eq!(bt.blocks().len(), 2);
+    /// ```
     pub fn blocks(&self) -> &[T] {
         &self.blocks
     }
 
     /// Get all blocks as a mutable slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::block_tensor::BlockTensor;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
+    /// let mut bt = BlockTensor::new(vec![t], (1, 1));
+    /// assert_eq!(bt.blocks_mut().len(), 1);
+    /// ```
     pub fn blocks_mut(&mut self) -> &mut [T] {
         &mut self.blocks
     }
 
     /// Consume self and return the blocks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::block_tensor::BlockTensor;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let t = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
+    /// let bt = BlockTensor::new(vec![t], (1, 1));
+    /// let blocks = bt.into_blocks();
+    /// assert_eq!(blocks.len(), 1);
+    /// assert_eq!(blocks[0].dims(), vec![2]);
+    /// ```
     pub fn into_blocks(self) -> Vec<T> {
         self.blocks
     }
@@ -151,6 +261,21 @@ impl<T: TensorLike> BlockTensor<T> {
     /// - All blocks have the same number of external indices.
     /// - Blocks in the same row share some common index IDs (output indices).
     /// - Blocks in the same column share some common index IDs (input indices).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::block_tensor::BlockTensor;
+    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    ///
+    /// // Column vector: always valid regardless of index sharing
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let t1 = TensorDynLen::from_dense(vec![i], vec![1.0, 2.0]).unwrap();
+    /// let t2 = TensorDynLen::from_dense(vec![j], vec![3.0, 4.0]).unwrap();
+    /// let bt = BlockTensor::new(vec![t1, t2], (2, 1));
+    /// assert!(bt.validate_indices().is_ok());
+    /// ```
     pub fn validate_indices(&self) -> Result<()> {
         let (rows, cols) = self.shape;
 
