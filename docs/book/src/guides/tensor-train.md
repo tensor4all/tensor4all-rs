@@ -147,7 +147,8 @@ ordering.
 
 ### Creating and orthogonalizing
 
-```rust,ignore
+```rust
+# fn main() -> anyhow::Result<()> {
 use tensor4all_core::{DynIndex, TensorDynLen};
 use tensor4all_itensorlike::{CanonicalForm, TensorTrain, TruncateOptions};
 
@@ -174,17 +175,49 @@ let t2 = TensorDynLen::from_dense(
 
 // Assemble and orthogonalize with center at site 1
 let mut tt = TensorTrain::new(vec![t0, t1, t2])?;
+let norm_before = tt.norm();
 tt.orthogonalize(1)?;
 
 assert!(tt.isortho());
+assert_eq!(tt.orthocenter(), Some(1));
+
+// Orthogonalization preserves the tensor train value
+assert!((tt.norm() - norm_before).abs() < 1e-10);
+# Ok(())
+# }
 ```
 
 ### Truncating
 
 After orthogonalization you can truncate bond dimensions by SVD:
 
-```rust,ignore
+```rust
+# fn main() -> anyhow::Result<()> {
+# use tensor4all_core::{DynIndex, TensorDynLen};
+# use tensor4all_itensorlike::{TensorTrain, TruncateOptions};
+# let s0 = DynIndex::new_dyn(2);
+# let s1 = DynIndex::new_dyn(2);
+# let s2 = DynIndex::new_dyn(2);
+# let b01 = DynIndex::new_bond(4)?;
+# let b12 = DynIndex::new_bond(4)?;
+# let t0 = TensorDynLen::from_dense(
+#     vec![s0, b01.clone()],
+#     (0..8).map(|i| i as f64).collect(),
+# )?;
+# let t1 = TensorDynLen::from_dense(
+#     vec![b01, s1, b12.clone()],
+#     (0..32).map(|i| i as f64).collect(),
+# )?;
+# let t2 = TensorDynLen::from_dense(
+#     vec![b12, s2],
+#     (0..8).map(|i| i as f64).collect(),
+# )?;
+# let mut tt = TensorTrain::new(vec![t0, t1, t2])?;
+# tt.orthogonalize(1)?;
 tt.truncate(&TruncateOptions::svd().with_rtol(1e-10).with_max_rank(2))?;
+assert!(tt.maxbonddim() <= 2);
+# Ok(())
+# }
 ```
 
 `rtol` is the relative truncation tolerance (equivalent to `√cutoff` in
@@ -192,20 +225,38 @@ ITensorMPS.jl notation).
 
 ### Norm and inner product
 
-```rust,ignore
+```rust
+# fn main() -> anyhow::Result<()> {
+# use tensor4all_core::{DynIndex, TensorDynLen};
+# use tensor4all_itensorlike::TensorTrain;
+# let s0 = DynIndex::new_dyn(2);
+# let s1 = DynIndex::new_dyn(2);
+# let b = DynIndex::new_bond(2)?;
+# let t0 = TensorDynLen::from_dense(
+#     vec![s0, b.clone()],
+#     vec![1.0_f64, 0.0, 0.0, 1.0],
+# )?;
+# let t1 = TensorDynLen::from_dense(
+#     vec![b, s1],
+#     vec![1.0, 0.0, 0.0, 1.0],
+# )?;
+# let tt = TensorTrain::new(vec![t0, t1])?;
 let norm = tt.norm();
 assert!(norm.is_finite());
 
-// <tt|tt> = ‖tt‖²
+// <tt|tt> = ||tt||^2
 let inner = tt.inner(&tt);
 assert!((inner.real() - norm * norm).abs() < 1e-10);
+# Ok(())
+# }
 ```
 
 ### Complex scalars
 
 The same API works with `Complex64`:
 
-```rust,ignore
+```rust
+# fn main() -> anyhow::Result<()> {
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, TensorDynLen};
 use tensor4all_itensorlike::TensorTrain;
@@ -230,7 +281,16 @@ let t1 = TensorDynLen::from_dense(
 )?;
 
 let tt = TensorTrain::new(vec![t0, t1])?;
-assert!(tt.norm() > 0.0);
+
+// Norm is sqrt(<tt|tt>) = sqrt(conj(tt) * tt summed over all indices)
+let norm = tt.norm();
+assert!(norm > 0.0);
+
+// For complex tensors, inner product uses complex conjugation on self
+let inner = tt.inner(&tt);
+assert!((inner.real() - norm * norm).abs() < 1e-10);
+# Ok(())
+# }
 ```
 
 ---

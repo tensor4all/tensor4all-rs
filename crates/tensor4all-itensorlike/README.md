@@ -12,7 +12,8 @@ ITensors.jl-inspired TensorTrain API with orthogonality tracking and multiple ca
 
 ## Example
 
-```rust,ignore
+```rust
+# fn main() -> anyhow::Result<()> {
 use tensor4all_core::{DynIndex, TensorDynLen};
 use tensor4all_itensorlike::{TensorTrain, TruncateOptions};
 
@@ -38,6 +39,8 @@ assert!(norm.is_finite());
 // Inner product: <tt|tt> = norm^2
 let inner = tt.inner(&tt);
 assert!((inner.real() - norm * norm).abs() < 1e-10);
+# Ok(())
+# }
 ```
 
 ## Documentation
