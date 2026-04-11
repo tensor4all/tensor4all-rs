@@ -12,28 +12,96 @@ use tensor4all_tcicore::Scalar;
 use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions};
 use tensor4all_tensorbackend::BackendLinalgScalar;
 
-/// Compression method for tensor trains
+/// Matrix decomposition method used during TT compression.
+///
+/// The method controls how each bond is factored during the right-to-left
+/// truncation sweep.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::CompressionMethod;
+///
+/// let method = CompressionMethod::default();
+/// assert_eq!(method, CompressionMethod::LU);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CompressionMethod {
-    /// LU decomposition (rank-revealing)
+    /// Rank-revealing LU decomposition (default).
+    ///
+    /// Fast and robust for most use cases.
     #[default]
     LU,
-    /// Cross interpolation based
+    /// Cross-interpolation (CI) decomposition.
+    ///
+    /// Can be faster than LU for very large bond dimensions because it
+    /// avoids dense matrix operations.
     CI,
-    /// SVD compression (currently unimplemented and returns an error)
+    /// Singular value decomposition (SVD).
+    ///
+    /// Gives the optimal low-rank approximation (Eckart--Young theorem)
+    /// but is more expensive than LU or CI.
     SVD,
 }
 
-/// Options for compression
+/// Configuration for tensor train compression.
+///
+/// Controls the accuracy-vs-cost trade-off when reducing bond dimensions
+/// via [`TensorTrain::compress`] or [`TensorTrain::compressed`].
+///
+/// # Fields
+///
+/// | Field | Default | Meaning |
+/// |-------|---------|---------|
+/// | `method` | `LU` | Decomposition algorithm (see [`CompressionMethod`]) |
+/// | `tolerance` | `1e-12` | Relative truncation threshold per bond |
+/// | `max_bond_dim` | `usize::MAX` | Hard upper bound on any bond dimension |
+/// | `normalize_error` | `true` | Whether error is measured relative to the norm |
+///
+/// # Choosing `tolerance`
+///
+/// - `1e-12` (default): near machine precision, almost lossless.
+/// - `1e-8` to `1e-6`: good for most scientific applications.
+/// - `1e-4` to `1e-2`: aggressive compression, useful for exploratory work.
+///
+/// Tighter tolerances produce larger bond dimensions and slower evaluation.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{CompressionOptions, CompressionMethod};
+///
+/// // Default: LU with tolerance 1e-12
+/// let opts = CompressionOptions::default();
+/// assert_eq!(opts.method, CompressionMethod::LU);
+/// assert!((opts.tolerance - 1e-12).abs() < 1e-15);
+/// assert_eq!(opts.max_bond_dim, usize::MAX);
+///
+/// // Custom: SVD with moderate tolerance and bond dim cap
+/// let opts = CompressionOptions {
+///     method: CompressionMethod::SVD,
+///     tolerance: 1e-6,
+///     max_bond_dim: 50,
+///     ..Default::default()
+/// };
+/// assert_eq!(opts.method, CompressionMethod::SVD);
+/// ```
 #[derive(Debug, Clone)]
 pub struct CompressionOptions {
-    /// Compression method
+    /// Decomposition method (LU, CI, or SVD).
     pub method: CompressionMethod,
-    /// Tolerance for truncation (relative)
+    /// Relative truncation tolerance per bond.
+    ///
+    /// Singular values (or pivots) smaller than `tolerance * sigma_max` are
+    /// discarded. Smaller values preserve more accuracy but produce larger
+    /// bond dimensions.
     pub tolerance: f64,
-    /// Maximum bond dimension
+    /// Hard upper bound on any bond dimension.
+    ///
+    /// Even if the tolerance would allow a larger rank, the bond dimension
+    /// is capped at this value. Set to `usize::MAX` (default) for no limit.
     pub max_bond_dim: usize,
-    /// Whether to normalize the error
+    /// Whether to normalize the truncation error by the tensor norm.
     pub normalize_error: bool,
 }
 
@@ -321,11 +389,36 @@ where
 }
 
 impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
-    /// Compress the tensor train in-place using the specified method
+    /// Compress the tensor train **in place**, reducing bond dimensions.
     ///
-    /// This performs a two-sweep compression:
-    /// 1. Left-to-right sweep with left-orthogonal factorization (no truncation)
-    /// 2. Right-to-left sweep with truncation
+    /// The algorithm performs two sweeps:
+    /// 1. **Left-to-right**: orthogonalize each bond without truncation.
+    /// 2. **Right-to-left**: truncate each bond according to `options`.
+    ///
+    /// After compression, the tensor train approximates the original within
+    /// the specified tolerance while using smaller bond dimensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the internal factorization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, CompressionOptions};
+    ///
+    /// // Add two constant TTs to get bond dim 2, then compress back to 1
+    /// let a = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+    /// let b = TensorTrain::<f64>::constant(&[2, 3, 4], 2.0);
+    /// let mut sum = a.add(&b).unwrap(); // bond dim = 2
+    /// assert_eq!(sum.rank(), 2);
+    ///
+    /// sum.compress(&CompressionOptions::default()).unwrap();
+    /// assert_eq!(sum.rank(), 1); // compressed back to optimal
+    ///
+    /// // Values are preserved: 1.0 + 2.0 = 3.0
+    /// assert!((sum.evaluate(&[0, 0, 0]).unwrap() - 3.0).abs() < 1e-10);
+    /// ```
     pub fn compress(&mut self, options: &CompressionOptions) -> Result<()>
     where
         T: tensor4all_tcicore::MatrixLuciScalar,
@@ -444,7 +537,9 @@ impl<T: TTScalar + Scalar + Default> TensorTrain<T> {
         Ok(())
     }
 
-    /// Create a compressed copy of the tensor train
+    /// Return a compressed copy of the tensor train (non-mutating).
+    ///
+    /// Equivalent to cloning and calling [`compress`](Self::compress).
     ///
     /// # Examples
     ///

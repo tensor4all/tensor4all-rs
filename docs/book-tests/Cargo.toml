@@ -19,6 +19,7 @@ tensor4all-quanticstci = { path = "../../crates/tensor4all-quanticstci" }
 tensor4all-itensorlike = { path = "../../crates/tensor4all-itensorlike" }
 tensor4all-hdf5 = { path = "../../crates/tensor4all-hdf5" }
 tensor4all-treetci = { path = "../../crates/tensor4all-treetci" }
+anyhow = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 approx = { workspace = true }

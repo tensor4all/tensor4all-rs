@@ -9,3 +9,9 @@ mod getting_started {}
 
 #[doc = include_str!("../../book/src/guides/tensor-basics.md")]
 mod tensor_basics {}
+
+#[doc = include_str!("../../book/src/guides/tensor-train.md")]
+mod tensor_train {}
+
+#[doc = include_str!("../../book/src/guides/compress.md")]
+mod compress {}

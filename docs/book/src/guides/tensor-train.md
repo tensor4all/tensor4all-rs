@@ -9,6 +9,11 @@ complementary implementations:
 | `tensor4all-simplett` | Lightweight numerical work with raw arrays |
 | `tensor4all-itensorlike` | ITensors.jl-like Index semantics, orthogonality tracking, canonical forms |
 
+**When to choose which:**
+Use `tensor4all-simplett` when you want fast numerics with minimal boilerplate
+(no named indices needed). Use `tensor4all-itensorlike` when you need named
+indices, automatic orthogonality tracking, or ITensors.jl compatibility.
+
 ---
 
 ## SimpleTT
@@ -19,43 +24,112 @@ manage named indices.
 
 ### Creating a tensor train
 
-```rust,ignore
+```rust
+# fn main() -> anyhow::Result<()> {
 use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
 
 // Constant TT: all entries equal to 1.0, physical dimensions [2, 3, 4]
 let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+assert_eq!(tt.len(), 3);
+assert_eq!(tt.site_dims(), vec![2, 3, 4]);
+assert_eq!(tt.link_dims(), vec![1, 1]); // bond dim = 1 for a constant
 
-// Random TT with bond dimension 4
-let tt_rand = TensorTrain::<f64>::random(&[2, 3, 4], 4);
+// Zero TT: all entries are zero
+let zero_tt = TensorTrain::<f64>::zeros(&[2, 3, 4]);
+assert!((zero_tt.sum()).abs() < 1e-14);
+# Ok(())
+# }
 ```
 
 ### Evaluating and summing
 
-```rust,ignore
+```rust
+# fn main() -> anyhow::Result<()> {
+# use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
+# let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 // Evaluate the tensor at a specific multi-index
 let value = tt.evaluate(&[0, 1, 2])?;
+assert!((value - 1.0).abs() < 1e-12);
 
 // Sum over all multi-indices (equivalent to contracting with all-ones vectors)
 let total = tt.sum();
+// For the constant TT: sum = 1.0 * 2 * 3 * 4 = 24.0
+assert!((total - 24.0).abs() < 1e-10);
+# Ok(())
+# }
 ```
-
-For the constant TT above `tt.sum()` returns `2 × 3 × 4 = 24`.
 
 ### Compressing
 
-`CompressionOptions` controls the accuracy–cost trade-off:
+`CompressionOptions` controls the accuracy--cost trade-off:
 
-```rust,ignore
+```rust
+# fn main() -> anyhow::Result<()> {
+# use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
+// Build a TT with artificially inflated bond dimension by adding two constants
+let a = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+let b = TensorTrain::<f64>::constant(&[2, 3, 4], 2.0);
+let big = a.add(&b)?; // bond dim = 2, but rank-1 would suffice
+assert_eq!(big.rank(), 2);
+
 let options = CompressionOptions {
     tolerance: 1e-10,
     max_bond_dim: 20,
     ..Default::default()
 };
-let compressed = tt.compressed(&options)?;
+let compressed = big.compressed(&options)?;
+
+// Compression found the optimal rank
+assert_eq!(compressed.rank(), 1);
+// Values are preserved: 1.0 + 2.0 = 3.0
+assert!((compressed.evaluate(&[0, 1, 2])? - 3.0).abs() < 1e-10);
+# Ok(())
+# }
 ```
 
 The compression reduces bond dimensions while keeping the approximation error
-below `tolerance` (relative `L∞` norm), up to `max_bond_dim`.
+below `tolerance` (relative truncation threshold), up to `max_bond_dim`.
+
+**Tolerance guidance:**
+- `1e-12` (default): near machine precision, almost lossless.
+- `1e-8` to `1e-6`: good for most scientific applications.
+- Tighter tolerances produce larger bond dimensions and slower evaluation.
+
+### End-to-end workflow
+
+This example shows the complete lifecycle: create, add, compress, evaluate, and
+verify.
+
+```rust
+# fn main() -> anyhow::Result<()> {
+use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
+
+// Step 1: Create two constant TTs
+let a = TensorTrain::<f64>::constant(&[4, 4, 4], 1.0);
+let b = TensorTrain::<f64>::constant(&[4, 4, 4], 2.0);
+
+// Step 2: Add them (bond dim doubles)
+let sum = a.add(&b)?;
+assert_eq!(sum.rank(), 2);
+
+// Step 3: Compress
+let compressed = sum.compressed(&CompressionOptions::default())?;
+assert_eq!(compressed.rank(), 1);
+
+// Step 4: Evaluate and verify
+for i in 0..4 {
+    for j in 0..4 {
+        let val = compressed.evaluate(&[i, j, 0])?;
+        assert!((val - 3.0).abs() < 1e-10);
+    }
+}
+
+// Step 5: Check norm
+// norm^2 = 3^2 * 4^3 = 576, norm = 24
+assert!((compressed.norm() - 24.0).abs() < 1e-10);
+# Ok(())
+# }
+```
 
 ---
 

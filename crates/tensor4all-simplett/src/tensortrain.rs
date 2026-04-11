@@ -4,14 +4,32 @@ use crate::error::{Result, TensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 
-/// Tensor Train (Matrix Product State) representation
+/// Tensor Train (Matrix Product State) representation.
 ///
-/// A tensor train represents a high-dimensional tensor as a product of
-/// lower-dimensional tensors:
+/// A tensor train decomposes a high-dimensional tensor `T[i0, i1, ..., i_{L-1}]`
+/// into a chain of rank-3 core tensors:
 ///
-/// T\[i1, i2, ..., iL\] = A1\[i1\] * A2\[i2\] * ... * AL\[iL\]
+/// ```text
+/// T[i0, i1, ..., i_{L-1}] = A0[i0] * A1[i1] * ... * A_{L-1}[i_{L-1}]
+/// ```
 ///
-/// where each Ak\[ik\] is a matrix of shape (rk-1, rk).
+/// where each core `Ak` has shape `(r_{k-1}, d_k, r_k)` with:
+/// - `r_k` = bond dimension (link between site `k` and `k+1`),
+/// - `d_k` = physical (site) dimension at site `k`,
+/// - `r_{-1} = r_{L-1} = 1` (boundary condition).
+///
+/// # Construction
+///
+/// - [`TensorTrain::constant`] -- all entries equal to a given value
+/// - [`TensorTrain::zeros`] -- all entries zero
+/// - [`TensorTrain::new`] -- from explicit rank-3 core tensors
+///
+/// # Related types
+///
+/// - [`CompressionOptions`](crate::CompressionOptions) -- configure compression
+/// - [`TTCache`](crate::TTCache) -- cached evaluation
+/// - [`SiteTensorTrain`](crate::SiteTensorTrain) -- center-canonical form
+/// - [`VidalTensorTrain`](crate::VidalTensorTrain) -- Vidal canonical form
 ///
 /// # Examples
 ///
@@ -23,6 +41,7 @@ use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 ///
 /// assert_eq!(tt.len(), 3);
 /// assert_eq!(tt.site_dims(), vec![2, 3, 4]);
+/// assert_eq!(tt.link_dims(), vec![1, 1]); // bond dim = 1 for constant
 ///
 /// // Evaluate at a specific index
 /// let val = tt.evaluate(&[0, 1, 2]).unwrap();
@@ -40,10 +59,41 @@ pub struct TensorTrain<T: TTScalar> {
 }
 
 impl<T: TTScalar> TensorTrain<T> {
-    /// Create a new tensor train from a list of 3D tensors
+    /// Create a new tensor train from a list of rank-3 core tensors.
     ///
-    /// Each tensor should have shape (left_bond, site_dim, right_bond)
-    /// where the right_bond of tensor i equals the left_bond of tensor i+1.
+    /// Each tensor must have shape `(left_bond, site_dim, right_bond)` where
+    /// the `right_bond` of tensor `i` equals the `left_bond` of tensor `i+1`.
+    /// The first tensor must have `left_bond = 1` and the last must have
+    /// `right_bond = 1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TensorTrainError::DimensionMismatch`] if adjacent bond
+    /// dimensions do not match, or [`TensorTrainError::InvalidOperation`] if
+    /// boundary dimensions are not 1.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, Tensor3Ops, tensor3_zeros};
+    ///
+    /// // Build a 2-site TT with bond dimension 1 and site dimensions [2, 3]
+    /// let mut t0 = tensor3_zeros::<f64>(1, 2, 1);
+    /// t0.set3(0, 0, 0, 1.0);
+    /// t0.set3(0, 1, 0, 2.0);
+    ///
+    /// let mut t1 = tensor3_zeros::<f64>(1, 3, 1);
+    /// t1.set3(0, 0, 0, 10.0);
+    /// t1.set3(0, 1, 0, 20.0);
+    /// t1.set3(0, 2, 0, 30.0);
+    ///
+    /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    /// assert_eq!(tt.len(), 2);
+    ///
+    /// // T[0, 2] = 1.0 * 30.0 = 30.0
+    /// let val = tt.evaluate(&[0, 2]).unwrap();
+    /// assert!((val - 30.0).abs() < 1e-12);
+    /// ```
     pub fn new(tensors: Vec<Tensor3<T>>) -> Result<Self> {
         // Validate dimensions
         for i in 0..tensors.len().saturating_sub(1) {
@@ -75,13 +125,42 @@ impl<T: TTScalar> TensorTrain<T> {
         Self { tensors }
     }
 
-    /// Create a tensor train representing the zero function
+    /// Create a tensor train where every entry is zero.
+    ///
+    /// The resulting TT has bond dimension 1 at every link.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// let tt = TensorTrain::<f64>::zeros(&[2, 3]);
+    /// assert!((tt.evaluate(&[1, 2]).unwrap()).abs() < 1e-14);
+    /// assert!((tt.sum()).abs() < 1e-14);
+    /// ```
     pub fn zeros(site_dims: &[usize]) -> Self {
         let tensors: Vec<Tensor3<T>> = site_dims.iter().map(|&d| tensor3_zeros(1, d, 1)).collect();
         Self { tensors }
     }
 
-    /// Create a tensor train representing a constant function
+    /// Create a tensor train where every entry equals `value`.
+    ///
+    /// The resulting TT has bond dimension 1 at every link.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 5.0);
+    ///
+    /// // Every entry is 5.0
+    /// assert!((tt.evaluate(&[0, 0, 0]).unwrap() - 5.0).abs() < 1e-12);
+    /// assert!((tt.evaluate(&[1, 2, 3]).unwrap() - 5.0).abs() < 1e-12);
+    ///
+    /// // Sum = 5.0 * 2 * 3 * 4 = 120.0
+    /// assert!((tt.sum() - 120.0).abs() < 1e-10);
+    /// ```
     pub fn constant(site_dims: &[usize], value: T) -> Self {
         if site_dims.is_empty() {
             return Self {
@@ -133,7 +212,21 @@ impl<T: TTScalar> TensorTrain<T> {
         &mut self.tensors
     }
 
-    /// Multiply the tensor train by a scalar
+    /// Multiply every entry of the tensor train by `factor` in place.
+    ///
+    /// Only the last core tensor is rescaled, so this is an O(d * r^2) operation
+    /// where `d` is the site dimension and `r` the bond dimension of the last site.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// let mut tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    /// tt.scale(3.0);
+    /// assert!((tt.evaluate(&[0, 0]).unwrap() - 3.0).abs() < 1e-12);
+    /// assert!((tt.sum() - 18.0).abs() < 1e-10);
+    /// ```
     pub fn scale(&mut self, factor: T) {
         if !self.tensors.is_empty() {
             let last = self.tensors.len() - 1;
@@ -149,14 +242,54 @@ impl<T: TTScalar> TensorTrain<T> {
         }
     }
 
-    /// Create a scaled copy of the tensor train
+    /// Return a new tensor train with every entry multiplied by `factor`.
+    ///
+    /// This is the non-mutating version of [`scale`](Self::scale).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+    /// let tt2 = tt.scaled(4.0);
+    /// // Original is unchanged
+    /// assert!((tt.evaluate(&[0, 0]).unwrap() - 1.0).abs() < 1e-12);
+    /// // Scaled copy
+    /// assert!((tt2.evaluate(&[0, 0]).unwrap() - 4.0).abs() < 1e-12);
+    /// ```
     pub fn scaled(&self, factor: T) -> Self {
         let mut result = self.clone();
         result.scale(factor);
         result
     }
 
-    /// Reverse the tensor train (swap left and right)
+    /// Reverse the order of sites in the tensor train.
+    ///
+    /// The reversed TT satisfies `reversed.evaluate(&[i_{L-1}, ..., i_0]) ==
+    /// original.evaluate(&[i_0, ..., i_{L-1}])`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, Tensor3Ops, tensor3_zeros};
+    ///
+    /// let mut t0 = tensor3_zeros::<f64>(1, 2, 1);
+    /// t0.set3(0, 0, 0, 1.0);
+    /// t0.set3(0, 1, 0, 2.0);
+    /// let mut t1 = tensor3_zeros::<f64>(1, 3, 1);
+    /// t1.set3(0, 0, 0, 10.0);
+    /// t1.set3(0, 1, 0, 20.0);
+    /// t1.set3(0, 2, 0, 30.0);
+    /// let tt = TensorTrain::new(vec![t0, t1]).unwrap();
+    ///
+    /// let rev = tt.reverse();
+    /// assert_eq!(rev.site_dims(), vec![3, 2]);
+    /// // T[0, 1] = 1.0 * 10.0 = 10.0, reversed: T_rev[0, 1] should also be 10.0 (site 0->10, site 1->2)
+    /// // Original: T[1, 0] = 2.0 * 10.0 = 20.0
+    /// // Reversed: T_rev[0, 1] = 20.0
+    /// assert!((rev.evaluate(&[0, 1]).unwrap() - tt.evaluate(&[1, 0]).unwrap()).abs() < 1e-12);
+    /// ```
     pub fn reverse(&self) -> Self {
         let mut new_tensors = Vec::with_capacity(self.tensors.len());
         for tensor in self.tensors.iter().rev() {
@@ -179,12 +312,27 @@ impl<T: TTScalar> TensorTrain<T> {
 }
 
 impl<T: TTScalar> TensorTrain<T> {
-    /// Convert the tensor train to a full tensor
+    /// Materialize the tensor train as a full dense tensor.
     ///
-    /// Returns a flat vector containing all tensor elements in column-major order,
-    /// along with the shape (site dimensions).
+    /// Returns `(data, shape)` where `data` is a flat vector in **column-major**
+    /// order and `shape` is the site dimensions. The total number of elements
+    /// is `prod(shape)`.
     ///
-    /// Warning: This can be very large for high-dimensional tensors!
+    /// **Warning:** The full tensor can be extremely large for high-dimensional
+    /// problems. Only use this for small tensors or debugging.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// let tt = TensorTrain::<f64>::constant(&[2, 3], 7.0);
+    /// let (data, shape) = tt.fulltensor();
+    /// assert_eq!(shape, vec![2, 3]);
+    /// assert_eq!(data.len(), 6);
+    /// // Every element should be 7.0
+    /// assert!(data.iter().all(|&v| (v - 7.0).abs() < 1e-12));
+    /// ```
     pub fn fulltensor(&self) -> (Vec<T>, Vec<usize>) {
         if self.is_empty() {
             return (Vec::new(), Vec::new());
@@ -232,12 +380,32 @@ impl<T: TTScalar> TensorTrain<T> {
 }
 
 impl<T: TTScalar> TensorTrain<T> {
-    /// Sum over selected dimensions, returning a new TensorTrain with remaining dimensions.
+    /// Sum (trace out) selected site dimensions, returning a lower-order TT.
     ///
-    /// `dims` is a slice of 0-indexed site positions to sum over.
-    /// If all dimensions are summed, returns a 1-site TensorTrain wrapping the scalar result.
+    /// `dims` is a slice of 0-indexed site positions to sum over. The
+    /// remaining sites keep their original order. If *all* dimensions are
+    /// summed, the result is a 1-site TT wrapping the scalar total.
     ///
-    /// Port of Julia's `_sum(tt; dims)` from `abstracttensortrain.jl`.
+    /// # Errors
+    ///
+    /// Returns an error if any element of `dims` is out of range.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// // 3-site constant TT: T[i,j,k] = 1.0, dims = [2, 3, 4]
+    /// let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+    ///
+    /// // Sum over the middle site (index 1): result has dims [2, 4]
+    /// let summed = tt.partial_sum(&[1]).unwrap();
+    /// assert_eq!(summed.site_dims(), vec![2, 4]);
+    ///
+    /// // Each remaining entry = 1.0 * 3 (summed over dim=3)
+    /// let val = summed.evaluate(&[0, 0]).unwrap();
+    /// assert!((val - 3.0).abs() < 1e-12);
+    /// ```
     pub fn partial_sum(&self, dims: &[usize]) -> Result<TensorTrain<T>> {
         use tensor4all_tcicore::matrix::{mat_mul, ncols, nrows, zeros as mat_zeros};
 

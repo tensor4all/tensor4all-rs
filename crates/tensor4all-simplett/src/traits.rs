@@ -4,32 +4,87 @@ use crate::error::Result;
 use crate::types::{LocalIndex, Tensor3, Tensor3Ops};
 use tenferro_algebra::Scalar as TfScalar;
 
-/// Common scalar bound for simplett tensors.
+/// Scalar trait bound shared by all simplett tensor types.
+///
+/// Combines [`tensor4all_core::CommonScalar`] (arithmetic, conversion) with
+/// [`tenferro_algebra::Scalar`] (backend compatibility). Both `f64` and
+/// `Complex64` implement this trait.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::TTScalar;
+///
+/// // f64 satisfies TTScalar
+/// fn uses_ttscalar<T: TTScalar>(x: T, y: T) -> T { x + y }
+///
+/// let result = uses_ttscalar(1.0_f64, 2.0_f64);
+/// assert!((result - 3.0).abs() < 1e-15);
+///
+/// // Complex64 also satisfies TTScalar
+/// use num_complex::Complex64;
+/// let c = uses_ttscalar(Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0));
+/// assert!((c.re - 1.0).abs() < 1e-15);
+/// assert!((c.im - 1.0).abs() < 1e-15);
+/// ```
 pub trait TTScalar: tensor4all_core::CommonScalar + TfScalar {}
 
 impl<T> TTScalar for T where T: tensor4all_core::CommonScalar + TfScalar {}
 
-/// Abstract trait for tensor train objects
+/// Common interface implemented by all tensor train representations.
 ///
-/// A tensor train (also known as MPS) represents a high-dimensional tensor
-/// as a product of low-rank tensors.
+/// Provides read-only access to site tensors plus derived operations:
+/// [`evaluate`](Self::evaluate), [`sum`](Self::sum),
+/// [`norm`](Self::norm), and [`log_norm`](Self::log_norm).
+///
+/// # Implementors
+///
+/// - [`TensorTrain`](crate::TensorTrain) -- primary container
+/// - [`SiteTensorTrain`](crate::SiteTensorTrain) -- center-canonical form
+/// - [`VidalTensorTrain`](crate::VidalTensorTrain) -- Vidal form (after
+///   conversion to `TensorTrain`)
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+///
+/// // TensorTrain implements AbstractTensorTrain.
+/// let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
+///
+/// // Query structure
+/// assert_eq!(tt.len(), 3);
+/// assert!(!tt.is_empty());
+/// assert_eq!(tt.site_dims(), vec![2, 3, 4]);
+/// assert_eq!(tt.site_dim(1), 3);
+/// assert_eq!(tt.link_dims(), vec![1, 1]);
+///
+/// // Evaluate, sum, and norm
+/// let val = tt.evaluate(&[0, 0, 0]).unwrap();
+/// assert!((val - 1.0).abs() < 1e-12);
+///
+/// let s = tt.sum();
+/// assert!((s - 24.0).abs() < 1e-10);
+///
+/// let n = tt.norm();
+/// assert!((n - 24.0_f64.sqrt()).abs() < 1e-10);
+/// ```
 pub trait AbstractTensorTrain<T: TTScalar>: Sized {
-    /// Number of sites (tensors) in the tensor train
+    /// Number of sites (core tensors) in the tensor train.
     fn len(&self) -> usize;
 
-    /// Check if the tensor train is empty
+    /// Returns `true` if the tensor train has zero sites.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Get the site tensor at position i
+    /// Borrow the rank-3 core tensor at site `i`.
     fn site_tensor(&self, i: usize) -> &Tensor3<T>;
 
-    /// Get all site tensors
+    /// Borrow all core tensors as a slice.
     fn site_tensors(&self) -> &[Tensor3<T>];
 
-    /// Bond dimensions along the links between tensors
-    /// Returns a vector of length L-1 where L is the number of sites
+    /// Bond dimensions at every link (length = `len() - 1`).
     fn link_dims(&self) -> Vec<usize> {
         if self.len() <= 1 {
             return Vec::new();
@@ -39,24 +94,24 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
             .collect()
     }
 
-    /// Bond dimension at the link between tensor i and i+1
+    /// Bond dimension at the link between site `i` and site `i+1`.
     fn link_dim(&self, i: usize) -> usize {
         self.site_tensor(i + 1).left_dim()
     }
 
-    /// Site dimensions (physical dimensions) for each tensor
+    /// Physical (site) dimensions for every site.
     fn site_dims(&self) -> Vec<usize> {
         (0..self.len())
             .map(|i| self.site_tensor(i).site_dim())
             .collect()
     }
 
-    /// Site dimension at position i
+    /// Physical (site) dimension at site `i`.
     fn site_dim(&self, i: usize) -> usize {
         self.site_tensor(i).site_dim()
     }
 
-    /// Maximum bond dimension (rank) of the tensor train
+    /// Maximum bond dimension across all links.
     fn rank(&self) -> usize {
         let lds = self.link_dims();
         if lds.is_empty() {
@@ -213,7 +268,18 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
         current[0]
     }
 
-    /// Compute the squared Frobenius norm of the tensor train
+    /// Squared Frobenius norm: `sum_i |T[i]|^2`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// // Constant TT: T[i,j] = 2.0 on a 3x4 grid
+    /// let tt = TensorTrain::<f64>::constant(&[3, 4], 2.0);
+    /// // norm^2 = 2^2 * 3 * 4 = 48
+    /// assert!((tt.norm2() - 48.0).abs() < 1e-10);
+    /// ```
     fn norm2(&self) -> f64 {
         if self.is_empty() {
             return 0.0;
@@ -270,18 +336,42 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
         current[0].abs_sq().sqrt()
     }
 
-    /// Compute the Frobenius norm of the tensor train
+    /// Frobenius norm: `sqrt(sum_i |T[i]|^2)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// let tt = TensorTrain::<f64>::constant(&[3, 4], 2.0);
+    /// // norm = sqrt(48) ~ 6.928
+    /// assert!((tt.norm() - 48.0_f64.sqrt()).abs() < 1e-10);
+    /// ```
     fn norm(&self) -> f64 {
         self.norm2().sqrt()
     }
 
-    /// Compute the logarithm of the Frobenius norm of the tensor train
+    /// Logarithm of the Frobenius norm: `ln(norm())`.
     ///
     /// This is more numerically stable than `norm().ln()` for tensor trains
-    /// with very large or very small norms, as it avoids overflow/underflow
-    /// by normalizing at each step.
+    /// with very large or very small norms, because it normalizes at each
+    /// contraction step to avoid overflow/underflow.
     ///
     /// Returns `f64::NEG_INFINITY` for zero tensor trains.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain};
+    ///
+    /// let tt = TensorTrain::<f64>::constant(&[3, 4], 2.0);
+    /// let log_n = tt.log_norm();
+    /// assert!((log_n - tt.norm().ln()).abs() < 1e-10);
+    ///
+    /// // Zero TT returns negative infinity
+    /// let zero_tt = TensorTrain::<f64>::zeros(&[2, 3]);
+    /// assert_eq!(zero_tt.log_norm(), f64::NEG_INFINITY);
+    /// ```
     fn log_norm(&self) -> f64 {
         if self.is_empty() {
             return f64::NEG_INFINITY;

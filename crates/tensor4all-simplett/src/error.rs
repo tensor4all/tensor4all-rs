@@ -6,6 +6,27 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, TensorTrainError>;
 
 /// Errors that can occur during tensor train operations
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{TensorTrainError, TensorTrain, AbstractTensorTrain};
+///
+/// // Empty index set triggers IndexLengthMismatch
+/// let tt = TensorTrain::<f64>::constant(&[2, 3], 1.0);
+/// let err = tt.evaluate(&[0]).unwrap_err();
+/// assert!(matches!(err, TensorTrainError::IndexLengthMismatch { expected: 2, got: 1 }));
+///
+/// // DimensionMismatch can be constructed directly
+/// let err = TensorTrainError::DimensionMismatch { site: 3 };
+/// assert!(err.to_string().contains("site 3"));
+///
+/// // InvalidOperation carries an arbitrary message
+/// let err = TensorTrainError::InvalidOperation {
+///     message: "test error".to_string(),
+/// };
+/// assert!(err.to_string().contains("test error"));
+/// ```
 #[derive(Error, Debug)]
 pub enum TensorTrainError {
     /// Dimension mismatch between tensors

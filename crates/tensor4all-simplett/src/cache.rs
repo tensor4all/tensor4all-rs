@@ -205,11 +205,30 @@ impl UniqueCounter {
     }
 }
 
-/// Cached tensor train for efficient repeated evaluation
+/// Cached tensor train evaluator.
 ///
-/// Caches left and right partial contractions to avoid redundant computation
-/// when evaluating the same tensor train at multiple index sets that share
-/// common prefixes or suffixes.
+/// Wraps a tensor train and caches left and right partial contractions so
+/// that repeated evaluations sharing common prefixes or suffixes reuse
+/// previously computed results. This is particularly effective for
+/// batch evaluation via [`evaluate_many`](Self::evaluate_many).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{TensorTrain, AbstractTensorTrain, TTCache};
+///
+/// let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 5.0);
+/// let mut cache = TTCache::new(&tt);
+///
+/// // Single evaluation (caches intermediate contractions)
+/// let val = cache.evaluate(&[1, 2, 3]).unwrap();
+/// assert!((val - 5.0).abs() < 1e-12);
+///
+/// // Batch evaluation reuses cached partial contractions
+/// let indices = vec![vec![0, 0, 0], vec![1, 2, 3], vec![0, 1, 2]];
+/// let vals = cache.evaluate_many(&indices, None).unwrap();
+/// assert!(vals.iter().all(|&v| (v - 5.0).abs() < 1e-12));
+/// ```
 #[derive(Debug, Clone)]
 pub struct TTCache<T: TTScalar> {
     /// The site tensors (reshaped to 3D: left_bond x flat_site x right_bond)

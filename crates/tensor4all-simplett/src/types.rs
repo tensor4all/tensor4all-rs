@@ -11,33 +11,53 @@ pub type LocalIndex = usize;
 /// Multi-index type (indices across all sites)
 pub type MultiIndex = Vec<LocalIndex>;
 
-/// Helper functions for Tensor3 operations
+/// Convenience accessors for rank-3 core tensors with shape
+/// `(left_bond, site_dim, right_bond)`.
+///
+/// These methods give named access to dimensions and elements using the
+/// tensor train convention where axis 0 is the left bond, axis 1 is the
+/// physical (site) index, and axis 2 is the right bond.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{Tensor3Ops, tensor3_zeros};
+///
+/// let mut t = tensor3_zeros::<f64>(2, 3, 4);
+/// assert_eq!(t.left_dim(), 2);
+/// assert_eq!(t.site_dim(), 3);
+/// assert_eq!(t.right_dim(), 4);
+///
+/// t.set3(1, 2, 3, 42.0);
+/// assert_eq!(*t.get3(1, 2, 3), 42.0);
+/// ```
 pub trait Tensor3Ops<T: Clone + Default> {
-    /// Get the left (bond) dimension
+    /// Left (bond) dimension (axis 0).
     fn left_dim(&self) -> usize;
 
-    /// Get the site (physical) dimension
+    /// Physical (site) dimension (axis 1).
     fn site_dim(&self) -> usize;
 
-    /// Get the right (bond) dimension
+    /// Right (bond) dimension (axis 2).
     fn right_dim(&self) -> usize;
 
-    /// Get element at (left, site, right)
+    /// Borrow the element at `(left, site, right)`.
     fn get3(&self, l: usize, s: usize, r: usize) -> &T;
 
-    /// Get mutable element at (left, site, right)
+    /// Mutably borrow the element at `(left, site, right)`.
     fn get3_mut(&mut self, l: usize, s: usize, r: usize) -> &mut T;
 
-    /// Set element at (left, site, right)
+    /// Set the element at `(left, site, right)` to `value`.
     fn set3(&mut self, l: usize, s: usize, r: usize, value: T);
 
-    /// Get a slice for fixed site index: returns (left_dim, right_dim) matrix as flat Vec
+    /// Extract the `(left_dim, right_dim)` matrix for a fixed site index `s`
+    /// as a flat row-major vector.
     fn slice_site(&self, s: usize) -> Vec<T>;
 
-    /// Reshape this tensor to a matrix (left_dim * site_dim, right_dim)
+    /// Reshape to a `(left_dim * site_dim, right_dim)` matrix.
     fn as_left_matrix(&self) -> (Vec<T>, usize, usize);
 
-    /// Reshape this tensor to a matrix (left_dim, site_dim * right_dim)
+    /// Reshape to a `(left_dim, site_dim * right_dim)` matrix.
     fn as_right_matrix(&self) -> (Vec<T>, usize, usize);
 }
 
@@ -113,7 +133,19 @@ impl<T: Clone + Default + TfScalar> Tensor3Ops<T> for Tensor3<T> {
     }
 }
 
-/// Create a zero-filled Tensor3
+/// Create a zero-filled rank-3 tensor with shape `(left_dim, site_dim, right_dim)`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{tensor3_zeros, Tensor3Ops};
+///
+/// let t = tensor3_zeros::<f64>(2, 3, 4);
+/// assert_eq!(t.left_dim(), 2);
+/// assert_eq!(t.site_dim(), 3);
+/// assert_eq!(t.right_dim(), 4);
+/// assert_eq!(*t.get3(0, 0, 0), 0.0);
+/// ```
 pub fn tensor3_zeros<T: Clone + Default + TfScalar>(
     left_dim: usize,
     site_dim: usize,
@@ -122,7 +154,22 @@ pub fn tensor3_zeros<T: Clone + Default + TfScalar>(
     Tensor::from_elem([left_dim, site_dim, right_dim], T::default())
 }
 
-/// Create a Tensor3 from flat data (column-major order)
+/// Create a rank-3 tensor from flat data in **column-major** order.
+///
+/// # Panics
+///
+/// Panics if `data.len() != left_dim * site_dim * right_dim`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_simplett::{tensor3_from_data, Tensor3Ops};
+///
+/// // 1 x 2 x 1 tensor, column-major data: [10.0, 20.0]
+/// let t = tensor3_from_data(vec![10.0, 20.0], 1, 2, 1);
+/// assert_eq!(*t.get3(0, 0, 0), 10.0);
+/// assert_eq!(*t.get3(0, 1, 0), 20.0);
+/// ```
 pub fn tensor3_from_data<T: Clone + TfScalar>(
     data: Vec<T>,
     left_dim: usize,
