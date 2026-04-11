@@ -36,10 +36,39 @@ Read `docs/api/*.md` before source files. Only read source when API doc is insuf
 
 ## Documentation Requirements
 
-Every public type, trait, and function **must** include usage examples in its
-doc comments (`/// # Examples`). Examples must include assertions to verify
-correctness (e.g., `assert!`, `assert_eq!`, `approx::assert_abs_diff_eq!`).
-Use `ignore` attribute on examples that cannot run in doctests.
+### Rustdoc Standards
+
+Every public type, trait, and function **must** have doc comments with the following:
+
+**Types (struct/enum/trait):**
+- Summary: what it represents, when to use it (1-2 sentences)
+- Related types: relationship to similar types (e.g., "`TensorTrain` is the simple chain version; `TreeTN` is the general tree version")
+- `# Examples` section with runnable code and assertions
+
+**Functions/methods:**
+- Summary: what it does (1 sentence)
+- Arguments: meaning, constraints, typical values for each parameter (especially for `Options` types)
+- Returns: what is returned, how to use it
+- `# Panics` or `# Errors`: under what conditions it fails
+- `# Examples` section with runnable code and assertions
+
+**Options/Config types (critical for usability):**
+- Each field: meaning, recommended values, and default behavior
+- Field relationships and trade-offs (e.g., `rtol` vs `max_bond_dim`)
+- "When in doubt" defaults
+
+### Code Example Rules
+
+- All doc examples **must** be runnable (`ignore` and `no_run` attributes are **prohibited**)
+- All doc examples **must** include assertions verifying correctness (not just compilation/execution)
+  - Use `assert!`, `assert_eq!`, `approx::assert_abs_diff_eq!`, etc.
+- mdBook guide code blocks follow the same rules: runnable with assertions
+- mdBook code blocks use hidden lines (`# ` prefix) for `use` statements and `fn main()` wrappers
+
+### CI Verification
+
+- `cargo test --doc --release --workspace` must pass (rustdoc examples)
+- `mdbook test docs/book` must pass (mdBook guide examples)
 
 ## Error Handling
 
