@@ -21,4 +21,4 @@ faer = { workspace = true }
 [dev-dependencies]
 rand_chacha.workspace = true
 tenferro.workspace = true
-tenferro-prims.workspace = true
+tenferro-tensor.workspace = true

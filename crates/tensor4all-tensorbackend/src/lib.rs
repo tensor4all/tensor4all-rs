@@ -15,6 +15,8 @@
 mod any_scalar;
 /// Backend dispatch for SVD and QR operations.
 mod backend;
+/// Thread-local tenferro execution helpers.
+mod context;
 /// Tensor snapshot storage types and low-level dense/diagonal kernels.
 mod storage;
 pub(crate) mod tenferro_bridge;
@@ -23,6 +25,7 @@ mod tensor_element;
 
 pub use any_scalar::AnyScalar;
 pub use backend::{qr_backend, svd_backend, BackendLinalgScalar, SvdResult};
+pub use context::{default_eager_ctx, with_default_backend};
 pub use storage::{
     contract_storage, make_mut_storage, mindim, Storage, StorageScalar, StructuredStorage,
     SumFromStorage,
@@ -39,5 +42,4 @@ pub use tenferro_bridge::{
     scale_native_tensor, scale_storage_native, storage_to_native_tensor, sum_native_tensor,
     svd_native_tensor, tangent_native_tensor,
 };
-pub use tenferro_prims::print_and_reset_contract_profile;
 pub use tensor_element::TensorElement;

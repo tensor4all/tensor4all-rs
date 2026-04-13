@@ -28,4 +28,4 @@ tenferro-tensor.workspace = true
 
 [dev-dependencies]
 rand_chacha.workspace = true
-tenferro-prims.workspace = true
+tenferro-tensor.workspace = true

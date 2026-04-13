@@ -1,4 +1,5 @@
 use super::*;
+use tenferro::DType;
 
 fn assert_scalar_close(actual: &Scalar, expected: &Scalar) {
     match (actual.as_f64(), expected.as_f64()) {
@@ -73,82 +74,82 @@ fn promote_scalar_native_covers_all_scalar_type_pairs() {
     let cases = vec![
         (
             Scalar::from_value(1.25_f32),
-            ScalarType::F32,
+            DType::F32,
             Scalar::from_value(1.25_f32),
         ),
         (
             Scalar::from_value(1.25_f32),
-            ScalarType::F64,
+            DType::F64,
             Scalar::from_value(1.25_f64),
         ),
         (
             Scalar::from_value(1.25_f32),
-            ScalarType::C32,
+            DType::C32,
             Scalar::from_value(Complex32::new(1.25, 0.0)),
         ),
         (
             Scalar::from_value(1.25_f32),
-            ScalarType::C64,
+            DType::C64,
             Scalar::from_value(Complex64::new(1.25, 0.0)),
         ),
         (
             Scalar::from_value(-2.5_f64),
-            ScalarType::F32,
+            DType::F32,
             Scalar::from_value(-2.5_f32),
         ),
         (
             Scalar::from_value(-2.5_f64),
-            ScalarType::F64,
+            DType::F64,
             Scalar::from_value(-2.5_f64),
         ),
         (
             Scalar::from_value(-2.5_f64),
-            ScalarType::C32,
+            DType::C32,
             Scalar::from_value(Complex32::new(-2.5, 0.0)),
         ),
         (
             Scalar::from_value(-2.5_f64),
-            ScalarType::C64,
+            DType::C64,
             Scalar::from_value(Complex64::new(-2.5, 0.0)),
         ),
         (
             Scalar::from_value(Complex32::new(3.0, -0.5)),
-            ScalarType::F32,
+            DType::F32,
             Scalar::from_value(3.0_f32),
         ),
         (
             Scalar::from_value(Complex32::new(3.0, -0.5)),
-            ScalarType::F64,
+            DType::F64,
             Scalar::from_value(3.0_f64),
         ),
         (
             Scalar::from_value(Complex32::new(3.0, -0.5)),
-            ScalarType::C32,
+            DType::C32,
             Scalar::from_value(Complex32::new(3.0, -0.5)),
         ),
         (
             Scalar::from_value(Complex32::new(3.0, -0.5)),
-            ScalarType::C64,
+            DType::C64,
             Scalar::from_value(Complex64::new(3.0, -0.5)),
         ),
         (
             Scalar::from_value(Complex64::new(-1.0, 2.0)),
-            ScalarType::F32,
+            DType::F32,
             Scalar::from_value(-1.0_f32),
         ),
         (
             Scalar::from_value(Complex64::new(-1.0, 2.0)),
-            ScalarType::F64,
+            DType::F64,
             Scalar::from_value(-1.0_f64),
         ),
         (
             Scalar::from_value(Complex64::new(-1.0, 2.0)),
-            ScalarType::C32,
+            DType::C32,
             Scalar::from_value(Complex32::new(-1.0, 2.0)),
         ),
         (
             Scalar::from_value(Complex64::new(-1.0, 2.0)),
-            ScalarType::C64,
+            DType::C64,
             Scalar::from_value(Complex64::new(-1.0, 2.0)),
         ),
     ];
@@ -157,7 +158,7 @@ fn promote_scalar_native_covers_all_scalar_type_pairs() {
         let promoted =
             Scalar::from_native(promote_scalar_native(source.as_native(), target).unwrap())
                 .expect("promoted scalar");
-        assert_eq!(promoted.native.scalar_type(), expected.native.scalar_type());
+        assert_eq!(promoted.native.dtype(), expected.native.dtype());
         assert_scalar_close(&promoted, &expected);
     }
 }
@@ -224,5 +225,5 @@ fn scalar_trait_helpers_cover_ordering_and_conversions() {
 
     let debug = format!("{:?}", Scalar::from_real(1.0));
     assert!(debug.contains("Scalar"));
-    assert!(debug.contains("scalar_type"));
+    assert!(debug.contains("dtype"));
 }

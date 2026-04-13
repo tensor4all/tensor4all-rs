@@ -7,7 +7,8 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use tensor4all_tensorbackend::{
-    dense_native_tensor_from_col_major, einsum_native_tensors, print_and_reset_contract_profile,
+    dense_native_tensor_from_col_major, einsum_native_tensors,
+    print_and_reset_native_einsum_profile, reset_native_einsum_profile,
 };
 
 const PHYS_DIM: usize = 2;
@@ -44,26 +45,24 @@ fn time_best_of<R>(label: &str, repeats: usize, mut f: impl FnMut() -> R) -> Dur
 
 #[cfg(feature = "einsum-dispatch-profile")]
 fn reset_dispatch_profile() {
-    tenferro_einsum::print_and_reset_profile();
-    print_and_reset_contract_profile();
+    reset_native_einsum_profile();
 }
 
 #[cfg(not(feature = "einsum-dispatch-profile"))]
 fn reset_dispatch_profile() {
-    print_and_reset_contract_profile();
+    reset_native_einsum_profile();
 }
 
 #[cfg(feature = "einsum-dispatch-profile")]
 fn print_dispatch_profile(label: &str) {
     eprintln!("  dispatch profile for {label}:");
-    tenferro_einsum::print_and_reset_profile();
-    print_and_reset_contract_profile();
+    print_and_reset_native_einsum_profile();
 }
 
 #[cfg(not(feature = "einsum-dispatch-profile"))]
 fn print_dispatch_profile(label: &str) {
     eprintln!("  dispatch profile for {label}:");
-    print_and_reset_contract_profile();
+    print_and_reset_native_einsum_profile();
 }
 
 fn run_dispatch_profile<R>(label: &str, repeats: usize, mut f: impl FnMut() -> R) {
@@ -89,13 +88,13 @@ fn bench_native_einsum_arity() {
     assert_eq!(
         einsum_native_tensors(&[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2])
             .unwrap()
-            .dims(),
+            .shape(),
         &[BOND_DIM, BOND_DIM]
     );
     assert_eq!(
         einsum_native_tensors(&[(&a, &[0, 1]), (&b, &[0, 2]), (&c, &[0, 3])], &[1, 2, 3])
             .unwrap()
-            .dims(),
+            .shape(),
         &[BOND_DIM, BOND_DIM, BOND_DIM]
     );
     assert_eq!(
@@ -104,7 +103,7 @@ fn bench_native_einsum_arity() {
             &[1, 2, 3, 4]
         )
         .unwrap()
-        .dims(),
+        .shape(),
         &[BOND_DIM, BOND_DIM, BOND_DIM, BOND_DIM]
     );
 
