@@ -4,12 +4,13 @@
 //! - `dot`: Inner product (returns scalar)
 
 use crate::compression::CompressionMethod;
-use crate::einsum_helper::{einsum_tensors, tensor_to_row_major_vec, EinsumScalar};
+use crate::einsum_helper::{
+    einsum_tensors, tensor_to_row_major_vec, typed_tensor_from_row_major_slice, EinsumScalar,
+};
 use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::Tensor3Ops;
-use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
 use tensor4all_tcicore::matrix::Matrix;
 use tensor4all_tcicore::Scalar;
 
@@ -124,12 +125,10 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> TensorTrain<T> {
                 });
             }
 
-            let result_tf = TfTensor::from_slice(
+            let result_tf = typed_tensor_from_row_major_slice(
                 result.as_slice(),
                 &[result.nrows(), result.ncols()],
-                MemoryOrder::RowMajor,
-            )
-            .expect("dot intermediate matrix dimensions should match tenferro");
+            );
 
             result = Matrix::from_raw_vec(
                 a.right_dim(),

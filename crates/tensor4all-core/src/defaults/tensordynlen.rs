@@ -970,8 +970,12 @@ impl TensorDynLen {
             return Self::from_native(result_indices, result_native);
         }
 
-        let subscripts =
-            Self::build_binary_einsum_subscripts(self.indices.len(), &[], other.indices.len(), &[])?;
+        let subscripts = Self::build_binary_einsum_subscripts(
+            self.indices.len(),
+            &[],
+            other.indices.len(),
+            &[],
+        )?;
         let result = eager_einsum_ad(&[self.inner.as_ref(), other.inner.as_ref()], &subscripts)
             .map_err(|e| anyhow::anyhow!("outer_product failed: {e}"))?;
         Self::from_inner(result_indices, result)
@@ -1292,7 +1296,11 @@ impl TensorDynLen {
                 other_aligned.as_native(),
                 &b.to_backend_scalar(),
             )?;
-            return Self::from_native_with_axis_classes(self.indices.clone(), combined, axis_classes);
+            return Self::from_native_with_axis_classes(
+                self.indices.clone(),
+                combined,
+                axis_classes,
+            );
         }
 
         let lhs = self.scale(a)?;
@@ -2446,7 +2454,7 @@ impl TensorDynLen {
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{DynIndex, TensorDynLen};
+    /// use tensor4all_core::{DynIndex, Storage, TensorDynLen};
     ///
     /// // Tensors from `from_dense` use dense storage
     /// let i = DynIndex::new_dyn(2);
@@ -2454,11 +2462,16 @@ impl TensorDynLen {
     /// let dense = TensorDynLen::from_dense(vec![i, j], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
     /// assert!(!dense.is_diag());
     ///
-    /// // `from_diag` preserves diagonal logical metadata even though the eager
-    /// // payload tensor is currently materialized densely.
+    /// // Diagonal metadata is preserved when constructing from diagonal storage.
     /// let k = DynIndex::new_dyn(2);
     /// let l = DynIndex::new_dyn(2);
-    /// let diag = TensorDynLen::from_diag(vec![k, l], vec![1.0, 2.0]).unwrap();
+    /// let diag = TensorDynLen::from_storage(
+    ///     vec![k, l],
+    ///     Storage::from_diag_col_major(vec![1.0, 2.0], 2)
+    ///         .map(std::sync::Arc::new)
+    ///         .unwrap(),
+    /// )
+    /// .unwrap();
     /// assert!(diag.is_diag());
     /// ```
     pub fn is_diag(&self) -> bool {

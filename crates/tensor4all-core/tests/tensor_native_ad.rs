@@ -85,3 +85,17 @@ fn tracks_grad_and_detach_report_leaf_state() {
     assert!(!detached.tracks_grad());
     assert!(tracked.tracks_grad());
 }
+
+#[test]
+fn clone_shares_tracked_leaf_gradient_slot() {
+    let x = TensorDynLen::scalar(2.0).unwrap().enable_grad();
+    let alias = x.clone();
+
+    let loss = &x * &alias;
+    loss.backward().unwrap();
+
+    let grad_x = x.grad().unwrap().unwrap();
+    let grad_alias = alias.grad().unwrap().unwrap();
+    assert!((grad_x.only().real() - 4.0).abs() < 1e-12);
+    assert!((grad_alias.only().real() - 4.0).abs() < 1e-12);
+}

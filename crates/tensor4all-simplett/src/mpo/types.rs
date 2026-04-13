@@ -8,8 +8,7 @@
 
 use crate::tensor::Tensor;
 pub use crate::tensor::Tensor4;
-use tenferro_algebra::Scalar as TfScalar;
-use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
+use tenferro_tensor::{TensorScalar, TypedTensor as TfTensor};
 
 /// Local index type (index within a single tensor site)
 pub type LocalIndex = usize;
@@ -53,7 +52,7 @@ pub trait Tensor4Ops<T: Clone + Default> {
     fn as_center_matrix(&self) -> (Vec<T>, usize, usize);
 }
 
-impl<T: Clone + Default + TfScalar> Tensor4Ops<T> for Tensor4<T> {
+impl<T: Clone + Default + TensorScalar> Tensor4Ops<T> for Tensor4<T> {
     fn left_dim(&self) -> usize {
         self.dim(0)
     }
@@ -156,7 +155,7 @@ impl<T: Clone + Default + TfScalar> Tensor4Ops<T> for Tensor4<T> {
 }
 
 /// Create a zero-filled Tensor4
-pub fn tensor4_zeros<T: Clone + Default + TfScalar>(
+pub fn tensor4_zeros<T: Clone + Default + TensorScalar>(
     left_dim: usize,
     site_dim_1: usize,
     site_dim_2: usize,
@@ -166,7 +165,7 @@ pub fn tensor4_zeros<T: Clone + Default + TfScalar>(
 }
 
 /// Create a Tensor4 from flat data (column-major order)
-pub fn tensor4_from_data<T: Clone + TfScalar>(
+pub fn tensor4_from_data<T: TensorScalar>(
     data: Vec<T>,
     left_dim: usize,
     site_dim_1: usize,
@@ -175,8 +174,7 @@ pub fn tensor4_from_data<T: Clone + TfScalar>(
 ) -> Tensor4<T> {
     assert_eq!(data.len(), left_dim * site_dim_1 * site_dim_2 * right_dim);
     let dims = [left_dim, site_dim_1, site_dim_2, right_dim];
-    let inner = TfTensor::from_slice(&data, &dims, MemoryOrder::ColumnMajor)
-        .expect("tensor4_from_data received invalid column-major data");
+    let inner = TfTensor::from_vec(dims.to_vec(), data);
     Tensor::from_tenferro(inner)
 }
 

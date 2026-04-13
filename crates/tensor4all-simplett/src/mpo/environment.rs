@@ -3,15 +3,13 @@
 //! This module provides functions for computing left and right environments
 //! used in variational algorithms and efficient MPO evaluation.
 
-use crate::einsum_helper::{einsum_tensors, EinsumScalar};
+use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape, EinsumScalar};
 
 use super::error::{MPOError, Result};
 use super::factorize::SVDScalar;
 use super::mpo::MPO;
 use super::types::{Tensor4, Tensor4Ops};
 use super::{matrix2_zeros, Matrix2};
-use tenferro_tensor::MemoryOrder;
-
 /// Contract two 4D site tensors over their shared physical index
 ///
 /// Given two 4D tensors:
@@ -59,13 +57,8 @@ where
     // TODO: Remove this materialization once tenferro supports reshaping
     // layout-compatible strided views directly.
     // Tracking issue: https://github.com/tensor4all/tenferro-rs/issues/575
-    let contracted = einsum_tensors("askr,bktq->bastqr", &[a.as_inner(), b.as_inner()])
-        .contiguous(MemoryOrder::ColumnMajor);
-    let reshaped = contracted
-        .reshape(&[new_left, new_s1, new_s2, new_right])
-        .map_err(|e| MPOError::InvalidOperation {
-            message: format!("Failed to reshape contracted site tensors: {e}"),
-        })?;
+    let contracted = einsum_tensors("askr,bktq->bastqr", &[a.as_inner(), b.as_inner()]);
+    let reshaped = typed_tensor_reshape(&contracted, &[new_left, new_s1, new_s2, new_right]);
 
     Ok(Tensor4::from_tenferro(reshaped))
 }
