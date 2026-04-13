@@ -6,11 +6,12 @@
 //! Internally, TensorTrain is implemented as a thin wrapper around
 //! `TreeTN<TensorDynLen, usize>` where node names are site indices (0, 1, 2, ...).
 
+use num_complex::Complex64;
 use std::ops::Range;
 use tensor4all_core::{common_inds, hascommoninds, DynIndex, IndexLike};
 use tensor4all_core::{
-    AllowedPairs, AnyScalar, DirectSumResult, FactorizeError, FactorizeOptions, FactorizeResult,
-    TensorDynLen, TensorIndex, TensorLike,
+    AllowedPairs, AnyScalar, CommonScalar, DirectSumResult, FactorizeError, FactorizeOptions,
+    FactorizeResult, TensorDynLen, TensorElement, TensorIndex, TensorLike,
 };
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
@@ -73,6 +74,41 @@ pub struct TensorTrain {
     pub(crate) treetn: TreeTN<TensorDynLen, usize>,
     /// The canonical form used (if known).
     canonical_form: Option<CanonicalForm>,
+}
+
+#[derive(Debug)]
+struct PackedSiteTensor<T> {
+    left_dim: usize,
+    physical_dim: usize,
+    right_dim: usize,
+    data: Vec<T>,
+}
+
+impl<T: Copy> PackedSiteTensor<T> {
+    fn get(&self, left: usize, physical: usize, right: usize) -> T {
+        debug_assert!(left < self.left_dim);
+        debug_assert!(physical < self.physical_dim);
+        debug_assert!(right < self.right_dim);
+
+        let idx = left + self.left_dim * (physical + self.physical_dim * right);
+        self.data[idx]
+    }
+}
+
+trait NormAccumScalar: CommonScalar {
+    fn into_nonnegative_real(self) -> f64;
+}
+
+impl NormAccumScalar for f64 {
+    fn into_nonnegative_real(self) -> f64 {
+        self.max(0.0)
+    }
+}
+
+impl NormAccumScalar for Complex64 {
+    fn into_nonnegative_real(self) -> f64 {
+        self.re.max(0.0)
+    }
 }
 
 impl TensorTrain {
@@ -867,10 +903,13 @@ impl TensorTrain {
     /// Returns `<self | self>` = ||self||^2.
     ///
     /// # Note
-    /// Due to numerical errors, the inner product can be very slightly negative.
-    /// This method clamps the result to be non-negative.
+    /// For linear tensor trains with one site index per site, this uses a
+    /// specialized chain contraction instead of the generic inner-product path.
+    /// Due to numerical errors, the final scalar can be very slightly negative,
+    /// so the returned value is clamped to be non-negative.
     pub fn norm_squared(&self) -> f64 {
-        self.inner(self).real().max(0.0)
+        self.norm_squared_fast_path()
+            .unwrap_or_else(|| self.inner(self).real().max(0.0))
     }
 
     /// Compute the norm of the tensor train.
@@ -878,6 +917,111 @@ impl TensorTrain {
     /// Returns ||self|| = sqrt(<self | self>).
     pub fn norm(&self) -> f64 {
         self.norm_squared().sqrt()
+    }
+
+    fn norm_squared_fast_path(&self) -> Option<f64> {
+        if self.is_empty() {
+            return Some(0.0);
+        }
+        if !self.has_simple_linear_links() {
+            return None;
+        }
+        if self
+            .siteinds()
+            .iter()
+            .any(|site_indices| site_indices.len() != 1)
+        {
+            return None;
+        }
+
+        let mut normalized = self.clone();
+        normalized.normalize_site_tensor_orders().ok()?;
+
+        if let Some(sites) = Self::pack_normalized_sites::<f64>(&normalized) {
+            return Some(Self::norm_squared_from_packed_sites(&sites));
+        }
+        if let Some(sites) = Self::pack_normalized_sites::<Complex64>(&normalized) {
+            return Some(Self::norm_squared_from_packed_sites(&sites));
+        }
+
+        None
+    }
+
+    fn pack_normalized_sites<T: TensorElement>(tt: &Self) -> Option<Vec<PackedSiteTensor<T>>> {
+        let mut sites = Vec::with_capacity(tt.len());
+
+        for site in 0..tt.len() {
+            let tensor = tt.tensor(site);
+            let left_dim = if site == 0 {
+                1
+            } else {
+                tt.linkind(site - 1)?.size()
+            };
+            let right_dim = if site + 1 == tt.len() {
+                1
+            } else {
+                tt.linkind(site)?.size()
+            };
+            let total_size: usize = tensor.dims().iter().product();
+            let boundary_size = left_dim.checked_mul(right_dim)?;
+            if boundary_size == 0 || !total_size.is_multiple_of(boundary_size) {
+                return None;
+            }
+
+            sites.push(PackedSiteTensor {
+                left_dim,
+                physical_dim: total_size / boundary_size,
+                right_dim,
+                data: tensor.to_vec::<T>().ok()?,
+            });
+        }
+
+        Some(sites)
+    }
+
+    fn norm_squared_from_packed_sites<T: NormAccumScalar>(sites: &[PackedSiteTensor<T>]) -> f64 {
+        if sites.is_empty() {
+            return 0.0;
+        }
+
+        let first = &sites[0];
+        let mut current = vec![T::zero(); first.right_dim * first.right_dim];
+
+        for physical in 0..first.physical_dim {
+            for right in 0..first.right_dim {
+                let value = first.get(0, physical, right);
+                for right_conj in 0..first.right_dim {
+                    let idx = right * first.right_dim + right_conj;
+                    current[idx] = current[idx] + value * first.get(0, physical, right_conj).conj();
+                }
+            }
+        }
+
+        for site in &sites[1..] {
+            let mut next = vec![T::zero(); site.right_dim * site.right_dim];
+
+            for left in 0..site.left_dim {
+                for left_conj in 0..site.left_dim {
+                    let env = current[left * site.left_dim + left_conj];
+                    for physical in 0..site.physical_dim {
+                        for right in 0..site.right_dim {
+                            let value = site.get(left, physical, right);
+                            for right_conj in 0..site.right_dim {
+                                let idx = right * site.right_dim + right_conj;
+                                next[idx] = next[idx]
+                                    + env
+                                        * value
+                                        * site.get(left_conj, physical, right_conj).conj();
+                            }
+                        }
+                    }
+                }
+            }
+
+            current = next;
+        }
+
+        current[0].into_nonnegative_real()
     }
 
     /// Convert the tensor train to a single dense tensor.
