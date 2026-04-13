@@ -7,6 +7,7 @@ use crate::global_default::GlobalDefault;
 use crate::truncation::TruncationParams;
 use crate::{unfold_split, TensorDynLen};
 use num_complex::ComplexFloat;
+use tenferro::DType;
 use tensor4all_tensorbackend::{
     dense_native_tensor_from_col_major, native_tensor_primal_to_dense_c64_col_major,
     native_tensor_primal_to_dense_f64_col_major, qr_native_tensor, reshape_col_major_native_tensor,
@@ -270,13 +271,13 @@ pub fn qr_with<T>(
     let k = m.min(n);
     let (mut q_native, mut r_native) =
         qr_native_tensor(&matrix_native).map_err(QrError::ComputationError)?;
-    let r = match r_native.scalar_type() {
-        tenferro::ScalarType::F64 => {
+    let r = match r_native.dtype() {
+        DType::F64 => {
             let values = native_tensor_primal_to_dense_f64_col_major(&r_native)
                 .map_err(QrError::ComputationError)?;
             compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
         }
-        tenferro::ScalarType::C64 => {
+        DType::C64 => {
             let values = native_tensor_primal_to_dense_c64_col_major(&r_native)
                 .map_err(QrError::ComputationError)?;
             compute_retained_rank_qr_from_dense(&values, k, n, rtol)?
@@ -288,8 +289,8 @@ pub fn qr_with<T>(
         }
     };
     if r < k {
-        match q_native.scalar_type() {
-            tenferro::ScalarType::F64 => {
+        match q_native.dtype() {
+            DType::F64 => {
                 let q_values = native_tensor_primal_to_dense_f64_col_major(&q_native)
                     .map_err(QrError::ComputationError)?;
                 let r_values = native_tensor_primal_to_dense_f64_col_major(&r_native)
@@ -299,7 +300,7 @@ pub fn qr_with<T>(
                 r_native =
                     truncate_matrix_rows(&r_values, k, n, r).map_err(QrError::ComputationError)?;
             }
-            tenferro::ScalarType::C64 => {
+            DType::C64 => {
                 let q_values = native_tensor_primal_to_dense_c64_col_major(&q_native)
                     .map_err(QrError::ComputationError)?;
                 let r_values = native_tensor_primal_to_dense_c64_col_major(&r_native)

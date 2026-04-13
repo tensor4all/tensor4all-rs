@@ -331,3 +331,49 @@ fn test_scalar_lhs_rhs_mixed_ops() {
     assert!((z.re - 2.0).abs() < 1e-12);
     assert!((z.im + 1.0).abs() < 1e-12);
 }
+
+#[test]
+fn test_enable_grad_and_borrow_arithmetic_backward() {
+    let x = AnyScalar::new_real(2.0).enable_grad();
+    let y = AnyScalar::new_real(3.0).enable_grad();
+
+    let product = &x * &y;
+    let loss = &product + &x;
+
+    assert!(loss.tracks_grad());
+    loss.backward().unwrap();
+
+    let grad_x = x.grad().unwrap().unwrap();
+    let grad_y = y.grad().unwrap().unwrap();
+    assert!((grad_x.real() - 4.0).abs() < 1e-12);
+    assert!((grad_y.real() - 2.0).abs() < 1e-12);
+}
+
+#[test]
+fn test_clone_shares_tracked_leaf_gradient_slot() {
+    let x = AnyScalar::new_real(2.0).enable_grad();
+    let alias = x.clone();
+
+    let loss = &x * &alias;
+    loss.backward().unwrap();
+
+    let grad_x = x.grad().unwrap().unwrap();
+    let grad_alias = alias.grad().unwrap().unwrap();
+    assert!((grad_x.real() - 4.0).abs() < 1e-12);
+    assert!((grad_alias.real() - 4.0).abs() < 1e-12);
+}
+
+#[test]
+fn test_function_api_takes_anyscalar_ref() {
+    fn quadratic_plus_one(x: &AnyScalar) -> AnyScalar {
+        let square = x * x;
+        &square + &AnyScalar::one()
+    }
+
+    let x = AnyScalar::new_real(3.0).enable_grad();
+    let loss = quadratic_plus_one(&x);
+    loss.backward().unwrap();
+
+    let grad = x.grad().unwrap().unwrap();
+    assert!((grad.real() - 6.0).abs() < 1e-12);
+}

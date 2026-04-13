@@ -182,6 +182,17 @@ pub fn contract_multi(
         0 => Err(anyhow::anyhow!("No tensors to contract")),
         1 => Ok((*tensors[0]).clone()),
         _ => {
+            if matches!(allowed, AllowedPairs::All)
+                && tensors.iter().any(|tensor| tensor.tracks_grad())
+            {
+                let mut iter = tensors.iter();
+                let mut result = (*iter.next().unwrap()).clone();
+                for tensor in iter {
+                    result = result.contract(tensor);
+                }
+                return Ok(result);
+            }
+
             // Validate AllowedPairs::Specified pairs have contractable indices
             if let AllowedPairs::Specified(pairs) = allowed {
                 for &(i, j) in pairs {
@@ -281,6 +292,17 @@ pub fn contract_connected(
         0 => Err(anyhow::anyhow!("No tensors to contract")),
         1 => Ok((*tensors[0]).clone()),
         _ => {
+            if matches!(allowed, AllowedPairs::All)
+                && tensors.iter().any(|tensor| tensor.tracks_grad())
+            {
+                let mut iter = tensors.iter();
+                let mut result = (*iter.next().unwrap()).clone();
+                for tensor in iter {
+                    result = result.contract(tensor);
+                }
+                return Ok(result);
+            }
+
             // Check connectivity first
             let components = find_tensor_connected_components(tensors, allowed);
             if components.len() > 1 {
