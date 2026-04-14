@@ -10,7 +10,7 @@ A Rust implementation of tensor networks: TCI, Quantics Tensor Train, and Tree T
 - **Tensor Cross Interpolation**: TCI2 algorithm for efficient high-dimensional function approximation
 - **Quantics Tensor Train**: Binary encoding of continuous variables with transformation operators
 - **Tree Tensor Networks**: Arbitrary topology with canonicalization, truncation, and contraction
-- **C API**: Full functionality exposed for language bindings (Julia)
+- **C API**: Minimal Julia-facing FFI surface for indices, tensors, TreeTN, and quantics materialization
 
 ## Quick Start
 

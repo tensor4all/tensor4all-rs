@@ -1,471 +1,404 @@
 use super::*;
+use crate::{t4a_index, t4a_treetn_release, T4A_INVALID_ARGUMENT, T4A_SUCCESS};
+use num_complex::Complex64;
+use num_rational::Rational64;
+use tensor4all_core::{ColMajorArrayRef, TensorDynLen};
+use tensor4all_quanticstransform::{
+    affine_operator, binaryop_operator, cumsum_operator, flip_operator, phase_rotation_operator,
+    quantics_fourier_operator, shift_operator, AffineParams, BinaryCoeffs, BoundaryCondition,
+    FourierOptions,
+};
+use tensor4all_treetn::LinearOperator;
 
-#[test]
-fn test_shift_operator_construction() {
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-
-    // Periodic shift by +1 on 4-bit quantics
-    let status = t4a_qtransform_shift(4, 1, t4a_boundary_condition::Periodic, &mut op);
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op.is_null());
-    t4a_linop_release(op);
-
-    // Open shift
-    let mut op2: *mut t4a_linop = std::ptr::null_mut();
-    let status = t4a_qtransform_shift(4, -3, t4a_boundary_condition::Open, &mut op2);
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op2.is_null());
-    t4a_linop_release(op2);
-}
-
-#[test]
-fn test_flip_operator_construction() {
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-
-    let status = t4a_qtransform_flip(4, t4a_boundary_condition::Periodic, &mut op);
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op.is_null());
-    t4a_linop_release(op);
-}
-
-#[test]
-fn test_phase_rotation_construction() {
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-
-    let status = t4a_qtransform_phase_rotation(4, std::f64::consts::PI / 4.0, &mut op);
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op.is_null());
-    t4a_linop_release(op);
-}
-
-#[test]
-fn test_cumsum_construction() {
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-
-    let status = t4a_qtransform_cumsum(4, &mut op);
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op.is_null());
-    t4a_linop_release(op);
-}
-
-#[test]
-fn test_fourier_operator_construction() {
-    // Forward Fourier
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-    let status = t4a_qtransform_fourier(4, 1, 0, 0.0, &mut op);
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op.is_null());
-    t4a_linop_release(op);
-
-    // Inverse Fourier with custom params
-    let mut op2: *mut t4a_linop = std::ptr::null_mut();
-    let status = t4a_qtransform_fourier(4, 0, 16, 1e-12, &mut op2);
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op2.is_null());
-    t4a_linop_release(op2);
-}
-
-#[test]
-fn test_shift_operator_multivar_construction() {
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-
-    let status =
-        t4a_qtransform_shift_multivar(4, 1, t4a_boundary_condition::Periodic, 3, 1, &mut op);
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op.is_null());
-    t4a_linop_release(op);
-}
-
-#[test]
-fn test_flip_operator_multivar_construction() {
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-
-    let status = t4a_qtransform_flip_multivar(4, t4a_boundary_condition::Open, 3, 2, &mut op);
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op.is_null());
-    t4a_linop_release(op);
-}
-
-#[test]
-fn test_phase_rotation_multivar_construction() {
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-
-    let status =
-        t4a_qtransform_phase_rotation_multivar(4, std::f64::consts::PI / 3.0, 3, 0, &mut op);
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op.is_null());
-    t4a_linop_release(op);
-}
-
-#[test]
-fn test_affine_operator_construction() {
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-
-    // 3 output variables from 2 input variables:
-    // y1 = x1
-    // y2 = x1 + x2
-    // y3 = x2
-    let a_num = [
-        1_i64, 1, 0, // first input column
-        0, 1, 1, // second input column
-    ];
-    let a_den = [1_i64; 6];
-    let b_num = [0_i64, 0, 0];
-    let b_den = [1_i64; 3];
-    let bc = [
-        t4a_boundary_condition::Open,
-        t4a_boundary_condition::Open,
-        t4a_boundary_condition::Periodic,
-    ];
-
-    let status = t4a_qtransform_affine(
-        4,
-        a_num.as_ptr(),
-        a_den.as_ptr(),
-        b_num.as_ptr(),
-        b_den.as_ptr(),
-        3,
-        2,
-        bc.as_ptr(),
-        &mut op,
+fn new_layout(kind: t4a_qtt_layout_kind, resolutions: &[usize]) -> *mut t4a_qtt_layout {
+    let mut out = std::ptr::null_mut();
+    assert_eq!(
+        t4a_qtt_layout_new(kind, resolutions.len(), resolutions.as_ptr(), &mut out),
+        T4A_SUCCESS
     );
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op.is_null());
-    t4a_linop_release(op);
-}
-
-#[test]
-fn test_affine_pullback_operator_construction() {
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-
-    // source x = x1, output y = (y1, y2), x1 = y1
-    let a_num = [1_i64, 0];
-    let a_den = [1_i64; 2];
-    let b_num = [0_i64];
-    let b_den = [1_i64];
-    let bc = [t4a_boundary_condition::Open];
-
-    let status = t4a_qtransform_affine_pullback(
-        4,
-        1,
-        2,
-        a_num.as_ptr(),
-        a_den.as_ptr(),
-        b_num.as_ptr(),
-        b_den.as_ptr(),
-        bc.as_ptr(),
-        &mut op,
-    );
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op.is_null());
-    t4a_linop_release(op);
-}
-
-#[test]
-fn test_binaryop_operator_construction() {
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-
-    let status = t4a_qtransform_binaryop(
-        4,
-        1,
-        1,
-        1,
-        -1,
-        t4a_boundary_condition::Open,
-        t4a_boundary_condition::Periodic,
-        &mut op,
-    );
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op.is_null());
-    t4a_linop_release(op);
-}
-
-#[test]
-fn test_linop_apply_shift() {
-    use num_complex::Complex64;
-    use tensor4all_core::index::{DynId, Index, TagSet};
-    use tensor4all_core::TensorDynLen;
-    use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
-    use tensor4all_treetn::{apply_linear_operator, ApplyOptions, TreeTN};
-
-    type DynIndex = Index<DynId, TagSet>;
-
-    let r = 3;
-
-    // Build the shift operator via Rust API
-    let op =
-        shift_operator(r, 1, BoundaryCondition::Periodic).expect("Failed to create shift operator");
-
-    // Create a product state |0⟩ = |0⟩⊗|0⟩⊗|0⟩ (all bits zero)
-    let mut tensors_mps: Vec<_> = Vec::with_capacity(r);
-    for _ in 0..r {
-        let mut t = tensor3_zeros::<Complex64>(1, 2, 1);
-        *t.get3_mut(0, 0, 0) = Complex64::new(1.0, 0.0); // bit = 0
-        tensors_mps.push(t);
-    }
-    let mps = TensorTrain::new(tensors_mps).expect("Failed to create MPS");
-
-    // Convert MPS to TreeTN with indices matching operator's input (true_index)
-    let n = mps.len();
-    let mut bond_indices: Vec<DynIndex> = Vec::with_capacity(n + 1);
-    for i in 0..=n {
-        let dim = if i == 0 {
-            1
-        } else {
-            mps.site_tensor(i - 1).right_dim()
-        };
-        bond_indices.push(Index::new_dyn(dim));
-    }
-
-    let mut tensors: Vec<TensorDynLen> = Vec::with_capacity(n);
-    let node_names: Vec<usize> = (0..n).collect();
-
-    for i in 0..n {
-        let t = mps.site_tensor(i);
-        let site_dim = t.site_dim();
-        let right_dim = t.right_dim();
-        let left_dim = t.left_dim();
-
-        // Use operator's true_index as the state's site index
-        let op_input = op
-            .get_input_mapping(&i)
-            .expect("input mapping")
-            .true_index
-            .clone();
-
-        let mut indices: Vec<DynIndex> = Vec::new();
-        let mut dims_vec: Vec<usize> = Vec::new();
-
-        if i > 0 {
-            indices.push(bond_indices[i].clone());
-            dims_vec.push(left_dim);
-        }
-        indices.push(op_input);
-        dims_vec.push(site_dim);
-        if i < n - 1 {
-            indices.push(bond_indices[i + 1].clone());
-            dims_vec.push(right_dim);
-        }
-
-        let total_size: usize = dims_vec.iter().product();
-        let mut data: Vec<Complex64> = vec![Complex64::new(0.0, 0.0); total_size];
-
-        #[allow(clippy::needless_range_loop)]
-        if i == 0 && n == 1 {
-            for s in 0..site_dim {
-                data[s] = *t.get3(0, s, 0);
-            }
-        } else if i == 0 {
-            for s in 0..site_dim {
-                for rv in 0..right_dim {
-                    data[s * right_dim + rv] = *t.get3(0, s, rv);
-                }
-            }
-        } else if i == n - 1 {
-            for l in 0..left_dim {
-                for s in 0..site_dim {
-                    data[l * site_dim + s] = *t.get3(l, s, 0);
-                }
-            }
-        } else {
-            for l in 0..left_dim {
-                for s in 0..site_dim {
-                    for rv in 0..right_dim {
-                        data[(l * site_dim + s) * right_dim + rv] = *t.get3(l, s, rv);
-                    }
-                }
-            }
-        }
-
-        tensors.push(TensorDynLen::from_dense(indices, data).unwrap());
-    }
-
-    let treetn = TreeTN::from_tensors(tensors, node_names).expect("Failed to create TreeTN");
-
-    // Test via Rust API first to verify our TreeTN construction is correct
-    let result =
-        apply_linear_operator(&op, &treetn, ApplyOptions::naive()).expect("Rust apply failed");
-    assert!(!result.node_names().is_empty());
-
-    // Now test via C API: wrap in opaque types
-    let c_op = Box::into_raw(Box::new(t4a_linop::new(op)));
-    let c_state = Box::into_raw(Box::new(t4a_treetn::new(treetn)));
-
-    let mut c_result: *mut t4a_treetn = std::ptr::null_mut();
-    let status = t4a_linop_apply(
-        c_op,
-        c_state,
-        0, // Naive
-        0.0,
-        0,
-        &mut c_result,
-    );
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!c_result.is_null());
-
-    // Clean up
-    unsafe {
-        let _ = Box::from_raw(c_result);
-        let _ = Box::from_raw(c_state);
-        let _ = Box::from_raw(c_op);
-    }
-}
-
-#[test]
-fn test_linop_set_io_space_then_apply() {
-    use num_complex::Complex64;
-    use tensor4all_core::index::{DynId, Index, TagSet};
-    use tensor4all_core::TensorDynLen;
-    use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, TensorTrain};
-    use tensor4all_treetn::TreeTN;
-
-    type DynIndex = Index<DynId, TagSet>;
-
-    let r = 3;
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-    let status = t4a_qtransform_shift(r, 1, t4a_boundary_condition::Periodic, &mut op);
-    assert_eq!(status, T4A_SUCCESS);
-    assert!(!op.is_null());
-
-    let mut tensors_mps: Vec<_> = Vec::with_capacity(r);
-    for _ in 0..r {
-        let mut t = tensor3_zeros::<Complex64>(1, 2, 1);
-        *t.get3_mut(0, 0, 0) = Complex64::new(1.0, 0.0);
-        tensors_mps.push(t);
-    }
-    let mps = TensorTrain::new(tensors_mps).expect("Failed to create MPS");
-
-    let n = mps.len();
-    let mut bond_indices: Vec<DynIndex> = Vec::with_capacity(n + 1);
-    for i in 0..=n {
-        let dim = if i == 0 {
-            1
-        } else {
-            mps.site_tensor(i - 1).right_dim()
-        };
-        bond_indices.push(Index::new_dyn(dim));
-    }
-
-    let mut tensors: Vec<TensorDynLen> = Vec::with_capacity(n);
-    let node_names: Vec<usize> = (0..n).collect();
-    let site_indices: Vec<DynIndex> = (0..n).map(|_| Index::new_dyn(2)).collect();
-
-    for i in 0..n {
-        let t = mps.site_tensor(i);
-        let site_dim = t.site_dim();
-        let right_dim = t.right_dim();
-        let left_dim = t.left_dim();
-
-        let mut indices: Vec<DynIndex> = Vec::new();
-
-        if i > 0 {
-            indices.push(bond_indices[i].clone());
-        }
-        indices.push(site_indices[i].clone());
-        if i < n - 1 {
-            indices.push(bond_indices[i + 1].clone());
-        }
-
-        let mut flat = vec![Complex64::new(0.0, 0.0); left_dim * site_dim * right_dim];
-        if i == 0 {
-            for s in 0..site_dim {
-                for rv in 0..right_dim {
-                    flat[s * right_dim + rv] = *t.get3(0, s, rv);
-                }
-            }
-        } else if i == n - 1 {
-            for l in 0..left_dim {
-                for s in 0..site_dim {
-                    flat[l * site_dim + s] = *t.get3(l, s, 0);
-                }
-            }
-        } else {
-            for l in 0..left_dim {
-                for s in 0..site_dim {
-                    for rv in 0..right_dim {
-                        flat[(l * site_dim + s) * right_dim + rv] = *t.get3(l, s, rv);
-                    }
-                }
-            }
-        }
-
-        tensors.push(TensorDynLen::from_dense(indices, flat).expect("site tensor"));
-    }
-
-    let state_tn = TreeTN::from_tensors(tensors, node_names).expect("state treetn");
-    let state = Box::into_raw(Box::new(t4a_treetn::new(state_tn)));
-
-    assert_eq!(t4a_linop_set_input_space(op, state), T4A_SUCCESS);
-    assert_eq!(t4a_linop_set_output_space(op, state), T4A_SUCCESS);
-
-    let mut out: *mut t4a_treetn = std::ptr::null_mut();
-    let status = t4a_linop_apply(op, state, 0, 0.0, 0, &mut out);
-    assert_eq!(status, T4A_SUCCESS);
     assert!(!out.is_null());
+    out
+}
 
-    unsafe {
-        let _ = Box::from_raw(out);
-        let _ = Box::from_raw(state);
-        let _ = Box::from_raw(op);
+fn last_error() -> String {
+    let mut len = 0usize;
+    assert_eq!(
+        crate::t4a_last_error_message(std::ptr::null_mut(), 0, &mut len),
+        T4A_SUCCESS
+    );
+    let mut buf = vec![0u8; len];
+    assert_eq!(
+        crate::t4a_last_error_message(buf.as_mut_ptr(), buf.len(), &mut len),
+        T4A_SUCCESS
+    );
+    std::ffi::CStr::from_bytes_until_nul(&buf)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+fn decode_mixed_radix(mut flat: usize, dims: &[usize]) -> Vec<usize> {
+    let mut values = Vec::with_capacity(dims.len());
+    for &dim in dims {
+        values.push(flat % dim);
+        flat /= dim;
+    }
+    values
+}
+
+fn encode_mixed_radix(values: &[usize], dims: &[usize]) -> usize {
+    let mut flat = 0usize;
+    let mut stride = 1usize;
+    for (&value, &dim) in values.iter().zip(dims.iter()) {
+        flat += value * stride;
+        stride *= dim;
+    }
+    flat
+}
+
+fn rust_operator_matrix(
+    op: &LinearOperator<TensorDynLen, usize>,
+    out_dims: &[usize],
+    in_dims: &[usize],
+) -> Vec<Complex64> {
+    let nsites = out_dims.len();
+    assert_eq!(in_dims.len(), nsites);
+    let nrows: usize = out_dims.iter().product();
+    let ncols: usize = in_dims.iter().product();
+
+    let mut indices = Vec::with_capacity(2 * nsites);
+    for site in 0..nsites {
+        indices.push(op.output_mapping.get(&site).unwrap().internal_index.clone());
+        indices.push(op.input_mapping.get(&site).unwrap().internal_index.clone());
+    }
+
+    let mut matrix = vec![Complex64::new(0.0, 0.0); nrows * ncols];
+    for x in 0..ncols {
+        let in_values = decode_mixed_radix(x, in_dims);
+        for y in 0..nrows {
+            let out_values = decode_mixed_radix(y, out_dims);
+            let mut values = Vec::with_capacity(2 * nsites);
+            for site in 0..nsites {
+                values.push(out_values[site]);
+                values.push(in_values[site]);
+            }
+            let shape = [values.len(), 1];
+            let result = op
+                .mpo
+                .evaluate_at(&indices, ColMajorArrayRef::new(&values, &shape))
+                .unwrap();
+            matrix[y + nrows * x] = result[0].clone().into();
+        }
+    }
+    matrix
+}
+
+fn c_operator_matrix(
+    op: *const t4a_treetn,
+    out_dims: &[usize],
+    in_dims: &[usize],
+) -> Vec<Complex64> {
+    let nsites = out_dims.len();
+    assert_eq!(in_dims.len(), nsites);
+
+    let mut n_vertices = 0usize;
+    assert_eq!(
+        crate::treetn::t4a_treetn_num_vertices(op, &mut n_vertices),
+        T4A_SUCCESS
+    );
+    assert_eq!(n_vertices, nsites);
+
+    let mut out_indices = Vec::with_capacity(nsites);
+    let mut in_indices = Vec::with_capacity(nsites);
+    for site in 0..nsites {
+        let mut len = 0usize;
+        assert_eq!(
+            crate::treetn::t4a_treetn_siteinds(op, site, std::ptr::null_mut(), 0, &mut len),
+            T4A_SUCCESS
+        );
+        assert_eq!(len, 2);
+        let mut pair = vec![std::ptr::null_mut(); len];
+        assert_eq!(
+            crate::treetn::t4a_treetn_siteinds(op, site, pair.as_mut_ptr(), pair.len(), &mut len),
+            T4A_SUCCESS
+        );
+
+        let mut dim_out = 0usize;
+        let mut dim_in = 0usize;
+        assert_eq!(
+            crate::index::t4a_index_dim(pair[0], &mut dim_out),
+            T4A_SUCCESS
+        );
+        assert_eq!(
+            crate::index::t4a_index_dim(pair[1], &mut dim_in),
+            T4A_SUCCESS
+        );
+        assert_eq!(dim_out, out_dims[site]);
+        assert_eq!(dim_in, in_dims[site]);
+
+        out_indices.push(pair[0]);
+        in_indices.push(pair[1]);
+    }
+
+    let nrows: usize = out_dims.iter().product();
+    let ncols: usize = in_dims.iter().product();
+    let mut matrix = vec![Complex64::new(0.0, 0.0); nrows * ncols];
+    let ordered_indices: Vec<*const t4a_index> = (0..nsites)
+        .flat_map(|site| {
+            [
+                out_indices[site] as *const t4a_index,
+                in_indices[site] as *const t4a_index,
+            ]
+        })
+        .collect();
+
+    for x in 0..ncols {
+        let in_values = decode_mixed_radix(x, in_dims);
+        for y in 0..nrows {
+            let out_values = decode_mixed_radix(y, out_dims);
+            let mut values = Vec::with_capacity(2 * nsites);
+            for site in 0..nsites {
+                values.push(out_values[site]);
+                values.push(in_values[site]);
+            }
+            let mut re = 0.0;
+            let mut im = 0.0;
+            assert_eq!(
+                crate::treetn::t4a_treetn_evaluate(
+                    op,
+                    ordered_indices.as_ptr(),
+                    ordered_indices.len(),
+                    values.as_ptr(),
+                    1,
+                    &mut re,
+                    &mut im
+                ),
+                T4A_SUCCESS
+            );
+            matrix[y + nrows * x] = Complex64::new(re, im);
+        }
+    }
+
+    for index in out_indices.into_iter().chain(in_indices.into_iter()) {
+        crate::index::t4a_index_release(index);
+    }
+    matrix
+}
+
+fn assert_matrix_close(actual: &[Complex64], expected: &[Complex64]) {
+    assert_eq!(actual.len(), expected.len());
+    for (slot, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+        let err = (*a - *e).norm();
+        assert!(
+            err < 1e-10,
+            "matrix mismatch at slot {slot}: actual={a:?}, expected={e:?}, err={err}"
+        );
     }
 }
 
 #[test]
-fn test_null_pointer_guards() {
-    let mut op: *mut t4a_linop = std::ptr::null_mut();
-
-    // Null output pointer
+fn test_shift_grouped_materialization_matches_reference() {
+    let layout = new_layout(t4a_qtt_layout_kind::Grouped, &[2, 1]);
+    let mut op = std::ptr::null_mut();
     assert_eq!(
-        t4a_qtransform_shift(4, 1, t4a_boundary_condition::Periodic, std::ptr::null_mut()),
-        T4A_NULL_POINTER
-    );
-    assert_eq!(
-        t4a_qtransform_flip(4, t4a_boundary_condition::Periodic, std::ptr::null_mut()),
-        T4A_NULL_POINTER
-    );
-    assert_eq!(
-        t4a_qtransform_phase_rotation(4, 1.0, std::ptr::null_mut()),
-        T4A_NULL_POINTER
-    );
-    assert_eq!(
-        t4a_qtransform_cumsum(4, std::ptr::null_mut()),
-        T4A_NULL_POINTER
-    );
-    assert_eq!(
-        t4a_qtransform_fourier(4, 1, 0, 0.0, std::ptr::null_mut()),
-        T4A_NULL_POINTER
+        t4a_qtransform_shift_materialize(layout, 0, 1, t4a_boundary_condition::Periodic, &mut op),
+        T4A_SUCCESS
     );
 
-    // Invalid r=0
+    let actual = c_operator_matrix(op, &[2, 2, 2], &[2, 2, 2]);
+    let shift = shift_operator(2, 1, BoundaryCondition::Periodic).unwrap();
+    let shift_mat = rust_operator_matrix(&shift, &[2, 2], &[2, 2]);
+    let mut expected = vec![Complex64::new(0.0, 0.0); 8 * 8];
+    for x in 0..8 {
+        let in_values = decode_mixed_radix(x, &[2, 2, 2]);
+        let in_shift = encode_mixed_radix(&in_values[..2], &[2, 2]);
+        for y in 0..8 {
+            let out_values = decode_mixed_radix(y, &[2, 2, 2]);
+            if out_values[2] == in_values[2] {
+                let out_shift = encode_mixed_radix(&out_values[..2], &[2, 2]);
+                expected[y + 8 * x] = shift_mat[out_shift + 4 * in_shift];
+            }
+        }
+    }
+
+    assert_matrix_close(&actual, &expected);
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
+fn test_flip_materialization_matches_rust_reference() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2]);
+    let mut op = std::ptr::null_mut();
     assert_eq!(
-        t4a_qtransform_shift(0, 1, t4a_boundary_condition::Periodic, &mut op),
-        T4A_INVALID_ARGUMENT
+        t4a_qtransform_flip_materialize(layout, 0, t4a_boundary_condition::Periodic, &mut op),
+        T4A_SUCCESS
     );
-    assert_eq!(
-        t4a_qtransform_flip(0, t4a_boundary_condition::Periodic, &mut op),
-        T4A_INVALID_ARGUMENT
+    let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
+    let expected = rust_operator_matrix(
+        &flip_operator(2, BoundaryCondition::Periodic).unwrap(),
+        &[2, 2],
+        &[2, 2],
     );
+    assert_matrix_close(&actual, &expected);
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
+fn test_phase_rotation_materialization_matches_rust_reference() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2]);
+    let mut op = std::ptr::null_mut();
     assert_eq!(
-        t4a_qtransform_phase_rotation(0, 1.0, &mut op),
-        T4A_INVALID_ARGUMENT
+        t4a_qtransform_phase_rotation_materialize(layout, 0, std::f64::consts::PI / 4.0, &mut op),
+        T4A_SUCCESS
     );
-    assert_eq!(t4a_qtransform_cumsum(0, &mut op), T4A_INVALID_ARGUMENT);
+    let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
+    let expected = rust_operator_matrix(
+        &phase_rotation_operator(2, std::f64::consts::PI / 4.0).unwrap(),
+        &[2, 2],
+        &[2, 2],
+    );
+    assert_matrix_close(&actual, &expected);
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
+fn test_cumsum_materialization_matches_rust_reference() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2]);
+    let mut op = std::ptr::null_mut();
     assert_eq!(
-        t4a_qtransform_fourier(0, 1, 0, 0.0, &mut op),
-        T4A_INVALID_ARGUMENT
+        t4a_qtransform_cumsum_materialize(layout, 0, &mut op),
+        T4A_SUCCESS
+    );
+    let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
+    let expected = rust_operator_matrix(&cumsum_operator(2).unwrap(), &[2, 2], &[2, 2]);
+    assert_matrix_close(&actual, &expected);
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
+fn test_fourier_materialization_matches_rust_reference() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2]);
+    let mut op = std::ptr::null_mut();
+    assert_eq!(
+        t4a_qtransform_fourier_materialize(layout, 0, 1, 8, 1e-12, &mut op),
+        T4A_SUCCESS
+    );
+    let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
+    let mut options = FourierOptions::forward();
+    options.maxbonddim = 8;
+    options.tolerance = 1e-12;
+    let expected = rust_operator_matrix(
+        &quantics_fourier_operator(2, options).unwrap(),
+        &[2, 2],
+        &[2, 2],
+    );
+    assert_matrix_close(&actual, &expected);
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
+fn test_binaryop_interleaved_materialization_matches_rust_reference() {
+    let layout = new_layout(t4a_qtt_layout_kind::Interleaved, &[2, 2]);
+    let mut op = std::ptr::null_mut();
+    assert_eq!(
+        t4a_qtransform_binaryop_materialize(
+            layout,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            t4a_boundary_condition::Periodic,
+            t4a_boundary_condition::Periodic,
+            &mut op
+        ),
+        T4A_SUCCESS
+    );
+    let actual = c_operator_matrix(op, &[2, 2, 2, 2], &[2, 2, 2, 2]);
+    let expected = rust_operator_matrix(
+        &binaryop_operator(
+            2,
+            BinaryCoeffs::sum(),
+            BinaryCoeffs::select_y(),
+            [BoundaryCondition::Periodic, BoundaryCondition::Periodic],
+        )
+        .unwrap(),
+        &[2, 2, 2, 2],
+        &[2, 2, 2, 2],
+    );
+    assert_matrix_close(&actual, &expected);
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
+fn test_affine_fused_materialization_matches_rust_reference() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2]);
+    let mut op = std::ptr::null_mut();
+    let a_num = [1i64];
+    let a_den = [1i64];
+    let b_num = [1i64];
+    let b_den = [1i64];
+    let bc = [t4a_boundary_condition::Periodic];
+    assert_eq!(
+        t4a_qtransform_affine_materialize(
+            layout,
+            a_num.as_ptr(),
+            a_den.as_ptr(),
+            b_num.as_ptr(),
+            b_den.as_ptr(),
+            1,
+            1,
+            bc.as_ptr(),
+            &mut op
+        ),
+        T4A_SUCCESS
     );
 
-    // Apply null guards
-    let mut out: *mut t4a_treetn = std::ptr::null_mut();
-    assert_eq!(
-        t4a_linop_apply(std::ptr::null(), std::ptr::null(), 1, 0.0, 0, &mut out),
-        T4A_NULL_POINTER
+    let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
+    let params = AffineParams::new(
+        vec![Rational64::from_integer(1)],
+        vec![Rational64::from_integer(1)],
+        1,
+        1,
+    )
+    .unwrap();
+    let expected = rust_operator_matrix(
+        &affine_operator(2, &params, &[BoundaryCondition::Periodic]).unwrap(),
+        &[2, 2],
+        &[2, 2],
     );
+    assert_matrix_close(&actual, &expected);
 
-    // Invalid method
-    // We need a valid op and state for this, so skip method check with nulls
-    // (it returns NULL_POINTER first)
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
+}
 
-    // Release null should not crash
-    t4a_linop_release(std::ptr::null_mut());
+#[test]
+fn test_grouped_binaryop_is_rejected_with_explicit_message() {
+    let layout = new_layout(t4a_qtt_layout_kind::Grouped, &[2, 2]);
+    let mut op = std::ptr::null_mut();
+    let status = t4a_qtransform_binaryop_materialize(
+        layout,
+        0,
+        1,
+        1,
+        1,
+        0,
+        1,
+        t4a_boundary_condition::Periodic,
+        t4a_boundary_condition::Periodic,
+        &mut op,
+    );
+    assert_eq!(status, T4A_INVALID_ARGUMENT);
+    assert!(last_error().contains("grouped layouts"));
+    assert!(op.is_null());
+    t4a_qtt_layout_release(layout);
 }

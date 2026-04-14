@@ -1,655 +1,980 @@
-//! C API for QuanticsTransform operators
-//!
-//! This provides C-compatible interface for constructing and applying quantics
-//! transformation operators (shift, flip, phase rotation, cumulative sum, Fourier).
-//! These wrap `tensor4all-quanticstransform` which provides `LinearOperator` constructors.
+//! C API for canonical QTT layouts and transform materialization.
 
-use crate::types::{t4a_boundary_condition, t4a_linop, t4a_treetn};
-use crate::{StatusCode, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS};
-use num_rational::Rational64;
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use tensor4all_quanticstransform::{
-    affine_operator, affine_pullback_operator, binaryop_operator, cumsum_operator, flip_operator,
-    flip_operator_multivar, phase_rotation_operator, phase_rotation_operator_multivar,
-    quantics_fourier_operator, shift_operator, shift_operator_multivar, AffineParams, BinaryCoeffs,
-    BoundaryCondition, FourierOptions,
+use crate::types::{
+    t4a_boundary_condition, t4a_qtt_layout, t4a_qtt_layout_kind, t4a_treetn, InternalIndex,
+    InternalQttLayout, InternalTreeTN,
 };
-use tensor4all_treetn::treetn::contraction::ContractionMethod;
-use tensor4all_treetn::{apply_linear_operator, ApplyOptions};
+use crate::{
+    capi_error, clone_opaque, is_assigned_opaque, release_opaque, run_catching, set_last_error,
+    CapiResult, StatusCode, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER,
+};
+use num_complex::Complex64;
+use num_rational::Rational64;
+use tensor4all_core::{IndexLike, TensorDynLen};
+use tensor4all_quanticstransform::{
+    affine_operator, binaryop_operator, cumsum_operator, flip_operator, phase_rotation_operator,
+    quantics_fourier_operator, shift_operator, AffineParams, BinaryCoeffs, BoundaryCondition,
+    FourierOptions,
+};
 
-// ============================================================================
-// Lifecycle functions
-// ============================================================================
-
-impl_opaque_type_common!(linop);
-
-fn boundary_conditions_from_raw(
-    ptr: *const t4a_boundary_condition,
-    len: usize,
-) -> Result<Vec<BoundaryCondition>, StatusCode> {
-    if ptr.is_null() {
-        return Err(T4A_NULL_POINTER);
-    }
-
-    let bc = unsafe { std::slice::from_raw_parts(ptr, len) };
-    Ok(bc.iter().copied().map(Into::into).collect())
+/// Release a QTT layout handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_qtt_layout_release(obj: *mut t4a_qtt_layout) {
+    release_opaque(obj);
 }
 
-fn rationals_from_raw(
-    num_ptr: *const i64,
-    den_ptr: *const i64,
-    len: usize,
-) -> Result<Vec<Rational64>, StatusCode> {
-    if num_ptr.is_null() || den_ptr.is_null() {
-        return Err(T4A_NULL_POINTER);
+/// Clone a QTT layout handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_qtt_layout_clone(
+    src: *const t4a_qtt_layout,
+    out: *mut *mut t4a_qtt_layout,
+) -> StatusCode {
+    clone_opaque(src, out)
+}
+
+/// Check whether a QTT layout handle is assigned.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_qtt_layout_is_assigned(obj: *const t4a_qtt_layout) -> i32 {
+    is_assigned_opaque(obj)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChainSiteKind {
+    Single,
+    First,
+    Middle,
+    Last,
+}
+
+#[derive(Clone)]
+struct SourceSite {
+    kind: ChainSiteKind,
+    left_dim: usize,
+    out_dim: usize,
+    in_dim: usize,
+    right_dim: usize,
+    data: Vec<Complex64>,
+}
+
+impl SourceSite {
+    fn from_chain_treetn(tn: &InternalTreeTN, site: usize, nsites: usize) -> CapiResult<Self> {
+        let node_idx = tn
+            .node_index(&site)
+            .ok_or_else(|| capi_error(T4A_INVALID_ARGUMENT, format!("missing node {site}")))?;
+        let tensor = tn.tensor(node_idx).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("missing tensor at node {site}"),
+            )
+        })?;
+        let dims = tensor.dims();
+        let data = tensor
+            .to_vec::<Complex64>()
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+
+        let (kind, left_dim, out_dim, in_dim, right_dim) = match (site == 0, site + 1 == nsites) {
+            (true, true) => {
+                if dims.len() != 2 {
+                    return Err(capi_error(
+                        T4A_INVALID_ARGUMENT,
+                        format!(
+                            "single-site operator tensor must have rank 2, got {}",
+                            dims.len()
+                        ),
+                    ));
+                }
+                (ChainSiteKind::Single, 1, dims[0], dims[1], 1)
+            }
+            (true, false) => {
+                if dims.len() != 3 {
+                    return Err(capi_error(
+                        T4A_INVALID_ARGUMENT,
+                        format!("first operator tensor must have rank 3, got {}", dims.len()),
+                    ));
+                }
+                (ChainSiteKind::First, 1, dims[0], dims[1], dims[2])
+            }
+            (false, true) => {
+                if dims.len() != 3 {
+                    return Err(capi_error(
+                        T4A_INVALID_ARGUMENT,
+                        format!("last operator tensor must have rank 3, got {}", dims.len()),
+                    ));
+                }
+                (ChainSiteKind::Last, dims[0], dims[1], dims[2], 1)
+            }
+            (false, false) => {
+                if dims.len() != 4 {
+                    return Err(capi_error(
+                        T4A_INVALID_ARGUMENT,
+                        format!(
+                            "middle operator tensor must have rank 4, got {}",
+                            dims.len()
+                        ),
+                    ));
+                }
+                (ChainSiteKind::Middle, dims[0], dims[1], dims[2], dims[3])
+            }
+        };
+
+        Ok(Self {
+            kind,
+            left_dim,
+            out_dim,
+            in_dim,
+            right_dim,
+            data,
+        })
     }
 
-    let nums = unsafe { std::slice::from_raw_parts(num_ptr, len) };
-    let dens = unsafe { std::slice::from_raw_parts(den_ptr, len) };
+    fn value(&self, left: usize, out: usize, input: usize, right: usize) -> Complex64 {
+        match self.kind {
+            ChainSiteKind::Single => self.data[out + self.out_dim * input],
+            ChainSiteKind::First => self.data[out + self.out_dim * (input + self.in_dim * right)],
+            ChainSiteKind::Middle => {
+                self.data
+                    [left + self.left_dim * (out + self.out_dim * (input + self.in_dim * right))]
+            }
+            ChainSiteKind::Last => self.data[left + self.left_dim * (out + self.out_dim * input)],
+        }
+    }
+}
 
-    let mut out = Vec::with_capacity(len);
-    for (i, (&num, &den)) in nums.iter().zip(dens.iter()).enumerate() {
-        if den == 0 {
-            crate::set_last_error(&format!(
-                "Rational denominator at index {i} must be nonzero"
+fn require_layout<'a>(layout: *const t4a_qtt_layout) -> CapiResult<&'a InternalQttLayout> {
+    if layout.is_null() {
+        return Err(capi_error(T4A_NULL_POINTER, "layout is null"));
+    }
+    Ok(unsafe { (&*layout).inner() })
+}
+
+fn bit_dim(bits: usize, what: &str) -> CapiResult<usize> {
+    1usize
+        .checked_shl(bits as u32)
+        .ok_or_else(|| capi_error(T4A_INVALID_ARGUMENT, format!("{what} is too large")))
+}
+
+fn extract_chain_sites(mpo: &InternalTreeTN) -> CapiResult<Vec<SourceSite>> {
+    let nsites = mpo.node_count();
+    if nsites == 0 {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "materialized operator must contain at least one site",
+        ));
+    }
+
+    let mut sites = Vec::with_capacity(nsites);
+    for site in 0..nsites {
+        sites.push(SourceSite::from_chain_treetn(mpo, site, nsites)?);
+    }
+    Ok(sites)
+}
+
+fn build_chain_tensor<F>(
+    left_bond: Option<InternalIndex>,
+    out_index: InternalIndex,
+    in_index: InternalIndex,
+    right_bond: Option<InternalIndex>,
+    eval: F,
+) -> CapiResult<TensorDynLen>
+where
+    F: Fn(usize, usize, usize, usize) -> Complex64,
+{
+    let left_dim = left_bond.as_ref().map_or(1, |idx| idx.dim());
+    let out_dim = out_index.dim();
+    let in_dim = in_index.dim();
+    let right_dim = right_bond.as_ref().map_or(1, |idx| idx.dim());
+
+    let mut indices = Vec::new();
+    let mut dims = Vec::new();
+    let has_left = left_bond.is_some();
+    let has_right = right_bond.is_some();
+
+    if let Some(idx) = left_bond {
+        dims.push(left_dim);
+        indices.push(idx);
+    }
+    dims.push(out_dim);
+    indices.push(out_index);
+    dims.push(in_dim);
+    indices.push(in_index);
+    if let Some(idx) = right_bond {
+        dims.push(right_dim);
+        indices.push(idx);
+    }
+
+    let total_size: usize = dims.iter().product();
+    let mut data = vec![Complex64::new(0.0, 0.0); total_size];
+
+    for left in 0..left_dim {
+        for out in 0..out_dim {
+            for input in 0..in_dim {
+                for right in 0..right_dim {
+                    let flat = match (has_left, has_right) {
+                        (false, false) => out + out_dim * input,
+                        (false, true) => out + out_dim * (input + in_dim * right),
+                        (true, false) => left + left_dim * (out + out_dim * input),
+                        (true, true) => {
+                            left + left_dim * (out + out_dim * (input + in_dim * right))
+                        }
+                    };
+                    data[flat] = eval(left, out, input, right);
+                }
+            }
+        }
+    }
+
+    TensorDynLen::from_dense(indices, data).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))
+}
+
+fn build_identity_site(
+    left_bond: Option<InternalIndex>,
+    out_index: InternalIndex,
+    in_index: InternalIndex,
+    right_bond: Option<InternalIndex>,
+) -> CapiResult<TensorDynLen> {
+    let left_dim = left_bond.as_ref().map_or(1, |idx| idx.dim());
+    let right_dim = right_bond.as_ref().map_or(1, |idx| idx.dim());
+    if left_dim != right_dim {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!(
+                "identity bridge requires matching bond dimensions, got {left_dim} and {right_dim}"
+            ),
+        ));
+    }
+
+    build_chain_tensor(
+        left_bond,
+        out_index,
+        in_index,
+        right_bond,
+        |left, out, input, right| {
+            if left == right && out == input {
+                Complex64::new(1.0, 0.0)
+            } else {
+                Complex64::new(0.0, 0.0)
+            }
+        },
+    )
+}
+
+fn build_treetn_from_chain(tensors: Vec<TensorDynLen>) -> CapiResult<InternalTreeTN> {
+    let node_names: Vec<usize> = (0..tensors.len()).collect();
+    InternalTreeTN::from_tensors(tensors, node_names)
+        .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))
+}
+
+fn single_var_positions(layout: &InternalQttLayout, target_var: usize) -> CapiResult<Vec<usize>> {
+    if target_var >= layout.nvariables() {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "target_var must be smaller than nvariables",
+        ));
+    }
+
+    let resolution = layout.resolution(target_var);
+    let positions = match layout.kind() {
+        t4a_qtt_layout_kind::Grouped => {
+            let start: usize = layout.variable_resolutions()[..target_var].iter().sum();
+            (start..start + resolution).collect()
+        }
+        t4a_qtt_layout_kind::Interleaved => {
+            let nvariables = layout.nvariables();
+            (0..resolution)
+                .map(|level| level * nvariables + target_var)
+                .collect()
+        }
+        t4a_qtt_layout_kind::Fused => {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "single_var_positions is not valid for fused layouts",
+            ))
+        }
+    };
+    Ok(positions)
+}
+
+fn expand_chain_with_identities(
+    source_sites: &[SourceSite],
+    nsites: usize,
+    source_positions: &[usize],
+) -> CapiResult<InternalTreeTN> {
+    if source_sites.is_empty() {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "source operator must contain at least one site",
+        ));
+    }
+    if source_sites.len() != source_positions.len() {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "source_positions length does not match source operator length",
+        ));
+    }
+    if source_positions.iter().any(|&pos| pos >= nsites) {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "source_positions must all be smaller than nsites",
+        ));
+    }
+    if source_positions
+        .windows(2)
+        .any(|window| window[0] >= window[1])
+    {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "source_positions must be strictly increasing",
+        ));
+    }
+
+    let phys_dim = source_sites[0].out_dim;
+    if source_sites
+        .iter()
+        .any(|site| site.out_dim != phys_dim || site.in_dim != phys_dim)
+    {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "expanded identity embedding requires square per-site dimensions",
+        ));
+    }
+
+    let mut bond_dims = vec![1; nsites.saturating_sub(1)];
+    for (src_idx, window) in source_positions.windows(2).enumerate() {
+        let bond_dim = source_sites[src_idx].right_dim;
+        for dim in bond_dims.iter_mut().take(window[1]).skip(window[0]) {
+            *dim = bond_dim;
+        }
+    }
+    let bond_indices: Vec<_> = bond_dims
+        .iter()
+        .map(|&dim| InternalIndex::new_dyn(dim))
+        .collect();
+
+    let mut tensors = Vec::with_capacity(nsites);
+    let mut next_source = 0usize;
+    for site in 0..nsites {
+        let left_bond = (site > 0).then(|| bond_indices[site - 1].clone());
+        let right_bond = (site + 1 < nsites).then(|| bond_indices[site].clone());
+        let out_index = InternalIndex::new_dyn(phys_dim);
+        let in_index = InternalIndex::new_dyn(phys_dim);
+
+        let tensor =
+            if next_source < source_positions.len() && source_positions[next_source] == site {
+                let src = &source_sites[next_source];
+                next_source += 1;
+                build_chain_tensor(
+                    left_bond,
+                    out_index,
+                    in_index,
+                    right_bond,
+                    |left, out, input, right| src.value(left, out, input, right),
+                )?
+            } else {
+                build_identity_site(left_bond, out_index, in_index, right_bond)?
+            };
+        tensors.push(tensor);
+    }
+
+    build_treetn_from_chain(tensors)
+}
+
+fn embed_single_var_fused(
+    layout: &InternalQttLayout,
+    target_var: usize,
+    source_sites: &[SourceSite],
+) -> CapiResult<InternalTreeTN> {
+    let nvariables = layout.nvariables();
+    let phys_dim = bit_dim(nvariables, "fused local dimension")?;
+    let nsites = layout.nsites();
+    if source_sites.len() != nsites {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "source operator length does not match fused layout length",
+        ));
+    }
+
+    let bond_indices: Vec<_> = source_sites
+        .iter()
+        .take(source_sites.len().saturating_sub(1))
+        .map(|site| InternalIndex::new_dyn(site.right_dim))
+        .collect();
+
+    let mut tensors = Vec::with_capacity(nsites);
+    for (site_idx, src) in source_sites.iter().enumerate() {
+        let left_bond = (site_idx > 0).then(|| bond_indices[site_idx - 1].clone());
+        let right_bond = (site_idx + 1 < nsites).then(|| bond_indices[site_idx].clone());
+        let out_index = InternalIndex::new_dyn(phys_dim);
+        let in_index = InternalIndex::new_dyn(phys_dim);
+
+        tensors.push(build_chain_tensor(
+            left_bond,
+            out_index,
+            in_index,
+            right_bond,
+            |left, out_multi, in_multi, right| {
+                for variable in 0..nvariables {
+                    if variable == target_var {
+                        continue;
+                    }
+                    if ((out_multi >> variable) & 1) != ((in_multi >> variable) & 1) {
+                        return Complex64::new(0.0, 0.0);
+                    }
+                }
+                let out_bit = (out_multi >> target_var) & 1;
+                let in_bit = (in_multi >> target_var) & 1;
+                src.value(left, out_bit, in_bit, right)
+            },
+        )?);
+    }
+
+    build_treetn_from_chain(tensors)
+}
+
+fn materialize_single_var_operator(
+    layout: &InternalQttLayout,
+    target_var: usize,
+    source_mpo: InternalTreeTN,
+) -> CapiResult<InternalTreeTN> {
+    let source_sites = extract_chain_sites(&source_mpo)?;
+    match layout.kind() {
+        t4a_qtt_layout_kind::Grouped | t4a_qtt_layout_kind::Interleaved => {
+            let positions = single_var_positions(layout, target_var)?;
+            if positions.len() != source_sites.len() {
+                return Err(capi_error(
+                    T4A_INVALID_ARGUMENT,
+                    "layout resolution does not match source operator length",
+                ));
+            }
+            expand_chain_with_identities(&source_sites, layout.nsites(), &positions)
+        }
+        t4a_qtt_layout_kind::Fused => embed_single_var_fused(layout, target_var, &source_sites),
+    }
+}
+
+fn fused_binary_site_data(
+    kind: ChainSiteKind,
+    left_dim: usize,
+    right_dim: usize,
+    x_site: &SourceSite,
+    y_site: &SourceSite,
+) -> Vec<Complex64> {
+    let out_dim = 4usize;
+    let in_dim = 4usize;
+    let total_size = match kind {
+        ChainSiteKind::Single => out_dim * in_dim,
+        ChainSiteKind::First => out_dim * in_dim * right_dim,
+        ChainSiteKind::Middle => left_dim * out_dim * in_dim * right_dim,
+        ChainSiteKind::Last => left_dim * out_dim * in_dim,
+    };
+    let mut data = vec![Complex64::new(0.0, 0.0); total_size];
+
+    for left in 0..left_dim {
+        for out_multi in 0..out_dim {
+            let out_x = out_multi & 1;
+            let out_y = (out_multi >> 1) & 1;
+            for in_multi in 0..in_dim {
+                let in_x = in_multi & 1;
+                let in_y = (in_multi >> 1) & 1;
+                for right in 0..right_dim {
+                    let mut sum = Complex64::new(0.0, 0.0);
+                    for mid in 0..x_site.right_dim {
+                        sum += x_site.value(left, out_x, in_x, mid)
+                            * y_site.value(mid, out_y, in_y, right);
+                    }
+                    let flat = match kind {
+                        ChainSiteKind::Single => out_multi + out_dim * in_multi,
+                        ChainSiteKind::First => out_multi + out_dim * (in_multi + in_dim * right),
+                        ChainSiteKind::Middle => {
+                            left + left_dim * (out_multi + out_dim * (in_multi + in_dim * right))
+                        }
+                        ChainSiteKind::Last => left + left_dim * (out_multi + out_dim * in_multi),
+                    };
+                    data[flat] = sum;
+                }
+            }
+        }
+    }
+
+    data
+}
+
+fn fuse_binaryop_pairs(source_sites: &[SourceSite]) -> CapiResult<Vec<SourceSite>> {
+    if source_sites.is_empty() || !source_sites.len().is_multiple_of(2) {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "binaryop source operator must have an even number of sites",
+        ));
+    }
+
+    let r = source_sites.len() / 2;
+    let mut fused = Vec::with_capacity(r);
+    for level in 0..r {
+        let x_site = &source_sites[2 * level];
+        let y_site = &source_sites[2 * level + 1];
+        if x_site.right_dim != y_site.left_dim {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "binaryop source pair has incompatible intermediate bond dimensions",
             ));
-            return Err(T4A_INVALID_ARGUMENT);
         }
-        out.push(Rational64::new(num, den));
+
+        let kind = match (level == 0, level + 1 == r) {
+            (true, true) => ChainSiteKind::Single,
+            (true, false) => ChainSiteKind::First,
+            (false, true) => ChainSiteKind::Last,
+            (false, false) => ChainSiteKind::Middle,
+        };
+        let left_dim = x_site.left_dim;
+        let right_dim = y_site.right_dim;
+        let data = fused_binary_site_data(kind, left_dim, right_dim, x_site, y_site);
+        fused.push(SourceSite {
+            kind,
+            left_dim,
+            out_dim: 4,
+            in_dim: 4,
+            right_dim,
+            data,
+        });
     }
-    Ok(out)
+
+    Ok(fused)
 }
 
-// ============================================================================
-// Operator construction
-// ============================================================================
+fn embed_two_var_fused(
+    layout: &InternalQttLayout,
+    var_a: usize,
+    var_b: usize,
+    fused_pair_sites: &[SourceSite],
+) -> CapiResult<InternalTreeTN> {
+    let nvariables = layout.nvariables();
+    let phys_dim = bit_dim(nvariables, "fused local dimension")?;
+    let nsites = layout.nsites();
+    if fused_pair_sites.len() != nsites {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "binaryop fused source length does not match fused layout length",
+        ));
+    }
 
-/// Create a shift operator: f(x) = g(x + offset) mod 2^r
-///
-/// # Arguments
-/// * `r` - Number of quantics bits
-/// * `offset` - Shift offset (can be negative)
-/// * `bc` - Boundary condition (Periodic or Open)
-/// * `out` - Output: new linop handle (caller owns)
-///
-/// # Returns
-/// Status code
+    let bond_indices: Vec<_> = fused_pair_sites
+        .iter()
+        .take(fused_pair_sites.len().saturating_sub(1))
+        .map(|site| InternalIndex::new_dyn(site.right_dim))
+        .collect();
+
+    let mut tensors = Vec::with_capacity(nsites);
+    for (site_idx, src) in fused_pair_sites.iter().enumerate() {
+        let left_bond = (site_idx > 0).then(|| bond_indices[site_idx - 1].clone());
+        let right_bond = (site_idx + 1 < nsites).then(|| bond_indices[site_idx].clone());
+        let out_index = InternalIndex::new_dyn(phys_dim);
+        let in_index = InternalIndex::new_dyn(phys_dim);
+
+        tensors.push(build_chain_tensor(
+            left_bond,
+            out_index,
+            in_index,
+            right_bond,
+            |left, out_multi, in_multi, right| {
+                for variable in 0..nvariables {
+                    if variable == var_a || variable == var_b {
+                        continue;
+                    }
+                    if ((out_multi >> variable) & 1) != ((in_multi >> variable) & 1) {
+                        return Complex64::new(0.0, 0.0);
+                    }
+                }
+                let out_pair = ((out_multi >> var_a) & 1) | (((out_multi >> var_b) & 1) << 1);
+                let in_pair = ((in_multi >> var_a) & 1) | (((in_multi >> var_b) & 1) << 1);
+                src.value(left, out_pair, in_pair, right)
+            },
+        )?);
+    }
+
+    build_treetn_from_chain(tensors)
+}
+
+fn parse_rationals(
+    numerators: *const i64,
+    denominators: *const i64,
+    len: usize,
+    name: &str,
+) -> CapiResult<Vec<Rational64>> {
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    if numerators.is_null() || denominators.is_null() {
+        return Err(capi_error(
+            T4A_NULL_POINTER,
+            format!("{name} numerator/denominator array is null"),
+        ));
+    }
+
+    let nums = unsafe { std::slice::from_raw_parts(numerators, len) };
+    let dens = unsafe { std::slice::from_raw_parts(denominators, len) };
+    nums.iter()
+        .zip(dens.iter())
+        .enumerate()
+        .map(|(i, (&num, &den))| {
+            if den == 0 {
+                Err(capi_error(
+                    T4A_INVALID_ARGUMENT,
+                    format!("{name}[{i}] has zero denominator"),
+                ))
+            } else {
+                Ok(Rational64::new(num, den))
+            }
+        })
+        .collect()
+}
+
+fn parse_boundary_conditions(
+    bc: *const t4a_boundary_condition,
+    len: usize,
+) -> CapiResult<Vec<BoundaryCondition>> {
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    if bc.is_null() {
+        return Err(capi_error(T4A_NULL_POINTER, "bc is null"));
+    }
+    Ok(unsafe { std::slice::from_raw_parts(bc, len) }
+        .iter()
+        .copied()
+        .map(Into::into)
+        .collect())
+}
+
+/// Create an immutable canonical QTT layout descriptor.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_shift(
-    r: libc::size_t,
+pub extern "C" fn t4a_qtt_layout_new(
+    kind: t4a_qtt_layout_kind,
+    nvariables: usize,
+    variable_resolutions: *const usize,
+    out: *mut *mut t4a_qtt_layout,
+) -> StatusCode {
+    run_catching(out, || {
+        if nvariables == 0 {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "nvariables must be greater than zero",
+            ));
+        }
+        if variable_resolutions.is_null() {
+            return Err(capi_error(T4A_NULL_POINTER, "variable_resolutions is null"));
+        }
+
+        let resolutions = unsafe { std::slice::from_raw_parts(variable_resolutions, nvariables) };
+        let layout = InternalQttLayout::new(kind, resolutions.to_vec())
+            .map_err(|msg| capi_error(T4A_INVALID_ARGUMENT, msg))?;
+        Ok(t4a_qtt_layout::new(layout))
+    })
+}
+
+/// Materialize a shift transform directly as a chain-shaped TreeTN.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_qtransform_shift_materialize(
+    layout: *const t4a_qtt_layout,
+    target_var: usize,
     offset: i64,
     bc: t4a_boundary_condition,
-    out: *mut *mut t4a_linop,
+    out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    if out.is_null() {
-        return T4A_NULL_POINTER;
-    }
-    if r == 0 {
-        return T4A_INVALID_ARGUMENT;
-    }
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let bc_rust: BoundaryCondition = bc.into();
-        match shift_operator(r, offset, bc_rust) {
-            Ok(op) => {
-                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
-                T4A_SUCCESS
-            }
-            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+    let layout_ref = match require_layout(layout) {
+        Ok(layout) => layout,
+        Err((code, msg)) => {
+            set_last_error(&msg);
+            return code;
         }
-    }));
+    };
 
-    crate::unwrap_catch(result)
+    run_catching(out, || {
+        if target_var >= layout_ref.nvariables() {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "target_var must be smaller than nvariables",
+            ));
+        }
+        let r = layout_ref.resolution(target_var);
+        let source = shift_operator(r, offset, bc.into())
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let treetn = materialize_single_var_operator(layout_ref, target_var, source.mpo)?;
+        Ok(t4a_treetn::new(treetn))
+    })
 }
 
-/// Create a shift operator for one variable in a multi-variable system.
+/// Materialize a flip transform directly as a chain-shaped TreeTN.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_shift_multivar(
-    r: libc::size_t,
-    offset: i64,
+pub extern "C" fn t4a_qtransform_flip_materialize(
+    layout: *const t4a_qtt_layout,
+    target_var: usize,
     bc: t4a_boundary_condition,
-    nvariables: libc::size_t,
-    target_var: libc::size_t,
-    out: *mut *mut t4a_linop,
+    out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    if out.is_null() {
-        return T4A_NULL_POINTER;
-    }
-    if r == 0 || nvariables == 0 {
-        return T4A_INVALID_ARGUMENT;
-    }
-    if target_var >= nvariables {
-        return crate::err_status(
-            "target_var must be smaller than nvariables",
-            T4A_INVALID_ARGUMENT,
-        );
-    }
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let bc_rust: BoundaryCondition = bc.into();
-        match shift_operator_multivar(r, offset, bc_rust, nvariables, target_var) {
-            Ok(op) => {
-                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
-                T4A_SUCCESS
-            }
-            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+    let layout_ref = match require_layout(layout) {
+        Ok(layout) => layout,
+        Err((code, msg)) => {
+            set_last_error(&msg);
+            return code;
         }
-    }));
+    };
 
-    crate::unwrap_catch(result)
+    run_catching(out, || {
+        if target_var >= layout_ref.nvariables() {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "target_var must be smaller than nvariables",
+            ));
+        }
+        let r = layout_ref.resolution(target_var);
+        let source =
+            flip_operator(r, bc.into()).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let treetn = materialize_single_var_operator(layout_ref, target_var, source.mpo)?;
+        Ok(t4a_treetn::new(treetn))
+    })
 }
 
-/// Create a flip operator: f(x) = g(2^r - x)
-///
-/// # Arguments
-/// * `r` - Number of quantics bits
-/// * `bc` - Boundary condition (Periodic or Open)
-/// * `out` - Output: new linop handle (caller owns)
-///
-/// # Returns
-/// Status code
+/// Materialize a phase-rotation transform directly as a chain-shaped TreeTN.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_flip(
-    r: libc::size_t,
-    bc: t4a_boundary_condition,
-    out: *mut *mut t4a_linop,
-) -> StatusCode {
-    if out.is_null() {
-        return T4A_NULL_POINTER;
-    }
-    if r == 0 {
-        return T4A_INVALID_ARGUMENT;
-    }
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let bc_rust: BoundaryCondition = bc.into();
-        match flip_operator(r, bc_rust) {
-            Ok(op) => {
-                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
-                T4A_SUCCESS
-            }
-            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
-        }
-    }));
-
-    crate::unwrap_catch(result)
-}
-
-/// Create a flip operator for one variable in a multi-variable system.
-#[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_flip_multivar(
-    r: libc::size_t,
-    bc: t4a_boundary_condition,
-    nvariables: libc::size_t,
-    target_var: libc::size_t,
-    out: *mut *mut t4a_linop,
-) -> StatusCode {
-    if out.is_null() {
-        return T4A_NULL_POINTER;
-    }
-    if r == 0 || nvariables == 0 {
-        return T4A_INVALID_ARGUMENT;
-    }
-    if target_var >= nvariables {
-        return crate::err_status(
-            "target_var must be smaller than nvariables",
-            T4A_INVALID_ARGUMENT,
-        );
-    }
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let bc_rust: BoundaryCondition = bc.into();
-        match flip_operator_multivar(r, bc_rust, nvariables, target_var) {
-            Ok(op) => {
-                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
-                T4A_SUCCESS
-            }
-            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
-        }
-    }));
-
-    crate::unwrap_catch(result)
-}
-
-/// Create a phase rotation operator: f(x) = exp(i*theta*x) * g(x)
-///
-/// # Arguments
-/// * `r` - Number of quantics bits
-/// * `theta` - Phase angle
-/// * `out` - Output: new linop handle (caller owns)
-///
-/// # Returns
-/// Status code
-#[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_phase_rotation(
-    r: libc::size_t,
+pub extern "C" fn t4a_qtransform_phase_rotation_materialize(
+    layout: *const t4a_qtt_layout,
+    target_var: usize,
     theta: f64,
-    out: *mut *mut t4a_linop,
+    out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    if out.is_null() {
-        return T4A_NULL_POINTER;
-    }
-    if r == 0 {
-        return T4A_INVALID_ARGUMENT;
-    }
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        match phase_rotation_operator(r, theta) {
-            Ok(op) => {
-                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
-                T4A_SUCCESS
-            }
-            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+    let layout_ref = match require_layout(layout) {
+        Ok(layout) => layout,
+        Err((code, msg)) => {
+            set_last_error(&msg);
+            return code;
         }
-    }));
+    };
 
-    crate::unwrap_catch(result)
+    run_catching(out, || {
+        if target_var >= layout_ref.nvariables() {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "target_var must be smaller than nvariables",
+            ));
+        }
+        let r = layout_ref.resolution(target_var);
+        let source = phase_rotation_operator(r, theta)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let treetn = materialize_single_var_operator(layout_ref, target_var, source.mpo)?;
+        Ok(t4a_treetn::new(treetn))
+    })
 }
 
-/// Create a phase rotation operator for one variable in a multi-variable system.
+/// Materialize a cumulative-sum transform directly as a chain-shaped TreeTN.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_phase_rotation_multivar(
-    r: libc::size_t,
-    theta: f64,
-    nvariables: libc::size_t,
-    target_var: libc::size_t,
-    out: *mut *mut t4a_linop,
+pub extern "C" fn t4a_qtransform_cumsum_materialize(
+    layout: *const t4a_qtt_layout,
+    target_var: usize,
+    out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    if out.is_null() {
-        return T4A_NULL_POINTER;
-    }
-    if r == 0 || nvariables == 0 {
-        return T4A_INVALID_ARGUMENT;
-    }
-    if target_var >= nvariables {
-        return crate::err_status(
-            "target_var must be smaller than nvariables",
-            T4A_INVALID_ARGUMENT,
-        );
-    }
-
-    let result = catch_unwind(AssertUnwindSafe(|| match phase_rotation_operator_multivar(
-        r, theta, nvariables, target_var,
-    ) {
-        Ok(op) => {
-            unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
-            T4A_SUCCESS
+    let layout_ref = match require_layout(layout) {
+        Ok(layout) => layout,
+        Err((code, msg)) => {
+            set_last_error(&msg);
+            return code;
         }
-        Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
-    }));
+    };
 
-    crate::unwrap_catch(result)
+    run_catching(out, || {
+        if target_var >= layout_ref.nvariables() {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "target_var must be smaller than nvariables",
+            ));
+        }
+        let r = layout_ref.resolution(target_var);
+        let source = cumsum_operator(r).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let treetn = materialize_single_var_operator(layout_ref, target_var, source.mpo)?;
+        Ok(t4a_treetn::new(treetn))
+    })
 }
 
-/// Create a cumulative sum operator: y_i = sum_{j<i} x_j
-///
-/// # Arguments
-/// * `r` - Number of quantics bits
-/// * `out` - Output: new linop handle (caller owns)
-///
-/// # Returns
-/// Status code
+/// Materialize a Fourier transform directly as a chain-shaped TreeTN.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_cumsum(r: libc::size_t, out: *mut *mut t4a_linop) -> StatusCode {
-    if out.is_null() {
-        return T4A_NULL_POINTER;
-    }
-    if r == 0 {
-        return T4A_INVALID_ARGUMENT;
-    }
-
-    let result = catch_unwind(AssertUnwindSafe(|| match cumsum_operator(r) {
-        Ok(op) => {
-            unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
-            T4A_SUCCESS
-        }
-        Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
-    }));
-
-    crate::unwrap_catch(result)
-}
-
-/// Create a general affine transformation operator.
-#[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_affine(
-    r: libc::size_t,
-    a_num: *const i64,
-    a_den: *const i64,
-    b_num: *const i64,
-    b_den: *const i64,
-    m: libc::size_t,
-    n: libc::size_t,
-    bc: *const t4a_boundary_condition,
-    out: *mut *mut t4a_linop,
-) -> StatusCode {
-    if out.is_null() {
-        return T4A_NULL_POINTER;
-    }
-    if r == 0 || m == 0 || n == 0 {
-        return T4A_INVALID_ARGUMENT;
-    }
-
-    let a = match rationals_from_raw(a_num, a_den, m * n) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-    let b = match rationals_from_raw(b_num, b_den, m) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-    let bc = match boundary_conditions_from_raw(bc, m) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let params = match AffineParams::new(a, b, m, n) {
-            Ok(params) => params,
-            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
-        };
-        match affine_operator(r, &params, &bc) {
-            Ok(op) => {
-                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
-                T4A_SUCCESS
-            }
-            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
-        }
-    }));
-
-    crate::unwrap_catch(result)
-}
-
-/// Create an affine pullback operator: f(y) = g(A*y + b).
-///
-/// `a_num` and `a_den` encode an MxN matrix in column-major order.
-/// `b_num` and `b_den` encode an M-vector.
-/// `bc` must have length M and applies to the transformed source coordinates.
-#[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_affine_pullback(
-    r: libc::size_t,
-    m: libc::size_t,
-    n: libc::size_t,
-    a_num: *const i64,
-    a_den: *const i64,
-    b_num: *const i64,
-    b_den: *const i64,
-    bc: *const t4a_boundary_condition,
-    out: *mut *mut t4a_linop,
-) -> StatusCode {
-    if out.is_null() {
-        return T4A_NULL_POINTER;
-    }
-    if r == 0 || m == 0 || n == 0 {
-        return T4A_INVALID_ARGUMENT;
-    }
-
-    let a = match rationals_from_raw(a_num, a_den, m * n) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-    let b = match rationals_from_raw(b_num, b_den, m) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-    let bc = match boundary_conditions_from_raw(bc, m) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let params = match AffineParams::new(a, b, m, n) {
-            Ok(params) => params,
-            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
-        };
-        match affine_pullback_operator(r, &params, &bc) {
-            Ok(op) => {
-                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
-                T4A_SUCCESS
-            }
-            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
-        }
-    }));
-
-    crate::unwrap_catch(result)
-}
-
-/// Create a two-output binary operation operator.
-#[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_binaryop(
-    r: libc::size_t,
-    a1: i8,
-    b1: i8,
-    a2: i8,
-    b2: i8,
-    bc1: t4a_boundary_condition,
-    bc2: t4a_boundary_condition,
-    out: *mut *mut t4a_linop,
-) -> StatusCode {
-    if out.is_null() {
-        return T4A_NULL_POINTER;
-    }
-    if r == 0 {
-        return T4A_INVALID_ARGUMENT;
-    }
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let coeffs1 = match BinaryCoeffs::new(a1, b1) {
-            Ok(coeffs) => coeffs,
-            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
-        };
-        let coeffs2 = match BinaryCoeffs::new(a2, b2) {
-            Ok(coeffs) => coeffs,
-            Err(e) => return crate::err_status(e, T4A_INVALID_ARGUMENT),
-        };
-        let bc = [bc1.into(), bc2.into()];
-
-        match binaryop_operator(r, coeffs1, coeffs2, bc) {
-            Ok(op) => {
-                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
-                T4A_SUCCESS
-            }
-            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
-        }
-    }));
-
-    crate::unwrap_catch(result)
-}
-
-/// Create a Fourier transform operator.
-///
-/// # Arguments
-/// * `r` - Number of quantics bits
-/// * `forward` - 1 for forward transform, 0 for inverse
-/// * `maxbonddim` - Maximum bond dimension (0 = default of 12)
-/// * `tolerance` - Compression tolerance (0.0 = default of 1e-14)
-/// * `out` - Output: new linop handle (caller owns)
-///
-/// # Returns
-/// Status code
-#[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_fourier(
-    r: libc::size_t,
+pub extern "C" fn t4a_qtransform_fourier_materialize(
+    layout: *const t4a_qtt_layout,
+    target_var: usize,
     forward: i32,
-    maxbonddim: libc::size_t,
+    maxbonddim: usize,
     tolerance: f64,
-    out: *mut *mut t4a_linop,
+    out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    if out.is_null() {
-        return T4A_NULL_POINTER;
-    }
-    if r == 0 {
-        return T4A_INVALID_ARGUMENT;
-    }
+    let layout_ref = match require_layout(layout) {
+        Ok(layout) => layout,
+        Err((code, msg)) => {
+            set_last_error(&msg);
+            return code;
+        }
+    };
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
+    run_catching(out, || {
+        if target_var >= layout_ref.nvariables() {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "target_var must be smaller than nvariables",
+            ));
+        }
+        let r = layout_ref.resolution(target_var);
         let mut options = if forward != 0 {
             FourierOptions::forward()
         } else {
             FourierOptions::inverse()
         };
-
         if maxbonddim > 0 {
             options.maxbonddim = maxbonddim;
         }
         if tolerance > 0.0 {
             options.tolerance = tolerance;
         }
-
-        match quantics_fourier_operator(r, options) {
-            Ok(op) => {
-                unsafe { *out = Box::into_raw(Box::new(t4a_linop::new(op))) };
-                T4A_SUCCESS
-            }
-            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
-        }
-    }));
-
-    crate::unwrap_catch(result)
+        let source = quantics_fourier_operator(r, options)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let treetn = materialize_single_var_operator(layout_ref, target_var, source.mpo)?;
+        Ok(t4a_treetn::new(treetn))
+    })
 }
 
-// ============================================================================
-// Operator application
-// ============================================================================
-
-/// Apply a linear operator to a TreeTN (MPS) state.
-///
-/// Computes `result = operator * state`.
-///
-/// # Arguments
-/// * `op` - Linear operator handle
-/// * `state` - Input TreeTN state
-/// * `method` - Contraction method: 0=Naive, 1=Zipup, 2=Fit
-/// * `rtol` - Relative tolerance for truncation (0.0 = no truncation)
-/// * `maxdim` - Maximum bond dimension (0 = unlimited)
-/// * `out` - Output: new TreeTN handle (caller owns)
-///
-/// # Returns
-/// Status code
+/// Materialize a binary operator directly as a chain-shaped TreeTN.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_linop_apply(
-    op: *const t4a_linop,
-    state: *const t4a_treetn,
-    method: i32,
-    rtol: f64,
-    maxdim: libc::size_t,
+pub extern "C" fn t4a_qtransform_binaryop_materialize(
+    layout: *const t4a_qtt_layout,
+    lhs_var: usize,
+    rhs_var: usize,
+    a1: i8,
+    b1: i8,
+    a2: i8,
+    b2: i8,
+    bc1: t4a_boundary_condition,
+    bc2: t4a_boundary_condition,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    if op.is_null() || state.is_null() || out.is_null() {
-        return T4A_NULL_POINTER;
-    }
-
-    let contraction_method = match method {
-        0 => ContractionMethod::Naive,
-        1 => ContractionMethod::Zipup,
-        2 => ContractionMethod::Fit,
-        _ => return T4A_INVALID_ARGUMENT,
+    let layout_ref = match require_layout(layout) {
+        Ok(layout) => layout,
+        Err((code, msg)) => {
+            set_last_error(&msg);
+            return code;
+        }
     };
 
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let op_ref = unsafe { &*op };
-        let state_ref = unsafe { &*state };
-        let mut aligned_op = op_ref.inner().clone();
-
-        for (node, mapping) in aligned_op.input_mapping.iter_mut() {
-            let state_site = match state_ref.inner().site_space(node) {
-                Some(indices) => indices,
-                None => {
-                    return crate::err_status(
-                        anyhow::anyhow!("State node {:?} has no site index", node),
-                        T4A_INTERNAL_ERROR,
-                    )
-                }
-            };
-            if state_site.len() != 1 {
-                return crate::err_status(
-                    anyhow::anyhow!(
-                        "Expected exactly one site index at node {:?}, got {}",
-                        node,
-                        state_site.len()
-                    ),
-                    T4A_INTERNAL_ERROR,
-                );
-            }
-            mapping.true_index = state_site.iter().next().unwrap().clone();
+    run_catching(out, || {
+        if lhs_var >= layout_ref.nvariables() || rhs_var >= layout_ref.nvariables() {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "lhs_var and rhs_var must both be smaller than nvariables",
+            ));
+        }
+        if lhs_var == rhs_var {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "lhs_var and rhs_var must be distinct",
+            ));
         }
 
-        let mut options = ApplyOptions {
-            method: contraction_method,
-            ..ApplyOptions::default()
+        let (var_a, var_b, coeffs1, coeffs2, bc_pair) = if lhs_var < rhs_var {
+            (
+                lhs_var,
+                rhs_var,
+                BinaryCoeffs::new(a1, b1).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?,
+                BinaryCoeffs::new(a2, b2).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?,
+                [bc1.into(), bc2.into()],
+            )
+        } else {
+            (
+                rhs_var,
+                lhs_var,
+                BinaryCoeffs::new(b2, a2).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?,
+                BinaryCoeffs::new(b1, a1).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?,
+                [bc2.into(), bc1.into()],
+            )
         };
 
-        if rtol > 0.0 {
-            options.rtol = Some(rtol);
-        }
-        if maxdim > 0 {
-            options.max_rank = Some(maxdim);
+        let r = layout_ref.resolution(var_a);
+        if layout_ref.resolution(var_b) != r {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "binaryop requires both variables to have the same resolution",
+            ));
         }
 
-        match apply_linear_operator(&aligned_op, state_ref.inner(), options) {
-            Ok(result_treetn) => {
-                unsafe { *out = Box::into_raw(Box::new(t4a_treetn::new(result_treetn))) };
-                T4A_SUCCESS
+        let source = binaryop_operator(r, coeffs1, coeffs2, bc_pair)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let source_sites = extract_chain_sites(&source.mpo)?;
+
+        let treetn = match layout_ref.kind() {
+            t4a_qtt_layout_kind::Interleaved => {
+                let nvariables = layout_ref.nvariables();
+                let mut positions = Vec::with_capacity(2 * r);
+                for level in 0..r {
+                    positions.push(level * nvariables + var_a);
+                    positions.push(level * nvariables + var_b);
+                }
+                expand_chain_with_identities(&source_sites, layout_ref.nsites(), &positions)?
             }
-            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
-        }
-    }));
+            t4a_qtt_layout_kind::Fused => {
+                let fused_sites = fuse_binaryop_pairs(&source_sites)?;
+                embed_two_var_fused(layout_ref, var_a, var_b, &fused_sites)?
+            }
+            t4a_qtt_layout_kind::Grouped => {
+                return Err(capi_error(
+                    T4A_INVALID_ARGUMENT,
+                    "binaryop materialization does not yet support grouped layouts",
+                ))
+            }
+        };
 
-    crate::unwrap_catch(result)
+        Ok(t4a_treetn::new(treetn))
+    })
 }
 
-/// Reset the operator's true input site indices to match a TreeTN state.
+/// Materialize an affine transform directly as a chain-shaped TreeTN.
 #[unsafe(no_mangle)]
-pub extern "C" fn t4a_linop_set_input_space(
-    op: *mut t4a_linop,
-    state: *const t4a_treetn,
+pub extern "C" fn t4a_qtransform_affine_materialize(
+    layout: *const t4a_qtt_layout,
+    a_num: *const i64,
+    a_den: *const i64,
+    b_num: *const i64,
+    b_den: *const i64,
+    m: usize,
+    n: usize,
+    bc: *const t4a_boundary_condition,
+    out: *mut *mut t4a_treetn,
 ) -> StatusCode {
-    if op.is_null() || state.is_null() {
-        return T4A_NULL_POINTER;
-    }
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let op_ref = unsafe { &mut *op };
-        let state_ref = unsafe { &*state };
-        match op_ref
-            .inner_mut()
-            .set_input_space_from_state(state_ref.inner())
-        {
-            Ok(()) => T4A_SUCCESS,
-            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+    let layout_ref = match require_layout(layout) {
+        Ok(layout) => layout,
+        Err((code, msg)) => {
+            set_last_error(&msg);
+            return code;
         }
-    }));
+    };
 
-    crate::unwrap_catch(result)
-}
-
-/// Reset the operator's true output site indices to match a TreeTN state.
-#[unsafe(no_mangle)]
-pub extern "C" fn t4a_linop_set_output_space(
-    op: *mut t4a_linop,
-    state: *const t4a_treetn,
-) -> StatusCode {
-    if op.is_null() || state.is_null() {
-        return T4A_NULL_POINTER;
-    }
-
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let op_ref = unsafe { &mut *op };
-        let state_ref = unsafe { &*state };
-        match op_ref
-            .inner_mut()
-            .set_output_space_from_state(state_ref.inner())
-        {
-            Ok(()) => T4A_SUCCESS,
-            Err(e) => crate::err_status(e, T4A_INTERNAL_ERROR),
+    run_catching(out, || {
+        if m == 0 || n == 0 {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "affine materialization requires m > 0 and n > 0",
+            ));
         }
-    }));
+        if layout_ref.kind() != t4a_qtt_layout_kind::Fused {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "affine materialization currently supports fused layouts only",
+            ));
+        }
 
-    crate::unwrap_catch(result)
+        let a = parse_rationals(a_num, a_den, m * n, "a")?;
+        let b = parse_rationals(b_num, b_den, m, "b")?;
+        let bc = parse_boundary_conditions(bc, m)?;
+        let params =
+            AffineParams::new(a, b, m, n).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let r = layout_ref.nsites();
+        let source = affine_operator(r, &params, &bc)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_treetn::new(source.mpo))
+    })
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests;

@@ -13,22 +13,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 tensor4all-core = { path = "../tensor4all-core" }
-tensor4all-itensorlike = { path = "../tensor4all-itensorlike" }
 tensor4all-treetn = { path = "../tensor4all-treetn" }
-tensor4all-simplett = { path = "../tensor4all-simplett" }
-tensor4all-quanticstci = { path = "../tensor4all-quanticstci" }
-tensor4all-treetci = { path = "../tensor4all-treetci" }
 tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform" }
-tensor4all-hdf5 = { path = "../tensor4all-hdf5", default-features = false, features = ["runtime-loading"], optional = true }
-quanticsgrids.workspace = true
-anyhow.workspace = true
 libc.workspace = true
-thiserror.workspace = true
 paste.workspace = true
 num-complex.workspace = true
 num-rational = "0.4"
-rand.workspace = true
-
-[features]
-default = ["hdf5"]
-hdf5 = ["dep:tensor4all-hdf5"]
