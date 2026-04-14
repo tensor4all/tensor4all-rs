@@ -1,12 +1,11 @@
 //! Compression algorithms for tensor trains
 
+use crate::einsum_helper::{tensor_to_row_major_vec, typed_tensor_from_row_major_slice};
 use crate::error::Result;
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
-use tenferro_algebra::Scalar as TfScalar;
-use tenferro_linalg::LinalgScalar;
-use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor as TypedTensor};
+use tenferro_tensor::{TensorScalar, TypedTensor};
 use tensor4all_tcicore::matrix::{mat_mul, ncols, nrows, zeros, Matrix};
 use tensor4all_tcicore::Scalar;
 use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions};
@@ -201,33 +200,26 @@ where
 
 /// Trait bounds for SVD-compatible scalars in TT compression
 trait SVDCompressScalar:
-    TTScalar
-    + Scalar
-    + Default
-    + Copy
-    + BackendLinalgScalar
-    + TfScalar
-    + num_complex::ComplexFloat
-    + 'static
+    TTScalar + Scalar + Default + Copy + BackendLinalgScalar + num_complex::ComplexFloat + 'static
 {
-    fn sv_to_f64(real: <Self as LinalgScalar>::Real) -> f64;
-    fn from_sv(real: <Self as LinalgScalar>::Real) -> Self;
+    fn sv_to_f64(real: <Self as TensorScalar>::Real) -> f64;
+    fn from_sv(real: <Self as TensorScalar>::Real) -> Self;
 }
 
 impl SVDCompressScalar for f64 {
-    fn sv_to_f64(real: <Self as LinalgScalar>::Real) -> f64 {
+    fn sv_to_f64(real: <Self as TensorScalar>::Real) -> f64 {
         real
     }
-    fn from_sv(real: <Self as LinalgScalar>::Real) -> Self {
+    fn from_sv(real: <Self as TensorScalar>::Real) -> Self {
         real
     }
 }
 
 impl SVDCompressScalar for num_complex::Complex64 {
-    fn sv_to_f64(real: <Self as LinalgScalar>::Real) -> f64 {
+    fn sv_to_f64(real: <Self as TensorScalar>::Real) -> f64 {
         real
     }
-    fn from_sv(real: <Self as LinalgScalar>::Real) -> Self {
+    fn from_sv(real: <Self as TensorScalar>::Real) -> Self {
         num_complex::Complex64::new(real, 0.0)
     }
 }
@@ -272,18 +264,11 @@ fn svd_dispatch<T: TTScalar + Scalar>(
     })
 }
 
-/// Helper: extract row-major data from a TypedTensor
-fn typed_tensor_row_major<T: TfScalar + Copy>(
+/// Helper: extract row-major data from a TypedTensor.
+fn typed_tensor_row_major<T: TensorScalar>(
     tensor: &TypedTensor<T>,
-    name: &str,
 ) -> crate::error::Result<Vec<T>> {
-    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
-    let data = row_major.buffer().as_slice().ok_or_else(|| {
-        crate::error::TensorTrainError::InvalidOperation {
-            message: format!("SVD {name}: non-CPU tensor"),
-        }
-    })?;
-    Ok(data.to_vec())
+    Ok(tensor_to_row_major_vec(tensor))
 }
 
 /// SVD-based factorization for TT compression
@@ -292,10 +277,7 @@ fn factorize_svd<T: SVDCompressScalar>(
     tolerance: f64,
     max_bond_dim: usize,
     left_orthogonal: bool,
-) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)>
-where
-    <T as LinalgScalar>::Real: KeepCountScalar,
-{
+) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)> {
     let m = nrows(matrix);
     let n = ncols(matrix);
 
@@ -312,12 +294,7 @@ where
             data[i * n + j] = matrix[[i, j]];
         }
     }
-    let a_tensor =
-        TypedTensor::<T>::from_slice(&data, &[m, n], MemoryOrder::RowMajor).map_err(|e| {
-            crate::error::TensorTrainError::InvalidOperation {
-                message: format!("SVD tensor creation failed: {e}"),
-            }
-        })?;
+    let a_tensor = typed_tensor_from_row_major_slice(&data, &[m, n]);
 
     let svd_result = tensor4all_tensorbackend::svd_backend(&a_tensor).map_err(|e| {
         crate::error::TensorTrainError::InvalidOperation {
@@ -326,11 +303,11 @@ where
     })?;
 
     // Extract U, S, Vt as row-major vectors
-    let u_data = typed_tensor_row_major(&svd_result.u, "U")?;
-    let u_cols = svd_result.u.dims()[1];
-    let s_data: Vec<<T as LinalgScalar>::Real> = typed_tensor_row_major(&svd_result.s, "S")?;
-    let vt_data = typed_tensor_row_major(&svd_result.vt, "Vt")?;
-    let vt_cols = svd_result.vt.dims()[1];
+    let u_data = typed_tensor_row_major(&svd_result.u)?;
+    let u_cols = svd_result.u.shape[1];
+    let s_data: Vec<<T as TensorScalar>::Real> = typed_tensor_row_major(&svd_result.s)?;
+    let vt_data = typed_tensor_row_major(&svd_result.vt)?;
+    let vt_cols = svd_result.vt.shape[1];
 
     // Determine rank based on tolerance and max_bond_dim
     let min_dim = m.min(n);

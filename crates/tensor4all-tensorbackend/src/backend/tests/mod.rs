@@ -1,29 +1,22 @@
 use super::*;
 use num_complex::Complex64;
 use num_traits::Zero;
-use tenferro::LogicalMemorySpace;
-use tenferro_algebra::Scalar as TfScalar;
-use tenferro_tensor::MemoryOrder;
 
 fn row_major_values<T>(tensor: &TypedTensor<T>) -> Vec<T>
 where
-    T: TfScalar + Copy,
+    T: Copy,
 {
-    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
-    let row_major = if row_major.logical_memory_space() == LogicalMemorySpace::MainMemory {
-        row_major
-    } else {
-        row_major
-            .to_memory_space_async(LogicalMemorySpace::MainMemory)
-            .expect("tensor should be movable to host memory")
-    };
-    let offset = usize::try_from(row_major.offset()).expect("offset should be non-negative");
-    let len = row_major.len();
-    let values: &[T] = row_major
-        .buffer()
-        .as_slice()
-        .expect("tensor should expose contiguous host buffer");
-    values[offset..offset + len].to_vec()
+    assert_eq!(tensor.shape.len(), 2, "test helper expects a matrix");
+    let rows = tensor.shape[0];
+    let cols = tensor.shape[1];
+    let values = tensor.as_slice();
+    let mut out = Vec::with_capacity(values.len());
+    for row in 0..rows {
+        for col in 0..cols {
+            out.push(values[row + col * rows]);
+        }
+    }
+    out
 }
 
 fn matmul_row_major<T>(a: &[T], m: usize, k: usize, b: &[T], n: usize) -> Vec<T>
@@ -61,12 +54,11 @@ fn scale_columns_complex(
 
 #[test]
 fn qr_backend_reconstructs_real_matrix() {
-    let input =
-        TypedTensor::from_slice(&[1.0_f64, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::RowMajor).unwrap();
+    let input = TypedTensor::from_vec(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
 
     let (q, r) = qr_backend(&input).unwrap();
-    assert_eq!(q.dims(), &[2, 2]);
-    assert_eq!(r.dims(), &[2, 2]);
+    assert_eq!(q.shape, vec![2, 2]);
+    assert_eq!(r.shape, vec![2, 2]);
 
     let q_values = row_major_values(&q);
     let r_values = row_major_values(&r);
@@ -83,25 +75,23 @@ fn qr_backend_reconstructs_real_matrix() {
 
 #[test]
 fn svd_backend_reconstructs_complex_matrix() {
-    let input = TypedTensor::from_slice(
-        &[
+    let input = TypedTensor::from_vec(
+        vec![2, 2],
+        vec![
             Complex64::new(1.0, -0.5),
-            Complex64::new(2.0, 1.5),
             Complex64::new(-3.0, 0.25),
+            Complex64::new(2.0, 1.5),
             Complex64::new(4.0, -2.0),
         ],
-        &[2, 2],
-        MemoryOrder::RowMajor,
-    )
-    .unwrap();
+    );
 
     let decomp = svd_backend(&input).unwrap();
-    assert_eq!(decomp.u.dims(), &[2, 2]);
-    assert_eq!(decomp.s.dims(), &[2]);
-    assert_eq!(decomp.vt.dims(), &[2, 2]);
+    assert_eq!(decomp.u.shape, vec![2, 2]);
+    assert_eq!(decomp.s.shape, vec![2]);
+    assert_eq!(decomp.vt.shape, vec![2, 2]);
 
     let u = row_major_values(&decomp.u);
-    let s = row_major_values(&decomp.s);
+    let s = decomp.s.as_slice().to_vec();
     let vt = row_major_values(&decomp.vt);
     let us = scale_columns_complex(&u, 2, 2, &s);
     let reconstructed = matmul_row_major(&us, 2, 2, &vt, 2);

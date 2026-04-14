@@ -27,6 +27,8 @@ pub mod col_major_array;
 pub use col_major_array::{ColMajorArray, ColMajorArrayMut, ColMajorArrayRef};
 
 // Common (tags, utilities, scalar)
+/// Dynamic scalar compatibility wrapper built on rank-0 `TensorDynLen`.
+pub mod any_scalar;
 pub mod global_default;
 pub mod index_like;
 pub mod scalar;
@@ -59,11 +61,7 @@ pub use index_ops::{
 pub use smallstring::{SmallChar, SmallString, SmallStringError};
 pub use tagset::{Tag, TagSetError, TagSetLike};
 
-// Tensor (storage, tensor types) - re-exported from tensor4all-tensorbackend
-pub mod any_scalar {
-    //! Re-export of dynamic scalar utilities.
-    pub use tensor4all_tensorbackend::AnyScalar;
-}
+// Tensor (storage, tensor types)
 pub mod storage {
     //! Re-export of snapshot storage utilities.
     pub use tensor4all_tensorbackend::{

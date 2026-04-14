@@ -10,6 +10,9 @@ The library is structured as a workspace of independent crates under `crates/`, 
 
 Source code and issue tracker: [github.com/tensor4all/tensor4all-rs](https://github.com/tensor4all/tensor4all-rs)
 
+The repository root `README.md` stays intentionally concise. Longer runnable
+examples live in this guide and the guide examples are exercised in CI.
+
 ---
 
 ## Where to start

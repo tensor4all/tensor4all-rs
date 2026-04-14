@@ -22,23 +22,16 @@ tensor4all-simplett = "0.1"
 ```
 
 ```rust
-use tensor4all_simplett::{AbstractTensorTrain, CompressionOptions, TensorTrain};
+use tensor4all_simplett::{AbstractTensorTrain, TensorTrain};
 
 let tt = TensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
-let value = tt.evaluate(&[0, 1, 2]).unwrap();
-assert!((value - 1.0).abs() < 1e-12);
-
-let total = tt.sum();
-assert!((total - 24.0).abs() < 1e-12);
-
-let options = CompressionOptions {
-    tolerance: 1e-10,
-    max_bond_dim: 20,
-    ..Default::default()
-};
-let compressed = tt.compressed(&options).unwrap();
-assert!((compressed.sum() - 24.0).abs() < 1e-10);
+assert!((tt.evaluate(&[0, 1, 2]).unwrap() - 1.0).abs() < 1e-12);
+assert!((tt.sum() - 24.0).abs() < 1e-12);
 ```
+
+The root `README.md` is kept intentionally short and its Rust snippets are
+validated in CI. Longer runnable examples live in the
+[User Guide](https://tensor4all.org/tensor4all-rs/).
 
 ## Crate Overview
 

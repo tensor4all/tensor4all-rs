@@ -6,15 +6,14 @@
 
 use std::ops::Range;
 
+use crate::einsum_helper::{tensor_to_row_major_vec, typed_tensor_from_row_major_slice};
 use crate::error::{Result, TensorTrainError};
 use crate::tensortrain::TensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use num_complex::ComplexFloat;
 use num_traits::ToPrimitive;
-use tenferro_algebra::Scalar as TfScalar;
-use tenferro_linalg::LinalgScalar;
-use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor as TypedTensor};
+use tenferro_tensor::{TensorScalar, TypedTensor};
 use tensor4all_tcicore::matrix::{mat_mul, ncols, nrows, zeros, Matrix};
 use tensor4all_tcicore::Scalar;
 use tensor4all_tcicore::{rrlu, RrLUOptions};
@@ -34,27 +33,20 @@ fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> (Matrix<T>, Matrix<T>)
 
 fn typed_tensor_to_matrix<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Matrix<T>>
 where
-    T: TfScalar + Copy + Default,
+    T: TTScalar + Scalar + Default,
 {
-    if tensor.ndim() != 2 {
+    if tensor.shape.len() != 2 {
         return Err(TensorTrainError::InvalidOperation {
             message: format!(
                 "{op} returned rank-{} tensor, expected matrix",
-                tensor.ndim()
+                tensor.shape.len()
             ),
         });
     }
 
-    let dims = tensor.dims();
-    let rows = dims[0];
-    let cols = dims[1];
-    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
-    let data = row_major
-        .buffer()
-        .as_slice()
-        .ok_or_else(|| TensorTrainError::InvalidOperation {
-            message: format!("{op} returned non-CPU tensor unexpectedly"),
-        })?;
+    let rows = tensor.shape[0];
+    let cols = tensor.shape[1];
+    let data = tensor_to_row_major_vec(tensor);
 
     let mut matrix = zeros(rows, cols);
     for i in 0..rows {
@@ -67,15 +59,9 @@ where
 
 fn typed_real_values_to_f64<R>(tensor: &TypedTensor<R>, op: &'static str) -> Result<Vec<f64>>
 where
-    R: TfScalar + Copy + ToPrimitive,
+    R: TensorScalar + ToPrimitive,
 {
-    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
-    let data = row_major
-        .buffer()
-        .as_slice()
-        .ok_or_else(|| TensorTrainError::InvalidOperation {
-            message: format!("{op} returned non-CPU tensor unexpectedly"),
-        })?;
+    let data = tensor_to_row_major_vec(tensor);
     data.iter()
         .map(|value| {
             value
@@ -91,8 +77,8 @@ where
 
 fn svd_factorize_right_matrix<T>(matrix: &Matrix<T>) -> Result<(Matrix<T>, DiagMatrix, Matrix<T>)>
 where
-    T: TTScalar + Scalar + Default + ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
-    <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive + KeepCountScalar,
+    T: TTScalar + Scalar + Default + ComplexFloat + BackendLinalgScalar + Copy + 'static,
+    <T as TensorScalar>::Real: TensorScalar + ToPrimitive,
 {
     let rows = nrows(matrix);
     let cols = ncols(matrix);
@@ -109,12 +95,7 @@ where
         }
     }
 
-    let typed =
-        TypedTensor::from_slice(&data, &[rows, cols], MemoryOrder::RowMajor).map_err(|e| {
-            TensorTrainError::InvalidOperation {
-                message: format!("Failed to convert bond matrix to tenferro tensor: {e}"),
-            }
-        })?;
+    let typed = typed_tensor_from_row_major_slice(&data, &[rows, cols]);
     let decomp = svd_backend(&typed).map_err(|e| TensorTrainError::InvalidOperation {
         message: format!("Failed to compute Vidal bond SVD: {e}"),
     })?;
@@ -230,8 +211,8 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// Create a VidalTensorTrain from a regular TensorTrain
     pub fn from_tensor_train(tt: &TensorTrain<T>) -> Result<Self>
     where
-        T: ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
-        <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive + KeepCountScalar,
+        T: ComplexFloat + BackendLinalgScalar + Copy + 'static,
+        <T as TensorScalar>::Real: TensorScalar + ToPrimitive,
     {
         Self::from_tensor_train_with_partition(tt, 0..tt.len())
     }
@@ -242,8 +223,8 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
         partition: Range<usize>,
     ) -> Result<Self>
     where
-        T: ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
-        <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive + KeepCountScalar,
+        T: ComplexFloat + BackendLinalgScalar + Copy + 'static,
+        <T as TensorScalar>::Real: TensorScalar + ToPrimitive,
     {
         let n = tt.len();
         if n == 0 {
@@ -660,8 +641,8 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     /// Create an InverseTensorTrain from a regular TensorTrain
     pub fn from_tensor_train(tt: &TensorTrain<T>) -> Result<Self>
     where
-        T: ComplexFloat + BackendLinalgScalar + TfScalar + Copy + 'static,
-        <T as LinalgScalar>::Real: TfScalar + Copy + ToPrimitive + KeepCountScalar,
+        T: ComplexFloat + BackendLinalgScalar + Copy + 'static,
+        <T as TensorScalar>::Real: TensorScalar + ToPrimitive,
     {
         let vidal = VidalTensorTrain::from_tensor_train(tt)?;
         Self::from_vidal(&vidal)

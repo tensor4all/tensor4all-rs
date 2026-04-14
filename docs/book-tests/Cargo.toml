@@ -7,6 +7,8 @@ publish = false
 # This crate exists solely to test mdBook guide code examples.
 # Code blocks in the markdown files are tested as doctests via
 # `cargo test --doc -p book-tests --release`.
+# The standalone mdBook harness reuses this crate's resolved `--extern` flags
+# through `scripts/test-mdbook.sh`.
 
 [dependencies]
 tensor4all-core = { path = "../../crates/tensor4all-core" }

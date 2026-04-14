@@ -53,6 +53,8 @@ fn test_inner_wrong_with_nonstandard_index_order() {
     // inner(x, x) for both must be real, non-negative, and match dense norm²
     let inner_std = tt_std.inner(&tt_std);
     let inner_ns = tt_ns.inner(&tt_ns);
+    let norm_sq_std_tt = tt_std.norm_squared();
+    let norm_sq_ns_tt = tt_ns.norm_squared();
 
     eprintln!("inner std={:?}", inner_std);
     eprintln!("inner ns ={:?}", inner_ns);
@@ -66,6 +68,12 @@ fn test_inner_wrong_with_nonstandard_index_order() {
     assert!(
         (inner_std.real() - norm_sq_std).abs() / norm_sq_std < 1e-10,
         "std: inner mismatch"
+    );
+    assert!(
+        (norm_sq_std_tt - norm_sq_std).abs() / norm_sq_std < 1e-10,
+        "std: norm_squared mismatch: TT={:.6e}, dense={:.6e}",
+        norm_sq_std_tt,
+        norm_sq_std
     );
 
     assert!(
@@ -82,6 +90,12 @@ fn test_inner_wrong_with_nonstandard_index_order() {
         (inner_ns.real() - norm_sq_ns).abs() / norm_sq_ns < 1e-6,
         "ns: inner mismatch: TT={:.6e}, dense={:.6e}",
         inner_ns.real(),
+        norm_sq_ns
+    );
+    assert!(
+        (norm_sq_ns_tt - norm_sq_ns).abs() / norm_sq_ns < 1e-6,
+        "ns: norm_squared mismatch: TT={:.6e}, dense={:.6e}",
+        norm_sq_ns_tt,
         norm_sq_ns
     );
 }
@@ -117,6 +131,7 @@ fn test_inner_wrong_3site_nonstandard() {
     .unwrap();
 
     let inner = tt.inner(&tt);
+    let norm_sq_tt = tt.norm_squared();
     let dense = tt.to_dense().unwrap();
     let dense_norm_sq = dense.norm() * dense.norm();
 
@@ -136,6 +151,12 @@ fn test_inner_wrong_3site_nonstandard() {
         (inner.real() - dense_norm_sq).abs() / dense_norm_sq < 1e-6,
         "inner mismatch: TT={:.6e}, dense={:.6e}",
         inner.real(),
+        dense_norm_sq
+    );
+    assert!(
+        (norm_sq_tt - dense_norm_sq).abs() / dense_norm_sq < 1e-6,
+        "norm_squared mismatch: TT={:.6e}, dense={:.6e}",
+        norm_sq_tt,
         dense_norm_sq
     );
 }
@@ -177,6 +198,7 @@ fn test_inner_wrong_with_two_site_indices_per_site_nonstandard_order() {
     .unwrap();
 
     let inner = tt.inner(&tt);
+    let norm_sq_tt = tt.norm_squared();
     let dense = tt.to_dense().unwrap();
     let dense_norm_sq = dense.norm() * dense.norm();
 
@@ -189,6 +211,12 @@ fn test_inner_wrong_with_two_site_indices_per_site_nonstandard_order() {
         (inner.real() - dense_norm_sq).abs() / dense_norm_sq < 1e-10,
         "inner mismatch: TT={:.12e}, dense={:.12e}",
         inner.real(),
+        dense_norm_sq
+    );
+    assert!(
+        (norm_sq_tt - dense_norm_sq).abs() / dense_norm_sq < 1e-10,
+        "norm_squared mismatch: TT={:.12e}, dense={:.12e}",
+        norm_sq_tt,
         dense_norm_sq
     );
 }

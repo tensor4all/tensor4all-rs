@@ -10,8 +10,6 @@ use super::mpo::MPO;
 use super::site_mpo::SiteMPO;
 use super::types::{Tensor4, Tensor4Ops};
 use crate::einsum_helper::EinsumScalar;
-use tenferro_linalg::LinalgScalar;
-use tenferro_tensor::KeepCountScalar;
 
 /// Options for the variational fit algorithm
 #[derive(Debug, Clone)]
@@ -62,7 +60,6 @@ pub fn contract_fit<T: SVDScalar + EinsumScalar>(
 ) -> Result<MPO<T>>
 where
     <T as num_complex::ComplexFloat>::Real: Into<f64>,
-    <T as LinalgScalar>::Real: KeepCountScalar,
 {
     if mpo_a.len() != mpo_b.len() {
         return Err(MPOError::LengthMismatch {

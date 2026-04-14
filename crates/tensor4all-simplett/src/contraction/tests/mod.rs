@@ -1,7 +1,8 @@
 use super::*;
-use crate::einsum_helper::{einsum_tensors, EinsumScalar};
+use crate::einsum_helper::{
+    einsum_tensors, tensor_to_row_major_vec, typed_tensor_from_row_major_slice, EinsumScalar,
+};
 use crate::types::{tensor3_zeros, Tensor3};
-use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
 
 #[test]
 fn test_dot_constant() {
@@ -150,13 +151,9 @@ fn test_dot_three_sites() {
 
 #[test]
 fn test_einsum_tensors_matmul() {
-    let a = TfTensor::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::RowMajor).unwrap();
-    let b = TfTensor::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], MemoryOrder::RowMajor).unwrap();
+    let a = typed_tensor_from_row_major_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let b = typed_tensor_from_row_major_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
 
     let c = einsum_tensors("ij,jk->ik", &[&a, &b]);
-    let c_row_major = c.contiguous(MemoryOrder::RowMajor);
-    assert_eq!(
-        c_row_major.buffer().as_slice().unwrap(),
-        &[19.0, 22.0, 43.0, 50.0]
-    );
+    assert_eq!(tensor_to_row_major_vec(&c), &[19.0, 22.0, 43.0, 50.0]);
 }

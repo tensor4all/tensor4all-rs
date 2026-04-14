@@ -12,7 +12,7 @@ categories = ["science", "mathematics"]
 [features]
 default = ["backend-tenferro"]
 backend-tenferro = []
-einsum-dispatch-profile = ["tenferro-einsum/profile-dispatch"]
+einsum-dispatch-profile = []
 
 [dependencies]
 num-complex.workspace = true
@@ -25,9 +25,7 @@ tenferro.workspace = true
 tenferro-algebra.workspace = true
 tenferro-device.workspace = true
 tenferro-einsum.workspace = true
-tenferro-prims.workspace = true
 tenferro-tensor.workspace = true
-tenferro-linalg.workspace = true
 
 [dev-dependencies]
 approx.workspace = true

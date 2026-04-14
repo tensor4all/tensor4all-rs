@@ -36,7 +36,7 @@ pub type Matrix2<T> = crate::tensor::Tensor2<T>;
 ///
 /// This is a shared utility used across multiple MPO modules.
 #[inline]
-pub(crate) fn matrix2_zeros<T: tenferro_algebra::Scalar + Clone + Default>(
+pub(crate) fn matrix2_zeros<T: crate::traits::TTScalar + Default>(
     rows: usize,
     cols: usize,
 ) -> Matrix2<T> {

@@ -11,8 +11,6 @@ use super::mpo::MPO;
 use super::types::{tensor4_zeros, Tensor4, Tensor4Ops};
 use super::{matrix2_zeros, Matrix2};
 use crate::einsum_helper::EinsumScalar;
-use tenferro_linalg::LinalgScalar;
-use tenferro_tensor::KeepCountScalar;
 
 /// Perform naive contraction of two MPOs
 ///
@@ -40,7 +38,6 @@ pub fn contract_naive<T: SVDScalar + EinsumScalar>(
 ) -> Result<MPO<T>>
 where
     <T as num_complex::ComplexFloat>::Real: Into<f64>,
-    <T as LinalgScalar>::Real: KeepCountScalar,
 {
     if mpo_a.len() != mpo_b.len() {
         return Err(MPOError::LengthMismatch {
@@ -96,7 +93,6 @@ where
 fn compress_mpo<T: SVDScalar>(mpo: &mut MPO<T>, options: &ContractionOptions) -> Result<()>
 where
     <T as num_complex::ComplexFloat>::Real: Into<f64>,
-    <T as LinalgScalar>::Real: KeepCountScalar,
 {
     if mpo.len() <= 1 {
         return Ok(());

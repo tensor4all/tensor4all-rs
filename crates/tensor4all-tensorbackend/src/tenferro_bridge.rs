@@ -1,47 +1,25 @@
-//! Runtime bridge for tenferro-backed execution.
-//!
-//! This module keeps tensor4all's storage/materialization boundary separate
-//! from the canonical compute object: [`tenferro::Tensor`].
+//! Bridge helpers between tensor4all storage snapshots and tenferro tensors.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
-use num_complex::Complex64;
-use tenferro::{set_default_runtime, RuntimeContext, ScalarType, Tensor as NativeTensor};
-use tenferro_prims::CpuContext;
-use tenferro_tensor::{MemoryOrder, Tensor as TypedTensor};
+use anyhow::{anyhow, ensure, Result};
+use num_complex::{Complex32, Complex64};
+use tenferro::eager_einsum::eager_einsum;
+use tenferro::{DType, Tensor as NativeTensor, TensorBackend};
 
 use crate::any_scalar::promote_scalar_native;
+use crate::context::with_default_backend;
+use crate::storage::Storage;
 #[cfg(test)]
 use crate::storage::StorageRepr;
-use crate::storage::{NativePayload, Storage};
 use crate::tensor_element::TensorElement;
 use crate::AnyScalar;
+
 #[cfg(test)]
 use std::cell::Cell;
-
-/// Runtime kind for tenferro execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeKind {
-    /// CPU runtime.
-    Cpu,
-    /// CUDA runtime (reserved).
-    Cuda,
-    /// ROCm runtime (reserved).
-    Rocm,
-}
-
-struct CachedCpuContext {
-    cpu_threads: usize,
-    ctx: CpuContext,
-}
-
-struct CachedCpuContextLease {
-    cached: Option<CachedCpuContext>,
-}
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum NativeEinsumPath {
@@ -50,10 +28,9 @@ enum NativeEinsumPath {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct NativeOperandSignature {
-    dims: Vec<usize>,
+    shape: Vec<usize>,
     ids: Vec<u32>,
-    is_dense: bool,
-    is_diag: bool,
+    dtype: DType,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -70,87 +47,13 @@ struct NativeEinsumProfileEntry {
 }
 
 thread_local! {
-    static CACHED_CPU_CONTEXT: RefCell<Option<CachedCpuContext>> = const { RefCell::new(None) };
     static NATIVE_EINSUM_PROFILE_STATE: RefCell<HashMap<NativeEinsumSignature, NativeEinsumProfileEntry>> =
         RefCell::new(HashMap::new());
 }
 
 #[cfg(test)]
 thread_local! {
-    static DEFAULT_RUNTIME_INSTALLS: Cell<usize> = const { Cell::new(0) };
-    static CPU_CONTEXT_INSTALLS: Cell<usize> = const { Cell::new(0) };
     static FORCE_NATIVE_EINSUM_PROFILE: Cell<bool> = const { Cell::new(false) };
-}
-
-#[cfg(test)]
-fn note_default_runtime_install() {
-    DEFAULT_RUNTIME_INSTALLS.with(|count| count.set(count.get() + 1));
-}
-
-#[cfg(not(test))]
-fn note_default_runtime_install() {}
-
-#[cfg(test)]
-fn note_cpu_context_install() {
-    CPU_CONTEXT_INSTALLS.with(|count| count.set(count.get() + 1));
-}
-
-#[cfg(not(test))]
-fn note_cpu_context_install() {}
-
-#[cfg(test)]
-pub(crate) fn reset_runtime_caches_for_tests() {
-    CACHED_CPU_CONTEXT.with(|slot| {
-        slot.borrow_mut().take();
-    });
-    NATIVE_EINSUM_PROFILE_STATE.with(|state| state.borrow_mut().clear());
-    DEFAULT_RUNTIME_INSTALLS.with(|count| count.set(0));
-    CPU_CONTEXT_INSTALLS.with(|count| count.set(0));
-    FORCE_NATIVE_EINSUM_PROFILE.with(|slot| slot.set(false));
-}
-
-#[cfg(test)]
-pub(crate) fn default_runtime_install_count_for_tests() -> usize {
-    DEFAULT_RUNTIME_INSTALLS.with(Cell::get)
-}
-
-#[cfg(test)]
-pub(crate) fn cpu_context_install_count_for_tests() -> usize {
-    CPU_CONTEXT_INSTALLS.with(Cell::get)
-}
-
-fn parse_runtime_kind() -> RuntimeKind {
-    match env::var("T4A_TENFERRO_RUNTIME") {
-        Ok(value) => match value.to_ascii_lowercase().as_str() {
-            "cpu" => RuntimeKind::Cpu,
-            "cuda" => RuntimeKind::Cuda,
-            "rocm" => RuntimeKind::Rocm,
-            _ => RuntimeKind::Cpu,
-        },
-        Err(_) => RuntimeKind::Cpu,
-    }
-}
-
-fn cpu_threads_from_env_value(value: Option<&str>) -> Result<usize> {
-    match value {
-        Some(raw) => {
-            let parsed = raw
-                .parse::<usize>()
-                .map_err(|e| anyhow!("T4A_TENFERRO_CPU_THREADS must be a positive integer: {e}"))?;
-            if parsed == 0 {
-                return Err(anyhow!(
-                    "T4A_TENFERRO_CPU_THREADS must be >= 1 when explicitly set"
-                ));
-            }
-            Ok(parsed)
-        }
-        None => Ok(CpuContext::default_num_threads()),
-    }
-}
-
-fn cpu_threads() -> Result<usize> {
-    let raw = env::var("T4A_TENFERRO_CPU_THREADS").ok();
-    cpu_threads_from_env_value(raw.as_deref())
 }
 
 fn native_einsum_profile_enabled() -> bool {
@@ -166,20 +69,10 @@ pub(crate) fn set_native_einsum_profile_enabled_for_tests(enabled: bool) {
     FORCE_NATIVE_EINSUM_PROFILE.with(|slot| slot.set(enabled));
 }
 
-fn native_operand_signature(tensor: &NativeTensor, ids: &[u32]) -> NativeOperandSignature {
-    NativeOperandSignature {
-        dims: tensor.dims().to_vec(),
-        ids: ids.to_vec(),
-        is_dense: tensor.is_dense(),
-        is_diag: tensor.is_diag(),
-    }
-}
-
 fn record_native_einsum_profile(
     path: NativeEinsumPath,
     operands: &[(&NativeTensor, &[usize])],
-    input_ids_u32: &[Vec<u32>],
-    output_ids_u32: &[u32],
+    output_ids: &[u32],
     elapsed: Duration,
 ) {
     if !native_einsum_profile_enabled() {
@@ -189,10 +82,13 @@ fn record_native_einsum_profile(
         path,
         operands: operands
             .iter()
-            .zip(input_ids_u32.iter())
-            .map(|((tensor, _), ids)| native_operand_signature(tensor, ids))
+            .map(|(tensor, ids)| NativeOperandSignature {
+                shape: tensor.shape().to_vec(),
+                ids: ids.iter().map(|&id| id as u32).collect(),
+                dtype: tensor.dtype(),
+            })
             .collect(),
-        output_ids: output_ids_u32.to_vec(),
+        output_ids: output_ids.to_vec(),
     };
     NATIVE_EINSUM_PROFILE_STATE.with(|state| {
         let mut state = state.borrow_mut();
@@ -233,226 +129,120 @@ pub fn print_and_reset_native_einsum_profile() {
             );
             for operand in signature.operands {
                 eprintln!(
-                    "     dims={:?} ids={:?} dense={} diag={}",
-                    operand.dims, operand.ids, operand.is_dense, operand.is_diag,
+                    "     shape={:?} ids={:?} dtype={:?}",
+                    operand.shape, operand.ids, operand.dtype
                 );
             }
         }
     });
 }
 
-fn retry_with_default_runtime_if_needed<R>(
-    op: &'static str,
-    f: impl FnOnce() -> Result<R>,
-) -> Result<R> {
-    with_default_runtime(op, f)
-}
-
-/// Run a typed tenferro op against the currently selected runtime.
-pub fn with_tenferro_ctx<R>(
-    op: &'static str,
-    f: impl FnOnce(&mut CpuContext) -> Result<R>,
-) -> Result<R> {
-    match parse_runtime_kind() {
-        RuntimeKind::Cpu => CACHED_CPU_CONTEXT.with(|slot| {
-            let cpu_threads = cpu_threads()?;
-            let mut slot = slot.borrow_mut();
-            let recreate = slot
-                .as_ref()
-                .is_none_or(|cached| cached.cpu_threads != cpu_threads);
-            let cached = if recreate {
-                slot.take();
-                note_cpu_context_install();
-                CachedCpuContext {
-                    cpu_threads,
-                    ctx: CpuContext::new(cpu_threads),
-                }
-            } else {
-                slot.take()
-                    .ok_or_else(|| anyhow!("{op}: missing cached CPU context"))?
-            };
-            drop(slot);
-
-            let mut lease = CachedCpuContextLease {
-                cached: Some(cached),
-            };
-            f(lease.ctx_mut())
-        }),
-        RuntimeKind::Cuda => Err(anyhow!(
-            "{op}: CUDA runtime is not yet wired in tensor4all tenferro backend"
-        )),
-        RuntimeKind::Rocm => Err(anyhow!(
-            "{op}: ROCm runtime is not yet wired in tensor4all tenferro backend"
-        )),
+fn common_dtype(dtypes: &[DType]) -> DType {
+    let has_f64 = dtypes.contains(&DType::F64);
+    let has_c64 = dtypes.contains(&DType::C64);
+    let has_c32 = dtypes.contains(&DType::C32);
+    let has_complex = has_c64 || has_c32;
+    if has_c64 || (has_f64 && has_complex) {
+        DType::C64
+    } else if has_c32 {
+        DType::C32
+    } else if has_f64 {
+        DType::F64
+    } else {
+        DType::F32
     }
 }
 
-pub(crate) fn with_default_runtime<R>(
-    op: &'static str,
-    f: impl FnOnce() -> Result<R>,
-) -> Result<R> {
-    match parse_runtime_kind() {
-        RuntimeKind::Cpu => {
-            let cpu_threads = cpu_threads()?;
-            note_default_runtime_install();
-            let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(cpu_threads)));
-            f()
-        }
-        RuntimeKind::Cuda => Err(anyhow!(
-            "{op}: CUDA runtime is not yet wired in tensor4all tenferro backend"
-        )),
-        RuntimeKind::Rocm => Err(anyhow!(
-            "{op}: ROCm runtime is not yet wired in tensor4all tenferro backend"
-        )),
+fn convert_tensor(tensor: &NativeTensor, to: DType) -> Result<NativeTensor> {
+    if tensor.dtype() == to {
+        return Ok(tensor.clone());
     }
+    with_default_backend(|backend| backend.with_exec_session(|exec| exec.convert(tensor, to)))
+        .map_err(|e| anyhow!("tensor conversion to {to:?} failed: {e}"))
 }
 
-impl CachedCpuContextLease {
-    fn ctx_mut(&mut self) -> &mut CpuContext {
-        &mut self
-            .cached
-            .as_mut()
-            .expect("cached CPU context lease must contain a context")
-            .ctx
+fn ids_to_subscript(ids: &[u32]) -> Result<String> {
+    const LETTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let mut out = String::with_capacity(ids.len());
+    for &id in ids {
+        let idx = usize::try_from(id).unwrap_or(usize::MAX);
+        let letter = LETTERS
+            .get(idx)
+            .ok_or_else(|| anyhow!("einsum label {id} exceeds supported label range"))?;
+        out.push(char::from(*letter));
     }
+    Ok(out)
 }
 
-impl Drop for CachedCpuContextLease {
-    fn drop(&mut self) {
-        if let Some(cached) = self.cached.take() {
-            CACHED_CPU_CONTEXT.with(|slot| {
-                *slot.borrow_mut() = Some(cached);
-            });
-        }
-    }
-}
-
-fn native_tensor_from_f64_payload(payload: NativePayload<f64>) -> Result<NativeTensor> {
-    let typed = TypedTensor::from_slice(
-        &payload.data,
-        &payload.payload_dims,
-        MemoryOrder::ColumnMajor,
-    )
-    .map_err(|e| anyhow!("failed to build f64 tensor from storage payload: {e}"))?;
-    let _ = payload.axis_classes;
-    Ok(NativeTensor::from(typed))
-}
-
-fn native_tensor_from_c64_payload(payload: NativePayload<Complex64>) -> Result<NativeTensor> {
-    let typed = TypedTensor::from_slice(
-        &payload.data,
-        &payload.payload_dims,
-        MemoryOrder::ColumnMajor,
-    )
-    .map_err(|e| anyhow!("failed to build c64 tensor from storage payload: {e}"))?;
-    let _ = payload.axis_classes;
-    Ok(NativeTensor::from(typed))
-}
-
-/// Build a native dense tensor from column-major boundary data.
-pub fn dense_native_tensor_from_col_major<T: TensorElement>(
-    data: &[T],
-    logical_dims: &[usize],
-) -> Result<NativeTensor> {
-    T::dense_native_tensor_from_col_major(data, logical_dims)
-}
-
-/// Build a native diagonal tensor from column-major diagonal payload data.
-pub fn diag_native_tensor_from_col_major<T: TensorElement>(
-    data: &[T],
-    logical_rank: usize,
-) -> Result<NativeTensor> {
-    T::diag_native_tensor_from_col_major(data, logical_rank)
-}
-
-fn labels_to_notation(inputs: &[Vec<usize>], output: &[usize]) -> Result<String> {
-    let mut id_to_char = HashMap::new();
-    let mut next_code = 'a' as u32;
-
-    let mut alloc_label = |id: usize| -> Result<char> {
-        if let Some(&ch) = id_to_char.get(&id) {
-            return Ok(ch);
-        }
-        loop {
-            let Some(ch) = char::from_u32(next_code) else {
-                return Err(anyhow!("ran out of einsum label codepoints"));
-            };
-            next_code += 1;
-            if ch.is_alphanumeric() {
-                id_to_char.insert(id, ch);
-                return Ok(ch);
-            }
-        }
-    };
-
-    let input_terms: Result<Vec<String>> = inputs
+fn build_einsum_subscripts(operands: &[&[u32]], output_ids: &[u32]) -> Result<String> {
+    let inputs = operands
         .iter()
-        .map(|ids| ids.iter().map(|&id| alloc_label(id)).collect())
-        .collect();
-    let output_term: Result<String> = output.iter().map(|&id| alloc_label(id)).collect();
-
-    Ok(format!("{}->{}", input_terms?.join(","), output_term?))
+        .map(|ids| ids_to_subscript(ids))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(format!(
+        "{}->{}",
+        inputs.join(","),
+        ids_to_subscript(output_ids)?
+    ))
 }
 
-fn labels_to_u32(labels: &[usize], op: &'static str) -> Result<Vec<u32>> {
-    labels
-        .iter()
-        .map(|&label| {
-            u32::try_from(label).map_err(|_| anyhow!("{op}: label {label} exceeds u32 range"))
-        })
-        .collect()
-}
-
-fn build_binary_einsum_ids(
-    rank_a: usize,
+/// Build native einsum ids for a binary contraction.
+pub(crate) fn build_binary_einsum_ids(
+    lhs_rank: usize,
     axes_a: &[usize],
-    rank_b: usize,
+    rhs_rank: usize,
     axes_b: &[usize],
-) -> Result<(Vec<usize>, Vec<usize>, Vec<usize>)> {
-    if axes_a.len() != axes_b.len() {
-        return Err(anyhow!(
-            "binary contraction axes length mismatch: lhs={}, rhs={}",
-            axes_a.len(),
-            axes_b.len()
-        ));
-    }
+) -> Result<(Vec<u32>, Vec<u32>, Vec<u32>)> {
+    ensure!(
+        axes_a.len() == axes_b.len(),
+        "contract axis length mismatch: lhs {:?}, rhs {:?}",
+        axes_a,
+        axes_b
+    );
 
-    let mut lhs_ids = vec![usize::MAX; rank_a];
-    let mut rhs_ids = vec![usize::MAX; rank_b];
-    let mut next_id = 0usize;
+    let mut lhs_ids = vec![u32::MAX; lhs_rank];
+    let mut rhs_ids = vec![u32::MAX; rhs_rank];
+    let mut next_id = 0u32;
+
+    let mut seen_lhs = vec![false; lhs_rank];
+    let mut seen_rhs = vec![false; rhs_rank];
 
     for (&lhs_axis, &rhs_axis) in axes_a.iter().zip(axes_b.iter()) {
-        if lhs_axis >= rank_a || rhs_axis >= rank_b {
-            return Err(anyhow!(
-                "binary contraction axis out of range: lhs_axis={}, rhs_axis={}, lhs_rank={}, rhs_rank={}",
-                lhs_axis,
-                rhs_axis,
-                rank_a,
-                rank_b
-            ));
-        }
-        if lhs_ids[lhs_axis] != usize::MAX || rhs_ids[rhs_axis] != usize::MAX {
-            return Err(anyhow!(
-                "duplicate contraction axis in native binary contraction: lhs_axis={}, rhs_axis={}",
-                lhs_axis,
-                rhs_axis
-            ));
-        }
+        ensure!(
+            lhs_axis < lhs_rank,
+            "lhs contract axis {lhs_axis} out of range"
+        );
+        ensure!(
+            rhs_axis < rhs_rank,
+            "rhs contract axis {rhs_axis} out of range"
+        );
+        ensure!(
+            !seen_lhs[lhs_axis],
+            "duplicate lhs contract axis {lhs_axis}"
+        );
+        ensure!(
+            !seen_rhs[rhs_axis],
+            "duplicate rhs contract axis {rhs_axis}"
+        );
+        seen_lhs[lhs_axis] = true;
+        seen_rhs[rhs_axis] = true;
         lhs_ids[lhs_axis] = next_id;
         rhs_ids[rhs_axis] = next_id;
         next_id += 1;
     }
 
-    let mut output_ids = Vec::with_capacity(rank_a + rank_b - 2 * axes_a.len());
-    for slot in &mut lhs_ids {
-        if *slot == usize::MAX {
+    let mut output_ids = Vec::with_capacity(lhs_rank + rhs_rank - 2 * axes_a.len());
+    for (axis, slot) in lhs_ids.iter_mut().enumerate() {
+        if *slot == u32::MAX {
             *slot = next_id;
             output_ids.push(next_id);
             next_id += 1;
+        } else {
+            let _ = axis;
         }
     }
     for slot in &mut rhs_ids {
-        if *slot == usize::MAX {
+        if *slot == u32::MAX {
             *slot = next_id;
             output_ids.push(next_id);
             next_id += 1;
@@ -462,392 +252,474 @@ fn build_binary_einsum_ids(
     Ok((lhs_ids, rhs_ids, output_ids))
 }
 
-/// Convert legacy [`Storage`] into a primal-mode [`tenferro::Tensor`].
+/// Build a dense native tensor from column-major data.
+pub fn dense_native_tensor_from_col_major<T: TensorElement>(
+    data: &[T],
+    logical_dims: &[usize],
+) -> Result<NativeTensor> {
+    T::dense_native_tensor_from_col_major(data, logical_dims)
+}
+
+/// Build a dense native tensor whose logical values are diagonal.
+pub fn diag_native_tensor_from_col_major<T: TensorElement>(
+    data: &[T],
+    logical_rank: usize,
+) -> Result<NativeTensor> {
+    T::diag_native_tensor_from_col_major(data, logical_rank)
+}
+
+/// Convert storage to a dense native tensor.
 pub fn storage_to_native_tensor(storage: &Storage, logical_dims: &[usize]) -> Result<NativeTensor> {
-    if !storage.is_dense() {
-        let dense = storage.to_dense_storage(logical_dims);
-        return storage_to_native_tensor(&dense, logical_dims);
-    }
     if storage.is_c64() {
-        native_tensor_from_c64_payload(storage.native_payload_c64(logical_dims)?)
+        dense_native_tensor_from_col_major(
+            &storage
+                .to_dense_c64_col_major_vec(logical_dims)
+                .map_err(|e| anyhow!("dense c64 materialization failed: {e}"))?,
+            logical_dims,
+        )
     } else {
-        native_tensor_from_f64_payload(storage.native_payload_f64(logical_dims)?)
+        dense_native_tensor_from_col_major(
+            &storage
+                .to_dense_f64_col_major_vec(logical_dims)
+                .map_err(|e| anyhow!("dense f64 materialization failed: {e}"))?,
+            logical_dims,
+        )
     }
 }
 
-/// Materialize the primal payload of a native tensor back into [`Storage`].
-///
-/// AD metadata is intentionally dropped at this bridge boundary.
+/// Materialize a native tensor into dense storage.
 pub fn native_tensor_primal_to_storage(tensor: &NativeTensor) -> Result<Storage> {
-    match tensor.scalar_type() {
-        ScalarType::F32 | ScalarType::C32 => Err(anyhow!(
-            "tensor4all native bridge currently supports only f64/Complex64 tensors"
-        )),
-        ScalarType::F64 => {
-            if tensor.is_diag() && tensor.ndim() >= 2 {
-                Storage::from_diag_col_major(
-                    <f64 as TensorElement>::diag_values_from_native_temp(tensor)?,
-                    tensor.ndim(),
-                )
-            } else {
-                Storage::from_dense_col_major(
-                    <f64 as TensorElement>::dense_values_from_native_col_major(tensor)?,
-                    tensor.dims(),
-                )
-            }
-        }
-        ScalarType::C64 => {
-            if tensor.is_diag() && tensor.ndim() >= 2 {
-                Storage::from_diag_col_major(
-                    <Complex64 as TensorElement>::diag_values_from_native_temp(tensor)?,
-                    tensor.ndim(),
-                )
-            } else {
-                Storage::from_dense_col_major(
-                    <Complex64 as TensorElement>::dense_values_from_native_col_major(tensor)?,
-                    tensor.dims(),
-                )
-            }
-        }
+    match tensor.dtype() {
+        DType::F32 => Storage::from_dense_col_major(
+            tensor
+                .as_slice::<f32>()
+                .ok_or_else(|| anyhow!("failed to read f32 native tensor"))?
+                .iter()
+                .map(|&value| value as f64)
+                .collect::<Vec<_>>(),
+            tensor.shape(),
+        ),
+        DType::F64 => Storage::from_dense_col_major(
+            tensor
+                .as_slice::<f64>()
+                .ok_or_else(|| anyhow!("failed to read f64 native tensor"))?
+                .to_vec(),
+            tensor.shape(),
+        ),
+        DType::C32 => Storage::from_dense_col_major(
+            tensor
+                .as_slice::<Complex32>()
+                .ok_or_else(|| anyhow!("failed to read c32 native tensor"))?
+                .iter()
+                .map(|&value| Complex64::new(value.re as f64, value.im as f64))
+                .collect::<Vec<_>>(),
+            tensor.shape(),
+        ),
+        DType::C64 => Storage::from_dense_col_major(
+            tensor
+                .as_slice::<Complex64>()
+                .ok_or_else(|| anyhow!("failed to read c64 native tensor"))?
+                .to_vec(),
+            tensor.shape(),
+        ),
+    }
+    .map_err(|e| anyhow!("native tensor snapshot materialization failed: {e}"))
+}
+
+/// Materialize dense f64 values from a native tensor.
+pub fn native_tensor_primal_to_dense_f64_col_major(tensor: &NativeTensor) -> Result<Vec<f64>> {
+    match tensor.dtype() {
+        DType::F32 => Ok(tensor
+            .as_slice::<f32>()
+            .ok_or_else(|| anyhow!("failed to read f32 native tensor"))?
+            .iter()
+            .map(|&value| value as f64)
+            .collect()),
+        DType::F64 => <f64 as TensorElement>::dense_values_from_native_col_major(tensor),
+        other => Err(anyhow!("expected real native tensor, got dtype {other:?}")),
     }
 }
 
-/// Materialize the dense primal payload of a native tensor as column-major `f64`.
-pub fn native_tensor_primal_to_dense_f64_col_major(tensor: &NativeTensor) -> Result<Vec<f64>> {
-    retry_with_default_runtime_if_needed("native_tensor_primal_to_dense_f64_col_major", || {
-        <f64 as TensorElement>::dense_values_from_native_col_major(tensor)
-    })
-}
-
-/// Materialize the dense primal payload of a native tensor as column-major `Complex64`.
+/// Materialize dense Complex64 values from a native tensor.
 pub fn native_tensor_primal_to_dense_c64_col_major(
     tensor: &NativeTensor,
 ) -> Result<Vec<Complex64>> {
-    retry_with_default_runtime_if_needed("native_tensor_primal_to_dense_c64_col_major", || {
-        <Complex64 as TensorElement>::dense_values_from_native_col_major(tensor)
-    })
+    match tensor.dtype() {
+        DType::C32 => Ok(tensor
+            .as_slice::<Complex32>()
+            .ok_or_else(|| anyhow!("failed to read c32 native tensor"))?
+            .iter()
+            .map(|&value| Complex64::new(value.re as f64, value.im as f64))
+            .collect()),
+        DType::C64 => <Complex64 as TensorElement>::dense_values_from_native_col_major(tensor),
+        other => Err(anyhow!(
+            "expected complex native tensor, got dtype {other:?}"
+        )),
+    }
 }
 
-/// Materialize the dense primal payload of a native tensor (generic over element type).
-///
-/// This is the generic equivalent of [`native_tensor_primal_to_dense_f64_col_major`]
-/// and [`native_tensor_primal_to_dense_c64_col_major`].
+/// Materialize dense column-major values from a native tensor.
 pub fn native_tensor_primal_to_dense_col_major<T: TensorElement>(
     tensor: &NativeTensor,
 ) -> Result<Vec<T>> {
-    retry_with_default_runtime_if_needed("native_tensor_primal_to_dense_col_major", || {
-        T::dense_values_from_native_col_major(tensor)
-    })
+    T::dense_values_from_native_col_major(tensor)
 }
 
-/// Materialize the diagonal payload of a native diagonal tensor as `f64`.
+/// Extract the diagonal payload from a real native tensor.
 pub fn native_tensor_primal_to_diag_f64(tensor: &NativeTensor) -> Result<Vec<f64>> {
-    retry_with_default_runtime_if_needed("native_tensor_primal_to_diag_f64", || {
-        <f64 as TensorElement>::diag_values_from_native_temp(tensor)
-    })
-}
-
-/// Materialize the diagonal payload of a native diagonal tensor as `Complex64`.
-pub fn native_tensor_primal_to_diag_c64(tensor: &NativeTensor) -> Result<Vec<Complex64>> {
-    retry_with_default_runtime_if_needed("native_tensor_primal_to_diag_c64", || {
-        <Complex64 as TensorElement>::diag_values_from_native_temp(tensor)
-    })
-}
-
-/// Extract the forward tangent of a native tensor as a primal tensor.
-pub fn tangent_native_tensor(tensor: &NativeTensor) -> Option<NativeTensor> {
-    let _ = tensor;
-    None
-}
-
-/// Reshape a native tensor using tensor4all's column-major semantics.
-pub fn reshape_col_major_native_tensor(
-    tensor: &NativeTensor,
-    new_dims: &[usize],
-) -> Result<NativeTensor> {
-    match tensor.scalar_type() {
-        ScalarType::F32 | ScalarType::C32 => Err(anyhow!(
-            "tensor4all native bridge currently supports only f64/Complex64 tensors"
-        )),
-        ScalarType::F64 => dense_native_tensor_from_col_major(
-            &native_tensor_primal_to_dense_col_major::<f64>(tensor)?,
-            new_dims,
-        ),
-        ScalarType::C64 => dense_native_tensor_from_col_major(
-            &native_tensor_primal_to_dense_col_major::<Complex64>(tensor)?,
-            new_dims,
-        ),
+    match tensor.dtype() {
+        DType::F32 => {
+            let promoted = convert_tensor(tensor, DType::F64)?;
+            <f64 as TensorElement>::diag_values_from_native_temp(&promoted)
+        }
+        DType::F64 => <f64 as TensorElement>::diag_values_from_native_temp(tensor),
+        other => Err(anyhow!("expected real native tensor, got dtype {other:?}")),
     }
 }
 
-/// Compute native QR while preserving AD metadata when supported by upstream.
-pub fn qr_native_tensor(tensor: &NativeTensor) -> Result<(NativeTensor, NativeTensor)> {
-    with_default_runtime("native_qr", || {
-        let out = tensor.qr().map_err(|e| anyhow!("native qr failed: {e}"))?;
-        Ok((out.q, out.r))
-    })
+/// Extract the diagonal payload from a complex native tensor.
+pub fn native_tensor_primal_to_diag_c64(tensor: &NativeTensor) -> Result<Vec<Complex64>> {
+    match tensor.dtype() {
+        DType::C32 => {
+            let promoted = convert_tensor(tensor, DType::C64)?;
+            <Complex64 as TensorElement>::diag_values_from_native_temp(&promoted)
+        }
+        DType::C64 => <Complex64 as TensorElement>::diag_values_from_native_temp(tensor),
+        other => Err(anyhow!(
+            "expected complex native tensor, got dtype {other:?}"
+        )),
+    }
 }
 
-/// Compute native SVD while preserving AD metadata when supported by upstream.
+/// Reshape a native tensor without changing its column-major linearization.
+pub fn reshape_col_major_native_tensor(
+    tensor: &NativeTensor,
+    logical_dims: &[usize],
+) -> Result<NativeTensor> {
+    with_default_backend(|backend| tensor.reshape(logical_dims, backend))
+        .map_err(|e| anyhow!("native reshape failed: {e}"))
+}
+
+/// Compute a QR decomposition on a native tensor.
+pub fn qr_native_tensor(tensor: &NativeTensor) -> Result<(NativeTensor, NativeTensor)> {
+    with_default_backend(|backend| tensor.qr(backend)).map_err(|e| anyhow!("native QR failed: {e}"))
+}
+
+/// Compute an SVD on a native tensor.
 pub fn svd_native_tensor(
     tensor: &NativeTensor,
 ) -> Result<(NativeTensor, NativeTensor, NativeTensor)> {
-    with_default_runtime("native_svd", || {
-        let out = tensor
-            .svd(None)
-            .map_err(|e| anyhow!("native svd failed: {e}"))?;
-        Ok((out.u, out.s, out.vt))
-    })
+    with_default_backend(|backend| tensor.svd(backend))
+        .map_err(|e| anyhow!("native SVD failed: {e}"))
 }
 
-/// Sum all elements of a native tensor, preserving AD metadata.
+/// Sum all elements of a native tensor, returning a dynamic scalar.
 pub fn sum_native_tensor(tensor: &NativeTensor) -> Result<AnyScalar> {
-    with_default_runtime("native_sum", || {
-        let reduced = tensor
-            .sum()
-            .map_err(|e| anyhow!("native sum failed: {e}"))?;
-        AnyScalar::from_native(reduced)
-    })
+    let reduced = if tensor.shape().is_empty() {
+        tensor.clone()
+    } else {
+        let axes: Vec<usize> = (0..tensor.shape().len()).collect();
+        with_default_backend(|backend| tensor.reduce_sum(&axes, backend))
+            .map_err(|e| anyhow!("native sum failed: {e}"))?
+    };
+    AnyScalar::from_native(reduced)
 }
 
-fn supported_bridge_scalar_type(tensor: &NativeTensor, op: &'static str) -> Result<ScalarType> {
-    match tensor.scalar_type() {
-        ScalarType::F64 | ScalarType::C64 => Ok(tensor.scalar_type()),
-        ScalarType::F32 | ScalarType::C32 => Err(anyhow!(
-            "{op}: tensor4all native bridge currently supports only f64/Complex64 tensors"
-        )),
-    }
+/// Return the tangent tensor when present.
+///
+/// Plain `Tensor` values do not carry tangent storage, so this bridge returns
+/// `None`.
+pub fn tangent_native_tensor(_tensor: &NativeTensor) -> Option<NativeTensor> {
+    None
 }
 
-fn shared_tensor_scalar_type(
-    lhs: &NativeTensor,
-    rhs: &NativeTensor,
-    op: &'static str,
-) -> Result<ScalarType> {
-    let lhs_ty = supported_bridge_scalar_type(lhs, op)?;
-    let rhs_ty = supported_bridge_scalar_type(rhs, op)?;
-    if lhs_ty != rhs_ty {
-        return Err(anyhow!(
-            "{op}: native tensors must share a dtype, got lhs={lhs_ty:?}, rhs={rhs_ty:?}"
-        ));
-    }
-    Ok(lhs_ty)
-}
-
-fn common_operand_scalar_type(
-    operands: &[(&NativeTensor, &[usize])],
-    op: &'static str,
-) -> Result<ScalarType> {
-    let mut target = ScalarType::F64;
-    for (tensor, _) in operands {
-        match supported_bridge_scalar_type(tensor, op)? {
-            ScalarType::C64 => target = ScalarType::C64,
-            ScalarType::F64 => {}
-            ScalarType::F32 | ScalarType::C32 => unreachable!("unsupported dtype filtered above"),
-        }
-    }
-    Ok(target)
-}
-
-fn promote_detached_tensor_to_dtype(
-    tensor: &NativeTensor,
-    target: ScalarType,
-    op: &'static str,
-) -> Result<NativeTensor> {
-    let source = supported_bridge_scalar_type(tensor, op)?;
-    if source == target {
-        return Err(anyhow!(
-            "{op}: internal promotion bug, source and target dtypes already match"
-        ));
-    }
-    if tensor.requires_grad() {
-        return Err(anyhow!(
-            "{op}: cannot promote a reverse-tracked tensor from {source:?} to {target:?} without losing autodiff metadata"
-        ));
-    }
-    match (source, target) {
-        (ScalarType::F64, ScalarType::C64) => {
-            if tensor.is_diag() && tensor.ndim() >= 2 {
-                let diag = native_tensor_primal_to_diag_f64(tensor)?
-                    .into_iter()
-                    .map(|value| Complex64::new(value, 0.0))
-                    .collect::<Vec<_>>();
-                diag_native_tensor_from_col_major(&diag, tensor.ndim())
-            } else {
-                let dense = native_tensor_primal_to_dense_f64_col_major(tensor)?
-                    .into_iter()
-                    .map(|value| Complex64::new(value, 0.0))
-                    .collect::<Vec<_>>();
-                dense_native_tensor_from_col_major(&dense, tensor.dims())
-            }
-        }
-        (lhs, rhs) => Err(anyhow!(
-            "{op}: unsupported dtype promotion from {lhs:?} to {rhs:?}"
-        )),
-    }
-}
-
-/// Scale a native tensor with a tensor4all scalar while preserving AD metadata.
+/// Multiply a native tensor by a dynamic scalar.
 pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<NativeTensor> {
-    let scalar_native = promote_scalar_native(
-        scalar.as_native(),
-        supported_bridge_scalar_type(tensor, "native_scale")?,
-    )?;
-    let output_ids = (0..tensor.ndim()).collect::<Vec<_>>();
-    einsum_native_tensors(&[(&scalar_native, &[]), (tensor, &output_ids)], &output_ids)
+    let target = common_dtype(&[tensor.dtype(), scalar.as_native().dtype()]);
+    let tensor = convert_tensor(tensor, target)?;
+    let scalar = promote_scalar_native(scalar.as_native(), target)?;
+
+    match target {
+        DType::F32 => {
+            let factor = scalar
+                .as_slice::<f32>()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow!("failed to read promoted f32 scalar"))?;
+            let values = tensor
+                .as_slice::<f32>()
+                .ok_or_else(|| anyhow!("failed to read promoted f32 tensor"))?
+                .iter()
+                .map(|&value| value * factor)
+                .collect::<Vec<_>>();
+            Ok(NativeTensor::new(tensor.shape().to_vec(), values))
+        }
+        DType::F64 => {
+            let factor = scalar
+                .as_slice::<f64>()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow!("failed to read promoted f64 scalar"))?;
+            let values = tensor
+                .as_slice::<f64>()
+                .ok_or_else(|| anyhow!("failed to read promoted f64 tensor"))?
+                .iter()
+                .map(|&value| value * factor)
+                .collect::<Vec<_>>();
+            Ok(NativeTensor::new(tensor.shape().to_vec(), values))
+        }
+        DType::C32 => {
+            let factor = scalar
+                .as_slice::<Complex32>()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow!("failed to read promoted c32 scalar"))?;
+            let values = tensor
+                .as_slice::<Complex32>()
+                .ok_or_else(|| anyhow!("failed to read promoted c32 tensor"))?
+                .iter()
+                .map(|&value| value * factor)
+                .collect::<Vec<_>>();
+            Ok(NativeTensor::new(tensor.shape().to_vec(), values))
+        }
+        DType::C64 => {
+            let factor = scalar
+                .as_slice::<Complex64>()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow!("failed to read promoted c64 scalar"))?;
+            let values = tensor
+                .as_slice::<Complex64>()
+                .ok_or_else(|| anyhow!("failed to read promoted c64 tensor"))?
+                .iter()
+                .map(|&value| value * factor)
+                .collect::<Vec<_>>();
+            Ok(NativeTensor::new(tensor.shape().to_vec(), values))
+        }
+    }
 }
 
-/// Compute `a * lhs + b * rhs` on native tensors while preserving AD metadata.
+/// Compute `a * lhs + b * rhs`.
 pub fn axpby_native_tensor(
     lhs: &NativeTensor,
     a: &AnyScalar,
     rhs: &NativeTensor,
     b: &AnyScalar,
 ) -> Result<NativeTensor> {
-    let target = shared_tensor_scalar_type(lhs, rhs, "native_axpby")?;
-    let a_native = promote_scalar_native(a.as_native(), target)?;
-    let b_native = promote_scalar_native(b.as_native(), target)?;
-    let lhs_scaled = {
-        let output_ids = (0..lhs.ndim()).collect::<Vec<_>>();
-        einsum_native_tensors(&[(&a_native, &[]), (lhs, &output_ids)], &output_ids)?
-    };
-    let rhs_scaled = {
-        let output_ids = (0..rhs.ndim()).collect::<Vec<_>>();
-        einsum_native_tensors(&[(&b_native, &[]), (rhs, &output_ids)], &output_ids)?
-    };
-    with_default_runtime("native_axpby", || {
-        lhs_scaled
-            .add(&rhs_scaled)
-            .map_err(|e| anyhow!("native axpby failed: {e}"))
-    })
+    ensure!(
+        lhs.shape() == rhs.shape(),
+        "axpby requires matching tensor shapes, got lhs {:?} and rhs {:?}",
+        lhs.shape(),
+        rhs.shape()
+    );
+
+    let target = common_dtype(&[
+        lhs.dtype(),
+        rhs.dtype(),
+        a.as_native().dtype(),
+        b.as_native().dtype(),
+    ]);
+    let lhs = convert_tensor(lhs, target)?;
+    let rhs = convert_tensor(rhs, target)?;
+    let a = promote_scalar_native(a.as_native(), target)?;
+    let b = promote_scalar_native(b.as_native(), target)?;
+
+    match target {
+        DType::F32 => {
+            let a = a
+                .as_slice::<f32>()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow!("failed to read promoted f32 scalar a"))?;
+            let b = b
+                .as_slice::<f32>()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow!("failed to read promoted f32 scalar b"))?;
+            let lhs_values = lhs
+                .as_slice::<f32>()
+                .ok_or_else(|| anyhow!("failed to read promoted f32 lhs"))?;
+            let rhs_values = rhs
+                .as_slice::<f32>()
+                .ok_or_else(|| anyhow!("failed to read promoted f32 rhs"))?;
+            let values = lhs_values
+                .iter()
+                .zip(rhs_values.iter())
+                .map(|(&x, &y)| a * x + b * y)
+                .collect::<Vec<_>>();
+            Ok(NativeTensor::new(lhs.shape().to_vec(), values))
+        }
+        DType::F64 => {
+            let a = a
+                .as_slice::<f64>()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow!("failed to read promoted f64 scalar a"))?;
+            let b = b
+                .as_slice::<f64>()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow!("failed to read promoted f64 scalar b"))?;
+            let lhs_values = lhs
+                .as_slice::<f64>()
+                .ok_or_else(|| anyhow!("failed to read promoted f64 lhs"))?;
+            let rhs_values = rhs
+                .as_slice::<f64>()
+                .ok_or_else(|| anyhow!("failed to read promoted f64 rhs"))?;
+            let values = lhs_values
+                .iter()
+                .zip(rhs_values.iter())
+                .map(|(&x, &y)| a * x + b * y)
+                .collect::<Vec<_>>();
+            Ok(NativeTensor::new(lhs.shape().to_vec(), values))
+        }
+        DType::C32 => {
+            let a = a
+                .as_slice::<Complex32>()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow!("failed to read promoted c32 scalar a"))?;
+            let b = b
+                .as_slice::<Complex32>()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow!("failed to read promoted c32 scalar b"))?;
+            let lhs_values = lhs
+                .as_slice::<Complex32>()
+                .ok_or_else(|| anyhow!("failed to read promoted c32 lhs"))?;
+            let rhs_values = rhs
+                .as_slice::<Complex32>()
+                .ok_or_else(|| anyhow!("failed to read promoted c32 rhs"))?;
+            let values = lhs_values
+                .iter()
+                .zip(rhs_values.iter())
+                .map(|(&x, &y)| a * x + b * y)
+                .collect::<Vec<_>>();
+            Ok(NativeTensor::new(lhs.shape().to_vec(), values))
+        }
+        DType::C64 => {
+            let a = a
+                .as_slice::<Complex64>()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow!("failed to read promoted c64 scalar a"))?;
+            let b = b
+                .as_slice::<Complex64>()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow!("failed to read promoted c64 scalar b"))?;
+            let lhs_values = lhs
+                .as_slice::<Complex64>()
+                .ok_or_else(|| anyhow!("failed to read promoted c64 lhs"))?;
+            let rhs_values = rhs
+                .as_slice::<Complex64>()
+                .ok_or_else(|| anyhow!("failed to read promoted c64 rhs"))?;
+            let values = lhs_values
+                .iter()
+                .zip(rhs_values.iter())
+                .map(|(&x, &y)| a * x + b * y)
+                .collect::<Vec<_>>();
+            Ok(NativeTensor::new(lhs.shape().to_vec(), values))
+        }
+    }
 }
 
-/// Execute native structured einsum on multiple tensors.
+/// Execute an eager einsum over native tensors.
 pub fn einsum_native_tensors(
     operands: &[(&NativeTensor, &[usize])],
     output_ids: &[usize],
 ) -> Result<NativeTensor> {
-    if operands.is_empty() {
-        return Err(anyhow!("native einsum requires at least one operand"));
+    ensure!(
+        !operands.is_empty(),
+        "native einsum requires at least one operand"
+    );
+    for (tensor, ids) in operands {
+        ensure!(
+            tensor.shape().len() == ids.len(),
+            "einsum id list {:?} does not match tensor shape {:?}",
+            ids,
+            tensor.shape()
+        );
     }
 
-    let target = common_operand_scalar_type(operands, "native_einsum")?;
-    let promoted = operands
+    let target = common_dtype(
+        &operands
+            .iter()
+            .map(|(tensor, _)| tensor.dtype())
+            .collect::<Vec<_>>(),
+    );
+    let converted = operands
         .iter()
-        .map(|(tensor, _)| {
-            let source = supported_bridge_scalar_type(tensor, "native_einsum")?;
-            if source == target {
-                Ok(None)
-            } else {
-                promote_detached_tensor_to_dtype(tensor, target, "native_einsum").map(Some)
-            }
-        })
+        .map(|(tensor, _)| convert_tensor(tensor, target))
         .collect::<Result<Vec<_>>>()?;
+    let refs = converted.iter().collect::<Vec<_>>();
+    let subscripts = build_einsum_subscripts(
+        &operands
+            .iter()
+            .map(|(_, ids)| ids.iter().map(|&id| id as u32).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>(),
+        &output_ids.iter().map(|&id| id as u32).collect::<Vec<_>>(),
+    )?;
 
-    let input_ids_u32: Vec<Vec<u32>> = operands
-        .iter()
-        .map(|(_, ids)| labels_to_u32(ids, "native_einsum"))
-        .collect::<Result<_>>()?;
-    let output_ids_u32 = labels_to_u32(output_ids, "native_einsum")?;
-    let profile_started = native_einsum_profile_enabled().then(Instant::now);
-
-    let input_ids: Vec<Vec<usize>> = operands.iter().map(|(_, ids)| ids.to_vec()).collect();
-    let final_operands: Vec<&NativeTensor> = operands
-        .iter()
-        .zip(promoted.iter())
-        .map(|((tensor, _), promoted)| promoted.as_ref().unwrap_or(tensor))
-        .collect();
-    let notation = labels_to_notation(&input_ids, output_ids)?;
-
-    with_default_runtime("native_einsum", || {
-        let out = NativeTensor::einsum(&notation, &final_operands)
-            .map_err(|e| anyhow!("native einsum failed: {e}"))?;
-        if let Some(started) = profile_started.as_ref() {
-            record_native_einsum_profile(
-                NativeEinsumPath::FrontendFallback,
-                operands,
-                &input_ids_u32,
-                &output_ids_u32,
-                started.elapsed(),
-            );
-        }
-        Ok(out)
-    })
+    let started = Instant::now();
+    let result = with_default_backend(|backend| eager_einsum(backend, &refs, &subscripts))
+        .map_err(|e| anyhow!("native einsum failed: {e}"))?;
+    record_native_einsum_profile(
+        NativeEinsumPath::FrontendFallback,
+        operands,
+        &output_ids.iter().map(|&id| id as u32).collect::<Vec<_>>(),
+        started.elapsed(),
+    );
+    Ok(result)
 }
 
-/// Permute a native tensor through tenferro frontend operations.
+/// Permute axes of a native tensor.
 pub fn permute_native_tensor(tensor: &NativeTensor, perm: &[usize]) -> Result<NativeTensor> {
-    let input_ids = (0..tensor.ndim()).collect::<Vec<_>>();
-    let output_ids = perm
-        .iter()
-        .map(|&axis| {
-            input_ids
-                .get(axis)
-                .copied()
-                .ok_or_else(|| anyhow!("native permute axis {axis} out of bounds"))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    einsum_native_tensors(&[(tensor, &input_ids)], &output_ids)
+    with_default_backend(|backend| tensor.transpose(perm, backend))
+        .map_err(|e| anyhow!("native permute failed: {e}"))
 }
 
-/// Contract two native tensors with AD-preserving einsum execution.
+/// Contract two native tensors along matching axes.
 pub fn contract_native_tensor(
     lhs: &NativeTensor,
-    axes_lhs: &[usize],
+    axes_a: &[usize],
     rhs: &NativeTensor,
-    axes_rhs: &[usize],
+    axes_b: &[usize],
 ) -> Result<NativeTensor> {
     let (lhs_ids, rhs_ids, output_ids) =
-        build_binary_einsum_ids(lhs.ndim(), axes_lhs, rhs.ndim(), axes_rhs)?;
-    einsum_native_tensors(&[(lhs, &lhs_ids), (rhs, &rhs_ids)], &output_ids)
+        build_binary_einsum_ids(lhs.shape().len(), axes_a, rhs.shape().len(), axes_b)?;
+    let lhs_ids_usize = lhs_ids.iter().map(|&id| id as usize).collect::<Vec<_>>();
+    let rhs_ids_usize = rhs_ids.iter().map(|&id| id as usize).collect::<Vec<_>>();
+    let output_ids_usize = output_ids.iter().map(|&id| id as usize).collect::<Vec<_>>();
+    let operands = [
+        (lhs, lhs_ids_usize.as_slice()),
+        (rhs, rhs_ids_usize.as_slice()),
+    ];
+    einsum_native_tensors(&operands, &output_ids_usize)
 }
 
-/// Compute outer product of two native tensors.
+/// Compute the outer product of two native tensors.
 pub fn outer_product_native_tensor(lhs: &NativeTensor, rhs: &NativeTensor) -> Result<NativeTensor> {
     contract_native_tensor(lhs, &[], rhs, &[])
 }
 
-/// Conjugate a native tensor while preserving AD metadata.
+/// Conjugate a native tensor.
 pub fn conj_native_tensor(tensor: &NativeTensor) -> Result<NativeTensor> {
-    match tensor.scalar_type() {
-        ScalarType::F32 | ScalarType::C32 => Err(anyhow!(
-            "tensor4all native bridge currently supports only f64/Complex64 tensors"
+    match tensor.dtype() {
+        DType::F32 | DType::F64 => Ok(tensor.clone()),
+        DType::C32 => Ok(NativeTensor::new(
+            tensor.shape().to_vec(),
+            tensor
+                .as_slice::<Complex32>()
+                .ok_or_else(|| anyhow!("failed to read c32 native tensor"))?
+                .iter()
+                .map(|&value| value.conj())
+                .collect::<Vec<_>>(),
         )),
-        ScalarType::F64 => {
-            if tensor.is_diag() && tensor.ndim() >= 2 {
-                diag_native_tensor_from_col_major(
-                    &native_tensor_primal_to_diag_f64(tensor)?,
-                    tensor.ndim(),
-                )
-            } else {
-                dense_native_tensor_from_col_major(
-                    &native_tensor_primal_to_dense_f64_col_major(tensor)?,
-                    tensor.dims(),
-                )
-            }
-        }
-        ScalarType::C64 => {
-            let data = if tensor.is_diag() && tensor.ndim() >= 2 {
-                native_tensor_primal_to_diag_c64(tensor)?
-                    .into_iter()
-                    .map(|value| value.conj())
-                    .collect::<Vec<_>>()
-            } else {
-                native_tensor_primal_to_dense_c64_col_major(tensor)?
-                    .into_iter()
-                    .map(|value| value.conj())
-                    .collect::<Vec<_>>()
-            };
-            if tensor.is_diag() && tensor.ndim() >= 2 {
-                diag_native_tensor_from_col_major(&data, tensor.ndim())
-            } else {
-                dense_native_tensor_from_col_major(&data, tensor.dims())
-            }
-        }
+        DType::C64 => Ok(NativeTensor::new(
+            tensor.shape().to_vec(),
+            tensor
+                .as_slice::<Complex64>()
+                .ok_or_else(|| anyhow!("failed to read c64 native tensor"))?
+                .iter()
+                .map(|&value| value.conj())
+                .collect::<Vec<_>>(),
+        )),
     }
 }
 
-/// Permute storage through native tenferro execution.
+/// Permute storage by round-tripping through native tensors.
 pub fn permute_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
@@ -858,7 +730,7 @@ pub fn permute_storage_native(
     native_tensor_primal_to_storage(&permuted)
 }
 
-/// Contract two storages through native tenferro execution.
+/// Contract storages via native tensors.
 pub fn contract_storage_native(
     storage_a: &Storage,
     dims_a: &[usize],
@@ -866,17 +738,15 @@ pub fn contract_storage_native(
     storage_b: &Storage,
     dims_b: &[usize],
     axes_b: &[usize],
-    result_dims: &[usize],
+    _result_dims: &[usize],
 ) -> Result<Storage> {
     let lhs = storage_to_native_tensor(storage_a, dims_a)?;
     let rhs = storage_to_native_tensor(storage_b, dims_b)?;
     let result = contract_native_tensor(&lhs, axes_a, &rhs, axes_b)?;
-    let storage = native_tensor_primal_to_storage(&result)?;
-    let _ = result_dims;
-    Ok(storage)
+    native_tensor_primal_to_storage(&result)
 }
 
-/// Compute an outer product through native tenferro execution.
+/// Outer-product storages via native tensors.
 pub fn outer_product_storage_native(
     lhs: &Storage,
     lhs_dims: &[usize],
@@ -890,7 +760,7 @@ pub fn outer_product_storage_native(
     native_tensor_primal_to_storage(&result)
 }
 
-/// Apply native tenferro mixed scalar/tensor scaling at the storage boundary.
+/// Scale storage by a scalar via native tensors.
 pub fn scale_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
@@ -901,7 +771,7 @@ pub fn scale_storage_native(
     native_tensor_primal_to_storage(&scaled)
 }
 
-/// Apply native tenferro fused `a * lhs + b * rhs` at the storage boundary.
+/// Compute `a * lhs + b * rhs` over storages via native tensors.
 pub fn axpby_storage_native(
     lhs: &Storage,
     lhs_dims: &[usize],
