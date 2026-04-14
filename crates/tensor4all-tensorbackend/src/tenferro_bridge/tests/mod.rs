@@ -1,6 +1,7 @@
 use super::*;
 use crate::storage::Storage;
-use num_complex::Complex64;
+use crate::tensor_element::TensorElement;
+use num_complex::{Complex32, Complex64};
 
 fn assert_storage_eq(lhs: &Storage, rhs: &Storage) {
     match (lhs.repr(), rhs.repr()) {
@@ -106,6 +107,55 @@ fn diag_native_tensor_from_col_major_f64_roundtrip() {
 }
 
 #[test]
+fn dense_native_tensor_from_col_major_f32_roundtrip() {
+    let native = dense_native_tensor_from_col_major(&[1.25_f32, -2.5_f32], &[2]).unwrap();
+    let values = native_tensor_primal_to_dense_f64_col_major(&native).unwrap();
+    let snapshot = native_tensor_primal_to_storage(&native).unwrap();
+
+    assert_eq!(values, vec![1.25, -2.5]);
+    assert_storage_eq(
+        &snapshot,
+        &Storage::from_dense_col_major(vec![1.25, -2.5], &[2]).unwrap(),
+    );
+}
+
+#[test]
+fn diag_native_tensor_from_col_major_c32_promotes_to_c64_values() {
+    let data = vec![Complex32::new(1.0, -0.5), Complex32::new(-2.0, 0.25)];
+    let native = diag_native_tensor_from_col_major(&data, 2).unwrap();
+    let diag_values = native_tensor_primal_to_diag_c64(&native).unwrap();
+    let dense_values = native_tensor_primal_to_dense_c64_col_major(&native).unwrap();
+    let snapshot = native_tensor_primal_to_storage(&native).unwrap();
+
+    assert_eq!(
+        diag_values,
+        vec![Complex64::new(1.0, -0.5), Complex64::new(-2.0, 0.25)]
+    );
+    assert_eq!(
+        dense_values,
+        vec![
+            Complex64::new(1.0, -0.5),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(-2.0, 0.25),
+        ]
+    );
+    assert_storage_eq(
+        &snapshot,
+        &Storage::from_dense_col_major(
+            vec![
+                Complex64::new(1.0, -0.5),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(-2.0, 0.25),
+            ],
+            &[2, 2],
+        )
+        .unwrap(),
+    );
+}
+
+#[test]
 fn sum_native_tensor_returns_rank0_scalar() {
     let storage = Storage::from_dense_col_major(
         vec![Complex64::new(1.0, -1.0), Complex64::new(-0.5, 2.0)],
@@ -118,6 +168,14 @@ fn sum_native_tensor_returns_rank0_scalar() {
 
     assert!(sum.is_complex());
     assert_eq!(sum.as_c64(), Some(Complex64::new(0.5, 1.0)));
+}
+
+#[test]
+fn sum_native_tensor_preserves_rank0_scalar() {
+    let native = Complex64::scalar_native_tensor(Complex64::new(1.5, -0.25)).unwrap();
+    let sum = sum_native_tensor(&native).unwrap();
+
+    assert_eq!(sum.as_c64(), Some(Complex64::new(1.5, -0.25)));
 }
 
 #[test]
@@ -263,6 +321,26 @@ fn scale_native_tensor_promotes_real_scalar_for_complex_tensor() {
 }
 
 #[test]
+fn scale_and_axpby_native_tensor_cover_f32_paths() {
+    let lhs = dense_native_tensor_from_col_major(&[1.0_f32, -2.0_f32], &[2]).unwrap();
+    let rhs = dense_native_tensor_from_col_major(&[0.5_f32, 4.0_f32], &[2]).unwrap();
+
+    let scaled = scale_native_tensor(&lhs, &crate::AnyScalar::from_value(0.5_f32)).unwrap();
+    let scaled_values = native_tensor_primal_to_dense_f64_col_major(&scaled).unwrap();
+    assert_eq!(scaled_values, vec![0.5, -1.0]);
+
+    let combined = axpby_native_tensor(
+        &lhs,
+        &crate::AnyScalar::from_value(2.0_f32),
+        &rhs,
+        &crate::AnyScalar::from_value(-1.0_f32),
+    )
+    .unwrap();
+    let combined_values = native_tensor_primal_to_dense_f64_col_major(&combined).unwrap();
+    assert_eq!(combined_values, vec![1.5, -8.0]);
+}
+
+#[test]
 fn axpby_native_tensor_promotes_real_scalars_for_complex_tensors() {
     let lhs = dense_native_tensor_from_col_major(
         &[Complex64::new(1.0, 2.0), Complex64::new(-1.0, 0.5)],
@@ -338,6 +416,29 @@ fn tangent_native_tensor_returns_none_for_primal() {
 }
 
 #[test]
+fn dense_and_diag_extractors_reject_wrong_dtypes() {
+    let real = dense_native_tensor_from_col_major(&[1.0_f64, 2.0], &[2]).unwrap();
+    let complex = dense_native_tensor_from_col_major(&[Complex64::new(1.0, -1.0)], &[1]).unwrap();
+
+    assert!(native_tensor_primal_to_dense_f64_col_major(&complex)
+        .unwrap_err()
+        .to_string()
+        .contains("expected real native tensor"));
+    assert!(native_tensor_primal_to_dense_c64_col_major(&real)
+        .unwrap_err()
+        .to_string()
+        .contains("expected complex native tensor"));
+    assert!(native_tensor_primal_to_diag_f64(&complex)
+        .unwrap_err()
+        .to_string()
+        .contains("expected real native tensor"));
+    assert!(native_tensor_primal_to_diag_c64(&real)
+        .unwrap_err()
+        .to_string()
+        .contains("expected complex native tensor"));
+}
+
+#[test]
 fn einsum_native_tensors_rejects_empty_operands() {
     let result = einsum_native_tensors(&[], &[]);
     assert!(result.is_err());
@@ -348,10 +449,32 @@ fn einsum_native_tensors_rejects_empty_operands() {
 }
 
 #[test]
+fn ids_to_subscript_and_build_einsum_subscripts_cover_helper_paths() {
+    assert_eq!(ids_to_subscript(&[0, 25, 51]).unwrap(), "azZ");
+    assert_eq!(
+        build_einsum_subscripts(&[&[0, 1], &[2, 1]], &[0, 2]).unwrap(),
+        "ab,cb->ac"
+    );
+    assert!(ids_to_subscript(&[52])
+        .unwrap_err()
+        .to_string()
+        .contains("exceeds supported label range"));
+}
+
+#[test]
 fn build_binary_einsum_ids_rejects_mismatched_axes_len() {
     let result = build_binary_einsum_ids(2, &[0], 2, &[0, 1]);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("length mismatch"));
+}
+
+#[test]
+fn build_binary_einsum_ids_success_assigns_free_axes_after_contract_axes() {
+    let (lhs_ids, rhs_ids, output_ids) = build_binary_einsum_ids(3, &[1], 2, &[0]).unwrap();
+
+    assert_eq!(lhs_ids, vec![1, 0, 2]);
+    assert_eq!(rhs_ids, vec![0, 3]);
+    assert_eq!(output_ids, vec![1, 2, 3]);
 }
 
 #[test]
