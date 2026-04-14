@@ -711,40 +711,53 @@ pub trait BlasMul: Sized {
     fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Matrix<Self>;
 }
 
+fn row_major_to_col_major<T: Copy>(data: &[T], nrows: usize, ncols: usize) -> Vec<T> {
+    let mut out = Vec::with_capacity(data.len());
+    for col in 0..ncols {
+        for row in 0..nrows {
+            out.push(data[row * ncols + col]);
+        }
+    }
+    out
+}
+
+fn col_major_to_row_major<T: Copy>(data: &[T], nrows: usize, ncols: usize) -> Vec<T> {
+    let mut out = Vec::with_capacity(data.len());
+    for row in 0..nrows {
+        for col in 0..ncols {
+            out.push(data[col * nrows + row]);
+        }
+    }
+    out
+}
+
 macro_rules! impl_blas_mul {
     ($($t:ty),*) => {
         $(
         impl BlasMul for $t {
             fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Matrix<Self> {
-                use tenferro_tensor_compute::{
-                    einsum, CpuBackend, CpuContext, MemoryOrder, Standard, Tensor,
-                };
+                use tenferro_einsum::typed_eager_einsum;
+                use tenferro_tensor::TypedTensor;
+                use tensor4all_tensorbackend::with_default_backend;
 
                 let m = a.nrows();
                 let k = a.ncols();
                 let n = b.ncols();
                 assert_eq!(b.nrows(), k);
 
-                let mut ctx = CpuContext::new(1);
-                let a_tensor =
-                    Tensor::<$t>::from_slice(a.as_slice(), &[m, k], MemoryOrder::RowMajor)
-                        .expect("invalid matrix dimensions");
-                let b_tensor =
-                    Tensor::<$t>::from_slice(b.as_slice(), &[k, n], MemoryOrder::RowMajor)
-                        .expect("invalid matrix dimensions");
-                let c = einsum::<Standard<$t>, CpuBackend>(
-                    &mut ctx,
-                    "ij,jk->ik",
-                    &[&a_tensor, &b_tensor],
-                    None,
-                )
+                let a_tensor = TypedTensor::<$t>::from_vec(
+                    vec![m, k],
+                    row_major_to_col_major(a.as_slice(), m, k),
+                );
+                let b_tensor = TypedTensor::<$t>::from_vec(
+                    vec![k, n],
+                    row_major_to_col_major(b.as_slice(), k, n),
+                );
+                let c = with_default_backend(|backend| {
+                    typed_eager_einsum(backend, &[&a_tensor, &b_tensor], "ij,jk->ik")
+                })
                 .expect("einsum failed");
-                let c_rm = c.contiguous(MemoryOrder::RowMajor);
-                let c_data = c_rm
-                    .buffer()
-                    .as_slice()
-                    .expect("CPU-only operation")
-                    .to_vec();
+                let c_data = col_major_to_row_major(c.as_slice(), m, n);
                 Matrix::from_raw_vec(m, n, c_data)
             }
         }

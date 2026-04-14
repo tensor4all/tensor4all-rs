@@ -31,6 +31,9 @@ jobs:
       - name: Install mdBook
         run: cargo install mdbook --version 0.5.2 --locked
 
+      - name: Verify mdBook examples
+        run: ./scripts/test-mdbook.sh
+
       - name: Build mdBook
         run: mdbook build docs/book
 

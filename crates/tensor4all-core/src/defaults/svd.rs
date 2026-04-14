@@ -12,6 +12,7 @@ use crate::global_default::GlobalDefault;
 use crate::index_like::IndexLike;
 use crate::truncation::{HasTruncationParams, TruncationParams};
 use crate::{unfold_split, TensorDynLen};
+use tenferro::DType;
 use tensor4all_tensorbackend::{
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
     native_tensor_primal_to_dense_c64_col_major, native_tensor_primal_to_dense_f64_col_major,
@@ -146,11 +147,11 @@ fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
 }
 
 fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, SvdError> {
-    match tensor.scalar_type() {
-        tenferro::ScalarType::F64 => {
+    match tensor.dtype() {
+        DType::F64 => {
             native_tensor_primal_to_dense_f64_col_major(tensor).map_err(SvdError::ComputationError)
         }
-        tenferro::ScalarType::C64 => native_tensor_primal_to_dense_c64_col_major(tensor)
+        DType::C64 => native_tensor_primal_to_dense_c64_col_major(tensor)
             .map(|values| values.into_iter().map(|value| value.re).collect())
             .map_err(SvdError::ComputationError),
         other => Err(SvdError::ComputationError(anyhow::anyhow!(
@@ -214,8 +215,8 @@ fn svd_truncated_native(
         r = r.min(max_rank);
     }
     if r < k {
-        match u_native.scalar_type() {
-            tenferro::ScalarType::F64 => {
+        match u_native.dtype() {
+            DType::F64 => {
                 let u_values = native_tensor_primal_to_dense_f64_col_major(&u_native)
                     .map_err(SvdError::ComputationError)?;
                 let vt_values = native_tensor_primal_to_dense_f64_col_major(&vt_native)
@@ -225,7 +226,7 @@ fn svd_truncated_native(
                 vt_native = truncate_matrix_rows(&vt_values, k, n, r)
                     .map_err(SvdError::ComputationError)?;
             }
-            tenferro::ScalarType::C64 => {
+            DType::C64 => {
                 let u_values = native_tensor_primal_to_dense_c64_col_major(&u_native)
                     .map_err(SvdError::ComputationError)?;
                 let vt_values = native_tensor_primal_to_dense_c64_col_major(&vt_native)

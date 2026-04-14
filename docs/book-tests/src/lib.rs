@@ -1,8 +1,18 @@
 //! Test harness for mdBook guide code examples.
 //!
-//! Each module embeds a markdown guide file via `include_str!`. Running
+//! Each module embeds a markdown file via `include_str!`. Running
 //! `cargo test --doc -p book-tests` executes every fenced Rust code block
 //! in these files as a doctest.
+//!
+//! `scripts/test-mdbook.sh` reuses this crate's resolved `--extern` flags to
+//! run the same snippets through `mdbook test docs/book`, avoiding ambiguous
+//! dependency resolution from the workspace-wide `target/release/deps` cache.
+//!
+//! The repository root `README.md` is included here as well so its short
+//! runnable examples stay covered by CI.
+
+#[doc = include_str!("../../../README.md")]
+mod root_readme {}
 
 #[doc = include_str!("../../book/src/getting-started.md")]
 mod getting_started {}

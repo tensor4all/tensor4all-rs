@@ -697,13 +697,6 @@ impl<T: Copy + Default> StructuredStorage<T> {
 pub struct Storage(pub(crate) StorageRepr);
 
 #[derive(Debug, Clone)]
-pub(crate) struct NativePayload<T> {
-    pub(crate) data: Vec<T>,
-    pub(crate) payload_dims: Vec<usize>,
-    pub(crate) axis_classes: Option<Vec<usize>>,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) enum StorageRepr {
     /// Storage with f64 elements.
     F64(StructuredStorage<f64>),
@@ -882,80 +875,6 @@ impl Storage {
         axis_classes: Vec<usize>,
     ) -> Result<Self> {
         T::build_structured_storage(data, payload_dims, strides, axis_classes)
-    }
-
-    pub(crate) fn native_payload_f64(&self, logical_dims: &[usize]) -> Result<NativePayload<f64>> {
-        match &self.0 {
-            StorageRepr::F64(value) => {
-                ensure!(
-                    value.logical_dims() == logical_dims,
-                    "logical dims {:?} do not match structured f64 logical dims {:?}",
-                    logical_dims,
-                    value.logical_dims()
-                );
-                let axis_classes = if value.is_dense() {
-                    None
-                } else {
-                    Some(value.axis_classes().to_vec())
-                };
-                Ok(NativePayload {
-                    data: value.payload_col_major_vec(),
-                    payload_dims: value.payload_dims().to_vec(),
-                    axis_classes,
-                })
-            }
-            StorageRepr::C64(_) => Err(anyhow!(
-                "complex storage cannot be converted to f64 native payload"
-            )),
-        }
-    }
-
-    pub(crate) fn native_payload_c64(
-        &self,
-        logical_dims: &[usize],
-    ) -> Result<NativePayload<Complex64>> {
-        match &self.0 {
-            StorageRepr::C64(value) => {
-                ensure!(
-                    value.logical_dims() == logical_dims,
-                    "logical dims {:?} do not match structured c64 logical dims {:?}",
-                    logical_dims,
-                    value.logical_dims()
-                );
-                let axis_classes = if value.is_dense() {
-                    None
-                } else {
-                    Some(value.axis_classes().to_vec())
-                };
-                Ok(NativePayload {
-                    data: value.payload_col_major_vec(),
-                    payload_dims: value.payload_dims().to_vec(),
-                    axis_classes,
-                })
-            }
-            StorageRepr::F64(value) => {
-                ensure!(
-                    value.logical_dims() == logical_dims,
-                    "logical dims {:?} do not match structured f64 logical dims {:?} for promotion",
-                    logical_dims,
-                    value.logical_dims()
-                );
-                let axis_classes = if value.is_dense() {
-                    None
-                } else {
-                    Some(value.axis_classes().to_vec())
-                };
-                Ok(NativePayload {
-                    data: value
-                        .payload_col_major_vec()
-                        .into_iter()
-                        .map(|entry| Complex64::new(entry, 0.0))
-                        .collect(),
-                    payload_dims: value.payload_dims().to_vec(),
-                    axis_classes,
-                })
-            }
-        }
     }
 
     /// Create dense f64 storage from column-major logical values.

@@ -5,10 +5,9 @@
 
 use super::error::{MPOError, Result};
 use super::Matrix2;
+use crate::einsum_helper::{tensor_to_row_major_vec, typed_tensor_from_row_major_slice};
 use num_complex::{Complex64, ComplexFloat};
-use tenferro_algebra::Scalar as TfScalar;
-use tenferro_linalg::LinalgScalar;
-use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor as TypedTensor};
+use tenferro_tensor::{TensorScalar, TypedTensor};
 use tensor4all_tensorbackend::{svd_backend, BackendLinalgScalar};
 
 /// Factorization method to use
@@ -57,7 +56,7 @@ impl Default for FactorizeOptions {
 
 /// Result of factorization
 #[derive(Debug, Clone)]
-pub struct FactorizeResult<T: TfScalar> {
+pub struct FactorizeResult<T: TensorScalar> {
     /// Left factor matrix (m x rank)
     pub left: Matrix2<T>,
     /// Right factor matrix (rank x n)
@@ -70,30 +69,30 @@ pub struct FactorizeResult<T: TfScalar> {
 
 /// Trait bounds for SVD-compatible scalars
 pub trait SVDScalar:
-    crate::traits::TTScalar + ComplexFloat + Default + Copy + BackendLinalgScalar + TfScalar + 'static
+    crate::traits::TTScalar + ComplexFloat + Default + Copy + BackendLinalgScalar + 'static
 {
     /// Convert a backend singular value into `f64` for truncation logic.
-    fn linalg_real_to_f64(real: <Self as LinalgScalar>::Real) -> f64;
+    fn linalg_real_to_f64(real: <Self as TensorScalar>::Real) -> f64;
     /// Promote a backend singular value into the matrix scalar type.
-    fn from_linalg_real(real: <Self as LinalgScalar>::Real) -> Self;
+    fn from_linalg_real(real: <Self as TensorScalar>::Real) -> Self;
 }
 
 impl SVDScalar for f64 {
-    fn linalg_real_to_f64(real: <Self as LinalgScalar>::Real) -> f64 {
+    fn linalg_real_to_f64(real: <Self as TensorScalar>::Real) -> f64 {
         real
     }
 
-    fn from_linalg_real(real: <Self as LinalgScalar>::Real) -> Self {
+    fn from_linalg_real(real: <Self as TensorScalar>::Real) -> Self {
         real
     }
 }
 
 impl SVDScalar for Complex64 {
-    fn linalg_real_to_f64(real: <Self as LinalgScalar>::Real) -> f64 {
+    fn linalg_real_to_f64(real: <Self as TensorScalar>::Real) -> f64 {
         real
     }
 
-    fn from_linalg_real(real: <Self as LinalgScalar>::Real) -> Self {
+    fn from_linalg_real(real: <Self as TensorScalar>::Real) -> Self {
         Complex64::new(real, 0.0)
     }
 }
@@ -113,10 +112,7 @@ impl SVDScalar for Complex64 {
 pub fn factorize<T: SVDScalar>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<T>>
-where
-    <T as LinalgScalar>::Real: KeepCountScalar,
-{
+) -> Result<FactorizeResult<T>> {
     match options.method {
         FactorizeMethod::SVD => factorize_svd(matrix, options),
         FactorizeMethod::RSVD => factorize_rsvd(matrix, options),
@@ -133,40 +129,29 @@ use super::matrix2_zeros;
 
 fn matrix2_to_typed_tensor<T>(matrix: &Matrix2<T>) -> Result<TypedTensor<T>>
 where
-    T: TfScalar + Copy,
+    T: TensorScalar,
 {
     let dims = [matrix.dim(0), matrix.dim(1)];
     let data: Vec<T> = matrix.iter().copied().collect();
-    TypedTensor::from_slice(&data, &dims, MemoryOrder::RowMajor).map_err(|e| {
-        MPOError::FactorizationError {
-            message: format!("failed to convert Matrix2 to tenferro tensor: {e}"),
-        }
-    })
+    Ok(typed_tensor_from_row_major_slice(&data, &dims))
 }
 
 fn typed_tensor_to_matrix2<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Matrix2<T>>
 where
-    T: TfScalar + Copy + Default,
+    T: crate::traits::TTScalar + Default,
 {
-    if tensor.ndim() != 2 {
+    if tensor.shape.len() != 2 {
         return Err(MPOError::FactorizationError {
             message: format!(
                 "{op} returned rank-{} tensor, expected matrix",
-                tensor.ndim()
+                tensor.shape.len()
             ),
         });
     }
 
-    let dims = tensor.dims();
-    let rows = dims[0];
-    let cols = dims[1];
-    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
-    let data = row_major
-        .buffer()
-        .as_slice()
-        .ok_or_else(|| MPOError::FactorizationError {
-            message: format!("{op} returned non-CPU tensor unexpectedly"),
-        })?;
+    let rows = tensor.shape[0];
+    let cols = tensor.shape[1];
+    let data = tensor_to_row_major_vec(tensor);
 
     let mut matrix = matrix2_zeros(rows, cols);
     for i in 0..rows {
@@ -179,26 +164,17 @@ where
 
 fn typed_row_major_values<T>(tensor: &TypedTensor<T>, op: &'static str) -> Result<Vec<T>>
 where
-    T: TfScalar + Copy,
+    T: TensorScalar,
 {
-    let row_major = tensor.contiguous(MemoryOrder::RowMajor);
-    let data = row_major
-        .buffer()
-        .as_slice()
-        .ok_or_else(|| MPOError::FactorizationError {
-            message: format!("{op} returned non-CPU tensor unexpectedly"),
-        })?;
-    Ok(data.to_vec())
+    let _ = op;
+    Ok(tensor_to_row_major_vec(tensor))
 }
 
 /// Factorize using SVD
 fn factorize_svd<T: SVDScalar>(
     matrix: &Matrix2<T>,
     options: &FactorizeOptions,
-) -> Result<FactorizeResult<T>>
-where
-    <T as LinalgScalar>::Real: KeepCountScalar,
-{
+) -> Result<FactorizeResult<T>> {
     let m = matrix.dim(0);
     let n = matrix.dim(1);
 

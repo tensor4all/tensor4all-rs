@@ -331,3 +331,128 @@ fn test_scalar_lhs_rhs_mixed_ops() {
     assert!((z.re - 2.0).abs() < 1e-12);
     assert!((z.im + 1.0).abs() < 1e-12);
 }
+
+#[test]
+fn test_enable_grad_and_borrow_arithmetic_backward() {
+    let x = AnyScalar::new_real(2.0).enable_grad();
+    let y = AnyScalar::new_real(3.0).enable_grad();
+
+    let product = &x * &y;
+    let loss = &product + &x;
+
+    assert!(loss.tracks_grad());
+    loss.backward().unwrap();
+
+    let grad_x = x.grad().unwrap().unwrap();
+    let grad_y = y.grad().unwrap().unwrap();
+    assert!((grad_x.real() - 4.0).abs() < 1e-12);
+    assert!((grad_y.real() - 2.0).abs() < 1e-12);
+}
+
+#[test]
+fn test_clone_shares_tracked_leaf_gradient_slot() {
+    let x = AnyScalar::new_real(2.0).enable_grad();
+    let alias = x.clone();
+
+    let loss = &x * &alias;
+    loss.backward().unwrap();
+
+    let grad_x = x.grad().unwrap().unwrap();
+    let grad_alias = alias.grad().unwrap().unwrap();
+    assert!((grad_x.real() - 4.0).abs() < 1e-12);
+    assert!((grad_alias.real() - 4.0).abs() < 1e-12);
+}
+
+#[test]
+fn test_owned_arithmetic_backward_with_moved_operands() {
+    let x = AnyScalar::new_real(2.0).enable_grad();
+    let y = AnyScalar::new_real(3.0).enable_grad();
+
+    let x_alias = x.clone();
+    let y_alias = y.clone();
+    let x_grad = x_alias.clone();
+    let y_grad = y_alias.clone();
+
+    let product = x * y;
+    let loss = product + x_alias;
+    loss.backward().unwrap();
+
+    let grad_x = x_grad.grad().unwrap().unwrap();
+    let grad_y = y_grad.grad().unwrap().unwrap();
+    assert!((grad_x.real() - 4.0).abs() < 1e-12);
+    assert!((grad_y.real() - 2.0).abs() < 1e-12);
+}
+
+#[test]
+fn test_clear_grad_resets_anyscalar_accumulation() {
+    let x = AnyScalar::new_real(2.0).enable_grad();
+    let y = AnyScalar::new_real(3.0).enable_grad();
+
+    let loss = &x * &y;
+    loss.backward().unwrap();
+
+    let loss = &x * &y;
+    loss.backward().unwrap();
+
+    let grad_x = x.grad().unwrap().unwrap();
+    let grad_y = y.grad().unwrap().unwrap();
+    assert!((grad_x.real() - 6.0).abs() < 1e-12);
+    assert!((grad_y.real() - 4.0).abs() < 1e-12);
+
+    x.clear_grad().unwrap();
+    y.clear_grad().unwrap();
+    assert!(x.grad().unwrap().is_none());
+    assert!(y.grad().unwrap().is_none());
+}
+
+#[test]
+fn test_detach_breaks_reverse_graph_for_anyscalar() {
+    let x = AnyScalar::new_real(3.0).enable_grad();
+    let y = AnyScalar::new_real(2.0).enable_grad();
+    let detached = x.detach();
+
+    assert!(!detached.tracks_grad());
+    assert!(x.tracks_grad());
+    assert!(y.tracks_grad());
+
+    let loss = &detached * &y;
+    assert!(loss.tracks_grad());
+    loss.backward().unwrap();
+
+    assert!(x.grad().unwrap().is_none());
+    let grad_y = y.grad().unwrap().unwrap();
+    assert!((grad_y.real() - 3.0).abs() < 1e-12);
+}
+
+#[test]
+fn test_primal_matches_detach_semantics_for_anyscalar() {
+    let x = AnyScalar::new_real(3.0).enable_grad();
+    let y = AnyScalar::new_real(2.0).enable_grad();
+    let primal = x.primal();
+
+    assert!(!primal.tracks_grad());
+    assert_eq!(primal.real(), 3.0);
+
+    let loss = &primal * &y;
+    assert!(loss.tracks_grad());
+    loss.backward().unwrap();
+
+    assert!(x.grad().unwrap().is_none());
+    let grad_y = y.grad().unwrap().unwrap();
+    assert!((grad_y.real() - 3.0).abs() < 1e-12);
+}
+
+#[test]
+fn test_function_api_takes_anyscalar_ref() {
+    fn quadratic_plus_one(x: &AnyScalar) -> AnyScalar {
+        let square = x * x;
+        &square + &AnyScalar::one()
+    }
+
+    let x = AnyScalar::new_real(3.0).enable_grad();
+    let loss = quadratic_plus_one(&x);
+    loss.backward().unwrap();
+
+    let grad = x.grad().unwrap().unwrap();
+    assert!((grad.real() - 6.0).abs() < 1e-12);
+}

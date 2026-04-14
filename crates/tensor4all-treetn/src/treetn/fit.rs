@@ -943,6 +943,9 @@ where
         eprintln!("replace/update:    {:?}", profile.replace_time);
         eprintln!("invalidate:        {:?}", profile.invalidate_time);
     }
+    // These are tensor4all-owned profiling hooks, intentionally kept during the
+    // migration so fit profiling still works without the removed tenferro
+    // runtime APIs.
     print_and_reset_contract_profile();
     print_and_reset_native_einsum_profile();
 
