@@ -416,6 +416,29 @@ void t4a_tensor_release(struct t4a_tensor *obj);
 StatusCode t4a_tensor_scalar_kind(const struct t4a_tensor *ptr, enum t4a_scalar_kind *out_kind);
 
 /**
+ * Apply a chain-compatible operator TreeTN to a chain state TreeTN.
+ *
+ * The operator must use dense node names `0..m-1`. `mapped_positions[i]`
+ * specifies which state-chain node the operator node `i` acts on. Each mapped
+ * operator node must have exactly two site indices, and the corresponding
+ * `internal_input_indices[i]` and `internal_output_indices[i]` must point to
+ * those indices. Unmapped state nodes are filled with identities by
+ * `apply_linear_operator`.
+ */
+StatusCode t4a_treetn_apply_operator_chain(const struct t4a_treetn *operator_,
+                                           const struct t4a_treetn *state,
+                                           const size_t *mapped_positions,
+                                           size_t n_mapped_positions,
+                                           const struct t4a_index *const *internal_input_indices,
+                                           const struct t4a_index *const *internal_output_indices,
+                                           const struct t4a_index *const *true_output_indices,
+                                           enum t4a_contract_method method,
+                                           double rtol,
+                                           double cutoff,
+                                           size_t maxdim,
+                                           struct t4a_treetn **out);
+
+/**
  * Clone a TreeTN handle.
  */
 StatusCode t4a_treetn_clone(const struct t4a_treetn *src, struct t4a_treetn **out);

@@ -10,10 +10,14 @@ use crate::{
     T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 use num_complex::Complex64;
+use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use tensor4all_core::ColMajorArrayRef;
+use tensor4all_core::{ColMajorArrayRef, IndexLike};
 use tensor4all_treetn::treetn::contraction::{self, ContractionMethod, ContractionOptions};
-use tensor4all_treetn::{CanonicalizationOptions, TruncationOptions};
+use tensor4all_treetn::{
+    apply_linear_operator, ApplyOptions, CanonicalizationOptions, IndexMapping, LinearOperator,
+    TruncationOptions,
+};
 
 /// Release a TreeTN handle.
 #[unsafe(no_mangle)]
@@ -148,9 +152,10 @@ fn query_then_fill_copy<T: Copy>(
 fn collect_indices(
     index_ptrs: *const *const t4a_index,
     n_indices: usize,
+    what: &str,
 ) -> CapiResult<Vec<InternalIndex>> {
     if index_ptrs.is_null() {
-        return Err(capi_error(T4A_NULL_POINTER, "indices is null"));
+        return Err(capi_error(T4A_NULL_POINTER, format!("{what} is null")));
     }
 
     let mut indices = Vec::with_capacity(n_indices);
@@ -159,12 +164,272 @@ fn collect_indices(
         if ptr.is_null() {
             return Err(capi_error(
                 T4A_NULL_POINTER,
-                format!("indices[{i}] is null"),
+                format!("{what}[{i}] is null"),
             ));
         }
         indices.push(unsafe { &*ptr }.inner().clone());
     }
     Ok(indices)
+}
+
+fn collect_positions(
+    positions: *const libc::size_t,
+    len: usize,
+    what: &str,
+) -> CapiResult<Vec<usize>> {
+    if positions.is_null() {
+        return Err(capi_error(T4A_NULL_POINTER, format!("{what} is null")));
+    }
+
+    let mut out = Vec::with_capacity(len);
+    for i in 0..len {
+        out.push(unsafe { *positions.add(i) });
+    }
+    Ok(out)
+}
+
+fn require_chain_layout(tn: &InternalTreeTN, what: &str) -> CapiResult<usize> {
+    let n = tn.node_count();
+    if n == 0 {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!("{what} must not be empty"),
+        ));
+    }
+    if tn.edge_count() != n.saturating_sub(1) {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!(
+                "{what} must be a chain with {} edges, got {}",
+                n.saturating_sub(1),
+                tn.edge_count()
+            ),
+        ));
+    }
+
+    for position in 0..n {
+        if tn.node_index(&position).is_none() {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("{what} must use dense node names 0..{}, missing {position}", n - 1),
+            ));
+        }
+
+        let mut neighbors: Vec<usize> = tn.site_index_network().neighbors(&position).collect();
+        neighbors.sort_unstable();
+        let mut expected = Vec::with_capacity(2);
+        if position > 0 {
+            expected.push(position - 1);
+        }
+        if position + 1 < n {
+            expected.push(position + 1);
+        }
+        if neighbors != expected {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "{what} must follow chain adjacency at node {position}, got neighbors {:?}, expected {:?}",
+                    neighbors, expected
+                ),
+            ));
+        }
+    }
+
+    Ok(n)
+}
+
+fn collect_single_site_indices(tn: &InternalTreeTN, what: &str) -> CapiResult<Vec<InternalIndex>> {
+    let n = require_chain_layout(tn, what)?;
+    let mut site_indices = Vec::with_capacity(n);
+    for position in 0..n {
+        let site_space = tn.site_space(&position).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("{what} node {position} has no site index"),
+            )
+        })?;
+        if site_space.len() != 1 {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "{what} node {position} must have exactly one site index, got {}",
+                    site_space.len()
+                ),
+            ));
+        }
+        site_indices.push(site_space.iter().next().unwrap().clone());
+    }
+    Ok(site_indices)
+}
+
+fn validate_mapped_positions(
+    mapped_positions: &[usize],
+    state_nsites: usize,
+    operator_nsites: usize,
+) -> CapiResult<()> {
+    if mapped_positions.is_empty() {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            "mapped node positions must not be empty",
+        ));
+    }
+    if mapped_positions.len() != operator_nsites {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!(
+                "mapped node positions length {} does not match operator node count {}",
+                mapped_positions.len(),
+                operator_nsites
+            ),
+        ));
+    }
+    for (i, &position) in mapped_positions.iter().enumerate() {
+        if position >= state_nsites {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "mapped node position {position} is outside the state chain with {state_nsites} nodes"
+                ),
+            ));
+        }
+        if i > 0 && mapped_positions[i - 1] >= position {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "mapped node positions must be strictly increasing",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn remap_operator_nodes_to_positions(
+    operator: &InternalTreeTN,
+    mapped_positions: &[usize],
+) -> CapiResult<InternalTreeTN> {
+    let operator_nsites = require_chain_layout(operator, "operator")?;
+    if operator_nsites != mapped_positions.len() {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!(
+                "operator node count {} does not match mapped node positions length {}",
+                operator_nsites,
+                mapped_positions.len()
+            ),
+        ));
+    }
+
+    let mut tensors = Vec::with_capacity(operator_nsites);
+    for position in 0..operator_nsites {
+        let node_idx = operator.node_index(&position).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "operator must use dense node names 0..{}, missing {position}",
+                    operator_nsites - 1
+                ),
+            )
+        })?;
+        let tensor = operator.tensor(node_idx).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("operator node {position} has no tensor"),
+            )
+        })?;
+        tensors.push(tensor.clone());
+    }
+
+    InternalTreeTN::from_tensors(tensors, mapped_positions.to_vec())
+        .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))
+}
+
+fn build_chain_linear_operator(
+    operator: &InternalTreeTN,
+    state_true_inputs: &[InternalIndex],
+    mapped_positions: &[usize],
+    internal_inputs: &[InternalIndex],
+    internal_outputs: &[InternalIndex],
+    true_outputs: &[InternalIndex],
+) -> CapiResult<LinearOperator<crate::types::InternalTensor, usize>> {
+    let remapped_operator = remap_operator_nodes_to_positions(operator, mapped_positions)?;
+    let mut input_mapping = HashMap::with_capacity(mapped_positions.len());
+    let mut output_mapping = HashMap::with_capacity(mapped_positions.len());
+
+    for (slot, &position) in mapped_positions.iter().enumerate() {
+        let site_space = remapped_operator.site_space(&position).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("operator node {position} has no site indices"),
+            )
+        })?;
+        if site_space.len() != 2 {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "operator node {position} must have exactly two site indices, got {}",
+                    site_space.len()
+                ),
+            ));
+        }
+
+        let internal_input = &internal_inputs[slot];
+        let internal_output = &internal_outputs[slot];
+        if !site_space.contains(internal_input) {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("operator node {position} does not contain the provided internal input index"),
+            ));
+        }
+        if !site_space.contains(internal_output) {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("operator node {position} does not contain the provided internal output index"),
+            ));
+        }
+
+        let true_input = &state_true_inputs[position];
+        let true_output = &true_outputs[slot];
+        if true_input.dim() != internal_input.dim() {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "input index dimension mismatch at node {position}: state has {}, operator internal input has {}",
+                    true_input.dim(),
+                    internal_input.dim()
+                ),
+            ));
+        }
+        if true_output.dim() != internal_output.dim() {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "output index dimension mismatch at node {position}: requested true output has {}, operator internal output has {}",
+                    true_output.dim(),
+                    internal_output.dim()
+                ),
+            ));
+        }
+
+        input_mapping.insert(
+            position,
+            IndexMapping {
+                true_index: true_input.clone(),
+                internal_index: internal_input.clone(),
+            },
+        );
+        output_mapping.insert(
+            position,
+            IndexMapping {
+                true_index: true_output.clone(),
+                internal_index: internal_output.clone(),
+            },
+        );
+    }
+
+    Ok(LinearOperator::new(
+        remapped_operator,
+        input_mapping,
+        output_mapping,
+    ))
 }
 
 /// Create a tree tensor network from an array of tensors.
@@ -469,7 +734,7 @@ pub extern "C" fn t4a_treetn_evaluate(
             return Err(capi_error(T4A_NULL_POINTER, "out_re is null"));
         }
 
-        let indices = collect_indices(indices, n_indices)?;
+        let indices = collect_indices(indices, n_indices, "indices")?;
         let n_values = n_indices.checked_mul(n_points).ok_or_else(|| {
             capi_error(
                 T4A_INVALID_ARGUMENT,
@@ -594,6 +859,90 @@ pub extern "C" fn t4a_treetn_contract(
 
         let result = contraction::contract(tn_a.inner(), tn_b.inner(), &center, options)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_treetn::new(result))
+    })
+}
+
+/// Apply a chain-compatible operator TreeTN to a chain state TreeTN.
+///
+/// The operator must use dense node names `0..m-1`. `mapped_positions[i]`
+/// specifies which state-chain node the operator node `i` acts on. Each mapped
+/// operator node must have exactly two site indices, and the corresponding
+/// `internal_input_indices[i]` and `internal_output_indices[i]` must point to
+/// those indices. Unmapped state nodes are filled with identities by
+/// `apply_linear_operator`.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_apply_operator_chain(
+    operator: *const t4a_treetn,
+    state: *const t4a_treetn,
+    mapped_positions: *const libc::size_t,
+    n_mapped_positions: libc::size_t,
+    internal_input_indices: *const *const t4a_index,
+    internal_output_indices: *const *const t4a_index,
+    true_output_indices: *const *const t4a_index,
+    method: t4a_contract_method,
+    rtol: libc::c_double,
+    cutoff: libc::c_double,
+    maxdim: libc::size_t,
+    out: *mut *mut t4a_treetn,
+) -> StatusCode {
+    let op = match require_tree(operator) {
+        Ok(tn) => tn,
+        Err((code, msg)) => {
+            set_last_error(&msg);
+            return code;
+        }
+    };
+    let state = match require_tree(state) {
+        Ok(tn) => tn,
+        Err((code, msg)) => {
+            set_last_error(&msg);
+            return code;
+        }
+    };
+
+    run_catching(out, || {
+        let mapped_positions =
+            collect_positions(mapped_positions, n_mapped_positions, "mapped_positions")?;
+        let internal_inputs = collect_indices(
+            internal_input_indices,
+            n_mapped_positions,
+            "internal_input_indices",
+        )?;
+        let internal_outputs = collect_indices(
+            internal_output_indices,
+            n_mapped_positions,
+            "internal_output_indices",
+        )?;
+        let true_outputs =
+            collect_indices(true_output_indices, n_mapped_positions, "true_output_indices")?;
+
+        let state_true_inputs = collect_single_site_indices(state.inner(), "state")?;
+        validate_mapped_positions(
+            &mapped_positions,
+            state_true_inputs.len(),
+            op.inner().node_count(),
+        )?;
+        let linear_operator = build_chain_linear_operator(
+            op.inner(),
+            &state_true_inputs,
+            &mapped_positions,
+            &internal_inputs,
+            &internal_outputs,
+            &true_outputs,
+        )?;
+
+        let result = apply_linear_operator(
+            &linear_operator,
+            state.inner(),
+            ApplyOptions {
+                method: method.into(),
+                max_rank: (maxdim > 0).then_some(maxdim),
+                rtol: resolve_rtol(rtol, cutoff),
+                ..Default::default()
+            },
+        )
+        .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         Ok(t4a_treetn::new(result))
     })
 }

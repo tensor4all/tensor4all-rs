@@ -4,6 +4,24 @@ use crate::tensor::{
     t4a_tensor_copy_dense_f64, t4a_tensor_new_dense_f64, t4a_tensor_rank, t4a_tensor_release,
 };
 
+fn last_error() -> String {
+    let mut len = 0usize;
+    assert_eq!(
+        crate::t4a_last_error_message(std::ptr::null_mut(), 0, &mut len),
+        T4A_SUCCESS
+    );
+    let mut buf = vec![0u8; len];
+    assert_eq!(
+        crate::t4a_last_error_message(buf.as_mut_ptr(), buf.len(), &mut len),
+        T4A_SUCCESS
+    );
+    std::ffi::CStr::from_bytes_until_nul(&buf)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
 fn new_index(dim: usize) -> *mut t4a_index {
     let mut out = std::ptr::null_mut();
     assert_eq!(
@@ -60,6 +78,31 @@ fn read_dense_f64_treetn(treetn: *const t4a_treetn) -> Vec<f64> {
     let values = read_dense_f64_tensor(dense);
     t4a_tensor_release(dense);
     values
+}
+
+fn read_siteinds(tt: *const t4a_treetn, vertex: usize) -> Vec<*mut t4a_index> {
+    let mut len = 0usize;
+    assert_eq!(
+        t4a_treetn_siteinds(tt, vertex, std::ptr::null_mut(), 0, &mut len),
+        T4A_SUCCESS
+    );
+    let mut indices = vec![std::ptr::null_mut(); len];
+    assert_eq!(
+        t4a_treetn_siteinds(tt, vertex, indices.as_mut_ptr(), indices.len(), &mut len),
+        T4A_SUCCESS
+    );
+    indices
+}
+
+fn assert_vec_close(actual: &[f64], expected: &[f64], tol: f64) {
+    assert_eq!(actual.len(), expected.len());
+    for (slot, (&a, &e)) in actual.iter().zip(expected.iter()).enumerate() {
+        let err = (a - e).abs();
+        assert!(
+            err <= tol,
+            "value mismatch at slot {slot}: actual={a}, expected={e}, err={err}, tol={tol}"
+        );
+    }
 }
 
 fn make_two_site_treetn() -> (*mut t4a_treetn, Vec<*mut t4a_tensor>, Vec<*mut t4a_index>) {
@@ -296,7 +339,7 @@ fn test_treetn_contract_and_to_dense() {
     let op = new_treetn(&[op_tensor as *const t4a_tensor]);
     let state = new_treetn(&[state_tensor as *const t4a_tensor]);
 
-    let mut result = std::ptr::null_mut();
+    let mut result: *mut t4a_treetn = std::ptr::null_mut();
     assert_eq!(
         t4a_treetn_contract(
             op,
@@ -319,4 +362,157 @@ fn test_treetn_contract_and_to_dense() {
     t4a_index_release(in_clone);
     t4a_index_release(out_idx);
     t4a_index_release(in_idx);
+}
+
+#[test]
+fn test_treetn_apply_operator_chain_identity_single_site() {
+    let state_site = new_index(2);
+    let state = new_tensor(&[state_site as *const t4a_index], &[1.5, -2.0]);
+    let state_tt = new_treetn(&[state as *const t4a_tensor]);
+
+    let internal_in = new_index(2);
+    let internal_out = new_index(2);
+    let target_out = new_index(2);
+    let op = new_tensor(
+        &[internal_out as *const t4a_index, internal_in as *const t4a_index],
+        &[1.0, 0.0, 0.0, 1.0],
+    );
+    let op_tt = new_treetn(&[op as *const t4a_tensor]);
+
+    let mapped_nodes = [0usize];
+    let input_indices = [internal_in as *const t4a_index];
+    let output_indices = [internal_out as *const t4a_index];
+    let true_output_indices = [target_out as *const t4a_index];
+
+    let mut result: *mut t4a_treetn = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_apply_operator_chain(
+            op_tt,
+            state_tt,
+            mapped_nodes.as_ptr(),
+            mapped_nodes.len(),
+            input_indices.as_ptr(),
+            output_indices.as_ptr(),
+            true_output_indices.as_ptr(),
+            t4a_contract_method::Naive,
+            0.0,
+            0.0,
+            0,
+            &mut result
+        ),
+        T4A_SUCCESS
+    );
+    assert_eq!(read_dense_f64_treetn(result), vec![1.5, -2.0]);
+
+    let siteinds = read_siteinds(result, 0);
+    assert_eq!(siteinds.len(), 1);
+    let mut dim = 0usize;
+    assert_eq!(crate::index::t4a_index_dim(siteinds[0], &mut dim), T4A_SUCCESS);
+    assert_eq!(dim, 2);
+    t4a_index_release(siteinds[0]);
+
+    t4a_treetn_release(result);
+    t4a_treetn_release(op_tt);
+    t4a_treetn_release(state_tt);
+    t4a_tensor_release(op);
+    t4a_tensor_release(state);
+    t4a_index_release(target_out);
+    t4a_index_release(internal_out);
+    t4a_index_release(internal_in);
+    t4a_index_release(state_site);
+}
+
+#[test]
+fn test_treetn_apply_operator_chain_partial_operator() {
+    let (state_tt, state_tensors, mut state_indices) = make_two_site_treetn();
+
+    let internal_in = new_index(2);
+    let internal_out = new_index(2);
+    let target_out = new_index(2);
+    let op = new_tensor(
+        &[internal_out as *const t4a_index, internal_in as *const t4a_index],
+        &[2.0, 0.0, 0.0, 5.0],
+    );
+    let op_tt = new_treetn(&[op as *const t4a_tensor]);
+
+    let mapped_nodes = [1usize];
+    let input_indices = [internal_in as *const t4a_index];
+    let output_indices = [internal_out as *const t4a_index];
+    let true_output_indices = [target_out as *const t4a_index];
+
+    let mut result: *mut t4a_treetn = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_apply_operator_chain(
+            op_tt,
+            state_tt,
+            mapped_nodes.as_ptr(),
+            mapped_nodes.len(),
+            input_indices.as_ptr(),
+            output_indices.as_ptr(),
+            true_output_indices.as_ptr(),
+            t4a_contract_method::Naive,
+            0.0,
+            0.0,
+            0,
+            &mut result
+        ),
+        T4A_SUCCESS
+    );
+    let dense = read_dense_f64_treetn(result);
+    assert_vec_close(&dense, &[2.0, 4.0, 15.0, 20.0], 1e-10);
+
+    t4a_treetn_release(result);
+    t4a_treetn_release(op_tt);
+    t4a_tensor_release(op);
+    t4a_index_release(target_out);
+    t4a_index_release(internal_out);
+    t4a_index_release(internal_in);
+    cleanup(state_tt, state_tensors, std::mem::take(&mut state_indices));
+}
+
+#[test]
+fn test_treetn_apply_operator_chain_rejects_out_of_range_mapped_node() {
+    let (state_tt, state_tensors, mut state_indices) = make_two_site_treetn();
+
+    let internal_in = new_index(2);
+    let internal_out = new_index(2);
+    let target_out = new_index(2);
+    let op = new_tensor(
+        &[internal_out as *const t4a_index, internal_in as *const t4a_index],
+        &[1.0, 0.0, 0.0, 1.0],
+    );
+    let op_tt = new_treetn(&[op as *const t4a_tensor]);
+
+    let mapped_nodes = [2usize];
+    let input_indices = [internal_in as *const t4a_index];
+    let output_indices = [internal_out as *const t4a_index];
+    let true_output_indices = [target_out as *const t4a_index];
+    let mut result = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_apply_operator_chain(
+            op_tt,
+            state_tt,
+            mapped_nodes.as_ptr(),
+            mapped_nodes.len(),
+            input_indices.as_ptr(),
+            output_indices.as_ptr(),
+            true_output_indices.as_ptr(),
+            t4a_contract_method::Naive,
+            0.0,
+            0.0,
+            0,
+            &mut result
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    let err = last_error();
+    assert!(err.contains("mapped node position 2"), "unexpected error: {err}");
+    assert!(result.is_null());
+
+    t4a_treetn_release(op_tt);
+    t4a_tensor_release(op);
+    t4a_index_release(target_out);
+    t4a_index_release(internal_out);
+    t4a_index_release(internal_in);
+    cleanup(state_tt, state_tensors, std::mem::take(&mut state_indices));
 }
