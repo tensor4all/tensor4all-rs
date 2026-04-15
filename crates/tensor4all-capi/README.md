@@ -1,46 +1,50 @@
 # tensor4all-capi
 
-C-compatible FFI interface to the tensor4all Rust library, enabling language bindings for Julia, Python, and other languages.
+C-compatible FFI interface to the tensor4all Rust library, focused on the
+minimal Julia-facing surface.
 
 ## Features
 
-- **Index API**: Create and manipulate tensor indices with tags
-- **Tensor API**: Dense and diagonal tensors for `f64` and `Complex64`
-- **TensorTrain API**: Full MPS functionality (orthogonalize, truncate, contract)
-- **Algorithm selection**: Configurable factorization and contraction algorithms
-- **Error handling**: Status codes instead of exceptions
-- **Panic safety**: All functions protected with `catch_unwind`
+- **Index API**: Immutable index handles with constructor/getter-only access
+- **Tensor API**: Dense `f64` / `Complex64` construction, export, and contraction
+- **TreeTN API**: General tree tensor network accessors and core operations
+- **QTT layout API**: Canonical binary QTT layout descriptors for transform materialization
+- **Generated C header**: `include/tensor4all_capi.h` for downstream bindings
+- **Error handling**: `StatusCode + out` constructors/clones plus `t4a_last_error_message`
+- **Panic safety**: All exported functions catch Rust panics at the FFI boundary
 
 ## API Conventions
 
-- Opaque pointers with lifecycle management (`*_new`, `*_release`, `*_clone`)
+- Opaque pointers with lifecycle management (`*_new(..., out)`, `*_release`, `*_clone(..., out)`)
 - Status codes: `T4A_SUCCESS`, `T4A_NULL_POINTER`, `T4A_INVALID_ARGUMENT`, etc.
-- Row-major data layout for tensor data
+- Column-major data layout for dense tensor data
+- Complex buffers use interleaved doubles: `[re, im, re, im, ...]`
 
 ## Example (C)
 
-> **Note**: A C header is not yet generated automatically. Declare the required
-> function prototypes manually, or generate one with `cbindgen` from the crate source.
-
 ```c
-/* Create an index with dimension 2 and a "Site" tag */
-t4a_index* idx = t4a_index_new(2);
-t4a_index_add_tag(idx, "Site");
+/* Create a tagged index with explicit plev. */
+struct t4a_index *idx = NULL;
+t4a_index_new(2, "Site", 0, &idx);
 
-/* Create a tensor train of zeros: 4 sites each of dimension 2 */
-size_t site_dims[] = {2, 2, 2, 2};
-t4a_simplett_f64* tt = t4a_simplett_f64_zeros(site_dims, 4);
-
-/* Query properties */
-size_t n_sites = t4a_simplett_f64_len(tt);
-
-/* Compute norm; returns T4A_SUCCESS (0) on success */
-double norm;
-t4a_simplett_f64_norm(tt, &norm);
+/* Construct a dense tensor in column-major order. */
+double data[] = {1.0, 2.0};
+struct t4a_tensor *tensor = NULL;
+const struct t4a_index *indices[] = {idx};
+t4a_tensor_new_dense_f64(1, indices, data, 2, &tensor);
 
 /* Release objects */
-t4a_simplett_f64_release(tt);
+t4a_tensor_release(tensor);
 t4a_index_release(idx);
+```
+
+## Regenerating the Header
+
+```bash
+mkdir -p crates/tensor4all-capi/include
+cbindgen crates/tensor4all-capi \
+  --config crates/tensor4all-capi/cbindgen.toml \
+  --output crates/tensor4all-capi/include/tensor4all_capi.h
 ```
 
 ## License

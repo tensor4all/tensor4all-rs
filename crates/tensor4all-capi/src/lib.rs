@@ -1,57 +1,30 @@
 #![warn(missing_docs)]
 //! C API for tensor4all Rust implementation
 //!
-//! This crate provides a C-compatible interface to the tensor4all library,
-//! enabling usage from languages like Julia, Python, and C++.
+//! This crate provides the minimal Julia-facing C-compatible interface to the
+//! tensor4all library.
 //!
-//! ## Milestone 1: Index types
+//! The retained public surface is intentionally small:
+//! - `Index`
+//! - `Tensor`
+//! - `TreeTN`
+//! - canonical QTT layout descriptors and transform materialization entrypoints
 //!
-//! The initial implementation provides wrappers for:
-//! - `DynIndex` (`Index<DynId, TagSet>`) - the default dynamic index type
-//!
-//! ## Milestone 2: Tensor types
-//!
-//! Extended to support:
-//! - `TensorDynLen` with Dense/Diag storage
-//! - Bidirectional conversion with ITensors.ITensor
-//!
-//! ## Design patterns
-//!
-//! Following the patterns from `sparse-ir-capi`:
-//! - Opaque pointers with `_private: *const c_void`
-//! - Explicit lifecycle functions: `*_release`, `*_clone`, `*_is_assigned`
-//! - Status codes for error handling
-//! - `catch_unwind` to prevent Rust panics from crossing FFI boundary
+//! Convenience subsystems such as SimpleTT, TreeTCI, QuanticsTCI, quantics grid
+//! objects, and HDF5 are not part of the redesigned C surface.
 
 // C API requires unsafe operations with raw pointers
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-#[macro_use]
-mod macros;
-
-mod algorithm;
-#[cfg(feature = "hdf5")]
-mod hdf5;
 mod index;
-mod quanticsgrids;
-mod quanticstci;
 mod quanticstransform;
-mod simplett;
 mod tensor;
-mod treetci;
 mod treetn;
 mod types;
 
-pub use algorithm::*;
-#[cfg(feature = "hdf5")]
-pub use hdf5::*;
 pub use index::*;
-pub use quanticsgrids::*;
-pub use quanticstci::*;
 pub use quanticstransform::*;
-pub use simplett::*;
 pub use tensor::*;
-pub use treetci::*;
 pub use treetn::*;
 pub use types::*;
 
@@ -74,6 +47,9 @@ pub const T4A_BUFFER_TOO_SMALL: StatusCode = -5;
 pub const T4A_INTERNAL_ERROR: StatusCode = -6;
 /// The requested API exists but is not implemented yet.
 pub const T4A_NOT_IMPLEMENTED: StatusCode = -7;
+
+/// Internal result type carrying both a status code and an error message.
+pub(crate) type CapiResult<T> = Result<T, (StatusCode, String)>;
 
 // ============================================================================
 // Thread-local error message storage
@@ -109,9 +85,80 @@ pub(crate) fn err_status<E: std::fmt::Display>(err: E, code: StatusCode) -> Stat
 }
 
 /// Store an error and return a null pointer.
+#[allow(dead_code)]
 pub(crate) fn err_null<T, E: std::fmt::Display>(err: E) -> *mut T {
     set_last_error(&err.to_string());
     std::ptr::null_mut()
+}
+
+/// Pair a status code with an error message for `run_catching`.
+pub(crate) fn capi_error<E: std::fmt::Display>(code: StatusCode, err: E) -> (StatusCode, String) {
+    (code, err.to_string())
+}
+
+/// Run a constructor-like closure and write the resulting handle to `out`.
+pub(crate) fn run_catching<T, F>(out: *mut *mut T, f: F) -> StatusCode
+where
+    F: FnOnce() -> CapiResult<T>,
+{
+    if out.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(Ok(value)) => {
+            unsafe { *out = Box::into_raw(Box::new(value)) };
+            T4A_SUCCESS
+        }
+        Ok(Err((code, msg))) => {
+            set_last_error(&msg);
+            code
+        }
+        Err(panic) => {
+            let msg = panic_message(&*panic);
+            set_last_error(&msg);
+            T4A_INTERNAL_ERROR
+        }
+    }
+}
+
+/// Clone an opaque wrapper through the constructor-style `out` pattern.
+pub(crate) fn clone_opaque<T: Clone>(src: *const T, out: *mut *mut T) -> StatusCode {
+    if src.is_null() {
+        return T4A_NULL_POINTER;
+    }
+
+    run_catching(out, || unsafe { Ok((&*src).clone()) })
+}
+
+/// Release an opaque wrapper allocated with `Box::into_raw`.
+pub(crate) fn release_opaque<T>(obj: *mut T) {
+    if obj.is_null() {
+        return;
+    }
+
+    unsafe {
+        let _ = Box::from_raw(obj);
+    }
+}
+
+/// Check whether an opaque wrapper pointer is valid.
+pub(crate) fn is_assigned_opaque<T>(obj: *const T) -> i32 {
+    if obj.is_null() {
+        return 0;
+    }
+
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let _ = &*obj;
+        1
+    })) {
+        Ok(v) => v,
+        Err(panic) => {
+            let msg = panic_message(&*panic);
+            set_last_error(&msg);
+            0
+        }
+    }
 }
 
 /// Unwrap a `catch_unwind` result, storing any panic message.
@@ -127,6 +174,7 @@ pub(crate) fn unwrap_catch(result: std::thread::Result<StatusCode>) -> StatusCod
 }
 
 /// Unwrap a `catch_unwind` pointer result, storing any panic message.
+#[allow(dead_code)]
 pub(crate) fn unwrap_catch_ptr<T>(result: std::thread::Result<*mut T>) -> *mut T {
     match result {
         Ok(ptr) => ptr,

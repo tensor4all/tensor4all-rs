@@ -76,6 +76,61 @@ fn test_validate_linsolve_inputs_incompatible_dimensions() {
     assert!(result.is_err());
 }
 
+#[test]
+fn test_square_linsolve_zero_sweeps_returns_solution_wrapper() {
+    let operator = create_simple_2site_mpo();
+    let rhs = create_simple_2site_mps();
+    let init = create_simple_2site_mps();
+
+    let result = square_linsolve(
+        &operator,
+        &rhs,
+        init,
+        &"site0".to_string(),
+        LinsolveOptions::new(0),
+    )
+    .unwrap();
+
+    assert_eq!(result.solution.node_count(), 2);
+    assert_eq!(result.sweeps, 0);
+    assert_eq!(result.residual, None);
+    assert!(!result.converged);
+}
+
+#[test]
+fn test_square_linsolve_validation_error_bubbles_up() {
+    let operator = create_simple_2site_mpo();
+    let rhs = create_simple_2site_mps();
+
+    let mut init = TreeTN::<TensorDynLen, String>::new();
+    let s0 = DynIndex::new_dyn(3);
+    let s1 = DynIndex::new_dyn(3);
+    let b01 = DynIndex::new_dyn(2);
+
+    let t0 = TensorDynLen::from_dense(vec![s0.clone(), b01.clone()], vec![1.0; 6]).unwrap();
+    let t1 = TensorDynLen::from_dense(vec![b01.clone(), s1.clone()], vec![1.0; 6]).unwrap();
+
+    let n0 = init.add_tensor("site0".to_string(), t0).unwrap();
+    let n1 = init.add_tensor("site1".to_string(), t1).unwrap();
+    init.connect(n0, &b01, n1, &b01).unwrap();
+
+    let err = square_linsolve(
+        &operator,
+        &rhs,
+        init,
+        &"site0".to_string(),
+        LinsolveOptions::new(0),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        err.contains("Operator cannot act on init")
+            || err.contains("Result of operator action is not compatible with RHS"),
+        "unexpected error: {err}"
+    );
+}
+
 // Note: square_linsolve requires MPO and MPS to have compatible index structures.
 // The MPO should have input indices matching the MPS site indices.
 // These tests are simplified to only test validation, as full linsolve requires
