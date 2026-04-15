@@ -374,7 +374,10 @@ fn test_treetn_apply_operator_chain_identity_single_site() {
     let internal_out = new_index(2);
     let target_out = new_index(2);
     let op = new_tensor(
-        &[internal_out as *const t4a_index, internal_in as *const t4a_index],
+        &[
+            internal_out as *const t4a_index,
+            internal_in as *const t4a_index,
+        ],
         &[1.0, 0.0, 0.0, 1.0],
     );
     let op_tt = new_treetn(&[op as *const t4a_tensor]);
@@ -407,7 +410,10 @@ fn test_treetn_apply_operator_chain_identity_single_site() {
     let siteinds = read_siteinds(result, 0);
     assert_eq!(siteinds.len(), 1);
     let mut dim = 0usize;
-    assert_eq!(crate::index::t4a_index_dim(siteinds[0], &mut dim), T4A_SUCCESS);
+    assert_eq!(
+        crate::index::t4a_index_dim(siteinds[0], &mut dim),
+        T4A_SUCCESS
+    );
     assert_eq!(dim, 2);
     t4a_index_release(siteinds[0]);
 
@@ -430,7 +436,10 @@ fn test_treetn_apply_operator_chain_partial_operator() {
     let internal_out = new_index(2);
     let target_out = new_index(2);
     let op = new_tensor(
-        &[internal_out as *const t4a_index, internal_in as *const t4a_index],
+        &[
+            internal_out as *const t4a_index,
+            internal_in as *const t4a_index,
+        ],
         &[2.0, 0.0, 0.0, 5.0],
     );
     let op_tt = new_treetn(&[op as *const t4a_tensor]);
@@ -478,7 +487,10 @@ fn test_treetn_apply_operator_chain_rejects_out_of_range_mapped_node() {
     let internal_out = new_index(2);
     let target_out = new_index(2);
     let op = new_tensor(
-        &[internal_out as *const t4a_index, internal_in as *const t4a_index],
+        &[
+            internal_out as *const t4a_index,
+            internal_in as *const t4a_index,
+        ],
         &[1.0, 0.0, 0.0, 1.0],
     );
     let op_tt = new_treetn(&[op as *const t4a_tensor]);
@@ -506,7 +518,10 @@ fn test_treetn_apply_operator_chain_rejects_out_of_range_mapped_node() {
         T4A_INVALID_ARGUMENT
     );
     let err = last_error();
-    assert!(err.contains("mapped node position 2"), "unexpected error: {err}");
+    assert!(
+        err.contains("mapped node position 2"),
+        "unexpected error: {err}"
+    );
     assert!(result.is_null());
 
     t4a_treetn_release(op_tt);

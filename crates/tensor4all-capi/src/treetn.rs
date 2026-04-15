@@ -162,10 +162,7 @@ fn collect_indices(
     for i in 0..n_indices {
         let ptr = unsafe { *index_ptrs.add(i) };
         if ptr.is_null() {
-            return Err(capi_error(
-                T4A_NULL_POINTER,
-                format!("{what}[{i}] is null"),
-            ));
+            return Err(capi_error(T4A_NULL_POINTER, format!("{what}[{i}] is null")));
         }
         indices.push(unsafe { &*ptr }.inner().clone());
     }
@@ -211,7 +208,10 @@ fn require_chain_layout(tn: &InternalTreeTN, what: &str) -> CapiResult<usize> {
         if tn.node_index(&position).is_none() {
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
-                format!("{what} must use dense node names 0..{}, missing {position}", n - 1),
+                format!(
+                    "{what} must use dense node names 0..{}, missing {position}",
+                    n - 1
+                ),
             ));
         }
 
@@ -376,13 +376,17 @@ fn build_chain_linear_operator(
         if !site_space.contains(internal_input) {
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
-                format!("operator node {position} does not contain the provided internal input index"),
+                format!(
+                    "operator node {position} does not contain the provided internal input index"
+                ),
             ));
         }
         if !site_space.contains(internal_output) {
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
-                format!("operator node {position} does not contain the provided internal output index"),
+                format!(
+                    "operator node {position} does not contain the provided internal output index"
+                ),
             ));
         }
 
@@ -914,8 +918,11 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
             n_mapped_positions,
             "internal_output_indices",
         )?;
-        let true_outputs =
-            collect_indices(true_output_indices, n_mapped_positions, "true_output_indices")?;
+        let true_outputs = collect_indices(
+            true_output_indices,
+            n_mapped_positions,
+            "true_output_indices",
+        )?;
 
         let state_true_inputs = collect_single_site_indices(state.inner(), "state")?;
         validate_mapped_positions(
