@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use num_complex::Complex64;
-use tensor4all_core::{IndexLike, TensorDynLen, TensorElement, TensorLike};
+use tensor4all_core::{IndexLike, TensorDynLen, TensorElement};
 use tensor4all_treetn::{SwapOptions, TreeTN};
 
 // ============================================================================
@@ -396,9 +396,11 @@ fn test_swap_2r_interleave_generic<T: TensorElement + From<f64>>() {
     );
 
     let after = tn.contract_to_tensor().unwrap();
+    let diff = &before - &after;
     assert!(
-        before.isapprox(&after, 1e-10, 1e-10),
-        "contract_to_tensor must match before and after swap"
+        diff.maxabs() < 1e-10,
+        "contract_to_tensor must match before and after swap, diff={}",
+        diff.maxabs()
     );
 }
 
@@ -427,6 +429,27 @@ fn test_swap_y_shape_generic<T: TensorElement + From<f64>>() {
     );
 }
 
+fn test_swap_y_shape_contract_and_canonical_form_generic<T: TensorElement + From<f64>>() {
+    let (mut tn, s0, s1, _s2) = y_shape_tree::<T>();
+    let before = tn.contract_to_tensor().unwrap();
+
+    let mut target = HashMap::new();
+    target.insert(s0.id().to_owned(), "L1".to_string());
+    target.insert(s1.id().to_owned(), "L0".to_string());
+
+    tn.swap_site_indices(&target, &SwapOptions::default())
+        .unwrap();
+
+    let after = tn.contract_to_tensor().unwrap();
+    let diff = &before - &after;
+    assert!(
+        diff.maxabs() < 1e-10,
+        "contract_to_tensor must match before and after Y-shape swap, diff={}",
+        diff.maxabs()
+    );
+    assert!(tn.is_canonicalized());
+}
+
 fn test_swap_correctness_contract_generic<T: TensorElement + From<f64>>() {
     let (mut tn, s0, s1) = two_node_chain::<T>();
     let before = tn.contract_to_tensor().unwrap();
@@ -438,9 +461,11 @@ fn test_swap_correctness_contract_generic<T: TensorElement + From<f64>>() {
         .unwrap();
 
     let after = tn.contract_to_tensor().unwrap();
+    let diff = &before - &after;
     assert!(
-        before.isapprox(&after, 1e-10, 1e-10),
-        "contract_to_tensor must match before and after swap"
+        diff.maxabs() < 1e-10,
+        "contract_to_tensor must match before and after swap, diff={}",
+        diff.maxabs()
     );
 }
 
@@ -493,7 +518,7 @@ fn test_swap_empty_target_no_op() {
 #[test]
 fn test_swap_partial() {
     let (mut tn, s0, s1) = two_node_chain::<f64>();
-    // Only move s0 to B; s1 not in target. On a 2-node chain one factorize can only 1-1 split.
+    // Only move s0 to B; s1 is not targeted and stays on its current side.
     let mut target = HashMap::new();
     target.insert(s0.id().to_owned(), "B".to_string());
     tn.swap_site_indices(&target, &SwapOptions::default())
@@ -505,7 +530,7 @@ fn test_swap_partial() {
     );
     assert_eq!(
         net.find_node_by_index_id(s1.id()).map(|n| n.as_str()),
-        Some("A")
+        Some("B")
     );
 }
 
@@ -525,7 +550,6 @@ fn test_swap_2r_interleave() {
 }
 
 #[test]
-#[ignore = "Y-shape swap requires separate implementation (see plan/swap-site-indices-perf.md)"]
 fn test_swap_y_shape() {
     test_swap_y_shape_generic::<f64>();
 }
@@ -538,6 +562,11 @@ fn test_swap_correctness_contract() {
 #[test]
 fn test_swap_by_index_matches_id_based() {
     test_swap_by_index_matches_id_based_generic::<f64>();
+}
+
+#[test]
+fn test_swap_y_shape_contract_and_canonical_form() {
+    test_swap_y_shape_contract_and_canonical_form_generic::<f64>();
 }
 
 // ============================================================================
@@ -565,7 +594,6 @@ fn test_swap_2r_interleave_c64() {
 }
 
 #[test]
-#[ignore = "Y-shape swap requires separate implementation (see plan/swap-site-indices-perf.md)"]
 fn test_swap_y_shape_c64() {
     test_swap_y_shape_generic::<Complex64>();
 }
@@ -573,6 +601,11 @@ fn test_swap_y_shape_c64() {
 #[test]
 fn test_swap_correctness_contract_c64() {
     test_swap_correctness_contract_generic::<Complex64>();
+}
+
+#[test]
+fn test_swap_y_shape_contract_and_canonical_form_c64() {
+    test_swap_y_shape_contract_and_canonical_form_generic::<Complex64>();
 }
 
 // ============================================================================

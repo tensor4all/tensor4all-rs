@@ -1,19 +1,99 @@
 //! Site index swap: reorder which node holds which site index.
 //!
 //! Implements swapping site indices between adjacent nodes along the tree
-//! so that the network reaches a target assignment (index id → node name).
+//! so that the network reaches a target assignment (index id -> node name).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::Hash;
 
 use anyhow::{Context, Result};
 use petgraph::stable_graph::NodeIndex;
 
-use tensor4all_core::{IndexLike, TensorLike};
+use tensor4all_core::{FactorizeOptions, FactorizeResult, IndexLike, TensorLike};
 
 use crate::node_name_network::NodeNameNetwork;
 
-use super::TreeTN;
+use super::{localupdate::LocalUpdateSweepPlan, TreeTN};
+
+// ============================================================================
+// Factorize with trivial-bond handling
+// ============================================================================
+
+/// Factorize a tensor into left and right parts connected by a bond index.
+///
+/// Extends [`TensorLike::factorize`] to handle degenerate cases where all
+/// indices go to one side (empty `left_inds` or `left_inds == all_inds`).
+/// For these cases a dimension-1 trivial bond is created so that
+/// `contract(left, right)` recovers the input tensor exactly.
+///
+/// With `Canonical::Left` (the only mode used by swap):
+/// - **Normal case**: delegates to `TensorLike::factorize`.
+/// - **Empty `left_inds`**: `left = [1]` (dim-1 scalar isometry),
+///   `right = tensor ⊗ [1]` (acquires the trivial bond).
+/// - **Full `left_inds`**: `left = (tensor ⊗ [1]) / ‖tensor‖`,
+///   `right = [‖tensor‖]` (norm on the right side, left is isometric).
+pub(crate) fn factorize_or_trivial<T>(
+    tensor: &T,
+    left_inds: &[T::Index],
+    all_inds: &[T::Index],
+    factorize_options: &FactorizeOptions,
+) -> anyhow::Result<FactorizeResult<T>>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + std::fmt::Debug + Send + Sync,
+{
+    if left_inds.is_empty() {
+        // All indices go to the right side.
+        let bond = <T::Index as IndexLike>::create_dummy_link_pair().0;
+        let left = T::onehot(&[(bond.clone(), 0)])
+            .map_err(|e| anyhow::anyhow!("factorize_or_trivial: left onehot: {}", e))?;
+        let right_bond = T::onehot(&[(bond.clone(), 0)])
+            .map_err(|e| anyhow::anyhow!("factorize_or_trivial: right onehot: {}", e))?;
+        let right = tensor
+            .outer_product(&right_bond)
+            .context("factorize_or_trivial: right outer_product")?;
+        return Ok(FactorizeResult {
+            left,
+            right,
+            bond_index: bond,
+            singular_values: None,
+            rank: 1,
+        });
+    }
+
+    if left_inds.len() == all_inds.len() {
+        // All indices go to the left side.
+        let bond = <T::Index as IndexLike>::create_dummy_link_pair().0;
+        let left_bond = T::onehot(&[(bond.clone(), 0)])
+            .map_err(|e| anyhow::anyhow!("factorize_or_trivial: left onehot: {}", e))?;
+        let mut left = tensor
+            .outer_product(&left_bond)
+            .context("factorize_or_trivial: left outer_product")?;
+        let mut right = T::onehot(&[(bond.clone(), 0)])
+            .map_err(|e| anyhow::anyhow!("factorize_or_trivial: right onehot: {}", e))?;
+        let left_norm = left.norm();
+        if left_norm > 0.0 {
+            left = left
+                .scale(tensor4all_core::AnyScalar::new_real(1.0 / left_norm))
+                .context("factorize_or_trivial: normalize left")?;
+            right = right
+                .scale(tensor4all_core::AnyScalar::new_real(left_norm))
+                .context("factorize_or_trivial: scale right")?;
+        }
+        return Ok(FactorizeResult {
+            left,
+            right,
+            bond_index: bond,
+            singular_values: None,
+            rank: 1,
+        });
+    }
+
+    // Normal case: delegate to TensorLike::factorize
+    tensor
+        .factorize(left_inds, factorize_options)
+        .map_err(|e| anyhow::anyhow!("factorize_or_trivial: factorize: {}", e))
+}
 
 // ============================================================================
 // SwapOptions
@@ -33,155 +113,364 @@ pub struct SwapOptions {
 }
 
 // ============================================================================
-// SwapStep
+// ScheduledSwapStep
 // ============================================================================
 
-/// A single swap step on one edge: which index id moves in which direction.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SwapStep<V, I>
-where
-    I: IndexLike,
-{
-    /// Edge (node1, node2); canonical key is (min, max).
-    pub edge: (V, V),
-    /// Index id moving from the first node (min) to the second (max). None if no move.
-    pub index_to_second: Option<I::Id>,
-    /// Index id moving from the second node (max) to the first (min). None if no move.
-    pub index_to_first: Option<I::Id>,
-}
-
-// ============================================================================
-// SwapPlan
-// ============================================================================
-
-/// Swap plan: sequence of swap steps per edge to go from current to target assignment.
+/// A single two-site update step in a pre-computed swap schedule.
 ///
-/// Used for validation and optional debugging/visualization. The actual sweep
-/// uses dynamic per-step decision based on current vs target assignment.
+/// Use this to inspect exactly which edge is updated, whether the canonical
+/// center must be transported first, and which site indices must end up on
+/// each side of the edge after the local factorization.
+///
+/// Related types:
+/// - [`SwapSchedule`] stores the full ordered sequence of these steps.
+/// - [`SwapOptions`] controls truncation only during execution, not schedule construction.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashSet;
+///
+/// use tensor4all_treetn::ScheduledSwapStep;
+///
+/// let step = ScheduledSwapStep {
+///     transport_path: vec!["L0".to_string(), "C".to_string()],
+///     node_a: "C".to_string(),
+///     node_b: "L1".to_string(),
+///     a_side_sites: HashSet::from(["s1".to_string()]),
+///     b_side_sites: HashSet::from(["s0".to_string()]),
+/// };
+///
+/// assert_eq!(step.transport_path, vec!["L0".to_string(), "C".to_string()]);
+/// assert!(step.a_side_sites.contains("s1"));
+/// assert!(step.b_side_sites.contains("s0"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduledSwapStep<V, Id>
+where
+    Id: Eq + Hash,
+{
+    /// Path to transport the canonical center before the swap.
+    ///
+    /// Empty when the center is already at `node_a` or `node_b`.
+    /// Otherwise this is `[current_center, ..., node_a]`.
+    pub transport_path: Vec<V>,
+    /// The first node in the directed sweep edge.
+    pub node_a: V,
+    /// The second node in the directed sweep edge.
+    pub node_b: V,
+    /// Site index IDs that should live on `node_a`'s side after this step.
+    pub a_side_sites: HashSet<Id>,
+    /// Site index IDs that should live on `node_b`'s side after this step.
+    pub b_side_sites: HashSet<Id>,
+}
+
+// ============================================================================
+// SwapSchedule
+// ============================================================================
+
+/// Pre-computed swap schedule for `swap_site_indices`.
+///
+/// The schedule is derived purely from graph structure plus current and target
+/// site assignments. It contains no tensor data and can therefore be built,
+/// inspected, and unit-tested without performing any tensor contractions.
+///
+/// Related types:
+/// - [`ScheduledSwapStep`] is one local two-site update in this schedule.
+/// - [`SwapOptions`] affects execution of the schedule, but not its contents.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+///
+/// use tensor4all_treetn::{NodeNameNetwork, SwapSchedule};
+///
+/// let mut topology = NodeNameNetwork::new();
+/// topology.add_node("A".to_string()).unwrap();
+/// topology.add_node("B".to_string()).unwrap();
+/// topology.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+///
+/// let current = HashMap::from([("s0".to_string(), "A".to_string())]);
+/// let target = HashMap::from([("s0".to_string(), "B".to_string())]);
+/// let root = "A".to_string();
+///
+/// let schedule = SwapSchedule::build(&topology, &current, &target, &root).unwrap();
+///
+/// assert_eq!(schedule.root, "A");
+/// assert_eq!(schedule.steps.len(), 1);
+/// assert_eq!(schedule.steps[0].node_a, "A");
+/// assert_eq!(schedule.steps[0].node_b, "B");
+/// ```
 #[derive(Debug, Clone)]
-pub struct SwapPlan<V, I>
+pub struct SwapSchedule<V, Id>
 where
-    I: IndexLike,
+    Id: Eq + Hash,
 {
-    /// Per-edge swap steps. Key is normalized edge (min(node_a, node_b), max(...)).
-    swaps: HashMap<(V, V), Vec<SwapStep<V, I>>>,
+    /// Root used for the base Euler sweep and initial canonicalization.
+    pub root: V,
+    /// Fully expanded sequence of swap steps.
+    pub steps: Vec<ScheduledSwapStep<V, Id>>,
 }
 
-fn normalize_edge<V: Ord>(a: V, b: V) -> (V, V) {
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
-}
-
-impl<V, I> SwapPlan<V, I>
+impl<V, Id> SwapSchedule<V, Id>
 where
-    V: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
-    I: IndexLike,
-    I::Id: Clone + Hash + Eq,
+    V: Clone + Hash + Eq + std::fmt::Debug + Send + Sync,
+    Id: Clone + Hash + Eq + std::fmt::Debug,
 {
-    /// Build a swap plan from current and target assignment.
+    /// Build a swap schedule from topology plus current and target assignments.
     ///
-    /// - `current_assignment`: every site index id in the network → its current node.
-    /// - `target_assignment`: partial map; only indices to move need to be present.
-    ///   Indices not in `target_assignment` stay in place.
+    /// The returned schedule is a pure graph computation. It simulates site
+    /// positions through repeated Euler-tour sweeps, emits only edges where at
+    /// least one targeted site index crosses, and records any required
+    /// canonical-center transport between non-adjacent emitted swap steps.
     ///
-    /// Validation:
-    /// - Every key in `target_assignment` must exist in `current_assignment`.
-    /// - Every target node must exist in `topology`.
-    pub fn new(
-        current_assignment: &HashMap<I::Id, V>,
-        target_assignment: &HashMap<I::Id, V>,
+    /// # Arguments
+    /// * `topology` - Tree topology whose nodes are named by `V`.
+    /// * `current_assignment` - Current node for every site index ID in the network.
+    /// * `target_assignment` - Partial target map; indices not listed keep their current side.
+    /// * `root` - Sweep root and assumed initial canonical center.
+    ///
+    /// # Returns
+    /// A [`SwapSchedule`] containing the ordered local updates needed to realize `target_assignment`.
+    ///
+    /// # Errors
+    /// Returns an error if `root` is missing, an index ID in `target_assignment`
+    /// is unknown, a referenced node is missing from `topology`, no tree path
+    /// exists between required nodes, or the simulated sweeps fail to satisfy
+    /// the requested target assignment within the tree-diameter pass bound.
+    pub fn build(
         topology: &NodeNameNetwork<V>,
+        current_assignment: &HashMap<Id, V>,
+        target_assignment: &HashMap<Id, V>,
+        root: &V,
     ) -> Result<Self> {
-        let mut swaps: HashMap<(V, V), Vec<SwapStep<V, I>>> = HashMap::new();
+        if !topology.has_node(root) {
+            return Err(anyhow::anyhow!(
+                "SwapSchedule::build: root {:?} not in topology",
+                root
+            ));
+        }
 
-        for (index_id, target_node) in target_assignment {
-            let current_node = current_assignment.get(index_id).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "target_assignment contains index id {:?} which is not in the network",
-                    index_id
-                )
-            })?;
-
-            if !topology.has_node(target_node) {
+        for (index_id, current_node) in current_assignment {
+            if !topology.has_node(current_node) {
                 return Err(anyhow::anyhow!(
-                    "target node {:?} for index {:?} is not in the topology",
-                    target_node,
+                    "SwapSchedule::build: current node {:?} for index {:?} is not in the topology",
+                    current_node,
                     index_id
-                ))
-                .context("SwapPlan::new: target node must exist");
-            }
-
-            if current_node == target_node {
-                continue;
-            }
-
-            let from_idx = topology.node_index(current_node).ok_or_else(|| {
-                anyhow::anyhow!("current node {:?} not found in topology", current_node)
-            })?;
-            let to_idx = topology.node_index(target_node).ok_or_else(|| {
-                anyhow::anyhow!("target node {:?} not found in topology", target_node)
-            })?;
-
-            let path = topology.path_between(from_idx, to_idx).ok_or_else(|| {
-                anyhow::anyhow!("no path between {:?} and {:?}", current_node, target_node)
-            })?;
-
-            let path_names: Vec<V> = path
-                .iter()
-                .filter_map(|ni| topology.node_name(*ni).cloned())
-                .collect();
-
-            for i in 0..path_names.len().saturating_sub(1) {
-                let a = path_names[i].clone();
-                let b = path_names[i + 1].clone();
-                let (first, second) = normalize_edge(a.clone(), b.clone());
-                let edge_key = (first.clone(), second.clone());
-
-                let step = if a < b {
-                    SwapStep {
-                        edge: (a, b),
-                        index_to_second: Some(index_id.clone()),
-                        index_to_first: None,
-                    }
-                } else {
-                    SwapStep {
-                        edge: (b.clone(), a.clone()),
-                        index_to_second: None,
-                        index_to_first: Some(index_id.clone()),
-                    }
-                };
-
-                swaps.entry(edge_key).or_default().push(step);
+                ));
             }
         }
 
-        Ok(Self { swaps })
+        for (index_id, target_node) in target_assignment {
+            if !current_assignment.contains_key(index_id) {
+                return Err(anyhow::anyhow!(
+                    "SwapSchedule::build: target_assignment contains index id {:?} which is not in the network",
+                    index_id
+                ));
+            }
+            if !topology.has_node(target_node) {
+                return Err(anyhow::anyhow!(
+                    "SwapSchedule::build: target node {:?} for index {:?} is not in the topology",
+                    target_node,
+                    index_id
+                ));
+            }
+        }
+
+        let oracle = SubtreeOracle::new(topology, root)?;
+        let base_sweep = LocalUpdateSweepPlan::new(topology, root, 2)
+            .ok_or_else(|| anyhow::anyhow!("SwapSchedule::build: failed to build 2-site sweep"))?;
+        let max_passes = tree_diameter(topology)?;
+
+        let mut position = current_assignment.clone();
+        let mut center = root.clone();
+        let mut steps = Vec::new();
+
+        for _pass in 0..max_passes {
+            if positions_satisfy_targets(&position, target_assignment) {
+                break;
+            }
+
+            let mut any_moved_this_pass = false;
+
+            for sweep_step in base_sweep.iter() {
+                if sweep_step.nodes.len() != 2 {
+                    continue;
+                }
+
+                let node_a = sweep_step.nodes[0].clone();
+                let node_b = sweep_step.nodes[1].clone();
+
+                let mut a_side_sites = HashSet::new();
+                let mut b_side_sites = HashSet::new();
+                let mut any_crossing = false;
+                let mut any_site_on_edge = false;
+
+                for (index_id, current_node) in &position {
+                    if current_node != &node_a && current_node != &node_b {
+                        continue;
+                    }
+
+                    any_site_on_edge = true;
+
+                    if let Some(target_node) = target_assignment.get(index_id) {
+                        if oracle.is_target_on_a_side(&node_a, &node_b, target_node) {
+                            a_side_sites.insert(index_id.clone());
+                            if current_node == &node_b {
+                                any_crossing = true;
+                            }
+                        } else {
+                            b_side_sites.insert(index_id.clone());
+                            if current_node == &node_a {
+                                any_crossing = true;
+                            }
+                        }
+                    } else if current_node == &node_a {
+                        a_side_sites.insert(index_id.clone());
+                    } else {
+                        b_side_sites.insert(index_id.clone());
+                    }
+                }
+
+                if !any_site_on_edge || !any_crossing {
+                    continue;
+                }
+
+                let transport_path = if center == node_a || center == node_b {
+                    Vec::new()
+                } else {
+                    tree_path(topology, &center, &node_a)?
+                };
+
+                steps.push(ScheduledSwapStep {
+                    transport_path,
+                    node_a: node_a.clone(),
+                    node_b: node_b.clone(),
+                    a_side_sites: a_side_sites.clone(),
+                    b_side_sites: b_side_sites.clone(),
+                });
+
+                for index_id in &a_side_sites {
+                    position.insert(index_id.clone(), node_a.clone());
+                }
+                for index_id in &b_side_sites {
+                    position.insert(index_id.clone(), node_b.clone());
+                }
+
+                center = node_b;
+                any_moved_this_pass = true;
+            }
+
+            if !any_moved_this_pass {
+                break;
+            }
+        }
+
+        if !positions_satisfy_targets(&position, target_assignment) {
+            return Err(anyhow::anyhow!(
+                "SwapSchedule::build: did not converge within {} passes",
+                max_passes
+            ));
+        }
+
+        Ok(Self {
+            root: root.clone(),
+            steps,
+        })
+    }
+}
+
+fn positions_satisfy_targets<V, Id>(
+    position: &HashMap<Id, V>,
+    target_assignment: &HashMap<Id, V>,
+) -> bool
+where
+    V: Eq,
+    Id: Hash + Eq,
+{
+    target_assignment.iter().all(|(index_id, target_node)| {
+        position
+            .get(index_id)
+            .is_some_and(|node| node == target_node)
+    })
+}
+
+fn tree_path<V>(topology: &NodeNameNetwork<V>, from: &V, to: &V) -> Result<Vec<V>>
+where
+    V: Clone + Hash + Eq + std::fmt::Debug + Send + Sync,
+{
+    let from_idx = topology
+        .node_index(from)
+        .ok_or_else(|| anyhow::anyhow!("tree_path: node {:?} not found", from))?;
+    let to_idx = topology
+        .node_index(to)
+        .ok_or_else(|| anyhow::anyhow!("tree_path: node {:?} not found", to))?;
+
+    topology
+        .path_between(from_idx, to_idx)
+        .ok_or_else(|| anyhow::anyhow!("tree_path: no path between {:?} and {:?}", from, to))?
+        .into_iter()
+        .map(|node_idx| {
+            topology
+                .node_name(node_idx)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("tree_path: node name not found"))
+        })
+        .collect()
+}
+
+fn tree_diameter<V>(topology: &NodeNameNetwork<V>) -> Result<usize>
+where
+    V: Clone + Hash + Eq + std::fmt::Debug + Send + Sync,
+{
+    let mut node_indices = topology.graph().node_indices();
+    let Some(start) = node_indices.next() else {
+        return Ok(0);
+    };
+
+    let (farthest, _) = farthest_node(topology, start)?;
+    let (_, diameter) = farthest_node(topology, farthest)?;
+    Ok(diameter)
+}
+
+fn farthest_node<V>(topology: &NodeNameNetwork<V>, start: NodeIndex) -> Result<(NodeIndex, usize)>
+where
+    V: Clone + Hash + Eq + std::fmt::Debug + Send + Sync,
+{
+    let graph = topology.graph();
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::from([(start, 0usize)]);
+    let mut farthest = (start, 0usize);
+
+    visited.insert(start);
+
+    while let Some((node, distance)) = queue.pop_front() {
+        if distance > farthest.1 {
+            farthest = (node, distance);
+        }
+
+        for neighbor in graph.neighbors(node) {
+            if visited.insert(neighbor) {
+                queue.push_back((neighbor, distance + 1));
+            }
+        }
     }
 
-    /// Returns true if there is at least one swap on the given edge.
-    pub fn has_swaps_at(&self, edge: &(V, V)) -> bool {
-        let key = normalize_edge(edge.0.clone(), edge.1.clone());
-        self.swaps.get(&key).is_some_and(|v| !v.is_empty())
+    if visited.len() != graph.node_count() {
+        return Err(anyhow::anyhow!(
+            "SwapSchedule::build: topology must be connected"
+        ));
     }
 
-    /// Returns the set of edges that have at least one swap.
-    pub fn edges_with_swaps(&self) -> HashSet<(V, V)> {
-        self.swaps
-            .iter()
-            .filter(|(_, steps)| !steps.is_empty())
-            .map(|(k, _)| k.clone())
-            .collect()
-    }
+    Ok(farthest)
 }
 
 // ============================================================================
 // Helpers: current assignment
 // ============================================================================
 
-/// Build index id → node name from a TreeTN (all site indices).
+/// Build index id -> node name from a TreeTN (all site indices).
 pub(crate) fn current_site_assignment<T, V>(
     treetn: &TreeTN<T, V>,
 ) -> HashMap<<T::Index as IndexLike>::Id, V>
@@ -242,9 +531,7 @@ where
             } else {
                 in_time.insert(name, timer);
                 timer += 1;
-                // Push exit marker (processed after all children)
                 stack.push((node_idx, parent_idx, true));
-                // Push children (all neighbors except parent)
                 let graph = topology.graph();
                 for neighbor in graph.neighbors(node_idx) {
                     if Some(neighbor) != parent_idx {
@@ -292,11 +579,9 @@ where
             None => return false,
         };
 
-        // Is A the ancestor of B in the DFS tree? Then A-side = NOT in subtree(B).
         if in_a <= in_b && out_b <= out_a {
             !(in_b <= in_t && out_t <= out_b)
         } else {
-            // B is ancestor of A; A-side = subtree(A).
             in_a <= in_t && out_t <= out_a
         }
     }
