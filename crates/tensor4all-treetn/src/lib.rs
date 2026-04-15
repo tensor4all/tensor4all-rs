@@ -66,9 +66,9 @@ pub use treetn::{
     LocalUpdater,
     PartialContractionSpec,
     // Swap
+    ScheduledSwapStep,
     SwapOptions,
-    SwapPlan,
-    SwapStep,
+    SwapSchedule,
     // Core type
     TreeTN,
     TreeTopology,

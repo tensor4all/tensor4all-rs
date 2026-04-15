@@ -1,7 +1,5 @@
 use super::*;
 
-use tensor4all_core::DynIndex;
-
 fn build_chain_topology() -> NodeNameNetwork<String> {
     let mut net = NodeNameNetwork::new();
     net.add_node("A".to_string()).unwrap();
@@ -24,24 +22,45 @@ fn build_chain_topology_with_d() -> NodeNameNetwork<String> {
     net
 }
 
+fn build_two_node_topology() -> NodeNameNetwork<String> {
+    let mut net = NodeNameNetwork::new();
+    net.add_node("A".to_string()).unwrap();
+    net.add_node("B".to_string()).unwrap();
+    net.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+    net
+}
+
+fn build_single_node_topology() -> NodeNameNetwork<String> {
+    let mut net = NodeNameNetwork::new();
+    net.add_node("A".to_string()).unwrap();
+    net
+}
+
+fn build_y_topology() -> NodeNameNetwork<String> {
+    let mut net = NodeNameNetwork::new();
+    net.add_node("C".to_string()).unwrap();
+    net.add_node("L0".to_string()).unwrap();
+    net.add_node("L1".to_string()).unwrap();
+    net.add_node("L2".to_string()).unwrap();
+    net.add_edge(&"C".to_string(), &"L0".to_string()).unwrap();
+    net.add_edge(&"C".to_string(), &"L1".to_string()).unwrap();
+    net.add_edge(&"C".to_string(), &"L2".to_string()).unwrap();
+    net
+}
+
 #[test]
 fn test_subtree_oracle_chain() {
-    // Chain A-B-C, rooted at A.
-    // DFS from A: in_A=0, in_B=1, in_C=2, out_C=3, out_B=4, out_A=5
     let topo = build_chain_topology();
     let oracle = SubtreeOracle::new(&topo, &"A".to_string()).unwrap();
 
-    // Edge (A, B): A-side = {A}, B-side = {B, C}
     assert!(oracle.is_target_on_a_side(&"A".to_string(), &"B".to_string(), &"A".to_string()));
     assert!(!oracle.is_target_on_a_side(&"A".to_string(), &"B".to_string(), &"B".to_string()));
     assert!(!oracle.is_target_on_a_side(&"A".to_string(), &"B".to_string(), &"C".to_string()));
 
-    // Edge (B, C): B-side = {A, B}, C-side = {C}
     assert!(oracle.is_target_on_a_side(&"B".to_string(), &"C".to_string(), &"A".to_string()));
     assert!(oracle.is_target_on_a_side(&"B".to_string(), &"C".to_string(), &"B".to_string()));
     assert!(!oracle.is_target_on_a_side(&"B".to_string(), &"C".to_string(), &"C".to_string()));
 
-    // Reversed edge (B, A): B-side = {B, C}, A-side = {A}
     assert!(!oracle.is_target_on_a_side(&"B".to_string(), &"A".to_string(), &"A".to_string()));
     assert!(oracle.is_target_on_a_side(&"B".to_string(), &"A".to_string(), &"B".to_string()));
     assert!(oracle.is_target_on_a_side(&"B".to_string(), &"A".to_string(), &"C".to_string()));
@@ -49,11 +68,9 @@ fn test_subtree_oracle_chain() {
 
 #[test]
 fn test_subtree_oracle_longer_chain() {
-    // Chain A-B-C-D, rooted at B.
     let topo = build_chain_topology_with_d();
     let oracle = SubtreeOracle::new(&topo, &"B".to_string()).unwrap();
 
-    // Edge (B, C): B-side = {A, B}, C-side = {C, D}
     assert!(oracle.is_target_on_a_side(&"B".to_string(), &"C".to_string(), &"A".to_string()));
     assert!(!oracle.is_target_on_a_side(&"B".to_string(), &"C".to_string(), &"D".to_string()));
 }
@@ -66,74 +83,245 @@ fn test_subtree_oracle_unknown_root() {
 }
 
 #[test]
-fn test_swap_plan_has_swaps_at() {
+fn test_swap_schedule_chain_swap_endpoints() {
     let topo = build_chain_topology();
-    let ix = DynIndex::new_dyn(2);
-    let mut current = HashMap::new();
-    current.insert(ix.id().to_owned(), "A".to_string());
-    let mut target = HashMap::new();
-    target.insert(ix.id().to_owned(), "B".to_string());
+    let current = HashMap::from([
+        ("s_a".to_string(), "A".to_string()),
+        ("s_c".to_string(), "C".to_string()),
+    ]);
+    let target = HashMap::from([
+        ("s_a".to_string(), "C".to_string()),
+        ("s_c".to_string(), "A".to_string()),
+    ]);
+    let root = "A".to_string();
 
-    let plan = SwapPlan::<String, DynIndex>::new(&current, &target, &topo).unwrap();
-    assert!(plan.has_swaps_at(&("A".to_string(), "B".to_string())));
-    assert!(!plan.has_swaps_at(&("B".to_string(), "C".to_string())));
+    let schedule = SwapSchedule::build(&topo, &current, &target, &root).unwrap();
+
+    assert_eq!(schedule.root, root);
+    assert_eq!(schedule.steps.len(), 3);
+
+    assert_eq!(schedule.steps[0].transport_path, Vec::<String>::new());
+    assert_eq!(schedule.steps[0].node_a, "A");
+    assert_eq!(schedule.steps[0].node_b, "B");
+    assert_eq!(schedule.steps[0].a_side_sites, HashSet::new());
+    assert_eq!(
+        schedule.steps[0].b_side_sites,
+        HashSet::from(["s_a".to_string()])
+    );
+
+    assert_eq!(schedule.steps[1].transport_path, Vec::<String>::new());
+    assert_eq!(schedule.steps[1].node_a, "B");
+    assert_eq!(schedule.steps[1].node_b, "C");
+    assert_eq!(
+        schedule.steps[1].a_side_sites,
+        HashSet::from(["s_c".to_string()])
+    );
+    assert_eq!(
+        schedule.steps[1].b_side_sites,
+        HashSet::from(["s_a".to_string()])
+    );
+
+    assert_eq!(
+        schedule.steps[2].transport_path,
+        vec!["C".to_string(), "B".to_string()]
+    );
+    assert_eq!(schedule.steps[2].node_a, "B");
+    assert_eq!(schedule.steps[2].node_b, "A");
+    assert_eq!(schedule.steps[2].a_side_sites, HashSet::new());
+    assert_eq!(
+        schedule.steps[2].b_side_sites,
+        HashSet::from(["s_c".to_string()])
+    );
 }
 
 #[test]
-fn test_swap_plan_no_move() {
-    let topo = build_chain_topology();
-    let mut current = HashMap::new();
-    let ix = DynIndex::new_dyn(2);
-    let iy = DynIndex::new_dyn(2);
-    current.insert(ix.id().to_owned(), "A".to_string());
-    current.insert(iy.id().to_owned(), "B".to_string());
-    let target = HashMap::new();
+fn test_swap_schedule_y_shape() {
+    let topo = build_y_topology();
+    let current = HashMap::from([
+        ("s0".to_string(), "L0".to_string()),
+        ("s1".to_string(), "L1".to_string()),
+        ("s2".to_string(), "L2".to_string()),
+    ]);
+    let target = HashMap::from([
+        ("s0".to_string(), "L1".to_string()),
+        ("s1".to_string(), "L0".to_string()),
+    ]);
+    let root = "C".to_string();
 
-    let plan = SwapPlan::<String, DynIndex>::new(&current, &target, &topo).unwrap();
-    assert!(plan.edges_with_swaps().is_empty());
+    let schedule = SwapSchedule::build(&topo, &current, &target, &root).unwrap();
+
+    assert_eq!(schedule.steps.len(), 3);
+
+    assert_eq!(schedule.steps[0].transport_path, Vec::<String>::new());
+    assert_eq!(schedule.steps[0].node_a, "C");
+    assert_eq!(schedule.steps[0].node_b, "L1");
+    assert_eq!(
+        schedule.steps[0].a_side_sites,
+        HashSet::from(["s1".to_string()])
+    );
+    assert_eq!(schedule.steps[0].b_side_sites, HashSet::new());
+
+    assert_eq!(
+        schedule.steps[1].transport_path,
+        vec!["L1".to_string(), "C".to_string()]
+    );
+    assert_eq!(schedule.steps[1].node_a, "C");
+    assert_eq!(schedule.steps[1].node_b, "L0");
+    assert_eq!(
+        schedule.steps[1].a_side_sites,
+        HashSet::from(["s0".to_string()])
+    );
+    assert_eq!(
+        schedule.steps[1].b_side_sites,
+        HashSet::from(["s1".to_string()])
+    );
+
+    assert_eq!(
+        schedule.steps[2].transport_path,
+        vec!["L0".to_string(), "C".to_string()]
+    );
+    assert_eq!(schedule.steps[2].node_a, "C");
+    assert_eq!(schedule.steps[2].node_b, "L1");
+    assert_eq!(schedule.steps[2].a_side_sites, HashSet::new());
+    assert_eq!(
+        schedule.steps[2].b_side_sites,
+        HashSet::from(["s0".to_string()])
+    );
+
+    // Edge (C, L2) must never appear in the schedule.
+    for step in &schedule.steps {
+        let is_c_l2 = step.node_a == "C" && step.node_b == "L2";
+        let is_l2_c = step.node_a == "L2" && step.node_b == "C";
+        assert!(!is_c_l2 && !is_l2_c, "unexpected edge (C, L2) in schedule");
+    }
 }
 
 #[test]
-fn test_swap_plan_two_node_swap() {
+fn test_swap_schedule_no_op() {
     let topo = build_chain_topology();
-    let mut current = HashMap::new();
-    let ix = DynIndex::new_dyn(2);
-    let iy = DynIndex::new_dyn(2);
-    current.insert(ix.id().to_owned(), "A".to_string());
-    current.insert(iy.id().to_owned(), "B".to_string());
-    let mut target = HashMap::new();
-    target.insert(ix.id().to_owned(), "B".to_string());
-    target.insert(iy.id().to_owned(), "A".to_string());
+    let current = HashMap::from([
+        ("s0".to_string(), "A".to_string()),
+        ("s1".to_string(), "B".to_string()),
+    ]);
+    let target = HashMap::from([
+        ("s0".to_string(), "A".to_string()),
+        ("s1".to_string(), "B".to_string()),
+    ]);
+    let root = "A".to_string();
 
-    let plan = SwapPlan::<String, DynIndex>::new(&current, &target, &topo).unwrap();
-    let edges = plan.edges_with_swaps();
-    assert_eq!(edges.len(), 1);
-    assert!(edges.contains(&("A".to_string(), "B".to_string())));
+    let schedule = SwapSchedule::build(&topo, &current, &target, &root).unwrap();
+    assert!(schedule.steps.is_empty());
 }
 
 #[test]
-fn test_swap_plan_invalid_target_node() {
-    let topo = build_chain_topology();
-    let ix = DynIndex::new_dyn(2);
-    let mut current = HashMap::new();
-    current.insert(ix.id().to_owned(), "A".to_string());
-    let mut target = HashMap::new();
-    target.insert(ix.id().to_owned(), "Z".to_string()); // Z not in topology
+fn test_swap_schedule_partial_assignment_keeps_unassigned_on_current_side() {
+    let topo = build_two_node_topology();
+    let current = HashMap::from([
+        ("s0".to_string(), "A".to_string()),
+        ("s1".to_string(), "B".to_string()),
+    ]);
+    let target = HashMap::from([("s0".to_string(), "B".to_string())]);
+    let root = "A".to_string();
 
-    let res = SwapPlan::<String, DynIndex>::new(&current, &target, &topo);
+    let schedule = SwapSchedule::build(&topo, &current, &target, &root).unwrap();
+
+    assert_eq!(schedule.steps.len(), 1);
+    assert_eq!(schedule.steps[0].node_a, "A");
+    assert_eq!(schedule.steps[0].node_b, "B");
+    assert_eq!(schedule.steps[0].a_side_sites, HashSet::new());
+    assert_eq!(
+        schedule.steps[0].b_side_sites,
+        HashSet::from(["s0".to_string(), "s1".to_string()])
+    );
+}
+
+#[test]
+fn test_swap_schedule_single_node() {
+    let topo = build_single_node_topology();
+    let current = HashMap::from([("s0".to_string(), "A".to_string())]);
+    let target = HashMap::from([("s0".to_string(), "A".to_string())]);
+    let root = "A".to_string();
+
+    let schedule = SwapSchedule::build(&topo, &current, &target, &root).unwrap();
+    assert!(schedule.steps.is_empty());
+}
+
+#[test]
+fn test_swap_schedule_multi_site_node() {
+    let topo = build_two_node_topology();
+    let current = HashMap::from([
+        ("s0".to_string(), "A".to_string()),
+        ("s1".to_string(), "A".to_string()),
+        ("s2".to_string(), "B".to_string()),
+    ]);
+    let target = HashMap::from([
+        ("s0".to_string(), "B".to_string()),
+        ("s2".to_string(), "A".to_string()),
+    ]);
+    let root = "A".to_string();
+
+    let schedule = SwapSchedule::build(&topo, &current, &target, &root).unwrap();
+
+    assert_eq!(schedule.steps.len(), 1);
+    assert_eq!(
+        schedule.steps[0].a_side_sites,
+        HashSet::from(["s1".to_string(), "s2".to_string()])
+    );
+    assert_eq!(
+        schedule.steps[0].b_side_sites,
+        HashSet::from(["s0".to_string()])
+    );
+}
+
+#[test]
+fn test_swap_schedule_transit_node_zero_to_n_to_zero() {
+    let topo = build_chain_topology();
+    let current = HashMap::from([
+        ("s0".to_string(), "A".to_string()),
+        ("s1".to_string(), "A".to_string()),
+    ]);
+    let target = HashMap::from([
+        ("s0".to_string(), "C".to_string()),
+        ("s1".to_string(), "C".to_string()),
+    ]);
+    let root = "A".to_string();
+
+    let schedule = SwapSchedule::build(&topo, &current, &target, &root).unwrap();
+
+    assert_eq!(schedule.steps.len(), 2);
+    assert_eq!(schedule.steps[0].node_a, "A");
+    assert_eq!(schedule.steps[0].node_b, "B");
+    assert_eq!(schedule.steps[0].a_side_sites, HashSet::new());
+    assert_eq!(
+        schedule.steps[0].b_side_sites,
+        HashSet::from(["s0".to_string(), "s1".to_string()])
+    );
+
+    assert_eq!(schedule.steps[1].node_a, "B");
+    assert_eq!(schedule.steps[1].node_b, "C");
+    assert_eq!(schedule.steps[1].a_side_sites, HashSet::new());
+    assert_eq!(
+        schedule.steps[1].b_side_sites,
+        HashSet::from(["s0".to_string(), "s1".to_string()])
+    );
+}
+
+#[test]
+fn test_swap_schedule_invalid_target_node() {
+    let topo = build_chain_topology();
+    let current = HashMap::from([("s0".to_string(), "A".to_string())]);
+    let target = HashMap::from([("s0".to_string(), "Z".to_string())]);
+
+    let res = SwapSchedule::build(&topo, &current, &target, &"A".to_string());
     assert!(res.is_err());
 }
 
 #[test]
-fn test_swap_plan_unknown_index_in_target() {
+fn test_swap_schedule_unknown_index_in_target() {
     let topo = build_chain_topology();
-    let ix = DynIndex::new_dyn(2);
-    let iy = DynIndex::new_dyn(2);
-    let mut current = HashMap::new();
-    current.insert(ix.id().to_owned(), "A".to_string());
-    let mut target = HashMap::new();
-    target.insert(iy.id().to_owned(), "B".to_string()); // iy not in current (different id)
+    let current = HashMap::from([("s0".to_string(), "A".to_string())]);
+    let target = HashMap::from([("s1".to_string(), "B".to_string())]);
 
-    let res = SwapPlan::<String, DynIndex>::new(&current, &target, &topo);
+    let res = SwapSchedule::build(&topo, &current, &target, &"A".to_string());
     assert!(res.is_err());
 }

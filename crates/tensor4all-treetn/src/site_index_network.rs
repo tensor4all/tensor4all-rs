@@ -243,7 +243,9 @@ where
 
         // Remove old indices from index_to_node
         for old_idx in site_space.iter() {
-            self.index_to_node.remove(old_idx.id());
+            if self.index_to_node.get(old_idx.id()) == Some(node_name) {
+                self.index_to_node.remove(old_idx.id());
+            }
         }
 
         // Add new indices to index_to_node
