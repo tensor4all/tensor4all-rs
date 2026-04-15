@@ -140,6 +140,20 @@ See `docs/CAPI_DESIGN.md` for C API patterns. Bindings: [Tensor4all.jl](https://
 
 Truncation tolerance: support both `cutoff` (ITensors) and `rtol` (tensor4all-rs). Conversion: `rtol = √cutoff`.
 
+### Cross-repo development with Tensor4all.jl
+
+When a Tensor4all.jl feature requires new C API functions:
+
+1. Develop both sides locally. Tensor4all.jl's `deps/build.jl` can use a local
+   Rust build via `TENSOR4ALL_RS_PATH`.
+2. Test both sides locally until all tests pass.
+3. Create and merge the tensor4all-rs PR **first**.
+4. Then update the pin hash in Tensor4all.jl `deps/build.jl` to the merged
+   commit on remote and create the Tensor4all.jl PR.
+
+Issue templates are in `.github/ISSUE_TEMPLATE/`. Feature requests from
+Tensor4all.jl should link the related Julia-side issue.
+
 ## Dependencies
 
 - Prefer `mdarray` for arrays (row-major only), `mdarray-linalg` for linear algebra
