@@ -303,6 +303,35 @@ fn test_fourier_materialization_matches_rust_reference() {
 }
 
 #[test]
+fn test_qtt_layout_clone_assignment_and_inverse_fourier_match_reference() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2]);
+    assert_eq!(t4a_qtt_layout_is_assigned(layout), 1);
+    assert_eq!(t4a_qtt_layout_is_assigned(std::ptr::null()), 0);
+
+    let mut clone = std::ptr::null_mut();
+    assert_eq!(t4a_qtt_layout_clone(layout, &mut clone), T4A_SUCCESS);
+    assert!(!clone.is_null());
+
+    let mut op = std::ptr::null_mut();
+    assert_eq!(
+        t4a_qtransform_fourier_materialize(clone, 0, 0, 0, 0.0, &mut op),
+        T4A_SUCCESS
+    );
+
+    let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
+    let expected = rust_operator_matrix(
+        &quantics_fourier_operator(2, FourierOptions::inverse()).unwrap(),
+        &[2, 2],
+        &[2, 2],
+    );
+    assert_matrix_close(&actual, &expected);
+
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(clone);
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
 fn test_binaryop_interleaved_materialization_matches_rust_reference() {
     let layout = new_layout(t4a_qtt_layout_kind::Interleaved, &[2, 2]);
     let mut op = std::ptr::null_mut();
@@ -333,6 +362,67 @@ fn test_binaryop_interleaved_materialization_matches_rust_reference() {
         &[2, 2, 2, 2],
         &[2, 2, 2, 2],
     );
+    assert_matrix_close(&actual, &expected);
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
+fn test_binaryop_fused_materialization_matches_reindexed_reference() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2, 2]);
+    let mut op = std::ptr::null_mut();
+    assert_eq!(
+        t4a_qtransform_binaryop_materialize(
+            layout,
+            0,
+            1,
+            1,
+            1,
+            0,
+            1,
+            t4a_boundary_condition::Periodic,
+            t4a_boundary_condition::Periodic,
+            &mut op
+        ),
+        T4A_SUCCESS
+    );
+
+    let actual = c_operator_matrix(op, &[4, 4], &[4, 4]);
+    let interleaved = rust_operator_matrix(
+        &binaryop_operator(
+            2,
+            BinaryCoeffs::sum(),
+            BinaryCoeffs::select_y(),
+            [BoundaryCondition::Periodic, BoundaryCondition::Periodic],
+        )
+        .unwrap(),
+        &[2, 2, 2, 2],
+        &[2, 2, 2, 2],
+    );
+
+    let mut expected = vec![Complex64::new(0.0, 0.0); 16 * 16];
+    for x in 0..16 {
+        let in_sites = decode_mixed_radix(x, &[4, 4]);
+        let in_bits = [
+            in_sites[0] & 1,
+            (in_sites[0] >> 1) & 1,
+            in_sites[1] & 1,
+            (in_sites[1] >> 1) & 1,
+        ];
+        let x_ref = encode_mixed_radix(&in_bits, &[2, 2, 2, 2]);
+        for y in 0..16 {
+            let out_sites = decode_mixed_radix(y, &[4, 4]);
+            let out_bits = [
+                out_sites[0] & 1,
+                (out_sites[0] >> 1) & 1,
+                out_sites[1] & 1,
+                (out_sites[1] >> 1) & 1,
+            ];
+            let y_ref = encode_mixed_radix(&out_bits, &[2, 2, 2, 2]);
+            expected[y + 16 * x] = interleaved[y_ref + 16 * x_ref];
+        }
+    }
+
     assert_matrix_close(&actual, &expected);
     t4a_treetn_release(op);
     t4a_qtt_layout_release(layout);
@@ -401,4 +491,76 @@ fn test_grouped_binaryop_is_rejected_with_explicit_message() {
     assert!(last_error().contains("grouped layouts"));
     assert!(op.is_null());
     t4a_qtt_layout_release(layout);
+}
+
+#[test]
+fn test_layout_and_affine_validation_errors_are_reported() {
+    let mut layout = std::ptr::null_mut();
+    assert_eq!(
+        t4a_qtt_layout_new(t4a_qtt_layout_kind::Fused, 0, std::ptr::null(), &mut layout),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("nvariables must be greater than zero"));
+
+    let resolutions = [2usize];
+    assert_eq!(
+        t4a_qtt_layout_new(
+            t4a_qtt_layout_kind::Fused,
+            resolutions.len(),
+            std::ptr::null(),
+            &mut layout
+        ),
+        T4A_NULL_POINTER
+    );
+    assert!(last_error().contains("variable_resolutions is null"));
+
+    let fused = new_layout(t4a_qtt_layout_kind::Fused, &resolutions);
+    let mut op = std::ptr::null_mut();
+    assert_eq!(
+        t4a_qtransform_shift_materialize(fused, 1, 0, t4a_boundary_condition::Periodic, &mut op),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("target_var must be smaller than nvariables"));
+
+    let grouped = new_layout(t4a_qtt_layout_kind::Grouped, &resolutions);
+    let a_num = [1i64];
+    let a_den = [1i64];
+    let b_num = [0i64];
+    let b_den = [1i64];
+    let bc = [t4a_boundary_condition::Periodic];
+    assert_eq!(
+        t4a_qtransform_affine_materialize(
+            grouped,
+            a_num.as_ptr(),
+            a_den.as_ptr(),
+            b_num.as_ptr(),
+            b_den.as_ptr(),
+            1,
+            1,
+            bc.as_ptr(),
+            &mut op
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("fused layouts only"));
+
+    let zero_den = [0i64];
+    assert_eq!(
+        t4a_qtransform_affine_materialize(
+            fused,
+            a_num.as_ptr(),
+            zero_den.as_ptr(),
+            b_num.as_ptr(),
+            b_den.as_ptr(),
+            1,
+            1,
+            bc.as_ptr(),
+            &mut op
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("zero denominator"));
+
+    t4a_qtt_layout_release(grouped);
+    t4a_qtt_layout_release(fused);
 }

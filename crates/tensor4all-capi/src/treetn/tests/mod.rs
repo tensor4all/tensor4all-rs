@@ -1,7 +1,8 @@
 use super::*;
 use crate::index::{t4a_index_new, t4a_index_release};
 use crate::tensor::{
-    t4a_tensor_copy_dense_f64, t4a_tensor_new_dense_f64, t4a_tensor_rank, t4a_tensor_release,
+    t4a_tensor_copy_dense_f64, t4a_tensor_new_dense_c64, t4a_tensor_new_dense_f64, t4a_tensor_rank,
+    t4a_tensor_release,
 };
 
 fn last_error() -> String {
@@ -212,6 +213,121 @@ fn test_treetn_topology_queries() {
 }
 
 #[test]
+fn test_treetn_clone_inner_norm_and_assignment() {
+    let (tt, tensors, indices) = make_two_site_treetn();
+
+    assert_eq!(t4a_treetn_is_assigned(tt), 1);
+    assert_eq!(t4a_treetn_is_assigned(std::ptr::null()), 0);
+
+    let mut clone = std::ptr::null_mut();
+    assert_eq!(t4a_treetn_clone(tt, &mut clone), T4A_SUCCESS);
+    assert!(!clone.is_null());
+
+    let mut inner_re = 0.0;
+    let mut inner_im = 0.0;
+    assert_eq!(
+        t4a_treetn_inner(tt, clone, &mut inner_re, &mut inner_im),
+        T4A_SUCCESS
+    );
+    assert!((inner_re - 30.0).abs() < 1e-12);
+    assert_eq!(inner_im, 0.0);
+
+    let mut norm = 0.0;
+    assert_eq!(t4a_treetn_norm(clone, &mut norm), T4A_SUCCESS);
+    assert!((norm * norm - inner_re).abs() < 1e-12);
+
+    t4a_treetn_release(clone);
+    cleanup(tt, tensors, indices);
+}
+
+#[test]
+fn test_treetn_query_helpers_reject_invalid_requests() {
+    let (tt, tensors, indices) = make_two_site_treetn();
+
+    assert_eq!(
+        t4a_treetn_num_vertices(tt, std::ptr::null_mut()),
+        T4A_NULL_POINTER
+    );
+    assert!(last_error().contains("out_n is null"));
+
+    let mut neigh_len = 0usize;
+    let mut neighbors: [usize; 0] = [];
+    assert_eq!(
+        t4a_treetn_neighbors(tt, 0, neighbors.as_mut_ptr(), 0, &mut neigh_len),
+        T4A_BUFFER_TOO_SMALL
+    );
+    assert_eq!(neigh_len, 1);
+
+    assert_eq!(
+        t4a_treetn_neighbors(tt, 2, std::ptr::null_mut(), 0, &mut neigh_len),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("vertex 2 does not exist"));
+
+    let mut siteind_len = 0usize;
+    let mut siteinds: [*mut t4a_index; 0] = [];
+    assert_eq!(
+        t4a_treetn_siteinds(tt, 0, siteinds.as_mut_ptr(), 0, &mut siteind_len),
+        T4A_BUFFER_TOO_SMALL
+    );
+    assert_eq!(siteind_len, 1);
+
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(t4a_treetn_tensor(tt, 9, &mut tensor), T4A_INVALID_ARGUMENT);
+    assert!(tensor.is_null());
+
+    let mut link = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_linkind(tt, 0, 0, &mut link),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(link.is_null());
+
+    cleanup(tt, tensors, indices);
+}
+
+#[test]
+fn test_treetn_creation_and_scalar_api_validation_errors() {
+    let mut tt = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_new(std::ptr::null(), 0, &mut tt),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("n_tensors must be greater than zero"));
+
+    assert_eq!(
+        t4a_treetn_new(std::ptr::null(), 1, &mut tt),
+        T4A_NULL_POINTER
+    );
+    assert!(last_error().contains("tensors is null"));
+
+    let (tt, tensors, indices) = make_two_site_treetn();
+    assert_eq!(
+        t4a_treetn_set_tensor(tt, 9, tensors[0] as *const t4a_tensor),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("vertex 9 does not exist"));
+
+    assert_eq!(
+        t4a_treetn_set_tensor(tt, 0, std::ptr::null()),
+        T4A_NULL_POINTER
+    );
+    assert!(last_error().contains("tensor is null"));
+
+    let mut inner_re = 0.0;
+    assert_eq!(
+        t4a_treetn_inner(tt, tt, &mut inner_re, std::ptr::null_mut()),
+        T4A_NULL_POINTER
+    );
+    assert!(last_error().contains("out_re or out_im is null"));
+
+    assert_eq!(t4a_treetn_norm(tt, std::ptr::null_mut()), T4A_NULL_POINTER);
+    assert!(last_error().contains("out_norm is null"));
+
+    cleanup(tt, tensors, indices);
+}
+
+#[test]
 fn test_treetn_set_tensor_and_to_dense() {
     let (tt, mut tensors, mut indices) = make_two_site_treetn();
 
@@ -319,6 +435,39 @@ fn test_treetn_evaluate_multiple_points() {
     );
     assert_eq!(out_re, [1.0, 2.0, 4.0]);
     cleanup(tt, tensors, indices);
+}
+
+#[test]
+fn test_treetn_evaluate_complex_requires_out_im_buffer() {
+    let s = new_index(2);
+    let index_ptrs = [s as *const t4a_index];
+    let interleaved = [1.0, 2.0, 0.0, 0.0];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_dense_c64(1, index_ptrs.as_ptr(), interleaved.as_ptr(), 2, &mut tensor),
+        T4A_SUCCESS
+    );
+
+    let tt = new_treetn(&[tensor as *const t4a_tensor]);
+    let values = [0usize];
+    let mut out_re = 0.0;
+    assert_eq!(
+        t4a_treetn_evaluate(
+            tt,
+            index_ptrs.as_ptr(),
+            1,
+            values.as_ptr(),
+            1,
+            &mut out_re,
+            std::ptr::null_mut()
+        ),
+        T4A_NULL_POINTER
+    );
+    assert!(last_error().contains("out_im is required"));
+
+    t4a_treetn_release(tt);
+    t4a_tensor_release(tensor);
+    t4a_index_release(s);
 }
 
 #[test]
@@ -530,4 +679,112 @@ fn test_treetn_apply_operator_chain_rejects_out_of_range_mapped_node() {
     t4a_index_release(internal_out);
     t4a_index_release(internal_in);
     cleanup(state_tt, state_tensors, std::mem::take(&mut state_indices));
+}
+
+#[test]
+fn test_treetn_apply_operator_chain_rejects_empty_mapping() {
+    let state_site = new_index(2);
+    let state = new_tensor(&[state_site as *const t4a_index], &[1.0, 2.0]);
+    let state_tt = new_treetn(&[state as *const t4a_tensor]);
+
+    let internal_in = new_index(2);
+    let internal_out = new_index(2);
+    let target_out = new_index(2);
+    let op = new_tensor(
+        &[
+            internal_out as *const t4a_index,
+            internal_in as *const t4a_index,
+        ],
+        &[1.0, 0.0, 0.0, 1.0],
+    );
+    let op_tt = new_treetn(&[op as *const t4a_tensor]);
+
+    let mapped_nodes: [usize; 0] = [];
+    let input_indices: [*const t4a_index; 0] = [];
+    let output_indices: [*const t4a_index; 0] = [];
+    let true_output_indices: [*const t4a_index; 0] = [];
+    let mut result = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_apply_operator_chain(
+            op_tt,
+            state_tt,
+            mapped_nodes.as_ptr(),
+            mapped_nodes.len(),
+            input_indices.as_ptr(),
+            output_indices.as_ptr(),
+            true_output_indices.as_ptr(),
+            t4a_contract_method::Naive,
+            0.0,
+            0.0,
+            0,
+            &mut result
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("mapped node positions must not be empty"));
+    assert!(result.is_null());
+
+    t4a_treetn_release(op_tt);
+    t4a_treetn_release(state_tt);
+    t4a_tensor_release(op);
+    t4a_tensor_release(state);
+    t4a_index_release(target_out);
+    t4a_index_release(internal_out);
+    t4a_index_release(internal_in);
+    t4a_index_release(state_site);
+}
+
+#[test]
+fn test_treetn_apply_operator_chain_rejects_unknown_internal_input_index() {
+    let state_site = new_index(2);
+    let state = new_tensor(&[state_site as *const t4a_index], &[1.0, 2.0]);
+    let state_tt = new_treetn(&[state as *const t4a_tensor]);
+
+    let internal_in = new_index(2);
+    let internal_out = new_index(2);
+    let wrong_in = new_index(2);
+    let target_out = new_index(2);
+    let op = new_tensor(
+        &[
+            internal_out as *const t4a_index,
+            internal_in as *const t4a_index,
+        ],
+        &[1.0, 0.0, 0.0, 1.0],
+    );
+    let op_tt = new_treetn(&[op as *const t4a_tensor]);
+
+    let mapped_nodes = [0usize];
+    let input_indices = [wrong_in as *const t4a_index];
+    let output_indices = [internal_out as *const t4a_index];
+    let true_output_indices = [target_out as *const t4a_index];
+    let mut result = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_apply_operator_chain(
+            op_tt,
+            state_tt,
+            mapped_nodes.as_ptr(),
+            mapped_nodes.len(),
+            input_indices.as_ptr(),
+            output_indices.as_ptr(),
+            true_output_indices.as_ptr(),
+            t4a_contract_method::Naive,
+            0.0,
+            0.0,
+            0,
+            &mut result
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("provided internal input index"));
+    assert!(result.is_null());
+
+    t4a_treetn_release(op_tt);
+    t4a_treetn_release(state_tt);
+    t4a_tensor_release(op);
+    t4a_tensor_release(state);
+    t4a_index_release(target_out);
+    t4a_index_release(wrong_in);
+    t4a_index_release(internal_out);
+    t4a_index_release(internal_in);
+    t4a_index_release(state_site);
 }
