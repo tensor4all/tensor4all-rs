@@ -188,10 +188,12 @@ fn test_swap_schedule_y_shape() {
         HashSet::from(["s0".to_string()])
     );
 
-    assert!(schedule.steps.iter().all(|step| {
-        !(step.node_a == "C" && step.node_b == "L2"
-            || step.node_a == "L2" && step.node_b == "C")
-    }));
+    // Edge (C, L2) must never appear in the schedule.
+    for step in &schedule.steps {
+        let is_c_l2 = step.node_a == "C" && step.node_b == "L2";
+        let is_l2_c = step.node_a == "L2" && step.node_b == "C";
+        assert!(!is_c_l2 && !is_l2_c, "unexpected edge (C, L2) in schedule");
+    }
 }
 
 #[test]
