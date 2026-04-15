@@ -1,0 +1,47 @@
+name: Feature Request
+description: Propose a new feature or enhancement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for your feature proposal!
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What do you want to add or change? (1-2 sentences)
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why is this needed? What use case does it serve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-approach
+    attributes:
+      label: Proposed approach (optional)
+      description: If you have an idea for how to implement this, describe it here.
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: How do we know this is done? Use a checklist.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: false
+  - type: textarea
+    id: cross-repo
+    attributes:
+      label: Related Tensor4all.jl issue (optional)
+      description: If this is needed for a Tensor4all.jl feature, link the issue here.
+      placeholder: "tensor4all/Tensor4all.jl#00"
+    validations:
+      required: false
