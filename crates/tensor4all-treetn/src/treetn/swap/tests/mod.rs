@@ -189,7 +189,8 @@ fn test_swap_schedule_y_shape() {
     );
 
     assert!(schedule.steps.iter().all(|step| {
-        !(step.node_a == "C" && step.node_b == "L2") && !(step.node_a == "L2" && step.node_b == "C")
+        !(step.node_a == "C" && step.node_b == "L2"
+            || step.node_a == "L2" && step.node_b == "C")
     }));
 }
 
