@@ -59,8 +59,7 @@ fn test_linsolve_identity_mpo_distinct_output_indices() {
 
     // Site 1: [b_mpo, s1_out, s1] - identity
     let t1_mpo =
-        TensorDynLen::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1.clone()], id_data)
-            .unwrap();
+        TensorDynLen::from_dense(vec![b_mpo.clone(), s1_out.clone(), s1.clone()], id_data).unwrap();
 
     let operator = TensorTrain::new(vec![t0_mpo, t1_mpo]).unwrap();
 
