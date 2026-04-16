@@ -12,10 +12,10 @@
 //! - `evaluate_at` for evaluating using `Index` objects instead of raw IDs
 //! - `all_site_indices` for retrieving all site indices and their owning vertices
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, TensorLike};
+use tensor4all_core::{AllowedPairs, AnyScalar, ColMajorArrayRef, IndexLike, TensorLike};
 
 use super::TreeTN;
 
@@ -246,6 +246,74 @@ where
         Ok(n * n)
     }
 
+    /// Scale the tensor network by a complex scalar.
+    ///
+    /// This multiplies a single node tensor, chosen deterministically as the
+    /// minimum-named node, so the represented state is scaled once rather than
+    /// applying `scalar^n` across all nodes.
+    ///
+    /// Scaling a non-center tensor generally invalidates any existing
+    /// canonicalization metadata, so this method clears the cached canonical
+    /// region and orthogonality directions after updating the tensor.
+    ///
+    /// # Arguments
+    /// * `scalar` - Scalar multiplier applied to the represented tensor network
+    ///
+    /// # Returns
+    /// `Ok(())` after the selected node tensor has been updated in place
+    ///
+    /// # Errors
+    /// Returns an error if the TreeTN is empty or the selected node/tensor
+    /// cannot be found
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorIndex, TensorLike};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let s = DynIndex::new_dyn(2);
+    /// let t = TensorDynLen::from_dense(vec![s], vec![1.0_f64, -2.0]).unwrap();
+    /// let mut tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
+    ///
+    /// tn.scale(AnyScalar::new_real(2.0)).unwrap();
+    ///
+    /// let dense = tn.to_dense().unwrap();
+    /// let expected = TensorDynLen::from_dense(
+    ///     dense.external_indices(),
+    ///     vec![2.0_f64, -4.0],
+    /// ).unwrap();
+    /// assert!((&dense - &expected).maxabs() < 1e-12);
+    /// ```
+    pub fn scale(&mut self, scalar: AnyScalar) -> Result<()> {
+        let min_node = self
+            .node_names()
+            .into_iter()
+            .min()
+            .ok_or_else(|| anyhow::anyhow!("Cannot scale empty TreeTN"))
+            .context("scale: network must have at least one node")?;
+        let node_idx = self
+            .node_index(&min_node)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", min_node))
+            .context("scale: selected node must exist")?;
+        let tensor = self
+            .tensor(node_idx)
+            .ok_or_else(|| anyhow::anyhow!("Node tensor not found for {:?}", min_node))
+            .context("scale: selected node tensor must exist")?
+            .clone();
+        let scaled = tensor
+            .scale(scalar)
+            .context("scale: tensor scaling failed")?;
+        self.replace_tensor(node_idx, scaled)?
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", min_node))
+            .context("scale: failed to replace scaled tensor")?;
+
+        self.clear_canonical_region();
+        self.ortho_towards.clear();
+
+        Ok(())
+    }
+
     /// Compute the inner product of two TreeTNs.
     ///
     /// Computes `<self | other>` = sum over all indices of `conj(self) * other`.
@@ -286,28 +354,107 @@ where
         if self.node_count() == 0 && other.node_count() == 0 {
             return Ok(AnyScalar::new_real(0.0));
         }
+        if !self.share_equivalent_site_index_network(other) {
+            return Err(anyhow::anyhow!(
+                "inner: TreeTNs must have the same topology and site indices"
+            ));
+        }
 
-        // Use contract_naive which handles sim_internal_inds and full contraction.
-        // conj(self) * other contracted over site indices gives the inner product.
-        // Build conj(self) by conjugating all tensors.
-        let mut conj_self = self.clone();
-        for node_idx in conj_self.graph.graph().node_indices().collect::<Vec<_>>() {
-            if let Some(tensor) = conj_self.graph.graph_mut().node_weight_mut(node_idx) {
-                *tensor = tensor.conj();
+        let root_name = self
+            .node_names()
+            .into_iter()
+            .min()
+            .ok_or_else(|| anyhow::anyhow!("Cannot compute inner product of empty TreeTN"))
+            .context("inner: network must have at least one node")?;
+        let other_sim = other.sim_internal_inds();
+
+        let post_order = self
+            .site_index_network()
+            .post_order_dfs(&root_name)
+            .ok_or_else(|| anyhow::anyhow!("Root node {:?} not found", root_name))
+            .context("inner: failed to build post-order traversal")?;
+
+        let mut parent_of: HashMap<V, Option<V>> = HashMap::new();
+        parent_of.insert(root_name.clone(), None);
+        let mut stack = vec![root_name.clone()];
+        while let Some(node_name) = stack.pop() {
+            let mut neighbors: Vec<V> = self.site_index_network().neighbors(&node_name).collect();
+            neighbors.sort();
+            for neighbor in neighbors {
+                if parent_of.contains_key(&neighbor) {
+                    continue;
+                }
+                parent_of.insert(neighbor.clone(), Some(node_name.clone()));
+                stack.push(neighbor);
             }
         }
 
-        // Contract conj(self) with other using naive contraction
-        let result_tensor = conj_self
-            .contract_naive(other)
-            .context("inner: failed to contract conj(self) with other")?;
+        let mut envs: HashMap<V, T> = HashMap::new();
 
-        // The result should be a scalar (rank 0) since all site indices were contracted
-        // (self and other share the same site indices, link indices were sim'd).
-        // Extract the scalar value via inner_product with scalar_one.
+        for node_name in post_order {
+            let node_idx_self = self
+                .node_index(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in self", node_name))
+                .context("inner: self node must exist")?;
+            let node_idx_other = other_sim
+                .node_index(&node_name)
+                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in other", node_name))
+                .context("inner: other node must exist")?;
+
+            let mut env = self
+                .tensor(node_idx_self)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_name))
+                .context("inner: self tensor must exist")?
+                .conj();
+
+            let mut children: Vec<V> = parent_of
+                .iter()
+                .filter_map(|(child, parent)| {
+                    if parent.as_ref() == Some(&node_name) {
+                        Some(child.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            children.sort();
+
+            for child_name in children {
+                let child_env = envs.remove(&child_name).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Missing child environment for child {:?} of node {:?}",
+                        child_name,
+                        node_name
+                    )
+                })?;
+                env = T::contract(&[&env, &child_env], AllowedPairs::All)
+                    .context("inner: failed to absorb child environment")?;
+            }
+
+            let other_tensor = other_sim
+                .tensor(node_idx_other)
+                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node_name))
+                .context("inner: other tensor must exist")?;
+            env = T::contract(&[&env, other_tensor], AllowedPairs::All)
+                .context("inner: failed to contract node bra-ket tensors")?;
+
+            envs.insert(node_name, env);
+        }
+
+        let result_tensor = envs
+            .remove(&root_name)
+            .ok_or_else(|| anyhow::anyhow!("Root environment was not produced"))
+            .context("inner: root contraction failed")?;
+        if !envs.is_empty() {
+            return Err(anyhow::anyhow!(
+                "inner: contraction left {} dangling environments",
+                envs.len()
+            ));
+        }
+
         let scalar_one = T::scalar_one().context("inner: failed to create scalar_one")?;
-        result_tensor
-            .inner_product(&scalar_one)
+        scalar_one
+            .inner_product(&result_tensor)
             .context("inner: failed to extract scalar value")
     }
 
@@ -682,3 +829,6 @@ where
         self.evaluate(&index_ids, values)
     }
 }
+
+#[cfg(test)]
+mod tests;

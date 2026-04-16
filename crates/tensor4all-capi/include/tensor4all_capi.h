@@ -496,6 +496,15 @@ StatusCode t4a_treetn_neighbors(const struct t4a_treetn *treetn,
                                 size_t *out_len);
 
 /**
+ * Get the canonical region vertices, sorted ascending.
+ * Call with buf=NULL to query required length via out_len.
+ */
+StatusCode t4a_treetn_canonical_region(const struct t4a_treetn *treetn,
+                                       size_t *buf,
+                                       size_t buf_len,
+                                       size_t *out_len);
+
+/**
  * Create a tree tensor network from an array of tensors.
  */
 StatusCode t4a_treetn_new(const struct t4a_tensor *const *tensors,
@@ -506,6 +515,26 @@ StatusCode t4a_treetn_new(const struct t4a_tensor *const *tensors,
  * Compute the norm of the tree tensor network.
  */
 StatusCode t4a_treetn_norm(struct t4a_treetn *treetn, double *out_norm);
+
+/**
+ * Scale a tree tensor network by a complex scalar.
+ */
+StatusCode t4a_treetn_scale(const struct t4a_treetn *treetn,
+                            double re,
+                            double im,
+                            struct t4a_treetn **out);
+
+/**
+ * Add two tree tensor networks (direct sum of bond dimensions).
+ * Optional truncation: set rtol > 0, cutoff > 0, or maxdim > 0.
+ * cutoff is converted to rtol = sqrt(cutoff).
+ */
+StatusCode t4a_treetn_add(const struct t4a_treetn *a,
+                          const struct t4a_treetn *b,
+                          double rtol,
+                          double cutoff,
+                          size_t maxdim,
+                          struct t4a_treetn **out);
 
 /**
  * Get the number of vertices in the tree tensor network.
