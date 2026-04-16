@@ -1,5 +1,5 @@
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen};
 
 use crate::TreeTN;
 
@@ -32,6 +32,17 @@ fn test_inner_matches_norm_squared_for_three_node_chain() {
 
     assert!((inner.real() - norm_squared).abs() < 1.0e-10);
     assert!(inner.imag().abs() < 1.0e-10);
+}
+
+#[test]
+fn test_scale_doubles_norm() {
+    let mut tn = make_three_node_chain();
+    let original_norm = tn.norm().unwrap();
+
+    tn.scale(AnyScalar::new_real(2.0)).unwrap();
+    let scaled_norm = tn.norm().unwrap();
+
+    assert!((scaled_norm - 2.0 * original_norm).abs() < 1.0e-10);
 }
 
 #[test]

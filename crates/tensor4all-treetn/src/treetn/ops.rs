@@ -246,6 +246,74 @@ where
         Ok(n * n)
     }
 
+    /// Scale the tensor network by a complex scalar.
+    ///
+    /// This multiplies a single node tensor, chosen deterministically as the
+    /// minimum-named node, so the represented state is scaled once rather than
+    /// applying `scalar^n` across all nodes.
+    ///
+    /// Scaling a non-center tensor generally invalidates any existing
+    /// canonicalization metadata, so this method clears the cached canonical
+    /// region and orthogonality directions after updating the tensor.
+    ///
+    /// # Arguments
+    /// * `scalar` - Scalar multiplier applied to the represented tensor network
+    ///
+    /// # Returns
+    /// `Ok(())` after the selected node tensor has been updated in place
+    ///
+    /// # Errors
+    /// Returns an error if the TreeTN is empty or the selected node/tensor
+    /// cannot be found
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let s = DynIndex::new_dyn(2);
+    /// let t = TensorDynLen::from_dense(vec![s], vec![1.0_f64, -2.0]).unwrap();
+    /// let mut tn = TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap();
+    ///
+    /// tn.scale(AnyScalar::new_real(2.0)).unwrap();
+    ///
+    /// let dense = tn.to_dense().unwrap();
+    /// let expected = TensorDynLen::from_dense(
+    ///     dense.external_indices(),
+    ///     vec![2.0_f64, -4.0],
+    /// ).unwrap();
+    /// assert!((&dense - &expected).maxabs() < 1e-12);
+    /// ```
+    pub fn scale(&mut self, scalar: AnyScalar) -> Result<()> {
+        let min_node = self
+            .node_names()
+            .into_iter()
+            .min()
+            .ok_or_else(|| anyhow::anyhow!("Cannot scale empty TreeTN"))
+            .context("scale: network must have at least one node")?;
+        let node_idx = self
+            .node_index(&min_node)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", min_node))
+            .context("scale: selected node must exist")?;
+        let tensor = self
+            .tensor(node_idx)
+            .ok_or_else(|| anyhow::anyhow!("Node tensor not found for {:?}", min_node))
+            .context("scale: selected node tensor must exist")?
+            .clone();
+        let scaled = tensor
+            .scale(scalar)
+            .context("scale: tensor scaling failed")?;
+        self.replace_tensor(node_idx, scaled)?
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", min_node))
+            .context("scale: failed to replace scaled tensor")?;
+
+        self.clear_canonical_region();
+        self.ortho_towards.clear();
+
+        Ok(())
+    }
+
     /// Compute the inner product of two TreeTNs.
     ///
     /// Computes `<self | other>` = sum over all indices of `conj(self) * other`.
