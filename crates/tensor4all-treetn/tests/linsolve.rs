@@ -2219,7 +2219,7 @@ fn test_square_linsolve_with_mappings_identity() {
     // For identity operator, solution should match RHS
     let contracted = result.solution.contract_to_tensor().unwrap();
     let solution_values: Vec<f64> = contracted.to_vec::<f64>().unwrap();
-    let expected = vec![1.0, 2.0, 3.0, 4.0];
+    let expected = [1.0, 2.0, 3.0, 4.0];
 
     let diff_norm: f64 = solution_values
         .iter()
