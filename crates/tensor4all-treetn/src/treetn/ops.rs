@@ -269,7 +269,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorLike};
+    /// use tensor4all_core::{AnyScalar, DynIndex, TensorDynLen, TensorIndex, TensorLike};
     /// use tensor4all_treetn::TreeTN;
     ///
     /// let s = DynIndex::new_dyn(2);
