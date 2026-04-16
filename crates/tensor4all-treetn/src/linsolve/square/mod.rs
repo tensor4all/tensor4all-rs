@@ -30,13 +30,15 @@ mod updater;
 pub use projected_state::ProjectedState;
 pub use updater::{LinsolveVerifyReport, NodeVerifyDetail, SquareLinsolveUpdater};
 
+use std::collections::HashMap;
 use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::TensorLike;
+use tensor4all_core::{IndexLike, TensorLike};
 
 use crate::linsolve::common::LinsolveOptions;
+use crate::operator::IndexMapping;
 use crate::{apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan, TreeTN};
 
 /// Result of square_linsolve operation.
@@ -102,6 +104,10 @@ where
 /// * `init` - Initial guess for |x⟩
 /// * `center` - Node to use as sweep center
 /// * `options` - Solver options
+/// * `input_mapping` - Optional per-node mapping from state site index to operator input index.
+///   Required when the operator (MPO) uses internal indices distinct from the state's site indices.
+/// * `output_mapping` - Optional per-node mapping from state site index to operator output index.
+///   Required when the operator (MPO) uses internal indices distinct from the state's site indices.
 ///
 /// # Returns
 ///
@@ -123,7 +129,7 @@ where
 /// let rhs = TreeTN::<TensorDynLen, usize>::from_tensors(vec![rhs_tensor], vec![0])?;
 /// let init = TreeTN::<TensorDynLen, usize>::from_tensors(vec![init_tensor], vec![0])?;
 ///
-/// let result = square_linsolve(&operator, &rhs, init, &0usize, LinsolveOptions::default())?;
+/// let result = square_linsolve(&operator, &rhs, init, &0usize, LinsolveOptions::default(), None, None)?;
 /// assert_eq!(result.solution.node_count(), 1);
 /// # Ok(())
 /// # }
@@ -134,10 +140,12 @@ pub fn square_linsolve<T, V>(
     init: TreeTN<T, V>,
     center: &V,
     options: LinsolveOptions,
+    input_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
+    output_mapping: Option<HashMap<V, IndexMapping<T::Index>>>,
 ) -> Result<SquareLinsolveResult<T, V>>
 where
     T: TensorLike + 'static,
-    <T::Index as tensor4all_core::IndexLike>::Id:
+    <T::Index as IndexLike>::Id:
         Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
@@ -147,8 +155,22 @@ where
     // Canonicalize initial guess towards center
     let mut x = init.canonicalize([center.clone()], CanonicalizationOptions::default())?;
 
-    // Create SquareLinsolveUpdater
-    let mut updater = SquareLinsolveUpdater::new(operator.clone(), rhs.clone(), options.clone());
+    // Create SquareLinsolveUpdater with or without index mappings
+    let mut updater = match (input_mapping, output_mapping) {
+        (Some(input), Some(output)) => SquareLinsolveUpdater::with_index_mappings(
+            operator.clone(),
+            input,
+            output,
+            rhs.clone(),
+            options.clone(),
+        ),
+        (None, None) => SquareLinsolveUpdater::new(operator.clone(), rhs.clone(), options.clone()),
+        _ => {
+            return Err(anyhow::anyhow!(
+                "input_mapping and output_mapping must both be Some or both be None"
+            ));
+        }
+    };
 
     // Create sweep plan (nsite=2 for 2-site updates)
     let plan = LocalUpdateSweepPlan::from_treetn(&x, center, 2)

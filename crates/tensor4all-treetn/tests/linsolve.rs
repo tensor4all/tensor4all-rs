@@ -2171,3 +2171,85 @@ fn test_linsolve_n_site_identity_3() {
 fn test_linsolve_n_site_identity_4() {
     test_linsolve_n_site_identity_impl(4);
 }
+
+// ============================================================================
+// Regression tests for #349: square_linsolve with index mappings
+// ============================================================================
+
+/// Test that square_linsolve works with explicit index mappings for an identity
+/// MPO with distinct input/output indices (regression test for #349).
+#[test]
+fn test_square_linsolve_with_mappings_identity() {
+    use tensor4all_treetn::square_linsolve;
+
+    let phys_dim = 2;
+    let (_mps, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
+    let rhs = _mps;
+
+    // Create identity MPO with internal indices
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[1.0, 1.0], phys_dim);
+
+    // Create index mappings
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+
+    let init = rhs.clone();
+    let options = LinsolveOptions::default()
+        .with_nfullsweeps(3)
+        .with_krylov_tol(1e-10)
+        .with_krylov_dim(10)
+        .with_krylov_maxiter(30)
+        .with_max_rank(4);
+
+    // This previously failed with index mismatch when mappings were not supported
+    let result = square_linsolve(
+        &mpo,
+        &rhs,
+        init,
+        &"site0",
+        options,
+        Some(input_mapping),
+        Some(output_mapping),
+    )
+    .unwrap();
+
+    assert_eq!(result.solution.node_count(), 2);
+    assert!(result.sweeps > 0);
+
+    // For identity operator, solution should match RHS
+    let contracted = result.solution.contract_to_tensor().unwrap();
+    let solution_values: Vec<f64> = contracted.to_vec::<f64>().unwrap();
+    let expected = vec![1.0, 2.0, 3.0, 4.0];
+
+    let diff_norm: f64 = solution_values
+        .iter()
+        .zip(expected.iter())
+        .map(|(&c, &e)| (c - e).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    let expected_norm: f64 = expected.iter().map(|&e| e.powi(2)).sum::<f64>().sqrt();
+    let rel_error = diff_norm / expected_norm;
+    assert!(
+        rel_error < 1e-6,
+        "square_linsolve with mappings: relative error = {}",
+        rel_error
+    );
+}
+
+/// Test that square_linsolve still works without mappings (backward compat).
+#[test]
+fn test_square_linsolve_no_mappings_shared_indices() {
+    use tensor4all_treetn::square_linsolve;
+
+    // Create MPS with shared site indices
+    let (mps, site_indices, _bonds) = create_two_site_mps();
+
+    // Create an MPO that shares one site index with the MPS (s_in = state's index)
+    let (mpo, _output_indices) = create_identity_mpo(&site_indices);
+
+    let options = LinsolveOptions::new(0); // zero sweeps - just test it doesn't error
+
+    let result = square_linsolve(&mpo, &mps, mps.clone(), &"site0", options, None, None).unwrap();
+    assert_eq!(result.solution.node_count(), 2);
+    assert_eq!(result.sweeps, 0);
+}
