@@ -88,6 +88,8 @@ fn test_square_linsolve_zero_sweeps_returns_solution_wrapper() {
         init,
         &"site0".to_string(),
         LinsolveOptions::new(0),
+        None,
+        None,
     )
     .unwrap();
 
@@ -120,6 +122,8 @@ fn test_square_linsolve_validation_error_bubbles_up() {
         init,
         &"site0".to_string(),
         LinsolveOptions::new(0),
+        None,
+        None,
     )
     .unwrap_err()
     .to_string();
