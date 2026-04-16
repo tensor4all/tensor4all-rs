@@ -12,7 +12,7 @@ use crate::{
 use num_complex::Complex64;
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use tensor4all_core::{ColMajorArrayRef, IndexLike};
+use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike};
 use tensor4all_treetn::treetn::contraction::{self, ContractionMethod, ContractionOptions};
 use tensor4all_treetn::{
     apply_linear_operator, ApplyOptions, CanonicalizationOptions, IndexMapping, LinearOperator,
@@ -563,6 +563,22 @@ pub extern "C" fn t4a_treetn_neighbors(
     })
 }
 
+/// Get the canonical region vertices, sorted ascending.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_canonical_region(
+    treetn: *const t4a_treetn,
+    buf: *mut libc::size_t,
+    buf_len: libc::size_t,
+    out_len: *mut libc::size_t,
+) -> StatusCode {
+    run_status(|| {
+        let tn = require_tree(treetn)?;
+        let mut vertices: Vec<_> = tn.inner().canonical_region().iter().cloned().collect();
+        vertices.sort_unstable();
+        query_then_fill_copy(&vertices, buf, buf_len, out_len, "canonical_region")
+    })
+}
+
 /// Get the site indices attached to a vertex.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_siteinds(
@@ -817,6 +833,69 @@ pub extern "C" fn t4a_treetn_norm(
                 .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         }
         Ok(())
+    })
+}
+
+/// Scale a tree tensor network by a complex scalar.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_scale(
+    treetn: *const t4a_treetn,
+    re: libc::c_double,
+    im: libc::c_double,
+    out: *mut *mut t4a_treetn,
+) -> StatusCode {
+    run_catching(out, || {
+        let tn = require_tree(treetn)?;
+        let mut result = tn.inner().clone();
+        let scalar = if im == 0.0 {
+            AnyScalar::new_real(re)
+        } else {
+            AnyScalar::new_complex(re, im)
+        };
+        result
+            .scale(scalar)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_treetn::new(result))
+    })
+}
+
+/// Add two tree tensor networks, optionally truncating the result.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_add(
+    a: *const t4a_treetn,
+    b: *const t4a_treetn,
+    rtol: libc::c_double,
+    cutoff: libc::c_double,
+    maxdim: libc::size_t,
+    out: *mut *mut t4a_treetn,
+) -> StatusCode {
+    run_catching(out, || {
+        let tn_a = require_tree(a)?;
+        let tn_b = require_tree(b)?;
+
+        let mut result = tn_a
+            .inner()
+            .add(tn_b.inner())
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+
+        let mut options = TruncationOptions::new();
+        if let Some(rtol) = resolve_rtol(rtol, cutoff) {
+            options = options.with_rtol(rtol);
+        }
+        if maxdim > 0 {
+            options = options.with_max_rank(maxdim);
+        }
+
+        if options.rtol().is_some() || options.max_rank().is_some() {
+            let center = result.node_names().into_iter().min().ok_or_else(|| {
+                capi_error(T4A_INVALID_ARGUMENT, "cannot truncate an empty TreeTN")
+            })?;
+            result
+                .truncate_mut(std::iter::once(center), options)
+                .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        }
+
+        Ok(t4a_treetn::new(result))
     })
 }
 

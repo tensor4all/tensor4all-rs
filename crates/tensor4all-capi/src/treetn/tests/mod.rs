@@ -95,6 +95,20 @@ fn read_siteinds(tt: *const t4a_treetn, vertex: usize) -> Vec<*mut t4a_index> {
     indices
 }
 
+fn read_canonical_region(tt: *const t4a_treetn) -> Vec<usize> {
+    let mut len = 0usize;
+    assert_eq!(
+        t4a_treetn_canonical_region(tt, std::ptr::null_mut(), 0, &mut len),
+        T4A_SUCCESS
+    );
+    let mut vertices = vec![0usize; len];
+    assert_eq!(
+        t4a_treetn_canonical_region(tt, vertices.as_mut_ptr(), vertices.len(), &mut len),
+        T4A_SUCCESS
+    );
+    vertices
+}
+
 fn assert_vec_close(actual: &[f64], expected: &[f64], tol: f64) {
     assert_eq!(actual.len(), expected.len());
     for (slot, (&a, &e)) in actual.iter().zip(expected.iter()).enumerate() {
@@ -363,6 +377,20 @@ fn test_treetn_orthogonalize_preserves_dense_tensor() {
     cleanup(tt, tensors, indices);
 }
 
+#[test]
+fn test_treetn_canonical_region_query() {
+    let (tt, tensors, indices) = make_two_site_treetn();
+    assert_eq!(read_canonical_region(tt), Vec::<usize>::new());
+
+    assert_eq!(
+        t4a_treetn_orthogonalize(tt, 1, t4a_canonical_form::Unitary),
+        T4A_SUCCESS
+    );
+    assert_eq!(read_canonical_region(tt), vec![1]);
+
+    cleanup(tt, tensors, indices);
+}
+
 fn make_truncatable_treetn() -> (*mut t4a_treetn, Vec<*mut t4a_tensor>, Vec<*mut t4a_index>) {
     let s0 = new_index(2);
     let bond = new_index(4);
@@ -407,6 +435,40 @@ fn test_treetn_truncate_with_rtol_and_cutoff() {
     assert_eq!(t4a_treetn_truncate(tt_cutoff, 0.0, 1e-24, 1), T4A_SUCCESS);
     assert_eq!(link_dim(tt_cutoff), 1);
     cleanup(tt_cutoff, tensors_cutoff, indices_cutoff);
+}
+
+#[test]
+fn test_treetn_scale_and_add() {
+    let (tt, tensors, indices) = make_two_site_treetn();
+
+    let mut scaled = std::ptr::null_mut();
+    assert_eq!(t4a_treetn_scale(tt, 2.0, 0.0, &mut scaled), T4A_SUCCESS);
+    assert_eq!(read_dense_f64_treetn(scaled), vec![2.0, 4.0, 6.0, 8.0]);
+
+    let mut sum = std::ptr::null_mut();
+    assert_eq!(t4a_treetn_add(tt, tt, 0.0, 0.0, 0, &mut sum), T4A_SUCCESS);
+    assert_eq!(read_dense_f64_treetn(sum), vec![2.0, 4.0, 6.0, 8.0]);
+
+    t4a_treetn_release(sum);
+    t4a_treetn_release(scaled);
+    cleanup(tt, tensors, indices);
+}
+
+#[test]
+fn test_treetn_add_with_truncation() {
+    let (tt, tensors, indices) = make_truncatable_treetn();
+    let expected = read_dense_f64_treetn(tt);
+
+    let mut sum = std::ptr::null_mut();
+    assert_eq!(t4a_treetn_add(tt, tt, 1e-12, 0.0, 1, &mut sum), T4A_SUCCESS);
+    assert_eq!(link_dim(sum), 1);
+
+    let dense = read_dense_f64_treetn(sum);
+    let doubled_expected: Vec<f64> = expected.iter().map(|value| 2.0 * value).collect();
+    assert_vec_close(&dense, &doubled_expected, 1.0e-10);
+
+    t4a_treetn_release(sum);
+    cleanup(tt, tensors, indices);
 }
 
 #[test]
