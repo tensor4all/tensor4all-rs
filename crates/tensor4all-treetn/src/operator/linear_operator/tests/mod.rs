@@ -7,7 +7,7 @@ use crate::operator::Operator;
 use crate::treetn::TreeTN;
 
 /// Create a simple "MPO" TreeTN with two site indices per node (input + output).
-/// Structure: single node "A" with indices (s_in_tmp, s_out_tmp)
+/// Structure: single node "A" with indices (s_out_tmp, s_in_tmp)
 /// Also returns a "state" TreeTN with a single site index s.
 fn make_simple_mpo_and_state() -> (
     TreeTN<TensorDynLen, String>,
@@ -21,10 +21,10 @@ fn make_simple_mpo_and_state() -> (
     let s_out_tmp = DynIndex::new_dyn(2); // MPO output index
 
     // MPO tensor: identity operator (2x2 -> 2x2)
-    // s_in_tmp x s_out_tmp with identity values
+    // s_out_tmp x s_in_tmp with identity values
     let mpo_data = vec![1.0, 0.0, 0.0, 1.0]; // identity matrix
     let mpo_tensor =
-        TensorDynLen::from_dense(vec![s_in_tmp.clone(), s_out_tmp.clone()], mpo_data).unwrap();
+        TensorDynLen::from_dense(vec![s_out_tmp.clone(), s_in_tmp.clone()], mpo_data).unwrap();
     let mpo = TreeTN::<TensorDynLen, String>::from_tensors(vec![mpo_tensor], vec!["A".to_string()])
         .unwrap();
 
@@ -155,12 +155,16 @@ fn test_linear_operator_operator_trait_site_index_network() {
 
 #[test]
 fn test_from_mpo_and_state() {
-    let (mpo, state, _s, _s_in_tmp, _s_out_tmp) = make_simple_mpo_and_state();
+    let (mpo, state, s, s_in_tmp, s_out_tmp) = make_simple_mpo_and_state();
     let op = LinearOperator::from_mpo_and_state(mpo, &state).unwrap();
 
     // Should have input and output mappings for node "A"
-    assert!(op.get_input_mapping(&"A".to_string()).is_some());
-    assert!(op.get_output_mapping(&"A".to_string()).is_some());
+    let input = op.get_input_mapping(&"A".to_string()).unwrap();
+    let output = op.get_output_mapping(&"A".to_string()).unwrap();
+    assert!(input.true_index.same_id(&s));
+    assert!(input.internal_index.same_id(&s_in_tmp));
+    assert!(output.true_index.same_id(&s));
+    assert!(output.internal_index.same_id(&s_out_tmp));
     assert_eq!(op.input_mappings().len(), 1);
     assert_eq!(op.output_mappings().len(), 1);
 }

@@ -127,6 +127,24 @@ where
         }
     }
 
+    fn ordered_site_indices(network: &TreeTN<T, V>, node: &V) -> Result<Vec<T::Index>> {
+        let Some(site_space) = network.site_space(node) else {
+            return Ok(Vec::new());
+        };
+        let node_idx = network
+            .node_index(node)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in tensor network", node))?;
+        let tensor = network
+            .tensor(node_idx)
+            .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", node))?;
+
+        Ok(tensor
+            .external_indices()
+            .into_iter()
+            .filter(|index| site_space.contains(index))
+            .collect())
+    }
+
     /// Create a LinearOperator from an MPO and a reference state.
     ///
     /// This assumes:
@@ -147,60 +165,82 @@ where
         let mut output_mapping = HashMap::new();
 
         for node in mpo.site_index_network().node_names() {
-            // Get state's site indices for this node
             let state_site = state.site_space(node);
-
-            // Get MPO's site indices for this node
             let mpo_site = mpo.site_space(node);
 
             match (state_site, mpo_site) {
-                (Some(state_indices), Some(mpo_indices)) => {
-                    // MPO should have exactly 2 site indices per state site index:
-                    // one for input (s_in_tmp) and one for output (s_out_tmp)
-                    // Both should have the same dimension as the state's site index.
+                (Some(_state_indices), Some(_)) => {
+                    let state_indices = Self::ordered_site_indices(state, node)?;
+                    let mut mpo_indices = Self::ordered_site_indices(&mpo, node)?;
 
+                    // MPO should have exactly 2 site indices per state site index:
+                    // one for input and one for output. We infer them from tensor index
+                    // order using the MPO convention `[... , s_out, s_in, ...]`.
                     if state_indices.len() * 2 != mpo_indices.len() {
                         return Err(anyhow::anyhow!(
                             "Node {:?}: MPO should have 2x site indices. State has {}, MPO has {}",
                             node,
-                            state_indices.len(),
-                            mpo_indices.len()
+                            state_site.map_or(0, |indices| indices.len()),
+                            mpo_site.map_or(0, |indices| indices.len())
                         ));
                     }
 
-                    // For each state site index, find matching MPO indices by dimension
                     for state_idx in state_indices {
-                        let dim = state_idx.dim();
+                        let matching_positions: Vec<_> = mpo_indices
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(position, index)| {
+                                (index.dim() == state_idx.dim()).then_some(position)
+                            })
+                            .take(2)
+                            .collect();
 
-                        // Find MPO indices with matching dimension
-                        let matching_mpo: Vec<_> =
-                            mpo_indices.iter().filter(|idx| idx.dim() == dim).collect();
-
-                        if matching_mpo.len() < 2 {
+                        if matching_positions.len() < 2 {
                             return Err(anyhow::anyhow!(
                                 "Node {:?}: Not enough MPO indices with dimension {}. Found {}",
                                 node,
-                                dim,
-                                matching_mpo.len()
+                                state_idx.dim(),
+                                matching_positions.len()
                             ));
                         }
 
-                        // Convention: first matching is s_in_tmp, second is s_out_tmp
-                        // (This depends on how the MPO was constructed)
-                        input_mapping.insert(
-                            node.clone(),
-                            IndexMapping {
-                                true_index: state_idx.clone(),
-                                internal_index: matching_mpo[0].clone(),
-                            },
-                        );
+                        let input_position = matching_positions
+                            .iter()
+                            .copied()
+                            .find(|position| mpo_indices[*position].same_id(&state_idx))
+                            .unwrap_or(matching_positions[1]);
+                        let output_position = matching_positions
+                            .iter()
+                            .copied()
+                            .find(|position| *position != input_position)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "Node {:?}: Could not disambiguate input/output site indices",
+                                    node
+                                )
+                            })?;
 
-                        // For output, use the same true index (space(x) = space(b))
+                        let output_internal = mpo_indices[output_position].clone();
+                        let input_internal = mpo_indices[input_position].clone();
+
+                        let mut removal_positions = [output_position, input_position];
+                        removal_positions.sort_unstable_by(|lhs, rhs| rhs.cmp(lhs));
+                        for position in removal_positions {
+                            mpo_indices.remove(position);
+                        }
+
                         output_mapping.insert(
                             node.clone(),
                             IndexMapping {
                                 true_index: state_idx.clone(),
-                                internal_index: matching_mpo[1].clone(),
+                                internal_index: output_internal,
+                            },
+                        );
+                        input_mapping.insert(
+                            node.clone(),
+                            IndexMapping {
+                                true_index: state_idx.clone(),
+                                internal_index: input_internal,
                             },
                         );
                     }
