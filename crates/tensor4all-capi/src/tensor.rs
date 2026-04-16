@@ -3,11 +3,13 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use num_complex::Complex64;
+use tensor4all_core::{qr, svd_with, SvdOptions, TruncationParams};
 
 use crate::types::{t4a_index, t4a_scalar_kind, t4a_tensor, InternalIndex, InternalTensor};
 use crate::{
-    capi_error, clone_opaque, is_assigned_opaque, release_opaque, run_catching, StatusCode,
-    T4A_BUFFER_TOO_SMALL, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
+    capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
+    set_last_error, CapiResult, StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR,
+    T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 
 /// Release a tensor handle.
@@ -58,6 +60,48 @@ fn read_indices_from_ptrs(
 
 fn dims_from_indices(indices: &[InternalIndex]) -> Vec<usize> {
     indices.iter().map(|index| index.size()).collect()
+}
+
+fn run_status<F>(f: F) -> StatusCode
+where
+    F: FnOnce() -> CapiResult<()>,
+{
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(Ok(())) => T4A_SUCCESS,
+        Ok(Err((code, msg))) => {
+            set_last_error(&msg);
+            code
+        }
+        Err(panic) => {
+            let msg = panic_message(&*panic);
+            set_last_error(&msg);
+            T4A_INTERNAL_ERROR
+        }
+    }
+}
+
+fn require_tensor<'a>(ptr: *const t4a_tensor) -> Result<&'a t4a_tensor, (StatusCode, String)> {
+    if ptr.is_null() {
+        return Err(capi_error(T4A_NULL_POINTER, "tensor is null"));
+    }
+    Ok(unsafe { &*ptr })
+}
+
+fn build_svd_options(rtol: f64, cutoff: f64, maxdim: usize) -> SvdOptions {
+    let mut truncation = TruncationParams::new();
+    if cutoff > 0.0 {
+        truncation = truncation.with_cutoff(cutoff);
+    } else if rtol > 0.0 {
+        truncation = truncation.with_rtol(rtol);
+    }
+    if maxdim > 0 {
+        truncation = truncation.with_max_rank(maxdim);
+    }
+    SvdOptions { truncation }
+}
+
+fn box_tensor_handle(tensor: InternalTensor) -> *mut t4a_tensor {
+    Box::into_raw(Box::new(t4a_tensor::new(tensor)))
 }
 
 /// Get the rank of a tensor.
@@ -237,6 +281,75 @@ pub extern "C" fn t4a_tensor_contract(
 
     run_catching(out, || unsafe {
         Ok(t4a_tensor::new((*a).inner().contract((*b).inner())))
+    })
+}
+
+/// Compute the SVD of a tensor split by the requested left indices.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_svd(
+    tensor: *const t4a_tensor,
+    left_inds: *const *const t4a_index,
+    n_left: usize,
+    rtol: f64,
+    cutoff: f64,
+    maxdim: usize,
+    out_u: *mut *mut t4a_tensor,
+    out_s: *mut *mut t4a_tensor,
+    out_v: *mut *mut t4a_tensor,
+) -> StatusCode {
+    run_status(|| {
+        let tensor = require_tensor(tensor)?;
+        if out_u.is_null() || out_s.is_null() || out_v.is_null() {
+            return Err(capi_error(
+                T4A_NULL_POINTER,
+                "out_u, out_s, or out_v is null",
+            ));
+        }
+
+        let left_inds = read_indices_from_ptrs(n_left, left_inds)?;
+        let options = build_svd_options(rtol, cutoff, maxdim);
+        let (u, s, v) = match t4a_scalar_kind::from_tensor(tensor.inner()) {
+            t4a_scalar_kind::F64 => svd_with::<f64>(tensor.inner(), &left_inds, &options),
+            t4a_scalar_kind::C64 => svd_with::<Complex64>(tensor.inner(), &left_inds, &options),
+        }
+        .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+
+        unsafe {
+            *out_u = box_tensor_handle(u);
+            *out_s = box_tensor_handle(s);
+            *out_v = box_tensor_handle(v);
+        }
+        Ok(())
+    })
+}
+
+/// Compute the QR decomposition of a tensor split by the requested left indices.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_qr(
+    tensor: *const t4a_tensor,
+    left_inds: *const *const t4a_index,
+    n_left: usize,
+    out_q: *mut *mut t4a_tensor,
+    out_r: *mut *mut t4a_tensor,
+) -> StatusCode {
+    run_status(|| {
+        let tensor = require_tensor(tensor)?;
+        if out_q.is_null() || out_r.is_null() {
+            return Err(capi_error(T4A_NULL_POINTER, "out_q or out_r is null"));
+        }
+
+        let left_inds = read_indices_from_ptrs(n_left, left_inds)?;
+        let (q, r) = match t4a_scalar_kind::from_tensor(tensor.inner()) {
+            t4a_scalar_kind::F64 => qr::<f64>(tensor.inner(), &left_inds),
+            t4a_scalar_kind::C64 => qr::<Complex64>(tensor.inner(), &left_inds),
+        }
+        .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+
+        unsafe {
+            *out_q = box_tensor_handle(q);
+            *out_r = box_tensor_handle(r);
+        }
+        Ok(())
     })
 }
 

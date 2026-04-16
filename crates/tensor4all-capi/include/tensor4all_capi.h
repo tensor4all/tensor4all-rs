@@ -401,6 +401,15 @@ StatusCode t4a_tensor_new_dense_f64(size_t rank,
                                     struct t4a_tensor **out);
 
 /**
+ * Compute the QR decomposition of a tensor split by the requested left indices.
+ */
+StatusCode t4a_tensor_qr(const struct t4a_tensor *tensor,
+                         const struct t4a_index *const *left_inds,
+                         size_t n_left,
+                         struct t4a_tensor **out_q,
+                         struct t4a_tensor **out_r);
+
+/**
  * Get the rank of a tensor.
  */
 StatusCode t4a_tensor_rank(const struct t4a_tensor *ptr, size_t *out_rank);
@@ -414,6 +423,29 @@ void t4a_tensor_release(struct t4a_tensor *obj);
  * Get the scalar kind of a tensor.
  */
 StatusCode t4a_tensor_scalar_kind(const struct t4a_tensor *ptr, enum t4a_scalar_kind *out_kind);
+
+/**
+ * Compute the SVD of a tensor split by the requested left indices.
+ */
+StatusCode t4a_tensor_svd(const struct t4a_tensor *tensor,
+                          const struct t4a_index *const *left_inds,
+                          size_t n_left,
+                          double rtol,
+                          double cutoff,
+                          size_t maxdim,
+                          struct t4a_tensor **out_u,
+                          struct t4a_tensor **out_s,
+                          struct t4a_tensor **out_v);
+
+/**
+ * Add two tree tensor networks, optionally truncating the result.
+ */
+StatusCode t4a_treetn_add(const struct t4a_treetn *a,
+                          const struct t4a_treetn *b,
+                          double rtol,
+                          double cutoff,
+                          size_t maxdim,
+                          struct t4a_treetn **out);
 
 /**
  * Apply a chain-compatible operator TreeTN to a chain state TreeTN.
@@ -437,6 +469,14 @@ StatusCode t4a_treetn_apply_operator_chain(const struct t4a_treetn *operator_,
                                            double cutoff,
                                            size_t maxdim,
                                            struct t4a_treetn **out);
+
+/**
+ * Get the canonical region vertices, sorted ascending.
+ */
+StatusCode t4a_treetn_canonical_region(const struct t4a_treetn *treetn,
+                                       size_t *buf,
+                                       size_t buf_len,
+                                       size_t *out_len);
 
 /**
  * Clone a TreeTN handle.
@@ -496,15 +536,6 @@ StatusCode t4a_treetn_neighbors(const struct t4a_treetn *treetn,
                                 size_t *out_len);
 
 /**
- * Get the canonical region vertices, sorted ascending.
- * Call with buf=NULL to query required length via out_len.
- */
-StatusCode t4a_treetn_canonical_region(const struct t4a_treetn *treetn,
-                                       size_t *buf,
-                                       size_t buf_len,
-                                       size_t *out_len);
-
-/**
  * Create a tree tensor network from an array of tensors.
  */
 StatusCode t4a_treetn_new(const struct t4a_tensor *const *tensors,
@@ -515,26 +546,6 @@ StatusCode t4a_treetn_new(const struct t4a_tensor *const *tensors,
  * Compute the norm of the tree tensor network.
  */
 StatusCode t4a_treetn_norm(struct t4a_treetn *treetn, double *out_norm);
-
-/**
- * Scale a tree tensor network by a complex scalar.
- */
-StatusCode t4a_treetn_scale(const struct t4a_treetn *treetn,
-                            double re,
-                            double im,
-                            struct t4a_treetn **out);
-
-/**
- * Add two tree tensor networks (direct sum of bond dimensions).
- * Optional truncation: set rtol > 0, cutoff > 0, or maxdim > 0.
- * cutoff is converted to rtol = sqrt(cutoff).
- */
-StatusCode t4a_treetn_add(const struct t4a_treetn *a,
-                          const struct t4a_treetn *b,
-                          double rtol,
-                          double cutoff,
-                          size_t maxdim,
-                          struct t4a_treetn **out);
 
 /**
  * Get the number of vertices in the tree tensor network.
@@ -552,6 +563,14 @@ StatusCode t4a_treetn_orthogonalize(struct t4a_treetn *treetn,
  * Release a TreeTN handle.
  */
 void t4a_treetn_release(struct t4a_treetn *obj);
+
+/**
+ * Scale a tree tensor network by a complex scalar.
+ */
+StatusCode t4a_treetn_scale(const struct t4a_treetn *treetn,
+                            double re,
+                            double im,
+                            struct t4a_treetn **out);
 
 /**
  * Replace the tensor at a specific vertex.

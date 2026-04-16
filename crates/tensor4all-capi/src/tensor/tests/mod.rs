@@ -1,5 +1,6 @@
 use super::*;
 use crate::index::{t4a_index_new, t4a_index_release};
+use num_complex::Complex64;
 
 fn new_index(dim: usize) -> *mut t4a_index {
     let mut out = std::ptr::null_mut();
@@ -27,6 +28,22 @@ fn new_tensor_f64(indices: &[*const t4a_index], data: &[f64]) -> *mut t4a_tensor
     out
 }
 
+fn new_tensor_c64(indices: &[*const t4a_index], data_interleaved: &[f64]) -> *mut t4a_tensor {
+    let mut out = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_dense_c64(
+            indices.len(),
+            indices.as_ptr(),
+            data_interleaved.as_ptr(),
+            data_interleaved.len() / 2,
+            &mut out
+        ),
+        T4A_SUCCESS
+    );
+    assert!(!out.is_null());
+    out
+}
+
 fn read_dense_f64(tensor: *const t4a_tensor) -> Vec<f64> {
     let mut len = 0usize;
     assert_eq!(
@@ -39,6 +56,52 @@ fn read_dense_f64(tensor: *const t4a_tensor) -> Vec<f64> {
         T4A_SUCCESS
     );
     data
+}
+
+fn assert_tensors_close(actual: &InternalTensor, expected: &InternalTensor, tol: f64) {
+    let diff = actual - expected;
+    let maxabs = diff.maxabs();
+    assert!(
+        maxabs < tol,
+        "tensor maxabs diff {maxabs} exceeded tolerance {tol}"
+    );
+}
+
+fn reconstruct_svd(
+    u: *const t4a_tensor,
+    s: *const t4a_tensor,
+    v: *const t4a_tensor,
+) -> InternalTensor {
+    let v = unsafe { (*v).inner() };
+    let s = unsafe { (*s).inner() };
+    let mut perm = vec![v.indices.len() - 1];
+    perm.extend(0..(v.indices.len() - 1));
+    let vh = v.conj().permute(&perm);
+    let svh = s.contract(&vh);
+    let sim_bond = s.indices[1].clone();
+    let bond = v.indices[v.indices.len() - 1].clone();
+    let svh = svh.replaceind(&sim_bond, &bond);
+    unsafe { (*u).inner().contract(&svh) }
+}
+
+fn reconstruct_qr(q: *const t4a_tensor, r: *const t4a_tensor) -> InternalTensor {
+    unsafe { (*q).inner().contract((*r).inner()) }
+}
+
+fn internal_tensor_f64(indices: &[*const t4a_index], data: &[f64]) -> InternalTensor {
+    let indices = indices
+        .iter()
+        .map(|index| unsafe { (**index).inner().clone() })
+        .collect();
+    InternalTensor::from_dense(indices, data.to_vec()).unwrap()
+}
+
+fn internal_tensor_c64(indices: &[*const t4a_index], data: &[Complex64]) -> InternalTensor {
+    let indices = indices
+        .iter()
+        .map(|index| unsafe { (**index).inner().clone() })
+        .collect();
+    InternalTensor::from_dense(indices, data.to_vec()).unwrap()
 }
 
 #[test]
@@ -170,4 +233,252 @@ fn test_tensor_contract_matches_matrix_multiplication() {
     t4a_index_release(k);
     t4a_index_release(j);
     t4a_index_release(i);
+}
+
+#[test]
+fn test_tensor_svd_rank2() {
+    let i = new_index(3);
+    let j = new_index(4);
+    let tensor = new_tensor_f64(
+        &[i as *const t4a_index, j as *const t4a_index],
+        &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0],
+    );
+
+    let mut u = std::ptr::null_mut();
+    let mut s = std::ptr::null_mut();
+    let mut v = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_svd(
+            tensor,
+            [i as *const t4a_index].as_ptr(),
+            1,
+            0.0,
+            0.0,
+            0,
+            &mut u,
+            &mut s,
+            &mut v
+        ),
+        T4A_SUCCESS
+    );
+
+    assert_eq!(unsafe { (*u).inner().dims() }, vec![3, 3]);
+    assert_eq!(unsafe { (*s).inner().dims() }, vec![3, 3]);
+    assert_eq!(unsafe { (*v).inner().dims() }, vec![4, 3]);
+
+    let reconstructed = reconstruct_svd(u, s, v);
+    assert_tensors_close(&reconstructed, unsafe { (*tensor).inner() }, 1.0e-10);
+
+    for handle in [v, s, u, tensor] {
+        t4a_tensor_release(handle);
+    }
+    for index in [j, i] {
+        t4a_index_release(index);
+    }
+}
+
+#[test]
+fn test_tensor_svd_truncation() {
+    let i = new_index(3);
+    let j = new_index(3);
+    let tensor = new_tensor_f64(
+        &[i as *const t4a_index, j as *const t4a_index],
+        &[4.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+    );
+
+    let mut u = std::ptr::null_mut();
+    let mut s = std::ptr::null_mut();
+    let mut v = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_svd(
+            tensor,
+            [i as *const t4a_index].as_ptr(),
+            1,
+            0.0,
+            0.0,
+            1,
+            &mut u,
+            &mut s,
+            &mut v
+        ),
+        T4A_SUCCESS
+    );
+
+    assert_eq!(unsafe { (*u).inner().dims() }, vec![3, 1]);
+    assert_eq!(unsafe { (*s).inner().dims() }, vec![1, 1]);
+    assert_eq!(unsafe { (*v).inner().dims() }, vec![3, 1]);
+
+    let reconstructed = reconstruct_svd(u, s, v);
+    let expected = internal_tensor_f64(
+        &[i as *const t4a_index, j as *const t4a_index],
+        &[4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    );
+    assert_tensors_close(&reconstructed, &expected, 1.0e-10);
+
+    for handle in [v, s, u, tensor] {
+        t4a_tensor_release(handle);
+    }
+    for index in [j, i] {
+        t4a_index_release(index);
+    }
+}
+
+#[test]
+fn test_tensor_svd_rank3() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let k = new_index(4);
+    let data = vec![
+        1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    let tensor = new_tensor_f64(
+        &[
+            i as *const t4a_index,
+            j as *const t4a_index,
+            k as *const t4a_index,
+        ],
+        &data,
+    );
+
+    let mut u = std::ptr::null_mut();
+    let mut s = std::ptr::null_mut();
+    let mut v = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_svd(
+            tensor,
+            [i as *const t4a_index, j as *const t4a_index].as_ptr(),
+            2,
+            0.0,
+            0.0,
+            0,
+            &mut u,
+            &mut s,
+            &mut v
+        ),
+        T4A_SUCCESS
+    );
+
+    assert_eq!(unsafe { (*u).inner().dims() }, vec![2, 3, 4]);
+    assert_eq!(unsafe { (*s).inner().dims() }, vec![4, 4]);
+    assert_eq!(unsafe { (*v).inner().dims() }, vec![4, 4]);
+
+    let reconstructed = reconstruct_svd(u, s, v);
+    assert_tensors_close(&reconstructed, unsafe { (*tensor).inner() }, 1.0e-10);
+
+    for handle in [v, s, u, tensor] {
+        t4a_tensor_release(handle);
+    }
+    for index in [k, j, i] {
+        t4a_index_release(index);
+    }
+}
+
+#[test]
+fn test_tensor_qr_rank2() {
+    let i = new_index(3);
+    let j = new_index(4);
+    let tensor = new_tensor_f64(
+        &[i as *const t4a_index, j as *const t4a_index],
+        &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0],
+    );
+
+    let mut q = std::ptr::null_mut();
+    let mut r = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_qr(tensor, [i as *const t4a_index].as_ptr(), 1, &mut q, &mut r),
+        T4A_SUCCESS
+    );
+
+    assert_eq!(unsafe { (*q).inner().dims() }, vec![3, 3]);
+    assert_eq!(unsafe { (*r).inner().dims() }, vec![3, 4]);
+
+    let reconstructed = reconstruct_qr(q, r);
+    assert_tensors_close(&reconstructed, unsafe { (*tensor).inner() }, 1.0e-10);
+
+    for handle in [r, q, tensor] {
+        t4a_tensor_release(handle);
+    }
+    for index in [j, i] {
+        t4a_index_release(index);
+    }
+}
+
+#[test]
+fn test_tensor_qr_rank3() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let k = new_index(4);
+    let data = vec![
+        1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    let tensor = new_tensor_f64(
+        &[
+            i as *const t4a_index,
+            j as *const t4a_index,
+            k as *const t4a_index,
+        ],
+        &data,
+    );
+
+    let mut q = std::ptr::null_mut();
+    let mut r = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_qr(
+            tensor,
+            [i as *const t4a_index, j as *const t4a_index].as_ptr(),
+            2,
+            &mut q,
+            &mut r
+        ),
+        T4A_SUCCESS
+    );
+
+    assert_eq!(unsafe { (*q).inner().dims() }, vec![2, 3, 4]);
+    assert_eq!(unsafe { (*r).inner().dims() }, vec![4, 4]);
+
+    let reconstructed = reconstruct_qr(q, r);
+    assert_tensors_close(&reconstructed, unsafe { (*tensor).inner() }, 1.0e-10);
+
+    for handle in [r, q, tensor] {
+        t4a_tensor_release(handle);
+    }
+    for index in [k, j, i] {
+        t4a_index_release(index);
+    }
+}
+
+#[test]
+fn test_tensor_qr_rank2_c64() {
+    let i = new_index(2);
+    let j = new_index(2);
+    let data = [
+        Complex64::new(1.0, 1.0),
+        Complex64::new(3.0, -0.5),
+        Complex64::new(2.0, -2.0),
+        Complex64::new(-1.0, 0.25),
+    ];
+    let tensor = new_tensor_c64(
+        &[i as *const t4a_index, j as *const t4a_index],
+        &[1.0, 1.0, 3.0, -0.5, 2.0, -2.0, -1.0, 0.25],
+    );
+
+    let mut q = std::ptr::null_mut();
+    let mut r = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_qr(tensor, [i as *const t4a_index].as_ptr(), 1, &mut q, &mut r),
+        T4A_SUCCESS
+    );
+
+    let reconstructed = reconstruct_qr(q, r);
+    let expected = internal_tensor_c64(&[i as *const t4a_index, j as *const t4a_index], &data);
+    assert_tensors_close(&reconstructed, &expected, 1.0e-10);
+
+    for handle in [r, q, tensor] {
+        t4a_tensor_release(handle);
+    }
+    for index in [j, i] {
+        t4a_index_release(index);
+    }
 }
