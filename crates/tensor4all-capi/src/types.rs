@@ -2,7 +2,7 @@
 
 use std::ffi::c_void;
 
-use tensor4all_core::{DynIndex, TensorDynLen};
+use tensor4all_core::{DynIndex, FactorizeAlg, TensorDynLen};
 use tensor4all_quanticstransform::BoundaryCondition as QuanticsBoundaryCondition;
 use tensor4all_treetn::treetn::contraction::ContractionMethod;
 use tensor4all_treetn::{CanonicalForm as TreeCanonicalForm, DefaultTreeTN};
@@ -187,6 +187,43 @@ impl From<t4a_canonical_form> for TreeCanonicalForm {
             t4a_canonical_form::Unitary => Self::Unitary,
             t4a_canonical_form::LU => Self::LU,
             t4a_canonical_form::CI => Self::CI,
+        }
+    }
+}
+
+/// Factorization algorithms exposed through the C API.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum t4a_factorize_alg {
+    /// Singular value decomposition.
+    #[default]
+    SVD = 0,
+    /// QR decomposition.
+    QR = 1,
+    /// Rank-revealing LU decomposition.
+    LU = 2,
+    /// Cross interpolation.
+    CI = 3,
+}
+
+impl From<FactorizeAlg> for t4a_factorize_alg {
+    fn from(alg: FactorizeAlg) -> Self {
+        match alg {
+            FactorizeAlg::SVD => Self::SVD,
+            FactorizeAlg::QR => Self::QR,
+            FactorizeAlg::LU => Self::LU,
+            FactorizeAlg::CI => Self::CI,
+        }
+    }
+}
+
+impl From<t4a_factorize_alg> for FactorizeAlg {
+    fn from(alg: t4a_factorize_alg) -> Self {
+        match alg {
+            t4a_factorize_alg::SVD => Self::SVD,
+            t4a_factorize_alg::QR => Self::QR,
+            t4a_factorize_alg::LU => Self::LU,
+            t4a_factorize_alg::CI => Self::CI,
         }
     }
 }

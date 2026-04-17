@@ -15,6 +15,7 @@ mod localupdate;
 mod operator_impl;
 mod ops;
 pub mod partial_contraction;
+mod restructure;
 mod swap;
 mod tensor_like;
 mod transform;

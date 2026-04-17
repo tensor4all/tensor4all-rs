@@ -3,7 +3,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use num_complex::Complex64;
-use tensor4all_core::{qr, svd_with, SvdOptions, TruncationParams};
+use tensor4all_core::{qr_with, svd_with, QrOptions, SvdOptions, TruncationParams};
 
 use crate::types::{t4a_index, t4a_scalar_kind, t4a_tensor, InternalIndex, InternalTensor};
 use crate::{
@@ -98,6 +98,11 @@ fn build_svd_options(rtol: f64, cutoff: f64, maxdim: usize) -> SvdOptions {
         truncation = truncation.with_max_rank(maxdim);
     }
     SvdOptions { truncation }
+}
+
+fn build_qr_options(rtol: f64) -> QrOptions {
+    // `0.0` is the C-API sentinel for exact QR without truncation.
+    QrOptions::with_rtol(rtol)
 }
 
 fn box_tensor_handle(tensor: InternalTensor) -> *mut t4a_tensor {
@@ -324,11 +329,44 @@ pub extern "C" fn t4a_tensor_svd(
 }
 
 /// Compute the QR decomposition of a tensor split by the requested left indices.
+///
+/// The tensor is unfolded into a matrix by treating `left_inds[..n_left]` as row
+/// indices and all remaining tensor indices as columns, then factorized as
+/// `tensor = Q * R`.
+///
+/// # Arguments
+/// * `tensor` - Input tensor handle to factorize.
+/// * `left_inds` - Pointers to the indices that should appear on the left side
+///   of the factorization.
+/// * `n_left` - Number of entries in `left_inds`.
+/// * `rtol` - Relative truncation tolerance for QR row-norm truncation. Pass
+///   `0.0` to disable truncation and keep the exact QR rank. Pass any other
+///   finite, non-negative value to request truncation for this call.
+/// * `out_q` - Output slot that receives a newly allocated `Q` tensor handle on
+///   success.
+/// * `out_r` - Output slot that receives a newly allocated `R` tensor handle on
+///   success.
+///
+/// # Returns
+/// Returns `T4A_SUCCESS` on success and writes owned tensor handles to
+/// `out_q` and `out_r`. The caller must release both handles with
+/// [`t4a_tensor_release`].
+///
+/// # Errors
+/// Returns:
+/// - `T4A_NULL_POINTER` if `tensor`, any required index pointer, `out_q`, or
+///   `out_r` is null.
+/// - `T4A_INVALID_ARGUMENT` if the index split is invalid, QR factorization
+///   fails, or `rtol` is negative or non-finite (for example `NaN` or
+///   `+/-inf`).
+/// - `T4A_INTERNAL_ERROR` if the Rust implementation panics while processing
+///   the request.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_qr(
     tensor: *const t4a_tensor,
     left_inds: *const *const t4a_index,
     n_left: usize,
+    rtol: f64,
     out_q: *mut *mut t4a_tensor,
     out_r: *mut *mut t4a_tensor,
 ) -> StatusCode {
@@ -339,9 +377,10 @@ pub extern "C" fn t4a_tensor_qr(
         }
 
         let left_inds = read_indices_from_ptrs(n_left, left_inds)?;
+        let options = build_qr_options(rtol);
         let (q, r) = match t4a_scalar_kind::from_tensor(tensor.inner()) {
-            t4a_scalar_kind::F64 => qr::<f64>(tensor.inner(), &left_inds),
-            t4a_scalar_kind::C64 => qr::<Complex64>(tensor.inner(), &left_inds),
+            t4a_scalar_kind::F64 => qr_with::<f64>(tensor.inner(), &left_inds, &options),
+            t4a_scalar_kind::C64 => qr_with::<Complex64>(tensor.inner(), &left_inds, &options),
         }
         .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
 

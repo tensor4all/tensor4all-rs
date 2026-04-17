@@ -1,8 +1,8 @@
 //! C API for the reduced TreeTN surface.
 
 use crate::types::{
-    t4a_canonical_form, t4a_contract_method, t4a_index, t4a_tensor, t4a_treetn, InternalIndex,
-    InternalTreeTN,
+    t4a_canonical_form, t4a_contract_method, t4a_factorize_alg, t4a_index, t4a_tensor, t4a_treetn,
+    InternalIndex, InternalTreeTN,
 };
 use crate::{
     capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
@@ -10,13 +10,13 @@ use crate::{
     T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 use num_complex::Complex64;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike};
 use tensor4all_treetn::treetn::contraction::{self, ContractionMethod, ContractionOptions};
 use tensor4all_treetn::{
     apply_linear_operator, ApplyOptions, CanonicalizationOptions, IndexMapping, LinearOperator,
-    TruncationOptions,
+    RestructureOptions, SiteIndexNetwork, SplitOptions, SwapOptions, TruncationOptions,
 };
 
 /// Release a TreeTN handle.
@@ -70,6 +70,34 @@ fn resolve_rtol(rtol: f64, cutoff: f64) -> Option<f64> {
         Tol::Rtol(r) => Some(r),
         Tol::None => None,
     }
+}
+
+#[inline]
+fn resolve_convergence_tol(convergence_tol: f64) -> Option<f64> {
+    (convergence_tol > 0.0).then_some(convergence_tol)
+}
+
+#[inline]
+fn resolve_fit_nfullsweeps(nfullsweeps: usize) -> usize {
+    if nfullsweeps == 0 {
+        1
+    } else {
+        nfullsweeps
+    }
+}
+
+fn orthogonalize_error_message(force: libc::c_int, err: impl std::fmt::Display) -> String {
+    let mut msg = format!("{err:#}");
+    if force == 0 {
+        msg = msg.replace("CanonicalizationOptions::forced()", "force=1");
+        if msg == "canonicalize: form mismatch" {
+            msg.push_str(
+                ": The network is already canonicalized with a different form. \
+                 Pass force=1 to re-canonicalize with a different form.",
+            );
+        }
+    }
+    msg
 }
 
 fn run_status<F>(f: F) -> StatusCode
@@ -154,6 +182,9 @@ fn collect_indices(
     n_indices: usize,
     what: &str,
 ) -> CapiResult<Vec<InternalIndex>> {
+    if n_indices == 0 {
+        return Ok(Vec::new());
+    }
     if index_ptrs.is_null() {
         return Err(capi_error(T4A_NULL_POINTER, format!("{what} is null")));
     }
@@ -174,6 +205,9 @@ fn collect_positions(
     len: usize,
     what: &str,
 ) -> CapiResult<Vec<usize>> {
+    if len == 0 {
+        return Ok(Vec::new());
+    }
     if positions.is_null() {
         return Err(capi_error(T4A_NULL_POINTER, format!("{what} is null")));
     }
@@ -183,6 +217,174 @@ fn collect_positions(
         out.push(unsafe { *positions.add(i) });
     }
     Ok(out)
+}
+
+fn collect_edge_endpoints(
+    sources: *const libc::size_t,
+    targets: *const libc::size_t,
+    n_edges: usize,
+    what: &str,
+) -> CapiResult<Vec<(usize, usize)>> {
+    let sources = collect_positions(sources, n_edges, &format!("{what}.sources"))?;
+    let targets = collect_positions(targets, n_edges, &format!("{what}.targets"))?;
+    Ok(sources.into_iter().zip(targets).collect())
+}
+
+fn collect_target_assignment(
+    assignment_siteinds: *const *const t4a_index,
+    assignment_target_vertices: *const libc::size_t,
+    n_assignments: usize,
+    what: &str,
+) -> CapiResult<HashMap<<InternalIndex as IndexLike>::Id, usize>> {
+    let siteinds = collect_indices(
+        assignment_siteinds,
+        n_assignments,
+        &format!("{what}.siteinds"),
+    )?;
+    let target_vertices = collect_positions(
+        assignment_target_vertices,
+        n_assignments,
+        &format!("{what}.target_vertices"),
+    )?;
+    let mut target_assignment = HashMap::with_capacity(n_assignments);
+    for (siteind, target_vertex) in siteinds.into_iter().zip(target_vertices) {
+        let site_id = siteind.id().clone();
+        if let Some(previous_target) = target_assignment.insert(site_id.clone(), target_vertex) {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "{what}: duplicate site index assignment for {:?}: {} and {}",
+                    site_id, previous_target, target_vertex
+                ),
+            ));
+        }
+    }
+    Ok(target_assignment)
+}
+
+fn build_target_network(
+    target_vertices: *const libc::size_t,
+    n_target_vertices: usize,
+    target_siteinds: *const *const t4a_index,
+    target_siteinds_len: *const libc::size_t,
+    target_edge_sources: *const libc::size_t,
+    target_edge_targets: *const libc::size_t,
+    n_target_edges: usize,
+    what: &str,
+) -> CapiResult<SiteIndexNetwork<usize, InternalIndex>> {
+    if n_target_vertices == 0 {
+        return Err(capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!("{what}: target must contain at least one vertex"),
+        ));
+    }
+
+    let vertices = collect_positions(
+        target_vertices,
+        n_target_vertices,
+        &format!("{what}.vertices"),
+    )?;
+    let siteind_lens = collect_positions(
+        target_siteinds_len,
+        n_target_vertices,
+        &format!("{what}.siteind_lens"),
+    )?;
+    let total_siteinds: usize = siteind_lens.iter().sum();
+    let flat_siteinds =
+        collect_indices(target_siteinds, total_siteinds, &format!("{what}.siteinds"))?;
+    let edges = collect_edge_endpoints(
+        target_edge_sources,
+        target_edge_targets,
+        n_target_edges,
+        &format!("{what}.edges"),
+    )?;
+
+    let mut network = SiteIndexNetwork::with_capacity(n_target_vertices, n_target_edges);
+    let mut seen_siteinds: HashMap<<InternalIndex as IndexLike>::Id, usize> =
+        HashMap::with_capacity(total_siteinds);
+    let mut offset = 0usize;
+    for (slot, &vertex) in vertices.iter().enumerate() {
+        let len = siteind_lens[slot];
+        if len == 0 {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("{what}: target vertex {vertex} must contain at least one site index"),
+            ));
+        }
+        let mut site_space = HashSet::with_capacity(len);
+        for siteind in &flat_siteinds[offset..offset + len] {
+            let site_id = siteind.id().clone();
+            if let Some(previous_vertex) = seen_siteinds.insert(site_id.clone(), vertex) {
+                return Err(capi_error(
+                    T4A_INVALID_ARGUMENT,
+                    format!(
+                        "{what}: duplicate site index {:?} appears in target vertices {} and {}",
+                        site_id, previous_vertex, vertex
+                    ),
+                ));
+            }
+            site_space.insert(siteind.clone());
+        }
+        offset += len;
+        network
+            .add_node(vertex, site_space)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, format!("{what}: {err}")))?;
+    }
+
+    for (source, target) in edges {
+        network
+            .add_edge(&source, &target)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, format!("{what}: {err}")))?;
+    }
+
+    Ok(network)
+}
+
+fn build_split_options(
+    rtol: f64,
+    cutoff: f64,
+    maxdim: usize,
+    form: t4a_canonical_form,
+    final_sweep: libc::c_int,
+) -> SplitOptions {
+    let mut options = SplitOptions::new()
+        .with_form(form.into())
+        .with_final_sweep(final_sweep != 0);
+    if maxdim > 0 {
+        options = options.with_max_rank(maxdim);
+    }
+    if let Some(rtol) = resolve_rtol(rtol, cutoff) {
+        options = options.with_rtol(rtol);
+    }
+    options
+}
+
+fn build_swap_options(maxdim: usize, rtol: f64) -> SwapOptions {
+    SwapOptions {
+        max_rank: (maxdim > 0).then_some(maxdim),
+        rtol: (rtol > 0.0).then_some(rtol),
+    }
+}
+
+fn build_final_truncation(
+    rtol: f64,
+    cutoff: f64,
+    maxdim: usize,
+    form: t4a_canonical_form,
+) -> Option<TruncationOptions> {
+    let resolved_rtol = resolve_rtol(rtol, cutoff);
+    if maxdim == 0 && resolved_rtol.is_none() {
+        return None;
+    }
+
+    let mut options = TruncationOptions::new().with_form(form.into());
+    if maxdim > 0 {
+        options = options.with_max_rank(maxdim);
+    }
+    if let Some(rtol) = resolved_rtol {
+        options = options.with_rtol(rtol);
+    }
+    Some(options)
 }
 
 fn require_chain_layout(tn: &InternalTreeTN, what: &str) -> CapiResult<usize> {
@@ -675,19 +877,35 @@ pub extern "C" fn t4a_treetn_linkind(
 }
 
 /// Orthogonalize the tree tensor network to a vertex using the requested form.
+///
+/// When `force == 0`, this uses smart canonicalization:
+/// - If the network is already canonical at `vertex` with `form`, the call is a no-op.
+/// - If the network is already canonicalized with a different form, the call returns
+///   `T4A_INVALID_ARGUMENT`. Pass a nonzero `force` to re-canonicalize with a different form.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_orthogonalize(
     treetn: *mut t4a_treetn,
     vertex: libc::size_t,
     form: t4a_canonical_form,
+    force: libc::c_int,
 ) -> StatusCode {
     run_status(|| {
         let tn = require_tree_mut(treetn)?;
         require_node(tn.inner(), vertex)?;
-        let options = CanonicalizationOptions::forced().with_form(form.into());
-        tn.inner_mut()
+        let mut options = CanonicalizationOptions::new().with_form(form.into());
+        if force != 0 {
+            options = options.force();
+        }
+        let mut canonicalized = tn.inner().clone();
+        canonicalized
             .canonicalize_mut(std::iter::once(vertex), options)
-            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+            .map_err(|err| {
+                capi_error(
+                    T4A_INVALID_ARGUMENT,
+                    orthogonalize_error_message(force, err),
+                )
+            })?;
+        *tn.inner_mut() = canonicalized;
         Ok(())
     })
 }
@@ -699,11 +917,12 @@ pub extern "C" fn t4a_treetn_truncate(
     rtol: libc::c_double,
     cutoff: libc::c_double,
     maxdim: libc::size_t,
+    form: t4a_canonical_form,
 ) -> StatusCode {
     run_status(|| {
         let tn = require_tree_mut(treetn)?;
 
-        let mut options = TruncationOptions::new();
+        let mut options = TruncationOptions::new().with_form(form.into());
         if let Some(rtol) = resolve_rtol(rtol, cutoff) {
             options = options.with_rtol(rtol);
         }
@@ -719,6 +938,164 @@ pub extern "C" fn t4a_treetn_truncate(
             .truncate_mut(std::iter::once(center), options)
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         Ok(())
+    })
+}
+
+/// Fuse connected current-node groups into the requested target topology.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_fuse_to(
+    treetn: *const t4a_treetn,
+    target_vertices: *const libc::size_t,
+    n_target_vertices: libc::size_t,
+    target_siteinds: *const *const t4a_index,
+    target_siteinds_len: *const libc::size_t,
+    target_edge_sources: *const libc::size_t,
+    target_edge_targets: *const libc::size_t,
+    n_target_edges: libc::size_t,
+    out: *mut *mut t4a_treetn,
+) -> StatusCode {
+    run_catching(out, || {
+        let tn = require_tree(treetn)?;
+        let target = build_target_network(
+            target_vertices,
+            n_target_vertices,
+            target_siteinds,
+            target_siteinds_len,
+            target_edge_sources,
+            target_edge_targets,
+            n_target_edges,
+            "target",
+        )?;
+        let result = tn
+            .inner()
+            .fuse_to(&target)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_treetn::new(result))
+    })
+}
+
+/// Split current nodes to match the requested target topology.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_split_to(
+    treetn: *const t4a_treetn,
+    target_vertices: *const libc::size_t,
+    n_target_vertices: libc::size_t,
+    target_siteinds: *const *const t4a_index,
+    target_siteinds_len: *const libc::size_t,
+    target_edge_sources: *const libc::size_t,
+    target_edge_targets: *const libc::size_t,
+    n_target_edges: libc::size_t,
+    rtol: libc::c_double,
+    cutoff: libc::c_double,
+    maxdim: libc::size_t,
+    form: t4a_canonical_form,
+    final_sweep: libc::c_int,
+    out: *mut *mut t4a_treetn,
+) -> StatusCode {
+    run_catching(out, || {
+        let tn = require_tree(treetn)?;
+        let target = build_target_network(
+            target_vertices,
+            n_target_vertices,
+            target_siteinds,
+            target_siteinds_len,
+            target_edge_sources,
+            target_edge_targets,
+            n_target_edges,
+            "target",
+        )?;
+        let options = build_split_options(rtol, cutoff, maxdim, form, final_sweep);
+        let result = tn
+            .inner()
+            .split_to(&target, &options)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_treetn::new(result))
+    })
+}
+
+/// Reassign site indices to target vertices using scheduled swap transport.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_swap_site_indices(
+    treetn: *const t4a_treetn,
+    assignment_siteinds: *const *const t4a_index,
+    assignment_target_vertices: *const libc::size_t,
+    n_assignments: libc::size_t,
+    maxdim: libc::size_t,
+    rtol: libc::c_double,
+    out: *mut *mut t4a_treetn,
+) -> StatusCode {
+    run_catching(out, || {
+        let tn = require_tree(treetn)?;
+        let target_assignment = collect_target_assignment(
+            assignment_siteinds,
+            assignment_target_vertices,
+            n_assignments,
+            "target_assignment",
+        )?;
+        let options = build_swap_options(maxdim, rtol);
+        let mut result = tn.inner().clone();
+        result
+            .swap_site_indices(&target_assignment, &options)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_treetn::new(result))
+    })
+}
+
+/// Restructure a TreeTN using split, swap, and optional final truncation phases.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_restructure_to(
+    treetn: *const t4a_treetn,
+    target_vertices: *const libc::size_t,
+    n_target_vertices: libc::size_t,
+    target_siteinds: *const *const t4a_index,
+    target_siteinds_len: *const libc::size_t,
+    target_edge_sources: *const libc::size_t,
+    target_edge_targets: *const libc::size_t,
+    n_target_edges: libc::size_t,
+    split_rtol: libc::c_double,
+    split_cutoff: libc::c_double,
+    split_maxdim: libc::size_t,
+    split_form: t4a_canonical_form,
+    split_final_sweep: libc::c_int,
+    swap_maxdim: libc::size_t,
+    swap_rtol: libc::c_double,
+    final_rtol: libc::c_double,
+    final_cutoff: libc::c_double,
+    final_maxdim: libc::size_t,
+    final_form: t4a_canonical_form,
+    out: *mut *mut t4a_treetn,
+) -> StatusCode {
+    run_catching(out, || {
+        let tn = require_tree(treetn)?;
+        let target = build_target_network(
+            target_vertices,
+            n_target_vertices,
+            target_siteinds,
+            target_siteinds_len,
+            target_edge_sources,
+            target_edge_targets,
+            n_target_edges,
+            "target",
+        )?;
+        let mut options = RestructureOptions::new()
+            .with_split(build_split_options(
+                split_rtol,
+                split_cutoff,
+                split_maxdim,
+                split_form,
+                split_final_sweep,
+            ))
+            .with_swap(build_swap_options(swap_maxdim, swap_rtol));
+        if let Some(final_truncation) =
+            build_final_truncation(final_rtol, final_cutoff, final_maxdim, final_form)
+        {
+            options = options.with_final_truncation(final_truncation);
+        }
+        let result = tn
+            .inner()
+            .restructure_to(&target, &options)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_treetn::new(result))
     })
 }
 
@@ -900,6 +1277,9 @@ pub extern "C" fn t4a_treetn_add(
 }
 
 /// Contract two tree tensor networks with the requested method.
+///
+/// For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
+/// default", which currently resolves to one variational sweep.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_contract(
     a: *const t4a_treetn,
@@ -908,6 +1288,9 @@ pub extern "C" fn t4a_treetn_contract(
     rtol: libc::c_double,
     cutoff: libc::c_double,
     maxdim: libc::size_t,
+    nfullsweeps: libc::size_t,
+    convergence_tol: libc::c_double,
+    factorize_alg: t4a_factorize_alg,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
     let tn_a = match require_tree(a) {
@@ -932,12 +1315,18 @@ pub extern "C" fn t4a_treetn_contract(
             })?;
 
         let rust_method: ContractionMethod = method.into();
-        let mut options = ContractionOptions::new(rust_method);
+        let fit_nfullsweeps = resolve_fit_nfullsweeps(nfullsweeps);
+        let mut options = ContractionOptions::new(rust_method)
+            .with_nfullsweeps(fit_nfullsweeps)
+            .with_factorize_alg(factorize_alg.into());
         if let Some(rtol) = resolve_rtol(rtol, cutoff) {
             options = options.with_rtol(rtol);
         }
         if maxdim > 0 {
             options = options.with_max_rank(maxdim);
+        }
+        if let Some(tol) = resolve_convergence_tol(convergence_tol) {
+            options = options.with_convergence_tol(tol);
         }
 
         let result = contraction::contract(tn_a.inner(), tn_b.inner(), &center, options)
@@ -954,6 +1343,9 @@ pub extern "C" fn t4a_treetn_contract(
 /// `internal_input_indices[i]` and `internal_output_indices[i]` must point to
 /// those indices. Unmapped state nodes are filled with identities by
 /// `apply_linear_operator`.
+///
+/// For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
+/// default", which currently resolves to one variational sweep.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_apply_operator_chain(
     operator: *const t4a_treetn,
@@ -967,6 +1359,8 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
     rtol: libc::c_double,
     cutoff: libc::c_double,
     maxdim: libc::size_t,
+    nfullsweeps: libc::size_t,
+    convergence_tol: libc::c_double,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
     let op = match require_tree(operator) {
@@ -1018,6 +1412,7 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
             &true_outputs,
         )?;
 
+        let fit_nfullsweeps = resolve_fit_nfullsweeps(nfullsweeps);
         let result = apply_linear_operator(
             &linear_operator,
             state.inner(),
@@ -1025,6 +1420,8 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
                 method: method.into(),
                 max_rank: (maxdim > 0).then_some(maxdim),
                 rtol: resolve_rtol(rtol, cutoff),
+                nfullsweeps: fit_nfullsweeps,
+                convergence_tol: resolve_convergence_tol(convergence_tol),
                 ..Default::default()
             },
         )

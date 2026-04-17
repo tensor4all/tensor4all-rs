@@ -386,7 +386,14 @@ fn test_tensor_qr_rank2() {
     let mut q = std::ptr::null_mut();
     let mut r = std::ptr::null_mut();
     assert_eq!(
-        t4a_tensor_qr(tensor, [i as *const t4a_index].as_ptr(), 1, &mut q, &mut r),
+        t4a_tensor_qr(
+            tensor,
+            [i as *const t4a_index].as_ptr(),
+            1,
+            0.0,
+            &mut q,
+            &mut r
+        ),
         T4A_SUCCESS
     );
 
@@ -429,6 +436,7 @@ fn test_tensor_qr_rank3() {
             tensor,
             [i as *const t4a_index, j as *const t4a_index].as_ptr(),
             2,
+            0.0,
             &mut q,
             &mut r
         ),
@@ -467,7 +475,14 @@ fn test_tensor_qr_rank2_c64() {
     let mut q = std::ptr::null_mut();
     let mut r = std::ptr::null_mut();
     assert_eq!(
-        t4a_tensor_qr(tensor, [i as *const t4a_index].as_ptr(), 1, &mut q, &mut r),
+        t4a_tensor_qr(
+            tensor,
+            [i as *const t4a_index].as_ptr(),
+            1,
+            0.0,
+            &mut q,
+            &mut r
+        ),
         T4A_SUCCESS
     );
 
@@ -476,6 +491,57 @@ fn test_tensor_qr_rank2_c64() {
     assert_tensors_close(&reconstructed, &expected, 1.0e-10);
 
     for handle in [r, q, tensor] {
+        t4a_tensor_release(handle);
+    }
+    for index in [j, i] {
+        t4a_index_release(index);
+    }
+}
+
+#[test]
+fn test_tensor_qr_zero_rtol_disables_truncation() {
+    let i = new_index(2);
+    let j = new_index(2);
+    let tensor = new_tensor_f64(
+        &[i as *const t4a_index, j as *const t4a_index],
+        &[1.0, 0.0, 0.0, 1.0e-16],
+    );
+
+    let mut q_exact = std::ptr::null_mut();
+    let mut r_exact = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_qr(
+            tensor,
+            [i as *const t4a_index].as_ptr(),
+            1,
+            0.0,
+            &mut q_exact,
+            &mut r_exact
+        ),
+        T4A_SUCCESS
+    );
+
+    assert_eq!(unsafe { (*q_exact).inner().dims() }, vec![2, 2]);
+    assert_eq!(unsafe { (*r_exact).inner().dims() }, vec![2, 2]);
+
+    let mut q_truncated = std::ptr::null_mut();
+    let mut r_truncated = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_qr(
+            tensor,
+            [i as *const t4a_index].as_ptr(),
+            1,
+            1.0e-12,
+            &mut q_truncated,
+            &mut r_truncated
+        ),
+        T4A_SUCCESS
+    );
+
+    assert_eq!(unsafe { (*q_truncated).inner().dims() }, vec![2, 1]);
+    assert_eq!(unsafe { (*r_truncated).inner().dims() }, vec![1, 2]);
+
+    for handle in [r_truncated, q_truncated, r_exact, q_exact, tensor] {
         t4a_tensor_release(handle);
     }
     for index in [j, i] {

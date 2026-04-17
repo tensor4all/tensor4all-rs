@@ -45,7 +45,7 @@ pub use operator::{
     compose_exclusive_linear_operators, ApplyOptions, ArcLinearOperator, IndexMapping,
     LinearOperator, Operator,
 };
-pub use options::{CanonicalizationOptions, SplitOptions, TruncationOptions};
+pub use options::{CanonicalizationOptions, RestructureOptions, SplitOptions, TruncationOptions};
 pub use random::{random_treetn, LinkSpace};
 pub use simplett_bridge::{
     tensor_train_to_treetn, tensor_train_to_treetn_with_names,
