@@ -366,7 +366,65 @@ git add crates/tensor4all-itensorlike/src/options.rs crates/tensor4all-itensorli
 git commit -m "refactor(itensorlike): replace rtol and cutoff with svd policy"
 ```
 
-### Task 7: Refresh docs, rustdoc examples, and workspace verification
+### Task 7: Redesign the C API to expose explicit SVD truncation policies
+
+**Files:**
+- Modify: `crates/tensor4all-capi/src/types.rs`
+- Modify: `crates/tensor4all-capi/src/tensor.rs`
+- Modify: `crates/tensor4all-capi/src/treetn.rs`
+- Modify: `crates/tensor4all-capi/src/tensor/tests/mod.rs`
+- Modify: `crates/tensor4all-capi/src/treetn/tests/mod.rs`
+- Modify: `crates/tensor4all-capi/include/tensor4all_capi.h`
+
+**Step 1: Write the failing tests**
+
+Add C API tests that:
+
+```rust
+let policy = t4a_svd_truncation_policy {
+    threshold: 1e-10,
+    scale: t4a_threshold_scale::Relative,
+    measure: t4a_singular_value_measure::SquaredValue,
+    rule: t4a_truncation_rule::DiscardedTailSum,
+};
+```
+
+and verify:
+
+- `t4a_treetn_truncate` accepts `&policy` and `maxdim`
+- `t4a_treetn_add` accepts `&policy` and `maxdim`
+- `t4a_treetn_contract` accepts `policy` plus QR-specific `qr_rtol`
+- `t4a_treetn_linsolve` no longer takes `form`
+
+**Step 2: Run test to verify it fails**
+
+Run: `cargo nextest run --release -p tensor4all-capi treetn tensor`
+
+Expected: FAIL because the TreeTN C entry points still expose legacy
+`rtol/cutoff/form` signatures.
+
+**Step 3: Write minimal implementation**
+
+- Remove legacy `rtol/cutoff/form` parameters from SVD-based TreeTN C entry points
+- Add `const t4a_svd_truncation_policy *policy` wherever SVD truncation is used
+- Keep `form` only on canonicalization APIs
+- Preserve separate `qr_rtol` inputs for QR-based paths
+- Regenerate `crates/tensor4all-capi/include/tensor4all_capi.h`
+
+**Step 4: Run test to verify it passes**
+
+Run: `cargo nextest run --release -p tensor4all-capi treetn tensor`
+
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add crates/tensor4all-capi/src/types.rs crates/tensor4all-capi/src/tensor.rs crates/tensor4all-capi/src/treetn.rs crates/tensor4all-capi/src/tensor/tests/mod.rs crates/tensor4all-capi/src/treetn/tests/mod.rs crates/tensor4all-capi/include/tensor4all_capi.h
+git commit -m "refactor(capi): expose explicit svd truncation policies"
+```
+
+### Task 8: Refresh docs, rustdoc examples, and workspace verification
 
 **Files:**
 - Modify: `README.md`
@@ -385,8 +443,9 @@ Run:
 cargo fmt --all
 cargo clippy --workspace
 cargo test --doc --release --workspace
-mdbook test docs/book
+./scripts/test-mdbook.sh
 cargo nextest run --release --workspace
+cbindgen --config crates/tensor4all-capi/cbindgen.toml --crate tensor4all-capi --output crates/tensor4all-capi/include/tensor4all_capi.h
 ```
 
 Expected: at least one failure from stale docs/examples before cleanup.
@@ -405,8 +464,9 @@ Run:
 cargo fmt --all
 cargo clippy --workspace
 cargo test --doc --release --workspace
-mdbook test docs/book
+./scripts/test-mdbook.sh
 cargo nextest run --release --workspace
+cbindgen --config crates/tensor4all-capi/cbindgen.toml --crate tensor4all-capi --output crates/tensor4all-capi/include/tensor4all_capi.h
 ```
 
 Expected: PASS

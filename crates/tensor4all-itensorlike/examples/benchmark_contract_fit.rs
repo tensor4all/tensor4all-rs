@@ -151,7 +151,7 @@ fn main() -> Result<()> {
         "Options: method=Fit, max_rank={}, nhalfsweeps={}, rtol={:?}",
         max_rank,
         n_half_sweeps,
-        options.rtol()
+        options.svd_policy().map(|policy| policy.threshold)
     );
     println!("Note: Each run copies MPOs and includes orthogonalization time");
     println!();

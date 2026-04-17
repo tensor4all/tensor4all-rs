@@ -1,5 +1,6 @@
 use super::*;
 use crate::index::{t4a_index_new, t4a_index_release};
+use crate::types::{t4a_singular_value_measure, t4a_threshold_scale, t4a_truncation_rule};
 use num_complex::Complex64;
 
 fn new_index(dim: usize) -> *mut t4a_index {
@@ -252,8 +253,7 @@ fn test_tensor_svd_rank2() {
             tensor,
             [i as *const t4a_index].as_ptr(),
             1,
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
             &mut u,
             &mut s,
@@ -294,8 +294,7 @@ fn test_tensor_svd_truncation() {
             tensor,
             [i as *const t4a_index].as_ptr(),
             1,
-            0.0,
-            0.0,
+            std::ptr::null(),
             1,
             &mut u,
             &mut s,
@@ -349,8 +348,7 @@ fn test_tensor_svd_rank3() {
             tensor,
             [i as *const t4a_index, j as *const t4a_index].as_ptr(),
             2,
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
             &mut u,
             &mut s,
@@ -370,6 +368,50 @@ fn test_tensor_svd_rank3() {
         t4a_tensor_release(handle);
     }
     for index in [k, j, i] {
+        t4a_index_release(index);
+    }
+}
+
+#[test]
+fn test_tensor_svd_explicit_policy() {
+    let i = new_index(3);
+    let j = new_index(3);
+    let tensor = new_tensor_f64(
+        &[i as *const t4a_index, j as *const t4a_index],
+        &[4.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+    );
+    let policy = t4a_svd_truncation_policy {
+        threshold: 0.3,
+        scale: t4a_threshold_scale::Relative,
+        measure: t4a_singular_value_measure::Value,
+        rule: t4a_truncation_rule::PerValue,
+    };
+
+    let mut u = std::ptr::null_mut();
+    let mut s = std::ptr::null_mut();
+    let mut v = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_svd(
+            tensor,
+            [i as *const t4a_index].as_ptr(),
+            1,
+            &policy,
+            0,
+            &mut u,
+            &mut s,
+            &mut v
+        ),
+        T4A_SUCCESS
+    );
+
+    assert_eq!(unsafe { (*u).inner().dims() }, vec![3, 1]);
+    assert_eq!(unsafe { (*s).inner().dims() }, vec![1, 1]);
+    assert_eq!(unsafe { (*v).inner().dims() }, vec![3, 1]);
+
+    for handle in [v, s, u, tensor] {
+        t4a_tensor_release(handle);
+    }
+    for index in [j, i] {
         t4a_index_release(index);
     }
 }

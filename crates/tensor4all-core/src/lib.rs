@@ -120,7 +120,10 @@ pub mod qr {
 }
 pub mod svd {
     //! Re-export of SVD decomposition operations.
-    pub use crate::defaults::svd::*;
+    pub use crate::defaults::svd::{
+        default_svd_truncation_policy, set_default_svd_truncation_policy, svd, svd_with, SvdError,
+        SvdOptions,
+    };
 }
 
 // Re-export linear algebra items for top-level access

@@ -214,14 +214,19 @@ After orthogonalization you can truncate bond dimensions by SVD:
 # )?;
 # let mut tt = TensorTrain::new(vec![t0, t1, t2])?;
 # tt.orthogonalize(1)?;
-tt.truncate(&TruncateOptions::svd().with_rtol(1e-10).with_max_rank(2))?;
+tt.truncate(
+    &TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
+        .with_max_rank(2),
+)?;
 assert!(tt.maxbonddim() <= 2);
 # Ok(())
 # }
 ```
 
-`rtol` is the relative truncation tolerance (equivalent to `√cutoff` in
-ITensorMPS.jl notation).
+`SvdTruncationPolicy::new(threshold)` uses the default relative per-value rule.
+To emulate ITensor-style discarded-weight cutoffs, use
+`.with_squared_values().with_discarded_tail_sum()`.
 
 ### Norm and inner product
 

@@ -11,7 +11,7 @@ pub use contract::contract;
 pub use error::{Result, TensorTrainError};
 pub use linsolve::linsolve;
 pub use options::{
-    CanonicalForm, ContractMethod, ContractOptions, LinsolveOptions, TruncateAlg, TruncateOptions,
+    CanonicalForm, ContractMethod, ContractOptions, LinsolveOptions, TruncateOptions,
 };
 pub use tensortrain::TensorTrain;
 

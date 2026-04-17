@@ -2,7 +2,7 @@
 //! from axpby (direct sum).
 //!
 //! After axpby, the TT has inflated bond dimensions and is not in canonical
-//! form. Calling `truncate(svd().with_rtol(1e-15))` should remove only
+//! form. Calling `truncate(svd().with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-15)))` should remove only
 //! near-zero singular values (effectively lossless for well-conditioned data).
 //! But truncate incorrectly drops significant singular values, changing the
 //! represented function.
@@ -121,7 +121,10 @@ fn test_truncate_drops_significant_singular_values() {
     // truncate with rtol=1e-15: should keep bonddim=2
     let mut f_truncated = f.clone();
     f_truncated
-        .truncate(&TruncateOptions::svd().with_rtol(1e-15))
+        .truncate(
+            &TruncateOptions::svd()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-15)),
+        )
         .unwrap();
 
     let f_dense_after = f_truncated.to_dense().unwrap();
@@ -140,7 +143,9 @@ fn test_truncate_drops_significant_singular_values() {
     // truncate with rtol=0.0 should also preserve the function
     let mut f_trunc0 = f.clone();
     f_trunc0
-        .truncate(&TruncateOptions::svd().with_rtol(0.0))
+        .truncate(
+            &TruncateOptions::svd().with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(0.0)),
+        )
         .unwrap();
     let f_dense_0 = f_trunc0.to_dense().unwrap();
     let diff_0 = f_dense_before
@@ -198,7 +203,10 @@ fn test_truncate_drops_sv_various_sizes() {
 
         let mut f_truncated = f.clone();
         f_truncated
-            .truncate(&TruncateOptions::svd().with_rtol(1e-15))
+            .truncate(
+                &TruncateOptions::svd()
+                    .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-15)),
+            )
             .unwrap();
 
         let f_dense_after = f_truncated.to_dense().unwrap();

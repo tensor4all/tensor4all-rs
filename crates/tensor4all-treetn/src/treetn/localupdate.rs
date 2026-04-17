@@ -446,6 +446,7 @@ use tensor4all_core::{Canonical, FactorizeOptions, SvdTruncationPolicy};
 /// let t0 = TensorDynLen::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0])?;
 /// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0, 0.0])?;
 /// let mut treetn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1])?;
+/// treetn.canonicalize_mut(std::iter::once(0usize), Default::default())?;
 ///
 /// let plan = LocalUpdateSweepPlan::from_treetn(&treetn, &0usize, 2).unwrap();
 /// let mut updater = TruncateUpdater::new(

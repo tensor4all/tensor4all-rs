@@ -326,7 +326,7 @@ fn main() -> anyhow::Result<()> {
     // Compute b = A * x_true
     let apply_opts = ApplyOptions::zipup()
         .with_max_rank(max_rank)
-        .with_rtol(rtol);
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol));
     let linop_for_rhs = LinearOperator::new(
         operator_a.clone(),
         a_input_mapping.clone(),
@@ -337,8 +337,7 @@ fn main() -> anyhow::Result<()> {
     let center = make_node_name(n_sites / 2);
 
     let truncation = TruncationOptions::default()
-        .with_form(CanonicalForm::Unitary)
-        .with_rtol(rtol)
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol))
         .with_max_rank(max_rank);
 
     let options = LinsolveOptions::default()

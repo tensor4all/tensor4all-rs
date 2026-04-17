@@ -2,7 +2,10 @@
 
 use std::ffi::c_void;
 
-use tensor4all_core::{DynIndex, FactorizeAlg, TensorDynLen};
+use tensor4all_core::{
+    DynIndex, FactorizeAlg, SingularValueMeasure, SvdTruncationPolicy, TensorDynLen,
+    ThresholdScale, TruncationRule,
+};
 use tensor4all_quanticstransform::BoundaryCondition as QuanticsBoundaryCondition;
 use tensor4all_treetn::treetn::contraction::ContractionMethod;
 use tensor4all_treetn::{CanonicalForm as TreeCanonicalForm, DefaultTreeTN};
@@ -159,7 +162,7 @@ impl Drop for t4a_treetn {
 unsafe impl Send for t4a_treetn {}
 unsafe impl Sync for t4a_treetn {}
 
-/// Canonical form used for orthogonalization/truncation.
+/// Canonical form used for orthogonalization and canonicalization.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum t4a_canonical_form {
@@ -187,6 +190,240 @@ impl From<t4a_canonical_form> for TreeCanonicalForm {
             t4a_canonical_form::Unitary => Self::Unitary,
             t4a_canonical_form::LU => Self::LU,
             t4a_canonical_form::CI => Self::CI,
+        }
+    }
+}
+
+/// Threshold scaling used by the C API SVD truncation policy.
+///
+/// Related types:
+/// - [`t4a_singular_value_measure`] selects whether the threshold is applied to
+///   singular values or squared singular values.
+/// - [`t4a_truncation_rule`] selects whether the threshold is checked per value
+///   or against the discarded suffix sum.
+/// - [`t4a_svd_truncation_policy`] combines all three knobs with the numeric
+///   threshold.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_capi::t4a_threshold_scale;
+/// use tensor4all_core::ThresholdScale;
+///
+/// assert_eq!(
+///     ThresholdScale::from(t4a_threshold_scale::Relative),
+///     ThresholdScale::Relative
+/// );
+/// assert_eq!(
+///     ThresholdScale::from(t4a_threshold_scale::Absolute),
+///     ThresholdScale::Absolute
+/// );
+/// ```
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum t4a_threshold_scale {
+    /// Compare the threshold to a singular-value-derived reference scale.
+    #[default]
+    Relative = 0,
+    /// Compare the threshold directly to the measured singular-value quantity.
+    Absolute = 1,
+}
+
+impl From<ThresholdScale> for t4a_threshold_scale {
+    fn from(scale: ThresholdScale) -> Self {
+        match scale {
+            ThresholdScale::Relative => Self::Relative,
+            ThresholdScale::Absolute => Self::Absolute,
+        }
+    }
+}
+
+impl From<t4a_threshold_scale> for ThresholdScale {
+    fn from(scale: t4a_threshold_scale) -> Self {
+        match scale {
+            t4a_threshold_scale::Relative => Self::Relative,
+            t4a_threshold_scale::Absolute => Self::Absolute,
+        }
+    }
+}
+
+/// Singular-value quantity used by the C API SVD truncation policy.
+///
+/// Related types:
+/// - [`t4a_threshold_scale`] selects whether the threshold is relative or
+///   absolute.
+/// - [`t4a_truncation_rule`] selects whether truncation is per value or based
+///   on the discarded tail sum.
+/// - [`t4a_svd_truncation_policy`] stores the full C-facing SVD policy.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_capi::t4a_singular_value_measure;
+/// use tensor4all_core::SingularValueMeasure;
+///
+/// assert_eq!(
+///     SingularValueMeasure::from(t4a_singular_value_measure::Value),
+///     SingularValueMeasure::Value
+/// );
+/// assert_eq!(
+///     SingularValueMeasure::from(t4a_singular_value_measure::SquaredValue),
+///     SingularValueMeasure::SquaredValue
+/// );
+/// ```
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum t4a_singular_value_measure {
+    /// Measure singular values directly.
+    #[default]
+    Value = 0,
+    /// Measure squared singular values.
+    SquaredValue = 1,
+}
+
+impl From<SingularValueMeasure> for t4a_singular_value_measure {
+    fn from(measure: SingularValueMeasure) -> Self {
+        match measure {
+            SingularValueMeasure::Value => Self::Value,
+            SingularValueMeasure::SquaredValue => Self::SquaredValue,
+        }
+    }
+}
+
+impl From<t4a_singular_value_measure> for SingularValueMeasure {
+    fn from(measure: t4a_singular_value_measure) -> Self {
+        match measure {
+            t4a_singular_value_measure::Value => Self::Value,
+            t4a_singular_value_measure::SquaredValue => Self::SquaredValue,
+        }
+    }
+}
+
+/// Rank-selection rule used by the C API SVD truncation policy.
+///
+/// Related types:
+/// - [`t4a_threshold_scale`] sets whether the threshold is relative or
+///   absolute.
+/// - [`t4a_singular_value_measure`] sets whether values or squared values are
+///   measured.
+/// - [`t4a_svd_truncation_policy`] combines the rule with the other SVD
+///   truncation knobs.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_capi::t4a_truncation_rule;
+/// use tensor4all_core::TruncationRule;
+///
+/// assert_eq!(
+///     TruncationRule::from(t4a_truncation_rule::PerValue),
+///     TruncationRule::PerValue
+/// );
+/// assert_eq!(
+///     TruncationRule::from(t4a_truncation_rule::DiscardedTailSum),
+///     TruncationRule::DiscardedTailSum
+/// );
+/// ```
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum t4a_truncation_rule {
+    /// Apply the threshold independently to each singular value.
+    #[default]
+    PerValue = 0,
+    /// Apply the threshold to the cumulative discarded tail.
+    DiscardedTailSum = 1,
+}
+
+impl From<TruncationRule> for t4a_truncation_rule {
+    fn from(rule: TruncationRule) -> Self {
+        match rule {
+            TruncationRule::PerValue => Self::PerValue,
+            TruncationRule::DiscardedTailSum => Self::DiscardedTailSum,
+        }
+    }
+}
+
+impl From<t4a_truncation_rule> for TruncationRule {
+    fn from(rule: t4a_truncation_rule) -> Self {
+        match rule {
+            t4a_truncation_rule::PerValue => Self::PerValue,
+            t4a_truncation_rule::DiscardedTailSum => Self::DiscardedTailSum,
+        }
+    }
+}
+
+/// Explicit SVD truncation policy exposed through the C API.
+///
+/// This is the ABI-facing mirror of [`tensor4all_core::SvdTruncationPolicy`].
+/// Pass it to SVD-based C API entry points to choose the threshold value, the
+/// threshold scale, whether singular values are squared first, and whether the
+/// truncation rule is per value or tail-sum based.
+///
+/// Related types:
+/// - [`t4a_threshold_scale`] controls relative vs absolute thresholding.
+/// - [`t4a_singular_value_measure`] controls value vs squared-value
+///   measurement.
+/// - [`t4a_truncation_rule`] controls per-value vs discarded-tail-sum
+///   truncation.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_capi::{
+///     t4a_singular_value_measure, t4a_svd_truncation_policy, t4a_threshold_scale,
+///     t4a_truncation_rule,
+/// };
+/// use tensor4all_core::{SingularValueMeasure, SvdTruncationPolicy, ThresholdScale, TruncationRule};
+///
+/// let ffi_policy = t4a_svd_truncation_policy {
+///     threshold: 1e-8,
+///     scale: t4a_threshold_scale::Absolute,
+///     measure: t4a_singular_value_measure::SquaredValue,
+///     rule: t4a_truncation_rule::DiscardedTailSum,
+/// };
+/// let core_policy = SvdTruncationPolicy::from(ffi_policy);
+/// assert_eq!(core_policy.threshold, 1e-8);
+/// assert_eq!(core_policy.scale, ThresholdScale::Absolute);
+/// assert_eq!(core_policy.measure, SingularValueMeasure::SquaredValue);
+/// assert_eq!(core_policy.rule, TruncationRule::DiscardedTailSum);
+/// ```
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct t4a_svd_truncation_policy {
+    /// Threshold value used by the selected scale/rule combination.
+    pub threshold: f64,
+    /// Relative or absolute threshold interpretation.
+    pub scale: t4a_threshold_scale,
+    /// Singular-value quantity used for thresholding.
+    pub measure: t4a_singular_value_measure,
+    /// Rank-selection rule.
+    pub rule: t4a_truncation_rule,
+}
+
+impl Default for t4a_svd_truncation_policy {
+    fn default() -> Self {
+        Self::from(SvdTruncationPolicy::new(1e-12))
+    }
+}
+
+impl From<SvdTruncationPolicy> for t4a_svd_truncation_policy {
+    fn from(policy: SvdTruncationPolicy) -> Self {
+        Self {
+            threshold: policy.threshold,
+            scale: policy.scale.into(),
+            measure: policy.measure.into(),
+            rule: policy.rule.into(),
+        }
+    }
+}
+
+impl From<t4a_svd_truncation_policy> for SvdTruncationPolicy {
+    fn from(policy: t4a_svd_truncation_policy) -> Self {
+        SvdTruncationPolicy {
+            threshold: policy.threshold,
+            scale: policy.scale.into(),
+            measure: policy.measure.into(),
+            rule: policy.rule.into(),
         }
     }
 }

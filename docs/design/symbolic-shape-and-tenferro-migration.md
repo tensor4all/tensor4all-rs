@@ -513,7 +513,7 @@ Each stage has explicit verification:
    `cargo fmt --all`
    `cargo clippy --workspace --all-targets`
    `cargo test --doc --release --workspace`
-   `mdbook test docs/book`
+   `./scripts/test-mdbook.sh`
    `cargo doc --workspace --no-deps`
 
 ## 6. Risks

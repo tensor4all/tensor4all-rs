@@ -430,7 +430,7 @@ fn apply_mpo_for_block(
 ) -> anyhow::Result<TensorTrain> {
     let options = ContractOptions::fit()
         .with_nhalfsweeps(4)
-        .with_rtol(1e-10)
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
         .with_max_rank(30);
     let result = mpo
         .contract(mps, &options)
@@ -451,7 +451,7 @@ fn apply_cross_block_mpo(
 ) -> anyhow::Result<TensorTrain> {
     let options = ContractOptions::fit()
         .with_nhalfsweeps(4)
-        .with_rtol(1e-10)
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
         .with_max_rank(30);
     let result = mpo
         .contract(mps, &options)
@@ -536,7 +536,9 @@ fn test_block_diagonal_identity() -> anyhow::Result<()> {
     };
 
     // Truncation
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(30);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
+        .with_max_rank(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -633,7 +635,9 @@ fn test_block_diagonal_diagonal_mpo() -> anyhow::Result<()> {
     };
 
     // Truncation
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(30);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
+        .with_max_rank(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -753,7 +757,9 @@ fn test_block_upper_triangular() -> anyhow::Result<()> {
     };
 
     // Truncation
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(30);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
+        .with_max_rank(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -840,7 +846,9 @@ fn test_restart_gmres_block_mps() -> anyhow::Result<()> {
     println!("b = A * x_true computed, norm: {:.6}", b_norm);
 
     // Truncation with aggressive settings
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-6).with_max_rank(10);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
+        .with_max_rank(10);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -859,7 +867,10 @@ fn test_restart_gmres_block_mps() -> anyhow::Result<()> {
     println!("\nRunning Restart GMRES...");
     println!(
         "Truncation: rtol={:.0e}, max_rank={}",
-        truncate_opts.rtol().unwrap_or(0.0),
+        truncate_opts
+            .svd_policy()
+            .map(|policy| policy.threshold)
+            .unwrap_or(0.0),
         truncate_opts.max_rank().unwrap_or(0)
     );
 
@@ -973,7 +984,9 @@ fn test_block_offdiagonal_complex_pauli_x() -> anyhow::Result<()> {
     };
 
     // Truncation
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(30);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
+        .with_max_rank(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -1089,7 +1102,9 @@ fn test_3x3_block_antidiagonal_complex_pauli_x() -> anyhow::Result<()> {
     };
 
     // Truncation
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(30);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
+        .with_max_rank(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -1187,7 +1202,9 @@ fn scaling_offdiagonal_complex_pauli_x(n_sites: usize) -> anyhow::Result<()> {
         check_true_residual: false,
     };
 
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(30);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
+        .with_max_rank(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };
@@ -1286,7 +1303,9 @@ fn scaling_3x3_antidiagonal_complex_pauli_x(n_sites: usize) -> anyhow::Result<()
         check_true_residual: false,
     };
 
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(30);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
+        .with_max_rank(30);
     let truncate_fn = |x: &mut BlockTensor<TensorTrain>| -> anyhow::Result<()> {
         truncate_block_tensor(x, &truncate_opts)
     };

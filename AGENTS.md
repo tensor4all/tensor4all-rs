@@ -68,7 +68,7 @@ Every public type, trait, and function **must** have doc comments with the follo
 ### CI Verification
 
 - `cargo test --doc --release --workspace` must pass (rustdoc examples)
-- `mdbook test docs/book` must pass (mdBook guide examples)
+- `./scripts/test-mdbook.sh` must pass (mdBook guide examples; raw `mdbook test docs/book` does not receive the resolved `--extern` flags that the guide snippets need)
 
 ## Error Handling
 

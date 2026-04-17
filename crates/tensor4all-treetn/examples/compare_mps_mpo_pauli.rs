@@ -375,8 +375,7 @@ fn main() -> anyhow::Result<()> {
     println!();
 
     let truncation = TruncationOptions::default()
-        .with_form(CanonicalForm::Unitary)
-        .with_rtol(rtol)
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol))
         .with_max_rank(max_rank);
 
     let options = LinsolveOptions::default()

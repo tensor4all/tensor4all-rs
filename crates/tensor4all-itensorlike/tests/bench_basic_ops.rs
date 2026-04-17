@@ -114,7 +114,9 @@ fn bench_truncate() {
     eprintln!("\n=== truncate benchmark (main) ===");
     for &n in &[20, 45, 90] {
         let mut mps = make_random_mps(n, 2, 16, 123);
-        let opts = TruncateOptions::svd().with_rtol(1e-6).with_max_rank(8);
+        let opts = TruncateOptions::svd()
+            .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
+            .with_max_rank(8);
         time_it(&format!("truncate({n} sites, bd=16→8)"), || {
             mps.truncate(&opts).unwrap();
         });
@@ -126,7 +128,9 @@ fn bench_contract_zipup() {
     eprintln!("\n=== contract zipup benchmark (main) ===");
     for &n in &[10, 20, 45] {
         let (a, b) = make_random_mpo_pair(n, 2, 8);
-        let opts = ContractOptions::zipup().with_rtol(1e-6).with_max_rank(16);
+        let opts = ContractOptions::zipup()
+            .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
+            .with_max_rank(16);
         time_it(&format!("zipup({n} sites, bd=8)"), || {
             let _ = a.contract(&b, &opts).unwrap();
         });
@@ -138,7 +142,9 @@ fn bench_contract_fit() {
     eprintln!("\n=== contract fit benchmark (main) ===");
     for &n in &[10, 20, 45] {
         let (a, b) = make_random_mpo_pair(n, 2, 8);
-        let opts = ContractOptions::fit().with_rtol(1e-6).with_max_rank(16);
+        let opts = ContractOptions::fit()
+            .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
+            .with_max_rank(16);
         time_it(&format!("fit({n} sites, bd=8)"), || {
             let _ = a.contract(&b, &opts).unwrap();
         });

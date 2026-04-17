@@ -582,7 +582,7 @@ fn test_partitioned_tt_contract_with_rtol_and_max_rank() {
     let partitioned2 = PartitionedTT::from_subdomains(vec![subdomain2_a, subdomain2_b]).unwrap();
 
     let options = ContractOptions::default()
-        .with_rtol(1e-12)
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-12))
         .with_max_rank(10);
     let result = partitioned1.contract(&partitioned2, &options).unwrap();
 

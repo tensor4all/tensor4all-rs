@@ -79,7 +79,8 @@ fn test_contract_free_fn_invalid_rtol() {
     let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
     let tt2 = TensorTrain::new(vec![t0]).unwrap();
 
-    let options = ContractOptions::zipup().with_rtol(-1.0);
+    let options =
+        ContractOptions::zipup().with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(-1.0));
     let err = contract(&tt1, &tt2, &options).unwrap_err();
     assert!(matches!(err, TensorTrainError::OperationError { .. }));
 }
@@ -150,7 +151,8 @@ fn test_contract_zipup_with_rtol() {
     let t2_1 = make_tensor(vec![l01_b.clone(), s1.clone()]);
     let tt2 = TensorTrain::new(vec![t2_0, t2_1]).unwrap();
 
-    let options = ContractOptions::zipup().with_rtol(1e-10);
+    let options =
+        ContractOptions::zipup().with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10));
     let result = contract(&tt1, &tt2, &options).unwrap();
     assert_eq!(result.len(), 1);
     assert_matches_naive(&tt1, &tt2, &result);
@@ -395,7 +397,8 @@ fn test_contract_free_fn_nan_rtol() {
     let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
     let tt2 = TensorTrain::new(vec![t0]).unwrap();
 
-    let options = ContractOptions::zipup().with_rtol(f64::NAN);
+    let options = ContractOptions::zipup()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(f64::NAN));
     let err = contract(&tt1, &tt2, &options).unwrap_err();
     assert!(matches!(err, TensorTrainError::OperationError { .. }));
 }
@@ -407,7 +410,8 @@ fn test_contract_free_fn_inf_rtol() {
     let tt1 = TensorTrain::new(vec![t0.clone()]).unwrap();
     let tt2 = TensorTrain::new(vec![t0]).unwrap();
 
-    let options = ContractOptions::zipup().with_rtol(f64::INFINITY);
+    let options = ContractOptions::zipup()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(f64::INFINITY));
     let err = contract(&tt1, &tt2, &options).unwrap_err();
     assert!(matches!(err, TensorTrainError::OperationError { .. }));
 }

@@ -56,7 +56,7 @@ fn create_function_2d_tt(
     }
 
     let big = TensorDynLen::from_dense(all_sites.clone(), quantics_data).unwrap();
-    let opts = FactorizeOptions::qr().with_rtol(0.0);
+    let opts = FactorizeOptions::qr().with_qr_rtol(0.0);
     let n_sites = all_sites.len();
     let mut remaining = big;
     let mut tensors = Vec::with_capacity(n_sites);
@@ -301,7 +301,7 @@ fn test_fit_wrong_for_elementwise_structured() {
         &tt_a,
         &tt_b,
         &all_sites,
-        &ContractOptions::fit().with_rtol(1e-30),
+        &ContractOptions::fit().with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-30)),
     );
     let fit_rtol_err = result_fit_rtol
         .axpby(1.0.into(), &result_ref, (-1.0).into())

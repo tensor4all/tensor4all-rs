@@ -38,8 +38,9 @@ use num_complex::{Complex64, ComplexFloat};
 use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use tensor4all_tensorbackend::TensorElement;
 
+use crate::defaults::svd::svd_for_factorize;
 use crate::qr::{qr_with, QrOptions};
-use crate::svd::{svd_for_factorize, SvdOptions};
+use crate::svd::SvdOptions;
 
 // Re-export types from tensor_like for backwards compatibility
 pub use crate::tensor_like::{

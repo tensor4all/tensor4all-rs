@@ -41,8 +41,9 @@ This prevents expressing the four intended SVD truncation semantics:
   immediately.
 - Do not force LU/CI to share the same truncation policy type as SVD. Their
   rank selection is not based on singular values.
-- Do not redesign the C API in the same change. Rust APIs should be cleaned up
-  first, then FFI can follow in a separate pass.
+- Do not preserve the legacy C ABI that exposes `rtol/cutoff/form` for
+  SVD-based TreeTN operations. The C surface should move to the same explicit
+  policy model as the Rust APIs.
 
 ## Primary Type
 
@@ -329,6 +330,69 @@ Replace `rtol/cutoff` builders with:
 
 and keep sweep-count / convergence settings as they are.
 
+### `tensor4all-capi`
+
+#### Public policy types
+
+Expose the SVD truncation policy explicitly through the C ABI:
+
+```c
+typedef enum t4a_threshold_scale {
+    T4A_THRESHOLD_SCALE_RELATIVE = 0,
+    T4A_THRESHOLD_SCALE_ABSOLUTE = 1,
+} t4a_threshold_scale;
+
+typedef enum t4a_singular_value_measure {
+    T4A_SINGULAR_VALUE_MEASURE_VALUE = 0,
+    T4A_SINGULAR_VALUE_MEASURE_SQUARED_VALUE = 1,
+} t4a_singular_value_measure;
+
+typedef enum t4a_truncation_rule {
+    T4A_TRUNCATION_RULE_PER_VALUE = 0,
+    T4A_TRUNCATION_RULE_DISCARDED_TAIL_SUM = 1,
+} t4a_truncation_rule;
+
+typedef struct t4a_svd_truncation_policy {
+    double threshold;
+    enum t4a_threshold_scale scale;
+    enum t4a_singular_value_measure measure;
+    enum t4a_truncation_rule rule;
+} t4a_svd_truncation_policy;
+```
+
+`NULL` policy pointers continue to mean "use the backend default policy".
+
+#### Function families
+
+For SVD-based TreeTN operations, the C ABI should expose `policy + maxdim`
+directly and stop using `rtol/cutoff/form` shims:
+
+- `t4a_treetn_truncate`
+- `t4a_treetn_add`
+- `t4a_treetn_contract`
+- `t4a_treetn_apply_operator_chain`
+- `t4a_treetn_linsolve`
+- `t4a_treetn_split_to`
+- `t4a_treetn_restructure_to`
+
+These functions should follow the same algorithm split as the Rust API:
+
+- SVD truncation paths accept `const t4a_svd_truncation_policy *policy`
+- `maxdim` remains an independent hard cap
+- `form` remains available only for canonicalization-oriented APIs
+- QR-specific paths keep `qr_rtol` semantics instead of reusing SVD policy
+
+#### Canonicalization boundary
+
+`t4a_treetn_orthogonalize` and any future explicit canonicalization entry
+points keep `enum t4a_canonical_form`, because LU/CI are meaningful there.
+
+By contrast, truncation-facing functions should not pretend to support LU/CI:
+
+- remove `form` from truncate / linsolve / split-final-truncation entry points
+- reject impossible algorithm-policy combinations before calling Rust
+- document clearly that LU/CI are canonicalization forms, not truncation modes
+
 ## Validation Rules
 
 All policy-carrying APIs should reject:
@@ -359,6 +423,10 @@ Add tests that:
 - verify `truncate` no longer exposes LU/CI
 - verify invalid `FactorizeOptions` combinations return errors
 - verify high-level APIs propagate `SvdTruncationPolicy` correctly
+- verify C policy structs round-trip into Rust policy values
+- verify TreeTN C entry points accept explicit policy objects for all four
+  threshold modes
+- verify truncation-facing C APIs no longer expose canonical-form arguments
 
 ### Regression Coverage
 
@@ -378,6 +446,12 @@ scope.
 `TruncationParams` currently leaks SVD terminology into QR. Careless refactors
 can accidentally break QR rank selection. QR must keep its own option path and
 tests.
+
+### C Header Drift
+
+The Rust source and generated `tensor4all_capi.h` must stay synchronized.
+Changing the C-facing function signatures without regenerating the header would
+silently break downstream bindings.
 
 ### High-Level Fit Semantics
 

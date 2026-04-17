@@ -138,6 +138,7 @@ Three methods are available, each with different tradeoffs:
 | `ApplyOptions::fit()` | Iterative variational optimization | Best compression; use when bond dim must be small |
 
 ```rust
+use tensor4all_core::SvdTruncationPolicy;
 use tensor4all_treetn::ApplyOptions;
 
 // Naive: exact but O(exp(n)) memory. Best for testing.
@@ -147,7 +148,7 @@ assert_eq!(opts.max_rank, None);
 // ZipUp (default): single-pass, controllable truncation.
 let opts = ApplyOptions::zipup()
     .with_max_rank(64)
-    .with_rtol(1e-10);
+    .with_svd_policy(SvdTruncationPolicy::new(1e-10));
 assert_eq!(opts.max_rank, Some(64));
 
 // Fit: iterative sweeps for best compression.

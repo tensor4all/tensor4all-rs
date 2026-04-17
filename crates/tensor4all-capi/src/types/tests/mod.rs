@@ -1,5 +1,7 @@
 use super::*;
-use tensor4all_core::FactorizeAlg;
+use tensor4all_core::{
+    FactorizeAlg, SingularValueMeasure, SvdTruncationPolicy, ThresholdScale, TruncationRule,
+};
 use tensor4all_treetn::treetn::contraction::ContractionMethod;
 use tensor4all_treetn::CanonicalForm;
 
@@ -37,6 +39,47 @@ fn test_factorize_alg_roundtrip() {
         let roundtrip = FactorizeAlg::from(ffi);
         assert_eq!(roundtrip, alg);
     }
+}
+
+#[test]
+fn test_threshold_scale_roundtrip() {
+    for scale in [ThresholdScale::Relative, ThresholdScale::Absolute] {
+        let ffi = t4a_threshold_scale::from(scale);
+        let roundtrip = ThresholdScale::from(ffi);
+        assert_eq!(roundtrip, scale);
+    }
+}
+
+#[test]
+fn test_singular_value_measure_roundtrip() {
+    for measure in [
+        SingularValueMeasure::Value,
+        SingularValueMeasure::SquaredValue,
+    ] {
+        let ffi = t4a_singular_value_measure::from(measure);
+        let roundtrip = SingularValueMeasure::from(ffi);
+        assert_eq!(roundtrip, measure);
+    }
+}
+
+#[test]
+fn test_truncation_rule_roundtrip() {
+    for rule in [TruncationRule::PerValue, TruncationRule::DiscardedTailSum] {
+        let ffi = t4a_truncation_rule::from(rule);
+        let roundtrip = TruncationRule::from(ffi);
+        assert_eq!(roundtrip, rule);
+    }
+}
+
+#[test]
+fn test_svd_truncation_policy_roundtrip() {
+    let policy = SvdTruncationPolicy::new(1e-8)
+        .with_absolute()
+        .with_squared_values()
+        .with_discarded_tail_sum();
+    let ffi = t4a_svd_truncation_policy::from(policy);
+    let roundtrip = SvdTruncationPolicy::from(ffi);
+    assert_eq!(roundtrip, policy);
 }
 
 #[test]

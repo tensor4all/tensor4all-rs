@@ -117,16 +117,6 @@ pub fn set_default_svd_truncation_policy(policy: SvdTruncationPolicy) -> Result<
     Ok(())
 }
 
-#[doc(hidden)]
-pub fn default_svd_rtol() -> f64 {
-    default_svd_truncation_policy().threshold
-}
-
-#[doc(hidden)]
-pub fn set_default_svd_rtol(rtol: f64) -> Result<(), SvdError> {
-    set_default_svd_truncation_policy(SvdTruncationPolicy::new(rtol))
-}
-
 fn singular_value_measure(value: f64, measure: SingularValueMeasure) -> f64 {
     match measure {
         SingularValueMeasure::Value => value,

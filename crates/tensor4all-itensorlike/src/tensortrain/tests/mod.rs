@@ -362,7 +362,8 @@ fn test_truncate_invalid_rtol_errors() {
     let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
 
     let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
-    let options = TruncateOptions::svd().with_rtol(-1.0);
+    let options =
+        TruncateOptions::svd().with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(-1.0));
     let err = tt.truncate(&options).unwrap_err();
     assert!(matches!(err, TensorTrainError::OperationError { .. }));
 }
@@ -1215,7 +1216,8 @@ fn test_truncate_with_rtol() {
 
     let mut tt = TensorTrain::new(vec![t0, t1, t2]).unwrap();
 
-    let options = TruncateOptions::svd().with_rtol(1e-10);
+    let options =
+        TruncateOptions::svd().with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10));
     tt.truncate(&options).unwrap();
     assert!(tt.isortho() || tt.len() == 3);
 }

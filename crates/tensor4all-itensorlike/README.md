@@ -6,7 +6,7 @@ ITensors.jl-inspired TensorTrain API with orthogonality tracking and multiple ca
 
 - `TensorTrain` — tensor train with orthogonality center tracking
 - `orthogonalize()` — move orthogonality center to a given site
-- `truncate()` — bond dimension truncation (SVD, LU, or CI)
+- `truncate()` — SVD-based bond dimension truncation
 - `inner()` — inner product `<self|other>` with complex conjugation on `self`
 - `norm()` — efficient norm via the orthogonality center
 
@@ -30,7 +30,7 @@ let t2 = TensorDynLen::from_dense(vec![b12, s2], vec![1.0, 0.0, 0.0, 1.0])?;
 
 let mut tt = TensorTrain::new(vec![t0, t1, t2])?;
 tt.orthogonalize(1)?;
-tt.truncate(&TruncateOptions::svd().with_rtol(1e-10).with_max_rank(2))?;
+tt.truncate(&TruncateOptions::svd().with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10)).with_max_rank(2))?;
 
 assert!(tt.isortho());
 let norm = tt.norm();

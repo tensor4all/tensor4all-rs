@@ -265,8 +265,8 @@ impl PartitionedTT {
                     })?;
                     // Truncate after addition using the same truncation params as contraction
                     let mut truncate_opts = TruncateOptions::svd();
-                    if let Some(rtol) = options.rtol() {
-                        truncate_opts = truncate_opts.with_rtol(rtol);
+                    if let Some(policy) = options.svd_policy() {
+                        truncate_opts = truncate_opts.with_svd_policy(policy);
                     }
                     if let Some(max_rank) = options.max_rank() {
                         truncate_opts = truncate_opts.with_max_rank(max_rank);
