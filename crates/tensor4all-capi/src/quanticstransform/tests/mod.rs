@@ -180,7 +180,7 @@ fn c_operator_matrix(
         }
     }
 
-    for index in out_indices.into_iter().chain(in_indices.into_iter()) {
+    for index in out_indices.into_iter().chain(in_indices) {
         crate::index::t4a_index_release(index);
     }
     matrix
