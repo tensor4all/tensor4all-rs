@@ -183,6 +183,79 @@ fn make_two_site_treetn() -> (*mut t4a_treetn, Vec<*mut t4a_tensor>, Vec<*mut t4
     (tt, vec![t0, t1], vec![s0, bond, bond_clone, s1])
 }
 
+fn make_two_site_identity_operator_with_shared_inputs(
+    input0: *const t4a_index,
+    input1: *const t4a_index,
+) -> (*mut t4a_treetn, Vec<*mut t4a_tensor>, Vec<*mut t4a_index>) {
+    let out0 = new_index(index_dim(input0));
+    let out1 = new_index(index_dim(input1));
+    let bond = new_index(1);
+    let mut bond_clone = std::ptr::null_mut();
+    assert_eq!(
+        crate::index::t4a_index_clone(bond, &mut bond_clone),
+        T4A_SUCCESS
+    );
+
+    let t0 = new_tensor(
+        &[out0 as *const t4a_index, input0, bond as *const t4a_index],
+        &[1.0, 0.0, 0.0, 1.0],
+    );
+    let t1 = new_tensor(
+        &[
+            bond_clone as *const t4a_index,
+            out1 as *const t4a_index,
+            input1,
+        ],
+        &[1.0, 0.0, 0.0, 1.0],
+    );
+    let tt = new_treetn(&[t0 as *const t4a_tensor, t1 as *const t4a_tensor]);
+    (tt, vec![t0, t1], vec![out0, out1, bond, bond_clone])
+}
+
+fn make_two_site_identity_operator_with_internal_indices() -> (
+    *mut t4a_treetn,
+    Vec<*mut t4a_tensor>,
+    Vec<*mut t4a_index>,
+    [*mut t4a_index; 2],
+    [*mut t4a_index; 2],
+) {
+    let internal_inputs = [new_index(2), new_index(2)];
+    let internal_outputs = [new_index(2), new_index(2)];
+    let bond = new_index(1);
+    let mut bond_clone = std::ptr::null_mut();
+    assert_eq!(
+        crate::index::t4a_index_clone(bond, &mut bond_clone),
+        T4A_SUCCESS
+    );
+
+    let t0 = new_tensor(
+        &[
+            internal_outputs[0] as *const t4a_index,
+            internal_inputs[0] as *const t4a_index,
+            bond as *const t4a_index,
+        ],
+        &[1.0, 0.0, 0.0, 1.0],
+    );
+    let t1 = new_tensor(
+        &[
+            bond_clone as *const t4a_index,
+            internal_outputs[1] as *const t4a_index,
+            internal_inputs[1] as *const t4a_index,
+        ],
+        &[1.0, 0.0, 0.0, 1.0],
+    );
+    let tt = new_treetn(&[t0 as *const t4a_tensor, t1 as *const t4a_tensor]);
+    let indices = vec![
+        internal_inputs[0],
+        internal_inputs[1],
+        internal_outputs[0],
+        internal_outputs[1],
+        bond,
+        bond_clone,
+    ];
+    (tt, vec![t0, t1], indices, internal_inputs, internal_outputs)
+}
+
 fn make_two_node_groups_of_two_treetn(
 ) -> (*mut t4a_treetn, Vec<*mut t4a_tensor>, Vec<*mut t4a_index>) {
     let x0 = new_index(2);
@@ -1626,4 +1699,190 @@ fn test_treetn_apply_operator_chain_rejects_unknown_internal_input_index() {
     t4a_index_release(internal_out);
     t4a_index_release(internal_in);
     t4a_index_release(state_site);
+}
+
+#[test]
+fn test_treetn_linsolve_two_site_identity_without_mapping_zero_sweeps() {
+    let (rhs_tt, rhs_tensors, mut rhs_indices) = make_two_site_treetn();
+    let expected = read_dense_f64_treetn(rhs_tt);
+
+    let rhs_site0 = read_siteinds(rhs_tt, 0).remove(0);
+    let rhs_site1 = read_siteinds(rhs_tt, 1).remove(0);
+    let (op_tt, op_tensors, op_indices) =
+        make_two_site_identity_operator_with_shared_inputs(rhs_site0, rhs_site1);
+
+    let mut result: *mut t4a_treetn = std::ptr::null_mut();
+    let status = t4a_treetn_linsolve(
+        op_tt,
+        rhs_tt,
+        rhs_tt,
+        0,
+        std::ptr::null(),
+        0,
+        std::ptr::null(),
+        std::ptr::null(),
+        std::ptr::null(),
+        std::ptr::null(),
+        0.0,
+        0.0,
+        0,
+        t4a_canonical_form::Unitary,
+        0,
+        1e-12,
+        30,
+        10,
+        0.0,
+        1.0,
+        0.0,
+        &mut result,
+    );
+    assert_eq!(status, T4A_SUCCESS, "{}", last_error());
+    assert_vec_close(&read_dense_f64_treetn(result), &expected, 1e-10);
+
+    t4a_treetn_release(result);
+    t4a_treetn_release(op_tt);
+    for tensor in op_tensors {
+        t4a_tensor_release(tensor);
+    }
+    for index in op_indices {
+        t4a_index_release(index);
+    }
+    t4a_index_release(rhs_site1);
+    t4a_index_release(rhs_site0);
+    cleanup(rhs_tt, rhs_tensors, std::mem::take(&mut rhs_indices));
+}
+
+#[test]
+fn test_treetn_linsolve_two_site_identity_with_explicit_mapping() {
+    let (rhs_tt, rhs_tensors, mut rhs_indices) = make_two_site_treetn();
+    let expected = read_dense_f64_treetn(rhs_tt);
+
+    let rhs_site0 = read_siteinds(rhs_tt, 0).remove(0);
+    let rhs_site1 = read_siteinds(rhs_tt, 1).remove(0);
+    let (op_tt, op_tensors, op_indices, internal_inputs, internal_outputs) =
+        make_two_site_identity_operator_with_internal_indices();
+
+    let mapped_vertices = [0usize, 1usize];
+    let true_inputs = [rhs_site0 as *const t4a_index, rhs_site1 as *const t4a_index];
+    let internal_inputs = [
+        internal_inputs[0] as *const t4a_index,
+        internal_inputs[1] as *const t4a_index,
+    ];
+    let true_outputs = [rhs_site0 as *const t4a_index, rhs_site1 as *const t4a_index];
+    let internal_outputs = [
+        internal_outputs[0] as *const t4a_index,
+        internal_outputs[1] as *const t4a_index,
+    ];
+
+    let mut result: *mut t4a_treetn = std::ptr::null_mut();
+    let status = t4a_treetn_linsolve(
+        op_tt,
+        rhs_tt,
+        rhs_tt,
+        0,
+        mapped_vertices.as_ptr(),
+        mapped_vertices.len(),
+        true_inputs.as_ptr(),
+        internal_inputs.as_ptr(),
+        true_outputs.as_ptr(),
+        internal_outputs.as_ptr(),
+        0.0,
+        0.0,
+        0,
+        t4a_canonical_form::Unitary,
+        3,
+        1e-12,
+        30,
+        10,
+        0.0,
+        1.0,
+        0.0,
+        &mut result,
+    );
+    assert_eq!(status, T4A_SUCCESS, "{}", last_error());
+    assert_vec_close(&read_dense_f64_treetn(result), &expected, 1e-10);
+
+    t4a_treetn_release(result);
+    t4a_treetn_release(op_tt);
+    for tensor in op_tensors {
+        t4a_tensor_release(tensor);
+    }
+    for index in op_indices {
+        t4a_index_release(index);
+    }
+    t4a_index_release(rhs_site1);
+    t4a_index_release(rhs_site0);
+    cleanup(rhs_tt, rhs_tensors, std::mem::take(&mut rhs_indices));
+}
+
+#[test]
+fn test_treetn_linsolve_rejects_mapping_true_output_not_on_rhs() {
+    let true_input = new_index(2);
+    let true_output = new_index(2);
+    let wrong_output = new_index(2);
+    let internal_input = new_index(2);
+    let internal_output = new_index(2);
+
+    let init = new_tensor(&[true_input as *const t4a_index], &[1.0, 1.0]);
+    let rhs = new_tensor(&[true_output as *const t4a_index], &[3.0, 4.0]);
+    let init_tt = new_treetn(&[init as *const t4a_tensor]);
+    let rhs_tt = new_treetn(&[rhs as *const t4a_tensor]);
+
+    let op = new_tensor(
+        &[
+            internal_output as *const t4a_index,
+            internal_input as *const t4a_index,
+        ],
+        &[1.0, 0.0, 0.0, 1.0],
+    );
+    let op_tt = new_treetn(&[op as *const t4a_tensor]);
+
+    let mapped_vertices = [0usize];
+    let true_inputs = [true_input as *const t4a_index];
+    let internal_inputs = [internal_input as *const t4a_index];
+    let true_outputs = [wrong_output as *const t4a_index];
+    let internal_outputs = [internal_output as *const t4a_index];
+
+    let mut result: *mut t4a_treetn = std::ptr::null_mut();
+    assert_eq!(
+        t4a_treetn_linsolve(
+            op_tt,
+            rhs_tt,
+            init_tt,
+            0,
+            mapped_vertices.as_ptr(),
+            mapped_vertices.len(),
+            true_inputs.as_ptr(),
+            internal_inputs.as_ptr(),
+            true_outputs.as_ptr(),
+            internal_outputs.as_ptr(),
+            0.0,
+            0.0,
+            0,
+            t4a_canonical_form::Unitary,
+            4,
+            1e-12,
+            30,
+            10,
+            0.0,
+            1.0,
+            0.0,
+            &mut result
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("true output"));
+    assert!(result.is_null());
+
+    t4a_treetn_release(op_tt);
+    t4a_treetn_release(rhs_tt);
+    t4a_treetn_release(init_tt);
+    t4a_tensor_release(op);
+    t4a_tensor_release(rhs);
+    t4a_tensor_release(init);
+    t4a_index_release(internal_output);
+    t4a_index_release(internal_input);
+    t4a_index_release(wrong_output);
+    t4a_index_release(true_output);
+    t4a_index_release(true_input);
 }

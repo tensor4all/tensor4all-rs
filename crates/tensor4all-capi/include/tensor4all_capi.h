@@ -606,6 +606,45 @@ StatusCode t4a_treetn_linkind(const struct t4a_treetn *treetn,
                               struct t4a_index **out);
 
 /**
+ * Solve `(a0 + a1 * operator) * x = rhs` for `x` as a TreeTN.
+ *
+ * The solver returns only the solution TreeTN. The Rust-side `SquareLinsolveResult`
+ * also tracks sweep metadata, but that is not yet exposed through the C ABI.
+ *
+ * `mapped_vertices` and the four index arrays provide optional per-vertex
+ * index mappings when the operator uses internal site indices distinct from
+ * the `init` / `rhs` site indices. Pass `n_mapped_vertices == 0` to disable
+ * mappings.
+ *
+ * Current limitation: the sweep-based backend still assumes that `init` and
+ * `rhs` share the same true site-index set. The mapping arrays bridge the
+ * operator's internal indices to those true indices, but they do not yet
+ * support solving between distinct `init` and `rhs` true index spaces.
+ */
+StatusCode t4a_treetn_linsolve(const struct t4a_treetn *operator_,
+                               const struct t4a_treetn *rhs,
+                               const struct t4a_treetn *init,
+                               size_t center_vertex,
+                               const size_t *mapped_vertices,
+                               size_t n_mapped_vertices,
+                               const struct t4a_index *const *true_input_indices,
+                               const struct t4a_index *const *internal_input_indices,
+                               const struct t4a_index *const *true_output_indices,
+                               const struct t4a_index *const *internal_output_indices,
+                               double rtol,
+                               double cutoff,
+                               size_t maxdim,
+                               enum t4a_canonical_form form,
+                               size_t nfullsweeps,
+                               double krylov_tol,
+                               size_t krylov_maxiter,
+                               size_t krylov_dim,
+                               double a0,
+                               double a1,
+                               double convergence_tol,
+                               struct t4a_treetn **out);
+
+/**
  * Get the neighbors of a vertex.
  */
 StatusCode t4a_treetn_neighbors(const struct t4a_treetn *treetn,

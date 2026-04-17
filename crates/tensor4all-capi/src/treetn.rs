@@ -15,8 +15,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike};
 use tensor4all_treetn::treetn::contraction::{self, ContractionMethod, ContractionOptions};
 use tensor4all_treetn::{
-    apply_linear_operator, ApplyOptions, CanonicalizationOptions, IndexMapping, LinearOperator,
-    RestructureOptions, SiteIndexNetwork, SplitOptions, SwapOptions, TruncationOptions,
+    apply_linear_operator, square_linsolve, ApplyOptions, CanonicalizationOptions, IndexMapping,
+    LinearOperator, LinsolveOptions, RestructureOptions, SiteIndexNetwork, SplitOptions,
+    SwapOptions, TruncationOptions,
 };
 
 /// Release a TreeTN handle.
@@ -636,6 +637,152 @@ fn build_chain_linear_operator(
         input_mapping,
         output_mapping,
     ))
+}
+
+type LinsolveMappings = (
+    HashMap<usize, IndexMapping<InternalIndex>>,
+    HashMap<usize, IndexMapping<InternalIndex>>,
+);
+
+fn build_linsolve_index_mappings(
+    operator: &InternalTreeTN,
+    rhs: &InternalTreeTN,
+    init: &InternalTreeTN,
+    mapped_vertices: *const libc::size_t,
+    n_mapped_vertices: usize,
+    true_input_indices: *const *const t4a_index,
+    internal_input_indices: *const *const t4a_index,
+    true_output_indices: *const *const t4a_index,
+    internal_output_indices: *const *const t4a_index,
+) -> CapiResult<Option<LinsolveMappings>> {
+    if n_mapped_vertices == 0 {
+        return Ok(None);
+    }
+
+    let mapped_vertices = collect_positions(mapped_vertices, n_mapped_vertices, "mapped_vertices")?;
+    let true_inputs = collect_indices(true_input_indices, n_mapped_vertices, "true_input_indices")?;
+    let internal_inputs = collect_indices(
+        internal_input_indices,
+        n_mapped_vertices,
+        "internal_input_indices",
+    )?;
+    let true_outputs = collect_indices(
+        true_output_indices,
+        n_mapped_vertices,
+        "true_output_indices",
+    )?;
+    let internal_outputs = collect_indices(
+        internal_output_indices,
+        n_mapped_vertices,
+        "internal_output_indices",
+    )?;
+
+    let mut input_mapping = HashMap::with_capacity(n_mapped_vertices);
+    let mut output_mapping = HashMap::with_capacity(n_mapped_vertices);
+
+    for slot in 0..n_mapped_vertices {
+        let vertex = mapped_vertices[slot];
+        require_node(operator, vertex)?;
+        require_node(rhs, vertex)?;
+        require_node(init, vertex)?;
+
+        let operator_site_space = operator.site_space(&vertex).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("operator vertex {vertex} has no site indices"),
+            )
+        })?;
+        let rhs_site_space = rhs.site_space(&vertex).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("rhs vertex {vertex} has no site indices"),
+            )
+        })?;
+        let init_site_space = init.site_space(&vertex).ok_or_else(|| {
+            capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("init vertex {vertex} has no site indices"),
+            )
+        })?;
+
+        let true_input = &true_inputs[slot];
+        let internal_input = &internal_inputs[slot];
+        let true_output = &true_outputs[slot];
+        let internal_output = &internal_outputs[slot];
+
+        if !init_site_space.contains(true_input) {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("init vertex {vertex} does not contain the provided true input index"),
+            ));
+        }
+        if !rhs_site_space.contains(true_output) {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("rhs vertex {vertex} does not contain the provided true output index"),
+            ));
+        }
+        if !operator_site_space.contains(internal_input) {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "operator vertex {vertex} does not contain the provided internal input index"
+                ),
+            ));
+        }
+        if !operator_site_space.contains(internal_output) {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "operator vertex {vertex} does not contain the provided internal output index"
+                ),
+            ));
+        }
+        if true_input.dim() != internal_input.dim() {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "input index dimension mismatch at vertex {vertex}: init has {}, operator internal input has {}",
+                    true_input.dim(),
+                    internal_input.dim()
+                ),
+            ));
+        }
+        if true_output.dim() != internal_output.dim() {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "output index dimension mismatch at vertex {vertex}: rhs has {}, operator internal output has {}",
+                    true_output.dim(),
+                    internal_output.dim()
+                ),
+            ));
+        }
+
+        if input_mapping.contains_key(&vertex) {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("duplicate mapped vertex {vertex} in linsolve input mapping"),
+            ));
+        }
+
+        input_mapping.insert(
+            vertex,
+            IndexMapping {
+                true_index: true_input.clone(),
+                internal_index: internal_input.clone(),
+            },
+        );
+        output_mapping.insert(
+            vertex,
+            IndexMapping {
+                true_index: true_output.clone(),
+                internal_index: internal_output.clone(),
+            },
+        );
+    }
+
+    Ok(Some((input_mapping, output_mapping)))
 }
 
 /// Create a tree tensor network from an array of tensors.
@@ -1427,6 +1574,147 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
         )
         .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         Ok(t4a_treetn::new(result))
+    })
+}
+
+/// Solve `(a0 + a1 * operator) * x = rhs` for `x` as a TreeTN.
+///
+/// The solver returns only the solution TreeTN. The Rust-side `SquareLinsolveResult`
+/// also tracks sweep metadata, but that is not yet exposed through the C ABI.
+///
+/// `mapped_vertices` and the four index arrays provide optional per-vertex
+/// index mappings when the operator uses internal site indices distinct from
+/// the `init` / `rhs` site indices. Pass `n_mapped_vertices == 0` to disable
+/// mappings.
+///
+/// Current limitation: the sweep-based backend still assumes that `init` and
+/// `rhs` share the same true site-index set. The mapping arrays bridge the
+/// operator's internal indices to those true indices, but they do not yet
+/// support solving between distinct `init` and `rhs` true index spaces.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_treetn_linsolve(
+    operator: *const t4a_treetn,
+    rhs: *const t4a_treetn,
+    init: *const t4a_treetn,
+    center_vertex: libc::size_t,
+    mapped_vertices: *const libc::size_t,
+    n_mapped_vertices: libc::size_t,
+    true_input_indices: *const *const t4a_index,
+    internal_input_indices: *const *const t4a_index,
+    true_output_indices: *const *const t4a_index,
+    internal_output_indices: *const *const t4a_index,
+    rtol: libc::c_double,
+    cutoff: libc::c_double,
+    maxdim: libc::size_t,
+    form: t4a_canonical_form,
+    nfullsweeps: libc::size_t,
+    krylov_tol: libc::c_double,
+    krylov_maxiter: libc::size_t,
+    krylov_dim: libc::size_t,
+    a0: libc::c_double,
+    a1: libc::c_double,
+    convergence_tol: libc::c_double,
+    out: *mut *mut t4a_treetn,
+) -> StatusCode {
+    let operator = match require_tree(operator) {
+        Ok(tn) => tn,
+        Err((code, msg)) => {
+            set_last_error(&msg);
+            return code;
+        }
+    };
+    let rhs = match require_tree(rhs) {
+        Ok(tn) => tn,
+        Err((code, msg)) => {
+            set_last_error(&msg);
+            return code;
+        }
+    };
+    let init = match require_tree(init) {
+        Ok(tn) => tn,
+        Err((code, msg)) => {
+            set_last_error(&msg);
+            return code;
+        }
+    };
+
+    run_catching(out, || {
+        require_node(init.inner(), center_vertex)?;
+
+        if !krylov_tol.is_finite() || krylov_tol <= 0.0 {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("krylov_tol must be finite and > 0, got {krylov_tol}"),
+            ));
+        }
+        if krylov_maxiter == 0 {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "krylov_maxiter must be >= 1",
+            ));
+        }
+        if krylov_dim == 0 {
+            return Err(capi_error(T4A_INVALID_ARGUMENT, "krylov_dim must be >= 1"));
+        }
+        if !a0.is_finite() || !a1.is_finite() {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!("a0 and a1 must be finite, got a0={a0}, a1={a1}"),
+            ));
+        }
+        if !(convergence_tol == 0.0 || (convergence_tol.is_finite() && convergence_tol > 0.0)) {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                format!(
+                    "convergence_tol must be 0.0 or a finite positive value, got {convergence_tol}"
+                ),
+            ));
+        }
+
+        let mappings = build_linsolve_index_mappings(
+            operator.inner(),
+            rhs.inner(),
+            init.inner(),
+            mapped_vertices,
+            n_mapped_vertices,
+            true_input_indices,
+            internal_input_indices,
+            true_output_indices,
+            internal_output_indices,
+        )?;
+
+        let mut options = LinsolveOptions::new(nfullsweeps)
+            .with_truncation(TruncationOptions::new().with_form(form.into()))
+            .with_krylov_tol(krylov_tol)
+            .with_krylov_maxiter(krylov_maxiter)
+            .with_krylov_dim(krylov_dim)
+            .with_coefficients(a0, a1);
+        if let Some(rtol) = resolve_rtol(rtol, cutoff) {
+            options = options.with_rtol(rtol);
+        }
+        if maxdim > 0 {
+            options = options.with_max_rank(maxdim);
+        }
+        if let Some(tol) = resolve_convergence_tol(convergence_tol) {
+            options = options.with_convergence_tol(tol);
+        }
+
+        let (input_mapping, output_mapping) = match mappings {
+            Some((input_mapping, output_mapping)) => (Some(input_mapping), Some(output_mapping)),
+            None => (None, None),
+        };
+
+        let result = square_linsolve(
+            operator.inner(),
+            rhs.inner(),
+            init.inner().clone(),
+            &center_vertex,
+            options,
+            input_mapping,
+            output_mapping,
+        )
+        .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_treetn::new(result.solution))
     })
 }
 
