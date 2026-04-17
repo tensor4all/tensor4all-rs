@@ -8,7 +8,14 @@
 
 use crate::algorithm::CanonicalForm;
 use crate::treetn::SwapOptions;
-use tensor4all_core::truncation::{HasTruncationParams, TruncationParams};
+use tensor4all_core::SvdTruncationPolicy;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct FactorizationToleranceOptions {
+    pub max_rank: Option<usize>,
+    pub svd_policy: Option<SvdTruncationPolicy>,
+    pub qr_rtol: Option<f64>,
+}
 
 /// Options for canonicalization operations.
 ///
@@ -80,40 +87,29 @@ impl CanonicalizationOptions {
 /// # Builder Pattern
 ///
 /// ```
-/// use tensor4all_treetn::{CanonicalForm, TruncationOptions};
+/// use tensor4all_core::SvdTruncationPolicy;
+/// use tensor4all_treetn::TruncationOptions;
 ///
 /// let options = TruncationOptions::default()
 ///     .with_max_rank(50)
-///     .with_rtol(1e-10);
+///     .with_svd_policy(SvdTruncationPolicy::new(1e-10));
 ///
-/// assert!(matches!(options.form, CanonicalForm::Unitary));
 /// assert_eq!(options.max_rank(), Some(50));
-/// assert_eq!(options.rtol(), Some(1e-10));
+/// assert_eq!(options.svd_policy(), Some(SvdTruncationPolicy::new(1e-10)));
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct TruncationOptions {
-    /// Canonical form / algorithm to use (SVD, LU, or CI)
-    pub form: CanonicalForm,
-    /// Truncation parameters (rtol, max_rank).
-    pub truncation: TruncationParams,
+    #[allow(dead_code)]
+    pub(crate) form: CanonicalForm,
+    pub(crate) truncation: FactorizationToleranceOptions,
 }
 
 impl Default for TruncationOptions {
     fn default() -> Self {
         Self {
             form: CanonicalForm::Unitary,
-            truncation: TruncationParams::default(),
+            truncation: FactorizationToleranceOptions::default(),
         }
-    }
-}
-
-impl HasTruncationParams for TruncationOptions {
-    fn truncation_params(&self) -> &TruncationParams {
-        &self.truncation
-    }
-
-    fn truncation_params_mut(&mut self) -> &mut TruncationParams {
-        &mut self.truncation
     }
 }
 
@@ -129,24 +125,18 @@ impl TruncationOptions {
         self
     }
 
-    /// Create options with a relative tolerance.
-    pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.truncation.rtol = Some(rtol);
+    /// Set the SVD truncation policy used during the truncation sweep.
+    pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
+        self.truncation.svd_policy = Some(policy);
         self
     }
 
-    /// Set the canonical form / algorithm.
-    pub fn with_form(mut self, form: CanonicalForm) -> Self {
-        self.form = form;
-        self
+    /// Get the SVD truncation policy.
+    pub fn svd_policy(&self) -> Option<SvdTruncationPolicy> {
+        self.truncation.svd_policy
     }
 
-    /// Get rtol (for backwards compatibility).
-    pub fn rtol(&self) -> Option<f64> {
-        self.truncation.rtol
-    }
-
-    /// Get max_rank (for backwards compatibility).
+    /// Get max_rank.
     pub fn max_rank(&self) -> Option<usize> {
         self.truncation.max_rank
     }
@@ -157,24 +147,27 @@ impl TruncationOptions {
 /// # Builder Pattern
 ///
 /// ```
+/// use tensor4all_core::SvdTruncationPolicy;
 /// use tensor4all_treetn::{CanonicalForm, SplitOptions};
 ///
 /// let options = SplitOptions::default()
 ///     .with_max_rank(50)
-///     .with_rtol(1e-10)
+///     .with_svd_policy(SvdTruncationPolicy::new(1e-10))
+///     .with_qr_rtol(1e-12)
 ///     .with_final_sweep(true);
 ///
 /// assert!(matches!(options.form, CanonicalForm::Unitary));
 /// assert_eq!(options.max_rank(), Some(50));
-/// assert_eq!(options.rtol(), Some(1e-10));
+/// assert_eq!(options.svd_policy(), Some(SvdTruncationPolicy::new(1e-10)));
+/// assert_eq!(options.qr_rtol(), Some(1e-12));
 /// assert!(options.final_sweep);
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct SplitOptions {
     /// Canonical form / algorithm to use (SVD, QR, etc.)
     pub form: CanonicalForm,
-    /// Truncation parameters (rtol, max_rank).
-    pub truncation: TruncationParams,
+    /// Algorithm-aware factorization tolerances.
+    pub(crate) truncation: FactorizationToleranceOptions,
     /// Whether to perform a final sweep for global bond dimension optimization
     pub final_sweep: bool,
 }
@@ -183,19 +176,9 @@ impl Default for SplitOptions {
     fn default() -> Self {
         Self {
             form: CanonicalForm::Unitary,
-            truncation: TruncationParams::default(),
+            truncation: FactorizationToleranceOptions::default(),
             final_sweep: false,
         }
-    }
-}
-
-impl HasTruncationParams for SplitOptions {
-    fn truncation_params(&self) -> &TruncationParams {
-        &self.truncation
-    }
-
-    fn truncation_params_mut(&mut self) -> &mut TruncationParams {
-        &mut self.truncation
     }
 }
 
@@ -211,9 +194,15 @@ impl SplitOptions {
         self
     }
 
-    /// Create options with a relative tolerance.
-    pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.truncation.rtol = Some(rtol);
+    /// Set the SVD truncation policy used when `form` is unitary/SVD-based.
+    pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
+        self.truncation.svd_policy = Some(policy);
+        self
+    }
+
+    /// Set the QR-specific relative tolerance used when `form` is QR-based.
+    pub fn with_qr_rtol(mut self, rtol: f64) -> Self {
+        self.truncation.qr_rtol = Some(rtol);
         self
     }
 
@@ -229,12 +218,17 @@ impl SplitOptions {
         self
     }
 
-    /// Get rtol (for backwards compatibility).
-    pub fn rtol(&self) -> Option<f64> {
-        self.truncation.rtol
+    /// Get the SVD truncation policy.
+    pub fn svd_policy(&self) -> Option<SvdTruncationPolicy> {
+        self.truncation.svd_policy
     }
 
-    /// Get max_rank (for backwards compatibility).
+    /// Get the QR-specific relative tolerance.
+    pub fn qr_rtol(&self) -> Option<f64> {
+        self.truncation.qr_rtol
+    }
+
+    /// Get max_rank.
     pub fn max_rank(&self) -> Option<usize> {
         self.truncation.max_rank
     }
@@ -262,6 +256,7 @@ impl SplitOptions {
 /// use tensor4all_treetn::{
 ///     RestructureOptions, SplitOptions, SwapOptions, TruncationOptions,
 /// };
+/// use tensor4all_core::SvdTruncationPolicy;
 ///
 /// let options = RestructureOptions::new()
 ///     .with_split(SplitOptions::new().with_max_rank(32))
@@ -269,7 +264,9 @@ impl SplitOptions {
 ///         max_rank: Some(16),
 ///         rtol: Some(1e-10),
 ///     })
-///     .with_final_truncation(TruncationOptions::new().with_rtol(1e-12));
+///     .with_final_truncation(
+///         TruncationOptions::new().with_svd_policy(SvdTruncationPolicy::new(1e-12)),
+///     );
 ///
 /// assert_eq!(options.split.max_rank(), Some(32));
 /// assert!(!options.split.final_sweep);
@@ -279,8 +276,8 @@ impl SplitOptions {
 ///     options
 ///         .final_truncation
 ///         .as_ref()
-///         .and_then(TruncationOptions::rtol),
-///     Some(1e-12)
+///         .and_then(TruncationOptions::svd_policy),
+///     Some(SvdTruncationPolicy::new(1e-12))
 /// );
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -288,10 +285,11 @@ pub struct RestructureOptions {
     /// Options for the split/refinement phase.
     ///
     /// These settings matter when a current node must be factored into multiple
-    /// fragments before any fragment movement can happen. Higher `max_rank`
-    /// and smaller `rtol` preserve more fidelity but can increase intermediate
-    /// bond dimensions. `final_sweep` should usually remain `false` here unless
-    /// a split-only workflow is being optimized in isolation.
+    /// fragments before any fragment movement can happen. Higher `max_rank`,
+    /// stricter `svd_policy`, and smaller `qr_rtol` preserve more fidelity but
+    /// can increase intermediate bond dimensions. `final_sweep` should usually
+    /// remain `false` here unless a split-only workflow is being optimized in
+    /// isolation.
     pub split: SplitOptions,
     /// Options for the site-transport / swap phase.
     ///
@@ -393,9 +391,14 @@ impl RestructureOptions {
     ///
     /// ```
     /// use tensor4all_treetn::{RestructureOptions, TruncationOptions};
+    /// use tensor4all_core::SvdTruncationPolicy;
     ///
     /// let options = RestructureOptions::new()
-    ///     .with_final_truncation(TruncationOptions::new().with_max_rank(10));
+    ///     .with_final_truncation(
+    ///         TruncationOptions::new()
+    ///             .with_max_rank(10)
+    ///             .with_svd_policy(SvdTruncationPolicy::new(1e-10)),
+    ///     );
     ///
     /// assert_eq!(
     ///     options

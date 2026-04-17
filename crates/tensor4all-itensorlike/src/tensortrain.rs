@@ -16,8 +16,7 @@ use tensor4all_core::{
 use tensor4all_treetn::{CanonicalizationOptions, TreeTN, TruncationOptions};
 
 use crate::error::{Result, TensorTrainError};
-use crate::options::{validate_truncation_params, CanonicalForm, TruncateAlg, TruncateOptions};
-use tensor4all_core::truncation::HasTruncationParams;
+use crate::options::{validate_svd_truncation_options, CanonicalForm, TruncateOptions};
 
 /// Tensor Train with orthogonality tracking.
 ///
@@ -801,14 +800,16 @@ impl TensorTrain {
             return Ok(());
         }
 
-        validate_truncation_params(options.truncation_params())?;
+        validate_svd_truncation_options(options.max_rank(), options.svd_policy())?;
 
         // Convert TruncateOptions to TruncationOptions
-        let form = truncate_alg_to_form(options.alg());
-        let treetn_options = TruncationOptions {
-            form,
-            truncation: options.truncation(),
-        };
+        let mut treetn_options = TruncationOptions::new();
+        if let Some(policy) = options.svd_policy() {
+            treetn_options = treetn_options.with_svd_policy(policy);
+        }
+        if let Some(max_rank) = options.max_rank() {
+            treetn_options = treetn_options.with_max_rank(max_rank);
+        }
 
         // Truncate towards the last site (rightmost) as the canonical center
         // This matches ITensor convention where truncation sweeps left-to-right
@@ -820,7 +821,7 @@ impl TensorTrain {
                 message: format!("TreeTN truncation failed: {}", e),
             })?;
 
-        self.canonical_form = Some(form);
+        self.canonical_form = Some(CanonicalForm::Unitary);
 
         Ok(())
     }
@@ -1198,18 +1199,6 @@ impl TensorTrain {
 impl Default for TensorTrain {
     fn default() -> Self {
         Self::new(vec![]).expect("Failed to create empty TensorTrain")
-    }
-}
-
-/// Convert TruncateAlg to CanonicalForm.
-///
-/// Note: SVD truncation algorithm corresponds to Unitary canonical form
-/// because both produce orthogonal/isometric tensors.
-pub(crate) fn truncate_alg_to_form(alg: TruncateAlg) -> CanonicalForm {
-    match alg {
-        TruncateAlg::SVD | TruncateAlg::RSVD | TruncateAlg::QR => CanonicalForm::Unitary,
-        TruncateAlg::LU => CanonicalForm::LU,
-        TruncateAlg::CI => CanonicalForm::CI,
     }
 }
 

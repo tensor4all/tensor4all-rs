@@ -224,7 +224,9 @@ fn test_gmres_mpo_identity(n: usize) -> anyhow::Result<(f64, f64, usize)> {
         check_true_residual: false,
     };
 
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(20);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
+        .with_max_rank(20);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -317,7 +319,9 @@ fn test_gmres_mpo_pauli(n: usize) -> anyhow::Result<(f64, f64, usize)> {
         check_true_residual: false,
     };
 
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(20);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
+        .with_max_rank(20);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -403,7 +407,9 @@ fn test_gmres_mpo_imaginary(n: usize) -> anyhow::Result<(f64, f64, usize)> {
         check_true_residual: false,
     };
 
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(20);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
+        .with_max_rank(20);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -496,7 +502,9 @@ fn test_gmres_mpo_random(n: usize, max_iter: usize) -> anyhow::Result<(f64, f64,
         check_true_residual: true,
     };
 
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(50);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
+        .with_max_rank(50);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -739,7 +747,7 @@ fn apply_operator_to_mpo(
     // Contract operator with MPO using fit method
     let options = ContractOptions::fit()
         .with_nhalfsweeps(4)
-        .with_rtol(1e-10)
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
         .with_max_rank(50);
 
     let result = op

@@ -200,8 +200,7 @@ fn issue192_regression_no_svd_nan_n5_identity_ones() -> anyhow::Result<()> {
         .context("failed to canonicalize initial x0=b")?;
 
     let truncation = TruncationOptions::default()
-        .with_form(CanonicalForm::Unitary)
-        .with_rtol(rtol)
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol))
         .with_max_rank(bond_dim);
 
     let options = LinsolveOptions::default()

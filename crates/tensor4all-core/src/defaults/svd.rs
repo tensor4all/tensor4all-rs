@@ -8,10 +8,13 @@
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
 
 use crate::defaults::DynIndex;
-use crate::global_default::GlobalDefault;
 use crate::index_like::IndexLike;
-use crate::truncation::{HasTruncationParams, TruncationParams};
+use crate::truncation::{
+    validate_svd_truncation_policy, SingularValueMeasure, SvdTruncationPolicy, ThresholdScale,
+    TruncationRule,
+};
 use crate::{unfold_split, TensorDynLen};
+use std::sync::Mutex;
 use tenferro::DType;
 use tensor4all_tensorbackend::{
     dense_native_tensor_from_col_major, diag_native_tensor_from_col_major,
@@ -26,9 +29,9 @@ pub enum SvdError {
     /// SVD computation failed.
     #[error("SVD computation failed: {0}")]
     ComputationError(#[from] anyhow::Error),
-    /// Invalid relative tolerance value (must be finite and non-negative).
-    #[error("Invalid rtol value: {0}. rtol must be finite and non-negative.")]
-    InvalidRtol(f64),
+    /// Invalid truncation threshold value (must be finite and non-negative).
+    #[error("Invalid SVD truncation threshold: {0}. Threshold must be finite and non-negative.")]
+    InvalidThreshold(f64),
 }
 
 /// Options for SVD decomposition with truncation control.
@@ -37,14 +40,14 @@ pub enum SvdError {
 ///
 /// ```
 /// use tensor4all_core::svd::{SvdOptions, svd_with};
-/// use tensor4all_core::{DynIndex, TensorDynLen};
+/// use tensor4all_core::{DynIndex, SvdTruncationPolicy, TensorDynLen};
 ///
 /// let i = DynIndex::new_dyn(3);
 /// let j = DynIndex::new_dyn(3);
 /// let data: Vec<f64> = (0..9).map(|x| x as f64).collect();
 /// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
-/// let opts = SvdOptions::with_rtol(1e-10);
+/// let opts = SvdOptions::new().with_policy(SvdTruncationPolicy::new(1e-10));
 /// let (u, s, v) = svd_with::<f64>(&tensor, &[i.clone()], &opts).unwrap();
 ///
 /// // U has left index + bond, S is diagonal bond x bond, V has right index + bond
@@ -53,97 +56,134 @@ pub enum SvdError {
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SvdOptions {
-    /// Truncation parameters (rtol, max_rank).
-    pub truncation: TruncationParams,
+    /// Maximum retained rank after policy-based truncation.
+    pub max_rank: Option<usize>,
+    /// Per-call SVD truncation policy.
+    /// If `None`, the global default policy is used.
+    pub policy: Option<SvdTruncationPolicy>,
 }
 
 impl SvdOptions {
-    /// Create new SVD options with the specified rtol.
-    pub fn with_rtol(rtol: f64) -> Self {
-        Self {
-            truncation: TruncationParams::new().with_rtol(rtol),
-        }
+    /// Create new SVD options with no overrides.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Create new SVD options with the specified max_rank.
-    pub fn with_max_rank(max_rank: usize) -> Self {
-        Self {
-            truncation: TruncationParams::new().with_max_rank(max_rank),
-        }
+    /// Set the maximum retained rank.
+    #[must_use]
+    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
+        self.max_rank = Some(max_rank);
+        self
     }
 
-    /// Get rtol from options (for backwards compatibility).
-    pub fn rtol(&self) -> Option<f64> {
-        self.truncation.rtol
-    }
-
-    /// Get max_rank from options (for backwards compatibility).
-    pub fn max_rank(&self) -> Option<usize> {
-        self.truncation.max_rank
+    /// Set the SVD truncation policy override.
+    #[must_use]
+    pub fn with_policy(mut self, policy: SvdTruncationPolicy) -> Self {
+        self.policy = Some(policy);
+        self
     }
 }
 
-impl HasTruncationParams for SvdOptions {
-    fn truncation_params(&self) -> &TruncationParams {
-        &self.truncation
-    }
-
-    fn truncation_params_mut(&mut self) -> &mut TruncationParams {
-        &mut self.truncation
+fn default_policy_guard() -> std::sync::MutexGuard<'static, SvdTruncationPolicy> {
+    match DEFAULT_SVD_TRUNCATION_POLICY.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 
-// Global default rtol using the unified GlobalDefault type
-// Default value: 1e-12 (near machine precision)
-static DEFAULT_SVD_RTOL: GlobalDefault = GlobalDefault::new(1e-12);
+// Default value: relative per-value threshold 1e-12.
+static DEFAULT_SVD_TRUNCATION_POLICY: Mutex<SvdTruncationPolicy> =
+    Mutex::new(SvdTruncationPolicy::new(1e-12));
 
-/// Get the global default rtol for SVD truncation.
+/// Get the global default truncation policy for SVD.
 ///
-/// The default value is 1e-12 (near machine precision).
-pub fn default_svd_rtol() -> f64 {
-    DEFAULT_SVD_RTOL.get()
+/// The default policy is `SvdTruncationPolicy::new(1e-12)`.
+#[must_use]
+pub fn default_svd_truncation_policy() -> SvdTruncationPolicy {
+    *default_policy_guard()
 }
 
-/// Set the global default rtol for SVD truncation.
+/// Set the global default truncation policy for SVD.
 ///
 /// # Arguments
-/// * `rtol` - Relative Frobenius error tolerance (must be finite and non-negative)
+/// * `policy` - SVD truncation policy to use when `SvdOptions::policy` is `None`
 ///
 /// # Errors
-/// Returns `SvdError::InvalidRtol` if rtol is not finite or is negative.
-pub fn set_default_svd_rtol(rtol: f64) -> Result<(), SvdError> {
-    DEFAULT_SVD_RTOL
-        .set(rtol)
-        .map_err(|e| SvdError::InvalidRtol(e.0))
+/// Returns `SvdError::InvalidThreshold` if `policy.threshold` is invalid.
+pub fn set_default_svd_truncation_policy(policy: SvdTruncationPolicy) -> Result<(), SvdError> {
+    validate_svd_truncation_policy(policy).map_err(|e| SvdError::InvalidThreshold(e.0))?;
+    *default_policy_guard() = policy;
+    Ok(())
 }
 
-/// Compute the retained rank based on rtol (TSVD truncation).
-///
-/// This implements the truncation criterion:
-///   sum_{i>r} σ_i² / sum_i σ_i² <= rtol²
-fn compute_retained_rank(s_vec: &[f64], rtol: f64) -> usize {
+fn singular_value_measure(value: f64, measure: SingularValueMeasure) -> f64 {
+    match measure {
+        SingularValueMeasure::Value => value,
+        SingularValueMeasure::SquaredValue => value * value,
+    }
+}
+
+/// Compute the retained rank based on an explicit SVD truncation policy.
+fn compute_retained_rank(s_vec: &[f64], policy: &SvdTruncationPolicy) -> usize {
     if s_vec.is_empty() {
         return 1;
     }
 
-    let total_sq_norm: f64 = s_vec.iter().map(|&s| s * s).sum();
-    if total_sq_norm == 0.0 {
+    let measured: Vec<f64> = s_vec
+        .iter()
+        .map(|&value| singular_value_measure(value, policy.measure))
+        .collect();
+    if measured.iter().all(|&value| value == 0.0) {
         return 1;
     }
 
-    let threshold = rtol * rtol * total_sq_norm;
-    let mut discarded_sq_norm = 0.0;
-    let mut r = s_vec.len();
-    for i in (0..s_vec.len()).rev() {
-        let s_sq = s_vec[i] * s_vec[i];
-        if discarded_sq_norm + s_sq <= threshold {
-            discarded_sq_norm += s_sq;
-            r = i;
-        } else {
-            break;
+    let retained = match (policy.scale, policy.rule) {
+        (ThresholdScale::Relative, TruncationRule::PerValue) => {
+            let reference = measured.iter().copied().fold(0.0_f64, f64::max);
+            measured
+                .iter()
+                .take_while(|&&value| reference > 0.0 && value / reference > policy.threshold)
+                .count()
         }
-    }
-    r.max(1)
+        (ThresholdScale::Absolute, TruncationRule::PerValue) => measured
+            .iter()
+            .take_while(|&&value| value > policy.threshold)
+            .count(),
+        (ThresholdScale::Relative, TruncationRule::DiscardedTailSum) => {
+            let total: f64 = measured.iter().sum();
+            if total == 0.0 {
+                1
+            } else {
+                let mut discarded = 0.0;
+                let mut keep = measured.len();
+                for (i, value) in measured.iter().enumerate().rev() {
+                    if (discarded + value) / total <= policy.threshold {
+                        discarded += value;
+                        keep = i;
+                    } else {
+                        break;
+                    }
+                }
+                keep
+            }
+        }
+        (ThresholdScale::Absolute, TruncationRule::DiscardedTailSum) => {
+            let mut discarded = 0.0;
+            let mut keep = measured.len();
+            for (i, value) in measured.iter().enumerate().rev() {
+                if discarded + value <= policy.threshold {
+                    discarded += value;
+                    keep = i;
+                } else {
+                    break;
+                }
+            }
+            keep
+        }
+    };
+
+    retained.max(1)
 }
 
 fn singular_values_from_native(tensor: &tenferro::Tensor) -> Result<Vec<f64>, SvdError> {
@@ -197,10 +237,8 @@ fn svd_truncated_native(
     left_inds: &[DynIndex],
     options: &SvdOptions,
 ) -> Result<SvdTruncatedNativeResult, SvdError> {
-    let rtol = options.truncation.effective_rtol(default_svd_rtol());
-    if !rtol.is_finite() || rtol < 0.0 {
-        return Err(SvdError::InvalidRtol(rtol));
-    }
+    let policy = options.policy.unwrap_or_else(default_svd_truncation_policy);
+    validate_svd_truncation_policy(policy).map_err(|e| SvdError::InvalidThreshold(e.0))?;
 
     let (matrix_native, _, m, n, left_indices, right_indices) = unfold_split(t, left_inds)
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
@@ -210,10 +248,11 @@ fn svd_truncated_native(
     let (mut u_native, mut s_native, mut vt_native) =
         svd_native_tensor(&matrix_native).map_err(SvdError::ComputationError)?;
     let s_full = singular_values_from_native(&s_native)?;
-    let mut r = compute_retained_rank(&s_full, rtol);
-    if let Some(max_rank) = options.truncation.max_rank {
+    let mut r = compute_retained_rank(&s_full, &policy);
+    if let Some(max_rank) = options.max_rank {
         r = r.min(max_rank);
     }
+    r = r.max(1);
     if r < k {
         match u_native.dtype() {
             DType::F64 => {
@@ -293,8 +332,8 @@ pub fn svd<T>(
 
 /// Compute SVD decomposition of a tensor with arbitrary rank, returning (U, S, V).
 ///
-/// This function allows per-call control of the truncation tolerance via `SvdOptions`.
-/// If `options.rtol` is `None`, uses the global default rtol.
+/// This function allows per-call control of the truncation policy via `SvdOptions`.
+/// If `options.policy` is `None`, it uses the global default policy.
 ///
 /// # Examples
 ///
@@ -309,13 +348,15 @@ pub fn svd<T>(
 /// data[0] = 1.0;
 /// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
-/// // Truncate with tight tolerance => rank 1
-/// let opts = SvdOptions::with_rtol(1e-10);
+/// use tensor4all_core::SvdTruncationPolicy;
+///
+/// // Truncate with a relative per-value threshold => rank 1
+/// let opts = SvdOptions::new().with_policy(SvdTruncationPolicy::new(1e-10));
 /// let (u, s, _v) = svd_with::<f64>(&tensor, &[i.clone()], &opts).unwrap();
 /// assert_eq!(s.dims()[0], 1);  // rank-1
 ///
 /// // Truncate with max_rank => capped
-/// let opts = SvdOptions::with_max_rank(2);
+/// let opts = SvdOptions::new().with_max_rank(2);
 /// let (_u, s, _v) = svd_with::<f64>(&tensor, &[i.clone()], &opts).unwrap();
 /// assert!(s.dims()[0] <= 2);
 /// ```

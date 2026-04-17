@@ -1,12 +1,15 @@
-//! Common truncation options and traits.
+//! Truncation policy types for decomposition algorithms.
 //!
-//! This module provides shared types and traits for truncation parameters
-//! used across tensor operations like SVD, QR, and tensor train compression.
+//! This module keeps algorithm selection separate from algorithm-specific
+//! truncation semantics. SVD-based routines use [`SvdTruncationPolicy`],
+//! while QR and other decompositions keep their own option types.
+
+use thiserror::Error;
 
 /// Decomposition/factorization algorithm.
 ///
 /// This enum unifies the algorithm choices across different crates
-/// (tensor4all-core, tensor4all-treetn, etc.).
+/// (`tensor4all-core`, `tensor4all-treetn`, etc.).
 ///
 /// # Examples
 ///
@@ -47,237 +50,176 @@ impl DecompositionAlg {
     }
 }
 
-/// Common truncation parameters.
+/// Threshold scaling for SVD truncation.
 ///
-/// This struct contains the core parameters used for rank truncation
-/// across various tensor decomposition and compression operations.
-///
-/// # Semantics
-///
-/// This crate uses **relative tolerance** (`rtol`) semantics:
-/// - Singular values are truncated when `σ_i / σ_max < rtol`
-///
-/// ITensorMPS.jl uses **cutoff** semantics:
-/// - Singular values are truncated when `σ_i² < cutoff`
-///
-/// **Conversion**: For normalized tensors (where `σ_max = 1`):
-/// - ITensorMPS.jl's `cutoff` = tensor4all-rs's `rtol²`
-/// - To match ITensorMPS.jl behavior: use `rtol = sqrt(cutoff)`
-/// - Example: ITensorMPS.jl `cutoff=1e-10` ↔ tensor4all-rs `rtol=1e-5`
+/// Relative thresholds compare against a scale derived from the singular values.
+/// Absolute thresholds compare directly against the configured cutoff.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::TruncationParams;
+/// use tensor4all_core::ThresholdScale;
 ///
-/// // Builder pattern
-/// let params = TruncationParams::new()
-///     .with_rtol(1e-8)
-///     .with_max_rank(50);
-/// assert_eq!(params.rtol, Some(1e-8));
-/// assert_eq!(params.max_rank, Some(50));
-///
-/// // ITensorMPS.jl compatibility
-/// let params = TruncationParams::new().with_cutoff(1e-10);
-/// let rtol = params.rtol.unwrap();
-/// assert!((rtol - 1e-5).abs() < 1e-10);  // sqrt(1e-10) = 1e-5
-///
-/// // Effective values with defaults
-/// let params = TruncationParams::new();
-/// assert_eq!(params.effective_rtol(1e-12), 1e-12);  // uses default
-/// assert_eq!(params.effective_max_rank(), usize::MAX);  // no limit
+/// assert_eq!(ThresholdScale::default(), ThresholdScale::Relative);
 /// ```
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TruncationParams {
-    /// Relative tolerance for truncation.
-    ///
-    /// Singular values satisfying `σ_i / σ_max < rtol` are truncated,
-    /// where `σ_max` is the largest singular value.
-    ///
-    /// If `None`, uses the algorithm's default tolerance.
-    pub rtol: Option<f64>,
-
-    /// Maximum rank (bond dimension).
-    ///
-    /// If `None`, no rank limit is applied.
-    pub max_rank: Option<usize>,
-
-    /// Cutoff value (ITensorMPS.jl convention).
-    ///
-    /// When set via [`with_cutoff`](TruncationParams::with_cutoff), `rtol` is
-    /// automatically set to `√cutoff`. This field tracks the original cutoff
-    /// value for inspection; `rtol` is always the authoritative tolerance.
-    ///
-    /// If `None`, cutoff was not used.
-    pub cutoff: Option<f64>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThresholdScale {
+    /// Compare against a singular-value-derived reference scale.
+    #[default]
+    Relative,
+    /// Compare directly against the configured threshold.
+    Absolute,
 }
 
-impl TruncationParams {
-    /// Create new truncation parameters with default values.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
+/// Singular-value-derived quantity used for truncation.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::SingularValueMeasure;
+///
+/// assert_eq!(SingularValueMeasure::default(), SingularValueMeasure::Value);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SingularValueMeasure {
+    /// Compare using singular values `σ_i`.
+    #[default]
+    Value,
+    /// Compare using squared singular values `σ_i²`.
+    SquaredValue,
+}
 
-    /// Set the relative tolerance.
-    ///
-    /// Clears any previously set cutoff origin.
-    #[must_use]
-    pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.rtol = Some(rtol);
-        self.cutoff = None;
-        self
-    }
+/// Rule used to map singular values to a retained rank.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::TruncationRule;
+///
+/// assert_eq!(TruncationRule::default(), TruncationRule::PerValue);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TruncationRule {
+    /// Keep values whose individual measure exceeds the threshold rule.
+    #[default]
+    PerValue,
+    /// Discard a suffix while the cumulative discarded measure stays below
+    /// the threshold rule.
+    DiscardedTailSum,
+}
 
-    /// Set the maximum rank.
-    #[must_use]
-    pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.max_rank = Some(max_rank);
-        self
-    }
+/// Explicit truncation policy for SVD-based decompositions.
+///
+/// Use this type when you need to describe how singular values are measured,
+/// scaled, and turned into a retained rank. [`SvdOptions`](crate::SvdOptions)
+/// carries this policy plus an independent `max_rank` cap.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{
+///     SingularValueMeasure, SvdTruncationPolicy, ThresholdScale, TruncationRule,
+/// };
+///
+/// let policy = SvdTruncationPolicy::new(1e-12);
+/// assert_eq!(policy.scale, ThresholdScale::Relative);
+/// assert_eq!(policy.measure, SingularValueMeasure::Value);
+/// assert_eq!(policy.rule, TruncationRule::PerValue);
+///
+/// let tail_policy = SvdTruncationPolicy::new(1e-8)
+///     .with_absolute()
+///     .with_squared_values()
+///     .with_discarded_tail_sum();
+/// assert_eq!(tail_policy.scale, ThresholdScale::Absolute);
+/// assert_eq!(tail_policy.measure, SingularValueMeasure::SquaredValue);
+/// assert_eq!(tail_policy.rule, TruncationRule::DiscardedTailSum);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SvdTruncationPolicy {
+    /// Threshold value used by the selected scale/rule combination.
+    pub threshold: f64,
+    /// Whether the threshold is interpreted relatively or absolutely.
+    pub scale: ThresholdScale,
+    /// Whether the policy measures singular values or squared singular values.
+    pub measure: SingularValueMeasure,
+    /// Whether truncation is per value or based on a discarded tail sum.
+    pub rule: TruncationRule,
+}
 
-    /// Set cutoff (ITensorMPS.jl convention).
-    ///
-    /// Internally converted to `rtol = √cutoff`. Clears any previously set
-    /// `rtol` origin so `cutoff` becomes the authoritative tolerance source.
+impl SvdTruncationPolicy {
+    /// Create a policy with the default semantics:
+    /// relative threshold, singular values, and per-value truncation.
     #[must_use]
-    pub fn with_cutoff(mut self, cutoff: f64) -> Self {
-        self.cutoff = Some(cutoff);
-        self.rtol = Some(cutoff.sqrt());
-        self
-    }
-
-    /// Set maxdim (alias for [`with_max_rank`](Self::with_max_rank)).
-    ///
-    /// This is provided for ITensorMPS.jl compatibility.
-    #[must_use]
-    pub fn with_maxdim(mut self, maxdim: usize) -> Self {
-        self.max_rank = Some(maxdim);
-        self
-    }
-
-    /// Get the effective rtol, using the provided default if not set.
-    #[must_use]
-    pub fn effective_rtol(&self, default: f64) -> f64 {
-        self.rtol.unwrap_or(default)
-    }
-
-    /// Get the effective max_rank, using usize::MAX if not set.
-    #[must_use]
-    pub fn effective_max_rank(&self) -> usize {
-        self.max_rank.unwrap_or(usize::MAX)
-    }
-
-    /// Merge with another set of parameters, preferring self's values.
-    #[must_use]
-    pub fn merge(&self, other: &Self) -> Self {
+    pub const fn new(threshold: f64) -> Self {
         Self {
-            rtol: self.rtol.or(other.rtol),
-            max_rank: self.max_rank.or(other.max_rank),
-            cutoff: self.cutoff.or(other.cutoff),
+            threshold,
+            scale: ThresholdScale::Relative,
+            measure: SingularValueMeasure::Value,
+            rule: TruncationRule::PerValue,
         }
     }
-}
 
-/// Trait for types that contain truncation parameters.
-///
-/// This trait provides a common interface for accessing and modifying
-/// truncation parameters in various options structs (e.g., [`SvdOptions`](crate::SvdOptions),
-/// [`QrOptions`](crate::QrOptions)).
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_core::svd::SvdOptions;
-/// use tensor4all_core::HasTruncationParams;
-///
-/// let opts = SvdOptions::with_rtol(1e-6).with_max_rank(20);
-/// assert_eq!(opts.rtol(), Some(1e-6));
-/// assert_eq!(opts.max_rank(), Some(20));
-/// ```
-pub trait HasTruncationParams {
-    /// Get a reference to the truncation parameters.
-    fn truncation_params(&self) -> &TruncationParams;
-
-    /// Get a mutable reference to the truncation parameters.
-    fn truncation_params_mut(&mut self) -> &mut TruncationParams;
-
-    /// Get the rtol value.
-    fn rtol(&self) -> Option<f64> {
-        self.truncation_params().rtol
-    }
-
-    /// Get the max_rank value.
-    fn max_rank(&self) -> Option<usize> {
-        self.truncation_params().max_rank
-    }
-
-    /// Set the rtol value (builder pattern).
-    ///
-    /// Clears any previously set cutoff origin.
-    fn with_rtol(mut self, rtol: f64) -> Self
-    where
-        Self: Sized,
-    {
-        let p = self.truncation_params_mut();
-        p.rtol = Some(rtol);
-        p.cutoff = None;
+    /// Use relative threshold scaling.
+    #[must_use]
+    pub const fn with_relative(mut self) -> Self {
+        self.scale = ThresholdScale::Relative;
         self
     }
 
-    /// Set the max_rank value (builder pattern).
-    fn with_max_rank(mut self, max_rank: usize) -> Self
-    where
-        Self: Sized,
-    {
-        self.truncation_params_mut().max_rank = Some(max_rank);
+    /// Use absolute threshold scaling.
+    #[must_use]
+    pub const fn with_absolute(mut self) -> Self {
+        self.scale = ThresholdScale::Absolute;
         self
     }
 
-    /// Set cutoff (ITensorMPS.jl convention, builder pattern).
-    ///
-    /// Internally converted to `rtol = √cutoff`.
-    fn with_cutoff(mut self, cutoff: f64) -> Self
-    where
-        Self: Sized,
-    {
-        let p = self.truncation_params_mut();
-        p.cutoff = Some(cutoff);
-        p.rtol = Some(cutoff.sqrt());
+    /// Measure singular values directly.
+    #[must_use]
+    pub const fn with_values(mut self) -> Self {
+        self.measure = SingularValueMeasure::Value;
         self
     }
 
-    /// Set maxdim (alias for max_rank, builder pattern).
-    fn with_maxdim(mut self, maxdim: usize) -> Self
-    where
-        Self: Sized,
-    {
-        self.truncation_params_mut().max_rank = Some(maxdim);
+    /// Measure squared singular values.
+    #[must_use]
+    pub const fn with_squared_values(mut self) -> Self {
+        self.measure = SingularValueMeasure::SquaredValue;
         self
     }
 
-    /// Set cutoff via mutable reference.
-    fn set_cutoff(&mut self, cutoff: f64) {
-        let p = self.truncation_params_mut();
-        p.cutoff = Some(cutoff);
-        p.rtol = Some(cutoff.sqrt());
+    /// Apply the threshold independently to each singular value.
+    #[must_use]
+    pub const fn with_per_value(mut self) -> Self {
+        self.rule = TruncationRule::PerValue;
+        self
     }
 
-    /// Set maxdim via mutable reference (alias for max_rank).
-    fn set_maxdim(&mut self, maxdim: usize) {
-        self.truncation_params_mut().max_rank = Some(maxdim);
+    /// Apply the threshold to the cumulative discarded tail.
+    #[must_use]
+    pub const fn with_discarded_tail_sum(mut self) -> Self {
+        self.rule = TruncationRule::DiscardedTailSum;
+        self
     }
 }
 
-// Implement HasTruncationParams for TruncationParams itself
-impl HasTruncationParams for TruncationParams {
-    fn truncation_params(&self) -> &TruncationParams {
-        self
-    }
+/// Error for invalid SVD truncation thresholds.
+#[derive(Debug, Error, Clone, Copy, PartialEq)]
+#[error("Invalid SVD truncation threshold: {0}. Threshold must be finite and non-negative.")]
+pub struct InvalidThresholdError(pub f64);
 
-    fn truncation_params_mut(&mut self) -> &mut TruncationParams {
-        self
+/// Validate one threshold value.
+pub(crate) fn validate_threshold_value(threshold: f64) -> Result<(), InvalidThresholdError> {
+    if !threshold.is_finite() || threshold < 0.0 {
+        return Err(InvalidThresholdError(threshold));
     }
+    Ok(())
+}
+
+/// Validate one full SVD truncation policy.
+pub(crate) fn validate_svd_truncation_policy(
+    policy: SvdTruncationPolicy,
+) -> Result<(), InvalidThresholdError> {
+    validate_threshold_value(policy.threshold)
 }
 
 #[cfg(test)]

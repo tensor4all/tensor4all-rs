@@ -120,7 +120,10 @@ pub mod qr {
 }
 pub mod svd {
     //! Re-export of SVD decomposition operations.
-    pub use crate::defaults::svd::*;
+    pub use crate::defaults::svd::{
+        default_svd_truncation_policy, set_default_svd_truncation_policy, svd, svd_with, SvdError,
+        SvdOptions,
+    };
 }
 
 // Re-export linear algebra items for top-level access
@@ -128,9 +131,13 @@ pub use defaults::direct_sum::direct_sum;
 pub use defaults::factorize::factorize;
 pub use defaults::qr::{default_qr_rtol, qr, qr_with, set_default_qr_rtol, QrError, QrOptions};
 pub use defaults::svd::{
-    default_svd_rtol, set_default_svd_rtol, svd, svd_with, SvdError, SvdOptions,
+    default_svd_truncation_policy, set_default_svd_truncation_policy, svd, svd_with, SvdError,
+    SvdOptions,
 };
 
 // Global default and truncation utilities
 pub use global_default::{GlobalDefault, InvalidRtolError};
-pub use truncation::{DecompositionAlg, HasTruncationParams, TruncationParams};
+pub use truncation::{
+    DecompositionAlg, InvalidThresholdError, SingularValueMeasure, SvdTruncationPolicy,
+    ThresholdScale, TruncationRule,
+};

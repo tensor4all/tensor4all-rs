@@ -4,7 +4,7 @@ use tensor4all_core::index::Index;
 use tensor4all_core::{
     factorize, Canonical, DynIndex, FactorizeAlg, FactorizeError, FactorizeOptions,
 };
-use tensor4all_core::{TensorDynLen, TensorLike};
+use tensor4all_core::{SvdTruncationPolicy, TensorDynLen, TensorLike};
 
 // ============================================================================
 // Test Data Helpers
@@ -103,8 +103,9 @@ fn test_factorize_reconstruction_all_algorithms() {
             let options = FactorizeOptions {
                 alg,
                 canonical,
-                rtol: None,
                 max_rank: None,
+                svd_policy: None,
+                qr_rtol: None,
             };
             test_factorize_reconstruction(&options);
         }
@@ -125,8 +126,9 @@ fn test_factorize_shared_bond_index_all_algorithms() {
         let options = FactorizeOptions {
             alg,
             canonical: Canonical::Left,
-            rtol: None,
             max_rank: None,
+            svd_policy: None,
+            qr_rtol: None,
         };
         test_shared_bond_index(&options);
     }
@@ -205,8 +207,9 @@ fn test_factorize_lu_ci_no_singular_values() {
             let options = FactorizeOptions {
                 alg,
                 canonical,
-                rtol: None,
                 max_rank: None,
+                svd_policy: None,
+                qr_rtol: None,
             };
             let result = factorize(&tensor, &left_inds, &options).unwrap();
 
@@ -224,8 +227,9 @@ fn test_factorize_lu_ci_reconstruction_with_unit_dim_axis() {
         let options = FactorizeOptions {
             alg,
             canonical: Canonical::Left,
-            rtol: None,
             max_rank: None,
+            svd_policy: None,
+            qr_rtol: None,
         };
         let result = factorize(&tensor, &left_inds, &options).unwrap();
         let reconstructed = result.left.contract(&result.right);
@@ -242,8 +246,9 @@ fn test_factorize_lu_ci_reconstruction_with_col_major_matrix_input() {
         let options = FactorizeOptions {
             alg,
             canonical: Canonical::Left,
-            rtol: None,
             max_rank: None,
+            svd_policy: None,
+            qr_rtol: None,
         };
         let result = factorize(&tensor, &left_inds, &options).unwrap();
         let reconstructed = result.left.contract(&result.right);
@@ -269,6 +274,36 @@ fn test_factorize_with_max_rank() {
     let options = FactorizeOptions::svd().with_max_rank(1);
     let result = factorize(&tensor, &left_inds, &options).unwrap();
     assert!(result.rank >= 1);
+}
+
+#[test]
+fn test_factorize_rejects_mixed_algorithm_options() {
+    let tensor = create_test_matrix();
+    let left_inds = vec![tensor.indices[0].clone()];
+
+    let svd_with_qr = FactorizeOptions::svd().with_qr_rtol(1.0e-8);
+    assert!(matches!(
+        factorize(&tensor, &left_inds, &svd_with_qr),
+        Err(FactorizeError::InvalidOptions(_))
+    ));
+
+    let qr_with_svd = FactorizeOptions::qr().with_svd_policy(SvdTruncationPolicy::new(1.0e-8));
+    assert!(matches!(
+        factorize(&tensor, &left_inds, &qr_with_svd),
+        Err(FactorizeError::InvalidOptions(_))
+    ));
+
+    for options in [
+        FactorizeOptions::lu().with_qr_rtol(1.0e-8),
+        FactorizeOptions::lu().with_svd_policy(SvdTruncationPolicy::new(1.0e-8)),
+        FactorizeOptions::ci().with_qr_rtol(1.0e-8),
+        FactorizeOptions::ci().with_svd_policy(SvdTruncationPolicy::new(1.0e-8)),
+    ] {
+        assert!(matches!(
+            factorize(&tensor, &left_inds, &options),
+            Err(FactorizeError::InvalidOptions(_))
+        ));
+    }
 }
 
 // ============================================================================

@@ -165,7 +165,7 @@ factor connected by a new bond index.
 ### SVD with truncation
 
 ```rust
-use tensor4all_core::{TensorDynLen, Index, factorize, FactorizeOptions};
+use tensor4all_core::{TensorDynLen, Index, factorize, FactorizeOptions, SvdTruncationPolicy};
 use tensor4all_core::index::DynId;
 
 let i = Index::new_dyn(4);
@@ -177,8 +177,8 @@ let mut rng = {
 };
 let t: TensorDynLen = TensorDynLen::random::<f64, _>(&mut rng, vec![i.clone(), j.clone()]);
 
-// SVD: split along i | j, discarding singular values below 1e-10.
-let opts = FactorizeOptions::svd().with_rtol(1e-10);
+// SVD: split along i | j, discarding singular values below the chosen policy threshold.
+let opts = FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(1e-10));
 let result = factorize(&t, &[i.clone()], &opts).unwrap();
 
 // result.left  has indices [i, bond]
@@ -188,7 +188,7 @@ let bond_dim = result.rank;
 println!("bond dimension after SVD: {bond_dim}");
 
 // Limit bond dimension explicitly.
-let opts_capped = FactorizeOptions::svd().with_rtol(0.0).with_max_rank(2);
+let opts_capped = FactorizeOptions::svd().with_max_rank(2);
 let result_capped = factorize(&t, &[i], &opts_capped).unwrap();
 assert!(result_capped.rank <= 2);
 ```
@@ -216,5 +216,7 @@ let result = factorize(&t, &[i], &opts).unwrap();
 ```
 
 Both `FactorizeOptions::svd()` and `FactorizeOptions::qr()` return builder
-structs. Chain `.with_rtol(tol)` and `.with_max_rank(n)` to configure truncation.
-For SVD, `result.singular_values` holds the retained singular values.
+structs. Use `.with_svd_policy(policy)` for SVD and `.with_qr_rtol(tol)` for
+QR-specific rank control. `with_max_rank(n)` remains available as an
+algorithm-independent hard cap. For SVD, `result.singular_values` holds the
+retained singular values.

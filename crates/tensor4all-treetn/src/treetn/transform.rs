@@ -450,8 +450,9 @@ where
             let factorize_options = FactorizeOptions {
                 alg: FactorizeAlg::QR,
                 canonical: Canonical::Left,
-                rtol: None,
                 max_rank: None,
+                svd_policy: None,
+                qr_rtol: None,
             };
 
             let factorize_result = remaining_tensor

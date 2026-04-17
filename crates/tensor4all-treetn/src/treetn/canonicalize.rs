@@ -142,8 +142,9 @@ where
         let factorize_options = FactorizeOptions {
             alg,
             canonical: Canonical::Left,
-            rtol: None,
             max_rank: None,
+            svd_policy: None,
+            qr_rtol: None,
         };
 
         // Process edges in order (leaves towards center)

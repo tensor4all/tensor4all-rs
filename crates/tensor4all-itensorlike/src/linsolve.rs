@@ -8,13 +8,12 @@
 
 use std::collections::HashMap;
 
-use tensor4all_core::truncation::HasTruncationParams;
 use tensor4all_core::{DynIndex, IndexLike};
 use tensor4all_treetn::{square_linsolve, IndexMapping, TruncationOptions};
 
 use crate::error::{Result, TensorTrainError};
-use crate::options::{validate_truncation_params, LinsolveOptions};
-use crate::tensortrain::{truncate_alg_to_form, TensorTrain};
+use crate::options::{validate_svd_truncation_options, CanonicalForm, LinsolveOptions};
+use crate::tensortrain::TensorTrain;
 
 /// Solve `(a₀ + a₁ * A) * x = b` for `x`.
 ///
@@ -53,7 +52,7 @@ pub fn linsolve(
         });
     }
 
-    validate_truncation_params(options.truncation_params())?;
+    validate_svd_truncation_options(options.max_rank(), options.svd_policy())?;
 
     if !options.krylov_tol().is_finite() || options.krylov_tol() <= 0.0 {
         return Err(TensorTrainError::OperationError {
@@ -85,18 +84,17 @@ pub fn linsolve(
     }
 
     // Convert LinsolveOptions → treetn::LinsolveOptions
-    let form = truncate_alg_to_form(options.alg());
     let nfullsweeps = options.nhalfsweeps() / 2;
 
     let treetn_options = tensor4all_treetn::LinsolveOptions::new(nfullsweeps)
-        .with_truncation(TruncationOptions::new().with_form(form))
+        .with_truncation(TruncationOptions::new())
         .with_krylov_tol(options.krylov_tol())
         .with_krylov_maxiter(options.krylov_maxiter())
         .with_krylov_dim(options.krylov_dim())
         .with_coefficients(options.coefficients().0, options.coefficients().1);
 
-    let treetn_options = if let Some(rtol) = options.rtol() {
-        treetn_options.with_rtol(rtol)
+    let treetn_options = if let Some(policy) = options.svd_policy() {
+        treetn_options.with_svd_policy(policy)
     } else {
         treetn_options
     };
@@ -138,7 +136,7 @@ pub fn linsolve(
         message: format!("Linsolve failed: {}", e),
     })?;
 
-    TensorTrain::from_inner(result.solution, Some(form))
+    TensorTrain::from_inner(result.solution, Some(CanonicalForm::Unitary))
 }
 
 type SiteMappings = (

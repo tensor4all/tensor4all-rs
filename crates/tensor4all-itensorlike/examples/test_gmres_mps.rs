@@ -235,7 +235,9 @@ fn test_gmres_mps(n: usize, operator: &str) -> anyhow::Result<(f64, f64, usize)>
     };
 
     // Truncation options: control bond dimension growth
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(20);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
+        .with_max_rank(20);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -248,7 +250,10 @@ fn test_gmres_mps(n: usize, operator: &str) -> anyhow::Result<(f64, f64, usize)>
     println!("rtol = {:.2e}", options.rtol);
     println!(
         "truncation: rtol={:.2e}, max_rank={}",
-        truncate_opts.rtol().unwrap_or(0.0),
+        truncate_opts
+            .svd_policy()
+            .map(|policy| policy.threshold)
+            .unwrap_or(0.0),
         truncate_opts.max_rank().unwrap_or(0)
     );
     let result = gmres_with_truncation(&apply_a, &b, &x0, &options, truncate_fn)?;
@@ -386,7 +391,7 @@ fn apply_mpo(
     // Use consistent truncation: rtol=1e-10, max_rank=20
     let options = ContractOptions::fit()
         .with_nhalfsweeps(4)
-        .with_rtol(1e-8)
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
         .with_max_rank(20);
     let result = mpo
         .contract(mps, &options)
@@ -506,7 +511,9 @@ fn test_gmres_mps_imaginary(n: usize, max_iter: usize) -> anyhow::Result<(f64, f
     };
 
     // Truncation options: control bond dimension growth
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(20);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
+        .with_max_rank(20);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -519,7 +526,10 @@ fn test_gmres_mps_imaginary(n: usize, max_iter: usize) -> anyhow::Result<(f64, f
     println!("rtol = {:.2e}", options.rtol);
     println!(
         "truncation: rtol={:.2e}, max_rank={}",
-        truncate_opts.rtol().unwrap_or(0.0),
+        truncate_opts
+            .svd_policy()
+            .map(|policy| policy.threshold)
+            .unwrap_or(0.0),
         truncate_opts.max_rank().unwrap_or(0)
     );
     let result = gmres_with_truncation(&apply_a, &b, &x0, &options, truncate_fn)?;
@@ -769,7 +779,9 @@ fn test_gmres_mps_random(n: usize, max_iter: usize) -> anyhow::Result<(f64, f64,
     };
 
     // Truncation options: control bond dimension growth
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(50);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
+        .with_max_rank(50);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -782,7 +794,10 @@ fn test_gmres_mps_random(n: usize, max_iter: usize) -> anyhow::Result<(f64, f64,
     println!("rtol = {:.2e}", options.rtol);
     println!(
         "truncation: rtol={:.2e}, max_rank={}",
-        truncate_opts.rtol().unwrap_or(0.0),
+        truncate_opts
+            .svd_policy()
+            .map(|policy| policy.threshold)
+            .unwrap_or(0.0),
         truncate_opts.max_rank().unwrap_or(0)
     );
     let result = gmres_with_truncation(&apply_a, &b, &x0, &options, truncate_fn)?;

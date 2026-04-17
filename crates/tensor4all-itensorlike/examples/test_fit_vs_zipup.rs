@@ -842,7 +842,9 @@ fn test_truncation_effect() -> anyhow::Result<()> {
     println!("r0 bond dims: {:?}", r0.bond_dims());
 
     // Apply truncation
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(20);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
+        .with_max_rank(20);
     r0.truncate(&truncate_opts)?;
 
     println!("\n=== After truncation ===");
@@ -1227,7 +1229,9 @@ fn test_gmres_with_both(
 
     println!("\n--- GMRES WITH truncation ---");
 
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(20);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
+        .with_max_rank(20);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -1453,7 +1457,9 @@ fn apply_with_zipup(
     mpo: &TensorTrain,
     indices: &SharedIndices,
 ) -> anyhow::Result<TensorTrain> {
-    let options = ContractOptions::zipup().with_rtol(1e-10).with_max_rank(50);
+    let options = ContractOptions::zipup()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
+        .with_max_rank(50);
 
     let result = op
         .contract(mpo, &options)
@@ -1471,7 +1477,7 @@ fn apply_with_fit(
 ) -> anyhow::Result<TensorTrain> {
     let options = ContractOptions::fit()
         .with_nhalfsweeps(4)
-        .with_rtol(1e-10)
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
         .with_max_rank(50);
 
     let result = op
@@ -1490,10 +1496,12 @@ fn debug_contract_result(
 ) -> anyhow::Result<()> {
     println!("\n=== DEBUG: Contract result before replaceinds ===");
 
-    let options_zipup = ContractOptions::zipup().with_rtol(1e-10).with_max_rank(50);
+    let options_zipup = ContractOptions::zipup()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
+        .with_max_rank(50);
     let options_fit = ContractOptions::fit()
         .with_nhalfsweeps(4)
-        .with_rtol(1e-10)
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
         .with_max_rank(50);
 
     let raw_zipup = op
@@ -1624,7 +1632,9 @@ fn debug_contract_result(
     let mut result_zipup_trunc = result_zipup.clone();
     let mut result_fit_trunc = result_fit.clone();
 
-    let trunc_opts = TruncateOptions::svd().with_rtol(1e-8).with_max_rank(20);
+    let trunc_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-8))
+        .with_max_rank(20);
     result_zipup_trunc.truncate(&trunc_opts)?;
     result_fit_trunc.truncate(&trunc_opts)?;
 

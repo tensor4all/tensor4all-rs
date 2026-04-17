@@ -1,5 +1,5 @@
 use super::*;
-use tensor4all_core::{DynIndex, IndexLike, TensorDynLen, TensorIndex};
+use tensor4all_core::{DynIndex, IndexLike, SvdTruncationPolicy, TensorDynLen, TensorIndex};
 
 /// Helper to create a simple 2-node TreeTN: A -- bond -- B
 fn make_two_node_treetn() -> (TreeTN<TensorDynLen, String>, DynIndex, DynIndex, DynIndex) {
@@ -38,7 +38,8 @@ fn test_contraction_options_default() {
     let opts = ContractionOptions::default();
     assert_eq!(opts.method, ContractionMethod::Zipup);
     assert!(opts.max_rank.is_none());
-    assert!(opts.rtol.is_none());
+    assert!(opts.svd_policy.is_none());
+    assert!(opts.qr_rtol.is_none());
     assert_eq!(opts.nfullsweeps, 1);
     assert!(opts.convergence_tol.is_none());
 }
@@ -63,18 +64,33 @@ fn test_contraction_options_fit() {
 
 #[test]
 fn test_contraction_options_builders() {
+    let policy = SvdTruncationPolicy::new(1e-8)
+        .with_squared_values()
+        .with_discarded_tail_sum();
     let opts = ContractionOptions::zipup()
         .with_max_rank(10)
-        .with_rtol(1e-8)
+        .with_svd_policy(policy)
         .with_nfullsweeps(3)
         .with_convergence_tol(1e-6)
         .with_factorize_alg(FactorizeAlg::LU);
 
     assert_eq!(opts.max_rank, Some(10));
-    assert_eq!(opts.rtol, Some(1e-8));
+    assert_eq!(opts.svd_policy, Some(policy));
+    assert_eq!(opts.qr_rtol, None);
     assert_eq!(opts.nfullsweeps, 3);
     assert_eq!(opts.convergence_tol, Some(1e-6));
     assert_eq!(opts.factorize_alg, FactorizeAlg::LU);
+}
+
+#[test]
+fn test_contraction_options_qr_builder() {
+    let opts = ContractionOptions::fit()
+        .with_factorize_alg(FactorizeAlg::QR)
+        .with_qr_rtol(1e-7);
+
+    assert_eq!(opts.factorize_alg, FactorizeAlg::QR);
+    assert_eq!(opts.qr_rtol, Some(1e-7));
+    assert!(opts.svd_policy.is_none());
 }
 
 #[test]
@@ -260,7 +276,8 @@ fn test_naive_contraction_scalar_result() {
         TreeTN::<TensorDynLen, String>::from_tensors(vec![t_b], vec!["A".to_string()]).unwrap();
 
     // Naive contraction: inner product = 1+2+3 = 6
-    let result = contract_naive_to_treetn(&tn_a, &tn_b, &"A".to_string(), None, None).unwrap();
+    let result =
+        contract_naive_to_treetn(&tn_a, &tn_b, &"A".to_string(), None, None, None).unwrap();
 
     assert_eq!(result.node_count(), 1);
     let dense = result.contract_to_tensor().unwrap();

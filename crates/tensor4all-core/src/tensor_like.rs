@@ -14,6 +14,7 @@
 
 use crate::any_scalar::AnyScalar;
 use crate::tensor_index::TensorIndex;
+use crate::truncation::SvdTruncationPolicy;
 use anyhow::Result;
 use std::fmt::Debug;
 
@@ -57,6 +58,12 @@ pub enum FactorizeError {
     InvalidRtol(
         /// The invalid rtol value
         f64,
+    ),
+    /// Invalid algorithm-specific option combination.
+    #[error("Invalid factorize options: {0}")]
+    InvalidOptions(
+        /// Description of the invalid option combination
+        &'static str,
     ),
     /// The storage type is not supported for this operation.
     #[error("Unsupported storage type: {0}")]
@@ -176,14 +183,15 @@ pub enum Canonical {
 ///
 /// - Algorithm: SVD
 /// - Canonical: Left (left factor is orthogonal)
-/// - rtol: `None` (uses the algorithm's global default)
 /// - max_rank: `None` (no rank limit)
+/// - svd_policy: `None` (uses the SVD global default policy)
+/// - qr_rtol: `None` (uses the QR global default tolerance)
 ///
 /// # Field Interactions
 ///
-/// - `rtol` and `max_rank` are independent: the retained rank is the
-///   **minimum** of the tolerance-based rank and `max_rank`.
-/// - When neither is set, the algorithm's global default tolerance is used.
+/// - `svd_policy` is only valid for `FactorizeAlg::SVD`.
+/// - `qr_rtol` is only valid for `FactorizeAlg::QR`.
+/// - `max_rank` is independent of the algorithm-specific tolerance settings.
 ///
 /// # Examples
 ///
@@ -198,13 +206,14 @@ pub enum Canonical {
 /// data[0] = 1.0;  // rank-1 matrix
 /// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
-/// // SVD with tolerance truncation
-/// let opts = FactorizeOptions::svd().with_rtol(1e-10);
+/// // SVD with an explicit policy
+/// let opts = FactorizeOptions::svd()
+///     .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10));
 /// let result = factorize(&tensor, &[i.clone()], &opts).unwrap();
 /// assert_eq!(result.rank, 1);
 ///
 /// // QR with max-rank truncation
-/// let opts = FactorizeOptions::qr().with_max_rank(2);
+/// let opts = FactorizeOptions::qr().with_qr_rtol(1e-8).with_max_rank(2);
 /// let result = factorize(&tensor, &[i.clone()], &opts).unwrap();
 /// assert!(result.rank <= 2);
 /// ```
@@ -214,12 +223,15 @@ pub struct FactorizeOptions {
     pub alg: FactorizeAlg,
     /// Canonical direction.
     pub canonical: Canonical,
-    /// Relative tolerance for truncation.
-    /// If `None`, uses the algorithm's default.
-    pub rtol: Option<f64>,
     /// Maximum rank for truncation.
     /// If `None`, no rank limit is applied.
     pub max_rank: Option<usize>,
+    /// SVD truncation policy.
+    /// If `None`, uses the SVD global default.
+    pub svd_policy: Option<SvdTruncationPolicy>,
+    /// QR-specific relative tolerance.
+    /// If `None`, uses the QR global default.
+    pub qr_rtol: Option<f64>,
 }
 
 impl Default for FactorizeOptions {
@@ -227,8 +239,9 @@ impl Default for FactorizeOptions {
         Self {
             alg: FactorizeAlg::SVD,
             canonical: Canonical::Left,
-            rtol: None,
             max_rank: None,
+            svd_policy: None,
+            qr_rtol: None,
         }
     }
 }
@@ -317,18 +330,33 @@ impl FactorizeOptions {
         self
     }
 
-    /// Set relative tolerance.
+    /// Set the SVD truncation policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{FactorizeOptions, SvdTruncationPolicy};
+    ///
+    /// let opts = FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(1e-8));
+    /// assert_eq!(opts.svd_policy, Some(SvdTruncationPolicy::new(1e-8)));
+    /// ```
+    pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
+        self.svd_policy = Some(policy);
+        self
+    }
+
+    /// Set the QR-specific relative tolerance.
     ///
     /// # Examples
     ///
     /// ```
     /// use tensor4all_core::FactorizeOptions;
     ///
-    /// let opts = FactorizeOptions::svd().with_rtol(1e-8);
-    /// assert_eq!(opts.rtol, Some(1e-8));
+    /// let opts = FactorizeOptions::qr().with_qr_rtol(1e-8);
+    /// assert_eq!(opts.qr_rtol, Some(1e-8));
     /// ```
-    pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.rtol = Some(rtol);
+    pub fn with_qr_rtol(mut self, rtol: f64) -> Self {
+        self.qr_rtol = Some(rtol);
         self
     }
 
@@ -345,6 +373,45 @@ impl FactorizeOptions {
     pub fn with_max_rank(mut self, max_rank: usize) -> Self {
         self.max_rank = Some(max_rank);
         self
+    }
+
+    /// Validate that the selected fields make sense for the chosen algorithm.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FactorizeError::InvalidOptions`] if an algorithm is paired with
+    /// unsupported algorithm-specific truncation settings.
+    pub fn validate(&self) -> std::result::Result<(), FactorizeError> {
+        match self.alg {
+            FactorizeAlg::SVD => {
+                if self.qr_rtol.is_some() {
+                    return Err(FactorizeError::InvalidOptions(
+                        "SVD factorization does not accept qr_rtol",
+                    ));
+                }
+            }
+            FactorizeAlg::QR => {
+                if self.svd_policy.is_some() {
+                    return Err(FactorizeError::InvalidOptions(
+                        "QR factorization does not accept svd_policy",
+                    ));
+                }
+            }
+            FactorizeAlg::LU | FactorizeAlg::CI => {
+                if self.svd_policy.is_some() {
+                    return Err(FactorizeError::InvalidOptions(
+                        "LU/CI factorization does not accept svd_policy",
+                    ));
+                }
+                if self.qr_rtol.is_some() {
+                    return Err(FactorizeError::InvalidOptions(
+                        "LU/CI factorization does not accept qr_rtol",
+                    ));
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

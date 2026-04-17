@@ -69,7 +69,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::{IndexLike, TensorIndex, TensorLike};
+use tensor4all_core::{IndexLike, SvdTruncationPolicy, TensorIndex, TensorLike};
 
 use super::index_mapping::IndexMapping;
 use super::linear_operator::LinearOperator;
@@ -89,7 +89,8 @@ use crate::treetn::TreeTN;
 ///
 /// - `method`: [`ContractionMethod::Zipup`] (single-sweep, no iteration)
 /// - `max_rank`: `None` (no rank limit)
-/// - `rtol`: `None` (no tolerance-based truncation)
+/// - `svd_policy`: `None` (uses the SVD global default policy)
+/// - `qr_rtol`: `None` (uses the QR global default tolerance)
 /// - `nfullsweeps`: `1` (only used by Fit method)
 /// - `convergence_tol`: `None` (only used by Fit method)
 ///
@@ -97,15 +98,18 @@ use crate::treetn::TreeTN;
 ///
 /// ```
 /// use tensor4all_treetn::ApplyOptions;
+/// use tensor4all_core::SvdTruncationPolicy;
 ///
 /// // Default: Zipup with no truncation
 /// let opts = ApplyOptions::default();
 /// assert_eq!(opts.max_rank, None);
 ///
 /// // Zipup with rank and tolerance limits
-/// let opts = ApplyOptions::zipup().with_max_rank(50).with_rtol(1e-8);
+/// let opts = ApplyOptions::zipup()
+///     .with_max_rank(50)
+///     .with_svd_policy(SvdTruncationPolicy::new(1e-8));
 /// assert_eq!(opts.max_rank, Some(50));
-/// assert_eq!(opts.rtol, Some(1e-8));
+/// assert_eq!(opts.svd_policy, Some(SvdTruncationPolicy::new(1e-8)));
 ///
 /// // Fit method with sweep control
 /// let opts = ApplyOptions::fit().with_nfullsweeps(3).with_max_rank(20);
@@ -121,8 +125,10 @@ pub struct ApplyOptions {
     pub method: ContractionMethod,
     /// Maximum bond dimension for truncation.
     pub max_rank: Option<usize>,
-    /// Relative tolerance for truncation.
-    pub rtol: Option<f64>,
+    /// Explicit SVD truncation policy.
+    pub svd_policy: Option<SvdTruncationPolicy>,
+    /// QR-specific relative tolerance.
+    pub qr_rtol: Option<f64>,
     /// Number of full sweeps for Fit method.
     ///
     /// A full sweep visits each edge twice (forward and backward) using an Euler tour.
@@ -136,7 +142,8 @@ impl Default for ApplyOptions {
         Self {
             method: ContractionMethod::Zipup,
             max_rank: None,
-            rtol: None,
+            svd_policy: None,
+            qr_rtol: None,
             nfullsweeps: 1,
             convergence_tol: None,
         }
@@ -171,9 +178,15 @@ impl ApplyOptions {
         self
     }
 
-    /// Set relative tolerance.
-    pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.rtol = Some(rtol);
+    /// Set the SVD truncation policy.
+    pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
+        self.svd_policy = Some(policy);
+        self
+    }
+
+    /// Set the QR-specific truncation tolerance.
+    pub fn with_qr_rtol(mut self, rtol: f64) -> Self {
+        self.qr_rtol = Some(rtol);
         self
     }
 
@@ -252,7 +265,9 @@ impl ApplyOptions {
 /// let truncated = apply_linear_operator(
 ///     &operator,
 ///     &state,
-///     ApplyOptions::zipup().with_max_rank(4).with_rtol(1e-10),
+///     ApplyOptions::zipup()
+///         .with_max_rank(4)
+///         .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10)),
 /// )?;
 /// assert_eq!(truncated.node_count(), 1);
 /// # Ok(())
@@ -301,7 +316,8 @@ where
     let contraction_options = ContractionOptions {
         method: options.method,
         max_rank: options.max_rank,
-        rtol: options.rtol,
+        svd_policy: options.svd_policy,
+        qr_rtol: options.qr_rtol,
         nfullsweeps: options.nfullsweeps,
         convergence_tol: options.convergence_tol,
         ..Default::default()

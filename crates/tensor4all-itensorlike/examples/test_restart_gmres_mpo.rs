@@ -142,7 +142,9 @@ fn test_restart_gmres_mpo(n: usize, operator: &str) -> anyhow::Result<(bool, usi
     println!("b = A(x_true), norm: {:.6}", b_norm);
 
     // Truncation options
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-10).with_max_rank(30);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
+        .with_max_rank(30);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -210,7 +212,9 @@ fn test_restart_gmres_mpo_hard(n: usize) -> anyhow::Result<(bool, usize, f64)> {
     println!("b = A(x_true), norm: {:.6}", b_norm);
 
     // AGGRESSIVE truncation to make the problem harder
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-6).with_max_rank(5);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
+        .with_max_rank(5);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -218,7 +222,10 @@ fn test_restart_gmres_mpo_hard(n: usize) -> anyhow::Result<(bool, usize, f64)> {
 
     println!(
         "Truncation: rtol={:.0e}, max_rank={}",
-        truncate_opts.rtol().unwrap_or(0.0),
+        truncate_opts
+            .svd_policy()
+            .map(|policy| policy.threshold)
+            .unwrap_or(0.0),
         truncate_opts.max_rank().unwrap_or(0)
     );
 
@@ -290,7 +297,9 @@ fn test_restart_gmres_mpo_imaginary_diagonal(n: usize) -> anyhow::Result<(bool, 
     println!("b = A(x_true), norm: {:.6}", b_norm);
 
     // Aggressive truncation
-    let truncate_opts = TruncateOptions::svd().with_rtol(1e-6).with_max_rank(5);
+    let truncate_opts = TruncateOptions::svd()
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-6))
+        .with_max_rank(5);
     let truncate_fn = |x: &mut TensorTrain| -> anyhow::Result<()> {
         x.truncate(&truncate_opts)?;
         Ok(())
@@ -298,7 +307,10 @@ fn test_restart_gmres_mpo_imaginary_diagonal(n: usize) -> anyhow::Result<(bool, 
 
     println!(
         "Truncation: rtol={:.0e}, max_rank={}",
-        truncate_opts.rtol().unwrap_or(0.0),
+        truncate_opts
+            .svd_policy()
+            .map(|policy| policy.threshold)
+            .unwrap_or(0.0),
         truncate_opts.max_rank().unwrap_or(0)
     );
 
@@ -500,7 +512,7 @@ fn apply_operator_to_mpo(
 ) -> anyhow::Result<TensorTrain> {
     let options = ContractOptions::fit()
         .with_nhalfsweeps(4)
-        .with_rtol(1e-10)
+        .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-10))
         .with_max_rank(30);
 
     let result = op

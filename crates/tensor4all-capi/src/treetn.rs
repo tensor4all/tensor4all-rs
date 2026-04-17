@@ -1,8 +1,8 @@
 //! C API for the reduced TreeTN surface.
 
 use crate::types::{
-    t4a_canonical_form, t4a_contract_method, t4a_factorize_alg, t4a_index, t4a_tensor, t4a_treetn,
-    InternalIndex, InternalTreeTN,
+    t4a_canonical_form, t4a_contract_method, t4a_factorize_alg, t4a_index,
+    t4a_svd_truncation_policy, t4a_tensor, t4a_treetn, InternalIndex, InternalTreeTN,
 };
 use crate::{
     capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
@@ -12,12 +12,12 @@ use crate::{
 use num_complex::Complex64;
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike};
+use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, SvdTruncationPolicy};
 use tensor4all_treetn::treetn::contraction::{self, ContractionMethod, ContractionOptions};
 use tensor4all_treetn::{
-    apply_linear_operator, square_linsolve, ApplyOptions, CanonicalizationOptions, IndexMapping,
-    LinearOperator, LinsolveOptions, RestructureOptions, SiteIndexNetwork, SplitOptions,
-    SwapOptions, TruncationOptions,
+    apply_linear_operator, square_linsolve, ApplyOptions, CanonicalForm, CanonicalizationOptions,
+    IndexMapping, LinearOperator, LinsolveOptions, RestructureOptions, SiteIndexNetwork,
+    SplitOptions, SwapOptions, TruncationOptions,
 };
 
 /// Release a TreeTN handle.
@@ -41,36 +41,18 @@ pub extern "C" fn t4a_treetn_is_assigned(obj: *const t4a_treetn) -> i32 {
     is_assigned_opaque(obj)
 }
 
-#[derive(Clone, Copy, Debug)]
-enum Tol {
-    None,
-    Rtol(f64),
-    Cutoff(f64),
-}
-
 #[inline]
-fn select_tol(rtol: f64, cutoff: f64) -> Tol {
-    if cutoff > 0.0 {
-        Tol::Cutoff(cutoff)
-    } else if rtol > 0.0 {
-        Tol::Rtol(rtol)
+fn resolve_svd_policy(policy: *const t4a_svd_truncation_policy) -> Option<SvdTruncationPolicy> {
+    if policy.is_null() {
+        None
     } else {
-        Tol::None
+        Some(SvdTruncationPolicy::from(unsafe { *policy }))
     }
 }
 
 #[inline]
-fn cutoff_to_rtol(cutoff: f64) -> f64 {
-    cutoff.sqrt()
-}
-
-#[inline]
-fn resolve_rtol(rtol: f64, cutoff: f64) -> Option<f64> {
-    match select_tol(rtol, cutoff) {
-        Tol::Cutoff(c) => Some(cutoff_to_rtol(c)),
-        Tol::Rtol(r) => Some(r),
-        Tol::None => None,
-    }
+fn resolve_qr_rtol(qr_rtol: f64) -> Option<f64> {
+    (qr_rtol != 0.0).then_some(qr_rtol)
 }
 
 #[inline]
@@ -343,20 +325,18 @@ fn build_target_network(
 }
 
 fn build_split_options(
-    rtol: f64,
-    cutoff: f64,
+    policy: *const t4a_svd_truncation_policy,
     maxdim: usize,
-    form: t4a_canonical_form,
     final_sweep: libc::c_int,
 ) -> SplitOptions {
     let mut options = SplitOptions::new()
-        .with_form(form.into())
+        .with_form(CanonicalForm::Unitary)
         .with_final_sweep(final_sweep != 0);
     if maxdim > 0 {
         options = options.with_max_rank(maxdim);
     }
-    if let Some(rtol) = resolve_rtol(rtol, cutoff) {
-        options = options.with_rtol(rtol);
+    if let Some(policy) = resolve_svd_policy(policy) {
+        options = options.with_svd_policy(policy);
     }
     options
 }
@@ -369,22 +349,20 @@ fn build_swap_options(maxdim: usize, rtol: f64) -> SwapOptions {
 }
 
 fn build_final_truncation(
-    rtol: f64,
-    cutoff: f64,
+    policy: *const t4a_svd_truncation_policy,
     maxdim: usize,
-    form: t4a_canonical_form,
 ) -> Option<TruncationOptions> {
-    let resolved_rtol = resolve_rtol(rtol, cutoff);
-    if maxdim == 0 && resolved_rtol.is_none() {
+    let policy = resolve_svd_policy(policy);
+    if maxdim == 0 && policy.is_none() {
         return None;
     }
 
-    let mut options = TruncationOptions::new().with_form(form.into());
+    let mut options = TruncationOptions::new();
     if maxdim > 0 {
         options = options.with_max_rank(maxdim);
     }
-    if let Some(rtol) = resolved_rtol {
-        options = options.with_rtol(rtol);
+    if let Some(policy) = policy {
+        options = options.with_svd_policy(policy);
     }
     Some(options)
 }
@@ -1059,21 +1037,19 @@ pub extern "C" fn t4a_treetn_orthogonalize(
     })
 }
 
-/// Truncate the tree tensor network bond dimensions.
+/// Truncate the tree tensor network bond dimensions using SVD-based truncation.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_treetn_truncate(
     treetn: *mut t4a_treetn,
-    rtol: libc::c_double,
-    cutoff: libc::c_double,
+    policy: *const t4a_svd_truncation_policy,
     maxdim: libc::size_t,
-    form: t4a_canonical_form,
 ) -> StatusCode {
     run_status(|| {
         let tn = require_tree_mut(treetn)?;
 
-        let mut options = TruncationOptions::new().with_form(form.into());
-        if let Some(rtol) = resolve_rtol(rtol, cutoff) {
-            options = options.with_rtol(rtol);
+        let mut options = TruncationOptions::new();
+        if let Some(policy) = resolve_svd_policy(policy) {
+            options = options.with_svd_policy(policy);
         }
         if maxdim > 0 {
             options = options.with_max_rank(maxdim);
@@ -1134,10 +1110,8 @@ pub extern "C" fn t4a_treetn_split_to(
     target_edge_sources: *const libc::size_t,
     target_edge_targets: *const libc::size_t,
     n_target_edges: libc::size_t,
-    rtol: libc::c_double,
-    cutoff: libc::c_double,
+    policy: *const t4a_svd_truncation_policy,
     maxdim: libc::size_t,
-    form: t4a_canonical_form,
     final_sweep: libc::c_int,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
@@ -1153,7 +1127,7 @@ pub extern "C" fn t4a_treetn_split_to(
             n_target_edges,
             "target",
         )?;
-        let options = build_split_options(rtol, cutoff, maxdim, form, final_sweep);
+        let options = build_split_options(policy, maxdim, final_sweep);
         let result = tn
             .inner()
             .split_to(&target, &options)
@@ -1201,17 +1175,13 @@ pub extern "C" fn t4a_treetn_restructure_to(
     target_edge_sources: *const libc::size_t,
     target_edge_targets: *const libc::size_t,
     n_target_edges: libc::size_t,
-    split_rtol: libc::c_double,
-    split_cutoff: libc::c_double,
+    split_policy: *const t4a_svd_truncation_policy,
     split_maxdim: libc::size_t,
-    split_form: t4a_canonical_form,
     split_final_sweep: libc::c_int,
     swap_maxdim: libc::size_t,
     swap_rtol: libc::c_double,
-    final_rtol: libc::c_double,
-    final_cutoff: libc::c_double,
+    final_policy: *const t4a_svd_truncation_policy,
     final_maxdim: libc::size_t,
-    final_form: t4a_canonical_form,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
     run_catching(out, || {
@@ -1228,16 +1198,12 @@ pub extern "C" fn t4a_treetn_restructure_to(
         )?;
         let mut options = RestructureOptions::new()
             .with_split(build_split_options(
-                split_rtol,
-                split_cutoff,
+                split_policy,
                 split_maxdim,
-                split_form,
                 split_final_sweep,
             ))
             .with_swap(build_swap_options(swap_maxdim, swap_rtol));
-        if let Some(final_truncation) =
-            build_final_truncation(final_rtol, final_cutoff, final_maxdim, final_form)
-        {
+        if let Some(final_truncation) = build_final_truncation(final_policy, final_maxdim) {
             options = options.with_final_truncation(final_truncation);
         }
         let result = tn
@@ -1390,8 +1356,7 @@ pub extern "C" fn t4a_treetn_scale(
 pub extern "C" fn t4a_treetn_add(
     a: *const t4a_treetn,
     b: *const t4a_treetn,
-    rtol: libc::c_double,
-    cutoff: libc::c_double,
+    policy: *const t4a_svd_truncation_policy,
     maxdim: libc::size_t,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
@@ -1405,14 +1370,14 @@ pub extern "C" fn t4a_treetn_add(
             .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
 
         let mut options = TruncationOptions::new();
-        if let Some(rtol) = resolve_rtol(rtol, cutoff) {
-            options = options.with_rtol(rtol);
+        if let Some(policy) = resolve_svd_policy(policy) {
+            options = options.with_svd_policy(policy);
         }
         if maxdim > 0 {
             options = options.with_max_rank(maxdim);
         }
 
-        if options.rtol().is_some() || options.max_rank().is_some() {
+        if options.svd_policy().is_some() || options.max_rank().is_some() {
             let center = result.node_names().into_iter().min().ok_or_else(|| {
                 capi_error(T4A_INVALID_ARGUMENT, "cannot truncate an empty TreeTN")
             })?;
@@ -1434,12 +1399,12 @@ pub extern "C" fn t4a_treetn_contract(
     a: *const t4a_treetn,
     b: *const t4a_treetn,
     method: t4a_contract_method,
-    rtol: libc::c_double,
-    cutoff: libc::c_double,
+    policy: *const t4a_svd_truncation_policy,
     maxdim: libc::size_t,
     nfullsweeps: libc::size_t,
     convergence_tol: libc::c_double,
     factorize_alg: t4a_factorize_alg,
+    qr_rtol: libc::c_double,
     out: *mut *mut t4a_treetn,
 ) -> StatusCode {
     let tn_a = match require_tree(a) {
@@ -1468,8 +1433,43 @@ pub extern "C" fn t4a_treetn_contract(
         let mut options = ContractionOptions::new(rust_method)
             .with_nfullsweeps(fit_nfullsweeps)
             .with_factorize_alg(factorize_alg.into());
-        if let Some(rtol) = resolve_rtol(rtol, cutoff) {
-            options = options.with_rtol(rtol);
+        match factorize_alg {
+            t4a_factorize_alg::SVD => {
+                if qr_rtol != 0.0 {
+                    return Err(capi_error(
+                        T4A_INVALID_ARGUMENT,
+                        "qr_rtol is only supported when factorize_alg=QR",
+                    ));
+                }
+                if let Some(policy) = resolve_svd_policy(policy) {
+                    options = options.with_svd_policy(policy);
+                }
+            }
+            t4a_factorize_alg::QR => {
+                if !policy.is_null() {
+                    return Err(capi_error(
+                        T4A_INVALID_ARGUMENT,
+                        "policy is only supported when factorize_alg=SVD",
+                    ));
+                }
+                if let Some(rtol) = resolve_qr_rtol(qr_rtol) {
+                    options = options.with_qr_rtol(rtol);
+                }
+            }
+            t4a_factorize_alg::LU | t4a_factorize_alg::CI => {
+                if !policy.is_null() {
+                    return Err(capi_error(
+                        T4A_INVALID_ARGUMENT,
+                        "policy is only supported when factorize_alg=SVD",
+                    ));
+                }
+                if qr_rtol != 0.0 {
+                    return Err(capi_error(
+                        T4A_INVALID_ARGUMENT,
+                        "qr_rtol is only supported when factorize_alg=QR",
+                    ));
+                }
+            }
         }
         if maxdim > 0 {
             options = options.with_max_rank(maxdim);
@@ -1505,8 +1505,7 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
     internal_output_indices: *const *const t4a_index,
     true_output_indices: *const *const t4a_index,
     method: t4a_contract_method,
-    rtol: libc::c_double,
-    cutoff: libc::c_double,
+    policy: *const t4a_svd_truncation_policy,
     maxdim: libc::size_t,
     nfullsweeps: libc::size_t,
     convergence_tol: libc::c_double,
@@ -1568,7 +1567,8 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
             ApplyOptions {
                 method: method.into(),
                 max_rank: (maxdim > 0).then_some(maxdim),
-                rtol: resolve_rtol(rtol, cutoff),
+                svd_policy: resolve_svd_policy(policy),
+                qr_rtol: None,
                 nfullsweeps: fit_nfullsweeps,
                 convergence_tol: resolve_convergence_tol(convergence_tol),
             },
@@ -1604,10 +1604,8 @@ pub extern "C" fn t4a_treetn_linsolve(
     internal_input_indices: *const *const t4a_index,
     true_output_indices: *const *const t4a_index,
     internal_output_indices: *const *const t4a_index,
-    rtol: libc::c_double,
-    cutoff: libc::c_double,
+    policy: *const t4a_svd_truncation_policy,
     maxdim: libc::size_t,
-    form: t4a_canonical_form,
     nfullsweeps: libc::size_t,
     krylov_tol: libc::c_double,
     krylov_maxiter: libc::size_t,
@@ -1685,13 +1683,13 @@ pub extern "C" fn t4a_treetn_linsolve(
         )?;
 
         let mut options = LinsolveOptions::new(nfullsweeps)
-            .with_truncation(TruncationOptions::new().with_form(form.into()))
+            .with_truncation(TruncationOptions::new())
             .with_krylov_tol(krylov_tol)
             .with_krylov_maxiter(krylov_maxiter)
             .with_krylov_dim(krylov_dim)
             .with_coefficients(a0, a1);
-        if let Some(rtol) = resolve_rtol(rtol, cutoff) {
-            options = options.with_rtol(rtol);
+        if let Some(policy) = resolve_svd_policy(policy) {
+            options = options.with_svd_policy(policy);
         }
         if maxdim > 0 {
             options = options.with_max_rank(maxdim);

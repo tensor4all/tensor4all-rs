@@ -1,34 +1,30 @@
 //! Configuration options for tensor train operations.
 
 use std::ops::Range;
-use tensor4all_core::truncation::{HasTruncationParams, TruncationParams};
+
+use tensor4all_core::SvdTruncationPolicy;
 
 use crate::error::{Result, TensorTrainError};
 
-// Re-export CanonicalForm from treetn for convenience
+// Re-export CanonicalForm from treetn for convenience.
 pub use tensor4all_treetn::algorithm::CanonicalForm;
 
-// Re-export DecompositionAlg for convenience
-pub use tensor4all_core::truncation::DecompositionAlg;
-
-pub(crate) fn validate_truncation_params(p: &TruncationParams) -> Result<()> {
-    if let Some(cutoff) = p.cutoff {
-        if !cutoff.is_finite() || cutoff < 0.0 {
+pub(crate) fn validate_svd_truncation_options(
+    max_rank: Option<usize>,
+    svd_policy: Option<SvdTruncationPolicy>,
+) -> Result<()> {
+    if let Some(policy) = svd_policy {
+        if !policy.threshold.is_finite() || policy.threshold < 0.0 {
             return Err(TensorTrainError::OperationError {
-                message: format!("cutoff must be finite and >= 0, got {}", cutoff),
+                message: format!(
+                    "svd_policy.threshold must be finite and >= 0, got {}",
+                    policy.threshold
+                ),
             });
         }
     }
 
-    if let Some(rtol) = p.rtol {
-        if !rtol.is_finite() || rtol < 0.0 {
-            return Err(TensorTrainError::OperationError {
-                message: format!("rtol must be finite and >= 0, got {}", rtol),
-            });
-        }
-    }
-
-    if let Some(max_rank) = p.max_rank {
+    if let Some(max_rank) = max_rank {
         if max_rank == 0 {
             return Err(TensorTrainError::OperationError {
                 message: "max_rank/maxdim must be >= 1".to_string(),
@@ -39,170 +35,75 @@ pub(crate) fn validate_truncation_params(p: &TruncationParams) -> Result<()> {
     Ok(())
 }
 
-/// Truncation algorithm.
-///
-/// This specifies which algorithm to use for truncating bond dimensions.
-/// This is an alias for [`DecompositionAlg`] for backwards compatibility.
-pub type TruncateAlg = DecompositionAlg;
-
 /// Options for tensor train truncation.
 ///
-/// Inspired by ITensorMPS.jl's truncation interface, but using tensor4all-rs
-/// naming conventions (`rtol` instead of `cutoff`, `max_rank` instead of `maxdim`).
+/// Truncation is explicitly SVD-based. Canonicalization remains the API for
+/// LU/CI-style forms; truncate itself only accepts SVD truncation controls.
 ///
-/// # Difference from ITensorMPS.jl
-///
-/// This crate uses **relative tolerance** (`rtol`) semantics:
-/// - Singular values are truncated when `σ_i / σ_max < rtol`
-///
-/// ITensorMPS.jl uses **cutoff** semantics:
-/// - Singular values are truncated when `σ_i² < cutoff`
-///
-/// **Conversion**: For normalized tensors (where `σ_max = 1`):
-/// - ITensorMPS.jl's `cutoff` = tensor4all-rs's `rtol²`
-/// - To match ITensorMPS.jl behavior: use `rtol = sqrt(cutoff)`
-/// - Example: ITensorMPS.jl `cutoff=1e-10` ↔ tensor4all-rs `rtol=1e-5`
-///
-/// # Example
+/// # Examples
 ///
 /// ```
+/// use tensor4all_core::SvdTruncationPolicy;
 /// use tensor4all_itensorlike::TruncateOptions;
 ///
-/// // SVD with relative tolerance
-/// let opts = TruncateOptions::svd().with_rtol(1e-10);
+/// let opts = TruncateOptions::svd()
+///     .with_svd_policy(SvdTruncationPolicy::new(1e-10))
+///     .with_max_rank(20)
+///     .with_site_range(0..4);
 ///
-/// // LU with max rank
-/// let opts = TruncateOptions::lu().with_max_rank(50);
-///
-/// // CI with both constraints
-/// let opts = TruncateOptions::ci()
-///     .with_rtol(1e-8)
-///     .with_max_rank(100);
+/// assert_eq!(opts.svd_policy(), Some(SvdTruncationPolicy::new(1e-10)));
+/// assert_eq!(opts.max_rank(), Some(20));
+/// assert_eq!(opts.site_range(), Some(0..4));
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TruncateOptions {
-    /// Algorithm to use for truncation.
-    alg: TruncateAlg,
-
-    /// Truncation parameters (rtol, max_rank).
-    truncation: TruncationParams,
-
-    /// Range of sites to truncate (0-indexed, exclusive end).
-    ///
-    /// If `None`, all bonds are truncated.
+    max_rank: Option<usize>,
+    svd_policy: Option<SvdTruncationPolicy>,
     site_range: Option<Range<usize>>,
-}
-
-impl Default for TruncateOptions {
-    fn default() -> Self {
-        Self {
-            alg: TruncateAlg::SVD,
-            truncation: TruncationParams::default(),
-            site_range: None,
-        }
-    }
-}
-
-impl HasTruncationParams for TruncateOptions {
-    fn truncation_params(&self) -> &TruncationParams {
-        &self.truncation
-    }
-
-    fn truncation_params_mut(&mut self) -> &mut TruncationParams {
-        &mut self.truncation
-    }
 }
 
 impl TruncateOptions {
     /// Create options for SVD-based truncation.
     pub fn svd() -> Self {
-        Self {
-            alg: TruncateAlg::SVD,
-            ..Default::default()
-        }
+        Self::default()
     }
 
-    /// Create options for LU-based truncation.
-    pub fn lu() -> Self {
-        Self {
-            alg: TruncateAlg::LU,
-            ..Default::default()
-        }
-    }
-
-    /// Create options for CI-based truncation.
-    pub fn ci() -> Self {
-        Self {
-            alg: TruncateAlg::CI,
-            ..Default::default()
-        }
-    }
-
-    /// Set the relative tolerance for truncation.
-    ///
-    /// Clears any previously set cutoff origin.
-    pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.truncation.rtol = Some(rtol);
-        self.truncation.cutoff = None;
+    /// Set the explicit SVD truncation policy.
+    pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
+        self.svd_policy = Some(policy);
         self
     }
 
-    /// Set the maximum rank (bond dimension).
+    /// Set the maximum retained bond dimension.
     pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.truncation.max_rank = Some(max_rank);
-        self
-    }
-
-    /// Set cutoff (ITensorMPS.jl convention). Converted to `rtol = √cutoff`.
-    pub fn with_cutoff(mut self, cutoff: f64) -> Self {
-        self.truncation.cutoff = Some(cutoff);
-        self.truncation.rtol = Some(cutoff.sqrt());
-        self
-    }
-
-    /// Set maxdim (alias for [`with_max_rank`](Self::with_max_rank)).
-    pub fn with_maxdim(mut self, maxdim: usize) -> Self {
-        self.truncation.max_rank = Some(maxdim);
+        self.max_rank = Some(max_rank);
         self
     }
 
     /// Set the site range for truncation.
     ///
     /// The range is 0-indexed with exclusive end.
-    /// For example, `0..5` truncates bonds between sites 0-1, 1-2, 2-3, 3-4.
     pub fn with_site_range(mut self, range: Range<usize>) -> Self {
         self.site_range = Some(range);
         self
     }
 
-    /// Get the truncation algorithm.
+    /// Get the SVD truncation policy override.
     #[inline]
-    pub fn alg(&self) -> TruncateAlg {
-        self.alg
+    pub fn svd_policy(&self) -> Option<SvdTruncationPolicy> {
+        self.svd_policy
     }
 
-    /// Get truncation parameters.
-    ///
-    /// This returns a copy because [`TruncationParams`] is cheap and `Copy`.
+    /// Get the maximum retained bond dimension.
     #[inline]
-    pub fn truncation(&self) -> TruncationParams {
-        self.truncation
+    pub fn max_rank(&self) -> Option<usize> {
+        self.max_rank
     }
 
     /// Get the site range for truncation.
     #[inline]
     pub fn site_range(&self) -> Option<Range<usize>> {
         self.site_range.clone()
-    }
-
-    /// Get rtol (for backwards compatibility).
-    pub fn rtol(&self) -> Option<f64> {
-        self.truncation.rtol
-    }
-
-    /// Get max_rank (for backwards compatibility).
-    pub fn max_rank(&self) -> Option<usize> {
-        self.truncation.max_rank
     }
 }
 
@@ -221,29 +122,26 @@ pub enum ContractMethod {
 
 /// Options for tensor train contraction.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```
+/// use tensor4all_core::SvdTruncationPolicy;
 /// use tensor4all_itensorlike::ContractOptions;
 ///
-/// // Zipup with max rank
-/// let opts = ContractOptions::zipup().with_max_rank(50);
-///
-/// // Fit with relative tolerance
 /// let opts = ContractOptions::fit()
-///     .with_rtol(1e-10)
-///     .with_nhalfsweeps(10);  // 10 half-sweeps = 5 full sweeps
+///     .with_svd_policy(SvdTruncationPolicy::new(1e-8))
+///     .with_max_rank(50)
+///     .with_nsweeps(3);
+///
+/// assert_eq!(opts.max_rank(), Some(50));
+/// assert_eq!(opts.svd_policy(), Some(SvdTruncationPolicy::new(1e-8)));
+/// assert_eq!(opts.nhalfsweeps(), 6);
 /// ```
 #[derive(Debug, Clone)]
 pub struct ContractOptions {
-    /// Contraction method to use.
     method: ContractMethod,
-    /// Truncation parameters (rtol, max_rank).
-    truncation: TruncationParams,
-    /// Number of half-sweeps for Fit method.
-    ///
-    /// A half-sweep visits edges in one direction only (forward or backward).
-    /// This must be a multiple of 2 (each full sweep consists of 2 half-sweeps).
+    max_rank: Option<usize>,
+    svd_policy: Option<SvdTruncationPolicy>,
     nhalfsweeps: usize,
 }
 
@@ -251,19 +149,10 @@ impl Default for ContractOptions {
     fn default() -> Self {
         Self {
             method: ContractMethod::default(),
-            truncation: TruncationParams::default(),
+            max_rank: None,
+            svd_policy: None,
             nhalfsweeps: 2,
         }
-    }
-}
-
-impl HasTruncationParams for ContractOptions {
-    fn truncation_params(&self) -> &TruncationParams {
-        &self.truncation
-    }
-
-    fn truncation_params_mut(&mut self) -> &mut TruncationParams {
-        &mut self.truncation
     }
 }
 
@@ -285,9 +174,6 @@ impl ContractOptions {
     }
 
     /// Create options for naive contraction.
-    ///
-    /// Note: Naive contraction is O(exp(n)) in memory and is primarily
-    /// useful for debugging and testing.
     pub fn naive() -> Self {
         Self {
             method: ContractMethod::Naive,
@@ -295,47 +181,27 @@ impl ContractOptions {
         }
     }
 
-    /// Set maximum bond dimension.
+    /// Set the maximum retained bond dimension.
     pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.truncation.max_rank = Some(max_rank);
+        self.max_rank = Some(max_rank);
         self
     }
 
-    /// Set relative tolerance.
-    ///
-    /// Clears any previously set cutoff origin.
-    pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.truncation.rtol = Some(rtol);
-        self.truncation.cutoff = None;
+    /// Set the explicit SVD truncation policy.
+    pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
+        self.svd_policy = Some(policy);
         self
     }
 
-    /// Set cutoff (ITensorMPS.jl convention). Converted to `rtol = √cutoff`.
-    pub fn with_cutoff(mut self, cutoff: f64) -> Self {
-        self.truncation.cutoff = Some(cutoff);
-        self.truncation.rtol = Some(cutoff.sqrt());
-        self
-    }
-
-    /// Set maxdim (alias for [`with_max_rank`](Self::with_max_rank)).
-    pub fn with_maxdim(mut self, maxdim: usize) -> Self {
-        self.truncation.max_rank = Some(maxdim);
-        self
-    }
-
-    /// Set number of half-sweeps for Fit method.
-    ///
-    /// # Arguments
-    /// * `nhalfsweeps` - Number of half-sweeps (must be a multiple of 2)
+    /// Set number of half-sweeps for fit contraction.
     pub fn with_nhalfsweeps(mut self, nhalfsweeps: usize) -> Self {
         self.nhalfsweeps = nhalfsweeps;
         self
     }
 
-    /// Set number of full sweeps (ITensorMPS.jl convention).
+    /// Set number of full sweeps.
     ///
-    /// A full sweep = 2 half-sweeps (forward + backward).
-    /// Equivalent to `with_nhalfsweeps(nsweeps * 2)`.
+    /// A full sweep is two half-sweeps.
     pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
         self.nhalfsweeps = nsweeps * 2;
         self
@@ -347,20 +213,22 @@ impl ContractOptions {
         self.method
     }
 
+    /// Get the maximum retained bond dimension.
+    #[inline]
+    pub fn max_rank(&self) -> Option<usize> {
+        self.max_rank
+    }
+
+    /// Get the SVD truncation policy override.
+    #[inline]
+    pub fn svd_policy(&self) -> Option<SvdTruncationPolicy> {
+        self.svd_policy
+    }
+
     /// Get number of half-sweeps.
     #[inline]
     pub fn nhalfsweeps(&self) -> usize {
         self.nhalfsweeps
-    }
-
-    /// Get rtol (for backwards compatibility).
-    pub fn rtol(&self) -> Option<f64> {
-        self.truncation.rtol
-    }
-
-    /// Get max_rank (for backwards compatibility).
-    pub fn max_rank(&self) -> Option<usize> {
-        self.truncation.max_rank
     }
 }
 
@@ -368,50 +236,41 @@ impl ContractOptions {
 ///
 /// Solves `(a₀ + a₁ * A) * x = b` using DMRG-like sweeps with local GMRES.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```
+/// use tensor4all_core::SvdTruncationPolicy;
 /// use tensor4all_itensorlike::LinsolveOptions;
 ///
-/// let opts = LinsolveOptions::default()
-///     .with_nsweeps(10)
-///     .with_cutoff(1e-10)
-///     .with_maxdim(100)
+/// let opts = LinsolveOptions::new(5)
+///     .with_svd_policy(SvdTruncationPolicy::new(1e-10))
+///     .with_max_rank(64)
 ///     .with_krylov_tol(1e-8)
 ///     .with_coefficients(1.0, -1.0);
+///
+/// assert_eq!(opts.max_rank(), Some(64));
+/// assert_eq!(opts.svd_policy(), Some(SvdTruncationPolicy::new(1e-10)));
+/// assert_eq!(opts.nhalfsweeps(), 10);
 /// ```
 #[derive(Debug, Clone)]
 pub struct LinsolveOptions {
-    /// Number of half-sweeps (must be a multiple of 2).
-    ///
-    /// Default: 10 (= 5 full sweeps).
     nhalfsweeps: usize,
-    /// Truncation parameters (rtol/cutoff, max_rank/maxdim).
-    truncation: TruncationParams,
-    /// Algorithm for truncation.
-    alg: TruncateAlg,
-    /// GMRES tolerance.
+    max_rank: Option<usize>,
+    svd_policy: Option<SvdTruncationPolicy>,
     krylov_tol: f64,
-    /// Maximum GMRES iterations per local solve.
     krylov_maxiter: usize,
-    /// Krylov subspace dimension (restart parameter).
     krylov_dim: usize,
-    /// Coefficient a₀ in (a₀ + a₁ * A) * x = b.
     a0: f64,
-    /// Coefficient a₁ in (a₀ + a₁ * A) * x = b.
     a1: f64,
-    /// Convergence tolerance for early termination.
-    ///
-    /// If `Some(tol)`, stop when relative residual < tol.
     convergence_tol: Option<f64>,
 }
 
 impl Default for LinsolveOptions {
     fn default() -> Self {
         Self {
-            nhalfsweeps: 10, // 5 full sweeps
-            truncation: TruncationParams::default(),
-            alg: TruncateAlg::SVD,
+            nhalfsweeps: 10,
+            max_rank: None,
+            svd_policy: None,
             krylov_tol: 1e-10,
             krylov_maxiter: 100,
             krylov_dim: 30,
@@ -422,18 +281,8 @@ impl Default for LinsolveOptions {
     }
 }
 
-impl HasTruncationParams for LinsolveOptions {
-    fn truncation_params(&self) -> &TruncationParams {
-        &self.truncation
-    }
-
-    fn truncation_params_mut(&mut self) -> &mut TruncationParams {
-        &mut self.truncation
-    }
-}
-
 impl LinsolveOptions {
-    /// Create options with specified number of full sweeps.
+    /// Create options with the specified number of full sweeps.
     pub fn new(nsweeps: usize) -> Self {
         Self {
             nhalfsweeps: nsweeps * 2,
@@ -441,37 +290,15 @@ impl LinsolveOptions {
         }
     }
 
-    /// Set the relative tolerance for truncation.
-    ///
-    /// Clears any previously set cutoff origin.
-    pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.truncation.rtol = Some(rtol);
-        self.truncation.cutoff = None;
+    /// Set the explicit SVD truncation policy.
+    pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
+        self.svd_policy = Some(policy);
         self
     }
 
-    /// Set the maximum rank (bond dimension).
+    /// Set the maximum retained bond dimension.
     pub fn with_max_rank(mut self, max_rank: usize) -> Self {
-        self.truncation.max_rank = Some(max_rank);
-        self
-    }
-
-    /// Set cutoff (ITensorMPS.jl convention). Converted to `rtol = √cutoff`.
-    pub fn with_cutoff(mut self, cutoff: f64) -> Self {
-        self.truncation.cutoff = Some(cutoff);
-        self.truncation.rtol = Some(cutoff.sqrt());
-        self
-    }
-
-    /// Set maxdim (alias for [`with_max_rank`](Self::with_max_rank)).
-    pub fn with_maxdim(mut self, maxdim: usize) -> Self {
-        self.truncation.max_rank = Some(maxdim);
-        self
-    }
-
-    /// Set the truncation algorithm.
-    pub fn with_alg(mut self, alg: TruncateAlg) -> Self {
-        self.alg = alg;
+        self.max_rank = Some(max_rank);
         self
     }
 
@@ -481,10 +308,7 @@ impl LinsolveOptions {
         self
     }
 
-    /// Set number of full sweeps (ITensorMPS.jl convention).
-    ///
-    /// A full sweep = 2 half-sweeps (forward + backward).
-    /// Equivalent to `with_nhalfsweeps(nsweeps * 2)`.
+    /// Set number of full sweeps.
     pub fn with_nsweeps(mut self, nsweeps: usize) -> Self {
         self.nhalfsweeps = nsweeps * 2;
         self
@@ -508,7 +332,7 @@ impl LinsolveOptions {
         self
     }
 
-    /// Set coefficients a₀ and a₁ in (a₀ + a₁ * A) * x = b.
+    /// Set coefficients `a₀` and `a₁` in `(a₀ + a₁ * A) * x = b`.
     pub fn with_coefficients(mut self, a0: f64, a1: f64) -> Self {
         self.a0 = a0;
         self.a1 = a1;
@@ -521,26 +345,22 @@ impl LinsolveOptions {
         self
     }
 
-    /// Get rtol (for convenience).
-    pub fn rtol(&self) -> Option<f64> {
-        self.truncation.rtol
+    /// Get the maximum retained bond dimension.
+    #[inline]
+    pub fn max_rank(&self) -> Option<usize> {
+        self.max_rank
     }
 
-    /// Get max_rank (for convenience).
-    pub fn max_rank(&self) -> Option<usize> {
-        self.truncation.max_rank
+    /// Get the SVD truncation policy override.
+    #[inline]
+    pub fn svd_policy(&self) -> Option<SvdTruncationPolicy> {
+        self.svd_policy
     }
 
     /// Get number of half-sweeps.
     #[inline]
     pub fn nhalfsweeps(&self) -> usize {
         self.nhalfsweeps
-    }
-
-    /// Get truncation algorithm.
-    #[inline]
-    pub fn alg(&self) -> TruncateAlg {
-        self.alg
     }
 
     /// Get GMRES tolerance.
@@ -561,7 +381,7 @@ impl LinsolveOptions {
         self.krylov_dim
     }
 
-    /// Get coefficients (a0, a1).
+    /// Get coefficients `(a0, a1)`.
     #[inline]
     pub fn coefficients(&self) -> (f64, f64) {
         (self.a0, self.a1)

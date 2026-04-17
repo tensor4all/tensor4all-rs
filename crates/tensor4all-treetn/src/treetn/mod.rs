@@ -1583,7 +1583,8 @@ where
             swap_factorize_options = swap_factorize_options.with_max_rank(mr);
         }
         if let Some(rtol) = options.rtol {
-            swap_factorize_options = swap_factorize_options.with_rtol(rtol);
+            swap_factorize_options = swap_factorize_options
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol));
         }
         let transport_factorize_options = FactorizeOptions::svd().with_canonical(Canonical::Left);
 

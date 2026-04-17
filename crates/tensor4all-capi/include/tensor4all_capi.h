@@ -60,6 +60,119 @@ typedef enum t4a_scalar_kind {
 } t4a_scalar_kind;
 
 /**
+ * Threshold scaling used by the C API SVD truncation policy.
+ *
+ * Related types:
+ * - [`t4a_singular_value_measure`] selects whether the threshold is applied to
+ *   singular values or squared singular values.
+ * - [`t4a_truncation_rule`] selects whether the threshold is checked per value
+ *   or against the discarded suffix sum.
+ * - [`t4a_svd_truncation_policy`] combines all three knobs with the numeric
+ *   threshold.
+ *
+ * # Examples
+ *
+ * ```
+ * use tensor4all_capi::t4a_threshold_scale;
+ * use tensor4all_core::ThresholdScale;
+ *
+ * assert_eq!(
+ *     ThresholdScale::from(t4a_threshold_scale::Relative),
+ *     ThresholdScale::Relative
+ * );
+ * assert_eq!(
+ *     ThresholdScale::from(t4a_threshold_scale::Absolute),
+ *     ThresholdScale::Absolute
+ * );
+ * ```
+ */
+typedef enum t4a_threshold_scale {
+  /**
+   * Compare the threshold to a singular-value-derived reference scale.
+   */
+  T4A_THRESHOLD_SCALE_RELATIVE = 0,
+  /**
+   * Compare the threshold directly to the measured singular-value quantity.
+   */
+  T4A_THRESHOLD_SCALE_ABSOLUTE = 1,
+} t4a_threshold_scale;
+
+/**
+ * Singular-value quantity used by the C API SVD truncation policy.
+ *
+ * Related types:
+ * - [`t4a_threshold_scale`] selects whether the threshold is relative or
+ *   absolute.
+ * - [`t4a_truncation_rule`] selects whether truncation is per value or based
+ *   on the discarded tail sum.
+ * - [`t4a_svd_truncation_policy`] stores the full C-facing SVD policy.
+ *
+ * # Examples
+ *
+ * ```
+ * use tensor4all_capi::t4a_singular_value_measure;
+ * use tensor4all_core::SingularValueMeasure;
+ *
+ * assert_eq!(
+ *     SingularValueMeasure::from(t4a_singular_value_measure::Value),
+ *     SingularValueMeasure::Value
+ * );
+ * assert_eq!(
+ *     SingularValueMeasure::from(t4a_singular_value_measure::SquaredValue),
+ *     SingularValueMeasure::SquaredValue
+ * );
+ * ```
+ */
+typedef enum t4a_singular_value_measure {
+  /**
+   * Measure singular values directly.
+   */
+  T4A_SINGULAR_VALUE_MEASURE_VALUE = 0,
+  /**
+   * Measure squared singular values.
+   */
+  T4A_SINGULAR_VALUE_MEASURE_SQUARED_VALUE = 1,
+} t4a_singular_value_measure;
+
+/**
+ * Rank-selection rule used by the C API SVD truncation policy.
+ *
+ * Related types:
+ * - [`t4a_threshold_scale`] sets whether the threshold is relative or
+ *   absolute.
+ * - [`t4a_singular_value_measure`] sets whether values or squared values are
+ *   measured.
+ * - [`t4a_svd_truncation_policy`] combines the rule with the other SVD
+ *   truncation knobs.
+ *
+ * # Examples
+ *
+ * ```
+ * use tensor4all_capi::t4a_truncation_rule;
+ * use tensor4all_core::TruncationRule;
+ *
+ * assert_eq!(
+ *     TruncationRule::from(t4a_truncation_rule::PerValue),
+ *     TruncationRule::PerValue
+ * );
+ * assert_eq!(
+ *     TruncationRule::from(t4a_truncation_rule::DiscardedTailSum),
+ *     TruncationRule::DiscardedTailSum
+ * );
+ * ```
+ */
+typedef enum t4a_truncation_rule {
+  /**
+   * Apply the threshold independently to each singular value.
+   */
+  T4A_TRUNCATION_RULE_PER_VALUE = 0,
+  /**
+   * Apply the threshold to the cumulative discarded tail.
+   */
+  T4A_TRUNCATION_RULE_DISCARDED_TAIL_SUM = 1,
+} t4a_truncation_rule;
+
+/**
  * TreeTN contraction method exposed through the C API.
  */
 typedef enum t4a_contract_method {
@@ -100,7 +213,7 @@ typedef enum t4a_factorize_alg {
 } t4a_factorize_alg;
 
 /**
- * Canonical form used for orthogonalization/truncation.
+ * Canonical form used for orthogonalization and canonicalization.
  */
 typedef enum t4a_canonical_form {
   /**
@@ -149,6 +262,62 @@ typedef struct t4a_treetn {
 typedef struct t4a_tensor {
   const void *_private;
 } t4a_tensor;
+
+/**
+ * Explicit SVD truncation policy exposed through the C API.
+ *
+ * This is the ABI-facing mirror of [`tensor4all_core::SvdTruncationPolicy`].
+ * Pass it to SVD-based C API entry points to choose the threshold value, the
+ * threshold scale, whether singular values are squared first, and whether the
+ * truncation rule is per value or tail-sum based.
+ *
+ * Related types:
+ * - [`t4a_threshold_scale`] controls relative vs absolute thresholding.
+ * - [`t4a_singular_value_measure`] controls value vs squared-value
+ *   measurement.
+ * - [`t4a_truncation_rule`] controls per-value vs discarded-tail-sum
+ *   truncation.
+ *
+ * # Examples
+ *
+ * ```
+ * use tensor4all_capi::{
+ *     t4a_singular_value_measure, t4a_svd_truncation_policy, t4a_threshold_scale,
+ *     t4a_truncation_rule,
+ * };
+ * use tensor4all_core::{SingularValueMeasure, SvdTruncationPolicy, ThresholdScale, TruncationRule};
+ *
+ * let ffi_policy = t4a_svd_truncation_policy {
+ *     threshold: 1e-8,
+ *     scale: t4a_threshold_scale::Absolute,
+ *     measure: t4a_singular_value_measure::SquaredValue,
+ *     rule: t4a_truncation_rule::DiscardedTailSum,
+ * };
+ * let core_policy = SvdTruncationPolicy::from(ffi_policy);
+ * assert_eq!(core_policy.threshold, 1e-8);
+ * assert_eq!(core_policy.scale, ThresholdScale::Absolute);
+ * assert_eq!(core_policy.measure, SingularValueMeasure::SquaredValue);
+ * assert_eq!(core_policy.rule, TruncationRule::DiscardedTailSum);
+ * ```
+ */
+typedef struct t4a_svd_truncation_policy {
+  /**
+   * Threshold value used by the selected scale/rule combination.
+   */
+  double threshold;
+  /**
+   * Relative or absolute threshold interpretation.
+   */
+  enum t4a_threshold_scale scale;
+  /**
+   * Singular-value quantity used for thresholding.
+   */
+  enum t4a_singular_value_measure measure;
+  /**
+   * Rank-selection rule.
+   */
+  enum t4a_truncation_rule rule;
+} t4a_svd_truncation_policy;
 
 /**
  * The provided output buffer is too small for the result.
@@ -503,8 +672,7 @@ StatusCode t4a_tensor_scalar_kind(const struct t4a_tensor *ptr, enum t4a_scalar_
 StatusCode t4a_tensor_svd(const struct t4a_tensor *tensor,
                           const struct t4a_index *const *left_inds,
                           size_t n_left,
-                          double rtol,
-                          double cutoff,
+                          const struct t4a_svd_truncation_policy *policy,
                           size_t maxdim,
                           struct t4a_tensor **out_u,
                           struct t4a_tensor **out_s,
@@ -515,8 +683,7 @@ StatusCode t4a_tensor_svd(const struct t4a_tensor *tensor,
  */
 StatusCode t4a_treetn_add(const struct t4a_treetn *a,
                           const struct t4a_treetn *b,
-                          double rtol,
-                          double cutoff,
+                          const struct t4a_svd_truncation_policy *policy,
                           size_t maxdim,
                           struct t4a_treetn **out);
 
@@ -541,8 +708,7 @@ StatusCode t4a_treetn_apply_operator_chain(const struct t4a_treetn *operator_,
                                            const struct t4a_index *const *internal_output_indices,
                                            const struct t4a_index *const *true_output_indices,
                                            enum t4a_contract_method method,
-                                           double rtol,
-                                           double cutoff,
+                                           const struct t4a_svd_truncation_policy *policy,
                                            size_t maxdim,
                                            size_t nfullsweeps,
                                            double convergence_tol,
@@ -570,12 +736,12 @@ StatusCode t4a_treetn_clone(const struct t4a_treetn *src, struct t4a_treetn **ou
 StatusCode t4a_treetn_contract(const struct t4a_treetn *a,
                                const struct t4a_treetn *b,
                                enum t4a_contract_method method,
-                               double rtol,
-                               double cutoff,
+                               const struct t4a_svd_truncation_policy *policy,
                                size_t maxdim,
                                size_t nfullsweeps,
                                double convergence_tol,
                                enum t4a_factorize_alg factorize_alg,
+                               double qr_rtol,
                                struct t4a_treetn **out);
 
 /**
@@ -649,10 +815,8 @@ StatusCode t4a_treetn_linsolve(const struct t4a_treetn *operator_,
                                const struct t4a_index *const *internal_input_indices,
                                const struct t4a_index *const *true_output_indices,
                                const struct t4a_index *const *internal_output_indices,
-                               double rtol,
-                               double cutoff,
+                               const struct t4a_svd_truncation_policy *policy,
                                size_t maxdim,
-                               enum t4a_canonical_form form,
                                size_t nfullsweeps,
                                double krylov_tol,
                                size_t krylov_maxiter,
@@ -717,17 +881,13 @@ StatusCode t4a_treetn_restructure_to(const struct t4a_treetn *treetn,
                                      const size_t *target_edge_sources,
                                      const size_t *target_edge_targets,
                                      size_t n_target_edges,
-                                     double split_rtol,
-                                     double split_cutoff,
+                                     const struct t4a_svd_truncation_policy *split_policy,
                                      size_t split_maxdim,
-                                     enum t4a_canonical_form split_form,
                                      int split_final_sweep,
                                      size_t swap_maxdim,
                                      double swap_rtol,
-                                     double final_rtol,
-                                     double final_cutoff,
+                                     const struct t4a_svd_truncation_policy *final_policy,
                                      size_t final_maxdim,
-                                     enum t4a_canonical_form final_form,
                                      struct t4a_treetn **out);
 
 /**
@@ -765,10 +925,8 @@ StatusCode t4a_treetn_split_to(const struct t4a_treetn *treetn,
                                const size_t *target_edge_sources,
                                const size_t *target_edge_targets,
                                size_t n_target_edges,
-                               double rtol,
-                               double cutoff,
+                               const struct t4a_svd_truncation_policy *policy,
                                size_t maxdim,
-                               enum t4a_canonical_form form,
                                int final_sweep,
                                struct t4a_treetn **out);
 
@@ -796,12 +954,10 @@ StatusCode t4a_treetn_tensor(const struct t4a_treetn *treetn,
 StatusCode t4a_treetn_to_dense(const struct t4a_treetn *treetn, struct t4a_tensor **out);
 
 /**
- * Truncate the tree tensor network bond dimensions.
+ * Truncate the tree tensor network bond dimensions using SVD-based truncation.
  */
 StatusCode t4a_treetn_truncate(struct t4a_treetn *treetn,
-                               double rtol,
-                               double cutoff,
-                               size_t maxdim,
-                               enum t4a_canonical_form form);
+                               const struct t4a_svd_truncation_policy *policy,
+                               size_t maxdim);
 
 #endif  /* TENSOR4ALL_CAPI_H */

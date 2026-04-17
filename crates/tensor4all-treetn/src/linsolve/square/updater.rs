@@ -752,8 +752,8 @@ where
         if let Some(max_rank) = self.options.truncation.max_rank() {
             factorize_options = factorize_options.with_max_rank(max_rank);
         }
-        if let Some(rtol) = self.options.truncation.rtol() {
-            factorize_options = factorize_options.with_rtol(rtol);
+        if let Some(policy) = self.options.truncation.svd_policy() {
+            factorize_options = factorize_options.with_svd_policy(policy);
         }
         // Force decomposition root to be consistent with the sweep plan's new center.
         // This keeps the norm-carrying tensor on the declared canonical center.

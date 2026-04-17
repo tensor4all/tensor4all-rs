@@ -4,6 +4,7 @@ use crate::tensor::{
     t4a_tensor_copy_dense_f64, t4a_tensor_new_dense_c64, t4a_tensor_new_dense_f64, t4a_tensor_rank,
     t4a_tensor_release,
 };
+use crate::types::{t4a_singular_value_measure, t4a_threshold_scale, t4a_truncation_rule};
 
 fn last_error() -> String {
     let mut len = 0usize;
@@ -156,6 +157,24 @@ fn assert_vec_close(actual: &[f64], expected: &[f64], tol: f64) {
             err <= tol,
             "value mismatch at slot {slot}: actual={a}, expected={e}, err={err}, tol={tol}"
         );
+    }
+}
+
+fn relative_policy(threshold: f64) -> t4a_svd_truncation_policy {
+    t4a_svd_truncation_policy {
+        threshold,
+        scale: t4a_threshold_scale::Relative,
+        measure: t4a_singular_value_measure::Value,
+        rule: t4a_truncation_rule::PerValue,
+    }
+}
+
+fn squared_tail_policy(threshold: f64) -> t4a_svd_truncation_policy {
+    t4a_svd_truncation_policy {
+        threshold,
+        scale: t4a_threshold_scale::Relative,
+        measure: t4a_singular_value_measure::SquaredValue,
+        rule: t4a_truncation_rule::DiscardedTailSum,
     }
 }
 
@@ -727,10 +746,8 @@ fn test_treetn_split_to_splits_fused_vertex() {
             split_target.edge_sources.as_ptr(),
             split_target.edge_targets.as_ptr(),
             split_target.edge_sources.len(),
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
-            t4a_canonical_form::Unitary,
             0,
             &mut split,
         ),
@@ -837,17 +854,13 @@ fn test_treetn_restructure_to_mixed_case() {
             target.edge_sources.as_ptr(),
             target.edge_targets.as_ptr(),
             target.edge_sources.len(),
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
-            t4a_canonical_form::Unitary,
             0,
             0,
             0.0,
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
-            t4a_canonical_form::Unitary,
             &mut result,
         ),
         T4A_SUCCESS
@@ -1006,17 +1019,16 @@ fn link_dim(tt: *const t4a_treetn) -> usize {
 fn test_treetn_truncate_with_rtol_and_cutoff() {
     let (tt_rtol, tensors_rtol, indices_rtol) = make_truncatable_treetn();
     assert_eq!(link_dim(tt_rtol), 4);
-    assert_eq!(
-        t4a_treetn_truncate(tt_rtol, 1e-12, 0.0, 1, t4a_canonical_form::Unitary),
-        T4A_SUCCESS
-    );
+    let rtol_policy = relative_policy(1e-12);
+    assert_eq!(t4a_treetn_truncate(tt_rtol, &rtol_policy, 1), T4A_SUCCESS);
     assert_eq!(link_dim(tt_rtol), 1);
     cleanup(tt_rtol, tensors_rtol, indices_rtol);
 
     let (tt_cutoff, tensors_cutoff, indices_cutoff) = make_truncatable_treetn();
     assert_eq!(link_dim(tt_cutoff), 4);
+    let cutoff_policy = squared_tail_policy(1e-24);
     assert_eq!(
-        t4a_treetn_truncate(tt_cutoff, 0.0, 1e-24, 1, t4a_canonical_form::LU),
+        t4a_treetn_truncate(tt_cutoff, &cutoff_policy, 1),
         T4A_SUCCESS
     );
     assert_eq!(link_dim(tt_cutoff), 1);
@@ -1032,7 +1044,10 @@ fn test_treetn_scale_and_add() {
     assert_eq!(read_dense_f64_treetn(scaled), vec![2.0, 4.0, 6.0, 8.0]);
 
     let mut sum = std::ptr::null_mut();
-    assert_eq!(t4a_treetn_add(tt, tt, 0.0, 0.0, 0, &mut sum), T4A_SUCCESS);
+    assert_eq!(
+        t4a_treetn_add(tt, tt, std::ptr::null(), 0, &mut sum),
+        T4A_SUCCESS
+    );
     assert_eq!(read_dense_f64_treetn(sum), vec![2.0, 4.0, 6.0, 8.0]);
 
     t4a_treetn_release(sum);
@@ -1044,9 +1059,10 @@ fn test_treetn_scale_and_add() {
 fn test_treetn_add_with_truncation() {
     let (tt, tensors, indices) = make_truncatable_treetn();
     let expected = read_dense_f64_treetn(tt);
+    let policy = relative_policy(1e-12);
 
     let mut sum = std::ptr::null_mut();
-    assert_eq!(t4a_treetn_add(tt, tt, 1e-12, 0.0, 1, &mut sum), T4A_SUCCESS);
+    assert_eq!(t4a_treetn_add(tt, tt, &policy, 1, &mut sum), T4A_SUCCESS);
     assert_eq!(link_dim(sum), 1);
 
     let dense = read_dense_f64_treetn(sum);
@@ -1142,12 +1158,12 @@ fn test_treetn_contract_and_to_dense() {
             op,
             state,
             t4a_contract_method::Naive,
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
             1,
             0.0,
             t4a_factorize_alg::SVD,
+            0.0,
             &mut result
         ),
         T4A_SUCCESS
@@ -1174,12 +1190,12 @@ fn test_treetn_contract_fit_zero_sweeps_uses_backend_default() {
             a,
             b,
             t4a_contract_method::Fit,
-            1e-12,
-            0.0,
+            std::ptr::null(),
             0,
             1,
             1e-30,
             t4a_factorize_alg::LU,
+            0.0,
             &mut baseline
         ),
         T4A_SUCCESS
@@ -1191,12 +1207,12 @@ fn test_treetn_contract_fit_zero_sweeps_uses_backend_default() {
             a,
             b,
             t4a_contract_method::Fit,
-            1e-12,
-            0.0,
+            std::ptr::null(),
             0,
             0,
             1e-30,
             t4a_factorize_alg::LU,
+            0.0,
             &mut uses_default
         ),
         T4A_SUCCESS
@@ -1222,12 +1238,12 @@ fn test_treetn_contract_fit_accepts_iterative_options() {
             a,
             b,
             t4a_contract_method::Naive,
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
             1,
             0.0,
             t4a_factorize_alg::SVD,
+            0.0,
             &mut expected
         ),
         T4A_SUCCESS
@@ -1239,12 +1255,12 @@ fn test_treetn_contract_fit_accepts_iterative_options() {
             a,
             b,
             t4a_contract_method::Fit,
-            1e-12,
-            0.0,
+            std::ptr::null(),
             0,
             2,
             1e-30,
             t4a_factorize_alg::LU,
+            0.0,
             &mut fitted
         ),
         T4A_SUCCESS
@@ -1294,8 +1310,7 @@ fn test_treetn_apply_operator_chain_identity_single_site() {
             output_indices.as_ptr(),
             true_output_indices.as_ptr(),
             t4a_contract_method::Naive,
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
             1,
             0.0,
@@ -1358,8 +1373,7 @@ fn test_treetn_apply_operator_chain_partial_operator() {
             output_indices.as_ptr(),
             true_output_indices.as_ptr(),
             t4a_contract_method::Naive,
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
             1,
             0.0,
@@ -1399,6 +1413,7 @@ fn test_treetn_apply_operator_chain_fit_zero_sweeps_uses_backend_default() {
     let input_indices = [internal_in as *const t4a_index];
     let output_indices = [internal_out as *const t4a_index];
     let true_output_indices = [target_out as *const t4a_index];
+    let policy = relative_policy(1e-12);
 
     let mut baseline = std::ptr::null_mut();
     assert_eq!(
@@ -1411,8 +1426,7 @@ fn test_treetn_apply_operator_chain_fit_zero_sweeps_uses_backend_default() {
             output_indices.as_ptr(),
             true_output_indices.as_ptr(),
             t4a_contract_method::Fit,
-            1e-12,
-            0.0,
+            &policy,
             0,
             1,
             1e-30,
@@ -1432,8 +1446,7 @@ fn test_treetn_apply_operator_chain_fit_zero_sweeps_uses_backend_default() {
             output_indices.as_ptr(),
             true_output_indices.as_ptr(),
             t4a_contract_method::Fit,
-            1e-12,
-            0.0,
+            &policy,
             0,
             0,
             1e-30,
@@ -1476,6 +1489,7 @@ fn test_treetn_apply_operator_chain_fit_accepts_iterative_options() {
     let input_indices = [internal_in as *const t4a_index];
     let output_indices = [internal_out as *const t4a_index];
     let true_output_indices = [target_out as *const t4a_index];
+    let policy = relative_policy(1e-12);
 
     let mut expected = std::ptr::null_mut();
     assert_eq!(
@@ -1488,8 +1502,7 @@ fn test_treetn_apply_operator_chain_fit_accepts_iterative_options() {
             output_indices.as_ptr(),
             true_output_indices.as_ptr(),
             t4a_contract_method::Naive,
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
             1,
             0.0,
@@ -1509,8 +1522,7 @@ fn test_treetn_apply_operator_chain_fit_accepts_iterative_options() {
             output_indices.as_ptr(),
             true_output_indices.as_ptr(),
             t4a_contract_method::Fit,
-            1e-12,
-            0.0,
+            &policy,
             0,
             2,
             1e-30,
@@ -1564,8 +1576,7 @@ fn test_treetn_apply_operator_chain_rejects_out_of_range_mapped_node() {
             output_indices.as_ptr(),
             true_output_indices.as_ptr(),
             t4a_contract_method::Naive,
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
             1,
             0.0,
@@ -1621,8 +1632,7 @@ fn test_treetn_apply_operator_chain_rejects_empty_mapping() {
             output_indices.as_ptr(),
             true_output_indices.as_ptr(),
             t4a_contract_method::Naive,
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
             1,
             0.0,
@@ -1677,8 +1687,7 @@ fn test_treetn_apply_operator_chain_rejects_unknown_internal_input_index() {
             output_indices.as_ptr(),
             true_output_indices.as_ptr(),
             t4a_contract_method::Naive,
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
             1,
             0.0,
@@ -1722,10 +1731,8 @@ fn test_treetn_linsolve_two_site_identity_without_mapping_zero_sweeps() {
         std::ptr::null(),
         std::ptr::null(),
         std::ptr::null(),
-        0.0,
-        0.0,
+        std::ptr::null(),
         0,
-        t4a_canonical_form::Unitary,
         0,
         1e-12,
         30,
@@ -1785,10 +1792,8 @@ fn test_treetn_linsolve_two_site_identity_with_explicit_mapping() {
         internal_inputs.as_ptr(),
         true_outputs.as_ptr(),
         internal_outputs.as_ptr(),
-        0.0,
-        0.0,
+        std::ptr::null(),
         0,
-        t4a_canonical_form::Unitary,
         3,
         1e-12,
         30,
@@ -1855,10 +1860,8 @@ fn test_treetn_linsolve_rejects_mapping_true_output_not_on_rhs() {
             internal_inputs.as_ptr(),
             true_outputs.as_ptr(),
             internal_outputs.as_ptr(),
-            0.0,
-            0.0,
+            std::ptr::null(),
             0,
-            t4a_canonical_form::Unitary,
             4,
             1e-12,
             30,

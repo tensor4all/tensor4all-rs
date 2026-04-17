@@ -141,7 +141,7 @@ fn main() -> Result<()> {
     println!(
         "Options: method=Zipup, max_rank={}, rtol={:?}",
         max_rank,
-        options.rtol()
+        options.svd_policy().map(|policy| policy.threshold)
     );
     println!("Note: Each run copies MPOs and includes orthogonalization time");
     println!();

@@ -38,8 +38,9 @@ use num_complex::{Complex64, ComplexFloat};
 use tensor4all_tcicore::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions, Scalar as MatrixScalar};
 use tensor4all_tensorbackend::TensorElement;
 
+use crate::defaults::svd::svd_for_factorize;
 use crate::qr::{qr_with, QrOptions};
-use crate::svd::{svd_for_factorize, SvdOptions};
+use crate::svd::SvdOptions;
 
 // Re-export types from tensor_like for backwards compatibility
 pub use crate::tensor_like::{
@@ -77,6 +78,8 @@ pub fn factorize(
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
+    options.validate()?;
+
     if t.is_diag() {
         return Err(FactorizeError::UnsupportedStorage(
             "Diagonal storage not supported for factorize",
@@ -126,12 +129,12 @@ fn factorize_svd(
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<TensorDynLen>, FactorizeError> {
-    let mut svd_options = SvdOptions::default();
-    if let Some(rtol) = options.rtol {
-        svd_options.truncation.rtol = Some(rtol);
+    let mut svd_options = SvdOptions::new();
+    if let Some(policy) = options.svd_policy {
+        svd_options = svd_options.with_policy(policy);
     }
     if let Some(max_rank) = options.max_rank {
-        svd_options.truncation.max_rank = Some(max_rank);
+        svd_options = svd_options.with_max_rank(max_rank);
     }
 
     let result = svd_for_factorize(t, left_inds, &svd_options)?;
@@ -183,10 +186,11 @@ fn factorize_qr(
         ));
     }
 
-    let mut qr_options = QrOptions::default();
-    if let Some(rtol) = options.rtol {
-        qr_options.truncation.rtol = Some(rtol);
-    }
+    let qr_options = if let Some(rtol) = options.qr_rtol {
+        QrOptions::new().with_rtol(rtol)
+    } else {
+        QrOptions::new()
+    };
 
     let (q, r) = qr_with::<f64>(t, left_inds, &qr_options)?;
 
@@ -233,7 +237,7 @@ where
     let left_orthogonal = options.canonical == Canonical::Left;
     let lu_options = RrLUOptions {
         max_rank: options.max_rank.unwrap_or(usize::MAX),
-        rel_tol: options.rtol.unwrap_or(1e-14),
+        rel_tol: 1e-14,
         abs_tol: 0.0,
         left_orthogonal,
     };
@@ -301,7 +305,7 @@ where
     let left_orthogonal = options.canonical == Canonical::Left;
     let lu_options = RrLUOptions {
         max_rank: options.max_rank.unwrap_or(usize::MAX),
-        rel_tol: options.rtol.unwrap_or(1e-14),
+        rel_tol: 1e-14,
         abs_tol: 0.0,
         left_orthogonal,
     };

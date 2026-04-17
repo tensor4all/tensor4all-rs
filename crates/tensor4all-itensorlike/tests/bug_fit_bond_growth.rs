@@ -95,7 +95,11 @@ fn test_fit_bond_growth_with_rtol() {
 
     // Zipup with rtol: truncates significantly
     let result_zipup = mpo_a
-        .contract(&mpo_b, &ContractOptions::zipup().with_rtol(rtol))
+        .contract(
+            &mpo_b,
+            &ContractOptions::zipup()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
+        )
         .unwrap();
     let zipup_bd = result_zipup.maxbonddim();
     let zipup_err = result_zipup
@@ -116,7 +120,11 @@ fn test_fit_bond_growth_with_rtol() {
     // Expected: fit should be free to grow bonds during sweeps and achieve
     //           better accuracy than zipup alone (limited only by rtol).
     let result_fit = mpo_a
-        .contract(&mpo_b, &ContractOptions::fit().with_rtol(rtol))
+        .contract(
+            &mpo_b,
+            &ContractOptions::fit()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
+        )
         .unwrap();
     let fit_bd = result_fit.maxbonddim();
     let fit_err = result_fit
@@ -130,7 +138,9 @@ fn test_fit_bond_growth_with_rtol() {
     let result_fit4 = mpo_a
         .contract(
             &mpo_b,
-            &ContractOptions::fit().with_rtol(rtol).with_nsweeps(4),
+            &ContractOptions::fit()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol))
+                .with_nsweeps(4),
         )
         .unwrap();
     let fit4_bd = result_fit4.maxbonddim();
@@ -143,7 +153,11 @@ fn test_fit_bond_growth_with_rtol() {
 
     // Control: fit with small rtol (no truncation), no max_rank
     let result_fit_small_rtol = mpo_a
-        .contract(&mpo_b, &ContractOptions::fit().with_rtol(1e-12))
+        .contract(
+            &mpo_b,
+            &ContractOptions::fit()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-12)),
+        )
         .unwrap();
     let fit_small_rtol_bd = result_fit_small_rtol.maxbonddim();
     let fit_small_rtol_err = result_fit_small_rtol

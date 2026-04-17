@@ -849,7 +849,9 @@ fn test_truncate_three_node_chain() {
 }
 
 #[test]
-fn test_truncate_with_rtol() {
+fn test_truncate_with_svd_policy() {
+    use tensor4all_core::SvdTruncationPolicy;
+
     let mut tn = TreeTN::<TensorDynLen, NodeIndex>::new();
 
     let i = DynIndex::new_dyn(2);
@@ -872,11 +874,11 @@ fn test_truncate_with_rtol() {
 
     tn.connect(n1, &bond, n2, &bond).unwrap();
 
-    // Truncate with rtol - should reduce rank significantly for low-rank data
+    // Truncate with an explicit SVD policy - should reduce rank for low-rank data
     let truncated = tn
         .truncate(
             std::iter::once(n2),
-            TruncationOptions::default().with_rtol(1e-10),
+            TruncationOptions::default().with_svd_policy(SvdTruncationPolicy::new(1e-10)),
         )
         .unwrap();
 
@@ -1800,13 +1802,19 @@ fn create_mpo_chain_for_fit() -> TreeTN<TensorDynLen, String> {
 
 #[test]
 fn test_fit_contraction_options() {
+    use tensor4all_core::SvdTruncationPolicy;
+
+    let policy = SvdTruncationPolicy::new(1e-8)
+        .with_squared_values()
+        .with_discarded_tail_sum();
     let options = FitContractionOptions::new(5)
         .with_max_rank(10)
-        .with_rtol(1e-8);
+        .with_svd_policy(policy);
 
-        assert_eq!(options.nfullsweeps, 5);
+    assert_eq!(options.nfullsweeps, 5);
     assert_eq!(options.max_rank, Some(10));
-    assert_eq!(options.rtol, Some(1e-8));
+    assert_eq!(options.svd_policy, Some(policy));
+    assert_eq!(options.qr_rtol, None);
 }
 
 // Note: test_fit_environment_basic was removed because FitEnvironment now uses

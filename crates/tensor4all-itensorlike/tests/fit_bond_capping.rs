@@ -95,17 +95,24 @@ fn setup_test_mpos(length: usize, phys_dim: usize, bond_dim: usize) -> TestMPOs 
     }
 }
 
-/// fit() with rtol=0.0 explicit and fit() with no rtol should produce the same
-/// bond dimensions and accuracy. This ensures the API is consistent regardless
-/// of whether the user explicitly passes rtol=0.0 or omits it.
+/// fit() with an explicit zero-threshold policy should preserve the same bond
+/// dimensions as fit() without a policy override.
+///
+/// Unlike the removed `rtol=0` sentinel API, an explicit
+/// `SvdTruncationPolicy::new(0.0)` is now a real truncation policy. Small
+/// numerical differences in the final state are therefore acceptable, but the
+/// bond-dimension cap behavior should still match.
 #[test]
-fn test_fit_rtol_zero_matches_no_rtol() {
+fn test_fit_zero_threshold_matches_no_policy_bond_dims() {
     let t = setup_test_mpos(TEST_LENGTH, TEST_PHYS_DIM, TEST_BOND_DIM);
 
     let result_no_rtol = t.mpo_a.contract(&t.mpo_b, &ContractOptions::fit()).unwrap();
     let result_rtol_zero = t
         .mpo_a
-        .contract(&t.mpo_b, &ContractOptions::fit().with_rtol(0.0))
+        .contract(
+            &t.mpo_b,
+            &ContractOptions::fit().with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(0.0)),
+        )
         .unwrap();
 
     let bd_no_rtol = result_no_rtol.maxbonddim();
@@ -118,14 +125,8 @@ fn test_fit_rtol_zero_matches_no_rtol() {
 
     assert_eq!(
         bd_no_rtol, bd_rtol_zero,
-        "fit(no rtol) and fit(rtol=0) should produce the same bond dims: \
+        "fit(no policy) and fit(threshold=0) should produce the same bond dims: \
          {bd_no_rtol} vs {bd_rtol_zero}"
-    );
-    let err_diff = (err_no_rtol - err_rtol_zero).abs();
-    assert!(
-        err_diff < 1e-10,
-        "fit(no rtol) and fit(rtol=0) should produce the same error: \
-         {err_no_rtol:.6e} vs {err_rtol_zero:.6e}"
     );
 }
 
@@ -141,7 +142,7 @@ fn test_fit_max_rank_caps_bonds() {
             &t.mpo_b,
             &ContractOptions::fit()
                 .with_max_rank(max_rank)
-                .with_rtol(1e-12),
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(1e-12)),
         )
         .unwrap();
     let result_bd = result.maxbonddim();
@@ -168,7 +169,7 @@ fn test_fit_max_rank_overrides_rtol() {
             &t.mpo_b,
             &ContractOptions::fit()
                 .with_max_rank(max_rank)
-                .with_rtol(rtol),
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
         )
         .unwrap();
     let result_bd = result.maxbonddim();
@@ -176,7 +177,11 @@ fn test_fit_max_rank_overrides_rtol() {
     // Without max_rank, rtol=1e-12 produces large bonds
     let result_no_cap = t
         .mpo_a
-        .contract(&t.mpo_b, &ContractOptions::fit().with_rtol(rtol))
+        .contract(
+            &t.mpo_b,
+            &ContractOptions::fit()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
+        )
         .unwrap();
     let no_cap_bd = result_no_cap.maxbonddim();
 
@@ -204,11 +209,19 @@ fn test_fit_rtol_controls_bond_growth() {
 
     let result_large = t
         .mpo_a
-        .contract(&t.mpo_b, &ContractOptions::fit().with_rtol(rtol_large))
+        .contract(
+            &t.mpo_b,
+            &ContractOptions::fit()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol_large)),
+        )
         .unwrap();
     let result_small = t
         .mpo_a
-        .contract(&t.mpo_b, &ContractOptions::fit().with_rtol(rtol_small))
+        .contract(
+            &t.mpo_b,
+            &ContractOptions::fit()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol_small)),
+        )
         .unwrap();
 
     let bd_large = result_large.maxbonddim();
@@ -274,11 +287,19 @@ fn test_fit_not_worse_than_zipup_with_rtol() {
     for rtol in [0.3, 0.1] {
         let result_zipup = t
             .mpo_a
-            .contract(&t.mpo_b, &ContractOptions::zipup().with_rtol(rtol))
+            .contract(
+                &t.mpo_b,
+                &ContractOptions::zipup()
+                    .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
+            )
             .unwrap();
         let result_fit = t
             .mpo_a
-            .contract(&t.mpo_b, &ContractOptions::fit().with_rtol(rtol))
+            .contract(
+                &t.mpo_b,
+                &ContractOptions::fit()
+                    .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
+            )
             .unwrap();
 
         let zipup_err = relative_error(&result_zipup, &t.exact, t.exact_norm);
@@ -304,11 +325,22 @@ fn test_fit_cutoff_equivalent_to_rtol() {
 
     let result_cutoff = t
         .mpo_a
-        .contract(&t.mpo_b, &ContractOptions::fit().with_cutoff(cutoff))
+        .contract(
+            &t.mpo_b,
+            &ContractOptions::fit().with_svd_policy(
+                tensor4all_core::SvdTruncationPolicy::new(cutoff)
+                    .with_squared_values()
+                    .with_discarded_tail_sum(),
+            ),
+        )
         .unwrap();
     let result_rtol = t
         .mpo_a
-        .contract(&t.mpo_b, &ContractOptions::fit().with_rtol(rtol))
+        .contract(
+            &t.mpo_b,
+            &ContractOptions::fit()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol)),
+        )
         .unwrap();
 
     let bd_cutoff = result_cutoff.maxbonddim();
@@ -384,14 +416,18 @@ fn test_fit_more_sweeps_with_rtol_improves() {
         .mpo_a
         .contract(
             &t.mpo_b,
-            &ContractOptions::fit().with_rtol(rtol).with_nsweeps(1),
+            &ContractOptions::fit()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol))
+                .with_nsweeps(1),
         )
         .unwrap();
     let result_4sw = t
         .mpo_a
         .contract(
             &t.mpo_b,
-            &ContractOptions::fit().with_rtol(rtol).with_nsweeps(4),
+            &ContractOptions::fit()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(rtol))
+                .with_nsweeps(4),
         )
         .unwrap();
 

@@ -420,7 +420,7 @@ where
 // TruncateUpdater - LocalUpdater implementation for truncation
 // ============================================================================
 
-use tensor4all_core::{Canonical, FactorizeOptions};
+use tensor4all_core::{Canonical, FactorizeOptions, SvdTruncationPolicy};
 
 /// Truncation updater for nsite=2 sweeps.
 ///
@@ -435,7 +435,7 @@ use tensor4all_core::{Canonical, FactorizeOptions};
 /// 4. B is the orthogonality center (isometry pointing towards B)
 ///
 /// # Usage
-/// ```no_run
+/// ```
 /// use tensor4all_core::{DynIndex, TensorDynLen};
 /// use tensor4all_treetn::{apply_local_update_sweep, LocalUpdateSweepPlan, TreeTN, TruncateUpdater};
 ///
@@ -446,9 +446,13 @@ use tensor4all_core::{Canonical, FactorizeOptions};
 /// let t0 = TensorDynLen::from_dense(vec![s0, bond.clone()], vec![1.0, 0.0])?;
 /// let t1 = TensorDynLen::from_dense(vec![bond, s1], vec![1.0, 0.0])?;
 /// let mut treetn = TreeTN::<TensorDynLen, usize>::from_tensors(vec![t0, t1], vec![0, 1])?;
+/// treetn.canonicalize_mut(std::iter::once(0usize), Default::default())?;
 ///
 /// let plan = LocalUpdateSweepPlan::from_treetn(&treetn, &0usize, 2).unwrap();
-/// let mut updater = TruncateUpdater::new(Some(4), Some(1e-10));
+/// let mut updater = TruncateUpdater::new(
+///     Some(4),
+///     Some(tensor4all_core::SvdTruncationPolicy::new(1e-10)),
+/// );
 /// apply_local_update_sweep(&mut treetn, &plan, &mut updater)?;
 ///
 /// assert_eq!(treetn.node_count(), 2);
@@ -459,8 +463,8 @@ use tensor4all_core::{Canonical, FactorizeOptions};
 pub struct TruncateUpdater {
     /// Maximum bond dimension after truncation.
     pub max_rank: Option<usize>,
-    /// Relative tolerance for truncation (singular values below rtol * max_sv are dropped).
-    pub rtol: Option<f64>,
+    /// Explicit SVD truncation policy.
+    pub svd_policy: Option<SvdTruncationPolicy>,
 }
 
 impl TruncateUpdater {
@@ -468,9 +472,12 @@ impl TruncateUpdater {
     ///
     /// # Arguments
     /// * `max_rank` - Maximum bond dimension (None for no limit)
-    /// * `rtol` - Relative tolerance for truncation (None for no tolerance-based truncation)
-    pub fn new(max_rank: Option<usize>, rtol: Option<f64>) -> Self {
-        Self { max_rank, rtol }
+    /// * `svd_policy` - SVD truncation policy override (None uses the global default)
+    pub fn new(max_rank: Option<usize>, svd_policy: Option<SvdTruncationPolicy>) -> Self {
+        Self {
+            max_rank,
+            svd_policy,
+        }
     }
 }
 
@@ -535,8 +542,8 @@ where
         if let Some(max_rank) = self.max_rank {
             options = options.with_max_rank(max_rank);
         }
-        if let Some(rtol) = self.rtol {
-            options = options.with_rtol(rtol);
+        if let Some(policy) = self.svd_policy {
+            options = options.with_svd_policy(policy);
         }
 
         // Factorize

@@ -9,9 +9,8 @@ use tensor4all_treetn::treetn::contraction::{
 use tensor4all_treetn::CanonicalForm;
 
 use crate::error::{Result, TensorTrainError};
-use crate::options::{validate_truncation_params, ContractMethod, ContractOptions};
+use crate::options::{validate_svd_truncation_options, ContractMethod, ContractOptions};
 use crate::tensortrain::TensorTrain;
-use tensor4all_core::truncation::HasTruncationParams;
 
 /// Contract two tensor trains, returning a new tensor train.
 ///
@@ -52,7 +51,7 @@ pub fn contract(
         });
     }
 
-    validate_truncation_params(options.truncation_params())?;
+    validate_svd_truncation_options(options.max_rank(), options.svd_policy())?;
 
     if matches!(options.method(), ContractMethod::Fit) && !options.nhalfsweeps().is_multiple_of(2) {
         return Err(TensorTrainError::OperationError {
@@ -80,14 +79,8 @@ pub fn contract(
         treetn_options
     };
 
-    let fit_normalized_rtol = if matches!(options.method(), ContractMethod::Fit) {
-        Some(options.rtol().unwrap_or(0.0))
-    } else {
-        options.rtol()
-    };
-
-    let treetn_options = if let Some(rtol) = fit_normalized_rtol {
-        treetn_options.with_rtol(rtol)
+    let treetn_options = if let Some(policy) = options.svd_policy() {
+        treetn_options.with_svd_policy(policy)
     } else {
         treetn_options
     };
@@ -101,7 +94,7 @@ pub fn contract(
                 b.as_treetn(),
                 &center,
                 CanonicalForm::Unitary,
-                options.rtol(),
+                options.svd_policy(),
                 options.max_rank(),
             )
             .map_err(|e| TensorTrainError::InvalidStructure {

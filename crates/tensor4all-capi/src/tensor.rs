@@ -3,9 +3,12 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use num_complex::Complex64;
-use tensor4all_core::{qr_with, svd_with, QrOptions, SvdOptions, TruncationParams};
+use tensor4all_core::{qr_with, svd_with, QrOptions, SvdOptions, SvdTruncationPolicy};
 
-use crate::types::{t4a_index, t4a_scalar_kind, t4a_tensor, InternalIndex, InternalTensor};
+use crate::types::{
+    t4a_index, t4a_scalar_kind, t4a_svd_truncation_policy, t4a_tensor, InternalIndex,
+    InternalTensor,
+};
 use crate::{
     capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
     set_last_error, CapiResult, StatusCode, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR,
@@ -87,22 +90,21 @@ fn require_tensor<'a>(ptr: *const t4a_tensor) -> Result<&'a t4a_tensor, (StatusC
     Ok(unsafe { &*ptr })
 }
 
-fn build_svd_options(rtol: f64, cutoff: f64, maxdim: usize) -> SvdOptions {
-    let mut truncation = TruncationParams::new();
-    if cutoff > 0.0 {
-        truncation = truncation.with_cutoff(cutoff);
-    } else if rtol > 0.0 {
-        truncation = truncation.with_rtol(rtol);
+fn build_svd_options(policy: *const t4a_svd_truncation_policy, maxdim: usize) -> SvdOptions {
+    let mut options = SvdOptions::new();
+    if !policy.is_null() {
+        let policy = unsafe { *policy };
+        options = options.with_policy(SvdTruncationPolicy::from(policy));
     }
     if maxdim > 0 {
-        truncation = truncation.with_max_rank(maxdim);
+        options = options.with_max_rank(maxdim);
     }
-    SvdOptions { truncation }
+    options
 }
 
 fn build_qr_options(rtol: f64) -> QrOptions {
     // `0.0` is the C-API sentinel for exact QR without truncation.
-    QrOptions::with_rtol(rtol)
+    QrOptions::new().with_rtol(rtol)
 }
 
 fn box_tensor_handle(tensor: InternalTensor) -> *mut t4a_tensor {
@@ -295,8 +297,7 @@ pub extern "C" fn t4a_tensor_svd(
     tensor: *const t4a_tensor,
     left_inds: *const *const t4a_index,
     n_left: usize,
-    rtol: f64,
-    cutoff: f64,
+    policy: *const t4a_svd_truncation_policy,
     maxdim: usize,
     out_u: *mut *mut t4a_tensor,
     out_s: *mut *mut t4a_tensor,
@@ -312,7 +313,7 @@ pub extern "C" fn t4a_tensor_svd(
         }
 
         let left_inds = read_indices_from_ptrs(n_left, left_inds)?;
-        let options = build_svd_options(rtol, cutoff, maxdim);
+        let options = build_svd_options(policy, maxdim);
         let (u, s, v) = match t4a_scalar_kind::from_tensor(tensor.inner()) {
             t4a_scalar_kind::F64 => svd_with::<f64>(tensor.inner(), &left_inds, &options),
             t4a_scalar_kind::C64 => svd_with::<Complex64>(tensor.inner(), &left_inds, &options),
