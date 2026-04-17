@@ -3,7 +3,7 @@ use crate::random::{random_treetn, LinkSpace};
 use crate::SiteIndexNetwork;
 use std::collections::{HashMap, HashSet};
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::TensorDynLen;
+use tensor4all_core::{SvdTruncationPolicy, TensorDynLen};
 
 type DynIndex = Index<DynId, TagSet>;
 
@@ -202,10 +202,16 @@ fn assert_identity_application(
 
 #[test]
 fn test_apply_options_builder() {
-    let opts = ApplyOptions::zipup().with_max_rank(50).with_rtol(1e-10);
+    let policy = SvdTruncationPolicy::new(1e-10)
+        .with_squared_values()
+        .with_discarded_tail_sum();
+    let opts = ApplyOptions::zipup()
+        .with_max_rank(50)
+        .with_svd_policy(policy);
     assert_eq!(opts.method, ContractionMethod::Zipup);
     assert_eq!(opts.max_rank, Some(50));
-    assert_eq!(opts.rtol, Some(1e-10));
+    assert_eq!(opts.svd_policy, Some(policy));
+    assert_eq!(opts.qr_rtol, None);
 
     let fit = ApplyOptions::fit().with_nfullsweeps(3);
     assert_eq!(fit.method, ContractionMethod::Fit);

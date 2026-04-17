@@ -15,12 +15,13 @@ use std::hash::Hash;
 
 use anyhow::{Context, Result};
 
-use crate::algorithm::CanonicalForm;
+use tensor4all_core::SvdTruncationPolicy;
 use tensor4all_core::{IndexLike, TensorLike};
 
 use super::localupdate::{apply_local_update_sweep, LocalUpdateSweepPlan, TruncateUpdater};
 use super::TreeTN;
 use crate::options::{CanonicalizationOptions, TruncationOptions};
+use crate::CanonicalForm;
 
 impl<T, V> TreeTN<T, V>
 where
@@ -31,7 +32,7 @@ where
     ///
     /// This is the recommended unified API for truncation. It accepts:
     /// - Center nodes specified by their node names (V)
-    /// - [`TruncationOptions`] to control the form, rtol, and max_rank
+    /// - [`TruncationOptions`] to control the SVD policy and max_rank
     ///
     /// # Algorithm
     /// 1. Canonicalize the network towards the center (required for truncation)
@@ -83,8 +84,7 @@ where
     {
         self.truncate_impl(
             canonical_region,
-            options.form,
-            options.truncation.rtol,
+            options.svd_policy(),
             options.truncation.max_rank,
             "truncate",
         )?;
@@ -105,8 +105,7 @@ where
     {
         self.truncate_impl(
             canonical_region,
-            options.form,
-            options.truncation.rtol,
+            options.svd_policy(),
             options.truncation.max_rank,
             "truncate_mut",
         )
@@ -118,8 +117,7 @@ where
     pub(crate) fn truncate_impl(
         &mut self,
         canonical_region: impl IntoIterator<Item = V>,
-        form: CanonicalForm,
-        rtol: Option<f64>,
+        svd_policy: Option<SvdTruncationPolicy>,
         max_rank: Option<usize>,
         context_name: &str,
     ) -> Result<()>
@@ -146,7 +144,8 @@ where
         let center_node = center_nodes.iter().next().unwrap().clone();
 
         // Step 1: Canonicalize towards the center (required before truncation sweep)
-        let canonicalize_options = CanonicalizationOptions::default().with_form(form);
+        let canonicalize_options =
+            CanonicalizationOptions::default().with_form(CanonicalForm::Unitary);
         self.canonicalize_impl(
             [center_node.clone()],
             canonicalize_options.form,
@@ -166,12 +165,12 @@ where
         }
 
         // Step 3: Apply truncation sweep
-        let mut updater = TruncateUpdater::new(max_rank, rtol);
+        let mut updater = TruncateUpdater::new(max_rank, svd_policy);
         apply_local_update_sweep(self, &plan, &mut updater)
             .context(format!("{}: truncation sweep failed", context_name))?;
 
         // The canonical form is maintained by the sweep
-        self.canonical_form = Some(form);
+        self.canonical_form = Some(CanonicalForm::Unitary);
 
         Ok(())
     }

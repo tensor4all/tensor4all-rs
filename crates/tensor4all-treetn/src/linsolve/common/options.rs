@@ -1,6 +1,7 @@
 //! Common options for linsolve algorithms.
 
 use crate::TruncationOptions;
+use tensor4all_core::SvdTruncationPolicy;
 
 /// Options for the linsolve algorithm.
 #[derive(Debug, Clone)]
@@ -68,9 +69,9 @@ impl LinsolveOptions {
         self
     }
 
-    /// Set relative tolerance for truncation.
-    pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.truncation = self.truncation.with_rtol(rtol);
+    /// Set the SVD truncation policy used by TreeTN truncation steps.
+    pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
+        self.truncation = self.truncation.with_svd_policy(policy);
         self
     }
 

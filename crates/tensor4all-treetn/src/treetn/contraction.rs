@@ -15,7 +15,8 @@ use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
 use tensor4all_core::{
-    AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
+    AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, SvdTruncationPolicy,
+    TensorLike,
 };
 
 use super::TreeTN;
@@ -249,7 +250,7 @@ where
     /// # Arguments
     /// * `other` - The other TreeTN to contract with (must have same topology)
     /// * `center` - The center node name towards which to contract
-    /// * `rtol` - Optional relative tolerance for truncation
+    /// * `svd_policy` - Optional SVD truncation policy
     /// * `max_rank` - Optional maximum bond dimension
     ///
     /// # Returns
@@ -258,7 +259,7 @@ where
         &self,
         other: &Self,
         center: &V,
-        rtol: Option<f64>,
+        svd_policy: Option<SvdTruncationPolicy>,
         max_rank: Option<usize>,
     ) -> Result<Self>
     where
@@ -266,7 +267,7 @@ where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
-        self.contract_zipup_with(other, center, CanonicalForm::Unitary, rtol, max_rank)
+        self.contract_zipup_with(other, center, CanonicalForm::Unitary, svd_policy, max_rank)
     }
 
     /// Contract two TreeTNs with the same topology using the zip-up algorithm with a specified form.
@@ -277,7 +278,7 @@ where
         other: &Self,
         center: &V,
         form: CanonicalForm,
-        rtol: Option<f64>,
+        svd_policy: Option<SvdTruncationPolicy>,
         max_rank: Option<usize>,
     ) -> Result<Self>
     where
@@ -285,7 +286,7 @@ where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
-        self.contract_zipup_tree_accumulated(other, center, form, rtol, max_rank)
+        self.contract_zipup_tree_accumulated(other, center, form, svd_policy, max_rank)
     }
 
     /// Contract two TreeTNs using zip-up algorithm with accumulated intermediate tensors.
@@ -304,7 +305,7 @@ where
     /// * `other` - The other TreeTN to contract with (must have same topology)
     /// * `center` - The center node name towards which to contract
     /// * `form` - Canonical form (Unitary/LU/CI)
-    /// * `rtol` - Optional relative tolerance for truncation
+    /// * `svd_policy` - Optional SVD truncation policy
     /// * `max_rank` - Optional maximum bond dimension
     ///
     /// # Returns
@@ -314,7 +315,7 @@ where
         other: &Self,
         center: &V,
         form: CanonicalForm,
-        rtol: Option<f64>,
+        svd_policy: Option<SvdTruncationPolicy>,
         max_rank: Option<usize>,
     ) -> Result<Self>
     where
@@ -394,12 +395,23 @@ where
             CanonicalForm::CI => FactorizeAlg::CI,
         };
 
-        let factorize_options = FactorizeOptions {
-            alg,
-            canonical: Canonical::Left,
-            rtol,
-            max_rank,
-        };
+        let mut factorize_options = match alg {
+            FactorizeAlg::SVD => FactorizeOptions::svd(),
+            FactorizeAlg::QR => FactorizeOptions::qr(),
+            FactorizeAlg::LU => FactorizeOptions::lu(),
+            FactorizeAlg::CI => FactorizeOptions::ci(),
+        }
+        .with_canonical(Canonical::Left);
+
+        if let Some(max_rank) = max_rank {
+            factorize_options = factorize_options.with_max_rank(max_rank);
+        }
+        if let Some(policy) = svd_policy {
+            factorize_options = factorize_options.with_svd_policy(policy);
+        }
+        factorize_options
+            .validate()
+            .map_err(|err| anyhow::anyhow!("invalid zipup factorization options: {err}"))?;
 
         // 9. Process edges from leaves towards root
         for (source_name, destination_name) in &edges {
@@ -797,8 +809,10 @@ pub struct ContractionOptions {
     pub method: ContractionMethod,
     /// Maximum bond dimension (optional).
     pub max_rank: Option<usize>,
-    /// Relative tolerance for truncation (optional).
-    pub rtol: Option<f64>,
+    /// Explicit SVD truncation policy (optional).
+    pub svd_policy: Option<SvdTruncationPolicy>,
+    /// QR-specific relative tolerance (optional).
+    pub qr_rtol: Option<f64>,
     /// Number of full sweeps for Fit method.
     ///
     /// A full sweep visits each edge twice (forward and backward) using an Euler tour.
@@ -814,7 +828,8 @@ impl Default for ContractionOptions {
         Self {
             method: ContractionMethod::default(),
             max_rank: None,
-            rtol: None,
+            svd_policy: None,
+            qr_rtol: None,
             nfullsweeps: 1,
             convergence_tol: None,
             factorize_alg: FactorizeAlg::default(),
@@ -847,9 +862,15 @@ impl ContractionOptions {
         self
     }
 
-    /// Set relative tolerance.
-    pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.rtol = Some(rtol);
+    /// Set the SVD truncation policy.
+    pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
+        self.svd_policy = Some(policy);
+        self
+    }
+
+    /// Set the QR-specific relative tolerance.
+    pub fn with_qr_rtol(mut self, rtol: f64) -> Self {
+        self.qr_rtol = Some(rtol);
         self
     }
 
@@ -889,7 +910,7 @@ where
 {
     match options.method {
         ContractionMethod::Zipup => {
-            tn_a.contract_zipup(tn_b, center, options.rtol, options.max_rank)
+            tn_a.contract_zipup(tn_b, center, options.svd_policy, options.max_rank)
         }
         ContractionMethod::Fit => {
             let fit_options = FitContractionOptions::new(options.nfullsweeps)
@@ -899,10 +920,16 @@ where
             } else {
                 fit_options
             };
-            // For fit, unspecified rtol and explicit rtol=0.0 are intended to be
-            // identical. Normalize here so downstream code sees exactly the same
-            // option state in both cases.
-            let fit_options = fit_options.with_rtol(options.rtol.unwrap_or(0.0));
+            let fit_options = if let Some(policy) = options.svd_policy {
+                fit_options.with_svd_policy(policy)
+            } else {
+                fit_options
+            };
+            let fit_options = if let Some(qr_rtol) = options.qr_rtol {
+                fit_options.with_qr_rtol(qr_rtol)
+            } else {
+                fit_options
+            };
             let fit_options = if let Some(tol) = options.convergence_tol {
                 fit_options.with_convergence_tol(tol)
             } else {
@@ -910,9 +937,14 @@ where
             };
             super::fit::contract_fit(tn_a, tn_b, center, fit_options)
         }
-        ContractionMethod::Naive => {
-            contract_naive_to_treetn(tn_a, tn_b, center, options.max_rank, options.rtol)
-        }
+        ContractionMethod::Naive => contract_naive_to_treetn(
+            tn_a,
+            tn_b,
+            center,
+            options.max_rank,
+            options.svd_policy,
+            options.qr_rtol,
+        ),
     }
 }
 
@@ -930,7 +962,8 @@ pub fn contract_naive_to_treetn<T, V>(
     tn_b: &TreeTN<T, V>,
     center: &V,
     _max_rank: Option<usize>,
-    _rtol: Option<f64>,
+    _svd_policy: Option<SvdTruncationPolicy>,
+    _qr_rtol: Option<f64>,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,

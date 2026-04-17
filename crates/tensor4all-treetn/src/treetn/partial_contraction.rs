@@ -14,8 +14,8 @@ use super::contraction::{contract, ContractionOptions};
 use super::decompose::{factorize_tensor_to_treetn_with, TreeTopology};
 use super::TreeTN;
 use tensor4all_core::{
-    AllowedPairs, AnyScalar, DynIndex, FactorizeOptions, IndexLike, TensorDynLen, TensorIndex,
-    TensorLike,
+    AllowedPairs, AnyScalar, DynIndex, FactorizeAlg, FactorizeOptions, IndexLike, TensorDynLen,
+    TensorIndex, TensorLike,
 };
 
 type DiagonalPairApplication<V> = (
@@ -229,18 +229,28 @@ where
     Ok(())
 }
 
-fn factorize_options_from_contraction_options(options: &ContractionOptions) -> FactorizeOptions {
-    let mut factorize_options = FactorizeOptions {
-        alg: options.factorize_alg,
-        ..FactorizeOptions::default()
+fn factorize_options_from_contraction_options(
+    options: &ContractionOptions,
+) -> Result<FactorizeOptions> {
+    let mut factorize_options = match options.factorize_alg {
+        FactorizeAlg::SVD => FactorizeOptions::svd(),
+        FactorizeAlg::QR => FactorizeOptions::qr(),
+        FactorizeAlg::LU => FactorizeOptions::lu(),
+        FactorizeAlg::CI => FactorizeOptions::ci(),
     };
-    if let Some(rtol) = options.rtol {
-        factorize_options = factorize_options.with_rtol(rtol);
+    if let Some(policy) = options.svd_policy {
+        factorize_options = factorize_options.with_svd_policy(policy);
+    }
+    if let Some(rtol) = options.qr_rtol {
+        factorize_options = factorize_options.with_qr_rtol(rtol);
     }
     if let Some(max_rank) = options.max_rank {
         factorize_options = factorize_options.with_max_rank(max_rank);
     }
-    factorize_options
+    factorize_options.validate().map_err(|err| {
+        anyhow!("partial_contract: invalid contraction factorization options: {err}")
+    })?;
+    Ok(factorize_options)
 }
 
 fn union_result_topology<V>(
@@ -325,7 +335,7 @@ where
     }
 
     let topology = union_result_topology(a, b, &contracted_tensor)?;
-    let factorize_options = factorize_options_from_contraction_options(&options);
+    let factorize_options = factorize_options_from_contraction_options(&options)?;
     factorize_tensor_to_treetn_with(&contracted_tensor, &topology, factorize_options, center)
         .context("partial_contract: failed to factorize mismatched-topology dense result")
 }

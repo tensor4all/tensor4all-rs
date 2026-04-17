@@ -35,7 +35,7 @@ use anyhow::Result;
 use tensor4all_core::{
     print_and_reset_contract_profile, print_and_reset_native_einsum_profile,
     reset_contract_profile, reset_native_einsum_profile, AllowedPairs, Canonical, FactorizeAlg,
-    FactorizeOptions, IndexLike, TensorLike,
+    FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorLike,
 };
 
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
@@ -485,8 +485,12 @@ where
     pub envs: FitEnvironment<T, V>,
     /// Maximum bond dimension
     pub max_rank: Option<usize>,
-    /// Relative tolerance for truncation
-    pub rtol: Option<f64>,
+    /// Legacy relative tolerance retained for same-crate tests and call chains.
+    pub(crate) rtol: Option<f64>,
+    /// Explicit SVD truncation policy
+    pub svd_policy: Option<SvdTruncationPolicy>,
+    /// QR-specific relative tolerance
+    pub qr_rtol: Option<f64>,
     /// Factorization algorithm
     pub factorize_alg: FactorizeAlg,
 }
@@ -503,7 +507,8 @@ where
     /// * `tn_a` - First input TreeTN
     /// * `tn_b` - Second input TreeTN
     /// * `max_rank` - Maximum bond dimension for truncation
-    /// * `rtol` - Relative tolerance for truncation
+    /// * `svd_policy` - Explicit SVD truncation policy
+    /// * `qr_rtol` - QR-specific relative tolerance
     ///
     /// Note: sim_internal_inds() should be called on tn_a and tn_b before passing
     /// if index collision is a concern. This is not done here because contraction
@@ -520,6 +525,8 @@ where
             envs: FitEnvironment::new(),
             max_rank,
             rtol,
+            svd_policy: rtol.map(SvdTruncationPolicy::new),
+            qr_rtol: None,
             factorize_alg: FactorizeAlg::SVD,
         }
     }
@@ -527,6 +534,19 @@ where
     /// Set the factorization algorithm.
     pub fn with_factorize_alg(mut self, alg: FactorizeAlg) -> Self {
         self.factorize_alg = alg;
+        self
+    }
+
+    /// Set the SVD truncation policy used by fit sweeps.
+    pub(crate) fn with_svd_policy(mut self, policy: Option<SvdTruncationPolicy>) -> Self {
+        self.rtol = policy.map(|value| value.threshold);
+        self.svd_policy = policy;
+        self
+    }
+
+    /// Set the QR-specific relative tolerance used by fit sweeps.
+    pub(crate) fn with_qr_rtol(mut self, qr_rtol: Option<f64>) -> Self {
+        self.qr_rtol = qr_rtol;
         self
     }
 }
@@ -664,23 +684,26 @@ where
         };
         options = options.with_canonical(Canonical::Left);
 
-        // Use user's explicit rtol if specified, otherwise rtol=0.
-        // We must NOT let the default_svd_rtol fallback (1e-12) be applied,
-        // so we always set an explicit value here.
-        options = options.with_rtol(self.rtol.unwrap_or(0.0));
+        if let Some(policy) = self.svd_policy {
+            options = options.with_svd_policy(policy);
+        }
+        if let Some(qr_rtol) = self.qr_rtol {
+            options = options.with_qr_rtol(qr_rtol);
+        }
+        options
+            .validate()
+            .map_err(|e| anyhow::anyhow!("invalid fit factorization options: {e}"))?;
 
         // Determine bond dimension cap for this factorization step.
         // - If max_rank is explicitly specified, use it.
-        // - If a positive rtol is specified (but max_rank is not), allow bonds
-        //   to grow freely — truncation is controlled only by rtol, matching
-        //   Julia's ITensorMPS.jl where maxdim defaults to typemax(Int).
-        // - Otherwise (neither specified, or rtol=0), cap at the existing bond
-        //   dimension to preserve the zipup initialization size. This ensures
-        //   that with_rtol(0.0) and no rtol behave identically (both cap bonds).
+        // - If an algorithm-specific tolerance is specified (but max_rank is not),
+        //   allow bonds to grow freely and let the factorization policy decide.
+        // - Otherwise, cap at the existing bond dimension to preserve the zipup
+        //   initialization size.
         let bond_cap = if self.max_rank.is_some() {
             self.max_rank
-        } else if self.rtol.is_some_and(|r| r > 0.0) {
-            None // positive rtol controls truncation; no bond cap
+        } else if self.svd_policy.is_some() || self.qr_rtol.is_some() {
+            None
         } else {
             subtree
                 .edge_between(node_u, node_v)
@@ -760,8 +783,12 @@ pub struct FitContractionOptions {
     pub nfullsweeps: usize,
     /// Maximum bond dimension.
     pub max_rank: Option<usize>,
-    /// Relative tolerance for truncation.
-    pub rtol: Option<f64>,
+    /// Legacy relative tolerance retained for same-crate tests and call chains.
+    pub(crate) rtol: Option<f64>,
+    /// Explicit SVD truncation policy.
+    pub svd_policy: Option<SvdTruncationPolicy>,
+    /// QR-specific relative tolerance.
+    pub qr_rtol: Option<f64>,
     /// Factorization algorithm.
     pub factorize_alg: FactorizeAlg,
     /// Tolerance for early termination based on relative change.
@@ -776,6 +803,8 @@ impl Default for FitContractionOptions {
             nfullsweeps: 1,
             max_rank: None,
             rtol: None,
+            svd_policy: None,
+            qr_rtol: None,
             factorize_alg: FactorizeAlg::SVD,
             convergence_tol: None,
         }
@@ -797,10 +826,27 @@ impl FitContractionOptions {
         self
     }
 
-    /// Set relative tolerance.
-    pub fn with_rtol(mut self, rtol: f64) -> Self {
-        self.rtol = Some(rtol);
+    /// Set the SVD truncation policy.
+    pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
+        self.rtol = Some(policy.threshold);
+        self.svd_policy = Some(policy);
         self
+    }
+
+    /// Set the QR-specific relative tolerance.
+    pub fn with_qr_rtol(mut self, rtol: f64) -> Self {
+        self.qr_rtol = Some(rtol);
+        self
+    }
+
+    /// Set relative tolerance as a per-value relative SVD policy.
+    pub(crate) fn with_rtol(self, rtol: f64) -> Self {
+        self.with_svd_policy(SvdTruncationPolicy::new(rtol))
+    }
+
+    /// Get the legacy SVD threshold value when represented as an rtol.
+    pub(crate) fn rtol(&self) -> Option<f64> {
+        self.svd_policy.map(|policy| policy.threshold)
     }
 
     /// Set factorization algorithm.
@@ -856,17 +902,13 @@ where
         ));
     }
 
-    // Initialize C using zipup (arguments: rtol, max_rank).
-    // When rtol is not specified, use 0.0 to prevent the default_svd_rtol
-    // fallback (1e-12) from being applied. This is consistent with how
-    // rtol is handled during sweeps.
-    let zipup_rtol = Some(options.rtol.unwrap_or(0.0));
+    // Initialize C using the SVD-based zipup contraction.
     let zipup_started = profile_enabled.then(Instant::now);
     let mut tn_c = tn_a.contract_zipup_tree_accumulated(
         tn_b,
         center,
         CanonicalForm::Unitary,
-        zipup_rtol,
+        options.svd_policy,
         options.max_rank,
     )?;
     if let Some(zipup_started) = zipup_started {
@@ -877,16 +919,17 @@ where
 
     // The zip-up initializer already returns a network centered at `center`.
 
-    // With neither max_rank nor a positive rtol, fit sweeps cannot change the
-    // bond cap and only introduce numerical drift relative to the zip-up
-    // initializer. Treat rtol=None and rtol=0.0 identically by returning the
-    // zip-up result directly in this regime.
-    if options.max_rank.is_none() && options.rtol.unwrap_or(0.0) <= 0.0 {
+    // With neither max_rank nor an algorithm-specific truncation override, fit
+    // sweeps cannot change the bond cap and only introduce numerical drift
+    // relative to the zip-up initializer.
+    if options.max_rank.is_none() && options.svd_policy.is_none() && options.qr_rtol.is_none() {
         return Ok(tn_c);
     }
 
     // Create FitUpdater (environments are computed lazily)
-    let mut updater = FitUpdater::new(tn_a.clone(), tn_b.clone(), options.max_rank, options.rtol)
+    let mut updater = FitUpdater::new(tn_a.clone(), tn_b.clone(), options.max_rank, None)
+        .with_svd_policy(options.svd_policy)
+        .with_qr_rtol(options.qr_rtol)
         .with_factorize_alg(options.factorize_alg);
 
     // Create sweep plan
