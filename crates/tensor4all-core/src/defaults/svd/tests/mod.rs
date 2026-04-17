@@ -1,14 +1,42 @@
 use super::*;
 use crate::index::DefaultIndex as Index;
+use crate::{SingularValueMeasure, SvdTruncationPolicy, ThresholdScale, TruncationRule};
 use num_complex::Complex64;
 use tenferro::Tensor as NativeTensor;
 
 #[test]
 fn compute_retained_rank_handles_edge_cases() {
-    assert_eq!(compute_retained_rank(&[], 1.0e-12), 1);
-    assert_eq!(compute_retained_rank(&[0.0, 0.0], 1.0e-6), 1);
-    assert_eq!(compute_retained_rank(&[5.0, 1.0e-9], 1.0e-6), 1);
-    assert_eq!(compute_retained_rank(&[5.0, 1.0], 1.0e-12), 2);
+    let per_value = SvdTruncationPolicy::new(1.0e-6);
+    assert_eq!(compute_retained_rank(&[], &per_value), 1);
+    assert_eq!(compute_retained_rank(&[0.0, 0.0], &per_value), 1);
+    assert_eq!(compute_retained_rank(&[5.0, 1.0e-9], &per_value), 1);
+    assert_eq!(
+        compute_retained_rank(&[5.0, 1.0], &SvdTruncationPolicy::new(1.0e-12)),
+        2
+    );
+}
+
+#[test]
+fn compute_retained_rank_supports_all_policy_axes() {
+    let absolute_per_value = SvdTruncationPolicy::new(1.5).with_absolute();
+    assert_eq!(compute_retained_rank(&[5.0, 1.0], &absolute_per_value), 1);
+
+    let relative_squared_tail = SvdTruncationPolicy::new(0.05)
+        .with_squared_values()
+        .with_discarded_tail_sum();
+    assert_eq!(
+        compute_retained_rank(&[10.0, 1.0, 0.1], &relative_squared_tail),
+        1
+    );
+
+    let absolute_squared_tail = SvdTruncationPolicy::new(0.02)
+        .with_absolute()
+        .with_squared_values()
+        .with_discarded_tail_sum();
+    assert_eq!(
+        compute_retained_rank(&[1.0, 0.1, 0.1], &absolute_squared_tail),
+        2
+    );
 }
 
 #[test]
@@ -27,22 +55,36 @@ fn singular_values_from_native_accepts_real_and_complex_dense() {
 }
 
 #[test]
-fn set_default_svd_rtol_rejects_invalid_values() {
-    let original = default_svd_rtol();
-    assert!(set_default_svd_rtol(f64::NAN).is_err());
-    assert!(set_default_svd_rtol(-1.0).is_err());
-    set_default_svd_rtol(original).unwrap();
+fn set_default_svd_truncation_policy_rejects_invalid_values() {
+    let original = default_svd_truncation_policy();
+    assert!(set_default_svd_truncation_policy(SvdTruncationPolicy::new(f64::NAN)).is_err());
+    assert!(set_default_svd_truncation_policy(SvdTruncationPolicy::new(-1.0)).is_err());
+    assert!(set_default_svd_truncation_policy(SvdTruncationPolicy::new(f64::INFINITY)).is_err());
+    set_default_svd_truncation_policy(original).unwrap();
 }
 
 #[test]
 fn svd_options_accessors_roundtrip() {
-    let by_rtol = SvdOptions::with_rtol(1.0e-5);
-    assert_eq!(by_rtol.rtol(), Some(1.0e-5));
-    assert_eq!(by_rtol.max_rank(), None);
+    let by_policy = SvdOptions::new().with_policy(
+        SvdTruncationPolicy::new(1.0e-5)
+            .with_absolute()
+            .with_squared_values()
+            .with_discarded_tail_sum(),
+    );
+    assert_eq!(
+        by_policy.policy,
+        Some(SvdTruncationPolicy {
+            threshold: 1.0e-5,
+            scale: ThresholdScale::Absolute,
+            measure: SingularValueMeasure::SquaredValue,
+            rule: TruncationRule::DiscardedTailSum,
+        })
+    );
+    assert_eq!(by_policy.max_rank, None);
 
-    let by_rank = SvdOptions::with_max_rank(7);
-    assert_eq!(by_rank.rtol(), None);
-    assert_eq!(by_rank.max_rank(), Some(7));
+    let by_rank = SvdOptions::new().with_max_rank(7);
+    assert_eq!(by_rank.policy, None);
+    assert_eq!(by_rank.max_rank, Some(7));
 }
 
 #[test]
@@ -64,7 +106,7 @@ fn svd_with_max_rank_truncates_native_outputs() {
     let (u, s, v) = svd_with::<f64>(
         &tensor,
         std::slice::from_ref(&i),
-        &SvdOptions::with_max_rank(1),
+        &SvdOptions::new().with_max_rank(1),
     )
     .unwrap();
 
@@ -83,14 +125,14 @@ fn svd_with_invalid_rtol_is_rejected_before_linalg() {
     let nan = svd_with::<f64>(
         &tensor,
         std::slice::from_ref(&i),
-        &SvdOptions::with_rtol(f64::NAN),
+        &SvdOptions::new().with_policy(SvdTruncationPolicy::new(f64::NAN)),
     );
-    assert!(matches!(nan, Err(SvdError::InvalidRtol(v)) if v.is_nan()));
+    assert!(matches!(nan, Err(SvdError::InvalidThreshold(v)) if v.is_nan()));
 
     let negative = svd_with::<f64>(
         &tensor,
         std::slice::from_ref(&i),
-        &SvdOptions::with_rtol(-1.0),
+        &SvdOptions::new().with_policy(SvdTruncationPolicy::new(-1.0)),
     );
-    assert!(matches!(negative, Err(SvdError::InvalidRtol(v)) if v == -1.0));
+    assert!(matches!(negative, Err(SvdError::InvalidThreshold(v)) if v == -1.0));
 }

@@ -1,6 +1,9 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
-use tensor4all_core::{default_svd_rtol, set_default_svd_rtol, svd, svd_with, SvdOptions};
+use tensor4all_core::{
+    default_svd_truncation_policy, set_default_svd_truncation_policy, svd, svd_with, SvdOptions,
+    SvdTruncationPolicy,
+};
 use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
 
 fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
@@ -294,7 +297,7 @@ fn test_svd_truncation() {
     let tensor = dense_f64(vec![i.clone(), j.clone()], data);
 
     // Use a more lenient rtol to ensure truncation happens
-    let options = SvdOptions::with_rtol(1e-10);
+    let options = SvdOptions::new().with_policy(SvdTruncationPolicy::new(1e-10));
     let (u, s, v) =
         svd_with::<f64>(&tensor, std::slice::from_ref(&i), &options).expect("SVD should succeed");
 
@@ -318,8 +321,8 @@ fn test_svd_truncation() {
 }
 
 #[test]
-fn test_svd_with_override() {
-    // Test that svd_with can override the global default rtol
+fn test_svd_with_policy_override() {
+    // Test that svd_with can override the global default truncation policy
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
 
@@ -332,15 +335,15 @@ fn test_svd_with_override() {
     let tensor = dense_f64(vec![i.clone(), j.clone()], data);
 
     // Save original default
-    let original_rtol = default_svd_rtol();
+    let original_policy = default_svd_truncation_policy();
 
-    // Test with lenient rtol (should truncate)
-    let lenient_options = SvdOptions::with_rtol(1e-4);
+    // Test with lenient threshold (should truncate)
+    let lenient_options = SvdOptions::new().with_policy(SvdTruncationPolicy::new(1e-4));
     let (u1, s1, _v1) = svd_with::<f64>(&tensor, std::slice::from_ref(&i), &lenient_options)
         .expect("SVD should succeed");
 
-    // Test with strict rtol (should not truncate)
-    let strict_options = SvdOptions::with_rtol(1e-12);
+    // Test with strict threshold (should not truncate)
+    let strict_options = SvdOptions::new().with_policy(SvdTruncationPolicy::new(1e-12));
     let (u2, s2, _v2) = svd_with::<f64>(&tensor, std::slice::from_ref(&i), &strict_options)
         .expect("SVD should succeed");
 
@@ -361,59 +364,41 @@ fn test_svd_with_override() {
     assert_eq!(s2_dims[0], 2, "Strict rtol should keep full rank");
 
     // Restore original default
-    set_default_svd_rtol(original_rtol).expect("Should restore original rtol");
+    set_default_svd_truncation_policy(original_policy).expect("Should restore original policy");
 }
 
 #[test]
-fn test_default_svd_rtol() {
-    // Test global default rtol getter and setter
-    // Note: Other tests may have changed the global default, so we restore it first
-    let original_rtol = default_svd_rtol();
+fn test_default_svd_truncation_policy() {
+    let original_policy = default_svd_truncation_policy();
 
-    // Restore to expected default (1e-12) for this test
-    set_default_svd_rtol(1e-12).expect("Should set default rtol");
-    let current_rtol = default_svd_rtol();
+    let expected_default = SvdTruncationPolicy::new(1e-12);
+    set_default_svd_truncation_policy(expected_default).expect("Should set default policy");
+    assert_eq!(default_svd_truncation_policy(), expected_default);
 
-    // Default should be 1e-12
+    let new_policy = SvdTruncationPolicy::new(1e-8).with_absolute();
+    set_default_svd_truncation_policy(new_policy).expect("Should set policy");
+    assert_eq!(default_svd_truncation_policy(), new_policy);
+
     assert!(
-        (current_rtol - 1e-12).abs() < 1e-15,
-        "Default rtol should be 1e-12, got {}",
-        current_rtol
-    );
-
-    // Test setting a new value
-    let new_rtol = 1e-8;
-    set_default_svd_rtol(new_rtol).expect("Should set rtol");
-    assert!(
-        (default_svd_rtol() - new_rtol).abs() < 1e-15,
-        "Should retrieve the set rtol value"
-    );
-
-    // Test invalid values
-    assert!(
-        set_default_svd_rtol(-1.0).is_err(),
-        "Negative rtol should be rejected"
+        set_default_svd_truncation_policy(SvdTruncationPolicy::new(-1.0)).is_err(),
+        "Negative threshold should be rejected"
     );
     assert!(
-        set_default_svd_rtol(f64::NAN).is_err(),
-        "NaN rtol should be rejected"
+        set_default_svd_truncation_policy(SvdTruncationPolicy::new(f64::NAN)).is_err(),
+        "NaN threshold should be rejected"
     );
     assert!(
-        set_default_svd_rtol(f64::INFINITY).is_err(),
-        "Infinite rtol should be rejected"
+        set_default_svd_truncation_policy(SvdTruncationPolicy::new(f64::INFINITY)).is_err(),
+        "Infinite threshold should be rejected"
     );
 
-    // Restore original
-    set_default_svd_rtol(original_rtol).expect("Should restore original rtol");
-    assert!(
-        (default_svd_rtol() - original_rtol).abs() < 1e-15,
-        "Should restore original rtol"
-    );
+    set_default_svd_truncation_policy(original_policy).expect("Should restore original policy");
+    assert_eq!(default_svd_truncation_policy(), original_policy);
 }
 
 #[test]
 fn test_svd_uses_global_default() {
-    // Test that svd() uses the global default rtol
+    // Test that svd() uses the global default truncation policy
     let i = Index::new_dyn(2);
     let j = Index::new_dyn(2);
 
@@ -422,22 +407,22 @@ fn test_svd_uses_global_default() {
     let tensor = dense_f64(vec![i.clone(), j.clone()], data);
 
     // Save original default
-    let original_rtol = default_svd_rtol();
+    let original_policy = default_svd_truncation_policy();
 
     // Change global default
-    set_default_svd_rtol(1e-6).expect("Should set rtol");
+    set_default_svd_truncation_policy(SvdTruncationPolicy::new(1e-6)).expect("Should set policy");
 
     // svd() should use the new global default
     let (u, s, _v) = svd::<f64>(&tensor, std::slice::from_ref(&i)).expect("SVD should succeed");
 
-    // With rtol=1e-6, identity matrix should keep full rank (both singular values are 1.0)
+    // With threshold=1e-6, identity matrix should keep full rank (both singular values are 1.0)
     let u_dims = u.dims();
     let s_dims = s.dims();
     assert_eq!(u_dims[1], 2, "Identity matrix should keep full rank");
     assert_eq!(s_dims[0], 2, "Identity matrix should keep full rank");
 
     // Restore original
-    set_default_svd_rtol(original_rtol).expect("Should restore original rtol");
+    set_default_svd_truncation_policy(original_policy).expect("Should restore original policy");
 }
 
 /// Helper: compute SVD reconstruction error for a given tensor and split.

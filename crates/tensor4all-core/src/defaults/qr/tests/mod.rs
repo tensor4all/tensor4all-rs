@@ -68,9 +68,9 @@ fn set_default_qr_rtol_rejects_invalid_values() {
 #[test]
 fn qr_options_report_rtol_and_default_roundtrips() {
     let original = default_qr_rtol();
-    let options = QrOptions::with_rtol(1.0e-7);
-    assert_eq!(options.rtol(), Some(1.0e-7));
-    assert_eq!(QrOptions::default().rtol(), None);
+    let options = QrOptions::new().with_rtol(1.0e-7);
+    assert_eq!(options.rtol, Some(1.0e-7));
+    assert_eq!(QrOptions::new().rtol, None);
 
     set_default_qr_rtol(1.0e-9).unwrap();
     assert_eq!(default_qr_rtol(), 1.0e-9);
@@ -86,14 +86,14 @@ fn qr_with_invalid_rtol_is_rejected_before_linalg() {
     let nan = qr_with::<f64>(
         &tensor,
         std::slice::from_ref(&i),
-        &QrOptions::with_rtol(f64::NAN),
+        &QrOptions::new().with_rtol(f64::NAN),
     );
     assert!(matches!(nan, Err(QrError::InvalidRtol(v)) if v.is_nan()));
 
     let negative = qr_with::<f64>(
         &tensor,
         std::slice::from_ref(&i),
-        &QrOptions::with_rtol(-1.0),
+        &QrOptions::new().with_rtol(-1.0),
     );
     assert!(matches!(negative, Err(QrError::InvalidRtol(v)) if v == -1.0));
 }
@@ -110,7 +110,7 @@ fn qr_with_native_truncation_reduces_bond_dimension() {
     let (q, r) = qr_with::<f64>(
         &tensor,
         std::slice::from_ref(&i),
-        &QrOptions::with_rtol(1.0e-10),
+        &QrOptions::new().with_rtol(1.0e-10),
     )
     .unwrap();
     assert_eq!(q.dims(), vec![2, 1]);
@@ -129,7 +129,7 @@ fn qr_with_complex_fallback_truncation_reduces_bond_dimension() {
     let (q, r) = qr_with::<Complex64>(
         &tensor,
         std::slice::from_ref(&i),
-        &QrOptions::with_rtol(1.0e-10),
+        &QrOptions::new().with_rtol(1.0e-10),
     )
     .unwrap();
     assert_eq!(q.dims(), vec![2, 1]);

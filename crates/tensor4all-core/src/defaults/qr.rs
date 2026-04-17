@@ -4,7 +4,6 @@
 
 use crate::defaults::DynIndex;
 use crate::global_default::GlobalDefault;
-use crate::truncation::TruncationParams;
 use crate::{unfold_split, TensorDynLen};
 use num_complex::ComplexFloat;
 use tenferro::DType;
@@ -39,7 +38,7 @@ pub enum QrError {
 /// let data: Vec<f64> = (0..9).map(|x| x as f64).collect();
 /// let tensor = TensorDynLen::from_dense(vec![i.clone(), j.clone()], data).unwrap();
 ///
-/// let opts = QrOptions::with_rtol(1e-10);
+/// let opts = QrOptions::new().with_rtol(1e-10);
 /// let (q, r) = qr_with::<f64>(&tensor, &[i], &opts).unwrap();
 ///
 /// // Q * R recovers the original tensor
@@ -48,21 +47,23 @@ pub enum QrError {
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QrOptions {
-    /// Truncation parameters (rtol only for QR).
-    pub truncation: TruncationParams,
+    /// Relative tolerance for QR row-norm truncation.
+    /// If `None`, uses the global default.
+    pub rtol: Option<f64>,
 }
 
 impl QrOptions {
-    /// Create new QR options with the specified rtol.
-    pub fn with_rtol(rtol: f64) -> Self {
-        Self {
-            truncation: TruncationParams::new().with_rtol(rtol),
-        }
+    /// Create new QR options with no overrides.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Get rtol from options (for backwards compatibility).
-    pub fn rtol(&self) -> Option<f64> {
-        self.truncation.rtol
+    /// Set the QR truncation tolerance.
+    #[must_use]
+    pub fn with_rtol(mut self, rtol: f64) -> Self {
+        self.rtol = Some(rtol);
+        self
     }
 }
 
@@ -259,7 +260,7 @@ pub fn qr_with<T>(
     options: &QrOptions,
 ) -> Result<(TensorDynLen, TensorDynLen), QrError> {
     // Determine rtol to use
-    let rtol = options.truncation.effective_rtol(default_qr_rtol());
+    let rtol = options.rtol.unwrap_or(default_qr_rtol());
     if !rtol.is_finite() || rtol < 0.0 {
         return Err(QrError::InvalidRtol(rtol));
     }
