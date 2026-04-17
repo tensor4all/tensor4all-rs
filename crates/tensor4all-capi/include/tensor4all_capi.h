@@ -277,6 +277,24 @@ StatusCode t4a_qtransform_affine_materialize(const struct t4a_qtt_layout *layout
                                              struct t4a_treetn **out);
 
 /**
+ * Materialize an affine pullback operator (`g(x) -> g(A * y + b)`) as a
+ * chain-shaped TreeTN.
+ *
+ * `bc[i]` controls how source coordinate `i` is treated when `(A * y + b)[i]`
+ * leaves the valid interval. `Periodic` wraps the coordinate, while `Open`
+ * zero-extends it.
+ */
+StatusCode t4a_qtransform_affine_pullback_materialize(const struct t4a_qtt_layout *layout,
+                                                      const int64_t *a_num,
+                                                      const int64_t *a_den,
+                                                      const int64_t *b_num,
+                                                      const int64_t *b_den,
+                                                      size_t m,
+                                                      size_t n,
+                                                      const enum t4a_boundary_condition *bc,
+                                                      struct t4a_treetn **out);
+
+/**
  * Materialize a binary operator directly as a chain-shaped TreeTN.
  */
 StatusCode t4a_qtransform_binaryop_materialize(const struct t4a_qtt_layout *layout,
