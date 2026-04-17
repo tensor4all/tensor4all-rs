@@ -1,4 +1,5 @@
 use super::*;
+use tensor4all_core::FactorizeAlg;
 use tensor4all_treetn::treetn::contraction::ContractionMethod;
 use tensor4all_treetn::CanonicalForm;
 
@@ -21,6 +22,20 @@ fn test_contract_method_roundtrip() {
         let ffi = t4a_contract_method::from(method);
         let roundtrip = ContractionMethod::from(ffi);
         assert_eq!(roundtrip, method);
+    }
+}
+
+#[test]
+fn test_factorize_alg_roundtrip() {
+    for alg in [
+        FactorizeAlg::SVD,
+        FactorizeAlg::QR,
+        FactorizeAlg::LU,
+        FactorizeAlg::CI,
+    ] {
+        let ffi = t4a_factorize_alg::from(alg);
+        let roundtrip = FactorizeAlg::from(ffi);
+        assert_eq!(roundtrip, alg);
     }
 }
 

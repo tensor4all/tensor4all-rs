@@ -1,4 +1,5 @@
 use super::*;
+use crate::SwapOptions;
 
 #[test]
 fn test_canonicalization_options_default() {
@@ -99,4 +100,32 @@ fn test_split_options_has_truncation_params() {
     assert!(opts.truncation_params().max_rank.is_none());
     opts.truncation_params_mut().max_rank = Some(25);
     assert_eq!(opts.truncation_params().max_rank, Some(25));
+}
+
+#[test]
+fn test_restructure_options_default_and_builder() {
+    let opts = RestructureOptions::default();
+    assert_eq!(opts.split.form, CanonicalForm::Unitary);
+    assert!(!opts.split.final_sweep);
+    assert_eq!(opts.swap.max_rank, None);
+    assert_eq!(opts.swap.rtol, None);
+    assert!(opts.final_truncation.is_none());
+
+    let opts = RestructureOptions::new()
+        .with_split(SplitOptions::new().with_max_rank(16).with_final_sweep(true))
+        .with_swap(SwapOptions {
+            max_rank: Some(8),
+            rtol: Some(1e-9),
+        })
+        .with_final_truncation(TruncationOptions::new().with_rtol(1e-10));
+    assert_eq!(opts.split.max_rank(), Some(16));
+    assert!(opts.split.final_sweep);
+    assert_eq!(opts.swap.max_rank, Some(8));
+    assert_eq!(opts.swap.rtol, Some(1e-9));
+    assert_eq!(
+        opts.final_truncation
+            .as_ref()
+            .and_then(TruncationOptions::rtol),
+        Some(1e-10)
+    );
 }

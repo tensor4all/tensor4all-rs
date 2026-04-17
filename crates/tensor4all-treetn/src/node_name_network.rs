@@ -564,7 +564,7 @@ where
             .map(|(&node, &d)| (node, d))
             .collect();
 
-        node_dist_pairs.sort_by(|a, b| b.1.cmp(&a.1)); // Descending by distance
+        node_dist_pairs.sort_by_key(|pair| std::cmp::Reverse(pair.1)); // Descending by distance
 
         let edges: Vec<(NodeIndex, NodeIndex)> = node_dist_pairs
             .iter()

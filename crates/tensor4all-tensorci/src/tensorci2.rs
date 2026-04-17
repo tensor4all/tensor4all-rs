@@ -1481,7 +1481,7 @@ where
         }
 
         let mut cache_ref = self.cache.borrow_mut();
-        for ((out_idx, row, col), value) in missing_entries.into_iter().zip(values.into_iter()) {
+        for ((out_idx, row, col), value) in missing_entries.into_iter().zip(values) {
             out[out_idx] = value;
             cache_ref.insert((row, col), value);
 

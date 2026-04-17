@@ -78,6 +78,28 @@ typedef enum t4a_contract_method {
 } t4a_contract_method;
 
 /**
+ * Factorization algorithms exposed through the C API.
+ */
+typedef enum t4a_factorize_alg {
+  /**
+   * Singular value decomposition.
+   */
+  T4A_FACTORIZE_ALG_SVD = 0,
+  /**
+   * QR decomposition.
+   */
+  T4A_FACTORIZE_ALG_QR = 1,
+  /**
+   * Rank-revealing LU decomposition.
+   */
+  T4A_FACTORIZE_ALG_LU = 2,
+  /**
+   * Cross interpolation.
+   */
+  T4A_FACTORIZE_ALG_CI = 3,
+} t4a_factorize_alg;
+
+/**
  * Canonical form used for orthogonalization/truncation.
  */
 typedef enum t4a_canonical_form {
@@ -402,10 +424,43 @@ StatusCode t4a_tensor_new_dense_f64(size_t rank,
 
 /**
  * Compute the QR decomposition of a tensor split by the requested left indices.
+ *
+ * The tensor is unfolded into a matrix by treating `left_inds[..n_left]` as row
+ * indices and all remaining tensor indices as columns, then factorized as
+ * `tensor = Q * R`.
+ *
+ * # Arguments
+ * * `tensor` - Input tensor handle to factorize.
+ * * `left_inds` - Pointers to the indices that should appear on the left side
+ *   of the factorization.
+ * * `n_left` - Number of entries in `left_inds`.
+ * * `rtol` - Relative truncation tolerance for QR row-norm truncation. Pass
+ *   `0.0` to disable truncation and keep the exact QR rank. Pass any other
+ *   finite, non-negative value to request truncation for this call.
+ * * `out_q` - Output slot that receives a newly allocated `Q` tensor handle on
+ *   success.
+ * * `out_r` - Output slot that receives a newly allocated `R` tensor handle on
+ *   success.
+ *
+ * # Returns
+ * Returns `T4A_SUCCESS` on success and writes owned tensor handles to
+ * `out_q` and `out_r`. The caller must release both handles with
+ * [`t4a_tensor_release`].
+ *
+ * # Errors
+ * Returns:
+ * - `T4A_NULL_POINTER` if `tensor`, any required index pointer, `out_q`, or
+ *   `out_r` is null.
+ * - `T4A_INVALID_ARGUMENT` if the index split is invalid, QR factorization
+ *   fails, or `rtol` is negative or non-finite (for example `NaN` or
+ *   `+/-inf`).
+ * - `T4A_INTERNAL_ERROR` if the Rust implementation panics while processing
+ *   the request.
  */
 StatusCode t4a_tensor_qr(const struct t4a_tensor *tensor,
                          const struct t4a_index *const *left_inds,
                          size_t n_left,
+                         double rtol,
                          struct t4a_tensor **out_q,
                          struct t4a_tensor **out_r);
 
@@ -456,6 +511,9 @@ StatusCode t4a_treetn_add(const struct t4a_treetn *a,
  * `internal_input_indices[i]` and `internal_output_indices[i]` must point to
  * those indices. Unmapped state nodes are filled with identities by
  * `apply_linear_operator`.
+ *
+ * For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
+ * default", which currently resolves to one variational sweep.
  */
 StatusCode t4a_treetn_apply_operator_chain(const struct t4a_treetn *operator_,
                                            const struct t4a_treetn *state,
@@ -468,6 +526,8 @@ StatusCode t4a_treetn_apply_operator_chain(const struct t4a_treetn *operator_,
                                            double rtol,
                                            double cutoff,
                                            size_t maxdim,
+                                           size_t nfullsweeps,
+                                           double convergence_tol,
                                            struct t4a_treetn **out);
 
 /**
@@ -485,6 +545,9 @@ StatusCode t4a_treetn_clone(const struct t4a_treetn *src, struct t4a_treetn **ou
 
 /**
  * Contract two tree tensor networks with the requested method.
+ *
+ * For `t4a_contract_method::Fit`, `nfullsweeps == 0` means "use the backend
+ * default", which currently resolves to one variational sweep.
  */
 StatusCode t4a_treetn_contract(const struct t4a_treetn *a,
                                const struct t4a_treetn *b,
@@ -492,6 +555,9 @@ StatusCode t4a_treetn_contract(const struct t4a_treetn *a,
                                double rtol,
                                double cutoff,
                                size_t maxdim,
+                               size_t nfullsweeps,
+                               double convergence_tol,
+                               enum t4a_factorize_alg factorize_alg,
                                struct t4a_treetn **out);
 
 /**
@@ -504,6 +570,19 @@ StatusCode t4a_treetn_evaluate(const struct t4a_treetn *treetn,
                                size_t n_points,
                                double *out_re,
                                double *out_im);
+
+/**
+ * Fuse connected current-node groups into the requested target topology.
+ */
+StatusCode t4a_treetn_fuse_to(const struct t4a_treetn *treetn,
+                              const size_t *target_vertices,
+                              size_t n_target_vertices,
+                              const struct t4a_index *const *target_siteinds,
+                              const size_t *target_siteinds_len,
+                              const size_t *target_edge_sources,
+                              const size_t *target_edge_targets,
+                              size_t n_target_edges,
+                              struct t4a_treetn **out);
 
 /**
  * Compute the inner product of two tree tensor networks.
@@ -525,6 +604,45 @@ StatusCode t4a_treetn_linkind(const struct t4a_treetn *treetn,
                               size_t v1,
                               size_t v2,
                               struct t4a_index **out);
+
+/**
+ * Solve `(a0 + a1 * operator) * x = rhs` for `x` as a TreeTN.
+ *
+ * The solver returns only the solution TreeTN. The Rust-side `SquareLinsolveResult`
+ * also tracks sweep metadata, but that is not yet exposed through the C ABI.
+ *
+ * `mapped_vertices` and the four index arrays provide optional per-vertex
+ * index mappings when the operator uses internal site indices distinct from
+ * the `init` / `rhs` site indices. Pass `n_mapped_vertices == 0` to disable
+ * mappings.
+ *
+ * Current limitation: the sweep-based backend still assumes that `init` and
+ * `rhs` share the same true site-index set. The mapping arrays bridge the
+ * operator's internal indices to those true indices, but they do not yet
+ * support solving between distinct `init` and `rhs` true index spaces.
+ */
+StatusCode t4a_treetn_linsolve(const struct t4a_treetn *operator_,
+                               const struct t4a_treetn *rhs,
+                               const struct t4a_treetn *init,
+                               size_t center_vertex,
+                               const size_t *mapped_vertices,
+                               size_t n_mapped_vertices,
+                               const struct t4a_index *const *true_input_indices,
+                               const struct t4a_index *const *internal_input_indices,
+                               const struct t4a_index *const *true_output_indices,
+                               const struct t4a_index *const *internal_output_indices,
+                               double rtol,
+                               double cutoff,
+                               size_t maxdim,
+                               enum t4a_canonical_form form,
+                               size_t nfullsweeps,
+                               double krylov_tol,
+                               size_t krylov_maxiter,
+                               size_t krylov_dim,
+                               double a0,
+                               double a1,
+                               double convergence_tol,
+                               struct t4a_treetn **out);
 
 /**
  * Get the neighbors of a vertex.
@@ -554,15 +672,45 @@ StatusCode t4a_treetn_num_vertices(const struct t4a_treetn *treetn, size_t *out_
 
 /**
  * Orthogonalize the tree tensor network to a vertex using the requested form.
+ *
+ * When `force == 0`, this uses smart canonicalization:
+ * - If the network is already canonical at `vertex` with `form`, the call is a no-op.
+ * - If the network is already canonicalized with a different form, the call returns
+ *   `T4A_INVALID_ARGUMENT`. Pass a nonzero `force` to re-canonicalize with a different form.
  */
 StatusCode t4a_treetn_orthogonalize(struct t4a_treetn *treetn,
                                     size_t vertex,
-                                    enum t4a_canonical_form form);
+                                    enum t4a_canonical_form form,
+                                    int force);
 
 /**
  * Release a TreeTN handle.
  */
 void t4a_treetn_release(struct t4a_treetn *obj);
+
+/**
+ * Restructure a TreeTN using split, swap, and optional final truncation phases.
+ */
+StatusCode t4a_treetn_restructure_to(const struct t4a_treetn *treetn,
+                                     const size_t *target_vertices,
+                                     size_t n_target_vertices,
+                                     const struct t4a_index *const *target_siteinds,
+                                     const size_t *target_siteinds_len,
+                                     const size_t *target_edge_sources,
+                                     const size_t *target_edge_targets,
+                                     size_t n_target_edges,
+                                     double split_rtol,
+                                     double split_cutoff,
+                                     size_t split_maxdim,
+                                     enum t4a_canonical_form split_form,
+                                     int split_final_sweep,
+                                     size_t swap_maxdim,
+                                     double swap_rtol,
+                                     double final_rtol,
+                                     double final_cutoff,
+                                     size_t final_maxdim,
+                                     enum t4a_canonical_form final_form,
+                                     struct t4a_treetn **out);
 
 /**
  * Scale a tree tensor network by a complex scalar.
@@ -589,6 +737,35 @@ StatusCode t4a_treetn_siteinds(const struct t4a_treetn *treetn,
                                size_t *out_len);
 
 /**
+ * Split current nodes to match the requested target topology.
+ */
+StatusCode t4a_treetn_split_to(const struct t4a_treetn *treetn,
+                               const size_t *target_vertices,
+                               size_t n_target_vertices,
+                               const struct t4a_index *const *target_siteinds,
+                               const size_t *target_siteinds_len,
+                               const size_t *target_edge_sources,
+                               const size_t *target_edge_targets,
+                               size_t n_target_edges,
+                               double rtol,
+                               double cutoff,
+                               size_t maxdim,
+                               enum t4a_canonical_form form,
+                               int final_sweep,
+                               struct t4a_treetn **out);
+
+/**
+ * Reassign site indices to target vertices using scheduled swap transport.
+ */
+StatusCode t4a_treetn_swap_site_indices(const struct t4a_treetn *treetn,
+                                        const struct t4a_index *const *assignment_siteinds,
+                                        const size_t *assignment_target_vertices,
+                                        size_t n_assignments,
+                                        size_t maxdim,
+                                        double rtol,
+                                        struct t4a_treetn **out);
+
+/**
  * Get the tensor at a specific vertex.
  */
 StatusCode t4a_treetn_tensor(const struct t4a_treetn *treetn,
@@ -606,6 +783,7 @@ StatusCode t4a_treetn_to_dense(const struct t4a_treetn *treetn, struct t4a_tenso
 StatusCode t4a_treetn_truncate(struct t4a_treetn *treetn,
                                double rtol,
                                double cutoff,
-                               size_t maxdim);
+                               size_t maxdim,
+                               enum t4a_canonical_form form);
 
 #endif  /* TENSOR4ALL_CAPI_H */
