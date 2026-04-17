@@ -252,7 +252,7 @@ where
 
         // Step 1: Add all tensors as nodes and collect NodeIndex mappings
         let mut node_indices = Vec::with_capacity(tensors.len());
-        for (tensor, node_name) in tensors.into_iter().zip(node_names.into_iter()) {
+        for (tensor, node_name) in tensors.into_iter().zip(node_names) {
             let node_idx = treetn.add_tensor_internal(node_name, tensor)?;
             node_indices.push(node_idx);
         }
