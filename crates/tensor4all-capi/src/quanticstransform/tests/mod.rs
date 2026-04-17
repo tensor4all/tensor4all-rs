@@ -4,9 +4,9 @@ use num_complex::Complex64;
 use num_rational::Rational64;
 use tensor4all_core::{ColMajorArrayRef, TensorDynLen};
 use tensor4all_quanticstransform::{
-    affine_operator, binaryop_operator, cumsum_operator, flip_operator, phase_rotation_operator,
-    quantics_fourier_operator, shift_operator, AffineParams, BinaryCoeffs, BoundaryCondition,
-    FourierOptions,
+    affine_operator, affine_pullback_operator, binaryop_operator, cumsum_operator, flip_operator,
+    phase_rotation_operator, quantics_fourier_operator, shift_operator, AffineParams, BinaryCoeffs,
+    BoundaryCondition, FourierOptions,
 };
 use tensor4all_treetn::LinearOperator;
 
@@ -472,6 +472,105 @@ fn test_affine_fused_materialization_matches_rust_reference() {
 }
 
 #[test]
+fn test_affine_pullback_fused_materialization_matches_rust_reference() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2]);
+    let mut op = std::ptr::null_mut();
+    let a_num = [1i64];
+    let a_den = [1i64];
+    let b_num = [0i64];
+    let b_den = [1i64];
+    let bc = [t4a_boundary_condition::Periodic];
+    assert_eq!(
+        t4a_qtransform_affine_pullback_materialize(
+            layout,
+            a_num.as_ptr(),
+            a_den.as_ptr(),
+            b_num.as_ptr(),
+            b_den.as_ptr(),
+            1,
+            1,
+            bc.as_ptr(),
+            &mut op
+        ),
+        T4A_SUCCESS
+    );
+
+    let actual = c_operator_matrix(op, &[2, 2], &[2, 2]);
+    let params = AffineParams::new(
+        vec![Rational64::from_integer(1)],
+        vec![Rational64::from_integer(0)],
+        1,
+        1,
+    )
+    .unwrap();
+    let expected = rust_operator_matrix(
+        &affine_pullback_operator(2, &params, &[BoundaryCondition::Periodic]).unwrap(),
+        &[2, 2],
+        &[2, 2],
+    );
+    assert_matrix_close(&actual, &expected);
+
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
+fn test_affine_pullback_fused_swap_matches_rust_reference() {
+    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[1, 1]);
+    let mut op = std::ptr::null_mut();
+    let a_num = [0i64, 1i64, 1i64, 0i64];
+    let a_den = [1i64; 4];
+    let b_num = [0i64, 0i64];
+    let b_den = [1i64; 2];
+    let bc = [
+        t4a_boundary_condition::Periodic,
+        t4a_boundary_condition::Periodic,
+    ];
+    assert_eq!(
+        t4a_qtransform_affine_pullback_materialize(
+            layout,
+            a_num.as_ptr(),
+            a_den.as_ptr(),
+            b_num.as_ptr(),
+            b_den.as_ptr(),
+            2,
+            2,
+            bc.as_ptr(),
+            &mut op
+        ),
+        T4A_SUCCESS
+    );
+
+    let actual = c_operator_matrix(op, &[4], &[4]);
+    let params = AffineParams::new(
+        vec![
+            Rational64::from_integer(0),
+            Rational64::from_integer(1),
+            Rational64::from_integer(1),
+            Rational64::from_integer(0),
+        ],
+        vec![Rational64::from_integer(0), Rational64::from_integer(0)],
+        2,
+        2,
+    )
+    .unwrap();
+    let expected = rust_operator_matrix(
+        &affine_pullback_operator(
+            1,
+            &params,
+            &[BoundaryCondition::Periodic, BoundaryCondition::Periodic],
+        )
+        .unwrap(),
+        &[4],
+        &[4],
+    );
+    assert_matrix_close(&actual, &expected);
+
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
 fn test_grouped_binaryop_is_rejected_with_explicit_message() {
     let layout = new_layout(t4a_qtt_layout_kind::Grouped, &[2, 2]);
     let mut op = std::ptr::null_mut();
@@ -530,6 +629,21 @@ fn test_layout_and_affine_validation_errors_are_reported() {
     let bc = [t4a_boundary_condition::Periodic];
     assert_eq!(
         t4a_qtransform_affine_materialize(
+            grouped,
+            a_num.as_ptr(),
+            a_den.as_ptr(),
+            b_num.as_ptr(),
+            b_den.as_ptr(),
+            1,
+            1,
+            bc.as_ptr(),
+            &mut op
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("fused layouts only"));
+    assert_eq!(
+        t4a_qtransform_affine_pullback_materialize(
             grouped,
             a_num.as_ptr(),
             a_den.as_ptr(),
