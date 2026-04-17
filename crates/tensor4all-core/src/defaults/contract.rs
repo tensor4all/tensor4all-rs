@@ -23,6 +23,7 @@
 //! - This creates a hyperedge that the einsum optimizer handles correctly
 
 use std::cell::RefCell;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::env;
 use std::time::{Duration, Instant};
@@ -95,7 +96,7 @@ pub fn print_and_reset_contract_profile() {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         state.borrow_mut().clear();
-        entries.sort_by(|(_, lhs), (_, rhs)| rhs.total_time.cmp(&lhs.total_time));
+        entries.sort_by_key(|(_, entry)| Reverse(entry.total_time));
 
         eprintln!("=== contract_multi Profile ===");
         for (idx, (signature, entry)) in entries.into_iter().take(20).enumerate() {
