@@ -249,8 +249,8 @@ fn collect_target_assignment(
     )?;
     let mut target_assignment = HashMap::with_capacity(n_assignments);
     for (siteind, target_vertex) in siteinds.into_iter().zip(target_vertices) {
-        let site_id = siteind.id().clone();
-        if let Some(previous_target) = target_assignment.insert(site_id.clone(), target_vertex) {
+        let site_id = *siteind.id();
+        if let Some(previous_target) = target_assignment.insert(site_id, target_vertex) {
             return Err(capi_error(
                 T4A_INVALID_ARGUMENT,
                 format!(
@@ -263,6 +263,7 @@ fn collect_target_assignment(
     Ok(target_assignment)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_target_network(
     target_vertices: *const libc::size_t,
     n_target_vertices: usize,
@@ -314,8 +315,8 @@ fn build_target_network(
         }
         let mut site_space = HashSet::with_capacity(len);
         for siteind in &flat_siteinds[offset..offset + len] {
-            let site_id = siteind.id().clone();
-            if let Some(previous_vertex) = seen_siteinds.insert(site_id.clone(), vertex) {
+            let site_id = *siteind.id();
+            if let Some(previous_vertex) = seen_siteinds.insert(site_id, vertex) {
                 return Err(capi_error(
                     T4A_INVALID_ARGUMENT,
                     format!(
@@ -644,6 +645,7 @@ type LinsolveMappings = (
     HashMap<usize, IndexMapping<InternalIndex>>,
 );
 
+#[allow(clippy::too_many_arguments)]
 fn build_linsolve_index_mappings(
     operator: &InternalTreeTN,
     rhs: &InternalTreeTN,
@@ -1569,7 +1571,6 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
                 rtol: resolve_rtol(rtol, cutoff),
                 nfullsweeps: fit_nfullsweeps,
                 convergence_tol: resolve_convergence_tol(convergence_tol),
-                ..Default::default()
             },
         )
         .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;

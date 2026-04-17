@@ -159,6 +159,8 @@ fn assert_vec_close(actual: &[f64], expected: &[f64], tol: f64) {
     }
 }
 
+type OwnedTreeTN = (*mut t4a_treetn, Vec<*mut t4a_tensor>, Vec<*mut t4a_index>);
+
 fn make_two_site_treetn() -> (*mut t4a_treetn, Vec<*mut t4a_tensor>, Vec<*mut t4a_index>) {
     let s0 = new_index(2);
     let bond = new_index(2);
@@ -346,10 +348,7 @@ fn flat_assignment(assignments: &[(*const t4a_index, usize)]) -> FlatAssignment 
     }
 }
 
-fn make_two_site_contract_operands() -> (
-    (*mut t4a_treetn, Vec<*mut t4a_tensor>, Vec<*mut t4a_index>),
-    (*mut t4a_treetn, Vec<*mut t4a_tensor>, Vec<*mut t4a_index>),
-) {
+fn make_two_site_contract_operands() -> (OwnedTreeTN, OwnedTreeTN) {
     let in0 = new_index(2);
     let in1 = new_index(2);
     let out0 = new_index(2);

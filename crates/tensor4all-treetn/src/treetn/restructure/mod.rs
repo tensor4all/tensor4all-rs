@@ -31,6 +31,9 @@ struct FragmentNode<CurrentV, TargetV> {
     target: TargetV,
 }
 
+type SplitThenFuseTarget<CurrentV, TargetV, I> =
+    SiteIndexNetwork<FragmentNode<CurrentV, TargetV>, I>;
+
 #[derive(Debug, Clone)]
 enum RestructurePlanKind<CurrentV, TargetV, I>
 where
@@ -48,7 +51,7 @@ where
         target_assignment: HashMap<I::Id, CurrentV>,
     },
     SplitThenFuse {
-        split_target: SiteIndexNetwork<FragmentNode<CurrentV, TargetV>, I>,
+        split_target: Box<SplitThenFuseTarget<CurrentV, TargetV, I>>,
     },
 }
 
@@ -311,7 +314,7 @@ fn build_split_then_fuse_target<T, CurrentV, TargetV>(
     target: &SiteIndexNetwork<TargetV, T::Index>,
     site_to_target: &HashMap<<T::Index as IndexLike>::Id, TargetV>,
     site_to_current: &HashMap<<T::Index as IndexLike>::Id, CurrentV>,
-) -> Result<Option<SiteIndexNetwork<FragmentNode<CurrentV, TargetV>, T::Index>>>
+) -> Result<Option<SplitThenFuseTarget<CurrentV, TargetV, T::Index>>>
 where
     T: TensorLike,
     CurrentV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
@@ -593,6 +596,13 @@ where
     signature
 }
 
+#[derive(Default)]
+struct IsomorphicMatchState {
+    current_cache: HashMap<(usize, Option<usize>), String>,
+    target_cache: HashMap<(usize, Option<usize>), String>,
+    mapping: HashMap<NodeIndex, NodeIndex>,
+}
+
 fn match_isomorphic_subtrees<CurrentV, TargetV>(
     current_topology: &NodeNameNetwork<CurrentV>,
     target_topology: &NodeNameNetwork<TargetV>,
@@ -600,15 +610,13 @@ fn match_isomorphic_subtrees<CurrentV, TargetV>(
     current_parent: Option<NodeIndex>,
     target_node: NodeIndex,
     target_parent: Option<NodeIndex>,
-    current_cache: &mut HashMap<(usize, Option<usize>), String>,
-    target_cache: &mut HashMap<(usize, Option<usize>), String>,
-    mapping: &mut HashMap<NodeIndex, NodeIndex>,
+    state: &mut IsomorphicMatchState,
 ) -> bool
 where
     CurrentV: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
     TargetV: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
-    if let Some(existing) = mapping.insert(target_node, current_node) {
+    if let Some(existing) = state.mapping.insert(target_node, current_node) {
         if existing != current_node {
             return false;
         }
@@ -622,14 +630,23 @@ where
 
     let mut current_groups: HashMap<String, Vec<NodeIndex>> = HashMap::new();
     for child in current_children {
-        let signature =
-            rooted_signature(current_topology, child, Some(current_node), current_cache);
+        let signature = rooted_signature(
+            current_topology,
+            child,
+            Some(current_node),
+            &mut state.current_cache,
+        );
         current_groups.entry(signature).or_default().push(child);
     }
 
     let mut target_groups: HashMap<String, Vec<NodeIndex>> = HashMap::new();
     for child in target_children {
-        let signature = rooted_signature(target_topology, child, Some(target_node), target_cache);
+        let signature = rooted_signature(
+            target_topology,
+            child,
+            Some(target_node),
+            &mut state.target_cache,
+        );
         target_groups.entry(signature).or_default().push(child);
     }
 
@@ -663,9 +680,7 @@ where
                 Some(current_node),
                 target_child,
                 Some(target_node),
-                current_cache,
-                target_cache,
-                mapping,
+                state,
             ) {
                 return false;
             }
@@ -690,15 +705,12 @@ where
         return None;
     }
 
-    let mut current_cache = HashMap::new();
-    let mut target_cache = HashMap::new();
-
     let mut current_roots: Vec<(String, NodeIndex)> = current_topology
         .graph()
         .node_indices()
         .map(|node| {
             (
-                rooted_signature(current_topology, node, None, &mut current_cache),
+                rooted_signature(current_topology, node, None, &mut HashMap::new()),
                 node,
             )
         })
@@ -710,7 +722,7 @@ where
         .node_indices()
         .map(|node| {
             (
-                rooted_signature(target_topology, node, None, &mut target_cache),
+                rooted_signature(target_topology, node, None, &mut HashMap::new()),
                 node,
             )
         })
@@ -723,7 +735,7 @@ where
                 continue;
             }
 
-            let mut mapping = HashMap::new();
+            let mut state = IsomorphicMatchState::default();
             if match_isomorphic_subtrees(
                 current_topology,
                 target_topology,
@@ -731,12 +743,10 @@ where
                 None,
                 *target_root,
                 None,
-                &mut current_cache,
-                &mut target_cache,
-                &mut mapping,
-            ) && mapping.len() == target_topology.node_count()
+                &mut state,
+            ) && state.mapping.len() == target_topology.node_count()
             {
-                return Some(mapping);
+                return Some(state.mapping);
             }
         }
     }
@@ -890,7 +900,9 @@ where
         &site_to_current,
     )? {
         return Ok(RestructurePlan {
-            kind: RestructurePlanKind::SplitThenFuse { split_target },
+            kind: RestructurePlanKind::SplitThenFuse {
+                split_target: Box::new(split_target),
+            },
         });
     }
 
@@ -934,7 +946,7 @@ where
         }
         RestructurePlanKind::SplitThenFuse { split_target } => {
             let split = tree
-                .split_to(&split_target, &options.split)
+                .split_to(split_target.as_ref(), &options.split)
                 .context("restructure_to: split phase")?;
             split.fuse_to(target).context("restructure_to: fuse phase")
         }
@@ -1051,6 +1063,14 @@ mod tests {
 
     use super::*;
 
+    type FourSiteChainCase = (
+        TreeTN<TensorDynLen, String>,
+        DynIndex,
+        DynIndex,
+        DynIndex,
+        DynIndex,
+    );
+
     fn two_node_chain() -> anyhow::Result<(TreeTN<TensorDynLen, String>, DynIndex, DynIndex)> {
         let left = DynIndex::new_dyn(2);
         let right = DynIndex::new_dyn(2);
@@ -1064,13 +1084,7 @@ mod tests {
         Ok((treetn, left, right))
     }
 
-    fn two_node_groups_of_two() -> anyhow::Result<(
-        TreeTN<TensorDynLen, String>,
-        DynIndex,
-        DynIndex,
-        DynIndex,
-        DynIndex,
-    )> {
+    fn two_node_groups_of_two() -> anyhow::Result<FourSiteChainCase> {
         let x0 = DynIndex::new_dyn(2);
         let x1 = DynIndex::new_dyn(2);
         let y0 = DynIndex::new_dyn(2);
@@ -1091,13 +1105,7 @@ mod tests {
         Ok((treetn, x0, x1, y0, y1))
     }
 
-    fn three_node_chain_for_swap() -> anyhow::Result<(
-        TreeTN<TensorDynLen, String>,
-        DynIndex,
-        DynIndex,
-        DynIndex,
-        DynIndex,
-    )> {
+    fn three_node_chain_for_swap() -> anyhow::Result<FourSiteChainCase> {
         let s0 = DynIndex::new_dyn(2);
         let s1 = DynIndex::new_dyn(2);
         let s2 = DynIndex::new_dyn(2);
@@ -1120,13 +1128,7 @@ mod tests {
         Ok((treetn, s0, s1, s2, s3))
     }
 
-    fn four_node_interleaved_chain() -> anyhow::Result<(
-        TreeTN<TensorDynLen, String>,
-        DynIndex,
-        DynIndex,
-        DynIndex,
-        DynIndex,
-    )> {
+    fn four_node_interleaved_chain() -> anyhow::Result<FourSiteChainCase> {
         let x0 = DynIndex::new_dyn(2);
         let x1 = DynIndex::new_dyn(2);
         let y0 = DynIndex::new_dyn(2);
