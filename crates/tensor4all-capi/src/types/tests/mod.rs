@@ -96,10 +96,6 @@ fn test_boundary_condition_roundtrip() {
 
 #[test]
 fn test_qtt_layout_validation() {
-    let grouped = InternalQttLayout::new(t4a_qtt_layout_kind::Grouped, vec![3, 2]).unwrap();
-    assert_eq!(grouped.nvariables(), 2);
-    assert_eq!(grouped.nsites(), 5);
-
     let interleaved = InternalQttLayout::new(t4a_qtt_layout_kind::Interleaved, vec![4, 4]).unwrap();
     assert_eq!(interleaved.nsites(), 8);
 

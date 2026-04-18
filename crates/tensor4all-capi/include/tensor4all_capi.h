@@ -32,17 +32,13 @@ typedef enum t4a_boundary_condition {
  */
 typedef enum t4a_qtt_layout_kind {
   /**
-   * Variable-major grouped layout.
-   */
-  T4A_QTT_LAYOUT_KIND_GROUPED = 0,
-  /**
    * Level-major interleaved layout.
    */
-  T4A_QTT_LAYOUT_KIND_INTERLEAVED = 1,
+  T4A_QTT_LAYOUT_KIND_INTERLEAVED = 0,
   /**
    * Fused-per-level layout.
    */
-  T4A_QTT_LAYOUT_KIND_FUSED = 2,
+  T4A_QTT_LAYOUT_KIND_FUSED = 1,
 } t4a_qtt_layout_kind;
 
 /**
@@ -433,7 +429,25 @@ StatusCode t4a_index_tags(const struct t4a_index *ptr,
 StatusCode t4a_last_error_message(uint8_t *buf, size_t buf_len, size_t *out_len);
 
 /**
- * Materialize an affine transform directly as a chain-shaped TreeTN.
+ * Materialize the forward affine operator `y = A * x + b` as a chain-shaped
+ * TreeTN using the Fused QTT layout.
+ *
+ * `a_num[i + k * m]` and `a_den[i + k * m]` hold the numerator and
+ * denominator of `A[i, k]` (column-major, length `m * n`, where `i`
+ * is the row index 0..m and `k` is the column index 0..n). `b_num[i]`
+ * and `b_den[i]` describe the `i`-th component of `b` (length `m`).
+ * `bc[i]` is the boundary condition applied to output coordinate `i`.
+ * The resulting TreeTN has `layout->nsites()` nodes, each with fused
+ * input and output site indices of dimensions `2^n` and `2^m`
+ * respectively.
+ *
+ * See also [`t4a_qtransform_affine_pullback_materialize`] for the pullback
+ * direction `f(y) = g(A * y + b)`.
+ *
+ * # Errors
+ *
+ * Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `layout->kind()`
+ * is not `Fused`, `b_den[i] == 0`, or `a_den[i + k * m] == 0`.
  */
 StatusCode t4a_qtransform_affine_materialize(const struct t4a_qtt_layout *layout,
                                              const int64_t *a_num,
@@ -446,12 +460,22 @@ StatusCode t4a_qtransform_affine_materialize(const struct t4a_qtt_layout *layout
                                              struct t4a_treetn **out);
 
 /**
- * Materialize an affine pullback operator (`g(x) -> g(A * y + b)`) as a
- * chain-shaped TreeTN.
+ * Materialize the pullback operator `f(y) = g(A * y + b)` as a chain-shaped
+ * TreeTN using the Fused QTT layout.
  *
- * `bc[i]` controls how source coordinate `i` is treated when `(A * y + b)[i]`
- * leaves the valid interval. `Periodic` wraps the coordinate, while `Open`
- * zero-extends it.
+ * Argument layout matches [`t4a_qtransform_affine_materialize`]; the
+ * difference is in how the site indices of the resulting `LinearOperator`
+ * are permuted so that the input encodes `g`'s `m`-variable quantics state
+ * and the output encodes `f`'s `n`-variable quantics state.
+ *
+ * `bc[i]` controls how source coordinate `i` is treated when
+ * `(A * y + b)[i]` leaves the valid interval. `Periodic` wraps the
+ * coordinate, while `Open` zero-extends it.
+ *
+ * # Errors
+ *
+ * Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `layout->kind()`
+ * is not `Fused`, `b_den[i] == 0`, or `a_den[i + k * m] == 0`.
  */
 StatusCode t4a_qtransform_affine_pullback_materialize(const struct t4a_qtt_layout *layout,
                                                       const int64_t *a_num,
@@ -462,20 +486,6 @@ StatusCode t4a_qtransform_affine_pullback_materialize(const struct t4a_qtt_layou
                                                       size_t n,
                                                       const enum t4a_boundary_condition *bc,
                                                       struct t4a_treetn **out);
-
-/**
- * Materialize a binary operator directly as a chain-shaped TreeTN.
- */
-StatusCode t4a_qtransform_binaryop_materialize(const struct t4a_qtt_layout *layout,
-                                               size_t lhs_var,
-                                               size_t rhs_var,
-                                               int8_t a1,
-                                               int8_t b1,
-                                               int8_t a2,
-                                               int8_t b2,
-                                               enum t4a_boundary_condition bc1,
-                                               enum t4a_boundary_condition bc2,
-                                               struct t4a_treetn **out);
 
 /**
  * Materialize a cumulative-sum transform directly as a chain-shaped TreeTN.

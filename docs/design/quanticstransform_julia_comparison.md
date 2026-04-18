@@ -12,7 +12,7 @@ Rust crate `tensor4all-quanticstransform` が Julia パッケージ `Quantics.jl
 | | Rust | Julia |
 |---|---|---|
 | パス | `crates/tensor4all-quanticstransform/` | `../Quantics.jl/` |
-| コード量 | ~4,100行 (9モジュール) | ~2,276行 (9モジュール) |
+| コード量 | ~3,138行 (8モジュール, binaryop.rs 削除済み) | ~2,276行 (9モジュール) |
 | テンソル形式 | rank-3 (bond, fused_site, bond) | rank-4 (bond, out_site, in_site, bond) via ITensors |
 | データ型 | `Complex64` 統一 | `Float64` / `BigFloat` 混合 |
 
@@ -27,9 +27,14 @@ src/
 ├── phase_rotation.rs (174行) # Phase rotation: f(x) = exp(iθx) g(x)
 ├── cumsum.rs (211行)   # Cumulative sum: y_i = Σ_{j<i} x_j
 ├── fourier.rs (411行)  # Quantics Fourier Transform (QFT)
-├── binaryop.rs (405行) # Binary op: a*x + b*y 変換
 └── affine.rs (1860行)  # Affine transform: y = Ax + b
 ```
+
+> **Note (2026-04-18):** `binaryop.rs` was removed in issue #428. The binary-op
+> functionality is a historical artifact predating general affine support.
+> Two-variable interleaved operations are now handled by `affine.rs` /
+> `affine_operator` at the Rust level, or by the Julia-side reimplementation
+> using the affine pullback + tensor-level SVD workflow.
 
 ### Julia モジュール構成
 
@@ -114,6 +119,8 @@ src/
 
 ### 2.6 Binary Operation (`g(ax+by, cx+dy)`)
 
+> **注 (2026-04-18):** 以下は 2026-02-13 時点の記録。issue #428 で Rust 側の `binaryop_operator` は削除済み。現状は Julia の binaryop.jl を `affine_pullback_operator` ベースに再実装する follow-up PR で対応予定。
+
 **アルゴリズム一致度: 部分的一致**
 
 - 単一テンソル演算: 一致 (carry states {-1,0,1}, 同じ算術)
@@ -166,6 +173,8 @@ src/
 
 ### 4.1 Rust に不足しているテスト (優先度順)
 
+> **注 (2026-04-18):** 下記のうち binaryop 関連の未解決項目は issue #428 で Rust 側の削除により moot 化した。項目 1（binaryop 数値正当性テスト皆無）と項目 4 の binaryop 部分は現時点では該当しない。
+
 | # | ギャップ | 影響度 | 詳細 |
 |---|---------|--------|------|
 | 1 | **binaryop の数値正当性テストが皆無** | 致命的 | 全テストがスモークテスト(生成のみ)。Julia は81通りの (a,b,c,d) を検証 |
@@ -194,7 +203,7 @@ src/
 | Phase rotation | 3 | 3 |
 | Cumsum | 3 | 3 |
 | Fourier | 2, 3, 4 | 3 |
-| Binaryop | 2, 3 | 0(error), 2, 4 |
+| Binaryop | 2, 3 | 0(error), 2, 4 (削除済み — issue #428) |
 | Affine | 1, 2, 3, 4, 5, 6 | 0(error), 1, 2, 3, 4, 5, 6, 8, 16 |
 
 ### 4.4 テスト境界条件の比較
@@ -203,12 +212,14 @@ src/
 |-----------|-------|------|
 | Flip | Periodic, Antisymmetric | Periodic, Open |
 | Shift | Periodic, Antisymmetric | Periodic, Open |
-| Binaryop | Periodic, Antisymmetric | Periodic |
+| Binaryop | Periodic, Antisymmetric | Periodic (削除済み — issue #428) |
 | Affine | Periodic, Antisymmetric, Open | Periodic, Open |
 
 ---
 
 ## 5. 結論
+
+> **注 (2026-04-18):** 項目 1（binaryop 数値正当性テスト）と項目 2（binaryop multi-var 対応）は issue #428 で Rust 側の削除により resolved。本 conclusion 上位に残るべきは項目 3 以降。
 
 ### アルゴリズム一致度
 

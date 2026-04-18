@@ -151,11 +151,7 @@ Quantics transforms do not expose an intermediate linear-operator handle in the
 C ABI. Instead, the binding provides a canonical layout and materializes the
 operator directly as a `t4a_treetn`.
 
-Supported layout kinds:
-
-- `Grouped`
-- `Interleaved`
-- `Fused`
+Supported layout kinds: `Interleaved` and `Fused`.
 
 Current materializers:
 
@@ -164,14 +160,10 @@ Current materializers:
 - `t4a_qtransform_phase_rotation_materialize`
 - `t4a_qtransform_cumsum_materialize`
 - `t4a_qtransform_fourier_materialize`
-- `t4a_qtransform_binaryop_materialize`
 - `t4a_qtransform_affine_materialize`
+- `t4a_qtransform_affine_pullback_materialize`
 
-Current intentional limitations:
-
-- grouped binary-op materialization is rejected with
-  `T4A_INVALID_ARGUMENT`
-- affine materialization currently requires `Fused` layout
+Current intentional limitation: affine materialization requires `Fused` layout.
 
 These constraints should stay explicit in both the function documentation and
 the error message returned to bindings.
