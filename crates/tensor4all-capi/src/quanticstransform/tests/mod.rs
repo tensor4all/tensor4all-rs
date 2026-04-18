@@ -5,8 +5,8 @@ use num_rational::Rational64;
 use tensor4all_core::{ColMajorArrayRef, TensorDynLen};
 use tensor4all_quanticstransform::{
     affine_operator, affine_pullback_operator, cumsum_operator, flip_operator,
-    phase_rotation_operator, quantics_fourier_operator, AffineParams, BoundaryCondition,
-    FourierOptions,
+    phase_rotation_operator, quantics_fourier_operator, shift_operator, AffineParams,
+    BoundaryCondition, FourierOptions,
 };
 use tensor4all_treetn::LinearOperator;
 
@@ -518,4 +518,111 @@ fn test_layout_and_affine_validation_errors_are_reported() {
 
     t4a_qtt_layout_release(interleaved);
     t4a_qtt_layout_release(fused);
+}
+
+/// Build the expected 16×16 dense matrix for an interleaved 2-variable 2-bit layout
+/// where the single-var 2-site operator is embedded at `var_sites` and identity occupies
+/// the complementary sites.
+///
+/// `var_sites[level]` gives the chain position for the variable being acted on.
+/// The complementary sites carry identity.
+///
+/// Index ordering (column-major / little-endian):
+///   row = Σ_k  out_k * 2^k   (k = 0..4)
+///   col = Σ_k  in_k  * 2^k
+///
+/// For var0 (sites 0, 2) acting on a 4-site chain:
+///   var_sites = [0, 2]   identity_sites = [1, 3]
+/// For var1 (sites 1, 3):
+///   var_sites = [1, 3]   identity_sites = [0, 2]
+fn expected_interleaved_shift_matrix(
+    shift_4x4: &[Complex64],
+    var_sites: [usize; 2],
+) -> Vec<Complex64> {
+    // identity_sites are the two sites NOT in var_sites (within 0..4)
+    let identity_sites: Vec<usize> = (0..4).filter(|s| !var_sites.contains(s)).collect();
+    let is0 = identity_sites[0];
+    let is1 = identity_sites[1];
+
+    // shift_4x4 is indexed (row, col) where
+    //   row = out_lvl0 + 2*out_lvl1   (mixed-radix in level order)
+    //   col = in_lvl0  + 2*in_lvl1
+    let mut expected = vec![Complex64::new(0.0, 0.0); 16 * 16];
+    // Enumerate all 2^4 = 16 output states and 16 input states.
+    for col in 0..16usize {
+        // Decode column → per-site input bits
+        let i: [usize; 4] = std::array::from_fn(|k| (col >> k) & 1);
+        for row in 0..16usize {
+            // Decode row → per-site output bits
+            let o: [usize; 4] = std::array::from_fn(|k| (row >> k) & 1);
+
+            // Identity condition: identity sites must pass through unchanged
+            if o[is0] != i[is0] || o[is1] != i[is1] {
+                continue;
+            }
+
+            // Operator element for the variable sites:
+            //   shift_4x4 row = out_lvl0 + 2*out_lvl1  (var bit at level 0, then level 1)
+            //   shift_4x4 col = in_lvl0  + 2*in_lvl1
+            let shift_row = o[var_sites[0]] + 2 * o[var_sites[1]];
+            let shift_col = i[var_sites[0]] + 2 * i[var_sites[1]];
+            expected[row + 16 * col] = shift_4x4[shift_row + 4 * shift_col];
+        }
+    }
+    expected
+}
+
+#[test]
+fn test_shift_interleaved_multivar_materialization_matches_rust_reference() {
+    // 2 variables × 2 bits each → 4 sites in interleaved order:
+    //   site 0 = var0_lvl0, site 1 = var1_lvl0, site 2 = var0_lvl1, site 3 = var1_lvl1
+    // We shift var0 (target_var = 0) by 1 with Periodic BC.
+    let layout = new_layout(t4a_qtt_layout_kind::Interleaved, &[2, 2]);
+    let mut op = std::ptr::null_mut();
+    assert_eq!(
+        t4a_qtransform_shift_materialize(layout, 0, 1, t4a_boundary_condition::Periodic, &mut op),
+        T4A_SUCCESS
+    );
+
+    let actual = c_operator_matrix(op, &[2, 2, 2, 2], &[2, 2, 2, 2]);
+
+    // Reference: 2-site shift-by-1 on var0 (sites 0 and 2); identity on var1 (sites 1 and 3).
+    let shift_4x4 = rust_operator_matrix(
+        &shift_operator(2, 1, BoundaryCondition::Periodic).unwrap(),
+        &[2, 2],
+        &[2, 2],
+    );
+    // var0 occupies interleaved positions [0, 2]
+    let expected = expected_interleaved_shift_matrix(&shift_4x4, [0, 2]);
+
+    assert_matrix_close(&actual, &expected);
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
+}
+
+#[test]
+fn test_shift_interleaved_second_var_matches_rust_reference() {
+    // Same layout but we shift var1 (target_var = 1).
+    // var1 occupies interleaved positions [1, 3]; identity on var0 at [0, 2].
+    let layout = new_layout(t4a_qtt_layout_kind::Interleaved, &[2, 2]);
+    let mut op = std::ptr::null_mut();
+    assert_eq!(
+        t4a_qtransform_shift_materialize(layout, 1, 1, t4a_boundary_condition::Periodic, &mut op),
+        T4A_SUCCESS
+    );
+
+    let actual = c_operator_matrix(op, &[2, 2, 2, 2], &[2, 2, 2, 2]);
+
+    // Reference: 2-site shift-by-1 on var1 (sites 1 and 3); identity on var0 (sites 0 and 2).
+    let shift_4x4 = rust_operator_matrix(
+        &shift_operator(2, 1, BoundaryCondition::Periodic).unwrap(),
+        &[2, 2],
+        &[2, 2],
+    );
+    // var1 occupies interleaved positions [1, 3]
+    let expected = expected_interleaved_shift_matrix(&shift_4x4, [1, 3]);
+
+    assert_matrix_close(&actual, &expected);
+    t4a_treetn_release(op);
+    t4a_qtt_layout_release(layout);
 }
