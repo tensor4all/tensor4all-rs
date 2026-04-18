@@ -70,6 +70,12 @@ Every public type, trait, and function **must** have doc comments with the follo
 - `cargo test --doc --release --workspace` must pass (rustdoc examples)
 - `./scripts/test-mdbook.sh` must pass (mdBook guide examples; raw `mdbook test docs/book` does not receive the resolved `--extern` flags that the guide snippets need)
 
+### Public Surface Drift
+
+- `README.md`, rustdoc, and examples must not claim more than the current public surface actually provides.
+- When changing public APIs, documented capabilities, or user-facing examples, check for stale names, stale capability claims, and references to removed paths or workflows.
+- Keep documentation slightly behind reality if validation is incomplete; do not advertise partially landed surfaces as stable or fully supported.
+
 ## Error Handling
 
 - `anyhow` for internal error handling and context
@@ -102,6 +108,19 @@ cargo nextest run --release -p crate_name        # Single crate
 - **Test tolerance changes**: When relaxing test tolerances (unit tests, codecov targets, etc.), always seek explicit user approval before making changes.
 - **Dense whole-result comparisons**: When comparing full tensors/operators in tests, do not recompute contractions element-by-element. Materialize once to a dense tensor/matrix, then compare via tensor subtraction and `maxabs()`. `TensorDynLen` subtraction aligns indices by index semantics, so explicit axis reordering is usually unnecessary.
 
+### Coverage and Path Exercise
+
+- Each distinct control-flow path (error branches, layout variants, boundary conditions) needs a test. Happy-path only is insufficient.
+- When removing code, check whether the removed tests were the sole exerciser of any shared helper; add replacement coverage if so.
+- Before pushing a deletion PR, run the CI coverage check locally:
+
+```bash
+cargo llvm-cov --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
+python3 scripts/check-coverage.py coverage.json
+```
+
+Fix drops by adding tests, not by lowering thresholds (threshold changes need explicit approval).
+
 ## API Design
 
 Only make functions `pub` when truly public API.
@@ -119,6 +138,12 @@ Only make functions `pub` when truly public API.
   - Instead of `AnyScalar::C64(z)`, use `AnyScalar::new_complex(re, im)`
 
 **This applies to both library code and test code.** Tests should also use public APIs to maintain consistency and reduce maintenance burden when internal representations change.
+
+**No ad hoc fixes:**
+
+- Do not add ad hoc fixes that violate DRY, KISS, or layering.
+- Do not introduce compatibility shims, duplicated implementations, or downstream reach-through into lower-level internals when a higher-level seam should exist instead.
+- If a needed behavior does not fit the current abstraction cleanly, add or refine the appropriate seam instead of patching around it locally.
 
 ### Code Deduplication
 
