@@ -27,9 +27,14 @@ src/
 ├── phase_rotation.rs (174行) # Phase rotation: f(x) = exp(iθx) g(x)
 ├── cumsum.rs (211行)   # Cumulative sum: y_i = Σ_{j<i} x_j
 ├── fourier.rs (411行)  # Quantics Fourier Transform (QFT)
-├── binaryop.rs (405行) # Binary op: a*x + b*y 変換
 └── affine.rs (1860行)  # Affine transform: y = Ax + b
 ```
+
+> **Note (2026-04-18):** `binaryop.rs` was removed in issue #428. The binary-op
+> functionality is a historical artifact predating general affine support.
+> Two-variable interleaved operations are now handled by `affine.rs` /
+> `affine_operator` at the Rust level, or by the Julia-side reimplementation
+> using the affine pullback + tensor-level SVD workflow.
 
 ### Julia モジュール構成
 

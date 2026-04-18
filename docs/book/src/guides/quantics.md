@@ -27,7 +27,6 @@ operators are applied in the same way regardless of their mathematical meaning.
 | Phase Rotation | f(x) = exp(i*theta*x) * g(x) | `phase_rotation_operator` |
 | Cumulative Sum | y_i = sum of x_j for j < i | `cumsum_operator` |
 | Fourier Transform | Quantics Fourier Transform (QFT) | `quantics_fourier_operator` |
-| Binary Operation | f(x, y), first variable -> a*x + b*y | `binaryop_single_operator` |
 | Affine Transform | y = A*x + b (rational coefficients) | `affine_operator` |
 
 The parameter `r` that appears in every constructor is the number of quantics
@@ -42,7 +41,6 @@ Constructors return `Err` for invalid inputs:
 - `r == 1` for `cumsum_operator`, `triangle_operator`, `quantics_fourier_operator` -- requires at least 2 sites
 - `r >= 64` for `shift_operator` -- would overflow a 64-bit integer
 - NaN or Inf `theta` for `phase_rotation_operator` -- invalid rotation angle
-- `BinaryCoeffs(-1, -1)` for `binaryop_single_operator` -- this combination is not supported
 
 ---
 
