@@ -310,18 +310,33 @@ fn remap_affine_site_indices_pullback(
         .map_err(|e| anyhow::anyhow!("Failed to create pullback-remapped MPO: {}", e))
 }
 
-/// Create an affine transformation operator.
+/// Create the operator that realizes the coordinate map `y = A * x + b`.
 ///
-/// This operator transforms a quantics tensor train representing a function
-/// f(x_1, ..., x_N) to g(y_1, ..., y_M) where y = A*x + b.
+/// This is the **forward** affine operator. It maps a quantics tensor train
+/// representing an `N`-variable state `x` to the quantics tensor train of
+/// the `M`-variable state `y = A * x + b`.
+///
+/// For the **pullback** direction (`f(y) = g(A * y + b)`, used to compose a
+/// function with an affine change of coordinates), see
+/// [`affine_pullback_operator`].
+///
+/// Forward and pullback share the same underlying MPO construction
+/// (`affine_transform_mpo`) but apply different site-index permutations so
+/// that the resulting `LinearOperator`'s input and output dimensions match
+/// the intended direction of the map.
 ///
 /// # Arguments
-/// * `r` - Number of bits per variable
-/// * `params` - Affine transformation parameters
-/// * `bc` - Boundary conditions for each output variable
 ///
-/// # Returns
-/// LinearOperator representing the affine transformation
+/// * `r` — bits per variable (number of sites in the output MPO).
+/// * `params` — rational `M × N` matrix `A` and `M`-vector `b` describing
+///   the affine map.
+/// * `bc` — length `M` array of boundary conditions for each output variable.
+///   `Periodic` wraps output coordinates modulo `2^r`; `Open` zeroes the
+///   out-of-range contributions.
+///
+/// # Errors
+///
+/// Returns an error if `r == 0` or if `bc.len() != params.m`.
 ///
 /// # Examples
 ///
@@ -389,15 +404,32 @@ pub fn affine_operator(
     tensortrain_to_linear_operator_asymmetric(&remapped_mpo, &input_dims, &output_dims)
 }
 
-/// Create an affine pullback operator.
+/// Create the operator that realizes the pullback `f(y) = g(A * y + b)`.
 ///
-/// This operator transforms a quantics tensor train representing a source function
-/// `g(x_1, ..., x_M)` to a result `f(y_1, ..., y_N)` where
-/// `f(y) = g(A * y + b)`.
+/// This is the **pullback** (function-composition) operator. It maps a
+/// quantics tensor train for an `M`-variable function `g` to the quantics
+/// tensor train of the `N`-variable function `f = g ∘ (A y + b)`.
 ///
-/// The affine parameters describe the source coordinates as affine functions of the
-/// output coordinates. The input state has `M = params.m` variables and the output state has
-/// `N = params.n` variables.
+/// For the **forward** direction (the coordinate map `y = A * x + b`
+/// itself), see [`affine_operator`].
+///
+/// Forward and pullback share the same underlying MPO construction
+/// (`affine_transform_mpo`) but apply different site-index permutations so
+/// that the resulting `LinearOperator`'s input and output dimensions match
+/// the intended direction of the map.
+///
+/// # Arguments
+///
+/// * `r` — bits per variable.
+/// * `params` — rational `M × N` matrix `A` and `M`-vector `b` describing
+///   the affine map whose pullback is constructed.
+/// * `bc` — length `M` array controlling how each source coordinate
+///   `(A y + b)[i]` is treated when it leaves the representable interval
+///   `[0, 2^r)`. `Periodic` wraps the coordinate; `Open` zero-extends.
+///
+/// # Errors
+///
+/// Returns an error if `r == 0` or if `bc.len() != params.m`.
 ///
 /// # Examples
 ///

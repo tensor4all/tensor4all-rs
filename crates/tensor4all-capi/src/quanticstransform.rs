@@ -740,7 +740,23 @@ pub extern "C" fn t4a_qtransform_fourier_materialize(
     })
 }
 
-/// Materialize an affine transform directly as a chain-shaped TreeTN.
+/// Materialize the forward affine operator `y = A * x + b` as a chain-shaped
+/// TreeTN using the Fused QTT layout.
+///
+/// `a_num[k + i * n]` and `a_den[k + i * n]` hold the numerator and
+/// denominator of `A[i, k]` (column-major, length `m * n`). `b_num[i]` and
+/// `b_den[i]` describe the `i`-th component of `b` (length `m`). `bc[i]` is
+/// the boundary condition applied to output coordinate `i`. The resulting
+/// TreeTN has `layout->nsites()` nodes, each with fused input and output
+/// site indices of dimensions `2^n` and `2^m` respectively.
+///
+/// See also [`t4a_qtransform_affine_pullback_materialize`] for the pullback
+/// direction `f(y) = g(A * y + b)`.
+///
+/// # Errors
+///
+/// Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `layout->kind()`
+/// is not `Fused`, `b_den[i] == 0`, or `a_den[k + i * n] == 0`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_qtransform_affine_materialize(
     layout: *const t4a_qtt_layout,
@@ -775,12 +791,22 @@ pub extern "C" fn t4a_qtransform_affine_materialize(
     })
 }
 
-/// Materialize an affine pullback operator (`g(x) -> g(A * y + b)`) as a
-/// chain-shaped TreeTN.
+/// Materialize the pullback operator `f(y) = g(A * y + b)` as a chain-shaped
+/// TreeTN using the Fused QTT layout.
 ///
-/// `bc[i]` controls how source coordinate `i` is treated when `(A * y + b)[i]`
-/// leaves the valid interval. `Periodic` wraps the coordinate, while `Open`
-/// zero-extends it.
+/// Argument layout matches [`t4a_qtransform_affine_materialize`]; the
+/// difference is in how the site indices of the resulting `LinearOperator`
+/// are permuted so that the input encodes `g`'s `m`-variable quantics state
+/// and the output encodes `f`'s `n`-variable quantics state.
+///
+/// `bc[i]` controls how source coordinate `i` is treated when
+/// `(A * y + b)[i]` leaves the valid interval. `Periodic` wraps the
+/// coordinate, while `Open` zero-extends it.
+///
+/// # Errors
+///
+/// Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `layout->kind()`
+/// is not `Fused`, `b_den[i] == 0`, or `a_den[k + i * n] == 0`.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_qtransform_affine_pullback_materialize(
     layout: *const t4a_qtt_layout,
