@@ -432,12 +432,14 @@ StatusCode t4a_last_error_message(uint8_t *buf, size_t buf_len, size_t *out_len)
  * Materialize the forward affine operator `y = A * x + b` as a chain-shaped
  * TreeTN using the Fused QTT layout.
  *
- * `a_num[k + i * n]` and `a_den[k + i * n]` hold the numerator and
- * denominator of `A[i, k]` (column-major, length `m * n`). `b_num[i]` and
- * `b_den[i]` describe the `i`-th component of `b` (length `m`). `bc[i]` is
- * the boundary condition applied to output coordinate `i`. The resulting
- * TreeTN has `layout->nsites()` nodes, each with fused input and output
- * site indices of dimensions `2^n` and `2^m` respectively.
+ * `a_num[i + k * m]` and `a_den[i + k * m]` hold the numerator and
+ * denominator of `A[i, k]` (column-major, length `m * n`, where `i`
+ * is the row index 0..m and `k` is the column index 0..n). `b_num[i]`
+ * and `b_den[i]` describe the `i`-th component of `b` (length `m`).
+ * `bc[i]` is the boundary condition applied to output coordinate `i`.
+ * The resulting TreeTN has `layout->nsites()` nodes, each with fused
+ * input and output site indices of dimensions `2^n` and `2^m`
+ * respectively.
  *
  * See also [`t4a_qtransform_affine_pullback_materialize`] for the pullback
  * direction `f(y) = g(A * y + b)`.
@@ -445,7 +447,7 @@ StatusCode t4a_last_error_message(uint8_t *buf, size_t buf_len, size_t *out_len)
  * # Errors
  *
  * Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `layout->kind()`
- * is not `Fused`, `b_den[i] == 0`, or `a_den[k + i * n] == 0`.
+ * is not `Fused`, `b_den[i] == 0`, or `a_den[i + k * m] == 0`.
  */
 StatusCode t4a_qtransform_affine_materialize(const struct t4a_qtt_layout *layout,
                                              const int64_t *a_num,
@@ -473,7 +475,7 @@ StatusCode t4a_qtransform_affine_materialize(const struct t4a_qtt_layout *layout
  * # Errors
  *
  * Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `layout->kind()`
- * is not `Fused`, `b_den[i] == 0`, or `a_den[k + i * n] == 0`.
+ * is not `Fused`, `b_den[i] == 0`, or `a_den[i + k * m] == 0`.
  */
 StatusCode t4a_qtransform_affine_pullback_materialize(const struct t4a_qtt_layout *layout,
                                                       const int64_t *a_num,
