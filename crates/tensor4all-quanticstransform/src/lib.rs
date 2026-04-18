@@ -17,7 +17,6 @@
 //! - **Phase Rotation**: f(x) = exp(i*θ*x) * g(x)
 //! - **Cumulative Sum**: y_i = Σ_{j<i} x_j
 //! - **Fourier Transform**: Quantics Fourier Transform (QFT)
-//! - **Binary Operation**: f(x, y) where first variable is a*x + b*y
 //! - **Affine Transform**: y = A*x + b with rational coefficients
 //!
 //! # Example
@@ -31,7 +30,6 @@
 //! ```
 
 mod affine;
-mod binaryop;
 mod common;
 mod cumsum;
 mod flip;
@@ -43,7 +41,6 @@ pub use affine::{
     affine_operator, affine_pullback_operator, affine_transform_matrix,
     affine_transform_tensors_unfused, AffineParams, UnfusedTensorInfo,
 };
-pub use binaryop::{binaryop_operator, binaryop_single_operator, BinaryCoeffs};
 pub use common::{BoundaryCondition, CarryDirection};
 pub use cumsum::{cumsum_operator, triangle_operator, TriangleType};
 pub use flip::{flip_operator, flip_operator_multivar};
