@@ -161,6 +161,7 @@ Current materializers:
 - `t4a_qtransform_cumsum_materialize`
 - `t4a_qtransform_fourier_materialize`
 - `t4a_qtransform_affine_materialize`
+- `t4a_qtransform_affine_pullback_materialize`
 
 Current intentional limitation: affine materialization requires `Fused` layout.
 
