@@ -32,17 +32,13 @@ typedef enum t4a_boundary_condition {
  */
 typedef enum t4a_qtt_layout_kind {
   /**
-   * Variable-major grouped layout.
-   */
-  T4A_QTT_LAYOUT_KIND_GROUPED = 0,
-  /**
    * Level-major interleaved layout.
    */
-  T4A_QTT_LAYOUT_KIND_INTERLEAVED = 1,
+  T4A_QTT_LAYOUT_KIND_INTERLEAVED = 0,
   /**
    * Fused-per-level layout.
    */
-  T4A_QTT_LAYOUT_KIND_FUSED = 2,
+  T4A_QTT_LAYOUT_KIND_FUSED = 1,
 } t4a_qtt_layout_kind;
 
 /**

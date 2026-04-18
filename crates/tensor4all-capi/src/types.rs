@@ -530,12 +530,10 @@ impl From<QuanticsBoundaryCondition> for t4a_boundary_condition {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum t4a_qtt_layout_kind {
-    /// Variable-major grouped layout.
-    Grouped = 0,
     /// Level-major interleaved layout.
-    Interleaved = 1,
+    Interleaved = 0,
     /// Fused-per-level layout.
-    Fused = 2,
+    Fused = 1,
 }
 
 /// Internal immutable descriptor for canonical binary QTT layouts.
@@ -562,7 +560,6 @@ impl InternalQttLayout {
         let first = variable_resolutions[0];
         let all_equal = variable_resolutions.iter().all(|&r| r == first);
         let nsites = match kind {
-            t4a_qtt_layout_kind::Grouped => variable_resolutions.iter().sum(),
             t4a_qtt_layout_kind::Interleaved => {
                 if !all_equal {
                     return Err(
@@ -596,11 +593,6 @@ impl InternalQttLayout {
     /// Number of physical sites in the canonical layout.
     pub(crate) fn nsites(&self) -> usize {
         self.nsites
-    }
-
-    /// Per-variable bit resolutions in canonical variable order.
-    pub(crate) fn variable_resolutions(&self) -> &[usize] {
-        &self.variable_resolutions
     }
 
     /// Bit resolution of a single logical variable.

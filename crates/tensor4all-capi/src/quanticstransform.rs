@@ -275,10 +275,6 @@ fn single_var_positions(layout: &InternalQttLayout, target_var: usize) -> CapiRe
 
     let resolution = layout.resolution(target_var);
     let positions = match layout.kind() {
-        t4a_qtt_layout_kind::Grouped => {
-            let start: usize = layout.variable_resolutions()[..target_var].iter().sum();
-            (start..start + resolution).collect()
-        }
         t4a_qtt_layout_kind::Interleaved => {
             let nvariables = layout.nvariables();
             (0..resolution)
@@ -438,7 +434,7 @@ fn materialize_single_var_operator(
 ) -> CapiResult<InternalTreeTN> {
     let source_sites = extract_chain_sites(&source_mpo)?;
     match layout.kind() {
-        t4a_qtt_layout_kind::Grouped | t4a_qtt_layout_kind::Interleaved => {
+        t4a_qtt_layout_kind::Interleaved => {
             let positions = single_var_positions(layout, target_var)?;
             if positions.len() != source_sites.len() {
                 return Err(capi_error(

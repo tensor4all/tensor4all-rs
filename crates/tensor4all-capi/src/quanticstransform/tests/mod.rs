@@ -5,8 +5,8 @@ use num_rational::Rational64;
 use tensor4all_core::{ColMajorArrayRef, TensorDynLen};
 use tensor4all_quanticstransform::{
     affine_operator, affine_pullback_operator, cumsum_operator, flip_operator,
-    phase_rotation_operator, quantics_fourier_operator, shift_operator, AffineParams,
-    BoundaryCondition, FourierOptions,
+    phase_rotation_operator, quantics_fourier_operator, AffineParams, BoundaryCondition,
+    FourierOptions,
 };
 use tensor4all_treetn::LinearOperator;
 
@@ -45,16 +45,6 @@ fn decode_mixed_radix(mut flat: usize, dims: &[usize]) -> Vec<usize> {
         flat /= dim;
     }
     values
-}
-
-fn encode_mixed_radix(values: &[usize], dims: &[usize]) -> usize {
-    let mut flat = 0usize;
-    let mut stride = 1usize;
-    for (&value, &dim) in values.iter().zip(dims.iter()) {
-        flat += value * stride;
-        stride *= dim;
-    }
-    flat
 }
 
 fn rust_operator_matrix(
@@ -195,36 +185,6 @@ fn assert_matrix_close(actual: &[Complex64], expected: &[Complex64]) {
             "matrix mismatch at slot {slot}: actual={a:?}, expected={e:?}, err={err}"
         );
     }
-}
-
-#[test]
-fn test_shift_grouped_materialization_matches_reference() {
-    let layout = new_layout(t4a_qtt_layout_kind::Grouped, &[2, 1]);
-    let mut op = std::ptr::null_mut();
-    assert_eq!(
-        t4a_qtransform_shift_materialize(layout, 0, 1, t4a_boundary_condition::Periodic, &mut op),
-        T4A_SUCCESS
-    );
-
-    let actual = c_operator_matrix(op, &[2, 2, 2], &[2, 2, 2]);
-    let shift = shift_operator(2, 1, BoundaryCondition::Periodic).unwrap();
-    let shift_mat = rust_operator_matrix(&shift, &[2, 2], &[2, 2]);
-    let mut expected = vec![Complex64::new(0.0, 0.0); 8 * 8];
-    for x in 0..8 {
-        let in_values = decode_mixed_radix(x, &[2, 2, 2]);
-        let in_shift = encode_mixed_radix(&in_values[..2], &[2, 2]);
-        for y in 0..8 {
-            let out_values = decode_mixed_radix(y, &[2, 2, 2]);
-            if out_values[2] == in_values[2] {
-                let out_shift = encode_mixed_radix(&out_values[..2], &[2, 2]);
-                expected[y + 8 * x] = shift_mat[out_shift + 4 * in_shift];
-            }
-        }
-    }
-
-    assert_matrix_close(&actual, &expected);
-    t4a_treetn_release(op);
-    t4a_qtt_layout_release(layout);
 }
 
 #[test]
@@ -502,7 +462,7 @@ fn test_layout_and_affine_validation_errors_are_reported() {
     );
     assert!(last_error().contains("target_var must be smaller than nvariables"));
 
-    let grouped = new_layout(t4a_qtt_layout_kind::Grouped, &resolutions);
+    let interleaved = new_layout(t4a_qtt_layout_kind::Interleaved, &resolutions);
     let a_num = [1i64];
     let a_den = [1i64];
     let b_num = [0i64];
@@ -510,7 +470,7 @@ fn test_layout_and_affine_validation_errors_are_reported() {
     let bc = [t4a_boundary_condition::Periodic];
     assert_eq!(
         t4a_qtransform_affine_materialize(
-            grouped,
+            interleaved,
             a_num.as_ptr(),
             a_den.as_ptr(),
             b_num.as_ptr(),
@@ -525,7 +485,7 @@ fn test_layout_and_affine_validation_errors_are_reported() {
     assert!(last_error().contains("fused layouts only"));
     assert_eq!(
         t4a_qtransform_affine_pullback_materialize(
-            grouped,
+            interleaved,
             a_num.as_ptr(),
             a_den.as_ptr(),
             b_num.as_ptr(),
@@ -556,6 +516,6 @@ fn test_layout_and_affine_validation_errors_are_reported() {
     );
     assert!(last_error().contains("zero denominator"));
 
-    t4a_qtt_layout_release(grouped);
+    t4a_qtt_layout_release(interleaved);
     t4a_qtt_layout_release(fused);
 }
