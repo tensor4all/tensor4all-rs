@@ -465,7 +465,12 @@ EOF
 
 These are deferred items — do **not** start them until the PR from tasks 1–5 is merged to main.
 
-- [ ] Open a Tensor4all.jl issue titled "Follow-up: reimplement `binaryop_operator` on top of affine + tensor SVD (tracks tensor4all-rs #428)". Link the merged tensor4all-rs PR and summarise the required Julia-side changes (reimplement `binaryop_operator` / `binaryop_operator_multivar` using `affine_pullback_operator` + tensor-level SVD via the exposed C API primitives; drop `_materialize_binaryop`; remove Grouped layout references; update tests).
+- [ ] Open a Tensor4all.jl issue titled "Follow-up: reimplement `binaryop_operator` on top of affine + tensor SVD (tracks tensor4all-rs #428)". Link the merged tensor4all-rs PR and summarise the required Julia-side changes:
+  - Reimplement `binaryop_operator` / `binaryop_operator_multivar` using `affine_pullback_operator` + tensor-level SVD via the exposed C API primitives.
+  - Drop `_materialize_binaryop`.
+  - Remove Grouped layout references.
+  - **Update layout enum constants in `src/TensorNetworks/backend/capi.jl`:** change `_T4A_QTT_LAYOUT_INTERLEAVED = Cint(1)` → `Cint(0)` and `_T4A_QTT_LAYOUT_FUSED = Cint(2)` → `Cint(1)`. The Rust-side enum was renumbered to close the gap left by removing `Grouped`.
+  - Update tests.
 
 - [ ] Reply to [#428](https://github.com/tensor4all/tensor4all-rs/issues/428) linking the merged PR. Summarise: forward/pullback kept (docs clarified), `_materialize` retained for consistency, `binaryop` removed with Julia-side follow-up issue linked, `Grouped` removed, docstrings expanded.
 
