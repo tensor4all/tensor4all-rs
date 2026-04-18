@@ -4,8 +4,8 @@ use num_complex::Complex64;
 use num_rational::Rational64;
 use tensor4all_core::{ColMajorArrayRef, TensorDynLen};
 use tensor4all_quanticstransform::{
-    affine_operator, affine_pullback_operator, binaryop_operator, cumsum_operator, flip_operator,
-    phase_rotation_operator, quantics_fourier_operator, shift_operator, AffineParams, BinaryCoeffs,
+    affine_operator, affine_pullback_operator, cumsum_operator, flip_operator,
+    phase_rotation_operator, quantics_fourier_operator, shift_operator, AffineParams,
     BoundaryCondition, FourierOptions,
 };
 use tensor4all_treetn::LinearOperator;
@@ -332,103 +332,6 @@ fn test_qtt_layout_clone_assignment_and_inverse_fourier_match_reference() {
 }
 
 #[test]
-fn test_binaryop_interleaved_materialization_matches_rust_reference() {
-    let layout = new_layout(t4a_qtt_layout_kind::Interleaved, &[2, 2]);
-    let mut op = std::ptr::null_mut();
-    assert_eq!(
-        t4a_qtransform_binaryop_materialize(
-            layout,
-            0,
-            1,
-            1,
-            1,
-            0,
-            1,
-            t4a_boundary_condition::Periodic,
-            t4a_boundary_condition::Periodic,
-            &mut op
-        ),
-        T4A_SUCCESS
-    );
-    let actual = c_operator_matrix(op, &[2, 2, 2, 2], &[2, 2, 2, 2]);
-    let expected = rust_operator_matrix(
-        &binaryop_operator(
-            2,
-            BinaryCoeffs::sum(),
-            BinaryCoeffs::select_y(),
-            [BoundaryCondition::Periodic, BoundaryCondition::Periodic],
-        )
-        .unwrap(),
-        &[2, 2, 2, 2],
-        &[2, 2, 2, 2],
-    );
-    assert_matrix_close(&actual, &expected);
-    t4a_treetn_release(op);
-    t4a_qtt_layout_release(layout);
-}
-
-#[test]
-fn test_binaryop_fused_materialization_matches_reindexed_reference() {
-    let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2, 2]);
-    let mut op = std::ptr::null_mut();
-    assert_eq!(
-        t4a_qtransform_binaryop_materialize(
-            layout,
-            0,
-            1,
-            1,
-            1,
-            0,
-            1,
-            t4a_boundary_condition::Periodic,
-            t4a_boundary_condition::Periodic,
-            &mut op
-        ),
-        T4A_SUCCESS
-    );
-
-    let actual = c_operator_matrix(op, &[4, 4], &[4, 4]);
-    let interleaved = rust_operator_matrix(
-        &binaryop_operator(
-            2,
-            BinaryCoeffs::sum(),
-            BinaryCoeffs::select_y(),
-            [BoundaryCondition::Periodic, BoundaryCondition::Periodic],
-        )
-        .unwrap(),
-        &[2, 2, 2, 2],
-        &[2, 2, 2, 2],
-    );
-
-    let mut expected = vec![Complex64::new(0.0, 0.0); 16 * 16];
-    for x in 0..16 {
-        let in_sites = decode_mixed_radix(x, &[4, 4]);
-        let in_bits = [
-            in_sites[0] & 1,
-            (in_sites[0] >> 1) & 1,
-            in_sites[1] & 1,
-            (in_sites[1] >> 1) & 1,
-        ];
-        let x_ref = encode_mixed_radix(&in_bits, &[2, 2, 2, 2]);
-        for y in 0..16 {
-            let out_sites = decode_mixed_radix(y, &[4, 4]);
-            let out_bits = [
-                out_sites[0] & 1,
-                (out_sites[0] >> 1) & 1,
-                out_sites[1] & 1,
-                (out_sites[1] >> 1) & 1,
-            ];
-            let y_ref = encode_mixed_radix(&out_bits, &[2, 2, 2, 2]);
-            expected[y + 16 * x] = interleaved[y_ref + 16 * x_ref];
-        }
-    }
-
-    assert_matrix_close(&actual, &expected);
-    t4a_treetn_release(op);
-    t4a_qtt_layout_release(layout);
-}
-
-#[test]
 fn test_affine_fused_materialization_matches_rust_reference() {
     let layout = new_layout(t4a_qtt_layout_kind::Fused, &[2]);
     let mut op = std::ptr::null_mut();
@@ -567,28 +470,6 @@ fn test_affine_pullback_fused_swap_matches_rust_reference() {
     assert_matrix_close(&actual, &expected);
 
     t4a_treetn_release(op);
-    t4a_qtt_layout_release(layout);
-}
-
-#[test]
-fn test_grouped_binaryop_is_rejected_with_explicit_message() {
-    let layout = new_layout(t4a_qtt_layout_kind::Grouped, &[2, 2]);
-    let mut op = std::ptr::null_mut();
-    let status = t4a_qtransform_binaryop_materialize(
-        layout,
-        0,
-        1,
-        1,
-        1,
-        0,
-        1,
-        t4a_boundary_condition::Periodic,
-        t4a_boundary_condition::Periodic,
-        &mut op,
-    );
-    assert_eq!(status, T4A_INVALID_ARGUMENT);
-    assert!(last_error().contains("grouped layouts"));
-    assert!(op.is_null());
     t4a_qtt_layout_release(layout);
 }
 

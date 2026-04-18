@@ -464,20 +464,6 @@ StatusCode t4a_qtransform_affine_pullback_materialize(const struct t4a_qtt_layou
                                                       struct t4a_treetn **out);
 
 /**
- * Materialize a binary operator directly as a chain-shaped TreeTN.
- */
-StatusCode t4a_qtransform_binaryop_materialize(const struct t4a_qtt_layout *layout,
-                                               size_t lhs_var,
-                                               size_t rhs_var,
-                                               int8_t a1,
-                                               int8_t b1,
-                                               int8_t a2,
-                                               int8_t b2,
-                                               enum t4a_boundary_condition bc1,
-                                               enum t4a_boundary_condition bc2,
-                                               struct t4a_treetn **out);
-
-/**
  * Materialize a cumulative-sum transform directly as a chain-shaped TreeTN.
  */
 StatusCode t4a_qtransform_cumsum_materialize(const struct t4a_qtt_layout *layout,
