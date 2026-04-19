@@ -262,68 +262,15 @@ fn remap_affine_site_indices(
         .map_err(|e| anyhow::anyhow!("Failed to create remapped MPO: {}", e))
 }
 
-/// Remap site indices for pullback semantics.
-///
-/// The internal affine MPO encodes site indices as `source_bits | (output_bits << source_ndims)`
-/// for the relation `source = A * output + b`. For pullback application we need the LinearOperator
-/// site encoding `s = s_out * in_dim + s_in = output_bits * 2^source_ndims + source_bits`.
-fn remap_affine_site_indices_pullback(
-    mpo: &TensorTrain<Complex64>,
-    source_ndims: usize,
-    output_ndims: usize,
-    site_dim: usize,
-) -> Result<TensorTrain<Complex64>> {
-    let input_dim = 1 << source_ndims;
-    let _output_dim = 1 << output_ndims;
-
-    let perm: Vec<usize> = (0..site_dim)
-        .map(|old_idx| {
-            let source_bits = old_idx & ((1 << source_ndims) - 1);
-            let output_bits = old_idx >> source_ndims;
-            output_bits * input_dim + source_bits
-        })
-        .collect();
-
-    let r = mpo.len();
-    let mut new_tensors = Vec::with_capacity(r);
-
-    for i in 0..r {
-        let tensor = mpo.site_tensor(i);
-        let left_dim = tensor.left_dim();
-        let right_dim = tensor.right_dim();
-
-        let mut t = tensor3_zeros(left_dim, site_dim, right_dim);
-        for l in 0..left_dim {
-            for (old_s, &new_s) in perm.iter().enumerate() {
-                for rr in 0..right_dim {
-                    let val = *tensor.get3(l, old_s, rr);
-                    if val != Complex64::new(0.0, 0.0) {
-                        t.set3(l, new_s, rr, val);
-                    }
-                }
-            }
-        }
-        new_tensors.push(t);
-    }
-
-    TensorTrain::new(new_tensors)
-        .map_err(|e| anyhow::anyhow!("Failed to create pullback-remapped MPO: {}", e))
-}
-
 /// Create the operator that realizes the coordinate map `y = A * x + b`.
 ///
 /// This is the **forward** affine operator. It maps a quantics tensor train
 /// representing an `N`-variable state `x` to the quantics tensor train of
 /// the `M`-variable state `y = A * x + b`.
 ///
-/// For the **pullback** direction (`f(y) = g(A * y + b)`, used to compose a
-/// function with an affine change of coordinates), see
-/// [`affine_pullback_operator`].
-///
-/// Forward and pullback share the same underlying MPO construction
-/// (`affine_transform_mpo`) but apply different site-index permutations so
-/// that the resulting `LinearOperator`'s input and output dimensions match
-/// the intended direction of the map.
+/// To build the **pullback** (`f(y) = g(A * y + b)`), call `.transpose()`
+/// on the returned operator; the pullback is exactly the transpose of the
+/// forward operator.
 ///
 /// # Arguments
 ///
@@ -398,74 +345,6 @@ pub fn affine_operator(
     // We need to remap the site indices.
     let site_dim = input_dim * output_dim;
     let remapped_mpo = remap_affine_site_indices(&mpo, m, n, site_dim)?;
-
-    let input_dims = vec![input_dim; r];
-    let output_dims = vec![output_dim; r];
-    tensortrain_to_linear_operator_asymmetric(&remapped_mpo, &input_dims, &output_dims)
-}
-
-/// Create the operator that realizes the pullback `f(y) = g(A * y + b)`.
-///
-/// This is the **pullback** (function-composition) operator. It maps a
-/// quantics tensor train for an `M`-variable function `g` to the quantics
-/// tensor train of the `N`-variable function `f = g ∘ (A y + b)`.
-///
-/// For the **forward** direction (the coordinate map `y = A * x + b`
-/// itself), see [`affine_operator`].
-///
-/// Forward and pullback share the same underlying MPO construction
-/// (`affine_transform_mpo`) but apply different site-index permutations so
-/// that the resulting `LinearOperator`'s input and output dimensions match
-/// the intended direction of the map.
-///
-/// # Arguments
-///
-/// * `r` — bits per variable.
-/// * `params` — rational `M × N` matrix `A` and `M`-vector `b` describing
-///   the affine map whose pullback is constructed.
-/// * `bc` — length `M` array controlling how each source coordinate
-///   `(A y + b)[i]` is treated when it leaves the representable interval
-///   `[0, 2^r)`. `Periodic` wraps the coordinate; `Open` zero-extends.
-///
-/// # Errors
-///
-/// Returns an error if `r == 0` or if `bc.len() != params.m`.
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_quanticstransform::{affine_pullback_operator, AffineParams, BoundaryCondition};
-///
-/// // Pullback of 1D identity: g(x) -> f(y) = g(y)
-/// let params = AffineParams::from_integers(vec![1], vec![0], 1, 1).unwrap();
-/// let bc = vec![BoundaryCondition::Periodic];
-/// let op = affine_pullback_operator(4, &params, &bc).unwrap();
-/// assert_eq!(op.mpo.node_count(), 4);
-/// ```
-pub fn affine_pullback_operator(
-    r: usize,
-    params: &AffineParams,
-    bc: &[BoundaryCondition],
-) -> Result<QuanticsOperator> {
-    if r == 0 {
-        return Err(anyhow::anyhow!("Number of bits must be positive"));
-    }
-    if bc.len() != params.m {
-        return Err(anyhow::anyhow!(
-            "Boundary conditions length {} doesn't match source dimensions {}",
-            bc.len(),
-            params.m
-        ));
-    }
-
-    let mpo = affine_transform_mpo(r, params, bc)?;
-    let source_ndims = params.m;
-    let output_ndims = params.n;
-    let input_dim = 1 << source_ndims;
-    let output_dim = 1 << output_ndims;
-    let site_dim = input_dim * output_dim;
-    let remapped_mpo =
-        remap_affine_site_indices_pullback(&mpo, source_ndims, output_ndims, site_dim)?;
 
     let input_dims = vec![input_dim; r];
     let output_dims = vec![output_dim; r];
