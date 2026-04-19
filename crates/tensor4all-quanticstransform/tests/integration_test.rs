@@ -2101,6 +2101,69 @@ fn test_affine_mpo_matches_matrix() {
 }
 
 #[test]
+fn test_affine_operator_transpose_matches_forward_matrix_transposed() {
+    // For each test case, forward matrix M satisfies M[y, x] = 1 iff y = A x + b.
+    // Thus M^T[x, y] = M[y, x]. We verify that
+    //   dense(affine_operator(...).transpose())[a, b] == M[b, a]
+    // for the same (a_flat, b_vec, r, bc), covering both 1×1 and a 2×2 swap.
+    let test_cases: Vec<(Vec<i64>, Vec<i64>, usize, usize, Vec<BoundaryCondition>)> = vec![
+        (vec![1], vec![0], 1, 1, vec![BoundaryCondition::Periodic]),
+        (vec![1], vec![3], 1, 1, vec![BoundaryCondition::Periodic]),
+        (vec![-1], vec![0], 1, 1, vec![BoundaryCondition::Periodic]),
+        (vec![1], vec![1], 1, 1, vec![BoundaryCondition::Open]),
+    ];
+
+    for (a_flat, b_vec, m, n, bc) in &test_cases {
+        for r in [2, 3] {
+            let params =
+                AffineParams::from_integers(a_flat.clone(), b_vec.clone(), *m, *n).unwrap();
+
+            let ref_matrix = affine_transform_matrix(r, &params, bc).unwrap();
+
+            let op = affine_operator(r, &params, bc).unwrap().transpose();
+
+            // All test cases use m = n = 1, so per-site bit counts are (r, r),
+            // matching the existing pullback-vs-forward test in this file.
+            let mpo_dense = apply_operator_to_dense_matrix(&op, r, r);
+
+            let in_dim = 1usize << (r * *m);
+            let out_dim = 1usize << (r * *n);
+            for y in 0..out_dim {
+                for x in 0..in_dim {
+                    let expected = *ref_matrix.get(x, y).unwrap_or(&0.0);
+                    let actual = mpo_dense[y][x];
+                    assert!(
+                        (actual.re - expected).abs() < 1e-10,
+                        "transpose real mismatch a={:?} b={:?} r={} bc={:?} at ({},{}): \
+                         actual={} expected={}",
+                        a_flat,
+                        b_vec,
+                        r,
+                        bc,
+                        y,
+                        x,
+                        actual.re,
+                        expected,
+                    );
+                    assert!(
+                        actual.im.abs() < 1e-10,
+                        "transpose imag nonzero a={:?} b={:?} r={} bc={:?} at ({},{}): \
+                         actual_im={}",
+                        a_flat,
+                        b_vec,
+                        r,
+                        bc,
+                        y,
+                        x,
+                        actual.im,
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn test_affine_pullback_mpo_matches_transposed_matrix() {
     let test_cases_1d: Vec<(Vec<i64>, Vec<i64>, Vec<BoundaryCondition>)> = vec![
         (vec![1], vec![0], vec![BoundaryCondition::Periodic]),
