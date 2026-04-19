@@ -78,15 +78,18 @@ fn test_affine_operator_creation() {
 }
 
 #[test]
-fn test_affine_pullback_operator_creation() {
-    // source x = x1, output y = (y1, y2), x1 = y1
+fn test_affine_pullback_operator_creation_via_transpose() {
+    // Verify we can build the pullback of a 1->2 affine map via
+    // affine_operator(...).transpose(): the pullback direction swaps
+    // input/output roles without panicking or erroring.
     let a = vec![1i64, 0];
     let b = vec![0i64];
     let params = AffineParams::from_integers(a, b, 1, 2).unwrap();
     let bc = vec![BoundaryCondition::Open];
 
-    let result = affine_pullback_operator(4, &params, &bc);
-    assert!(result.is_ok());
+    let op = affine_operator(4, &params, &bc);
+    assert!(op.is_ok());
+    let _transposed = op.unwrap().transpose();
 }
 
 #[test]
@@ -112,13 +115,15 @@ fn test_affine_error_bc_mismatch() {
 }
 
 #[test]
-fn test_affine_pullback_bc_mismatch() {
+fn test_affine_pullback_bc_mismatch_via_transpose() {
+    // Boundary-condition length must equal params.m; affine_operator
+    // rejects mismatches regardless of whether the caller later transposes.
     let a = vec![1i64, 0];
     let b = vec![0i64];
     let params = AffineParams::from_integers(a, b, 1, 2).unwrap();
     let bc = vec![BoundaryCondition::Periodic; 2];
 
-    let result = affine_pullback_operator(4, &params, &bc);
+    let result = affine_operator(4, &params, &bc);
     assert!(result.is_err());
 }
 
