@@ -1852,9 +1852,7 @@ fn test_cumsum_all_values() {
 // Affine operator tests
 // ============================================================================
 
-use tensor4all_quanticstransform::{
-    affine_operator, affine_pullback_operator, affine_transform_matrix, AffineParams,
-};
+use tensor4all_quanticstransform::{affine_operator, affine_transform_matrix, AffineParams};
 
 /// Test affine identity transformation: y = x.
 #[test]
@@ -2200,12 +2198,13 @@ fn test_affine_pullback_mpo_matches_transposed_matrix() {
                 )
             });
 
-            let op = affine_pullback_operator(r, &params, bc).unwrap_or_else(|e| {
+            let op = affine_operator(r, &params, bc).unwrap_or_else(|e| {
                 panic!(
-                    "Failed pullback operator a={:?} b={:?} r={} bc={:?}: {}",
+                    "Failed forward operator a={:?} b={:?} r={} bc={:?}: {}",
                     a_flat, b_vec, r, bc, e
                 )
             });
+            let op = op.transpose();
 
             let dim = 1usize << r;
             let mpo_dense = apply_operator_to_dense_matrix(&op, r, r);
