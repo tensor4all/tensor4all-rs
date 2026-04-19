@@ -483,3 +483,65 @@ fn test_align_to_state_missing_node() {
     let result = op.align_to_state(&state);
     assert!(result.is_err());
 }
+
+#[test]
+fn test_linear_operator_transpose_swaps_mappings() {
+    let (op, _s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
+
+    // Snapshot the expected swapped mappings before consuming `op`.
+    let original_input = op.input_mapping.clone();
+    let original_output = op.output_mapping.clone();
+
+    let transposed = op.transpose();
+
+    // After transpose, the new input_mapping is the original output_mapping,
+    // and vice versa.
+    assert_eq!(transposed.input_mapping.len(), original_output.len());
+    assert_eq!(transposed.output_mapping.len(), original_input.len());
+    let tin = transposed
+        .input_mapping
+        .get("A")
+        .expect("transposed input mapping for A");
+    let tout = transposed
+        .output_mapping
+        .get("A")
+        .expect("transposed output mapping for A");
+    let expected_in = original_output.get("A").unwrap();
+    let expected_out = original_input.get("A").unwrap();
+    assert!(tin.true_index.same_id(&expected_in.true_index));
+    assert!(tin.internal_index.same_id(&expected_in.internal_index));
+    assert!(tout.true_index.same_id(&expected_out.true_index));
+    assert!(tout.internal_index.same_id(&expected_out.internal_index));
+}
+
+#[test]
+fn test_linear_operator_transpose_is_involutive() {
+    let (op, _s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
+
+    let original_input = op.input_mapping.clone();
+    let original_output = op.output_mapping.clone();
+
+    let round_trip = op.transpose().transpose();
+
+    // Double transpose == identity on mappings.
+    assert_eq!(round_trip.input_mapping.len(), original_input.len());
+    assert_eq!(round_trip.output_mapping.len(), original_output.len());
+    let rin = round_trip.input_mapping.get("A").unwrap();
+    let rout = round_trip.output_mapping.get("A").unwrap();
+    let ein = original_input.get("A").unwrap();
+    let eout = original_output.get("A").unwrap();
+    assert!(rin.true_index.same_id(&ein.true_index));
+    assert!(rin.internal_index.same_id(&ein.internal_index));
+    assert!(rout.true_index.same_id(&eout.true_index));
+    assert!(rout.internal_index.same_id(&eout.internal_index));
+}
+
+#[test]
+fn test_linear_operator_transpose_preserves_mpo() {
+    let (op, _s, _s_in_tmp, _s_out_tmp) = make_linear_operator();
+    let original_node_count = op.mpo().node_count();
+
+    let transposed = op.transpose();
+
+    assert_eq!(transposed.mpo().node_count(), original_node_count);
+}

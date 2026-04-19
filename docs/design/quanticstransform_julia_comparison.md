@@ -119,7 +119,7 @@ src/
 
 ### 2.6 Binary Operation (`g(ax+by, cx+dy)`)
 
-> **注 (2026-04-18):** 以下は 2026-02-13 時点の記録。issue #428 で Rust 側の `binaryop_operator` は削除済み。現状は Julia の binaryop.jl を `affine_pullback_operator` ベースに再実装する follow-up PR で対応予定。
+> **注 (2026-04-19):** 以下は 2026-02-13 時点の記録。issue #428 で Rust 側の `binaryop_operator` は削除済み。issue #431 で `affine_pullback_operator` も削除し、pullback は `affine_operator(...).transpose()` で取得する方針に変更。Julia の binaryop.jl は `affine_operator + transpose + SVD` ベースで再実装する follow-up PR で対応予定。
 
 **アルゴリズム一致度: 部分的一致**
 

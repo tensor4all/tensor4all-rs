@@ -1852,9 +1852,7 @@ fn test_cumsum_all_values() {
 // Affine operator tests
 // ============================================================================
 
-use tensor4all_quanticstransform::{
-    affine_operator, affine_pullback_operator, affine_transform_matrix, AffineParams,
-};
+use tensor4all_quanticstransform::{affine_operator, affine_transform_matrix, AffineParams};
 
 /// Test affine identity transformation: y = x.
 #[test]
@@ -2101,6 +2099,72 @@ fn test_affine_mpo_matches_matrix() {
 }
 
 #[test]
+fn test_affine_operator_transpose_matches_forward_matrix_transposed() {
+    // For each test case, forward matrix M satisfies M[y, x] = 1 iff y = A x + b.
+    // Thus M^T[x, y] = M[y, x]. We verify that
+    //   dense(affine_operator(...).transpose())[a, b] == M[b, a]
+    // for the same (a_flat, b_vec, r, bc). All cases use m = n = 1 (identity,
+    // shift, negation, and Open BC) because apply_operator_to_dense_matrix
+    // hard-codes site_dim = 2.
+    #[allow(clippy::type_complexity)]
+    let test_cases: Vec<(Vec<i64>, Vec<i64>, usize, usize, Vec<BoundaryCondition>)> = vec![
+        (vec![1], vec![0], 1, 1, vec![BoundaryCondition::Periodic]),
+        (vec![1], vec![3], 1, 1, vec![BoundaryCondition::Periodic]),
+        (vec![-1], vec![0], 1, 1, vec![BoundaryCondition::Periodic]),
+        (vec![1], vec![1], 1, 1, vec![BoundaryCondition::Open]),
+    ];
+
+    for (a_flat, b_vec, m, n, bc) in &test_cases {
+        for r in [2, 3] {
+            let params =
+                AffineParams::from_integers(a_flat.clone(), b_vec.clone(), *m, *n).unwrap();
+
+            let ref_matrix = affine_transform_matrix(r, &params, bc).unwrap();
+
+            let op = affine_operator(r, &params, bc).unwrap().transpose();
+
+            // All test cases use m = n = 1, so per-site bit counts are (r, r),
+            // matching the existing pullback-vs-forward test in this file.
+            let mpo_dense = apply_operator_to_dense_matrix(&op, r, r);
+
+            let in_dim = 1usize << (r * *m);
+            let out_dim = 1usize << (r * *n);
+            for y in 0..out_dim {
+                for x in 0..in_dim {
+                    let expected = *ref_matrix.get(x, y).unwrap_or(&0.0);
+                    let actual = mpo_dense[y][x];
+                    assert!(
+                        (actual.re - expected).abs() < 1e-10,
+                        "transpose real mismatch a={:?} b={:?} r={} bc={:?} at ({},{}): \
+                         actual={} expected={}",
+                        a_flat,
+                        b_vec,
+                        r,
+                        bc,
+                        y,
+                        x,
+                        actual.re,
+                        expected,
+                    );
+                    assert!(
+                        actual.im.abs() < 1e-10,
+                        "transpose imag nonzero a={:?} b={:?} r={} bc={:?} at ({},{}): \
+                         actual_im={}",
+                        a_flat,
+                        b_vec,
+                        r,
+                        bc,
+                        y,
+                        x,
+                        actual.im,
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn test_affine_pullback_mpo_matches_transposed_matrix() {
     let test_cases_1d: Vec<(Vec<i64>, Vec<i64>, Vec<BoundaryCondition>)> = vec![
         (vec![1], vec![0], vec![BoundaryCondition::Periodic]),
@@ -2134,12 +2198,13 @@ fn test_affine_pullback_mpo_matches_transposed_matrix() {
                 )
             });
 
-            let op = affine_pullback_operator(r, &params, bc).unwrap_or_else(|e| {
+            let op = affine_operator(r, &params, bc).unwrap_or_else(|e| {
                 panic!(
-                    "Failed pullback operator a={:?} b={:?} r={} bc={:?}: {}",
+                    "Failed forward operator a={:?} b={:?} r={} bc={:?}: {}",
                     a_flat, b_vec, r, bc, e
                 )
             });
+            let op = op.transpose();
 
             let dim = 1usize << r;
             let mpo_dense = apply_operator_to_dense_matrix(&op, r, r);

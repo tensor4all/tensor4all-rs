@@ -161,9 +161,13 @@ Current materializers:
 - `t4a_qtransform_cumsum_materialize`
 - `t4a_qtransform_fourier_materialize`
 - `t4a_qtransform_affine_materialize`
-- `t4a_qtransform_affine_pullback_materialize`
 
-Current intentional limitation: affine materialization requires `Fused` layout.
+Current intentional limitation: affine materialization requires `Fused`
+layout. The pullback operator `f(y) = g(A * y + b)` is not exposed as a
+separate C API entry point; bindings derive it by calling
+`t4a_qtransform_affine_materialize` and transposing the resulting
+`LinearOperator` at the binding layer (the pullback is exactly the transpose
+of the forward operator).
 
 These constraints should stay explicit in both the function documentation and
 the error message returned to bindings.

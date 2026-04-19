@@ -12,11 +12,9 @@ use num_complex::Complex64;
 use num_rational::Rational64;
 use tensor4all_core::{IndexLike, TensorDynLen};
 use tensor4all_quanticstransform::{
-    affine_operator, affine_pullback_operator, cumsum_operator, flip_operator,
-    phase_rotation_operator, quantics_fourier_operator, shift_operator, AffineParams,
-    BoundaryCondition, FourierOptions,
+    affine_operator, cumsum_operator, flip_operator, phase_rotation_operator,
+    quantics_fourier_operator, shift_operator, AffineParams, BoundaryCondition, FourierOptions,
 };
-use tensor4all_treetn::LinearOperator;
 
 /// Release a QTT layout handle.
 #[unsafe(no_mangle)]
@@ -499,54 +497,6 @@ fn parse_boundary_conditions(
         .collect())
 }
 
-#[derive(Clone, Copy)]
-struct AffineMaterializeArgs {
-    a_num: *const i64,
-    a_den: *const i64,
-    b_num: *const i64,
-    b_den: *const i64,
-    m: usize,
-    n: usize,
-    bc: *const t4a_boundary_condition,
-}
-
-fn materialize_affine_family<F, E>(
-    layout_ref: &InternalQttLayout,
-    args: AffineMaterializeArgs,
-    family_name: &str,
-    build_operator: F,
-) -> CapiResult<t4a_treetn>
-where
-    F: FnOnce(
-        usize,
-        &AffineParams,
-        &[BoundaryCondition],
-    ) -> Result<LinearOperator<TensorDynLen, usize>, E>,
-    E: std::fmt::Display,
-{
-    if args.m == 0 || args.n == 0 {
-        return Err(capi_error(
-            T4A_INVALID_ARGUMENT,
-            format!("{family_name} materialization requires m > 0 and n > 0"),
-        ));
-    }
-    if layout_ref.kind() != t4a_qtt_layout_kind::Fused {
-        return Err(capi_error(
-            T4A_INVALID_ARGUMENT,
-            format!("{family_name} materialization currently supports fused layouts only"),
-        ));
-    }
-
-    let a = parse_rationals(args.a_num, args.a_den, args.m * args.n, "a")?;
-    let b = parse_rationals(args.b_num, args.b_den, args.m, "b")?;
-    let bc = parse_boundary_conditions(args.bc, args.m)?;
-    let params = AffineParams::new(a, b, args.m, args.n)
-        .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
-    let source = build_operator(layout_ref.nsites(), &params, &bc)
-        .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
-    Ok(t4a_treetn::new(source.mpo))
-}
-
 /// Create an immutable canonical QTT layout descriptor.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_qtt_layout_new(
@@ -752,8 +702,9 @@ pub extern "C" fn t4a_qtransform_fourier_materialize(
 /// input and output site indices of dimensions `2^n` and `2^m`
 /// respectively.
 ///
-/// See also [`t4a_qtransform_affine_pullback_materialize`] for the pullback
-/// direction `f(y) = g(A * y + b)`.
+/// To obtain the pullback operator `f(y) = g(A * y + b)`, materialize the
+/// forward operator with this function and transpose at the binding layer
+/// (the pullback is exactly the transpose of the forward operator).
 ///
 /// # Errors
 ///
@@ -780,71 +731,27 @@ pub extern "C" fn t4a_qtransform_affine_materialize(
     };
 
     run_catching(out, || {
-        let args = AffineMaterializeArgs {
-            a_num,
-            a_den,
-            b_num,
-            b_den,
-            m,
-            n,
-            bc,
-        };
-        materialize_affine_family(layout_ref, args, "affine", affine_operator)
-    })
-}
-
-/// Materialize the pullback operator `f(y) = g(A * y + b)` as a chain-shaped
-/// TreeTN using the Fused QTT layout.
-///
-/// Argument layout matches [`t4a_qtransform_affine_materialize`]; the
-/// difference is in how the site indices of the resulting `LinearOperator`
-/// are permuted so that the input encodes `g`'s `m`-variable quantics state
-/// and the output encodes `f`'s `n`-variable quantics state.
-///
-/// `bc[i]` controls how source coordinate `i` is treated when
-/// `(A * y + b)[i]` leaves the valid interval. `Periodic` wraps the
-/// coordinate, while `Open` zero-extends it.
-///
-/// # Errors
-///
-/// Returns `T4A_INVALID_ARGUMENT` if `m == 0`, `n == 0`, `layout->kind()`
-/// is not `Fused`, `b_den[i] == 0`, or `a_den[i + k * m] == 0`.
-#[unsafe(no_mangle)]
-pub extern "C" fn t4a_qtransform_affine_pullback_materialize(
-    layout: *const t4a_qtt_layout,
-    a_num: *const i64,
-    a_den: *const i64,
-    b_num: *const i64,
-    b_den: *const i64,
-    m: usize,
-    n: usize,
-    bc: *const t4a_boundary_condition,
-    out: *mut *mut t4a_treetn,
-) -> StatusCode {
-    let layout_ref = match require_layout(layout) {
-        Ok(layout) => layout,
-        Err((code, msg)) => {
-            set_last_error(&msg);
-            return code;
+        if m == 0 || n == 0 {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "affine materialization requires m > 0 and n > 0",
+            ));
         }
-    };
+        if layout_ref.kind() != t4a_qtt_layout_kind::Fused {
+            return Err(capi_error(
+                T4A_INVALID_ARGUMENT,
+                "affine materialization currently supports fused layouts only",
+            ));
+        }
 
-    run_catching(out, || {
-        let args = AffineMaterializeArgs {
-            a_num,
-            a_den,
-            b_num,
-            b_den,
-            m,
-            n,
-            bc,
-        };
-        materialize_affine_family(
-            layout_ref,
-            args,
-            "affine pullback",
-            affine_pullback_operator,
-        )
+        let a = parse_rationals(a_num, a_den, m * n, "a")?;
+        let b = parse_rationals(b_num, b_den, m, "b")?;
+        let bc = parse_boundary_conditions(bc, m)?;
+        let params =
+            AffineParams::new(a, b, m, n).map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let source = affine_operator(layout_ref.nsites(), &params, &bc)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_treetn::new(source.mpo))
     })
 }
 
