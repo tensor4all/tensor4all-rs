@@ -437,6 +437,61 @@ where
         self.set_output_space_from_state(state)?;
         Ok(())
     }
+
+    /// Returns the transposed operator by swapping input and output mappings.
+    ///
+    /// The pullback of a forward operator is its transpose: if the forward
+    /// operator realizes the matrix `M_{y,x}`, the transposed operator
+    /// realizes `M_{x,y}`. This method swaps `input_mapping` and
+    /// `output_mapping` without copying the underlying MPO tensors — it is
+    /// an O(1) operation.
+    ///
+    /// `.transpose().transpose()` yields an operator equivalent to the
+    /// original (mappings restored, MPO unchanged).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::HashMap;
+    /// use tensor4all_core::{DynIndex, IndexLike, TensorDynLen};
+    /// use tensor4all_treetn::{IndexMapping, LinearOperator, TreeTN};
+    ///
+    /// let site_in = DynIndex::new_dyn(2);
+    /// let site_out = DynIndex::new_dyn(3);
+    /// let s_in_tmp = DynIndex::new_dyn(2);
+    /// let s_out_tmp = DynIndex::new_dyn(3);
+    ///
+    /// let mpo_tensor = TensorDynLen::from_dense(
+    ///     vec![s_in_tmp.clone(), s_out_tmp.clone()],
+    ///     vec![1.0_f64, 0.0, 0.0, 0.0, 1.0, 0.0],
+    /// ).unwrap();
+    /// let mpo = TreeTN::<_, usize>::from_tensors(vec![mpo_tensor], vec![0]).unwrap();
+    ///
+    /// let mut input_mapping = HashMap::new();
+    /// input_mapping.insert(
+    ///     0usize,
+    ///     IndexMapping { true_index: site_in.clone(), internal_index: s_in_tmp.clone() },
+    /// );
+    /// let mut output_mapping = HashMap::new();
+    /// output_mapping.insert(
+    ///     0usize,
+    ///     IndexMapping { true_index: site_out.clone(), internal_index: s_out_tmp.clone() },
+    /// );
+    ///
+    /// let op = LinearOperator::new(mpo, input_mapping, output_mapping);
+    /// let t = op.transpose();
+    ///
+    /// // Input/output mappings are swapped.
+    /// assert!(t.input_mapping[&0].true_index.same_id(&site_out));
+    /// assert!(t.output_mapping[&0].true_index.same_id(&site_in));
+    /// ```
+    pub fn transpose(self) -> Self {
+        Self {
+            mpo: self.mpo,
+            input_mapping: self.output_mapping,
+            output_mapping: self.input_mapping,
+        }
+    }
 }
 
 // ============================================================================
