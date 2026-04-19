@@ -2105,7 +2105,10 @@ fn test_affine_operator_transpose_matches_forward_matrix_transposed() {
     // For each test case, forward matrix M satisfies M[y, x] = 1 iff y = A x + b.
     // Thus M^T[x, y] = M[y, x]. We verify that
     //   dense(affine_operator(...).transpose())[a, b] == M[b, a]
-    // for the same (a_flat, b_vec, r, bc), covering both 1×1 and a 2×2 swap.
+    // for the same (a_flat, b_vec, r, bc). All cases use m = n = 1 (identity,
+    // shift, negation, and Open BC) because apply_operator_to_dense_matrix
+    // hard-codes site_dim = 2.
+    #[allow(clippy::type_complexity)]
     let test_cases: Vec<(Vec<i64>, Vec<i64>, usize, usize, Vec<BoundaryCondition>)> = vec![
         (vec![1], vec![0], 1, 1, vec![BoundaryCondition::Periodic]),
         (vec![1], vec![3], 1, 1, vec![BoundaryCondition::Periodic]),
