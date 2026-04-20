@@ -11,6 +11,9 @@
 //! The repository root `README.md` is included here as well so its short
 //! runnable examples stay covered by CI.
 
+#[cfg(test)]
+const BOOK_INTRODUCTION: &str = include_str!("../../book/src/README.md");
+
 #[doc = include_str!("../../../README.md")]
 mod root_readme {}
 
@@ -40,3 +43,20 @@ mod quantics {}
 
 #[doc = include_str!("../../book/src/guides/qft.md")]
 mod qft {}
+
+#[cfg(test)]
+mod tests {
+    use super::BOOK_INTRODUCTION;
+
+    #[test]
+    fn introduction_uses_repo_relative_rustdoc_link() {
+        assert!(
+            BOOK_INTRODUCTION.contains("[rustdoc API reference](rustdoc/tensor4all_core/)"),
+            "top-level mdBook page must link to rustdoc within the published /tensor4all-rs/ site"
+        );
+        assert!(
+            !BOOK_INTRODUCTION.contains("[rustdoc API reference](../rustdoc/tensor4all_core/)"),
+            "top-level mdBook page must not climb above the published site root"
+        );
+    }
+}
