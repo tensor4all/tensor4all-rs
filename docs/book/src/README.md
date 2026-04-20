@@ -23,7 +23,7 @@ examples live in this guide and the guide examples are exercised in CI.
 | Install and run my first example | [Getting Started](getting-started.md) |
 | Understand the crate structure | [Architecture & Crate Guide](architecture.md) |
 | Come from ITensors.jl and map types | [Conventions](conventions.md) |
-| Browse the full API reference | [rustdoc API reference](../rustdoc/tensor4all_core/) |
+| Browse the full API reference | [rustdoc API reference](rustdoc/tensor4all_core/) |
 | Use tensor4all-rs from Julia | [Julia Bindings](julia-bindings.md) |
 
 ---
