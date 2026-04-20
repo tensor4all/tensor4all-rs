@@ -11,6 +11,7 @@
 //! The repository root `README.md` is included here as well so its short
 //! runnable examples stay covered by CI.
 
+#[cfg(test)]
 const BOOK_INTRODUCTION: &str = include_str!("../../book/src/README.md");
 
 #[doc = include_str!("../../../README.md")]
