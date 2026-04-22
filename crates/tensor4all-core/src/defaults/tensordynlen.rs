@@ -10,7 +10,7 @@ use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
 use std::collections::HashSet;
 use std::ops::{Mul, Neg, Sub};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tenferro::eager_einsum::eager_einsum_ad;
 use tenferro::{CpuBackend, DType, EagerTensor, Tensor as NativeTensor};
 use tensor4all_tensorbackend::{
@@ -161,11 +161,10 @@ pub trait TensorAccess {
 pub struct TensorDynLen {
     /// Full index information (includes tags and other metadata).
     pub indices: Vec<DynIndex>,
-    /// Eager payload tensor. During the primal migration this is created as an
-    /// untracked eager leaf and will start carrying AD state again in Task 4.
-    pub(crate) inner: Arc<EagerTensor<CpuBackend>>,
-    /// Logical-to-payload axis classes. Repeated values encode diagonal axes.
-    pub(crate) axis_classes: Vec<usize>,
+    /// Authoritative compact payload storage.
+    pub(crate) storage: Arc<Storage>,
+    /// Lazily materialized eager payload for native execution and AD.
+    pub(crate) eager_cache: Arc<OnceLock<Arc<EagerTensor<CpuBackend>>>>,
 }
 
 impl TensorAccess for TensorDynLen {
@@ -205,7 +204,8 @@ impl TensorDynLen {
     }
 
     fn permute_axis_classes(&self, perm: &[usize]) -> Vec<usize> {
-        let permuted: Vec<usize> = perm.iter().map(|&index| self.axis_classes[index]).collect();
+        let axis_classes = self.storage.axis_classes();
+        let permuted: Vec<usize> = perm.iter().map(|&index| axis_classes[index]).collect();
         Self::canonicalize_axis_classes(&permuted)
     }
 
@@ -329,6 +329,69 @@ impl TensorDynLen {
         storage_to_native_tensor(storage, dims)
     }
 
+    fn empty_eager_cache() -> Arc<OnceLock<Arc<EagerTensor<CpuBackend>>>> {
+        Arc::new(OnceLock::new())
+    }
+
+    fn eager_cache_with(
+        inner: EagerTensor<CpuBackend>,
+    ) -> Arc<OnceLock<Arc<EagerTensor<CpuBackend>>>> {
+        let cache = Arc::new(OnceLock::new());
+        let _ = cache.set(Arc::new(inner));
+        cache
+    }
+
+    fn storage_from_native_with_axis_classes(
+        native: &NativeTensor,
+        axis_classes: &[usize],
+        logical_rank: usize,
+    ) -> Result<Storage> {
+        if Self::is_diag_axis_classes(axis_classes) {
+            match native.dtype() {
+                DType::F32 | DType::F64 => Storage::from_diag_col_major(
+                    native_tensor_primal_to_diag_f64(native)?,
+                    logical_rank,
+                ),
+                DType::C32 | DType::C64 => Storage::from_diag_col_major(
+                    native_tensor_primal_to_diag_c64(native)?,
+                    logical_rank,
+                ),
+            }
+        } else {
+            native_tensor_primal_to_storage(native)
+        }
+    }
+
+    fn validate_storage_matches_indices(indices: &[DynIndex], storage: &Storage) -> Result<()> {
+        let dims = Self::expected_dims_from_indices(indices);
+        let storage_dims = storage.logical_dims();
+        if storage_dims != dims {
+            return Err(anyhow::anyhow!(
+                "storage logical dims {:?} do not match indices dims {:?}",
+                storage_dims,
+                dims
+            ));
+        }
+        if storage.is_diag() {
+            Self::validate_diag_dims(&dims)?;
+        }
+        Ok(())
+    }
+
+    fn materialized_inner(&self) -> &EagerTensor<CpuBackend> {
+        self.eager_cache
+            .get_or_init(|| {
+                let native = Self::seed_native_payload(self.storage.as_ref(), &self.dims())
+                    .unwrap_or_else(|err| panic!("TensorDynLen materialization failed: {err}"));
+                Arc::new(EagerTensor::from_tensor_in(native, default_eager_ctx()))
+            })
+            .as_ref()
+    }
+
+    pub(crate) fn as_inner(&self) -> &EagerTensor<CpuBackend> {
+        self.materialized_inner()
+    }
+
     /// Compute dims from `indices` order.
     #[inline]
     fn expected_dims_from_indices(indices: &[DynIndex]) -> Vec<usize> {
@@ -404,7 +467,7 @@ impl TensorDynLen {
         Self::new(indices, storage)
     }
 
-    /// Create a tensor from explicit storage by seeding a canonical native payload.
+    /// Create a tensor from explicit compact storage.
     ///
     /// # Examples
     ///
@@ -419,18 +482,39 @@ impl TensorDynLen {
     /// assert_eq!(t.dims(), vec![2, 2]);
     /// ```
     pub fn from_storage(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
-        let dims = Self::expected_dims_from_indices(&indices);
         Self::validate_indices(&indices);
-        if storage.is_diag() {
-            Self::validate_diag_dims(&dims)?;
-        }
-        let native = Self::seed_native_payload(storage.as_ref(), &dims)?;
-        let axis_classes = if storage.is_diag() {
-            Self::diag_axis_classes(indices.len())
-        } else {
-            Self::dense_axis_classes(indices.len())
-        };
-        Self::from_native_with_axis_classes(indices, native, axis_classes)
+        Self::validate_storage_matches_indices(&indices, storage.as_ref())?;
+        Ok(Self {
+            indices,
+            storage,
+            eager_cache: Self::empty_eager_cache(),
+        })
+    }
+
+    /// Create a tensor from explicit structured storage.
+    ///
+    /// This is an alias for [`TensorDynLen::from_storage`] with a name that
+    /// emphasizes that compact structured metadata is preserved.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage logical dimensions do not match the
+    /// supplied indices, or if duplicate indices are provided.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, Storage, StorageKind, TensorDynLen};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let storage = Arc::new(Storage::from_diag_col_major(vec![1.0_f64, 2.0], 2).unwrap());
+    /// let tensor = TensorDynLen::from_structured_storage(vec![i, j], storage).unwrap();
+    /// assert_eq!(tensor.storage().storage_kind(), StorageKind::Diagonal);
+    /// ```
+    pub fn from_structured_storage(indices: Vec<DynIndex>, storage: Arc<Storage>) -> Result<Self> {
+        Self::from_storage(indices, storage)
     }
 
     /// Create a tensor from a native tenferro payload.
@@ -476,10 +560,15 @@ impl TensorDynLen {
         if Self::is_diag_axis_classes(&axis_classes) {
             Self::validate_diag_dims(&dims)?;
         }
+        let storage = Self::storage_from_native_with_axis_classes(
+            inner.data(),
+            &axis_classes,
+            indices.len(),
+        )?;
         Ok(Self {
             indices,
-            inner: Arc::new(inner),
-            axis_classes,
+            storage: Arc::new(storage),
+            eager_cache: Self::eager_cache_with(inner),
         })
     }
 
@@ -490,7 +579,7 @@ impl TensorDynLen {
 
     /// Borrow the native payload.
     pub(crate) fn as_native(&self) -> &NativeTensor {
-        self.inner.data()
+        self.materialized_inner().data()
     }
 
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
@@ -498,25 +587,30 @@ impl TensorDynLen {
         let native = self.as_native().clone();
         Self {
             indices: self.indices,
-            inner: Arc::new(EagerTensor::requires_grad_in(native, default_eager_ctx())),
-            axis_classes: self.axis_classes,
+            storage: self.storage,
+            eager_cache: Self::eager_cache_with(EagerTensor::requires_grad_in(
+                native,
+                default_eager_ctx(),
+            )),
         }
     }
 
     /// Report whether this tensor participates in gradient tracking.
     pub fn tracks_grad(&self) -> bool {
-        self.inner.tracks_grad()
+        self.eager_cache
+            .get()
+            .is_some_and(|inner| inner.tracks_grad())
     }
 
     /// Return the accumulated gradient, if one has been stored.
     pub fn grad(&self) -> Result<Option<Self>> {
-        self.inner
+        self.materialized_inner()
             .grad()
             .map(|grad| {
                 Self::from_native_with_axis_classes(
                     self.indices.clone(),
                     grad.as_ref().clone(),
-                    self.axis_classes.clone(),
+                    self.storage.axis_classes().to_vec(),
                 )
             })
             .transpose()
@@ -524,13 +618,15 @@ impl TensorDynLen {
 
     /// Clear the accumulated gradient stored for this tensor.
     pub fn clear_grad(&self) -> Result<()> {
-        self.inner.clear_grad();
+        if let Some(inner) = self.eager_cache.get() {
+            inner.clear_grad();
+        }
         Ok(())
     }
 
     /// Run reverse-mode autodiff from this scalar tensor.
     pub fn backward(&self) -> Result<()> {
-        self.inner
+        self.materialized_inner()
             .backward()
             .map(|_| ())
             .map_err(|e| anyhow::anyhow!("TensorDynLen::backward failed: {e}"))
@@ -538,11 +634,12 @@ impl TensorDynLen {
 
     /// Detach this tensor from the reverse graph.
     pub fn detach(&self) -> Self {
-        Self {
-            indices: self.indices.clone(),
-            inner: Arc::new(self.inner.detach()),
-            axis_classes: self.axis_classes.clone(),
-        }
+        Self::from_inner_with_axis_classes(
+            self.indices.clone(),
+            self.materialized_inner().detach(),
+            self.storage.axis_classes().to_vec(),
+        )
+        .expect("TensorDynLen::detach returned invalid tensor")
     }
 
     /// Check if this tensor is already in canonical form.
@@ -552,27 +649,12 @@ impl TensorDynLen {
 
     /// Materialize the primal snapshot as storage.
     pub fn to_storage(&self) -> Result<Arc<Storage>> {
-        let storage = if self.is_diag() {
-            match self.as_native().dtype() {
-                DType::F32 | DType::F64 => Storage::from_diag_col_major(
-                    native_tensor_primal_to_diag_f64(self.as_native())?,
-                    self.indices.len(),
-                )?,
-                DType::C32 | DType::C64 => Storage::from_diag_col_major(
-                    native_tensor_primal_to_diag_c64(self.as_native())?,
-                    self.indices.len(),
-                )?,
-            }
-        } else {
-            native_tensor_primal_to_storage(self.as_native())?
-        };
-        Ok(Arc::new(storage))
+        Ok(Arc::clone(&self.storage))
     }
 
-    /// Materialize the primal snapshot as storage.
+    /// Returns the authoritative compact storage.
     pub fn storage(&self) -> Arc<Storage> {
-        self.to_storage()
-            .expect("TensorDynLen::storage snapshot materialization failed")
+        Arc::clone(&self.storage)
     }
 
     /// Sum all elements, returning `AnyScalar`.
@@ -593,7 +675,7 @@ impl TensorDynLen {
         }
         let axes: Vec<usize> = (0..self.indices.len()).collect();
         let reduced = self
-            .inner
+            .materialized_inner()
             .reduce_sum(&axes)
             .unwrap_or_else(|e| panic!("TensorDynLen::sum failed: {e}"));
         AnyScalar::from_tensor_unchecked(
@@ -669,7 +751,7 @@ impl TensorDynLen {
         let perm = compute_permutation_from_indices(&self.indices, new_indices);
 
         let permuted = self
-            .inner
+            .materialized_inner()
             .transpose(&perm)
             .unwrap_or_else(|e| panic!("TensorDynLen::permute_indices failed: {e}"));
         let axis_classes = self.permute_axis_classes(&perm);
@@ -715,7 +797,7 @@ impl TensorDynLen {
         // Permute indices
         let new_indices: Vec<DynIndex> = perm.iter().map(|&i| self.indices[i].clone()).collect();
         let permuted = self
-            .inner
+            .materialized_inner()
             .transpose(perm)
             .unwrap_or_else(|e| panic!("TensorDynLen::permute failed: {e}"));
         let axis_classes = self.permute_axis_classes(perm);
@@ -768,8 +850,8 @@ impl TensorDynLen {
 
         if self.indices.is_empty() && other.indices.is_empty() {
             let result = self
-                .inner
-                .mul(other.inner.as_ref())
+                .materialized_inner()
+                .mul(other.materialized_inner())
                 .unwrap_or_else(|e| panic!("TensorDynLen::contract scalar multiply failed: {e}"));
             return Self::from_inner(spec.result_indices, result)
                 .expect("TensorDynLen::contract returned invalid scalar");
@@ -794,8 +876,11 @@ impl TensorDynLen {
             &spec.axes_b,
         )
         .expect("TensorDynLen::contract failed to build einsum subscripts");
-        let result = eager_einsum_ad(&[self.inner.as_ref(), other.inner.as_ref()], &subscripts)
-            .unwrap_or_else(|e| panic!("TensorDynLen::contract failed: {e}"));
+        let result = eager_einsum_ad(
+            &[self.materialized_inner(), other.materialized_inner()],
+            &subscripts,
+        )
+        .unwrap_or_else(|e| panic!("TensorDynLen::contract failed: {e}"));
         Self::from_inner(spec.result_indices, result)
             .expect("TensorDynLen::contract returned invalid tensor")
     }
@@ -886,8 +971,8 @@ impl TensorDynLen {
 
         if self.indices.is_empty() && other.indices.is_empty() {
             let result = self
-                .inner
-                .mul(other.inner.as_ref())
+                .materialized_inner()
+                .mul(other.materialized_inner())
                 .map_err(|e| anyhow::anyhow!("tensordot scalar multiply failed: {e}"))?;
             return Self::from_inner(spec.result_indices, result);
         }
@@ -908,8 +993,11 @@ impl TensorDynLen {
             other.indices.len(),
             &spec.axes_b,
         )?;
-        let result = eager_einsum_ad(&[self.inner.as_ref(), other.inner.as_ref()], &subscripts)
-            .map_err(|e| anyhow::anyhow!("tensordot failed: {e}"))?;
+        let result = eager_einsum_ad(
+            &[self.materialized_inner(), other.materialized_inner()],
+            &subscripts,
+        )
+        .map_err(|e| anyhow::anyhow!("tensordot failed: {e}"))?;
         Self::from_inner(spec.result_indices, result)
     }
 
@@ -976,8 +1064,11 @@ impl TensorDynLen {
             other.indices.len(),
             &[],
         )?;
-        let result = eager_einsum_ad(&[self.inner.as_ref(), other.inner.as_ref()], &subscripts)
-            .map_err(|e| anyhow::anyhow!("outer_product failed: {e}"))?;
+        let result = eager_einsum_ad(
+            &[self.materialized_inner(), other.materialized_inner()],
+            &subscripts,
+        )
+        .map_err(|e| anyhow::anyhow!("outer_product failed: {e}"))?;
         Self::from_inner(result_indices, result)
     }
 }
@@ -1280,8 +1371,8 @@ impl TensorDynLen {
             ));
         }
 
-        let axis_classes = if self.axis_classes == other_aligned.axis_classes {
-            self.axis_classes.clone()
+        let axis_classes = if self.storage.axis_classes() == other_aligned.storage.axis_classes() {
+            self.storage.axis_classes().to_vec()
         } else {
             Self::dense_axis_classes(self.indices.len())
         };
@@ -1306,8 +1397,8 @@ impl TensorDynLen {
         let lhs = self.scale(a)?;
         let rhs = other_aligned.scale(b)?;
         let combined = lhs
-            .inner
-            .add(rhs.inner.as_ref())
+            .materialized_inner()
+            .add(rhs.materialized_inner())
             .map_err(|e| anyhow::anyhow!("tensor addition failed: {e}"))?;
         Self::from_inner_with_axis_classes(self.indices.clone(), combined, axis_classes)
     }
@@ -1332,23 +1423,30 @@ impl TensorDynLen {
             return Self::from_native_with_axis_classes(
                 self.indices.clone(),
                 scaled,
-                self.axis_classes.clone(),
+                self.storage.axis_classes().to_vec(),
             );
         }
 
         let scaled = if self.indices.is_empty() {
-            self.inner
-                .mul(scalar.as_tensor().inner.as_ref())
+            self.materialized_inner()
+                .mul(scalar.as_tensor().materialized_inner())
                 .map_err(|e| anyhow::anyhow!("scalar multiplication failed: {e}"))?
         } else {
             let subscripts = Self::scale_subscripts(self.indices.len())?;
             eager_einsum_ad(
-                &[self.inner.as_ref(), scalar.as_tensor().inner.as_ref()],
+                &[
+                    self.materialized_inner(),
+                    scalar.as_tensor().materialized_inner(),
+                ],
                 &subscripts,
             )
             .map_err(|e| anyhow::anyhow!("tensor scaling failed: {e}"))?
         };
-        Self::from_inner_with_axis_classes(self.indices.clone(), scaled, self.axis_classes.clone())
+        Self::from_inner_with_axis_classes(
+            self.indices.clone(),
+            scaled,
+            self.storage.axis_classes().to_vec(),
+        )
     }
 
     /// Inner product (dot product) of two tensors.
@@ -1447,8 +1545,8 @@ impl TensorDynLen {
 
         Self {
             indices: new_indices,
-            inner: self.inner.clone(),
-            axis_classes: self.axis_classes.clone(),
+            storage: Arc::clone(&self.storage),
+            eager_cache: Arc::clone(&self.eager_cache),
         }
     }
 
@@ -1522,8 +1620,8 @@ impl TensorDynLen {
 
         Self {
             indices: new_indices_vec,
-            inner: self.inner.clone(),
-            axis_classes: self.axis_classes.clone(),
+            storage: Arc::clone(&self.storage),
+            eager_cache: Arc::clone(&self.eager_cache),
         }
     }
 }
@@ -1561,11 +1659,15 @@ impl TensorDynLen {
         // for QSpace-compatible directed indices where conj() flips Ket <-> Bra
         let new_indices: Vec<DynIndex> = self.indices.iter().map(|idx| idx.conj()).collect();
         let conjugated = self
-            .inner
+            .materialized_inner()
             .conj()
             .unwrap_or_else(|e| panic!("TensorDynLen::conj failed: {e}"));
-        Self::from_inner_with_axis_classes(new_indices, conjugated, self.axis_classes.clone())
-            .expect("TensorDynLen::conj returned invalid tensor")
+        Self::from_inner_with_axis_classes(
+            new_indices,
+            conjugated,
+            self.storage.axis_classes().to_vec(),
+        )
+        .expect("TensorDynLen::conj returned invalid tensor")
     }
 }
 
@@ -2206,7 +2308,7 @@ impl TensorDynLen {
         Self::validate_indices(&indices);
         Self::validate_diag_payload_len(data.len(), &dims)?;
         let native = diag_native_tensor_from_col_major(&data, dims.len())?;
-        Self::from_native(indices, native)
+        Self::from_native_with_axis_classes(indices, native, Self::diag_axis_classes(dims.len()))
     }
 
     /// Create a diagonal tensor from diagonal payload data provided as
@@ -2446,7 +2548,7 @@ impl TensorDynLen {
     /// assert!(!tensor.is_complex());
     /// ```
     pub fn is_f64(&self) -> bool {
-        matches!(self.as_native().dtype(), DType::F64 | DType::F32)
+        self.storage.is_f64()
     }
 
     /// Check whether the tensor carries diagonal logical axis metadata.
@@ -2475,7 +2577,7 @@ impl TensorDynLen {
     /// assert!(diag.is_diag());
     /// ```
     pub fn is_diag(&self) -> bool {
-        Self::is_diag_axis_classes(&self.axis_classes)
+        self.storage.is_diag()
     }
 
     /// Check if the tensor has complex storage (C64).
@@ -2497,7 +2599,7 @@ impl TensorDynLen {
     /// assert!(complex_t.is_complex());
     /// ```
     pub fn is_complex(&self) -> bool {
-        matches!(self.as_native().dtype(), DType::C64 | DType::C32)
+        self.storage.is_complex()
     }
 }
 

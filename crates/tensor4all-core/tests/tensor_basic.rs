@@ -30,7 +30,8 @@ where
     let j = Index::new_dyn(3);
     let tensor = TensorDynLen::from_diag(vec![i, j], data).unwrap();
     assert_eq!(tensor.dims(), vec![3, 3]);
-    assert!(!tensor.is_diag());
+    assert!(tensor.is_diag());
+    assert_eq!(tensor.storage().storage_kind(), StorageKind::Diagonal);
 }
 
 #[test]

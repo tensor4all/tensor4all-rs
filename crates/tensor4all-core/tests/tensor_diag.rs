@@ -268,7 +268,8 @@ fn test_diag_tensor_complex() {
 
     let tensor = TensorDynLen::from_diag(vec![i.clone(), j.clone()], diag_data.clone()).unwrap();
     assert_eq!(tensor.dims(), vec![2, 2]);
-    assert!(!tensor.is_diag());
+    assert!(tensor.is_diag());
+    assert_eq!(tensor.storage().storage_kind(), StorageKind::Diagonal);
     assert_eq!(
         tensor.to_vec::<Complex64>().unwrap(),
         vec![
@@ -301,7 +302,8 @@ fn test_diag_tensor_complex_axpby_preserves_diagonal_values() {
     let b = AnyScalar::new_complex(-0.5, 1.0);
     let result = tensor_a.axpby(a, &tensor_b, b).unwrap();
 
-    assert!(!result.is_diag());
+    assert!(result.is_diag());
+    assert_eq!(result.storage().storage_kind(), StorageKind::Diagonal);
     let b_c = Complex64::new(-0.5, 1.0);
     let expected_diag: Vec<Complex64> = diag_a
         .iter()
