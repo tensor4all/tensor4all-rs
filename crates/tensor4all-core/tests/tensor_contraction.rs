@@ -138,6 +138,21 @@ fn test_contract_no_common_indices_preserves_left_then_right_index_order_and_val
 }
 
 #[test]
+fn structured_tensor_contract_materializes_to_correct_dense_result() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let k = Index::new_dyn(2);
+    let diag = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![2.0_f64, 3.0]).unwrap();
+    assert!(diag.is_diag());
+    let dense = TensorDynLen::from_dense(vec![j, k.clone()], vec![5.0, 7.0, 11.0, 13.0]).unwrap();
+
+    let result = diag.contract(&dense);
+
+    let expected = TensorDynLen::from_dense(vec![i, k], vec![10.0, 21.0, 22.0, 39.0]).unwrap();
+    assert!((&result - &expected).maxabs() < 1e-12);
+}
+
+#[test]
 fn test_contract_three_indices() {
     // Create A[i, j, k] and B[j, k, l]
     // Contract along j and k: result should be C[i, l]
