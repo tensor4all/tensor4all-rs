@@ -65,8 +65,8 @@ pub use tagset::{Tag, TagSetError, TagSetLike};
 pub mod storage {
     //! Re-export of snapshot storage utilities.
     pub use tensor4all_tensorbackend::{
-        make_mut_storage, mindim, AnyScalar, Storage, StorageScalar, StructuredStorage,
-        SumFromStorage,
+        make_mut_storage, mindim, AnyScalar, Storage, StorageKind, StorageScalar,
+        StructuredStorage, SumFromStorage,
     };
 }
 pub mod tensor_index;
@@ -88,7 +88,9 @@ pub use defaults::tensordynlen::{
     compute_permutation_from_indices, diag_tensor_dyn_len, unfold_split, RandomScalar,
     TensorAccess, TensorDynLen,
 };
-pub use storage::{make_mut_storage, mindim, Storage, StructuredStorage, SumFromStorage};
+pub use storage::{
+    make_mut_storage, mindim, Storage, StorageKind, StructuredStorage, SumFromStorage,
+};
 pub use tensor4all_tensorbackend::TensorElement;
 pub use tensor4all_tensorbackend::{
     print_and_reset_native_einsum_profile, reset_native_einsum_profile,

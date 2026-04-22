@@ -69,6 +69,54 @@ fn test_storage_is_diag() {
 }
 
 #[test]
+fn storage_kind_and_metadata_accessors_cover_dense_diag_and_structured() {
+    let dense = Storage::from_dense_col_major(vec![1.0_f64, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+    assert_eq!(dense.storage_kind(), StorageKind::Dense);
+    assert_eq!(dense.logical_dims(), vec![2, 2]);
+    assert_eq!(dense.logical_rank(), 2);
+    assert_eq!(dense.payload_dims(), &[2, 2]);
+    assert_eq!(dense.payload_strides(), &[1, 2]);
+    assert_eq!(dense.axis_classes(), &[0, 1]);
+    assert_eq!(dense.payload_len(), 4);
+    assert_eq!(
+        dense.payload_f64_col_major_vec().unwrap(),
+        vec![1.0, 2.0, 3.0, 4.0]
+    );
+
+    let diag = Storage::from_diag_col_major(vec![10.0_f64, 20.0], 2).unwrap();
+    assert_eq!(diag.storage_kind(), StorageKind::Diagonal);
+    assert_eq!(diag.logical_dims(), vec![2, 2]);
+    assert_eq!(diag.payload_dims(), &[2]);
+    assert_eq!(diag.axis_classes(), &[0, 0]);
+    assert_eq!(diag.payload_f64_col_major_vec().unwrap(), vec![10.0, 20.0]);
+
+    let structured = Storage::new_structured(
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+        vec![2, 3],
+        vec![1, 2],
+        vec![0, 1, 0],
+    )
+    .unwrap();
+    assert_eq!(structured.storage_kind(), StorageKind::Structured);
+    assert_eq!(structured.logical_dims(), vec![2, 3, 2]);
+    assert_eq!(structured.payload_dims(), &[2, 3]);
+    assert_eq!(structured.payload_strides(), &[1, 2]);
+    assert_eq!(structured.axis_classes(), &[0, 1, 0]);
+}
+
+#[test]
+fn storage_payload_c64_readback_is_interpreted_as_payload_not_logical_dense() {
+    let data = vec![Complex64::new(1.0, -1.0), Complex64::new(2.0, -2.0)];
+    let storage = Storage::from_diag_col_major(data.clone(), 2).unwrap();
+    assert_eq!(storage.storage_kind(), StorageKind::Diagonal);
+    assert_eq!(storage.payload_c64_col_major_vec().unwrap(), data);
+    assert!(storage
+        .payload_f64_col_major_vec()
+        .unwrap_err()
+        .contains("expected f64"));
+}
+
+#[test]
 fn structured_storage_rejects_noncanonical_axis_classes() {
     let err = StructuredStorage::<f64>::new(
         vec![1.0, 2.0, 3.0, 4.0],
