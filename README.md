@@ -10,7 +10,7 @@ A Rust implementation of tensor networks: TCI, Quantics Tensor Train, and Tree T
 - **Tensor Cross Interpolation**: TCI2 algorithm for efficient high-dimensional function approximation
 - **Quantics Tensor Train**: Binary encoding of continuous variables with transformation operators
 - **Tree Tensor Networks**: Arbitrary topology with canonicalization, truncation, and contraction
-- **C API**: Minimal Julia-facing FFI surface for indices, tensors, TreeTN, and quantics materialization
+- **C API**: Minimal Julia-facing FFI surface for indices, structured tensors, TreeTN, and quantics materialization
 
 ## Quick Start
 
@@ -62,7 +62,7 @@ Inspired by [ITensors.jl](https://github.com/ITensor/ITensors.jl). We acknowledg
 
 **Citation:** If you use this code in research, please cite:
 
-> We used tensor4all-rs (https://github.com/tensor4all/tensor4all-rs), inspired by ITensors.jl.
+> We used tensor4all-rs (<https://github.com/tensor4all/tensor4all-rs>), inspired by ITensors.jl.
 >
 > M. Fishman, S. R. White, E. M. Stoudenmire, "The ITensor Software Library for Tensor Network Calculations", arXiv:2007.14822 (2020)
 

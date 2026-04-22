@@ -110,13 +110,15 @@ pub trait TensorAccess {
     fn indices(&self) -> &[DynIndex];
 }
 
-/// Dynamic-rank dense tensor -- the central data type of tensor4all.
+/// Dynamic-rank tensor with structured payload storage -- the central data type
+/// of tensor4all.
 ///
-/// `TensorDynLen` stores a multi-dimensional array of `f64` or `Complex64`
-/// values together with a list of [`DynIndex`] labels. The indices carry
-/// unique identities (UUIDs) so that contraction, addition, and other
-/// binary operations can automatically match legs by identity rather than
-/// position.
+/// `TensorDynLen` stores a logical multi-dimensional tensor of `f64` or
+/// `Complex64` values together with a list of [`DynIndex`] labels. The
+/// authoritative payload is compact [`Storage`], which may be dense, diagonal,
+/// or explicitly structured. The indices carry unique identities (UUIDs) so
+/// that contraction, addition, and other binary operations can automatically
+/// match legs by identity rather than position.
 ///
 /// # Key Operations
 ///
@@ -132,8 +134,10 @@ pub trait TensorAccess {
 ///
 /// # Data Layout
 ///
-/// Data is stored in **column-major** order (first index varies fastest),
-/// matching Fortran, Julia, and ITensors.jl conventions.
+/// Logical dense extraction uses **column-major** order (first index varies
+/// fastest), matching Fortran, Julia, and ITensors.jl conventions. Compact
+/// structured payloads additionally carry explicit payload dimensions, strides,
+/// and logical-axis classes.
 ///
 /// # Examples
 ///
@@ -1842,9 +1846,9 @@ impl std::fmt::Debug for TensorDynLen {
 /// * `indices` - The indices for the tensor (all must have the same dimension)
 /// * `diag_data` - The diagonal elements (length must equal the dimension of indices)
 ///
-/// The public native bridge currently materializes diagonal payloads densely, so
-/// the returned tensor is mathematically diagonal but may not report
-/// [`TensorDynLen::is_diag`] at the native-storage level.
+/// The returned tensor preserves compact diagonal payload metadata; use
+/// [`TensorDynLen::is_diag`] or [`TensorDynLen::storage`] to inspect that
+/// representation.
 ///
 /// # Panics
 /// Panics if indices have different dimensions, or if diag_data length doesn't match.
@@ -1858,6 +1862,7 @@ impl std::fmt::Debug for TensorDynLen {
 /// let j = DynIndex::new_dyn(3);
 /// let t = diag_tensor_dyn_len(vec![i, j], vec![1.0, 2.0, 3.0]);
 /// assert_eq!(t.dims(), vec![3, 3]);
+/// assert!(t.is_diag());
 /// ```
 pub fn diag_tensor_dyn_len(indices: Vec<DynIndex>, diag_data: Vec<f64>) -> TensorDynLen {
     TensorDynLen::from_diag(indices, diag_data)
@@ -2314,9 +2319,9 @@ impl TensorDynLen {
     /// that dimension. The resulting tensor has nonzero entries only on
     /// the multi-index diagonal (`T[i,i,...,i] = data[i]`).
     ///
-    /// The public native bridge currently materializes diagonal payloads densely, so
-    /// the returned tensor is mathematically diagonal but may not report
-    /// [`TensorDynLen::is_diag`] at the native-storage level.
+    /// The returned tensor preserves compact diagonal payload metadata; use
+    /// [`TensorDynLen::is_diag`] or [`TensorDynLen::storage`] to inspect that
+    /// representation.
     ///
     /// # Examples
     ///
@@ -2326,6 +2331,7 @@ impl TensorDynLen {
     /// let i = DynIndex::new_dyn(3);
     /// let j = DynIndex::new_dyn(3);
     /// let diag = TensorDynLen::from_diag(vec![i, j], vec![1.0, 2.0, 3.0]).unwrap();
+    /// assert!(diag.is_diag());
     ///
     /// let data = diag.to_vec::<f64>().unwrap();
     /// // 3x3 identity-like: [1,0,0, 0,2,0, 0,0,3] in column-major
