@@ -112,7 +112,7 @@ impl AnyScalar {
     where
         E: fmt::Display,
     {
-        let result = f(lhs.tensor.inner.as_ref(), rhs.tensor.inner.as_ref())
+        let result = f(lhs.tensor.as_inner(), rhs.tensor.as_inner())
             .unwrap_or_else(|e| panic!("AnyScalar::{op} failed: {e}"));
         Self::from_tensor_result(TensorDynLen::from_inner(vec![], result), op)
     }
@@ -127,8 +127,8 @@ impl AnyScalar {
     where
         E: fmt::Display,
     {
-        let result = f(input.tensor.inner.as_ref())
-            .unwrap_or_else(|e| panic!("AnyScalar::{op} failed: {e}"));
+        let result =
+            f(input.tensor.as_inner()).unwrap_or_else(|e| panic!("AnyScalar::{op} failed: {e}"));
         Self::from_tensor_result(TensorDynLen::from_inner(vec![], result), op)
     }
 

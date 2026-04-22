@@ -56,6 +56,24 @@ typedef enum t4a_scalar_kind {
 } t4a_scalar_kind;
 
 /**
+ * Storage layout kind used by tensor payload inspection APIs.
+ */
+typedef enum t4a_storage_kind {
+  /**
+   * Dense storage whose payload axes match the logical tensor axes.
+   */
+  T4A_STORAGE_KIND_DENSE = 0,
+  /**
+   * Diagonal storage whose logical axes all share one payload axis.
+   */
+  T4A_STORAGE_KIND_DIAGONAL = 1,
+  /**
+   * General structured storage with explicit payload-axis classes.
+   */
+  T4A_STORAGE_KIND_STRUCTURED = 2,
+} t4a_storage_kind;
+
+/**
  * Threshold scaling used by the C API SVD truncation policy.
  *
  * Related types:
@@ -526,6 +544,14 @@ StatusCode t4a_qtt_layout_new(enum t4a_qtt_layout_kind kind,
 void t4a_qtt_layout_release(struct t4a_qtt_layout *obj);
 
 /**
+ * Copy logical-axis to payload-axis class mapping.
+ */
+StatusCode t4a_tensor_axis_classes(const struct t4a_tensor *ptr,
+                                   size_t *buf,
+                                   size_t buf_len,
+                                   size_t *out_len);
+
+/**
  * Clone a tensor handle.
  */
 StatusCode t4a_tensor_clone(const struct t4a_tensor *src, struct t4a_tensor **out);
@@ -552,6 +578,22 @@ StatusCode t4a_tensor_copy_dense_f64(const struct t4a_tensor *ptr,
                                      double *buf,
                                      size_t buf_len,
                                      size_t *out_len);
+
+/**
+ * Copy compact payload `Complex64` data as interleaved doubles.
+ */
+StatusCode t4a_tensor_copy_payload_c64(const struct t4a_tensor *ptr,
+                                       double *buf_interleaved,
+                                       size_t n_complex,
+                                       size_t *out_len);
+
+/**
+ * Copy compact payload `f64` data in payload column-major order.
+ */
+StatusCode t4a_tensor_copy_payload_f64(const struct t4a_tensor *ptr,
+                                       double *buf,
+                                       size_t buf_len,
+                                       size_t *out_len);
 
 /**
  * Copy tensor dimensions in index order.
@@ -591,6 +633,80 @@ StatusCode t4a_tensor_new_dense_f64(size_t rank,
                                     const double *data,
                                     size_t data_len,
                                     struct t4a_tensor **out);
+
+/**
+ * Create a complex diagonal tensor from compact diagonal payload data.
+ */
+StatusCode t4a_tensor_new_diag_c64(size_t rank,
+                                   const struct t4a_index *const *index_ptrs,
+                                   const double *diag_data_interleaved,
+                                   size_t n_complex,
+                                   struct t4a_tensor **out);
+
+/**
+ * Create a real diagonal tensor from compact diagonal payload data.
+ */
+StatusCode t4a_tensor_new_diag_f64(size_t rank,
+                                   const struct t4a_index *const *index_ptrs,
+                                   const double *diag_data,
+                                   size_t diag_len,
+                                   struct t4a_tensor **out);
+
+/**
+ * Create a complex tensor from explicit compact structured storage.
+ */
+StatusCode t4a_tensor_new_structured_c64(size_t rank,
+                                         const struct t4a_index *const *index_ptrs,
+                                         const double *data_interleaved,
+                                         size_t n_complex,
+                                         const size_t *payload_dims,
+                                         size_t payload_rank,
+                                         const ptrdiff_t *payload_strides,
+                                         size_t payload_strides_len,
+                                         const size_t *axis_classes,
+                                         size_t axis_classes_len,
+                                         struct t4a_tensor **out);
+
+/**
+ * Create a real tensor from explicit compact structured storage.
+ */
+StatusCode t4a_tensor_new_structured_f64(size_t rank,
+                                         const struct t4a_index *const *index_ptrs,
+                                         const double *data,
+                                         size_t data_len,
+                                         const size_t *payload_dims,
+                                         size_t payload_rank,
+                                         const ptrdiff_t *payload_strides,
+                                         size_t payload_strides_len,
+                                         const size_t *axis_classes,
+                                         size_t axis_classes_len,
+                                         struct t4a_tensor **out);
+
+/**
+ * Copy compact payload dimensions.
+ */
+StatusCode t4a_tensor_payload_dims(const struct t4a_tensor *ptr,
+                                   size_t *buf,
+                                   size_t buf_len,
+                                   size_t *out_len);
+
+/**
+ * Get the compact payload length in scalar elements.
+ */
+StatusCode t4a_tensor_payload_len(const struct t4a_tensor *ptr, size_t *out_len);
+
+/**
+ * Get the rank of the compact payload tensor.
+ */
+StatusCode t4a_tensor_payload_rank(const struct t4a_tensor *ptr, size_t *out_rank);
+
+/**
+ * Copy compact payload strides in scalar elements.
+ */
+StatusCode t4a_tensor_payload_strides(const struct t4a_tensor *ptr,
+                                      ptrdiff_t *buf,
+                                      size_t buf_len,
+                                      size_t *out_len);
 
 /**
  * Compute the QR decomposition of a tensor split by the requested left indices.
@@ -648,6 +764,11 @@ void t4a_tensor_release(struct t4a_tensor *obj);
  * Get the scalar kind of a tensor.
  */
 StatusCode t4a_tensor_scalar_kind(const struct t4a_tensor *ptr, enum t4a_scalar_kind *out_kind);
+
+/**
+ * Get the storage layout kind of a tensor.
+ */
+StatusCode t4a_tensor_storage_kind(const struct t4a_tensor *ptr, enum t4a_storage_kind *out_kind);
 
 /**
  * Compute the SVD of a tensor split by the requested left indices.

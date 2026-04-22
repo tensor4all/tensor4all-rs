@@ -46,9 +46,10 @@ assert_eq!(bra.plev(), 1);
 
 ## Tensor (TensorDynLen)
 
-`TensorDynLen` is a dynamic-rank dense tensor parameterized by a list of `Index`
-values. Each index uniquely identifies an axis; there is no fixed axis ordering in
-the abstract sense — operations match axes by index identity.
+`TensorDynLen` is a dynamic-rank tensor parameterized by a list of `Index`
+values and backed by compact storage that may be dense, diagonal, or explicitly
+structured. Each index uniquely identifies an axis; there is no fixed axis
+ordering in the abstract sense — operations match axes by index identity.
 
 ### Creating tensors
 

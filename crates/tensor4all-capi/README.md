@@ -6,7 +6,7 @@ minimal Julia-facing surface.
 ## Features
 
 - **Index API**: Immutable index handles with constructor/getter-only access
-- **Tensor API**: Dense `f64` / `Complex64` construction, export, and contraction
+- **Tensor API**: Dense, diagonal, and structured `f64` / `Complex64` construction, payload export, dense export, and contraction
 - **TreeTN API**: General tree tensor network accessors and core operations
 - **QTT layout API**: Canonical binary QTT layout descriptors for transform materialization
 - **Generated C header**: `include/tensor4all_capi.h` for downstream bindings
@@ -17,7 +17,7 @@ minimal Julia-facing surface.
 
 - Opaque pointers with lifecycle management (`*_new(..., out)`, `*_release`, `*_clone(..., out)`)
 - Status codes: `T4A_SUCCESS`, `T4A_NULL_POINTER`, `T4A_INVALID_ARGUMENT`, etc.
-- Column-major data layout for dense tensor data
+- Column-major data layout for dense logical tensor data and compact payload buffers
 - Complex buffers use interleaved doubles: `[re, im, re, im, ...]`
 
 ## Example (C)

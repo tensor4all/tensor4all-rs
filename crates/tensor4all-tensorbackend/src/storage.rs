@@ -696,6 +696,32 @@ impl<T: Copy + Default> StructuredStorage<T> {
 #[derive(Debug, Clone)]
 pub struct Storage(pub(crate) StorageRepr);
 
+/// Classifies the compact layout used by [`Storage`].
+///
+/// Use this to distinguish dense logical payloads from diagonal/copy payloads
+/// and general structured payloads without exposing the internal storage enum.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{Storage, StorageKind};
+///
+/// let dense = Storage::from_dense_col_major(vec![1.0_f64, 2.0], &[2]).unwrap();
+/// assert_eq!(dense.storage_kind(), StorageKind::Dense);
+///
+/// let diag = Storage::from_diag_col_major(vec![1.0_f64, 2.0], 2).unwrap();
+/// assert_eq!(diag.storage_kind(), StorageKind::Diagonal);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageKind {
+    /// Logical dense payload layout.
+    Dense,
+    /// Diagonal or copy-tensor payload layout.
+    Diagonal,
+    /// General structured payload layout with repeated axis classes.
+    Structured,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum StorageRepr {
     /// Storage with f64 elements.
@@ -993,6 +1019,204 @@ impl Storage {
         match &self.0 {
             StorageRepr::F64(value) => value.is_diag(),
             StorageRepr::C64(value) => value.is_diag(),
+        }
+    }
+
+    /// Returns the compact layout class for this storage.
+    ///
+    /// The return value is metadata-only and never materializes dense logical
+    /// values. Use it to choose whether to read compact payload metadata or
+    /// dense logical values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{Storage, StorageKind};
+    ///
+    /// let structured = Storage::new_structured(
+    ///     vec![1.0_f64, 2.0],
+    ///     vec![2],
+    ///     vec![1],
+    ///     vec![0, 0],
+    /// ).unwrap();
+    /// assert_eq!(structured.storage_kind(), StorageKind::Diagonal);
+    /// ```
+    pub fn storage_kind(&self) -> StorageKind {
+        if self.is_dense() {
+            StorageKind::Dense
+        } else if self.is_diag() {
+            StorageKind::Diagonal
+        } else {
+            StorageKind::Structured
+        }
+    }
+
+    /// Returns the logical tensor dimensions represented by this storage.
+    ///
+    /// The dimensions are derived from payload dimensions and `axis_classes`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let diag = Storage::from_diag_col_major(vec![1.0_f64, 2.0], 2).unwrap();
+    /// assert_eq!(diag.logical_dims(), vec![2, 2]);
+    /// ```
+    pub fn logical_dims(&self) -> Vec<usize> {
+        match &self.0 {
+            StorageRepr::F64(value) => value.logical_dims(),
+            StorageRepr::C64(value) => value.logical_dims(),
+        }
+    }
+
+    /// Returns the logical tensor rank represented by this storage.
+    ///
+    /// This equals `axis_classes().len()`, not necessarily `payload_dims().len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let diag = Storage::from_diag_col_major(vec![1.0_f64, 2.0], 3).unwrap();
+    /// assert_eq!(diag.logical_rank(), 3);
+    /// assert_eq!(diag.payload_dims(), &[2]);
+    /// ```
+    pub fn logical_rank(&self) -> usize {
+        match &self.0 {
+            StorageRepr::F64(value) => value.logical_rank(),
+            StorageRepr::C64(value) => value.logical_rank(),
+        }
+    }
+
+    /// Returns the compact payload dimensions.
+    ///
+    /// For dense storage these match logical dimensions. For diagonal storage
+    /// this is rank-1 even when the logical tensor has multiple axes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let diag = Storage::from_diag_col_major(vec![1.0_f64, 2.0], 2).unwrap();
+    /// assert_eq!(diag.payload_dims(), &[2]);
+    /// ```
+    pub fn payload_dims(&self) -> &[usize] {
+        match &self.0 {
+            StorageRepr::F64(value) => value.payload_dims(),
+            StorageRepr::C64(value) => value.payload_dims(),
+        }
+    }
+
+    /// Returns the compact payload strides.
+    ///
+    /// Strides are measured in stored scalar elements and describe the compact
+    /// payload buffer, not the logical dense tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let dense = Storage::from_dense_col_major(vec![0.0_f64; 6], &[2, 3]).unwrap();
+    /// assert_eq!(dense.payload_strides(), &[1, 2]);
+    /// ```
+    pub fn payload_strides(&self) -> &[isize] {
+        match &self.0 {
+            StorageRepr::F64(value) => value.strides(),
+            StorageRepr::C64(value) => value.strides(),
+        }
+    }
+
+    /// Returns logical-axis equivalence classes for this storage.
+    ///
+    /// Repeated class labels mean the corresponding logical axes share one
+    /// payload axis. Dense storage has `[0, 1, ...]`; diagonal storage has
+    /// repeated zero labels.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let diag = Storage::from_diag_col_major(vec![1.0_f64, 2.0], 2).unwrap();
+    /// assert_eq!(diag.axis_classes(), &[0, 0]);
+    /// ```
+    pub fn axis_classes(&self) -> &[usize] {
+        match &self.0 {
+            StorageRepr::F64(value) => value.axis_classes(),
+            StorageRepr::C64(value) => value.axis_classes(),
+        }
+    }
+
+    /// Returns the number of stored compact payload elements.
+    ///
+    /// For dense storage this equals the logical dense length. For diagonal and
+    /// structured storage this is the compact payload length.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let diag = Storage::from_diag_col_major(vec![1.0_f64, 2.0], 2).unwrap();
+    /// assert_eq!(diag.payload_len(), 2);
+    /// ```
+    pub fn payload_len(&self) -> usize {
+        self.len()
+    }
+
+    /// Copies the compact `f64` payload in column-major payload order.
+    ///
+    /// This does not materialize logical dense values. For diagonal storage the
+    /// returned vector contains only diagonal payload values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage scalar type is not `f64`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let diag = Storage::from_diag_col_major(vec![1.0_f64, 2.0], 2).unwrap();
+    /// assert_eq!(diag.payload_f64_col_major_vec().unwrap(), vec![1.0, 2.0]);
+    /// ```
+    pub fn payload_f64_col_major_vec(&self) -> Result<Vec<f64>, String> {
+        match &self.0 {
+            StorageRepr::F64(value) => Ok(value.payload_col_major_vec()),
+            StorageRepr::C64(_) => Err("expected f64 storage when copying f64 payload".to_string()),
+        }
+    }
+
+    /// Copies the compact `Complex64` payload in column-major payload order.
+    ///
+    /// This does not materialize logical dense values. Complex payloads are
+    /// returned as native Rust `Complex64` values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage scalar type is not `Complex64`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tensor4all_tensorbackend::Storage;
+    ///
+    /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)];
+    /// let diag = Storage::from_diag_col_major(data.clone(), 2).unwrap();
+    /// assert_eq!(diag.payload_c64_col_major_vec().unwrap(), data);
+    /// ```
+    pub fn payload_c64_col_major_vec(&self) -> Result<Vec<Complex64>, String> {
+        match &self.0 {
+            StorageRepr::C64(value) => Ok(value.payload_col_major_vec()),
+            StorageRepr::F64(_) => {
+                Err("expected Complex64 storage when copying c64 payload".to_string())
+            }
         }
     }
 

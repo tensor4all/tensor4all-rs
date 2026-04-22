@@ -1,6 +1,8 @@
 use super::*;
 use crate::index::{t4a_index_new, t4a_index_release};
-use crate::types::{t4a_singular_value_measure, t4a_threshold_scale, t4a_truncation_rule};
+use crate::types::{
+    t4a_singular_value_measure, t4a_storage_kind, t4a_threshold_scale, t4a_truncation_rule,
+};
 use num_complex::Complex64;
 
 fn new_index(dim: usize) -> *mut t4a_index {
@@ -54,6 +56,76 @@ fn read_dense_f64(tensor: *const t4a_tensor) -> Vec<f64> {
     let mut data = vec![0.0; len];
     assert_eq!(
         t4a_tensor_copy_dense_f64(tensor, data.as_mut_ptr(), data.len(), &mut len),
+        T4A_SUCCESS
+    );
+    data
+}
+
+fn read_payload_dims(tensor: *const t4a_tensor) -> Vec<usize> {
+    let mut len = 0usize;
+    assert_eq!(
+        t4a_tensor_payload_dims(tensor, std::ptr::null_mut(), 0, &mut len),
+        T4A_SUCCESS
+    );
+    let mut dims = vec![0usize; len];
+    assert_eq!(
+        t4a_tensor_payload_dims(tensor, dims.as_mut_ptr(), dims.len(), &mut len),
+        T4A_SUCCESS
+    );
+    dims
+}
+
+fn read_payload_strides(tensor: *const t4a_tensor) -> Vec<isize> {
+    let mut len = 0usize;
+    assert_eq!(
+        t4a_tensor_payload_strides(tensor, std::ptr::null_mut(), 0, &mut len),
+        T4A_SUCCESS
+    );
+    let mut strides = vec![0isize; len];
+    assert_eq!(
+        t4a_tensor_payload_strides(tensor, strides.as_mut_ptr(), strides.len(), &mut len),
+        T4A_SUCCESS
+    );
+    strides
+}
+
+fn read_axis_classes(tensor: *const t4a_tensor) -> Vec<usize> {
+    let mut len = 0usize;
+    assert_eq!(
+        t4a_tensor_axis_classes(tensor, std::ptr::null_mut(), 0, &mut len),
+        T4A_SUCCESS
+    );
+    let mut classes = vec![0usize; len];
+    assert_eq!(
+        t4a_tensor_axis_classes(tensor, classes.as_mut_ptr(), classes.len(), &mut len),
+        T4A_SUCCESS
+    );
+    classes
+}
+
+fn read_payload_f64(tensor: *const t4a_tensor) -> Vec<f64> {
+    let mut len = 0usize;
+    assert_eq!(
+        t4a_tensor_copy_payload_f64(tensor, std::ptr::null_mut(), 0, &mut len),
+        T4A_SUCCESS
+    );
+    let mut data = vec![0.0; len];
+    assert_eq!(
+        t4a_tensor_copy_payload_f64(tensor, data.as_mut_ptr(), data.len(), &mut len),
+        T4A_SUCCESS
+    );
+    data
+}
+
+fn read_payload_c64(tensor: *const t4a_tensor) -> Vec<f64> {
+    let mut len = 0usize;
+    assert_eq!(
+        t4a_tensor_copy_payload_c64(tensor, std::ptr::null_mut(), 0, &mut len),
+        T4A_SUCCESS
+    );
+    let mut data = vec![0.0; 2 * len];
+    assert_eq!(
+        t4a_tensor_copy_payload_c64(tensor, data.as_mut_ptr(), len, &mut len),
         T4A_SUCCESS
     );
     data
@@ -197,6 +269,250 @@ fn test_tensor_dense_c64_roundtrip() {
     t4a_tensor_release(tensor);
     t4a_index_release(i);
     t4a_index_release(j);
+}
+
+#[test]
+fn test_tensor_diag_f64_storage_payload_roundtrip() {
+    let i = new_index(3);
+    let j = new_index(3);
+    let index_ptrs = [i as *const t4a_index, j as *const t4a_index];
+    let diag = [1.0, 2.0, 4.0];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_diag_f64(
+            2,
+            index_ptrs.as_ptr(),
+            diag.as_ptr(),
+            diag.len(),
+            &mut tensor
+        ),
+        T4A_SUCCESS
+    );
+    assert!(!tensor.is_null());
+
+    let mut kind = t4a_storage_kind::Dense;
+    assert_eq!(t4a_tensor_storage_kind(tensor, &mut kind), T4A_SUCCESS);
+    assert_eq!(kind, t4a_storage_kind::Diagonal);
+
+    let mut payload_rank = 0usize;
+    assert_eq!(
+        t4a_tensor_payload_rank(tensor, &mut payload_rank),
+        T4A_SUCCESS
+    );
+    assert_eq!(payload_rank, 1);
+
+    let mut payload_len = 0usize;
+    assert_eq!(
+        t4a_tensor_payload_len(tensor, &mut payload_len),
+        T4A_SUCCESS
+    );
+    assert_eq!(payload_len, 3);
+    assert_eq!(read_payload_dims(tensor), vec![3]);
+    assert_eq!(read_payload_strides(tensor), vec![1]);
+    assert_eq!(read_axis_classes(tensor), vec![0, 0]);
+    assert_eq!(read_payload_f64(tensor), diag);
+    assert_eq!(
+        read_dense_f64(tensor),
+        vec![1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 4.0]
+    );
+
+    t4a_tensor_release(tensor);
+    t4a_index_release(j);
+    t4a_index_release(i);
+}
+
+#[test]
+fn test_tensor_structured_f64_storage_payload_roundtrip() {
+    let i = new_index(2);
+    let j = new_index(3);
+    let k = new_index(2);
+    let index_ptrs = [
+        i as *const t4a_index,
+        j as *const t4a_index,
+        k as *const t4a_index,
+    ];
+    let payload_dims = [2usize, 3];
+    let payload_strides = [1isize, 2];
+    let axis_classes = [0usize, 1, 0];
+    let payload = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_structured_f64(
+            3,
+            index_ptrs.as_ptr(),
+            payload.as_ptr(),
+            payload.len(),
+            payload_dims.as_ptr(),
+            payload_dims.len(),
+            payload_strides.as_ptr(),
+            payload_strides.len(),
+            axis_classes.as_ptr(),
+            axis_classes.len(),
+            &mut tensor,
+        ),
+        T4A_SUCCESS
+    );
+    assert!(!tensor.is_null());
+
+    let mut kind = t4a_storage_kind::Dense;
+    assert_eq!(t4a_tensor_storage_kind(tensor, &mut kind), T4A_SUCCESS);
+    assert_eq!(kind, t4a_storage_kind::Structured);
+    assert_eq!(read_payload_dims(tensor), payload_dims);
+    assert_eq!(read_payload_strides(tensor), payload_strides);
+    assert_eq!(read_axis_classes(tensor), axis_classes);
+    assert_eq!(read_payload_f64(tensor), payload);
+    assert_eq!(
+        read_dense_f64(tensor),
+        vec![1.0, 0.0, 3.0, 0.0, 5.0, 0.0, 0.0, 2.0, 0.0, 4.0, 0.0, 6.0]
+    );
+
+    t4a_tensor_release(tensor);
+    for index in [k, j, i] {
+        t4a_index_release(index);
+    }
+}
+
+#[test]
+fn test_tensor_structured_c64_storage_payload_roundtrip() {
+    let i = new_index(2);
+    let j = new_index(2);
+    let index_ptrs = [i as *const t4a_index, j as *const t4a_index];
+    let payload_dims = [2usize];
+    let payload_strides = [1isize];
+    let axis_classes = [0usize, 0];
+    let payload = [1.0, 0.5, 2.0, -1.5];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_structured_c64(
+            2,
+            index_ptrs.as_ptr(),
+            payload.as_ptr(),
+            payload.len() / 2,
+            payload_dims.as_ptr(),
+            payload_dims.len(),
+            payload_strides.as_ptr(),
+            payload_strides.len(),
+            axis_classes.as_ptr(),
+            axis_classes.len(),
+            &mut tensor,
+        ),
+        T4A_SUCCESS
+    );
+    assert!(!tensor.is_null());
+
+    let mut scalar_kind = t4a_scalar_kind::F64;
+    assert_eq!(
+        t4a_tensor_scalar_kind(tensor, &mut scalar_kind),
+        T4A_SUCCESS
+    );
+    assert_eq!(scalar_kind, t4a_scalar_kind::C64);
+
+    let mut storage_kind = t4a_storage_kind::Dense;
+    assert_eq!(
+        t4a_tensor_storage_kind(tensor, &mut storage_kind),
+        T4A_SUCCESS
+    );
+    assert_eq!(storage_kind, t4a_storage_kind::Diagonal);
+    assert_eq!(read_payload_c64(tensor), payload);
+
+    t4a_tensor_release(tensor);
+    t4a_index_release(j);
+    t4a_index_release(i);
+}
+
+#[test]
+fn test_tensor_diag_c64_storage_payload_roundtrip() {
+    let i = new_index(2);
+    let j = new_index(2);
+    let index_ptrs = [i as *const t4a_index, j as *const t4a_index];
+    let diag = [3.0, 0.25, 4.0, -0.5];
+    let mut tensor = std::ptr::null_mut();
+    assert_eq!(
+        t4a_tensor_new_diag_c64(2, index_ptrs.as_ptr(), diag.as_ptr(), 2, &mut tensor),
+        T4A_SUCCESS
+    );
+    assert!(!tensor.is_null());
+    assert_eq!(read_payload_c64(tensor), diag);
+
+    let mut storage_kind = t4a_storage_kind::Dense;
+    assert_eq!(
+        t4a_tensor_storage_kind(tensor, &mut storage_kind),
+        T4A_SUCCESS
+    );
+    assert_eq!(storage_kind, t4a_storage_kind::Diagonal);
+
+    t4a_tensor_release(tensor);
+    t4a_index_release(j);
+    t4a_index_release(i);
+}
+
+#[test]
+fn test_tensor_structured_constructor_rejects_logical_dim_mismatch() {
+    let i = new_index(2);
+    let j = new_index(4);
+    let k = new_index(2);
+    let index_ptrs = [
+        i as *const t4a_index,
+        j as *const t4a_index,
+        k as *const t4a_index,
+    ];
+    let payload_dims = [2usize, 3];
+    let payload_strides = [1isize, 2];
+    let axis_classes = [0usize, 1, 0];
+    let payload = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let mut tensor = std::ptr::null_mut();
+
+    assert_eq!(
+        t4a_tensor_new_structured_f64(
+            3,
+            index_ptrs.as_ptr(),
+            payload.as_ptr(),
+            payload.len(),
+            payload_dims.as_ptr(),
+            payload_dims.len(),
+            payload_strides.as_ptr(),
+            payload_strides.len(),
+            axis_classes.as_ptr(),
+            axis_classes.len(),
+            &mut tensor,
+        ),
+        T4A_INVALID_ARGUMENT
+    );
+    assert!(tensor.is_null());
+
+    for index in [k, j, i] {
+        t4a_index_release(index);
+    }
+}
+
+#[test]
+fn test_tensor_payload_readback_reports_buffer_and_type_errors() {
+    let i = new_index(2);
+    let tensor = new_tensor_f64(&[i as *const t4a_index], &[1.0, 2.0]);
+
+    let mut len = 0usize;
+    let mut dim = 0usize;
+    assert_eq!(
+        t4a_tensor_payload_dims(tensor, &mut dim, 0, &mut len),
+        T4A_BUFFER_TOO_SMALL
+    );
+    assert_eq!(len, 1);
+
+    let mut payload = [0.0_f64; 1];
+    assert_eq!(
+        t4a_tensor_copy_payload_f64(tensor, payload.as_mut_ptr(), payload.len(), &mut len),
+        T4A_BUFFER_TOO_SMALL
+    );
+    assert_eq!(len, 2);
+
+    let mut complex_len = 0usize;
+    assert_eq!(
+        t4a_tensor_copy_payload_c64(tensor, std::ptr::null_mut(), 0, &mut complex_len),
+        T4A_INVALID_ARGUMENT
+    );
+
+    t4a_tensor_release(tensor);
+    t4a_index_release(i);
 }
 
 #[test]

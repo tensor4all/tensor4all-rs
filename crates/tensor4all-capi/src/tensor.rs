@@ -1,13 +1,14 @@
 //! C API for dense tensor construction, inspection, and contraction.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Arc;
 
 use num_complex::Complex64;
-use tensor4all_core::{qr_with, svd_with, QrOptions, SvdOptions, SvdTruncationPolicy};
+use tensor4all_core::{qr_with, svd_with, QrOptions, Storage, SvdOptions, SvdTruncationPolicy};
 
 use crate::types::{
-    t4a_index, t4a_scalar_kind, t4a_svd_truncation_policy, t4a_tensor, InternalIndex,
-    InternalTensor,
+    t4a_index, t4a_scalar_kind, t4a_storage_kind, t4a_svd_truncation_policy, t4a_tensor,
+    InternalIndex, InternalTensor,
 };
 use crate::{
     capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
@@ -63,6 +64,117 @@ fn read_indices_from_ptrs(
 
 fn dims_from_indices(indices: &[InternalIndex]) -> Vec<usize> {
     indices.iter().map(|index| index.size()).collect()
+}
+
+fn read_plain_slice<T: Copy>(
+    name: &str,
+    ptr: *const T,
+    len: usize,
+) -> Result<Vec<T>, (StatusCode, String)> {
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    if ptr.is_null() {
+        return Err(capi_error(T4A_NULL_POINTER, format!("{name} is null")));
+    }
+    Ok(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
+}
+
+fn read_c64_slice(
+    name: &str,
+    ptr: *const f64,
+    n_complex: usize,
+) -> Result<Vec<Complex64>, (StatusCode, String)> {
+    if n_complex == 0 {
+        return Ok(Vec::new());
+    }
+    if ptr.is_null() {
+        return Err(capi_error(T4A_NULL_POINTER, format!("{name} is null")));
+    }
+    let raw_len = n_complex.checked_mul(2).ok_or_else(|| {
+        capi_error(
+            T4A_INVALID_ARGUMENT,
+            format!("{name} length overflows usize"),
+        )
+    })?;
+    let raw = unsafe { std::slice::from_raw_parts(ptr, raw_len) };
+    Ok((0..n_complex)
+        .map(|i| Complex64::new(raw[2 * i], raw[2 * i + 1]))
+        .collect())
+}
+
+fn copy_plain_slice<T: Copy>(
+    name: &str,
+    values: &[T],
+    buf: *mut T,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> CapiResult<()> {
+    if out_len.is_null() {
+        return Err(capi_error(
+            T4A_NULL_POINTER,
+            format!("{name} out_len is null"),
+        ));
+    }
+    unsafe {
+        *out_len = values.len();
+    }
+
+    if buf.is_null() {
+        return Ok(());
+    }
+    if buf_len < values.len() {
+        return Err(capi_error(
+            T4A_BUFFER_TOO_SMALL,
+            format!(
+                "{name} buffer too small: required {}, got {buf_len}",
+                values.len()
+            ),
+        ));
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(values.as_ptr(), buf, values.len());
+    }
+    Ok(())
+}
+
+fn copy_c64_interleaved(
+    name: &str,
+    values: &[Complex64],
+    buf_interleaved: *mut f64,
+    n_complex: usize,
+    out_len: *mut usize,
+) -> CapiResult<()> {
+    if out_len.is_null() {
+        return Err(capi_error(
+            T4A_NULL_POINTER,
+            format!("{name} out_len is null"),
+        ));
+    }
+    unsafe {
+        *out_len = values.len();
+    }
+
+    if buf_interleaved.is_null() {
+        return Ok(());
+    }
+    if n_complex < values.len() {
+        return Err(capi_error(
+            T4A_BUFFER_TOO_SMALL,
+            format!(
+                "{name} buffer too small: required {}, got {n_complex}",
+                values.len()
+            ),
+        ));
+    }
+
+    for (i, value) in values.iter().enumerate() {
+        unsafe {
+            *buf_interleaved.add(2 * i) = value.re;
+            *buf_interleaved.add(2 * i + 1) = value.im;
+        }
+    }
+    Ok(())
 }
 
 fn run_status<F>(f: F) -> StatusCode
@@ -206,6 +318,123 @@ pub extern "C" fn t4a_tensor_scalar_kind(
     crate::unwrap_catch(result)
 }
 
+/// Get the storage layout kind of a tensor.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_storage_kind(
+    ptr: *const t4a_tensor,
+    out_kind: *mut t4a_storage_kind,
+) -> StatusCode {
+    run_status(|| {
+        let tensor = require_tensor(ptr)?;
+        if out_kind.is_null() {
+            return Err(capi_error(T4A_NULL_POINTER, "out_kind is null"));
+        }
+        unsafe {
+            *out_kind = t4a_storage_kind::from(tensor.inner().storage().storage_kind());
+        }
+        Ok(())
+    })
+}
+
+/// Get the rank of the compact payload tensor.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_payload_rank(
+    ptr: *const t4a_tensor,
+    out_rank: *mut usize,
+) -> StatusCode {
+    run_status(|| {
+        let tensor = require_tensor(ptr)?;
+        if out_rank.is_null() {
+            return Err(capi_error(T4A_NULL_POINTER, "out_rank is null"));
+        }
+        unsafe {
+            *out_rank = tensor.inner().storage().payload_dims().len();
+        }
+        Ok(())
+    })
+}
+
+/// Get the compact payload length in scalar elements.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_payload_len(
+    ptr: *const t4a_tensor,
+    out_len: *mut usize,
+) -> StatusCode {
+    run_status(|| {
+        let tensor = require_tensor(ptr)?;
+        if out_len.is_null() {
+            return Err(capi_error(T4A_NULL_POINTER, "out_len is null"));
+        }
+        unsafe {
+            *out_len = tensor.inner().storage().payload_len();
+        }
+        Ok(())
+    })
+}
+
+/// Copy compact payload dimensions.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_payload_dims(
+    ptr: *const t4a_tensor,
+    buf: *mut usize,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> StatusCode {
+    run_status(|| {
+        let tensor = require_tensor(ptr)?;
+        let storage = tensor.inner().storage();
+        copy_plain_slice(
+            "payload_dims",
+            storage.payload_dims(),
+            buf,
+            buf_len,
+            out_len,
+        )
+    })
+}
+
+/// Copy compact payload strides in scalar elements.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_payload_strides(
+    ptr: *const t4a_tensor,
+    buf: *mut isize,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> StatusCode {
+    run_status(|| {
+        let tensor = require_tensor(ptr)?;
+        let storage = tensor.inner().storage();
+        copy_plain_slice(
+            "payload_strides",
+            storage.payload_strides(),
+            buf,
+            buf_len,
+            out_len,
+        )
+    })
+}
+
+/// Copy logical-axis to payload-axis class mapping.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_axis_classes(
+    ptr: *const t4a_tensor,
+    buf: *mut usize,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> StatusCode {
+    run_status(|| {
+        let tensor = require_tensor(ptr)?;
+        let storage = tensor.inner().storage();
+        copy_plain_slice(
+            "axis_classes",
+            storage.axis_classes(),
+            buf,
+            buf_len,
+            out_len,
+        )
+    })
+}
+
 /// Copy dense `f64` data in column-major order.
 #[unsafe(no_mangle)]
 pub extern "C" fn t4a_tensor_copy_dense_f64(
@@ -273,6 +502,44 @@ pub extern "C" fn t4a_tensor_copy_dense_c64(
     }));
 
     crate::unwrap_catch(result)
+}
+
+/// Copy compact payload `f64` data in payload column-major order.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_copy_payload_f64(
+    ptr: *const t4a_tensor,
+    buf: *mut f64,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> StatusCode {
+    run_status(|| {
+        let tensor = require_tensor(ptr)?;
+        let data = tensor
+            .inner()
+            .storage()
+            .payload_f64_col_major_vec()
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        copy_plain_slice("payload_f64", &data, buf, buf_len, out_len)
+    })
+}
+
+/// Copy compact payload `Complex64` data as interleaved doubles.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_copy_payload_c64(
+    ptr: *const t4a_tensor,
+    buf_interleaved: *mut f64,
+    n_complex: usize,
+    out_len: *mut usize,
+) -> StatusCode {
+    run_status(|| {
+        let tensor = require_tensor(ptr)?;
+        let data = tensor
+            .inner()
+            .storage()
+            .payload_c64_col_major_vec()
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        copy_c64_interleaved("payload_c64", &data, buf_interleaved, n_complex, out_len)
+    })
 }
 
 /// Contract two tensors by matching common indices.
@@ -450,6 +717,102 @@ pub extern "C" fn t4a_tensor_new_dense_c64(
             .collect::<Vec<_>>();
         let tensor = InternalTensor::from_dense(indices, values)
             .map_err(|e| capi_error(T4A_INVALID_ARGUMENT, e))?;
+        Ok(t4a_tensor::new(tensor))
+    })
+}
+
+/// Create a real tensor from explicit compact structured storage.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_new_structured_f64(
+    rank: usize,
+    index_ptrs: *const *const t4a_index,
+    data: *const f64,
+    data_len: usize,
+    payload_dims: *const usize,
+    payload_rank: usize,
+    payload_strides: *const isize,
+    payload_strides_len: usize,
+    axis_classes: *const usize,
+    axis_classes_len: usize,
+    out: *mut *mut t4a_tensor,
+) -> StatusCode {
+    run_catching(out, || {
+        let indices = read_indices_from_ptrs(rank, index_ptrs)?;
+        let values = read_plain_slice("data", data, data_len)?;
+        let payload_dims = read_plain_slice("payload_dims", payload_dims, payload_rank)?;
+        let payload_strides =
+            read_plain_slice("payload_strides", payload_strides, payload_strides_len)?;
+        let axis_classes = read_plain_slice("axis_classes", axis_classes, axis_classes_len)?;
+        let storage = Storage::new_structured(values, payload_dims, payload_strides, axis_classes)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let tensor = InternalTensor::from_structured_storage(indices, Arc::new(storage))
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_tensor::new(tensor))
+    })
+}
+
+/// Create a complex tensor from explicit compact structured storage.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_new_structured_c64(
+    rank: usize,
+    index_ptrs: *const *const t4a_index,
+    data_interleaved: *const f64,
+    n_complex: usize,
+    payload_dims: *const usize,
+    payload_rank: usize,
+    payload_strides: *const isize,
+    payload_strides_len: usize,
+    axis_classes: *const usize,
+    axis_classes_len: usize,
+    out: *mut *mut t4a_tensor,
+) -> StatusCode {
+    run_catching(out, || {
+        let indices = read_indices_from_ptrs(rank, index_ptrs)?;
+        let values = read_c64_slice("data_interleaved", data_interleaved, n_complex)?;
+        let payload_dims = read_plain_slice("payload_dims", payload_dims, payload_rank)?;
+        let payload_strides =
+            read_plain_slice("payload_strides", payload_strides, payload_strides_len)?;
+        let axis_classes = read_plain_slice("axis_classes", axis_classes, axis_classes_len)?;
+        let storage = Storage::new_structured(values, payload_dims, payload_strides, axis_classes)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        let tensor = InternalTensor::from_structured_storage(indices, Arc::new(storage))
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_tensor::new(tensor))
+    })
+}
+
+/// Create a real diagonal tensor from compact diagonal payload data.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_new_diag_f64(
+    rank: usize,
+    index_ptrs: *const *const t4a_index,
+    diag_data: *const f64,
+    diag_len: usize,
+    out: *mut *mut t4a_tensor,
+) -> StatusCode {
+    run_catching(out, || {
+        let indices = read_indices_from_ptrs(rank, index_ptrs)?;
+        let values = read_plain_slice("diag_data", diag_data, diag_len)?;
+        let tensor = InternalTensor::from_diag(indices, values)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+        Ok(t4a_tensor::new(tensor))
+    })
+}
+
+/// Create a complex diagonal tensor from compact diagonal payload data.
+#[unsafe(no_mangle)]
+pub extern "C" fn t4a_tensor_new_diag_c64(
+    rank: usize,
+    index_ptrs: *const *const t4a_index,
+    diag_data_interleaved: *const f64,
+    n_complex: usize,
+    out: *mut *mut t4a_tensor,
+) -> StatusCode {
+    run_catching(out, || {
+        let indices = read_indices_from_ptrs(rank, index_ptrs)?;
+        let values = read_c64_slice("diag_data_interleaved", diag_data_interleaved, n_complex)?;
+        let tensor = InternalTensor::from_diag(indices, values)
+            .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
         Ok(t4a_tensor::new(tensor))
     })
 }

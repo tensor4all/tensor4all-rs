@@ -3,7 +3,7 @@
 use std::ffi::c_void;
 
 use tensor4all_core::{
-    DynIndex, FactorizeAlg, SingularValueMeasure, SvdTruncationPolicy, TensorDynLen,
+    DynIndex, FactorizeAlg, SingularValueMeasure, StorageKind, SvdTruncationPolicy, TensorDynLen,
     ThresholdScale, TruncationRule,
 };
 use tensor4all_quanticstransform::BoundaryCondition as QuanticsBoundaryCondition;
@@ -75,6 +75,28 @@ impl t4a_scalar_kind {
             Self::C64
         } else {
             Self::F64
+        }
+    }
+}
+
+/// Storage layout kind used by tensor payload inspection APIs.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum t4a_storage_kind {
+    /// Dense storage whose payload axes match the logical tensor axes.
+    Dense = 0,
+    /// Diagonal storage whose logical axes all share one payload axis.
+    Diagonal = 1,
+    /// General structured storage with explicit payload-axis classes.
+    Structured = 2,
+}
+
+impl From<StorageKind> for t4a_storage_kind {
+    fn from(kind: StorageKind) -> Self {
+        match kind {
+            StorageKind::Dense => Self::Dense,
+            StorageKind::Diagonal => Self::Diagonal,
+            StorageKind::Structured => Self::Structured,
         }
     }
 }
