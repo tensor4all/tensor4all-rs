@@ -164,6 +164,49 @@ fn tensor_from_structured_storage_rejects_index_dim_mismatch() {
 }
 
 #[test]
+fn same_layout_axpby_preserves_structured_metadata() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let make = |offset| {
+        TensorDynLen::from_storage(
+            vec![i.clone(), j.clone(), k.clone()],
+            Arc::new(
+                Storage::new_structured(
+                    vec![
+                        1.0 + offset,
+                        2.0 + offset,
+                        3.0 + offset,
+                        4.0 + offset,
+                        5.0 + offset,
+                        6.0 + offset,
+                    ],
+                    vec![2, 3],
+                    vec![1, 2],
+                    vec![0, 1, 0],
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap()
+    };
+
+    let a = make(0.0);
+    let b = make(10.0);
+    let result = a
+        .axpby(AnyScalar::new_real(2.0), &b, AnyScalar::new_real(-1.0))
+        .unwrap();
+    let storage = result.storage();
+
+    assert_eq!(storage.storage_kind(), StorageKind::Structured);
+    assert_eq!(storage.axis_classes(), &[0, 1, 0]);
+    assert_eq!(
+        storage.payload_f64_col_major_vec().unwrap(),
+        vec![-9.0, -8.0, -7.0, -6.0, -5.0, -4.0]
+    );
+}
+
+#[test]
 fn test_tensor_shared_storage() {
     let indices = vec![Index::new_dyn(2)];
     let tensor1 = make_tensor_f64(indices.clone(), vec![1.0, 2.0]);

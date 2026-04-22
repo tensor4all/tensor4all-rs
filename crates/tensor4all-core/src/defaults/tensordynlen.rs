@@ -749,6 +749,13 @@ impl TensorDynLen {
     pub fn permute_indices(&self, new_indices: &[DynIndex]) -> Self {
         // Compute permutation by matching IDs
         let perm = compute_permutation_from_indices(&self.indices, new_indices);
+        if perm.iter().copied().eq(0..perm.len()) {
+            return Self {
+                indices: new_indices.to_vec(),
+                storage: Arc::clone(&self.storage),
+                eager_cache: Arc::clone(&self.eager_cache),
+            };
+        }
 
         let permuted = self
             .materialized_inner()
@@ -793,6 +800,9 @@ impl TensorDynLen {
             self.indices.len(),
             "permutation length must match tensor rank"
         );
+        if perm.iter().copied().eq(0..perm.len()) {
+            return self.clone();
+        }
 
         // Permute indices
         let new_indices: Vec<DynIndex> = perm.iter().map(|&i| self.indices[i].clone()).collect();
@@ -1376,6 +1386,27 @@ impl TensorDynLen {
         } else {
             Self::dense_axis_classes(self.indices.len())
         };
+
+        let same_compact_layout = self.storage.payload_dims()
+            == other_aligned.storage.payload_dims()
+            && self.storage.payload_strides() == other_aligned.storage.payload_strides()
+            && self.storage.axis_classes() == other_aligned.storage.axis_classes();
+        if same_compact_layout
+            && !self.tracks_grad()
+            && !other_aligned.tracks_grad()
+            && !a.tracks_grad()
+            && !b.tracks_grad()
+        {
+            let combined = self
+                .storage
+                .axpby(
+                    &a.to_backend_scalar(),
+                    other_aligned.storage.as_ref(),
+                    &b.to_backend_scalar(),
+                )
+                .map_err(|e| anyhow::anyhow!("storage axpby failed: {e}"))?;
+            return Self::from_storage(self.indices.clone(), Arc::new(combined));
+        }
 
         if self.as_native().dtype() != other_aligned.as_native().dtype()
             || self.as_native().dtype() != a.as_tensor().as_native().dtype()

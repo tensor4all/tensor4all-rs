@@ -181,6 +181,47 @@ fn from_diag_storage_roundtrip_uses_payload_not_dense_logical_values() {
 }
 
 #[test]
+fn diag_permute_scale_conj_and_replaceind_preserve_payload_metadata() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(3);
+    let tensor = TensorDynLen::from_diag(
+        vec![i.clone(), j.clone(), k.clone()],
+        vec![1.0_f64, -2.0, 4.0],
+    )
+    .unwrap();
+
+    let permuted = tensor.permute(&[2, 0, 1]);
+    assert!(permuted.is_diag());
+    assert_eq!(permuted.storage().axis_classes(), &[0, 0, 0]);
+    assert_eq!(
+        permuted.storage().payload_f64_col_major_vec().unwrap(),
+        vec![1.0, -2.0, 4.0]
+    );
+
+    let scaled = permuted.scale(AnyScalar::new_real(2.0)).unwrap();
+    assert!(scaled.is_diag());
+    assert_eq!(
+        scaled.storage().payload_f64_col_major_vec().unwrap(),
+        vec![2.0, -4.0, 8.0]
+    );
+
+    let replaced = scaled.replaceind(&k, &Index::new_dyn(3));
+    assert!(replaced.is_diag());
+    assert_eq!(
+        replaced.storage().payload_f64_col_major_vec().unwrap(),
+        vec![2.0, -4.0, 8.0]
+    );
+
+    let conjugated = replaced.conj();
+    assert!(conjugated.is_diag());
+    assert_eq!(
+        conjugated.storage().payload_f64_col_major_vec().unwrap(),
+        vec![2.0, -4.0, 8.0]
+    );
+}
+
+#[test]
 fn test_diag_tensor_rank3() {
     // Test DiagTensor with rank 3
     let i = Index::new_dyn(2);
