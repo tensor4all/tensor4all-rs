@@ -1,7 +1,7 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::TensorLike;
-use tensor4all_core::{diag_tensor_dyn_len, AnyScalar, TensorDynLen};
+use tensor4all_core::{diag_tensor_dyn_len, AnyScalar, StorageKind, TensorDynLen};
 
 #[test]
 fn test_diag_tensor_creation() {
@@ -11,7 +11,8 @@ fn test_diag_tensor_creation() {
 
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone()], diag_data.clone());
     assert_eq!(tensor.dims(), vec![3, 3]);
-    assert!(!tensor.is_diag());
+    assert!(tensor.is_diag());
+    assert_eq!(tensor.storage().storage_kind(), StorageKind::Diagonal);
     assert_eq!(
         tensor.to_vec::<f64>().unwrap(),
         vec![
@@ -52,7 +53,8 @@ fn test_diag_tensor_scale_preserves_diagonal_values() {
 
     let scaled = tensor.scale(AnyScalar::new_real(-0.5)).unwrap();
 
-    assert!(!scaled.is_diag());
+    assert!(scaled.is_diag());
+    assert_eq!(scaled.storage().storage_kind(), StorageKind::Diagonal);
     let expected = diag_tensor_dyn_len(vec![i, j], vec![-0.5, 1.0, -2.0]);
     assert!(scaled.isapprox(&expected, 1e-12, 0.0));
 }
@@ -159,6 +161,26 @@ fn test_diag_tensor_convert_to_dense() {
 }
 
 #[test]
+fn from_diag_storage_roundtrip_uses_payload_not_dense_logical_values() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+    let tensor = TensorDynLen::from_diag(vec![i, j], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let storage = tensor.storage();
+
+    assert_eq!(storage.storage_kind(), StorageKind::Diagonal);
+    assert_eq!(storage.payload_dims(), &[3]);
+    assert_eq!(storage.axis_classes(), &[0, 0]);
+    assert_eq!(
+        storage.payload_f64_col_major_vec().unwrap(),
+        vec![1.0, 2.0, 3.0]
+    );
+    assert_eq!(
+        tensor.to_vec::<f64>().unwrap(),
+        vec![1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0]
+    );
+}
+
+#[test]
 fn test_diag_tensor_rank3() {
     // Test DiagTensor with rank 3
     let i = Index::new_dyn(2);
@@ -168,7 +190,8 @@ fn test_diag_tensor_rank3() {
 
     let tensor = diag_tensor_dyn_len(vec![i.clone(), j.clone(), k.clone()], diag_data.clone());
     assert_eq!(tensor.dims(), vec![2, 2, 2]);
-    assert!(!tensor.is_diag());
+    assert!(tensor.is_diag());
+    assert_eq!(tensor.storage().storage_kind(), StorageKind::Diagonal);
 
     // Sum should work
     let sum: AnyScalar = tensor.sum();

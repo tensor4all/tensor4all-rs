@@ -2,7 +2,7 @@ use num_complex::{Complex32, Complex64};
 use std::sync::Arc;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index::DynIndex;
-use tensor4all_core::{AnyScalar, Storage, TensorDynLen, TensorElement};
+use tensor4all_core::{AnyScalar, Storage, StorageKind, TensorDynLen, TensorElement};
 
 /// Helper to create DenseF64 storage with shape information
 fn make_dense_f64(data: Vec<f64>, dims: &[usize]) -> Storage {
@@ -113,6 +113,53 @@ fn test_tensor_dyn_len_creation() {
     assert_eq!(dims.len(), 2);
     assert_eq!(dims[0], 2);
     assert_eq!(dims[1], 3);
+}
+
+#[test]
+fn tensor_from_structured_storage_preserves_compact_payload() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let storage = Arc::new(
+        Storage::new_structured(
+            vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+            vec![2, 3],
+            vec![1, 2],
+            vec![0, 1, 0],
+        )
+        .unwrap(),
+    );
+
+    let tensor = TensorDynLen::from_storage(vec![i, j, k], Arc::clone(&storage)).unwrap();
+    let snapshot = tensor.storage();
+
+    assert_eq!(snapshot.storage_kind(), StorageKind::Structured);
+    assert_eq!(snapshot.payload_dims(), &[2, 3]);
+    assert_eq!(snapshot.payload_strides(), &[1, 2]);
+    assert_eq!(snapshot.axis_classes(), &[0, 1, 0]);
+    assert_eq!(
+        snapshot.payload_f64_col_major_vec().unwrap(),
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+    assert_eq!(tensor.dims(), vec![2, 3, 2]);
+}
+
+#[test]
+fn tensor_from_structured_storage_rejects_index_dim_mismatch() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(4);
+    let storage = Arc::new(
+        Storage::new_structured(
+            vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+            vec![2, 3],
+            vec![1, 2],
+            vec![0, 1],
+        )
+        .unwrap(),
+    );
+
+    let err = TensorDynLen::from_storage(vec![i, j], storage).unwrap_err();
+    assert!(err.to_string().contains("storage logical dims"));
 }
 
 #[test]
