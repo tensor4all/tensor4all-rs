@@ -21,6 +21,11 @@ use tensor4all_tensorbackend::{
     reshape_col_major_native_tensor, scale_native_tensor, storage_to_native_tensor, TensorElement,
 };
 
+use super::structured_contraction::{
+    normalize_payload_for_roots, storage_from_payload_native, storage_payload_native,
+    OperandLayout, StructuredContractionPlan, StructuredContractionSpec,
+};
+
 /// Trait for scalar types that can generate random values from a standard
 /// normal distribution.
 ///
@@ -110,6 +115,13 @@ pub trait TensorAccess {
     fn indices(&self) -> &[DynIndex];
 }
 
+#[derive(Clone)]
+pub(crate) struct StructuredAdValue {
+    payload: Arc<EagerTensor<CpuBackend>>,
+    payload_dims: Vec<usize>,
+    axis_classes: Vec<usize>,
+}
+
 /// Dynamic-rank tensor with structured payload storage -- the central data type
 /// of tensor4all.
 ///
@@ -167,6 +179,8 @@ pub struct TensorDynLen {
     pub indices: Vec<DynIndex>,
     /// Authoritative compact payload storage.
     pub(crate) storage: Arc<Storage>,
+    /// Optional tracked compact payload used to preserve structured AD layouts.
+    pub(crate) structured_ad: Option<Arc<StructuredAdValue>>,
     /// Lazily materialized eager payload for native execution and AD.
     pub(crate) eager_cache: Arc<OnceLock<Arc<EagerTensor<CpuBackend>>>>,
 }
@@ -296,6 +310,91 @@ impl TensorDynLen {
         ))
     }
 
+    fn binary_contraction_axis_classes(
+        lhs_axis_classes: &[usize],
+        axes_a: &[usize],
+        rhs_axis_classes: &[usize],
+        axes_b: &[usize],
+    ) -> Vec<usize> {
+        debug_assert_eq!(axes_a.len(), axes_b.len());
+
+        fn find(parent: &mut [usize], value: usize) -> usize {
+            if parent[value] != value {
+                parent[value] = find(parent, parent[value]);
+            }
+            parent[value]
+        }
+
+        fn union(parent: &mut [usize], lhs: usize, rhs: usize) {
+            let lhs_root = find(parent, lhs);
+            let rhs_root = find(parent, rhs);
+            if lhs_root != rhs_root {
+                parent[rhs_root] = lhs_root;
+            }
+        }
+
+        let lhs_payload_rank = lhs_axis_classes
+            .iter()
+            .copied()
+            .max()
+            .map(|value| value + 1)
+            .unwrap_or(0);
+        let rhs_payload_rank = rhs_axis_classes
+            .iter()
+            .copied()
+            .max()
+            .map(|value| value + 1)
+            .unwrap_or(0);
+        let rhs_offset = lhs_payload_rank;
+        let mut parent: Vec<usize> = (0..lhs_payload_rank + rhs_payload_rank).collect();
+
+        for (&lhs_axis, &rhs_axis) in axes_a.iter().zip(axes_b.iter()) {
+            union(
+                &mut parent,
+                lhs_axis_classes[lhs_axis],
+                rhs_offset + rhs_axis_classes[rhs_axis],
+            );
+        }
+
+        let mut lhs_contracted = vec![false; lhs_axis_classes.len()];
+        for &axis in axes_a {
+            lhs_contracted[axis] = true;
+        }
+        let mut rhs_contracted = vec![false; rhs_axis_classes.len()];
+        for &axis in axes_b {
+            rhs_contracted[axis] = true;
+        }
+
+        let mut root_to_class = std::collections::HashMap::new();
+        let mut next_class = 0usize;
+        let mut axis_classes = Vec::new();
+
+        for (axis, &class_id) in lhs_axis_classes.iter().enumerate() {
+            if !lhs_contracted[axis] {
+                let root = find(&mut parent, class_id);
+                let class = *root_to_class.entry(root).or_insert_with(|| {
+                    let value = next_class;
+                    next_class += 1;
+                    value
+                });
+                axis_classes.push(class);
+            }
+        }
+        for (axis, &class_id) in rhs_axis_classes.iter().enumerate() {
+            if !rhs_contracted[axis] {
+                let root = find(&mut parent, rhs_offset + class_id);
+                let class = *root_to_class.entry(root).or_insert_with(|| {
+                    let value = next_class;
+                    next_class += 1;
+                    value
+                });
+                axis_classes.push(class);
+            }
+        }
+
+        axis_classes
+    }
+
     fn scale_subscripts(rank: usize) -> Result<String> {
         if rank == 0 {
             Ok("->".to_string())
@@ -345,6 +444,318 @@ impl TensorDynLen {
         cache
     }
 
+    fn compact_payload_inner(&self) -> Result<EagerTensor<CpuBackend>> {
+        Ok(EagerTensor::from_tensor_in(
+            storage_payload_native(self.storage.as_ref())?,
+            default_eager_ctx(),
+        ))
+    }
+
+    fn tracked_compact_payload_value(&self) -> Option<&StructuredAdValue> {
+        self.structured_ad.as_deref()
+    }
+
+    fn compact_payload_is_logical_dense(&self, payload_dims: &[usize]) -> bool {
+        self.storage.axis_classes() == Self::dense_axis_classes(self.indices.len())
+            && payload_dims == self.dims()
+    }
+
+    fn build_binary_contraction_labels(
+        lhs_rank: usize,
+        axes_a: &[usize],
+        rhs_rank: usize,
+        axes_b: &[usize],
+    ) -> Result<(Vec<usize>, Vec<usize>, Vec<usize>)> {
+        anyhow::ensure!(
+            axes_a.len() == axes_b.len(),
+            "contract axis length mismatch: lhs {:?}, rhs {:?}",
+            axes_a,
+            axes_b
+        );
+
+        let mut lhs_ids = vec![usize::MAX; lhs_rank];
+        let mut rhs_ids = vec![usize::MAX; rhs_rank];
+        let mut next_id = 0usize;
+
+        let mut seen_lhs = vec![false; lhs_rank];
+        let mut seen_rhs = vec![false; rhs_rank];
+
+        for (&lhs_axis, &rhs_axis) in axes_a.iter().zip(axes_b.iter()) {
+            anyhow::ensure!(
+                lhs_axis < lhs_rank,
+                "lhs contract axis {lhs_axis} out of range"
+            );
+            anyhow::ensure!(
+                rhs_axis < rhs_rank,
+                "rhs contract axis {rhs_axis} out of range"
+            );
+            anyhow::ensure!(
+                !seen_lhs[lhs_axis],
+                "duplicate lhs contract axis {lhs_axis}"
+            );
+            anyhow::ensure!(
+                !seen_rhs[rhs_axis],
+                "duplicate rhs contract axis {rhs_axis}"
+            );
+            seen_lhs[lhs_axis] = true;
+            seen_rhs[rhs_axis] = true;
+            lhs_ids[lhs_axis] = next_id;
+            rhs_ids[rhs_axis] = next_id;
+            next_id += 1;
+        }
+
+        let mut output_ids = Vec::with_capacity(lhs_rank + rhs_rank - 2 * axes_a.len());
+        for id in &mut lhs_ids {
+            if *id == usize::MAX {
+                *id = next_id;
+                output_ids.push(next_id);
+                next_id += 1;
+            }
+        }
+        for id in &mut rhs_ids {
+            if *id == usize::MAX {
+                *id = next_id;
+                output_ids.push(next_id);
+                next_id += 1;
+            }
+        }
+
+        Ok((lhs_ids, rhs_ids, output_ids))
+    }
+
+    fn build_payload_einsum_subscripts(
+        input_roots: &[Vec<usize>],
+        output_roots: &[usize],
+    ) -> Result<String> {
+        let input_labels = input_roots
+            .iter()
+            .map(|roots| Self::einsum_labels(roots))
+            .collect::<Result<Vec<_>>>()?;
+        let output = Self::einsum_labels(output_roots)?;
+        Ok(format!("{}->{}", input_labels.join(","), output))
+    }
+
+    fn normalize_eager_payload_for_roots(
+        payload: &EagerTensor<CpuBackend>,
+        roots: &[usize],
+    ) -> Result<(Option<EagerTensor<CpuBackend>>, Vec<usize>)> {
+        anyhow::ensure!(
+            payload.data().shape().len() == roots.len(),
+            "payload rank {} does not match root label count {}",
+            payload.data().shape().len(),
+            roots.len()
+        );
+
+        let mut current_payload = None;
+        let mut current_roots = roots.to_vec();
+        while let Some((axis_a, axis_b)) = Self::first_duplicate_pair(&current_roots) {
+            let source = current_payload.as_ref().unwrap_or(payload);
+            current_payload = Some(source.extract_diag(axis_a, axis_b)?);
+            current_roots.remove(axis_b);
+        }
+
+        Ok((current_payload, current_roots))
+    }
+
+    fn first_duplicate_pair(values: &[usize]) -> Option<(usize, usize)> {
+        let mut first_axis_by_value = std::collections::HashMap::new();
+        for (axis, &value) in values.iter().enumerate() {
+            if let Some(&first_axis) = first_axis_by_value.get(&value) {
+                return Some((first_axis, axis));
+            }
+            first_axis_by_value.insert(value, axis);
+        }
+        None
+    }
+
+    fn binary_structured_contraction_plan(
+        &self,
+        other: &Self,
+        axes_a: &[usize],
+        axes_b: &[usize],
+    ) -> Result<(StructuredContractionPlan, Vec<Vec<usize>>, Vec<usize>)> {
+        let (lhs_labels, rhs_labels, output_labels) = Self::build_binary_contraction_labels(
+            self.indices.len(),
+            axes_a,
+            other.indices.len(),
+            axes_b,
+        )?;
+        let operands = vec![
+            OperandLayout::new(self.dims(), self.storage.axis_classes().to_vec())?,
+            OperandLayout::new(other.dims(), other.storage.axis_classes().to_vec())?,
+        ];
+        let spec = StructuredContractionSpec {
+            input_labels: vec![lhs_labels, rhs_labels],
+            output_labels,
+            retained_labels: Default::default(),
+        };
+        let plan = StructuredContractionPlan::new(&operands, &spec)?;
+        Ok((plan, spec.input_labels, spec.output_labels))
+    }
+
+    fn from_structured_payload_inner(
+        indices: Vec<DynIndex>,
+        payload_inner: EagerTensor<CpuBackend>,
+        payload_dims: Vec<usize>,
+        axis_classes: Vec<usize>,
+    ) -> Result<Self> {
+        Self::validate_indices(&indices);
+        if payload_inner.data().shape() != payload_dims {
+            return Err(anyhow::anyhow!(
+                "structured payload dims {:?} do not match planned payload dims {:?}",
+                payload_inner.data().shape(),
+                payload_dims
+            ));
+        }
+        let storage = storage_from_payload_native(
+            payload_inner.data().clone(),
+            &payload_dims,
+            axis_classes.clone(),
+        )?;
+        Self::validate_storage_matches_indices(&indices, &storage)?;
+        Ok(Self {
+            indices,
+            storage: Arc::new(storage),
+            structured_ad: Some(Arc::new(StructuredAdValue {
+                payload: Arc::new(payload_inner),
+                payload_dims,
+                axis_classes,
+            })),
+            eager_cache: Self::empty_eager_cache(),
+        })
+    }
+
+    fn contract_structured_payloads(
+        &self,
+        other: &Self,
+        result_indices: Vec<DynIndex>,
+        axes_a: &[usize],
+        axes_b: &[usize],
+    ) -> Result<Self> {
+        let (plan, _, _) = self.binary_structured_contraction_plan(other, axes_a, axes_b)?;
+        let lhs_roots = plan.operand_plans[0].class_roots.clone();
+        let rhs_roots = plan.operand_plans[1].class_roots.clone();
+        let scalar_multiply =
+            lhs_roots.is_empty() && rhs_roots.is_empty() && plan.output_payload_roots.is_empty();
+
+        if let (Some(lhs_ad), Some(rhs_ad)) = (
+            self.tracked_compact_payload_value(),
+            other.tracked_compact_payload_value(),
+        ) {
+            if lhs_ad.payload.data().dtype() != rhs_ad.payload.data().dtype() {
+                return Err(anyhow::anyhow!(
+                    "structured AD contraction requires matching payload dtypes"
+                ));
+            }
+            let (lhs_normalized, lhs_labels) =
+                Self::normalize_eager_payload_for_roots(lhs_ad.payload.as_ref(), &lhs_roots)?;
+            let (rhs_normalized, rhs_labels) =
+                Self::normalize_eager_payload_for_roots(rhs_ad.payload.as_ref(), &rhs_roots)?;
+            let lhs_payload = lhs_normalized
+                .as_ref()
+                .unwrap_or_else(|| lhs_ad.payload.as_ref());
+            let rhs_payload = rhs_normalized
+                .as_ref()
+                .unwrap_or_else(|| rhs_ad.payload.as_ref());
+            let payload = if scalar_multiply {
+                lhs_payload.mul(rhs_payload)?
+            } else {
+                let subscripts = Self::build_payload_einsum_subscripts(
+                    &[lhs_labels, rhs_labels],
+                    &plan.output_payload_roots,
+                )?;
+                eager_einsum_ad(&[lhs_payload, rhs_payload], &subscripts)?
+            };
+            return Self::from_structured_payload_inner(
+                result_indices,
+                payload,
+                plan.output_payload_dims,
+                plan.output_axis_classes,
+            );
+        }
+
+        if self.tracked_compact_payload_value().is_some()
+            || other.tracked_compact_payload_value().is_some()
+        {
+            let lhs_owned = if self.tracked_compact_payload_value().is_some() {
+                None
+            } else {
+                Some(self.compact_payload_inner()?)
+            };
+            let rhs_owned = if other.tracked_compact_payload_value().is_some() {
+                None
+            } else {
+                Some(other.compact_payload_inner()?)
+            };
+            let lhs = if let Some(value) = self.tracked_compact_payload_value() {
+                value.payload.as_ref()
+            } else {
+                lhs_owned.as_ref().unwrap()
+            };
+            let rhs = if let Some(value) = other.tracked_compact_payload_value() {
+                value.payload.as_ref()
+            } else {
+                rhs_owned.as_ref().unwrap()
+            };
+            if lhs.data().dtype() != rhs.data().dtype() {
+                return Err(anyhow::anyhow!(
+                    "structured AD contraction requires matching payload dtypes"
+                ));
+            }
+            let (lhs_normalized, lhs_labels) =
+                Self::normalize_eager_payload_for_roots(lhs, &lhs_roots)?;
+            let (rhs_normalized, rhs_labels) =
+                Self::normalize_eager_payload_for_roots(rhs, &rhs_roots)?;
+            let lhs_payload = lhs_normalized.as_ref().unwrap_or(lhs);
+            let rhs_payload = rhs_normalized.as_ref().unwrap_or(rhs);
+            let payload = if scalar_multiply {
+                lhs_payload.mul(rhs_payload)?
+            } else {
+                let subscripts = Self::build_payload_einsum_subscripts(
+                    &[lhs_labels, rhs_labels],
+                    &plan.output_payload_roots,
+                )?;
+                eager_einsum_ad(&[lhs_payload, rhs_payload], &subscripts)?
+            };
+            return Self::from_structured_payload_inner(
+                result_indices,
+                payload,
+                plan.output_payload_dims,
+                plan.output_axis_classes,
+            );
+        }
+
+        let lhs = storage_payload_native(self.storage.as_ref())?;
+        let rhs = storage_payload_native(other.storage.as_ref())?;
+        if lhs.dtype() != rhs.dtype() {
+            return Err(anyhow::anyhow!(
+                "structured payload contraction requires matching payload dtypes"
+            ));
+        }
+        let (lhs, lhs_labels) = normalize_payload_for_roots(&lhs, &lhs_roots)?;
+        let (rhs, rhs_labels) = normalize_payload_for_roots(&rhs, &rhs_roots)?;
+        let payload = tensor4all_tensorbackend::einsum_native_tensors(
+            &[(&lhs, lhs_labels.as_slice()), (&rhs, rhs_labels.as_slice())],
+            &plan.output_payload_roots,
+        )?;
+        let storage = storage_from_payload_native(
+            payload,
+            &plan.output_payload_dims,
+            plan.output_axis_classes,
+        )?;
+        Self::from_storage(result_indices, Arc::new(storage))
+    }
+
+    fn should_use_structured_payload_contract(&self, other: &Self) -> bool {
+        let same_payload_dtype = self.storage.is_f64() == other.storage.is_f64()
+            && self.storage.is_complex() == other.storage.is_complex();
+        same_payload_dtype
+            && (self.tracked_compact_payload_value().is_some()
+                || other.tracked_compact_payload_value().is_some()
+                || self.storage.axis_classes() != Self::dense_axis_classes(self.indices.len())
+                || other.storage.axis_classes() != Self::dense_axis_classes(other.indices.len()))
+    }
+
     fn storage_from_native_with_axis_classes(
         native: &NativeTensor,
         axis_classes: &[usize],
@@ -383,6 +794,11 @@ impl TensorDynLen {
     }
 
     fn materialized_inner(&self) -> &EagerTensor<CpuBackend> {
+        if let Some(value) = self.tracked_compact_payload_value() {
+            if self.compact_payload_is_logical_dense(&value.payload_dims) {
+                return value.payload.as_ref();
+            }
+        }
         self.eager_cache
             .get_or_init(|| {
                 let native = Self::seed_native_payload(self.storage.as_ref(), &self.dims())
@@ -491,6 +907,7 @@ impl TensorDynLen {
         Ok(Self {
             indices,
             storage,
+            structured_ad: None,
             eager_cache: Self::empty_eager_cache(),
         })
     }
@@ -572,6 +989,7 @@ impl TensorDynLen {
         Ok(Self {
             indices,
             storage: Arc::new(storage),
+            structured_ad: None,
             eager_cache: Self::eager_cache_with(inner),
         })
     }
@@ -588,26 +1006,49 @@ impl TensorDynLen {
 
     /// Enable reverse-mode AD tracking on this tensor by creating a tracked leaf.
     pub fn enable_grad(self) -> Self {
-        let native = self.as_native().clone();
+        let payload = storage_payload_native(self.storage.as_ref())
+            .unwrap_or_else(|err| panic!("TensorDynLen::enable_grad failed: {err}"));
+        let payload_dims = self.storage.payload_dims().to_vec();
+        let axis_classes = self.storage.axis_classes().to_vec();
         Self {
             indices: self.indices,
             storage: self.storage,
-            eager_cache: Self::eager_cache_with(EagerTensor::requires_grad_in(
-                native,
-                default_eager_ctx(),
-            )),
+            structured_ad: Some(Arc::new(StructuredAdValue {
+                payload: Arc::new(EagerTensor::requires_grad_in(payload, default_eager_ctx())),
+                payload_dims,
+                axis_classes,
+            })),
+            eager_cache: Self::empty_eager_cache(),
         }
     }
 
     /// Report whether this tensor participates in gradient tracking.
     pub fn tracks_grad(&self) -> bool {
-        self.eager_cache
-            .get()
-            .is_some_and(|inner| inner.tracks_grad())
+        self.structured_ad
+            .as_ref()
+            .is_some_and(|value| value.payload.tracks_grad())
+            || self
+                .eager_cache
+                .get()
+                .is_some_and(|inner| inner.tracks_grad())
     }
 
     /// Return the accumulated gradient, if one has been stored.
     pub fn grad(&self) -> Result<Option<Self>> {
+        if let Some(value) = self.tracked_compact_payload_value() {
+            return value
+                .payload
+                .grad()
+                .map(|grad| {
+                    let storage = storage_from_payload_native(
+                        grad.as_ref().clone(),
+                        &value.payload_dims,
+                        value.axis_classes.clone(),
+                    )?;
+                    Self::from_storage(self.indices.clone(), Arc::new(storage))
+                })
+                .transpose();
+        }
         self.materialized_inner()
             .grad()
             .map(|grad| {
@@ -622,6 +1063,9 @@ impl TensorDynLen {
 
     /// Clear the accumulated gradient stored for this tensor.
     pub fn clear_grad(&self) -> Result<()> {
+        if let Some(value) = self.tracked_compact_payload_value() {
+            value.payload.clear_grad();
+        }
         if let Some(inner) = self.eager_cache.get() {
             inner.clear_grad();
         }
@@ -630,6 +1074,13 @@ impl TensorDynLen {
 
     /// Run reverse-mode autodiff from this scalar tensor.
     pub fn backward(&self) -> Result<()> {
+        if let Some(value) = self.tracked_compact_payload_value() {
+            return value
+                .payload
+                .backward()
+                .map(|_| ())
+                .map_err(|e| anyhow::anyhow!("TensorDynLen::backward failed: {e}"));
+        }
         self.materialized_inner()
             .backward()
             .map(|_| ())
@@ -638,6 +1089,10 @@ impl TensorDynLen {
 
     /// Detach this tensor from the reverse graph.
     pub fn detach(&self) -> Self {
+        if self.tracked_compact_payload_value().is_some() {
+            return Self::from_storage(self.indices.clone(), Arc::clone(&self.storage))
+                .expect("TensorDynLen::detach returned invalid tensor");
+        }
         Self::from_inner_with_axis_classes(
             self.indices.clone(),
             self.materialized_inner().detach(),
@@ -757,6 +1212,7 @@ impl TensorDynLen {
             return Self {
                 indices: new_indices.to_vec(),
                 storage: Arc::clone(&self.storage),
+                structured_ad: self.structured_ad.clone(),
                 eager_cache: Arc::clone(&self.eager_cache),
             };
         }
@@ -861,6 +1317,23 @@ impl TensorDynLen {
         let other_dims = Self::expected_dims_from_indices(&other.indices);
         let spec = prepare_contraction(&self.indices, &self_dims, &other.indices, &other_dims)
             .expect("contraction preparation failed");
+        let result_axis_classes = Self::binary_contraction_axis_classes(
+            self.storage.axis_classes(),
+            &spec.axes_a,
+            other.storage.axis_classes(),
+            &spec.axes_b,
+        );
+
+        if self.should_use_structured_payload_contract(other) {
+            return self
+                .contract_structured_payloads(
+                    other,
+                    spec.result_indices,
+                    &spec.axes_a,
+                    &spec.axes_b,
+                )
+                .expect("TensorDynLen::contract structured payload path failed");
+        }
 
         if self.indices.is_empty() && other.indices.is_empty() {
             let result = self
@@ -879,8 +1352,12 @@ impl TensorDynLen {
                 &spec.axes_b,
             )
             .unwrap_or_else(|e| panic!("TensorDynLen::contract native fallback failed: {e}"));
-            return Self::from_native(spec.result_indices, result_native)
-                .expect("TensorDynLen::contract native fallback returned invalid tensor");
+            return Self::from_native_with_axis_classes(
+                spec.result_indices,
+                result_native,
+                result_axis_classes,
+            )
+            .expect("TensorDynLen::contract native fallback returned invalid tensor");
         }
 
         let subscripts = Self::build_binary_einsum_subscripts(
@@ -895,7 +1372,7 @@ impl TensorDynLen {
             &subscripts,
         )
         .unwrap_or_else(|e| panic!("TensorDynLen::contract failed: {e}"));
-        Self::from_inner(spec.result_indices, result)
+        Self::from_inner_with_axis_classes(spec.result_indices, result, result_axis_classes)
             .expect("TensorDynLen::contract returned invalid tensor")
     }
 
@@ -982,6 +1459,21 @@ impl TensorDynLen {
                 anyhow::anyhow!("tensordot: Duplicate axis {} in {} tensor", pos, tensor)
             }
         })?;
+        let result_axis_classes = Self::binary_contraction_axis_classes(
+            self.storage.axis_classes(),
+            &spec.axes_a,
+            other.storage.axis_classes(),
+            &spec.axes_b,
+        );
+
+        if self.should_use_structured_payload_contract(other) {
+            return self.contract_structured_payloads(
+                other,
+                spec.result_indices,
+                &spec.axes_a,
+                &spec.axes_b,
+            );
+        }
 
         if self.indices.is_empty() && other.indices.is_empty() {
             let result = self
@@ -998,7 +1490,11 @@ impl TensorDynLen {
                 other.as_native(),
                 &spec.axes_b,
             )?;
-            return Self::from_native(spec.result_indices, result_native);
+            return Self::from_native_with_axis_classes(
+                spec.result_indices,
+                result_native,
+                result_axis_classes,
+            );
         }
 
         let subscripts = Self::build_binary_einsum_subscripts(
@@ -1012,7 +1508,7 @@ impl TensorDynLen {
             &subscripts,
         )
         .map_err(|e| anyhow::anyhow!("tensordot failed: {e}"))?;
-        Self::from_inner(spec.result_indices, result)
+        Self::from_inner_with_axis_classes(spec.result_indices, result, result_axis_classes)
     }
 
     /// Compute the outer product (tensor product) of two tensors.
@@ -1066,10 +1562,23 @@ impl TensorDynLen {
         // Build result indices and dimensions
         let mut result_indices = self.indices.clone();
         result_indices.extend(other.indices.iter().cloned());
+        let result_axis_classes = Self::binary_contraction_axis_classes(
+            self.storage.axis_classes(),
+            &[],
+            other.storage.axis_classes(),
+            &[],
+        );
+        if self.should_use_structured_payload_contract(other) {
+            return self.contract_structured_payloads(other, result_indices, &[], &[]);
+        }
         if self.as_native().dtype() != other.as_native().dtype() {
             let result_native =
                 contract_native_tensor(self.as_native(), &[], other.as_native(), &[])?;
-            return Self::from_native(result_indices, result_native);
+            return Self::from_native_with_axis_classes(
+                result_indices,
+                result_native,
+                result_axis_classes,
+            );
         }
 
         let subscripts = Self::build_binary_einsum_subscripts(
@@ -1083,7 +1592,7 @@ impl TensorDynLen {
             &subscripts,
         )
         .map_err(|e| anyhow::anyhow!("outer_product failed: {e}"))?;
-        Self::from_inner(result_indices, result)
+        Self::from_inner_with_axis_classes(result_indices, result, result_axis_classes)
     }
 }
 
@@ -1581,6 +2090,7 @@ impl TensorDynLen {
         Self {
             indices: new_indices,
             storage: Arc::clone(&self.storage),
+            structured_ad: self.structured_ad.clone(),
             eager_cache: Arc::clone(&self.eager_cache),
         }
     }
@@ -1656,6 +2166,7 @@ impl TensorDynLen {
         Self {
             indices: new_indices_vec,
             storage: Arc::clone(&self.storage),
+            structured_ad: self.structured_ad.clone(),
             eager_cache: Arc::clone(&self.eager_cache),
         }
     }

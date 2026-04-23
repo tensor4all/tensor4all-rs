@@ -1,5 +1,7 @@
 use super::*;
 use crate::defaults::Index;
+use crate::tensor_like::TensorLike;
+use crate::StorageKind;
 use num_complex::Complex64;
 use std::ffi::OsString;
 use std::time::Duration;
@@ -70,6 +72,25 @@ fn test_contract_multi_pair() {
     let b = make_test_tensor(&[3, 4], &[2, 3]); // j=2, k=3
     let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
     assert_eq!(result.dims(), vec![2, 4]); // i, k
+}
+
+#[test]
+fn test_contract_multi_diag_diag_partial_preserves_diagonal_storage() {
+    let i = Index::new(DynId(1), 3);
+    let j = Index::new(DynId(2), 3);
+    let k = Index::new(DynId(3), 3);
+
+    let a = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let b = TensorDynLen::from_diag(vec![j, k.clone()], vec![4.0_f64, 5.0, 6.0]).unwrap();
+
+    let result = contract_multi(&[&a, &b], AllowedPairs::All).unwrap();
+
+    assert_eq!(result.dims(), vec![3, 3]);
+    assert!(result.is_diag());
+    assert_eq!(result.storage().storage_kind(), StorageKind::Diagonal);
+
+    let expected = TensorDynLen::from_diag(vec![i, k], vec![4.0_f64, 10.0, 18.0]).unwrap();
+    assert!(result.isapprox(&expected, 1e-12, 0.0));
 }
 
 #[test]

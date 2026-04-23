@@ -1,4 +1,4 @@
-use tensor4all_core::{contract_multi, AllowedPairs, Index, Storage, TensorDynLen};
+use tensor4all_core::{contract_multi, AllowedPairs, Index, Storage, StorageKind, TensorDynLen};
 
 #[test]
 fn plain_dense_storage_auto_seeds_native_payload() {
@@ -71,6 +71,36 @@ fn backward_accumulates_until_clear_grad() {
 
     x.clear_grad().unwrap();
     assert!(x.grad().unwrap().is_none());
+}
+
+#[test]
+fn general_structured_grad_preserves_input_axis_classes() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let storage = Storage::new_structured(
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+        vec![2, 3],
+        vec![1, 2],
+        vec![0, 1, 0],
+    )
+    .map(std::sync::Arc::new)
+    .unwrap();
+    let x = TensorDynLen::from_storage(vec![i.clone(), j.clone(), k.clone()], storage)
+        .unwrap()
+        .enable_grad();
+    let ones = TensorDynLen::from_dense(vec![i, j, k], vec![1.0; 12]).unwrap();
+
+    let loss = contract_multi(&[&x, &ones], AllowedPairs::All).unwrap();
+    loss.backward().unwrap();
+
+    let grad = x.grad().unwrap().unwrap();
+    assert_eq!(grad.storage().axis_classes(), &[0, 1, 0]);
+    assert_eq!(grad.storage().storage_kind(), StorageKind::Structured);
+    assert_eq!(
+        grad.storage().payload_f64_col_major_vec().unwrap(),
+        vec![1.0; 6]
+    );
 }
 
 #[test]
