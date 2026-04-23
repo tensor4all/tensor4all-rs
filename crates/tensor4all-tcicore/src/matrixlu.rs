@@ -457,7 +457,7 @@ impl Default for RrLUOptions {
 ///
 /// # Errors
 ///
-/// Returns [`MatrixCIError::NaNEncountered`](crate::error::MatrixCIError::NaNEncountered)
+/// Returns [`MatrixCIError::NaNEncountered`]
 /// if NaN values appear in the L or U factors.
 ///
 /// # Examples
@@ -617,7 +617,7 @@ pub fn rrlu_inplace<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) 
 ///
 /// # Errors
 ///
-/// Returns [`MatrixCIError::NaNEncountered`](crate::error::MatrixCIError::NaNEncountered)
+/// Returns [`MatrixCIError::NaNEncountered`]
 /// if NaN values appear in the L or U factors.
 ///
 /// # Examples

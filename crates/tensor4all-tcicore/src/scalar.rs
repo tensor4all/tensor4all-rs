@@ -4,7 +4,7 @@
 //! in matrix cross interpolation and tensor train operations. It is
 //! implemented for [`f64`], [`f32`], [`Complex64`], and [`Complex32`].
 //!
-//! The [`scalar_tests!`] macro generates dual `f64`/`Complex64` test
+//! The `scalar_tests!` macro generates dual `f64`/`Complex64` test
 //! variants from a single generic test function.
 
 use crate::matrix::BlasMul;

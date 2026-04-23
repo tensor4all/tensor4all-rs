@@ -1,7 +1,7 @@
 //! Cross-factor reconstruction helpers.
 //!
 //! [`CrossFactors`] gathers the pivot block, pivot columns, and pivot rows
-//! from a [`CandidateMatrixSource`](super::CandidateMatrixSource), and
+//! from a [`CandidateMatrixSource`], and
 //! provides methods to compute the left and right CI factors.
 
 use crate::matrixluci::error::MatrixLuciError;
