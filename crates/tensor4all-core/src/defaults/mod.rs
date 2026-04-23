@@ -23,6 +23,7 @@ pub mod tensordynlen;
 
 // Contraction
 pub mod contract;
+pub(crate) mod structured_contraction;
 
 // Linear algebra modules
 pub mod direct_sum;

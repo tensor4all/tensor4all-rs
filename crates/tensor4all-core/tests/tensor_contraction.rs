@@ -1,7 +1,7 @@
 use num_complex::Complex64;
 use tensor4all_core::index::DefaultIndex as Index;
 use tensor4all_core::index_ops::common_inds;
-use tensor4all_core::{DynIndex, TensorDynLen, TensorLike};
+use tensor4all_core::{DynIndex, Storage, StorageKind, TensorDynLen, TensorLike};
 
 fn dense_f64(indices: Vec<DynIndex>, data: Vec<f64>) -> TensorDynLen {
     TensorDynLen::from_dense(indices, data).unwrap()
@@ -150,6 +150,45 @@ fn structured_tensor_contract_materializes_to_correct_dense_result() {
 
     let expected = TensorDynLen::from_dense(vec![i, k], vec![10.0, 21.0, 22.0, 39.0]).unwrap();
     assert!((&result - &expected).maxabs() < 1e-12);
+}
+
+#[test]
+fn general_structured_contract_preserves_output_axis_classes() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let l = Index::new_dyn(2);
+    let structured = TensorDynLen::from_storage(
+        vec![i.clone(), j.clone(), k.clone()],
+        Storage::new_structured(
+            vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+            vec![2, 3],
+            vec![1, 2],
+            vec![0, 1, 0],
+        )
+        .map(std::sync::Arc::new)
+        .unwrap(),
+    )
+    .unwrap();
+    let dense = TensorDynLen::from_dense(
+        vec![j, l.clone()],
+        vec![10.0, 20.0, 30.0, 100.0, 200.0, 300.0],
+    )
+    .unwrap();
+
+    let result = structured.contract(&dense);
+
+    assert_eq!(result.indices, vec![i, k, l]);
+    assert_eq!(result.storage().storage_kind(), StorageKind::Structured);
+    assert_eq!(result.storage().axis_classes(), &[0, 0, 1]);
+    assert_eq!(
+        result.storage().payload_f64_col_major_vec().unwrap(),
+        vec![220.0, 280.0, 2200.0, 2800.0]
+    );
+    assert_eq!(
+        result.to_vec::<f64>().unwrap(),
+        vec![220.0, 0.0, 0.0, 280.0, 2200.0, 0.0, 0.0, 2800.0]
+    );
 }
 
 #[test]

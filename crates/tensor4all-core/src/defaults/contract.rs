@@ -1,7 +1,7 @@
 //! Multi-tensor contraction with optimal contraction order.
 //!
 //! This module provides functions to contract multiple tensors efficiently
-//! using hyperedge-aware einsum optimization via the tensorbackend
+//! using einsum optimization via the tensorbackend
 //! (tenferro-backed implementation).
 //!
 //! This module works with concrete types (`DynIndex`, `TensorDynLen`) only.
@@ -13,14 +13,10 @@
 //!
 //! # Diag Tensor Handling
 //!
-//! When Diag tensors share indices, their diagonal axes are unified to create
-//! hyperedges in the einsum optimizer.
-//!
-//! Example: `Diag(i,j) * Diag(j,k)`:
-//! - Diag(i,j) has diagonal axes i and j (same index)
-//! - Diag(j,k) has diagonal axes j and k (same index)
-//! - After union-find: i, j, k all map to the same representative ID
-//! - This creates a hyperedge that the einsum optimizer handles correctly
+//! Diagonal tensors are materialized as dense native operands for contraction,
+//! so numeric einsum labels must keep uncontracted logical axes distinct.
+//! Diagonal/structured equality metadata is propagated separately onto the
+//! result when the contraction leaves equal axes behind.
 
 use std::cell::RefCell;
 use std::cmp::Reverse;
@@ -241,8 +237,7 @@ pub fn contract_multi(
 
 /// Contract multiple tensors that form a connected graph.
 ///
-/// Uses hyperedge-aware einsum optimization via tensorbackend.
-/// This correctly handles Diag tensors by treating their diagonal axes as hyperedges.
+/// Uses einsum optimization via tensorbackend.
 ///
 /// # Arguments
 /// * `tensors` - Slice of tensors to contract (must form a connected graph)
@@ -261,7 +256,7 @@ pub fn contract_multi(
 /// # Behavior by N
 /// - N=0: Error
 /// - N=1: Clone of input
-/// - N>=2: Optimal order via hyperedge-aware greedy optimizer
+/// - N>=2: Optimized order via the tensorbackend einsum path
 ///
 /// # Examples
 ///
@@ -404,14 +399,14 @@ impl Default for AxisUnionFind {
 }
 
 // ============================================================================
-// Diag union-find builders
+// Axis helper builders
 // ============================================================================
 
 /// Build a union-find structure from a collection of tensors.
 ///
-/// For each Diag tensor component, all its indices are unified (they share the same
-/// diagonal dimension). This creates hyperedges when multiple Diag tensors
-/// share indices.
+/// This helper is kept for callers that need to group diagonal axes by index ID.
+/// Numeric contraction currently keeps dense logical axes distinct and propagates
+/// diagonal result metadata separately.
 pub fn build_diag_union(tensors: &[&TensorDynLen]) -> AxisUnionFind {
     let mut uf = AxisUnionFind::new();
 
@@ -471,8 +466,8 @@ pub fn collect_sizes(tensors: &[&TensorDynLen], uf: &mut AxisUnionFind) -> HashM
 
 /// Internal implementation of multi-tensor contraction.
 ///
-/// For Diag tensors, we pass them as 1D tensors (the diagonal elements) with
-/// a single hyperedge ID. The einsum hyperedge optimizer will handle them correctly.
+/// Diagonal tensors are passed as dense native operands for numeric contraction.
+/// Their compact equality metadata is propagated separately onto the result.
 ///
 /// This implementation preserves storage type: if all inputs are F64, the result
 /// is F64; if any input is C64, the result is C64.
@@ -484,10 +479,12 @@ fn contract_multi_impl(
     allowed: AllowedPairs<'_>,
     _skip_connectivity_check: bool,
 ) -> Result<TensorDynLen> {
-    // 1. Build union-find from Diag tensors to unify diagonal axes
-    let mut diag_uf = build_diag_union(tensors);
+    // 1. Build union-find over exact matching index IDs. Diagonal equality is
+    // encoded in the dense native values and should not collapse uncontracted
+    // logical axes in the numeric einsum.
+    let mut diag_uf = AxisUnionFind::new();
 
-    // 2. Build internal IDs with Diag-awareness
+    // 2. Build internal IDs for numeric contraction.
     let (ixs, internal_id_to_original) = build_internal_ids(tensors, allowed, &mut diag_uf)?;
 
     // 3. Output = count == 1 internal IDs (external indices)
@@ -542,6 +539,7 @@ fn contract_multi_impl(
     if let (Some(signature), Some(started)) = (profile_signature, profile_started) {
         record_contract_profile(signature, started.elapsed());
     }
+    let result_axis_classes = output_axis_classes(tensors, &ixs, &output, &internal_id_to_original);
     let final_indices = if output.is_empty() {
         vec![]
     } else {
@@ -553,12 +551,89 @@ fn contract_multi_impl(
             })
             .collect()
     };
-    TensorDynLen::from_native(final_indices, result_native)
+    TensorDynLen::from_native_with_axis_classes(final_indices, result_native, result_axis_classes)
 }
 
-/// Build internal IDs with Diag-awareness.
+fn output_axis_classes(
+    tensors: &[&TensorDynLen],
+    ixs: &[Vec<usize>],
+    output: &[usize],
+    internal_id_to_original: &HashMap<usize, (usize, usize)>,
+) -> Vec<usize> {
+    fn find(parent: &mut [usize], value: usize) -> usize {
+        if parent[value] != value {
+            parent[value] = find(parent, parent[value]);
+        }
+        parent[value]
+    }
+
+    fn union(parent: &mut [usize], lhs: usize, rhs: usize) {
+        let lhs_root = find(parent, lhs);
+        let rhs_root = find(parent, rhs);
+        if lhs_root != rhs_root {
+            parent[rhs_root] = lhs_root;
+        }
+    }
+
+    let mut class_offsets = Vec::with_capacity(tensors.len());
+    let mut next_node = 0usize;
+    for tensor in tensors {
+        class_offsets.push(next_node);
+        let payload_rank = tensor
+            .storage()
+            .axis_classes()
+            .iter()
+            .copied()
+            .max()
+            .map(|value| value + 1)
+            .unwrap_or(0);
+        next_node += payload_rank;
+    }
+    let mut parent: Vec<usize> = (0..next_node).collect();
+    let mut axes_by_internal_id: HashMap<usize, Vec<usize>> = HashMap::new();
+
+    for (tensor_idx, tensor) in tensors.iter().enumerate() {
+        for (axis, &internal_id) in ixs[tensor_idx].iter().enumerate() {
+            let class_id = tensor.storage().axis_classes()[axis];
+            let node = class_offsets[tensor_idx] + class_id;
+            axes_by_internal_id
+                .entry(internal_id)
+                .or_default()
+                .push(node);
+        }
+    }
+
+    for nodes in axes_by_internal_id.values() {
+        if let Some((&first, rest)) = nodes.split_first() {
+            for &node in rest {
+                union(&mut parent, first, node);
+            }
+        }
+    }
+
+    let mut root_to_class = HashMap::new();
+    let mut next_class = 0usize;
+    output
+        .iter()
+        .map(|internal_id| {
+            let (tensor_idx, axis) = internal_id_to_original[internal_id];
+            let class_id = tensors[tensor_idx].storage().axis_classes()[axis];
+            let node = class_offsets[tensor_idx] + class_id;
+            let root = find(&mut parent, node);
+            *root_to_class.entry(root).or_insert_with(|| {
+                let class = next_class;
+                next_class += 1;
+                class
+            })
+        })
+        .collect()
+}
+
+/// Build internal IDs for numeric contraction.
 ///
-/// Uses the union-find to ensure diagonal axes from Diag tensors share the same internal ID.
+/// Uses the union-find to merge IDs that have already been proven equivalent by
+/// the caller. Diagonal logical-axis metadata is intentionally handled outside
+/// this numeric labeling step.
 ///
 /// Returns: (ixs, internal_id_to_original)
 #[allow(clippy::type_complexity)]

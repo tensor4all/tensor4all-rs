@@ -110,10 +110,56 @@ fn test_diag_tensor_contract_diag_diag_partial() {
     let result = tensor_a.contract(&tensor_b);
 
     assert_eq!(result.dims(), vec![3, 3]);
-    assert!(!result.is_diag());
+    assert!(result.is_diag());
+    assert_eq!(result.storage().storage_kind(), StorageKind::Diagonal);
 
     // Result diagonal should be element-wise product: [1*4, 2*5, 3*6] = [4, 10, 18]
     let expected = diag_tensor_dyn_len(vec![i, k], vec![4.0, 10.0, 18.0]);
+    assert!(result.isapprox(&expected, 1e-12, 0.0));
+}
+
+#[test]
+fn tracked_diag_partial_contraction_preserves_diag_result_and_grad() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(3);
+    let a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![2.0, 3.0, 5.0]).enable_grad();
+    let b = diag_tensor_dyn_len(vec![j, k.clone()], vec![7.0, 11.0, 13.0]);
+
+    let c = a.contract(&b);
+    assert_eq!(c.storage().storage_kind(), StorageKind::Diagonal);
+
+    let ones = diag_tensor_dyn_len(vec![i, k], vec![1.0, 1.0, 1.0]);
+    let loss = c.contract(&ones);
+    loss.backward().unwrap();
+
+    let grad = a.grad().unwrap().unwrap();
+    assert_eq!(grad.storage().storage_kind(), StorageKind::Diagonal);
+    assert_eq!(
+        grad.storage().payload_f64_col_major_vec().unwrap(),
+        vec![7.0, 11.0, 13.0]
+    );
+}
+
+#[test]
+fn test_diag_tensor_tensordot_diag_diag_partial_preserves_diagonal_storage() {
+    let i = Index::new_dyn(3);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(3);
+    let l = Index::new_dyn(3);
+
+    let tensor_a = diag_tensor_dyn_len(vec![i.clone(), j.clone()], vec![1.0, 2.0, 3.0]);
+    let tensor_b = diag_tensor_dyn_len(vec![k.clone(), l.clone()], vec![4.0, 5.0, 6.0]);
+
+    let result = tensor_a
+        .tensordot(&tensor_b, &[(j, k)])
+        .expect("diag-diag tensordot should succeed");
+
+    assert_eq!(result.dims(), vec![3, 3]);
+    assert!(result.is_diag());
+    assert_eq!(result.storage().storage_kind(), StorageKind::Diagonal);
+
+    let expected = diag_tensor_dyn_len(vec![i, l], vec![4.0, 10.0, 18.0]);
     assert!(result.isapprox(&expected, 1e-12, 0.0));
 }
 
@@ -372,7 +418,8 @@ fn test_diag_tensor_contract_rank3() {
     let result = tensor_a.contract(&tensor_b);
 
     assert_eq!(result.dims(), vec![2, 2, 2]);
-    assert!(!result.is_diag());
+    assert!(result.is_diag());
+    assert_eq!(result.storage().storage_kind(), StorageKind::Diagonal);
 
     // Result diagonal should be element-wise product: [1*3, 2*4] = [3, 8]
     let expected = diag_tensor_dyn_len(vec![i, j, l], vec![3.0, 8.0]);
