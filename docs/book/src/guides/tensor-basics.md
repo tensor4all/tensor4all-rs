@@ -3,11 +3,19 @@
 This guide covers the `tensor4all-core` crate, which provides the foundation for
 all tensor operations: indices, tensors, contraction, and factorization.
 
-Add it to your `Cargo.toml`:
+If you have not set up a dependency yet, add `tensor4all-core` to your
+`Cargo.toml`. Use a git dependency from an external project:
 
 ```toml
 [dependencies]
-tensor4all-core = "0.1"
+tensor4all-core = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-core" }
+```
+
+Or use a path dependency when working from a local checkout:
+
+```toml
+[dependencies]
+tensor4all-core = { path = "../tensor4all-rs/crates/tensor4all-core" }
 ```
 
 ## Index

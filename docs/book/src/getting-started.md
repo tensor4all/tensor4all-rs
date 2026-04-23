@@ -6,24 +6,36 @@ You need the Rust toolchain. If you do not have it installed, follow the instruc
 
 ## Adding tensor4all-rs to Your Project
 
-tensor4all-rs is a collection of crates. Add the ones you need to your `Cargo.toml`:
+tensor4all-rs is a collection of crates. The crates are not published to
+crates.io yet, so use git dependencies from an external project:
 
 ```toml
 [dependencies]
 # Basic tensor train construction and manipulation
-tensor4all-simplett = "0.1"
+tensor4all-simplett = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-simplett" }
 
 # Tensor Cross Interpolation (TCI)
-tensor4all-tensorci = "0.1"
+tensor4all-tensorci = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-tensorci" }
 
 # Quantics TCI (combines quantics encoding with TCI)
-tensor4all-quanticstci = "0.1"
+tensor4all-quanticstci = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-quanticstci" }
 
 # Tree tensor networks
-tensor4all-treetn = "0.1"
+tensor4all-treetn = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-treetn" }
 ```
 
 You do not need to add all of them — only include the crates relevant to your use case.
+
+When working from a local checkout, use path dependencies instead. Paths are
+relative to your project's `Cargo.toml`; adjust `../tensor4all-rs` as needed:
+
+```toml
+[dependencies]
+tensor4all-simplett = { path = "../tensor4all-rs/crates/tensor4all-simplett" }
+tensor4all-tensorci = { path = "../tensor4all-rs/crates/tensor4all-tensorci" }
+tensor4all-quanticstci = { path = "../tensor4all-rs/crates/tensor4all-quanticstci" }
+tensor4all-treetn = { path = "../tensor4all-rs/crates/tensor4all-treetn" }
+```
 
 ## First Example: Tensor Trains
 
