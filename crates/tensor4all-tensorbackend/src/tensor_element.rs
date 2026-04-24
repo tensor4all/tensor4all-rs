@@ -83,7 +83,7 @@ macro_rules! impl_tensor_element {
                     dims,
                     expected_len
                 );
-                Ok(NativeTensor::new(dims.to_vec(), data.to_vec()))
+                Ok(NativeTensor::from_vec(dims.to_vec(), data.to_vec()))
             }
 
             fn diag_native_tensor_from_col_major(
@@ -96,7 +96,7 @@ macro_rules! impl_tensor_element {
             }
 
             fn scalar_native_tensor(value: Self) -> Result<NativeTensor> {
-                Ok(NativeTensor::new(vec![], vec![value]))
+                Ok(NativeTensor::from_vec(vec![], vec![value]))
             }
 
             fn dense_values_from_native_col_major(tensor: &NativeTensor) -> Result<Vec<Self>> {

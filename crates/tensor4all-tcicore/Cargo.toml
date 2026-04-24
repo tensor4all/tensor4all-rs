@@ -16,7 +16,6 @@ rand.workspace = true
 paste.workspace = true
 bnum.workspace = true
 faer.workspace = true
-tenferro-algebra.workspace = true
 tenferro-einsum.workspace = true
 tenferro-tensor.workspace = true
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend" }

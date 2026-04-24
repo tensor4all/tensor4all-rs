@@ -230,6 +230,61 @@ fn native_einsum_accepts_unsorted_nonfirst_operand_labels() {
 }
 
 #[test]
+fn einsum_native_tensors_supports_retained_shared_nary_label() {
+    let a = NativeTensor::from_vec(vec![2, 2], vec![5.0_f64, 7.0, 11.0, 13.0]);
+    let b = NativeTensor::from_vec(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let c = NativeTensor::from_vec(vec![2, 2], vec![11.0_f64, 13.0, 17.0, 19.0]);
+
+    let out = einsum_native_tensors(
+        &[(&a, &[0, 1]), (&b, &[0, 2]), (&c, &[0, 3])],
+        &[0, 1, 2, 3],
+    )
+    .unwrap();
+    let values = native_tensor_primal_to_dense_f64_col_major(&out).unwrap();
+
+    let mut expected = vec![0.0; 24];
+    for b_idx in 0..2 {
+        for i_idx in 0..2 {
+            for j_idx in 0..3 {
+                for k_idx in 0..2 {
+                    let a_offset = b_idx + 2 * i_idx;
+                    let b_offset = b_idx + 2 * j_idx;
+                    let c_offset = b_idx + 2 * k_idx;
+                    let out_offset = b_idx + 2 * (i_idx + 2 * (j_idx + 3 * k_idx));
+                    expected[out_offset] = a.as_slice::<f64>().unwrap()[a_offset]
+                        * b.as_slice::<f64>().unwrap()[b_offset]
+                        * c.as_slice::<f64>().unwrap()[c_offset];
+                }
+            }
+        }
+    }
+
+    assert_eq!(out.shape(), &[2, 2, 3, 2]);
+    assert_eq!(values, expected);
+    assert_eq!(values[0], 55.0);
+}
+
+#[test]
+fn einsum_native_tensors_owned_matches_borrowed_and_promotes_dtype() {
+    let lhs = NativeTensor::from_vec(vec![2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]);
+    let rhs = NativeTensor::from_vec(vec![2, 3], vec![5.0_f64, 6.0, 7.0, 8.0, 9.0, 10.0]);
+
+    let owned = einsum_native_tensors_owned(
+        vec![(lhs.clone(), vec![0, 1]), (rhs.clone(), vec![1, 2])],
+        &[0, 2],
+    )
+    .unwrap();
+    let borrowed = einsum_native_tensors(&[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2]).unwrap();
+
+    assert_eq!(owned.shape(), &[2, 3]);
+    assert_eq!(owned.dtype(), DType::F64);
+    assert_eq!(
+        native_tensor_primal_to_dense_f64_col_major(&owned).unwrap(),
+        native_tensor_primal_to_dense_f64_col_major(&borrowed).unwrap()
+    );
+}
+
+#[test]
 fn einsum_native_tensors_dense_binary_records_frontend_fallback_profile() {
     struct ProfileGuard;
 

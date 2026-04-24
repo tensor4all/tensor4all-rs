@@ -47,6 +47,27 @@ fn make_test_tensor(shape: &[usize], ids: &[u64]) -> TensorDynLen {
     TensorDynLen::from_dense(indices, data).unwrap()
 }
 
+fn make_test_tensor_from_data(
+    shape: &[usize],
+    indices: Vec<DynIndex>,
+    data: Vec<f64>,
+) -> TensorDynLen {
+    assert_eq!(shape.iter().product::<usize>(), data.len());
+    assert_eq!(shape.len(), indices.len());
+    TensorDynLen::from_dense(indices, data).unwrap()
+}
+
+fn col_major_offset(coords: &[usize], dims: &[usize]) -> usize {
+    let mut stride = 1usize;
+    let mut offset = 0usize;
+    for (&coord, &dim) in coords.iter().zip(dims.iter()) {
+        assert!(coord < dim);
+        offset += coord * stride;
+        stride *= dim;
+    }
+    offset
+}
+
 // ========================================================================
 // contract_multi tests
 // ========================================================================
@@ -167,6 +188,366 @@ fn test_contract_connected_specified_no_contractable_error() {
         "Expected error about disconnected or no contractable indices, got: {}",
         err_msg
     );
+}
+
+#[test]
+fn test_contract_multi_with_options_retains_shared_batch_index() {
+    let batch = Index::new(DynId(10), 2);
+    let i = Index::new(DynId(11), 2);
+    let k = Index::new(DynId(12), 3);
+    let j = Index::new(DynId(13), 2);
+
+    let a = make_test_tensor_from_data(
+        &[2, 2, 3],
+        vec![batch.clone(), i.clone(), k.clone()],
+        (1..=12).map(|x| x as f64).collect(),
+    );
+    let b = make_test_tensor_from_data(
+        &[2, 3, 2],
+        vec![batch.clone(), k.clone(), j.clone()],
+        (1..=12).map(|x| 0.5 * x as f64).collect(),
+    );
+
+    let retain_indices = [batch.clone()];
+    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+    let result = contract_multi_with_options(&[&a, &b], options).unwrap();
+
+    assert_eq!(result.indices(), &[batch.clone(), i.clone(), j.clone()]);
+    assert_eq!(result.dims(), vec![2, 2, 2]);
+
+    let a_data = a.to_vec::<f64>().unwrap();
+    let b_data = b.to_vec::<f64>().unwrap();
+    let a_dims = a.dims();
+    let b_dims = b.dims();
+    let mut expected = Vec::new();
+    for j_idx in 0..2 {
+        for i_idx in 0..2 {
+            for b_idx in 0..2 {
+                let mut sum = 0.0;
+                for k_idx in 0..3 {
+                    let a_offset = col_major_offset(&[b_idx, i_idx, k_idx], &a_dims);
+                    let b_offset = col_major_offset(&[b_idx, k_idx, j_idx], &b_dims);
+                    sum += a_data[a_offset] * b_data[b_offset];
+                }
+                expected.push(sum);
+            }
+        }
+    }
+
+    assert_eq!(result.to_vec::<f64>().unwrap(), expected);
+}
+
+#[test]
+fn test_tensor_contract_with_options_retains_shared_index() {
+    let batch = Index::new(DynId(60), 2);
+    let i = Index::new(DynId(61), 2);
+    let k = Index::new(DynId(62), 3);
+    let j = Index::new(DynId(63), 2);
+
+    let a = make_test_tensor_from_data(
+        &[2, 2, 3],
+        vec![batch.clone(), i.clone(), k.clone()],
+        vec![1.0; 12],
+    );
+    let b = make_test_tensor_from_data(
+        &[2, 3, 2],
+        vec![batch.clone(), k.clone(), j.clone()],
+        vec![1.0; 12],
+    );
+
+    let result = a
+        .contract_with_options(
+            &b,
+            ContractionOptions::new(AllowedPairs::All)
+                .with_retain_indices(std::slice::from_ref(&batch)),
+        )
+        .unwrap();
+
+    assert_eq!(result.indices(), &[batch, i, j]);
+    assert_eq!(result.dims(), vec![2, 2, 2]);
+    assert_eq!(result.to_vec::<f64>().unwrap(), vec![3.0; 8]);
+}
+
+#[test]
+fn test_contract_multi_with_options_supports_three_way_retained_label() {
+    let batch = Index::new(DynId(20), 2);
+    let i = Index::new(DynId(21), 2);
+    let j = Index::new(DynId(22), 3);
+    let k = Index::new(DynId(23), 2);
+
+    let a = make_test_tensor_from_data(
+        &[2, 2],
+        vec![batch.clone(), i.clone()],
+        vec![1.0, 2.0, 3.0, 4.0],
+    );
+    let b = make_test_tensor_from_data(
+        &[2, 3],
+        vec![batch.clone(), j.clone()],
+        vec![5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+    );
+    let c = make_test_tensor_from_data(
+        &[2, 2],
+        vec![batch.clone(), k.clone()],
+        vec![11.0, 12.0, 13.0, 14.0],
+    );
+
+    let retain_indices = [batch.clone()];
+    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+    let result = contract_multi_with_options(&[&a, &b, &c], options).unwrap();
+
+    assert_eq!(
+        result.indices(),
+        &[batch.clone(), i.clone(), j.clone(), k.clone()]
+    );
+    assert_eq!(result.dims(), vec![2, 2, 3, 2]);
+
+    let a_data = a.to_vec::<f64>().unwrap();
+    let b_data = b.to_vec::<f64>().unwrap();
+    let c_data = c.to_vec::<f64>().unwrap();
+    let a_dims = a.dims();
+    let b_dims = b.dims();
+    let c_dims = c.dims();
+    let mut expected = Vec::new();
+    for k_idx in 0..2 {
+        for j_idx in 0..3 {
+            for i_idx in 0..2 {
+                for batch_idx in 0..2 {
+                    let a_offset = col_major_offset(&[batch_idx, i_idx], &a_dims);
+                    let b_offset = col_major_offset(&[batch_idx, j_idx], &b_dims);
+                    let c_offset = col_major_offset(&[batch_idx, k_idx], &c_dims);
+                    expected.push(a_data[a_offset] * b_data[b_offset] * c_data[c_offset]);
+                }
+            }
+        }
+    }
+
+    assert_eq!(result.to_vec::<f64>().unwrap(), expected);
+}
+
+#[test]
+fn test_contract_multi_with_options_errors_for_missing_retained_index() {
+    let i = Index::new(DynId(30), 2);
+    let j = Index::new(DynId(31), 3);
+    let missing = Index::new(DynId(32), 2);
+
+    let a = make_test_tensor_from_data(&[2], vec![i.clone()], vec![1.0, 2.0]);
+    let b = make_test_tensor_from_data(&[3], vec![j.clone()], vec![3.0, 4.0, 5.0]);
+
+    let retain_indices = [missing];
+    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+    let result = contract_multi_with_options(&[&a, &b], options);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_contract_multi_with_options_retained_index_connects_components() {
+    let batch = Index::new(DynId(40), 2);
+    let i = Index::new(DynId(41), 2);
+    let j = Index::new(DynId(42), 3);
+
+    let a = make_test_tensor_from_data(
+        &[2, 2],
+        vec![batch.clone(), i.clone()],
+        vec![1.0, 2.0, 3.0, 4.0],
+    );
+    let b = make_test_tensor_from_data(
+        &[2, 3],
+        vec![batch.clone(), j.clone()],
+        vec![5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+    );
+
+    let retain_indices = [batch.clone()];
+    let options =
+        ContractionOptions::new(AllowedPairs::Specified(&[])).with_retain_indices(&retain_indices);
+    let result = contract_multi_with_options(&[&a, &b], options).unwrap();
+
+    assert_eq!(result.indices(), &[batch.clone(), i.clone(), j.clone()]);
+    assert_eq!(result.dims(), vec![2, 2, 3]);
+
+    let a_data = a.to_vec::<f64>().unwrap();
+    let b_data = b.to_vec::<f64>().unwrap();
+    let a_dims = a.dims();
+    let b_dims = b.dims();
+    let mut expected = Vec::new();
+    for j_idx in 0..3 {
+        for i_idx in 0..2 {
+            for batch_idx in 0..2 {
+                let a_offset = col_major_offset(&[batch_idx, i_idx], &a_dims);
+                let b_offset = col_major_offset(&[batch_idx, j_idx], &b_dims);
+                expected.push(a_data[a_offset] * b_data[b_offset]);
+            }
+        }
+    }
+
+    assert_eq!(result.to_vec::<f64>().unwrap(), expected);
+}
+
+#[test]
+fn test_contract_multi_with_options_does_not_contract_unretained_shared_index_between_retained_components(
+) {
+    let batch = Index::new(DynId(50), 2);
+    let i = Index::new(DynId(51), 2);
+
+    let a = make_test_tensor_from_data(
+        &[2, 2],
+        vec![batch.clone(), i.clone()],
+        vec![1.0, 2.0, 3.0, 4.0],
+    );
+    let b = make_test_tensor_from_data(
+        &[2, 2],
+        vec![batch.clone(), i.clone()],
+        vec![5.0, 6.0, 7.0, 8.0],
+    );
+
+    let retain_indices = [batch.clone()];
+    let options =
+        ContractionOptions::new(AllowedPairs::Specified(&[])).with_retain_indices(&retain_indices);
+    let result = contract_multi_with_options(&[&a, &b], options);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_contract_multi_owned_matches_borrowed_with_options() {
+    let batch = Index::new(DynId(70), 2);
+    let i = Index::new(DynId(71), 2);
+    let k = Index::new(DynId(72), 3);
+    let j = Index::new(DynId(73), 2);
+
+    let a = make_test_tensor_from_data(
+        &[2, 2, 3],
+        vec![batch.clone(), i.clone(), k.clone()],
+        (1..=12).map(|x| x as f64).collect(),
+    );
+    let b = make_test_tensor_from_data(
+        &[2, 3, 2],
+        vec![batch.clone(), k.clone(), j.clone()],
+        (1..=12).map(|x| (x as f64) * 0.5).collect(),
+    );
+
+    let retain_indices = [batch.clone()];
+    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+    let owned = contract_multi_owned(vec![a.clone(), b.clone()], options).unwrap();
+    let borrowed = contract_multi_with_options(&[&a, &b], options).unwrap();
+
+    assert_eq!(owned.indices(), borrowed.indices());
+    assert_eq!(owned.dims(), borrowed.dims());
+    assert_eq!(
+        owned.to_vec::<f64>().unwrap(),
+        borrowed.to_vec::<f64>().unwrap()
+    );
+}
+
+#[test]
+fn test_contract_multi_owned_single_matches_borrowed_with_specified_pairs() {
+    let a = make_test_tensor_from_data(
+        &[2, 3],
+        vec![Index::new(DynId(74), 2), Index::new(DynId(75), 3)],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    );
+    let options = ContractionOptions::new(AllowedPairs::Specified(&[(0, 1)]));
+
+    let owned = contract_multi_owned(vec![a.clone()], options).unwrap();
+    let borrowed = contract_multi_with_options(&[&a], options).unwrap();
+
+    assert_eq!(owned.indices(), borrowed.indices());
+    assert_eq!(
+        owned.to_vec::<f64>().unwrap(),
+        borrowed.to_vec::<f64>().unwrap()
+    );
+}
+
+#[test]
+fn test_contract_multi_owned_falls_back_for_structured_storage() {
+    let i = Index::new(DynId(76), 3);
+    let j = Index::new(DynId(77), 3);
+    let k = Index::new(DynId(78), 3);
+
+    let a = TensorDynLen::from_diag(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let b = TensorDynLen::from_diag(vec![j, k.clone()], vec![4.0_f64, 5.0, 6.0]).unwrap();
+    let options = ContractionOptions::new(AllowedPairs::All);
+
+    let owned = contract_multi_owned(vec![a.clone(), b.clone()], options).unwrap();
+    let borrowed = contract_multi_with_options(&[&a, &b], options).unwrap();
+
+    assert_eq!(owned.indices(), borrowed.indices());
+    assert_eq!(owned.storage().storage_kind(), StorageKind::Diagonal);
+    assert!(owned.isapprox(&borrowed, 1e-12, 0.0));
+    let expected = TensorDynLen::from_diag(vec![i, k], vec![4.0_f64, 10.0, 18.0]).unwrap();
+    assert!(owned.isapprox(&expected, 1e-12, 0.0));
+}
+
+#[test]
+fn test_contract_multi_owned_supports_three_way_retained_label() {
+    let batch = Index::new(DynId(80), 2);
+    let i = Index::new(DynId(81), 2);
+    let j = Index::new(DynId(82), 3);
+    let k = Index::new(DynId(83), 2);
+
+    let a = make_test_tensor_from_data(
+        &[2, 2],
+        vec![batch.clone(), i.clone()],
+        vec![1.0, 2.0, 3.0, 4.0],
+    );
+    let b = make_test_tensor_from_data(
+        &[2, 3],
+        vec![batch.clone(), j.clone()],
+        vec![5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+    );
+    let c = make_test_tensor_from_data(
+        &[2, 2],
+        vec![batch.clone(), k.clone()],
+        vec![11.0, 12.0, 13.0, 14.0],
+    );
+
+    let retain_indices = [batch.clone()];
+    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+    let owned = contract_multi_owned(vec![a.clone(), b.clone(), c.clone()], options).unwrap();
+    let borrowed = contract_multi_with_options(&[&a, &b, &c], options).unwrap();
+
+    assert_eq!(
+        owned.indices(),
+        &[batch.clone(), i.clone(), j.clone(), k.clone()]
+    );
+    assert_eq!(owned.dims(), vec![2, 2, 3, 2]);
+    assert_eq!(owned.indices(), borrowed.indices());
+    assert_eq!(
+        owned.to_vec::<f64>().unwrap(),
+        borrowed.to_vec::<f64>().unwrap()
+    );
+}
+
+#[test]
+fn test_contract_multi_owned_falls_back_to_borrowed_for_grad_tensors() {
+    let batch = Index::new(DynId(90), 2);
+    let i = Index::new(DynId(91), 2);
+    let k = Index::new(DynId(92), 3);
+    let j = Index::new(DynId(93), 2);
+
+    let x = make_test_tensor_from_data(
+        &[2, 2, 3],
+        vec![batch.clone(), i.clone(), k.clone()],
+        (1..=12).map(|value| value as f64).collect(),
+    )
+    .enable_grad();
+    let y = make_test_tensor_from_data(
+        &[2, 3, 2],
+        vec![batch.clone(), k.clone(), j.clone()],
+        vec![1.0; 12],
+    );
+
+    let retain_indices = [batch.clone()];
+    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+    let owned = contract_multi_owned(vec![x.clone(), y], options).unwrap();
+
+    let ones = TensorDynLen::from_dense(owned.indices().to_vec(), vec![1.0; 8]).unwrap();
+    let loss = contract_multi(&[&owned, &ones], AllowedPairs::All).unwrap();
+    loss.backward().unwrap();
+
+    let grad = x.grad().unwrap().unwrap();
+    assert_eq!(grad.dims(), vec![2, 2, 3]);
+    assert_eq!(grad.to_vec::<f64>().unwrap(), vec![2.0; 12]);
 }
 
 #[test]

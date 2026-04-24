@@ -1,4 +1,7 @@
-use tensor4all_core::{contract_multi, AllowedPairs, Index, Storage, StorageKind, TensorDynLen};
+use tensor4all_core::{
+    contract_multi, contract_multi_with_options, AllowedPairs, ContractionOptions, Index, Storage,
+    StorageKind, TensorDynLen,
+};
 
 #[test]
 fn plain_dense_storage_auto_seeds_native_payload() {
@@ -128,4 +131,68 @@ fn clone_shares_tracked_leaf_gradient_slot() {
     let grad_alias = alias.grad().unwrap().unwrap();
     assert!((grad_x.only().real() - 4.0).abs() < 1e-12);
     assert!((grad_alias.only().real() - 4.0).abs() < 1e-12);
+}
+
+#[test]
+fn retained_multi_contraction_preserves_grad_path() {
+    let batch = Index::new_dyn(2);
+    let i = Index::new_dyn(2);
+    let k = Index::new_dyn(3);
+    let j = Index::new_dyn(2);
+
+    let x = TensorDynLen::from_dense(
+        vec![batch.clone(), i.clone(), k.clone()],
+        (1..=12).map(|value| value as f64).collect(),
+    )
+    .unwrap()
+    .enable_grad();
+    let y =
+        TensorDynLen::from_dense(vec![batch.clone(), k.clone(), j.clone()], vec![1.0; 12]).unwrap();
+    let retain_indices = [batch.clone()];
+    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+
+    let result = contract_multi_with_options(&[&x, &y], options).unwrap();
+    assert_eq!(result.dims(), vec![2, 2, 2]);
+    assert_eq!(
+        result.to_vec::<f64>().unwrap(),
+        vec![15.0, 18.0, 21.0, 24.0, 15.0, 18.0, 21.0, 24.0]
+    );
+
+    let ones = TensorDynLen::from_dense(result.indices().to_vec(), vec![1.0; 8]).unwrap();
+    let loss = contract_multi(&[&result, &ones], AllowedPairs::All).unwrap();
+    loss.backward().unwrap();
+
+    let grad = x.grad().unwrap().unwrap();
+    assert_eq!(grad.dims(), vec![2, 2, 3]);
+    assert_eq!(grad.to_vec::<f64>().unwrap(), vec![2.0; 12]);
+}
+
+#[test]
+fn structured_retained_multi_contraction_errors_before_detaching_grad() {
+    let batch = Index::new_dyn(2);
+    let i = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let j = Index::new_dyn(2);
+    let storage = Storage::new_structured(
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+        vec![2, 3],
+        vec![1, 2],
+        vec![0, 1, 0],
+    )
+    .map(std::sync::Arc::new)
+    .unwrap();
+    let x = TensorDynLen::from_storage(vec![batch.clone(), i.clone(), k.clone()], storage)
+        .unwrap()
+        .enable_grad();
+    let y =
+        TensorDynLen::from_dense(vec![batch.clone(), k.clone(), j.clone()], vec![1.0; 8]).unwrap();
+    let retain_indices = [batch.clone()];
+    let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain_indices);
+
+    let err = contract_multi_with_options(&[&x, &y], options).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("structured storage") || message.contains("not yet supported"),
+        "{message}"
+    );
 }

@@ -103,7 +103,9 @@ pub use tensor_like::{
 // Contraction - backwards compatibility
 pub use defaults::contract;
 pub use defaults::contract::{
-    contract_connected, contract_multi, print_and_reset_contract_profile, reset_contract_profile,
+    contract_connected, contract_connected_with_options, contract_multi, contract_multi_owned,
+    contract_multi_with_options, print_and_reset_contract_profile, reset_contract_profile,
+    ContractionOptions,
 };
 
 // Re-export linear algebra modules from defaults for backwards compatibility

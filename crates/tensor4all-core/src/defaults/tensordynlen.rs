@@ -1308,11 +1308,61 @@ impl TensorDynLen {
     /// let indices_b = vec![j.clone(), k.clone()];
     /// let tensor_b: TensorDynLen = TensorDynLen::from_dense(indices_b, vec![0.0; 12]).unwrap();
     ///
-    /// // Contract along j: result is C[i, k]
+    /// // Contract along j with the default pairwise semantics: result is C[i, k]
     /// let result = tensor_a.contract(&tensor_b);
     /// assert_eq!(result.dims(), vec![2, 4]);
     /// ```
     pub fn contract(&self, other: &Self) -> Self {
+        self.contract_pairwise_default(other)
+    }
+
+    /// Contract this tensor with another tensor using explicit contraction options.
+    ///
+    /// # Arguments
+    /// * `other` - The tensor to contract with.
+    /// * `options` - Pair-selection policy and retained indices.
+    ///
+    /// # Returns
+    /// The contracted tensor, or an error if the contraction cannot be built.
+    ///
+    /// # Errors
+    /// Returns an error if the tensors are disconnected, retained indices are
+    /// invalid, or the contraction plan cannot be executed.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{AllowedPairs, ContractionOptions, DynIndex, TensorDynLen};
+    ///
+    /// let batch = DynIndex::new_dyn(2);
+    /// let i = DynIndex::new_dyn(2);
+    /// let k = DynIndex::new_dyn(3);
+    /// let j = DynIndex::new_dyn(2);
+    ///
+    /// let a = TensorDynLen::from_dense(
+    ///     vec![batch.clone(), i.clone(), k.clone()],
+    ///     vec![1.0_f64; 12],
+    /// ).unwrap();
+    /// let b = TensorDynLen::from_dense(
+    ///     vec![batch.clone(), k.clone(), j.clone()],
+    ///     vec![1.0_f64; 12],
+    /// ).unwrap();
+    /// let retain = [batch.clone()];
+    /// let options = ContractionOptions::new(AllowedPairs::All).with_retain_indices(&retain);
+    /// let result = a.contract_with_options(&b, options).unwrap();
+    ///
+    /// assert_eq!(result.indices(), &[batch, i, j]);
+    /// assert_eq!(result.dims(), vec![2, 2, 2]);
+    /// assert_eq!(result.to_vec::<f64>().unwrap(), vec![3.0; 8]);
+    /// ```
+    pub fn contract_with_options(
+        &self,
+        other: &Self,
+        options: crate::defaults::contract::ContractionOptions<'_>,
+    ) -> Result<Self> {
+        crate::defaults::contract::contract_multi_with_options(&[self, other], options)
+    }
+
+    pub(crate) fn contract_pairwise_default(&self, other: &Self) -> Self {
         let self_dims = Self::expected_dims_from_indices(&self.indices);
         let other_dims = Self::expected_dims_from_indices(&other.indices);
         let spec = prepare_contraction(&self.indices, &self_dims, &other.indices, &other_dims)
