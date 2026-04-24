@@ -258,7 +258,8 @@ fn test_tensor_contract_with_options_retains_shared_index() {
     let result = a
         .contract_with_options(
             &b,
-            ContractionOptions::new(AllowedPairs::All).with_retain_indices(&[batch.clone()]),
+            ContractionOptions::new(AllowedPairs::All)
+                .with_retain_indices(std::slice::from_ref(&batch)),
         )
         .unwrap();
 
