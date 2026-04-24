@@ -5,12 +5,21 @@ applying transformations to functions represented as quantics tensor trains.
 It is a Rust port of the transformation functionality from
 [Quantics.jl](https://github.com/tensor4all/Quantics.jl).
 
-Add it to your `Cargo.toml`:
+If you have not set up dependencies yet, add the transform and TreeTN crates to
+your `Cargo.toml`. Use git dependencies from an external project:
 
 ```toml
 [dependencies]
-tensor4all-quanticstransform = "0.1"
-tensor4all-treetn = "0.1"
+tensor4all-quanticstransform = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-quanticstransform" }
+tensor4all-treetn = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-treetn" }
+```
+
+Or use path dependencies when working from a local checkout:
+
+```toml
+[dependencies]
+tensor4all-quanticstransform = { path = "../tensor4all-rs/crates/tensor4all-quanticstransform" }
+tensor4all-treetn = { path = "../tensor4all-rs/crates/tensor4all-treetn" }
 ```
 
 ---
