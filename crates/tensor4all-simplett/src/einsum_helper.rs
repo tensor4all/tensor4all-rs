@@ -109,7 +109,7 @@ pub(crate) fn matrix_times_col_vector<T: EinsumScalar>(
 
 /// Scalar types supported by the tenferro-backed einsum helpers used in
 /// `tensor4all-simplett`.
-pub trait EinsumScalar: tenferro_algebra::Scalar + TensorScalar + Sized {}
+pub trait EinsumScalar: TensorScalar + Sized {}
 
 macro_rules! impl_einsum_scalar {
     ($($t:ty),*) => {

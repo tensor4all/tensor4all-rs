@@ -32,9 +32,10 @@ pub mod qr;
 pub mod svd;
 
 pub use contract::{
-    build_diag_union, collect_sizes, contract_connected, contract_multi,
+    build_diag_union, collect_sizes, contract_connected, contract_connected_with_options,
+    contract_multi, contract_multi_owned, contract_multi_with_options,
     print_and_reset_contract_profile, remap_output_ids, remap_tensor_ids, reset_contract_profile,
-    AxisUnionFind,
+    AxisUnionFind, ContractionOptions,
 };
 pub use index::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
 pub use tensordynlen::{

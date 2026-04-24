@@ -22,7 +22,6 @@ anyhow.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
 tenferro.workspace = true
-tenferro-algebra.workspace = true
 tenferro-device.workspace = true
 tenferro-einsum.workspace = true
 tenferro-tensor.workspace = true

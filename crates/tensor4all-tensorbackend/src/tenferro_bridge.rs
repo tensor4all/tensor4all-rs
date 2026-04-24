@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, ensure, Result};
 use num_complex::{Complex32, Complex64};
-use tenferro::eager_einsum::eager_einsum;
+use tenferro::eager_einsum::eager_einsum_owned;
 use tenferro::{DType, Tensor as NativeTensor, TensorBackend};
 
 use crate::any_scalar::promote_scalar_native;
@@ -452,7 +452,7 @@ pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<
                 .iter()
                 .map(|&value| value * factor)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::new(tensor.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec(tensor.shape().to_vec(), values))
         }
         DType::F64 => {
             let factor = scalar
@@ -465,7 +465,7 @@ pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<
                 .iter()
                 .map(|&value| value * factor)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::new(tensor.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec(tensor.shape().to_vec(), values))
         }
         DType::C32 => {
             let factor = scalar
@@ -478,7 +478,7 @@ pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<
                 .iter()
                 .map(|&value| value * factor)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::new(tensor.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec(tensor.shape().to_vec(), values))
         }
         DType::C64 => {
             let factor = scalar
@@ -491,7 +491,7 @@ pub fn scale_native_tensor(tensor: &NativeTensor, scalar: &AnyScalar) -> Result<
                 .iter()
                 .map(|&value| value * factor)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::new(tensor.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec(tensor.shape().to_vec(), values))
         }
     }
 }
@@ -542,7 +542,7 @@ pub fn axpby_native_tensor(
                 .zip(rhs_values.iter())
                 .map(|(&x, &y)| a * x + b * y)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::new(lhs.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec(lhs.shape().to_vec(), values))
         }
         DType::F64 => {
             let a = a
@@ -564,7 +564,7 @@ pub fn axpby_native_tensor(
                 .zip(rhs_values.iter())
                 .map(|(&x, &y)| a * x + b * y)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::new(lhs.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec(lhs.shape().to_vec(), values))
         }
         DType::C32 => {
             let a = a
@@ -586,7 +586,7 @@ pub fn axpby_native_tensor(
                 .zip(rhs_values.iter())
                 .map(|(&x, &y)| a * x + b * y)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::new(lhs.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec(lhs.shape().to_vec(), values))
         }
         DType::C64 => {
             let a = a
@@ -608,28 +608,49 @@ pub fn axpby_native_tensor(
                 .zip(rhs_values.iter())
                 .map(|(&x, &y)| a * x + b * y)
                 .collect::<Vec<_>>();
-            Ok(NativeTensor::new(lhs.shape().to_vec(), values))
+            Ok(NativeTensor::from_vec(lhs.shape().to_vec(), values))
         }
     }
 }
 
-/// Execute an eager einsum over native tensors.
-pub fn einsum_native_tensors(
-    operands: &[(&NativeTensor, &[usize])],
+/// Execute an eager einsum over owned native tensors.
+///
+/// This is the consuming bridge used by higher-level owned contraction APIs.
+/// Inputs are promoted to a common dtype before the owned tenferro eager
+/// einsum runs.
+///
+/// # Arguments
+/// * `operands` - Native tensors paired with numeric einsum labels for each axis.
+/// * `output_ids` - Numeric labels to keep in the result, in output axis order.
+///
+/// # Returns
+/// The contracted native tensor in the promoted common dtype.
+///
+/// # Errors
+/// Returns an error if the operand list is empty, any label list length does
+/// not match its tensor rank, label generation exceeds the supported range, or
+/// the backend contraction fails.
+///
+/// # Examples
+/// ```
+/// use tensor4all_tensorbackend::einsum_native_tensors_owned;
+/// use tenferro::Tensor as NativeTensor;
+///
+/// let lhs = NativeTensor::from_vec(vec![2, 3], vec![1.0_f64; 6]);
+/// let rhs = NativeTensor::from_vec(vec![3, 2], vec![1.0_f64; 6]);
+/// let result = einsum_native_tensors_owned(vec![(lhs, vec![0, 1]), (rhs, vec![1, 2])], &[0, 2]).unwrap();
+///
+/// assert_eq!(result.shape(), &[2, 2]);
+/// assert_eq!(result.as_slice::<f64>().unwrap(), &[3.0, 3.0, 3.0, 3.0]);
+/// ```
+pub fn einsum_native_tensors_owned(
+    operands: Vec<(NativeTensor, Vec<usize>)>,
     output_ids: &[usize],
 ) -> Result<NativeTensor> {
     ensure!(
         !operands.is_empty(),
         "native einsum requires at least one operand"
     );
-    for (tensor, ids) in operands {
-        ensure!(
-            tensor.shape().len() == ids.len(),
-            "einsum id list {:?} does not match tensor shape {:?}",
-            ids,
-            tensor.shape()
-        );
-    }
 
     let target = common_dtype(
         &operands
@@ -637,29 +658,51 @@ pub fn einsum_native_tensors(
             .map(|(tensor, _)| tensor.dtype())
             .collect::<Vec<_>>(),
     );
-    let converted = operands
-        .iter()
-        .map(|(tensor, _)| convert_tensor(tensor, target))
-        .collect::<Result<Vec<_>>>()?;
-    let refs = converted.iter().collect::<Vec<_>>();
-    let subscripts = build_einsum_subscripts(
-        &operands
-            .iter()
-            .map(|(_, ids)| ids.iter().map(|&id| id as u32).collect::<Vec<_>>())
-            .collect::<Vec<_>>()
-            .iter()
-            .map(Vec::as_slice)
-            .collect::<Vec<_>>(),
-        &output_ids.iter().map(|&id| id as u32).collect::<Vec<_>>(),
-    )?;
 
+    let mut converted = Vec::with_capacity(operands.len());
+    let mut input_ids = Vec::with_capacity(operands.len());
+    for (tensor, ids) in operands {
+        ensure!(
+            tensor.shape().len() == ids.len(),
+            "einsum id list {:?} does not match tensor shape {:?}",
+            ids,
+            tensor.shape()
+        );
+        let tensor = if tensor.dtype() == target {
+            tensor
+        } else {
+            convert_tensor(&tensor, target)?
+        };
+        input_ids.push(ids.into_iter().map(|id| id as u32).collect::<Vec<_>>());
+        converted.push(tensor);
+    }
+
+    let input_slices = input_ids.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let output_ids_u32 = output_ids.iter().map(|&id| id as u32).collect::<Vec<_>>();
+    let subscripts = build_einsum_subscripts(&input_slices, &output_ids_u32)?;
+
+    let result =
+        with_default_backend(|backend| eager_einsum_owned(backend, converted, &subscripts))
+            .map_err(|e| anyhow!("native einsum failed: {e}"))?;
+    Ok(result)
+}
+
+/// Execute an eager einsum over native tensors.
+pub fn einsum_native_tensors(
+    operands: &[(&NativeTensor, &[usize])],
+    output_ids: &[usize],
+) -> Result<NativeTensor> {
+    let owned_operands = operands
+        .iter()
+        .map(|(tensor, ids)| ((*tensor).clone(), ids.to_vec()))
+        .collect::<Vec<_>>();
+    let output_ids_u32 = output_ids.iter().map(|&id| id as u32).collect::<Vec<_>>();
     let started = Instant::now();
-    let result = with_default_backend(|backend| eager_einsum(backend, &refs, &subscripts))
-        .map_err(|e| anyhow!("native einsum failed: {e}"))?;
+    let result = einsum_native_tensors_owned(owned_operands, output_ids)?;
     record_native_einsum_profile(
         NativeEinsumPath::FrontendFallback,
         operands,
-        &output_ids.iter().map(|&id| id as u32).collect::<Vec<_>>(),
+        &output_ids_u32,
         started.elapsed(),
     );
     Ok(result)
@@ -699,7 +742,7 @@ pub fn outer_product_native_tensor(lhs: &NativeTensor, rhs: &NativeTensor) -> Re
 pub fn conj_native_tensor(tensor: &NativeTensor) -> Result<NativeTensor> {
     match tensor.dtype() {
         DType::F32 | DType::F64 => Ok(tensor.clone()),
-        DType::C32 => Ok(NativeTensor::new(
+        DType::C32 => Ok(NativeTensor::from_vec(
             tensor.shape().to_vec(),
             tensor
                 .as_slice::<Complex32>()
@@ -708,7 +751,7 @@ pub fn conj_native_tensor(tensor: &NativeTensor) -> Result<NativeTensor> {
                 .map(|&value| value.conj())
                 .collect::<Vec<_>>(),
         )),
-        DType::C64 => Ok(NativeTensor::new(
+        DType::C64 => Ok(NativeTensor::from_vec(
             tensor.shape().to_vec(),
             tensor
                 .as_slice::<Complex64>()

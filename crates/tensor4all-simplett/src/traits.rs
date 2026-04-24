@@ -2,13 +2,12 @@
 
 use crate::error::Result;
 use crate::types::{LocalIndex, Tensor3, Tensor3Ops};
-use tenferro_algebra::Scalar as TfScalar;
 use tenferro_tensor::TensorScalar;
 
 /// Scalar trait bound shared by all simplett tensor types.
 ///
 /// Combines [`tensor4all_core::CommonScalar`] (arithmetic, conversion) with
-/// [`tenferro_algebra::Scalar`] (backend compatibility). Both `f64` and
+/// [`tenferro_tensor::TensorScalar`] (backend compatibility). Both `f64` and
 /// `Complex64` implement this trait.
 ///
 /// # Examples
@@ -28,9 +27,9 @@ use tenferro_tensor::TensorScalar;
 /// assert!((c.re - 1.0).abs() < 1e-15);
 /// assert!((c.im - 1.0).abs() < 1e-15);
 /// ```
-pub trait TTScalar: tensor4all_core::CommonScalar + TfScalar + TensorScalar {}
+pub trait TTScalar: tensor4all_core::CommonScalar + TensorScalar {}
 
-impl<T> TTScalar for T where T: tensor4all_core::CommonScalar + TfScalar + TensorScalar {}
+impl<T> TTScalar for T where T: tensor4all_core::CommonScalar + TensorScalar {}
 
 /// Common interface implemented by all tensor train representations.
 ///

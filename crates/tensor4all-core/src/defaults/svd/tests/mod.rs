@@ -41,10 +41,10 @@ fn compute_retained_rank_supports_all_policy_axes() {
 
 #[test]
 fn singular_values_from_native_accepts_real_and_complex_dense() {
-    let dense = NativeTensor::new(vec![2], vec![3.0_f64, 1.5]);
+    let dense = NativeTensor::from_vec(vec![2], vec![3.0_f64, 1.5]);
     assert_eq!(singular_values_from_native(&dense).unwrap(), vec![3.0, 1.5]);
 
-    let complex = NativeTensor::new(
+    let complex = NativeTensor::from_vec(
         vec![2],
         vec![Complex64::new(1.0, 2.0), Complex64::new(0.5, -4.0)],
     );
@@ -89,7 +89,7 @@ fn svd_options_accessors_roundtrip() {
 
 #[test]
 fn singular_values_from_native_rejects_unsupported_scalar_types() {
-    let tensor = NativeTensor::new(vec![2], vec![1.0_f32, 2.0]);
+    let tensor = NativeTensor::from_vec(vec![2], vec![1.0_f32, 2.0]);
     let err = singular_values_from_native(&tensor).unwrap_err();
     assert!(err
         .to_string()

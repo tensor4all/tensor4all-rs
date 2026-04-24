@@ -298,14 +298,14 @@ pub(crate) fn normalize_payload_for_roots(
 
 pub(crate) fn storage_payload_native(storage: &Storage) -> Result<NativeTensor> {
     if storage.is_f64() {
-        Ok(NativeTensor::new(
+        Ok(NativeTensor::from_vec(
             storage.payload_dims().to_vec(),
             storage
                 .payload_f64_col_major_vec()
                 .map_err(anyhow::Error::msg)?,
         ))
     } else if storage.is_c64() {
-        Ok(NativeTensor::new(
+        Ok(NativeTensor::from_vec(
             storage.payload_dims().to_vec(),
             storage
                 .payload_c64_col_major_vec()
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn normalizes_repeated_payload_roots_by_extracting_diagonal() {
-        let payload = tenferro::Tensor::new(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+        let payload = tenferro::Tensor::from_vec(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
         let (normalized, roots) = normalize_payload_for_roots(&payload, &[0, 0]).unwrap();
 
         assert_eq!(normalized.shape(), &[2]);
