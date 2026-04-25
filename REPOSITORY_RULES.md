@@ -20,6 +20,19 @@
 - `AGENTS.md` is the entry point for developers and AI agents. This file is
   the durable repository rule set.
 
+## Base Branch Synchronization
+
+- Start new work from the current remote base, not from a stale local checkout:
+  run `git fetch origin` and create feature branches or worktrees from
+  `origin/main`.
+- Before treating PR checks as final, fetch `origin` and verify that the PR
+  branch contains the current `origin/main`.
+- If GitHub reports the PR as behind the base branch, update the PR branch from
+  `origin/main` before relying on checks, enabling auto-merge, or declaring the
+  PR ready to merge.
+- After any `origin/main` synchronization, rerun or re-monitor CI. Green checks
+  from before the synchronization are not sufficient.
+
 ## No Hidden Dense Materialization In Production Paths
 
 - Production algorithms must not silently materialize a full dense tensor whose
