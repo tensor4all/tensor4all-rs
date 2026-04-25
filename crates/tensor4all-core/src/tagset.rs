@@ -77,14 +77,14 @@ pub trait TagSetLike: Default + Clone + PartialEq + Eq {
 
     /// Create a tag set from a comma-separated string.
     ///
-    /// Whitespace is ignored (similar to ITensors.jl).
+    /// ASCII spaces are ignored (matching ITensors.jl).
     /// Tags are automatically sorted.
     fn from_str(s: &str) -> Result<Self, TagSetError> {
         let mut tagset = Self::default();
 
-        // Parse comma-separated tags, trimming whitespace
+        // Parse comma-separated tags, ignoring ASCII spaces like ITensors.jl.
         for tag in s.split(',') {
-            let trimmed: String = tag.chars().filter(|c| !c.is_whitespace()).collect();
+            let trimmed: String = tag.chars().filter(|c| *c != ' ').collect();
             if !trimmed.is_empty() {
                 tagset.add_tag(&trimmed)?;
             }
@@ -171,7 +171,7 @@ impl<const MAX_TAGS: usize, const MAX_TAG_LEN: usize, C: SmallChar>
 
     /// Create a TagSet from a comma-separated string.
     ///
-    /// Whitespace is ignored (similar to ITensors.jl).
+    /// ASCII spaces are ignored (matching ITensors.jl).
     /// Tags are automatically sorted.
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Self, TagSetError> {

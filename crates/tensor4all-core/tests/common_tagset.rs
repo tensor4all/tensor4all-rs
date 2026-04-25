@@ -91,10 +91,22 @@ fn test_tagset_whitespace_ignored() {
     let ts = TagSet::<4, 16>::from_str(" aaa , bb bb  , ccc    ").unwrap();
     assert_eq!(ts.len(), 3);
 
-    // Whitespace should be removed
+    // ITensors.jl's TagSet constructor ignores ASCII spaces inside tags.
     assert!(ts.has_tag("aaa"));
     assert!(ts.has_tag("bbbb"));
     assert!(ts.has_tag("ccc"));
+}
+
+#[test]
+fn test_tagset_uses_itensors_separator_rules() {
+    let ts = TagSet::<4, 16>::from_str("a\tb, c\u{00a0}d, e\u{3000}f").unwrap();
+    assert_eq!(ts.len(), 3);
+
+    // Commas separate tags. ASCII spaces are ignored, but Unicode whitespace
+    // and tabs are part of the tag, matching ITensors.jl's TagSet parser.
+    assert!(ts.has_tag("a\tb"));
+    assert!(ts.has_tag("c\u{00a0}d"));
+    assert!(ts.has_tag("e\u{3000}f"));
 }
 
 #[test]
