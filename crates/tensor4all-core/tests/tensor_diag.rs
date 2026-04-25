@@ -227,6 +227,50 @@ fn from_diag_storage_roundtrip_uses_payload_not_dense_logical_values() {
 }
 
 #[test]
+fn tensorlike_diagonal_uses_compact_diagonal_storage() {
+    let i = Index::new_dyn(4);
+    let o = Index::new_dyn(4);
+
+    let delta = <TensorDynLen as TensorLike>::diagonal(&i, &o).unwrap();
+
+    assert!(delta.is_diag());
+    assert_eq!(delta.storage().storage_kind(), StorageKind::Diagonal);
+    assert_eq!(delta.storage().payload_dims(), &[4]);
+    assert_eq!(delta.storage().axis_classes(), &[0, 0]);
+    assert_eq!(
+        delta.storage().payload_f64_col_major_vec().unwrap(),
+        vec![1.0, 1.0, 1.0, 1.0],
+    );
+}
+
+#[test]
+fn tensorlike_delta_two_pairs_preserves_independent_copy_structure() {
+    let i1 = Index::new_dyn(2);
+    let o1 = Index::new_dyn(2);
+    let i2 = Index::new_dyn(3);
+    let o2 = Index::new_dyn(3);
+
+    let delta = <TensorDynLen as TensorLike>::delta(
+        &[i1.clone(), i2.clone()],
+        &[o1.clone(), o2.clone()],
+    )
+    .unwrap();
+
+    assert_eq!(delta.dims(), vec![2, 2, 3, 3]);
+    assert_eq!(delta.storage().storage_kind(), StorageKind::Structured);
+    assert_eq!(delta.storage().payload_dims(), &[2, 3]);
+    assert_eq!(delta.storage().axis_classes(), &[0, 0, 1, 1]);
+
+    let expected = TensorDynLen::from_diag(vec![i1, o1], vec![1.0_f64, 1.0])
+        .unwrap()
+        .outer_product(
+            &TensorDynLen::from_diag(vec![i2, o2], vec![1.0_f64, 1.0, 1.0]).unwrap(),
+        )
+        .unwrap();
+    assert!(delta.isapprox(&expected, 1e-12, 0.0));
+}
+
+#[test]
 fn diag_permute_scale_conj_and_replaceind_preserve_payload_metadata() {
     let i = Index::new_dyn(3);
     let j = Index::new_dyn(3);

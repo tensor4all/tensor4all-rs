@@ -2672,13 +2672,10 @@ impl TensorLike for TensorDynLen {
             ));
         }
 
-        // Build identity matrix
-        let mut data = vec![0.0_f64; dim * dim];
-        for i in 0..dim {
-            data[i * dim + i] = 1.0;
-        }
-
-        TensorDynLen::from_dense(vec![input_index.clone(), output_index.clone()], data)
+        TensorDynLen::from_diag(
+            vec![input_index.clone(), output_index.clone()],
+            vec![1.0_f64; dim],
+        )
     }
 
     fn scalar_one() -> Result<Self> {
