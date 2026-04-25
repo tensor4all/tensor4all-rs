@@ -128,6 +128,42 @@ fn make_three_node_chain() -> (
     (tn, s0, s1, s2)
 }
 
+fn make_two_node_groups_of_two() -> (
+    TreeTN<TensorDynLen, String>,
+    DynIndex,
+    DynIndex,
+    DynIndex,
+    DynIndex,
+) {
+    let x0 = DynIndex::new_dyn(2);
+    let x1 = DynIndex::new_dyn(2);
+    let y0 = DynIndex::new_dyn(2);
+    let y1 = DynIndex::new_dyn(2);
+    let old_bond = DynIndex::new_dyn(2);
+
+    let left = TensorDynLen::from_dense(
+        vec![x0.clone(), x1.clone(), old_bond.clone()],
+        vec![1.0; 2 * 2 * 2],
+    )
+    .unwrap();
+    let right =
+        TensorDynLen::from_dense(vec![old_bond, y0.clone(), y1.clone()], vec![1.0; 2 * 2 * 2])
+            .unwrap();
+    let tn = TreeTN::<TensorDynLen, String>::from_tensors(
+        vec![left, right],
+        vec!["left".to_string(), "right".to_string()],
+    )
+    .unwrap();
+
+    (tn, x0, x1, y0, y1)
+}
+
+fn error_chain_contains(error: &anyhow::Error, needle: &str) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.to_string().contains(needle))
+}
+
 #[test]
 fn test_fuse_to_three_nodes_pairwise() {
     let (tn, s0, s1, s2) = make_three_node_chain();
@@ -229,6 +265,242 @@ fn test_split_to_with_actual_splitting() {
     let fused_full = fused.contract_to_tensor().unwrap();
     let split_full = split.contract_to_tensor().unwrap();
     assert!(fused_full.distance(&split_full) < 1e-12);
+}
+
+#[test]
+fn test_split_to_preserves_requested_chain_edges_across_original_bond() {
+    let (tn, s11, s12, s21, s22) = make_two_node_groups_of_two();
+
+    let mut target = SiteIndexNetwork::<usize, DynIndex>::new();
+    target.add_node(0, HashSet::from([s11.clone()])).unwrap();
+    target.add_node(1, HashSet::from([s12.clone()])).unwrap();
+    target.add_node(2, HashSet::from([s21.clone()])).unwrap();
+    target.add_node(3, HashSet::from([s22.clone()])).unwrap();
+    target.add_edge(&0, &1).unwrap();
+    target.add_edge(&1, &2).unwrap();
+    target.add_edge(&2, &3).unwrap();
+
+    let split = tn.split_to(&target, &SplitOptions::default()).unwrap();
+
+    assert_eq!(split.node_count(), 4);
+    assert!(
+        split
+            .site_index_network()
+            .share_equivalent_site_index_network(&target),
+        "split_to must preserve the requested target site grouping and chain topology"
+    );
+}
+
+#[test]
+fn test_split_to_allows_edgeless_intermediate_fragments() {
+    let (tn, x0, x1, y0, y1) = make_two_node_groups_of_two();
+
+    let mut target = SiteIndexNetwork::<String, DynIndex>::new();
+    target
+        .add_node("left_x".to_string(), HashSet::from([x0.clone()]))
+        .unwrap();
+    target
+        .add_node("left_y".to_string(), HashSet::from([x1.clone()]))
+        .unwrap();
+    target
+        .add_node("right_y".to_string(), HashSet::from([y0.clone()]))
+        .unwrap();
+    target
+        .add_node("right_z".to_string(), HashSet::from([y1.clone()]))
+        .unwrap();
+
+    let split = tn.split_to(&target, &SplitOptions::default()).unwrap();
+
+    assert_eq!(split.node_count(), 4);
+    assert_eq!(
+        split
+            .site_index_network()
+            .find_node_by_index_id(x0.id())
+            .map(|name| name.as_str()),
+        Some("left_x")
+    );
+    assert_eq!(
+        split
+            .site_index_network()
+            .find_node_by_index_id(x1.id())
+            .map(|name| name.as_str()),
+        Some("left_y")
+    );
+    assert_eq!(
+        split
+            .site_index_network()
+            .find_node_by_index_id(y0.id())
+            .map(|name| name.as_str()),
+        Some("right_y")
+    );
+    assert_eq!(
+        split
+            .site_index_network()
+            .find_node_by_index_id(y1.id())
+            .map(|name| name.as_str()),
+        Some("right_z")
+    );
+    assert!(
+        tn.contract_to_tensor()
+            .unwrap()
+            .distance(&split.contract_to_tensor().unwrap())
+            < 1e-12
+    );
+}
+
+#[test]
+fn test_split_to_rejects_missing_explicit_target_boundary_edge() {
+    let (tn, x0, x1, y0, y1) = make_two_node_groups_of_two();
+
+    let mut target = SiteIndexNetwork::<usize, DynIndex>::new();
+    target.add_node(0, HashSet::from([x0])).unwrap();
+    target.add_node(1, HashSet::from([x1])).unwrap();
+    target.add_node(2, HashSet::from([y0])).unwrap();
+    target.add_node(3, HashSet::from([y1])).unwrap();
+    target.add_edge(&0, &1).unwrap();
+    target.add_edge(&2, &3).unwrap();
+
+    let error = tn.split_to(&target, &SplitOptions::default()).unwrap_err();
+
+    assert!(error_chain_contains(
+        &error,
+        "expected exactly one target edge crossing current edge"
+    ));
+}
+
+#[test]
+fn test_split_to_rejects_ambiguous_explicit_target_boundary_edges() {
+    let (tn, x0, x1, y0, y1) = make_two_node_groups_of_two();
+
+    let mut target = SiteIndexNetwork::<usize, DynIndex>::new();
+    target.add_node(0, HashSet::from([x0])).unwrap();
+    target.add_node(1, HashSet::from([x1])).unwrap();
+    target.add_node(2, HashSet::from([y0])).unwrap();
+    target.add_node(3, HashSet::from([y1])).unwrap();
+    target.add_edge(&0, &2).unwrap();
+    target.add_edge(&1, &3).unwrap();
+
+    let error = tn.split_to(&target, &SplitOptions::default()).unwrap_err();
+
+    assert!(error_chain_contains(
+        &error,
+        "expected exactly one target edge crossing current edge"
+    ));
+}
+
+#[test]
+fn test_fuse_to_rejects_ambiguous_current_node_mapping() {
+    let (tn, s0, s1) = make_two_node_chain();
+
+    let mut fuse_target = SiteIndexNetwork::<String, DynIndex>::new();
+    fuse_target
+        .add_node("AB".to_string(), HashSet::from([s0.clone(), s1.clone()]))
+        .unwrap();
+    let fused = tn.fuse_to(&fuse_target).unwrap();
+
+    let mut incompatible_target = SiteIndexNetwork::<String, DynIndex>::new();
+    incompatible_target
+        .add_node("A".to_string(), HashSet::from([s0.clone()]))
+        .unwrap();
+    incompatible_target
+        .add_node("B".to_string(), HashSet::from([s1.clone()]))
+        .unwrap();
+    incompatible_target
+        .add_edge(&"A".to_string(), &"B".to_string())
+        .unwrap();
+
+    let error = fused.fuse_to(&incompatible_target).unwrap_err();
+
+    assert!(error_chain_contains(&error, "ambiguous mapping"));
+}
+
+#[test]
+fn test_fuse_to_rejects_disconnected_current_group() {
+    let (tn, s0, s1, s2) = make_three_node_chain();
+
+    let mut target = SiteIndexNetwork::<String, DynIndex>::new();
+    target
+        .add_node("AC".to_string(), HashSet::from([s0.clone(), s2.clone()]))
+        .unwrap();
+    target
+        .add_node("B".to_string(), HashSet::from([s1.clone()]))
+        .unwrap();
+    target
+        .add_edge(&"AC".to_string(), &"B".to_string())
+        .unwrap();
+
+    let error = tn.fuse_to(&target).unwrap_err();
+
+    assert!(error_chain_contains(&error, "failed to contract nodes"));
+    assert!(error_chain_contains(&error, "connected subtree"));
+}
+
+#[test]
+fn test_split_to_identity_preserves_explicit_edge() {
+    let (tn, s0, s1) = make_two_node_chain();
+
+    let mut target = SiteIndexNetwork::<String, DynIndex>::new();
+    target
+        .add_node("A".to_string(), HashSet::from([s0.clone()]))
+        .unwrap();
+    target
+        .add_node("B".to_string(), HashSet::from([s1.clone()]))
+        .unwrap();
+    target.add_edge(&"A".to_string(), &"B".to_string()).unwrap();
+
+    let split = tn.split_to(&target, &SplitOptions::default()).unwrap();
+
+    assert_eq!(split.node_count(), 2);
+    assert!(split
+        .site_index_network()
+        .share_equivalent_site_index_network(&target));
+    assert!(
+        tn.contract_to_tensor()
+            .unwrap()
+            .distance(&split.contract_to_tensor().unwrap())
+            < 1e-12
+    );
+}
+
+#[test]
+fn test_split_to_rejects_target_node_spanning_current_nodes() {
+    let (tn, x0, x1, y0, y1) = make_two_node_groups_of_two();
+
+    let mut target = SiteIndexNetwork::<String, DynIndex>::new();
+    target
+        .add_node("mixed".to_string(), HashSet::from([x0.clone(), y0.clone()]))
+        .unwrap();
+    target
+        .add_node("left_tail".to_string(), HashSet::from([x1.clone()]))
+        .unwrap();
+    target
+        .add_node("right_tail".to_string(), HashSet::from([y1.clone()]))
+        .unwrap();
+
+    let error = tn.split_to(&target, &SplitOptions::default()).unwrap_err();
+
+    assert!(error_chain_contains(&error, "spans multiple current nodes"));
+}
+
+#[test]
+fn test_split_to_rejects_current_site_missing_from_target() {
+    let (tn, s0, _s1) = make_two_node_chain();
+
+    let mut target = SiteIndexNetwork::<String, DynIndex>::new();
+    target
+        .add_node("A".to_string(), HashSet::from([s0.clone()]))
+        .unwrap();
+
+    let error = tn.split_to(&target, &SplitOptions::default()).unwrap_err();
+
+    assert!(error_chain_contains(
+        &error,
+        "has no corresponding target node"
+    ));
+    assert!(error_chain_contains(
+        &error,
+        "incompatible target structure"
+    ));
 }
 
 #[test]
