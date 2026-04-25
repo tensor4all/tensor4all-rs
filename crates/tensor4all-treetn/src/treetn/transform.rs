@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use petgraph::stable_graph::NodeIndex;
 
 use tensor4all_core::{
-    AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
+    index_ops, AllowedPairs, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
 };
 
 use super::TreeTN;
@@ -401,11 +401,13 @@ where
                 result_tensors.push((target_name, tensor.clone()));
             } else {
                 // Need to split this node
+                let fragment_target = build_fragment_sub_target(target, targets_for_node)?;
                 let split_tensors = self
                     .split_tensor_for_targets(
                         tensor,
                         &site_to_target,
                         boundary_indices.get(&current_node_name),
+                        &fragment_target,
                     )
                     .with_context(|| {
                         format!("split_to: failed to split node {:?}", current_node_name)
@@ -427,7 +429,29 @@ where
         let result = TreeTN::<T, TargetV>::from_tensors(tensors, names)
             .context("split_to: failed to build result TreeTN")?;
 
-        // Step 5: Phase 2 - Optional truncation sweep
+        // Step 5: Validate result topology matches target
+        // Skip validation if target has no edges (caller doesn't care about topology)
+        if target.edge_count() > 0
+            && !result
+                .site_index_network()
+                .share_equivalent_site_index_network(target)
+        {
+            return Err(anyhow::anyhow!(
+                "split_to: result topology does not match target: \
+                 expected edges {:?}, got {:?}",
+                target
+                    .edges()
+                    .map(|(a, b)| (a.clone(), b.clone()))
+                    .collect::<Vec<_>>(),
+                result
+                    .site_index_network()
+                    .edges()
+                    .map(|(a, b)| (a.clone(), b.clone()))
+                    .collect::<Vec<_>>(),
+            ));
+        }
+
+        // Step 6: Phase 2 - Optional truncation sweep
         if options.final_sweep {
             // Find a center node for truncation
             let center = result.node_names().into_iter().min().ok_or_else(|| {
@@ -520,20 +544,21 @@ where
         Ok(boundary_indices)
     }
 
-    /// Split a tensor into multiple tensors, one for each target node.
+    /// Split a tensor into multiple tensors using post-order tree decomposition.
     ///
-    /// This uses QR factorization to iteratively separate site indices
-    /// belonging to different target nodes.
-    ///
-    /// Returns a vector of (target_name, tensor) pairs.
+    /// This uses QR factorization following the target sub-topology (edges between
+    /// fragment nodes within the current node). The algorithm mirrors
+    /// `factorize_tensor_to_treetn_with_root_impl`: process leaves first, include
+    /// child bonds in `left_inds`, root gets the remaining tensor.
     fn split_tensor_for_targets<TargetV>(
         &self,
         tensor: &T,
         site_to_target: &HashMap<<T::Index as IndexLike>::Id, TargetV>,
         boundary_indices: Option<&HashMap<TargetV, HashSet<<T::Index as IndexLike>::Id>>>,
+        fragment_target: &SiteIndexNetwork<TargetV, T::Index>,
     ) -> Result<Vec<(TargetV, T)>>
     where
-        TargetV: Clone + Hash + Eq + Ord + std::fmt::Debug,
+        TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
     {
         // Group tensor's site indices by their target node
         let mut partition: HashMap<TargetV, HashSet<<T::Index as IndexLike>::Id>> = HashMap::new();
@@ -544,7 +569,6 @@ where
                     .or_default()
                     .insert(idx.id().clone());
             }
-            // Note: bond indices (not in site_to_target) are handled by factorize
         }
         if let Some(boundary_indices) = boundary_indices {
             let tensor_index_ids: HashSet<_> = tensor
@@ -567,32 +591,87 @@ where
             }
         }
 
-        // Sort target names for deterministic processing
-        let mut target_names: Vec<TargetV> = partition.keys().cloned().collect();
+        let mut target_names: Vec<TargetV> =
+            fragment_target.node_names().into_iter().cloned().collect();
         target_names.sort();
 
         if target_names.len() <= 1 {
-            // Should not happen if called correctly, but handle gracefully
-            let target_name = target_names
+            let name = target_names
                 .first()
                 .cloned()
-                .ok_or_else(|| anyhow::anyhow!("No site indices found in tensor"))?;
-            return Ok(vec![(target_name, tensor.clone())]);
+                .ok_or_else(|| anyhow::anyhow!("No target nodes found for this tensor"))?;
+            return Ok(vec![(name, tensor.clone())]);
         }
 
-        // Split iteratively: separate first target's indices, then next, etc.
+        // For edgeless targets, fall back to sequential QR (caller doesn't
+        // care about topology, any decomposition is acceptable).
+        if fragment_target.edge_count() == 0 {
+            return self.split_tensor_for_targets_sequential(tensor, &partition, &target_names);
+        }
+
+        // Choose root: prefer the fragment with boundary indices (those need
+        // to be on the root so the original bond connects correctly).
+        let root = if let Some(bi) = boundary_indices {
+            if let Some((name, _)) = bi.iter().max_by_key(|(_, ids)| ids.len()) {
+                if fragment_target.node_names().contains(&name) {
+                    name.clone()
+                } else {
+                    target_names[0].clone()
+                }
+            } else {
+                target_names[0].clone()
+            }
+        } else {
+            target_names[0].clone()
+        };
+
+        // Post-order traversal (leaves first, root last) via petgraph DfsPostOrder
+        let traversal = fragment_target
+            .post_order_dfs(&root)
+            .ok_or_else(|| anyhow::anyhow!("Root {:?} not found in fragment target", root))?;
+
+        // Build children_by_parent from target edges. The endpoint closer to
+        // the root (higher position in post-order) is the parent.
+        let mut children_by_parent: HashMap<TargetV, Vec<TargetV>> = HashMap::new();
+        for (ref parent_name, ref child_name) in fragment_target.edges() {
+            let pos_a = traversal.iter().position(|n| *n == *parent_name).unwrap();
+            let pos_b = traversal.iter().position(|n| *n == *child_name).unwrap();
+            if pos_a > pos_b {
+                children_by_parent
+                    .entry(parent_name.clone())
+                    .or_default()
+                    .push(child_name.clone());
+            } else {
+                children_by_parent
+                    .entry(child_name.clone())
+                    .or_default()
+                    .push(parent_name.clone());
+            }
+        }
+
+        // Process nodes in post-order (skip root — it gets the remaining tensor)
         let mut remaining_tensor = tensor.clone();
         let mut result: Vec<(TargetV, T)> = Vec::new();
+        let mut child_bonds: HashMap<TargetV, <T::Index as IndexLike>::Id> = HashMap::new();
 
-        // Process all but the last target (the last one gets the remaining tensor)
-        for target_name in target_names.iter().take(target_names.len() - 1) {
-            let site_ids_for_target = partition.get(target_name).unwrap();
+        for node in traversal.iter().take(traversal.len() - 1) {
+            let node_ids = partition.get(node).cloned().unwrap_or_default();
+            let current_indices = remaining_tensor.external_indices();
 
-            // Find the actual Index objects for these site IDs
-            let left_inds: Vec<_> = remaining_tensor
-                .external_indices()
+            // Build set of desired index IDs: this node's site+boundary indices
+            // plus bonds from already-processed children.
+            let mut desired_ids = node_ids;
+            if let Some(children) = children_by_parent.get(node) {
+                for child in children {
+                    if let Some(bond_id) = child_bonds.get(child) {
+                        desired_ids.insert(bond_id.clone());
+                    }
+                }
+            }
+
+            let left_inds: Vec<_> = current_indices
                 .iter()
-                .filter(|idx| site_ids_for_target.contains(idx.id()))
+                .filter(|idx| desired_ids.contains(idx.id()))
                 .cloned()
                 .collect();
 
@@ -600,7 +679,6 @@ where
                 continue;
             }
 
-            // Factorize: separate these site indices
             let factorize_options = FactorizeOptions {
                 alg: FactorizeAlg::QR,
                 canonical: Canonical::Left,
@@ -613,19 +691,108 @@ where
                 .factorize(&left_inds, &factorize_options)
                 .map_err(|e| anyhow::anyhow!("Factorization failed: {:?}", e))?;
 
-            // Left tensor gets the separated indices
-            result.push((target_name.clone(), factorize_result.left));
+            // Detect the parent bond (shared between left and right tensors)
+            let left_indices = factorize_result.left.external_indices();
+            let right_indices = factorize_result.right.external_indices();
+            let shared = index_ops::common_inds(&left_indices, &right_indices);
+            if shared.len() != 1 {
+                return Err(anyhow::anyhow!(
+                    "Expected exactly one bond for node {:?}, found {}",
+                    node,
+                    shared.len()
+                ));
+            }
+            child_bonds.insert(node.clone(), shared[0].id().clone());
 
-            // Right tensor becomes the remaining tensor for next iteration
+            result.push((node.clone(), factorize_result.left));
             remaining_tensor = factorize_result.right;
         }
 
-        // The last target gets the remaining tensor
-        let last_target = target_names.last().unwrap().clone();
-        result.push((last_target, remaining_tensor));
+        // Root gets the remaining tensor with all child bonds
+        let root_name = traversal.last().unwrap();
+        result.push((root_name.clone(), remaining_tensor));
 
         Ok(result)
     }
+
+    /// Sequential QR fallback for edgeless targets.
+    ///
+    /// Processes targets in sorted order, peeling each via QR. The last target
+    /// accumulates all bonds (star topology). This is acceptable when the caller
+    /// does not specify target edges.
+    fn split_tensor_for_targets_sequential<TargetV>(
+        &self,
+        tensor: &T,
+        partition: &HashMap<TargetV, HashSet<<T::Index as IndexLike>::Id>>,
+        target_names: &[TargetV],
+    ) -> Result<Vec<(TargetV, T)>>
+    where
+        TargetV: Clone + Hash + Eq + Ord + std::fmt::Debug,
+    {
+        let mut remaining_tensor = tensor.clone();
+        let mut result: Vec<(TargetV, T)> = Vec::new();
+
+        for target_name in target_names.iter().take(target_names.len() - 1) {
+            let site_ids_for_target = partition.get(target_name).unwrap();
+
+            let left_inds: Vec<_> = remaining_tensor
+                .external_indices()
+                .iter()
+                .filter(|idx| site_ids_for_target.contains(idx.id()))
+                .cloned()
+                .collect();
+
+            if left_inds.is_empty() {
+                continue;
+            }
+
+            let factorize_options = FactorizeOptions {
+                alg: FactorizeAlg::QR,
+                canonical: Canonical::Left,
+                max_rank: None,
+                svd_policy: None,
+                qr_rtol: None,
+            };
+
+            let factorize_result = remaining_tensor
+                .factorize(&left_inds, &factorize_options)
+                .map_err(|e| anyhow::anyhow!("Factorization failed: {:?}", e))?;
+
+            result.push((target_name.clone(), factorize_result.left));
+            remaining_tensor = factorize_result.right;
+        }
+
+        let last_target = target_names.last().unwrap();
+        result.push((last_target.clone(), remaining_tensor));
+
+        Ok(result)
+    }
+}
+
+/// Build a sub-`SiteIndexNetwork` containing only the fragment nodes that
+/// belong to a given current node, preserving edges between them.
+fn build_fragment_sub_target<TargetV, I>(
+    target: &SiteIndexNetwork<TargetV, I>,
+    fragment_names: &HashSet<TargetV>,
+) -> Result<SiteIndexNetwork<TargetV, I>>
+where
+    TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    I: IndexLike,
+{
+    let mut sub = SiteIndexNetwork::with_capacity(fragment_names.len(), 0);
+    for name in fragment_names {
+        let site_space = target
+            .site_space(name)
+            .ok_or_else(|| anyhow::anyhow!("Fragment node {:?} not found in target", name))?;
+        sub.add_node(name.clone(), site_space.clone())
+            .map_err(anyhow::Error::msg)?;
+    }
+    for (a, b) in target.edges() {
+        if fragment_names.contains(&a) && fragment_names.contains(&b) {
+            sub.add_edge(&a, &b).map_err(anyhow::Error::msg)?;
+        }
+    }
+    Ok(sub)
 }
 
 // Tests are disabled until random module is refactored
