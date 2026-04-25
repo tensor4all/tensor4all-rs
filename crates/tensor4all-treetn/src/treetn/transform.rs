@@ -18,6 +18,8 @@ use super::TreeTN;
 use crate::options::SplitOptions;
 use crate::site_index_network::SiteIndexNetwork;
 
+type SplitBoundaryIndices<V, TargetV, Id> = HashMap<V, HashMap<TargetV, HashSet<Id>>>;
+
 impl<T, V> TreeTN<T, V>
 where
     T: TensorLike,
@@ -301,6 +303,60 @@ where
             }
         }
 
+        let mut site_to_current: HashMap<<T::Index as IndexLike>::Id, V> = HashMap::new();
+        for current_node_name in self.node_names() {
+            let site_space = self.site_space(&current_node_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "split_to: current node {:?} has no registered site space",
+                    current_node_name
+                )
+            })?;
+            for site_idx in site_space {
+                site_to_current.insert(site_idx.id().clone(), current_node_name.clone());
+            }
+        }
+
+        let mut target_to_current: HashMap<TargetV, V> = HashMap::new();
+        for target_node_name in target.node_names() {
+            let site_space = target.site_space(target_node_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "split_to: target node {:?} has no registered site space",
+                    target_node_name
+                )
+            })?;
+            let current_names: HashSet<_> = site_space
+                .iter()
+                .map(|site_idx| {
+                    site_to_current.get(site_idx.id()).cloned().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "split_to: target site index {:?} is missing from the current network",
+                            site_idx.id()
+                        )
+                    })
+                })
+                .collect::<Result<_>>()?;
+            if current_names.len() != 1 {
+                return Err(anyhow::anyhow!(
+                    "split_to: target node {:?} spans multiple current nodes; use restructure_to for mixed regrouping",
+                    target_node_name
+                ));
+            }
+            let current_name = current_names.into_iter().next().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "split_to: target node {:?} has no current owner",
+                    target_node_name
+                )
+            })?;
+            target_to_current.insert(target_node_name.clone(), current_name);
+        }
+
+        let boundary_indices = if target.edge_count() == 0 {
+            HashMap::new()
+        } else {
+            self.split_boundary_indices_by_target(target, &target_to_current)
+                .context("split_to: assign current bonds to target boundary fragments")?
+        };
+
         // Step 2: For each current node, determine which target nodes it maps to
         // and validate the mapping
         let mut current_to_targets: HashMap<V, HashSet<TargetV>> = HashMap::new();
@@ -346,7 +402,11 @@ where
             } else {
                 // Need to split this node
                 let split_tensors = self
-                    .split_tensor_for_targets(tensor, &site_to_target)
+                    .split_tensor_for_targets(
+                        tensor,
+                        &site_to_target,
+                        boundary_indices.get(&current_node_name),
+                    )
                     .with_context(|| {
                         format!("split_to: failed to split node {:?}", current_node_name)
                     })?;
@@ -387,6 +447,79 @@ where
         Ok(result)
     }
 
+    fn split_boundary_indices_by_target<TargetV>(
+        &self,
+        target: &SiteIndexNetwork<TargetV, T::Index>,
+        target_to_current: &HashMap<TargetV, V>,
+    ) -> Result<SplitBoundaryIndices<V, TargetV, <T::Index as IndexLike>::Id>>
+    where
+        TargetV: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    {
+        let mut boundary_indices: SplitBoundaryIndices<V, TargetV, <T::Index as IndexLike>::Id> =
+            HashMap::new();
+
+        for edge in self.graph.graph().edge_indices() {
+            let (node_a, node_b) = self.graph.graph().edge_endpoints(edge).ok_or_else(|| {
+                anyhow::anyhow!("split_to: current edge {:?} has missing endpoints", edge)
+            })?;
+            let current_a = self.graph.node_name(node_a).cloned().ok_or_else(|| {
+                anyhow::anyhow!("split_to: current edge {:?} has missing source node", edge)
+            })?;
+            let current_b = self.graph.node_name(node_b).cloned().ok_or_else(|| {
+                anyhow::anyhow!("split_to: current edge {:?} has missing target node", edge)
+            })?;
+            let bond_index = self.graph.graph().edge_weight(edge).ok_or_else(|| {
+                anyhow::anyhow!("split_to: current edge {:?} has no bond index", edge)
+            })?;
+
+            let mut crossing_edges = Vec::new();
+            for (target_a, target_b) in target.edges() {
+                let owner_a = target_to_current.get(&target_a).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "split_to: target edge references node {:?} without a current owner",
+                        target_a
+                    )
+                })?;
+                let owner_b = target_to_current.get(&target_b).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "split_to: target edge references node {:?} without a current owner",
+                        target_b
+                    )
+                })?;
+
+                if owner_a == &current_a && owner_b == &current_b {
+                    crossing_edges.push((target_a, target_b));
+                } else if owner_a == &current_b && owner_b == &current_a {
+                    crossing_edges.push((target_b, target_a));
+                }
+            }
+
+            let [(target_for_a, target_for_b)] = crossing_edges.as_slice() else {
+                return Err(anyhow::anyhow!(
+                    "split_to: expected exactly one target edge crossing current edge {:?}-{:?}, found {}",
+                    current_a,
+                    current_b,
+                    crossing_edges.len()
+                ));
+            };
+
+            boundary_indices
+                .entry(current_a)
+                .or_default()
+                .entry(target_for_a.clone())
+                .or_default()
+                .insert(bond_index.id().clone());
+            boundary_indices
+                .entry(current_b)
+                .or_default()
+                .entry(target_for_b.clone())
+                .or_default()
+                .insert(bond_index.id().clone());
+        }
+
+        Ok(boundary_indices)
+    }
+
     /// Split a tensor into multiple tensors, one for each target node.
     ///
     /// This uses QR factorization to iteratively separate site indices
@@ -397,6 +530,7 @@ where
         &self,
         tensor: &T,
         site_to_target: &HashMap<<T::Index as IndexLike>::Id, TargetV>,
+        boundary_indices: Option<&HashMap<TargetV, HashSet<<T::Index as IndexLike>::Id>>>,
     ) -> Result<Vec<(TargetV, T)>>
     where
         TargetV: Clone + Hash + Eq + Ord + std::fmt::Debug,
@@ -411,6 +545,26 @@ where
                     .insert(idx.id().clone());
             }
             // Note: bond indices (not in site_to_target) are handled by factorize
+        }
+        if let Some(boundary_indices) = boundary_indices {
+            let tensor_index_ids: HashSet<_> = tensor
+                .external_indices()
+                .iter()
+                .map(|idx| idx.id().clone())
+                .collect();
+            for (target_name, index_ids) in boundary_indices {
+                let target_partition = partition.entry(target_name.clone()).or_default();
+                for index_id in index_ids {
+                    if !tensor_index_ids.contains(index_id) {
+                        return Err(anyhow::anyhow!(
+                            "split_to: boundary index {:?} is not present in the tensor for target {:?}",
+                            index_id,
+                            target_name
+                        ));
+                    }
+                    target_partition.insert(index_id.clone());
+                }
+            }
         }
 
         // Sort target names for deterministic processing
