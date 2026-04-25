@@ -171,17 +171,16 @@ where
         // Nodes without site indices (internal bonding nodes) are skipped —
         // contract_node_group auto-expands via Steiner tree to include them.
         for current_name in self.node_names() {
-            if !current_to_target.contains_key(&current_name) {
-                if self
+            if !current_to_target.contains_key(&current_name)
+                && self
                     .site_space(&current_name)
                     .is_some_and(|s| !s.is_empty())
-                {
-                    return Err(anyhow::anyhow!(
-                        "Current node {:?} has site indices but no corresponding target node",
-                        current_name
-                    ))
-                    .context("fuse_to: missing target for current node");
-                }
+            {
+                return Err(anyhow::anyhow!(
+                    "Current node {:?} has site indices but no corresponding target node",
+                    current_name
+                ))
+                .context("fuse_to: missing target for current node");
             }
         }
 
@@ -201,7 +200,7 @@ where
                 if let Some(name) = self.graph.node_name(*idx) {
                     // Only include internal nodes (no private site indices) —
                     // site-bearing nodes belong to their own target group.
-                    if self.site_space(name).map_or(true, |s| s.is_empty()) {
+                    if self.site_space(name).is_none_or(|s| s.is_empty()) {
                         current_nodes.insert(name.clone());
                     }
                 }

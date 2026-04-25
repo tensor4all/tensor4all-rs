@@ -1489,6 +1489,7 @@ mod tests {
     ///    / \
     ///   C   D
     /// (site_c) (site_d)
+    #[allow(clippy::type_complexity)]
     fn y_shape_treetn() -> anyhow::Result<(
         TreeTN<TensorDynLen, String>,
         DynIndex,
