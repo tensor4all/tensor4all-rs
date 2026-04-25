@@ -567,6 +567,9 @@ where
             }
         }
 
+        // Collect all site index IDs to distinguish inherited bond indices
+        let all_site_ids: HashSet<_> = partition.values().flatten().cloned().collect();
+
         // Sort target names for deterministic processing
         let mut target_names: Vec<TargetV> = partition.keys().cloned().collect();
         target_names.sort();
@@ -588,13 +591,23 @@ where
         for target_name in target_names.iter().take(target_names.len() - 1) {
             let site_ids_for_target = partition.get(target_name).unwrap();
 
-            // Find the actual Index objects for these site IDs
-            let left_inds: Vec<_> = remaining_tensor
+            // Find site indices for this target
+            let mut left_inds: Vec<_> = remaining_tensor
                 .external_indices()
                 .iter()
                 .filter(|idx| site_ids_for_target.contains(idx.id()))
                 .cloned()
                 .collect();
+
+            // Include inherited bond indices so they are forwarded to the
+            // current target instead of accumulating on the last target.
+            left_inds.extend(
+                remaining_tensor
+                    .external_indices()
+                    .iter()
+                    .filter(|idx| !all_site_ids.contains(idx.id()))
+                    .cloned(),
+            );
 
             if left_inds.is_empty() {
                 continue;
