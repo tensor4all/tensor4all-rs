@@ -261,6 +261,12 @@ fn test_split_to_with_actual_splitting() {
         .split_to(&split_target, &SplitOptions::default())
         .unwrap();
     assert_eq!(split.node_count(), 3);
+    assert!(
+        split
+            .site_index_network()
+            .share_equivalent_site_index_network(&split_target),
+        "split_to must preserve the requested chain topology, not silently produce a star/tree"
+    );
 
     let fused_full = fused.contract_to_tensor().unwrap();
     let split_full = split.contract_to_tensor().unwrap();
